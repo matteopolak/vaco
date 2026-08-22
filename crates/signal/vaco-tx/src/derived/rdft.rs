@@ -23,9 +23,9 @@
 //! nothing, because `1/M · 1/2` from the `A`/`B` extraction already lands on
 //! `1/N`. One `if`, in one place, and the two directions stay symmetric.
 
+use crate::engine::Ctx;
 use crate::engine::Engine;
 use crate::num::Arith;
-use crate::engine::Ctx;
 
 /// How the real transform is realised.
 ///

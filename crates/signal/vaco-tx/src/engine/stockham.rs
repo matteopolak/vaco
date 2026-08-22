@@ -33,9 +33,9 @@
 //! runs of `s`. Once `s` reaches the vector width, both sides are unit stride and
 //! the twiddle is a broadcast — which is the entire SIMD story for this crate.
 
+use super::Ctx;
 use crate::butterfly::{RadixConst, kernels};
 use crate::num::{Arith, StageView};
-use super::Ctx;
 
 /// One radix pass, with its twiddles in the order the kernel walks them.
 #[derive(Debug, Clone)]
@@ -116,7 +116,6 @@ impl<T: Arith> Stockham<T> {
         }
         Self { n, stages }
     }
-
 
     /// Two ping-pong buffers, one per component.
     pub(crate) const fn scratch_len(&self) -> usize {

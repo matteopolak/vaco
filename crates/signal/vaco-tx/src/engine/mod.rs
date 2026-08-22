@@ -186,7 +186,6 @@ impl<T: Arith> Engine<T> {
         Self::Bluestein(Box::new(bluestein::Bluestein::new(n)))
     }
 
-
     pub(crate) fn scratch_len(&self) -> usize {
         match self {
             Self::Identity => 0,

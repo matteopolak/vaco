@@ -316,7 +316,12 @@ impl_float!(f32, "f32", crate::simd::stockham_pass_f32);
 // `f64` has no vector kernel: at 2 lanes on NEON and 4 on AVX2 the win does not
 // justify a second monomorphisation of every butterfly, and no codec asks for a
 // hot `f64` transform. Measured, not assumed — see the benchmark report.
-impl_float!(f64, "f64", |_, _, _: &[f64], _: &[f64], _: &mut [f64], _: &mut [f64]| false);
+impl_float!(f64, "f64", |_,
+                         _,
+                         _: &[f64],
+                         _: &[f64],
+                         _: &mut [f64],
+                         _: &mut [f64]| false);
 
 impl Lane for i32 {
     type Const = i32;

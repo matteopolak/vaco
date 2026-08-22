@@ -353,9 +353,7 @@ fn scale_is_applied_to_the_output() {
 fn inplace_without_the_flag_is_rejected_at_plan_time() {
     // MDCT forward has different input and output lengths, so INPLACE cannot
     // be honoured and must fail loudly rather than silently corrupting.
-    assert!(
-        Plan::<f32>::new(TxKind::Mdct, Direction::Forward, 64, 1.0, TxFlags::INPLACE).is_err()
-    );
+    assert!(Plan::<f32>::new(TxKind::Mdct, Direction::Forward, 64, 1.0, TxFlags::INPLACE).is_err());
     assert!(
         Plan::<f32>::new(
             TxKind::Rdft,

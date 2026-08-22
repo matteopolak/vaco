@@ -19,9 +19,9 @@
 //! specialised optimisation. They do.
 
 use super::rdft::Rdft;
+use crate::engine::Ctx;
 use crate::engine::scale_ratio;
 use crate::num::Arith;
-use crate::engine::Ctx;
 
 #[derive(Debug, Clone)]
 pub(crate) struct SymTx<T: Arith> {
@@ -52,7 +52,6 @@ impl<T: Arith> SymTx<T> {
         })
     }
 
-
     #[allow(clippy::integer_division, reason = "ext is even by construction")]
     pub(crate) fn scratch_len(&self) -> usize {
         self.ext + 2 * (self.ext / 2 + 1) + self.rdft.scratch_len()
@@ -67,14 +66,7 @@ impl<T: Arith> SymTx<T> {
         reason = "extension indices are < ext and bin indices are ≤ ext/2, both inside buffers sized by scratch_len"
     )]
     #[allow(clippy::integer_division, reason = "ext is even by construction")]
-    pub(crate) fn exec(
-        &self,
-        x: &[T],
-        out: &mut [T],
-        scratch: &mut [T],
-        ctx: Ctx,
-        inverse: bool,
-    ) {
+    pub(crate) fn exec(&self, x: &[T], out: &mut [T], scratch: &mut [T], ctx: Ctx, inverse: bool) {
         let (n, ext) = (self.n, self.ext);
         let bins = ext / 2 + 1;
         if x.len() < n || out.len() < n || scratch.len() < self.scratch_len() {

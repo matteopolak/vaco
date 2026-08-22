@@ -132,7 +132,10 @@ fn run(case: &Case) -> Vec<i32> {
     };
     let plan = Plan::<i32>::new(case.kind, dir, case.len, fixed::ONE, case.flags).unwrap();
     let mut tx = Tx::new(Arc::clone(&plan));
-    let x = input(plan.input_len(), case.len as u64 * 31 + u64::from(case.inverse));
+    let x = input(
+        plan.input_len(),
+        case.len as u64 * 31 + u64::from(case.inverse),
+    );
     let mut out = vec![0i32; plan.output_len()];
     tx.execute(&mut out, &x);
     out
@@ -148,7 +151,8 @@ fn golden_vectors_are_unchanged() {
     for (case, &want) in GOLDEN.iter().zip(DIGESTS) {
         let got = fnv1a(&run(case));
         assert_eq!(
-            got, want,
+            got,
+            want,
             "{} {} len={} flags={:?}: digest changed. This is a CONTRACT change; see the module docs.",
             case.kind,
             if case.inverse { "inverse" } else { "forward" },

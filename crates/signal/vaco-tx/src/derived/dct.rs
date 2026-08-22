@@ -29,8 +29,8 @@
 //! codec asks for it; it exists so the transform is defined for every length.
 
 use super::rdft::Rdft;
-use crate::num::Arith;
 use crate::engine::Ctx;
+use crate::num::Arith;
 
 #[derive(Debug, Clone)]
 pub(crate) struct Dct<T: Arith> {
@@ -75,7 +75,6 @@ impl<T: Arith> Dct<T> {
             table,
         })
     }
-
 
     pub(crate) fn scratch_len(&self) -> usize {
         match &self.rdft {
@@ -130,14 +129,7 @@ impl<T: Arith> Dct<T> {
         reason = "index maps are k, n-k and 2i / n-1-i with i < n/2, all inside the length-checked buffers"
     )]
     #[allow(clippy::integer_division, reason = "n is even on this path")]
-    pub(crate) fn exec(
-        &self,
-        x: &[T],
-        out: &mut [T],
-        scratch: &mut [T],
-        ctx: Ctx,
-        inverse: bool,
-    ) {
+    pub(crate) fn exec(&self, x: &[T], out: &mut [T], scratch: &mut [T], ctx: Ctx, inverse: bool) {
         let n = self.n;
         if x.len() < n || out.len() < n || scratch.len() < self.scratch_len() {
             debug_assert!(false, "buffer too small for DCT({n})");

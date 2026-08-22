@@ -16,10 +16,10 @@
 //! there would be no reason to have both. Using the exact cyclic length is the
 //! whole win: roughly half the work.
 
+use super::Ctx;
 use super::conv::Conv;
 use crate::factor;
 use crate::num::Arith;
-use super::Ctx;
 
 #[derive(Debug, Clone)]
 pub(crate) struct Rader<T: Arith> {
@@ -67,7 +67,6 @@ impl<T: Arith> Rader<T> {
             conv: Conv::new(l, &b_re, &b_im, depth),
         })
     }
-
 
     pub(crate) fn scratch_len(&self) -> usize {
         2 * (self.p - 1) + self.conv.scratch_len()

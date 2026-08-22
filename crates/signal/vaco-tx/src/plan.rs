@@ -211,13 +211,12 @@ impl<T: TxSample> Plan<T> {
             TxKind::Rdft => {
                 let r = Rdft::new(len).ok_or(Error::InvalidData("rdft length must be positive"))?;
                 let bins = r.bins();
-                let complex_len = if flags
-                    .intersects(TxFlags::REAL_TO_REAL | TxFlags::REAL_TO_IMAGINARY)
-                {
-                    bins
-                } else {
-                    2 * bins
-                };
+                let complex_len =
+                    if flags.intersects(TxFlags::REAL_TO_REAL | TxFlags::REAL_TO_IMAGINARY) {
+                        bins
+                    } else {
+                        2 * bins
+                    };
                 let (i, o) = if dir.is_inverse() {
                     (complex_len, len)
                 } else {

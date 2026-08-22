@@ -61,10 +61,7 @@ impl<S, V: Copy> Copy for Vf32<S, V> {}
 impl<S: Lanes, V: SimdFloat<S, Element = f32>> Vf32<S, V> {
     #[inline(always)]
     fn wrap(v: V) -> Self {
-        Self {
-            v,
-            _s: PhantomData,
-        }
+        Self { v, _s: PhantomData }
     }
     #[inline(always)]
     fn load(simd: S, src: &[f32]) -> Self {

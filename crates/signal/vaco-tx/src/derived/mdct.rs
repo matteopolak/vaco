@@ -36,8 +36,8 @@
 //! belong in the codec DSP crate. `vaco-tx` transforms; it does not window.
 
 use super::dct4::Dct4;
-use crate::num::Arith;
 use crate::engine::Ctx;
+use crate::num::Arith;
 
 #[derive(Debug, Clone)]
 pub(crate) struct Mdct<T: Arith> {
@@ -60,7 +60,6 @@ impl<T: Arith> Mdct<T> {
             dct4: Dct4::new(n / 2)?,
         })
     }
-
 
     #[allow(clippy::integer_division, reason = "n is a multiple of 4")]
     pub(crate) fn scratch_len(&self) -> usize {

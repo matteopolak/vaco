@@ -27,9 +27,9 @@
 //! fixed-point paths carry materially less headroom than the staged ones. See
 //! `docs/signal/vaco-tx.md`, "Precision of the awkward lengths".
 
+use super::Ctx;
 use super::{Engine, scale_ratio};
 use crate::num::Arith;
-use super::Ctx;
 
 #[derive(Debug, Clone)]
 pub(crate) struct Conv<T: Arith> {
@@ -56,7 +56,6 @@ impl<T: Arith> Conv<T> {
             bf_im,
         }
     }
-
 
     pub(crate) fn scratch_len(&self) -> usize {
         self.engine.scratch_len()

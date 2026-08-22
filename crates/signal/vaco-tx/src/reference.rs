@@ -45,7 +45,10 @@ mod imp {
         let n = x.len();
         let (r, i) = dft(x, &vec![0.0; n], false);
         let bins = n / 2 + 1;
-        (r.into_iter().take(bins).collect(), i.into_iter().take(bins).collect())
+        (
+            r.into_iter().take(bins).collect(),
+            i.into_iter().take(bins).collect(),
+        )
     }
 
     /// Forward MDCT: `n` samples to `n/2` coefficients.
@@ -57,9 +60,8 @@ mod imp {
             .map(|k| {
                 (0..n)
                     .map(|j| {
-                        let a = TAU / n as f64
-                            * (j as f64 + 0.5 + n as f64 / 4.0)
-                            * (k as f64 + 0.5);
+                        let a =
+                            TAU / n as f64 * (j as f64 + 0.5 + n as f64 / 4.0) * (k as f64 + 0.5);
                         x[j] * a.cos()
                     })
                     .sum()
@@ -76,9 +78,8 @@ mod imp {
             .map(|j| {
                 (0..half)
                     .map(|k| {
-                        let a = TAU / n as f64
-                            * (j as f64 + 0.5 + n as f64 / 4.0)
-                            * (k as f64 + 0.5);
+                        let a =
+                            TAU / n as f64 * (j as f64 + 0.5 + n as f64 / 4.0) * (k as f64 + 0.5);
                         coeffs[k] * a.cos()
                     })
                     .sum()
@@ -122,7 +123,11 @@ mod imp {
         let m = (n - 1) as f64;
         (0..n)
             .map(|k| {
-                let last = if k.is_multiple_of(2) { x[n - 1] } else { -x[n - 1] };
+                let last = if k.is_multiple_of(2) {
+                    x[n - 1]
+                } else {
+                    -x[n - 1]
+                };
                 let ends = f64::midpoint(x[0], last);
                 ends + (1..n - 1)
                     .map(|j| x[j] * (PI * j as f64 * k as f64 / m).cos())

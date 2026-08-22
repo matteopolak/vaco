@@ -10,10 +10,10 @@
 //! The cost is two index permutations and a transpose. Both are `O(N)` against
 //! an `O(N log N)` transform, and the permutation tables are built once.
 
+use super::Ctx;
 use super::Engine;
 use crate::factor;
 use crate::num::Arith;
-use super::Ctx;
 
 #[derive(Debug, Clone)]
 pub(crate) struct PrimeFactor<T: Arith> {
@@ -77,7 +77,6 @@ impl<T: Arith> PrimeFactor<T> {
         })
     }
 
-
     pub(crate) fn scratch_len(&self) -> usize {
         4 * self.n + self.sub1.scratch_len().max(self.sub2.scratch_len())
     }
@@ -130,6 +129,5 @@ impl<T: Arith> PrimeFactor<T> {
             re[dst] = b_re[g];
             im[dst] = b_im[g];
         }
-
     }
 }

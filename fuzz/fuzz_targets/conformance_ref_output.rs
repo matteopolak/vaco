@@ -19,10 +19,8 @@ fuzz_target!(|data: &[u8]| {
     }
 
     for fmt in pixfmt::parse_show_pixel_formats(s) {
-        for field in pixfmt::FIELDS {
-            let _ = field;
-        }
         let _ = fmt.depths.len();
+        let _ = fmt.flags.len();
     }
 
     for fmt in pixfmt::parse_pix_fmts(s) {

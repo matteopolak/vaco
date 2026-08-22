@@ -159,7 +159,9 @@ fn rdft_matches_the_reference_both_ways() {
 
 #[test]
 fn mdct_and_imdct_match_the_reference() {
-    for &n in &[4usize, 8, 12, 16, 20, 24, 32, 36, 40, 48, 60, 64, 120, 128, 240, 256, 480, 960] {
+    for &n in &[
+        4usize, 8, 12, 16, 20, 24, 32, 36, 40, 48, 60, 64, 120, 128, 240, 256, 480, 960,
+    ] {
         let x = signal(n, n as u64 + 21);
         let plan = Plan::<f64>::mdct(n, false, 1.0).unwrap();
         let got = run_f64(&plan, &x);
@@ -197,14 +199,14 @@ fn dct_ii_and_iii_match_the_reference() {
         1usize, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 15, 16, 20, 24, 30, 32, 48, 64, 96, 120, 128, 512,
     ] {
         let x = signal(n, n as u64 + 31);
-        let fwd = Plan::<f64>::new(TxKind::Dct, Direction::Forward, n, 1.0, TxFlags::empty())
-            .unwrap();
+        let fwd =
+            Plan::<f64>::new(TxKind::Dct, Direction::Forward, n, 1.0, TxFlags::empty()).unwrap();
         let got = run_f64(&fwd, &x);
         let want = reference::dct2(&x);
         assert!(rms_rel(&got, &want) < 1e-11, "dct-II n={n}");
 
-        let inv = Plan::<f64>::new(TxKind::Dct, Direction::Inverse, n, 1.0, TxFlags::empty())
-            .unwrap();
+        let inv =
+            Plan::<f64>::new(TxKind::Dct, Direction::Inverse, n, 1.0, TxFlags::empty()).unwrap();
         let got3 = run_f64(&inv, &x);
         let want3 = reference::dct3(&x);
         assert!(rms_rel(&got3, &want3) < 1e-11, "dct-III n={n}");
@@ -213,15 +215,17 @@ fn dct_ii_and_iii_match_the_reference() {
 
 #[test]
 fn dct_i_and_dst_i_match_the_reference() {
-    for &n in &[2usize, 3, 4, 5, 6, 7, 8, 9, 12, 16, 17, 24, 32, 33, 64, 65, 128] {
+    for &n in &[
+        2usize, 3, 4, 5, 6, 7, 8, 9, 12, 16, 17, 24, 32, 33, 64, 65, 128,
+    ] {
         let x = signal(n, n as u64 + 41);
-        let c = Plan::<f64>::new(TxKind::DctI, Direction::Forward, n, 1.0, TxFlags::empty())
-            .unwrap();
+        let c =
+            Plan::<f64>::new(TxKind::DctI, Direction::Forward, n, 1.0, TxFlags::empty()).unwrap();
         let got = run_f64(&c, &x);
         assert!(rms_rel(&got, &reference::dct1(&x)) < 1e-11, "dct-I n={n}");
 
-        let s = Plan::<f64>::new(TxKind::DstI, Direction::Forward, n, 1.0, TxFlags::empty())
-            .unwrap();
+        let s =
+            Plan::<f64>::new(TxKind::DstI, Direction::Forward, n, 1.0, TxFlags::empty()).unwrap();
         let got = run_f64(&s, &x);
         assert!(rms_rel(&got, &reference::dst1(&x)) < 1e-11, "dst-I n={n}");
     }

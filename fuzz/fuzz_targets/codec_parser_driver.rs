@@ -44,7 +44,7 @@ fuzz_target!(|input: Input| {
         loop {
             steps += 1;
             assert!(steps < 100_000, "the harness failed to terminate");
-            match driver.next() {
+            match driver.next_unit() {
                 Ok(_) => {}
                 Err(Error::NeedMoreInput) => break,
                 Err(_) => break,
@@ -57,11 +57,11 @@ fuzz_target!(|input: Input| {
     loop {
         steps += 1;
         assert!(steps < 100_000, "the harness failed to terminate at end of stream");
-        match driver.next() {
+        match driver.next_unit() {
             Ok(_) => {}
             Err(_) => break,
         }
     }
     // Eof is stable.
-    assert!(driver.next().is_err());
+    assert!(driver.next_unit().is_err());
 });

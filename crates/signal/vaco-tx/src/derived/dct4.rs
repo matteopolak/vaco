@@ -34,9 +34,9 @@
 //! "transform of length `M` is scaled by `1/M`" rule, with no separate
 //! correction pass.
 
+use crate::engine::Ctx;
 use crate::engine::Engine;
 use crate::num::Arith;
-use crate::engine::Ctx;
 
 #[derive(Debug, Clone)]
 pub(crate) struct Dct4<T: Arith> {
@@ -85,7 +85,6 @@ impl<T: Arith> Dct4<T> {
             fft: Engine::new(l),
         })
     }
-
 
     pub(crate) fn scratch_len(&self) -> usize {
         2 * self.l + self.fft.scratch_len()

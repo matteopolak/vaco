@@ -263,7 +263,9 @@ mod tests {
 
     #[test]
     fn smooth_radices_multiply_back() {
-        for n in [2usize, 4, 8, 16, 64, 120, 240, 480, 960, 1024, 2048, 4096, 5040] {
+        for n in [
+            2usize, 4, 8, 16, 64, 120, 240, 480, 960, 1024, 2048, 4096, 5040,
+        ] {
             let r = smooth_radices(n).unwrap_or_default();
             assert!(!r.is_empty(), "n={n} should be smooth");
             assert_eq!(r.iter().product::<usize>(), n, "n={n} radices {r:?}");

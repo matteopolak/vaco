@@ -135,10 +135,34 @@ pub(crate) fn bf_odd<L: Lane, const R: usize>(
     // S_j = a_j + a_{R-j}, D_j = a_j - a_{R-j}. Exact: no rounding, and after
     // the caller's divide-by-R the magnitudes cannot leave the sample range.
     // Index 0 is unused and holds a_0 so `from_fn` has something to return.
-    let sr: [L; R] = core::array::from_fn(|j| if j == 0 { re[0] } else { L::add(re[j], re[R - j]) });
-    let si: [L; R] = core::array::from_fn(|j| if j == 0 { im[0] } else { L::add(im[j], im[R - j]) });
-    let dr: [L; R] = core::array::from_fn(|j| if j == 0 { re[0] } else { L::sub(re[j], re[R - j]) });
-    let di: [L; R] = core::array::from_fn(|j| if j == 0 { im[0] } else { L::sub(im[j], im[R - j]) });
+    let sr: [L; R] = core::array::from_fn(|j| {
+        if j == 0 {
+            re[0]
+        } else {
+            L::add(re[j], re[R - j])
+        }
+    });
+    let si: [L; R] = core::array::from_fn(|j| {
+        if j == 0 {
+            im[0]
+        } else {
+            L::add(im[j], im[R - j])
+        }
+    });
+    let dr: [L; R] = core::array::from_fn(|j| {
+        if j == 0 {
+            re[0]
+        } else {
+            L::sub(re[j], re[R - j])
+        }
+    });
+    let di: [L; R] = core::array::from_fn(|j| {
+        if j == 0 {
+            im[0]
+        } else {
+            L::sub(im[j], im[R - j])
+        }
+    });
 
     let (a0r, a0i) = (re[0], im[0]);
     let mut zr = a0r;
@@ -244,7 +268,7 @@ impl<T: crate::num::Arith> RadixConst<T> {
 /// const parameter on the array itself — so there is no index that is in bounds
 /// for one monomorphisation and out of bounds for another.
 pub(crate) mod kernels {
-    use super::{KConst, Lane, bf2, bf4, bf8, bf_odd};
+    use super::{KConst, Lane, bf_odd, bf2, bf4, bf8};
 
     #[inline(always)]
     pub(crate) fn k2<L: Lane>(_k: KConst<'_, L::Const>, re: &mut [L; 2], im: &mut [L; 2]) {
@@ -298,8 +322,12 @@ mod tests {
 
     fn sample(n: usize) -> (Vec<f64>, Vec<f64>) {
         (
-            (0..n).map(|j| ((j * 37 % 19) as f64) / 19.0 - 0.5).collect(),
-            (0..n).map(|j| ((j * 53 % 23) as f64) / 23.0 - 0.5).collect(),
+            (0..n)
+                .map(|j| ((j * 37 % 19) as f64) / 19.0 - 0.5)
+                .collect(),
+            (0..n)
+                .map(|j| ((j * 53 % 23) as f64) / 23.0 - 0.5)
+                .collect(),
         )
     }
 

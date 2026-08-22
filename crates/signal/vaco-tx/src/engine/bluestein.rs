@@ -16,9 +16,9 @@
 //! the alternative is every codec discovering, late, that its bitstream asked
 //! for 1381 points.
 
+use super::Ctx;
 use super::conv::Conv;
 use crate::num::Arith;
-use super::Ctx;
 
 #[derive(Debug, Clone)]
 pub(crate) struct Bluestein<T: Arith> {
@@ -80,7 +80,6 @@ impl<T: Arith> Bluestein<T> {
             conv: Conv::new(m, &b_re, &b_im, 0),
         }
     }
-
 
     pub(crate) fn scratch_len(&self) -> usize {
         2 * self.m + self.conv.scratch_len()
