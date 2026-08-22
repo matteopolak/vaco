@@ -3319,3 +3319,50 @@ checklist so none is forgotten.
    now; segmenting muxers will need the sink hook when `vaco-mux-segment` lands.
 8. **`ProtocolEnv` gained `root`** to carry rule U2, which §2 states without
    giving a mechanism for.
+
+## Amendment — §3.1 corrected against the binary (2026-08-22)
+
+`vaco-format-isom` measured four claims in §3.1 and found three wrong.
+
+**§3.1.3's probe scores are wrong in three of four rows.** The plan predicts
+100 / 90 / 75 / 75 for a clean file, an unknown major brand, a missing `ftyp`
+and a mangled `ftyp`. Measured against ffprobe 8.1 by mutating one file four
+ways, **all four score 100**. The reference's ISOBMFF probe does not grade
+brands at all, and does not care whether `ftyp` is present. Any scoring logic
+built on §3.1.3 would have produced the wrong winner on ambiguous input.
+
+**§3.1.4's `dts_shift` rule (MP4-T1) does not match.** The plan says "max of the
+`ctts` offsets in the first `delay+1` samples". Measured, the reference applies
+`min(0, min(ctts))` to **DTS**, where ISO/IEC 14496-12 §8.6.1.4 defines the
+shift as added to *composition* times. Reproduced as a D17 deviation.
+
+**§3.1.10 is wrong about fragment byte addressing.** It says a `tfhd` with
+neither `default-base-is-moof` nor `base_data_offset` bases on "the start of the
+previous `mdat`". 14496-12 §8.8.7.1 says the first `traf` bases on the enclosing
+`moof` and each later one on the end of its predecessor's data. The spec was
+followed; the two agree for single-`traf` fragments, and no `ffmpeg` invocation
+was found that writes a file distinguishing them — so this is corrected on the
+standard's authority, with the ambiguity recorded rather than hidden.
+
+**`duration_ts` is not `mdhd.duration`.** It is the sum of the **non-empty**
+`elst` segment durations, rescaled movie→media. The discriminating case is a
+file with an initial empty edit: 25 600 rather than 32 256.
+
+### The finding worth carrying beyond this crate
+
+The slow unit in `isom_sample_table` was a **real design bug**, not a benchmark
+artefact, and the route to it is instructive. A `stsc` declaring 4.2 billion
+single-sample chunks with no `stco` entries took **13.8 s on a 78-byte input** —
+and `cargo fuzz` exited 0, so the artifact on disk was the only evidence (§13).
+
+The first hypothesis — that the test oracle's dense scan was at fault — was
+wrong; bounding the oracle still left 15 s. Timing the target's sections showed
+parse and every point query under 400 µs, with the cursor accounting for all of
+it. The fix was a fact about the format rather than a faster loop: **chunk
+numbers are non-decreasing in the sample index**, so a missing `stco` entry is
+*terminal*, not a hole to skip past one sample at a time. 13.8 s → 0 ms, and
+target throughput went from 350 to 7 990 326 executions.
+
+That is the shape §13 predicts for slow units: the fix is usually a bound or an
+invariant, not optimisation — and here the invariant came from reading the
+standard, not from profiling.
