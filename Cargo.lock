@@ -1280,11 +1280,16 @@ dependencies = [
 name = "vaco-codec-core"
 version = "0.1.0"
 dependencies = [
+ "bitflags",
+ "vaco-chlayout",
+ "vaco-color",
  "vaco-core",
  "vaco-frame",
  "vaco-limits",
  "vaco-opts",
  "vaco-packet",
+ "vaco-pixfmt",
+ "vaco-sampfmt",
 ]
 
 [[package]]
@@ -1371,6 +1376,7 @@ dependencies = [
 name = "vaco-filter-core"
 version = "0.1.0"
 dependencies = [
+ "bitflags",
  "smallvec",
  "vaco-chlayout",
  "vaco-color",
@@ -1405,6 +1411,7 @@ dependencies = [
 name = "vaco-format-core"
 version = "0.1.0"
 dependencies = [
+ "bitflags",
  "smallvec",
  "vaco-codec-core",
  "vaco-core",
@@ -1460,6 +1467,7 @@ dependencies = [
 name = "vaco-frame"
 version = "0.1.0"
 dependencies = [
+ "bitflags",
  "smallvec",
  "vaco-chlayout",
  "vaco-color",
@@ -1508,6 +1516,7 @@ dependencies = [
 name = "vaco-packet"
 version = "0.1.0"
 dependencies = [
+ "bitflags",
  "smallvec",
  "vaco-core",
  "vaco-pool",
@@ -1566,6 +1575,7 @@ dependencies = [
 name = "vaco-pixfmt"
 version = "0.1.0"
 dependencies = [
+ "bitflags",
  "vaco-core",
 ]
 

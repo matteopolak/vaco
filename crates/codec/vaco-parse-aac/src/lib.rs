@@ -1,1 +1,1 @@
-//! AAC ADTS/LATM and AudioSpecificConfig parsing (no decode).
+//! AAC `ADTS`/`LATM` and `AudioSpecificConfig` parsing (no decode).

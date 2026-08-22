@@ -9,8 +9,8 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-vaco-core = { path = "../../core/vaco-core" }
 smallvec.workspace = true
+vaco-core = { path = "../../core/vaco-core" }
 
 [lints]
 workspace = true

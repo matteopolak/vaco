@@ -9,6 +9,11 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+bitflags.workspace = true
+vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
+vaco-sampfmt = { path = "../../model/vaco-sampfmt" }
+vaco-chlayout = { path = "../../model/vaco-chlayout" }
+vaco-color = { path = "../../model/vaco-color" }
 vaco-core = { path = "../../core/vaco-core" }
 vaco-frame = { path = "../../model/vaco-frame" }
 vaco-packet = { path = "../../model/vaco-packet" }

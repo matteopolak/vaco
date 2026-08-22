@@ -1,1 +1,1 @@
-//! The AVOption equivalent: typed, introspectable option sets.
+//! The `AVOption` equivalent: typed, introspectable option sets.

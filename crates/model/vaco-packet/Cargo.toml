@@ -12,6 +12,7 @@ authors.workspace = true
 vaco-core = { path = "../../core/vaco-core" }
 vaco-pool = { path = "../../model/vaco-pool" }
 smallvec.workspace = true
+bitflags.workspace = true
 
 [lints]
 workspace = true

@@ -1,6 +1,6 @@
 [package]
 name = "vaco-protocol-http"
-description = "http:/https: via ureq + rustls with a pure-Rust provider (D14.2)."
+description = "HTTP and HTTPS protocols via ureq with rustls and a pure-Rust crypto provider."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

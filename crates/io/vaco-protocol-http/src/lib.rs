@@ -1,1 +1,2 @@
-//! http:/https: via ureq + rustls with a pure-Rust provider (D14.2).
+//! The `http:` and `https:` protocols, via `ureq` with `rustls` and a pure-Rust
+//! crypto provider (D14.2).
