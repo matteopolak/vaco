@@ -168,11 +168,25 @@ carry `--target-dir`, which is exactly why the `just xtask` recipe exists — it
 ```toml
 # .cargo/config.toml
 [build]
-rustc-wrapper = "/opt/homebrew/bin/sccache"
+rustc-wrapper = "sccache"   # PATH-relative, never an absolute path
 
 [env]
-SCCACHE_CACHE_SIZE = "10G"
+SCCACHE_CACHE_SIZE = "20G"
 ```
+
+**The path must be PATH-relative.** An absolute `/opt/homebrew/bin/sccache` is a
+macOS Homebrew location; it broke CI on `ubuntu-latest` immediately and would
+break any contributor not on a Mac. The failure mode is confusing, too — cargo
+reports `could not execute process ... (No such file or directory)` from inside
+whatever tool happened to invoke it, not from a step that mentions sccache.
+
+Because the wrapper is configured repo-wide, **`sccache` must be on PATH for any
+cargo invocation here**. Every CI job that compiles installs it. Container actions
+that cannot (`cargo-deny-action`, `audit-check`) set `RUSTC_WRAPPER: ""`, which
+takes precedence over the config and disables it; neither compiles anything, so
+nothing is lost. Contributors without sccache can export the same empty value,
+but should expect much slower cold builds — and should pick one setting and keep
+it, since flipping the wrapper invalidates every fingerprint in a target dir.
 
 CI uses `mozilla-actions/sccache-action` pinned to an exact version, matching the local
 `sccache` release.

@@ -20,7 +20,20 @@ xtask = "run --quiet --package xtask --"
 # Do NOT set CARGO_INCREMENTAL=0. sccache marks workspace crates non-cacheable and
 # passes them through, so incremental compilation is preserved.
 [build]
-rustc-wrapper = "/opt/homebrew/bin/sccache"
+# PATH-relative, NOT an absolute path. An absolute /opt/homebrew path is a macOS
+# Homebrew location that does not exist on Linux or Windows, which broke CI and
+# would break any contributor not on a Mac.
+#
+# The consequence: `sccache` must be on PATH for any cargo invocation in this
+# repo. CI installs it in every job that compiles. Container-based actions that
+# cannot install it (cargo-deny, audit-check) set RUSTC_WRAPPER="" to disable it,
+# which the environment variable takes precedence to do.
+#
+# Contributors without sccache: install it (`brew install sccache`,
+# `cargo install sccache`) or export RUSTC_WRAPPER="" — but expect much slower
+# cold builds, and note that flipping the wrapper on or off invalidates every
+# fingerprint in a target dir, so pick one and stay with it.
+rustc-wrapper = "sccache"
 
 [env]
 SCCACHE_CACHE_SIZE = "20G"

@@ -37,6 +37,14 @@ jobs:
   licence:
     name: licence and advisories
     runs-on: ubuntu-latest
+    # These are container actions we do not control, so sccache cannot be
+    # installed inside them — and .cargo/config.toml sets it as the rustc
+    # wrapper for every invocation in this repo. An empty RUSTC_WRAPPER
+    # overrides the config and disables it. Neither action compiles anything,
+    # so there is nothing to cache here anyway.
+    env:
+      RUSTC_WRAPPER: ""
+      SCCACHE_GHA_ENABLED: "false"
     steps:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
