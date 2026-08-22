@@ -21,12 +21,12 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-simd | 0 | #90 | agent:simd | done | 2026-08-21 | 2026-08-21 | x86 re-run outstanding |
 | vaco-opts | 0 | — | agent:opts | done | 2026-08-21 | 2026-08-21 |  |
 | vaco-opts-derive | 0 | — | agent:opts | done | 2026-08-21 | 2026-08-21 |  |
-| vaco-expr | 0 | — | agent:expr | assigned | 2026-08-22 |  |
+| vaco-expr | 0 | — | agent:expr | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-bitstream | 0 | — | agent:bitstream | done | 2026-08-21 | 2026-08-21 |  |
 | vaco-pixfmt | 1 | — | agent:pixfmt | done | 2026-08-21 | 2026-08-21 |
-| vaco-sampfmt | 1 | — | agent:audio-desc | assigned | 2026-08-22 |  |
-| vaco-chlayout | 1 | — | agent:audio-desc | assigned | 2026-08-22 |  |
-| vaco-color | 1 | — | agent:color | assigned | 2026-08-22 |  |
+| vaco-sampfmt | 1 | — | agent:audio-desc | done | 2026-08-22 | 2026-08-22 |  |
+| vaco-chlayout | 1 | — | agent:audio-desc | done | 2026-08-22 | 2026-08-22 |  |
+| vaco-color | 1 | — | agent:color | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-pool | 1 | — | agent:model | done | 2026-08-22 | 2026-08-22 |
 | vaco-frame | 1 | — | agent:model | done | 2026-08-22 | 2026-08-22 |
 | vaco-packet | 1 | — | agent:model | done | 2026-08-22 | 2026-08-22 |
@@ -38,11 +38,11 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-scale | 3 | — | — | free |  |  |
 | vaco-resample | 3 | — | — | free |  |  |
 | vaco-codec-core | 3 | #170,#251 | agent:codec-core | done | 2026-08-22 | 2026-08-22 |  |
-| vaco-codec-golomb | 3 | — | agent:codec-bits | assigned | 2026-08-22 |  |
-| vaco-codec-cabac | 3 | — | agent:codec-bits | assigned | 2026-08-22 |  |
+| vaco-codec-golomb | 3 | — | agent:codec-bits | done | 2026-08-22 | 2026-08-22 |  |
+| vaco-codec-cabac | 3 | — | agent:codec-bits | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-codec-cbs | 3 | — | — | free |  |  |
 | vaco-codec-dsp-idct | 3 | — | — | free |  |  |
-| vaco-format-core | 4 | — | agent:format-core | assigned | 2026-08-22 |  | unblocked by vaco-io |
+| vaco-format-core | 4 | — | agent:format-core | done | 2026-08-22 | 2026-08-22 | unblocked by vaco-io |
 | vaco-format-riff | 4 | — | — | free |  |  |
 | vaco-format-isom | 4 | — | — | free |  |  |
 | vaco-format-mpegts-tables | 4 | — | — | free |  |  |
@@ -61,7 +61,7 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-filter-graph | 5 | — | — | free |  |  |
 | vaco-registry | 6 | — | — | free |  |  |
 | vaco-textformat | 7 | #188,#189 | agent:textformat | done | 2026-08-22 | 2026-08-22 |  |
-| vaco-cli-core | 7 | — | agent:cli-core | assigned | 2026-08-22 |  |
+| vaco-cli-core | 7 | — | agent:cli-core | done | 2026-08-22 | 2026-08-22 | needs vaco-expr edge for `-b:v 2*1000` |
 | vaco-sched | 7 | — | — | free |  |  |
 | vaco-probe | 7 | — | — | free |  |  |
 | vaco-cli | 7 | — | — | free |  |  |
