@@ -33,6 +33,7 @@ jobs:
       - run: cargo xtask gen-registry --check
       - run: cargo xtask gen-docs-index --check
       - run: cargo xtask gen-pixfmt --check
+      - run: cargo xtask gen-fuzz --check
 
   licence:
     name: licence and advisories

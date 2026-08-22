@@ -10,6 +10,7 @@ use std::process::Command;
 
 mod deps;
 mod docs;
+mod gen_fuzz;
 mod gen_pixfmt;
 mod layers;
 mod registry;
@@ -27,6 +28,7 @@ fn main() {
         "gen-registry" => registry::run(check),
         "gen-docs-index" => docs::run(check),
         "gen-pixfmt" => gen_pixfmt::run(check),
+        "gen-fuzz" => gen_fuzz::run(check),
         other => {
             eprintln!("unknown task: {other}\n");
             eprintln!("tasks:");
@@ -38,6 +40,7 @@ fn main() {
             eprintln!(
                 "  gen-pixfmt      expand the pixel-format families into the committed table"
             );
+            eprintln!("  gen-fuzz        assemble fuzz/Cargo.toml from target front-matter");
             std::process::exit(2);
         }
     };

@@ -3,6 +3,7 @@
 //! The point of this crate is that hostile sizes produce clean errors, so the
 //! findings here are: a panic, an arithmetic overflow, an allocation that got
 //! through, or a counter that drifted. `LimitError` is success.
+//! fuzz-crate: vaco-limits
 #![no_main]
 
 use arbitrary::Arbitrary;

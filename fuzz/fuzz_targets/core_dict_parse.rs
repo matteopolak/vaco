@@ -1,4 +1,5 @@
 //! `key=value:key=value` option strings against arbitrary text.
+//! fuzz-crate: vaco-core
 #![no_main]
 use libfuzzer_sys::fuzz_target;
 use vaco_core::dict::{Dict, DictFlags};

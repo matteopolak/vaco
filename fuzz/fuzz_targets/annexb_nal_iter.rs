@@ -3,6 +3,7 @@
 //! Properties: the iterator terminates, every unit is a non-empty in-order
 //! disjoint sub-slice of the input, no unit contains a start code, and the
 //! word-skip scanner agrees exactly with a naive three-byte window scan.
+//! fuzz-crate: vaco-bitstream
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;

@@ -4,6 +4,7 @@
 //! demuxer sizing a buffer from a length field. The findings are: a panic, an
 //! arithmetic overflow, a buffer that is not 64-byte aligned, or accounting that
 //! grows past the pool's configured bound. `Error::LimitExceeded` is success.
+//! fuzz-crate: vaco-pool
 #![no_main]
 
 use arbitrary::Arbitrary;

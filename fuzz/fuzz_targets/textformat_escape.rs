@@ -11,6 +11,7 @@
 //!   the original value;
 //! * a writer emitting its own item separator unescaped, which would tear a
 //!   record in half for anything splitting on it.
+//! fuzz-crate: vaco-textformat
 
 #![no_main]
 

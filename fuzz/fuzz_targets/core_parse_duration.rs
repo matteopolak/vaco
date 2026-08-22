@@ -2,6 +2,7 @@
 //!
 //! Property: never panics, and anything that parses formats back to something
 //! that parses to the same value.
+//! fuzz-crate: vaco-core
 #![no_main]
 use libfuzzer_sys::fuzz_target;
 use vaco_core::parse;

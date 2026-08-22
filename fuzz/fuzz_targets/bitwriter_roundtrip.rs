@@ -2,6 +2,7 @@
 //!
 //! The single most valuable property in the crate, run at fuzzer speed rather
 //! than at proptest's 256 cases.
+//! fuzz-crate: vaco-bitstream
 #![no_main]
 
 use arbitrary::Arbitrary;

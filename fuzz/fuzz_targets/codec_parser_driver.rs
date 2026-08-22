@@ -3,6 +3,7 @@
 //! The harness owns reassembly, end-of-stream handling and byte accounting for
 //! every parser in the project, so a hang or a panic here would be a hang or a
 //! panic in all of them. A limit error is correct behaviour, not a finding.
+//! fuzz-crate: vaco-codec-core
 
 #![no_main]
 

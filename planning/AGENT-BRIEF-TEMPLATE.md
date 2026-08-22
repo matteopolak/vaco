@@ -95,7 +95,12 @@ and never `add -A`. In a shared working tree those destroy other agents' work.
 1. Implementation replacing the `todo!()` bodies.
 2. Unit tests, and property tests (`proptest`) wherever there is a round-trip or
    an invariant.
-3. A fuzz target if the crate parses untrusted input. **A crate that parses input
+3. A fuzz target if the crate parses untrusted input. **Do not edit
+   `fuzz/Cargo.toml` — it is generated.** Write
+   `fuzz/fuzz_targets/<name>.rs`, give it the header line
+   `//! fuzz-crate: <your-crate>`, and run `cargo xtask gen-fuzz`. The path
+   dependency, the feature, the `[[bin]]` block and the `default` entry are all
+   derived from that one line. **A crate that parses input
    and has no fuzz target is not done** (D6).
 
    Report the target's **exit code and exec count**, not a verdict. Do not grep

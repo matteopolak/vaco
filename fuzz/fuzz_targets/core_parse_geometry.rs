@@ -1,4 +1,5 @@
 //! `-s 1920x1080` and `-r 30000/1001` against arbitrary text.
+//! fuzz-crate: vaco-core
 #![no_main]
 use libfuzzer_sys::fuzz_target;
 use vaco_core::parse;

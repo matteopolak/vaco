@@ -6,6 +6,7 @@
 //! `split_url(s).to_string() != s`, then what the whitelist checked and what a
 //! protocol opens are two different strings, which is exactly the shape of a
 //! bypass.
+//! fuzz-crate: vaco-protocol-core
 #![no_main]
 use libfuzzer_sys::fuzz_target;
 use vaco_protocol_core::split_url;

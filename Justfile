@@ -105,13 +105,17 @@ gen-docs-index:
 gen-pixfmt:
     cargo xtask gen-pixfmt
 
-gen:  gen-registry gen-docs-index gen-pixfmt
+gen-fuzz:
+    cargo xtask gen-fuzz
+
+gen:  gen-registry gen-docs-index gen-pixfmt gen-fuzz
 
 # CI re-runs the generators and fails if the committed output differs.
 docs-check:
     cargo xtask gen-registry --check
     cargo xtask gen-docs-index --check
     cargo xtask gen-pixfmt --check
+    cargo xtask gen-fuzz --check
 
 # ------------------------------------------------------ benchmarks & profiling
 

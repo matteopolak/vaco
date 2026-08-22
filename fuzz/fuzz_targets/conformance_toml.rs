@@ -5,6 +5,7 @@
 //! is that a parser without a fuzz target is not done. What this proves is the
 //! property the workspace lints demand everywhere: it terminates and it does
 //! not panic, whatever it is handed.
+//! fuzz-crate: vaco-conformance
 #![no_main]
 use libfuzzer_sys::fuzz_target;
 use vaco_conformance::toml;

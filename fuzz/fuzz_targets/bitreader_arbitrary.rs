@@ -3,6 +3,7 @@
 //! Findings are: a panic, a hang, or a disagreement between the padded and
 //! unpadded readers. A truncated input is *not* a finding — the reader is
 //! specified to return zeros and set overrun, and this target asserts it does.
+//! fuzz-crate: vaco-bitstream
 #![no_main]
 
 use arbitrary::Arbitrary;

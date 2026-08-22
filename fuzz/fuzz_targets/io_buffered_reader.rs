@@ -12,6 +12,7 @@
 //! * bytes read are the bytes at that position in the source;
 //! * `peek` returns the bytes at the current position and does not move it;
 //! * a forward-only source refuses backward seeks rather than lying about them.
+//! fuzz-crate: vaco-io
 #![no_main]
 
 use arbitrary::Arbitrary;

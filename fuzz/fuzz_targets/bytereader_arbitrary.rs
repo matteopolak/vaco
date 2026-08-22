@@ -3,6 +3,7 @@
 //! The byte reader is what every container parser sits on, so its sticky-overrun
 //! contract needs the same coverage as the bit reader's: never panic, never read
 //! out of bounds, never report bytes remaining after a truncated read.
+//! fuzz-crate: vaco-bitstream
 #![no_main]
 
 use arbitrary::Arbitrary;

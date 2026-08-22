@@ -4,6 +4,7 @@
 //! legal sequence must never panic, never report an illegal error, never lose
 //! an output and never duplicate one, for any codec behaviour and any queue
 //! depth.
+//! fuzz-crate: vaco-codec-core
 
 #![no_main]
 

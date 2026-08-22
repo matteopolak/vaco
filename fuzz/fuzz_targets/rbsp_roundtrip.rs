@@ -3,6 +3,7 @@
 //! `to_rbsp ∘ to_ebsp` is the identity for every input, and `to_ebsp` output
 //! never violates the constraint that makes start-code scanning unambiguous.
 //! De-escaping arbitrary bytes must not panic and must not grow the buffer.
+//! fuzz-crate: vaco-bitstream
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;

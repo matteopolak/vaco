@@ -323,8 +323,23 @@ dependencies = [
 [[package]]
 name = "vaco-chlayout"
 version = "0.1.0"
+
+[[package]]
+name = "vaco-cli-core"
+version = "0.1.0"
 dependencies = [
- "smallvec",
+ "thiserror",
+ "vaco-core",
+ "vaco-opts",
+ "vaco-registry",
+ "vaco-textformat",
+]
+
+[[package]]
+name = "vaco-codec-cabac"
+version = "0.1.0"
+dependencies = [
+ "vaco-bitstream",
  "vaco-core",
 ]
 
@@ -346,11 +361,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "vaco-color"
+name = "vaco-codec-golomb"
 version = "0.1.0"
 dependencies = [
+ "vaco-bitstream",
  "vaco-core",
+ "vaco-limits",
 ]
+
+[[package]]
+name = "vaco-color"
+version = "0.1.0"
 
 [[package]]
 name = "vaco-conformance"
@@ -367,6 +388,44 @@ version = "0.1.0"
 dependencies = [
  "thiserror",
  "tracing",
+]
+
+[[package]]
+name = "vaco-expr"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
+ "vaco-core",
+]
+
+[[package]]
+name = "vaco-filter-core"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "smallvec",
+ "vaco-chlayout",
+ "vaco-color",
+ "vaco-core",
+ "vaco-expr",
+ "vaco-frame",
+ "vaco-opts",
+ "vaco-pixfmt",
+ "vaco-sampfmt",
+]
+
+[[package]]
+name = "vaco-format-core"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "smallvec",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-opts",
+ "vaco-packet",
 ]
 
 [[package]]
@@ -392,16 +451,23 @@ dependencies = [
  "arbitrary",
  "libfuzzer-sys",
  "vaco-bitstream",
+ "vaco-chlayout",
+ "vaco-cli-core",
+ "vaco-codec-cabac",
  "vaco-codec-core",
+ "vaco-codec-golomb",
+ "vaco-color",
  "vaco-conformance",
  "vaco-core",
+ "vaco-expr",
+ "vaco-format-core",
  "vaco-frame",
  "vaco-io",
  "vaco-limits",
  "vaco-packet",
- "vaco-pixfmt",
  "vaco-pool",
  "vaco-protocol-core",
+ "vaco-sampfmt",
  "vaco-textformat",
 ]
 
@@ -477,6 +543,17 @@ dependencies = [
  "vaco-core",
  "vaco-io",
  "vaco-opts",
+]
+
+[[package]]
+name = "vaco-registry"
+version = "0.1.0"
+dependencies = [
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-format-core",
+ "vaco-protocol-core",
 ]
 
 [[package]]

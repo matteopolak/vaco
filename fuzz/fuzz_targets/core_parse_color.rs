@@ -1,4 +1,5 @@
 //! `-fill_color red@0.5` against arbitrary text.
+//! fuzz-crate: vaco-core
 #![no_main]
 use libfuzzer_sys::fuzz_target;
 use vaco_core::parse;

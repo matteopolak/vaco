@@ -5,6 +5,7 @@
 //! loop, which is the classic parser hang. Every call is required to either
 //! advance the reader or flag it, which is the same progress contract
 //! `vaco_limits::ProgressGuard` enforces on components.
+//! fuzz-crate: vaco-bitstream
 #![no_main]
 
 use arbitrary::Arbitrary;

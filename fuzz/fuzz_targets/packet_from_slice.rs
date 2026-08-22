@@ -4,6 +4,7 @@
 //! rests on, so a packet that comes out of any of these paths without at least
 //! 64 zero bytes past its payload is a soundness-adjacent finding, not a
 //! cosmetic one.
+//! fuzz-crate: vaco-packet
 #![no_main]
 
 use arbitrary::Arbitrary;

@@ -2,6 +2,7 @@
 //!
 //! Overflow here is silent and corrupts timestamps rather than crashing, which
 //! is why this is fuzzed rather than only proptested.
+//! fuzz-crate: vaco-core
 #![no_main]
 use libfuzzer_sys::fuzz_target;
 use vaco_core::Rational;

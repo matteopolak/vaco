@@ -5,6 +5,7 @@
 //! Reads are checked against the value written into each row, so a mis-indexed
 //! band shows up as wrong data rather than as a crash that never happens in
 //! safe Rust.
+//! fuzz-crate: vaco-codec-core
 
 #![no_main]
 

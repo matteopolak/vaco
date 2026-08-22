@@ -5,6 +5,7 @@
 //! that prints an unexpected column, an interleaved warning. A parser that
 //! panics there turns an oracle hiccup into a harness crash, so all four are
 //! held to the same no-panic standard as everything else.
+//! fuzz-crate: vaco-conformance
 #![no_main]
 use libfuzzer_sys::fuzz_target;
 use vaco_conformance::compare::structured;

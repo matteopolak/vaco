@@ -2,6 +2,7 @@
 //!
 //! Three nested escaping levels make this genuinely easy to get wrong, and a
 //! mistake corrupts a user's filter description silently rather than failing.
+//! fuzz-crate: vaco-core
 #![no_main]
 use libfuzzer_sys::fuzz_target;
 use vaco_core::escape::{self, Mode, FILTERGRAPH_SPECIAL, OPT_VALUE_SPECIAL};

@@ -4,6 +4,7 @@
 //! life, so every size below is attacker-controlled. Either a valid frame comes
 //! back or an error does; a panic, an overflow or a plane shorter than its own
 //! rows is a finding.
+//! fuzz-crate: vaco-frame
 #![no_main]
 
 use arbitrary::Arbitrary;
