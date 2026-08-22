@@ -137,6 +137,25 @@ and never `add -A`. In a shared working tree those destroy other agents' work.
    configuration · dependencies.
 5. `vaco-component.toml` if the crate registers a component.
 6. All three commands above green.
+7. **Close the GitHub issues your work actually completed.** Find them with
+   `gh issue list --search "<crate-name>"`, and close each with a one-line note
+   saying what landed and anything you measured on the way:
+
+   ```
+   gh issue close 123 --comment "Shipped in vaco-parse-av1: OBU framing, \
+   sequence header, av1C. Measured: coded_width is the coded size, not the \
+   cropped one — the opposite of H.264."
+   ```
+
+   **Judge per issue, not per crate.** A finished crate normally still carries
+   open issues: `vaco-scale` shipped six of ten filter kernels and no tone
+   mapping, and closing its issues wholesale would have erased that. If you
+   deferred a package, leave its issue open and say in the issue what is
+   missing — that comment is worth more than the closure.
+
+   If you are unsure whether an issue is yours, leave it open and name it in
+   your report. A wrongly-closed issue is invisible; an open one is a question
+   somebody can answer.
 
 ## Report
 
@@ -145,6 +164,7 @@ and never `add -A`. In a shared working tree those destroy other agents' work.
 - **Anything in this brief that turned out to be wrong.** Say so plainly — briefs
   are written from plans, and plans have been wrong before.
 - Your D11 fidelity grade if you wrapped an external crate.
+- **Which issues you closed, and which you left open and why.**
 
 ## Dependencies a brief may not offer you
 
