@@ -4,7 +4,7 @@
 //! must edit. Measured on a comparable project, a docs index was the single
 //! highest-churn file in the repository.
 
-use crate::{crates, repo_root, Task};
+use crate::{Task, crates, repo_root};
 
 pub fn run(check: bool) -> Task {
     let root = repo_root();
@@ -29,7 +29,11 @@ pub fn run(check: bool) -> Task {
          | Crate | Layer | Purpose | Doc |\n|---|---|---|---|\n",
     );
     for (layer, name, desc, doc, exists) in &rows {
-        let link = if *exists { format!("[{name}]({doc})") } else { "—".into() };
+        let link = if *exists {
+            format!("[{name}]({doc})")
+        } else {
+            "—".into()
+        };
         out.push_str(&format!("| `{name}` | {layer} | {desc} | {link} |\n"));
     }
 
@@ -37,7 +41,10 @@ pub fn run(check: bool) -> Task {
     if check {
         let current = std::fs::read_to_string(&dest).unwrap_or_default();
         if current != out {
-            return Err(format!("{} is stale; run `just gen-docs-index`", dest.display()));
+            return Err(format!(
+                "{} is stale; run `just gen-docs-index`",
+                dest.display()
+            ));
         }
         println!("gen-docs-index --check: up to date");
     } else {

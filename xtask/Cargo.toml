@@ -6,3 +6,14 @@ license.workspace = true
 publish = false
 
 [dependencies]
+
+# xtask enforces the project's policies and does not get to be exempt from the
+# central one: it forbids `unsafe` exactly like every other crate.
+#
+# It deliberately does NOT inherit the panic-averse lints (`unwrap_used`,
+# `panic`, `indexing_slicing`, `integer_division`). Those exist because decoders
+# parse untrusted input, where a panic is a denial-of-service vector. xtask reads
+# this repository's own files at development time, where failing loudly on
+# malformed input is the correct behaviour rather than a vulnerability.
+[lints.rust]
+unsafe_code = "forbid"

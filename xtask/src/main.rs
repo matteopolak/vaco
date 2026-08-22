@@ -10,6 +10,7 @@ use std::process::Command;
 
 mod deps;
 mod docs;
+mod gen_pixfmt;
 mod layers;
 mod registry;
 mod unsafe_audit;
@@ -25,6 +26,7 @@ fn main() {
         "unsafe-audit" => unsafe_audit::run(),
         "gen-registry" => registry::run(check),
         "gen-docs-index" => docs::run(check),
+        "gen-pixfmt" => gen_pixfmt::run(check),
         other => {
             eprintln!("unknown task: {other}\n");
             eprintln!("tasks:");
@@ -33,6 +35,9 @@ fn main() {
             eprintln!("  unsafe-audit    `unsafe` only where D2/D13 permit");
             eprintln!("  gen-registry    assemble the registry from crate fragments");
             eprintln!("  gen-docs-index  generate docs/README.md");
+            eprintln!(
+                "  gen-pixfmt      expand the pixel-format families into the committed table"
+            );
             std::process::exit(2);
         }
     };

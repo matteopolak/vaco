@@ -4,7 +4,7 @@
 //! it compiles fine — and only shows up much later as a dependency cycle nobody
 //! can unpick.
 
-use crate::{crates, repo_root, Map, Set, Task};
+use crate::{Map, Set, Task, crates, repo_root};
 
 /// Layer index per directory under `crates/`, matching `layers.toml`.
 fn layer_of(dir: &str) -> Option<u8> {
@@ -31,7 +31,9 @@ pub fn run() -> Task {
 
     for (d, name, _) in &all {
         let Some(l) = layer_of(d) else {
-            return Err(format!("crates/{d}/ is not a known layer; add it to layers.toml"));
+            return Err(format!(
+                "crates/{d}/ is not a known layer; add it to layers.toml"
+            ));
         };
         layer.insert(name.clone(), l);
         dir_of.insert(name.clone(), d.clone());
@@ -41,15 +43,17 @@ pub fn run() -> Task {
     let mut violations = Vec::new();
 
     for (_, name, path) in &all {
-        let manifest = std::fs::read_to_string(path.join("Cargo.toml"))
-            .map_err(|e| format!("{name}: {e}"))?;
+        let manifest =
+            std::fs::read_to_string(path.join("Cargo.toml")).map_err(|e| format!("{name}: {e}"))?;
         let mut deps = Set::new();
         for line in manifest.lines() {
             let line = line.trim();
-            if let Some(dep) = line.split(&[' ', '=', '.'][..]).next() {
-                if dep.starts_with("vaco-") && layer.contains_key(dep) && line.contains("path") {
-                    deps.insert(dep.to_string());
-                }
+            if let Some(dep) = line.split(&[' ', '=', '.'][..]).next()
+                && dep.starts_with("vaco-")
+                && layer.contains_key(dep)
+                && line.contains("path")
+            {
+                deps.insert(dep.to_string());
             }
         }
 
@@ -97,7 +101,10 @@ pub fn run() -> Task {
 
     let _ = root;
     if violations.is_empty() {
-        println!("layer-check: {} crates, graph acyclic and downward", all.len());
+        println!(
+            "layer-check: {} crates, graph acyclic and downward",
+            all.len()
+        );
         Ok(())
     } else {
         violations.sort();

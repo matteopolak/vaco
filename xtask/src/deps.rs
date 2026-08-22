@@ -12,7 +12,7 @@
 //! checks the property Gate 1 actually cares about: whether anything in the tree
 //! links or compiles foreign code.
 
-use crate::{capture, repo_root, Task};
+use crate::{Task, capture, repo_root};
 use std::process::Command;
 
 /// Crates whose entire purpose is to compile or bind foreign code.
@@ -21,7 +21,10 @@ const BANNED: &[(&str, &str)] = &[
     ("cmake", "drives a native build system"),
     ("bindgen", "generates FFI bindings"),
     ("pkg-config", "locates system libraries to link"),
-    ("ring", "vendors and compiles C and assembly; use rustls-rustcrypto (D14.2)"),
+    (
+        "ring",
+        "vendors and compiles C and assembly; use rustls-rustcrypto (D14.2)",
+    ),
     ("aws-lc-rs", "vendors and compiles C and assembly (D14.2)"),
     ("aws-lc-sys", "vendors and compiles C and assembly"),
     ("openssl-sys", "links the system OpenSSL"),
@@ -32,11 +35,14 @@ pub fn run() -> Task {
     let mut violations = Vec::new();
 
     for kind in ["normal", "build"] {
-        let tree = capture(
-            Command::new("cargo")
-                .current_dir(&root)
-                .args(["tree", "--workspace", "-e", kind, "--prefix", "none"]),
-        )?;
+        let tree = capture(Command::new("cargo").current_dir(&root).args([
+            "tree",
+            "--workspace",
+            "-e",
+            kind,
+            "--prefix",
+            "none",
+        ]))?;
 
         for line in tree.lines() {
             let name = line.split_whitespace().next().unwrap_or("");
@@ -49,11 +55,12 @@ pub fn run() -> Task {
     // A `links` key means the crate claims a native library. A third-party
     // build.rs is how foreign code gets compiled. Both are Gate 1 failures
     // regardless of which crate they come from.
-    let meta = capture(
-        Command::new("cargo")
-            .current_dir(&root)
-            .args(["metadata", "--format-version", "1", "--all-features"]),
-    )?;
+    let meta = capture(Command::new("cargo").current_dir(&root).args([
+        "metadata",
+        "--format-version",
+        "1",
+        "--all-features",
+    ]))?;
 
     for chunk in meta.split("\"name\":\"").skip(1) {
         let name = chunk.split('"').next().unwrap_or("");

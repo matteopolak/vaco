@@ -99,12 +99,19 @@ gen-registry:
 gen-docs-index:
     cargo xtask gen-docs-index
 
-gen:  gen-registry gen-docs-index
+# The 268-entry pixel-format table is generated from a declarative family
+# description, not hand-written: hand-maintaining that much metadata guarantees
+# silent drift, and drift here corrupts every frame that touches the format.
+gen-pixfmt:
+    cargo xtask gen-pixfmt
+
+gen:  gen-registry gen-docs-index gen-pixfmt
 
 # CI re-runs the generators and fails if the committed output differs.
 docs-check:
     cargo xtask gen-registry --check
     cargo xtask gen-docs-index --check
+    cargo xtask gen-pixfmt --check
 
 # ------------------------------------------------------ benchmarks & profiling
 

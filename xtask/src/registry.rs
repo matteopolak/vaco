@@ -8,7 +8,7 @@
 //! Linker-section registration (`inventory`, `linkme`) would also solve the
 //! contention, but both rely on `unsafe` and link tricks, which D2 rules out.
 
-use crate::{crates, repo_root, Task};
+use crate::{Task, crates, repo_root};
 
 pub fn run(check: bool) -> Task {
     let mut components: Vec<(String, String)> = Vec::new();
@@ -44,7 +44,10 @@ pub fn run(check: bool) -> Task {
                 dest.display()
             ));
         }
-        println!("gen-registry --check: up to date ({} components)", components.len());
+        println!(
+            "gen-registry --check: up to date ({} components)",
+            components.len()
+        );
     } else {
         if let Some(p) = dest.parent() {
             std::fs::create_dir_all(p).map_err(|e| e.to_string())?;

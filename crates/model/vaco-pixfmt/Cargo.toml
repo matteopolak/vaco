@@ -12,6 +12,9 @@ authors.workspace = true
 bitflags.workspace = true
 vaco-core = { path = "../../core/vaco-core" }
 
+[dev-dependencies]
+proptest.workspace = true
+
 [lints]
 workspace = true
 
