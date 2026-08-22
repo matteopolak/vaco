@@ -1,0 +1,16 @@
+# Registry fragment (plan 19 §3.4).
+#
+# One component: `matroska,webm` is a comma-separated alias family, exactly as
+# the reference reports it. Measured, not assumed — `ffprobe` prints
+# `format_name=matroska,webm` for a `DocType=webm` file as readily as for a
+# `matroska` one, and `ffprobe -h demuxer=matroska` names the demuxer
+# `matroska,webm [Matroska / WebM]` with the extension list below and no MIME
+# type of its own.
+
+[[component]]
+kind       = "demuxer"
+name       = "matroska,webm"
+long_name  = "Matroska / WebM"
+feature    = "demux-matroska"
+ctor       = "vaco_demux_matroska::DEMUXER"
+extensions = "mkv,mk3d,mka,mks,webm"

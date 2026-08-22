@@ -1,0 +1,16 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# One component, not six: the reference reports this family under the single
+# name `mov,mp4,m4a,3gp,3g2,mj2`, and `-f mp4` selects it through
+# `DemuxerDesc::matches_name`, which splits on commas.
+#
+# `vaco-format-isom` registers nothing — it is the box layer, not a container.
+
+[[component]]
+kind       = "demuxer"
+name       = "mov,mp4,m4a,3gp,3g2,mj2"
+long_name  = "QuickTime / MOV"
+feature    = "demux-mp4"
+ctor       = "vaco_demux_mp4::DEMUXER"
+extensions = "mov,mp4,m4a,3gp,3g2,mj2,psp,m4b,ism,ismv,isma,f4v,avif,heic,heif"
+mime_types = "video/mp4,audio/mp4,application/mp4,video/quicktime,video/3gpp,video/3gpp2,image/avif,image/heic"

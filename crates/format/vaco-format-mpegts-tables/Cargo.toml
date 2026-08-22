@@ -11,6 +11,10 @@ authors.workspace = true
 [dependencies]
 vaco-core = { path = "../../core/vaco-core" }
 vaco-format-core = { path = "../../format/vaco-format-core" }
+vaco-codec-core = { path = "../../signal/vaco-codec-core" }
+
+[dev-dependencies]
+proptest.workspace = true
 
 [lints]
 workspace = true

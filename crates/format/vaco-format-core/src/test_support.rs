@@ -60,6 +60,7 @@ pub(crate) const DESC_A: DemuxerDesc = DemuxerDesc {
     long_name: "test format A",
     extensions: &["fa"],
     mime_types: &["video/x-a"],
+    flags: crate::FormatFlags::empty(),
     probe: probe_a,
     open: unopenable,
 };
@@ -69,6 +70,7 @@ pub(crate) const DESC_B: DemuxerDesc = DemuxerDesc {
     long_name: "test format B",
     extensions: &["fb"],
     mime_types: &["video/x-b"],
+    flags: crate::FormatFlags::empty(),
     probe: probe_b,
     open: unopenable,
 };
@@ -78,6 +80,7 @@ pub(crate) const DESC_MIME: DemuxerDesc = DemuxerDesc {
     long_name: "test format with a mime type",
     extensions: &["fm"],
     mime_types: &["video/x-test"],
+    flags: crate::FormatFlags::empty(),
     probe: probe_mime,
     open: unopenable,
 };
@@ -87,6 +90,7 @@ pub(crate) const DESC_WEAK: DemuxerDesc = DemuxerDesc {
     long_name: "test format that always guesses",
     extensions: &[],
     mime_types: &[],
+    flags: crate::FormatFlags::empty(),
     probe: probe_weak,
     open: unopenable,
 };

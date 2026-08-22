@@ -1,0 +1,12 @@
+# Registry fragment, per the frozen schema in planning/19-parallel-execution.md
+# §3.4. `vaco-format-mpegts-tables` ships no fragment: it is a shared helper
+# like `vaco-format-isom`, and the demuxer is what registers.
+
+[[component]]
+kind       = "demuxer"
+name       = "mpegts"
+long_name  = "MPEG-TS (MPEG-2 Transport Stream)"
+feature    = "demux-mpegts"
+ctor       = "vaco_demux_mpegts::DEMUXER"
+extensions = "ts,m2t,m2ts,mts,mpegts"
+mime_types = "video/mp2t"

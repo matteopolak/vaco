@@ -134,6 +134,7 @@ pub const DEMUXER: DemuxerDesc = DemuxerDesc {
     long_name: "Vaco reference container (worked example)",
     extensions: &["vacoraw"],
     mime_types: &["application/x-vacoraw"],
+    flags: FLAGS,
     probe,
     open: open_demuxer,
 };

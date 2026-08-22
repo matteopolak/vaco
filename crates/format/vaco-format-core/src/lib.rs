@@ -430,6 +430,18 @@ pub struct DemuxerDesc {
     pub long_name: &'static str,
     pub extensions: &'static [&'static str],
     pub mime_types: &'static [&'static str],
+    /// Behavioural flags for this container, so a caller composing
+    /// [`Discovery`] can reach them **through the registry**.
+    ///
+    /// Without this a composer has to name each demuxer crate's public `FLAGS`
+    /// const, which puts a dependency edge on every container and defeats the
+    /// point of a registry. `vaco-probe` hit exactly that and had to keep a
+    /// name-keyed transcription guarded by a test.
+    ///
+    /// Getting a flag wrong is not free: `TS_DISCONT` *suppresses* the
+    /// monotonic-DTS repair, so guessing it absent would silently rewrite a
+    /// genuine discontinuity. That is why this is a field and not a default.
+    pub flags: FormatFlags,
     /// Cheap content sniff, run before the source is fully opened.
     pub probe: fn(&ProbeData<'_>) -> ProbeScore,
     pub open: fn(Box<dyn MediaSource>, &dyn ParserProvider) -> Result<Box<dyn Demuxer>>,
