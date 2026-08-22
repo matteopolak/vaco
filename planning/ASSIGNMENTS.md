@@ -21,6 +21,7 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-simd | 0 | #90 | agent:simd | done | 2026-08-21 | 2026-08-21 | x86 re-run outstanding |
 | vaco-opts | 0 | — | agent:opts | done | 2026-08-21 | 2026-08-21 |  |
 | vaco-opts-derive | 0 | — | agent:opts | done | 2026-08-21 | 2026-08-21 |  |
+| vaco-time | 0 | — | orchestrator | done | 2026-08-22 | 2026-08-22 | D18: the clock, behind one door |
 | vaco-expr | 0 | — | agent:expr | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-bitstream | 0 | — | agent:bitstream | done | 2026-08-21 | 2026-08-21 |  |
 | vaco-pixfmt | 1 | — | agent:pixfmt | done | 2026-08-21 | 2026-08-21 |
@@ -35,8 +36,8 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-protocol-file | 2 | — | agent:io | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-protocol-http | 2 | — | — | free |  |  |
 | vaco-tx | 3 | #243-#246 | agent:tx | done | 2026-08-22 | 2026-08-22 |  |
-| vaco-scale | 3 | — | agent:scale | assigned | 2026-08-22 |  |  |
-| vaco-resample | 3 | — | agent:resample | assigned | 2026-08-22 |  |  |
+| vaco-scale | 3 | — | agent:scale | done | 2026-08-22 | 2026-08-22 |  |
+| vaco-resample | 3 | — | agent:resample | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-codec-core | 3 | #170,#251 | agent:codec-core | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-codec-golomb | 3 | — | agent:codec-bits | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-codec-cabac | 3 | — | agent:codec-bits | done | 2026-08-22 | 2026-08-22 |  |
@@ -44,19 +45,19 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-codec-dsp-idct | 3 | — | — | free |  |  |
 | vaco-format-core | 4 | — | agent:format-core | done | 2026-08-22 | 2026-08-22 | unblocked by vaco-io |
 | vaco-format-riff | 4 | — | — | free |  |  |
-| vaco-format-isom | 4 | — | agent:isom | assigned | 2026-08-22 |  |  |
+| vaco-format-isom | 4 | — | agent:isom | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-format-mpegts-tables | 4 | — | — | free |  |  |
 | vaco-format-id3 | 4 | — | — | free |  |  |
-| vaco-format-nalu | 4 | — | agent:h264 | assigned | 2026-08-22 |  |  |
-| vaco-parse-h264 | 4 | — | agent:h264 | assigned | 2026-08-22 |  |  |
+| vaco-format-nalu | 4 | — | agent:h264 | done | 2026-08-22 | 2026-08-22 |  |
+| vaco-parse-h264 | 4 | — | agent:h264 | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-parse-hevc | 4 | — | — | free |  |  |
 | vaco-parse-av1 | 4 | — | — | free |  |  |
-| vaco-parse-aac | 4 | — | agent:audio-parse | assigned | 2026-08-22 |  |  |
-| vaco-parse-opus | 4 | — | agent:audio-parse | assigned | 2026-08-22 |  |  |
+| vaco-parse-aac | 4 | — | agent:audio-parse | done | 2026-08-22 | 2026-08-22 |  |
+| vaco-parse-opus | 4 | — | agent:audio-parse | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-demux-mp4 | 4 | — | — | free |  |  |
 | vaco-demux-matroska | 4 | — | — | free |  |  |
 | vaco-demux-mpegts | 4 | — | — | free |  |  |
-| vaco-filter-core | 5 | — | agent:filter-core | assigned | 2026-08-22 |  | frozen only |
+| vaco-filter-core | 5 | — | agent:filter-core | done | 2026-08-22 | 2026-08-22 | frozen only |
 | vaco-filter-framesync | 5 | — | — | free |  |  |
 | vaco-filter-graph | 5 | — | — | free |  |  |
 | vaco-registry | 6 | — | — | free |  |  |
