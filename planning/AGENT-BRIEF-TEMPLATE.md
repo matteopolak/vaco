@@ -9,6 +9,32 @@ moved, an interface froze); they may not change a constraint.
 
 ---
 
+## The plan index — check a citation before you write it
+
+Briefs are hand-written and plan numbers get mistyped. Three briefs in wave 6
+cited a plan that does not exist or covers something else, and each cost an
+agent time before it worked out what to read instead. The numbers are not
+mnemonic; look them up.
+
+| file | covers |
+|---|---|
+| `00-decisions.md` | D1–D19, the binding decisions |
+| `10-architecture.md` | workspace and crate architecture |
+| `11-foundations.md` | layers 0 and 1, the media data model |
+| `12-performance.md` | performance, and the PF-0.x measured-backwards record |
+| `13-correctness.md` | conformance, fuzzing, testing, CI, provenance |
+| `14-cli.md` | the CLI layer — `vaco-cli-core`, `vaco-textformat`, `vaco-sched`, `vaco`, `vaco-probe`, `vaco-play` |
+| `15-codecs.md` | codecs |
+| `16-filters.md` | the filter subsystem |
+| `17-scale-resample-tx.md` | `vaco-scale`, `vaco-resample`, `vaco-tx` |
+| `18-formats.md` | containers, protocols and I/O |
+| `19-parallel-execution.md` | this protocol |
+| `20-roadmap.md` | work packages, which the GitHub issues are generated from |
+
+There is **no** `14-io.md` and no `16-cli.md`; both were cited. I/O is 18 and
+the CLI is 14. If a brief points you at a file that does not exist, say so in
+your report and read the one that covers the subject — do not guess.
+
 ## Scope
 
 You own exactly one crate: `crates/<area>/<crate>/`.

@@ -34,7 +34,7 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-io | 2 | #199,#200 | agent:io | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-protocol-core | 2 | #535 | agent:io | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-protocol-file | 2 | — | agent:io | done | 2026-08-22 | 2026-08-22 |  |
-| vaco-protocol-http | 2 | — | — | free |  |  |
+| vaco-protocol-http | 2 | — | agent:http | done | 2026-08-22 | 2026-08-22 | ureq+rustls-rustcrypto; NATIVE_ONLY for wasm by design |
 | vaco-tx | 3 | #243-#246 | agent:tx | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-scale | 3 | — | agent:scale | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-resample | 3 | — | agent:resample | done | 2026-08-22 | 2026-08-22 |  |
@@ -42,16 +42,16 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-codec-golomb | 3 | — | agent:codec-bits | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-codec-cabac | 3 | — | agent:codec-bits | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-codec-cbs | 3 | — | agent:hevc | done | 2026-08-22 | 2026-08-22 |  |
-| vaco-codec-dsp-idct | 3 | — | — | free |  |  |
+| vaco-codec-dsp-idct | 3 | — | agent:idct | done | 2026-08-22 | 2026-08-22 | HEVC eq. 8-317 misread by two agreeing oracles; see plan 13 §2b |
 | vaco-format-core | 4 | — | agent:format-core | done | 2026-08-22 | 2026-08-22 | unblocked by vaco-io |
-| vaco-format-riff | 4 | — | — | free |  |  |
+| vaco-format-riff | 4 | — | agent:riff-id3 | done | 2026-08-22 | 2026-08-22 | declared chunk sizes clamped, never trusted |
 | vaco-format-isom | 4 | — | agent:isom | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-format-mpegts-tables | 4 | — | agent:mpegts | done | 2026-08-22 | 2026-08-22 |  |
-| vaco-format-id3 | 4 | — | — | free |  |  |
+| vaco-format-id3 | 4 | — | agent:riff-id3 | done | 2026-08-22 | 2026-08-22 | clean-room; issue #539's "wraps id3" premise was wrong |
 | vaco-format-nalu | 4 | — | agent:h264 | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-parse-h264 | 4 | — | agent:h264 | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-parse-hevc | 4 | — | agent:hevc | done | 2026-08-22 | 2026-08-22 |  |
-| vaco-parse-av1 | 4 | — | — | free |  |  |
+| vaco-parse-av1 | 4 | — | agent:av1 | done | 2026-08-22 | 2026-08-22 | cbs fits a non-NAL codec; Annex B framing does not round-trip |
 | vaco-parse-aac | 4 | — | agent:audio-parse | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-parse-opus | 4 | — | agent:audio-parse | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-demux-mp4 | 4 | — | agent:demux-mp4 | done | 2026-08-22 | 2026-08-22 |  |
@@ -63,7 +63,7 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-registry | 6 | — | agent:probe | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-textformat | 7 | #188,#189 | agent:textformat | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-cli-core | 7 | — | agent:cli-core | done | 2026-08-22 | 2026-08-22 | needs vaco-expr edge for `-b:v 2*1000` |
-| vaco-sched | 7 | — | — | free |  |  |
+| vaco-sched | 7 | — | agent:sched | done | 2026-08-22 | 2026-08-22 | step function; threads are a driver choice, break-even ~20us/job |
 | vaco-probe | 7 | — | agent:probe | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-cli | 7 | — | — | free |  |  |
 | vaco-conformance | 10 | #172,#173 | agent:conformance | done | 2026-08-22 | 2026-08-22 |  |
