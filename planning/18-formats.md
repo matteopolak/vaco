@@ -3451,3 +3451,60 @@ a shared pass has one.
 3. **Demuxers must not compensate locally** for anything discovery computes. If a
    value looks wrong, report it rather than patching it in the container — the
    patch will be invisible to every other container with the same problem.
+
+## Amendment — §3.1 MP4 measured again, from the demuxer side (2026-08-22)
+
+`vaco-demux-mp4` re-measured six rules with byte-patched fixtures isolating one
+field each. Several refine what the earlier `vaco-format-isom` amendment
+recorded; one inverts a plan rule outright.
+
+**`duration_ts` — a refinement, not a contradiction.** The isom amendment said
+it is the sum of the non-empty `elst` segment durations rescaled. Measured from
+the demuxer it is
+
+> `min(elst sum, min(mdhd.duration, Σ sample durations))`
+
+and with **no** edit list it is the `stts` total, not `mdhd`. The two agree
+whenever the edit sum is the smallest of the three, which is the ordinary case
+and why the earlier measurement held. The discriminating experiment is two
+points: patching `mdhd` to 20 000 on a track whose `stts` totals 25 600 gives
+`duration_ts=20000`; patching it to 40 000 gives 25 600. A single fixture cannot
+separate the formulas.
+
+`vaco_format_isom::Track::reported_duration` implements the earlier, narrower
+rule and is therefore wrong on both counts; `vaco-demux-mp4` does not call it.
+
+**`bit_rate` divides by that same clamped limit, not by `duration_ts`** — and
+rounds differently on the two paths: the sample-table path **truncates**
+(25 650 ticks → 283 873 where exact is 283 873.56), the fragment path **rounds
+to nearest** (67 753.86 → 67 754). `esds` and `btrt` are ignored; patching
+`esds` `avgBitrate` to 12 345 changed nothing.
+
+**MP4-T1's edit shift is wrong.** The shift is
+`empty_offset − max(media_time, min PTS)`. Patching one file's `elst.media_time`
+to 0 / 512 / 1024 / 2048 gives shifts of −1024 / −1024 / −1024 / −2048, where
+1024 is that track's minimum raw PTS. MP4-T1 predicts 2048 for all four. The
+separate D17 `min(0, min(ctts))` DTS deviation is reproduced unchanged.
+
+**MP4-O1 is inverted.** The plan says smallest DTS, ties broken by offset.
+Measured: **within one second, file order decides; outside it, DTS does.**
+`frag.mp4`'s first `moof` discriminates — 13 video samples spanning 0.56 s with
+audio starting at 0.000000, and the reference emits all 13 video packets first.
+
+**`format.duration` is `max(start + duration)` over streams**, not
+`mvhd.duration` (patched to 5 s, changed nothing), and **`format.start_time` is
+the minimum** over streams — which settles VERIFY-T2.
+
+**`avg_frame_rate` divides by the *raw* `stts` total** while `duration_ts` and
+`bit_rate` divide by the clamped limit. `r_frame_rate` is
+`timescale / most-common delta`, not the smallest delta.
+
+### `Stream::start_time` is the demuxer's for MP4, and discovery is right to yield
+
+For MP4 it is neither the first PTS nor first-PTS-plus-padding: it is the edit
+list's leading empty-edit offset. `prog.mp4`'s audio has a first packet at
+`pts=-1024` and the reference prints `start_pts=0`; `delay.mp4`'s video prints
+6656. So the demuxer must set it, and `Discovery::finish` filling only when the
+field is `None` is exactly the right contract — the same guard that looked like
+a hazard for Matroska is what makes MP4 correct. Both readings were right about
+their own container.
