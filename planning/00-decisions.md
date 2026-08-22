@@ -998,3 +998,51 @@ adapter rule working exactly as intended.
   API level, not merely feature-gated at the call site.
 - D16 already excluded `fd:` and numeric `pipe:` for needing `from_raw_fd`,
   which points the same way.
+
+### D17.2 — Reference defects we do not reproduce because the reference's own output is undefined (2026-08-22)
+
+D17 says match the reference where it deviates from spec in observable output.
+D17.1 carved out the case where a Rust type forbids constructing the value.
+`vaco-scale` found a third case, and it needs its own rule.
+
+Converting Y'CbCr to RGB, the reference emits **0** where the pre-clip value
+reaches 512 — the first index past the end of its clipping table. Reproduced
+directly:
+
+```
+yuv444p 1x1, scale=in_range=tv:out_range=pc:in_color_matrix=bt709
+  Y=224 U=255 V=128  ->  B = 255      correct saturation
+  Y=225 U=255 V=128  ->  B =   0      one past the table
+  Y=226 U=255 V=128  ->  B =   0
+```
+
+It is a sharp cliff, not a drift, and it is reachable from ordinary out-of-gamut
+chroma — not a contrived input.
+
+**We saturate. We do not reproduce it.** The rule:
+
+> Where the reference's behaviour is a **read of memory it does not own**, the
+> observable output is a property of one build's memory layout rather than of
+> the reference. There is nothing stable to match, so match the specification
+> instead, and pin the divergence.
+
+This is narrower than "the reference has a bug". D17 stands for bugs with
+defined, reproducible output — the `image_size` truncation and the `bt470m`
+name tables are both reproduced faithfully. The distinction is whether repeating
+the behaviour requires repeating an out-of-bounds access. It does here: emitting
+0 is not a computation we could justify, it is whatever that build's linker put
+after the table.
+
+Three obligations come with the exception, all met by `vaco-scale`:
+
+1. **Pin it against the live reference**, not against a recorded constant, so
+   the test reports if the reference's behaviour ever changes.
+2. **Pin the value either side of the cliff**, proving it is a cliff and
+   bounding exactly which inputs diverge.
+3. **Expose it as a named constant** (`REFERENCE_CLIP_DIVERGENCE`) and document
+   it where a conformance audit will look, not only in a code comment.
+
+Note what this does *not* license. "The reference is wrong and we know better"
+is not a reason to diverge — D17 exists precisely to overrule that instinct.
+The test is narrow: undefined behaviour in the reference, no stable output to
+match, divergence pinned and documented.
