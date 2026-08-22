@@ -4028,3 +4028,55 @@ Rader and Bluestein normalise through a convolution and lose roughly
 `log₂(M²/n)` bits, which is why `DIRECT_MAX_FIXED` is 4096: a direct O(n²) DFT
 rounds once per output and is the accurate fixed-point choice. No shipping codec
 reaches Bluestein in fixed point.
+
+## Amendment — §A.7.1 and §A.4.4 corrected against the binary (2026-08-22)
+
+`vaco-scale` measured three claims in this plan and found all three wrong.
+
+**§A.7.1: the default bicubic is not Catmull–Rom.** The plan says (B, C) =
+(0, 0.5). Measured, it is Mitchell–Netravali (0, **0.6**) — recovered by scaling
+an impulse 8× into 16-bit and least-squares fitting a cubic to each piece, which
+lands on 0.6 within 0.002. Pinned in a test. The two kernels differ by 20% in
+the negative lobe, so this is visible ringing, not a rounding detail.
+
+**§A.4.4: chroma siting does not shift phase by default.** The plan implies it
+does. The reference applies the plain box mapping; confirmed by impulse
+symmetry.
+
+**The canonical sequence is missing a step, and it dominates fidelity.** The
+reference does **not** interpolate chroma on the way to R'G'B' — it *replicates*.
+§A's sequence has no notion of this. Without it, `yuv420p→rgb24` diverges by
+184/255; with it, by 1/255. Any implementation following the plan as written
+would have been Divergent on the single most common conversion in the project
+and would have had no idea why.
+
+### The colour arithmetic is recoverable, and cheaply
+
+The plans assumed reproducing the reference's fixed-point arithmetic would be
+hard. It took about an hour: **13-bit fixed point with `+1<<12` rounding out to
+R'G'B', 15-bit with `+(1<<14)+(1<<8)` out to Y'CbCr**, both fitted uniquely and
+reproducing every probe sample exactly. Worth remembering the next time a plan
+assumes bit-exactness against the reference is out of reach — for the arithmetic
+itself, it usually is not. What actually costs the fidelity is a *missing stage*
+like chroma replication above, not the rounding.
+
+### Two performance results that contradicted expectation
+
+Recorded because plan 12's PF-0.1 and PF-0.2 keep proving the same point:
+
+- **Clamping intermediates between the horizontal and vertical passes made
+  fidelity worse**, not better. Reverted; numbers in the crate docs.
+- **Special-casing a one-tap filter bank as a gather was worth 2.2×** on
+  `yuv420p→rgb24`. Unexpected, because a one-tap bank looks like
+  multiply-by-one — but chroma *replication* makes the degenerate case the
+  common one, so the "special case" is the hot path.
+
+### Honest performance position
+
+6–9× off the reference, and structural rather than a missing intrinsic: the
+generic path materialises `i32` planes and makes up to four passes where the
+reference fuses. 1080p `yuv420p→rgb24` is 6.1 ms against 0.67 ms. The SIMD affine
+row measures 2.73× over scalar at 1920 samples and threading scales 3.02× at 8
+workers, so the substrate is working — the loss is in the pipeline shape. `fast.rs`
+is the seam for closing it, and closing it is a scheduled piece of work, not a
+mystery.
