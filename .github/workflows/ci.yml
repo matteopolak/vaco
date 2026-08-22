@@ -27,6 +27,9 @@ jobs:
       # D2/D13 — `unsafe` only in vaco-hw-*, and no crate silently stops
       # inheriting forbid(unsafe_code).
       - run: cargo xtask unsafe-audit
+      # D18: every library still builds for wasm32.
+      - run: rustup target add wasm32-unknown-unknown
+      - run: cargo xtask wasm-check
       # The crate graph stays acyclic and downward (D14.1).
       - run: cargo xtask layer-check
       # Generated files are current.

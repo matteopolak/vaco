@@ -34,6 +34,19 @@ derives it from there and a doc filed elsewhere is never linked.
 The ones that catch people out:
 
 - **`#![forbid(unsafe_code)]`.** No exceptions outside `vaco-hw-*`.
+- **Your library must build for `wasm32-unknown-unknown`** (D18). In practice
+  this costs nothing for computational crates — all 27 libraries already did at
+  adoption. The one real trap is the clock: `std::time::Instant::now()` and
+  `SystemTime::now()` **panic** on wasm. Use `vaco-time` instead
+  (`Instant`, `unix_nanos()`). `std::fs` is fine to *compile* — it fails
+  gracefully at runtime. Check with `cargo xtask wasm-check`; CI runs it.
+- **Create a file BEFORE declaring it in `Cargo.toml`.** A `[[bench]]`,
+  `[[test]]` or `[[bin]]` whose file does not exist fails manifest *parsing*,
+  and manifest parsing is workspace-wide: for as long as the gap is open, every
+  `cargo` command fails for **every** agent in the tree, not just yours. This
+  has now blocked the whole workspace three times. If you find yourself blocked
+  by someone else's gap, run `python3 scripts/unblock-manifests.py`, which
+  creates placeholders without needing cargo to work.
 - **Clean room (D7/D15).** Do **not** open `~/repos/FFmpeg`. Implement from the
   public specification named below. Algorithms are not copyrightable and
   format-dictated tables fall under merger — but literal code, comments and

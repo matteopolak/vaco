@@ -916,3 +916,85 @@ divergence was invisible. It took re-probing with byte-exact tooling to see it.
 That is plan 13 §1b's rule applying to the *read* side as well as the write
 side: the tool between you and the answer has opinions. When the question is
 about bytes, look at bytes.
+
+## D18 — Vaco must compile for wasm32, so OS coupling lives behind one door (2026-08-22)
+
+**Decision.** Every Vaco *library* builds for `wasm32-unknown-unknown`. Where a
+platform capability is not available there, it is abstracted into a single crate
+rather than `#[cfg]`-ed at each use site. `cargo xtask wasm-check` enforces it,
+and CI runs it.
+
+This is a forward-looking constraint: there is no wasm product yet. It is
+adopted now because retrofitting portability after the I/O and threading layers
+harden is enormously more expensive than keeping it, and because the discipline
+it imposes — knowing exactly where the OS is touched — is worth having anyway.
+
+### Measured starting position
+
+Better than expected. At adoption, **all 27 libraries already built for wasm**,
+including `vaco-io` and `vaco-format-core`. The whole cost of D18 was one new
+crate and three call sites.
+
+### The one thing that actually breaks
+
+`std::time::Instant::now()` and `SystemTime::now()` do not merely fail on
+`wasm32-unknown-unknown` — they **panic**. In a workspace that `deny`s
+`unwrap_used`, `expect_used` and `panic` specifically to keep untrusted input
+away from a crash, a panicking clock is the worst available failure mode.
+
+Note what does *not* break: `std::fs` compiles on wasm and returns runtime
+errors. Graceful failure is fine. The rule is about panics and compile failures,
+not about whether an operation can succeed.
+
+### `vaco-time`
+
+The clock now lives in `crates/core/vaco-time` and nowhere else, exposing:
+
+- `Instant` — monotonic, present on every target, saturating rather than
+  panicking on the argument orders `std` panics on.
+- `unix_nanos() -> Option<u128>` — wall clock, `Option` because a target
+  genuinely may not have one.
+
+They are deliberately **different types**, because they answer different
+questions and have different availability. `Instant` is deliberately not
+`std::time::Instant`, so a crate cannot silently reacquire the dependency.
+
+On wasm without the `web` feature, `Instant` is a stopped clock and
+`unix_nanos` returns `None`. Each fallback is chosen so the failure is safe: a
+deadline set forward never fires (deadlines are a last-resort guard, and the
+byte and element budgets that actually bound an attacker are untouched); a seed
+falls back to a constant, which weakens nothing, since `parse::color("random")`
+is documented as carrying no statistical claim; `time` in an expression reads 0.
+
+The intended fix is the declared-but-unwired `web` feature backed by `web-time`.
+It is not wired yet because adopting a dependency before there is a wasm build
+to test it against is adoption on faith, and D10 makes every adoption reviewed.
+
+### The allowlist default is the point
+
+`wasm-check` treats a crate as portable **unless** it is on `NATIVE_ONLY`. A new
+crate is portable by default, and making one native-only is a deliberate act
+that leaves a written reason — the same shape as the unsafe audit's exemptions.
+The opposite default would let OS coupling spread silently, which is the failure
+D18 exists to prevent.
+
+One entry today: `vaco-protocol-http`, which is `ureq` + `rustls` — a
+socket-and-TLS stack, and `wasm32-unknown-unknown` has no sockets. Note this is
+**not** a hole in the design. Portability there means a *different* protocol
+implementation behind the same `vaco-protocol-core` trait, which is the D11
+adapter rule working exactly as intended.
+
+### Scope
+
+- **Libraries only.** We do not run the test suite on wasm: `proptest` pulls
+  `rand_core` and `tempfile` pulls `getrandom`, which `compile_error!`s on wasm
+  without its `js` feature. Both are dev-dependencies — `cargo tree -e normal -i
+  getrandom` finds nothing — so no shipped library is affected. This is also why
+  the gate builds each library individually instead of `--workspace`, which
+  resolves one unified feature graph and drags dev-dependencies in.
+- **Threading is not yet addressed.** `wasm32-unknown-unknown` has no threads.
+  Nothing in the tree spawns any today, so the question is open rather than
+  answered; when `vaco-sched` lands it must make parallelism optional at the
+  API level, not merely feature-gated at the call site.
+- D16 already excluded `fd:` and numeric `pipe:` for needing `from_raw_fd`,
+  which points the same way.

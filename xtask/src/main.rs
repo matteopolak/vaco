@@ -15,6 +15,7 @@ mod gen_pixfmt;
 mod layers;
 mod registry;
 mod unsafe_audit;
+mod wasm;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -25,6 +26,7 @@ fn main() {
         "layer-check" => layers::run(),
         "dep-gate" => deps::run(),
         "unsafe-audit" => unsafe_audit::run(),
+        "wasm-check" => wasm::run(check),
         "gen-registry" => registry::run(check),
         "gen-docs-index" => docs::run(check),
         "gen-pixfmt" => gen_pixfmt::run(check),
@@ -35,6 +37,7 @@ fn main() {
             eprintln!("  layer-check     crate graph is acyclic and points downward");
             eprintln!("  dep-gate        D10 Gate 1: no FFI, no vendored C");
             eprintln!("  unsafe-audit    `unsafe` only where D2/D13 permit");
+            eprintln!("  wasm-check      every library still builds for wasm32 (D18)");
             eprintln!("  gen-registry    assemble the registry from crate fragments");
             eprintln!("  gen-docs-index  generate docs/README.md");
             eprintln!(

@@ -139,6 +139,36 @@ build-pgo:
 conformance suite="smoke":
     cargo run --release -p vaco-conformance {{TD}} -- --suite {{suite}}
 
+# Reclaim build scratch. Safe to run mid-wave: it never touches a target dir a
+# running agent owns, only the orchestrator's own and stale ones.
+#
+# Concurrent agents each carry a private target dir (plan 19 §4), so a wave of
+# six can hold 10-20 GiB between them on top of sccache. One wave took the disk
+# from comfortable to 98% full.
+disk-report:
+    #!/usr/bin/env bash
+    df -h /System/Volumes/Data | tail -1
+    echo "--- build scratch ---"
+    du -sh /tmp/vaco-* 2>/dev/null | sort -rh | head -10
+    echo "--- sccache ---"
+    sccache --show-stats 2>/dev/null | grep -iE "cache size|max cache" || true
+
+# Remove the orchestrator's own target dirs and any scratch older than a day.
+# Agents' dirs (/tmp/vaco-<crate>-<rand>) are left alone unless stale — an agent
+# deletes its own by literal name when it finishes, so a day-old one is orphaned.
+disk-clean:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    before=$(df -g /System/Volumes/Data | awk 'NR==2{print $4}')
+    rm -rf /tmp/vaco-p0 /tmp/vaco-fresh /tmp/vaco-fuzzlog /tmp/vaco-*.log
+    find /tmp -maxdepth 1 -name 'vaco-*' -type d -mtime +1 -print -exec rm -rf {} + 2>/dev/null || true
+    after=$(df -g /System/Volumes/Data | awk 'NR==2{print $4}')
+    echo "freed $((after - before))GiB; ${after}GiB now free"
+
+# Every library still builds for wasm32 (D18).
+wasm-check:
+    cargo xtask wasm-check
+
 # Cargo.lock moved only by dependency EDGES, never by packages (plan 19 §3.3).
 # Safe to run mid-wave: concurrent agents reconcile the lock against whatever
 # manifests exist, and this proves the reconciliation added nothing reviewable.
