@@ -222,6 +222,17 @@ clippy.toml  rustfmt.toml  .cargo/config.toml  .github/**
 crates/registry/**            (generated)
 docs/README.md                (generated)
 fuzz/Cargo.toml               (generated from target front-matter, §3.4b)
+```
+
+**Running a generator is not editing its output.** An agent that adds
+`docs/<area>/<crate>.md` or a fuzz target *should* run `cargo xtask
+gen-docs-index` / `gen-fuzz` — leaving the generated file stale fails CI's
+`--check`, and the generator is deterministic, so a concurrent agent running it
+too converges rather than conflicting. What the list above forbids is
+hand-editing the generated file. The `vaco-parse-h264` agent worked this out and
+flagged it; the rule now says so.
+
+```text
 planning/**                   (owned by the orchestrator)
 ```
 

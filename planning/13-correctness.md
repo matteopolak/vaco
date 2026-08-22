@@ -1151,6 +1151,45 @@ shell and the option layer will both have opinions. Verify your harness can
 deliver a known-awkward value intact — round-trip a value whose handling you are
 already sure of — before trusting what it says about values you are not.
 
+## 1c. Open security finding: start-code scanning is 27x slower on adversarial input
+
+`vaco-format-nalu` benchmarked four start-code scanners over four corpora, with
+agreement asserted before timing. Reproduced independently (median, Apple M5):
+
+| corpus | `vaco-bitstream::find_start_code` | `memchr::memmem` | ratio |
+|---|---|---|---|
+| dense (realistic) | 94 µs | 29 µs | 3.3x |
+| many_units | 267 µs | 624 µs | **0.43x** (ours wins) |
+| sparse (25% zeros) | 921 µs | 33 µs | **27.6x** |
+| all zeros | ~660 µs | 23 µs | **~29x** |
+
+The word-skip scanner is a solid 3.5x over naive and wins outright on
+many-small-units, so its design reasoning was sound. The problem is *where* the
+gap is: `sparse` and `zeros` are not realistic media, they are what an attacker
+sends. A scan that touches every byte of every input, 28x slower on
+attacker-chosen content, is a denial-of-service lever — the same class as the
+`slow-unit` findings in §13, reached by benchmarking rather than fuzzing.
+
+**Status: open, and deliberately not fixed by the finder.** `find_start_code` is
+`vaco-bitstream`'s single definition, and adding a second scanner in a consumer
+would fork it. The right fix is one of:
+
+1. A vectorised scanner in `vaco-simd`, which the plans already slate to own it.
+   No new dependency; `#![forbid(unsafe_code)]` and `std::simd` apply.
+2. Adopt `memchr` as a runtime dependency of `vaco-bitstream` alone (D11: one
+   door). It is pure Rust with no FFI, permissively licensed, and about as
+   well-tested as a Rust crate gets — it clears D10's gates comfortably, and a
+   substring searcher is squarely the "general algorithm" category the
+   dependency policy allows.
+
+Option 1 is preferred if it lands within a small factor of `memmem`; option 2 is
+the fallback and should not be treated as defeat. **Benchmark before choosing** —
+`benches/scan.rs` in `vaco-format-nalu` is the harness, and the corpora are
+already the right ones.
+
+`memchr` is currently a **dev-dependency** of `vaco-format-nalu`, purely so this
+evidence can be re-taken. It ships in nothing.
+
 ## 2. Fuzzing
 
 D6: *"Every demuxer, every bitstream parser, every decoder gets a fuzz target from the day it lands — a
