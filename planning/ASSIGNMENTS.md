@@ -35,8 +35,8 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-protocol-file | 2 | — | agent:io | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-protocol-http | 2 | — | — | free |  |  |
 | vaco-tx | 3 | #243-#246 | agent:tx | done | 2026-08-22 | 2026-08-22 |  |
-| vaco-scale | 3 | — | — | free |  |  |
-| vaco-resample | 3 | — | — | free |  |  |
+| vaco-scale | 3 | — | agent:scale | assigned | 2026-08-22 |  |  |
+| vaco-resample | 3 | — | agent:resample | assigned | 2026-08-22 |  |  |
 | vaco-codec-core | 3 | #170,#251 | agent:codec-core | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-codec-golomb | 3 | — | agent:codec-bits | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-codec-cabac | 3 | — | agent:codec-bits | done | 2026-08-22 | 2026-08-22 |  |
@@ -44,19 +44,19 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-codec-dsp-idct | 3 | — | — | free |  |  |
 | vaco-format-core | 4 | — | agent:format-core | done | 2026-08-22 | 2026-08-22 | unblocked by vaco-io |
 | vaco-format-riff | 4 | — | — | free |  |  |
-| vaco-format-isom | 4 | — | — | free |  |  |
+| vaco-format-isom | 4 | — | agent:isom | assigned | 2026-08-22 |  |  |
 | vaco-format-mpegts-tables | 4 | — | — | free |  |  |
 | vaco-format-id3 | 4 | — | — | free |  |  |
-| vaco-format-nalu | 4 | — | — | free |  |  |
-| vaco-parse-h264 | 4 | — | — | free |  |  |
+| vaco-format-nalu | 4 | — | agent:h264 | assigned | 2026-08-22 |  |  |
+| vaco-parse-h264 | 4 | — | agent:h264 | assigned | 2026-08-22 |  |  |
 | vaco-parse-hevc | 4 | — | — | free |  |  |
 | vaco-parse-av1 | 4 | — | — | free |  |  |
-| vaco-parse-aac | 4 | — | — | free |  |  |
-| vaco-parse-opus | 4 | — | — | free |  |  |
+| vaco-parse-aac | 4 | — | agent:audio-parse | assigned | 2026-08-22 |  |  |
+| vaco-parse-opus | 4 | — | agent:audio-parse | assigned | 2026-08-22 |  |  |
 | vaco-demux-mp4 | 4 | — | — | free |  |  |
 | vaco-demux-matroska | 4 | — | — | free |  |  |
 | vaco-demux-mpegts | 4 | — | — | free |  |  |
-| vaco-filter-core | 5 | — | — | free |  |  | frozen only |
+| vaco-filter-core | 5 | — | agent:filter-core | assigned | 2026-08-22 |  | frozen only |
 | vaco-filter-framesync | 5 | — | — | free |  |  |
 | vaco-filter-graph | 5 | — | — | free |  |  |
 | vaco-registry | 6 | — | — | free |  |  |
