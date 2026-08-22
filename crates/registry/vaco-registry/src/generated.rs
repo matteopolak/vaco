@@ -2,5 +2,88 @@
 //!
 //! Assembled from `vaco-component.toml` fragments so that adding a component
 //! touches only that component's own crate (plan 19 §3.4).
+//!
+//! Every row is gated on the cargo feature its fragment names, so a disabled
+//! component contributes no table entry, no dependency edge and no code.
+//!
+//! Kinds with no descriptor type in the trait layer yet — `encoder`, `parser`,
+//! `bitstream_filter` — get a metadata row and a path-resolution check, but no
+//! typed table. When `EncoderDesc` and friends land, add them to `KINDS` in
+//! `xtask/src/registry.rs` and the tables appear.
 
-// No components registered yet.
+/// Every enabled component, ordered by (kind, name, crate).
+///
+/// This is the listing surface: `-formats`, `-codecs`, `-demuxers` and the
+/// rest render exactly these rows.
+pub static COMPONENTS: &[crate::Component] = &[
+    #[cfg(feature = "demux-matroska")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "matroska,webm",
+        long_name: Some("Matroska / WebM"),
+        krate: "vaco-demux-matroska",
+        feature: Some("demux-matroska"),
+        media: None,
+        codec: None,
+        extensions: &["mkv", "mk3d", "mka", "mks", "webm"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-mp4")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "mov,mp4,m4a,3gp,3g2,mj2",
+        long_name: Some("QuickTime / MOV"),
+        krate: "vaco-demux-mp4",
+        feature: Some("demux-mp4"),
+        media: None,
+        codec: None,
+        extensions: &[
+            "mov", "mp4", "m4a", "3gp", "3g2", "mj2", "psp", "m4b", "ism", "ismv", "isma", "f4v",
+            "avif", "heic", "heif",
+        ],
+        mime_types: &[
+            "video/mp4",
+            "audio/mp4",
+            "application/mp4",
+            "video/quicktime",
+            "video/3gpp",
+            "video/3gpp2",
+            "image/avif",
+            "image/heic",
+        ],
+    },
+    #[cfg(feature = "demux-mpegts")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "mpegts",
+        long_name: Some("MPEG-TS (MPEG-2 Transport Stream)"),
+        krate: "vaco-demux-mpegts",
+        feature: Some("demux-mpegts"),
+        media: None,
+        codec: None,
+        extensions: &["ts", "m2t", "m2ts", "mts", "mpegts"],
+        mime_types: &["video/mp2t"],
+    },
+];
+
+/// Descriptors of every enabled demuxer implementation.
+pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
+    #[cfg(feature = "demux-matroska")]
+    &::vaco_demux_matroska::DEMUXER,
+    #[cfg(feature = "demux-mp4")]
+    &::vaco_demux_mp4::DEMUXER,
+    #[cfg(feature = "demux-mpegts")]
+    &::vaco_demux_mpegts::DEMUXER,
+];
+
+/// Descriptors of every enabled muxer implementation.
+pub static MUXERS: &[&::vaco_format_core::MuxerDesc] = &[];
+
+/// Descriptors of every enabled decoder implementation.
+pub static DECODERS: &[&::vaco_codec_core::DecoderDesc] = &[];
+
+/// Descriptors of every enabled filter implementation.
+pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[];
+
+/// Descriptors of every enabled protocol implementation.
+pub static PROTOCOLS: &[&::vaco_protocol_core::ProtocolDesc] = &[];

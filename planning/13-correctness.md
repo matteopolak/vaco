@@ -2695,3 +2695,37 @@ should have been `pub(crate)`.
 Sanity-checked when written: every known cross-crate item (`image_size`,
 `Rational`, `PixFmt`, `ChannelLayout`, …) is correctly absent, and each reported
 item has exactly one occurrence outside tests, its own definition.
+
+
+## 5c. What proves a refactor faithful
+
+`vaco-probe` deleted a block of code by slicing between two doc-comment markers,
+and the slice also removed four unrelated functions that happened to sit between
+them. The compiler caught it and the restore was correct — but the note worth
+keeping is about *what proved the restore faithful*:
+
+> "99 tests pass" was **not** what proved it. The byte corpus was — coming back
+> to exactly 188/204 with the same single divergent file. A restore that
+> silently dropped a section would have passed the unit tests.
+
+Two rules follow.
+
+**Marker-delimited edits must check what is between the markers**, not merely
+that both markers exist. A generated region, a doc-comment fence, a `BEGIN`/`END`
+pair — the span is only as trustworthy as the assumption that nothing else moved
+into it.
+
+**A refactor is proved by an end-to-end measurement that was already at a known
+number**, not by the unit tests passing. This is why the conformance corpora
+earn their keep beyond conformance: they are the only artefacts in the project
+whose output is a *number* that can be compared to a number from before. Record
+that number before a refactor and check it after.
+
+The same pattern retired a workaround in the same session. Asked whether reading
+`duration()` before wrapping was still needed, the agent swapped it out and
+re-ran the corpus rather than reasoning about it — twelve of twelve containers
+agreed either way, so it went. And going through the shared path turned out to
+be *better*, not merely equal: it applies R14, which reading the inner demuxer's
+field directly bypassed. The workaround was both redundant and slightly wrong,
+and keeping it "just in case" would have hidden the next regression rather than
+the last one.

@@ -12,6 +12,10 @@ authors.workspace = true
 vaco-core = { path = "../../core/vaco-core" }
 vaco-frame = { path = "../../model/vaco-frame" }
 vaco-filter-core = { path = "../../filter/vaco-filter-core" }
+vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
+
+[dev-dependencies]
+proptest.workspace = true
 
 [lints]
 workspace = true

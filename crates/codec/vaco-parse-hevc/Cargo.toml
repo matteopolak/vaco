@@ -14,6 +14,19 @@ vaco-bitstream = { path = "../../core/vaco-bitstream" }
 vaco-codec-core = { path = "../../signal/vaco-codec-core" }
 vaco-codec-golomb = { path = "../../signal/vaco-codec-golomb" }
 vaco-format-nalu = { path = "../../format/vaco-format-nalu" }
+vaco-codec-cbs = { path = "../../signal/vaco-codec-cbs" }
+vaco-limits = { path = "../../core/vaco-limits" }
+vaco-color = { path = "../../model/vaco-color" }
+vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
+vaco-packet = { path = "../../model/vaco-packet" }
+
+[dev-dependencies]
+proptest.workspace = true
+divan.workspace = true
+
+[[bench]]
+name = "sps"
+harness = false
 
 [lints]
 workspace = true

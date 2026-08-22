@@ -8,16 +8,44 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+# A library plus a thin binary, rather than a binary alone.
+#
+# The whole program has to be reachable from a test and from a fuzz target
+# without spawning a process: `cargo fuzz` links against a *library*, and D6
+# makes `cli_probe` a required target for a crate that parses untrusted argv and
+# untrusted media. The binary target keeps only argv, stdio and the exit code.
+#
+# Having a lib target also brings the crate inside `cargo xtask wasm-check`
+# (D18), which it passes: the only OS coupling is `std::fs` behind `vaco-io`,
+# and that compiles on wasm and fails gracefully at runtime.
+[lib]
+name = "vaco_probe"
+path = "src/lib.rs"
+
 [[bin]]
 name = "vaco-probe"
 path = "src/main.rs"
 
 [dependencies]
 vaco-core = { path = "../../core/vaco-core" }
+vaco-opts = { path = "../../core/vaco-opts" }
 vaco-cli-core = { path = "../../app/vaco-cli-core" }
 vaco-textformat = { path = "../../app/vaco-textformat" }
 vaco-registry = { path = "../../registry/vaco-registry" }
 vaco-format-core = { path = "../../format/vaco-format-core" }
+vaco-codec-core = { path = "../../signal/vaco-codec-core" }
+vaco-chlayout = { path = "../../model/vaco-chlayout" }
+vaco-packet = { path = "../../model/vaco-packet" }
+vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
+vaco-sampfmt = { path = "../../model/vaco-sampfmt" }
+vaco-io = { path = "../../io/vaco-io" }
+vaco-protocol-core = { path = "../../io/vaco-protocol-core" }
+vaco-protocol-file = { path = "../../io/vaco-protocol-file" }
+
+[dev-dependencies]
+proptest.workspace = true
+vaco-color = { path = "../../model/vaco-color" }
+vaco-limits = { path = "../../core/vaco-limits" }
 
 [lints]
 workspace = true

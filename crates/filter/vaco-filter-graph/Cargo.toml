@@ -11,8 +11,19 @@ authors.workspace = true
 [dependencies]
 vaco-core = { path = "../../core/vaco-core" }
 vaco-filter-core = { path = "../../filter/vaco-filter-core" }
-vaco-scale = { path = "../../signal/vaco-scale" }
-vaco-resample = { path = "../../signal/vaco-resample" }
+vaco-frame = { path = "../../model/vaco-frame" }
+vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
+vaco-sampfmt = { path = "../../model/vaco-sampfmt" }
+vaco-chlayout = { path = "../../model/vaco-chlayout" }
+
+[dev-dependencies]
+proptest.workspace = true
+divan.workspace = true
+vaco-expr = { path = "../../core/vaco-expr" }
+
+[[bench]]
+name = "parse"
+harness = false
 
 [lints]
 workspace = true

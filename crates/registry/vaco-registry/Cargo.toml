@@ -20,3 +20,32 @@ workspace = true
 
 [package.metadata.vaco]
 layer = 6
+
+# BEGIN GENERATED — `cargo xtask gen-registry`. Do not edit by hand.
+#
+# One optional path dependency per component crate, and one feature per
+# `feature = …` a fragment names. `default` lists every feature that did not
+# opt out with `default = false`, so a component can never be silently absent
+# from a default build — the same rule `gen-fuzz` applies to its targets.
+# A component that must not ship by default (D4, patent-encumbered) sets
+# `default = false` in its own fragment; nothing here is hand-maintained.
+
+[features]
+default = ["demux-matroska", "demux-mp4", "demux-mpegts"]
+"demux-matroska" = ["dep:vaco-demux-matroska"]
+"demux-mp4" = ["dep:vaco-demux-mp4"]
+"demux-mpegts" = ["dep:vaco-demux-mpegts"]
+
+[dependencies.vaco-demux-matroska]
+path = "../../format/vaco-demux-matroska"
+optional = true
+
+[dependencies.vaco-demux-mp4]
+path = "../../format/vaco-demux-mp4"
+optional = true
+
+[dependencies.vaco-demux-mpegts]
+path = "../../format/vaco-demux-mpegts"
+optional = true
+
+# END GENERATED
