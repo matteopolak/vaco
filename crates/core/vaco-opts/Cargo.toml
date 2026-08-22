@@ -14,6 +14,10 @@ vaco-opts-derive = { path = "../../core/vaco-opts-derive" }
 thiserror.workspace = true
 smallvec.workspace = true
 
+[dev-dependencies]
+proptest.workspace = true
+insta.workspace = true
+
 [lints]
 workspace = true
 
