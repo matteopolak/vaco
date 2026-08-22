@@ -6,3 +6,4 @@
 # everyone who runs the test benefits from these saved cases.
 cc 5d7ceae58a6201374a78d5ec055b125be398dc9ae06a5d23cc35b7734b268504 # shrinks to v = -926061.000150753, max_den = 6634
 cc 39a97b6f8158bbba65a060bd73d921955d40c93fc883e0cd86456b6af196ef3d # shrinks to a = Rational { num: 0, den: -1 }, b = Rational { num: -2147483648, den: -2147483648 }
+cc 72923939b87db615614e5f65d6a63c3e017dc381b91d6596f28273f7cffa92eb # shrinks to r = Rational { num: -2147483648, den: -128950729 }

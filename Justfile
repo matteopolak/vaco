@@ -135,8 +135,30 @@ build-pgo:
 conformance suite="smoke":
     cargo run --release -p vaco-conformance {{TD}} -- --suite {{suite}}
 
+# One target, interactively. Ctrl-C to stop.
 fuzz target:
     cargo +nightly fuzz run {{target}}
+
+# Every target, for `secs` each. The exit code is the oracle — see plan 19 §13.
+# Reports the exec count per target so a target that never ran cannot pass.
+fuzz-all secs="120":
+    #!/usr/bin/env bash
+    set -uo pipefail
+    log=$(mktemp -d); fail=0
+    for t in $(cargo +nightly fuzz list); do
+        cargo +nightly fuzz run "$t" -- -max_total_time={{secs}} -rss_limit_mb=4096 \
+            > "$log/$t.log" 2>&1
+        rc=$?
+        n=$(grep -oE '^#[0-9]+' "$log/$t.log" | tail -1)
+        printf '%-28s exit=%d execs=%s\n' "$t" "$rc" "${n:-NONE}"
+        [ "$rc" -eq 0 ] || { fail=1; tail -30 "$log/$t.log"; }
+        [ -n "${n:-}" ] || { echo "  ^ no execs: the target never ran"; fail=1; }
+    done
+    # An artifact on disk is a crash whatever the logs said.
+    if [ -n "$(find fuzz/artifacts -type f 2>/dev/null)" ]; then
+        echo "crash artifacts present:"; find fuzz/artifacts -type f; fail=1
+    fi
+    exit $fail
 
 corpus-fetch:
     cargo xtask corpus-fetch

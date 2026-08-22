@@ -25,7 +25,7 @@
 //!
 //! | Function | Accepted |
 //! |---|---|
-//! | [`image_size`] | `WxH`, `WXH`, or one of [`image_size_names`] |
+//! | [`image_size`] | `W<sep>H` for any single-byte `<sep>`, or one of [`image_size_names`] |
 //! | [`video_rate`] | `num/den`, `num:den`, an integer, a decimal, or one of [`video_rate_names`] |
 //! | [`rational`] | `num/den`, `num:den`, an integer, or a decimal (approximated, `max_den` 10^6) |
 //! | [`duration`] | `[-][HH:]MM:SS[.m…]` or `[-]S+[.m…][s\|ms\|us]` |
@@ -138,17 +138,99 @@ const SIZES: &[(&str, u32, u32)] = &[
     ("uhd4320", 7680, 4320),
 ];
 
-/// `"1920x1080"`, or one of the abbreviations in [`image_size_names`].
+/// `"1920x1080"`, or one of the abbreviations in [`image_size_names`]
+/// (matched exactly, so `VGA` is not `vga`).
 ///
-/// The separator may be `x` or `X`. Both halves must be plain decimal `u32`;
-/// a sign, a space or trailing junk is a rejection.
+/// Otherwise: a decimal width, **one** separator byte, a decimal height, and
+/// then end of string. Both dimensions must be strictly positive.
+///
+/// # D17: the separator is any single byte, not `x`
+///
+/// The reference does not look for an `x`. It runs `strtol` for the width,
+/// skips exactly one byte if any remain, runs `strtol` for the height, and
+/// requires the string to be exhausted. So `320-240`, `320 240`, `320,240` and
+/// `320+240` all parse as 320x240, and are accepted on real command lines.
+/// `320240` is rejected — not for lacking a separator, but because the first
+/// `strtol` eats the lot and the height comes out 0.
+///
+/// `strtol` also skips leading whitespace and takes a sign, which is why
+/// `" 320x240"` is accepted but `"320x240 "` is not, and why the sign is
+/// caught by the positivity check rather than by the grammar.
+///
+/// # D17: out-of-range dimensions wrap rather than fail
+///
+/// The reference stores `strtol`'s `long` into an `int`. On every target that
+/// matters that is a wrapping truncation, and the *truncated* value is what
+/// gets range-checked. `4294967297x240` is therefore accepted as `1x240`, and
+/// `4294967296x240` is rejected for being 0 — not for being too large.
+///
+/// Both of these are reproduced deliberately. They decide which command lines
+/// are accepted, so "fixing" them would diverge our CLI from the reference.
+/// Read D17 before changing either.
 #[must_use]
 pub fn image_size(s: &str) -> Option<(u32, u32)> {
     if let Some(&(_, w, h)) = SIZES.iter().find(|(n, _, _)| *n == s) {
         return Some((w, h));
     }
-    let (w, h) = s.split_once('x').or_else(|| s.split_once('X'))?;
-    Some((w.parse().ok()?, h.parse().ok()?))
+    // Byte-wise throughout: the reference advances one *byte* past the
+    // separator, which for a multi-byte character lands mid-sequence. Slicing
+    // a `&str` there would panic, and the leftover continuation byte is not a
+    // digit, so the height parse fails and the whole thing is rejected anyway.
+    let (w, rest) = strtol10(s.as_bytes());
+    let rest = rest.get(1..).unwrap_or(rest);
+    let (h, rest) = strtol10(rest);
+    if !rest.is_empty() {
+        return None;
+    }
+    // The truncation is the reference's, and it happens before the check.
+    let (w, h) = (w as i32, h as i32);
+    (w > 0 && h > 0).then_some((w as u32, h as u32))
+}
+
+/// `strtol(s, &end, 10)`: leading ASCII whitespace, one optional sign, then
+/// decimal digits, saturating at the `i64` bounds on overflow.
+///
+/// Returns the value and the unconsumed tail. When no digits are present the
+/// value is 0 and the tail is the *whole* input, whitespace included — C leaves
+/// `endptr` at the original pointer on a failed conversion, and callers that
+/// step over a separator byte can see the difference.
+fn strtol10(b: &[u8]) -> (i64, &[u8]) {
+    let ws = b.iter().take_while(|c| c.is_ascii_whitespace()).count();
+    let mut rest = b.get(ws..).unwrap_or_default();
+    let neg = match rest.first() {
+        Some(b'-') => {
+            rest = rest.get(1..).unwrap_or_default();
+            true
+        }
+        Some(b'+') => {
+            rest = rest.get(1..).unwrap_or_default();
+            false
+        }
+        _ => false,
+    };
+    let ndigits = rest.iter().take_while(|c| c.is_ascii_digit()).count();
+    let (digits, tail) = rest.split_at_checked(ndigits).unwrap_or((rest, &[]));
+    if digits.is_empty() {
+        // No conversion: C leaves `endptr` at the original pointer, whitespace
+        // and sign included. A caller stepping over a separator byte can tell.
+        return (0, b);
+    }
+    let mag = digits.iter().fold(0_u64, |a, d| {
+        a.saturating_mul(10).saturating_add(u64::from(d - b'0'))
+    });
+    // `strtol` clamps to LONG_MAX / LONG_MIN rather than failing.
+    let v = if neg {
+        if mag > i64::MIN.unsigned_abs() {
+            i64::MIN
+        } else {
+            mag.cast_signed().wrapping_neg()
+        }
+    } else if mag > i64::MAX.cast_unsigned() {
+        i64::MAX
+    } else {
+        mag.cast_signed()
+    };
+    (v, tail)
 }
 
 /// The abbreviation table, for help output and tests.
@@ -180,12 +262,24 @@ const RATES: &[(&str, i32, i32)] = &[
 ///
 /// The abbreviations are checked first, so `film` is 24/1 and never a
 /// numeric parse.
+///
+/// **Only a strictly positive, finite rate is accepted.** `rational` parses
+/// zero, negative and infinite ratios and documents that filtering them is the
+/// caller's job, because some options legitimately accept them — and this is
+/// that caller. A frame rate of zero or infinity is not a rate.
+///
+/// Verified against the reference, which rejects every one of `0`, `0/0`,
+/// `0/5`, `-25` and `1/0` with "Unable to parse … as video rate". A fuzz target
+/// found us returning `Some(0/0)` for `"00:0"`, which is indistinguishable from
+/// our "unknown" sentinel and would have propagated as a silently undefined
+/// frame rate.
 #[must_use]
 pub fn video_rate(s: &str) -> Option<Rational> {
     if let Some(&(_, n, d)) = RATES.iter().find(|(n, _, _)| *n == s) {
         return Some(Rational::new(n, d));
     }
-    rational(s)
+    let r = rational(s)?;
+    (r.num > 0 && r.den > 0).then_some(r)
 }
 
 /// The frame-rate abbreviation table, for help output and tests.

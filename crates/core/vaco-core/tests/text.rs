@@ -142,6 +142,62 @@ fn image_size_accepts_both_spellings() {
     assert!(parse::image_size_names().count() >= 53);
 }
 
+/// Every case below was probed against the reference (ffmpeg 8.1,
+/// `-f rawvideo -video_size <s>`) rather than read off a grammar. See the D17
+/// notes on `parse::image_size`.
+#[test]
+fn image_size_matches_the_reference_strtol_grammar() {
+    // The separator is one byte, and it is not required to be an `x`.
+    for s in [
+        "320x240", "320X240", "320-240", "320 240", "320,240", "320+240",
+    ] {
+        assert_eq!(parse::image_size(s), Some((320, 240)), "{s:?}");
+    }
+    // `strtol` skips leading whitespace, but nothing consumes a trailing byte.
+    assert_eq!(parse::image_size("  320x240"), Some((320, 240)));
+    assert_eq!(parse::image_size("320x 240"), Some((320, 240)));
+    assert_eq!(parse::image_size("320x+240"), Some((320, 240)));
+    assert_eq!(parse::image_size("320x240 "), None);
+    // No separator: the first parse eats the lot and the height comes out 0.
+    assert_eq!(parse::image_size("320240"), None);
+    assert_eq!(parse::image_size("320x"), None);
+    assert_eq!(parse::image_size("x240"), None);
+    // Zero and negative dimensions are rejected in either position.
+    for s in ["0x1", "0X1", "1x0", "0x0", "-1x2", "-0x240"] {
+        assert_eq!(parse::image_size(s), None, "{s:?}");
+    }
+    // Abbreviations are matched exactly.
+    assert_eq!(parse::image_size("vga"), Some((640, 480)));
+    assert_eq!(parse::image_size("VGA"), None);
+    assert_eq!(parse::image_size(" vga"), None);
+}
+
+/// D17: the reference range-checks the `int`-truncated value, so a width just
+/// over 2^32 is accepted as a small one. Reproduced deliberately.
+#[test]
+fn image_size_truncates_before_the_range_check() {
+    assert_eq!(
+        parse::image_size("2147483647x240"),
+        Some((2_147_483_647, 240))
+    );
+    assert_eq!(parse::image_size("2147483648x240"), None); // truncates to i32::MIN
+    assert_eq!(parse::image_size("4294967296x240"), None); // truncates to 0
+    assert_eq!(parse::image_size("4294967297x240"), Some((1, 240))); // truncates to 1
+    assert_eq!(parse::image_size("8589934593x240"), Some((1, 240))); // 2*2^32 + 1
+    // Past LONG_MAX, `strtol` clamps; the clamp truncates to -1.
+    assert_eq!(parse::image_size("99999999999999999999x240"), None);
+}
+
+/// A multi-byte separator leaves the reference mid-sequence, and the resulting
+/// continuation byte is not a digit. We must reject without panicking on the
+/// non-`char`-boundary slice.
+#[test]
+fn image_size_survives_a_multibyte_separator() {
+    assert_eq!(parse::image_size("320\u{00d7}240"), None);
+    assert_eq!(parse::image_size("320\u{00d7}"), None);
+    assert_eq!(parse::image_size("\u{00d7}"), None);
+}
+
 #[test]
 fn video_rate_abbreviations_are_exact() {
     assert_eq!(parse::video_rate("ntsc"), Some(Rational::new(30000, 1001)));
@@ -333,9 +389,14 @@ proptest! {
     }
 
     /// Every parser inverts its formatter exactly.
+    ///
+    /// The size domain is `1..=i32::MAX` because that is the reference's own
+    /// accepted range — `format_image_size` will happily render a `u32` the
+    /// parser then rejects (0) or aliases onto a different one (> 2^32). See
+    /// the D17 notes on `parse::image_size`.
     #[test]
     fn parsers_roundtrip(
-        w in any::<u32>(), h in any::<u32>(),
+        w in 1..=i32::MAX.cast_unsigned(), h in 1..=i32::MAX.cast_unsigned(),
         us in (i64::MIN + 1)..=i64::MAX,
         rgba in any::<(u8, u8, u8, u8)>(),
         num in any::<i32>(), den in any::<i32>(),

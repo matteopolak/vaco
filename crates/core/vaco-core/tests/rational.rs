@@ -132,10 +132,21 @@ fn undefined_has_no_order_but_has_a_total_one() {
 
 #[test]
 fn reduce_at_i32_min() {
-    // i32::MIN / -1 is 2^31, which no i32 numerator can hold: saturate, never wrap.
-    let r = Rational::new(i32::MIN, -1).reduced();
-    assert_eq!(r, Rational::new(i32::MAX, 1));
-    assert!(Rational::new(i32::MIN, -1).checked_reduced().is_none());
+    // i32::MIN / -1 is 2^31, which no i32 numerator can hold. `reduced()` returns
+    // the input UNCHANGED rather than the nearest representable value, so the
+    // number is still exact — just not in canonical form.
+    //
+    // This test previously asserted saturation to i32::MAX/1. A fuzz target
+    // showed why that was wrong: saturating makes two genuinely different
+    // rationals compare equal after reduction, so any code that reduced before
+    // comparing got a silently wrong answer.
+    let input = Rational::new(i32::MIN, -1);
+    assert_eq!(
+        input.reduced(),
+        input,
+        "reduction must never change the value"
+    );
+    assert!(input.checked_reduced().is_none());
 
     // i32::MIN / -2 reduces to 2^30 / 1, which fits exactly.
     assert_eq!(
@@ -152,9 +163,11 @@ fn reduce_at_i32_min() {
     );
 
     // 1 / i32::MIN: the sign has to move to the numerator, and 2^31 does not fit
-    // there either. The result is the closest representable rational, not a wrap.
-    let r = Rational::new(1, i32::MIN).reduced();
-    assert!(r.num < 0 && r.den > 0);
+    // there either. The input is returned unchanged — exact, but with the sign
+    // still on the denominator.
+    let input = Rational::new(1, i32::MIN);
+    let r = input.reduced();
+    assert_eq!(r, input, "reduction must never change the value");
     assert!(r.to_f64() < 0.0 && r.to_f64() > -1e-9);
 }
 
@@ -278,11 +291,16 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(2048))]
 
     /// `reduced()` returns the same number, in canonical form, whenever that
-    /// number is representable at all; when it is not, it is still close.
+    /// canonical form is representable; when it is not, it returns the input
+    /// unchanged. Either way **the value is preserved** — which is the property
+    /// the name claims and the one callers rely on.
     #[test]
     fn reduced_preserves_value(r in any_rational()) {
         let red = r.reduced();
-        prop_assert!(red.den >= 0);
+        // The value is always preserved. Sign normalisation is not always
+        // possible: a denominator of i32::MIN cannot be negated in i32.
+        prop_assert_eq!(reference_cmp(red, r), Ordering::Equal);
+        prop_assert!(red.den >= 0 || r.checked_reduced().is_none());
         if red.den == 0 {
             prop_assert!((-1..=1).contains(&red.num));
         }
@@ -290,12 +308,11 @@ proptest! {
             prop_assert_eq!(red, exact);
             prop_assert_eq!(reference_cmp(red, r), Ordering::Equal);
         } else {
-            // Not representable: the fallback must still be finite, signed
-            // correctly and close to the true value.
-            prop_assert!(red.den > 0);
+            // Not representable in canonical form: the input is returned
+            // unchanged, so it is EXACT rather than merely close. Only the sign
+            // placement differs from canonical.
+            prop_assert_eq!(red, r);
             prop_assert_eq!(red.signum(), r.signum());
-            let err = (red.to_f64() - r.to_f64()).abs();
-            prop_assert!(err <= r.to_f64().abs() / 1e9 + 1e-9, "err {}", err);
         }
         // Canonical form: reducing twice changes nothing.
         prop_assert_eq!(red.reduced(), red);

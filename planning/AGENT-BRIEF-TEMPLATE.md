@@ -81,6 +81,12 @@ and never `add -A`. In a shared working tree those destroy other agents' work.
    an invariant.
 3. A fuzz target if the crate parses untrusted input. **A crate that parses input
    and has no fuzz target is not done** (D6).
+
+   Report the target's **exit code and exec count**, not a verdict. Do not grep
+   the log for `panicked` — that has already produced two false "clean" reports
+   (plan 19 §13). `cargo +nightly fuzz run` exits non-zero on a crash, and a
+   crash also leaves a file in `fuzz/artifacts/<target>/`; check both, and say
+   `exit=0 execs=#11822410` so a target that never ran cannot pass as clean.
 4. `docs/<layer>/<crate>.md` with: what it is · how it works · how to change it ·
    configuration · dependencies.
 5. `vaco-component.toml` if the crate registers a component.

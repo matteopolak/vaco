@@ -89,14 +89,27 @@ impl Rational {
     /// Reduce to lowest terms, normalising the sign onto the numerator.
     ///
     /// Undefined stays undefined; an infinity collapses to `±1/0`; zero becomes
-    /// `0/1`. On the two boundary inputs whose reduced value does not fit in
-    /// `i32/i32` — those involving `i32::MIN` against a negative denominator —
-    /// the closest representable rational is returned instead, because this
-    /// method cannot fail. Use [`Rational::checked_reduced`] to see that happen.
+    /// `0/1`.
+    ///
+    /// **Reduction never changes the value.** On the boundary inputs whose
+    /// reduced form does not fit in `i32/i32` — those involving `i32::MIN`
+    /// against a negative denominator — this returns `self` unchanged rather
+    /// than the nearest representable rational.
+    ///
+    /// That matters more than it looks. This method previously approximated, on
+    /// the reasoning that it cannot fail and something must be returned. A fuzz
+    /// target found the consequence: `-1/i32::MIN` is exactly `1/2147483648`,
+    /// which no `i32` denominator can hold, so it saturated to `1/2147483647`
+    /// and became **equal to a genuinely different rational**. Any code that
+    /// reduced before comparing then got the wrong answer, silently. Returning
+    /// a not-fully-reduced but exact value is strictly safer: reduction is an
+    /// optimisation, not a change of meaning.
+    ///
+    /// Use [`Rational::checked_reduced`] to detect the case explicitly.
     #[must_use]
     pub fn reduced(self) -> Self {
         let (n, d) = self.canonical();
-        from_canonical(n, d)
+        exact_from_canonical(n, d).unwrap_or(self)
     }
 
     /// [`Rational::reduced`], but `None` when the reduced value is not exactly

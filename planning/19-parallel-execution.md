@@ -444,3 +444,55 @@ git read-tree HEAD          # index only; the working tree is untouched
 files. Do **not** reach for `git reset` here out of habit — `--hard` would destroy
 every in-flight agent's work, and the `MM` display is exactly the kind of scary
 symptom that invites that reflex.
+
+## 13. Fuzzing: check the exit code, never grep the log
+
+A fuzz run was reported as "six targets clean" when two of them had in fact
+found crashes. The report came from grepping the captured output for `panicked`
+in a loop. The grep missed them — libFuzzer's crash report is interleaved with
+the target's own stderr and the loop's redirection dropped part of it — and
+nothing else in the pipeline disagreed, so "clean" went into the ledger. The
+crash artifacts sat in `fuzz/artifacts/` for two waves before an agent working
+on `vaco-frame` noticed the directory was not empty and said so.
+
+Both were real:
+
+- `Rational::reduced()` saturated at `i32::MIN`, mapping `-1/i32::MIN` onto a
+  genuinely different rational, so `cmp` disagreed with itself before and after
+  reduction.
+- `parse::video_rate("00:0")` returned `Some(0/0)`; the reference rejects it.
+
+A third, `image_size` accepting a zero dimension, was found on the very next run
+after the fix — the target had never got past the first crash to reach it.
+
+### The rule
+
+`cargo +nightly fuzz run` **exits non-zero on a crash**. That is the oracle.
+
+```sh
+cargo +nightly fuzz run "$t" -- -max_total_time=120 > "$log" 2>&1
+rc=$?                       # <-- this, not `grep panicked "$log"`
+```
+
+Two further checks, both cheap, both of which would independently have caught
+this:
+
+1. **`find fuzz/artifacts -type f` must be empty afterwards.** An artifact on
+   disk is a crash, whatever the log says. Check it in CI, not just by eye.
+2. **Report the exec count, not the verdict.** A target that fails to build, or
+   dies in the first millisecond, also produces no `panicked` line. `#11822410`
+   is evidence of fuzzing; "clean" is not. Pull the last `#<n>` out of the log
+   and put it in the ledger next to the target name.
+
+### The wider point
+
+This is the same failure as §11 (grepping `Cargo.lock` for Gate 1 instead of
+asking the build graph) and the `unsafe-audit` rewrite (grepping source text
+instead of asking the compiler). Three times now, a text search over a tool's
+*output* has been wrong where the tool's own *result* was right there. When a
+tool already computes the answer — an exit code, a resolved graph, a lint —
+that answer is the oracle. Grep is for finding things to look at, not for
+deciding whether something passed.
+
+Reporting a check as passed when it was never really run is worse than reporting
+a failure: a failure gets fixed, a false pass gets built on.
