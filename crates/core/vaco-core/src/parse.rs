@@ -478,7 +478,11 @@ const COLORS: &[(&str, u8, u8, u8)] = &[
     ("mediumaquamarine", 0x66, 0xcd, 0xaa),
     ("mediumblue", 0x00, 0x00, 0xcd),
     ("mediumorchid", 0xba, 0x55, 0xd3),
-    ("mediumpurple", 0x93, 0x70, 0xdb),
+    // D17: SVG 1.1 / CSS Color 3 define #9370DB. FFmpeg 8.1 emits #9370D8 — a
+    // `db`->`d8` transposition. We reproduce the reference's value so that
+    // `-fill_color mediumpurple` paints identical pixels in both programs (D6).
+    // Do NOT "correct" this to the standard's value without reading D17.
+    ("mediumpurple", 0x93, 0x70, 0xd8),
     ("mediumseagreen", 0x3c, 0xb3, 0x71),
     ("mediumslateblue", 0x7b, 0x68, 0xee),
     ("mediumspringgreen", 0x00, 0xfa, 0x9a),
@@ -499,7 +503,9 @@ const COLORS: &[(&str, u8, u8, u8)] = &[
     ("palegoldenrod", 0xee, 0xe8, 0xaa),
     ("palegreen", 0x98, 0xfb, 0x98),
     ("paleturquoise", 0xaf, 0xee, 0xee),
-    ("palevioletred", 0xdb, 0x70, 0x93),
+    // D17: SVG 1.1 / CSS Color 3 define #DB7093. FFmpeg 8.1 emits #D87093 — the
+    // same transposition as `mediumpurple`. Reference value reproduced for D6.
+    ("palevioletred", 0xd8, 0x70, 0x93),
     ("papayawhip", 0xff, 0xef, 0xd5),
     ("peachpuff", 0xff, 0xda, 0xb9),
     ("peru", 0xcd, 0x85, 0x3f),

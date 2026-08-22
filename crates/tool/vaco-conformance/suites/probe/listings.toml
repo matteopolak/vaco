@@ -1,0 +1,53 @@
+# Listing commands — the first C0 targets that need no media at all.
+#
+# These are deliberately the cheapest possible cases: no corpus, no decode, one
+# process per side. They exist so the harness has something real to run before
+# any codec does, and so `vaco-probe`'s writer output is held to byte equality
+# from its very first commit (plan 13 §1.11.1: probe output is C0, always).
+#
+# Every case here SKIPS until `vaco-probe` exists. That is the designed
+# behaviour, not a gap: a skip is counted and reported, and §1.5.4's skip budget
+# makes the coverage hole visible instead of letting it pass as green.
+
+schema = 1
+suite  = "probe-listings"
+tool   = "probe"
+tier   = "smoke"
+owner  = "@correctness-owner"
+
+# No media: these commands read nothing.
+[[media]]
+id     = "none"
+source = "builtin://none"
+
+[[axis]]
+name = "listing"
+values = [
+  { id = "pix-fmts",  argv = ["-show_pixel_formats"] },
+  { id = "colors",    argv = ["-colors"], tier = "core" },
+]
+
+[[axis]]
+name = "writer"
+values = [
+  { id = "default", argv = ["-of", "default"] },
+  { id = "compact", argv = ["-of", "compact"], tier = "core" },
+  { id = "csv",     argv = ["-of", "csv"], tier = "core" },
+  { id = "flat",    argv = ["-of", "flat"], tier = "core" },
+  { id = "ini",     argv = ["-of", "ini"], tier = "core" },
+  { id = "json",    argv = ["-of", "json"] },
+  { id = "xml",     argv = ["-of", "xml"], tier = "core" },
+]
+
+[[exclude]]
+when   = { listing = ["colors"], writer = ["compact", "csv", "flat", "ini", "json", "xml"] }
+reason = """
+`-colors` is a plain two-column listing that ignores `-of` entirely, so pairing
+it with the whole writer axis would produce seven byte-identical cases. One
+`writer=default` case remains, which is the one that actually tests the listing.
+"""
+
+[compare]
+mode    = "exact-bytes"
+capture = ["stdout", "exit-code"]
+timeout = "20s"

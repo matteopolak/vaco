@@ -66,6 +66,20 @@ component breaks it.
 | **R6** | Output only ever follows input | `Violation::OutputWithoutInput` |
 | **C1** | A component without `Caps::DELAY` produces nothing during a drain | `Violation::DelayedOutputWithoutCap` |
 | **C2** | A component without `Caps::SUBFRAMES` produces at most one output per input | `Violation::SubframesWithoutCap` |
+
+Both capability rules are stated to the validator in terms of what a *caller*
+can see, which is not quite the same as how they read:
+
+* **C2** becomes "cumulative outputs never exceed cumulative inputs". Same
+  statement, but it does not misfire when a caller sends several inputs before
+  taking anything and then drains the queue in one go.
+* **C1** becomes "output appeared after `send(None)`, from a component that had
+  already answered `NeedMoreInput` and been given no input since". A component
+  that merely had output queued under backpressure is not buffering; one that
+  said it had nothing left and then produced something is. The consequence is
+  that C1 is only detected when the caller actually drained before end of
+  stream — it never reports a false violation, and it catches the real case
+  every ordinary caller produces.
 | **F1** | `flush()` is infallible and total: the post-state is exactly a fresh component's, minus reparsing extradata | `Violation::FlushDidNotReset` |
 | **E1** | A decode error is **not** terminal unless it is fatal. The caller decides whether to emit the frame with `FrameFlags::CORRUPT` or suppress it | — |
 | **D1** | Output is bit-identical for any legal thread count. Conformance runs diff `threads ∈ {1, 2, 3, 8, 17}` | — |
@@ -210,10 +224,10 @@ milestone.
 `ParserDriver` owns the three things every parser gets wrong at least once:
 
 ```text
-  push(chunk)  ──►  [ reassembly buffer ] ──► parser.parse(&buf) ──► Packet
-                           ▲                        │
-                           └── unconsumed tail ─────┘
-  finish()     ──►  parse(&[]) once the buffer drains ──► final Packet ──► Eof
+  push(chunk)      ──►  [ reassembly buffer ] ──► parser.parse(&buf) ──► Packet
+  next_unit()           ▲                              │
+                        └──── unconsumed tail ─────────┘
+  finish()         ──►  parse(&[]) once the buffer drains ──► final Packet ──► Eof
 ```
 
 * **Reassembly across chunk boundaries**, with a cursor and amortised compaction
@@ -350,7 +364,9 @@ specification Annex A) and are reached here through `ProfileTable` and
   no failing test is documentation, not a rule.
 * **Adding a `Caps` flag.** Append at the next free bit. Never renumber:
   descriptors are `const` values across many crates. Add it to `CAP_NAMES`, which
-  is what the CLI prints and parses.
+  is what the CLI prints and parses. Note that `bitflags` generates a
+  `from_name` of its own over the *constant* names, which is why the CLI-facing
+  lookup is `Caps::from_cli_name`.
 * **Adding a codec.** `CodecId` is hand-written here for now; plan 15 §1.1 has it
   generated from `codecs.toml` the way `vaco-pixfmt`'s table is. The `CodecEntry`
   shape is what that generator must emit, so adding a variant means adding a row
@@ -390,6 +406,18 @@ budgeted), `vaco-opts`, and `bitflags`. Nothing outside the workspace beyond
 `bitflags`; `proptest` for tests.
 
 Nothing depends on a concrete codec, and nothing here knows one exists.
+
+## Fuzzing
+
+Three targets in `fuzz/`, behind the `codec-core` feature. The untrusted input
+is the *call sequence*, not a byte stream, because that is what this crate
+actually consumes:
+
+| Target | What it drives |
+|---|---|
+| `codec_send_receive` | arbitrary caller behaviour against the mock codec, checked against the reference model and for recorded violations |
+| `codec_parser_driver` | arbitrary chunking and parser misbehaviour through `ParserDriver`, with a hard step cap so a hang is a finding |
+| `codec_picture_bands` | arbitrary picture geometry, publication and block reads, with every byte checked against the row it should have come from |
 
 ## Testing
 

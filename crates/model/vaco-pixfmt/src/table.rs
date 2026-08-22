@@ -533,8 +533,8 @@ pub enum PixFmt {
     D3d12 = 255,
     /// `vdpau`
     Vdpau = 256,
-    /// `videotoolbox`
-    Videotoolbox = 257,
+    /// `videotoolbox_vld`
+    VideotoolboxVld = 257,
     /// `cuda`
     Cuda = 258,
     /// `qsv`
@@ -549,8 +549,8 @@ pub enum PixFmt {
     DrmPrime = 263,
     /// `vulkan`
     Vulkan = 264,
-    /// `amf_surface`
-    AmfSurface = 265,
+    /// `amf`
+    Amf = 265,
     /// `ohcodec`
     Ohcodec = 266,
     /// `cuarray`
@@ -841,14 +841,14 @@ pub(crate) static DESCRIPTORS: [PixFmtDescriptor; 268] = [
     d("y216be", &[c(0,4,0,0,16),c(0,8,2,0,16),c(0,8,6,0,16)], 1, 1, 0, 32, F::BIG_ENDIAN),
     d("monow", &[c(0,1,0,0,1)], 1, 0, 0, 1, F::BITSTREAM),
     d("monob", &[c(0,1,0,0,1)], 1, 0, 0, 1, F::BITSTREAM),
-    d("pal8", &[c(0,1,0,0,8)], 1, 0, 0, 8, F::PALETTE),
+    d("pal8", &[c(0,1,0,0,8)], 1, 0, 0, 8, F::PALETTE.union(F::ALPHA)),
     d("vaapi", &[], 0, 0, 0, 0, F::HW_ACCEL),
     d("dxva2_vld", &[], 0, 0, 0, 0, F::HW_ACCEL),
     d("d3d11va_vld", &[], 0, 0, 0, 0, F::HW_ACCEL),
     d("d3d11", &[], 0, 0, 0, 0, F::HW_ACCEL),
     d("d3d12", &[], 0, 0, 0, 0, F::HW_ACCEL),
     d("vdpau", &[], 0, 0, 0, 0, F::HW_ACCEL),
-    d("videotoolbox", &[], 0, 0, 0, 0, F::HW_ACCEL),
+    d("videotoolbox_vld", &[], 0, 0, 0, 0, F::HW_ACCEL),
     d("cuda", &[], 0, 0, 0, 0, F::HW_ACCEL),
     d("qsv", &[], 0, 0, 0, 0, F::HW_ACCEL),
     d("mmal", &[], 0, 0, 0, 0, F::HW_ACCEL),
@@ -856,7 +856,7 @@ pub(crate) static DESCRIPTORS: [PixFmtDescriptor; 268] = [
     d("opencl", &[], 0, 0, 0, 0, F::HW_ACCEL),
     d("drm_prime", &[], 0, 0, 0, 0, F::HW_ACCEL),
     d("vulkan", &[], 0, 0, 0, 0, F::HW_ACCEL),
-    d("amf_surface", &[], 0, 0, 0, 0, F::HW_ACCEL),
+    d("amf", &[], 0, 0, 0, 0, F::HW_ACCEL),
     d("ohcodec", &[], 0, 0, 0, 0, F::HW_ACCEL),
     d("cuarray", &[], 0, 0, 0, 0, F::HW_ACCEL),
 ];
@@ -928,19 +928,20 @@ pub(crate) static ALL: [PixFmt; 268] = [
     PixFmt::Y212le, PixFmt::Y212be, PixFmt::Y216le, PixFmt::Y216be,
     PixFmt::MonoWhite, PixFmt::MonoBlack, PixFmt::Pal8, PixFmt::Vaapi,
     PixFmt::Dxva2Vld, PixFmt::D3d11vaVld, PixFmt::D3d11, PixFmt::D3d12,
-    PixFmt::Vdpau, PixFmt::Videotoolbox, PixFmt::Cuda, PixFmt::Qsv,
+    PixFmt::Vdpau, PixFmt::VideotoolboxVld, PixFmt::Cuda, PixFmt::Qsv,
     PixFmt::Mmal, PixFmt::Mediacodec, PixFmt::Opencl, PixFmt::DrmPrime,
-    PixFmt::Vulkan, PixFmt::AmfSurface, PixFmt::Ohcodec, PixFmt::Cuarray,
+    PixFmt::Vulkan, PixFmt::Amf, PixFmt::Ohcodec, PixFmt::Cuarray,
 ];
 
 /// Every accepted spelling, sorted, for `binary_search_by_key`. Includes
 /// aliases, so this is longer than [`ALL`].
 #[rustfmt::skip]
-pub(crate) static NAMES_SORTED: [(&str, PixFmt); 274] = [
+pub(crate) static NAMES_SORTED: [(&str, PixFmt); 276] = [
     ("0bgr", PixFmt::X0bgr),
     ("0rgb", PixFmt::X0rgb),
     ("abgr", PixFmt::Abgr),
-    ("amf_surface", PixFmt::AmfSurface),
+    ("amf", PixFmt::Amf),
+    ("amf_surface", PixFmt::Amf),
     ("argb", PixFmt::Argb),
     ("ayuv", PixFmt::Ayuv),
     ("ayuv64be", PixFmt::Ayuv64be),
@@ -1104,7 +1105,8 @@ pub(crate) static NAMES_SORTED: [(&str, PixFmt); 274] = [
     ("v30xle", PixFmt::V30xle),
     ("vaapi", PixFmt::Vaapi),
     ("vdpau", PixFmt::Vdpau),
-    ("videotoolbox", PixFmt::Videotoolbox),
+    ("videotoolbox", PixFmt::VideotoolboxVld),
+    ("videotoolbox_vld", PixFmt::VideotoolboxVld),
     ("vulkan", PixFmt::Vulkan),
     ("vuya", PixFmt::Vuya),
     ("vuyx", PixFmt::Vuyx),
@@ -1609,6 +1611,14 @@ mod generated_invariants {
     #[test]
     fn alpha_flag_matches_the_layout() {
         for d in &DESCRIPTORS {
+            // Palette formats are exempt. A palettised frame stores one component
+            // — the index — while its alpha lives in the palette's RGB32 entries,
+            // which the component list does not model at all. So ALPHA is set and
+            // the component count is 1, and that is correct rather than a
+            // contradiction. Confirmed against the reference, which agrees.
+            if d.flags.contains(F::PALETTE) {
+                continue;
+            }
             let has = d.flags.contains(F::ALPHA);
             let n = d.components.len();
             assert_eq!(

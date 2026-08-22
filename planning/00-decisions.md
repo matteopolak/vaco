@@ -822,3 +822,47 @@ comparable, and the allowlist is only worth anything if it stays short.
 
 Revisit only if a concrete workflow appears that genuinely cannot be expressed
 through stdin/stdout.
+
+## D17 — Where the reference is wrong, we match it anyway (2026-08-22)
+
+The conformance harness found `vaco-core`'s colour table disagreeing with the
+reference on two names. Verified directly:
+
+| Name | Ours | FFmpeg 8.1 | SVG 1.1 / CSS Color 3 |
+|---|---|---|---|
+| `mediumpurple` | `#9370db` | `#9370d8` | **`#9370DB`** |
+| `palevioletred` | `#db7093` | `#d87093` | **`#DB7093`** |
+
+**We are right and the reference is wrong** — the same `db`→`d8` transposition in
+both names, against a published standard.
+
+**Decision: match the reference.** `-fill_color mediumpurple` must paint the same
+pixels in both programs, and D6 makes byte-identical output the contract. A user
+migrating a script cares that the output matches, not that we are more faithful to
+a W3C document than the tool they are replacing. Being quietly *more correct* is
+still a behavioural difference, and behavioural differences are what D6 exists to
+eliminate.
+
+The general rule this establishes, which will recur:
+
+> Where the reference deviates from a published specification in **observable
+> output**, we reproduce the deviation, record it as a known deviation with a
+> citation, and report it upstream. Where the deviation is in something not
+> observable, we follow the specification.
+
+Both values are annotated in the colour table with the standard's value, the
+reference's value, and why we chose the latter. This is not a bug to be "fixed"
+later by someone reading the SVG spec — the annotation exists to stop exactly that.
+
+### The converse case: where we are more permissive
+
+We accept seven `grey`-spelled names the reference rejects (`grey`, `darkgrey`,
+`dimgrey`, `slategrey`, `darkslategrey`, `lightslategrey`, `lightgray`), making our
+set a strict superset of theirs — 147 against 140. The reference's own spelling is
+internally inconsistent, using `Gray` for six pairs and `LightGrey` for the seventh.
+
+**We keep the superset.** Being more permissive breaks nothing: every command that
+works against the reference works against us. The reverse — a script written
+against us failing on the reference — is a real but minor cost, and the
+alternative is deliberately rejecting valid CSS colour names to reproduce an
+inconsistency. Documented in the crate docs so the asymmetry is not a surprise.

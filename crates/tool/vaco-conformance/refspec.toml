@@ -1,0 +1,135 @@
+# The reference-binary pin (QA-03, plan 13 §1.6).
+#
+# THE REFERENCE IS AN ORACLE, NEVER A SOURCE. See `docs/tool/vaco-conformance.md`
+# for the bright-line rule before you touch anything here.
+#
+# ---------------------------------------------------------------------------
+# WHY 8.1 IS `stable` AND NOT 8.0
+# ---------------------------------------------------------------------------
+# Plan 13 §1.6.1's worked example pins `stable = 8.0` / `next = 8.1`. That is
+# the wrong way round for this project, and the reason is recorded in the tree:
+#
+#   * `planning/research/05-fftools-cli.md` was compiled from an **8.0.git**
+#     source snapshot. Its header carries a CORRECTIONS block listing five
+#     statements that black-box runs against an **8.1** binary proved wrong
+#     (root child order, `-show_entries 'format='`, `-byte_binary_prefix`,
+#     `packets_and_frames` in `-sections`, `-stats elapsed=`).
+#   * `planning/14-cli.md` — the document our CLI is actually implemented from —
+#     states in its header that every "OBSERVED" line comes from black-box runs
+#     against **ffprobe/ffmpeg 8.1**, and §6/§10 resolve every conflict in
+#     favour of the 8.1 observation.
+#
+# So the behaviour we implement IS 8.1 behaviour. Pinning 8.0 as the gate would
+# make CI fail on five behaviours we deliberately match. It would also violate
+# §1.6.1's own rule that a pin must be a released tag: 8.0.git is a git
+# snapshot, and snapshots are unreproducible oracles.
+#
+# `previous = 8.0` is kept for the §1.6.2 multi-version assertion: a case that
+# passes on one and fails on the other means we encoded version-specific
+# behaviour rather than what the specification says.
+#
+# ---------------------------------------------------------------------------
+# HOW TO BUMP
+# ---------------------------------------------------------------------------
+# `just refbin-bump <version>` — never edit `stable` by hand. The bump runs the
+# full tier against both pins and refuses to complete until every drift line is
+# triaged into follow / regression / intentional-change / harness-artifact
+# (plan 13 §1.6.2).
+
+schema = 1
+
+# --------------------------------------------------------------- gating pin
+[stable]
+version  = "8.1"
+tarball  = "https://ffmpeg.org/releases/ffmpeg-8.1.tar.xz"
+# TODO(vaco#173): fill in once the refbin build workflow publishes its first
+# image. The harness treats an empty digest as "verification unavailable" and
+# reports it, rather than pretending the pin is verified.
+sha256       = ""
+image_digest = ""
+gates        = true
+configure = [
+  "--disable-gpl",
+  "--disable-nonfree",
+  "--disable-doc",
+  "--disable-programs",
+  "--enable-ffmpeg",
+  "--enable-ffprobe",
+  "--disable-autodetect",
+]
+
+# ------------------------------------------------- advisory, nightly-only pin
+# Non-blocking by construction: drift against the next upstream release is
+# discovered weeks before the bump instead of on the day of it.
+[next]
+version      = "8.2"
+tarball      = "https://ffmpeg.org/releases/ffmpeg-8.2.tar.xz"
+sha256       = ""
+image_digest = ""
+gates        = false
+configure = [
+  "--disable-gpl",
+  "--disable-nonfree",
+  "--disable-doc",
+  "--disable-programs",
+  "--enable-ffmpeg",
+  "--enable-ffprobe",
+  "--disable-autodetect",
+]
+
+# ------------------------------------------- the previous major, for §1.6.2
+[previous]
+version      = "8.0"
+tarball      = "https://ffmpeg.org/releases/ffmpeg-8.0.tar.xz"
+sha256       = ""
+image_digest = ""
+gates        = false
+configure = [
+  "--disable-gpl",
+  "--disable-nonfree",
+  "--disable-doc",
+  "--disable-programs",
+  "--enable-ffmpeg",
+  "--enable-ffprobe",
+  "--disable-autodetect",
+]
+
+# Behaviours known to differ between `previous` and `stable`. Each is an
+# already-triaged drift line from plan 13 §1.6.2, recorded here so that a
+# contributor running against 8.0 sees an explanation instead of a mystery.
+# These are FACTS ABOUT OBSERVED BEHAVIOUR (plan 13 §1.7.1), not source
+# knowledge.
+[[known_drift]]
+from    = "8.0"
+to      = "8.1"
+subject = "ffprobe root child order"
+bucket  = "follow"
+note    = "8.1 emits children in XSD order; research 05 §3.5 described a different order. We follow 8.1."
+
+[[known_drift]]
+from    = "8.0"
+to      = "8.1"
+subject = "-show_entries 'format='"
+bucket  = "follow"
+note    = "8.1 emits nothing at all in the default writer, not a bare section header."
+
+[[known_drift]]
+from    = "8.0"
+to      = "8.1"
+subject = "-byte_binary_prefix"
+bucket  = "regression"
+note    = "A no-op in 8.1; 2097152 B reports as 2.097152 Mbyte. Plan 14 §10-V5 accepts the flag and revisits if upstream fixes it."
+
+[[known_drift]]
+from    = "8.0"
+to      = "8.1"
+subject = "packets_and_frames in -sections"
+bucket  = "follow"
+note    = "Absent from 8.1's -sections listing although the section is emitted. Plan 14 §10-V1."
+
+[[known_drift]]
+from    = "8.0"
+to      = "8.1"
+subject = "-stats elapsed= field"
+bucket  = "intentional-change"
+note    = "8.1 gained an elapsed= field. Plan 14 §10-V8: match 8.1's field set; stats are not byte-compared."

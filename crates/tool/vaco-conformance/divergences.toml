@@ -1,0 +1,63 @@
+# The divergence allowlist (plan 13 §1.4).
+#
+# THIS IS A GOVERNED REGISTER, NOT A SUPPRESSION FILE.
+#
+# Read `docs/tool/vaco-conformance.md#the-divergence-allowlist` before adding an
+# entry. In particular: you may run the reference binary as often as you like,
+# but you may not read its source. When our output differs and you cannot
+# explain why, you escalate — you do not go looking in the source for the
+# answer.
+#
+# CODEOWNERS-gated to the correctness owner. `unexplained` and `upstream-bug`
+# additionally require the module owner (§1.4.3 mechanism 5).
+#
+# ---------------------------------------------------------------------------
+# IT IS EMPTY ON PURPOSE
+# ---------------------------------------------------------------------------
+# Every entry here is a place the harness has been told to stop proving
+# something. Seeding the file with examples would be seeding it with excuses, so
+# it ships with caps and nothing else. The divergences the table extractors
+# currently find are REPORTED, not suppressed — see the crate doc's "Findings"
+# section. An entry lands here only when a human has argued for it and two of
+# the required approvers have signed it off.
+
+schema = 1
+
+# ---------------------------------------------------------------------------
+# The ratchet (§1.4.3 mechanism 2).
+#
+# CI fails if a category's live count exceeds its cap. `unimplemented` ratchets
+# monotonically DOWN and is never raised without an RFC. `unexplained` is a hard
+# ceiling that is never raised at all.
+#
+# A category with entries and no cap here is a load error: an uncapped category
+# is an uncapped dumping ground.
+# ---------------------------------------------------------------------------
+[caps]
+identification         = 40
+wallclock              = 15
+encoder-nondeterminism = 25
+float-lastbit          = 30
+upstream-bug           = 20
+unimplemented          = 50
+unexplained            = 10
+
+# ---------------------------------------------------------------------------
+# Entries go below. The shape, for reference:
+#
+# [[divergence]]
+# id        = "DIV-0001"
+# title     = "one line"
+# category  = "identification"      # one of the seven in §1.4.2
+# scope     = { suite = "probe-*", section = "format", field = "format_long_name" }
+# rule      = { kind = "value-differs" }
+# justification = """
+# The argument a reviewer must accept. Name the machine-readable field we DO
+# match exactly, or the spec clause, or the upstream ticket.
+# """
+# opened      = 2026-08-21
+# review_by   = 2027-08-21          # CI fails the day this passes
+# owner       = "@module-owner"
+# approved_by = ["@correctness-owner"]
+# issue       = "vaco#0000"
+# ---------------------------------------------------------------------------

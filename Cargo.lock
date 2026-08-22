@@ -1524,6 +1524,8 @@ name = "vaco-codec-core"
 version = "0.1.0"
 dependencies = [
  "bitflags",
+ "proptest",
+ "smallvec",
  "vaco-chlayout",
  "vaco-color",
  "vaco-core",
@@ -1564,6 +1566,7 @@ version = "0.1.0"
 dependencies = [
  "tempfile",
  "vaco-core",
+ "vaco-pixfmt",
 ]
 
 [[package]]
@@ -1725,6 +1728,7 @@ dependencies = [
 name = "vaco-io"
 version = "0.1.0"
 dependencies = [
+ "proptest",
  "vaco-core",
  "vaco-limits",
 ]
@@ -1851,6 +1855,7 @@ dependencies = [
 name = "vaco-protocol-core"
 version = "0.1.0"
 dependencies = [
+ "proptest",
  "vaco-core",
  "vaco-io",
  "vaco-opts",
@@ -1860,8 +1865,11 @@ dependencies = [
 name = "vaco-protocol-file"
 version = "0.1.0"
 dependencies = [
+ "proptest",
+ "tempfile",
  "vaco-core",
  "vaco-io",
+ "vaco-opts",
  "vaco-protocol-core",
 ]
 
@@ -1944,6 +1952,9 @@ dependencies = [
 name = "vaco-textformat"
 version = "0.1.0"
 dependencies = [
+ "bitflags",
+ "insta",
+ "proptest",
  "vaco-core",
 ]
 
@@ -1951,6 +1962,9 @@ dependencies = [
 name = "vaco-tx"
 version = "0.1.0"
 dependencies = [
+ "bitflags",
+ "divan",
+ "proptest",
  "vaco-core",
  "vaco-simd",
 ]

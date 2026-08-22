@@ -347,6 +347,14 @@ mod generated_invariants {
     #[test]
     fn alpha_flag_matches_the_layout() {
         for d in &DESCRIPTORS {
+            // Palette formats are exempt. A palettised frame stores one component
+            // — the index — while its alpha lives in the palette's RGB32 entries,
+            // which the component list does not model at all. So ALPHA is set and
+            // the component count is 1, and that is correct rather than a
+            // contradiction. Confirmed against the reference, which agrees.
+            if d.flags.contains(F::PALETTE) {
+                continue;
+            }
             let has = d.flags.contains(F::ALPHA);
             let n = d.components.len();
             assert_eq!(has, n == 2 || n == 4, "{}: ALPHA flag disagrees with layout", d.name);

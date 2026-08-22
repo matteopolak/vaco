@@ -271,6 +271,88 @@ wrong.
 
 ---
 
+## Findings — the first run, against FFmpeg 8.1
+
+Recorded here because they are the point of the exercise, not because they are
+settled. **The divergence register is empty and stays empty until a table's
+owner decides which side is wrong.** `vaco-conformance tables --deep` reproduces
+every line below.
+
+### The result that matters most
+
+`pixfmt-geometry` compared, for **205 formats**, the byte count of one 64×64
+`rawvideo` frame written by the reference against `PixFmt::plane_layout`.
+**204 of 205 agree.** That is an independent check of plane count, `step`,
+subsampling and stride — our *arithmetic*, not our copy of the metadata — and it
+is the strongest statement anyone can currently make about `vaco-pixfmt`. Forty-six
+formats have no `rawvideo` conversion path in the reference and were not probed;
+that is a coverage gap, not a divergence.
+
+The judgement calls `docs/model/vaco-pixfmt.md` flags as unvalidated:
+`nv20le`/`nv20be` and `v30xle` **agree** on both listings and on geometry
+(16384 bytes at 64×64, matching our model). `v30xbe`/`xv30be` cannot be written
+as `rawvideo` at all, so their geometry remains unchecked. Note that the probe
+cannot see `shift`, so the specific `nv20` question — right- versus left-aligned
+— is still open.
+
+### `vaco-pixfmt` — name-set divergences (3 + 2)
+
+| Ours | Reference 8.1 | Note |
+|---|---|---|
+| `amf_surface` | `amf` | a CLI-visible name; `-pix_fmt amf` would be rejected by us |
+| `videotoolbox` | `videotoolbox_vld` | same |
+| `cuarray` | *(absent)* | we have a format 8.1's listing does not carry |
+
+All three are hardware-surface formats, so nothing decodes differently — but the
+names are an interface surface (D9) and a script that passes one of them gets a
+different answer from each program.
+
+### `vaco-pixfmt` — field divergences
+
+| Formats | Field | Ours | Reference | Reading |
+|---|---|---|---|---|
+| all 12 `bayer_*` | `nb_components` / `bit_depths` | `1` / full sample depth | `3` / `2-4-2` (8-bit), `4-8-4` (16-bit) | **deliberate.** `docs/model/vaco-pixfmt.md` records the choice: a colour-filter-array mosaic is one sample per pixel and demosaicing is a filter's job. `bits_per_pixel` agrees either way. Needs an allowlist entry, not a fix. |
+| `bgr8` | `bit_depths` | `2-3-3` | `3-3-2` | **likely ours.** `rgb8` agrees at `3-3-2`, so the two members of the pair are modelled inconsistently. Components are indexed by logical channel (0=R, 1=G, 2=B) in both models, so a 3:3:2 packing should read `3-3-2` whichever byte order it is stored in. |
+| `pal8` | `alpha` | `0` | `1` | **likely ours** — see the geometry line below; the palette carries alpha. |
+| `pal8` | `frame_bytes` (geometry) | 4096 | 5120 | **likely ours.** The 1024-byte difference is a 256-entry × 4-byte palette. We model `pal8` as one 4096-byte plane; the reference emits the palette alongside it. Together with the `alpha` line this is one finding, not two. |
+| `xyz12le`, `xyz12be` | `rgb` | `1` | `0` | **arguable.** We set both `XYZ` and `RGB`; the reference sets neither. Since we have a distinct `XYZ` flag, the question is whether `RGB` should mean "stored like RGB" or "is RGB". A caller branching on `is_rgb()` gets a different answer from each. |
+| `v30xbe`, `xv30be` | `bitstream` | `0` | `1` | **suspect the oracle, do not guess.** The reference marks only the **big-endian** members as bitstream formats; `v30xle` and `xv30le` are `0` on both sides. An endianness-dependent bitstream flag has no obvious meaning, and both formats also fail to write as `rawvideo` while their LE siblings succeed. This is a §1.7.3 step-5 escalation, not something to match by inspection. |
+
+`-pix_fmts` and `-show_pixel_formats` agree with each other on every format they
+both describe, once the zero-component rendering artifact is handled (the column
+listing prints a lone `0` where the section listing prints nothing).
+
+### `vaco-core` colours
+
+| Name | Ours | Reference 8.1 | Reading |
+|---|---|---|---|
+| `mediumpurple` | `#9370db` | `#9370d8` | **the reference disagrees with the standard.** SVG 1.1 / CSS Color 3 define MediumPurple as `#9370DB`. |
+| `palevioletred` | `#db7093` | `#d87093` | same; the standard is `#DB7093`. |
+
+Both are one hex digit apart in the same position, which is the signature of a
+transcription slip somewhere upstream. This is the `upstream-bug` category if we
+keep our values, and a compatibility decision either way: `-fill_color
+mediumpurple` currently produces different pixels in the two programs.
+
+Seven names we accept and the reference does not: `grey`, `darkgrey`,
+`dimgrey`, `slategrey`, `darkslategrey`, `lightslategrey`, `lightgray`.
+**Confirmed behaviourally**, not merely inferred from the listing — the
+extractor asked the parser directly and all seven were rejected at the CLI. Our
+set is a strict superset of theirs (147 ⊃ 140), so every reference-valid command
+means the same thing in both. Worth knowing: the reference's own spelling choice
+is inconsistent — it takes `Gray` for six of the pairs but `LightGrey` for the
+seventh.
+
+### `vaco-core` frame sizes and rates
+
+**Clean.** All 53 size abbreviations and all 8 rate abbreviations resolve to
+exactly the same values in both programs, confirmed by asking the reference to
+build a source with each one. None of the 18 `SUSPECTED` candidate names were
+accepted by the reference, so no gap in our tables was found — subject to the
+one-directional limitation above.
+
+---
+
 ## How to change it
 
 ### Adding a test case

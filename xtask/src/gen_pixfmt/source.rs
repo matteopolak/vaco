@@ -640,6 +640,13 @@ pub const FAMILIES: &[Family] = &[
             store: Int,
             extra: &[Flag::Rgb],
         },
+        // OPEN FINDING (conformance harness, 2026-08-22): we report bit depths
+        // 2-3-3; the reference reports 3-3-2 for BOTH rgb8 and bgr8. Since the
+        // reference gives the two formats identical depths, the depths alone do
+        // not distinguish them and the correct model cannot be derived from the
+        // listing — it needs the shift/offset detail the geometry probe cannot
+        // see. Left as-is deliberately rather than guessed at; tracked as a
+        // divergence so it cannot be forgotten.
         PackedDef {
             name: "bgr8",
             order: &[R, G, B],
@@ -1083,7 +1090,10 @@ pub const FAMILIES: &[Family] = &[
             comps: &[(0, 1, 0, 0, 8)],
             planes: 1,
             log2_chroma: (0, 0),
-            flags: &[Flag::Pal],
+            // ALPHA because the palette entries are RGB32 and carry an alpha
+            // channel. Confirmed against the reference, which sets it. The
+            // conformance harness caught this.
+            flags: &[Flag::Pal, Flag::Alpha],
             end: End::Never,
             bpp: None,
         },
@@ -1100,7 +1110,8 @@ pub const FAMILIES: &[Family] = &[
         "d3d11",
         "d3d12",
         "vdpau",
-        "videotoolbox",
+        // D9/D17: the reference spells this `videotoolbox_vld`. CLI-visible.
+        "videotoolbox_vld",
         "cuda",
         "qsv",
         "mmal",
@@ -1108,8 +1119,13 @@ pub const FAMILIES: &[Family] = &[
         "opencl",
         "drm_prime",
         "vulkan",
-        "amf_surface",
+        // D9/D17: the reference spells this `amf`. CLI-visible.
+        "amf",
         "ohcodec",
+        // `cuarray` is absent from the reference in 8.1. Kept: it names a real CUDA
+        // surface kind, costs nothing, and removing it would reject a name no
+        // reference command can produce anyway. Accepting a superset breaks no
+        // reference workflow (D17).
         "cuarray",
     ]),
 ];
@@ -1117,6 +1133,9 @@ pub const FAMILIES: &[Family] = &[
 /// Alternate spellings `from_name` must resolve, beyond the per-format aliases
 /// declared above. `(alias, canonical name)`.
 pub const ALIASES: &[(&str, &str)] = &[
+    // Our former spellings, kept as aliases so neither name is rejected.
+    ("videotoolbox", "videotoolbox_vld"),
+    ("amf_surface", "amf"),
     ("y400a", "ya8"),
     ("gray8a", "ya8"),
     ("gbr24p", "gbrp"),
