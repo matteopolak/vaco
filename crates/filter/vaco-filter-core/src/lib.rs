@@ -97,7 +97,7 @@ pub mod timeline;
 
 pub use adapt::{AudioFilter, Blocked, FrameFilter, FrameOut, Simple, SourceFilter, Sourced};
 pub use context::NodeLinks;
-pub use link::{Direction, Link, LinkArena, LinkId, LinkStats, NodeId, PadRef, Status};
+pub use link::{Direction, Link, LinkArena, LinkId, LinkStats, NodeId, PadRef, Rejected, Status};
 pub use negotiate::{
     Assignment, AutoConvert, Conflict, ConflictSide, Constraint, ConverterFactory, ConverterSpec,
     FormatSet, Insertion, LinkEnds, NegotiationPlan, NoConversion, NodeFormats, Property, Tie,
@@ -194,6 +194,9 @@ pub struct FilterContext<'a> {
     format_mismatch: bool,
     /// Set when a push landed on an already-closed pad.
     push_after_close: bool,
+    /// Set when a push was refused for backpressure, which loses the frame.
+    /// See [`Violation::FrameDroppedByBackpressure`].
+    dropped_by_backpressure: bool,
 }
 
 impl FilterContext<'_> {

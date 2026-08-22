@@ -43,6 +43,47 @@ pub struct NodeId(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LinkId(pub u32);
 
+/// A frame a link refused, handed back so the caller can actually retry.
+///
+/// # Why this type exists
+///
+/// [`Link::push`] takes the frame by value, so a plain `Result<()>` failure
+/// *drops* it. The documentation used to promise the opposite — "the caller
+/// keeps the frame and retries" — which was impossible against the signature,
+/// and `Graph::send` repeated the same promise to external callers. A
+/// backpressure signal that silently eats the frame it is refusing is worse
+/// than no backpressure at all: the pipeline keeps running and the output is
+/// short by exactly the frames it was busiest for.
+///
+/// Handing the frame back in the error makes the promise true. `Error` still
+/// converts from this, so a caller that genuinely wants to discard the frame
+/// can keep using `?` and pay nothing.
+#[derive(Debug)]
+pub struct Rejected {
+    /// Why it was refused: [`Error::OutputPending`] for backpressure,
+    /// [`Error::Eof`] for a push after close.
+    pub error: Error,
+    /// The frame, unmodified. Retry with this one.
+    pub frame: Frame,
+}
+
+impl From<Rejected> for Error {
+    /// Discards the frame. Deliberately explicit at the call site via `?` or
+    /// `.into()`, so losing it is something the code says rather than something
+    /// the signature does behind your back.
+    fn from(r: Rejected) -> Self {
+        r.error
+    }
+}
+
+impl core::fmt::Display for Rejected {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.error.fmt(f)
+    }
+}
+
+impl std::error::Error for Rejected {}
+
 /// One end of a link: a node, a direction, and a pad index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PadRef {
@@ -337,17 +378,38 @@ impl Link {
     /// # Errors
     ///
     /// [`Error::OutputPending`] when the queue is at capacity — pure
-    /// backpressure; the caller keeps the frame and retries.
+    /// backpressure; the frame comes back in [`Rejected::frame`] and the caller
+    /// retries with it.
     /// [`Error::Eof`] when the link has already been closed: pushing after a
     /// terminal status is a defect in the producer, and losing the frame
     /// silently would be worse than refusing it.
-    pub fn push(&mut self, mut frame: Frame) -> Result<()> {
+    ///
+    /// Both failures hand the frame back **unmodified** — timestamps are
+    /// rebased only on the success path, so a retry after the queue drains
+    /// rescales exactly once.
+    #[allow(
+        clippy::result_large_err,
+        reason = "the large Err *is* the feature: it carries the refused Frame back. \
+                  Boxing it would trade a 392-byte return slot for a heap \
+                  allocation on the backpressure path, which is the path that \
+                  repeats — a saturated pipeline refuses constantly. And the \
+                  size is not meaningful next to what it guards: a Frame's \
+                  struct is 392 bytes, its pixel data is tens of kilobytes, and \
+                  push already takes one by value on every call."
+    )]
+    pub fn push(&mut self, mut frame: Frame) -> core::result::Result<(), Rejected> {
         if self.status.is_some() {
-            return Err(Error::Eof);
+            return Err(Rejected {
+                error: Error::Eof,
+                frame,
+            });
         }
         if self.queue.len() >= self.capacity {
             self.stats.blocked = self.stats.blocked.saturating_add(1);
-            return Err(Error::OutputPending);
+            return Err(Rejected {
+                error: Error::OutputPending,
+                frame,
+            });
         }
         rebase_frame(&mut frame, self.format.time_base());
         self.queue.push_back(frame);
@@ -721,6 +783,42 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_push_hands_the_frame_back() {
+        let mut l = link().with_capacity(1);
+        l.set_format(video_link_format(16, 16));
+        l.push(video_frame(16, 16, 0)).expect("room");
+
+        // Full: the frame must come back, not vanish.
+        let Err(rejected) = l.push(video_frame(16, 16, 1)) else {
+            panic!("a full link must refuse");
+        };
+        assert!(matches!(rejected.error, Error::OutputPending));
+        assert_eq!(rejected.frame.pts, Timestamp::new(1));
+
+        // Drain, then retry with the very frame we got back. This is the whole
+        // point: before `Rejected` existed the docs promised this and the
+        // signature made it impossible.
+        assert!(l.pop().is_some());
+        l.push(rejected.frame).expect("room after draining");
+        assert_eq!(l.pop().map(|f| f.pts), Some(Timestamp::new(1)));
+    }
+
+    #[test]
+    fn a_push_after_close_also_hands_the_frame_back() {
+        let mut l = link();
+        l.set_format(video_link_format(16, 16));
+        l.close(Status::Eof, Timestamp::new(0));
+        let Err(rejected) = l.push(video_frame(16, 16, 7)) else {
+            panic!("a closed link must refuse");
+        };
+        assert!(matches!(rejected.error, Error::Eof));
+        // Recovering it is not useful here — the link is finished — but a
+        // caller routing to several links can still send it elsewhere, and
+        // dropping it silently is what we are trying to stop.
+        assert_eq!(rejected.frame.pts, Timestamp::new(7));
+    }
+
+    #[test]
     fn eof_is_ordered_behind_the_queue() {
         let mut l = link();
         l.set_format(video_link_format(16, 16));
@@ -764,7 +862,13 @@ mod tests {
         let mut l = link();
         l.set_format(video_link_format(16, 16));
         l.close(Status::Eof, Timestamp::ZERO);
-        assert!(matches!(l.push(video_frame(16, 16, 0)), Err(Error::Eof)));
+        assert!(matches!(
+            l.push(video_frame(16, 16, 0)),
+            Err(Rejected {
+                error: Error::Eof,
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -775,7 +879,10 @@ mod tests {
         l.push(video_frame(16, 16, 1)).expect("room");
         assert!(matches!(
             l.push(video_frame(16, 16, 2)),
-            Err(Error::OutputPending)
+            Err(Rejected {
+                error: Error::OutputPending,
+                ..
+            })
         ));
         assert_eq!(l.stats().blocked, 1);
         assert!(l.pop().is_some());

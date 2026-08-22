@@ -552,8 +552,8 @@ fn a_source_stops_being_wanted_once_the_graph_is_full() -> Result<()> {
         c.graph.run()?;
         match c.graph.send(c.src, gray_frame(16, 16, i, 0)) {
             Ok(()) => sent += 1,
-            Err(Error::OutputPending) => break,
-            Err(e) => return Err(e),
+            Err(r) if matches!(r.error, Error::OutputPending) => break,
+            Err(r) => return Err(r.error),
         }
     }
     assert!(sent > 0, "nothing got in at all");

@@ -98,8 +98,11 @@ fn drive(rig: &mut Rig, rates: [i32; 2], counts: [i64; 2]) -> Result<Vec<(i64, u
                 };
                 match rig.graph.send(rig.sources[i], frame) {
                     Ok(()) => sent[i] += 1,
-                    Err(Error::OutputPending) => {}
-                    Err(e) => return Err(e),
+                    // Backpressure. The frame comes back and this loop simply
+                    // rebuilds it next round, so dropping it here is harmless
+                    // — but it is now a choice rather than the default.
+                    Err(r) if matches!(r.error, Error::OutputPending) => {}
+                    Err(r) => return Err(r.error),
                 }
             } else if !closed[i] {
                 rig.graph

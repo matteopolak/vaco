@@ -28,7 +28,9 @@ use vaco_core::{Error, MediaType, Result, Timestamp};
 use vaco_frame::{Frame, FramePool};
 
 use crate::context::NodeLinks;
-use crate::link::{Direction, Link, LinkArena, LinkId, NodeId, PadRef, Status, rescale_pts};
+use crate::link::{
+    Direction, Link, LinkArena, LinkId, NodeId, PadRef, Rejected, Status, rescale_pts,
+};
 use crate::negotiate::{
     AutoConvert, Conflict, ConverterFactory, ConverterSpec, NegotiationPlan, NoConversion,
     NodeFormats, negotiate,
@@ -162,6 +164,22 @@ pub enum Violation {
     FrameFormatMismatch,
     /// Ran after returning [`Activity::Eof`]. Rule F5.
     ActivateAfterEof,
+    /// Pushed a frame to a **full** output pad, so the frame was lost.
+    ///
+    /// [`FilterContext::push_output`] takes the frame by value, so a
+    /// backpressure refusal drops it. That is only survivable if a filter never
+    /// pushes to a full pad — and a filter cannot guarantee that, because a
+    /// multi-output node is scheduled when **any one** of its outputs has room,
+    /// not all of them. A `split` whose second consumer is slow is therefore
+    /// runnable, takes its input, and silently loses the copy bound for the
+    /// full pad.
+    ///
+    /// Diagnosed rather than tolerated, which is this crate's whole posture: an
+    /// output short by exactly the frames it was busiest for is the hardest
+    /// class of bug to find from the outside. The structural fix is for
+    /// `push_output` to hand the frame back, which changes the contract every
+    /// filter is written against — a deliberate change, not a patch.
+    FrameDroppedByBackpressure,
 }
 
 impl Violation {
@@ -183,6 +201,9 @@ impl Violation {
                 "a frame was pushed whose format does not match the negotiated link format"
             }
             Self::ActivateAfterEof => "activate ran again after it had reported Eof",
+            Self::FrameDroppedByBackpressure => {
+                "a frame was pushed to a full output pad and lost; see Violation::FrameDroppedByBackpressure"
+            }
         }
     }
 }
@@ -670,18 +691,41 @@ impl Graph {
     /// # Errors
     ///
     /// [`Error::InvalidData`] if the node is not a source, [`Error::Eof`] if it
-    /// has been closed, [`Error::OutputPending`] for backpressure — the frame is
-    /// returned to the caller by being left un-consumed, so retry with the same
-    /// one.
-    pub fn send(&mut self, node: NodeId, frame: Frame) -> Result<()> {
-        let id = self.source_link(node)?;
+    /// has been closed, [`Error::OutputPending`] for backpressure.
+    ///
+    /// **Every failure hands the frame back** in [`Rejected::frame`], so a
+    /// backpressure refusal can genuinely be retried with the same frame. It
+    /// used to say that and not do it: the frame was taken by value and dropped
+    /// on the error path, so the caller's only options were to lose it or to
+    /// clone every frame defensively. `Error: From<Rejected>` keeps `?` working
+    /// for callers that do want to discard it.
+    ///
+    /// [`Graph::source_wants`] is still the cheaper question — it answers
+    /// `is_wanted() && !is_full()`, so a `true` there means this call cannot
+    /// report backpressure.
+    #[allow(
+        clippy::result_large_err,
+        reason = "see Link::push — the large Err carries the refused Frame back, \
+                  which is the whole point of the type."
+    )]
+    pub fn send(&mut self, node: NodeId, frame: Frame) -> core::result::Result<(), Rejected> {
+        let id = match self.source_link(node) {
+            Ok(id) => id,
+            Err(error) => return Err(Rejected { error, frame }),
+        };
         let Some(link) = self.links.get_mut(id) else {
-            return Err(Error::InvalidData("source has no output link"));
+            return Err(Rejected {
+                error: Error::InvalidData("source has no output link"),
+                frame,
+            });
         };
         if cfg!(debug_assertions) && !link.format().accepts(&frame) {
-            return Err(Error::InvalidData(
-                "frame sent to a source does not match the link's negotiated format",
-            ));
+            return Err(Rejected {
+                error: Error::InvalidData(
+                    "frame sent to a source does not match the link's negotiated format",
+                ),
+                frame,
+            });
         }
         link.push(frame)
     }
@@ -814,6 +858,7 @@ impl Graph {
         let outcome = filter.activate(&mut ctx);
         let pushed_bad_format = ctx.saw_format_mismatch();
         let pushed_after_close = ctx.saw_push_after_close();
+        let dropped_by_backpressure = ctx.saw_dropped_by_backpressure();
         if let Some(node) = self.nodes.get_mut(id.0 as usize) {
             node.filter = Some(filter);
         }
@@ -822,6 +867,9 @@ impl Graph {
         }
         if pushed_after_close {
             self.violations.push(Violation::PushAfterClose);
+        }
+        if dropped_by_backpressure {
+            self.violations.push(Violation::FrameDroppedByBackpressure);
         }
         let after = self.links.epoch_sum();
         match outcome {

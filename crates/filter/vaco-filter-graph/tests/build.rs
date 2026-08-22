@@ -126,7 +126,7 @@ fn run(src: &str, mode: AutoConvert, frames: usize) -> (BuiltGraph, Vec<usize>) 
                 frame.time_base = vaco_core::Rational::new(1, 25);
                 match built.graph.send(source, frame) {
                     Ok(()) => sent[i] = sent[i].saturating_add(1),
-                    Err(vaco_core::Error::OutputPending) => {}
+                    Err(r) if matches!(r.error, vaco_core::Error::OutputPending) => {}
                     Err(e) => panic!("{src:?}: {e}"),
                 }
             } else if !closed[i] {

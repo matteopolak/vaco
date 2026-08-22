@@ -100,6 +100,7 @@ impl<'a> FilterContext<'a> {
             pool,
             format_mismatch: false,
             push_after_close: false,
+            dropped_by_backpressure: false,
         }
     }
 
@@ -109,6 +110,10 @@ impl<'a> FilterContext<'a> {
 
     pub(crate) const fn saw_push_after_close(&self) -> bool {
         self.push_after_close
+    }
+
+    pub(crate) const fn saw_dropped_by_backpressure(&self) -> bool {
+        self.dropped_by_backpressure
     }
 
     /// How many input pads this filter has.
@@ -334,12 +339,20 @@ impl<'a> FilterContext<'a> {
         if !link.format().accepts(&frame) {
             self.format_mismatch = true;
         }
+        // The frame is consumed either way — `push` takes it by value and the
+        // error path drops it. Both losses are recorded so neither is silent;
+        // see `Violation::FrameDroppedByBackpressure` for why the backpressure
+        // one is reachable at all.
         match link.push(frame) {
-            Err(vaco_core::Error::Eof) => {
-                self.push_after_close = true;
-                Err(vaco_core::Error::Eof)
+            Ok(()) => Ok(()),
+            Err(r) => {
+                match r.error {
+                    vaco_core::Error::Eof => self.push_after_close = true,
+                    vaco_core::Error::OutputPending => self.dropped_by_backpressure = true,
+                    _ => {}
+                }
+                Err(r.error)
             }
-            other => other,
         }
     }
 }
