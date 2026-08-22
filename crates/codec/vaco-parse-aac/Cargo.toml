@@ -1,0 +1,20 @@
+[package]
+name = "vaco-parse-aac"
+description = "AAC ADTS/LATM and AudioSpecificConfig parsing (no decode)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+vaco-core = { path = "../../core/vaco-core" }
+vaco-bitstream = { path = "../../core/vaco-bitstream" }
+vaco-codec-core = { path = "../../signal/vaco-codec-core" }
+
+[lints]
+workspace = true
+
+[package.metadata.vaco]
+layer = 4

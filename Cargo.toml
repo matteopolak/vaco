@@ -1,0 +1,162 @@
+# Vaco — a clean-room Rust reimplementation of ffmpeg / ffprobe / ffplay.
+#
+# See planning/00-decisions.md for the binding constraints (D1-D15) and
+# planning/10-architecture.md for the crate layering this manifest realises.
+
+[workspace]
+resolver = "3"
+# GLOB MEMBERSHIP IS LOAD-BEARING (plan 19 §3.1).
+#
+# Work is done by many agents in ONE shared working tree on ONE branch. The root
+# manifest is the single file every new crate would otherwise have to touch, which
+# would make it the project's biggest contention point. With a glob, adding a crate
+# is creating a directory — no agent ever edits this file to register one.
+#
+# The layer directories under crates/ mirror planning/10-architecture.md §3.
+members = ["crates/*/*", "xtask"]
+exclude = ["fuzz"]
+
+[workspace.package]
+version      = "0.1.0"
+edition      = "2024"
+rust-version = "1.89"
+license      = "MIT OR Apache-2.0"
+repository   = "https://github.com/matteopolak/vaco"
+authors      = ["Vaco contributors"]
+
+# Inherited by every crate via `[lints] workspace = true`.
+#
+# `unsafe_code = "forbid"` is the project's central safety guarantee (D2). It is a
+# per-crate lint, so crates that genuinely need unsafe — only the `vaco-hw-*`
+# family, per D13 — simply do not inherit this block and declare their own
+# `[lints]` instead. That makes the exception set explicit and auditable rather
+# than hidden behind an `#[allow]` somewhere in a file.
+[workspace.lints.rust]
+unsafe_code            = "forbid"
+missing_debug_implementations = "warn"
+unreachable_pub        = "warn"
+rust_2018_idioms       = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+pedantic         = { level = "warn", priority = -1 }
+# Denied because each is a latent panic, and a panic reachable from untrusted
+# input is a decoder vulnerability (plan 13 §2).
+unwrap_used      = "deny"
+expect_used      = "deny"
+panic            = "deny"
+indexing_slicing = "deny"
+integer_division = "deny"
+undocumented_unsafe_blocks = "deny"
+disallowed_methods = "deny"
+# Noise in a codebase full of format enums and bit manipulation.
+module_name_repetitions = "allow"
+similar_names           = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss           = "allow"
+cast_precision_loss      = "allow"
+too_many_lines           = "allow"
+
+# PRE-POPULATED SO AGENTS NEVER EDIT THIS FILE (plan 19 §3.2).
+#
+# Every dependency the plans anticipate is declared here once. Crates then write
+# `foo.workspace = true` and nothing else. An agent that needs something not listed
+# here STOPS and requests it rather than editing the root — deliberate friction,
+# since D10 makes every adoption a reviewed decision anyway.
+#
+# D10 gates: pure Rust with zero FFI, permissive licence, trusted and maintained.
+[workspace.dependencies]
+# --- SIMD substrate (D12). Reachable ONLY from vaco-simd, per the D11 adapter rule.
+fearless_simd = "0.7"
+
+# --- error handling, logging, small utilities
+thiserror  = "2"
+tracing    = "0.1"
+bitflags   = "2"
+smallvec   = "1"
+arrayvec   = "0.7"
+bytemuck   = "1"
+memchr     = "2"
+
+# --- concurrency
+rayon      = "1"
+crossbeam-channel = "0.5"
+crossbeam-utils   = "0.8"
+parking_lot = "0.12"
+
+# --- general-purpose compression (general algorithms, not media codecs)
+miniz_oxide = "0.8"
+lzma-rs     = "0.3"
+
+# --- crypto and hashing (CENC, HLS AES-128, checksums) — RustCrypto, pure Rust
+aes    = "0.8"
+cbc    = "0.4"
+ctr    = "0.9"
+sha1   = "0.10"
+sha2   = "0.10"
+md-5   = "0.10"
+crc    = "3"
+
+# --- networking and TLS. D14.2: rustls with a PURE-RUST provider — both `ring`
+#     and `aws-lc-rs` compile C and assembly and therefore fail D10 Gate 1.
+rustls            = { version = "0.23", default-features = false, features = ["std", "tls12"] }
+rustls-rustcrypto = "0.0.2-alpha"
+webpki-roots      = "1"
+ureq              = { version = "3", default-features = false }
+socket2           = "0.5"
+quick-xml         = "0.37"
+
+# --- text shaping and fonts (general typography, not a media codec)
+cosmic-text = "0.12"
+swash       = "0.2"
+ttf-parser  = "0.25"
+
+# --- presentation (vaco-play). Not media codecs.
+wgpu       = "23"
+winit      = "0.30"
+cpal       = "0.15"
+pollster   = "0.4"
+
+# --- proc-macro tooling (vaco-opts derive)
+syn        = { version = "2", features = ["full", "extra-traits"] }
+quote      = "1"
+proc-macro2 = "1"
+
+# --- dev-dependencies
+proptest   = "1"
+divan      = "0.1"
+insta      = "1"
+tempfile   = "3"
+
+# Release: LTO and one codegen unit are the baseline for a performance-critical
+# binary. PGO is layered on top by `just build-pgo` (plan 12 §7) rather than being
+# configured here, since it needs a profile-generate/profile-use two-pass build.
+[profile.release]
+opt-level     = 3
+lto           = "fat"
+codegen-units = 1
+panic         = "abort"
+strip         = "symbols"
+
+# `dist` is what we actually publish: release plus the debug info needed to
+# symbolise a crash report from a user.
+[profile.dist]
+inherits = "release"
+strip    = "none"
+debug    = "line-tables-only"
+
+# Benchmarks must be measured with release codegen but keep symbols so profiles
+# are readable.
+[profile.bench]
+inherits = "release"
+strip    = "none"
+debug    = "line-tables-only"
+
+# Dependencies are compiled optimised even in dev builds: a debug-profile decoder
+# is too slow to run conformance suites against, and dependency code is not what
+# anyone is stepping through.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev]
+opt-level = 1
+debug     = true

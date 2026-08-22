@@ -1,0 +1,13 @@
+# Raw allocation is banned so that every buffer sized from untrusted input goes
+# through `vaco-limits` (plan 13 §2). In safe Rust the reachable bug classes are
+# panics and unbounded allocation, not memory corruption — this addresses the
+# second one structurally rather than hoping reviewers catch it.
+disallowed-methods = [
+    { path = "std::vec::Vec::with_capacity", reason = "size an allocation through vaco_limits::Budget::alloc instead" },
+    { path = "std::vec::Vec::reserve",       reason = "size an allocation through vaco_limits::Budget::alloc instead" },
+    { path = "std::vec::Vec::reserve_exact", reason = "size an allocation through vaco_limits::Budget::alloc instead" },
+]
+
+# Media code legitimately has wide match arms over format enums.
+too-many-arguments-threshold = 10
+type-complexity-threshold    = 500

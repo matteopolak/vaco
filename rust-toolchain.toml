@@ -1,0 +1,19 @@
+# Pinned stable, not nightly.
+#
+# D12 moved the SIMD substrate from `std::simd` (nightly-only, gated behind
+# `#![feature(portable_simd)]`) to `fearless_simd`, which builds on stable 1.89+.
+# `std::simd` was the ONLY mandatory reason this project needed nightly, so the
+# pin is stable — a real gain for reproducibility, CI and contributor onboarding.
+#
+# Pinned to an exact version rather than floating `stable`: a floating channel
+# means a `rustup update` can change codegen under a performance baseline, and
+# this project's whole premise is measurement against a reference binary.
+#
+# MSRV is 1.89 (fearless_simd's requirement). We build with more than that; the
+# MSRV matters only for downstream consumers of the library crates.
+#
+# Cranelift dev builds (`just build-fast`) need nightly, which is NOT pinned here
+# because it is optional convenience, not a requirement. See .cargo/config.toml.
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]

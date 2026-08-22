@@ -1,0 +1,51 @@
+# D3 / D10 Gate 2. Enforced in CI.
+#
+# D9 found that this file ALONE is not sufficient: crates.io metadata lies. The
+# `x264` and `x265` crates declare MIT while statically linking GPL libraries, and
+# `freetype-sys` declares MIT over FTL/GPL-2. A licence check that trusts declared
+# metadata will happily pass a GPL binary.
+#
+# The structural defence is the [bans] section below, which forbids the machinery
+# that vendoring foreign code requires (`cc`, `cmake`, `bindgen`, `pkg-config`),
+# plus `cargo xtask dep-gate`, which fails on any `links` key or third-party
+# build.rs. That enforces D10 Gate 1 by construction rather than by declaration.
+
+[graph]
+all-features = true
+
+[licenses]
+version = 2
+confidence-threshold = 0.95
+allow = [
+    "MIT", "MIT-0",
+    "Apache-2.0", "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause", "BSD-3-Clause", "BSD-3-Clause-Clear",
+    "ISC", "Zlib", "0BSD", "CC0-1.0",
+    "Unicode-3.0", "Unicode-DFS-2016",
+]
+# Everything not listed is denied, including MPL-2.0 (excludes Symphonia and
+# mp4parse), WTFPL, and every GPL/LGPL/AGPL variant.
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# D10 Gate 1, structurally. These crates exist to compile or bind foreign code;
+# banning them makes a `-sys` dependency fail to resolve rather than fail review.
+deny = [
+    { name = "cc" },
+    { name = "cmake" },
+    { name = "bindgen" },
+    { name = "pkg-config" },
+    { name = "ring",       reason = "compiles C and assembly; fails D10 Gate 1. Use rustls-rustcrypto (D14.2)." },
+    { name = "aws-lc-rs",  reason = "compiles C and assembly; fails D10 Gate 1. Use rustls-rustcrypto (D14.2)." },
+    { name = "aws-lc-sys", reason = "compiles C and assembly; fails D10 Gate 1." },
+    { name = "openssl-sys" },
+]
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git      = "deny"

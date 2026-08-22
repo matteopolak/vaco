@@ -1,0 +1,19 @@
+# The crate graph. Consumed by `cargo xtask layer-check`, which fails the build on
+# any dependency edge that points sideways or upward.
+#
+# D14.1 CORRECTION IS APPLIED HERE: `vaco-codec-core` sits BELOW `vaco-format-core`,
+# because demuxers need codec parameters and bitstream parsers. Demuxers reach
+# parsers through an injected `ParserProvider` trait, so no format crate ever
+# depends on a concrete codec crate.
+
+[layers]
+0 = "foundation"   # no vaco deps at all
+1 = "model"        # media data model
+2 = "io"           # byte sources/sinks, protocols
+3 = "signal"       # transforms, scaling, resampling, codec framework
+4 = "component"    # codecs, containers  (leaves; may depend on 0-3)
+5 = "filter"       # filter framework and filters
+6 = "registry"     # assembles enabled components
+7 = "app"          # binaries and their support
+9 = "hw"           # hardware backends (the only crates permitted `unsafe`, D13)
+10 = "tool"        # test/bench harnesses; may depend on anything

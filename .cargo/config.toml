@@ -1,0 +1,26 @@
+[alias]
+xtask = "run --quiet --package xtask --"
+
+# sccache as a compiler cache, following the measured setup in ~/projects/lodestone
+# (docs/build-caching.md). The reason this matters here is multi-agent contention:
+# cargo takes an EXCLUSIVE lock per target directory, so concurrent agents sharing
+# one `target/` serialise on it — measured there at 42 minutes elapsed / 0.0% CPU
+# for a single test run. Private per-agent target dirs dodge that lock; sccache is
+# what makes them affordable, because the dependency graph then comes from cache
+# instead of being recompiled once per agent.
+#
+# TRAP, measured: pass `--target-dir` as a FLAG, never export CARGO_TARGET_DIR as
+# an environment variable. sccache hashes CARGO_* env vars into its cache keys —
+# the env-var form measured 0% hits where the flag form measured 78-94%.
+#
+# TRAP: cargo hashes the wrapper into every fingerprint, so adding or removing
+# `rustc-wrapper` forces a full rebuild in every target dir. It is set here once,
+# before any parallel work begins, and should not be flipped casually.
+#
+# Do NOT set CARGO_INCREMENTAL=0. sccache marks workspace crates non-cacheable and
+# passes them through, so incremental compilation is preserved.
+[build]
+rustc-wrapper = "/opt/homebrew/bin/sccache"
+
+[env]
+SCCACHE_CACHE_SIZE = "20G"
