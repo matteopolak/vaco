@@ -41,30 +41,30 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-codec-core | 3 | #170,#251 | agent:codec-core | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-codec-golomb | 3 | — | agent:codec-bits | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-codec-cabac | 3 | — | agent:codec-bits | done | 2026-08-22 | 2026-08-22 |  |
-| vaco-codec-cbs | 3 | — | agent:hevc | assigned | 2026-08-22 |  |  |
+| vaco-codec-cbs | 3 | — | agent:hevc | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-codec-dsp-idct | 3 | — | — | free |  |  |
 | vaco-format-core | 4 | — | agent:format-core | done | 2026-08-22 | 2026-08-22 | unblocked by vaco-io |
 | vaco-format-riff | 4 | — | — | free |  |  |
 | vaco-format-isom | 4 | — | agent:isom | done | 2026-08-22 | 2026-08-22 |  |
-| vaco-format-mpegts-tables | 4 | — | agent:mpegts | assigned | 2026-08-22 |  |  |
+| vaco-format-mpegts-tables | 4 | — | agent:mpegts | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-format-id3 | 4 | — | — | free |  |  |
 | vaco-format-nalu | 4 | — | agent:h264 | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-parse-h264 | 4 | — | agent:h264 | done | 2026-08-22 | 2026-08-22 |  |
-| vaco-parse-hevc | 4 | — | agent:hevc | assigned | 2026-08-22 |  |  |
+| vaco-parse-hevc | 4 | — | agent:hevc | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-parse-av1 | 4 | — | — | free |  |  |
 | vaco-parse-aac | 4 | — | agent:audio-parse | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-parse-opus | 4 | — | agent:audio-parse | done | 2026-08-22 | 2026-08-22 |  |
-| vaco-demux-mp4 | 4 | — | agent:demux-mp4 | assigned | 2026-08-22 |  |  |
-| vaco-demux-matroska | 4 | — | agent:matroska | assigned | 2026-08-22 |  |  |
-| vaco-demux-mpegts | 4 | — | agent:mpegts | assigned | 2026-08-22 |  |  |
+| vaco-demux-mp4 | 4 | — | agent:demux-mp4 | done | 2026-08-22 | 2026-08-22 |  |
+| vaco-demux-matroska | 4 | — | agent:matroska | done | 2026-08-22 | 2026-08-22 |  |
+| vaco-demux-mpegts | 4 | — | agent:mpegts | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-filter-core | 5 | — | agent:filter-core | done | 2026-08-22 | 2026-08-22 | frozen only |
-| vaco-filter-framesync | 5 | — | agent:filter-graph | assigned | 2026-08-22 |  |  |
-| vaco-filter-graph | 5 | — | agent:filter-graph | assigned | 2026-08-22 |  |  |
-| vaco-registry | 6 | — | agent:probe | assigned | 2026-08-22 |  |  |
+| vaco-filter-framesync | 5 | — | agent:filter-graph | done | 2026-08-22 | 2026-08-22 |  |
+| vaco-filter-graph | 5 | — | agent:filter-graph | done | 2026-08-22 | 2026-08-22 |  |
+| vaco-registry | 6 | — | agent:probe | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-textformat | 7 | #188,#189 | agent:textformat | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-cli-core | 7 | — | agent:cli-core | done | 2026-08-22 | 2026-08-22 | needs vaco-expr edge for `-b:v 2*1000` |
 | vaco-sched | 7 | — | — | free |  |  |
-| vaco-probe | 7 | — | agent:probe | assigned | 2026-08-22 |  |  |
+| vaco-probe | 7 | — | agent:probe | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-cli | 7 | — | — | free |  |  |
 | vaco-conformance | 10 | #172,#173 | agent:conformance | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-checkasm | 10 | — | — | free |  |  |
