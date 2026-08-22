@@ -3961,3 +3961,70 @@ Recorded rather than resolved, each with the point at which it must be answered.
 | A `threads` option on `vaco-resample` | §B.9. It would invite configurations slower than the default. |
 | Silently aliasing unimplementable options | §B.13.3. Accept the name, do the sensible thing, and log it. Silent divergence is the one failure mode we never choose. |
 | Widening a tolerance to make a failing test pass | §A.15.3, §B.14.4. Every tolerance in this document has a derivation attached; changing one is a reviewed diff. |
+
+---
+
+## Corrections from implementation (vaco-tx, 2026-08-22)
+
+**§C.3.1 and §C.5.2 are incompatible, and the conflict is real.** Split-radix
+decomposes N into one N/2 and two N/4 sub-blocks *at different depths*, so
+§C.5.2's fixed-point contract — "divide by the radix at every stage" — has no
+meaning under it. Only one could survive. The arithmetic contract was kept,
+because codec conformance depends on it, and Stockham radix-8/4/2 replaces
+split-radix. Cost is single-digit percent of arithmetic on pure powers of two.
+**Split-radix is not implemented, and reinstating it means restating the
+fixed-point contract first.**
+
+**The "last log₂(lanes) stages" are the *first* stages.** In a Stockham flow the
+stride starts at 1 and multiplies by the radix, so with largest-radix-first
+exactly **one** stage falls below the vector width, and it is at the beginning.
+The plan describes the opposite end.
+
+**A counterintuitive measurement worth carrying to every other SIMD crate.**
+Preferring radix 4 over radix 8 *improves* the SIMD-versus-scalar ratio (1.82x
+against 1.40x at n=1024) while making the transform **slower** in absolute terms
+(3.54 µs against 2.92 µs). **The vector/scalar ratio is a misleading optimisation
+target on its own** — it improves when the scalar path gets worse. Optimise
+absolute time; use the ratio only to find where the vector path is not working.
+
+Measured on Apple M5, NEON, 4-lane f32, same plan run twice through a scalar hook
+so the ratio isolates kernels: 1.22x at n=64 rising to 1.64x at n=4096. The
+un-vectorised first stage is *not* the main limiter — it is one stage of four at
+n=4096, worth at most 1.25x. The rest is radix-8 register pressure (16 live
+vectors, half the NEON file) and the O(n) boundary interleave. x86 unmeasured.
+
+**`Tx` is `Sync`.** The plan specifies Send-not-Sync; `execute` takes `&mut self`,
+so `&Tx` grants nothing and an artificial `!Sync` is pure cost to callers.
+
+**The i32 path has no SIMD, deliberately** — reproducibility becomes structural
+rather than something a test has to keep proving. Costs 2.4–3.2x against f32.
+
+**No `bitexact` flag.** The f32 SIMD and scalar paths already agree bit for bit
+(one butterfly source, no FMA) and a test asserts exact equality — but that is
+deliberately kept out of the *contract*, so the guarantee can be relaxed later
+without a semver break.
+
+### On the estimate
+
+Plan 17 costed 27 pw excluding the deferrable C13. Actual: one agent session for
+everything except split-radix and cache blocking. **Plan 17 looks substantially
+over-costed, and the reason is structural rather than luck.** One `Lane` trait
+means the scalar reference, the fixed-point specification and the SIMD kernel are
+*the same source* monomorphised three times — which collapses C2, C3, C8 and C10's
+kernel work into one body and removes C9's scalar-versus-SIMD divergence risk
+entirely, rather than testing for it.
+
+Note the contrast with plan 15, whose 3.4x under-cost of this same crate was real.
+Both errors came from estimating work packages independently rather than asking
+what a single well-chosen abstraction collapses.
+
+### Fixed-point results
+Q31, round-half-up, saturate, divide by radix each stage, so forward produces
+`DFT(x)/n` exactly. Measured SNR 152.5 dB at n=64 falling to 138.9 dB at n=2048 —
+about 23 effective bits at AAC LC's transform size. 27 golden vectors pin the
+codec-relevant combinations.
+
+Rader and Bluestein normalise through a convolution and lose roughly
+`log₂(M²/n)` bits, which is why `DIRECT_MAX_FIXED` is 4096: a direct O(n²) DFT
+rounds once per output and is the accurate fixed-point choice. No shipping codec
+reaches Bluestein in fixed point.

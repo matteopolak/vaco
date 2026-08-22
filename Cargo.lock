@@ -1715,10 +1715,13 @@ name = "vaco-frame"
 version = "0.1.0"
 dependencies = [
  "bitflags",
+ "parking_lot",
+ "proptest",
  "smallvec",
  "vaco-chlayout",
  "vaco-color",
  "vaco-core",
+ "vaco-limits",
  "vaco-pixfmt",
  "vaco-pool",
  "vaco-sampfmt",
@@ -1768,8 +1771,11 @@ name = "vaco-packet"
 version = "0.1.0"
 dependencies = [
  "bitflags",
+ "proptest",
  "smallvec",
+ "vaco-bitstream",
  "vaco-core",
+ "vaco-limits",
  "vaco-pool",
 ]
 
@@ -1836,6 +1842,8 @@ name = "vaco-pool"
 version = "0.1.0"
 dependencies = [
  "parking_lot",
+ "proptest",
+ "vaco-bitstream",
  "vaco-core",
  "vaco-limits",
 ]

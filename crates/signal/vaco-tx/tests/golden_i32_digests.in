@@ -1,0 +1,29 @@
+[
+    0x819b_aebf_10f3_ce3e, // fft fwd len=8
+    0x5a54_b3f0_1ce4_dae4, // fft fwd len=15
+    0x9042_8b93_8b1c_81a4, // fft fwd len=64
+    0xe00f_5988_c391_1670, // fft fwd len=120
+    0xbf88_91cf_4812_3664, // fft fwd len=128
+    0x16d9_eaba_0f19_9591, // fft fwd len=240
+    0x8081_dbfd_0c26_5ab9, // fft fwd len=512
+    0x9c6c_18b6_29ee_8803, // fft inv len=512
+    0x6c42_8108_3cd4_962c, // fft fwd len=11
+    0xa9b5_b525_c69f_4fd0, // fft fwd len=121
+    0x49b8_37c9_c741_6886, // mdct fwd len=2048
+    0x6386_79b9_0c33_e51b, // mdct inv len=2048
+    0x18ea_72ea_d22d_21e7, // mdct inv len=2048
+    0x36e5_922c_fd93_d1a1, // mdct fwd len=256
+    0x3347_fd21_bc49_320d, // mdct fwd len=512
+    0x0089_e3f4_b411_1bac, // mdct inv len=512
+    0x5281_743e_af65_8282, // mdct fwd len=960
+    0xa848_1c64_5973_f3e3, // mdct inv len=480
+    0x703e_6a10_8163_3727, // mdct fwd len=64
+    0x35c6_1a30_a633_bb32, // rdft fwd len=512
+    0x70f0_0510_7d87_d96e, // rdft inv len=512
+    0xd7c7_7184_f59a_7c7d, // rdft fwd len=2048
+    0x25b0_932d_85a4_cb98, // dct fwd len=32
+    0x789f_1be9_a5ae_6e07, // dct inv len=32
+    0x500c_c58f_c8a5_abf5, // dct fwd len=512
+    0x319b_ca8c_cf65_da37, // dct1 fwd len=65
+    0x777a_838f_cbcc_ba5b, // dst1 fwd len=63
+]

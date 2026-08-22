@@ -122,6 +122,20 @@ quote      = "1"
 proc-macro2 = "1"
 
 # --- dev-dependencies
+#
+# rustfft is a DEV-dependency only: a float FFT oracle for vaco-tx above n~1024,
+# where the O(n^2) f64 definitions in its own reference module become too slow to
+# run. Below that the direct definitions are the stronger oracle, being the
+# definition rather than another implementation.
+#
+# D10 assessment (adopted 2026-08-22): pure Rust with zero FFI (gate 1);
+# MIT OR Apache-2.0 (gate 2); widely used, actively maintained, shallow tree
+# (gate 3). It uses `unsafe` internally for SIMD, which D10 says to weigh rather
+# than veto — and here it is moot, because a dev-dependency never enters a
+# shipped artifact. Plan 17 rejected it as an IMPLEMENTATION on model fit (we
+# need bit-exact i32 fixed point, which it does not provide); as an oracle that
+# objection does not apply.
+rustfft    = "6"
 proptest   = "1"
 divan      = "0.1"
 insta      = "1"
