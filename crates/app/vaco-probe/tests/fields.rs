@@ -84,7 +84,7 @@ fn a_video_stream_emits_the_table_in_order() {
     let got = keys(|e| {
         e.tf().open(SectionId::STREAMS).expect("streams");
         e.tf().open(SectionId::STREAM).expect("stream");
-        show::stream(e, &bare(0, MediaType::Video)).expect("stream");
+        show::stream(e, &bare(0, MediaType::Video), true).expect("stream");
         e.tf().close().expect("stream");
         e.tf().close().expect("streams");
     });
@@ -98,7 +98,7 @@ fn a_video_stream_emits_the_table_in_order() {
 #[test]
 fn an_audio_stream_emits_the_table_in_order() {
     let got = keys(|e| {
-        show::stream(e, &bare(0, MediaType::Audio)).expect("stream");
+        show::stream(e, &bare(0, MediaType::Audio), true).expect("stream");
     });
     let want = expected(fields::STREAM, Some(MediaType::Audio));
     let got: Vec<String> = got.into_iter().take_while(|k| k != "default").collect();
@@ -108,7 +108,7 @@ fn an_audio_stream_emits_the_table_in_order() {
 #[test]
 fn a_subtitle_stream_gets_width_and_height_and_nothing_else_visual() {
     let got = keys(|e| {
-        show::stream(e, &bare(0, MediaType::Subtitle)).expect("stream");
+        show::stream(e, &bare(0, MediaType::Subtitle), true).expect("stream");
     });
     let got: Vec<String> = got.into_iter().take_while(|k| k != "default").collect();
     assert_eq!(got, expected(fields::STREAM, Some(MediaType::Subtitle)));
@@ -165,7 +165,7 @@ fn every_declared_field_is_reachable_from_some_emitter() {
     let mut seen: Vec<String> = Vec::new();
     for media in [MediaType::Video, MediaType::Audio, MediaType::Subtitle] {
         for k in keys(|e| {
-            show::stream(e, &bare(0, media)).expect("stream");
+            show::stream(e, &bare(0, media), true).expect("stream");
         }) {
             if !seen.contains(&k) {
                 seen.push(k);
@@ -190,7 +190,7 @@ fn every_declared_field_is_reachable_from_some_emitter() {
 fn nothing_is_emitted_that_the_table_does_not_declare() {
     for media in [MediaType::Video, MediaType::Audio, MediaType::Subtitle] {
         for k in keys(|e| {
-            show::stream(e, &bare(0, media)).expect("stream");
+            show::stream(e, &bare(0, media), true).expect("stream");
         }) {
             let known = fields::find(fields::STREAM, &k).is_some()
                 // The disposition sub-section's keys are the 19 flag names.

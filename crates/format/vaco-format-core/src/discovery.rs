@@ -39,7 +39,7 @@
 use std::collections::VecDeque;
 
 use vaco_codec_core::{CodecId, CodecProperties, ParserDriver};
-use vaco_core::{Duration, Error, Rational, Result, Timestamp};
+use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
 use vaco_limits::{Limits, ProgressGuard};
 use vaco_packet::Packet;
 
@@ -395,15 +395,27 @@ impl<D: Demuxer> Discovery<D> {
                 // records what it saw and leaves the caller to decide.
                 stream.frame_count = None;
             }
-            // Average frame rate from the mean DTS delta. `Stream` has no
-            // avg_frame_rate/r_frame_rate pair, so the estimate lands on the
-            // codec parameters — see the docs file.
+            // Frame rate from the mean DTS delta, for a stream that arrived
+            // without one.
+            //
+            // The estimate is an *average*, so it is `avg_frame_rate`'s answer
+            // by construction. It is also written to `r_frame_rate`, and that
+            // needs justifying rather than assuming: a mean cannot distinguish
+            // the two, and the container that *can* — MP4, which has every
+            // `stts` delta — fills both itself, so this branch never runs for
+            // it. Leaving `r_frame_rate` at `0/0` here would print `0/0` for
+            // every MPEG-TS video stream, where the reference prints a rate.
+            // A genuine `r_frame_rate` wants the delta *histogram* (plan 18
+            // §1.6.3 says gcd; MP4 measured most-common), which this pass does
+            // not keep — recorded as the honest gap it is.
+            // Video only. The reference prints `0/0` for both rates on every
+            // audio and subtitle stream, however regular its packet spacing —
+            // and an estimator handed a 1024-sample AAC stream will happily
+            // produce `11025/256`, which is a real rate and the wrong answer.
+            // This used to be enforced accidentally, by the estimate landing
+            // on `params.video`, which only a video stream has.
             let enough = fps_probe == 0 || st.delta_count >= fps_probe;
-            if enough
-                && st.delta_count > 0
-                && let Some(v) = stream.params.video.as_mut()
-                && (!v.frame_rate.is_defined() || v.frame_rate.is_zero())
-            {
+            if enough && st.delta_count > 0 && stream.media_type() == Some(MediaType::Video) {
                 #[allow(
                     clippy::integer_division,
                     reason = "delta_count is non-zero on this branch; the mean is exact enough \
@@ -418,7 +430,17 @@ impl<D: Demuxer> Discovery<D> {
                             .saturating_mul(i64::from(stream.time_base.num)),
                         i64::from(i32::MAX),
                     );
-                    v.frame_rate = rate;
+                    if let Some(v) = stream.params.video.as_mut()
+                        && (!v.frame_rate.is_defined() || v.frame_rate.is_zero())
+                    {
+                        v.frame_rate = rate;
+                    }
+                    if !stream.avg_frame_rate.is_defined() || stream.avg_frame_rate.is_zero() {
+                        stream.avg_frame_rate = rate;
+                    }
+                    if !stream.r_frame_rate.is_defined() || stream.r_frame_rate.is_zero() {
+                        stream.r_frame_rate = rate;
+                    }
                 }
             }
         }
@@ -432,7 +454,7 @@ impl<D: Demuxer> Discovery<D> {
         self.report.duration_inputs.start_time = self.report.start_time;
         self.report.duration_inputs.container = self.inner.duration();
         self.report.duration_inputs.longest_stream =
-            self.streams.iter().filter_map(|s| s.duration).max();
+            self.streams.iter().filter_map(Stream::duration).max();
         // `from_pts` is DELIBERATELY left unset. It is documented as
         // "`max(pts + duration)` over streams, **from a tail scan**", and
         // `estimate_duration` prefers it over the container's own field — but
@@ -454,6 +476,70 @@ impl<D: Demuxer> Discovery<D> {
         //
         // A tail-scanning caller may set it; this pass must not.
         self.report.duration_inputs.from_pts = None;
+        self.adopt_container_timings();
+    }
+
+    /// A stream the pass never saw a timestamp for takes the *container's*
+    /// start time and duration, each rescaled into its own time base.
+    ///
+    /// **Measured on Matroska**, which is where the rule shows itself, because
+    /// there a track states neither. The discriminating experiments:
+    ///
+    /// | file | subtitle `start_pts` | subtitle `duration_ts` |
+    /// |---|---|---|
+    /// | `sub.mkv` — subtitle only, container start `N/A`, duration 2.000 | `N/A` | **2000** |
+    /// | `as.mkv` — opus + subtitle, container start 0, duration 2.008 | 0 | **2008** |
+    /// | `as2.mkv` — as above but the subtitle ends at 1.0 s | 0 | **2008** |
+    /// | `live_as.mkv` — same, muxed to a pipe so no `Duration` element | 0 | `N/A` |
+    ///
+    /// `as2.mkv` rules out "the stream's own extent" — the value ignores where
+    /// the subtitle actually stops — and `live_as.mkv` rules out a packet
+    /// scan: remove the container's statement and the field goes with it. It
+    /// is the container's duration, handed to a stream that has nothing of its
+    /// own, and the per-track `DURATION` *tag* is not the source either
+    /// (`as2.mkv`'s says 1.0 s where the field says 2.008).
+    ///
+    /// Both halves are guarded on `start_time.is_none()` together, not
+    /// separately: `sub.mkv` has an unknown container start and a known
+    /// container duration and reports `start_pts=N/A` with `duration_ts=2000`,
+    /// so each half is applied only if the container states it, but the
+    /// *decision* to apply either is one test on `start_time`.
+    ///
+    /// This is deliberately here and not in a demuxer. It needs the container
+    /// duration and the whole stream list, neither of which one track knows,
+    /// and a demuxer that filled it locally would disable the shared rule for
+    /// every caller that does run discovery — the hazard plan 18's composition
+    /// amendment records.
+    fn adopt_container_timings(&mut self) {
+        let container_duration =
+            crate::time::estimate_duration(&self.report.duration_inputs, &self.opts).duration;
+        let container_start = self.report.start_time;
+        for stream in &mut self.streams {
+            if stream.start_time.is_some() {
+                continue;
+            }
+            let tb = stream.time_base;
+            if let Some(start) = container_start {
+                stream.start_time = Timestamp::new(start.as_micros())
+                    .checked_rescale(
+                        vaco_core::TimeBase::MICROSECONDS,
+                        tb,
+                        vaco_core::Rounding::NearestAwayFromZero,
+                    )
+                    .unwrap_or(Timestamp::NONE);
+            }
+            if stream.duration_ts.is_none()
+                && let Some(d) = container_duration
+                && let Some(ts) = Timestamp::new(d.as_micros()).checked_rescale(
+                    vaco_core::TimeBase::MICROSECONDS,
+                    tb,
+                    vaco_core::Rounding::NearestAwayFromZero,
+                )
+                && let Some(ticks) = ts.ticks()
+            {
+                stream.set_duration_ts(ticks);
+            }
+        }
     }
 }
 
@@ -619,6 +705,65 @@ mod tests {
         assert_eq!(seen.len(), 20);
         let expect: Vec<Option<i64>> = (0..20).map(|i| Some(i * 100)).collect();
         assert_eq!(seen, expect);
+    }
+
+    /// A stream the pass never saw a packet for takes the container's start
+    /// time and duration. See [`Discovery::adopt_container_timings`] for the
+    /// four Matroska files this rule was measured on.
+    #[test]
+    fn a_stream_with_no_packets_inherits_the_container_timings() {
+        let inner = MockDemuxer::new(2, MediaType::Video)
+            .with_packets(10)
+            .with_duration(2_000_000);
+        let mut d = Discovery::new(inner, FormatFlags::empty(), &opts());
+        d.run(&NoParsers).unwrap();
+        // Stream 1 gets no packets from the mock at all.
+        let s = &d.streams()[1];
+        assert_eq!(s.start_time.ticks(), Some(0));
+        assert_eq!(s.duration_ts, Some(2000), "1/1000 ticks");
+        // Stream 0 has its own first pts and keeps it, and does *not* get the
+        // container duration handed to it — that would overwrite a real
+        // measurement with an approximation.
+        assert_eq!(d.streams()[0].start_time.ticks(), Some(0));
+        assert_eq!(d.streams()[0].duration_ts, None);
+    }
+
+    /// A container that states no duration hands out none — the field stays
+    /// absent rather than becoming zero.
+    #[test]
+    fn no_container_duration_means_no_inherited_duration() {
+        let inner = MockDemuxer::new(2, MediaType::Video).with_packets(10);
+        let mut d = Discovery::new(inner, FormatFlags::empty(), &opts());
+        d.run(&NoParsers).unwrap();
+        assert_eq!(d.streams()[1].duration_ts, None);
+    }
+
+    /// The estimate fills both printed rates, and only for video.
+    #[test]
+    fn the_frame_rate_pair_is_video_only() {
+        let inner = MockDemuxer::new(1, MediaType::Video).with_packets(10);
+        let mut d = Discovery::new(inner, FormatFlags::empty(), &opts());
+        d.run(&NoParsers).unwrap();
+        // 100 ticks of 1/1000 per packet.
+        assert_eq!(d.streams()[0].r_frame_rate, Rational::new(10, 1));
+        assert_eq!(d.streams()[0].avg_frame_rate, Rational::new(10, 1));
+
+        let inner = MockDemuxer::new(1, MediaType::Audio).with_packets(10);
+        let mut d = Discovery::new(inner, FormatFlags::empty(), &opts());
+        d.run(&NoParsers).unwrap();
+        assert_eq!(d.streams()[0].r_frame_rate, Rational::UNDEFINED);
+        assert_eq!(d.streams()[0].avg_frame_rate, Rational::UNDEFINED);
+    }
+
+    /// A rate the container stated is not replaced by an estimate.
+    #[test]
+    fn a_stated_frame_rate_survives_the_estimate() {
+        let mut inner = MockDemuxer::new(1, MediaType::Video).with_packets(10);
+        inner.set_frame_rates(Rational::new(24, 1), Rational::new(24000, 1001));
+        let mut d = Discovery::new(inner, FormatFlags::empty(), &opts());
+        d.run(&NoParsers).unwrap();
+        assert_eq!(d.streams()[0].r_frame_rate, Rational::new(24, 1));
+        assert_eq!(d.streams()[0].avg_frame_rate, Rational::new(24000, 1001));
     }
 
     #[test]

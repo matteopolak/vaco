@@ -753,6 +753,26 @@ impl MatroskaDemuxer {
         stream.id = Some(i64::try_from(number).unwrap_or(i64::MAX));
         stream.params = params;
         stream.disposition = disposition;
+        // `DefaultDuration` is the only rate a Matroska track states, and it
+        // answers **both** printed rates: `av.mkv`'s 40 000 000 ns track
+        // reports `r_frame_rate=25/1` and `avg_frame_rate=25/1`. A track that
+        // states none leaves both at `0/0` and `Discovery` estimates them —
+        // which is the right split, because a rate derived from observed
+        // packet deltas is not something this container stated.
+        //
+        // `duration_ts` is deliberately **not** set here. Measured: a Matroska
+        // track's per-track `DURATION` tag is *not* what the reference prints
+        // (`as2.mkv`'s subtitle tag says 1.0 s where the field says 2.008),
+        // the value that is printed is the segment `Duration`, and it appears
+        // only on a stream that has no timing of its own. That makes it a
+        // container-wide rule, and it lives in `Discovery::finish`.
+        if media == MediaType::Video
+            && let Some(ns) = default_duration
+        {
+            let rate = frame_rate_from_duration(ns);
+            stream.r_frame_rate = rate;
+            stream.avg_frame_rate = rate;
+        }
         if let Some(t) = name.filter(|s| !s.is_empty()) {
             push_meta(&mut stream.metadata, "title", &t);
         }

@@ -40,6 +40,26 @@
 //! reason in the source. Same shape as the unsafe audit's exemptions. Use it
 //! for converting a value the OS already gave you; do not use it for `now()`.
 //!
+//! # Code that is `cfg`'d out of wasm is not a finding
+//!
+//! The gate's whole premise is "this compiles for wasm32 and panics when
+//! called". That premise is **false** for an item behind
+//! `#[cfg(not(target_family = \"wasm\"))]` — it does not compile for wasm at
+//! all, so it cannot panic there.
+//!
+//! `vaco-sched`'s threaded driver is the worked example and the reason this
+//! exists: `run_threaded` calls `std::thread::spawn`, and that is exactly
+//! right. D18 asks for parallelism to be optional *at the API level*, which it
+//! is — the same `Driver::run` compiles and works on wasm, reporting one
+//! thread — and the threaded implementation is then correctly compiled out.
+//! Reporting it would be telling the author to undo the thing D18 asked for.
+//!
+//! So before reporting a line, the gate walks up to the item that encloses it
+//! and checks the attribute block above that item. It is a text scan, so it
+//! sees the common shape (an attribute directly above a top-level `fn`, `impl`
+//! or `mod`) and not an arbitrary one; the `// time-gate:` hatch covers the
+//! rest.
+//!
 //! # Why an allowlist of crates rather than of lines
 //!
 //! Same reasoning as [`crate::wasm`]'s `NATIVE_ONLY`, and the entries overlap
@@ -82,6 +102,55 @@ const NATIVE_ONLY: &[(&str, &str)] = &[
          are std::net's own API and take std durations.",
     ),
 ];
+
+/// Whether the item enclosing `line` is compiled out of wasm.
+///
+/// Walks up to the nearest item header at column 0 — `fn`, `impl`, `mod` — and
+/// then reads the contiguous attribute-and-comment block directly above it.
+/// That is the shape real code uses; anything more tangled should carry an
+/// explicit `// time-gate:` note instead, because a reader will need one too.
+fn cfg_excludes_wasm(lines: &[&str], at: usize) -> bool {
+    let is_item = |t: &str| {
+        t.starts_with("fn ")
+            || t.starts_with("pub fn ")
+            || t.starts_with("pub(crate) fn ")
+            || t.starts_with("impl")
+            || t.starts_with("mod ")
+            || t.starts_with("pub mod ")
+    };
+    // The item header, at column 0 (so a method inside an `impl` resolves to
+    // the `impl`, which is where the attribute conventionally sits).
+    let mut i = at;
+    loop {
+        let Some(l) = lines.get(i) else { return false };
+        if !l.starts_with(char::is_whitespace) && is_item(l) {
+            break;
+        }
+        let Some(prev) = i.checked_sub(1) else {
+            return false;
+        };
+        i = prev;
+    }
+    // The attribute block above it.
+    while let Some(prev) = i.checked_sub(1) {
+        let t = lines.get(prev).map_or("", |l| l.trim_start());
+        if !(t.starts_with('#') || t.starts_with("//")) {
+            return false;
+        }
+        // `not(target_family = "wasm")` and `not(target_arch = "wasm32")` both
+        // mean the same thing here; so does a plain `unix`/`windows` gate.
+        if t.starts_with("#[cfg")
+            && (t.contains("not(target_family = \"wasm\")")
+                || t.contains("not(target_arch = \"wasm32\")")
+                || t.contains("target_family = \"unix\"")
+                || t.contains("target_os = \"windows\""))
+        {
+            return true;
+        }
+        i = prev;
+    }
+    false
+}
 
 /// Ignore `tests/`, `benches/`, `examples/` and fuzz targets: none of them ship,
 /// and a test timing itself is not a portability claim.
@@ -143,7 +212,7 @@ pub fn run(_check: bool) -> Task {
                         waived = p.starts_with("// time-gate:");
                         i -= 1;
                     }
-                    if waived {
+                    if waived || cfg_excludes_wasm(&lines, n) {
                         continue;
                     }
                     // A mention in prose is not a use. This crate's own module

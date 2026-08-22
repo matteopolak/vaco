@@ -116,13 +116,20 @@ fuzz_target!(|data: &[u8]| {
     };
 
     // Every reported field must be answerable for any input.
-    for (i, s) in demux.streams().iter().enumerate() {
+    for s in demux.streams() {
         let _ = s.media_type();
         let _ = s.start_time_absolute();
         let _ = s.params.bit_rate;
-        let _ = demux.duration_ts(i);
-        let _ = demux.frame_rates(i);
-        let _ = demux.display_matrix(i);
+        // These three were inherent accessors on `Mp4Demuxer` until `Stream`
+        // grew fields for them; the point of the exercise is the same, but a
+        // `dyn Demuxer` caller can reach them now.
+        let _ = s.duration_ts;
+        let _ = s.duration();
+        let _ = (s.r_frame_rate, s.avg_frame_rate);
+        if let Some(m) = s.display_matrix() {
+            let deg = vaco_format_core::display_rotation(&m);
+            assert!(deg.is_finite(), "a matrix produced a non-finite rotation");
+        }
         assert!(
             s.time_base.den >= 0,
             "a negative time base is not a time base"

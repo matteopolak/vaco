@@ -68,7 +68,7 @@ fn report_what_we_say_about_a_real_file() {
             s.metadata_get("ts_codec"),
             s.params.codec_tag,
             s.start_time.ticks(),
-            s.duration.map(|d| d.as_micros()),
+            s.duration().map(|d| d.as_micros()),
         );
     }
     let dur = d.duration();

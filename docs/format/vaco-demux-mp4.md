@@ -34,8 +34,8 @@ use vaco_demux_mp4::{Mp4Demuxer, Mp4Options};
 
 let src: Box<dyn MediaSource> = Box::new(MemorySource::new(std::fs::read("clip.mp4")?));
 let mut demux = Mp4Demuxer::open(src, &NoParsers, &FormatOptions::default(), Mp4Options::default())?;
-for (i, s) in demux.streams().iter().enumerate() {
-    println!("{i} {:?} {:?}", s.params.codec_id, demux.duration_ts(i));
+for s in demux.streams() {
+    println!("{i} {:?} {:?}", s.params.codec_id, s.duration_ts);
 }
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
@@ -556,20 +556,28 @@ Reported, not worked around (plan 19 §6).
    discovery must not overwrite it"). Nothing to change; recorded because a
    later reader may otherwise "fix" the demuxer into disagreeing with the
    reference on four of the four calibration files.
-5. **`vaco-format-core`: `Stream` cannot hold what `ffprobe` prints.** Four
-   fields have no home and are exposed as inherent methods on `Mp4Demuxer`
-   instead — `duration_ts`, the `r_frame_rate`/`avg_frame_rate` pair, and the
-   `tkhd` display matrix. `Stream::duration` is a microsecond `Duration` and
-   **cannot round-trip a media timescale**: 25 500 ticks at 1/12800 is
-   1 992 187.5 µs, and `ffprobe` prints `duration_ts=25500`. This is gap 5 in
-   that crate's own *Signature gaps* list, and MP4 is where it bites.
+5. **`vaco-format-core`: `Stream` could not hold what `ffprobe` prints —
+   **closed 2026-08-22.** `duration_ts`, the `r_frame_rate`/`avg_frame_rate`
+   pair and the `tkhd` display matrix used to live in a private `TrackFacts`
+   table reached through inherent methods on `Mp4Demuxer`, which
+   `DemuxerDesc::open`'s `Box<dyn Demuxer>` made unreachable from `vaco-probe`.
+   `Stream` now carries `duration_ts: Option<i64>`, the two rates, and a
+   `side_data` list; `TrackFacts` is deleted, and the three accessors with it.
 
-   **This is currently blocking, not cosmetic.** `DemuxerDesc::open` returns
-   `Box<dyn Demuxer>`, so an inherent method on `Mp4Demuxer` is unreachable
-   through the registry — and `vaco-probe` reads `.streams()` off the trait
-   object. Until `Stream` grows the fields (or `Demuxer` grows accessors),
-   `duration_ts`, `r_frame_rate` and `avg_frame_rate` cannot be printed
-   correctly for MP4 no matter what this crate computes.
+   The rules this crate measured are unchanged and are now simply written where
+   a caller can see them: `duration_ts` is
+   `min(elst sum, min(mdhd.duration, Σ sample durations))`, `avg_frame_rate`
+   divides by the *raw* `stts` total while `duration_ts` and `bit_rate` divide
+   by the clamped limit, and `r_frame_rate` is `timescale / most-common delta`.
+   A `covr` stream keeps its measured `r_frame_rate=90000/1` with
+   `avg_frame_rate=0/0`.
+
+   The display matrix became **side data** rather than a field. The reasoning
+   is in `vaco-format-core`'s `sidedata` module: `ffprobe` prints a list whose
+   length varies, the eight other members plan 18 §1.1 names would each want
+   their own field, and the matrix means the same thing whichever container
+   carried it. `track::display_matrix` still returns `Option<[i32; 9]>` and
+   still suppresses the identity, which is what the reference does.
 6. **`vaco-packet`: `Packet::duration` has no "absent" value.** It is a
    `Duration`, so zero is the only representation of "unknown", and `ffprobe`
    prints `N/A` for the cover-art packet. A printer that maps zero to `N/A`

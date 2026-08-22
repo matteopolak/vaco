@@ -156,12 +156,22 @@ impl ProgramClock {
 struct ScanState {
     first_pts: Timestamp,
     last_pts: Timestamp,
-    /// Smallest positive PTS increment seen. For video this *is* the frame
-    /// duration — one PES packet carries one access unit — and it survives
-    /// B-frame reordering, where consecutive deltas alternate but the smallest
-    /// positive one is still one frame. For audio it is not: a PES packet
-    /// holds a dozen frames, so the smallest PES-to-PES gap is a dozen frame
-    /// durations and means nothing.
+    /// PTS of the *previous* packet in file order, which is not `last_pts`:
+    /// `last_pts` is the running maximum, and under B-frame reordering the two
+    /// differ on most packets.
+    prev_pts: Timestamp,
+    /// Smallest positive PTS increment between **consecutive** packets. For
+    /// video this *is* the frame duration — one PES packet carries one access
+    /// unit — and it survives B-frame reordering, where consecutive deltas
+    /// alternate but the smallest positive one is still one frame. For audio
+    /// it is not: a PES packet holds a dozen frames, so the smallest PES-to-PES
+    /// gap is a dozen frame durations and means nothing.
+    ///
+    /// Measuring against `last_pts` instead — which is what this did — gives
+    /// the smallest jump *above the running maximum*, and that is a whole GOP,
+    /// not a frame. On a 25 fps file with two B-frames it measured 14 400
+    /// ticks where the frame is 3 600, and `duration_ts` came out three frames
+    /// long: 100 800 against the reference's 90 000.
     min_delta: i64,
 }
 
@@ -447,18 +457,26 @@ impl MpegTsDemuxer {
         };
         let program_id = i64::from(pmt.program_number);
         let (prog, clock) = self.program_slot(program_id);
-        // `Program` has no `pmt_pid`/`pcr_pid`/`pmt_version` fields, so the
-        // three values `vaco-probe -show_programs` prints go in the metadata
-        // list. See the docs file's signature-gap section.
+        // These are `Program` fields now. They used to be metadata entries,
+        // which printed as `TAG:pmt_pid=…` under `[PROGRAM]` — the right
+        // values in the wrong section, since the reference prints `pmt_pid`
+        // and `pcr_pid` as program fields and has no such tags.
+        //
+        // `pmt_version` is kept on the struct but is **not** printed:
+        // `-of flat -show_optional_fields always -show_programs` on
+        // `ffprobe 8.1` emits `program_id`, `program_num`, `nb_streams`,
+        // `pmt_pid`, `pcr_pid` and the tags, and nothing else. Plan 18 §1.1
+        // says otherwise and is wrong.
         let pmt_pid = self
             .pmt_pids
             .iter()
             .find(|&&(_, n)| n == pmt.program_number)
-            .map_or(0, |&(p, _)| p);
+            .map(|&(p, _)| p);
         if let Some(p) = self.programs.get_mut(prog) {
-            set_meta(&mut p.metadata, "pmt_pid", pmt_pid.to_string());
-            set_meta(&mut p.metadata, "pcr_pid", pmt.pcr_pid.to_string());
-            set_meta(&mut p.metadata, "pmt_version", pmt.version.to_string());
+            p.program_num = Some(i64::from(pmt.program_number));
+            p.pmt_pid = pmt_pid;
+            p.pcr_pid = Some(pmt.pcr_pid);
+            p.pmt_version = Some(pmt.version);
         }
 
         let cap = usize::try_from(self.opts.max_streams).unwrap_or(usize::MAX);
@@ -512,17 +530,9 @@ impl MpegTsDemuxer {
             MediaType::Audio => params.audio = Some(AudioParameters::default()),
             _ => {}
         }
-        let mut stream = Stream {
-            index,
-            id: Some(i64::from(pid)),
-            params,
-            time_base: TIME_BASE,
-            start_time: Timestamp::NONE,
-            duration: None,
-            frame_count: None,
-            disposition: Disposition::empty(),
-            metadata: Vec::new(),
-        };
+        let mut stream = Stream::new(index, media, TIME_BASE);
+        stream.id = Some(i64::from(pid));
+        stream.params = params;
         // `TsCodec` carries codecs `CodecId` has no variant for; record the
         // name so nothing is lost when `codec_id` is `None`.
         stream.metadata_set("ts_codec", resolved.codec.name());
@@ -575,11 +585,7 @@ impl MpegTsDemuxer {
         if let Some(i) = self.programs.iter().position(|p| p.id == program_id) {
             return (i, self.program_clocks.get(i).copied().unwrap_or(0));
         }
-        self.programs.push(Program {
-            id: program_id,
-            stream_indices: Vec::new(),
-            metadata: Vec::new(),
-        });
+        self.programs.push(Program::new(program_id));
         self.clocks.push(ProgramClock::new(&self.opts));
         let clock = self.clocks.len().saturating_sub(1);
         self.program_clocks.push(clock);
@@ -867,12 +873,13 @@ impl MpegTsDemuxer {
         if st.first_pts.is_none() || st.first_pts.ticks().is_some_and(|f| v < f) {
             st.first_pts = Timestamp::new(v);
         }
-        if let Some(prev) = st.last_pts.ticks() {
-            let delta = v.saturating_sub(prev);
+        if let Some(prev) = st.prev_pts.ticks() {
+            let delta = v.saturating_sub(prev).abs();
             if delta > 0 && (st.min_delta == 0 || delta < st.min_delta) {
                 st.min_delta = delta;
             }
         }
+        st.prev_pts = Timestamp::new(v);
         if st.last_pts.ticks().is_none_or(|p| v > p) {
             st.last_pts = Timestamp::new(v);
         }
@@ -1004,7 +1011,7 @@ impl MpegTsDemuxer {
                 continue;
             };
             let ticks = end.saturating_sub(first).max(0);
-            stream.duration = Timestamp::new(ticks).to_duration(TIME_BASE);
+            stream.set_duration_ts(ticks);
             latest = Some(latest.map_or(end, |v: i64| v.max(end)));
             earliest = Some(earliest.map_or(first, |v: i64| v.min(first)));
         }

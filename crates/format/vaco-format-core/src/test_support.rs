@@ -10,14 +10,14 @@
 //! [`crate::vacoraw`], which is a format rather than a stub.
 
 use vaco_codec_core::{CodecId, CodecParameters};
-use vaco_core::{Error, MediaType, Rational, Result, Timestamp};
+use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
 use vaco_io::MediaSource;
 use vaco_limits::{Budget, Limits};
 use vaco_packet::{Packet, PacketFlags};
 
 use crate::probe::{ProbeData, ProbeScore};
 use crate::seek::{SeekFlags, SeekTarget};
-use crate::{Demuxer, DemuxerDesc, Disposition, ParserProvider, Stream};
+use crate::{Demuxer, DemuxerDesc, ParserProvider, Stream};
 
 fn unopenable(_src: Box<dyn MediaSource>, _p: &dyn ParserProvider) -> Result<Box<dyn Demuxer>> {
     Err(Error::Unsupported("test descriptor cannot be opened"))
@@ -106,6 +106,7 @@ pub(crate) struct MockDemuxer {
     total: u64,
     next: u64,
     first_pts: i64,
+    duration: Option<Duration>,
     budget: Budget,
 }
 
@@ -127,17 +128,10 @@ impl MockDemuxer {
                     }
                     _ => {}
                 }
-                Stream {
-                    index: i as u32,
-                    id: Some(i as i64),
-                    params,
-                    time_base: Rational::new(1, 1000),
-                    start_time: Timestamp::NONE,
-                    duration: None,
-                    frame_count: None,
-                    disposition: Disposition::empty(),
-                    metadata: Vec::new(),
-                }
+                let mut s = Stream::new(i as u32, media, Rational::new(1, 1000));
+                s.id = Some(i as i64);
+                s.params = params;
+                s
             })
             .collect();
         Self {
@@ -145,6 +139,7 @@ impl MockDemuxer {
             total: 0,
             next: 0,
             first_pts: 0,
+            duration: None,
             budget: Budget::new(Limits::permissive()),
         }
     }
@@ -158,11 +153,32 @@ impl MockDemuxer {
         self.first_pts = pts;
         self
     }
+
+    /// Declare both printed frame rates on every stream, as a container that
+    /// states them does.
+    pub(crate) fn set_frame_rates(&mut self, r: Rational, avg: Rational) {
+        for s in &mut self.streams {
+            s.r_frame_rate = r;
+            s.avg_frame_rate = avg;
+        }
+    }
+
+    /// State a container-level duration, as a container with a header field
+    /// does. Needed to exercise the rule that hands it to a stream with no
+    /// timing of its own.
+    pub(crate) const fn with_duration(mut self, micros: i64) -> Self {
+        self.duration = Some(Duration::from_micros(micros));
+        self
+    }
 }
 
 impl Demuxer for MockDemuxer {
     fn streams(&self) -> &[Stream] {
         &self.streams
+    }
+
+    fn duration(&self) -> Option<Duration> {
+        self.duration
     }
 
     fn read_packet(&mut self) -> Result<Packet> {

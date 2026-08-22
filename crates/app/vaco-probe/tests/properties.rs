@@ -19,7 +19,7 @@ use proptest::prelude::*;
 
 use vaco_chlayout::ChannelLayout;
 use vaco_codec_core::{CodecId, CodecParameters, Level, Profile};
-use vaco_core::{Duration, MediaType, Rational, Timestamp};
+use vaco_core::{MediaType, Rational, Timestamp};
 use vaco_format_core::{Disposition, Stream};
 use vaco_probe::emit::Emit;
 use vaco_probe::fields;
@@ -72,7 +72,7 @@ prop_compose! {
         let mut s = Stream::new(index, media, Rational::new(tb_num, tb_den));
         s.id = Some(i64::from(index));
         s.start_time = start.map_or(Timestamp::NONE, Timestamp::new);
-        s.duration = duration.map(Duration::from_micros);
+        s.duration_ts = duration;
         s.frame_count = frames;
         s.disposition = Disposition::from_bits_truncate(disposition);
         s.metadata = tags.into_iter().collect();
@@ -119,7 +119,7 @@ fn render(spec: &str, streams: &[Stream]) -> String {
     {
         let mut e = Emit::new(&mut tf, OptionalFields::Auto);
         for s in streams {
-            show::stream(&mut e, s).expect("stream");
+            show::stream(&mut e, s, true).expect("stream");
         }
     }
     tf.close().expect("streams");
@@ -213,7 +213,7 @@ proptest! {
                 tf.open(SectionId::ROOT).expect("root");
                 {
                     let mut e = Emit::new(&mut tf, policy);
-                    show::stream(&mut e, &s).expect("stream");
+                    show::stream(&mut e, &s, true).expect("stream");
                 }
                 tf.close().expect("root");
                 let text = String::from_utf8(tf.finish().expect("finish")).expect("utf8");

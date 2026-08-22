@@ -43,7 +43,7 @@
 
 use vaco_chlayout::ChannelLayout;
 use vaco_codec_core::{CodecId, CodecParameters, Level, Profile};
-use vaco_core::{Duration, MediaType, Rational, Timestamp};
+use vaco_core::{MediaType, Rational, Timestamp};
 use vaco_format_core::{Disposition, Stream};
 use vaco_probe::emit::Emit;
 use vaco_probe::show::{self, FormatInfo};
@@ -238,7 +238,12 @@ fn av_mp4_streams() -> Vec<Stream> {
     let mut video = Stream::new(0, MediaType::Video, Rational::new(1, 12800));
     video.id = Some(1);
     video.start_time = Timestamp::new(0);
-    video.duration = Some(Duration::from_micros(2_000_000));
+    // Ticks in the stream's own base, which is what the container states and
+    // what `duration_ts=25600` prints. Deriving it from 2 000 000 µs happened
+    // to work here only because 2 s is a whole number of 1/12800 ticks.
+    video.duration_ts = Some(25_600);
+    video.r_frame_rate = Rational::new(25, 1);
+    video.avg_frame_rate = Rational::new(25, 1);
     video.frame_count = Some(50);
     video.disposition = Disposition::DEFAULT;
     video.metadata = vec![
@@ -271,7 +276,7 @@ fn av_mp4_streams() -> Vec<Stream> {
     let mut audio = Stream::new(1, MediaType::Audio, Rational::new(1, 44100));
     audio.id = Some(2);
     audio.start_time = Timestamp::new(0);
-    audio.duration = Some(Duration::from_micros(2_000_000));
+    audio.duration_ts = Some(88_200);
     audio.frame_count = Some(88);
     audio.disposition = Disposition::DEFAULT;
     audio.metadata = vec![
@@ -314,6 +319,41 @@ const METADATA: &[(&str, &str)] = &[
     ("encoder", "Lavf62.12.100"),
 ];
 
+/// `ffprobe -v quiet -of default -show_streams -select_streams v rot.mov`,
+/// the `[SIDE_DATA]` block only.
+///
+/// `rot.mov` is `av.mp4`'s content muxed to MOV with the video `tkhd` matrix
+/// byte-patched to a 90-degree rotation
+/// (`[0, 65536, 0, -65536, 0, 0, 7864320, 0, 1073741824]`). Column widths are
+/// load-bearing and were read with `od -c`, not by eye.
+const SIDE_DATA_DEFAULT: &str = "\
+[SIDE_DATA]
+side_data_type=Display Matrix
+displaymatrix=
+00000000:            0       65536           0
+00000001:       -65536           0           0
+00000002:      7864320           0  1073741824
+
+rotation=-90
+[/SIDE_DATA]
+";
+
+/// `ffprobe -v quiet -of default -show_programs ts.ts`, the program's own
+/// fields only — the nested `[STREAM]` sections are `stream_fields`, already
+/// covered above.
+///
+/// There is no `pmt_version` line, and `-show_optional_fields always` does not
+/// add one. Plan 18 §1.1 says `vaco-probe` prints it; measurement says the
+/// section has five fields and that is not one of them.
+const PROGRAM_DEFAULT_HEAD: &str = "\
+[PROGRAM]
+program_id=1
+program_num=1
+nb_streams=2
+pmt_pid=4096
+pcr_pid=256
+";
+
 // ------------------------------------------------------------------ rendering
 
 fn render(spec: &str, f: impl FnOnce(&mut Emit<'_, Vec<u8>>)) -> String {
@@ -332,7 +372,7 @@ fn streams(spec: &str) -> String {
     render(spec, |e| {
         e.tf().open(SectionId::STREAMS).expect("streams");
         for s in &av_mp4_streams() {
-            show::stream(e, s).expect("stream");
+            show::stream(e, s, true).expect("stream");
         }
         e.tf().close().expect("streams");
     })
@@ -532,4 +572,91 @@ fn the_streams_are_byte_identical_apart_from_the_known_gaps() {
     let want = join(STREAMS_DEFAULT);
     let got = join(&streams("default"));
     assert_eq!(got, want);
+}
+
+/// The stream `[SIDE_DATA]` block, byte for byte.
+///
+/// This is the one that would have gone wrong silently: the `displaymatrix`
+/// value's three rows are `%08x:` plus three right-aligned **12**-column
+/// integers, which is 37 characters after the colon. The obvious reading —
+/// `": %11d %11d %11d"` — gives 36 and is wrong on every line, but only by a
+/// space, so nothing short of a byte comparison catches it.
+#[test]
+fn the_display_matrix_side_data_block_is_byte_identical() {
+    let mut s = Stream::new(0, MediaType::Video, Rational::new(1, 12800));
+    s.side_data
+        .push(vaco_format_core::StreamSideData::DisplayMatrix([
+            0,
+            65536,
+            0,
+            -65536,
+            0,
+            0,
+            7_864_320,
+            0,
+            1 << 30,
+        ]));
+    let out = render("default", |e| {
+        show::side_data(e, &s).expect("side data");
+    });
+    assert_eq!(out, SIDE_DATA_DEFAULT);
+}
+
+/// A stream with no side data opens no list at all — the reference emits
+/// neither `[SIDE_DATA]` nor an empty `side_data_list`.
+#[test]
+fn a_stream_without_side_data_opens_no_list() {
+    let s = Stream::new(0, MediaType::Video, Rational::new(1, 12800));
+    assert_eq!(
+        render("default", |e| show::side_data(e, &s).expect("none")),
+        ""
+    );
+}
+
+/// The `[PROGRAM]` header fields, in the reference's order.
+#[test]
+fn the_program_section_prints_five_fields_in_order() {
+    let mut p = vaco_format_core::Program::new(1);
+    p.program_num = Some(1);
+    p.pmt_pid = Some(4096);
+    p.pcr_pid = Some(256);
+    p.pmt_version = Some(0);
+    p.stream_indices = vec![0, 1];
+    let streams = av_mp4_streams();
+    let out = render("default", |e| {
+        show::program(e, &p, &streams, false).expect("program");
+    });
+    let head = out
+        .lines()
+        .take_while(|l| *l != "[STREAM]")
+        .fold(String::new(), |mut acc, l| {
+            acc.push_str(l);
+            acc.push('\n');
+            acc
+        });
+    assert_eq!(head, PROGRAM_DEFAULT_HEAD);
+}
+
+/// `id` is printed only by a container that declares `SHOW_IDS`.
+///
+/// Measured: the same H.264 track reports `id=0x1` out of MP4 and `id=N/A` out
+/// of Matroska, which declares no `SHOW_IDS`. The `Stream::id` field is set in
+/// both cases — Matroska's `TrackNumber` is what `-map 0:#1` resolves against —
+/// so the suppression has to happen at the printer.
+#[test]
+fn the_id_field_follows_show_ids() {
+    let streams = av_mp4_streams();
+    let with = render("default", |e| {
+        for s in &streams {
+            show::stream(e, s, true).expect("stream");
+        }
+    });
+    let without = render("default", |e| {
+        for s in &streams {
+            show::stream(e, s, false).expect("stream");
+        }
+    });
+    assert!(with.contains("\nid=0x1\n"), "{with}");
+    assert!(without.contains("\nid=N/A\n"), "{without}");
+    assert!(!without.contains("id=0x1"));
 }

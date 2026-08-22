@@ -377,10 +377,14 @@ impl<'a, O: Write> Writer<'a, O> {
             emit.tf().open(SectionId::FRAMES)?;
             emit.tf().close()?;
         }
+        let show_ids = input
+            .desc
+            .flags
+            .contains(vaco_format_core::FormatFlags::SHOW_IDS);
         if opts.show.programs {
             emit.tf().open(SectionId::PROGRAMS)?;
             for p in input.demuxer.programs() {
-                show::program(&mut emit, p, &streams)?;
+                show::program(&mut emit, p, &streams, show_ids)?;
             }
             emit.tf().close()?;
         }
@@ -391,7 +395,7 @@ impl<'a, O: Write> Writer<'a, O> {
         if opts.show.streams {
             emit.tf().open(SectionId::STREAMS)?;
             for s in selected.iter().copied() {
-                show::stream(&mut emit, s)?;
+                show::stream(&mut emit, s, show_ids)?;
             }
             emit.tf().close()?;
         }

@@ -28,7 +28,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Mp4Options::default(),
     )?;
 
-    for (i, s) in demux.streams().iter().enumerate() {
+    for s in demux.streams() {
         println!("[STREAM]");
         println!("index={}", s.index);
         println!(
@@ -57,20 +57,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("sample_rate={}", a.sample_rate);
         }
         println!("id=0x{:x}", s.id.unwrap_or(0));
-        let (r, avg) = demux.frame_rates(i).unwrap_or_default();
-        println!("r_frame_rate={}/{}", r.num, r.den);
-        println!("avg_frame_rate={}/{}", avg.num, avg.den);
+        println!("r_frame_rate={}/{}", s.r_frame_rate.num, s.r_frame_rate.den);
+        println!(
+            "avg_frame_rate={}/{}",
+            s.avg_frame_rate.num, s.avg_frame_rate.den
+        );
         println!("time_base={}/{}", s.time_base.num, s.time_base.den);
         println!("start_pts={}", s.start_time);
         println!(
             "duration_ts={}",
-            demux
-                .duration_ts(i)
-                .map_or("N/A".to_owned(), |v| v.to_string())
+            s.duration_ts.map_or("N/A".to_owned(), |v| v.to_string())
         );
         println!(
             "duration={}",
-            s.duration
+            s.duration()
                 .map_or("N/A".to_owned(), |d| format!("{:.6}", d.as_secs_f64()))
         );
         println!(

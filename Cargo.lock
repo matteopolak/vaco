@@ -225,15 +225,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "crossbeam-channel"
-version = "0.5.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d85363c37faeca707aef026efa9f3b34d077bce547e48f770770625c6013679e"
-dependencies = [
- "crossbeam-utils",
-]
-
-[[package]]
 name = "crossbeam-deque"
 version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1109,6 +1100,7 @@ version = "0.23.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
 dependencies = [
+ "log",
  "once_cell",
  "rustls-pki-types",
  "rustls-webpki 0.103.15",
@@ -1444,8 +1436,11 @@ dependencies = [
  "base64",
  "log",
  "percent-encoding",
+ "rustls",
+ "rustls-pki-types",
  "ureq-proto",
  "utf8-zero",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -1559,8 +1554,10 @@ dependencies = [
 name = "vaco-codec-dsp-idct"
 version = "0.1.0"
 dependencies = [
+ "divan",
+ "proptest",
  "vaco-core",
- "vaco-simd",
+ "vaco-tx",
 ]
 
 [[package]]
@@ -1719,8 +1716,12 @@ dependencies = [
 name = "vaco-format-id3"
 version = "0.1.0"
 dependencies = [
+ "bitflags",
+ "proptest",
+ "vaco-bitstream",
  "vaco-core",
  "vaco-io",
+ "vaco-limits",
 ]
 
 [[package]]
@@ -1763,9 +1764,12 @@ dependencies = [
 name = "vaco-format-riff"
 version = "0.1.0"
 dependencies = [
+ "proptest",
+ "vaco-bitstream",
+ "vaco-codec-core",
  "vaco-core",
- "vaco-format-core",
  "vaco-io",
+ "vaco-limits",
 ]
 
 [[package]]
@@ -1856,9 +1860,16 @@ dependencies = [
 name = "vaco-parse-av1"
 version = "0.1.0"
 dependencies = [
+ "divan",
+ "proptest",
  "vaco-bitstream",
+ "vaco-codec-cbs",
  "vaco-codec-core",
+ "vaco-color",
  "vaco-core",
+ "vaco-limits",
+ "vaco-packet",
+ "vaco-pixfmt",
 ]
 
 [[package]]
@@ -1981,13 +1992,16 @@ dependencies = [
 name = "vaco-protocol-http"
 version = "0.1.0"
 dependencies = [
+ "proptest",
  "rustls",
  "rustls-rustcrypto",
  "ureq",
  "vaco-core",
  "vaco-io",
+ "vaco-limits",
+ "vaco-opts",
  "vaco-protocol-core",
- "webpki-roots",
+ "vaco-time",
 ]
 
 [[package]]
@@ -2002,6 +2016,7 @@ dependencies = [
  "vaco-filter-core",
  "vaco-format-core",
  "vaco-protocol-core",
+ "vaco-protocol-http",
 ]
 
 [[package]]
@@ -2047,10 +2062,17 @@ dependencies = [
 name = "vaco-sched"
 version = "0.1.0"
 dependencies = [
- "crossbeam-channel",
+ "divan",
+ "proptest",
+ "vaco-codec-core",
  "vaco-core",
+ "vaco-filter-core",
+ "vaco-format-core",
  "vaco-frame",
+ "vaco-limits",
  "vaco-packet",
+ "vaco-pixfmt",
+ "vaco-pool",
 ]
 
 [[package]]

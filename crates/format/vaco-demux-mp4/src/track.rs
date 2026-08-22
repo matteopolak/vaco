@@ -19,21 +19,6 @@ use vaco_format_core::{Disposition, Stream};
 use vaco_format_isom::stsd::{ConfigFlavour, SampleEntry};
 use vaco_format_isom::{Language, Track, esds, fixed, stsd};
 
-/// Everything about a track that [`Stream`] has no field for.
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct TrackFacts {
-    /// `duration_ts`, exactly, in media ticks. [`Stream::duration`] is
-    /// microseconds and cannot round-trip it.
-    pub duration_ts: Option<i64>,
-    /// `r_frame_rate` — the timescale over the most common `stts` delta.
-    pub r_frame_rate: Rational,
-    /// `avg_frame_rate` — sample count over the media limit.
-    pub avg_frame_rate: Rational,
-    /// The `tkhd` display matrix, when it is not the identity. `Stream` has no
-    /// side-data list, so `vaco-probe`'s `rotation` has to reach it this way.
-    pub display_matrix: Option<[i32; 9]>,
-}
-
 /// Media-timescale quantities derived from the sample table or the fragments.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct MediaTotals {

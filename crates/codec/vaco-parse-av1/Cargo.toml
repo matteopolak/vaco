@@ -12,6 +12,19 @@ authors.workspace = true
 vaco-core = { path = "../../core/vaco-core" }
 vaco-bitstream = { path = "../../core/vaco-bitstream" }
 vaco-codec-core = { path = "../../signal/vaco-codec-core" }
+vaco-codec-cbs = { path = "../../signal/vaco-codec-cbs" }
+vaco-limits = { path = "../../core/vaco-limits" }
+vaco-color = { path = "../../model/vaco-color" }
+vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
+vaco-packet = { path = "../../model/vaco-packet" }
+
+[dev-dependencies]
+proptest.workspace = true
+divan.workspace = true
+
+[[bench]]
+name = "seq"
+harness = false
 
 [lints]
 workspace = true

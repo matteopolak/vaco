@@ -75,7 +75,7 @@ mod tests {
         assert_eq!(s.frame_count, Some(10));
         // 10 samples of 4 bytes over 10 * 512 ticks at 12800/s.
         assert_eq!(s.params.bit_rate, Some(40 * 8 * 12800 / 5120));
-        assert_eq!(demux.duration_ts(0), Some(5120));
+        assert_eq!(s.duration_ts, Some(5120));
     }
 
     #[test]

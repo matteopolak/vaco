@@ -566,3 +566,65 @@ proptest! {
         }
     }
 }
+
+proptest! {
+    /// `display_rotation` is total: no matrix panics it, and every answer is a
+    /// finite angle in `(-180, 180]`.
+    ///
+    /// The all-zero matrix is the case that makes this non-obvious — both
+    /// column scales are zero, and an unguarded normalisation returns NaN,
+    /// which then truncates to a value the reference never prints.
+    #[test]
+    fn display_rotation_is_total_and_bounded(m in proptest::array::uniform9(any::<i32>())) {
+        let deg = vaco_format_core::display_rotation(&m);
+        prop_assert!(deg.is_finite(), "{m:?} -> {deg}");
+        prop_assert!((-180.0..=180.0).contains(&deg), "{m:?} -> {deg}");
+    }
+
+    /// The identity is the only matrix reported as the identity, and it is the
+    /// one a demuxer must not turn into side data.
+    #[test]
+    fn only_the_identity_is_the_identity(m in proptest::array::uniform9(any::<i32>())) {
+        let identity = [1 << 16, 0, 0, 0, 1 << 16, 0, 0, 0, 1 << 30];
+        prop_assert_eq!(vaco_format_core::is_identity_matrix(&m), m == identity);
+    }
+
+    /// `duration_ts` is the stored truth and `duration()` the derived view, so
+    /// the tick count must survive whatever the microsecond view loses.
+    ///
+    /// The concrete case behind this: 25 500 ticks at 1/12800 is
+    /// 1 992 187.5 µs. Storing microseconds and converting back gives 25 499
+    /// or 25 500 depending on the rounding, and `ffprobe` prints `25500`.
+    #[test]
+    fn duration_ts_is_never_lost_to_the_microsecond_view(
+        ticks in 0i64..1_000_000_000,
+        den in 1i32..=1_000_000,
+    ) {
+        let mut s = vaco_format_core::Stream::new(
+            0,
+            vaco_core::MediaType::Video,
+            Rational::new(1, den),
+        );
+        s.set_duration_ts(ticks);
+        prop_assert_eq!(s.duration_ts, Some(ticks));
+        // The derived view may round; the field may not.
+        if let Some(d) = s.duration() {
+            prop_assert!(d.as_micros() >= 0);
+        }
+    }
+
+    /// A negative duration is refused rather than clamped: no container states
+    /// one, so it means the arithmetic that produced it was wrong, and `N/A`
+    /// keeps that visible.
+    #[test]
+    fn a_negative_duration_is_refused(ticks in i64::MIN..0) {
+        let mut s = vaco_format_core::Stream::new(
+            0,
+            vaco_core::MediaType::Video,
+            Rational::new(1, 1000),
+        );
+        s.set_duration_ts(ticks);
+        prop_assert_eq!(s.duration_ts, None);
+        prop_assert_eq!(s.duration(), None);
+    }
+}

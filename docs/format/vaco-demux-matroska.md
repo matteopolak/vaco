@@ -152,6 +152,37 @@ metadata, chapter list, container duration, and — packet by packet — `pts`,
 `duration`, `size`, `pos`, flags and `SkipSamples` side data. `cargo run -p
 vaco-demux-matroska --example mkvdump -- <file> --packets` reproduces our half.
 
+### The two frame rates, and the `duration_ts` we deliberately do not set
+
+`Stream` grew an `r_frame_rate`/`avg_frame_rate` pair on 2026-08-22. Matroska
+states exactly one rate — `DefaultDuration`, in nanoseconds per frame — and it
+answers **both**: `av.mkv`'s 40 000 000 ns video track reports
+`r_frame_rate=25/1` and `avg_frame_rate=25/1`. A track that states no
+`DefaultDuration` leaves both at `0/0` and `Discovery` estimates them, which is
+the right split: a rate derived from observed packet spacing is not something
+this container stated.
+
+`duration_ts` is **not** set here, and the measurements are why.
+
+| file | subtitle `duration_ts` | its own `DURATION` tag | container duration |
+|---|---:|---:|---:|
+| `sub.mkv` (subtitle only) | 2000 | 2.000 | 2.000 |
+| `as.mkv` (opus + subtitle) | **2008** | 2.000 | 2.008 |
+| `as2.mkv` (subtitle ends at 1.0 s) | **2008** | 1.000 | 2.008 |
+| `live_as.mkv` (piped, no `Duration` element) | `N/A` | 1.000 | `N/A` |
+| `av.mkv`, `vs.mkv`, `avs.mkv`, `v.mkv`, `a.mka` | `N/A` | — | — |
+
+The per-track `DURATION` tag is not the source — `as2.mkv` separates them. The
+track's own extent is not the source either — `as2.mkv`'s subtitle stops at
+1.0 s. What is printed is the *container* duration, handed to a stream that has
+no timing of its own, and `live_as.mkv` proves it: remove the `Duration`
+element and the field disappears with it.
+
+So this is a container-wide rule, not a per-track statement, and it lives in
+`Discovery::finish` — where filling it in a demuxer would have disabled the
+shared rule for every caller that does run discovery, which is the same reason
+this crate declined to set `start_time`. See `docs/format/vaco-format-core.md`.
+
 ### Two numbers we do not produce, and neither is ours to produce
 
 * **Audio packet durations where the track states no `DefaultDuration` and the

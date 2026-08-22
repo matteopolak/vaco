@@ -367,6 +367,116 @@ breaks and a muxer with no opinion need not invent one. `VacoRawMuxer`
 implements it, and the round-trip fixtures now ask the muxer for the base rather
 than assuming it, which is what a real caller has to do.
 
+## The 2026-08-22 widening: `duration_ts`, the frame-rate pair, side data
+
+Three things `ffprobe` prints had no home on `Stream`, so all three demuxers
+kept them in private side tables reachable only through inherent methods on
+their concrete types — and `DemuxerDesc::open` returns `Box<dyn Demuxer>`, so
+`vaco-probe` could not reach any of them. `vaco-demux-mp4`'s author called it
+"now blocking". The fix is on `Stream`; the interesting part is *which* of the
+three became a field and which did not.
+
+### `duration_ts` replaces `duration`, rather than joining it
+
+`Stream::duration` was an `Option<Duration>` — microseconds. A media timescale
+does not survive that: 25 500 ticks at 1/12800 is 1 992 187.5 µs, and the
+reference prints `duration_ts=25500`.
+
+Adding `duration_ts` *beside* `duration` would have put one concept in two
+fields, which D19 exists to stop, and left every writer free to set one and not
+the other. So the field is now
+
+```rust
+pub duration_ts: Option<i64>,          // ticks of `time_base`, stored
+pub fn duration(&self) -> Option<Duration>   // microseconds, derived
+```
+
+The lossy view is the derived one. `set_duration_ts` refuses a negative tick
+count rather than clamping it: no container states a negative length, so one
+means the arithmetic that produced it was wrong, and `None` keeps that visible
+as `N/A` instead of printing a confident `0`.
+
+### The frame rates are a pair because they genuinely differ
+
+`r_frame_rate` and `avg_frame_rate` both used to be answered by
+`params.video.frame_rate`, which is one field, so the two could not diverge —
+and they do. A 1/600-timescale MP4 whose `stts` holds mostly 60-tick deltas
+with a few 20-tick ones reports `r_frame_rate=10/1` and `avg_frame_rate=300/29`
+on the same track. `params.video.frame_rate` is still set, because parsers and
+filters want *a* rate; the two printed fields are now their own.
+
+Both are plain `Rational`, not `Option<Rational>`: the reference prints `0/0`
+for a stream with no rate — including every audio stream — never `N/A`, so
+there is no third state to model.
+
+### The display matrix is side data, and that is a deliberate refusal
+
+It would have been one line shorter as `display_matrix: Option<[i32; 9]>`. It
+is a `Vec<StreamSideData>` instead, for reasons written out in the [`sidedata`]
+module docs: the reference prints a *list* whose length varies, the eight other
+members plan 18 §1.1 names would each want their own mostly-`None` field, and
+the matrix means the same thing whether it arrived in an ISOBMFF `tkhd`, a
+Matroska `Projection` or an H.264 SEI.
+
+`StreamSideData` is deliberately **not** `#[non_exhaustive]`. Everything that
+consumes it is in this workspace, and `non_exhaustive` would force a catch-all
+arm into `vaco-probe`'s printer — turning "a new side-data kind is unprinted"
+from a compile error into a silently missing `[SIDE_DATA]` block.
+
+`display_rotation` is measured, not derived from first principles. It
+normalises each *column* to unit length before taking the angle, and the file
+that proves it is `[65536, 66000, 0, 0, 65536, 0, …]`: the reference reports
+`-35`, where the obvious `-atan2(b, a)` predicts `-45`. A corpus of pure
+rotations cannot tell the two rules apart.
+
+### `Program` gained four MPEG-TS fields
+
+`program_num`, `pmt_pid`, `pcr_pid`, `pmt_version`. `vaco-demux-mpegts` was
+putting the last three in `Program::metadata`, where they printed as
+`TAG:pmt_pid=…` — the right values in the wrong section.
+
+`pmt_version` is on the struct and is **not printed**. Plan 18 §1.1 and the
+brief that asked for it both say `-show_programs` prints it; measured with
+`-of flat -show_optional_fields always -show_programs` on `ffprobe 8.1`, the
+section is `program_id`, `program_num`, `nb_streams`, `pmt_pid`, `pcr_pid` and
+the tags, and nothing else. The field stays because a demuxer needs it to
+notice a PMT change, not because anything prints it.
+
+### The new shared rule in `Discovery::finish`
+
+**A stream the pass never saw a timestamp for takes the container's start time
+and duration**, each rescaled into its own time base.
+
+This is a container-wide rule wearing a per-stream disguise, and it was
+measured on Matroska because Matroska is where it shows:
+
+| file | subtitle `start_pts` | subtitle `duration_ts` |
+|---|---|---|
+| `sub.mkv` — subtitle only; container start `N/A`, duration 2.000 | `N/A` | **2000** |
+| `as.mkv` — opus + subtitle; container start 0, duration 2.008 | 0 | **2008** |
+| `as2.mkv` — as above, but the subtitle's last event ends at 1.0 s | 0 | **2008** |
+| `live_as.mkv` — as above, muxed to a pipe so there is no `Duration` element | 0 | `N/A` |
+
+`as2.mkv` rules out the stream's own extent — the value ignores where the
+subtitle stops. `live_as.mkv` rules out a packet scan — remove the container's
+statement and the field goes with it. And the per-track `DURATION` *tag* is not
+the source either: `as2.mkv`'s says 1.0 s where the printed field says 2.008.
+
+It is here and not in `vaco-demux-matroska` because it needs the container
+duration and the whole stream list, neither of which one track knows, and
+because a demuxer that filled it locally would disable the shared rule for
+every caller that does run discovery — the hazard plan 18's composition
+amendment records.
+
+**It does not fire on today's corpus**, and that is worth stating plainly. Our
+discovery loop runs until every stream has *two DTS deltas*, so it always sees
+the subtitle packet and sets `start_time` from it; the reference's loop stops as
+soon as every stream's codec parameters are complete, which for a file of
+subrip and Opus is before it reads anything at all. That difference is the
+whole of the remaining `sub.mkv` divergence — see `docs/app/vaco-probe.md` — and
+narrowing the stop condition to match is a much larger change than this one,
+with `start_time` for every delay-coded audio stream riding on it.
+
 ## Signature gaps
 
 Interfaces are frozen (plan 19 §6), so these are **reported, not changed**. In
@@ -389,12 +499,13 @@ descending order of how much they cost.
    which is how `-ss` expresses "do not overshoot" without `BACKWARD`. The
    single-target-plus-flags form covers every case we can currently test, but
    `-ss` precision will want the range.
-5. **`Stream` is missing five fields** the plan specifies and `vaco-probe` will
-   want: `pts_wrap_bits` (the demuxer holds the `WrapState` instead),
-   `avg_frame_rate`/`r_frame_rate` as a pair (the estimate lands on
-   `params.video.frame_rate`, so the two cannot diverge as ffprobe reports them
-   diverging), a container-level `sample_aspect_ratio` override, `discard`, and
-   `attached_pic`.
+5. **`Stream` is missing two of the five fields** the plan specifies.
+   `duration_ts`, the `avg_frame_rate`/`r_frame_rate` pair and stream side data
+   are now present — see *The 2026-08-22 widening* below. Still absent, and
+   still nothing asks for them: `pts_wrap_bits` (the demuxer holds the
+   `WrapState` instead), a container-level `sample_aspect_ratio` override,
+   `discard`, and `attached_pic` (the `ATTACHED_PIC` disposition plus a normal
+   stream covers every case `vaco-probe` has met).
 6. **`Demuxer::read_packet` does not promise `Eof` is stable.** See *How to
    change it*. Costs one flag per demuxer and one class of bug per demuxer that
    forgets it.

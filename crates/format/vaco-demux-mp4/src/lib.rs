@@ -76,7 +76,7 @@ use vaco_limits::{Budget, Limits};
 use vaco_packet::{Packet, PacketFlags, PacketSideData};
 
 use read::{FragEntry, Pending, Reader, Source};
-use track::{MediaTotals, TrackFacts};
+use track::MediaTotals;
 
 /// The registry name of this family. One component, six spellings.
 pub const FORMAT_NAME: &str = vaco_format_isom::FORMAT_NAME;
@@ -229,7 +229,6 @@ pub struct Mp4Demuxer {
 
     streams: Vec<Stream>,
     readers: Vec<Reader>,
-    facts: Vec<TrackFacts>,
     chapters: Vec<Chapter>,
     metadata: Vec<(String, String)>,
     duration: Option<Duration>,
@@ -331,7 +330,6 @@ impl Mp4Demuxer {
             mdat_buf: None,
             streams: Vec::new(),
             readers: Vec::new(),
-            facts: Vec::new(),
             chapters: Vec::new(),
             metadata: Vec::new(),
             duration: None,
@@ -346,33 +344,13 @@ impl Mp4Demuxer {
         Ok(me)
     }
 
-    /// The exact `duration_ts` of a stream, in its own time base.
-    ///
-    /// [`Stream::duration`] is microseconds and cannot round-trip a media
-    /// timescale — 25 500 ticks at 1/12800 is 1 992 187.5 µs — so the exact
-    /// value `ffprobe` prints is only reachable through here. A `Stream` field
-    /// would be the right home; see the crate's doc file.
-    #[must_use]
-    pub fn duration_ts(&self, stream_index: usize) -> Option<i64> {
-        self.facts.get(stream_index).and_then(|f| f.duration_ts)
-    }
-
-    /// `r_frame_rate` and `avg_frame_rate`, which `Stream` cannot hold as a
-    /// pair — `CodecParameters::video.frame_rate` is one field and the two
-    /// genuinely differ on a variable-rate file.
-    #[must_use]
-    pub fn frame_rates(&self, stream_index: usize) -> Option<(Rational, Rational)> {
-        self.facts
-            .get(stream_index)
-            .map(|f| (f.r_frame_rate, f.avg_frame_rate))
-    }
-
-    /// The `tkhd` display matrix, when it is not the identity. `Stream` has no
-    /// side-data list, so `vaco-probe`'s `rotation` has to come from here.
-    #[must_use]
-    pub fn display_matrix(&self, stream_index: usize) -> Option<[i32; 9]> {
-        self.facts.get(stream_index).and_then(|f| f.display_matrix)
-    }
+    // `duration_ts`, `frame_rates` and `display_matrix` used to live here as
+    // inherent accessors over a private `TrackFacts` table, because `Stream`
+    // could hold none of the three. They are `Stream::duration_ts`,
+    // `Stream::r_frame_rate`/`avg_frame_rate` and
+    // `Stream::side_data` now, so a caller holding a `dyn Demuxer` can reach
+    // them — which is the whole point, since `DemuxerDesc::open` hands back a
+    // trait object and `vaco-probe` reads `.streams()` off it.
 
     /// Whether the file is fragmented (`mvex` present).
     #[must_use]
@@ -405,24 +383,22 @@ impl Mp4Demuxer {
         }
 
         let size = self.io.size();
-        let (streams, readers, facts, slots, found) = {
+        let (streams, readers, slots, found) = {
             let bx = moov_box(&self.moov, self.moov_offset, self.moov_header_len);
             let movie = Movie::parse(&bx)?;
             let mut streams = Vec::new();
             let mut readers = Vec::new();
-            let mut facts = Vec::new();
             let mut slots = Vec::new();
             for (slot, trak) in movie.tracks.iter().enumerate() {
                 let index = streams.len() as u32;
                 if u64::from(index) >= u64::from(self.budget.limits().max_streams) {
                     break;
                 }
-                let Some((stream, reader, fact)) = self.build_track(trak, slot, index, size) else {
+                let Some((stream, reader)) = self.build_track(trak, slot, index, size) else {
                     continue;
                 };
                 streams.push(stream);
                 readers.push(reader);
-                facts.push(fact);
                 slots.push(Some(slot));
             }
             // Metadata, chapters and cover art all live in `udta`, which the
@@ -431,11 +407,10 @@ impl Mp4Demuxer {
                 .udta
                 .as_ref()
                 .map(|u| meta::parse_udta(u, !self.mp4.ignore_chapters));
-            (streams, readers, facts, slots, found)
+            (streams, readers, slots, found)
         };
         self.streams = streams;
         self.readers = readers;
-        self.facts = facts;
         self.slots = slots;
 
         if let Some(found) = found {
@@ -451,10 +426,9 @@ impl Mp4Demuxer {
             }
             if let Some(cover) = found.cover {
                 let index = self.streams.len() as u32;
-                let (stream, reader, fact) = cover_stream(index, cover);
+                let (stream, reader) = cover_stream(index, cover);
                 self.streams.push(stream);
                 self.readers.push(reader);
-                self.facts.push(fact);
                 self.slots.push(None);
             }
         }
@@ -468,8 +442,8 @@ impl Mp4Demuxer {
     /// `format.duration` at 2 s, so `mvhd` is not the source.
     fn finish_durations(&mut self) {
         let mut best: Option<i64> = None;
-        for (s, f) in self.streams.iter().zip(&self.facts) {
-            let Some(dur) = f.duration_ts else { continue };
+        for s in &self.streams {
+            let Some(dur) = s.duration_ts else { continue };
             let start = s.start_time.ticks().unwrap_or(0);
             let end = Timestamp::new(start.saturating_add(dur))
                 .to_duration(s.time_base)
@@ -482,12 +456,11 @@ impl Mp4Demuxer {
         // A cover image has no timeline; the reference gives it the container's
         // duration in its own 1/90000 base.
         let total = self.duration;
-        for (s, f) in self.streams.iter_mut().zip(&mut self.facts) {
+        for s in &mut self.streams {
             if !s.is_attached_pic() {
                 continue;
             }
-            s.duration = total;
-            f.duration_ts = total
+            s.duration_ts = total
                 .and_then(|d| {
                     Timestamp::new(d.as_micros()).checked_rescale(
                         vaco_core::TimeBase::MICROSECONDS,
@@ -519,7 +492,7 @@ impl Mp4Demuxer {
         slot: usize,
         index: u32,
         size: Option<u64>,
-    ) -> Option<(Stream, Reader, TrackFacts)> {
+    ) -> Option<(Stream, Reader)> {
         // A zero timescale is a division by zero waiting to happen; plan 18
         // §3.1.10 drops the track.
         if !trak.has_usable_timescale() {
@@ -560,31 +533,24 @@ impl Mp4Demuxer {
         stream.params = params;
         stream.disposition = track::disposition(trak);
         stream.start_time = Timestamp::new(start_pts);
-        stream.duration = duration_ts.and_then(|d| Timestamp::new(d).to_duration(stream.time_base));
+        stream.duration_ts = duration_ts;
         stream.frame_count = (totals.count > 0).then_some(u64::from(totals.count));
         let vendor = entry.and_then(|_| vendor_id(table));
         let compressor = entry.and_then(|e| e.visual.as_ref().and_then(|v| v.compressor()));
         stream.metadata = track::track_metadata(trak, vendor, compressor);
 
         let (r_rate, avg_rate) = self.frame_rate_estimate(trak, table, &totals, limit);
-        let facts = TrackFacts {
-            duration_ts,
-            r_frame_rate: if media_type == MediaType::Video {
-                r_rate
-            } else {
-                Rational::UNDEFINED
-            },
-            avg_frame_rate: if media_type == MediaType::Video {
-                avg_rate
-            } else {
-                Rational::UNDEFINED
-            },
-            display_matrix: track::display_matrix(trak),
-        };
-        if media_type == MediaType::Video
-            && let Some(v) = stream.params.video.as_mut()
-        {
-            v.frame_rate = avg_rate;
+        if media_type == MediaType::Video {
+            stream.r_frame_rate = r_rate;
+            stream.avg_frame_rate = avg_rate;
+            if let Some(v) = stream.params.video.as_mut() {
+                v.frame_rate = avg_rate;
+            }
+        }
+        if let Some(matrix) = track::display_matrix(trak) {
+            stream
+                .side_data
+                .push(vaco_format_core::StreamSideData::DisplayMatrix(matrix));
         }
 
         let source = if self.fragmented {
@@ -627,7 +593,7 @@ impl Mp4Demuxer {
                 reader.finished = true;
             }
         }
-        Some((stream, reader, facts))
+        Some((stream, reader))
     }
 
     /// `duration_ts`: the edit list, clamped by what the media actually holds.
@@ -1693,10 +1659,13 @@ fn reduce(num: i64, den: i64) -> Rational {
 }
 
 /// The stream a `covr` image becomes.
-fn cover_stream(index: u32, cover: meta::CoverArt) -> (Stream, Reader, TrackFacts) {
+fn cover_stream(index: u32, cover: meta::CoverArt) -> (Stream, Reader) {
     let mut stream = Stream::new(index, MediaType::Video, ATTACHED_PIC_TIME_BASE);
     stream.disposition = Disposition::ATTACHED_PIC;
     stream.start_time = Timestamp::ZERO;
+    // **Measured**: a `covr` image reports `r_frame_rate=90000/1` — the
+    // reciprocal of its own time base — and `avg_frame_rate=0/0`.
+    stream.r_frame_rate = ATTACHED_PIC_TIME_BASE.inverse();
     stream.params = vaco_codec_core::CodecParameters::video();
     // The reference prints `codec_tag_string=[0][0][0][0]`: a cover image is
     // not a sample entry, so it has no four-character code at all.
@@ -1724,11 +1693,5 @@ fn cover_stream(index: u32, cover: meta::CoverArt) -> (Stream, Reader, TrackFact
         finished: false,
         blocked: false,
     };
-    let facts = TrackFacts {
-        duration_ts: None,
-        r_frame_rate: ATTACHED_PIC_TIME_BASE.inverse(),
-        avg_frame_rate: Rational::UNDEFINED,
-        display_matrix: None,
-    };
-    (stream, reader, facts)
+    (stream, reader)
 }

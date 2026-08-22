@@ -35,6 +35,7 @@ default = ["demux-matroska", "demux-mp4", "demux-mpegts"]
 "demux-matroska" = ["dep:vaco-demux-matroska"]
 "demux-mp4" = ["dep:vaco-demux-mp4"]
 "demux-mpegts" = ["dep:vaco-demux-mpegts"]
+"protocol-http" = ["dep:vaco-protocol-http"]
 
 [dependencies.vaco-demux-matroska]
 path = "../../format/vaco-demux-matroska"
@@ -46,6 +47,10 @@ optional = true
 
 [dependencies.vaco-demux-mpegts]
 path = "../../format/vaco-demux-mpegts"
+optional = true
+
+[dependencies.vaco-protocol-http]
+path = "../../io/vaco-protocol-http"
 optional = true
 
 # END GENERATED

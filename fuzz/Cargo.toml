@@ -32,6 +32,7 @@ vaco-cli-core = { path = "../crates/app/vaco-cli-core" }
 vaco-codec-cabac = { path = "../crates/signal/vaco-codec-cabac" }
 vaco-codec-cbs = { path = "../crates/signal/vaco-codec-cbs" }
 vaco-codec-core = { path = "../crates/signal/vaco-codec-core" }
+vaco-codec-dsp-idct = { path = "../crates/signal/vaco-codec-dsp-idct" }
 vaco-codec-golomb = { path = "../crates/signal/vaco-codec-golomb" }
 vaco-color = { path = "../crates/model/vaco-color" }
 vaco-conformance = { path = "../crates/tool/vaco-conformance" }
@@ -44,14 +45,17 @@ vaco-filter-core = { path = "../crates/filter/vaco-filter-core" }
 vaco-filter-framesync = { path = "../crates/filter/vaco-filter-framesync" }
 vaco-filter-graph = { path = "../crates/filter/vaco-filter-graph" }
 vaco-format-core = { path = "../crates/format/vaco-format-core" }
+vaco-format-id3 = { path = "../crates/format/vaco-format-id3" }
 vaco-format-isom = { path = "../crates/format/vaco-format-isom" }
 vaco-format-mpegts-tables = { path = "../crates/format/vaco-format-mpegts-tables" }
 vaco-format-nalu = { path = "../crates/format/vaco-format-nalu" }
+vaco-format-riff = { path = "../crates/format/vaco-format-riff" }
 vaco-frame = { path = "../crates/model/vaco-frame" }
 vaco-io = { path = "../crates/io/vaco-io" }
 vaco-limits = { path = "../crates/core/vaco-limits" }
 vaco-packet = { path = "../crates/model/vaco-packet" }
 vaco-parse-aac = { path = "../crates/codec/vaco-parse-aac" }
+vaco-parse-av1 = { path = "../crates/codec/vaco-parse-av1" }
 vaco-parse-h264 = { path = "../crates/codec/vaco-parse-h264" }
 vaco-parse-hevc = { path = "../crates/codec/vaco-parse-hevc" }
 vaco-parse-opus = { path = "../crates/codec/vaco-parse-opus" }
@@ -59,6 +63,7 @@ vaco-pixfmt = { path = "../crates/model/vaco-pixfmt" }
 vaco-pool = { path = "../crates/model/vaco-pool" }
 vaco-probe = { path = "../crates/app/vaco-probe" }
 vaco-protocol-core = { path = "../crates/io/vaco-protocol-core" }
+vaco-protocol-http = { path = "../crates/io/vaco-protocol-http" }
 vaco-resample = { path = "../crates/signal/vaco-resample" }
 vaco-sampfmt = { path = "../crates/model/vaco-sampfmt" }
 vaco-scale = { path = "../crates/signal/vaco-scale" }
@@ -71,6 +76,7 @@ default = [
     "cli-core",
     "codec-cabac",
     "codec-core",
+    "codec-dsp-idct",
     "codec-golomb",
     "color",
     "conformance",
@@ -83,20 +89,24 @@ default = [
     "filter-framesync",
     "filter-graph",
     "format-core",
+    "format-id3",
     "format-isom",
     "format-mpegts-tables",
     "format-nalu",
+    "format-riff",
     "frame",
     "io",
     "limits",
     "packet",
     "parse-aac",
+    "parse-av1",
     "parse-h264",
     "parse-hevc",
     "parse-opus",
     "pool",
     "probe",
     "protocol-core",
+    "protocol-http",
     "resample",
     "sampfmt",
     "scale",
@@ -107,6 +117,7 @@ chlayout = []
 cli-core = []
 codec-cabac = []
 codec-core = []
+codec-dsp-idct = []
 codec-golomb = []
 color = []
 conformance = []
@@ -119,20 +130,24 @@ filter-core = []
 filter-framesync = []
 filter-graph = []
 format-core = []
+format-id3 = []
 format-isom = []
 format-mpegts-tables = []
 format-nalu = []
+format-riff = []
 frame = []
 io = []
 limits = []
 packet = []
 parse-aac = []
+parse-av1 = []
 parse-h264 = []
 parse-hevc = []
 parse-opus = []
 pool = []
 probe = []
 protocol-core = []
+protocol-http = []
 resample = []
 sampfmt = []
 scale = []
@@ -185,6 +200,14 @@ test = false
 doc = false
 bench = false
 required-features = ["codec-cabac"]
+
+[[bin]]
+name = "cbs_av1"
+path = "fuzz_targets/cbs_av1.rs"
+test = false
+doc = false
+bench = false
+required-features = ["parse-av1"]
 
 [[bin]]
 name = "cbs_hevc"
@@ -339,6 +362,14 @@ bench = false
 required-features = ["demux-mp4"]
 
 [[bin]]
+name = "dsp_idct"
+path = "fuzz_targets/dsp_idct.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-dsp-idct"]
+
+[[bin]]
 name = "expr_grammar"
 path = "fuzz_targets/expr_grammar.rs"
 test = false
@@ -449,6 +480,14 @@ test = false
 doc = false
 bench = false
 required-features = ["filter-graph"]
+
+[[bin]]
+name = "id3_tag"
+path = "fuzz_targets/id3_tag.rs"
+test = false
+doc = false
+bench = false
+required-features = ["format-id3"]
 
 [[bin]]
 name = "io_buffered_reader"
@@ -587,6 +626,14 @@ bench = false
 required-features = ["parse-aac"]
 
 [[bin]]
+name = "parse_av1"
+path = "fuzz_targets/parse_av1.rs"
+test = false
+doc = false
+bench = false
+required-features = ["parse-av1"]
+
+[[bin]]
 name = "parse_h264"
 path = "fuzz_targets/parse_h264.rs"
 test = false
@@ -635,6 +682,14 @@ bench = false
 required-features = ["probe"]
 
 [[bin]]
+name = "protocol_http_response"
+path = "fuzz_targets/protocol_http_response.rs"
+test = false
+doc = false
+bench = false
+required-features = ["protocol-http"]
+
+[[bin]]
 name = "rbsp_roundtrip"
 path = "fuzz_targets/rbsp_roundtrip.rs"
 test = false
@@ -649,6 +704,22 @@ test = false
 doc = false
 bench = false
 required-features = ["resample"]
+
+[[bin]]
+name = "resample_opts"
+path = "fuzz_targets/resample_opts.rs"
+test = false
+doc = false
+bench = false
+required-features = ["resample"]
+
+[[bin]]
+name = "riff_chunk"
+path = "fuzz_targets/riff_chunk.rs"
+test = false
+doc = false
+bench = false
+required-features = ["format-riff"]
 
 [[bin]]
 name = "sampfmt_parse"

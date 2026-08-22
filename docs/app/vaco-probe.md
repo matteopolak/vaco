@@ -85,6 +85,7 @@ Measured effect, `format` section, before and after composing it:
 | after | 11 of 12 | 188/204 |
 
 and stream field values went from 336/393 to **748/877** over twelve files.
+See *The 2026-08-22 `Stream` widening* below for the numbers after that.
 
 #### Three workarounds this needed, and none of them survived
 
@@ -308,6 +309,112 @@ durations cannot distinguish three rules; one inexact duration distinguishes
 them immediately. Pinned by
 `show::tests::format_bit_rate_truncates_to_whole_bits_per_second`.
 
+### The 2026-08-22 `Stream` widening — what it closed
+
+`vaco_format_core::Stream` grew `duration_ts`, an
+`r_frame_rate`/`avg_frame_rate` pair and a `side_data` list, and `Program`
+grew `program_num`/`pmt_pid`/`pcr_pid`/`pmt_version`. Everything below is
+measured against `ffprobe 8.1` under `LC_ALL=C`.
+
+**The corpus is not the one the 748/877 figure was taken on** — that one was
+not committed and cannot be reconstructed byte for byte — so two numbers are
+given: one on a rebuilt thirteen-file corpus of the same shape (MP4 ×4, MOV,
+M4A, MPEG-TS, Matroska ×4, WebM, 1080p MP4), and one on that corpus plus two
+files chosen because they *discriminate* rules the old corpus could not see.
+
+| | before | after |
+|---|---|---|
+| stream field values, 13 files | 1069/1247 | **1083/1247** |
+| `format` section matrix, 13 files × 17 option sets | 204/221 | **204/221** |
+| files identical on every option set | 12/13 | **12/13** |
+
+and on the fifteen-file corpus, **1191/1371** stream field values, **238/255**
+format cells, **14 of 15** files identical on every option set. The one file
+that is not is `sub.mkv`, for the one reason recorded below.
+
+The two added files, and why a corpus without them cannot grade this work:
+
+* **`vfr.mp4`** — 1/600 timescale, mostly 60-tick `stts` deltas with a few
+  20-tick ones. The reference reports `r_frame_rate=10/1` and
+  `avg_frame_rate=300/29`. Every file in the old corpus is constant-rate, where
+  the two fields are equal and one field answering both is indistinguishable
+  from two fields answering correctly.
+* **`odd.mp4`** — a duration that is not a whole number of seconds, so
+  `duration_ts` cannot be recovered from a microsecond `Duration`.
+
+The fourteen field values the widening closed on the thirteen-file corpus:
+
+| field | count | what changed |
+|---|---:|---|
+| `id` | 9 | printed only when the container declares `FormatFlags::SHOW_IDS`. Matroska sets `Stream::id` from `TrackNumber` — `-map 0:#1` needs it — and the reference does not print it. |
+| `side_data_type`, `displaymatrix`, `rotation` | 3 | the `[SIDE_DATA]` block for a rotated `tkhd` matrix, which had no representation at all. |
+| `duration_ts`, `duration` | 2 | MPEG-TS video, where the demuxer's own frame-duration estimate was measuring a GOP rather than a frame. |
+
+### What is left, and whose it is
+
+Of the 180 stream field values still diverging on the fifteen-file corpus:
+
+* **147 need a bitstream parser** — `profile`, `level`, `pix_fmt`,
+  `sample_fmt`, `channels`, `channel_layout`, `has_b_frames`,
+  `bits_per_raw_sample`, `is_avc`, `nal_length_size`, `mime_codec_string`, plus
+  the nine `ts.ts` fields (`width`, `height`, the two `coded_*`, both aspect
+  ratios, `extradata_size`, `sample_rate`, `bit_rate`) that MPEG-TS states
+  nowhere at all. None of these is a container-model question; they arrive
+  through `ParserProvider` when the parsers are wired.
+* **11 are `codec_tag`**, a spelling difference for containers with no
+  four-character code: the reference prints `0x0000` where we print
+  `0x00000000`.
+* **9 are `codec_name`/`codec_long_name`** for codecs `CodecId` has no variant
+  for (`subrip`) or whose long name differs (`Opus`).
+
+That leaves thirteen, and they are worth naming individually:
+
+* **`duration_ts`/`duration` on `as.mkv` and `sub.mkv` subtitles** (4). The
+  rule that produces them is implemented — a stream with no timing of its own
+  takes the container's — but it does not fire, because our discovery loop runs
+  until every stream has two DTS deltas and therefore always sees the subtitle
+  packet. See below.
+* **`duration_ts`/`duration` on MPEG-TS audio** (2). Short by exactly one AAC
+  frame; the reference re-frames the PES payload and we do not, which
+  `vaco-demux-mpegts`' doc records as a `ParserProvider` gap.
+* **`start_pts`/`start_time` on `sub.mkv`** (2), the same cause as the first
+  item.
+* **`ts_id`, `ts_packetsize`** (2) — MPEG-TS stream tags we do not emit.
+* **`TAG:vendor_id`** (1) on a MOV audio track whose `vendor_id` is
+  `[0][0][0][0]`.
+
+The fourteen the widening closed and the thirteen container-level ones left are
+the whole of what this crate and the three demuxers can affect without a
+parser.
+
+#### The `sub.mkv` divergence, now with a cause
+
+The known gap used to read "`Discovery::finish` derives a `start_time` for a
+subtitle-only file where the reference reports `N/A`". The cause is now
+measured, and it is not about subtitles at all.
+
+The reference's analysis pass stops as soon as every stream's codec parameters
+are complete. For a file of subrip — whose parameters come entirely from
+`CodecID` and `CodecPrivate` — that is **before it reads a single packet**, so
+no stream ever gets a `start_time` from a first PTS, and the container's
+timings are handed out instead. Ours stops when every stream has parameters
+*and* a first PTS *and* two DTS deltas, so it always reads far enough to see
+the subtitle packet and sets `start_time=0` from it.
+
+Four files pin this down. `as.mkv` (opus + subtitle) and `sub.mkv` (subtitle
+only) both complete without packets and both get the container fill;
+`vs.mkv` and `avs.mkv` contain H.264, whose parameters need packets, so the
+loop runs, the subtitle packet is seen, and its `start_pts` comes from the
+packet while `duration_ts` stays `N/A`. The presence of a video stream is what
+switches the behaviour, and nothing about the subtitle track changes.
+
+Narrowing our stop condition to match is a much larger change than it looks:
+`start_time` for every delay-coded audio stream is derived from the first PTS
+plus `initial_padding`, and a pass that reads no packets has no first PTS to
+work from. Left as a known divergence rather than special-cased, because a
+local override of a shared rule is exactly the failure this crate has twice
+avoided.
+
 ### Failure paths and exit codes
 
 **74 of 74 invocations identical on stdout *and* exit code**, over: no input
@@ -418,21 +525,19 @@ Reported, not worked around.
   all nineteen in the reference's bit order — the CLI-facing table is the right
   source anyway — so the section is byte-identical, but the container model
   cannot represent four of the flags and they are always zero.
-* **`Discovery::finish` derives a `start_time` for a subtitle-only file where
-  the reference reports `N/A`.** Narrowly scoped, and measured rather than
-  assumed: a subtitle track alongside audio (`as.mkv`) or video (`vs.mkv`) gets
-  `start_pts=0` from *both* tools and matches exactly. Only a Matroska whose
-  sole track is a subtitle diverges — the reference leaves `start_pts` unset
-  even though the first packet is at pts 0. Not worked around locally, because a
-  local override of a shared rule is the exact failure `vaco-demux-matroska`
-  avoided by not setting `start_time` in the first place.
+* **`Discovery` reads further than the reference's analysis pass**, which is
+  what leaves `sub.mkv` reporting `start_pts=0` where the reference reports
+  `N/A`. Cause measured; see *The `sub.mkv` divergence, now with a cause*
+  above. Not worked around locally, because a local override of a shared rule
+  is the exact failure `vaco-demux-matroska` avoided by not setting
+  `start_time` in the first place.
 * **`vaco-demux-mpegts` emits a `ts_codec` stream tag the reference does not.**
   The only field we emit that `ffprobe` has no counterpart for.
 * **`CodecParameters` has no `max_bit_rate`**, and `bits_per_raw_sample` is on
   `AudioParameters` only. Both are printed for every stream by the reference.
-* **`Stream` has no `r_frame_rate` distinct from `avg_frame_rate`.** They differ
-  only for a variable-rate stream, and the container's declared frame rate
-  answers both here.
+* ~~**`Stream` has no `r_frame_rate` distinct from `avg_frame_rate`.**~~ Closed:
+  they are two fields now, and `vfr.mp4` is the regression fixture that would
+  notice if they were merged again.
 * **`vaco_io::IoContext` cannot give its source back** — no `into_inner`, no
   `into_source`. Probing and demuxing each need to own a `Box<dyn MediaSource>`,
   so a probed open reads the URL **twice**: once through an `IoContext` that

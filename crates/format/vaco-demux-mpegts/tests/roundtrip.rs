@@ -319,14 +319,17 @@ fn psi_produces_one_program_and_two_streams() {
     assert_eq!(d.programs().len(), 1);
     assert_eq!(d.programs()[0].id, 1);
     assert_eq!(d.programs()[0].stream_indices, vec![0, 1]);
-    // `Program` has no fields for these, so they travel as metadata.
-    assert_eq!(
-        d.programs()[0]
+    // Fields, not metadata: they used to print as `TAG:pcr_pid=…`.
+    assert_eq!(d.programs()[0].pcr_pid, Some(256));
+    assert_eq!(d.programs()[0].pmt_pid, Some(PMT_PID));
+    assert_eq!(d.programs()[0].program_num, Some(1));
+    assert_eq!(d.programs()[0].pmt_version, Some(0));
+    assert!(
+        !d.programs()[0]
             .metadata
             .iter()
-            .find(|(k, _)| k == "pcr_pid")
-            .map(|(_, v)| v.as_str()),
-        Some("256")
+            .any(|(k, _)| k == "pcr_pid" || k == "pmt_pid" || k == "pmt_version"),
+        "the three values must not also travel as tags"
     );
 }
 
@@ -380,7 +383,7 @@ fn start_time_and_duration_are_estimated_because_nothing_declares_them() {
     // the previous inter-frame delta, so the end is 90_000 + 25 * 3600.
     let dur = d.duration().expect("estimated");
     assert_eq!(dur.as_micros(), 25 * 3600 * 1_000_000 / 90_000);
-    let per_stream = d.streams()[0].duration.expect("per-stream duration");
+    let per_stream = d.streams()[0].duration().expect("per-stream duration");
     assert_eq!(per_stream, dur);
 }
 

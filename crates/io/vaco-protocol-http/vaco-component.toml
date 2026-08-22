@@ -1,0 +1,38 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Two components, one crate: `http:` and `https:` share a single
+# `HttpProtocol` implementation (the scheme actually opened is read from the
+# `Url` `Protocol::open` receives, per RFC 3986 §3.1's case-insensitive
+# scheme), so both registrations point at the same crate and feature and
+# differ only in `name`/`long_name`/`ctor`.
+#
+# `default = false`, and this needed measuring rather than guessing: with the
+# generator's ordinary default (`true`), `vaco-registry`'s own
+# `cargo xtask wasm-check` regressed — `protocol-http` became a *default*
+# optional dependency of `vaco-registry`, which is not on the `NATIVE_ONLY`
+# exemption list (only `vaco-protocol-http` itself is), so building
+# `vaco-registry` for wasm32-unknown-unknown now tried to compile `ureq` +
+# `rustls-rustcrypto` and failed on `getrandom`'s hard wasm32 `compile_error!`.
+# `vaco-protocol-http` cannot itself grow a wasm story (D18's own docs: a
+# browser build reaches HTTP through `fetch`, a *different* crate behind the
+# same `vaco-protocol-core::Protocol` trait), so the fix belongs here, in
+# whether this crate's registration is reachable by default — not in
+# `vaco-registry` or in `xtask/src/wasm.rs`, neither of which is this crate's
+# to edit. `-registry` still lists `http`/`https` under an explicit
+# `--features protocol-http` opt-in.
+
+[[component]]
+kind      = "protocol"
+name      = "http"
+long_name = "HTTP"
+feature   = "protocol-http"
+default   = false
+ctor      = "vaco_protocol_http::HTTP_PROTOCOL"
+
+[[component]]
+kind      = "protocol"
+name      = "https"
+long_name = "HTTPS"
+feature   = "protocol-http"
+default   = false
+ctor      = "vaco_protocol_http::HTTPS_PROTOCOL"

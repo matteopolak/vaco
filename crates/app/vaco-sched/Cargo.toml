@@ -1,6 +1,6 @@
 [package]
 name = "vaco-sched"
-description = "The pipeline scheduler: components as a DAG of threads."
+description = "The pipeline scheduler: a step function over a demux/decode/filter/encode/mux graph."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,9 +10,22 @@ authors.workspace = true
 
 [dependencies]
 vaco-core = { path = "../../core/vaco-core" }
+vaco-limits = { path = "../../core/vaco-limits" }
 vaco-frame = { path = "../../model/vaco-frame" }
 vaco-packet = { path = "../../model/vaco-packet" }
-crossbeam-channel.workspace = true
+vaco-codec-core = { path = "../../signal/vaco-codec-core" }
+vaco-filter-core = { path = "../../filter/vaco-filter-core" }
+vaco-format-core = { path = "../../format/vaco-format-core" }
+
+[dev-dependencies]
+vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
+vaco-pool = { path = "../../model/vaco-pool" }
+divan.workspace = true
+proptest.workspace = true
+
+[[bench]]
+name = "pipeline"
+harness = false
 
 [lints]
 workspace = true

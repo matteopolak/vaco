@@ -10,7 +10,15 @@ authors.workspace = true
 
 [dependencies]
 vaco-core = { path = "../../core/vaco-core" }
-vaco-simd = { path = "../../core/vaco-simd" }
+vaco-tx = { path = "../vaco-tx" }
+
+[dev-dependencies]
+proptest.workspace = true
+divan.workspace = true
+
+[[bench]]
+name    = "idct"
+harness = false
 
 [lints]
 workspace = true

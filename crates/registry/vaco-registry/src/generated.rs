@@ -64,6 +64,30 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["ts", "m2t", "m2ts", "mts", "mpegts"],
         mime_types: &["video/mp2t"],
     },
+    #[cfg(feature = "protocol-http")]
+    crate::Component {
+        kind: crate::Kind::Protocol,
+        name: "http",
+        long_name: Some("HTTP"),
+        krate: "vaco-protocol-http",
+        feature: Some("protocol-http"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "protocol-http")]
+    crate::Component {
+        kind: crate::Kind::Protocol,
+        name: "https",
+        long_name: Some("HTTPS"),
+        krate: "vaco-protocol-http",
+        feature: Some("protocol-http"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
 ];
 
 /// Descriptors of every enabled demuxer implementation.
@@ -86,4 +110,9 @@ pub static DECODERS: &[&::vaco_codec_core::DecoderDesc] = &[];
 pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[];
 
 /// Descriptors of every enabled protocol implementation.
-pub static PROTOCOLS: &[&::vaco_protocol_core::ProtocolDesc] = &[];
+pub static PROTOCOLS: &[&::vaco_protocol_core::ProtocolDesc] = &[
+    #[cfg(feature = "protocol-http")]
+    &::vaco_protocol_http::HTTP_PROTOCOL,
+    #[cfg(feature = "protocol-http")]
+    &::vaco_protocol_http::HTTPS_PROTOCOL,
+];

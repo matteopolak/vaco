@@ -8,7 +8,7 @@ use std::io::Write;
 
 use vaco_codec_core::{CodecId, CodecParameters, Level, Profile};
 use vaco_core::{MediaType, Rational, Result};
-use vaco_format_core::{Chapter, Program, Stream};
+use vaco_format_core::{Chapter, Program, Stream, StreamSideData, display_rotation};
 use vaco_packet::{Packet, PacketFlags};
 use vaco_textformat::num;
 use vaco_textformat::sections::SectionId;
@@ -124,22 +124,93 @@ fn container_start_time(streams: &[Stream]) -> Option<f64> {
 ///
 /// # Errors
 /// Propagates the sink's I/O error.
-pub fn stream<W: Write>(e: &mut Emit<'_, W>, s: &Stream) -> Result<()> {
+pub fn stream<W: Write>(e: &mut Emit<'_, W>, s: &Stream, show_ids: bool) -> Result<()> {
     e.tf().open(SectionId::STREAM)?;
-    stream_fields(e, s)?;
+    stream_fields(e, s, show_ids)?;
     disposition(e, SectionId::STREAM_DISPOSITION, s.disposition)?;
     tags(e, SectionId::STREAM_TAGS, &s.metadata)?;
+    side_data(e, s)?;
     e.tf().close()
 }
 
-fn stream_fields<W: Write>(e: &mut Emit<'_, W>, s: &Stream) -> Result<()> {
+/// The `side_data_list` sub-section, emitted only when the stream carries side
+/// data — the reference opens no list at all for a stream without any.
+///
+/// The section's *type* is the human name (`Display Matrix`), not a slug: the
+/// `xml` writer prints it verbatim as `type="Display Matrix"` while `compact`
+/// runs it through `sanitise_type` to get `side_datum/display_matrix:`. Both
+/// were read off `ffprobe 8.1`, and passing the slug would have been right in
+/// one writer and wrong in the other.
+///
+/// # Errors
+/// Propagates the sink's I/O error.
+pub fn side_data<W: Write>(e: &mut Emit<'_, W>, s: &Stream) -> Result<()> {
+    if s.side_data.is_empty() {
+        return Ok(());
+    }
+    e.tf().open(SectionId::STREAM_SIDE_DATA_LIST)?;
+    for datum in &s.side_data {
+        e.tf()
+            .open_typed(SectionId::STREAM_SIDE_DATA, datum.name())?;
+        e.tf().str("side_data_type", datum.name())?;
+        match *datum {
+            StreamSideData::DisplayMatrix(m) => {
+                e.tf().str("displaymatrix", &display_matrix_text(&m))?;
+                // Truncated toward zero, not rounded. Measured: an exact
+                // -35.683 prints -35 and an exact 26.978 prints 26.
+                e.tf()
+                    .int("rotation", display_rotation(&m).trunc() as i64)?;
+            }
+        }
+        e.tf().close()?;
+    }
+    e.tf().close()
+}
+
+/// The `displaymatrix` value: a leading newline, then one line per row.
+///
+/// **Measured byte for byte** through the `json` writer, which is the only one
+/// that shows the value's own bytes rather than the writer's line breaks:
+///
+/// ```text
+/// "\n00000000:            0       65536           0\n…\n"
+/// ```
+///
+/// Each row is `%08x:` then three right-aligned 12-column integers with a
+/// single space after the colon — 37 characters after the colon, not the 36 a
+/// `": %11d %11d %11d"` reading would give. The `-2147483648` case is what
+/// pins the width down, because it is the only value wide enough to collide
+/// with a wrong one.
+fn display_matrix_text(m: &[i32; 9]) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::from("\n");
+    for row in 0..3usize {
+        let at = |i: usize| m.get(row * 3 + i).copied().unwrap_or(0);
+        // `write!` into a `String` is infallible; the `Result` is discarded
+        // deliberately rather than unwrapped, which is denied here.
+        let _ = writeln!(out, "{row:08x}: {:12}{:12}{:12}", at(0), at(1), at(2));
+    }
+    out
+}
+
+fn stream_fields<W: Write>(e: &mut Emit<'_, W>, s: &Stream, show_ids: bool) -> Result<()> {
     let p = &s.params;
     let media = s.media_type();
     for field in fields::STREAM {
         if !in_scope(field, media) {
             continue;
         }
-        let val = stream_value(field, s, p, media);
+        let mut val = stream_value(field, s, p, media);
+        // `id` is printed only by a container that declares
+        // `FormatFlags::SHOW_IDS`. Measured: the same H.264 track reports
+        // `id=0x1` from MP4 and `id=N/A` from Matroska, and Matroska's
+        // `TrackNumber` is every bit as real an identifier — the reference
+        // simply does not print it. Suppressing it here rather than leaving
+        // `Stream::id` unset keeps `-map 0:#1` working on Matroska, which is
+        // the other thing the field is for.
+        if field.name == "id" && !show_ids {
+            val = Val::Absent;
+        }
         e.put(Some(field), &val)?;
     }
     Ok(())
@@ -225,19 +296,21 @@ fn stream_value(field: &Field, s: &Stream, p: &CodecParameters, media: Option<Me
         "bits_per_sample" => Val::opt_i(audio.map(|_| i64::from(bits_per_sample(p.codec_id)))),
         "initial_padding" => Val::opt_i(audio.map(|a| i64::from(a.initial_padding))),
         "id" => Val::opt_s(s.id.map(num::id)),
-        // No `r_frame_rate` on the frozen `Stream`, so the container's declared
-        // frame rate answers both. They differ only for a variable-rate stream,
-        // which needs a demuxer-side statistic the model does not carry — a
-        // reported gap, see the doc file.
-        "r_frame_rate" | "avg_frame_rate" => Val::s(num::rational(frame_rate(video))),
+        // Two fields, two sources. They differ on a variable-rate file:
+        // a 1/600-timescale MP4 whose `stts` holds mostly 60-tick deltas
+        // reports `r_frame_rate=10/1` and `avg_frame_rate=300/29`.
+        "r_frame_rate" => Val::s(num::rational(frame_rate(s.r_frame_rate, video))),
+        "avg_frame_rate" => Val::s(num::rational(frame_rate(s.avg_frame_rate, video))),
         "time_base" => Val::s(num::rational(tb)),
         "start_pts" => Val::opt_i(s.start_time.ticks()),
         "start_time" => Val::opt_f(
             s.start_time_absolute()
                 .map(vaco_core::Duration::as_secs_f64),
         ),
-        "duration_ts" => Val::opt_i(s.duration.and_then(|d| d.to_ticks(tb))),
-        "duration" => Val::opt_f(s.duration.map(vaco_core::Duration::as_secs_f64)),
+        // Straight off the field: the microsecond round-trip this used to go
+        // through could not represent 25 500 ticks at 1/12800 at all.
+        "duration_ts" => Val::opt_i(s.duration_ts),
+        "duration" => Val::opt_f(s.duration().map(vaco_core::Duration::as_secs_f64)),
         "bit_rate" => Val::opt_f(p.bit_rate.map(|b| b as f64)),
         // `max_bit_rate` is not on the frozen `CodecParameters`, and
         // `nb_read_frames`/`nb_read_packets` need `-count_frames` /
@@ -271,11 +344,19 @@ fn colour(name: Option<&'static str>) -> Val {
     }
 }
 
-fn frame_rate(video: Option<&vaco_codec_core::VideoParameters>) -> Rational {
+/// The stream's own rate, falling back to the codec parameters.
+///
+/// The fallback exists because `CodecParameters::video.frame_rate` is filled by
+/// the bitstream parsers as well as by the container, and a rate a parser found
+/// is still a rate. `Rational::UNDEFINED` prints `0/0`, which is what the
+/// reference prints for a stream with no frame rate — including every audio
+/// stream.
+fn frame_rate(stated: Rational, video: Option<&vaco_codec_core::VideoParameters>) -> Rational {
+    if stated.den != 0 && !stated.is_zero() {
+        return stated;
+    }
     match video.map(|v| v.frame_rate) {
         Some(r) if r.den != 0 => r,
-        // `0/0`, which is what the reference prints for a stream with no frame
-        // rate — including every audio stream.
         _ => Rational::UNDEFINED,
     }
 }
@@ -524,15 +605,36 @@ pub fn chapter<W: Write>(e: &mut Emit<'_, W>, c: &Chapter) -> Result<()> {
 ///
 /// # Errors
 /// Propagates the sink's I/O error.
-pub fn program<W: Write>(e: &mut Emit<'_, W>, p: &Program, streams: &[Stream]) -> Result<()> {
+pub fn program<W: Write>(
+    e: &mut Emit<'_, W>,
+    p: &Program,
+    streams: &[Stream],
+    show_ids: bool,
+) -> Result<()> {
+    let members = p
+        .stream_indices
+        .iter()
+        .filter(|i| streams.iter().any(|s| s.index == **i))
+        .count();
     e.tf().open(SectionId::PROGRAM)?;
+    // The five fields the reference prints, in the order it prints them.
+    // Measured with `-of flat -show_optional_fields always -show_programs`,
+    // which shows every field a section defines including the unavailable
+    // ones: `program_id`, `program_num`, `nb_streams`, `pmt_pid`, `pcr_pid`,
+    // then the tags. There is no `pmt_version` field, no `start_time` and no
+    // `end_time`, which is where plan 18 §1.1 is wrong.
     e.tf().int("program_id", p.id)?;
+    e.tf().int_opt("program_num", p.program_num)?;
+    e.tf()
+        .int("nb_streams", i64::try_from(members).unwrap_or(i64::MAX))?;
+    e.tf().int_opt("pmt_pid", p.pmt_pid.map(i64::from))?;
+    e.tf().int_opt("pcr_pid", p.pcr_pid.map(i64::from))?;
     tags(e, SectionId::PROGRAM_TAGS, &p.metadata)?;
     e.tf().open(SectionId::PROGRAM_STREAMS)?;
     for index in &p.stream_indices {
         if let Some(s) = streams.iter().find(|s| s.index == *index) {
             e.tf().open(SectionId::PROGRAM_STREAM)?;
-            stream_fields(e, s)?;
+            stream_fields(e, s, show_ids)?;
             disposition(e, SectionId::PROGRAM_STREAM_DISPOSITION, s.disposition)?;
             tags(e, SectionId::PROGRAM_STREAM_TAGS, &s.metadata)?;
             e.tf().close()?;
@@ -610,7 +712,7 @@ mod tests {
 
     #[test]
     fn frame_rate_of_a_non_video_stream_is_zero_over_zero() {
-        assert_eq!(num::rational(frame_rate(None)), "0/0");
+        assert_eq!(num::rational(frame_rate(Rational::UNDEFINED, None)), "0/0");
     }
 
     /// `format.bit_rate` truncates. Regression: it was emitted as a bare
@@ -660,14 +762,14 @@ mod tests {
 
     #[test]
     fn container_start_time_ignores_cover_art() {
-        use vaco_core::{Duration, Timestamp};
+        use vaco_core::Timestamp;
         let tb = Rational::new(1, 1000);
         let mut art = Stream::new(0, MediaType::Video, tb);
         art.start_time = Timestamp::new(0);
         art.disposition = vaco_format_core::Disposition::ATTACHED_PIC;
         let mut audio = Stream::new(1, MediaType::Audio, tb);
         audio.start_time = Timestamp::new(5000);
-        audio.duration = Some(Duration::from_micros(1_000_000));
+        audio.duration_ts = Some(1_000_000);
 
         assert_eq!(container_start_time(&[art, audio]), Some(5.0));
         assert_eq!(container_start_time(&[]), None);

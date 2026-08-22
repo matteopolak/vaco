@@ -72,7 +72,7 @@ use crate::probe::{ProbeData, ProbeScore};
 use crate::seek::{
     IndexEntry, PacketIndex, SeekFlags, SeekLanding, SeekStrategy, SeekTarget, binary_search,
 };
-use crate::{Demuxer, DemuxerDesc, Disposition, Muxer, MuxerDesc, ParserProvider, Stream};
+use crate::{Demuxer, DemuxerDesc, Muxer, MuxerDesc, ParserProvider, Stream};
 
 /// Magic plus version byte.
 pub const MAGIC: &[u8; 8] = b"VACORAW\x01";
@@ -508,17 +508,13 @@ fn read_stream_entry(io: &mut IoContext, index: u32) -> Result<Stream> {
         MediaType::Audio => params.audio = Some(vaco_codec_core::AudioParameters::default()),
         _ => {}
     }
-    Ok(Stream {
-        index,
-        id: Some(i64::from(index)),
-        params,
-        time_base,
-        start_time: Timestamp::NONE,
-        duration: None,
-        frame_count: None,
-        disposition: Disposition::empty(),
-        metadata: Vec::new(),
-    })
+    // Built through `Stream::new` rather than as a literal: a literal has to
+    // be edited every time the model widens, and the model widened three times
+    // in one wave.
+    let mut stream = Stream::new(index, media, time_base);
+    stream.id = Some(i64::from(index));
+    stream.params = params;
+    Ok(stream)
 }
 
 impl Demuxer for VacoRawDemuxer {

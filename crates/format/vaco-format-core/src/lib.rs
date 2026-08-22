@@ -79,6 +79,7 @@ pub mod interleave;
 pub mod options;
 pub mod probe;
 pub mod seek;
+pub mod sidedata;
 pub mod time;
 pub mod vacoraw;
 
@@ -91,6 +92,7 @@ pub use interleave::{ChunkPolicy, InterleaveQueue, MuxTimestamps, interleave_per
 pub use options::{AvoidNegativeTs, FFlags, FormatOptions};
 pub use probe::{Detected, Probe, ProbeData, ProbeScore};
 pub use seek::{IndexEntry, IndexFlags, PacketIndex, SeekFlags, SeekStrategy, SeekTarget};
+pub use sidedata::{StreamSideData, display_rotation, is_identity_matrix};
 pub use time::{DurationEstimate, DurationSource, TimestampFixer, WrapState};
 
 /// One elementary stream in a container.
@@ -104,10 +106,39 @@ pub struct Stream {
     /// The unit every timestamp on this stream is counted in.
     pub time_base: Rational,
     pub start_time: Timestamp,
-    pub duration: Option<Duration>,
+    /// Duration **in `time_base` ticks**, exactly as the container states it.
+    ///
+    /// Deliberately not a [`Duration`]. A `Duration` counts microseconds and
+    /// cannot round-trip a media timescale: 25 500 ticks at 1/12800 is
+    /// 1 992 187.5 µs, and `ffprobe` prints `duration_ts=25500`. Every demuxer
+    /// in the workspace had to keep the tick count in a private side table to
+    /// work around that, and none of them could hand it back through
+    /// `dyn Demuxer`. Use [`Stream::duration`] for the microsecond view.
+    pub duration_ts: Option<i64>,
     pub frame_count: Option<u64>,
+    /// The lowest frame rate that represents every timestamp in the stream
+    /// exactly — `ffprobe`'s `r_frame_rate`.
+    ///
+    /// A *pair* with [`Stream::avg_frame_rate`], because the two genuinely
+    /// differ: a track whose `stts` holds mostly 60-tick deltas with a few
+    /// 20-tick ones reports `r_frame_rate=10/1` and `avg_frame_rate=300/29` on
+    /// the same file. They used to share `params.video.frame_rate`, which made
+    /// that file unrepresentable.
+    ///
+    /// [`Rational::UNDEFINED`] (`0/1`… printed `0/0`) means "not stated"; the
+    /// reference prints `0/0` rather than `N/A`, including for every audio
+    /// stream, so there is no third state to model and this is not an
+    /// `Option`.
+    pub r_frame_rate: Rational,
+    /// Frames over duration — `ffprobe`'s `avg_frame_rate`. See
+    /// [`Stream::r_frame_rate`] for why they are two fields.
+    pub avg_frame_rate: Rational,
     pub disposition: Disposition,
     pub metadata: Vec<(String, String)>,
+    /// Side data describing the stream rather than any packet — today, the
+    /// display matrix. See [`sidedata`] for why this is a list and not a
+    /// field per kind.
+    pub side_data: Vec<StreamSideData>,
 }
 
 impl Stream {
@@ -120,11 +151,44 @@ impl Stream {
             params: CodecParameters::new(media_type),
             time_base,
             start_time: Timestamp::NONE,
-            duration: None,
+            duration_ts: None,
             frame_count: None,
+            r_frame_rate: Rational::UNDEFINED,
+            avg_frame_rate: Rational::UNDEFINED,
             disposition: Disposition::empty(),
             metadata: Vec::new(),
+            side_data: Vec::new(),
         }
+    }
+
+    /// [`Stream::duration_ts`] as an absolute duration, for cross-stream
+    /// comparison and for the `duration` field `vaco-probe` prints in seconds.
+    ///
+    /// Lossy by construction — that is the whole reason `duration_ts` is
+    /// stored and this is derived, rather than the other way round.
+    #[must_use]
+    pub fn duration(&self) -> Option<Duration> {
+        Timestamp::new(self.duration_ts?).to_duration(self.time_base)
+    }
+
+    /// Record a duration stated in `time_base` ticks.
+    ///
+    /// A negative tick count is refused rather than clamped: no container
+    /// states a negative length, so one means the arithmetic that produced it
+    /// was wrong, and storing `None` keeps that visible as `N/A`.
+    pub const fn set_duration_ts(&mut self, ticks: i64) {
+        self.duration_ts = if ticks >= 0 { Some(ticks) } else { None };
+    }
+
+    /// The first display matrix on the stream, if it carries one.
+    #[must_use]
+    pub fn display_matrix(&self) -> Option<[i32; 9]> {
+        self.side_data
+            .iter()
+            .map(|d| match *d {
+                StreamSideData::DisplayMatrix(m) => m,
+            })
+            .next()
     }
 
     /// The stream's media type, falling back to what its codec implies.
@@ -263,11 +327,51 @@ impl Disposition {
 }
 
 /// A named group of streams, as MPEG-TS programs and similar express.
+///
+/// The four `Option` fields below are MPEG-TS specifics that plan 18 §1.1
+/// specifies and that `vaco-probe -show_programs` prints. Before they existed
+/// `vaco-demux-mpegts` put them in [`Program::metadata`], where they printed as
+/// `TAG:pmt_pid=…` — the right values in the wrong section.
 #[derive(Debug, Clone)]
 pub struct Program {
     pub id: i64,
+    /// MPEG-TS `program_number`. Distinct from [`Program::id`] in the model
+    /// even though every container that sets both sets them equal, because the
+    /// reference prints them as two fields and a caller cannot tell from `id`
+    /// alone whether a container stated a program number at all.
+    pub program_num: Option<i64>,
+    /// PID of the PMT section that describes this program.
+    pub pmt_pid: Option<u16>,
+    /// PID carrying this program's PCR.
+    pub pcr_pid: Option<u16>,
+    /// `version_number` of the PMT last applied.
+    ///
+    /// **Not printed by `ffprobe 8.1`** — the brief that asked for it, and plan
+    /// 18 §1.1, both say `-show_programs` prints it, and measurement says
+    /// otherwise: `-of flat -show_optional_fields always -show_programs` emits
+    /// `program_id`, `program_num`, `nb_streams`, `pmt_pid`, `pcr_pid` and the
+    /// tags, and nothing else. It is kept because it is a genuine container
+    /// statement a demuxer needs in order to notice a PMT change, not because
+    /// anything prints it.
+    pub pmt_version: Option<u8>,
     pub stream_indices: Vec<u32>,
     pub metadata: Vec<(String, String)>,
+}
+
+impl Program {
+    /// An empty program with `id` and nothing else stated.
+    #[must_use]
+    pub const fn new(id: i64) -> Self {
+        Self {
+            id,
+            program_num: None,
+            pmt_pid: None,
+            pcr_pid: None,
+            pmt_version: None,
+            stream_indices: Vec::new(),
+            metadata: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

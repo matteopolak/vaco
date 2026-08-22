@@ -263,16 +263,44 @@ and one AAC audio stream each.
 | `format.bit_rate` | **exact** on all five (`size * 8 * 1e6 / duration_us`, floored) |
 | `format.start_time` | **exact** (minimum stream start) |
 | stream `id` (PID), `codec_tag` | **exact**, including the registration-identifier case |
-| video `start_pts`, `duration_ts` | **exact** |
+| video `start_pts`, `duration_ts` | **exact** — see *The `min_delta` bug* below |
 | video packet count, keyframe count, `pos` | **exact** |
 | audio `start_pts` | **exact** |
-| program `program_num`, `pmt_pid`, `pcr_pid`, service tags | **exact** values, wrong shape (see gaps) |
+| program `program_num`, `pmt_pid`, `pcr_pid`, service tags | **exact**, and in the right section since the `Program` fields landed |
 | audio `duration_ts` | **short by one audio frame** (23.211 ms, every file) |
 | audio packet count | **10 against 131** — the reference re-frames; see below |
 
 `tests/reference.rs` is the harness that produced these; it is `#[ignore]`d and
 takes a file through `VACO_TS_FIXTURE`, so the numbers can be re-measured
 against a newer reference rather than trusted.
+
+### The `min_delta` bug: a frame duration that was a whole GOP
+
+`end_pts` reports `last_pts + min_delta` for video, where `min_delta` is
+documented as "the smallest positive PTS increment — for video this *is* the
+frame duration, and it survives B-frame reordering, where consecutive deltas
+alternate but the smallest positive one is still one frame".
+
+The code measured the increment against `last_pts`, which is the running
+**maximum**, not the previous packet. Under reordering those are different
+numbers on most packets, and the smallest positive jump *above the running
+maximum* is a whole GOP. On a 25 fps two-B-frame file it measured 14 400 ticks
+where the frame is 3 600:
+
+```
+PTS in file order: 133200 147600 140400 136800 144000 162000 …
+|consecutive deltas|:    14400   7200   3600   7200  18000 …    -> 3600
+deltas above the max:    14400      –      –      –  14400 …    -> 14400
+```
+
+`duration_ts` came out three frames long — 100 800 against the reference's
+90 000. Fixed by keeping `prev_pts` alongside `last_pts` and taking the
+smallest non-zero |difference| between consecutive packets. Re-measured on four
+files (1 s, 3 s, 7 s, 20 s): video `duration_ts` is now exact on all four,
+where before it was exact on the two longest only. The implementation had
+drifted from its own doc comment, and only a short fixture showed it — a long
+one has a GOP jump small enough to coincide with the frame duration often
+enough to hide the difference.
 
 ### The largest divergence: the reference re-frames audio and we do not
 
@@ -325,10 +353,19 @@ in descending order of cost.
    Handled by calling `binary_search` directly; a separate `NOBINSEARCH`-style
    bit, or splitting the flag, would let `SeekStrategy::choose` be used as
    intended.
-5. **`Program` has no `pmt_pid`, `pcr_pid` or `pmt_version` fields**, all three
-   of which `vaco-probe -show_programs` prints, and plan 18 §1.1 specifies. They
-   travel as metadata entries here, which means the printer has to know to look
-   for them by name.
+5. **`Program` had no `pmt_pid`, `pcr_pid` or `pmt_version` fields — closed
+   2026-08-22.** All four (`program_num` too) are `Program` fields now and the
+   demuxer sets them there; they used to travel as metadata entries, which is
+   why the `[PROGRAM]` section printed them as `TAG:pmt_pid=…` — the right
+   values in the wrong section.
+
+   One correction to the request: `pmt_version` is **not** printed by
+   `ffprobe 8.1`. Measured with
+   `-of flat -show_optional_fields always -show_programs`, which shows every
+   field a section defines including the unavailable ones, the section is
+   `program_id`, `program_num`, `nb_streams`, `pmt_pid`, `pcr_pid` and the tags.
+   Plan 18 §1.1 says otherwise and is wrong. The field is kept because this
+   demuxer needs it to notice a PMT change, not because anything prints it.
 6. **`ProbeScore`'s convention table has no value for a self-synchronising
    container.** `repeating(n)` steps over 50, which is what MPEG-TS actually
    scores, and there is no constant for the reference's low-confidence 2.
