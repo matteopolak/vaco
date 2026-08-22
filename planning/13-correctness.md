@@ -1104,6 +1104,53 @@ A single codec's lifecycle, end to end, showing every mechanism firing in order:
 
 ---
 
+## 1b. Probing the reference: choose the shortest path to the parser
+
+Most of what we must match is not written down anywhere, so it gets recovered by
+probing the reference binary. The recurring failure is not misreading the result
+— it is **probing through a layer that transforms the input first**, and then
+attributing that layer's behaviour to the thing under test.
+
+It has now happened twice, independently:
+
+- `parse::image_size` was probed through a filtergraph
+  (`-i "color=c=black:s=<value>"`). The filtergraph parser eats and re-splits its
+  own argument text, so a trailing space vanished before `av_parse_video_size`
+  ever saw it, and `"320x240 "` looked accepted when it is rejected. Re-probing
+  through `-video_size` on the rawvideo demuxer — one option, straight to the
+  parser — gave the true answer, and with it the discovery that the separator is
+  any single byte rather than an `x`.
+- `vaco-chlayout` was probed through `anullsrc=channel_layout=...`, where the
+  filtergraph's own unescaping sits in front of the layout parser. Two whitespace
+  rules came out wrong. `-ch_layout` on a raw demuxer fixed it.
+
+### The rules
+
+1. **Pick the entry point with the fewest layers between the command line and
+   the parser.** A demuxer or encoder option (`-video_size`, `-ch_layout`,
+   `-color_trc`) reaches the parser almost directly. A filtergraph argument does
+   not: it passes through graph splitting, then option splitting, then
+   unescaping. Never probe a *parser* through a filtergraph.
+2. **Do not assume the field you read back is the thing you set.** `ffprobe`'s
+   `channel_layout` is not the layout *description*: it prints `unknown` where
+   the description says `N channels`. Confirm the field you are reading is the
+   one carrying the value, by setting something whose spelling you already know.
+3. **Read-back and input are different tables until proven otherwise.**
+   `vaco-color` found the reference has two disjoint name tables: transfer 4 is
+   `gamma22` on input and prints as `bt470m`, and `-color_trc bt470m` is
+   rejected. Probe both directions separately and never populate one from the
+   other.
+4. **State how you obtained each table**, in the crate's doc file, with the
+   command. A table nobody can re-derive cannot be re-checked when the pinned
+   reference version moves.
+
+### Escaping is part of the experiment
+
+When the value contains a space, a comma, a colon, a backslash or a quote, the
+shell and the option layer will both have opinions. Verify your harness can
+deliver a known-awkward value intact — round-trip a value whose handling you are
+already sure of — before trusting what it says about values you are not.
+
 ## 2. Fuzzing
 
 D6: *"Every demuxer, every bitstream parser, every decoder gets a fuzz target from the day it lands — a

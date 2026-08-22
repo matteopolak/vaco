@@ -106,6 +106,14 @@ and never `add -A`. In a shared working tree those destroy other agents' work.
   are written from plans, and plans have been wrong before.
 - Your D11 fidelity grade if you wrapped an external crate.
 
+## Probing the reference
+
+Where you must match behaviour nobody wrote down, probe the reference binary —
+and read **plan 13 §1b** first. It records two independent cases where an agent
+probed a parser *through a filtergraph*, and measured the filtergraph's
+unescaping instead of the parser. Use the most direct entry point you can find,
+and never assume the field you read back is the field you set.
+
 ## Specification
 
 <the exact document, version and sections to implement from>
