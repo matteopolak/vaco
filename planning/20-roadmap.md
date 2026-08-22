@@ -2253,3 +2253,33 @@ they are placeholders. Decomposing them now would be planning work against scope
 committed to, and §10 is explicit that scheduling the post-1.0 backlog is the second phase's job, not
 this document's. **They must be split before any of them is scheduled**, on the same criteria used
 here.
+
+---
+
+## Execution note — wave 2 ordering adjusted (2026-08-22)
+
+Plan 19's wave 2 lists the substrate crates without an internal order. Executed
+order puts **`vaco-conformance` first**, ahead of everything else in the wave.
+
+Reason: wave 1 finished with three crates carrying unvalidated data —
+`vaco-pixfmt`'s 268-format table, and `vaco-core`'s colour, frame-size and
+frame-rate tables. All are internally consistent and physically derived, and none
+has been diffed against the reference binary. Plan 11 calls that diff the primary
+acceptance criterion. Every further table we build inherits the same gap, so the
+harness is worth more now than any additional feature.
+
+Dispatched concurrently (5 agents, at the plan 19 §7 ceiling):
+
+| Agent | Crates | Issues | Rationale |
+|---|---|---|---|
+| conformance | `vaco-conformance` | #172, #173 | Unblocks validation for three finished crates |
+| io | `vaco-io`, `-protocol-core`, `-protocol-file` | #199, #200, #535 | `vaco-format-core` depends on it |
+| codec-core | `vaco-codec-core` | #170, #251 | Sits below format-core per D14.1 |
+| tx | `vaco-tx` | #243–#246 | Critical path; every audio codec blocks on it |
+| textformat | `vaco-textformat` | #188, #189 | *Is* the v0.1 acceptance criterion |
+
+`vaco-format-core` is deliberately held back one dispatch rather than run
+concurrently with `vaco-io`. Its probing path depends on `peek` working over a
+non-seekable source, which is behaviour rather than signature — and wave 1 showed
+what it costs to build against a dependency whose bodies do not yet exist
+(`vaco-opts` reimplemented 897 lines of `vaco-core` and threw them away).

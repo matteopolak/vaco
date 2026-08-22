@@ -30,14 +30,14 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-pool | 1 | — | — | free | | |
 | vaco-frame | 1 | — | — | free | | |
 | vaco-packet | 1 | — | — | free | | |
-| vaco-io | 2 | — | — | free | | |
-| vaco-protocol-core | 2 | — | — | free | | |
-| vaco-protocol-file | 2 | — | — | free | | |
+| vaco-io | 2 | #199,#200 | agent:io | assigned | 2026-08-22 | | |
+| vaco-protocol-core | 2 | #535 | agent:io | assigned | 2026-08-22 | | |
+| vaco-protocol-file | 2 | — | agent:io | assigned | 2026-08-22 | | |
 | vaco-protocol-http | 2 | — | — | free | | |
-| vaco-tx | 3 | — | — | free | | |
+| vaco-tx | 3 | #243-#246 | agent:tx | assigned | 2026-08-22 | | |
 | vaco-scale | 3 | — | — | free | | |
 | vaco-resample | 3 | — | — | free | | |
-| vaco-codec-core | 3 | — | — | free | | | frozen only |
+| vaco-codec-core | 3 | #170,#251 | agent:codec-core | assigned | 2026-08-22 | | |
 | vaco-codec-golomb | 3 | — | — | free | | |
 | vaco-codec-cabac | 3 | — | — | free | | |
 | vaco-codec-cbs | 3 | — | — | free | | |
@@ -60,10 +60,10 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-filter-framesync | 5 | — | — | free | | |
 | vaco-filter-graph | 5 | — | — | free | | |
 | vaco-registry | 6 | — | — | free | | |
-| vaco-textformat | 7 | — | — | free | | |
+| vaco-textformat | 7 | #188,#189 | agent:textformat | assigned | 2026-08-22 | | |
 | vaco-cli-core | 7 | — | — | free | | |
 | vaco-sched | 7 | — | — | free | | |
 | vaco-probe | 7 | — | — | free | | |
 | vaco-cli | 7 | — | — | free | | |
-| vaco-conformance | 10 | — | — | free | | |
+| vaco-conformance | 10 | #172,#173 | agent:conformance | assigned | 2026-08-22 | | |
 | vaco-checkasm | 10 | — | — | free | | |
