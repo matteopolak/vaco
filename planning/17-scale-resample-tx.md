@@ -4080,3 +4080,53 @@ row measures 2.73× over scalar at 1920 samples and threading scales 3.02× at 8
 workers, so the substrate is working — the loss is in the pipeline shape. `fast.rs`
 is the seam for closing it, and closing it is a scheduled piece of work, not a
 mystery.
+
+## Amendment — §B corrected against the binary (2026-08-22)
+
+`vaco-resample` measured five claims in §B and found all five wrong. Each was
+written from the algorithm as it *should* be, not from the binary.
+
+1. **§B.3.2 integer narrowing** says round-half-up. The reference does an
+   arithmetic shift: `s32 -32768 → -1`.
+2. **§B.3.2 float→int rounding** says half-away-from-zero. Measured, `f32→s16`
+   is half-**up** and everything else is ties-to-even.
+3. **§B.5.4 zero-priming.** The reference does not zero-prime; it **mirrors** —
+   whole-sample at the head, half-sample at the tail. A DC input produces flat
+   DC with no fade-in, which zero-priming cannot do.
+4. **§B.5.2 per-phase normalisation.** The reference scales the whole bank by
+   `1/Σh[0]`. Per-phase normalisation would change every coefficient.
+5. **§B.5.2 cutoff.** Derived from Kaiser this comes out 0.63; the measured
+   default is **0.97**, applied as `min(1, ratio·cutoff)` — with the `min`
+   outside the product, so **upsampling applies no cutoff at all**.
+
+### §B.14.1 was too pessimistic, and this is the useful part
+
+§B.14.1 answered "can we match the reference's resampler bit-exactly?" with
+*"No, and we should not try"*, and budgeted 3 person-weeks of class-8
+investigation. Measured:
+
+| path | grade |
+|---|---|
+| integer↔integer, integer→float, packed↔planar | **Exact** |
+| rematrix, 23 layout pairs, float output | **Exact**, 23/23 bit-identical f64 |
+| rate conversion, upsampling | **Equivalent, 304–307 dB** |
+| rate conversion, downsampling | **Equivalent, 101–113 dB** |
+| output sample count | **Exact**, `ceil(in·p/q)` |
+
+The filter design was *recoverable exactly* rather than merely fittable, and the
+budgeted investigation was not needed. Together with `vaco-scale` recovering the
+reference's fixed-point colour arithmetic in about an hour against plans that
+assumed it would be hard, the lesson is the same both times:
+
+> **A plan predicting that reproducing the reference is infeasible is a
+> hypothesis, and a cheap one to test.** Spend an hour probing before budgeting
+> weeks — or before conceding the divergence.
+
+### Two divergences kept, both D17.1-shaped
+
+`f32→s16` ties in a trailing partial block: the reference's rounding is **not a
+function of the sample value alone** — half-up in whole 16-sample blocks,
+ties-to-even in the trailing `len % 16`. Reproducing it would make output depend
+on how the caller chunked its input, which is exactly the kind of contract
+D17.1 says not to adopt. Also `22.2→stereo` and `hexadecagonal→stereo`, where no
+single rule reproduces the reference's own inconsistent folding.
