@@ -3872,3 +3872,21 @@ agrees but `component_count` will not.
 extractor comparing our table against `ffprobe -show_pixel_formats`. It needs the
 pinned reference binary, which arrives with the conformance harness. Until then
 the table is internally consistent and physically derived, but unvalidated.
+
+---
+
+## Corrections from implementation (vaco-simd, 2026-08-21)
+
+1. **`ops` paths.** The frozen `ops` module has scalar signatures, so the vector
+   forms live at `ops::simd::` under the same names. §5 writes
+   `ops::wmla_u8_i16`; the real path is `ops::simd::wmla_u8_i16`.
+2. **`vaco_core::num::clip_u8` does not exist** (§5.4 references it). Implemented
+   locally as `ops::clip_u8`.
+3. **`KernelSet` needed `select()` and `kernel_names()`**, both used by §5 but
+   absent from the frozen trait. Added as *provided* methods, so the freeze holds
+   and no implementor breaks.
+4. **`Tier::detect()` cannot carry a capability token**, so `dispatch_kernel!`
+   takes a `Caps` newtype over `fearless_simd`'s `Level`. `Tier` is unchanged from
+   the freeze.
+5. **§5.6's prescribed FIR structure is slower than the naive form** it was meant
+   to improve. See plan 12's amendment.

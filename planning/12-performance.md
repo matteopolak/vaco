@@ -2209,3 +2209,50 @@ Apache-2.0 OR MIT, ~5k lines of hand-written code over generated backends, small
 and maintain — but it is not eliminated, and "we could fork it" is a cost we would actually have to pay.
 Record it in `docs/dependencies.md` as an accepted risk with a named owner, and re-check it at every
 release per D10 Gate 3. It is the right trade, and it is a trade.
+
+---
+
+## Amendment — PF-0.0 measured (2026-08-21)
+
+See `planning/00-decisions.md` D12 second addendum for the full table. What
+changes in this document:
+
+1. **The widening-MAC risk is downgraded on aarch64 and remains open on x86.**
+   Measured 0.79x for the `pmaddwd` shape and 1.12x for the 8-tap u8 FIR, against
+   the ~6x and 2.2–2.5x this plan assumed. LLVM reconstructs `smull`/`smull2`/
+   `addp.4s` from our composition. The performance bands in §2 that were driven
+   down by this gap should be re-derived for aarch64; **they stand unrevised for
+   x86 until an x86-64 run exists**, since that target was not measured at all.
+
+2. **§5.6's FIR structure recommendation is withdrawn.** "Hoist the widen, `slide`
+   per tap" measures 1.63x versus 1.12x for the naive per-tap reload it was meant
+   to improve — twelve `ext.16b` contending for one shuffle port. Prefer the naive
+   form and measure before restructuring.
+
+3. **Two authoring rules are added to §5, and they outrank instruction selection.**
+   Both are invisible to correctness tests and each is worth up to 4x:
+   - *Batch until you spill.* Batching the FIR made it worse — one stack spill
+     became six. There is an optimum and it is found by measuring, not by reasoning.
+   - *Never carry a single vector accumulator; use four.* Both the horizontal
+     reduction (3.90x → 0.99x) and the rounded average (1.55x → 1.00x) were
+     latency chains misdiagnosed as missing instructions.
+
+4. **A missing operation is not automatically a cost.** The methodology lesson: of
+   seven gaps this plan treated as deficits, six measure free once LLVM has seen
+   the composition. Measure the composition before designing around its absence.
+
+5. **§11's "count instructions with `llvm-mca`" is superseded.** Timing
+   `#[inline(never)]` symbols and disassembling them gives both the instruction
+   count and the cycles, and it caught a 0.45x reading on byte-identical machine
+   code that an instruction count would have accepted as equal.
+
+6. **New CI requirement.** These results depend on LLVM 22's combiner; a toolchain
+   bump could take a 1.00x row to 3x with no test failing. `xtask` needs an
+   instruction-selection assertion driven by the `probes` module in `vaco-simd`,
+   so silent codegen regressions fail CI.
+
+7. **Benchmark harness note.** `divan` was dropped for this checklist in favour of
+   a hand-rolled interleaved A/B harness, because the measurement needs a ~300 ms
+   core-promotion warmup: macOS parks new processes on efficiency cores, and
+   without it an unchanged binary reported 45 ns and 132 ns for the same row on
+   consecutive runs. Any benchmark on Apple silicon needs this.

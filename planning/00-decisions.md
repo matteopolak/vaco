@@ -721,3 +721,78 @@ win into one we most likely never have.
    answer to formats we could never support. Those formats are now merely expensive.
 4. **Add a costed spec-extraction track to the roadmap** so long-tail formats can be pulled forward
    individually when demand justifies them.
+
+### D12 second addendum — PF-0.0 measured (2026-08-21)
+
+The adoption checklist was executed on real hardware. **The first addendum's
+estimates were wrong, and wrong in our favour.** Corrected here because a
+pessimistic forecast that stays uncorrected distorts every downstream decision as
+badly as an optimistic one.
+
+**Measured on:** Apple M5, `aarch64-apple-darwin`, rustc 1.97.1 / LLVM 22.1.6,
+`fearless_simd` 0.7.0, bench profile. Min-of-100 over 500-pass samples, three runs
+agreeing to ±0.01x, with `#[inline(never)]` symbols disassembled to confirm what
+actually compiled.
+
+**The headline: LLVM reconstructs the native instruction from our composition.**
+The premise of the first addendum — that a missing operation means paying its
+composition cost — is largely false on this target.
+
+| Operation | 1st addendum estimate | Measured | What it compiled to |
+|---|---|---|---|
+| **Widening MAC, `pmaddwd` shape** | **~6x** | **0.79x** | `smull` + `smull2` + `addp.4s` — the optimal NEON form |
+| **8-tap u8 FIR** | 2.2–2.5x | **1.12x** | |
+| unsigned saturating add | 3 ops | **1.01x** | `uqadd.16b`, byte-identical to baseline |
+| unsigned saturating sub | 2 ops | **1.01x** | `uqsub.16b` |
+| integer abs | 2 ops | **1.00x** | `abs.8h` |
+| absolute difference | 3 ops | **0.46x** | `uabd.16b` — *faster*; `u8::abs_diff` compiles worse |
+| rounded average | 4 ops | **1.00x** batched | `urhadd.16b`; the gap was unrolling, not selection |
+| horizontal reduction | ~2·log₂N | **0.99x** | with four accumulators; it was a latency chain |
+| **signed saturating add/sub** | — | **1.46x** | the one genuine gap |
+
+**A gap the plans missed, now the #2 upstream ask.** There is no `i16 → u8`
+saturating narrow. The first addendum called `saturating_narrow` "the `packuswb`
+we need"; it is not — `SimdNarrow` provides `i16→i8` and `u16→u8` only. Clamp to
+0..255 and pack is the final step of essentially every pixel kernel we will write,
+and it costs 2 extra operations there.
+
+**Revised upstream asks:** (1) signed saturating add/sub, (2) `i16→u8` saturating
+narrow, (3) widening MAC — worth raising, but say honestly that NEON does not hurt.
+**Withdraw** the other five: they measure free.
+
+**Two authoring rules worth more than any composition**, both invisible to
+correctness tests and worth up to 4x:
+- **Batch until you spill.** Batching helps until it does not — the FIR got *worse*
+  when batched, one stack spill becoming six.
+- **Never carry a single vector accumulator; use four.** The horizontal-reduction
+  and rounded-average "gaps" were both latency chains, not missing instructions.
+
+**Plan 11 §5.6's prescribed FIR structure is the worst variant.** "Hoist the
+widen, `slide` per tap" measures 1.63x against 1.12x for the naive reload it was
+meant to improve: twelve `ext.16b` all contend for one shuffle port. The plan is
+amended.
+
+**Other checklist results:** dispatch overhead 0.00–0.23 ns, indistinguishable
+from a plain `fn` pointer. Inlining clean — the only call in any kernel body is a
+cold bounds-check failure. NEON confirmed and asserted by a test. `dispatch!`
+expands to no unsafe and `kernel!` does, confirmed at `kernel_macros.rs:226`.
+Worked `yuv420p→rgb24` kernel: **4.1x over scalar** on a 1920px row.
+
+#### Two things this does NOT settle
+
+1. **Nothing here tests x86.** aarch64 has a single SIMD level, so the whole
+   measurement is one target. x86 is where FFmpeg's assembly is densest and where
+   `pmaddubsw`/`pmaddwd` matter most — so the risk the first addendum identified
+   is *unmeasured*, not disproved. **Checklist item 7 (cross-tier bit-exactness)
+   is blocking and cannot be closed on this hardware.** An x86-64 run, ideally
+   AVX-512, is required before production kernels land. Treat the performance
+   forecast as revised for aarch64 and still open for x86.
+2. **These numbers depend on LLVM 22's combiner.** A toolchain bump could turn a
+   1.00x row into 3x with no test failing. The crate's `probes` module exists to
+   make this checkable; `xtask` should grow an instruction-selection assertion so
+   a regression fails CI rather than being discovered in a benchmark months later.
+
+**Verdict: adopt, confirmed.** On aarch64 the substrate costs essentially nothing.
+The open question is x86, and it is a measurement we can schedule rather than a
+design risk we must architect around — `vaco-simd` remains a D11 adapter, so even
+a bad x86 result changes one crate's internals.

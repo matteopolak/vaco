@@ -12,6 +12,19 @@ authors.workspace = true
 vaco-core = { path = "../../core/vaco-core" }
 fearless_simd.workspace = true
 
+[dev-dependencies]
+# The differential oracle for every composed op and every kernel (D6, plan 11 §5.5).
+proptest.workspace = true
+# NOTE: no benchmark framework. `benches/adoption.rs` is `harness = false` and
+# times paired A/B implementations by hand, because what the adoption checklist
+# (plan 12 §11) needs is the RATIO between a composition and its native-or-
+# autovectorised counterpart in one process on one core, reported as a
+# min-of-N. A framework would add a lockfile entry and take that control away.
+
+[[bench]]
+name    = "adoption"
+harness = false
+
 [lints]
 workspace = true
 
