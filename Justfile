@@ -165,6 +165,13 @@ disk-clean:
     after=$(df -g /System/Volumes/Data | awk 'NR==2{print $4}')
     echo "freed $((after - before))GiB; ${after}GiB now free"
 
+# Watch free space while a wave builds, reclaiming build outputs under a floor.
+# Reports Steam, container and node_modules candidates rather than deleting
+# them: reclaiming something a human has to re-download is a decision, and an
+# unattended loop is the wrong place to make one.
+disk-watch minutes="45" floor="25":
+    ./scripts/disk-watch.sh {{minutes}} {{floor}}
+
 # Every library still builds for wasm32 (D18).
 wasm-check:
     cargo xtask wasm-check
