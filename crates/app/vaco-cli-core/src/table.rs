@@ -10,12 +10,12 @@
 //!
 //! | Scope | Flag | Where it binds |
 //! |---|---|---|
-//! | **Global** | [`OptFlags::GLOBAL`] | The whole run. Position is irrelevant: `vaco -y -i a out` and `vaco -i a -y out` are the same command. |
-//! | **Per-file** | [`OptFlags::PER_FILE`] | The **next** file mentioned. `-t 10 -i a -i b` limits `a` only. |
+//! | **Global** | [`ArgFlags::GLOBAL`] | The whole run. Position is irrelevant: `vaco -y -i a out` and `vaco -i a -y out` are the same command. |
+//! | **Per-file** | [`ArgFlags::PER_FILE`] | The **next** file mentioned. `-t 10 -i a -i b` limits `a` only. |
 //! | **Per-stream** | `PER_FILE \| PER_STREAM` | A per-file option that additionally carries a stream specifier, so one file can hold several values of it. |
 //!
-//! Per-file options additionally carry [`OptFlags::INPUT`] and/or
-//! [`OptFlags::OUTPUT`], which decide which *kind* of file they may bind to.
+//! Per-file options additionally carry [`ArgFlags::INPUT`] and/or
+//! [`ArgFlags::OUTPUT`], which decide which *kind* of file they may bind to.
 //! Getting that wrong is the reference's most user-visible diagnostic:
 //!
 //! ```text
@@ -52,21 +52,39 @@
 use crate::error::CliError;
 use crate::value::ValueKind;
 
-/// What an option is allowed to do and where it may appear.
+/// What a **command-line** option is allowed to do and where it may appear.
+///
+/// # Not to be confused with `vaco_opts::OptFlags`
+///
+/// These are two different flag universes on two different structures, and the
+/// reference tool shows it: `-h full` prints an eleven-column flag field
+/// (`E..VA......`) beside every *`AVOption`*, and prints **no** flag column at
+/// all beside the command-line options above it. `vaco_opts::OptFlags` is that
+/// column — encoding/decoding/filtering, readonly, runtime, deprecated. This
+/// type is the other thing entirely: does the option consume the next argv
+/// entry, is it global or per-file, may it bind to an input or an output.
+///
+/// They were briefly tracked as one concept duplicated across two crates. They
+/// are not — but the shared name was a real hazard, because `vaco-cli-core`
+/// depends on `vaco-opts` and `-h full` needs both sets in the same file. Hence
+/// `ArgFlags`: it says which universe it belongs to. See D19.
+///
+/// `VIDEO`/`AUDIO`/`SUBTITLE` appear in both and mean different things even
+/// there — help *grouping* here, media applicability there.
 ///
 /// A hand-rolled bit set rather than `bitflags`: this crate has no external
 /// dependencies and adding one would need a D10 review for eleven lines of code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct OptFlags(u32);
+pub struct ArgFlags(u32);
 
 /// The raw bit values.
 ///
 /// A separate module because `BitOr` cannot be `const` on stable, and the
-/// tables need `A | B` inside a `static`. Public API uses [`OptFlags`].
+/// tables need `A | B` inside a `static`. Public API uses [`ArgFlags`].
 mod bit {
     #![allow(
         unreachable_pub,
-        reason = "an internal constant table; the public spelling is OptFlags"
+        reason = "an internal constant table; the public spelling is ArgFlags"
     )]
     /// Consumes the following argv entry as its value.
     pub const HAS_ARG: u32 = 1 << 0;
@@ -94,7 +112,7 @@ mod bit {
     pub const DATA: u32 = 1 << 13;
 }
 
-impl OptFlags {
+impl ArgFlags {
     pub const NONE: Self = Self(0);
     /// Consumes the following argv entry as its value.
     pub const HAS_ARG: Self = Self(bit::HAS_ARG);
@@ -140,7 +158,7 @@ impl OptFlags {
     }
 }
 
-impl core::ops::BitOr for OptFlags {
+impl core::ops::BitOr for ArgFlags {
     type Output = Self;
     fn bitor(self, rhs: Self) -> Self {
         Self(self.0 | rhs.0)
@@ -168,7 +186,7 @@ pub struct OptDesc {
     pub name: &'static str,
     /// The placeholder `-h` prints for the value, when there is one.
     pub argname: Option<&'static str>,
-    pub flags: OptFlags,
+    pub flags: ArgFlags,
     /// The grammar the value is written in, established by probing rather than
     /// inferred from the argument placeholder — see [`ValueKind`].
     pub kind: ValueKind,
@@ -188,7 +206,7 @@ impl PartialEq for OptDesc {
 impl OptDesc {
     #[must_use]
     pub const fn takes_value(&self) -> bool {
-        self.flags.contains(OptFlags::HAS_ARG)
+        self.flags.contains(ArgFlags::HAS_ARG)
     }
 
     /// The numeric bounds this option's type imposes, if it has any.
@@ -207,9 +225,9 @@ impl OptDesc {
     /// the suffix is parsed only when this says it means something.
     #[must_use]
     pub const fn spec_kind(&self) -> SpecKind {
-        if self.flags.contains(OptFlags::PER_STREAM) {
+        if self.flags.contains(ArgFlags::PER_STREAM) {
             SpecKind::Stream
-        } else if self.flags.contains(OptFlags::TAKES_SPEC) {
+        } else if self.flags.contains(ArgFlags::TAKES_SPEC) {
             // Every `[:<spec>]` option in ffmpeg 8.1 either takes a metadata
             // specifier (`-metadata`, `-map_metadata`) or a stream specifier
             // used for selection rather than for per-stream storage
@@ -225,9 +243,9 @@ impl OptDesc {
     #[must_use]
     pub const fn allowed_on(&self, output: bool) -> bool {
         if output {
-            self.flags.contains(OptFlags::OUTPUT)
+            self.flags.contains(ArgFlags::OUTPUT)
         } else {
-            self.flags.contains(OptFlags::INPUT)
+            self.flags.contains(ArgFlags::INPUT)
         }
     }
 }
@@ -325,7 +343,7 @@ const fn o(
     OptDesc {
         name,
         argname,
-        flags: OptFlags(flags),
+        flags: ArgFlags(flags),
         kind,
         help,
         alias_of: None,
@@ -344,7 +362,7 @@ const fn alias(
     OptDesc {
         name,
         argname,
-        flags: OptFlags(flags),
+        flags: ArgFlags(flags),
         kind,
         help,
         alias_of: Some((target, spec)),
@@ -398,8 +416,8 @@ mod tests {
     fn every_option_has_exactly_one_scope() {
         for table in [ffmpeg(), ffprobe()] {
             for o in table.options {
-                let global = o.flags.contains(OptFlags::GLOBAL);
-                let per_file = o.flags.contains(OptFlags::PER_FILE);
+                let global = o.flags.contains(ArgFlags::GLOBAL);
+                let per_file = o.flags.contains(ArgFlags::PER_FILE);
                 assert!(
                     global ^ per_file,
                     "{}/{} must be exactly one of GLOBAL and PER_FILE",
@@ -408,7 +426,7 @@ mod tests {
                 );
                 if per_file {
                     assert!(
-                        o.flags.intersects(OptFlags::INPUT | OptFlags::OUTPUT),
+                        o.flags.intersects(ArgFlags::INPUT | ArgFlags::OUTPUT),
                         "{}/{} is per-file but neither INPUT nor OUTPUT",
                         table.tool,
                         o.name
@@ -416,7 +434,7 @@ mod tests {
                 }
                 if global {
                     assert!(
-                        !o.flags.intersects(OptFlags::INPUT | OptFlags::OUTPUT),
+                        !o.flags.intersects(ArgFlags::INPUT | ArgFlags::OUTPUT),
                         "{}/{} is global but carries a side",
                         table.tool,
                         o.name
@@ -429,8 +447,8 @@ mod tests {
     #[test]
     fn per_stream_implies_per_file() {
         for o in ffmpeg().options {
-            if o.flags.contains(OptFlags::PER_STREAM) {
-                assert!(o.flags.contains(OptFlags::PER_FILE), "{}", o.name);
+            if o.flags.contains(ArgFlags::PER_STREAM) {
+                assert!(o.flags.contains(ArgFlags::PER_FILE), "{}", o.name);
             }
         }
     }
@@ -510,14 +528,14 @@ mod tests {
         let t = ffmpeg();
         // Scope, from the probe transcript.
         let re = t.find("re").unwrap();
-        assert!(re.flags.contains(OptFlags::INPUT) && !re.flags.contains(OptFlags::OUTPUT));
+        assert!(re.flags.contains(ArgFlags::INPUT) && !re.flags.contains(ArgFlags::OUTPUT));
         let shortest = t.find("shortest").unwrap();
         assert!(
-            shortest.flags.contains(OptFlags::OUTPUT) && !shortest.flags.contains(OptFlags::INPUT)
+            shortest.flags.contains(ArgFlags::OUTPUT) && !shortest.flags.contains(ArgFlags::INPUT)
         );
         let ss = t.find("ss").unwrap();
-        assert!(ss.flags.contains(OptFlags::INPUT) && ss.flags.contains(OptFlags::OUTPUT));
-        assert!(t.find("y").unwrap().flags.contains(OptFlags::GLOBAL));
+        assert!(ss.flags.contains(ArgFlags::INPUT) && ss.flags.contains(ArgFlags::OUTPUT));
+        assert!(t.find("y").unwrap().flags.contains(ArgFlags::GLOBAL));
         // Specifier kinds.
         assert_eq!(t.find("c").unwrap().spec_kind(), SpecKind::Stream);
         assert_eq!(t.find("metadata").unwrap().spec_kind(), SpecKind::Metadata);

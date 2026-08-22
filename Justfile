@@ -169,6 +169,14 @@ disk-clean:
 wasm-check:
     cargo xtask wasm-check
 
+# The OS clock is reached only through vaco-time (D18).
+#
+# The companion to `wasm-check`, and it catches what that one structurally
+# cannot: `std::time::Instant::now()` compiles for wasm32 and panics at run
+# time, so a crate can pass the compile gate and still be unusable.
+time-gate:
+    cargo xtask time-gate
+
 # One definition per concept (D19).
 dup-check:
     cargo xtask dup-check

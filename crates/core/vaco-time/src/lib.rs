@@ -130,6 +130,32 @@ impl Instant {
     }
 }
 
+/// Block the current thread for approximately `d`.
+///
+/// The third time door, and here for the same reason as the other two: sleeping
+/// is an OS capability that `wasm32-unknown-unknown` does not have, and a crate
+/// that reaches for `std::thread::sleep` directly has quietly become
+/// non-portable without the compiler saying so.
+///
+/// # It does not sleep everywhere, so do not rely on it for correctness
+///
+/// Where there is no thread to block this returns immediately, and
+/// [`can_sleep`] says so. A polling loop must therefore be bounded by an
+/// iteration count as well as by a deadline — bounding it by the clock alone is
+/// exactly the bug this crate makes visible, because [`Instant`] is also
+/// stopped on such a target and `now() < deadline` stays true forever.
+///
+/// `vaco-protocol-file`'s `follow` read is the worked example.
+pub fn sleep(d: Duration) {
+    backend::sleep(d);
+}
+
+/// Whether [`sleep`] actually blocks on this target.
+#[must_use]
+pub const fn can_sleep() -> bool {
+    backend::CAN_SLEEP
+}
+
 /// Nanoseconds since the Unix epoch, or `None` where there is no wall clock.
 ///
 /// Separate from [`Instant`] because it answers a different question and has a
@@ -148,6 +174,11 @@ mod backend {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     pub(crate) const MONOTONIC_AVAILABLE: bool = true;
+    pub(crate) const CAN_SLEEP: bool = true;
+
+    pub(crate) fn sleep(d: core::time::Duration) {
+        std::thread::sleep(d);
+    }
 
     /// A fixed origin, so `Instant` can be a plain integer. Taken once.
     fn origin() -> std::time::Instant {
@@ -175,6 +206,11 @@ mod backend {
     // No clock. Both functions are total and constant — see the crate docs for
     // why each fallback is the safe direction, and turn on `web` to fix it.
     pub(crate) const MONOTONIC_AVAILABLE: bool = false;
+    pub(crate) const CAN_SLEEP: bool = false;
+
+    /// Returns immediately: there is no thread to block. Callers must bound
+    /// their loop by a count, not only by a deadline — see [`super::sleep`].
+    pub(crate) fn sleep(_d: core::time::Duration) {}
 
     pub(crate) fn monotonic_nanos() -> u64 {
         0
@@ -213,6 +249,25 @@ mod tests {
         let a = Instant::now();
         let far = a.saturating_add(Duration::from_secs(u64::MAX));
         assert!(far >= a, "a saturating add must never wrap into the past");
+    }
+
+    #[test]
+    fn sleeping_and_the_clock_agree() {
+        // The dangerous combination is a target that can sleep but has no
+        // clock, or vice versa: a polling loop bounded by a deadline would
+        // then either spin without waiting or wait without ever expiring.
+        // Neither exists today, and this test is where it would be noticed.
+        assert_eq!(can_sleep(), Instant::is_available());
+    }
+
+    #[test]
+    fn sleep_is_at_least_as_long_as_asked_where_it_sleeps() {
+        let d = Duration::from_millis(2);
+        let before = Instant::now();
+        sleep(d);
+        if can_sleep() {
+            assert!(before.elapsed() >= d);
+        }
     }
 
     #[test]

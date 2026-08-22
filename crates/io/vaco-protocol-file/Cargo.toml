@@ -13,6 +13,7 @@ vaco-core = { path = "../../core/vaco-core" }
 vaco-io = { path = "../../io/vaco-io" }
 vaco-protocol-core = { path = "../../io/vaco-protocol-core" }
 vaco-opts = { path = "../../core/vaco-opts" }
+vaco-time = { path = "../../core/vaco-time" }
 
 [dev-dependencies]
 proptest.workspace = true

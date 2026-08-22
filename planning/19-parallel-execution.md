@@ -768,3 +768,73 @@ Do not rewrite published history. Note that message rewriting needs a clean
 working tree, which during a wave it never is: a `filter-branch` attempted
 mid-wave fails with "You have unstaged changes", and stashing an agent's work to
 get around that would be a data-loss bug, not a workaround.
+
+
+## 16. Which model to dispatch
+
+Agents cost money, and the models differ by roughly an order of magnitude. The
+default should therefore be the cheaper one, and the question worth asking is
+not "is this task hard?" — every task here is hard — but **"is the hard part
+already decided?"**
+
+### The rule
+
+**Sonnet when the answer exists somewhere and the job is to bring it into the
+tree faithfully. Opus when the job is to decide what the answer is.**
+
+Almost every codec, container and DSP crate is the first kind. An AV1 sequence
+header, an HEVC inverse transform, an ID3v2 frame, a RIFF chunk — these are
+written down in a specification, in a syntax table, to the bit. The brief can
+name the clause. The work is real and unforgiving, but it is *transcription
+under constraints*, and the constraints are checkable: the tests either match
+`ffprobe` or they do not. That is Sonnet's shape.
+
+The second kind is where the tree does not yet contain the concept, and the
+crate's *interface* is the deliverable rather than its behaviour. `vaco-sched`
+is the clearest example: nothing in the workspace spawns a thread, so the crate
+that first wants concurrency has to decide, once, what parallelism looks like
+across a codebase that must also run on a target with no threads. Getting that
+wrong is not a failing test, it is a shape that every later crate inherits.
+Dispatch that to Opus.
+
+### The tie-breakers
+
+Prefer Opus when any of these hold, and Sonnet otherwise:
+
+- **The crate owns a trait other crates will implement.** A trait is a decision
+  in the type system, and the cost of getting it wrong is paid by everyone
+  downstream. `vaco-codec-cbs` is the cautionary case: it was built against two
+  NAL-based codecs, which are similar to each other, and its own author flagged
+  that AV1 would be the real test.
+- **The brief spans more than one crate.** Widening a struct breaks every
+  literal that constructs it, so the agent is doing coordinated surgery rather
+  than filling in a stub, and a partial job leaves the tree red for everyone.
+- **The task is to arbitrate, not to build** — resolving a `KNOWN_DUPLICATE`,
+  deciding where a concept's single home should be (D19), or judging whether a
+  measured deviation should be reproduced (D17).
+
+And prefer Sonnet, explicitly, when:
+
+- There is a specification section number in the brief.
+- The oracle is a probe of the reference binary, so "correct" is decidable
+  without judgement.
+- The crate is a leaf: it implements an existing trait and nothing depends on
+  its internal shape.
+
+### What does not change with the model
+
+Everything in §8 and §14. **Cheaper does not mean less rigorous** — the fuzz
+target, the wasm check, the `dup-check` row with a written reason, the measured
+ratio instead of a predicted one, and "stop and report rather than write outside
+your crate" apply identically. If anything they matter more on the cheaper
+model, because the brief is carrying more of the load: a Sonnet brief must
+supply the spec reference, the sibling crate to imitate, and the exact gates,
+where an Opus brief can pose the question and trust the agent to find them.
+
+### Brief with hypotheses, not conclusions — regardless of model
+
+§10.3 already says this and it is worth repeating here because model choice
+tempts you to compress the brief. The HEVC brief asserted that H.264's measured
+deviations transferred; four of five did not. The correct form is "H.264 does
+X; verify whether HEVC does" — which costs one sentence and is the difference
+between an agent measuring and an agent believing.

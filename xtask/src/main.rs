@@ -16,6 +16,7 @@ mod gen_fuzz;
 mod gen_pixfmt;
 mod layers;
 mod registry;
+mod time_gate;
 mod unsafe_audit;
 mod wasm;
 
@@ -31,6 +32,7 @@ fn main() {
         "dup-check" => dup_check::run(check),
         "dead-code" => dead_code::run(check),
         "wasm-check" => wasm::run(check),
+        "time-gate" => time_gate::run(check),
         "gen-registry" => registry::run(check),
         "gen-docs-index" => docs::run(check),
         "gen-pixfmt" => gen_pixfmt::run(check),
@@ -42,6 +44,7 @@ fn main() {
             eprintln!("  dep-gate        D10 Gate 1: no FFI, no vendored C");
             eprintln!("  unsafe-audit    `unsafe` only where D2/D13 permit");
             eprintln!("  wasm-check      every library still builds for wasm32 (D18)");
+            eprintln!("  time-gate       the OS clock is reached only through vaco-time (D18)");
             eprintln!("  dup-check       one definition per concept (D19)");
             eprintln!("  dead-code       public API that only tests use (report, not a gate)");
             eprintln!("  gen-registry    assemble the registry from crate fragments");

@@ -175,11 +175,11 @@ proptest! {
             // option really is not.
             for o in &cl.global {
                 let d = o.desc.expect("a deferred option is never hoisted");
-                prop_assert!(d.flags.contains(vaco_cli_core::OptFlags::GLOBAL));
+                prop_assert!(d.flags.contains(vaco_cli_core::ArgFlags::GLOBAL));
             }
             for o in cl.groups.iter().flat_map(|g| &g.opts).chain(&cl.orphaned) {
                 if let Some(d) = o.desc {
-                    prop_assert!(!d.flags.contains(vaco_cli_core::OptFlags::GLOBAL));
+                    prop_assert!(!d.flags.contains(vaco_cli_core::ArgFlags::GLOBAL));
                 }
             }
 

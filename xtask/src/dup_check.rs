@@ -185,12 +185,6 @@ const KNOWN_DUPLICATE: &[(&str, &str)] = &[
          depends on the other today.",
     ),
     (
-        "OptFlags",
-        "vaco-opts and vaco-cli-core. cli-core ALREADY depends on vaco-opts, so \
-         this one is straightforwardly resolvable — cli-core's adds a column \
-         concept for -h full rendering that vaco-opts should carry.",
-    ),
-    (
         "Disposition",
         "vaco-cli-core and vaco-format-core. Aligned numerically (both 19 flags, \
          same bits) so nothing is wrong today, but it is one concept twice. \

@@ -37,7 +37,7 @@ use crate::lex::{Token, classify};
 use crate::metaspec::MetadataSpecifier;
 use crate::spec::StreamSpecifier;
 use crate::stream::MatchCtx;
-use crate::table::{Lookup, OptDesc, OptFlags, OptTable, Positional, SpecKind};
+use crate::table::{ArgFlags, Lookup, OptDesc, OptTable, Positional, SpecKind};
 use crate::value::{Expression, NumberLimits, OptionConstants, ValueKind};
 
 /// Decides whether an option name the tool's own table does not have could
@@ -453,8 +453,8 @@ pub fn split_with<S: AsRef<OsStr>>(
                 };
 
                 match desc {
-                    Some(d) if d.flags.contains(OptFlags::GLOBAL) => out.global.push(parsed),
-                    Some(d) if d.flags.contains(OptFlags::OPENS_INPUT) => {
+                    Some(d) if d.flags.contains(ArgFlags::GLOBAL) => out.global.push(parsed),
+                    Some(d) if d.flags.contains(ArgFlags::OPENS_INPUT) => {
                         let index = bump(&mut inputs, &mut outputs, GroupKind::Input);
                         out.groups.push(OptionGroup {
                             kind: GroupKind::Input,

@@ -2,7 +2,9 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use vaco_time::{Instant, sleep};
 
 use vaco_core::{Error, Result as CoreResult};
 use vaco_io::{CancelToken, MediaSink, MediaSource, PeekSource, RawSource, Seekability};
@@ -103,6 +105,27 @@ impl FileSource {
     }
 }
 
+/// A filesystem timestamp as microseconds since the Unix epoch.
+///
+/// `SystemTime` is not orderable against the epoch without asking, so both
+/// directions are tried; a pre-1970 mtime is unusual but not invalid and comes
+/// back negative rather than clamped. Anything outside `i64` microseconds —
+/// which is ±292,000 years and only reachable from a corrupt inode — is
+/// reported as unknown rather than wrapped into a plausible-looking wrong date.
+// time-gate: converting a value the OS already handed us, not reading a clock.
+// `fs::Metadata::modified()` is the OS call and it already returned; from here
+// on this is arithmetic. A target without a filesystem never reaches it.
+fn epoch_micros(t: std::time::SystemTime) -> Option<i64> {
+    // time-gate: as above — a constant, not a clock read.
+    use std::time::UNIX_EPOCH;
+    match t.duration_since(UNIX_EPOCH) {
+        Ok(d) => i64::try_from(d.as_micros()).ok(),
+        Err(e) => i64::try_from(e.duration().as_micros())
+            .ok()
+            .map(i64::wrapping_neg),
+    }
+}
+
 impl RawSource for FileSource {
     fn read(&mut self, buf: &mut [u8]) -> CoreResult<usize> {
         let n = self.read_once(buf)?;
@@ -117,10 +140,31 @@ impl RawSource for FileSource {
             return Ok(0);
         };
         let (cancel, timeout) = (state.cancel.clone(), state.timeout);
-        let deadline = Instant::now() + timeout;
-        while Instant::now() < deadline {
+        // Bounded twice over, by the deadline *and* by a poll count, because
+        // neither bound is sufficient alone:
+        //
+        // - The deadline is the real one on a target with a clock.
+        // - The count is what makes this terminate on a target without one.
+        //   `vaco_time::Instant` is a *stopped* clock where there is no
+        //   monotonic source, so `now() < deadline` would stay true forever and
+        //   this loop would never exit. Switching to `vaco-time` alone would
+        //   have turned `std::time::Instant::now()`'s wasm panic into a hang,
+        //   which is not an improvement — the loop shape had to change too.
+        //
+        // The count is derived from the same two durations, so on a working
+        // clock it expires at or after the deadline and never truncates a wait.
+        let deadline = Instant::now().saturating_add(timeout);
+        let max_polls = timeout
+            .as_nanos()
+            .div_ceil(FOLLOW_POLL.as_nanos().max(1))
+            .try_into()
+            .unwrap_or(usize::MAX);
+        for _ in 0..max_polls {
+            if Instant::now() >= deadline {
+                break;
+            }
             cancel.check()?;
-            std::thread::sleep(FOLLOW_POLL);
+            sleep(FOLLOW_POLL);
             let n = self.read_once(buf)?;
             if n > 0 {
                 self.pos = self.pos.saturating_add(n as u64);
@@ -289,7 +333,10 @@ impl Protocol for FileProtocol {
                 name: entry.file_name().to_string_lossy().into_owned(),
                 kind,
                 size: meta.as_ref().map(std::fs::Metadata::len),
-                modified: meta.as_ref().and_then(|m| m.modified().ok()),
+                modified: meta
+                    .as_ref()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(epoch_micros),
             });
         }
         out.sort_by(|a, b| a.name.cmp(&b.name));

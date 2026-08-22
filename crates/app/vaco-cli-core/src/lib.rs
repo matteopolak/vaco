@@ -103,7 +103,7 @@ pub use split::{
     RejectUnknown, split, split_with,
 };
 pub use stream::{Disposition, GroupInfo, MatchCtx, ProgramInfo, StreamInfo};
-pub use table::{Lookup, OptDesc, OptFlags, OptTable, Positional, SpecKind, ffmpeg, ffprobe};
+pub use table::{ArgFlags, Lookup, OptDesc, OptTable, Positional, SpecKind, ffmpeg, ffprobe};
 pub use value::{
     Expression, NumberLimits, OptionConstants, ValueKind, eval_checked, eval_once, eval_option,
     parse_number, strtod,

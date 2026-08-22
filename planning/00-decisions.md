@@ -1047,6 +1047,54 @@ is not a reason to diverge — D17 exists precisely to overrule that instinct.
 The test is narrow: undefined behaviour in the reference, no stable output to
 match, divergence pinned and documented.
 
+### D18.1 — a compile gate cannot see a runtime panic (2026-08-22)
+
+`wasm-check` answers "does this compile for wasm32?", and that is a weaker
+question than it looks. `std::time::Instant::now()` **compiles** for
+`wasm32-unknown-unknown` and panics when called. So a crate can pass the gate on
+every run and still be unusable on the target it just passed for — and in a
+workspace that denies `unwrap_used` and `panic` specifically to keep untrusted
+input from reaching a crash, a panic that no lint and no gate can see is the
+worst shape available.
+
+Two crates were in exactly that state, found by reading rather than by any gate:
+
+| where | what |
+|---|---|
+| `vaco-protocol-file` | the `follow` read built its deadline with `std::time::Instant` and polled with `std::thread::sleep` |
+| `vaco-protocol-core` | `DirEntry.modified` was `Option<std::time::SystemTime>` |
+
+The second is the more instructive. It is a field in a **trait's data model**,
+so it obliged every implementer of `Protocol` to produce an OS type — coupling
+in the *interface*, where no `cfg` can reach it. It is now `Option<i64>`
+microseconds since the epoch. Signed, because filesystems carry pre-1970
+timestamps.
+
+`cargo xtask time-gate` now enforces the rule, with a crate allowlist (three
+entries) and a line-level `// time-gate: <reason>` escape hatch for converting a
+value the OS has already handed you. `Duration` is deliberately **not** flagged:
+it is arithmetic over two integers, `vaco_time` re-exports
+`core::time::Duration`, and the two spellings name the same type. A gate that
+fires on `Duration` is a gate people learn to ignore.
+
+#### `vaco-time` alone would not have fixed the `follow` loop
+
+Worth recording because it generalises. The loop was
+`while Instant::now() < deadline`. Swapping in `vaco_time::Instant` removes the
+panic — and replaces it with a **hang**, because that `Instant` is a *stopped*
+clock where there is no monotonic source, so the condition stays true forever.
+
+The abstraction moved the failure; it did not remove it. The loop shape had to
+change too, and is now bounded by an iteration count as well as by the deadline,
+with the count derived from the same two durations so that on a working clock it
+never truncates a wait. `vaco_time::sleep` is now the third door alongside
+`Instant` and `unix_nanos`, and `can_sleep()` exists so a caller can ask.
+
+**The transferable rule: a polling loop must be bounded by a count, not only by
+a clock.** Putting a capability behind one door tells you where the OS is
+touched; it does not tell you that the code above the door was written assuming
+the capability works.
+
 ## D19 — One definition per concept, enforced (2026-08-22)
 
 **Decision.** Every concept has exactly one definition. Where a thing is needed
@@ -1087,8 +1135,45 @@ regression, not a proof of non-duplication.
 | name | crates | plan |
 |---|---|---|
 | `CancelToken` | `vaco-io`, `vaco-codec-core` | Both are `Arc<AtomicBool>` with different semantics on top. Shared primitive belongs in `vaco-core`; neither crate depends on the other today. |
-| `OptFlags` | `vaco-opts`, `vaco-cli-core` | The easy one — `vaco-cli-core` already depends on `vaco-opts`. cli-core's adds a column concept for `-h full` rendering, which `vaco-opts` should carry. |
 | `Disposition` | `vaco-cli-core`, `vaco-format-core` | Aligned numerically (19 flags, same bits) so nothing is wrong today. cli-core does not depend on format-core, so the shared home has to sit below both. |
+
+#### `OptFlags` was on that list and should not have been (resolved 2026-08-22)
+
+The entry above read "the easy one" and was wrong twice over. It claimed
+cli-core's version "adds a column concept for `-h full` rendering, which
+`vaco-opts` should carry" — but `vaco-opts::OptFlags` is *already* the one with
+`column()`, and cli-core's never renders a column at all.
+
+Probing settled it. `ffmpeg -h full` prints an eleven-column flag field beside
+every `AVOption`:
+
+```
+  -b   <int64>   E..VA...... set bitrate (in bits/s)
+```
+
+and prints **no flag column** beside the command-line options above it:
+
+```
+-muxers             show available muxers
+```
+
+Two flag universes on two structures. `vaco-opts::OptFlags` is the column —
+encoding, decoding, filtering, readonly, runtime, deprecated. cli-core's is
+argv mechanics — consumes the next entry, global or per-file, binds to an input
+or an output. Even the three spellings they share diverge: `VIDEO`/`AUDIO`/
+`SUBTITLE` are media applicability in one and help *grouping* in the other.
+
+So it belonged in `DISTINCT`, not `KNOWN_DUPLICATE`. But leaving it as a shared
+name was still wrong, because `vaco-cli-core` depends on `vaco-opts` and
+`-h full` needs both sets **in the same file** — the one place where two types
+of the same name is not a documentation problem but a `use` conflict. cli-core's
+is now `ArgFlags`, and the collision is gone rather than explained.
+
+The transferable lesson is about the list itself: a `KNOWN_DUPLICATE` row is a
+claim, and claims written from a name-based scan are exactly as unreliable as
+the scan. Before merging a tracked duplicate, check that it *is* one. Two of
+the three rows on this list were written the same way; treat the remaining two
+as unverified.
 
 The H.264/HEVC pair share **21 type names** (`Sps`, `SliceHeader`,
 `HrdParameters`, `NalUnitType`, …). Those are *not* duplication today: the two

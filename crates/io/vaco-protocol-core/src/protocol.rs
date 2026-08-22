@@ -118,8 +118,20 @@ pub struct DirEntry {
     pub kind: EntryKind,
     /// Size in bytes, when the platform reports one.
     pub size: Option<u64>,
-    /// Modification time, when the platform reports one.
-    pub modified: Option<std::time::SystemTime>,
+    /// Modification time in **microseconds since the Unix epoch**, when the
+    /// platform reports one.
+    ///
+    /// An integer rather than `std::time::SystemTime` because this is a trait's
+    /// data model: a `SystemTime` field obliges every implementer to produce an
+    /// OS type, and `wasm32-unknown-unknown` has no wall clock to produce it
+    /// from. The coupling would be in the *interface*, where no `cfg` can reach
+    /// it. See D18 and `cargo xtask time-gate`.
+    ///
+    /// Signed, because filesystems really do carry pre-1970 timestamps.
+    /// Microseconds because `i64` of them spans ±292,000 years, which is more
+    /// range than any directory listing needs and more resolution than any
+    /// caller of this will use.
+    pub modified: Option<i64>,
 }
 
 /// A byte transport reachable by URL.

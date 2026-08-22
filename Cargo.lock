@@ -1974,6 +1974,7 @@ dependencies = [
  "vaco-io",
  "vaco-opts",
  "vaco-protocol-core",
+ "vaco-time",
 ]
 
 [[package]]

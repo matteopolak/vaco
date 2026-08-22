@@ -30,6 +30,9 @@ jobs:
       # D18: every library still builds for wasm32.
       - run: rustup target add wasm32-unknown-unknown
       - run: cargo xtask wasm-check
+      # D18, the other half: `std::time::Instant::now()` *compiles* for wasm32
+      # and panics when called, so `wasm-check` alone cannot see it.
+      - run: cargo xtask time-gate
       # D19: one definition per concept.
       - run: cargo xtask dup-check
       # The crate graph stays acyclic and downward (D14.1).
