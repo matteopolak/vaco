@@ -716,20 +716,25 @@ middle of a wave, and expect to commit the reformatting as its own change.
 Subjects follow [Conventional Commits](https://www.conventionalcommits.org/):
 `type(scope): summary`, imperative, lower-case, no trailing full stop.
 
+**Five types, and only these five:**
+
 | type | when |
 |---|---|
 | `feat` | a crate or capability that did not exist |
 | `fix` | a defect in committed code |
 | `perf` | a change made for speed, with the measured ratio in the body |
 | `docs` | planning documents, decision records, crate docs |
-| `test` | tests or fuzz targets alone |
-| `refactor` | behaviour-preserving restructuring |
-| `build` / `ci` | manifests, Justfile, workflows, xtask gates |
-| `chore` | the assignment ledger, housekeeping |
+| `chore` | everything else — manifests, the Justfile, CI, xtask gates, formatting, the ledger |
 
-Scope is the crate without its `vaco-` prefix (`core`, `demux-mp4`, `xtask`),
-`planning` for the plans, `ledger` for `ASSIGNMENTS.md`, or `wave-N` for a wave
-integration commit.
+Do **not** invent types. `build`, `ci`, `style` and `refactor` are not in the
+list; they are `chore`. A CI fix is `fix(ci)`, not `ci(...)` — the type says what
+kind of change it is, the scope says where.
+
+**Scope goes in brackets, where it makes sense**, and is never bare before the
+colon. `cli: …` and `wave 3: …` are wrong; `docs(cli): …` and `feat(wave-3): …`
+are right. Use the crate without its `vaco-` prefix (`core`, `demux-mp4`,
+`xtask`), `planning` for the plans, `ledger` for `ASSIGNMENTS.md`, `ci` for the
+workflow, or `wave-N` for a wave integration commit that spans many crates.
 
 **The body is where the value is, and none of this changes that.** This project's
 commit bodies carry measured ratios, refuted hypotheses and the reasoning behind
