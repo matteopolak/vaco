@@ -866,3 +866,53 @@ works against the reference works against us. The reverse — a script written
 against us failing on the reference — is a real but minor cost, and the
 alternative is deliberately rejecting valid CSS colour names to reproduce an
 inconsistency. Documented in the crate docs so the asymmetry is not a surprise.
+
+### D17.1 — Deviations we *cannot* reproduce, because a type forbids them (2026-08-22)
+
+D17 says to match the reference where it deviates from spec in observable
+output. `vaco-chlayout` found the first case where that is impossible.
+
+The reference truncates a channel label at 15 **bytes**, without regard to
+character boundaries. Probed byte-exactly:
+
+```
+-ch_layout "FL@ééééééééé+FR"   ->   FL@ + c3a9 c3a9 c3a9 c3a9 c3a9 c3a9 c3a9 c3
+                                          seven é (14 bytes) + a dangling lead byte
+```
+
+That output is **not valid UTF-8**. A Rust `String` cannot hold it, so
+`describe() -> String` cannot reproduce it — not as a matter of effort, but by
+the type's guarantee. And every lossy rendering of the dangling byte re-parses
+to a third value, breaking the `describe → parse → describe` fixed point the
+whole layout grammar rests on.
+
+**The rule.** When byte-identical output would require constructing a value a
+Rust type forbids:
+
+1. **Do not weaken the type** to accommodate it. `String`'s guarantee is worth
+   more than the last byte of a pathological label.
+2. **Diverge minimally and predictably** — here, cut at the last character
+   boundary at or below the reference's byte cap. Inputs that do not hit the
+   pathological case, which is every ASCII label and every realistic command
+   line, stay byte-identical.
+3. **Pin the divergence in a test that asserts it still exists**, so that if the
+   reference changes, or we find a way to close it, the test tells us instead of
+   silently passing. `vaco-chlayout` uses `LABEL_TRUNCATION_DIVERGENCE` for
+   exactly this, and the same pattern retired its earlier label gap when that one
+   became closable.
+4. **Record it in the crate's doc file** under a heading someone auditing
+   conformance will find, not only in a code comment.
+
+This is a narrower exception than it looks. It applies when a *type invariant*
+makes reproduction impossible, not when reproduction is merely awkward,
+unpleasant, or requires `unsafe`. If the only obstacle is effort, D17 stands and
+we match the reference.
+
+#### A note on how this was found
+
+The first probe of this used `grep -oE` to extract the label, and `grep` silently
+dropped the dangling byte — so the output looked like clean UTF-8 and the whole
+divergence was invisible. It took re-probing with byte-exact tooling to see it.
+That is plan 13 §1b's rule applying to the *read* side as well as the write
+side: the tool between you and the answer has opinions. When the question is
+about bytes, look at bytes.
