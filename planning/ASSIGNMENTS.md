@@ -8,13 +8,19 @@ crate needs two people it needs splitting into two crates first.
 
 Status: `free` · `assigned` · `in-review` · `done`
 
-| Crate | Layer | Issue | Owner | Status | Started | Finished |
-|---|---|---|---|---|---|---|
-| vaco-core | 0 | #2,#4 | orchestrator | done | 2026-08-21 | 2026-08-21 |
+**`frozen` is not `done`.** Wave 0 froze every public signature with a `todo!()`
+body. A crate whose interface is frozen but whose bodies are unimplemented is
+`free`, not `done` — recording it as done cost real work: the `vaco-opts` agent
+found `vaco-core`'s `Rational` methods still unimplemented and had to reimplement
+`Dict`, `escape` and `parse` locally to make progress.
+
+| Crate | Layer | Issue | Owner | Status | Started | Finished | Note |
+|---|---|---|---|---|---|---|---|
+| vaco-core | 0 | — | agent:core | assigned | 2026-08-21 | | frozen in P0-03; bodies outstanding |
 | vaco-limits | 0 | — | agent:bitstream | assigned | 2026-08-21 | |
-| vaco-simd | 0 | #90 | agent:simd | assigned | 2026-08-21 | |
-| vaco-opts | 0 | — | agent:opts | assigned | 2026-08-21 | |
-| vaco-opts-derive | 0 | — | agent:opts | assigned | 2026-08-21 | |
+| vaco-simd | 0 | #90 | agent:simd | done | 2026-08-21 | 2026-08-21 | x86 re-run outstanding |
+| vaco-opts | 0 | — | agent:opts | done | 2026-08-21 | 2026-08-21 | |
+| vaco-opts-derive | 0 | — | agent:opts | done | 2026-08-21 | 2026-08-21 | |
 | vaco-expr | 0 | — | — | free | | |
 | vaco-bitstream | 0 | — | agent:bitstream | assigned | 2026-08-21 | |
 | vaco-pixfmt | 1 | — | agent:pixfmt | done | 2026-08-21 | 2026-08-21 |
@@ -31,12 +37,12 @@ Status: `free` · `assigned` · `in-review` · `done`
 | vaco-tx | 3 | — | — | free | | |
 | vaco-scale | 3 | — | — | free | | |
 | vaco-resample | 3 | — | — | free | | |
-| vaco-codec-core | 3 | #4 | orchestrator | done | 2026-08-21 | 2026-08-21 |
+| vaco-codec-core | 3 | — | — | free | | | frozen only |
 | vaco-codec-golomb | 3 | — | — | free | | |
 | vaco-codec-cabac | 3 | — | — | free | | |
 | vaco-codec-cbs | 3 | — | — | free | | |
 | vaco-codec-dsp-idct | 3 | — | — | free | | |
-| vaco-format-core | 4 | #4 | orchestrator | done | 2026-08-21 | 2026-08-21 |
+| vaco-format-core | 4 | — | — | free | | | frozen only |
 | vaco-format-riff | 4 | — | — | free | | |
 | vaco-format-isom | 4 | — | — | free | | |
 | vaco-format-mpegts-tables | 4 | — | — | free | | |
@@ -50,7 +56,7 @@ Status: `free` · `assigned` · `in-review` · `done`
 | vaco-demux-mp4 | 4 | — | — | free | | |
 | vaco-demux-matroska | 4 | — | — | free | | |
 | vaco-demux-mpegts | 4 | — | — | free | | |
-| vaco-filter-core | 5 | #4 | orchestrator | done | 2026-08-21 | 2026-08-21 |
+| vaco-filter-core | 5 | — | — | free | | | frozen only |
 | vaco-filter-framesync | 5 | — | — | free | | |
 | vaco-filter-graph | 5 | — | — | free | | |
 | vaco-registry | 6 | — | — | free | | |
