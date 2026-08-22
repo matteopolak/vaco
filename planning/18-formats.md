@@ -3409,3 +3409,45 @@ semantics, and `start_time` being first-pts-plus-`initial_padding`). That is the
 second independent confirmation that a `Demuxer` owning its own I/O beats plan
 18 §1.2's `DemuxCtx`: a callback-driven demuxer could not express "the scan
 stopped; validate these `SeekHead` positions and try again".
+
+
+## Amendment — the composition gap: `Discovery` is never run (2026-08-22)
+
+Traced from a fidelity bug, and worth more than the bug. Every `Discovery::new`
+in the workspace is in a test file, an example, or `discovery.rs`'s own unit
+tests. **No production path wraps a demuxer in the stream-discovery pass**, and
+`vaco-probe` reads `.streams()` straight off the bare `Box<dyn Demuxer>` that
+`DemuxerDesc::open` returns.
+
+So everything that pass computes is dead code today: `probesize` and
+`analyzeduration`, refined codec parameters, `start_time`, duration estimation,
+frame-rate estimation. A `start_time` fix landed in `Discovery::finish` and
+changed nothing observable, because nothing calls it.
+
+### The shape of the gap
+
+The traits are fine. `DemuxerDesc::open` hands back a bare `Box<dyn Demuxer>`
+and **nothing in the design says who wraps it**. A trait cannot enforce
+composition; a documented opener can, and the plans never named one.
+
+`vaco-demux-matroska`'s author declined to set `start_time` in the demuxer, for
+a reason that generalises: `Discovery::finish` guards on `if
+stream.start_time.is_none()`, so a demuxer that fills the field **disables the
+shared rule** for every caller that does run discovery, and the two then diverge
+with nothing to catch it. In their words — today the value is visibly absent,
+then it would be quietly wrong. A guard of that shape turns "helpfully filling a
+field in" into a silent override, which is a hazard worth watching for wherever
+a shared pass has one.
+
+### Consequences
+
+1. **`vaco-probe`'s `open` composes `Discovery`.** That is the composition point,
+   and it is also where `probesize`/`analyzeduration` belong.
+2. **`DemuxerDesc` needs a `flags` field.** `Discovery::new` takes `FormatFlags`
+   and the descriptor does not carry them, so an opener can reach a demuxer's
+   flags only by naming each crate's public `FLAGS` const — which defeats the
+   registry. Deferred to a wave boundary because adding a struct field breaks
+   every in-flight `DemuxerDesc` literal.
+3. **Demuxers must not compensate locally** for anything discovery computes. If a
+   value looks wrong, report it rather than patching it in the container — the
+   patch will be invisible to every other container with the same problem.
