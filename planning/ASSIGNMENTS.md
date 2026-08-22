@@ -16,13 +16,13 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 
 | Crate | Layer | Issue | Owner | Status | Started | Finished | Note |
 |---|---|---|---|---|---|---|---|
-| vaco-core | 0 | — | agent:core | assigned | 2026-08-21 | | frozen in P0-03; bodies outstanding |
-| vaco-limits | 0 | — | agent:bitstream | assigned | 2026-08-21 | |
+| vaco-core | 0 | — | agent:core | done | 2026-08-21 | 2026-08-21 | tables unvalidated pending reference binary |
+| vaco-limits | 0 | — | agent:bitstream | done | 2026-08-21 | 2026-08-21 | |
 | vaco-simd | 0 | #90 | agent:simd | done | 2026-08-21 | 2026-08-21 | x86 re-run outstanding |
 | vaco-opts | 0 | — | agent:opts | done | 2026-08-21 | 2026-08-21 | |
 | vaco-opts-derive | 0 | — | agent:opts | done | 2026-08-21 | 2026-08-21 | |
 | vaco-expr | 0 | — | — | free | | |
-| vaco-bitstream | 0 | — | agent:bitstream | assigned | 2026-08-21 | |
+| vaco-bitstream | 0 | — | agent:bitstream | done | 2026-08-21 | 2026-08-21 | |
 | vaco-pixfmt | 1 | — | agent:pixfmt | done | 2026-08-21 | 2026-08-21 |
 | vaco-sampfmt | 1 | — | — | free | | |
 | vaco-chlayout | 1 | — | — | free | | |

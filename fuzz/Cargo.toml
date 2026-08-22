@@ -25,12 +25,14 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
 vaco-bitstream = { path = "../crates/core/vaco-bitstream" }
+vaco-core = { path = "../crates/core/vaco-core" }
 vaco-limits = { path = "../crates/core/vaco-limits" }
 
 [features]
-default = ["bitstream", "limits"]
+default = ["bitstream", "limits", "core"]
 bitstream = []
 limits = []
+core = []
 
 # Overflow checks ON in the profile the fuzzer actually runs, so arithmetic
 # overflow is a finding rather than a silent wrap (plan 13 §2.2.1). The shipped
@@ -92,3 +94,47 @@ path = "fuzz_targets/limit_budget.rs"
 test = false
 doc = false
 required-features = ["limits"]
+
+# --- vaco-core: the user-facing CLI grammars. Each parser is reachable from an
+# --- untrusted command line, so each gets a target (D6).
+[[bin]]
+name = "core_parse_duration"
+path = "fuzz_targets/core_parse_duration.rs"
+test = false
+doc = false
+required-features = ["core"]
+
+[[bin]]
+name = "core_parse_color"
+path = "fuzz_targets/core_parse_color.rs"
+test = false
+doc = false
+required-features = ["core"]
+
+[[bin]]
+name = "core_parse_geometry"
+path = "fuzz_targets/core_parse_geometry.rs"
+test = false
+doc = false
+required-features = ["core"]
+
+[[bin]]
+name = "core_dict_parse"
+path = "fuzz_targets/core_dict_parse.rs"
+test = false
+doc = false
+required-features = ["core"]
+
+[[bin]]
+name = "core_escape_roundtrip"
+path = "fuzz_targets/core_escape_roundtrip.rs"
+test = false
+doc = false
+required-features = ["core"]
+
+[[bin]]
+name = "core_rational"
+path = "fuzz_targets/core_rational.rs"
+test = false
+doc = false
+required-features = ["core"]

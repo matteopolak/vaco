@@ -228,6 +228,7 @@ dependencies = [
  "arbitrary",
  "libfuzzer-sys",
  "vaco-bitstream",
+ "vaco-core",
  "vaco-limits",
 ]
 

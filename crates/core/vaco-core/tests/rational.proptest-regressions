@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 5d7ceae58a6201374a78d5ec055b125be398dc9ae06a5d23cc35b7734b268504 # shrinks to v = -926061.000150753, max_den = 6634
+cc 39a97b6f8158bbba65a060bd73d921955d40c93fc883e0cd86456b6af196ef3d # shrinks to a = Rational { num: 0, den: -1 }, b = Rational { num: -2147483648, den: -2147483648 }
