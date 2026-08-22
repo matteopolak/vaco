@@ -2311,3 +2311,46 @@ So, for anything on a hot path:
    *present*.
 4. **Report the ratio, not the verdict.** "1.76x" survives a different machine;
    "faster" does not.
+
+## Amendment — PF-0.2: a missing niche multiplies (2026-08-22)
+
+`ChannelLayout` reached 256 bytes and tripped `clippy::large_enum_variant` on
+`FrameData` three crates away, because it is embedded by value in every audio
+frame. Shrinking it to 40 took two independent changes, and the smaller-looking
+one mattered more than expected:
+
+| | before | after |
+|---|---|---|
+| `Label` | 16 | 16 |
+| `Option<Label>` | **17** | **16** |
+| `ChannelEntry` | 28 | 24 |
+| `ChannelOrder` | 240 | 24 |
+| `ChannelLayout` | 256 | 40 |
+
+`Label`'s length was a plain `u8`, so `Option<Label>` had no niche and paid a
+whole extra byte — which padding then rounded up to four. A `Label` is never
+empty, so `NonZeroU8` is not a trick but the semantically exact type, and it
+makes the `Option` free. **The saving multiplies by the container's capacity**,
+which is what made it worth as much as the container change itself.
+
+The container went from `SmallVec<[ChannelEntry; 8]>` to `Box<[ChannelEntry]>`.
+Inline storage was sized for the rare case at the expense of the common one:
+`Native(mask)` and `Unspecified` carry no map at all, and an empty boxed slice
+does not allocate, so only a genuinely custom layout reaches the allocator — and
+those are already off the hot path.
+
+An unplanned confirmation that the size was real: the `chlayout_parse` fuzz
+target went from 1.6 M to 4.4 M execs in the same 180 s wall clock. 2.7x the
+throughput, from nothing but the smaller layout.
+
+### The rules
+
+1. **Check whether `Option<T>` costs anything.** If `T` has no niche, every
+   optional field pays a byte plus padding, multiplied by however many of them a
+   container holds. Reach for `NonZero*` where the semantics genuinely exclude
+   zero — not as a trick, but because it is the accurate type.
+2. **Size inline storage for the common case, not the representable one.** A
+   `SmallVec` capacity chosen to cover the worst input taxes every value.
+3. **Assert the size in a test**, naming the cause, the symptom and where the
+   trade-off is written down. A size regression surfaces as a lint in a
+   different crate, which is a terrible place to learn about it.
