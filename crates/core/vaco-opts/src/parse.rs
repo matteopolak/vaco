@@ -8,8 +8,8 @@
 //! are distinct option types with distinct grammars. That is an option-system
 //! concern with no meaning in `vaco-core`.
 
-pub use vaco_core::parse::*;
 use vaco_core::Rational;
+pub use vaco_core::parse::*;
 
 /// A newtype over [`Rational`] rather than a bare `Rational`, because
 /// `OptBase::Rational` and `OptBase::VideoRate` are different option types with
