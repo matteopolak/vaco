@@ -10,6 +10,11 @@ authors.workspace = true
 
 [dependencies]
 vaco-core = { path = "../../core/vaco-core" }
+bitflags.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+proptest.workspace = true
 
 [lints]
 workspace = true

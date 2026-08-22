@@ -1,0 +1,31 @@
+---
+source: crates/app/vaco-textformat/tests/snapshots.rs
+expression: "render(\"flat\", FormatOpts :: default())"
+---
+streams.stream.0.index=0
+streams.stream.0.codec_name="aac"
+streams.stream.0.sample_rate="44100"
+streams.stream.0.channels=1
+streams.stream.0.start_time="0.000000"
+streams.stream.0.bit_rate="70303"
+streams.stream.0.max_bit_rate="N/A"
+streams.stream.0.disposition.default=1
+streams.stream.0.tags.language="und"
+streams.stream.0.tags.WE_IRD_KEY_1="v=1,c:2|q\"3\\4;e[f]#g <&> ünï"
+streams.stream.0.side_data_list.side_data.0.side_data_type="Skip Samples"
+streams.stream.0.side_data_list.side_data.0.skip_samples=1024
+streams.stream.1.index=1
+streams.stream.1.codec_name="aac"
+streams.stream.1.sample_rate="44100"
+streams.stream.1.channels=1
+streams.stream.1.start_time="0.000000"
+streams.stream.1.bit_rate="70303"
+streams.stream.1.max_bit_rate="N/A"
+streams.stream.1.disposition.default=1
+streams.stream.1.tags.language="und"
+streams.stream.1.tags.WE_IRD_KEY_1="v=1,c:2|q\"3\\4;e[f]#g <&> ünï"
+streams.stream.1.side_data_list.side_data.0.side_data_type="Skip Samples"
+streams.stream.1.side_data_list.side_data.0.skip_samples=1024
+format.filename="t.mkv"
+format.size="10028"
+format.tags.title="hello"

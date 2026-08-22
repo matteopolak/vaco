@@ -1,0 +1,53 @@
+---
+source: crates/app/vaco-textformat/tests/snapshots.rs
+expression: "render(\"ini=h=0\", FormatOpts :: default())"
+---
+# ffprobe output
+
+
+[stream.0]
+index=0
+codec_name=aac
+sample_rate=44100
+channels=1
+start_time=0.000000
+bit_rate=70303
+max_bit_rate=N/A
+
+[stream.0.disposition]
+default=1
+
+[stream.0.tags]
+language=und
+WE-IRD_KEY.1=v\=1,c\:2|q"3\\4;e[f]\#g <&> ünï
+
+[stream.0.side_data.0]
+side_data_type=Skip Samples
+skip_samples=1024
+
+[stream.1]
+index=1
+codec_name=aac
+sample_rate=44100
+channels=1
+start_time=0.000000
+bit_rate=70303
+max_bit_rate=N/A
+
+[stream.1.disposition]
+default=1
+
+[stream.1.tags]
+language=und
+WE-IRD_KEY.1=v\=1,c\:2|q"3\\4;e[f]\#g <&> ünï
+
+[stream.1.side_data.0]
+side_data_type=Skip Samples
+skip_samples=1024
+
+[format]
+filename=t.mkv
+size=10028
+
+[format.tags]
+title=hello

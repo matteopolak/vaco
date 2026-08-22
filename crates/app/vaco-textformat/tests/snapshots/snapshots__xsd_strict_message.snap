@@ -1,0 +1,6 @@
+---
+source: crates/app/vaco-textformat/tests/snapshots.rs
+expression: err.to_string()
+---
+option `unit`: XSD-compliant output selected but option 'unit' was selected, XML output may be non-compliant.
+You need to disable such option with '-nounit'

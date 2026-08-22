@@ -1,0 +1,41 @@
+---
+source: crates/app/vaco-textformat/tests/snapshots.rs
+expression: "render(\"default=nk=1\", FormatOpts :: default())"
+---
+[STREAM]
+0
+aac
+44100
+1
+0.000000
+70303
+N/A
+1
+und
+v=1,c:2|q"3\4;e[f]#g <&> ünï
+[SIDE_DATA]
+Skip Samples
+1024
+[/SIDE_DATA]
+[/STREAM]
+[STREAM]
+1
+aac
+44100
+1
+0.000000
+70303
+N/A
+1
+und
+v=1,c:2|q"3\4;e[f]#g <&> ünï
+[SIDE_DATA]
+Skip Samples
+1024
+[/SIDE_DATA]
+[/STREAM]
+[FORMAT]
+t.mkv
+10028
+hello
+[/FORMAT]

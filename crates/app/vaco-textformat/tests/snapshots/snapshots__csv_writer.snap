@@ -1,0 +1,7 @@
+---
+source: crates/app/vaco-textformat/tests/snapshots.rs
+expression: "render(\"csv\", FormatOpts :: default())"
+---
+stream,0,aac,44100,1,0.000000,70303,N/A,1,und,"v=1,c:2|q""3\4;e[f]#g <&> ünï",Skip Samples,1024
+stream,1,aac,44100,1,0.000000,70303,N/A,1,und,"v=1,c:2|q""3\4;e[f]#g <&> ünï",Skip Samples,1024
+format,t.mkv,10028,hello

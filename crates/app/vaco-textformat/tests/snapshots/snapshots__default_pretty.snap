@@ -1,0 +1,41 @@
+---
+source: crates/app/vaco-textformat/tests/snapshots.rs
+expression: "render(\"default\", FormatOpts::pretty())"
+---
+[STREAM]
+index=0
+codec_name=aac
+sample_rate=44100
+channels=1
+start_time=0:00:00.000000
+bit_rate=70.303000 Kbit/s
+max_bit_rate=N/A
+DISPOSITION:default=1
+TAG:language=und
+TAG:WE-IRD_KEY.1=v=1,c:2|q"3\4;e[f]#g <&> ünï
+[SIDE_DATA]
+side_data_type=Skip Samples
+skip_samples=1024
+[/SIDE_DATA]
+[/STREAM]
+[STREAM]
+index=1
+codec_name=aac
+sample_rate=44100
+channels=1
+start_time=0:00:00.000000
+bit_rate=70.303000 Kbit/s
+max_bit_rate=N/A
+DISPOSITION:default=1
+TAG:language=und
+TAG:WE-IRD_KEY.1=v=1,c:2|q"3\4;e[f]#g <&> ünï
+[SIDE_DATA]
+side_data_type=Skip Samples
+skip_samples=1024
+[/SIDE_DATA]
+[/STREAM]
+[FORMAT]
+filename=t.mkv
+size=10.028000 Kbyte
+TAG:title=hello
+[/FORMAT]

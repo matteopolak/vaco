@@ -1,0 +1,7 @@
+---
+source: crates/app/vaco-textformat/tests/snapshots.rs
+expression: "render(\"compact=p=0\", FormatOpts :: default())"
+---
+index=0|codec_name=aac|sample_rate=44100|channels=1|start_time=0.000000|bit_rate=70303|max_bit_rate=N/A|disposition:default=1|tag:language=und|tag:WE-IRD_KEY.1=v=1,c:2\|q"3\\4;e[f]#g <&> ünï|side_datum/skip_samples:side_data_type=Skip Samples|side_datum/skip_samples:skip_samples=1024
+index=1|codec_name=aac|sample_rate=44100|channels=1|start_time=0.000000|bit_rate=70303|max_bit_rate=N/A|disposition:default=1|tag:language=und|tag:WE-IRD_KEY.1=v=1,c:2\|q"3\\4;e[f]#g <&> ünï|side_datum/skip_samples:side_data_type=Skip Samples|side_datum/skip_samples:skip_samples=1024
+filename=t.mkv|size=10028|tag:title=hello

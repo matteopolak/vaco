@@ -59,6 +59,18 @@ Before finishing: rm -rf /tmp/vaco-<crate>-xxxx   (your dir only, by literal nam
 never a glob — another agent is using one of those).
 ```
 
+**Fuzzing needs `+nightly` explicitly.** `rust-toolchain.toml` pins **stable** (D12
+removed the only mandatory reason for nightly), but `cargo fuzz` requires
+`-Zsanitizer=address`, which is nightly-only. So write:
+
+```
+cargo +nightly fuzz run <target> --features <feature> -- -max_total_time=30
+```
+
+Without `+nightly` it fails with a sanitizer error that reads like a broken
+toolchain. `just fuzz <target>` already does this for you. Fuzzing is a test-time
+tool; it does not affect the stable release toolchain.
+
 **Run no git commands.** Not `add`, not `commit`, not `checkout`, not `stash`,
 and never `add -A`. In a shared working tree those destroy other agents' work.
 

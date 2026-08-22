@@ -2033,3 +2033,68 @@ Per the repository standard, each of these lands with the code, and `docs/README
 `docs/vaco/stream-selection.md`, `docs/vaco/timestamps-and-sync.md`, `docs/vaco/filtergraphs.md`,
 `docs/vaco/progress-and-exit-codes.md`, `docs/sched/architecture.md`, `docs/sched/sync-queues.md`,
 `docs/play/architecture.md`, `docs/play/sync-model.md`, `docs/play/bindings.md`.
+
+---
+
+## Corrections from implementation (vaco-textformat, 2026-08-22)
+
+Established by capturing 120 real `ffprobe` 8.1 outputs across six scenarios and
+twenty writer/option specs, replaying them through the API, and comparing byte for
+byte. All 120 match. Where this document and the binary disagreed, the binary won.
+
+**§4.3's `ini` rule is wrong.** It says a blank line precedes every section
+header. The real behaviour is two rules: a `[path]` header gets a blank line
+before it *unless the previous line written was also a header*; and a section that
+produced no output writes one blank line when it closes. The document generalised
+from a single `od -c` capture that happened to be the second case.
+
+**§4.4's sexagesimal negatives are wrong.** It says negatives take a leading `-`.
+They do not: −0.02322 s prints `0:00:-0.023220`, the sign landing on the seconds
+component, out of truncating division plus `%09.6f`. We reproduce it.
+
+**§4.3's `xsd_strict` refusal set is wrong.** It refuses `unit` and `prefix` only;
+`-byte_binary_prefix` and `-sexagesimal` are accepted.
+
+**§4.1's compact type sanitisation is wrong.** Per character, not per run — the
+document's own `h_26_45__user_data` example proves it, since `] ` becomes two
+underscores.
+
+**Research §3.3's `string_validation_replacement` default is wrong.** It says empty
+string; 8.1 substitutes U+FFFD when the option is untouched. `svr=` explicitly
+does delete.
+
+**§4.5 on empty arrays is wrong, and the real cause is more interesting.**
+`"programs": []` appears under `auto`, not only under `always`. The cause is the
+entry filter: `-show_entries` matches **local** names as well as unique ones, and
+`stream` is also the local name of `program_stream` and `stream_group_stream`, so
+those root arrays get opened.
+
+**§4.1 claims `default_style` is underivable. It is derivable** — not from the
+section's own flags, but from its parent's: a section gets a header iff its parent
+is the root or an array. `compact` differs on exactly one point, inlining every
+variable-field section.
+
+**The escaping tables were incomplete.** `compact e=c` also escapes `\b` and `\f`
+and does *not* escape tab or VT; `flat` also escapes `\n`/`\r`; `ini` and `json`
+escape remaining C0 as `\x00NN` / `\u00NN`. `xml` is the only writer where
+`sv`/`svr` does anything.
+
+**Confirmed as documented:** JSON number-versus-string is per-field (and so is
+`flat`); `-byte_binary_prefix` is a no-op in 8.1; unit/prefix prints integers bare
+otherwise six decimals — except `Unit::Second`, which never collapses (4000 s is
+`4.000000 Ks` while 1000 bytes is `1 Kbyte`). `<stream >` with a trailing space is
+real, and refined: attribute-capable sections open `<name ` and close `/>` or `>`;
+arrays and variable-field sections open `<name>` with no space and never
+self-close.
+
+### Interface deviations, for review
+- `section_footer` takes an extra `produced: bool` — the `ini` blank-line rule
+  cannot be implemented without it, and only the façade knows.
+- `TextFormat::new` drops the `schema` parameter (there is one static schema).
+- `DefaultStyle` gained `Transparent` for the root and arrays.
+
+### Outstanding
+`element_name` is unverified for six sections — the `stream_group` component
+family and the frame-side-data component family. Nothing reachable through `lavfi`
+produces an IAMF stream group, and `-show_frames` is v0.2 (D14.4). They carry
+placeholders, are marked in `sections.rs`, and affect only `xml` and `compact`.
