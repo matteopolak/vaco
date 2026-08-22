@@ -341,6 +341,41 @@ pub trait Demuxer: Send {
     }
 }
 
+/// So a boxed demuxer is itself a [`Demuxer`].
+///
+/// `DemuxerDesc::open` returns a trait object and [`Discovery::new`] takes
+/// `D: Demuxer` by value, so without this there is no way to compose the two —
+/// which is exactly what `vaco-probe` hit, and worked around with a
+/// hand-written seven-method newtype.
+///
+/// `vaco-codec-core` has had the equivalent `impl Parser for Box<P>` since the
+/// wave before, and `Discovery::refine` depends on it. The absence here was an
+/// inconsistency between sibling trait layers rather than a deliberate
+/// restriction.
+impl<D: Demuxer + ?Sized> Demuxer for Box<D> {
+    fn streams(&self) -> &[Stream] {
+        (**self).streams()
+    }
+    fn programs(&self) -> &[Program] {
+        (**self).programs()
+    }
+    fn chapters(&self) -> &[Chapter] {
+        (**self).chapters()
+    }
+    fn metadata(&self) -> &[(String, String)] {
+        (**self).metadata()
+    }
+    fn read_packet(&mut self) -> Result<Packet> {
+        (**self).read_packet()
+    }
+    fn seek(&mut self, target: SeekTarget, flags: SeekFlags) -> Result<()> {
+        (**self).seek(target, flags)
+    }
+    fn duration(&self) -> Option<Duration> {
+        (**self).duration()
+    }
+}
+
 /// Write packets into a container.
 pub trait Muxer: Send {
     /// Declare a stream. All streams must be added before [`Muxer::write_header`].

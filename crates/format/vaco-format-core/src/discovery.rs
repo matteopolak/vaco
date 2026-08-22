@@ -433,12 +433,27 @@ impl<D: Demuxer> Discovery<D> {
         self.report.duration_inputs.container = self.inner.duration();
         self.report.duration_inputs.longest_stream =
             self.streams.iter().filter_map(|s| s.duration).max();
-        self.report.duration_inputs.from_pts = self
-            .streams
-            .iter()
-            .zip(self.state.iter())
-            .filter_map(|(s, st)| st.last_end.to_duration(s.time_base))
-            .max();
+        // `from_pts` is DELIBERATELY left unset. It is documented as
+        // "`max(pts + duration)` over streams, **from a tail scan**", and
+        // `estimate_duration` prefers it over the container's own field — but
+        // discovery reads a *prefix*, so filling it from `last_end` reports the
+        // length of the probe window instead of the file.
+        //
+        // Measured, five containers each tracking its own window:
+        //
+        //   av.mp4      ref 2.000000   from the probe window 0.200000
+        //   op_st.webm  ref 2.008000                         0.034000
+        //   ts.ts       ref 1.000000                         0.900000
+        //   a.m4a       ref 1.000000                         0.046440
+        //   fhd.mp4     ref 1.000000                         0.120000
+        //
+        // Found independently by `vaco-probe` (which broke every container's
+        // duration the moment discovery was actually composed) and by
+        // `vaco-demux-mpegts` (which reported that a 10-second file with a
+        // 5-second analyzeduration reports ~5 s). Two reports, one cause.
+        //
+        // A tail-scanning caller may set it; this pass must not.
+        self.report.duration_inputs.from_pts = None;
     }
 }
 

@@ -127,7 +127,8 @@ and never `add -A`. In a shared working tree those destroy other agents' work.
    crash also leaves a file in `fuzz/artifacts/<target>/`; check both, and say
    `exit=0 execs=#11822410` so a target that never ran cannot pass as clean.
 
-   **`slow-unit-…` and `oom-…` artifacts exit 0.** An exit-code check alone
+   **`slow-unit-…` and `oom-…` artifacts exit 0** — an exit-code-only check
+   passes on both. An exit-code check alone
    calls those clean, so `find fuzz/artifacts -type f` must be empty too. A slow
    unit means some input costs far more than its size implies — a real
    denial-of-service finding for anything reading untrusted media. Diagnose it,

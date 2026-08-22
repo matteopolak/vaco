@@ -647,7 +647,9 @@ this:
 1. **`find fuzz/artifacts -type f` must be empty afterwards.** An artifact on
    disk is a finding, whatever the log says. Check it in CI, not just by eye.
 
-   **Not every artifact is a crash, and the others exit 0.** libFuzzer also
+   **Not every artifact is a crash, and the others exit 0.** An exit-code-only
+   check passes on a `slow-unit-` and on an `oom-` alike; three agents have now
+   had one sitting in the tree while their run reported success. libFuzzer also
    writes `slow-unit-…` (an input far over the time budget) and `oom-…`, and the
    run *succeeds* — so an exit-code check alone reports it clean and the file is
    the only evidence. That is this section's own failure mode wearing a
