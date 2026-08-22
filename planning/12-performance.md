@@ -2354,3 +2354,56 @@ throughput, from nothing but the smaller layout.
 3. **Assert the size in a test**, naming the cause, the symptom and where the
    trade-off is written down. A size regression surfaces as a lint in a
    different crate, which is a terrible place to learn about it.
+
+## Amendment — PF-0.3: "use four accumulators" is not a rule, lane width is (2026-08-22)
+
+PF-0.0 recorded that splitting a dot product across four accumulators beats one.
+`vaco-resample` measured the opposite on its polyphase kernel, and the
+explanation generalises further than either result.
+
+Re-measured independently (Apple M5, divan; the machine was loaded, so the
+robust column is the ratio, not the absolute):
+
+| f32 dot, taps | naive | acc4 | acc8 |
+|---|---|---|---|
+| 32 | 12.5 ns | 13.3 ns | **2.3 ns** |
+| 50 | 21.6 ns | 10.6 ns | **3.9 ns** |
+| 256 | 176.7 ns | 55.3 ns | **16.9 ns** |
+
+**`acc8` wins decisively everywhere — 5–10× over naive.** That part is
+unambiguous across every size and both the fastest and median columns. `acc4` is
+the interesting one: it is *at best* no better than a plain reduction and
+sometimes worse (1.56× slower than naive at 32 taps on fastest-sample; under
+load at 50 taps I could not separate them cleanly, where the agent measured
+1.55–1.68× slower).
+
+### Why, and what the real rule is
+
+Four `f32` lanes is exactly one NEON register. Writing `as_chunks::<4>()` and
+summing four accumulators does not *add* parallelism — it **replaces** the
+unrolling LLVM already performs on a plain reduction, and caps it at one
+register's worth. Eight lanes gives the compiler two registers to interleave and
+it wins by a lot.
+
+So PF-0.0's advice was never about the number four. Restated:
+
+> **Accumulator splitting must exceed the target's vector width, not match it.**
+> Matching it substitutes your hand-unrolling for the compiler's, which is a
+> downgrade. On a 128-bit target, 4×`f32` is the width — split by 8.
+
+Note this is target-dependent in a way the original rule hid. The same code on a
+256-bit target would want 8 to be the *floor*, not the answer.
+
+### The third time
+
+This is the third confident performance assumption on this project to measure
+backwards, after PF-0.1 (branchless CABAC, 1.76× slower than the spec's literal
+shape) and D12's widening-MAC gap (assumed ~6×, measured 0.79×). `vaco-scale`
+added two more in the same wave: clamping intermediates between passes made
+fidelity *worse*, and special-casing a one-tap filter bank as a gather was worth
+2.2× because chroma replication makes the degenerate case the common one.
+
+The pattern is consistent enough to state plainly: **on this project, an
+optimisation believed in but not measured has been wrong more often than right.**
+Write the obvious version, benchmark alternatives side by side in one file, and
+report ratios.
