@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push: { branches: [main] }
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # sccache: the wrapper is configured in .cargo/config.toml, so every job needs
+  # the binary present or every build fails.
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: "true"
+
+jobs:
+  # Fast gates first: they are cheap and catch most mistakes, and PR feedback has
+  # a 15-minute budget (plan 13 §5).
+  policy:
+    name: policy gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - run: cargo fmt --all -- --check
+      # D10 Gate 1 — checked against the resolved BUILD GRAPH, not Cargo.lock,
+      # which lists optional deps whether or not they are enabled (plan 19 §11).
+      - run: cargo xtask dep-gate
+      # D2/D13 — `unsafe` only in vaco-hw-*, and no crate silently stops
+      # inheriting forbid(unsafe_code).
+      - run: cargo xtask unsafe-audit
+      # The crate graph stays acyclic and downward (D14.1).
+      - run: cargo xtask layer-check
+      # Generated files are current.
+      - run: cargo xtask gen-registry --check
+      - run: cargo xtask gen-docs-index --check
+
+  licence:
+    name: licence and advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with: { command: check licenses bans sources }
+      # D9: cargo-deny alone is NOT sufficient — crates.io metadata lies (the
+      # x264 and x265 crates declare MIT while linking GPL). The dep-gate job
+      # above is the structural defence; this catches the rest.
+      - uses: rustsec/audit-check@v2
+        with: { token: "${{ secrets.GITHUB_TOKEN }}" }
+
+  build:
+    name: build and test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked --no-fail-fast
+
+  features:
+    name: feature-gate consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      # A crate that only compiles when some unrelated feature happens to be on
+      # is a latent breakage; both extremes must build.
+      - run: cargo check --workspace --no-default-features --locked
+      - run: cargo check --workspace --all-features --locked
