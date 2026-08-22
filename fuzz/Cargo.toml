@@ -27,12 +27,20 @@ arbitrary = { version = "1", features = ["derive"] }
 vaco-bitstream = { path = "../crates/core/vaco-bitstream" }
 vaco-core = { path = "../crates/core/vaco-core" }
 vaco-limits = { path = "../crates/core/vaco-limits" }
+vaco-codec-core = { path = "../crates/signal/vaco-codec-core" }
+vaco-conformance = { path = "../crates/tool/vaco-conformance" }
+vaco-io = { path = "../crates/io/vaco-io" }
+vaco-protocol-core = { path = "../crates/io/vaco-protocol-core" }
 
 [features]
-default = ["bitstream", "limits", "core"]
+default = ["bitstream", "limits", "core", "io", "protocol-core", "codec-core"]
 bitstream = []
 limits = []
 core = []
+codec-core = []
+conformance = []
+io = []
+protocol-core = []
 
 # Overflow checks ON in the profile the fuzzer actually runs, so arithmetic
 # overflow is a finding rather than a silent wrap (plan 13 §2.2.1). The shipped
@@ -138,3 +146,65 @@ path = "fuzz_targets/core_rational.rs"
 test = false
 doc = false
 required-features = ["core"]
+
+# --- vaco-io / vaco-protocol-core: both take input an attacker chooses. A URL
+# --- arrives from a playlist; a byte stream arrives from anywhere at all.
+
+[[bin]]
+name = "io_url_split"
+path = "fuzz_targets/io_url_split.rs"
+test = false
+doc = false
+required-features = ["protocol-core"]
+
+[[bin]]
+name = "io_buffered_reader"
+path = "fuzz_targets/io_buffered_reader.rs"
+test = false
+doc = false
+required-features = ["io"]
+
+# --- vaco-conformance: two hand-written parsers. The TOML reader backs the
+# --- manifests and the divergence register; the reference-output parsers
+# --- consume another process's stdout. Neither may panic (D6).
+[[bin]]
+name = "conformance_toml"
+path = "fuzz_targets/conformance_toml.rs"
+test = false
+doc = false
+required-features = ["conformance"]
+
+[[bin]]
+name = "conformance_ref_output"
+path = "fuzz_targets/conformance_ref_output.rs"
+test = false
+doc = false
+required-features = ["conformance"]
+
+# ------------------------------------------------------------ vaco-codec-core
+#
+# The untrusted input here is the *call sequence*, not a byte stream: the
+# send/receive machine and the parser harness are what every codec and every
+# parser in the project runs through, so a hang or a lost frame in either is a
+# hang or a lost frame everywhere.
+
+[[bin]]
+name = "codec_send_receive"
+path = "fuzz_targets/codec_send_receive.rs"
+test = false
+doc = false
+required-features = ["codec-core"]
+
+[[bin]]
+name = "codec_parser_driver"
+path = "fuzz_targets/codec_parser_driver.rs"
+test = false
+doc = false
+required-features = ["codec-core"]
+
+[[bin]]
+name = "codec_picture_bands"
+path = "fuzz_targets/codec_picture_bands.rs"
+test = false
+doc = false
+required-features = ["codec-core"]

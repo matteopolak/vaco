@@ -1,0 +1,246 @@
+//! The `Protocol` trait and its descriptor.
+
+use vaco_io::{MediaSink, MediaSource};
+use vaco_opts::{Dict, Schema};
+
+use crate::{ProtocolEnv, ProtocolError, Result, Url};
+
+/// What an open is for.
+///
+/// Deliberately a struct of named booleans rather than a bitflag set: every
+/// call site reads `IoFlags::read()` rather than a bit-or of constants, and a
+/// flag that is not set cannot be confused with one that does not exist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "an open mode is a set of independent booleans"
+)]
+pub struct IoFlags {
+    /// Open for reading.
+    pub read: bool,
+    /// Open for writing.
+    pub write: bool,
+    /// Append rather than truncate an existing file.
+    pub append: bool,
+    /// `-avioflags direct`: no buffering.
+    pub direct: bool,
+    /// `-listen 1`: bind and accept rather than connect.
+    pub listen: bool,
+}
+
+impl IoFlags {
+    /// Read-only.
+    pub const READ: Self = Self {
+        read: true,
+        write: false,
+        append: false,
+        direct: false,
+        listen: false,
+    };
+    /// Write-only, truncating.
+    pub const WRITE: Self = Self {
+        read: false,
+        write: true,
+        append: false,
+        direct: false,
+        listen: false,
+    };
+    /// Read and write.
+    pub const READ_WRITE: Self = Self {
+        read: true,
+        write: true,
+        append: false,
+        direct: false,
+        listen: false,
+    };
+}
+
+/// Static facts about a protocol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent capability facts"
+)]
+pub struct ProtocolFlags {
+    /// Touches the network. Used by `-protocol_whitelist` presets and by the
+    /// `nonetwork` build.
+    pub network: bool,
+    /// Opens further URLs, so its `default_whitelist` is meaningful.
+    pub nested_scheme: bool,
+    /// Implements `accept`.
+    pub server_capable: bool,
+}
+
+impl ProtocolFlags {
+    /// A local transport that opens nothing else: `file`, `pipe`, `data`.
+    pub const LOCAL: Self = Self {
+        network: false,
+        nested_scheme: false,
+        server_capable: false,
+    };
+    /// A network transport that opens nothing else: `tcp`, `udp`.
+    pub const NETWORK: Self = Self {
+        network: true,
+        nested_scheme: false,
+        server_capable: false,
+    };
+}
+
+/// Whether a URL can be read, written, or both. The `check` result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Access {
+    /// Readable.
+    pub read: bool,
+    /// Writable.
+    pub write: bool,
+}
+
+/// What kind of thing a directory listing found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EntryKind {
+    /// A regular file.
+    File,
+    /// A directory.
+    Directory,
+    /// A symbolic link. Never followed by a listing.
+    Symlink,
+    /// Anything else the platform reports.
+    Other,
+}
+
+/// One entry from [`Protocol::list_dir`].
+#[derive(Debug, Clone)]
+pub struct DirEntry {
+    /// Name relative to the listed URL.
+    pub name: String,
+    /// What it is.
+    pub kind: EntryKind,
+    /// Size in bytes, when the platform reports one.
+    pub size: Option<u64>,
+    /// Modification time, when the platform reports one.
+    pub modified: Option<std::time::SystemTime>,
+}
+
+/// A byte transport reachable by URL.
+///
+/// Implementations are stateless: `open` produces the state. That is what lets
+/// [`ProtocolDesc`] hold a `&'static dyn Protocol` and lets the registry be
+/// built without instantiating anything.
+pub trait Protocol: Send + Sync {
+    /// Open `url` for reading.
+    ///
+    /// The implementation must route any nested open through
+    /// [`ProtocolEnv`] rather than opening a URL itself — that is the
+    /// whitelist boundary, and stepping around it is what lets a hostile
+    /// playlist read `/etc/passwd`.
+    ///
+    /// # Errors
+    /// Whatever the transport reports, as [`ProtocolError`].
+    fn open(
+        &self,
+        url: &Url,
+        flags: IoFlags,
+        opts: &Dict,
+        env: &ProtocolEnv<'_>,
+    ) -> Result<Box<dyn MediaSource>>;
+
+    /// Open `url` for writing.
+    ///
+    /// # Errors
+    /// [`ProtocolError::Unsupported`] by default.
+    fn create(
+        &self,
+        url: &Url,
+        flags: IoFlags,
+        opts: &Dict,
+        env: &ProtocolEnv<'_>,
+    ) -> Result<Box<dyn MediaSink>> {
+        let _ = (url, flags, opts, env);
+        Err(ProtocolError::Unsupported {
+            scheme: "?",
+            operation: "create",
+        })
+    }
+
+    /// Report whether `url` is readable, writable or both.
+    ///
+    /// # Errors
+    /// [`ProtocolError::Unsupported`] by default.
+    fn check(&self, url: &Url, env: &ProtocolEnv<'_>) -> Result<Access> {
+        let _ = (url, env);
+        Err(ProtocolError::Unsupported {
+            scheme: "?",
+            operation: "check",
+        })
+    }
+
+    /// List a directory URL.
+    ///
+    /// Returns a `Vec` rather than an iterator because a listing is small,
+    /// borrows nothing, and an iterator would have to name a lifetime the trait
+    /// object cannot carry.
+    ///
+    /// # Errors
+    /// [`ProtocolError::Unsupported`] by default.
+    fn list_dir(&self, url: &Url, env: &ProtocolEnv<'_>) -> Result<Vec<DirEntry>> {
+        let _ = (url, env);
+        Err(ProtocolError::Unsupported {
+            scheme: "?",
+            operation: "list_dir",
+        })
+    }
+
+    /// Delete a URL.
+    ///
+    /// # Errors
+    /// [`ProtocolError::Unsupported`] by default.
+    fn delete(&self, url: &Url, env: &ProtocolEnv<'_>) -> Result<()> {
+        let _ = (url, env);
+        Err(ProtocolError::Unsupported {
+            scheme: "?",
+            operation: "delete",
+        })
+    }
+
+    /// Rename a URL.
+    ///
+    /// # Errors
+    /// [`ProtocolError::Unsupported`] by default.
+    fn rename(&self, from: &Url, to: &Url, env: &ProtocolEnv<'_>) -> Result<()> {
+        let _ = (from, to, env);
+        Err(ProtocolError::Unsupported {
+            scheme: "?",
+            operation: "rename",
+        })
+    }
+}
+
+/// The registry's view of a protocol: everything knowable without instantiating.
+pub struct ProtocolDesc {
+    /// The scheme this registers under. A CLI-stable interface fact.
+    pub name: &'static str,
+    /// One-line description for `-protocols`.
+    pub long_name: &'static str,
+    /// Capability facts.
+    pub flags: ProtocolFlags,
+    /// The nested schemes this protocol implicitly grants when it opens further
+    /// URLs. `hls` grants http, https, tls, tcp, crypto — and deliberately not
+    /// `file` (rule W3).
+    pub default_whitelist: &'static [&'static str],
+    /// Option schema, for `-h protocol=name`. A function pointer rather than a
+    /// reference so the descriptor can be a `static`.
+    pub options: Option<fn() -> &'static Schema>,
+    /// The implementation.
+    pub proto: &'static dyn Protocol,
+}
+
+impl std::fmt::Debug for ProtocolDesc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProtocolDesc")
+            .field("name", &self.name)
+            .field("flags", &self.flags)
+            .field("default_whitelist", &self.default_whitelist)
+            .finish_non_exhaustive()
+    }
+}

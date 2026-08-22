@@ -3289,3 +3289,33 @@ checklist so none is forgotten.
   §1.4 allowlist, with the reason recorded.
 - **Live DASH and live HLS byte-exactness.** Both depend on wall-clock time by design and cannot be
   in a byte-exact corpus; they get `container-structure` (correctness C2) comparison instead.
+
+---
+
+## Corrections from implementation (vaco-io, 2026-08-22)
+
+1. **`fd:` and numeric `pipe:` are not implementable under D2** — see D16. The
+   §2.4 P1 estimate assumed an unsafe escape hatch that does not exist.
+2. **`IoContext` is split into `IoContext` (read) and `IoWriter` (write).** §2.2
+   gives one type both `new` and `new_write`, which makes "read from a write
+   context" a runtime error on some forty methods; two types make it a compile
+   error. **`MuxCtx` must hold `&mut IoWriter`.**
+3. **`Url` needs an `args` field.** §2.3's `{scheme, nested, rest, inline_opts}`
+   cannot represent `subfile,,start,1024,end,4096,,:archive.bin`, where the prefix
+   sits *before* the `:` and so cannot live in `rest`. Without it the round-trip
+   is lossy — and losing bytes between the whitelist check and the open is the
+   shape of a bypass.
+4. **`inline_opts` must be opt-in**, not populated by `split_url`. Splitting
+   unconditionally renames any file whose name contains a space and an `=`. RTMP
+   asks for it; nothing else does.
+5. **`short_seek_threshold` is derived from `Seekability`, not configured.** The
+   classification already carries the information: `Cheap → 0`,
+   `Expensive → 64 KiB`, `None → always read-and-discard`.
+6. **`peek` on `MediaSource` forces every source to own a buffer.** Resolved with
+   a `RawSource` + `PeekSource<R>` split so protocols implement one method and get
+   `peek` free. §2.2 places `peek` on `IoContext`; the frozen trait places it on
+   `MediaSource`, and this reconciles them without changing the freeze.
+7. **`MediaSink` has no `write_marked` or `truncate`.** Handled writer-side for
+   now; segmenting muxers will need the sink hook when `vaco-mux-segment` lands.
+8. **`ProtocolEnv` gained `root`** to carry rule U2, which §2 states without
+   giving a mechanism for.

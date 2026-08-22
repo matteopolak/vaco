@@ -796,3 +796,29 @@ Worked `yuv420p→rgb24` kernel: **4.1x over scalar** on a 1920px row.
 The open question is x86, and it is a measurement we can schedule rather than a
 design risk we must architect around — `vaco-simd` remains a D11 adapter, so even
 a bad x86 result changes one crate's internals.
+
+## D16 — `fd:` and numeric `pipe:` descriptors are out of scope (2026-08-22)
+
+Raised by the `vaco-io` implementation. Plan 18 §2.4 P1 budgets an `fd:` protocol
+at 0.2 pw and notes "Unix only (`OwnedFd`)". **That estimate assumes an escape
+hatch D2 does not grant.**
+
+Turning an integer into an owned file descriptor requires `FromRawFd::from_raw_fd`,
+which is `unsafe` — and justifiably so. Nothing proves the integer names a
+descriptor this process owns, and a wrong value closes someone else's socket when
+the wrapper drops. That is not a formality; it is a real bug class that safe Rust
+exists to prevent.
+
+**Decision: `fd:` is not implemented, and `pipe:` supports only 0, 1 and 2.**
+Those three work through `std::io::stdin`/`stdout`/`stderr`, which own their
+descriptors legitimately. Any other `pipe:<n>` returns `Unsupported` naming the
+reason.
+
+The alternative — adding a `vaco-protocol-fd` crate to the D2 allowlist — is
+rejected for now. D13 admits `unsafe` where it is the only way to reach hardware
+that has no safe path; passing descriptors between processes is a convenience with
+a shell-level workaround (`ffmpeg ... pipe:1 | vaco -i pipe:0`). The two are not
+comparable, and the allowlist is only worth anything if it stays short.
+
+Revisit only if a concrete workflow appears that genuinely cannot be expressed
+through stdin/stdout.

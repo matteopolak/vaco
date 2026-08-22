@@ -13,6 +13,9 @@ vaco-core = { path = "../../core/vaco-core" }
 vaco-io = { path = "../../io/vaco-io" }
 vaco-opts = { path = "../../core/vaco-opts" }
 
+[dev-dependencies]
+proptest.workspace = true
+
 [lints]
 workspace = true
 
