@@ -1046,3 +1046,62 @@ Note what this does *not* license. "The reference is wrong and we know better"
 is not a reason to diverge — D17 exists precisely to overrule that instinct.
 The test is narrow: undefined behaviour in the reference, no stable output to
 match, divergence pinned and documented.
+
+## D19 — One definition per concept, enforced (2026-08-22)
+
+**Decision.** Every concept has exactly one definition. Where a thing is needed
+by two crates, it moves down to a shared home rather than being written twice.
+`cargo xtask dup-check` enforces it and CI runs it.
+
+This generalises what D11 already says about external crates ("reachable from
+exactly one Vaco crate") to our own types, and what §3.4 says about generated
+files ("a crate declares what it provides; the shared file is derived").
+
+### Why a gate rather than an audit
+
+The first manual pass over this workspace **missed the one type already known to
+be duplicated.** `vaco_format_core::Disposition` is declared inside a
+`bitflags!` invocation, so it is indented, and a `^pub struct` search never sees
+it. An audit that misses the case you already know about is not an audit.
+
+So `dup-check` runs in CI over two explicit lists:
+
+- **`DISTINCT`** — names that appear twice and mean different things, each with
+  the reason. `Tier` is a SIMD tier and an HEVC tier; `Component` is a pixel
+  component and a registered component. Writing the reason down is the point: it
+  is what stops the list becoming a place to hide real duplication.
+- **`KNOWN_DUPLICATE`** — the same concept twice, tracked with a resolution plan
+  so it cannot be forgotten and cannot grow quietly.
+
+A new shared name that is on neither list fails the build.
+
+### What it cannot do
+
+It compares **names**, which is a proxy for concepts. It cannot see two types
+that mean the same thing under different names, and it cannot see a duplicated
+*table* or constant. Those still need a person. It is a ratchet against
+regression, not a proof of non-duplication.
+
+### Outstanding, with plans
+
+| name | crates | plan |
+|---|---|---|
+| `CancelToken` | `vaco-io`, `vaco-codec-core` | Both are `Arc<AtomicBool>` with different semantics on top. Shared primitive belongs in `vaco-core`; neither crate depends on the other today. |
+| `OptFlags` | `vaco-opts`, `vaco-cli-core` | The easy one — `vaco-cli-core` already depends on `vaco-opts`. cli-core's adds a column concept for `-h full` rendering, which `vaco-opts` should carry. |
+| `Disposition` | `vaco-cli-core`, `vaco-format-core` | Aligned numerically (19 flags, same bits) so nothing is wrong today. cli-core does not depend on format-core, so the shared home has to sit below both. |
+
+The H.264/HEVC pair share **21 type names** (`Sps`, `SliceHeader`,
+`HrdParameters`, `NalUnitType`, …). Those are *not* duplication today: the two
+standards define structurally different syntax for the same concepts.
+`vaco-codec-cbs` exists to unify what can be unified, and its author was asked
+directly whether its representation serves H.264 as well as HEVC. That answer
+decides which of the 21 collapse; until then they stay, marked `(D19: cbs)`.
+
+### A case that was already right
+
+`vaco_pool::BITSTREAM_PADDING` and `vaco_bitstream::Padded::PAD` are both 64 and
+in different crates — but `vaco-pool` depends on `vaco-bitstream` and carries a
+`const _: () = assert!(…)` tying them together, with a comment saying a compile
+error means one of the two moved. That is the shape to copy when a constant
+genuinely must live in two places: not a comment saying they match, a compile
+error when they stop.

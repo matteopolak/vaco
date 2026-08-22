@@ -169,6 +169,10 @@ disk-clean:
 wasm-check:
     cargo xtask wasm-check
 
+# One definition per concept (D19).
+dup-check:
+    cargo xtask dup-check
+
 # Cargo.lock moved only by dependency EDGES, never by packages (plan 19 §3.3).
 # Safe to run mid-wave: concurrent agents reconcile the lock against whatever
 # manifests exist, and this proves the reconciliation added nothing reviewable.

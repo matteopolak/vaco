@@ -30,6 +30,8 @@ jobs:
       # D18: every library still builds for wasm32.
       - run: rustup target add wasm32-unknown-unknown
       - run: cargo xtask wasm-check
+      # D19: one definition per concept.
+      - run: cargo xtask dup-check
       # The crate graph stays acyclic and downward (D14.1).
       - run: cargo xtask layer-check
       # Generated files are current.

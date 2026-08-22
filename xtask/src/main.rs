@@ -10,6 +10,7 @@ use std::process::Command;
 
 mod deps;
 mod docs;
+mod dup_check;
 mod gen_fuzz;
 mod gen_pixfmt;
 mod layers;
@@ -26,6 +27,7 @@ fn main() {
         "layer-check" => layers::run(),
         "dep-gate" => deps::run(),
         "unsafe-audit" => unsafe_audit::run(),
+        "dup-check" => dup_check::run(check),
         "wasm-check" => wasm::run(check),
         "gen-registry" => registry::run(check),
         "gen-docs-index" => docs::run(check),
@@ -38,6 +40,7 @@ fn main() {
             eprintln!("  dep-gate        D10 Gate 1: no FFI, no vendored C");
             eprintln!("  unsafe-audit    `unsafe` only where D2/D13 permit");
             eprintln!("  wasm-check      every library still builds for wasm32 (D18)");
+            eprintln!("  dup-check       one definition per concept (D19)");
             eprintln!("  gen-registry    assemble the registry from crate fragments");
             eprintln!("  gen-docs-index  generate docs/README.md");
             eprintln!(
