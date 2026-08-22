@@ -2152,3 +2152,80 @@ binary implements a `strtol`-based scanner whose acceptance set is wider in some
 places and narrower in others. This is the same lesson as plan 13 §1b and D17:
 **for anything a user's command line depends on, the binary is the specification
 and the documentation is a hint.**
+
+## Amendment — §2.5 is backwards: AVOptions evaluate, numbers do not (2026-08-22)
+
+§2.5 said numeric option values are evaluated as expressions. **Most are not.**
+They reject an expression outright:
+
+```
+$ ffmpeg -i in.mkv -ac '1*2' -f null -
+Expected number for ac but found: 1*2
+```
+
+while the AVOption path accepts one:
+
+```
+$ ffmpeg -i in -c:v mpeg4 -b:v '2*1000' -f null -    # accepted
+```
+
+Both reproduced directly. Of the 128 argument-taking `vaco` options, **41 take a
+plain number and 11 evaluate**. The evaluator is reached three ways, none of
+which is "the value looks numeric":
+
+| Route | Options |
+|---|---|
+| implemented as an `AVOption`, not a table option | `cpucount`, `cpuflags`, `abort_on`, `profile`, `discard`, `disposition`, `apply_cropping` |
+| the ratio grammar | `aspect`, `time_base`, and `r` via the rate grammar |
+| a codec option reached by name | `b`, `ab`, and every component option (`-crf`, …) |
+
+§2.5's own example, `-b:v 2*1000`, is in the third row — it evaluates *because it
+is an AVOption*, which is exactly why `-ac` does not. The rule is **"AVOptions
+evaluate"**, and the plan generalised from one example to the wrong axis.
+
+The ratio grammar is separate again: `av_parse_ratio` evaluates the **whole
+string** as one expression and then approximates. Verified: `-aspect '2*3/4'`
+gives DAR 3:2, i.e. 1.5, identically to `-aspect 3/2` and `-aspect 1.5`.
+
+### Two dialects of the same language
+
+On the AVOption path, `default`, `max` and `min` are **constants naming the
+option's own metadata, and they shadow the builtin functions**:
+
+```
+-crf 'max(1,2)'  ->  [Eval] Invalid chars '(1,2)' at the end of expression 'max(1,2)'
+-crf 'min-1'     ->  Value -2.000000 for parameter 'crf' out of range [-1 - 3.40282e+38]
+-crf 'hypot(3,4)'->  accepted
+```
+
+The second line is the proof the constants are real: `crf`'s minimum is -1, so
+`min-1` is -2. The third shows every other builtin still resolves. The same
+shadowing appears on `-cpucount`, so it is the option system's binding rather
+than one codec's. Filter variables (`w`, `n`, `t`) are **not** in scope here;
+`PI`/`E`/`PHI` are; prefix matching still applies, so `maxi` is rejected.
+
+This partially settles a question `vaco-expr` recorded as "our choice, not
+established by probing": caller-supplied names **do** shadow builtin functions.
+Whether they also shadow `PI`/`E`/`PHI` remains open.
+
+### A diagnostic that means two different things
+
+`Unable to parse "crf" option value "…"` is printed for **both** a grammar
+rejection and a NaN *result*. `0/0`, `nan`, `while(0,1)` and `sqrt(-1)` all parse
+perfectly well and then produce NaN. Only the `[Eval @ …]` line distinguishes
+them, so a conformance transcript must record acceptance and NaN-ness
+separately — four verdicts, not two.
+
+### Why the plan was wrong
+
+Same root cause as the §§2.3/2.4/2.6/3.1 corrections: the section was written
+from the published documentation, which describes the intended model, and
+generalised a single example onto the wrong axis. **For anything a user's
+command line depends on, the binary is the specification.**
+
+The method that found it is worth reusing: feed every argument-taking option a
+junk value and classify by *which parser complained*, since each grammar has its
+own message. Then separate int from float with `0.5`, and read each integer
+option's exact bounds out of the reference's own out-of-range message — `-ac
+3e9` is rejected where `-fs 3e9` is not, which is not guessable from the
+argument placeholder.
