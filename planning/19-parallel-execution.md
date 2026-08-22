@@ -496,3 +496,34 @@ deciding whether something passed.
 
 Reporting a check as passed when it was never really run is worse than reporting
 a failure: a failure gets fixed, a false pass gets built on.
+
+## 14. The orchestrator's pre-commit gate
+
+Agents run their own three commands (`check`, `test`, `clippy`) on their own
+crate. That is not sufficient, because two classes of breakage are invisible
+from inside a single crate:
+
+- **Workspace-wide gates.** `vaco-tx` was committed failing
+  `cargo fmt --all -- --check`, which CI enforces. The agent never ran it —
+  correctly, since `--all` reaches into crates it does not own. Only the
+  orchestrator can run it, and only at commit time.
+- **Unowned files.** `fuzz/fuzz_targets/` belongs to no crate. When
+  `vaco-codec-core` renamed `next()` to `next_unit()`, two fuzz targets kept
+  calling the old name and nobody's `cargo check -p <crate>` covered them.
+  Anything outside `crates/*/*/` needs an explicit owner at integration time,
+  and that owner is the orchestrator.
+
+So before every commit, from the repository root:
+
+```sh
+cargo fmt --all -- --check          # CI enforces this; agents cannot run it
+cargo xtask layer-check             # graph acyclic and downward
+cargo xtask dep-gate                # D10 Gate 1: no FFI, no vendored C
+cargo xtask unsafe-audit            # D2
+cargo +nightly fuzz build           # the unowned directory still compiles
+find fuzz/artifacts -type f         # must be empty (§13)
+```
+
+Run `cargo fmt --all` (not `--check`) with care: it will reformat crates other
+agents are actively editing. Do it immediately before committing, never in the
+middle of a wave, and expect to commit the reformatting as its own change.
