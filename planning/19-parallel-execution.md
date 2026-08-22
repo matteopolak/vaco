@@ -716,7 +716,7 @@ middle of a wave, and expect to commit the reformatting as its own change.
 Subjects follow [Conventional Commits](https://www.conventionalcommits.org/):
 `type(scope): summary`, imperative, lower-case, no trailing full stop.
 
-**Five types, and only these five:**
+**Six types, and only these six:**
 
 | type | when |
 |---|---|
@@ -724,11 +724,13 @@ Subjects follow [Conventional Commits](https://www.conventionalcommits.org/):
 | `fix` | a defect in committed code |
 | `perf` | a change made for speed, with the measured ratio in the body |
 | `docs` | planning documents, decision records, crate docs |
-| `chore` | everything else — manifests, the Justfile, CI, xtask gates, formatting, the ledger |
+| `ci` | the workflow files and the gates CI runs |
+| `chore` | everything else — manifests, the Justfile, formatting, the ledger |
 
-Do **not** invent types. `build`, `ci`, `style` and `refactor` are not in the
-list; they are `chore`. A CI fix is `fix(ci)`, not `ci(...)` — the type says what
-kind of change it is, the scope says where.
+Do **not** invent types. `build`, `style` and `refactor` are not in the list;
+they are `chore`. A defect in the CI config is still a `fix` — use `fix(ci)`
+rather than `ci(...)` when something was broken, and `ci(...)` when adding or
+changing what CI does.
 
 **Scope goes in brackets, where it makes sense**, and is never bare before the
 colon. `cli: …` and `wave 3: …` are wrong; `docs(cli): …` and `feat(wave-3): …`
