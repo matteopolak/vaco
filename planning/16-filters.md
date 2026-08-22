@@ -1824,3 +1824,65 @@ full textual DSL. That is the point at which `vaco` becomes a transcoder rather 
 6. **`slice_count` defaults.** Arch §6 rejects upstream's 16-thread ceiling in favour of measurement. The
    measurement has not been done; until it is, the default is `available_parallelism()` and the benchmark
    suite must include a thread-scaling sweep per filter class.
+
+## Amendment — §1.6.4's loss table corrected against the binary (2026-08-22)
+
+The loss table was wrong in three ways, found by `vaco-filter-core` and then
+re-measured after my own proposed correction turned out to be wrong too.
+
+### The measured ordering
+
+> **chroma-total > alpha > depth > colour model > chroma coarsening > packing**
+
+### The three errors
+
+1. **Chroma resolution sat above colour model. It is below.** A YUV↔RGB change
+   is cheaper than losing even *one bit* of depth, confirmed at 1, 2, 4 and 8
+   bits: from `yuv444p10le`, offered `yuv444p9le` (one bit) against `rgb48le`
+   (colour model), the reference takes `rgb48le`.
+2. **Chroma loss was graded per halved axis. It is a flag.** `yuv444p→yuv422p`
+   and `yuv444p→yuv420p` score identically; the reference then picks on its own
+   enum order, which D1 says we do not mirror.
+3. **There was no notion of losing chroma *entirely*.** A greyscale destination
+   is a distinct component from a colour-model change, it is the heaviest in the
+   model, and it is the only one above alpha: from `yuva444p`, offered
+   `yuv444p` (lose alpha) against `ya8` (lose chroma), the reference takes
+   `yuv444p`.
+
+### How the corpus missed it, and the general rule
+
+The original 17 measured pairs had a colour destination on both sides, or grey
+as the *source* — never grey as a *candidate*, which is the only pair that
+discriminates. That is a coverage gap in the corpus rather than a fault in the
+method, and it generalises:
+
+> **Enumerate the components first, then cover every *pair* of components with
+> the others held equal.** Collecting interesting-looking pairs and inferring an
+> order from them leaves exactly this shape of hole.
+
+The corpus is now 35 rows, all order-independent, with all 17 originals still
+passing — so the reweighting resolved a gap rather than trading one error for
+another.
+
+### My own wrong inference, recorded because the shape recurs
+
+I probed three grey-destination cases, saw the model pick grey where the
+reference did not, and concluded that **colour model outranks depth**. The
+probes were right and the inference was wrong: I had conflated "changes the
+colour model" (YUV→RGB, which keeps chroma) with "loses chroma entirely"
+(YUV→grey). Both look like a colour change in prose; the model treats them as
+different components. Had the agent implemented my proposal it would have broken
+four rows that were already passing.
+
+The lesson is narrower than "measure": I *did* measure. It is that a probe
+distinguishes the hypotheses you thought of. Three cases that all differ in two
+ways at once cannot separate those two ways, however many of them you run — the
+discriminating probe is the one that varies a single component. The agent found
+it by holding depth equal and varying only chroma-total, which is the move I
+should have made.
+
+### Enforcement
+
+The tier order is now five `const _: () = assert!(…)` statements at module
+scope, so a reweighting that breaks it fails to **compile** rather than failing a
+test. Same technique as `vaco-pool`'s `Padded::PAD`.
