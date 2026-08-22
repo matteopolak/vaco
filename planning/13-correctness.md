@@ -1144,6 +1144,25 @@ It has now happened twice, independently:
    command. A table nobody can re-derive cannot be re-checked when the pinned
    reference version moves.
 
+### Exit codes are a channel too, and pipes swallow them
+
+`vaco-probe` shipped believing `ffprobe` with no input file exits 0, with a code
+comment calling it "a genuine oddity". It exits **1**:
+
+```sh
+ffprobe </dev/null >/dev/null 2>/dev/null; echo $?   # 1
+```
+
+The likely route to the wrong answer is `ffprobe | head; echo $?`, which reports
+`head`'s status, not `ffprobe`'s. That is this section's rule on the *exit-code*
+channel rather than the output channel: a pipeline is a measuring layer, and it
+has an opinion about `$?`.
+
+Exit codes are conformance surface — a script branching on `$?` is as broken by a
+wrong one as by wrong output. When measuring an exit code, run the binary as the
+last command in the pipeline, redirect both streams to `/dev/null` so nothing
+else can interfere, and check the zero-argument and error cases explicitly.
+
 ### Escaping is part of the experiment
 
 When the value contains a space, a comma, a colon, a backslash or a quote, the

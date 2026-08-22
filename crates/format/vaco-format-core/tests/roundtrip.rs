@@ -382,3 +382,40 @@ fn every_truncation_of_a_valid_file_is_handled() {
         }
     }
 }
+
+/// All nineteen disposition flags, in the order `ffprobe -show_streams` prints
+/// them. Read off a real file, not inferred: four were missing and the
+/// numbering diverged from bit 9, which made the DISPOSITION section
+/// impossible to reproduce.
+#[test]
+fn disposition_names_match_the_reference_exactly() {
+    const EXPECTED: [&str; 19] = [
+        "default",
+        "dub",
+        "original",
+        "comment",
+        "lyrics",
+        "karaoke",
+        "forced",
+        "hearing_impaired",
+        "visual_impaired",
+        "clean_effects",
+        "attached_pic",
+        "timed_thumbnails",
+        "non_diegetic",
+        "captions",
+        "descriptions",
+        "metadata",
+        "dependent",
+        "still_image",
+        "multilayer",
+    ];
+    let names: Vec<&str> = vaco_format_core::DISPOSITION_NAMES
+        .iter()
+        .map(|&(_, n)| n)
+        .collect();
+    assert_eq!(
+        names, EXPECTED,
+        "order is output order, so it is part of the contract"
+    );
+}

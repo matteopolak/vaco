@@ -189,19 +189,33 @@ bitflags::bitflags! {
         const FORCED           = 1 << 6;
         const HEARING_IMPAIRED = 1 << 7;
         const VISUAL_IMPAIRED  = 1 << 8;
-        const ATTACHED_PIC     = 1 << 9;
-        const CAPTIONS         = 1 << 10;
-        const DESCRIPTIONS     = 1 << 11;
-        const METADATA         = 1 << 12;
-        const DEPENDENT        = 1 << 13;
-        const STILL_IMAGE      = 1 << 14;
+        const CLEAN_EFFECTS    = 1 << 9;
+        const ATTACHED_PIC     = 1 << 10;
+        const TIMED_THUMBNAILS = 1 << 11;
+        const NON_DIEGETIC     = 1 << 12;
+        const CAPTIONS         = 1 << 13;
+        const DESCRIPTIONS     = 1 << 14;
+        const METADATA         = 1 << 15;
+        const DEPENDENT        = 1 << 16;
+        const STILL_IMAGE      = 1 << 17;
+        const MULTILAYER       = 1 << 18;
     }
 }
 
 /// The name each disposition flag prints under.
 ///
 /// `vaco-probe`'s DISPOSITION section prints one field per flag, so these names
-/// are interface facts (D9) and the order is output order.
+/// are interface facts (D9) and the order is output order. All nineteen were
+/// read straight out of `ffprobe -show_streams` on a real file, in the order it
+/// prints them; four were missing here and the numbering diverged from bit 9,
+/// which `vaco-probe`'s author found while making the section byte-identical.
+///
+/// The bit positions match `vaco_cli_core::Disposition`'s deliberately. **There
+/// are two `Disposition` types in this workspace and there should be one** —
+/// `vaco-cli-core` needs it for `-disposition:s:0` and does not depend on this
+/// crate. They are aligned numerically so nothing is wrong today; deduplicating
+/// them is a layering decision, not a rename, because the shared home would have
+/// to sit below both.
 pub const DISPOSITION_NAMES: &[(Disposition, &str)] = &[
     (Disposition::DEFAULT, "default"),
     (Disposition::DUB, "dub"),
@@ -212,12 +226,16 @@ pub const DISPOSITION_NAMES: &[(Disposition, &str)] = &[
     (Disposition::FORCED, "forced"),
     (Disposition::HEARING_IMPAIRED, "hearing_impaired"),
     (Disposition::VISUAL_IMPAIRED, "visual_impaired"),
+    (Disposition::CLEAN_EFFECTS, "clean_effects"),
     (Disposition::ATTACHED_PIC, "attached_pic"),
+    (Disposition::TIMED_THUMBNAILS, "timed_thumbnails"),
+    (Disposition::NON_DIEGETIC, "non_diegetic"),
     (Disposition::CAPTIONS, "captions"),
     (Disposition::DESCRIPTIONS, "descriptions"),
     (Disposition::METADATA, "metadata"),
     (Disposition::DEPENDENT, "dependent"),
     (Disposition::STILL_IMAGE, "still_image"),
+    (Disposition::MULTILAYER, "multilayer"),
 ];
 
 impl Disposition {

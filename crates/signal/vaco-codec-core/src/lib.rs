@@ -124,7 +124,7 @@ const CODECS: &[CodecEntry] = &[
     entry(
         CodecId::H264,
         "h264",
-        "H.264 / AVC / MPEG-4 AVC",
+        "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
         V,
         CodecProperties::LOSSY
             .union(CodecProperties::REORDER)
