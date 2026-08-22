@@ -1,0 +1,94 @@
+# Fuzz targets for the whole workspace.
+#
+# EXCLUDED from the root workspace (see the `exclude` key in /Cargo.toml), so
+# this manifest has its own lockfile and its own dependency set. `libfuzzer-sys`
+# and `arbitrary` live here and nowhere else — they never enter a shipped
+# artifact's dependency graph, which is what the D2 unsafe audit checks.
+#
+# ADDING TARGETS (for the agent who owns the crate being fuzzed):
+#   1. add your crate under [dependencies] as a path dependency;
+#   2. add a feature named after your crate to [features] and to `default`;
+#   3. add one [[bin]] per target with `required-features` set to that feature.
+#
+# The feature gate is what stops `cargo fuzz build` from compiling every target
+# in the project when someone wants one (plan 13 §2.1).
+[package]
+name = "vaco-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+vaco-bitstream = { path = "../crates/core/vaco-bitstream" }
+vaco-limits = { path = "../crates/core/vaco-limits" }
+
+[features]
+default = ["bitstream", "limits"]
+bitstream = []
+limits = []
+
+# Overflow checks ON in the profile the fuzzer actually runs, so arithmetic
+# overflow is a finding rather than a silent wrap (plan 13 §2.2.1). The shipped
+# release profile keeps them off for speed; the nightly `release-overflow` job
+# closes the gap for everything else.
+[profile.release]
+debug = 1
+overflow-checks = true
+
+# ------------------------------------------------------------- vaco-bitstream
+
+[[bin]]
+name = "bitreader_arbitrary"
+path = "fuzz_targets/bitreader_arbitrary.rs"
+test = false
+doc = false
+required-features = ["bitstream"]
+
+[[bin]]
+name = "golomb_arbitrary"
+path = "fuzz_targets/golomb_arbitrary.rs"
+test = false
+doc = false
+required-features = ["bitstream"]
+
+[[bin]]
+name = "bitwriter_roundtrip"
+path = "fuzz_targets/bitwriter_roundtrip.rs"
+test = false
+doc = false
+required-features = ["bitstream"]
+
+[[bin]]
+name = "annexb_nal_iter"
+path = "fuzz_targets/annexb_nal_iter.rs"
+test = false
+doc = false
+required-features = ["bitstream"]
+
+[[bin]]
+name = "rbsp_roundtrip"
+path = "fuzz_targets/rbsp_roundtrip.rs"
+test = false
+doc = false
+required-features = ["bitstream"]
+
+[[bin]]
+name = "bytereader_arbitrary"
+path = "fuzz_targets/bytereader_arbitrary.rs"
+test = false
+doc = false
+required-features = ["bitstream"]
+
+# ---------------------------------------------------------------- vaco-limits
+
+[[bin]]
+name = "limit_budget"
+path = "fuzz_targets/limit_budget.rs"
+test = false
+doc = false
+required-features = ["limits"]

@@ -12,6 +12,9 @@ authors.workspace = true
 vaco-core = { path = "../../core/vaco-core" }
 thiserror.workspace = true
 
+[dev-dependencies]
+proptest.workspace = true
+
 [lints]
 workspace = true
 

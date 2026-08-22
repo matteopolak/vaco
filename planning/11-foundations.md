@@ -3890,3 +3890,63 @@ the table is internally consistent and physically derived, but unvalidated.
    the freeze.
 5. **§5.6's prescribed FIR structure is slower than the naive form** it was meant
    to improve. See plan 12's amendment.
+
+---
+
+## Corrections from implementation (vaco-bitstream, vaco-limits, 2026-08-21)
+
+**A latent correctness bug in §8's prescribed reader, worth reading before writing
+any similar code.** The plan specifies `body_end = len - 8` with a `pos <=
+body_end` fast-path test. For any buffer shorter than 8 bytes that computation
+underflows into a huge value, the fast path is taken, and the reader **silently
+returns zeros** instead of signalling overrun. The correct bound is `pos + 8 <=
+len`. Short buffers are not an edge case here — a parameter set in its own NAL is
+exactly that shape, and it is the D5 workload.
+
+**§8.3's "1-3%" estimate measured the wrong axis.** It framed the padding's cost
+as padded-versus-unpadded on a long buffer, where the gap is *zero*. The padding's
+value is entirely in the short-buffer case — a unit read end-to-end inside the
+tail — where it is worth a consistent 11.7%. The conclusion (keep the padding)
+survives; the reasoning does not.
+
+**The larger result: the safe reader is not a tax.** Measured on Apple M5 against
+three safe alternatives, both padded and unpadded readers win by 1.5-2.6x:
+
+| Workload | padded | unpadded | `Result` per read | checked per read | bytewise |
+|---|---|---|---|---|---|
+| per-unit (512 × ~27-byte NALs) | 15.83 µs | +11.7% | +62% | +150% | +132% |
+| header parse (13.7 KB) | 17.81 µs | parity | +77% | +149% | +163% |
+| bulk fixed-width (256 KiB) | 84.5 µs | +4.4% | +47% | +62% | +42% |
+
+The body/tail split is *why* a `forbid(unsafe_code)` bit reader is fast, not a
+concession we make to stay safe. F13's sticky-overrun choice is worth 62-77% on
+header parsing on its own, not merely better ergonomics. Start-code scanning by
+word-skip runs at 20.5 GB/s against 4.2 GB/s for a naive three-byte window.
+
+**Four API items in §8 do not work as written:**
+1. `check(&mut self)` with check-and-clear is not implementable — overrun is
+   derived from position, so "clear" is meaningless and would hide a truncation
+   from the next caller. It is `check(&self)`.
+2. `BitWriter::with_capacity(n: usize)` cannot exist: `clippy.toml` denies
+   `Vec::with_capacity`. It takes a `&mut Budget`.
+3. `Limits` cannot hold a mutable `Fuel` (plan 13 §2.2.2) and stay `Clone + Sync`.
+   Split into immutable policy (`Limits`) and per-instance meter (`Budget`).
+   **The plan text and `clippy.toml` disagreed** — the config already named
+   `vaco_limits::Budget::alloc`. The config was right.
+4. `ProgressGuard` returns `LimitError::NoProgress` rather than panicking:
+   `clippy::panic` is denied, and a scheduler wants to stop one component, not
+   abort the process.
+
+### Open cross-crate items
+- **`vaco-pool` / `vaco-packet`** should expose their padded buffers as
+  `Padded::new(bytes, logical_len)`. `vaco_pool::BITSTREAM_PADDING` and
+  `Padded::PAD` must stay equal; the assertion belongs in whichever crate ends up
+  owning the shared constant. **Preferred fix: hoist the constant into `vaco-core`
+  once its implementation lands**, so both reference one definition rather than
+  agreeing by convention.
+- **`vaco-bitstream` deliberately does not depend on `vaco-simd`**, contrary to
+  §8.8. That crate was in flight and its `scan` API unfrozen; taking the
+  dependency would have coupled two agents' schedules. `annexb::find_start_code`
+  is the scalar reference `vaco_simd::scan` must agree with, and the
+  `annexb_nal_iter` fuzz target already differentially checks it. Revisit now that
+  `vaco-simd` has landed.
