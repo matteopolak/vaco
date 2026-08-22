@@ -11,7 +11,15 @@ moved, an interface froze); they may not change a constraint.
 
 ## Scope
 
-You own exactly one crate: `crates/<layer>/<crate>/`.
+You own exactly one crate: `crates/<area>/<crate>/`.
+
+**Confirm the path before you start** — `ls crates/*/ | grep <crate>`. The area
+directories are `app codec core filter format io model registry signal tool`,
+and they do not always match the obvious guess: `vaco-codec-golomb` and
+`vaco-codec-cabac` live under `signal/`, not `codec/`, and `vaco-cli-core` under
+`app/`, not `cli/`. Two briefs have now named the wrong directory. The docs path
+follows the same area (`docs/<area>/<crate>.md`), because `xtask gen-docs-index`
+derives it from there and a doc filed elsewhere is never linked.
 
 - Write **only** inside that directory. You may read anything.
 - If you need a change in another crate, **stop and report it**. Do not reach
@@ -36,7 +44,9 @@ The ones that catch people out:
   absent, stop and ask — D10 makes every adoption a reviewed decision.
 
   Taking up one that IS pre-declared is fine and expected — including `proptest`
-  and `divan`. It adds an edge to `Cargo.lock` inside your own crate's block, not
+  and `divan`. **Benchmarks use `divan`, not `criterion`** — criterion is not a
+  workspace dependency and should not be requested; `vaco-bitstream`, `vaco-tx`
+  and `vaco-codec-cabac` all use divan. It adds an edge to `Cargo.lock` inside your own crate's block, not
   a package. Run your first `cargo check` **without** `--locked` so that edge can
   register (plan 19 §3.3); use `--locked` for `test` and `clippy` afterwards.
   Do not skip property tests to avoid touching the lock.
