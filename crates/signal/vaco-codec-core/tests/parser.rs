@@ -101,3 +101,38 @@ fn reset_clears_buffered_bytes_and_end_of_stream() {
     d.push(&[0; 4]).unwrap();
     assert!(matches!(d.next_unit(), Err(Error::NeedMoreInput)));
 }
+
+/// Feeding a stream one byte at a time must not look like a stall.
+///
+/// Regression for a defect `vaco-parse-aac`'s fuzzer found: `next_unit` ticked
+/// the progress guard whenever the parser could not yet form a unit, but the
+/// caller *was* progressing — it was adding bytes between calls. Any parser
+/// driven in chunks smaller than about 1/64 of a unit aborted with
+/// `NoProgress`, which is every byte-stream parser in the project.
+#[test]
+fn byte_at_a_time_feeding_is_progress() {
+    let mut d = ParserDriver::new(MockParser::new(200), Limits::permissive());
+    for i in 0..200_u16 {
+        d.push(&[7]).expect("push must not fail");
+        match d.next_unit() {
+            Ok(_) | Err(Error::NeedMoreInput) => {}
+            Err(e) => panic!("byte {i} of 200 aborted the stream: {e}"),
+        }
+    }
+}
+
+/// The hang the guard exists to catch is still caught: a caller that spins on
+/// `next_unit` without ever pushing re-parses the same bytes forever.
+#[test]
+fn spinning_without_pushing_still_aborts() {
+    let mut d = ParserDriver::new(MockParser::new(200), Limits::permissive());
+    d.push(&[1, 2, 3]).expect("push");
+    for _ in 0..10_000 {
+        match d.next_unit() {
+            Err(Error::NeedMoreInput) => {}
+            Err(_) => return, // the guard tripped, which is the point
+            Ok(_) => panic!("a parser with too few bytes must not emit"),
+        }
+    }
+    panic!("a caller spinning without pushing was never stopped");
+}

@@ -10,11 +10,31 @@ authors.workspace = true
 
 [dependencies]
 vaco-core = { path = "../../core/vaco-core" }
-vaco-simd = { path = "../../core/vaco-simd" }
 vaco-frame = { path = "../../model/vaco-frame" }
 vaco-sampfmt = { path = "../../model/vaco-sampfmt" }
 vaco-chlayout = { path = "../../model/vaco-chlayout" }
-vaco-opts = { path = "../../core/vaco-opts" }
+vaco-limits = { path = "../../core/vaco-limits" }
+tracing.workspace = true
+
+# NOT taken, and both are measurements rather than preferences:
+#
+# vaco-simd  - every kernel here is lanewise or a plain reduction, and LLVM
+#              already vectorises both. `benches/resample.rs` compares three
+#              hand-shaped dot products; the winner is the one that gives the
+#              compiler the most room, and format conversion runs at 5.9 G
+#              samples/s scalar. See docs/signal/vaco-resample.md "Why no
+#              vaco-simd (yet)" for the one kernel where an explicit tier would
+#              pay and what it would have to preserve.
+# vaco-opts  - needs `OptValue` for SampleFmt and ChannelLayout, which live in
+#              crates this one does not own. See src/opts.rs.
+
+[dev-dependencies]
+proptest.workspace = true
+divan.workspace = true
+
+[[bench]]
+name = "resample"
+harness = false
 
 [lints]
 workspace = true

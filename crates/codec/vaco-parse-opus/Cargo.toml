@@ -12,6 +12,18 @@ authors.workspace = true
 vaco-core = { path = "../../core/vaco-core" }
 vaco-bitstream = { path = "../../core/vaco-bitstream" }
 vaco-codec-core = { path = "../../signal/vaco-codec-core" }
+vaco-chlayout = { path = "../../model/vaco-chlayout" }
+vaco-limits = { path = "../../core/vaco-limits" }
+vaco-packet = { path = "../../model/vaco-packet" }
+arrayvec.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+divan.workspace = true
+
+[[bench]]
+name = "parse"
+harness = false
 
 [lints]
 workspace = true

@@ -1,0 +1,18 @@
+[package]
+name = "vaco-time"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The clock, behind one door — so every other crate is platform-independent."
+
+[dependencies]
+
+[features]
+default = []
+# On wasm, back the clock with `web-time` (browser `performance.now()`).
+# Declared but not yet wired: see docs/core/vaco-time.md.
+web = []
+
+[lints]
+workspace = true

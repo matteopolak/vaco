@@ -90,6 +90,29 @@ fn arb_method() -> impl Strategy<Value = TMethod> {
     ]
 }
 
+/// A ratio that survives evaluate-then-approximate, which is what the CLI ratio
+/// grammar does. Reduced, finite, and comfortably inside the 10^6 denominator
+/// bound, so `parse(format(r)) == r` holds exactly.
+fn arb_reduced_ratio() -> impl Strategy<Value = (i32, i32)> {
+    (-10_000_i32..=10_000, 1_i32..=10_000).prop_map(|(n, d)| {
+        // Both magnitudes are <= 10_000, so the gcd is too and the cast is
+        // exact — but say it totally rather than relying on the reader.
+        let g = i32::try_from(gcd(n.unsigned_abs(), d.unsigned_abs()))
+            .unwrap_or(1)
+            .max(1);
+        (n / g, d / g)
+    })
+}
+
+const fn gcd(mut a: u32, mut b: u32) -> u32 {
+    while b != 0 {
+        let t = b;
+        b = a % b;
+        a = t;
+    }
+    a
+}
+
 fn arb_all_kinds() -> impl Strategy<Value = AllKinds> {
     let numbers = (
         any::<u64>(),
@@ -105,7 +128,14 @@ fn arb_all_kinds() -> impl Strategy<Value = AllKinds> {
     );
     let values = (
         arb_text(),
-        (any::<i32>(), any::<i32>()),
+        // A ratio option round-trips through the CLI grammar, which EVALUATES
+        // `num/den` as a division and then approximates with a denominator
+        // bound of 10^6. So the round-tripping domain is reduced ratios inside
+        // that bound — `6/4` comes back as `3/2`, and `0/0` does not come back
+        // at all. The reference is identical: `-aspect 6/4` yields 3:2.
+        // `Rational::from_str` is the exact, structural parser if you want the
+        // stored pair preserved; it is deliberately a different grammar.
+        arb_reduced_ratio(),
         proptest::collection::vec(any::<u8>(), 0..6),
         arb_dict(),
         // An image size is `1..=i32::MAX` per dimension, and a video rate is
@@ -114,7 +144,7 @@ fn arb_all_kinds() -> impl Strategy<Value = AllKinds> {
         // hold — `serialize` will happily render a `u32` that `parse` then
         // rejects. See the D17 notes on `vaco_core::parse::image_size`.
         (1..=i32::MAX.cast_unsigned(), 1..=i32::MAX.cast_unsigned()),
-        (1..=i32::MAX, 1..=i32::MAX),
+        arb_reduced_ratio().prop_map(|(n, d)| (n.abs().max(1), d)),
         any::<i64>(),
         (any::<u8>(), any::<u8>(), any::<u8>(), any::<u8>()),
     );

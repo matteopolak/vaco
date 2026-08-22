@@ -275,12 +275,10 @@ fn plausible_but_nonexistent_functions_stay_rejected() {
     }
 }
 
-#[test]
-fn errors_convert_into_the_core_taxonomy() {
-    let err = Expr::parse("nosuchfn(1)", &Bindings::EMPTY).expect_err("rejected");
-    let core: vaco_core::Error = err.into();
-    assert!(matches!(core, vaco_core::Error::Option { .. }));
-}
+// `errors_convert_into_the_core_taxonomy` moved to `vaco-core`, along with the
+// `From<ParseError> for vaco_core::Error` impl it exercises. This crate no
+// longer depends on `vaco-core` — that one edge was blocking `vaco-core` from
+// using the evaluator, which its ratio grammar needs.
 
 // -------------------------------------------------------------- utilities
 

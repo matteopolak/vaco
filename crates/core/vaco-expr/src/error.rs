@@ -69,11 +69,8 @@ impl fmt::Display for ParseError {
 
 impl core::error::Error for ParseError {}
 
-impl From<ParseError> for vaco_core::Error {
-    fn from(e: ParseError) -> Self {
-        Self::Option {
-            name: "expr".to_owned(),
-            detail: e.to_string(),
-        }
-    }
-}
+// `impl From<ParseError> for vaco_core::Error` lives in `vaco-core`, not here.
+// It was this crate's ONLY use of `vaco-core`, and that one edge was enough to
+// stop `vaco-core` from using the evaluator — which it must, because the
+// reference's ratio grammar is expression-backed. The orphan rule allows the
+// impl on either side; putting it on the `Error` side makes `vaco-expr` a leaf.

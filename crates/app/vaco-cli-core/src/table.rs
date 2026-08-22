@@ -50,6 +50,7 @@
 //! is a known and accepted consequence.
 
 use crate::error::CliError;
+use crate::value::ValueKind;
 
 /// What an option is allowed to do and where it may appear.
 ///
@@ -168,6 +169,9 @@ pub struct OptDesc {
     /// The placeholder `-h` prints for the value, when there is one.
     pub argname: Option<&'static str>,
     pub flags: OptFlags,
+    /// The grammar the value is written in, established by probing rather than
+    /// inferred from the argument placeholder — see [`ValueKind`].
+    pub kind: ValueKind,
     /// Written for Vaco, not transcribed from the reference (D9).
     pub help: &'static str,
     /// Non-`None` when this name is a spelling of another option with a
@@ -185,6 +189,12 @@ impl OptDesc {
     #[must_use]
     pub const fn takes_value(&self) -> bool {
         self.flags.contains(OptFlags::HAS_ARG)
+    }
+
+    /// The numeric bounds this option's type imposes, if it has any.
+    #[must_use]
+    pub fn number_limits(&self) -> Option<crate::value::NumberLimits> {
+        crate::value::NumberLimits::for_kind(self.kind)
     }
 
     /// Which specifier grammar applies to this option's `:suffix`.
@@ -309,12 +319,14 @@ const fn o(
     name: &'static str,
     argname: Option<&'static str>,
     flags: u32,
+    kind: ValueKind,
     help: &'static str,
 ) -> OptDesc {
     OptDesc {
         name,
         argname,
         flags: OptFlags(flags),
+        kind,
         help,
         alias_of: None,
     }
@@ -324,6 +336,7 @@ const fn alias(
     name: &'static str,
     argname: Option<&'static str>,
     flags: u32,
+    kind: ValueKind,
     help: &'static str,
     target: &'static str,
     spec: &'static str,
@@ -332,6 +345,7 @@ const fn alias(
         name,
         argname,
         flags: OptFlags(flags),
+        kind,
         help,
         alias_of: Some((target, spec)),
     }
@@ -419,6 +433,67 @@ mod tests {
                 assert!(o.flags.contains(OptFlags::PER_FILE), "{}", o.name);
             }
         }
+    }
+
+    #[test]
+    fn the_value_kind_agrees_with_has_arg() {
+        for table in [ffmpeg(), ffprobe()] {
+            for o in table.options {
+                assert_eq!(
+                    o.kind.takes_value(),
+                    o.takes_value(),
+                    "{}/{}: kind {:?} disagrees with HAS_ARG",
+                    table.tool,
+                    o.name,
+                    o.kind
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn value_kinds_are_the_probed_ones() {
+        let t = ffmpeg();
+        // Plain numbers -- these reject `1*2`.
+        assert_eq!(t.find("ac").unwrap().kind, ValueKind::Int);
+        assert_eq!(t.find("ar").unwrap().kind, ValueKind::Int);
+        assert_eq!(t.find("qscale").unwrap().kind, ValueKind::Float);
+        // The five 64-bit ones, distinguished by the bounds the reference
+        // printed rather than by their argument placeholder.
+        assert_eq!(t.find("fs").unwrap().kind, ValueKind::Int64);
+        assert_eq!(t.find("frames").unwrap().kind, ValueKind::Int64);
+        // Expression-valued: an `AVOption`, a ratio, a codec option.
+        assert_eq!(t.find("cpucount").unwrap().kind, ValueKind::Expr);
+        assert_eq!(t.find("aspect").unwrap().kind, ValueKind::Expr);
+        assert_eq!(t.find("b").unwrap().kind, ValueKind::Expr);
+        assert_eq!(t.find("disposition").unwrap().kind, ValueKind::Expr);
+        // Not numeric at all.
+        assert_eq!(t.find("t").unwrap().kind, ValueKind::Duration);
+        assert_eq!(t.find("r").unwrap().kind, ValueKind::Rate);
+        assert_eq!(t.find("y").unwrap().kind, ValueKind::None);
+        assert_eq!(t.find("map").unwrap().kind, ValueKind::Custom);
+    }
+
+    /// The headline result of the value-grammar probing, asserted as a shape:
+    /// the evaluator is the exception, not the rule.
+    #[test]
+    fn most_numeric_options_are_not_expressions() {
+        let t = ffmpeg();
+        let plain = t
+            .options
+            .iter()
+            .filter(|o| matches!(o.kind, ValueKind::Int | ValueKind::Int64 | ValueKind::Float))
+            .count();
+        let expr = t
+            .options
+            .iter()
+            .filter(|o| o.kind == ValueKind::Expr)
+            .count();
+        assert!(
+            plain > expr * 2,
+            "plan 14 §2.5 says every numeric value evaluates; probing says \
+             {plain} take a plain number and {expr} evaluate"
+        );
     }
 
     #[test]

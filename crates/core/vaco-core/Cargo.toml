@@ -9,10 +9,13 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+vaco-time = { path = "../vaco-time" }
+vaco-expr = { path = "../vaco-expr" }
 thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+vaco-expr = { path = "../vaco-expr" }
 proptest.workspace = true
 
 [lints]

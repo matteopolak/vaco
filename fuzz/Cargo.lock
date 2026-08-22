@@ -12,6 +12,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrayvec"
+version = "0.7.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
+
+[[package]]
 name = "bitflags"
 version = "2.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -36,6 +42,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
+name = "crossbeam-deque"
+version = "0.8.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5181e0de7b61eb03a81e347d6dd8797bae9da5146707b51077e2d71a54ec0ceb"
+dependencies = [
+ "crossbeam-epoch",
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-epoch"
+version = "0.9.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d6914041f254d6e9176c01941b21115dcfb7089e55135a35411081bd106ef3f"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-utils"
+version = "0.8.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "61803da095bee82a81bb1a452ecc25d3b2f1416d1897eb86430c6159ef717c17"
+
+[[package]]
 name = "derive_arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -45,6 +76,12 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "either"
+version = "1.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "252afb9ae5eaa683babdc6a068b3f5726eb19e05070c731f9b2a23a7c3e8ed34"
 
 [[package]]
 name = "errno"
@@ -61,6 +98,12 @@ name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
+
+[[package]]
+name = "fearless_simd"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f4beca3cb2444e3304ac30843cc091f44ed58932353cd492ce740067bfce6b12"
 
 [[package]]
 name = "find-msvc-tools"
@@ -178,6 +221,26 @@ name = "r-efi"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
+
+[[package]]
+name = "rayon"
+version = "1.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb39b166781f92d482534ef4b4b1b2568f42613b53e5b6c160e24cfbfa30926d"
+dependencies = [
+ "either",
+ "rayon-core",
+]
+
+[[package]]
+name = "rayon-core"
+version = "1.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
+dependencies = [
+ "crossbeam-deque",
+ "crossbeam-utils",
+]
 
 [[package]]
 name = "redox_syscall"
@@ -330,6 +393,7 @@ version = "0.1.0"
 dependencies = [
  "thiserror",
  "vaco-core",
+ "vaco-expr",
  "vaco-opts",
  "vaco-registry",
  "vaco-textformat",
@@ -388,6 +452,8 @@ version = "0.1.0"
 dependencies = [
  "thiserror",
  "tracing",
+ "vaco-expr",
+ "vaco-time",
 ]
 
 [[package]]
@@ -395,7 +461,7 @@ name = "vaco-expr"
 version = "0.1.0"
 dependencies = [
  "thiserror",
- "vaco-core",
+ "vaco-time",
 ]
 
 [[package]]
@@ -409,7 +475,6 @@ dependencies = [
  "vaco-core",
  "vaco-expr",
  "vaco-frame",
- "vaco-opts",
  "vaco-pixfmt",
  "vaco-sampfmt",
 ]
@@ -426,6 +491,27 @@ dependencies = [
  "vaco-limits",
  "vaco-opts",
  "vaco-packet",
+]
+
+[[package]]
+name = "vaco-format-isom"
+version = "0.1.0"
+dependencies = [
+ "vaco-bitstream",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-format-core",
+ "vaco-io",
+ "vaco-limits",
+]
+
+[[package]]
+name = "vaco-format-nalu"
+version = "0.1.0"
+dependencies = [
+ "vaco-bitstream",
+ "vaco-core",
+ "vaco-limits",
 ]
 
 [[package]]
@@ -460,15 +546,23 @@ dependencies = [
  "vaco-conformance",
  "vaco-core",
  "vaco-expr",
+ "vaco-filter-core",
  "vaco-format-core",
+ "vaco-format-isom",
+ "vaco-format-nalu",
  "vaco-frame",
  "vaco-io",
  "vaco-limits",
  "vaco-packet",
+ "vaco-parse-aac",
+ "vaco-parse-h264",
+ "vaco-parse-opus",
  "vaco-pixfmt",
  "vaco-pool",
  "vaco-protocol-core",
+ "vaco-resample",
  "vaco-sampfmt",
+ "vaco-scale",
  "vaco-textformat",
 ]
 
@@ -486,6 +580,7 @@ version = "0.1.0"
 dependencies = [
  "thiserror",
  "vaco-core",
+ "vaco-time",
 ]
 
 [[package]]
@@ -517,6 +612,46 @@ dependencies = [
  "vaco-core",
  "vaco-limits",
  "vaco-pool",
+]
+
+[[package]]
+name = "vaco-parse-aac"
+version = "0.1.0"
+dependencies = [
+ "vaco-bitstream",
+ "vaco-chlayout",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-limits",
+ "vaco-packet",
+]
+
+[[package]]
+name = "vaco-parse-h264"
+version = "0.1.0"
+dependencies = [
+ "vaco-bitstream",
+ "vaco-codec-core",
+ "vaco-codec-golomb",
+ "vaco-color",
+ "vaco-core",
+ "vaco-format-nalu",
+ "vaco-limits",
+ "vaco-packet",
+ "vaco-pixfmt",
+]
+
+[[package]]
+name = "vaco-parse-opus"
+version = "0.1.0"
+dependencies = [
+ "arrayvec",
+ "vaco-bitstream",
+ "vaco-chlayout",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-limits",
+ "vaco-packet",
 ]
 
 [[package]]
@@ -558,9 +693,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-resample"
+version = "0.1.0"
+dependencies = [
+ "tracing",
+ "vaco-chlayout",
+ "vaco-core",
+ "vaco-frame",
+ "vaco-limits",
+ "vaco-sampfmt",
+]
+
+[[package]]
 name = "vaco-sampfmt"
 version = "0.1.0"
 dependencies = [
+ "vaco-core",
+]
+
+[[package]]
+name = "vaco-scale"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "rayon",
+ "vaco-color",
+ "vaco-core",
+ "vaco-frame",
+ "vaco-limits",
+ "vaco-opts",
+ "vaco-pixfmt",
+ "vaco-simd",
+]
+
+[[package]]
+name = "vaco-simd"
+version = "0.1.0"
+dependencies = [
+ "fearless_simd",
  "vaco-core",
 ]
 
@@ -571,6 +741,10 @@ dependencies = [
  "bitflags",
  "vaco-core",
 ]
+
+[[package]]
+name = "vaco-time"
+version = "0.1.0"
 
 [[package]]
 name = "windows-link"

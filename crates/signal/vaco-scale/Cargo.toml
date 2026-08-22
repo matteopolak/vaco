@@ -15,7 +15,17 @@ vaco-frame = { path = "../../model/vaco-frame" }
 vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
 vaco-color = { path = "../../model/vaco-color" }
 vaco-opts = { path = "../../core/vaco-opts" }
+vaco-limits = { path = "../../core/vaco-limits" }
+bitflags.workspace = true
 rayon.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+divan.workspace = true
+
+[[bench]]
+name    = "scale"
+harness = false
 
 [lints]
 workspace = true

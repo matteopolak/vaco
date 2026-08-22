@@ -1,7 +1,7 @@
 # `vaco-cli-core`
 
-Layer 7 (application). Depends on `vaco-core`, `vaco-opts`, `vaco-registry`,
-`vaco-textformat`, `thiserror`. Dev: `proptest`.
+Layer 7 (application). Depends on `vaco-core`, `vaco-expr`, `vaco-opts`,
+`vaco-registry`, `vaco-textformat`, `thiserror`. Dev: `proptest`.
 
 ## What it is
 
@@ -18,6 +18,7 @@ Four pieces:
 | `spec` | The stream-specifier grammar and matcher. |
 | `metaspec` | The *metadata* specifier grammar, which shares a syntactic slot with the stream one and is a different language. |
 | `map` | The `-map` value grammar. |
+| `value` | Which grammar each option's *value* is written in, and the two numeric parsers. |
 | `lex` / `split` | Tokenising one argv entry, and the grouping pass. |
 | `num` | The `strtol` scanner every numeric field in the grammar is built on. |
 | `stream` | The facts a specifier is matched against, plus the 19 disposition flags. |
@@ -104,6 +105,78 @@ additionally requires a leading digit, which the `p:`/`g:`/`i:`/`#` forms do
 not: `-c:v:+0` is rejected while `-c:p:+1` is accepted. That asymmetry is real
 and is reproduced.
 
+### Option values: two numeric grammars, not one
+
+Plan 14 §2.5 states that "every numeric option value goes through the expression
+evaluator", citing `-b:v 2*1000`. **Probing shows the opposite**, and the
+difference decides which command lines work.
+
+Of the 128 argument-taking options in the `vaco` table, **41 take a plain
+number and reject an expression outright**:
+
+```text
+$ ffmpeg -i in.mkv -ac 1*2 -f null -
+Expected number for ac but found: 1*2
+```
+
+Exactly **11 reach the evaluator**, and none of them for the reason plan 14
+gives. The three routes:
+
+| Route | Options |
+|---|---|
+| implemented as an `AVOption` rather than a table option | `cpucount`, `cpuflags`, `abort_on`, `profile`, `discard`, `disposition`, `apply_cropping` |
+| the ratio grammar, which is expression-backed | `aspect`, `time_base` (and `r`, via the rate grammar) |
+| a codec option reached by name | `b`, `ab`, and every component option — `-crf`, `-qp`, … |
+
+Plan 14's own example sits in the third row: `-b:v` is an `AVOption` on the
+codec. That is exactly why it evaluates while `-ac` does not, and it is why the
+rule is "AVOptions evaluate" rather than "numbers evaluate".
+
+The remaining 76 are 41 strings, 5 durations, 1 rate, 1 `-map`, and 28 bespoke
+grammars the consuming binary owns (log levels, filter graphs, `key=value`
+metadata, hardware device specifications, `-target` presets).
+
+**Two dialects, one language.** On the `AVOption` path — which is the CLI's
+expression path — `default`, `max` and `min` are **constants naming the
+option's own metadata**, and they shadow the builtin functions of the same
+name:
+
+```text
+$ ffmpeg … -crf max(1,2) …
+[Eval] Invalid chars '(1,2)' at the end of expression 'max(1,2)'
+$ ffmpeg … -crf min-1 …
+Value -2.000000 for parameter 'crf' out of range [-1 - 3.40282e+38]
+```
+
+The second line is the proof that the constants are real: crf's minimum is -1,
+so `min-1` is -2. Every other builtin still resolves (`abs`, `gcd`, `hypot`,
+`if`, `st`/`ld`, `while`, `root`, `taylor` all verified), and the same shadowing
+appears on `-cpucount`, so it is the option system's binding rather than one
+codec's. The filtergraph path is *not* like this — there `max` and `min` are the
+ordinary builtins.
+
+`value::OptionConstants` models the binding. Where the option's schema is not in
+hand, `OptionConstants::UNKNOWN` still binds the three names — which is what
+decides acceptance — and evaluates them to NaN. Closing that needs the
+component schema from `vaco-opts`.
+
+**The plain-number grammar is `av_strtod`**, which is not C's `strtod`: it adds
+the SI prefixes (`2k`, `2h`, `2E`), the `i` binary modifier (`2ki` = 2048), the
+`B` times-eight suffix (`2kB` = 16000) and the `dB` suffix, and its hexadecimal
+is integer-only. That grammar already exists as the expression language's number
+lexer, so `value::strtod` calls `vaco_expr::scan_number` rather than growing a
+second copy that would drift.
+
+Three checks run, in this order, and the order is observable:
+
+1. whole-string parse → `Expected number for {name} but found: {value}`
+2. range → `The value for {name} was {value} which is not within {min} - {max}`
+3. integrality, for integer fields only → `Expected int64 for {name} but found {value}`
+
+`-fs 1e30` stops at (2); `-fs 20dB` passes (2) and stops at (3), because 20 dB is
+9.999999999999998. Note the colon after "found:" in the first message and its
+absence in the third — the asymmetry is the reference's.
+
 ## Method: how the grammar was established
 
 Per D7/D15 no FFmpeg source was read. The command line is an *interface*, so it
@@ -145,6 +218,30 @@ then probed per option:
   classified this way; the result agrees with the help section headers wherever
   those state a side, which is the cross-check that the method works.
 
+**Value grammars.** Every argument-taking option was fed a junk value and
+classified by *which parser complained*, since each grammar has its own message:
+`Expected number for …` (plain number), `Invalid duration for option …`
+(duration), `Undefined constant or missing '('` (expression), `Invalid
+framerate value` (rate). Integer and floating-point options were then separated
+by feeding `0.5` and seeing whether the integrality check fired. This is
+measurement, not inference from the argument placeholder — which would have got
+`-b` and `-ac` the same and both wrong.
+
+**The expression path was confirmed filtergraph-free** (plan 13 §1b). `-crf`
+goes from `argv` through `av_opt_set` straight to the evaluator, and its range
+check echoes the value, so it settles the whitespace and associativity
+questions that a `-vf` probe could not:
+
+```text
+-crf -2^2          rejected: the value is -4, so the sign follows the whole chain
+-crf max(1,0/0)    rejected: NaN, so `max` is a comparison select
+-crf ---1          rejected: "Undefined constant … in '--1'"
+-crf 1 2           accepted: 12, so whitespace is deleted rather than skipped
+-crf 0-20dB        accepted: 0.1, so the sign belongs to the decibel literal
+```
+
+Each is a `vaco-expr` D17 behaviour, re-confirmed here on the CLI's own path.
+
 **Numeric bases.** Probed by reading the index back out of the reference's own
 diagnostics — e.g. `-metadata:c:010` reports `Invalid chapter index 8`, which
 settles that the chapter index is base 0 rather than base 10.
@@ -162,6 +259,9 @@ Each is annotated at its site with a `// D17:` comment.
 | `Cannot combine multiple program/group designators…` | end with a newline | emits none, so the next log line is glued on |
 | `Parsed 'usable only'` | not print at all | prints it at `AV_LOG_ERROR` **on the success path**, for every specifier containing `u` |
 | `Stream map '' matches no streams.` | name the map | interpolates an empty string (ffmpeg 8.1) |
+| `-crf max(1,2)` | call the builtin | parse error: `max` is a constant on this path and shadows the function |
+| the `int64` out-of-range message | print `INT64_MAX` | prints `9223372036854775808.000000`, one too high, because the bound goes through a `double` before `%f` |
+| `-ac ""` | reject | accepted as zero, because C sets `endptr = nptr` on failure and the tail is then empty — while `-ac " "` *is* rejected |
 
 The last two are the binary's to reproduce, not this crate's — this crate does
 not log. `StreamSpecifier::usable` is the trigger for the first;
@@ -203,7 +303,13 @@ bite here, but a consumer must honour it.
 
 * **A new option** is a row in `src/tables/ffmpeg.rs` or `src/tables/ffprobe.rs`.
   Give it exactly one of `GLOBAL` / `PER_FILE`; a `PER_FILE` row needs `INPUT`,
-  `OUTPUT` or both. `tests` in `src/table.rs` enforce both rules.
+  `OUTPUT` or both; and give it a `ValueKind` **established by probing**, not by
+  reading the argument placeholder. `tests` in `src/table.rs` enforce the first
+  two rules and that the kind agrees with `HAS_ARG`.
+* **Do not add a second number parser.** `value::strtod` is `av_strtod` and is
+  built on `vaco_expr::scan_number`, so the CLI grammar and the expression
+  language's literals cannot drift apart. They are the same function in the
+  reference too.
 * **The grammar** lives in one function, `StreamSpecifier::token`. Adding a token
   means adding a branch and deciding whether it is terminal. Add the new
   spellings to `tests/reference.rs` *by probing the reference*, never by
@@ -238,6 +344,7 @@ decides when an unknown option name becomes an error.
 | Crate | Used for |
 |---|---|
 | `vaco-core` | `MediaType`, `Dict` (case-insensitive tag lookup) |
+| `vaco-expr` | the expression language, and its number lexer — which is also the plain-number grammar |
 | `thiserror` | the error taxonomy |
 | `vaco-opts` | declared for the component-option seam; **not yet used** |
 | `vaco-registry` | declared for the listing commands; **not yet used** |
@@ -254,11 +361,22 @@ build depend on the whole workspace compiling.
   commands (`-formats`, `-codecs`, …). Roadmap CL-04. The table carries
   everything they need — `EXPERT`, `VIDEO`/`AUDIO`/`SUBTITLE`/`DATA`, `argname`,
   `help` — so this is rendering work, not modelling work.
-* **Numeric value grammars with expressions.** The reference accepts
-  `-b:v 2*1000`, which means every numeric option value goes through the
-  expression evaluator. `vaco-expr` is not a declared dependency of this crate,
-  so this is deferred rather than half-done. `vaco-core::parse` already covers
-  durations, sizes, rates and colours.
+* **The ratio and rate parsers.** `ValueKind::Rate` and the ratio-valued
+  options (`-aspect`, `-time_base`) are *classified* here but parsed in
+  `vaco-core::parse`, which is where the size, colour and duration grammars
+  already live. **That parser is currently not expression-backed and needs to
+  be**: the reference's `av_parse_ratio` evaluates the whole string as one
+  expression and then approximates, so `-aspect 2*3/4` is 1.5 (rendered 3:2)
+  and `-r 5*5` is 25/1 — both verified. `vaco_core::parse::rational` splits on
+  `/` and calls `str::parse`, so it rejects all three. Raised for the
+  `vaco-core` owner rather than worked around here; adding a second ratio
+  parser in this crate is exactly the drift the shared number grammar avoids.
+
+* **The bespoke value grammars** — log levels, `-target` presets, hardware
+  device specifications, `-program`/`-stream_group` specifications. Each is
+  `ValueKind::Custom`: one parser and one message per option, owned by the
+  binary that uses it. Durations, sizes, rates and colours already live in
+  `vaco-core::parse`.
 * **`-map_metadata`'s two-sided form** (`outfile[,metadata]:infile[,metadata]`).
   The metadata specifier grammar it is built from is implemented; the pairing is
   the consuming binary's.

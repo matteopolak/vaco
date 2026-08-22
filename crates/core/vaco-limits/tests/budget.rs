@@ -244,13 +244,11 @@ fn deadline_is_checked_only_when_configured() {
     let b = Budget::new(Limits::strict());
     assert!(b.check_deadline().is_ok());
 
-    let past = std::time::Instant::now()
-        .checked_sub(std::time::Duration::from_secs(1))
-        .unwrap();
+    let past = vaco_time::Instant::now().saturating_sub(vaco_time::Duration::from_secs(1));
     let b = Budget::new(Limits::strict().with_deadline(past));
     assert_eq!(b.check_deadline(), Err(LimitError::DeadlineExceeded));
 
-    let future = std::time::Instant::now() + std::time::Duration::from_secs(3600);
+    let future = vaco_time::Instant::now().saturating_add(vaco_time::Duration::from_secs(3600));
     let b = Budget::new(Limits::strict().with_deadline(future));
     assert!(b.check_deadline().is_ok());
 }

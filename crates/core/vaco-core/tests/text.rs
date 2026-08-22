@@ -216,8 +216,14 @@ fn video_rate_abbreviations_are_exact() {
     let r = parse::video_rate("29.97").unwrap();
     assert_eq!(r, Rational::new(2997, 100));
     assert_ne!(r, Rational::new(30000, 1001));
-    // 1/0 parses: research 05 §5.6 says filtering it out is the caller's job.
-    assert_eq!(parse::rational("1/0"), Some(Rational::new(1, 0)));
+    // 1/0 does NOT parse. Research 05 §5.6 said an infinite ratio was valid and
+    // that filtering it was the caller's job; probing says otherwise — the
+    // reference rejects it at both sites we can reach:
+    //   -aspect 1/0  ->  Invalid aspect ratio: 1/0
+    //   -r      1/0  ->  Invalid framerate value: 1/0
+    // It falls out of the grammar rather than being a special case: `/` is
+    // division, 1/0 is infinity, and an infinity has no rational approximation.
+    assert_eq!(parse::rational("1/0"), None);
     assert_eq!(parse::rational("16:9"), Some(Rational::new(16, 9)));
     assert_eq!(parse::rational("not a rate"), None);
 }
@@ -412,9 +418,22 @@ proptest! {
         prop_assert_eq!(parse::color(&parse::format_color(c)), Some(c));
         prop_assert_eq!(parse::color(&c.to_string()), Some(c));
 
+        // `format_rational` renders `num/den`, and `rational` now EVALUATES
+        // that as a division — so the round trip preserves the value, not the
+        // spelling. The reference does the same: `-aspect 6/4` yields 3:2.
+        // Restricted to finite, in-range ratios; `den == 0` is an infinity with
+        // no rational approximation, which the reference also rejects.
         let r = Rational::new(num, den);
-        let back = parse::rational(&parse::format_rational(r)).unwrap();
-        prop_assert_eq!((back.num, back.den), (r.num, r.den));
+        if r.den != 0 && r.num != 0 {
+            let back = parse::rational(&parse::format_rational(r))
+                .expect("a finite ratio must round-trip");
+            let (a, b) = (back.to_f64(), r.to_f64());
+            prop_assert!(
+                (a - b).abs() <= b.abs() / 1e5 + 1e-9,
+                "{} vs {} for {}/{}", a, b, r.num, r.den
+            );
+            prop_assert_eq!(back.signum(), r.signum());
+        }
 
         let hex = parse::format_binary(&bytes);
         let decoded = parse::binary(&hex);
@@ -455,4 +474,54 @@ proptest! {
         let name = rates[i % rates.len()];
         prop_assert!(parse::video_rate(name).unwrap().is_defined(), "{}", name);
     }
+}
+
+/// The ratio grammar is expression-backed, and `/` is division rather than a
+/// separator. Every row probed against ffmpeg 8.1 via `-aspect` and `-r`; the
+/// discriminating cases are the ones a split-on-`/` reading gets wrong.
+#[test]
+fn rational_evaluates_the_whole_string() {
+    let r = |s| parse::rational(s).map(|r| (r.num, r.den));
+    // Chosen to tell whole-string evaluation from split-on-first-`/`:
+    // a split reading predicts 2:3 for "4/2*3"; the reference gives 6:1.
+    assert_eq!(r("1/2/2"), Some((1, 4)));
+    assert_eq!(r("4/2*3"), Some((6, 1)));
+    assert_eq!(r("8/2/2"), Some((2, 1)));
+    assert_eq!(r("2*3/4"), Some((3, 2)));
+    assert_eq!(r("sqrt(4)"), Some((2, 1)));
+    assert_eq!(r("2^5"), Some((32, 1)));
+    assert_eq!(r("1+1"), Some((2, 1)));
+
+    // Plain forms still behave, and stay exact.
+    assert_eq!(r("30000/1001"), Some((30000, 1001)));
+    assert_eq!(r("25"), Some((25, 1)));
+
+    // The `:` form is the first branch and is NOT expression-backed: it matches
+    // only as `int:int` spanning the whole string.
+    assert_eq!(r("3:2"), Some((3, 2)));
+    assert_eq!(r("16:9"), Some((16, 9)));
+    assert_eq!(r("1:2/2"), None, "the reference rejects this at the ':'");
+}
+
+/// `-r` accepts the same expressions, and still rejects non-positive rates.
+#[test]
+fn video_rate_accepts_expressions() {
+    let v = |s| parse::video_rate(s).map(|r| (r.num, r.den));
+    assert_eq!(v("5*5"), Some((25, 1)));
+    assert_eq!(v("2^5"), Some((32, 1)));
+    assert_eq!(v("sqrt(4)"), Some((2, 1)));
+    assert_eq!(v("ntsc"), Some((30000, 1001)), "abbreviations win first");
+    assert_eq!(v("0-1"), None, "the reference rejects a negative rate");
+    assert_eq!(v("0"), None);
+}
+
+/// Moved here with the `From` impl when `vaco-expr` became a leaf: the impl
+/// cannot live in `vaco-expr` without that crate depending on this one, and
+/// that edge blocked this crate from using the evaluator at all.
+#[test]
+fn expression_errors_convert_into_the_core_taxonomy() {
+    let err = vaco_expr::Expr::parse("nosuchfn(1)", &vaco_expr::Bindings::new(&[]))
+        .expect_err("an unknown function is rejected");
+    let core: vaco_core::Error = err.into();
+    assert!(matches!(core, vaco_core::Error::Option { .. }));
 }

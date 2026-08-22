@@ -36,15 +36,23 @@ vaco-color = { path = "../crates/model/vaco-color" }
 vaco-conformance = { path = "../crates/tool/vaco-conformance" }
 vaco-core = { path = "../crates/core/vaco-core" }
 vaco-expr = { path = "../crates/core/vaco-expr" }
+vaco-filter-core = { path = "../crates/filter/vaco-filter-core" }
 vaco-format-core = { path = "../crates/format/vaco-format-core" }
+vaco-format-isom = { path = "../crates/format/vaco-format-isom" }
+vaco-format-nalu = { path = "../crates/format/vaco-format-nalu" }
 vaco-frame = { path = "../crates/model/vaco-frame" }
 vaco-io = { path = "../crates/io/vaco-io" }
 vaco-limits = { path = "../crates/core/vaco-limits" }
 vaco-packet = { path = "../crates/model/vaco-packet" }
+vaco-parse-aac = { path = "../crates/codec/vaco-parse-aac" }
+vaco-parse-h264 = { path = "../crates/codec/vaco-parse-h264" }
+vaco-parse-opus = { path = "../crates/codec/vaco-parse-opus" }
 vaco-pixfmt = { path = "../crates/model/vaco-pixfmt" }
 vaco-pool = { path = "../crates/model/vaco-pool" }
 vaco-protocol-core = { path = "../crates/io/vaco-protocol-core" }
+vaco-resample = { path = "../crates/signal/vaco-resample" }
 vaco-sampfmt = { path = "../crates/model/vaco-sampfmt" }
+vaco-scale = { path = "../crates/signal/vaco-scale" }
 vaco-textformat = { path = "../crates/app/vaco-textformat" }
 
 [features]
@@ -59,14 +67,22 @@ default = [
     "conformance",
     "core",
     "expr",
+    "filter-core",
     "format-core",
+    "format-isom",
+    "format-nalu",
     "frame",
     "io",
     "limits",
     "packet",
+    "parse-aac",
+    "parse-h264",
+    "parse-opus",
     "pool",
     "protocol-core",
+    "resample",
     "sampfmt",
+    "scale",
     "textformat",
 ]
 bitstream = []
@@ -79,14 +95,22 @@ color = []
 conformance = []
 core = []
 expr = []
+filter-core = []
 format-core = []
+format-isom = []
+format-nalu = []
 frame = []
 io = []
 limits = []
 packet = []
+parse-aac = []
+parse-h264 = []
+parse-opus = []
 pool = []
 protocol-core = []
+resample = []
 sampfmt = []
+scale = []
 textformat = []
 
 # Overflow checks ON in the profile the fuzzer actually runs, so arithmetic
@@ -156,6 +180,14 @@ required-features = ["cli-core"]
 [[bin]]
 name = "cli_specifier"
 path = "fuzz_targets/cli_specifier.rs"
+test = false
+doc = false
+bench = false
+required-features = ["cli-core"]
+
+[[bin]]
+name = "cli_value"
+path = "fuzz_targets/cli_value.rs"
 test = false
 doc = false
 bench = false
@@ -274,6 +306,22 @@ bench = false
 required-features = ["expr"]
 
 [[bin]]
+name = "filter_graph_schedule"
+path = "fuzz_targets/filter_graph_schedule.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-core"]
+
+[[bin]]
+name = "filter_timeline_expr"
+path = "fuzz_targets/filter_timeline_expr.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-core"]
+
+[[bin]]
 name = "format_interleave"
 path = "fuzz_targets/format_interleave.rs"
 test = false
@@ -346,6 +394,30 @@ bench = false
 required-features = ["protocol-core"]
 
 [[bin]]
+name = "isom_box_walk"
+path = "fuzz_targets/isom_box_walk.rs"
+test = false
+doc = false
+bench = false
+required-features = ["format-isom"]
+
+[[bin]]
+name = "isom_file"
+path = "fuzz_targets/isom_file.rs"
+test = false
+doc = false
+bench = false
+required-features = ["format-isom"]
+
+[[bin]]
+name = "isom_sample_table"
+path = "fuzz_targets/isom_sample_table.rs"
+test = false
+doc = false
+bench = false
+required-features = ["format-isom"]
+
+[[bin]]
 name = "limit_budget"
 path = "fuzz_targets/limit_budget.rs"
 test = false
@@ -354,12 +426,76 @@ bench = false
 required-features = ["limits"]
 
 [[bin]]
+name = "limit_h264"
+path = "fuzz_targets/limit_h264.rs"
+test = false
+doc = false
+bench = false
+required-features = ["parse-h264"]
+
+[[bin]]
+name = "nalu_framing"
+path = "fuzz_targets/nalu_framing.rs"
+test = false
+doc = false
+bench = false
+required-features = ["format-nalu"]
+
+[[bin]]
 name = "packet_from_slice"
 path = "fuzz_targets/packet_from_slice.rs"
 test = false
 doc = false
 bench = false
 required-features = ["packet"]
+
+[[bin]]
+name = "parse_aac_adts"
+path = "fuzz_targets/parse_aac_adts.rs"
+test = false
+doc = false
+bench = false
+required-features = ["parse-aac"]
+
+[[bin]]
+name = "parse_aac_asc"
+path = "fuzz_targets/parse_aac_asc.rs"
+test = false
+doc = false
+bench = false
+required-features = ["parse-aac"]
+
+[[bin]]
+name = "parse_aac_latm"
+path = "fuzz_targets/parse_aac_latm.rs"
+test = false
+doc = false
+bench = false
+required-features = ["parse-aac"]
+
+[[bin]]
+name = "parse_h264"
+path = "fuzz_targets/parse_h264.rs"
+test = false
+doc = false
+bench = false
+required-features = ["parse-h264"]
+
+[[bin]]
+name = "parse_opus_head"
+path = "fuzz_targets/parse_opus_head.rs"
+test = false
+doc = false
+bench = false
+required-features = ["parse-opus"]
+
+[[bin]]
+name = "parse_opus_packet"
+path = "fuzz_targets/parse_opus_packet.rs"
+test = false
+doc = false
+bench = false
+required-features = ["parse-opus"]
 
 [[bin]]
 name = "pool_acquire"
@@ -378,12 +514,28 @@ bench = false
 required-features = ["bitstream"]
 
 [[bin]]
+name = "resample_convert"
+path = "fuzz_targets/resample_convert.rs"
+test = false
+doc = false
+bench = false
+required-features = ["resample"]
+
+[[bin]]
 name = "sampfmt_parse"
 path = "fuzz_targets/sampfmt_parse.rs"
 test = false
 doc = false
 bench = false
 required-features = ["sampfmt"]
+
+[[bin]]
+name = "scale_convert"
+path = "fuzz_targets/scale_convert.rs"
+test = false
+doc = false
+bench = false
+required-features = ["scale"]
 
 [[bin]]
 name = "textformat_escape"

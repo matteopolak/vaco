@@ -1,6 +1,6 @@
 //! The immutable policy half of the crate.
 
-use std::time::Instant;
+use vaco_time::Instant;
 
 /// The caps a component instance must respect, as an immutable policy value.
 ///

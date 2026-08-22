@@ -18,12 +18,18 @@
     clippy::expect_used,
     reason = "a test that cannot set up is a failed test"
 )]
+#![allow(
+    clippy::float_cmp,
+    reason = "these assert exact values, and an epsilon would hide the only \
+              thing worth catching -- a wrong constant"
+)]
 
 use std::ffi::OsString;
 
 use proptest::prelude::*;
 use vaco_cli_core::{
-    Disposition, MapSpec, MatchCtx, StreamInfo, StreamSpecifier, ffmpeg, ffprobe, split,
+    Disposition, Expression, MapSpec, MatchCtx, NumberLimits, OptionConstants, StreamInfo,
+    StreamSpecifier, eval_option, ffmpeg, ffprobe, parse_number, split, strtod,
 };
 use vaco_core::MediaType;
 
@@ -201,6 +207,105 @@ proptest! {
             }
         }
     }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 512, ..ProptestConfig::default() })]
+
+    /// `strtod` reports exactly what it consumed, always.
+    ///
+    /// The `Expected number for …` check is `*endptr == 0`, so a tail that is
+    /// not a true suffix would make acceptance disagree with the reference.
+    #[test]
+    fn strtod_tail_is_always_a_suffix(s in wild_text()) {
+        let (_, tail) = strtod(&s);
+        prop_assert!(s.ends_with(tail));
+        prop_assert!(tail.len() <= s.len());
+    }
+
+    /// C's contract: no conversion means `endptr == nptr`, leading whitespace
+    /// included. That is what makes `-ac ""` legal and `-ac " "` not.
+    #[test]
+    fn strtod_consumes_nothing_or_starts_at_the_number(s in wild_text()) {
+        let (value, tail) = strtod(&s);
+        if tail.len() == s.len() {
+            prop_assert_eq!(tail, s.as_str());
+            prop_assert_eq!(value.to_bits(), 0.0f64.to_bits());
+        }
+    }
+
+    /// Every `f64` survives a round trip through the number grammar, because
+    /// Rust's `{:?}` is round-trip exact and `av_strtod` is a superset of the
+    /// decimal syntax it emits — `inf` and `NaN` included.
+    #[test]
+    fn every_f64_round_trips_through_strtod(bits in any::<u64>()) {
+        let v = f64::from_bits(bits);
+        let text = format!("{v:?}");
+        let (back, tail) = strtod(&text);
+        prop_assert_eq!(tail, "", "{:?} left {:?}", text, tail);
+        if v.is_nan() {
+            prop_assert!(back.is_nan());
+        } else {
+            prop_assert_eq!(back.to_bits(), v.to_bits(), "via {:?}", text);
+        }
+    }
+
+    /// Acceptance implies full consumption, and a bounded kind never returns a
+    /// value outside its bounds.
+    #[test]
+    fn parse_number_respects_its_own_contract(s in wild_text()) {
+        for limits in [NumberLimits::int32(), NumberLimits::int64(), NumberLimits::float()] {
+            if let Ok(v) = parse_number("opt", &s, limits) {
+                prop_assert_eq!(strtod(&s).1, "");
+                prop_assert!(v >= limits.min && v <= limits.max);
+                if limits.integral {
+                    prop_assert_eq!(v.fract(), 0.0);
+                }
+            }
+        }
+    }
+
+    /// Compiling once and evaluating is the same as evaluating once, and
+    /// evaluation is deterministic.
+    #[test]
+    fn expression_evaluation_is_deterministic(s in expr_text()) {
+        let c = OptionConstants::new(1.0, -2.0, 3.0);
+        let once = eval_option("opt", &s, c);
+        let compiled = Expression::compile_for_option("opt", &s);
+        prop_assert_eq!(once.is_ok(), compiled.is_ok());
+        if let (Ok(a), Ok(e)) = (once, compiled) {
+            let b = e.eval(&c.values());
+            prop_assert_eq!(a.to_bits(), b.to_bits());
+            prop_assert_eq!(e.eval(&c.values()).to_bits(), b.to_bits());
+            prop_assert_eq!(e.source(), s.as_str());
+        }
+    }
+
+    /// Both value grammars are total over the same corpus.
+    ///
+    /// They disagree constantly — that is the point, and the specific
+    /// disagreements are pinned by the recorded transcript in
+    /// `tests/conformance.rs`. What matters here is that neither ever panics on
+    /// text written for the other.
+    #[test]
+    fn both_value_grammars_are_total_over_the_same_corpus(s in expr_text()) {
+        let plain = parse_number("opt", &s, NumberLimits::float());
+        let expr = eval_option("opt", &s, OptionConstants::UNKNOWN);
+        // A value both accept must agree, since a bare number means the same
+        // thing in either grammar.
+        if let (Ok(a), Ok(b)) = (plain, expr) {
+            prop_assert_eq!(a.to_bits(), b.to_bits(), "grammars disagree on {:?}", s);
+        }
+    }
+}
+
+/// Text drawn from the expression alphabet.
+fn expr_text() -> impl Strategy<Value = String> {
+    let token = prop::sample::select(vec![
+        "1", "2", "0", "+", "-", "*", "/", "^", "(", ")", ",", ";", "min", "max", "default", "PI",
+        "E", "abs", "gcd", "if", "st", "ld", "20dB", "2k", "0x10", " ", "nan", "inf", "",
+    ]);
+    prop::collection::vec(token, 0..8).prop_map(|v| v.concat())
 }
 
 /// Argv entries drawn from a mix of real option spellings and noise.

@@ -38,6 +38,7 @@ use crate::metaspec::MetadataSpecifier;
 use crate::spec::StreamSpecifier;
 use crate::stream::MatchCtx;
 use crate::table::{Lookup, OptDesc, OptFlags, OptTable, Positional, SpecKind};
+use crate::value::{Expression, NumberLimits, OptionConstants, ValueKind};
 
 /// Decides whether an option name the tool's own table does not have could
 /// still be a component `AVOption`.
@@ -168,6 +169,60 @@ impl ParsedOption {
             kind,
             value: v.clone(),
         })
+    }
+
+    /// The grammar this occurrence's value is written in.
+    ///
+    /// [`ValueKind::Expr`] for a deferred component option, because every
+    /// `AVOption` numeric goes through the evaluator — which is precisely why
+    /// `-crf 2*10` works while `-ac 1*2` does not.
+    #[must_use]
+    pub fn kind(&self) -> ValueKind {
+        self.desc.map_or(ValueKind::Expr, |d| d.kind)
+    }
+
+    /// Parse the value under the option's own grammar, returning a number.
+    ///
+    /// Dispatches on [`ParsedOption::kind`]: a plain-number option gets
+    /// `av_strtod` plus the range and integrality checks, an expression option
+    /// gets the evaluator. Anything else returns `Ok(None)` — a duration, a
+    /// size or a filter graph is not this function's business.
+    ///
+    /// # Errors
+    /// [`CliError::ExpectedNumber`], [`CliError::ValueOutOfRange`],
+    /// [`CliError::ExpectedInteger`] or [`CliError::BadExpression`].
+    pub fn number(&self) -> Result<Option<f64>> {
+        let kind = self.kind();
+        let text = match kind {
+            ValueKind::Int | ValueKind::Int64 | ValueKind::Float | ValueKind::Expr => {
+                self.value_str("number")?
+            }
+            _ => return Ok(None),
+        };
+        if kind == ValueKind::Expr {
+            // The option dialect, not the filtergraph one: `max` and `min` are
+            // this option's own bounds here, not builtin functions.
+            crate::value::eval_option(&self.name, text, OptionConstants::UNKNOWN).map(Some)
+        } else {
+            let limits = NumberLimits::for_kind(kind).unwrap_or_else(NumberLimits::float);
+            crate::value::parse_number(&self.name, text, limits).map(Some)
+        }
+    }
+
+    /// Compile the value as an expression, for the options that take one.
+    ///
+    /// Returns `Ok(None)` when this option's value is not an expression, so a
+    /// caller can ask unconditionally.
+    ///
+    /// # Errors
+    /// [`CliError::BadExpression`], or [`CliError::InvalidValue`] if the value
+    /// is not UTF-8.
+    pub fn expression(&self) -> Result<Option<Expression>> {
+        if !self.kind().is_expression() {
+            return Ok(None);
+        }
+        let text = self.value_str("expression")?;
+        Expression::compile_for_option(&self.name, text).map(Some)
     }
 
     /// Read the value from the file it names, for `-/opt path`.

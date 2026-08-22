@@ -50,6 +50,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "940b3a0ca603d1eade50a4846a2afffd5ef57a9feac2c0e2ec2e14f9ead76000"
 
 [[package]]
+name = "arrayvec"
+version = "0.7.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -647,6 +653,12 @@ name = "log"
 version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
+
+[[package]]
+name = "memchr"
+version = "2.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "miniz_oxide"
@@ -1498,6 +1510,7 @@ dependencies = [
  "proptest",
  "thiserror",
  "vaco-core",
+ "vaco-expr",
  "vaco-opts",
  "vaco-registry",
  "vaco-textformat",
@@ -1582,6 +1595,8 @@ dependencies = [
  "proptest",
  "thiserror",
  "tracing",
+ "vaco-expr",
+ "vaco-time",
 ]
 
 [[package]]
@@ -1624,7 +1639,7 @@ dependencies = [
  "divan",
  "proptest",
  "thiserror",
- "vaco-core",
+ "vaco-time",
 ]
 
 [[package]]
@@ -1632,13 +1647,14 @@ name = "vaco-filter-core"
 version = "0.1.0"
 dependencies = [
  "bitflags",
+ "divan",
+ "proptest",
  "smallvec",
  "vaco-chlayout",
  "vaco-color",
  "vaco-core",
  "vaco-expr",
  "vaco-frame",
- "vaco-opts",
  "vaco-pixfmt",
  "vaco-sampfmt",
 ]
@@ -1689,9 +1705,14 @@ dependencies = [
 name = "vaco-format-isom"
 version = "0.1.0"
 dependencies = [
+ "divan",
+ "proptest",
+ "vaco-bitstream",
+ "vaco-codec-core",
  "vaco-core",
  "vaco-format-core",
  "vaco-io",
+ "vaco-limits",
 ]
 
 [[package]]
@@ -1706,8 +1727,12 @@ dependencies = [
 name = "vaco-format-nalu"
 version = "0.1.0"
 dependencies = [
+ "divan",
+ "memchr",
+ "proptest",
  "vaco-bitstream",
  "vaco-core",
+ "vaco-limits",
 ]
 
 [[package]]
@@ -1752,6 +1777,7 @@ dependencies = [
  "proptest",
  "thiserror",
  "vaco-core",
+ "vaco-time",
 ]
 
 [[package]]
@@ -1792,9 +1818,14 @@ dependencies = [
 name = "vaco-parse-aac"
 version = "0.1.0"
 dependencies = [
+ "divan",
+ "proptest",
  "vaco-bitstream",
+ "vaco-chlayout",
  "vaco-codec-core",
  "vaco-core",
+ "vaco-limits",
+ "vaco-packet",
 ]
 
 [[package]]
@@ -1810,11 +1841,17 @@ dependencies = [
 name = "vaco-parse-h264"
 version = "0.1.0"
 dependencies = [
+ "divan",
+ "proptest",
  "vaco-bitstream",
  "vaco-codec-core",
  "vaco-codec-golomb",
+ "vaco-color",
  "vaco-core",
  "vaco-format-nalu",
+ "vaco-limits",
+ "vaco-packet",
+ "vaco-pixfmt",
 ]
 
 [[package]]
@@ -1832,9 +1869,15 @@ dependencies = [
 name = "vaco-parse-opus"
 version = "0.1.0"
 dependencies = [
+ "arrayvec",
+ "divan",
+ "proptest",
  "vaco-bitstream",
+ "vaco-chlayout",
  "vaco-codec-core",
  "vaco-core",
+ "vaco-limits",
+ "vaco-packet",
 ]
 
 [[package]]
@@ -1918,12 +1961,14 @@ dependencies = [
 name = "vaco-resample"
 version = "0.1.0"
 dependencies = [
+ "divan",
+ "proptest",
+ "tracing",
  "vaco-chlayout",
  "vaco-core",
  "vaco-frame",
- "vaco-opts",
+ "vaco-limits",
  "vaco-sampfmt",
- "vaco-simd",
 ]
 
 [[package]]
@@ -1938,10 +1983,14 @@ dependencies = [
 name = "vaco-scale"
 version = "0.1.0"
 dependencies = [
+ "bitflags",
+ "divan",
+ "proptest",
  "rayon",
  "vaco-color",
  "vaco-core",
  "vaco-frame",
+ "vaco-limits",
  "vaco-opts",
  "vaco-pixfmt",
  "vaco-simd",
@@ -1975,6 +2024,10 @@ dependencies = [
  "proptest",
  "vaco-core",
 ]
+
+[[package]]
+name = "vaco-time"
+version = "0.1.0"
 
 [[package]]
 name = "vaco-tx"

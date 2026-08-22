@@ -9,6 +9,7 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+vaco-time = { path = "../vaco-time" }
 vaco-core = { path = "../../core/vaco-core" }
 thiserror.workspace = true
 

@@ -101,6 +101,21 @@ impl<P: Parser> ParserDriver<P> {
         }
         self.budget.check(chunk.len() as u64)?;
         self.buf.extend_from_slice(chunk);
+        if !chunk.is_empty() {
+            // New bytes ARE progress, even though the parser consumed none from
+            // the previous ones. Without this, feeding a stream in chunks
+            // smaller than a frame aborts it: each `next_unit` that finds the
+            // buffer still too short ticks the guard, and 65 of those trip
+            // `NoProgress` — so an 88-byte ADTS frame pushed a byte at a time
+            // died before it could be confirmed. Found by `vaco-parse-aac`'s
+            // fuzzer; it affects every byte-stream parser, not that one.
+            //
+            // The hang this guard exists to catch is unaffected: a caller that
+            // loops `next_unit` WITHOUT pushing still re-parses the same bytes,
+            // still ticks, and still aborts. And a parser that never consumes
+            // while the caller keeps pushing is caught by `max_pending` above.
+            self.guard.reset();
+        }
         Ok(())
     }
 

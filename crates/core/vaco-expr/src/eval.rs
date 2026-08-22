@@ -570,7 +570,7 @@ fn next_random(ctx: &mut Context<'_>, index: usize) -> f64 {
 }
 
 fn wallclock_seconds() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0.0, |d| d.as_secs_f64())
+    // Via `vaco-time`: on a target with no wall clock this reads 0, which is
+    // what the crate docs promise for `time` rather than a panic.
+    vaco_time::unix_nanos().map_or(0.0, |n| n as f64 / 1e9)
 }

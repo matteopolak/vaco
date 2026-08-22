@@ -263,7 +263,7 @@ impl Budget {
     /// [`LimitError::DeadlineExceeded`].
     pub fn check_deadline(&self) -> Result<()> {
         match self.limits.deadline {
-            Some(at) if std::time::Instant::now() >= at => Err(LimitError::DeadlineExceeded),
+            Some(at) if vaco_time::Instant::now() >= at => Err(LimitError::DeadlineExceeded),
             _ => Ok(()),
         }
     }

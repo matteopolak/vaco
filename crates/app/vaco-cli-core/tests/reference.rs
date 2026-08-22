@@ -7217,3 +7217,679 @@ pub static MAPS: &[Observed] = &[
         verdict: "OK",
     },
 ];
+
+/// `-ac <literal>` — the plain-number grammar, and the three checks the
+/// reference runs in order. `-ac` is a C `int` field, so `verdict` shows the
+/// `int32` bounds.
+///
+/// `verdict` is `"OK"` for acceptance, otherwise the exact message text.
+pub static NUMBERS: &[Observed] = &[
+    Observed {
+        input: "2",
+        verdict: "OK",
+    },
+    Observed {
+        input: "2.0",
+        verdict: "OK",
+    },
+    Observed {
+        input: "+2",
+        verdict: "OK",
+    },
+    Observed {
+        input: "-2",
+        verdict: "OK",
+    },
+    Observed {
+        input: " 2",
+        verdict: "OK",
+    },
+    Observed {
+        input: "  2",
+        verdict: "OK",
+    },
+    Observed {
+        input: "\t2",
+        verdict: "OK",
+    },
+    Observed {
+        input: "\n2",
+        verdict: "OK",
+    },
+    Observed {
+        input: "\r2",
+        verdict: "OK",
+    },
+    Observed {
+        input: "\u{b}2",
+        verdict: "OK",
+    },
+    Observed {
+        input: "\u{c}2",
+        verdict: "OK",
+    },
+    Observed {
+        input: "2 ",
+        verdict: "Expected number for ac but found: 2 ",
+    },
+    Observed {
+        input: "2\t",
+        verdict: "Expected number for ac but found: 2\t",
+    },
+    Observed {
+        input: "- 2",
+        verdict: "Expected number for ac but found: - 2",
+    },
+    Observed {
+        input: "-  2",
+        verdict: "Expected number for ac but found: -  2",
+    },
+    Observed {
+        input: "+ 2",
+        verdict: "Expected number for ac but found: + 2",
+    },
+    Observed {
+        input: "0x2",
+        verdict: "OK",
+    },
+    Observed {
+        input: "0X10",
+        verdict: "OK",
+    },
+    Observed {
+        input: "0x",
+        verdict: "Expected number for ac but found: 0x",
+    },
+    Observed {
+        input: "0x1p4",
+        verdict: "Expected number for ac but found: 0x1p4",
+    },
+    Observed {
+        input: "0b1",
+        verdict: "Expected number for ac but found: 0b1",
+    },
+    Observed {
+        input: "1e0",
+        verdict: "OK",
+    },
+    Observed {
+        input: "1e3",
+        verdict: "OK",
+    },
+    Observed {
+        input: "2e",
+        verdict: "Expected number for ac but found: 2e",
+    },
+    Observed {
+        input: "2E",
+        verdict: "The value for ac was 2E which is not within -2147483648.000000 - 2147483647.000000",
+    },
+    Observed {
+        input: "2k",
+        verdict: "OK",
+    },
+    Observed {
+        input: "2K",
+        verdict: "OK",
+    },
+    Observed {
+        input: "2M",
+        verdict: "OK",
+    },
+    Observed {
+        input: "2G",
+        verdict: "OK",
+    },
+    Observed {
+        input: "2m",
+        verdict: "Expected int64 for ac but found 2m",
+    },
+    Observed {
+        input: "2u",
+        verdict: "Expected int64 for ac but found 2u",
+    },
+    Observed {
+        input: "2n",
+        verdict: "Expected int64 for ac but found 2n",
+    },
+    Observed {
+        input: "2h",
+        verdict: "OK",
+    },
+    Observed {
+        input: "2c",
+        verdict: "Expected int64 for ac but found 2c",
+    },
+    Observed {
+        input: "2d",
+        verdict: "Expected int64 for ac but found 2d",
+    },
+    Observed {
+        input: "2ki",
+        verdict: "OK",
+    },
+    Observed {
+        input: "2Ki",
+        verdict: "OK",
+    },
+    Observed {
+        input: "2kB",
+        verdict: "OK",
+    },
+    Observed {
+        input: "2B",
+        verdict: "OK",
+    },
+    Observed {
+        input: "2kBB",
+        verdict: "Expected number for ac but found: 2kBB",
+    },
+    Observed {
+        input: "2Bk",
+        verdict: "Expected number for ac but found: 2Bk",
+    },
+    Observed {
+        input: "2i",
+        verdict: "Expected number for ac but found: 2i",
+    },
+    Observed {
+        input: "2dB",
+        verdict: "Expected int64 for ac but found 2dB",
+    },
+    Observed {
+        input: "20dB",
+        verdict: "Expected int64 for ac but found 20dB",
+    },
+    Observed {
+        input: "-20dB",
+        verdict: "Expected int64 for ac but found -20dB",
+    },
+    Observed {
+        input: "0dB",
+        verdict: "OK",
+    },
+    Observed {
+        input: "inf",
+        verdict: "The value for ac was inf which is not within -2147483648.000000 - 2147483647.000000",
+    },
+    Observed {
+        input: "-inf",
+        verdict: "The value for ac was -inf which is not within -2147483648.000000 - 2147483647.000000",
+    },
+    Observed {
+        input: "INF",
+        verdict: "The value for ac was INF which is not within -2147483648.000000 - 2147483647.000000",
+    },
+    Observed {
+        input: "infinity",
+        verdict: "The value for ac was infinity which is not within -2147483648.000000 - 2147483647.000000",
+    },
+    Observed {
+        input: "nan",
+        verdict: "Expected int64 for ac but found nan",
+    },
+    Observed {
+        input: "nan(1)",
+        verdict: "Expected int64 for ac but found nan(1)",
+    },
+    Observed {
+        input: "-nan",
+        verdict: "Expected int64 for ac but found -nan",
+    },
+    Observed {
+        input: "2.5k",
+        verdict: "OK",
+    },
+    Observed {
+        input: ".5",
+        verdict: "Expected int64 for ac but found .5",
+    },
+    Observed {
+        input: "5.",
+        verdict: "OK",
+    },
+    Observed {
+        input: ".",
+        verdict: "Expected number for ac but found: .",
+    },
+    Observed {
+        input: "",
+        verdict: "OK",
+    },
+    Observed {
+        input: "  ",
+        verdict: "Expected number for ac but found:   ",
+    },
+    Observed {
+        input: "2*1",
+        verdict: "Expected number for ac but found: 2*1",
+    },
+    Observed {
+        input: "1+1",
+        verdict: "Expected number for ac but found: 1+1",
+    },
+    Observed {
+        input: "PI",
+        verdict: "Expected number for ac but found: PI",
+    },
+    Observed {
+        input: "E",
+        verdict: "Expected number for ac but found: E",
+    },
+    Observed {
+        input: "zzz",
+        verdict: "Expected number for ac but found: zzz",
+    },
+    Observed {
+        input: "1_0",
+        verdict: "Expected number for ac but found: 1_0",
+    },
+    Observed {
+        input: "2 k",
+        verdict: "Expected number for ac but found: 2 k",
+    },
+    Observed {
+        input: "0xg",
+        verdict: "Expected number for ac but found: 0xg",
+    },
+    Observed {
+        input: "2p",
+        verdict: "Expected int64 for ac but found 2p",
+    },
+    Observed {
+        input: "2y",
+        verdict: "Expected int64 for ac but found 2y",
+    },
+    Observed {
+        input: "2Y",
+        verdict: "The value for ac was 2Y which is not within -2147483648.000000 - 2147483647.000000",
+    },
+    Observed {
+        input: "2z",
+        verdict: "Expected int64 for ac but found 2z",
+    },
+    Observed {
+        input: "2Z",
+        verdict: "The value for ac was 2Z which is not within -2147483648.000000 - 2147483647.000000",
+    },
+    Observed {
+        input: "2a",
+        verdict: "Expected int64 for ac but found 2a",
+    },
+    Observed {
+        input: "2f",
+        verdict: "Expected int64 for ac but found 2f",
+    },
+    Observed {
+        input: "2T",
+        verdict: "The value for ac was 2T which is not within -2147483648.000000 - 2147483647.000000",
+    },
+    Observed {
+        input: "2P",
+        verdict: "The value for ac was 2P which is not within -2147483648.000000 - 2147483647.000000",
+    },
+    Observed {
+        input: "2Ei",
+        verdict: "The value for ac was 2Ei which is not within -2147483648.000000 - 2147483647.000000",
+    },
+    Observed {
+        input: "2mi",
+        verdict: "Expected int64 for ac but found 2mi",
+    },
+];
+
+/// `-crf <expression>` — the expression path, reached because `crf` is a codec
+/// `AVOption` rather than a table option. `crf` is filtergraph-free: the value
+/// goes from `argv` through `av_opt_set` straight to the evaluator, which is
+/// what makes the whitespace and associativity rows trustworthy (plan 13 §1b).
+///
+/// This path is the **option dialect**: `default`, `max` and `min` are
+/// constants naming the option's own metadata and shadow the builtin functions,
+/// so `max(1,2)` is a rejection here where it would be a call in a filtergraph.
+/// `min-1` being `OUT_OF_RANGE` is the proof the constants are real — crf's
+/// minimum is -1, so the expression is -2. See `value::OptionConstants`.
+///
+/// Four verdicts, and the distinction between the first two matters:
+///
+/// | verdict | meaning |
+/// |---|---|
+/// | `REJECT` | the grammar refused it — an `[Eval @ …]` line appeared |
+/// | `NAN` | it parsed and evaluated to NaN |
+/// | `OUT_OF_RANGE` | it parsed; the value is outside crf's `[-1, 3.40282e+38]` |
+/// | `OK` | it parsed and was accepted |
+///
+/// `NAN` and `REJECT` are easy to conflate, because the reference prints
+/// `Unable to parse "crf" option value "…"` for **both** — `0/0` and `nan`
+/// parse perfectly well. Only the `[Eval @ …]` line distinguishes them, and a
+/// classifier that keys on the "Unable to parse" line alone gets `while(0,1)`,
+/// `0/0`, `nan` and `sqrt(-1)` wrong.
+pub static EXPRESSIONS: &[Observed] = &[
+    Observed {
+        input: "2",
+        verdict: "OK",
+    },
+    Observed {
+        input: "2*10",
+        verdict: "OK",
+    },
+    Observed {
+        input: "2^3^2",
+        verdict: "OK",
+    },
+    Observed {
+        input: "-2^2",
+        verdict: "OUT_OF_RANGE",
+    },
+    Observed {
+        input: "2^-2",
+        verdict: "OK",
+    },
+    Observed {
+        input: "0-20dB",
+        verdict: "OK",
+    },
+    Observed {
+        input: "1 2",
+        verdict: "OK",
+    },
+    Observed {
+        input: "--1",
+        verdict: "OK",
+    },
+    Observed {
+        input: "---1",
+        verdict: "REJECT",
+    },
+    Observed {
+        input: "abs.(1)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "abs_(1)",
+        verdict: "REJECT",
+    },
+    Observed {
+        input: "mod(-5,3)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "max(1,0/0)",
+        verdict: "REJECT",
+    },
+    Observed {
+        input: "max(0/0,1)",
+        verdict: "REJECT",
+    },
+    Observed {
+        input: "if(0/0,7)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "ifnot(0/0,7)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "st(0,1);ld(0)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "ld(100)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "PI",
+        verdict: "OK",
+    },
+    Observed {
+        input: "E",
+        verdict: "OK",
+    },
+    Observed {
+        input: "PHI",
+        verdict: "OK",
+    },
+    Observed {
+        input: "gcd(-7,0)",
+        verdict: "OUT_OF_RANGE",
+    },
+    Observed {
+        input: "zzz",
+        verdict: "REJECT",
+    },
+    Observed {
+        input: "(1",
+        verdict: "REJECT",
+    },
+    Observed {
+        input: "1)",
+        verdict: "REJECT",
+    },
+    Observed {
+        input: "",
+        verdict: "REJECT",
+    },
+    Observed {
+        input: "1+",
+        verdict: "REJECT",
+    },
+    Observed {
+        input: "*1",
+        verdict: "REJECT",
+    },
+    Observed {
+        input: "bitand(1,3)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "hypot(3,4)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "between(1,0,2)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "clip(5,0,3)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "2k*2",
+        verdict: "OK",
+    },
+    Observed {
+        input: "1;2",
+        verdict: "OK",
+    },
+    Observed {
+        input: "0/0",
+        verdict: "NAN",
+    },
+    Observed {
+        input: "nan",
+        verdict: "NAN",
+    },
+    Observed {
+        input: "1/0",
+        verdict: "OUT_OF_RANGE",
+    },
+    Observed {
+        input: "-1/0",
+        verdict: "OUT_OF_RANGE",
+    },
+    Observed {
+        input: "min",
+        verdict: "OK",
+    },
+    Observed {
+        input: "max",
+        verdict: "OK",
+    },
+    Observed {
+        input: "default",
+        verdict: "OK",
+    },
+    Observed {
+        input: "min-1",
+        verdict: "OUT_OF_RANGE",
+    },
+    Observed {
+        input: "default+1",
+        verdict: "OK",
+    },
+    Observed {
+        input: "default*0-2",
+        verdict: "OUT_OF_RANGE",
+    },
+    Observed {
+        input: "max(1,2)",
+        verdict: "REJECT",
+    },
+    Observed {
+        input: "min(1,2)",
+        verdict: "REJECT",
+    },
+    Observed {
+        input: "abs(-3)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "gte(2,1)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "sqrt(4)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "not(0)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "eq(1,1)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "while(0,1)",
+        verdict: "NAN",
+    },
+    Observed {
+        input: "root(1,10)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "taylor(1,1)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "print(1)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "random(0)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "w",
+        verdict: "REJECT",
+    },
+    Observed {
+        input: "n",
+        verdict: "REJECT",
+    },
+    Observed {
+        input: "t",
+        verdict: "REJECT",
+    },
+    Observed {
+        input: "maxi",
+        verdict: "REJECT",
+    },
+    Observed {
+        input: "mini",
+        verdict: "REJECT",
+    },
+    Observed {
+        input: "defaults",
+        verdict: "REJECT",
+    },
+    Observed {
+        input: "min*2",
+        verdict: "OUT_OF_RANGE",
+    },
+    Observed {
+        input: "max*0+7",
+        verdict: "OK",
+    },
+    Observed {
+        input: "min(1)",
+        verdict: "REJECT",
+    },
+    Observed {
+        input: "max()",
+        verdict: "REJECT",
+    },
+    Observed {
+        input: "sin(0)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "exp(1)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "log(1)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "floor(1.5)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "ceil(1.5)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "round(1.5)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "trunc(1.5)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "sgn(-2)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "isnan(0/0)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "isinf(1/0)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "lt(1,2)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "lte(1,1)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "gt(2,1)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "pow(2,3)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "squish(0)",
+        verdict: "OK",
+    },
+    Observed {
+        input: "sqrt(-1)",
+        verdict: "NAN",
+    },
+];

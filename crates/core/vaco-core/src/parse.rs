@@ -287,24 +287,63 @@ pub fn video_rate_names() -> impl Iterator<Item = &'static str> {
     RATES.iter().map(|(n, _, _)| *n)
 }
 
-/// `"num/den"`, `"num:den"`, `"25"`, or a decimal, which is approximated.
+/// `"num:den"`, or **any expression**, evaluated and then approximated.
 ///
-/// `1/0` parses and is a *valid* infinite ratio; negative values parse too.
-/// Research 05 §5.6 is explicit that filtering those out is the caller's job,
-/// because some options accept them.
+/// Negative values parse; filtering those is the caller's job, since some
+/// options accept them.
+///
+/// `1/0` does **not** parse, contrary to research 05 §5.6, which recorded an
+/// infinite ratio as valid. Probing says otherwise — `-aspect 1/0` gives
+/// "Invalid aspect ratio" and `-r 1/0` gives "Invalid framerate value". It is
+/// not a special case here either: `/` is division, so `1/0` is an infinity,
+/// and an infinity has no rational approximation. If an option is ever found
+/// that *does* accept an infinite ratio, this is the note to revisit — both
+/// sites reachable today reject it.
+///
+/// # `/` is division, not a separator
+///
+/// The reference's ratio grammar has two branches, and the second is the whole
+/// expression language — so `/` means division and binds like division. Probed
+/// with cases chosen to tell the two readings apart:
+///
+/// | input | evaluates to | as a ratio |
+/// |---|---|---|
+/// | `1/2/2` | 0.25 | `1:4` |
+/// | `4/2*3` | 6 | `6:1` |
+/// | `8/2/2` | 2 | `2:1` |
+/// | `2*3/4` | 1.5 | `3:2` |
+/// | `sqrt(4)` | 2 | `2:1` |
+///
+/// A split-on-the-first-`/` reading predicts `2:3` for `4/2*3`; the reference
+/// gives `6:1`. Anything that treated `/` as a separator would be wrong on every
+/// row but the last.
+///
+/// The `:` form is the *first* branch and is not expression-backed: `3:2` and
+/// `16:9` work, while `1:2/2` falls through to the evaluator and is rejected
+/// with `Invalid chars ':2/2'`. So a colon is matched only when it spans the
+/// whole string as `int:int`.
+///
+/// Exactness survives the round trip where it matters — `30000/1001` evaluates
+/// to 29.97002997… and approximates back to exactly `30000/1001`, because that
+/// is the best rational with denominator ≤ 10⁶.
 #[must_use]
 pub fn rational(s: &str) -> Option<Rational> {
-    if let Some((n, d)) = s.split_once('/').or_else(|| s.split_once(':')) {
-        return Some(Rational::new(
-            n.trim().parse().ok()?,
-            d.trim().parse().ok()?,
-        ));
+    // Branch one: `int:int`, whole string. Not expression-backed.
+    if let Some((n, d)) = s.split_once(':')
+        && let (Ok(n), Ok(d)) = (n.trim().parse::<i32>(), d.trim().parse::<i32>())
+    {
+        return Some(Rational::new(n, d));
     }
-    if let Ok(n) = s.parse::<i32>() {
+    // An integer is exact, and going through f64 would lose precision past 2^53
+    // for no reason. `i32::MAX` is well inside f64, but the exact path is also
+    // the fast one and keeps `5` meaning exactly `5/1`.
+    if let Ok(n) = s.trim().parse::<i32>() {
         return Some(Rational::new(n, 1));
     }
-    let f: f64 = s.parse().ok()?;
-    approximate(f, 1_000_000)
+    // Branch two: the whole string is an expression, with no variables bound —
+    // the ratio grammar has no `w`/`n`/`t` in scope, unlike a filter argument.
+    let expr = vaco_expr::Expr::parse(s, &vaco_expr::Bindings::new(&[])).ok()?;
+    approximate(expr.eval(&[]), 1_000_000)
 }
 
 /// Best rational approximation of `value` with a bounded denominator.
@@ -731,15 +770,16 @@ pub fn color_by_name(name: &str) -> Option<Rgba> {
 fn random_rgb() -> Rgba {
     use std::sync::OnceLock;
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     static SEQ: OnceLock<AtomicU64> = OnceLock::new();
     const GAMMA: u64 = 0x9E37_79B9_7F4A_7C15;
 
     let counter = SEQ.get_or_init(|| {
-        let seed = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0x1234_5678_9ABC_DEF0, |d| d.as_nanos() as u64);
+        // Via `vaco-time` so this compiles for wasm, where there may be no
+        // wall clock at all. The fallback constant is then the seed for the
+        // whole process — acceptable only because this function is documented
+        // as carrying no statistical claim.
+        let seed = vaco_time::unix_nanos().map_or(0x1234_5678_9ABC_DEF0, |n| n as u64);
         AtomicU64::new(seed)
     });
     let mut z = counter

@@ -113,3 +113,20 @@ impl From<std::io::Error> for Error {
         }
     }
 }
+
+/// Expression parse failures surface as option errors.
+///
+/// This impl lives here rather than in `vaco-expr` because it was that crate's
+/// only reason to depend on `vaco-core`, and that single edge blocked
+/// `vaco-core` from using the evaluator at all — which it needs, since the
+/// reference's ratio grammar is expression-backed. The orphan rule permits the
+/// impl on either side; putting it on the `Error` side leaves `vaco-expr` a leaf
+/// with no Vaco dependencies but `vaco-time`.
+impl From<vaco_expr::ParseError> for Error {
+    fn from(e: vaco_expr::ParseError) -> Self {
+        Self::Option {
+            name: "expr".to_owned(),
+            detail: e.to_string(),
+        }
+    }
+}

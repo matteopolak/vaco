@@ -12,6 +12,17 @@ authors.workspace = true
 vaco-core = { path = "../../core/vaco-core" }
 vaco-io = { path = "../../io/vaco-io" }
 vaco-format-core = { path = "../../format/vaco-format-core" }
+vaco-bitstream = { path = "../../core/vaco-bitstream" }
+vaco-limits = { path = "../../core/vaco-limits" }
+vaco-codec-core = { path = "../../signal/vaco-codec-core" }
+
+[dev-dependencies]
+divan.workspace = true
+proptest.workspace = true
+
+[[bench]]
+name = "sample_lookup"
+harness = false
 
 [lints]
 workspace = true

@@ -1,0 +1,511 @@
+# `vaco-format-isom`
+
+Layer 4. The ISO base media file format **box layer** — the structural parser
+behind MP4, MOV, 3GP, CMAF and fragmented MP4.
+
+This is not the demuxer. `vaco-demux-mp4` is, and it is built on this crate:
+everything here is structure, tables, and the arithmetic that turns them into
+answers. No I/O policy, no packet emission, no opinion about which sample to
+play next.
+
+---
+
+## What it is
+
+| Module | Contents |
+|---|---|
+| `boxes` | box headers (32/64-bit sizes, `uuid`, full-box version/flags), flat iteration, two bounded searches |
+| `fourcc` | `FourCc` and the box-type constants |
+| `scan` | locating top-level boxes over `vaco_io::IoContext` without reading their payloads |
+| `movie` | `ftyp`, `mvhd`, `trak ▸ mdia ▸ minf ▸ stbl` assembly into `Movie`/`Track` |
+| `stbl` | the sample tables and the sample → byte-offset mapping |
+| `table` | fixed-stride table views and their decimated summaries |
+| `edit` | `elst` and the presentation ↔ media timeline |
+| `frag` | `mvex`/`trex`, `moof ▸ traf ▸ tfhd/tfdt/trun`, `sidx`, `mfra ▸ tfra` |
+| `stsd` | sample entries, configuration boxes, the four-character-code tables |
+| `esds` | the MPEG-4 descriptor tree and the object type indications |
+| `fixed` | 16.16 / 8.8 / 2.30 fixed point and the 3×3 display matrix |
+| `lang` | the packed ISO-639-2/T language field |
+| `probe` | content scoring, with the measurements behind it |
+| `build` | fixture construction, shared by the tests, benchmarks and fuzz targets |
+
+Written from **ISO/IEC 14496-12** (base file format), **14496-14** (MP4),
+**14496-15** (`avcC`/`hvcC` carriage), **14496-1** (`esds`), and Apple's
+published *QuickTime File Format Specification* for the MOV-only sample-entry
+versions. No FFmpeg source was consulted (D7/D15); behavioural facts came from
+running the binary, and each one is recorded below with its command.
+
+---
+
+## How it works
+
+### The sample tables are the point
+
+Five tables compose into one answer:
+
+```text
+stsc   sample  -> chunk, and position within the chunk
+stco   chunk   -> file offset
+stsz   sample  -> size          (so the within-chunk offset is a running sum)
+stts   sample  -> decode time   (run-length coded deltas)
+ctts   sample  -> pts - dts
+stss   sample  -> is it a sync sample (absent => every sample is)
+```
+
+`SampleTable::sample(n)` resolves all six for an arbitrary `n`. Verified
+byte-exactly against the reference: on the calibration file, `ffprobe
+-show_packets` reported the first five video packets at `pos = 3017, 7839, 9765,
+11181, 12226`, and those are the offsets the crate produces from a `stsc` of
+`[(1, 2, 1), (2, 1, 1)]` and a `stco` starting `3017, 9765, 11181`.
+
+### Two access paths, deliberately separate
+
+| Path | Cost | Used by |
+|---|---|---|
+| `SampleTable::sample(n)` / `sample_at_dts(t)` | O(log n) | seek |
+| `SampleTable::cursor()` | O(1) amortised per sample | the demux loop |
+
+A seek asks the random-access questions repeatedly — find the sample at a time,
+walk back to the sync sample, resolve it, then repeat for every other track —
+so it must never walk from sample zero. The cursor carries the `stts` run, the
+chunk and the within-chunk byte offset, so `next` is a table read and three
+additions rather than three binary searches.
+
+Measured on a 50 000-sample table (`cargo bench -p vaco-format-isom`, M-series,
+per operation):
+
+| | compact | fragmented tables | uniform |
+|---|---:|---:|---:|
+| one seek (`sample_at_dts` → `sync_at_or_before` → `sample`) | **135 ns** | 252 ns | 14 ns |
+| one random sample lookup | **92 ns** | 192 ns | 10 ns |
+| one sequential sample | **30 ns** | 73 ns | 3.6 ns |
+| whole-table parse | 64 µs | 178 µs | 0.17 µs |
+
+`compact` is one `stts` run and one sample per chunk — a normally-muxed file.
+`fragmented tables` is **one `stts` run per sample and one `stsc` run per
+chunk**, the shape the decimated summaries exist for; it costs about 2×, not
+50 000×, which is the whole point. The cursor is ~3× faster than random access,
+so keeping the two paths separate earns its keep in the demux loop.
+
+Parse cost is the eager summary build over `stsz`; a 3-hour 30 fps track
+(324 000 samples) is about 420 µs, paid once at open. A uniform `stsz` builds no
+summary at all, which is why its column is three orders of magnitude cheaper.
+
+They are cross-checked everywhere: a unit test, a property test and two fuzz
+targets. On a well-formed table the invariant is `table.sample(i) ==
+table.cursor().nth(i)`; on an adversarial one the cursor may skip indices random
+access cannot resolve, so the fuzz targets assert the weaker-but-always-true
+form (every yielded sample round-trips through random access, indices strictly
+increase, nothing resolvable is skipped). If those two paths ever diverge, a
+seek lands somewhere a sequential read never would, and nothing else in the
+pipeline would notice.
+
+### What the cursor does with a damaged table
+
+Not "stop at the first problem". A sample fails to resolve for exactly two
+reasons, and they are bounded differently:
+
+* **The chunk has no `stco`/`co64` entry.** Chunk numbers are non-decreasing in
+  the sample index, so once one chunk is past the end of the offset table every
+  later one is too. That is the **end** of iteration.
+* **`chunk_offset + within` overflows `u64`.** Monotone inside the chunk (the
+  running offset only grows) but says nothing about the next one, so the cursor
+  jumps to the next chunk's first sample in **one step**.
+
+Both are bounded by the number of chunks, which is bounded by the `stco`
+payload. One bad chunk offset costs one chunk, not the rest of the track —
+which is also what `planning/18-formats.md` §3.1.10 says about samples past the
+end of `mdat`.
+
+### The memory decision, with the arithmetic
+
+**Nothing proportional to the sample count is allocated.** A sample table is a
+`&[u8]` plus a stride; entry *i* is decoded on demand. Two rules make that safe:
+
+1. **Declared counts are clamped against the payload.** Every one of these
+   tables has a fixed entry width, so `usable = min(declared, payload_len /
+   stride)` is exact rather than a heuristic. A `stsz` claiming `0xFFFF_FFFF`
+   samples in a twelve-byte box describes one sample.
+2. **Nothing is decoded up front.** Parsing an entire `stbl` allocates only the
+   run summaries below.
+
+For a 3-hour 30 fps video track — 324 000 samples, one chunk per sample, the
+worst realistic case:
+
+| Table | In the file | Resident |
+|---|---:|---:|
+| `stsz` | 1.30 MB | 0 (borrowed) |
+| `stco` | 1.30 MB | 0 (borrowed) |
+| `stts`, one run | 8 B | 0 (borrowed) |
+| `stsc`, two runs | 24 B | 0 (borrowed) |
+| summaries | — | ≤ 4 × 96 KiB |
+
+Against a materialised `Vec<Sample>` at 40 bytes each — 13 MB for that track,
+and 130 MB for a nine-hour surveillance recording — this is a 20× to 400×
+reduction, and it is bounded by a **constant** rather than by the input.
+
+### Why the summaries exist, and why they are decimated
+
+Borrowing gives O(1) access to entry *i*, but the questions are cumulative:
+*which sample is at DTS t*, *what is the byte offset of sample n*. Answering
+those from run-length tables is O(runs) or O(samples) per query.
+
+`RunIndex` is a **decimated prefix sum**: a checkpoint every `stride` entries,
+at most `MAX_CHECKPOINTS` (4096) of them, so `stride = ceil(runs / 4096)`.
+Lookup is a binary search over the checkpoints plus at most `stride` linear
+steps.
+
+A full prefix sum would be simpler and is the wrong choice: it costs 16 bytes
+per run, and the pathological `stts` — one run per sample — has as many runs as
+samples, so the "index" would be larger than the table it indexes. Decimation
+makes both memory and query cost independent of the input. A normal file has
+one `stts` run and gets stride 1, i.e. an exact index, for 24 bytes.
+
+### No recursion is reachable from input
+
+Box parsing is the textbook stack-overflow surface. This crate answers it
+structurally, not with a counter:
+
+* `BoxIter` is **flat** — it walks one container's direct children and never
+  descends;
+* the known tree (`moov ▸ trak ▸ mdia ▸ minf ▸ stbl`) is assembled by nested
+  `for` loops, a compile-time depth no input can deepen;
+* the two generic searches (`boxes::find_path`, `boxes::walk`) are iterative
+  with an explicit worklist and a hard `MAX_DEPTH` of 16.
+
+There is a test that builds a megabyte of nested `moov` boxes — 20 000 deep —
+and asserts the walk visits at most `MAX_DEPTH` of them. A counter has to be
+correct at every call site; this has to be correct once.
+
+### Termination
+
+`BoxHeader::parse` guarantees `size >= header_len >= 8`, so every iteration step
+advances by at least eight bytes. That single invariant is what makes box
+iteration, the top-level scan and the recursive-free walk all terminate, and it
+is asserted directly by the `isom_box_walk` fuzz target.
+
+Where a loop's trip count is genuinely input-derived — the top-level scan, the
+generic walk — the caller's `vaco_limits::Budget` is charged one fuel per box,
+so exhaustion is deterministic and reproducible rather than wall-clock.
+
+### Arithmetic
+
+Every accumulation saturates rather than wrapping. `stts` decode times and
+cumulative byte counts are both non-decreasing sequences, so saturation
+preserves the ordering the binary searches depend on; wrapping would not, and
+panicking is not available to a parser of untrusted input (`unwrap`, `expect`,
+`panic` and `indexing_slicing` are all denied workspace-wide).
+
+---
+
+## Reference behaviour (D17)
+
+Every row below was **measured**, not inferred. Plan 13 §1b's rule applies: each
+came from the most direct entry point available — `ffprobe` reading a real file
+written by `ffmpeg` — with the file's own bytes dumped independently so the
+input side of each experiment is known rather than assumed.
+
+Fixtures, all `ffmpeg` 8.1:
+
+```sh
+ffmpeg -f lavfi -i testsrc2=size=160x120:rate=25:duration=2 \
+       -f lavfi -i sine=frequency=440:duration=2 \
+       -c:v libx264 -preset ultrafast -g 15 -bf 2 -pix_fmt yuv420p -c:a aac \
+       -movflags +faststart prog.mp4
+
+ffmpeg ... -movflags +frag_keyframe+empty_moov                     frag.mp4
+ffmpeg ... -movflags +frag_keyframe+empty_moov+default_base_moof+omit_tfhd_offset dbm.mp4
+ffmpeg -itsoffset 0.5 ... -bf 0                                    delay.mp4
+ffmpeg ... -bf 2 -movflags +negative_cts_offsets                   ncts.mp4
+```
+
+### 1. Sample offsets — confirmed exactly
+
+```sh
+ffprobe -v error -show_packets -select_streams 0 -of compact prog.mp4
+```
+
+`pos = 3017, 7839, 9765, 11181, 12226`. Reproduced from `stsc`/`stsz`/`stco`.
+Fragmented: `frag.mp4` reported `pos=1775` from `tfhd.base_data_offset = 1259`
+plus `trun.data_offset = 516`; `dbm.mp4` reported `pos=921` from `moof` at 769
+plus `data_offset = 152`.
+
+### 2. The DTS shift — a spec deviation we reproduce
+
+ISO/IEC 14496-12 §8.6.1.4 defines `cslg.compositionToDTSShift` as a value
+**added to composition times** so that every composition time is at or above its
+decode time. The reference instead **subtracts** the equivalent quantity from
+every decode time, leaving presentation times where the file put them.
+
+Measured on `ncts.mp4` (`ctts` version 1, runs `(1,0) (1,1024) (2,-512)`,
+`elst media_time = 0`):
+
+```text
+ffprobe -show_packets  ->  pts=0 dts=-512 | pts=1536 dts=0 | pts=512 dts=512
+```
+
+The applied shift is `min(ctts) = -512` on DTS. The specification's reading
+would have produced `pts=512 dts=0`. Both express the same `pts - dts`
+relationship; only one matches `-show_packets`, and D6 makes that the contract.
+
+`SampleTable::dts_shift` returns `min(0, least_offset)` accordingly, preferring
+`cslg` when present. **This must not be "corrected" to the specification's sign
+convention** — the annotation on the method exists to stop exactly that. A
+`ctts` version 0 table cannot hold a negative offset, so such a track always
+gets zero; confirmed on `prog.mp4`, whose `ctts` v0 minimum is 512 and whose
+reported shift came entirely from its edit list.
+
+### 3. Edit lists
+
+| File | `elst` (movie ts, media ts) | `start_pts` | first packet |
+|---|---|---:|---|
+| `prog.mp4` video | `[(2000, 1024, 1.0)]` | 0 | `pts=0 dts=-1024` |
+| `prog.mp4` audio | `[(2000, 1024, 1.0)]` | 0 | `pts=-1024`, `skip_samples=1024`, discard |
+| `delay.mp4` video | `[(520, -1), (2000, 0)]` | 6656 | `pts=6656` |
+| `frag.mp4` video | none | 1024 | `pts=1024 dts=0` |
+
+So a non-empty first edit with `media_time = M` shifts **both** PTS and DTS by
+`-M`, and a leading empty edit shifts both by `+segment_duration` rescaled from
+the movie timescale into the media timescale. `EditList::simple_shift` is that
+sum and reproduces all four rows.
+
+Audio samples before the edit start are **not dropped**; they are emitted with a
+`skip_samples` trim and a discard flag. That is the demuxer's decision. What
+this crate owes it is `Timeline::media_to_presentation` returning `None` for
+exactly those samples, which it does.
+
+### 4. `duration_ts` comes from the edit list, not from `mdhd`
+
+| Track | `mdhd.duration` | non-empty `elst` | `duration_ts` |
+|---|---:|---:|---:|
+| `prog.mp4` video | 26 112 | 2000 movie @12800/1000 | **25 600** |
+| `prog.mp4` audio | 89 224 | 2000 movie @44100/1000 | **88 200** |
+| `delay.mp4` video | 25 600 | 2000 (empty edit excluded) | **25 600** |
+
+The third row discriminates: had the empty edit counted, `duration_ts` would be
+32 256. `Track::reported_duration` implements it; with no edit list at all,
+`mdhd.duration` is used.
+
+`nb_frames` is the `stsz` sample count, and is `N/A` for a fragmented file,
+which has no `stsz`.
+
+### 5. Probe scores — three of plan 18's four rows were wrong
+
+Plan 18 §3.1.3 predicts 100 for a recognised major brand, 90 for an unknown one
+and 75 for a leading `moov`/`mdat`. Measured by mutating one file four ways:
+
+```sh
+ffprobe -v quiet -show_entries format=probe_score -of default=nw=1:nk=1 <file>
+```
+
+| File | Prediction | Measured |
+|---|---:|---:|
+| `ftyp` brand `isom` | 100 | **100** |
+| `ftyp` brand `zzzz`, all compatible brands overwritten | 90 | **100** |
+| `ftyp` removed, file starts with `moov` | 75 | **100** |
+| `ftyp` removed, `mdat` first, `moov` last | 75 | **100** |
+
+The reference's ISOBMFF probe does not grade brands at all. `probe::probe`
+returns `MAGIC_CHECKED` for any structural opening box, and `CONTENT` for a
+padding-only opening (`free`/`wide`/`skip`) — that last row is a **choice**, not
+a reproduction: such files are detected by the reference (the error carries the
+`mov,mp4,m4a,3gp,3g2,mj2` context) but have no streams, so no `FORMAT` section
+and no score is printable.
+
+`KNOWN_BRANDS` therefore affects no score. It exists for callers that want to
+report or filter on brands.
+
+### 6. Fragment byte addressing
+
+§8.8.7.1's three cases are implemented as written, and rows 2 and 3 of the
+measurement table above confirm the first two. **Plan 18 §3.1.10 is wrong about
+the third**: it says a `tfhd` with neither `default-base-is-moof` nor
+`base_data_offset` bases on "the start of the previous `mdat`". 14496-12 says
+the first track fragment bases on the enclosing `moof` and each later one on the
+end of its predecessor's data. This crate follows the specification; the two
+agree for a single-`traf` fragment and disagree for any file with more than one,
+and no fixture that distinguishes them could be produced with `ffmpeg` (it
+always writes an explicit base or sets the flag).
+
+---
+
+## How to change it
+
+### Adding a box
+
+Add its four-character code to `fourcc::boxes`, then handle it in whichever
+module owns its parent — `movie` for `moov` descendants, `stbl` for sample
+tables, `frag` for `moof` descendants, `stsd` for sample-entry extensions.
+Unknown boxes are already skipped correctly by their declared size, so adding
+one is additive and cannot break an existing parse.
+
+### Adding a codec four-character code
+
+`stsd::sample_entry_codec`. Codes with no `vaco_codec_core::CodecId` map to
+`None` deliberately rather than to a near miss; the caller keeps the raw
+four-character code either way and `ffprobe` prints it as `codec_tag_string`
+regardless. When `CodecId` grows — it is currently a hand-written stub of
+thirteen variants awaiting generation from `codecs.toml` — several `None` rows
+here become real (`ac-3`, `ec-3`, `alac`, `tx3g`, `samr`, the ProRes codes).
+
+### Changing the memory/latency trade-off
+
+`table::MAX_CHECKPOINTS` is the single knob. Raising it makes random access
+faster on pathologically fragmented tables and costs 24 bytes per checkpoint per
+summary per track; lowering it does the reverse. The current value makes the
+worst-case linear tail `ceil(runs / 4096)` steps, which for a ten-million-run
+table is about 2400 — microseconds, not milliseconds.
+
+### Gotchas
+
+* **The two timescales.** `elst.segment_duration` is in the **movie** timescale;
+  `elst.media_time` is in the **media** timescale, in the same record. Using one
+  for the other desynchronises by the ratio of the two — 12.8× for video and
+  44.1× for audio in the calibration file, which presents as drift rather than
+  as a broken file. Every conversion goes through
+  `edit::rescale_movie_to_media`, which takes both explicitly.
+* **`stss` is one-based**, `stco` chunk numbers are one-based, `stsc.first_chunk`
+  is one-based, and sample numbers in this crate's API are **zero-based**. The
+  conversion happens at the table boundary and nowhere else.
+* **`ctts` version decides the sign.** Version 0 is unsigned, version 1 signed.
+  Getting it backwards moves every presentation timestamp on the track.
+* **An absent `stss` and an empty `stss` are different.** Absent means every
+  sample is a sync sample; present-but-empty means none are. There are two tests
+  for exactly this.
+* **`stsc` is the one structural refusal.** A `first_chunk` that does not start
+  at 1 or does not strictly increase makes the run's extent undefined, and every
+  offset derived from it would be invented. `SampleTable::parse` returns
+  `InvalidData`; the demuxer should drop that track and keep the others.
+* **`build` is public.** It is fixture construction, not a muxer, and nothing in
+  the parse path calls it. It is public so `vaco-demux-mp4`'s tests, the
+  benchmarks and the fuzz targets share one definition of "an MP4 shaped like
+  this".
+
+---
+
+## Configuration
+
+No options, no environment variables, no features. Two constants bound
+residency and one bounds work:
+
+| Constant | Value | Bounds |
+|---|---:|---|
+| `table::MAX_CHECKPOINTS` | 4096 | summary size, and therefore the linear tail of a lookup |
+| `boxes::MAX_DEPTH` | 16 | worklist depth in the generic searches |
+| `boxes::FUEL_PER_BOX` | 1 | fuel charged per box header inspected |
+| `edit::MAX_EDIT_ENTRIES` | 65 536 | `elst` entries kept (16 bytes each) |
+| `movie::MAX_TRACKS` | 4096 | tracks kept from one `moov` |
+| `movie::MAX_FRAGMENTS` | 65 536 | `moof` boxes collected by `IsoFile::parse` |
+| `frag::MAX_RUNS_PER_TRAF` | 4096 | `trun` boxes kept per `traf` |
+| `frag::MAX_TRAF_PER_MOOF` | 1024 | track fragments per `moof` |
+| `scan::MAX_TOP_LEVEL_BOXES` | 1 048 576 | boxes a scan inspects before giving up |
+| `esds::MAX_DESCRIPTORS` | 64 | descriptors walked in one `esds` |
+
+Callers pass a `vaco_limits::Budget` to `boxes::walk`, `scan::TopLevelScanner`
+and `scan::read_payload`; those are the only entry points that allocate or that
+do input-derived amounts of work.
+
+---
+
+## Dependencies
+
+| Crate | Why |
+|---|---|
+| `vaco-core` | `Error`, `Result`, `Rational`, `rescale_rnd`, `MediaType` — exact time-base arithmetic, never hand-rolled |
+| `vaco-bitstream` | `ByteReader`, whose sticky-overrun model is exactly right for box parsing: read the fields, check once per box |
+| `vaco-limits` | `Budget` — fuel for the walkers, allocation ceilings for payload reads |
+| `vaco-io` | `IoContext` for `scan` |
+| `vaco-format-core` | `ProbeData`/`ProbeScore` for `probe` |
+| `vaco-codec-core` | `CodecId` for the four-character-code and object-type tables |
+
+Dev only: `proptest`, `divan`.
+
+No external dependencies. Nothing here is a wrapper, so D11 does not apply and
+there is no fidelity grade.
+
+---
+
+## Tests and benchmarks
+
+```sh
+cargo test  -p vaco-format-isom --locked
+cargo bench -p vaco-format-isom
+just fuzz isom_file
+just fuzz isom_sample_table
+just fuzz isom_box_walk
+```
+
+The benchmark (`benches/sample_lookup.rs`, divan) measures the seek path on
+three table shapes: `compact` (one `stts` run, one sample per chunk — what a
+normally-muxed file looks like), `fragmented_tables` (one run per sample — the
+adversarial shape the decimation exists for), and `uniform` (constant sample
+size, where the within-chunk offset is a multiplication). `seek_by_time` is the
+number that matters: `sample_at_dts` → `sync_at_or_before` → `sample`, which is
+what one seek does per track.
+
+Three fuzz targets, because the crate has three distinct surfaces:
+
+| Target | Input | Looking for |
+|---|---|---|
+| `isom_box_walk` | raw bytes | non-terminating iteration, unbounded depth, `esds` length overflow |
+| `isom_sample_table` | structured tables in a valid box wrapper | cross-table contradictions, overflow in the offset arithmetic |
+| `isom_file` | raw bytes | everything, end to end |
+
+All three assert the central invariant — random access and the cursor agree —
+rather than only "does not panic".
+
+### What the fuzzer found
+
+Four findings, all in the sample-table layer, all now pinned by named
+regression tests. They are recorded here because three of the four are
+**design** findings rather than patches, and the fourth is a lesson about
+oracles.
+
+| # | Found by | Executions | What it was |
+|---|---|---:|---|
+| 1 | `isom_sample_table` | 25 | A *uniform* `stsz` is the one declared count with no payload to clamp it: twelve bytes can legally declare four billion samples. Not a bug in the crate — nothing allocates for it — but the target asserted a bound that does not exist. Documented on `SampleSizes::uniform`; bounding it is the demuxer's job and happens naturally, because such a file's chunk offsets point past its own end. |
+| 2 | `isom_sample_table` | 27 | **Real bug.** The cursor stopped at the first unresolvable sample. A `co64` whose first chunk offset was `u64::MAX` made samples 1..43 overflow and the cursor never reached sample 44, which random access resolved at an ordinary offset in the second chunk. Fixed by skipping holes; test `one_bad_chunk_offset_costs_one_chunk_not_the_rest_of_the_track`. |
+| 3 | `isom_sample_table` | slow-unit | **Real design bug, and the most valuable of the four.** The fix for #2 skipped one sample at a time, so a `stsc` declaring 4.2 billion single-sample chunks with no offsets took **13.8 seconds on a 78-byte input** — superlinear expansion of exactly the kind the brief warned about. `cargo fuzz` **exits 0 on a slow unit**, so the artifact on disk was the only evidence. Localised by timing the target's sections: parse and every point query were under 400 µs and the cursor was all of the remaining 13.8 s — the first hypothesis (that the oracle was at fault) was wrong, and measuring rather than reasoning is what found it. Fixed by observing that chunk numbers are monotone, which makes a missing offset terminal; 13.8 s → 0 ms. Test `a_stsc_declaring_billions_of_offsetless_chunks_ends_at_once`. |
+| 4 | `isom_sample_table` and `isom_file`, within 30 executions of each | 25 / 26 | **Real bug.** `stss` sample numbers are one-based, so the zero-based sample `u32::MAX` has one-based number 2^32. Computing `n + 1` in `u32` saturated, and `sync_at_or_after(u32::MAX)` returned `u32::MAX - 1` — a sync sample *before* the one asked for, which is a seek landing backwards. Fixed by widening the search key to `u64`; test `sync_queries_at_the_top_of_the_index_space_do_not_go_backwards`. |
+
+Finding 3 is worth restating as a rule, because it is the one that generalises:
+**a slow unit is the fuzzer answering the eager-versus-lazy question
+empirically.** The exit code says nothing about it. Plan 19 §13's rule — an
+artifact on disk is a finding whatever the log says — is what surfaces it.
+
+The throughput change is the clearest evidence the fix landed. Same target,
+same machine, same seed corpus:
+
+| After | executions in ~200 s |
+|---|---:|
+| finding 3 present, skipping one sample at a time | **350** |
+| oracle bounded, crate unchanged | 13 360 |
+| chunk numbers treated as monotone | **7 990 326** |
+
+A 23 000× difference between the second and third rows, from a three-line
+change, on inputs the fuzzer was already generating.
+
+---
+
+## Deferred
+
+Named so the demuxer's author knows what is not here:
+
+* **Metadata.** `udta ▸ meta ▸ ilst`, the `keys`-indexed QuickTime form, the
+  3GPP `udta` boxes, `chpl` chapters and the iTunes key-conversion table.
+  `Movie::udta` hands over the box unparsed. Plan 18 §2928 assigns the
+  conversion table to this crate; it is a table with no dependency on anything
+  else here and can be added without touching the parse path.
+* **Common encryption.** `sinf ▸ frma`/`schm`/`schi ▸ tenc` are located far
+  enough to report the original four-character code (`SampleEntry::original_format`),
+  but `senc`, `saiz`/`saio` and `pssh` are not parsed.
+* **Sample groups.** `sbgp`/`sgpd` are skipped.
+* **HEIF/AVIF item model.** `meta ▸ iloc/iinf/iprp/iref/idat` and the derived
+  items. The `meta` box type exists; nothing reads it.
+* **`cmov`.** zlib-compressed `moov`; plan 18 already tiers it as v0.2.
+* **Box writing.** `build` writes exactly the boxes its fixtures need and is not
+  a muxer. `vaco-mux-mp4` will want a real writer; the natural place is a new
+  `write` module here, since the box-type constants and the fixed-point helpers
+  are already shared.
+* **`tapt`, `gmhd`, hint tracks, `stsh`, `padb`, `subs`** — parsed structurally
+  as unknown boxes, i.e. skipped by size.

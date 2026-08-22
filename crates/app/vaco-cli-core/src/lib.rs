@@ -17,6 +17,9 @@
 //!   the *name* token.
 //! * `-crf 20` is valid only because some encoder declares `crf`; the parser
 //!   must accept unknown names and audit them later.
+//! * `-ac 1*2` is an error and `-crf 1*2` is 2 — the CLI has **two** numeric
+//!   value grammars, and which one an option uses is not a property of its
+//!   type. See [`value`].
 //! * `-nostats` negates a boolean; `-noqwerty` is an error.
 //! * `-/filter:v graph.txt` reads the value out of a file.
 //!
@@ -39,6 +42,8 @@
 //! * [`spec`] — the stream specifier grammar, which is stranger than the manual
 //!   suggests.
 //! * [`split`] — the grouping pass.
+//! * [`value`] — the two numeric grammars, and the option dialect of the
+//!   expression language.
 //!
 //! # Provenance
 //!
@@ -66,6 +71,9 @@
 //! | [`map`] | `-map [v` needs no closing bracket | same |
 //! | [`error::SpecError::MultipleProgramOrGroup`] | prints without a trailing newline, so the next log line runs into it | stderr is compared byte for byte (D6) |
 //! | [`spec`] | prints `Parsed 'usable only'` at error level on success | see the note below |
+//! | [`value`] | accepts `-ac ""` as zero while rejecting `-ac " "` | C sets `endptr = nptr`, so only the first has an empty tail |
+//! | [`value`] | prints an `int64` bound as `9223372036854775808`, one too high | the bound goes through a `double` before `%f` |
+//! | [`value`] | `-crf max(1,2)` is a parse error | `max` is a *constant* on the option path and shadows the builtin |
 //!
 //! That last one is a message the reference emits *on the success path* at
 //! `AV_LOG_ERROR` whenever a specifier contains `u`. It is left to the binary
@@ -83,6 +91,7 @@ pub mod spec;
 pub mod split;
 pub mod stream;
 pub mod table;
+pub mod value;
 
 pub use error::{CliError, Phase, Result, SpecError};
 pub use lex::{NameToken, Token, classify};
@@ -95,3 +104,7 @@ pub use split::{
 };
 pub use stream::{Disposition, GroupInfo, MatchCtx, ProgramInfo, StreamInfo};
 pub use table::{Lookup, OptDesc, OptFlags, OptTable, Positional, SpecKind, ffmpeg, ffprobe};
+pub use value::{
+    Expression, NumberLimits, OptionConstants, ValueKind, eval_checked, eval_once, eval_option,
+    parse_number, strtod,
+};

@@ -71,6 +71,11 @@ pub enum CodecId {
     Vp8,
     Vp9,
     Aac,
+    /// AAC in the LATM/LOAS syntax, which the reference treats as a separate
+    /// codec rather than a framing of `Aac`: `ffmpeg -codecs` lists both, and
+    /// ffprobe prints `codec_name=aac_latm`. Reproducing that spelling is why
+    /// this is a variant and not a flag on `Aac`.
+    AacLatm,
     Opus,
     Flac,
     Vorbis,
@@ -153,6 +158,13 @@ const CODECS: &[CodecEntry] = &[
         CodecId::Aac,
         "aac",
         "AAC (Advanced Audio Coding)",
+        A,
+        CodecProperties::LOSSY,
+    ),
+    entry(
+        CodecId::AacLatm,
+        "aac_latm",
+        "AAC LATM (Advanced Audio Coding LATM syntax)",
         A,
         CodecProperties::LOSSY,
     ),

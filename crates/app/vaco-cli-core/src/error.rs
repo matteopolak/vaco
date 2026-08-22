@@ -56,7 +56,11 @@ pub enum SpecError {
 }
 
 /// Everything the command line itself can reject.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+///
+/// `PartialEq` but not `Eq`: [`CliError::ValueOutOfRange`] carries the bounds as
+/// `f64`, because that is how the reference formats them and reproducing the
+/// text is the point.
+#[derive(Debug, Clone, PartialEq, Error)]
 #[non_exhaustive]
 pub enum CliError {
     /// An option name present in no table and claimed by no component.
@@ -121,6 +125,52 @@ pub enum CliError {
         value: OsString,
     },
 
+    /// A plain-number option value that the number grammar could not consume
+    /// whole. Note the colon after "found:" — the integrality message below
+    /// has none, and the asymmetry is the reference's.
+    #[error("Expected number for {option} but found: {value}")]
+    ExpectedNumber { option: String, value: String },
+
+    /// A numeric value outside the field's bounds.
+    ///
+    /// The value is printed as the **original string**, the bounds as `%f`.
+    /// D17: for an `int64` field the printed upper bound is
+    /// `9223372036854775808.000000` — one more than `INT64_MAX`, because the
+    /// reference formats it after a round trip through a `double`.
+    #[error("The value for {option} was {value} which is not within {min:.6} - {max:.6}")]
+    ValueOutOfRange {
+        option: String,
+        value: String,
+        min: f64,
+        max: f64,
+    },
+
+    /// A fractional value for an integer option. `-fs 20dB` lands here, because
+    /// 20 dB is 9.999999999999998.
+    #[error("Expected int64 for {option} but found {value}")]
+    ExpectedInteger { option: String, value: String },
+
+    /// An expression-valued option whose expression did not parse.
+    ///
+    /// The reference prints two lines, the first of which carries a heap
+    /// address and is therefore not reproducible:
+    ///
+    /// ```text
+    /// [libx264 @ 0x…] [Eval @ 0x…] Undefined constant or missing '(' in 'zzz'
+    /// [libx264 @ 0x…] Unable to parse "crf" option value "zzz"
+    /// ```
+    ///
+    /// `Display` is the second, stable line. `detail` carries the evaluator's
+    /// own message, which is the address-free remainder of the first, so a
+    /// caller can print both.
+    #[error("Unable to parse \"{option}\" option value \"{value}\"")]
+    BadExpression {
+        option: String,
+        value: String,
+        /// The evaluator's message, e.g. `undefined constant or missing '(' in 'zzz'`.
+        detail: String,
+    },
+
     /// An option name or specifier that is not valid UTF-8.
     ///
     /// Deliberate divergence, documented in `docs/app/vaco-cli-core.md`: the
@@ -158,6 +208,10 @@ impl CliError {
             Self::MissingArgument { .. }
             | Self::Spec(_)
             | Self::InvalidStreamSpecifier { .. }
+            | Self::ExpectedNumber { .. }
+            | Self::ValueOutOfRange { .. }
+            | Self::ExpectedInteger { .. }
+            | Self::BadExpression { .. }
             | Self::MapTrailingGarbage { .. } => None,
         }
     }
@@ -175,6 +229,10 @@ impl CliError {
             Self::MissingArgument { .. } => Phase::SplitInvalid,
             Self::Spec(_)
             | Self::InvalidStreamSpecifier { .. }
+            | Self::ExpectedNumber { .. }
+            | Self::ValueOutOfRange { .. }
+            | Self::ExpectedInteger { .. }
+            | Self::BadExpression { .. }
             | Self::MapTrailingGarbage { .. }
             | Self::OptionValueRejected { .. }
             | Self::WrongSide { .. }

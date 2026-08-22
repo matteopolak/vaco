@@ -421,14 +421,32 @@ impl fmt::Display for Rational {
     }
 }
 
-/// `"30000/1001"`, `"30000:1001"`, `"25"` or a decimal such as `"29.97"`.
+/// `"30000/1001"`, `"30000:1001"` or `"25"` — the **stored pair**, exactly.
 ///
-/// A decimal is approximated with a denominator bound of 1 000 000, which is
-/// the CLI's documented behaviour for ratio-shaped options.
+/// # Not the same grammar as [`parse::rational`](crate::parse::rational)
+///
+/// This is a literal parser and the inverse of [`Display`](fmt::Display): what
+/// you write is what you get, unreduced, so `"6/4"` is 6/4 and `1/0` is the
+/// stored infinity. It is what you want for a config file, a test fixture, or
+/// anything round-tripping through text.
+///
+/// `parse::rational` is the *CLI option* grammar, and it is a different thing:
+/// it evaluates the whole string as an expression and then approximates, so
+/// there `"6/4"` is 3/2 — matching the reference, where `-aspect 6/4` yields
+/// 3:2. The two were the same function until the ratio grammar was found to be
+/// expression-backed, at which point sharing one implementation meant either
+/// this type stopped round-tripping or the CLI stopped matching.
 impl FromStr for Rational {
     type Err = Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        crate::parse::rational(s.trim()).ok_or(Error::InvalidData("rational"))
+        let s = s.trim();
+        let bad = || Error::InvalidData("rational");
+        if let Some((n, d)) = s.split_once('/').or_else(|| s.split_once(':')) {
+            let n = n.trim().parse().map_err(|_| bad())?;
+            let d = d.trim().parse().map_err(|_| bad())?;
+            return Ok(Self::new(n, d));
+        }
+        s.parse().map(|n| Self::new(n, 1)).map_err(|_| bad())
     }
 }
 

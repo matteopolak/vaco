@@ -11,6 +11,16 @@ authors.workspace = true
 [dependencies]
 vaco-core = { path = "../../core/vaco-core" }
 vaco-bitstream = { path = "../../core/vaco-bitstream" }
+vaco-limits = { path = "../../core/vaco-limits" }
+
+[dev-dependencies]
+proptest.workspace = true
+divan.workspace = true
+memchr.workspace = true
+
+[[bench]]
+name = "scan"
+harness = false
 
 [lints]
 workspace = true

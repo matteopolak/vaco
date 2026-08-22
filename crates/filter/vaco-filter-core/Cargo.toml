@@ -12,13 +12,20 @@ authors.workspace = true
 bitflags.workspace = true
 vaco-core = { path = "../../core/vaco-core" }
 vaco-frame = { path = "../../model/vaco-frame" }
-vaco-opts = { path = "../../core/vaco-opts" }
 vaco-expr = { path = "../../core/vaco-expr" }
 vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
 vaco-sampfmt = { path = "../../model/vaco-sampfmt" }
 vaco-chlayout = { path = "../../model/vaco-chlayout" }
 vaco-color = { path = "../../model/vaco-color" }
 smallvec.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+divan.workspace = true
+
+[[bench]]
+name = "framework"
+harness = false
 
 [lints]
 workspace = true
