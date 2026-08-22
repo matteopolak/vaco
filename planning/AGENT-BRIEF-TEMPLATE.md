@@ -100,6 +100,11 @@ Without `+nightly` it fails with a sanitizer error that reads like a broken
 toolchain. `just fuzz <target>` already does this for you. Fuzzing is a test-time
 tool; it does not affect the stable release toolchain.
 
+**Run no git commands.** (The orchestrator commits, using Conventional Commit
+subjects — plan 19 §15. You never need to write one, but your report becomes the
+body, so make it precise: measured ratios, hypotheses you refuted, and why a
+divergence exists are exactly what belongs there.)
+
 **Run no git commands.** Not `add`, not `commit`, not `checkout`, not `stash`,
 and never `add -A`. In a shared working tree those destroy other agents' work.
 

@@ -707,3 +707,42 @@ just lock-gate                      # Cargo.lock moved by edges only (§3.3)
 Run `cargo fmt --all` (not `--check`) with care: it will reformat crates other
 agents are actively editing. Do it immediately before committing, never in the
 middle of a wave, and expect to commit the reformatting as its own change.
+
+
+## 15. Commit messages, and pushing
+
+### Conventional Commits
+
+Subjects follow [Conventional Commits](https://www.conventionalcommits.org/):
+`type(scope): summary`, imperative, lower-case, no trailing full stop.
+
+| type | when |
+|---|---|
+| `feat` | a crate or capability that did not exist |
+| `fix` | a defect in committed code |
+| `perf` | a change made for speed, with the measured ratio in the body |
+| `docs` | planning documents, decision records, crate docs |
+| `test` | tests or fuzz targets alone |
+| `refactor` | behaviour-preserving restructuring |
+| `build` / `ci` | manifests, Justfile, workflows, xtask gates |
+| `chore` | the assignment ledger, housekeeping |
+
+Scope is the crate without its `vaco-` prefix (`core`, `demux-mp4`, `xtask`),
+`planning` for the plans, `ledger` for `ASSIGNMENTS.md`, or `wave-N` for a wave
+integration commit.
+
+**The body is where the value is, and none of this changes that.** This project's
+commit bodies carry measured ratios, refuted hypotheses and the reasoning behind
+a divergence; several are the only record of why a plan was wrong. The subject
+line convention is for tooling and scanning — keep writing the body.
+
+### Pushing
+
+Push at every wave boundary, and after any commit that fixes something another
+agent is blocked on. CI runs on push, so **the pre-commit gate in §14 must have
+passed** — pushing a red `main` costs every agent their signal.
+
+Do not rewrite published history. Note that message rewriting needs a clean
+working tree, which during a wave it never is: a `filter-branch` attempted
+mid-wave fails with "You have unstaged changes", and stashing an agent's work to
+get around that would be a data-loss bug, not a workaround.
