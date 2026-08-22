@@ -591,7 +591,19 @@ Two further checks, both cheap, both of which would independently have caught
 this:
 
 1. **`find fuzz/artifacts -type f` must be empty afterwards.** An artifact on
-   disk is a crash, whatever the log says. Check it in CI, not just by eye.
+   disk is a finding, whatever the log says. Check it in CI, not just by eye.
+
+   **Not every artifact is a crash, and the others exit 0.** libFuzzer also
+   writes `slow-unit-…` (an input far over the time budget) and `oom-…`, and the
+   run *succeeds* — so an exit-code check alone reports it clean and the file is
+   the only evidence. That is this section's own failure mode wearing a
+   different hat, and it caught two agents in the wave after this was written.
+
+   A slow unit is a real result, not fuzzer noise: it means some input has a
+   cost superlinear in its size, which for anything parsing untrusted media is a
+   denial-of-service surface. Diagnose it; do not delete it. The fix is often a
+   bound in `vaco-limits` rather than a faster loop, which makes it a finding
+   about the design rather than a patch.
 2. **Report the exec count, not the verdict.** A target that fails to build, or
    dies in the first millisecond, also produces no `panicked` line. `#11822410`
    is evidence of fuzzing; "clean" is not. Pull the last `#<n>` out of the log

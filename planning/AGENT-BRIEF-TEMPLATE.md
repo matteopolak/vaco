@@ -121,6 +121,12 @@ and never `add -A`. In a shared working tree those destroy other agents' work.
    (plan 19 §13). `cargo +nightly fuzz run` exits non-zero on a crash, and a
    crash also leaves a file in `fuzz/artifacts/<target>/`; check both, and say
    `exit=0 execs=#11822410` so a target that never ran cannot pass as clean.
+
+   **`slow-unit-…` and `oom-…` artifacts exit 0.** An exit-code check alone
+   calls those clean, so `find fuzz/artifacts -type f` must be empty too. A slow
+   unit means some input costs far more than its size implies — a real
+   denial-of-service finding for anything reading untrusted media. Diagnose it,
+   do not delete it.
 4. `docs/<layer>/<crate>.md` with: what it is · how it works · how to change it ·
    configuration · dependencies.
 5. `vaco-component.toml` if the crate registers a component.

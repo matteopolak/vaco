@@ -211,8 +211,11 @@ fuzz-all secs="120":
         [ -n "${n:-}" ] || { echo "  ^ no execs: the target never ran"; fail=1; }
     done
     # An artifact on disk is a crash whatever the logs said.
+    # Crashes, slow units and OOMs all land here. Only the first makes the run
+    # exit non-zero, so the directory is the only evidence for the other two.
     if [ -n "$(find fuzz/artifacts -type f 2>/dev/null)" ]; then
-        echo "crash artifacts present:"; find fuzz/artifacts -type f; fail=1
+        echo "fuzz artifacts present (crash / slow-unit / oom are all findings):"
+        find fuzz/artifacts -type f; fail=1
     fi
     exit $fail
 
