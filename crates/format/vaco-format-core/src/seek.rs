@@ -173,6 +173,18 @@ bitflags::bitflags! {
 /// One seek point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IndexEntry {
+    /// A byte offset the demuxer can **resume parsing at** — not necessarily
+    /// where the frame's payload begins.
+    ///
+    /// This distinction has teeth. For Matroska it must be the enclosing
+    /// `Cluster`, never the block: recording block positions type-checks,
+    /// passes every non-seeking test, and produces garbage on the first seek.
+    /// `vaco-demux-matroska`'s author hit exactly that and asked for this line.
+    /// For MPEG-TS it is a packet boundary; for MP4 a chunk offset is fine
+    /// because the sample tables can resume anywhere.
+    ///
+    /// If a container has no position it can restart from, it should not add
+    /// the entry.
     pub pos: u64,
     pub timestamp: Timestamp,
     pub flags: IndexFlags,

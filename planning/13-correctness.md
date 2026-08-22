@@ -1159,9 +1159,23 @@ channel rather than the output channel: a pipeline is a measuring layer, and it
 has an opinion about `$?`.
 
 Exit codes are conformance surface — a script branching on `$?` is as broken by a
-wrong one as by wrong output. When measuring an exit code, run the binary as the
-last command in the pipeline, redirect both streams to `/dev/null` so nothing
-else can interfere, and check the zero-argument and error cases explicitly.
+wrong one as by wrong output.
+
+**And the obvious fix for the pipe trap silently fails too.** `${PIPESTATUS[0]}`
+is a bash idiom; this project's shell is **zsh**, where the array is
+`$pipestatus` and is **1-indexed**. `${PIPESTATUS[0]}` expands to the empty
+string, and a comparison against an empty string succeeds — so the repair reads
+as a pass. That is a second measuring layer stacked on the first, and it is why
+the original wrong answer survived a deliberate re-check.
+
+The rule that actually holds:
+
+> **Never read an exit code through a pipe.** Capture the process's own status —
+> `subprocess.run(...).returncode` from Python, or run the binary as the sole
+> command with both streams redirected — and close stdin so it cannot block.
+
+Check the zero-argument and error cases explicitly; they are the ones a corpus
+of successful invocations never reaches.
 
 ### Escaping is part of the experiment
 

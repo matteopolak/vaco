@@ -356,7 +356,39 @@ impl<D: Demuxer> Discovery<D> {
         let fps_probe = u64::try_from(self.opts.fpsprobesize).unwrap_or(0);
         for (stream, st) in self.streams.iter_mut().zip(self.state.iter()) {
             if stream.start_time.is_none() {
-                stream.start_time = st.first_pts;
+                // `first_pts + initial_padding`, NOT the first pts. An encoder
+                // delay makes the first packet's timestamp negative by exactly
+                // the priming it declares, and the reference reports the sum —
+                // which is 0 for a normally-encoded stream.
+                //
+                // Measured: a libopus track in Matroska declares
+                // `initial_padding = 312` samples at 48 kHz and its first
+                // packet has `pts = -7` ms, yet `ffprobe` reports
+                // `start_pts=0`. Taking the first pts alone gives `-0.007`,
+                // which is wrong on every delay-coded stream there is.
+                //
+                // Found by `vaco-demux-matroska`, which raised it instead of
+                // compensating locally — the right call, since otherwise every
+                // container carrying Opus or AAC needs the same workaround.
+                let pad_ticks = stream
+                    .params
+                    .audio
+                    .as_ref()
+                    .filter(|a| a.initial_padding > 0 && a.sample_rate > 0)
+                    .and_then(|a| {
+                        // The priming is a sample count; the timestamp is in
+                        // the stream's time base. Convert exactly rather than
+                        // assuming they share units — for Matroska they do not
+                        // (samples at 48 kHz against a 1 ms base).
+                        vaco_core::rescale_rnd(
+                            i64::from(a.initial_padding),
+                            stream.time_base.den.into(),
+                            i64::from(a.sample_rate) * i64::from(stream.time_base.num),
+                            vaco_core::Rounding::NearestAwayFromZero,
+                        )
+                    })
+                    .unwrap_or(0);
+                stream.start_time = st.first_pts.offset(pad_ticks);
             }
             if stream.frame_count.is_none() && st.packets > 0 {
                 // Only meaningful once the whole file has been read; the loop
