@@ -736,6 +736,19 @@ commit bodies carry measured ratios, refuted hypotheses and the reasoning behind
 a divergence; several are the only record of why a plan was wrong. The subject
 line convention is for tooling and scanning — keep writing the body.
 
+### Issues
+
+Close a work-package issue when its deliverable actually ships, with a one-line
+note saying what landed and anything measured along the way. **A crate being
+"done" does not close its issues** — the crates are v0.1-scoped and a finished
+crate still carries genuinely open packages: `vaco-scale` shipped six of ten
+filter kernels and no tone mapping, `vaco-resample` shipped no noise-shaping
+dither. Closing per crate rather than per package would erase that.
+
+Judge per issue, leave the rest open, and close roadmap-superseded packages
+(the ones the roadmap itself struck through as deduplicated) with a note saying
+what absorbed them.
+
 ### Pushing
 
 Push at every wave boundary, and after any commit that fixes something another
