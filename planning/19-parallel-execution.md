@@ -88,6 +88,48 @@ produces is:
 
 That is expected churn, and the orchestrator commits it with the crate.
 
+#### Who reconciles the lock, concurrently
+
+Once agents may add edges (above), the lock is reconciled by **whichever agent
+runs cargo next**, against whatever manifests exist in the tree at that instant.
+The `vaco-color` agent found its own one-line lock change accompanied by five
+hunks it had not authored, from four other crates, one of which appeared between
+two of its own runs.
+
+That is safe, and it is worth knowing exactly why:
+
+- Cargo serialises writes to the lock, so there is no torn file.
+- Agents only ever *add* edges, each inside its own crate's block, so there is
+  no region two agents contend for. The reconciliation converges.
+- No package, version or checksum can move, because no agent may edit the root
+  `Cargo.toml` where versions are declared. Only edges to already-resolved
+  packages can appear.
+
+What is **not** safe is regenerating the lock at a wave boundary from a tree that
+is still being edited — you would pin whatever half-written state exists at that
+moment. So the orchestrator does not regenerate it. It *verifies* it, which is a
+checkable invariant rather than a judgement call:
+
+```sh
+just lock-gate
+```
+
+That fails if any `name` / `version` / `source` / `checksum` / `[[package]]`
+line moved, and then proves the lock is consistent with every manifest in the
+tree.
+
+It uses `cargo metadata --locked`, not `cargo check --locked`, deliberately.
+`metadata` resolves the dependency graph without compiling anything, so the gate
+answers *"is the lock consistent?"* and not *"does the whole workspace build?"* —
+which mid-wave it does not, because some crate is always half-written. The first
+version of this gate used `check` and failed on a crate that was being actively
+constructed at the time, which is exactly the false alarm that trains people to
+ignore a gate.
+
+The remaining hazard is unchanged and already recorded: one agent's syntactically
+broken manifest fails workspace *parsing* for everyone, which is how a `[[bench]]`
+with no bench file once blocked every agent at once.
+
 #### The `--locked` trap
 
 As first written, this section said agents run `cargo check --locked`, which "fails loudly rather than
@@ -552,6 +594,7 @@ cargo xtask dep-gate                # D10 Gate 1: no FFI, no vendored C
 cargo xtask unsafe-audit            # D2
 cargo +nightly fuzz build           # the unowned directory still compiles
 find fuzz/artifacts -type f         # must be empty (§13)
+just lock-gate                      # Cargo.lock moved by edges only (§3.3)
 ```
 
 Run `cargo fmt --all` (not `--check`) with care: it will reformat crates other

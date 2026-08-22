@@ -135,6 +135,28 @@ build-pgo:
 conformance suite="smoke":
     cargo run --release -p vaco-conformance {{TD}} -- --suite {{suite}}
 
+# Cargo.lock moved only by dependency EDGES, never by packages (plan 19 §3.3).
+# Safe to run mid-wave: concurrent agents reconcile the lock against whatever
+# manifests exist, and this proves the reconciliation added nothing reviewable.
+lock-gate:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    moved=$(git diff HEAD -- Cargo.lock \
+        | grep -E '^[+-](name|version|source|checksum|\[\[package\]\])' || true)
+    if [ -n "$moved" ]; then
+        echo "Cargo.lock moved a PACKAGE, not just an edge — this needs D10 review:"
+        echo "$moved"
+        exit 1
+    fi
+    # Consistent with every manifest in the tree, including other agents'.
+    # `metadata` resolves the graph WITHOUT compiling, so this stays meaningful
+    # mid-wave, when a crate under active construction does not build yet.
+    cargo metadata --locked --format-version 1 -q > /dev/null 2>&1 || {
+        echo "lock is not consistent with the workspace manifests:"
+        cargo metadata --locked --format-version 1 2>&1 >/dev/null | head -20
+        exit 1; }
+    echo "lock-gate: edges only, consistent with all manifests"
+
 # One target, interactively. Ctrl-C to stop.
 fuzz target:
     cargo +nightly fuzz run {{target}}
