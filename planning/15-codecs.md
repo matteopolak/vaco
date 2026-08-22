@@ -2070,3 +2070,61 @@ honestly-named features so the code is reviewed and the hardware paths are testa
 encoder budget into AV1 and Opus. And write down, for every codec we do not support, exactly why —
 because that document is the one FFmpeg never wrote, and it is the clearest signal that this project
 means what it says.
+
+## Amendment — H.264's reference deviations mostly do NOT transfer to HEVC (2026-08-22)
+
+The `vaco-parse-hevc` brief said "several of `vaco-parse-h264`'s measured D17
+deviations apply to HEVC too — verify rather than assume, but start from its
+findings". **Four of the five do not transfer.** The agent verified instead of
+starting from them, and that was load-bearing.
+
+| field | H.264 | HEVC |
+|---|---|---|
+| `coded_width`/`coded_height` | the **cropped** size | the **coded** size |
+| `r_frame_rate` | twice the picture rate | the picture rate, **not** halved |
+| monochrome `pix_fmt` | `yuv420p` | `gray` |
+| `chroma_location`, no VUI | `left` at every chroma format | `left` for 4:2:0 only |
+| `field_order` from headers | `progressive` | `unknown` always |
+
+Reproduced directly for the first row — one 1918×1078 source encoded both ways
+gives `coded_width=1918` for H.264 and `1920` for HEVC.
+
+Only the SAR rejection rule carried over unchanged (reduce, then require
+`scaled > 0`). Recovering it needed Extended SAR spliced into the VUI at the bit
+level, because x265 clamps `--sar`.
+
+### The lesson for every future codec brief
+
+A brief that says "codec B is like codec A" is a **hypothesis**, and offering
+prior findings as a starting point biases towards confirming them. State them as
+things to *disprove*, not to build on. The reference's per-codec behaviour is
+per-codec: these five fields are printed by the same `ffprobe` code path from
+different decoder metadata, and there is no reason for them to agree.
+
+### `vaco-codec-cbs` is not HEVC-shaped, and is not yet proven
+
+`tests/two_codecs.rs` implements `CbsCodec` twice — H.264-shaped and
+HEVC-shaped — and runs split/drop/insert/typed-RMW/reframe/round-trip through
+both with one `CbsFragment`, no codec-specific branch. The H.264 impl was
+written first, deliberately.
+
+But two NAL-based codecs are similar codecs. Four caveats stand, all recorded:
+
+1. **AV1 is the real test and has not been run.** OBUs nest inside temporal
+   units; a flat unit list cannot express that, so grouping would have to live
+   in the codec's `Content`. Workable, but a genuine impedance mismatch.
+2. **`unit_type: u32` assumes one type per unit.** An SEI NAL carries several
+   messages of different types, so "drop SEI type 5, keep the unit" cannot be a
+   `retain`.
+3. **No `trace_headers` hook** — it needs changes to the readers, not to CBS.
+4. **The write path is read/move/write, not read/modify/write.** Typed parameter
+   sets return `Unsupported`, because a non-bit-exact SPS writer corrupts
+   silently.
+
+### A layering fact worth stating
+
+`vaco-codec-cbs` is layer 3 and `vaco-format-nalu` is layer 4, so **CBS cannot
+use the framing helpers**. That is why `split`/`assemble` are trait methods and
+`Framing` is an associated type rather than a shared implementation — the design
+was forced by the layering, not chosen freely, and the genericity test has to
+hand-roll a minimal splitter for the same reason.
