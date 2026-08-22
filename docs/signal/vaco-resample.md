@@ -532,7 +532,7 @@ paths, the rematrixing or the chunk-invariance contract.
 
 ## 11. Tests
 
-`cargo test -p vaco-resample` — 44 tests, none requiring `ffmpeg` on the machine.
+`cargo test -p vaco-resample` — 47 tests, none requiring `ffmpeg` on the machine.
 
 | File | What it holds |
 |---|---|

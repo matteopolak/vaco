@@ -1767,6 +1767,66 @@ signal), but it is an accelerator, not a foundation. The foundation is ours.
 
 ---
 
+## 2b. An oracle you wrote shares your misreading
+
+Recorded because it cost real time in wave 6 and the shape recurs everywhere in
+this project.
+
+`vaco-codec-dsp-idct` implemented HEVC's inverse transform from H.265 §8.6.4.2,
+and checked it two ways that both looked independent and were not:
+
+1. **Golden vectors from a separate Python transliteration** of the same
+   clauses, written by the same author from the same PDF.
+2. **Recognition** — the derived 4-point and 8-point cores came out *exactly*
+   equal to the well-known H.264/HEVC integer cores. Matching a table you can
+   look up elsewhere feels like the strongest possible confirmation.
+
+Both passed. Both were wrong. The literal reading of equation 8-317,
+`y[i] = Σⱼ M[i·stride][j]·x[j]`, reproduces those famous cores and still
+computes the wrong transform; the inverse strides the *summed* index instead,
+`y[i] = Σⱼ M[j·stride][i]·x[j]`.
+
+The Python oracle shared the misreading because it was transcribed from the same
+sentence, so it agreed enthusiastically. And the matrix-recognition check could
+never have caught it: **the bug is in the indexing, not in the coefficients**,
+so the table is right either way.
+
+### What caught it
+
+A structural invariant that does not mention the matrix at all: **a DC-only
+coefficient block must produce a spatially uniform output**, because the
+frequency-0 basis function is constant by definition. That is true of any
+correct inverse DCT, derivable without reading the standard, and impossible to
+satisfy accidentally.
+
+### The rule
+
+**A second implementation is only an oracle if it can be wrong differently.**
+Two transcriptions of one sentence cannot; two people reading the same
+ambiguous clause usually cannot either. When the specification is the only
+source, the independent check has to come from **a property the output must
+have** rather than from another route to the same numbers:
+
+- DC-only in → uniform block out (any inverse DCT).
+- Linearity: `T(a + b) == T(a) + T(b)` within the arithmetic's exactness.
+- Orthogonality of the matrix, checked numerically.
+- Round-trip against the *forward* transform, when one exists independently.
+
+Note how this differs from the reference-probing rule in §1b. Probing gives a
+genuinely independent oracle — the reference binary was written by other people
+from the same standard, so it *can* be wrong differently, and where it is, D17
+says reproduce it. This section is about the case where probing is unavailable
+or the quantity is not observable, which is most of DSP.
+
+Two smaller instances from the same wave, both the same shape:
+
+- `vaco-format-id3` obtained the 192-entry ID3v1 genre table by probing every
+  byte value 0–255 rather than transcribing the well-known list. A remembered
+  table is 95% right and wrong exactly where nobody checks.
+- `vaco-parse-av1` was briefed with two hypotheses carried over from H.264 and
+  HEVC. Both were false. See §1b's standing rule: brief with hypotheses, never
+  conclusions.
+
 ## 3. Unit and property testing standards
 
 ### 3.1 The bar every crate must clear

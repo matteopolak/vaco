@@ -23,7 +23,7 @@ use vaco_core::{Error, MediaType, Rational, Timestamp};
 use vaco_filter_core::mock::{
     any_video_sink, gray_frame, gray_link, video_source_formats, Drop, Fps, Invert,
 };
-use vaco_filter_core::{Graph, GraphStatus, NodeId};
+use vaco_filter_core::{Graph, GraphStatus};
 use vaco_pixfmt::PixFmt;
 
 #[derive(Debug, arbitrary::Arbitrary)]
@@ -122,10 +122,15 @@ fuzz_target!(|input: Input| {
                     let value = u8::try_from(sent & 0xff).unwrap_or(0);
                     match graph.send(src, gray_frame(8, 8, sent, value)) {
                         Ok(()) => sent += 1,
-                        // Backpressure: the frame was not taken, and that is the
-                        // whole point. Retrying with the same one is legal.
-                        Err(Error::OutputPending) => {}
-                        Err(e) => panic!("send failed unexpectedly: {e:?}"),
+                        // Backpressure. This comment used to say "the frame was
+                        // not taken, and retrying with the same one is legal" —
+                        // which the docs also claimed and the signature made
+                        // impossible, because `send` consumed the frame and
+                        // dropped it. Now it really does come back, so drop it
+                        // here deliberately: this target is exercising the
+                        // scheduler's step ordering, not recovery.
+                        Err(r) if matches!(r.error, Error::OutputPending) => {}
+                        Err(r) => panic!("send failed unexpectedly: {:?}", r.error),
                     }
                 }
             }

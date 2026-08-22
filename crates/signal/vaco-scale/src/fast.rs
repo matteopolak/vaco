@@ -4,8 +4,8 @@
 //!
 //! **A kernel here may only make the generic path faster, never different.**
 //! Every entry has a scalar reference in [`crate::exec`] that defines its
-//! semantics, and `tests/kernels_agree.rs` runs both over randomised input and
-//! requires byte equality. Adding a kernel is therefore purely additive: if it
+//! semantics, and the `kernels_agree` tests at the bottom of this file run both
+//! over randomised input and require byte equality. Adding a kernel is therefore purely additive: if it
 //! is wrong, a test says so, and if it is missing, the generic path already
 //! works.
 //!

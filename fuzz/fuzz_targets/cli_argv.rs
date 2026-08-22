@@ -18,7 +18,7 @@
 use std::ffi::OsString;
 
 use libfuzzer_sys::fuzz_target;
-use vaco_cli_core::{GroupKind, OptFlags, OptTable, ffmpeg, ffprobe, split};
+use vaco_cli_core::{GroupKind, ArgFlags, OptTable, ffmpeg, ffprobe, split};
 
 fn to_argv(data: &[u8]) -> Vec<OsString> {
     data.split(|b| *b == 0).map(to_os).collect()
@@ -46,7 +46,7 @@ fn check(table: &OptTable, argv: &[OsString]) {
             .desc
             .unwrap_or_else(|| panic!("a deferred option was hoisted as global: {:?}", o.name));
         assert!(
-            d.flags.contains(OptFlags::GLOBAL),
+            d.flags.contains(ArgFlags::GLOBAL),
             "{:?} was hoisted but is not global",
             o.name
         );
@@ -55,7 +55,7 @@ fn check(table: &OptTable, argv: &[OsString]) {
     for o in cl.groups.iter().flat_map(|g| &g.opts).chain(&cl.orphaned) {
         if let Some(d) = o.desc {
             assert!(
-                !d.flags.contains(OptFlags::GLOBAL),
+                !d.flags.contains(ArgFlags::GLOBAL),
                 "{:?} is global but was bound to a file",
                 o.name
             );
