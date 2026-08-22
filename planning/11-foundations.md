@@ -3838,3 +3838,37 @@ Plus four cross-cutting documents this plan implies:
 - `docs/simd-dispatch.md` — F5′ in full (§5.3), the `fearless_simd` adapter boundary, the §5.6 gap table
   with its compositions, and the measurement that would
   trigger a D2 amendment. This one matters because it is the decision most likely to be questioned later.
+
+---
+
+## Corrections from implementation (vaco-pixfmt, 2026-08-21)
+
+Found while implementing §9. Six statements in that section are wrong; the
+implementation follows reality, not the plan.
+
+1. **Paths.** The crate is `crates/model/vaco-pixfmt` and the generator lives in
+   `xtask/src/gen_pixfmt/`, not `crates/core/` and `crates/tools/`.
+2. **`PixFmtDescriptor` needs `bits_per_pixel`.** `ffprobe -show_pixel_formats`
+   prints it and nothing outside the crate can compute it. Added.
+3. **`gray8` is an alias; the CLI-visible name is `gray`.** The distinction
+   matters because these names are part of the byte-identical output contract.
+4. **`from_name` needs endianness-widening behaviour, not alias entries.**
+   Unsuffixed spellings such as `gray16` and `rgb48` resolve to the host-endian
+   variant.
+5. **The claimed invariant `offset + ceil(depth/8) <= step` is false** for
+   `uyyvyy411`, whose luma samples are not evenly spaced. Relaxed to bound
+   against the widest step in the plane.
+6. **"BE-flagged formats have depth > 8" is false** for `rgb444be`, `rgb555be`,
+   `bgr565be` and friends — 4-to-6-bit fields inside a 16-bit container.
+   Restated as "a multi-byte container".
+
+Two formats have no public specification and are modelled on judgement, flagged
+`UNVERIFIED` in the generator source: `nv20le/be` and `v30xle/be`. `bayer_*` is
+modelled as one component at the sample depth, which is physically truthful;
+the reference models three components with fractional depths, so `bits_per_pixel`
+agrees but `component_count` will not.
+
+**The primary acceptance criterion is still outstanding**: a differential
+extractor comparing our table against `ffprobe -show_pixel_formats`. It needs the
+pinned reference binary, which arrives with the conformance harness. Until then
+the table is internally consistent and physically derived, but unvalidated.

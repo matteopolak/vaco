@@ -406,3 +406,27 @@ ignore the gate — worse than not having one.
 
 Note also that `cargo tree -i <crate>` returning empty output *is* the pass signal, not a broken
 command.
+
+---
+
+## 12. Private-index commits leave the main index stale
+
+Discovered on the first wave-1 commit.
+
+The `GIT_INDEX_FILE` + `commit-tree` recipe in §5 works and does keep the shared
+`.git/index` untouched — which is the point. But after `git update-ref` moves the
+branch, the main index still describes the *previous* commit, so `git status`
+reports every file in the new commit as modified (`MM`), which looks alarmingly
+like an agent having overwritten it.
+
+Refresh the main index after moving the ref:
+
+```bash
+git update-ref refs/heads/main "$COMMIT"
+git read-tree HEAD          # index only; the working tree is untouched
+```
+
+`git read-tree` is safe with agents mid-write because it never touches working
+files. Do **not** reach for `git reset` here out of habit — `--hard` would destroy
+every in-flight agent's work, and the `MM` display is exactly the kind of scary
+symptom that invites that reflex.

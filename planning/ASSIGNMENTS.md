@@ -11,13 +11,13 @@ Status: `free` · `assigned` · `in-review` · `done`
 | Crate | Layer | Issue | Owner | Status | Started | Finished |
 |---|---|---|---|---|---|---|
 | vaco-core | 0 | #2,#4 | orchestrator | done | 2026-08-21 | 2026-08-21 |
-| vaco-limits | 0 | — | — | free | | |
-| vaco-simd | 0 | #90 | — | free | | |
-| vaco-opts | 0 | — | — | free | | |
-| vaco-opts-derive | 0 | — | — | free | | |
+| vaco-limits | 0 | — | agent:bitstream | assigned | 2026-08-21 | |
+| vaco-simd | 0 | #90 | agent:simd | assigned | 2026-08-21 | |
+| vaco-opts | 0 | — | agent:opts | assigned | 2026-08-21 | |
+| vaco-opts-derive | 0 | — | agent:opts | assigned | 2026-08-21 | |
 | vaco-expr | 0 | — | — | free | | |
-| vaco-bitstream | 0 | — | — | free | | |
-| vaco-pixfmt | 1 | — | — | free | | |
+| vaco-bitstream | 0 | — | agent:bitstream | assigned | 2026-08-21 | |
+| vaco-pixfmt | 1 | — | agent:pixfmt | done | 2026-08-21 | 2026-08-21 |
 | vaco-sampfmt | 1 | — | — | free | | |
 | vaco-chlayout | 1 | — | — | free | | |
 | vaco-color | 1 | — | — | free | | |
