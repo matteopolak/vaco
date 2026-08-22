@@ -167,6 +167,49 @@ ctor      = "vaco_codec_flac::FlacDecoder"
 generated file is committed and reviewable; CI re-runs the generator and fails if it differs. No agent
 ever writes the registry, so ~120 crates register themselves with zero contention.
 
+#### The fragment schema (contract-first, §6)
+
+Frozen here so that a crate can write its fragment before the generator that
+consumes it exists. Every wave-3 and wave-4 agent correctly deferred its
+`vaco-component.toml` because there was no schema and nothing read it — that is
+the gap this closes.
+
+```toml
+[[component]]
+kind      = "demuxer"        # see the vocabulary below
+name      = "mov,mp4,m4a,3gp,3g2,mj2"   # registry name; comma-separated aliases
+                                        # are ONE component, as the reference has it
+long_name = "QuickTime / MOV"
+feature   = "demux-mp4"      # the cargo feature gating it; omit for always-on
+ctor      = "vaco_demux_mp4::Mp4DemuxerDesc"   # a `const`/`static` descriptor path,
+                                               # NOT a function — the registry must be
+                                               # able to list capabilities without
+                                               # constructing anything
+
+# kind-specific, all optional:
+media       = "video"                # decoder/encoder/parser/filter: video|audio|subtitle|data
+codec       = "h264"                 # decoder/encoder/parser: the CodecId variant, snake_case
+extensions  = "mp4,m4a,mov"          # demuxer/muxer
+mime_types  = "video/mp4"            # demuxer/muxer
+```
+
+**`kind` vocabulary:** `demuxer`, `muxer`, `decoder`, `encoder`, `parser`,
+`filter`, `protocol`, `bitstream_filter`.
+
+**Rules an agent can rely on:**
+
+- One file per crate, any number of `[[component]]` tables in it.
+- `kind`, `name` and `ctor` are always required; everything else is per-kind.
+- The `ctor` path must resolve under the crate's own name, and the generated
+  registry gates it on `feature` so a disabled component costs nothing.
+- A crate that registers nothing ships no file. Shared helpers
+  (`vaco-format-isom`, `vaco-format-nalu`, `vaco-parse-*`) register nothing —
+  the *demuxer* registers, not the box parser it uses.
+
+The generator and the registry's public API belong to `vaco-registry`'s owner,
+who may extend this schema. They may not silently change a field an existing
+fragment already uses — that is the same freeze the trait layers get.
+
 ### 3.4b `fuzz/Cargo.toml` is generated from the target files
 
 The fuzz manifest was the last hand-edited shared file, and the worst of them:
