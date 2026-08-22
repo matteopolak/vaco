@@ -2256,3 +2256,58 @@ changes in this document:
    core-promotion warmup: macOS parks new processes on efficiency cores, and
    without it an unchanged binary reported 45 ns and 132 ns for the same row on
    consecutive runs. Any benchmark on Apple silicon needs this.
+
+## Amendment — PF-0.1 measured (2026-08-22): the spec's literal shape won
+
+`vaco-codec-cabac` benchmarked all four combinations of {branchy, branchless}
+decision × {per-bit, whole-width} renormalisation, side by side in one file, on
+two corpora. Apple M5, divan, min of 300 samples, three agreeing runs; the
+ordering was reproduced independently on a loaded machine:
+
+| decision | renorm | skewed (~6% ones) | even (~50%) |
+|---|---|---|---|
+| **branchy (as specified)** | **per-bit (as specified)** | **15.7 µs** | **17.2 µs** |
+| branchy | whole-width | 23.5 | 22.8 |
+| branchless | per-bit | 21.7 | 24.0 |
+| branchless | whole-width | 29.0 | 30.3 |
+
+The agent shipped the bottom row first, on the reasoning every optimisation
+guide gives, and rewriting to the top row was a **1.76x speed-up**.
+
+**Why branchless lost.** The masked selects serialise the dependency chain and
+deny the branch predictor anything to speculate through. CABAC's branch is
+predictable in practice — that is the entire point of an adaptive binary coder —
+so replacing a well-predicted branch with a data dependency trades a rare
+mispredict for a guaranteed stall on every bin. It lost on the *even* corpus
+too, which rules out "the benchmark was too skewed".
+
+**Why whole-width renorm lost.** `BitReader::get(n)` with a *variable* `n`
+carries an `if n == 0` early return, a `min(32)` and a variable shift. At `n = 1`
+all three fold away. The spec's per-bit loop is not naive; it is the shape that
+lets the compiler delete the generality.
+
+Same result a third time in the same crate: batching bypass bins into one
+`get(n)` measured **1.2x slower** than a plain loop, so `decode_bypass_bits` is
+a plain loop. (Re-measured here at 8.83 µs batched vs 8.79 µs looped — no win
+even before the loaded-machine noise.)
+
+### The generalisation
+
+This is the second recorded case of a confident performance assumption measuring
+backwards, after D12's widening-MAC gap — assumed ~6x, measured **0.79x**, i.e.
+faster. Both were assumptions about what the hardware would do, made by someone
+who had not yet run the code.
+
+So, for anything on a hot path:
+
+1. **Write the specified shape first and benchmark it.** It is the baseline, it
+   is obviously correct, and here it was also the winner. Treat "the spec's
+   version is naive" as a hypothesis, not a premise.
+2. **Benchmark alternatives side by side in one file**, on more than one corpus,
+   rather than sequentially against remembered numbers. The four-way table above
+   is why the answer was unambiguous.
+3. **A branch that the hardware predicts well is not a cost.** Reach for
+   branchless where the branch is genuinely data-random, not where it is merely
+   *present*.
+4. **Report the ratio, not the verdict.** "1.76x" survives a different machine;
+   "faster" does not.
