@@ -39,12 +39,31 @@ fn quoting_handles_the_embedded_quote() {
     assert_eq!(escape::unescape("'a'\\''b'").unwrap(), "a'b");
 }
 
+/// D17: neither an unterminated quote nor a trailing backslash is an error.
+///
+/// The strict reading was wrong and would have failed real command lines
+/// through `vaco-opts`. Probed directly, where the error message reveals the
+/// unescaped value:
+///
+/// ```text
+/// ffmpeg -i "movie='ab"  ->  Failed to avformat_open_input 'ab'
+/// ffmpeg -i 'movie=ab\'  ->  Failed to avformat_open_input 'ab\'
+/// ```
+///
+/// So the quote is consumed and its content kept, and the backslash is content.
 #[test]
-fn malformed_escapes_are_errors_not_panics() {
-    assert!(escape::unescape("'unterminated").is_err());
-    assert!(escape::unescape("trailing\\").is_err());
-    assert!(escape::split_raw("'oops", ":").is_err());
-    assert!(escape::split_once_raw("bad\\", ":").is_err());
+fn malformed_escapes_are_accepted_like_the_reference() {
+    assert_eq!(escape::unescape("'unterminated").unwrap(), "unterminated");
+    assert_eq!(escape::unescape("trailing\\").unwrap(), "trailing\\");
+    assert_eq!(escape::unescape("'ab").unwrap(), "ab");
+    assert_eq!(escape::unescape("ab\\").unwrap(), "ab\\");
+
+    // An unterminated quote swallows the rest, separators included.
+    assert_eq!(escape::split_raw("'oops", ":").unwrap(), vec!["'oops"]);
+    assert_eq!(escape::split_raw("a:'b:c", ":").unwrap(), vec!["a", "'b:c"]);
+
+    // And nothing panics on the degenerate shapes.
+    assert!(escape::split_once_raw("bad\\", ":").is_ok());
 }
 
 #[test]

@@ -122,7 +122,10 @@ pub fn escape(s: &str, special: &str, mode: Mode) -> String {
 ///
 /// # Errors
 ///
-/// [`EscapeError`] for an unterminated quote or a trailing backslash.
+/// Never fails today — the variants remain because `escape`'s inverse is
+/// fallible in principle and callers already handle `Result`. An unterminated
+/// quote and a trailing backslash are both **accepted**, matching the reference;
+/// see the notes in the body.
 pub fn unescape(s: &str) -> Result<String, EscapeError> {
     let mut out = String::with_capacity(s.len());
     let mut it = s.chars();
@@ -130,16 +133,20 @@ pub fn unescape(s: &str) -> Result<String, EscapeError> {
     while let Some(c) = it.next() {
         match c {
             '\'' => in_quote = !in_quote,
+            // D17: a trailing backslash is kept LITERALLY, not an error.
+            // `movie=ab\` opens a file named `ab\`, reproduced directly. The
+            // strict reading rejected it, which would have failed real command
+            // lines through `vaco-opts`.
             '\\' if !in_quote => match it.next() {
                 Some(n) => out.push(n),
-                None => return Err(EscapeError::TrailingBackslash),
+                None => out.push('\\'),
             },
             _ => out.push(c),
         }
     }
-    if in_quote {
-        return Err(EscapeError::UnterminatedQuote);
-    }
+    // D17: end of input closes an open quote rather than failing. `movie='ab`
+    // opens a file named `ab` — the quote is consumed and the content kept.
+    // Reproduced directly; `in_quote` is deliberately not checked here.
     Ok(out)
 }
 
@@ -162,9 +169,9 @@ pub fn split_raw<'a>(s: &'a str, seps: &str) -> Result<Vec<&'a str>, EscapeError
         match c {
             '\'' => in_quote = !in_quote,
             '\\' if !in_quote => {
-                if it.next().is_none() {
-                    return Err(EscapeError::TrailingBackslash);
-                }
+                // A trailing backslash ends the piece; it is content, not an
+                // error. See `unescape`.
+                let _ = it.next();
             }
             _ if !in_quote && seps.contains(c) => {
                 out.push(s.get(start..i).unwrap_or_default());
@@ -173,9 +180,8 @@ pub fn split_raw<'a>(s: &'a str, seps: &str) -> Result<Vec<&'a str>, EscapeError
             _ => {}
         }
     }
-    if in_quote {
-        return Err(EscapeError::UnterminatedQuote);
-    }
+    // An unterminated quote runs to the end of the input, taking the rest of
+    // the string with it as one piece. See `unescape`.
     out.push(s.get(start..).unwrap_or_default());
     Ok(out)
 }
@@ -222,9 +228,9 @@ pub fn split_once_raw<'a>(
         match c {
             '\'' => in_quote = !in_quote,
             '\\' if !in_quote => {
-                if it.next().is_none() {
-                    return Err(EscapeError::TrailingBackslash);
-                }
+                // A trailing backslash ends the piece; it is content, not an
+                // error. See `unescape`.
+                let _ = it.next();
             }
             _ if !in_quote && seps.contains(c) => {
                 let head = s.get(..i).unwrap_or_default();

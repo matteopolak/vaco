@@ -582,8 +582,10 @@ fn escaping_levels() {
     assert_eq!(escape::escape("a:b", ":=", Mode::Quote), "'a:b'");
     assert_eq!(escape::escape("a'b", ":=", Mode::Quote), "'a'\\''b'");
     assert_eq!(escape::unescape("'a'\\''b'").unwrap(), "a'b");
-    assert!(escape::unescape("'unterminated").is_err());
-    assert!(escape::unescape(r"trailing\").is_err());
+    // D17: both are accepted, not errors — the reference opens `movie='ab` as
+    // the file `ab` and `movie=ab\` as `ab\`. See vaco-core's escape tests.
+    assert_eq!(escape::unescape("'unterminated").unwrap(), "unterminated");
+    assert_eq!(escape::unescape(r"trailing\").unwrap(), r"trailing\");
 
     let parts = escape::split(r"a\:b:c", ':').unwrap();
     assert_eq!(parts.len(), 2);
