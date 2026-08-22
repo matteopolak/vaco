@@ -2098,3 +2098,57 @@ self-close.
 family and the frame-side-data component family. Nothing reachable through `lavfi`
 produces an IAMF stream group, and `-show_frames` is v0.2 (D14.4). They carry
 placeholders, are marked in `sections.rs`, and affect only `xml` and `compact`.
+
+## Amendment — §§2.3, 2.4, 2.6, 3.1 corrected against the binary (2026-08-22)
+
+`vaco-cli-core` probed the grammar rather than implementing plan 14 as written,
+and found four claims in this document to be false. Three are reproduced here
+directly against ffmpeg 8.1; the fourth rests on 1,896 recorded verdicts in
+`crates/app/vaco-cli-core/tests/reference.rs`.
+
+**§2.3 rule 1 — "FFmpeg has no end-of-options marker". It does.** `--` is
+consumed and forces the *next* entry to be a positional:
+
+```
+ffmpeg -i a -- -f null -      # -f becomes the OUTPUT URL
+                              # "Unable to choose an output format for '-f'"
+```
+
+No file named `--` is created. Any argv model that treats `--` as an ordinary
+positional is wrong.
+
+**§2.4 — "two dashes are accepted for every option (`--help` ≡ `-help`)".
+False.** `--help` works only because a literal `-help` entry exists in the table.
+`--y` reports `Unrecognized option '-y'`. There is no general double-dash form.
+
+**§2.6 — "if pending non-empty: error 'Trailing options were found on the
+commandline.'". It exits 0 and discards them silently.** Verified with trailing
+`-y -threads 2` after the output URL: exit 0, no diagnostic.
+
+**§3.1 — the specifier grammar is not `segment (':' segment)*` with free
+chaining.** Three properties the published grammar does not capture, all
+load-bearing:
+
+1. **Four tokens are terminal.** After an index, a stream id, `m:k:v` or `u`,
+   nothing may follow. `v:0:u` fails; `v:u` works.
+2. **The colon is a separator, not a requirement.** `p:1v` ≡ `p:1:v`.
+3. **Two tokens have different lookahead rules.** A type letter needs a
+   non-alphanumeric next byte (`v-` parses the `v`; `vu` fails as a whole);
+   `u` needs a colon or end-of-string (`u_` fails as a whole).
+
+§3.1 also omits that `disp:` is non-terminal but singleton, and that its token
+class excludes `-`.
+
+Because the index token is terminal it is always last, so stream matching
+collapses to "filter by conjunctive predicates, then take the n-th survivor" —
+there are no ordered-narrowing special cases to implement. That simplification is
+a consequence of the corrected grammar, and is not available under §3.1's.
+
+### Why this section was wrong
+
+The original §§2–3 were written from the reference's published documentation and
+from reading its help output. Both describe the grammar the author intended; the
+binary implements a `strtol`-based scanner whose acceptance set is wider in some
+places and narrower in others. This is the same lesson as plan 13 §1b and D17:
+**for anything a user's command line depends on, the binary is the specification
+and the documentation is a hint.**
