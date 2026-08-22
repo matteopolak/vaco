@@ -69,11 +69,41 @@ An agent needing a dependency that is not pre-declared **stops and requests it**
 the root. Requests are batched by the orchestrator. This is deliberate friction: D10 makes every
 adoption a reviewed decision, so an agent silently adding a dependency would violate policy anyway.
 
-### 3.3 `Cargo.lock` is generated once per wave, by the orchestrator
+### 3.3 `Cargo.lock`: new *packages* are the orchestrator's, new *edges* are not
 
-Agents never run `cargo add`, `cargo update`, or anything else that rewrites the lock file. Because
-all dependencies are pre-declared (§3.2), the lock is stable for the whole wave. Agents run
-`cargo check --locked` / `cargo test --locked`, which fails loudly rather than silently rewriting.
+Agents never run `cargo add` or `cargo update`, and never edit the root `Cargo.toml`. Adding a
+dependency that is not already in `[workspace.dependencies]` is a D10 decision and goes through the
+orchestrator.
+
+**But an agent writing `proptest.workspace = true` in its own crate is not that.** Every anticipated
+dependency is already declared and already resolved (§3.2), so taking one up adds an *edge* inside an
+existing workspace member — no new package, no new version, nothing to review. The lock line it
+produces is:
+
+```
+ name = "vaco-chlayout"
+ dependencies = [
++ "proptest",
+```
+
+That is expected churn, and the orchestrator commits it with the crate.
+
+#### The `--locked` trap
+
+As first written, this section said agents run `cargo check --locked`, which "fails loudly rather than
+silently rewriting". It does — including when an agent legitimately takes up a pre-declared
+dependency, because the edge is missing from the lock. The rule and the flag together made a permitted
+action look forbidden.
+
+The `vaco-color` agent read it correctly and went the conservative way: it dropped `proptest` and
+hand-rolled seeded xorshift sweeps instead, losing shrinking on a crate full of table invariants.
+Three concurrent agents read it the other way and added `proptest` regardless. Both were defensible
+readings of a rule that could not be obeyed as stated.
+
+So: **use `--locked` for `test` and `clippy`, but run the first `cargo check` of a crate without it**,
+so a newly taken-up workspace dependency can register its edge. If that run changes anything in
+`Cargo.lock` other than lines inside your own crate's `dependencies = [...]` block, stop and report —
+that means a *package* moved, which is not yours.
 
 ### 3.4 The registry is assembled from per-crate fragments
 

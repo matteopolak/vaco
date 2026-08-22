@@ -34,6 +34,12 @@ The ones that catch people out:
 - **No new dependencies.** Everything anticipated is pre-declared in
   `[workspace.dependencies]`; write `foo.workspace = true`. If you need something
   absent, stop and ask — D10 makes every adoption a reviewed decision.
+
+  Taking up one that IS pre-declared is fine and expected — including `proptest`
+  and `divan`. It adds an edge to `Cargo.lock` inside your own crate's block, not
+  a package. Run your first `cargo check` **without** `--locked` so that edge can
+  register (plan 19 §3.3); use `--locked` for `test` and `clippy` afterwards.
+  Do not skip property tests to avoid touching the lock.
 - **Interfaces are frozen.** Implement the traits as they stand. If a signature is
   genuinely wrong, report it; do not change it.
 
