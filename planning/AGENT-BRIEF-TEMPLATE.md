@@ -145,6 +145,15 @@ and never `add -A`. In a shared working tree those destroy other agents' work.
   are written from plans, and plans have been wrong before.
 - Your D11 fidelity grade if you wrapped an external crate.
 
+## Dependencies a brief may not offer you
+
+A brief listing a dependency does **not** override the layering. D14.1 and
+`cargo xtask layer-check` forbid a `crates/format/` crate depending on a
+`crates/codec/` one: parsers are reached through `ParserProvider`, not directly.
+Three container briefs listed `vaco-parse-h264`/`aac`/`opus` as available; all
+three agents correctly took none of them. If a brief offers you an edge the
+layering forbids, refuse it and say so — the brief is wrong, not the rule.
+
 ## Probing the reference
 
 Where you must match behaviour nobody wrote down, probe the reference binary —

@@ -3366,3 +3366,46 @@ target throughput went from 350 to 7 990 326 executions.
 That is the shape §13 predicts for slow units: the fix is usually a bound or an
 invariant, not optimisation — and here the invariant came from reading the
 standard, not from profiling.
+
+
+## Amendment — §3.2 Matroska corrected against the binary and the RFCs (2026-08-22)
+
+`vaco-demux-matroska` found three errors, one of which would send a reader to
+the wrong document entirely.
+
+**§3.2.1 and §3.2.4 step 4 say RFC 9559 §27 is the codec-mapping registry. It is
+not.** §27 is IANA Considerations — element IDs plus small enum registries. The
+codec IDs live in `draft-ietf-cellar-codec`, cited in RFC 9559 as
+`[MatroskaCodec]`. The clean-room position is unaffected, since that is still an
+IETF document, but anyone following the plan literally will not find the table.
+
+**§3.2.4 step 1 says the reported `format_name` is the `DocType`. It is not.**
+It is `matroska,webm` for both, reproduced on a `DocType=webm` file and a
+`DocType=matroska` one.
+
+**§3.2.4 step 6 (MKV-L1)** ends "…they inherit the block timestamp and are
+marked as having no independent PTS". `Packet` has no such flag, so laced frames
+with no duration source all take the block timestamp.
+
+### Measured facts the plan did not have
+
+- **`CodecDelay` is rounded to the nearest tick first, then subtracted** from the
+  integer block timestamp. Doing it in the nanosecond domain and flooring gives
+  −26 where the reference gives −25. Only an MP3 file discriminates the two
+  hypotheses; the Opus file agrees either way — a reminder that a corpus has to
+  contain the case that separates the rules, not just cases that pass.
+- **Packet duration is quantised to the time base before becoming a duration**
+  (26 122 448 ns → `0.026000`, not `0.026122`).
+- **`DiscardPadding` must not re-trim the duration**; `BlockDuration` is already
+  trimmed.
+- **`Packet::pos` is the block element's *data* offset**, verified separately for
+  a `SimpleBlock` and for a `Block` nested in a `BlockGroup`.
+
+### The traits held
+
+The answer to "did `vaco-format-core` fit a cue-based container" was **yes,
+nothing unsatisfiable** — with two doc-level gaps since closed (`IndexEntry::pos`
+semantics, and `start_time` being first-pts-plus-`initial_padding`). That is the
+second independent confirmation that a `Demuxer` owning its own I/O beats plan
+18 §1.2's `DemuxCtx`: a callback-driven demuxer could not express "the scan
+stopped; validate these `SeekHead` positions and try again".
