@@ -11,8 +11,13 @@ authors.workspace = true
 [dependencies]
 vaco-core = { path = "../../core/vaco-core" }
 vaco-pool = { path = "../../model/vaco-pool" }
+vaco-limits = { path = "../../core/vaco-limits" }
+vaco-bitstream = { path = "../../core/vaco-bitstream" }
 smallvec.workspace = true
 bitflags.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
 
 [lints]
 workspace = true

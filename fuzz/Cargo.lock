@@ -333,6 +333,7 @@ name = "vaco-codec-core"
 version = "0.1.0"
 dependencies = [
  "bitflags",
+ "smallvec",
  "vaco-chlayout",
  "vaco-color",
  "vaco-core",
@@ -373,10 +374,12 @@ name = "vaco-frame"
 version = "0.1.0"
 dependencies = [
  "bitflags",
+ "parking_lot",
  "smallvec",
  "vaco-chlayout",
  "vaco-color",
  "vaco-core",
+ "vaco-limits",
  "vaco-pixfmt",
  "vaco-pool",
  "vaco-sampfmt",
@@ -392,9 +395,14 @@ dependencies = [
  "vaco-codec-core",
  "vaco-conformance",
  "vaco-core",
+ "vaco-frame",
  "vaco-io",
  "vaco-limits",
+ "vaco-packet",
+ "vaco-pixfmt",
+ "vaco-pool",
  "vaco-protocol-core",
+ "vaco-textformat",
 ]
 
 [[package]]
@@ -438,7 +446,9 @@ version = "0.1.0"
 dependencies = [
  "bitflags",
  "smallvec",
+ "vaco-bitstream",
  "vaco-core",
+ "vaco-limits",
  "vaco-pool",
 ]
 
@@ -455,6 +465,7 @@ name = "vaco-pool"
 version = "0.1.0"
 dependencies = [
  "parking_lot",
+ "vaco-bitstream",
  "vaco-core",
  "vaco-limits",
 ]
@@ -472,6 +483,14 @@ dependencies = [
 name = "vaco-sampfmt"
 version = "0.1.0"
 dependencies = [
+ "vaco-core",
+]
+
+[[package]]
+name = "vaco-textformat"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
  "vaco-core",
 ]
 

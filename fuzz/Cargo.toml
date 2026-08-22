@@ -32,9 +32,13 @@ vaco-codec-core = { path = "../crates/signal/vaco-codec-core" }
 vaco-conformance = { path = "../crates/tool/vaco-conformance" }
 vaco-io = { path = "../crates/io/vaco-io" }
 vaco-protocol-core = { path = "../crates/io/vaco-protocol-core" }
+vaco-pool = { path = "../crates/model/vaco-pool" }
+vaco-frame = { path = "../crates/model/vaco-frame" }
+vaco-packet = { path = "../crates/model/vaco-packet" }
+vaco-pixfmt = { path = "../crates/model/vaco-pixfmt" }
 
 [features]
-default = ["bitstream", "limits", "core", "io", "protocol-core", "codec-core", "textformat"]
+default = ["bitstream", "limits", "core", "io", "protocol-core", "codec-core", "textformat", "pool", "frame", "packet"]
 bitstream = []
 limits = []
 core = []
@@ -43,6 +47,9 @@ conformance = []
 io = []
 protocol-core = []
 textformat = []
+pool = []
+frame = []
+packet = []
 
 # Overflow checks ON in the profile the fuzzer actually runs, so arithmetic
 # overflow is a finding rather than a silent wrap (plan 13 §2.2.1). The shipped
@@ -221,3 +228,29 @@ path = "fuzz_targets/textformat_escape.rs"
 test = false
 doc = false
 required-features = ["textformat"]
+
+# ------------------------------------------------------- vaco-pool / -frame / -packet
+#
+# Every buffer length in this family derives from something a container or a
+# sequence header said, so all three paths are input-sized allocation (D6).
+
+[[bin]]
+name = "pool_acquire"
+path = "fuzz_targets/pool_acquire.rs"
+test = false
+doc = false
+required-features = ["pool"]
+
+[[bin]]
+name = "frame_alloc"
+path = "fuzz_targets/frame_alloc.rs"
+test = false
+doc = false
+required-features = ["frame"]
+
+[[bin]]
+name = "packet_from_slice"
+path = "fuzz_targets/packet_from_slice.rs"
+test = false
+doc = false
+required-features = ["packet"]

@@ -1,4 +1,47 @@
 //! Decoded frames: video pictures and audio sample blocks.
+//!
+//! # The ownership model, in one paragraph
+//!
+//! A [`Frame`] is a bag of metadata plus a list of [`Plane`]s, and **each plane
+//! owns its own [`Buffer`]** — one `Arc` per plane, not one per frame (plan 11
+//! F11). That single decision buys three things: two threads can hold `&mut` to
+//! different planes with the borrow checker proving disjointness, a filter that
+//! rewrites chroma and passes luma through copies nothing, and copy-on-write
+//! granularity is the plane rather than the whole picture. Cloning a `Frame` is
+//! a handful of refcount bumps and never touches a pixel.
+//!
+//! # Reading and writing planes
+//!
+//! Go through [`PlaneRef`] and [`PlaneMut`], not through `plane.data` directly.
+//! They carry the geometry (`stride`, `rows`, `row_bytes`) that a bare `&[u8]`
+//! loses, and they are the forward-compatibility seam for banded frame
+//! threading (plan 11 §13.6) — a kernel written against `PlaneRef` keeps
+//! compiling if planes ever become segmented.
+//!
+//! ```
+//! use vaco_frame::Frame;
+//! use vaco_limits::{Budget, Limits};
+//! use vaco_pixfmt::PixFmt;
+//!
+//! let mut budget = Budget::new(Limits::strict());
+//! let mut frame = Frame::alloc_video(&mut budget, PixFmt::Yuv420p, 64, 64)?;
+//!
+//! // Four independent `&mut`, disjoint by construction: no runtime mechanism.
+//! let mut planes = frame.planes_mut();
+//! let (luma, chroma) = planes.split_at_mut(1);
+//! std::thread::scope(|s| {
+//!     s.spawn(|| luma[0].fill(16));            // exclusive access to plane 0
+//!     s.spawn(|| { let _ = chroma[0].row(0); }); // and to plane 1
+//! });
+//! # Ok::<(), vaco_core::Error>(())
+//! ```
+
+#![forbid(unsafe_code)]
+
+mod alloc;
+mod plane;
+mod pool;
+mod sidedata;
 
 use smallvec::SmallVec;
 use vaco_chlayout::ChannelLayout;
@@ -7,6 +50,10 @@ use vaco_core::{Duration, Rational, Timestamp};
 use vaco_pixfmt::PixFmt;
 use vaco_pool::Buffer;
 use vaco_sampfmt::SampleFmt;
+
+pub use plane::{PlaneMut, PlaneRef};
+pub use pool::FramePool;
+pub use sidedata::{Crop, FrameSideDataKind};
 
 /// One plane of a video frame, or one channel of planar audio.
 ///
@@ -69,7 +116,16 @@ pub enum FrameSideData {
     DisplayMatrix([i32; 9]),
     ClosedCaptions(Buffer),
     MasteringDisplay(Box<MasteringDisplay>),
-    ContentLightLevel { max_cll: u32, max_fall: u32 },
+    ContentLightLevel {
+        max_cll: u32,
+        max_fall: u32,
+    },
+    /// Crop rectangle to apply on presentation, as signalled by the codec.
+    ///
+    /// Not in the original freeze: [`Frame::cropped_dimensions`] was, and it has
+    /// to read the rectangle from somewhere. Cropping is metadata rather than a
+    /// plane rewrite, which is what makes it free.
+    Cropping(Crop),
     // ... generated from the side-data table
 }
 
@@ -83,13 +139,32 @@ pub struct MasteringDisplay {
 
 impl Frame {
     /// Crop rectangle applied on presentation, if the codec signalled one.
+    ///
+    /// `None` when there is no crop, when the crop is empty, or for audio.
+    /// Cropping is presentation metadata: no plane is touched and no byte moves,
+    /// which is why the visible size and the allocated size can differ.
     #[must_use]
     pub fn cropped_dimensions(&self) -> Option<(u32, u32)> {
-        todo!("P0-03 freeze")
+        let FrameData::Video { width, height, .. } = self.data else {
+            return None;
+        };
+        let crop = self.crop()?;
+        Some(crop.apply(width, height))
     }
 
     /// Make every plane uniquely owned so it can be written.
+    ///
+    /// The `av_frame_make_writable` equivalent: pay the copy-on-write cost up
+    /// front, at a point of the caller's choosing, rather than inside a loop.
     pub fn make_writable(&mut self) {
-        todo!("P0-03 freeze: Buffer::make_mut on each plane")
+        for plane in self.planes_slice_mut() {
+            plane.data.make_writable();
+        }
+    }
+
+    /// Whether every plane is uniquely owned, so writing copies nothing.
+    #[must_use]
+    pub fn is_writable(&self) -> bool {
+        self.planes_slice().iter().all(|p| p.data.is_unique())
     }
 }
