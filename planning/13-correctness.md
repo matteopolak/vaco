@@ -2657,3 +2657,41 @@ once. D5 is v0.1 = ffprobe on modern containers, byte-identical.
    change and by new-coverage rate). Rotation is almost certainly right; specify the scheduler at v0.3.
 8. **Who is the correctness owner?** §1.4 and §1.12 hang two CODEOWNERS gates on this role. It needs a
    named person before the first divergence-allowlist entry, or the governance is decorative.
+
+
+## 5b. Dead code, and the case no lint catches
+
+`dead_code` catches a **private** item used only from `#[cfg(test)]`: the block
+is not compiled for the lib target, so the item is unused there, and CI's
+`-D warnings` denies it. Verified by planting one.
+
+It does **not** fire for `pub` items, because a public item is reachable in
+principle — and `unreachable_pub` does not fire either, because it genuinely is
+reachable. So **a `pub fn` that no other crate calls and only tests exercise is
+invisible to every lint in the toolchain.** Also verified by planting one.
+
+That case matters here, because a test in `tests/` can only reach `pub` items.
+The standard move is to widen visibility to test something and never narrow it
+again, and nothing complains.
+
+`cargo xtask dead-code` reports it. Name-based, so it cannot see trait dispatch,
+re-exports under a different path, or macro-built names — which is why it
+**prints and returns success** rather than failing the build. A hard gate would
+need an allowlist, and an allowlist is where real findings go to hide.
+
+### Reading the number
+
+At the time it was written it reported **219 items across 33 crates**, and that
+is the expected shape rather than a backlog: this project built its substrate
+before its consumers. `vaco-bitstream::f32_le` is waiting for a PCM decoder;
+`vaco-codec-cabac::decode_uegk` is waiting for H.264. Neither is dead — both are
+unadopted.
+
+So the number is a **leading indicator**, not a defect count. It should fall as
+wave 4's codecs, muxers and filters land. What deserves attention is an item
+that stays on the list after its intended consumer ships — that one really
+should have been `pub(crate)`.
+
+Sanity-checked when written: every known cross-crate item (`image_size`,
+`Rational`, `PixFmt`, `ChannelLayout`, …) is correctly absent, and each reported
+item has exactly one occurrence outside tests, its own definition.

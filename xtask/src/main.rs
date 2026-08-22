@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod dead_code;
 mod deps;
 mod docs;
 mod dup_check;
@@ -28,6 +29,7 @@ fn main() {
         "dep-gate" => deps::run(),
         "unsafe-audit" => unsafe_audit::run(),
         "dup-check" => dup_check::run(check),
+        "dead-code" => dead_code::run(check),
         "wasm-check" => wasm::run(check),
         "gen-registry" => registry::run(check),
         "gen-docs-index" => docs::run(check),
@@ -41,6 +43,7 @@ fn main() {
             eprintln!("  unsafe-audit    `unsafe` only where D2/D13 permit");
             eprintln!("  wasm-check      every library still builds for wasm32 (D18)");
             eprintln!("  dup-check       one definition per concept (D19)");
+            eprintln!("  dead-code       public API that only tests use (report, not a gate)");
             eprintln!("  gen-registry    assemble the registry from crate fragments");
             eprintln!("  gen-docs-index  generate docs/README.md");
             eprintln!(
