@@ -18,6 +18,9 @@ vaco-codec-core = { path = "../../signal/vaco-codec-core" }
 vaco-limits = { path = "../../core/vaco-limits" }
 smallvec.workspace = true
 
+[dev-dependencies]
+proptest.workspace = true
+
 [lints]
 workspace = true
 

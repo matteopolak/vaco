@@ -1,0 +1,477 @@
+# `vaco-format-core`
+
+Layer 3b. The container framework: what a demuxer and a muxer *are*, and the
+five models they all share — probing, stream discovery, timestamps, seeking and
+interleaving.
+
+Per D14.1 this crate sits **above** `vaco-codec-core`, because `Stream` carries
+`CodecParameters`. It reaches bitstream parsers through an injected
+`ParserProvider`, so **no format crate ever depends on a codec crate**.
+
+---
+
+## What it is
+
+| Module | Contents |
+|---|---|
+| `probe` | `ProbeData`, `ProbeScore`, and the score-based detection engine |
+| `options` | `FormatOptions` — the generic format-level option table |
+| `flags` | `FormatFlags` — what a container declares it can do |
+| `time` | wraparound, timestamp generation and repair, duration estimation |
+| `seek` | `SeekTarget`, `PacketIndex`, and the two generic seek strategies |
+| `discovery` | `Discovery<D>` — the bounded, replayable stream-discovery pass |
+| `interleave` | `InterleaveQueue` and the muxer-side timestamp chain |
+| `vacoraw` | a worked-example container that drives every one of the above |
+
+### The one idea worth reading first
+
+**The core does not own the demuxer.** `Demuxer` is a self-contained object: it
+holds its own I/O, reads its own packets, performs its own seeks. Everything
+generic in this crate is therefore either
+
+* a **library the demuxer calls** — `SeekStrategy::choose`, `binary_search`,
+  `PacketIndex`, `TimestampFixer`, `WrapState`; or
+* a **wrapper the caller composes** — `Discovery<D>`, which is itself a
+  `Demuxer`.
+
+It is never a driver that reaches into a demuxer through callbacks.
+
+That is the opposite of `planning/18-formats.md` §1.2, which sketched a
+`DemuxCtx` owning the I/O with the demuxer as a set of callbacks. The frozen
+trait forced the inversion, and the inversion is better: `Discovery` can be
+applied or not applied, tested against a mock, and stacked, and no demuxer has
+to know it exists. The cost is real and is listed under *Signature gaps* below.
+
+---
+
+## The design justification: MP4, Matroska and MPEG-TS
+
+The brief for this crate asked for exactly one thing above all others — that the
+traits be implementable by all three of MP4, Matroska and MPEG-TS without
+contortions, because those three cover the design space: index-based random
+access, cue-based with the cues sometimes missing, and streaming with no index
+at all. This section is that analysis. It is the justification for the shape of
+`seek`, `probe` and `time`, and it is what to re-read before changing any of
+them.
+
+### MP4 / MOV — a complete index, built once
+
+*Probe.* `ProbeScore::MAGIC_CHECKED` on `ftyp` at offset 4 with a recognised
+brand; `ProbeScore::MAGIC` for a bare `moov`/`mdat` at offset 4 without one.
+`ProbeData`'s zero-padding matters here: on a file shorter than 12 bytes the
+brand read must yield zeros rather than a short read, or the score differs from
+the reference's.
+
+*Open.* Walk the box tree; build one `Stream` per `trak`; `mdhd.timescale`
+becomes `Stream::time_base`; `tkhd.duration` and `mdhd.duration` become
+`Stream::duration`; the edit list gives `Stream::start_time` authoritatively, so
+discovery must not overwrite it (and `TimestampFixer` does not — it only fills
+in what is absent).
+
+*Index.* `stts` + `ctts` + `stss` + `stsc` + `stco`/`co64` + `stsz` expand into
+one `PacketIndex` per stream at `read_header`. `PacketIndex::add` updates rather
+than duplicates on an equal timestamp, which is what makes it safe to feed the
+same sample twice from two tables. `indexmem` decimation applies to very long
+files; for a fragmented file the `sidx` supplies a sparser index and
+`fflags +fastseek` is the switch that says "use `sidx`, do not walk the `moof`s".
+
+*Seek.* `SeekStrategy::choose` returns `Index` and `PacketIndex::search` does
+the work. MP4 declares neither `TS_DISCONT` nor `NOBINSEARCH`, so a file whose
+`stbl` was discarded by `fflags +ignidx` falls through to `binary_search`
+cleanly.
+
+*What is missing.* Nothing structural. `Stream` has no `attached_pic` field, so
+MP4 cover art (`covr`) has to be surfaced as an `ATTACHED_PIC` stream whose
+single packet arrives through `read_packet` — workable, and slightly different
+from the reference, which pre-loads it. Listed under *Signature gaps*.
+
+### Matroska / WebM — cues, when there are any
+
+*Probe.* `ProbeScore::MAGIC_CHECKED` on the EBML magic plus a `DocType` of
+`matroska` or `webm`; `ProbeScore::MAGIC` on the magic alone. Confirmed
+empirically that a corrupted magic scores zero even when the transport supplies
+`Content-Type: video/x-matroska`, so the MIME bonus must not rescue it — see
+*Probing* below.
+
+*Open.* `Info/TimestampScale` gives every track the same time base (usually
+1/1000, i.e. milliseconds); `Info/Duration` is a **float**, which determinism
+rule DD3 says must be converted to a rational exactly once and never
+accumulated. `CodecDelay` and `DiscardPadding` land on `AudioParameters` and on
+packet side data respectively.
+
+*Index.* `Cues` populate `PacketIndex` — sparse, keyframe-only, and *frequently
+absent* in files written by a live encoder or truncated mid-write.
+
+*Seek.* This is the case that decided the module's shape. With cues,
+`SeekStrategy::choose` returns `Index`. Without them it returns `BinarySearch`,
+and the demuxer supplies a probe closure that scans forward for a Cluster ID and
+reads its `Timestamp` element. `binary_search` populates the index as it
+bisects, so the second seek into a cue-less file is cheap — which is exactly the
+behaviour a scrubbing UI needs and is why the bisection returns entries at all
+rather than just a position.
+
+*The unknown-size cluster.* Matroska permits a cluster whose size is the
+all-ones VINT, meaning "until the next cluster". A forward scan for the next
+Cluster ID handles it, and it is the demuxer's business; nothing here assumes a
+container can state its own element sizes.
+
+*What is missing.* Nothing structural. Lacing means one Block yields several
+packets, which `Packet::sub_packet` covers at the cost of a copy — a known
+`vaco-packet` limitation recorded in its own docs, not this crate's.
+
+### MPEG-TS — no index, and timestamps that legitimately jump
+
+*Probe.* The `ProbeScore::repeating(n)` row of the convention table: count
+consecutive `0x47` sync bytes at the 188/192/204-byte strides. Measured against
+the reference, an 18 KB TS file scores **50** and a 20-second one also scores
+50, so the reference's TS probe saturates well below `MAX` — a calibration fact
+worth having before `vaco-demux-mpegts` is written, and the reason
+`repeating(n)` tops out where it does rather than reaching 100 on any real file.
+
+*Open.* PAT and PMT give `Program`s and their `Stream`s. Time base is fixed at
+1/90000. `Stream::id` is the PID, and `FormatFlags::SHOW_IDS` is what makes
+`vaco-probe` print it.
+
+*Timestamps.* The hard case, and the one `time` is shaped by:
+
+* PTS/DTS are **33 bits**, so `WrapState::new(33)` applies and a 26.5-hour
+  recording crosses the wrap. The state is **per program, not per stream**
+  (R7) — correcting video and leaving audio uncorrected desynchronises them
+  permanently, and a multiplex shares one clock.
+* A `discontinuity_indicator` in the adaptation field is a *legitimate* jump.
+  MPEG-TS therefore declares `FormatFlags::TS_DISCONT`, which suppresses R22's
+  monotonic-DTS repair entirely. That split — the format layer never repairs a
+  declared discontinuity, and the CLI decides what to do about it — is the
+  single most important boundary rule in the model.
+* `TS_DISCONT` also disables `binary_search`, because bisection assumes
+  timestamps increase with byte position and the flag is the declaration that
+  they do not. `SeekStrategy::choose` encodes exactly that: with `TS_DISCONT`
+  and no index, it returns `Byte`, and the demuxer resynchronises on the sync
+  byte at the packet stride.
+
+*Seek.* Three paths, all reachable: `Index` once packets have gone past and the
+`GENERIC_INDEX` flag let the core record them; `BinarySearch` for a
+well-behaved recording without discontinuities; `Byte` plus resync otherwise.
+
+*What is missing.* `Stream` has no `pts_wrap_bits` field, so the demuxer holds
+the `WrapState` itself rather than the core deriving it. That is a downgrade
+from the plan and it is listed under *Signature gaps* — but it is not a blocker,
+because the wrap state is per *program* anyway and `Program` could never have
+carried it as a per-stream field.
+
+### What the three together prove
+
+* **Index, bisection and byte-plus-resync are all needed**, and no container
+  needs a fourth. `SeekStrategy` has exactly four variants and each is reachable.
+* **The index must be usable when partially populated**, because Matroska
+  without cues and MPEG-TS both build theirs incrementally. `PacketIndex::search`
+  returning `None` is a fact the caller acts on, never an error.
+* **Timestamp repair must be suppressible per format**, or MPEG-TS is
+  unreadable. Hence `TS_DISCONT` and hence the boundary rule.
+* **Probing must tolerate a short prefix**, because a TS probe wants 188·N bytes
+  and an MP4 probe wants 12. Hence the retry loop and the padding window.
+* Every one of these is exercised end to end by `vacoraw`, which implements the
+  index path, the bisection path and the byte path in one 700-line format.
+
+---
+
+## How it works
+
+### Probing
+
+Score-based, bounded, and total. Each registered `DemuxerDesc` gets a prefix and
+returns a `ProbeScore` in `0..=100`; the highest wins; zero never wins.
+
+Two rules that `planning/18-formats.md` marked as needing verification were
+**measured against the pinned reference (ffmpeg/ffprobe 8.1)** rather than
+guessed, and one of the two contradicts the plan:
+
+| Question | Plan's guess | Measured | Where |
+|---|---|---|---|
+| `probe_score` for `-f <name>` | `MAX` (100) | **0** | `ffprobe -f matroska a.mkv` |
+| Does a matching MIME rescue a zero content score? | open (VERIFY-P1) | **No** | HTTP `Content-Type: video/x-matroska` over a file with corrupted EBML magic — detection fails |
+
+Calibration data from the same reference, useful when writing a real probe:
+MP4 100, Matroska 100, WAV 99, raw H.264 51, MPEG-TS 50. The score space is
+genuinely used across its whole range, which is why `ProbeScore` publishes a
+convention table (`MAGIC_CHECKED`, `MAGIC`, `VARIABLE_OFFSET`, `repeating(n)`,
+`EXTENSION`, `weak(n)`) rather than three constants. `formatprobesize`'s
+documented default of `1048576` fixes `PROBE_BUF_MAX`.
+
+`ProbeData` reproduces the reference's 32 zero bytes past the end of the buffer.
+Not for safety — nothing here can read out of range — but for **fidelity**: on a
+six-byte file, a probe reading a sixteen-byte header sees ten zeros upstream and
+would see a short read here, giving a different score, a different chosen format
+and a different `probe_score` line.
+
+`Probe::detect` runs the retry loop against a live `IoContext` using `peek`, so
+the source's position is unchanged on return whatever the outcome. That is what
+makes detection work on a pipe and why a failed detection needs no undoing.
+
+### Stream discovery
+
+`Discovery<D>` wraps a demuxer, reads a bounded prefix, refines what it can, and
+replays every packet it consumed. Five termination conditions, checked in a
+fixed order, each reported as a `StopReason`: `Complete`, `ProbeSize`,
+`AnalyzeDuration`, `PacketCap`, `NoStreams`, plus `Eof`, `NoProgress` and
+`Error`. `StopReason` is the single most useful diagnostic when a reported field
+comes out wrong — "the loop stopped at `ProbeSize`" explains a missing profile
+far better than the missing profile does.
+
+Determinism rules, all because D6 requires identical output across runs and
+machines: no wall clock, no unordered iteration (per-stream state is a `Vec`
+indexed by stream index), no float accumulation, no threading.
+
+### Timestamps
+
+Rules are numbered as `planning/18-formats.md` §1.7 numbers them, so the two
+documents compose by citation. The boundary is stated once:
+
+> **This crate owns** field decoding, wraparound, absent-timestamp
+> normalisation, PTS generation from DTS, per-stream monotonic-DTS repair,
+> packet duration fill-in, `start_time` derivation and duration estimation.
+>
+> **The CLI owns** `-itsoffset`, `-itsscale`, `-isync`, discontinuity *policy*,
+> `-ss`/`-t`/`-to` trimming, output-base normalisation, `-fps_mode` and encoder
+> time bases.
+
+Nothing goes through `f64`. Rescaling is `Timestamp::rescale`, which multiplies
+in `i128` and divides once with a named rounding mode; cross-base comparison
+cross-multiplies rather than converting to seconds. A 1/90000 stream and a
+1/1001 stream compared through seconds order *nearly*, and "nearly" is a desync.
+
+**One divergence from the plan, and it is a correction.** The plan applies R8's
+pivot rule and R9's cumulative offset to every timestamp. Doing both
+double-counts: a raw value the pivot lifted by a period, followed by one it did
+not, reads as a jump backwards, and the stream sawtooths. `WrapState::correct`
+therefore applies the pivot to the **first** value only — the only one with no
+history to take a delta against — and folds it into the offset. Everything after
+it is delta tracking in raw space. A property test walks a wrapping clock across
+three periods and asserts strict monotonicity with the delta preserved exactly.
+
+### Seeking
+
+Four strategies, one decision function, and a per-stream index. See the
+three-container analysis above for why each exists. `binary_search` is bounded
+twice — by `log2(size / MIN_SEEK_STEP)` and again by a hard iteration cap — so a
+pathological probe closure cannot hang, which is a real fuzzing concern rather
+than a theoretical one.
+
+### Interleaving
+
+`MuxTimestamps` runs M1–M4 (rescale, `output_ts_offset`, the
+`avoid_negative_ts` shift, the monotonicity check) and `InterleaveQueue` runs N1–N5
+(readiness, `(dts, stream, seq)` selection, the sparse-stream escape, EOF, chunk
+grouping). The `avoid_negative_ts` offset is computed **once**, from the first
+packet across all streams, and applied uniformly — a per-stream offset would
+desynchronise them.
+
+M4 is an **error, never a repair**. Silently repairing a non-monotonic DTS here
+is how files with subtly wrong durations get made, and the caller is in a far
+better position to decide what to do about it.
+
+---
+
+## How to change it
+
+* **Adding a container.** Write a `DemuxerDesc` with a `probe` function drawn
+  from `ProbeScore`'s convention table, implement `Demuxer`, and call
+  `SeekStrategy::choose` at the top of `seek`. `vacoraw` is the worked example;
+  read it before writing the second one.
+* **`Eof` must be sticky.** `read_packet` generally consumes bytes before it can
+  tell whether a packet follows, so a demuxer that does not latch end of stream
+  reports the middle of its own trailer as corruption on the *second* call. That
+  is a real bug this crate's integration tests caught in `vacoraw`, and the
+  frozen `Demuxer` trait does not say `Eof` has to be stable. It should. Until
+  it does, every demuxer needs the flag `VacoRawDemuxer` has.
+* **Changing a probe score changes observable output.** `probe_score` is printed
+  by `vaco-probe`, so any change to the scoring model is a conformance-matrix
+  change, not an internal one.
+* **Adding a `FormatFlags` bit** means adding a row to `FORMAT_FLAG_NAMES`; a
+  test asserts the two never drift.
+* **Adding a `FormatOptions` field** means adding it in the reference's own
+  order, because `-h demuxer=…` prints in declaration order and a test pins the
+  whole list. If the reference does not have the option, say so in its doc
+  comment — `recursion_limit` is the one such field today.
+* **Do not add a `HashMap` anywhere.** Iteration order is output order (DD2).
+* **Gotcha — `TS_DISCONT` is load-bearing in three places**: it suppresses the
+  monotonic repair, it disables bisection, and it changes what
+  `SeekStrategy::choose` returns. Setting it on a format that does not need it
+  degrades seeking silently.
+
+---
+
+## Configuration
+
+`FormatOptions` is the whole table: 38 options reproduced from the reference by
+name, type, default and named constants, plus one of ours. Values were read from
+`ffmpeg -h full`'s `AVFormatContext AVOptions` block on the pinned reference —
+black-box observation of a shipped binary, which is what D6 and D7 permit.
+
+Three corrections to `planning/18-formats.md` §1.11, which was written from an
+older survey:
+
+* `fflags` has **twelve** constants, not fourteen: there is no `nonblock` and no
+  `shortest`.
+* `fdebug` has **one** constant, `ts`. There is no `id3v2`.
+* `recursion_limit` does not exist on the reference at all. We keep it as a
+  security bound on nested demuxer opens (concat lists, HLS variants), enforced
+  here so no nested demuxer can forget it. Being a strict superset breaks no
+  script — D17's converse case.
+
+Constants defined here rather than taken from the reference, each recorded as a
+choice rather than presented as reproduction:
+
+| Constant | Value | Basis |
+|---|---|---|
+| `PROBE_BUF_MIN` | 2048 | Our starting window for the retry loop |
+| `PROBE_BUF_MAX` | 1 MiB | **Measured** — `formatprobesize` defaults to `1048576` |
+| `DEFAULT_DURATION_PROBESIZE` | 250 KiB | Ours. The reference's value is unmeasured (VERIFY-T4) |
+| `MIN_SEEK_STEP` | 64 KiB | Ours. Bounds the bisection and the iteration count |
+| `PacketIndex` decimation | drop every second non-key, then every second key | Ours. Not observable through any output field |
+
+`container_start_time` implements the plan's stated **minimum**-over-streams
+rule. The plan marks min-versus-max as VERIFY-T2 and we have not measured it, so
+this is unverified rather than reproduced. It is worth an hour with an MP4 whose
+audio starts at 0.000000 and video at 0.041708.
+
+---
+
+## Dependencies
+
+`vaco-core` (errors, `Rational`, `Timestamp`, exact rescaling), `vaco-io`
+(`MediaSource`/`MediaSink`/`IoContext`), `vaco-packet`, `vaco-codec-core`
+(`CodecParameters`, `CodecId`, `Parser`), `vaco-opts` (the option derive),
+`vaco-limits` (`Budget`, `ProgressGuard`), `bitflags`, `smallvec`.
+
+No external media crate. No codec crate — that is the `ParserProvider` seam's
+whole purpose.
+
+---
+
+## One approved change to a frozen interface
+
+`Muxer::stream_time_base(&self, u32) -> Option<Rational>`, defaulting to `None`,
+was **added after the freeze with the orchestrator's approval**.
+
+`add_stream` takes only `&CodecParameters`, and the muxer — not the caller —
+decides what the container can express: MP4 wants the media timescale, MPEG-TS
+is fixed at 1/90000, Matroska derives one from `TimestampScale`. But step M1 of
+the muxer-side chain rescales every packet *into* that base, so a caller holding
+a `dyn Muxer` that cannot ask what it is could not use the interface correctly
+at all. That is not drive-by churn; it is a signature that does not work, which
+is the one thing the freeze is not there to protect.
+
+The default returns `None` — "assume `TIME_BASE_Q`" — so no implementation
+breaks and a muxer with no opinion need not invent one. `VacoRawMuxer`
+implements it, and the round-trip fixtures now ask the muxer for the base rather
+than assuming it, which is what a real caller has to do.
+
+## Signature gaps
+
+Interfaces are frozen (plan 19 §6), so these are **reported, not changed**. In
+descending order of how much they cost.
+
+1. **`DemuxerDesc::open` takes no options and no limits.** A demuxer cannot be
+   told its `probesize`, its `Limits`, or its `IoOptions::block_size` through the
+   descriptor, so `open` has to default them and expose a second, non-`dyn`
+   constructor for callers that care — which is what `VacoRawDemuxer` does.
+2. **`ParserProvider` has only `parser_for`.** The plan's `refine` is reachable
+   by driving the parser and reading `Parser::parameters`, so nothing is lost
+   there. `probe_codec` — content-sniffing a payload to a `CodecId` — is
+   genuinely absent, and raw elementary streams and MPEG-TS private streams
+   need it.
+3. **`Demuxer` has no `read_timestamp` hook**, so the core cannot drive a
+   bisection on a demuxer's behalf. Handled by inverting the relationship: the
+   demuxer calls `binary_search` and supplies the probe closure. Arguably better,
+   and recorded here because it is a visible departure from plan 18 §1.8.2.
+4. **`SeekTarget` has no range form.** The plan wanted `(min_ts, ts, max_ts)`,
+   which is how `-ss` expresses "do not overshoot" without `BACKWARD`. The
+   single-target-plus-flags form covers every case we can currently test, but
+   `-ss` precision will want the range.
+5. **`Stream` is missing five fields** the plan specifies and `vaco-probe` will
+   want: `pts_wrap_bits` (the demuxer holds the `WrapState` instead),
+   `avg_frame_rate`/`r_frame_rate` as a pair (the estimate lands on
+   `params.video.frame_rate`, so the two cannot diverge as ffprobe reports them
+   diverging), a container-level `sample_aspect_ratio` override, `discard`, and
+   `attached_pic`.
+6. **`Demuxer::read_packet` does not promise `Eof` is stable.** See *How to
+   change it*. Costs one flag per demuxer and one class of bug per demuxer that
+   forgets it.
+
+### Wanted from other crates
+
+* **`vaco-codec-core`: `impl Parser for Box<dyn Parser>` — done.** The
+  orchestrator added `impl<P: Parser + ?Sized> Parser for Box<P>`, so
+  `ParserDriver<P>` now accepts what `ParserProvider::parser_for` returns.
+  `discovery::refine` drives the parser through the driver, and the hand-rolled
+  reassembly and byte-accounting it used to carry is gone — that code existed
+  only to work around the gap, and keeping it would have meant two
+  implementations of the end-of-stream convention drifting apart.
+  `Discovery::with_limits` is the new knob that caps what an injected parser may
+  allocate, since `DemuxerDesc::open` still takes no `Limits`.
+* **`vaco-io`: a seekable in-memory `MediaSink` — deferred, by decision.**
+  `MemorySource` exists for reading; there is no writable counterpart, and a
+  muxer's header-patch path cannot be tested without one. `vacoraw::MemorySink`
+  stays here for now: a `MemorySink` is better specified by the second real
+  muxer than by one example container. **Candidate for promotion into `vaco-io`
+  once `vaco-mux-mp4` or `vaco-mux-matroska` says what it actually needs.**
+
+---
+
+## Testing
+
+* **120 tests**: 92 unit, 14 named integration cases, 13 property tests, 1
+  doctest.
+* **The worked example is the proof.** `vacoraw` is muxed and demuxed end to
+  end, with the index path, the bisection path and the byte path each covered by
+  a test that fails if the strategy is not the one taken.
+* **`tests/properties.rs` is `proptest`.** The properties were first written
+  against a fixed xorshift generator, because adding a dev-dependency rewrote
+  `Cargo.lock` and `--locked` refused it. That restriction was lifted — a
+  pre-declared dependency adds an edge, not a package — and they were ported.
+  Shrinking paid for itself immediately: see below.
+* **`tests/roundtrip.rs` is named cases.** A specific file, a specific seek, a
+  specific truncation, each chosen because it pins one rule down. The two files
+  share fixtures deliberately.
+* **Four fuzz targets** (D6): `format_probe`, `format_vacoraw_demux`,
+  `format_interleave`, `format_timestamps`. The last two fuzz a *call sequence*
+  rather than a byte stream, the same shape as `codec_send_receive`, because the
+  ordering and timestamp machinery is shared by every muxer and demuxer in the
+  project.
+
+### What the generated tests found
+
+**`format_timestamps` (fuzz), first run.** R22's monotonic repair could saturate
+at `i64::MAX` and then claim to have repaired a stream it had left
+non-increasing. Fixed by *reporting* it — `FixReport::dts_overflow` — rather
+than by weakening the invariant, because "DTS strictly increases after a repair"
+is precisely what a scheduler leans on.
+
+**`the_index_stays_well_formed` (proptest), first run.** `PacketIndex::add`
+computed its insertion point, *then* decimated if the index was full, then
+inserted at the position it had computed. Decimation shortens the vector, so the
+position was stale and the entry landed in the wrong slot, silently unsorting
+the index — after which every seek is wrong. Clamping to the new length hid the
+symptom for an ascending insertion order and for no other, which is exactly why
+the unit tests missed it: they all insert in timestamp order, and real
+containers mostly do too. Fixed by decimating *before* choosing the position.
+
+The shrunk counterexample was four entries at timestamps `0, 1, -1, 2` with a
+two-entry cap, and it is now a named regression test. It is worth noting that
+the xorshift version of this property had been running for the whole first pass
+of this crate without finding it: the bug needs a small cap *and* an
+out-of-order insertion *and* the search to land mid-vector, and random cases hit
+that combination rarely. Shrinking is what turned it from a 400-entry failure
+nobody would read into four entries.
+
+Two further proptest failures were **the properties being wrong, not the code**,
+and both are recorded here because they are easy to re-derive incorrectly:
+
+* A backward seek into a file with *no keyframes at all* carries no index, so it
+  takes the bisection path, whose documented fallback is the first sync point in
+  the range. Landing after the target is correct there — it is the best a
+  backward seek can do when there is nothing behind you.
+* `Error::InvalidData` is recoverable by design: the demuxer skips the bad
+  header and resynchronises, so reading past one is correct and only `Eof` is
+  terminal. Only `Eof` is required to be stable.

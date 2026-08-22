@@ -465,6 +465,7 @@ dependencies = [
  "vaco-io",
  "vaco-limits",
  "vaco-packet",
+ "vaco-pixfmt",
  "vaco-pool",
  "vaco-protocol-core",
  "vaco-sampfmt",

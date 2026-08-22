@@ -315,6 +315,25 @@ pub trait Parser: Send {
     fn parameters(&self) -> Option<&CodecParameters>;
 }
 
+/// So a boxed parser is itself a [`Parser`], and can be handed to anything
+/// generic over `P: Parser` — [`ParserDriver`] above all.
+///
+/// Without this, a caller that obtains a parser dynamically (from a registry
+/// lookup, or `ParserProvider::parser_for`, which can only return a `Box<dyn
+/// Parser>` because the codec is not known until runtime) cannot use the driver
+/// at all, and has to re-implement the end-of-stream convention and the
+/// consumed-bytes check by hand. `vaco-format-core`'s stream discovery hit
+/// exactly that and was doing so.
+impl<P: Parser + ?Sized> Parser for Box<P> {
+    fn parse(&mut self, input: &[u8]) -> Result<(Option<Packet>, usize)> {
+        (**self).parse(input)
+    }
+
+    fn parameters(&self) -> Option<&CodecParameters> {
+        (**self).parameters()
+    }
+}
+
 /// Transforms packets without decoding: format conversion, metadata rewriting,
 /// extradata extraction.
 ///

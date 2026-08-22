@@ -8,8 +8,15 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+# No dependencies, and that is a fact about the layering rather than an
+# omission. This crate is pure H.273 vocabulary and the arithmetic it implies:
+# every entry point returns `Option` rather than `vaco_core::Error`, because it
+# sits on the scaler's hot path and `Error::Option` allocates two `String`s.
+# The option layer above translates a `None` into a diagnostic.
 [dependencies]
-vaco-core = { path = "../../core/vaco-core" }
+
+[dev-dependencies]
+proptest.workspace = true
 
 [lints]
 workspace = true

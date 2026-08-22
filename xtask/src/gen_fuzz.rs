@@ -54,8 +54,13 @@ pub fn run(check: bool) -> Task {
 
     let mut entries = Vec::new();
     let mut missing = Vec::new();
-    let read = std::fs::read_dir(&targets_dir)
-        .map_err(|e| format!("{}: {e}", targets_dir.display()))?;
+    // Every crate any target *mentions*, which is a superset of the crates the
+    // targets *declare*: `frame_alloc` fuzzes `vaco-frame` but needs
+    // `vaco-pixfmt` to build a frame at all. The front-matter says which crate a
+    // target is a fuzz target FOR — it is not the dependency list.
+    let mut referenced = Set::new();
+    let read =
+        std::fs::read_dir(&targets_dir).map_err(|e| format!("{}: {e}", targets_dir.display()))?;
 
     for f in read.flatten() {
         let path = f.path();
@@ -66,8 +71,22 @@ pub fn run(check: bool) -> Task {
             continue;
         };
         let body = std::fs::read_to_string(&path).unwrap_or_default();
-        // Only the header comment counts, so a mention in prose cannot declare
-        // a dependency by accident.
+
+        // Scan the source for `vaco_foo` paths. Deliberately crude: over-listing
+        // a dependency costs a compile edge in a manifest that ships nowhere,
+        // while under-listing one breaks the build — which is exactly what the
+        // first version of this generator did by emitting only declared crates.
+        for word in body.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
+            if let Some(rest) = word.strip_prefix("vaco_") {
+                let name = format!("vaco-{}", rest.replace('_', "-"));
+                if layer_of.contains_key(&name) {
+                    referenced.insert(name);
+                }
+            }
+        }
+
+        // Only the header comment counts for the DECLARATION, so a mention in
+        // prose cannot claim a target fuzzes something it does not.
         let declared = body
             .lines()
             .take_while(|l| l.starts_with("//!") || l.trim().is_empty())
@@ -97,7 +116,9 @@ pub fn run(check: bool) -> Task {
     }
     entries.sort();
 
+    // Features come from what targets declare; dependencies from what they use.
     let used: Set<String> = entries.iter().map(|(_, c)| c.clone()).collect();
+    referenced.extend(used.iter().cloned());
     let feature_of = |c: &str| c.strip_prefix("vaco-").unwrap_or(c).to_string();
 
     let mut out = String::from(
@@ -130,7 +151,7 @@ pub fn run(check: bool) -> Task {
          libfuzzer-sys = \"0.4\"\n\
          arbitrary = { version = \"1\", features = [\"derive\"] }\n",
     );
-    for c in &used {
+    for c in &referenced {
         let layer = layer_of.get(c).map_or("core", String::as_str);
         out.push_str(&format!("{c} = {{ path = \"../crates/{layer}/{c}\" }}\n"));
     }

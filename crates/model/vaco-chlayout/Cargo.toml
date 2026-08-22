@@ -8,9 +8,8 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
-[dependencies]
-smallvec.workspace = true
-vaco-core = { path = "../../core/vaco-core" }
+[dev-dependencies]
+proptest.workspace = true
 
 [lints]
 workspace = true

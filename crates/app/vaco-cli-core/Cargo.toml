@@ -13,6 +13,10 @@ vaco-core = { path = "../../core/vaco-core" }
 vaco-opts = { path = "../../core/vaco-opts" }
 vaco-registry = { path = "../../registry/vaco-registry" }
 vaco-textformat = { path = "../../app/vaco-textformat" }
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
 
 [lints]
 workspace = true

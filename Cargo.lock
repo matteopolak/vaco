@@ -1477,8 +1477,7 @@ dependencies = [
 name = "vaco-chlayout"
 version = "0.1.0"
 dependencies = [
- "smallvec",
- "vaco-core",
+ "proptest",
 ]
 
 [[package]]
@@ -1496,6 +1495,8 @@ dependencies = [
 name = "vaco-cli-core"
 version = "0.1.0"
 dependencies = [
+ "proptest",
+ "thiserror",
  "vaco-core",
  "vaco-opts",
  "vaco-registry",
@@ -1506,6 +1507,8 @@ dependencies = [
 name = "vaco-codec-cabac"
 version = "0.1.0"
 dependencies = [
+ "divan",
+ "proptest",
  "vaco-bitstream",
  "vaco-core",
 ]
@@ -1549,15 +1552,18 @@ dependencies = [
 name = "vaco-codec-golomb"
 version = "0.1.0"
 dependencies = [
+ "divan",
+ "proptest",
  "vaco-bitstream",
  "vaco-core",
+ "vaco-limits",
 ]
 
 [[package]]
 name = "vaco-color"
 version = "0.1.0"
 dependencies = [
- "vaco-core",
+ "proptest",
 ]
 
 [[package]]
@@ -1615,6 +1621,8 @@ dependencies = [
 name = "vaco-expr"
 version = "0.1.0"
 dependencies = [
+ "divan",
+ "proptest",
  "thiserror",
  "vaco-core",
 ]
@@ -1659,6 +1667,7 @@ name = "vaco-format-core"
 version = "0.1.0"
 dependencies = [
  "bitflags",
+ "proptest",
  "smallvec",
  "vaco-codec-core",
  "vaco-core",
@@ -1921,6 +1930,7 @@ dependencies = [
 name = "vaco-sampfmt"
 version = "0.1.0"
 dependencies = [
+ "proptest",
  "vaco-core",
 ]
 

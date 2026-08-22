@@ -41,6 +41,7 @@ vaco-frame = { path = "../crates/model/vaco-frame" }
 vaco-io = { path = "../crates/io/vaco-io" }
 vaco-limits = { path = "../crates/core/vaco-limits" }
 vaco-packet = { path = "../crates/model/vaco-packet" }
+vaco-pixfmt = { path = "../crates/model/vaco-pixfmt" }
 vaco-pool = { path = "../crates/model/vaco-pool" }
 vaco-protocol-core = { path = "../crates/io/vaco-protocol-core" }
 vaco-sampfmt = { path = "../crates/model/vaco-sampfmt" }

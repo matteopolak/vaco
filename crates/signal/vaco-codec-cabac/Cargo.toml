@@ -12,6 +12,14 @@ authors.workspace = true
 vaco-core = { path = "../../core/vaco-core" }
 vaco-bitstream = { path = "../../core/vaco-bitstream" }
 
+[dev-dependencies]
+proptest.workspace = true
+divan.workspace = true
+
+[[bench]]
+name = "cabac"
+harness = false
+
 [lints]
 workspace = true
 

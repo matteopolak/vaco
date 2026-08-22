@@ -108,8 +108,13 @@ fn arb_all_kinds() -> impl Strategy<Value = AllKinds> {
         (any::<i32>(), any::<i32>()),
         proptest::collection::vec(any::<u8>(), 0..6),
         arb_dict(),
-        (any::<u32>(), any::<u32>()),
-        (any::<i32>(), any::<i32>()),
+        // An image size is `1..=i32::MAX` per dimension, and a video rate is
+        // strictly positive over strictly positive. These are the domains the
+        // reference's own parsers accept, not the domains the Rust types can
+        // hold — `serialize` will happily render a `u32` that `parse` then
+        // rejects. See the D17 notes on `vaco_core::parse::image_size`.
+        (1..=i32::MAX.cast_unsigned(), 1..=i32::MAX.cast_unsigned()),
+        (1..=i32::MAX, 1..=i32::MAX),
         any::<i64>(),
         (any::<u8>(), any::<u8>(), any::<u8>(), any::<u8>()),
     );
@@ -292,7 +297,10 @@ proptest! {
     }
 
     #[test]
-    fn image_size_round_trips(w in any::<u32>(), h in any::<u32>()) {
+    fn image_size_round_trips(
+        w in 1..=i32::MAX.cast_unsigned(),
+        h in 1..=i32::MAX.cast_unsigned(),
+    ) {
         let mut text = String::new();
         (w, h).serialize(&mut text, &SerCtx::bare("size"));
         prop_assert_eq!(parse::image_size(&text).unwrap(), (w, h));
