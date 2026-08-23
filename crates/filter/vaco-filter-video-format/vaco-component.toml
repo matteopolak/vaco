@@ -1,0 +1,71 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Video format/metadata filters: format, setsar, setdar, setfield, setrange,
+# fps, framerate. FT-4.4 (GitHub epic #54), the format child issue.
+#
+# Each `ctor` names the per-filter `pub const DESC: FilterDesc`; runtime
+# instantiation goes through `vaco_filter_video_format::registry::FormatRegistry`,
+# a `vaco_filter_graph::registry::FilterRegistry` impl.
+
+[[component]]
+kind = "filter"
+name = "format"
+long_name = "Convert the input video to one of the specified pixel formats"
+ctor = "vaco_filter_video_format::format::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "fps"
+long_name = "Force constant framerate"
+ctor = "vaco_filter_video_format::fps::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "framerate"
+long_name = "Upsamples or downsamples progressive source between specified frame rates"
+ctor = "vaco_filter_video_format::framerate::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "noformat"
+long_name = "Force libavfilter not to use any of the specified pixel formats for the input to the next filter"
+ctor = "vaco_filter_video_format::noformat::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "setparams"
+long_name = "Force field, or color property for the output video frame"
+ctor = "vaco_filter_video_format::setparams::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "setdar"
+long_name = "Set the frame display aspect ratio"
+ctor = "vaco_filter_video_format::setdar::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "setfield"
+long_name = "Force field for the output video frame"
+ctor = "vaco_filter_video_format::setfield::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "setrange"
+long_name = "Force color range for the output video frame"
+ctor = "vaco_filter_video_format::setrange::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "setsar"
+long_name = "Set the pixel sample aspect ratio"
+ctor = "vaco_filter_video_format::setsar::DESC"
+media = "video"

@@ -1620,6 +1620,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-demux-rtsp"
+version = "0.1.0"
+dependencies = [
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-format-core",
+ "vaco-format-rtp",
+ "vaco-hash",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-opts",
+ "vaco-packet",
+ "vaco-protocol-core",
+ "vaco-protocol-socket",
+ "vaco-time",
+]
+
+[[package]]
 name = "vaco-expr"
 version = "0.1.0"
 dependencies = [
@@ -1881,6 +1899,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-format-rtp"
+version = "0.1.0"
+dependencies = [
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-limits",
+ "vaco-packet",
+]
+
+[[package]]
 name = "vaco-format-subtitle"
 version = "0.1.0"
 dependencies = [
@@ -1942,6 +1970,7 @@ dependencies = [
  "vaco-demux-mxf",
  "vaco-demux-ogg",
  "vaco-demux-raw",
+ "vaco-demux-rtsp",
  "vaco-expr",
  "vaco-filter-audio",
  "vaco-filter-core",
@@ -1963,6 +1992,7 @@ dependencies = [
  "vaco-format-mpegts-tables",
  "vaco-format-nalu",
  "vaco-format-riff",
+ "vaco-format-rtp",
  "vaco-format-subtitle",
  "vaco-frame",
  "vaco-io",

@@ -1,0 +1,41 @@
+[[table]]
+name   = "STATIC_PAYLOADS"
+file   = "crates/format/vaco-format-rtp/src/payload.rs"
+source = "rfc-3551"
+clause = "§6 Tables 4 and 5"
+method = "transcribed"
+
+[[table]]
+name   = "ZIGZAG"
+file   = "crates/format/vaco-format-rtp/src/depacket/jpeg.rs"
+source = "rfc-2435"
+clause = "Appendix A"
+method = "transcribed"
+
+[[table]]
+name   = "DEFAULT_LUMA_QUANTIZER"
+file   = "crates/format/vaco-format-rtp/src/depacket/jpeg.rs"
+source = "rfc-2435"
+clause = "Appendix A"
+method = "transcribed"
+
+[[table]]
+name   = "DEFAULT_CHROMA_QUANTIZER"
+file   = "crates/format/vaco-format-rtp/src/depacket/jpeg.rs"
+source = "rfc-2435"
+clause = "Appendix A"
+method = "transcribed"
+
+[[table]]
+name   = "AC_LUMA_VALUES"
+file   = "crates/format/vaco-format-rtp/src/depacket/jpeg.rs"
+source = "rfc-2435"
+clause = "Appendix B"
+method = "transcribed"
+
+[[table]]
+name   = "AC_CHROMA_VALUES"
+file   = "crates/format/vaco-format-rtp/src/depacket/jpeg.rs"
+source = "rfc-2435"
+clause = "Appendix B"
+method = "transcribed"

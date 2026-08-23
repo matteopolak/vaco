@@ -1,0 +1,23 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Video test-pattern sources: pal100bars, pal75bars. FT-4.4 (GitHub epic
+# #54), the source child issue. See this crate's `lib.rs` doc for why
+# `color`/`nullsrc`/`testsrc`/`testsrc2`/`smptebars` are not registered here.
+#
+# Each `ctor` names the per-filter `pub const DESC: FilterDesc`; runtime
+# instantiation goes through `vaco_filter_video_source::registry::SourceRegistry`,
+# a `vaco_filter_graph::registry::FilterRegistry` impl.
+
+[[component]]
+kind = "filter"
+name = "pal100bars"
+long_name = "generate PAL 100% color bars"
+ctor = "vaco_filter_video_source::bars::pal100::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "pal75bars"
+long_name = "generate PAL 75% color bars"
+ctor = "vaco_filter_video_source::bars::pal75::DESC"
+media = "video"

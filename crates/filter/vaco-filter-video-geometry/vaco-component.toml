@@ -1,0 +1,50 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# The rotate-free video geometry filters: scale, crop, pad, hflip, vflip,
+# transpose. FT-4.4 (GitHub epic #54), the geometry child issue.
+#
+# Each `ctor` names the per-filter `pub const DESC: FilterDesc`; runtime
+# instantiation goes through `vaco_filter_video_geometry::registry::GeometryRegistry`,
+# a `vaco_filter_graph::registry::FilterRegistry` impl.
+
+[[component]]
+kind = "filter"
+name = "crop"
+long_name = "Crop the input video"
+ctor = "vaco_filter_video_geometry::crop::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "hflip"
+long_name = "Horizontally flip the input video"
+ctor = "vaco_filter_video_geometry::flip::hflip::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "pad"
+long_name = "Pad the input video"
+ctor = "vaco_filter_video_geometry::pad::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "scale"
+long_name = "Scale the input video size and/or convert the image format"
+ctor = "vaco_filter_video_geometry::scale::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "transpose"
+long_name = "Transpose input video"
+ctor = "vaco_filter_video_geometry::transpose::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "vflip"
+long_name = "Vertically flip the input video"
+ctor = "vaco_filter_video_geometry::flip::vflip::DESC"
+media = "video"

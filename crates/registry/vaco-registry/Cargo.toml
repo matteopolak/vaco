@@ -34,7 +34,7 @@ layer = 6
 # `default = false` in its own fragment; nothing here is hand-maintained.
 
 [features]
-default = ["demux-aiff", "demux-asf", "demux-asf-o", "demux-au", "demux-avi", "demux-caf", "demux-dash", "demux-dv", "demux-flv", "demux-hls", "demux-image2", "demux-ircam", "demux-matroska", "demux-mp4", "demux-mpegps", "demux-mpegts", "demux-mpegtsraw", "demux-mxf", "demux-ogg", "demux-raw", "demux-rso", "demux-sox", "demux-voc", "demux-w64", "demux-wav", "mux-aiff", "mux-asf", "mux-asf-stream", "mux-au", "mux-avi", "mux-caf", "mux-dash", "mux-dv", "mux-dvd", "mux-flv", "mux-hls", "mux-image2", "mux-ircam", "mux-matroska", "mux-mp4", "mux-mpeg", "mux-mpegts", "mux-ogg", "mux-raw", "mux-rso", "mux-sox", "mux-svcd", "mux-vcd", "mux-vob", "mux-voc", "mux-w64", "mux-wav", "parse-aac", "parse-av1", "parse-h264", "parse-hevc", "parse-opus", "subtitle-bitmap", "subtitle-text"]
+default = ["demux-aiff", "demux-asf", "demux-asf-o", "demux-au", "demux-avi", "demux-caf", "demux-dash", "demux-dv", "demux-flv", "demux-hls", "demux-image2", "demux-ircam", "demux-matroska", "demux-mp4", "demux-mpegps", "demux-mpegts", "demux-mpegtsraw", "demux-mxf", "demux-ogg", "demux-raw", "demux-rso", "demux-rtp", "demux-rtsp", "demux-sdp", "demux-sox", "demux-voc", "demux-w64", "demux-wav", "mux-aiff", "mux-asf", "mux-asf-stream", "mux-au", "mux-avi", "mux-caf", "mux-dash", "mux-dv", "mux-dvd", "mux-flv", "mux-hls", "mux-image2", "mux-ircam", "mux-matroska", "mux-mp4", "mux-mpeg", "mux-mpegts", "mux-ogg", "mux-raw", "mux-rso", "mux-rtp", "mux-rtp-mpegts", "mux-sox", "mux-svcd", "mux-vcd", "mux-vob", "mux-voc", "mux-w64", "mux-wav", "parse-aac", "parse-av1", "parse-h264", "parse-hevc", "parse-opus", "subtitle-bitmap", "subtitle-text"]
 "demux-aiff" = ["dep:vaco-format-audio-simple"]
 "demux-asf" = ["dep:vaco-demux-asf"]
 "demux-asf-o" = ["dep:vaco-demux-asf"]
@@ -56,6 +56,9 @@ default = ["demux-aiff", "demux-asf", "demux-asf-o", "demux-au", "demux-avi", "d
 "demux-ogg" = ["dep:vaco-demux-ogg"]
 "demux-raw" = ["dep:vaco-demux-raw"]
 "demux-rso" = ["dep:vaco-format-audio-simple"]
+"demux-rtp" = ["dep:vaco-demux-rtsp"]
+"demux-rtsp" = ["dep:vaco-demux-rtsp"]
+"demux-sdp" = ["dep:vaco-demux-rtsp"]
 "demux-sox" = ["dep:vaco-format-audio-simple"]
 "demux-voc" = ["dep:vaco-format-audio-simple"]
 "demux-w64" = ["dep:vaco-format-audio-simple"]
@@ -80,6 +83,8 @@ default = ["demux-aiff", "demux-asf", "demux-asf-o", "demux-au", "demux-avi", "d
 "mux-ogg" = ["dep:vaco-mux-ogg"]
 "mux-raw" = ["dep:vaco-mux-raw"]
 "mux-rso" = ["dep:vaco-format-audio-simple"]
+"mux-rtp" = ["dep:vaco-mux-rtp"]
+"mux-rtp-mpegts" = ["dep:vaco-mux-rtp"]
 "mux-sox" = ["dep:vaco-format-audio-simple"]
 "mux-svcd" = ["dep:vaco-mux-mpegps"]
 "mux-vcd" = ["dep:vaco-mux-mpegps"]
@@ -150,11 +155,24 @@ optional = true
 path = "../../format/vaco-demux-raw"
 optional = true
 
+[dependencies.vaco-demux-rtsp]
+path = "../../format/vaco-demux-rtsp"
+optional = true
+
 [dependencies.vaco-filter-audio]
 path = "../../filter/vaco-filter-audio"
 
 [dependencies.vaco-filter-plumbing]
 path = "../../filter/vaco-filter-plumbing"
+
+[dependencies.vaco-filter-video-format]
+path = "../../filter/vaco-filter-video-format"
+
+[dependencies.vaco-filter-video-geometry]
+path = "../../filter/vaco-filter-video-geometry"
+
+[dependencies.vaco-filter-video-source]
+path = "../../filter/vaco-filter-video-source"
 
 [dependencies.vaco-format-audio-simple]
 path = "../../format/vaco-format-audio-simple"
@@ -213,6 +231,10 @@ optional = true
 
 [dependencies.vaco-mux-raw]
 path = "../../format/vaco-mux-raw"
+optional = true
+
+[dependencies.vaco-mux-rtp]
+path = "../../format/vaco-mux-rtp"
 optional = true
 
 [dependencies.vaco-mux-stream]

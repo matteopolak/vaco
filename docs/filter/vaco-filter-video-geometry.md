@@ -1,7 +1,22 @@
 # vaco-filter-video-geometry
 
-Rotate-free video geometry filters (FT-4.4, GitHub epic #54, geometry child issue):
-`scale`, `crop`, `pad`, `hflip`, `vflip`, `transpose`.
+Rotate-free video geometry filters: `scale`, `crop`, `pad`, `hflip`, `vflip`,
+`transpose`.
+
+## Naming versus GitHub epic #54's real children
+
+This crate's name predates checking epic #54's actual three child issues.
+They split differently: **#464** (`vaco-filter-crop`) wants exactly `crop`,
+`pad`, `transpose`, `hflip`, `vflip` — this crate's contents minus `scale` —
+and **#463** (`vaco-filter-scale`) wants `scale` grouped with
+`format`/`noformat`/`setsar`/`setdar`/`setparams` (implemented in the
+sibling `vaco-filter-video-format` crate) instead. `scale` was kept here
+deliberately: it changes geometry, and every other filter this project
+groups by "what does it do to the picture" would put it in this crate, not
+the metadata one — see `lib.rs`'s doc for the full reasoning. Net effect:
+this crate's five non-`scale` filters satisfy issue #464 exactly; `scale`
+itself is the one filter issue #463 needs that is not in
+`vaco-filter-video-format`.
 
 ## What it is
 

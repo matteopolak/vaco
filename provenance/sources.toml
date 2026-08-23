@@ -198,6 +198,13 @@ where    = "the reference binary installed on the development machine"
 # solving the seed algebraically, then confirming from a different direction
 # with `framehash -hash adler32`. See docs/core/vaco-hash.md.
 [[source]]
+id       = "ffmpeg-filters-probe"
+kind     = "blackbox"
+title    = "Observed behaviour of `ffmpeg -filters`, `-h filter=…` and per-filter `showinfo` experiments, ffmpeg 8.1"
+acquired = "2026-08-23"
+where    = "the reference binary installed on the development machine"
+
+[[source]]
 id       = "ffmpeg-hash-probe"
 kind     = "blackbox"
 title    = "Observed output of `ffmpeg -f hash/-f crc/-f framecrc/-f framehash`, ffmpeg 8.1"
@@ -268,5 +275,63 @@ where    = "SMPTE"
 id       = "ffmpeg-mxf-probe"
 kind     = "blackbox"
 title    = "Observed byte layout of `ffmpeg -f mxf` / `-f mxf_opatom` output, ffmpeg 8.1"
+acquired = "2026-08-23"
+where    = "the reference binary installed on the development machine"
+
+# ---------------------------------------------------- RTP/RTSP/SDP (FM-40/41/42)
+
+[[source]]
+id       = "rfc-3550"
+kind     = "rfc"
+title    = "RFC 3550, RTP: A Transport Protocol for Real-Time Applications"
+acquired = "2026-08-23"
+where    = "https://www.rfc-editor.org/rfc/rfc3550"
+
+[[source]]
+id       = "rfc-3551"
+kind     = "rfc"
+title    = "RFC 3551, RTP Profile for Audio and Video Conferences with Minimal Control"
+acquired = "2026-08-23"
+where    = "https://www.rfc-editor.org/rfc/rfc3551"
+
+[[source]]
+id       = "rfc-2326"
+kind     = "rfc"
+title    = "RFC 2326, Real Time Streaming Protocol (RTSP)"
+acquired = "2026-08-23"
+where    = "https://www.rfc-editor.org/rfc/rfc2326"
+
+[[source]]
+id       = "rfc-7826"
+kind     = "rfc"
+title    = "RFC 7826, Real-Time Streaming Protocol Version 2.0"
+acquired = "2026-08-23"
+where    = "https://www.rfc-editor.org/rfc/rfc7826"
+
+[[source]]
+id       = "rfc-4566"
+kind     = "rfc"
+title    = "RFC 4566, SDP: Session Description Protocol"
+acquired = "2026-08-23"
+where    = "https://www.rfc-editor.org/rfc/rfc4566"
+
+[[source]]
+id       = "rfc-2617"
+kind     = "rfc"
+title    = "RFC 2617, HTTP Authentication: Basic and Digest Access Authentication"
+acquired = "2026-08-23"
+where    = "https://www.rfc-editor.org/rfc/rfc2617"
+
+[[source]]
+id       = "rfc-2435"
+kind     = "rfc"
+title    = "RFC 2435, RTP Payload Format for JPEG-compressed Video"
+acquired = "2026-08-23"
+where    = "https://www.rfc-editor.org/rfc/rfc2435"
+
+[[source]]
+id       = "ffmpeg-rtsp-demuxer-probe"
+kind     = "blackbox"
+title    = "Observed `ffmpeg -h demuxer=rtsp` / `-h demuxer=rtp` option tables and `-protocol_whitelist` defaults for rtsp/tls, ffmpeg 8.1"
 acquired = "2026-08-23"
 where    = "the reference binary installed on the development machine"

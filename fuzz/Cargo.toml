@@ -51,6 +51,7 @@ vaco-demux-mpegts = { path = "../crates/format/vaco-demux-mpegts" }
 vaco-demux-mxf = { path = "../crates/format/vaco-demux-mxf" }
 vaco-demux-ogg = { path = "../crates/format/vaco-demux-ogg" }
 vaco-demux-raw = { path = "../crates/format/vaco-demux-raw" }
+vaco-demux-rtsp = { path = "../crates/format/vaco-demux-rtsp" }
 vaco-expr = { path = "../crates/core/vaco-expr" }
 vaco-filter-audio = { path = "../crates/filter/vaco-filter-audio" }
 vaco-filter-core = { path = "../crates/filter/vaco-filter-core" }
@@ -72,6 +73,7 @@ vaco-format-isom = { path = "../crates/format/vaco-format-isom" }
 vaco-format-mpegts-tables = { path = "../crates/format/vaco-format-mpegts-tables" }
 vaco-format-nalu = { path = "../crates/format/vaco-format-nalu" }
 vaco-format-riff = { path = "../crates/format/vaco-format-riff" }
+vaco-format-rtp = { path = "../crates/format/vaco-format-rtp" }
 vaco-format-subtitle = { path = "../crates/format/vaco-format-subtitle" }
 vaco-frame = { path = "../crates/model/vaco-frame" }
 vaco-io = { path = "../crates/io/vaco-io" }
@@ -131,6 +133,7 @@ default = [
     "demux-mxf",
     "demux-ogg",
     "demux-raw",
+    "demux-rtsp",
     "expr",
     "filter-audio",
     "filter-core",
@@ -151,6 +154,7 @@ default = [
     "format-mpegts-tables",
     "format-nalu",
     "format-riff",
+    "format-rtp",
     "frame",
     "io",
     "limits",
@@ -205,6 +209,7 @@ demux-mpegts = []
 demux-mxf = []
 demux-ogg = []
 demux-raw = []
+demux-rtsp = []
 expr = []
 filter-audio = []
 filter-core = []
@@ -225,6 +230,7 @@ format-isom = []
 format-mpegts-tables = []
 format-nalu = []
 format-riff = []
+format-rtp = []
 frame = []
 io = []
 limits = []
@@ -1096,6 +1102,22 @@ bench = false
 required-features = ["format-riff"]
 
 [[bin]]
+name = "rtp_header_parse"
+path = "fuzz_targets/rtp_header_parse.rs"
+test = false
+doc = false
+bench = false
+required-features = ["format-rtp"]
+
+[[bin]]
+name = "rtsp_response_parse"
+path = "fuzz_targets/rtsp_response_parse.rs"
+test = false
+doc = false
+bench = false
+required-features = ["demux-rtsp"]
+
+[[bin]]
 name = "sampfmt_parse"
 path = "fuzz_targets/sampfmt_parse.rs"
 test = false
@@ -1110,6 +1132,14 @@ test = false
 doc = false
 bench = false
 required-features = ["scale"]
+
+[[bin]]
+name = "sdp_parse"
+path = "fuzz_targets/sdp_parse.rs"
+test = false
+doc = false
+bench = false
+required-features = ["format-rtp"]
 
 [[bin]]
 name = "socket_url_parse"

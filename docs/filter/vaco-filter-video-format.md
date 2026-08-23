@@ -1,15 +1,34 @@
 # vaco-filter-video-format
 
-Video format/metadata filters (FT-4.4, GitHub epic #54, format child issue):
-`format`, `setsar`, `setdar`, `setfield`, `setrange`, `fps`, `framerate`.
+Video format/metadata filters: `format`, `noformat`, `setsar`, `setdar`,
+`setparams`, `setfield`, `setrange`, `fps`, `framerate`.
+
+**Naming note**: this crate corresponds to two of GitHub epic #54's real
+children — issue #463 (`scale, format, noformat, setsar, setdar, setparams`,
+suggested crate `vaco-filter-scale`) minus `scale` itself (which lives in
+the sibling `vaco-filter-video-geometry` crate instead — see that crate's
+doc for why), plus `setfield`/`setrange` (real, separately-registered
+reference filters, not named by any FT-4.1x child but implemented because
+they were already half-built while measuring `setparams`) and `fps`
+(named by issue #465 alongside `overlay`, which this crate does **not**
+implement — see below).
 
 ## What it is
 
-Seven filters that change a link's *declared meaning* (pixel format,
-aspect ratio, field order, colour range, frame rate) rather than its pixel
-content. Each is a module exposing `pub const DESC: FilterDesc` and a
-crate-private `create`, dispatched by
+Nine filters that change a link's *declared meaning* (pixel format, aspect
+ratio, field order, colour range, colour signalling, frame rate) rather
+than its pixel content. Each is a module exposing `pub const DESC:
+FilterDesc` and a crate-private `create`, dispatched by
 [`registry::FormatRegistry`](../../crates/filter/vaco-filter-video-format/src/registry.rs).
+
+## What is deferred
+
+`overlay` (issue #465's other filter) is a substantial multi-input
+compositing filter needing `vaco-filter-framesync` integration and alpha
+blending across several positioning/blend modes — not attempted here; it
+belongs in its own crate (`vaco-filter-overlay`, per the issue) rather than
+bolted onto this one. `framerate`'s motion-compensated blending is
+similarly deferred — see `framerate.rs`'s doc.
 
 ## How it works
 
@@ -52,6 +71,9 @@ on), so treat it as "keeps a constant rate," not as a fidelity match.
 | `fps` | end of stream, `eof_action=pass` | Emits the held frame exactly once more (not independently measured; inferred from the documented contrast with `round`). |
 | `fps` | two input frames land on the same output slot | The earlier one is silently dropped entirely — no error, no partial blend. |
 | `format` | `pix_fmts` list | `|`-separated, preference order preserved into `Constraint::OneOf`. |
+| `noformat` | `pix_fmts` list | Same list shape as `format`, but the constraint is the *complement* — every `PixFmt::all()` member not named — since `Constraint` has no "none of" variant to express exclusion symbolically. |
+| `setparams` | any option left at `auto` | Left untouched — not reset to a default, matching `setfield`/`setrange`'s own `auto`. |
+| `setparams` | `colorspace=`/`color_primaries=`/`color_trc=`/`chroma_location=` | Resolved through `vaco_color`'s own `from_name`, which already carries the reference's own two-name-table quirks (D17) — not a second, possibly-divergent name table maintained here. |
 
 ## How to change it
 
