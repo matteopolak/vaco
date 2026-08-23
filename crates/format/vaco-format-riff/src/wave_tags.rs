@@ -99,25 +99,47 @@ pub fn codec_name(fmt: &WaveFormatEx) -> Option<&'static str> {
     }
 }
 
-/// A best-effort [`CodecId`] for a parsed `fmt` structure.
+/// The [`CodecId`] for a parsed `fmt` structure.
 ///
-/// `CodecId` is a small, hand-maintained enum (`vaco-codec-core`, not owned
-/// by this crate) that does not yet have a variant for most WAVE format
-/// tags — there is one `CodecId::Pcm` bucket for every integer/float/A-law/
-/// µ-law PCM variant, and no variant at all for ADPCM, AC-3 or WMA. This
-/// mirrors `vaco-format-isom::stsd::sample_entry_codec`'s documented choice:
-/// a tag with no representable `CodecId` maps to `None` rather than to a
-/// guessed near-miss.
-#[must_use]
+/// # This used to answer `CodecId::Pcm` for everything uncompressed
+///
+/// The note that stood here said `CodecId` was "a small, hand-maintained enum
+/// … there is one `CodecId::Pcm` bucket for every integer/float/A-law/mu-law
+/// width". That was true and is not any more — `vaco-codec-core` gained the
+/// fourteen PCM flavours, so the bucket can be opened.
+///
+/// It matters beyond tidiness. `ffprobe` prints `codec_name=pcm_s24le`, and
+/// with one bucket we printed `pcm`; `bits_per_sample` is a function of the
+/// flavour (8 for A-law despite it decoding to `s16`), so it was 0 for every
+/// PCM stream.
+///
+/// # Width and endianness both come from the tag, not the name
+///
+/// `WAVE_FORMAT_PCM` in a RIFF file is little-endian by definition, and the
+/// width is `bits_per_sample`. A-law and mu-law carry 8 bits regardless of what
+/// the field says. An unrepresentable width maps to `None` rather than to a
+/// nearby flavour — a wrong `codec_name` is worse than an absent one, because
+/// it looks like an answer.
 pub fn codec_id(fmt: &WaveFormatEx) -> Option<CodecId> {
     let tag = fmt
         .extensible()
         .and_then(|e| e.sub_format_tag())
         .unwrap_or(fmt.format_tag);
     match tag {
-        WAVE_FORMAT_PCM | WAVE_FORMAT_IEEE_FLOAT | WAVE_FORMAT_ALAW | WAVE_FORMAT_MULAW => {
-            Some(CodecId::Pcm)
-        }
+        WAVE_FORMAT_PCM => match fmt.bits_per_sample {
+            8 => Some(CodecId::PcmU8),
+            16 => Some(CodecId::PcmS16le),
+            24 => Some(CodecId::PcmS24le),
+            32 => Some(CodecId::PcmS32le),
+            _ => None,
+        },
+        WAVE_FORMAT_IEEE_FLOAT => match fmt.bits_per_sample {
+            32 => Some(CodecId::PcmF32le),
+            64 => Some(CodecId::PcmF64le),
+            _ => None,
+        },
+        WAVE_FORMAT_ALAW => Some(CodecId::PcmAlaw),
+        WAVE_FORMAT_MULAW => Some(CodecId::PcmMulaw),
         WAVE_FORMAT_MPEGLAYER3 => Some(CodecId::Mp3),
         WAVE_FORMAT_AAC => Some(CodecId::Aac),
         _ => None,
@@ -240,7 +262,15 @@ mod tests {
 
     #[test]
     fn codec_id_only_covers_what_the_shared_enum_represents() {
-        assert_eq!(codec_id(&fmt(WAVE_FORMAT_PCM, 16)), Some(CodecId::Pcm));
+        assert_eq!(codec_id(&fmt(WAVE_FORMAT_PCM, 16)), Some(CodecId::PcmS16le));
+        assert_eq!(codec_id(&fmt(WAVE_FORMAT_PCM, 24)), Some(CodecId::PcmS24le));
+        assert_eq!(codec_id(&fmt(WAVE_FORMAT_PCM, 8)), Some(CodecId::PcmU8));
+        // A-law is 8-bit whatever the field says, and decodes to s16 — the case
+        // a rule derived from the sample format gets wrong.
+        assert_eq!(codec_id(&fmt(WAVE_FORMAT_ALAW, 8)), Some(CodecId::PcmAlaw));
+        // An unrepresentable width is None, never a nearby flavour: a wrong
+        // codec_name looks like an answer.
+        assert_eq!(codec_id(&fmt(WAVE_FORMAT_PCM, 12)), None);
         assert_eq!(
             codec_id(&fmt(WAVE_FORMAT_MPEGLAYER3, 0)),
             Some(CodecId::Mp3)

@@ -462,20 +462,57 @@ fn field_order_name(order: Option<vaco_codec_core::FieldOrder>) -> &'static str 
 /// AAC's sample entry says 16 and the reference prints **0**; `pcm_s24le`'s
 /// sample entry also says 16 and the reference prints **24**. Neither follows
 /// the container. Both follow the codec: zero for anything compressed, and the
-/// PCM flavour's own depth for PCM — which the sample entry's *fourcc*
-/// (`in24`) states, not its `sample_size` field.
+/// PCM flavour's own width for PCM.
 ///
-/// So this reports 0 for every codec Vaco models today, which is exact for all
-/// of them except PCM. `CodecId::Pcm` is one variant covering every flavour;
-/// giving it the flavours is what unblocks `pcm_s24le`, and this comment is the
-/// note to find when someone does.
+/// # The PCM table is measured, not derived
 ///
-/// Briefly wired to the container's depth while fixing the neighbouring
-/// `bits_per_raw_sample` bug, which regressed AAC from 0 to 16. Reverted after
-/// measuring — recorded here so it is not rediscovered as an improvement.
+/// The width is the flavour's stored bits, which the name states — except for
+/// A-law and mu-law, which are **8** despite decoding to `s16`. Companding is
+/// exactly the case a rule derived from the sample format gets wrong.
+///
+/// ```text
+/// pcm_s16le  -> 16     pcm_u8     ->  8     pcm_alaw  -> 8
+/// pcm_s24le  -> 24     pcm_s8     ->  8     pcm_mulaw -> 8
+/// pcm_s32le  -> 32     pcm_f32le  -> 32     pcm_f64le -> 64
+/// ```
 const fn bits_per_sample(codec: Option<CodecId>) -> u32 {
-    let _ = codec;
-    0
+    let Some(codec) = codec else { return 0 };
+    match codec {
+        CodecId::PcmU8 | CodecId::PcmS8 | CodecId::PcmAlaw | CodecId::PcmMulaw => 8,
+        CodecId::PcmS16le | CodecId::PcmS16be => 16,
+        CodecId::PcmS24le | CodecId::PcmS24be => 24,
+        CodecId::PcmS32le | CodecId::PcmS32be | CodecId::PcmF32le | CodecId::PcmF32be => 32,
+        CodecId::PcmF64le | CodecId::PcmF64be => 64,
+        // Zero for every compressed codec, which is a value and not an absence.
+        _ => 0,
+    }
+}
+
+/// `bits_per_raw_sample` for a PCM flavour, where the reference states one.
+///
+/// **Not derivable, and the obvious rule is wrong.** "Report it when it differs
+/// from the sample format's natural depth" explains `pcm_s24le` (24 bits stored
+/// in `s32`) and then fails on `pcm_s32le`, which is 32 in `s32` — no
+/// difference at all — and is still reported:
+///
+/// ```text
+///            sample_fmt  bits_per_raw_sample
+/// pcm_s16le      s16            N/A
+/// pcm_s24le      s32             24
+/// pcm_s32le      s32             32
+/// pcm_f32le      flt            N/A
+/// ```
+///
+/// So it is which decoders happen to set the field, which is an implementation
+/// fact rather than a property of the format. D17 says reproduce measured
+/// behaviour; this is a measured table and is documented as one rather than
+/// dressed up as a rule. Both endiannesses of each were checked.
+const fn pcm_raw_sample_bits(codec: CodecId) -> Option<u8> {
+    match codec {
+        CodecId::PcmS24le | CodecId::PcmS24be => Some(24),
+        CodecId::PcmS32le | CodecId::PcmS32be => Some(32),
+        _ => None,
+    }
 }
 
 /// `bits_per_raw_sample`, which is a **codec** property and not a container
@@ -508,7 +545,10 @@ fn bits_per_raw_sample(p: &CodecParameters) -> Option<u8> {
     if let Some(v) = p.video.as_ref() {
         return v.bits_per_raw_sample;
     }
-    p.audio.as_ref()?.bits_per_raw_sample
+    let audio = p.audio.as_ref()?;
+    audio
+        .bits_per_raw_sample
+        .or_else(|| p.codec_id.and_then(pcm_raw_sample_bits))
 }
 
 /// `codec_tag_string`: printable ASCII kept, everything else as `[n]`.
