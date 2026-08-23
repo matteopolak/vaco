@@ -136,6 +136,28 @@ primitive for a caller building an actual `QuickTime` chapter *track*, but
 `MovMuxer` does not synthesize one itself. Verified round-trip against
 `vaco-demux-mp4`'s own `Demuxer::metadata()`.
 
+**Reaching this from `Muxer::set_metadata`** (CL-16, `planning/INTERFACE-GAPS.md`
+gap 1): `MuxOptions` is this crate's own fourcc-keyed shape, not the generic
+string-keyed `vaco_format_core::metadata::MuxMetadata` every muxer in the
+workspace now receives, so `meta::itunes_fourcc` is the measured
+generic-key → `ilst` atom table (`title`→`©nam`, `artist`→`©ART`,
+`album_artist`→`aART`, `album`→`©alb`, `comment`→`©cmt`, `genre`→`©gen`,
+`date`/`year`→`©day`, `composer`→`©wrt`, `copyright`→`cprt`,
+`description`→`desc`, `encoder`→`©too`; measured against `ffmpeg -metadata
+...  -f mp4 -`, byte-inspected). A key with no entry is dropped, not guessed
+at — MP4 has a `----`/`mean`/`name`/`data` freeform atom in principle, but
+this crate does not write one. `set_metadata` itself only *stores* the
+`MuxMetadata`; `MovMuxer::resolve_metadata` folds it into `opts`/`tracks`
+once, at the top of `write_header`, specifically so the order it runs in
+relative to `add_stream` does not matter (`vaco-cli`'s scheduler drives a raw
+`dyn Muxer` with no way to guarantee that order — see its `exec.rs` module
+docs). Per-stream `language` is the only per-track field this path can set
+(there is no per-track title box this crate writes); the first attachment
+whose `mime_type` reads as `image/png`/`image/jpeg` becomes `covr`.
+`tests/roundtrip.rs`'s `set_metadata_round_trips_through_the_demuxer` and
+`set_metadata_before_add_stream_still_resolves_per_stream_language` are the
+regression tests.
+
 ### Codec support
 
 Video: H.264 (`avcC`/`avc1`), HEVC (`hvcC`/`hev1`), AV1 (`av1C`/`av01`),

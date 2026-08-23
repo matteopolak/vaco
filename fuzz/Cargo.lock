@@ -1846,6 +1846,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-format-subtitle-bitmap"
+version = "0.1.0"
+dependencies = [
+ "vaco-core",
+ "vaco-limits",
+]
+
+[[package]]
 name = "vaco-frame"
 version = "0.1.0"
 dependencies = [
@@ -1938,6 +1946,7 @@ dependencies = [
  "vaco-resample",
  "vaco-sampfmt",
  "vaco-scale",
+ "vaco-subtitle-bitmap",
  "vaco-subtitle-text",
  "vaco-textformat",
 ]
@@ -2450,6 +2459,7 @@ dependencies = [
  "vaco-protocol-file",
  "vaco-protocol-local",
  "vaco-protocol-wrap",
+ "vaco-subtitle-bitmap",
  "vaco-subtitle-text",
 ]
 
@@ -2506,6 +2516,20 @@ version = "0.1.0"
 dependencies = [
  "fearless_simd",
  "vaco-core",
+]
+
+[[package]]
+name = "vaco-subtitle-bitmap"
+version = "0.1.0"
+dependencies = [
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-demux-mpegps",
+ "vaco-format-core",
+ "vaco-format-subtitle-bitmap",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-packet",
 ]
 
 [[package]]

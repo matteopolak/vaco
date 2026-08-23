@@ -1,0 +1,51 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Scope note (see `src/lib.rs`): `ffmpeg -demuxers`/`-muxers` 8.1 name four
+# demuxers in this family (`dvbsub`, `dvbtxt`, `sup`, `vobsub`) and exactly
+# one muxer (`sup`) — matching FM-52's stated list, unlike several sibling
+# briefs this wave whose plan-stated counts were off against the measured
+# reference. `dvbsub`/`dvbtxt`/`vobsub` genuinely have no muxer in the
+# reference, so none is registered here for them.
+
+[[component]]
+kind       = "demuxer"
+name       = "dvbsub"
+long_name  = "raw dvbsub"
+feature    = "subtitle-bitmap"
+ctor       = "vaco_subtitle_bitmap::dvbsub::DEMUXER"
+media      = "subtitle"
+
+[[component]]
+kind       = "demuxer"
+name       = "dvbtxt"
+long_name  = "dvbtxt"
+feature    = "subtitle-bitmap"
+ctor       = "vaco_subtitle_bitmap::dvbtxt::DEMUXER"
+media      = "subtitle"
+
+[[component]]
+kind       = "demuxer"
+name       = "sup"
+long_name  = "raw HDMV Presentation Graphic Stream subtitles"
+feature    = "subtitle-bitmap"
+ctor       = "vaco_subtitle_bitmap::sup::DEMUXER"
+media      = "subtitle"
+extensions = "sup"
+mime_types = "application/x-pgs"
+
+[[component]]
+kind       = "demuxer"
+name       = "vobsub"
+long_name  = "VobSub subtitle format"
+feature    = "subtitle-bitmap"
+ctor       = "vaco_subtitle_bitmap::vobsub::DEMUXER"
+media      = "subtitle"
+extensions = "idx"
+
+[[component]]
+kind       = "muxer"
+name       = "sup"
+long_name  = "raw HDMV Presentation Graphic Stream subtitles"
+feature    = "subtitle-bitmap"
+ctor       = "vaco_subtitle_bitmap::sup::MUXER"
+extensions = "sup"

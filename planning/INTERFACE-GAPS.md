@@ -166,6 +166,28 @@ the demuxer side.
 **Blocks:** nothing outright. It buys a double construction per output and an
 explanation in two places.
 
+## 7. `DemuxerDesc::open` receives exactly one `MediaSource`
+
+Reported by: `vaco-subtitle-bitmap`.
+
+VobSub is **two files**: a `.idx` text index and a `.sub` MPEG-PS stream. The
+registered path can only be handed one of them, so it parses the `.idx` and
+produces correct timing with empty payloads. The real entry point,
+`VobSubDemuxer::open_pair(idx, sub)`, is unreachable through the registry.
+
+`image2` has the same shape from the other direction — a sequence of files
+rather than a pair — and solved it by owning the file enumeration itself, which
+works because the pattern names them. VobSub cannot: the second file's name is a
+convention, not something the first file states.
+
+**Blocks:** VobSub payloads, and any future format whose unit of demuxing is a
+set rather than a file (MXF OP-Atom is the other one already in the tree).
+
+Same root cause as gaps 4 and 5 — `open` is a bare `fn` pointer with a fixed
+signature that ~90 crates already implement — so the additive fix is the same
+shape: a defaulted trait method that hands over the extra sources after
+construction, not a wider `open`.
+
 ## Sequencing
 
 1, 4, 5 and 6 are additive and can land together behind default-implemented

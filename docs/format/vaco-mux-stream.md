@@ -52,16 +52,23 @@ named file (this crate cannot depend on `vaco-registry` itself — that crate
 depends on every format crate, including this one, so the edge would
 cycle); this crate's own tests supply a fake.
 
-`ffmetadata` has the mildest version of the same problem, one level further
-in: `vaco_format_core::Muxer` gives a muxer no channel for file-level
-metadata, per-stream metadata or chapters at all — `add_stream` takes only
-`CodecParameters`, and nothing else in the trait carries a tag list or a
-chapter table. `vaco-mux-matroska` documents the identical gap for
-`Tags`/`Chapters`/`Attachments`. So the registered `FfmetadataMuxer`, driven
-only through `dyn Muxer`, always writes exactly `;FFMETADATA1\nencoder=vaco\n`
-— there is nothing upstream of it to report. The real, useful entry point is
-the module's plain `write`/`parse` functions, which a caller that actually
-has metadata calls directly.
+`ffmetadata` had the mildest version of the same problem, one level further
+in: `vaco_format_core::Muxer` gave a muxer no channel for file-level
+metadata, per-stream metadata or chapters at all. **Closed** (CL-16,
+`planning/INTERFACE-GAPS.md` gap 1): `Muxer::set_metadata` now exists, and
+`FfmetadataMuxer` overrides it — the override just stores the
+`vaco_format_core::metadata::MuxMetadata` it is handed, and `write_header` is
+what turns it into the actual document via `write`: file tags become global
+lines, `stream_tags` become one `[STREAM]` block per `add_stream`-declared
+track, `chapters` become `[CHAPTER]` blocks (`ChapterUID`/timestamps mapped
+from `vaco_core::Chapter` via the module's own `chapter_meta` helper).
+`MuxMetadata::attachments` has no representation in this format and is
+silently ignored, matching the reference (`-f ffmetadata` has no attachment
+section). A caller that never calls `MuxBuilder::with_metadata` — every
+pre-existing call site — still gets exactly `;FFMETADATA1\nencoder=vaco\n`,
+since `MuxMetadata::default()` is empty. The module's plain `write`/`parse`
+functions remain the entry point for a caller that wants to build the
+document itself without going through the `Muxer` trait at all.
 
 ### `ffmetadata`
 
@@ -285,7 +292,7 @@ registry seam does not fit most of these", above):
 
 | Registration | Real constructor | Registry `open` |
 |---|---|---|
-| `ffmetadata` | `ffmetadata::write`/`parse` (free functions) | Works, but structurally limited — see above |
+| `ffmetadata` | `ffmetadata::write`/`parse` (free functions), or `Muxer::set_metadata` through the registry — see above | Works fully now (CL-16) |
 | `concat` | `ConcatDemuxer::open_script(script, ConcatOptions, &dyn ConcatSource)` | `Error::Unsupported` after validating the script |
 | `tee` | `TeeMuxer::new(&[TeeOutput], Vec<Box<dyn Muxer>>)` | `Error::Unsupported` |
 | `segment`/`stream_segment` | `SegmentMuxer::new(pattern, SegmentOptions, SegmentFactory)` | `Error::Unsupported` |

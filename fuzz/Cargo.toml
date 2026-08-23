@@ -97,6 +97,7 @@ vaco-registry = { path = "../crates/registry/vaco-registry" }
 vaco-resample = { path = "../crates/signal/vaco-resample" }
 vaco-sampfmt = { path = "../crates/model/vaco-sampfmt" }
 vaco-scale = { path = "../crates/signal/vaco-scale" }
+vaco-subtitle-bitmap = { path = "../crates/format/vaco-subtitle-bitmap" }
 vaco-subtitle-text = { path = "../crates/format/vaco-subtitle-text" }
 vaco-textformat = { path = "../crates/app/vaco-textformat" }
 
@@ -168,6 +169,7 @@ default = [
     "resample",
     "sampfmt",
     "scale",
+    "subtitle-bitmap",
     "subtitle-text",
     "textformat",
 ]
@@ -237,6 +239,7 @@ registry = []
 resample = []
 sampfmt = []
 scale = []
+subtitle-bitmap = []
 subtitle-text = []
 textformat = []
 
@@ -1071,6 +1074,14 @@ test = false
 doc = false
 bench = false
 required-features = ["protocol-socket"]
+
+[[bin]]
+name = "subtitle_bitmap_demux"
+path = "fuzz_targets/subtitle_bitmap_demux.rs"
+test = false
+doc = false
+bench = false
+required-features = ["subtitle-bitmap"]
 
 [[bin]]
 name = "subtitle_text_demux"

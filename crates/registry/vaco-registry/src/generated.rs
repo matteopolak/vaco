@@ -303,6 +303,30 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["dv", "dif"],
         mime_types: &["video/x-dv"],
     },
+    #[cfg(feature = "subtitle-bitmap")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "dvbsub",
+        long_name: Some("raw dvbsub"),
+        krate: "vaco-subtitle-bitmap",
+        feature: Some("subtitle-bitmap"),
+        media: Some("subtitle"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "subtitle-bitmap")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "dvbtxt",
+        long_name: Some("dvbtxt"),
+        krate: "vaco-subtitle-bitmap",
+        feature: Some("subtitle-bitmap"),
+        media: Some("subtitle"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-raw")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -771,6 +795,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["ul"],
         mime_types: &[],
     },
+    #[cfg(feature = "demux-mxf")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "mxf",
+        long_name: Some("MXF (Material eXchange Format)"),
+        krate: "vaco-demux-mxf",
+        feature: Some("demux-mxf"),
+        media: None,
+        codec: None,
+        extensions: &["mxf"],
+        mime_types: &["application/mxf"],
+    },
     #[cfg(feature = "demux-raw")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -1233,6 +1269,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["sun", "ras"],
         mime_types: &[],
     },
+    #[cfg(feature = "subtitle-bitmap")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "sup",
+        long_name: Some("raw HDMV Presentation Graphic Stream subtitles"),
+        krate: "vaco-subtitle-bitmap",
+        feature: Some("subtitle-bitmap"),
+        media: Some("subtitle"),
+        codec: None,
+        extensions: &["sup"],
+        mime_types: &["application/x-pgs"],
+    },
     #[cfg(feature = "demux-image2")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -1411,6 +1459,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "subtitle-bitmap")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "vobsub",
+        long_name: Some("VobSub subtitle format"),
+        krate: "vaco-subtitle-bitmap",
+        feature: Some("subtitle-bitmap"),
+        media: Some("subtitle"),
+        codec: None,
+        extensions: &["idx"],
         mime_types: &[],
     },
     #[cfg(feature = "demux-voc")]
@@ -2480,6 +2540,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "subtitle-bitmap")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "sup",
+        long_name: Some("raw HDMV Presentation Graphic Stream subtitles"),
+        krate: "vaco-subtitle-bitmap",
+        feature: Some("subtitle-bitmap"),
+        media: None,
+        codec: None,
+        extensions: &["sup"],
+        mime_types: &[],
+    },
     #[cfg(feature = "mux-svcd")]
     crate::Component {
         kind: crate::Kind::Muxer,
@@ -3279,12 +3351,72 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "protocol-socket")]
+    crate::Component {
+        kind: crate::Kind::Protocol,
+        name: "tcp",
+        long_name: Some("TCP"),
+        krate: "vaco-protocol-socket",
+        feature: Some("protocol-socket"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
     crate::Component {
         kind: crate::Kind::Protocol,
         name: "tee",
         long_name: Some("Tee muxer"),
         krate: "vaco-protocol-wrap",
         feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "protocol-tls")]
+    crate::Component {
+        kind: crate::Kind::Protocol,
+        name: "tls",
+        long_name: Some("TLS"),
+        krate: "vaco-protocol-tls",
+        feature: Some("protocol-tls"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "protocol-socket")]
+    crate::Component {
+        kind: crate::Kind::Protocol,
+        name: "udp",
+        long_name: Some("UDP"),
+        krate: "vaco-protocol-socket",
+        feature: Some("protocol-socket"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "protocol-socket")]
+    crate::Component {
+        kind: crate::Kind::Protocol,
+        name: "udplite",
+        long_name: Some("UDP-Lite"),
+        krate: "vaco-protocol-socket",
+        feature: Some("protocol-socket"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "protocol-socket")]
+    crate::Component {
+        kind: crate::Kind::Protocol,
+        name: "unix",
+        long_name: Some("Unix domain socket"),
+        krate: "vaco-protocol-socket",
+        feature: Some("protocol-socket"),
         media: None,
         codec: None,
         extensions: &[],
@@ -3359,6 +3491,10 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_image2::pipe::DEMUXER_DPX,
     #[cfg(feature = "demux-dv")]
     &::vaco_format_dv::DEMUXER,
+    #[cfg(feature = "subtitle-bitmap")]
+    &::vaco_subtitle_bitmap::dvbsub::DEMUXER,
+    #[cfg(feature = "subtitle-bitmap")]
+    &::vaco_subtitle_bitmap::dvbtxt::DEMUXER,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::bitstream::DEMUXER_EVC,
     #[cfg(feature = "demux-image2")]
@@ -3435,6 +3571,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_subtitle_text::mpsub::DEMUXER,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::pcm::DEMUXER_MULAW,
+    #[cfg(feature = "demux-mxf")]
+    &::vaco_demux_mxf::DEMUXER,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::bitstream::DEMUXER_OBU,
     #[cfg(feature = "demux-ogg")]
@@ -3511,6 +3649,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_subtitle_text::subviewer1::DEMUXER,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_SUNRAST,
+    #[cfg(feature = "subtitle-bitmap")]
+    &::vaco_subtitle_bitmap::sup::DEMUXER,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_SVG,
     #[cfg(feature = "demux-image2")]
@@ -3541,6 +3681,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_raw::bitstream::DEMUXER_VC1,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::pcm::DEMUXER_VIDC,
+    #[cfg(feature = "subtitle-bitmap")]
+    &::vaco_subtitle_bitmap::vobsub::DEMUXER,
     #[cfg(feature = "demux-voc")]
     &::vaco_format_audio_simple::voc::DEMUXER,
     #[cfg(feature = "subtitle-text")]
@@ -3712,6 +3854,8 @@ pub static MUXERS: &[&::vaco_format_core::MuxerDesc] = &[
     &::vaco_subtitle_text::srt::MUXER,
     &::vaco_mux_stream::MUXER_STREAM_SEGMENT,
     &::vaco_mux_hash::MUXER_STREAMHASH,
+    #[cfg(feature = "subtitle-bitmap")]
+    &::vaco_subtitle_bitmap::sup::MUXER,
     #[cfg(feature = "mux-svcd")]
     &::vaco_mux_mpegps::MUXER_SVCD,
     &::vaco_mux_stream::MUXER_TEE,
@@ -3826,5 +3970,15 @@ pub static PROTOCOLS: &[&::vaco_protocol_core::ProtocolDesc] = &[
     &::vaco_protocol_local::MD5_PROTOCOL,
     &::vaco_protocol_file::PIPE_PROTOCOL,
     &::vaco_protocol_wrap::SUBFILE_PROTOCOL,
+    #[cfg(feature = "protocol-socket")]
+    &::vaco_protocol_socket::TCP_PROTOCOL,
     &::vaco_protocol_wrap::TEE_PROTOCOL,
+    #[cfg(feature = "protocol-tls")]
+    &::vaco_protocol_tls::TLS_PROTOCOL,
+    #[cfg(feature = "protocol-socket")]
+    &::vaco_protocol_socket::UDP_PROTOCOL,
+    #[cfg(feature = "protocol-socket")]
+    &::vaco_protocol_socket::UDPLITE_PROTOCOL,
+    #[cfg(feature = "protocol-socket")]
+    &::vaco_protocol_socket::UNIX_PROTOCOL,
 ];

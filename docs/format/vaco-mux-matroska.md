@@ -150,15 +150,17 @@ allow-list per the current `WebM` Project container guidelines, which added
 AV1 after the original VP8/VP9-only text the error message itself still
 quotes.
 
-### What `Muxer` cannot carry, and what that rules out
+### What `Muxer` carries now, and what still needs no channel
 
-`vaco_format_core::Muxer::add_stream` takes only `CodecParameters` — nothing
-in the trait carries a file title, a tag list, or a chapter table. `Tags`,
-`Chapters` and `Attachments` are therefore **not written**: there is no
-channel this crate could read them from. `Cues` needed no such channel
-(every field it carries comes from the packets themselves) and is
-implemented in full — one `CuePoint` per video keyframe, `CueClusterPosition`
-relative to the first byte of `Segment`'s data per RFC 9559 §11.8.
+`vaco_format_core::Muxer::add_stream` still takes only `CodecParameters` —
+nothing in *that* method carries a file title, a tag list, or a chapter
+table. `Muxer::set_metadata` is the channel added for exactly this (M30,
+`planning/INTERFACE-GAPS.md` gap 1); see *Metadata, chapters, attachments*
+below for how this crate uses it. `Cues` needed no such channel at all
+(every field it carries comes from the packets themselves) and was
+implemented in full from the start — one `CuePoint` per video keyframe,
+`CueClusterPosition` relative to the first byte of `Segment`'s data per
+RFC 9559 §11.8.
 
 `SeekHead` is a separate, deliberate omission, not a trait limitation: it is
 RFC 9559's optional fast-locate index, and `vaco-demux-matroska` itself
@@ -247,10 +249,44 @@ arbitrary sequence of frame-timing deltas and demux the result with
 `vaco-demux-matroska` — proving agreement with an independently developed
 sibling crate, a stronger check than a fuzz target could give here.
 
+## Metadata, chapters, attachments (CL-16, `planning/INTERFACE-GAPS.md` gap 1)
+
+`Muxer::set_metadata` stores whatever `vaco_format_core::metadata::MuxMetadata`
+it is handed; every field it drives — `Info > Title`, per-track `Name`/
+`Language`, `Tags`, `Chapters`, `Attachments` — is resolved **lazily**, inside
+`write_header`, not eagerly inside `set_metadata` itself. That is deliberate:
+`vaco-cli`'s scheduler drives a raw `dyn Muxer` and has no guaranteed point at
+which `set_metadata` runs relative to `add_stream` (see that crate's
+`exec.rs` module docs), so any field this crate resolves by reading
+`self.tracks` has to do it at a point both calls are guaranteed to have
+already happened — `write_header` is that point; `set_metadata` itself is not.
+`mux::tests::set_metadata_before_add_stream_still_resolves_per_stream_fields`
+is the regression test for this.
+
+Element order (`Info`, `Tracks`, `Chapters`, `Attachments`, `Tags`, then the
+first `Cluster`) and the exact key routing (`title`→`Info > Title` file-level,
+`title`/`language`→`TrackEntry` per stream, everything else→`SimpleTag` with
+an **uppercased** `TagName`) were measured against `ffmpeg 8.1` by
+byte-inspecting `ffmpeg -metadata title=... -metadata:s:v:0 language=eng ...
+-f matroska -`/`-f webm -` output with a small Python EBML walker — see
+`crate::mux`'s module docs for the full table. `FileMimeType` (`0x4660`) is
+not in `vaco-demux-matroska::ebml::schema` (that crate has no attachment
+reader), so it is a local constant in `crate::mux` rather than an edit to a
+crate this one only reads from (D19).
+
+Not reproduced: the reference's own auto `ENCODER`/`DURATION` `SimpleTag`s
+(they stamp the reference's own build identity and a duration this trait
+cannot see ahead of write time) and a random `FileUID` (this crate derives
+one deterministically from an attachment's position and filename instead —
+neither a clock nor an RNG is reachable from `wasm32`, and a random value
+would make output non-reproducible under `-fflags +bitexact`, the same
+failure mode already documented for `DateUTC` below).
+
 ## Known gaps (say plainly what is not done)
 
-1. `Tags`, `Chapters`, `Attachments` and `SeekHead` are not written — see
-   *What `Muxer` cannot carry* and *SeekHead* above for why.
+1. `SeekHead` is not written — see *SeekHead* above for why. `Tags`,
+   `Chapters` and `Attachments` **are** now written, driven by
+   `Muxer::set_metadata` — see the section above.
 2. `ReferenceBlock` always points at the immediately preceding frame on the
    same track in decode order. This is correct for the common single-past-
    reference case and is **not** a general reference-picture-list encoder;

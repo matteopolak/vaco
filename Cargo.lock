@@ -1321,6 +1321,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 
 [[package]]
+name = "socket2"
+version = "0.5.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e22376abed350d73dd1cd119b57ffccad95b4e585a7cda43e286245ce23c0678"
+dependencies = [
+ "libc",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
 name = "spin"
 version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1815,6 +1825,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-demux-mxf"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-format-core",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-packet",
+]
+
+[[package]]
 name = "vaco-demux-ogg"
 version = "0.1.0"
 dependencies = [
@@ -2100,6 +2123,15 @@ version = "0.1.0"
 dependencies = [
  "proptest",
  "vaco-core",
+]
+
+[[package]]
+name = "vaco-format-subtitle-bitmap"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-core",
+ "vaco-limits",
 ]
 
 [[package]]
@@ -2569,14 +2601,13 @@ name = "vaco-protocol-http"
 version = "0.1.0"
 dependencies = [
  "proptest",
- "rustls",
- "rustls-rustcrypto",
  "ureq",
  "vaco-core",
  "vaco-io",
  "vaco-limits",
  "vaco-opts",
  "vaco-protocol-core",
+ "vaco-protocol-tls",
  "vaco-time",
 ]
 
@@ -2590,6 +2621,35 @@ dependencies = [
  "vaco-io",
  "vaco-opts",
  "vaco-protocol-core",
+]
+
+[[package]]
+name = "vaco-protocol-socket"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "socket2",
+ "vaco-core",
+ "vaco-io",
+ "vaco-opts",
+ "vaco-protocol-core",
+ "vaco-time",
+]
+
+[[package]]
+name = "vaco-protocol-tls"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "rustls",
+ "rustls-rustcrypto",
+ "vaco-core",
+ "vaco-io",
+ "vaco-opts",
+ "vaco-protocol-core",
+ "vaco-protocol-socket",
+ "vaco-time",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -2622,6 +2682,7 @@ dependencies = [
  "vaco-demux-mp4",
  "vaco-demux-mpegps",
  "vaco-demux-mpegts",
+ "vaco-demux-mxf",
  "vaco-demux-ogg",
  "vaco-demux-raw",
  "vaco-filter-audio",
@@ -2655,7 +2716,10 @@ dependencies = [
  "vaco-protocol-file",
  "vaco-protocol-http",
  "vaco-protocol-local",
+ "vaco-protocol-socket",
+ "vaco-protocol-tls",
  "vaco-protocol-wrap",
+ "vaco-subtitle-bitmap",
  "vaco-subtitle-text",
 ]
 
@@ -2722,6 +2786,21 @@ dependencies = [
  "fearless_simd",
  "proptest",
  "vaco-core",
+]
+
+[[package]]
+name = "vaco-subtitle-bitmap"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-demux-mpegps",
+ "vaco-format-core",
+ "vaco-format-subtitle-bitmap",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-packet",
 ]
 
 [[package]]
