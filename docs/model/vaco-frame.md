@@ -3,10 +3,11 @@
 ## What it is
 
 Decoded media: video pictures and audio sample blocks, with plane storage,
-strides, colour signalling, timing, cropping and side data. This is where the
-"zero copy" claim in architecture §7.4 is either true or not: the refcount and
-copy-on-write model that `FFmpeg` builds by hand from `AVBufferRef` is expressed
-here with `Arc` and `Arc::make_mut`, without a line of `unsafe`.
+strides, colour signalling, timing, cropping, side data and a string-keyed
+metadata dictionary. This is where the "zero copy" claim in architecture §7.4
+is either true or not: the refcount and copy-on-write model that `FFmpeg`
+builds by hand from `AVBufferRef` is expressed here with `Arc` and
+`Arc::make_mut`, without a line of `unsafe`.
 
 ## How it works
 
@@ -86,6 +87,48 @@ picture cannot be cropped by an odd number of pixels because there is no half
 chroma sample to start at, and rejecting that here is what stops a
 bitstream-supplied rectangle from producing a misaligned chroma plane.
 
+### Frame metadata: `AVFrame::metadata`'s counterpart (interface gap 11)
+
+`Frame::metadata()` returns `&[(String, String)]` — a string-keyed,
+**insertion-ordered** dictionary, set with `Frame::set_metadata` and read with
+`Frame::metadata_get`. It exists because an entire family of measurement
+filters (`signalstats`, `freezedetect`, and the twenty-plus filters queued
+behind `vaco-filter-analysis` — `psnr`, `ssim`, `blackdetect`, `cropdetect`,
+…) has no output *other* than metadata: they pass every frame through
+unchanged and report their answer as `lavfi.<filter>.<key>` entries for
+`-show_frames`/`select`'s `metadata()` expression function to read back.
+Before this existed, `freezedetect` had nowhere to put its answer except a
+`pub(crate)` test-only accessor — see that crate's docs for how it closed.
+
+Ordered rather than hashed on purpose: `ffprobe -show_frames` output is
+compared byte for byte against the reference, which prints tags in the order
+they were set. `set_metadata` overwrites an existing key's value **in
+place**, keeping its position, rather than moving it to the end — measured
+against `av_dict_set`'s behaviour by re-setting a key across two frames and
+confirming the block's order does not change.
+
+**Implementation, and why it is a `FrameSideData` variant and not a field.**
+`Frame`'s eight fields are all public, so adding one is a breaking change for
+every struct-literal `Frame { .. }` construction in the workspace —
+measured at the time (`rg 'side_data:' --type rust`) to be exactly two sites
+outside this crate, both in crates outside the frame work's ownership.
+`FrameSideData` is `#[non_exhaustive]`, so a new variant is additive and
+breaks nothing anywhere. The dictionary itself is `FrameMetadata`, a
+`Vec<(String, String)>` newtype (linear scan — a frame carries at most a
+handful of entries, so a hash map would cost more than it saves, the same
+reasoning `side_data`'s own lookup already uses), stored as
+`FrameSideData::Metadata(FrameMetadata)`. A frame that never calls
+`set_metadata` carries no `Metadata` side-data entry at all — not an empty
+one — which is what keeps `Frame::metadata()` a zero-cost `&[]` for the
+overwhelming majority of frames that never touch it.
+
+**The consumer side.** `Frame::metadata()`'s return type — `&[(String,
+String)]` — is deliberately the exact shape `vaco-probe`'s existing
+`show::tags` helper already renders for stream/format/chapter/program
+metadata (`crates/app/vaco-probe/src/show.rs`). Closing gap 11's `-show_frames`
+side needed no new renderer, only a caller reaching this accessor and passing
+it to `show::tags(&mut emit, SectionId::FRAME_TAGS, frame.metadata())`.
+
 ### Pooling
 
 `FramePool` owns one `BufferPool` per plane, keyed by `(format, width, height)`
@@ -112,6 +155,23 @@ proving the pooling claim rather than asserting it.
   is `#[non_exhaustive]`, so adding is not a breaking change outside the crate.
   Bulk payloads should be `Arc<[u8]>` so cloning a frame carrying an ICC profile
   stays a refcount bump.
+- **A measurement filter with no other output writes to `Frame::set_metadata`,
+  keyed `lavfi.<filter>.<key>`** — do not invent a second typed `FrameSideData`
+  variant per filter for this; that is exactly what the metadata dictionary
+  exists to avoid. Check the reference for the *exact* key spelling and value
+  formatting before wiring one in (`freezedetect`'s module doc has a worked
+  example, including a value-formatting rule that is not `"{:.6}"` alone and a
+  timestamp choice that only an irregular-frame-rate test could distinguish
+  from its wrong neighbour).
+- **The metadata dictionary is additive, not the eventual shape.** `Frame`'s
+  fields are frozen (interface freeze, plan 19 §8), so this landed as a
+  `FrameSideData` variant rather than a dedicated field even though a field
+  would arguably read cleaner — the literal-construction cost was small (two
+  sites) but both are outside this work's ownership in a shared tree. If
+  those two sites are ever swept in the same wave as other `Frame` field
+  changes, promoting metadata to `pub metadata: FrameMetadata` directly on
+  `Frame` is the natural next step; nothing about the `FrameMetadata` type
+  itself would need to change, only where it lives.
 - **`FramePool` caches exactly one geometry.** If a real workload turns out to
   alternate between two resolutions, widen it to a small LRU rather than removing
   the eviction.

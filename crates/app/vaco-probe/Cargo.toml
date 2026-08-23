@@ -51,6 +51,13 @@ vaco-hash = { path = "../../core/vaco-hash" }
 [dev-dependencies]
 proptest.workspace = true
 vaco-color = { path = "../../model/vaco-color" }
+# `tests/frame_tags.rs` only: builds a `Frame` directly (no decoder involved,
+# same "replay the description" split `reference.rs`/`packets.rs` use) to
+# prove `show::tags` renders `Frame::metadata()` byte-identically to the
+# reference. Not a production dependency — see `FRAMES_UNSUPPORTED` in
+# `src/lib.rs` for why `-show_frames` itself stays refused in v0.1.
+vaco-frame = { path = "../../model/vaco-frame" }
+smallvec.workspace = true
 
 [lints]
 workspace = true
