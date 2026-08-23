@@ -179,6 +179,45 @@ Found by trying the obvious command while the harness was fresh in mind, which
 is worth recording on its own — 2,935 unit tests and eight gates were all green
 on a binary that could not write a file.
 
+## 7. MP4's codec table, and why a `FourCc` table cannot work — **open**, `vaco-format-isom`
+
+The MP4 half of finding 4. `sample_entry_codec` in
+`crates/format/vaco-format-isom/src/stsd.rs` maps about fifteen FourCCs and
+collapses nine of them onto a single `CodecId::Pcm`, so a QuickTime file with
+16-bit little-endian audio prints `codec_name=pcm` where the reference prints
+`pcm_s16le`.
+
+Filling the table in is not enough, and this is the interesting part. Measured
+2026-08-23 by encoding one `.mov` per PCM variant and reading back both the
+sample-entry FourCC and what `ffprobe` calls it:
+
+| encoder | `codec_tag_string` | `codec_name` |
+|---|---|---|
+| `pcm_s16le` | `sowt` | `pcm_s16le` |
+| `pcm_s8` | `sowt` | `pcm_s8` |
+| `pcm_s24le` | `in24` | `pcm_s24le` |
+| `pcm_s24be` | `in24` | `pcm_s24be` |
+| `pcm_s32le` | `in32` | `pcm_s32le` |
+| `pcm_s32be` | `in32` | `pcm_s32be` |
+| `pcm_f32le` | `fl32` | `pcm_f32le` |
+| `pcm_f32be` | `fl32` | `pcm_f32be` |
+| `pcm_u8` | `raw ` | `pcm_u8` |
+
+**The FourCC does not determine the codec.** `sowt` covers both 16-bit and
+8-bit; `in24`, `in32`, `fl32` and `fl64` each cover *both endiannesses*. So
+endianness is not in the FourCC at all — it comes from the sample entry's
+`enda` box — and width comes from `bits_per_sample`. A table keyed on FourCC
+alone cannot reproduce the reference no matter how many rows it has, which is
+what makes this a design finding rather than a data-entry task.
+
+Two more measured on the way, both plain table rows: `ulaw` → `pcm_mulaw` and
+`alaw` → `pcm_alaw` (currently both collapse to `pcm`), and `raw ` means
+`pcm_u8` in an **audio** sample entry but `rawvideo` in a **video** one — the
+current code lumps `raw ` into the PCM group regardless of which it is in.
+
+Also missing and straightforward: `mp4v` → `mpeg4` (through the ESDS
+object-type indication), `h263` → `h263`, `ap4h` → `prores`, `alac` → `alac`.
+
 ## How to re-run
 
 ```sh
