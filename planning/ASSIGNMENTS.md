@@ -136,8 +136,9 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-filter-geometry | 5 | #470 | agent:geom2 | assigned | 2026-08-23 |  | T2 geometry (~28) — distinct from vaco-filter-video-geometry's T1 set |
 | vaco-filter-component | 5 | #476 | agent:component | assigned | 2026-08-23 |  | T3 pixel-format, bit-depth and component filters (~20) |
 | vaco-filter-achannel | 5 | #482 | agent:achannel | done | 2026-08-23 | 2026-08-23 | T3 channel, layout and mixing filters (~14) |
-| vaco-filter-ameasure | 5 | #483 | agent:ameasure | assigned | 2026-08-23 |  | T3 audio analysis and measurement filters (~14) |
+| vaco-filter-ameasure | 5 | #483 | agent:ameasure | done | 2026-08-23 | 2026-08-23 | NAME DIVERGES: plan 16 §4.3 calls this vaco-filter-aanalysis |
 | vaco-demux-mpegts | 4 | #632 | agent:tspkt | assigned | 2026-08-23 |  | packet duration halved + packet ordering + MPEGTS Stream ID side data |
 | vaco-bsf-core | 3 | #349 | agent:bsf | assigned | 2026-08-23 |  | M6 stage is reachable but inert until this exists |
 | vaco-bsf-generic | 3 | #349 | agent:bsf | assigned | 2026-08-23 |  | extract_extradata closes CONFORMANCE-FINDINGS 26 |
 | vaco-bsf-h2645 | 3 | #350 | agent:bsf | assigned | 2026-08-23 |  | *_mp4toannexb; dedups vaco-mux-avi/mpegts converters |
+| vaco-filter-temporal | 5 | #475 | agent:temporal | assigned | 2026-08-23 |  | plan 16 §4.3 row; fps already taken by vaco-filter-video-format |
