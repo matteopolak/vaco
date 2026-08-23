@@ -59,6 +59,7 @@ vaco-expr = { path = "../crates/core/vaco-expr" }
 vaco-filter-aeffects = { path = "../crates/filter/vaco-filter-aeffects" }
 vaco-filter-ameasure = { path = "../crates/filter/vaco-filter-ameasure" }
 vaco-filter-analysis = { path = "../crates/filter/vaco-filter-analysis" }
+vaco-filter-asource = { path = "../crates/filter/vaco-filter-asource" }
 vaco-filter-audio = { path = "../crates/filter/vaco-filter-audio" }
 vaco-filter-audio-dynamics = { path = "../crates/filter/vaco-filter-audio-dynamics" }
 vaco-filter-audio-eq = { path = "../crates/filter/vaco-filter-audio-eq" }
@@ -159,6 +160,7 @@ default = [
     "filter-aeffects",
     "filter-ameasure",
     "filter-analysis",
+    "filter-asource",
     "filter-audio",
     "filter-audio-dynamics",
     "filter-audio-eq",
@@ -253,6 +255,7 @@ expr = []
 filter-aeffects = []
 filter-ameasure = []
 filter-analysis = []
+filter-asource = []
 filter-audio = []
 filter-audio-dynamics = []
 filter-audio-eq = []
@@ -675,6 +678,14 @@ test = false
 doc = false
 bench = false
 required-features = ["filter-analysis"]
+
+[[bin]]
+name = "filter_asource_options"
+path = "fuzz_targets/filter_asource_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-asource"]
 
 [[bin]]
 name = "filter_audio_dynamics_options"
