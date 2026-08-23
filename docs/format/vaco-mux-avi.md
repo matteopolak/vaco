@@ -46,6 +46,50 @@ known until every packet has been written:
   Its `dwOffset` is written movi-relative, the convention `vaco-demux-avi`
   measured `ffmpeg 8.1`'s own writer using.
 
+### Length-prefixed H.264/HEVC is converted to Annex B
+
+AVI has no out-of-band configuration record the way MP4's `avcC`/`hvcC` do,
+so it expects H.264/HEVC as Annex B: start-code-delimited NAL units, SPS/PPS
+in-band. A stream sourced from a length-prefixed container (typically MP4,
+via `-c copy`) arrives with 4-byte length prefixes instead, which used to be
+written straight into the `movi` chunk verbatim — finding 16
+(`planning/CONFORMANCE-FINDINGS.md`)'s measured 3.4× size gap against the
+reference, and a structural one: the two files are not different lengths of
+the same bytes, they are laid out differently.
+
+`add_stream` now records a `LengthSize` on the `StreamOut` whenever the video
+codec is H.264/HEVC and `VideoParameters::nal_length_size` says the source is
+length-prefixed; `AviMuxer::maybe_convert` runs
+`vaco_format_nalu::convert::length_prefixed_to_annexb` over the payload in
+`write_packet` before anything else touches it — mirroring
+`vaco-mux-mpegts::MpegTsMuxer::maybe_convert`, which solves the identical
+problem for the identical codecs (that is also *why* this crate now depends
+on `vaco-format-nalu`, which it did not before this fix). Verified against
+the reference directly (`ffmpeg -i <mp4-source> -c copy -f avi`): per-packet
+sizes now match exactly, byte for byte — the *remaining* total-file-size gap
+against the reference is a separate, still-open difference (an ~192-byte gap
+appears between consecutive `movi` chunks in the reference's own output for
+reasons not yet understood; not a bitstream-framing issue, since the payload
+bytes and their per-packet lengths already match).
+
+**AAC arriving in ADTS framing (no `AudioSpecificConfig` in `extradata`) is
+refused, not silently written**: AVI's `WAVE_FORMAT_AAC` entry expects raw,
+config-out-of-band-framed AAC, and MPEG-TS's own AAC convention is ADTS
+(config repeated per frame, no separate config blob) — measured directly
+(`ffmpeg -i <mpegts-source> -c copy -f avi` refuses at `write_header` with
+"ADTS is only supported with codec tag 0x1610"). `add_stream` refuses AAC
+with empty/absent `extradata` for the same reason finding 19
+(`planning/CONFORMANCE-FINDINGS.md`) named this "silent success": writing the
+chunk anyway produces a technically-malformed audio stream no real AVI reader
+expects.
+
+**A packet with no PTS at all is refused, not silently muxed with a
+`pts=dts=0` chunk timestamp** — also finding 19, measured the same way
+(`ffmpeg -i <avi-source-with-no-pts> -c copy -f {mpegts,flv}` refuses; AVI
+itself has no PTS field to lose, so this specific check lives in
+`vaco-mux-mpegts`/`vaco-mux-flv` rather than here, but is documented in both
+places since it is one finding).
+
 ### Codec support
 
 Video: H.264, HEVC, VP8, VP9, MJPEG, PNG — the codecs
@@ -106,5 +150,22 @@ by this muxer (no per-file option changes its output).
 
 `vaco-core`, `vaco-io` (`IoWriter`, `MediaSink`), `vaco-packet`,
 `vaco-format-core` (`Muxer`, `MuxerDesc`), `vaco-codec-core`
-(`CodecParameters`, `CodecId`). Dev-only: `vaco-demux-avi`, to verify this
-crate's own output demuxes as intended.
+(`CodecParameters`, `CodecId`), `vaco-format-nalu`
+(`convert::length_prefixed_to_annexb`, `LengthSize` — added for finding 16;
+see *Length-prefixed H.264/HEVC is converted to Annex B* above),
+`vaco-limits` (`Budget`, for that same conversion's bound). Dev-only:
+`vaco-demux-avi`, to verify this crate's own output demuxes as intended.
+
+## Tests and fuzzing
+
+`tests/roundtrip.rs` covers the length-prefixed-to-Annex-B conversion
+directly (`a_length_prefixed_h264_sample_is_rewritten_to_annex_b`) and the
+finding-19 refusals (`adts_framed_aac_with_no_extradata_is_rejected`,
+`raw_aac_with_extradata_is_accepted`), alongside the pre-existing shape/order/
+trailer-patch tests.
+
+`fuzz/fuzz_targets/avi_mux_packet.rs` mirrors `vaco-mux-mpegts`'s own
+`mpegts_mux_packet` target: arbitrary bytes through `write_packet`, with
+`nal_length_size` toggled by an input bit, asserting output growth stays
+within a generous bound. 30-second run: `exit=0`, `execs≈1,753,000` (varies
+run to run), `find fuzz/artifacts -type f` empty.

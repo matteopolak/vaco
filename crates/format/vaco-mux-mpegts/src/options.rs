@@ -80,6 +80,14 @@ impl Default for ServiceType {
 /// reference's own; this crate does not re-validate them beyond fitting in
 /// the 13-bit PID field, on the theory that a caller passing a value outside
 /// the reference's documented range is not this muxer's problem to police.
+///
+/// `service_name`/`service_provider` are the one exception to "every field
+/// has an AVOption": `-h muxer=mpegts` lists no such options at all (measured
+/// 2026-08-23; there is no `-service_name`/`-service_provider` flag), so
+/// these two are the reference's own hardcoded fallback strings rather than
+/// a documented default — recovered by probing `-c copy -f mpegts`'s SDT
+/// service descriptor directly (tag `0x48`: `provider_name_length=6
+/// "FFmpeg"`, `service_name_length=9 "Service01"`), not by recalling them.
 #[derive(Debug, Clone)]
 pub struct MpegTsMuxOptions {
     pub transport_stream_id: u16,
@@ -125,8 +133,10 @@ impl Default for MpegTsMuxOptions {
             original_network_id: 0xFF01,
             service_id: 1,
             service_type: ServiceType::default(),
-            service_name: String::new(),
-            service_provider: String::new(),
+            // Finding 17 (`planning/CONFORMANCE-FINDINGS.md`): measured, not
+            // an AVOption default — see this struct's doc comment.
+            service_name: String::from("Service01"),
+            service_provider: String::from("FFmpeg"),
             pmt_start_pid: 0x1000,
             start_pid: 0x0100,
             m2ts_mode: None,

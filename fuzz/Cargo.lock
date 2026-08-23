@@ -1699,6 +1699,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-filter-video-format"
+version = "0.1.0"
+dependencies = [
+ "smallvec",
+ "vaco-color",
+ "vaco-core",
+ "vaco-expr",
+ "vaco-filter-core",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-opts",
+ "vaco-pixfmt",
+]
+
+[[package]]
+name = "vaco-filter-video-geometry"
+version = "0.1.0"
+dependencies = [
+ "vaco-color",
+ "vaco-core",
+ "vaco-expr",
+ "vaco-filter-core",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-opts",
+ "vaco-pixfmt",
+ "vaco-scale",
+]
+
+[[package]]
+name = "vaco-filter-video-source"
+version = "0.1.0"
+dependencies = [
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-opts",
+ "vaco-pixfmt",
+]
+
+[[package]]
 name = "vaco-format-adaptive"
 version = "0.1.0"
 dependencies = [
@@ -1906,6 +1948,9 @@ dependencies = [
  "vaco-filter-framesync",
  "vaco-filter-graph",
  "vaco-filter-plumbing",
+ "vaco-filter-video-format",
+ "vaco-filter-video-geometry",
+ "vaco-filter-video-source",
  "vaco-format-adaptive",
  "vaco-format-apetag",
  "vaco-format-audio-simple",
@@ -1922,6 +1967,7 @@ dependencies = [
  "vaco-frame",
  "vaco-io",
  "vaco-limits",
+ "vaco-mux-avi",
  "vaco-mux-mp4",
  "vaco-mux-mpegps",
  "vaco-mux-mpegts",
@@ -2000,6 +2046,7 @@ dependencies = [
  "vaco-codec-core",
  "vaco-core",
  "vaco-format-core",
+ "vaco-format-nalu",
  "vaco-format-riff",
  "vaco-io",
  "vaco-limits",
@@ -2431,6 +2478,9 @@ dependencies = [
  "vaco-filter-audio",
  "vaco-filter-core",
  "vaco-filter-plumbing",
+ "vaco-filter-video-format",
+ "vaco-filter-video-geometry",
+ "vaco-filter-video-source",
  "vaco-format-audio-simple",
  "vaco-format-core",
  "vaco-format-dv",

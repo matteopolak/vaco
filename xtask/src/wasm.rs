@@ -126,8 +126,8 @@ pub fn run(_check: bool) -> Task {
             let blame = err
                 .lines()
                 .find_map(|l| l.trim().strip_prefix("--> "))
-                .and_then(|loc| loc.split('/').nth(2))
-                .map_or_else(|| name.clone(), str::to_string);
+                .and_then(blame_from_path)
+                .unwrap_or_else(|| name.clone());
             failed.push((blame, first));
         }
     }
@@ -153,4 +153,54 @@ pub fn run(_check: bool) -> Task {
     // That is not a false positive worth engineering away: the gate's job is the
     // committed tree, and CI is where it runs.
     Ok(())
+}
+
+/// The workspace crate a `--> path` points into, if it points into one.
+///
+/// Only `crates/<area>/<crate>/…` counts. The first version took the third
+/// path component unconditionally, which is right for a repo-relative path and
+/// nonsense for anything else: an error inside a registry dependency lives at
+/// `/Users/<you>/.cargo/registry/…`, so the gate blamed a crate called
+/// **`matthew`** and sent the reader to a directory that does not exist.
+///
+/// Returning `None` for a path we do not recognise lets the caller fall back to
+/// the crate it actually asked cargo for, which is a worse answer than the
+/// truth and a much better one than a username.
+fn blame_from_path(loc: &str) -> Option<String> {
+    let mut parts = loc.split('/');
+    if parts.next()? != "crates" {
+        return None;
+    }
+    let _area = parts.next()?;
+    let krate = parts.next()?;
+    krate.starts_with("vaco-").then(|| krate.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::blame_from_path;
+
+    #[test]
+    fn a_repo_relative_path_names_its_crate() {
+        assert_eq!(
+            blame_from_path("crates/io/vaco-protocol-socket/src/sys.rs:3:1").as_deref(),
+            Some("vaco-protocol-socket")
+        );
+    }
+
+    /// The bug this function exists for: an error inside a registry dependency
+    /// lives under `/Users/<you>/.cargo/registry/…`, and taking the third path
+    /// component blamed a crate named after the developer.
+    #[test]
+    fn an_absolute_registry_path_blames_nobody_rather_than_the_username() {
+        for loc in [
+            "/Users/matthew/.cargo/registry/src/index.crates.io-1949cf/socket2-0.6.0/src/sys.rs",
+            "/some/other/place/lib.rs",
+            "crates/io/not-a-vaco-crate/src/lib.rs",
+            "crates",
+            "",
+        ] {
+            assert_eq!(blame_from_path(loc), None, "{loc}");
+        }
+    }
 }

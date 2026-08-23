@@ -190,7 +190,7 @@ impl Muxer for MovMuxer {
         self.resolve_metadata();
         match &mut self.mode {
             Mode::Progressive(state) => {
-                progressive::write_header(&mut self.out, &self.opts, state)?;
+                progressive::write_header(&mut self.out, &self.opts, state, &self.tracks)?;
             }
             Mode::Fragmented(state) => {
                 fragmented::write_header(
@@ -218,7 +218,20 @@ impl Muxer for MovMuxer {
         let pts = packet.pts.ticks().unwrap_or(dts);
         let cts_offset = i32::try_from(pts.saturating_sub(dts)).unwrap_or(0);
         let is_sync = packet.is_key();
-        let duration = u32::try_from(packet.duration.0.max(0)).unwrap_or(0);
+        // `Packet::duration` is always microseconds (see `vaco_packet::Packet::rescale_ts`'s
+        // doc comment: only `pts`/`dts` are rescaled to the muxer's own time base, `duration`
+        // deliberately is not), so it must be converted into this track's own timescale here —
+        // storing the raw microsecond count as if it already were a tick count in `mdhd`'s
+        // timescale is what produced a ~1600x wrong `mvhd`/`mdhd` duration (measured: a 1-second,
+        // 25fps clip's last sample duration of 40000us was written verbatim as `40000` ticks at
+        // timescale 25, instead of the `1` tick that timescale actually calls for).
+        let duration_ticks = self
+            .tracks
+            .get(idx)
+            .and_then(|t| packet.duration.to_ticks(t.time_base()))
+            .unwrap_or(0)
+            .max(0);
+        let duration = u32::try_from(duration_ticks).unwrap_or(0);
         let payload = packet.payload();
 
         match &mut self.mode {

@@ -114,6 +114,23 @@ output. `mfra`'s `tfra.moof_offset` is recorded relative to the start of the
 fragment stream while `sidx`'s final length is still unknown, then corrected
 by exactly that length once `sidx` is built (`fragmented::finish`).
 
+### Packet duration is microseconds; the track's own timescale is ticks
+
+`vaco_packet::Packet::duration` is **always microseconds** — `Packet::rescale_ts`'s
+own doc comment says so, and it deliberately rescales only `pts`/`dts`, not
+`duration`, when a packet moves between time bases. `write_packet` must
+therefore convert it with `Packet::duration.to_ticks(track.time_base())`
+before it can go into `stts` as a tick count. Finding 20
+(`planning/CONFORMANCE-FINDINGS.md`) is what copying the raw microsecond
+count verbatim looks like: a 1-second, 25fps clip's last sample carried a
+`40000` (the correct value in microseconds, at 1/25 that is 1 tick) straight
+into `TrackState::last_duration_hint`, inflating the reported duration by
+~1600×. `tests/roundtrip.rs`'s
+`track_duration_converts_packet_duration_from_microseconds_to_track_ticks` is
+the regression test — it sets an explicit one-second `Duration` on the last
+of three packets and checks the demuxed `duration_ts` lands on `30` (one
+second at this track's 30-timescale), not `1_000_000`.
+
 ### What is simplified
 
 * **One `tfra` entry per track per fragment**, pointing at that fragment's
@@ -201,6 +218,22 @@ ffmpeg -y -f lavfi -i testsrc=d=1:size=64x64:rate=5 -f lavfi -i sine=d=1 \
 | `3g2` | `3g2a` | `0x10000` | `3g2a isom iso2` |
 | `avif` | `avif` | `0` | `avif mif1 miaf MA1B` |
 
+**`avc1` is added to the compatible-brand list, not baked into the table
+above, exactly when the file has an H.264 video track** —
+`brand::brand_conditions_avc1_on_h264` (finding 14,
+`planning/CONFORMANCE-FINDINGS.md`). Measured with `-c copy` on an H.264
+source into each brand: `mp4`/`ipod`/`psp`/`3gp`/`3g2` all gain `avc1`
+(inserted just before `mp41` where that entry exists, else appended); an
+AAC-only or HEVC source gets none; `mov`/`ismv` never do, H.264 or not.
+`f4v`'s `avc1` is unconditional in the table above already, so this rule
+never has to add one there.
+
+**A `free` (or, for `mov`, `wide`) 8-byte placeholder box is written between
+`ftyp` and `mdat`** in streaming (non-`faststart`) mode —
+`progressive::placeholder_box`, same finding. `faststart` mode writes no
+placeholder at all (`moov` follows `ftyp` directly there, which is also
+measured, not assumed).
+
 `avif`'s brand is recorded (`brand::AVIF`) but not registered — an AVIF file
 is a HEIF item structure (`meta ▸ iinf/iloc/iprp/ipco/pitm`), not a
 `moov`/`trak` track, and building that is a different box model than the rest
@@ -260,6 +293,18 @@ and needs a different argument.
 * **`ChunkOffsets::offset` and `stsc`'s `first_chunk` are one-based.**
   `vaco-format-isom::stbl` reads them that way; `TrackState::stsc_runs`
   produces one-based chunk numbers to match.
+* **`Packet::duration` is microseconds, not ticks in the packet's own time
+  base** — unlike `pts`/`dts`, which arrive already rescaled to
+  `stream_time_base()`. Any new code path that reads `packet.duration`
+  directly (rather than through `Duration::to_ticks`) will reproduce finding
+  20's ~1600× duration bug the moment the track's timescale is not close to
+  1,000,000.
+* **This crate's own track timescale (`Self::track_time_base`, derived from
+  frame rate/sample rate) is not the same value the reference picks on a
+  `-c copy` path** (which preserves the source's own `mdhd` timescale
+  instead) — a real, currently-open byte-exactness gap, but not one that
+  produces a *wrong* duration the way finding 20 was; see that finding's
+  entry in `planning/CONFORMANCE-FINDINGS.md` for the measurement.
 
 ---
 

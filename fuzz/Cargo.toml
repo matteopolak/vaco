@@ -57,6 +57,9 @@ vaco-filter-core = { path = "../crates/filter/vaco-filter-core" }
 vaco-filter-framesync = { path = "../crates/filter/vaco-filter-framesync" }
 vaco-filter-graph = { path = "../crates/filter/vaco-filter-graph" }
 vaco-filter-plumbing = { path = "../crates/filter/vaco-filter-plumbing" }
+vaco-filter-video-format = { path = "../crates/filter/vaco-filter-video-format" }
+vaco-filter-video-geometry = { path = "../crates/filter/vaco-filter-video-geometry" }
+vaco-filter-video-source = { path = "../crates/filter/vaco-filter-video-source" }
 vaco-format-adaptive = { path = "../crates/format/vaco-format-adaptive" }
 vaco-format-apetag = { path = "../crates/format/vaco-format-apetag" }
 vaco-format-audio-simple = { path = "../crates/format/vaco-format-audio-simple" }
@@ -73,6 +76,7 @@ vaco-format-subtitle = { path = "../crates/format/vaco-format-subtitle" }
 vaco-frame = { path = "../crates/model/vaco-frame" }
 vaco-io = { path = "../crates/io/vaco-io" }
 vaco-limits = { path = "../crates/core/vaco-limits" }
+vaco-mux-avi = { path = "../crates/format/vaco-mux-avi" }
 vaco-mux-mp4 = { path = "../crates/format/vaco-mux-mp4" }
 vaco-mux-mpegps = { path = "../crates/format/vaco-mux-mpegps" }
 vaco-mux-mpegts = { path = "../crates/format/vaco-mux-mpegts" }
@@ -133,6 +137,9 @@ default = [
     "filter-framesync",
     "filter-graph",
     "filter-plumbing",
+    "filter-video-format",
+    "filter-video-geometry",
+    "filter-video-source",
     "format-apetag",
     "format-audio-simple",
     "format-avlanguage",
@@ -147,6 +154,7 @@ default = [
     "frame",
     "io",
     "limits",
+    "mux-avi",
     "mux-mp4",
     "mux-mpegps",
     "mux-mpegts",
@@ -203,6 +211,9 @@ filter-core = []
 filter-framesync = []
 filter-graph = []
 filter-plumbing = []
+filter-video-format = []
+filter-video-geometry = []
+filter-video-source = []
 format-apetag = []
 format-audio-simple = []
 format-avlanguage = []
@@ -217,6 +228,7 @@ format-riff = []
 frame = []
 io = []
 limits = []
+mux-avi = []
 mux-mp4 = []
 mux-mpegps = []
 mux-mpegts = []
@@ -290,6 +302,14 @@ test = false
 doc = false
 bench = false
 required-features = ["demux-avi"]
+
+[[bin]]
+name = "avi_mux_packet"
+path = "fuzz_targets/avi_mux_packet.rs"
+test = false
+doc = false
+bench = false
+required-features = ["mux-avi"]
 
 [[bin]]
 name = "avlanguage_parse"
@@ -586,6 +606,30 @@ test = false
 doc = false
 bench = false
 required-features = ["filter-core"]
+
+[[bin]]
+name = "filter_video_format_options"
+path = "fuzz_targets/filter_video_format_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-video-format"]
+
+[[bin]]
+name = "filter_video_geometry_options"
+path = "fuzz_targets/filter_video_geometry_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-video-geometry"]
+
+[[bin]]
+name = "filter_video_source_options"
+path = "fuzz_targets/filter_video_source_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-video-source"]
 
 [[bin]]
 name = "flv_demux"

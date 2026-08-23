@@ -417,7 +417,7 @@ suite whose fixture assumed an optional encoder. Swapped `libvorbis` →
 audio codec and enabled far more often. 8 of the 16 previously-unreachable
 cases now agree.
 
-## 14. `vaco-mux-mp4`/MOV: no `avc1` compatible-brand entry, no placeholder atom before `mdat`
+## 14. `vaco-mux-mp4`/MOV: no `avc1` compatible-brand entry, no placeholder atom before `mdat` — **fixed**
 
 ```
 $ just conformance-run 'transcode-remux-bitexact/v-mp4/output=mp4'
@@ -434,6 +434,24 @@ placeholder writer exists anywhere in the crate. `-f mov` shares the same
 `write_header` (confirmed by reading the call site, not guessed), so its
 divergence (byte 23, 88 bytes short) is the identical root cause.
 
+**Fixed** (agent:muxfix, 2026-08-23). `brand::file_type_box` now takes the
+muxer's own track list and folds `avc1` into the compatible-brand list
+exactly when there is an H.264 video track — measured across `mp4`,
+`ipod`/`psp`/`3gp`/`3g2` (all gain it), `mov`/`ismv` (never do), an AAC-only
+or HEVC source (no `avc1` either); inserted just before `mp41` where that
+entry exists (`mp4`'s measured order is `isom iso2 avc1 mp41`, not `isom iso2
+mp41 avc1`), else appended. `progressive::write_header` now writes an 8-byte
+`free` (`wide` for `mov`) placeholder between `ftyp` and `mdat` in streaming
+mode — `faststart` mode gets none, also measured. Verified byte-for-byte
+against `ffmpeg 8.1 -c copy -f mp4` on the exact `v-mp4` fixture: `ftyp`
+through the placeholder now match exactly; the only remaining divergence is
+`mdat`'s header shape (this crate always uses the 16-byte `largesize` form,
+a separate, already-documented, deliberate choice — see
+`docs/format/vaco-mux-mp4.md`). Tests: `vaco_mux_mp4::brand::tests` (three
+new cases) and `progressive::tests::mov_gets_wide_every_other_brand_gets_free`,
+plus `tests/roundtrip.rs::a_non_faststart_file_puts_mdat_before_moov`
+updated for the new placeholder box.
+
 ## 15. `vaco-mux-matroska`: no `SeekHead` — open, but recorded as intentional in-crate
 
 ```
@@ -449,7 +467,7 @@ strings start immediately where the reference's `SeekHead` would be).
 Recording it here because XF-03 is where the byte cost becomes visible and
 measured (126 bytes on this fixture), not because it is news to the crate.
 
-## 16. `vaco-mux-avi`: no length-prefixed-to-Annex-B bitstream conversion at all
+## 16. `vaco-mux-avi`: no length-prefixed-to-Annex-B bitstream conversion at all — **fixed, byte gap not fully closed**
 
 ```
 $ just conformance-run 'transcode-remux-bitexact/v-mp4/output=avi'
@@ -467,7 +485,39 @@ sets layout. `idx1` and the RIFF/trailer size patches are present and
 correct — this is not an indexing gap, it is a missing bitstream-format
 stage.
 
-## 17. `vaco-mux-mpegts`: SDT service name/provider default to empty strings
+**Fixed the missing conversion** (agent:muxfix, 2026-08-23), chosen to live
+**inside the muxer**, not as a `vaco-sched` bitstream-filter stage: the brief
+noted `vaco-sched`'s mux path does not run the BSF chain at all
+(`INTERFACE-GAPS.md`), so a muxer-internal conversion is the only place this
+could land today, and it is exactly the shape `vaco-mux-mpegts` already uses
+for the identical problem (`vaco-mux-avi` now depends on `vaco-format-nalu`
+too, mirroring that crate's `Cargo.toml`). `add_stream` records a
+`LengthSize` from `nal_length_size` for H.264/HEVC; `write_packet` runs
+`length_prefixed_to_annexb` over the payload before it reaches `movi`, and
+every downstream size field (`idx1`, chunk length, the odd-byte pad check)
+now uses the *converted* length.
+
+Measured after the fix, directly against `ffmpeg 8.1 -c copy -f avi` on the
+`v-mp4` fixture: per-packet sizes now match the reference exactly (25
+packets, identical byte counts each, confirmed via `ffprobe -show_packets`
+on both files), and an Annex-B start code (`00 00 00 01`) now opens every
+chunk where a raw length value used to. **The total file-size gap is not
+closed**, though: the reference's own `movi` region is larger than the sum
+of its packets by a wide margin (an ~192-byte gap appears between every pair
+of consecutive real chunks, structured as if reserved space rather than
+padding) — measured directly, not yet understood, and not an artefact of
+this fix (both `idx1` and `ffprobe`'s packet list confirm the payload bytes
+themselves are already correct). Left open as its own, narrower
+sub-question rather than folded into this finding's original framing, which
+was specifically about the missing bitstream conversion.
+
+Tests: `tests/roundtrip.rs::a_length_prefixed_h264_sample_is_rewritten_to_annex_b`.
+Fuzzing: new target `fuzz/fuzz_targets/avi_mux_packet.rs` (D6 — this crate
+had no fuzz target at all before this fix, and now has real byte-level
+parsing of caller-supplied length prefixes); 30s run, `exit=0`,
+`execs≈1,753,000`, `find fuzz/artifacts -type f` empty.
+
+## 17. `vaco-mux-mpegts`: SDT service name/provider default to empty strings — **fixed**
 
 ```
 $ just conformance-run 'transcode-remux-bitexact/v-mp4/output=mpegts'
@@ -483,7 +533,16 @@ empty strings, and the CLI's default invocation uses that default. Not a
 missing feature, a default-value choice that happens to disagree with the
 reference's.
 
-## 18. `vaco-mux-flv`: `onMetaData` carries 3 of the reference's ~10 properties
+**Fixed** (agent:muxfix, 2026-08-23). Re-measured rather than assumed: `-h
+muxer=mpegts` has no `-service_name`/`-service_provider` option at all (so
+there is no documented default to defer to, unlike every other field this
+struct's doc comment says matches that transcript), so the two literal
+strings were recovered by probing the SDT's own service descriptor bytes
+from a plain `-c copy -f mpegts` — `provider_name="FFmpeg"`,
+`service_name="Service01"`. `MpegTsMuxOptions::default()` now writes those.
+Test: `tests/roundtrip.rs::default_options_write_the_references_measured_sdt_strings`.
+
+## 18. `vaco-mux-flv`: `onMetaData` carries 3 of the reference's ~10 properties — **fixed**
 
 ```
 $ just conformance-run 'transcode-remux-bitexact/v-mp4/output=flv'
@@ -498,7 +557,29 @@ code's own comment says width/height are "not threaded through
 or `filesize` ever get written, which also changes the ECMA array's element
 count — the single byte the harness reports as the divergence point.
 
-## 19. Six of ten known-incompatible remux pairs **succeed** on `vaco` where the reference refuses — open, cross-cutting
+**Fixed** (agent:muxfix, 2026-08-23). `add_stream` used to discard
+`CodecParameters` entirely after pulling `extradata` out of it; it now
+captures an `OnMetaFields` per stream (width/height/frame_rate/sample_rate/
+channels/bits/`bit_rate`), and `write_metadata_tag` writes all of
+`width height videodatarate framerate videocodecid` (video) and
+`audiodatarate audiosamplerate audiosamplesize stereo audiocodecid` (audio),
+plus a now-patched `filesize`, in the measured order (`-c copy -f flv` on an
+H.264(+AAC) MP4 source, byte-inspected: `duration width height
+videodatarate framerate videocodecid [audiodatarate audiosamplerate
+audiosamplesize stereo audiocodecid] filesize`). `videodatarate`/
+`audiodatarate` are written only when the source's `CodecParameters::bit_rate`
+states one, omitted otherwise — an honest "unknown", not a fabricated
+number; `major_brand`/`minor_version`/`compatible_brands`/`encoder` also
+appear in the reference's own output but are left out (see finding 22 — no
+channel for MP4-`ftyp`-sourced format tags or an encoder identity string
+reaches this crate today). Verified against `ffmpeg 8.1` directly: the
+video-only fixture's key set and order now match exactly, missing only the
+four fields just named. Test:
+`tests/roundtrip.rs::on_meta_data_carries_the_streams_own_video_and_audio_properties`,
+which decodes the real AMF0 body and checks each field's value against the
+`CodecParameters` it came from — not merely that more keys exist.
+
+## 19. Six of ten known-incompatible remux pairs **succeed** on `vaco` where the reference refuses — **1 of 6 fixed, root cause characterised, 3 more blocked on a demux-side decision**
 
 ```
 $ just conformance-run 'transcode-remux-known-incompatible/av-avi/output=to-mpegts'
@@ -521,7 +602,64 @@ Four of the ten pairs *do* agree — both sides reject, with unrelated numeric
 codes (what finding 11 fixed): AVI→Matroska, AVI→FLV, FLV→AVI, ASF→AVI all
 already fail the same way on both sides.
 
-## 20. `vaco-mux-mp4`: self-remuxed MP4 reports a ~1600× wrong duration
+**Investigated (agent:muxfix, 2026-08-23).** The "codec support lists" framing
+above turned out not to be quite the mechanism: `vaco_format_core::mux::MuxBuilder::add_stream`
+*does* call `query_codec` (M15), and it is tested
+(`an_unsupported_codec_is_refused_at_add_stream`). The reason it never fires
+for these six pairs is that `vaco-sched`'s `PipelineSpec::map`
+(`crates/app/vaco-sched/src/spec.rs`) calls `muxer.add_stream(params)`
+directly on the raw `Box<dyn Muxer>`, bypassing `MuxBuilder` entirely — a
+fact `vaco-cli/src/exec.rs`'s own module docs already state for an unrelated
+reason ("`vaco-sched`'s `MuxWork` drives a raw `dyn Muxer`..."). **This is not
+mine to fix** (`vaco-sched` is outside this brief's scope), and it would not
+have been the fix anyway: `query_codec`/`CodecSupport` answers "can this
+container ever hold this codec at all", which is not what either failure
+mode here is about — H.264 is fine in AVI/MPEG-TS/FLV in general, and AAC is
+fine in AVI in general. Both are narrower, *stream-content* constraints:
+
+1. **A stream's first packet has no PTS at all.** Measured directly
+   (`ffmpeg -i <that-format> -c copy -f {mpegts,flv}`): MPEG-TS refuses with
+   "first pts and dts value must be set" (exit 183); FLV refuses with
+   "Packet is missing PTS" (exit 234). AVI is the concrete source — it has no
+   native per-packet PTS field, only a per-stream sample count a reader
+   reconstructs timing from — and real `ffmpeg`'s own AVI *demuxer* leaves
+   `pts` genuinely unset for such a stream while still deriving a `dts`.
+   **Fixed** in `vaco-mux-mpegts` (first packet per stream only, matching the
+   reference's own "first" wording) and `vaco-mux-flv` (every packet, since
+   its message carries no "first" qualifier) — both now refuse rather than
+   silently reusing the previous clock / writing `pts=0`.
+2. **ADTS-framed AAC has no legal representation in a container that expects
+   raw, `AudioSpecificConfig`-framed AAC.** Measured directly
+   (`ffmpeg -i <mpegts-source> -c copy -f avi` refuses at `write_header` with
+   "ADTS is only supported with codec tag 0x1610", exit 234). MPEG-TS's own
+   AAC convention is ADTS (config repeated per frame, no separate blob), so
+   a stream with no `extradata` at all is the observable signal available for
+   "this is ADTS, not raw" — MP4/`esds`-sourced AAC always has one. **Fixed**
+   in `vaco-mux-avi`'s `add_stream`.
+
+**Measured result of (1) against `vaco`'s own demux side**: it does not yet
+change AVI→MPEG-TS's or ASF→{Matroska, MPEG-TS, FLV}'s outcome, because
+`vaco-probe`/`vaco-demux-avi` synthesize a `pts` for *every* packet
+(confirmed: `vaco-probe -show_packets` on the same AVI fixture prints
+`pts=0`, `pts=1`, … for every video packet) where the reference's own AVI
+demuxer leaves it unset. The mux-side refusal is correctly implemented and
+unit-tested against the *contract* (a genuinely-`None` `pts` is refused,
+verified directly), and it is exactly what closed MPEG-TS→AVI (fix 2, which
+does not depend on any demuxer's PTS policy) — but full parity on the other
+three pairs needs `vaco-demux-avi`/`vaco-demux-asf` to also decline to
+fabricate a timestamp they cannot truly derive, which is a demux-side design
+question (does synthesizing a PTS from frame count count as "the source
+stated one"?) outside this brief's crates (`vaco-demux-avi`, `vaco-demux-asf`
+are not `vaco-mux-*`). Flagged for whichever agent owns those two crates.
+
+**Net**: MPEG-TS→AVI now agrees with the reference (both reject). AVI→MPEG-TS
+and ASF→{Matroska, MPEG-TS, FLV} still diverge, for the demux-side reason
+above — the mux-side half of the fix is in place and tested, waiting on the
+other half. ASF→Matroska and MPEG-TS→ASF also remain open in the same shape
+as (1)/(2) respectively, since their target muxers (`vaco-mux-matroska`,
+`vaco-mux-asf`) are outside this brief's four crates.
+
+## 20. `vaco-mux-mp4`: self-remuxed MP4 reports a ~1600× wrong duration — **fixed**
 
 ```
 $ just conformance-run 'transcode-remux-structural/v-mp4/output=mp4'
@@ -544,6 +682,27 @@ by 40ms, plausibly a rounding/timebase-conversion artifact rather than the
 same bug), which narrows the search to MP4/MOV's own timescale handling
 specifically.
 
+**Root cause, fixed** (agent:muxfix, 2026-08-23): not the track-timescale
+*choice* (which is a separate, real, lower-severity gap — see
+`docs/format/vaco-mux-mp4.md`'s gotchas — this crate picks the timescale
+from frame rate/sample rate rather than preserving a `-c copy` source's own
+`mdhd` timescale) but a units bug in `MovMuxer::write_packet`:
+`vaco_packet::Packet::duration` is **always microseconds**
+(`Packet::rescale_ts`'s own doc comment: only `pts`/`dts` are rescaled to a
+new time base, `duration` deliberately is not), and `write_packet` was
+reading `packet.duration.0` straight into `TrackState::last_duration_hint` —
+a tick count in the track's own timescale — with no conversion at all.
+Confirmed by dumping the produced file's raw boxes: `mdhd`/`stts` showed a
+last-sample delta of exactly `40000` (the correct value *in microseconds* —
+1/25 second — copied verbatim into a field whose unit is 1/25-second ticks
+at this track's timescale of 25, where the correct tick count is `1`).
+Fixed with `vaco_core::Duration::to_ticks(track.time_base())`, which already
+existed for exactly this conversion and was simply not being called.
+Verified against `ffmpeg 8.1 -c copy -f mp4` on the exact fixture:
+`duration_ts` now reads `25` (was `40024`), `FORMAT.duration` reads `1.000000`
+(was `1601.040000`). Test:
+`tests/roundtrip.rs::track_duration_converts_packet_duration_from_microseconds_to_track_ticks`.
+
 ## 21. H.264 `profile` is reported inconsistently across probe paths
 
 Three different behaviours, same field:
@@ -561,6 +720,14 @@ value in at all, and the MP4 path fills it in with the wrong *kind* of value
 (a name where a number is expected). Owning crate depends on where the field
 is assembled for each container — `vaco-parse-h264` for the SPS read, or
 each demuxer's stream-info translation for the ASF/FLV gap specifically.
+
+**Checked, not fixed** (agent:muxfix, 2026-08-23): confirmed this is entirely
+a demux/probe-side gap — `profile` is assembled while reading a stream, not
+while muxing one, so no muxer this brief owns (`vaco-mux-mp4`,
+`vaco-mux-avi`, `vaco-mux-mpegts`, `vaco-mux-flv`) touches this field at all.
+Belongs to `vaco-parse-h264` and/or `vaco-demux-asf`/`vaco-demux-flv`, none
+of which are in this brief's scope; reported per this brief's own
+instruction rather than worked around.
 
 ## 22. `vaco`'s copy pipeline does not carry MP4-sourced format tags into ASF
 
@@ -584,6 +751,18 @@ also shows `vaco`'s H.264 stream-info coming back essentially empty on
 read-back (`pix_fmt=unknown`, `extradata_size=""`, `is_avc=""`,
 `nal_length_size=""`, `codec_tag_string=H264` vs the reference's `avc1`) —
 consistent with finding 21 and worth the same crate's attention.
+
+**Checked, not fixed** (agent:muxfix, 2026-08-23): the FLV side of this
+finding's own note is now partially addressed as a side effect of finding
+18 — `vaco-mux-flv`'s `onMetaData` now carries `width`/`height`/`framerate`/
+etc. sourced from `CodecParameters`, which is the *same generic-tag*
+question this finding raises, just for a different field set (`onMetaData`
+properties vs. `ftyp`-derived `FORMAT.TAG:*` entries and H.264 stream-info
+read-back). The core ASF question — whether generic format tags propagate
+across `-c copy` — is unresolved and still belongs to `vaco-sched`/
+`vaco-cli-core` (the copy pipeline) or `vaco-mux-asf` (the tag-writing path),
+neither of which is in this brief's scope (`vaco-mux-mp4`, `vaco-mux-avi`,
+`vaco-mux-mpegts`, `vaco-mux-flv`).
 
 ## 23. `vaco-probe` finds **zero streams** in every FLV file
 

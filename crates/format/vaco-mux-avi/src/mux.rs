@@ -30,7 +30,9 @@
 use vaco_codec_core::{CodecId, CodecParameters};
 use vaco_core::{Error, MediaType, Rational, Result};
 use vaco_format_core::{FormatOptions, Muxer, MuxerDesc};
+use vaco_format_nalu::{LengthSize, convert::length_prefixed_to_annexb};
 use vaco_io::{IoOptions, IoWriter, MediaSink};
+use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
 
 /// `AVIF_HASINDEX | AVIF_ISINTERLEAVED`, per the field this crate's sibling
@@ -79,6 +81,13 @@ struct StreamOut {
     audio_format_tag: u16,
     channels: u16,
     bits_per_sample: u16,
+    /// `Some` when this video stream needs converting from length-prefixed
+    /// (MP4/`avcC`/`hvcC`-style) framing to Annex B before it goes into a
+    /// `movi` chunk — see [`AviMuxer::maybe_convert`]. `None` for anything
+    /// that either is not H.264/HEVC or already declared Annex-B framing
+    /// (`nal_length_size` unset or `0`, `vaco_codec_core::VideoParameters`'s
+    /// own convention for "already start-code framed").
+    length_size: Option<LengthSize>,
 }
 
 /// One `idx1` entry, with an absolute file position not yet converted to the
@@ -110,6 +119,12 @@ pub struct AviMuxer {
     /// to.
     movi_fourcc_pos: u64,
     idx: Vec<IdxEntry>,
+    /// Bookkeeping for [`maybe_convert`](Self::maybe_convert)'s
+    /// length-prefixed-to-Annex-B rewrite — permissive because a conversion
+    /// this crate itself drives is not attacker-controlled the way a
+    /// demuxer's input is; it only bounds runaway output on a malformed
+    /// length prefix.
+    convert_budget: Budget,
 }
 
 impl AviMuxer {
@@ -128,6 +143,7 @@ impl AviMuxer {
             movi_size_at: 0,
             movi_fourcc_pos: 0,
             idx: Vec::new(),
+            convert_budget: Budget::new(Limits::permissive()),
         })
     }
 
@@ -136,6 +152,40 @@ impl AviMuxer {
     pub const fn position(&self) -> u64 {
         self.out.pos()
     }
+
+    /// Rewrite `payload` to Annex B if the stream at `index` declared
+    /// length-prefixed framing at [`Muxer::add_stream`] time.
+    ///
+    /// AVI has no out-of-band configuration record the way MP4's `avcC`/
+    /// `hvcC` do, so an H.264/HEVC stream sourced from a length-prefixed
+    /// container (typically MP4, via `-c copy`) must be reframed with start
+    /// codes before it can go into a `movi` chunk — otherwise the "length"
+    /// this crate would write is a byte count for a NAL unit stream no AVI
+    /// reader's convention matches, which is finding 16's measured 3.4×
+    /// size gap against the reference (the two aren't different lengths of
+    /// the same bytes; the bytes are structured differently). Mirrors
+    /// `vaco-mux-mpegts::MpegTsMuxer::maybe_convert`, which solves the exact
+    /// same problem for the exact same codecs.
+    fn maybe_convert(&mut self, index: usize, payload: &[u8]) -> Result<Vec<u8>> {
+        let Some(stream) = self.streams.get(index) else {
+            return Ok(payload.to_vec());
+        };
+        let Some(length_size) = stream.length_size else {
+            return Ok(payload.to_vec());
+        };
+        let mut out = Vec::new();
+        length_prefixed_to_annexb(payload, length_size, &mut out, &mut self.convert_budget)?;
+        Ok(out)
+    }
+}
+
+/// Whether `id` is a codec whose length-prefixed framing needs converting to
+/// Annex B for AVI — the same two codecs `vaco-mux-mpegts` converts, and for
+/// the same reason: neither has an AVI (or MPEG-TS) out-of-band
+/// configuration record, so in-band start-code-framed NAL units with inline
+/// parameter sets are the only layout either container's readers expect.
+fn is_h264_or_hevc(id: CodecId) -> bool {
+    matches!(id, CodecId::H264 | CodecId::Hevc)
 }
 
 /// A stream's `movi` chunk tag, e.g. `"00dc"` for video stream 0.
@@ -268,6 +318,7 @@ impl Muxer for AviMuxer {
             audio_format_tag: 0,
             channels: 1,
             bits_per_sample: 16,
+            length_size: None,
         };
 
         if is_video {
@@ -282,12 +333,34 @@ impl Muxer for AviMuxer {
                 .ok_or(Error::Unsupported("avi: codec has no AVI video FourCC"))?;
             out.width = v.width;
             out.height = v.height;
+            if is_h264_or_hevc(codec_id) {
+                out.length_size = v.nal_length_size.filter(|&n| n > 0).and_then(LengthSize::new);
+            }
         } else {
             let a = params.audio.as_ref().ok_or(Error::Unsupported(
                 "avi: audio stream has no AudioParameters",
             ))?;
             if a.sample_rate == 0 {
                 return Err(Error::Unsupported("avi: audio stream has no sample rate"));
+            }
+            // Finding 19 (`planning/CONFORMANCE-FINDINGS.md`): measured
+            // directly (`ffmpeg -i <mpegts-with-adts-aac> -c copy -f avi`,
+            // which refuses at `write_header` with "ADTS is only supported
+            // with codec tag 0x1610" and a nonzero exit) — AVI's
+            // `WAVE_FORMAT_AAC` entry expects raw, `AudioSpecificConfig`-
+            // framed AAC (the config carried once, out of band), not
+            // ADTS's self-contained per-frame header. MPEG-TS's own AAC
+            // convention is ADTS and carries no such config, so a stream
+            // with no extradata at all is the observable signal this crate
+            // has for "this is ADTS-framed, not raw" (MP4/`esds`-sourced
+            // AAC always has one). Refusing here, rather than writing a
+            // technically-malformed `WAVE_FORMAT_AAC` chunk stream, is the
+            // fix for the "silent success" shape finding 6 already named.
+            if codec_id == CodecId::Aac && params.extradata.as_deref().is_none_or(<[u8]>::is_empty)
+            {
+                return Err(Error::Unsupported(
+                    "avi: ADTS-framed AAC has no AVI representation; needs raw AudioSpecificConfig extradata",
+                ));
             }
             out.time_base = Rational::new(1, i32::try_from(a.sample_rate).unwrap_or(i32::MAX));
             out.audio_format_tag = audio_format_tag(codec_id)
@@ -374,13 +447,20 @@ impl Muxer for AviMuxer {
             .is_video;
         let tag = chunk_tag(packet.stream_index, is_video)?;
 
+        // Finding 16: a length-prefixed H.264/HEVC sample (typically sourced
+        // from MP4, `-c copy`) must be reframed to Annex B before it is a
+        // legal AVI chunk payload — see `maybe_convert`'s doc comment.
+        // `payload`'s length, not `packet.len`, drives every size field below
+        // from here on, since the two can differ once conversion runs.
+        let payload = self.maybe_convert(idx, packet.payload())?;
+
         let pos = self.out.pos();
         self.out.write_tag(&tag)?;
         let len =
-            u32::try_from(packet.len).map_err(|_| Error::Unsupported("avi: packet too large"))?;
+            u32::try_from(payload.len()).map_err(|_| Error::Unsupported("avi: packet too large"))?;
         self.out.wl32(len)?;
-        self.out.write(packet.payload())?;
-        if packet.len % 2 == 1 {
+        self.out.write(&payload)?;
+        if payload.len() % 2 == 1 {
             self.out.w8(0)?;
         }
 

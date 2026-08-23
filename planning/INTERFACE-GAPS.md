@@ -188,7 +188,28 @@ signature that ~90 crates already implement — so the additive fix is the same
 shape: a defaulted trait method that hands over the extra sources after
 construction, not a wider `open`.
 
-## 8. `vaco-sched` cannot call `set_metadata` between `add_stream` and `write_header`
+## 8. `vaco-sched` drives a raw `dyn Muxer` instead of `MuxWriter`
+
+**This is one gap wearing three faces**, and each was reported separately before
+anyone noticed they were the same thing:
+
+- **No metadata ordering.** The CLI calls `set_metadata` before the muxer has
+  any streams, because `MuxWork` never goes through `MuxBuilder::open`. MP4 and
+  Matroska both had to make per-stream resolution lazy to survive it.
+- **No bitstream-filter stage.** `BsfChain`/`BsfProvider` exist on `MuxWriter`
+  and never run, so a stream needing Annex-B conversion is written unfiltered.
+  `vaco-mux-avi` and `vaco-mux-mpegts` each carry their own conversion inside
+  the muxer as a result — two copies of something the framework has a slot for.
+- **No codec-compatibility check.** `MuxBuilder::add_stream` calls
+  `query_codec`; `PipelineSpec::map` calls `muxer.add_stream()` directly on the
+  raw trait object, so the support lists are simply never asked. This one is
+  worth stating plainly: **the check exists, is tested, and is bypassed.**
+
+Fixing it is one change — `MuxWork` builds and drives a `MuxWriter` — and it
+closes all three. Every workaround above can then be deleted, which is the
+argument for doing it rather than adding a fourth.
+
+### 8a. Historical note: `set_metadata` ordering
 
 Reported by: the CLI metadata wiring, immediately after gap 1 was closed to
 enable it.

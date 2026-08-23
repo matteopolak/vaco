@@ -42,6 +42,15 @@ looks like" for both the demuxer and this muxer to agree on (D19).
    decided in `Muxer::init` once every stream is known.
 2. `write_header` emits a PAT, a PMT and an SDT immediately.
 3. `write_packet`:
+   - Refuses a stream's *first* packet outright if it has no PTS at all
+     (finding 19, `planning/CONFORMANCE-FINDINGS.md`) — measured directly
+     (`ffmpeg -i <avi-source> -c copy -f mpegts` refuses with "first pts and
+     dts value must be set" and a nonzero exit; AVI is the concrete source,
+     since it has no native per-packet PTS field). Previously this silently
+     reused the previous packet's clock instead, which is exactly the
+     "silent success" shape finding 6 already named. A later packet on the
+     same stream with no PTS is still tolerated, since only the first-packet
+     case is what was actually measured.
    - Repeats the PAT/PMT and, separately, the SDT if the configured period
      has elapsed, `-mpegts_flags resend_headers` is set, or (for PAT/PMT only)
      `pat_pmt_at_frames` is set and this is a video keyframe.
@@ -190,6 +199,15 @@ in a per-container option) and `nit`/`nit_period` (accepted as a flag/field
 for round-tripping a caller's option string, but this muxer never writes a
 NIT regardless — see *Deferred* below).
 
+**`service_name`/`service_provider` are not in that transcript at all** — the
+SDT's service descriptor carries them, but there is no
+`-service_name`/`-service_provider` AVOption to report a default for.
+Measured a different way (finding 17, `planning/CONFORMANCE-FINDINGS.md`):
+probe the SDT bytes `-c copy -f mpegts` actually writes with no metadata
+given at all, and read the service descriptor (tag `0x48`) directly —
+`provider_name="FFmpeg"`, `service_name="Service01"`. `MpegTsMuxOptions::default()`
+now writes those two literal strings rather than empty ones.
+
 `-mpegts_flags` maps onto `options::MpegTsFlags`, `-mpegts_service_type` onto
 `options::ServiceType`. None of this is routed through
 `vaco_format_core::FormatOptions` — that type is the options every container
@@ -298,6 +316,10 @@ holds closing an issue to:
   (against the sibling demuxer's parser) and "any payload length reassembles
   to the original bytes" (`tsw`'s TS-packet splitter, against the sibling
   crate's own `TsPacket::parse`).
+* `mux::tests::a_streams_first_packet_with_no_pts_is_refused`/
+  `a_later_packet_with_no_pts_is_still_accepted` (finding 19) and
+  `tests/roundtrip.rs`'s `default_options_write_the_references_measured_sdt_strings`
+  (finding 17) are the regression tests for those two fixes.
 * `tests/roundtrip.rs`: mux with this crate, demux with `vaco-demux-mpegts`,
   and check the streams, payloads and timestamps that come back match what
   went in — including one run in M2TS mode. This is the test that found the

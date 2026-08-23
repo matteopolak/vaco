@@ -22,6 +22,7 @@ vaco-demux-flv = { path = "../vaco-demux-flv" }
 
 [dev-dependencies]
 proptest.workspace = true
+vaco-chlayout = { path = "../../model/vaco-chlayout" }
 
 [lints]
 workspace = true

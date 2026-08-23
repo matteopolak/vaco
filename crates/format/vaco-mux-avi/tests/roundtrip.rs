@@ -142,6 +142,96 @@ fn the_trailer_patches_total_frame_and_length_counts() {
     assert_eq!(demux.streams().len(), 2);
 }
 
+/// Finding 16 (`planning/CONFORMANCE-FINDINGS.md`): an H.264 stream sourced
+/// from a length-prefixed container (MP4's `avcC`, typically via `-c copy`)
+/// must be reframed to Annex B before it is a legal AVI `movi` chunk — this
+/// crate used to write `packet.payload()` verbatim regardless, which is the
+/// finding's measured 3.4x size gap against the reference (a structural
+/// difference, not a byte-count one).
+#[test]
+fn a_length_prefixed_h264_sample_is_rewritten_to_annex_b() {
+    let sink = MemorySink::new();
+    let shared: SharedBytes = sink.shared();
+    let mut mux = vaco_mux_avi::AviMuxer::new(Box::new(sink), &FormatOptions::default()).unwrap();
+
+    let mut params = video_params(64, 48, (25, 1));
+    if let Some(v) = &mut params.video {
+        v.nal_length_size = Some(4);
+    }
+    let v = mux.add_stream(&params).unwrap();
+    mux.write_header().unwrap();
+
+    // Two 4-byte-length-prefixed NAL units, back to back — exactly what an
+    // `avcC`-framed MP4 sample copies out as.
+    let nal_a = [0x67, 0xAA, 0xBB]; // fake SPS
+    let nal_b = [0x68, 0xCC]; // fake PPS
+    let mut sample = Vec::new();
+    sample.extend_from_slice(&(nal_a.len() as u32).to_be_bytes());
+    sample.extend_from_slice(&nal_a);
+    sample.extend_from_slice(&(nal_b.len() as u32).to_be_bytes());
+    sample.extend_from_slice(&nal_b);
+
+    mux.write_packet(&packet(v, &sample, true)).unwrap();
+    mux.write_trailer().unwrap();
+
+    let bytes = shared.snapshot();
+    // The length prefix (`00 00 00 03`/`00 00 00 02`) must not appear
+    // anywhere in the output; Annex B start codes must, once per NAL unit.
+    let mut expected_annexb = Vec::new();
+    expected_annexb.extend_from_slice(&[0, 0, 0, 1]);
+    expected_annexb.extend_from_slice(&nal_a);
+    expected_annexb.extend_from_slice(&[0, 0, 0, 1]);
+    expected_annexb.extend_from_slice(&nal_b);
+    let windows_match = bytes
+        .windows(expected_annexb.len())
+        .any(|w| w == expected_annexb.as_slice());
+    assert!(
+        windows_match,
+        "expected the Annex-B-reframed sample to appear verbatim in the muxed bytes"
+    );
+
+    // And the chunk's declared length must match the *converted* payload
+    // (12 bytes: two 4-byte start codes plus 3+2 bytes of NAL data), not the
+    // original 10-byte length-prefixed sample.
+    let mut demux = open(bytes);
+    let p = demux.read_packet().unwrap();
+    assert_eq!(p.len, expected_annexb.len());
+}
+
+/// Finding 19 (`planning/CONFORMANCE-FINDINGS.md`): measured directly
+/// against the reference (`ffmpeg -i <mpegts-with-adts-aac> -c copy -f
+/// avi`, which refuses at `write_header` with "ADTS is only supported with
+/// codec tag 0x1610" and a nonzero exit) — AAC with no extradata (the shape
+/// MPEG-TS's own ADTS framing produces, since ADTS carries its config
+/// per-frame rather than out of band) has no legal AVI representation.
+#[test]
+fn adts_framed_aac_with_no_extradata_is_rejected() {
+    let sink = MemorySink::new();
+    let mut mux = vaco_mux_avi::AviMuxer::new(Box::new(sink), &FormatOptions::default()).unwrap();
+    let mut p = CodecParameters::audio();
+    p.codec_id = Some(CodecId::Aac);
+    if let Some(a) = &mut p.audio {
+        a.sample_rate = 44_100;
+    }
+    // No extradata set at all — exactly what an ADTS-framed source gives.
+    assert!(mux.add_stream(&p).is_err());
+}
+
+/// The same codec with a raw `AudioSpecificConfig` in `extradata` (what an
+/// MP4/`esds` source gives) is the case this crate does support.
+#[test]
+fn raw_aac_with_extradata_is_accepted() {
+    let sink = MemorySink::new();
+    let mut mux = vaco_mux_avi::AviMuxer::new(Box::new(sink), &FormatOptions::default()).unwrap();
+    let mut p = CodecParameters::audio();
+    p.codec_id = Some(CodecId::Aac);
+    p.extradata = Some(vec![0x12, 0x10]); // a minimal AudioSpecificConfig
+    if let Some(a) = &mut p.audio {
+        a.sample_rate = 44_100;
+    }
+    assert!(mux.add_stream(&p).is_ok());
+}
+
 #[test]
 fn a_codec_with_no_avi_mapping_is_rejected_not_silently_wrong() {
     let sink = MemorySink::new();

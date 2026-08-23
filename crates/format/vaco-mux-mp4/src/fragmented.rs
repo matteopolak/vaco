@@ -142,7 +142,7 @@ pub fn write_header(
         *state = FragmentedState::new(tracks.len());
     }
     let flags = opts.effective_flags();
-    let mut header = crate::brand::file_type_box(opts.brand);
+    let mut header = crate::brand::file_type_box(opts.brand, tracks);
     header.extend_from_slice(&build_initial_moov(tracks, opts, movie_timescale));
     state.header_len = u64::try_from(header.len()).unwrap_or(u64::MAX);
     // `header` is written immediately either way — only the *fragment

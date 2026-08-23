@@ -364,7 +364,7 @@ impl Muxer for MpegTsMuxer {
 
     fn write_packet(&mut self, packet: &Packet) -> Result<()> {
         let index = packet.stream_index as usize;
-        let (pid, codec_id, media_type, stream_type) = {
+        let (pid, codec_id, media_type, stream_type, is_first_for_stream) = {
             let stream = self
                 .streams
                 .get(index)
@@ -374,9 +374,25 @@ impl Muxer for MpegTsMuxer {
                 stream.codec_id,
                 stream.media_type,
                 stream.stream_type,
+                !stream.first_packet_written,
             )
         };
         let _ = stream_type;
+
+        // Finding 19 (`planning/CONFORMANCE-FINDINGS.md`): measured
+        // directly (`ffmpeg -i <avi-with-no-pts> -c copy -f mpegts`) —
+        // the reference refuses with "first pts and dts value must be set"
+        // and a nonzero exit rather than silently reusing the previous
+        // packet's clock. A source with no native per-packet timestamp
+        // field (AVI's `dwSampleSize`-derived timing has no PTS/CTS offset
+        // to give) produces exactly this on its first packet per stream;
+        // writing an MPEG-TS PES header with a fabricated PTS/DTS instead of
+        // refusing is the "silent success" shape finding 6 already named.
+        if is_first_for_stream && packet.pts.ticks().is_none() {
+            return Err(Error::InvalidData(
+                "mpegts: first pts and dts value must be set",
+            ));
+        }
 
         let clock = packet
             .dts
@@ -616,6 +632,44 @@ mod tests {
         let bytes = mirror.take();
         // The Annex B start code must appear somewhere in the output stream.
         assert!(bytes.windows(4).any(|w| w == [0, 0, 0, 1]));
+    }
+
+    /// Finding 19 (`planning/CONFORMANCE-FINDINGS.md`): measured directly
+    /// against the reference (`ffmpeg -i <no-pts-source> -c copy -f
+    /// mpegts`, which refuses with "first pts and dts value must be set"
+    /// and a nonzero exit) — a stream's first packet with no PTS at all
+    /// (the shape an AVI source produces, since AVI has no native
+    /// per-packet PTS field) must be refused, not silently muxed with a
+    /// fabricated clock value reused from the previous packet.
+    #[test]
+    fn a_streams_first_packet_with_no_pts_is_refused() {
+        let sink = SharedDynBuf::new();
+        let mut mux = MpegTsMuxer::new(Box::new(sink));
+        let v = mux.add_stream(&video_params(CodecId::Mpeg2video)).unwrap();
+        mux.init().unwrap();
+        mux.write_header().unwrap();
+        let mut pkt = packet(v, 0, true, &[0u8; 8]);
+        pkt.pts = Timestamp::NONE;
+        pkt.dts = Timestamp::NONE;
+        assert!(mux.write_packet(&pkt).is_err());
+    }
+
+    /// The same stream's *second* packet is not held to the same standard
+    /// here — only the measured "first pts and dts value must be set"
+    /// case is enforced, since that is the one behaviour actually measured
+    /// against the reference.
+    #[test]
+    fn a_later_packet_with_no_pts_is_still_accepted() {
+        let sink = SharedDynBuf::new();
+        let mut mux = MpegTsMuxer::new(Box::new(sink));
+        let v = mux.add_stream(&video_params(CodecId::Mpeg2video)).unwrap();
+        mux.init().unwrap();
+        mux.write_header().unwrap();
+        mux.write_packet(&packet(v, 0, true, &[0u8; 8])).unwrap();
+        let mut pkt = packet(v, 0, false, &[1u8; 8]);
+        pkt.pts = Timestamp::NONE;
+        pkt.dts = Timestamp::NONE;
+        assert!(mux.write_packet(&pkt).is_ok());
     }
 
     #[test]

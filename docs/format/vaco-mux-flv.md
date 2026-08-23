@@ -38,20 +38,41 @@ A codec whose `CodecParameters.extradata` is set gets a sequence-header tag
 written at timestamp `0`, immediately after `onMetaData` and before any real
 frame — the order every FLV reader relies on.
 
-### `onMetaData` and the one thing that gets patched
+### `onMetaData` and the two things that get patched
 
-`onMetaData` is written at `write_header` time with `duration` set to `0.0`
-and `videocodecid`/`audiocodecid` filled from the framing decided in
-`add_stream`. The `duration` value's absolute byte position is computed
-during encoding (an AMF0 `Number` is a fixed 8 bytes with no length prefix,
-so this is safe) and, if the sink can seek, `write_trailer` seeks back and
-overwrites it with the highest timestamp actually written. On a non-seekable
-sink, `duration` stays `0.0` — genuinely unknown at header-write time for a
-live/streamed encode, the same limitation real FLV encoders have.
+`onMetaData` is written at `write_header` time with `duration` and
+`filesize` set to `0.0` placeholders and everything else filled from the
+`OnMetaFields` each stream's `add_stream` call captured (see below) plus
+`videocodecid`/`audiocodecid` from the framing decided there too. Both
+placeholders' absolute byte positions are found by searching the encoded tag
+body for the field's own key-plus-type-marker bytes (`number_value_offset`)
+rather than computed from a fixed layout — necessary once the field set
+varies with which streams exist (video-only vs. video+audio write different
+keys). If the sink can seek, `write_trailer` seeks back and overwrites
+`duration` with the highest timestamp actually written and `filesize` with
+the file's true final byte count (nothing is written after that patch, so
+the position captured just before it already *is* the final size). On a
+non-seekable sink, both stay `0.0` — genuinely unknown at header-write time
+for a live/streamed encode, the same limitation real FLV encoders have.
 
-`width`/`height`/`framerate` are **not** written to `onMetaData` in this
-version — `CodecParameters` carries them, but nothing here forwards them yet.
-See *How to change it*.
+**`width`/`height`/`videodatarate`/`framerate`/`audiodatarate`/
+`audiosamplerate`/`audiosamplesize`/`stereo` are now written too** — finding
+18 (`planning/CONFORMANCE-FINDINGS.md`): `add_stream` used to discard
+`CodecParameters` entirely after pulling `extradata` out of it, so
+`onMetaData` had nowhere to forward these from even though the caller's
+stream carried them all along. `OnMetaFields` (captured per-stream, in
+`add_stream`) is what survives instead. `videodatarate`/`audiodatarate` are
+written only when `CodecParameters::bit_rate` states one — omitted rather
+than fabricated when the source did not say, which is the honest reading of
+finding 25's "field-presence, not field-value" distinction applied here.
+Order and key set are measured, not guessed: `-c copy -f flv` on an H.264(+
+AAC) MP4 source writes `duration width height videodatarate framerate
+videocodecid`, then (audio streams only) `audiodatarate audiosamplerate
+audiosamplesize stereo audiocodecid`, then `filesize` — `major_brand`/
+`minor_version`/`compatible_brands`/`encoder` also appear in that
+measurement but are MP4-`ftyp`-sourced format tags and an encoder identity
+string this crate has no channel for (finding 22), so they are left out
+rather than guessed at.
 
 ---
 
@@ -60,18 +81,38 @@ See *How to change it*.
 - **Exercised** (`tests/roundtrip.rs`): muxing an H.264+AAC pair and demuxing
   the result with `vaco-demux-flv`, checking stream discovery, extradata,
   packet order, and PTS/DTS/composition-time round-tripping through both
-  crates' independent understanding of the byte layout.
+  crates' independent understanding of the byte layout;
+  `on_meta_data_carries_the_streams_own_video_and_audio_properties` decodes
+  the raw `onMetaData` AMF0 body directly (via `vaco_demux_flv::amf::decode`)
+  and checks each field against the `CodecParameters` it should have come
+  from, per finding 18; `a_packet_with_no_pts_is_refused` covers finding 19.
 - **Not exercised**: Enhanced RTMP video/audio muxing (`HEVC`/`AV1`/`VP9`/
   `Opus`/`FLAC` framing is implemented per the spec but has no integration
-  test decoding it back), the seekable-sink `duration` patch path, PCM/MP3
-  audio.
+  test decoding it back), the seekable-sink `filesize`/`duration` patch path
+  end to end against a real reader, PCM/MP3 audio. No fuzz target exists yet
+  for this crate — `write_packet` takes an arbitrary payload but does no
+  byte-level parsing of it (unlike `vaco-mux-avi`/`vaco-mux-mpegts`'s
+  length-prefix-to-Annex-B conversion), so D6's "parses untrusted input"
+  trigger has not fired for it so far.
+
+### A packet with no PTS is refused
+
+Finding 19 (`planning/CONFORMANCE-FINDINGS.md`), measured directly
+(`ffmpeg -i <avi-source> -c copy -f flv` refuses with "Packet is missing
+PTS" and a nonzero exit; AVI is the concrete source, since it has no native
+per-packet PTS field): `write_packet` used to default a missing `pts` to
+`0` silently. It now refuses the packet outright — unlike
+`vaco-mux-mpegts`'s version of this same check, this one is not limited to
+a stream's first packet, since the reference's own message carries no
+"first" qualifier.
 
 ## How to change it
 
-- **Write `width`/`height`/`framerate` into `onMetaData`**: extend
-  `write_metadata_tag` the same way `duration` is handled — these do *not*
-  need a patch-after-the-fact, since a video stream's dimensions are known at
-  `add_stream` time, before `write_header` runs.
+- **Add another `onMetaData` key**: extend `OnMetaFields` (captured in
+  `add_stream`, from the stream's own `CodecParameters`) and
+  `write_metadata_tag`'s `pairs.push` sequence, in the position the
+  reference's own measured order puts it — see *`onMetaData` and the two
+  things that get patched* above.
 - **Add a codec**: extend `framing_for`. An Enhanced RTMP entry only needs a
   FourCC; a legacy entry needs the right nibble value and, for AAC
   specifically, `AACPacketType` handling (`write_packet`'s `LegacyAudio`
@@ -92,4 +133,5 @@ None beyond `vaco_format_core::FormatOptions`, accepted but currently unused.
 `vaco-format-core` (`Muxer`, `MuxerDesc`), `vaco-codec-core`
 (`CodecParameters`, `CodecId`), `vaco-demux-flv` (`AmfValue` — the one
 cross-sibling dependency in this set of four crates, and load-bearing: it is
-what keeps AMF0 a single definition rather than two).
+what keeps AMF0 a single definition rather than two). Dev-only:
+`vaco-chlayout` (`ChannelLayout::STEREO`, for the `onMetaData` test above).

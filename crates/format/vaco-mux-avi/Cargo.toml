@@ -15,6 +15,7 @@ vaco-limits = { path = "../../core/vaco-limits" }
 vaco-packet = { path = "../../model/vaco-packet" }
 vaco-format-core = { path = "../../format/vaco-format-core" }
 vaco-format-riff = { path = "../../format/vaco-format-riff" }
+vaco-format-nalu = { path = "../../format/vaco-format-nalu" }
 vaco-codec-core = { path = "../../signal/vaco-codec-core" }
 
 [dev-dependencies]

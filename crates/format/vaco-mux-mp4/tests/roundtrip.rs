@@ -12,7 +12,7 @@
 )]
 
 use vaco_codec_core::{CodecId, CodecParameters, VideoParameters};
-use vaco_core::{MediaType, Rational, Timestamp};
+use vaco_core::{Duration, MediaType, Rational, Timestamp};
 use vaco_format_core::discovery::NoParsers;
 use vaco_format_core::{Demuxer, FormatOptions, Muxer};
 use vaco_io::SharedDynBuf;
@@ -133,6 +133,52 @@ fn a_progressive_file_round_trips_every_sample() {
     assert_eq!(count, 20);
 }
 
+/// Finding 20 (`planning/CONFORMANCE-FINDINGS.md`): `Packet::duration` is
+/// always microseconds — `vaco_packet::Packet::rescale_ts`'s own doc comment
+/// says so, and only rescales `pts`/`dts` — so `write_packet` must convert it
+/// into the track's own timescale before it reaches `stts`. Copying the raw
+/// microsecond count as if it were already a tick count made a real,
+/// measured remux report a ~1600x wrong duration (a 1-second, 25fps clip
+/// came back as 1601 seconds).
+#[test]
+fn track_duration_converts_packet_duration_from_microseconds_to_track_ticks() {
+    let sink = SharedDynBuf::with_limits(Limits::permissive());
+    let mut mux = MovMuxer::new(Box::new(sink.clone()) as Box<dyn MediaSink>).unwrap();
+    // `h264_params()` declares a 30/1 frame rate, so this track's timescale
+    // (and therefore `mdhd`/`stts`'s units) is 30.
+    let idx = mux.add_stream(&h264_params()).unwrap();
+    mux.init().unwrap();
+    mux.write_header().unwrap();
+
+    // Three samples one tick apart in dts (already in the track's own time
+    // base, per this crate's contract), each carrying an explicit duration
+    // of exactly one second — a value nothing about the dts spacing would
+    // produce on its own, so the assertion below only holds if `duration` is
+    // actually rescaled rather than copied verbatim.
+    for i in 0..3i64 {
+        let payload = nal_payload(&[0x65, u8::try_from(i).unwrap()]);
+        let mut p = packet(idx, i, i == 0, &payload);
+        p.duration = Duration::from_micros(1_000_000);
+        mux.write_packet(&p).unwrap();
+    }
+    mux.write_trailer().unwrap();
+
+    let bytes = sink.snapshot();
+    let src: Box<dyn MediaSource> = Box::new(MemorySource::new(bytes));
+    let demux = vaco_demux_mp4::Mp4Demuxer::open(
+        src,
+        &NoParsers,
+        &FormatOptions::default(),
+        vaco_demux_mp4::Mp4Options::default(),
+    )
+    .unwrap();
+    let duration_ts = demux.streams()[0].duration_ts.unwrap();
+    // Two inter-sample dts deltas of 1 tick each, plus the final sample's
+    // one-second duration converted to this track's timescale of 30 (i.e.
+    // 30 ticks, not the raw `1_000_000` microsecond count).
+    assert_eq!(duration_ts, 2 + 30);
+}
+
 #[test]
 fn faststart_puts_moov_before_mdat() {
     let sink = SharedDynBuf::with_limits(Limits::permissive());
@@ -176,8 +222,17 @@ fn a_non_faststart_file_puts_mdat_before_moov() {
     write_video_file(&mut mux, 5);
     let bytes = sink.snapshot();
     let ftyp_len = box_len(&bytes, 0);
-    let second_kind = bytes.get(ftyp_len + 4..ftyp_len + 8).unwrap();
-    assert_eq!(second_kind, b"mdat");
+    // Finding 14: the reference always puts an 8-byte `free`/`wide`
+    // placeholder box between `ftyp` and `mdat` in streaming mode (measured:
+    // `-c copy -f mp4` on an H.264 source, no `-movflags faststart`), so
+    // `mdat` is the *third* box here, not the second.
+    let placeholder_kind = bytes.get(ftyp_len + 4..ftyp_len + 8).unwrap();
+    assert_eq!(placeholder_kind, b"free");
+    let placeholder_len = box_len(&bytes, ftyp_len);
+    let third_kind = bytes
+        .get(ftyp_len + placeholder_len + 4..ftyp_len + placeholder_len + 8)
+        .unwrap();
+    assert_eq!(third_kind, b"mdat");
 }
 
 #[test]
@@ -418,7 +473,11 @@ fn every_registered_brand_writes_its_measured_ftyp_bytes() {
         (Brand::ThreeG2, b"3g2a", &[b"3g2a", b"isom", b"iso2"]),
     ];
     for (brand, major, compatible) in cases {
-        let bytes = vaco_mux_mp4::brand::file_type_box(*brand);
+        // No tracks at all, so finding 14's conditional `avc1` entry (added
+        // only when an H.264 video track is present — see
+        // `vaco_mux_mp4::brand`'s own tests) never fires here; this checks
+        // the static, codec-independent part of each brand's table.
+        let bytes = vaco_mux_mp4::brand::file_type_box(*brand, &[]);
         assert_eq!(bytes.get(4..8).unwrap(), b"ftyp");
         assert_eq!(bytes.get(8..12).unwrap(), *major, "{brand:?} major brand");
         let mut at = 16usize; // past major_brand + minor_version

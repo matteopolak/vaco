@@ -43,7 +43,7 @@ use vaco_format_isom::writer;
 use vaco_io::IoWriter;
 
 use crate::meta::build_udta;
-use crate::options::MuxOptions;
+use crate::options::{Brand, MuxOptions};
 use crate::track::TrackState;
 
 /// Bytes of the `largesize` `mdat` header this crate always writes:
@@ -95,8 +95,11 @@ impl Default for ProgressiveState {
     }
 }
 
-/// `ftyp`, and either the real `mdat` header (streaming) or nothing yet
-/// (`faststart`, where `mdat`'s bytes are buffered until [`finish`]).
+/// `ftyp`, then either a `free`/`wide` placeholder box followed by the real
+/// `mdat` header (streaming), or nothing yet (`faststart`, where `mdat`'s
+/// bytes are buffered until [`finish`] and no placeholder is written at all —
+/// measured: `-movflags faststart` puts `moov` directly after `ftyp`, with no
+/// intervening box).
 ///
 /// # Errors
 /// Propagates I/O failure.
@@ -104,17 +107,37 @@ pub fn write_header(
     out: &mut IoWriter,
     opts: &MuxOptions,
     state: &mut ProgressiveState,
+    tracks: &[TrackState],
 ) -> Result<()> {
-    out.write(&crate::brand::file_type_box(opts.brand))?;
+    out.write(&crate::brand::file_type_box(opts.brand, tracks))?;
     if opts.movflags.contains(crate::options::MovFlags::FASTSTART) {
         state.mdat_buf = Some(Vec::new());
     } else {
+        out.write(&placeholder_box(opts.brand))?;
         out.write(&1u32.to_be_bytes())?; // size == 1: largesize follows
         out.write(b"mdat")?;
         state.mdat_size_field_at = out.pos();
         out.write(&0u64.to_be_bytes())?; // patched in `finish`
     }
     Ok(())
+}
+
+/// The 8-byte empty box the reference writes between `ftyp` and `mdat` in
+/// streaming (non-`faststart`) mode: `wide` for `-f mov`, `free` for every
+/// other brand this crate writes progressively (measured across `mp4`,
+/// `ipod`, `f4v`, `psp`, `3gp`, `3g2` — all `free`; `mov` alone is `wide`).
+/// Real players ignore an unknown box here regardless of name, but the byte
+/// layout is part of what `remux-bitexact` compares.
+fn placeholder_box(brand: Brand) -> [u8; 8] {
+    let kind: &[u8; 4] = if matches!(brand, Brand::Mov) {
+        b"wide"
+    } else {
+        b"free"
+    };
+    let mut b = [0u8; 8];
+    b[..4].copy_from_slice(&8u32.to_be_bytes());
+    b[4..].copy_from_slice(kind);
+    b
 }
 
 /// Write one sample's payload, recording its offset and updating chunk
@@ -405,4 +428,32 @@ fn rescale(value: u64, from: u32, to: u32) -> u64 {
     let scaled = u128::from(value).saturating_mul(u128::from(to));
     let out = scaled / u128::from(from);
     u64::try_from(out).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Finding 14: the reference writes an 8-byte `free` box between `ftyp`
+    /// and `mdat` for every brand this crate mux-writes progressively except
+    /// `mov`, which gets `wide` instead (measured with `-c copy`, no
+    /// `-movflags faststart`, across `mp4`/`ipod`/`f4v`/`psp`/`3gp`/`3g2`/`mov`).
+    #[test]
+    fn mov_gets_wide_every_other_brand_gets_free() {
+        assert_eq!(&placeholder_box(Brand::Mov), b"\0\0\0\x08wide");
+        for brand in [
+            Brand::Mp4,
+            Brand::Ipod,
+            Brand::F4v,
+            Brand::Psp,
+            Brand::ThreeGp,
+            Brand::ThreeG2,
+        ] {
+            assert_eq!(
+                &placeholder_box(brand),
+                b"\0\0\0\x08free",
+                "brand {brand:?} should get a free placeholder"
+            );
+        }
+    }
 }

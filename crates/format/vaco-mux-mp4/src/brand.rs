@@ -27,13 +27,14 @@
 //! crate — see the crate-level *What is deferred* note. [`MUXER_AVIF`] is not
 //! registered as a working muxer for this reason.
 
-use vaco_core::Result;
+use vaco_core::{MediaType, Result};
 use vaco_format_isom::fourcc::FourCc;
 use vaco_format_isom::writer;
 use vaco_io::MediaSink;
 
 use crate::mux::MovMuxer;
 use crate::options::{Brand, MuxOptions};
+use crate::track::TrackState;
 use vaco_codec_core::CodecId;
 use vaco_format_core::{Muxer, MuxerDesc};
 
@@ -131,11 +132,57 @@ impl Brand {
     }
 }
 
-/// `ftyp`, for whichever brand [`MuxOptions::brand`] names.
+/// Whether `brand`'s compatible-brand list gains an `avc1` entry when the
+/// file carries an H.264 video track — measured with `-fflags +bitexact -i
+/// h264.mp4 -c copy -f <brand>`: an AAC-only or HEVC `-c copy` into `mp4`
+/// writes `isom iso2 mp41` with no `avc1`, while the identical command on an
+/// H.264 source writes `isom iso2 avc1 mp41`, and `ipod`/`psp`/`3gp`/`3g2`
+/// all reproduce the same pattern. `mov` and `ismv` do not — an H.264 `-c
+/// copy -f mov` stays `qt  ` only — so they are deliberately excluded here
+/// rather than guessed into the same bucket. `f4v`'s compatible list already
+/// hardcodes `avc1` unconditionally (`F4V` above); this only ever *adds* a
+/// missing entry, so `f4v` is unaffected either way.
+const fn brand_conditions_avc1_on_h264(brand: Brand) -> bool {
+    matches!(
+        brand,
+        Brand::Mp4 | Brand::Ipod | Brand::Psp | Brand::ThreeGp | Brand::ThreeG2
+    )
+}
+
+/// Whether any track in `tracks` is H.264 video — what
+/// [`brand_conditions_avc1_on_h264`]'s measurement keys off.
+fn has_h264_video(tracks: &[TrackState]) -> bool {
+    tracks
+        .iter()
+        .any(|t| t.media == MediaType::Video && t.params.codec_id == Some(CodecId::H264))
+}
+
+/// `ftyp`, for whichever brand [`MuxOptions::brand`] names, with `avc1`
+/// folded into the compatible-brand list where [`brand_conditions_avc1_on_h264`]
+/// says the reference does that dynamically rather than unconditionally.
+///
+/// Where it lands matters for byte-exactness, not just presence: measured on
+/// `mp4` (whose static list ends in `mp41`), the reference writes `isom iso2
+/// avc1 mp41` — `avc1` inserted just *before* `mp41`, not appended after it.
+/// `ipod`/`psp`/`3gp`/`3g2`'s static lists have no `mp41` entry at all, so for
+/// them "insert before `mp41`" and "append at the end" are the same
+/// operation and both are consistent with what was measured on each.
 #[must_use]
-pub fn file_type_box(brand: Brand) -> Vec<u8> {
+pub fn file_type_box(brand: Brand, tracks: &[TrackState]) -> Vec<u8> {
     let s = brand.spec();
-    writer::file_type(b"ftyp", s.major, s.minor_version, s.compatible)
+    let avc1 = fcc(*b"avc1");
+    if brand_conditions_avc1_on_h264(brand) && has_h264_video(tracks) && !s.compatible.contains(&avc1)
+    {
+        let mp41 = fcc(*b"mp41");
+        let mut compatible = s.compatible.to_vec();
+        match compatible.iter().position(|&c| c == mp41) {
+            Some(i) => compatible.insert(i, avc1),
+            None => compatible.push(avc1),
+        }
+        writer::file_type(b"ftyp", s.major, s.minor_version, &compatible)
+    } else {
+        writer::file_type(b"ftyp", s.major, s.minor_version, s.compatible)
+    }
 }
 
 fn open_with(brand: Brand) -> impl Fn(Box<dyn MediaSink>) -> Result<Box<dyn Muxer>> {
@@ -269,4 +316,63 @@ fn unsupported_avif(_sink: Box<dyn MediaSink>) -> Result<Box<dyn Muxer>> {
     Err(vaco_core::Error::Unsupported(
         "mp4: avif is a HEIF item structure, not a moov/trak track mux; not implemented",
     ))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test code")]
+mod tests {
+    use super::*;
+    use crate::entry::BuiltEntry;
+    use vaco_codec_core::{CodecParameters, VideoParameters};
+
+    fn video_track(codec: CodecId) -> TrackState {
+        let params = CodecParameters {
+            media_type: Some(MediaType::Video),
+            codec_id: Some(codec),
+            video: Some(VideoParameters::default()),
+            ..CodecParameters::default()
+        };
+        TrackState::new(
+            1,
+            25,
+            BuiltEntry {
+                bytes: vec![0u8; 4],
+                media: MediaType::Video,
+            },
+            params,
+        )
+    }
+
+    /// Finding 14: measured on `-c copy -f mp4` with an H.264 source, the
+    /// reference's compatible-brand list gains `avc1` on top of this crate's
+    /// static `isom iso2 mp41` table.
+    #[test]
+    fn mp4_gains_avc1_when_the_video_track_is_h264() {
+        let tracks = [video_track(CodecId::H264)];
+        let ftyp = file_type_box(Brand::Mp4, &tracks);
+        // Measured byte order: `isom iso2 avc1 mp41` — `avc1` inserted right
+        // before `mp41`, not appended after it.
+        assert_eq!(ftyp.get(16..).unwrap(), b"isomiso2avc1mp41");
+    }
+
+    /// Measured against the same command with an AAC-only or HEVC source:
+    /// no `avc1` appears — this is conditional on the codec, not a brand-wide
+    /// addition.
+    #[test]
+    fn mp4_has_no_avc1_when_the_video_track_is_not_h264() {
+        let tracks = [video_track(CodecId::Hevc)];
+        let ftyp = file_type_box(Brand::Mp4, &tracks);
+        let text = String::from_utf8_lossy(&ftyp);
+        assert!(!text.contains("avc1"), "unexpected avc1 in {text:?}");
+    }
+
+    /// Measured: an identical H.264 `-c copy -f mov` stays `qt  ` only —
+    /// `mov` does not pick up the same conditional `avc1` entry `mp4` does.
+    #[test]
+    fn mov_never_gains_avc1_even_with_an_h264_track() {
+        let tracks = [video_track(CodecId::H264)];
+        let ftyp = file_type_box(Brand::Mov, &tracks);
+        let text = String::from_utf8_lossy(&ftyp);
+        assert!(!text.contains("avc1"), "unexpected avc1 in {text:?}");
+    }
 }

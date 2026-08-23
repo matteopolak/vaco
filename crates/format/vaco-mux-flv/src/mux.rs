@@ -52,6 +52,39 @@ enum Framing {
 struct StreamOut {
     is_video: bool,
     framing: Framing,
+    /// What `write_metadata_tag` needs from the stream's own
+    /// `CodecParameters`, which `add_stream` used to discard entirely after
+    /// pulling out `extradata` — finding 18
+    /// (`planning/CONFORMANCE-FINDINGS.md`): `onMetaData` carried `duration`
+    /// and (conditionally) `videocodecid`/`audiocodecid` and nothing else,
+    /// because nothing forwarded the rest this far.
+    onmeta: OnMetaFields,
+}
+
+/// The subset of a stream's `CodecParameters` that survives into
+/// `onMetaData`, captured at [`Muxer::add_stream`] time since nothing else
+/// keeps the original value around.
+#[derive(Debug, Clone, Copy, Default)]
+struct OnMetaFields {
+    width: u32,
+    height: u32,
+    /// `0.0` when the source declared no usable frame rate — omitted from
+    /// `onMetaData` in that case rather than writing a fabricated `0`.
+    frame_rate: f64,
+    sample_rate: u32,
+    stereo: bool,
+    /// `onMetaData`'s `audiosamplesize`: the container's stated bit depth
+    /// when it has one, else `16` — measured on AAC (whose own
+    /// `bits_per_coded_sample` is `0`, not absent, per
+    /// `vaco_codec_core::AudioParameters`'s own doc comment) writing `16`,
+    /// which is the value every FLV reader assumes for "not literally
+    /// 8-bit PCM" anyway.
+    audio_sample_size: u8,
+    /// `Some` kbit/s when `CodecParameters::bit_rate` states one — this is
+    /// the source's own declared rate, not a byte-count estimate this crate
+    /// computes itself, so it is honestly omitted rather than guessed at
+    /// when the source did not state one.
+    kbit_rate: Option<f64>,
 }
 
 /// The FLV muxer.
@@ -66,7 +99,27 @@ pub struct FlvMuxer {
     /// Absolute position of `onMetaData`'s `duration` value, if written and
     /// the sink is seekable — patched at [`FlvMuxer::write_trailer`].
     duration_field_at: Option<u64>,
+    /// Absolute position of `onMetaData`'s `filesize` value, mirroring
+    /// `duration_field_at` — finding 18: the reference always writes this,
+    /// patched to the true final byte count once the whole file exists.
+    filesize_field_at: Option<u64>,
     max_timestamp_ms: i64,
+}
+
+/// The byte offset, within an already-encoded `onMetaData` tag body, of the
+/// raw 8-byte `f64` backing the `Number` value for `key` — found by
+/// searching for the field's own encoded key-plus-type-marker bytes rather
+/// than computed from a fixed layout, since `write_metadata_tag` emits a
+/// different set of keys depending on which streams exist.
+fn number_value_offset(body: &[u8], key: &str) -> Option<usize> {
+    let key_len = u16::try_from(key.len()).ok()?;
+    let mut needle = key_len.to_be_bytes().to_vec();
+    needle.extend_from_slice(key.as_bytes());
+    needle.push(0x00); // AMF0 Number type marker
+    let at = body
+        .windows(needle.len())
+        .position(|w| w == needle.as_slice())?;
+    Some(at + needle.len())
 }
 
 impl FlvMuxer {
@@ -83,6 +136,7 @@ impl FlvMuxer {
             header_written: false,
             trailer_written: false,
             duration_field_at: None,
+            filesize_field_at: None,
             max_timestamp_ms: 0,
         })
     }
@@ -161,6 +215,22 @@ impl Muxer for FlvMuxer {
         let framing = framing_for(is_video, codec_id)
             .ok_or(Error::Unsupported("flv: codec has no FLV framing"))?;
 
+        let mut onmeta = OnMetaFields::default();
+        if is_video {
+            if let Some(v) = &params.video {
+                onmeta.width = v.width;
+                onmeta.height = v.height;
+                if v.frame_rate.is_defined() && !v.frame_rate.is_zero() && !v.frame_rate.is_infinite() {
+                    onmeta.frame_rate = f64::from(v.frame_rate.num) / f64::from(v.frame_rate.den);
+                }
+            }
+        } else if let Some(a) = &params.audio {
+            onmeta.sample_rate = a.sample_rate;
+            onmeta.stereo = a.layout.as_ref().is_some_and(|l| l.channels >= 2);
+            onmeta.audio_sample_size = a.bits_per_coded_sample.filter(|&b| b > 0).unwrap_or(16);
+        }
+        onmeta.kbit_rate = params.bit_rate.map(|b| b as f64 / 1000.0);
+
         let index = u32::try_from(self.streams.len())
             .map_err(|_| Error::Unsupported("flv: too many streams"))?;
         if is_video {
@@ -168,8 +238,14 @@ impl Muxer for FlvMuxer {
         } else {
             self.audio_index = Some(self.streams.len());
         }
-        self.streams
-            .push((StreamOut { is_video, framing }, params.extradata.clone()));
+        self.streams.push((
+            StreamOut {
+                is_video,
+                framing,
+                onmeta,
+            },
+            params.extradata.clone(),
+        ));
         Ok(index)
     }
 
@@ -218,7 +294,16 @@ impl Muxer for FlvMuxer {
             .get(idx)
             .map(|(s, _)| *s)
             .ok_or(Error::InvalidData("flv: packet names an unknown stream"))?;
-        let pts_ms = packet.pts.ticks().unwrap_or(0);
+        // Finding 19 (`planning/CONFORMANCE-FINDINGS.md`): measured
+        // directly (`ffmpeg -i <avi-with-no-pts> -c copy -f flv`, which
+        // refuses with "Packet is missing PTS" and a nonzero exit) — a
+        // packet with no PTS at all must be refused, not silently written
+        // with a fabricated `0`. AVI is the concrete source this bites:
+        // its own per-packet model has no PTS field to give.
+        let pts_ms = packet
+            .pts
+            .ticks()
+            .ok_or(Error::InvalidData("flv: packet is missing PTS"))?;
         let dts_ms = packet.dts.ticks().unwrap_or(pts_ms);
         self.max_timestamp_ms = self.max_timestamp_ms.max(pts_ms).max(dts_ms);
 
@@ -289,13 +374,20 @@ impl Muxer for FlvMuxer {
         }
         self.trailer_written = true;
 
-        if self.out.is_seekable()
-            && let Some(at) = self.duration_field_at
-        {
+        if self.out.is_seekable() {
             let end = self.out.pos();
-            self.out.seek(at)?;
-            let seconds = self.max_timestamp_ms as f64 / 1000.0;
-            self.out.write(&seconds.to_be_bytes())?;
+            if let Some(at) = self.duration_field_at {
+                self.out.seek(at)?;
+                let seconds = self.max_timestamp_ms as f64 / 1000.0;
+                self.out.write(&seconds.to_be_bytes())?;
+            }
+            // `filesize`: nothing is written after this patch, so `end` —
+            // the position before either seek-back — is already the file's
+            // true final byte count.
+            if let Some(at) = self.filesize_field_at {
+                self.out.seek(at)?;
+                self.out.write(&(end as f64).to_be_bytes())?;
+            }
             self.out.seek(end)?;
         }
 
@@ -306,19 +398,36 @@ impl Muxer for FlvMuxer {
 impl FlvMuxer {
     fn write_metadata_tag(&mut self) -> Result<()> {
         let mut pairs = Vec::new();
-        // `duration` is written first and its value's position recorded, so
-        // it can be patched byte-for-byte later without re-encoding the
-        // whole tag (an AMF0 `Number` is a fixed 8 bytes, so this is safe).
+        // `duration` and `filesize` are both patched in place once their
+        // true values are known at `write_trailer` — everything else here is
+        // written once and never touched again.
         pairs.push(("duration".to_owned(), AmfValue::Number(0.0)));
-        // Width/height are not threaded through `CodecParameters` back into
-        // this muxer in this version (the caller's video stream carries
-        // them, but nothing here currently forwards them into
-        // `onMetaData` — see `docs/format/vaco-mux-flv.md`). `videocodecid`/
-        // `audiocodecid` are written since they come straight from the
-        // framing decided in `add_stream`.
+
+        // Finding 18 (`planning/CONFORMANCE-FINDINGS.md`): `onMetaData` used
+        // to carry `duration` and (conditionally) `videocodecid`/
+        // `audiocodecid` alone. Measured order for the rest, `-c copy -f
+        // flv` on an H.264(+AAC) MP4 source: `width height videodatarate
+        // framerate videocodecid`, then (if there is an audio stream)
+        // `audiodatarate audiosamplerate audiosamplesize stereo
+        // audiocodecid`, then `filesize`. `major_brand`/`minor_version`/
+        // `compatible_brands`/`encoder` also appear in that measurement but
+        // are MP4-`ftyp`-sourced format tags and an encoder identity string
+        // this crate has no channel for (see finding 22) — left out rather
+        // than guessed at.
         if let Some(i) = self.video_index
             && let Some((s, _)) = self.streams.get(i)
         {
+            pairs.push(("width".to_owned(), AmfValue::Number(f64::from(s.onmeta.width))));
+            pairs.push((
+                "height".to_owned(),
+                AmfValue::Number(f64::from(s.onmeta.height)),
+            ));
+            if let Some(kbps) = s.onmeta.kbit_rate {
+                pairs.push(("videodatarate".to_owned(), AmfValue::Number(kbps)));
+            }
+            if s.onmeta.frame_rate > 0.0 {
+                pairs.push(("framerate".to_owned(), AmfValue::Number(s.onmeta.frame_rate)));
+            }
             let id = match s.framing {
                 // Enhanced RTMP's codec identity is a FourCC, not a
                 // number; `7.0` (AVC) is the closest legacy-compatible
@@ -332,31 +441,43 @@ impl FlvMuxer {
         if let Some(i) = self.audio_index
             && let Some((s, _)) = self.streams.get(i)
         {
+            if let Some(kbps) = s.onmeta.kbit_rate {
+                pairs.push(("audiodatarate".to_owned(), AmfValue::Number(kbps)));
+            }
+            pairs.push((
+                "audiosamplerate".to_owned(),
+                AmfValue::Number(f64::from(s.onmeta.sample_rate)),
+            ));
+            pairs.push((
+                "audiosamplesize".to_owned(),
+                AmfValue::Number(f64::from(s.onmeta.audio_sample_size)),
+            ));
+            pairs.push(("stereo".to_owned(), AmfValue::Boolean(s.onmeta.stereo)));
             let id = match s.framing {
                 Framing::LegacyAudio(format) => f64::from(format),
                 _ => 0.0,
             };
             pairs.push(("audiocodecid".to_owned(), AmfValue::Number(id)));
         }
+        pairs.push(("filesize".to_owned(), AmfValue::Number(0.0)));
 
         let mut body = Vec::new();
         AmfValue::String("onMetaData".to_owned()).encode(&mut body);
-        let ecma_header_len = body.len() + 1 + 4; // marker + count, before the pairs begin
         AmfValue::EcmaArray(pairs).encode(&mut body);
-
-        // The `duration` pair, first in `pairs`, is laid out from
-        // `ecma_header_len` as: `u16` key length (2) + `"duration"` (8) +
-        // the value's own AMF0 type marker (1) = 11 bytes, landing exactly
-        // on the raw 8-byte `f64` this function patches later.
-        let duration_value_offset = ecma_header_len + 11;
 
         let tag_pos = self.out.pos();
         self.write_tag(18, 0, &body)?;
         if self.out.is_seekable() {
-            // `write_tag` wrote: tag header(11) then `body`. The value sits
-            // at `tag_pos + 11 + duration_value_offset`.
+            // `write_tag` wrote an 11-byte tag header, then `body` verbatim,
+            // so a byte offset found in `body` sits at `tag_pos + 11 +
+            // offset` in the file. Located by search rather than
+            // hand-computed arithmetic, since which fields precede
+            // `duration`/`filesize` now varies with which streams exist.
+            let base = tag_pos + 11;
             self.duration_field_at =
-                Some(tag_pos + 11 + u64::try_from(duration_value_offset).unwrap_or(0));
+                number_value_offset(&body, "duration").map(|o| base + u64::try_from(o).unwrap_or(0));
+            self.filesize_field_at =
+                number_value_offset(&body, "filesize").map(|o| base + u64::try_from(o).unwrap_or(0));
         }
         Ok(())
     }

@@ -1869,6 +1869,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-demux-rtsp"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-format-core",
+ "vaco-format-rtp",
+ "vaco-hash",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-opts",
+ "vaco-packet",
+ "vaco-protocol-core",
+ "vaco-protocol-file",
+ "vaco-protocol-socket",
+ "vaco-time",
+]
+
+[[package]]
 name = "vaco-expr"
 version = "0.1.0"
 dependencies = [
@@ -1955,6 +1975,51 @@ dependencies = [
  "vaco-opts",
  "vaco-pixfmt",
  "vaco-sampfmt",
+]
+
+[[package]]
+name = "vaco-filter-video-format"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "smallvec",
+ "vaco-color",
+ "vaco-core",
+ "vaco-expr",
+ "vaco-filter-core",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-opts",
+ "vaco-pixfmt",
+]
+
+[[package]]
+name = "vaco-filter-video-geometry"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-color",
+ "vaco-core",
+ "vaco-expr",
+ "vaco-filter-core",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-opts",
+ "vaco-pixfmt",
+ "vaco-scale",
+]
+
+[[package]]
+name = "vaco-filter-video-source"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-opts",
+ "vaco-pixfmt",
 ]
 
 [[package]]
@@ -2118,6 +2183,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-format-rtp"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-limits",
+ "vaco-packet",
+]
+
+[[package]]
 name = "vaco-format-subtitle"
 version = "0.1.0"
 dependencies = [
@@ -2206,6 +2282,7 @@ dependencies = [
  "vaco-core",
  "vaco-demux-avi",
  "vaco-format-core",
+ "vaco-format-nalu",
  "vaco-format-riff",
  "vaco-io",
  "vaco-limits",
@@ -2237,6 +2314,7 @@ name = "vaco-mux-flv"
 version = "0.1.0"
 dependencies = [
  "proptest",
+ "vaco-chlayout",
  "vaco-codec-core",
  "vaco-core",
  "vaco-demux-flv",
@@ -2385,6 +2463,22 @@ dependencies = [
  "vaco-limits",
  "vaco-packet",
  "vaco-pixfmt",
+]
+
+[[package]]
+name = "vaco-mux-rtp"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-bitstream",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-format-core",
+ "vaco-format-rtp",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-packet",
+ "vaco-time",
 ]
 
 [[package]]
@@ -2688,6 +2782,9 @@ dependencies = [
  "vaco-filter-audio",
  "vaco-filter-core",
  "vaco-filter-plumbing",
+ "vaco-filter-video-format",
+ "vaco-filter-video-geometry",
+ "vaco-filter-video-source",
  "vaco-format-audio-simple",
  "vaco-format-core",
  "vaco-format-dv",

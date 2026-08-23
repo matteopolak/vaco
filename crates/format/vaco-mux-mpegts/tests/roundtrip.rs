@@ -184,3 +184,39 @@ fn m2ts_mode_still_demuxes_once_the_four_byte_prefix_is_known() {
     let demux = MpegTsDemuxer::open(src, &NoParsers, &FormatOptions::default());
     assert!(demux.is_ok(), "M2TS output should still open as mpegts");
 }
+
+/// Finding 17 (`planning/CONFORMANCE-FINDINGS.md`): the reference's SDT
+/// service descriptor carries `provider_name="FFmpeg"`/
+/// `service_name="Service01"` with no `-service_name`/`-service_provider`
+/// flag given at all — measured, not documented in `-h muxer=mpegts` (which
+/// has no such option). `MpegTsMuxOptions::default()` must reproduce that,
+/// not the empty strings a naive "no option means no value" reading would
+/// pick.
+#[test]
+fn default_options_write_the_references_measured_sdt_strings() {
+    let sink = SharedDynBuf::new();
+    let mirror = sink.clone();
+    let mut mux = MpegTsMuxer::new(Box::new(sink) as Box<dyn MediaSink>);
+    let v = mux.add_stream(&video_params(CodecId::Mpeg2video)).unwrap();
+    mux.init().unwrap();
+    mux.write_header().unwrap();
+    mux.write_packet(&packet(v, 0, 0, true, &[0u8; 50]))
+        .unwrap();
+    mux.write_trailer().unwrap();
+    let bytes = mirror.take();
+
+    // DVB EN 300 468 §6.2.33's service descriptor orders
+    // `provider_name` before `service_name`, both length-prefixed — the same
+    // byte order this crate's own `build_sdt` writes them in.
+    let mut expected = Vec::new();
+    expected.push(u8::try_from("FFmpeg".len()).unwrap());
+    expected.extend_from_slice(b"FFmpeg");
+    expected.push(u8::try_from("Service01".len()).unwrap());
+    expected.extend_from_slice(b"Service01");
+    assert!(
+        bytes
+            .windows(expected.len())
+            .any(|w| w == expected.as_slice()),
+        "expected the default provider/service name pair in the SDT"
+    );
+}
