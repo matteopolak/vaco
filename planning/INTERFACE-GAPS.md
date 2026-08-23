@@ -321,6 +321,39 @@ neither codec parameters nor file-level metadata.
 Same class as gap 1, and the reason #207 (CL-16) stayed open after tags and
 chapters worked.
 
+## 10. `vaco-filter-core` has no adapter for a multi-input or multi-output filter
+
+Reported by three filter agents independently, on 2026-08-23, each reaching the
+same conclusion from a different crate: `framepack`, `mergeplanes`,
+`alphamerge`, `maskedmerge`, `tlut2` and friends take two inputs, and
+`extractplanes` produces a *dynamic number* of output pads. `adapt.rs` offers
+`Simple` (one in, one out), `Sourced` (none in, one out) and `Blocked` (audio,
+one in, one out), and nothing else — so each agent recorded the filter as
+blocked and moved on.
+
+**It is not blocked, and this entry exists so the fourth agent does not reach
+the same wrong conclusion.** The capability is already there: `Filter::activate`
+returning `Activity` is the general form, and `vaco-filter-video-composite`'s
+`overlay` is a working witness — two inputs, two independent timelines, driven
+by `vaco-filter-framesync`, with the `eof_action`/`shortest`/`repeatlast`
+surface that goes with it. What is missing is the *convenience*: there is no
+`Simple`-shaped adapter that hands a filter two aligned frames and takes one
+back, so every multi-input filter re-derives the same `activate` loop.
+
+So this is a different class from gaps 2, 3, 7 and 9. Those are interfaces that
+*cannot express* what a caller needs. This one expresses it fine and makes every
+author write the same forty lines — which is how the seventh copy ends up
+subtly different from the first, the failure mode D19 exists to prevent.
+
+Additive, and worth doing before the next filter wave: a `Paired<F>` adapter
+over `framesync` for the two-input case, and a `Fanout<F>` for the
+dynamic-output-pad case that `extractplanes` needs. Neither changes `Filter`.
+
+The multi-input filters already declined for this reason, so they can be picked
+up in one pass once the adapter exists: `framepack`, `mergeplanes`,
+`alphamerge` and `extractplanes` (`vaco-filter-geometry`), and whatever the
+in-flight `vaco-filter-key` and `vaco-filter-temporal` crates report.
+
 ## Sequencing
 
 1, 4, 5 and 6 are additive and can land together behind default-implemented
