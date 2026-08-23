@@ -278,9 +278,14 @@ fn stream_value(
         "index" => Val::I(i64::from(s.index)),
         "codec_name" => Val::opt_s(p.codec_id.map(CodecId::name)),
         "codec_long_name" => Val::opt_s(p.codec_id.map(CodecId::long_name)),
-        // `unknown` rather than absent: every stream prints a profile, and a
-        // codec without profiles prints the word.
-        "profile" => Val::s(p.profile.map_or("unknown", |x: Profile| x.name)),
+        // Absent, not the literal word. `Absent::Word("unknown")` in the field
+        // table already renders `profile=unknown` for the writers that show
+        // optional fields; handing it a *present* `"unknown"` here made `json`
+        // and `xml` print a key the reference omits. Measured on FLAC:
+        //
+        //   ffprobe -v quiet -of json    -show_entries stream=profile f.flac  # no key
+        //   ffprobe -v quiet -of default -show_entries stream=profile f.flac  # profile=unknown
+        "profile" => Val::opt_s(p.profile.map(|x: Profile| x.name)),
         "codec_type" => Val::opt_s(media.map(MediaType::name)),
         "codec_tag_string" => Val::s(codec_tag_string(p.codec_tag)),
         "codec_tag" => Val::s(num::codec_tag(codec_tag_u32(p.codec_tag))),
@@ -1020,6 +1025,32 @@ mod tests {
         assert!(matches!(render(None, "nal_length_size"), Val::Absent));
         assert_eq!(field("is_avc").absent, crate::fields::Absent::Omit);
         assert_eq!(field("nal_length_size").absent, crate::fields::Absent::Omit);
+    }
+
+    /// A codec with no profile is *absent*, not the string `unknown`.
+    ///
+    /// The distinction is invisible in every writer but `json` and `xml`, which
+    /// are the two that omit unavailable optional fields — and those are the
+    /// two where the reference prints no `profile` key at all. Measured on a
+    /// FLAC stream:
+    ///
+    /// ```sh
+    /// ffprobe -v quiet -of json    -show_entries stream=profile f.flac  # {}
+    /// ffprobe -v quiet -of default -show_entries stream=profile f.flac  # profile=unknown
+    /// ```
+    #[test]
+    fn a_codec_without_a_profile_is_absent_not_the_word() {
+        let field = crate::fields::STREAM
+            .iter()
+            .find(|f| f.name == "profile")
+            .copied()
+            .expect("in the table");
+        let stream = Stream::new(0, MediaType::Audio, vaco_core::Rational::new(1, 1000));
+        let p = CodecParameters::audio().with_codec(CodecId::Flac);
+        let v = stream_value(&field, &stream, &p, Some(MediaType::Audio), Counts::NONE);
+        assert!(matches!(v, Val::Absent), "{v:?}");
+        // …and the table still carries the word, so `-of default` prints it.
+        assert_eq!(field.absent, crate::fields::Absent::Word("unknown"));
     }
 
     /// `bits_per_raw_sample` is a codec property. The container's own sample

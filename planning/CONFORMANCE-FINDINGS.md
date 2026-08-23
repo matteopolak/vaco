@@ -703,23 +703,35 @@ Verified against `ffmpeg 8.1 -c copy -f mp4` on the exact fixture:
 (was `1601.040000`). Test:
 `tests/roundtrip.rs::track_duration_converts_packet_duration_from_microseconds_to_track_ticks`.
 
-## 21. H.264 `profile` is reported inconsistently across probe paths
+## 21. H.264 `profile` is reported inconsistently across probe paths — **the premise was wrong; FLV now agrees**
 
-Three different behaviours, same field:
+**This finding's third bullet was false and sent the fix in the wrong
+direction.** The reference does *not* print the numeric `profile_idc`. It
+prints the decoded **name**, for every container, in every writer:
 
-- Probing a *reference-built* ASF/FLV file: `profile=unknown` (`vaco`'s
-  H.264 parser or its ASF/FLV integration never extracts `profile_idc`).
-- Probing `vaco`'s own MP4 remux of the same stream: `profile=High` (a
-  decoded *name*, not the numeric `profile_idc` the reference prints —
-  `profile=100`).
-- The reference: always the numeric `profile_idc` (`100`, `244`, …) for
-  every container.
+```sh
+$ ffmpeg -f lavfi -i testsrc=size=64x64:rate=10:duration=1 \
+         -pix_fmt yuv420p -c:v libx264 -profile:v high -f flv p.flv
+$ ffprobe -v quiet -of json -show_entries stream=profile,level p.flv
+{ "profile": "High", "level": 10 }
+```
 
-Two separate small gaps sharing one field: the ASF/FLV path never fills the
-value in at all, and the MP4 path fills it in with the wrong *kind* of value
-(a name where a number is expected). Owning crate depends on where the field
-is assembled for each container — `vaco-parse-h264` for the SPS read, or
-each demuxer's stream-info translation for the ASF/FLV gap specifically.
+So `vaco`'s MP4 path, which this finding recorded as "the wrong *kind* of
+value", was right all along. Recorded here because the mistake is the one
+`AGENT-CONSTRAINTS.md` keeps warning about: the numeric form was recalled,
+not measured.
+
+The ASF/FLV half was real, and FLV is now **fixed** — as a side effect of
+finding 23's stream-enumeration fix, not of any work on this field:
+
+```sh
+$ vaco-probe -v quiet -of json -show_entries stream=profile,level p.flv
+{ "profile": "High", "level": 10 }        # identical to the reference
+```
+
+Still open for ASF specifically (`vaco-demux-asf`), which finding 22's own
+note already characterises as returning essentially empty H.264 stream info
+on read-back.
 
 **Checked, not fixed** (agent:muxfix, 2026-08-23): confirmed this is entirely
 a demux/probe-side gap — `profile` is assembled while reading a stream, not
@@ -799,15 +811,28 @@ Same mechanical fix each time — complete the mapping table for the format —
 and the same ownership pattern: whichever demuxer builds the
 `CodecParameters` for that family.
 
-## 25. `vaco-probe`'s JSON/writer output emits `"profile": "unknown"` where the reference omits the key entirely
+## 25. `vaco-probe` emits `"profile": "unknown"` where the reference omits the key entirely — **fixed**
 
 Seen on FLAC and DV (finding 24): the reference's JSON writer does not emit a
 `profile` key at all for a codec with no meaningful profile concept;
 `vaco`'s always does, with the value `"unknown"`. A field-presence
 difference, not a field-value one — worth distinguishing because "the field
-is wrong" and "the field shouldn't be there" have different fixes. Belongs
-to `vaco-probe`'s writers, not the demuxers that were the direct cause of
-findings 4/24.
+is wrong" and "the field shouldn't be there" have different fixes.
+
+**Fixed.** Not in the writers: the optional-field machinery in
+`vaco-probe`'s `emit.rs` was already correct and already tested, and the
+field table already carried `Absent::Word("unknown")` for `profile`. The
+fault was one line up, in `show.rs`, which handed the emitter a *present*
+`Val::s("unknown")` instead of `Val::Absent` — so the writer never reached
+the branch that omits. Measured both ways before and after:
+
+```sh
+ffprobe -v quiet -of json    -show_entries stream=profile f.flac   # no key
+ffprobe -v quiet -of default -show_entries stream=profile f.flac   # profile=unknown
+```
+
+The heading also under-stated the scope: the same one-line fault would have
+affected every codec with no profile, not only FLAC and DV.
 
 ## Harness changes, summarised
 
