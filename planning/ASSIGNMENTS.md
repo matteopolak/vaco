@@ -166,3 +166,4 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-bsf-vpx | 3 | #351 | agent:extradata | done | 2026-08-23 | 2026-08-23 | VP9 only — no VP8 bsf exists in the reference |
 | vaco-bsf-audio | 3 | #352 | agent:extradata | done | 2026-08-23 | 2026-08-23 | aac_adtstoasc, opus_metadata, pcm_rechunk |
 | vaco-format-nalu | 4 | — | agent:extradata | done | 2026-08-23 | 2026-08-23 | now owns the one extradata-assembly rule (D19) |
+| vaco-bsf-* (all six) | 3 | #353,#354 | agent:bsf3 | assigned | 2026-08-23 |  | *_metadata needs a CBS write path; INTERFACE-GAPS 12 blocks options |

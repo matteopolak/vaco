@@ -27,7 +27,7 @@ fi
 # Cargo could not load the workspace: someone else's half-created crate, not
 # anything about this message. Say so loudly and let the commit through — CI
 # still checks the trailers, and it will have a loadable tree.
-if printf '%s' "$out" | grep -q 'failed to load manifest for workspace member\|no targets specified in the manifest'; then
+if printf '%s' "$out" | grep -q 'failed to load manifest for workspace member\|no targets specified in the manifest\|no matching package named'; then
   echo "$out" | sed 's/^/  /'
   echo
   echo "  ^ the workspace does not load right now — almost certainly another"
