@@ -1,6 +1,6 @@
-# The filter crate partition drifted from plan 16 §4.3, and it was the orchestrator's doing
+# The filter crate partition drifted from plan 16 §4.2–4.4, and it was the orchestrator's doing
 
-`planning/16-filters.md` §4.3 and §4.4 carry an authoritative table: one row per
+`planning/16-filters.md` §4.2, §4.3 and §4.4 carry an authoritative table: one row per
 `vaco-filter-*` crate, with the exact filter list, the shared kernels it leans
 on, and its tier. It is a deliberate partition — crates are grouped by the
 kernels they share (`vdsp`, `adsp`, `draw`, `framesync`), not by topic — and it
@@ -39,7 +39,7 @@ would have prevented, because `axcorrelate` appears in exactly one row.
 ## The rule going forward
 
 **A dispatch brief for a filter crate must quote its row from
-`planning/16-filters.md` §4.3/§4.4 and must not name a crate the table does not
+`planning/16-filters.md` §4.2–4.4 and must not name a crate the table does not
 have.** If the reference has a filter the table places nowhere, that is a change
 to the table — proposed in a commit that says why — not a new crate invented at
 dispatch time.
@@ -55,7 +55,7 @@ Two of them are more than a rename and need a decision first:
 - `vaco-filter-video-geometry` holds the T1 subset (`crop`, `pad`, `transpose`,
   the flips) of the plan's single `vaco-filter-geometry` row, whose T2 remainder
   is being written separately. Either they merge, or the plan grows an explicit
-  T1/T2 split. Merging is truer to §4.3.
+  T1/T2 split. Merging is truer to §4.2.
 - `vaco-filter-audio` spans three plan rows and predates all of this. Splitting
   it is the largest single piece of the reconciliation.
 
@@ -63,7 +63,7 @@ Two of them are more than a rename and need a decision first:
 
 `vaco-filter-component` never landed. The agent building it was redirected
 mid-flight and shipped `vaco-filter-color`, `vaco-filter-key` and
-`vaco-filter-lut` instead — three real rows from §4.3. `vaco-filter-blur`'s
+`vaco-filter-lut` instead — three real rows from §4.2. `vaco-filter-blur`'s
 author likewise split the convolution and morphology family out into
 `vaco-filter-convolve`, its own row, rather than leaving it misfiled.
 
@@ -85,3 +85,20 @@ dynamic-output V→N, `mergeplanes` is **dynamic-input N→V**, and `alphamerge`
 runs through `framesync` directly. The gap-10 entry originally named only a
 two-input adapter and a dynamic-output one; the N-input case is a third shape
 and neither covers it.
+
+## The section numbers, since three briefs got them wrong
+
+`planning/16-filters.md` §4 splits as:
+
+| §   | What                                                     |
+|-----|----------------------------------------------------------|
+| 4.1 | Infrastructure (layer 5a) — `-core`, `-graph`, `-framesync`, `-draw`, `-vdsp`, `-adsp` |
+| 4.2 | **Video** filter crates                                  |
+| 4.3 | **Audio** filter crates                                  |
+| 4.4 | Multimedia crates — `-mm`, `-movie`, `-avvis`            |
+| 4.5 | GPU and hardware                                         |
+
+Several dispatch briefs cited §4.3 for *video* rows. The `vaco-filter-color`
+agent caught it and said so; the rows it needed were in §4.2. Cite the right
+one, or just say "the table in §4" and let the agent find its row.
+

@@ -496,7 +496,7 @@ the only output channel those filters have.
 
 ### What it blocks
 
-Three whole rows of plan 16 §4.3, not a filter or two:
+Three whole rows of plan 16 §4.2–4.3, not a filter or two:
 
 * `vaco-filter-analysis` — `psnr`, `ssim`, `ssim360`, `xpsnr`, `vif`,
   `vmafmotion`, `msad`, `identity`, `blackdetect`, `blockdetect`,

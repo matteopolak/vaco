@@ -367,7 +367,7 @@ a plausible-looking wrong answer where a missing one would have been caught.
 
 ## The plan already partitions the filters; do not invent a crate
 
-`planning/16-filters.md` §4.3 and §4.4 are a table, one row per
+`planning/16-filters.md` §4.2, §4.3 and §4.4 are a table, one row per
 `vaco-filter-*` crate, with the exact filter list for each. The grouping is by
 *shared kernel* — `vdsp`, `adsp`, `draw`, `framesync` — which is why
 `convolution` and `sobel` sit in `vaco-filter-convolve` rather than next to
