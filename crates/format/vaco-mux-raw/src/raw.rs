@@ -93,9 +93,18 @@ macro_rules! raw_reg {
 
 // ---------------------------------------------------------------------- PCM
 //
-// `CodecId` has one generic `Pcm` variant (see the crate docs) rather than a
-// tag per on-disk width, so every PCM muxer below reports it rather than the
-// reference's specific `pcm_s16le`-style name.
+// Every muxer below names the specific codec the reference names, measured
+// one at a time:
+//
+//   $ ffmpeg -h muxer=s24le   ->  Default audio codec: pcm_s24le.
+//   $ ffmpeg -h muxer=alaw    ->  Default audio codec: pcm_alaw.
+//
+// They all reported the generic `CodecId::Pcm` until 2026-08-23 — a codec the
+// reference does not have, and the single invented name in our whole `-codecs`
+// listing. Six of the twenty needed a `CodecId` variant that did not exist
+// (`pcm_u16le` and its five siblings); those were added rather than left
+// generic, because "the enum cannot say it" had stopped being true for the
+// other fourteen and would only have hidden the remaining six.
 
 raw_reg!(
     MUXER_ALAW,
@@ -103,7 +112,7 @@ raw_reg!(
     "PCM A-law",
     &["al"],
     None,
-    Some(CodecId::Pcm)
+    Some(CodecId::PcmAlaw)
 );
 raw_reg!(
     MUXER_MULAW,
@@ -111,7 +120,7 @@ raw_reg!(
     "PCM mu-law",
     &["ul"],
     None,
-    Some(CodecId::Pcm)
+    Some(CodecId::PcmMulaw)
 );
 raw_reg!(
     MUXER_F32BE,
@@ -119,7 +128,7 @@ raw_reg!(
     "PCM 32-bit floating-point big-endian",
     &[],
     None,
-    Some(CodecId::Pcm)
+    Some(CodecId::PcmF32be)
 );
 raw_reg!(
     MUXER_F32LE,
@@ -127,7 +136,7 @@ raw_reg!(
     "PCM 32-bit floating-point little-endian",
     &[],
     None,
-    Some(CodecId::Pcm)
+    Some(CodecId::PcmF32le)
 );
 raw_reg!(
     MUXER_F64BE,
@@ -135,7 +144,7 @@ raw_reg!(
     "PCM 64-bit floating-point big-endian",
     &[],
     None,
-    Some(CodecId::Pcm)
+    Some(CodecId::PcmF64be)
 );
 raw_reg!(
     MUXER_F64LE,
@@ -143,7 +152,7 @@ raw_reg!(
     "PCM 64-bit floating-point little-endian",
     &[],
     None,
-    Some(CodecId::Pcm)
+    Some(CodecId::PcmF64le)
 );
 raw_reg!(
     MUXER_S16BE,
@@ -151,7 +160,7 @@ raw_reg!(
     "PCM signed 16-bit big-endian",
     &[],
     None,
-    Some(CodecId::Pcm)
+    Some(CodecId::PcmS16be)
 );
 raw_reg!(
     MUXER_S16LE,
@@ -159,7 +168,7 @@ raw_reg!(
     "PCM signed 16-bit little-endian",
     &["sw"],
     None,
-    Some(CodecId::Pcm)
+    Some(CodecId::PcmS16le)
 );
 raw_reg!(
     MUXER_S24BE,
@@ -167,7 +176,7 @@ raw_reg!(
     "PCM signed 24-bit big-endian",
     &[],
     None,
-    Some(CodecId::Pcm)
+    Some(CodecId::PcmS24be)
 );
 raw_reg!(
     MUXER_S24LE,
@@ -175,7 +184,7 @@ raw_reg!(
     "PCM signed 24-bit little-endian",
     &[],
     None,
-    Some(CodecId::Pcm)
+    Some(CodecId::PcmS24le)
 );
 raw_reg!(
     MUXER_S32BE,
@@ -183,7 +192,7 @@ raw_reg!(
     "PCM signed 32-bit big-endian",
     &[],
     None,
-    Some(CodecId::Pcm)
+    Some(CodecId::PcmS32be)
 );
 raw_reg!(
     MUXER_S32LE,
@@ -191,7 +200,7 @@ raw_reg!(
     "PCM signed 32-bit little-endian",
     &[],
     None,
-    Some(CodecId::Pcm)
+    Some(CodecId::PcmS32le)
 );
 raw_reg!(
     MUXER_S8,
@@ -199,7 +208,7 @@ raw_reg!(
     "PCM signed 8-bit",
     &["sb"],
     None,
-    Some(CodecId::Pcm)
+    Some(CodecId::PcmS8)
 );
 raw_reg!(
     MUXER_U16BE,
@@ -207,7 +216,7 @@ raw_reg!(
     "PCM unsigned 16-bit big-endian",
     &[],
     None,
-    Some(CodecId::Pcm)
+    Some(CodecId::PcmU16be)
 );
 raw_reg!(
     MUXER_U16LE,
@@ -215,7 +224,7 @@ raw_reg!(
     "PCM unsigned 16-bit little-endian",
     &["uw"],
     None,
-    Some(CodecId::Pcm)
+    Some(CodecId::PcmU16le)
 );
 raw_reg!(
     MUXER_U24BE,
@@ -223,7 +232,7 @@ raw_reg!(
     "PCM unsigned 24-bit big-endian",
     &[],
     None,
-    Some(CodecId::Pcm)
+    Some(CodecId::PcmU24be)
 );
 raw_reg!(
     MUXER_U24LE,
@@ -231,7 +240,7 @@ raw_reg!(
     "PCM unsigned 24-bit little-endian",
     &[],
     None,
-    Some(CodecId::Pcm)
+    Some(CodecId::PcmU24le)
 );
 raw_reg!(
     MUXER_U32BE,
@@ -239,7 +248,7 @@ raw_reg!(
     "PCM unsigned 32-bit big-endian",
     &[],
     None,
-    Some(CodecId::Pcm)
+    Some(CodecId::PcmU32be)
 );
 raw_reg!(
     MUXER_U32LE,
@@ -247,7 +256,7 @@ raw_reg!(
     "PCM unsigned 32-bit little-endian",
     &[],
     None,
-    Some(CodecId::Pcm)
+    Some(CodecId::PcmU32le)
 );
 raw_reg!(
     MUXER_U8,
@@ -255,7 +264,7 @@ raw_reg!(
     "PCM unsigned 8-bit",
     &["ub"],
     None,
-    Some(CodecId::Pcm)
+    Some(CodecId::PcmU8)
 );
 raw_reg!(
     MUXER_VIDC,
@@ -263,7 +272,7 @@ raw_reg!(
     "PCM Archimedes VIDC",
     &[],
     None,
-    Some(CodecId::Pcm)
+    Some(CodecId::PcmVidc)
 );
 
 // ----------------------------------------------------------------- raw video
@@ -273,7 +282,7 @@ raw_reg!(
     "rawvideo",
     "raw video",
     &["yuv", "rgb"],
-    None,
+    Some(CodecId::Rawvideo),
     None
 );
 
@@ -303,7 +312,7 @@ raw_reg!(
     "avs2",
     "raw AVS2-P2/IEEE1857.4 video",
     &["avs", "avs2"],
-    None,
+    Some(CodecId::Avs2),
     None
 );
 raw_reg!(
@@ -311,7 +320,7 @@ raw_reg!(
     "avs3",
     "AVS3-P2/IEEE1857.10",
     &["avs3"],
-    None,
+    Some(CodecId::Avs3),
     None
 );
 raw_reg!(
@@ -320,14 +329,15 @@ raw_reg!(
     "G.729 BIT file format",
     &["bit"],
     None,
-    None
+    // Measured: `ffmpeg -h muxer=bit` -> `Default audio codec: g729.`
+    Some(CodecId::G729)
 );
 raw_reg!(
     MUXER_CAVSVIDEO,
     "cavsvideo",
     "raw Chinese AVS (Audio Video Standard) video",
     &["cavs"],
-    None,
+    Some(CodecId::Cavs),
     None
 );
 raw_reg!(MUXER_DATA, "data", "raw data", &[], None, None);
@@ -336,7 +346,7 @@ raw_reg!(
     "dirac",
     "raw Dirac",
     &["drc", "vc2"],
-    None,
+    Some(CodecId::Dirac),
     None
 );
 raw_reg!(
@@ -344,12 +354,12 @@ raw_reg!(
     "dnxhd",
     "raw DNxHD (SMPTE VC-3)",
     &["dnxhd", "dnxhr"],
-    None,
+    Some(CodecId::Dnxhd),
     None
 );
-raw_reg!(MUXER_EVC, "evc", "raw EVC video", &["evc"], None, None);
-raw_reg!(MUXER_H261, "h261", "raw H.261", &["h261"], None, None);
-raw_reg!(MUXER_H263, "h263", "raw H.263", &["h263"], None, None);
+raw_reg!(MUXER_EVC, "evc", "raw EVC video", &["evc"], Some(CodecId::Evc), None);
+raw_reg!(MUXER_H261, "h261", "raw H.261", &["h261"], Some(CodecId::H261), None);
+raw_reg!(MUXER_H263, "h263", "raw H.263", &["h263"], Some(CodecId::H263), None);
 raw_reg!(
     MUXER_H264,
     "h264",
@@ -366,7 +376,7 @@ raw_reg!(
     Some(CodecId::Hevc),
     None
 );
-raw_reg!(MUXER_M4V, "m4v", "raw MPEG-4 video", &["m4v"], None, None);
+raw_reg!(MUXER_M4V, "m4v", "raw MPEG-4 video", &["m4v"], Some(CodecId::Mpeg4), None);
 raw_reg!(
     MUXER_MJPEG,
     "mjpeg",
@@ -383,13 +393,14 @@ raw_reg!(
     Some(CodecId::Av1),
     None
 );
-raw_reg!(MUXER_VC1, "vc1", "raw VC-1 video", &["vc1"], None, None);
+raw_reg!(MUXER_VC1, "vc1", "raw VC-1 video", &["vc1"], Some(CodecId::Vc1), None);
 raw_reg!(
     MUXER_VVC,
     "vvc",
     "raw H.266/VVC video",
     &["vvc", "h266", "266"],
-    None,
+    // Measured: `ffmpeg -h muxer=vvc` -> `vvc`, not the `h264` this carried.
+    Some(CodecId::Vvc),
     None
 );
 

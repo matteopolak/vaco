@@ -85,8 +85,10 @@ pub const MUXER: MuxerDesc = MuxerDesc {
     name: "dv",
     long_name: "DV (Digital Video)",
     extensions: &["dv"],
-    default_video: None,
-    default_audio: None,
+    // Measured: `ffmpeg -h muxer=dv` -> dvvideo / pcm_s16le. Both variants
+    // exist; these were `None` from before either did.
+    default_video: Some(vaco_codec_core::CodecId::Dvvideo),
+    default_audio: Some(vaco_codec_core::CodecId::PcmS16le),
     open: open_muxer,
 };
 

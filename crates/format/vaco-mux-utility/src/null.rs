@@ -24,13 +24,11 @@
 //! `pcm_s16le` has a [`CodecId`] in this workspace and is reproduced exactly.
 //! `wrapped_avframe` is the reference's pseudo-codec for "an undecoded
 //! `AVFrame` handed straight to a muxer with no real encoder" — it has no
-//! bitstream, no extradata, and no [`CodecId`] variant here, so
-//! [`MUXER_NULL::default_video`] is `None` rather than a guess. This is a
-//! deliberate difference from `vaco-cli`'s local copy, which declares `None`
-//! for *both* fields on the reasoning that "this build has no encoders" — a
-//! true fact about the whole workspace at the time it was written, but this
-//! crate's job is to describe what the container itself wants, which for
-//! audio is exactly representable.
+//! bitstream and no extradata. It had no [`CodecId`] variant when this note
+//! was written, so `default_video` was `None`; `CodecId::WrappedAvframe`
+//! exists as of 2026-08-23 and this now reports what the reference reports.
+//! The variant is a pseudo-codec and is documented as one, which is a
+//! better record than a silently-absent field.
 
 use vaco_codec_core::{CodecId, CodecParameters};
 use vaco_core::{Rational, Result};
@@ -115,14 +113,14 @@ fn open_null(_sink: Box<dyn MediaSink>) -> Result<Box<dyn Muxer>> {
     Ok(Box::new(NullSinkMuxer::new()))
 }
 
-/// `null`: discards everything. See the module docs for why `default_video`
-/// is `None` where the reference's own default (`wrapped_avframe`) has no
-/// [`CodecId`] here, while `default_audio` matches the reference exactly.
+/// `null`: discards everything.
+///
+/// Measured: `ffmpeg -h muxer=null` -> `wrapped_avframe` / `pcm_s16le`.
 pub static MUXER_NULL: MuxerDesc = MuxerDesc {
     name: "null",
     long_name: "raw null video",
     extensions: &[],
-    default_video: None,
+    default_video: Some(CodecId::WrappedAvframe),
     default_audio: Some(CodecId::PcmS16le),
     open: open_null,
 };
@@ -172,10 +170,18 @@ mod tests {
         assert!(FLAGS.contains(FormatFlags::NOFILE));
     }
 
+    /// Measured: `ffmpeg -h muxer=null` -> `wrapped_avframe` / `pcm_s16le`.
+    ///
+    /// The video assertion used to be `None`, on the reasoning that
+    /// `wrapped_avframe` had no `CodecId`. It has one now, so the test name's
+    /// "where representable" qualifier no longer applies to either field.
     #[test]
-    fn descriptor_matches_reference_defaults_where_representable() {
+    fn descriptor_matches_reference_defaults() {
         assert!(MUXER_NULL.matches_name("null"));
-        assert_eq!(MUXER_NULL.default_codec(MediaType::Video), None);
+        assert_eq!(
+            MUXER_NULL.default_codec(MediaType::Video),
+            Some(CodecId::WrappedAvframe)
+        );
         assert_eq!(
             MUXER_NULL.default_codec(MediaType::Audio),
             Some(CodecId::PcmS16le)

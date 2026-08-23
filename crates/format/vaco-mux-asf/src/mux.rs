@@ -90,7 +90,8 @@ pub const MUXER: MuxerDesc = MuxerDesc {
     name: "asf",
     long_name: "ASF (Advanced / Active Streaming Format)",
     extensions: &["asf", "wmv", "wma"],
-    default_video: Some(CodecId::Vc1),
+    // Measured: `ffmpeg -h muxer=asf` / `=asf_stream` -> msmpeg4v3 / wmav2.
+    default_video: Some(CodecId::Msmpeg4v3),
     default_audio: Some(CodecId::Wmav2),
     open: open_muxer,
 };
@@ -104,7 +105,8 @@ pub const MUXER_STREAM: MuxerDesc = MuxerDesc {
     name: "asf_stream",
     long_name: "ASF (Advanced / Active Streaming Format)",
     extensions: &[],
-    default_video: Some(CodecId::Vc1),
+    // Measured: `ffmpeg -h muxer=asf` / `=asf_stream` -> msmpeg4v3 / wmav2.
+    default_video: Some(CodecId::Msmpeg4v3),
     default_audio: Some(CodecId::Wmav2),
     open: open_muxer,
 };

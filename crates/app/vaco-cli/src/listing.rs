@@ -427,6 +427,16 @@ fn write_codecs<W: Write>(w: &mut W) -> std::io::Result<()> {
     writeln!(w, " .....S = Lossless compression")?;
     writeln!(w, " -------")?;
     for id in vaco_registry::codecs() {
+        // `CodecId::Pcm` is a sentinel — "PCM, flavour undetermined" — and not
+        // a codec the reference has. Listing it made `pcm` the single invented
+        // name in this whole listing, checked by diffing every row against
+        // `ffmpeg -codecs`. It stays in the enum because fifty call sites still
+        // reach it when a container states PCM without saying which, and each
+        // of those is a gap worth being able to see (CONFORMANCE-FINDINGS 24);
+        // it just is not an answer to "what codecs exist".
+        if id == vaco_codec_core::CodecId::Pcm {
+            continue;
+        }
         let props = id.properties();
         // Real ffmpeg's `..T...` slot is a separate "attachment codec" flag
         // rather than a seventh media type, but `vaco_core::MediaType` models

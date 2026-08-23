@@ -91,15 +91,21 @@ fn open_dvd(sink: Box<dyn MediaSink>) -> Result<Box<dyn Muxer>> {
 
 /// `ffmpeg -f mpeg`: MPEG-1 Systems / MPEG program stream.
 ///
-/// `default_video`/`default_audio` are `None`: no `CodecId` exists yet for
-/// MPEG-1 video or MPEG audio layer II, the codecs a real `mpeg` file
-/// carries (see the crate docs).
+/// Measured 2026-08-23, all five program-stream muxers at once:
+///
+/// ```text
+/// mpeg  mpeg1video / mp2     vcd   mpeg1video / mp2
+/// vob   mpeg2video / mp2     svcd  mpeg2video / mp2     dvd  mpeg2video / mp2
+/// ```
+///
+/// The note that used to sit here said no `CodecId` existed for MPEG-1 video
+/// or MPEG audio layer II. `Mpeg1video`, `Mpeg2video` and `Mp2` all did.
 pub const MUXER_MPEG: MuxerDesc = MuxerDesc {
     name: "mpeg",
     long_name: "MPEG-1 Systems / MPEG program stream",
     extensions: &["mpg", "mpeg"],
-    default_video: None::<CodecId>,
-    default_audio: None::<CodecId>,
+    default_video: Some(CodecId::Mpeg1video),
+    default_audio: Some(CodecId::Mp2),
     open: open_mpeg,
 };
 
@@ -108,8 +114,8 @@ pub const MUXER_VCD: MuxerDesc = MuxerDesc {
     name: "vcd",
     long_name: "MPEG-1 Systems / MPEG program stream (VCD)",
     extensions: &["dat"],
-    default_video: None::<CodecId>,
-    default_audio: None::<CodecId>,
+    default_video: Some(CodecId::Mpeg1video),
+    default_audio: Some(CodecId::Mp2),
     open: open_vcd,
 };
 
@@ -118,8 +124,8 @@ pub const MUXER_VOB: MuxerDesc = MuxerDesc {
     name: "vob",
     long_name: "MPEG-2 PS (VOB)",
     extensions: &["vob"],
-    default_video: None::<CodecId>,
-    default_audio: None::<CodecId>,
+    default_video: Some(CodecId::Mpeg2video),
+    default_audio: Some(CodecId::Mp2),
     open: open_vob,
 };
 
@@ -128,8 +134,8 @@ pub const MUXER_SVCD: MuxerDesc = MuxerDesc {
     name: "svcd",
     long_name: "MPEG-2 PS (SVCD)",
     extensions: &["mpg"],
-    default_video: None::<CodecId>,
-    default_audio: None::<CodecId>,
+    default_video: Some(CodecId::Mpeg2video),
+    default_audio: Some(CodecId::Mp2),
     open: open_svcd,
 };
 
@@ -138,8 +144,8 @@ pub const MUXER_DVD: MuxerDesc = MuxerDesc {
     name: "dvd",
     long_name: "MPEG-2 PS (DVD VOB)",
     extensions: &["vob"],
-    default_video: None::<CodecId>,
-    default_audio: None::<CodecId>,
+    default_video: Some(CodecId::Mpeg2video),
+    default_audio: Some(CodecId::Mp2),
     open: open_dvd,
 };
 

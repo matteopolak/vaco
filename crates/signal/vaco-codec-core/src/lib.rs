@@ -116,6 +116,25 @@ pub enum CodecId {
     PcmS32le,
     PcmS32be,
     PcmU8,
+    /// Unsigned PCM above one byte, which only the raw `-f u16le`-family
+    /// muxers name. Added 2026-08-23: every one of them reported
+    /// `Default audio codec: pcm.` — a codec the reference does not have —
+    /// because these six variants did not exist.
+    /// `pcm_vidc`, the Archimedes VIDC logarithmic PCM the `vidc` muxer
+    /// defaults to. Measured from `ffmpeg -codecs`: `DEAIL. pcm_vidc  PCM
+    /// Archimedes VIDC`.
+    PcmVidc,
+    /// `wrapped_avframe`. Not a codec in any real sense — it is the
+    /// reference's passthrough pseudo-codec, and it is here only because
+    /// `-h muxer=null` and `-h muxer=yuv4mpegpipe` both name it as their
+    /// default video codec and there is no other way to say so.
+    WrappedAvframe,
+    PcmU16le,
+    PcmU16be,
+    PcmU24le,
+    PcmU24be,
+    PcmU32le,
+    PcmU32be,
     PcmS8,
     PcmF32le,
     PcmF32be,
@@ -428,6 +447,62 @@ const CODECS: &[CodecEntry] = &[
         CodecId::PcmU8,
         "pcm_u8",
         "PCM unsigned 8-bit",
+        A,
+        CodecProperties::LOSSLESS.union(CodecProperties::INTRA_ONLY),
+    ),
+    entry(
+        CodecId::PcmVidc,
+        "pcm_vidc",
+        "PCM Archimedes VIDC",
+        A,
+        CodecProperties::INTRA_ONLY,
+    ),
+    entry(
+        CodecId::WrappedAvframe,
+        "wrapped_avframe",
+        "AVFrame to AVPacket passthrough",
+        V,
+        CodecProperties::LOSSLESS.union(CodecProperties::INTRA_ONLY),
+    ),
+    entry(
+        CodecId::PcmU16le,
+        "pcm_u16le",
+        "PCM unsigned 16-bit little-endian",
+        A,
+        CodecProperties::LOSSLESS.union(CodecProperties::INTRA_ONLY),
+    ),
+    entry(
+        CodecId::PcmU16be,
+        "pcm_u16be",
+        "PCM unsigned 16-bit big-endian",
+        A,
+        CodecProperties::LOSSLESS.union(CodecProperties::INTRA_ONLY),
+    ),
+    entry(
+        CodecId::PcmU24le,
+        "pcm_u24le",
+        "PCM unsigned 24-bit little-endian",
+        A,
+        CodecProperties::LOSSLESS.union(CodecProperties::INTRA_ONLY),
+    ),
+    entry(
+        CodecId::PcmU24be,
+        "pcm_u24be",
+        "PCM unsigned 24-bit big-endian",
+        A,
+        CodecProperties::LOSSLESS.union(CodecProperties::INTRA_ONLY),
+    ),
+    entry(
+        CodecId::PcmU32le,
+        "pcm_u32le",
+        "PCM unsigned 32-bit little-endian",
+        A,
+        CodecProperties::LOSSLESS.union(CodecProperties::INTRA_ONLY),
+    ),
+    entry(
+        CodecId::PcmU32be,
+        "pcm_u32be",
+        "PCM unsigned 32-bit big-endian",
         A,
         CodecProperties::LOSSLESS.union(CodecProperties::INTRA_ONLY),
     ),

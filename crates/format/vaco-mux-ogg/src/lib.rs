@@ -59,13 +59,13 @@ fn open_muxer(sink: Box<dyn MediaSink>) -> Result<Box<dyn Muxer>> {
 
 /// `ffmpeg -f ogg`: video and audio, defaulting to Theora and FLAC.
 ///
-/// `default_video` is `None`, not `Some(CodecId::Theora)` — no such variant
-/// exists; see the crate docs.
+/// Measured: `ffmpeg -h muxer=ogg` -> `theora` / `flac`. The note that used
+/// to sit here said `CodecId::Theora` did not exist; it does.
 pub const MUXER_OGG: MuxerDesc = MuxerDesc {
     name: "ogg",
     long_name: "Ogg",
     extensions: &["ogg"],
-    default_video: None,
+    default_video: Some(CodecId::Theora),
     default_audio: Some(CodecId::Flac),
     open: open_muxer,
 };
@@ -80,13 +80,13 @@ pub const MUXER_OGA: MuxerDesc = MuxerDesc {
     open: open_muxer,
 };
 
-/// `ffmpeg -f ogv`: video, defaulting to VP8.
+/// Measured: `ffmpeg -h muxer=ogv` -> `vp8` / `flac`.
 pub const MUXER_OGV: MuxerDesc = MuxerDesc {
     name: "ogv",
     long_name: "Ogg Video",
     extensions: &["ogv"],
     default_video: Some(CodecId::Vp8),
-    default_audio: None,
+    default_audio: Some(CodecId::Flac),
     open: open_muxer,
 };
 
@@ -102,14 +102,14 @@ pub const MUXER_OPUS: MuxerDesc = MuxerDesc {
 
 /// `ffmpeg -f spx`: audio, defaulting to Speex.
 ///
-/// `default_audio` is `None`, not `Some(CodecId::Speex)` — no such variant
-/// exists; see the crate docs.
+/// Measured: `ffmpeg -h muxer=spx` -> no video default, `speex`. The note
+/// that used to sit here said `CodecId::Speex` did not exist; it does.
 pub const MUXER_SPX: MuxerDesc = MuxerDesc {
     name: "spx",
     long_name: "Ogg Speex",
     extensions: &["spx"],
     default_video: None,
-    default_audio: None,
+    default_audio: Some(CodecId::Speex),
     open: open_muxer,
 };
 
@@ -126,12 +126,24 @@ mod tests {
         assert!(MUXER_SPX.matches_name("spx"));
     }
 
+    /// Every default, re-measured 2026-08-23:
+    ///
+    /// ```text
+    /// ogg   theora / flac      ogv   vp8 / flac      opus   — / opus
+    /// oga   — / flac           spx   — / speex
+    /// ```
+    ///
+    /// Three of these were `None` on the strength of comments saying the
+    /// `CodecId` variant did not exist. `Theora`, `Speex` and the rest all
+    /// existed; the notes had simply outlived the enum.
     #[test]
     fn defaults_match_what_was_measured_against_the_reference() {
+        assert_eq!(MUXER_OGG.default_video, Some(CodecId::Theora));
         assert_eq!(MUXER_OGG.default_audio, Some(CodecId::Flac));
-        assert_eq!(MUXER_OGG.default_video, None);
+        assert_eq!(MUXER_OGA.default_audio, Some(CodecId::Flac));
         assert_eq!(MUXER_OGV.default_video, Some(CodecId::Vp8));
+        assert_eq!(MUXER_OGV.default_audio, Some(CodecId::Flac));
         assert_eq!(MUXER_OPUS.default_audio, Some(CodecId::Opus));
-        assert_eq!(MUXER_SPX.default_audio, None);
+        assert_eq!(MUXER_SPX.default_audio, Some(CodecId::Speex));
     }
 }

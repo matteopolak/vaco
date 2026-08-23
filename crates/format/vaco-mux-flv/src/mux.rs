@@ -30,8 +30,10 @@ pub const MUXER: MuxerDesc = MuxerDesc {
     name: "flv",
     long_name: "FLV (Flash Video)",
     extensions: &["flv"],
-    default_video: Some(CodecId::H264),
-    default_audio: Some(CodecId::Aac),
+    // Measured: `ffmpeg -h muxer=flv` -> flv1 / mp3. Not h264/aac, which is
+    // what FLV is usually *used* for and not what the muxer defaults to.
+    default_video: Some(CodecId::Flv1),
+    default_audio: Some(CodecId::Mp3),
     open: open_muxer,
 };
 

@@ -118,11 +118,13 @@ fn open_muxer(sink: Box<dyn MediaSink>) -> Result<Box<dyn Muxer>> {
     Ok(Box::new(Yuv4MpegMuxer::new(sink)?))
 }
 
+/// Measured: `ffmpeg -h muxer=yuv4mpegpipe` -> `wrapped_avframe`, the
+/// reference's passthrough pseudo-codec, and no audio default.
 pub const MUXER_YUV4MPEGPIPE: MuxerDesc = MuxerDesc {
     name: "yuv4mpegpipe",
     long_name: "YUV4MPEG pipe",
     extensions: &["y4m"],
-    default_video: None,
+    default_video: Some(vaco_codec_core::CodecId::WrappedAvframe),
     default_audio: None,
     open: open_muxer,
 };

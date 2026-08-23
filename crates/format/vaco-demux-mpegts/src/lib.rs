@@ -77,7 +77,11 @@ pub const DEMUXER: DemuxerDesc = DemuxerDesc {
     name: "mpegts",
     long_name: "MPEG-TS (MPEG-2 Transport Stream)",
     extensions: &["ts", "m2t", "m2ts", "mts", "mpegts"],
-    mime_types: &["video/mp2t"],
+    // `video/MP2T`, with the IANA capitalisation, is what the reference
+    // prints — `ffmpeg -h muxer=mpegts` says `Mime type: video/MP2T.`. The
+    // lower-cased spelling here was the only one of 38 muxers whose MIME type
+    // was present and *wrong* rather than absent.
+    mime_types: &["video/MP2T"],
     flags: crate::demux::FLAGS,
     probe,
     open: open_demuxer,

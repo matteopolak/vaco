@@ -285,8 +285,10 @@ pub const MUXER_3GP: MuxerDesc = MuxerDesc {
     name: "3gp",
     long_name: "3GP (3GPP file format)",
     extensions: &["3gp"],
-    default_video: Some(CodecId::H264),
-    default_audio: Some(CodecId::Aac),
+    // Measured: `ffmpeg -h muxer=3gp` -> h263 / amr_nb, not the h264/aac
+    // every other brand in this file defaults to.
+    default_video: Some(CodecId::H263),
+    default_audio: Some(CodecId::AmrNb),
     open: open_3gp,
 };
 
@@ -295,8 +297,10 @@ pub const MUXER_3G2: MuxerDesc = MuxerDesc {
     name: "3g2",
     long_name: "3GP2 (3GPP2 file format)",
     extensions: &["3g2"],
-    default_video: Some(CodecId::H264),
-    default_audio: Some(CodecId::Aac),
+    // Measured: `ffmpeg -h muxer=3g2` -> h263 / amr_nb, not the h264/aac
+    // every other brand in this file defaults to.
+    default_video: Some(CodecId::H263),
+    default_audio: Some(CodecId::AmrNb),
     open: open_3g2,
 };
 

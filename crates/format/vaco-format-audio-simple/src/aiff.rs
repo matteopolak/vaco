@@ -90,7 +90,9 @@ pub const MUXER: MuxerDesc = MuxerDesc {
     name: "aiff",
     long_name: "Audio IFF",
     extensions: &["aif", "aiff"],
-    default_video: None,
+    // Measured: `ffmpeg -h muxer=aiff` -> `Default video codec: png.`
+    // AIFF carries cover art, which is why an audio container has one.
+    default_video: Some(CodecId::Png),
     // `ffmpeg -h muxer=aiff` says "Default audio codec: pcm_s16be." The
     // generic `Pcm` that was here is not a codec the reference ever names.
     default_audio: Some(CodecId::PcmS16be),

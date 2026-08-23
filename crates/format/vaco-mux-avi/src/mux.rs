@@ -29,6 +29,7 @@
 
 use vaco_codec_core::{CodecId, CodecParameters};
 use vaco_core::{Error, MediaType, Rational, Result};
+use vaco_format_core::mux::BitstreamAction;
 use vaco_format_core::{FormatOptions, Muxer, MuxerDesc};
 use vaco_format_nalu::{LengthSize, convert::length_prefixed_to_annexb};
 use vaco_io::{IoOptions, IoWriter, MediaSink};
@@ -52,7 +53,8 @@ pub const MUXER: MuxerDesc = MuxerDesc {
     name: "avi",
     long_name: "AVI (Audio Video Interleaved)",
     extensions: &["avi"],
-    default_video: Some(CodecId::H264),
+    // Measured: `ffmpeg -h muxer=avi` -> mpeg4 / mp3, not h264.
+    default_video: Some(CodecId::Mpeg4),
     default_audio: Some(CodecId::Mp3),
     open: open_muxer,
 };
@@ -88,6 +90,14 @@ struct StreamOut {
     /// (`nal_length_size` unset or `0`, `vaco_codec_core::VideoParameters`'s
     /// own convention for "already start-code framed").
     length_size: Option<LengthSize>,
+    /// Set the first time [`AviMuxer::check_bitstream`] answers `Insert` for
+    /// this stream, so the second ask in the same chain-building loop
+    /// answers `Keep` instead of the same name again — a muxer that keeps
+    /// answering `Insert` is a loop, per
+    /// [`vaco_format_core::mux::MuxWriter`]'s own "the duplicate-name check
+    /// ... stops that from looping" doc, and this is the state that check
+    /// needs a muxer to carry.
+    bsf_decided: bool,
 }
 
 /// One `idx1` entry, with an absolute file position not yet converted to the
@@ -166,6 +176,23 @@ impl AviMuxer {
     /// the same bytes; the bytes are structured differently). Mirrors
     /// `vaco-mux-mpegts::MpegTsMuxer::maybe_convert`, which solves the exact
     /// same problem for the exact same codecs.
+    ///
+    /// # Why this is not the whole story any more
+    ///
+    /// This is pure framing — it does not splice SPS/PPS in front of a
+    /// keyframe the way `vaco-bsf-h2645::h264_mp4toannexb` does, because it
+    /// cannot: AVI's own `strf` carries no configuration record for this
+    /// crate to read parameter sets out of, and this method never sees more
+    /// than one packet at a time. A caller driving this muxer through
+    /// [`vaco_format_core::mux::MuxWriter`] with a real
+    /// [`vaco_format_core::mux::BsfProvider`] gets the correct, spliced
+    /// conversion from [`AviMuxer::check_bitstream`]'s M6 request instead,
+    /// and arrives here already in Annex B — the guard below is what stops
+    /// that already-converted payload from being reframed a second time as
+    /// if it were still length-prefixed. A caller driving [`Muxer`] directly
+    /// (every existing test, and any caller with no filter chain at all)
+    /// still gets exactly this method's old, unspliced behaviour, which is
+    /// wrong in the same way it always was but not a regression from it.
     fn maybe_convert(&mut self, index: usize, payload: &[u8]) -> Result<Vec<u8>> {
         let Some(stream) = self.streams.get(index) else {
             return Ok(payload.to_vec());
@@ -173,10 +200,25 @@ impl AviMuxer {
         let Some(length_size) = stream.length_size else {
             return Ok(payload.to_vec());
         };
+        if starts_with_annexb_start_code(payload) {
+            return Ok(payload.to_vec());
+        }
         let mut out = Vec::new();
         length_prefixed_to_annexb(payload, length_size, &mut out, &mut self.convert_budget)?;
         Ok(out)
     }
+}
+
+/// Whether `payload` already opens with an Annex B start code (`00 00 01` or
+/// `00 00 00 01`).
+///
+/// A length-prefixed sample's first four bytes are a big-endian byte count,
+/// which coincides with this only for a NAL exactly one byte long (`00 00 00
+/// 01`) — a unit too short to carry a NAL header, so not a real ambiguity in
+/// practice. Used to make [`AviMuxer::maybe_convert`] a no-op on a payload
+/// [`AviMuxer::check_bitstream`]'s filter chain has already reframed.
+fn starts_with_annexb_start_code(payload: &[u8]) -> bool {
+    payload.starts_with(&[0, 0, 1]) || payload.starts_with(&[0, 0, 0, 1])
 }
 
 /// Whether `id` is a codec whose length-prefixed framing needs converting to
@@ -319,6 +361,7 @@ impl Muxer for AviMuxer {
             channels: 1,
             bits_per_sample: 16,
             length_size: None,
+            bsf_decided: false,
         };
 
         if is_video {
@@ -493,6 +536,39 @@ impl Muxer for AviMuxer {
             .ok()
             .and_then(|i| self.streams.get(i))
             .map(|s| s.time_base)
+    }
+
+    /// Ask M6 for `h264_mp4toannexb`/`hevc_mp4toannexb` when the stream
+    /// declared length-prefixed framing at [`Muxer::add_stream`] — the same
+    /// condition [`AviMuxer::maybe_convert`] uses, so a caller driven through
+    /// [`vaco_format_core::mux::MuxWriter`] with a real `BsfProvider` gets the
+    /// splice-correct conversion instead of this crate's own framing-only
+    /// fallback (see that method's docs).
+    fn check_bitstream(&mut self, params: &CodecParameters, pkt: &Packet) -> Result<BitstreamAction> {
+        let idx = usize::try_from(pkt.stream_index).ok();
+        if idx.and_then(|i| self.streams.get(i)).is_some_and(|s| s.bsf_decided) {
+            return Ok(BitstreamAction::Keep);
+        }
+        if let Some(s) = idx.and_then(|i| self.streams.get_mut(i)) {
+            s.bsf_decided = true;
+        }
+        let needs_annexb = params
+            .codec_id
+            .is_some_and(is_h264_or_hevc)
+            && params
+                .video
+                .as_ref()
+                .and_then(|v| v.nal_length_size)
+                .is_some_and(|n| n > 0);
+        if !needs_annexb {
+            return Ok(BitstreamAction::Keep);
+        }
+        Ok(BitstreamAction::Insert {
+            name: match params.codec_id {
+                Some(CodecId::Hevc) => "hevc_mp4toannexb",
+                _ => "h264_mp4toannexb",
+            },
+        })
     }
 
     fn write_trailer(&mut self) -> Result<()> {

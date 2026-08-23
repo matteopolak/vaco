@@ -67,7 +67,9 @@ pub const MUXER_IMAGE2: MuxerDesc = MuxerDesc {
     name: "image2",
     long_name: "image2 sequence",
     extensions: &[],
-    default_video: None,
+    // Measured: `ffmpeg -h muxer=image2` -> `Default video codec: mjpeg.`
+    // (`CodecId::Jpeg` is spelled `mjpeg` in the reference's own listing.)
+    default_video: Some(vaco_codec_core::CodecId::Jpeg),
     default_audio: None,
     open: |sink: Box<dyn MediaSink>| Ok(Box::new(Image2SinkMuxer::new(sink)?) as Box<dyn Muxer>),
 };
