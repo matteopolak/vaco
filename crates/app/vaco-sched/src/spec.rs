@@ -35,12 +35,14 @@
 //!   in1 ─stream 1───▶ decode ─┘  (a second input into the same graph)
 //! ```
 
+use std::sync::Arc;
+
 use vaco_codec_core::{CodecParameters, Decoder, Encoder};
 use vaco_core::{Error, Rational, Result, TimeBase};
 use vaco_filter_core::{Graph, NodeId};
-use vaco_format_core::flags::FormatFlags;
+use vaco_format_core::metadata::MuxMetadata;
+use vaco_format_core::mux::{BsfProvider, MuxBuilder};
 use vaco_format_core::options::FormatOptions;
-use vaco_format_core::time::TIME_BASE_Q;
 use vaco_format_core::{Demuxer, Muxer};
 use vaco_limits::Limits;
 
@@ -152,9 +154,19 @@ pub(crate) enum KindSpec {
         sinks: Vec<NodeId>,
     },
     Mux {
-        muxer: Box<dyn Muxer>,
-        flags: FormatFlags,
-        options: Box<FormatOptions>,
+        /// Declares streams; consumed into a
+        /// [`vaco_format_core::mux::MuxWriter`] at [`PipelineSpec::build`]
+        /// (M8/M9 — `MuxBuilder` enforces the ordering that used to live in
+        /// this crate's own `MuxWork`, gap 8 in
+        /// `planning/INTERFACE-GAPS.md`).
+        ///
+        /// `Option` purely for the ownership dance of `MuxBuilder`'s
+        /// consuming `with_*` methods: [`PipelineSpec::set_output_metadata`]
+        /// and [`PipelineSpec::set_output_bsfs`] `take` it, call the method,
+        /// and put the result back. It reads `Some` at every point a caller
+        /// can observe it; `None` is a "this output was already built"
+        /// error, never a state a caller can reach twice.
+        builder: Option<Box<MuxBuilder>>,
         /// Per input port, the muxer stream index it feeds.
         stream_of_port: Vec<u32>,
     },
@@ -317,42 +329,104 @@ impl PipelineSpec {
             .map_or(0, |n| n.outputs.len())
     }
 
-    /// Add an output file, taking the container's flags from the muxer itself.
+    /// Add an output file with default [`FormatOptions`], no metadata and no
+    /// bitstream filters.
     ///
-    /// This used to pass `FormatFlags::empty()`, which reads as "nothing
-    /// special" and is in fact the *strictest* container: `requires_strict_dts`
-    /// is `!TS_NONSTRICT`, so an empty set silently opted every caller into
-    /// strictly increasing DTS. Asking the muxer is both correct and impossible
-    /// to get wrong by omission.
+    /// See [`PipelineSpec::add_output_with`] for options,
+    /// [`PipelineSpec::set_output_metadata`] for `-metadata`, and
+    /// [`PipelineSpec::set_output_bsfs`] for M6.
     pub fn add_output(&mut self, muxer: Box<dyn Muxer>) -> OutputRef {
-        let flags = muxer.flags();
-        self.add_output_with(muxer, flags, FormatOptions::default())
+        self.add_output_with(muxer, &FormatOptions::default())
     }
 
-    /// Add an output file, declaring the container's flags and options.
+    /// Add an output file, declaring the output-side [`FormatOptions`] (FW-11:
+    /// `-avoid_negative_ts`, `-max_interleave_delta`, …).
     ///
-    /// `flags` are the muxer's own — they decide whether `avoid_negative_ts`
-    /// resolves to shifting and whether DTS must strictly increase — and they
-    /// come from the container's `MuxerDesc`, not from the caller's preference.
-    pub fn add_output_with(
-        &mut self,
-        muxer: Box<dyn Muxer>,
-        flags: FormatFlags,
-        options: FormatOptions,
-    ) -> OutputRef {
+    /// Builds a [`MuxBuilder`] over `muxer` immediately. The container's flags
+    /// — whether `avoid_negative_ts` may shift, whether DTS must strictly
+    /// increase — are read from the muxer once, inside `MuxBuilder::new`, and
+    /// not consulted again: they are a property of the container, not a
+    /// caller preference, and `MuxBuilder` is what now owns asking. Every
+    /// stream [`PipelineSpec::map`] adds against the returned [`OutputRef`]
+    /// goes through [`MuxBuilder::add_stream`], so the codec-compatibility
+    /// check (M15, `query_codec`) runs before this crate's own `MuxWork` ever
+    /// sees the stream — gap 8 in `planning/INTERFACE-GAPS.md`.
+    pub fn add_output_with(&mut self, muxer: Box<dyn Muxer>, options: &FormatOptions) -> OutputRef {
+        let builder = MuxBuilder::new(muxer, options);
         let label = format!("output {}", self.nodes.len());
         let id = self.push(NodeSpec {
             label,
             kind: KindSpec::Mux {
-                muxer,
-                flags,
-                options: Box::new(options),
+                builder: Some(Box::new(builder)),
                 stream_of_port: Vec::new(),
             },
             inputs: Vec::new(),
             outputs: Vec::new(),
         });
         OutputRef(id)
+    }
+
+    /// Attach file- and stream-level metadata, delivered to
+    /// [`Muxer::set_metadata`] at [`MuxBuilder::open`] (M30) — after every
+    /// stream is declared and time bases are settled, but before the header.
+    ///
+    /// This is the ordering half of gap 8 (`planning/INTERFACE-GAPS.md`): the
+    /// CLI used to call `set_metadata` on the muxer directly, before
+    /// `PipelineSpec::map` had declared a single stream, because there was no
+    /// later point at which it could still reach the muxer. `vaco-mux-mp4`
+    /// and `vaco-mux-matroska` both resolve per-stream metadata lazily, at
+    /// `write_header` time, to survive exactly that ordering — see gap 8a's
+    /// history. Calling this before [`PipelineSpec::build`] restores the
+    /// ordering `Muxer::set_metadata`'s own doc comment describes; the lazy
+    /// resolution in those two crates is no longer required by this path, but
+    /// changing them is out of this crate's scope.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidData`] if `output` does not name an output, or if its
+    /// muxer has already been opened by [`PipelineSpec::build`].
+    pub fn set_output_metadata(&mut self, output: OutputRef, metadata: MuxMetadata) -> Result<()> {
+        let node = self
+            .nodes
+            .get_mut(output.0 as usize)
+            .ok_or(Error::InvalidData("no such output"))?;
+        let KindSpec::Mux { builder, .. } = &mut node.kind else {
+            return Err(Error::InvalidData("that handle is not an output"));
+        };
+        let b = builder.take().ok_or(Error::InvalidData(
+            "the output's muxer has already been opened",
+        ))?;
+        *builder = Some(Box::new(b.with_metadata(metadata)));
+        Ok(())
+    }
+
+    /// Supply the bitstream filters M6 may need
+    /// ([`vaco_format_core::mux::BsfChain`]/[`BsfProvider`]), so a stream the
+    /// muxer's `check_bitstream` flags is actually converted instead of being
+    /// written unfiltered — the second face of gap 8
+    /// (`planning/INTERFACE-GAPS.md`).
+    ///
+    /// Without a call to this, an output's M6 stage runs against
+    /// [`vaco_format_core::mux::NoBsfs`], which errs if any muxer ever asks
+    /// it for a filter by name.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidData`] if `output` does not name an output, or if its
+    /// muxer has already been opened by [`PipelineSpec::build`].
+    pub fn set_output_bsfs(&mut self, output: OutputRef, bsfs: Arc<dyn BsfProvider>) -> Result<()> {
+        let node = self
+            .nodes
+            .get_mut(output.0 as usize)
+            .ok_or(Error::InvalidData("no such output"))?;
+        let KindSpec::Mux { builder, .. } = &mut node.kind else {
+            return Err(Error::InvalidData("that handle is not an output"));
+        };
+        let b = builder.take().ok_or(Error::InvalidData(
+            "the output's muxer has already been opened",
+        ))?;
+        *builder = Some(Box::new(b.with_bsfs(bsfs)));
+        Ok(())
     }
 
     /// Attach a decoder to a packet producer. Frames come out in the producer's
@@ -465,22 +539,22 @@ impl PipelineSpec {
             .get_mut(to.0 as usize)
             .ok_or(Error::InvalidData("no such output"))?;
         let KindSpec::Mux {
-            muxer,
+            builder,
             stream_of_port,
-            ..
         } = &mut node.kind
         else {
             return Err(Error::InvalidData("that handle is not an output"));
         };
-        let index = muxer.add_stream(params)?;
+        let b = builder.as_mut().ok_or(Error::InvalidData(
+            "the output's muxer has already been opened",
+        ))?;
+        // M15 (`query_codec`) runs inside `add_stream`, before the muxer is
+        // asked to do anything — gap 8's third face, closed by routing
+        // through `MuxBuilder` instead of the raw `dyn Muxer` this used to
+        // call directly.
+        let index = b.add_stream(params, from_tb)?;
         stream_of_port.push(index);
         node.inputs.push((from.into(), from_tb));
         Ok(index)
-    }
-
-    /// The time base a muxer chose for one of its streams, or
-    /// [`TIME_BASE_Q`] when it has no opinion.
-    pub(crate) fn muxer_time_base(muxer: &dyn Muxer, index: u32) -> TimeBase {
-        muxer.stream_time_base(index).unwrap_or(TIME_BASE_Q)
     }
 }

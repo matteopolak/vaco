@@ -163,6 +163,23 @@ let Some(name) = vaco_registry::demuxers().iter().map(|d| d.name)
     .find(|n| vaco_registry::muxer_by_name(n).is_none()) else { return };
 ```
 
+## `git stash` in a shared tree is a loaded gun
+
+An agent ran `git stash` once to A/B-test a behaviour, recognised immediately
+that it violated the rule, and restored with `git stash pop` in the same turn.
+Nothing was lost, and self-reporting it was exactly right.
+
+But it is worth being concrete about what was at stake: **four other agents had
+uncommitted work in that tree at that moment** — three whole new crates among
+it — and `git stash` would have swept every file of it away, in a directory none
+of them would think to look in. They would have found their work simply gone,
+mid-run, with no error.
+
+That is why the rule is "no git commands" rather than "no destructive git
+commands". `stash` does not read as destructive. In a shared tree it is.
+
+To A/B-test a change, copy the file aside and copy it back.
+
 ## An empty collection at construction is not an answer
 
 Twice in one week, in unrelated crates:

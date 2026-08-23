@@ -227,16 +227,17 @@ fn open_null(_sink: Box<dyn MediaSink>) -> Result<Box<dyn Muxer>> {
 ///
 /// # Why counting here rather than trusting the container's own byte count
 ///
-/// No [`Muxer`] implementation in this workspace reports payload bytes back to
-/// its caller — that is `vaco_format_core::mux::MuxReport`'s job, and it is
-/// produced by [`vaco_format_core::mux::MuxWriter`], which `vaco-sched`'s own
-/// mux node does not use (see `vaco_sched::node::MuxWork`'s docs: it re-derives
-/// M1–M11 against a raw `dyn Muxer` rather than going through the wrapper, for
-/// reasons specific to a step-driven pipeline). So the CLI's own count is the
-/// only count there is, and this type is what makes it count *real* writes:
-/// every packet handed to `write_packet` here is the same packet the inner
-/// muxer receives and, `write_packet` having returned successfully, has
-/// already turned into bytes on the wire or on disk.
+/// `vaco-sched`'s mux node does now drive a
+/// [`vaco_format_core::mux::MuxWriter`] (gap 8, `planning/INTERFACE-GAPS.md`,
+/// closed), so `vaco_format_core::mux::MuxReport` exists for every run — but
+/// it is returned from `MuxWriter::finish`, deep inside the pipeline, and
+/// `vaco-sched` does not thread a per-output report back out to its caller.
+/// Adding that channel is a `vaco-sched` API change this crate did not need:
+/// this type already counts *real* writes without it, and does so at a finer
+/// grain than `MuxReport` does (per media type, not just per stream) — every
+/// packet handed to `write_packet` here is the same packet the inner muxer
+/// receives and, `write_packet` having returned successfully, has already
+/// turned into bytes on the wire or on disk.
 pub struct TallyingMuxer {
     inner: Box<dyn Muxer>,
     sink: Sink,

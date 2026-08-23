@@ -29,10 +29,10 @@
 //! which is the classic bug in this shape of code.
 
 use vaco_codec_core::{Decoder, Encoder, Stage};
-use vaco_core::{Error, Rational, Result, TimeBase, Timestamp};
+use vaco_core::{Error, Rational, Result, Timestamp};
 use vaco_filter_core::{Graph, GraphStatus, LinkFormat, NodeId};
-use vaco_format_core::interleave::{InterleaveQueue, MuxTimestamps};
-use vaco_format_core::{Demuxer, Muxer};
+use vaco_format_core::Demuxer;
+use vaco_format_core::mux::MuxWriter;
 use vaco_frame::Frame;
 
 use crate::wire::Payload;
@@ -169,7 +169,7 @@ impl Work {
             Self::Decode(c) => c.stage == Stage::Drained,
             Self::Encode(c) => c.stage == Stage::Drained,
             Self::Filter(f) => f.sink_closed.iter().all(|c| *c),
-            Self::Mux(m) => m.trailer_written,
+            Self::Mux(m) => m.writer.is_none(),
         }
     }
 
@@ -671,42 +671,47 @@ pub(crate) fn link_time_base(format: &LinkFormat) -> Rational {
 
 // --------------------------------------------------------------------- mux
 
-/// A muxer, its timestamp chain and its interleave queue.
+/// A muxer already past its header, mid-file.
 ///
-/// The ordering rules are `vaco-format-core`'s, not this crate's: M1 to M4 and
-/// the interleave queue are already written and already tested there, and a
-/// second implementation of packet ordering is exactly the kind of duplication
-/// D19 exists to prevent.
+/// The ordering rules — M1 to M11, the interleave queue, the bitstream-filter
+/// stage — are `vaco-format-core`'s, not this crate's:
+/// [`vaco_format_core::mux::MuxWriter`] already implements and tests all of
+/// them, and a second implementation of packet ordering was exactly the kind
+/// of duplication D19 exists to prevent. This struct used to be that second
+/// implementation — driving a raw `dyn Muxer` through hand-rolled `init`,
+/// header, interleave-queue and trailer bookkeeping — which is gap 8 in
+/// `planning/INTERFACE-GAPS.md`: it is also why `set_metadata` had to be
+/// called before any stream existed, and why the bitstream-filter stage
+/// (M6) and the codec-compatibility check (M15) were never reached at all.
+/// [`crate::spec::PipelineSpec::build`] now calls
+/// [`vaco_format_core::mux::MuxBuilder::open`] instead, so by the time a
+/// `MuxWork` exists the header is already written and every stream already
+/// passed `query_codec`; this struct's only job is feeding packets to the
+/// `MuxWriter` that came back and calling `finish` once every input is done.
 pub(crate) struct MuxWork {
-    pub muxer: Box<dyn Muxer>,
-    pub ts: MuxTimestamps,
-    pub queue: InterleaveQueue,
+    /// `None` once [`MuxWriter::finish`] has run — there is no second
+    /// trailer, so the value that could write one is gone rather than
+    /// tracked by a separate flag.
+    pub writer: Option<MuxWriter>,
     /// Input port to muxer stream index.
     pub stream_index: Vec<u32>,
-    /// Input port to the time base its wire counts in.
-    pub from_time_base: Vec<TimeBase>,
-    /// Input port to the time base the muxer chose for that stream.
-    pub to_time_base: Vec<TimeBase>,
-    pub header_written: bool,
-    pub trailer_written: bool,
 }
 
 impl std::fmt::Debug for MuxWork {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MuxWork")
-            .field("header_written", &self.header_written)
-            .field("trailer_written", &self.trailer_written)
-            .field("queued", &self.queue.pending())
+            .field("finished", &self.writer.is_none())
+            .field("report", &self.writer.as_ref().map(MuxWriter::report))
             .finish_non_exhaustive()
     }
 }
 
 impl MuxWork {
     fn ready(&self, ports: Ports<'_>) -> bool {
-        if self.trailer_written {
+        if self.writer.is_none() {
             return false;
         }
-        ports.any_input() || ports.any_new_eof() || (ports.all_eof() && !self.trailer_written)
+        ports.any_input() || ports.any_new_eof() || ports.all_eof()
     }
 
     fn advance(
@@ -715,15 +720,10 @@ impl MuxWork {
         ended: &[(usize, Timestamp)],
         all_ended: bool,
     ) -> Result<bool> {
-        if self.trailer_written {
+        let Some(writer) = self.writer.as_mut() else {
             return Ok(false);
-        }
+        };
         let mut progressed = false;
-        if !self.header_written {
-            self.muxer.write_header()?;
-            self.header_written = true;
-            progressed = true;
-        }
         for (port, item) in inputs {
             let Some(mut packet) = item.into_packet() else {
                 return Err(Error::InvalidData("a frame reached a muxer"));
@@ -734,25 +734,21 @@ impl MuxWork {
                 ));
             };
             packet.stream_index = index;
-            let from = self.from_time_base.get(port).copied().unwrap_or_default();
-            let to = self.to_time_base.get(port).copied().unwrap_or_default();
-            self.ts.apply(&mut packet, from, to)?;
-            self.queue.push(packet)?;
+            // M1-M4 (rescale), M5 (interleave), M6 (bitstream filters) and M7
+            // (the write itself) all happen inside this one call now — the
+            // input/output time bases `MuxWriter` rescales between are the
+            // ones `MuxBuilder::add_stream`/`open` already settled.
+            writer.write_packet(packet)?;
             progressed = true;
         }
         for (port, _) in ended {
             if let Some(index) = self.stream_index.get(*port).copied() {
-                self.queue.end_stream(index);
+                writer.end_stream(index)?;
                 progressed = true;
             }
         }
-        while let Some(packet) = self.queue.next(all_ended) {
-            self.muxer.write_packet(&packet)?;
-            progressed = true;
-        }
-        if all_ended && self.queue.is_empty() {
-            self.muxer.write_trailer()?;
-            self.trailer_written = true;
+        if all_ended && let Some(w) = self.writer.take() {
+            w.finish()?;
             progressed = true;
         }
         Ok(progressed)

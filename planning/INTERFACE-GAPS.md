@@ -188,7 +188,85 @@ signature that ~90 crates already implement — so the additive fix is the same
 shape: a defaulted trait method that hands over the extra sources after
 construction, not a wider `open`.
 
-## 8. `vaco-sched` drives a raw `dyn Muxer` instead of `MuxWriter`
+## 8. `vaco-sched` drives a raw `dyn Muxer` instead of `MuxWriter` — CLOSED 2026-08-23
+
+**One change did close all three faces** — `PipelineSpec` now holds a
+`vaco_format_core::mux::MuxBuilder` per output from `add_output`/
+`add_output_with` onward, `PipelineSpec::map` calls `MuxBuilder::add_stream`
+instead of `Muxer::add_stream` directly, and `PipelineSpec::build` consumes
+the builder with one call to `MuxBuilder::open`, handing the resulting
+`MuxWriter` to a `node::MuxWork` that shrank to `Option<MuxWriter>` plus the
+per-port bookkeeping `write_packet`/`end_stream`/`finish` need. No `#[cfg]`,
+no dual code path: `vaco-sched`'s own M8–M11 re-derivation (`header_written`/
+`trailer_written` bools, a hand-rolled `InterleaveQueue`/`MuxTimestamps` pair)
+is gone, not bypassed.
+
+Two new `PipelineSpec` methods carry what the wrapper needs that the old
+`add_output_with(muxer, flags, options)` signature had nowhere to put:
+`set_output_metadata(output, metadata)` (M30) and `set_output_bsfs(output,
+bsfs)` (M6's `BsfProvider`). `add_output_with` itself lost its `flags`
+parameter — `MuxBuilder::new` reads `Muxer::flags()` from the muxer directly,
+so a parameter that could only ever legally equal `muxer.flags()` was pure
+redundancy.
+
+What each face actually got, now that it has been measured rather than
+assumed:
+
+- **Ordering (8a) — fully closed.** `set_metadata` now runs where
+  `Muxer::set_metadata`'s own doc comment always said it would: after every
+  stream is declared and its time base settled, before the header. The CLI's
+  `set_output_metadata` call can happen before or after `PipelineSpec::map`
+  now, because `MuxBuilder::open` is what fixes the order the muxer actually
+  sees, not the caller's call order at this layer. `vaco-mux-mp4`'s and
+  `vaco-mux-matroska`'s lazy per-stream resolution — deferred to
+  `write_header` time specifically so it survives either call order — is no
+  longer load-bearing for this path, but neither crate needed to change:
+  their `set_metadata` overrides just store the metadata and resolve it
+  later regardless of when they were called, so they are correct under the
+  new ordering by construction, and their `set_metadata_before_add_stream_
+  still_resolves_*` regression tests pass unmodified.
+- **M15 (`query_codec`) — mechanically closed, practically narrower than the
+  writeup below implied.** `PipelineSpec::map` now asks before `Muxer::add_stream`
+  runs, closing the exact bypass described. But investigating the six
+  known-incompatible pairs this gap's writeup pointed at
+  (`planning/CONFORMANCE-FINDINGS.md` finding 19) found that `query_codec`
+  was never the mechanism those six needed: `CodecSupport` answers "can this
+  container ever hold this codec" (H.264-in-AVI is `Supported`), and the six
+  pairs fail on narrower stream-content constraints — a packet with no PTS at
+  all, ADTS-framed AAC where the container needs raw `AudioSpecificConfig`
+  framing — that live in `vaco-mux-avi`'s and `vaco-mux-mpegts`'s own
+  `add_stream`, reachable through the *old* direct `Muxer::add_stream` call
+  just as much as the new `MuxBuilder` one. Measured directly: MPEG-TS→AVI
+  with ADTS AAC refuses identically before and after this change
+  (`unsupported: avi: ADTS-framed AAC has no AVI representation…`, exit 218 —
+  the reference's own message is "ADTS is only supported with codec tag
+  0x1610", exit 234; same refusal, different wording/code, a separate and
+  smaller gap). `query_codec` genuinely closing a real bypass and finding 19's
+  six pairs turning on a different mechanism are both true; the original
+  writeup below conflated them.
+- **M6 (bitstream filters) — the stage runs; nothing feeds it yet.** Every
+  packet `MuxWriter::write_packet` handles now passes through
+  `check_bitstream`/`BsfChain` before `Muxer::write_packet` sees it, and
+  `PipelineSpec::set_output_bsfs` is the seam for a real `BsfProvider`. But no
+  caller supplies one: there is no `vaco-bsf-*` crate in this workspace, and
+  neither `vaco-mux-avi` nor `vaco-mux-mpegts` — the two the original writeup
+  named — implements `check_bitstream` at all, so both still run their own
+  inline length-prefix-to-Annex-B conversion and both still get
+  `BitstreamAction::Keep` (the trait default) from M6 regardless of which
+  path drives them. **Their inline conversions are not dead code from this
+  change.** Closing that needs three things done together, deliberately not
+  done in this pass so a bisect stays possible if remuxing breaks: a
+  bitstream-filter crate, a `BsfProvider` (the mux-side mirror of
+  `vaco-registry`'s `ParserProvider`, which does not exist for
+  `Kind::BitstreamFilter` yet either — `vaco-codec-core` has no
+  `BitstreamFilterDesc`, per `vaco_registry::Kind::has_table`'s own doc
+  comment), and those two crates' `check_bitstream` asking for it.
+
+See `docs/app/vaco-sched.md` and `docs/app/vaco-cli.md` (#10) for the
+implementation detail and the measurements above.
+
+Original report, kept for the *why* — including why it took three reports to
+notice it was one gap:
 
 **This is one gap wearing three faces**, and each was reported separately before
 anyone noticed they were the same thing:
@@ -230,6 +308,10 @@ a constraint every future muxer inherits without being told, and the honest fix
 is the same one gap 2 needs: `MuxWork` driving `MuxWriter` instead of a bare
 `dyn Muxer`.
 
+**Fixed 2026-08-23** as part of closing gap 8 above — see that entry for what
+changed and why the lazy resolution in both crates turned out not to need
+touching.
+
 ## 9. `Muxer::add_stream` takes only `CodecParameters`
 
 Reported by: the same pass. `-disposition` and `-program` parse correctly and
@@ -249,11 +331,16 @@ running.
 Two more findings from the same wiring pass, recorded here because they are the
 same class — an interface that cannot express what a caller needs:
 
-- **`vaco-sched`'s `MuxWork` never runs the M6 bitstream-filter stage.** It
-  drives a raw `dyn Muxer` rather than `MuxWriter`, so `BsfChain`/`BsfProvider`
-  are skipped and a stream needing conversion (Annex-B H.264 into MP4) is
-  written unfiltered instead of converted or refused. Common-case remuxing is
-  unaffected; the restructure is a wave-boundary change.
+- **`vaco-sched`'s `MuxWork` never ran the M6 bitstream-filter stage — fixed
+  2026-08-23 as part of gap 8.** It drove a raw `dyn Muxer` rather than
+  `MuxWriter`, so `BsfChain`/`BsfProvider` were skipped and a stream needing
+  conversion was written unfiltered instead of converted or refused. `MuxWork`
+  now drives a `MuxWriter`, so the stage runs — but no `BsfProvider` in this
+  workspace supplies a real filter yet (there is no `vaco-bsf-*` crate), and
+  `vaco-mux-avi`/`vaco-mux-mpegts`, the two containers with an inline
+  conversion of their own, do not implement `check_bitstream` to ask M6 for
+  one. See gap 8's entry above for what closing that the rest of the way
+  needs.
 - **`build_work` read `Muxer::stream_time_base` before calling `init()`** — so
   `vaco-mux-mp4`'s movie-timescale derivation and `vaco-mux-mpegts`'s PCR-PID
   assignment never ran at all. Fixed in place, since the ordering was simply

@@ -382,22 +382,35 @@ mod tests {
     }
 
     #[test]
-    fn filter_and_bsf_report_absence() {
+    fn filter_and_bsf_describe_what_is_registered_and_reject_the_rest() {
+        // This named `scale` as its example of an unknown filter, and `scale`
+        // was registered the same day. Ninth test in this project to fail *on
+        // success*; the rule and the registry-driven pattern are in
+        // `planning/AGENT-CONSTRAINTS.md`.
         assert_eq!(
             text(Some("filter")),
             "No filter name specified.\n\nExiting with exit code 0\n"
         );
+        for f in vaco_registry::filters() {
+            let s = text(Some(&format!("filter={}", f.name)));
+            assert!(
+                !s.starts_with("Unknown filter"),
+                "registered filter `{}` reported unknown: {s}",
+                f.name
+            );
+        }
         assert_eq!(
-            text(Some("filter=scale")),
-            "Unknown filter 'scale'.\n\nExiting with exit code 0\n"
+            text(Some("filter=nonesuchxyz")),
+            "Unknown filter 'nonesuchxyz'.\n\nExiting with exit code 0\n"
         );
+
         assert_eq!(
             text(Some("bsf")),
             "No bitstream filter name specified.\n\nExiting with exit code 0\n"
         );
         assert_eq!(
-            text(Some("bsf=aac_adtstoasc")),
-            "Unknown bit stream filter 'aac_adtstoasc'.\n\nExiting with exit code 0\n"
+            text(Some("bsf=nonesuchxyz")),
+            "Unknown bit stream filter 'nonesuchxyz'.\n\nExiting with exit code 0\n"
         );
     }
 

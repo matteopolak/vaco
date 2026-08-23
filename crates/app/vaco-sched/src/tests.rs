@@ -75,12 +75,21 @@ struct MuxLog {
     trailer: bool,
     /// `(stream index, pts, dts)` in write order.
     packets: Vec<(u32, Option<i64>, Option<i64>)>,
+    /// File-level tags [`Muxer::set_metadata`] was called with.
+    metadata_tags: Vec<(String, String)>,
+    /// `(streams declared, header already written)` at the moment
+    /// `set_metadata` ran, or `None` if it was never called — the ordering
+    /// gap 8 (`planning/INTERFACE-GAPS.md`) is about.
+    metadata_snapshot: Option<(usize, bool)>,
 }
 
 #[derive(Debug)]
 struct RecordingMuxer {
     log: Arc<Mutex<MuxLog>>,
     time_base: Rational,
+    /// M15: a codec this container refuses, for
+    /// [`an_incompatible_codec_is_refused_before_the_muxer_sees_it`].
+    reject: Option<vaco_codec_core::CodecId>,
 }
 
 impl RecordingMuxer {
@@ -90,9 +99,19 @@ impl RecordingMuxer {
             Self {
                 log: Arc::clone(&log),
                 time_base,
+                reject: None,
             },
             log,
         )
+    }
+
+    fn rejecting(
+        time_base: Rational,
+        reject: vaco_codec_core::CodecId,
+    ) -> (Self, Arc<Mutex<MuxLog>>) {
+        let (mut m, log) = Self::pair(time_base);
+        m.reject = Some(reject);
+        (m, log)
     }
 }
 
@@ -131,6 +150,25 @@ impl Muxer for RecordingMuxer {
 
     fn stream_time_base(&self, _stream_index: u32) -> Option<Rational> {
         Some(self.time_base)
+    }
+
+    fn set_metadata(&mut self, metadata: &vaco_format_core::metadata::MuxMetadata) -> Result<()> {
+        let mut log = self.log.lock().expect("mux log");
+        log.metadata_snapshot = Some((log.streams.len(), log.header));
+        log.metadata_tags = metadata.tags.clone();
+        Ok(())
+    }
+
+    fn query_codec(
+        &self,
+        codec: vaco_codec_core::CodecId,
+        _strict: i32,
+    ) -> vaco_format_core::mux::CodecSupport {
+        if self.reject == Some(codec) {
+            vaco_format_core::mux::CodecSupport::Unsupported
+        } else {
+            vaco_format_core::mux::CodecSupport::Supported
+        }
     }
 }
 
@@ -292,6 +330,77 @@ fn stream_copy_moves_every_packet() {
     assert_eq!(log.packets[0].1, Some(90));
     assert_eq!(log.packets[9].1, Some(900));
     assert!(log.packets.windows(2).all(|w| w[0].2 < w[1].2));
+}
+
+/// Gap 8 (`planning/INTERFACE-GAPS.md`): `MuxWork` used to drive a raw
+/// `dyn Muxer`, so the CLI's `set_metadata` call landed before
+/// `PipelineSpec::map` had declared a single stream. `PipelineSpec::build`
+/// now goes through `MuxBuilder::open`, which calls `set_metadata` at M30 —
+/// after every stream and its time base are settled, but before the header.
+/// `RecordingMuxer::set_metadata` records both timing facts and the tags
+/// themselves, so this test fails if either the ordering regresses or the
+/// call is silently dropped.
+#[test]
+fn metadata_reaches_the_muxer_after_streams_and_before_the_header() {
+    let mut spec = PipelineSpec::new();
+    let input = spec.add_input(Box::new(ScriptedDemuxer::new(
+        vec![video_stream(0, TB)],
+        packets(0, 3, 4),
+    )));
+    let (muxer, log) = RecordingMuxer::pair(MUX_TB);
+    let output = spec.add_output(Box::new(muxer));
+    let tap = spec.input_stream(input, 0).unwrap();
+    spec.map(tap, output, &CodecParameters::new(MediaType::Video))
+        .unwrap();
+
+    let mut meta = vaco_format_core::metadata::MuxMetadata::default();
+    meta.tags.push(("title".to_owned(), "gap 8".to_owned()));
+    spec.set_output_metadata(output, meta).unwrap();
+
+    let mut pipeline = spec.build().unwrap();
+    assert_eq!(pipeline.run().unwrap(), Finish::Complete);
+
+    let log = log.lock().unwrap();
+    let (streams_at_metadata, header_at_metadata) = log
+        .metadata_snapshot
+        .expect("set_metadata was never called");
+    assert!(
+        streams_at_metadata > 0,
+        "set_metadata ran before any stream was declared"
+    );
+    assert!(!header_at_metadata, "set_metadata ran after the header");
+    assert_eq!(
+        log.metadata_tags,
+        vec![("title".to_owned(), "gap 8".to_owned())]
+    );
+}
+
+/// Gap 8's third face: `PipelineSpec::map` used to call
+/// `muxer.add_stream(params)` directly on the trait object, bypassing
+/// `query_codec` (M15) entirely, so an incompatible codec/container pairing
+/// that the muxer itself refuses would still be accepted. `map` now goes
+/// through `MuxBuilder::add_stream`, which asks first.
+#[test]
+fn an_incompatible_codec_is_refused_before_the_muxer_sees_a_stream() {
+    let mut spec = PipelineSpec::new();
+    let input = spec.add_input(Box::new(ScriptedDemuxer::new(
+        vec![video_stream(0, TB)],
+        packets(0, 3, 4),
+    )));
+    let (muxer, log) = RecordingMuxer::rejecting(MUX_TB, vaco_codec_core::CodecId::H264);
+    let output = spec.add_output(Box::new(muxer));
+    let tap = spec.input_stream(input, 0).unwrap();
+
+    let params = CodecParameters::video().with_codec(vaco_codec_core::CodecId::H264);
+    let err = spec.map(tap, output, &params).expect_err(
+        "an unsupported codec must be refused at map time, not written and discovered later",
+    );
+    assert!(matches!(err, Error::Unsupported(_)), "got {err:?}");
+
+    // Refused before `add_stream` ever reached the muxer: the log has no
+    // stream to show for it, which is the difference between "rejected" and
+    // "accepted, then never used".
+    assert!(log.lock().unwrap().streams.is_empty());
 }
 
 #[test]

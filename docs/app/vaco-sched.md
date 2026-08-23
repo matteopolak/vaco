@@ -117,48 +117,64 @@ chain agree. Rescaling happens exactly once per item, when a consumer takes it
 out of a wire — the wire records the producer's base, the input port records the
 consumer's.
 
-Muxer-side ordering is *not* reimplemented here: `MuxTimestamps` (M1–M4) and
-`InterleaveQueue` come from `vaco-format-core`. What *is* reimplemented is the
-init/header/packet/trailer state machine around them — `node::MuxWork` drives a
-raw `Box<dyn Muxer>` directly rather than going through
-`vaco_format_core::mux::MuxBuilder`/`MuxWriter`, because that wrapper consumes
-`self` at each phase transition and a step-driven node needs to keep the
-component around between calls to `advance`. `MuxWork` re-derives the subset of
-M8–M12 it needs (streams before header, header once, packets between header and
-trailer, trailer once and only after every input has drained) rather than
-getting it from the wrapper for free.
+Muxer-side ordering is *not* reimplemented here, and — since gap 8
+(`planning/INTERFACE-GAPS.md`) closed — no longer partially reimplemented
+either. `node::MuxWork` used to drive a raw `Box<dyn Muxer>` directly rather
+than going through `vaco_format_core::mux::MuxBuilder`/`MuxWriter`, because
+that wrapper consumes `self` at each phase transition and a step-driven node
+needs to keep *something* around between calls to `advance`. The fix is not
+to avoid that consumption but to place it correctly: `PipelineSpec` now holds
+a `MuxBuilder` per output from `add_output`/`add_output_with` onward —
+`PipelineSpec::map` calls `MuxBuilder::add_stream` instead of
+`Muxer::add_stream` directly — and `PipelineSpec::build` consumes it with one
+call to `MuxBuilder::open`, handing the resulting `MuxWriter` to `MuxWork`.
+`MuxWork` itself shrank to a thin driver: `Option<MuxWriter>`, `write_packet`
+and `end_stream` per port, and `finish` once every input is done. M1–M11 (the
+whole state machine), M15 (`query_codec`) and M30 (`set_metadata`'s ordering)
+all now come from `vaco-format-core` rather than being re-derived here — which
+is what closed all three faces of gap 8 in one change:
 
-**M12 (`init` runs once, after every stream is declared, before anything reads
-a time base) was missing until this pass.** `PipelineSpec::build`'s
-`build_work` read `Muxer::stream_time_base` to seed the interleave queue's
-per-stream bases *before* ever calling `Muxer::init`, so a container whose
-`init` derives something `stream_time_base` depends on saw the pre-`init`
-state: `vaco-mux-mp4`'s `init` picks the movie timescale from the largest track
-timescale (and only takes that path when a track's timescale is nonzero, i.e.
-after `add_stream` has run — `init` is what makes that value trustworthy),
-and `vaco-mux-mpegts`'s `init` is also where `pcr_pid` gets assigned and where
-the "at least one stream" check lives. Neither ran before this fix, because
-nothing called `init` at all. `build_work` now calls `muxer.init()?`
-immediately after destructuring `KindSpec::Mux` and before the
-`stream_time_base` loop, matching `MuxBuilder::open`'s own ordering; `build_work`
-had to become fallible (`Result<Work>`) for the `?` to have somewhere to go.
+- **M12** (`init` runs once, after every stream is declared, before anything
+  reads a time base) is `MuxBuilder::open`'s job now, not `build_work`'s own
+  hand-rolled call to `muxer.init()?` ahead of a `stream_time_base` loop. Same
+  ordering, moved to where the framework already tests it.
+- **M30** (`set_metadata` runs after streams and time bases are settled, but
+  before the header) is `MuxBuilder::open`'s as well.
+  `PipelineSpec::set_output_metadata` attaches the metadata to the builder at
+  any point before `build`; the call itself can happen before or after
+  `map`, because the ordering that reaches the muxer is fixed by `open`, not
+  by call order at this layer. This is the fix for gap 8a: the CLI used to
+  call `Muxer::set_metadata` directly, before `add_output` had taken the
+  muxer, because there was no later point to reach it from — see
+  `docs/app/vaco-cli.md`.
+- **M15** (`query_codec`, asked before the muxer does anything) now actually
+  runs: `PipelineSpec::map` calls `MuxBuilder::add_stream`, which asks
+  `query_codec` first and returns `Error::Unsupported` before the raw
+  `Muxer::add_stream` is ever reached. Previously `map` called
+  `Muxer::add_stream` directly, and the check — implemented, tested — was
+  simply never asked.
+- **M6** (the bitstream-filter stage, `BsfChain`/`BsfProvider`) now runs too:
+  every packet handed to `MuxWriter::write_packet` passes through
+  `check_bitstream`/`BsfChain` before `Muxer::write_packet` sees it.
+  `PipelineSpec::set_output_bsfs` is the seam for supplying real filters; no
+  caller in this workspace calls it yet (see the gotcha below), so every
+  output still runs M6 against `vaco_format_core::mux::NoBsfs`, which is
+  correct — no muxer's `check_bitstream` asks it for anything — but is not
+  the same claim as "a real bitstream filter now converts a stream that
+  needed it". No `vaco-bsf-*` crate exists in this workspace yet, and neither
+  `vaco-mux-avi` nor `vaco-mux-mpegts` (which each carry their own inline
+  length-prefix-to-Annex-B conversion) call `check_bitstream` to ask for one
+  — they use the trait's default (`Keep`), so M6 is a no-op for them
+  regardless of which path drives it. Their inline conversions are **not**
+  dead code from this change; closing that requires a filter crate, a
+  `BsfProvider`, and those two crates' own `check_bitstream` to start asking
+  — three changes outside this crate, done together so a bisect stays
+  possible if remuxing breaks.
 
-**M6 (the bitstream-filter-in-muxer stage) is not implemented in this node at
-all**, unlike `MuxBuilder`/`MuxWriter`, which carry `BsfChain` and a
-`BsfProvider`. `MuxWork::advance` pushes packets from the queue straight into
-`Muxer::write_packet` with no `check_bitstream`/filter step in between, so a
-stream whose bitstream form the destination container cannot carry as-is (Annex
-B H.264 into MP4 needing `h264_annexb2mp4`, for one) is written unfiltered
-rather than refused or converted. Reported rather than fixed here: closing it
-means either giving `MuxWork` its own `BsfChain` per stream plus a
-`BsfProvider` handle (duplicating machinery `mux.rs` already has) or
-restructuring `MuxWork` to hold an internal `MuxBuilder`/`MuxWriter` and drive
-*that* instead of the raw trait — the second is more consistent with "reuse
-what `vaco-format-core` already got right" but is a bigger change than this
-pass's scope (wiring `vaco-cli` to real muxers) justified making unreviewed.
-Most-common-case remuxing (matroska↔mp4↔mpegts stream copy, same bitstream
-convention on both sides) is unaffected; the gap only bites a container pairing
-that actually needs conversion.
+`build_work`'s `KindSpec::Mux` arm is now three lines: take the `MuxBuilder`
+out of the (by-then-consumed) `NodeSpec`, call `.open()`, wrap the result. The
+`Result<Work>` return type `build_work` already had for the M12 fix carries
+the `?`.
 
 ### Why it cannot deadlock
 
@@ -195,6 +211,19 @@ Gotchas:
   what makes room for the frame being held.
 - Adding a node kind that expands its input (N:M) must keep `batch() == 1`, or
   the wire bound stops meaning anything.
+- `KindSpec::Mux::builder` is `Option<Box<MuxBuilder>>`, not `Box<MuxBuilder>`.
+  Not defensive padding: `MuxBuilder::with_metadata`/`with_bsfs` consume
+  `self` and return a new `MuxBuilder`, and `PipelineSpec::set_output_metadata`/
+  `set_output_bsfs` have only `&mut self` on the spec to work with — the
+  `Option` is what lets them `take()` the value out, call the consuming
+  method, and put the result back. It reads `Some` at every point a caller of
+  this crate can observe it.
+- Nobody calls `PipelineSpec::set_output_bsfs` yet. It exists so the seam is
+  wired end to end, but until some crate implements `BsfProvider` for a real
+  filter (there is no `vaco-bsf-*` crate in this workspace) every output's M6
+  stage runs against `NoBsfs`. Do not read "the plumbing compiles" as "a
+  stream needing conversion now gets one" — check the muxer's own
+  `check_bitstream` too.
 
 ## Configuration
 
@@ -204,7 +233,9 @@ Gotchas:
 | Memory ceiling | `PipelineSpec::with_limits(Limits)` | `Limits::permissive()` (1 GiB) |
 | Recoverable demux errors per input | `PipelineSpec::with_max_input_errors` | 64 |
 | Threads | `Driver::with_threads(n)` | 1 (`Driver::serial`) |
-| Container flags and options | `PipelineSpec::add_output_with` | `FormatFlags::empty()`, `FormatOptions::default()` |
+| Output-side format options | `PipelineSpec::add_output_with(muxer, &options)` | `FormatOptions::default()` (container flags always come from `Muxer::flags()`, via `MuxBuilder::new` — never a parameter) |
+| Output metadata (`-metadata`) | `PipelineSpec::set_output_metadata(output, metadata)` | none |
+| Output bitstream filters (M6) | `PipelineSpec::set_output_bsfs(output, bsfs)` | `vaco_format_core::mux::NoBsfs` |
 | Livelock tolerance | `ProgressGuard::DEFAULT_MAX_STALLS` | 64 |
 
 ## D18: why this shape
@@ -284,7 +315,7 @@ because the builder's acyclicity is structural.
 - `vaco-packet`, `vaco-frame` — what travels on a wire
 - `vaco-codec-core` — `Decoder`, `Encoder`, `Stage`, `CancelToken`, `CodecParameters`
 - `vaco-filter-core` — `Graph`, `GraphStatus`, `LinkFormat`, `NodeId`
-- `vaco-format-core` — `Demuxer`, `Muxer`, `Stream`, `MuxTimestamps`, `InterleaveQueue`, `FormatFlags`, `FormatOptions`
+- `vaco-format-core` — `Demuxer`, `Muxer`, `Stream`, `FormatOptions`, and (since gap 8) `mux::{MuxBuilder, MuxWriter, BsfProvider}`, `metadata::MuxMetadata`. `MuxTimestamps`/`InterleaveQueue` are no longer named directly here — `MuxBuilder`/`MuxWriter` own them now.
 
 No external crates at all. Dev only: `proptest`, `divan`, `vaco-pixfmt`,
 `vaco-pool`.

@@ -55,14 +55,21 @@
 //! own stream list into a [`vaco_format_core::metadata::MuxMetadata`];
 //! [`resolve_mapped_metadata`] finishes it with `-map_chapters`/
 //! `-map_metadata`'s source input once one is actually open; [`run_pipeline`]
-//! calls [`Muxer::set_metadata`] on the freshly opened muxer directly —
-//! *before* handing it to [`PipelineSpec::add_output_with`] — because
-//! `vaco-sched`'s `MuxWork` drives a raw `dyn Muxer` with no way for this
-//! module to reach back into it afterward (`planning/INTERFACE-GAPS.md`'s
-//! note on that struct). That ordering constraint is also why
-//! `vaco-mux-mp4`/`vaco-mux-matroska`/`vaco-mux-stream`'s `ffmetadata`
-//! resolve every per-stream field lazily, at `write_header` time, rather than
-//! eagerly inside their own `set_metadata` — see each crate's module docs.
+//! hands the result to [`vaco_sched::spec::PipelineSpec::set_output_metadata`]
+//! *after* [`PipelineSpec::add_output_with`], which is now safe to do in that
+//! order: `PipelineSpec::build` delivers it to [`Muxer::set_metadata`] at
+//! `MuxBuilder::open` (M30), after every stream is declared and its time base
+//! settled, but before the header.
+//!
+//! That was not always true. Gap 8 in `planning/INTERFACE-GAPS.md` (now
+//! closed) was that `vaco-sched`'s `MuxWork` drove a raw `dyn Muxer`, so this
+//! module used to call [`Muxer::set_metadata`] on the freshly opened muxer
+//! directly, *before* handing it to `add_output_with` — there was no later
+//! point at which it could still reach the muxer. `vaco-mux-mp4` and
+//! `vaco-mux-matroska`'s `ffmetadata` resolve per-stream fields lazily, at
+//! `write_header` time, to survive exactly that ordering (see each crate's
+//! module docs); that laziness is no longer load-bearing for this path, but
+//! neither crate is this one's to change.
 //!
 //! `-metadata:c:N`/`-metadata:p:N` parse (a malformed one still reports the
 //! reference's own specifier error) but land nowhere: chapter-scoped tag
@@ -602,31 +609,35 @@ pub fn run_pipeline(
     let mut sinks: Vec<(Sink, Option<Arc<AtomicU64>>)> = Vec::new();
     for out in outputs.iter().filter(|o| !o.dropped) {
         let (inner, high_water) = open_output(out)?;
-        let mut muxer: Box<dyn Muxer> = Box::new(TallyingMuxer::new(inner, out.sink.clone()));
+        let muxer: Box<dyn Muxer> = Box::new(TallyingMuxer::new(inner, out.sink.clone()));
+
+        // `add_output_with`, not the plain `add_output`: the container's
+        // flags still come from the muxer itself — `MuxBuilder::new` reads
+        // them once, inside `spec.add_output_with`, and a caller preference
+        // cannot override `TS_NONSTRICT`/`NOTIMESTAMPS` — but `options` is
+        // FW-11's output-side share of the generic `AVFormatContext` table
+        // (`-avoid_negative_ts`, `-max_interleave_delta`, …) instead of
+        // always `default()`.
+        let oref = spec.add_output_with(muxer, &out.format_opts);
 
         // CL-16 (gap 1): resolve `-map_chapters`/`-map_metadata` against the
-        // inputs actually opened, then hand the whole thing to the muxer.
-        // Called here, before `add_stream` runs inside `spec.map` below,
-        // deliberately — every `set_metadata` override this workspace ships
-        // (`vaco-mux-mp4`, `vaco-mux-matroska`, `vaco-mux-stream`'s
-        // `ffmetadata`) resolves per-stream fields lazily at `write_header`
-        // time for exactly this reason: `vaco-sched`'s `MuxWork` drives a raw
-        // `dyn Muxer` (see `planning/INTERFACE-GAPS.md`'s note on it), so
-        // there is no later point at which this module could still reach the
-        // muxer to call `set_metadata` after `spec.add_output` has taken it.
+        // inputs actually opened, then attach it to the output through
+        // `PipelineSpec::set_output_metadata`. `PipelineSpec::build` delivers
+        // it to `Muxer::set_metadata` at `MuxBuilder::open` (M30) — after
+        // every stream is declared and its time base is settled, but before
+        // the header. This used to call `Muxer::set_metadata` on the muxer
+        // directly, before a single stream existed, because `vaco-sched`'s
+        // `MuxWork` drove a raw `dyn Muxer` with no later point at which this
+        // module could still reach it (gap 8, `planning/INTERFACE-GAPS.md`,
+        // now closed: `MuxWork` drives a `MuxWriter`, and `MuxBuilder` is the
+        // later point). `vaco-mux-mp4`/`vaco-mux-matroska`/
+        // `vaco-mux-stream`'s `ffmetadata` still resolve per-stream fields
+        // lazily at `write_header` time; that laziness is no longer required
+        // by this ordering, but changing those crates is out of this one's
+        // scope.
         let meta = resolve_mapped_metadata(out, &input_chapters, &input_metadata);
-        muxer
-            .set_metadata(&meta)
+        spec.set_output_metadata(oref, meta)
             .map_err(|e| internal_from("the muxer refused metadata", &e))?;
-
-        // `add_output_with`, not the plain `add_output`: flags still come
-        // from the muxer itself (a caller preference cannot override
-        // `TS_NONSTRICT`/`NOTIMESTAMPS`, which are properties of the
-        // container), but `options` is now FW-11's output-side share of the
-        // generic `AVFormatContext` table (`-avoid_negative_ts`,
-        // `-max_interleave_delta`, …) instead of always `default()`.
-        let flags = muxer.flags();
-        let oref = spec.add_output_with(muxer, flags, out.format_opts.clone());
         sinks.push((out.sink.clone(), high_water));
         for (i, s) in out.streams.iter().enumerate() {
             let Some(input) = refs.get(s.source.file as usize).copied() else {

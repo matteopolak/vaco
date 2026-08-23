@@ -47,8 +47,12 @@ The registry now has 63 muxers, and both halves of the CLI reach all of them:
   registry `input.rs` uses to read (`file:`/`pipe:`, with `-` mapped to
   `pipe:1` — see `output::normalize`'s docs for why that mapping cannot live in
   the generic URL parser), and `(MuxerDesc::open)` turns that into a
-  `Box<dyn Muxer>` `vaco-sched` drives exactly as it always has. Streamcopy end
-  to end — the one thing a build with no encoders can do — is now enough to
+  `Box<dyn Muxer>` this crate hands to `PipelineSpec::add_output_with`.
+  `vaco-sched` builds a `vaco_format_core::mux::MuxBuilder` over it there and
+  consumes that into a `MuxWriter` at `PipelineSpec::build` (gap 8,
+  `planning/INTERFACE-GAPS.md`, closed) rather than driving the trait object
+  directly — see #8 below and `docs/app/vaco-sched.md`. Streamcopy end to end
+  — the one thing a build with no encoders can do — is now enough to
   actually remux.
 * **Every output this build cannot write is still refused with a message
   naming the real reason**, and the refusal still distinguishes three cases —
@@ -504,23 +508,41 @@ Findings that belong to other crates and were **not** worked around here.
    `PipelineSpec::add_output_with` — the *shared* option surface FW-11 covers.
    A caller-facing `-movflags`/`-id3v2_version`-class per-muxer option is
    still unimplemented in this crate, tracked separately from CL-16/FW-11.
-8. **RESOLVED (CL-16, this wave).** `Muxer` had no metadata channel, so
-   `-metadata`/chapters/attachments had nowhere to go even once parsed.
-   `planning/INTERFACE-GAPS.md` gap 1 added
+8. **RESOLVED (CL-16, gap 1; ordering RESOLVED 2026-08-23, gap 8).** `Muxer`
+   had no metadata channel, so `-metadata`/chapters/attachments had nowhere to
+   go even once parsed. `planning/INTERFACE-GAPS.md` gap 1 added
    `vaco_format_core::metadata::MuxMetadata` and `Muxer::set_metadata`.
    `exec::metadata_of` resolves `-metadata`/`-metadata:s:…` against an
    output's own stream list; `exec::resolve_mapped_metadata` finishes it with
-   `-map_chapters`/`-map_metadata`'s source input; `run_pipeline` calls
-   `set_metadata` on the freshly opened muxer *before* handing it to
-   `PipelineSpec::add_output_with`, since `vaco-sched`'s `MuxWork` drives a
-   raw `dyn Muxer` with no way to reach back into it afterward. **Not
-   resolved**, and reported fresh rather than worked around: `-disposition`
-   and `-program` parse (`vaco-cli-core`'s option tables already declare
-   them) but have no channel to write through — `Muxer::add_stream` takes
-   only `CodecParameters`, which carries neither a disposition bit nor a
-   program membership, and `MuxMetadata` (gap 1's fix) does not cover either.
-   Closing this needs the same shape of addition gap 1 was, scoped to
-   disposition/program specifically.
+   `-map_chapters`/`-map_metadata`'s source input.
+
+   `run_pipeline` used to call `set_metadata` on the freshly opened muxer
+   *before* handing it to `PipelineSpec::add_output_with`, because
+   `vaco-sched`'s `MuxWork` drove a raw `dyn Muxer` with no way to reach back
+   into it afterward — gap 8's ordering face (8a). That is fixed now:
+   `run_pipeline` calls `add_output_with` first, gets an `OutputRef` back, and
+   calls `vaco_sched::spec::PipelineSpec::set_output_metadata(oref, meta)`,
+   which attaches the metadata to the `MuxBuilder` `add_output_with` built.
+   `PipelineSpec::build` delivers it to `Muxer::set_metadata` at
+   `MuxBuilder::open` — after `PipelineSpec::map` has declared every stream
+   and settled their time bases, but before the header, which is the
+   ordering `Muxer::set_metadata`'s own doc comment always described.
+   `vaco-mux-mp4`/`vaco-mux-matroska`'s lazy per-stream resolution (deferred
+   to `write_header` time specifically so it survives *either* ordering) is
+   no longer load-bearing for this call path, but neither crate needed to
+   change: their `set_metadata` overrides just store the `MuxMetadata` and
+   resolve later regardless of when they were called, so correcting the
+   caller's ordering does not affect them either way, and their own
+   `set_metadata_before_add_stream_still_resolves_*` regression tests stay
+   green unmodified.
+
+   **Not resolved**, and reported fresh rather than worked around:
+   `-disposition` and `-program` parse (`vaco-cli-core`'s option tables
+   already declare them) but have no channel to write through —
+   `Muxer::add_stream` takes only `CodecParameters`, which carries neither a
+   disposition bit nor a program membership, and `MuxMetadata` (gap 1's fix)
+   does not cover either. Closing this needs the same shape of addition gap 1
+   was, scoped to disposition/program specifically.
 9. **`MuxerDesc` has no `flags` field**, unlike `DemuxerDesc`, which explicitly
    carries one "so a caller composing `Discovery` can reach them through the
    registry" (that crate's own doc comment). The same reasoning applies on the
@@ -530,6 +552,35 @@ Findings that belong to other crates and were **not** worked around here.
    filesystem is even correct. A `flags: FormatFlags` field, populated the same
    way `DemuxerDesc::flags` is, would remove that throwaway construction
    entirely.
+10. **RESOLVED (2026-08-23, gap 8's remaining two faces).** `PipelineSpec::map`
+    used to call `Muxer::add_stream` directly on the raw trait object, which
+    meant `MuxBuilder::add_stream`'s `query_codec` check (M15) — implemented,
+    tested — was never asked from this crate's own call path, and the
+    bitstream-filter stage (M6, `BsfChain`/`BsfProvider`) never ran either.
+    `run_pipeline` needed no change for either: it already called
+    `spec.map(tap, oref, &p)`, and `map` now routes through `MuxBuilder`
+    internally. Two things worth knowing before assuming this closes
+    `planning/CONFORMANCE-FINDINGS.md` finding 19's six known-incompatible
+    remux pairs:
+    - **`query_codec` is a coarser question than those six pairs need.**
+      `CodecSupport` answers "can this container ever hold this codec", and
+      H.264-in-AVI/MPEG-TS/FLV and AAC-in-AVI are all `Supported` in general —
+      the six pairs fail on narrower *stream-content* constraints (a packet
+      with no PTS at all; ADTS-framed AAC where the container needs raw
+      `AudioSpecificConfig` framing) that `vaco-mux-avi`'s and
+      `vaco-mux-mpegts`'s own `add_stream` already checked, reachable through
+      the old direct call just as much as the new `MuxBuilder` one. Measured
+      directly (`vaco -i av-src.ts -c copy -f avi`, an MPEG-TS→AVI ADTS-AAC
+      pair): refused before and after this change, same message, because the
+      refusal was never gated on `query_codec` in the first place.
+    - **M6 running is necessary but not sufficient.** Neither `vaco-mux-avi`
+      nor `vaco-mux-mpegts` calls `Muxer::check_bitstream` to ask for a
+      filter — both apply their own inline length-prefix-to-Annex-B
+      conversion instead — so M6 now executing on every packet does not yet
+      change what either crate produces. See `docs/app/vaco-sched.md`'s note
+      on `PipelineSpec::set_output_bsfs` for what is still missing (a
+      `vaco-bsf-*` crate and a `BsfProvider`, neither of which exists here
+      yet) before that stage does anything for a real file.
 
 ## Deferred
 

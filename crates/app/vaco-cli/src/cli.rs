@@ -197,12 +197,8 @@ pub fn parse<S: AsRef<OsStr>>(argv: &[S]) -> Result<Cli, Diagnostic> {
                 data: g.last("dn").is_some(),
             },
             format_opts: format_options_of(g)?,
-            map_chapters: last_value(g, "map_chapters")?
-                .as_deref()
-                .map(leading_int),
-            map_metadata: last_value(g, "map_metadata")?
-                .as_deref()
-                .map(leading_int),
+            map_chapters: last_value(g, "map_chapters")?.as_deref().map(leading_int),
+            map_metadata: last_value(g, "map_metadata")?.as_deref().map(leading_int),
         });
     }
 
@@ -262,7 +258,9 @@ fn format_options_of(g: &OptionGroup) -> Result<FormatOptions, Diagnostic> {
         opts.set_str(name, &value).map_err(|e| {
             Diagnostic::new(
                 AvError::EINVAL,
-                vec![format!("Error parsing option '{name}' with value '{value}': {e}")],
+                vec![format!(
+                    "Error parsing option '{name}' with value '{value}': {e}"
+                )],
             )
         })?;
     }
@@ -425,7 +423,10 @@ mod tests {
         let opts = &cli.inputs.first().unwrap().format_opts;
         assert_eq!(opts.probesize, 12345);
         assert_eq!(opts.analyzeduration, 999);
-        assert!(opts.fflags.contains(vaco_format_core::options::FFlags::GENPTS));
+        assert!(
+            opts.fflags
+                .contains(vaco_format_core::options::FFlags::GENPTS)
+        );
     }
 
     #[test]
@@ -443,7 +444,10 @@ mod tests {
             "-",
         ])
         .unwrap();
-        assert_eq!(cli.outputs.first().unwrap().format_opts.avoid_negative_ts, 2);
+        assert_eq!(
+            cli.outputs.first().unwrap().format_opts.avoid_negative_ts,
+            2
+        );
     }
 
     #[test]
@@ -451,7 +455,10 @@ mod tests {
         // `-map`/`-f`/`-c` are never `FormatOptions` fields; `format_options_of`
         // must not choke on them or silently absorb their values.
         let cli = parse(&["-i", "a.mkv", "-map", "0", "-c", "copy", "-f", "null", "-"]).unwrap();
-        assert_eq!(cli.outputs.first().unwrap().format_opts.probesize, 5_000_000);
+        assert_eq!(
+            cli.outputs.first().unwrap().format_opts.probesize,
+            5_000_000
+        );
     }
 
     #[test]

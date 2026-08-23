@@ -34,7 +34,6 @@
 
 use vaco_codec_core::{CancelToken, Stage};
 use vaco_core::{Error, Result, TimeBase};
-use vaco_format_core::interleave::{InterleaveQueue, MuxTimestamps};
 use vaco_limits::{Budget, ProgressGuard};
 
 use crate::node::{
@@ -617,21 +616,7 @@ impl PipelineSpec {
         let mut work = Vec::new();
         for (i, spec) in specs.into_iter().enumerate() {
             let outputs = metas.get(i).map(|m| m.outputs.clone()).unwrap_or_default();
-            let inputs_tb: Vec<TimeBase> = metas
-                .get(i)
-                .map(|m| {
-                    m.inputs
-                        .iter()
-                        .map(|p| wires.get(p.wire).map_or(TimeBase::ZERO, Wire::time_base))
-                        .collect()
-                })
-                .unwrap_or_default();
-            work.push(Some(build_work(
-                spec,
-                &outputs,
-                &inputs_tb,
-                max_input_errors,
-            )?));
+            work.push(Some(build_work(spec, &outputs, max_input_errors)?));
         }
 
         Ok(Pipeline {
@@ -651,7 +636,6 @@ impl PipelineSpec {
 fn build_work(
     spec: crate::spec::NodeSpec,
     outputs: &[Vec<usize>],
-    input_time_bases: &[TimeBase],
     max_input_errors: u32,
 ) -> Result<Work> {
     Ok(match spec.kind {
@@ -713,53 +697,27 @@ fn build_work(
             }))
         }
         KindSpec::Mux {
-            mut muxer,
-            flags,
-            options,
+            builder,
             stream_of_port,
         } => {
-            // M12: `init` runs once, after every stream is declared and before
-            // anything reads a time base. Skipping this used to mean every
-            // real container's `stream_time_base` was consulted on
-            // whatever state its fields happened to have at `add_stream`
-            // time — for `vaco-mux-mp4` that is the *default* movie
-            // timescale rather than the one `init` derives from the
-            // largest track, and for `vaco-mux-mpegts` it is a `pcr_pid` of
-            // `None` and no chance to reject a stream-less file. Both are
-            // exactly what `vaco_format_core::mux::MuxBuilder::open` does
-            // before it reads a single time base, and this node is the only
-            // other caller that drives a `dyn Muxer` from cold — the wrapper
-            // deliberately does not go through `MuxBuilder` (see
-            // `crate::node::MuxWork`'s docs), so it has to repeat this one
-            // step itself rather than get it for free.
-            muxer.init()?;
-            let count = stream_of_port
-                .iter()
-                .copied()
-                .max()
-                .map_or(0, |m| m as usize + 1);
-            // A `notimestamps` container stores no timestamps, so
-            // `MuxTimestamps::apply` clears them — and the queue has to be
-            // told, or it rejects the very packets that function produced.
-            let mut queue = InterleaveQueue::new(count, &options);
-            if flags.contains(vaco_format_core::flags::FormatFlags::NOTIMESTAMPS) {
-                queue = queue.without_timestamps();
-            }
-            let mut to_time_base = Vec::new();
-            for index in &stream_of_port {
-                let tb = PipelineSpec::muxer_time_base(muxer.as_ref(), *index);
-                queue.set_time_base(*index, tb);
-                to_time_base.push(tb);
-            }
+            // `MuxBuilder::open` runs M12 (`init`, then each stream's time
+            // base is re-read once `init` has had its say), M30 (metadata,
+            // gap 1) and M9 (the header) in that order — the same three
+            // steps this arm used to hand-roll against a raw `dyn Muxer`,
+            // which is gap 8 in `planning/INTERFACE-GAPS.md`: it is also why
+            // `set_metadata` used to run before any stream existed, and why
+            // M6 (bitstream filters) and M15 (`query_codec`) were never
+            // reached from this crate at all. `builder` is `None` only if
+            // this node's output was already consumed, which
+            // `PipelineSpec::build` never does twice.
+            let writer = builder
+                .ok_or(Error::InvalidData(
+                    "an output's muxer builder was already consumed",
+                ))?
+                .open()?;
             Work::Mux(Box::new(MuxWork {
-                ts: MuxTimestamps::new(count, flags, &options),
-                queue,
-                muxer,
+                writer: Some(writer),
                 stream_index: stream_of_port,
-                from_time_base: input_time_bases.to_vec(),
-                to_time_base,
-                header_written: false,
-                trailer_written: false,
             }))
         }
     })
