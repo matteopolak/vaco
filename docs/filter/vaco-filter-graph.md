@@ -353,15 +353,15 @@ pins it.
 
 Interfaces are frozen (plan 19 §6), so these are **reported, not changed**.
 
-1. **`Graph::configure_converting` discards the arguments the factory
-   produced.** `ConverterFactory::converter` returns a `ConverterSpec` with an
-   `args` field; `configure_converting` then rebuilds the spec as
-   `ConverterSpec { filter, args: String::new(), formats }` before handing it to
-   the builder. So the `sws_flags=` prefix cannot reach the `scale` it was
-   parsed for through the interface. Worked around here by having the builder
-   closure ask `DefaultConverters::args_for(spec.filter)` for them again — which
-   works only because the same crate owns both halves. A filter library
-   supplying its own builder would silently lose them.
+1. ~~**`Graph::configure_converting` discards the arguments the factory
+   produced.**~~ **Fixed.** `Insertion` now carries `args`, so the factory's
+   `sws_flags=` reaches the `scale` it was parsed for and the builder closure
+   reads `spec.args` directly. The workaround here — asking
+   `DefaultConverters::args_for(spec.filter)` for them again — is gone; it only
+   ever worked because the same crate owns both halves, and a filter library
+   supplying its own builder would have lost them silently. Worth noting the
+   gap was invisible from inside the workspace for exactly that reason, which
+   is what a "signature gaps" section is for.
 2. **`Graph` exposes no accessor for a node's `FilterDesc`.** The builder needs
    pad counts and media types before anything is connected, and `Graph::connect`
    validates pad indices against the descriptor it holds. `build.rs` keeps its

@@ -149,16 +149,16 @@ impl BuiltGraph {
         let swr = self.swr_opts.clone();
         let factory = DefaultConverters::new(sws.clone(), swr.clone());
         self.graph.configure_converting(&factory, |spec| {
-            // `configure_converting` rebuilds the spec with an empty `args`
-            // before calling us — see the signature gap in the crate docs — so
-            // the options are recovered from the factory's own policy here
-            // rather than read off the spec.
-            let args = factory.args_for(spec.filter);
+            // Read straight off the spec. This used to re-fetch the arguments
+            // from `factory` because `configure_converting` rebuilt the spec
+            // with an empty `args` — a workaround that only worked because the
+            // factory and the builder are the same crate here. It is fixed at
+            // the source now, in `Insertion`.
             let arguments = Vec::new();
             let req = Instantiate {
                 name: spec.filter,
                 instance: spec.filter,
-                args: Some(args.as_str()),
+                args: Some(spec.args.as_str()),
                 arguments: &arguments,
             };
             registry

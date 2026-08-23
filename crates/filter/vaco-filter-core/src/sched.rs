@@ -517,7 +517,13 @@ impl Graph {
                 .unwrap_or_default();
             let spec = ConverterSpec {
                 filter: insertion.filter,
-                args: String::new(),
+                // The factory's own arguments, not an empty string. This
+                // discarded them until `Insertion` started carrying them —
+                // invisible from inside this workspace, because
+                // `vaco-filter-graph`'s builder re-fetches them from its own
+                // factory, but a third-party registry would have lost every
+                // `sws_flags=` it asked for.
+                args: insertion.args.clone(),
                 formats,
             };
             let filter = build(&spec)?;

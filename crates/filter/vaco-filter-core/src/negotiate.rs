@@ -892,6 +892,16 @@ pub struct Insertion {
     pub name: String,
     /// What the factory asked for.
     pub filter: &'static str,
+    /// The arguments the factory asked for, e.g. `sws_flags=bicubic`.
+    ///
+    /// Carried here because it used to be **dropped**: `Insertion` recorded the
+    /// filter name and not its arguments, so `Graph::configure_converting`
+    /// rebuilt the `ConverterSpec` with `args: String::new()` and whatever the
+    /// factory had chosen was lost. `vaco-filter-graph` did not notice because
+    /// its builder re-fetches the arguments from its own factory in the same
+    /// crate — a third-party registry supplying its own builder would silently
+    /// have lost them.
+    pub args: String,
     /// The properties this converter was inserted to fix.
     pub properties: Vec<Property>,
 }
@@ -979,6 +989,7 @@ pub fn negotiate(
                 tail,
                 name,
                 filter: spec.filter,
+                args: spec.args,
                 properties,
             });
             repaired += 1;
