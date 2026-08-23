@@ -119,7 +119,7 @@ fn render(spec: &str, streams: &[Stream]) -> String {
     {
         let mut e = Emit::new(&mut tf, OptionalFields::Auto);
         for s in streams {
-            show::stream(&mut e, s, true).expect("stream");
+            show::stream(&mut e, s, true, show::Counts::NONE).expect("stream");
         }
     }
     tf.close().expect("streams");
@@ -213,7 +213,7 @@ proptest! {
                 tf.open(SectionId::ROOT).expect("root");
                 {
                     let mut e = Emit::new(&mut tf, policy);
-                    show::stream(&mut e, &s, true).expect("stream");
+                    show::stream(&mut e, &s, true, show::Counts::NONE).expect("stream");
                 }
                 tf.close().expect("root");
                 let text = String::from_utf8(tf.finish().expect("finish")).expect("utf8");

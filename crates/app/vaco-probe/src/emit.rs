@@ -89,9 +89,103 @@ impl<'a, W: Write> Emit<'a, W> {
         }
     }
 
-    /// The wrapped formatter, for section open/close and for `tag`.
+    /// The wrapped formatter, for section open/close **only**.
+    ///
+    /// Field emission goes through [`Emit::put`], [`Emit::int`], [`Emit::str`]
+    /// or [`Emit::tag`], because `-show_optional_fields never` is a property of
+    /// fields and a call that bypasses this type bypasses it. See
+    /// [`Emit::suppress_all`].
     pub fn tf(&mut self) -> &mut TextFormat<W> {
         self.tf
+    }
+
+    /// Whether `-show_optional_fields never` is in force.
+    ///
+    /// **It suppresses every field, not merely the unavailable ones.** Measured
+    /// on ffprobe 8.1, and it is not what the option's name suggests:
+    ///
+    /// ```sh
+    /// ffprobe -v error -of default -show_format -show_optional_fields never av.mp4
+    /// #   [FORMAT]
+    /// #   [/FORMAT]
+    /// ffprobe -v error -of xml -show_packets -show_optional_fields never … av.mp4
+    /// #   <packet />
+    /// ```
+    ///
+    /// `filename`, `index`, `codec_type` and `flags` all go, and so do the
+    /// `TAG:` and `DISPOSITION:` lines — but the **sections** stay: `json`
+    /// still emits `"tags": {}` and `xml` still emits
+    /// `<side_data type="Skip Samples">`. So the rule is "no fields", not "no
+    /// content", and the type attribute of a typed section is not a field.
+    #[must_use]
+    pub const fn suppress_all(&self) -> bool {
+        matches!(self.policy, OptionalFields::Never)
+    }
+
+    /// An always-present integer field, for a section with no [`Field`] table.
+    ///
+    /// # Errors
+    /// Propagates the sink's I/O error.
+    pub fn int(&mut self, key: &str, v: i64) -> Result<()> {
+        if self.suppress_all() {
+            return Ok(());
+        }
+        self.tf.int(key, v)
+    }
+
+    /// An optional integer field.
+    ///
+    /// # Errors
+    /// Propagates the sink's I/O error.
+    pub fn int_opt(&mut self, key: &str, v: Option<i64>) -> Result<()> {
+        if self.suppress_all() {
+            return Ok(());
+        }
+        self.tf.int_opt(key, v)
+    }
+
+    /// An always-present string field.
+    ///
+    /// # Errors
+    /// Propagates the sink's I/O error.
+    pub fn str(&mut self, key: &str, v: &str) -> Result<()> {
+        if self.suppress_all() {
+            return Ok(());
+        }
+        self.tf.str(key, v)
+    }
+
+    /// A timestamp field.
+    ///
+    /// # Errors
+    /// Propagates the sink's I/O error.
+    pub fn ts(&mut self, key: &str, ts: Option<i64>) -> Result<()> {
+        if self.suppress_all() {
+            return Ok(());
+        }
+        self.tf.ts(key, ts)
+    }
+
+    /// A seconds field.
+    ///
+    /// # Errors
+    /// Propagates the sink's I/O error.
+    pub fn duration(&mut self, key: &str, secs: Option<f64>) -> Result<()> {
+        if self.suppress_all() {
+            return Ok(());
+        }
+        self.tf.duration(key, secs)
+    }
+
+    /// One key/value pair of a `tags` section.
+    ///
+    /// # Errors
+    /// Propagates the sink's I/O error.
+    pub fn tag(&mut self, key: &str, v: &str) -> Result<()> {
+        if self.suppress_all() {
+            return Ok(());
+        }
+        self.tf.tag(key, v)
     }
 
     /// Emit one field of a table.
@@ -103,6 +197,9 @@ impl<'a, W: Write> Emit<'a, W> {
     /// Propagates the sink's I/O error.
     pub fn put(&mut self, field: Option<&'static Field>, val: &Val) -> Result<()> {
         let Some(field) = field else { return Ok(()) };
+        if self.suppress_all() {
+            return Ok(());
+        }
         match val {
             Val::I(v) => self.tf.int(field.name, *v),
             Val::S(v) => self.tf.str(field.name, v),

@@ -265,6 +265,26 @@ pub static FORMAT: &[Field] = &[
 ///
 /// `stream_index` is an integer and `size` and `pos` are strings — again next
 /// to each other, again holding plain numbers.
+///
+/// Measured with
+///
+/// ```sh
+/// ffprobe -v quiet -of flat -show_optional_fields always -show_packets \
+///         -read_intervals '%+#3' av.mp4
+/// ```
+///
+/// across MP4, Matroska and MPEG-TS: the same eleven fields in the same order
+/// in all three, so nothing here is container-specific.
+///
+/// Two rows are conditional rather than optional. `data` and `data_hash` exist
+/// only when `-show_data` / `-show_data_hash` asked for them — `Absent::Omit`,
+/// so `-show_optional_fields always` does **not** conjure an `N/A` for either,
+/// which is what the run above confirms. `data` precedes `data_hash` when both
+/// are on.
+///
+/// `duration` and `duration_time` are the two fields whose absent form is
+/// **zero rather than a sentinel**: the reference prints `N/A` for a duration
+/// of 0, which is not how `pts` behaves three rows above.
 pub static PACKET: &[Field] = &[
     f("codec_type", Str, Word("unknown")),
     f("stream_index", Int, Never),
@@ -275,8 +295,19 @@ pub static PACKET: &[Field] = &[
     f("duration", Int, Na),
     f("duration_time", Time, Na),
     f("size", Size, Na),
-    f("pos", Size, Na),
+    // A plain integer string, **not** a `Size`. Measured, and it is exactly
+    // the kind of row this table exists for:
+    //
+    //   -unit -prefix   ->   size=5.171000 Kbyte   pos=48
+    //
+    // `size` scales and takes a unit; `pos` one column later does neither,
+    // under any of `-unit`, `-prefix`, `-byte_binary_prefix` or `-pretty`.
+    // Typing it `Size` because it holds a byte count looks obviously right
+    // and is wrong in four of the seven formatting modes.
+    f("pos", Str, Na),
     f("flags", Str, Never),
+    f("data", Str, Omit),
+    f("data_hash", Str, Omit),
 ];
 
 /// The `error` section.

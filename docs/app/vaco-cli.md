@@ -76,6 +76,7 @@ produces:
 
 ```text
 argv ─▶ [cli]      split, validate, bind          (vaco-cli-core, cli.rs)
+     ─▶ [help]     -h and its four depths          (help.rs)
      ─▶ [listing]  -version/-formats/… and exit   (listing.rs)
      ─▶ [input]    protocol → probe → demux       (vaco-io, vaco-format-core)
      ─▶ [select]   -map, or the auto rules        (select.rs)
@@ -86,12 +87,13 @@ argv ─▶ [cli]      split, validate, bind          (vaco-cli-core, cli.rs)
 | Module | Owns |
 |---|---|
 | `cli` | binding a split command line; the `AVOption` oracle |
+| `help` | CL-04: `-h`'s three depths and `-h <kind>=<name>`, wiring `vaco_cli_core::help`'s renderers to `vaco-registry` |
 | `select` | `-map` and the automatic selection rules |
 | `input` | opening one input: protocol env, probe, `Discovery` |
 | `nullmux` | the `null` sink and its counters |
 | `exec` | muxer resolution, the codec check, `PipelineSpec`, the driver |
 | `exit` | `AvError`, `ExitCode`, `Diagnostic` |
-| `listing` | `-version`, `-formats` and the registry listings |
+| `listing` | `-version`, `-formats` and the other thirteen registry listings; CL-04 |
 
 ### Stream selection — the measured rule
 
@@ -188,13 +190,91 @@ and no output file.
 16 of 19 differential invocations match the reference's exit code exactly today;
 the three that do not are all the reordered-video gap below.
 
+`-h` (all four spellings and depths), `-h <kind>=<name>`, and every listing
+command exit **0**, including the "not found"/"no name" `-h` outcomes — the
+reference's own `-h zzzz=x` and `ffmpeg -h full` both exit 0, and there is no
+error path here that does not. Only `-h`/`-version`/`-buildconf` additionally
+print a literal `Exiting with exit code 0` on stdout, unconditionally
+(measured even at `-loglevel quiet`); see `vaco_cli_core::help`'s doc comments
+for the full measurement and why the other thirteen listings do not get it.
+
+### `-h` and the listing commands
+
+CL-04. `help.rs` wires `vaco_cli_core::help`'s two renderers (the
+command-line-option grouping, and the `AVOptions`-block algorithm — both
+measured against `ffmpeg 8.1`/`ffprobe 8.1`, see that crate's doc file) to
+what this build's registry actually contains.
+
+**Shipped, and measured structurally identical to the reference where this
+build's contents allow it:**
+
+* `-h` / `-h long` / `-h full` — our own prose (D9 bars copying help text),
+  the reference's column algorithm and blank-line rules.
+* `-h <kind>=<name>` for all seven kinds, including the full "no name" /
+  "unknown name" matrix (`No codec name specified.`, `Unknown format
+  '(null)'.` vs `Unknown format ''.`, `No protocol name specified.`, …) and
+  the found path for `demuxer=<matroska|mp4|mpegts>` — `-h demuxer=matroska`
+  is **byte-identical** to the reference (measured), because matroska has no
+  private options in *either* implementation. `mp4`/`mpegts` diverge by
+  missing the reference's private-options block — see the "not this crate's
+  gap" note in `vaco-cli-core`'s doc file.
+* `-formats`/`-demuxers`/`-muxers` (shared header+legend, `max(15, len)+1`
+  name field), `-decoders`/`-encoders`/`-filters` (legend only — always zero
+  rows, D5), `-bsfs`, `-protocols` (`Input:`/`Output:` sections — see the
+  known gap below), `-codecs` (full six-column flags from
+  `vaco_codec_core::CodecProperties` and `vaco_registry::can_decode`),
+  `-dispositions` (already byte-identical: nineteen bare names).
+
+**Known gaps in this build's data, not in the renderer:**
+
+* `vaco_protocol_core::ProtocolFlags` carries no read/write capability bit, so
+  `-protocols` cannot tell an input-only protocol from an output-only one and
+  lists every enabled protocol under both `Input:` and `Output:`.
+* `vaco_format_core::DemuxerDesc`/`MuxerDesc` and `vaco_codec_core::DecoderDesc`/
+  `vaco_filter_core::FilterDesc` have no options-schema hook at all, so a
+  private-options block can never be shown for any of them even where one
+  exists in the reference (`mp4`, `mpegts`). `vaco_protocol_core::ProtocolDesc`
+  already has one (`options: Option<fn() -> &'static Schema>`); the other four
+  descriptor types not having the same field is the asymmetry worth fixing.
+* By default this build's registry has **zero protocols at all** —
+  `protocol-http` is a non-default feature and `vaco-protocol-file` ships no
+  `vaco-component.toml` (already flagged in "Reported upstream" below) — so
+  `-h protocol=file`/`-protocols` render structurally correctly but show
+  nothing to test against without `--features protocol-http`.
+
+**Deliberately not attempted**, named rather than left silent:
+
+* `-pix_fmts`/`-sample_fmts`/`-layouts`/`-colors`/`-hwaccels`/`-devices`/
+  `-sources`/`-sinks` still return `ENOSYS`. The first three need per-format
+  component counts, bit depths and alpha/paletted/bitstream/hardware flags
+  that `vaco-pixfmt`/`vaco-sampfmt`/`vaco-chlayout` do not currently expose
+  through a public API this crate can reach; `-colors` was never wired to a
+  renderer either. The last four need a hardware/device registry this
+  project does not have yet (D13's `vaco-hw-*` crates are a separate work
+  package). Headers for `-pix_fmts`/`-sample_fmts`/`-layouts` were measured
+  and are recorded in `vaco-cli-core`'s doc file for whoever picks this up.
+* **The brief that scoped this work named `-colorspaces` as one of the
+  fourteen listing commands to cover. It does not exist in ffmpeg 8.1** —
+  measured directly: `ffmpeg -colorspaces` exits 8, "Unrecognized option
+  'colorspaces'." (A first probe of it through a pipe reported exit 0 —
+  `head`'s status, not ffmpeg's — plan 13 §1b's exact trap, caught by
+  re-probing without a pipe.) The real option is `-colors` (named colours),
+  already tracked above as deferred; `-colorspaces` is not implemented under
+  either spelling because it is not a real target.
+* `vaco-probe`'s own `-h` dispatch is out of scope for this crate's
+  Scope-declared area (`crates/app/vaco-cli/` and `crates/app/vaco-cli-core/`
+  only). The shared `ffprobe()` option table's `-h` entry was fixed alongside
+  `ffmpeg()`'s (same `OPTIONAL_ARG` bug, same fix), but wiring `vaco-probe`'s
+  binary to call `vaco_cli_core::help`'s renderers was not done, since that
+  binary's `src/` is a different crate.
+
 ### Known divergences
 
 | what | why | where |
 |---|---|---|
 | **`-crf 20` is rejected** | The `AVOption` oracle answers from what this build contains, which is `FormatOptions` and nothing else — there are no encoders to declare `crf`. The reference applies the same rule to itself and gets a different answer because it has encoders. Closes on its own as codecs land. The alternative, accepting every unknown name, makes `-qwrty 3` a silent no-op. | `cli::Oracle` |
 | **Non-UTF-8 filenames are refused** | Every layer below takes a `&str`. The reference opens them. Reported rather than papered over with a lossy conversion that would open a *different* file. | `cli::url_of` |
-| **`-h` and four listings are unimplemented** | CL-04 owns the help system. `-pix_fmts`, `-layouts`, `-sample_fmts`, `-colors` and the device listings return `ENOSYS` naming the issue rather than half-rendering. | `listing::render` |
+| **Eight listings are deferred** | `-pix_fmts`, `-sample_fmts`, `-layouts`, `-colors`, `-hwaccels`, `-devices`, `-sources`, `-sinks` return `ENOSYS` naming the gap. See [`-h` and the listing commands](#-h-and-the-listing-commands) below for what CL-04 shipped and what it deliberately did not. | `listing::render` |
 | **No `av_dump_format` block** | The reference prints `Input #0, matroska,webm, from '…':` and a per-stream summary to stderr. Not reproduced; that is `vaco-probe`-shaped formatting work. | — |
 
 ## How to change it

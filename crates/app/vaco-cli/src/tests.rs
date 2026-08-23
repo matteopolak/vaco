@@ -228,6 +228,48 @@ fn formats_lists_the_demuxers_and_admits_to_no_muxers() {
     assert!(r.out.contains("matroska"), "{}", r.out);
 }
 
+// -------------------------------------------------------------------- -h end-to-end
+
+#[test]
+fn bare_h_exits_zero_through_the_whole_binary() {
+    // Every `-h` form exits 0 in the reference (measured, ffmpeg 8.1, no
+    // pipe) — this is the same exit-code family the listing commands share,
+    // asserted here through the real argv/exit-code path rather than only
+    // against `help::render` directly.
+    for argv in [
+        vec!["-hide_banner", "-h"],
+        vec!["-hide_banner", "-h", "long"],
+        vec!["-hide_banner", "-h", "full"],
+        vec!["-hide_banner", "-h", "decoder=h264"],
+        vec!["-hide_banner", "-h", "protocol=file"],
+        vec!["-hide_banner", "-h", "bogus"],
+        vec!["-hide_banner", "-?"],
+        vec!["-hide_banner", "-help"],
+        vec!["-hide_banner", "--help"],
+    ] {
+        let r = go(&argv);
+        assert_eq!(r.code, ExitCode::OK, "{argv:?}");
+        assert!(
+            r.out.ends_with("Exiting with exit code 0\n"),
+            "{argv:?}: {}",
+            r.out
+        );
+    }
+}
+
+#[test]
+fn h_swallows_the_next_token_even_when_it_looks_like_an_option() {
+    // Measured: `ffmpeg -h -i x` reports `Unknown help option '-i'.` and `x`
+    // is never looked at — no "missing output file" failure follows.
+    let r = go(&["-hide_banner", "-h", "-i", "x"]);
+    assert_eq!(r.code, ExitCode::OK, "{:?}", r.out);
+    assert!(
+        r.out.starts_with("Unknown help option '-i'.\n"),
+        "{}",
+        r.out
+    );
+}
+
 // ---------------------------------------------------------- the no-muxer wall
 
 #[test]

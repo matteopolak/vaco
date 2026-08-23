@@ -19,6 +19,9 @@ use std::ffi::OsString;
 use vaco_cli_core::{CliError, CommandLine, GroupKind, StreamSpecifier, split, table};
 use vaco_textformat::{EntryFilterSet, FormatOpts, OptionalFields, num::Pretty};
 
+use crate::dump::{DumpFormat, HashAlg};
+use crate::intervals::{self, ReadInterval};
+
 /// A listing command: prints and exits, ignoring any input.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Listing {
@@ -123,6 +126,16 @@ pub struct Options {
     pub hide_banner: bool,
     /// `-bitexact`.
     pub bitexact: bool,
+    /// `-read_intervals`, already parsed. A single whole-file interval when the
+    /// option was absent, so the read loop has no special case.
+    pub intervals: Vec<ReadInterval>,
+    /// Diagnostics `-read_intervals` produced without failing. See
+    /// [`crate::intervals::BAD_COUNT`].
+    pub interval_warnings: Vec<String>,
+    /// `-show_data` plus `-data_dump_format`, resolved into one value.
+    pub show_data: Option<DumpFormat>,
+    /// `-show_data_hash <alg>`.
+    pub show_data_hash: Option<HashAlg>,
 }
 
 impl Default for Options {
@@ -140,6 +153,10 @@ impl Default for Options {
             listing: None,
             hide_banner: false,
             bitexact: false,
+            intervals: vec![ReadInterval::ALL],
+            interval_warnings: Vec::new(),
+            show_data: None,
+            show_data_hash: None,
         }
     }
 }
@@ -187,6 +204,8 @@ pub fn parse<S: AsRef<std::ffi::OsStr>>(argv: &[S]) -> Result<Options, CliError>
         listing: first_listing(&cmd),
         ..Options::default()
     };
+    let mut show_data = false;
+    let mut dump_format: Option<DumpFormat> = None;
 
     for opt in &cmd.global {
         let (name, _) = opt.resolved();
@@ -224,6 +243,47 @@ pub fn parse<S: AsRef<std::ffi::OsStr>>(argv: &[S]) -> Result<Options, CliError>
                     FormatOpts::pretty().pretty
                 };
             }
+            // Three options that co-operate: `-show_data` turns the field on,
+            // `-data_dump_format` chooses the rendering, and either may come
+            // first. Resolved after the loop rather than here.
+            "show_data" => show_data = !opt.negated,
+            "data_dump_format" => {
+                let v = value(opt, "string")?;
+                dump_format =
+                    Some(
+                        DumpFormat::parse(&v).ok_or_else(|| CliError::OptionValueRejected {
+                            option: "data_dump_format".to_owned(),
+                            value: v.into(),
+                        })?,
+                    );
+            }
+            "show_data_hash" => {
+                let v = value(opt, "string")?;
+                o.show_data_hash =
+                    Some(
+                        HashAlg::parse(&v).ok_or_else(|| CliError::OptionValueRejected {
+                            option: "show_data_hash".to_owned(),
+                            value: v.into(),
+                        })?,
+                    );
+            }
+            // Last wins. Observed: `-read_intervals '%+#2' -read_intervals
+            // '%+#1'` reads one packet, not three and not two.
+            "read_intervals" => {
+                let v = value(opt, "read_intervals")?;
+                // The value in the message is the raw spec, as the reference's
+                // own third line has it. The reference prints two further
+                // lines naming *which* interval and why; those are not
+                // reproduced, and plan 14 §5.6 makes only the exit code
+                // conformance surface here.
+                let (parsed, warnings) =
+                    intervals::parse(&v).map_err(|_| CliError::OptionValueRejected {
+                        option: "read_intervals".to_owned(),
+                        value: v.clone().into(),
+                    })?;
+                o.intervals = parsed;
+                o.interval_warnings = warnings;
+            }
             "hide_banner" => o.hide_banner = !opt.negated,
             "bitexact" => o.bitexact = !opt.negated,
             "show_optional_fields" => {
@@ -248,6 +308,12 @@ pub fn parse<S: AsRef<std::ffi::OsStr>>(argv: &[S]) -> Result<Options, CliError>
             }
             _ => {}
         }
+    }
+
+    // `-data_dump_format` on its own does nothing; it only chooses how
+    // `-show_data` renders. Observed: the field appears only with `-show_data`.
+    if show_data {
+        o.show_data = Some(dump_format.unwrap_or_default());
     }
 
     // `-show_entries format=filename` implies `-show_format`: naming a section

@@ -15,6 +15,7 @@ Four pieces:
 | Module | Contents |
 |---|---|
 | `table` | The option descriptor tables and **the scope model**. Start here. |
+| `help` | CL-04: `-h`'s topic grammar, the command-line-option renderer and the `AVOptions`-block renderer. See its own section below. |
 | `spec` | The stream-specifier grammar and matcher. |
 | `metaspec` | The *metadata* specifier grammar, which shares a syntactic slot with the stream one and is a different language. |
 | `map` | The `-map` value grammar. |
@@ -176,6 +177,107 @@ Three checks run, in this order, and the order is observable:
 `-fs 1e30` stops at (2); `-fs 20dB` passes (2) and stops at (3), because 20 dB is
 9.999999999999998. Note the colon after "found:" in the first message and its
 absence in the third — the asymmetry is the reference's.
+
+## The help system (`help`)
+
+CL-04. Two renderers, because `ffmpeg -h full` uses two: the command-line
+options section has no flag column, every `AVOptions` block has an
+eleven-column one. Conflating them is the easiest way to get this wrong.
+
+* [`help::parse_topic`] turns `-h`'s raw argument into a [`help::Topic`]:
+  `None`/empty is bare `-h`, `"long"`/`"full"` are the two depths, anything
+  with `=` is `kind=name`, a bare word from the seven recognised kinds
+  (`decoder`/`encoder`/`demuxer`/`muxer`/`filter`/`bsf`/`protocol`) is that
+  kind with no name, and everything else is unrecognised. `vaco-cli` owns
+  turning a `Topic::Kind` into an actual lookup — this crate has no registry.
+* [`help::render_options_help`] is the command-line half: [`table::OptTable`]
+  grouped into sections (D9: option *names* are reproduced, section headings
+  and help prose are ours), formatted with a `max(18, len) + 2` name field.
+* [`help::render_schema_block`] is the `AVOptions` half: one call renders a
+  whole `vaco_opts::Schema` — the class-name header, every option at
+  `max(18, len) + 1` name / `max(12, len) + 1` type, the eleven-column flag
+  field verbatim, then its named constants at `max(15, len) + 1` /
+  `max(12, len) + 1`, inheriting the *owning option's* flag column (every
+  measured example does; `ConstDesc::flags` itself defaults empty).
+* [`help::ends_in_options_block`] answers the one thing the blank-line rule
+  needs: did the body's last line belong to an option or const row. `vaco-cli`
+  uses it to choose one blank line before the `Exiting with exit code 0`
+  trailer, or two.
+
+### Measured, not recalled (D17, plan 13 §1b)
+
+Every number below is `ffmpeg 8.1`/`ffprobe 8.1` under `LC_ALL=C`, no pipe,
+`homebrew`/arm64. Re-run these if the pinned reference version moves:
+
+```sh
+LC_ALL=C ffmpeg -h            >h.out;      LC_ALL=C ffmpeg -h long >hl.out
+LC_ALL=C ffmpeg -h full       >hf.out
+LC_ALL=C ffmpeg -h protocol=file      >hpf.out
+LC_ALL=C ffmpeg -h demuxer=matroska   >hdm.out
+LC_ALL=C ffmpeg -h demuxer=mp4        >hdmp4.out   # has private options; ours does not (see vaco-cli.md)
+LC_ALL=C ffmpeg -h muxer=matroska     >hmm.out      # has private options and named constants
+LC_ALL=C ffmpeg -h decoder=nonesuchxyz -h encoder=nonesuchxyz -h filter=x \
+                 -h bsf=x -h protocol=x -h demuxer -h muxer -h decoder \
+                 -h encoder -h filter -h bsf -h protocol   # the "no name"/"unknown name" matrix
+```
+
+* **`-h` always consumes the next argv entry if one exists, whatever it looks
+  like**, and does not error when none does. `ffmpeg -h -i x` reports `Unknown
+  help option '-i'.` — `-i` was consumed as the topic, `x` is never looked at.
+  This is the one option in either table with
+  [`table::ArgFlags::OPTIONAL_ARG`]; `split::split_with` treats a missing
+  value as `None` rather than [`error::CliError::MissingArgument`] only for it.
+* **Name field: `max(18, len) + 1`, not `+ 8`.** Confirmed against `-h
+  protocol=file`'s five options (name lengths 6–10, one field width
+  throughout — not distinguishing enough on its own) and cross-checked against
+  all ~14,000 lines of `-h full`, where the field grows past the minimum at
+  exactly `len + 1` for every name from 2 to 32 characters, no exception.
+  Type field: same rule, minimum 12.
+* **Only `-h`/`-version`/`-buildconf` print `Exiting with exit code 0` on
+  *stdout*, unconditionally — even at `-loglevel quiet`.** None of the other
+  thirteen listing commands do (confirmed across all of them). It is not the
+  ordinary log stream: `-muxers -loglevel debug` prints the same line, but to
+  *stderr*, as the shared debug-level exit trace every invocation gets: the
+  `-h` family's copy is unconditional and lands on stdout regardless.
+* **Blank lines before the trailer: one normally, two when the body's last
+  block was an `AVOptions`/consts block.** True for the success paths
+  (`-h full`, `-h protocol=file`, `-h muxer=matroska`) and for the "not
+  found" one-liners (`Codec 'x' is not recognized…`, `Unknown format 'x'.`) —
+  which get exactly one, the same as any other non-`AVOptions` body, not zero.
+* **`-h decoder`/`-h demuxer`/… (bare, no `=`) is a different "no name" case
+  from `-h decoder=`/`-h demuxer=` (an explicit empty name).** The first
+  short-circuits before any lookup (`No codec name specified.`, `Unknown
+  format '(null)'.` — the reference's own C `NULL` literal, printed by `%s`);
+  the second runs the lookup with an empty string and gets the ordinary
+  "not found" message (`Codec '' is not recognized…`, `Unknown format ''.`).
+  `demuxer`/`muxer` share one message shape because both are
+  `AVFormatContext` lookups in the reference.
+* **An unrecognised `kind` reports only the kind text.** `-h zzzz=x` says
+  `Unknown help option 'zzzz'.`, not `'zzzz=x'.` — [`help::parse_topic`]
+  always splits on `=` first and leaves kind-validity to the caller.
+* **A found `protocol` prints no header at all** — straight into `<name>
+  AVOptions:` (or nothing, if the protocol declares no schema). Every other
+  found kind (`Demuxer`/`Muxer`/`Decoder`/`Encoder`/`Filter`/`Bit stream
+  filter`) prints `"{Kind} {name} [{long_name}]:\n"` first.
+
+### What this build cannot show, and why — not this crate's gap
+
+This build has zero muxers, zero decoders, zero encoders and zero filters
+(D5), so most of `-h <kind>=<name>`'s "found" branches are exercised only by
+`demuxer=<one of our three>` and (once `--features protocol-http` is on)
+`protocol=http`/`protocol=https`. Two real gaps sit in other crates, not here,
+and are recorded in `docs/app/vaco-cli.md`'s "Reported upstream" rather than
+worked around:
+
+* `vaco_format_core::DemuxerDesc`/`MuxerDesc` carry no options-schema hook —
+  unlike `vaco_protocol_core::ProtocolDesc::options` — so even a demuxer with
+  private options (none of ours have any yet) could not show them.
+* `vaco_codec_core::DecoderDesc` and `vaco_filter_core::FilterDesc` carry
+  none either, and `vaco-cli`'s `codec_kind`/`filter` "found" branches are
+  therefore unreachable *and* unmeasured — implemented as real lookups so a
+  landing decoder lights the path up rather than staying silently wrong, but
+  their header-only shape is a best guess, not something checked against a
+  real row.
 
 ## Method: how the grammar was established
 

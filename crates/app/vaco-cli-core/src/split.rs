@@ -429,14 +429,24 @@ pub fn split_with<S: AsRef<OsStr>>(
                 // A deferred option always takes a value: nothing knows whether
                 // it is a flag, and the reference assumes it is not.
                 let wants_value = desc.is_none_or(OptDesc::takes_value);
+                // `-h` (and its `-?`/`-help`/`--help` spellings) is the one
+                // option in either table that tolerates running out of argv:
+                // a bare trailing `-h` is the basic help, not a missing-value
+                // error. See `ArgFlags::OPTIONAL_ARG`.
+                let optional = desc.is_some_and(|d| d.flags.contains(ArgFlags::OPTIONAL_ARG));
                 let value = if wants_value {
-                    let Some(v) = argv.get(i + 1) else {
-                        return Err(CliError::MissingArgument {
-                            name: tok.display_name(),
-                        });
-                    };
-                    i += 1;
-                    Some(v.as_ref().to_owned())
+                    match argv.get(i + 1) {
+                        Some(v) => {
+                            i += 1;
+                            Some(v.as_ref().to_owned())
+                        }
+                        None if optional => None,
+                        None => {
+                            return Err(CliError::MissingArgument {
+                                name: tok.display_name(),
+                            });
+                        }
+                    }
                 } else {
                     None
                 };

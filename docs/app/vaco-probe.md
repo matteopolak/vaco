@@ -51,6 +51,8 @@ argv ──▶ [cli]      the option set                          (vaco-cli-core
      ──▶ [open]     protocol → IoContext → probe → demuxer
                              → Discovery                    (vaco-io, -format-core)
      ──▶ [show]     one section per -show_* flag             (this crate)
+     ──▶ [packets]  one pass: -show_packets, -count_packets,
+                    -select_streams, -read_intervals         (this crate)
      ──▶ [writer]   bytes                                    (vaco-textformat)
 ```
 
@@ -235,6 +237,131 @@ constructing anything. Column layouts, measured:
   `4·depth + 2` below it. Measured across all thirteen distinct depths — the
   step is genuinely 3 then 4, not 4 throughout.
 
+### `packets.rs`, `intervals.rs`, `dump.rs` — the `[PACKET]` section
+
+Three modules, one pass over the file.
+
+Before this wave `-show_packets` opened the `packets` array and closed it again:
+a stub that printed nothing and exited 0. That is the worst failure shape
+available, because silence with exit 0 is indistinguishable from "this file has
+no packets" and a differential harness records it as a pass.
+
+`packets::read` is the loop, and it serves `-show_packets`, `-count_packets`,
+`-select_streams` and `-read_intervals` together because the reference serves
+them together:
+
+```text
+for interval in intervals:
+    seek if it has a start
+    loop:
+        packet = demuxer.read_packet()      -- an error or EOF ends everything
+        skip it unless -select_streams admits it
+        cursor.admit(pts) -> Show: emit and count
+                          -> Stop: this packet is DROPPED, next interval
+```
+
+The observable consequence of it being one pass is that `-count_packets`
+`-read_intervals '%+#3'` reports 3, not the file's total — the counter counts
+what was *shown*.
+
+#### Five rules that are not derivable and were measured
+
+The commands are in each module's `# Provenance` block. In summary:
+
+| Rule | Observed |
+|---|---|
+| An interval boundary **eats one packet** | `-read_intervals '%+#1,%+#1'` prints the packets at offsets 48 and **7675**, skipping 5219. The packet that ends an interval has already been consumed. |
+| `#N` counts **selected** packets only | `-select_streams v -read_intervals '%+#1,%+#1'` skips the second *video* packet, not the second packet. |
+| `#` is legal only after `%+` | `#5`, `+#5` are start errors; `%#5` is an end error. |
+| A malformed `#N` is a **warning**, not an error | `-read_intervals '%+#-1'` prints `Invalid or negative value '-1' …`, shows nothing, and **exits 0**. |
+| An offset end is measured from the position **found** | `1%+0.04` on a file whose only keyframe is at 0 ends at 0.04, not 1.04. |
+
+And one that cost a wrong first implementation:
+
+> **`pos` is a plain integer string, not a byte *value*.** Under `-unit
+> -prefix`, `size` prints `5.171000 Kbyte` and `pos` — the next field, also a
+> byte count — prints `48`. Typing it `Ty::Size` because it holds a byte count
+> looks obviously right and is wrong in four of the seven formatting modes.
+> Pinned by `tests/packets.rs::size_scales_under_pretty_and_pos_does_not`.
+
+#### `flags` is `K`/`D`/`C`, in that order
+
+`vaco_textformat::num::packet_flags(key, discard, corrupt)` already existed; it
+was checked rather than trusted, because the `PacketFlags` bits are numbered
+KEY/CORRUPT/DISCARD and a helper written from the bit order would be wrong in
+the middle character only. Three files settle it:
+
+| File | Packet | `flags` |
+|---|---|---|
+| `av.mp4` | first AAC packet (encoder delay) | `KD_` |
+| `av.ts` with one 188-byte TS packet removed | the packet spanning the gap | `K_C` |
+| any | ordinary | `K__` / `___` |
+
+So the middle character is D and the last is C. The helper is correct.
+
+#### `-show_data`, `-data_dump_format`, `-show_data_hash`
+
+`dump.rs`. The hexdump geometry was measured on rawvideo files of exactly *n*
+bytes for n ∈ {1,2,3,4,5,15,16,17,31,32,33}, which pins the partial-line padding
+at every position within a group and at both group boundaries: the ASCII column
+starts at byte **51** of every line, a missing byte contributes two spaces so
+the group separator survives, and `isprint` is the C-locale range 0x20–0x7e so
+a space prints as a space.
+
+**base64 wraps at 80 characters**, and that was missed the first time: a 17-byte
+file produces one short line and looks unwrapped. It only appears on a payload
+long enough to exceed 80 base64 characters — the 5 171-byte first video packet
+of `av.mp4` renders as 87 lines, 86 of exactly 80 and a last of 16. *A short
+input is not a small version of a long one.*
+
+The hash names are matched **case-insensitively** and printed in the
+reference's own spelling, which is not uniform: `md5` → `MD5`, `crc32` →
+`CRC32`, `ADLER32` → **`adler32`** (lower case, alone among the fifteen), and
+`sha1` is **rejected** — the name is `SHA160`.
+
+Ten of the fifteen are implemented, from crates already in
+`[workspace.dependencies]`: MD5, SHA160/224/256/384/512, SHA512/224,
+SHA512/256, CRC32 (the ordinary reflected IEEE polynomial, checked against
+Python's `zlib`) and adler32 (nine lines, written out rather than adopted).
+**`murmur3` and RIPEMD128/160/256/320 have no pre-declared pure-Rust crate**, so
+`-show_data_hash RIPEMD160` **fails with `Unsupported`** naming them. The first
+version returned `None` and, because `data_hash` is `Absent::Omit`, printed a
+perfectly ordinary packet with no `data_hash` line and exit 0 — the same
+silent-success shape this whole wave replaced.
+
+#### `-show_frames` fails loudly
+
+D5 gives v0.1 zero decoders and a frame section reports *decoded* frame
+properties; D14.4 moved `-show_frames`, `-count_frames` and `-analyze_frames` to
+v0.2. So they return `Error::Unsupported` naming the decision and the work
+package, and exit 1, before a byte is written:
+
+```console
+$ vaco-probe -show_frames av.mp4; echo $?
+unsupported: -show_frames/-count_frames need a decoder; v0.1 has none (D5, D14.4 — roadmap CL-34b/v0.2)
+1
+```
+
+`vaco-cli` set the precedent with `AvError::ENOSYS` for its unimplemented
+listings. A gap you can see beats a gap that looks like an empty answer.
+
+#### Bounding the work
+
+Two bounds, answering different questions.
+
+* **`-read_intervals` is the user's bound.** Without it a packet dump is
+  unbounded by construction.
+* **A `vaco_limits::Budget` is the safety bound.** One unit of fuel per packet
+  read, so a demuxer that returns packets without consuming input terminates
+  instead of spinning. `run` uses `Limits::permissive()` (2³² packets, four
+  orders of magnitude above any real file); `run_with_limits` exists so the
+  fuzz target can pass `Limits::tiny()`.
+
+A read error needs no bound: the reference stops the whole read on any
+`av_read_frame` failure, so a corrupt file terminates by the same path a
+well-formed one does.
+
+
 ## Measured fidelity
 
 Two independent measurements, because they answer different questions.
@@ -309,6 +436,116 @@ Two independent cases, both truncating, neither rounding. A corpus of exact
 durations cannot distinguish three rules; one inexact duration distinguishes
 them immediately. Pinned by
 `show::tests::format_bit_rate_truncates_to_whole_bits_per_second`.
+
+### The packet section, measured per container
+
+`ffprobe` 8.1 against `vaco-probe`, `-of json -show_packets -read_intervals
+'%+#40'`, comparing all eleven field values packet by packet over seventeen
+files. Every divergence below is a **demuxer** fact, not a section-emitter one.
+
+| Container | Field values matched | Files |
+|---|---|---|
+| **MP4 / MOV / M4A** | **2 431 / 2 431** | `av.mp4`, `frag.mp4`, `prog.mp4`, `hd.mp4`, `mono.m4a`, `small.mov`, `subs.mp4`, `col.mp4` |
+| **Matroska / WebM** | 1 292 / 1 562 | `av.mkv`, `op_st.webm`, `vs.mkv`, `as.mkv`, `sub.mkv` |
+| **MPEG-TS** | 186 / 550 | `av.ts`, `ts.ts` |
+| Total | 3 909 / 4 543 | |
+
+Per field:
+
+| Field | MP4 | Matroska | MPEG-TS |
+|---|---|---|---|
+| `codec_type` | 221/221 | 142/142 | 28/50 |
+| `stream_index` | 221/221 | 142/142 | 28/50 |
+| `pts` / `pts_time` | 221/221 | 142/142 | 17/50 |
+| `dts` / `dts_time` | 221/221 | **111/142** | 17/50 |
+| `duration` / `duration_time` | 221/221 | **38/142** | **0/50** |
+| `size` | 221/221 | 142/142 | 17/50 |
+| `pos` | 221/221 | 142/142 | 17/50 |
+| `flags` | 221/221 | 142/142 | 28/50 |
+| `side_data_list` present | 1/1 | 1/1 | **0/25** |
+
+**MP4 is byte-identical**, including `pos` — the field the wave brief flagged as
+the one containers disagree about. `pos=48` is the offset of the sample data in
+`mdat`; Matroska's `pos` is the block's own offset and also matches;
+MPEG-TS's is the 188-byte-aligned offset of the TS packet that begins the PES,
+and matches on every packet whose ordering matches.
+
+The three divergences, all upstream of this crate:
+
+1. **`vaco-demux-matroska` sets no packet `dts` and no packet `duration`** on
+   most packets. Never a wrong value — always absent. 31 `dts` and 104
+   `duration` field values on the corpus.
+2. **`vaco-demux-mpegts` reports half the packet duration.** `3600` ticks at
+   1/90000 in the reference, `1800` in ours — a factor of exactly two, which is
+   the field rate standing in for the frame rate. The first few packets carry no
+   duration at all.
+3. **`vaco-demux-mpegts` interleaves differently.** From packet 7 onward it
+   emits video where the reference emits audio, so every field after that point
+   is compared against the wrong packet. The 17/50 and 28/50 columns above are
+   an *ordering* difference, not eleven separate field bugs.
+4. **`vaco_packet::PacketSideData` has no `MPEGTS Stream ID` variant**, which
+   the reference attaches to every MPEG-TS packet. `Skip Samples` is modelled
+   and matches on both MP4 and Matroska.
+
+### The `-show_packets` option matrix
+
+Full cross-product on `av.mp4`: 14 writer specs × 6 formatting modes × 4
+`-select_streams` values × 5 `-read_intervals` values × 3
+`-show_optional_fields` values = **5 040 invocations**, compared as exact
+stdout bytes plus exit code.
+
+**4 620 / 5 040 byte-identical.**
+
+All 420 failures are one class: **a seeking interval combined with
+`-select_streams a`**. `ffprobe` seeks with stream index `-1`, letting
+libavformat pick a stream and then reposition *each track* to its own nearest
+sample at or before the target; `vaco_format_core::SeekTarget` has no such
+spelling, so `packets::seek` names the first video stream (which is what
+`av_find_default_stream_index` picks). `vaco-demux-mp4` then rewinds the audio
+track to the start of the file rather than to its own nearest sample, so
+`-select_streams a -read_intervals '1%+#3'` starts at 0 where the reference
+starts at 0.998458. Both halves are recorded under *Known gaps in other
+crates*.
+
+### `-show_optional_fields never` suppressed nothing, and now suppresses everything
+
+Found by the matrix above, and it is **not specific to packets** — it was wrong
+for `[FORMAT]` and `[STREAM]` in exactly the same way, so this is a
+pre-existing crate-wide divergence that the packet work happened to expose.
+
+The option's name suggests it hides *unavailable* fields. Measured, it hides
+**every** field:
+
+```console
+$ ffprobe -v error -of default -show_format -show_optional_fields never av.mp4
+[FORMAT]
+[/FORMAT]
+$ ffprobe -v error -of xml -show_packets -show_optional_fields never … av.mp4
+        <packet />
+```
+
+`filename`, `index`, `codec_type` and `flags` all go, and so do the `TAG:` and
+`DISPOSITION:` lines. But the **sections** stay — `json` still emits
+`"tags": {}` and `xml` still emits `<side_data type="Skip Samples">`. So the
+rule is "no fields", not "no content", and the `type` attribute of a typed
+section is not a field.
+
+`Emit` now enforces that in one place: `Emit::put`, `int`, `int_opt`, `str`,
+`ts`, `duration` and `tag` all return early, and `Emit::tf()` is documented as
+being for section open/close **only**. Every field emitter in `show.rs` was
+moved onto those wrappers, so a new call site cannot bypass the policy by
+reaching for the formatter directly. This closed 1 428 of the 1 848 matrix
+failures on its own.
+
+Re-measured across the stream and format sections — 10 files × 7 writers × 5
+section combinations × 3 policies, 1 050 invocations — `never` now scores
+**321/350**, ahead of `auto` (269) and `always` (273), where before the fix it
+could only have matched on a section with no fields at all. Of the 29 that
+remain, **21 are the `ini` writer omitting the blank line after an *empty*
+section**, a shape that was unreachable until `never` started producing empty
+sections; the other 8 are the known `ts_codec` tag on MPEG-TS streams, which
+opens a `tags` section where the reference has none. Both belong to other
+crates and are listed below.
 
 ### The 2026-08-22 `Stream` widening — what it closed
 
@@ -568,6 +805,13 @@ A change to observable output needs a reference run in the commit.
   table and not of the values, so no combination of present and absent data can
   reorder the output. A reordering that only shows up on some files is the worst
   kind of divergence to find.
+* `tests/packets.rs` holds captured `[PACKET]` bytes for the default, json and
+  compact writers, plus the `-pretty` line that pins `size` scaling and `pos`
+  not scaling, plus the two loud-failure paths (`-show_frames` and an
+  unimplemented hash). The packets are replayed rather than demuxed, for the
+  same reason `reference.rs` replays streams: this file is about which fields in
+  what order, and mixing a demuxer in would make every demuxer change a failure
+  here.
 
 ## Configuration
 
@@ -583,8 +827,20 @@ above records how it got there.
 
 `vaco-core`, `vaco-opts`, `vaco-cli-core`, `vaco-textformat`, `vaco-registry`,
 `vaco-format-core`, `vaco-codec-core`, `vaco-chlayout`, `vaco-packet`,
-`vaco-pixfmt`, `vaco-sampfmt`, `vaco-io`, `vaco-protocol-core`,
+`vaco-pixfmt`, `vaco-sampfmt`, `vaco-io`, `vaco-limits`, `vaco-protocol-core`,
 `vaco-protocol-file`.
+
+Four third-party crates, all pre-declared in `[workspace.dependencies]`, all
+pure Rust (D10 Gate 1), all reachable from this crate and no other (D11):
+`md-5`, `sha1`, `sha2` and `crc`, for `-show_data_hash`. They cover ten of the
+reference's fifteen algorithm names; `adler32` is written out here because a
+dependency that only ever computes nine lines is a D10 adoption for no
+reduction in code. `murmur3` and the four RIPEMD variants are refused by name
+rather than adopted — see above.
+
+`vaco-limits` moved from a dev-dependency to a real one: `packets::read` needs a
+`Budget` to bound the read loop, and a bound that only exists in tests is not a
+bound.
 
 The crate has a `lib` target as well as a `bin`, so `cargo fuzz` can link
 against it and `cargo xtask wasm-check` covers it (it passes: the only OS
@@ -618,25 +874,67 @@ engine, the section emitters. Beyond "does not panic" it asserts **determinism**
 the same argv twice must produce the same bytes, because output that depends on
 anything but the input cannot be byte-identical to anything.
 
-Last run: `exit=0 execs=1530353`, `find fuzz/artifacts -type f` empty.
+Last run: `exit=0 execs=1779115`, `find fuzz/artifacts -type f` empty.
+
+`fuzz/fuzz_targets/probe_packets.rs` starts where `probe_argv` stops. `probe_argv`
+never reaches a packet, because the paths it invents do not exist and the run
+ends at the open; this target supplies an arbitrary `-read_intervals` spec, an
+arbitrary packet payload and an arbitrary writer, which is the combination
+`-show_packets` actually runs. Beyond "does not panic" it asserts that
+`intervals::parse` is total, that the hexdump's ASCII column stays at byte 51 at
+every payload length, that no base64 line exceeds the wrap width, that every
+`HashAlg` agrees with its own `implemented()` flag, that no writer emits
+non-UTF-8 (a payload byte reaching the sink means a dump was bypassed), and that
+the counts never exceed what the intervals allow.
+
+Last run: `exit=0 execs=265611`, `find fuzz/artifacts -type f` empty.
+
+**Its first version measured 1 exec/s** and that is worth recording. The packet
+source never ended, so every iteration ran the full `Limits::tiny()` budget —
+65 536 packets, each emitting a section. libFuzzer needs thousands of execs to
+be worth running. That is not a finding about `vaco-probe`; it is the harness
+paying the bound's full price on every input, and the bound is already pinned
+deterministically by
+`packets::tests::a_demuxer_that_never_ends_is_bounded_by_the_budget`. The source
+is now finite and derived from the input length — what a real file looks like —
+and the target explores option shapes instead of re-proving one constant.
+155 361 execs in the first 60 s after the change.
 
 ## Scoped out this wave
 
 Named, not silently missing.
 
-* **`-show_frames`** — D14.4 moved it to v0.2; it needs decoders. The `frames`
-  array is opened and closed so the document shape is right.
-* **`-show_packets`** — the `packet` field table and emitter are written and
-  tested, but the read loop is not wired: it needs `-read_intervals` and a
-  demuxer that returns packets. The `packets` array is opened and closed.
+* **`-show_frames`, `-count_frames`** — D14.4 moved them to v0.2; they need
+  decoders. They no longer print an empty `[FRAMES]` array: they return
+  `Error::Unsupported` naming D14.4 and exit 1. See above.
+* ~~**`-show_packets`**~~ — done this wave, together with `-read_intervals`,
+  `-count_packets`, `-select_streams` over packets, `-show_data`,
+  `-data_dump_format` and `-show_data_hash`.
+* **`-read_intervals` grammar deferred: nothing.** The full grammar is
+  implemented — `START`, `+START_OFFSET`, `%END`, `%+END_OFFSET`, `%+#COUNT`,
+  and comma-separated lists, with the duration grammar
+  `[ws][sign]D+[:D+[:D+]][.D*][s|ms|us]`. What is *approximated* is the
+  execution of a seeking start: see the option matrix above.
 * **`-show_pixel_formats`, `-pix_fmts`, `-sample_fmts`, `-layouts`, `-colors`**
   — the headers are byte-identical; the rows need an "every variant" iterator
   that `vaco-pixfmt`, `vaco-sampfmt` and `vaco-chlayout` do not expose. Writing
   a local list here would duplicate a generated table and start drifting from it.
 * **`-show_stream_groups`** — no container in this build produces one.
-* **`-count_frames` / `-count_packets` / `-read_intervals` / `-show_data` /
-  `-show_data_hash` / `-show_log` / `-analyze_frames`** — parsed and carried,
-  not acted on.
+* **`-show_log` / `-analyze_frames`** — parsed and carried, not acted on.
+* **`-show_data_hash murmur3` and the four RIPEMD variants** — refused by name
+  with `Unsupported`, because no pure-Rust crate for them is pre-declared and
+  D10 makes adding one a reviewed decision.
+* **`-show_entries <section>=<fields>` combined with `-show_<section>`** — the
+  reference *ignores the field filter* in that case and prints every field;
+  we honour the filter. Measured on both `stream` and `packet`. Pre-existing
+  and general, not a packet issue; fixing it needs an additive
+  `EntryFilterSet::show_all(SectionId)` in `vaco-textformat`, which this crate
+  does not own.
+* **The two extra `-read_intervals` diagnostic lines.** The reference prints
+  `Invalid interval start specification 'x'` and `Error parsing read interval
+  #0 'x'` before the `Failed to set value …` line; we print only the last.
+  Plan 14 §5.6 makes the exit code conformance surface here and not the
+  message.
 * **`av_dump_format` on stderr** — see the correction above.
 * **`-h`, `-L`, `-buildconf`, `-version`** — one line each, ours, per D9.
 
@@ -699,3 +997,34 @@ Reported, not worked around.
 * **`vaco-protocol-file` ships no `vaco-component.toml`**, so
   `vaco_registry::protocol_registry()` is empty and this crate registers
   `file:`/`pipe:` itself.
+* **`vaco-demux-matroska` sets no packet `dts` and no packet `duration`.** The
+  reference reports both from `BlockGroup`/`DefaultDuration`. 31 `dts` and 104
+  `duration` field values on the packet corpus; never a wrong value, always
+  absent.
+* **`vaco-demux-mpegts` reports exactly half the packet duration** — `1800`
+  ticks at 1/90000 where the reference reports `3600`. A factor of two is the
+  field rate standing in for the frame rate. It also emits no duration at all
+  on the first packets, and its packet *ordering* diverges from packet 7 of
+  `av.ts`, emitting video where the reference emits audio.
+* **`vaco_packet::PacketSideData` has no `MPEGTS Stream ID` variant.** The
+  reference attaches one to every MPEG-TS packet, so every `[PACKET]` from a
+  transport stream is missing a `[SIDE_DATA]` block. `Skip Samples` is modelled
+  and byte-identical on MP4 and Matroska.
+* **`vaco_format_core::SeekTarget` cannot express "the default stream".**
+  `ffprobe` seeks with stream index `-1` against `AV_TIME_BASE_Q`; ours must
+  name a stream and a timestamp in that stream's base. `packets::seek` picks the
+  first video stream, mirroring `av_find_default_stream_index`, and says so.
+* **`vaco-demux-mp4` rewinds every track to the start when seeking.** Seeking
+  the video track to 1 s on a file whose only keyframe is at 0 also puts the
+  *audio* track back at the start; the reference leaves audio at its own nearest
+  sample, 0.998458. This is the single remaining class in the `-show_packets`
+  option matrix — 420 of 5 040 invocations.
+* **`vaco_textformat`'s `ini` writer omits the blank line after an empty
+  section.** The reference prints one, so
+  `-of ini -show_streams -show_optional_fields never` differs by two blank lines
+  per stream. Unreachable until `never` began producing empty sections; 21 of
+  the 29 residual `never` failures across the stream/format matrix.
+* **`vaco_packet::PacketSideData::SkipSamples` has no `skip_reason` /
+  `discard_reason`.** The reference prints both, always 0 on every file
+  measured, so this crate emits 0 to keep the block's shape. If a container ever
+  sets them it becomes a divergence.

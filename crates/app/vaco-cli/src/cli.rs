@@ -73,8 +73,15 @@ pub struct OutputSpec {
 #[derive(Debug, Default)]
 pub struct Cli {
     pub hide_banner: bool,
-    /// The name of the first `-version`/`-formats`/… option seen, if any.
+    /// The resolved name of the first `-version`/`-formats`/`-h`/… option
+    /// seen, if any. Resolved through [`ParsedOption::resolved`] rather than
+    /// taken from the raw descriptor, because `-?`/`-help`/`--help` are all
+    /// aliases of `-h` and must dispatch identically.
     pub listing: Option<&'static str>,
+    /// The raw value that followed the listing option, if it took one.
+    /// `-h`'s topic argument lives here (`-h full`, `-h decoder=x264`); the
+    /// other listing options never take a value, so this is `None` for them.
+    pub listing_value: Option<std::ffi::OsString>,
     pub inputs: Vec<InputSpec>,
     pub outputs: Vec<OutputSpec>,
     /// Trailing per-file options with no file after them. The reference drops
@@ -119,13 +126,24 @@ pub fn parse<S: AsRef<OsStr>>(argv: &[S]) -> Result<Cli, Diagnostic> {
     let line = vaco_cli_core::split_with(&table, argv, &Oracle).map_err(|e| split_error(&e))?;
     line.validate().map_err(|e| split_error(&e))?;
 
+    let listing_opt = line
+        .global
+        .iter()
+        .find(|o| o.desc.is_some_and(|d| d.flags.contains(ArgFlags::EXIT)));
+
     let mut cli = Cli {
         hide_banner: line.last_global("hide_banner").is_some(),
-        listing: line
-            .global
-            .iter()
-            .find(|o| o.desc.is_some_and(|d| d.flags.contains(ArgFlags::EXIT)))
-            .and_then(|o| o.desc.map(|d| d.name)),
+        // The *resolved* name, not the raw descriptor's own: `-?`, `-help`
+        // and `--help` are `alias_of`-redirected to `h`, so their own
+        // `OptDesc::name` ("?", "help", "-help") would dispatch nowhere.
+        // Every option reaching `listing_opt` has `desc.is_some()` by
+        // construction (the `find` above requires it), so `d.name` is always
+        // `'static` here — no need to go through `resolved()`, which would
+        // borrow from `o` instead.
+        listing: listing_opt
+            .and_then(|o| o.desc)
+            .map(|d| d.alias_of.map_or(d.name, |(target, _)| target)),
+        listing_value: listing_opt.and_then(|o| o.value.clone()),
         orphaned: line
             .orphaned
             .iter()

@@ -41,6 +41,16 @@ const TOKENS: &[&str] = &[
     "-probesize", "-nostats", "--", "-", "copy", "null", "0", "0:v", "0:a", "-0:v", "0:v:0?",
     "[x]", "matroska", "nosuchformat", "out.mkv", "out.zzz", "/nonexistent/vaco-fuzz-input",
     "pipe:0", "", ":", "?",
+    // CL-04: `-h`'s topic grammar takes an arbitrary string, including one
+    // that looks like another option (`-h -i` swallows `-i` rather than
+    // re-lexing it) — see `vaco_cli_core::help::parse_topic` and
+    // `vaco_cli::help::render`. "long"/"full" exercise the two depths,
+    // "decoder=", "protocol=", "demuxer=", "muxer=", "filter=", "bsf=" (with
+    // no name after the `=`, which is a distinct case from no `=` at all)
+    // exercise all seven kinds and the found/not-found paths.
+    "long", "full", "decoder=h264", "encoder=x", "demuxer=matroska", "demuxer=",
+    "muxer=matroska", "protocol=file", "protocol=", "filter=scale", "bsf=x",
+    "-buildconf", "-codecs", "-protocols", "-bsfs", "-dispositions",
 ];
 
 fn argv_from(u: &mut Unstructured<'_>) -> Vec<String> {

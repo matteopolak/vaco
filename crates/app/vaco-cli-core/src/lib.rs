@@ -83,6 +83,7 @@
 #![forbid(unsafe_code)]
 
 pub mod error;
+pub mod help;
 pub mod lex;
 pub mod map;
 pub mod metaspec;
@@ -94,6 +95,9 @@ pub mod table;
 pub mod value;
 
 pub use error::{CliError, Phase, Result, SpecError};
+pub use help::{
+    HelpLevel, KindTopic, Topic, parse_topic, render_options_help, render_schema_block,
+};
 pub use lex::{NameToken, Token, classify};
 pub use map::{FileMap, MapSpec};
 pub use metaspec::{MetaSpecError, MetadataSpecifier};

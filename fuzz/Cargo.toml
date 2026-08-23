@@ -696,6 +696,14 @@ bench = false
 required-features = ["probe"]
 
 [[bin]]
+name = "probe_packets"
+path = "fuzz_targets/probe_packets.rs"
+test = false
+doc = false
+bench = false
+required-features = ["probe"]
+
+[[bin]]
 name = "protocol_http_response"
 path = "fuzz_targets/protocol_http_response.rs"
 test = false

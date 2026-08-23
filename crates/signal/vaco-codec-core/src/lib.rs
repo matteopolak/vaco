@@ -83,12 +83,13 @@ pub enum CodecId {
     Pcm,
     Png,
     Jpeg,
-    /// SubRip (`.srt`), the text subtitle format Matroska carries as
+    /// `SubRip` (`.srt`), the text subtitle format Matroska carries as
     /// `S_TEXT/UTF8`. `ffprobe` prints `codec_name=subrip`.
     SubRip,
     /// MPEG-4 timed text, the *same* subtitles inside MP4. A separate codec in
     /// the reference rather than a framing — `ffprobe` prints
-    /// `codec_name=mov_text` for a track transcoded from the identical SubRip
+    /// `codec_name=mov_text` for a track transcoded from the identical
+    /// `SubRip`
     /// source, so the two spellings are an interface fact (D9), not a choice.
     MovText,
     // ... generated

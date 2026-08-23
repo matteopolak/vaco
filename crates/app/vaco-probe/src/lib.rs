@@ -30,8 +30,15 @@
 //!      ──▶ [listing]  -formats/-sections/… print and exit
 //!      ──▶ [open]     protocol → IoContext → probe → demuxer  (vaco-io, -format-core)
 //!      ──▶ [show]     one section per -show_* flag             (this crate)
+//!      ──▶ [packets]  one pass serving -show_packets,
+//!                     -count_packets, -select_streams and
+//!                     -read_intervals together               (this crate)
 //!      ──▶ [writer]   bytes                                    (vaco-textformat)
 //! ```
+//!
+//! [`packets`] is one pass because the reference makes it one pass, and the
+//! observable consequence is that `-count_packets -read_intervals '%+#3'`
+//! reports 3 rather than the file's total.
 //!
 //! # A correction worth stating plainly
 //!
@@ -66,9 +73,12 @@
 #![forbid(unsafe_code)]
 
 pub mod cli;
+pub mod dump;
 pub mod emit;
 pub mod fields;
+pub mod intervals;
 pub mod listing;
+pub mod packets;
 pub mod show;
 
 use std::io::Write;
@@ -76,11 +86,25 @@ use std::io::Write;
 use vaco_core::{Error, Result};
 use vaco_format_core::{Demuxer, DemuxerDesc, Discovery, FormatOptions, Probe, Stream};
 use vaco_io::{IoContext, IoOptions};
+use vaco_limits::Limits;
 use vaco_textformat::sections::SectionId;
 use vaco_textformat::{EntryFilterSet, TextFormat, writers};
 
 pub use cli::{Listing, Options, Show};
 pub use emit::{Emit, Val};
+
+/// Why `-show_frames` and `-count_frames` fail instead of printing nothing.
+///
+/// D5 gives v0.1 zero decoders, and a frame section reports **decoded** frame
+/// properties. D14.4 moved `-show_frames`, `-count_frames` and
+/// `-analyze_frames` to v0.2 for exactly that reason.
+///
+/// The alternative — an empty `[FRAMES]` array and exit 0 — is worse than a
+/// refusal, because it is indistinguishable from "this file has no frames".
+/// A differential harness records that as a pass. `vaco-cli` sets the
+/// precedent with `AvError::ENOSYS` for its unimplemented listings: a gap you
+/// can see beats a gap that looks like an empty answer.
+pub const FRAMES_UNSUPPORTED: &str = "-show_frames/-count_frames need a decoder; v0.1 has none (D5, D14.4 \u{2014} roadmap CL-34b/v0.2)";
 
 /// This program's version, as `program_version.version` prints it.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -115,6 +139,21 @@ where
     O: Write,
     E: Write,
 {
+    run_with_limits(argv, out, err, Limits::permissive())
+}
+
+/// [`run`], with the packet loop's safety bound supplied by the caller.
+///
+/// Exists for the fuzz target, which needs a hostile input to terminate in
+/// milliseconds rather than in the four billion packets `permissive` allows.
+/// It is a *safety* bound, never a correctness one: no real file comes near it,
+/// and `-read_intervals` is what a user reaches for. See [`packets`].
+pub fn run_with_limits<S, O, E>(argv: &[S], out: &mut O, err: &mut E, limits: Limits) -> Exit
+where
+    S: AsRef<std::ffi::OsStr>,
+    O: Write,
+    E: Write,
+{
     let opts = match cli::parse(argv) {
         Ok(o) => o,
         Err(e) => {
@@ -122,7 +161,10 @@ where
             return Exit::Failure;
         }
     };
-    match execute(&opts, out, err) {
+    for warning in &opts.interval_warnings {
+        let _ = writeln!(err, "{warning}");
+    }
+    match execute(&opts, out, err, limits) {
         Ok(x) => x,
         Err(e) => {
             let _ = writeln!(err, "{e}");
@@ -131,7 +173,12 @@ where
     }
 }
 
-fn execute<O: Write, E: Write>(opts: &Options, out: &mut O, err: &mut E) -> Result<Exit> {
+fn execute<O: Write, E: Write>(
+    opts: &Options,
+    out: &mut O,
+    err: &mut E,
+    limits: Limits,
+) -> Result<Exit> {
     if !opts.hide_banner && opts.listing != Some(Listing::Version) {
         banner(err)?;
     }
@@ -139,6 +186,17 @@ fn execute<O: Write, E: Write>(opts: &Options, out: &mut O, err: &mut E) -> Resu
         version_listing(out, which)?;
         listing::render(out, which)?;
         return Ok(Exit::Ok);
+    }
+
+    // Refuse before anything is written, so the failure cannot be mistaken for
+    // an empty section. See [`FRAMES_UNSUPPORTED`].
+    if opts.show.frames || opts.show.count_frames {
+        return Err(Error::Unsupported(FRAMES_UNSUPPORTED));
+    }
+    // Same rule for the five hash algorithms this build knows the name of but
+    // cannot compute. See [`dump::HASH_UNSUPPORTED`].
+    if opts.show_data_hash.is_some_and(|a| !a.implemented()) {
+        return Err(Error::Unsupported(dump::HASH_UNSUPPORTED));
     }
 
     // The writer is built *before* the input is checked, because the reference
@@ -191,8 +249,8 @@ fn execute<O: Write, E: Write>(opts: &Options, out: &mut O, err: &mut E) -> Resu
             writeln!(err, "{url}: {}", error_report(&e).1)?;
             Ok(Exit::Failure)
         }
-        Ok(input) => {
-            writer.document(opts, &input, &url)?;
+        Ok(mut input) => {
+            writer.document(opts, &mut input, &url, limits)?;
             writer.finish()?;
             Ok(Exit::Ok)
         }
@@ -349,9 +407,16 @@ impl<'a, O: Write> Writer<'a, O> {
     /// enabled at once (plan 14 §5.4):
     /// `program_version, library_versions, pixel_formats, packets, frames,
     /// programs, stream_groups, streams, chapters, format, error`.
-    fn document(&mut self, opts: &Options, input: &Input, url: &str) -> Result<()> {
+    fn document(
+        &mut self,
+        opts: &Options,
+        input: &mut Input,
+        url: &str,
+        limits: vaco_limits::Limits,
+    ) -> Result<()> {
         let streams: Vec<Stream> = input.demuxer.streams().to_vec();
         let selected = select(opts, &streams);
+        let selected_ids: Vec<u32> = selected.iter().map(|s| s.index).collect();
 
         self.tf.open(SectionId::ROOT)?;
         let mut emit = Emit::new(&mut self.tf, self.policy);
@@ -368,15 +433,45 @@ impl<'a, O: Write> Writer<'a, O> {
             emit.tf().open(SectionId::PIXEL_FORMATS)?;
             emit.tf().close()?;
         }
-        if opts.show.packets {
-            emit.tf().open(SectionId::PACKETS)?;
-            emit.tf().close()?;
-        }
-        if opts.show.frames {
-            // D14.4 moved `-show_frames` to v0.2: it needs decoders.
-            emit.tf().open(SectionId::FRAMES)?;
-            emit.tf().close()?;
-        }
+        // One pass serves `-show_packets` and `-count_packets` both, which is
+        // why `-count_packets` alone still reads the whole file. `packets`
+        // opens and closes the array itself, so the root-child position is
+        // this statement's position.
+        let counts = if opts.show.packets || opts.show.count_packets {
+            packets::read(
+                &mut emit,
+                input.demuxer.as_mut(),
+                &streams,
+                packets::ReadOpts {
+                    intervals: &opts.intervals,
+                    selected: &selected_ids,
+                    emit_packets: opts.show.packets,
+                    payload: show::PayloadOpts {
+                        data: opts.show_data,
+                        hash: opts.show_data_hash,
+                    },
+                    limits,
+                },
+            )?
+        } else {
+            Vec::new()
+        };
+        // `-count_packets` is what puts a number in `nb_read_packets`; without
+        // it the field is `N/A` even though the count is knowable. Observed,
+        // and the reason the counter is an `Option` rather than a `u64`.
+        let count_of = |index: u32| show::Counts {
+            read_packets: opts.show.count_packets.then(|| {
+                streams
+                    .iter()
+                    .position(|s| s.index == index)
+                    .and_then(|i| counts.get(i))
+                    .copied()
+                    .unwrap_or(0)
+            }),
+            // `-count_frames` never gets here: `execute` refuses it.
+            read_frames: None,
+        };
+        // `-show_frames` never gets here either.
         let show_ids = input
             .desc
             .flags
@@ -384,7 +479,7 @@ impl<'a, O: Write> Writer<'a, O> {
         if opts.show.programs {
             emit.tf().open(SectionId::PROGRAMS)?;
             for p in input.demuxer.programs() {
-                show::program(&mut emit, p, &streams, show_ids)?;
+                show::program(&mut emit, p, &streams, show_ids, &count_of)?;
             }
             emit.tf().close()?;
         }
@@ -395,7 +490,7 @@ impl<'a, O: Write> Writer<'a, O> {
         if opts.show.streams {
             emit.tf().open(SectionId::STREAMS)?;
             for s in selected.iter().copied() {
-                show::stream(&mut emit, s, show_ids)?;
+                show::stream(&mut emit, s, show_ids, count_of(s.index))?;
             }
             emit.tf().close()?;
         }

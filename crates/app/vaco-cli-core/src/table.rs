@@ -110,6 +110,14 @@ mod bit {
     pub const AUDIO: u32 = 1 << 11;
     pub const SUBTITLE: u32 = 1 << 12;
     pub const DATA: u32 = 1 << 13;
+    /// Consumes the following argv entry **if one exists**, but does not error
+    /// when it does not. Only `-h`/`-?`/`-help`/`--help` carry this: measured
+    /// (`ffmpeg 8.1`, no pipe), a bare trailing `-h` prints the basic help
+    /// rather than "Missing argument for option 'h'.", while `-h -i` swallows
+    /// `-i` itself as the topic (`Unknown help option '-i'.`) — the consumed
+    /// token is never re-classified as an option name. No other option in
+    /// either table has this shape.
+    pub const OPTIONAL_ARG: u32 = 1 << 14;
 }
 
 impl ArgFlags {
@@ -141,6 +149,8 @@ impl ArgFlags {
     pub const AUDIO: Self = Self(bit::AUDIO);
     pub const SUBTITLE: Self = Self(bit::SUBTITLE);
     pub const DATA: Self = Self(bit::DATA);
+    /// See [`bit::OPTIONAL_ARG`].
+    pub const OPTIONAL_ARG: Self = Self(bit::OPTIONAL_ARG);
 
     #[must_use]
     pub const fn contains(self, other: Self) -> bool {

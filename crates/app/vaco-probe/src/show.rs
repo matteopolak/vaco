@@ -9,12 +9,35 @@ use std::io::Write;
 use vaco_codec_core::{CodecId, CodecParameters, Level, Profile};
 use vaco_core::{MediaType, Rational, Result};
 use vaco_format_core::{Chapter, Program, Stream, StreamSideData, display_rotation};
-use vaco_packet::{Packet, PacketFlags};
+use vaco_packet::{Packet, PacketFlags, PacketSideData};
 use vaco_textformat::num;
 use vaco_textformat::sections::SectionId;
 
+use crate::dump::{DumpFormat, HashAlg};
 use crate::emit::{Emit, Val};
 use crate::fields::{self, Field, Scope};
+
+/// What `-count_packets` and `-count_frames` filled in for one stream.
+///
+/// `nb_read_packets` and `nb_read_frames` are the only two stream fields that
+/// cannot be answered from the header — they are the result of having read the
+/// file, and they are **bounded by `-read_intervals` and `-select_streams`**.
+/// Measured: `-count_packets -read_intervals '%+#3'` on a two-stream MP4
+/// reports `nb_read_packets` of 2 and 1, not 50 and 88, so the counter counts
+/// what was *shown*, not what exists.
+#[derive(Clone, Copy, Default, Debug)]
+pub struct Counts {
+    pub read_packets: Option<u64>,
+    pub read_frames: Option<u64>,
+}
+
+impl Counts {
+    /// Neither counter was requested.
+    pub const NONE: Self = Self {
+        read_packets: None,
+        read_frames: None,
+    };
+}
 
 /// The unknown-level sentinel. Raw video prints `level=-99`, as an integer —
 /// the only field in the stream section whose absent form is not a string.
@@ -124,9 +147,14 @@ fn container_start_time(streams: &[Stream]) -> Option<f64> {
 ///
 /// # Errors
 /// Propagates the sink's I/O error.
-pub fn stream<W: Write>(e: &mut Emit<'_, W>, s: &Stream, show_ids: bool) -> Result<()> {
+pub fn stream<W: Write>(
+    e: &mut Emit<'_, W>,
+    s: &Stream,
+    show_ids: bool,
+    counts: Counts,
+) -> Result<()> {
     e.tf().open(SectionId::STREAM)?;
-    stream_fields(e, s, show_ids)?;
+    stream_fields(e, s, show_ids, counts)?;
     disposition(e, SectionId::STREAM_DISPOSITION, s.disposition)?;
     tags(e, SectionId::STREAM_TAGS, &s.metadata)?;
     side_data(e, s)?;
@@ -152,14 +180,13 @@ pub fn side_data<W: Write>(e: &mut Emit<'_, W>, s: &Stream) -> Result<()> {
     for datum in &s.side_data {
         e.tf()
             .open_typed(SectionId::STREAM_SIDE_DATA, datum.name())?;
-        e.tf().str("side_data_type", datum.name())?;
+        e.str("side_data_type", datum.name())?;
         match *datum {
             StreamSideData::DisplayMatrix(m) => {
-                e.tf().str("displaymatrix", &display_matrix_text(&m))?;
+                e.str("displaymatrix", &display_matrix_text(&m))?;
                 // Truncated toward zero, not rounded. Measured: an exact
                 // -35.683 prints -35 and an exact 26.978 prints 26.
-                e.tf()
-                    .int("rotation", display_rotation(&m).trunc() as i64)?;
+                e.int("rotation", display_rotation(&m).trunc() as i64)?;
             }
         }
         e.tf().close()?;
@@ -193,14 +220,19 @@ fn display_matrix_text(m: &[i32; 9]) -> String {
     out
 }
 
-fn stream_fields<W: Write>(e: &mut Emit<'_, W>, s: &Stream, show_ids: bool) -> Result<()> {
+fn stream_fields<W: Write>(
+    e: &mut Emit<'_, W>,
+    s: &Stream,
+    show_ids: bool,
+    counts: Counts,
+) -> Result<()> {
     let p = &s.params;
     let media = s.media_type();
     for field in fields::STREAM {
         if !in_scope(field, media) {
             continue;
         }
-        let mut val = stream_value(field, s, p, media);
+        let mut val = stream_value(field, s, p, media, counts);
         // `id` is printed only by a container that declares
         // `FormatFlags::SHOW_IDS`. Measured: the same H.264 track reports
         // `id=0x1` from MP4 and `id=N/A` from Matroska, and Matroska's
@@ -232,7 +264,13 @@ fn in_scope(field: &Field, media: Option<MediaType>) -> bool {
     clippy::too_many_lines,
     reason = "one arm per field; splitting it would hide the order this asserts"
 )]
-fn stream_value(field: &Field, s: &Stream, p: &CodecParameters, media: Option<MediaType>) -> Val {
+fn stream_value(
+    field: &Field,
+    s: &Stream,
+    p: &CodecParameters,
+    media: Option<MediaType>,
+    counts: Counts,
+) -> Val {
     let video = p.video.as_ref();
     let audio = p.audio.as_ref();
     let tb = s.time_base;
@@ -337,13 +375,17 @@ fn stream_value(field: &Field, s: &Stream, p: &CodecParameters, media: Option<Me
         "duration_ts" => Val::opt_i(s.duration_ts),
         "duration" => Val::opt_f(s.duration().map(vaco_core::Duration::as_secs_f64)),
         "bit_rate" => Val::opt_f(p.bit_rate.map(|b| b as f64)),
-        // `max_bit_rate` is not on the frozen `CodecParameters`, and
-        // `nb_read_frames`/`nb_read_packets` need `-count_frames` /
-        // `-count_packets`. All three fall through to the wildcard, which is
-        // `Val::Absent` — the reference prints `N/A` for them too until
-        // something fills them.
+        // `max_bit_rate` is not on the frozen `CodecParameters`, so it falls
+        // through to the wildcard and prints `N/A`, as the reference does
+        // until something fills it.
         "bits_per_raw_sample" => Val::opt_s(bits_per_raw_sample(p).map(|b| b.to_string())),
         "nb_frames" => Val::opt_s(s.frame_count.map(|n| n.to_string())),
+        // Strings, not integers, next to `nb_frames` which is also a string —
+        // see the module note. Absent unless the matching count flag was
+        // given, which is the whole difference between `-count_packets` and
+        // reading the header.
+        "nb_read_packets" => Val::opt_s(counts.read_packets.map(|n| n.to_string())),
+        "nb_read_frames" => Val::opt_s(counts.read_frames.map(|n| n.to_string())),
         "extradata_size" => Val::opt_i(
             p.extradata
                 .as_ref()
@@ -590,7 +632,7 @@ pub fn disposition<W: Write>(
     e.tf().open(section)?;
     for &(_, name) in vaco_cli_core::Disposition::ALL {
         let set = vaco_format_core::Disposition::by_name(name).is_some_and(|f| d.contains(f));
-        e.tf().int(name, i64::from(set))?;
+        e.int(name, i64::from(set))?;
     }
     e.tf().close()
 }
@@ -612,16 +654,34 @@ pub fn tags<W: Write>(
     }
     e.tf().open(section)?;
     for (k, v) in metadata {
-        e.tf().tag(k, v)?;
+        e.tag(k, v)?;
     }
     e.tf().close()
+}
+
+/// What `-show_data`, `-data_dump_format` and `-show_data_hash` asked for.
+///
+/// A struct rather than three parameters because the *order* of the two extra
+/// fields is part of the contract — `data` before `data_hash`, measured — and
+/// keeping them together is what makes that visible at the one call site.
+#[derive(Clone, Copy, Default, Debug)]
+pub struct PayloadOpts {
+    /// `-show_data`.
+    pub data: Option<DumpFormat>,
+    /// `-show_data_hash <alg>`.
+    pub hash: Option<HashAlg>,
 }
 
 /// One `packet` section.
 ///
 /// # Errors
 /// Propagates the sink's I/O error.
-pub fn packet<W: Write>(e: &mut Emit<'_, W>, pkt: &Packet, stream: Option<&Stream>) -> Result<()> {
+pub fn packet<W: Write>(
+    e: &mut Emit<'_, W>,
+    pkt: &Packet,
+    stream: Option<&Stream>,
+    payload: PayloadOpts,
+) -> Result<()> {
     let t = fields::PACKET;
     let tb = stream.map_or(Rational::MICROSECONDS, |s| s.time_base);
     let secs = |ts: Option<i64>| -> Option<f64> {
@@ -646,18 +706,21 @@ pub fn packet<W: Write>(e: &mut Emit<'_, W>, pkt: &Packet, stream: Option<&Strea
     // `duration` counts ticks of the stream's time base, `duration_time` is the
     // same quantity in seconds. The model carries a `Duration` in microseconds,
     // so the tick count is derived rather than stored.
+    //
+    // A duration of **zero prints `N/A`**, which is not how `pts` behaves — a
+    // pts of 0 prints 0. The reference's duration printer treats 0 as "no
+    // value" where its timestamp printer only treats `AV_NOPTS_VALUE` that
+    // way. Observed on both, in the same section, three fields apart.
     let ticks = pkt.duration.to_ticks(tb).filter(|t| *t != 0);
     e.field(t, "duration", &Val::opt_i(ticks))?;
-    e.field(
-        t,
-        "duration_time",
-        &Val::opt_f(ticks.and_then(|_| {
-            let secs = pkt.duration.as_secs_f64();
-            (secs != 0.0).then_some(secs)
-        })),
-    )?;
+    // Derived from the *ticks*, not from the microsecond `Duration`, so that
+    // `duration_time` is `duration × time_base` exactly as the reference
+    // computes it. Going through microseconds rounds twice: 1024 ticks at
+    // 1/44100 is 23219.95 µs, and the second rounding has nothing left to
+    // recover the sixth decimal from.
+    e.field(t, "duration_time", &Val::opt_f(secs(ticks)))?;
     e.field(t, "size", &Val::F(pkt.payload().len() as f64))?;
-    e.field(t, "pos", &Val::opt_f(pkt.pos.map(|p| p as f64)))?;
+    e.field(t, "pos", &Val::opt_s(pkt.pos.map(|p| p.to_string())))?;
     e.field(
         t,
         "flags",
@@ -667,7 +730,69 @@ pub fn packet<W: Write>(e: &mut Emit<'_, W>, pkt: &Packet, stream: Option<&Strea
             pkt.flags.contains(PacketFlags::CORRUPT),
         )),
     )?;
+    if let Some(format) = payload.data {
+        e.field(t, "data", &Val::s(format.render(pkt.payload())))?;
+    }
+    if let Some(alg) = payload.hash {
+        e.field(t, "data_hash", &Val::opt_s(alg.digest(pkt.payload())))?;
+    }
+    packet_side_data(e, pkt)?;
     e.tf().close()
+}
+
+/// The packet's `side_data_list`, when it carries any.
+///
+/// Only `Skip Samples` is measured, because it is the only kind our demuxers
+/// produce: MP4 and Matroska both attach it to the first audio packet, and the
+/// reference prints
+///
+/// ```text
+/// [SIDE_DATA]
+/// side_data_type=Skip Samples
+/// skip_samples=1024
+/// discard_padding=0
+/// skip_reason=0
+/// discard_reason=0
+/// [/SIDE_DATA]
+/// ```
+///
+/// `skip_reason` and `discard_reason` are not in `vaco_packet::PacketSideData`
+/// at all; both are 0 in every file measured, and they are emitted as 0 rather
+/// than omitted so the block's shape matches. If a container ever sets them
+/// this becomes a divergence, which is why it is written down here.
+///
+/// The other three kinds print their type name and nothing else. Their names
+/// are **not** measured — no demuxer in this build emits one — so they are
+/// marked as such rather than presented as observed.
+fn packet_side_data<W: Write>(e: &mut Emit<'_, W>, pkt: &Packet) -> Result<()> {
+    if pkt.side_data.is_empty() {
+        return Ok(());
+    }
+    e.tf().open(SectionId::PACKET_SIDE_DATA_LIST)?;
+    for datum in &pkt.side_data {
+        let name = packet_side_data_name(datum);
+        e.tf().open_typed(SectionId::PACKET_SIDE_DATA, name)?;
+        e.str("side_data_type", name)?;
+        if let PacketSideData::SkipSamples { start, end } = *datum {
+            e.int("skip_samples", i64::from(start))?;
+            e.int("discard_padding", i64::from(end))?;
+            e.int("skip_reason", 0)?;
+            e.int("discard_reason", 0)?;
+        }
+        e.tf().close()?;
+    }
+    e.tf().close()
+}
+
+/// Measured for `SkipSamples`; the rest are unverified (see above).
+const fn packet_side_data_name(d: &PacketSideData) -> &'static str {
+    match d {
+        PacketSideData::Palette(_) => "Palette",
+        PacketSideData::NewExtradata(_) => "New Extradata",
+        PacketSideData::DisplayMatrix(_) => "Display Matrix",
+        PacketSideData::SkipSamples { .. } => "Skip Samples",
+        _ => "Unknown",
+    }
 }
 
 /// The `error` section.
@@ -696,12 +821,12 @@ pub fn chapter<W: Write>(e: &mut Emit<'_, W>, c: &Chapter) -> Result<()> {
         Some(ts as f64 * f64::from(tb.num) / f64::from(tb.den))
     };
     e.tf().open(SectionId::CHAPTER)?;
-    e.tf().str("id", &c.id.to_string())?;
-    e.tf().str("time_base", &num::rational(tb))?;
-    e.tf().ts("start", c.start.ticks())?;
-    e.tf().duration("start_time", secs(c.start.ticks()))?;
-    e.tf().ts("end", c.end.ticks())?;
-    e.tf().duration("end_time", secs(c.end.ticks()))?;
+    e.str("id", &c.id.to_string())?;
+    e.str("time_base", &num::rational(tb))?;
+    e.ts("start", c.start.ticks())?;
+    e.duration("start_time", secs(c.start.ticks()))?;
+    e.ts("end", c.end.ticks())?;
+    e.duration("end_time", secs(c.end.ticks()))?;
     tags(e, SectionId::CHAPTER_TAGS, &c.metadata)?;
     e.tf().close()
 }
@@ -715,6 +840,7 @@ pub fn program<W: Write>(
     p: &Program,
     streams: &[Stream],
     show_ids: bool,
+    counts: &dyn Fn(u32) -> Counts,
 ) -> Result<()> {
     let members = p
         .stream_indices
@@ -728,18 +854,17 @@ pub fn program<W: Write>(
     // ones: `program_id`, `program_num`, `nb_streams`, `pmt_pid`, `pcr_pid`,
     // then the tags. There is no `pmt_version` field, no `start_time` and no
     // `end_time`, which is where plan 18 §1.1 is wrong.
-    e.tf().int("program_id", p.id)?;
-    e.tf().int_opt("program_num", p.program_num)?;
-    e.tf()
-        .int("nb_streams", i64::try_from(members).unwrap_or(i64::MAX))?;
-    e.tf().int_opt("pmt_pid", p.pmt_pid.map(i64::from))?;
-    e.tf().int_opt("pcr_pid", p.pcr_pid.map(i64::from))?;
+    e.int("program_id", p.id)?;
+    e.int_opt("program_num", p.program_num)?;
+    e.int("nb_streams", i64::try_from(members).unwrap_or(i64::MAX))?;
+    e.int_opt("pmt_pid", p.pmt_pid.map(i64::from))?;
+    e.int_opt("pcr_pid", p.pcr_pid.map(i64::from))?;
     tags(e, SectionId::PROGRAM_TAGS, &p.metadata)?;
     e.tf().open(SectionId::PROGRAM_STREAMS)?;
     for index in &p.stream_indices {
         if let Some(s) = streams.iter().find(|s| s.index == *index) {
             e.tf().open(SectionId::PROGRAM_STREAM)?;
-            stream_fields(e, s, show_ids)?;
+            stream_fields(e, s, show_ids, counts(s.index))?;
             disposition(e, SectionId::PROGRAM_STREAM_DISPOSITION, s.disposition)?;
             tags(e, SectionId::PROGRAM_STREAM_TAGS, &s.metadata)?;
             e.tf().close()?;
@@ -823,7 +948,13 @@ mod tests {
             if let Some(v) = p.video.as_mut() {
                 v.nal_length_size = size;
             }
-            stream_value(&field(name), &stream, &p, Some(MediaType::Video))
+            stream_value(
+                &field(name),
+                &stream,
+                &p,
+                Some(MediaType::Video),
+                Counts::NONE,
+            )
         };
         let text = |v: Val| match v {
             Val::S(s) => Some(s),

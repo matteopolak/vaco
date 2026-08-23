@@ -377,7 +377,7 @@ fn streams(spec: &str) -> String {
     render(spec, |e| {
         e.tf().open(SectionId::STREAMS).expect("streams");
         for s in &av_mp4_streams() {
-            show::stream(e, s, true).expect("stream");
+            show::stream(e, s, true, show::Counts::NONE).expect("stream");
         }
         e.tf().close().expect("streams");
     })
@@ -604,7 +604,7 @@ fn the_program_section_prints_five_fields_in_order() {
     p.stream_indices = vec![0, 1];
     let streams = av_mp4_streams();
     let out = render("default", |e| {
-        show::program(e, &p, &streams, false).expect("program");
+        show::program(e, &p, &streams, false, &|_| show::Counts::NONE).expect("program");
     });
     let head = out
         .lines()
@@ -628,12 +628,12 @@ fn the_id_field_follows_show_ids() {
     let streams = av_mp4_streams();
     let with = render("default", |e| {
         for s in &streams {
-            show::stream(e, s, true).expect("stream");
+            show::stream(e, s, true, show::Counts::NONE).expect("stream");
         }
     });
     let without = render("default", |e| {
         for s in &streams {
-            show::stream(e, s, false).expect("stream");
+            show::stream(e, s, false, show::Counts::NONE).expect("stream");
         }
     });
     assert!(with.contains("\nid=0x1\n"), "{with}");

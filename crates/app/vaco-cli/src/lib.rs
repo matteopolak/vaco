@@ -57,6 +57,7 @@
 pub mod cli;
 pub mod exec;
 pub mod exit;
+pub mod help;
 pub mod input;
 pub mod listing;
 pub mod nullmux;
@@ -108,7 +109,11 @@ where
     let cli = cli::parse(argv)?;
 
     if let Some(name) = cli.listing {
-        listing::render(out, name)?;
+        if name == "h" {
+            help::render(out, cli.listing_value.as_deref()).map_err(listing::io_diagnostic)?;
+        } else {
+            listing::render(out, name)?;
+        }
         return Ok(ExitCode::OK);
     }
 
