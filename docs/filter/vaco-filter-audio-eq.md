@@ -34,16 +34,18 @@ function (see below). The twelve are: `equalizer`, `bass`, `lowshelf`,
 One module per filter (`src/<name>.rs`), each exposing `pub const DESC:
 FilterDesc` and a crate-private `fn create`, aggregated by
 [`registry::EqRegistry`](../../crates/filter/vaco-filter-audio-eq/src/registry.rs)
-— the same shape `vaco-filter-audio` uses. `src/engine.rs` holds the shared
-math; `src/common.rs` holds shared option parsing and the `Biquad`
-`FrameFilter` that is the entire body of every filter here except
-`tiltshelf`, `anequalizer`, `superequalizer` and `firequalizer` (each of
-which needs more than one biquad section, so each writes its own small
-`FrameFilter`).
+— the same shape `vaco-filter-audio` uses. The Audio EQ Cookbook math itself
+— `Coeffs`, `State`, `WidthType`, and every formula function — lives in
+[`vaco_filter_adsp::biquad`](../../crates/filter/vaco-filter-adsp/src/biquad.rs),
+not in this crate (see below for why); `src/common.rs` holds shared option
+parsing and the `Biquad` `FrameFilter` that is the entire body of every
+filter here except `tiltshelf`, `anequalizer`, `superequalizer` and
+`firequalizer` (each of which needs more than one biquad section, so each
+writes its own small `FrameFilter`).
 
 ## How it works
 
-### The Audio EQ Cookbook engine (`engine.rs`) — the hard part
+### The Audio EQ Cookbook engine (`vaco-filter-adsp::biquad`) — the hard part
 
 `equalizer`, `bass`/`lowshelf`, `treble`/`highshelf`, `highpass`, `lowpass`,
 `bandpass`, `bandreject`, `allpass` and the raw `biquad` filter are one IIR
@@ -52,6 +54,19 @@ coefficient formulas. Those formulas are transcribed from Robert
 Bristow-Johnson's "Audio EQ Cookbook", the standard citable reference for
 RBJ biquads (`provenance/sources.toml`'s `rbj-audio-eq-cookbook` entry),
 never from an implementation.
+
+**This math used to live in this crate, as a `pub(crate)` module named
+`engine`.** It moved to `vaco-filter-adsp::biquad` (D19) once three other
+crates — `vaco-filter-aeffects`, `vaco-filter-ameasure` and
+`vaco-filter-audio-dynamics` — turned out to need the same two-pole design
+and, finding this crate's copy crate-private and therefore unreachable,
+each either wrote a fallback (`aeffects`'s one-pole approximations in
+`aexciter`/`deesser`/`virtualbass`) or duplicated the cookbook formulas
+outright (`ameasure::kweight`, `audio-dynamics::mcompand`). This crate now
+depends on `vaco-filter-adsp` like the other three; `Coeffs::normalise`'s
+NaN-safety fallback and `Coeffs::response_db`'s independent z-transform
+oracle (below) are unchanged by the move — same code, same tests, new
+address.
 
 **Why the tests are a real oracle and not a restated formula.** A second
 transcription of the same cookbook sentence cannot disagree with the first —
@@ -140,7 +155,7 @@ a tilt EQ, not a probe of the reference's DSP). Built as a low shelf cutting
 `-gain/2` cascaded with a high shelf boosting `+gain/2`, both at the same
 `frequency`: each stage crosses 0 dB exactly at `frequency`, so the cascade
 sums to `-gain/2` at DC, `+gain/2` at Nyquist, and 0 dB at the pivot — a
-genuine tilt. Verified in `engine::tests::tiltshelf_pivots_between_the_two_gains`.
+genuine tilt. Verified in `vaco-filter-adsp`'s `biquad::tests::tiltshelf_pivots_between_the_two_gains`.
 
 ### `anequalizer` — structural
 
@@ -197,10 +212,10 @@ delayed.
 
 ## How to change it
 
-* New biquad-family filter: add a formula function to `engine.rs`, a
+* New biquad-family filter: add a formula function to `vaco-filter-adsp`'s `src/biquad.rs`, a
   `Design` variant in `common.rs`, and a thin module following
   `lowpass.rs`'s shape. Add the frequency-response test to
-  `engine.rs::tests` before anything else — that is the actual
+  its `tests` module before anything else — that is the actual
   specification check.
 * Changing a default: check `ffmpeg -h filter=<name>` first (`docs/filter/`
   convention: measure, don't recall — six defaults in this project's roadmap
@@ -221,7 +236,9 @@ per-filter options above, read at filtergraph-parse time.
 `vaco-core`, `vaco-frame`, `vaco-sampfmt`, `vaco-chlayout`, `vaco-resample`
 (the shared `f64` sample domain, `sample.rs`), `vaco-filter-core` (the
 `Filter`/`FrameFilter` traits, the `Simple` adapter), `vaco-filter-graph`
-(`FilterRegistry`). No new dependencies were added; `vaco-tx` (FFT/MDCT/DCT)
+(`FilterRegistry`), `vaco-filter-adsp` (`biquad`: the cookbook coefficient
+math this crate used to carry itself — new dependency, added when `engine`
+moved there). `vaco-tx` (FFT/MDCT/DCT)
 was considered for `firequalizer`/`superequalizer` but not needed — the
 frequency-sampling FIR design and the fixed IIR band cascade are both direct
 summations, not full transforms.

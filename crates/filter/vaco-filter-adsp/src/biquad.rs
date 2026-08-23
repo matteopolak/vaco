@@ -1,24 +1,44 @@
-//! The Audio EQ Cookbook biquad engine.
+//! RBJ Audio EQ Cookbook biquad coefficient design — the one definition
+//! (D19) for every `vaco-filter-a*` crate that needs a two-pole IIR
+//! section.
 //!
-//! `equalizer`, `bass`/`lowshelf`, `treble`/`highshelf`, `highpass`, `lowpass`,
-//! `bandpass`, `bandreject`, `allpass` and the raw `biquad` filter are all one
-//! IIR section — `y = b0 x0 + b1 x1 + b2 x2 - a1 y1 - a2 y2` — with different
-//! coefficient formulas. Those formulas come from Robert Bristow-Johnson's
-//! "Audio EQ Cookbook" (the standard, citable reference for RBJ biquads;
-//! `provenance/sources.toml` records it), not from any implementation, so this
-//! module is the one place FT-4.8a's "hard part" lives.
+//! `equalizer`, `bass`/`lowshelf`, `treble`/`highshelf`, `highpass`,
+//! `lowpass`, `bandpass`, `bandreject`, `allpass` and the raw `biquad`
+//! filter (all in `vaco-filter-aeq`) are one IIR section — `y = b0 x0 + b1
+//! x1 + b2 x2 - a1 y1 - a2 y2` — with different coefficient formulas. Those
+//! formulas come from Robert Bristow-Johnson's "Audio EQ Cookbook" (the
+//! standard, citable reference for RBJ biquads; `provenance/sources.toml`
+//! records it as `rbj-audio-eq-cookbook`), not from any implementation.
+//!
+//! # Why this moved here (D19, FT — filter crate consolidation)
+//!
+//! This module was originally `vaco-filter-audio-eq::engine`, `pub(crate)`
+//! — private to that crate on the theory that only the EQ family would ever
+//! need a biquad. That theory did not survive contact with the rest of
+//! `planning/16-filters.md` §4.3: `vaco-filter-aeffects`, `-ameasure` and
+//! `-audio-dynamics` each needed a two-pole section (a band splitter, a
+//! K-weighting cascade, a crossover filter) and, finding the EQ crate's
+//! version crate-private, each wrote its own — `-aeffects` fell back to
+//! one-pole approximations for `aexciter`/`deesser`/`virtualbass` instead
+//! (documented in those modules as "no cross-crate biquad access"), and
+//! `-ameasure::kweight` and `-audio-dynamics::mcompand` duplicated the
+//! cookbook formulas outright. Plan §4.1 already named "biquad coefficient
+//! design" as one of this crate's shared kernels; this is that move.
 //!
 //! # Why the tests here are a real oracle
 //!
-//! A biquad coefficient set and a "reimplementation of the same formula" agree
-//! by construction — two transcriptions of one sentence cannot disagree (see
-//! `planning/AGENT-CONSTRAINTS.md`'s HEVC IDCT cautionary tale). The property
-//! this module's tests check instead is the frequency response itself:
-//! [`Coeffs::response_db`] evaluates `H(e^{jw})` directly from the *z-transform
-//! definition*, not from the cookbook's algebra, so a coefficient sign error or
-//! a wrong `Q`/`BW`/`S` mapping shows up as a `-3 dB` point or a design-frequency
-//! gain that lands in the wrong place — a route to the answer that is
-//! genuinely independent of how the coefficients were derived.
+//! A biquad coefficient set and a "reimplementation of the same formula"
+//! agree by construction — two transcriptions of one sentence cannot
+//! disagree (see `planning/AGENT-CONSTRAINTS.md`'s HEVC IDCT cautionary
+//! tale). The property this module's tests check instead is the frequency
+//! response itself: [`Coeffs::response_db`] evaluates `H(e^{jw})` directly
+//! from the *z-transform definition*, not from the cookbook's algebra, so a
+//! coefficient sign error or a wrong `Q`/`BW`/`S` mapping shows up as a
+//! `-3 dB` point or a design-frequency gain that lands in the wrong place —
+//! a route to the answer that is genuinely independent of how the
+//! coefficients were derived. It is `pub`, not `#[cfg(test)]`, precisely so
+//! every downstream crate's own tests get the same independent oracle
+//! rather than re-deriving one.
 
 use std::f64::consts::{LN_2, PI};
 
@@ -36,7 +56,7 @@ use std::f64::consts::{LN_2, PI};
 ///   any other filter that (unusually) selects it, since the cookbook defines
 ///   no shelf slope for a non-shelving section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum WidthType {
+pub enum WidthType {
     Hz,
     KHz,
     #[default]
@@ -46,7 +66,8 @@ pub(crate) enum WidthType {
 }
 
 impl WidthType {
-    pub(crate) fn parse(s: &str) -> Option<Self> {
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "h" => Some(Self::Hz),
             "k" => Some(Self::KHz),
@@ -60,7 +81,7 @@ impl WidthType {
 
 /// One biquad section's coefficients, normalised so `a0 == 1`.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct Coeffs {
+pub struct Coeffs {
     pub b0: f64,
     pub b1: f64,
     pub b2: f64,
@@ -74,9 +95,12 @@ impl Coeffs {
     /// `a0` non-finite or zero (a cutoff of 0 Hz or at/above Nyquist makes
     /// `sin`/`cos` degenerate and can drive `a0` to zero) yields the identity
     /// section rather than propagating `NaN`/`inf` into every sample this
-    /// filter will ever see — see the crate's fuzz target and
-    /// `docs/filter/vaco-filter-audio-eq.md` for the measurement.
-    pub(crate) fn normalise(b0: f64, b1: f64, b2: f64, a0: f64, a1: f64, a2: f64) -> Self {
+    /// filter will ever see — see this crate's fuzz target and each caller's
+    /// docs for the measurement. **This fallback is load-bearing: keep it,
+    /// and keep the tests that pin it** — no parameter combination any
+    /// caller passes may put a `NaN` into a sample stream.
+    #[must_use]
+    pub fn normalise(b0: f64, b1: f64, b2: f64, a0: f64, a1: f64, a2: f64) -> Self {
         if !a0.is_finite() || a0 == 0.0 {
             return Self::identity();
         }
@@ -100,7 +124,8 @@ impl Coeffs {
     }
 
     /// The no-op section: `y = x`.
-    pub(crate) const fn identity() -> Self {
+    #[must_use]
+    pub const fn identity() -> Self {
         Self {
             b0: 1.0,
             b1: 0.0,
@@ -113,15 +138,19 @@ impl Coeffs {
     /// `H(e^{jw})` in dB, evaluated directly from the z-transform definition
     /// `H(z) = (b0 + b1 z^-1 + b2 z^-2) / (1 + a1 z^-1 + a2 z^-2)`.
     ///
-    /// Test-only: this is the independent route to the response described in
-    /// the module doc, not a helper the filters call.
-    #[cfg(test)]
-    pub(crate) fn response_db(&self, w: f64) -> f64 {
+    /// This is the independent route to the response described in the
+    /// module doc, not a helper the filters call in production — but it is
+    /// a normal `pub fn`, not `#[cfg(test)]`, because the whole point of
+    /// moving this module here is that other crates' *own* tests need this
+    /// same oracle. Gating it to this crate's test builds would have kept
+    /// it exactly as unreachable to callers as the `pub(crate)` visibility
+    /// this move is fixing.
+    #[must_use]
+    pub fn response_db(&self, w: f64) -> f64 {
         let (re, im) = self.response(w);
         10.0 * (re.mul_add(re, im * im)).log10()
     }
 
-    #[cfg(test)]
     fn response(&self, w: f64) -> (f64, f64) {
         let (c1, s1) = (w.cos(), -w.sin());
         let (c2, s2) = ((2.0 * w).cos(), -(2.0 * w).sin());
@@ -144,10 +173,9 @@ impl Coeffs {
 /// *same* transfer function. Direct Form I is implemented; the others are not
 /// — they change rounding behaviour under fixed-point/`f32` precision, not the
 /// `f64` response this crate computes in, so DI is a faithful (if not
-/// bit-identical-to-every-mode) realisation. Structural gap, recorded in
-/// `docs/filter/vaco-filter-audio-eq.md`.
+/// bit-identical-to-every-mode) realisation.
 #[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct State {
+pub struct State {
     x1: f64,
     x2: f64,
     y1: f64,
@@ -155,7 +183,7 @@ pub(crate) struct State {
 }
 
 impl State {
-    pub(crate) fn process(&mut self, c: &Coeffs, x0: f64) -> f64 {
+    pub fn process(&mut self, c: &Coeffs, x0: f64) -> f64 {
         let y0 = c.b0.mul_add(
             x0,
             c.b1.mul_add(
@@ -176,7 +204,8 @@ impl State {
 /// `shelf` selects the `S`-slope formula for `WidthType::Slope`; every other
 /// filter that (unusually) selects `s` falls back to treating `width` as `Q`,
 /// since the cookbook defines no shelf slope for a non-shelving section.
-fn alpha(
+#[must_use]
+pub fn alpha(
     width_type: WidthType,
     w0: f64,
     frequency: f64,
@@ -201,7 +230,8 @@ fn alpha(
     }
 }
 
-fn alpha_q(w0: f64, q: f64) -> f64 {
+#[must_use]
+pub fn alpha_q(w0: f64, q: f64) -> f64 {
     if q <= 0.0 {
         return 0.0;
     }
@@ -228,16 +258,19 @@ fn alpha_shelf(w0: f64, a: f64, s_slope: f64) -> f64 {
 /// frequency. Callers treat a non-finite or out-of-`(0, pi)` result as the
 /// "coefficients go non-finite" case `normalise` catches — a cutoff of 0 Hz
 /// or at/above Nyquist.
-fn w0_of(sample_rate: f64, frequency: f64) -> f64 {
+#[must_use]
+pub fn w0_of(sample_rate: f64, frequency: f64) -> f64 {
     2.0 * PI * frequency / sample_rate
 }
 
 /// `A`, the cookbook's linear gain term, from a dB gain.
-fn a_of(gain_db: f64) -> f64 {
+#[must_use]
+pub fn a_of(gain_db: f64) -> f64 {
     10f64.powf(gain_db / 40.0)
 }
 
-pub(crate) fn lowpass(fs: f64, f0: f64, wt: WidthType, width: f64) -> Coeffs {
+#[must_use]
+pub fn lowpass(fs: f64, f0: f64, wt: WidthType, width: f64) -> Coeffs {
     let w0 = w0_of(fs, f0);
     let a = alpha(wt, w0, f0, width, 1.0, false);
     let cw = w0.cos();
@@ -251,7 +284,8 @@ pub(crate) fn lowpass(fs: f64, f0: f64, wt: WidthType, width: f64) -> Coeffs {
     )
 }
 
-pub(crate) fn highpass(fs: f64, f0: f64, wt: WidthType, width: f64) -> Coeffs {
+#[must_use]
+pub fn highpass(fs: f64, f0: f64, wt: WidthType, width: f64) -> Coeffs {
     let w0 = w0_of(fs, f0);
     let a = alpha(wt, w0, f0, width, 1.0, false);
     let cw = w0.cos();
@@ -261,7 +295,8 @@ pub(crate) fn highpass(fs: f64, f0: f64, wt: WidthType, width: f64) -> Coeffs {
 
 /// `csg`: constant skirt gain (peak gain `Q`) when true, else constant 0 dB
 /// peak gain. `ffmpeg -h filter=bandpass` documents the `csg` boolean.
-pub(crate) fn bandpass(fs: f64, f0: f64, wt: WidthType, width: f64, csg: bool) -> Coeffs {
+#[must_use]
+pub fn bandpass(fs: f64, f0: f64, wt: WidthType, width: f64, csg: bool) -> Coeffs {
     let w0 = w0_of(fs, f0);
     let a = alpha(wt, w0, f0, width, 1.0, false);
     let cw = w0.cos();
@@ -269,7 +304,8 @@ pub(crate) fn bandpass(fs: f64, f0: f64, wt: WidthType, width: f64, csg: bool) -
     Coeffs::normalise(b0, 0.0, -b0, 1.0 + a, -2.0 * cw, 1.0 - a)
 }
 
-pub(crate) fn bandreject(fs: f64, f0: f64, wt: WidthType, width: f64) -> Coeffs {
+#[must_use]
+pub fn bandreject(fs: f64, f0: f64, wt: WidthType, width: f64) -> Coeffs {
     let w0 = w0_of(fs, f0);
     let a = alpha(wt, w0, f0, width, 1.0, false);
     let cw = w0.cos();
@@ -281,7 +317,8 @@ pub(crate) fn bandreject(fs: f64, f0: f64, wt: WidthType, width: f64) -> Coeffs 
 /// section, so order 1 uses the textbook first-order all-pass
 /// `H(z) = (a + z^-1) / (1 + a z^-1)` with `a` from the same `tan(w0/2)`
 /// relation the cookbook's second-order form reduces to at `Q -> infinity`.
-pub(crate) fn allpass(fs: f64, f0: f64, wt: WidthType, width: f64, order: u8) -> Coeffs {
+#[must_use]
+pub fn allpass(fs: f64, f0: f64, wt: WidthType, width: f64, order: u8) -> Coeffs {
     let w0 = w0_of(fs, f0);
     if order == 1 {
         let t = (w0 / 2.0).tan();
@@ -294,7 +331,8 @@ pub(crate) fn allpass(fs: f64, f0: f64, wt: WidthType, width: f64, order: u8) ->
 }
 
 /// Peaking EQ: `equalizer`.
-pub(crate) fn peaking(fs: f64, f0: f64, wt: WidthType, width: f64, gain_db: f64) -> Coeffs {
+#[must_use]
+pub fn peaking(fs: f64, f0: f64, wt: WidthType, width: f64, gain_db: f64) -> Coeffs {
     let w0 = w0_of(fs, f0);
     let a = a_of(gain_db);
     let al = alpha(wt, w0, f0, width, a, false);
@@ -310,7 +348,8 @@ pub(crate) fn peaking(fs: f64, f0: f64, wt: WidthType, width: f64, gain_db: f64)
 }
 
 /// Low shelf: `bass`/`lowshelf`.
-pub(crate) fn lowshelf(fs: f64, f0: f64, wt: WidthType, width: f64, gain_db: f64) -> Coeffs {
+#[must_use]
+pub fn lowshelf(fs: f64, f0: f64, wt: WidthType, width: f64, gain_db: f64) -> Coeffs {
     let w0 = w0_of(fs, f0);
     let a = a_of(gain_db);
     let al = alpha(wt, w0, f0, width, a, true);
@@ -327,7 +366,8 @@ pub(crate) fn lowshelf(fs: f64, f0: f64, wt: WidthType, width: f64, gain_db: f64
 }
 
 /// High shelf: `treble`/`highshelf`.
-pub(crate) fn highshelf(fs: f64, f0: f64, wt: WidthType, width: f64, gain_db: f64) -> Coeffs {
+#[must_use]
+pub fn highshelf(fs: f64, f0: f64, wt: WidthType, width: f64, gain_db: f64) -> Coeffs {
     let w0 = w0_of(fs, f0);
     let a = a_of(gain_db);
     let al = alpha(wt, w0, f0, width, a, true);
@@ -351,7 +391,8 @@ pub(crate) fn highshelf(fs: f64, f0: f64, wt: WidthType, width: f64, gain_db: f6
 /// which is why this is not held to the same `-3 dB`-at-`f0` bar the
 /// two-pole `lowpass`/`highpass` tests assert. Unity at DC and monotonic
 /// roll-off are checked instead.
-pub(crate) fn lowpass_one_pole(fs: f64, f0: f64) -> Coeffs {
+#[must_use]
+pub fn lowpass_one_pole(fs: f64, f0: f64) -> Coeffs {
     let w0 = w0_of(fs, f0);
     let a = (-w0).exp();
     Coeffs::normalise(1.0 - a, 0.0, 0.0, 1.0, -a, 0.0)
@@ -359,7 +400,8 @@ pub(crate) fn lowpass_one_pole(fs: f64, f0: f64) -> Coeffs {
 
 /// One-pole high-pass (`poles=1`): the complement of [`lowpass_one_pole`],
 /// `H_hp(z) = 1 - H_lp(z) = a(1 - z^-1) / (1 - a z^-1)`.
-pub(crate) fn highpass_one_pole(fs: f64, f0: f64) -> Coeffs {
+#[must_use]
+pub fn highpass_one_pole(fs: f64, f0: f64) -> Coeffs {
     let w0 = w0_of(fs, f0);
     let a = (-w0).exp();
     Coeffs::normalise(a, -a, 0.0, 1.0, -a, 0.0)
@@ -373,7 +415,8 @@ pub(crate) fn highpass_one_pole(fs: f64, f0: f64) -> Coeffs {
 /// cascading them sums to exactly `-gain/2` at DC and `+gain/2` at Nyquist
 /// with nothing left at the pivot — a genuine tilt rather than a shelf.
 /// Verified by [`tests::tiltshelf_pivots_between_the_two_gains`].
-pub(crate) fn tilt(fs: f64, f0: f64, wt: WidthType, width: f64, gain_db: f64) -> (Coeffs, Coeffs) {
+#[must_use]
+pub fn tilt(fs: f64, f0: f64, wt: WidthType, width: f64, gain_db: f64) -> (Coeffs, Coeffs) {
     (
         lowshelf(fs, f0, wt, width, -gain_db / 2.0),
         highshelf(fs, f0, wt, width, gain_db / 2.0),
@@ -545,8 +588,8 @@ mod tests {
 
     #[test]
     fn zero_hz_cutoff_does_not_produce_nan() {
-        // The failure mode the brief calls out explicitly: a 0 Hz or
-        // above-Nyquist cutoff must not let NaN/inf reach the coefficients.
+        // The failure mode this exists to prevent: a 0 Hz or above-Nyquist
+        // cutoff must not let NaN/inf reach the coefficients.
         for f in [0.0, -10.0, FS, FS * 10.0] {
             for wt in [WidthType::QFactor, WidthType::Hz, WidthType::Octave] {
                 let c = lowpass(FS, f, wt, 0.707);
@@ -624,10 +667,9 @@ mod tests {
     }
 
     proptest::proptest! {
-        /// The invariant the brief names explicitly: a unity-gain biquad must
-        /// not change the signal. `Coeffs::identity()` run through `State`
-        /// must reproduce any finite input sample for sample, for any
-        /// sequence of inputs.
+        /// Keeps the identity-section guarantee pinned: `Coeffs::identity()`
+        /// run through `State` must reproduce any finite input sample for
+        /// sample, for any sequence of inputs.
         #[test]
         fn identity_coeffs_never_change_the_signal(xs in proptest::collection::vec(-1.0e6f64..1.0e6, 0..64)) {
             let c = Coeffs::identity();
@@ -653,8 +695,7 @@ mod tests {
         }
 
         /// `bass`/`lowshelf` and `treble`/`highshelf` at 0 dB gain must also
-        /// be the identity — the invariant the brief names for `bass`
-        /// specifically, checked across the option ranges rather than one
+        /// be the identity, checked across the option ranges rather than one
         /// fixed point.
         #[test]
         fn shelf_zero_gain_is_identity_for_any_design(

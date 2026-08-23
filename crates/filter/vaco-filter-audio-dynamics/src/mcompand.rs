@@ -9,13 +9,30 @@
 //! five bands crossing over at 100/400/1600/6400 Hz.
 //!
 //! Each band is split out with a second-order Butterworth low-pass/high-pass
-//! pair at its crossover edges (the cookbook formula, duplicated locally
-//! rather than depending on `vaco-filter-audio-eq` — a dozen lines, not
-//! worth a cross-crate coupling for), companded with [`crate::compand`]'s
-//! transfer-curve machinery, and summed. `soft-knee` is accepted and
-//! ignored, matching `compand`.
+//! pair at its crossover edges — [`vaco_filter_adsp::biquad`]'s cookbook
+//! design at `Q = 1/sqrt(2)` fixed, since a crossover has no user-facing
+//! `width`/`Q` option — companded with [`crate::compand`]'s transfer-curve
+//! machinery, and summed. `soft-knee` is accepted and ignored, matching
+//! `compand`.
+//!
+//! This module used to carry its own duplicate of the cookbook Butterworth
+//! formula (on the theory that depending on `vaco-filter-audio-eq` for "a
+//! dozen lines" was not worth a cross-crate coupling). `vaco-filter-adsp`
+//! now exists as the shared home those lines belong in regardless of size
+//! (D19), so [`crossover_lowpass`] and [`crossover_highpass`] build on it
+//! directly. The one piece kept local is the out-of-range crossover
+//! frequency guard: at or below DC, or at or above Nyquist, the crossover
+//! has nothing to split, so the guard substitutes the identity (lowpass) or
+//! zero (highpass) section directly rather than asking the cookbook formula
+//! for a design point outside its intended domain — `vaco-filter-adsp`'s
+//! own `lowpass`/`highpass` do not special-case this range (their contract
+//! is "coefficients stay finite", not "physically sensible above
+//! Nyquist" — see their tests), so reproducing this crate's prior exact
+//! behaviour at those edges means keeping the guard here rather than
+//! pushing it down.
 
 use vaco_core::{MediaType, Result};
+use vaco_filter_adsp::biquad::{Coeffs, State, WidthType, highpass, lowpass};
 use vaco_filter_core::adapt::{FrameFilter, FrameOut, Simple};
 use vaco_filter_core::negotiate::NodeFormats;
 use vaco_filter_core::{FilterContext, FilterDesc, FilterFlags, LinkFormat, Timeline};
@@ -35,88 +52,39 @@ pub const DESC: FilterDesc = FilterDesc {
     flags: FilterFlags::empty(),
 };
 
-/// A second-order Butterworth section, duplicated from the same Audio EQ
-/// Cookbook formula `vaco-filter-audio-eq::engine` uses (`Q = 1/sqrt(2)`
-/// fixed, since a crossover has no user-facing `width`/`Q` option).
-#[derive(Debug, Clone, Copy, Default)]
-struct Biquad2 {
-    b0: f64,
-    b1: f64,
-    b2: f64,
-    a1: f64,
-    a2: f64,
+/// Fixed Butterworth `Q` for a crossover section (no user-facing `width`).
+const CROSSOVER_Q: f64 = std::f64::consts::FRAC_1_SQRT_2;
+
+/// A crossover's low-pass edge, or the identity section (pass everything
+/// through) if `f0` is at/below DC or at/above Nyquist — see the module doc.
+fn crossover_lowpass(fs: f64, f0: f64) -> Coeffs {
+    if !f0.is_finite() || f0 <= 0.0 || f0 >= fs / 2.0 {
+        return Coeffs::identity();
+    }
+    lowpass(fs, f0, WidthType::QFactor, CROSSOVER_Q)
 }
 
-impl Biquad2 {
-    fn lowpass(fs: f64, f0: f64) -> Self {
-        Self::build(fs, f0, false)
-    }
-
-    fn highpass(fs: f64, f0: f64) -> Self {
-        Self::build(fs, f0, true)
-    }
-
-    fn build(fs: f64, f0: f64, high: bool) -> Self {
-        let w0 = 2.0 * std::f64::consts::PI * f0 / fs;
-        if !w0.is_finite() || w0 <= 0.0 || w0 >= std::f64::consts::PI {
-            // Above Nyquist / at-or-below DC: pass everything through
-            // (lowpass) or block everything (highpass) via the identity /
-            // zero section rather than letting `sin`/`cos` degenerate into a
-            // non-finite coefficient.
-            return if high {
-                Self {
-                    b0: 0.0,
-                    b1: 0.0,
-                    b2: 0.0,
-                    a1: 0.0,
-                    a2: 0.0,
-                }
-            } else {
-                Self {
-                    b0: 1.0,
-                    b1: 0.0,
-                    b2: 0.0,
-                    a1: 0.0,
-                    a2: 0.0,
-                }
-            };
-        }
-        let q = std::f64::consts::FRAC_1_SQRT_2;
-        let alpha = w0.sin() / (2.0 * q);
-        let cw = w0.cos();
-        let (b0, b1, b2) = if high {
-            let h = f64::midpoint(1.0, cw);
-            (h, -(1.0 + cw), h)
-        } else {
-            let l = f64::midpoint(1.0, -cw);
-            (l, 1.0 - cw, l)
+/// A crossover's high-pass edge, or the zero section (block everything) if
+/// `f0` is at/below DC or at/above Nyquist — see the module doc.
+fn crossover_highpass(fs: f64, f0: f64) -> Coeffs {
+    if !f0.is_finite() || f0 <= 0.0 || f0 >= fs / 2.0 {
+        return Coeffs {
+            b0: 0.0,
+            b1: 0.0,
+            b2: 0.0,
+            a1: 0.0,
+            a2: 0.0,
         };
-        let a0 = 1.0 + alpha;
-        let a1 = -2.0 * cw;
-        let a2 = 1.0 - alpha;
-        if a0 == 0.0 || !a0.is_finite() {
-            return Self::default();
-        }
-        let s = Self {
-            b0: b0 / a0,
-            b1: b1 / a0,
-            b2: b2 / a0,
-            a1: a1 / a0,
-            a2: a2 / a0,
-        };
-        if [s.b0, s.b1, s.b2, s.a1, s.a2].iter().all(|v| v.is_finite()) {
-            s
-        } else {
-            Self::default()
-        }
     }
+    highpass(fs, f0, WidthType::QFactor, CROSSOVER_Q)
+}
 
-    fn process(&self, state: &mut (f64, f64, f64, f64), x0: f64) -> f64 {
-        let (x1, x2, y1, y2) = *state;
-        let y0 = self.b0 * x0 + self.b1 * x1 + self.b2 * x2 - self.a1 * y1 - self.a2 * y2;
-        *state = (x0, x1, y0, y1);
-        if y0.is_finite() { y0 } else { 0.0 }
-    }
+/// `state.process(coeffs, x)`, clamped to `0.0` on a non-finite result — the
+/// same per-sample safety net this module had before the move to
+/// `vaco_filter_adsp::biquad::State`, which does not clamp on its own.
+fn process_clamped(state: &mut State, coeffs: &Coeffs, x: f64) -> f64 {
+    let y = state.process(coeffs, x);
+    if y.is_finite() { y } else { 0.0 }
 }
 
 #[derive(Debug, Clone)]
@@ -166,14 +134,14 @@ fn parse_bands(raw: &str) -> Vec<BandSpec> {
 
 #[derive(Debug, Clone, Copy, Default)]
 struct FilterState {
-    lp: (f64, f64, f64, f64),
-    hp: (f64, f64, f64, f64),
+    lp: State,
+    hp: State,
 }
 
 struct Band {
     spec: BandSpec,
-    lowpass: Biquad2,
-    highpass: Biquad2,
+    lowpass: Coeffs,
+    highpass: Coeffs,
     states: Vec<FilterState>,
     envelopes: Vec<Envelope>,
 }
@@ -208,20 +176,14 @@ impl FrameFilter for MultibandCompand {
                     Band {
                         spec: spec.clone(),
                         lowpass: if is_last {
-                            Biquad2 {
-                                b0: 1.0,
-                                ..Biquad2::default()
-                            }
+                            Coeffs::identity()
                         } else {
-                            Biquad2::lowpass(self.sample_rate, spec.crossover_hz)
+                            crossover_lowpass(self.sample_rate, spec.crossover_hz)
                         },
                         highpass: if low_edge > 0.0 {
-                            Biquad2::highpass(self.sample_rate, low_edge)
+                            crossover_highpass(self.sample_rate, low_edge)
                         } else {
-                            Biquad2 {
-                                b0: 1.0,
-                                ..Biquad2::default()
-                            }
+                            Coeffs::identity()
                         },
                         states: vec![FilterState::default(); n],
                         envelopes: vec![Envelope::default(); n],
@@ -251,8 +213,8 @@ impl FrameFilter for MultibandCompand {
                     continue;
                 };
                 for (si, &x) in ch.iter().enumerate() {
-                    let filtered = band.highpass.process(&mut state.hp, x);
-                    let filtered = band.lowpass.process(&mut state.lp, filtered);
+                    let filtered = process_clamped(&mut state.hp, &band.highpass, x);
+                    let filtered = process_clamped(&mut state.lp, &band.lowpass, filtered);
                     let level = env.step(filtered.abs(), attack, decay);
                     let level_db = db(level);
                     let target_db = transfer_db(&band.spec.points, level_db);
@@ -329,11 +291,36 @@ mod tests {
     #[test]
     fn crossover_coefficients_are_always_finite() {
         for f0 in [0.0, -10.0, 100.0, 24_000.0, 48_000.0] {
-            for high in [false, true] {
-                let c = Biquad2::build(48_000.0, f0, high);
+            for c in [
+                crossover_lowpass(48_000.0, f0),
+                crossover_highpass(48_000.0, f0),
+            ] {
                 assert!(c.b0.is_finite() && c.b1.is_finite() && c.b2.is_finite());
                 assert!(c.a1.is_finite() && c.a2.is_finite());
             }
+        }
+    }
+
+    /// The edge case the module doc calls out explicitly: a crossover at or
+    /// above Nyquist must not be handed to the cookbook formula at all — the
+    /// low-pass side must pass everything through and the high-pass side
+    /// must block everything, exactly as before the move to
+    /// `vaco_filter_adsp::biquad`.
+    #[test]
+    fn out_of_range_crossover_uses_the_identity_and_zero_sections() {
+        let fs = 48_000.0;
+        for f0 in [0.0, -10.0, fs / 2.0, fs] {
+            assert_eq!(crossover_lowpass(fs, f0), Coeffs::identity());
+            assert_eq!(
+                crossover_highpass(fs, f0),
+                Coeffs {
+                    b0: 0.0,
+                    b1: 0.0,
+                    b2: 0.0,
+                    a1: 0.0,
+                    a2: 0.0,
+                }
+            );
         }
     }
 }

@@ -103,13 +103,25 @@ from its own implementation:
 ITU-R BS.1770-4's K-weighting curve is specified as a high shelf
 (models head diffraction, ~+4 dB above ~1.7 kHz) cascaded with a
 high-pass (models the outer/middle ear's low-frequency rolloff, corner
-~38 Hz). `kweight.rs` builds both stages from the standard Robert
-Bristow-Johnson "Audio EQ Cookbook" biquad formulas — the same formulas
-`vaco-filter-audio-eq::engine` uses — at the `(f0, Q, gain)` working point
-the spec gives, **recomputed at the link's actual sample rate** rather
-than hard-coded as the reference's own printed 48 kHz coefficient table.
-That is what lets this filter skip an internal resample step and still be
-correct at 44.1 kHz, 96 kHz, or anything else.
+~38 Hz). `kweight.rs` builds both stages from `vaco_filter_adsp::biquad`'s
+standard Robert Bristow-Johnson "Audio EQ Cookbook" formulas at the
+`(f0, Q, gain)` working point the spec gives, **recomputed at the link's
+actual sample rate** rather than hard-coded as the reference's own printed
+48 kHz coefficient table. That is what lets this filter skip an internal
+resample step and still be correct at 44.1 kHz, 96 kHz, or anything else.
+
+`kweight.rs` used to carry its own copy of these two formulas (`Coeffs`,
+`BiquadState`, `high_shelf`, `high_pass`), written before
+`vaco-filter-adsp::biquad` existed as a shared home for them (D19: one
+biquad design, not five). It now depends on that crate and calls
+`highshelf`/`highpass` directly. Auditing the old copy before deleting it
+found one real divergence worth recording: its zero-`a0` fallback replaced
+`a0` with `1.0` and left the numerator untouched, rather than returning the
+identity section the shared `Coeffs::normalise` returns. Not reachable at
+any real sample rate for this module's fixed design points (`SHELF_F0` ≈
+1682 Hz, `HP_F0` ≈ 38 Hz), so not a live bug — but a second, quieter answer
+to the same "what if `a0` is zero" question, exactly the kind of thing D19
+exists to surface before it does matter.
 
 `loudness.rs`'s gate is the two-stage BS.1770-4 algorithm: split into
 400 ms blocks (100 ms apart, i.e. 75% overlap); stage 1 discards blocks
@@ -179,5 +191,9 @@ filter=<name>`, ffmpeg 8.1, 2026-08-23).
   `aspectralstats`'s window FFT.
 - `vaco-resample` (`convert`, `AudioRef`/`AudioMut`) for the shared
   f64-domain sample decode/encode every filter here uses.
+- `vaco-filter-adsp` (`biquad`: `Coeffs`, `State`, `WidthType`, `highshelf`,
+  `highpass`) for `kweight`'s K-weighting cascade — new dependency, added
+  when `kweight`'s own duplicate cookbook formulas were replaced with this
+  shared one.
 - `vaco-chlayout` for `ebur128`/`replaygain`'s per-channel BS.1770 weight
   lookup (front/centre `1.0`, surround/side/back `~1.41`, LFE `0`).

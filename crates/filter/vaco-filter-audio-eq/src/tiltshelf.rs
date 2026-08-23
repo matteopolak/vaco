@@ -4,7 +4,7 @@
 //! (`ffmpeg -h filter=tiltshelf` prints the same `treble/high/tiltshelf`
 //! class, probed 2026-08-23) but is a different transfer function: a tilt
 //! EQ, not a shelf. Built as a cascade of a low shelf cutting `-gain/2` and
-//! a high shelf boosting `+gain/2` — see `crate::engine::tilt` for why that
+//! a high shelf boosting `+gain/2` — see `vaco_filter_adsp::biquad::tilt` for why that
 //! construction is a genuine tilt (0 dB at the pivot, `-gain/2`/`+gain/2` at
 //! DC/Nyquist) and its numeric verification.
 //!
@@ -20,7 +20,7 @@ use vaco_frame::Frame;
 use vaco_filter_graph::registry::{Instance, Instantiate};
 
 use crate::common::{self, ChannelSelect};
-use crate::engine::{self, Coeffs, State, WidthType};
+use vaco_filter_adsp::biquad::{self as biquad, Coeffs, State, WidthType};
 
 pub const DESC: FilterDesc = FilterDesc {
     name: "tiltshelf",
@@ -52,7 +52,7 @@ impl FrameFilter for TiltShelf {
             ..
         }) = ctx.input_link(0)
         {
-            let (low, high) = engine::tilt(
+            let (low, high) = biquad::tilt(
                 f64::from(*sample_rate),
                 self.f0,
                 self.wt,

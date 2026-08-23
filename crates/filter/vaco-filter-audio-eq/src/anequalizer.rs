@@ -8,7 +8,7 @@
 //! interface fact, not source) — not measured against a running filter here,
 //! so treat the grammar itself as the medium-confidence part of this module.
 //!
-//! Each band becomes one [`crate::engine::peaking`] section on its declared
+//! Each band becomes one [`vaco_filter_adsp::biquad::peaking`] section on its declared
 //! channel, cascaded in declaration order; `w` is documented as a bandwidth
 //! in Hz, so it is read through [`WidthType::Hz`]. `t` (filter type —
 //! Butterworth/Chebyshev variants in the reference) is accepted and ignored:
@@ -26,7 +26,7 @@ use vaco_frame::Frame;
 use vaco_filter_graph::registry::{Instance, Instantiate};
 
 use crate::common;
-use crate::engine::{self, Coeffs, State, WidthType};
+use vaco_filter_adsp::biquad::{self as biquad, Coeffs, State, WidthType};
 
 pub const DESC: FilterDesc = FilterDesc {
     name: "anequalizer",
@@ -109,7 +109,7 @@ impl FrameFilter for AnEqualizer {
                     continue;
                 };
                 let coeffs =
-                    engine::peaking(fs, band.f0, WidthType::Hz, band.width_hz, band.gain_db);
+                    biquad::peaking(fs, band.f0, WidthType::Hz, band.width_hz, band.gain_db);
                 stage.push((coeffs, State::default()));
             }
         }

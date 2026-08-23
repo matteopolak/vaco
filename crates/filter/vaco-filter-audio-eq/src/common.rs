@@ -1,9 +1,9 @@
 //! Shared option parsing and per-channel application for the biquad family.
 //!
-//! Every filter in [`crate::engine`]'s family documents more options than this
+//! Every filter in [`vaco_filter_adsp::biquad`]'s family documents more options than this
 //! crate implements (`transform`, `precision`, `blocksize`, and their `a`/`r`
 //! aliases pick among numerically-different realisations of the *same*
-//! transfer function or an execution-speed knob — see `engine::State`'s doc).
+//! transfer function or an execution-speed knob — see `biquad::State`'s doc).
 //! Rather than declare them on a [`vaco_opts::Options`] struct and reject a
 //! filtergraph string that sets one — which is what a strict
 //! `set_from_string` would do — every filter here reads only the options it
@@ -20,7 +20,7 @@ use vaco_frame::Frame;
 
 use vaco_filter_graph::registry::Instantiate;
 
-use crate::engine::{self, Coeffs, State, WidthType};
+use vaco_filter_adsp::biquad::{self as biquad, Coeffs, State, WidthType};
 
 pub(crate) const AUDIO_PAD: &[Pad] = &[Pad {
     name: "default",
@@ -199,9 +199,9 @@ impl Design {
                 poles,
             } => {
                 if poles == 1 {
-                    engine::lowpass_one_pole(fs, f0)
+                    biquad::lowpass_one_pole(fs, f0)
                 } else {
-                    engine::lowpass(fs, f0, wt, width)
+                    biquad::lowpass(fs, f0, wt, width)
                 }
             }
             Self::Highpass {
@@ -211,37 +211,37 @@ impl Design {
                 poles,
             } => {
                 if poles == 1 {
-                    engine::highpass_one_pole(fs, f0)
+                    biquad::highpass_one_pole(fs, f0)
                 } else {
-                    engine::highpass(fs, f0, wt, width)
+                    biquad::highpass(fs, f0, wt, width)
                 }
             }
-            Self::Bandpass { f0, wt, width, csg } => engine::bandpass(fs, f0, wt, width, csg),
-            Self::Bandreject { f0, wt, width } => engine::bandreject(fs, f0, wt, width),
+            Self::Bandpass { f0, wt, width, csg } => biquad::bandpass(fs, f0, wt, width, csg),
+            Self::Bandreject { f0, wt, width } => biquad::bandreject(fs, f0, wt, width),
             Self::Allpass {
                 f0,
                 wt,
                 width,
                 order,
-            } => engine::allpass(fs, f0, wt, width, order),
+            } => biquad::allpass(fs, f0, wt, width, order),
             Self::Peaking {
                 f0,
                 wt,
                 width,
                 gain_db,
-            } => engine::peaking(fs, f0, wt, width, gain_db),
+            } => biquad::peaking(fs, f0, wt, width, gain_db),
             Self::Lowshelf {
                 f0,
                 wt,
                 width,
                 gain_db,
-            } => engine::lowshelf(fs, f0, wt, width, gain_db),
+            } => biquad::lowshelf(fs, f0, wt, width, gain_db),
             Self::Highshelf {
                 f0,
                 wt,
                 width,
                 gain_db,
-            } => engine::highshelf(fs, f0, wt, width, gain_db),
+            } => biquad::highshelf(fs, f0, wt, width, gain_db),
             Self::Raw(c) => c,
         }
     }
@@ -249,7 +249,7 @@ impl Design {
 
 /// A `FrameFilter` that runs one biquad section over every selected channel,
 /// wet/dry-mixed by `mix`. This is the whole body of every filter in
-/// [`crate::engine`]'s family that is not `tiltshelf` (which cascades two of
+/// [`vaco_filter_adsp::biquad`]'s family that is not `tiltshelf` (which cascades two of
 /// these).
 #[derive(Debug, Clone)]
 pub(crate) struct Biquad {

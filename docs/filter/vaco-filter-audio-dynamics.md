@@ -100,14 +100,26 @@ registered processor under two names in the reference, which is why this
 crate shares one `Dynamics`/`Curve` engine between each pair rather than
 writing sidechain variants from scratch.
 
-### `mcompand` — crossover filters, duplicated rather than shared
+### `mcompand` — crossover filters, now shared via `vaco-filter-adsp`
 
-`mcompand.rs` implements its own tiny second-order Butterworth low-pass/
-high-pass pair (`Biquad2`) rather than depending on `vaco-filter-audio-eq`.
-A dozen lines of the same cookbook formula is cheaper than a cross-crate
-coupling between the two FT-4.8 children, especially since a crossover
-filter has no user-facing `Q`/`width` option to reuse `vaco-filter-audio-eq`'s
-richer API for — it is fixed at `Q = 1/sqrt(2)` (Butterworth) always.
+`mcompand.rs` used to implement its own tiny second-order Butterworth
+low-pass/high-pass pair (`Biquad2`), on the reasoning that a dozen lines of
+the same cookbook formula was cheaper than a cross-crate coupling between
+the two FT-4.8 children. `vaco-filter-adsp::biquad` now exists as the
+shared home that reasoning was arguing against (D19: the crate's size is
+not the test, whether the concept is shared is), so `crossover_lowpass`/
+`crossover_highpass` in `mcompand.rs` call `vaco_filter_adsp::biquad::{lowpass,
+highpass}` at `Q = 1/sqrt(2)` (Butterworth; still fixed — a crossover has no
+user-facing `Q`/`width` option) instead of recomputing the formula locally.
+
+One piece stayed local: a crossover frequency at/below DC or at/above
+Nyquist is substituted with the identity (lowpass) or zero (highpass)
+section *before* calling into `vaco-filter-adsp`, because that crate's
+`lowpass`/`highpass` guarantee only "coefficients stay finite" outside
+`(0, Nyquist)`, not "physically sensible" — reproducing this filter's prior
+exact behaviour at those edges required keeping the guard here. See
+`vaco-filter-adsp`'s own doc for the other three duplicate-formula sites
+this same move touched, and what auditing them turned up.
 
 ### `silenceremove` — single-period, window-granular
 
@@ -157,5 +169,7 @@ installs; with none installed, the events are simply dropped.
 `AudioFilter`, the `Simple`/`Blocked` adapters), `vaco-filter-graph`
 (`FilterRegistry`), `vaco-filter-framesync` (`Synced`/`FrameSyncFilter`, for
 `sidechaincompress`/`sidechaingate`'s two inputs), `tracing` (the
-`astats`/`volumedetect`/`silencedetect` logging surface). No new
-dependencies were added.
+`astats`/`volumedetect`/`silencedetect` logging surface), `vaco-filter-adsp`
+(`biquad`: `Coeffs`, `State`, `WidthType`, `lowpass`, `highpass`) for
+`mcompand`'s crossover filters — new dependency, added when `mcompand`'s own
+duplicate `Biquad2` was replaced with this shared type.

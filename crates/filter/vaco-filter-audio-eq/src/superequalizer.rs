@@ -8,7 +8,7 @@
 //! from each option's help text.
 //!
 //! The reference implements this with an FFT-domain filter bank; this crate
-//! builds it from eighteen cascaded [`crate::engine::peaking`] sections
+//! builds it from eighteen cascaded [`vaco_filter_adsp::biquad::peaking`] sections
 //! instead — a structural approximation, not a claim of matching the
 //! reference's magnitude response band-for-band. `gain_db = 20*log10(gain)`
 //! converts the linear knob so that the documented default (`1` on every
@@ -27,7 +27,7 @@ use vaco_frame::Frame;
 use vaco_filter_graph::registry::{Instance, Instantiate};
 
 use crate::common;
-use crate::engine::{self, Coeffs, State, WidthType};
+use vaco_filter_adsp::biquad::{self as biquad, Coeffs, State, WidthType};
 
 pub const DESC: FilterDesc = FilterDesc {
     name: "superequalizer",
@@ -77,7 +77,7 @@ impl FrameFilter for SuperEqualizer {
                     gain_db: 0.0,
                 });
                 (
-                    engine::peaking(fs, d.f0, WidthType::QFactor, BAND_Q, d.gain_db),
+                    biquad::peaking(fs, d.f0, WidthType::QFactor, BAND_Q, d.gain_db),
                     State::default(),
                 )
             });
@@ -165,7 +165,7 @@ mod tests {
         // identity property, checked at the frequency this filter actually
         // designs for.
         for f0 in CENTERS_HZ {
-            let c = engine::peaking(48_000.0, f0, WidthType::QFactor, BAND_Q, 0.0);
+            let c = biquad::peaking(48_000.0, f0, WidthType::QFactor, BAND_Q, 0.0);
             assert!(
                 c.response_db(2.0 * std::f64::consts::PI * f0 / 48_000.0)
                     .abs()

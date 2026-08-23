@@ -8,14 +8,19 @@
 //! # Provenance
 //!
 //! The two stages are the standard Robert Bristow-Johnson "Audio EQ
-//! Cookbook" biquad designs (public-domain formulas already used the same
-//! way by `vaco-filter-audio-eq::engine`) at the `(f0, Q, gain)` working
-//! point ITU-R BS.1770-4 specifies for its K-weighting curve: a +4 dB high
-//! shelf around 1.68 kHz cascaded with a high-pass around 38 Hz.
-//! Recomputing coefficients from `(f0, Q, gain)` at the link's actual
-//! sample rate — rather than hard-coding the reference's own printed
-//! 48 kHz coefficient table — means this needs no internal resample step
-//! and is correct at any input rate, not just 48 kHz.
+//! Cookbook" biquad designs — [`vaco_filter_adsp::biquad`] builds the
+//! sections, this module only supplies the `(f0, Q, gain)` working point
+//! ITU-R BS.1770-4 specifies for its K-weighting curve: a +4 dB high shelf
+//! around 1.68 kHz cascaded with a high-pass around 38 Hz. Recomputing
+//! coefficients from `(f0, Q, gain)` at the link's actual sample rate —
+//! rather than hard-coding the reference's own printed 48 kHz coefficient
+//! table — means this needs no internal resample step and is correct at
+//! any input rate, not just 48 kHz.
+//!
+//! This module used to carry its own copy of the cookbook formulas and
+//! biquad state, written before `vaco-filter-adsp::biquad` existed as a
+//! shared, reusable home for them (D19). It now builds on that module
+//! directly instead of duplicating it a fourth time.
 //!
 //! **Oracle**, per `docs/filter/vaco-filter-ameasure.md`: not a second
 //! transcription of the same coefficients. [`crate::ebur128`]'s tests check
@@ -26,7 +31,7 @@
 //! formula predicts — a physical property, not a numerical coincidence with
 //! this module's own design equations.
 
-use std::f64::consts::PI;
+use vaco_filter_adsp::biquad::{Coeffs, State, WidthType, highpass, highshelf};
 
 /// High-shelf design point (ITU-R BS.1770-4's "stage 1" pre-filter).
 const SHELF_F0: f64 = 1681.9745;
@@ -37,102 +42,34 @@ const SHELF_GAIN_DB: f64 = 3.999_844;
 const HP_F0: f64 = 38.13547;
 const HP_Q: f64 = 0.500_327;
 
-#[derive(Debug, Clone, Copy, Default)]
-struct Coeffs {
-    b0: f64,
-    b1: f64,
-    b2: f64,
-    a1: f64,
-    a2: f64,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-struct BiquadState {
-    x1: f64,
-    x2: f64,
-    y1: f64,
-    y2: f64,
-}
-
-impl BiquadState {
-    fn process(&mut self, c: Coeffs, x: f64) -> f64 {
-        let y = c.b0 * x + c.b1 * self.x1 + c.b2 * self.x2 - c.a1 * self.y1 - c.a2 * self.y2;
-        self.x2 = self.x1;
-        self.x1 = x;
-        self.y2 = self.y1;
-        self.y1 = y;
-        y
-    }
-}
-
-/// RBJ cookbook high-shelf, normalized so `a0 == 1`.
-fn high_shelf(f0: f64, q: f64, gain_db: f64, fs: f64) -> Coeffs {
-    let a = 10f64.powf(gain_db / 40.0);
-    let w0 = 2.0 * PI * f0 / fs.max(1.0);
-    let (sinw0, cosw0) = w0.sin_cos();
-    let alpha = sinw0 / (2.0 * q);
-    let sqrt_a = a.sqrt();
-    let b0 = a * ((a + 1.0) + (a - 1.0) * cosw0 + 2.0 * sqrt_a * alpha);
-    let b1 = -2.0 * a * ((a - 1.0) + (a + 1.0) * cosw0);
-    let b2 = a * ((a + 1.0) + (a - 1.0) * cosw0 - 2.0 * sqrt_a * alpha);
-    let a0 = (a + 1.0) - (a - 1.0) * cosw0 + 2.0 * sqrt_a * alpha;
-    let a1 = 2.0 * ((a - 1.0) - (a + 1.0) * cosw0);
-    let a2 = (a + 1.0) - (a - 1.0) * cosw0 - 2.0 * sqrt_a * alpha;
-    normalize(b0, b1, b2, a0, a1, a2)
-}
-
-/// RBJ cookbook high-pass, normalized so `a0 == 1`.
-fn high_pass(f0: f64, q: f64, fs: f64) -> Coeffs {
-    let w0 = 2.0 * PI * f0 / fs.max(1.0);
-    let (sinw0, cosw0) = w0.sin_cos();
-    let alpha = sinw0 / (2.0 * q);
-    let b0 = f64::midpoint(1.0, cosw0);
-    let b1 = -(1.0 + cosw0);
-    let b2 = f64::midpoint(1.0, cosw0);
-    let a0 = 1.0 + alpha;
-    let a1 = -2.0 * cosw0;
-    let a2 = 1.0 - alpha;
-    normalize(b0, b1, b2, a0, a1, a2)
-}
-
-fn normalize(b0: f64, b1: f64, b2: f64, a0: f64, a1: f64, a2: f64) -> Coeffs {
-    let a0 = if a0.abs() > 1e-12 { a0 } else { 1.0 };
-    Coeffs {
-        b0: b0 / a0,
-        b1: b1 / a0,
-        b2: b2 / a0,
-        a1: a1 / a0,
-        a2: a2 / a0,
-    }
-}
-
 /// One channel's K-weighting cascade.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct KWeight {
     shelf: Coeffs,
     hp: Coeffs,
-    shelf_state: BiquadState,
-    hp_state: BiquadState,
+    shelf_state: State,
+    hp_state: State,
 }
 
 impl KWeight {
     pub(crate) fn new(fs: f64) -> Self {
+        let fs = fs.max(1.0);
         Self {
-            shelf: high_shelf(SHELF_F0, SHELF_Q, SHELF_GAIN_DB, fs),
-            hp: high_pass(HP_F0, HP_Q, fs),
-            shelf_state: BiquadState::default(),
-            hp_state: BiquadState::default(),
+            shelf: highshelf(fs, SHELF_F0, WidthType::QFactor, SHELF_Q, SHELF_GAIN_DB),
+            hp: highpass(fs, HP_F0, WidthType::QFactor, HP_Q),
+            shelf_state: State::default(),
+            hp_state: State::default(),
         }
     }
 
     pub(crate) fn process(&mut self, x: f64) -> f64 {
-        let y = self.shelf_state.process(self.shelf, x);
-        self.hp_state.process(self.hp, y)
+        let y = self.shelf_state.process(&self.shelf, x);
+        self.hp_state.process(&self.hp, y)
     }
 
     pub(crate) fn reset(&mut self) {
-        self.shelf_state = BiquadState::default();
-        self.hp_state = BiquadState::default();
+        self.shelf_state = State::default();
+        self.hp_state = State::default();
     }
 }
 

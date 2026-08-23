@@ -27,10 +27,13 @@
 //!
 //! # Shape
 //!
-//! * [`engine`] — the Audio EQ Cookbook biquad math: coefficient formulas
-//!   and their frequency-response verification. This is FT-4.8a's "hard
-//!   part"; see its module doc for what makes the tests there a real oracle
-//!   rather than a second transcription of the same formula.
+//! * [`vaco_filter_adsp::biquad`] — the Audio EQ Cookbook biquad math:
+//!   coefficient formulas and their frequency-response verification. This
+//!   was FT-4.8a's "hard part", built here as a crate-private `engine`
+//!   module; moved to `vaco-filter-adsp` (D19) once three other crates
+//!   needed the same math and found this crate's copy `pub(crate)` and
+//!   unreachable. See that module's doc for what makes its tests a real
+//!   oracle rather than a second transcription of the same formula.
 //! * [`common`] — option parsing shared by the biquad-family filters, and
 //!   [`common::Biquad`], the `FrameFilter` every one of them but `tiltshelf`
 //!   *is*.
@@ -64,7 +67,6 @@ pub mod bandreject;
 pub mod bass;
 pub mod biquad;
 mod common;
-mod engine;
 pub mod equalizer;
 pub mod firequalizer;
 pub mod highpass;

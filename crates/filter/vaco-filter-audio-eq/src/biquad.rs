@@ -4,7 +4,7 @@
 //! (defaults `a0=1`, everything else `0` — the identity section), `mix`/`m`,
 //! `channels`/`c`. Unlike every other filter in this crate, coefficients here
 //! are not derived from a design frequency at all — they *are* the option
-//! values, normalised by `a0` exactly as [`crate::engine::Coeffs`] normalises
+//! values, normalised by `a0` exactly as [`vaco_filter_adsp::biquad::Coeffs`] normalises
 //! every cookbook formula's output.
 
 use vaco_core::MediaType;
@@ -14,7 +14,7 @@ use vaco_filter_core::{FilterDesc, FilterFlags, Timeline};
 use vaco_filter_graph::registry::{Instance, Instantiate};
 
 use crate::common::{self, Biquad, ChannelSelect, Design};
-use crate::engine::Coeffs;
+use vaco_filter_adsp::biquad::Coeffs;
 
 pub const DESC: FilterDesc = FilterDesc {
     name: "biquad",

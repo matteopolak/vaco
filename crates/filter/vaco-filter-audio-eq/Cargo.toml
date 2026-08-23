@@ -16,6 +16,7 @@ vaco-chlayout = { path = "../../model/vaco-chlayout" }
 vaco-resample = { path = "../../signal/vaco-resample" }
 vaco-filter-core = { path = "../../filter/vaco-filter-core" }
 vaco-filter-graph = { path = "../../filter/vaco-filter-graph" }
+vaco-filter-adsp = { path = "../../filter/vaco-filter-adsp" }
 smallvec.workspace = true
 
 [dev-dependencies]
