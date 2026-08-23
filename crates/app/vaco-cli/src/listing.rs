@@ -799,11 +799,6 @@ fn write_pix_fmts<W: Write>(w: &mut W) -> std::io::Result<()> {
     });
     for fmt in all {
         let name = fmt.name();
-        // Measured: `vaco-pixfmt` carries one format the reference does not.
-        // See the divergence note above; not fixed in the model crate here.
-        if name == "cuarray" {
-            continue;
-        }
         let d = fmt.descriptor();
         let hw = d.flags.contains(vaco_pixfmt::PixFmtFlags::HW_ACCEL);
         let palette = d.flags.contains(vaco_pixfmt::PixFmtFlags::PALETTE);

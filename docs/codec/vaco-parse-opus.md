@@ -250,10 +250,15 @@ Dev-only: `proptest`, `divan`.
 
 ## Testing and probing
 
-`cargo test -p vaco-parse-opus` runs 35 unit and property tests. Every expected
+`cargo test -p vaco-parse-opus` runs 41 unit and property tests. Every expected
 value carries a `// measured:` comment.
 
-Fuzz targets: `parse_opus_head`, `parse_opus_packet`.
+Fuzz targets: `parse_opus_head`, `parse_opus_packet`. The latter also drives
+`Parser::packet_duration` over arbitrary bytes, with and without an `OpusHead`
+offered as extradata so the multi-stream branch is reachable, and asserts that
+the answer is positive, denominated in 48 000, and never longer than the 120 ms
+RFC 6716 §3.2.5 allows. `exit=0 execs=#641338`, `find fuzz/artifacts -type f`
+empty.
 
 ### How the reference was probed
 
@@ -284,6 +289,11 @@ packets of a 5.1 file.
 
 None found. Every observable the reference produces for an Opus stream —
 `sample_rate`, `channels`, `channel_layout`, `initial_padding`, packet duration —
-is derivable from the headers, so a parse-only build reproduces all of it. That
+is derivable from the headers, so a parse-only build reproduces all of it.
+Packet duration was the last of those to arrive: it needed
+`Parser::packet_duration`, and with it `vaco-probe` now matches `ffprobe 8.1` on
+every Opus packet of every Matroska, WebM, MP4 and Ogg file in the corpus,
+including the 2.5 ms frame size where the reference's truncation and a rounding
+implementation disagree. That
 is the opposite of the AAC situation and worth noting: Opus put its
 configuration in the header where it belongs.

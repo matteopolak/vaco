@@ -990,6 +990,19 @@ Named, not silently missing.
 
 Reported, not worked around.
 
+* **`vaco-demux-mpegts` does not re-frame an audio PES into codec frames.**
+  Measured on a 1 s AAC-in-TS file: the reference emits packets of 265, 265,
+  154, 191 bytes at `pts` 126000, 128090, 130179, 132269 — one ADTS frame each.
+  We emit 2836, 2873, 2853, 745 bytes at 126000, 153168, 182425, 211682 — whole
+  PES payloads of roughly thirteen frames. Every downstream field (`pts`,
+  `size`, `pos`, `duration`) is then compared against the wrong packet. This is
+  the single largest MPEG-TS gap in the `[PACKET]` section and it subsumes the
+  separately recorded "the first few packets carry no duration".
+* **No `vaco-parse-flac`.** FLAC in Matroska carries no `DefaultDuration`, and
+  the reference reports 104 ms per packet from the in-band frame header. The
+  `Parser::packet_duration` seam now exists, so a FLAC parser closes `flac.mka`'s
+  0-of-20 `duration` score with no change in the format layer.
+
 * **`vaco_format_core::DISPOSITION_NAMES` has 15 flags; the reference has 19.**
   Missing `clean_effects`, `timed_thumbnails`, `non_diegetic` and `multilayer`,
   and the order differs from bit 9 onward. Printing the `DISPOSITION` section

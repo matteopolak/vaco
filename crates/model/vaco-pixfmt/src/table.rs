@@ -553,8 +553,6 @@ pub enum PixFmt {
     Amf = 265,
     /// `ohcodec`
     Ohcodec = 266,
-    /// `cuarray`
-    Cuarray = 267,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -590,7 +588,7 @@ const fn c(plane: u8, step: u8, offset: u8, shift: u8, depth: u8) -> Component {
 
 /// Index-aligned with [`PixFmt`]'s discriminants.
 #[rustfmt::skip]
-pub(crate) static DESCRIPTORS: [PixFmtDescriptor; 268] = [
+pub(crate) static DESCRIPTORS: [PixFmtDescriptor; 267] = [
     d("yuv410p", &[c(0,1,0,0,8),c(1,1,0,0,8),c(2,1,0,0,8)], 3, 2, 2, 9, F::PLANAR),
     d("yuv411p", &[c(0,1,0,0,8),c(1,1,0,0,8),c(2,1,0,0,8)], 3, 2, 0, 12, F::PLANAR),
     d("yuv420p", &[c(0,1,0,0,8),c(1,1,0,0,8),c(2,1,0,0,8)], 3, 1, 1, 12, F::PLANAR),
@@ -817,18 +815,18 @@ pub(crate) static DESCRIPTORS: [PixFmtDescriptor; 268] = [
     d("xv48be", &[c(0,8,2,0,16),c(0,8,0,0,16),c(0,8,4,0,16)], 1, 0, 0, 48, F::BIG_ENDIAN),
     d("v30xle", &[c(0,4,0,12,10),c(0,4,0,2,10),c(0,4,0,22,10)], 1, 0, 0, 30, F::empty()),
     d("v30xbe", &[c(0,4,0,12,10),c(0,4,0,2,10),c(0,4,0,22,10)], 1, 0, 0, 30, F::BIG_ENDIAN),
-    d("bayer_bggr8", &[c(0,1,0,0,8)], 1, 0, 0, 8, F::RGB.union(F::BAYER)),
-    d("bayer_rggb8", &[c(0,1,0,0,8)], 1, 0, 0, 8, F::RGB.union(F::BAYER)),
-    d("bayer_gbrg8", &[c(0,1,0,0,8)], 1, 0, 0, 8, F::RGB.union(F::BAYER)),
-    d("bayer_grbg8", &[c(0,1,0,0,8)], 1, 0, 0, 8, F::RGB.union(F::BAYER)),
-    d("bayer_bggr16le", &[c(0,2,0,0,16)], 1, 0, 0, 16, F::RGB.union(F::BAYER)),
-    d("bayer_bggr16be", &[c(0,2,0,0,16)], 1, 0, 0, 16, F::BIG_ENDIAN.union(F::RGB).union(F::BAYER)),
-    d("bayer_rggb16le", &[c(0,2,0,0,16)], 1, 0, 0, 16, F::RGB.union(F::BAYER)),
-    d("bayer_rggb16be", &[c(0,2,0,0,16)], 1, 0, 0, 16, F::BIG_ENDIAN.union(F::RGB).union(F::BAYER)),
-    d("bayer_gbrg16le", &[c(0,2,0,0,16)], 1, 0, 0, 16, F::RGB.union(F::BAYER)),
-    d("bayer_gbrg16be", &[c(0,2,0,0,16)], 1, 0, 0, 16, F::BIG_ENDIAN.union(F::RGB).union(F::BAYER)),
-    d("bayer_grbg16le", &[c(0,2,0,0,16)], 1, 0, 0, 16, F::RGB.union(F::BAYER)),
-    d("bayer_grbg16be", &[c(0,2,0,0,16)], 1, 0, 0, 16, F::BIG_ENDIAN.union(F::RGB).union(F::BAYER)),
+    d("bayer_bggr8", &[c(0,1,0,0,2),c(0,1,0,0,4),c(0,1,0,0,2)], 1, 0, 0, 8, F::RGB.union(F::BAYER)),
+    d("bayer_rggb8", &[c(0,1,0,0,2),c(0,1,0,0,4),c(0,1,0,0,2)], 1, 0, 0, 8, F::RGB.union(F::BAYER)),
+    d("bayer_gbrg8", &[c(0,1,0,0,2),c(0,1,0,0,4),c(0,1,0,0,2)], 1, 0, 0, 8, F::RGB.union(F::BAYER)),
+    d("bayer_grbg8", &[c(0,1,0,0,2),c(0,1,0,0,4),c(0,1,0,0,2)], 1, 0, 0, 8, F::RGB.union(F::BAYER)),
+    d("bayer_bggr16le", &[c(0,2,0,0,4),c(0,2,0,0,8),c(0,2,0,0,4)], 1, 0, 0, 16, F::RGB.union(F::BAYER)),
+    d("bayer_bggr16be", &[c(0,2,0,0,4),c(0,2,0,0,8),c(0,2,0,0,4)], 1, 0, 0, 16, F::BIG_ENDIAN.union(F::RGB).union(F::BAYER)),
+    d("bayer_rggb16le", &[c(0,2,0,0,4),c(0,2,0,0,8),c(0,2,0,0,4)], 1, 0, 0, 16, F::RGB.union(F::BAYER)),
+    d("bayer_rggb16be", &[c(0,2,0,0,4),c(0,2,0,0,8),c(0,2,0,0,4)], 1, 0, 0, 16, F::BIG_ENDIAN.union(F::RGB).union(F::BAYER)),
+    d("bayer_gbrg16le", &[c(0,2,0,0,4),c(0,2,0,0,8),c(0,2,0,0,4)], 1, 0, 0, 16, F::RGB.union(F::BAYER)),
+    d("bayer_gbrg16be", &[c(0,2,0,0,4),c(0,2,0,0,8),c(0,2,0,0,4)], 1, 0, 0, 16, F::BIG_ENDIAN.union(F::RGB).union(F::BAYER)),
+    d("bayer_grbg16le", &[c(0,2,0,0,4),c(0,2,0,0,8),c(0,2,0,0,4)], 1, 0, 0, 16, F::RGB.union(F::BAYER)),
+    d("bayer_grbg16be", &[c(0,2,0,0,4),c(0,2,0,0,8),c(0,2,0,0,4)], 1, 0, 0, 16, F::BIG_ENDIAN.union(F::RGB).union(F::BAYER)),
     d("yuyv422", &[c(0,2,0,0,8),c(0,4,1,0,8),c(0,4,3,0,8)], 1, 1, 0, 16, F::empty()),
     d("uyvy422", &[c(0,2,1,0,8),c(0,4,0,0,8),c(0,4,2,0,8)], 1, 1, 0, 16, F::empty()),
     d("yvyu422", &[c(0,2,0,0,8),c(0,4,3,0,8),c(0,4,1,0,8)], 1, 1, 0, 16, F::empty()),
@@ -858,12 +856,11 @@ pub(crate) static DESCRIPTORS: [PixFmtDescriptor; 268] = [
     d("vulkan", &[], 0, 0, 0, 0, F::HW_ACCEL),
     d("amf", &[], 0, 0, 0, 0, F::HW_ACCEL),
     d("ohcodec", &[], 0, 0, 0, 0, F::HW_ACCEL),
-    d("cuarray", &[], 0, 0, 0, 0, F::HW_ACCEL),
 ];
 
 /// Every format, in discriminant order.
 #[rustfmt::skip]
-pub(crate) static ALL: [PixFmt; 268] = [
+pub(crate) static ALL: [PixFmt; 267] = [
     PixFmt::Yuv410p, PixFmt::Yuv411p, PixFmt::Yuv420p, PixFmt::Yuv422p,
     PixFmt::Yuv440p, PixFmt::Yuv444p, PixFmt::Yuvj411p, PixFmt::Yuvj420p,
     PixFmt::Yuvj422p, PixFmt::Yuvj440p, PixFmt::Yuvj444p, PixFmt::Yuva420p,
@@ -930,13 +927,13 @@ pub(crate) static ALL: [PixFmt; 268] = [
     PixFmt::Dxva2Vld, PixFmt::D3d11vaVld, PixFmt::D3d11, PixFmt::D3d12,
     PixFmt::Vdpau, PixFmt::VideotoolboxVld, PixFmt::Cuda, PixFmt::Qsv,
     PixFmt::Mmal, PixFmt::Mediacodec, PixFmt::Opencl, PixFmt::DrmPrime,
-    PixFmt::Vulkan, PixFmt::Amf, PixFmt::Ohcodec, PixFmt::Cuarray,
+    PixFmt::Vulkan, PixFmt::Amf, PixFmt::Ohcodec,
 ];
 
 /// Every accepted spelling, sorted, for `binary_search_by_key`. Includes
 /// aliases, so this is longer than [`ALL`].
 #[rustfmt::skip]
-pub(crate) static NAMES_SORTED: [(&str, PixFmt); 276] = [
+pub(crate) static NAMES_SORTED: [(&str, PixFmt); 275] = [
     ("0bgr", PixFmt::X0bgr),
     ("0rgb", PixFmt::X0rgb),
     ("abgr", PixFmt::Abgr),
@@ -974,7 +971,6 @@ pub(crate) static NAMES_SORTED: [(&str, PixFmt); 276] = [
     ("bgra", PixFmt::Bgra),
     ("bgra64be", PixFmt::Bgra64be),
     ("bgra64le", PixFmt::Bgra64le),
-    ("cuarray", PixFmt::Cuarray),
     ("cuda", PixFmt::Cuda),
     ("d3d11", PixFmt::D3d11),
     ("d3d11va_vld", PixFmt::D3d11vaVld),
@@ -1218,7 +1214,7 @@ pub(crate) static NAMES_SORTED: [(&str, PixFmt); 276] = [
 /// The opposite-endianness sibling of each format, where one exists.
 /// Generated as a table rather than searched for at runtime.
 #[rustfmt::skip]
-pub(crate) static ENDIAN_SWAP: [Option<PixFmt>; 268] = [
+pub(crate) static ENDIAN_SWAP: [Option<PixFmt>; 267] = [
     None,
     None,
     None,
@@ -1467,7 +1463,6 @@ pub(crate) static ENDIAN_SWAP: [Option<PixFmt>; 268] = [
     Some(PixFmt::Y212le),
     Some(PixFmt::Y216be),
     Some(PixFmt::Y216le),
-    None,
     None,
     None,
     None,

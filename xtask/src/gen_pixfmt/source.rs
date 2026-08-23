@@ -640,13 +640,14 @@ pub const FAMILIES: &[Family] = &[
             store: Int,
             extra: &[Flag::Rgb],
         },
-        // OPEN FINDING (conformance harness, 2026-08-22): we report bit depths
-        // 2-3-3; the reference reports 3-3-2 for BOTH rgb8 and bgr8. Since the
-        // reference gives the two formats identical depths, the depths alone do
-        // not distinguish them and the correct model cannot be derived from the
-        // listing — it needs the shift/offset detail the geometry probe cannot
-        // see. Left as-is deliberately rather than guessed at; tracked as a
-        // divergence so it cannot be forgotten.
+        // The "we report 2-3-3, the reference reports 3-3-2" finding that used
+        // to sit here was stale, and the reason is worth keeping: the reference
+        // lists depths in **component identity order** (R, G, B), not in
+        // storage order. That is precisely why it gives `rgb8` and `bgr8`
+        // identical depths despite their differing byte layout — the two
+        // formats have the same per-channel precision and differ only in where
+        // each channel sits. Our data was right; only the reading of it was
+        // wrong.
         PackedDef {
             name: "bgr8",
             order: &[R, G, B],
@@ -1122,11 +1123,13 @@ pub const FAMILIES: &[Family] = &[
         // D9/D17: the reference spells this `amf`. CLI-visible.
         "amf",
         "ohcodec",
-        // `cuarray` is absent from the reference in 8.1. Kept: it names a real CUDA
-        // surface kind, costs nothing, and removing it would reject a name no
-        // reference command can produce anyway. Accepting a superset breaks no
-        // reference workflow (D17).
-        "cuarray",
+        // `cuarray` was here, with a note saying it "costs nothing" and that
+        // "accepting a superset breaks no reference workflow (D17)". Both
+        // halves are falsified by measurement: `ffmpeg -pix_fmt cuarray` gives
+        // "Unknown pixel format requested", so accepting the name *is* a
+        // divergence, and `-pix_fmts` lists every format, so carrying it put an
+        // extra row in a byte-identity target. Removed. The note was written
+        // before either consequence was observable.
     ]),
 ];
 

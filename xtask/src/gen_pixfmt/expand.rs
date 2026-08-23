@@ -285,11 +285,28 @@ fn packed(out: &mut Vec<Format>, def: &PackedDef) {
     emit(out, def.name, def.end, Core::new(comps, 1, (0, 0), flags));
 }
 
+/// A Bayer mosaic is **three** components, not one.
+///
+/// Measured: `bayer_bggr8` reports `3 components, 8 bpp, 2-4-2` and
+/// `bayer_bggr16le` reports `3, 16, 4-8-4`. The ratio is the 2x2 block itself —
+/// one red pixel, *two* green, one blue — so green carries half the bits and
+/// red and blue a quarter each, listed in R-G-B component order.
+///
+/// This modelled the mosaic as a single component of the full depth, which is
+/// how the bytes are *stored* but not what the format means: a consumer
+/// computing per-component precision from it would conclude every channel has
+/// 8 bits of red information, which is exactly backwards for the two channels
+/// that are subsampled.
 fn bayer(out: &mut Vec<Format>, patterns: &[&str], depths: &[u8], end: End) {
     for &depth in depths {
         for pattern in patterns {
             let bytes = super::model::sample_bytes(depth);
-            let comps = vec![Comp::new(0, bytes, 0, 0, depth)];
+            let (quarter, half) = (depth / 4, depth / 2);
+            let comps = vec![
+                Comp::new(0, bytes, 0, 0, quarter),
+                Comp::new(0, bytes, 0, 0, half),
+                Comp::new(0, bytes, 0, 0, quarter),
+            ];
             emit(
                 out,
                 &format!("bayer_{pattern}{depth}"),

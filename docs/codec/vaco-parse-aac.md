@@ -361,11 +361,18 @@ Dev-only: `proptest`, `divan`.
 
 ## Testing and probing
 
-`cargo test -p vaco-parse-aac` runs 34 unit and property tests. Every expected
+`cargo test -p vaco-parse-aac` runs 41 unit and property tests. Every expected
 value carries a `// measured:` comment naming the `ffprobe 8.1` observation it
 came from.
 
-Fuzz targets: `parse_aac_adts`, `parse_aac_asc`, `parse_aac_latm`.
+Fuzz targets: `parse_aac_adts`, `parse_aac_asc`, `parse_aac_latm`. The first
+also drives `Parser::packet_duration` over arbitrary bytes on both of its paths.
+The in-band path walks ADTS headers *inside* a payload, which is the same
+attacker-controlled scan the framing does, and a frame length of zero there
+would be a hang rather than a wrong answer; the configured path is asserted to
+give the same answer for the payload and for an empty slice, which is the
+"a sync word in raw AAC is a coincidence" rule stated as a property.
+`exit=0 execs=#295119`, `find fuzz/artifacts -type f` empty.
 
 ### How the reference was probed
 
