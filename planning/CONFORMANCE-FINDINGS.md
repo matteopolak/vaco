@@ -1316,9 +1316,30 @@ Muxer aiff [Audio IFF]:
 
 This is the same asymmetry `vaco-subtitle-text`'s `ass` already turned out to
 have and was fixed for: the demuxer identifies by probing, the muxer picks a
-filename. Reproducing it means moving the list off `DemuxerDesc` and onto
-`MuxerDesc` for these 56, which is a data sweep across most of the demux
-crates and wants a quiet tree.
+filename.
+
+**But it is not the mechanical sweep it looks like, and that is worth knowing
+before someone starts one.** `DemuxerDesc::extensions` is not display-only in
+this workspace — it is load-bearing:
+
+```rust
+// vaco-registry
+pub fn demuxers_for_extension(filename: &str) -> impl Iterator<Item = &'static DemuxerDesc>
+// called from vaco-cli/src/exec.rs:443
+// and vaco-demux-image2/src/pipe/mod.rs scores a probe with `spec.extensions`
+```
+
+So emptying those 56 lists to match the reference's *help* output would change
+our *probing* behaviour, and probing correctness matters more than a help
+string. The reference gets away with it because its extension hint lives
+somewhere our model does not separate.
+
+The fix is therefore a small design decision, not a data edit: either split the
+two roles (a `probe_extensions` the engine hints from, and the reference's
+narrower `extensions` the help prints), or keep one list and accept the help
+divergence with a recorded reason. Whoever takes it should decide that first
+and edit second. `ass` was safe to fix in place only because its demuxer had no
+probe that depended on the extension.
 
 Four more differ in content rather than presence, and each is worth a look
 because none is a simple omission:
