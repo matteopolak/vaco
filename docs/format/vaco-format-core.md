@@ -222,6 +222,40 @@ Determinism rules, all because D6 requires identical output across runs and
 machines: no wall clock, no unordered iteration (per-stream state is a `Vec`
 indexed by stream index), no float accumulation, no threading.
 
+#### How a parser is reached, and the two things that were wrong about it
+
+`Discovery` asks the injected `ParserProvider` for a parser the first time a
+stream produces a packet worth parsing, and **keeps it for the whole pass** in a
+`Vec<Option<ParserDriver<Box<dyn Parser>>>>` beside the per-stream state. Two
+corrections to the previous shape, both of them correctness rather than speed:
+
+1. **One parser per stream, not one per packet.** An H.264 NAL unit ends where
+   the *next* start code begins, so a parser thrown away at the end of each
+   payload never sees the end of its last unit; and an MPEG-TS stream's
+   parameter sets arrive in one packet while the fields they describe are wanted
+   for all of them. Holding it is also the safer shape under D6's threat model:
+   one `Budget` accumulates across the pass instead of each packet getting a
+   fresh full allowance.
+2. **The container's record is handed over before any packet.** `build_parser`
+   calls `Parser::set_extradata` with `stream.params.extradata`. Without this
+   step the whole seam is inert in MP4 and Matroska: the H.264 sequence
+   parameter set is in `avcC` and in **no sample**, the AAC configuration is in
+   `esds`, the Opus identification header is in `dOps`. Measured on `av.mp4`,
+   8 of 8 bitstream-derived stream values come from the record and 0 from the
+   packet path.
+
+A record that fails to parse is not fatal. Discovery is *offering* the parser
+whatever the container happened to carry; a malformed record means "this told me
+nothing", and the container's own fields still stand.
+
+`Discovery` therefore has a hand-written `Debug`: a `Box<dyn Parser>` is not
+`Debug`, and the parsers are summarised by how many were built.
+
+The direction of the merge is load-bearing and unchanged — `CodecParameters::
+fill_from` lets the container win and the parser only fill holes. Inverting it
+is how a stream whose bitstream header disagrees with its container ends up
+reported wrongly.
+
 ### Timestamps
 
 Rules are numbered as `planning/18-formats.md` §1.7 numbers them, so the two
@@ -512,6 +546,9 @@ descending order of how much they cost.
 
 ### Wanted from other crates
 
+* **`vaco-codec-core`: `Parser::set_extradata` — done.** The trait grew a
+  defaulted `set_extradata(&[u8]) -> Result<()>`, which is what makes a parser
+  useful at all in MP4 and Matroska. See *How a parser is reached* above.
 * **`vaco-codec-core`: `impl Parser for Box<dyn Parser>` — done.** The
   orchestrator added `impl<P: Parser + ?Sized> Parser for Box<P>`, so
   `ParserDriver<P>` now accepts what `ParserProvider::parser_for` returns.

@@ -297,6 +297,20 @@ impl Parser for Av1Parser {
     fn parameters(&self) -> Option<&CodecParameters> {
         self.params.as_ref()
     }
+
+    /// Read an `AV1CodecConfigurationRecord`.
+    ///
+    /// Unlike H.264 and HEVC there is no framing to switch: AV1's low-overhead
+    /// bitstream format is the same OBU stream in MP4, Matroska and a raw file,
+    /// so [`Parser::parse`] needs no adjustment. The record still matters,
+    /// because it carries the sequence header and an MP4 sample need not repeat
+    /// it.
+    fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
+        if extradata.is_empty() {
+            return Ok(());
+        }
+        Self::set_extradata(self, extradata)
+    }
 }
 
 #[cfg(test)]

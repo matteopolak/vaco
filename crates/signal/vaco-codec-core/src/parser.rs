@@ -7,11 +7,80 @@
 //! stream, and a byte count that does not match reality. [`ParserDriver`] owns
 //! all three so no parser has to.
 
-use vaco_core::{Error, Result};
+use vaco_core::{Error, MediaType, Result};
 use vaco_limits::{Budget, Limits, ProgressGuard};
 use vaco_packet::Packet;
 
-use crate::{CodecParameters, Parser};
+use crate::{CodecId, CodecParameters, Parser};
+
+/// Static description of a bitstream parser, and how to build one.
+///
+/// The counterpart of [`DecoderDesc`](crate::DecoderDesc), and the descriptor
+/// type the registry's `parser` fragment kind was waiting for. A `vaco-parse-*`
+/// crate exports one of these as a `const`, names it in its
+/// `vaco-component.toml`, and `cargo xtask gen-registry` collects them into
+/// `vaco_registry::PARSERS`, which is what
+/// [`ParserProvider`](../../vaco_format_core/trait.ParserProvider.html) reads.
+/// That indirection is D14.1: a demuxer asks for a parser by [`CodecId`] and
+/// never names a codec crate.
+///
+/// # Why `make` is a `fn` field and not a trait method
+///
+/// The registry's rule is that a descriptor is **inspectable without
+/// constructing anything** — `-parsers` and `-h parser=h264` must print
+/// capabilities without allocating. A `const` descriptor holding a function
+/// pointer satisfies that; a `Box<dyn ParserFactory>` would not, because
+/// `Box::new` is not a `const` operation.
+///
+/// # Why `codecs` is a slice
+///
+/// One implementation genuinely covers several [`CodecId`]s — the AAC parser
+/// answers for `Aac`, and the H.264 parser would answer for an `H264Mvc` if one
+/// existed. A one-to-one field would force a second descriptor per alias, and
+/// the two would drift.
+#[derive(Clone, Copy)]
+pub struct ParserDesc {
+    /// Registry name, e.g. `"h264"`. Unique among parsers.
+    pub name: &'static str,
+    pub long_name: &'static str,
+    /// Every codec this implementation parses, in preference order.
+    pub codecs: &'static [CodecId],
+    pub media_type: MediaType,
+    /// Build one, bounded by `limits`.
+    ///
+    /// Takes [`Limits`] rather than nothing because a parser on the probe path
+    /// is handed attacker-controlled bytes before anything has validated them,
+    /// and a parser that allocates from an unbounded budget is a denial of
+    /// service in a tool people point at untrusted media. There is no
+    /// `Default`-limits constructor here on purpose: every caller states the
+    /// budget.
+    pub make: fn(Limits) -> Box<dyn Parser>,
+}
+
+impl ParserDesc {
+    /// Whether this implementation parses `codec`.
+    #[must_use]
+    pub fn handles(&self, codec: CodecId) -> bool {
+        self.codecs.contains(&codec)
+    }
+
+    /// Build an instance bounded by `limits`.
+    #[must_use]
+    pub fn build(&self, limits: Limits) -> Box<dyn Parser> {
+        (self.make)(limits)
+    }
+}
+
+impl core::fmt::Debug for ParserDesc {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ParserDesc")
+            .field("name", &self.name)
+            .field("long_name", &self.long_name)
+            .field("codecs", &self.codecs)
+            .field("media_type", &self.media_type)
+            .finish_non_exhaustive()
+    }
+}
 
 /// The default cap on the reassembly buffer.
 ///

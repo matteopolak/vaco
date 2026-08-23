@@ -10,7 +10,7 @@
 //! |---|---|
 //! | [`machine`] | [`Machine`], the send/receive state machine every component shares |
 //! | [`protocol`] | [`SendReceive`], the adapters onto the three trait faces, and [`Validated`] |
-//! | [`parser`] | [`ParserDriver`], the harness that drives a [`Parser`] over a byte stream |
+//! | [`parser`] | [`ParserDesc`] and [`ParserDriver`]: how a parser is registered, and the harness that drives it |
 //! | [`caps`] | [`Caps`] — what an implementation can do, checked before it is built |
 //! | [`params`] | [`CodecParameters`], profiles, levels and their tables |
 //! | [`picture`] | frame-threading primitives: guard-padded row bands published through `OnceLock` |
@@ -47,7 +47,7 @@ pub use params::{
     AudioParameters, CodecParameters, FieldOrder, Level, LevelConstraints, LevelEntry, LevelQuery,
     LevelTable, Profile, ProfileEntry, ProfileTable, VideoParameters,
 };
-pub use parser::ParserDriver;
+pub use parser::{ParserDesc, ParserDriver};
 pub use picture::{
     BandMut, BandRangeMut, BlockRef, BlockScratch, PictureRef, PictureSpec, PictureWriter,
     PlaneSpec, PlaneView, ProgressPicture,
@@ -133,7 +133,7 @@ const CODECS: &[CodecEntry] = &[
     entry(
         CodecId::Hevc,
         "hevc",
-        "H.265 / HEVC",
+        "H.265 / HEVC (High Efficiency Video Coding)",
         V,
         CodecProperties::LOSSY
             .union(CodecProperties::REORDER)
@@ -168,7 +168,13 @@ const CODECS: &[CodecEntry] = &[
         A,
         CodecProperties::LOSSY,
     ),
-    entry(CodecId::Opus, "opus", "Opus", A, CodecProperties::LOSSY),
+    entry(
+        CodecId::Opus,
+        "opus",
+        "Opus (Opus Interactive Audio Codec)",
+        A,
+        CodecProperties::LOSSY,
+    ),
     entry(
         CodecId::Flac,
         "flac",
@@ -200,7 +206,7 @@ const CODECS: &[CodecEntry] = &[
     entry(
         CodecId::Png,
         "png",
-        "PNG (Portable Network Graphics)",
+        "PNG (Portable Network Graphics) image",
         V,
         CodecProperties::LOSSLESS.union(CodecProperties::INTRA_ONLY),
     ),
@@ -325,6 +331,45 @@ pub trait Parser: Send {
 
     /// Stream properties discovered so far, if enough header data has been seen.
     fn parameters(&self) -> Option<&CodecParameters>;
+
+    /// Seed the parser from the container's out-of-band configuration —
+    /// `avcC`, `hvcC`, `av1C`, an `AudioSpecificConfig`, an `OpusHead`.
+    ///
+    /// **This is the mechanism that makes a parser useful at all in MP4 and
+    /// Matroska**, and it was the missing half of the `ParserProvider` seam. In
+    /// an MPEG-TS or raw elementary stream every parameter set is in-band, so
+    /// [`Parser::parse`] alone finds everything. In MP4 the sequence parameter
+    /// set is in `avcC` and appears in **no packet at all**: a parser fed only
+    /// payloads reports nothing, forever, however many packets it is given.
+    /// Measured on `av.mp4` — 0 of the 8 bitstream-derived stream fields
+    /// arrive through the packet path and 8 of 8 arrive through this one.
+    ///
+    /// Two further things ride on it, which is why it returns a value rather
+    /// than being a plain setter:
+    ///
+    /// * the configuration record states the **NAL length prefix size**, which
+    ///   is the only way a parser can read a length-prefixed sample at all;
+    /// * `is_avc`/`nal_length_size` are printed by `-show_streams`, and they
+    ///   are properties of the *container's* framing rather than of the
+    ///   bitstream, so nothing downstream can derive them.
+    ///
+    /// Both are reported through [`CodecParameters`], so a caller that only
+    /// wants parameters needs nothing but [`Parser::parameters`].
+    ///
+    /// The default implementation ignores the record, which is right for a
+    /// codec whose containers carry none. Calling it twice, or with an empty
+    /// slice, must be harmless.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the codec's own record parser returns. A caller that is merely
+    /// *offering* extradata — stream discovery is — should treat an error as
+    /// "this record told me nothing" and carry on, because a malformed record
+    /// is not a reason to stop reporting the container's own fields.
+    fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
+        let _ = extradata;
+        Ok(())
+    }
 }
 
 /// So a boxed parser is itself a [`Parser`], and can be handed to anything
@@ -343,6 +388,10 @@ impl<P: Parser + ?Sized> Parser for Box<P> {
 
     fn parameters(&self) -> Option<&CodecParameters> {
         (**self).parameters()
+    }
+
+    fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
+        (**self).set_extradata(extradata)
     }
 }
 

@@ -320,6 +320,20 @@ pub fn codec_parameters(sps: &Sps) -> CodecParameters {
             FieldOrder::Unknown
         },
         has_b_frames: sps.max_num_reorder_frames().unwrap_or(0).min(255) as u8,
+        // D17: measured, and it does NOT transfer to the other codecs. The
+        // reference prints `bits_per_raw_sample=8` on an 8-bit H.264 stream
+        // and `10` on a 10-bit one, but prints `N/A` for HEVC, AV1 and VP9 at
+        // the same depth. So this is set here and deliberately left unset in
+        // `vaco-parse-hevc` and `vaco-parse-av1`.
+        //
+        //   1918x1080 yuv420p10le h264 -> bits_per_raw_sample="10"
+        //   1918x1080 yuv420p     hevc -> bits_per_raw_sample="N/A"
+        bits_per_raw_sample: Some(sps.bit_depth_luma),
+        // Annex B until a configuration record says otherwise. `parser::
+        // H264Parser::set_extradata` overwrites this with the record's own
+        // length size; a stream that never gets one is a byte stream, which is
+        // what `nal_length_size=0` means.
+        nal_length_size: Some(0),
     };
 
     let mut params = CodecParameters::video().with_codec(CodecId::H264);

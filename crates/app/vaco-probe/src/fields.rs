@@ -205,6 +205,20 @@ pub static STREAM: &[Field] = &[
     // The one that spells its unknown differently. Observed, not a typo.
     v("chroma_location", Str, Word("unspecified")),
     v("field_order", Str, Word("unknown")),
+    // Decoder **private** options (`-show_private_data`, on by default), which
+    // is why the block between `field_order` and `id` changes shape per codec.
+    // Measured, one file each:
+    //
+    //   h264 -> is_avc="true" nal_length_size="4"
+    //   hevc -> view_ids_available="" view_pos_available=""
+    //   av1  -> nothing at all
+    //
+    // `Omit`, so a codec that has none emits none — the reference does not
+    // print a placeholder for a private option that does not exist.
+    v("is_avc", Str, Omit),
+    v("nal_length_size", Str, Omit),
+    v("view_ids_available", Str, Omit),
+    v("view_pos_available", Str, Omit),
     a("sample_fmt", Str, Word("unknown")),
     a("sample_rate", Str, Never),
     a("channels", Int, Never),

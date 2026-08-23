@@ -14,7 +14,7 @@ defines the seams and nothing else.
 |---|---|
 | `machine` | `Machine`, the send/receive state machine every component embeds |
 | `protocol` | `SendReceive`, the adapters onto the three trait faces, and `Validated` |
-| `parser` | `ParserDriver`, the harness that drives a `Parser` over a byte stream |
+| `parser` | `ParserDesc` (how a parser is registered) and `ParserDriver` (the harness that drives it) |
 | `caps` | `Caps` (implementation capabilities) and `CodecProperties` (format facts) |
 | `params` | `CodecParameters`, `Profile`/`ProfileTable`, `Level`/`LevelTable` |
 | `picture` | `ProgressPicture`, `PictureWriter`, `PictureRef`, `PlaneView` |
@@ -240,6 +240,66 @@ milestone.
   turned by `vaco_limits::ProgressGuard` into a localised error instead of a
   fuzzer timeout with no stack.
 
+#### `set_extradata`, and why the trait needed a fourth method
+
+`Parser::set_extradata` takes the container's out-of-band configuration record
+— `avcC`, `hvcC`, `av1C`, an `AudioSpecificConfig`, an `OpusHead`. It has a
+default body that ignores it, so a codec whose containers carry none writes
+nothing.
+
+It looks like a convenience and it is not. In an MPEG-TS or raw elementary
+stream every parameter set is in-band and `parse` alone finds everything. **In
+MP4 the H.264 sequence parameter set is in `avcC` and appears in no sample at
+all**, so a parser fed only payloads reports nothing, forever, however many
+packets it is given. Measured on `av.mp4`: of the eight bitstream-derived values
+`ffprobe -show_streams` prints for its H.264 track, 8 arrive through the record
+and 0 through the packet path. Opus is the extreme case — its channel count,
+pre-skip and mapping exist *only* in the identification header, so for that
+codec there is no packet path at all.
+
+Two things ride on it that are not bitstream facts:
+
+* **The NAL length prefix size**, without which a length-prefixed sample cannot
+  be read at all. `H264Parser` and `HevcParser` remember it and switch `parse`
+  from the byte-stream scanner to the container path, because a length-prefixed
+  sample contains no start codes and the scanner finds nothing in one.
+* **`is_avc`/`nal_length_size`**, which `-show_streams` prints and which are
+  properties of the *container's* framing rather than of the bitstream. They
+  reach the caller through `VideoParameters::nal_length_size`.
+
+An error from it is not fatal to a caller that is merely *offering* a record —
+stream discovery is — because a malformed record means "this told me nothing",
+not "stop reporting the file".
+
+### Registering a parser: `ParserDesc`
+
+The counterpart of `DecoderDesc`, and the descriptor type the registry's
+`parser` fragment kind was waiting for.
+
+```rust
+pub const PARSER: ParserDesc = ParserDesc {
+    name: "h264",
+    long_name: "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+    codecs: &[CodecId::H264],
+    media_type: MediaType::Video,
+    make: |limits| Box::new(H264Parser::new(limits)),
+};
+```
+
+Two shape decisions:
+
+* **`make` is a `fn` field, not a trait method.** The registry's rule is that a
+  descriptor is inspectable without constructing anything, so `-parsers` can
+  print a table without allocating a parser. A `const` holding a function
+  pointer satisfies that; a `Box<dyn ParserFactory>` would not, because
+  `Box::new` is not `const`.
+* **`make` takes `Limits`.** A parser on the probe path reads
+  attacker-controlled bytes before anything has validated them; there is
+  deliberately no no-argument constructor, so every caller states a budget.
+* **`codecs` is a slice**, because one implementation genuinely covers several
+  `CodecId`s and a one-to-one field would force a second descriptor that then
+  drifts.
+
 ### Frame threading: mutable state never crosses a thread
 
 The design that matters most (plan 15 §1.8.1). A frame-threaded decoder is split
@@ -438,6 +498,18 @@ actually consumes:
 
 ## Known gaps
 
+* **`AudioParameters::bits_per_raw_sample` is the wrong home for a container's
+  sample depth.** `VideoParameters` now carries one too — the reference prints
+  `bits_per_raw_sample=8` for an 8-bit H.264 stream and `N/A` for the AAC track
+  beside it, the exact opposite of what the model could express — but the
+  audio-side field is being filled by `vaco-demux-mp4` and `vaco-demux-matroska`
+  from the container's `stsd` sample entry / `BitDepth`. Probed on a WAV,
+  `pcm_s16le` reports `bits_per_sample=16` and `bits_per_raw_sample="N/A"`, so
+  that number is `bits_per_coded_sample`, a **different field** with nowhere to
+  live. `vaco-probe` suppresses the audio value for float-output codecs as a
+  stopgap; the fix is a `bits_per_coded_sample` on `AudioParameters`.
+* **`CodecParameters` has no `max_bit_rate`**, which the reference prints for
+  every stream.
 * `vaco-pool::Buffer` has no public constructor yet, so no crate outside
   `vaco-pool` can build a `Packet`. The mock codec is therefore exercised over
   its own lightweight input type; `MockDecoder` provides the `Packet`/`Frame`

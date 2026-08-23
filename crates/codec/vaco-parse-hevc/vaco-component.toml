@@ -1,0 +1,15 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# `kind = "parser"` became a typed table when `vaco-codec-core` grew
+# `ParserDesc`; before that the generator checked the `ctor` path resolved and
+# emitted no table, which is why `ParserProvider::parser_for` returned `None`
+# for every codec.
+
+[[component]]
+kind      = "parser"
+name      = "hevc"
+long_name = "H.265 / HEVC (High Efficiency Video Coding)"
+feature   = "parse-hevc"
+ctor      = "vaco_parse_hevc::PARSER"
+media     = "video"
+codec     = "hevc"

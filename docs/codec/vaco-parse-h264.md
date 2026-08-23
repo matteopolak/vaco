@@ -102,6 +102,65 @@ Two design points behind it:
 - **Queued units are handed back before more input is taken**, which is what
   bounds the buffer to one access unit rather than to the caller's push size.
 
+## Registration: how a demuxer reaches this crate
+
+This crate ships a `vaco-component.toml` naming `vaco_parse_h264::PARSER`, a
+`vaco_codec_core::ParserDesc`. `cargo xtask gen-registry` collects it into
+`vaco_registry::PARSERS`, and `vaco_registry::Parsers` — the one
+`ParserProvider` in the build — answers `parser_for(CodecId::H264)` with a
+`Box<dyn Parser>` built from it.
+
+**No demuxer names this crate.** D14.1 and `cargo xtask layer-check` forbid a
+`crates/format/` crate from depending on a `crates/codec/` one; the indirection
+is what makes `-show_streams` able to report bitstream fields without that edge.
+
+Two consequences worth knowing when changing anything here:
+
+* **Everything a demuxer can see goes through `dyn Parser`.** `parse`,
+  `parameters` and `set_extradata` are the whole surface. An inherent method,
+  however useful, is invisible from a container. `tests/provider.rs` is written
+  entirely against `Box<dyn Parser>` for that reason — a version written against
+  the concrete type would pass while the seam stayed broken.
+* **`ParserDesc::make` takes `Limits`.** A parser on the probe path is handed
+  attacker-controlled bytes before anything has validated them, so there is no
+  no-argument constructor to reach for.
+
+### `set_extradata` is not optional here
+
+In MPEG-TS every parameter set is in-band and `Parser::parse` finds everything.
+**In MP4 the sequence parameter set is in `avcC` and appears in no sample at
+all**, so a parser fed only payloads reports nothing however many packets it is
+given. Measured on `av.mp4`: of the eight bitstream-derived values
+`ffprobe -show_streams` prints, 8 come from the record and 0 from the packets.
+
+The record also states the NAL length prefix size, and `H264Parser` remembers
+it: `Parser::parse` switches from the Annex B scanner to `push_access_unit` once
+a record has declared length-prefixed framing, because a length-prefixed sample
+contains **no start codes** and the scanner finds nothing in one.
+
+That prefix size is also observable output. `VideoParameters::nal_length_size`
+carries it, and `vaco-probe` prints it as the h264 decoder's private options —
+measured, the same content reports `is_avc=true nal_length_size=4` in MP4 and
+`is_avc=false nal_length_size=0` in MPEG-TS. `Some(0)` is a *value*, not an
+absence: `None` is what a non-H.264 codec reports, and it is what keeps the pair
+out of an HEVC stream's output.
+
+### `bits_per_raw_sample` is set here and nowhere else
+
+`codec_parameters` sets `VideoParameters::bits_per_raw_sample` from
+`bit_depth_luma`. Probed on the same 1918x1080 source encoded four ways:
+
+```text
+h264 yuv420p      -> bits_per_raw_sample="8"
+h264 yuv420p10le  -> bits_per_raw_sample="10"
+hevc yuv420p      -> bits_per_raw_sample="N/A"
+av1  yuv420p      -> bits_per_raw_sample="N/A"
+```
+
+H.264 is the exception rather than the rule. `vaco-parse-hevc` and
+`vaco-parse-av1` leave the field `None` deliberately, and their
+`tests/provider.rs` assert it.
+
 ## How to change it
 
 - **Adding an SEI payload type.** One arm in `sei::decode_payload` and one

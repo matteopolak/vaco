@@ -271,6 +271,11 @@ fn av_mp4_streams() -> Vec<Stream> {
         v.format = vaco_pixfmt::PixFmt::from_name("yuv420p").ok();
         v.color.chroma_location = vaco_color::ChromaLocation::Left;
         v.field_order = vaco_codec_core::FieldOrder::Progressive;
+        // Both from the bitstream parser, through `ParserProvider`. `avcC`
+        // declares a four-byte length prefix, which is `is_avc=true
+        // nal_length_size=4`; the SPS's `bit_depth_luma` is 8.
+        v.bits_per_raw_sample = Some(8);
+        v.nal_length_size = Some(4);
     }
 
     let mut audio = Stream::new(1, MediaType::Audio, Rational::new(1, 44100));
@@ -433,21 +438,31 @@ fn stream_lines_that_match_the_reference() {
         .lines()
         .filter(|l| mine.contains(l))
         .collect();
-    // 113 of the 116 reference lines, over two streams.
+    // All 116 reference lines, over two streams. It was 113 until the parser
+    // seam landed; the three that were missing were `is_avc`,
+    // `nal_length_size` and the video `bits_per_raw_sample`.
     assert_eq!(
         matched.len(),
-        STREAMS_DEFAULT.lines().count() - 3,
+        STREAMS_DEFAULT.lines().count(),
         "unexpected divergence:\n{:#?}",
         divergences(STREAMS_DEFAULT, &ours)
     );
 }
 
-/// The six lines we do **not** reproduce, and why.
+/// The lines we do **not** reproduce — and there are now none.
 ///
-/// Each is a missing input, not a formatting choice — three of them are facts
-/// no crate in this tree currently carries. Asserted exactly so the list cannot
-/// grow silently, and so that closing one of them fails here and gets removed
-/// deliberately.
+/// This list has been shrinking rather than growing, and each closure failed
+/// this assertion first, which is what it is for: a divergence disappearing is
+/// a change to observable output and gets reviewed like any other.
+///
+/// * `codec_long_name` — `vaco-codec-core` said "H.264 / AVC / MPEG-4 AVC"
+///   where the reference appends " / MPEG-4 part 10". Closed upstream.
+/// * `is_avc`, `nal_length_size` — the h264 decoder's private options.
+///   `CodecParameters` had nowhere to put them; `VideoParameters` now carries
+///   `nal_length_size` and the H.264 parser fills it from `avcC`.
+/// * `bits_per_raw_sample` — lived on `AudioParameters` only, so a *video*
+///   stream could not report the 8 the reference prints. It is on
+///   `VideoParameters` too now, and that is the half that is printed.
 #[test]
 fn the_known_stream_divergences_are_exactly_these() {
     let ours = streams("default");
@@ -456,39 +471,19 @@ fn the_known_stream_divergences_are_exactly_these() {
         .iter()
         .map(|(theirs, _)| theirs.split_once('=').map_or(theirs.as_str(), |(k, _)| k))
         .collect();
-
-    assert_eq!(
-        names,
-        [
-            // `codec_long_name` used to be here: `vaco-codec-core` said
-            // "H.264 / AVC / MPEG-4 AVC" where the reference appends
-            // " / MPEG-4 part 10". Reported rather than fixed here, and closed
-            // upstream during the wave — at which point this assertion failed,
-            // which is exactly what it is for. A divergence disappearing is a
-            // change to observable output and gets noticed like any other.
-            //
-            // Both of these come from the h264 decoder's private option table
-            // (`-show_private_data`, on by default). We have no decoder, and
-            // `CodecParameters` has nowhere to put them.
-            "is_avc",
-            "nal_length_size",
-            // `bits_per_raw_sample` lives on `AudioParameters` only, so a video
-            // stream cannot report the 8 the reference prints. The audio
-            // stream's own `bits_per_raw_sample=N/A` matches.
-            "bits_per_raw_sample",
-        ],
-        "divergence set moved:\n{found:#?}"
-    );
+    let empty: [&str; 0] = [];
+    assert_eq!(names, empty, "divergence set moved:\n{found:#?}");
 }
 
-/// A per-writer check that the divergence set is a property of the *fields*,
-/// not of one writer.
+/// A per-writer check that the field set is a property of the *fields*, not of
+/// one writer.
 #[test]
 fn the_same_six_fields_diverge_in_every_writer() {
     for spec in ["default", "flat", "compact", "ini", "xml", "json"] {
         let ours = streams(spec);
-        // Every writer must emit `is_avc` never, and `codec_name` always.
-        assert!(!ours.contains("is_avc"), "{spec}");
+        // `is_avc` is emitted by every writer now, and only for the H.264
+        // stream — the AAC stream beside it must not grow one.
+        assert_eq!(ours.matches("is_avc").count(), 1, "{spec}");
         assert!(ours.contains("h264"), "{spec}");
         assert!(ours.contains("mp4a.40.2"), "{spec}: mime_codec_string");
     }
@@ -548,30 +543,15 @@ fn json_quoting_matches_the_reference_field_for_field() {
     }
 }
 
-/// Both streams, byte for byte, with the three divergent lines removed from
-/// both sides.
+/// Both streams, byte for byte, with **nothing** removed from either side.
 ///
-/// The strongest statement available without the demuxer: same fields, same
-/// order, same spelling, same bytes — 113 of 116 lines, and the three that are
-/// missing are missing *inputs*, not formatting choices.
+/// This used to drop three lines from both sides — `is_avc`,
+/// `nal_length_size` and `bits_per_raw_sample`, all three missing *inputs*
+/// rather than formatting choices — and asserted 113 of 116. All three now
+/// arrive, so the filter is gone and the assertion is the whole document.
 #[test]
 fn the_streams_are_byte_identical_apart_from_the_known_gaps() {
-    let drop = |l: &&str| {
-        !l.starts_with("is_avc=")
-            && !l.starts_with("nal_length_size=")
-            && !l.starts_with("bits_per_raw_sample=")
-    };
-    let join = |text: &str| -> String {
-        let mut out = String::new();
-        for line in text.lines().filter(drop) {
-            out.push_str(line);
-            out.push('\n');
-        }
-        out
-    };
-    let want = join(STREAMS_DEFAULT);
-    let got = join(&streams("default"));
-    assert_eq!(got, want);
+    assert_eq!(streams("default"), STREAMS_DEFAULT);
 }
 
 /// The stream `[SIDE_DATA]` block, byte for byte.

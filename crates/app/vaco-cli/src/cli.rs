@@ -1,0 +1,384 @@
+//! Binding a split command line onto the options this binary understands.
+//!
+//! `vaco-cli-core` decides what a command line *means*: which options are
+//! global, which bind to a file, which side of their file they must be on, and
+//! how each value is spelled. This module is the next stage — taking that
+//! structure and producing the two lists the run is built from.
+//!
+//! # The `AVOption` oracle
+//!
+//! The reference accepts `-crf 20` before any encoder is chosen because *some*
+//! `AVOption` class in the process declares `crf`, and rejects `-qwerty 3`
+//! because none does. That decision needs the component registry, so
+//! `vaco-cli-core` takes it as an injected [`AvOptionOracle`].
+//!
+//! [`Oracle`] answers it from **what this build actually contains**, which is
+//! the same rule the reference applies to itself. Today that is
+//! `FormatOptions` — `probesize`, `fflags`, `protocol_whitelist` and the rest —
+//! and nothing else, because there are no encoders, decoders or filters to ask.
+//! So `vaco -crf 20 …` reports `Unrecognized option 'crf'` where the reference
+//! accepts it. That is a real divergence, it is caused by the build's contents
+//! rather than by the parser, and it closes on its own as codecs land. The
+//! alternative — accepting every unknown name — makes `-qwrty 3` a silent
+//! no-op, which is worse in exactly the case a user needs help.
+
+use std::ffi::OsStr;
+
+use vaco_cli_core::split::AvOptionOracle;
+use vaco_cli_core::{
+    CliError, CommandLine, GroupKind, OptionGroup, ParsedOption, table::ArgFlags, table::ffmpeg,
+};
+use vaco_format_core::FormatOptions;
+use vaco_opts::Options as _;
+
+use crate::exit::{AvError, Diagnostic};
+use crate::select::{MapEntry, Suppressed};
+
+/// Answers "could this name be a component option?" from the components this
+/// build has.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Oracle;
+
+impl AvOptionOracle for Oracle {
+    fn knows(&self, name: &str) -> bool {
+        FormatOptions::default().schema().find(name).is_some()
+    }
+}
+
+/// One `-i` group, bound.
+#[derive(Debug, Clone, Default)]
+pub struct InputSpec {
+    pub index: u32,
+    pub url: String,
+    /// `-f` on the input side.
+    pub format: Option<String>,
+    /// `-protocol_whitelist`, split on `,`.
+    pub whitelist: Option<Vec<String>>,
+    /// `-protocol_blacklist`, split on `,`.
+    pub blacklist: Option<Vec<String>>,
+}
+
+/// One output group, bound.
+#[derive(Debug, Clone, Default)]
+pub struct OutputSpec {
+    pub index: u32,
+    pub url: String,
+    /// `-f` on the output side.
+    pub format: Option<String>,
+    pub maps: Vec<MapEntry>,
+    pub blocked: Suppressed,
+}
+
+/// A whole invocation, bound.
+#[derive(Debug, Default)]
+pub struct Cli {
+    pub hide_banner: bool,
+    /// The name of the first `-version`/`-formats`/… option seen, if any.
+    pub listing: Option<&'static str>,
+    pub inputs: Vec<InputSpec>,
+    pub outputs: Vec<OutputSpec>,
+    /// Trailing per-file options with no file after them. The reference drops
+    /// these silently; kept so `vaco` can warn.
+    pub orphaned: Vec<String>,
+    /// The split command line, kept because per-stream option resolution needs
+    /// the original groups.
+    pub line: CommandLine,
+}
+
+impl Cli {
+    /// The output group for `index`, for per-stream option lookups.
+    #[must_use]
+    pub fn output_group(&self, index: u32) -> Option<&OptionGroup> {
+        self.line
+            .of_kind(GroupKind::Output)
+            .find(|g| g.index == index)
+    }
+}
+
+/// Whether argv asks for the banner to be suppressed.
+///
+/// A textual pre-scan, because the reference decides this *before* it parses:
+/// `ffmpeg -qwerty 3` prints the banner and then the error, so the banner
+/// cannot wait for a successful parse.
+#[must_use]
+pub fn wants_banner<S: AsRef<OsStr>>(argv: &[S]) -> bool {
+    !argv
+        .iter()
+        .any(|a| a.as_ref() == OsStr::new("-hide_banner"))
+}
+
+/// Split and bind `argv`.
+///
+/// # Errors
+///
+/// A [`Diagnostic`] carrying the reference's wording and exit status for a
+/// parse failure, an option on the wrong side of its file, or a `-map` value
+/// that does not parse.
+pub fn parse<S: AsRef<OsStr>>(argv: &[S]) -> Result<Cli, Diagnostic> {
+    let table = ffmpeg();
+    let line = vaco_cli_core::split_with(&table, argv, &Oracle).map_err(|e| split_error(&e))?;
+    line.validate().map_err(|e| split_error(&e))?;
+
+    let mut cli = Cli {
+        hide_banner: line.last_global("hide_banner").is_some(),
+        listing: line
+            .global
+            .iter()
+            .find(|o| o.desc.is_some_and(|d| d.flags.contains(ArgFlags::EXIT)))
+            .and_then(|o| o.desc.map(|d| d.name)),
+        orphaned: line
+            .orphaned
+            .iter()
+            .map(|o| format!("-{}", o.name))
+            .collect(),
+        ..Cli::default()
+    };
+
+    for g in line.of_kind(GroupKind::Input) {
+        cli.inputs.push(InputSpec {
+            index: g.index,
+            url: url_of(g)?,
+            format: last_value(g, "f")?,
+            whitelist: last_value(g, "protocol_whitelist")?.map(|v| split_list(&v)),
+            blacklist: last_value(g, "protocol_blacklist")?.map(|v| split_list(&v)),
+        });
+    }
+
+    for g in line.of_kind(GroupKind::Output) {
+        cli.outputs.push(OutputSpec {
+            index: g.index,
+            url: url_of(g)?,
+            format: last_value(g, "f")?,
+            maps: maps_of(g)?,
+            blocked: Suppressed {
+                video: g.last("vn").is_some(),
+                audio: g.last("an").is_some(),
+                subtitle: g.last("sn").is_some(),
+                data: g.last("dn").is_some(),
+            },
+        });
+    }
+
+    cli.line = line;
+    Ok(cli)
+}
+
+fn url_of(g: &OptionGroup) -> Result<String, Diagnostic> {
+    g.url.to_str().map(str::to_owned).ok_or_else(|| {
+        // The reference opens non-UTF-8 paths; we cannot, because every layer
+        // below takes a `&str`. Recorded in the doc file as a known divergence
+        // rather than hidden behind a lossy conversion that would open the
+        // wrong file.
+        Diagnostic::new(
+            AvError::EINVAL,
+            vec![format!(
+                "Filename is not valid UTF-8: {}",
+                g.url.to_string_lossy()
+            )],
+        )
+    })
+}
+
+fn last_value(g: &OptionGroup, name: &str) -> Result<Option<String>, Diagnostic> {
+    let Some(opt) = g.last(name) else {
+        return Ok(None);
+    };
+    value_str(opt).map(Some)
+}
+
+fn value_str(opt: &ParsedOption) -> Result<String, Diagnostic> {
+    opt.value
+        .as_ref()
+        .and_then(|v| v.to_str())
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            Diagnostic::new(
+                AvError::EINVAL,
+                vec![format!(
+                    "Invalid value for option '{}': not valid UTF-8",
+                    opt.name
+                )],
+            )
+        })
+}
+
+fn split_list(v: &str) -> Vec<String> {
+    v.split(',')
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn maps_of(g: &OptionGroup) -> Result<Vec<MapEntry>, Diagnostic> {
+    let mut out = Vec::new();
+    for opt in &g.opts {
+        if opt.resolved().0 != "map" {
+            continue;
+        }
+        // The reference prints the specifier grammar's own complaint first, then
+        // the generic "Failed to set value" line; `MapEntry::parse` owns both.
+        out.push(MapEntry::parse(&value_str(opt)?)?);
+    }
+    Ok(out)
+}
+
+/// Translate a `vaco-cli-core` parse failure into the reference's two-line
+/// shape and exit status.
+///
+/// Measured (`ffmpeg 8.1`, no pipe):
+///
+/// ```text
+/// ffmpeg -qwerty 3 …   -> exit 8    "Unrecognized option 'qwerty'."
+///                                    "Error splitting the argument list: Option not found"
+/// ffmpeg -i            -> exit 234  "Missing argument for option 'i'."
+///                                    "Error splitting the argument list: Invalid argument"
+/// ```
+fn split_error(e: &CliError) -> Diagnostic {
+    let (err, first) = match e {
+        CliError::UnrecognizedOption { name } => (
+            AvError::OPTION_NOT_FOUND,
+            format!("Unrecognized option '{}'.", name.to_string_lossy()),
+        ),
+        CliError::MissingArgument { name } => (
+            AvError::EINVAL,
+            format!("Missing argument for option '{name}'."),
+        ),
+        other => (AvError::EINVAL, other.to_string()),
+    };
+    let second = match e {
+        CliError::WrongSide { .. } => None,
+        _ => Some(format!("Error splitting the argument list: {}", err.text)),
+    };
+    let mut lines = vec![first];
+    lines.extend(second);
+    Diagnostic::new(err, lines)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test code")]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inputs_and_outputs_are_bound_in_order() {
+        let cli = parse(&["-i", "a.mkv", "-i", "b.mkv", "-f", "null", "-"]).unwrap();
+        assert_eq!(
+            cli.inputs
+                .iter()
+                .map(|i| i.url.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a.mkv", "b.mkv"]
+        );
+        assert_eq!(cli.outputs.len(), 1);
+        assert_eq!(
+            cli.outputs.first().map(|o| o.format.as_deref()),
+            Some(Some("null"))
+        );
+        assert_eq!(cli.outputs.first().map(|o| o.url.as_str()), Some("-"));
+    }
+
+    #[test]
+    fn an_unknown_option_is_rejected_with_the_reference_wording() {
+        let e = parse(&["-qwerty", "3", "-i", "a.mkv", "-f", "null", "-"]).unwrap_err();
+        assert_eq!(
+            e.render(),
+            "Unrecognized option 'qwerty'.\n\
+             Error splitting the argument list: Option not found\n"
+        );
+        assert_eq!(e.exit.code(), 8);
+    }
+
+    #[test]
+    fn a_missing_value_is_einval_not_option_not_found() {
+        // OBSERVED: `ffmpeg -i` exits 234, not 8.
+        let e = parse(&["-i"]).unwrap_err();
+        assert_eq!(
+            e.render(),
+            "Missing argument for option 'i'.\n\
+             Error splitting the argument list: Invalid argument\n"
+        );
+        assert_eq!(e.exit.code(), 234);
+    }
+
+    #[test]
+    fn a_format_option_name_is_accepted_because_this_build_has_one() {
+        // `probesize` is a real `FormatOptions` field, so the oracle knows it.
+        assert!(Oracle.knows("probesize"));
+        assert!(Oracle.knows("protocol_whitelist"));
+        // No encoders in this build, so no `crf`. Divergence, documented.
+        assert!(!Oracle.knows("crf"));
+        assert!(!Oracle.knows("qwerty"));
+    }
+
+    #[test]
+    fn drop_flags_bind_to_their_output() {
+        let cli = parse(&["-i", "a.mkv", "-vn", "-dn", "-f", "null", "-"]).unwrap();
+        let o = cli.outputs.first().unwrap();
+        assert_eq!(
+            o.blocked,
+            Suppressed {
+                video: true,
+                audio: false,
+                subtitle: false,
+                data: true
+            }
+        );
+    }
+
+    #[test]
+    fn maps_keep_their_order_and_their_text() {
+        let cli = parse(&[
+            "-i", "a.mkv", "-map", "0:a", "-map", "-0:a:1", "-f", "null", "-",
+        ])
+        .unwrap();
+        let o = cli.outputs.first().unwrap();
+        assert_eq!(
+            o.maps.iter().map(|m| m.text.as_str()).collect::<Vec<_>>(),
+            vec!["0:a", "-0:a:1"]
+        );
+    }
+
+    #[test]
+    fn a_protocol_whitelist_reaches_the_input() {
+        let cli = parse(&[
+            "-protocol_whitelist",
+            "file,crypto",
+            "-i",
+            "a.mkv",
+            "-f",
+            "null",
+            "-",
+        ])
+        .unwrap();
+        assert_eq!(
+            cli.inputs.first().and_then(|i| i.whitelist.clone()),
+            Some(vec!["file".to_owned(), "crypto".to_owned()])
+        );
+    }
+
+    #[test]
+    fn trailing_per_file_options_are_orphaned_not_fatal() {
+        // OBSERVED: `ffmpeg -i a -f null - -c:v libx264` exits 0.
+        let cli = parse(&["-i", "a.mkv", "-f", "null", "-", "-c:v", "libx264"]).unwrap();
+        assert_eq!(cli.orphaned, vec!["-c"]);
+    }
+
+    #[test]
+    fn an_exit_option_is_reported() {
+        let cli = parse(&["-version"]).unwrap();
+        assert_eq!(cli.listing, Some("version"));
+        let cli = parse(&["-formats"]).unwrap();
+        assert_eq!(cli.listing, Some("formats"));
+    }
+
+    #[test]
+    fn hide_banner_is_seen_by_the_pre_scan_and_by_the_parse() {
+        assert!(!wants_banner(&["-hide_banner", "-i", "x"]));
+        assert!(wants_banner(&["-i", "x"]));
+        assert!(
+            parse(&["-hide_banner", "-i", "x", "-f", "null", "-"])
+                .unwrap()
+                .hide_banner
+        );
+    }
+}

@@ -70,3 +70,26 @@ pub use tables::{
 
 #[cfg(test)]
 mod tests;
+
+/// The registry descriptors for this crate's two parsers.
+///
+/// Two, not one, because the reference treats LATM/LOAS as a **separate codec**
+/// rather than a framing of AAC — `ffprobe` prints `codec_name=aac_latm` — and
+/// `CodecId` mirrors that. One descriptor per `CodecId` keeps the registry's
+/// "two crates may not register the same name" check meaningful.
+pub const PARSER: ::vaco_codec_core::ParserDesc = ::vaco_codec_core::ParserDesc {
+    name: "aac",
+    long_name: "AAC (Advanced Audio Coding)",
+    codecs: &[::vaco_codec_core::CodecId::Aac],
+    media_type: ::vaco_core::MediaType::Audio,
+    make: |limits| ::std::boxed::Box::new(adts::AdtsParser::new(limits)),
+};
+
+/// The LATM/LOAS descriptor. See [`PARSER`].
+pub const PARSER_LATM: ::vaco_codec_core::ParserDesc = ::vaco_codec_core::ParserDesc {
+    name: "aac_latm",
+    long_name: "AAC LATM (Advanced Audio Coding LATM syntax)",
+    codecs: &[::vaco_codec_core::CodecId::AacLatm],
+    media_type: ::vaco_core::MediaType::Audio,
+    make: |limits| ::std::boxed::Box::new(latm::LoasParser::new(limits)),
+};

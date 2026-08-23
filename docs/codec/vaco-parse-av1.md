@@ -181,6 +181,50 @@ and the bit-by-bit trace in `seq.rs`'s own test fixture comment).
   implemented from the specification (§5.9.6–§5.9.7) and unit-tested by hand,
   not measured.
 
+## Registration: how a demuxer reaches this crate
+
+This crate ships a `vaco-component.toml` naming `vaco_parse_av1::PARSER`, a
+`vaco_codec_core::ParserDesc`. `cargo xtask gen-registry` collects it into
+`vaco_registry::PARSERS`, and `vaco_registry::Parsers` — the one
+`ParserProvider` in the build — answers `parser_for(CodecId::Av1)` with a
+`Box<dyn Parser>` built from it.
+
+**No demuxer names this crate.** D14.1 and `cargo xtask layer-check` forbid a
+`crates/format/` crate from depending on a `crates/codec/` one; the indirection
+is what makes `-show_streams` able to report bitstream fields without that edge.
+
+Two consequences worth knowing when changing anything here:
+
+* **Everything a demuxer can see goes through `dyn Parser`.** `parse`,
+  `parameters` and `set_extradata` are the whole surface. An inherent method,
+  however useful, is invisible from a container. `tests/provider.rs` is written
+  entirely against `Box<dyn Parser>` for that reason — a version written against
+  the concrete type would pass while the seam stayed broken.
+* **`ParserDesc::make` takes `Limits`.** A parser on the probe path is handed
+  attacker-controlled bytes before anything has validated them, so there is no
+  no-argument constructor to reach for.
+
+### Three ways AV1 differs, all measured rather than assumed
+
+None of these transfers from H.264 or HEVC, and `tests/provider.rs` asserts all
+three so a change shows up as a failure:
+
+* **No coded/display split.** `coded_width == width`. H.264 also reports the
+  cropped size as its coded size but HEVC reports the *coded* one — 1918 against
+  1920 on the same 1918x1080 source.
+* **No `yuvj` pixel-format family**, at any range. H.264 has one, at 8 bits only.
+* **Neither `bits_per_raw_sample` nor `nal_length_size`.** The reference prints
+  `N/A` for the first and omits the second entirely; both are `None` here.
+
+There is also **no framing switch**. AV1's low-overhead bitstream format is the
+same OBU stream in MP4, in Matroska and in a raw file, so unlike H.264 and HEVC
+`Parser::parse` needs no adjustment after `set_extradata`.
+
+`mime_codec_string` is `av01.<profile>.<level><tier>.<depth>`, probed as
+`av01.0.00M.08` at 8 bits and `av01.0.00M.10` at 10. `vaco-probe` builds it;
+`CodecParameters` does not carry `seq_tier`, so the tier is emitted as `M` and
+that is a recorded gap rather than a derivation.
+
 ## How to change it
 
 - **A new sequence-header field**: add it to `seq::SequenceHeader`, read it

@@ -6,7 +6,7 @@
 //! Every row is gated on the cargo feature its fragment names, so a disabled
 //! component contributes no table entry, no dependency edge and no code.
 //!
-//! Kinds with no descriptor type in the trait layer yet — `encoder`, `parser`,
+//! Kinds with no descriptor type in the trait layer yet — `encoder` and
 //! `bitstream_filter` — get a metadata row and a path-resolution check, but no
 //! typed table. When `EncoderDesc` and friends land, add them to `KINDS` in
 //! `xtask/src/registry.rs` and the tables appear.
@@ -64,6 +64,78 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["ts", "m2t", "m2ts", "mts", "mpegts"],
         mime_types: &["video/mp2t"],
     },
+    #[cfg(feature = "parse-aac")]
+    crate::Component {
+        kind: crate::Kind::Parser,
+        name: "aac",
+        long_name: Some("AAC (Advanced Audio Coding)"),
+        krate: "vaco-parse-aac",
+        feature: Some("parse-aac"),
+        media: Some("audio"),
+        codec: Some("aac"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "parse-aac")]
+    crate::Component {
+        kind: crate::Kind::Parser,
+        name: "aac_latm",
+        long_name: Some("AAC LATM (Advanced Audio Coding LATM syntax)"),
+        krate: "vaco-parse-aac",
+        feature: Some("parse-aac"),
+        media: Some("audio"),
+        codec: Some("aac_latm"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "parse-av1")]
+    crate::Component {
+        kind: crate::Kind::Parser,
+        name: "av1",
+        long_name: Some("Alliance for Open Media AV1"),
+        krate: "vaco-parse-av1",
+        feature: Some("parse-av1"),
+        media: Some("video"),
+        codec: Some("av1"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "parse-h264")]
+    crate::Component {
+        kind: crate::Kind::Parser,
+        name: "h264",
+        long_name: Some("H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10"),
+        krate: "vaco-parse-h264",
+        feature: Some("parse-h264"),
+        media: Some("video"),
+        codec: Some("h264"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "parse-hevc")]
+    crate::Component {
+        kind: crate::Kind::Parser,
+        name: "hevc",
+        long_name: Some("H.265 / HEVC (High Efficiency Video Coding)"),
+        krate: "vaco-parse-hevc",
+        feature: Some("parse-hevc"),
+        media: Some("video"),
+        codec: Some("hevc"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "parse-opus")]
+    crate::Component {
+        kind: crate::Kind::Parser,
+        name: "opus",
+        long_name: Some("Opus (Opus Interactive Audio Codec)"),
+        krate: "vaco-parse-opus",
+        feature: Some("parse-opus"),
+        media: Some("audio"),
+        codec: Some("opus"),
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "protocol-http")]
     crate::Component {
         kind: crate::Kind::Protocol,
@@ -105,6 +177,22 @@ pub static MUXERS: &[&::vaco_format_core::MuxerDesc] = &[];
 
 /// Descriptors of every enabled decoder implementation.
 pub static DECODERS: &[&::vaco_codec_core::DecoderDesc] = &[];
+
+/// Descriptors of every enabled parser implementation.
+pub static PARSERS: &[&::vaco_codec_core::ParserDesc] = &[
+    #[cfg(feature = "parse-aac")]
+    &::vaco_parse_aac::PARSER,
+    #[cfg(feature = "parse-aac")]
+    &::vaco_parse_aac::PARSER_LATM,
+    #[cfg(feature = "parse-av1")]
+    &::vaco_parse_av1::PARSER,
+    #[cfg(feature = "parse-h264")]
+    &::vaco_parse_h264::PARSER,
+    #[cfg(feature = "parse-hevc")]
+    &::vaco_parse_hevc::PARSER,
+    #[cfg(feature = "parse-opus")]
+    &::vaco_parse_opus::PARSER,
+];
 
 /// Descriptors of every enabled filter implementation.
 pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[];

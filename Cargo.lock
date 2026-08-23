@@ -1491,9 +1491,19 @@ dependencies = [
 name = "vaco-cli"
 version = "0.1.0"
 dependencies = [
+ "proptest",
+ "tempfile",
  "vaco-cli-core",
+ "vaco-codec-core",
  "vaco-core",
- "vaco-filter-graph",
+ "vaco-demux-matroska",
+ "vaco-format-core",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-opts",
+ "vaco-packet",
+ "vaco-protocol-core",
+ "vaco-protocol-file",
  "vaco-registry",
  "vaco-sched",
 ]
@@ -1854,6 +1864,7 @@ dependencies = [
  "vaco-core",
  "vaco-limits",
  "vaco-packet",
+ "vaco-sampfmt",
 ]
 
 [[package]]
@@ -1920,6 +1931,7 @@ dependencies = [
  "vaco-core",
  "vaco-limits",
  "vaco-packet",
+ "vaco-sampfmt",
 ]
 
 [[package]]
@@ -2015,6 +2027,12 @@ dependencies = [
  "vaco-demux-mpegts",
  "vaco-filter-core",
  "vaco-format-core",
+ "vaco-limits",
+ "vaco-parse-aac",
+ "vaco-parse-av1",
+ "vaco-parse-h264",
+ "vaco-parse-hevc",
+ "vaco-parse-opus",
  "vaco-protocol-core",
  "vaco-protocol-http",
 ]

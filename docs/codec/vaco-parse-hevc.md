@@ -169,6 +169,51 @@ On 640x360 that admits `360:1` and rejects `361:1`, admits `1:640` and rejects
 it is the same rule at a different picture size says it is the reference's general
 aspect-ratio handling rather than anything codec-specific.
 
+## Registration: how a demuxer reaches this crate
+
+This crate ships a `vaco-component.toml` naming `vaco_parse_hevc::PARSER`, a
+`vaco_codec_core::ParserDesc`. `cargo xtask gen-registry` collects it into
+`vaco_registry::PARSERS`, and `vaco_registry::Parsers` — the one
+`ParserProvider` in the build — answers `parser_for(CodecId::Hevc)` with a
+`Box<dyn Parser>` built from it.
+
+**No demuxer names this crate.** D14.1 and `cargo xtask layer-check` forbid a
+`crates/format/` crate from depending on a `crates/codec/` one; the indirection
+is what makes `-show_streams` able to report bitstream fields without that edge.
+
+Two consequences worth knowing when changing anything here:
+
+* **Everything a demuxer can see goes through `dyn Parser`.** `parse`,
+  `parameters` and `set_extradata` are the whole surface. An inherent method,
+  however useful, is invisible from a container. `tests/provider.rs` is written
+  entirely against `Box<dyn Parser>` for that reason — a version written against
+  the concrete type would pass while the seam stayed broken.
+* **`ParserDesc::make` takes `Limits`.** A parser on the probe path is handed
+  attacker-controlled bytes before anything has validated them, so there is no
+  no-argument constructor to reach for.
+
+### Two fields this crate deliberately does **not** set
+
+Both were measured against H.264 on the same source and neither transfers:
+
+* **`bits_per_raw_sample`.** The reference prints `8` for an 8-bit H.264 stream
+  and `N/A` for an 8-bit HEVC one. `codec_parameters` leaves it `None`.
+* **`nal_length_size`.** `is_avc`/`nal_length_size` are the *h264* decoder's
+  private options; the reference prints neither for HEVC, even from an `hvcC`
+  that declares a four-byte prefix. `None` is what keeps them out of the output.
+
+`HevcParser` still remembers the framing internally — `Parser::parse` switches
+from the Annex B scanner to `push_access_unit` once `set_extradata` has read an
+`hvcC`, because a length-prefixed sample contains no start codes.
+
+### One field that is a container fact and belongs to `vaco-demux-mp4`
+
+`field_order`. `params::field_order` returns `Unknown` from an SPS, and that is
+right: probed on a raw Annex B stream, `ffprobe -f hevc` reports
+`field_order=unknown`. The **same content in MP4** reports `progressive` — and
+the difference is the MOV `fiel` atom, which the file carries and
+`vaco-demux-mp4` does not read. Reported there; nothing to change here.
+
 ## How to change it
 
 - **A new SEI payload**: add a constant to `sei::payload_type` and an arm to

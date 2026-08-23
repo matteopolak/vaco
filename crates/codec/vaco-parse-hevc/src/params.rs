@@ -329,6 +329,17 @@ pub fn codec_parameters(sps: &Sps) -> CodecParameters {
         color: sps.color_info(),
         field_order: field_order(sps),
         has_b_frames: sps.max_num_reorder_pics().min(255) as u8,
+        // D17: **not** set, unlike H.264's. Measured on the same 1918x1080
+        // source encoded twice: `bits_per_raw_sample="8"` for H.264 and
+        // `"N/A"` for HEVC, and `"10"` for 10-bit H.264. AV1 and VP9 report
+        // `N/A` as well, so H.264 is the exception rather than the rule and
+        // nothing about the bit depth transfers between them.
+        bits_per_raw_sample: None,
+        // D17: `is_avc`/`nal_length_size` are H.264 decoder private options and
+        // the reference prints neither for an HEVC stream, in *any* container —
+        // probed on an MP4 whose `hvcC` declares a four-byte length prefix.
+        // Leaving this `None` is what keeps `vaco-probe` from printing them.
+        nal_length_size: None,
     };
 
     let mut params = CodecParameters::video().with_codec(CodecId::Hevc);

@@ -110,10 +110,28 @@ pub fn ratio(r: Rational) -> String {
     format!("{}:{}", r.num, r.den)
 }
 
-/// `codec_tag`: exactly eight lowercase hex digits behind `0x`.
+/// `codec_tag`: lowercase hex behind `0x`, **minimum width four**.
+///
+/// Not a fixed eight, which is what this printed until it was measured. A
+/// four-character tag needs eight digits and gets them, but a small integer
+/// tag does not: MPEG-TS stream type 27 prints `0x001b`, and a zero tag prints
+/// `0x0000`.
+///
+/// ```text
+/// avc1 (MP4)                -> 0x31637661
+/// stream type 27 (MPEG-TS)  -> 0x001b
+/// stream type 15 (MPEG-TS)  -> 0x000f
+/// none                      -> 0x0000
+/// ```
+///
+/// Observed values are all either four or eight digits, so these samples alone
+/// cannot separate "minimum four" from "four or eight" — nothing in the corpus
+/// needs five, six or seven. Minimum-width four is the reading taken because it
+/// is what a plain `%04x` does, and a format string is a likelier thing to find
+/// in a printer than a two-case rule.
 #[must_use]
 pub fn codec_tag(v: u32) -> String {
-    format!("0x{v:08x}")
+    format!("0x{v:04x}")
 }
 
 /// `id`: minimal lowercase hex behind `0x`.
@@ -293,7 +311,12 @@ mod tests {
     #[test]
     fn observed_hex_fields() {
         assert_eq!(codec_tag(0x6134_706d), "0x6134706d");
-        assert_eq!(codec_tag(0), "0x00000000");
+        // Four, not eight. Measured: ffprobe prints `0x0000` for an absent tag
+        // and `0x001b` for MPEG-TS stream type 27. The old assertion pinned
+        // `0x00000000`, so the test was holding the bug in place.
+        assert_eq!(codec_tag(0), "0x0000");
+        assert_eq!(codec_tag(27), "0x001b");
+        assert_eq!(codec_tag(15), "0x000f");
         assert_eq!(id(1), "0x1");
     }
 

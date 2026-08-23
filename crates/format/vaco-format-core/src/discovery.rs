@@ -38,7 +38,7 @@
 
 use std::collections::VecDeque;
 
-use vaco_codec_core::{CodecId, CodecProperties, ParserDriver};
+use vaco_codec_core::{CodecId, CodecProperties, Parser, ParserDriver};
 use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
 use vaco_limits::{Limits, ProgressGuard};
 use vaco_packet::Packet;
@@ -119,16 +119,38 @@ struct StreamState {
     delta_count: u64,
     last_dts: Timestamp,
     parser_packets: u32,
+    /// Whether the provider has already been asked for a parser for this
+    /// stream. Asking once and remembering the answer is what makes "no parser
+    /// for this codec" cost one lookup rather than one per packet.
+    parser_asked: bool,
     complete: bool,
 }
 
+/// One stream's parser, once the provider has been asked for it.
+///
+/// A `Vec` beside [`StreamState`] rather than a field inside it, because
+/// `StreamState` is `Clone` (it is built with `vec![…; n]`) and a boxed parser
+/// is not. Keeping them apart is also what lets `StreamState` stay `Debug`.
+type ParserSlot = Option<ParserDriver<Box<dyn Parser>>>;
+
 /// A [`Demuxer`] that has read ahead, learned what it could, and will replay
 /// every packet it consumed.
-#[derive(Debug)]
 pub struct Discovery<D> {
     inner: D,
     streams: Vec<Stream>,
     state: Vec<StreamState>,
+    /// One parser per stream, built lazily on the first packet that needs one
+    /// and **kept for the whole pass**.
+    ///
+    /// Kept, not rebuilt per packet, for two reasons that are not about speed.
+    /// An H.264 elementary stream's NAL unit ends where the *next* start code
+    /// begins, so a parser that is thrown away at the end of each payload never
+    /// sees the end of its last unit; and an MPEG-TS stream's parameter sets
+    /// arrive in one packet while the fields they describe are wanted for all
+    /// of them. Holding the parser is also the safer shape under D6's threat
+    /// model: one [`vaco_limits::Budget`] accumulates across the whole pass
+    /// instead of each packet getting a fresh full allowance.
+    parsers: Vec<ParserSlot>,
     queue: VecDeque<Packet>,
     fixer: TimestampFixer,
     opts: FormatOptions,
@@ -136,6 +158,25 @@ pub struct Discovery<D> {
     limits: Limits,
     report: DiscoveryReport,
     ran: bool,
+}
+
+/// Hand-written because a `Box<dyn Parser>` is not `Debug`, and
+/// [`Discovery::parsers`] holds one per stream. Everything a reader of a debug
+/// dump actually wants — the report, the stop reason, the queue depth — is
+/// here; the parsers are summarised by how many were built.
+impl<D: core::fmt::Debug> core::fmt::Debug for Discovery<D> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Discovery")
+            .field("inner", &self.inner)
+            .field("streams", &self.streams.len())
+            .field("parsers_built", &self.parsers.iter().flatten().count())
+            .field("queued", &self.queue.len())
+            .field("opts", &self.opts)
+            .field("flags", &self.flags)
+            .field("report", &self.report)
+            .field("ran", &self.ran)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<D: Demuxer> Discovery<D> {
@@ -158,6 +199,7 @@ impl<D: Demuxer> Discovery<D> {
         Self {
             inner,
             state: vec![StreamState::default(); n],
+            parsers: (0..n).map(|_| None).collect(),
             streams,
             queue: VecDeque::new(),
             fixer,
@@ -291,7 +333,11 @@ impl<D: Demuxer> Discovery<D> {
         let Ok(i) = usize::try_from(pkt.stream_index) else {
             return;
         };
-        let (Some(stream), Some(st)) = (self.streams.get_mut(i), self.state.get_mut(i)) else {
+        let (Some(stream), Some(st), Some(slot)) = (
+            self.streams.get_mut(i),
+            self.state.get_mut(i),
+            self.parsers.get_mut(i),
+        ) else {
             return;
         };
         let time_base = stream.time_base;
@@ -342,7 +388,13 @@ impl<D: Demuxer> Discovery<D> {
             && self.opts.codec_allowed(id.name())
         {
             st.parser_packets = st.parser_packets.saturating_add(1);
-            refine(stream, id, pkt.payload(), parsers, limits);
+            if !st.parser_asked {
+                st.parser_asked = true;
+                *slot = build_parser(stream, id, parsers, limits);
+            }
+            if let Some(driver) = slot.as_mut() {
+                refine(stream, driver, pkt.payload());
+            }
         }
 
         // A stream is complete once it has parameters, a first timestamp and
@@ -555,7 +607,44 @@ fn has_essential_params(stream: &Stream) -> bool {
     }
 }
 
-/// Ask the injected provider for a parser and let it fill in the blanks.
+/// Ask the injected provider for a parser, and seed it from the container's
+/// own configuration record.
+///
+/// **The seeding is the half that makes any of this work in MP4 and Matroska.**
+/// In an MPEG-TS or raw elementary stream every parameter set is in-band, so
+/// feeding payloads is enough. In MP4 the H.264 sequence parameter set is in
+/// `avcC`, the AAC configuration is in `esds`, and the Opus identification
+/// header is in `dOps` — none of them appears in any packet, so a parser given
+/// only payloads reports nothing however many it is given. Measured on
+/// `av.mp4`: eight of the eight bitstream-derived stream fields arrive from
+/// the record and none from a packet.
+///
+/// A record that fails to parse is **not** fatal. Discovery is offering the
+/// parser what the container happened to carry; a malformed record means "this
+/// told me nothing", and the container's own fields still stand.
+fn build_parser(
+    stream: &mut Stream,
+    id: CodecId,
+    parsers: &dyn ParserProvider,
+    limits: Limits,
+) -> ParserSlot {
+    let mut parser = parsers.parser_for(id)?;
+    if let Some(extra) = stream.params.extradata.clone()
+        && !extra.is_empty()
+    {
+        let _ = parser.set_extradata(&extra);
+    }
+    let driver = ParserDriver::new(parser, limits);
+    // Fold in whatever the record alone established, before any packet has
+    // arrived. A stream whose description is wholly out of band — Opus is
+    // exactly that — is complete at this point.
+    if let Some(found) = driver.parameters() {
+        stream.params.fill_from(found);
+    }
+    Some(driver)
+}
+
+/// Feed one payload to a stream's parser and fold back what it learned.
 ///
 /// The direction is load-bearing: the container's own metadata wins and the
 /// parser only supplies what the container left blank
@@ -564,25 +653,16 @@ fn has_essential_params(stream: &Stream) -> bool {
 /// wrongly.
 ///
 /// Driven through [`ParserDriver`], which owns reassembly across payload
-/// boundaries, the empty-slice end-of-stream convention and the
-/// consumed-bytes check. Doing that by hand here — as this did before
-/// `vaco-codec-core` grew `impl<P: Parser + ?Sized> Parser for Box<P>` — meant
-/// a second implementation of the same convention, which is precisely how the
-/// two drift apart.
-fn refine(
-    stream: &mut Stream,
-    id: CodecId,
-    payload: &[u8],
-    parsers: &dyn ParserProvider,
-    limits: Limits,
-) {
+/// boundaries, the empty-slice end-of-stream convention, the consumed-bytes
+/// check and the progress guard that turns a parser which never advances into
+/// a localised error rather than a hang. Doing that by hand here — as this did
+/// before `vaco-codec-core` grew `impl<P: Parser + ?Sized> Parser for Box<P>`
+/// — meant a second implementation of the same convention, which is precisely
+/// how the two drift apart.
+fn refine(stream: &mut Stream, driver: &mut ParserDriver<Box<dyn Parser>>, payload: &[u8]) {
     if payload.is_empty() {
         return;
     }
-    let Some(parser) = parsers.parser_for(id) else {
-        return;
-    };
-    let mut driver = ParserDriver::new(parser, limits);
     // A refused push means the payload is larger than the reassembly cap, which
     // is a legitimate answer for a hostile stream and not a reason to give up
     // on the parameters the parser may already have.
@@ -884,5 +964,148 @@ mod tests {
             d.streams().first().unwrap().params.effective_media_type(),
             Some(MediaType::Audio)
         );
+    }
+
+    // ----------------------------------------------------- the parser seam
+
+    /// A provider that records what it was asked for and answers with a parser
+    /// whose whole description comes out of the container's record.
+    ///
+    /// Deliberately not a real codec: the point under test is the *seam* — is a
+    /// parser built, is it built once, does it get the extradata, does what it
+    /// learns reach the stream — and a real codec would make a failure here
+    /// look like a bitstream bug.
+    #[derive(Debug, Default)]
+    struct CountingProvider {
+        built: std::sync::atomic::AtomicUsize,
+    }
+
+    #[derive(Debug, Default)]
+    struct RecordParser {
+        params: Option<vaco_codec_core::CodecParameters>,
+        payloads: u32,
+    }
+
+    impl vaco_codec_core::Parser for RecordParser {
+        fn parse(&mut self, input: &[u8]) -> Result<(Option<Packet>, usize)> {
+            if input.is_empty() {
+                return Ok((None, 0));
+            }
+            self.payloads = self.payloads.saturating_add(1);
+            Ok((None, input.len()))
+        }
+
+        fn parameters(&self) -> Option<&vaco_codec_core::CodecParameters> {
+            self.params.as_ref()
+        }
+
+        fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
+            // One byte of "record" stands in for a whole `avcC`: the width the
+            // container did not state.
+            let width = u32::from(*extradata.first().unwrap_or(&0));
+            let mut p = vaco_codec_core::CodecParameters::video();
+            if let Some(v) = p.video.as_mut() {
+                v.width = width;
+                v.height = width;
+                v.has_b_frames = 2;
+            }
+            self.params = Some(p);
+            Ok(())
+        }
+    }
+
+    impl ParserProvider for CountingProvider {
+        fn parser_for(&self, _codec: CodecId) -> Option<Box<dyn vaco_codec_core::Parser>> {
+            self.built
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Some(Box::new(RecordParser::default()))
+        }
+    }
+
+    /// The half that was missing, and the reason `-show_streams` reported no
+    /// profile, pixel format or channel count on any container: a parser that
+    /// is never given the container's configuration record describes nothing,
+    /// because in MP4 the sequence parameter set is in `avcC` and in no packet.
+    #[test]
+    fn the_container_record_reaches_the_parser() {
+        let inner = MockDemuxer::new(1, MediaType::Video)
+            .with_packets(4)
+            .with_extradata(&[64]);
+        let mut d = Discovery::new(inner, FormatFlags::empty(), &opts());
+        let p = CountingProvider::default();
+        d.run(&p).unwrap();
+        let v = d.streams()[0].params.video.as_ref().unwrap();
+        assert_eq!(v.width, 64, "the record never reached the parser");
+        assert_eq!(v.has_b_frames, 2);
+    }
+
+    /// One parser per stream for the whole pass, not one per packet.
+    ///
+    /// Rebuilding per packet is not merely wasteful: an H.264 NAL unit ends
+    /// where the *next* start code begins, so a parser thrown away at the end
+    /// of each payload never sees the end of its last unit, and an MPEG-TS
+    /// stream's parameter sets arrive in one packet while the fields they
+    /// describe are wanted for all of them.
+    #[test]
+    fn a_stream_gets_exactly_one_parser() {
+        // `MockDemuxer` puts every packet on stream 0, so 40 packets is 40
+        // chances to build a second parser for the same stream.
+        let inner = MockDemuxer::new(1, MediaType::Video).with_packets(40);
+        let mut d = Discovery::new(inner, FormatFlags::empty(), &opts());
+        let p = CountingProvider::default();
+        d.run(&p).unwrap();
+        assert_eq!(
+            p.built.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "one parser per stream, however many packets it sees"
+        );
+    }
+
+    /// `fflags=noparse` must still mean no parser is even asked for.
+    #[test]
+    fn noparse_asks_for_no_parser_at_all() {
+        let mut o = opts();
+        o.fflags = o.fflags.union(crate::options::FFlags::NOPARSE);
+        let inner = MockDemuxer::new(1, MediaType::Video)
+            .with_packets(4)
+            .with_extradata(&[64]);
+        let mut d = Discovery::new(inner, FormatFlags::empty(), &o);
+        let p = CountingProvider::default();
+        d.run(&p).unwrap();
+        assert_eq!(p.built.load(std::sync::atomic::Ordering::Relaxed), 0);
+        assert_eq!(d.streams()[0].params.video.as_ref().unwrap().width, 0);
+    }
+
+    /// A parser that refuses its record, or returns nothing at all, must not
+    /// stop the pass: discovery is *offering* the parser what the container
+    /// carried, and reporting six streams of seven beats reporting none.
+    #[test]
+    fn a_parser_that_learns_nothing_is_not_a_failure() {
+        #[derive(Debug)]
+        struct Refusing;
+        impl vaco_codec_core::Parser for Refusing {
+            fn parse(&mut self, _input: &[u8]) -> Result<(Option<Packet>, usize)> {
+                Err(Error::InvalidData("no"))
+            }
+            fn parameters(&self) -> Option<&vaco_codec_core::CodecParameters> {
+                None
+            }
+            fn set_extradata(&mut self, _extradata: &[u8]) -> Result<()> {
+                Err(Error::InvalidData("no"))
+            }
+        }
+        struct P;
+        impl ParserProvider for P {
+            fn parser_for(&self, _c: CodecId) -> Option<Box<dyn vaco_codec_core::Parser>> {
+                Some(Box::new(Refusing))
+            }
+        }
+        let inner = MockDemuxer::new(1, MediaType::Video)
+            .with_packets(20)
+            .with_extradata(&[64]);
+        let mut d = Discovery::new(inner, FormatFlags::empty(), &opts());
+        let r = d.run(&P).unwrap().clone();
+        assert_eq!(r.stop_reason, StopReason::Eof);
+        assert_eq!(d.streams().len(), 1);
     }
 }

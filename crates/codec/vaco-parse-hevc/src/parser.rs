@@ -144,6 +144,10 @@ pub struct HevcParser {
     max_access_unit: usize,
     params: Option<CodecParameters>,
     last_picture: PictureInfo,
+    /// How samples handed to [`Parser::parse`] are framed. Annex B until
+    /// [`HevcParser::set_extradata`] reads an `hvcC` and says otherwise; see
+    /// `vaco-parse-h264` for why the same parser has to serve both.
+    framing: Framing,
 }
 
 impl HevcParser {
@@ -169,6 +173,7 @@ impl HevcParser {
             max_access_unit: DEFAULT_MAX_ACCESS_UNIT,
             params: None,
             last_picture: PictureInfo::default(),
+            framing: Framing::AnnexB,
         }
     }
 
@@ -206,8 +211,15 @@ impl HevcParser {
             self.rbsp.fill(nal, &mut self.budget)?;
             let _ = self.sets.add_pps(self.rbsp.as_slice(), &mut self.budget);
         }
+        self.framing = Framing::LengthPrefixed(record.length_size);
         self.refresh_parameters();
-        Ok(Framing::LengthPrefixed(record.length_size))
+        Ok(self.framing)
+    }
+
+    /// The framing [`Parser::parse`] will apply to the next sample.
+    #[must_use]
+    pub const fn framing(&self) -> Framing {
+        self.framing
     }
 
     /// The parameter sets seen so far.
@@ -734,6 +746,19 @@ fn read_slice_header(
 
 impl Parser for HevcParser {
     fn parse(&mut self, input: &[u8]) -> Result<(Option<Packet>, usize)> {
+        // A length-prefixed sample is already one access unit and contains no
+        // start codes, so the byte-stream scanner would find nothing in it. See
+        // `vaco-parse-h264`'s equivalent.
+        if let Framing::LengthPrefixed(size) = self.framing
+            && !input.is_empty()
+        {
+            self.push_access_unit(input, Framing::LengthPrefixed(size))?;
+            let mut packet = Packet::from_slice(&mut self.budget, input)?;
+            if self.last_picture.is_irap {
+                packet.flags = PacketFlags::KEY;
+            }
+            return Ok((Some(packet), input.len()));
+        }
         if input.is_empty() {
             // End of stream. Called repeatedly until it yields nothing, which is
             // how the driver drains a buffer holding more than one unit.
@@ -756,6 +781,16 @@ impl Parser for HevcParser {
 
     fn parameters(&self) -> Option<&CodecParameters> {
         self.params.as_ref()
+    }
+
+    /// Read an `HEVCDecoderConfigurationRecord`. In MP4 and Matroska the
+    /// sequence parameter set is in `hvcC` and in no sample, so without this a
+    /// parser fed only payloads reports nothing.
+    fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
+        if extradata.is_empty() {
+            return Ok(());
+        }
+        Self::set_extradata(self, extradata).map(|_| ())
     }
 }
 

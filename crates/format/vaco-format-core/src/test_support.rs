@@ -149,6 +149,19 @@ impl MockDemuxer {
         self
     }
 
+    /// Give every stream out-of-band configuration, as MP4's `avcC` and
+    /// Matroska's `CodecPrivate` do.
+    ///
+    /// The container's own record is the *only* source of an H.264 sequence
+    /// parameter set in MP4, so a discovery test that never sets one cannot
+    /// tell a parser that is being fed from one that is not.
+    pub(crate) fn with_extradata(mut self, extra: &[u8]) -> Self {
+        for s in &mut self.streams {
+            s.params.extradata = Some(extra.to_vec());
+        }
+        self
+    }
+
     pub(crate) const fn with_first_pts(mut self, pts: i64) -> Self {
         self.first_pts = pts;
         self

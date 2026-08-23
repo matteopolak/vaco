@@ -300,7 +300,11 @@ impl IdentificationHeader {
         let mut params = CodecParameters::audio().with_codec(CodecId::Opus);
         params.audio = Some(AudioParameters {
             sample_rate: OUTPUT_SAMPLE_RATE,
-            format: None,
+            // D17: the decoder's **output** format. Opus decodes to float and
+            // the reference prints `fltp` for every Opus stream measured
+            // (Matroska, WebM). See `vaco-parse-aac`'s note for why a
+            // parse-only crate states one at all.
+            format: Some(::vaco_sampfmt::SampleFmt::F32P),
             layout: self
                 .channel_layout()
                 .or_else(|| Some(ChannelLayout::unspecified(u32::from(self.channel_count)))),

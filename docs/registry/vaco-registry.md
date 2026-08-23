@@ -63,12 +63,17 @@ because the edge has to satisfy the strictest component in it.
   with the same feature set list components identically (D6 compares the listing
   output byte for byte).
 * One typed table per kind that has a descriptor type: `DEMUXERS`, `MUXERS`,
-  `DECODERS`, `FILTERS`, `PROTOCOLS`.
-* For `encoder`, `parser` and `bitstream_filter` — kinds with no descriptor type
-  yet — a `const _: () = { let _ = &<ctor>; };` block. Taking a reference needs
-  no trait bound, so the path is checked at compile time even though the type is
-  unknown. A typo in a fragment is a compile error rather than a component that
-  silently is not there.
+  `DECODERS`, `PARSERS`, `FILTERS`, `PROTOCOLS`.
+* For `encoder` and `bitstream_filter` — kinds with no descriptor type yet — a
+  `const _: () = { let _ = &<ctor>; };` block. Taking a reference needs no trait
+  bound, so the path is checked at compile time even though the type is unknown.
+  A typo in a fragment is a compile error rather than a component that silently
+  is not there.
+
+`parser` was in that second group until `vaco-codec-core` grew
+[`ParserDesc`](../signal/vaco-codec-core.md). Promoting it was one row in
+`KINDS` in `xtask/src/registry.rs` plus a `desc_ty`/`table` arm — which is what
+the "to add a kind" note below describes, executed.
 
 Every row carries the `#[cfg(feature = …)]` its fragment named.
 
@@ -143,12 +148,47 @@ Cargo features only, and all of them are generated.
   because an accessor that only works when something is registered is a latent
   panic in exactly this build.
 
+## The parser provider
+
+`Parsers` is the crate's one piece of *behaviour* rather than lookup, and it is
+the seam D14.1 exists for.
+
+```rust
+let parser: Option<Box<dyn Parser>> = vaco_registry::Parsers.parser_for(CodecId::H264);
+```
+
+`vaco-demux-mp4` needs an H.264 sequence parameter set to report `profile`,
+`pix_fmt` and `has_b_frames`, and `cargo xtask layer-check` forbids it from
+depending on `vaco-parse-h264`. So it asks by `CodecId` and this answers from
+`PARSERS`. The demuxer names no codec crate; a `--no-default-features` build
+gets `None` and reports what the container itself states.
+
+Three properties are load-bearing:
+
+* **The budget is chosen here.** `ParserProvider::parser_for` takes no `Limits`
+  — the trait is frozen — and a parser on the probe path is handed
+  attacker-controlled bytes before anything has validated them. `Parsers` builds
+  with `Limits::strict()`, the same default `vaco_format_core::Discovery`
+  applies to the driver wrapped around it, so the two agree without either
+  knowing about the other.
+* **`Parsers` stays a unit struct.** Making it carry a `Limits` field would be a
+  source-breaking change for every existing `&vaco_registry::Parsers`, and both
+  binaries have one. When something needs a different budget, add a second
+  provider that carries one rather than re-shaping this.
+* **`ParserDesc::make` is a `fn` field**, so a descriptor is inspectable without
+  constructing anything — the same rule every other `ctor` follows.
+
+`fuzz/fuzz_targets/registry_discovery.rs` is the target for the composition:
+arbitrary bytes through a real demuxer into a real parser, which is the one path
+no per-crate target covers (`dem_mp4` and friends all run with `NoParsers`, by
+design).
+
 ## Dependencies
 
 The five `-core` crates that define the descriptor types (`vaco-core`,
 `vaco-codec-core`, `vaco-format-core`, `vaco-filter-core`,
-`vaco-protocol-core`), plus one optional path dependency per component crate,
-generated.
+`vaco-protocol-core`), `vaco-limits` for the budget `Parsers` builds with, plus
+one optional path dependency per component crate, generated.
 
 ## A note for anyone writing another generator
 
@@ -167,20 +207,22 @@ prove the output is a fixed point.
 
 Each is a missing piece elsewhere, reported rather than worked around.
 
-* **No `EncoderDesc`, `ParserDesc` or `BitstreamFilterDesc`.**
-  `vaco-codec-core` defines `DecoderDesc` and nothing else, so three of the
-  eight kinds get a metadata row and a compile-time path check but no typed
-  table. `Kind::has_table` reports which.
-* **`ParserProvider` returns `None` for every codec.** `vaco_registry::Parsers`
-  exists and implements the trait, but there is no `ParserDesc` for the
-  generator to build a table from, so a demuxer that asks for a bitstream parser
-  gets nothing and falls back to what the container states. This is the one gap
-  with a visible consequence today: it is why `vaco-probe` cannot fill
-  `profile`, `level` or `pix_fmt` for a stream whose container does not state
-  them.
-* **No priority on `DemuxerDesc` or `DecoderDesc`.** `decoder_for` returns the
-  first enabled implementation in registry order, which is deterministic but
-  arbitrary once two implementations of one codec exist. `vaco-format-core`
+* **No `EncoderDesc` or `BitstreamFilterDesc`.** `vaco-codec-core` defines
+  `DecoderDesc` and `ParserDesc`, so two of the eight kinds get a metadata row
+  and a compile-time path check but no typed table. `Kind::has_table` reports
+  which.
+* ~~**`ParserProvider` returns `None` for every codec.**~~ Closed. The gap was
+  exactly one descriptor type, as the comment on `Parsers` predicted — but the
+  prediction was half the work. A `ParserDesc` alone gets a parser built and
+  still describes nothing in MP4 or Matroska, because in those containers the
+  H.264 sequence parameter set is in `avcC` and in **no packet at all**. The
+  missing half was `Parser::set_extradata`, and it is the half that carries the
+  fields: measured on `av.mp4`, 8 of 8 bitstream-derived stream values arrive
+  through the record and 0 through the packet path.
+* **No priority on `DemuxerDesc`, `DecoderDesc` or `ParserDesc`.** `decoder_for` returns the
+  first enabled implementation in registry order, and `parser_desc_for` does the
+  same; both are deterministic but arbitrary once two implementations of one
+  codec exist. `vaco-format-core`
   reports the same gap for probe tie-breaking.
 * **`MuxerDesc` has no `mime_types`.** The fragment carries them for every kind,
   so the metadata row is complete; the descriptor is not.

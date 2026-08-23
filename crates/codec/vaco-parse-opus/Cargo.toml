@@ -13,6 +13,9 @@ vaco-core = { path = "../../core/vaco-core" }
 vaco-bitstream = { path = "../../core/vaco-bitstream" }
 vaco-codec-core = { path = "../../signal/vaco-codec-core" }
 vaco-chlayout = { path = "../../model/vaco-chlayout" }
+# `sample_fmt` is the decoder's output format, which the reference prints for
+# every compressed audio stream. See the note beside `to_codec_parameters`.
+vaco-sampfmt = { path = "../../model/vaco-sampfmt" }
 vaco-limits = { path = "../../core/vaco-limits" }
 vaco-packet = { path = "../../model/vaco-packet" }
 arrayvec.workspace = true

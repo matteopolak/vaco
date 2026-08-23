@@ -237,3 +237,66 @@ fn threading_declarations_must_match_the_capabilities() {
     assert_eq!(frame.clamped_to(64), frame);
     assert_eq!(Threading::None.max_frames(), 1);
 }
+
+// ---------------------------------------- what a parser is allowed to supply
+
+/// The colour description merges **per property**, not whole-struct.
+///
+/// MP4's `colr` box states primaries, transfer and matrix but has no chroma
+/// siting at all, while the H.264 VUI beside it does. Replacing the block only
+/// when it is entirely default would leave `chroma_location=unspecified` on
+/// every such file — measured, 9 of the corpus's 180 divergences were exactly
+/// that. The container still wins wherever it stated something.
+#[test]
+fn colour_merges_property_by_property_and_the_container_still_wins() {
+    use vaco_color::{ChromaLocation, ColorInfo, ColorPrimaries, MatrixCoefficients};
+
+    let mut container = VideoParameters {
+        color: ColorInfo {
+            primaries: ColorPrimaries::Bt709,
+            ..ColorInfo::default()
+        },
+        ..VideoParameters::default()
+    };
+    let bitstream = VideoParameters {
+        color: ColorInfo {
+            // Disagrees with the container: the container must win.
+            primaries: ColorPrimaries::Bt2020,
+            // The container left these unset: the parser must fill them.
+            matrix: MatrixCoefficients::Bt709,
+            chroma_location: ChromaLocation::Left,
+            ..ColorInfo::default()
+        },
+        ..VideoParameters::default()
+    };
+    container.fill_from(&bitstream);
+    assert_eq!(container.color.primaries, ColorPrimaries::Bt709);
+    assert_eq!(container.color.matrix, MatrixCoefficients::Bt709);
+    assert_eq!(container.color.chroma_location, ChromaLocation::Left);
+}
+
+/// `bits_per_raw_sample` and `nal_length_size` fill like every other field:
+/// only where the container left a hole.
+#[test]
+fn the_two_new_video_fields_fill_only_where_unset() {
+    let mut container = VideoParameters {
+        bits_per_raw_sample: Some(10),
+        ..VideoParameters::default()
+    };
+    container.fill_from(&VideoParameters {
+        bits_per_raw_sample: Some(8),
+        nal_length_size: Some(4),
+        ..VideoParameters::default()
+    });
+    assert_eq!(container.bits_per_raw_sample, Some(10));
+    assert_eq!(container.nal_length_size, Some(4));
+
+    // `Some(0)` is a *value*, not an absence: it is what an Annex B stream
+    // reports, and `is_avc=false` depends on being able to tell it from `None`.
+    let mut annexb = VideoParameters::default();
+    annexb.fill_from(&VideoParameters {
+        nal_length_size: Some(0),
+        ..VideoParameters::default()
+    });
+    assert_eq!(annexb.nal_length_size, Some(0));
+}

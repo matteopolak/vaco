@@ -246,23 +246,24 @@ diffed against captured `ffprobe` bytes:
 
 * `format`: **byte-identical**, whole document including trailing newlines, in
   `default`, `ini` and `xml`.
-* `stream`: **113 of 116 lines byte-identical** across both streams of `av.mp4`.
+* `stream`: **all 116 lines byte-identical** across both streams of `av.mp4`.
 
-The three that differ, each a missing *input* rather than a formatting choice:
+It was 113 of 116 until the parser wiring landed. The three that used to differ,
+each a missing *input* rather than a formatting choice, and what closed each:
 
-| Line | Why |
-|---|---|
-| `is_avc=true` | h264 decoder private option (`-show_private_data`, on by default). No decoder, and `CodecParameters` has nowhere to put it. |
-| `nal_length_size=4` | same. |
-| `bits_per_raw_sample=8` on the video stream | the field lives on `AudioParameters` only, so a video stream cannot report it. |
+| Line | Why it was missing | Closed by |
+|---|---|---|
+| `is_avc=true` | h264 decoder private option (`-show_private_data`, on by default). No decoder, and `CodecParameters` had nowhere to put it. | `VideoParameters::nal_length_size`, filled by `vaco-parse-h264` from `avcC` |
+| `nal_length_size=4` | same | same |
+| `bits_per_raw_sample=8` on the video stream | the field lived on `AudioParameters` only, so a video stream could not report it | `VideoParameters::bits_per_raw_sample` |
 
 The list is asserted **exactly**, so a divergence that disappears fails just as
-loudly as a new one — and it did. `codec_long_name` was a fourth entry
-(`vaco-codec-core` said `H.264 / AVC / MPEG-4 AVC` where the reference appends
-` / MPEG-4 part 10`); it was reported rather than fixed here, closed upstream
-mid-wave, and the assertion failed the moment it was. That is the behaviour to
-keep: a closing divergence is a change to observable output and gets reviewed
-like any other.
+loudly as a new one — and it has, three times now. `codec_long_name` was a fourth
+entry (`vaco-codec-core` said `H.264 / AVC / MPEG-4 AVC` where the reference
+appends ` / MPEG-4 part 10`); it was reported rather than fixed here, closed
+upstream mid-wave, and the assertion failed the moment it was. The three above
+did the same. That is the behaviour to keep: a closing divergence is a change to
+observable output and gets reviewed like any other.
 
 ### End to end, live (`vaco-probe` against `ffprobe`, `av.mp4`)
 
@@ -350,22 +351,115 @@ The fourteen field values the widening closed on the thirteen-file corpus:
 | `side_data_type`, `displaymatrix`, `rotation` | 3 | the `[SIDE_DATA]` block for a rotated `tkhd` matrix, which had no representation at all. |
 | `duration_ts`, `duration` | 2 | MPEG-TS video, where the demuxer's own frame-duration estimate was measuring a GOP rather than a frame. |
 
+### The 2026-08-22 parser wiring — what it closed
+
+`vaco_registry::Parsers` used to return `None` for every codec, so no
+`vaco-parse-*` crate was reachable from a demuxer at all. It is a real
+`ParserProvider` now. Measured on a sixteen-file corpus of the same shape as the
+one above (MP4 ×5 including a 1080p and a variable-rate file, MOV, M4A, MPEG-TS,
+Matroska ×4, WebM, plus an HEVC and an AV1 MP4), `ffprobe 8.1` under `LC_ALL=C`:
+
+| | before | after |
+|---|---|---|
+| stream field values | 1193/1376 | **1334/1375** |
+| `format` section matrix, 16 files × 17 option sets | 240/272 | **240/272** |
+| files identical on every format option set | 14/16 | **14/16** |
+
+**141 of the 183 diverging values closed.** The `format` section is untouched by
+design: nothing it prints comes from a bitstream. The denominator drops by one
+because we stopped emitting a `mime_codec_string` for HEVC, which the reference
+does not print at all.
+
+What closed, and where the work actually was:
+
+| field | count | source |
+|---|---:|---|
+| `profile` | 20 | the bitstream, through the container's configuration record |
+| `pix_fmt` | 12 | ditto |
+| `level` | 12 | ditto |
+| `has_b_frames` | 11 | ditto — and it is an integer *reorder depth*, `max_num_reorder_frames` for H.264 and `max_num_reorder_pics` for HEVC, not a boolean |
+| `sample_fmt` | 8 | the decoder's output format, which the parser now states |
+| `bits_per_raw_sample` | 17 | **video** `VideoParameters`, plus float-audio suppression |
+| `is_avc` / `nal_length_size` | 20 | the container's `avcC`, read by the parser |
+| `chroma_location` | 9 | the VUI, once `VideoParameters::fill_from` merged colour per property |
+| the nine `ts.ts` geometry and rate fields | 9 | in-band SPS, which MPEG-TS states nowhere |
+| `channels` / `channel_layout` | 10 | `AudioSpecificConfig` and `OpusHead` |
+| `mime_codec_string` | 13 | derived from profile and level, plus AV1's four-part form |
+| `codec_long_name` | 3 | `vaco-codec-core`'s table: Opus and HEVC both had short names |
+
+#### Three things measured per codec that did not transfer
+
+Assuming any of these from another codec would have been wrong, and the brief
+was right to warn about it:
+
+* **`coded_width` is the *display* size for H.264 and the *coded* size for
+  HEVC.** The same 1918x1080 source: H.264 reports `coded_width=1918`, HEVC
+  reports `1920`. AV1 has no coded/display split at all.
+* **`bits_per_raw_sample` is H.264-only.** `8` for 8-bit H.264 and `10` for
+  10-bit, and `N/A` for HEVC, AV1 and VP9 at the same depth.
+* **The private-data block between `field_order` and `id` changes shape per
+  codec.** h264 prints `is_avc` and `nal_length_size`; hevc prints
+  `view_ids_available=""` and `view_pos_available=""`; av1 prints nothing.
+
+#### Which of the "147 need a parser" were really container fields
+
+Four of them, and they were worth separating:
+
+* **`is_avc` and `nal_length_size` (20 values) are container facts**, not
+  bitstream ones — they describe how the *container* frames its NAL units. The
+  reference prints them for every H.264 stream, `true`/`4` in MP4 and
+  `false`/`0` in MPEG-TS. Only a parser can read them, because they live inside
+  `avcC`, but they are not derived from the coded video at all. They reach
+  `vaco-probe` through `VideoParameters::nal_length_size`, where `Some(0)` is a
+  value and `None` means the codec has no such option.
+* **`chroma_location` (9 values) was neither**: the parser had it all along and
+  `VideoParameters::fill_from` replaced the whole `ColorInfo` block rather than
+  merging it property by property, so a container that stated primaries and
+  transfer (MP4's `colr`, which has no chroma siting field) blocked the
+  parser's chroma location from ever landing.
+* **`field_order` on HEVC in MP4 is a container field we still miss.** Probed
+  both ways: `ffprobe -f hevc` on the raw Annex B stream reports
+  `field_order=unknown`, the same content in MP4 reports `progressive`, and the
+  difference is the MOV **`fiel` atom**, which the file carries and
+  `vaco-demux-mp4` does not read. `vaco-parse-hevc`'s D17 note was correct and
+  the earlier agent measured it correctly; the MP4 value comes from somewhere
+  else entirely.
+
 ### What is left, and whose it is
 
-Of the 180 stream field values still diverging on the fifteen-file corpus:
+Of the 41 stream field values still diverging on the sixteen-file corpus:
 
-* **147 need a bitstream parser** — `profile`, `level`, `pix_fmt`,
-  `sample_fmt`, `channels`, `channel_layout`, `has_b_frames`,
-  `bits_per_raw_sample`, `is_avc`, `nal_length_size`, `mime_codec_string`, plus
-  the nine `ts.ts` fields (`width`, `height`, the two `coded_*`, both aspect
-  ratios, `extradata_size`, `sample_rate`, `bit_rate`) that MPEG-TS states
-  nowhere at all. None of these is a container-model question; they arrive
-  through `ParserProvider` when the parsers are wired.
-* **11 are `codec_tag`**, a spelling difference for containers with no
-  four-character code: the reference prints `0x0000` where we print
-  `0x00000000`.
-* **9 are `codec_name`/`codec_long_name`** for codecs `CodecId` has no variant
-  for (`subrip`) or whose long name differs (`Opus`).
+* **12 are `codec_tag`**, a one-character fix in a crate this work does not own:
+  `vaco_textformat::num::codec_tag` formats `0x{v:08x}` and the reference uses a
+  minimum width of four. Measured: `avc1` prints `0x31637661` in both, MPEG-TS
+  stream type 27 prints `0x001b` in the reference and `0x0000001b` here.
+  Reported, not worked around — formatting helpers live in `vaco-textformat` and
+  duplicating one here to fix twelve values is how the two start drifting.
+* **8 are `subrip`**, four `codec_name` and four `codec_long_name`. `CodecId`
+  has no `SubRip` variant, and adding one needs `vaco-demux-matroska` to map
+  `S_TEXT/UTF8` to it, so it is a two-crate change.
+* **7 are the `sub.mkv` and `as.mkv` subtitle timings** — `duration_ts`,
+  `duration`, `start_pts`, `start_time` — the known `Discovery` stop-condition
+  divergence recorded below, unchanged.
+* **6 are MPEG-TS container facts**: `ts_id` and `ts_packetsize` (not emitted),
+  `tags.ts_codec` (emitted and the reference has no counterpart), and the AAC
+  `duration`/`duration_ts`/`bit_rate`, which are short by one frame because the
+  reference re-frames the PES payload and `vaco-demux-mpegts` does not.
+* **3 are VP9** — `profile`, `pix_fmt` and the full `mime_codec_string`
+  (`vp09.00.10.08`). There is no `vaco-parse-vp9`, and `ParserProvider` correctly
+  answers `None`, so the container's own fields are reported. This is the seam
+  working, not failing.
+* **1 is `ts.ts`'s `extradata_size`.** The reference synthesises Annex B
+  extradata for an MPEG-TS H.264 stream from the in-band parameter sets and
+  reports 38 bytes — exactly `4 + SPS(26) + 4 + PPS(4)`. `H264Parser` stores
+  parsed parameter sets, not the raw NAL bytes, so it cannot rebuild them.
+  Deferred deliberately: it is one value on one file and reaching the raw bytes
+  means touching the access-unit machinery.
+* **1 is `hevc.mp4`'s `field_order`**, the `fiel` atom above.
+* **1 is `av.mov`'s `TAG:vendor_id`** on an audio track whose `vendor_id` is
+  `[0][0][0][0]`.
+* **1 is `av1.mp4`'s `mime_codec_string`** — closed, in fact; the remaining AV1
+  row is the VP9 one above.
 
 That leaves thirteen, and they are worth naming individually:
 
@@ -435,12 +529,27 @@ one could not see:
   `-show_error` and the `default` writer, and never crossed a document-carrying
   writer with a failure mode.
 
-The eleven extra stream divergences are the demuxer not yet filling
-`CodecParameters` (`profile`, `pix_fmt`, `level`, `chroma_location`,
-`has_b_frames`, `sample_fmt`, `channels`, `channel_layout`, and
-`bits_per_raw_sample` set to 16 on an AAC stream where the reference reports
-`N/A`). `mime_codec_string` is absent as a consequence: it is derived from
-profile and level, and neither is set.
+Those eleven extra divergences were the demuxer not filling `CodecParameters`
+(`profile`, `pix_fmt`, `level`, `chroma_location`, `has_b_frames`, `sample_fmt`,
+`channels`, `channel_layout`, and `bits_per_raw_sample` set to 16 on an AAC
+stream where the reference reports `N/A`), with `mime_codec_string` absent as a
+consequence. All but the last are closed by the parser wiring; see *The
+2026-08-22 parser wiring* above.
+
+`bits_per_raw_sample=16` on AAC is the one that is **not** a missing input but a
+misfiled one, and it is worth stating precisely because it looks like a bug in
+this crate. `vaco-demux-mp4` and `vaco-demux-matroska` fill
+`AudioParameters::bits_per_raw_sample` from the container's own sample depth —
+MP4's `stsd` sample entry `sample_size`, Matroska's `BitDepth`. Probed on a WAV,
+`pcm_s16le` reports `bits_per_sample=16` and `bits_per_raw_sample="N/A"`, so
+that number is `bits_per_coded_sample`, a **different field** that
+`CodecParameters` has nowhere to hold. Until it does, `show::bits_per_raw_sample`
+suppresses the value for a stream whose decoded sample format is floating point:
+a raw-sample bit count is meaningless for a float decoder, and every
+float-output stream measured (AAC in MP4, MOV, Matroska and MPEG-TS; Opus in
+Matroska and WebM) reports `N/A`. Integer audio is untouched — `pcm_s24le` in
+MOV reports `24` and must keep doing so. Reported upstream rather than called a
+fix.
 
 **We never emit a field the reference does not.** That is checked directly.
 
@@ -484,6 +593,24 @@ gracefully at runtime).
 
 ## Fuzzing
 
+Two targets now matter for this crate, and the second is not in it.
+
+`fuzz/fuzz_targets/registry_discovery.rs` (`fuzz-crate: vaco-registry`) drives
+arbitrary bytes through a real demuxer into a **real bitstream parser** — the
+composition `vaco-probe` actually runs. Before the parser wiring, no target
+covered it: `dem_mp4`, `matroska_demux` and `mpegts_demux` all run with
+`NoParsers`, deliberately, so demuxer fuzzing stays fast and independent of
+codec code. The composition is where the bounds multiply, because a hostile file
+chooses *which* parser runs over its payloads and *what* configuration record
+that parser is handed. Last run: `exit=0 execs=302393`,
+`find fuzz/artifacts -type f` empty.
+
+Its first run found a bug in its own assertion rather than in the code:
+`Discovery::run` marks itself as having run before the loop, so a pass that ends
+in an error still reports `Ok` on a second call. That is the documented no-op
+behaviour; the target now asserts on *work done* (`packets_read`, `bytes_read`)
+instead of on the return value, and the input is kept in the corpus.
+
 `fuzz/fuzz_targets/probe_argv.rs` drives the whole program from an arbitrary
 NUL-separated argument vector — option table, specifier grammar,
 `-show_entries`, every writer's option parser, the protocol layer, the probe
@@ -491,7 +618,7 @@ engine, the section emitters. Beyond "does not panic" it asserts **determinism**
 the same argv twice must produce the same bytes, because output that depends on
 anything but the input cannot be byte-identical to anything.
 
-Last run: `exit=0 execs=2025261`, `find fuzz/artifacts -type f` empty.
+Last run: `exit=0 execs=1530353`, `find fuzz/artifacts -type f` empty.
 
 ## Scoped out this wave
 
@@ -533,8 +660,25 @@ Reported, not worked around.
   `start_time` in the first place.
 * **`vaco-demux-mpegts` emits a `ts_codec` stream tag the reference does not.**
   The only field we emit that `ffprobe` has no counterpart for.
-* **`CodecParameters` has no `max_bit_rate`**, and `bits_per_raw_sample` is on
-  `AudioParameters` only. Both are printed for every stream by the reference.
+* **`CodecParameters` has no `max_bit_rate`**, printed for every stream by the
+  reference. ~~`bits_per_raw_sample` is on `AudioParameters` only.~~ Closed:
+  `VideoParameters` carries one too, and that is the half the reference
+  actually prints. What remains is the *audio* half being filled with the
+  container's coded sample depth; see above.
+* **`vaco_textformat::num::codec_tag` formats `0x{v:08x}`; the reference uses a
+  minimum width of four.** `avc1` prints `0x31637661` in both, but MPEG-TS
+  stream type 27 prints `0x001b` there and `0x0000001b` here. Twelve field
+  values on the corpus, and a one-character fix in a crate this one does not
+  own. Not worked around locally: `fields.rs`'s own rule is that formatting
+  helpers live in `vaco-textformat` and none may be duplicated here.
+* **`vaco-demux-mp4` does not read the MOV `fiel` atom.** Probed both ways:
+  `ffprobe -f hevc` on a raw Annex B stream reports `field_order=unknown`, and
+  the same content in MP4 reports `progressive`. The bitstream parser is right
+  to report `unknown` — the MP4 value comes from `fiel`, which the file carries.
+* **`CodecId` has no `SubRip` variant**, so a Matroska `S_TEXT/UTF8` track
+  reports `codec_name=unknown` where the reference prints `subrip`. Eight field
+  values on the corpus, and a two-crate change: the variant in
+  `vaco-codec-core` and the mapping in `vaco-demux-matroska`.
 * ~~**`Stream` has no `r_frame_rate` distinct from `avg_frame_rate`.**~~ Closed:
   they are two fields now, and `vfr.mp4` is the regression fixture that would
   notice if they were merged again.

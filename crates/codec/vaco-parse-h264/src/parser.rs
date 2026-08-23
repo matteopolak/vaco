@@ -146,6 +146,13 @@ pub struct H264Parser {
     max_access_unit: usize,
     params: Option<CodecParameters>,
     last_picture: PictureInfo,
+    /// How samples handed to [`Parser::parse`] are framed.
+    ///
+    /// Annex B until [`H264Parser::set_extradata`] reads an `avcC` and says
+    /// otherwise. This is what makes the same parser usable from MPEG-TS (a
+    /// byte stream, boundaries derived) and from MP4 (length-prefixed samples,
+    /// boundaries given) without the caller having to know which it has.
+    framing: Framing,
 }
 
 impl H264Parser {
@@ -171,6 +178,7 @@ impl H264Parser {
             max_access_unit: DEFAULT_MAX_ACCESS_UNIT,
             params: None,
             last_picture: PictureInfo::default(),
+            framing: Framing::AnnexB,
         }
     }
 
@@ -204,8 +212,15 @@ impl H264Parser {
             self.rbsp.fill(nal, &mut self.budget)?;
             let _ = self.sets.add_pps(self.rbsp.as_slice(), &mut self.budget);
         }
+        self.framing = Framing::LengthPrefixed(record.length_size);
         self.refresh_parameters();
-        Ok(Framing::LengthPrefixed(record.length_size))
+        Ok(self.framing)
+    }
+
+    /// The framing [`Parser::parse`] will apply to the next sample.
+    #[must_use]
+    pub const fn framing(&self) -> Framing {
+        self.framing
     }
 
     /// The parameter sets seen so far.
@@ -332,10 +347,21 @@ impl H264Parser {
             return;
         };
         let mut params = codec_parameters(sps);
-        if let (Some(hint), Some(v)) = (self.au_pic_struct, params.video.as_mut())
-            && v.field_order == FieldOrder::Unknown
-        {
-            v.field_order = hint.field_order;
+        if let Some(v) = params.video.as_mut() {
+            // `codec_parameters` defaults this to 0 (Annex B) because an SPS
+            // alone cannot know how the container frames its samples. Only the
+            // parser has seen the configuration record, so only the parser can
+            // correct it.
+            v.nal_length_size = Some(
+                self.framing
+                    .length_size()
+                    .map_or(0, vaco_format_nalu::LengthSize::get),
+            );
+            if let Some(hint) = self.au_pic_struct
+                && v.field_order == FieldOrder::Unknown
+            {
+                v.field_order = hint.field_order;
+            }
         }
         self.params = Some(params);
     }
@@ -742,6 +768,20 @@ fn peek_pps_id(rbsp: &[u8]) -> Option<u8> {
 
 impl Parser for H264Parser {
     fn parse(&mut self, input: &[u8]) -> Result<(Option<Packet>, usize)> {
+        // A length-prefixed sample is already exactly one access unit, and it
+        // contains no start codes at all — running the byte-stream scanner over
+        // it finds nothing, forever. The container path exists for this and is
+        // taken whenever a configuration record has told us the framing.
+        if let Framing::LengthPrefixed(size) = self.framing
+            && !input.is_empty()
+        {
+            self.push_access_unit(input, Framing::LengthPrefixed(size))?;
+            let mut packet = Packet::from_slice(&mut self.budget, input)?;
+            if self.last_picture.is_idr {
+                packet.flags = PacketFlags::KEY;
+            }
+            return Ok((Some(packet), input.len()));
+        }
         if input.is_empty() {
             // End of stream. Called repeatedly until it yields nothing, which
             // is how the driver drains a buffer holding more than one unit.
@@ -764,6 +804,18 @@ impl Parser for H264Parser {
 
     fn parameters(&self) -> Option<&CodecParameters> {
         self.params.as_ref()
+    }
+
+    /// Read an `AVCDecoderConfigurationRecord`.
+    ///
+    /// This is where every H.264 field `-show_streams` prints for an MP4 comes
+    /// from: the sequence parameter set is in `avcC` and in no sample, so a
+    /// parser fed only payloads reports nothing however many it is given.
+    fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
+        if extradata.is_empty() {
+            return Ok(());
+        }
+        Self::set_extradata(self, extradata).map(|_| ())
     }
 }
 

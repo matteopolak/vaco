@@ -1,0 +1,187 @@
+//! The `ffmpeg`-equivalent: argv in, a run executed, a correct exit code out.
+//!
+//! # What this is
+//!
+//! `vaco` is the transcoding binary. This crate is its **spine**: option
+//! binding, opening inputs through the protocol and format registries, stream
+//! selection, building a [`vaco_sched::PipelineSpec`], driving it, and
+//! reporting. The twenty work packages above that spine — metadata mapping,
+//! `-progress`/`-stats`/`-report`, filtergraph binding, `-force_key_frames`,
+//! the timestamp matrix, `[dec:N]`, `-stream_group`, presets, hardware devices —
+//! are deliberately not here. See `docs/app/vaco-cli.md` for what is deferred
+//! and which issue owns each piece.
+//!
+//! ```text
+//! argv ─▶ [cli]      split, validate, bind          (vaco-cli-core, cli.rs)
+//!      ─▶ [listing]  -version/-formats/… and exit   (listing.rs)
+//!      ─▶ [input]    protocol → probe → demux       (vaco-io, vaco-format-core)
+//!      ─▶ [select]   -map, or the auto rules        (select.rs)
+//!      ─▶ [exec]     a PipelineSpec, driven          (vaco-sched)
+//!      ─▶ [exit]     stderr text and a status code   (exit.rs)
+//! ```
+//!
+//! # The thing to know before reading further: there are no muxers
+//!
+//! D5 scopes v0.1 to demuxing, and `crates/format/` contains three
+//! `vaco-demux-*` crates and no `vaco-mux-*`. There are no decoders and no
+//! encoders either. So:
+//!
+//! * `vaco -i in.mkv -c copy -f null -` **works**, end to end, and is the
+//!   acceptance path: protocol → probe → demux → discovery → selection →
+//!   `vaco-sched` → a counting sink.
+//! * `vaco -i in.mkv out.mkv` fails with a message naming the real reason,
+//!   and `vaco -i in.mkv -f null -` (no `-c copy`) fails on the reference's own
+//!   missing-encoder path. Neither pretends.
+//!
+//! The acceptance criterion is therefore **not** byte identity of an output
+//! file — there is no file. It is that the same argv produces the same stream
+//! selection, the same stderr text, the same exit code, and the same packet
+//! counts through the pipeline. [`nullmux::OutputTally`] is what makes the last of
+//! those observable.
+//!
+//! # A library plus a thin binary
+//!
+//! Same reason as `vaco-probe`: `cargo fuzz` links a *library*, and D6 makes a
+//! fuzz target mandatory for a crate whose input is a user's command line — the
+//! least trusted input in the project. The binary target keeps only argv, stdio
+//! and the exit code. Having a lib target also brings the crate inside
+//! `cargo xtask wasm-check` (D18), which it passes.
+//!
+//! # Configuration
+//!
+//! No environment variables and no config files. Everything is an option, and
+//! every option is in `vaco_cli_core::table::ffmpeg()`.
+
+#![forbid(unsafe_code)]
+
+pub mod cli;
+pub mod exec;
+pub mod exit;
+pub mod input;
+pub mod listing;
+pub mod nullmux;
+pub mod select;
+
+use std::ffi::OsStr;
+use std::io::Write;
+
+pub use exit::{AvError, Diagnostic, ExitCode};
+pub use listing::VERSION;
+
+/// Run one invocation.
+///
+/// `argv` must not include the program name. Everything the program would print
+/// goes to `out` or `err`; nothing reaches the real stdio, which is what makes
+/// the whole binary testable and fuzzable without spawning a process.
+pub fn run<S, O, E>(argv: &[S], out: &mut O, err: &mut E) -> ExitCode
+where
+    S: AsRef<OsStr>,
+    O: Write,
+    E: Write,
+{
+    // The banner goes out before anything is parsed: `ffmpeg -qwerty 3` prints
+    // it and *then* the error, so it cannot wait for a successful parse.
+    if cli::wants_banner(argv) {
+        let _ = listing::banner(err);
+    }
+    match execute(argv, out, err) {
+        Ok(code) => code,
+        Err(d) => {
+            let _ = err.write_all(d.render().as_bytes());
+            d.exit
+        }
+    }
+}
+
+fn execute<S, O, E>(argv: &[S], out: &mut O, err: &mut E) -> Result<ExitCode, Diagnostic>
+where
+    S: AsRef<OsStr>,
+    O: Write,
+    E: Write,
+{
+    if argv.is_empty() {
+        // OBSERVED: bare `ffmpeg` exits 1 after printing the banner and a usage
+        // block. The usage prose is ours (D9); the status is behaviour.
+        return Err(Diagnostic::usage(usage()));
+    }
+
+    let cli = cli::parse(argv)?;
+
+    if let Some(name) = cli.listing {
+        listing::render(out, name)?;
+        return Ok(ExitCode::OK);
+    }
+
+    if cli.outputs.is_empty() {
+        // OBSERVED: `ffmpeg -i in.mkv` exits 1 with exactly this line.
+        return Err(Diagnostic::usage(vec![
+            "At least one output file must be specified".to_owned(),
+        ]));
+    }
+
+    let mut inputs = Vec::new();
+    for spec in &cli.inputs {
+        let white: Option<Vec<&str>> = spec
+            .whitelist
+            .as_ref()
+            .map(|v| v.iter().map(String::as_str).collect());
+        let black: Option<Vec<&str>> = spec
+            .blacklist
+            .as_ref()
+            .map(|v| v.iter().map(String::as_str).collect());
+        let req = input::OpenRequest {
+            force_format: spec.format.as_deref(),
+            whitelist: white.as_deref(),
+            blacklist: black.as_deref(),
+        };
+        let opened = input::open(spec.index, &spec.url, &req).map_err(|e| {
+            let av = AvError::of(&e);
+            Diagnostic::opening(
+                av,
+                vec![format!(
+                    "[in#{}] Error opening input: {}",
+                    spec.index, av.text
+                )],
+                "input",
+                &spec.url,
+            )
+        })?;
+        inputs.push(opened);
+    }
+
+    let files: Vec<select::InputStreams> = inputs.iter().map(exec::describe).collect();
+
+    let mut outputs = Vec::new();
+    for spec in &cli.outputs {
+        outputs.push(exec::resolve_output(&cli, spec, &files)?);
+    }
+
+    let report = exec::run_pipeline(inputs, &outputs, &files)?;
+
+    // `Stream mapping:` is the reference's own wording and layout, and it is
+    // the most useful single line of evidence that selection agreed.
+    if !report.mapping.is_empty() {
+        let _ = writeln!(err, "Stream mapping:");
+        for line in &report.mapping {
+            let _ = writeln!(err, "{line}");
+        }
+    }
+    for line in &report.summary {
+        let _ = writeln!(err, "{line}");
+    }
+    Ok(ExitCode::OK)
+}
+
+/// The usage block. Written for Vaco: D9 puts the reference's help text outside
+/// what we reproduce, so `-h` output cannot be byte-identical by design.
+fn usage() -> Vec<String> {
+    vec![
+        format!("vaco version {VERSION}"),
+        "usage: vaco [options] -i <input> ... [options] <output> ...".to_owned(),
+        String::new(),
+        "Use -h to get full help, or -formats to list what this build contains.".to_owned(),
+    ]
+}
+
+#[cfg(test)]
+mod tests;

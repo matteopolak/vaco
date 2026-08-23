@@ -206,7 +206,37 @@ impl Parser for OpusParser {
     fn parameters(&self) -> Option<&CodecParameters> {
         self.params.as_ref()
     }
+
+    /// Read an `OpusHead`.
+    ///
+    /// Opus has **no in-band configuration at all** — the channel count, the
+    /// pre-skip and the mapping live only in the identification header the
+    /// container carries — so for this codec `set_extradata` is not an
+    /// optimisation, it is the only way a parser can describe the stream.
+    /// Measured: `sample_fmt`, `channels`, `channel_layout` and
+    /// `initial_padding` all arrive here and none of them arrives from a
+    /// packet.
+    fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
+        if extradata.is_empty() {
+            return Ok(());
+        }
+        self.set_identification_header(IdentificationHeader::parse(extradata)?);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests;
+
+/// The registry descriptor for this parser.
+///
+/// `vaco-component.toml` names this const, `cargo xtask gen-registry` puts it
+/// in `vaco_registry::PARSERS`, and a demuxer reaches it through
+/// `ParserProvider` without ever naming this crate (D14.1).
+pub const PARSER: ::vaco_codec_core::ParserDesc = ::vaco_codec_core::ParserDesc {
+    name: "opus",
+    long_name: "Opus (Opus Interactive Audio Codec)",
+    codecs: &[::vaco_codec_core::CodecId::Opus],
+    media_type: ::vaco_core::MediaType::Audio,
+    make: |limits| ::std::boxed::Box::new(OpusParser::new(limits)),
+};

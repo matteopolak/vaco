@@ -1271,6 +1271,24 @@ name = "vaco-chlayout"
 version = "0.1.0"
 
 [[package]]
+name = "vaco-cli"
+version = "0.1.0"
+dependencies = [
+ "vaco-cli-core",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-format-core",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-opts",
+ "vaco-packet",
+ "vaco-protocol-core",
+ "vaco-protocol-file",
+ "vaco-registry",
+ "vaco-sched",
+]
+
+[[package]]
 name = "vaco-cli-core"
 version = "0.1.0"
 dependencies = [
@@ -1534,6 +1552,7 @@ dependencies = [
  "libfuzzer-sys",
  "vaco-bitstream",
  "vaco-chlayout",
+ "vaco-cli",
  "vaco-cli-core",
  "vaco-codec-cabac",
  "vaco-codec-cbs",
@@ -1570,6 +1589,7 @@ dependencies = [
  "vaco-probe",
  "vaco-protocol-core",
  "vaco-protocol-http",
+ "vaco-registry",
  "vaco-resample",
  "vaco-sampfmt",
  "vaco-scale",
@@ -1634,6 +1654,7 @@ dependencies = [
  "vaco-core",
  "vaco-limits",
  "vaco-packet",
+ "vaco-sampfmt",
 ]
 
 [[package]]
@@ -1692,6 +1713,7 @@ dependencies = [
  "vaco-core",
  "vaco-limits",
  "vaco-packet",
+ "vaco-sampfmt",
 ]
 
 [[package]]
@@ -1778,6 +1800,12 @@ dependencies = [
  "vaco-demux-mpegts",
  "vaco-filter-core",
  "vaco-format-core",
+ "vaco-limits",
+ "vaco-parse-aac",
+ "vaco-parse-av1",
+ "vaco-parse-h264",
+ "vaco-parse-hevc",
+ "vaco-parse-opus",
  "vaco-protocol-core",
 ]
 
@@ -1813,6 +1841,19 @@ dependencies = [
  "vaco-opts",
  "vaco-pixfmt",
  "vaco-simd",
+]
+
+[[package]]
+name = "vaco-sched"
+version = "0.1.0"
+dependencies = [
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-format-core",
+ "vaco-frame",
+ "vaco-limits",
+ "vaco-packet",
 ]
 
 [[package]]

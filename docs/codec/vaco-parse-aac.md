@@ -91,6 +91,57 @@ on the end-of-stream call, `parse(&[])`. The reference does accept a file
 containing exactly one ADTS frame — probed with `ffprobe -f aac` — so dropping
 it would have been a divergence.
 
+## Registration: how a demuxer reaches this crate
+
+This crate ships a `vaco-component.toml` naming `vaco_parse_aac::PARSER`, a
+`vaco_codec_core::ParserDesc`. `cargo xtask gen-registry` collects it into
+`vaco_registry::PARSERS` — two rows, because the reference treats LATM/LOAS
+as a separate codec (`codec_name=aac_latm`) and `CodecId` mirrors that, so
+`PARSER_LATM` registers `LoasParser` beside it. `vaco_registry::Parsers` — the one
+`ParserProvider` in the build — answers `parser_for(CodecId::Aac)` with a
+`Box<dyn Parser>` built from it.
+
+**No demuxer names this crate.** D14.1 and `cargo xtask layer-check` forbid a
+`crates/format/` crate from depending on a `crates/codec/` one; the indirection
+is what makes `-show_streams` able to report bitstream fields without that edge.
+
+Two consequences worth knowing when changing anything here:
+
+* **Everything a demuxer can see goes through `dyn Parser`.** `parse`,
+  `parameters` and `set_extradata` are the whole surface. An inherent method,
+  however useful, is invisible from a container. `tests/provider.rs` is written
+  entirely against `Box<dyn Parser>` for that reason — a version written against
+  the concrete type would pass while the seam stayed broken.
+* **`ParserDesc::make` takes `Limits`.** A parser on the probe path is handed
+  attacker-controlled bytes before anything has validated them, so there is no
+  no-argument constructor to reach for.
+
+### AAC is where the two paths genuinely differ
+
+In MPEG-TS every frame carries an ADTS header and `Parser::parse` finds
+everything. In MP4 and Matroska the samples are **raw AAC** with no ADTS header
+at all, and the whole description — object type, sampling frequency, channel
+configuration — is in the `esds` `DecoderSpecificInfo` / `CodecPrivate`.
+`Parser::set_extradata` reads it as an `AudioSpecificConfig`.
+
+A parser that has been configured that way sets a `configured` flag and refuses
+to let a later ADTS header replace its parameters. That is not a preference: a
+raw AAC sample contains no ADTS header, so any sync word the scanner finds in
+one is a coincidence, and a coincidence must not overwrite a record the
+container stated. `tests/provider.rs` pins it with a synthetic 48 kHz frame fed
+to a parser configured at 44.1 kHz.
+
+### `sample_fmt` is the decoder's output format
+
+`to_codec_parameters` reports `fltp`, on both the ADTS and the `AudioSpecificConfig`
+paths. There is no sample format anywhere in AAC's syntax; `ffprobe` fills
+`sample_fmt` from the decoder's chosen output, and it prints `fltp` for every
+AAC stream measured — MP4, MOV, M4A, Matroska and MPEG-TS.
+
+A parse-only crate naming a decoder's output format is a real wrinkle. The
+alternative is worse: `sample_fmt` is inside the D6 byte-identity contract, and
+leaving it `unknown` diverges on every AAC stream there is.
+
 ## How to change it
 
 * **Adding a field to a header struct** is safe: both are `#[non_exhaustive]`.

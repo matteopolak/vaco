@@ -2,7 +2,10 @@
 
 use crate::CodecId;
 use vaco_chlayout::ChannelLayout;
-use vaco_color::ColorInfo;
+use vaco_color::{
+    ChromaLocation, ColorInfo, ColorPrimaries, ColorRange, MatrixCoefficients,
+    TransferCharacteristic,
+};
 use vaco_core::{MediaType, Rational};
 use vaco_limits::Budget;
 use vaco_pixfmt::PixFmt;
@@ -42,6 +45,28 @@ pub struct VideoParameters {
     pub field_order: FieldOrder,
     /// Reorder depth; non-zero means dts differs from pts.
     pub has_b_frames: u8,
+    /// Bits per component in the coded picture, when the bitstream states one.
+    ///
+    /// [`AudioParameters`] has carried the same field since the type was
+    /// frozen, and the *video* half was the one actually printed: measured on
+    /// `av.mp4`, the reference reports `bits_per_raw_sample=8` on the H.264
+    /// stream and `N/A` on the AAC stream beside it — the exact opposite of
+    /// what this model could express. It is a separate field from the pixel
+    /// format because a 10-bit stream can be carried in a 16-bit format and
+    /// the reference prints the bitstream's number, not the container's.
+    pub bits_per_raw_sample: Option<u8>,
+    /// The length prefix size the container's configuration record declares, in
+    /// bytes; `Some(0)` for an Annex B byte stream that has no record.
+    ///
+    /// This is a **container** property that only a parser can read, which is
+    /// why it is here and not in `vaco-format-core`: it lives inside `avcC`
+    /// and `hvcC`, and reading those means parsing. `ffprobe` prints it as the
+    /// H.264 decoder's private `is_avc` and `nal_length_size` options, and
+    /// prints them for *every* H.264 stream — measured, `av.mp4` reports
+    /// `is_avc=true nal_length_size=4` and the same content in MPEG-TS reports
+    /// `is_avc=false nal_length_size=0`. `None` means the question does not
+    /// apply to the codec, and nothing is printed.
+    pub nal_length_size: Option<u8>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -222,6 +247,30 @@ fn merge_option<T: Copy>(slot: &mut Option<T>, from: Option<T>) {
     }
 }
 
+/// Merge a colour description property by property, treating each
+/// `Unspecified` as unset.
+///
+/// `vaco-color` has no `fill_from` of its own and this crate does not own it,
+/// so the merge lives here. If `ColorInfo` ever grows one, this becomes a
+/// forwarding call — the semantics are identical and deliberately so.
+fn merge_colour(slot: &mut ColorInfo, from: ColorInfo) {
+    if slot.primaries == ColorPrimaries::Unspecified {
+        slot.primaries = from.primaries;
+    }
+    if slot.transfer == TransferCharacteristic::Unspecified {
+        slot.transfer = from.transfer;
+    }
+    if slot.matrix == MatrixCoefficients::Unspecified {
+        slot.matrix = from.matrix;
+    }
+    if slot.range == ColorRange::Unspecified {
+        slot.range = from.range;
+    }
+    if slot.chroma_location == ChromaLocation::Unspecified {
+        slot.chroma_location = from.chroma_location;
+    }
+}
+
 impl VideoParameters {
     /// Fill in unset fields from `other`. Zero and
     /// [`Rational::ZERO`](vaco_core::Rational) count as unset, because that is
@@ -254,6 +303,20 @@ impl VideoParameters {
         if self.has_b_frames == 0 {
             self.has_b_frames = other.has_b_frames;
         }
+        if self.bits_per_raw_sample.is_none() {
+            self.bits_per_raw_sample = other.bits_per_raw_sample;
+        }
+        if self.nal_length_size.is_none() {
+            self.nal_length_size = other.nal_length_size;
+        }
+        // Per-property, not whole-struct. A container often states *some* of
+        // the colour description and leaves the rest — MP4's `colr` box carries
+        // primaries, transfer and matrix but has no chroma siting at all — so
+        // replacing the block only when it is entirely default would keep
+        // `chroma_location=unspecified` on every H.264 file whose VUI states
+        // it. Measured: 9 of the 180 divergences on the corpus were exactly
+        // this, and all 9 are `chroma_location`.
+        merge_colour(&mut self.color, other.color);
     }
 
     /// Coded dimensions, falling back to the display ones when the container

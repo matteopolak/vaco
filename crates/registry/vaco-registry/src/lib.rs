@@ -53,13 +53,14 @@
 
 pub mod generated;
 
-use vaco_codec_core::{CodecId, DecoderDesc, Parser};
+use vaco_codec_core::{CodecId, DecoderDesc, Parser, ParserDesc};
 use vaco_core::MediaType;
 use vaco_filter_core::FilterDesc;
 use vaco_format_core::{DemuxerDesc, MuxerDesc, ParserProvider, ProbeData};
+use vaco_limits::Limits;
 use vaco_protocol_core::{ProtocolDesc, ProtocolRegistry};
 
-pub use generated::{COMPONENTS, DECODERS, DEMUXERS, FILTERS, MUXERS, PROTOCOLS};
+pub use generated::{COMPONENTS, DECODERS, DEMUXERS, FILTERS, MUXERS, PARSERS, PROTOCOLS};
 
 /// What a component is. The vocabulary is frozen in plan 19 §3.4.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -106,17 +107,25 @@ impl Kind {
 
     /// Whether this build has a typed descriptor table for the kind.
     ///
-    /// False for `Encoder`, `Parser` and `BitstreamFilter`, because
-    /// `vaco-codec-core` defines no `EncoderDesc`, `ParserDesc` or
-    /// `BitstreamFilterDesc` yet. Components of those kinds are listed and their
-    /// `ctor` paths are checked at compile time, but there is nothing typed to
-    /// hand back. This is a reported gap in the trait layer, not a design
-    /// choice — see the crate's doc file.
+    /// False for `Encoder` and `BitstreamFilter`, because `vaco-codec-core`
+    /// defines no `EncoderDesc` or `BitstreamFilterDesc` yet. Components of
+    /// those kinds are listed and their `ctor` paths are checked at compile
+    /// time, but there is nothing typed to hand back. This is a reported gap in
+    /// the trait layer, not a design choice — see the crate's doc file.
+    ///
+    /// `Parser` was on that list until `vaco-codec-core` grew
+    /// [`ParserDesc`](vaco_codec_core::ParserDesc); it is now a real table and
+    /// [`Parsers`] is a real provider.
     #[must_use]
     pub const fn has_table(self) -> bool {
         matches!(
             self,
-            Self::Demuxer | Self::Muxer | Self::Decoder | Self::Filter | Self::Protocol
+            Self::Demuxer
+                | Self::Muxer
+                | Self::Decoder
+                | Self::Parser
+                | Self::Filter
+                | Self::Protocol
         )
     }
 }
@@ -352,29 +361,77 @@ pub fn protocol_registry() -> ProtocolRegistry {
     r
 }
 
+// ------------------------------------------------------------------- parsers
+
+/// Every enabled parser descriptor.
+#[must_use]
+pub fn parsers() -> &'static [&'static ParserDesc] {
+    PARSERS
+}
+
+/// A parser by its implementation name, e.g. `"h264"`.
+#[must_use]
+pub fn parser_by_name(name: &str) -> Option<&'static ParserDesc> {
+    PARSERS.iter().copied().find(|p| p.name == name)
+}
+
+/// The parser descriptor for a codec: the first enabled implementation in
+/// registry order.
+///
+/// Same deterministic-but-arbitrary tie-break as [`decoder_for`], and for the
+/// same reason — [`ParserDesc`] has no priority field, and with one
+/// implementation per codec the question does not arise.
+#[must_use]
+pub fn parser_desc_for(codec: CodecId) -> Option<&'static ParserDesc> {
+    PARSERS.iter().copied().find(|p| p.handles(codec))
+}
+
+/// Whether this build can parse `codec`'s bitstream headers.
+#[must_use]
+pub fn can_parse(codec: CodecId) -> bool {
+    parser_desc_for(codec).is_some()
+}
+
 // ------------------------------------------------------------ parser provider
 
 /// The registry's [`ParserProvider`]: how a demuxer gets a bitstream parser
 /// without depending on a codec crate (D14.1).
 ///
-/// **Returns `None` for every codec today**, and will keep doing so until
-/// `vaco-codec-core` grows a `ParserDesc` for the generator to build a table
-/// from. `parser` is already in the fragment vocabulary, and the `vaco-parse-*`
-/// crates already exist, so the missing piece is exactly one descriptor type —
-/// see the doc file. A demuxer that needs a parser and does not get one falls
-/// back to whatever the container itself states, which is the same path it takes
-/// with [`vaco_format_core::NoParsers`] in its own tests.
+/// This is the whole point of the indirection. `vaco-demux-mp4` needs an H.264
+/// SPS to report `profile`, `pix_fmt` and `has_b_frames`, and
+/// `cargo xtask layer-check` forbids it from depending on `vaco-parse-h264`.
+/// So it asks for a parser by [`CodecId`] and this supplies one from the
+/// generated table — the demuxer names no codec crate, and a build with
+/// `--no-default-features` simply gets `None` and reports what the container
+/// itself states.
+///
+/// # Limits
+///
+/// A parser reached this way is handed **attacker-controlled bytes on the
+/// probe path**, before anything has validated them, so it must be bounded.
+/// [`ParserProvider::parser_for`] takes no [`Limits`] — the trait is frozen —
+/// so the budget is chosen here, and it is [`Limits::strict`]: the same
+/// conservative default [`vaco_format_core::Discovery`] applies to the driver
+/// wrapped around the parser, so the two agree without either having to know
+/// about the other.
+///
+/// `Parsers` is deliberately still a **unit struct**. Making it carry a
+/// `Limits` field would be a source-breaking change for every existing
+/// `&vaco_registry::Parsers`, and nothing needs a different budget yet. When
+/// something does, add a second provider that carries one rather than
+/// re-shaping this — that keeps the change additive, which is what a registry
+/// two binaries depend on is for.
 #[derive(Clone, Copy, Default, Debug)]
 pub struct Parsers;
 
 impl ParserProvider for Parsers {
     fn parser_for(&self, codec: CodecId) -> Option<Box<dyn Parser>> {
-        let _ = codec;
-        None
+        Some(parser_desc_for(codec)?.build(Limits::strict()))
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, reason = "test code")]
 mod tests {
     use super::*;
 
@@ -474,17 +531,64 @@ mod tests {
 
     #[test]
     fn a_kind_without_a_table_is_still_listable() {
-        for kind in [Kind::Encoder, Kind::Parser, Kind::BitstreamFilter] {
+        for kind in [Kind::Encoder, Kind::BitstreamFilter] {
             assert!(!kind.has_table());
             // Listing must not panic or claim a table exists.
             let _ = components_of_kind(kind).count();
         }
     }
 
+    /// Every registered parser must be reachable by every codec it declares.
+    ///
+    /// This replaces `the_parser_provider_is_honest_about_being_empty`, which
+    /// asserted `parser_for` returned `None` for every codec — true, and the
+    /// whole reason `-show_streams` could not report a profile, a pixel format
+    /// or a channel count on any container. The assertion is inverted rather
+    /// than deleted so that a build which loses the parser table fails here.
     #[test]
-    fn the_parser_provider_is_honest_about_being_empty() {
+    fn every_registered_parser_is_reachable_by_codec() {
+        for desc in parsers() {
+            for &codec in desc.codecs {
+                assert!(
+                    Parsers.parser_for(codec).is_some(),
+                    "{} declares {} but the provider cannot build one",
+                    desc.name,
+                    codec.name()
+                );
+                assert!(can_parse(codec), "{}", codec.name());
+                assert_eq!(parser_desc_for(codec).map(|d| d.name), Some(desc.name));
+            }
+            assert_eq!(parser_by_name(desc.name).map(|d| d.name), Some(desc.name));
+        }
+        assert!(parser_by_name("nonesuch").is_none());
+    }
+
+    /// A codec with no parser still answers, and answers `None` rather than
+    /// panicking — the `--no-default-features` shape, and the path a demuxer
+    /// takes for any codec this build cannot parse.
+    #[test]
+    fn a_codec_without_a_parser_gets_none() {
         for codec in codecs() {
-            assert!(Parsers.parser_for(codec).is_none());
+            let has = parsers().iter().any(|p| p.handles(codec));
+            assert_eq!(Parsers.parser_for(codec).is_some(), has, "{}", codec.name());
+        }
+    }
+
+    /// A descriptor must be inspectable without building anything, which is
+    /// what lets `-parsers` print a table without allocating a parser.
+    #[test]
+    fn parser_descriptors_agree_with_their_metadata_rows() {
+        for desc in parsers() {
+            let row = component(Kind::Parser, desc.name)
+                .unwrap_or_else(|| panic!("parser {} has no COMPONENTS row", desc.name));
+            assert_eq!(row.long_name, Some(desc.long_name), "{}", desc.name);
+            assert_eq!(row.media_type(), Some(desc.media_type), "{}", desc.name);
+            assert_eq!(
+                row.codec_id(),
+                desc.codecs.first().copied(),
+                "{} fragment `codec` must name the descriptor's first codec",
+                desc.name
+            );
         }
     }
 

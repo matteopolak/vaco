@@ -416,7 +416,19 @@ impl AudioSpecificConfig {
         params.profile = self.profile();
         params.audio = Some(AudioParameters {
             sample_rate: self.output_sample_rate(),
-            format: None,
+            // D17: the decoder's **output** format, which is what the
+            // reference prints. `sample_fmt` is `AVCodecParameters::format`,
+            // and for a compressed audio stream ffprobe fills it from the
+            // decoder's chosen output rather than from anything in the
+            // bitstream — there is no sample format in an
+            // `AudioSpecificConfig` at all. Measured `fltp` for every AAC
+            // stream in the corpus: MP4, MOV, M4A, Matroska and MPEG-TS.
+            //
+            // A parse-only crate naming a decoder's output format is a real
+            // wrinkle, and the alternative is worse: `sample_fmt` is in the
+            // D6 byte-identity contract, and leaving it `unknown` diverges on
+            // every AAC stream there is.
+            format: Some(::vaco_sampfmt::SampleFmt::F32P),
             layout: self
                 .channel_layout()
                 .or_else(|| self.output_channels().map(ChannelLayout::unspecified)),

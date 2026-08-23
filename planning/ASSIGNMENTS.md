@@ -65,6 +65,6 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-cli-core | 7 | — | agent:cli-core | done | 2026-08-22 | 2026-08-22 | needs vaco-expr edge for `-b:v 2*1000` |
 | vaco-sched | 7 | — | agent:sched | done | 2026-08-22 | 2026-08-22 | step function; threads are a driver choice, break-even ~20us/job |
 | vaco-probe | 7 | — | agent:probe | done | 2026-08-22 | 2026-08-22 |  |
-| vaco-cli | 7 | — | — | free |  |  |
+| vaco-cli | 7 | — | agent:cli | done | 2026-08-22 | 2026-08-22 | spine only; CL-16+ open. No muxers, so -f null is the observable path |
 | vaco-conformance | 10 | #172,#173 | agent:conformance | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-checkasm | 10 | — | — | free |  |  |

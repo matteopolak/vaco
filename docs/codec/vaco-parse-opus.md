@@ -101,6 +101,48 @@ cut away *before* the frame lengths are worked out from what is left; for a
 self-delimited packet the end is not known until the frames have been read, so
 the padding is skipped *afterwards*.
 
+## Registration: how a demuxer reaches this crate
+
+This crate ships a `vaco-component.toml` naming `vaco_parse_opus::PARSER`, a
+`vaco_codec_core::ParserDesc`. `cargo xtask gen-registry` collects it into
+`vaco_registry::PARSERS`, and `vaco_registry::Parsers` — the one
+`ParserProvider` in the build — answers `parser_for(CodecId::Opus)` with a
+`Box<dyn Parser>` built from it.
+
+**No demuxer names this crate.** D14.1 and `cargo xtask layer-check` forbid a
+`crates/format/` crate from depending on a `crates/codec/` one; the indirection
+is what makes `-show_streams` able to report bitstream fields without that edge.
+
+Two consequences worth knowing when changing anything here:
+
+* **Everything a demuxer can see goes through `dyn Parser`.** `parse`,
+  `parameters` and `set_extradata` are the whole surface. An inherent method,
+  however useful, is invisible from a container. `tests/provider.rs` is written
+  entirely against `Box<dyn Parser>` for that reason — a version written against
+  the concrete type would pass while the seam stayed broken.
+* **`ParserDesc::make` takes `Limits`.** A parser on the probe path is handed
+  attacker-controlled bytes before anything has validated them, so there is no
+  no-argument constructor to reach for.
+
+### Opus has no in-band configuration at all
+
+For every other codec `Parser::set_extradata` is an optimisation. For Opus it is
+the **only** way a parser can describe the stream: the channel count, the
+pre-skip and the mapping live solely in the `OpusHead` the container carries.
+A valid Opus packet on its own establishes nothing, and `tests/provider.rs`
+asserts exactly that before supplying the header.
+
+`initial_padding` is the `pre_skip`, and stream discovery uses it to derive
+`start_time` — the field the reference reports as `0` rather than as the first
+packet's negative pts.
+
+### `sample_fmt` is the decoder's output format
+
+`IdentificationHeader::to_codec_parameters` reports `fltp`. Opus decodes to
+float and the reference prints `fltp` for every Opus stream measured, in
+Matroska and in WebM. See `vaco-parse-aac`'s note for why a parse-only crate
+states one at all.
+
 ## How to change it
 
 * `IdentificationHeader` and `OpusPacket` grow fields safely.

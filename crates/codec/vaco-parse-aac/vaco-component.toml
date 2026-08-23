@@ -1,0 +1,23 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Two components from one crate: the reference treats LATM/LOAS as a separate
+# codec (`codec_name=aac_latm`), not a framing of AAC, and `CodecId` mirrors
+# that. `feature` is shared, so `--features parse-aac` brings both or neither.
+
+[[component]]
+kind      = "parser"
+name      = "aac"
+long_name = "AAC (Advanced Audio Coding)"
+feature   = "parse-aac"
+ctor      = "vaco_parse_aac::PARSER"
+media     = "audio"
+codec     = "aac"
+
+[[component]]
+kind      = "parser"
+name      = "aac_latm"
+long_name = "AAC LATM (Advanced Audio Coding LATM syntax)"
+feature   = "parse-aac"
+ctor      = "vaco_parse_aac::PARSER_LATM"
+media     = "audio"
+codec     = "aac_latm"

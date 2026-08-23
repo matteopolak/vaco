@@ -28,6 +28,7 @@ libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
 vaco-bitstream = { path = "../crates/core/vaco-bitstream" }
 vaco-chlayout = { path = "../crates/model/vaco-chlayout" }
+vaco-cli = { path = "../crates/app/vaco-cli" }
 vaco-cli-core = { path = "../crates/app/vaco-cli-core" }
 vaco-codec-cabac = { path = "../crates/signal/vaco-codec-cabac" }
 vaco-codec-cbs = { path = "../crates/signal/vaco-codec-cbs" }
@@ -64,6 +65,7 @@ vaco-pool = { path = "../crates/model/vaco-pool" }
 vaco-probe = { path = "../crates/app/vaco-probe" }
 vaco-protocol-core = { path = "../crates/io/vaco-protocol-core" }
 vaco-protocol-http = { path = "../crates/io/vaco-protocol-http" }
+vaco-registry = { path = "../crates/registry/vaco-registry" }
 vaco-resample = { path = "../crates/signal/vaco-resample" }
 vaco-sampfmt = { path = "../crates/model/vaco-sampfmt" }
 vaco-scale = { path = "../crates/signal/vaco-scale" }
@@ -73,6 +75,7 @@ vaco-textformat = { path = "../crates/app/vaco-textformat" }
 default = [
     "bitstream",
     "chlayout",
+    "cli",
     "cli-core",
     "codec-cabac",
     "codec-core",
@@ -107,6 +110,7 @@ default = [
     "probe",
     "protocol-core",
     "protocol-http",
+    "registry",
     "resample",
     "sampfmt",
     "scale",
@@ -114,6 +118,7 @@ default = [
 ]
 bitstream = []
 chlayout = []
+cli = []
 cli-core = []
 codec-cabac = []
 codec-core = []
@@ -148,6 +153,7 @@ pool = []
 probe = []
 protocol-core = []
 protocol-http = []
+registry = []
 resample = []
 sampfmt = []
 scale = []
@@ -232,6 +238,14 @@ test = false
 doc = false
 bench = false
 required-features = ["cli-core"]
+
+[[bin]]
+name = "cli_run"
+path = "fuzz_targets/cli_run.rs"
+test = false
+doc = false
+bench = false
+required-features = ["cli"]
 
 [[bin]]
 name = "cli_specifier"
@@ -696,6 +710,14 @@ test = false
 doc = false
 bench = false
 required-features = ["bitstream"]
+
+[[bin]]
+name = "registry_discovery"
+path = "fuzz_targets/registry_discovery.rs"
+test = false
+doc = false
+bench = false
+required-features = ["registry"]
 
 [[bin]]
 name = "resample_convert"

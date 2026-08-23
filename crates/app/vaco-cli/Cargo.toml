@@ -8,16 +8,47 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+# A library plus a thin binary, rather than a binary alone.
+#
+# `cargo fuzz` links against a *library*, and D6 makes a fuzz target mandatory
+# for a crate that parses untrusted input — and a user's command line is the
+# least trusted input in the project. The binary target keeps only argv, stdio
+# and the exit code, so a test can run a whole invocation in-process.
+#
+# Having a lib target also brings the crate inside `cargo xtask wasm-check`
+# (D18), which it passes: the only OS coupling is `std::fs` behind `vaco-io`,
+# which compiles on wasm and fails gracefully at runtime, and there is no clock.
+[lib]
+name = "vaco_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "vaco"
 path = "src/main.rs"
 
 [dependencies]
 vaco-core = { path = "../../core/vaco-core" }
+vaco-limits = { path = "../../core/vaco-limits" }
+vaco-opts = { path = "../../core/vaco-opts" }
 vaco-cli-core = { path = "../../app/vaco-cli-core" }
 vaco-sched = { path = "../../app/vaco-sched" }
 vaco-registry = { path = "../../registry/vaco-registry" }
-vaco-filter-graph = { path = "../../filter/vaco-filter-graph" }
+vaco-format-core = { path = "../../format/vaco-format-core" }
+vaco-codec-core = { path = "../../signal/vaco-codec-core" }
+vaco-packet = { path = "../../model/vaco-packet" }
+vaco-io = { path = "../../io/vaco-io" }
+vaco-protocol-core = { path = "../../io/vaco-protocol-core" }
+vaco-protocol-file = { path = "../../io/vaco-protocol-file" }
+
+[dev-dependencies]
+proptest.workspace = true
+tempfile.workspace = true
+# A fixture builder, not a muxer: `synth` writes exactly what it is told,
+# including a per-track `FlagDefault`, which is the field the whole
+# auto-selection rule turns on and which no real muxer will let a test control.
+# A dev-dependency on a layer-4 crate from layer 7 points downward, so
+# `layer-check` is satisfied; nothing in the shipped binary reaches it.
+vaco-demux-matroska = { path = "../../format/vaco-demux-matroska" }
 
 [lints]
 workspace = true

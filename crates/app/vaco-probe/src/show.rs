@@ -270,6 +270,31 @@ fn stream_value(field: &Field, s: &Stream, p: &CodecParameters, media: Option<Me
         "color_primaries" => colour(video.map(|v| v.color.primaries.name())),
         "chroma_location" => colour(video.map(|v| v.color.chroma_location.name())),
         "field_order" => Val::s(field_order_name(video.map(|v| v.field_order))),
+        // The H.264 decoder's two private options, both strings, both derived
+        // from one number. `nal_length_size` is the container's length prefix
+        // width and `is_avc` is "that width is non-zero"; measured, the same
+        // content in MP4 reports `true`/`4` and in MPEG-TS reports `false`/`0`.
+        // `None` for every other codec, which is what keeps the pair out of an
+        // HEVC or AV1 stream's output.
+        "is_avc" => Val::opt_s(
+            video
+                .and_then(|v| v.nal_length_size)
+                .map(|n| if n > 0 { "true" } else { "false" }.to_owned()),
+        ),
+        "nal_length_size" => {
+            Val::opt_s(video.and_then(|v| v.nal_length_size).map(|n| n.to_string()))
+        }
+        // The HEVC decoder's two, and they are **empty strings**, not absent:
+        // `view_ids_available=""` is printed for a plain single-layer stream.
+        // They list MV-HEVC layer ids, and this build parses no layer set, so
+        // the empty list is also the correct value rather than a placeholder.
+        "view_ids_available" | "view_pos_available" => {
+            if p.codec_id == Some(CodecId::Hevc) {
+                Val::s(String::new())
+            } else {
+                Val::Absent
+            }
+        }
         "sample_fmt" => Val::opt_s(
             audio
                 .and_then(|a| a.format)
@@ -317,11 +342,7 @@ fn stream_value(field: &Field, s: &Stream, p: &CodecParameters, media: Option<Me
         // `-count_packets`. All three fall through to the wildcard, which is
         // `Val::Absent` — the reference prints `N/A` for them too until
         // something fills them.
-        "bits_per_raw_sample" => Val::opt_s(
-            audio
-                .and_then(|a| a.bits_per_raw_sample)
-                .map(|b| b.to_string()),
-        ),
+        "bits_per_raw_sample" => Val::opt_s(bits_per_raw_sample(p).map(|b| b.to_string())),
         "nb_frames" => Val::opt_s(s.frame_count.map(|n| n.to_string())),
         "extradata_size" => Val::opt_i(
             p.extradata
@@ -394,6 +415,48 @@ const fn bits_per_sample(codec: Option<CodecId>) -> u32 {
     0
 }
 
+/// `bits_per_raw_sample`, which is a **codec** property and not a container
+/// one — and the two get confused in exactly one direction.
+///
+/// Video first, because that is where the reference actually prints it and the
+/// model could not express it until `VideoParameters` grew the field:
+///
+/// ```text
+/// av.mp4   h264 yuv420p     -> bits_per_raw_sample="8"    aac -> "N/A"
+/// 10-bit   h264 yuv420p10le -> bits_per_raw_sample="10"
+/// hevc.mp4 hevc yuv420p     -> bits_per_raw_sample="N/A"
+/// av1.mp4  av1  yuv420p     -> bits_per_raw_sample="N/A"
+/// ```
+///
+/// # The float suppression, and the crate-level defect behind it
+///
+/// `vaco-demux-mp4` and `vaco-demux-matroska` both fill
+/// `AudioParameters::bits_per_raw_sample` from the container's own sample
+/// depth — MP4's `stsd` sample entry `sample_size`, Matroska's `BitDepth` — so
+/// an AAC track reports 16 and an Opus track reports 32. The reference reports
+/// `N/A` for both. That number is not wrong, it is in the **wrong field**:
+/// probed on a WAV, `pcm_s16le` prints `bits_per_sample=16` and
+/// `bits_per_raw_sample="N/A"`, so the container's depth is
+/// `bits_per_coded_sample`, which `CodecParameters` has nowhere to put.
+///
+/// Until it does, this suppresses the value for a stream whose decoded sample
+/// format is **floating point**. A raw-sample bit count is meaningless for a
+/// float decoder, and every float-output stream measured — AAC in MP4, MOV,
+/// Matroska and `MPEG-TS`, Opus in Matroska and `WebM` — reports `N/A`. Integer
+/// audio is untouched: `pcm_s24le` in MOV reports `24` and must keep doing so.
+/// Reported upstream rather than being called a fix; see the doc file.
+fn bits_per_raw_sample(p: &CodecParameters) -> Option<u8> {
+    if let Some(v) = p.video.as_ref() {
+        return v.bits_per_raw_sample;
+    }
+    let audio = p.audio.as_ref()?;
+    let bits = audio.bits_per_raw_sample?;
+    if audio.format.is_some_and(vaco_sampfmt::SampleFmt::is_float) {
+        return None;
+    }
+    Some(bits)
+}
+
 /// `codec_tag_string`: printable ASCII kept, everything else as `[n]`.
 ///
 /// Observed both ways in one session: `avc1` for MP4's four-character code and
@@ -448,8 +511,28 @@ fn mime_codec_string(p: &CodecParameters) -> Option<String> {
                 level & 0xff
             ))
         }
-        CodecId::Hevc => Some("hvc1".to_owned()),
-        CodecId::Av1 => Some("av01".to_owned()),
+        // `av01.<profile>.<level><tier>.<depth>`, RFC 6381 / AV1 ISOBMFF §5.
+        // Probed at two depths on the same encoder:
+        //
+        //   profile 0, level 0, yuv420p     -> av01.0.00M.08
+        //   profile 0, level 0, yuv420p10le -> av01.0.00M.10
+        //
+        // The tier is `M` in both. `CodecParameters` does not carry
+        // `seq_tier`, and no `H`-tier sample could be produced with the
+        // encoders available, so `M` is what is emitted and the gap is
+        // recorded rather than guessed at.
+        CodecId::Av1 => {
+            let Level(level) = p.level.unwrap_or(Level(0));
+            Some(format!(
+                "av01.{}.{:02}M.{:02}",
+                profile.unwrap_or(0).clamp(0, 9),
+                level.clamp(0, 31),
+                p.video
+                    .as_ref()
+                    .and_then(|v| v.format)
+                    .map_or(8, vaco_pixfmt::PixFmt::max_depth),
+            ))
+        }
         // `mp4a.40.<audioObjectType>`; the object type is the profile plus one,
         // so AAC-LC (profile 1) prints `mp4a.40.2`.
         CodecId::Aac | CodecId::AacLatm => Some(format!(
@@ -459,8 +542,18 @@ fn mime_codec_string(p: &CodecParameters) -> Option<String> {
         CodecId::Opus => Some("opus".to_owned()),
         CodecId::Flac => Some("flac".to_owned()),
         CodecId::Vp8 => Some("vp8".to_owned()),
+        // `vp09.<profile>.<level>.<depth>` — probed as `vp09.00.10.08`. Left
+        // as the bare four-character form because this build has no VP9 parser,
+        // so `profile` and `level` are both unknown and a fabricated
+        // `vp09.00.10.08` would be right by coincidence on one file and wrong
+        // on the next. Closes when a `vaco-parse-vp9` exists.
         CodecId::Vp9 => Some("vp09".to_owned()),
         CodecId::Mp3 => Some("mp4a.40.34".to_owned()),
+        // HEVC falls through here deliberately. Measured on an `hvc1`-tagged
+        // MP4: the reference prints no `mime_codec_string` at all for HEVC, in
+        // any writer, at any `-show_optional_fields` setting. The
+        // four-character code alone is not an RFC 6381 codecs parameter and the
+        // reference does not pretend it is; we printed `hvc1` and were wrong.
         _ => None,
     }
 }
@@ -665,6 +758,110 @@ mod tests {
         // ffprobe prints codec_tag_string=mp4a with codec_tag=0x6134706d.
         assert_eq!(num::codec_tag(codec_tag_u32(Some(*b"mp4a"))), "0x6134706d");
         assert_eq!(num::codec_tag(codec_tag_u32(Some(*b"avc1"))), "0x31637661");
+    }
+
+    /// `mime_codec_string` per codec, each form probed on a real file. The
+    /// three video codecs answer three different shapes and one of them answers
+    /// nothing, which is why this is a table and not a rule.
+    #[test]
+    fn mime_codec_string_is_per_codec_and_hevc_has_none() {
+        // ffprobe -show_entries stream=mime_codec_string hevc.mp4  ->  absent
+        let hevc = CodecParameters::video().with_codec(CodecId::Hevc);
+        assert_eq!(mime_codec_string(&hevc), None);
+
+        // av1.mp4        profile 0, level 0, yuv420p     -> av01.0.00M.08
+        // 10-bit av1     profile 0, level 0, yuv420p10le -> av01.0.00M.10
+        let mut av1 = CodecParameters::video().with_codec(CodecId::Av1);
+        av1.profile = Some(Profile {
+            value: 0,
+            name: "Main",
+        });
+        av1.level = Some(Level(0));
+        if let Some(v) = av1.video.as_mut() {
+            v.format = vaco_pixfmt::PixFmt::from_name("yuv420p").ok();
+        }
+        assert_eq!(mime_codec_string(&av1).as_deref(), Some("av01.0.00M.08"));
+        if let Some(v) = av1.video.as_mut() {
+            v.format = vaco_pixfmt::PixFmt::from_name("yuv420p10le").ok();
+        }
+        assert_eq!(mime_codec_string(&av1).as_deref(), Some("av01.0.00M.10"));
+    }
+
+    /// `is_avc` and `nal_length_size` are H.264 decoder *private* options, and
+    /// they are container facts rather than bitstream ones. Probed on the same
+    /// content in two containers:
+    ///
+    /// ```text
+    /// av.mp4  ->  is_avc="true"   nal_length_size="4"
+    /// ts.ts   ->  is_avc="false"  nal_length_size="0"
+    /// hevc    ->  neither field printed at all
+    /// ```
+    #[test]
+    fn the_h264_private_options_distinguish_zero_from_absent() {
+        fn field(name: &str) -> Field {
+            crate::fields::STREAM
+                .iter()
+                .find(|f| f.name == name)
+                .copied()
+                .expect("in the table")
+        }
+        let stream = Stream::new(0, MediaType::Video, vaco_core::Rational::new(1, 1000));
+        let render = |size: Option<u8>, name: &str| {
+            let mut p = CodecParameters::video().with_codec(CodecId::H264);
+            if let Some(v) = p.video.as_mut() {
+                v.nal_length_size = size;
+            }
+            stream_value(&field(name), &stream, &p, Some(MediaType::Video))
+        };
+        let text = |v: Val| match v {
+            Val::S(s) => Some(s),
+            _ => None,
+        };
+        assert_eq!(text(render(Some(4), "is_avc")).as_deref(), Some("true"));
+        assert_eq!(
+            text(render(Some(4), "nal_length_size")).as_deref(),
+            Some("4")
+        );
+        // Annex B: a *value*, not an absence.
+        assert_eq!(text(render(Some(0), "is_avc")).as_deref(), Some("false"));
+        assert_eq!(
+            text(render(Some(0), "nal_length_size")).as_deref(),
+            Some("0")
+        );
+        // Another codec: absent, and `Absent::Omit` means nothing is printed.
+        assert!(matches!(render(None, "is_avc"), Val::Absent));
+        assert!(matches!(render(None, "nal_length_size"), Val::Absent));
+        assert_eq!(field("is_avc").absent, crate::fields::Absent::Omit);
+        assert_eq!(field("nal_length_size").absent, crate::fields::Absent::Omit);
+    }
+
+    /// `bits_per_raw_sample` is a codec property, and the container's own
+    /// sample depth is a *different* field the model cannot yet hold. See the
+    /// function's own note.
+    #[test]
+    fn bits_per_raw_sample_prefers_video_and_suppresses_float_audio() {
+        let mut video = CodecParameters::video().with_codec(CodecId::H264);
+        if let Some(v) = video.video.as_mut() {
+            v.bits_per_raw_sample = Some(8);
+        }
+        assert_eq!(bits_per_raw_sample(&video), Some(8));
+
+        // AAC: the demuxer supplies the container's 16, the reference prints
+        // `N/A`, and the decoder's output format is float.
+        let mut aac = CodecParameters::audio().with_codec(CodecId::Aac);
+        if let Some(a) = aac.audio.as_mut() {
+            a.bits_per_raw_sample = Some(16);
+            a.format = Some(vaco_sampfmt::SampleFmt::F32P);
+        }
+        assert_eq!(bits_per_raw_sample(&aac), None);
+
+        // Integer audio keeps its value: `pcm_s24le` in MOV reports 24.
+        let mut pcm = CodecParameters::audio().with_codec(CodecId::Pcm);
+        if let Some(a) = pcm.audio.as_mut() {
+            a.bits_per_raw_sample = Some(24);
+            a.format = Some(vaco_sampfmt::SampleFmt::S32);
+        }
+        assert_eq!(bits_per_raw_sample(&pcm), Some(24));
     }
 
     #[test]

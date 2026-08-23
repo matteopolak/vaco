@@ -241,7 +241,11 @@ impl AdtsHeader {
         params.profile = self.profile();
         params.audio = Some(AudioParameters {
             sample_rate: self.sampling_frequency,
-            format: None,
+            // The decoder's output format, as in `asc.rs` — see the note
+            // there. Same answer from an ADTS header as from an
+            // `AudioSpecificConfig`, measured on the same content in MPEG-TS
+            // and MP4.
+            format: Some(vaco_sampfmt::SampleFmt::F32P),
             layout: tables::layout_for_config(self.channel_configuration)
                 .or_else(|| self.channels().map(ChannelLayout::unspecified)),
             bits_per_raw_sample: None,
@@ -273,6 +277,14 @@ pub struct AdtsParser {
     /// Whether the last frame was accepted, which is what lets the final frame
     /// of a file be emitted without a following sync word to confirm it.
     synced: bool,
+    /// Whether [`Parser::set_extradata`] supplied an `AudioSpecificConfig`.
+    ///
+    /// When it did, that description wins over anything an ADTS header claims.
+    /// The reason is not preference but *correctness*: in MP4 and Matroska the
+    /// samples are raw AAC with no ADTS header at all, so any sync word the
+    /// scanner finds in them is a coincidence, and a coincidence must not be
+    /// allowed to overwrite a configuration record the container stated.
+    configured: bool,
     frames: u64,
     resyncs: u64,
 }
@@ -287,6 +299,7 @@ impl AdtsParser {
             budget: Budget::new(limits),
             deferred: Vec::new(),
             synced: false,
+            configured: false,
             frames: 0,
             resyncs: 0,
         }
@@ -328,7 +341,7 @@ impl AdtsParser {
         if !self.synced {
             self.resyncs = self.resyncs.saturating_add(1);
         }
-        if self.header != Some(header) {
+        if self.header != Some(header) && !self.configured {
             self.params = Some(header.to_codec_parameters());
         }
         self.header = Some(header);
@@ -416,6 +429,29 @@ impl Parser for AdtsParser {
         // No usable header. `i` stops `HEADER_LEN - 1` bytes short of the end,
         // so a header straddling the chunk boundary survives into the next call.
         Ok((None, i.min(input.len())))
+    }
+
+    /// Read an `AudioSpecificConfig` — the `esds` `DecoderSpecificInfo` in MP4,
+    /// `CodecPrivate` in Matroska.
+    ///
+    /// AAC is the codec where the two paths genuinely differ. In MPEG-TS every
+    /// frame carries an ADTS header and [`Parser::parse`] finds everything; in
+    /// MP4 the samples are *raw* AAC and the whole description — object type,
+    /// sampling frequency, channel configuration — is in the configuration
+    /// record. Measured on `a.m4a`: `profile`, `sample_fmt`, `channels` and
+    /// `channel_layout` all arrive here and none of them arrives from a packet.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`AudioSpecificConfig::parse`] returns.
+    fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
+        if extradata.is_empty() {
+            return Ok(());
+        }
+        let config = crate::asc::AudioSpecificConfig::parse(extradata)?;
+        self.params = Some(config.to_codec_parameters());
+        self.configured = true;
+        Ok(())
     }
 
     fn parameters(&self) -> Option<&CodecParameters> {

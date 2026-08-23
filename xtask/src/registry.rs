@@ -62,7 +62,7 @@ const KINDS: &[(&str, Option<Kind>)] = &[
     ("muxer", Some(Kind::Muxer)),
     ("decoder", Some(Kind::Decoder)),
     ("encoder", None),
-    ("parser", None),
+    ("parser", Some(Kind::Parser)),
     ("filter", Some(Kind::Filter)),
     ("protocol", Some(Kind::Protocol)),
     ("bitstream_filter", None),
@@ -74,6 +74,7 @@ enum Kind {
     Demuxer,
     Muxer,
     Decoder,
+    Parser,
     Filter,
     Protocol,
 }
@@ -85,6 +86,7 @@ impl Kind {
             Self::Demuxer => "::vaco_format_core::DemuxerDesc",
             Self::Muxer => "::vaco_format_core::MuxerDesc",
             Self::Decoder => "::vaco_codec_core::DecoderDesc",
+            Self::Parser => "::vaco_codec_core::ParserDesc",
             Self::Filter => "::vaco_filter_core::FilterDesc",
             Self::Protocol => "::vaco_protocol_core::ProtocolDesc",
         }
@@ -96,6 +98,7 @@ impl Kind {
             Self::Demuxer => "DEMUXERS",
             Self::Muxer => "MUXERS",
             Self::Decoder => "DECODERS",
+            Self::Parser => "PARSERS",
             Self::Filter => "FILTERS",
             Self::Protocol => "PROTOCOLS",
         }
@@ -410,7 +413,7 @@ fn emit_source(components: &[Component]) -> String {
          //! Every row is gated on the cargo feature its fragment names, so a disabled\n\
          //! component contributes no table entry, no dependency edge and no code.\n\
          //!\n\
-         //! Kinds with no descriptor type in the trait layer yet — `encoder`, `parser`,\n\
+         //! Kinds with no descriptor type in the trait layer yet — `encoder` and\n\
          //! `bitstream_filter` — get a metadata row and a path-resolution check, but no\n\
          //! typed table. When `EncoderDesc` and friends land, add them to `KINDS` in\n\
          //! `xtask/src/registry.rs` and the tables appear.\n\n",
@@ -998,9 +1001,32 @@ mod tests {
         assert!(src.contains("kind: crate::Kind::Demuxer,"));
         // Every typed table exists even when empty, so the registry's own source
         // never has to `#[cfg]` around a missing name.
-        for t in ["MUXERS", "DECODERS", "FILTERS", "PROTOCOLS"] {
+        for t in ["MUXERS", "DECODERS", "PARSERS", "FILTERS", "PROTOCOLS"] {
             assert!(src.contains(t), "{t}");
         }
+    }
+
+    /// `parser` gained a typed table when `vaco-codec-core` grew `ParserDesc`;
+    /// before that the generator emitted only a resolution check, and
+    /// `ParserProvider::parser_for` therefore had nothing to return.
+    #[test]
+    fn a_parser_fragment_lands_in_the_typed_table() {
+        let text = r#"[[component]]
+            kind = "parser"
+            name = "h264"
+            feature = "parse-h264"
+            media = "video"
+            codec = "h264"
+            ctor = "vaco_parse_h264::PARSER""#;
+        let tables = toml::components(text).expect("parse");
+        let t = tables.first().expect("one table");
+        let c = build(t, "vaco-parse-h264", "codec").expect("build");
+        let src = emit_source(&[c]);
+        assert!(src.contains("pub static PARSERS: &[&::vaco_codec_core::ParserDesc]"));
+        assert!(src.contains("&::vaco_parse_h264::PARSER,"));
+        assert!(src.contains("kind: crate::Kind::Parser,"));
+        // and it is a table row, not a bare resolution check.
+        assert!(!src.contains("let _ = &::vaco_parse_h264::PARSER;"));
     }
 
     #[test]

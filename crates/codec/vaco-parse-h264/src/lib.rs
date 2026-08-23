@@ -142,3 +142,16 @@ pub use sps::{
 // Re-exported so a caller can describe a stream without also depending on
 // `vaco-codec-core` directly.
 pub use vaco_codec_core::CodecParameters;
+
+/// The registry descriptor for this parser.
+///
+/// `vaco-component.toml` names this const, `cargo xtask gen-registry` puts it
+/// in `vaco_registry::PARSERS`, and a demuxer reaches it through
+/// `ParserProvider` without ever naming this crate (D14.1).
+pub const PARSER: ::vaco_codec_core::ParserDesc = ::vaco_codec_core::ParserDesc {
+    name: "h264",
+    long_name: "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+    codecs: &[::vaco_codec_core::CodecId::H264],
+    media_type: ::vaco_core::MediaType::Video,
+    make: |limits| ::std::boxed::Box::new(parser::H264Parser::new(limits)),
+};

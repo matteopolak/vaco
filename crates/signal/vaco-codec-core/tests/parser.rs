@@ -8,8 +8,8 @@
 )]
 
 use vaco_codec_core::mock::MockParser;
-use vaco_codec_core::{CodecId, CodecParameters, ParserDriver};
-use vaco_core::Error;
+use vaco_codec_core::{CodecId, CodecParameters, Parser, ParserDesc, ParserDriver};
+use vaco_core::{Error, MediaType};
 use vaco_limits::Limits;
 
 #[test]
@@ -135,4 +135,58 @@ fn spinning_without_pushing_still_aborts() {
         }
     }
     panic!("a caller spinning without pushing was never stopped");
+}
+
+// ------------------------------------------------------------- `ParserDesc`
+
+/// The descriptor is inspectable without building anything, which is what lets
+/// `-parsers` and `-h parser=h264` print capabilities without allocating.
+#[test]
+fn a_descriptor_answers_before_anything_is_built() {
+    const DESC: ParserDesc = ParserDesc {
+        name: "mock",
+        long_name: "a mock parser",
+        codecs: &[CodecId::H264, CodecId::Hevc],
+        media_type: MediaType::Video,
+        make: |_| Box::new(MockParser::new(4)),
+    };
+    assert!(DESC.handles(CodecId::H264));
+    assert!(DESC.handles(CodecId::Hevc));
+    assert!(!DESC.handles(CodecId::Aac));
+    assert_eq!(DESC.media_type, MediaType::Video);
+    // and `Debug` must not require building one either.
+    assert!(format!("{DESC:?}").contains("mock"));
+}
+
+/// A descriptor-built parser is a `Box<dyn Parser>`, and that has to be usable
+/// with `ParserDriver` — the blanket `impl Parser for Box<P>` is what makes the
+/// whole `ParserProvider` seam work at all.
+#[test]
+fn a_boxed_parser_from_a_descriptor_drives() {
+    const DESC: ParserDesc = ParserDesc {
+        name: "mock",
+        long_name: "a mock parser",
+        codecs: &[CodecId::H264],
+        media_type: MediaType::Video,
+        make: |_| Box::new(MockParser::new(4)),
+    };
+    let mut d = ParserDriver::new(DESC.build(Limits::permissive()), Limits::permissive());
+    d.push(&[0; 8]).unwrap();
+    assert!(matches!(d.next_unit(), Err(Error::NeedMoreInput)));
+    assert_eq!(d.consumed(), 8);
+}
+
+/// `set_extradata` has a default body, so a codec whose containers carry no
+/// configuration record does not have to write one — and calling it must be
+/// harmless, twice and with an empty slice.
+#[test]
+fn the_default_set_extradata_is_harmless() {
+    let mut p = MockParser::new(4);
+    p.set_extradata(&[]).expect("empty is harmless");
+    p.set_extradata(&[1, 2, 3]).expect("ignored is harmless");
+    p.set_extradata(&[1, 2, 3]).expect("twice is harmless");
+    // and it must forward through the box, or a provider-supplied parser
+    // silently never gets its configuration.
+    let mut boxed: Box<dyn Parser> = Box::new(MockParser::new(4));
+    boxed.set_extradata(&[1, 2, 3]).expect("forwards");
 }

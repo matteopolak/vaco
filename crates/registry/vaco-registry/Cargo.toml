@@ -11,6 +11,9 @@ authors.workspace = true
 [dependencies]
 vaco-core = { path = "../../core/vaco-core" }
 vaco-codec-core = { path = "../../signal/vaco-codec-core" }
+# `Parsers` carries the `Limits` it builds parsers with: `ParserProvider::
+# parser_for` takes none, and a parser on the probe path reads attacker bytes.
+vaco-limits = { path = "../../core/vaco-limits" }
 vaco-format-core = { path = "../../format/vaco-format-core" }
 vaco-filter-core = { path = "../../filter/vaco-filter-core" }
 vaco-protocol-core = { path = "../../io/vaco-protocol-core" }
@@ -31,10 +34,15 @@ layer = 6
 # `default = false` in its own fragment; nothing here is hand-maintained.
 
 [features]
-default = ["demux-matroska", "demux-mp4", "demux-mpegts"]
+default = ["demux-matroska", "demux-mp4", "demux-mpegts", "parse-aac", "parse-av1", "parse-h264", "parse-hevc", "parse-opus"]
 "demux-matroska" = ["dep:vaco-demux-matroska"]
 "demux-mp4" = ["dep:vaco-demux-mp4"]
 "demux-mpegts" = ["dep:vaco-demux-mpegts"]
+"parse-aac" = ["dep:vaco-parse-aac"]
+"parse-av1" = ["dep:vaco-parse-av1"]
+"parse-h264" = ["dep:vaco-parse-h264"]
+"parse-hevc" = ["dep:vaco-parse-hevc"]
+"parse-opus" = ["dep:vaco-parse-opus"]
 "protocol-http" = ["dep:vaco-protocol-http"]
 
 [dependencies.vaco-demux-matroska]
@@ -47,6 +55,26 @@ optional = true
 
 [dependencies.vaco-demux-mpegts]
 path = "../../format/vaco-demux-mpegts"
+optional = true
+
+[dependencies.vaco-parse-aac]
+path = "../../codec/vaco-parse-aac"
+optional = true
+
+[dependencies.vaco-parse-av1]
+path = "../../codec/vaco-parse-av1"
+optional = true
+
+[dependencies.vaco-parse-h264]
+path = "../../codec/vaco-parse-h264"
+optional = true
+
+[dependencies.vaco-parse-hevc]
+path = "../../codec/vaco-parse-hevc"
+optional = true
+
+[dependencies.vaco-parse-opus]
+path = "../../codec/vaco-parse-opus"
 optional = true
 
 [dependencies.vaco-protocol-http]
