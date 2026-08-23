@@ -163,6 +163,84 @@ pub fn comb_score(plane: PlaneRef<'_>) -> u64 {
     score
 }
 
+/// Sum of squared per-sample differences between two same-sized 8-bit
+/// planes (the overlap of their geometry, as [`plane_sad`]), the numerator
+/// `vaco-filter-analysis`'s `psnr` needs for its per-component MSE.
+///
+/// # 2026-08-23 addition
+///
+/// `vaco-filter-analysis` (plan 16 SS4.3, GitHub #477) needs a sum-of-
+/// squares reduction for `psnr`'s MSE, which is a different reduction from
+/// [`plane_sad`]'s sum-of-absolute-differences — squaring changes which
+/// differences dominate, so it is not expressible as a post-hoc transform of
+/// the existing sum. Added here per this crate's own invitation to extend
+/// rather than duplicate.
+///
+/// # Independent oracle
+///
+/// Two identical planes score `0`, the algebraic identity of "sum of squared
+/// differences"; a plane compared against its bitwise complement (`255 - x`)
+/// scores `255 * 255 * sample_count`, the maximum possible value — both are
+/// true of any correct sum-of-squares, not of this implementation.
+#[must_use]
+pub fn plane_sse(a: PlaneRef<'_>, b: PlaneRef<'_>) -> u64 {
+    let rows = a.rows().min(b.rows());
+    let mut sse: u64 = 0;
+    for y in 0..rows {
+        let (Some(ra), Some(rb)) = (a.row(y), b.row(y)) else {
+            continue;
+        };
+        let width = ra.len().min(rb.len());
+        for x in 0..width {
+            let (Some(&sa), Some(&sb)) = (ra.get(x), rb.get(x)) else {
+                continue;
+            };
+            let d = u64::from(sa.abs_diff(sb));
+            sse = sse.saturating_add(d.saturating_mul(d));
+        }
+    }
+    sse
+}
+
+/// How many of the samples two same-sized 8-bit planes share exactly, over
+/// how many samples were compared (the overlap of their geometry).
+///
+/// `vaco-filter-analysis`'s `identity` filter is measured (not guessed, see
+/// that crate's docs) to report the *fraction of bit-exact pixels* per
+/// plane, not a continuous difference measure — a plane that differs by 1
+/// everywhere and a plane that differs by 255 everywhere score identically
+/// (`0.0`) under this metric, which is the property that distinguishes it
+/// from [`normalised_sad`].
+///
+/// # Independent oracle
+///
+/// Two identical planes score `(n, n)` (every sample matches); a plane
+/// compared against its bitwise complement with no fixed point (guaranteed
+/// for any 8-bit value, since `x != 255 - x` whenever `x != 127.5`, which no
+/// integer is) scores `(0, n)`.
+#[must_use]
+pub fn identical_count(a: PlaneRef<'_>, b: PlaneRef<'_>) -> (u64, u64) {
+    let rows = a.rows().min(b.rows());
+    let mut same: u64 = 0;
+    let mut total: u64 = 0;
+    for y in 0..rows {
+        let (Some(ra), Some(rb)) = (a.row(y), b.row(y)) else {
+            continue;
+        };
+        let width = ra.len().min(rb.len());
+        for x in 0..width {
+            let (Some(&sa), Some(&sb)) = (ra.get(x), rb.get(x)) else {
+                continue;
+            };
+            total += 1;
+            if sa == sb {
+                same += 1;
+            }
+        }
+    }
+    (same, total)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "test code")]
 mod tests {
@@ -253,5 +331,44 @@ mod tests {
         let smooth_score = comb_score(smooth.plane(0).unwrap());
         assert!(combed > smooth_score, "combed={combed} smooth={smooth_score}");
         assert!(combed > 0);
+    }
+
+    #[test]
+    fn plane_sse_identical_is_zero_complement_is_the_algebraic_maximum() {
+        let a = plane_of(0, 4, 4);
+        let b = plane_of(255, 4, 4);
+        assert_eq!(plane_sse(a.plane(0).unwrap(), a.plane(0).unwrap()), 0);
+        assert_eq!(
+            plane_sse(a.plane(0).unwrap(), b.plane(0).unwrap()),
+            255 * 255 * 16
+        );
+    }
+
+    #[test]
+    fn identical_count_distinguishes_from_normalised_sad() {
+        // Half the plane matches exactly, half differs by 1 (not 255): a
+        // continuous metric like `normalised_sad` reports a small number
+        // (1/255 over half the samples), but `identical_count`'s fraction
+        // must be exactly 0.5 regardless of *how much* the other half
+        // differs, which is the property that makes it "identity" rather
+        // than "difference".
+        let pool = FramePool::default();
+        let mut a = pool.acquire_video(PixFmt::Gray8, 4, 4).unwrap();
+        let mut b = pool.acquire_video(PixFmt::Gray8, 4, 4).unwrap();
+        if let Some(mut p) = a.plane_mut(0) {
+            p.fill(10);
+        }
+        if let Some(mut p) = b.plane_mut(0) {
+            p.fill(10);
+            if let Some(row) = p.row_mut(0) {
+                row.fill(11);
+            }
+        }
+        let (same, total) = identical_count(a.plane(0).unwrap(), b.plane(0).unwrap());
+        assert_eq!(total, 16);
+        assert_eq!(same, 12, "3 of 4 rows are untouched, each 4 pixels wide");
+        #[allow(clippy::cast_precision_loss, reason = "test code, tiny counts")]
+        let fraction = same as f64 / total as f64;
+        assert!((fraction - 0.75).abs() < 1e-12);
     }
 }

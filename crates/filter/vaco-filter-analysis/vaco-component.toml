@@ -1,0 +1,71 @@
+# Registry fragment (plan 19 SS3.4). Consumed by `cargo xtask gen-registry`.
+#
+# T2/T3 video analysis and detection filters, FT-4.12d (GitHub #477): psnr,
+# ssim, identity, msad, signalstats, blackdetect, blackframe, bbox — eight of
+# plan 16 SS4.3's twenty-three-filter row. The other fifteen
+# (`ssim360`, `xpsnr`, `vif`, `vmafmotion`, `blockdetect`, `bitplanenoise`,
+# `entropy`, `siti`, `readeia608`, `readvitc`, `showinfo`,
+# `photosensitivity`, `scdet`, `codecview`, `cropdetect`, `signature`) are
+# not registered here — see `vaco_filter_analysis`'s crate-root doc for why
+# each one did not land in this wave.
+#
+# Each `ctor` names the per-filter `pub const DESC: FilterDesc`; runtime
+# instantiation goes through `vaco_filter_analysis::registry::AnalysisRegistry`,
+# a `vaco_filter_graph::registry::FilterRegistry` impl — the same shape
+# `vaco-filter-temporal` and `vaco-filter-denoise` use.
+
+[[component]]
+kind = "filter"
+name = "bbox"
+long_name = "Compute bounding box for each frame."
+ctor = "vaco_filter_analysis::bbox::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "blackdetect"
+long_name = "Detect video intervals that are (almost) black."
+ctor = "vaco_filter_analysis::blackdetect::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "blackframe"
+long_name = "Detect frames that are (almost) black."
+ctor = "vaco_filter_analysis::blackframe::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "identity"
+long_name = "Calculate the Identity between two video streams."
+ctor = "vaco_filter_analysis::identity::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "msad"
+long_name = "Calculate the MSAD between two video streams."
+ctor = "vaco_filter_analysis::msad::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "psnr"
+long_name = "Calculate the PSNR between two video streams."
+ctor = "vaco_filter_analysis::psnr::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "signalstats"
+long_name = "Generate statistics from video analysis."
+ctor = "vaco_filter_analysis::signalstats::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "ssim"
+long_name = "Calculate the SSIM between two video streams."
+ctor = "vaco_filter_analysis::ssim::DESC"
+media = "video"
