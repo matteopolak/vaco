@@ -182,9 +182,12 @@ reference does neither.
 `Tracks`, `Chapters`, `Attachments`, `Tags`, `Cluster`, `Cues`) opens with a
 `CRC-32` element (RFC 8794 §11.3.2) as its first child: standard CRC-32
 (IEEE, the same table `zlib.crc32` uses), emitted **little-endian**, over the
-element's own payload excluding the `CRC-32` element itself. `-bitexact`
-does not gate it — `ffmpeg -h muxer=matroska` has no such `AVOption` — so it
-is simply always there. `mux::with_crc32` is the one place this happens;
+element's own payload excluding the `CRC-32` element itself. `ffmpeg -h
+muxer=matroska` does have a real `AVOption` here — `-write_crc32 <boolean>
+... (default true)` — but `Muxer` has no per-muxer option channel to turn it
+off through, `-bitexact` does not touch it, and every measurement behind
+this section was taken at the (default) `true` setting anyway, so this crate
+writes it unconditionally. `mux::with_crc32` is the one place this happens;
 `vaco_hash::crc32` supplies the algorithm (D11: `vaco-hash` is the single
 owner of the `crc` crate, so this crate depends on it rather than adding a
 second table). Verified against two independent elements from a real

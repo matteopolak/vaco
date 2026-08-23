@@ -74,10 +74,12 @@
 //! excluding the `CRC-32` element itself. [`with_crc32`] is the one place
 //! that wrapping happens; every `*_bytes` builder in this file routes its
 //! body through it before handing it to `write_element`. Written
-//! unconditionally — `-bitexact` does not gate it, and there is no
-//! `-write_crc32`-shaped option on the muxer side to gate it with (measured:
-//! `ffmpeg -h muxer=matroska` lists no such `AVOption`; the CRC is simply
-//! always there).
+//! unconditionally in this crate, which matches the reference's own default:
+//! `ffmpeg -h muxer=matroska` lists `-write_crc32 <boolean> ... (default
+//! true)`, a real `AVOption` this crate has no channel to turn off (`Muxer`
+//! carries no per-muxer option surface) — moot in practice, since `true` is
+//! also what every measurement in this file was taken against, and
+//! `-bitexact` does not touch it either.
 //!
 //! **`SeekHead`.** The crate's own former objection — that building it
 //! needs "either a second seek-patch pass or fixed-width placeholder
@@ -237,7 +239,10 @@ pub const MUXER_MATROSKA: MuxerDesc = MuxerDesc {
     long_name: "Matroska",
     extensions: &["mkv"],
     default_video: Some(CodecId::H264),
-    default_audio: Some(CodecId::Aac),
+    // Measured: `ffmpeg -h muxer=matroska` prints "Default audio codec:
+    // ac3.", not AAC — easy to guess wrong since AAC is `webm`'s sibling
+    // muxer's own instinct, but the reference's is AC-3.
+    default_audio: Some(CodecId::Ac3),
     open: open_matroska,
 };
 

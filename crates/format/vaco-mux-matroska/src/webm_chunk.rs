@@ -47,12 +47,19 @@ use crate::mux::{MatroskaMuxer, WEBM};
 const DEFAULT_AUDIO_CHUNK_DURATION_MS: i64 = 5000;
 
 /// The registry descriptor for `webm_chunk`.
+///
+/// Measured: `ffmpeg -h muxer=webm_chunk` prints neither a "Default video
+/// codec" nor a "Default audio codec" line — unlike its sibling `webm`,
+/// which prints both (`vp9`/`opus`). Conflating the two is an easy mistake
+/// since `webm_chunk` wraps `webm` internally (see the module docs), but the
+/// reference does not carry `webm`'s defaults over, so this descriptor does
+/// not either.
 pub const MUXER_WEBM_CHUNK: MuxerDesc = MuxerDesc {
     name: "webm_chunk",
     long_name: "WebM Chunk Muxer",
     extensions: &["chk"],
-    default_video: Some(CodecId::Vp9),
-    default_audio: Some(CodecId::Opus),
+    default_video: None,
+    default_audio: None,
     open: open_webm_chunk,
 };
 

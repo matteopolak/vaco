@@ -540,8 +540,11 @@ every Level-1 element (`SeekHead`, `Info`, `Tracks`, `Chapters`,
 `Attachments`, `Tags`, `Cluster`, `Cues`) before it is wrapped in its own
 `write_element` call — `vaco_hash::crc32` (D11's single owner of the `crc`
 crate) supplies the algorithm, so no second table was added anywhere.
-Confirmed unconditional: `ffmpeg -h muxer=matroska` has no `-write_crc32`-
-shaped `AVOption`, and `-bitexact` does not touch it either. A new
+Confirmed unconditional in what this crate writes: `ffmpeg -h muxer=matroska`
+does list a real `-write_crc32 <boolean> ... (default true)` `AVOption` —
+correcting an earlier draft of this entry, which said no such option
+existed — but it defaults on, `Muxer` has no per-muxer option channel to
+turn it off through anyway, and `-bitexact` does not touch it. A new
 `tests/crc32_reference_fixture.rs` checks this crate's implementation against
 `tests/fixtures/ffmpeg_reference.mkv` — the reference's *own* output, not
 this crate's — recomputing and validating all six CRC-32-bearing Level-1
