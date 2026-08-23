@@ -547,3 +547,26 @@ message is a paperwork problem; a HEAD that does not compile blocks everyone.
 If you cannot split the file safely, say so and hand it to the orchestrator
 rather than committing half a change.
 
+## Two inputs does not mean `framesync` — check the option surface
+
+Three agents in one day were told by a brief that their two-input filters
+should ride on `vaco-filter-framesync`, and all three measured that they
+should not. The tally so far:
+
+| Filter | Uses `framesync`? | How it was determined |
+|---|---|---|
+| `overlay`, `alphamerge` | **yes** | `-h filter=` shows `eof_action`, `shortest`, `repeatlast`, `ts_sync_mode` |
+| `framepack`, `mergeplanes` | no | none of those options exist |
+| `maskedclamp`/`maskedmax`/`maskedmin`/`maskedthreshold` | no | measured, none expose the surface |
+| `psnr`, `ssim`, `identity`, `msad` | no | measured, none expose the surface |
+
+The rule is not arity. `framesync` exists to reconcile two inputs with
+*independent timelines* — different frame rates, different end times — and a
+filter that does that has the four options to prove it. A filter that simply
+needs one frame from each pad per step is strict lockstep, which is what
+`vaco-filter-core`'s `Paired` adapter is for.
+
+So: **run `ffmpeg -h filter=<name>` and look for `eof_action` before reaching
+for `framesync`.** It is one command and it has been the right answer four
+times out of five.
+

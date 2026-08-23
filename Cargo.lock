@@ -2125,6 +2125,7 @@ dependencies = [
  "smallvec",
  "vaco-chlayout",
  "vaco-core",
+ "vaco-filter-adsp",
  "vaco-filter-core",
  "vaco-filter-graph",
  "vaco-frame",
