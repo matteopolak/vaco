@@ -21,6 +21,7 @@
 //! | [`Scanner`] — incremental, resumable framing across chunk boundaries | layer 0's iterator is whole-buffer only |
 //! | [`convert`] — Annex B ↔ length-prefixed, budgeted | layer 0 has no [`Budget`](vaco_limits::Budget) in scope |
 //! | [`NalHeader`] — the H.264/HEVC/VVC header layouts | codec knowledge, however small |
+//! | [`extradata`] — assemble extradata from in-band parameter sets | the one shared floor `vaco-bsf-generic` and `vaco-format-core` both stand on (D19; CONFORMANCE-FINDINGS 26) |
 //!
 //! # The one idea worth reading first
 //!
@@ -83,12 +84,14 @@
 #![forbid(unsafe_code)]
 
 pub mod convert;
+pub mod extradata;
 mod framing;
 mod header;
 mod rbsp;
 mod scan;
 
 pub use convert::{annexb_to_length_prefixed, length_prefixed_to_annexb};
+pub use extradata::{assemble_extradata, is_parameter_set, parameter_sets};
 pub use framing::{Framing, LengthSize, Nal, NalUnits, units};
 pub use header::{HeaderKind, NalHeader};
 pub use rbsp::{RbspBuf, escape_into};

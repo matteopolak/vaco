@@ -9,38 +9,32 @@
 //! `extradata_size`, or a muxer that needs `avcC`/`hvcC` up front) has to pull
 //! them back out. This is that pull.
 //!
+//! The assembly rule itself — which units count as parameter sets, and how
+//! their bytes are laid out — lives in [`vaco_format_nalu::extradata`], not
+//! here. `vaco-format-core`'s stream discovery needs the exact same rule to
+//! close finding 26's read half, and D19 allows it exactly one definition;
+//! see that module's docs for the measurement and the rejected alternatives.
+//! This crate is the *write*-side caller: a [`BitstreamFilter`] that a muxer
+//! or `-bsf:v extract_extradata` can insert into a packet stream.
+//!
 //! # What is measured, not assumed
 //!
-//! Every byte-level detail below was checked against `ffmpeg 8.1`, not read
-//! from its source (D7): a synthetic `testsrc` clip encoded with `libx264`,
-//! muxed to AVI (finding 26's own recipe), and separately run straight
-//! through `-bsf:v extract_extradata,dump_extra=freq=keyframe` on the raw
-//! Annex B elementary stream to isolate exactly the bytes the filter adds.
-//! Both routes produced the same 37-byte buffer:
+//! Checked against `ffmpeg 8.1`, not read from its source (D7): a synthetic
+//! `testsrc` clip encoded with `libx264`, muxed to AVI (finding 26's own
+//! recipe), and separately run straight through
+//! `-bsf:v extract_extradata,dump_extra=freq=keyframe` on the raw Annex B
+//! elementary stream to isolate exactly the bytes the filter adds. Both
+//! routes produced the same 37-byte buffer, reproduced in
+//! [`vaco_format_nalu::extradata`]'s own doc comment and tests.
 //!
-//! ```text
-//! 00 00 01 67 64 00 0a ac d9 44 26 c0 44 00 00 03 00 04 00 00 03 00 c8 3c 48 96 58
-//! 00 00 00 01 68 eb e3 cb 22 c0
-//! ```
-//!
-//! Two things this is not the "obvious" spelling of:
-//!
-//! 1. **The first unit gets a three-byte start code; every unit after it gets
-//!    four.** The source packet's own SPS used a four-byte start code
-//!    (`00 00 00 01`); the extracted copy shortens only the first one. A
-//!    four-byte start code prevents a run of `RBSP` trailing zero bits at the
-//!    end of one unit from being misread as the *next* unit's start code once
-//!    two units are concatenated with nothing else between them — which is
-//!    exactly the situation gluing parameter sets together creates — and a
-//!    buffer that opens at offset zero has no such ambiguity to guard
-//!    against, so the first unit does not pay for it. Reproduced identically
-//!    for HEVC's three-unit VPS/SPS/PPS case.
-//! 2. **`extract_extradata` does not remove the units from the packet by
-//!    default.** `-bsf:v extract_extradata=remove=1` does; the bare name
-//!    does not. [`BsfProvider::open`](vaco_format_core::mux::BsfProvider::open)
-//!    carries no per-instance option string (see `planning/INTERFACE-GAPS.md`
-//!    for that gap), so this crate can only ever construct the bare-name
-//!    behaviour — `remove` is simply never reachable through the seam today.
+//! One thing worth calling out here specifically, because it is a fact about
+//! *this filter's construction* rather than about the assembly rule:
+//! `extract_extradata` does not remove the units from the packet by default.
+//! `-bsf:v extract_extradata=remove=1` does; the bare name does not.
+//! [`BsfProvider::open`](vaco_format_core::mux::BsfProvider::open) carries no
+//! per-instance option string (see `planning/INTERFACE-GAPS.md` for that
+//! gap), so this crate can only ever construct the bare-name behaviour —
+//! `remove` is simply never reachable through the seam today.
 //!
 //! # How the result is reported
 //!
@@ -72,7 +66,7 @@ use std::collections::VecDeque;
 use vaco_bsf_core::{BsfDesc, MappedFilter, PacketMap};
 use vaco_codec_core::{BitstreamFilter, CodecId, CodecParameters};
 use vaco_core::{Error, Result};
-use vaco_format_nalu::{Framing, HeaderKind, LengthSize, NalHeader, units};
+use vaco_format_nalu::{Framing, HeaderKind, LengthSize};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::{Packet, PacketSideData};
 use vaco_pool::Buffer;
@@ -116,16 +110,6 @@ fn build(params: &CodecParameters) -> Result<Box<dyn BitstreamFilter>> {
     })))
 }
 
-/// Whether `nal_unit_type` is a parameter set worth collecting, for the one
-/// codec [`ExtractExtradata::header_kind`] names.
-fn is_param_set(header_kind: HeaderKind, nal_unit_type: u8) -> bool {
-    match header_kind {
-        HeaderKind::H264 => matches!(nal_unit_type, 7 | 8), // SPS, PPS
-        HeaderKind::H265 => matches!(nal_unit_type, 32..=34), // VPS, SPS, PPS
-        HeaderKind::H266 => false,
-    }
-}
-
 struct ExtractExtradata {
     header_kind: HeaderKind,
     framing: Framing,
@@ -143,29 +127,11 @@ impl PacketMap for ExtractExtradata {
     fn push(&mut self, packet: Option<&Packet>, out: &mut VecDeque<Packet>) -> Result<()> {
         let Some(p) = packet else { return Ok(()) };
 
-        let mut found: Vec<&[u8]> = Vec::new();
-        for nal in units(p.payload(), self.framing) {
-            if let Some(h) = NalHeader::parse(self.header_kind, nal.data)
-                && is_param_set(self.header_kind, h.nal_unit_type)
-            {
-                found.push(nal.data);
-            }
-        }
+        let found = vaco_format_nalu::parameter_sets(p.payload(), self.framing, self.header_kind);
 
         let mut out_pkt = p.clone();
         if !found.is_empty() {
-            let mut candidate = Vec::new();
-            for (i, unit) in found.iter().enumerate() {
-                // The first unit gets a short start code; every later one a
-                // long one — see the module docs for why this is not
-                // arbitrary.
-                if i == 0 {
-                    candidate.extend_from_slice(&[0, 0, 1]);
-                } else {
-                    candidate.extend_from_slice(&[0, 0, 0, 1]);
-                }
-                candidate.extend_from_slice(unit);
-            }
+            let candidate = vaco_format_nalu::assemble_extradata(found);
             if candidate != self.stored {
                 self.budget
                     .release(u64::try_from(self.stored.len()).unwrap_or(0));

@@ -4,8 +4,11 @@
 //! disjoint sub-slices; this crate's framing agrees exactly with the definition
 //! in `vaco-bitstream`; `RbspBuf` agrees with `to_rbsp` byte for byte and always
 //! produces a valid `Padded`; escaping round-trips; framing conversion preserves
-//! the unit sequence; and the incremental `Scanner` finds exactly the boundaries
-//! a whole-buffer scan finds however the input is chopped up.
+//! the unit sequence; the incremental `Scanner` finds exactly the boundaries
+//! a whole-buffer scan finds however the input is chopped up; and
+//! `extradata::assemble_extradata` (CONFORMANCE-FINDINGS 26) round-trips
+//! through `units` — what it assembles, `units` parses back into exactly the
+//! same NAL units in the same order.
 //!
 //! A `LimitExceeded` is correct behaviour and returns normally; a panic, a hang
 //! or a disagreement is a bug (plan 13 §2.2.4).
@@ -15,8 +18,9 @@
 use libfuzzer_sys::fuzz_target;
 use vaco_bitstream::{annexb, avcc};
 use vaco_format_nalu::{
-    Framing, LengthSize, RbspBuf, Scanner, annexb_to_length_prefixed, escape_into,
-    length_prefixed_to_annexb, units, violates_ebsp_constraint,
+    Framing, HeaderKind, LengthSize, RbspBuf, Scanner, annexb_to_length_prefixed,
+    assemble_extradata, escape_into, length_prefixed_to_annexb, parameter_sets, units,
+    violates_ebsp_constraint,
 };
 use vaco_limits::{Budget, Limits};
 
@@ -125,4 +129,28 @@ fuzz_target!(|data: &[u8]| {
         incremental, reference,
         "incremental scanning found different boundaries than a whole-buffer scan"
     );
+
+    // ---- extradata assembly (CONFORMANCE-FINDINGS 26) round-trips through
+    // `units`: whatever `parameter_sets` collected out of arbitrary bytes,
+    // `assemble_extradata` lays out with a valid start-code convention, and
+    // re-scanning the result finds exactly those units again, in order.
+    // `units()` already trims trailing zero bits from a found unit, so a
+    // collected unit never ends in a byte that could fuse with the next
+    // delimiter into a different boundary — which is what makes the
+    // round-trip exact rather than approximate.
+    for kind in [HeaderKind::H264, HeaderKind::H265] {
+        let sets = parameter_sets(data, Framing::AnnexB, kind);
+        let assembled = assemble_extradata(sets.iter().copied());
+        if sets.is_empty() {
+            assert!(assembled.is_empty());
+            continue;
+        }
+        assert_eq!(&assembled[..3], &[0, 0, 1], "first start code must be 3 bytes");
+        let expected_len: usize =
+            sets.iter().map(|u| u.len()).sum::<usize>() + 3 + 4 * (sets.len() - 1);
+        assert_eq!(assembled.len(), expected_len, "assembled length disagrees with the unit sizes");
+
+        let recovered: Vec<&[u8]> = units(&assembled, Framing::AnnexB).map(|n| n.data).collect();
+        assert_eq!(recovered, sets, "assembled extradata does not round-trip through units()");
+    }
 });
