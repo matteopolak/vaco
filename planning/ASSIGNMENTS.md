@@ -157,3 +157,4 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-filter-color | 5 | #476 | agent:color2 | assigned | 2026-08-23 |  | remainder of the 29-filter row |
 | vaco-filter-key | 5 | #476 | agent:color2 | assigned | 2026-08-23 |  | remainder of the 20-filter row |
 | vaco-filter-lut | 5 | #476 | agent:color2 | assigned | 2026-08-23 |  | lut1d, haldclutsrc, the .3dl/.dat/.m3d parsers |
+| vaco-filter-analysis | 5 | #477 | agent:analysis | assigned | 2026-08-23 |  | unblocked by INTERFACE-GAPS 11 closing; may extend vaco-filter-vdsp |
