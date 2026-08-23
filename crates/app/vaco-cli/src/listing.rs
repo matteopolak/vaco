@@ -1410,9 +1410,25 @@ mod tests {
             "{s}"
         );
         assert!(s.contains("matroska"), "{s}");
-        // D5: zero muxers, so no row ever carries an `E`.
-        assert_eq!(vaco_registry::muxers().len(), 0);
-        assert!(!s.lines().any(|l| l.starts_with("  E")), "{s}");
+        // This used to assert `muxers().len() == 0` and that no row carried an
+        // `E`, which was true when written and stopped being true the moment
+        // muxers landed. A test that pins a point-in-time *fact* rather than an
+        // invariant fails on success, which is the least useful way for a test
+        // to fail. What is actually invariant is the mapping: a format shows
+        // `D` exactly when it demuxes and `E` exactly when it muxes.
+        let demuxers = vaco_registry::demuxers().len();
+        let muxers = vaco_registry::muxers().len();
+        assert!(demuxers > 0, "the registry has no demuxers at all");
+        let d_rows = s.lines().filter(|l| l.starts_with(" D")).count();
+        let e_rows = s
+            .lines()
+            .filter(|l| l.len() > 2 && l.as_bytes().get(2) == Some(&b'E'))
+            .count();
+        assert!(
+            d_rows > 0 && (muxers == 0) == (e_rows == 0),
+            "D rows {d_rows}, E rows {e_rows}, registry has {demuxers} demuxers \
+             and {muxers} muxers:\n{s}"
+        );
     }
 
     #[test]
@@ -1431,8 +1447,16 @@ mod tests {
         assert!(d.starts_with("Formats:\n"), "{d}");
         assert!(m.starts_with("Formats:\n"), "{m}");
         assert!(d.contains("matroska"), "{d}");
-        // No muxers in this build: the table under the header is empty.
-        assert_eq!(m.lines().count(), 5, "{m}");
+        // This asserted the muxer table was empty (five header lines and
+        // nothing else). It is not any more. The invariant is that both
+        // listings render the same header and that `-muxers` lists exactly the
+        // registry's muxers — not that there are none.
+        let header = 5;
+        assert_eq!(
+            m.lines().count(),
+            header + vaco_registry::muxers().len(),
+            "{m}"
+        );
     }
 
     #[test]

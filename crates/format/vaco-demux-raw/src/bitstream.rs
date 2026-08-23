@@ -600,7 +600,10 @@ macro_rules! bitstream_reg {
 fn probe_for(spec: &BitstreamSpec, data: &ProbeData<'_>) -> ProbeScore {
     let structural = match spec.framing {
         Framing::StartCode3 => !startcode::start_codes(data.buf).is_empty(),
-        Framing::Obu => !obu::temporal_units(data.buf).is_empty(),
+        // The strict test, not `temporal_units`: that one falls back to
+        // reporting the whole buffer when nothing parses, which is right for
+        // demuxing and makes every non-empty input look like AV1 when probing.
+        Framing::Obu => obu::looks_like_obu_stream(data.buf),
         Framing::Marker { start, .. } => data.starts_with(&start),
         Framing::Dirac => data.starts_with(b"BBCD"),
         Framing::FixedBlock => false,

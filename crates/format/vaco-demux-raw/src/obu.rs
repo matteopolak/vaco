@@ -75,6 +75,43 @@ fn parse_one(data: &[u8], at: usize) -> Option<Obu> {
     })
 }
 
+/// Whether `data` plausibly *is* an OBU stream — the detection question, which
+/// is not the same as the demux question.
+///
+/// [`temporal_units`] is deliberately lenient: when nothing parses it reports
+/// the whole buffer as one span, so a caller demuxing a slightly damaged file
+/// still sees a packet instead of silence. That is right for demuxing and
+/// catastrophic for probing, because `!temporal_units(buf).is_empty()` is then
+/// true for **any** non-empty input. It was, and `vaco -i notmedia` claimed a
+/// plain text file as `av1` where the reference exits 183.
+///
+/// So detection gets its own, strict test:
+///
+/// - the first OBU must actually parse, not fall back;
+/// - its `obu_forbidden_bit` must be zero;
+/// - its type must be one the specification assigns — types 9–14 are reserved,
+///   and a byte with one of those is far more likely to be prose than video.
+///
+/// A real AV1 elementary stream opens with a temporal delimiter or a sequence
+/// header, so this is not a tight filter — it only has to reject text.
+#[must_use]
+pub fn looks_like_obu_stream(data: &[u8]) -> bool {
+    let Some(&header) = data.first() else {
+        return false;
+    };
+    // `obu_forbidden_bit` (§5.3.2) is required to be 0.
+    if header & 0x80 != 0 {
+        return false;
+    }
+    let kind = (header >> 3) & 0x0f;
+    // 0 is reserved, 9..=14 are reserved, 15 is padding. 1..=8 plus 15 are the
+    // types a conforming stream can open with.
+    if kind == 0 || (9..=14).contains(&kind) {
+        return false;
+    }
+    parse_one(data, 0).is_some_and(|obu| obu.end > obu.start)
+}
+
 /// Split `data` into temporal-unit spans `(start, end)`.
 ///
 /// Bounded: each OBU consumes at least one byte of header, so the scan
@@ -114,6 +151,36 @@ pub fn temporal_units(data: &[u8]) -> Vec<(usize, usize)> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
 mod tests {
+    /// Detection must reject prose, and the demux fallback must not be used
+    /// for it.
+    ///
+    /// `vaco -i notmedia` claimed a plain text file as `av1` and exited 8 where
+    /// the reference exits 183, because the probe asked
+    /// `!temporal_units(buf).is_empty()` — and `temporal_units` reports the
+    /// whole buffer as one span when nothing parses, which is deliberate for
+    /// demuxing and true of every non-empty input.
+    #[test]
+    fn prose_is_not_an_obu_stream() {
+        let text = b"this is not a media file, not even slightly\n";
+        assert!(!looks_like_obu_stream(text));
+        // The lenient path still answers, which is the whole point of keeping
+        // the two separate rather than tightening `temporal_units`.
+        assert!(!temporal_units(text).is_empty());
+
+        assert!(!looks_like_obu_stream(&[]));
+        // obu_forbidden_bit set.
+        assert!(!looks_like_obu_stream(&[0x80, 0x00]));
+        // A reserved type (11), which prose hits far more often than video.
+        assert!(!looks_like_obu_stream(&[0b0101_1010, 0x00]));
+    }
+
+    /// A temporal delimiter with a size field is what a real stream opens with.
+    #[test]
+    fn a_temporal_delimiter_is_an_obu_stream() {
+        // type 2 (temporal delimiter), has_size_field, zero-length payload.
+        assert!(looks_like_obu_stream(&[0b0001_0010, 0x00]));
+    }
+
     use super::*;
 
     /// Build a minimal OBU: header with `has_size_field=1`, no extension.
