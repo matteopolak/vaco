@@ -16,7 +16,7 @@ name.
 
 | Built | Plan says | Note |
 |---|---|---|
-| `vaco-filter-audio-eq` | `vaco-filter-aeq` | membership matches; name only |
+| ~~`vaco-filter-audio-eq`~~ `vaco-filter-aeq` | `vaco-filter-aeq` | **Done**: renamed, membership unchanged. Landed alongside the `vaco-filter-adsp::biquad` consolidation (its `engine` module moved there, D19), so the rename commit is separate from that move. |
 | `vaco-filter-audio-dynamics` | `vaco-filter-adynamics` | membership matches; name only |
 | `vaco-filter-ameasure` | `vaco-filter-aanalysis` | membership matches exactly; name only |
 | ~~`vaco-filter-achannel`~~ `vaco-filter-aeffects` | `vaco-filter-aeffects` | **Done** (FT-4.13d, GitHub #484): renamed, and the crate now implements 22 of the row's 25 filters — `surround`/`headphone` remain deferred as disproportionately large (flagged by this crate's original author), and `hdcd`'s proprietary bit-level decode is out of reach for black-box probing at this project's clean-room standard. |
