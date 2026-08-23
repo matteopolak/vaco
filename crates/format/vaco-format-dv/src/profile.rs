@@ -23,9 +23,15 @@
 //! | `testsrc=720x576:rate=25`, `yuv420p` | `1f 07 00 bf` | 1 | 144000 |
 //!
 //! The chroma subsampling (411/420/422) is carried in a VAUX pack later in
-//! the frame and is **not** decoded here: `vaco_codec_core::CodecId` has no
-//! DV video variant yet (surveyed 2026-08-23), so there is nowhere to put a
-//! pixel format even if this read it — see the docs file.
+//! the frame and is **not** decoded here. The demuxer instead derives the
+//! pixel format from [`DvProfile::is_pal`], which is right for the two 25 Mbps
+//! systems and only those: NTSC is 4:1:1 and PAL is 4:2:0, both measured
+//! against `ffprobe`. DVCPRO50's 4:2:2 needs the VAUX read, and is part of the
+//! gap the next section describes.
+//!
+//! (An earlier version of this note said `vaco_codec_core::CodecId` had no DV
+//! variant "yet, surveyed 2026-08-23". `CodecId::Dvvideo` existed on that same
+//! date. Do not pin the absence of something the project is building.)
 //!
 //! # A real gap this crate does not paper over: DVCPRO50/DVCPRO HD
 //!

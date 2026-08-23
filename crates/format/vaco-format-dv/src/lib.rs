@@ -95,8 +95,8 @@ fn open_demuxer(
     _parsers: &dyn ParserProvider,
 ) -> Result<Box<dyn Demuxer>> {
     // DV carries no in-band codec configuration beyond the fixed frame
-    // itself, and there is no `CodecId` yet for it to refine into (see the
-    // docs file) — a `ParserProvider` has nothing to do here.
+    // itself — the codec identity comes from the format, not from a parsed
+    // header — so a `ParserProvider` has nothing to do here.
     Ok(Box::new(DvDemuxer::open(src)?))
 }
 

@@ -39,6 +39,7 @@
 //! nothing pretends otherwise.
 
 use vaco_chlayout::ChannelLayout;
+use vaco_sampfmt::SampleFmt;
 use vaco_codec_core::{AudioParameters, CodecId, CodecParameters, Parser, VideoParameters};
 use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
 use vaco_format_core::flags::FormatFlags;
@@ -528,6 +529,9 @@ fn describe(codec: OggCodec, bos: &[u8]) -> (MediaType, Rational, CodecParameter
                 sample_rate: granule::opus_time_base().den.unsigned_abs(),
                 layout: ident.and_then(|h| ChannelLayout::default_for(u32::from(h.channel_count))),
                 initial_padding: u32::from(ident.map_or(0, |h| h.pre_skip)),
+                // Measured, not assumed:
+                //   ffprobe -of csv=p=0 -show_entries stream=sample_fmt t.opus  # fltp
+                format: Some(SampleFmt::F32P),
                 ..AudioParameters::default()
             });
             (MediaType::Audio, granule::opus_time_base(), params)
@@ -554,6 +558,19 @@ fn describe(codec: OggCodec, bos: &[u8]) -> (MediaType, Rational, CodecParameter
                 sample_rate: rate,
                 layout: info.and_then(|i| ChannelLayout::default_for(u32::from(i.channels))),
                 bits_per_raw_sample: info.map(|i| i.bits_per_sample),
+                // 16-bit FLAC reports `s16`, 24-bit reports `s32` — measured
+                // on both, which is every depth this reference build's FLAC
+                // encoder will actually produce (it clamps 8, 20 and 32 to
+                // 24). The threshold is therefore pinned at the two points we
+                // have and stated rather than extrapolated: above 16 bits the
+                // samples do not fit an i16.
+                format: info.map(|i| {
+                    if i.bits_per_sample > 16 {
+                        SampleFmt::S32
+                    } else {
+                        SampleFmt::S16
+                    }
+                }),
                 ..AudioParameters::default()
             });
             let tb = safe_rational(1, rate);
@@ -769,4 +786,76 @@ impl Demuxer for OggDemuxer {
     // `duration()` is not overridden: this pass does not implement the tail
     // scan a real estimate needs (see the docs file's "gaps" section), and
     // the trait's default `None` is a more honest answer than a guess.
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "a test that cannot set up is a failed test"
+)]
+mod tests {
+    use super::{OggCodec, describe};
+    use vaco_sampfmt::SampleFmt;
+
+    /// A minimal Ogg-FLAC identification packet: the `\x7FFLAC` mapping header
+    /// followed by a STREAMINFO metadata block. Only the packed 64-bit region
+    /// at offset 10 of the block matters here — 20 bits sample rate, 3 bits
+    /// channels-1, 5 bits bits_per_sample-1, 36 bits total samples.
+    fn flac_bos(sample_rate: u32, channels: u8, bits_per_sample: u8) -> Vec<u8> {
+        let mut v = vec![0x7F];
+        v.extend_from_slice(b"FLAC");
+        v.extend_from_slice(&[1, 0]); // mapping major/minor
+        v.extend_from_slice(&[0, 1]); // header count
+        v.extend_from_slice(b"fLaC");
+        v.push(0x00); // metadata block header: STREAMINFO, not last
+        v.extend_from_slice(&[0, 0, 34]); // block length
+        v.extend_from_slice(&[0_u8; 10]); // block/frame size fields
+        let packed = (u64::from(sample_rate) << 44)
+            | (u64::from(channels.saturating_sub(1)) << 41)
+            | (u64::from(bits_per_sample.saturating_sub(1)) << 36);
+        v.extend_from_slice(&packed.to_be_bytes());
+        v.extend_from_slice(&[0_u8; 16]); // MD5
+        v
+    }
+
+    /// FLAC's `sample_fmt` follows the bit depth, and the threshold is 16.
+    ///
+    /// Measured against the reference on the only two depths its FLAC encoder
+    /// will actually emit — it clamps 8, 20 and 32 to 24:
+    ///
+    /// ```sh
+    /// ffprobe -v quiet -of csv=p=0 -show_entries stream=sample_fmt of16.ogg  # s16
+    /// ffprobe -v quiet -of csv=p=0 -show_entries stream=sample_fmt of24.ogg  # s32
+    /// ```
+    #[test]
+    fn flac_sample_fmt_follows_the_bit_depth() {
+        for (bits, want) in [(16_u8, SampleFmt::S16), (24, SampleFmt::S32)] {
+            let (_, _, params) = describe(OggCodec::Flac, &flac_bos(44_100, 2, bits));
+            let audio = params.audio.as_ref().unwrap();
+            assert_eq!(audio.format, Some(want), "{bits}-bit");
+            assert_eq!(audio.bits_per_raw_sample, Some(bits));
+        }
+    }
+
+    /// Opus is always `fltp`, whatever the container says about the source.
+    ///
+    /// ```sh
+    /// ffprobe -v quiet -of csv=p=0 -show_entries stream=sample_fmt t.opus  # fltp
+    /// ```
+    #[test]
+    fn opus_sample_fmt_is_fltp() {
+        let mut bos = b"OpusHead".to_vec();
+        bos.push(1); // version
+        bos.push(2); // channel count
+        bos.extend_from_slice(&312_u16.to_le_bytes()); // pre-skip
+        bos.extend_from_slice(&48_000_u32.to_le_bytes());
+        bos.extend_from_slice(&0_i16.to_le_bytes()); // output gain
+        bos.push(0); // channel mapping family
+        let (_, _, params) = describe(OggCodec::Opus, &bos);
+        assert_eq!(
+            params.audio.as_ref().unwrap().format,
+            Some(SampleFmt::F32P)
+        );
+    }
 }

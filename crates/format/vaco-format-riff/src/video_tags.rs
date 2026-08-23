@@ -62,10 +62,19 @@ fn fourcc_codec_name(id: ChunkId) -> Option<&'static str> {
 
 /// A best-effort [`CodecId`] for a `biCompression` value.
 ///
-/// As with [`crate::wave_tags::codec_id`], `CodecId` does not have a variant
-/// for most video `FourCCs` this table names — no MPEG-4 part 2, MS-MPEG4,
-/// WMV, Huffyuv, Cinepak or raw-video variant exists in the shared enum
-/// today — so those map to `None` rather than a guessed near-miss.
+/// This table must name everything [`codec_name`] names *and* the shared enum
+/// can represent, because `vaco-probe` prints `codec_name` from the
+/// `CodecId`, not from this crate's string. A `FourCC` that has a spelling
+/// here but no id prints `unknown` — which is how `FMP4` came to probe as
+/// `codec_name=unknown` while this very file knew it was `mpeg4`
+/// (CONFORMANCE-FINDINGS 24).
+///
+/// The doc comment that used to sit here said MPEG-4, MS-MPEG4, Huffyuv and
+/// raw video had no variant in the shared enum. That was true when it was
+/// written and had stopped being true by the time anyone read it — the
+/// hazard `AGENT-CONSTRAINTS.md` calls "never pin the absence of something
+/// the project is building". Only `msmpeg4v2`, `cinepak`, `msvideo1`, `wmv1`
+/// and `wmv2` are still genuinely unrepresentable.
 #[must_use]
 pub fn codec_id(compression: Compression) -> Option<CodecId> {
     let Compression::FourCc(id) = compression else {
@@ -78,6 +87,14 @@ pub fn codec_id(compression: Compression) -> Option<CodecId> {
         b"VP90" => Some(CodecId::Vp9),
         b"MJPG" | b"mjpg" => Some(CodecId::Jpeg),
         b"MPNG" => Some(CodecId::Png),
+        b"FMP4" | b"XVID" | b"DIVX" | b"DX50" | b"mp4v" => Some(CodecId::Mpeg4),
+        b"MP43" | b"DIV3" => Some(CodecId::Msmpeg4v3),
+        b"FFV1" => Some(CodecId::Ffv1),
+        b"HFYU" => Some(CodecId::Huffyuv),
+        b"I420" | b"IYUV" => Some(CodecId::Rawvideo),
+        // `MP42`, `cvid`, `MSVC`/`CRAM`, `WMV1`, `WMV2` have a spelling in
+        // `codec_name` and no variant in the shared enum. `None` rather than a
+        // near-miss, and `codec_name` keeps the string so the gap is visible.
         _ => None,
     }
 }
@@ -132,8 +149,70 @@ mod tests {
     fn codec_id_only_covers_what_the_shared_enum_represents() {
         assert_eq!(codec_id(fourcc(*b"H264")), Some(CodecId::H264));
         assert_eq!(codec_id(fourcc(*b"hvc1")), Some(CodecId::Hevc));
-        // mpeg4/msmpeg4/huffyuv/ffv1/cinepak/wmv have no CodecId variant yet.
-        assert_eq!(codec_id(fourcc(*b"FMP4")), None);
-        assert_eq!(codec_id(fourcc(*b"HFYU")), None);
+        assert_eq!(codec_id(fourcc(*b"FMP4")), Some(CodecId::Mpeg4));
+        assert_eq!(codec_id(fourcc(*b"HFYU")), Some(CodecId::Huffyuv));
+        // Still genuinely unrepresentable — no variant exists for these.
+        assert_eq!(codec_id(fourcc(*b"MP42")), None);
+        assert_eq!(codec_id(fourcc(*b"cvid")), None);
+        assert_eq!(codec_id(fourcc(*b"WMV1")), None);
+    }
+
+    /// Every `FourCC` with a spelling and a representable codec has an id.
+    ///
+    /// `vaco-probe` prints `codec_name` from the `CodecId`, so a `FourCC` in
+    /// one table and not the other probes as `unknown` while this crate is
+    /// holding the right answer. The list below is the set that has no variant
+    /// in the shared enum; anything else that regresses fails here.
+    #[test]
+    fn the_two_tables_disagree_only_where_the_enum_cannot_follow() {
+        const NO_VARIANT: &[&[u8; 4]] = &[b"MP42", b"cvid", b"MSVC", b"CRAM", b"WMV1", b"WMV2"];
+        for cc in [
+            &b"H264"[..],
+            b"X264",
+            b"x264",
+            b"avc1",
+            b"AVC1",
+            b"hvc1",
+            b"hev1",
+            b"HEVC",
+            b"H265",
+            b"VP80",
+            b"VP90",
+            b"MJPG",
+            b"mjpg",
+            b"FFV1",
+            b"HFYU",
+            b"FMP4",
+            b"XVID",
+            b"DIVX",
+            b"DX50",
+            b"mp4v",
+            b"MP42",
+            b"MP43",
+            b"DIV3",
+            b"MPNG",
+            b"I420",
+            b"IYUV",
+            b"cvid",
+            b"MSVC",
+            b"CRAM",
+            b"WMV1",
+            b"WMV2",
+        ] {
+            let Ok(bytes) = <[u8; 4]>::try_from(cc) else {
+                unreachable!("every literal above is four bytes")
+            };
+            let c = fourcc(bytes);
+            let name = codec_name(c);
+            assert!(name.is_some(), "{:?} has no spelling", core::str::from_utf8(cc));
+            let expected_none = NO_VARIANT.iter().any(|n| n.as_slice() == cc);
+            assert_eq!(
+                codec_id(c).is_none(),
+                expected_none,
+                "{:?}: codec_name={name:?} but codec_id={:?}",
+                core::str::from_utf8(cc),
+                codec_id(c)
+            );
+        }
     }
 }

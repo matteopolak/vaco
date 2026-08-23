@@ -31,7 +31,9 @@
 
 use std::collections::VecDeque;
 
-use vaco_codec_core::{AudioParameters, CodecParameters, VideoParameters};
+use vaco_codec_core::{AudioParameters, CodecId, CodecParameters, VideoParameters};
+use vaco_pixfmt::PixFmt;
+use vaco_sampfmt::SampleFmt;
 use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
 use vaco_format_core::flags::FormatFlags;
 use vaco_format_core::seek::{SeekFlags, SeekTarget};
@@ -128,9 +130,22 @@ impl DvDemuxer {
             coded_width: profile.width,
             coded_height: profile.height,
             frame_rate: profile.frame_rate,
+            // Chroma follows the system, measured on both:
+            //
+            //   ffprobe -show_entries stream=pix_fmt ntsc.dv  # yuv411p
+            //   ffprobe -show_entries stream=pix_fmt pal.dv   # yuv420p
+            //
+            // (IEC 61834 PAL is 4:2:0; the 25 Mbps NTSC variant is 4:1:1.
+            // DVCPRO50's 4:2:2 is a different profile this crate does not
+            // detect yet, so nothing here claims to cover it.)
+            format: Some(if profile.is_pal {
+                PixFmt::Yuv420p
+            } else {
+                PixFmt::Yuv411p
+            }),
             ..VideoParameters::default()
         };
-        let mut vparams = CodecParameters::new(MediaType::Video);
+        let mut vparams = CodecParameters::new(MediaType::Video).with_codec(CodecId::Dvvideo);
         vparams.video = Some(video);
         // Per-frame time base: one tick per frame is exact for both 30000/1001
         // and 25 fps, unlike a fixed 90 kHz base which cannot represent
@@ -147,9 +162,14 @@ impl DvDemuxer {
 
         let audio = AudioParameters {
             sample_rate: DEFAULT_AUDIO_SAMPLE_RATE,
+            // DV audio is uncompressed 16-bit little-endian PCM. Measured:
+            //
+            //   ffprobe -show_entries stream=codec_name,sample_fmt t.dv
+            //   # pcm_s16le, s16
+            format: Some(SampleFmt::S16),
             ..AudioParameters::default()
         };
-        let mut aparams = CodecParameters::new(MediaType::Audio);
+        let mut aparams = CodecParameters::new(MediaType::Audio).with_codec(CodecId::PcmS16le);
         aparams.audio = Some(audio);
         let audio_time_base = Rational {
             num: 1,
@@ -272,5 +292,62 @@ impl Demuxer for DvDemuxer {
         Some(Duration::from_micros(
             self.frame_duration().0.saturating_mul(n.cast_signed()),
         ))
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    reason = "a test that cannot set up is a failed test"
+)]
+mod codec_identity_tests {
+    use vaco_codec_core::CodecId;
+    use vaco_pixfmt::PixFmt;
+    use vaco_sampfmt::SampleFmt;
+
+    use super::DvDemuxer;
+    use crate::profile::DvProfile;
+
+    /// One 25 Mbps DV frame's worth of zeroes with a valid header, for each
+    /// system. `DvProfile::detect` reads the header byte at offset 3.
+    fn frame(pal: bool) -> Vec<u8> {
+        let profile = DvProfile::detect(&header(pal)).expect("a known profile");
+        let mut v = header(pal);
+        v.resize(profile.frame_size, 0);
+        v
+    }
+
+    fn header(pal: bool) -> Vec<u8> {
+        let mut v = vec![0x1F, 0x07, 0x00, if pal { 0xBF } else { 0x3F }];
+        v.resize(80, 0);
+        v
+    }
+
+    /// The identity fields the reference reports for a DV file, which `vaco`
+    /// left entirely empty until CONFORMANCE-FINDINGS 24:
+    ///
+    /// ```sh
+    /// ffprobe -v quiet -of csv=p=0 \
+    ///   -show_entries stream=codec_name,pix_fmt,sample_fmt ntsc.dv
+    /// # dvvideo,yuv411p
+    /// # pcm_s16le,s16
+    /// ```
+    #[test]
+    fn both_streams_carry_a_codec_id_and_a_format() {
+        for (pal, want_pix) in [(false, PixFmt::Yuv411p), (true, PixFmt::Yuv420p)] {
+            let data = frame(pal);
+            let src = Box::new(vaco_io::MemorySource::new(data));
+            let d = DvDemuxer::open(src).expect("open");
+            let streams = vaco_format_core::Demuxer::streams(&d);
+            assert_eq!(streams[0].params.codec_id, Some(CodecId::Dvvideo));
+            assert_eq!(streams[0].params.video.as_ref().unwrap().format, Some(want_pix));
+            assert_eq!(streams[1].params.codec_id, Some(CodecId::PcmS16le));
+            assert_eq!(
+                streams[1].params.audio.as_ref().unwrap().format,
+                Some(SampleFmt::S16)
+            );
+        }
     }
 }
