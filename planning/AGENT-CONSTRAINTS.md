@@ -586,3 +586,31 @@ So: **run `ffmpeg -h filter=<name>` and look for `eof_action` before reaching
 for `framesync`.** It is one command and it has been the right answer four
 times out of five.
 
+## Allocate after the limits, not before them
+
+`vaco-filter-source`'s `cellauto`, `life` and `sierpinski` each sized a working
+buffer from their *options* and allocated it before any frame was requested:
+
+```
+cellauto=size=911111x91111   ->  Vec<bool> of 83 GB
+```
+
+`FramePool` enforces `vaco-limits`, but it never saw this — the allocation
+happened upstream of it, in the filter's own setup. Found by fuzzing, on a
+filter whose inputs are entirely attacker-controlled in any `-filter_complex`
+string, and the crashing input is kept as a regression seed.
+
+The shape generalises to every filter with a size, count or duration option:
+
+- **A `Vec::with_capacity(n)` where `n` comes from an option is an
+  attacker-controlled allocation.** So is `vec![x; n]`, `resize`, and
+  collecting an iterator whose length an option decides.
+- Route it through the pool or a `vaco_limits::Budget`, or clamp it explicitly
+  and say what the clamp is.
+- "The frame allocation is bounded" is not enough. Ask what your filter
+  allocates *before* the first frame exists.
+
+Grep your own crate for `with_capacity`, `vec![`, and `resize` and check where
+each length comes from. This is the one class of bug in filter option parsing
+that fuzzing reliably finds and review reliably misses.
+

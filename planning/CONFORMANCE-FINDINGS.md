@@ -1399,6 +1399,35 @@ The comparison itself is worth keeping as a test: `-filters` is now a stable,
 machine-comparable surface, and a row-by-row diff against a captured reference
 listing would catch every future regression in three columns at once.
 
+## 30. `sine` is not bit-exact, and nearly shipped claiming it was
+
+`vaco-filter-asource`'s author fitted `floor(4095 * sin(...))` to the
+reference's `sine` output and it matched **8 of the first 10 samples**. That
+is the "fits 8 of 9 points" shape that has caught most of this project's wrong
+formulas, so they extended the comparison to 2000 samples: **51% disagree**.
+
+The residual pattern is a dithered quantiser. No closed-form expression
+reproduces it without the reference's own RNG, so `sine` is documented as
+algorithmically faithful and *not* bit-exact rather than shipped as a
+near-miss. `afdelaysrc` had the same near-miss caught the same way — a
+Blackman-windowed guess that was wrong by a factor of ten at the peak.
+
+**Why this one matters beyond its own filter.** `sine` is what almost every
+audio probe in this project generates its input with. Any future test that
+generates audio with `vaco` and compares against the reference's own `sine`
+will diverge for reasons that have nothing to do with what is being tested. So:
+generate test material with the **reference**, not with ours, until this is
+closed — which is what the conformance harness already does, and now there is a
+recorded reason why it must keep doing it.
+
+The video side has the same hazard and mostly avoids it: `allrgb`, `allyuv`,
+`yuvtestsrc`, `rgbtestsrc`, `colorspectrum`, `colorchart`, `smptebars` and
+`smptehdbars` are all exact — `allrgb`/`allyuv` verified as full bijections
+rather than point-matches. But `testsrc` and `testsrc2`, the two most-used
+generators of all, are **not implemented**: `testsrc` needs bitmap-font
+rendering and `testsrc2`'s animation did not resolve to a verifiable formula.
+Neither was guessed at.
+
 ## Harness changes, summarised
 
 Everything below is a change to `crates/tool/vaco-conformance/`,
