@@ -118,6 +118,7 @@ const KEYS: &[&str] = &[
     "extensions",
     "mime_types",
     "default",
+    "encumbered",
 ];
 
 /// `media` vocabulary.
@@ -144,6 +145,15 @@ struct Component {
     /// that must not ship in a default build (D4 — patent-encumbered) sets
     /// `default = false`.
     default_on: bool,
+    /// Whether this component is **patent-encumbered** (D4), as opposed to
+    /// merely off by default.
+    ///
+    /// The two are deliberately separate keys. `vaco-protocol-http` is
+    /// `default = false` because registering it drags `getrandom` into
+    /// `vaco-registry` and breaks its wasm build — a portability reason with no
+    /// legal content. Collapsing the two would make the patent gate fire on it
+    /// and teach everyone to ignore the gate.
+    encumbered: bool,
 }
 
 impl Component {
@@ -342,6 +352,20 @@ fn build(t: &toml::Table, krate: &str, area: &str) -> Result<Component, String> 
         Some("false") => false,
         Some(other) => return Err(format!("`default` must be a boolean, got {other:?}")),
     };
+    let encumbered = match t.get("encumbered") {
+        None => false,
+        Some("true") => true,
+        Some("false") => false,
+        Some(other) => return Err(format!("`encumbered` must be a boolean, got {other:?}")),
+    };
+    if encumbered && default_on {
+        return Err(
+            "`encumbered = true` requires `default = false`; D4 puts every \
+             patent-encumbered component behind a non-default feature and out of \
+             our published binaries"
+                .into(),
+        );
+    }
     if !default_on && t.get("feature").is_none() {
         return Err(
             "`default = false` needs a `feature`; an always-on component is in \
@@ -357,6 +381,7 @@ fn build(t: &toml::Table, krate: &str, area: &str) -> Result<Component, String> 
         name,
         long_name: t.get("long_name").map(str::to_owned),
         feature: t.get("feature").map(str::to_owned),
+        encumbered,
         ctor,
         media: t.get("media").map(str::to_owned),
         codec: t.get("codec").map(str::to_owned),
@@ -462,6 +487,33 @@ fn emit_source(components: &[Component]) -> String {
             c.mime_types.as_slice()
         ));
         rows.push_str("    },\n");
+    }
+    close_slice(&mut out, &rows);
+
+    // -- the patent gate ----------------------------------------------------
+    //
+    // D4 says "assert on the compiled feature list, not on intent", and this is
+    // that list. Each row is `#[cfg]`-gated on its own feature, so the compiler
+    // — not a manifest reader — decides whether it appears. A default build
+    // therefore produces an empty slice by construction, and `cargo xtask
+    // patent-gate` asserts emptiness on the built artifact rather than on what a
+    // TOML file claims.
+    out.push_str(
+        "/// Patent-encumbered components (D4) that are **compiled into this          build**.\n         ///\n         /// Empty in every binary we publish. Each entry is `#[cfg]`-gated on its own\n         /// feature, so this slice is the compiler's own answer to \"what is actually\n         /// enabled\" — which is what D4 asks to be asserted on, rather than on a\n         /// manifest's stated intent.\n         ///\n         /// Non-empty is not an error in itself: D4 explicitly supports building these\n         /// yourself. It is an error for the *published* build, and that is what CI\n         /// checks.\n         pub static ENCUMBERED_ENABLED: &[&str] = &[",
+    );
+    let mut rows = String::new();
+    for c in components.iter().filter(|c| c.encumbered) {
+        rows.push_str(&indent_cfg(c));
+        rows.push_str(&format!("    {:?},\n", c.name));
+    }
+    close_slice(&mut out, &rows);
+
+    out.push_str(
+        "\n/// Every patent-encumbered component this tree knows about, enabled or not.\n         ///\n         /// The denominator to [`ENCUMBERED_ENABLED`]'s numerator: a gate that only saw\n         /// the enabled list could not tell \"nothing is encumbered\" from \"the table is\n         /// broken and reports nothing\".\n         pub static ENCUMBERED_ALL: &[&str] = &[",
+    );
+    let mut rows = String::new();
+    for c in components.iter().filter(|c| c.encumbered) {
+        rows.push_str(&format!("    {:?},\n", c.name));
     }
     close_slice(&mut out, &rows);
 
@@ -982,6 +1034,7 @@ mod tests {
             extensions: Vec::new(),
             mime_types: Vec::new(),
             default_on: true,
+            encumbered: false,
         };
         // An alias collision counts: `-f mp4` must select exactly one demuxer.
         assert!(check_unique(&[mk("a", "mov,mp4"), mk("b", "mp4")]).is_err());
@@ -1058,7 +1111,66 @@ mod tests {
             extensions: Vec::new(),
             mime_types: Vec::new(),
             default_on,
+            encumbered: false,
         }
+    }
+
+    /// A gate with nothing to catch is unfalsifiable, and this tree has no
+    /// encumbered components yet — no encoders exist. So plant one and check
+    /// that the emitted table gates it on its own feature.
+    #[test]
+    fn encumbered_rows_are_gated_on_their_own_feature() {
+        let mut c = comp(
+            "vaco-codec-hevc",
+            "codec",
+            Some("patent-encumbered-hevc-encode"),
+            false,
+        );
+        c.encumbered = true;
+        c.kind = "encoder".to_owned();
+        c.name = "hevc".to_owned();
+        let src = emit_source(&[c]);
+
+        let enabled = src
+            .split("pub static ENCUMBERED_ENABLED")
+            .nth(1)
+            .unwrap_or_default()
+            .split("];")
+            .next()
+            .unwrap_or_default();
+        assert!(
+            enabled.contains(r#"#[cfg(feature = "patent-encumbered-hevc-encode")]"#),
+            "the enabled row must be cfg-gated, or the slice reports intent \
+             rather than what the compiler built:\n{enabled}"
+        );
+        assert!(enabled.contains(r#""hevc""#));
+
+        // The denominator is deliberately ungated: it is what lets the gate
+        // distinguish "nothing is encumbered" from "the generator is broken".
+        let all = src
+            .split("pub static ENCUMBERED_ALL")
+            .nth(1)
+            .unwrap_or_default()
+            .split("];")
+            .next()
+            .unwrap_or_default();
+        assert!(all.contains(r#""hevc""#));
+        assert!(
+            !all.contains("#[cfg("),
+            "ENCUMBERED_ALL must not be gated:\n{all}"
+        );
+    }
+
+    #[test]
+    fn encumbered_and_default_on_is_refused() {
+        // D4 puts every encumbered component behind a non-default feature.
+        // Accepting `encumbered = true, default = true` would let a fragment
+        // declare a contradiction and have the generator honour it.
+        let toml = "[[component]]\nkind = \"encoder\"\nname = \"hevc\"\n\
+                    feature = \"patent-encumbered-hevc-encode\"\n\
+                    ctor = \"vaco_demux_mp4::ENC\"\nencumbered = true\n";
+        let err = parse_one(toml).unwrap_err();
+        assert!(err.contains("default = false"), "{err}");
     }
 
     #[test]

@@ -33,6 +33,9 @@ jobs:
       # D18, the other half: `std::time::Instant::now()` *compiles* for wasm32
       # and panics when called, so `wasm-check` alone cannot see it.
       - run: cargo xtask time-gate
+      # D4: no patent-encumbered component in the published build. Asserts on
+      # the compiled feature list, not on what a manifest claims.
+      - run: cargo xtask patent-gate
       # D19: one definition per concept.
       - run: cargo xtask dup-check
       # The crate graph stays acyclic and downward (D14.1).

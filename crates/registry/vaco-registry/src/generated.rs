@@ -161,6 +161,24 @@ pub static COMPONENTS: &[crate::Component] = &[
         mime_types: &[],
     },
 ];
+/// Patent-encumbered components (D4) that are **compiled into this          build**.
+///
+/// Empty in every binary we publish. Each entry is `#[cfg]`-gated on its own
+/// feature, so this slice is the compiler's own answer to "what is actually
+/// enabled" — which is what D4 asks to be asserted on, rather than on a
+/// manifest's stated intent.
+///
+/// Non-empty is not an error in itself: D4 explicitly supports building these
+/// yourself. It is an error for the *published* build, and that is what CI
+/// checks.
+pub static ENCUMBERED_ENABLED: &[&str] = &[];
+
+/// Every patent-encumbered component this tree knows about, enabled or not.
+///
+/// The denominator to [`ENCUMBERED_ENABLED`]'s numerator: a gate that only saw
+/// the enabled list could not tell "nothing is encumbered" from "the table is
+/// broken and reports nothing".
+pub static ENCUMBERED_ALL: &[&str] = &[];
 
 /// Descriptors of every enabled demuxer implementation.
 pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[

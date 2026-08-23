@@ -57,6 +57,51 @@ Rewriting in Rust changes patent exposure by exactly zero. Therefore:
 - CI publishes the default binary with the encumbered feature set provably absent
   (assert on the compiled feature list, not on intent).
 
+### D4.1 — how "not on intent" is actually enforced (2026-08-22)
+
+`cargo xtask patent-gate`, wired into CI. The distinction in that last clause is
+the whole design, so it is worth spelling out.
+
+A manifest reader answers *"is this component marked `default = false`?"* — a
+claim about what somebody wrote down. The question that matters is *"is this
+component in the binary?"*, and only the compiler can answer it. So
+`gen-registry` emits
+
+```rust
+pub static ENCUMBERED_ENABLED: &[&str] = &[
+    #[cfg(feature = "patent-encumbered-hevc-encode")]
+    "hevc",
+];
+```
+
+where every row is `#[cfg]`-gated on its own feature. **The slice a build
+produces *is* the compiler's answer.** The gate compiles an example inside
+`vaco-registry` — so it inherits exactly that crate's resolved feature graph
+rather than a differently-resolved one — runs it, and asserts the slice is
+empty.
+
+**A non-empty slice is not automatically wrong.** D4 exists to make building
+these yourself possible; a developer's `--features patent-encumbered-hevc-encode`
+build is working as designed. What must never happen is a *published* binary
+containing one, so the gate checks the default feature set specifically.
+
+Two design points that are easy to get wrong:
+
+- **`encumbered` and `default = false` are separate keys.**
+  `vaco-protocol-http` is `default = false` because registering it drags
+  `getrandom` into `vaco-registry` and breaks its wasm build — a portability
+  reason with no legal content. Collapsing the two would make the patent gate
+  fire on it and teach everyone to ignore the gate. A fragment claiming
+  `encumbered = true` with `default = true` is refused outright.
+- **`ENCUMBERED_ALL` is emitted ungated**, as the denominator. A gate reading
+  only the enabled list could not distinguish "nothing is encumbered" from "the
+  generator is broken and reports nothing".
+
+The tree has **no encumbered components today** — there are no encoders — so
+both numbers are zero, and a gate with nothing to catch is unfalsifiable. Two
+unit tests plant one and assert the enabled row is `cfg`-gated and the
+denominator is not.
+
 ## D5 — v0.1 milestone: ffprobe on modern containers
 Demux MP4/MOV, Matroska/WebM, MPEG-TS; parse H.264/HEVC/AV1/AAC/Opus stream
 headers (parse only — no decode); emit the complete ffprobe writer surface

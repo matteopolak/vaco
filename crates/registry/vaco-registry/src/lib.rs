@@ -60,7 +60,10 @@ use vaco_format_core::{DemuxerDesc, MuxerDesc, ParserProvider, ProbeData};
 use vaco_limits::Limits;
 use vaco_protocol_core::{ProtocolDesc, ProtocolRegistry};
 
-pub use generated::{COMPONENTS, DECODERS, DEMUXERS, FILTERS, MUXERS, PARSERS, PROTOCOLS};
+pub use generated::{
+    COMPONENTS, DECODERS, DEMUXERS, ENCUMBERED_ALL, ENCUMBERED_ENABLED, FILTERS, MUXERS, PARSERS,
+    PROTOCOLS,
+};
 
 /// What a component is. The vocabulary is frozen in plan 19 §3.4.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]

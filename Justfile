@@ -184,6 +184,14 @@ wasm-check:
 time-gate:
     cargo xtask time-gate
 
+# No patent-encumbered component is in the default build (D4).
+#
+# Asserts on the *compiled* feature list rather than on what a manifest claims,
+# which is D4's own wording. Building an encumbered codec yourself is supported
+# and expected; shipping one is not.
+patent-gate:
+    cargo xtask patent-gate
+
 # One definition per concept (D19).
 dup-check:
     cargo xtask dup-check
