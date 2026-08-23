@@ -1210,12 +1210,63 @@ output. Unlabeled pads are *not* suppressed by `-vn`/`-an`/`-sn`/`-dn`.
 [label]`. Zero uses ⇒ error. Two uses ⇒ error.
 
 **Rule 5 (automatic picks), applied per type in the order video, audio, subtitle:**
-- video: across all inputs, the stream with the greatest `width × height`; ties broken by
-  (input index, stream index) ascending. Attached pictures/`V`-excluded streams do not participate.
+- video: across all inputs, the stream with the greatest **score**, where
+  `score = width × height + 5_000_000 × (disposition has default)` and an
+  `attached_pic` stream scores **area 0**; ties broken by (input index, stream
+  index) ascending. See the measurement below — this rule as first written said
+  "greatest `width × height`" and was wrong.
 - audio: greatest channel count; ties by (input index, stream index).
 - subtitle: the **first** subtitle stream in (input index, stream index) order whose *kind* (text vs
   bitmap) matches the kind produced by *O*'s default subtitle encoder.
 - data and attachment: never auto-selected.
+
+> #### Measured: `default` is worth exactly 5,000,000 pixels
+>
+> Rule 5 originally read "greatest `width × height`", and two probes appear to
+> contradict each other outright:
+>
+> ```
+> 320x240 (default) vs 640x480     -> 320x240 wins
+> 320x240 (default) vs 3840x2160   -> 3840x2160 wins
+> ```
+>
+> Both hold only if the `default` disposition is worth a *finite* number of
+> pixels. Bisecting a second stream's area against a fixed 320×240 (76 800)
+> first stream carrying `default`:
+>
+> | second stream | area − 76 800 | winner |
+> |---|---|---|
+> | 1920×1080 | 1 996 800 | first (`default`) |
+> | 2048×2048 | 4 117 504 | first (`default`) |
+> | 2538×2000 | **4 999 200** | first (`default`) |
+> | 2539×2000 | **5 001 200** | second |
+>
+> The cliff between 4 999 200 and 5 001 200 puts the bonus at exactly
+> **5 000 000**, with a strict comparison.
+>
+> Also measured: an `attached_pic` stream contributes **area 0** — a 4000×4000
+> cover art loses to a 64×64 video track, and an MP3 whose only video stream is
+> its cover still selects that cover. Audio scores on **channel count alone**:
+> 32 kbit/s beat 256 kbit/s and 8 kHz beat 48 kHz, both resolved by position.
+> Ties go to the earlier `(file, stream)` **across files**, not only within one.
+>
+> The general lesson is the one plan 13 §1b keeps restating: two probes that
+> disagree are not noise, they are a bound on a constant nobody wrote down.
+> A corpus of same-disposition streams could never have found this.
+
+#### Two corners Rule 5 does not cover, also measured
+
+**An output whose maps all matched nothing is dropped, not an error.**
+`-map 0:v:9?` exits 0 and creates no file. But `-vn -an -sn -dn` exits 234, and
+so does `-map 0:v:0 -map -0:v:0`. The discriminator is therefore *not* "did a
+stream reach the output" — `-map 0:v -vn` exits 234 with none — but **did any
+positive map match any input stream**.
+
+**A negative map errors only when nothing has been accumulated yet.**
+`-map -0:v` fails; `-map 0:a -map -0:v` succeeds and removes nothing. Six probes
+pin the behaviour, but not the *predicate*: emptiness may be a coincidence of
+these inputs rather than the reference's actual rule. Recorded as measured
+behaviour with the uncertainty attached, per D17.
 - Types not in `supported(O, k)` are skipped. Types in `blocked(O)` are skipped.
 
 **Rule 6 (codec independence, with the subtitle exception).** `-c`/`-codec` is resolved after selection
@@ -1511,6 +1562,37 @@ pixel format as the input/graph output with conversions disabled.
 | 69 | `-max_error_rate` (default 2/3) exceeded; processing still completed |
 | 255 | ≥1 termination signal received; >3 repeated signals force an immediate abort |
 | other | the raw, OS-truncated return value of the transcode/option-parse path |
+
+> #### Measured: there is no table — it is `AVERROR` truncated to eight bits
+>
+> That last row does all the work, and stating it as a rule rather than a
+> leftover makes the rest predictable: **the exit status is the negative
+> `AVERROR` value truncated to its low byte.** Reproduce it by arithmetic, not
+> by a lookup table.
+>
+> | invocation | status | why |
+> |---|---|---|
+> | `ffmpeg` (no args) | 1 | usage |
+> | `ffmpeg -i in.mkv` | 1 | no output |
+> | **`ffmpeg -i`** (dangling) | **234** | `EINVAL`, *not* 1 |
+> | missing file | 254 | `ENOENT` |
+> | a directory | 235 | `EISDIR` |
+> | a non-media file | 183 | `INVALIDDATA`, low byte `0xB7` |
+> | `-f null -` alone | 234 | `EINVAL` |
+> | `-qwerty 3` | 8 | see below |
+> | unknown encoder | 8 | |
+> | unknown protocol | 8 | |
+> | `-n` with the file present | **0** | declining to overwrite is success |
+>
+> The three unrelated failures sharing **8** are not a coincidence and not a
+> code anyone chose: every `FFERRTAG`-built constant begins `0xF8`, so its
+> negation ends in `0x08`. Recognising that is the difference between a table
+> with mysterious entries and a rule with none.
+>
+> Probe these **without a pipe**. Plan 13 §1b records the trap: a pipe swallows
+> the status, and the usual `${PIPESTATUS[0]}` repair is *bash* — zsh spells it
+> `$pipestatus` and 1-indexes it, so in zsh the bash form expands to empty and
+> the comparison silently succeeds. Use `bash -c`, or no pipe at all.
 
 **`-progress`** writes `key=value` lines to a URL every `-stats_period` (default 0.5 s) and once at the
 end. OBSERVED block, streamcopy of a 10-frame file:
