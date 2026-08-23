@@ -27,6 +27,9 @@
 use vaco_core::{Duration, Error, Rational, Result, Rounding, TimeBase, Timestamp};
 use vaco_packet::Packet;
 
+use vaco_codec_core::CodecProperties;
+
+use crate::Stream;
 use crate::flags::FormatFlags;
 use crate::options::{FFlags, FormatOptions};
 
@@ -424,6 +427,33 @@ impl TimestampFixer {
             fflags: opts.fflags,
             fill_in: opts.fills_in_timestamps(),
         }
+    }
+
+    /// A fixer already told about every stream's reorder depth.
+    ///
+    /// The setup loop this replaces lived only inside `Discovery`, so the
+    /// timestamp rules ran during the **analysis** pass and nowhere else. A
+    /// caller reading packets for output — `vaco-probe`'s `[PACKET]` section,
+    /// `vaco-cli`'s streamcopy — got whatever the container stated and no
+    /// reconstruction, which is why Matroska packets arrived with no DTS even
+    /// after R19b existed to derive one.
+    ///
+    /// Constructing it from `&[Stream]` is the whole fix: the delay is
+    /// `has_b_frames` and the reorder flag is the codec's own
+    /// `CodecProperties::REORDER`, and neither is something a caller should be
+    /// re-deriving by hand.
+    #[must_use]
+    pub fn for_streams(streams: &[Stream], flags: FormatFlags, opts: &FormatOptions) -> Self {
+        let mut fixer = Self::new(streams.len(), flags, opts);
+        for s in streams {
+            let delay = s.params.video.as_ref().map_or(0, |v| v.has_b_frames);
+            let reorders = s
+                .params
+                .codec_id
+                .is_some_and(|c| c.properties().contains(CodecProperties::REORDER));
+            fixer.set_stream_delay(s.index, delay, reorders);
+        }
+        fixer
     }
 
     /// Declare a stream's reorder depth and whether its codec reorders at all.

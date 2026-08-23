@@ -38,7 +38,7 @@
 
 use std::collections::VecDeque;
 
-use vaco_codec_core::{CodecId, CodecProperties, Parser, ParserDriver};
+use vaco_codec_core::{CodecId, Parser, ParserDriver};
 use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
 use vaco_limits::{Limits, ProgressGuard};
 use vaco_packet::Packet;
@@ -187,15 +187,7 @@ impl<D: Demuxer> Discovery<D> {
     pub fn new(inner: D, flags: FormatFlags, opts: &FormatOptions) -> Self {
         let streams = inner.streams().to_vec();
         let n = streams.len();
-        let mut fixer = TimestampFixer::new(n, flags, opts);
-        for s in &streams {
-            let delay = s.params.video.as_ref().map_or(0, |v| v.has_b_frames);
-            let reorders = s
-                .params
-                .codec_id
-                .is_some_and(|c| c.properties().contains(CodecProperties::REORDER));
-            fixer.set_stream_delay(s.index, delay, reorders);
-        }
+        let fixer = TimestampFixer::for_streams(&streams, flags, opts);
         Self {
             inner,
             state: vec![StreamState::default(); n],

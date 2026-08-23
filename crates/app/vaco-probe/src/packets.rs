@@ -53,7 +53,9 @@
 use std::io::Write;
 
 use vaco_core::{Error, Result, TimeBase};
-use vaco_format_core::{Demuxer, SeekFlags, SeekTarget, Stream};
+use vaco_format_core::flags::FormatFlags;
+use vaco_format_core::options::FormatOptions;
+use vaco_format_core::{Demuxer, SeekFlags, SeekTarget, Stream, TimestampFixer};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
 use vaco_textformat::sections::SectionId;
@@ -76,6 +78,16 @@ pub struct ReadOpts<'a> {
     pub payload: PayloadOpts,
     /// The safety bound. See the module note.
     pub limits: Limits,
+    /// The container's flags and options, for the timestamp rules.
+    ///
+    /// The rules used to run only inside `Discovery`'s analysis pass, so a
+    /// packet emitted for *output* carried whatever the container stated and no
+    /// reconstruction. Matroska stores no DTS, so every Matroska packet arrived
+    /// with `dts = N/A` even after R19b existed to derive one from the reorder
+    /// window.
+    pub format_flags: FormatFlags,
+    /// See [`ReadOpts::format_flags`].
+    pub format_options: FormatOptions,
 }
 
 /// Read the file once. Returns the per-stream packet counts, indexed the same
@@ -95,6 +107,7 @@ pub fn read<W: Write>(
 ) -> Result<Vec<u64>> {
     let mut counts = vec![0u64; streams.len()];
     let mut budget = Budget::new(opts.limits);
+    let mut fixer = TimestampFixer::for_streams(streams, opts.format_flags, &opts.format_options);
 
     if opts.emit_packets {
         e.tf().open(SectionId::PACKETS)?;
@@ -116,9 +129,17 @@ pub fn read<W: Write>(
             if budget.consume_fuel(1).is_err() {
                 break 'intervals;
             }
-            let Ok(pkt) = demuxer.read_packet() else {
+            let Ok(mut pkt) = demuxer.read_packet() else {
                 break 'intervals;
             };
+            // Fill in and repair before anything reads a timestamp off it —
+            // `Cursor::admit` compares against the interval bounds, so a packet
+            // whose DTS is reconstructed here must be reconstructed *first*.
+            let stream_tb = stream_of(streams, pkt.stream_index)
+                .map_or(vaco_core::Rational::ONE, |s| s.time_base);
+            let frame_rate = stream_of(streams, pkt.stream_index)
+                .map_or(vaco_core::Rational::ZERO, |s| s.avg_frame_rate);
+            fixer.fix(&mut pkt, stream_tb, frame_rate);
             if !opts.selected.contains(&pkt.stream_index) {
                 continue;
             }
@@ -331,6 +352,8 @@ mod tests {
 
     fn opts<'a>(intervals: &'a [ReadInterval], selected: &'a [u32]) -> ReadOpts<'a> {
         ReadOpts {
+            format_flags: FormatFlags::empty(),
+            format_options: FormatOptions::default(),
             intervals,
             selected,
             emit_packets: true,
@@ -439,6 +462,8 @@ mod tests {
                 &mut Endless(0),
                 &[stream(0, MediaType::Video)],
                 ReadOpts {
+                    format_flags: FormatFlags::empty(),
+                    format_options: FormatOptions::default(),
                     intervals: &[ReadInterval::ALL],
                     selected: &[0],
                     emit_packets: false,

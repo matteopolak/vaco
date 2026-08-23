@@ -451,6 +451,11 @@ impl<'a, O: Write> Writer<'a, O> {
                         hash: opts.show_data_hash,
                     },
                     limits,
+                    // The demuxer's own flags, not a default: an empty
+                    // `FormatFlags` is the *strictest* container, and the
+                    // timestamp rules read it.
+                    format_flags: input.desc.flags,
+                    format_options: FormatOptions::default(),
                 },
             )?
         } else {
