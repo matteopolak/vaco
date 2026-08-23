@@ -104,8 +104,16 @@ impl FrameFilter for StereoWiden {
                 .map_or(0, Vec::len)
                 .min(channels.get(1).map_or(0, Vec::len));
             for i in 0..n {
-                let l = channels.first().and_then(|c| c.get(i)).copied().unwrap_or(0.0);
-                let r = channels.get(1).and_then(|c| c.get(i)).copied().unwrap_or(0.0);
+                let l = channels
+                    .first()
+                    .and_then(|c| c.get(i))
+                    .copied()
+                    .unwrap_or(0.0);
+                let r = channels
+                    .get(1)
+                    .and_then(|c| c.get(i))
+                    .copied()
+                    .unwrap_or(0.0);
                 let delayed_l = self.hist_l.front().copied().unwrap_or(0.0);
                 let delayed_r = self.hist_r.front().copied().unwrap_or(0.0);
                 let (out_l, out_r) = apply(
@@ -205,7 +213,15 @@ mod tests {
             let r = 0.0;
             let delayed_l = f.hist_l.front().copied().unwrap_or(0.0);
             let delayed_r = f.hist_r.front().copied().unwrap_or(0.0);
-            let (out_l, out_r) = apply(l, r, delayed_l, delayed_r, f.crossfeed, f.feedback, f.drymix);
+            let (out_l, out_r) = apply(
+                l,
+                r,
+                delayed_l,
+                delayed_r,
+                f.crossfeed,
+                f.feedback,
+                f.drymix,
+            );
             f.hist_l.push_back(l);
             f.hist_r.push_back(r);
             f.hist_l.pop_front();

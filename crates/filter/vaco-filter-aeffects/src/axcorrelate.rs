@@ -119,9 +119,8 @@ impl FrameSyncFilter for Axcorrelate {
             .map_or(0, Vec::len)
             .min(b_channels.first().map_or(0, Vec::len));
 
-        let mut out_channels: crate::sample::Channels = (0..n_channels)
-            .map(|_| vec![0.0f64; n_samples])
-            .collect();
+        let mut out_channels: crate::sample::Channels =
+            (0..n_channels).map(|_| vec![0.0f64; n_samples]).collect();
 
         for ch in 0..n_channels {
             let Some(xa) = a_channels.get(ch) else {

@@ -1,14 +1,54 @@
 # Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
 #
-# Seven T3 audio channel/layout/mixing filters (FT-4.13b, GitHub #482):
-# axcorrelate, crossfeed, earwax, extrastereo, haas, stereotools, stereowiden.
-# `amerge`, `amix`, `channelmap`, `channelsplit`, `join`, `pan` are already
-# registered by `vaco-filter-audio`, and `asplit` by `vaco-filter-plumbing` —
-# this fragment does not repeat them (D19). `headphone`, `sofalizer` and
-# `surround` are documented as not implemented; see this crate's `lib.rs`
-# doc for why. Each `ctor` names the per-filter `pub const DESC: FilterDesc`,
-# matching `vaco-filter-audio-eq`'s and `vaco-filter-audio-dynamics`'s
-# convention.
+# FT-4.13d (GitHub #484). All twenty-two filters this crate implements from
+# plan 16 §4.3's `vaco-filter-aeffects` row: the seven from FT-4.13b (GitHub
+# #482, back when this crate was named `vaco-filter-achannel`) plus fifteen
+# landed here. `headphone`, `surround` and `hdcd` are the row's three
+# unimplemented names; see this crate's `lib.rs` doc for why. Each `ctor`
+# names the per-filter `pub const DESC: FilterDesc`, matching
+# `vaco-filter-audio-eq`'s and `vaco-filter-audio-dynamics`'s convention.
+
+[[component]]
+kind = "filter"
+name = "adelay"
+long_name = "Delay one or more audio channels"
+ctor = "vaco_filter_aeffects::adelay::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "aecho"
+long_name = "Add echoing to the audio"
+ctor = "vaco_filter_aeffects::aecho::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "aexciter"
+long_name = "Enhance high frequency part of audio"
+ctor = "vaco_filter_aeffects::aexciter::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "aphaser"
+long_name = "Add a phasing effect to the audio"
+ctor = "vaco_filter_aeffects::aphaser::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "apulsator"
+long_name = "Audio pulsator"
+ctor = "vaco_filter_aeffects::apulsator::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "atempo"
+long_name = "Adjust audio tempo"
+ctor = "vaco_filter_aeffects::atempo::DESC"
+media = "audio"
 
 [[component]]
 kind = "filter"
@@ -19,9 +59,51 @@ media = "audio"
 
 [[component]]
 kind = "filter"
+name = "chorus"
+long_name = "Add a chorus effect to the audio"
+ctor = "vaco_filter_aeffects::chorus::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "compensationdelay"
+long_name = "Audio Compensation Delay Line"
+ctor = "vaco_filter_aeffects::compensationdelay::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
 name = "crossfeed"
 long_name = "Apply headphone crossfeed filter"
 ctor = "vaco_filter_aeffects::crossfeed::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "crystalizer"
+long_name = "Simple audio noise sharpening filter"
+ctor = "vaco_filter_aeffects::crystalizer::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "dcshift"
+long_name = "Apply a DC shift to the audio"
+ctor = "vaco_filter_aeffects::dcshift::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "deesser"
+long_name = "Apply de-essing to the audio"
+ctor = "vaco_filter_aeffects::deesser::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "dialoguenhance"
+long_name = "Audio Dialogue Enhancement"
+ctor = "vaco_filter_aeffects::dialoguenhance::DESC"
 media = "audio"
 
 [[component]]
@@ -36,6 +118,13 @@ kind = "filter"
 name = "extrastereo"
 long_name = "Increase difference between stereo audio channels"
 ctor = "vaco_filter_aeffects::extrastereo::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "flanger"
+long_name = "Apply a flanging effect to the audio"
+ctor = "vaco_filter_aeffects::flanger::DESC"
 media = "audio"
 
 [[component]]
@@ -57,4 +146,25 @@ kind = "filter"
 name = "stereowiden"
 long_name = "Apply stereo widening effect"
 ctor = "vaco_filter_aeffects::stereowiden::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "tremolo"
+long_name = "Apply tremolo effect"
+ctor = "vaco_filter_aeffects::tremolo::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "vibrato"
+long_name = "Apply vibrato effect"
+ctor = "vaco_filter_aeffects::vibrato::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "virtualbass"
+long_name = "Audio Virtual Bass"
+ctor = "vaco_filter_aeffects::virtualbass::DESC"
 media = "audio"

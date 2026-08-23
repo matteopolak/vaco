@@ -1,6 +1,6 @@
 [package]
 name = "vaco-filter-aeffects"
-description = "T3 audio channel, layout and mixing filters: axcorrelate, crossfeed, earwax, extrastereo, haas, stereotools, stereowiden."
+description = "T3 audio effects and modulation filters: aecho, adelay, compensationdelay, chorus, flanger, aphaser, tremolo, vibrato, apulsator, crystalizer, aexciter, deesser, dialoguenhance, crossfeed, stereotools, stereowiden, extrastereo, earwax, haas, virtualbass, dcshift, atempo, axcorrelate."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -17,6 +17,7 @@ vaco-resample = { path = "../../signal/vaco-resample" }
 vaco-filter-core = { path = "../../filter/vaco-filter-core" }
 vaco-filter-graph = { path = "../../filter/vaco-filter-graph" }
 vaco-filter-framesync = { path = "../../filter/vaco-filter-framesync" }
+vaco-filter-adsp = { path = "../../filter/vaco-filter-adsp" }
 smallvec.workspace = true
 
 [dev-dependencies]

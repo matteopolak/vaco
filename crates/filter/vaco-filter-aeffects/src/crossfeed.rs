@@ -94,8 +94,18 @@ impl FrameFilter for Crossfeed {
                 .map_or(0, Vec::len)
                 .min(channels.get(1).map_or(0, Vec::len));
             for i in 0..n {
-                let l = channels.first().and_then(|c| c.get(i)).copied().unwrap_or(0.0) * self.level_in;
-                let r = channels.get(1).and_then(|c| c.get(i)).copied().unwrap_or(0.0) * self.level_in;
+                let l = channels
+                    .first()
+                    .and_then(|c| c.get(i))
+                    .copied()
+                    .unwrap_or(0.0)
+                    * self.level_in;
+                let r = channels
+                    .get(1)
+                    .and_then(|c| c.get(i))
+                    .copied()
+                    .unwrap_or(0.0)
+                    * self.level_in;
 
                 let lp_r = self.lp_r.step(r, self.coeff);
                 let lp_l = self.lp_l.step(l, self.coeff);

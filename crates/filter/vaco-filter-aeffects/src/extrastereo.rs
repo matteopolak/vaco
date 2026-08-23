@@ -71,8 +71,16 @@ impl FrameFilter for ExtraStereo {
                 .map_or(0, Vec::len)
                 .min(channels.get(1).map_or(0, Vec::len));
             for i in 0..n {
-                let l = channels.first().and_then(|c| c.get(i)).copied().unwrap_or(0.0);
-                let r = channels.get(1).and_then(|c| c.get(i)).copied().unwrap_or(0.0);
+                let l = channels
+                    .first()
+                    .and_then(|c| c.get(i))
+                    .copied()
+                    .unwrap_or(0.0);
+                let r = channels
+                    .get(1)
+                    .and_then(|c| c.get(i))
+                    .copied()
+                    .unwrap_or(0.0);
                 let (out_l, out_r) = apply(l, r, self.m, self.clip);
                 if let Some(c) = channels.get_mut(0)
                     && let Some(s) = c.get_mut(i)

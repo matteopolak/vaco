@@ -7,13 +7,29 @@ use vaco_filter_graph::registry::{FilterRegistry, Instance, Instantiate};
 /// Every name this crate answers to, alphabetical as `ffmpeg -filters` lists
 /// them.
 const NAMES: &[&str] = &[
+    "adelay",
+    "aecho",
+    "aexciter",
+    "aphaser",
+    "apulsator",
+    "atempo",
     "axcorrelate",
+    "chorus",
+    "compensationdelay",
     "crossfeed",
+    "crystalizer",
+    "dcshift",
+    "deesser",
+    "dialoguenhance",
     "earwax",
     "extrastereo",
+    "flanger",
     "haas",
     "stereotools",
     "stereowiden",
+    "tremolo",
+    "vibrato",
+    "virtualbass",
 ];
 
 /// Implements [`FilterRegistry`] for every filter in this crate.
@@ -27,13 +43,29 @@ impl FilterRegistry for AeffectsRegistry {
 
     fn create(&self, req: &Instantiate<'_>) -> Result<Instance, String> {
         Ok(match req.name {
+            "adelay" => crate::adelay::create(req),
+            "aecho" => crate::aecho::create(req),
+            "aexciter" => crate::aexciter::create(req),
+            "aphaser" => crate::aphaser::create(req),
+            "apulsator" => crate::apulsator::create(req),
+            "atempo" => crate::atempo::create(req),
             "axcorrelate" => crate::axcorrelate::create(req),
+            "chorus" => crate::chorus::create(req),
+            "compensationdelay" => crate::compensationdelay::create(req),
             "crossfeed" => crate::crossfeed::create(req),
+            "crystalizer" => crate::crystalizer::create(req),
+            "dcshift" => crate::dcshift::create(req),
+            "deesser" => crate::deesser::create(req),
+            "dialoguenhance" => crate::dialoguenhance::create(req),
             "earwax" => crate::earwax::create(req),
             "extrastereo" => crate::extrastereo::create(req),
+            "flanger" => crate::flanger::create(req),
             "haas" => crate::haas::create(req),
             "stereotools" => crate::stereotools::create(req),
             "stereowiden" => crate::stereowiden::create(req),
+            "tremolo" => crate::tremolo::create(req),
+            "vibrato" => crate::vibrato::create(req),
+            "virtualbass" => crate::virtualbass::create(req),
             other => return Err(format!("vaco-filter-aeffects: no filter named `{other}`")),
         })
     }

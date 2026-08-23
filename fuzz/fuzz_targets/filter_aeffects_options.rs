@@ -6,13 +6,21 @@
 //! this exercises the filtergraph's own escaping ahead of each filter's
 //! `Instantiate::named` reads, not a hand-built `Instantiate`.
 //!
-//! Property: for any byte string, for any of the seven registered names,
-//! either a clean `Err` comes back at some stage or a working `Instance`,
-//! never a panic and never an unbounded allocation. `axcorrelate`'s `size`
-//! option is the specific worry this target is aimed at — it is clamped to
-//! `2..=131_072` in `axcorrelate::create` specifically so an attacker-sized
+//! Property: for any byte string, for any of this crate's registered
+//! names (read from [`FilterRegistry::names`] itself, not a list
+//! duplicated here — a name added to the registry is covered by this
+//! target automatically), either a clean `Err` comes back at some stage or
+//! a working `Instance`, never a panic and never an unbounded allocation.
+//! `axcorrelate`'s `size` option is the specific worry this target was
+//! originally aimed at — it is clamped to `2..=131_072` in
+//! `axcorrelate::create` specifically so an attacker-sized
 //! `size=99999999999999999999` (which does not fit `usize` at all, let alone
-//! a sane window) cannot turn into an unbounded `VecDeque` allocation.
+//! a sane window) cannot turn into an unbounded `VecDeque` allocation. The
+//! delay-line filters added since (`adelay`, `aecho`,
+//! `compensationdelay`, `chorus`, `flanger`, `aphaser`, `vibrato`) share
+//! the same worry from parsed millisecond/distance options, so growing the
+//! name list to cover them for free is exactly the point of reading
+//! `names()` rather than hand-listing them again.
 //! fuzz-crate: vaco-filter-aeffects
 
 #![no_main]
@@ -21,22 +29,12 @@ use libfuzzer_sys::fuzz_target;
 use vaco_filter_aeffects::registry::AeffectsRegistry;
 use vaco_filter_graph::registry::{FilterRegistry, Instantiate};
 
-const NAMES: &[&str] = &[
-    "axcorrelate",
-    "crossfeed",
-    "earwax",
-    "extrastereo",
-    "haas",
-    "stereotools",
-    "stereowiden",
-];
-
 fuzz_target!(|args: &str| {
     if args.len() > 8192 {
         return;
     }
     let registry = AeffectsRegistry;
-    for &name in NAMES {
+    for name in registry.names() {
         let text = format!("{name}={args}");
         let Ok(ast) = vaco_filter_graph::parse(&text) else {
             continue;

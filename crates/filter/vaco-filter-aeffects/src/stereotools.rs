@@ -163,8 +163,16 @@ impl FrameFilter for StereoTools {
                 .map_or(0, Vec::len)
                 .min(channels.get(1).map_or(0, Vec::len));
             for i in 0..n {
-                let l = channels.first().and_then(|c| c.get(i)).copied().unwrap_or(0.0);
-                let r = channels.get(1).and_then(|c| c.get(i)).copied().unwrap_or(0.0);
+                let l = channels
+                    .first()
+                    .and_then(|c| c.get(i))
+                    .copied()
+                    .unwrap_or(0.0);
+                let r = channels
+                    .get(1)
+                    .and_then(|c| c.get(i))
+                    .copied()
+                    .unwrap_or(0.0);
 
                 let (l, r) = (l * self.level_in, r * self.level_in);
                 let (l, r) = balance(l, r, self.balance_in);
@@ -223,9 +231,7 @@ pub(crate) fn create(req: &Instantiate<'_>) -> Instance {
             phasel: common::bool_opt(req, &["phasel"], false),
             phaser: common::bool_opt(req, &["phaser"], false),
         },
-        mode: req
-            .named("mode")
-            .map_or(Mode::LrLr, |s| Mode::parse(&s)),
+        mode: req.named("mode").map_or(Mode::LrLr, |s| Mode::parse(&s)),
     };
     Instance {
         desc: DESC,
