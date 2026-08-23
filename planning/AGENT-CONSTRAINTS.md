@@ -485,3 +485,28 @@ left for the Matroska agent cost one message and no conflict at all.
 And if your work does get absorbed: report it, do not fix it. Both agents did
 exactly that, and both were right to.
 
+### Renaming a crate breaks the tree until the *registry* is regenerated
+
+The manifest trap above has a sharper form. When you rename a crate, the stale
+references are not only in your own files — `crates/registry/vaco-registry/`'s
+`Cargo.toml` and `generated.rs` are **generated** from every crate's
+`vaco-component.toml`, and they still name the old crate until you run
+`cargo run -p xtask -- gen-registry`. Until then:
+
+```
+failed to load manifest for dependency `vaco-filter-achannel`
+  No such file or directory
+```
+
+and every cargo command in the tree fails for every agent, exactly as with a
+missing `src/lib.rs`, but for longer — the window lasts until you regenerate,
+not until you finish moving files.
+
+**Do the move and the regeneration as one step**, and fix the `ctor` paths in
+your fragment *before* regenerating, since those are what the generator reads.
+
+This is also the one case where an agent should commit
+`vaco-registry/Cargo.toml`: the rename genuinely requires it and nobody else is
+renaming your crate. `generated.rs` still stays out — the orchestrator sweeps
+it.
+
