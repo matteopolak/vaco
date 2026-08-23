@@ -599,7 +599,27 @@ macro_rules! bitstream_reg {
 /// `data`'s measured behaviour of never auto-detecting.
 fn probe_for(spec: &BitstreamSpec, data: &ProbeData<'_>) -> ProbeScore {
     let structural = match spec.framing {
-        Framing::StartCode3 => !startcode::start_codes(data.buf).is_empty(),
+        // The **first** start code must be at the very beginning, not merely
+        // present somewhere.
+        //
+        // "Somewhere" is the whole file, and start codes are three bytes that
+        // occur inside every MPEG-family payload — so an MPEG-TS file, whose
+        // PES payloads are full of real elementary-stream start codes, matched
+        // every `StartCode3` format. Since a structural hit scores 51 and a
+        // confidently-detected transport stream scores 50 (both measured
+        // against the reference), the raw formats won by one point and
+        // `ffprobe file.ts` reported `format_name=avs2`. Found by the
+        // differential harness on its first run.
+        //
+        // A raw elementary stream **opens** with a start code, optionally after
+        // one leading zero byte, so requiring offset 0 or 1 costs nothing real
+        // and rejects every container. It is not the final answer — the truly
+        // correct test also matches the start-code *identifier* against the
+        // format, so `h264` and `avs2` stop agreeing with each other — but it
+        // is the part that stops containers being stolen, and it is measurable.
+        Framing::StartCode3 => startcode::start_codes(data.buf)
+            .first()
+            .is_some_and(|&i| i <= 1),
         // The strict test, not `temporal_units`: that one falls back to
         // reporting the whole buffer when nothing parses, which is right for
         // demuxing and makes every non-empty input look like AV1 when probing.

@@ -19,9 +19,11 @@
 //! owner  = "@isobmff-owner"
 //!
 //! [[media]]
-//! id     = "h264-aac-30f"
-//! source = "corpus://vaco/mp4/h264-aac-30f.mp4"
-//! tags   = ["video", "audio"]
+//! id       = "mpeg4-30f"
+//! source   = "generated://mpeg4-30f.mp4"
+//! tags     = ["video"]
+//! generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1.2",
+//!             "-c:v", "mpeg4", "-f", "mp4"]
 //!
 //! [[axis]]
 //! name   = "writer"
@@ -43,6 +45,14 @@
 //! invocation = ["bitexact", "hide-banner"]
 //! output     = ["line-endings"]
 //! ```
+//!
+//! `generate` synthesises the media with the reference binary at run time
+//! rather than fetching it, and the runner appends the output path. That is
+//! what makes the harness usable before the corpus machinery of QA-04/X-05
+//! exists, and it stays inside D6: expected values are generated fresh at test
+//! time and discarded, so nothing FFmpeg-derived enters the repository. A case
+//! refers to its media as `{media}`, or `{media:<id>}` when a suite declares
+//! several.
 //!
 //! Case ids come out as `suite/media/axis=value,axis=value`, in axis
 //! declaration order, which is what makes them stable enough to paste into a
@@ -173,12 +183,22 @@ impl Suite {
             if let Some(tier) = string(t, "tier").and_then(|s| Tier::parse(&s)) {
                 media_tier.insert(id.clone(), tier);
             }
+            let generate = t.get("generate").and_then(Value::as_str_array);
+            if let Some(g) = &generate
+                && g.is_empty()
+            {
+                return Err(format!(
+                    "media `{id}`: `generate` is present but empty — omit the key \
+                     rather than declaring a synthesis that produces nothing"
+                ));
+            }
             media.push(MediaRef {
                 source: string(t, "source").ok_or("a media entry needs a `source`")?,
                 tags: t
                     .get("tags")
                     .and_then(Value::as_str_array)
                     .unwrap_or_default(),
+                generate,
                 id,
             });
         }
@@ -257,12 +277,26 @@ impl Suite {
             .and_then(Value::as_table)
             .map_or_else(|| Ok(Chain::default()), Chain::from_manifest)?;
 
-        // Rule 1.
-        if matches!(compare, Compare::ExactBytes { .. }) && !normalise.is_empty() {
+        // Rule 1, and only for **output** normalisers.
+        //
+        // The first version of this check counted the invocation chain too, and
+        // that is a category error. An invocation normaliser adds the same flag
+        // to both command lines — `-bitexact`, `-hide_banner` — which controls a
+        // variable rather than hiding a difference: whatever the two binaries
+        // then print, the comparison still sees every byte of it. An *output*
+        // normaliser is the one that makes the comparison blind to something,
+        // and C1's whole point is that such blindness be visible in review.
+        //
+        // Conflating them made `exact-bytes` unusable in practice, because
+        // every honest suite wants `-bitexact` — the strictest mode was the one
+        // no suite could declare, which is precisely backwards.
+        if matches!(compare, Compare::ExactBytes { .. }) && !normalise.output.is_empty() {
             return Err(
-                "this suite declares normalisers but mode `exact-bytes`; a normalised \
-                 comparison is mode `exact-bytes-normalised` (§1.2 C1), so that the \
-                 permitted blindness is visible in review"
+                "this suite declares output normalisers but mode `exact-bytes`; a \
+                 normalised comparison is mode `exact-bytes-normalised` (§1.2 C1), so \
+                 that the permitted blindness is visible in review. Invocation \
+                 normalisers such as `bitexact` are fine under `exact-bytes`: they \
+                 control a variable on both sides rather than hiding a difference"
                     .to_owned(),
             );
         }

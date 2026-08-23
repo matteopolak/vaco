@@ -458,6 +458,45 @@ pub struct MediaRef {
     pub source: String,
     /// Free-form selectors.
     pub tags: Vec<String>,
+    /// Arguments that **synthesise** this media with the reference binary,
+    /// instead of fetching it.
+    ///
+    /// The output path is appended by the runner, so a manifest writes only the
+    /// input and encoding half:
+    ///
+    /// ```toml
+    /// generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1",
+    ///             "-c:v", "mpeg4", "-f", "mp4"]
+    /// ```
+    ///
+    /// This is what makes the harness runnable **today**, before the corpus
+    /// machinery of QA-04/X-05 exists — and it is squarely inside D6's rule,
+    /// which is that expected values may be *generated fresh from the reference
+    /// at test time and discarded*. Nothing FFmpeg-derived enters the
+    /// repository: the bytes live in a temporary directory for the length of
+    /// one run.
+    ///
+    /// It is also the honest option for a differential harness. A committed
+    /// media file is a fixture whose provenance somebody has to defend; a file
+    /// synthesised by a command visible in the manifest defends itself.
+    pub generate: Option<Vec<String>>,
+}
+
+impl MediaRef {
+    /// The on-disk name this media takes inside a case's working directory.
+    ///
+    /// Derived from the `source` so a suite controls the extension — which
+    /// matters more than it looks, because extension-based format guessing is
+    /// part of what these cases are testing.
+    #[must_use]
+    pub fn file_name(&self) -> String {
+        let tail = self.source.rsplit('/').next().unwrap_or(&self.source);
+        if tail.is_empty() {
+            self.id.clone()
+        } else {
+            tail.to_owned()
+        }
+    }
 }
 
 /// One executable comparison.

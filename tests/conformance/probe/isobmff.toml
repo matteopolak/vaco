@@ -1,0 +1,68 @@
+# ISO BMFF probing, against reference-synthesised media.
+#
+# `generate` synthesises each file with the reference at run time and discards
+# it (D6). Nothing FFmpeg-derived is committed here — and a file described by a
+# command in the manifest defends its own provenance, which a checked-in fixture
+# does not.
+schema = 1
+suite  = "probe-isobmff"
+tool   = "probe"
+tier   = "core"
+owner  = "@orchestrator"
+
+[[media]]
+id       = "mpeg4-video"
+source   = "generated://mpeg4-video.mp4"
+tags     = ["video"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1.2",
+            "-c:v", "mpeg4", "-f", "mp4"]
+
+[[media]]
+id       = "mpeg4-and-pcm"
+source   = "generated://mpeg4-and-pcm.mov"
+tags     = ["video", "audio"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1.2",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=1.2",
+            "-c:v", "mpeg4", "-c:a", "pcm_s16le", "-f", "mov"]
+
+[[media]]
+id       = "audio-only"
+source   = "generated://audio-only.m4a"
+tags     = ["audio"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1.2",
+            "-c:a", "alac", "-f", "ipod"]
+
+[[axis]]
+name   = "section"
+values = [
+  { id = "format",     argv = ["-show_format"] },
+  { id = "streams",    argv = ["-show_streams"] },
+  { id = "both",       argv = ["-show_format", "-show_streams"] },
+  { id = "packets",    argv = ["-show_packets"] },
+  { id = "frames",     argv = ["-show_frames"], tier = "full" },
+  { id = "error",      argv = ["-show_error"] },
+]
+
+[[axis]]
+name   = "writer"
+values = [
+  { id = "default", argv = ["-of", "default"] },
+  { id = "json",    argv = ["-of", "json"] },
+  { id = "xml",     argv = ["-of", "xml"] },
+  { id = "compact", argv = ["-of", "compact"] },
+  { id = "csv",     argv = ["-of", "csv"] },
+  { id = "flat",    argv = ["-of", "flat"] },
+  { id = "ini",     argv = ["-of", "ini"] },
+]
+
+[[axis]]
+name   = "input"
+values = [{ id = "file", argv = ["-i", "{media}"] }]
+
+[compare]
+mode    = "exact-bytes"
+capture = ["stdout", "exit-code"]
+timeout = "30s"
+
+[normalise]
+invocation = ["bitexact", "hide-banner"]

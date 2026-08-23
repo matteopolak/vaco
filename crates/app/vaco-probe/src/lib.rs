@@ -362,6 +362,8 @@ fn open(url: &str, force: Option<&str>) -> Result<Input> {
 struct Writer<'a, O: Write> {
     tf: TextFormat<&'a mut O>,
     policy: vaco_textformat::OptionalFields,
+    /// `-bitexact`, which drops every `*_long_name` — see [`Emit::bitexact`].
+    bitexact: bool,
 }
 
 impl<'a, O: Write> Writer<'a, O> {
@@ -373,6 +375,7 @@ impl<'a, O: Write> Writer<'a, O> {
         Ok(Self {
             tf,
             policy: opts.format_opts.show_optional_fields,
+            bitexact: opts.bitexact,
         })
     }
 
@@ -394,7 +397,7 @@ impl<'a, O: Write> Writer<'a, O> {
         let (code, text) = error_report(e);
         self.tf.open(SectionId::ROOT)?;
         {
-            let mut emit = Emit::new(&mut self.tf, self.policy);
+            let mut emit = Emit::new(&mut self.tf, self.policy).bitexact(self.bitexact);
             show::error(&mut emit, code, text)?;
         }
         self.tf.close()
@@ -419,7 +422,7 @@ impl<'a, O: Write> Writer<'a, O> {
         let selected_ids: Vec<u32> = selected.iter().map(|s| s.index).collect();
 
         self.tf.open(SectionId::ROOT)?;
-        let mut emit = Emit::new(&mut self.tf, self.policy);
+        let mut emit = Emit::new(&mut self.tf, self.policy).bitexact(self.bitexact);
 
         if opts.show.program_version {
             program_version(&mut emit)?;

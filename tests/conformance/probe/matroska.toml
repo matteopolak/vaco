@@ -1,0 +1,59 @@
+# Matroska and WebM probing, against reference-synthesised media.
+schema = 1
+suite  = "probe-matroska"
+tool   = "probe"
+tier   = "core"
+owner  = "@orchestrator"
+
+[[media]]
+id       = "mpeg4-video"
+source   = "generated://mpeg4-video.mkv"
+tags     = ["video"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1.2",
+            "-c:v", "mpeg4", "-f", "matroska"]
+
+[[media]]
+id       = "video-and-audio"
+source   = "generated://video-and-audio.mkv"
+tags     = ["video", "audio"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1.2",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=1.2",
+            "-c:v", "mpeg4", "-c:a", "flac", "-f", "matroska"]
+
+[[media]]
+id       = "webm"
+source   = "generated://vp8-vorbis.webm"
+tags     = ["video", "audio", "webm"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=160x120:rate=10:d=1",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+            "-c:v", "vp8", "-c:a", "libvorbis", "-f", "webm"]
+
+[[axis]]
+name   = "section"
+values = [
+  { id = "format",  argv = ["-show_format"] },
+  { id = "streams", argv = ["-show_streams"] },
+  { id = "both",    argv = ["-show_format", "-show_streams"] },
+  { id = "packets", argv = ["-show_packets"] },
+]
+
+[[axis]]
+name   = "writer"
+values = [
+  { id = "default", argv = ["-of", "default"] },
+  { id = "json",    argv = ["-of", "json"] },
+  { id = "xml",     argv = ["-of", "xml"] },
+  { id = "compact", argv = ["-of", "compact"] },
+]
+
+[[axis]]
+name   = "input"
+values = [{ id = "file", argv = ["-i", "{media}"] }]
+
+[compare]
+mode    = "exact-bytes"
+capture = ["stdout", "exit-code"]
+timeout = "30s"
+
+[normalise]
+invocation = ["bitexact", "hide-banner"]

@@ -22,6 +22,10 @@
 /// `obu_type` values named in the spec that this module inspects.
 const OBU_TEMPORAL_DELIMITER: u8 = 2;
 
+/// `OBU_SEQUENCE_HEADER` (AV1 §6.2.2). The only other type a conforming stream
+/// may open with.
+const OBU_SEQUENCE_HEADER: u8 = 1;
+
 /// One parsed OBU header, plus where its payload starts and ends in the
 /// original buffer.
 #[derive(Debug, Clone, Copy)]
@@ -104,9 +108,23 @@ pub fn looks_like_obu_stream(data: &[u8]) -> bool {
         return false;
     }
     let kind = (header >> 3) & 0x0f;
-    // 0 is reserved, 9..=14 are reserved, 15 is padding. 1..=8 plus 15 are the
-    // types a conforming stream can open with.
-    if kind == 0 || (9..=14).contains(&kind) {
+    // A conforming stream **opens** with a temporal delimiter or a sequence
+    // header — §7.5 requires a temporal unit to start with a temporal
+    // delimiter, and a decoder needs the sequence header before anything else
+    // is meaningful. Anything else in first position is some other format.
+    //
+    // The earlier version accepted any non-reserved type here, which was still
+    // far too loose. The differential harness caught it on its first run: an
+    // MPEG-TS file opens with 0x47, which reads as a perfectly valid
+    // `OBU_METADATA` header with a size field, parses, and scored `av1` above
+    // `mpegts` — so `ffprobe file.ts` reported `format_name=av1` and one
+    // stream where the reference reports `mpegts` and a program.
+    //
+    // That is the same mistake as the prose case in a smarter disguise, and the
+    // lesson is the one worth keeping: a probe must be justified by what a
+    // *conforming* stream looks like, not by what a malformed one might
+    // survive. Leniency belongs in the demuxer.
+    if kind != OBU_TEMPORAL_DELIMITER && kind != OBU_SEQUENCE_HEADER {
         return false;
     }
     parse_one(data, 0).is_some_and(|obu| obu.end > obu.start)

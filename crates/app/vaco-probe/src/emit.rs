@@ -76,6 +76,8 @@ pub struct Emit<'a, W: Write> {
     policy: OptionalFields,
     /// Whether the writer omits unavailable optional fields (`json`, `xml`).
     suppresses: bool,
+    /// `-bitexact`, which drops every `*_long_name` field.
+    bitexact: bool,
 }
 
 impl<'a, W: Write> Emit<'a, W> {
@@ -86,7 +88,53 @@ impl<'a, W: Write> Emit<'a, W> {
             tf,
             policy,
             suppresses,
+            bitexact: false,
         }
+    }
+
+    /// Turn on `-bitexact`.
+    #[must_use]
+    pub const fn bitexact(mut self, on: bool) -> Self {
+        self.bitexact = on;
+        self
+    }
+
+    /// Whether `-bitexact` drops this field.
+    ///
+    /// **It drops every `*_long_name`.** Measured on ffprobe 8.1, and nowhere
+    /// documented:
+    ///
+    /// ```sh
+    /// ffprobe -hide_banner -show_format av.mp4 | grep -c long_name           # 1
+    /// ffprobe -bitexact -hide_banner -show_format av.mp4 | grep -c long_name # 0
+    /// ```
+    ///
+    /// The reasoning is sound once you see it — a long name is descriptive
+    /// prose that changes between builds, exactly what `-bitexact` exists to
+    /// remove — but it is not the sort of thing anyone would guess, and the
+    /// consequence is severe: every one of the differential harness's
+    /// `exact-bytes` cases runs under `-bitexact`, so this single field made
+    /// **156 of 198** probe cases diverge on their first run. Found by running
+    /// the harness, which is the argument for having built it.
+    ///
+    /// Matched on the suffix rather than a list of names, deliberately:
+    /// `format_long_name` and `codec_long_name` exist today and a new section
+    /// with its own long name should not have to remember to come back here.
+    const fn dropped_by_bitexact(name: &str) -> bool {
+        // `str::ends_with` is not const; the suffix is nine bytes.
+        let b = name.as_bytes();
+        let s = b"_long_name";
+        if b.len() < s.len() {
+            return false;
+        }
+        let mut i = 0;
+        while i < s.len() {
+            if b[b.len() - s.len() + i] != s[i] {
+                return false;
+            }
+            i += 1;
+        }
+        true
     }
 
     /// The wrapped formatter, for section open/close **only**.
@@ -127,6 +175,9 @@ impl<'a, W: Write> Emit<'a, W> {
     /// # Errors
     /// Propagates the sink's I/O error.
     pub fn int(&mut self, key: &str, v: i64) -> Result<()> {
+        if self.bitexact && Self::dropped_by_bitexact(key) {
+            return Ok(());
+        }
         if self.suppress_all() {
             return Ok(());
         }
@@ -138,6 +189,9 @@ impl<'a, W: Write> Emit<'a, W> {
     /// # Errors
     /// Propagates the sink's I/O error.
     pub fn int_opt(&mut self, key: &str, v: Option<i64>) -> Result<()> {
+        if self.bitexact && Self::dropped_by_bitexact(key) {
+            return Ok(());
+        }
         if self.suppress_all() {
             return Ok(());
         }
@@ -149,6 +203,9 @@ impl<'a, W: Write> Emit<'a, W> {
     /// # Errors
     /// Propagates the sink's I/O error.
     pub fn str(&mut self, key: &str, v: &str) -> Result<()> {
+        if self.bitexact && Self::dropped_by_bitexact(key) {
+            return Ok(());
+        }
         if self.suppress_all() {
             return Ok(());
         }
@@ -160,6 +217,9 @@ impl<'a, W: Write> Emit<'a, W> {
     /// # Errors
     /// Propagates the sink's I/O error.
     pub fn ts(&mut self, key: &str, ts: Option<i64>) -> Result<()> {
+        if self.bitexact && Self::dropped_by_bitexact(key) {
+            return Ok(());
+        }
         if self.suppress_all() {
             return Ok(());
         }
@@ -171,6 +231,9 @@ impl<'a, W: Write> Emit<'a, W> {
     /// # Errors
     /// Propagates the sink's I/O error.
     pub fn duration(&mut self, key: &str, secs: Option<f64>) -> Result<()> {
+        if self.bitexact && Self::dropped_by_bitexact(key) {
+            return Ok(());
+        }
         if self.suppress_all() {
             return Ok(());
         }
@@ -197,6 +260,9 @@ impl<'a, W: Write> Emit<'a, W> {
     /// Propagates the sink's I/O error.
     pub fn put(&mut self, field: Option<&'static Field>, val: &Val) -> Result<()> {
         let Some(field) = field else { return Ok(()) };
+        if self.bitexact && Self::dropped_by_bitexact(field.name) {
+            return Ok(());
+        }
         if self.suppress_all() {
             return Ok(());
         }

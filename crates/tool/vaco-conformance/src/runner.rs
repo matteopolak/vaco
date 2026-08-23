@@ -39,6 +39,77 @@ use crate::divergence::Allowlist;
 use crate::refbin::Reference;
 use crate::run::{Invocation, run};
 
+/// Synthesised media, produced once per process and reused across cases.
+///
+/// Without the cache, a suite of a thousand cases over four media would invoke
+/// the reference four thousand times to build the same four files. The key is
+/// the generating argument vector, so two suites asking for the same media
+/// share one file — and two suites asking for *nearly* the same media do not,
+/// which is the behaviour you want when the difference is the point.
+#[derive(Debug, Default)]
+pub struct MediaCache {
+    dir: Option<std::sync::Arc<tempfile::TempDir>>,
+    built: std::cell::RefCell<std::collections::BTreeMap<String, PathBuf>>,
+}
+
+impl MediaCache {
+    /// Materialise `media` and return the path to it.
+    ///
+    /// # Errors
+    /// A message naming the media and what the reference said.
+    pub fn path(
+        &self,
+        media: &crate::case::MediaRef,
+        reference: &std::path::Path,
+    ) -> Result<PathBuf, String> {
+        let Some(argv) = &media.generate else {
+            return Err(format!(
+                "media `{}`: source `{}` is not a path this build can resolve, and \
+                 the entry declares no `generate`. Corpus fetching is QA-04/X-05 \
+                 and does not exist yet; until it does, a suite must synthesise \
+                 its media with the reference.",
+                media.id, media.source
+            ));
+        };
+        let key = format!("{}\u{1}{}", media.file_name(), argv.join("\u{1}"));
+        if let Some(hit) = self.built.borrow().get(&key) {
+            return Ok(hit.clone());
+        }
+        let dir = self
+            .dir
+            .as_ref()
+            .ok_or("the media cache has no directory")?;
+        // One subdirectory per media so two entries may share a file name.
+        let sub = dir.path().join(format!("m{}", self.built.borrow().len()));
+        std::fs::create_dir_all(&sub).map_err(|e| format!("{}: {e}", sub.display()))?;
+        let out = sub.join(media.file_name());
+
+        let mut full: Vec<String> = vec!["-nostdin".into(), "-y".into(), "-hide_banner".into()];
+        full.extend(argv.iter().cloned());
+        full.push(out.to_string_lossy().into_owned());
+        let inv = Invocation::new(reference, full).with_timeout(Duration::from_secs(60));
+        let obs = run(&inv).map_err(|e| format!("media `{}`: {e}", media.id))?;
+        if !obs.succeeded() {
+            return Err(format!(
+                "media `{}`: the reference could not synthesise it.\n  {}\n{}",
+                media.id,
+                inv.command_line(),
+                obs.stderr_text()
+            ));
+        }
+        if !out.exists() {
+            return Err(format!(
+                "media `{}`: the reference exited 0 but wrote no file. That is \
+                 usually a `generate` whose last argument is already an output \
+                 path — the runner appends one.",
+                media.id
+            ));
+        }
+        self.built.borrow_mut().insert(key, out.clone());
+        Ok(out)
+    }
+}
+
 /// Where our own binaries live.
 #[derive(Debug, Clone, Default)]
 pub struct UnderTest {
@@ -160,6 +231,8 @@ pub struct Runner<'a> {
     pub under_test: UnderTest,
     /// The divergence register.
     pub allowlist: &'a Allowlist,
+    /// Media synthesised by the reference, shared across every case in the run.
+    pub media: MediaCache,
 }
 
 impl<'a> Runner<'a> {
@@ -171,6 +244,13 @@ impl<'a> Runner<'a> {
             absent_reason: String::new(),
             under_test: UnderTest::discover(),
             allowlist,
+            media: MediaCache {
+                // A failure to make the directory is not fatal here: it becomes
+                // a per-case error with a real message, which is far easier to
+                // act on than a constructor that cannot fail.
+                dir: tempfile::tempdir().ok().map(std::sync::Arc::new),
+                built: std::cell::RefCell::new(std::collections::BTreeMap::new()),
+            },
         }
     }
 
@@ -188,6 +268,40 @@ impl<'a> Runner<'a> {
             outcomes.push(outcome);
         }
         (outcomes, tally)
+    }
+
+    /// Replace `{media}` and `{media:<id>}` placeholders in `argv`.
+    fn substitute_media(&self, case: &Case, argv: &mut [String]) -> Result<(), String> {
+        if !argv.iter().any(|a| a.contains("{media")) {
+            return Ok(());
+        }
+        let reference = self
+            .reference
+            .ok_or("a case references media but there is no reference to synthesise it")?;
+        for arg in argv.iter_mut() {
+            while let Some(start) = arg.find("{media") {
+                let end = arg
+                    .get(start..)
+                    .and_then(|r| r.find('}'))
+                    .map(|i| start + i)
+                    .ok_or_else(|| format!("unterminated `{{media` in {arg:?}"))?;
+                let token = arg.get(start + 1..end).unwrap_or_default();
+                let wanted = token.strip_prefix("media:").map(str::trim);
+                let media = match wanted {
+                    None => case.media.first().ok_or_else(|| {
+                        "`{media}` used but the suite declares no media".to_owned()
+                    })?,
+                    Some(id) => case
+                        .media
+                        .iter()
+                        .find(|m| m.id == id)
+                        .ok_or_else(|| format!("`{{media:{id}}}` names no declared media"))?,
+                };
+                let path = self.media.path(media, &reference.ffmpeg)?;
+                arg.replace_range(start..=end, &path.to_string_lossy());
+            }
+        }
+        Ok(())
     }
 
     /// Run one case.
@@ -238,6 +352,22 @@ impl<'a> Runner<'a> {
 
         let mut argv = case.normalise.argv_prefix(case.tool);
         argv.extend(case.argv.iter().cloned());
+
+        // Substitute `{media}` / `{media:<id>}` with real paths. A case that
+        // names media it does not declare fails loudly here rather than being
+        // handed a literal `{media}` to open, which the reference would report
+        // as a missing file and both sides would "agree" on — a false pass.
+        match self.substitute_media(case, &mut argv) {
+            Ok(()) => {}
+            Err(e) => {
+                return Outcome {
+                    case: case.clone(),
+                    verdict: Verdict::OursFailed(FailureKind::LaunchFailed(e)),
+                    ours_command: String::new(),
+                    theirs_command: String::new(),
+                };
+            }
+        }
 
         let ours_inv = Invocation::new(ours_bin, argv.clone())
             .in_dir(dir.path())

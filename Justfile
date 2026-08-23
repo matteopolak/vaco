@@ -126,6 +126,24 @@ docs-check:
     cargo xtask gen-pixfmt --check
     cargo xtask gen-fuzz --check
 
+# ------------------------------------------------------------- conformance
+
+# The differential harness: run both binaries over every case and diff.
+#
+# Media is synthesised by the reference at run time and discarded (D6), so this
+# needs `ffmpeg`/`ffprobe` on PATH but no corpus. Without them every case skips
+# rather than failing, which is deliberate — `cargo test` must pass on a machine
+# that has no reference (plan 13 §1.5.4).
+conformance tier="core":
+    cargo build -p vaco-probe {{TD}}
+    VACO_BIN_PROBE="$(cargo metadata --format-version 1 --no-deps | \
+        sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')/debug/vaco-probe" \
+      cargo run -p vaco-conformance {{TD}} -- run --tier {{tier}}
+
+# One case, by the id printed with every failure.
+conformance-run case:
+    cargo run -p vaco-conformance {{TD}} -- run --case "{{case}}"
+
 # ------------------------------------------------------ benchmarks & profiling
 
 bench filter="":
