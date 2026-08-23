@@ -102,6 +102,13 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-protocol-wrap | 3 | #545 | agent:protocols | done | 2026-08-23 | 2026-08-23 | subfile concat concatf cache tee async |
 | vaco-protocol-file | 3 | #544 | agent:protocols | done | 2026-08-23 | 2026-08-23 | had NO vaco-component.toml — file:/pipe: were never registered |
 | vaco-hash | 0 | — | orchestrator | done | 2026-08-23 | 2026-08-23 | D11 merge of crc/md-5/sha1/sha2 |
+| vaco-format-core | 4 | — | agent:iface | assigned | 2026-08-23 |  | INTERFACE-GAPS 1/4/5/6: metadata channel, options on open, MuxerDesc flags |
+| vaco-demux-mxf | 4 | #604-607 | agent:mxf | assigned | 2026-08-23 |  | KLV, structural metadata, essence, index tables |
+| vaco-protocol-socket | 3 | #547 | agent:net | assigned | 2026-08-23 |  | tcp udp udplite unix |
+| vaco-protocol-tls | 3 | #548 | agent:net | assigned | 2026-08-23 |  | rustls + D14.2 root store |
+| vaco-protocol-http | 3 | #549 | agent:net | assigned | 2026-08-23 |  | range/seek/reconnect/ICY/chunked POST |
+| vaco-conformance | 10 | #196,#211 | agent:conf | assigned | 2026-08-23 |  | the remux byte-identity matrix — possible now the CLI writes files |
+| vaco-demux-raw | 4 | — | agent:probefix | assigned | 2026-08-23 |  | CONFORMANCE-FINDINGS 3: start-code identifiers per format |
 | vaco-filter-core | 5 | — | agent:filter-core | done | 2026-08-22 | 2026-08-22 | frozen only |
 | vaco-filter-framesync | 5 | — | agent:filter-graph | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-filter-graph | 5 | — | agent:filter-graph | done | 2026-08-22 | 2026-08-22 |  |
