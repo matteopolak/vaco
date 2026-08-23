@@ -1177,6 +1177,25 @@ The rule that actually holds:
 Check the zero-argument and error cases explicitly; they are the ones a corpus
 of successful invocations never reaches.
 
+### An option's position changes which object it lands on
+
+`ffmpeg`'s options are positional by design: an option before `-i` configures
+the *input*, the same option after it configures the output. That is documented
+and easy to say, and still catches people, because the failure does not look
+like a mistake.
+
+Measured while probing muxer determinism: `-fflags +bitexact` placed **before**
+`-i` sets bitexact on the *input*, so Matroska goes on writing random
+`SegmentUID` and `TrackUID` values. Two runs of what looks like the same command
+then differ by about 60 bytes, and the obvious reading is "the muxer is
+nondeterministic" — a conclusion about the reference that is entirely an
+artefact of where a flag was typed.
+
+The general rule: **when a probe's result implies the reference is doing
+something surprising, check the option's position before believing it.** The
+surprising answer is more often a misplaced flag than a discovery, and this one
+is especially quiet because both placements are accepted and neither warns.
+
 ### Escaping is part of the experiment
 
 When the value contains a space, a comma, a colon, a backslash or a quote, the
