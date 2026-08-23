@@ -794,7 +794,7 @@ narrowed further because the harness cannot see past "prints nothing"
 without crossing into source-level debugging of a crate this brief does not
 own.
 
-## 24. Per-demuxer codec-ID mapping gaps — the same shape as finding 4, four more families
+## 24. Per-demuxer codec-ID mapping gaps — the same shape as finding 4, four more families — **all four fixed**
 
 Finding 4's shape ("`TsCodec::codec_id` maps eight of about thirty
 variants") turns up in every new probe suite, in crates finding 4 never
@@ -810,6 +810,34 @@ touched:
 Same mechanical fix each time — complete the mapping table for the format —
 and the same ownership pattern: whichever demuxer builds the
 `CodecParameters` for that family.
+
+**All four rows fixed.** AVI, DV and Ogg in 589e5e3; audio-simple below.
+Three of the four turned out not to be missing table entries at all — the
+crates held the right answer and had been told there was nowhere to put it:
+
+- **AVI** had `FMP4 -> "mpeg4"` in `codec_name` and no id in `codec_id`,
+  and `vaco-probe` prints the name from the *id*. Six more FourCCs were in
+  the same gap.
+- **DV** set no `codec_id` on either stream, on the strength of a comment
+  saying `CodecId` had no DV variant. It did.
+- **audio-simple** returned the generic `CodecId::Pcm` — a codec the
+  reference never names — for every flavour in AIFF, AIFF-C, AU, CAF and
+  RSO. A shared `pcm::codec_id_for(bits, is_float, big_endian, signed)`
+  now derives the specific one, and the AIFF-C table's conflation of
+  `sowt` (little-endian) with `twos` (big-endian) — invisible while both
+  returned the same generic id — is fixed with it.
+
+Verified end to end against the reference on 24 file/encoder combinations
+across AIFF, AU and CAF: `codec_name` and `sample_fmt` now agree on all 24.
+
+Two rows nobody would derive without measuring: `pcm_s8` reports
+`sample_fmt=u8` (there is no signed 8-bit sample format), and
+`pcm_alaw`/`pcm_mulaw` report `s16` while being neither signed nor 16-bit —
+the field is the *decoded* format, not the coded one.
+
+The nine `default_audio` declarations were wrong in the same way and are
+now what `ffmpeg -h muxer=<name>` states: `pcm_s16be` for aiff/au/caf,
+`pcm_u8` for rso, `pcm_s32le` for sox, `pcm_s16le` for ircam/voc/w64/wav.
 
 ## 25. `vaco-probe` emits `"profile": "unknown"` where the reference omits the key entirely — **fixed**
 

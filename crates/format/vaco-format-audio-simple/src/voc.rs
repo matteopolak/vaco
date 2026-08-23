@@ -108,7 +108,9 @@ pub const MUXER: MuxerDesc = MuxerDesc {
     long_name: "Creative Voice",
     extensions: &["voc"],
     default_video: None,
-    default_audio: Some(CodecId::Pcm),
+    // `ffmpeg -h muxer=voc` says "Default audio codec: pcm_s16le." The
+    // generic `Pcm` that was here is not a codec the reference ever names.
+    default_audio: Some(CodecId::PcmS16le),
     open: open_muxer,
 };
 

@@ -79,7 +79,9 @@ pub const MUXER: MuxerDesc = MuxerDesc {
     long_name: "SoX (Sound eXchange) native",
     extensions: &["sox"],
     default_video: None,
-    default_audio: Some(CodecId::Pcm),
+    // `ffmpeg -h muxer=sox` says "Default audio codec: pcm_s32le." The
+    // generic `Pcm` that was here is not a codec the reference ever names.
+    default_audio: Some(CodecId::PcmS32le),
     open: open_muxer,
 };
 

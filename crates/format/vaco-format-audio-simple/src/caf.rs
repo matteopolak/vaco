@@ -60,6 +60,16 @@ const DATA: [u8; 4] = *b"data";
 const LPCM: [u8; 4] = *b"lpcm";
 
 const FLAG_FLOAT: u32 = 1 << 0;
+/// `kCAFLinearPCMFormatFlagIsLittleEndian`. Measured by writing each PCM
+/// flavour and reading `mFormatFlags` at offset 32 of the file:
+///
+/// ```text
+/// pcm_s16be -> 0   pcm_s16le -> 2   pcm_f32be -> 1   pcm_f32le -> 3
+/// ```
+///
+/// `pcm_s8` writes 0 (8-bit LPCM is signed here), and the reference's `caf`
+/// muxer refuses `pcm_u8` outright.
+const FLAG_LITTLE_ENDIAN: u32 = 1 << 1;
 
 /// **Measured**: `ffprobe` 8.1's `format.probe_score` on a plain `ffmpeg -f
 /// caf` file with no extension is `100`.
@@ -89,7 +99,9 @@ pub const MUXER: MuxerDesc = MuxerDesc {
     long_name: "Apple CAF (Core Audio Format)",
     extensions: &["caf"],
     default_video: None,
-    default_audio: Some(CodecId::Pcm),
+    // `ffmpeg -h muxer=caf` says "Default audio codec: pcm_s16be." The
+    // generic `Pcm` that was here is not a codec the reference ever names.
+    default_audio: Some(CodecId::PcmS16be),
     open: open_muxer,
 };
 
@@ -174,12 +186,21 @@ impl CafDemuxer {
 
         let is_float = format_flags & FLAG_FLOAT != 0;
         let bits_u8 = u8::try_from(bits_per_channel.min(255)).unwrap_or(255);
+        let big_endian = format_flags & FLAG_LITTLE_ENDIAN == 0;
         let (codec_id, format, bits_coded, bits_raw) = if format_id == LPCM {
             let (fmt, raw) = pcm::sample_fmt_for(bits_u8, is_float);
-            (Some(CodecId::Pcm), fmt, Some(bits_u8), raw)
-        } else if &format_id == b"ulaw" || &format_id == b"alaw" {
+            let id = pcm::codec_id_for(bits_u8, is_float, big_endian, true);
+            (Some(id), fmt, Some(bits_u8), raw)
+        } else if &format_id == b"ulaw" {
             (
-                Some(CodecId::Pcm),
+                Some(CodecId::PcmMulaw),
+                Some(vaco_sampfmt::SampleFmt::S16),
+                Some(8),
+                None,
+            )
+        } else if &format_id == b"alaw" {
+            (
+                Some(CodecId::PcmAlaw),
                 Some(vaco_sampfmt::SampleFmt::S16),
                 Some(8),
                 None,

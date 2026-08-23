@@ -95,7 +95,9 @@ pub const MUXER: MuxerDesc = MuxerDesc {
     long_name: "Sun AU",
     extensions: &["au"],
     default_video: None,
-    default_audio: Some(CodecId::Pcm),
+    // `ffmpeg -h muxer=au` says "Default audio codec: pcm_s16be." The
+    // generic `Pcm` that was here is not a codec the reference ever names.
+    default_audio: Some(CodecId::PcmS16be),
     open: open_muxer,
 };
 
@@ -122,6 +124,26 @@ fn encoding_to_format(encoding: u32) -> Option<(SampleFmt, u8)> {
         ENC_PCM32 => Some((SampleFmt::S32, 32)),
         ENC_FLOAT32 => Some((SampleFmt::F32, 32)),
         ENC_FLOAT64 => Some((SampleFmt::F64, 64)),
+        _ => None,
+    }
+}
+
+/// The codec the reference names for one `.au` encoding value.
+///
+/// `.au` is big-endian throughout, and its "8-bit linear" encoding is
+/// *signed*: the reference's `au` muxer accepts `-c:a pcm_s8` and rejects
+/// `-c:a pcm_u8`, and a written file probes back as `pcm_s8` with
+/// `sample_fmt=u8` — the decoded format, which has no signed 8-bit spelling.
+fn encoding_to_codec(encoding: u32) -> Option<CodecId> {
+    match encoding {
+        ENC_MULAW8 => Some(CodecId::PcmMulaw),
+        ENC_ALAW8 => Some(CodecId::PcmAlaw),
+        ENC_PCM8 => Some(CodecId::PcmS8),
+        ENC_PCM16 => Some(CodecId::PcmS16be),
+        ENC_PCM24 => Some(CodecId::PcmS24be),
+        ENC_PCM32 => Some(CodecId::PcmS32be),
+        ENC_FLOAT32 => Some(CodecId::PcmF32be),
+        ENC_FLOAT64 => Some(CodecId::PcmF64be),
         _ => None,
     }
 }
@@ -157,11 +179,7 @@ impl AuDemuxer {
 
         let (format, bits_coded) =
             encoding_to_format(encoding).map_or((None, Some(0)), |(f, b)| (Some(f), Some(b)));
-        let codec_id = if format.is_some() {
-            Some(CodecId::Pcm)
-        } else {
-            None
-        };
+        let codec_id = encoding_to_codec(encoding);
         let bits_raw = if encoding == ENC_PCM24 {
             Some(24)
         } else {

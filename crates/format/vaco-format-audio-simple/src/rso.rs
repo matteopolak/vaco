@@ -78,7 +78,9 @@ pub const MUXER: MuxerDesc = MuxerDesc {
     long_name: "Lego Mindstorms RSO",
     extensions: &["rso"],
     default_video: None,
-    default_audio: Some(CodecId::Pcm),
+    // `ffmpeg -h muxer=rso` says "Default audio codec: pcm_u8." The
+    // generic `Pcm` that was here is not a codec the reference ever names.
+    default_audio: Some(CodecId::PcmU8),
     open: open_muxer,
 };
 
@@ -114,7 +116,10 @@ impl RsoDemuxer {
         let mut stream = pcm::new_stream(Rational::new(1, i32::try_from(sample_rate).unwrap_or(1)));
         let mut params: CodecParameters = pcm::params(
             PcmLayout::new(sample_rate, 1, 1),
-            Some(CodecId::Pcm),
+            // RSO is 8-bit unsigned linear only — `ffmpeg -h muxer=rso` says
+            // "Default audio codec: pcm_u8." and the format carries no field
+            // that could say anything else.
+            Some(CodecId::PcmU8),
             Some(SampleFmt::U8),
             Some(8),
             None,

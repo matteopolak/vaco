@@ -116,6 +116,61 @@ pub const fn sample_fmt_for(
     }
 }
 
+/// The width/signedness/endianness-specific `CodecId` for a PCM stream.
+///
+/// `CodecId::Pcm` is the generic fallback and it is **not** what the reference
+/// reports. Measured on AIFF, AU and CAF, all three agreeing:
+///
+/// ```text
+/// encoder      codec_name   sample_fmt   bits_per_raw_sample
+/// pcm_s16be    pcm_s16be    s16          N/A
+/// pcm_s16le    pcm_s16le    s16          N/A
+/// pcm_s24be    pcm_s24be    s32          24
+/// pcm_s8       pcm_s8       u8           N/A
+/// pcm_u8       pcm_u8       u8           N/A
+/// pcm_f32be    pcm_f32be    flt          N/A
+/// pcm_f64be    pcm_f64be    dbl          N/A
+/// pcm_alaw     pcm_alaw     s16          N/A
+/// pcm_mulaw    pcm_mulaw    s16          N/A
+/// ```
+///
+/// Two of those rows are the reason this is measured rather than derived:
+/// `pcm_s8` decodes to `u8`, not to some `s8` (there is no such sample
+/// format), and A-law/µ-law decode to `s16` while being neither.
+///
+/// Returns the generic [`CodecId::Pcm`] only for a width the shared enum has
+/// no variant for — 64-bit integer PCM is the one such case today.
+#[must_use]
+pub const fn codec_id_for(
+    bits_per_coded_sample: u8,
+    is_float: bool,
+    big_endian: bool,
+    signed: bool,
+) -> CodecId {
+    if is_float {
+        return match (bits_per_coded_sample, big_endian) {
+            (32, true) => CodecId::PcmF32be,
+            (32, false) => CodecId::PcmF32le,
+            (64, true) => CodecId::PcmF64be,
+            (64, false) => CodecId::PcmF64le,
+            _ => CodecId::Pcm,
+        };
+    }
+    // Endianness is meaningless at one byte per sample, so 8-bit splits on
+    // signedness alone.
+    match (bits_per_coded_sample, signed, big_endian) {
+        (8, true, _) => CodecId::PcmS8,
+        (8, false, _) => CodecId::PcmU8,
+        (16, _, true) => CodecId::PcmS16be,
+        (16, _, false) => CodecId::PcmS16le,
+        (24, _, true) => CodecId::PcmS24be,
+        (24, _, false) => CodecId::PcmS24le,
+        (32, _, true) => CodecId::PcmS32be,
+        (32, _, false) => CodecId::PcmS32le,
+        _ => CodecId::Pcm,
+    }
+}
+
 /// Build [`CodecParameters`] for one PCM (or PCM-shaped, e.g. A-law/µ-law)
 /// stream.
 ///
@@ -429,5 +484,61 @@ mod tests {
         let mut d = demux_of(data, 0, Some(8));
         let mut budget = Budget::new(Limits::permissive());
         assert!(d.read_packet(&mut budget).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod codec_id_tests {
+    use super::codec_id_for;
+    use vaco_codec_core::CodecId;
+
+    /// The width/endianness table, pinned to what the reference reports.
+    ///
+    /// ```sh
+    /// for c in pcm_s16be pcm_s16le pcm_s24be pcm_s8 pcm_u8 pcm_f32be pcm_f64be; do
+    ///   ffmpeg -y -v quiet -f lavfi -i sine=d=0.1 -c:a $c x.aiff
+    ///   ffprobe -v quiet -of csv=p=0 -show_entries stream=codec_name x.aiff
+    /// done
+    /// ```
+    #[test]
+    fn integer_widths_split_on_endianness_above_one_byte() {
+        assert_eq!(codec_id_for(16, false, true, true), CodecId::PcmS16be);
+        assert_eq!(codec_id_for(16, false, false, true), CodecId::PcmS16le);
+        assert_eq!(codec_id_for(24, false, true, true), CodecId::PcmS24be);
+        assert_eq!(codec_id_for(24, false, false, true), CodecId::PcmS24le);
+        assert_eq!(codec_id_for(32, false, true, true), CodecId::PcmS32be);
+        assert_eq!(codec_id_for(32, false, false, true), CodecId::PcmS32le);
+    }
+
+    /// One byte per sample has no endianness, so 8-bit splits on signedness.
+    #[test]
+    fn eight_bit_ignores_endianness_and_splits_on_sign() {
+        for big in [true, false] {
+            assert_eq!(codec_id_for(8, false, big, true), CodecId::PcmS8);
+            assert_eq!(codec_id_for(8, false, big, false), CodecId::PcmU8);
+        }
+    }
+
+    #[test]
+    fn floats_split_on_width_and_endianness() {
+        assert_eq!(codec_id_for(32, true, true, true), CodecId::PcmF32be);
+        assert_eq!(codec_id_for(32, true, false, true), CodecId::PcmF32le);
+        assert_eq!(codec_id_for(64, true, true, true), CodecId::PcmF64be);
+        assert_eq!(codec_id_for(64, true, false, true), CodecId::PcmF64le);
+    }
+
+    /// The generic `Pcm` survives only where the shared enum cannot follow.
+    ///
+    /// It is not a codec the reference ever names, so reaching it is a gap,
+    /// not an answer — and the assertion says which gap.
+    #[test]
+    fn the_generic_id_is_reached_only_by_sixty_four_bit_integers() {
+        assert_eq!(codec_id_for(64, false, true, true), CodecId::Pcm);
+        assert_eq!(codec_id_for(12, false, true, true), CodecId::Pcm);
+        for bits in [8_u8, 16, 24, 32] {
+            for big in [true, false] {
+                assert_ne!(codec_id_for(bits, false, big, true), CodecId::Pcm);
+            }
+        }
     }
 }

@@ -91,7 +91,9 @@ pub const MUXER: MuxerDesc = MuxerDesc {
     long_name: "Audio IFF",
     extensions: &["aif", "aiff"],
     default_video: None,
-    default_audio: Some(CodecId::Pcm),
+    // `ffmpeg -h muxer=aiff` says "Default audio codec: pcm_s16be." The
+    // generic `Pcm` that was here is not a codec the reference ever names.
+    default_audio: Some(CodecId::PcmS16be),
     open: open_muxer,
 };
 
@@ -117,22 +119,50 @@ fn compression_to_format(
     Option<u8>,
 ) {
     match &tag {
-        b"NONE" | b"sowt" | b"SOWT" | b"twos" => {
+        // `sowt` is `twos` spelled backwards, and that is exactly what it
+        // means: little-endian. Lumping the two together was wrong, and
+        // invisible while every branch returned the generic `CodecId::Pcm`.
+        //
+        //   ffmpeg -c:a pcm_s16le out.aiff
+        //   ffprobe -show_entries stream=codec_name,codec_tag_string out.aiff
+        //   # pcm_s16le,sowt
+        //
+        // A plain (uncompressed) AIFF has no compression tag at all — the
+        // reference prints `codec_tag_string=[0][0][0][0]` — and is
+        // big-endian, which is what `NONE`/`twos` stand for here.
+        b"NONE" | b"twos" | b"TWOS" => {
             let (fmt, raw) = pcm::sample_fmt_for(sample_size, false);
-            (Some(CodecId::Pcm), fmt, Some(sample_size), raw)
+            let id = pcm::codec_id_for(sample_size, false, true, true);
+            (Some(id), fmt, Some(sample_size), raw)
         }
+        b"sowt" | b"SOWT" => {
+            let (fmt, raw) = pcm::sample_fmt_for(sample_size, false);
+            let id = pcm::codec_id_for(sample_size, false, false, true);
+            (Some(id), fmt, Some(sample_size), raw)
+        }
+        // `fl32`/`fl64` are big-endian floats: `ffmpeg -c:a pcm_f32be` writes
+        // `fl32`, and there is no little-endian spelling in AIFF-C.
         b"fl32" | b"FL32" | b"fl64" | b"FL64" => {
             let (fmt, raw) = pcm::sample_fmt_for(sample_size, true);
-            (Some(CodecId::Pcm), fmt, Some(sample_size), raw)
+            let id = pcm::codec_id_for(sample_size, true, true, true);
+            (Some(id), fmt, Some(sample_size), raw)
         }
         b"raw " | b"RAW " => (
-            Some(CodecId::Pcm),
+            Some(CodecId::PcmU8),
             Some(vaco_sampfmt::SampleFmt::U8),
             Some(sample_size),
             None,
         ),
-        b"alaw" | b"ALAW" | b"ulaw" | b"ULAW" => (
-            Some(CodecId::Pcm),
+        // Both decode to `s16` while being neither signed nor 16-bit — the
+        // sample format is the *decoded* one, measured, not the coded one.
+        b"alaw" | b"ALAW" => (
+            Some(CodecId::PcmAlaw),
+            Some(vaco_sampfmt::SampleFmt::S16),
+            Some(sample_size),
+            None,
+        ),
+        b"ulaw" | b"ULAW" => (
+            Some(CodecId::PcmMulaw),
             Some(vaco_sampfmt::SampleFmt::S16),
             Some(sample_size),
             None,
@@ -213,8 +243,15 @@ impl AiffDemuxer {
 
         let sample_size_u8 = u8::try_from(sample_size.min(255)).unwrap_or(255);
         let (codec_id, format, bits_coded, bits_raw) = if form == AIFF {
+            // Plain AIFF (form type `AIFF`, no compression field at all) is
+            // signed big-endian at whatever width `COMM` states — the same
+            // family `AIFC`'s `NONE`/`twos` names, reached by a different
+            // door. This branch is why `pcm_s16be`, `pcm_s24be` and `pcm_s8`
+            // still probed as the generic `pcm` after the compression table
+            // was fixed: the common case never consults that table.
             let (fmt, raw) = pcm::sample_fmt_for(sample_size_u8, false);
-            (Some(CodecId::Pcm), fmt, Some(sample_size_u8), raw)
+            let id = pcm::codec_id_for(sample_size_u8, false, true, true);
+            (Some(id), fmt, Some(sample_size_u8), raw)
         } else {
             compression_to_format(compression, sample_size_u8)
         };
