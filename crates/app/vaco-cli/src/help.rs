@@ -402,14 +402,33 @@ mod tests {
     }
 
     #[test]
-    fn protocol_with_no_name_and_unknown_name() {
+    fn protocol_describes_a_registered_one_and_rejects_anything_else() {
+        // This asserted `-h protocol=file` reports "Unknown protocol", which
+        // was true when the build had no protocols and became false the moment
+        // one landed. That is the third test in this crate to pin the *absence*
+        // of a feature the project was actively building, and each one failed
+        // on success — the least useful day for a test to fail.
+        //
+        // The invariant is the mapping, not the emptiness.
         assert_eq!(
             text(Some("protocol")),
             "No protocol name specified.\n\nExiting with exit code 0\n"
         );
+        for p in vaco_registry::protocols() {
+            let s = text(Some(&format!("protocol={}", p.name)));
+            // Not "starts with `<name> AVOptions:`" — a protocol with no
+            // options prints no header at all, which is the reference's own
+            // behaviour and took one failed assertion to find. What must hold
+            // for every registered protocol is that it is not reported unknown.
+            assert!(
+                !s.starts_with("Unknown protocol"),
+                "registered protocol `{}` reported unknown: {s}",
+                p.name
+            );
+        }
         assert_eq!(
-            text(Some("protocol=file")),
-            "Unknown protocol 'file'.\n\nExiting with exit code 0\n"
+            text(Some("protocol=nonesuchxyz")),
+            "Unknown protocol 'nonesuchxyz'.\n\nExiting with exit code 0\n"
         );
     }
 

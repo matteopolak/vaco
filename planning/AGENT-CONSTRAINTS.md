@@ -135,6 +135,26 @@ source, the independent check must be **a property the output must have** — a
 DC-only block must produce a uniform output — not another route to the same
 numbers.
 
+## Never pin the absence of something the project is building
+
+Five tests have now failed **on success**: `vaco-cli` asserted "this build has
+zero muxers" (twice), "`-h muxer=matroska` is unknown", "`-h protocol=file` is
+unknown", and `vaco-probe` asserted a specific format was demux-only. Every one
+of them was true when written and became false the day the gap it described was
+closed — which is the least useful day for a test to fail, because it costs the
+agent who *fixed* something a debugging session.
+
+The fix is always the same shape: assert the **mapping**, not the emptiness. A
+format shows `D` exactly when it demuxes and `E` exactly when it muxes; a name
+the registry has is described and one it does not have is unknown; and where a
+test genuinely needs an example of a gap, pick one out of the registry at run
+time and skip cleanly when none is left:
+
+```rust
+let Some(name) = vaco_registry::demuxers().iter().map(|d| d.name)
+    .find(|n| vaco_registry::muxer_by_name(n).is_none()) else { return };
+```
+
 ## Detection and demuxing ask different questions
 
 A demuxer is *deliberately* forgiving. `vaco-demux-raw`'s `obu::temporal_units`
