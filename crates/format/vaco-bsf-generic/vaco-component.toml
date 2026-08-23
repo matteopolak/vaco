@@ -1,0 +1,53 @@
+[[component]]
+kind      = "bitstream_filter"
+name      = "null"
+long_name = "Null bitstream filter"
+ctor      = "vaco_bsf_generic::null::DESC"
+
+[[component]]
+kind      = "bitstream_filter"
+name      = "extract_extradata"
+long_name = "Extract extradata from the bitstream"
+ctor      = "vaco_bsf_generic::extract_extradata::DESC"
+
+[[component]]
+kind      = "bitstream_filter"
+name      = "noise"
+long_name = "Damage the contents of packets, without effecting the frame headers"
+ctor      = "vaco_bsf_generic::noise::DESC"
+
+[[component]]
+kind      = "bitstream_filter"
+name      = "remove_extra"
+long_name = "Remove extradata repeated in the bitstream"
+ctor      = "vaco_bsf_generic::remove_extra::DESC"
+
+[[component]]
+kind      = "bitstream_filter"
+name      = "setts"
+long_name = "Set packet timestamps"
+ctor      = "vaco_bsf_generic::setts::DESC"
+
+[[component]]
+kind      = "bitstream_filter"
+name      = "chomp"
+long_name = "Remove zero padding at the end of a packet"
+ctor      = "vaco_bsf_generic::chomp::DESC"
+
+[[component]]
+kind      = "bitstream_filter"
+name      = "dump_extra"
+long_name = "Dump extradata into the bitstream"
+ctor      = "vaco_bsf_generic::dump_extra::DESC"
+
+[[component]]
+kind      = "bitstream_filter"
+name      = "filter_units"
+long_name = "Remove units with types in a given set"
+ctor      = "vaco_bsf_generic::filter_units::DESC"
+
+[[component]]
+kind      = "bitstream_filter"
+name      = "trace_headers"
+long_name = "Trace headers of NAL units"
+ctor      = "vaco_bsf_generic::trace_headers::DESC"
