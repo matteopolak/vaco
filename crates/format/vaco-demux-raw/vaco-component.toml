@@ -1,0 +1,376 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# 48 demuxers, one shared feature: `--features demux-raw` brings the whole
+# crate or none of it, the same convention `vaco-parse-aac` uses for its two
+# components. Names, long names and extensions are captured under `LC_ALL=C`
+# against ffmpeg 8.1 (`ffmpeg -demuxers`, `ffmpeg -h demuxer=<name>`) — see
+# `docs/format/vaco-demux-raw.md` for the exact commands and what was
+# measured versus assumed per format.
+
+# ---------------------------------------------------------------------- PCM
+
+[[component]]
+kind      = "demuxer"
+name      = "alaw"
+long_name = "PCM A-law"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::pcm::DEMUXER_ALAW"
+extensions = "al"
+
+[[component]]
+kind      = "demuxer"
+name      = "mulaw"
+long_name = "PCM mu-law"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::pcm::DEMUXER_MULAW"
+extensions = "ul"
+
+[[component]]
+kind      = "demuxer"
+name      = "f32be"
+long_name = "PCM 32-bit floating-point big-endian"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::pcm::DEMUXER_F32BE"
+
+[[component]]
+kind      = "demuxer"
+name      = "f32le"
+long_name = "PCM 32-bit floating-point little-endian"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::pcm::DEMUXER_F32LE"
+
+[[component]]
+kind      = "demuxer"
+name      = "f64be"
+long_name = "PCM 64-bit floating-point big-endian"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::pcm::DEMUXER_F64BE"
+
+[[component]]
+kind      = "demuxer"
+name      = "f64le"
+long_name = "PCM 64-bit floating-point little-endian"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::pcm::DEMUXER_F64LE"
+
+[[component]]
+kind      = "demuxer"
+name      = "s16be"
+long_name = "PCM signed 16-bit big-endian"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::pcm::DEMUXER_S16BE"
+
+[[component]]
+kind      = "demuxer"
+name      = "s16le"
+long_name = "PCM signed 16-bit little-endian"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::pcm::DEMUXER_S16LE"
+extensions = "sw"
+
+[[component]]
+kind      = "demuxer"
+name      = "s24be"
+long_name = "PCM signed 24-bit big-endian"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::pcm::DEMUXER_S24BE"
+
+[[component]]
+kind      = "demuxer"
+name      = "s24le"
+long_name = "PCM signed 24-bit little-endian"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::pcm::DEMUXER_S24LE"
+
+[[component]]
+kind      = "demuxer"
+name      = "s32be"
+long_name = "PCM signed 32-bit big-endian"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::pcm::DEMUXER_S32BE"
+
+[[component]]
+kind      = "demuxer"
+name      = "s32le"
+long_name = "PCM signed 32-bit little-endian"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::pcm::DEMUXER_S32LE"
+
+[[component]]
+kind      = "demuxer"
+name      = "s8"
+long_name = "PCM signed 8-bit"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::pcm::DEMUXER_S8"
+extensions = "sb"
+
+[[component]]
+kind      = "demuxer"
+name      = "u16be"
+long_name = "PCM unsigned 16-bit big-endian"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::pcm::DEMUXER_U16BE"
+
+[[component]]
+kind      = "demuxer"
+name      = "u16le"
+long_name = "PCM unsigned 16-bit little-endian"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::pcm::DEMUXER_U16LE"
+extensions = "uw"
+
+[[component]]
+kind      = "demuxer"
+name      = "u24be"
+long_name = "PCM unsigned 24-bit big-endian"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::pcm::DEMUXER_U24BE"
+
+[[component]]
+kind      = "demuxer"
+name      = "u24le"
+long_name = "PCM unsigned 24-bit little-endian"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::pcm::DEMUXER_U24LE"
+
+[[component]]
+kind      = "demuxer"
+name      = "u32be"
+long_name = "PCM unsigned 32-bit big-endian"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::pcm::DEMUXER_U32BE"
+
+[[component]]
+kind      = "demuxer"
+name      = "u32le"
+long_name = "PCM unsigned 32-bit little-endian"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::pcm::DEMUXER_U32LE"
+
+[[component]]
+kind      = "demuxer"
+name      = "u8"
+long_name = "PCM unsigned 8-bit"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::pcm::DEMUXER_U8"
+extensions = "ub"
+
+[[component]]
+kind      = "demuxer"
+name      = "vidc"
+long_name = "PCM Archimedes VIDC"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::pcm::DEMUXER_VIDC"
+
+# ---------------------------------------------------------------- raw video
+
+[[component]]
+kind      = "demuxer"
+name      = "rawvideo"
+long_name = "raw video"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::rawvideo::DEMUXER_RAWVIDEO"
+extensions = "yuv,cif,qcif,rgb"
+
+[[component]]
+kind      = "demuxer"
+name      = "bitpacked"
+long_name = "Bitpacked"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::rawvideo::DEMUXER_BITPACKED"
+extensions = "bitpacked"
+
+[[component]]
+kind      = "demuxer"
+name      = "v210"
+long_name = "Uncompressed 4:2:2 10-bit"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::rawvideo::DEMUXER_V210"
+extensions = "v210"
+
+[[component]]
+kind      = "demuxer"
+name      = "v210x"
+long_name = "Uncompressed 4:2:2 10-bit"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::rawvideo::DEMUXER_V210X"
+extensions = "yuv10"
+
+[[component]]
+kind      = "demuxer"
+name      = "yuv4mpegpipe"
+long_name = "YUV4MPEG pipe"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::y4m::DEMUXER_YUV4MPEGPIPE"
+extensions = "y4m"
+
+# ----------------------------------------------------------------- bitstream
+
+[[component]]
+kind      = "demuxer"
+name      = "av1"
+long_name = "AV1 Annex B"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::bitstream::DEMUXER_AV1"
+extensions = "obu"
+
+[[component]]
+kind      = "demuxer"
+name      = "avs2"
+long_name = "raw AVS2-P2/IEEE1857.4"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::bitstream::DEMUXER_AVS2"
+extensions = "avs,avs2"
+
+[[component]]
+kind      = "demuxer"
+name      = "avs3"
+long_name = "raw AVS3-P2/IEEE1857.10"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::bitstream::DEMUXER_AVS3"
+extensions = "avs3"
+
+[[component]]
+kind      = "demuxer"
+name      = "bit"
+long_name = "G.729 BIT file format"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::bitstream::DEMUXER_BIT"
+extensions = "bit"
+
+[[component]]
+kind      = "demuxer"
+name      = "cavsvideo"
+long_name = "raw Chinese AVS (Audio Video Standard)"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::bitstream::DEMUXER_CAVSVIDEO"
+extensions = "avs"
+
+[[component]]
+kind      = "demuxer"
+name      = "data"
+long_name = "raw data"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::bitstream::DEMUXER_DATA"
+
+[[component]]
+kind      = "demuxer"
+name      = "dirac"
+long_name = "raw Dirac"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::bitstream::DEMUXER_DIRAC"
+
+[[component]]
+kind      = "demuxer"
+name      = "dnxhd"
+long_name = "raw DNxHD (SMPTE VC-3)"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::bitstream::DEMUXER_DNXHD"
+
+[[component]]
+kind      = "demuxer"
+name      = "evc"
+long_name = "EVC Annex B"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::bitstream::DEMUXER_EVC"
+extensions = "evc"
+
+[[component]]
+kind      = "demuxer"
+name      = "h261"
+long_name = "raw H.261"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::bitstream::DEMUXER_H261"
+extensions = "h261"
+
+[[component]]
+kind      = "demuxer"
+name      = "h263"
+long_name = "raw H.263"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::bitstream::DEMUXER_H263"
+
+[[component]]
+kind      = "demuxer"
+name      = "h264"
+long_name = "raw H.264 video"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::bitstream::DEMUXER_H264"
+extensions = "h26l,h264,264,avc"
+
+[[component]]
+kind      = "demuxer"
+name      = "hevc"
+long_name = "raw HEVC video"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::bitstream::DEMUXER_HEVC"
+extensions = "hevc,h265,265"
+
+[[component]]
+kind      = "demuxer"
+name      = "loas"
+long_name = "LOAS AudioSyncStream"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::bitstream::DEMUXER_LOAS"
+
+[[component]]
+kind      = "demuxer"
+name      = "m4v"
+long_name = "raw MPEG-4 video"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::bitstream::DEMUXER_M4V"
+extensions = "m4v"
+
+[[component]]
+kind      = "demuxer"
+name      = "mjpeg"
+long_name = "raw MJPEG video"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::bitstream::DEMUXER_MJPEG"
+extensions = "mjpg,mjpeg,mpo"
+
+[[component]]
+kind      = "demuxer"
+name      = "mjpeg_2000"
+long_name = "raw MJPEG 2000 video"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::bitstream::DEMUXER_MJPEG_2000"
+extensions = "j2k"
+
+[[component]]
+kind      = "demuxer"
+name      = "mpegvideo"
+long_name = "raw MPEG video"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::bitstream::DEMUXER_MPEGVIDEO"
+
+[[component]]
+kind      = "demuxer"
+name      = "obu"
+long_name = "AV1 low overhead OBU"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::bitstream::DEMUXER_OBU"
+extensions = "obu"
+
+[[component]]
+kind      = "demuxer"
+name      = "s337m"
+long_name = "SMPTE 337M"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::bitstream::DEMUXER_S337M"
+
+[[component]]
+kind      = "demuxer"
+name      = "vc1"
+long_name = "raw VC-1"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::bitstream::DEMUXER_VC1"
+extensions = "vc1"
+
+[[component]]
+kind      = "demuxer"
+name      = "vvc"
+long_name = "raw H.266/VVC video"
+feature   = "demux-raw"
+ctor      = "vaco_demux_raw::bitstream::DEMUXER_VVC"
+extensions = "h266,266,vvc"

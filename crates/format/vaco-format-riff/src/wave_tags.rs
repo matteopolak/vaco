@@ -120,6 +120,7 @@ pub fn codec_name(fmt: &WaveFormatEx) -> Option<&'static str> {
 /// the field says. An unrepresentable width maps to `None` rather than to a
 /// nearby flavour — a wrong `codec_name` is worse than an absent one, because
 /// it looks like an answer.
+#[must_use]
 pub fn codec_id(fmt: &WaveFormatEx) -> Option<CodecId> {
     let tag = fmt
         .extensible()
