@@ -25,6 +25,10 @@ proptest.workspace = true
 # `vaco-demux-mp4`'s own measured understanding of the format rather than
 # re-deriving a second, parallel one just for tests.
 vaco-demux-mp4 = { path = "../vaco-demux-mp4" }
+# The real `extract_extradata` `check_bitstream` asks for — see
+# `vaco-mux-avi`'s identical dependency for why a real filter, not a hand
+# test-double.
+vaco-bsf-generic = { path = "../vaco-bsf-generic" }
 
 [lints]
 workspace = true

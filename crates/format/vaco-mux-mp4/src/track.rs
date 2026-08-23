@@ -50,6 +50,14 @@ pub struct TrackState {
     /// repeating the previous delta is what every writer this crate could
     /// probe does when a demuxer's last packet gives none.
     pub last_duration_hint: u32,
+    /// Set the first time [`crate::mux::MovMuxer::check_bitstream`] answers
+    /// `Insert` for this track, so the second ask in the same chain-building
+    /// loop answers `Keep` instead of the same name again. Without this a
+    /// `GLOBALHEADER` track with empty extradata asks for `extract_extradata`
+    /// forever, since nothing about `CodecParameters` changes between asks —
+    /// see `vaco-mux-avi::StreamOut::bsf_decided` for the identical fix and
+    /// the `MuxWriter` doc this is answering.
+    pub bsf_decided: bool,
 }
 
 impl TrackState {
@@ -79,6 +87,7 @@ impl TrackState {
             samples: Vec::new(),
             chunks: Vec::new(),
             last_duration_hint: 0,
+            bsf_decided: false,
         }
     }
 

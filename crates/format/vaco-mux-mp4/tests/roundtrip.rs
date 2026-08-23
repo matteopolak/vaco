@@ -673,3 +673,80 @@ fn set_metadata_before_add_stream_still_resolves_per_stream_language() {
         .map(|(_, v)| v.clone());
     assert_eq!(language.as_deref(), Some("fra"));
 }
+
+/// Supplies the real `extract_extradata`, not a hand test-double — see
+/// `vaco-mux-avi`'s identical provider for the reasoning.
+struct OnlyExtractExtradata;
+
+impl vaco_format_core::mux::BsfProvider for OnlyExtractExtradata {
+    fn open(
+        &self,
+        name: &str,
+        params: &CodecParameters,
+    ) -> vaco_core::Result<Box<dyn vaco_codec_core::BitstreamFilter>> {
+        match name {
+            "extract_extradata" => (vaco_bsf_generic::extract_extradata::DESC.build)(params),
+            _ => Err(vaco_core::Error::Unsupported(
+                "test provider knows only extract_extradata",
+            )),
+        }
+    }
+}
+
+/// Finding 26 (`planning/CONFORMANCE-FINDINGS.md`), the write side: a track
+/// added with **no** extradata (the Annex-B-sourced case, e.g. remuxed from
+/// AVI) used to write an empty `avcC` forever, because `add_stream` builds
+/// `track.entry` before a single packet has been seen and nothing ever
+/// revisited it. Driven through `MuxBuilder`/`MuxWriter` with a real
+/// `BsfProvider`, `check_bitstream`'s `extract_extradata` request now runs,
+/// and `MovMuxer::adopt_new_extradata` rewrites `track.entry` from the
+/// resulting `NewExtradata` side data before `write_trailer` ever reads it —
+/// this is the ordering `crate::progressive::finish` writing `stsd` at
+/// finalise time, not at `add_stream` time, makes possible.
+///
+/// Also exercises the `bsf_decided` fix directly: without it this test's
+/// three packets alone would trip "muxer asked for the same bitstream filter
+/// twice" on the very first one, since `check_bitstream`'s condition
+/// (`extradata` is empty) never changes between `decide_bitstream`'s re-asks.
+#[test]
+fn extract_extradata_through_mux_writer_fills_in_the_avcc_add_stream_left_empty() {
+    use std::sync::Arc;
+
+    let sink = SharedDynBuf::with_limits(Limits::permissive());
+    let mux = MovMuxer::new(Box::new(sink.clone()) as Box<dyn MediaSink>).unwrap();
+
+    // No extradata at all: the Annex-B-sourced shape finding 26 measured.
+    let mut params = h264_params();
+    params.extradata = None;
+
+    let mut builder = vaco_format_core::mux::MuxBuilder::new(
+        Box::new(mux),
+        &FormatOptions::default(),
+    )
+    .with_bsfs(Arc::new(OnlyExtractExtradata));
+    let v = builder
+        .add_stream(&params, Rational::new(1, 30))
+        .unwrap();
+    let mut writer = builder.open().unwrap();
+
+    // In-band SPS/PPS ahead of the IDR, Annex-B framed — what an AVI-sourced
+    // demux hands a muxer when there is no configuration record to read.
+    let sps = [0x67, 0x42, 0x00, 0x0A, 0xAA];
+    let pps = [0x68, 0xCE];
+    let mut annexb = Vec::new();
+    for u in [&sps[..], &pps[..], &[0x65, 0x88][..]] {
+        annexb.extend_from_slice(&[0, 0, 0, 1]);
+        annexb.extend_from_slice(u);
+    }
+    writer.write_packet(packet(v, 0, true, &annexb)).unwrap();
+    writer.finish().unwrap();
+
+    let bytes = sink.snapshot();
+    let demux = open_demux(bytes);
+    let extradata = demux.streams()[0].params.extradata.clone();
+    assert!(
+        extradata.as_deref().is_some_and(|e| !e.is_empty()),
+        "expected extract_extradata's output to have filled in the avcC \
+         add_stream could not, given no extradata up front"
+    );
+}

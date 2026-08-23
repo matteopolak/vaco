@@ -7,7 +7,7 @@ use vaco_format_core::metadata::MuxMetadata;
 use vaco_format_core::mux::{BitstreamAction, CodecSupport, global_header_action};
 use vaco_format_core::{FormatFlags, Muxer};
 use vaco_io::{IoOptions, IoWriter, MediaSink};
-use vaco_packet::Packet;
+use vaco_packet::{Packet, PacketSideData};
 
 use crate::options::{ChapterMark, CoverArt, MuxOptions};
 use crate::track::TrackState;
@@ -214,6 +214,7 @@ impl Muxer for MovMuxer {
             .ok()
             .filter(|&i| i < self.tracks.len())
             .ok_or(Error::InvalidData("mp4: packet names an unknown track"))?;
+        self.adopt_new_extradata(idx, packet)?;
         let dts = packet.dts.ticks().or(packet.pts.ticks()).unwrap_or(0);
         let pts = packet.pts.ticks().unwrap_or(dts);
         let cts_offset = i32::try_from(pts.saturating_sub(dts)).unwrap_or(0);
@@ -299,11 +300,21 @@ impl Muxer for MovMuxer {
             .map(TrackState::time_base)
     }
 
-    fn check_bitstream(
-        &mut self,
-        params: &CodecParameters,
-        _pkt: &Packet,
-    ) -> Result<BitstreamAction> {
+    fn check_bitstream(&mut self, params: &CodecParameters, pkt: &Packet) -> Result<BitstreamAction> {
+        // Without this, a `GLOBALHEADER` track with empty extradata asks for
+        // `extract_extradata` on every one of `decide_bitstream`'s re-asks:
+        // nothing about `params` changes between them, so the *filter
+        // request* never changes either, and `MuxWriter` refuses a muxer
+        // that answers `Insert` with the same name twice — this was
+        // unreachable before a `BsfProvider` actually supplied
+        // `extract_extradata`, which is what makes it worth guarding now.
+        let idx = usize::try_from(pkt.stream_index).ok();
+        if idx.and_then(|i| self.tracks.get(i)).is_some_and(|t| t.bsf_decided) {
+            return Ok(BitstreamAction::Keep);
+        }
+        if let Some(t) = idx.and_then(|i| self.tracks.get_mut(i)) {
+            t.bsf_decided = true;
+        }
         Ok(global_header_action(self.flags(), params))
     }
 
@@ -316,6 +327,47 @@ impl Muxer for MovMuxer {
 }
 
 impl MovMuxer {
+    /// Rebuild track `idx`'s sample entry when `packet` carries a
+    /// [`PacketSideData::NewExtradata`] — the bytes
+    /// [`MovMuxer::check_bitstream`]'s `extract_extradata` request produces,
+    /// once a `BsfProvider` actually supplies that filter.
+    ///
+    /// This is what closes the loop `entry.rs`'s own module docs describe:
+    /// `add_stream` built `track.entry` from whatever extradata the caller
+    /// had *before* the first packet was ever inspected, which for a stream
+    /// sourced from a container with no configuration record (AVI, raw
+    /// Annex B) is none at all. [`crate::progressive::finish`] does not write
+    /// `stsd` until [`Muxer::write_trailer`], reading `track.entry` at that
+    /// point rather than at `add_stream` time, so replacing it here — on the
+    /// first packet that actually has parameter sets to offer — reaches the
+    /// file. Fragmented mode's init segment is written earlier and is not
+    /// helped by this; a fragmented `GLOBALHEADER` track still needs
+    /// extradata declared up front, same as before this method existed.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`entry::build`] returns for the updated parameters —
+    /// propagated rather than discarded, since a `let _ =` here would be
+    /// exactly the "the failure was discarded rather than reported" mistake
+    /// `planning/AGENT-CONSTRAINTS.md` warns about for this exact seam.
+    fn adopt_new_extradata(&mut self, idx: usize, packet: &Packet) -> Result<()> {
+        let Some(new_extradata) = packet.side_data.iter().find_map(|sd| match sd {
+            PacketSideData::NewExtradata(buf) => Some(buf.as_slice().to_vec()),
+            _ => None,
+        }) else {
+            return Ok(());
+        };
+        let Some(track) = self.tracks.get_mut(idx) else {
+            return Ok(());
+        };
+        if track.params.extradata.as_deref() == Some(new_extradata.as_slice()) {
+            return Ok(());
+        }
+        track.params.extradata = Some(new_extradata);
+        track.entry = entry::build(&track.params)?;
+        Ok(())
+    }
+
     /// Fold `self.metadata` into `self.opts`/`self.tracks`, once, at the top
     /// of [`write_header`](Muxer::write_header) — by which point every
     /// `add_stream` call has already happened regardless of when
