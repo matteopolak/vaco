@@ -99,7 +99,7 @@ impl FilterTrait for Filter {
         let big_endian = format.is_big_endian();
         for ch in 0..format.component_count() {
             let Some(comp) = sample::component(format, ch) else { continue };
-            let (Some(b), Some(o), Some(m), Some(mut d)) = (
+            let (Some(base_plane), Some(overlay_plane), Some(mask_plane), Some(mut dst_plane)) = (
                 base.plane(comp.plane as usize),
                 overlay.plane(comp.plane as usize),
                 mask.plane(comp.plane as usize),
@@ -108,27 +108,31 @@ impl FilterTrait for Filter {
                 continue;
             };
             if !sample::plane_selected(self.planes, ch) {
-                let n = d.rows().min(b.rows());
+                let n = dst_plane.rows().min(base_plane.rows());
                 for y in 0..n {
-                    let (Some(sr), Some(dr)) = (b.row(y), d.row_mut(y)) else { continue };
-                    let len = sr.len().min(dr.len());
-                    if let (Some(s), Some(dd)) = (sr.get(..len), dr.get_mut(..len)) {
+                    let (Some(src_row), Some(dst_row)) = (base_plane.row(y), dst_plane.row_mut(y)) else {
+                        continue;
+                    };
+                    let len = src_row.len().min(dst_row.len());
+                    if let (Some(s), Some(dd)) = (src_row.get(..len), dst_row.get_mut(..len)) {
                         dd.copy_from_slice(s);
                     }
                 }
                 continue;
             }
             let max = f64::from(sample::max_value(comp));
-            let w = d.row_bytes().checked_div(usize::from(comp.step.max(1))).unwrap_or(0);
-            let n = d.rows().min(b.rows()).min(o.rows()).min(m.rows());
+            let w = dst_plane.row_bytes().checked_div(usize::from(comp.step.max(1))).unwrap_or(0);
+            let n = dst_plane.rows().min(base_plane.rows()).min(overlay_plane.rows()).min(mask_plane.rows());
             for y in 0..n {
-                let (Some(br), Some(or), Some(mr), Some(dr)) = (b.row(y), o.row(y), m.row(y), d.row_mut(y)) else {
+                let (Some(base_row), Some(overlay_row), Some(mask_row), Some(dst_row)) =
+                    (base_plane.row(y), overlay_plane.row(y), mask_plane.row(y), dst_plane.row_mut(y))
+                else {
                     continue;
                 };
                 for x in 0..w {
-                    let bv = f64::from(sample::read(br, x, comp, big_endian));
-                    let ov = f64::from(sample::read(or, x, comp, big_endian));
-                    let mv = f64::from(sample::read(mr, x, comp, big_endian));
+                    let bv = f64::from(sample::read(base_row, x, comp, big_endian));
+                    let ov = f64::from(sample::read(overlay_row, x, comp, big_endian));
+                    let mv = f64::from(sample::read(mask_row, x, comp, big_endian));
                     let blended = if max > 0.0 {
                         bv + (ov - bv) * mv / max
                     } else {
@@ -140,7 +144,7 @@ impl FilterTrait for Filter {
                         reason = "clamped to [0, max] and max fits in u16 by construction"
                     )]
                     let out_v = blended.clamp(0.0, max).round() as u16;
-                    sample::write(dr, x, comp, big_endian, out_v);
+                    sample::write(dst_row, x, comp, big_endian, out_v);
                 }
             }
         }
