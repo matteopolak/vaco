@@ -314,3 +314,25 @@ cases get found.
 **Judge per issue, not per crate**, and be honest in the comment. "Structure
 complete, timestamps unverified against the reference" is useful. A comment
 implying more coverage than it has is worse than leaving the issue open.
+
+## A new crate's `Cargo.toml` blocks every other agent until `src/lib.rs` exists
+
+The workspace globs `crates/*/*`. The moment you write
+`crates/<area>/<new-crate>/Cargo.toml`, cargo starts trying to load it — and
+until `src/lib.rs` is on disk beside it, *every* cargo command in the tree
+fails for *everyone*:
+
+```
+error: failed to load manifest for workspace member `…/vaco-filter-component`
+Caused by: no targets specified in the manifest
+```
+
+That is not a warning on your own build. It is a hard stop for all five other
+agents and the orchestrator, for as long as the gap lasts. Measured
+2026-08-23, when one agent's manifest-first ordering blocked the whole tree.
+
+**Write `src/lib.rs` first, or write both in the same step.** A one-line
+`//! TODO` stub is enough to keep the workspace loadable. The same applies in
+reverse when you delete a crate: remove the directory in one move, not the
+`src/` first.
+

@@ -349,3 +349,10 @@ kind     = "paper"
 title    = "Giannoulis, Massberg & Reiss, \"Digital Dynamic Range Compressor Design — A Tutorial and Analysis\", Journal of the Audio Engineering Society, 2012 — the soft-knee quadratic gain-computer formula"
 acquired = "2026-08-23"
 where    = "https://www.eecs.qmul.ac.uk/~josh/documents/2012/GiannoulisMassbergReiss-dynamicrangecompression-JAES2012.pdf"
+
+[[source]]
+id       = "ffprobe-writers-probe"
+kind     = "blackbox"
+title    = "Observed `ffprobe` writer behaviour for unavailable optional fields, ffmpeg 8.1: `default`/`compact`/`csv`/`flat`/`ini` print the placeholder (`profile=unknown`), `json`/`xml` omit the key entirely, `-show_optional_fields always` makes all six print it, and `never` empties the section"
+acquired = "2026-08-23"
+where    = "the reference binary installed on the development machine"

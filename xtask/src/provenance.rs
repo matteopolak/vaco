@@ -553,6 +553,24 @@ fn trailers(root: &Path) -> Result<Vec<String>, String> {
         if !body.lines().any(|l| l.starts_with("Signed-off-by:")) {
             findings.push(format!("{short}: no `Signed-off-by:` trailer"));
         }
+        // A citation is validated wherever it appears, not only in the four
+        // clean-room-sensitive areas. Requiring a trailer is scoped; checking
+        // one that is *already there* is not, because an id that resolves to
+        // nothing is a false record no matter which directory it sits in.
+        // Found the hard way: a `vaco-probe` commit shipped
+        // `Vaco-Spec-Ref: ffprobe-writers-probe`, an id that has never existed,
+        // and this gate said OK because `crates/app/` is not in CODE_PATHS.
+        for r in &values(body, "Vaco-Spec-Ref") {
+            let id = r.split_whitespace().next().unwrap_or_default();
+            if !sources.contains(id) {
+                findings.push(format!(
+                    "{short}: `Vaco-Spec-Ref: {r}` starts with `{id}`, which no \
+                     `[[source]]` in provenance/ declares — a citation to a document \
+                     we never recorded acquiring proves nothing"
+                ));
+            }
+        }
+
         if !touches_code {
             continue;
         }
@@ -586,16 +604,8 @@ fn trailers(root: &Path) -> Result<Vec<String>, String> {
                 kinds.join(", ")
             ));
         }
-        for r in &refs {
-            let id = r.split_whitespace().next().unwrap_or_default();
-            if !sources.contains(id) {
-                findings.push(format!(
-                    "{short}: `Vaco-Spec-Ref: {r}` starts with `{id}`, which no \
-                     `[[source]]` in provenance/ declares — a citation to a document \
-                     we never recorded acquiring proves nothing"
-                ));
-            }
-        }
+        // Ids are validated above, for every commit; here only the
+        // *presence* requirement, which is scoped to the code areas.
     }
     Ok(findings)
 }
