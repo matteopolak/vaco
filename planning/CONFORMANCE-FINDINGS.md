@@ -1224,6 +1224,63 @@ Every filter registered so far declares its options — that is what the fuzz
 targets exercise — so the data is present. Worth doing as one piece of work
 across all filters rather than per crate.
 
+## 28. `-h demuxer=` — 56 demuxers declare extensions the reference does not, and none prints an option table
+
+Swept all 131 registered demuxers against `ffmpeg -h demuxer=<name>` 8.1.
+Sixteen agree; 115 differ, in two unrelated ways.
+
+### 56 declare `Common extensions:` where the reference declares none
+
+Not a spelling difference — the reference's *demuxer* for these formats has an
+empty extension list, and the extensions live on the **muxer** instead. `aiff`,
+`au`, `caf`, `asf`, `concat` and every `*_pipe` are in this set:
+
+```text
+$ ffmpeg -h demuxer=aiff          $ vaco -h demuxer=aiff
+Demuxer aiff [Audio IFF]:          Demuxer aiff [Audio IFF]:
+                                       Common extensions: aif,aiff,afc,aifc.
+$ ffmpeg -h muxer=aiff
+Muxer aiff [Audio IFF]:
+    Common extensions: aif,aiff,afc,aifc.
+```
+
+This is the same asymmetry `vaco-subtitle-text`'s `ass` already turned out to
+have and was fixed for: the demuxer identifies by probing, the muxer picks a
+filename. Reproducing it means moving the list off `DemuxerDesc` and onto
+`MuxerDesc` for these 56, which is a data sweep across most of the demux
+crates and wants a quiet tree.
+
+Four more differ in content rather than presence, and each is worth a look
+because none is a simple omission:
+
+```text
+ircam    ref sf,ircam                    ours sf
+mpl2     ref txt,mpl2                    ours mpl2,txt          (order differs)
+webvtt   ref vtt,webvtt                  ours vtt
+ogg      ref ogg                         ours ogg,oga,ogv,ogx,opus,spx
+```
+
+`ogg` is the interesting one: the reference's Ogg *demuxer* claims only `.ogg`,
+while `oga`/`ogv`/`opus`/`spx` are separate **muxers**. `mpl2` shows the list
+is ordered, not a set.
+
+### 99 have an `AVOptions` table and we print none
+
+The same gap finding 27 records for `-h filter=`, in a second surface:
+
+```text
+$ ffmpeg -h demuxer=concat
+Demuxer concat [Virtual concatenation script]:
+concat demuxer AVOptions:
+  -safe   <boolean>  .D......... enable safe mode (default true)
+  …
+```
+
+Ours stops after the header line. The demuxers already *have* their options —
+`FormatOptions` parses them and the fuzz targets exercise them — so this is
+rendering, not data. `-h muxer=` has the same hole. Worth doing once for
+filter, demuxer, muxer, bsf and protocol together rather than four times.
+
 ## Harness changes, summarised
 
 Everything below is a change to `crates/tool/vaco-conformance/`,
