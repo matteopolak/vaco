@@ -1,4 +1,4 @@
-//! Arbitrary filtergraph text against every `vaco-filter-achannel` filter's
+//! Arbitrary filtergraph text against every `vaco-filter-aeffects` filter's
 //! option parser.
 //!
 //! Mirrors `filter_audio_eq_options.rs` and `filter_audio_dynamics_options.rs`
@@ -13,12 +13,12 @@
 //! `2..=131_072` in `axcorrelate::create` specifically so an attacker-sized
 //! `size=99999999999999999999` (which does not fit `usize` at all, let alone
 //! a sane window) cannot turn into an unbounded `VecDeque` allocation.
-//! fuzz-crate: vaco-filter-achannel
+//! fuzz-crate: vaco-filter-aeffects
 
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use vaco_filter_achannel::registry::AchannelRegistry;
+use vaco_filter_aeffects::registry::AeffectsRegistry;
 use vaco_filter_graph::registry::{FilterRegistry, Instantiate};
 
 const NAMES: &[&str] = &[
@@ -35,7 +35,7 @@ fuzz_target!(|args: &str| {
     if args.len() > 8192 {
         return;
     }
-    let registry = AchannelRegistry;
+    let registry = AeffectsRegistry;
     for &name in NAMES {
         let text = format!("{name}={args}");
         let Ok(ast) = vaco_filter_graph::parse(&text) else {

@@ -14,47 +14,47 @@
 kind = "filter"
 name = "axcorrelate"
 long_name = "Cross-correlate two audio streams"
-ctor = "vaco_filter_achannel::axcorrelate::DESC"
+ctor = "vaco_filter_aeffects::axcorrelate::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "crossfeed"
 long_name = "Apply headphone crossfeed filter"
-ctor = "vaco_filter_achannel::crossfeed::DESC"
+ctor = "vaco_filter_aeffects::crossfeed::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "earwax"
 long_name = "Widen the stereo image"
-ctor = "vaco_filter_achannel::earwax::DESC"
+ctor = "vaco_filter_aeffects::earwax::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "extrastereo"
 long_name = "Increase difference between stereo audio channels"
-ctor = "vaco_filter_achannel::extrastereo::DESC"
+ctor = "vaco_filter_aeffects::extrastereo::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "haas"
 long_name = "Apply Haas Stereo Enhancer"
-ctor = "vaco_filter_achannel::haas::DESC"
+ctor = "vaco_filter_aeffects::haas::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "stereotools"
 long_name = "Apply various stereo tools"
-ctor = "vaco_filter_achannel::stereotools::DESC"
+ctor = "vaco_filter_aeffects::stereotools::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "stereowiden"
 long_name = "Apply stereo widening effect"
-ctor = "vaco_filter_achannel::stereowiden::DESC"
+ctor = "vaco_filter_aeffects::stereowiden::DESC"
 media = "audio"

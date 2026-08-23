@@ -17,7 +17,7 @@
 //! verified match (the reference's own text does not spell out the
 //! crossfeed transfer function, and isolating it from a running process would
 //! need per-frequency sine-sweep probing well beyond this work package's
-//! budget — see `docs/filter/vaco-filter-achannel.md`): the shape of the
+//! budget — see `docs/filter/vaco-filter-aeffects.md`): the shape of the
 //! `strength > 0` mix. This implementation feeds a one-pole low-pass of the
 //! *opposite* channel back into each channel, gated by `strength`, with
 //! `range` setting the low-pass cutoff (higher `range` -> brighter, less

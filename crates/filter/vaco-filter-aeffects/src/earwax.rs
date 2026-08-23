@@ -37,7 +37,7 @@
 //! implementation applies the measured 44100 Hz taps unconditionally,
 //! regardless of the input's actual sample rate — an exact match at
 //! 44100 Hz, a structural approximation everywhere else. See
-//! `docs/filter/vaco-filter-achannel.md`.
+//! `docs/filter/vaco-filter-aeffects.md`.
 
 use std::collections::VecDeque;
 

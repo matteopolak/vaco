@@ -170,8 +170,8 @@ optional = true
 path = "../../format/vaco-demux-rtsp"
 optional = true
 
-[dependencies.vaco-filter-achannel]
-path = "../../filter/vaco-filter-achannel"
+[dependencies.vaco-filter-aeffects]
+path = "../../filter/vaco-filter-aeffects"
 
 [dependencies.vaco-filter-ameasure]
 path = "../../filter/vaco-filter-ameasure"

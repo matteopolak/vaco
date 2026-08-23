@@ -1,5 +1,5 @@
 [package]
-name = "vaco-filter-achannel"
+name = "vaco-filter-aeffects"
 description = "T3 audio channel, layout and mixing filters: axcorrelate, crossfeed, earwax, extrastereo, haas, stereotools, stereowiden."
 version.workspace = true
 edition.workspace = true

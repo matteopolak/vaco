@@ -1,4 +1,4 @@
-//! [`AchannelRegistry`] — the [`FilterRegistry`] this crate's seven filters
+//! [`AeffectsRegistry`] — the [`FilterRegistry`] this crate's seven filters
 //! answer through. Mirrors `vaco-filter-audio-eq::registry::EqRegistry`'s
 //! shape exactly.
 
@@ -18,9 +18,9 @@ const NAMES: &[&str] = &[
 
 /// Implements [`FilterRegistry`] for every filter in this crate.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct AchannelRegistry;
+pub struct AeffectsRegistry;
 
-impl FilterRegistry for AchannelRegistry {
+impl FilterRegistry for AeffectsRegistry {
     fn names(&self) -> Vec<&str> {
         NAMES.to_vec()
     }
@@ -34,7 +34,7 @@ impl FilterRegistry for AchannelRegistry {
             "haas" => crate::haas::create(req),
             "stereotools" => crate::stereotools::create(req),
             "stereowiden" => crate::stereowiden::create(req),
-            other => return Err(format!("vaco-filter-achannel: no filter named `{other}`")),
+            other => return Err(format!("vaco-filter-aeffects: no filter named `{other}`")),
         })
     }
 }
@@ -45,7 +45,7 @@ mod tests {
 
     #[test]
     fn every_declared_name_is_creatable_with_no_arguments() {
-        let registry = AchannelRegistry;
+        let registry = AeffectsRegistry;
         for &name in NAMES {
             let req = Instantiate {
                 name,
@@ -63,7 +63,7 @@ mod tests {
 
     #[test]
     fn an_unknown_name_is_a_clean_error_not_a_panic() {
-        let registry = AchannelRegistry;
+        let registry = AeffectsRegistry;
         let req = Instantiate {
             name: "not-a-real-filter",
             instance: "not-a-real-filter",

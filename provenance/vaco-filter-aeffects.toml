@@ -1,11 +1,11 @@
 [[table]]
 name   = "DIRECT"
-file   = "crates/filter/vaco-filter-achannel/src/earwax.rs"
+file   = "crates/filter/vaco-filter-aeffects/src/earwax.rs"
 source = "ffmpeg-filters-probe"
 method = "probed"
 
 [[table]]
 name   = "CROSS"
-file   = "crates/filter/vaco-filter-achannel/src/earwax.rs"
+file   = "crates/filter/vaco-filter-aeffects/src/earwax.rs"
 source = "ffmpeg-filters-probe"
 method = "probed"

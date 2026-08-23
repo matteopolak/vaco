@@ -63,7 +63,7 @@
 //! structural. `axcorrelate`'s three-way sign/magnitude behaviour
 //! (identical/inverted/uncorrelated) is measured; whether the reference
 //! demeans its window first is not distinguishable from the outside and is
-//! documented as an open question. See `docs/filter/vaco-filter-achannel.md`.
+//! documented as an open question. See `docs/filter/vaco-filter-aeffects.md`.
 #![forbid(unsafe_code)]
 
 pub mod axcorrelate;
@@ -77,4 +77,4 @@ mod sample;
 pub mod stereotools;
 pub mod stereowiden;
 
-pub use registry::AchannelRegistry;
+pub use registry::AeffectsRegistry;

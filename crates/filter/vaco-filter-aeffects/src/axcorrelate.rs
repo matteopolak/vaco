@@ -28,7 +28,7 @@
 //! (approximately) zero-mean. This implementation uses the raw form —
 //! `r = Σxy / sqrt(Σx² · Σy²)` — which is simpler to maintain incrementally
 //! and is a standard textbook normalised cross-correlation; see
-//! `docs/filter/vaco-filter-achannel.md` for the caveat.
+//! `docs/filter/vaco-filter-aeffects.md` for the caveat.
 //!
 //! `algo` selects among the reference's three *implementations* of the same
 //! arithmetic (a brute-force sum, an FFT-accelerated one, and an

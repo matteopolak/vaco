@@ -45,7 +45,7 @@
 //! default `mid`, `middle_phase`, and whether `side_gain` scales only the
 //! direct term or the whole mix — the default probe above cannot distinguish
 //! `side_gain` from "no gain applied" since it is `1` either way. See
-//! `docs/filter/vaco-filter-achannel.md`.
+//! `docs/filter/vaco-filter-aeffects.md`.
 
 use std::collections::VecDeque;
 
