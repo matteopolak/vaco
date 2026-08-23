@@ -502,6 +502,12 @@ fn open_output(
     let desc = vaco_registry::muxer_by_name(out.format)
         .ok_or_else(|| internal("a resolved output format is no longer in the registry"))?;
 
+    // Deliberately not `MuxerDesc::probe_flags()`, which exists for callers that
+    // want only the flags. This one wants the *instance* as well: a `NOFILE`
+    // muxer writes nothing, so the throwaway construction against a memory sink
+    // is the real muxer and there is no second construction to pay for.
+    // `probe_flags` would discard it and we would build twice on the path where
+    // building twice is avoidable.
     let probe = (desc.open)(Box::new(vaco_format_core::vacoraw::MemorySink::new()))
         .map_err(|e| muxer_open_error(out, &e))?;
     if probe.flags().contains(FormatFlags::NOFILE) {
