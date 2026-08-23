@@ -365,3 +365,24 @@ taken from the first `--> ` line in stderr — a line that belonged to a
 *warning* from an unrelated crate. Not a discarded error, but the same class:
 a plausible-looking wrong answer where a missing one would have been caught.
 
+## The plan already partitions the filters; do not invent a crate
+
+`planning/16-filters.md` §4.3 and §4.4 are a table, one row per
+`vaco-filter-*` crate, with the exact filter list for each. The grouping is by
+*shared kernel* — `vdsp`, `adsp`, `draw`, `framesync` — which is why
+`convolution` and `sobel` sit in `vaco-filter-convolve` rather than next to
+`gblur` in `vaco-filter-blur`, and why the audio analysis filters sit in
+`vaco-filter-aanalysis` rather than being split by what they measure.
+
+If you are handed a filter group, find its row before you write anything. The
+row is the answer to both questions a brief can get wrong — what the crate is
+called, and which filters are in it — and a brief that disagrees with the row
+is wrong, including one written by the orchestrator.
+
+Measured cost of not doing this: `axcorrelate` reached two agents at once,
+and the second implemented it, tested it and deleted it. See
+`planning/FILTER-CRATE-DIVERGENCE.md`.
+
+If the reference has a filter the table places nowhere, that is a change to
+the table, proposed in a commit that says why — not a new crate.
+
