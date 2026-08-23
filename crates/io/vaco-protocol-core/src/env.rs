@@ -19,15 +19,37 @@
 //! ```text
 //! allowed(scheme) =
 //!       scheme ∉ blacklist                                   (W1)
-//!   AND (whitelist is None OR scheme ∈ whitelist
-//!                          OR scheme ∈ parent.default_whitelist)  (W2, W3)
+//!   AND (effective is None OR scheme ∈ effective)            (W2)
 //!   AND depth < recursion_limit                              (W4)
+//!
+//!   effective = whitelist               if the caller gave one   (W3)
+//!             = parent.default_whitelist if non-empty
+//!             = None
 //! ```
 //!
 //! * **W1** — the blacklist always wins, even over an explicit whitelist entry.
 //! * **W2** — a demuxer that opens nested URLs must route through here.
-//! * **W3** — the default grants of a remote playlist protocol exclude `file`.
-//!   This is the single most important security property in the I/O layer.
+//! * **W3** — an explicit whitelist **replaces** the parent's default grant; it
+//!   does not add to it. This used to be a union, which made us strictly more
+//!   permissive than the reference: a caller who narrowed the whitelist got
+//!   less narrowing than they asked for, in the one mechanism whose entire job
+//!   is to stop a playlist from opening `file:///etc/passwd`.
+//!
+//!   Measured: `-protocol_whitelist tls` alone is refused the nested `tcp:`
+//!   open with `Protocol 'tcp' not on whitelist 'tls'!`, even though `tls`
+//!   grants `tcp` by default. Found while building `vaco-protocol-tls` and
+//!   reported rather than worked around, because this crate was not that
+//!   agent's to change.
+//!
+//!   **The other half is deliberately not implemented.** Whether a *non-empty*
+//!   `default_whitelist` should also *restrict* when the caller gives no
+//!   explicit list is not something we have measured — the obvious experiment
+//!   (an HLS playlist naming a `data:` segment) is refused by a different gate,
+//!   `allowed_segment_extensions`, before the whitelist is consulted. Guessing
+//!   it would make us *more* restrictive than the reference and break files
+//!   that work today, which is the opposite failure and no more acceptable. So
+//!   `None` still means unrestricted, and this note is here so the next person
+//!   knows it is an open question rather than a settled one.
 //! * **W4** — depth increments on every nested open including
 //!   protocol-over-protocol, so `cache:async:https://…` is depth 3.
 
@@ -158,16 +180,11 @@ impl<'a> ProtocolEnv<'a> {
             return deny(DenyReason::TooDeep);
         }
 
-        // W2/W3.
-        if let Some(white) = self.whitelist {
-            let named = white.iter().any(|s| s.eq_ignore_ascii_case(scheme));
-            let granted = self
-                .parent_defaults
-                .iter()
-                .any(|s| s.eq_ignore_ascii_case(scheme));
-            if !named && !granted {
-                return deny(DenyReason::NotWhitelisted);
-            }
+        // W2/W3: an explicit whitelist replaces the parent's default grant.
+        if let Some(white) = self.whitelist
+            && !white.iter().any(|s| s.eq_ignore_ascii_case(scheme))
+        {
+            return deny(DenyReason::NotWhitelisted);
         }
 
         Ok(())

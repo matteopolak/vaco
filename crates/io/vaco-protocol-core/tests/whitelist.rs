@@ -168,19 +168,57 @@ fn w3_a_hostile_playlist_cannot_reach_file() {
     );
 }
 
+/// An explicit whitelist **replaces** the parent's default grant.
+///
+/// This test used to assert the opposite — that `playlist`'s default grant of
+/// `http` widened a caller's whitelist of `["playlist"]` so the segment fetch
+/// succeeded. That was a deliberate design decision and it was wrong.
+///
+/// Measured against ffmpeg 8.1 while building `vaco-protocol-tls`:
+/// `-protocol_whitelist tls` alone is refused the nested `tcp:` open with
+/// `Protocol 'tcp' not on whitelist 'tls'!`, even though `tls` grants `tcp` by
+/// default. Union semantics made us strictly more permissive than the
+/// reference — a caller who narrowed the whitelist got less narrowing than they
+/// asked for, in the one mechanism whose whole job is to stop a playlist
+/// opening `file:///etc/passwd`.
 #[test]
-fn w3_default_whitelist_grants_only_what_the_parent_declares() {
+fn w3_an_explicit_whitelist_replaces_the_parent_grant() {
     let r = registry();
     let c = CancelToken::new();
-    // `playlist` is not itself whitelisted for the nested open, but its parent
-    // grants `http`, so the segment fetch is allowed.
-    let env = ProtocolEnv::new(&r, &c).with_whitelist(&["playlist"]);
+
+    // `playlist` grants `http` by default, but the caller did not name it.
+    let narrow = ProtocolEnv::new(&r, &c).with_whitelist(&["playlist"]);
+    assert_eq!(
+        denied(r.open(
+            "playlist:http://cdn/segment0.ts",
+            IoFlags::READ,
+            &Dict::new(),
+            &narrow
+        )),
+        DenyReason::NotWhitelisted
+    );
+
+    // Naming it works, which is the point: the caller decides.
+    let named = ProtocolEnv::new(&r, &c).with_whitelist(&["playlist", "http"]);
     assert!(
         r.open(
             "playlist:http://cdn/segment0.ts",
             IoFlags::READ,
             &Dict::new(),
-            &env
+            &named
+        )
+        .is_ok()
+    );
+
+    // And with no whitelist at all, nothing is restricted — see the note in
+    // `env.rs` on why the default grant is not (yet) made to restrict here.
+    let open = ProtocolEnv::new(&r, &c);
+    assert!(
+        r.open(
+            "playlist:http://cdn/segment0.ts",
+            IoFlags::READ,
+            &Dict::new(),
+            &open
         )
         .is_ok()
     );
