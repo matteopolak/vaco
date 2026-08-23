@@ -21,6 +21,7 @@ Per D14.1 this crate sits **above** `vaco-codec-core`, because `Stream` carries
 | `seek` | `SeekTarget`, `PacketIndex`, and the two generic seek strategies |
 | `discovery` | `Discovery<D>` — the bounded, replayable stream-discovery pass |
 | `interleave` | `InterleaveQueue` and the muxer-side timestamp chain |
+| `metadata` | `MuxMetadata` — file/stream tags, chapters, attachments for a muxer |
 | `vacoraw` | a worked-example container that drives every one of the above |
 
 ### The one idea worth reading first
@@ -738,15 +739,125 @@ whole of the remaining `sub.mkv` divergence — see `docs/app/vaco-probe.md` —
 narrowing the stop condition to match is a much larger change than this one,
 with `start_time` for every delay-coded audio stream riding on it.
 
+## The 2026-08-23 wave: four interface gaps closed, one substituted
+
+`planning/INTERFACE-GAPS.md` recorded six gaps found independently by agents
+building containers against this crate. Four of them (1, 4, 5, 6) were this
+wave's; two (2, `Muxer` being single-sink, and 3, `write_packet` taking packets
+where `uncodedframecrc` wants frames) are shape changes and stay open — see that
+file's own record for why.
+
+**None of the four required editing an implementor.** `cargo check --workspace
+--all-targets --offline` was run after all four landed; every muxer, demuxer,
+`vaco-sched`, `vaco-cli` and `vaco-probe` still compiled unmodified. (One
+unrelated crate, `vaco-protocol-socket`, failed in the same run with missing
+files and missing dependencies — a concurrent agent's in-progress work, nothing
+to do with `Muxer`/`Demuxer`; the failure is confined to that crate alone.)
+
+### Gap 1 — a metadata channel for `Muxer`
+
+[`metadata::MuxMetadata`] bundles file tags, chapters (reusing [`Chapter`]
+verbatim, so a demuxed chapter list needs no conversion to remux), attachments
+(the new [`metadata::MuxAttachment`]), and per-stream tags indexed by declared
+position. [`Muxer::set_metadata`] is a new defaulted trait method — the default
+does nothing, which is exactly what every muxer already did before this
+existed, since there was no channel to drop anything from. [`mux::MuxBuilder::
+with_metadata`] queues a bundle; `MuxBuilder::open` calls `set_metadata` once,
+after `init` and after stream time bases are read but before the header (M30) —
+the same point M12 settles anything else that depends on the whole stream set.
+
+`vaco-mux-matroska`, `vaco-mux-mp4` and `vaco-mux-stream`'s `ffmetadata` can now
+override `set_metadata` to actually write `Tags`/`Chapters`/`Attachments`,
+`udta▸meta▸ilst`/`chpl`, and a real `;FFMETADATA1` body respectively — that
+work is theirs, in a later wave; this wave only opens the door.
+
+### Gaps 4 and 5 — `open` sees neither `Limits` nor options
+
+**Not closed as specified**, and that is a finding, not an evasion. Both gaps
+proposed widening `DemuxerDesc::open`/`MuxerDesc::open`'s signature. Checked
+directly: `open` is a bare `fn` pointer, and every one of the ~90 registered
+descriptors already supplies its own free function coercing to today's exact
+signature. A function item only coerces to a function-pointer type with a
+*matching* parameter list — there is no version of `fn(A, B) -> R` that also
+accepts `fn(A, B, C) -> R` — so widening it requires editing every one of those
+functions, not merely the descriptor literals that reference them. That is the
+edit this wave forbids, so it was not made.
+
+The substitute: [`Demuxer::reconfigure(&mut self, limits: &Limits, opts:
+&FormatOptions)`][Demuxer::reconfigure] and [`Muxer::set_option(&mut self, name:
+&str, value: &str)`][Muxer::set_option], both defaulted, both callable
+*after* `(desc.open)(..)` returns instead of *during* the call. `Discovery::run`
+now calls `reconfigure` once before reading anything, so wrapping a demuxer in
+`Discovery` is enough to reach it; a fuzz target driving `open` directly can and
+should call it too. `MuxBuilder::open` calls `set_option` for every pair queued
+through the new `with_private_options`, before `init` runs (M29) — the seam
+`vaco-mux-mp4`'s `MovMuxer::with_options`/`movflags` needs, mirroring
+`vaco_opts::OptionsExt::set_str`'s name/value-string contract on purpose so no
+second option-passing convention is needed.
+
+**What this does not fix**, honestly: neither method can bound or configure
+work `open` already did before returning — a header or index a container reads
+eagerly, or an `init` decision `set_option` did not exist in time to influence
+had the caller not queued it beforehand. `vacoraw::VacoRawDemuxer::open`'s
+`Budget::new(Limits::permissive())` is exactly that case, and it is unchanged.
+Closing that half needs the `open`-signature change these methods stand in for,
+and that is only possible in a wave that edits every implementor at once —
+which is what gap 6 below explains further.
+
+### Gap 6 — `MuxerDesc` has no `flags` field, and cannot get one for free
+
+**Also not closed as specified**, for the same class of reason. `DemuxerDesc`
+has `flags: FormatFlags`; the brief proposed the same field on `MuxerDesc`.
+Checked two ways before concluding it is not additive:
+
+* Every one of the ~90 registered `MuxerDesc` constants lists every current
+  field with no `..base` update syntax (grepped, confirmed) — Rust requires a
+  struct literal with no base expression to name every field, so any new field,
+  regardless of type or a "sensible" default, must be added at every one of
+  those call sites.
+* Default field values (`x: T = default`, RFC 3681) would remove that
+  requirement. Checked directly against this workspace's pinned `rustc 1.97.1`:
+  still `error[E0658]`, gated behind `#![feature(default_field_values)]`, not
+  reachable on the stable toolchain this project pins.
+
+The substitute is [`MuxerDesc::probe_flags`][MuxerDesc::probe_flags] — a method,
+not a field. It does exactly what `vaco-cli`'s `exec::open_output` already did
+by hand (construct against a throwaway [`vacoraw::MemorySink`], read `.flags()`,
+keep the answer), except written once, here, instead of once per caller. It
+does not remove `exec::open_output`'s double construction of a real output — a
+non-`NOFILE` format is still opened again against its real sink — it removes
+the *duplication of the probing logic itself*. Landing the field for real needs
+a wave that touches every `MuxerDesc` literal at once, the same wave
+`DemuxerDesc.flags` itself must have needed, before any implementor existed to
+edit.
+
+### `INTERFACE-GAPS.md` corrections
+
+Its "Sequencing" note claimed 1, 4, 5 and 6 "can land together behind
+default-implemented trait methods and a new struct field, so existing muxers
+and demuxers keep compiling." Gap 1 is exactly that. Gaps 4, 5 and 6 are not:
+they involve either a function-pointer field's signature or a plain field on a
+struct every implementor constructs by literal, and neither is addable without
+touching every one of those literals — confirmed against the actual `rustc`
+this workspace pins, not assumed. The substitutes above are the closest
+additive answer to each; `planning/INTERFACE-GAPS.md` records the same finding
+next to each gap's original entry, per this wave's brief ("leaving the entries
+and their reasoning, since the record of *why* an interface changed is worth
+more than the entry").
+
 ## Signature gaps
 
 Interfaces are frozen (plan 19 §6), so these are **reported, not changed**. In
 descending order of how much they cost.
 
-1. **`DemuxerDesc::open` takes no options and no limits.** A demuxer cannot be
-   told its `probesize`, its `Limits`, or its `IoOptions::block_size` through the
-   descriptor, so `open` has to default them and expose a second, non-`dyn`
-   constructor for callers that care — which is what `VacoRawDemuxer` does.
+1. **`DemuxerDesc::open` takes no options and no limits — partially closed.**
+   See *The 2026-08-23 wave* above: [`Demuxer::reconfigure`] reaches an
+   already-constructed demuxer with the caller's `Limits`/`FormatOptions`, which
+   is enough for anything `Discovery` or a fuzz target does after `open`
+   returns. It is *not* enough for what a demuxer allocates *during* `open`
+   itself — `VacoRawDemuxer::open`'s hardcoded `Budget::new(Limits::
+   permissive())` is unreached by design, and closing that needs the
+   `open`-signature change a whole-workspace wave would take.
 2. **`ParserProvider` has only `parser_for`.** The plan's `refine` is reachable
    by driving the parser and reading `Parser::parameters`, so nothing is lost
    there. `probe_codec` — content-sniffing a payload to a `CodecId` — is
@@ -802,8 +913,12 @@ descending order of how much they cost.
 
 ## Testing
 
-* **180 tests**: 138 unit, 23 named integration cases (14 `roundtrip.rs`, 9
-  `mux_session.rs`), 19 property tests, 1 doctest.
+* **193 tests**: 150 unit, 23 named integration cases (14 `roundtrip.rs`, 9
+  `mux_session.rs`), 19 property tests, 1 doctest. The unit count includes the
+  gap-closure tests added in *The 2026-08-23 wave*: for each of `Muxer::
+  set_metadata`, `Muxer::set_option` and `Demuxer::reconfigure`, one test
+  pinning the default's harmless behaviour and one pinning an override's real
+  one, plus coverage of `MuxerDesc::probe_flags` and `MuxMetadata` itself.
 * **The state machine's guarantees are not tested, because they are not
   testable.** `MuxBuilder` has no `write_packet` and `MuxWriter` has no
   `add_stream`, so the illegal sequences have no spelling that compiles.

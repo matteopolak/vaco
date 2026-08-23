@@ -16,6 +16,7 @@
 //! | [`seek`] | [`SeekTarget`], [`PacketIndex`] and the two generic strategies |
 //! | [`discovery`] | [`Discovery`] — the bounded, replayable stream-discovery pass |
 //! | [`interleave`] | [`InterleaveQueue`] and the muxer-side timestamp chain |
+//! | [`metadata`] | [`MuxMetadata`] — file/stream tags, chapters, attachments for a muxer |
 //! | [`mux`] | [`MuxBuilder`]/[`MuxWriter`] — the muxer state machine |
 //! | [`vacoraw`] | a worked-example container that drives every one of the above |
 //!
@@ -70,13 +71,15 @@
 #![forbid(unsafe_code)]
 
 use vaco_codec_core::{CodecId, CodecParameters, Parser};
-use vaco_core::{Duration, MediaType, Rational, Result, Timestamp};
+use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
 use vaco_io::{MediaSink, MediaSource};
+use vaco_limits::Limits;
 use vaco_packet::Packet;
 
 pub mod discovery;
 pub mod flags;
 pub mod interleave;
+pub mod metadata;
 pub mod mux;
 pub mod options;
 pub mod probe;
@@ -93,6 +96,7 @@ pub use flags::FormatFlags;
 pub use interleave::{
     ChunkPolicy, InterleaveQueue, MuxTimestamps, interleave_none, interleave_per_dts,
 };
+pub use metadata::{MuxAttachment, MuxMetadata};
 pub use mux::{
     BitstreamAction, BsfChain, BsfProvider, CodecSupport, MuxBuilder, MuxReport, MuxWriter, NoBsfs,
 };
@@ -378,6 +382,51 @@ pub trait Demuxer: Send {
     fn duration(&self) -> Option<Duration> {
         None
     }
+
+    /// Rebind this demuxer to a caller's [`Limits`] and [`FormatOptions`],
+    /// after construction (gap 4, `planning/INTERFACE-GAPS.md`).
+    ///
+    /// **Why this exists instead of a parameter on [`DemuxerDesc::open`].**
+    /// `open` is a bare `fn` pointer, and every one of the ~90 registered
+    /// demuxers already supplies its own free function of that exact
+    /// signature; a function item only coerces to a function-pointer type
+    /// with a matching parameter list, so widening `open`'s signature would
+    /// require editing every one of those functions, not just the descriptor
+    /// literals that reference them. That is the edit this wave's brief
+    /// forbids, so the seam has to be a call a caller makes *after*
+    /// construction instead of a parameter *to* it.
+    ///
+    /// [`Discovery::run`] calls this once, with its own configured `limits`
+    /// and `opts`, before reading anything — so wrapping a demuxer in
+    /// [`Discovery`] is enough to reach it. A fuzz target driving
+    /// `(desc.open)(..)` directly, with no [`Discovery`] in between, can and
+    /// should call it too: that is precisely the "cannot bound a demuxer it
+    /// cannot hand a budget to" case the gap names.
+    ///
+    /// **What this does not fix.** It cannot bound allocation that already
+    /// happened *during* `open` itself — a header, an index, anything a
+    /// container reads eagerly before any `Demuxer` exists to call this on.
+    /// Every demuxer in this workspace does that parsing with a budget it
+    /// invents internally (see `vacoraw::VacoRawDemuxer::open`'s
+    /// `Budget::new(Limits::permissive())`, which this method cannot reach).
+    /// Closing that half needs the `open`-signature change this method is
+    /// explicitly the substitute for, and that is only possible in a wave that
+    /// touches every implementor at once. Recorded as a known limit rather
+    /// than papered over; see `docs/format/vaco-format-core.md`.
+    ///
+    /// The default does nothing, which is exactly today's behaviour: every
+    /// demuxer that predates this method already ignores whatever budget or
+    /// options a caller wants, because there was nowhere to tell it. A
+    /// demuxer that opts in re-derives its internal `Budget` and any
+    /// option-driven state from `limits`/`opts`.
+    ///
+    /// # Errors
+    /// Whatever the demuxer's own validation of `opts` finds. The default
+    /// never errs.
+    fn reconfigure(&mut self, limits: &Limits, opts: &FormatOptions) -> Result<()> {
+        let _ = (limits, opts);
+        Ok(())
+    }
 }
 
 /// So a boxed demuxer is itself a [`Demuxer`].
@@ -412,6 +461,9 @@ impl<D: Demuxer + ?Sized> Demuxer for Box<D> {
     }
     fn duration(&self) -> Option<Duration> {
         (**self).duration()
+    }
+    fn reconfigure(&mut self, limits: &Limits, opts: &FormatOptions) -> Result<()> {
+        (**self).reconfigure(limits, opts)
     }
 }
 
@@ -562,6 +614,66 @@ pub trait Muxer: Send {
     fn write_flush(&mut self) -> Result<()> {
         Ok(())
     }
+
+    /// Accept file- and stream-level metadata: tags, chapters, attachments
+    /// (gap 1, `planning/INTERFACE-GAPS.md`).
+    ///
+    /// Called once by [`mux::MuxBuilder::open`], after [`Muxer::init`] and
+    /// after stream time bases are read, but before [`Muxer::write_header`]
+    /// (M30) — the same point M12 settles anything else that depends on the
+    /// whole stream set, and the point every container that has a place to
+    /// put a title or a chapter table needs to know it by.
+    ///
+    /// The default does nothing, which is exactly today's behaviour: before
+    /// this method existed there was no channel for [`crate::metadata::MuxMetadata`]
+    /// at all, so every muxer already drops it, and the default drops it the
+    /// same way — no existing muxer's write changes.
+    ///
+    /// # Errors
+    /// Whatever the container's own validation of tags, chapters or
+    /// attachments finds. The default never errs.
+    fn set_metadata(&mut self, metadata: &metadata::MuxMetadata) -> Result<()> {
+        let _ = metadata;
+        Ok(())
+    }
+
+    /// Set one muxer-private option by name (gap 5, `planning/INTERFACE-GAPS.md`)
+    /// — the seam for a per-container knob like `-movflags` that has no home
+    /// in the generic [`FormatOptions`] table.
+    ///
+    /// Mirrors [`vaco_opts::OptionsExt::set_str`]'s name/value-string
+    /// contract on purpose: a caller that already knows how to drive an
+    /// `#[derive(Options)]` struct from a CLI-parsed pair needs no second
+    /// convention to reach a muxer through the registry. `vaco-mux-mp4`'s
+    /// `MovMuxer::with_options` is exactly the constructor this exists to make
+    /// reachable — `vaco-mux-mp4` still owns parsing its own `movflags`
+    /// spelling, this method is only the door.
+    ///
+    /// **Why not a parameter on [`MuxerDesc::open`].** Same reason as
+    /// [`Demuxer::reconfigure`]: `open` is a bare `fn` pointer that ~90
+    /// registered free functions already implement at a fixed signature, and
+    /// widening it would require editing every one of them. [`mux::MuxBuilder`]
+    /// calls this once per option a caller explicitly supplies via
+    /// [`mux::MuxBuilder::with_private_options`], before [`Muxer::init`] (M29)
+    /// — early enough that a fragmentation flag can still change what `init`
+    /// decides.
+    ///
+    /// The default answers "no such option" for every name, which is correct
+    /// for the ~90 existing muxers that declare no private options: nothing
+    /// calls this today (no caller could reach it before now), so the default
+    /// is never exercised by current behaviour. A muxer that grows options
+    /// overrides it to parse its own.
+    ///
+    /// # Errors
+    /// [`Error::Option`] naming `name`, when this muxer has no such option or
+    /// `value` does not parse for it. The default always errs.
+    fn set_option(&mut self, name: &str, value: &str) -> Result<()> {
+        let _ = value;
+        Err(Error::Option {
+            name: name.to_owned(),
+            detail: "this muxer has no such option".to_owned(),
+        })
+    }
 }
 
 /// So a boxed muxer is itself a [`Muxer`].
@@ -611,6 +723,12 @@ impl<M: Muxer + ?Sized> Muxer for Box<M> {
     }
     fn write_flush(&mut self) -> Result<()> {
         (**self).write_flush()
+    }
+    fn set_metadata(&mut self, metadata: &metadata::MuxMetadata) -> Result<()> {
+        (**self).set_metadata(metadata)
+    }
+    fn set_option(&mut self, name: &str, value: &str) -> Result<()> {
+        (**self).set_option(name, value)
     }
 }
 
@@ -683,6 +801,47 @@ impl MuxerDesc {
     #[must_use]
     pub fn matches_name(&self, name: &str) -> bool {
         self.name == name || self.name.split(',').any(|n| n == name)
+    }
+
+    /// This muxer's [`FormatFlags`], read without keeping the instance
+    /// (gap 6, `planning/INTERFACE-GAPS.md`).
+    ///
+    /// **Why this is a method and not a `flags` field to match
+    /// [`DemuxerDesc::flags`].** A field is the right shape and was the
+    /// brief's own proposal, but it cannot be added the way this wave adds
+    /// everything else: every one of the ~90 registered `MuxerDesc` constants
+    /// already lists every current field with no `..base` update syntax (a
+    /// literal search confirms it), so Rust requires any new field —
+    /// regardless of its type or whether it has a sensible default — to be
+    /// named at every one of those call sites. Default field values
+    /// (`x: T = default`, RFC 3681) would remove that requirement and were
+    /// checked directly against this workspace's pinned `rustc 1.97.1`: they
+    /// remain behind `#![feature(default_field_values)]`
+    /// (`error[E0658]`), which is unavailable on the stable toolchain this
+    /// project pins and would not be reached for regardless. So the field is
+    /// not additive today, and this method is the closest substitute: it
+    /// reproduces exactly what `vaco-cli`'s `exec::open_output` already did by
+    /// hand — construct once against a throwaway sink, read `.flags()`, keep
+    /// the answer — except written once, here, instead of once per caller.
+    ///
+    /// It does not remove the double construction `exec::open_output`
+    /// documents (a real, non-`NOFILE` output is still opened separately,
+    /// against its own sink); it removes the *duplication* of the probing
+    /// logic itself. Landing the field for real needs a wave that touches
+    /// every `MuxerDesc` literal at once, the same wave `DemuxerDesc.flags`
+    /// itself must have needed when the field was first authored — before any
+    /// implementor existed to edit.
+    ///
+    /// A muxer whose `open` fails against an empty, writable
+    /// [`vacoraw::MemorySink`] answers the safe default, [`FormatFlags::empty`]
+    /// — none of the muxers in this workspace do, but a descriptor that could
+    /// only panic on a hypothetical one would be worse than one that answers
+    /// "nothing declared".
+    #[must_use]
+    pub fn probe_flags(&self) -> FormatFlags {
+        (self.open)(Box::new(vacoraw::MemorySink::new()))
+            .map(|m| m.flags())
+            .unwrap_or_default()
     }
 }
 
@@ -774,5 +933,56 @@ mod tests {
         assert_eq!(d.default_codec(MediaType::Video), Some(CodecId::H264));
         assert_eq!(d.default_codec(MediaType::Audio), Some(CodecId::Opus));
         assert_eq!(d.default_codec(MediaType::Subtitle), None);
+    }
+
+    // ------------------------------------------------- gap 6: probe_flags
+
+    /// `VacoRawMuxer` does not override [`Muxer::flags`], so this exercises
+    /// the trait's own default alongside [`MuxerDesc::probe_flags`]'s: the
+    /// harmless answer when nobody declared anything.
+    #[test]
+    fn probe_flags_reads_the_trait_default_when_the_muxer_declares_none() {
+        assert_eq!(vacoraw::MUXER.probe_flags(), FormatFlags::empty());
+    }
+
+    /// A muxer that overrides [`Muxer::flags`], to prove `probe_flags` reads
+    /// a real answer rather than always reporting the default — the useful
+    /// half of the gap 6 substitute.
+    #[derive(Debug, Default)]
+    struct FlaggedMuxer;
+
+    impl Muxer for FlaggedMuxer {
+        fn flags(&self) -> FormatFlags {
+            FormatFlags::NOFILE
+        }
+        fn add_stream(&mut self, _params: &CodecParameters) -> Result<u32> {
+            Ok(0)
+        }
+        fn write_header(&mut self) -> Result<()> {
+            Ok(())
+        }
+        fn write_packet(&mut self, _packet: &Packet) -> Result<()> {
+            Ok(())
+        }
+        fn write_trailer(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    fn open_flagged(_sink: Box<dyn MediaSink>) -> Result<Box<dyn Muxer>> {
+        Ok(Box::new(FlaggedMuxer))
+    }
+
+    #[test]
+    fn probe_flags_reads_a_real_flag() {
+        const DESC: MuxerDesc = MuxerDesc {
+            name: "test-flagged",
+            long_name: "test",
+            extensions: &[],
+            default_video: None,
+            default_audio: None,
+            open: open_flagged,
+        };
+        assert_eq!(DESC.probe_flags(), FormatFlags::NOFILE);
     }
 }

@@ -9,7 +9,20 @@ than one agent's misreading.
 land while agents are writing against the current signatures, so they are queued
 here with what each one blocks.
 
-## 1. `Muxer` has no metadata channel
+## 1. `Muxer` has no metadata channel — CLOSED 2026-08-23
+
+`Muxer::set_metadata(&mut self, &metadata::MuxMetadata) -> Result<()>`, a
+defaulted trait method (no-op default), plus `metadata::MuxMetadata` (tags,
+chapters — reusing `Chapter` verbatim — attachments, per-stream tags) and
+`MuxBuilder::with_metadata`/`MuxBuilder::open` calling it once, after `init`
+and stream time bases, before the header (M30). No implementor needed an edit;
+`cargo check --workspace` confirms it. `vaco-mux-matroska`, `vaco-mux-mp4` and
+`vaco-mux-stream`'s `ffmetadata` still need to *override* `set_metadata` to
+actually write anything — that is a later wave's work, this one only opens the
+channel. See `docs/format/vaco-format-core.md`'s "2026-08-23 wave" section for
+the full design and reasoning.
+
+Original report, kept for the *why*:
 
 Reported by: `vaco-mux-matroska`, and implied by `vaco-mux-mp4`'s brief.
 
@@ -48,9 +61,29 @@ unregistered and #572 stays open on it alone.
 
 **Blocks:** the last registration of FM-20 (#572).
 
-## 4. `DemuxerDesc::open` has no `Limits` or options parameter
+## 4. `DemuxerDesc::open` has no `Limits` or options parameter — SUBSTITUTED, not closed, 2026-08-23
 
-Reported independently by two agents in the container wave.
+The signature change this entry proposes turned out **not to be additive**:
+`open` is a bare `fn` pointer and every one of the ~90 registered demuxers
+already supplies its own free function coercing to today's exact two-argument
+signature — a function item only coerces to a function-pointer type with a
+matching parameter list, so widening it means editing every one of those
+functions, not just the descriptor literals naming them. That is the edit this
+wave forbids.
+
+Substituted with `Demuxer::reconfigure(&mut self, limits: &Limits, opts:
+&FormatOptions) -> Result<()>`, a defaulted trait method callable *after*
+`open` returns rather than *during* the call. `Discovery::run` now calls it
+before reading anything, so wrapping a demuxer in `Discovery` reaches it; a
+fuzz target driving `open` directly can call it too. No implementor needed an
+edit. It does **not** fix a demuxer's own hardcoded budget for work `open`
+itself does before any `Demuxer` value exists to call this on —
+`vacoraw::VacoRawDemuxer::open`'s `Budget::new(Limits::permissive())` is
+exactly that case and is unreached by this substitute. Closing that fully still
+needs the signature change, in a wave that edits every implementor at once. See
+`docs/format/vaco-format-core.md`.
+
+Original report, kept for the *why*:
 
 A demuxer cannot see the allocation budget it is supposed to respect, nor the
 `-analyzeduration`/`-probesize`-class options that change how it opens. Today
@@ -60,9 +93,26 @@ D19 failure mode: the same concept defined once per crate.
 **Blocks:** FW-11 (#537, the 40 generic options), and quietly weakens every
 fuzz target — a demuxer that cannot see a budget cannot be fuzzed against one.
 
-## 5. `MuxerDesc::open` carries no options
+## 5. `MuxerDesc::open` carries no options — SUBSTITUTED, not closed, 2026-08-23
 
-Reported by: `vaco-mux-mp4`, and `vaco-mux-avi` already had it.
+Same shape and same finding as gap 4: `MuxerDesc::open` is likewise a bare `fn`
+pointer ~90 crates already implement at a fixed one-argument signature, so
+widening it is not additive either.
+
+Substituted with `Muxer::set_option(&mut self, name: &str, value: &str) ->
+Result<()>`, a defaulted trait method (default: `Err`, "no such option" — an
+unrecognised name is refused, not silently dropped, matching `NoBsfs`'s
+philosophy). Mirrors `vaco_opts::OptionsExt::set_str`'s name/value-string
+contract on purpose, so a caller that already knows how to drive an
+`#[derive(Options)]` struct needs no second convention to reach a muxer through
+the registry. `MuxBuilder::with_private_options` queues pairs;
+`MuxBuilder::open` applies them through `set_option` before `init` runs (M29),
+early enough that `-movflags` can still change what `init` decides. No
+implementor needed an edit. `vaco-mux-mp4` reaching `MovMuxer::with_options`
+through this is still that crate's own work in a later wave. See
+`docs/format/vaco-format-core.md`.
+
+Original report, kept for the *why*:
 
 The registry constructs a muxer through `MuxerDesc::open`, whose signature has
 no room for `-movflags`, `-fflags` or any other per-muxer option. `vaco-mux-mp4`
@@ -76,9 +126,28 @@ go — and they should be fixed together.
 
 **Blocks:** every `-movflags` from the CLI, and the CLI half of FM-22 (#573).
 
-## 6. `MuxerDesc` has no `flags` field
+## 6. `MuxerDesc` has no `flags` field — SUBSTITUTED, not closed, 2026-08-23
 
-Reported by: the CLI muxer wiring.
+The proposed fix — add `flags: FormatFlags` to `MuxerDesc`, matching
+`DemuxerDesc` — is **not additive on this workspace's pinned toolchain**.
+Verified two ways: every one of the ~90 registered `MuxerDesc` constants lists
+every current field with no `..base` update syntax, so Rust's struct-literal
+exhaustiveness rule requires any new field to be named at every one of those
+call sites regardless of its type; and default field values (RFC 3681), which
+would remove that requirement, were checked directly against `rustc 1.97.1`
+(the pinned version) and remain `error[E0658]`, gated behind an unstable
+feature this project does not and should not enable.
+
+Substituted with `MuxerDesc::probe_flags(&self) -> FormatFlags`, a method that
+does exactly what `exec::open_output` already did by hand — construct against
+a throwaway `vacoraw::MemorySink`, read `.flags()` — except written once here.
+No implementor needed an edit. It does not remove `exec::open_output`'s double
+construction of a real, non-`NOFILE` output; it removes the *duplicated probing
+logic*. The field itself needs a wave that edits every `MuxerDesc` literal at
+once — the same wave `DemuxerDesc.flags` must have needed, before any
+implementor existed to edit. See `docs/format/vaco-format-core.md`.
+
+Original report, kept for the *why*:
 
 `DemuxerDesc` carries `flags: FormatFlags`; `MuxerDesc` does not. But the CLI
 has to know whether a muxer is `NOFILE` **before** it opens an output URL —

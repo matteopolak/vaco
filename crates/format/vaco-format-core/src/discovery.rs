@@ -255,6 +255,16 @@ impl<D: Demuxer> Discovery<D> {
             return Ok(&self.report);
         }
         self.ran = true;
+        // Gap 4 (`planning/INTERFACE-GAPS.md`): `DemuxerDesc::open` had no
+        // seam for `Limits` or `FormatOptions`, so every demuxer invented its
+        // own defaults. `Demuxer::reconfigure` is the seam that reaches an
+        // already-constructed demuxer instead; calling it here means wrapping
+        // a demuxer in `Discovery` is enough to hand over the real budget and
+        // the real option set before anything is read through this wrapper. A
+        // demuxer that predates the method ignores the call, exactly as it
+        // ignored `with_limits`/the caller's `FormatOptions` before this
+        // existed.
+        self.inner.reconfigure(&self.limits, &self.opts)?;
         let mut guard = ProgressGuard::new();
         let packet_cap = u64::try_from(self.opts.max_probe_packets)
             .unwrap_or(u64::MAX)
@@ -812,10 +822,74 @@ impl ParserProvider for NoParsers {
 mod tests {
     use super::*;
     use crate::test_support::MockDemuxer;
+    use std::sync::{Arc, Mutex};
     use vaco_core::MediaType;
 
     fn opts() -> FormatOptions {
         FormatOptions::default()
+    }
+
+    // --------------------------------------------------- gap 4: reconfigure
+
+    /// A demuxer that records the [`Limits`]/[`FormatOptions`] it was handed,
+    /// to prove [`Discovery::run`] actually calls [`Demuxer::reconfigure`]
+    /// rather than merely compiling against it.
+    #[derive(Debug)]
+    struct RecordingDemuxer {
+        inner: MockDemuxer,
+        seen: Arc<Mutex<Option<(u64, i64)>>>,
+    }
+
+    impl Demuxer for RecordingDemuxer {
+        fn streams(&self) -> &[Stream] {
+            self.inner.streams()
+        }
+        fn read_packet(&mut self) -> Result<Packet> {
+            self.inner.read_packet()
+        }
+        fn seek(&mut self, target: crate::SeekTarget, flags: crate::SeekFlags) -> Result<()> {
+            self.inner.seek(target, flags)
+        }
+        fn reconfigure(&mut self, limits: &Limits, opts: &FormatOptions) -> Result<()> {
+            if let Ok(mut g) = self.seen.lock() {
+                *g = Some((limits.max_alloc_total, opts.probesize));
+            }
+            Ok(())
+        }
+    }
+
+    /// The default does the harmless thing: [`MockDemuxer`] does not override
+    /// [`Demuxer::reconfigure`], and running discovery through it — with a
+    /// caller-supplied [`Limits`] that is nothing like the demuxer's own
+    /// hardcoded default — still succeeds, exactly as it did before this
+    /// method existed.
+    #[test]
+    fn reconfigure_default_is_a_harmless_no_op() {
+        let inner = MockDemuxer::new(1, MediaType::Video).with_packets(5);
+        let mut d =
+            Discovery::new(inner, FormatFlags::empty(), &opts()).with_limits(Limits::tiny());
+        assert!(d.run(&NoParsers).is_ok());
+    }
+
+    /// An override receives exactly the [`Limits`] [`Discovery::with_limits`]
+    /// was given and the exact [`FormatOptions`] [`Discovery::new`] was
+    /// constructed with — not a demuxer-invented default (the D19 failure mode
+    /// gap 4 names).
+    #[test]
+    fn reconfigure_override_receives_the_configured_limits_and_options() {
+        let seen = Arc::new(Mutex::new(None));
+        let inner = RecordingDemuxer {
+            inner: MockDemuxer::new(1, MediaType::Video).with_packets(5),
+            seen: Arc::clone(&seen),
+        };
+        let mut o = opts();
+        o.probesize = 12_345;
+        let limits = Limits::tiny();
+        let mut d = Discovery::new(inner, FormatFlags::empty(), &o).with_limits(limits.clone());
+        d.run(&NoParsers).unwrap();
+        let got = seen.lock().unwrap().unwrap_or_default();
+        assert_eq!(got.0, limits.max_alloc_total);
+        assert_eq!(got.1, 12_345);
     }
 
     #[test]

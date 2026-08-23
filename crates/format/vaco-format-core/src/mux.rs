@@ -96,6 +96,8 @@
 //! | M26 | packet and byte counts are recorded for the caller's stats | plan 14 |
 //! | M27 | ending a stream lets the rest drain | §1.9 N4 |
 //! | M28 | aborting writes no trailer, and says so | §1.3 |
+//! | M29 | muxer-private options (`-movflags`) are applied before `init` | gap 5, `planning/INTERFACE-GAPS.md` |
+//! | M30 | metadata reaches the muxer after `init`, before the header | gap 1, `planning/INTERFACE-GAPS.md` |
 
 use std::sync::Arc;
 
@@ -105,6 +107,7 @@ use vaco_packet::Packet;
 
 use crate::flags::FormatFlags;
 use crate::interleave::{InterleaveQueue, MuxTimestamps};
+use crate::metadata::MuxMetadata;
 use crate::options::{AvoidNegativeTs, FFlags, FormatOptions};
 use crate::time::TIME_BASE_Q;
 use crate::{Muxer, StreamType};
@@ -352,6 +355,9 @@ pub struct MuxBuilder {
     flags: FormatFlags,
     streams: Vec<StreamState>,
     bsfs: Arc<dyn BsfProvider>,
+    metadata: MuxMetadata,
+    /// Muxer-private options queued for [`Muxer::set_option`] (gap 5).
+    options: Vec<(String, String)>,
 }
 
 impl core::fmt::Debug for MuxBuilder {
@@ -378,6 +384,8 @@ impl MuxBuilder {
             flags,
             streams: Vec::new(),
             bsfs: Arc::new(NoBsfs),
+            metadata: MuxMetadata::default(),
+            options: Vec::new(),
         }
     }
 
@@ -385,6 +393,33 @@ impl MuxBuilder {
     #[must_use]
     pub fn with_bsfs(mut self, provider: Arc<dyn BsfProvider>) -> Self {
         self.bsfs = provider;
+        self
+    }
+
+    /// Attach file- and stream-level metadata for [`Muxer::set_metadata`] to
+    /// receive at [`MuxBuilder::open`] (M30, gap 1).
+    ///
+    /// Not calling this at all is what every existing caller of `MuxBuilder`
+    /// does today, and it is indistinguishable from calling it with
+    /// [`MuxMetadata::default`]: [`MuxBuilder::open`] always calls
+    /// `set_metadata`, and its default implementation drops whatever it is
+    /// handed, empty or not.
+    #[must_use]
+    pub fn with_metadata(mut self, metadata: MuxMetadata) -> Self {
+        self.metadata = metadata;
+        self
+    }
+
+    /// Queue muxer-private options — `-movflags` and the like — applied one
+    /// by one through [`Muxer::set_option`] before [`Muxer::init`] runs (M29,
+    /// gap 5).
+    ///
+    /// # Errors
+    /// Not here: a name this muxer does not recognise fails at
+    /// [`MuxBuilder::open`], the point the caller can still act on it.
+    #[must_use]
+    pub fn with_private_options(mut self, options: Vec<(String, String)>) -> Self {
+        self.options = options;
         self
     }
 
@@ -497,6 +532,12 @@ impl MuxBuilder {
             ));
         }
 
+        // M29 — muxer-private options land before init, so a flag like
+        // `-movflags` can still change what init decides.
+        for (name, value) in &self.options {
+            self.muxer.set_option(name, value)?;
+        }
+
         // M12 — init may rewrite time bases, so it runs before we read them.
         self.muxer.init()?;
         for (i, st) in self.streams.iter_mut().enumerate() {
@@ -517,6 +558,11 @@ impl MuxBuilder {
                 .filter(|tb| tb.is_defined() && !tb.is_zero())
                 .unwrap_or(TIME_BASE_Q);
         }
+
+        // M30 — metadata reaches the muxer after time bases are settled but
+        // before the header, the same point M12 settles anything else that
+        // depends on the whole stream set.
+        self.muxer.set_metadata(&self.metadata)?;
 
         self.muxer.write_header()?;
 
@@ -946,6 +992,7 @@ pub fn codec_in(list: &[CodecId], codec: CodecId) -> CodecSupport {
 )]
 mod tests {
     use super::*;
+    use crate::metadata::MuxAttachment;
     use std::sync::Mutex;
     use vaco_core::{Rational, Timestamp};
     use vaco_limits::{Budget, Limits};
@@ -1061,6 +1108,68 @@ mod tests {
                 .unwrap_or(BitstreamAction::Keep);
             self.ask_count += 1;
             Ok(a)
+        }
+    }
+
+    /// A muxer that overrides only [`Muxer::set_metadata`] and
+    /// [`Muxer::set_option`], logging every call alongside the phases it
+    /// still gets from the trait's other defaults and from its own minimal
+    /// required methods — so the log's order proves M29/M30's placement
+    /// relative to `init` and the header, not just that the calls happened.
+    #[derive(Debug, Default)]
+    struct ConfigurableMuxer {
+        log: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl Muxer for ConfigurableMuxer {
+        fn add_stream(&mut self, _params: &CodecParameters) -> Result<u32> {
+            Ok(0)
+        }
+        fn init(&mut self) -> Result<()> {
+            if let Ok(mut g) = self.log.lock() {
+                g.push("init".to_owned());
+            }
+            Ok(())
+        }
+        fn write_header(&mut self) -> Result<()> {
+            if let Ok(mut g) = self.log.lock() {
+                g.push("header".to_owned());
+            }
+            Ok(())
+        }
+        fn write_packet(&mut self, _packet: &Packet) -> Result<()> {
+            Ok(())
+        }
+        fn write_trailer(&mut self) -> Result<()> {
+            if let Ok(mut g) = self.log.lock() {
+                g.push("trailer".to_owned());
+            }
+            Ok(())
+        }
+        fn set_metadata(&mut self, metadata: &MuxMetadata) -> Result<()> {
+            if let Ok(mut g) = self.log.lock() {
+                g.push(format!(
+                    "metadata tags={} chapters={} attachments={} stream0_tags={}",
+                    metadata.tags.len(),
+                    metadata.chapters.len(),
+                    metadata.attachments.len(),
+                    metadata.tags_for_stream(0).len(),
+                ));
+            }
+            Ok(())
+        }
+        fn set_option(&mut self, name: &str, value: &str) -> Result<()> {
+            if name == "known" {
+                if let Ok(mut g) = self.log.lock() {
+                    g.push(format!("option {name}={value}"));
+                }
+                Ok(())
+            } else {
+                Err(Error::Option {
+                    name: name.to_owned(),
+                    detail: "unknown".to_owned(),
+                })
+            }
         }
     }
 
@@ -1468,6 +1577,111 @@ mod tests {
             ..Recorder::default()
         };
         let mut b = MuxBuilder::new(Box::new(rec), &opts);
+        b.add_stream(&video(), tb()).unwrap();
+        assert!(b.open().is_err());
+    }
+
+    // --------------------------------------------------- gap 1: set_metadata
+
+    /// The default does the harmless thing: a muxer that does not override
+    /// [`Muxer::set_metadata`] simply drops whatever [`MuxBuilder::with_metadata`]
+    /// supplied, exactly as if the channel did not exist — which, before this
+    /// gap closed, it did not.
+    #[test]
+    fn set_metadata_default_silently_drops_it() {
+        let opts = FormatOptions::default();
+        let mut meta = MuxMetadata::default();
+        meta.tags
+            .push(("title".to_owned(), "not written anywhere".to_owned()));
+        let mut b = MuxBuilder::new(Box::new(Recorder::default()), &opts).with_metadata(meta);
+        b.add_stream(&video(), tb()).unwrap();
+        let mut w = b.open().unwrap();
+        w.write_packet(pkt(0, 0)).unwrap();
+        assert!(w.finish().is_ok());
+    }
+
+    /// An override receives exactly what [`MuxBuilder::with_metadata`] supplied,
+    /// at the point M30 promises: after `init`, before the header.
+    #[test]
+    fn an_override_receives_the_supplied_metadata_before_the_header() {
+        let opts = FormatOptions::default();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let rec = ConfigurableMuxer {
+            log: Arc::clone(&log),
+        };
+        let mut meta = MuxMetadata::default();
+        meta.tags.push(("title".to_owned(), "x".to_owned()));
+        meta.chapters.push(crate::Chapter {
+            id: 0,
+            time_base: tb(),
+            start: Timestamp::new(0),
+            end: Timestamp::new(1000),
+            metadata: vec![("title".to_owned(), "chapter one".to_owned())],
+        });
+        meta.attachments.push(MuxAttachment {
+            filename: "cover.jpg".to_owned(),
+            mime_type: "image/jpeg".to_owned(),
+            description: String::new(),
+            data: vec![1, 2, 3],
+        });
+        meta.stream_tags = vec![vec![("language".to_owned(), "eng".to_owned())]];
+        let mut b = MuxBuilder::new(Box::new(rec), &opts).with_metadata(meta);
+        b.add_stream(&video(), tb()).unwrap();
+        let w = b.open().unwrap();
+        drop(w);
+        assert_eq!(
+            log_of(&log),
+            vec![
+                "init".to_owned(),
+                "metadata tags=1 chapters=1 attachments=1 stream0_tags=1".to_owned(),
+                "header".to_owned(),
+            ]
+        );
+    }
+
+    // ---------------------------------------------------- gap 5: set_option
+
+    /// The default does the safe thing: an option nobody had a channel to
+    /// carry before this gap closed is refused, not silently ignored — the
+    /// same philosophy [`NoBsfs`] applies to an unfulfillable bitstream-filter
+    /// request.
+    #[test]
+    fn set_option_default_refuses_every_name() {
+        let opts = FormatOptions::default();
+        let mut b = MuxBuilder::new(Box::new(Recorder::default()), &opts)
+            .with_private_options(vec![("movflags".to_owned(), "+faststart".to_owned())]);
+        b.add_stream(&video(), tb()).unwrap();
+        assert!(b.open().is_err());
+    }
+
+    /// An override applies queued options before `init` runs (M29), so a
+    /// muxer's `init` can see their effect.
+    #[test]
+    fn an_override_applies_options_before_init() {
+        let opts = FormatOptions::default();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let rec = ConfigurableMuxer {
+            log: Arc::clone(&log),
+        };
+        let mut b = MuxBuilder::new(Box::new(rec), &opts)
+            .with_private_options(vec![("known".to_owned(), "1".to_owned())]);
+        b.add_stream(&video(), tb()).unwrap();
+        let w = b.open().unwrap();
+        drop(w);
+        let entries = log_of(&log);
+        let opt_at = entries.iter().position(|e| e == "option known=1").unwrap();
+        let init_at = entries.iter().position(|e| e == "init").unwrap();
+        assert!(opt_at < init_at, "{entries:?}");
+    }
+
+    /// An unrecognised option fails at [`MuxBuilder::open`], the point the
+    /// caller can still act on it, rather than being dropped on the floor.
+    #[test]
+    fn an_override_refuses_an_unrecognised_option() {
+        let opts = FormatOptions::default();
+        let rec = ConfigurableMuxer::default();
+        let mut b = MuxBuilder::new(Box::new(rec), &opts)
+            .with_private_options(vec![("nope".to_owned(), "1".to_owned())]);
         b.add_stream(&video(), tb()).unwrap();
         assert!(b.open().is_err());
     }
