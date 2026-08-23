@@ -61,6 +61,14 @@ const OFFSETS: [(i32, i32); 8] = [
 pub(crate) enum Op {
     Dilate,
     Erode,
+    /// `inflate`: grow towards the local average of the fixed 8-neighbourhood
+    /// when that average exceeds self. See [`crate::inflate`]'s doc for the
+    /// probe that pinned this down (distinct from `Dilate`, which grows
+    /// towards the local *maximum*, not the average).
+    InflateAvg,
+    /// `deflate`: the `InflateAvg` dual, shrinking towards the local average
+    /// when it is below self. See [`crate::deflate`]'s doc.
+    DeflateAvg,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -69,32 +77,115 @@ pub(crate) struct MorphParams {
     pub threshold: i32,
 }
 
-/// One dilation/erosion pass over a whole plane.
-pub(crate) fn apply_plane(rows: &[&[u8]], w: i32, h: i32, op: Op, params: MorphParams) -> Vec<Vec<u8>> {
-    let selected: Vec<(i32, i32)> = OFFSETS
-        .iter()
-        .enumerate()
-        .filter(|(bit, _)| (params.coordinates >> bit) & 1 != 0)
-        .map(|(_, &o)| o)
-        .collect();
+/// One dilation/erosion/inflate/deflate pass over a whole plane.
+///
+/// `Dilate`/`Erode` combine the selected 8-neighbourhood by max/min;
+/// `InflateAvg`/`DeflateAvg` combine it by **truncating average** instead
+/// (measured — see [`crate::inflate`]'s doc: a `37.5` average probe returns
+/// `37`, not `38`, ruling out round-to-nearest) and always consider the
+/// fixed full 8-neighbourhood (`inflate`/`deflate` have no `coordinates`
+/// option in the reference), never a `coordinates`-selected subset.
+#[allow(
+    clippy::integer_division,
+    reason = "computing an average: the division is the whole point, not a \
+              precision bug"
+)]
+pub(crate) fn apply_plane(
+    rows: &[&[u8]],
+    w: i32,
+    h: i32,
+    op: Op,
+    params: MorphParams,
+) -> Vec<Vec<u8>> {
+    let selected: Vec<(i32, i32)> = match op {
+        Op::Dilate | Op::Erode => OFFSETS
+            .iter()
+            .enumerate()
+            .filter(|(bit, _)| (params.coordinates >> bit) & 1 != 0)
+            .map(|(_, &o)| o)
+            .collect(),
+        Op::InflateAvg | Op::DeflateAvg => OFFSETS.to_vec(),
+    };
     let mut out = Vec::new();
     for y in 0..h {
         let mut row = Vec::new();
         for x in 0..w {
             let self_v = i32::from(common::sample_clamped(rows, x, y, w, h));
-            let mut extreme = self_v;
-            for &(dy, dx) in &selected {
-                let v = i32::from(common::sample_clamped(rows, x + dx, y + dy, w, h));
-                extreme = match op {
-                    Op::Dilate => extreme.max(v),
-                    Op::Erode => extreme.min(v),
-                };
-            }
-            let capped = match op {
-                Op::Dilate => extreme.min(self_v.saturating_add(params.threshold)),
-                Op::Erode => extreme.max(self_v.saturating_sub(params.threshold)),
+            let neighbours = || {
+                selected
+                    .iter()
+                    .map(|&(dy, dx)| i32::from(common::sample_clamped(rows, x + dx, y + dy, w, h)))
             };
-            row.push(u8::try_from(capped.clamp(0, 255)).unwrap_or(0));
+            let value = match op {
+                Op::Dilate => {
+                    let extreme = neighbours().fold(self_v, i32::max);
+                    extreme.min(self_v.saturating_add(params.threshold))
+                }
+                Op::Erode => {
+                    let extreme = neighbours().fold(self_v, i32::min);
+                    extreme.max(self_v.saturating_sub(params.threshold))
+                }
+                Op::InflateAvg => {
+                    let avg = neighbours().sum::<i32>() / 8;
+                    if avg > self_v {
+                        avg.min(self_v.saturating_add(params.threshold))
+                    } else {
+                        self_v
+                    }
+                }
+                Op::DeflateAvg => {
+                    let avg = neighbours().sum::<i32>() / 8;
+                    if avg < self_v {
+                        avg.max(self_v.saturating_sub(params.threshold))
+                    } else {
+                        self_v
+                    }
+                }
+            };
+            row.push(u8::try_from(value.clamp(0, 255)).unwrap_or(0));
+        }
+        out.push(row);
+    }
+    out
+}
+
+/// Greyscale erode/dilate against an arbitrary structuring element, for
+/// [`crate::morpho`]. Unlike [`apply_plane`]'s fixed 3x3 `coordinates` mask,
+/// **self is not an implicit candidate** — only the offsets `offsets` names
+/// (which may or may not include `(0, 0)`) are combined. Measured (see
+/// `morpho`'s doc): a structuring element whose own centre pixel is dark
+/// (excluded) makes the output pixel forget its own input value entirely,
+/// which `dilation`/`erosion`'s always-include-self rule never does — a
+/// real difference between the two engines, not a simplification of one.
+///
+/// No `threshold` cap either: `morpho` has no such option in the reference.
+#[must_use]
+pub(crate) fn apply_structured(
+    rows: &[&[u8]],
+    w: i32,
+    h: i32,
+    op: Op,
+    offsets: &[(i32, i32)],
+) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    for y in 0..h {
+        let mut row = Vec::new();
+        for x in 0..w {
+            let mut acc: Option<i32> = None;
+            for &(dy, dx) in offsets {
+                let v = i32::from(common::sample_clamped(rows, x + dx, y + dy, w, h));
+                acc = Some(match (acc, op) {
+                    (None, _) => v,
+                    (Some(a), Op::Dilate | Op::InflateAvg) => a.max(v),
+                    (Some(a), Op::Erode | Op::DeflateAvg) => a.min(v),
+                });
+            }
+            // No active offset at all: the reference has no defined answer
+            // for an all-dark structuring element; fall back to the input
+            // pixel rather than fabricating a 0, which would look like a
+            // real (and wrong) measured value.
+            let value = acc.unwrap_or_else(|| i32::from(common::sample_clamped(rows, x, y, w, h)));
+            row.push(u8::try_from(value.clamp(0, 255)).unwrap_or(0));
         }
         out.push(row);
     }
@@ -132,7 +223,16 @@ mod tests {
             },
         );
         assert_eq!(out[2][2], 100);
-        for (dy, dx) in [(-1i32, -1i32), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)] {
+        for (dy, dx) in [
+            (-1i32, -1i32),
+            (-1, 0),
+            (-1, 1),
+            (0, -1),
+            (0, 1),
+            (1, -1),
+            (1, 0),
+            (1, 1),
+        ] {
             let y = (2 + dy) as usize;
             let x = (2 + dx) as usize;
             assert_eq!(out[y][x], 100, "({x},{y})");
@@ -195,7 +295,10 @@ mod tests {
         let img: Vec<Vec<u8>> = (0..5)
             .map(|y| (0..5).map(|x| ((x * 37 + y * 53) % 251) as u8).collect())
             .collect();
-        let inverted: Vec<Vec<u8>> = img.iter().map(|r| r.iter().map(|&v| 255 - v).collect()).collect();
+        let inverted: Vec<Vec<u8>> = img
+            .iter()
+            .map(|r| r.iter().map(|&v| 255 - v).collect())
+            .collect();
         let rows: Vec<&[u8]> = img.iter().map(Vec::as_slice).collect();
         let inv_rows: Vec<&[u8]> = inverted.iter().map(Vec::as_slice).collect();
         let params = MorphParams {

@@ -86,7 +86,11 @@ pub(crate) struct Filter {
 
 impl Filter {
     const fn new(opts: &Opts) -> Self {
-        let ry = if opts.radius_v <= 0 { opts.radius } else { opts.radius_v };
+        let ry = if opts.radius_v <= 0 {
+            opts.radius
+        } else {
+            opts.radius_v
+        };
         Self {
             rx: opts.radius,
             ry,
@@ -180,7 +184,9 @@ mod tests {
     use super::*;
 
     fn ramp() -> Vec<Vec<u8>> {
-        (0..5).map(|_| (0..5).map(|x| (x as u8) * 10).collect()).collect()
+        (0..5)
+            .map(|_| (0..5).map(|x| (x as u8) * 10).collect())
+            .collect()
     }
 
     /// Pinned against the reference probe in this module's doc.

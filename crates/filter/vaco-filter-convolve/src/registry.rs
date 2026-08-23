@@ -1,5 +1,5 @@
-//! [`ConvolveRegistry`] — the [`FilterRegistry`] this crate's nine filters
-//! answer through. Same shape as `vaco-filter-blur::registry`.
+//! [`ConvolveRegistry`] — the [`FilterRegistry`] this crate's twelve
+//! filters answer through. Same shape as `vaco-filter-blur::registry`.
 
 use vaco_filter_graph::registry::{FilterRegistry, Instance, Instantiate};
 
@@ -7,10 +7,13 @@ use vaco_filter_graph::registry::{FilterRegistry, Instance, Instantiate};
 /// prints them).
 const NAMES: &[&str] = &[
     "convolution",
+    "deflate",
     "dilation",
     "erosion",
+    "inflate",
     "kirsch",
     "median",
+    "morpho",
     "prewitt",
     "roberts",
     "scharr",
@@ -29,10 +32,13 @@ impl FilterRegistry for ConvolveRegistry {
     fn create(&self, req: &Instantiate<'_>) -> Result<Instance, String> {
         match req.name {
             "convolution" => crate::convolution::create(req),
+            "deflate" => crate::deflate::create(req),
             "dilation" => crate::dilation::create(req),
             "erosion" => crate::erosion::create(req),
+            "inflate" => crate::inflate::create(req),
             "kirsch" => crate::kirsch::create(req),
             "median" => crate::median::create(req),
+            "morpho" => crate::morpho::create(req),
             "prewitt" => crate::prewitt::create(req),
             "roberts" => crate::roberts::create(req),
             "scharr" => crate::scharr::create(req),

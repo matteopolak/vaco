@@ -83,21 +83,61 @@ pub(crate) struct Opts {
     pub m2: String,
     #[opt(name = "3m", help = "set matrix for 4th plane", default = IDENTITY.to_owned(), flags(video, filtering))]
     pub m3: String,
-    #[opt(name = "0rdiv", help = "set rdiv for 1st plane", default = 0.0, flags(video, filtering))]
+    #[opt(
+        name = "0rdiv",
+        help = "set rdiv for 1st plane",
+        default = 0.0,
+        flags(video, filtering)
+    )]
     pub rdiv0: f64,
-    #[opt(name = "1rdiv", help = "set rdiv for 2nd plane", default = 0.0, flags(video, filtering))]
+    #[opt(
+        name = "1rdiv",
+        help = "set rdiv for 2nd plane",
+        default = 0.0,
+        flags(video, filtering)
+    )]
     pub rdiv1: f64,
-    #[opt(name = "2rdiv", help = "set rdiv for 3rd plane", default = 0.0, flags(video, filtering))]
+    #[opt(
+        name = "2rdiv",
+        help = "set rdiv for 3rd plane",
+        default = 0.0,
+        flags(video, filtering)
+    )]
     pub rdiv2: f64,
-    #[opt(name = "3rdiv", help = "set rdiv for 4th plane", default = 0.0, flags(video, filtering))]
+    #[opt(
+        name = "3rdiv",
+        help = "set rdiv for 4th plane",
+        default = 0.0,
+        flags(video, filtering)
+    )]
     pub rdiv3: f64,
-    #[opt(name = "0bias", help = "set bias for 1st plane", default = 0.0, flags(video, filtering))]
+    #[opt(
+        name = "0bias",
+        help = "set bias for 1st plane",
+        default = 0.0,
+        flags(video, filtering)
+    )]
     pub bias0: f64,
-    #[opt(name = "1bias", help = "set bias for 2nd plane", default = 0.0, flags(video, filtering))]
+    #[opt(
+        name = "1bias",
+        help = "set bias for 2nd plane",
+        default = 0.0,
+        flags(video, filtering)
+    )]
     pub bias1: f64,
-    #[opt(name = "2bias", help = "set bias for 3rd plane", default = 0.0, flags(video, filtering))]
+    #[opt(
+        name = "2bias",
+        help = "set bias for 3rd plane",
+        default = 0.0,
+        flags(video, filtering)
+    )]
     pub bias2: f64,
-    #[opt(name = "3bias", help = "set bias for 4th plane", default = 0.0, flags(video, filtering))]
+    #[opt(
+        name = "3bias",
+        help = "set bias for 4th plane",
+        default = 0.0,
+        flags(video, filtering)
+    )]
     pub bias3: f64,
     #[opt(name = "0mode", help = "set matrix mode for 1st plane", default = "square".to_owned(), flags(video, filtering))]
     pub mode0: String,
@@ -156,7 +196,12 @@ impl Kernel {
                   both operands are small (matrix length), not a value where \
                   precision loss matters"
     )]
-    pub(crate) fn parse(matrix: &str, mode: Mode, rdiv: f64, bias: f64) -> std::result::Result<Self, String> {
+    pub(crate) fn parse(
+        matrix: &str,
+        mode: Mode,
+        rdiv: f64,
+        bias: f64,
+    ) -> std::result::Result<Self, String> {
         let values: Vec<f64> = matrix
             .split_whitespace()
             .map(|s| {
@@ -398,7 +443,9 @@ mod tests {
     #[test]
     fn identity_matrix_is_identity_away_from_the_border() {
         let kernel = Kernel::parse(IDENTITY, Mode::Square, 0.0, 0.0).unwrap();
-        let rows_owned: Vec<Vec<u8>> = (0..5).map(|y| (0..5).map(|x| (x * 7 + y * 3) as u8).collect()).collect();
+        let rows_owned: Vec<Vec<u8>> = (0..5)
+            .map(|y| (0..5).map(|x| (x * 7 + y * 3) as u8).collect())
+            .collect();
         let rows: Vec<&[u8]> = rows_owned.iter().map(Vec::as_slice).collect();
         let out = apply_plane(&rows, 5, 5, &kernel);
         for y in 1..4 {

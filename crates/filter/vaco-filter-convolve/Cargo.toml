@@ -1,6 +1,6 @@
 [package]
 name = "vaco-filter-convolve"
-description = "T2/T3 convolution and morphology video filters: convolution, sobel, prewitt, roberts, kirsch, scharr, dilation, erosion, median."
+description = "T2/T3 convolution and morphology video filters: convolution, sobel, prewitt, roberts, kirsch, scharr, dilation, erosion, median, inflate, deflate, morpho (see the crate docs for the six left as a follow-up)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -15,9 +15,11 @@ vaco-frame = { path = "../../model/vaco-frame" }
 vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
 vaco-filter-core = { path = "../../filter/vaco-filter-core" }
 vaco-filter-graph = { path = "../../filter/vaco-filter-graph" }
+vaco-filter-framesync = { path = "../../filter/vaco-filter-framesync" }
 
 [dev-dependencies]
 proptest.workspace = true
+vaco-color = { path = "../../model/vaco-color" }
 
 [lints]
 workspace = true

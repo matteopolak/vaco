@@ -12,8 +12,9 @@
 //! because it was wrong, only because it was filed under the wrong name.
 //!
 //! Built against `vaco-filter-core` (the `FrameFilter` trait, the `Simple`
-//! adapter), exactly as `vaco-filter-blur` is — this crate has no
-//! multi-input filter, so it does not need `vaco-filter-framesync`.
+//! adapter), exactly as `vaco-filter-blur` is, and now also against
+//! `vaco-filter-framesync` (the `FrameSyncFilter` trait, the `Synced`
+//! adapter) for [`morpho`]'s two video inputs.
 //!
 //! # Shape
 //!
@@ -24,7 +25,9 @@
 //! * [`convolution`] — the generic per-plane matrix engine, also the
 //!   `convolution` filter itself, reused by [`edge`] for the two-gradient
 //!   `sobel`/`prewitt`/`scharr` engine.
-//! * [`morph`] — the shared dilation/erosion engine.
+//! * [`morph`] — the shared dilation/erosion/inflate/deflate engine
+//!   (fixed 3x3 neighbourhood), and, via `apply_structured`, the arbitrary
+//!   structuring-element engine [`morpho`] uses.
 //! * One module per filter, each exposing `pub const DESC: FilterDesc` and
 //!   `pub(crate) fn create`, aggregated by
 //!   [`registry::ConvolveRegistry`].
@@ -33,25 +36,31 @@
 //!
 //! Framecrc-level confidence (interior pixels, against small generated
 //! inputs run through the reference binary directly): `convolution`,
-//! `sobel`, `prewitt`, `scharr`, `dilation`, `erosion`, `median`.
-//! Interior-verified with a documented border gap: `roberts`, `kirsch`
-//! (the border does not fit any boundary model tried, and is flagged
-//! unverified rather than guessed — see [`edge`]'s and
+//! `sobel`, `prewitt`, `scharr`, `dilation`, `erosion`, `median`,
+//! `inflate`, `deflate`. Interior-verified with a documented border gap:
+//! `roberts`, `kirsch` (the border does not fit any boundary model tried,
+//! and is flagged unverified rather than guessed — see [`edge`]'s and
 //! [`kirsch`]'s docs for the measurements, including a wrong-mask/
 //! wrong-divisor pair that cancelled into a false match on the first
-//! pass). See `docs/filter/vaco-filter-convolve.md` for the full
-//! accounting.
+//! pass). `morpho`'s `erode`/`dilate` core is measured directly against
+//! the reference (see [`morpho`]'s doc); `open`/`close`/`gradient`/
+//! `tophat`/`blackhat` are standard compositions of that measured core,
+//! verified via the anti-extensive/extensive mathematical-morphology
+//! invariants rather than probed individually. See
+//! `docs/filter/vaco-filter-convolve.md` for the full accounting.
 //!
 //! # Left for a follow-up (out of this brief's time budget)
 //!
-//! `morpho`, `inflate`, `deflate`, `edgedetect`, `blurdetect`, `convolve`,
-//! `deconvolve`, `corr`, `xcorrelate` — nine more filters
-//! `planning/16-filters.md` §4.2 counts in this crate. `convolve`/
-//! `deconvolve` need an FFT matched bit-exactly to the reference to be
-//! worth shipping at all; `morpho` takes a second video stream as its
-//! structuring element (needs `vaco-filter-framesync`, not yet a
-//! dependency here); the rest were not reached. None of them block the
-//! nine filters that did land.
+//! `edgedetect`, `blurdetect`, `convolve`, `deconvolve`, `corr`,
+//! `xcorrelate` — six more filters `planning/16-filters.md` §4.2 counts in
+//! this crate. `edgedetect`'s own hysteresis/edge-tracing stage was
+//! measured to behave in a way a plain Sobel-plus-double-threshold model
+//! does not reproduce (see the crate's report for the probe); `convolve`/
+//! `deconvolve`/`corr`/`xcorrelate` are frequency-domain, two-video-stream
+//! operations that want `vaco-tx` matched carefully to the reference's
+//! exact windowing and normalisation, and `blurdetect` is a
+//! wavelet-decomposition-based metric — none were reached in the time this
+//! pass had. None of them block the twelve filters that did land.
 
 #![forbid(unsafe_code)]
 #![allow(
@@ -64,16 +73,22 @@
 
 mod common;
 pub mod convolution;
+pub mod deflate;
 pub mod dilation;
 mod edge;
 pub mod erosion;
+pub mod inflate;
 pub mod kirsch;
 pub mod median;
 mod morph;
+pub mod morpho;
 pub mod prewitt;
 pub mod registry;
 pub mod roberts;
 pub mod scharr;
 pub mod sobel;
+
+#[cfg(test)]
+mod tests_graph;
 
 pub use registry::ConvolveRegistry;

@@ -122,7 +122,11 @@ impl Filter {
 }
 
 impl FrameFilter for Filter {
-    fn filter_frame(&mut self, ctx: &mut FilterContext<'_>, input: vaco_frame::Frame) -> Result<FrameOut> {
+    fn filter_frame(
+        &mut self,
+        ctx: &mut FilterContext<'_>,
+        input: vaco_frame::Frame,
+    ) -> Result<FrameOut> {
         let vaco_frame::FrameData::Video { format, .. } = input.data else {
             return Ok(FrameOut::One(input));
         };
@@ -182,7 +186,9 @@ mod tests {
     fn interior_matches_the_reference() {
         let opts = Opts::default();
         let filter = Filter::new(&opts);
-        let img: Vec<Vec<u8>> = (0..5).map(|_| (0..5).map(|x| (x as u8) * 10).collect()).collect();
+        let img: Vec<Vec<u8>> = (0..5)
+            .map(|_| (0..5).map(|x| (x as u8) * 10).collect())
+            .collect();
         let rows: Vec<&[u8]> = img.iter().map(Vec::as_slice).collect();
         let out = filter.apply_plane(&rows, 5, 5);
         assert_eq!(out[2][2], 80);

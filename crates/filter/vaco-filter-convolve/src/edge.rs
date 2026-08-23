@@ -90,7 +90,12 @@ pub(crate) struct TwoGradient {
 }
 
 impl TwoGradient {
-    pub(crate) fn new(gx: &str, gy: &str, rdiv: f64, opts: &Opts) -> std::result::Result<Self, String> {
+    pub(crate) fn new(
+        gx: &str,
+        gy: &str,
+        rdiv: f64,
+        opts: &Opts,
+    ) -> std::result::Result<Self, String> {
         Ok(Self {
             gx: Kernel::parse(gx, Mode::Square, rdiv, 0.0)?,
             gy: Kernel::parse(gy, Mode::Square, rdiv, 0.0)?,
@@ -199,7 +204,9 @@ mod tests {
     use super::*;
 
     fn ramp(w: usize, h: usize) -> Vec<Vec<u8>> {
-        (0..h).map(|_| (0..w).map(|x| (x as u8) * 10).collect()).collect()
+        (0..h)
+            .map(|_| (0..w).map(|x| (x as u8) * 10).collect())
+            .collect()
     }
 
     /// Pinned against the reference probe in this module's doc.

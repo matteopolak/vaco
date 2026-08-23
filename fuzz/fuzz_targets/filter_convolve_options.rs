@@ -7,12 +7,15 @@
 //! graph-string grammar's own escaping, not just each filter's
 //! `set_from_string`.
 //!
-//! This crate's option parsers include the one thing worth fuzzing beyond
-//! the usual `vaco-opts` integer/float/string paths: `convolution`'s
+//! This crate's option parsers include the things worth fuzzing beyond the
+//! usual `vaco-opts` integer/float/string paths: `convolution`'s
 //! whitespace-separated matrix parser (`Kernel::parse`, arbitrary length,
-//! `square`/`row`/`column` mode, and the `rdiv=0`-is-a-sentinel handling).
+//! `square`/`row`/`column` mode, and the `rdiv=0`-is-a-sentinel handling),
+//! and, since this crate grew a two-input filter, `morpho`'s `mode` and
+//! `structure` named-string options (this fuzz target still only exercises
+//! `create`'s option parsing — it never needs a second frame to succeed).
 //!
-//! Property: for any byte string, for any of the nine registered names,
+//! Property: for any byte string, for any of the twelve registered names,
 //! either a clean `Err` comes back at some stage or a working `Instance`,
 //! never a panic and never an unbounded allocation.
 //! fuzz-crate: vaco-filter-convolve
@@ -25,10 +28,13 @@ use vaco_filter_graph::registry::{FilterRegistry, Instantiate};
 
 const NAMES: &[&str] = &[
     "convolution",
+    "deflate",
     "dilation",
     "erosion",
+    "inflate",
     "kirsch",
     "median",
+    "morpho",
     "prewitt",
     "roberts",
     "scharr",
