@@ -510,3 +510,40 @@ This is also the one case where an agent should commit
 renaming your crate. `generated.rs` still stays out — the orchestrator sweeps
 it.
 
+### When you genuinely share a file: commit through a private index
+
+Everything above says to avoid sharing a file. Sometimes you cannot — a
+shared-kernel crate like `vaco-filter-vdsp` exists precisely so two callers
+can add to it, and two agents will occasionally need it in the same hour.
+
+The trap is subtle and it bit on 2026-08-23. `vaco-filter-deinterlace`
+committed cleanly and left its `comb_score` addition to `vaco-filter-vdsp`
+*out* of the commit, because another agent had `plane_sse` and
+`identical_count` in the same file. Correct instinct — and it left **HEAD
+unbuildable**, because the committed crate called a function that existed only
+in the working tree. Caution about the shared file produced a broken tree.
+
+The tool for this is a private index:
+
+```sh
+export GIT_INDEX_FILE=/tmp/my-idx
+git read-tree HEAD                              # start from HEAD, not the shared index
+blob=$(git hash-object -w /tmp/my-half-of-the-file.rs)
+git update-index --cacheinfo 100644,$blob,path/to/shared.rs
+git commit -F msg.txt
+unset GIT_INDEX_FILE
+git reset -q HEAD -- path/to/shared.rs          # settle the shared index against the new HEAD
+```
+
+Your half lands, the other agent's half stays in the working tree untouched,
+and the shared index is never written. The `git reset -q HEAD -- <path>` at the
+end is the one legitimate use of `git reset` in this tree: it unstages only,
+never touches the working tree, and without it the shared index still holds the
+*pre-commit* content for that path — so the next bare `git commit` by anyone
+would silently revert you.
+
+**Never leave HEAD unbuildable to avoid a misattribution.** A wrong commit
+message is a paperwork problem; a HEAD that does not compile blocks everyone.
+If you cannot split the file safely, say so and hand it to the orchestrator
+rather than committing half a change.
+
