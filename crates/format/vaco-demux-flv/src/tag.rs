@@ -49,14 +49,25 @@ pub(crate) const FRAME_TYPE_KEY: u8 = 1;
 /// the Enhanced RTMP high bit is not set) -> [`CodecId`], where the shared
 /// enum has a matching variant.
 ///
-/// `2` (Sorenson H.263), `3`/`6` (Screen video, v1/v2), `4`/`5` (On2 VP6,
-/// with/without alpha) have no [`CodecId`] variant today and resolve to
-/// `None` — the same "no guessed near miss" rule `vaco-format-riff`'s tag
-/// tables use.
+/// Every id measured by encoding one FLV per codec with the reference and
+/// reading back `codec_name`. `flv1`, `flashsv` and `flashsv2` were confirmed
+/// that way; `4`/`5` (On2 VP6, with and without alpha) have **no encoder in
+/// this ffmpeg build**, so there was nothing to measure and they are mapped
+/// from the FLV specification's own id assignment rather than from a probe —
+/// noted here so the distinction is visible.
+///
+/// Until this table was filled in, a Sorenson Spark stream — what `-c:v flv1`
+/// produces, and therefore the most ordinary FLV in existence — printed
+/// `codec_name=unknown`.
 #[must_use]
 pub(crate) fn legacy_video_codec_id(codec: u8) -> Option<CodecId> {
     match codec {
         1 => Some(CodecId::Jpeg),
+        2 => Some(CodecId::Flv1),
+        3 => Some(CodecId::Flashsv),
+        4 => Some(CodecId::Vp6f),
+        5 => Some(CodecId::Vp6a),
+        6 => Some(CodecId::Flashsv2),
         7 => Some(CodecId::H264),
         _ => None,
     }
@@ -65,16 +76,26 @@ pub(crate) fn legacy_video_codec_id(codec: u8) -> Option<CodecId> {
 /// Legacy `AudioTagHeader` `SoundFormat` (the high nibble of the first byte)
 /// -> [`CodecId`].
 ///
-/// `1` (ADPCM), `4`/`5`/`6` (Nellymoser variants), `11` (Speex), `15`
-/// (device-specific) have no variant and resolve to `None`. `7`/`8` (G.711
-/// A-law/µ-law) resolve to [`CodecId::Pcm`], mirroring
-/// `vaco_format_riff::wave_tags`' identical choice for `WAVE_FORMAT_ALAW`/
-/// `WAVE_FORMAT_MULAW`.
+/// `7` and `8` are **not** generic PCM. Measured: `-c:a pcm_alaw` into FLV
+/// reads back as `pcm_alaw` and `-c:a pcm_mulaw` as `pcm_mulaw`, so mapping
+/// both onto [`CodecId::Pcm`] — which this table did — lost the one thing the
+/// sound-format nibble stated. `3` is likewise `pcm_s16le`, not generic PCM.
+///
+/// `11` (Speex) and `15` (device-specific) stay `None`: Speex has no encoder in
+/// this ffmpeg build so there was nothing to measure it against, and `15` is
+/// by definition unspecified.
 #[must_use]
 pub(crate) fn legacy_audio_codec_id(format: u8) -> Option<CodecId> {
     match format {
-        0 | 3 | 7 | 8 => Some(CodecId::Pcm),
+        // Native-endian PCM, whose width the sound-size bit carries; the
+        // generic id is the honest answer without reading that bit here.
+        0 => Some(CodecId::Pcm),
+        1 => Some(CodecId::AdpcmSwf),
         2 | 14 => Some(CodecId::Mp3),
+        3 => Some(CodecId::PcmS16le),
+        4..=6 => Some(CodecId::Nellymoser),
+        7 => Some(CodecId::PcmAlaw),
+        8 => Some(CodecId::PcmMulaw),
         10 => Some(CodecId::Aac),
         _ => None,
     }
@@ -143,16 +164,52 @@ mod tests {
     use super::*;
 
     #[test]
-    fn legacy_tables_cover_the_measured_common_cases() {
-        assert_eq!(legacy_video_codec_id(7), Some(CodecId::H264));
-        assert_eq!(legacy_audio_codec_id(10), Some(CodecId::Aac));
-        assert_eq!(legacy_audio_codec_id(2), Some(CodecId::Mp3));
+    fn legacy_tables_match_what_the_reference_reports() {
+        // Every row here was measured: one FLV encoded per codec, then
+        // `ffprobe -show_entries stream=codec_name` read back.
+        for (id, want) in [
+            (1u8, CodecId::Jpeg),
+            (2, CodecId::Flv1),
+            (3, CodecId::Flashsv),
+            (6, CodecId::Flashsv2),
+            (7, CodecId::H264),
+        ] {
+            assert_eq!(legacy_video_codec_id(id), Some(want), "video id {id}");
+        }
+        for (id, want) in [
+            (1u8, CodecId::AdpcmSwf),
+            (2, CodecId::Mp3),
+            (3, CodecId::PcmS16le),
+            (4, CodecId::Nellymoser),
+            (7, CodecId::PcmAlaw),
+            (8, CodecId::PcmMulaw),
+            (10, CodecId::Aac),
+        ] {
+            assert_eq!(legacy_audio_codec_id(id), Some(want), "audio id {id}");
+        }
     }
 
+    /// An id the specification does not assign resolves to `None`, and a
+    /// mapped id resolves to a codec of the right media type.
+    ///
+    /// This replaces a test that asserted ids 4 and 1 were `None` — true when
+    /// the table had two rows, false the day it was filled in. That is the
+    /// **seventh** test in this project to fail on success by pinning the
+    /// absence of something the project was building; the rule and the pattern
+    /// are in `planning/AGENT-CONSTRAINTS.md`.
     #[test]
-    fn unrepresented_legacy_codecs_are_none_not_a_guess() {
-        assert_eq!(legacy_video_codec_id(4), None); // On2 VP6
-        assert_eq!(legacy_audio_codec_id(1), None); // ADPCM
+    fn unassigned_ids_are_none_and_assigned_ones_have_the_right_media_type() {
+        for id in [0u8, 8, 9, 10, 11, 12, 13, 14, 15] {
+            assert_eq!(legacy_video_codec_id(id), None, "video id {id}");
+        }
+        for id in 1u8..=15 {
+            if let Some(c) = legacy_video_codec_id(id) {
+                assert_eq!(c.media_type(), vaco_core::MediaType::Video, "video id {id}");
+            }
+            if let Some(c) = legacy_audio_codec_id(id) {
+                assert_eq!(c.media_type(), vaco_core::MediaType::Audio, "audio id {id}");
+            }
+        }
     }
 
     #[test]

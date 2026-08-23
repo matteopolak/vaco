@@ -204,6 +204,18 @@ pub enum CodecId {
     Scte35,
     TimedId3,
     Klv,
+    // The Flash repertoire. `vaco-demux-flv`'s legacy codec table mapped two of
+    // about ten ids, so a Sorenson Spark stream — what `-c:v flv1` produces and
+    // therefore the most ordinary FLV there is — printed `codec_name=unknown`.
+    // Names and long names probed from `ffmpeg -codecs` 8.1.
+    Flv1,
+    Flashsv,
+    Flashsv2,
+    Vp6,
+    Vp6a,
+    Vp6f,
+    Nellymoser,
+    AdpcmSwf,
 }
 
 /// One row of the codec identity table.
@@ -868,6 +880,56 @@ const CODECS: &[CodecEntry] = &[
         "klv",
         "SMPTE 336M Key-Length-Value (KLV) metadata",
         D,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::Flv1,
+        "flv1",
+        "FLV / Sorenson Spark / Sorenson H.263 (Flash Video)",
+        V,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::Flashsv,
+        "flashsv",
+        "Flash Screen Video v1",
+        V,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::Flashsv2,
+        "flashsv2",
+        "Flash Screen Video v2",
+        V,
+        CodecProperties::empty(),
+    ),
+    entry(CodecId::Vp6, "vp6", "On2 VP6", V, CodecProperties::empty()),
+    entry(
+        CodecId::Vp6a,
+        "vp6a",
+        "On2 VP6 (Flash version, with alpha channel)",
+        V,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::Vp6f,
+        "vp6f",
+        "On2 VP6 (Flash version)",
+        V,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::Nellymoser,
+        "nellymoser",
+        "Nellymoser Asao",
+        A,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::AdpcmSwf,
+        "adpcm_swf",
+        "ADPCM Shockwave Flash",
+        A,
         CodecProperties::empty(),
     ),
     entry(

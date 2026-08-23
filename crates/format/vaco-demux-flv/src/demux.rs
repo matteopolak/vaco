@@ -62,6 +62,13 @@ pub const FLAGS: FormatFlags = FormatFlags::GENERIC_INDEX.union(FormatFlags::NOB
 /// FLV's one and only time base: milliseconds. Every tag's timestamp is
 /// stated directly in it, so streams do not carry a per-stream time base the
 /// way AVI's `dwScale/dwRate` or MP4's media timescale do.
+/// How many tags [`FlvDemuxer::discover`] will read looking for the streams the
+/// header promised.
+///
+/// Generous, because an FLV may open with a run of script tags before any
+/// media, and cheap, because every tag read is queued rather than thrown away.
+const DISCOVERY_TAG_LIMIT: usize = 256;
+
 const MS_BASE: Rational = Rational::new(1, 1_000);
 
 /// Content probe: the `FLV` signature plus the version byte.
@@ -170,7 +177,12 @@ impl FlvDemuxer {
         // assumed away.
         io.seek(u64::from(data_offset))?;
 
-        Ok(Self {
+        // The header's flags byte declares which stream kinds the file holds.
+        // Measured against ffmpeg 8.1: video-only writes `0x01`, audio-only
+        // `0x04`, both `0x05` — so bit 0 is video and bit 2 is audio.
+        let declared = sig.get(4).copied().unwrap_or(0);
+
+        let mut this = Self {
             io,
             streams: Vec::new(),
             video_index: None,
@@ -182,7 +194,55 @@ impl FlvDemuxer {
             budget: Budget::new(limits),
             duration: None,
             eof: false,
-        })
+        };
+        this.discover(declared)?;
+        Ok(this)
+    }
+
+    /// Read forward until every stream the header declares has appeared.
+    ///
+    /// **Without this the demuxer reported zero streams for every FLV file.**
+    /// Streams are created lazily by the first tag that needs one, which is
+    /// right — FLV declares nothing about a stream until its first tag — but
+    /// `Demuxer::streams()` is asked before any packet is read, so it answered
+    /// with an empty list and `ffprobe` printed `nb_streams=0` on files the
+    /// reference reads perfectly. Found by the differential harness; the
+    /// crate's own tests all read packets first and so never saw it.
+    ///
+    /// Packets read here are queued, not discarded: `read_one` drains the queue
+    /// before touching the source, so discovery costs nothing beyond being
+    /// early.
+    ///
+    /// Bounded three ways, because the header is untrusted input: by the kinds
+    /// it declares (a file claiming neither reads no tags at all), by a tag
+    /// count, and by `Error::Eof`. A header that claims audio a file does not
+    /// contain costs [`DISCOVERY_TAG_LIMIT`] tags and then stops.
+    fn discover(&mut self, declared: u8) -> Result<()> {
+        const VIDEO: u8 = 0x01;
+        const AUDIO: u8 = 0x04;
+        let wants_video = declared & VIDEO != 0;
+        let wants_audio = declared & AUDIO != 0;
+
+        for _ in 0..DISCOVERY_TAG_LIMIT {
+            let have_video = !wants_video || self.video_index.is_some();
+            let have_audio = !wants_audio || self.audio_index.is_some();
+            if have_video && have_audio {
+                break;
+            }
+            if self.eof {
+                break;
+            }
+            match self.read_tag() {
+                Ok(()) => {}
+                // A truncated or damaged tail is not an open failure: whatever
+                // streams were found before it are still real, and the same
+                // error will surface again from `read_packet` where a caller
+                // can act on it.
+                Err(Error::Eof) => break,
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
     }
 
     fn ensure_video_stream(&mut self, codec_id: Option<CodecId>) -> usize {
