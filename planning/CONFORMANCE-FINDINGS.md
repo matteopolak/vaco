@@ -862,6 +862,53 @@ ffprobe -v quiet -of default -show_entries stream=profile f.flac   # profile=unk
 The heading also under-stated the scope: the same one-line fault would have
 affected every codec with no profile, not only FLAC and DV.
 
+## 26. `extradata_size` is absent wherever the reference synthesises extradata from the bitstream
+
+Measured on a reference-built AVI, where everything else about the stream
+already agrees:
+
+```sh
+$ ffmpeg -f lavfi -i testsrc=size=64x64:rate=25:duration=1 \
+         -pix_fmt yuv420p -c:v libx264 a.avi
+$ ffprobe    -v quiet -of csv=p=0 -show_entries stream=codec_name,profile,pix_fmt,extradata_size a.avi
+h264,High,yuv420p,37
+$ vaco-probe -v quiet -of csv=p=0 -show_entries stream=codec_name,profile,pix_fmt,extradata_size a.avi
+h264,High,yuv420p
+```
+
+`profile` and `pix_fmt` are right, so `vaco`'s H.264 parser *is* reading the
+in-band SPS. What it does not do is keep the SPS and PPS as `extradata`. The
+reference's 37 bytes are not in the file: the `strf` chunk is exactly 40
+bytes with `biSize = 40` and nothing after it, checked directly. They are
+produced by `avformat_find_stream_info` running the `extract_extradata`
+bitstream filter and storing the result on the stream.
+
+So this is not a missing table entry — it is a missing stage. It is the same
+`vaco-bsf-*` shaped hole that M6's bitstream-filter stage already names
+(reachable but inert), approached from the read side instead of the write
+side, and it should be fixed once for both rather than special-cased per
+demuxer.
+
+### The ASF half of findings 21 and 22, measured
+
+Same input, muxed to ASF instead:
+
+```sh
+$ ffprobe    -v quiet -of csv=p=0 \
+    -show_entries stream=codec_name,profile,level,pix_fmt,codec_tag_string a.asf
+h264,High,H264,yuv420p,10
+$ vaco-probe -v quiet -of csv=p=0 … a.asf
+h264,unknown,H264,unknown,-99
+```
+
+ASF is *worse* than AVI, not the same: `extradata_size` is 38 on both sides,
+so the container's own extradata does reach `vaco` — and yet `profile`,
+`level` and `pix_fmt` are all unset, which is exactly what AVI gets right
+from the in-band SPS. Whatever the H.264 parser is being fed on the ASF path,
+it is not reaching a sequence parameter set. That is a `vaco-demux-asf`
+payload-assembly question and it is the last open piece of findings 21 and
+22.
+
 ## Harness changes, summarised
 
 Everything below is a change to `crates/tool/vaco-conformance/`,
