@@ -133,14 +133,32 @@ after this one needs it):
 - `apulsator`: `width != 1` (probed and found to reshape the curve in a way
   not reproduced exactly) and `timing=bpm`/`ms` (converted to `hz` as
   `bpm/60` and `1000/ms`, not independently verified).
-- `aexciter`, `deesser`, `virtualbass`: each needs a band-splitting filter,
-  and this crate has no biquad design of its own — `vaco-filter-audio-eq`
-  owns that and keeps it crate-private (`mod common`/`mod engine`, not `pub
-  mod`), so it cannot be reused across crates without that crate's owner
-  exporting it. All three use a simple one-pole low/high-pass instead (the
-  same `OnePole` shape `crossfeed` already used in this crate before this
-  work package). Not claimed to match the reference's own filter shape or
-  detector.
+- `aexciter`, `deesser`, `virtualbass`: each needs a band-splitting filter.
+  All three use a simple one-pole low/high-pass (the same `OnePole` shape
+  `crossfeed` already used in this crate before this work package). Not
+  claimed to match the reference's own filter shape or detector — and, as
+  of the `vaco-filter-adsp::biquad` consolidation, not for lack of trying a
+  better one: with the biquad crate reachable (this crate already depends
+  on it for `wave`/`wsola`), a real two-pole Butterworth was substituted
+  for the one-pole split in each of the three and measured against
+  `ffmpeg` on the same probe inputs the crate already uses elsewhere. It
+  did not help:
+
+  | Filter | Probe | One-pole max error | Biquad max error |
+  |---|---|---:|---:|
+  | `aexciter` (defaults) | crate's 8-sample sequence | 0.73 | 1.04 |
+  | `deesser=i=0.5:m=0.5:f=0.5` | crate's 8-sample sequence | 0.657 | 0.657 (< 1e-15 different) |
+  | `virtualbass=cutoff=250:strength=3` | 4000-sample 80 Hz sine | 0.57 | 0.95 |
+
+  `aexciter` and `virtualbass` got measurably *worse* with a real biquad —
+  the reference's actual internal shape is evidently not "this same
+  structure at a higher filter order". `deesser` was unaffected either way,
+  because at this probe's amplitude the short-term envelope never crosses
+  the fixed `0.15` excess threshold, so `reduction` stays `0` and
+  `low + ess` reconstructs `dry` regardless of what produced `low` — the
+  gap to the reference there is in the undocumented detector/gain-reduction
+  logic, not the filter. All three keep the one-pole design; see each
+  module's own doc for the measurement in context.
 - `dialoguenhance`: measured to **not** be an identity even at every
   default option (`original=1, enhance=1, voice=2` on a smoothly-varying
   stereo signal reads back close to silence for the first several samples
@@ -183,15 +201,28 @@ after this one needs it):
   `aecho`, `compensationdelay`, `haas`, `stereowiden`). A `VecDeque` that
   merely caps its own length at `delay_samples` returns the wrong
   (too-early) value for every sample before it first fills.
+- A delay-in-milliseconds option **must** be clamped before it sizes a
+  `VecDeque`/`Vec`, or an absurd option value is an absurd, attacker-sized
+  allocation reached before `FramePool`'s own limits get a say — the same
+  shape a fuzz target already found in an unrelated crate's frame-size
+  options. `haas`'s `left_delay`/`right_delay` (`0..40`) and
+  `stereowiden`'s `delay` (`1..100`) clamp to the reference's own declared
+  range (`ffmpeg -h filter=<name>`); `adelay`'s `delays` has no such range
+  in the reference at all (it is a bare `<string>`), so its
+  `MAX_DELAY_MS` constant is a defensive engineering cap, not a
+  conformance clamp — document the difference if you add another one.
+  `compensationdelay`'s `mm`/`cm`/`m` were the original worked example.
 - A new LFO-driven filter should reach for
   `vaco_filter_adsp::wave::{Lfo, WaveShape}` rather than re-deriving
   sine/triangle/square/sawtooth evaluation; a new modulated-delay filter
   should reach for `common::InterpDelay` rather than writing a second
   linear-interpolation delay line.
-- If a filter genuinely needs proper biquad design (not a one-pole
-  approximation), that is a `vaco-filter-audio-eq` export gap, not
-  something to duplicate here — flag it rather than writing a second biquad
-  implementation.
+- A filter that needs proper biquad design should reach for
+  `vaco_filter_adsp::biquad` — reachable from this crate already. Do not
+  assume a real biquad automatically improves an existing one-pole
+  approximation without measuring, though: `aexciter`, `deesser` and
+  `virtualbass` all tried it and it did not help (see their own module
+  docs and the table above).
 
 ## Configuration
 

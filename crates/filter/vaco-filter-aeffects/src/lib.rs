@@ -66,8 +66,12 @@
 //! has no discrete-impulse signature to probe or needs a shared kernel this
 //! project does not have yet): `chorus`, `flanger`, `aphaser`, `vibrato`'s
 //! exact modulation shape; `apulsator`'s `width != 1` and `bpm`/`ms`
-//! timing; `aexciter`, `deesser`, `virtualbass` (no cross-crate biquad
-//! access — see their own module docs); `dialoguenhance` (measured to
+//! timing; `aexciter`, `deesser`, `virtualbass` one-pole band splits —
+//! *tried* a real biquad from `vaco-filter-adsp` in all three once it
+//! became reachable, measured it against the reference, and it made the
+//! match worse in two cases and no measurable difference in the third
+//! (see their own module docs for the numbers), so the one-pole design is
+//! kept in all three; `dialoguenhance` (measured to
 //! *not* be an identity even at its own defaults — a real voice-activity
 //! gate, not a mix knob — and implemented as a plain mid/side rebalance
 //! instead); `atempo` (WSOLA's window/search shape, not its

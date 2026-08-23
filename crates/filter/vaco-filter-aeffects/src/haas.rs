@@ -234,15 +234,24 @@ pub(crate) fn create(req: &Instantiate<'_>) -> Instance {
         .named("middle_source")
         .map_or(MiddleSource::Mid, |s| MiddleSource::parse(&s));
     let middle_phase = common::bool_opt(req, &["middle_phase"], false);
+    // `ffmpeg -h filter=haas` (2026-08-23): `left_delay`/`right_delay` are
+    // `0..40` ms and `left_balance`/`right_balance` are `-1..1`. Clamping
+    // matches the reference's own option range *and* keeps
+    // `Branch::configure`'s `delay_samples` — sized directly from
+    // `delay_ms * sample_rate` with no cap of its own — from turning an
+    // absurd `delay_ms` into an absurd `Vec`-backed `VecDeque` allocation
+    // (the same shape `cellauto=size=911111x91111` hit elsewhere in this
+    // project's fuzzing: an attacker-sized allocation reached before
+    // `FramePool`'s own limits could see it).
     let left = Branch::new(
-        common::f64_opt(req, &["left_delay"], 2.05),
-        common::f64_opt(req, &["left_balance"], -1.0),
+        common::f64_opt(req, &["left_delay"], 2.05).clamp(0.0, 40.0),
+        common::f64_opt(req, &["left_balance"], -1.0).clamp(-1.0, 1.0),
         common::f64_opt(req, &["left_gain"], 1.0),
         common::bool_opt(req, &["left_phase"], false),
     );
     let right = Branch::new(
-        common::f64_opt(req, &["right_delay"], 2.12),
-        common::f64_opt(req, &["right_balance"], 1.0),
+        common::f64_opt(req, &["right_delay"], 2.12).clamp(0.0, 40.0),
+        common::f64_opt(req, &["right_balance"], 1.0).clamp(-1.0, 1.0),
         common::f64_opt(req, &["right_gain"], 1.0),
         common::bool_opt(req, &["right_phase"], true),
     );

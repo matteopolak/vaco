@@ -160,10 +160,17 @@ impl FrameFilter for StereoWiden {
 }
 
 pub(crate) fn create(req: &Instantiate<'_>) -> Instance {
-    let delay_ms = common::f64_opt(req, &["delay"], 20.0);
-    let feedback = common::f64_opt(req, &["feedback"], 0.3);
-    let crossfeed = common::f64_opt(req, &["crossfeed"], 0.3);
-    let drymix = common::f64_opt(req, &["drymix"], 0.8);
+    // `ffmpeg -h filter=stereowiden` (2026-08-23): `delay` is `1..100` ms,
+    // `feedback` `0..0.9`, `crossfeed` `0..0.8`, `drymix` `0..1`. Clamping
+    // `delay` matches the reference's range *and* stops `configure`'s
+    // `delay_samples = delay_ms * sample_rate / 1000` — uncapped otherwise —
+    // from sizing `hist_l`/`hist_r` from an attacker-controlled option
+    // before `FramePool`'s own limits get a say (the `cellauto`-shaped
+    // allocation bug this project's fuzzing already found once).
+    let delay_ms = common::f64_opt(req, &["delay"], 20.0).clamp(1.0, 100.0);
+    let feedback = common::f64_opt(req, &["feedback"], 0.3).clamp(0.0, 0.9);
+    let crossfeed = common::f64_opt(req, &["crossfeed"], 0.3).clamp(0.0, 0.8);
+    let drymix = common::f64_opt(req, &["drymix"], 0.8).clamp(0.0, 1.0);
     let filter = StereoWiden {
         delay_ms,
         feedback,

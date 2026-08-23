@@ -10,16 +10,27 @@
 //! # What is structural, not measured
 //!
 //! A harmonic exciter splits off a high band, generates new harmonics from
-//! it with a saturator, and mixes them back in — this crate has no biquad
-//! design of its own to build a proper band-splitting filter from
-//! (`vaco-filter-audio-eq` owns that and does not export it across
-//! crates), so this implementation isolates the above-`freq` band with a
-//! one-pole high-pass, drives it through a `tanh` saturator (`drive`),
-//! low-passes the result at `ceil` to keep the added harmonics from
-//! extending past the requested ceiling, mixes in `blend` times the raw
-//! high band (which can be negative, per the option's own range), and adds
-//! the result scaled by `amount`. Not claimed to be sample-exact; see
-//! `docs/filter/vaco-filter-aeffects.md`.
+//! it with a saturator, and mixes them back in — this implementation
+//! isolates the above-`freq` band with a one-pole high-pass, drives it
+//! through a `tanh` saturator (`drive`), low-passes the result at `ceil` to
+//! keep the added harmonics from extending past the requested ceiling,
+//! mixes in `blend` times the raw high band (which can be negative, per the
+//! option's own range), and adds the result scaled by `amount`. Not claimed
+//! to be sample-exact; see `docs/filter/vaco-filter-aeffects.md`.
+//!
+//! **The one-pole band split was measured against a real biquad, not just
+//! assumed adequate.** This crate now depends on `vaco-filter-adsp`
+//! (already, for `wave`/`wsola`), so a real two-pole Butterworth split is
+//! one call away — the "no cross-crate biquad access" reason this design
+//! was originally structural no longer holds. Substituting
+//! `vaco_filter_adsp::biquad::{highpass, lowpass}` for both one-poles here,
+//! fed the crate's own eight-sample probe sequence through
+//! `ffmpeg -af aexciter` at default options, made the match *worse*, not
+//! better: max sample error against the reference rose from `0.73` (current
+//! one-pole) to `1.04` (biquad substitution) — the reference's actual
+//! internal shape is evidently not "this same structure with a
+//! higher-order filter". The one-pole design is kept; see
+//! `docs/filter/vaco-filter-aeffects.md` for the measurement.
 //!
 //! # What is exact, by construction
 //!

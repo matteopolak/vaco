@@ -17,18 +17,32 @@
 //!
 //! The sibilance *detection* (splitting off the frequency band `f` selects,
 //! and how `m` shapes the gain-reduction curve above it) is not
-//! reverse-engineered: this crate has no biquad design of its own to build
-//! a proper band-splitting filter from (`vaco-filter-audio-eq` owns that
-//! and does not export it across crates), so this implementation uses a
-//! simple one-pole high-pass (the same building block `crossfeed` already
-//! uses in this crate for its low-pass path) to isolate a "sibilant" band
-//! above a cutoff derived from `f`, and reduces that band's contribution by
-//! up to `m` in proportion to how far its short-term envelope exceeds a
-//! fixed threshold, scaled overall by `i`. Not claimed to match the
-//! reference's own detector or filter shape. `s=i` and `s=e` are
-//! implemented (return the dry input, and the isolated sibilant band
-//! respectively) and are exact by construction of this module's own split,
-//! not measured against the reference's ess-only output.
+//! reverse-engineered: this implementation uses a simple one-pole high-pass
+//! (the same building block `crossfeed` already uses in this crate for its
+//! low-pass path) to isolate a "sibilant" band above a cutoff derived from
+//! `f`, and reduces that band's contribution by up to `m` in proportion to
+//! how far its short-term envelope exceeds a fixed threshold, scaled
+//! overall by `i`. Not claimed to match the reference's own detector or
+//! filter shape. `s=i` and `s=e` are implemented (return the dry input, and
+//! the isolated sibilant band respectively) and are exact by construction
+//! of this module's own split, not measured against the reference's
+//! ess-only output.
+//!
+//! **Measured, not assumed: a real biquad split does not help here either.**
+//! `vaco_filter_adsp::biquad::highpass` is reachable from this crate now
+//! (`vaco-filter-aeffects` already depends on `vaco-filter-adsp`); swapping
+//! it in for the one-pole and re-running the crate's eight-sample probe
+//! through `ffmpeg -af deesser=i=0.5:m=0.5:f=0.5` changed the result by
+//! less than `1e-15` — floating-point noise, not a real difference. The
+//! reason is structural, not a filter-order problem: at this probe's
+//! amplitude the short-term envelope never crosses the fixed `0.15`
+//! excess threshold, so `reduction` stays `0` and `low + ess` (which
+//! reconstructs `dry` exactly regardless of what filter produced `low`,
+//! per [`tests::low_plus_ess_reconstructs_dry`]) dominates either way. The
+//! ~0.66 gap to the reference's actual output at these settings is in the
+//! detector/gain-reduction logic this module openly documents as
+//! unreverse-engineered, not in the one-pole split — so there is nothing
+//! for a biquad to fix, and the one-pole design is kept.
 use vaco_core::{MediaType, Result};
 use vaco_filter_core::adapt::{FrameFilter, FrameOut, Simple};
 use vaco_filter_core::negotiate::NodeFormats;

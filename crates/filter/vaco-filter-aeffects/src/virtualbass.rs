@@ -10,14 +10,24 @@
 //! are usually inaudible on small speakers, so instead of reproducing them
 //! directly, the missing fundamental is replaced with its own harmonics
 //! (which *are* reproducible) and the ear's harmonic-series perception
-//! fills in the missing fundamental. This crate has no biquad design of
-//! its own (`vaco-filter-audio-eq` owns that and does not export it across
-//! crates), so this implementation isolates the sub-`cutoff` band with a
-//! simple one-pole low-pass, generates harmonics with a `tanh` saturator,
-//! removes the residual fundamental from the harmonic signal with a second
-//! one-pole low-pass subtraction (leaving just the new harmonics), and adds
-//! that back scaled by `strength`. Not claimed to be sample-exact; see
-//! `docs/filter/vaco-filter-aeffects.md`.
+//! fills in the missing fundamental. This implementation isolates the
+//! sub-`cutoff` band with a simple one-pole low-pass, generates harmonics
+//! with a `tanh` saturator, removes the residual fundamental from the
+//! harmonic signal with a second one-pole low-pass subtraction (leaving
+//! just the new harmonics), and adds that back scaled by `strength`. Not
+//! claimed to be sample-exact; see `docs/filter/vaco-filter-aeffects.md`.
+//!
+//! **A real biquad was tried and measured, not assumed better.**
+//! `vaco_filter_adsp::biquad::lowpass` is reachable from this crate
+//! already (`vaco-filter-aeffects` depends on `vaco-filter-adsp` for
+//! `wave`/`wsola`); substituting it for both one-poles here and feeding a
+//! 4000-sample, 80 Hz sine (well inside the sub-`cutoff` band, unlike the
+//! crate's usual eight-sample probe which is too short for a 250 Hz filter
+//! to settle) through `ffmpeg -af virtualbass=cutoff=250:strength=3` made
+//! the match against the reference *worse*: max sample error rose from
+//! `0.57` (current one-pole) to `0.95` (biquad substitution). The
+//! reference's real harmonic-generation algorithm is evidently not "this
+//! same shape with a higher-order filter", so the one-pole design is kept.
 //!
 //! `strength`'s documented range (`0.5..3`) has no zero, so there is no
 //! identity case to measure or reproduce — [`tests::larger_strength_adds_more_energy`]

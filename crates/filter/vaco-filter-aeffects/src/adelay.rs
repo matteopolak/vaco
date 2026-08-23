@@ -38,6 +38,19 @@ pub const DESC: FilterDesc = FilterDesc {
     flags: FilterFlags::TIMELINE_GENERIC,
 };
 
+/// A defensive cap on one channel's delay, in milliseconds — not a
+/// conformance clamp, since unlike `haas`/`stereowiden` the reference
+/// declares no numeric range for `delays` at all (`ffmpeg -h filter=adelay`
+/// prints it as a bare `<string>`). Every millisecond becomes one
+/// `VecDeque<f64>` entry (`delay_ms * sample_rate / 1000`), so an
+/// unbounded value is an unbounded, attacker-sized allocation reached
+/// before `FramePool`'s own limits can see it — the same shape a fuzz
+/// target found in `cellauto`'s frame-size options elsewhere in this
+/// project. Ten minutes per channel is far past any real A/V-sync use of
+/// this filter while still ruling out a multi-gigabyte delay line from one
+/// absurd option string.
+const MAX_DELAY_MS: f64 = 600_000.0;
+
 /// Parse a `|`-separated list of millisecond delays into a per-channel
 /// sample-count table, expanded to `channels` entries: unlisted channels get
 /// `0` unless `all`, in which case they repeat the last listed value (or `0`
@@ -46,7 +59,11 @@ fn resolve_delays(spec: &str, channels: usize, sample_rate: f64, all: bool) -> V
     let listed: Vec<usize> = spec
         .split('|')
         .filter_map(|s| s.trim().parse::<f64>().ok())
-        .map(|ms| ((ms * sample_rate) / 1000.0).floor().max(0.0) as usize)
+        .map(|ms| {
+            ((ms.clamp(0.0, MAX_DELAY_MS) * sample_rate) / 1000.0)
+                .floor()
+                .max(0.0) as usize
+        })
         .collect();
 
     let mut out = Vec::new();
@@ -177,6 +194,20 @@ mod tests {
             let got = resolve_delays(spec, channels, 1000.0, all);
             assert_eq!(got, want, "spec={spec} all={all}");
         }
+    }
+
+    /// An absurd delay must not turn into an absurd allocation:
+    /// `resolve_delays` clamps to [`MAX_DELAY_MS`] before converting to a
+    /// sample count, so even a delay spec many orders of magnitude past any
+    /// real use resolves to a bounded `Vec<usize>` capacity, not an OOM.
+    #[test]
+    fn an_absurd_delay_is_clamped_not_allocated_verbatim() {
+        let got = resolve_delays("1e15", 1, 192_000.0, false);
+        let max_samples = (MAX_DELAY_MS * 192_000.0 / 1000.0) as usize;
+        assert_eq!(got, vec![max_samples]);
+        // Comfortably below "attacker asked for petabytes": a bound in the
+        // hundreds of millions of samples, not 10^17.
+        assert!(max_samples < 200_000_000, "got {max_samples}");
     }
 
     /// `adelay` with every channel's delay resolving to zero must be an
