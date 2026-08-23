@@ -102,6 +102,21 @@ input completed it. `MAX_PES_BYTES` (6 MiB) bounds the accumulation, and every
 appended byte is charged to the `Budget` besides, so a `Limits::strict` caller
 gets a smaller ceiling still.
 
+Once a PES completes, `flush_pes` turns it into one or more `Packet`s. For
+`CodecId::Aac` it is *one or more*: `split_adts` walks the payload as ADTS
+frames (`parse_adts_header`, ISO/IEC 13818-7 Annex B) and one `Packet` comes
+out per frame, `pos` set only on the one that opened the PES. Every other
+codec — including LATM AAC, which this does not parse as ADTS and correctly
+declines to split — gets the one-packet-per-PES behaviour this always had.
+See *Audio re-framing* below for why this lives here rather than behind
+`ParserProvider`, and for the one ordering divergence it did not close.
+
+Every packet this function produces also carries a `PacketSideData::
+MpegtsStreamId` — the PES `stream_id` byte itself (`0xe0` for the first video
+stream, `0xc0` for the first audio stream, ITU-T H.222.0 Table 2-22) —
+matching the reference's own `MPEGTS Stream ID` side-data block on every
+packet, measured against `ffprobe 8.1`.
+
 ### The clock
 
 `time_base` is fixed at 1/90000 by the format. Wrap state is a
@@ -345,8 +360,8 @@ and one AAC audio stream each.
 | video packet count, keyframe count, `pos` | **exact** |
 | audio `start_pts` | **exact** |
 | program `program_num`, `pmt_pid`, `pcr_pid`, service tags | **exact**, and in the right section since the `Program` fields landed |
-| audio `duration_ts` | **short by one audio frame** (23.211 ms, every file) |
-| audio packet count | **10 against 131** — the reference re-frames; see below |
+| audio `duration_ts` | **short by one audio frame** (23.211 ms, every file) — unaffected by the re-framing fix below; see `end_pts`'s own note |
+| audio packet count | **exact — 131 against 131, fixed 2026-08-23**; see below |
 
 `tests/reference.rs` is the harness that produced these; it is `#[ignore]`d and
 takes a file through `VACO_TS_FIXTURE`, so the numbers can be re-measured
@@ -380,25 +395,57 @@ drifted from its own doc comment, and only a short fixture showed it — a long
 one has a GOP jump small enough to coincide with the frame duration often
 enough to hide the difference.
 
-### The largest divergence: the reference re-frames audio and we do not
+### Audio re-framing — fixed 2026-08-23 (issue #632)
 
 On the three-second fixture the reference emits **131 audio packets** from
 **10 PES packets**, each 2089 ticks long with `pos` set only on the first of
 each group. It is splitting each PES payload into AAC frames.
 
-That splitting happens *inside* the reference's demux layer, driven by a
-per-stream "needs parsing" flag that MPEG-TS sets for essentially every stream.
-Our architecture has no equivalent: `ParserProvider` supplies parsers, and
-`Discovery::refine` drives them to fill in `CodecParameters`, but nothing
-re-frames a packet. Without it, `-show_packets` on a TS file cannot match for
-audio, and the audio duration is short by the last frame for the same reason.
+The earlier text here concluded this needed a `vaco-format-core`/
+`ParserProvider` change and would put codec knowledge in a container crate,
+violating D14.1. That conclusion does not survive contact with what an ADTS
+frame boundary actually is: `aac_frame_length` is a fixed-position 13-bit
+field in a 7- or 9-byte header (ISO/IEC 13818-7 Annex B), not something that
+needs a bitstream *parser* to find — the same sense in which Matroska's own
+lacing already splits one `Block` into several packets inside that demuxer,
+with no codec crate involved. `flush_pes` now parses ADTS headers directly
+(`parse_adts_header`/`split_adts`) and emits one `Packet` per frame whenever
+`CodecId::Aac` is the stream's codec; every other codec — including
+`CodecId::AacLatm`, which is not ADTS-framed and does not parse as one —
+keeps the original one-packet-per-PES behaviour untouched. `pos` is set only
+on the frame that opens the PES, `None` on every frame synthesised from it,
+matching the reference exactly. Verified on the doc's own three-second
+fixture: 131 audio packets against 131, 206 total against 206.
+
+Per-frame timestamps accumulate from the PES's own header PTS using
+`round(samples_so_far * 90000 / sample_rate)`, which matches the reference
+for the overwhelming majority of frames in a PES and is measured to be within
+**one tick (≤ 11 µs) of it** on a handful of others — the reference's own
+carry/rounding rule was not fully root-caused within a black-box budget (D7
+forbids reading its source) and is recorded here rather than hidden.
 
 Video is unaffected — one video PES packet is one access unit — which is why
 every video number above is exact.
 
-**This is a `vaco-format-core` gap, reported and not worked around.** Doing it
-here would put codec knowledge in a container crate, which D14.1 exists to
-prevent.
+**A related divergence remains, characterised but not fixed: MPEG-TS packet
+ordering across streams still disagrees with the reference on files that mix
+audio and video, one packet at a time, every time a video access unit's own
+PES (`PES_packet_length == 0`) sits between two runs of the other stream's
+packets.** Concretely, on a real `av.ts` (25 fps H.264 + 44.1 kHz AAC): TS
+packet trace confirms this crate's `flush_before` fires exactly when the
+*next* same-PID `payload_unit_start` arrives, which is the documented and
+spec-correct trigger — and does so identically to the reference for the two
+video packets immediately before an audio block starts. But the reference
+defers releasing the *first* of those two video packets until **after** the
+entire following audio PES has been read and returned, while this crate
+releases it as soon as its own trigger condition is met, one packet early.
+The order re-synchronises a few packets later and does not compound — it is a
+bounded, repeating one-packet swap, not a growing divergence — but it is real:
+on a 1 s `av.ts`, 22/70 packets land in a different position than the
+reference because of it, though every packet's own field values are correct
+once matched to its true reference counterpart. Reproduction: mux 25 fps
+H.264 + 44.1 kHz AAC to `-f mpegts`, compare `-show_packets` position-by-
+position; the swap recurs at every audio-PES boundary in the file.
 
 ---
 
@@ -407,7 +454,11 @@ prevent.
 Interfaces are frozen (plan 19 §6), so these are **reported, not changed**,
 in descending order of cost.
 
-1. **There is no packet-reframing layer.** The largest gap; see above.
+1. **Packet ordering across streams still disagrees with the reference by one
+   packet at a time, at every audio/video interleave boundary.** The
+   remaining piece of the former "no packet-reframing layer" gap — AAC
+   re-framing itself is fixed; see *Audio re-framing* above for the exact
+   reproduction and what is and is not understood about it.
 2. **`Discovery` snapshots the stream list at construction.** `Discovery::new`
    does `inner.streams().to_vec()` and never re-reads, so a stream the demuxer
    discovers *during* the pass never appears. That is the progressive-discovery
@@ -466,8 +517,10 @@ in descending order of cost.
   those streams are reported with the right media type, PID and language but
   `codec_id = None` and a `ts_codec` metadata tag.
 * **`vaco-codec-core`: `AudioParameters` has no `frame_size`.** With it, the
-  audio duration divergence above could be closed through `ParserProvider`
-  without the container learning anything about AAC.
+  audio `duration_ts` short-by-one-frame divergence noted in the fidelity
+  table above (unaffected by the ADTS re-framing fix, which is a packet-count
+  and per-packet-timing fix, not a stream-duration one) could be closed
+  through `ParserProvider` without the container learning anything about AAC.
 
 ---
 

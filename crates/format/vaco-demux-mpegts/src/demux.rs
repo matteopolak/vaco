@@ -6,8 +6,8 @@
 
 use std::collections::VecDeque;
 
-use vaco_codec_core::{AudioParameters, CodecParameters, VideoParameters};
-use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
+use vaco_codec_core::{AudioParameters, CodecId, CodecParameters, VideoParameters};
+use vaco_core::{Duration, Error, MediaType, Rational, Result, Rounding, Timestamp, rescale_rnd};
 use vaco_format_core::flags::FormatFlags;
 use vaco_format_core::options::FormatOptions;
 use vaco_format_core::seek::{
@@ -17,7 +17,7 @@ use vaco_format_core::time::WrapState;
 use vaco_format_core::{Demuxer, Disposition, ParserProvider, Program, Stream};
 use vaco_io::{IoContext, IoOptions, MediaSource, Seekability};
 use vaco_limits::{Budget, Limits};
-use vaco_packet::{Packet, PacketFlags};
+use vaco_packet::{Packet, PacketFlags, PacketSideData};
 
 use vaco_format_mpegts_tables::descriptor::{
     Descriptor, TAG_ISO639_LANGUAGE, TAG_SUBTITLING, TAG_TELETEXT, TAG_VBI_TELETEXT,
@@ -797,7 +797,8 @@ impl MpegTsDemuxer {
         Ok(())
     }
 
-    /// Turn the accumulated PES packet into a [`Packet`] and queue it.
+    /// Turn the accumulated PES packet into a [`Packet`] and queue it, split
+    /// into one packet per AAC/ADTS frame where that framing applies.
     fn flush_pes(&mut self, slot: usize) -> Result<()> {
         let Some(es) = self.es.get_mut(slot) else {
             return Ok(());
@@ -871,15 +872,12 @@ impl MpegTsDemuxer {
             }
             return Ok(());
         }
-        let mut pkt = Packet::from_slice(&mut self.budget, payload)?;
-        pkt.stream_index = stream_index;
-        pkt.pts = pts;
-        pkt.dts = if header.dts.is_some() || header.pts.is_some() {
+        let base_pts = pts;
+        let base_dts = if header.dts.is_some() || header.pts.is_some() {
             dts
         } else {
             Timestamp::NONE
         };
-        pkt.pos = Some(pos);
         let mut flags = PacketFlags::empty();
         let video = self
             .streams
@@ -892,14 +890,91 @@ impl MpegTsDemuxer {
         if corrupt {
             flags |= PacketFlags::CORRUPT;
         }
-        pkt.flags = flags;
 
-        if pkt.is_key()
-            && let Some(v) = dts.ticks()
-        {
-            self.index.add(IndexEntry::keyframe(pos, Timestamp::new(v)));
+        // The reference runs the ADTS parser over the PES payload and emits
+        // one packet per AAC frame; a PES here routinely carries more than
+        // one (measured: thirteen 1024-sample frames in one PES on a 1 s
+        // 44.1 kHz encode), and emitting the whole payload as one packet
+        // — what this used to do unconditionally — was the *ordering*
+        // divergence issue #632 named: every packet after the first
+        // multi-frame audio PES is either the wrong packet or in the wrong
+        // position, so no later field comparison against the reference was
+        // comparing like against like. Splitting only for AAC-in-ADTS, since
+        // that is the one payload shape this crate can self-delimit without
+        // reaching for a bitstream parser (D14.1: a format crate does not
+        // depend on a codec crate) — everything else keeps today's
+        // one-packet-per-PES behaviour, unchanged.
+        let is_aac = self
+            .streams
+            .get(stream_index as usize)
+            .is_some_and(|s| s.params.codec_id == Some(CodecId::Aac));
+        let frames = if is_aac {
+            split_adts(payload)
+        } else {
+            Vec::new()
+        };
+
+        // Measured against `ffprobe 8.1`: every packet demuxed from MPEG-TS
+        // carries its own `MPEGTS Stream ID` side-data block — the PES
+        // `stream_id` byte itself (ITU-T H.222.0 Table 2-22), e.g. `0xe0` for
+        // the first video stream. Attached to every packet this function
+        // produces, split frames included, since each is still a PES packet
+        // as far as this side data is concerned.
+        let stream_id = header.stream_id;
+
+        if frames.is_empty() {
+            let mut pkt = Packet::from_slice(&mut self.budget, payload)?;
+            pkt.stream_index = stream_index;
+            pkt.pts = base_pts;
+            pkt.dts = base_dts;
+            pkt.pos = Some(pos);
+            pkt.flags = flags;
+            pkt.side_data.push(PacketSideData::MpegtsStreamId(stream_id));
+            if pkt.is_key()
+                && let Some(v) = base_dts.ticks()
+            {
+                self.index.add(IndexEntry::keyframe(pos, Timestamp::new(v)));
+            }
+            self.queue.push_back(pkt);
+            return Ok(());
         }
-        self.queue.push_back(pkt);
+
+        // Every sub-frame after the first shares the PES's own declared
+        // timestamp family but has no byte position of its own — measured:
+        // the reference reports `pos` only on the frame that starts a PES
+        // packet and `N/A` on every frame synthesised from the same payload.
+        let mut samples_before: i64 = 0;
+        for frame in frames {
+            let delta = if samples_before == 0 {
+                0
+            } else {
+                rescale_rnd(
+                    samples_before,
+                    90_000,
+                    i64::from(frame.sample_rate),
+                    Rounding::NearestAwayFromZero,
+                )
+                .unwrap_or(0)
+            };
+            let Some(slice) = payload.get(frame.offset..frame.offset.saturating_add(frame.len))
+            else {
+                break;
+            };
+            let mut pkt = Packet::from_slice(&mut self.budget, slice)?;
+            pkt.stream_index = stream_index;
+            pkt.pts = base_pts.offset(delta);
+            pkt.dts = base_dts.offset(delta);
+            pkt.pos = if samples_before == 0 { Some(pos) } else { None };
+            pkt.flags = flags;
+            pkt.side_data.push(PacketSideData::MpegtsStreamId(stream_id));
+            if pkt.is_key()
+                && let Some(v) = pkt.dts.ticks()
+            {
+                self.index.add(IndexEntry::keyframe(pos, Timestamp::new(v)));
+            }
+            self.queue.push_back(pkt);
+            samples_before = samples_before.saturating_add(i64::from(frame.samples));
+        }
         Ok(())
     }
 
@@ -1221,6 +1296,81 @@ impl PsiPid {
             cc: None,
         }
     }
+}
+
+/// ISO/IEC 13818-7 Table 8 `sampling_frequency_index` — a spec-dictated
+/// constant table (D9: freely reproducible), not `FFmpeg`'s. Indices 13 and 14
+/// are reserved and 15 means "explicit frequency, not indexed"; a demuxer
+/// splitting frames does not need either, so both are absent and the lookup
+/// simply fails for them.
+const ADTS_SAMPLE_RATES: [u32; 13] = [
+    96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025, 8_000,
+    7_350,
+];
+
+/// One ADTS frame found in a PES payload: its byte span and the sample count
+/// it represents, needed to place the *next* frame's timestamp.
+#[derive(Debug, Clone, Copy)]
+struct AdtsFrame {
+    offset: usize,
+    len: usize,
+    samples: u32,
+    sample_rate: u32,
+}
+
+/// Parse one ADTS frame header at the front of `buf` (ISO/IEC 13818-7 Annex
+/// B). Returns `None` for anything that is not a plausible ADTS frame —
+/// wrong syncword, an out-of-range `sampling_frequency_index`, or a declared
+/// length shorter than the header that carries it — so a caller can fall
+/// back to treating the payload as opaque rather than misreading LATM or
+/// corrupt data as ADTS.
+fn parse_adts_header(buf: &[u8]) -> Option<AdtsFrame> {
+    let &[b0, b1, b2, b3, b4, b5, b6, ..] = buf else {
+        return None;
+    };
+    // 12-bit syncword, all ones.
+    if b0 != 0xFF || (b1 & 0xF0) != 0xF0 {
+        return None;
+    }
+    let protection_absent = b1 & 0x01 != 0;
+    let sampling_frequency_index = usize::from((b2 >> 2) & 0x0F);
+    let sample_rate = *ADTS_SAMPLE_RATES.get(sampling_frequency_index)?;
+    let frame_len = (usize::from(b3 & 0x03) << 11) | (usize::from(b4) << 3) | usize::from(b5 >> 5);
+    let header_len = if protection_absent { 7 } else { 9 };
+    if frame_len < header_len || frame_len > buf.len() {
+        return None;
+    }
+    // `number_of_raw_data_blocks_in_frame`: 0 means one 1024-sample block:
+    // the value in the header is *blocks minus one*.
+    let raw_blocks = u32::from(b6 & 0x03);
+    Some(AdtsFrame {
+        offset: 0,
+        len: frame_len,
+        samples: 1024u32.saturating_mul(raw_blocks.saturating_add(1)),
+        sample_rate,
+    })
+}
+
+/// Every ADTS frame in `payload`, in order. Stops (rather than erroring) at
+/// the first byte range that does not parse, since a PES packet can be
+/// padded or truncated — the frames found up to that point are still real
+/// frames and are worth keeping; an empty result tells the caller this was
+/// not ADTS at all, or not enough of it to find even one frame.
+fn split_adts(payload: &[u8]) -> Vec<AdtsFrame> {
+    let mut out = Vec::new();
+    let mut pos = 0usize;
+    while pos < payload.len() {
+        let Some(rest) = payload.get(pos..) else {
+            break;
+        };
+        let Some(mut frame) = parse_adts_header(rest) else {
+            break;
+        };
+        frame.offset = pos;
+        pos = pos.saturating_add(frame.len);
+        out.push(frame);
+    }
+    out
 }
 
 /// The continuity check's three outcomes.

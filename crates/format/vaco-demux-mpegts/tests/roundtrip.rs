@@ -31,6 +31,7 @@ use vaco_format_core::seek::{SeekFlags, SeekTarget};
 use vaco_format_core::{Demuxer, FormatOptions};
 use vaco_io::MemorySource;
 use vaco_limits::Limits;
+use vaco_packet::{PacketSideData, PacketSideDataKind};
 
 // --------------------------------------------------------------- fixtures
 
@@ -474,10 +475,16 @@ fn a_pmt_with_a_broken_crc_is_ignored_silently() {
 fn a_stream_whose_codec_has_no_codec_id_is_still_reported() {
     let mut w = TsWriter::new();
     w.section(PAT_PID, &pat(&[(1, PMT_PID)]));
-    // 0x81 is AC-3 in the ATSC private range; `CodecId` has no variant.
+    // 0x06 with *no* descriptor is "private PES data" (Table 2-34): the PMT
+    // genuinely says nothing more, so `codec_id` staying `None` is permanent,
+    // not a gap this build might close — unlike 0x81 (ATSC AC-3), which this
+    // test used to name and which `CodecId` has since grown a variant for.
+    // Per `planning/AGENT-CONSTRAINTS.md` "never pin the absence of something
+    // the project is building", so this pins a mapping that cannot ever
+    // become wrong by the table getting more complete.
     w.section(
         PMT_PID,
-        &pmt(1, 0, 0x1FFF, &[(0x81, AUDIO_PID, Vec::new())]),
+        &pmt(1, 0, 0x1FFF, &[(0x06, AUDIO_PID, Vec::new())]),
     );
     for i in 0..4 {
         w.pes(
@@ -493,9 +500,136 @@ fn a_stream_whose_codec_has_no_codec_id_is_still_reported() {
     let d = open(w.out);
     assert_eq!(d.streams().len(), 1);
     let s = &d.streams()[0];
-    assert_eq!(s.media_type(), Some(vaco_core::MediaType::Audio));
+    assert_eq!(s.media_type(), Some(vaco_core::MediaType::Data));
     assert_eq!(s.params.codec_id, None);
-    assert_eq!(s.metadata_get("ts_codec"), Some("ac3"));
+    assert_eq!(s.metadata_get("ts_codec"), Some("bin_data"));
+}
+
+/// A hand-built two-frame ADTS header, `protection_absent = 1` (7-byte
+/// header), 44.1 kHz, one raw data block (1024 samples): `frame_len` is the
+/// only field that differs between the two, encoded per ISO/IEC 13818-7
+/// Annex B.
+fn adts_header(frame_len: u16) -> [u8; 7] {
+    [
+        0xFF,
+        0xF1,
+        0x50, // profile=01, sampling_frequency_index=4 (44100), private=0
+        0x80 | ((frame_len >> 11) as u8 & 0x03),
+        ((frame_len >> 3) & 0xFF) as u8,
+        (((frame_len & 0x07) as u8) << 5) | 0x1F,
+        0xFC,
+    ]
+}
+
+/// Issue #632 part 2: an MPEG-TS audio PES routinely carries more than one
+/// ADTS frame (measured: thirteen 1024-sample frames in one PES on a real
+/// 44.1 kHz encode), and the packet stream must have one `Packet` per frame
+/// — not one per PES — for ordering and every downstream field to agree
+/// with the reference.
+#[test]
+fn one_pes_with_two_adts_frames_becomes_two_packets() {
+    let mut w = TsWriter::new();
+    w.section(PAT_PID, &pat(&[(1, PMT_PID)]));
+    w.section(PMT_PID, &pmt(1, 0, 0x1FFF, &[(0x0F, AUDIO_PID, Vec::new())]));
+
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&adts_header(17));
+    payload.extend_from_slice(&[0xAA; 10]);
+    payload.extend_from_slice(&adts_header(15));
+    payload.extend_from_slice(&[0xBB; 8]);
+    assert_eq!(payload.len(), 32);
+
+    w.pes(AUDIO_PID, 0xC0, Some(90_000), None, &payload, true, true);
+
+    let mut d = open(w.out);
+    let packets = drain(&mut d);
+    assert_eq!(packets.len(), 2, "one packet per ADTS frame, not per PES");
+
+    assert_eq!(packets[0].len, 17);
+    assert_eq!(packets[0].payload(), &payload[..17]);
+    assert_eq!(packets[0].pts.ticks(), Some(90_000));
+    assert!(
+        packets[0].pos.is_some(),
+        "the frame that opens the PES keeps its byte position"
+    );
+
+    assert_eq!(packets[1].len, 15);
+    assert_eq!(packets[1].payload(), &payload[17..]);
+    // 1024 samples at 44.1 kHz in a 1/90000 base: round(1024*90000/44100) =
+    // round(2089.7959...) = 2090. Measured against `ffprobe 8.1`: the
+    // reference's own accumulation matches this for most frames in a PES and
+    // is exactly this value ±1 tick (≤11 µs) on a few — a residual not yet
+    // root-caused, recorded rather than hidden (see the crate docs).
+    assert_eq!(packets[1].pts.ticks(), Some(92_090));
+    assert_eq!(
+        packets[1].pos, None,
+        "a frame synthesised from an already-read PES has no byte position of its own"
+    );
+}
+
+/// Issue #632 part 3: every packet MPEG-TS demuxes carries the PES
+/// `stream_id` byte as its own side-data block. Measured against `ffprobe
+/// 8.1`: `0xe0` (the first video stream) and `0xc0` (the first audio stream)
+/// both come back as `MPEGTS Stream ID { id }`, on every packet — including
+/// every frame split out of one PES.
+#[test]
+fn every_packet_carries_its_pes_stream_id() {
+    let mut w = TsWriter::new();
+    w.section(PAT_PID, &pat(&[(1, PMT_PID)]));
+    w.section(
+        PMT_PID,
+        &pmt(
+            1,
+            0,
+            VIDEO_PID,
+            &[(0x1B, VIDEO_PID, Vec::new()), (0x0F, AUDIO_PID, Vec::new())],
+        ),
+    );
+    w.pes(VIDEO_PID, 0xE0, Some(0), Some(0), &[0u8; 40], true, true);
+
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&adts_header(17));
+    payload.extend_from_slice(&[0xAA; 10]);
+    payload.extend_from_slice(&adts_header(15));
+    payload.extend_from_slice(&[0xBB; 8]);
+    w.pes(AUDIO_PID, 0xC0, Some(0), None, &payload, true, true);
+
+    let mut d = open(w.out);
+    let packets = drain(&mut d);
+    assert_eq!(packets.len(), 3, "1 video + 2 split audio frames");
+    for p in &packets {
+        let Some(PacketSideData::MpegtsStreamId(id)) =
+            p.side_data(PacketSideDataKind::MpegtsStreamId)
+        else {
+            panic!("every MPEG-TS packet carries an MPEGTS Stream ID");
+        };
+        let want = if p.stream_index == 0 { 0xE0 } else { 0xC0 };
+        assert_eq!(*id, want);
+    }
+}
+
+/// A payload that is not ADTS at all — the LATM case, and anything
+/// malformed — falls back to one packet for the whole PES, exactly as before
+/// this split existed. Splitting must never turn one bad payload into data
+/// loss or a spurious multi-packet result.
+#[test]
+fn a_non_adts_aac_payload_is_not_split() {
+    let mut w = TsWriter::new();
+    w.section(PAT_PID, &pat(&[(1, PMT_PID)]));
+    w.section(PMT_PID, &pmt(1, 0, 0x1FFF, &[(0x0F, AUDIO_PID, Vec::new())]));
+    w.pes(
+        AUDIO_PID,
+        0xC0,
+        Some(90_000),
+        None,
+        &[0u8; 32],
+        true,
+        true,
+    );
+    let mut d = open(w.out);
+    let packets = drain(&mut d);
+    assert_eq!(packets.len(), 1);
+    assert_eq!(packets[0].len, 32);
 }
 
 #[test]

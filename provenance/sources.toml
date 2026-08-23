@@ -42,6 +42,13 @@ acquired = "2026-08-22"
 where    = "ISO"
 
 [[source]]
+id       = "iso-13818-7"
+kind     = "spec"
+title    = "ISO/IEC 13818-7, Advanced Audio Coding (AAC), Annex B: the ADTS transport syntax"
+acquired = "2026-08-23"
+where    = "ISO"
+
+[[source]]
 id       = "iso-23001-7"
 kind     = "spec"
 title    = "ISO/IEC 23001-7, Common encryption in ISO base media file format files"
