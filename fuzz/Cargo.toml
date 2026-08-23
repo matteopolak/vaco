@@ -58,6 +58,7 @@ vaco-filter-audio = { path = "../crates/filter/vaco-filter-audio" }
 vaco-filter-audio-dynamics = { path = "../crates/filter/vaco-filter-audio-dynamics" }
 vaco-filter-audio-eq = { path = "../crates/filter/vaco-filter-audio-eq" }
 vaco-filter-core = { path = "../crates/filter/vaco-filter-core" }
+vaco-filter-denoise = { path = "../crates/filter/vaco-filter-denoise" }
 vaco-filter-framesync = { path = "../crates/filter/vaco-filter-framesync" }
 vaco-filter-graph = { path = "../crates/filter/vaco-filter-graph" }
 vaco-filter-plumbing = { path = "../crates/filter/vaco-filter-plumbing" }
@@ -144,6 +145,7 @@ default = [
     "filter-audio-dynamics",
     "filter-audio-eq",
     "filter-core",
+    "filter-denoise",
     "filter-framesync",
     "filter-graph",
     "filter-plumbing",
@@ -224,6 +226,7 @@ filter-audio = []
 filter-audio-dynamics = []
 filter-audio-eq = []
 filter-core = []
+filter-denoise = []
 filter-framesync = []
 filter-graph = []
 filter-plumbing = []
@@ -624,6 +627,14 @@ test = false
 doc = false
 bench = false
 required-features = ["filter-audio"]
+
+[[bin]]
+name = "filter_denoise_options"
+path = "fuzz_targets/filter_denoise_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-denoise"]
 
 [[bin]]
 name = "filter_graph_schedule"

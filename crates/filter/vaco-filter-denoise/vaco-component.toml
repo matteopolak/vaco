@@ -1,0 +1,68 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# T4 video denoise filters, FT-4.6b (GitHub #469): hqdn3d, atadenoise,
+# removegrain, nlmeans, owdenoise, dctdnoiz, fftdnoiz, vaguedenoiser.
+# `bm3d` — the ninth name in the reference's own denoise group
+# (`ffmpeg -hide_banner -filters`, ffmpeg 8.1) — is not registered; see
+# `vaco_filter_denoise::bm3d`'s module doc for why.
+#
+# Each `ctor` names the per-filter `pub const DESC: FilterDesc`; runtime
+# instantiation goes through `vaco_filter_denoise::registry::DenoiseRegistry`,
+# a `vaco_filter_graph::registry::FilterRegistry` impl — the same shape
+# `vaco-filter-audio-eq` and `vaco-filter-video-geometry` use.
+
+[[component]]
+kind = "filter"
+name = "atadenoise"
+long_name = "Apply an Adaptive Temporal Averaging Denoiser."
+ctor = "vaco_filter_denoise::atadenoise::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "dctdnoiz"
+long_name = "Denoise frames using 2D DCT."
+ctor = "vaco_filter_denoise::dctdnoiz::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "fftdnoiz"
+long_name = "Denoise frames using 3D FFT."
+ctor = "vaco_filter_denoise::fftdnoiz::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "hqdn3d"
+long_name = "Apply a High Quality 3D Denoiser."
+ctor = "vaco_filter_denoise::hqdn3d::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "nlmeans"
+long_name = "Non-local means denoiser."
+ctor = "vaco_filter_denoise::nlmeans::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "owdenoise"
+long_name = "Denoise using wavelets."
+ctor = "vaco_filter_denoise::owdenoise::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "removegrain"
+long_name = "Remove grain."
+ctor = "vaco_filter_denoise::removegrain::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "vaguedenoiser"
+long_name = "Apply a Wavelet based Denoiser."
+ctor = "vaco_filter_denoise::vaguedenoiser::DESC"
+media = "video"

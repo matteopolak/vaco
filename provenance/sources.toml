@@ -363,3 +363,38 @@ kind     = "blackbox"
 title    = "Observed `ffprobe` codec_name/pix_fmt/sample_fmt for AVI FourCCs, DV (NTSC 4:1:1 and PAL 4:2:0, pcm_s16le audio), Ogg (FLAC at 16 and 24 bits, Opus), and the AIFF/AIFF-C/AU/CAF PCM encoder matrix (nine flavours x three containers, plus CAF mFormatFlags read off the written files and `ffmpeg -h muxer=<name>` default-audio-codec lines), ffmpeg 8.1"
 acquired = "2026-08-23"
 where    = "the reference binary installed on the development machine"
+
+[[source]]
+id       = "ffmpeg-denoise-filters-probe"
+kind     = "blackbox"
+title    = "Observed `ffmpeg -hide_banner -filters` (the full denoise group membership) and `ffmpeg -h filter=<name>` option tables for hqdn3d, atadenoise, removegrain, nlmeans, owdenoise, dctdnoiz, fftdnoiz, vaguedenoiser and bm3d, plus the `-f framecrc` comparison establishing that hqdn3d's printed AVOption default of `0` is not the strength it actually applies, ffmpeg 8.1"
+acquired = "2026-08-23"
+where    = "the reference binary installed on the development machine"
+
+[[source]]
+id       = "buades-coll-morel-2005-nlmeans"
+kind     = "paper"
+title    = "Buades, Coll & Morel, \"A Non-Local Algorithm for Image Denoising\", CVPR 2005 — the patch-similarity weighted average `nlmeans` implements"
+acquired = "2026-08-23"
+where    = "https://www.ipol.im/pub/art/2011/bcm_nlm/"
+
+[[source]]
+id       = "holschneider-1989-atrous"
+kind     = "paper"
+title    = "Holschneider, Kronland-Martinet, Morlet & Tchamitchian, \"A real-time algorithm for signal analysis with the help of the wavelet transform\", 1989 — the a trous (stationary, undecimated) wavelet transform `owdenoise` and `vaguedenoiser` share"
+acquired = "2026-08-23"
+where    = "https://doi.org/10.1007/978-3-642-75988-8_28"
+
+[[source]]
+id       = "donoho-johnstone-1994-visushrink"
+kind     = "paper"
+title    = "Donoho & Johnstone, \"Ideal spatial adaptation by wavelet shrinkage\", Biometrika, 1994 — the median-absolute-deviation noise estimator and the universal (VisuShrink) threshold `t = sigma * sqrt(2 * ln N)` used by `vaguedenoiser`'s `type=universal` and by `dctdnoiz`'s DCT-domain thresholding"
+acquired = "2026-08-23"
+where    = "https://doi.org/10.1093/biomet/81.3.425"
+
+[[source]]
+id       = "chang-yu-vetterli-2000-bayesshrink"
+kind     = "paper"
+title    = "Chang, Yu & Vetterli, \"Adaptive wavelet thresholding for image denoising and compression\", IEEE Transactions on Image Processing, 2000 — the per-band adaptive (BayesShrink) threshold `vaguedenoiser`'s `type=bayes` uses"
+acquired = "2026-08-23"
+where    = "https://doi.org/10.1109/83.862633"

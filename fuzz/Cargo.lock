@@ -1709,6 +1709,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-filter-blur"
+version = "0.1.0"
+dependencies = [
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-filter-framesync",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-opts",
+ "vaco-pixfmt",
+]
+
+[[package]]
 name = "vaco-filter-core"
 version = "0.1.0"
 dependencies = [
@@ -1721,6 +1734,17 @@ dependencies = [
  "vaco-frame",
  "vaco-pixfmt",
  "vaco-sampfmt",
+]
+
+[[package]]
+name = "vaco-filter-denoise"
+version = "0.1.0"
+dependencies = [
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-pixfmt",
 ]
 
 [[package]]
@@ -2041,6 +2065,7 @@ dependencies = [
  "vaco-filter-audio-dynamics",
  "vaco-filter-audio-eq",
  "vaco-filter-core",
+ "vaco-filter-denoise",
  "vaco-filter-framesync",
  "vaco-filter-graph",
  "vaco-filter-plumbing",
@@ -2592,7 +2617,9 @@ dependencies = [
  "vaco-filter-audio",
  "vaco-filter-audio-dynamics",
  "vaco-filter-audio-eq",
+ "vaco-filter-blur",
  "vaco-filter-core",
+ "vaco-filter-denoise",
  "vaco-filter-plumbing",
  "vaco-filter-video-composite",
  "vaco-filter-video-format",
