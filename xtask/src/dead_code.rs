@@ -151,6 +151,12 @@ pub fn run(_check: bool) -> Task {
     }
 
     let mut findings: Vec<(String, String)> = Vec::new();
+    // Strictly deader: not used in production *and* not used in tests either.
+    // The first version of this pass dropped these on the floor — the report
+    // only listed items `test_text` mentioned — so an item with no reference
+    // anywhere was invisible while an item a test exercises was flagged.
+    // `vaco_mux_mp4::meta::build_chapter_tref` sat here unseen.
+    let mut orphans: Vec<(String, String)> = Vec::new();
     for (id, owner) in &defined {
         // Used anywhere in production code other than its own definition line?
         let mut used = false;
@@ -162,12 +168,18 @@ pub fn run(_check: bool) -> Task {
                 break;
             }
         }
-        if !used && test_text.contains(id.as_str()) {
-            findings.push((owner.clone(), id.clone()));
+        if !used {
+            if test_text.contains(id.as_str()) {
+                findings.push((owner.clone(), id.clone()));
+            } else {
+                orphans.push((owner.clone(), id.clone()));
+            }
         }
     }
 
     findings.sort();
+    orphans.sort();
+    report_orphans(&orphans);
     if findings.is_empty() {
         println!("dead-code: no public item is used only by tests");
         return Ok(());
@@ -193,4 +205,36 @@ pub fn run(_check: bool) -> Task {
         println!("    {id}");
     }
     Ok(())
+}
+
+/// Public items with no reference anywhere — not in production, not in a test.
+///
+/// Reported above the test-only list and separately from it, because the
+/// question is different. A test-only item is asking "should this be
+/// `pub(crate)`?". An item with no reference at all is asking "why is this
+/// here?" — and the honest answers are usually "a feature that was written
+/// before the thing that would call it" or "a leftover". Neither is a
+/// verdict: the same name-based limits apply, so a trait method, a re-export
+/// or a macro-built name can land here innocently.
+fn report_orphans(orphans: &[(String, String)]) {
+    if orphans.is_empty() {
+        println!("dead-code: every public item has at least one reference");
+        return;
+    }
+    let crates_hit: Set<&str> = orphans.iter().map(|(c, _)| c.as_str()).collect();
+    println!(
+        "dead-code: {} public item(s) across {} crate(s) have NO reference at all \
+         — not even a test.",
+        orphans.len(),
+        crates_hit.len()
+    );
+    let mut last = String::new();
+    for (owner, id) in orphans {
+        if *owner != last {
+            println!("  {owner}");
+            last.clone_from(owner);
+        }
+        println!("    {id}");
+    }
+    println!();
 }

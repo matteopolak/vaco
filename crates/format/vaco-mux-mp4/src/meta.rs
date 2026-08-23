@@ -107,9 +107,3 @@ pub fn build_udta(opts: &MuxOptions) -> Option<Vec<u8>> {
     }
 }
 
-/// `tref` naming `chapter_track_id` as this track's chapter track.
-#[must_use]
-pub fn build_chapter_tref(chapter_track_id: u32) -> Vec<u8> {
-    let chap = writer::tref_entry(FourCc::new(b"chap"), &[chapter_track_id]);
-    writer::tref(&chap)
-}
