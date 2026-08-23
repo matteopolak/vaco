@@ -485,6 +485,22 @@ left for the Matroska agent cost one message and no conflict at all.
 And if your work does get absorbed: report it, do not fix it. Both agents did
 exactly that, and both were right to.
 
+### The commit-msg hook no longer blocks when the workspace is merely unloadable
+
+Both of the above — a manifest with no `src/lib.rs`, and a rename before
+`gen-registry` — used to block *everyone's commits* as well as everyone's
+builds, because the `commit-msg` hook ran `cargo run -p xtask -- check-message`
+and treated any non-zero exit as "your trailers are wrong".
+
+It now tells the two apart. A workspace that does not load prints a loud
+warning, says your trailers were **not** checked, and lets the commit through;
+CI checks them later against a tree that loads. A genuinely bad trailer still
+blocks, which is the whole point of the hook.
+
+This does not make the manifest trap harmless — it still stops every build. It
+just stops one agent's half-created directory from also freezing five other
+agents' commits.
+
 ### Renaming a crate breaks the tree until the *registry* is regenerated
 
 The manifest trap above has a sharper form. When you rename a crate, the stale

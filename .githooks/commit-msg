@@ -10,9 +10,34 @@
 # Unlike `pre-commit`, this one BLOCKS. A bad trailer is cheap to fix at exactly
 # this moment and expensive at every later one, which is the whole argument for
 # a blocking check.
-cargo run -q -p xtask -- check-message "$1" || {
+#
+# But it blocks on a *bad trailer*, not on "cargo could not run". Those are
+# different things and the first version conflated them. In a shared tree the
+# workspace is regularly unloadable for a minute at a time — the moment any
+# agent creates `crates/<area>/<new>/` before its `Cargo.toml`, or renames a
+# crate before regenerating the registry, `crates/*/*` fails to glob and *every*
+# cargo command in the tree fails. Refusing everyone's commits for that is the
+# hook-people-disable failure mode this file's own docs warn about.
+out=$(cargo run -q -p xtask -- check-message "$1" 2>&1)
+status=$?
+if [ $status -eq 0 ]; then
+  exit 0
+fi
+
+# Cargo could not load the workspace: someone else's half-created crate, not
+# anything about this message. Say so loudly and let the commit through — CI
+# still checks the trailers, and it will have a loadable tree.
+if printf '%s' "$out" | grep -q 'failed to load manifest for workspace member\|no targets specified in the manifest'; then
+  echo "$out" | sed 's/^/  /'
   echo
-  echo "The commit message is not written yet — nothing was lost. Fix the"
-  echo "trailers above and commit again. See docs/provenance.md."
-  exit 1
-}
+  echo "  ^ the workspace does not load right now — almost certainly another"
+  echo "    agent mid-way through creating or renaming a crate. Your trailers"
+  echo "    were NOT checked; CI will check them. Commit allowed."
+  exit 0
+fi
+
+echo "$out"
+echo
+echo "The commit message is not written yet — nothing was lost. Fix the"
+echo "trailers above and commit again. See docs/provenance.md."
+exit 1

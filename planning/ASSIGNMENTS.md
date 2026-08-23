@@ -147,17 +147,17 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-filter-convolve | 5 | #468 | agent:blur2 | done | 2026-08-23 | 2026-08-23 | remainder of the plan row: morpho inflate deflate edgedetect blurdetect convolve deconvolve corr xcorrelate |
 | vaco-filter-core | 5 | — | agent:adapt | done | 2026-08-23 | 2026-08-23 | INTERFACE-GAPS 10: Paired + Fanout adapters, then the multi-input filters three agents declined |
 | vaco-mux-matroska | 4 | — | agent:mkv | done | 2026-08-23 | 2026-08-23 | CONFORMANCE-FINDINGS 15: CRC-32 on every level-1 element, then SeekHead |
-| vaco-filter-vdsp | 5 | — | agent:analysis | assigned | 2026-08-23 |  | created by agent:temporal for scene_sad; extend, do not duplicate |
+| vaco-filter-vdsp | 5 | — | agent:analysis2 | assigned | 2026-08-23 |  | created by agent:temporal for scene_sad; extend, do not duplicate |
 | vaco-filter-source | 5 | #474 | agent:src | assigned | 2026-08-23 |  | plan 16 §4.3 row; nullsrc/color already taken by vaco-filter-video-source |
 | vaco-filter-asource | 5 | #481 | agent:src | assigned | 2026-08-23 |  | anullsrc already taken |
 | vaco-filter-deinterlace | 5 | #480 | agent:deint | done | 2026-08-23 | 2026-08-23 | plan 16 §4.3 row; idet/vfrdet blocked on INTERFACE-GAPS 11 |
 | vaco-frame | 2 | — | agent:framemeta | done | 2026-08-23 | 2026-08-23 | INTERFACE-GAPS 11: per-frame metadata dictionary |
 | vaco-probe | 7 | — | agent:framemeta | done | 2026-08-23 | 2026-08-23 | -show_frames FRAME_TAGS consumer side |
 | vaco-filter-aeffects | 5 | #484 | agent:audiotidy | assigned | 2026-08-23 |  | renamed from vaco-filter-achannel per plan 16 §4.3 |
-| vaco-filter-color | 5 | #476 | agent:color2 | assigned | 2026-08-23 |  | remainder of the 29-filter row |
-| vaco-filter-key | 5 | #476 | agent:color2 | assigned | 2026-08-23 |  | remainder of the 20-filter row |
-| vaco-filter-lut | 5 | #476 | agent:color2 | assigned | 2026-08-23 |  | lut1d, haldclutsrc, the .3dl/.dat/.m3d parsers |
-| vaco-filter-analysis | 5 | #477 | agent:analysis | assigned | 2026-08-23 |  | unblocked by INTERFACE-GAPS 11 closing; may extend vaco-filter-vdsp |
+| vaco-filter-color | 5 | #476 | agent:analysis2 | assigned | 2026-08-23 |  | remainder of the 29-filter row |
+| vaco-filter-key | 5 | #476 | agent:color2 | done | 2026-08-23 | 2026-08-23 | remainder of the 20-filter row |
+| vaco-filter-lut | 5 | #476 | agent:color2 | done | 2026-08-23 | 2026-08-23 | lut1d, haldclutsrc, the .3dl/.dat/.m3d parsers |
+| vaco-filter-analysis | 5 | #477 | agent:analysis2 | assigned | 2026-08-23 |  | unblocked by INTERFACE-GAPS 11 closing; may extend vaco-filter-vdsp |
 | vaco-filter-adsp | 5 | — | agent:audiotidy | assigned | 2026-08-23 |  | D19: one biquad design, not five; plan 16 §4.2 says it lives here |
 | vaco-filter-audio-eq | 5 | — | agent:audiotidy | assigned | 2026-08-23 |  | rename to vaco-filter-aeq |
 | vaco-filter-audio-dynamics | 5 | — | agent:audiotidy | assigned | 2026-08-23 |  | rename to vaco-filter-adynamics |
