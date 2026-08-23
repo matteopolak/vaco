@@ -102,6 +102,18 @@ pub struct AudioSampleEntry {
     pub bytes_per_frame: u32,
     /// Version 1's `bytes_per_sample`.
     pub bytes_per_sample: u32,
+    /// Version 2's `constBitsPerChannel`.
+    ///
+    /// The real per-channel bit width for an `lpcm` entry. `sample_size`
+    /// above is a fixed placeholder (`16`) in every version-2 body this crate
+    /// has measured, regardless of the actual sample width — this field is
+    /// not.
+    pub const_bits_per_channel: Option<u32>,
+    /// Version 2's `formatFlags`: a `CoreAudio` `AudioFormatFlags` bitfield.
+    /// Bit 0 is float, bit 1 is big-endian, bit 2 is signed integer, bit 3 is
+    /// packed. This, not the fourcc, is what actually decides an `lpcm`
+    /// entry's PCM flavour — see [`SampleEntry::codec`].
+    pub format_flags: Option<u32>,
 }
 
 impl AudioSampleEntry {
@@ -274,8 +286,91 @@ impl<'a> SampleEntry<'a> {
         find_config(wave.children())
     }
 
-    /// The codec this entry names, refining `mp4a`/`mp4v` through `esds` where
-    /// one is present.
+    /// The `QuickTime` endian atom (`enda`), for the sample entries whose
+    /// fourcc does not fix a byte order on its own: `in24`, `in32`, `fl32`,
+    /// `fl64`. `Some(true)` is little-endian, `Some(false)` is big-endian,
+    /// `None` is "no `enda` box present" — which measured `sowt`/`twos`
+    /// files rely on, since those two encode the byte order in the fourcc
+    /// itself and never carry an `enda`.
+    ///
+    /// Searches the extensions, then — like [`SampleEntry::config`] —
+    /// inside `wave`, where the box is measured to live for `in24`/`in32`/
+    /// `fl32`/`fl64` (2026-08-23, `ffmpeg`'s `mov` muxer).
+    #[must_use]
+    pub fn endian(&self) -> Option<bool> {
+        if let Some(v) = find_enda(self.extension_boxes()) {
+            return Some(v);
+        }
+        let wave = self.extension_boxes().find(boxes::WAVE)?;
+        find_enda(wave.children())
+    }
+
+    /// [`SampleEntry::endian`], defaulted to big-endian.
+    ///
+    /// Apple's `QuickTime` File Format specification gives big-endian as the
+    /// byte order in force when no `enda` atom is present at all — the
+    /// default a demuxer must assume for the (unmeasured; `ffmpeg` never
+    /// omits `enda` where it matters) case of an `in24`/`in32`/`fl32`/`fl64`
+    /// entry with none.
+    fn little_endian(&self) -> bool {
+        self.endian().unwrap_or(false)
+    }
+
+    /// The codec an ambiguous fourcc names, using this entry's context —
+    /// media type, `bits_per_sample`, and `enda` — to resolve it.
+    ///
+    /// This is the reason [`SampleEntry::codec`] cannot be a plain
+    /// `FourCc -> CodecId` lookup for PCM: `sowt` alone means "little-endian
+    /// signed PCM" without saying 8- or 16-bit, `in24`/`in32`/`fl32`/`fl64`
+    /// alone fix a width but not a byte order, `lpcm`'s real layout is in its
+    /// version-2 body and not in the fourcc at all, and `raw ` is `pcm_u8` in
+    /// an audio entry but `rawvideo` in a video one. Measured 2026-08-23 by
+    /// encoding one `.mov` per PCM variant with `ffmpeg` and reading back
+    /// `codec_tag_string`/`codec_name`/`bits_per_raw_sample`, plus reading the
+    /// raw sample-entry bytes for `enda` and the version-2 body directly —
+    /// see `docs/format/vaco-format-isom.md` for the full table.
+    fn resolve_ambiguous(&self, fourcc: FourCc) -> Option<CodecId> {
+        if fourcc == FourCc::new(b"raw ") {
+            if self.visual.is_some() {
+                return Some(CodecId::Rawvideo);
+            }
+            let audio = self.audio.as_ref()?;
+            return (audio.sample_size == 8).then_some(CodecId::PcmU8);
+        }
+        let audio = self.audio.as_ref()?;
+        match &fourcc.0 {
+            // Measured: little-endian always, both 8- and 16-bit observed
+            // (`pcm_s8`/`pcm_s16le`), and neither carries an `enda` box.
+            b"sowt" => signed_pcm(audio.sample_size, true),
+            // Not directly measured (no `ffmpeg` encoder writes big-endian
+            // 8-bit `twos`), but symmetric with `sowt` per the QTFF spec.
+            b"twos" => signed_pcm(audio.sample_size, false),
+            // Measured: `sample_size` is a fixed `16` placeholder for all
+            // four of these regardless of the true width, so unlike `sowt`/
+            // `twos` it is not consulted here — the fourcc already fixes the
+            // width, and only the byte order (`enda`) is still open.
+            b"in24" => signed_pcm(24, self.little_endian()),
+            b"in32" => signed_pcm(32, self.little_endian()),
+            b"fl32" => float_pcm(32, self.little_endian()),
+            b"fl64" => float_pcm(64, self.little_endian()),
+            // The generic ISO sample entry: layout lives in the version-2
+            // body (`formatFlags` + `constBitsPerChannel`), not the fourcc.
+            // Measured with an 8-channel 192 kHz `pcm_s32le` track, the
+            // smallest input this `ffmpeg` build will promote to a version-2
+            // `lpcm` entry rather than `sowt`/`in32`.
+            b"lpcm" => lpcm_pcm(audio),
+            // Unmeasured — `ffmpeg`'s `mov` muxer has no path that emits
+            // `NONE` — but per the QTFF spec it is the same shape as `twos`:
+            // width from `sample_size`, byte order from `enda` (defaulting to
+            // big-endian, native, absent one).
+            b"NONE" => signed_pcm(audio.sample_size, self.little_endian()),
+            _ => None,
+        }
+    }
+
+    /// The codec this entry names, refining `mp4a`/`mp4v` through `esds`
+    /// where one is present and disambiguating the PCM family through
+    /// [`SampleEntry::resolve_ambiguous`] otherwise.
     #[must_use]
     pub fn codec(&self) -> Option<CodecId> {
         let fourcc = self.effective_format();
@@ -292,8 +387,81 @@ impl<'a> SampleEntry<'a> {
             // convention; `mp4v` without one is not guessable.
             return (fourcc == FourCc::new(b"mp4a")).then_some(CodecId::Aac);
         }
+        if let Some(id) = self.resolve_ambiguous(fourcc) {
+            return Some(id);
+        }
         sample_entry_codec(fourcc)
     }
+}
+
+/// One `enda` box's value, from an extension-box iterator: `Some(true)` for
+/// little-endian (`1`), `Some(false)` for big-endian (`0`), `None` if no
+/// `enda` is present. Malformed (too short) is treated the same as absent.
+fn find_enda(iter: BoxIter<'_>) -> Option<bool> {
+    let enda = iter.flatten().find(|b| b.kind() == boxes::ENDA)?;
+    let v = enda.payload.first_chunk::<2>()?;
+    Some(u16::from_be_bytes(*v) != 0)
+}
+
+/// Signed integer PCM for a measured bit width, `None` for anything this
+/// workspace has no `CodecId` for.
+fn signed_pcm(bits: u16, little: bool) -> Option<CodecId> {
+    match bits {
+        8 => Some(CodecId::PcmS8),
+        16 => Some(if little {
+            CodecId::PcmS16le
+        } else {
+            CodecId::PcmS16be
+        }),
+        24 => Some(if little {
+            CodecId::PcmS24le
+        } else {
+            CodecId::PcmS24be
+        }),
+        32 => Some(if little {
+            CodecId::PcmS32le
+        } else {
+            CodecId::PcmS32be
+        }),
+        _ => None,
+    }
+}
+
+/// Floating-point PCM for a measured bit width, `None` for anything this
+/// workspace has no `CodecId` for.
+fn float_pcm(bits: u16, little: bool) -> Option<CodecId> {
+    match bits {
+        32 => Some(if little {
+            CodecId::PcmF32le
+        } else {
+            CodecId::PcmF32be
+        }),
+        64 => Some(if little {
+            CodecId::PcmF64le
+        } else {
+            CodecId::PcmF64be
+        }),
+        _ => None,
+    }
+}
+
+/// An `lpcm` entry's flavour from its version-2 body: `formatFlags` (a
+/// `CoreAudio` `AudioFormatFlags` bitfield — bit 0 float, bit 1 big-endian,
+/// bit 2 signed integer) and `constBitsPerChannel`. `None` when the entry
+/// lacks a version-2 body (not measured against a real file — every `lpcm`
+/// entry this crate has seen from `ffmpeg` is version 2) or names a width
+/// this workspace has no PCM `CodecId` for.
+fn lpcm_pcm(audio: &AudioSampleEntry) -> Option<CodecId> {
+    let flags = audio.format_flags?;
+    let bits = u16::try_from(audio.const_bits_per_channel?).ok()?;
+    let little = flags & 0x2 == 0;
+    if flags & 0x1 != 0 {
+        return float_pcm(bits, little);
+    }
+    if flags & 0x4 != 0 {
+        return signed_pcm(bits, little);
+    }
+    (bits == 8).then_some(CodecId::PcmU8)
 }
 
 fn parse_visual(r: &mut vaco_bitstream::ByteReader<'_>) -> VisualSampleEntry {
@@ -359,12 +527,14 @@ fn parse_audio(r: &mut vaco_bitstream::ByteReader<'_>) -> (AudioSampleEntry, usi
             let rate = r.f64_be();
             let channels = r.be32();
             let _always_7f = r.be32();
-            let _const_bits = r.be32();
-            let _format_flags = r.be32();
+            let const_bits_per_channel = r.be32();
+            let format_flags = r.be32();
             let _const_bytes_packet = r.be32();
             let _const_frames_packet = r.be32();
             me.sample_rate_f64 = Some(rate);
             me.channel_count = u16::try_from(channels).unwrap_or(u16::MAX);
+            me.const_bits_per_channel = Some(const_bits_per_channel);
+            me.format_flags = Some(format_flags);
             (me, AUDIO_BODY_V0.saturating_add(AUDIO_EXTRA_V2))
         }
         _ => (me, AUDIO_BODY_V0),
@@ -442,8 +612,19 @@ pub fn handler_media_type(handler: FourCc) -> Option<MediaType> {
 ///
 /// Registered in ISO/IEC 14496-15 (`avc*`, `hvc*`, `hev*`), 14496-14 (`mp4a`,
 /// `mp4v`), the AOM `AV1` ISOBMFF binding (`av01`), the `WebM` VP binding
-/// (`vp08`/`vp09`), Xiph's Opus and FLAC encapsulations (`Opus`, `fLaC`) and
-/// Apple's `QuickTime` specification for the PCM flavours.
+/// (`vp08`/`vp09`), Xiph's Opus and FLAC encapsulations (`Opus`, `fLaC`),
+/// Apple's `QuickTime` specification for the PCM flavours, for `ProRes` and for
+/// `h263`, and Apple Lossless's own registration (`alac`).
+///
+/// This is a **fallback**, used directly for the fourccs that name exactly
+/// one codec and — via [`SampleEntry::resolve_ambiguous`] — as the safety net
+/// for the PCM fourccs when an entry's context does not resolve them to a
+/// specific width and byte order (malformed input, or a bit depth this
+/// workspace has no exact `CodecId` for). `raw ` is deliberately absent:
+/// alone it is genuinely ambiguous between `pcm_u8` (audio) and `rawvideo`
+/// (video), so a fourcc-only guess would be wrong half the time rather than
+/// imprecise, and `SampleEntry::codec` resolves it using the media type
+/// instead.
 ///
 /// Codes with no entry in this workspace's [`CodecId`] map to `None` rather
 /// than to a near miss; the caller keeps the four-character code either way,
@@ -462,9 +643,31 @@ pub fn sample_entry_codec(format: FourCc) -> Option<CodecId> {
         b"Opus" => Some(CodecId::Opus),
         b"fLaC" => Some(CodecId::Flac),
         b".mp3" | b"mp3 " => Some(CodecId::Mp3),
-        // QuickTime PCM flavours: signed/unsigned, both byte orders, and the
-        // generic `lpcm` entry whose real layout lives in its version-2 body.
-        b"sowt" | b"twos" | b"raw " | b"lpcm" | b"in24" | b"in32" | b"fl32" | b"fl64" | b"NONE" => {
+        // Measured: `ffmpeg -c:v h263 -f mov` writes `h263` directly, no
+        // `mp4v`/`esds` wrapper — unlike `mpeg4`, this one never goes through
+        // the object-type-indication table.
+        b"h263" => Some(CodecId::H263),
+        // ProRes: measured across every quality tier `prores_ks` has (proxy,
+        // LT, standard, HQ, 4444, 4444 XQ) — all six report
+        // `codec_name=prores`, distinguished only by `codec_tag_string`.
+        b"apco" | b"apcs" | b"apcn" | b"apch" | b"ap4h" | b"ap4x" => Some(CodecId::Prores),
+        b"alac" => Some(CodecId::Alac),
+        // Measured: `ffmpeg -c:a pcm_mulaw`/`pcm_alaw -f mov` write these
+        // directly with no ambiguity — one fourcc, one fixed encoding.
+        b"ulaw" => Some(CodecId::PcmMulaw),
+        b"alaw" => Some(CodecId::PcmAlaw),
+        // Uncompressed video: measured per input pixel format. `raw ` covers
+        // packed RGB and greyscale and is handled in
+        // [`SampleEntry::resolve_ambiguous`] instead, since the same fourcc
+        // means `pcm_u8` in an audio entry; `2vuy` is UYVY422, `yuvs` is
+        // YUYV422, `24BG` is BGR24 — `ffprobe` calls all of them
+        // `codec_name=rawvideo`.
+        b"2vuy" | b"yuvs" | b"24BG" => Some(CodecId::Rawvideo),
+        // QuickTime PCM flavours reached without entry context (see the
+        // function doc): a width- and byte-order-blind "it is some flavour
+        // of PCM" guess, safe because [`CodecId::Pcm`] exists for exactly
+        // this case.
+        b"sowt" | b"twos" | b"lpcm" | b"in24" | b"in32" | b"fl32" | b"fl64" | b"NONE" => {
             Some(CodecId::Pcm)
         }
         // MPEG-4 timed text. Measured: the *same* SubRip content muxed into MP4
@@ -534,6 +737,58 @@ mod tests {
         }
         b.extend_from_slice(ext);
         bx(&kind, &b)
+    }
+
+    /// A version-0 audio sample entry with an explicit `sample_size`, unlike
+    /// [`audio_entry`] which fixes it at 16 — needed to test the PCM
+    /// disambiguation, where `sample_size` is exactly the field in question.
+    fn pcm_audio_entry(kind: [u8; 4], sample_size: u16, ext: &[u8]) -> Vec<u8> {
+        let mut b = vec![0u8; 6];
+        b.extend_from_slice(&1u16.to_be_bytes()); // data_reference_index
+        b.extend_from_slice(&0u16.to_be_bytes()); // version
+        b.extend_from_slice(&0u16.to_be_bytes()); // revision
+        b.extend_from_slice(&0u32.to_be_bytes()); // vendor
+        b.extend_from_slice(&1u16.to_be_bytes()); // channels
+        b.extend_from_slice(&sample_size.to_be_bytes());
+        b.extend_from_slice(&0u16.to_be_bytes()); // compression_id
+        b.extend_from_slice(&0u16.to_be_bytes()); // packet_size
+        b.extend_from_slice(&(44_100u32 << 16).to_be_bytes());
+        b.extend_from_slice(ext);
+        bx(&kind, &b)
+    }
+
+    /// A `wave ▸ frma ▸ enda` extension, the shape `ffmpeg`'s `mov` muxer
+    /// writes `enda` in for `in24`/`in32`/`fl32`/`fl64`.
+    fn wave_with_enda(frma: [u8; 4], little: bool) -> Vec<u8> {
+        let mut body = bx(b"frma", &frma);
+        let value: u16 = little.into();
+        body.extend_from_slice(&bx(b"enda", &value.to_be_bytes()));
+        bx(b"wave", &body)
+    }
+
+    /// A version-2 (`lpcm`-style) audio sample entry with an explicit
+    /// `constBitsPerChannel` / `formatFlags`, the two fields that actually
+    /// decide an `lpcm` entry's flavour.
+    fn lpcm_v2_entry(channels: u32, rate: f64, const_bits: u32, format_flags: u32) -> Vec<u8> {
+        let mut b = vec![0u8; 6];
+        b.extend_from_slice(&1u16.to_be_bytes()); // data_reference_index
+        b.extend_from_slice(&2u16.to_be_bytes()); // version
+        b.extend_from_slice(&0u16.to_be_bytes()); // revision
+        b.extend_from_slice(&0u32.to_be_bytes()); // vendor
+        b.extend_from_slice(&0xFFFEu16.to_be_bytes()); // numChannels (compat)
+        b.extend_from_slice(&16u16.to_be_bytes()); // sampleSize (compat placeholder)
+        b.extend_from_slice(&0xFFFEu16.to_be_bytes()); // compressionID (compat)
+        b.extend_from_slice(&0u16.to_be_bytes()); // packetSize (compat)
+        b.extend_from_slice(&1u32.to_be_bytes()); // sampleRate (compat placeholder)
+        b.extend_from_slice(&72u32.to_be_bytes()); // sizeOfStructOnly
+        b.extend_from_slice(&rate.to_be_bytes());
+        b.extend_from_slice(&channels.to_be_bytes());
+        b.extend_from_slice(&0x7F00_0000u32.to_be_bytes()); // "always 7f"
+        b.extend_from_slice(&const_bits.to_be_bytes());
+        b.extend_from_slice(&format_flags.to_be_bytes());
+        b.extend_from_slice(&0u32.to_be_bytes()); // constBytesPerPacket
+        b.extend_from_slice(&1u32.to_be_bytes()); // constFramesPerPacket
+        bx(b"lpcm", &b)
     }
 
     #[test]
@@ -700,5 +955,193 @@ mod tests {
         // Not a near miss: AC-3 has no CodecId in this workspace yet.
         assert_eq!(sample_entry_codec(FourCc::new(b"ac-3")), None);
         assert_eq!(sample_entry_codec(FourCc::new(b"zzzz")), None);
+        assert_eq!(
+            sample_entry_codec(FourCc::new(b"h263")),
+            Some(CodecId::H263)
+        );
+        assert_eq!(
+            sample_entry_codec(FourCc::new(b"ap4h")),
+            Some(CodecId::Prores)
+        );
+        assert_eq!(
+            sample_entry_codec(FourCc::new(b"alac")),
+            Some(CodecId::Alac)
+        );
+        assert_eq!(
+            sample_entry_codec(FourCc::new(b"ulaw")),
+            Some(CodecId::PcmMulaw)
+        );
+        assert_eq!(
+            sample_entry_codec(FourCc::new(b"alaw")),
+            Some(CodecId::PcmAlaw)
+        );
+        // `raw ` is deliberately absent: context-free it is ambiguous between
+        // `pcm_u8` and `rawvideo`, so a fourcc-only guess is not made.
+        assert_eq!(sample_entry_codec(FourCc::new(b"raw ")), None);
+    }
+
+    /// The whole point of this task: a `FourCc` alone cannot name the PCM
+    /// codec. `sowt` covers 8- and 16-bit; `in24`/`in32`/`fl32`/`fl64` each
+    /// cover both byte orders. Every row here is the
+    /// (`FourCc`, `bits_per_sample`, `enda`) triple that
+    /// [`SampleEntry::codec`] must resolve, measured 2026-08-23 by encoding
+    /// one `.mov` per `ffmpeg` PCM encoder and reading the sample entry back
+    /// byte for byte — see `docs/format/vaco-format-isom.md`.
+    #[test]
+    fn the_pcm_family_resolves_from_fourcc_bits_per_sample_and_enda() {
+        struct Case {
+            fourcc: [u8; 4],
+            sample_size: u16,
+            enda: Option<bool>,
+            want: CodecId,
+        }
+        let cases = [
+            // `sowt`/`twos`: byte order is fixed by the fourcc itself, never
+            // an `enda` box; width comes from `sample_size`, which is
+            // measured accurate for these two (unlike the `inNN`/`flNN`
+            // group below).
+            Case {
+                fourcc: *b"sowt",
+                sample_size: 16,
+                enda: None,
+                want: CodecId::PcmS16le,
+            },
+            Case {
+                fourcc: *b"sowt",
+                sample_size: 8,
+                enda: None,
+                want: CodecId::PcmS8,
+            },
+            Case {
+                fourcc: *b"twos",
+                sample_size: 16,
+                enda: None,
+                want: CodecId::PcmS16be,
+            },
+            // `in24`/`in32`/`fl32`/`fl64`: width is fixed by the fourcc;
+            // `sample_size` is a measured-constant `16` placeholder here and
+            // is not consulted. Byte order comes from `enda` alone.
+            Case {
+                fourcc: *b"in24",
+                sample_size: 16,
+                enda: Some(true),
+                want: CodecId::PcmS24le,
+            },
+            Case {
+                fourcc: *b"in24",
+                sample_size: 16,
+                enda: Some(false),
+                want: CodecId::PcmS24be,
+            },
+            Case {
+                fourcc: *b"in32",
+                sample_size: 16,
+                enda: Some(true),
+                want: CodecId::PcmS32le,
+            },
+            Case {
+                fourcc: *b"in32",
+                sample_size: 16,
+                enda: Some(false),
+                want: CodecId::PcmS32be,
+            },
+            Case {
+                fourcc: *b"fl32",
+                sample_size: 16,
+                enda: Some(true),
+                want: CodecId::PcmF32le,
+            },
+            Case {
+                fourcc: *b"fl32",
+                sample_size: 16,
+                enda: Some(false),
+                want: CodecId::PcmF32be,
+            },
+            Case {
+                fourcc: *b"fl64",
+                sample_size: 16,
+                enda: Some(true),
+                want: CodecId::PcmF64le,
+            },
+            Case {
+                fourcc: *b"fl64",
+                sample_size: 16,
+                enda: Some(false),
+                want: CodecId::PcmF64be,
+            },
+        ];
+        for c in cases {
+            let ext = match c.enda {
+                Some(little) => wave_with_enda(c.fourcc, little),
+                None => Vec::new(),
+            };
+            let raw = pcm_audio_entry(c.fourcc, c.sample_size, &ext);
+            let e = SampleEntry::parse(&first_box(&raw), boxes::SOUN);
+            assert_eq!(
+                e.codec(),
+                Some(c.want),
+                "fourcc {:?} bits {} enda {:?}",
+                FourCc::new(&c.fourcc),
+                c.sample_size,
+                c.enda
+            );
+        }
+    }
+
+    #[test]
+    fn raw_is_pcm_u8_in_an_audio_entry_and_rawvideo_in_a_visual_one() {
+        let audio = pcm_audio_entry(*b"raw ", 8, &[]);
+        let e = SampleEntry::parse(&first_box(&audio), boxes::SOUN);
+        assert_eq!(e.codec(), Some(CodecId::PcmU8));
+
+        let visual = visual_entry(*b"raw ", 16, 16, &[]);
+        let e = SampleEntry::parse(&first_box(&visual), boxes::VIDE);
+        assert_eq!(e.codec(), Some(CodecId::Rawvideo));
+    }
+
+    #[test]
+    fn an_lpcm_entry_resolves_from_its_version_two_body_not_the_fourcc() {
+        // Measured: `ffmpeg -c:a pcm_s32le` on an 8-channel 192 kHz input —
+        // the smallest case this `ffmpeg` build promotes past `sowt`/`in32`
+        // to a version-2 `lpcm` entry — writes `formatFlags = 0x0C`
+        // (signed | packed) and `constBitsPerChannel = 32`.
+        let signed_packed_little_32 = lpcm_v2_entry(8, 192_000.0, 32, 0x0C);
+        let e = SampleEntry::parse(&first_box(&signed_packed_little_32), boxes::SOUN);
+        assert_eq!(e.codec(), Some(CodecId::PcmS32le));
+
+        // The rest are unmeasured (this `ffmpeg` build never emits them) but
+        // exercise every bit `lpcm_pcm` reads: big-endian, float and
+        // unsigned-8-bit.
+        let signed_packed_big_16 = lpcm_v2_entry(2, 48_000.0, 16, 0x0E);
+        let e = SampleEntry::parse(&first_box(&signed_packed_big_16), boxes::SOUN);
+        assert_eq!(e.codec(), Some(CodecId::PcmS16be));
+
+        let float_packed_little_32 = lpcm_v2_entry(2, 48_000.0, 32, 0x09);
+        let e = SampleEntry::parse(&first_box(&float_packed_little_32), boxes::SOUN);
+        assert_eq!(e.codec(), Some(CodecId::PcmF32le));
+
+        let float_packed_big_64 = lpcm_v2_entry(2, 48_000.0, 64, 0x0B);
+        let e = SampleEntry::parse(&first_box(&float_packed_big_64), boxes::SOUN);
+        assert_eq!(e.codec(), Some(CodecId::PcmF64be));
+
+        let unsigned_packed_8 = lpcm_v2_entry(1, 8_000.0, 8, 0x08);
+        let e = SampleEntry::parse(&first_box(&unsigned_packed_8), boxes::SOUN);
+        assert_eq!(e.codec(), Some(CodecId::PcmU8));
+    }
+
+    #[test]
+    fn enda_is_found_inside_wave_like_esds_is() {
+        let raw = pcm_audio_entry(*b"in24", 16, &wave_with_enda(*b"in24", true));
+        let e = SampleEntry::parse(&first_box(&raw), boxes::SOUN);
+        assert_eq!(e.endian(), Some(true));
+    }
+
+    #[test]
+    fn no_enda_box_reports_none_rather_than_a_default() {
+        let raw = pcm_audio_entry(*b"in24", 16, &[]);
+        let e = SampleEntry::parse(&first_box(&raw), boxes::SOUN);
+        assert_eq!(e.endian(), None);
+        // But the codec still resolves, defaulting to big-endian.
+        assert_eq!(e.codec(), Some(CodecId::PcmS24be));
     }
 }

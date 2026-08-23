@@ -197,29 +197,109 @@ pub fn write_expandable(len: u32) -> [u8; 4] {
     ]
 }
 
-/// MPEG-4 object type indications (ISO/IEC 14496-1 Table 5, extended by the
-/// MP4 Registration Authority) mapped to this workspace's codec identifiers.
+/// The complete object-type-indication registry: ISO/IEC 14496-1 Table 5
+/// (`0x01`-`0x6E`) plus every extension the MP4 Registration Authority has
+/// since assigned (`0xA0`-`0xFF`), transcribed in full from
+/// <https://mp4ra.org/registered-types/object-types> rather than trimmed to
+/// what this workspace can currently name.
 ///
-/// Only the values `vaco-codec-core` can name are listed. The rest are
+/// Transcribing the whole registry, not just the rows with a `CodecId`, is
+/// what caught `0xA5`/`0xA6`: they used to be AC-3 and Enhanced AC-3, and a
+/// table built from "which codecs do we support" would have mapped them
+/// there — a plausible-looking guess and a wrong one. The registry itself
+/// marks both **Withdrawn**, and it shows in the reference: `ffmpeg`'s `mov`
+/// muxer never puts AC-3 or E-AC-3 behind `mp4a`/`mp4v` + `esds` at all —
+/// `-c:a ac3 -f mov` writes its own sample-entry fourcc, `ac-3`, and `eac3`
+/// writes `ec-3`. Measured 2026-08-23; see `sample_entry_codec` in
+/// `stsd.rs` for those two rows.
+///
+/// Rows with no [`CodecId`] counterpart are kept as `None` rather than
+/// dropped, so the table stays a faithful copy of the registry and a later
+/// reader can tell "not in the registry" apart from "registered, we just
+/// don't have the enum variant yet." `0xDD` is the one exception: it is
+/// *not* in the MP4RA table at all, but some non-conformant writers use it
+/// for Vorbis-in-MP4 and a previous pass here recorded that. It is kept
+/// rather than removed for lack of evidence either way, and flagged as the
+/// outlier it is.
+static OBJECT_TYPE_TABLE: &[(u8, Option<CodecId>)] = &[
+    (0x01, None), // Systems ISO/IEC 14496-1 (1)
+    (0x02, None), // Systems ISO/IEC 14496-1 (2)
+    (0x03, None), // Interaction Stream
+    (0x04, None), // Extended BIFS
+    (0x05, None), // AFX Stream
+    (0x06, None), // Font Data Stream
+    (0x07, None), // Synthetised Texture
+    (0x08, None), // Text Stream
+    (0x09, None), // LASeR Stream
+    (0x0A, None), // Simple Aggregation Format (SAF) Stream
+    // Measured: `ffmpeg -c:v mpeg4 -f mov` writes `mp4v` + `esds` with this
+    // object type; `ffprobe` calls the result `codec_name=mpeg4`.
+    (0x20, Some(CodecId::Mpeg4)), // Visual ISO/IEC 14496-2 (MPEG-4 part 2)
+    (0x21, Some(CodecId::H264)),  // Visual ITU-T H.264 / ISO/IEC 14496-10
+    (0x22, None),                 // Parameter Sets for H.264 — not a decodable stream alone
+    (0x23, Some(CodecId::Hevc)),  // Visual ISO/IEC 23008-2 / H.265
+    // Measured: every `mp4a` + `esds` AAC entry this crate has seen carries
+    // object type `0x40`.
+    (0x40, Some(CodecId::Aac)), // Audio ISO/IEC 14496-3 (AAC)
+    (0x60, None),               // Visual ISO/IEC 13818-2 Simple Profile
+    (0x61, None),               // Visual ISO/IEC 13818-2 Main Profile
+    (0x62, None),               // Visual ISO/IEC 13818-2 SNR Profile
+    (0x63, None),               // Visual ISO/IEC 13818-2 Spatial Profile
+    (0x64, None),               // Visual ISO/IEC 13818-2 High Profile
+    (0x65, None),               // Visual ISO/IEC 13818-2 422 Profile
+    (0x66, Some(CodecId::Aac)), // Audio ISO/IEC 13818-7 Main Profile
+    (0x67, Some(CodecId::Aac)), // Audio ISO/IEC 13818-7 LowComplexity Profile
+    (0x68, Some(CodecId::Aac)), // Audio ISO/IEC 13818-7 Scaleable Sampling Rate
+    // MPEG-1/2 backward-compatible audio (layers 1-3, undifferentiated by the
+    // object type alone); treated as MP3, unmeasured — this crate's own `mov`
+    // probes never produced it (`libmp3lame` writes `.mp3` directly, no
+    // `esds`; see `stsd.rs`).
+    (0x69, Some(CodecId::Mp3)),        // Audio ISO/IEC 13818-3
+    (0x6A, Some(CodecId::Mpeg1video)), // Visual ISO/IEC 11172-2
+    (0x6B, Some(CodecId::Mp3)),        // Audio ISO/IEC 11172-3 (MPEG-1 audio)
+    (0x6C, Some(CodecId::Jpeg)),       // Visual ISO/IEC 10918-1 (JPEG)
+    (0x6D, Some(CodecId::Png)),        // Portable Network Graphics
+    (0x6E, Some(CodecId::Jpeg2000)),   // Visual ISO/IEC 15444-1 (JPEG 2000)
+    (0xA0, None),                      // EVRC Voice
+    (0xA1, None),                      // SMV Voice
+    (0xA2, None),                      // 3GPP2 Compact Multimedia Format (CMF)
+    (0xA3, Some(CodecId::Vc1)),        // SMPTE VC-1 Video
+    (0xA4, Some(CodecId::Dirac)),      // Dirac Video Coder
+    (0xA5, None),                      // Withdrawn — formerly AC-3; see the module doc above
+    (0xA6, None),                      // Withdrawn — formerly Enhanced AC-3; see the module doc
+    (0xA7, None),                      // DRA Audio
+    (0xA8, None),                      // ITU-T G.719 Audio
+    (0xA9, Some(CodecId::Dts)),        // Core Substream
+    (0xAA, Some(CodecId::Dts)),        // Core Substream + Extension Substream
+    (0xAB, Some(CodecId::Dts)),        // Extension Substream, XLL only
+    (0xAC, Some(CodecId::Dts)),        // Extension Substream, LBR only
+    (0xAD, Some(CodecId::Opus)),       // Opus Audio
+    (0xAE, None),                      // Withdrawn — formerly AC-4
+    (0xAF, None),                      // Auro-Cx 3D Audio
+    (0xB0, None),                      // RealVideo Codec 11 — no CodecId in this workspace
+    (0xB1, Some(CodecId::Vp9)),        // VP9 Video
+    (0xB2, None),                      // DTS-UHD profile 2
+    (0xB3, None),                      // DTS-UHD profile 3 or higher
+    // Not in the MP4RA registry — see the module doc above.
+    (0xDD, Some(CodecId::Vorbis)),
+    (0xE1, None), // 13K Voice (QCELP)
+    (0xFF, None), // No object type specified
+];
+
+/// MPEG-4 object type indications mapped to this workspace's codec
+/// identifiers, via [`OBJECT_TYPE_TABLE`].
+///
+/// Only the values `vaco-codec-core` can name resolve to `Some`. The rest are
 /// deliberately `None` rather than approximated — a demuxer that gets `None`
 /// still has the raw object type and the sample entry's four-character code to
 /// report, and inventing a wrong `CodecId` would be worse than reporting
 /// nothing.
 #[must_use]
 pub fn object_type_codec(oti: u8) -> Option<CodecId> {
-    match oti {
-        0x21 => Some(CodecId::H264),
-        0x23 => Some(CodecId::Hevc),
-        // 0x40 MPEG-4 Audio, 0x66/0x67/0x68 MPEG-2 AAC main/LC/SSR.
-        0x40 | 0x66 | 0x67 | 0x68 => Some(CodecId::Aac),
-        // 0x69 MPEG-2 Audio (layer 3), 0x6B MPEG-1 Audio.
-        0x69 | 0x6B => Some(CodecId::Mp3),
-        0x6C => Some(CodecId::Jpeg),
-        0x6D => Some(CodecId::Png),
-        0xAD => Some(CodecId::Opus),
-        0xDD => Some(CodecId::Vorbis),
-        _ => None,
-    }
+    OBJECT_TYPE_TABLE
+        .iter()
+        .find(|(o, _)| *o == oti)
+        .and_then(|(_, c)| *c)
 }
 
 /// The `streamType` values §7.2.6.6 defines, for the two that matter here.
@@ -356,9 +436,20 @@ mod tests {
 
     #[test]
     fn unknown_object_types_map_to_nothing_rather_than_a_guess() {
-        assert_eq!(object_type_codec(0x00), None);
-        assert_eq!(object_type_codec(0xFF), None);
-        assert_eq!(object_type_codec(0xA5), None); // AC-3: no CodecId yet
+        assert_eq!(object_type_codec(0x00), None); // not in the registry at all
+        assert_eq!(object_type_codec(0xFF), None); // registered as "unspecified"
+        // Withdrawn (formerly AC-3) — mapping it to `Ac3` would be a guess a
+        // real file can no longer confirm, and measurement shows the
+        // reference never takes this path for AC-3 anyway.
+        assert_eq!(object_type_codec(0xA5), None);
         assert_eq!(object_type_codec(0x6B), Some(CodecId::Mp3));
+    }
+
+    #[test]
+    fn the_object_type_table_covers_mpeg4_visual_and_the_dts_family() {
+        assert_eq!(object_type_codec(0x20), Some(CodecId::Mpeg4));
+        assert_eq!(object_type_codec(0xA9), Some(CodecId::Dts));
+        assert_eq!(object_type_codec(0xAC), Some(CodecId::Dts));
+        assert_eq!(object_type_codec(0xB1), Some(CodecId::Vp9));
     }
 }

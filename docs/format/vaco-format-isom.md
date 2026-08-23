@@ -383,6 +383,112 @@ because it is about demuxing policy, not box shape: `ffprobe 8.1` surfaces
 **no** encryption information for this file at all, and `ffmpeg -i` decodes the
 still-encrypted bytes into corrupted frames rather than refusing to open it.
 
+### 8. The PCM codec table, and why a `FourCc` table cannot work
+
+**The finding a future reader most needs before touching `stsd::sample_entry_codec`
+or `esds::OBJECT_TYPE_TABLE`:** a sample entry's four-character code alone does
+not name a PCM codec. `sowt` covers both 8- and 16-bit; `in24`, `in32`, `fl32`
+and `fl64` each cover *both* byte orders; `raw ` means `pcm_u8` in an audio
+entry and `rawvideo` in a video one; and `lpcm`'s entire layout — width,
+signedness, float-ness, byte order — lives in its version-2 body, not in the
+fourcc at all. No amount of filling in a `FourCc -> CodecId` table fixes this;
+the table has to take the sample entry's *context* as an input.
+
+Measured 2026-08-23 by encoding one `.mov` per `ffmpeg` PCM encoder
+(`ffmpeg -f lavfi -i "sine=frequency=440:duration=0.2" -c:a <encoder> -f mov
+p.mov`), reading back `codec_tag_string`/`codec_name` with `ffprobe`, and
+reading the sample entry's raw bytes directly for `enda`, `sample_size` and
+(for `lpcm`) the version-2 body:
+
+| encoder | `codec_tag_string` | `codec_name` | `enda` box | `sample_size` field |
+|---|---|---|---|---:|
+| `pcm_s16le` | `sowt` | `pcm_s16le` | absent | 16 (accurate) |
+| `pcm_s8` | `sowt` | `pcm_s8` | absent | 8 (accurate) |
+| `pcm_s16be` | `twos` | `pcm_s16be` | absent | 16 (accurate) |
+| `pcm_s24le` | `in24` | `pcm_s24le` | `0001` (little) | 16 (**placeholder**) |
+| `pcm_s24be` | `in24` | `pcm_s24be` | `0000` (big) | 16 (**placeholder**) |
+| `pcm_s32le` | `in32` | `pcm_s32le` | `0001` (little) | 16 (**placeholder**) |
+| `pcm_s32be` | `in32` | `pcm_s32be` | `0000` (big) | 16 (**placeholder**) |
+| `pcm_f32le` | `fl32` | `pcm_f32le` | `0001` (little) | 16 (**placeholder**) |
+| `pcm_f32be` | `fl32` | `pcm_f32be` | `0000` (big) | 16 (**placeholder**) |
+| `pcm_f64le` | `fl64` | `pcm_f64le` | `0001` (little) | 16 (**placeholder**) |
+| `pcm_f64be` | `fl64` | `pcm_f64be` | `0000` (big) | 16 (**placeholder**) |
+| `pcm_u8` | `raw ` | `pcm_u8` | absent | 8 (accurate) |
+| `pcm_alaw` | `alaw` | `pcm_alaw` | absent | 16 (irrelevant — fixed format) |
+| `pcm_mulaw` | `ulaw` | `pcm_mulaw` | absent | 16 (irrelevant — fixed format) |
+
+The "placeholder" column is the correction to make to finding 7 as originally
+written: it said "width comes from `bits_per_sample`", which is true in
+outcome but not in mechanism. For `in24`/`in32`/`fl32`/`fl64` the classic
+`sample_size` field is a **fixed 16 regardless of the real width** — every
+measured file above reports it — so this crate does not read it for those four
+fourccs at all. The width is already fixed by the fourcc itself; only the byte
+order is open, and that comes from `enda`. `sample_size` is trustworthy only
+for `sowt`/`twos`, where it really does vary (8 vs. 16) and really is read.
+
+`enda` (found via `SampleEntry::endian`) is a `QuickTime` atom nested inside a
+`wave` extension box, alongside `frma` — the same nesting `esds` uses for old
+`QuickTime` audio, found the same way (`SampleEntry::config`/`SampleEntry::endian`
+both check the top-level extensions first, then fall back into `wave`). Its
+payload is one big-endian `u16`: `0` is big-endian, `1` is little-endian. When
+it is absent entirely — measured for every `sowt`/`twos`/`raw `/`ulaw`/`alaw`
+file, since those fix their byte order (or have none) in the fourcc — this
+crate defaults to big-endian per the QTFF specification, for the unmeasured
+case of an `in24`/`in32`/`fl32`/`fl64` entry that omits it.
+
+`lpcm` was measured separately, since none of the encoders above ever produce
+it: an 8-channel, 192 kHz `pcm_s32le` track is the smallest input this
+`ffmpeg` build promotes to a version-2 `lpcm` entry rather than `sowt`/`in32`.
+Its version-2 body carried `formatFlags = 0x0C` (bit 2 signed, bit 3 packed,
+bit 1 clear so little-endian) and `constBitsPerChannel = 32`, and `ffprobe`
+called the result `pcm_s32le` — confirming that `formatFlags` +
+`constBitsPerChannel`, not the fourcc or `sample_size`, decide an `lpcm`
+entry's flavour. `SampleEntry::codec` resolves this via the private
+`lpcm_pcm` helper; `AudioSampleEntry::format_flags` and
+`::const_bits_per_channel` are the two fields that make it possible, kept
+where the rest of `parse_audio`'s version-2 branch used to discard them.
+
+Two rows are unmeasured and documented as such at the call site rather than
+guessed silently: `twos` at 8-bit (no `ffmpeg` encoder writes it; handled
+symmetrically with `sowt` per the QTFF spec, since byte order is irrelevant at
+8 bits either way) and the `NONE` compression type (no `ffmpeg` path emits it
+at all; treated the same as `twos` — width from `sample_size`, byte order from
+`enda` defaulting to big-endian — because that is what the QTFF spec says
+`NONE` means).
+
+`raw ` in a video sample entry resolves to `rawvideo` regardless of pixel
+format; three more fourccs came out of the same measurement for free and are
+now plain rows in `sample_entry_codec`: `2vuy` (UYVY422), `yuvs` (YUYV422) and
+`24BG` (BGR24) all report `codec_name=rawvideo`.
+
+#### The ESDS object-type-indication table
+
+`esds::OBJECT_TYPE_TABLE` is the complete registry — ISO/IEC 14496-1 Table 5
+plus every extension the MP4 Registration Authority has since assigned
+(`mp4ra.org/registered-types/object-types`) — transcribed in full rather than
+trimmed to the rows this workspace can currently name. That completeness is
+what caught a real trap: `0xA5`/`0xA6` used to mean AC-3 and Enhanced AC-3, and
+a table built only from "which `CodecId`s do we have" would plausibly have
+mapped them there. The registry itself marks both **Withdrawn**, and measuring
+confirms why it does not matter in practice: `ffmpeg -c:a ac3 -f mov` and
+`-c:a eac3 -f mov` never put their stream behind `mp4a`/`esds` at all — they
+write their own sample-entry fourccs, `ac-3` and `ec-3`, exactly as
+`sample_entry_codec` already expected.
+
+The one addition confirmed by measurement rather than by transcription:
+`ffmpeg -c:v mpeg4 -f mov` writes an `mp4v` entry with `esds` object type
+`0x20`, and `ffprobe` calls it `codec_name=mpeg4`. Everything else that could
+plausibly route through `mp4a`/`mp4v` + `esds` in this `ffmpeg` build — MPEG-2
+video, MPEG-1 video (no encoder in this build at the tested frame rate), AC-3,
+E-AC-3, DTS, MP3 — was measured and turned out **not** to use `esds` at all,
+each getting its own dedicated fourcc instead (`m2v1`, `ac-3`, `ec-3`, `dtsc`,
+`.mp3`). Those are `sample_entry_codec` rows, not `OBJECT_TYPE_TABLE` ones.
+
+`h263` and the six ProRes quality tiers (`apco`/`apcs`/`apcn`/`apch`/`ap4h`/
+`ap4x`) were measured the same way and never go through `esds` either — `h263`
+writes its own fourcc directly, and every ProRes tier reports
+`codec_name=prores`, distinguished only by `codec_tag_string`.
+
 ---
 
 ## How to change it
@@ -397,12 +503,29 @@ one is additive and cannot break an existing parse.
 
 ### Adding a codec four-character code
 
-`stsd::sample_entry_codec`. Codes with no `vaco_codec_core::CodecId` map to
-`None` deliberately rather than to a near miss; the caller keeps the raw
-four-character code either way and `ffprobe` prints it as `codec_tag_string`
-regardless. When `CodecId` grows — it is currently a hand-written stub of
-thirteen variants awaiting generation from `codecs.toml` — several `None` rows
-here become real (`ac-3`, `ec-3`, `alac`, `tx3g`, `samr`, the ProRes codes).
+Start by asking whether the fourcc alone determines the codec. If it does —
+most of them do — add it to `stsd::sample_entry_codec`. Codes with no
+`vaco_codec_core::CodecId` map to `None` deliberately rather than to a near
+miss; the caller keeps the raw four-character code either way and `ffprobe`
+prints it as `codec_tag_string` regardless.
+
+If it does not — see "The PCM codec table, and why a `FourCc` table cannot
+work" above — it needs a case in `SampleEntry::resolve_ambiguous` instead,
+which has access to the whole entry (media type, `bits_per_sample`, `enda`,
+the version-2 body), not just the four bytes. `sample_entry_codec` still gets
+a row for that fourcc as a **fallback** for when the context does not resolve
+it (a malformed entry, or a bit depth this workspace has no exact `CodecId`
+for) — `resolve_ambiguous` returning `None` is what lets `SampleEntry::codec`
+fall through to it.
+
+`mp4a`/`mp4v` are the third case: refined through `esds`'s
+`OBJECT_TYPE_TABLE`, which is the complete MP4RA object-type-indication
+registry, not a hand-picked subset — see above for why that completeness
+matters. Measure before adding a row to any of the three: encode with the
+relevant `ffmpeg` codec into `.mov`, and check whether it actually goes
+through `mp4a`/`mp4v` + `esds` at all before assuming an object type — several
+codecs that look like `esds` candidates (AC-3, DTS, MP3, MPEG-2 video) turn
+out to use their own dedicated fourcc instead.
 
 ### Changing the memory/latency trade-off
 

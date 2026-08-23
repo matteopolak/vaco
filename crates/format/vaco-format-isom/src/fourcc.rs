@@ -144,6 +144,10 @@ pub mod boxes {
         SCHM = b"schm", SCHI = b"schi", TENC = b"tenc", DVCC = b"dvcC", DVVC = b"dvvC",
         DVWC = b"dvwC", CLLI = b"clli", MDCV = b"mdcv", SMDM = b"SmDm", COLL = b"CoLL",
         CCST = b"ccst",
+        // `QuickTime`'s endian atom — inside `wave`, alongside `frma`, for the
+        // sample entries whose fourcc does not fix a byte order on its own
+        // (`in24`, `in32`, `fl32`, `fl64`). See `stsd.rs`'s module docs.
+        ENDA = b"enda",
 
         // Metadata.
         ILST = b"ilst", KEYS = b"keys", CHPL = b"chpl", DATA = b"data", MEAN = b"mean",

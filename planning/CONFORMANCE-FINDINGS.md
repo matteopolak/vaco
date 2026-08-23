@@ -187,44 +187,55 @@ Found by trying the obvious command while the harness was fresh in mind, which
 is worth recording on its own — 2,935 unit tests and eight gates were all green
 on a binary that could not write a file.
 
-## 7. MP4's codec table, and why a `FourCc` table cannot work — **open**, `vaco-format-isom`
+## 7. MP4's codec table, and why a `FourCc` table cannot work — **fixed**, `vaco-format-isom`
 
 The MP4 half of finding 4. `sample_entry_codec` in
-`crates/format/vaco-format-isom/src/stsd.rs` maps about fifteen FourCCs and
-collapses nine of them onto a single `CodecId::Pcm`, so a QuickTime file with
-16-bit little-endian audio prints `codec_name=pcm` where the reference prints
+`crates/format/vaco-format-isom/src/stsd.rs` mapped about fifteen FourCCs and
+collapsed nine of them onto a single `CodecId::Pcm`, so a QuickTime file with
+16-bit little-endian audio printed `codec_name=pcm` where the reference prints
 `pcm_s16le`.
 
-Filling the table in is not enough, and this is the interesting part. Measured
-2026-08-23 by encoding one `.mov` per PCM variant and reading back both the
-sample-entry FourCC and what `ffprobe` calls it:
-
-| encoder | `codec_tag_string` | `codec_name` |
-|---|---|---|
-| `pcm_s16le` | `sowt` | `pcm_s16le` |
-| `pcm_s8` | `sowt` | `pcm_s8` |
-| `pcm_s24le` | `in24` | `pcm_s24le` |
-| `pcm_s24be` | `in24` | `pcm_s24be` |
-| `pcm_s32le` | `in32` | `pcm_s32le` |
-| `pcm_s32be` | `in32` | `pcm_s32be` |
-| `pcm_f32le` | `fl32` | `pcm_f32le` |
-| `pcm_f32be` | `fl32` | `pcm_f32be` |
-| `pcm_u8` | `raw ` | `pcm_u8` |
+Filling the table in was not enough, and that was the interesting part.
+Measured 2026-08-23 by encoding one `.mov` per PCM variant and reading back
+both the sample-entry FourCC and what `ffprobe` calls it — full table,
+including the `enda` box and `sample_size` field measured for each row, now
+lives in `docs/format/vaco-format-isom.md` rather than duplicated here.
 
 **The FourCC does not determine the codec.** `sowt` covers both 16-bit and
 8-bit; `in24`, `in32`, `fl32` and `fl64` each cover *both endiannesses*. So
 endianness is not in the FourCC at all — it comes from the sample entry's
-`enda` box — and width comes from `bits_per_sample`. A table keyed on FourCC
-alone cannot reproduce the reference no matter how many rows it has, which is
-what makes this a design finding rather than a data-entry task.
+`enda` box, nested inside `wave` the same way `esds` is for old `QuickTime`
+audio.
 
-Two more measured on the way, both plain table rows: `ulaw` → `pcm_mulaw` and
-`alaw` → `pcm_alaw` (currently both collapse to `pcm`), and `raw ` means
-`pcm_u8` in an **audio** sample entry but `rawvideo` in a **video** one — the
-current code lumps `raw ` into the PCM group regardless of which it is in.
+One correction to this finding's own original wording: it said width "comes
+from `bits_per_sample`". True in outcome, false in mechanism — the classic
+`sample_size` field is a fixed `16` placeholder for `in24`/`in32`/`fl32`/`fl64`
+in every file measured, regardless of the real width, so the fix does not read
+it for those four fourccs at all. Width is already fixed by the fourcc; only
+`enda` was ever open. `sample_size` **is** read, and is accurate, for `sowt`
+and `twos`, the two fourccs that actually vary in width. `lpcm`'s flavour
+turned out to live somewhere else again — its version-2 body's `formatFlags` +
+`constBitsPerChannel`, not the fourcc, `sample_size`, or `enda` (no `enda` box
+is present on an `lpcm` entry at all).
 
-Also missing and straightforward: `mp4v` → `mpeg4` (through the ESDS
-object-type indication), `h263` → `h263`, `ap4h` → `prores`, `alac` → `alac`.
+Fixed via `SampleEntry::resolve_ambiguous`, which takes the whole entry —
+media type, `bits_per_sample`, `enda`, the version-2 body — rather than the
+bare fourcc `sample_entry_codec` still handles everything else with. `ulaw` →
+`pcm_mulaw`, `alaw` → `pcm_alaw`, `mp4v` → `mpeg4` (via the ESDS
+object-type-indication table, which is now the complete MP4RA registry rather
+than eight hand-picked rows — see its own module doc for the `0xA5`/`0xA6`
+"Withdrawn" trap that completeness caught), `h263` → `h263`, all six ProRes
+tiers (`apco`/`apcs`/`apcn`/`apch`/`ap4h`/`ap4x`) → `prores`, and `alac` →
+`alac` are now plain rows, all measured. `raw ` resolves to `pcm_u8` in an
+audio sample entry and `rawvideo` in a video one, using the media type the
+entry already carries; `2vuy`/`yuvs`/`24BG` (measured for free on the way) are
+three more `rawvideo` fourccs.
+
+No new `CodecId` variants were needed — every one this fix uses
+(`PcmS8`/`PcmU8`/`PcmS16le`/`PcmS16be`/`PcmS24le`/`PcmS24be`/`PcmS32le`/
+`PcmS32be`/`PcmF32le`/`PcmF32be`/`PcmF64le`/`PcmF64be`/`PcmAlaw`/`PcmMulaw`/
+`Rawvideo`/`Mpeg4`/`H263`/`Prores`/`Alac`/`Vc1`/`Dirac`/`Vp9`/`Dts`/
+`Jpeg2000`/`Mpeg1video`) already existed in `vaco-codec-core`, unused.
 
 ## The numbers, before and after (XF-03 / XF-01, this pass)
 
