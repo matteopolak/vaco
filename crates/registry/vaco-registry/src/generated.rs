@@ -16,6 +16,342 @@
 /// This is the listing surface: `-formats`, `-codecs`, `-demuxers` and the
 /// rest render exactly these rows.
 pub static COMPONENTS: &[crate::Component] = &[
+    #[cfg(feature = "demux-aiff")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "aiff",
+        long_name: Some("Audio IFF"),
+        krate: "vaco-format-audio-simple",
+        feature: Some("demux-aiff"),
+        media: None,
+        codec: None,
+        extensions: &["aif", "aiff", "afc", "aifc"],
+        mime_types: &["audio/aiff", "audio/x-aiff"],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "alaw",
+        long_name: Some("PCM A-law"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["al"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-au")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "au",
+        long_name: Some("Sun AU"),
+        krate: "vaco-format-audio-simple",
+        feature: Some("demux-au"),
+        media: None,
+        codec: None,
+        extensions: &["au", "snd"],
+        mime_types: &["audio/basic"],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "av1",
+        long_name: Some("AV1 Annex B"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["obu"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-avi")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "avi",
+        long_name: Some("AVI (Audio Video Interleaved)"),
+        krate: "vaco-demux-avi",
+        feature: Some("demux-avi"),
+        media: None,
+        codec: None,
+        extensions: &["avi"],
+        mime_types: &["video/x-msvideo"],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "avs2",
+        long_name: Some("raw AVS2-P2/IEEE1857.4"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["avs", "avs2"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "avs3",
+        long_name: Some("raw AVS3-P2/IEEE1857.10"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["avs3"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "bit",
+        long_name: Some("G.729 BIT file format"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["bit"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "bitpacked",
+        long_name: Some("Bitpacked"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["bitpacked"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-caf")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "caf",
+        long_name: Some("Apple CAF (Core Audio Format)"),
+        krate: "vaco-format-audio-simple",
+        feature: Some("demux-caf"),
+        media: None,
+        codec: None,
+        extensions: &["caf"],
+        mime_types: &["audio/x-caf"],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "cavsvideo",
+        long_name: Some("raw Chinese AVS (Audio Video Standard)"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["avs"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "data",
+        long_name: Some("raw data"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "dirac",
+        long_name: Some("raw Dirac"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "dnxhd",
+        long_name: Some("raw DNxHD (SMPTE VC-3)"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-dv")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "dv",
+        long_name: Some("DV (Digital Video)"),
+        krate: "vaco-format-dv",
+        feature: Some("demux-dv"),
+        media: None,
+        codec: None,
+        extensions: &["dv", "dif"],
+        mime_types: &["video/x-dv"],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "evc",
+        long_name: Some("EVC Annex B"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["evc"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "f32be",
+        long_name: Some("PCM 32-bit floating-point big-endian"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "f32le",
+        long_name: Some("PCM 32-bit floating-point little-endian"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "f64be",
+        long_name: Some("PCM 64-bit floating-point big-endian"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "f64le",
+        long_name: Some("PCM 64-bit floating-point little-endian"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-flv")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "flv",
+        long_name: Some("FLV (Flash Video)"),
+        krate: "vaco-demux-flv",
+        feature: Some("demux-flv"),
+        media: None,
+        codec: None,
+        extensions: &["flv"],
+        mime_types: &["video/x-flv"],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "h261",
+        long_name: Some("raw H.261"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["h261"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "h263",
+        long_name: Some("raw H.263"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "h264",
+        long_name: Some("raw H.264 video"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["h26l", "h264", "264", "avc"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "hevc",
+        long_name: Some("raw HEVC video"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["hevc", "h265", "265"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-ircam")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "ircam",
+        long_name: Some("Berkeley/IRCAM/CARL Sound Format"),
+        krate: "vaco-format-audio-simple",
+        feature: Some("demux-ircam"),
+        media: None,
+        codec: None,
+        extensions: &["sf"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "loas",
+        long_name: Some("LOAS AudioSyncStream"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "m4v",
+        long_name: Some("raw MPEG-4 video"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["m4v"],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-matroska")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -26,6 +362,30 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["mkv", "mk3d", "mka", "mks", "webm"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "mjpeg",
+        long_name: Some("raw MJPEG video"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["mjpg", "mjpeg", "mpo"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "mjpeg_2000",
+        long_name: Some("raw MJPEG 2000 video"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["j2k"],
         mime_types: &[],
     },
     #[cfg(feature = "demux-mp4")]
@@ -52,6 +412,18 @@ pub static COMPONENTS: &[crate::Component] = &[
             "image/heic",
         ],
     },
+    #[cfg(feature = "demux-mpegps")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "mpeg",
+        long_name: Some("MPEG-PS (MPEG-2 Program Stream)"),
+        krate: "vaco-demux-mpegps",
+        feature: Some("demux-mpegps"),
+        media: None,
+        codec: None,
+        extensions: &["mpg", "mpeg", "m2p", "vob", "vcd"],
+        mime_types: &["video/mpeg"],
+    },
     #[cfg(feature = "demux-mpegts")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -63,6 +435,1128 @@ pub static COMPONENTS: &[crate::Component] = &[
         codec: None,
         extensions: &["ts", "m2t", "m2ts", "mts", "mpegts"],
         mime_types: &["video/mp2t"],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "mpegvideo",
+        long_name: Some("raw MPEG video"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "mulaw",
+        long_name: Some("PCM mu-law"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["ul"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "obu",
+        long_name: Some("AV1 low overhead OBU"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["obu"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-ogg")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "ogg",
+        long_name: Some("Ogg"),
+        krate: "vaco-demux-ogg",
+        feature: Some("demux-ogg"),
+        media: None,
+        codec: None,
+        extensions: &["ogg", "oga", "ogv", "ogx", "opus", "spx"],
+        mime_types: &[
+            "application/ogg",
+            "audio/ogg",
+            "video/ogg",
+            "audio/opus",
+            "audio/speex",
+        ],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "rawvideo",
+        long_name: Some("raw video"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["yuv", "cif", "qcif", "rgb"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-rso")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "rso",
+        long_name: Some("Lego Mindstorms RSO"),
+        krate: "vaco-format-audio-simple",
+        feature: Some("demux-rso"),
+        media: None,
+        codec: None,
+        extensions: &["rso"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "s16be",
+        long_name: Some("PCM signed 16-bit big-endian"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "s16le",
+        long_name: Some("PCM signed 16-bit little-endian"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["sw"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "s24be",
+        long_name: Some("PCM signed 24-bit big-endian"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "s24le",
+        long_name: Some("PCM signed 24-bit little-endian"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "s32be",
+        long_name: Some("PCM signed 32-bit big-endian"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "s32le",
+        long_name: Some("PCM signed 32-bit little-endian"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "s337m",
+        long_name: Some("SMPTE 337M"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "s8",
+        long_name: Some("PCM signed 8-bit"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["sb"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-sox")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "sox",
+        long_name: Some("SoX (Sound eXchange) native"),
+        krate: "vaco-format-audio-simple",
+        feature: Some("demux-sox"),
+        media: None,
+        codec: None,
+        extensions: &["sox"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "u16be",
+        long_name: Some("PCM unsigned 16-bit big-endian"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "u16le",
+        long_name: Some("PCM unsigned 16-bit little-endian"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["uw"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "u24be",
+        long_name: Some("PCM unsigned 24-bit big-endian"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "u24le",
+        long_name: Some("PCM unsigned 24-bit little-endian"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "u32be",
+        long_name: Some("PCM unsigned 32-bit big-endian"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "u32le",
+        long_name: Some("PCM unsigned 32-bit little-endian"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "u8",
+        long_name: Some("PCM unsigned 8-bit"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["ub"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "v210",
+        long_name: Some("Uncompressed 4:2:2 10-bit"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["v210"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "v210x",
+        long_name: Some("Uncompressed 4:2:2 10-bit"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["yuv10"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "vc1",
+        long_name: Some("raw VC-1"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["vc1"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "vidc",
+        long_name: Some("PCM Archimedes VIDC"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-voc")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "voc",
+        long_name: Some("Creative Voice"),
+        krate: "vaco-format-audio-simple",
+        feature: Some("demux-voc"),
+        media: None,
+        codec: None,
+        extensions: &["voc"],
+        mime_types: &["audio/x-voc"],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "vvc",
+        long_name: Some("raw H.266/VVC video"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["h266", "266", "vvc"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-w64")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "w64",
+        long_name: Some("Sony Wave64"),
+        krate: "vaco-format-audio-simple",
+        feature: Some("demux-w64"),
+        media: None,
+        codec: None,
+        extensions: &["w64"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-wav")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "wav",
+        long_name: Some("WAV / WAVE (Waveform Audio)"),
+        krate: "vaco-format-audio-simple",
+        feature: Some("demux-wav"),
+        media: None,
+        codec: None,
+        extensions: &["wav"],
+        mime_types: &["audio/x-wav", "audio/wav"],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "yuv4mpegpipe",
+        long_name: Some("YUV4MPEG pipe"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["y4m"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-aiff")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "aiff",
+        long_name: Some("Audio IFF"),
+        krate: "vaco-format-audio-simple",
+        feature: Some("mux-aiff"),
+        media: None,
+        codec: None,
+        extensions: &["aif", "aiff"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "alaw",
+        long_name: Some("PCM A-law"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["al"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-au")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "au",
+        long_name: Some("Sun AU"),
+        krate: "vaco-format-audio-simple",
+        feature: Some("mux-au"),
+        media: None,
+        codec: None,
+        extensions: &["au"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-avi")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "avi",
+        long_name: Some("AVI (Audio Video Interleaved)"),
+        krate: "vaco-mux-avi",
+        feature: Some("mux-avi"),
+        media: None,
+        codec: None,
+        extensions: &["avi"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "avs2",
+        long_name: Some("raw AVS2-P2/IEEE1857.4 video"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["avs", "avs2"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "avs3",
+        long_name: Some("AVS3-P2/IEEE1857.10"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["avs3"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "bit",
+        long_name: Some("G.729 BIT file format"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["bit"],
+        mime_types: &["audio/bit"],
+    },
+    #[cfg(feature = "mux-caf")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "caf",
+        long_name: Some("Apple CAF (Core Audio Format)"),
+        krate: "vaco-format-audio-simple",
+        feature: Some("mux-caf"),
+        media: None,
+        codec: None,
+        extensions: &["caf"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "cavsvideo",
+        long_name: Some("raw Chinese AVS (Audio Video Standard) video"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["cavs"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "data",
+        long_name: Some("raw data"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "dirac",
+        long_name: Some("raw Dirac"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["drc", "vc2"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "dnxhd",
+        long_name: Some("raw DNxHD (SMPTE VC-3)"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["dnxhd", "dnxhr"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-dv")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "dv",
+        long_name: Some("DV (Digital Video)"),
+        krate: "vaco-format-dv",
+        feature: Some("mux-dv"),
+        media: None,
+        codec: None,
+        extensions: &["dv"],
+        mime_types: &["video/x-dv"],
+    },
+    #[cfg(feature = "mux-dvd")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "dvd",
+        long_name: Some("MPEG-2 PS (DVD VOB)"),
+        krate: "vaco-mux-mpegps",
+        feature: Some("mux-dvd"),
+        media: None,
+        codec: None,
+        extensions: &["vob"],
+        mime_types: &["video/mpeg"],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "evc",
+        long_name: Some("raw EVC video"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["evc"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "f32be",
+        long_name: Some("PCM 32-bit floating-point big-endian"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "f32le",
+        long_name: Some("PCM 32-bit floating-point little-endian"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "f64be",
+        long_name: Some("PCM 64-bit floating-point big-endian"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "f64le",
+        long_name: Some("PCM 64-bit floating-point little-endian"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-flv")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "flv",
+        long_name: Some("FLV (Flash Video)"),
+        krate: "vaco-mux-flv",
+        feature: Some("mux-flv"),
+        media: None,
+        codec: None,
+        extensions: &["flv"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "h261",
+        long_name: Some("raw H.261"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["h261"],
+        mime_types: &["video/x-h261"],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "h263",
+        long_name: Some("raw H.263"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["h263"],
+        mime_types: &["video/x-h263"],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "h264",
+        long_name: Some("raw H.264 video"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["h264", "264"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "hevc",
+        long_name: Some("raw HEVC video"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["hevc", "h265", "265"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-ircam")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "ircam",
+        long_name: Some("Berkeley/IRCAM/CARL Sound Format"),
+        krate: "vaco-format-audio-simple",
+        feature: Some("mux-ircam"),
+        media: None,
+        codec: None,
+        extensions: &["sf"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "m4v",
+        long_name: Some("raw MPEG-4 video"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["m4v"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "mjpeg",
+        long_name: Some("raw MJPEG video"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["mjpg", "mjpeg"],
+        mime_types: &["video/x-mjpeg"],
+    },
+    #[cfg(feature = "mux-mpeg")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "mpeg",
+        long_name: Some("MPEG-1 Systems / MPEG program stream"),
+        krate: "vaco-mux-mpegps",
+        feature: Some("mux-mpeg"),
+        media: None,
+        codec: None,
+        extensions: &["mpg", "mpeg"],
+        mime_types: &["video/mpeg"],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "mulaw",
+        long_name: Some("PCM mu-law"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["ul"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "obu",
+        long_name: Some("AV1 low overhead OBU"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["obu"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-ogg")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "oga",
+        long_name: Some("Ogg Audio"),
+        krate: "vaco-mux-ogg",
+        feature: Some("mux-ogg"),
+        media: None,
+        codec: None,
+        extensions: &["oga"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-ogg")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "ogg",
+        long_name: Some("Ogg"),
+        krate: "vaco-mux-ogg",
+        feature: Some("mux-ogg"),
+        media: None,
+        codec: None,
+        extensions: &["ogg"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-ogg")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "ogv",
+        long_name: Some("Ogg Video"),
+        krate: "vaco-mux-ogg",
+        feature: Some("mux-ogg"),
+        media: None,
+        codec: None,
+        extensions: &["ogv"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-ogg")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "opus",
+        long_name: Some("Ogg Opus"),
+        krate: "vaco-mux-ogg",
+        feature: Some("mux-ogg"),
+        media: None,
+        codec: None,
+        extensions: &["opus"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "rawvideo",
+        long_name: Some("raw video"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["yuv", "rgb"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-rso")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "rso",
+        long_name: Some("Lego Mindstorms RSO"),
+        krate: "vaco-format-audio-simple",
+        feature: Some("mux-rso"),
+        media: None,
+        codec: None,
+        extensions: &["rso"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "s16be",
+        long_name: Some("PCM signed 16-bit big-endian"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "s16le",
+        long_name: Some("PCM signed 16-bit little-endian"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["sw"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "s24be",
+        long_name: Some("PCM signed 24-bit big-endian"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "s24le",
+        long_name: Some("PCM signed 24-bit little-endian"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "s32be",
+        long_name: Some("PCM signed 32-bit big-endian"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "s32le",
+        long_name: Some("PCM signed 32-bit little-endian"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "s8",
+        long_name: Some("PCM signed 8-bit"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["sb"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-sox")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "sox",
+        long_name: Some("SoX (Sound eXchange) native"),
+        krate: "vaco-format-audio-simple",
+        feature: Some("mux-sox"),
+        media: None,
+        codec: None,
+        extensions: &["sox"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-ogg")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "spx",
+        long_name: Some("Ogg Speex"),
+        krate: "vaco-mux-ogg",
+        feature: Some("mux-ogg"),
+        media: None,
+        codec: None,
+        extensions: &["spx"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-svcd")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "svcd",
+        long_name: Some("MPEG-2 PS (SVCD)"),
+        krate: "vaco-mux-mpegps",
+        feature: Some("mux-svcd"),
+        media: None,
+        codec: None,
+        extensions: &["mpg"],
+        mime_types: &["video/mpeg"],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "u16be",
+        long_name: Some("PCM unsigned 16-bit big-endian"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "u16le",
+        long_name: Some("PCM unsigned 16-bit little-endian"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["uw"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "u24be",
+        long_name: Some("PCM unsigned 24-bit big-endian"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "u24le",
+        long_name: Some("PCM unsigned 24-bit little-endian"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "u32be",
+        long_name: Some("PCM unsigned 32-bit big-endian"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "u32le",
+        long_name: Some("PCM unsigned 32-bit little-endian"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "u8",
+        long_name: Some("PCM unsigned 8-bit"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["ub"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "vc1",
+        long_name: Some("raw VC-1 video"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["vc1"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-vcd")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "vcd",
+        long_name: Some("MPEG-1 Systems / MPEG program stream (VCD)"),
+        krate: "vaco-mux-mpegps",
+        feature: Some("mux-vcd"),
+        media: None,
+        codec: None,
+        extensions: &["dat"],
+        mime_types: &["video/mpeg"],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "vidc",
+        long_name: Some("PCM Archimedes VIDC"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-vob")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "vob",
+        long_name: Some("MPEG-2 PS (VOB)"),
+        krate: "vaco-mux-mpegps",
+        feature: Some("mux-vob"),
+        media: None,
+        codec: None,
+        extensions: &["vob"],
+        mime_types: &["video/mpeg"],
+    },
+    #[cfg(feature = "mux-voc")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "voc",
+        long_name: Some("Creative Voice"),
+        krate: "vaco-format-audio-simple",
+        feature: Some("mux-voc"),
+        media: None,
+        codec: None,
+        extensions: &["voc"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "vvc",
+        long_name: Some("raw H.266/VVC video"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["vvc", "h266", "266"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-w64")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "w64",
+        long_name: Some("Sony Wave64"),
+        krate: "vaco-format-audio-simple",
+        feature: Some("mux-w64"),
+        media: None,
+        codec: None,
+        extensions: &["w64"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-wav")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "wav",
+        long_name: Some("WAV / WAVE (Waveform Audio)"),
+        krate: "vaco-format-audio-simple",
+        feature: Some("mux-wav"),
+        media: None,
+        codec: None,
+        extensions: &["wav"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-raw")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "yuv4mpegpipe",
+        long_name: Some("YUV4MPEG pipe"),
+        krate: "vaco-mux-raw",
+        feature: Some("mux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["y4m"],
+        mime_types: &[],
     },
     #[cfg(feature = "parse-aac")]
     crate::Component {
@@ -182,16 +1676,265 @@ pub static ENCUMBERED_ALL: &[&str] = &[];
 
 /// Descriptors of every enabled demuxer implementation.
 pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
+    #[cfg(feature = "demux-aiff")]
+    &::vaco_format_audio_simple::aiff::DEMUXER,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::pcm::DEMUXER_ALAW,
+    #[cfg(feature = "demux-au")]
+    &::vaco_format_audio_simple::au::DEMUXER,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::bitstream::DEMUXER_AV1,
+    #[cfg(feature = "demux-avi")]
+    &::vaco_demux_avi::DEMUXER,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::bitstream::DEMUXER_AVS2,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::bitstream::DEMUXER_AVS3,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::bitstream::DEMUXER_BIT,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::rawvideo::DEMUXER_BITPACKED,
+    #[cfg(feature = "demux-caf")]
+    &::vaco_format_audio_simple::caf::DEMUXER,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::bitstream::DEMUXER_CAVSVIDEO,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::bitstream::DEMUXER_DATA,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::bitstream::DEMUXER_DIRAC,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::bitstream::DEMUXER_DNXHD,
+    #[cfg(feature = "demux-dv")]
+    &::vaco_format_dv::DEMUXER,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::bitstream::DEMUXER_EVC,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::pcm::DEMUXER_F32BE,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::pcm::DEMUXER_F32LE,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::pcm::DEMUXER_F64BE,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::pcm::DEMUXER_F64LE,
+    #[cfg(feature = "demux-flv")]
+    &::vaco_demux_flv::DEMUXER,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::bitstream::DEMUXER_H261,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::bitstream::DEMUXER_H263,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::bitstream::DEMUXER_H264,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::bitstream::DEMUXER_HEVC,
+    #[cfg(feature = "demux-ircam")]
+    &::vaco_format_audio_simple::ircam::DEMUXER,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::bitstream::DEMUXER_LOAS,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::bitstream::DEMUXER_M4V,
     #[cfg(feature = "demux-matroska")]
     &::vaco_demux_matroska::DEMUXER,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::bitstream::DEMUXER_MJPEG,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::bitstream::DEMUXER_MJPEG_2000,
     #[cfg(feature = "demux-mp4")]
     &::vaco_demux_mp4::DEMUXER,
+    #[cfg(feature = "demux-mpegps")]
+    &::vaco_demux_mpegps::DEMUXER,
     #[cfg(feature = "demux-mpegts")]
     &::vaco_demux_mpegts::DEMUXER,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::bitstream::DEMUXER_MPEGVIDEO,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::pcm::DEMUXER_MULAW,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::bitstream::DEMUXER_OBU,
+    #[cfg(feature = "demux-ogg")]
+    &::vaco_demux_ogg::DEMUXER,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::rawvideo::DEMUXER_RAWVIDEO,
+    #[cfg(feature = "demux-rso")]
+    &::vaco_format_audio_simple::rso::DEMUXER,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::pcm::DEMUXER_S16BE,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::pcm::DEMUXER_S16LE,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::pcm::DEMUXER_S24BE,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::pcm::DEMUXER_S24LE,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::pcm::DEMUXER_S32BE,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::pcm::DEMUXER_S32LE,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::bitstream::DEMUXER_S337M,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::pcm::DEMUXER_S8,
+    #[cfg(feature = "demux-sox")]
+    &::vaco_format_audio_simple::sox::DEMUXER,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::pcm::DEMUXER_U16BE,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::pcm::DEMUXER_U16LE,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::pcm::DEMUXER_U24BE,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::pcm::DEMUXER_U24LE,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::pcm::DEMUXER_U32BE,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::pcm::DEMUXER_U32LE,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::pcm::DEMUXER_U8,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::rawvideo::DEMUXER_V210,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::rawvideo::DEMUXER_V210X,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::bitstream::DEMUXER_VC1,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::pcm::DEMUXER_VIDC,
+    #[cfg(feature = "demux-voc")]
+    &::vaco_format_audio_simple::voc::DEMUXER,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::bitstream::DEMUXER_VVC,
+    #[cfg(feature = "demux-w64")]
+    &::vaco_format_audio_simple::w64::DEMUXER,
+    #[cfg(feature = "demux-wav")]
+    &::vaco_format_audio_simple::wav::DEMUXER,
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::y4m::DEMUXER_YUV4MPEGPIPE,
 ];
 
 /// Descriptors of every enabled muxer implementation.
-pub static MUXERS: &[&::vaco_format_core::MuxerDesc] = &[];
+pub static MUXERS: &[&::vaco_format_core::MuxerDesc] = &[
+    #[cfg(feature = "mux-aiff")]
+    &::vaco_format_audio_simple::aiff::MUXER,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_ALAW,
+    #[cfg(feature = "mux-au")]
+    &::vaco_format_audio_simple::au::MUXER,
+    #[cfg(feature = "mux-avi")]
+    &::vaco_mux_avi::MUXER,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_AVS2,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_AVS3,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_BIT,
+    #[cfg(feature = "mux-caf")]
+    &::vaco_format_audio_simple::caf::MUXER,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_CAVSVIDEO,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_DATA,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_DIRAC,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_DNXHD,
+    #[cfg(feature = "mux-dv")]
+    &::vaco_format_dv::MUXER,
+    #[cfg(feature = "mux-dvd")]
+    &::vaco_mux_mpegps::MUXER_DVD,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_EVC,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_F32BE,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_F32LE,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_F64BE,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_F64LE,
+    #[cfg(feature = "mux-flv")]
+    &::vaco_mux_flv::MUXER,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_H261,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_H263,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_H264,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_HEVC,
+    #[cfg(feature = "mux-ircam")]
+    &::vaco_format_audio_simple::ircam::MUXER,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_M4V,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_MJPEG,
+    #[cfg(feature = "mux-mpeg")]
+    &::vaco_mux_mpegps::MUXER_MPEG,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_MULAW,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_OBU,
+    #[cfg(feature = "mux-ogg")]
+    &::vaco_mux_ogg::MUXER_OGA,
+    #[cfg(feature = "mux-ogg")]
+    &::vaco_mux_ogg::MUXER_OGG,
+    #[cfg(feature = "mux-ogg")]
+    &::vaco_mux_ogg::MUXER_OGV,
+    #[cfg(feature = "mux-ogg")]
+    &::vaco_mux_ogg::MUXER_OPUS,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_RAWVIDEO,
+    #[cfg(feature = "mux-rso")]
+    &::vaco_format_audio_simple::rso::MUXER,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_S16BE,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_S16LE,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_S24BE,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_S24LE,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_S32BE,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_S32LE,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_S8,
+    #[cfg(feature = "mux-sox")]
+    &::vaco_format_audio_simple::sox::MUXER,
+    #[cfg(feature = "mux-ogg")]
+    &::vaco_mux_ogg::MUXER_SPX,
+    #[cfg(feature = "mux-svcd")]
+    &::vaco_mux_mpegps::MUXER_SVCD,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_U16BE,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_U16LE,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_U24BE,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_U24LE,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_U32BE,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_U32LE,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_U8,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_VC1,
+    #[cfg(feature = "mux-vcd")]
+    &::vaco_mux_mpegps::MUXER_VCD,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_VIDC,
+    #[cfg(feature = "mux-vob")]
+    &::vaco_mux_mpegps::MUXER_VOB,
+    #[cfg(feature = "mux-voc")]
+    &::vaco_format_audio_simple::voc::MUXER,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::raw::MUXER_VVC,
+    #[cfg(feature = "mux-w64")]
+    &::vaco_format_audio_simple::w64::MUXER,
+    #[cfg(feature = "mux-wav")]
+    &::vaco_format_audio_simple::wav::MUXER,
+    #[cfg(feature = "mux-raw")]
+    &::vaco_mux_raw::y4m::MUXER_YUV4MPEGPIPE,
+];
 
 /// Descriptors of every enabled decoder implementation.
 pub static DECODERS: &[&::vaco_codec_core::DecoderDesc] = &[];

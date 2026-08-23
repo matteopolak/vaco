@@ -168,6 +168,54 @@ impl Component {
 
 // ------------------------------------------------------------------- the task
 
+/// Whether the crate's own source declares the item a `ctor` names.
+///
+/// # Why this is worth a check rather than a compile error
+///
+/// The generated file contains a resolution check for every `ctor` — code that
+/// references the path, so a typo does not compile. That is the right design
+/// and it has a sharp edge: the failure lands in **`vaco-registry`**, which
+/// almost everything depends on, so a fragment naming a symbol its own crate
+/// has not exported yet breaks `wasm-check`, `patent-gate` and all fuzzing for
+/// **every** agent in the tree.
+///
+/// That is not hypothetical. `vaco-mux-avi` and `vaco-mux-flv` each shipped a
+/// fragment naming a `MUXER` const before exporting one, and the registry stayed
+/// broken for most of one agent's session — an agent working on an unrelated
+/// crate, who could do nothing about it.
+///
+/// So the generator refuses to emit the row instead, and the error names the
+/// fragment and the missing item. A generation-time error the owning agent sees
+/// immediately beats a compile error six other agents see.
+///
+/// It is a **text search** over the crate's own sources, so it sees a `pub
+/// static`, a `pub const`, a `pub fn` and a re-export alike, and cannot see a
+/// name built by a macro. That asymmetry is deliberate: a false *pass* costs a
+/// compile error the author gets anyway, while a false *failure* would block a
+/// legitimate fragment. Erring toward passing is the safe direction here.
+fn ctor_item_exists(crate_path: &std::path::Path, ctor: &str) -> bool {
+    let Some(item) = ctor.rsplit("::").next() else {
+        return true;
+    };
+    let mut stack = vec![crate_path.join("src")];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().and_then(|x| x.to_str()) == Some("rs")
+                && std::fs::read_to_string(&p).is_ok_and(|t| t.contains(item))
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 pub fn run(check: bool) -> Task {
     let root = repo_root();
     let mut components: Vec<Component> = Vec::new();
@@ -187,9 +235,24 @@ pub fn run(check: bool) -> Task {
             ));
         }
         for t in tables {
-            components.push(build(&t, &name, &area).map_err(|e| {
-                format!("{}: [[component]] {}: {e}", frag.display(), t.origin_line)
-            })?);
+            let c = build(&t, &name, &area)
+                .map_err(|e| format!("{}: [[component]] {}: {e}", frag.display(), t.origin_line))?;
+            if !ctor_item_exists(&path, &c.ctor) {
+                return Err(format!(
+                    "{}: [[component]] {}: `ctor = \"{}\"` names an item this \
+                     crate does not declare.\n\nThe generated registry contains \
+                     a resolution check for every ctor, so emitting this row \
+                     would break `vaco-registry` — and almost everything depends \
+                     on it, so `wasm-check`, `patent-gate` and all fuzzing would \
+                     fail for every agent in the tree, not just you. That has \
+                     happened.\n\nExport the descriptor first, then write the \
+                     fragment.",
+                    frag.display(),
+                    t.origin_line,
+                    c.ctor
+                ));
+            }
+            components.push(c);
         }
     }
 

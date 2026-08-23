@@ -34,16 +34,58 @@ layer = 6
 # `default = false` in its own fragment; nothing here is hand-maintained.
 
 [features]
-default = ["demux-matroska", "demux-mp4", "demux-mpegts", "parse-aac", "parse-av1", "parse-h264", "parse-hevc", "parse-opus"]
+default = ["demux-aiff", "demux-au", "demux-avi", "demux-caf", "demux-dv", "demux-flv", "demux-ircam", "demux-matroska", "demux-mp4", "demux-mpegps", "demux-mpegts", "demux-ogg", "demux-raw", "demux-rso", "demux-sox", "demux-voc", "demux-w64", "demux-wav", "mux-aiff", "mux-au", "mux-avi", "mux-caf", "mux-dv", "mux-dvd", "mux-flv", "mux-ircam", "mux-mpeg", "mux-ogg", "mux-raw", "mux-rso", "mux-sox", "mux-svcd", "mux-vcd", "mux-vob", "mux-voc", "mux-w64", "mux-wav", "parse-aac", "parse-av1", "parse-h264", "parse-hevc", "parse-opus"]
+"demux-aiff" = ["dep:vaco-format-audio-simple"]
+"demux-au" = ["dep:vaco-format-audio-simple"]
+"demux-avi" = ["dep:vaco-demux-avi"]
+"demux-caf" = ["dep:vaco-format-audio-simple"]
+"demux-dv" = ["dep:vaco-format-dv"]
+"demux-flv" = ["dep:vaco-demux-flv"]
+"demux-ircam" = ["dep:vaco-format-audio-simple"]
 "demux-matroska" = ["dep:vaco-demux-matroska"]
 "demux-mp4" = ["dep:vaco-demux-mp4"]
+"demux-mpegps" = ["dep:vaco-demux-mpegps"]
 "demux-mpegts" = ["dep:vaco-demux-mpegts"]
+"demux-ogg" = ["dep:vaco-demux-ogg"]
+"demux-raw" = ["dep:vaco-demux-raw"]
+"demux-rso" = ["dep:vaco-format-audio-simple"]
+"demux-sox" = ["dep:vaco-format-audio-simple"]
+"demux-voc" = ["dep:vaco-format-audio-simple"]
+"demux-w64" = ["dep:vaco-format-audio-simple"]
+"demux-wav" = ["dep:vaco-format-audio-simple"]
+"mux-aiff" = ["dep:vaco-format-audio-simple"]
+"mux-au" = ["dep:vaco-format-audio-simple"]
+"mux-avi" = ["dep:vaco-mux-avi"]
+"mux-caf" = ["dep:vaco-format-audio-simple"]
+"mux-dv" = ["dep:vaco-format-dv"]
+"mux-dvd" = ["dep:vaco-mux-mpegps"]
+"mux-flv" = ["dep:vaco-mux-flv"]
+"mux-ircam" = ["dep:vaco-format-audio-simple"]
+"mux-mpeg" = ["dep:vaco-mux-mpegps"]
+"mux-ogg" = ["dep:vaco-mux-ogg"]
+"mux-raw" = ["dep:vaco-mux-raw"]
+"mux-rso" = ["dep:vaco-format-audio-simple"]
+"mux-sox" = ["dep:vaco-format-audio-simple"]
+"mux-svcd" = ["dep:vaco-mux-mpegps"]
+"mux-vcd" = ["dep:vaco-mux-mpegps"]
+"mux-vob" = ["dep:vaco-mux-mpegps"]
+"mux-voc" = ["dep:vaco-format-audio-simple"]
+"mux-w64" = ["dep:vaco-format-audio-simple"]
+"mux-wav" = ["dep:vaco-format-audio-simple"]
 "parse-aac" = ["dep:vaco-parse-aac"]
 "parse-av1" = ["dep:vaco-parse-av1"]
 "parse-h264" = ["dep:vaco-parse-h264"]
 "parse-hevc" = ["dep:vaco-parse-hevc"]
 "parse-opus" = ["dep:vaco-parse-opus"]
 "protocol-http" = ["dep:vaco-protocol-http"]
+
+[dependencies.vaco-demux-avi]
+path = "../../format/vaco-demux-avi"
+optional = true
+
+[dependencies.vaco-demux-flv]
+path = "../../format/vaco-demux-flv"
+optional = true
 
 [dependencies.vaco-demux-matroska]
 path = "../../format/vaco-demux-matroska"
@@ -53,8 +95,48 @@ optional = true
 path = "../../format/vaco-demux-mp4"
 optional = true
 
+[dependencies.vaco-demux-mpegps]
+path = "../../format/vaco-demux-mpegps"
+optional = true
+
 [dependencies.vaco-demux-mpegts]
 path = "../../format/vaco-demux-mpegts"
+optional = true
+
+[dependencies.vaco-demux-ogg]
+path = "../../format/vaco-demux-ogg"
+optional = true
+
+[dependencies.vaco-demux-raw]
+path = "../../format/vaco-demux-raw"
+optional = true
+
+[dependencies.vaco-format-audio-simple]
+path = "../../format/vaco-format-audio-simple"
+optional = true
+
+[dependencies.vaco-format-dv]
+path = "../../format/vaco-format-dv"
+optional = true
+
+[dependencies.vaco-mux-avi]
+path = "../../format/vaco-mux-avi"
+optional = true
+
+[dependencies.vaco-mux-flv]
+path = "../../format/vaco-mux-flv"
+optional = true
+
+[dependencies.vaco-mux-mpegps]
+path = "../../format/vaco-mux-mpegps"
+optional = true
+
+[dependencies.vaco-mux-ogg]
+path = "../../format/vaco-mux-ogg"
+optional = true
+
+[dependencies.vaco-mux-raw]
+path = "../../format/vaco-mux-raw"
 optional = true
 
 [dependencies.vaco-parse-aac]

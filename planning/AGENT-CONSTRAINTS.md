@@ -53,6 +53,21 @@ for 25 minutes with five agents idle.
 `python3 scripts/unblock-manifests.py`** — it fixes all three without needing
 cargo to work.
 
+## Export your descriptor **before** writing `vaco-component.toml`
+
+The generated registry contains a resolution check for every `ctor`, so a
+fragment naming a const your crate has not exported yet does not merely fail for
+you — it breaks **`vaco-registry`**, which almost everything depends on. That
+takes down `wasm-check`, `patent-gate` and all fuzzing for **every** agent in
+the tree.
+
+It has happened: two crates each shipped a fragment naming a `MUXER` const
+before exporting one, and the registry stayed broken for most of an unrelated
+agent's session.
+
+`gen-registry` now refuses the row and tells you, rather than emitting code that
+breaks everyone. Same failure, local instead of global.
+
 ## Generated files — never edit these by hand
 
 | file | regenerate with |
