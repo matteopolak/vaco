@@ -1,0 +1,55 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Colour/LUT video filters, plan 16 §4.2's `vaco-filter-color` row.
+# Implemented: colorchannelmixer, lut, lutrgb, lutyuv, lut2, pseudocolor.
+# The rest of the row (curves, colorbalance, colorcontrast, colorcorrect,
+# colorize, colorlevels, colortemperature, huesaturation, hue, vibrance,
+# exposure, selectivecolor, grayworld, greyedge, normalize, monochrome,
+# midequalizer, geq, colormap, limitdiff, tonemap, eq, histeq, colormatrix)
+# is not registered here.
+#
+# Each `ctor` names the per-filter `pub const DESC: FilterDesc`; runtime
+# instantiation goes through `vaco_filter_color::registry::ColorRegistry`,
+# a `vaco_filter_graph::registry::FilterRegistry` impl.
+
+[[component]]
+kind = "filter"
+name = "colorchannelmixer"
+long_name = "Adjust colors by mixing color channels"
+ctor = "vaco_filter_color::colorchannelmixer::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "lut"
+long_name = "Compute and apply a lookup table to the RGB/YUV input video"
+ctor = "vaco_filter_color::lut::lut::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "lutrgb"
+long_name = "Compute and apply a lookup table to the RGB input video"
+ctor = "vaco_filter_color::lut::lutrgb::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "lutyuv"
+long_name = "Compute and apply a lookup table to the YUV input video"
+ctor = "vaco_filter_color::lut::lutyuv::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "lut2"
+long_name = "Compute and apply a lookup table from two video inputs"
+ctor = "vaco_filter_color::lut2::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "pseudocolor"
+long_name = "Make pseudocolored video frames"
+ctor = "vaco_filter_color::pseudocolor::DESC"
+media = "video"

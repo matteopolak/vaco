@@ -1,0 +1,23 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# 3D/Hald LUT video filters, plan 16 §4.2's `vaco-filter-lut` row.
+# Implemented: lut3d, haldclut. `lut1d` and `haldclutsrc` are not
+# registered here.
+#
+# Each `ctor` names the per-filter `pub const DESC: FilterDesc`; runtime
+# instantiation goes through `vaco_filter_lut::registry::LutRegistry`, a
+# `vaco_filter_graph::registry::FilterRegistry` impl.
+
+[[component]]
+kind = "filter"
+name = "lut3d"
+long_name = "Adjust colors using a 3D LUT"
+ctor = "vaco_filter_lut::lut3d::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "haldclut"
+long_name = "Adjust colors using a Hald CLUT"
+ctor = "vaco_filter_lut::haldclut::DESC"
+media = "video"

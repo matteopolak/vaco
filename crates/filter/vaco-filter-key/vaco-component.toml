@@ -1,0 +1,33 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Keying/masking video filters, plan 16 §4.2's `vaco-filter-key` row.
+# Implemented: premultiply, unpremultiply, maskedmerge. The rest of the row
+# (chromakey, chromahold, colorkey, colorhold, hsvkey, hsvhold, lumakey,
+# backgroundkey, despill, premultiply_dynamic, maskedclamp, maskedmax,
+# maskedmin, maskedthreshold, maskfun, threshold, hysteresis, floodfill)
+# is not registered here.
+#
+# Each `ctor` names the per-filter `pub const DESC: FilterDesc`; runtime
+# instantiation goes through `vaco_filter_key::registry::KeyRegistry`, a
+# `vaco_filter_graph::registry::FilterRegistry` impl.
+
+[[component]]
+kind = "filter"
+name = "premultiply"
+long_name = "PreMultiply first stream with first plane of second stream"
+ctor = "vaco_filter_key::premultiply::premultiply::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "unpremultiply"
+long_name = "UnPreMultiply first stream with first plane of second stream"
+ctor = "vaco_filter_key::premultiply::unpremultiply::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "maskedmerge"
+long_name = "Merge first stream with second stream using third stream as mask"
+ctor = "vaco_filter_key::maskedmerge::DESC"
+media = "video"

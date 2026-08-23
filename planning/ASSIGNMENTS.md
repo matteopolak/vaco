@@ -131,10 +131,12 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-cli | 7 | — | agent:cli-mux | done | 2026-08-23 | 2026-08-23 | muxers wired: -c copy remux writes a real file |
 | vaco-conformance | 10 | #172,#173 | agent:conformance | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-checkasm | 10 | — | — | free |  |  |
-| vaco-filter-blur | 5 | #468 | agent:blur | assigned | 2026-08-23 |  | gblur boxblur unsharp smartblur convolution sobel and the rest of FT-4.6a |
+| vaco-filter-blur | 5 | #468 | agent:blur | done | 2026-08-23 | 2026-08-23 | gblur boxblur unsharp smartblur convolution sobel and the rest of FT-4.6a |
 | vaco-filter-denoise | 5 | #469 | agent:denoise | done | 2026-08-23 | 2026-08-23 | hqdn3d atadenoise removegrain nlmeans owdenoise |
-| vaco-filter-geometry | 5 | #470 | agent:geom2 | assigned | 2026-08-23 |  | T2 geometry (~28) — distinct from vaco-filter-video-geometry's T1 set |
-| vaco-filter-component | 5 | #476 | agent:component | assigned | 2026-08-23 |  | T3 pixel-format, bit-depth and component filters (~20) |
+| vaco-filter-geometry | 5 | #470 | agent:geom2 | done | 2026-08-23 | 2026-08-23 | T2 geometry (~28) — distinct from vaco-filter-video-geometry's T1 set |
+| vaco-filter-color | 5 | #476 | agent:component | assigned | 2026-08-23 |  | redirected from the invented vaco-filter-component to plan 16 §4.3 rows |
+| vaco-filter-key | 5 | #476 | agent:component | assigned | 2026-08-23 |  | |
+| vaco-filter-lut | 5 | #476 | agent:component | assigned | 2026-08-23 |  | |
 | vaco-filter-achannel | 5 | #482 | agent:achannel | done | 2026-08-23 | 2026-08-23 | T3 channel, layout and mixing filters (~14) |
 | vaco-filter-ameasure | 5 | #483 | agent:ameasure | done | 2026-08-23 | 2026-08-23 | NAME DIVERGES: plan 16 §4.3 calls this vaco-filter-aanalysis |
 | vaco-demux-mpegts | 4 | #632 | agent:tspkt | assigned | 2026-08-23 |  | packet duration halved + packet ordering + MPEGTS Stream ID side data |
@@ -142,3 +144,5 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-bsf-generic | 3 | #349 | agent:bsf | assigned | 2026-08-23 |  | extract_extradata closes CONFORMANCE-FINDINGS 26 |
 | vaco-bsf-h2645 | 3 | #350 | agent:bsf | assigned | 2026-08-23 |  | *_mp4toannexb; dedups vaco-mux-avi/mpegts converters |
 | vaco-filter-temporal | 5 | #475 | agent:temporal | assigned | 2026-08-23 |  | plan 16 §4.3 row; fps already taken by vaco-filter-video-format |
+| vaco-filter-convolve | 5 | #468 | agent:blur2 | assigned | 2026-08-23 |  | remainder of the plan row: morpho inflate deflate edgedetect blurdetect convolve deconvolve corr xcorrelate |
+| vaco-filter-core | 5 | — | agent:adapt | assigned | 2026-08-23 |  | INTERFACE-GAPS 10: Paired + Fanout adapters, then the multi-input filters three agents declined |
