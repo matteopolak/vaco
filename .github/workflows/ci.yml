@@ -18,7 +18,10 @@ jobs:
     name: policy gates
     runs-on: ubuntu-latest
     steps:
+      # provenance-check walks the commit range since provenance/baseline, so
+      # the default single-commit fetch is not enough.
       - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
       - uses: mozilla-actions/sccache-action@v0.0.9
       - run: cargo fmt --all -- --check
       # D10 Gate 1 — checked against the resolved BUILD GRAPH, not Cargo.lock,
@@ -43,6 +46,10 @@ jobs:
       - run: cargo xtask dup-check
       # The crate graph stays acyclic and downward (D14.1).
       - run: cargo xtask layer-check
+      # D15: every large constant table names the document or measurement it
+      # came from, and every commit touching implementation code carries its
+      # provenance trailers. Needs full history for the trailer half.
+      - run: cargo xtask provenance-check
       # Generated files are current.
       - run: cargo xtask gen-registry --check
       - run: cargo xtask gen-docs-index --check

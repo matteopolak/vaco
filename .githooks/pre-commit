@@ -1,0 +1,8 @@
+#!/bin/sh
+# Report provenance findings before the commit is written, not after CI.
+#
+# Deliberately non-blocking (`--check`): the gate that matters runs in CI, and a
+# pre-commit hook that refuses a work-in-progress commit is a hook people
+# disable. This one tells you what CI will say.
+cargo xtask provenance-check --check 2>&1 | sed 's/^/  /' || true
+exit 0

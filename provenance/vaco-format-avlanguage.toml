@@ -1,0 +1,31 @@
+[[source]]
+id       = "iso-639-2"
+kind     = "spec"
+title    = "ISO 639-2 language code registry (Library of Congress registration authority)"
+acquired = "2026-08-22"
+where    = "https://www.loc.gov/standards/iso639-2/"
+
+[[source]]
+id       = "apple-qtff"
+kind     = "spec"
+title    = "Apple, QuickTime File Format Specification, the legacy Macintosh language codes"
+acquired = "2026-08-22"
+where    = "https://developer.apple.com/library/archive/documentation/QuickTime/QTFF/"
+
+[[table]]
+name   = "LANGUAGES"
+file   = "crates/format/vaco-format-avlanguage/src/table.rs"
+source = "iso-639-2"
+clause = "the ISO 639-2/T and 639-2/B code lists"
+method = "transcribed"
+
+# The common subset rather than all ~150 entries; extending it is adding a row.
+# Several Macintosh codes distinguish a script or variant ISO 639-2 does not —
+# 19 and 33 both resolve to `zho` — and that collapse is inherent in the target
+# code space, not a gap in the table.
+[[table]]
+name   = "MAC_LANGUAGE_TO_639_2T"
+file   = "crates/format/vaco-format-avlanguage/src/mac.rs"
+source = "apple-qtff"
+clause = "the Macintosh language code enumeration"
+method = "transcribed"

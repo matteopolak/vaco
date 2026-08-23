@@ -1,0 +1,27 @@
+[[source]]
+id       = "itu-t-h264-202108"
+kind     = "spec"
+title    = "ITU-T Rec. H.264 (08/2021), Advanced video coding for generic audiovisual services"
+acquired = "2026-08-21"
+where    = "https://www.itu.int/rec/T-REC-H.264"
+
+[[table]]
+name   = "RANGE_TAB_LPS"
+file   = "crates/signal/vaco-codec-cabac/src/tables.rs"
+source = "itu-t-h264-202108"
+clause = "Table 9-44, clause 9.3.3.2.1.1"
+method = "transcribed"
+
+[[table]]
+name   = "TRANS_IDX_LPS"
+file   = "crates/signal/vaco-codec-cabac/src/tables.rs"
+source = "itu-t-h264-202108"
+clause = "Table 9-45, clause 9.3.3.2.1.1"
+method = "transcribed"
+
+[[table]]
+name   = "TRANS_IDX_MPS"
+file   = "crates/signal/vaco-codec-cabac/src/tables.rs"
+source = "itu-t-h264-202108"
+clause = "Table 9-45, clause 9.3.3.2.1.1"
+method = "transcribed"

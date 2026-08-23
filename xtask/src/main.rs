@@ -17,8 +17,10 @@ mod gen_pixfmt;
 mod layers;
 mod owner_gate;
 mod patent_gate;
+mod provenance;
 mod registry;
 mod time_gate;
+mod toml;
 mod unsafe_audit;
 mod wasm;
 
@@ -36,6 +38,7 @@ fn main() {
         "wasm-check" => wasm::run(check),
         "time-gate" => time_gate::run(check),
         "patent-gate" => patent_gate::run(check),
+        "provenance-check" => provenance::run(check),
         "owner-gate" => owner_gate::run(check),
         "gen-registry" => registry::run(check),
         "gen-docs-index" => docs::run(check),
@@ -52,6 +55,7 @@ fn main() {
             eprintln!("  patent-gate     no encumbered component is in the default build (D4)");
             eprintln!("  owner-gate      each third-party media crate has exactly one owner (D11)");
             eprintln!("  dup-check       one definition per concept (D19)");
+            eprintln!("  provenance-check  every large constant table names its source (D15)");
             eprintln!("  dead-code       public API that only tests use (report, not a gate)");
             eprintln!("  gen-registry    assemble the registry from crate fragments");
             eprintln!("  gen-docs-index  generate docs/README.md");

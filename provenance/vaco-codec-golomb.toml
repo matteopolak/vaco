@@ -1,0 +1,13 @@
+[[source]]
+id       = "itu-t-h264-202108"
+kind     = "spec"
+title    = "ITU-T Rec. H.264 (08/2021), Advanced video coding for generic audiovisual services"
+acquired = "2026-08-21"
+where    = "https://www.itu.int/rec/T-REC-H.264"
+
+[[table]]
+name   = "CBP_48"
+file   = "crates/signal/vaco-codec-golomb/src/tables.rs"
+source = "itu-t-h264-202108"
+clause = "Table 9-4, ChromaArrayType 1 or 2"
+method = "transcribed"

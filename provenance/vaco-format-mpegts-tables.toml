@@ -1,0 +1,16 @@
+[[source]]
+id       = "etsi-en-300-468"
+kind     = "spec"
+title    = "ETSI EN 300 468, Specification for Service Information (SI) in DVB systems"
+acquired = "2026-08-22"
+where    = "https://www.etsi.org/deliver/etsi_en/300400_300499/300468/"
+
+# ISO/IEC 6937 defines the code points; EN 300 468 Annex A carries DVB's one
+# amendment, the Euro sign at 0xA4. Zero marks a position that is unassigned or
+# a combining diacritic — the decoder handles both, not this table.
+[[table]]
+name   = "ISO6937_HIGH"
+file   = "crates/format/vaco-format-mpegts-tables/src/text.rs"
+source = "etsi-en-300-468"
+clause = "Annex A, character coding tables"
+method = "transcribed"

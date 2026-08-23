@@ -1,0 +1,36 @@
+[[source]]
+id       = "ffmpeg-pix-fmts-probe"
+kind     = "blackbox"
+title    = "Observed output of `ffmpeg -pix_fmts`, ffmpeg 8.1"
+acquired = "2026-08-21"
+where    = "the reference binary installed on the development machine"
+
+# The descriptor rows are expanded from family declarations by
+# `cargo xtask gen-pixfmt`; the *set* of formats, their names and aliases, and
+# the printed component/bit-depth columns are what the probe fixes. Byte
+# identity of `-pix_fmts` is the test.
+[[table]]
+name   = "DESCRIPTORS"
+file   = "crates/model/vaco-pixfmt/src/table.rs"
+source = "ffmpeg-pix-fmts-probe"
+method = "probed"
+
+[[table]]
+name   = "ALL"
+file   = "crates/model/vaco-pixfmt/src/table.rs"
+source = "ffmpeg-pix-fmts-probe"
+method = "probed"
+
+[[table]]
+name   = "NAMES_SORTED"
+file   = "crates/model/vaco-pixfmt/src/table.rs"
+source = "ffmpeg-pix-fmts-probe"
+method = "probed"
+
+# Derived, not probed: which format is the byte-swapped counterpart of which is
+# a consequence of the descriptors, computed rather than observed.
+[[table]]
+name   = "ENDIAN_SWAP"
+file   = "crates/model/vaco-pixfmt/src/table.rs"
+source = "ffmpeg-pix-fmts-probe"
+method = "derived"

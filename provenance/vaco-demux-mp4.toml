@@ -1,0 +1,28 @@
+[[source]]
+id       = "apple-qtff"
+kind     = "spec"
+title    = "Apple, QuickTime File Format Specification (the `moov`/`udta`/`meta` metadata atoms)"
+acquired = "2026-08-22"
+where    = "https://developer.apple.com/library/archive/documentation/QuickTime/QTFF/"
+
+[[source]]
+id       = "id3v1-genre-list"
+kind     = "blackbox"
+title    = "The ID3v1 genre list including the Winamp extensions, as the reference resolves `gnre`"
+acquired = "2026-08-22"
+where    = "re-derived by script against the pinned reference version"
+
+[[table]]
+name   = "ILST_KEYS"
+file   = "crates/format/vaco-demux-mp4/src/meta.rs"
+source = "apple-qtff"
+clause = "Metadata item keys under `ilst`"
+method = "transcribed"
+
+# `gnre` stores a one-based index into this list, so the names are not ours to
+# choose — the mapping is what makes an existing file's genre readable at all.
+[[table]]
+name   = "ID3_GENRES"
+file   = "crates/format/vaco-demux-mp4/src/meta.rs"
+source = "id3v1-genre-list"
+method = "probed"

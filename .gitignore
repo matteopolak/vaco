@@ -7,3 +7,11 @@ Cargo.lock.bak
 /pgo-data
 /bench-results
 .DS_Store
+
+# Stray media generated while probing the reference implementation.
+/*.dv
+/*.mp4
+/*.mkv
+/*.ts
+/*.obu
+/*.wav

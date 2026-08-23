@@ -1,0 +1,7 @@
+# The commit from which `xtask provenance-check` validates trailers.
+#
+# History before this point predates the gate. Rewriting those messages would
+# have meant writing trailers from memory long after the fact, which is exactly
+# the false record plan 13 §6 warns against. This line is the honest statement:
+# the machine-checked trail starts here.
+f6d8ddeb3aeceff991711a176ad4c8191a3bee8d

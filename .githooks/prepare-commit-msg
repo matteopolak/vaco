@@ -1,0 +1,47 @@
+#!/bin/sh
+# Pre-populate the provenance trailers from the attestation and the staged diff.
+#
+# Plan 13 §6.2: the contributor supplies the spec reference; everything else is
+# machine-side. A provenance system people route around is worse than none,
+# because it creates a false record — so this hook does the typing.
+set -e
+msg_file="$1"
+src="$2"
+
+# Never touch an amend, a merge, a squash, or a message that already has them.
+case "$src" in merge|squash) exit 0 ;; esac
+grep -q '^Vaco-Provenance:' "$msg_file" && exit 0
+
+att=".git/vaco-attestation"
+name=$(git config user.name)
+email=$(git config user.email)
+if [ -f "$att" ]; then
+  name=$(sed -n 's/^name *= *"\(.*\)"$/\1/p' "$att" | head -1)
+  email=$(sed -n 's/^email *= *"\(.*\)"$/\1/p' "$att" | head -1)
+fi
+
+# Only implementation paths need the full block; a README fix needs a sign-off.
+touches_code=$(git diff --cached --name-only |
+  grep -c '^crates/\(codec\|format\|filter\|signal\)/' || true)
+
+block=""
+grep -q '^Signed-off-by:' "$msg_file" || block="Signed-off-by: $name <$email>"
+
+if [ "$touches_code" -gt 0 ]; then
+  block="$block
+Vaco-Provenance: spec
+Vaco-Spec-Ref: TODO-source-id clause
+Vaco-Clean-Room: yes
+Vaco-AI-Assisted: yes"
+fi
+
+[ -n "$block" ] || exit 0
+printf '\n%s\n' "$block" >> "$msg_file"
+cat >> "$msg_file" <<'EOF'
+
+# Vaco-Provenance: spec | rfc | paper | blackbox | cleanroom-doc:<path> | original
+# Vaco-Spec-Ref must START with a source id declared in provenance/*.toml.
+#   e.g. Vaco-Spec-Ref: itu-t-h264-202108 Table 9-44, clause 9.3.3.2.1.1
+# Use `blackbox` (and drop Vaco-Spec-Ref) when the behaviour was measured from
+# the reference binary rather than read from a document.
+EOF

@@ -56,7 +56,8 @@ clippy:
     cargo clippy --workspace --all-targets --locked {{TD}} -- -D warnings
 
 # Every gate CI runs, in the order CI runs them.
-ci: fmt-check clippy check-all test-all licence layer-check dep-gate unsafe-audit docs-check
+ci: fmt-check clippy check-all test-all licence layer-check dep-gate unsafe-audit \
+    wasm-check time-gate patent-gate owner-gate dup-check provenance-check docs-check
 
 # ------------------------------------------------------- policy gates (D3/D10)
 
@@ -85,9 +86,17 @@ layer-check:
 unsafe-audit:
     cargo xtask unsafe-audit
 
-# Assert patent-encumbered features are absent from a default build (D4).
-patent-check:
-    cargo xtask patent-check
+# D15 / plan 13 §6: every large constant table names its source, and every
+# commit touching implementation code carries its provenance trailers.
+provenance-check:
+    cargo xtask provenance-check
+
+# Install the git hooks and, on first run, take the DCO + clean-room
+# attestation. Run once per clone; see docs/provenance.md.
+setup:
+    git config core.hooksPath .githooks
+    @echo "hooks installed (core.hooksPath = .githooks)"
+    @test -f .git/vaco-attestation || echo "run .githooks/attest to record your DCO + clean-room attestation"
 
 # ------------------------------------------------------------ generated files
 

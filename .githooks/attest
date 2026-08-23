@@ -1,0 +1,17 @@
+#!/bin/sh
+# Record the DCO + clean-room attestation, once per clone (plan 13 §6.1).
+set -e
+att=".git/vaco-attestation"
+if [ -f "$att" ]; then echo "already attested:"; cat "$att"; exit 0; fi
+name=$(git config user.name); email=$(git config user.email)
+cat > "$att" <<EOF
+name  = "$name"
+email = "$email"
+dco   = "1.1"
+attested = $(date +%F)
+# Modules you are on the dirty team for: you have read another implementation's
+# source for these and must not author implementation code in them. Your local
+# copy; the authoritative register is private (D15).
+dirty_modules = []
+EOF
+echo "wrote $att:"; cat "$att"

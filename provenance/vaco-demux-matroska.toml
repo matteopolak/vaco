@@ -1,0 +1,27 @@
+[[source]]
+id       = "rfc-9559"
+kind     = "rfc"
+title    = "RFC 9559, Matroska Media Container Format Specification"
+acquired = "2026-08-22"
+where    = "https://www.rfc-editor.org/rfc/rfc9559"
+
+[[source]]
+id       = "rfc-8794"
+kind     = "rfc"
+title    = "RFC 8794, Extensible Binary Meta Language"
+acquired = "2026-08-22"
+where    = "https://www.rfc-editor.org/rfc/rfc8794"
+
+[[table]]
+name   = "ELEMENTS"
+file   = "crates/format/vaco-demux-matroska/src/ebml/schema.rs"
+source = "rfc-9559"
+clause = "Section 5, the Matroska element schema"
+method = "transcribed"
+
+[[table]]
+name   = "EXACT"
+file   = "crates/format/vaco-demux-matroska/src/codec.rs"
+source = "rfc-9559"
+clause = "Section 27, Codec Mappings"
+method = "transcribed"

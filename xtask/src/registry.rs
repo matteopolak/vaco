@@ -763,145 +763,14 @@ fn manifest_region(components: &[Component]) -> String {
 /// best-effort parse, because a fragment this reader half-understands would
 /// register the wrong thing rather than nothing.
 mod toml {
-    use crate::Map;
-
-    /// One `[[component]]` table: its keys, and the line it started on.
-    #[derive(Debug, Default)]
-    pub struct Table {
-        map: Map<String, String>,
-        pub origin_line: usize,
-    }
-
-    impl Table {
-        pub fn get(&self, key: &str) -> Option<&str> {
-            self.map.get(key).map(String::as_str)
-        }
-
-        pub fn keys(&self) -> impl Iterator<Item = &String> {
-            self.map.keys()
-        }
-    }
+    pub use crate::toml::Table;
 
     /// Parse every `[[component]]` table in `text`.
     ///
     /// # Errors
     /// A message naming the line, for anything outside the schema's grammar.
     pub fn components(text: &str) -> Result<Vec<Table>, String> {
-        let mut tables: Vec<Table> = Vec::new();
-        let mut open = false;
-
-        for (i, raw) in text.lines().enumerate() {
-            let line = i + 1;
-            let s = strip_comment(raw).trim();
-            if s.is_empty() {
-                continue;
-            }
-
-            if let Some(rest) = s.strip_prefix("[[") {
-                let name = rest
-                    .strip_suffix("]]")
-                    .ok_or_else(|| format!("line {line}: unterminated `[[` header"))?
-                    .trim();
-                if name != "component" {
-                    return Err(format!(
-                        "line {line}: `[[{name}]]` — the only table this schema \
-                         defines is `[[component]]`"
-                    ));
-                }
-                tables.push(Table {
-                    map: Map::new(),
-                    origin_line: line,
-                });
-                open = true;
-                continue;
-            }
-            if s.starts_with('[') {
-                return Err(format!(
-                    "line {line}: `{s}` — a fragment holds only `[[component]]` \
-                     tables (plan 19 §3.4)"
-                ));
-            }
-
-            let (key, value) = s
-                .split_once('=')
-                .ok_or_else(|| format!("line {line}: `{s}` is not `key = value`"))?;
-            let key = key.trim();
-            if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-                return Err(format!("line {line}: `{key}` is not a bare key"));
-            }
-            if !open {
-                return Err(format!(
-                    "line {line}: `{key}` appears before any `[[component]]` header"
-                ));
-            }
-            let value = scalar(value.trim(), line)?;
-
-            let Some(t) = tables.last_mut() else {
-                return Err(format!("line {line}: no open table"));
-            };
-            if t.map.insert(key.to_owned(), value).is_some() {
-                return Err(format!("line {line}: `{key}` is set twice"));
-            }
-        }
-        Ok(tables)
-    }
-
-    /// Remove a trailing `#` comment, respecting a quoted `#`.
-    fn strip_comment(s: &str) -> &str {
-        let mut in_str = false;
-        let mut escaped = false;
-        for (i, c) in s.char_indices() {
-            if escaped {
-                escaped = false;
-            } else if in_str && c == '\\' {
-                escaped = true;
-            } else if c == '"' {
-                in_str = !in_str;
-            } else if c == '#' && !in_str {
-                return s.get(..i).unwrap_or(s);
-            }
-        }
-        s
-    }
-
-    /// A basic string, or a bare `true`/`false`.
-    fn scalar(s: &str, line: usize) -> Result<String, String> {
-        if s == "true" || s == "false" {
-            return Ok(s.to_owned());
-        }
-        let inner = s
-            .strip_prefix('"')
-            .and_then(|r| r.strip_suffix('"'))
-            .ok_or_else(|| {
-                format!(
-                    "line {line}: {s:?} — values are double-quoted strings, or \
-                     `true`/`false`"
-                )
-            })?;
-
-        let mut out = String::new();
-        let mut chars = inner.chars();
-        while let Some(c) = chars.next() {
-            if c != '\\' {
-                if c == '"' {
-                    return Err(format!("line {line}: unescaped `\"` inside a string"));
-                }
-                out.push(c);
-                continue;
-            }
-            match chars.next() {
-                Some('n') => out.push('\n'),
-                Some('t') => out.push('\t'),
-                Some('r') => out.push('\r'),
-                Some('"') => out.push('"'),
-                Some('\\') => out.push('\\'),
-                Some(other) => {
-                    return Err(format!("line {line}: unsupported escape `\\{other}`"));
-                }
-                None => return Err(format!("line {line}: string ends in a backslash")),
-            }
-        }
-        Ok(out)
+        crate::toml::tables(text, &["component"])
     }
 }
 

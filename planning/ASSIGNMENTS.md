@@ -57,20 +57,35 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-demux-mp4 | 4 | — | agent:demux-mp4 | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-demux-matroska | 4 | — | agent:matroska | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-demux-mpegts | 4 | — | agent:mpegts | done | 2026-08-22 | 2026-08-22 |  |
-| vaco-demux-raw | 4 | — | agent:raw | assigned | 2026-08-22 |  | 48 registrations; PCM, rawvideo, bitstream |
-| vaco-mux-raw | 4 | — | agent:raw | assigned | 2026-08-22 |  | 40 registrations |
-| vaco-format-audio-simple | 4 | — | agent:audio-simple | assigned | 2026-08-22 |  | wav w64 aiff caf au voc sox ircam rso |
-| vaco-format-apetag | 4 | — | agent:audio-simple | assigned | 2026-08-22 |  | APE tag + ReplayGain |
-| vaco-format-avlanguage | 4 | — | agent:audio-simple | assigned | 2026-08-22 |  | language-code tables |
-| vaco-demux-avi | 4 | — | agent:avi-flv | assigned | 2026-08-22 |  | RIFF walk, idx1/OpenDML |
-| vaco-mux-avi | 4 | — | agent:avi-flv | assigned | 2026-08-22 |  |  |
-| vaco-demux-flv | 4 | — | agent:avi-flv | assigned | 2026-08-22 |  | tag walk, AMF metadata |
-| vaco-mux-flv | 4 | — | agent:avi-flv | assigned | 2026-08-22 |  |  |
-| vaco-demux-ogg | 4 | — | agent:ogg | assigned | 2026-08-22 |  | page/packet layer, per-codec granule mapping |
-| vaco-mux-ogg | 4 | — | agent:ogg | assigned | 2026-08-22 |  |  |
-| vaco-demux-mpegps | 4 | — | agent:mpegps-dv | assigned | 2026-08-22 |  | shares PES with mpegts; D19 question open |
-| vaco-mux-mpegps | 4 | — | agent:mpegps-dv | assigned | 2026-08-22 |  | mpeg vob svcd vcd dvd |
-| vaco-format-dv | 4 | — | agent:mpegps-dv | assigned | 2026-08-22 |  | frame format, not really a container |
+| vaco-demux-raw | 4 | — | agent:raw | done | 2026-08-22 | 2026-08-23 | 48 registrations; PCM, rawvideo, bitstream |
+| vaco-mux-raw | 4 | — | agent:raw | done | 2026-08-22 | 2026-08-23 | 40 registrations |
+| vaco-format-audio-simple | 4 | — | agent:audio-simple | done | 2026-08-22 | 2026-08-23 | wav w64 aiff caf au voc sox ircam rso |
+| vaco-format-apetag | 4 | — | agent:audio-simple | done | 2026-08-22 | 2026-08-23 | APE tag + ReplayGain |
+| vaco-format-avlanguage | 4 | — | agent:audio-simple | done | 2026-08-22 | 2026-08-23 | language-code tables |
+| vaco-demux-avi | 4 | — | agent:avi-flv | done | 2026-08-22 | 2026-08-23 | RIFF walk, idx1/OpenDML |
+| vaco-mux-avi | 4 | — | agent:avi-flv | done | 2026-08-22 | 2026-08-23 |  |
+| vaco-demux-flv | 4 | — | agent:avi-flv | done | 2026-08-22 | 2026-08-23 | tag walk, AMF metadata |
+| vaco-mux-flv | 4 | — | agent:avi-flv | done | 2026-08-22 | 2026-08-23 |  |
+| vaco-demux-ogg | 4 | — | agent:ogg | done | 2026-08-22 | 2026-08-23 | page/packet layer, per-codec granule mapping |
+| vaco-mux-ogg | 4 | — | agent:ogg | done | 2026-08-22 | 2026-08-23 |  |
+| vaco-demux-mpegps | 4 | — | agent:mpegps-dv | done | 2026-08-22 | 2026-08-23 | shares PES with mpegts; D19 question open |
+| vaco-mux-mpegps | 4 | — | agent:mpegps-dv | done | 2026-08-22 | 2026-08-23 | mpeg vob svcd vcd dvd |
+| vaco-format-dv | 4 | — | agent:mpegps-dv | done | 2026-08-22 | 2026-08-23 | frame format, not really a container |
+| vaco-filter-audio | 5 | #466 | agent:filters-t1a | assigned | 2026-08-22 |  | aresample aformat volume amix amerge channelmap channelsplit join pan asetnsamples asetrate |
+| vaco-filter-plumbing | 5 | #467 | agent:filters-t1a | assigned | 2026-08-22 |  | trim/atrim, setpts, settb, fifo family |
+| vaco-format-isom | 4 | #210,#573,#574 | agent:mux-mp4 | assigned | 2026-08-23 |  | reassigned from agent:demux-mp4 (done) to add box writers |
+| vaco-mux-mp4 | 4 | #210,#573,#574 | agent:mux-mp4 | assigned | 2026-08-23 |  |  |
+| vaco-format-ebml | 4 | #575 | agent:mux-matroska | assigned | 2026-08-23 |  | new: EBML reader extracted from the demuxer + writer |
+| vaco-demux-matroska | 4 | #575 | agent:mux-matroska | assigned | 2026-08-23 |  | reassigned for the EBML extraction only; behaviour must not change |
+| vaco-mux-matroska | 4 | #575 | agent:mux-matroska | assigned | 2026-08-23 |  | matroska webm matroska_audio webm_chunk |
+| vaco-format-asf | 4 | #586,#587 | agent:asf | assigned | 2026-08-23 |  | new: shared object model |
+| vaco-demux-asf | 4 | #586 | agent:asf | assigned | 2026-08-23 |  |  |
+| vaco-mux-asf | 4 | #587 | agent:asf | assigned | 2026-08-23 |  |  |
+| vaco-mux-hash | 4 | #572 | agent:mux-hash | assigned | 2026-08-23 |  | crc framecrc framemd5 framehash hash md5 streamhash uncodedframecrc — the differential oracle |
+| vaco-demux-image2 | 4 | #592 | agent:image2 | assigned | 2026-08-23 |  | glob/sequence patterns + 42 pipe splitters |
+| vaco-mux-image2 | 4 | #593 | agent:image2 | assigned | 2026-08-23 |  | filename patterns, -update, strftime, atomic write |
+| vaco-format-mpegts-tables | 4 | #576 | agent:mux-mpegts | assigned | 2026-08-23 |  | reassigned from agent:mpegts (done) to add table writers |
+| vaco-mux-mpegts | 4 | #576 | agent:mux-mpegts | assigned | 2026-08-23 |  |  |
 | vaco-filter-core | 5 | — | agent:filter-core | done | 2026-08-22 | 2026-08-22 | frozen only |
 | vaco-filter-framesync | 5 | — | agent:filter-graph | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-filter-graph | 5 | — | agent:filter-graph | done | 2026-08-22 | 2026-08-22 |  |

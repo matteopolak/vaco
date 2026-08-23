@@ -135,6 +135,26 @@ source, the independent check must be **a property the output must have** — a
 DC-only block must produce a uniform output — not another route to the same
 numbers.
 
+## Detection and demuxing ask different questions
+
+A demuxer is *deliberately* forgiving. `vaco-demux-raw`'s `obu::temporal_units`
+reports the whole buffer as a single span when nothing parses, so a caller
+reading a damaged AV1 file still gets a packet instead of silence. That is the
+right call — for demuxing.
+
+The AV1 probe then asked `!temporal_units(buf).is_empty()` as its detection
+test, and that fallback makes it true for **any** non-empty input. A plain text
+file scored 51 as `av1`, claimed the input, and `vaco -i notmedia -f null -`
+exited 8 where the reference exits 183 — the run got as far as *failing to find
+an encoder* instead of failing to open the input, which is a much more confusing
+way to be wrong.
+
+**If your crate both detects and demuxes, the two paths need separate
+functions.** Detection is strict and answers "is this plausibly mine?"; demuxing
+is lenient and answers "what can I still recover?". Reusing the lenient one as
+the strict one silently claims every file on the system. Test detection against
+a file that is definitely *not* your format — prose is the cheapest one to hand.
+
 ## Performance
 
 **Six confident performance predictions on this project have measured

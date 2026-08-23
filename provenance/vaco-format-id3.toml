@@ -1,0 +1,15 @@
+[[source]]
+id       = "id3v1-genre-list"
+kind     = "blackbox"
+title    = "The ID3v1 genre list: indices 0-79 original, 80-191 the Winamp extensions"
+acquired = "2026-08-22"
+where    = "re-derived by script against the pinned reference version"
+
+# Indices above 191 are deliberately absent: `genre_name` returns `None` rather
+# than padding the array to 256 with a guess. An invented name would read as
+# authoritative in `ffprobe` output.
+[[table]]
+name   = "ID3V1_GENRES"
+file   = "crates/format/vaco-format-id3/src/id3v1_genres.rs"
+source = "id3v1-genre-list"
+method = "probed"
