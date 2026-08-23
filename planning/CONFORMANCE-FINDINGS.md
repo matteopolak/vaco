@@ -88,6 +88,31 @@ Ours reports `pts=N/A` throughout. That is roughly eight times too many packets
 with no timestamps, which reads like PES payloads being emitted without
 reassembly.
 
+## 6. The CLI reaches none of the 63 muxers — **assigned**, `vaco-cli`
+
+```sh
+vaco -hide_banner -i in.mp4 -c copy -f matroska out.mkv
+#   Stream mapping:
+#     Stream #0:0 -> #0:0 (copy)
+#   [out#0/matroska] video:12KiB audio:0KiB … muxing overhead: unknown
+echo $?   # 0
+ls out.mkv   # No such file or directory
+```
+
+Exit 0, a plausible summary, and no file. `exec.rs::muxer_for` returns a format
+*name* and the pipeline then always builds `nullmux::NullMuxer`, which counts
+bytes and writes nothing. That was correct when D5 put zero muxers in v0.1 — the
+module doc says so at length — and has been false since the container wave.
+
+**Silent success is the worst failure mode available.** A user sees nothing
+wrong; a test sees exit 0; a differential harness scores it a pass. It is also
+why there is no `tests/conformance/transcode/` suite yet: there is nothing on
+the writing side to compare.
+
+Found by trying the obvious command while the harness was fresh in mind, which
+is worth recording on its own — 2,935 unit tests and eight gates were all green
+on a binary that could not write a file.
+
 ## How to re-run
 
 ```sh
