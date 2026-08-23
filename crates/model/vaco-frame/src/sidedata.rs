@@ -82,6 +82,7 @@ pub enum FrameSideDataKind {
     MasteringDisplay,
     ContentLightLevel,
     Cropping,
+    Metadata,
 }
 
 impl FrameSideData {
@@ -94,7 +95,79 @@ impl FrameSideData {
             Self::MasteringDisplay(_) => FrameSideDataKind::MasteringDisplay,
             Self::ContentLightLevel { .. } => FrameSideDataKind::ContentLightLevel,
             Self::Cropping(_) => FrameSideDataKind::Cropping,
+            Self::Metadata(_) => FrameSideDataKind::Metadata,
         }
+    }
+}
+
+/// A string-keyed, insertion-ordered dictionary of per-frame metadata.
+///
+/// The reference's `AVFrame::metadata` counterpart (interface gap 11). Ordered
+/// rather than hashed on purpose: the reference prints entries in the order
+/// they were set, `ffprobe -show_frames` output is compared byte for byte
+/// against that order, and a frame carries at most a handful of entries —
+/// linear scan costs nothing a hash would recover.
+///
+/// `set` overwrites an existing key's value **in place**, keeping its original
+/// position, rather than moving it to the end — the same behaviour
+/// `av_dict_set` has, measured against the reference: a filter that refreshes
+/// a key every frame does not reorder the block.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FrameMetadata(Vec<(String, String)>);
+
+impl FrameMetadata {
+    /// An empty dictionary.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    /// Whether there are no entries at all.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// How many entries this dictionary carries.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// The value stored under `key`, if any.
+    #[must_use]
+    pub fn get(&self, key: &str) -> Option<&str> {
+        self.0.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+    }
+
+    /// Insert `key`/`value`, or overwrite `key`'s value in place if it is
+    /// already present.
+    pub fn set(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        let key = key.into();
+        if let Some(slot) = self.0.iter_mut().find(|(k, _)| *k == key) {
+            slot.1 = value.into();
+        } else {
+            self.0.push((key, value.into()));
+        }
+    }
+
+    /// Remove `key`, returning its value if it was present.
+    pub fn remove(&mut self, key: &str) -> Option<String> {
+        let at = self.0.iter().position(|(k, _)| k == key)?;
+        Some(self.0.remove(at).1)
+    }
+
+    /// Entries in insertion order.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.0.iter().map(|(k, v)| (k.as_str(), v.as_str()))
+    }
+
+    /// The entries as a `(key, value)` slice, in insertion order — the shape
+    /// `vaco-probe`'s generic `tags` section renderer already takes for
+    /// stream/format/chapter/program metadata.
+    #[must_use]
+    pub fn as_slice(&self) -> &[(String, String)] {
+        &self.0
     }
 }
 
@@ -155,5 +228,46 @@ impl Frame {
         }
         self.set_side_data(FrameSideData::Cropping(crop));
         Ok(())
+    }
+
+    /// This frame's metadata entries, in insertion order, or `&[]` if it
+    /// carries none.
+    ///
+    /// The shape `vaco-probe`'s `show::tags` already renders for
+    /// stream/format/chapter/program metadata — pass this straight through to
+    /// print the `[FRAME_TAGS]`/`"tags"` block a measurement filter wrote.
+    #[must_use]
+    pub fn metadata(&self) -> &[(String, String)] {
+        match self.side_data(FrameSideDataKind::Metadata) {
+            Some(FrameSideData::Metadata(m)) => m.as_slice(),
+            _ => &[],
+        }
+    }
+
+    /// The value of one metadata key, if this frame carries it.
+    #[must_use]
+    pub fn metadata_get(&self, key: &str) -> Option<&str> {
+        match self.side_data(FrameSideDataKind::Metadata) {
+            Some(FrameSideData::Metadata(m)) => m.get(key),
+            _ => None,
+        }
+    }
+
+    /// Set (insert, or overwrite in place) one metadata entry.
+    ///
+    /// Creates the dictionary on first use; a frame that never calls this
+    /// carries no [`FrameSideDataKind::Metadata`] entry at all; rather than an
+    /// empty one, which is what keeps [`Frame::metadata`] a zero-cost `&[]`
+    /// for the overwhelming majority of frames that carry no metadata.
+    pub fn set_metadata(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        if let Some(FrameSideData::Metadata(m)) =
+            self.side_data.iter_mut().find(|d| d.kind() == FrameSideDataKind::Metadata)
+        {
+            m.set(key, value);
+            return;
+        }
+        let mut m = FrameMetadata::new();
+        m.set(key, value);
+        self.side_data.push(FrameSideData::Metadata(m));
     }
 }

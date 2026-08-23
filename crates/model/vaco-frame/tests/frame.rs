@@ -353,6 +353,53 @@ fn side_data_set_get_replace_remove() {
 }
 
 #[test]
+fn metadata_is_empty_by_default_and_costs_no_side_data_entry() {
+    let mut b = budget();
+    let frame = Frame::alloc_video(&mut b, PixFmt::Rgb24, 8, 8).unwrap();
+    assert_eq!(frame.metadata(), &[] as &[(String, String)]);
+    assert_eq!(frame.metadata_get("lavfi.freezedetect.freeze_start"), None);
+    // A frame that never calls `set_metadata` carries no side-data entry for
+    // it at all — not an empty one. Gap 11: an empty collection at
+    // construction must not be observable as "known to be nothing".
+    assert!(frame.side_data(FrameSideDataKind::Metadata).is_none());
+}
+
+#[test]
+fn metadata_preserves_insertion_order_and_overwrites_in_place() {
+    let mut b = budget();
+    let mut frame = Frame::alloc_video(&mut b, PixFmt::Rgb24, 8, 8).unwrap();
+
+    frame.set_metadata("lavfi.signalstats.YMIN", "22");
+    frame.set_metadata("lavfi.signalstats.YAVG", "59.6797");
+    frame.set_metadata("lavfi.signalstats.YMAX", "210");
+    // Overwriting an existing key updates its value without moving it to the
+    // end or appending a duplicate — `av_dict_set`'s behaviour, measured.
+    frame.set_metadata("lavfi.signalstats.YMIN", "23");
+
+    assert_eq!(
+        frame.metadata(),
+        &[
+            ("lavfi.signalstats.YMIN".to_string(), "23".to_string()),
+            ("lavfi.signalstats.YAVG".to_string(), "59.6797".to_string()),
+            ("lavfi.signalstats.YMAX".to_string(), "210".to_string()),
+        ]
+    );
+    assert_eq!(frame.metadata_get("lavfi.signalstats.YAVG"), Some("59.6797"));
+    assert_eq!(frame.metadata_get("lavfi.signalstats.nonexistent"), None);
+}
+
+#[test]
+fn metadata_coexists_with_typed_side_data() {
+    let mut b = budget();
+    let mut frame = Frame::alloc_video(&mut b, PixFmt::Rgb24, 8, 8).unwrap();
+    frame.set_side_data(FrameSideData::DisplayMatrix([1; 9]));
+    frame.set_metadata("lavfi.freezedetect.freeze_start", "0");
+    assert_eq!(frame.side_data.len(), 2);
+    assert!(frame.side_data(FrameSideDataKind::DisplayMatrix).is_some());
+    assert_eq!(frame.metadata_get("lavfi.freezedetect.freeze_start"), Some("0"));
+}
+
+#[test]
 fn planar_audio_gets_one_buffer_per_channel() {
     let mut b = budget();
     let frame =

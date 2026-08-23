@@ -53,7 +53,7 @@ use vaco_sampfmt::SampleFmt;
 
 pub use plane::{PlaneMut, PlaneRef};
 pub use pool::FramePool;
-pub use sidedata::{Crop, FrameSideDataKind};
+pub use sidedata::{Crop, FrameMetadata, FrameSideDataKind};
 
 /// One plane of a video frame, or one channel of planar audio.
 ///
@@ -126,6 +126,19 @@ pub enum FrameSideData {
     /// to read the rectangle from somewhere. Cropping is metadata rather than a
     /// plane rewrite, which is what makes it free.
     Cropping(Crop),
+    /// The frame's string-keyed metadata dictionary — `AVFrame::metadata`'s
+    /// counterpart, and the `lavfi.<filter>.<key>` export channel a whole
+    /// family of measurement filters (`signalstats`, `freezedetect`, the rest
+    /// of interface gap 11) has no other way to publish through.
+    ///
+    /// Not in the original freeze either, for the same reason `Cropping`
+    /// wasn't: nothing needed it until a filter that only measures, and
+    /// writes nothing else, showed up. Reach it through [`Frame::metadata`],
+    /// [`Frame::set_metadata`] and [`Frame::metadata_get`] rather than
+    /// matching this variant directly — they create the entry on first write
+    /// and return `&[]`/`None` rather than requiring a caller to check for
+    /// the variant's absence first.
+    Metadata(FrameMetadata),
     // ... generated from the side-data table
 }
 
