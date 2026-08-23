@@ -194,6 +194,9 @@ path = "../../filter/vaco-filter-color"
 [dependencies.vaco-filter-convolve]
 path = "../../filter/vaco-filter-convolve"
 
+[dependencies.vaco-filter-deinterlace]
+path = "../../filter/vaco-filter-deinterlace"
+
 [dependencies.vaco-filter-denoise]
 path = "../../filter/vaco-filter-denoise"
 
@@ -208,6 +211,9 @@ path = "../../filter/vaco-filter-lut"
 
 [dependencies.vaco-filter-plumbing]
 path = "../../filter/vaco-filter-plumbing"
+
+[dependencies.vaco-filter-source]
+path = "../../filter/vaco-filter-source"
 
 [dependencies.vaco-filter-temporal]
 path = "../../filter/vaco-filter-temporal"
