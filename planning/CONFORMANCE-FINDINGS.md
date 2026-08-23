@@ -1351,6 +1351,54 @@ Ours stops after the header line. The demuxers already *have* their options —
 rendering, not data. `-h muxer=` has the same hole. Worth doing once for
 filter, demuxer, muxer, bsf and protocol together rather than four times.
 
+## 29. `-filters`' flag and pad columns are wrong on half our filters
+
+Now that `-filters` prints rows (finding 27), the rows themselves can be
+compared. All 230 of our filters appear in the reference's 480 and **none is
+invented** — that part is clean. The columns are not.
+
+### The flag column: 114 of 230 differ
+
+```text
+  85  slice threading    ours `.`  ref `S`
+  59  timeline support   ours `.`  ref `T`
+  11  timeline support   ours `T`  ref `.`
+```
+
+These are not cosmetic. `FilterFlags::SLICE_THREADS` is a claim that the
+filter can process independent slices of a frame concurrently, and
+`TIMELINE_GENERIC`/`TIMELINE_INTERNAL` is a claim about `enable=` handling
+that the framework acts on. 85 filters that *can* be slice-threaded are
+declared as if they cannot, and 11 claim timeline support the reference does
+not give them — that last direction is the one that could misbehave rather
+than merely underperform.
+
+### The pad column: 7 differ, all in the same way
+
+```text
+anequalizer   ours A->A    ref A->N        decimate       ours V->V    ref N->V
+aphasemeter   ours A->A    ref A->N        guided         ours V->V    ref N->V
+ebur128       ours A->A    ref A->N        premultiply    ours VV->V   ref N->V
+                                           unpremultiply  ours VV->V   ref N->V
+```
+
+Every one is a *dynamic* pad count declared as fixed —
+`FilterFlags::DYNAMIC_INPUTS`/`DYNAMIC_OUTPUTS` missing. `premultiply` and
+`unpremultiply` are the instructive pair: they take one or two inputs
+depending on their options, and we declare two unconditionally, so
+`premultiply` alone is unusable in a graph where the reference accepts it.
+
+### How to fix it, and why it is not fixed here
+
+This is per-filter descriptor data spread across every filter crate, most of
+which had a live owner when it was measured. The whole table is derivable —
+`ffmpeg -filters` states it directly — so it wants one scripted sweep against
+the reference rather than hand-edits, in a quiet tree.
+
+The comparison itself is worth keeping as a test: `-filters` is now a stable,
+machine-comparable surface, and a row-by-row diff against a captured reference
+listing would catch every future regression in three columns at once.
+
 ## Harness changes, summarised
 
 Everything below is a change to `crates/tool/vaco-conformance/`,
