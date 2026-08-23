@@ -148,8 +148,8 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-filter-core | 5 | — | agent:adapt | done | 2026-08-23 | 2026-08-23 | INTERFACE-GAPS 10: Paired + Fanout adapters, then the multi-input filters three agents declined |
 | vaco-mux-matroska | 4 | — | agent:mkv | done | 2026-08-23 | 2026-08-23 | CONFORMANCE-FINDINGS 15: CRC-32 on every level-1 element, then SeekHead |
 | vaco-filter-vdsp | 5 | — | agent:analysis2 | assigned | 2026-08-23 |  | created by agent:temporal for scene_sad; extend, do not duplicate |
-| vaco-filter-source | 5 | #474 | agent:src | assigned | 2026-08-23 |  | plan 16 §4.3 row; nullsrc/color already taken by vaco-filter-video-source |
-| vaco-filter-asource | 5 | #481 | agent:src | assigned | 2026-08-23 |  | anullsrc already taken |
+| vaco-filter-source | 5 | #474 | agent:src | done | 2026-08-23 | 2026-08-23 | plan 16 §4.3 row; nullsrc/color already taken by vaco-filter-video-source |
+| vaco-filter-asource | 5 | #481 | agent:src | done | 2026-08-23 | 2026-08-23 | anullsrc already taken |
 | vaco-filter-deinterlace | 5 | #480 | agent:deint | done | 2026-08-23 | 2026-08-23 | plan 16 §4.3 row; idet/vfrdet blocked on INTERFACE-GAPS 11 |
 | vaco-frame | 2 | — | agent:framemeta | done | 2026-08-23 | 2026-08-23 | INTERFACE-GAPS 11: per-frame metadata dictionary |
 | vaco-probe | 7 | — | agent:framemeta | done | 2026-08-23 | 2026-08-23 | -show_frames FRAME_TAGS consumer side |
