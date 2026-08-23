@@ -151,8 +151,8 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-filter-source | 5 | #474 | agent:src | assigned | 2026-08-23 |  | plan 16 §4.3 row; nullsrc/color already taken by vaco-filter-video-source |
 | vaco-filter-asource | 5 | #481 | agent:src | assigned | 2026-08-23 |  | anullsrc already taken |
 | vaco-filter-deinterlace | 5 | #480 | agent:deint | assigned | 2026-08-23 |  | plan 16 §4.3 row; idet/vfrdet blocked on INTERFACE-GAPS 11 |
-| vaco-frame | 2 | — | agent:framemeta | assigned | 2026-08-23 |  | INTERFACE-GAPS 11: per-frame metadata dictionary |
-| vaco-probe | 7 | — | agent:framemeta | assigned | 2026-08-23 |  | -show_frames FRAME_TAGS consumer side |
+| vaco-frame | 2 | — | agent:framemeta | done | 2026-08-23 | 2026-08-23 | INTERFACE-GAPS 11: per-frame metadata dictionary |
+| vaco-probe | 7 | — | agent:framemeta | done | 2026-08-23 | 2026-08-23 | -show_frames FRAME_TAGS consumer side |
 | vaco-filter-aeffects | 5 | #484 | agent:aeffects | assigned | 2026-08-23 |  | renamed from vaco-filter-achannel per plan 16 §4.3 |
 | vaco-filter-color | 5 | #476 | agent:color2 | assigned | 2026-08-23 |  | remainder of the 29-filter row |
 | vaco-filter-key | 5 | #476 | agent:color2 | assigned | 2026-08-23 |  | remainder of the 20-filter row |
