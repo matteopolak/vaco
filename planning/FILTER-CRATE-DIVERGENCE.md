@@ -58,3 +58,30 @@ Two of them are more than a rename and need a decision first:
   T1/T2 split. Merging is truer to §4.3.
 - `vaco-filter-audio` spans three plan rows and predates all of this. Splitting
   it is the largest single piece of the reconciliation.
+
+## Resolved during the wave
+
+`vaco-filter-component` never landed. The agent building it was redirected
+mid-flight and shipped `vaco-filter-color`, `vaco-filter-key` and
+`vaco-filter-lut` instead — three real rows from §4.3. `vaco-filter-blur`'s
+author likewise split the convolution and morphology family out into
+`vaco-filter-convolve`, its own row, rather than leaving it misfiled.
+
+So the table above is now three rows shorter in the "built a crate the plan
+does not have" category, and the remaining work is renames plus the two
+structural decisions.
+
+## What the redirect cost, recorded honestly
+
+The `component` agent had working, tested implementations of `extractplanes`,
+`mergeplanes`, `alphamerge` and `maskedmerge` and deleted them rather than push
+into crates it did not own — which was the right call under a single-writer
+rule, and was still four filters of wasted work caused by the brief, not by the
+agent. `maskedmerge` survived in `vaco-filter-key`; the other three did not.
+
+Their shape is worth keeping even though the code is gone, because it is
+independent evidence about `INTERFACE-GAPS.md` gap 10: `extractplanes` is
+dynamic-output V→N, `mergeplanes` is **dynamic-input N→V**, and `alphamerge`
+runs through `framesync` directly. The gap-10 entry originally named only a
+two-input adapter and a dynamic-output one; the N-input case is a third shape
+and neither covers it.
