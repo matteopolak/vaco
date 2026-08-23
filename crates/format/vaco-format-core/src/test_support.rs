@@ -176,6 +176,20 @@ impl MockDemuxer {
         }
     }
 
+    /// State a video stream's *codec-reported* `frame_rate`, as a bitstream
+    /// parser does — distinct from [`Self::set_frame_rates`], which states the
+    /// container's own printed `r_frame_rate`/`avg_frame_rate` directly. This
+    /// is what R21's duration fill-in reads, and for H.264 (this mock's
+    /// default video codec) it is a *tick* rate rather than a picture rate —
+    /// see [`vaco_codec_core::CodecId::ticks_per_frame`].
+    pub(crate) fn set_video_frame_rate(&mut self, rate: Rational) {
+        for s in &mut self.streams {
+            if let Some(v) = s.params.video.as_mut() {
+                v.frame_rate = rate;
+            }
+        }
+    }
+
     /// State a container-level duration, as a container with a header field
     /// does. Needed to exercise the rule that hands it to a stream with no
     /// timing of its own.

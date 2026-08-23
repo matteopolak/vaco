@@ -1061,6 +1061,51 @@ impl CodecId {
     pub fn all() -> impl Iterator<Item = Self> {
         CODECS.iter().map(|e| e.id)
     }
+
+    /// How many bitstream "ticks" make up one displayed picture.
+    ///
+    /// A demuxer that must synthesise a packet's duration from a codec-level
+    /// frame rate (there being no more reliable per-packet timing available)
+    /// needs `frame_rate / ticks_per_frame`, not `frame_rate` alone — mirrors
+    /// the reference's `ff_compute_frame_duration`. Reaching for the codec
+    /// frame rate directly halves every such duration for a codec whose
+    /// bitstream rate field is a *tick* rate rather than a picture rate.
+    ///
+    /// `// D17:` measured per codec, not inferred from "supports interlace" —
+    /// that would have been wrong twice over. Reproduction, on real 25 fps
+    /// content, comparing `r_frame_rate` (bitstream-derived) against the true
+    /// encode rate:
+    ///
+    /// ```text
+    /// ffmpeg -f lavfi -i testsrc=size=64x64:rate=25:duration=1 \
+    ///        -pix_fmt yuv420p -c:v <encoder> -f mpegts t.ts
+    /// ffprobe -show_entries stream=r_frame_rate,avg_frame_rate t.ts
+    /// ```
+    ///
+    /// | encoder | `r_frame_rate` | true rate | ratio |
+    /// |---|---|---|---|
+    /// | `libx264` | 50/1 | 25 | **2** |
+    /// | `mpeg1video` | 50/1 | 25 | **2** |
+    /// | `mpeg2video` | 25/1 | 25 | 1 |
+    /// | `mpeg4` | 25/1 | 25 | 1 |
+    ///
+    /// Repeated at 24 fps and 30 fps to rule out a coincidence of the number
+    /// 25: `libx264` and `mpeg1video` scale to 48/1 and 60/1 respectively
+    /// (always exactly double), `mpeg2video` and `mpeg4` track the true rate
+    /// exactly. **MPEG-2 video and MPEG-4 part 2 do *not* need this** despite
+    /// both being interlace-capable — the natural guess, and wrong. MPEG-1
+    /// video does, despite having no interlace mode at all in its own right —
+    /// the codec whose VUI-equivalent field the reference doubles is not the
+    /// one this project's own `FIELDS` property flags, which is why this is
+    /// a distinct concept with its own table rather than a read of
+    /// [`CodecProperties::FIELDS`].
+    #[must_use]
+    pub fn ticks_per_frame(self) -> u32 {
+        match self {
+            Self::H264 | Self::Mpeg1video => 2,
+            _ => 1,
+        }
+    }
 }
 
 /// Decode: compressed packets in, frames out.

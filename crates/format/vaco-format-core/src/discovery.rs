@@ -347,11 +347,7 @@ impl<D: Demuxer> Discovery<D> {
         // before R21b existed. `refine` can fill `params.video.frame_rate` in,
         // and letting that reach the *same* packet's duration fill-in would be
         // a behaviour change nothing here asked for.
-        let rate = stream
-            .params
-            .video
-            .as_ref()
-            .map_or(Rational::ZERO, |v| v.frame_rate);
+        let rate = picture_rate(stream);
 
         // Refine parameters from the payload, without decoding it.
         //
@@ -610,6 +606,29 @@ impl<D: Demuxer> Discovery<D> {
     }
 }
 
+/// The picture rate R21 should divide by, derived from a stream's
+/// codec-reported `frame_rate`.
+///
+/// `params.video.frame_rate` is not always a picture rate: for H.264 and
+/// MPEG-1 video it is measured (see [`CodecId::ticks_per_frame`]) to be a
+/// *tick* rate, exactly double the rate pictures are actually shown at. R21
+/// fills in a packet's duration as `1 / rate`, so feeding it the tick rate
+/// directly halves every duration it fills in for those two codecs. Dividing
+/// here, once, keeps that correction in the one place both `absorb` and
+/// `read_packet` pull the rate from, rather than duplicating it at each call
+/// site.
+fn picture_rate(stream: &Stream) -> Rational {
+    let Some(video) = stream.params.video.as_ref() else {
+        return Rational::ZERO;
+    };
+    let divisor = stream
+        .params
+        .codec_id
+        .map_or(1, CodecId::ticks_per_frame)
+        .max(1);
+    video.frame_rate / Rational::new(i32::try_from(divisor).unwrap_or(1), 1)
+}
+
 /// Whether a stream has the fields every consumer needs.
 fn has_essential_params(stream: &Stream) -> bool {
     if stream.params.codec_id.is_none() {
@@ -762,13 +781,7 @@ impl<D: Demuxer> Demuxer for Discovery<D> {
             .ok()
             .and_then(|i| self.streams.get(i))
             .map_or((crate::time::TIME_BASE_Q, Rational::ZERO), |s| {
-                (
-                    s.time_base,
-                    s.params
-                        .video
-                        .as_ref()
-                        .map_or(Rational::ZERO, |v| v.frame_rate),
-                )
+                (s.time_base, picture_rate(s))
             });
         if let Ok(i) = usize::try_from(pkt.stream_index)
             && let Some(slot) = self.parsers.get(i)
@@ -968,6 +981,24 @@ mod tests {
         d.run(&NoParsers).unwrap();
         assert_eq!(d.streams()[0].r_frame_rate, Rational::new(24, 1));
         assert_eq!(d.streams()[0].avg_frame_rate, Rational::new(24000, 1001));
+    }
+
+    /// R21's duration fill-in must divide the codec-reported `frame_rate` by
+    /// [`CodecId::ticks_per_frame`] before inverting it, exactly as the
+    /// reference's `ff_compute_frame_duration` divides by `ticks_per_frame`.
+    ///
+    /// The mock's default video codec is H.264, measured to report a *tick*
+    /// rate double the picture rate (issue #632 part 1). 20/1 here stands in
+    /// for that tick rate; the true picture rate is 10 fps, so the filled
+    /// duration must be 100ms — not the 50ms a naive `1/rate` produces.
+    #[test]
+    fn r21_divides_the_tick_rate_by_ticks_per_frame() {
+        let mut inner = MockDemuxer::new(1, MediaType::Video).with_packets(1);
+        inner.set_video_frame_rate(Rational::new(20, 1));
+        let mut d = Discovery::new(inner, FormatFlags::empty(), &opts());
+        d.run(&NoParsers).unwrap();
+        let p = d.read_packet().unwrap();
+        assert_eq!(p.duration.as_micros(), 100_000, "10 fps, not 20 fps");
     }
 
     #[test]

@@ -451,6 +451,29 @@ it on the compiled artefact rather than on intent:
 `DecoderDesc::is_default_build_safe()` is the predicate CI evaluates over every
 descriptor the registry exposes.
 
+### `CodecId::ticks_per_frame` — measured, not one per property table
+
+`params.video.frame_rate` (set by a codec's own parser, e.g.
+`vaco-parse-h264`) is a **tick rate** for some codecs — twice the picture
+rate — and a picture rate directly for others. A caller filling in a
+packet's duration from it (`vaco-format-core::discovery`'s R21 rule) needs
+`frame_rate / ticks_per_frame`, mirroring the reference's
+`ff_compute_frame_duration`; using `frame_rate` alone silently halves every
+duration it fills in for a codec whose rate field is doubled (issue #632
+part 1).
+
+Measured per codec on real 25/24/30 fps encodes, comparing bitstream-derived
+`r_frame_rate` against the true encode rate (`ffprobe 8.1`): **H.264 and
+MPEG-1 video** report exactly double, at every rate tried; **MPEG-2 video and
+MPEG-4 part 2 do not**, despite both being interlace-capable — the natural
+guess from `CodecProperties::FIELDS`, and wrong. `ticks_per_frame` is
+therefore its own function with two hand-picked match arms, not a read of
+`FIELDS` or a new `CodecProperties` bit: the two concepts coincide for H.264
+by chance, not by definition, and MPEG-2 proves they are not the same
+property. Defaults to `1` for every other codec, including ones with no
+parser yet — safe, since a caller with no better information should not
+divide by anything.
+
 ### Profiles and levels
 
 Profiles are a codec-scoped integer plus a name; levels are a codec-scoped
@@ -475,6 +498,13 @@ specification Annex A) and are reached here through `ProfileTable` and
   is what the CLI prints and parses. Note that `bitflags` generates a
   `from_name` of its own over the *constant* names, which is why the CLI-facing
   lookup is `Caps::from_cli_name`.
+* **Adding a `ticks_per_frame` exception.** Do not guess from `CodecProperties`
+  or from what another codec in the same family does — MPEG-1 needs it and
+  MPEG-2 does not, which is the whole reason this is measured per codec. Mux a
+  short clip with the reference at two or three different frame rates, compare
+  `r_frame_rate` against the true rate on the raw elementary stream *and* in a
+  container, and only add the arm once the ratio is exactly 2 at every rate
+  tried.
 * **Adding a codec.** `CodecId` is hand-written here for now; plan 15 §1.1 has it
   generated from `codecs.toml` the way `vaco-pixfmt`'s table is. The `CodecEntry`
   shape is what that generator must emit, so adding a variant means adding a row

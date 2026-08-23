@@ -291,6 +291,31 @@ history to take a delta against — and folds it into the offset. Everything aft
 it is delta tracking in raw space. A property test walks a wrapping clock across
 three periods and asserts strict monotonicity with the delta preserved exactly.
 
+#### R21 — the tick-rate halving (fixed 2026-08-23, issue #632 part 1)
+
+R21 fills a zero `packet.duration` as `1 / rate`, where `rate` used to be read
+straight off `stream.params.video.frame_rate`. That field is not always a
+picture rate: `vaco-parse-h264` documents it as the **tick rate**, twice the
+picture rate, which is what the reference prints as `r_frame_rate` for a raw
+stream — deliberately, and pinned by a test at 48/1 for a 24 fps file. Feeding
+the tick rate straight into `1 / rate` halves the answer: on a 25 fps
+`-f mpegts` H.264 file the first packet (computed before the H.264 parser has
+run) landed on the correct 3600 ticks at 1/90000, and every packet after it
+(computed from the now-parsed tick rate) landed on 1800 — exactly half, and a
+visible asymmetry that was the tell.
+
+The fix is `discovery::picture_rate`, which divides by
+`CodecId::ticks_per_frame` before inverting — the same division the
+reference's `ff_compute_frame_duration` performs. Which codecs actually need
+the divisor was measured, not assumed from "supports interlace": H.264 and
+MPEG-1 video do (their bitstream-derived `r_frame_rate` is exactly double the
+true rate at every frame rate tried); MPEG-2 video and MPEG-4 part 2 do not,
+despite being interlace-capable. See `vaco-codec-core`'s doc file for the
+full measurement. `duration_from_rate`'s own contract — reject `ZERO`,
+`UNDEFINED` and `INFINITY` — is unchanged; only what gets divided into it at
+the call site changed, in both places that read a video stream's rate
+(`Discovery::absorb` and `Discovery::read_packet`'s replay path).
+
 #### R21b — the codec's own packet duration
 
 R21 fills a missing duration from the stream's frame rate, which answers for
@@ -383,12 +408,22 @@ Two files did not move, and both name a gap elsewhere:
   `DefaultDuration`, and the reference reports 104 ms from the in-band frame
   header — but there is no `vaco-parse-flac` in the tree. The seam now exists,
   so that crate closes this for free when it lands.
-* **`av.ts` 1/40.** `vaco-demux-mpegts` hands over whole PES payloads rather
-  than codec frames: one packet of 2836 bytes where the reference emits
-  thirteen of ~265. Our duration for it is 27167 ticks, which is exactly
-  thirteen frames and therefore *correct for the packet as framed* — the
-  divergence is the framing, not the number. The video half is the separately
-  recorded field-rate-for-frame-rate halving (1800 against 3600).
+* **`av.ts` 1/40 — the audio framing half fixed 2026-08-23 (issue #632).**
+  `vaco-demux-mpegts` used to hand over whole PES payloads rather than codec
+  frames: one packet of 2836 bytes where the reference emits thirteen of
+  ~265. `flush_pes` now splits an ADTS-framed AAC PES into one packet per
+  frame directly (no parser needed — an ADTS frame length is a fixed-position
+  header field, not something that needs bitstream parsing to find), so this
+  specific corpus file's packet count and per-frame boundaries now agree with
+  the reference; re-running this exact eleven-file/420-field harness to
+  update the table above was outside this fix's scope, so the numbers here
+  are left as last measured rather than guessed at. See
+  `vaco-demux-mpegts`'s doc file for what was verified directly (131/131
+  audio packets, 206/206 total, on the doc's own three-second fixture) and
+  for a remaining, separately-characterised packet-*ordering* divergence
+  this did not close. The video half — the field-rate-for-frame-rate halving
+  (1800 against 3600) — is fixed separately; see `CodecId::ticks_per_frame`
+  in `vaco-codec-core`'s doc file and R21's use of it below.
 
 ### Seeking
 

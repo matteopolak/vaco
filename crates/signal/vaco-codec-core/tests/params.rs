@@ -36,6 +36,30 @@ fn codec_identity_round_trips_through_its_name() {
     );
 }
 
+/// Which codecs need `frame_rate / ticks_per_frame` rather than `frame_rate`
+/// alone when a demuxer has to synthesise a packet duration from the codec's
+/// own rate. Measured (issue #632 part 1) on real 25/24/30 fps encodes: H.264
+/// and MPEG-1 video always report exactly double the true rate; MPEG-2 video
+/// and MPEG-4 part 2 — despite both being interlace-capable, the guess that
+/// would have been wrong — report the true rate directly. Everything else
+/// defaults to 1, and this test pins that default alongside the two measured
+/// exceptions so a new codec cannot silently join the halved group.
+#[test]
+fn ticks_per_frame_is_two_only_for_the_measured_codecs() {
+    assert_eq!(CodecId::H264.ticks_per_frame(), 2);
+    assert_eq!(CodecId::Mpeg1video.ticks_per_frame(), 2);
+    assert_eq!(CodecId::Mpeg2video.ticks_per_frame(), 1);
+    assert_eq!(CodecId::Mpeg4.ticks_per_frame(), 1);
+    assert_eq!(CodecId::Hevc.ticks_per_frame(), 1);
+    assert_eq!(CodecId::Av1.ticks_per_frame(), 1);
+    for id in CodecId::all() {
+        assert!(
+            id.ticks_per_frame() == 1 || matches!(id, CodecId::H264 | CodecId::Mpeg1video),
+            "{id:?} claims a ticks_per_frame nobody measured"
+        );
+    }
+}
+
 /// Every row of the table agrees with `ffmpeg -codecs`.
 ///
 /// The table was **generated** by probing that listing, so checking it against
