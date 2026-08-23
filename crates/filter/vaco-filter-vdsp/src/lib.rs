@@ -31,6 +31,23 @@
 //! addition (same loop, `u16` accumulator) whenever a caller needs one — not
 //! a redesign — so it is left until there is a real caller rather than
 //! speculatively generalised now.
+//!
+//! # 2026-08-23 addition: `comb_score`
+//!
+//! `vaco-filter-deinterlace` (plan 16 SS4.3, the FT-4.12 long tail, #480)
+//! needs a per-frame "how combed is this" metric for `idet` and
+//! `fieldmatch` — a different question from `plane_sad`'s "how different
+//! are these two whole planes", since combing is a property of **one**
+//! frame's own vertical structure (its rows alternate between two
+//! temporally-offset fields), not a comparison between two frames. Per this
+//! crate's own invitation to extend rather than duplicate (see this
+//! module's opening paragraph), [`comb_score`] is added here: the sum of
+//! absolute vertical second differences, `|row[y-1] - 2*row[y] +
+//! row[y+1]|`, which is small for smooth (progressive) vertical structure
+//! and large where alternating rows disagree (interlaced motion). This is
+//! an original metric — not a transcription of the reference's own
+//! (GPL, unread) interlace-detection formula — and `vaco-filter-deinterlace`
+//! documents it as such.
 #![forbid(unsafe_code)]
 
 use vaco_frame::PlaneRef;
@@ -110,6 +127,42 @@ pub fn normalised_sad(a: PlaneRef<'_>, b: PlaneRef<'_>) -> f64 {
     ratio.clamp(0.0, 1.0)
 }
 
+/// Sum of absolute vertical second differences, `|a[y-1] - 2*a[y] +
+/// a[y+1]|`, over interior rows of one plane (edge rows are excluded, not
+/// clamped — they have no interior second difference).
+///
+/// # Independent oracle
+///
+/// A plane whose rows are a linear ramp (`row[y] = k*y + c` for constant
+/// `k`) has zero second difference at every interior row *by construction*
+/// — that is an algebraic identity of "second difference of a linear
+/// function", not a property of this implementation — so [`comb_score`]
+/// must be exactly `0` on such a plane. A plane whose rows strictly
+/// alternate between two fixed values (the textbook combing pattern) has
+/// the maximum possible per-row score at every interior row.
+#[must_use]
+pub fn comb_score(plane: PlaneRef<'_>) -> u64 {
+    let rows = plane.rows();
+    if rows < 3 {
+        return 0;
+    }
+    let mut score: u64 = 0;
+    for y in 1..rows.saturating_sub(1) {
+        let (Some(above), Some(center), Some(below)) = (plane.row(y - 1), plane.row(y), plane.row(y + 1)) else {
+            continue;
+        };
+        let width = above.len().min(center.len()).min(below.len());
+        for x in 0..width {
+            let (Some(&a), Some(&c), Some(&b)) = (above.get(x), center.get(x), below.get(x)) else {
+                continue;
+            };
+            let second = i32::from(a) - 2 * i32::from(c) + i32::from(b);
+            score = score.saturating_add(second.unsigned_abs().into());
+        }
+    }
+    score
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "test code")]
 mod tests {
@@ -160,5 +213,45 @@ mod tests {
         assert_eq!(sad, 0, "perturbation outside the block must not count");
         let full = block_sad(a.plane(0).unwrap(), b.plane(0).unwrap(), 0, 0, 4, 4);
         assert_eq!(full, 255);
+    }
+
+    fn ramp_plane(w: u32, h: u32) -> vaco_frame::Frame {
+        let pool = FramePool::default();
+        let mut f = pool.acquire_video(PixFmt::Gray8, w, h).unwrap();
+        if let Some(mut p) = f.plane_mut(0) {
+            for y in 0..h as usize {
+                if let Some(row) = p.row_mut(y) {
+                    #[allow(clippy::cast_possible_truncation, reason = "test fixture, h is small")]
+                    row.fill((y as u32).min(255) as u8);
+                }
+            }
+        }
+        f
+    }
+
+    #[test]
+    fn a_linear_ramp_scores_zero() {
+        // Algebraic identity: the second difference of a linear function is
+        // zero everywhere, so comb_score must be exactly 0, not just small.
+        let f = ramp_plane(4, 8);
+        assert_eq!(comb_score(f.plane(0).unwrap()), 0);
+    }
+
+    #[test]
+    fn strict_alternation_scores_higher_than_a_ramp() {
+        let pool = FramePool::default();
+        let mut f = pool.acquire_video(PixFmt::Gray8, 4, 8).unwrap();
+        if let Some(mut p) = f.plane_mut(0) {
+            for y in 0..8usize {
+                if let Some(row) = p.row_mut(y) {
+                    row.fill(if y % 2 == 0 { 0 } else { 255 });
+                }
+            }
+        }
+        let combed = comb_score(f.plane(0).unwrap());
+        let smooth = ramp_plane(4, 8);
+        let smooth_score = comb_score(smooth.plane(0).unwrap());
+        assert!(combed > smooth_score, "combed={combed} smooth={smooth_score}");
+        assert!(combed > 0);
     }
 }
