@@ -1328,6 +1328,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-bsf-core"
+version = "0.1.0"
+dependencies = [
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-limits",
+ "vaco-packet",
+]
+
+[[package]]
+name = "vaco-bsf-generic"
+version = "0.1.0"
+dependencies = [
+ "vaco-bsf-core",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-format-nalu",
+ "vaco-limits",
+ "vaco-packet",
+ "vaco-parse-h264",
+ "vaco-parse-hevc",
+ "vaco-pool",
+]
+
+[[package]]
+name = "vaco-bsf-h2645"
+version = "0.1.0"
+dependencies = [
+ "vaco-bsf-core",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-format-nalu",
+ "vaco-limits",
+ "vaco-packet",
+ "vaco-parse-h264",
+ "vaco-parse-hevc",
+]
+
+[[package]]
 name = "vaco-chlayout"
 version = "0.1.0"
 
@@ -1339,6 +1378,7 @@ dependencies = [
  "vaco-cli-core",
  "vaco-codec-core",
  "vaco-core",
+ "vaco-filter-core",
  "vaco-format-core",
  "vaco-io",
  "vaco-limits",
@@ -1647,10 +1687,31 @@ dependencies = [
 ]
 
 [[package]]
-name = "vaco-filter-achannel"
+name = "vaco-filter-adsp"
+version = "0.1.0"
+
+[[package]]
+name = "vaco-filter-aeffects"
 version = "0.1.0"
 dependencies = [
  "smallvec",
+ "vaco-chlayout",
+ "vaco-core",
+ "vaco-filter-adsp",
+ "vaco-filter-core",
+ "vaco-filter-framesync",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-resample",
+ "vaco-sampfmt",
+]
+
+[[package]]
+name = "vaco-filter-ameasure"
+version = "0.1.0"
+dependencies = [
+ "smallvec",
+ "tracing",
  "vaco-chlayout",
  "vaco-core",
  "vaco-filter-core",
@@ -1659,6 +1720,20 @@ dependencies = [
  "vaco-frame",
  "vaco-resample",
  "vaco-sampfmt",
+ "vaco-tx",
+]
+
+[[package]]
+name = "vaco-filter-analysis"
+version = "0.1.0"
+dependencies = [
+ "smallvec",
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-filter-graph",
+ "vaco-filter-vdsp",
+ "vaco-frame",
+ "vaco-pixfmt",
 ]
 
 [[package]]
@@ -1722,6 +1797,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-filter-color"
+version = "0.1.0"
+dependencies = [
+ "vaco-core",
+ "vaco-expr",
+ "vaco-filter-core",
+ "vaco-filter-framesync",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-opts",
+ "vaco-pixfmt",
+]
+
+[[package]]
+name = "vaco-filter-convolve"
+version = "0.1.0"
+dependencies = [
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-filter-framesync",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-opts",
+ "vaco-pixfmt",
+]
+
+[[package]]
 name = "vaco-filter-core"
 version = "0.1.0"
 dependencies = [
@@ -1734,6 +1836,20 @@ dependencies = [
  "vaco-frame",
  "vaco-pixfmt",
  "vaco-sampfmt",
+]
+
+[[package]]
+name = "vaco-filter-deinterlace"
+version = "0.1.0"
+dependencies = [
+ "smallvec",
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-filter-graph",
+ "vaco-filter-vdsp",
+ "vaco-frame",
+ "vaco-opts",
+ "vaco-pixfmt",
 ]
 
 [[package]]
@@ -1758,6 +1874,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-filter-geometry"
+version = "0.1.0"
+dependencies = [
+ "smallvec",
+ "vaco-color",
+ "vaco-core",
+ "vaco-expr",
+ "vaco-filter-core",
+ "vaco-filter-framesync",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-opts",
+ "vaco-pixfmt",
+ "vaco-scale",
+]
+
+[[package]]
 name = "vaco-filter-graph"
 version = "0.1.0"
 dependencies = [
@@ -1767,6 +1900,33 @@ dependencies = [
  "vaco-frame",
  "vaco-pixfmt",
  "vaco-sampfmt",
+]
+
+[[package]]
+name = "vaco-filter-key"
+version = "0.1.0"
+dependencies = [
+ "smallvec",
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-filter-framesync",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-opts",
+ "vaco-pixfmt",
+]
+
+[[package]]
+name = "vaco-filter-lut"
+version = "0.1.0"
+dependencies = [
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-filter-framesync",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-opts",
+ "vaco-pixfmt",
 ]
 
 [[package]]
@@ -1784,6 +1944,40 @@ dependencies = [
  "vaco-opts",
  "vaco-pixfmt",
  "vaco-sampfmt",
+]
+
+[[package]]
+name = "vaco-filter-source"
+version = "0.1.0"
+dependencies = [
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-opts",
+ "vaco-pixfmt",
+]
+
+[[package]]
+name = "vaco-filter-temporal"
+version = "0.1.0"
+dependencies = [
+ "smallvec",
+ "vaco-core",
+ "vaco-expr",
+ "vaco-filter-core",
+ "vaco-filter-framesync",
+ "vaco-filter-graph",
+ "vaco-filter-vdsp",
+ "vaco-frame",
+ "vaco-pixfmt",
+]
+
+[[package]]
+name = "vaco-filter-vdsp"
+version = "0.1.0"
+dependencies = [
+ "vaco-frame",
 ]
 
 [[package]]
@@ -1906,6 +2100,7 @@ dependencies = [
  "smallvec",
  "vaco-codec-core",
  "vaco-core",
+ "vaco-format-nalu",
  "vaco-io",
  "vaco-limits",
  "vaco-opts",
@@ -2034,6 +2229,9 @@ dependencies = [
  "arbitrary",
  "libfuzzer-sys",
  "vaco-bitstream",
+ "vaco-bsf-core",
+ "vaco-bsf-generic",
+ "vaco-bsf-h2645",
  "vaco-chlayout",
  "vaco-cli",
  "vaco-cli-core",
@@ -2060,15 +2258,26 @@ dependencies = [
  "vaco-demux-raw",
  "vaco-demux-rtsp",
  "vaco-expr",
- "vaco-filter-achannel",
+ "vaco-filter-aeffects",
+ "vaco-filter-ameasure",
+ "vaco-filter-analysis",
  "vaco-filter-audio",
  "vaco-filter-audio-dynamics",
  "vaco-filter-audio-eq",
+ "vaco-filter-blur",
+ "vaco-filter-color",
+ "vaco-filter-convolve",
  "vaco-filter-core",
+ "vaco-filter-deinterlace",
  "vaco-filter-denoise",
  "vaco-filter-framesync",
+ "vaco-filter-geometry",
  "vaco-filter-graph",
+ "vaco-filter-key",
+ "vaco-filter-lut",
  "vaco-filter-plumbing",
+ "vaco-filter-source",
+ "vaco-filter-temporal",
  "vaco-filter-video-composite",
  "vaco-filter-video-format",
  "vaco-filter-video-geometry",
@@ -2256,6 +2465,7 @@ dependencies = [
  "vaco-demux-matroska",
  "vaco-format-core",
  "vaco-format-ebml",
+ "vaco-hash",
  "vaco-io",
  "vaco-limits",
  "vaco-packet",
@@ -2598,6 +2808,9 @@ dependencies = [
 name = "vaco-registry"
 version = "0.1.0"
 dependencies = [
+ "vaco-bsf-core",
+ "vaco-bsf-generic",
+ "vaco-bsf-h2645",
  "vaco-codec-core",
  "vaco-core",
  "vaco-demux-asf",
@@ -2613,14 +2826,24 @@ dependencies = [
  "vaco-demux-mxf",
  "vaco-demux-ogg",
  "vaco-demux-raw",
- "vaco-filter-achannel",
+ "vaco-filter-aeffects",
+ "vaco-filter-ameasure",
+ "vaco-filter-analysis",
  "vaco-filter-audio",
  "vaco-filter-audio-dynamics",
  "vaco-filter-audio-eq",
  "vaco-filter-blur",
+ "vaco-filter-color",
+ "vaco-filter-convolve",
  "vaco-filter-core",
+ "vaco-filter-deinterlace",
  "vaco-filter-denoise",
+ "vaco-filter-geometry",
+ "vaco-filter-key",
+ "vaco-filter-lut",
  "vaco-filter-plumbing",
+ "vaco-filter-source",
+ "vaco-filter-temporal",
  "vaco-filter-video-composite",
  "vaco-filter-video-format",
  "vaco-filter-video-geometry",

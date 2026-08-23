@@ -108,11 +108,17 @@ default = ["demux-aiff", "demux-asf", "demux-asf-o", "demux-au", "demux-avi", "d
 "subtitle-bitmap" = ["dep:vaco-subtitle-bitmap"]
 "subtitle-text" = ["dep:vaco-subtitle-text"]
 
+[dependencies.vaco-bsf-av1]
+path = "../../format/vaco-bsf-av1"
+
 [dependencies.vaco-bsf-generic]
 path = "../../format/vaco-bsf-generic"
 
 [dependencies.vaco-bsf-h2645]
 path = "../../format/vaco-bsf-h2645"
+
+[dependencies.vaco-bsf-vpx]
+path = "../../format/vaco-bsf-vpx"
 
 [dependencies.vaco-demux-asf]
 path = "../../format/vaco-demux-asf"
@@ -175,6 +181,12 @@ path = "../../filter/vaco-filter-aeffects"
 
 [dependencies.vaco-filter-ameasure]
 path = "../../filter/vaco-filter-ameasure"
+
+[dependencies.vaco-filter-analysis]
+path = "../../filter/vaco-filter-analysis"
+
+[dependencies.vaco-filter-asource]
+path = "../../filter/vaco-filter-asource"
 
 [dependencies.vaco-filter-audio]
 path = "../../filter/vaco-filter-audio"

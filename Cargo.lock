@@ -1576,6 +1576,69 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-bsf-av1"
+version = "0.1.0"
+dependencies = [
+ "vaco-bsf-core",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-limits",
+ "vaco-packet",
+ "vaco-parse-av1",
+]
+
+[[package]]
+name = "vaco-bsf-core"
+version = "0.1.0"
+dependencies = [
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-limits",
+ "vaco-packet",
+]
+
+[[package]]
+name = "vaco-bsf-generic"
+version = "0.1.0"
+dependencies = [
+ "vaco-bsf-core",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-format-nalu",
+ "vaco-limits",
+ "vaco-packet",
+ "vaco-parse-h264",
+ "vaco-parse-hevc",
+ "vaco-pool",
+]
+
+[[package]]
+name = "vaco-bsf-h2645"
+version = "0.1.0"
+dependencies = [
+ "vaco-bsf-core",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-format-nalu",
+ "vaco-limits",
+ "vaco-packet",
+ "vaco-parse-h264",
+ "vaco-parse-hevc",
+]
+
+[[package]]
+name = "vaco-bsf-vpx"
+version = "0.1.0"
+dependencies = [
+ "vaco-bitstream",
+ "vaco-bsf-core",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-limits",
+ "vaco-packet",
+]
+
+[[package]]
 name = "vaco-checkasm"
 version = "0.1.0"
 dependencies = [
@@ -1601,6 +1664,7 @@ dependencies = [
  "vaco-codec-core",
  "vaco-core",
  "vaco-demux-matroska",
+ "vaco-filter-core",
  "vaco-format-core",
  "vaco-io",
  "vaco-limits",
@@ -1948,13 +2012,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "vaco-filter-achannel"
+name = "vaco-filter-adsp"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
+name = "vaco-filter-aeffects"
 version = "0.1.0"
 dependencies = [
  "proptest",
  "smallvec",
  "vaco-chlayout",
  "vaco-core",
+ "vaco-filter-adsp",
  "vaco-filter-core",
  "vaco-filter-framesync",
  "vaco-filter-graph",
@@ -1979,6 +2051,35 @@ dependencies = [
  "vaco-resample",
  "vaco-sampfmt",
  "vaco-tx",
+]
+
+[[package]]
+name = "vaco-filter-analysis"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "smallvec",
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-filter-graph",
+ "vaco-filter-vdsp",
+ "vaco-frame",
+ "vaco-pixfmt",
+]
+
+[[package]]
+name = "vaco-filter-asource"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-chlayout",
+ "vaco-core",
+ "vaco-expr",
+ "vaco-filter-core",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-opts",
+ "vaco-sampfmt",
 ]
 
 [[package]]
@@ -2036,6 +2137,7 @@ name = "vaco-filter-blur"
 version = "0.1.0"
 dependencies = [
  "proptest",
+ "vaco-color",
  "vaco-core",
  "vaco-filter-core",
  "vaco-filter-framesync",
@@ -2046,11 +2148,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "vaco-filter-component"
+name = "vaco-filter-color"
 version = "0.1.0"
 dependencies = [
- "proptest",
- "smallvec",
  "vaco-core",
  "vaco-expr",
  "vaco-filter-core",
@@ -2058,6 +2158,21 @@ dependencies = [
  "vaco-filter-graph",
  "vaco-frame",
  "vaco-limits",
+ "vaco-opts",
+ "vaco-pixfmt",
+]
+
+[[package]]
+name = "vaco-filter-convolve"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-color",
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-filter-framesync",
+ "vaco-filter-graph",
+ "vaco-frame",
  "vaco-opts",
  "vaco-pixfmt",
 ]
@@ -2077,6 +2192,21 @@ dependencies = [
  "vaco-frame",
  "vaco-pixfmt",
  "vaco-sampfmt",
+]
+
+[[package]]
+name = "vaco-filter-deinterlace"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "smallvec",
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-filter-graph",
+ "vaco-filter-vdsp",
+ "vaco-frame",
+ "vaco-opts",
+ "vaco-pixfmt",
 ]
 
 [[package]]
@@ -2114,6 +2244,7 @@ dependencies = [
  "vaco-core",
  "vaco-expr",
  "vaco-filter-core",
+ "vaco-filter-framesync",
  "vaco-filter-graph",
  "vaco-frame",
  "vaco-opts",
@@ -2137,6 +2268,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-filter-key"
+version = "0.1.0"
+dependencies = [
+ "smallvec",
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-filter-framesync",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-limits",
+ "vaco-opts",
+ "vaco-pixfmt",
+]
+
+[[package]]
+name = "vaco-filter-lut"
+version = "0.1.0"
+dependencies = [
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-filter-framesync",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-limits",
+ "vaco-opts",
+ "vaco-pixfmt",
+]
+
+[[package]]
 name = "vaco-filter-plumbing"
 version = "0.1.0"
 dependencies = [
@@ -2152,6 +2312,44 @@ dependencies = [
  "vaco-opts",
  "vaco-pixfmt",
  "vaco-sampfmt",
+]
+
+[[package]]
+name = "vaco-filter-source"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-opts",
+ "vaco-pixfmt",
+]
+
+[[package]]
+name = "vaco-filter-temporal"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "smallvec",
+ "vaco-core",
+ "vaco-expr",
+ "vaco-filter-core",
+ "vaco-filter-framesync",
+ "vaco-filter-graph",
+ "vaco-filter-vdsp",
+ "vaco-frame",
+ "vaco-pixfmt",
+]
+
+[[package]]
+name = "vaco-filter-vdsp"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-frame",
+ "vaco-pixfmt",
 ]
 
 [[package]]
@@ -2288,6 +2486,7 @@ dependencies = [
  "smallvec",
  "vaco-codec-core",
  "vaco-core",
+ "vaco-format-nalu",
  "vaco-io",
  "vaco-limits",
  "vaco-opts",
@@ -2474,6 +2673,7 @@ name = "vaco-mux-avi"
 version = "0.1.0"
 dependencies = [
  "proptest",
+ "vaco-bsf-h2645",
  "vaco-codec-core",
  "vaco-core",
  "vaco-demux-avi",
@@ -2581,6 +2781,7 @@ dependencies = [
  "vaco-demux-matroska",
  "vaco-format-core",
  "vaco-format-ebml",
+ "vaco-hash",
  "vaco-io",
  "vaco-limits",
  "vaco-packet",
@@ -2592,6 +2793,7 @@ version = "0.1.0"
 dependencies = [
  "bitflags",
  "proptest",
+ "vaco-bsf-generic",
  "vaco-codec-core",
  "vaco-core",
  "vaco-demux-mp4",
@@ -2622,6 +2824,7 @@ version = "0.1.0"
 dependencies = [
  "bitflags",
  "proptest",
+ "vaco-bsf-h2645",
  "vaco-codec-core",
  "vaco-core",
  "vaco-demux-mpegts",
@@ -2844,12 +3047,14 @@ name = "vaco-probe"
 version = "0.1.0"
 dependencies = [
  "proptest",
+ "smallvec",
  "vaco-chlayout",
  "vaco-cli-core",
  "vaco-codec-core",
  "vaco-color",
  "vaco-core",
  "vaco-format-core",
+ "vaco-frame",
  "vaco-hash",
  "vaco-io",
  "vaco-limits",
@@ -2960,6 +3165,11 @@ dependencies = [
 name = "vaco-registry"
 version = "0.1.0"
 dependencies = [
+ "vaco-bsf-av1",
+ "vaco-bsf-core",
+ "vaco-bsf-generic",
+ "vaco-bsf-h2645",
+ "vaco-bsf-vpx",
  "vaco-codec-core",
  "vaco-core",
  "vaco-demux-asf",
@@ -2976,14 +3186,25 @@ dependencies = [
  "vaco-demux-ogg",
  "vaco-demux-raw",
  "vaco-demux-rtsp",
- "vaco-filter-achannel",
+ "vaco-filter-aeffects",
+ "vaco-filter-ameasure",
+ "vaco-filter-analysis",
+ "vaco-filter-asource",
  "vaco-filter-audio",
  "vaco-filter-audio-dynamics",
  "vaco-filter-audio-eq",
  "vaco-filter-blur",
+ "vaco-filter-color",
+ "vaco-filter-convolve",
  "vaco-filter-core",
+ "vaco-filter-deinterlace",
  "vaco-filter-denoise",
+ "vaco-filter-geometry",
+ "vaco-filter-key",
+ "vaco-filter-lut",
  "vaco-filter-plumbing",
+ "vaco-filter-source",
+ "vaco-filter-temporal",
  "vaco-filter-video-composite",
  "vaco-filter-video-format",
  "vaco-filter-video-geometry",
