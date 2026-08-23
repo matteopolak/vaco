@@ -143,7 +143,13 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-bsf-core | 3 | #349 | agent:bsf | assigned | 2026-08-23 |  | M6 stage is reachable but inert until this exists |
 | vaco-bsf-generic | 3 | #349 | agent:bsf | assigned | 2026-08-23 |  | extract_extradata closes CONFORMANCE-FINDINGS 26 |
 | vaco-bsf-h2645 | 3 | #350 | agent:bsf | assigned | 2026-08-23 |  | *_mp4toannexb; dedups vaco-mux-avi/mpegts converters |
-| vaco-filter-temporal | 5 | #475 | agent:temporal | assigned | 2026-08-23 |  | plan 16 §4.3 row; fps already taken by vaco-filter-video-format |
+| vaco-filter-temporal | 5 | #475 | agent:temporal | done | 2026-08-23 | 2026-08-23 | plan 16 §4.3 row; fps already taken by vaco-filter-video-format |
 | vaco-filter-convolve | 5 | #468 | agent:blur2 | assigned | 2026-08-23 |  | remainder of the plan row: morpho inflate deflate edgedetect blurdetect convolve deconvolve corr xcorrelate |
-| vaco-filter-core | 5 | — | agent:adapt | assigned | 2026-08-23 |  | INTERFACE-GAPS 10: Paired + Fanout adapters, then the multi-input filters three agents declined |
+| vaco-filter-core | 5 | — | agent:adapt | done | 2026-08-23 | 2026-08-23 | INTERFACE-GAPS 10: Paired + Fanout adapters, then the multi-input filters three agents declined |
 | vaco-mux-matroska | 4 | — | agent:mkv | assigned | 2026-08-23 |  | CONFORMANCE-FINDINGS 15: CRC-32 on every level-1 element, then SeekHead |
+| vaco-filter-vdsp | 5 | — | agent:deint | assigned | 2026-08-23 |  | created by agent:temporal for scene_sad; extend, do not duplicate |
+| vaco-filter-source | 5 | #474 | agent:src | assigned | 2026-08-23 |  | plan 16 §4.3 row; nullsrc/color already taken by vaco-filter-video-source |
+| vaco-filter-asource | 5 | #481 | agent:src | assigned | 2026-08-23 |  | anullsrc already taken |
+| vaco-filter-deinterlace | 5 | #480 | agent:deint | assigned | 2026-08-23 |  | plan 16 §4.3 row; idet/vfrdet blocked on INTERFACE-GAPS 11 |
+| vaco-frame | 2 | — | agent:framemeta | assigned | 2026-08-23 |  | INTERFACE-GAPS 11: per-frame metadata dictionary |
+| vaco-probe | 7 | — | agent:framemeta | assigned | 2026-08-23 |  | -show_frames FRAME_TAGS consumer side |
