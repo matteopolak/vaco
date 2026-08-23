@@ -419,7 +419,57 @@ up in one pass once the adapter exists: `framepack`, `mergeplanes`,
 `alphamerge` and `extractplanes` (`vaco-filter-geometry`), and whatever the
 in-flight `vaco-filter-key` and `vaco-filter-temporal` crates report.
 
-## 11. `vaco_frame::Frame` has no per-frame metadata dictionary
+## 11. `vaco_frame::Frame` has no per-frame metadata dictionary — CLOSED 2026-08-23
+
+`Frame::metadata() -> &[(String, String)]`, `Frame::set_metadata(key, value)`
+and `Frame::metadata_get(key) -> Option<&str>`, backed by a new
+`FrameSideData::Metadata(FrameMetadata)` variant (`FrameMetadata` an
+insertion-ordered `Vec<(String, String)>` newtype in `vaco-frame`). Additive,
+not a new field: `FrameSideData` is already `#[non_exhaustive]`, so the
+variant costs nothing anywhere else, and `rg 'side_data:' --type rust` found
+only two literal `Frame { .. }` constructions outside `vaco-frame` itself
+(`vaco-codec-core`'s and `vaco-sched`'s test/bench scaffolding) — small, but
+both sit in crates outside this work's ownership in a six-agent tree, so the
+field route would have needed cross-crate coordination this wave didn't have.
+The dedicated-field shape is recorded in `docs/model/vaco-frame.md` as the
+eventual promotion, once those two sites can move in the same wave as other
+`Frame` field changes.
+
+`freezedetect` (`vaco-filter-temporal`) is the wired acceptance case:
+`lavfi.freezedetect.freeze_start`/`.freeze_duration`/`.freeze_end`, attached
+to the confirming frame and the run-breaking frame respectively, replacing
+the `pub(crate)` test-only `Filter::events()` workaround its author had
+flagged. Measured against `ffmpeg 8.1`, not guessed, and one real bug found
+in the process: `freeze_end`/`freeze_duration` use the timestamp of the frame
+that *breaks* the freeze, not the last frozen frame — the two are
+indistinguishable at a uniform frame rate, so the original implementation
+(before this closed) had it wrong the same way `tblend`'s 256-vs-255 divisor
+was wrong, and an irregular-timestamp test is what catches it. Value
+formatting is six decimal digits, trailing zeros trimmed, then a bare
+trailing `.` trimmed (`0.0` → `"0"`, `1.001000` → `"1.001"`, `1.000001`
+unchanged) — see `freezedetect`'s module doc for the full measurement.
+
+On the consuming side, `Frame::metadata()`'s `&[(String, String)]` return
+type is deliberately the shape `vaco-probe`'s existing `show::tags` already
+renders for `STREAM_TAGS`/`FORMAT_TAGS`/`CHAPTER_TAGS`/`PROGRAM_TAGS`, so no
+new renderer was needed — `crates/app/vaco-probe/tests/frame_tags.rs` proves
+`show::tags(&mut e, SectionId::FRAME_TAGS, frame.metadata())` reproduces the
+reference's `[FRAME_TAGS]`/`"tags"` block byte for byte, including that a
+frame with nothing to report opens no section at all.
+
+**What did not ship: `-show_frames` itself is still refused.** Measured while
+scoping this, not assumed: `vaco-probe` has zero decoders anywhere in the
+workspace (D5) and doesn't even depend on `vaco-filter-core`/
+`vaco-filter-graph`/`vaco-sched` (`FRAMES_UNSUPPORTED` in `src/lib.rs`, moved
+to v0.2 by D14.4). There is no code path in this workspace today that
+produces a `Frame` from real input inside `vaco-probe`, so a live `vaco-probe
+-show_frames` run on a `freezedetect` graph is not reachable yet regardless
+of this gap — that is a decode/filter-graph wiring gap, not a metadata-model
+gap, and belongs to whichever wave adds `-show_frames` for real. This entry
+closes what it named: `Frame` has the dictionary, `freezedetect` writes it,
+and the renderer reproduces it exactly once handed a `Frame`.
+
+Original report, kept for the *why*:
 
 Reported by the `vaco-filter-color`/`-key`/`-lut` agent on 2026-08-23, which hit
 it while trying to place `msad` and `bitplanenoise` and found they had nowhere
