@@ -170,6 +170,12 @@ both exit 0, which is why the artifact check is separate.
 
 30 seconds per target is enough during the breadth phase.
 
+**Found an artifact? Diagnose it, do not delete it.** If you fix the bug, move
+the input to `fuzz/seeds/<target>/` — that directory is committed, while
+`fuzz/corpus/` is gitignored, so it is the only place a regression seed
+survives. A *stale* artifact is not harmless: `find fuzz/artifacts -type f` is
+in every agent's report, so it fails everyone's check until someone clears it.
+
 ## Closing issues
 
 You are authorised to close the GitHub issues your work completed — the
