@@ -356,3 +356,10 @@ kind     = "blackbox"
 title    = "Observed `ffprobe` writer behaviour for unavailable optional fields, ffmpeg 8.1: `default`/`compact`/`csv`/`flat`/`ini` print the placeholder (`profile=unknown`), `json`/`xml` omit the key entirely, `-show_optional_fields always` makes all six print it, and `never` empties the section"
 acquired = "2026-08-23"
 where    = "the reference binary installed on the development machine"
+
+[[source]]
+id       = "ffprobe-codec-identity-probe"
+kind     = "blackbox"
+title    = "Observed `ffprobe` codec_name/pix_fmt/sample_fmt for AVI FourCCs, DV (NTSC 4:1:1 and PAL 4:2:0, pcm_s16le audio) and Ogg (FLAC at 16 and 24 bits, Opus), ffmpeg 8.1"
+acquired = "2026-08-23"
+where    = "the reference binary installed on the development machine"
