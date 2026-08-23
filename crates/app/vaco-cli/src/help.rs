@@ -185,6 +185,7 @@ fn format_kind(name: Option<&str>, is_muxer: bool) -> String {
         if let Some(m) = vaco_registry::muxer_by_name(name) {
             let mut s = format!("Muxer {} [{}]:\n", m.name, m.long_name);
             push_extensions(&mut s, m.extensions);
+            push_mime(&mut s, name);
             if let Some(v) = m.default_video {
                 let _ = writeln!(s, "    Default video codec: {}.", v.name());
             }
@@ -199,6 +200,28 @@ fn format_kind(name: Option<&str>, is_muxer: bool) -> String {
         return s;
     }
     format!("Unknown format '{name}'.")
+}
+
+/// The muxer's first MIME type, if the registry has one.
+///
+/// Three things measured rather than assumed:
+///
+/// * **Muxers print it, demuxers do not.** `-h muxer=aiff` prints
+///   `Mime type: audio/aiff.`; `-h demuxer=aiff` prints nothing after its
+///   header, even though the same format is involved. So this is called from
+///   the muxer arm only.
+/// * **Only the first.** `aiff`'s component carries `audio/aiff` and
+///   `audio/x-aiff`; the reference prints the first alone.
+/// * **It comes from the registry, not the descriptor.** `MuxerDesc` has no
+///   MIME field — `vaco_registry::Component` does — which is why this takes a
+///   name and looks it up rather than reading it off `m`.
+fn push_mime(out: &mut String, name: &str) {
+    let Some(mime) = vaco_registry::component(Kind::Muxer, name)
+        .and_then(|c| c.mime_types.first())
+    else {
+        return;
+    };
+    let _ = writeln!(out, "    Mime type: {mime}.");
 }
 
 fn push_extensions(out: &mut String, extensions: &[&str]) {

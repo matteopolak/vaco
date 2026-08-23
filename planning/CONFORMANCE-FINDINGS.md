@@ -1056,6 +1056,44 @@ this was found, so it is recorded rather than done. It should be a single
 mechanical pass regenerating `long_name` from `ffmpeg -filters`, not 133
 hand-edits.
 
+### `Mime type:` was missing from `-h muxer=` — **fixed**, 11 -> 34 of 38
+
+Three separate facts, each measured:
+
+* **Muxers print it, demuxers do not.** `-h muxer=aiff` prints
+  `Mime type: audio/aiff.`; `-h demuxer=aiff` prints nothing at all after its
+  header, for the same format. So the line is emitted from the muxer arm only.
+* **Only the first is printed.** `aiff` carries `audio/aiff` and
+  `audio/x-aiff`; the reference prints the first alone.
+* **It is not on the descriptor.** `MuxerDesc` has no MIME field —
+  `vaco_registry::Component` does — so `help.rs` looks it up by name rather
+  than reading it off the descriptor it already holds.
+
+`help.rs` never emitted the line at all, and 27 muxer fragments had no
+`mime_types` row to emit. Both fixed by a scripted sweep against
+`ffmpeg -h muxer=<name>` rather than 27 hand-edits. One of the 27 was not
+missing but *wrong*: `mpegts` is `video/MP2T`, with the IANA capitalisation,
+and both the mux and demux fragments carried `video/mp2t`.
+
+Three remain — `matroska`, `webm`, `webm_chunk` — skipped because that crate
+was owned by a concurrent agent at the time, not because anything about them
+is different.
+
+### `Default subtitle codec:` has nowhere to come from — open
+
+```text
+$ ffmpeg -h muxer=matroska        $ ffmpeg -h muxer=webm
+    Default video codec: h264.        Default video codec: vp9.
+    Default audio codec: ac3.         Default audio codec: opus.
+    Default subtitle codec: ass.      Default subtitle codec: webvtt.
+```
+
+`MuxerDesc` has `default_video` and `default_audio` and no `default_subtitle`.
+Adding one is a field on a struct with ~100 exhaustive literal initialisers
+across the workspace, which is a breaking sweep and wants a quiet tree — the
+same class as `INTERFACE-GAPS.md` gaps 5 and 6, and it should probably land
+with them rather than on its own.
+
 ### `-h filter=<name>` is a stub — open
 
 ```text

@@ -15,6 +15,7 @@ long_name  = "Ogg"
 feature    = "mux-ogg"
 ctor       = "vaco_mux_ogg::MUXER_OGG"
 extensions = "ogg"
+mime_types = "application/ogg"
 
 [[component]]
 kind       = "muxer"
@@ -23,6 +24,7 @@ long_name  = "Ogg Audio"
 feature    = "mux-ogg"
 ctor       = "vaco_mux_ogg::MUXER_OGA"
 extensions = "oga"
+mime_types = "audio/ogg"
 
 [[component]]
 kind       = "muxer"
@@ -31,6 +33,7 @@ long_name  = "Ogg Video"
 feature    = "mux-ogg"
 ctor       = "vaco_mux_ogg::MUXER_OGV"
 extensions = "ogv"
+mime_types = "video/ogg"
 
 [[component]]
 kind       = "muxer"
@@ -39,6 +42,7 @@ long_name  = "Ogg Opus"
 feature    = "mux-ogg"
 ctor       = "vaco_mux_ogg::MUXER_OPUS"
 extensions = "opus"
+mime_types = "audio/ogg"
 
 [[component]]
 kind       = "muxer"
@@ -47,3 +51,5 @@ long_name  = "Ogg Speex"
 feature    = "mux-ogg"
 ctor       = "vaco_mux_ogg::MUXER_SPX"
 extensions = "spx"
+mime_types = "audio/ogg"
+

@@ -9,7 +9,7 @@ long_name  = "MPEG-TS (MPEG-2 Transport Stream)"
 feature    = "demux-mpegts"
 ctor       = "vaco_demux_mpegts::DEMUXER"
 extensions = "ts,m2t,m2ts,mts,mpegts"
-mime_types = "video/mp2t"
+mime_types = "video/MP2T"
 
 [[component]]
 kind       = "demuxer"

@@ -8,3 +8,5 @@ long_name  = "FLV (Flash Video)"
 feature    = "mux-flv"
 ctor       = "vaco_mux_flv::MUXER"
 extensions = "flv"
+mime_types = "video/x-flv"
+

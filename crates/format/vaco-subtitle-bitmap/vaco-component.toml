@@ -49,3 +49,5 @@ long_name  = "raw HDMV Presentation Graphic Stream subtitles"
 feature    = "subtitle-bitmap"
 ctor       = "vaco_subtitle_bitmap::sup::MUXER"
 extensions = "sup"
+mime_types = "application/x-pgs"
+

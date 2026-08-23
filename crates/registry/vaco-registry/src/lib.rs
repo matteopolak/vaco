@@ -53,9 +53,10 @@
 
 pub mod generated;
 
-use vaco_codec_core::{CodecId, DecoderDesc, Parser, ParserDesc};
-use vaco_core::MediaType;
+use vaco_codec_core::{BitstreamFilter, CodecId, CodecParameters, DecoderDesc, Parser, ParserDesc};
+use vaco_core::{Error, MediaType, Result};
 use vaco_filter_core::FilterDesc;
+use vaco_format_core::mux::BsfProvider;
 use vaco_format_core::{DemuxerDesc, MuxerDesc, ParserProvider, ProbeData};
 use vaco_limits::Limits;
 use vaco_protocol_core::{ProtocolDesc, ProtocolRegistry};
@@ -433,10 +434,94 @@ impl ParserProvider for Parsers {
     }
 }
 
+// -------------------------------------------------------- bitstream filters
+
+/// Every registered [`vaco_bsf_core::BsfDesc`], name-sorted duplicates aside.
+///
+/// A hand-assembled slice rather than a generated typed table: `kind =
+/// "bitstream_filter"` has no descriptor type in the trait layer yet
+/// ([`Kind::has_table`] says so directly), so `gen-registry` emits a
+/// [`Component`] metadata row and a `ctor`-resolution check for each fragment
+/// but no `BSF_FILTERS`-shaped static the way [`PARSERS`] gets one. Adding
+/// that table means adding a descriptor type to `vaco-codec-core`, the crate
+/// [`BitstreamFilter`] itself lives in — the same move that turned `Parser`
+/// from an untyped kind into [`PARSERS`], once `vaco-codec-core` grew
+/// [`ParserDesc`]. That crate is not this wave's to edit, so this is the
+/// scoped, disclosed workaround instead: match on name directly against each
+/// `vaco-bsf-*` crate's own `filters()` list, which is exactly what a typed
+/// table would let [`Bsfs::open`] do anyway, one layer removed. Recorded as a
+/// gap rather than silently living with it — see
+/// `planning/INTERFACE-GAPS.md`.
+fn bsf_descs() -> impl Iterator<Item = vaco_bsf_core::BsfDesc> {
+    vaco_bsf_generic::filters()
+        .iter()
+        .chain(vaco_bsf_h2645::filters())
+        .copied()
+}
+
+/// The registry's [`BsfProvider`]: how a muxer's `check_bitstream` request
+/// (M6) reaches a real filter without the muxer naming a `vaco-bsf-*` crate
+/// (D14.1) — the mux-side mirror of [`Parsers`].
+///
+/// Before this existed every `BsfProvider` in the tree was
+/// [`vaco_format_core::mux::NoBsfs`], so `check_bitstream` asking for
+/// `extract_extradata` or `h264_mp4toannexb` always failed — the M6 stage ran
+/// and had nothing to give it (`planning/INTERFACE-GAPS.md` gap 8's own
+/// closing note). This is that filter.
+#[derive(Clone, Copy, Default, Debug)]
+pub struct Bsfs;
+
+impl BsfProvider for Bsfs {
+    fn open(&self, name: &str, params: &CodecParameters) -> Result<Box<dyn BitstreamFilter>> {
+        for d in bsf_descs() {
+            if d.name == name {
+                return (d.build)(params);
+            }
+        }
+        Err(Error::Unsupported(
+            "this build registers no bitstream filter by that name",
+        ))
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::panic, reason = "test code")]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bsfs_opens_every_registered_filter_by_name() {
+        for d in bsf_descs() {
+            // Every filter here refuses at least one codec identity, but
+            // `null`/`setts`/`chomp`/`noise`/`dump_extra`/`remove_extra` take
+            // any `CodecParameters` at all — this only checks that `open`
+            // reaches the right constructor by name, not that every filter
+            // accepts a default-constructed stream.
+            let outcome = Bsfs.open(d.name, &CodecParameters::default());
+            assert!(
+                outcome.is_ok() || matches!(outcome, Err(Error::Unsupported(_))),
+                "{}: open returned neither a filter nor Unsupported",
+                d.name
+            );
+        }
+    }
+
+    #[test]
+    fn bsfs_refuses_an_unknown_name() {
+        let outcome = Bsfs.open("this_filter_does_not_exist", &CodecParameters::default());
+        assert!(matches!(outcome, Err(Error::Unsupported(_))));
+    }
+
+    #[test]
+    fn every_bsf_component_row_has_a_reachable_filter() {
+        for c in components_of_kind(Kind::BitstreamFilter) {
+            assert!(
+                bsf_descs().any(|d| d.name == c.name),
+                "{} is registered but Bsfs cannot open it",
+                c.name
+            );
+        }
+    }
 
     #[test]
     fn kind_names_round_trip() {

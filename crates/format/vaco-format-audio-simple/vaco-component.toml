@@ -17,6 +17,7 @@ long_name  = "WAV / WAVE (Waveform Audio)"
 feature    = "mux-wav"
 ctor       = "vaco_format_audio_simple::wav::MUXER"
 extensions = "wav"
+mime_types = "audio/x-wav"
 
 [[component]]
 kind       = "demuxer"
@@ -50,6 +51,7 @@ long_name  = "Audio IFF"
 feature    = "mux-aiff"
 ctor       = "vaco_format_audio_simple::aiff::MUXER"
 extensions = "aif,aiff"
+mime_types = "audio/aiff"
 
 [[component]]
 kind       = "demuxer"
@@ -67,6 +69,7 @@ long_name  = "Apple CAF (Core Audio Format)"
 feature    = "mux-caf"
 ctor       = "vaco_format_audio_simple::caf::MUXER"
 extensions = "caf"
+mime_types = "audio/x-caf"
 
 [[component]]
 kind       = "demuxer"
@@ -84,6 +87,7 @@ long_name  = "Sun AU"
 feature    = "mux-au"
 ctor       = "vaco_format_audio_simple::au::MUXER"
 extensions = "au"
+mime_types = "audio/basic"
 
 [[component]]
 kind       = "demuxer"
@@ -101,6 +105,7 @@ long_name  = "Creative Voice"
 feature    = "mux-voc"
 ctor       = "vaco_format_audio_simple::voc::MUXER"
 extensions = "voc"
+mime_types = "audio/x-voc"
 
 [[component]]
 kind       = "demuxer"

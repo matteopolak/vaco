@@ -38,6 +38,7 @@ long_name  = "iPod H.264 MP4 (MPEG-4 Part 14)"
 feature    = "mux-mp4"
 ctor       = "vaco_mux_mp4::MUXER_IPOD"
 extensions = "m4v,m4a"
+mime_types = "video/mp4"
 
 [[component]]
 kind       = "muxer"
@@ -46,6 +47,7 @@ long_name  = "ISMV/ISMA (Smooth Streaming)"
 feature    = "mux-mp4"
 ctor       = "vaco_mux_mp4::MUXER_ISMV"
 extensions = "ismv,isma"
+mime_types = "video/mp4"
 
 [[component]]
 kind       = "muxer"
@@ -54,6 +56,7 @@ long_name  = "F4V Adobe Flash Video"
 feature    = "mux-mp4"
 ctor       = "vaco_mux_mp4::MUXER_F4V"
 extensions = "f4v"
+mime_types = "application/f4v"
 
 [[component]]
 kind       = "muxer"

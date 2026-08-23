@@ -17,6 +17,11 @@ vaco-limits = { path = "../../core/vaco-limits" }
 vaco-format-core = { path = "../../format/vaco-format-core" }
 vaco-filter-core = { path = "../../filter/vaco-filter-core" }
 vaco-protocol-core = { path = "../../io/vaco-protocol-core" }
+# `Bsfs` names `vaco_bsf_core::BsfDesc`, the type every `vaco-bsf-*` crate's
+# `filters()` returns — same shape as the `vaco-codec-core` dependency above,
+# needed for a type name rather than for a generated table (`kind =
+# "bitstream_filter"` has no typed table yet; see `Bsfs`'s own doc comment).
+vaco-bsf-core = { path = "../../format/vaco-bsf-core" }
 
 [lints]
 workspace = true
@@ -102,6 +107,12 @@ default = ["demux-aiff", "demux-asf", "demux-asf-o", "demux-au", "demux-avi", "d
 "protocol-tls" = ["dep:vaco-protocol-tls"]
 "subtitle-bitmap" = ["dep:vaco-subtitle-bitmap"]
 "subtitle-text" = ["dep:vaco-subtitle-text"]
+
+[dependencies.vaco-bsf-generic]
+path = "../../format/vaco-bsf-generic"
+
+[dependencies.vaco-bsf-h2645]
+path = "../../format/vaco-bsf-h2645"
 
 [dependencies.vaco-demux-asf]
 path = "../../format/vaco-demux-asf"
@@ -197,6 +208,9 @@ path = "../../filter/vaco-filter-lut"
 
 [dependencies.vaco-filter-plumbing]
 path = "../../filter/vaco-filter-plumbing"
+
+[dependencies.vaco-filter-temporal]
+path = "../../filter/vaco-filter-temporal"
 
 [dependencies.vaco-filter-video-composite]
 path = "../../filter/vaco-filter-video-composite"

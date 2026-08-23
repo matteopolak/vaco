@@ -8,3 +8,5 @@ long_name  = "AVI (Audio Video Interleaved)"
 feature    = "mux-avi"
 ctor       = "vaco_mux_avi::MUXER"
 extensions = "avi"
+mime_types = "video/x-msvideo"
+

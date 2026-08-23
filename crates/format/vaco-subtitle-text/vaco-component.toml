@@ -36,15 +36,30 @@ media      = "subtitle"
 extensions = "vtt"
 mime_types = "text/vtt"
 
+# Measured, all four fields:
+#
+#   $ ffmpeg -h demuxer=ass
+#   Demuxer ass [SSA (SubStation Alpha) subtitle]:
+#
+# and nothing else — no `Common extensions` line and no `Mime type` line,
+# where `-h demuxer=mp3`/`avi`/`flv` all print theirs. The reference's ass
+# *demuxer* declares neither; its `ass` **muxer** declares both. So the
+# asymmetry below is the reference's, not an omission here.
+#
+# The name is `ass`, not `ass,ssa`. A comma-separated name list is a real
+# mechanism — `matroska,webm` and `mov,mp4,m4a,3gp,3g2,mj2` both round-trip
+# through `-demuxers` exactly — but `ssa` is not one of the names it applies
+# to: `ffmpeg -h demuxer=ssa` answers `Unknown format 'ssa'`.
+#
+# And the long name is SSA, not ASS. Reproducing the reference's spelling is
+# the point even where a better one exists (D9).
 [[component]]
 kind       = "demuxer"
-name       = "ass,ssa"
-long_name  = "ASS (Advanced SubStation Alpha) subtitle"
+name       = "ass"
+long_name  = "SSA (SubStation Alpha) subtitle"
 feature    = "subtitle-text"
 ctor       = "vaco_subtitle_text::ass::DEMUXER"
 media      = "subtitle"
-extensions = "ass,ssa"
-mime_types = "text/x-ass"
 
 [[component]]
 kind       = "demuxer"
@@ -187,6 +202,7 @@ long_name  = "SubRip subtitle"
 feature    = "subtitle-text"
 ctor       = "vaco_subtitle_text::srt::MUXER"
 extensions = "srt"
+mime_types = "application/x-subrip"
 
 [[component]]
 kind       = "muxer"
@@ -195,14 +211,23 @@ long_name  = "WebVTT subtitle"
 feature    = "subtitle-text"
 ctor       = "vaco_subtitle_text::webvtt::MUXER"
 extensions = "vtt"
+mime_types = "text/vtt"
+
+# `ffmpeg -h muxer=ass` prints all three, and the extension list is `ass,ssa`
+# rather than the demuxer-side `ass` this row used to carry:
+#
+#   Muxer ass [SSA (SubStation Alpha) subtitle]:
+#       Common extensions: ass,ssa.
+#       Mime type: text/x-ass.
 
 [[component]]
 kind       = "muxer"
 name       = "ass"
-long_name  = "ASS (Advanced SubStation Alpha) subtitle"
+long_name  = "SSA (SubStation Alpha) subtitle"
 feature    = "subtitle-text"
 ctor       = "vaco_subtitle_text::ass::MUXER"
-extensions = "ass"
+extensions = "ass,ssa"
+mime_types = "text/x-ass"
 
 [[component]]
 kind       = "muxer"
@@ -219,6 +244,7 @@ long_name  = "MicroDVD subtitle"
 feature    = "subtitle-text"
 ctor       = "vaco_subtitle_text::microdvd::MUXER"
 extensions = "sub"
+mime_types = "text/x-microdvd"
 
 [[component]]
 kind       = "muxer"
@@ -227,6 +253,7 @@ long_name  = "JACOsub subtitle format"
 feature    = "subtitle-text"
 ctor       = "vaco_subtitle_text::jacosub::MUXER"
 extensions = "jss"
+mime_types = "text/x-jacosub"
 
 [[component]]
 kind       = "muxer"
@@ -243,3 +270,5 @@ long_name  = "TTML subtitle"
 feature    = "subtitle-text"
 ctor       = "vaco_subtitle_text::ttml::MUXER"
 extensions = "ttml"
+mime_types = "text/ttml"
+

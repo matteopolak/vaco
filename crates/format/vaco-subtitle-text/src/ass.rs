@@ -129,11 +129,32 @@ fn open_demuxer(
 }
 
 /// The demuxer descriptor.
+///
+/// Every field here is the reference's, measured, including the two that look
+/// like mistakes:
+///
+/// ```text
+/// $ ffmpeg -h demuxer=ass
+/// Demuxer ass [SSA (SubStation Alpha) subtitle]:
+/// ```
+///
+/// and nothing after it — no `Common extensions` line and no `Mime type` line,
+/// where `-h demuxer=mp3`/`avi`/`flv` all print theirs. The reference's ass
+/// *demuxer* declares neither; its `ass` muxer declares both. The asymmetry is
+/// the reference's, not an omission.
+///
+/// The name is `ass`, not `ass,ssa`. A comma-separated name list is a real
+/// mechanism — `matroska,webm` and `mov,mp4,m4a,3gp,3g2,mj2` both round-trip
+/// through `-demuxers` exactly — but `ssa` is not one of the names it applies
+/// to: `ffmpeg -h demuxer=ssa` answers `Unknown format 'ssa'`.
+///
+/// And the long name says SSA where the format is ASS. Reproducing the
+/// reference's spelling is the point, even where a better one exists (D9).
 pub const DEMUXER: DemuxerDesc = DemuxerDesc {
-    name: "ass,ssa",
-    long_name: "ASS (Advanced SubStation Alpha) subtitle",
-    extensions: &["ass", "ssa"],
-    mime_types: &["text/x-ass"],
+    name: "ass",
+    long_name: "SSA (SubStation Alpha) subtitle",
+    extensions: &[],
+    mime_types: &[],
     flags: DEMUX_FLAGS,
     probe,
     open: open_demuxer,
@@ -172,10 +193,19 @@ fn open_muxer(sink: Box<dyn MediaSink>) -> Result<Box<dyn Muxer>> {
 }
 
 /// The muxer descriptor.
+///
+/// ```text
+/// $ ffmpeg -h muxer=ass
+/// Muxer ass [SSA (SubStation Alpha) subtitle]:
+///     Common extensions: ass,ssa.
+///     Mime type: text/x-ass.
+/// ```
+///
+/// Both extensions, unlike the demuxer above, which declares none.
 pub const MUXER: MuxerDesc = MuxerDesc {
     name: "ass",
-    long_name: "ASS (Advanced SubStation Alpha) subtitle",
-    extensions: &["ass"],
+    long_name: "SSA (SubStation Alpha) subtitle",
+    extensions: &["ass", "ssa"],
     default_video: None,
     default_audio: None,
     open: open_muxer,

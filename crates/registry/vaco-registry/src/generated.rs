@@ -67,14 +67,14 @@ pub static COMPONENTS: &[crate::Component] = &[
     #[cfg(feature = "subtitle-text")]
     crate::Component {
         kind: crate::Kind::Demuxer,
-        name: "ass,ssa",
-        long_name: Some("ASS (Advanced SubStation Alpha) subtitle"),
+        name: "ass",
+        long_name: Some("SSA (SubStation Alpha) subtitle"),
         krate: "vaco-subtitle-text",
         feature: Some("subtitle-text"),
         media: Some("subtitle"),
         codec: None,
-        extensions: &["ass", "ssa"],
-        mime_types: &["text/x-ass"],
+        extensions: &[],
+        mime_types: &[],
     },
     #[cfg(feature = "demux-au")]
     crate::Component {
@@ -733,7 +733,7 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["ts", "m2t", "m2ts", "mts", "mpegts"],
-        mime_types: &["video/mp2t"],
+        mime_types: &["video/MP2T"],
     },
     #[cfg(feature = "demux-mpegtsraw")]
     crate::Component {
@@ -1675,7 +1675,7 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["aif", "aiff"],
-        mime_types: &[],
+        mime_types: &["audio/aiff"],
     },
     #[cfg(feature = "mux-raw")]
     crate::Component {
@@ -1699,7 +1699,7 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["asf", "wmv", "wma"],
-        mime_types: &[],
+        mime_types: &["video/x-ms-asf"],
     },
     #[cfg(feature = "mux-asf-stream")]
     crate::Component {
@@ -1711,19 +1711,19 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &[],
-        mime_types: &[],
+        mime_types: &["video/x-ms-asf"],
     },
     #[cfg(feature = "subtitle-text")]
     crate::Component {
         kind: crate::Kind::Muxer,
         name: "ass",
-        long_name: Some("ASS (Advanced SubStation Alpha) subtitle"),
+        long_name: Some("SSA (SubStation Alpha) subtitle"),
         krate: "vaco-subtitle-text",
         feature: Some("subtitle-text"),
         media: None,
         codec: None,
-        extensions: &["ass"],
-        mime_types: &[],
+        extensions: &["ass", "ssa"],
+        mime_types: &["text/x-ass"],
     },
     #[cfg(feature = "mux-au")]
     crate::Component {
@@ -1735,7 +1735,7 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["au"],
-        mime_types: &[],
+        mime_types: &["audio/basic"],
     },
     #[cfg(feature = "mux-avi")]
     crate::Component {
@@ -1747,7 +1747,7 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["avi"],
-        mime_types: &[],
+        mime_types: &["video/x-msvideo"],
     },
     #[cfg(feature = "mux-raw")]
     crate::Component {
@@ -1795,7 +1795,7 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["caf"],
-        mime_types: &[],
+        mime_types: &["audio/x-caf"],
     },
     #[cfg(feature = "mux-raw")]
     crate::Component {
@@ -1938,7 +1938,7 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["f4v"],
-        mime_types: &[],
+        mime_types: &["application/f4v"],
     },
     #[cfg(feature = "mux-raw")]
     crate::Component {
@@ -1996,7 +1996,7 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["flv"],
-        mime_types: &[],
+        mime_types: &["video/x-flv"],
     },
     crate::Component {
         kind: crate::Kind::Muxer,
@@ -2124,7 +2124,7 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["m4v", "m4a"],
-        mime_types: &[],
+        mime_types: &["video/mp4"],
     },
     #[cfg(feature = "mux-ircam")]
     crate::Component {
@@ -2148,7 +2148,7 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["ismv", "isma"],
-        mime_types: &[],
+        mime_types: &["video/mp4"],
     },
     #[cfg(feature = "subtitle-text")]
     crate::Component {
@@ -2160,7 +2160,7 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["jss"],
-        mime_types: &[],
+        mime_types: &["text/x-jacosub"],
     },
     #[cfg(feature = "subtitle-text")]
     crate::Component {
@@ -2219,7 +2219,7 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["sub"],
-        mime_types: &[],
+        mime_types: &["text/x-microdvd"],
     },
     #[cfg(feature = "mux-raw")]
     crate::Component {
@@ -2290,7 +2290,7 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["ts", "m2t", "m2ts", "mts"],
-        mime_types: &["video/mp2t"],
+        mime_types: &["video/MP2T"],
     },
     #[cfg(feature = "mux-raw")]
     crate::Component {
@@ -2337,7 +2337,7 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["oga"],
-        mime_types: &[],
+        mime_types: &["audio/ogg"],
     },
     #[cfg(feature = "mux-ogg")]
     crate::Component {
@@ -2349,7 +2349,7 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["ogg"],
-        mime_types: &[],
+        mime_types: &["application/ogg"],
     },
     #[cfg(feature = "mux-ogg")]
     crate::Component {
@@ -2361,7 +2361,7 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["ogv"],
-        mime_types: &[],
+        mime_types: &["video/ogg"],
     },
     #[cfg(feature = "mux-ogg")]
     crate::Component {
@@ -2373,7 +2373,7 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["opus"],
-        mime_types: &[],
+        mime_types: &["audio/ogg"],
     },
     #[cfg(feature = "mux-mp4")]
     crate::Component {
@@ -2564,7 +2564,7 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["spx"],
-        mime_types: &[],
+        mime_types: &["audio/ogg"],
     },
     #[cfg(feature = "subtitle-text")]
     crate::Component {
@@ -2576,7 +2576,7 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["srt"],
-        mime_types: &[],
+        mime_types: &["application/x-subrip"],
     },
     crate::Component {
         kind: crate::Kind::Muxer,
@@ -2610,7 +2610,7 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["sup"],
-        mime_types: &[],
+        mime_types: &["application/x-pgs"],
     },
     #[cfg(feature = "mux-svcd")]
     crate::Component {
@@ -2645,7 +2645,7 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["ttml"],
-        mime_types: &[],
+        mime_types: &["text/ttml"],
     },
     #[cfg(feature = "mux-raw")]
     crate::Component {
@@ -2789,7 +2789,7 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["voc"],
-        mime_types: &[],
+        mime_types: &["audio/x-voc"],
     },
     #[cfg(feature = "mux-raw")]
     crate::Component {
@@ -2825,7 +2825,7 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["wav"],
-        mime_types: &[],
+        mime_types: &["audio/x-wav"],
     },
     #[cfg(feature = "mux-matroska")]
     crate::Component {
@@ -2861,7 +2861,7 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["vtt"],
-        mime_types: &[],
+        mime_types: &["text/vtt"],
     },
     #[cfg(feature = "mux-raw")]
     crate::Component {
@@ -3488,6 +3488,39 @@ pub static COMPONENTS: &[crate::Component] = &[
     },
     crate::Component {
         kind: crate::Kind::Filter,
+        name: "decimate",
+        long_name: Some("Decimate frames (post field matching filter)."),
+        krate: "vaco-filter-temporal",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "deflicker",
+        long_name: Some("Remove temporal frame luminance variations."),
+        krate: "vaco-filter-temporal",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "dejudder",
+        long_name: Some("Remove judder produced by pullup."),
+        krate: "vaco-filter-temporal",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
         name: "dilation",
         long_name: Some("Apply dilation effect"),
         krate: "vaco-filter-convolve",
@@ -3655,6 +3688,50 @@ pub static COMPONENTS: &[crate::Component] = &[
     },
     crate::Component {
         kind: crate::Kind::Filter,
+        name: "framestep",
+        long_name: Some("Select one frame every N frames."),
+        krate: "vaco-filter-temporal",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "freezedetect",
+        long_name: Some("Detects frozen video input."),
+        krate: "vaco-filter-temporal",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "freezeframes",
+        long_name: Some("Freeze video frames."),
+        krate: "vaco-filter-temporal",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "fsync",
+        long_name: Some("Synchronize video frames from external source."),
+        krate: "vaco-filter-temporal",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
         name: "gblur",
         long_name: Some("Apply Gaussian Blur filter"),
         krate: "vaco-filter-blur",
@@ -3757,6 +3834,17 @@ pub static COMPONENTS: &[crate::Component] = &[
         name: "kirsch",
         long_name: Some("Apply kirsch operator"),
         krate: "vaco-filter-convolve",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "lagfun",
+        long_name: Some("Slowly update darker pixels."),
+        krate: "vaco-filter-temporal",
         feature: None,
         media: Some("video"),
         codec: None,
@@ -3878,6 +3966,17 @@ pub static COMPONENTS: &[crate::Component] = &[
         name: "median",
         long_name: Some("Apply Median filter"),
         krate: "vaco-filter-convolve",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "mpdecimate",
+        long_name: Some("Remove near-duplicate frames."),
+        krate: "vaco-filter-temporal",
         feature: None,
         media: Some("video"),
         codec: None,
@@ -4056,6 +4155,17 @@ pub static COMPONENTS: &[crate::Component] = &[
         name: "pseudocolor",
         long_name: Some("Make pseudocolored video frames"),
         krate: "vaco-filter-color",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "random",
+        long_name: Some("Return random frames."),
+        krate: "vaco-filter-temporal",
         feature: None,
         media: Some("video"),
         codec: None,
@@ -4383,6 +4493,17 @@ pub static COMPONENTS: &[crate::Component] = &[
     },
     crate::Component {
         kind: crate::Kind::Filter,
+        name: "tblend",
+        long_name: Some("Blend successive frames."),
+        krate: "vaco-filter-temporal",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
         name: "tile",
         long_name: Some("Tile several successive frames together"),
         krate: "vaco-filter-geometry",
@@ -4399,6 +4520,61 @@ pub static COMPONENTS: &[crate::Component] = &[
         krate: "vaco-filter-audio-eq",
         feature: None,
         media: Some("audio"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "tlut2",
+        long_name: Some("Compute and apply a lookup table from two successive frames."),
+        krate: "vaco-filter-temporal",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "tmedian",
+        long_name: Some("Pick median pixels from successive frames."),
+        krate: "vaco-filter-temporal",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "tmidequalizer",
+        long_name: Some("Apply Temporal Midway Equalization."),
+        krate: "vaco-filter-temporal",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "tmix",
+        long_name: Some("Mix successive video frames."),
+        krate: "vaco-filter-temporal",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "tpad",
+        long_name: Some("Temporarily pad video frames."),
+        krate: "vaco-filter-temporal",
+        feature: None,
+        media: Some("video"),
         codec: None,
         extensions: &[],
         mime_types: &[],
@@ -4702,6 +4878,127 @@ pub static COMPONENTS: &[crate::Component] = &[
         long_name: Some("Unix domain socket"),
         krate: "vaco-protocol-socket",
         feature: Some("protocol-socket"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::BitstreamFilter,
+        name: "chomp",
+        long_name: Some("Remove zero padding at the end of a packet"),
+        krate: "vaco-bsf-generic",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::BitstreamFilter,
+        name: "dump_extra",
+        long_name: Some("Dump extradata into the bitstream"),
+        krate: "vaco-bsf-generic",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::BitstreamFilter,
+        name: "extract_extradata",
+        long_name: Some("Extract extradata from the bitstream"),
+        krate: "vaco-bsf-generic",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::BitstreamFilter,
+        name: "filter_units",
+        long_name: Some("Remove units with types in a given set"),
+        krate: "vaco-bsf-generic",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::BitstreamFilter,
+        name: "h264_mp4toannexb",
+        long_name: Some("Convert an H.264 bitstream from length prefixed to Annex B"),
+        krate: "vaco-bsf-h2645",
+        feature: None,
+        media: None,
+        codec: Some("h264"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::BitstreamFilter,
+        name: "hevc_mp4toannexb",
+        long_name: Some("Convert an HEVC bitstream from length prefixed to Annex B"),
+        krate: "vaco-bsf-h2645",
+        feature: None,
+        media: None,
+        codec: Some("hevc"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::BitstreamFilter,
+        name: "noise",
+        long_name: Some("Damage the contents of packets, without effecting the frame headers"),
+        krate: "vaco-bsf-generic",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::BitstreamFilter,
+        name: "null",
+        long_name: Some("Null bitstream filter"),
+        krate: "vaco-bsf-generic",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::BitstreamFilter,
+        name: "remove_extra",
+        long_name: Some("Remove extradata repeated in the bitstream"),
+        krate: "vaco-bsf-generic",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::BitstreamFilter,
+        name: "setts",
+        long_name: Some("Set packet timestamps"),
+        krate: "vaco-bsf-generic",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::BitstreamFilter,
+        name: "trace_headers",
+        long_name: Some("Trace headers of NAL units"),
+        krate: "vaco-bsf-generic",
+        feature: None,
         media: None,
         codec: None,
         extensions: &[],
@@ -5266,6 +5563,9 @@ pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[
     &::vaco_filter_video_geometry::crop::DESC,
     &::vaco_filter_achannel::crossfeed::DESC,
     &::vaco_filter_denoise::dctdnoiz::DESC,
+    &::vaco_filter_temporal::decimate::DESC,
+    &::vaco_filter_temporal::deflicker::DESC,
+    &::vaco_filter_temporal::dejudder::DESC,
     &::vaco_filter_convolve::dilation::DESC,
     &::vaco_filter_ameasure::drmeter::DESC,
     &::vaco_filter_audio_dynamics::dynaudnorm::DESC,
@@ -5281,6 +5581,10 @@ pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[
     &::vaco_filter_video_format::format::DESC,
     &::vaco_filter_video_format::fps::DESC,
     &::vaco_filter_video_format::framerate::DESC,
+    &::vaco_filter_temporal::framestep::DESC,
+    &::vaco_filter_temporal::freezedetect::DESC,
+    &::vaco_filter_temporal::freezeframes::DESC,
+    &::vaco_filter_temporal::fsync::DESC,
     &::vaco_filter_blur::gblur::DESC,
     &::vaco_filter_achannel::haas::DESC,
     &::vaco_filter_lut::haldclut::DESC,
@@ -5291,6 +5595,7 @@ pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[
     &::vaco_filter_geometry::il::DESC,
     &::vaco_filter_audio::join::DESC,
     &::vaco_filter_convolve::kirsch::DESC,
+    &::vaco_filter_temporal::lagfun::DESC,
     &::vaco_filter_audio_dynamics::loudnorm::DESC,
     &::vaco_filter_audio_eq::lowpass::DESC,
     &::vaco_filter_audio_eq::lowshelf::DESC,
@@ -5302,6 +5607,7 @@ pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[
     &::vaco_filter_key::maskedmerge::DESC,
     &::vaco_filter_audio_dynamics::mcompand::DESC,
     &::vaco_filter_convolve::median::DESC,
+    &::vaco_filter_temporal::mpdecimate::DESC,
     &::vaco_filter_denoise::nlmeans::DESC,
     &::vaco_filter_video_format::noformat::DESC,
     &::vaco_filter_plumbing::passthrough::null::DESC,
@@ -5318,6 +5624,7 @@ pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[
     &::vaco_filter_key::premultiply::premultiply::DESC,
     &::vaco_filter_convolve::prewitt::DESC,
     &::vaco_filter_color::pseudocolor::DESC,
+    &::vaco_filter_temporal::random::DESC,
     &::vaco_filter_denoise::removegrain::DESC,
     &::vaco_filter_ameasure::replaygain::DESC,
     &::vaco_filter_convolve::roberts::DESC,
@@ -5347,8 +5654,14 @@ pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[
     &::vaco_filter_audio_eq::superequalizer::DESC,
     &::vaco_filter_geometry::swaprect::DESC,
     &::vaco_filter_geometry::swapuv::DESC,
+    &::vaco_filter_temporal::tblend::DESC,
     &::vaco_filter_geometry::tile::DESC,
     &::vaco_filter_audio_eq::tiltshelf::DESC,
+    &::vaco_filter_temporal::tlut2::DESC,
+    &::vaco_filter_temporal::tmedian::DESC,
+    &::vaco_filter_temporal::tmidequalizer::DESC,
+    &::vaco_filter_temporal::tmix::DESC,
+    &::vaco_filter_temporal::tpad::DESC,
     &::vaco_filter_video_geometry::transpose::DESC,
     &::vaco_filter_audio_eq::treble::DESC,
     &::vaco_filter_plumbing::trim::video::DESC,
@@ -5388,3 +5701,21 @@ pub static PROTOCOLS: &[&::vaco_protocol_core::ProtocolDesc] = &[
     #[cfg(feature = "protocol-socket")]
     &::vaco_protocol_socket::UNIX_PROTOCOL,
 ];
+
+// Kinds with no descriptor type yet still get their `ctor` path checked,
+// so a typo in a fragment is a compile error rather than a component that
+// silently is not there. Taking a reference needs no trait bound, which is
+// what makes this work without knowing the type.
+const _: () = {
+    let _ = &::vaco_bsf_generic::chomp::DESC;
+    let _ = &::vaco_bsf_generic::dump_extra::DESC;
+    let _ = &::vaco_bsf_generic::extract_extradata::DESC;
+    let _ = &::vaco_bsf_generic::filter_units::DESC;
+    let _ = &::vaco_bsf_h2645::h264_mp4toannexb::DESC;
+    let _ = &::vaco_bsf_h2645::hevc_mp4toannexb::DESC;
+    let _ = &::vaco_bsf_generic::noise::DESC;
+    let _ = &::vaco_bsf_generic::null::DESC;
+    let _ = &::vaco_bsf_generic::remove_extra::DESC;
+    let _ = &::vaco_bsf_generic::setts::DESC;
+    let _ = &::vaco_bsf_generic::trace_headers::DESC;
+};
