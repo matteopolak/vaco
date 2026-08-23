@@ -124,12 +124,56 @@ at all, and the whole description — object type, sampling frequency, channel
 configuration — is in the `esds` `DecoderSpecificInfo` / `CodecPrivate`.
 `Parser::set_extradata` reads it as an `AudioSpecificConfig`.
 
-A parser that has been configured that way sets a `configured` flag and refuses
-to let a later ADTS header replace its parameters. That is not a preference: a
+A parser that has been configured that way keeps the whole
+`AudioSpecificConfig` and refuses to let a later ADTS header replace its
+parameters. That is not a preference: a
 raw AAC sample contains no ADTS header, so any sync word the scanner finds in
 one is a coincidence, and a coincidence must not overwrite a record the
 container stated. `tests/provider.rs` pins it with a synthetic 48 kHz frame fed
 to a parser configured at 44.1 kHz.
+
+### Packet duration, and why it does not care about SBR
+
+`Parser::packet_duration` returns one frame's length in seconds, as an exact
+`Rational`, and it takes the same two paths the paragraph above describes:
+
+* **Configured** (MP4 `esds`, Matroska `CodecPrivate`) — a stream constant off
+  the `AudioSpecificConfig`: `frame_length()` over `sampling_frequency`. The
+  payload is not read at all, and must not be, for the coincidence reason above.
+* **In-band** (MPEG-TS, a raw `.aac` file) — the payload is walked and each ADTS
+  frame's `raw_data_blocks × 1024` samples are summed at that header's rate, so
+  a PES payload holding several frames reports several frames.
+
+**The `sampling_frequency` in both is the *core* rate, and that is the whole
+trick.** The brief for this work described the quantity as "1024 samples per
+frame, or 2048 for SBR"; both are true and they are the *same duration*, because
+SBR doubles the output rate along with the sample count. `1024/22050` and
+`2048/44100` are one `Rational`. A caller that reached for the reported
+`sample_rate` — which is the *extension* rate for an SBR stream — and multiplied
+by 1024 would halve every duration on every HE-AAC file. Answering in seconds,
+inside the parser that holds both halves, removes the trap rather than
+documenting it. `packet_duration_is_unchanged_by_sbr` pins it against the real
+HE-AAC `esds` (`13 90 56 e5 a0`).
+
+Measured against `ffprobe 8.1`:
+
+| file | stream base | reference | exact |
+|---|---|---:|---|
+| AAC 44100 in Matroska (no `DefaultDuration`) | 1/1000 | 23 | 1024/44100 s |
+| AAC 48000 in Matroska (no `DefaultDuration`) | 1/1000 | 21 | 1024/48000 s |
+| AAC 44100 in MPEG-TS | 1/90000 | **2089** | 1024/44100 s |
+| AAC 44100 in LOAS/LATM | 1/28224000 | 655360 | 1024/44100 s |
+| AAC 44100 in MP4 | 1/44100 | 1024 | from `stts` |
+
+The MPEG-TS row is a rounding witness as well as a value: `1024 × 90000 ÷ 44100`
+is 2089.79 and the reference prints the truncation. **So AAC has the same gap
+Opus does**, in Matroska and in MPEG-TS; MP4 does not, because `stts` states a
+duration per sample and the container's statement always wins.
+
+`LoasParser` answers from the `StreamMuxConfig`: `numSubFrames × frame_length`
+over the first layer's core rate. It returns `None` until a configuration has
+been read, because `useSameStreamMux` lets a frame omit one entirely and
+guessing 1024 would be a fabrication.
 
 ### `sample_fmt` is the decoder's output format
 
@@ -167,6 +211,38 @@ leaving it `unknown` diverges on every AAC stream there is.
   `AdtsHeader::channel_configuration` is always 0..=7.
 
 ## Known divergences
+
+### The first AAC packet of a single-track Matroska has no duration
+
+Not reproduced, and the measurements are why. `ffprobe 8.1` prints
+`duration=N/A` on the **first** packet of an AAC track in some Matroska files
+and the codec-derived value on every packet after it:
+
+| file | first packet | rest |
+|---|---|---|
+| `aac.mka` (AAC only) | `N/A` | 23 |
+| `aac48.mka` (AAC only, 48 kHz) | `N/A` | 21 |
+| two AAC tracks in one file | `N/A` on **both** tracks | 23 / 21 |
+| AAC + Opus in one file | `N/A` on the AAC track only | 23 / 20 |
+| **`av.mkv` (AAC + H.264)** | **23** | 23 |
+| `opus.mka`, `flac.mka` | value | value |
+| AAC in MPEG-TS | value | value |
+
+It is not the priming: patching `CodecDelay` to zero, so the packet carries no
+`Skip Samples` side data at all, leaves the `N/A` in place. It is not a seek or
+a read position: `-read_intervals '2%…'` produces a duration on the first packet
+it emits. It is not `probesize` or `analyzeduration`, which change nothing. And
+`av.mkv` shows it is not even universal for AAC in Matroska — adding a video
+track makes the value appear.
+
+The pattern across the whole set is "the answer comes from the configuration
+rather than from the packet, and the reference has not established it yet when
+the first packet leaves its queue" — an artefact of its probing order, not a
+rule about the format. Reproducing it would mean teaching `Parser` to report
+*where* its answer came from, to serve one field value per track, and the
+`av.mkv` row says even that would not be enough. Recorded here instead; it is
+the single remaining `duration` divergence on Matroska AAC, 1 of 40 packets on
+`aac.mka` and 0 of 40 on `av.mkv`.
 
 ### D17: `samplingFrequencyIndex` 15 is rejected in the core position only
 

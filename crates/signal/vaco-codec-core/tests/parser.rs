@@ -190,3 +190,45 @@ fn the_default_set_extradata_is_harmless() {
     let mut boxed: Box<dyn Parser> = Box::new(MockParser::new(4));
     boxed.set_extradata(&[1, 2, 3]).expect("forwards");
 }
+
+/// `packet_duration` defaults to `None`, which is the right answer for every
+/// video codec: a video packet's duration is the container's statement, not
+/// the bitstream's.
+///
+/// The default matters as much as the method. `Parser` is implemented by five
+/// crates and only two of them have anything to say here, so a required method
+/// would have meant three `None` bodies written by hand and one more place for
+/// a new parser to get it wrong.
+#[test]
+fn the_default_packet_duration_is_none() {
+    let p = MockParser::new(4);
+    assert_eq!(p.packet_duration(&[]), None);
+    assert_eq!(p.packet_duration(&[1, 2, 3, 4]), None);
+}
+
+/// …and it forwards through the box, which is the only way a parser obtained
+/// from `ParserProvider` is ever reached.
+#[test]
+fn packet_duration_forwards_through_the_box() {
+    /// Answers 20 ms — one Opus packet — for any non-empty input.
+    #[derive(Debug)]
+    struct Timed;
+    impl Parser for Timed {
+        fn parse(
+            &mut self,
+            input: &[u8],
+        ) -> vaco_core::Result<(Option<vaco_packet::Packet>, usize)> {
+            Ok((None, input.len()))
+        }
+        fn parameters(&self) -> Option<&CodecParameters> {
+            None
+        }
+        fn packet_duration(&self, packet: &[u8]) -> Option<vaco_core::Rational> {
+            (!packet.is_empty()).then(|| vaco_core::Rational::new(960, 48000))
+        }
+    }
+    let boxed: Box<dyn Parser> = Box::new(Timed);
+    assert_eq!(boxed.packet_duration(&[]), None);
+    let d = boxed.packet_duration(&[1]).expect("forwards");
+    assert_eq!((d.num, d.den), (960, 48000));
+}

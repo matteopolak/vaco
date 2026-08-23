@@ -3,7 +3,7 @@
 //! # Scope
 //!
 //! CL-04 owns the help system. `-h` and its four depths live in [`crate::help`];
-//! this module is the other half — the fourteen standalone listing commands.
+//! this module is the other half — the twenty-two standalone listing commands.
 //! Column layouts, legends and headers below were measured against `ffmpeg
 //! 8.1`/`ffprobe 8.1` under `LC_ALL=C` (D17, plan 13 §1b), not recalled — see
 //! each function's doc comment for the exact invocation. Component *names* are
@@ -15,9 +15,23 @@
 //! A listing this build cannot yet render faithfully — because the data it
 //! would need does not exist in the registry, not because the layout is
 //! unknown — still returns [`AvError::ENOSYS`] naming the gap, rather than a
-//! half-formatted table. See the bottom of this file for exactly which ones
-//! and why.
+//! half-formatted table.
+//!
+//! # The eight formerly-`ENOSYS` listings
+//!
+//! `-pix_fmts`, `-sample_fmts`, `-layouts`, `-colors`, `-hwaccels`,
+//! `-devices`, `-sources` and `-sinks` all render now. The first four have
+//! real per-format data behind them (`vaco-pixfmt`, `vaco-sampfmt`,
+//! `vaco-chlayout`, `vaco_core::parse::color`); the last four are honest
+//! empty listings under a real header, because this build has no hardware
+//! backend and no device layer at all (D13's `vaco-hw-*` crates are a
+//! separate work package) — an empty list under a real header is exactly
+//! what the reference itself would print with none of a thing registered,
+//! and it is what CL-04's brief asks for rather than keeping `ENOSYS`. See
+//! each function's doc comment for the measurement and, where this build's
+//! data disagrees with the reference's, the exact divergence and its cause.
 
+use std::ffi::OsStr;
 use std::io::Write;
 
 use vaco_registry::{Kind, components_of_kind};
@@ -68,11 +82,22 @@ fn pad_field(out: &mut String, s: &str, min: usize) {
 
 /// Render one `-<name>` listing.
 ///
+/// `value` is the option's own argument, if it took one — today that is only
+/// `-sources`/`-sinks`' optional device name (`None` covers both "this
+/// option's grammar takes no argument" and "the argument was omitted"; the
+/// caller does not distinguish the two, and nothing here needs it to). An
+/// `OsStr`, not a `str`: this crate's own convention (see "Known
+/// divergences" in `docs/app/vaco-cli.md`) is to treat non-UTF-8 input as a
+/// real case rather than lossily converting it, and a device name that
+/// cannot be a `str` is still a device name that was *given* — distinct from
+/// none being given at all, which changes which of two reference outputs is
+/// correct.
+///
 /// # Errors
 ///
 /// [`AvError::ENOSYS`] for a listing this build does not render yet — see the
 /// module docs for exactly which and why.
-pub fn render<W: Write>(w: &mut W, name: &str) -> Result<(), Diagnostic> {
+pub fn render<W: Write>(w: &mut W, name: &str, value: Option<&OsStr>) -> Result<(), Diagnostic> {
     let mut go = || -> std::io::Result<bool> {
         match name {
             "version" => {
@@ -112,6 +137,27 @@ pub fn render<W: Write>(w: &mut W, name: &str) -> Result<(), Diagnostic> {
                 for &(_, n) in vaco_cli_core::Disposition::ALL {
                     writeln!(w, "{n}")?;
                 }
+            }
+            "pix_fmts" => {
+                write_pix_fmts(w)?;
+            }
+            "sample_fmts" => {
+                write_sample_fmts(w)?;
+            }
+            "layouts" => {
+                write_layouts(w)?;
+            }
+            "colors" => {
+                write_colors(w)?;
+            }
+            "hwaccels" => {
+                write_hwaccels(w)?;
+            }
+            "devices" => {
+                write_devices(w)?;
+            }
+            "sources" | "sinks" => {
+                write_sources_or_sinks(w, value)?;
             }
             // Not a reference option at all (verified: `ffmpeg -parsers` is
             // unrecognised); kept because `vaco-registry` tracks parsers as
@@ -351,26 +397,990 @@ fn enabled_features() -> Vec<&'static str> {
 }
 
 // ---------------------------------------------------------------------------
-// Deferred: `-pix_fmts`, `-sample_fmts`, `-layouts`, `-colors`, `-hwaccels`,
-// `-devices`, `-sources`, `-sinks`.
-//
-// All eight still return `ENOSYS`. Header shapes were measured for the first
-// three (`docs/app/vaco-cli.md` records them) but the row data needs
-// `vaco-pixfmt`/`vaco-sampfmt`/`vaco-chlayout` to expose per-format component
-// counts, bit depths and alpha/paletted/bitstream/hardware flags that this
-// crate has no way to reach without either a new dependency (out of scope: it
-// would cross from `app` down into `model`, which is architecturally fine,
-// but CL-04's own scope is the two `app` crates, not extending those model
-// crates' public surface to suit) or guessing, which D6 rules out. `-colors`
-// was never in the CLI table CL-04's ffmpeg option table declares as a real
-// option to begin with; it is real in the reference (verified:
-// `ffmpeg -colors` succeeds) but the brief's own listing named
-// "`-colorspaces`" instead, which does **not** exist in ffmpeg 8.1 (verified:
-// `ffmpeg -colorspaces` exits 8, "Unrecognized option") — see the crate's
-// report for that correction. `-hwaccels`/`-devices`/`-sources`/`-sinks` need
-// a hardware/device registry this build does not have at all (D13's
-// `vaco-hw-*` crates are a separate, later work package).
+// `-pix_fmts`
 // ---------------------------------------------------------------------------
+
+/// `-pix_fmts`: `vaco_pixfmt::PixFmt::all()` already carries a name,
+/// component count, average bits-per-pixel and per-component depth for every
+/// format — generated data (`cargo xtask gen-pixfmt`), not hand-written. This
+/// is the listing CL-04's brief calls out as most worth getting right, since
+/// that data already exists in full; this function's job is column layout
+/// and three small, named, measured corrections where this build's data and
+/// the reference's disagree.
+///
+/// Header, legend and the four fixed-width columns were measured directly
+/// (`ffmpeg -hide_banner -pix_fmts`, `LC_ALL=C`, ffmpeg 8.1):
+///
+/// ```text
+/// Pixel formats:
+/// I.... = Supported Input  format for conversion
+/// .O... = Supported Output format for conversion
+/// ..H.. = Hardware accelerated format
+/// ...P. = Paletted format
+/// ....B = Bitstream format
+/// FLAGS NAME            NB_COMPONENTS BITS_PER_PIXEL BIT_DEPTHS
+/// -----
+/// IO... yuv420p                3             12      8-8-8
+/// ```
+///
+/// Columns, measured by byte offset across all 267 rows (counted, not
+/// estimated — D17, plan 13 §1b): flags (5 chars) + one space, `NAME`
+/// left-justified to **16**, `NB_COMPONENTS` right-justified to **8**,
+/// `BITS_PER_PIXEL` right-justified to **15**, six literal spaces, then
+/// `BIT_DEPTHS` verbatim with no trailing padding. A zero-component
+/// (hardware) format prints a literal `0` in the depths column, not an empty
+/// string — the one formatting rule here that is not just "read the
+/// descriptor".
+///
+/// `H`/`P`/`B` come straight from
+/// `PixFmtFlags::{HW_ACCEL,PALETTE,BITSTREAM}` — real data — with the two
+/// named exceptions in [`BITSTREAM_FLAG_OVERRIDE`]. `I`/`O` ("supported
+/// *for conversion*") is not a pixel-format property at all: it is
+/// libswscale's own hand-maintained per-format capability list, which
+/// nothing in this workspace exposes — there is no scaler-capability query
+/// reachable from this crate, and `vaco-scale`'s own coverage would answer a
+/// different question (whether *our* scaler supports the format) from the
+/// one D6 needs (whether the *reference's* does). [`INPUT_ONLY`],
+/// [`OUTPUT_ONLY`] and [`NEITHER`] are that capability list, captured
+/// verbatim from the same probe and nothing else — 49 of 267 formats are not
+/// simply "software implies both", which is exactly the kind of fact this
+/// project's D17 says to measure rather than assume.
+///
+/// # Divergences from `vaco-pixfmt`'s own data (not fixed here — cross-crate)
+///
+/// Comparing every one of `vaco-pixfmt`'s 268 formats against the reference's
+/// 267 found:
+///
+/// * **One extra format.** `vaco-pixfmt` has `cuarray`; ffmpeg 8.1 does not.
+///   Excluded by name below — a listing decides what it shows, not what the
+///   descriptor table contains — and reported for `vaco-pixfmt` to look at.
+/// * **`bgr8`'s component depths are in the wrong order.** The reference
+///   reports `3-3-2`; `vaco-pixfmt`'s descriptor gives `2-3-3` for the same
+///   format, despite [`vaco_pixfmt::PixFmtDescriptor`]'s own documented
+///   convention (component 0 is the first *logical* channel, R for an RGB
+///   format) — this looks like the component array being stored in *plane*
+///   order for this one packed format rather than logical order. Corrected
+///   for display in [`DEPTHS_OVERRIDE`] below.
+/// * **The twelve Bayer formats model one raw-sample component where the
+///   reference models three uneven-depth ones** (`bayer_bggr8`: ours is
+///   1 component of depth 8, the reference is 3 components of depths
+///   `2-4-2`). This is a structural modelling difference, not a fixable
+///   typo — `vaco-pixfmt` treats a Bayer mosaic as a single logical channel,
+///   which is a defensible design, but it means this listing cannot be
+///   byte-identical for these twelve names without a display-only override,
+///   which [`DEPTHS_OVERRIDE`] also carries.
+/// * **`xv30be`/`v30xbe` are missing `PixFmtFlags::BITSTREAM`.** The
+///   reference marks both `B`; `vaco-pixfmt` marks neither, while their
+///   little-endian siblings (`xv30le`/`v30xle`) correctly have no `B` in
+///   either implementation. Compensated for display in
+///   [`BITSTREAM_FLAG_OVERRIDE`].
+///
+/// After the above, comparing every rendered row against the reference's own
+/// (as a multiset — `diff <(sort ours) <(sort theirs)`) shows **zero content
+/// differences across all 267 rows**, and with [`LISTING_ORDER`] the whole
+/// listing is byte-identical.
+///
+/// # The row order, and why recording it is clean-room
+///
+/// `PixFmt::all()` is declared in family/subsampling order (`yuv410p`,
+/// `yuv411p`, `yuv420p`, …); the reference emits its own historical
+/// `AVPixelFormat` enum-assignment order (`yuv420p`, `yuyv422`, `rgb24`, …),
+/// which encodes nothing but the sequence in which formats were added.
+///
+/// That was first left alone as "an arbitrary authorial sequence, not
+/// format-dictated data", which reads like the right instinct and is the wrong
+/// conclusion. **D6 is explicit**: the reference binary is used as a black box
+/// producing observed outputs, and *recording observed behaviour of a shipped
+/// binary is not copying expression*. The order below was obtained by running
+/// `ffmpeg -hide_banner -pix_fmts` under `LC_ALL=C` and reading its output —
+/// the same technique that produced the ID3v1 genre table (probed across every
+/// byte value 0–255) and the codec-tag tables. No source was consulted.
+///
+/// The distinction that matters is *how you learned it*, not how arbitrary it
+/// looks. An arbitrary sequence you read out of someone's header file is off
+/// limits; the same sequence printed on stdout by a program is an interface
+/// fact (D9), and byte-identity is the D6 contract.
+/// The reference's own row order for `-pix_fmts`, recorded by running it.
+///
+/// See [`write_pix_fmts`] for why reading this off stdout is clean-room and
+/// reading it out of a header would not be. A format absent from this list is
+/// appended after it in `PixFmt::all()` order, so a format we know and the
+/// reference does not still appears rather than vanishing.
+const LISTING_ORDER: &[&str] = &[
+    "yuv420p",
+    "yuyv422",
+    "rgb24",
+    "bgr24",
+    "yuv422p",
+    "yuv444p",
+    "yuv410p",
+    "yuv411p",
+    "gray",
+    "monow",
+    "monob",
+    "pal8",
+    "yuvj420p",
+    "yuvj422p",
+    "yuvj444p",
+    "uyvy422",
+    "uyyvyy411",
+    "bgr8",
+    "bgr4",
+    "bgr4_byte",
+    "rgb8",
+    "rgb4",
+    "rgb4_byte",
+    "nv12",
+    "nv21",
+    "argb",
+    "rgba",
+    "abgr",
+    "bgra",
+    "gray16be",
+    "gray16le",
+    "yuv440p",
+    "yuvj440p",
+    "yuva420p",
+    "rgb48be",
+    "rgb48le",
+    "rgb565be",
+    "rgb565le",
+    "rgb555be",
+    "rgb555le",
+    "bgr565be",
+    "bgr565le",
+    "bgr555be",
+    "bgr555le",
+    "vaapi",
+    "yuv420p16le",
+    "yuv420p16be",
+    "yuv422p16le",
+    "yuv422p16be",
+    "yuv444p16le",
+    "yuv444p16be",
+    "dxva2_vld",
+    "rgb444le",
+    "rgb444be",
+    "bgr444le",
+    "bgr444be",
+    "ya8",
+    "bgr48be",
+    "bgr48le",
+    "yuv420p9be",
+    "yuv420p9le",
+    "yuv420p10be",
+    "yuv420p10le",
+    "yuv422p10be",
+    "yuv422p10le",
+    "yuv444p9be",
+    "yuv444p9le",
+    "yuv444p10be",
+    "yuv444p10le",
+    "yuv422p9be",
+    "yuv422p9le",
+    "gbrp",
+    "gbrp9be",
+    "gbrp9le",
+    "gbrp10be",
+    "gbrp10le",
+    "gbrp16be",
+    "gbrp16le",
+    "yuva422p",
+    "yuva444p",
+    "yuva420p9be",
+    "yuva420p9le",
+    "yuva422p9be",
+    "yuva422p9le",
+    "yuva444p9be",
+    "yuva444p9le",
+    "yuva420p10be",
+    "yuva420p10le",
+    "yuva422p10be",
+    "yuva422p10le",
+    "yuva444p10be",
+    "yuva444p10le",
+    "yuva420p16be",
+    "yuva420p16le",
+    "yuva422p16be",
+    "yuva422p16le",
+    "yuva444p16be",
+    "yuva444p16le",
+    "vdpau",
+    "xyz12le",
+    "xyz12be",
+    "nv16",
+    "nv20le",
+    "nv20be",
+    "rgba64be",
+    "rgba64le",
+    "bgra64be",
+    "bgra64le",
+    "yvyu422",
+    "ya16be",
+    "ya16le",
+    "gbrap",
+    "gbrap16be",
+    "gbrap16le",
+    "qsv",
+    "mmal",
+    "d3d11va_vld",
+    "cuda",
+    "0rgb",
+    "rgb0",
+    "0bgr",
+    "bgr0",
+    "yuv420p12be",
+    "yuv420p12le",
+    "yuv420p14be",
+    "yuv420p14le",
+    "yuv422p12be",
+    "yuv422p12le",
+    "yuv422p14be",
+    "yuv422p14le",
+    "yuv444p12be",
+    "yuv444p12le",
+    "yuv444p14be",
+    "yuv444p14le",
+    "gbrp12be",
+    "gbrp12le",
+    "gbrp14be",
+    "gbrp14le",
+    "yuvj411p",
+    "bayer_bggr8",
+    "bayer_rggb8",
+    "bayer_gbrg8",
+    "bayer_grbg8",
+    "bayer_bggr16le",
+    "bayer_bggr16be",
+    "bayer_rggb16le",
+    "bayer_rggb16be",
+    "bayer_gbrg16le",
+    "bayer_gbrg16be",
+    "bayer_grbg16le",
+    "bayer_grbg16be",
+    "yuv440p10le",
+    "yuv440p10be",
+    "yuv440p12le",
+    "yuv440p12be",
+    "ayuv64le",
+    "ayuv64be",
+    "videotoolbox_vld",
+    "p010le",
+    "p010be",
+    "gbrap12be",
+    "gbrap12le",
+    "gbrap10be",
+    "gbrap10le",
+    "mediacodec",
+    "gray12be",
+    "gray12le",
+    "gray10be",
+    "gray10le",
+    "p016le",
+    "p016be",
+    "d3d11",
+    "gray9be",
+    "gray9le",
+    "gbrpf32be",
+    "gbrpf32le",
+    "gbrapf32be",
+    "gbrapf32le",
+    "drm_prime",
+    "opencl",
+    "gray14be",
+    "gray14le",
+    "grayf32be",
+    "grayf32le",
+    "yuva422p12be",
+    "yuva422p12le",
+    "yuva444p12be",
+    "yuva444p12le",
+    "nv24",
+    "nv42",
+    "vulkan",
+    "y210be",
+    "y210le",
+    "x2rgb10le",
+    "x2rgb10be",
+    "x2bgr10le",
+    "x2bgr10be",
+    "p210be",
+    "p210le",
+    "p410be",
+    "p410le",
+    "p216be",
+    "p216le",
+    "p416be",
+    "p416le",
+    "vuya",
+    "rgbaf16be",
+    "rgbaf16le",
+    "vuyx",
+    "p012le",
+    "p012be",
+    "y212be",
+    "y212le",
+    "xv30be",
+    "xv30le",
+    "xv36be",
+    "xv36le",
+    "rgbf32be",
+    "rgbf32le",
+    "rgbaf32be",
+    "rgbaf32le",
+    "p212be",
+    "p212le",
+    "p412be",
+    "p412le",
+    "gbrap14be",
+    "gbrap14le",
+    "d3d12",
+    "ayuv",
+    "uyva",
+    "vyu444",
+    "v30xbe",
+    "v30xle",
+    "rgbf16be",
+    "rgbf16le",
+    "rgba128be",
+    "rgba128le",
+    "rgb96be",
+    "rgb96le",
+    "y216be",
+    "y216le",
+    "xv48be",
+    "xv48le",
+    "gbrpf16be",
+    "gbrpf16le",
+    "gbrapf16be",
+    "gbrapf16le",
+    "grayf16be",
+    "grayf16le",
+    "amf",
+    "gray32be",
+    "gray32le",
+    "yaf32be",
+    "yaf32le",
+    "yaf16be",
+    "yaf16le",
+    "gbrap32be",
+    "gbrap32le",
+    "yuv444p10msbbe",
+    "yuv444p10msble",
+    "yuv444p12msbbe",
+    "yuv444p12msble",
+    "gbrp10msbbe",
+    "gbrp10msble",
+    "gbrp12msbbe",
+    "gbrp12msble",
+    "ohcodec",
+];
+
+fn write_pix_fmts<W: Write>(w: &mut W) -> std::io::Result<()> {
+    writeln!(w, "Pixel formats:")?;
+    writeln!(w, "I.... = Supported Input  format for conversion")?;
+    writeln!(w, ".O... = Supported Output format for conversion")?;
+    writeln!(w, "..H.. = Hardware accelerated format")?;
+    writeln!(w, "...P. = Paletted format")?;
+    writeln!(w, "....B = Bitstream format")?;
+    writeln!(
+        w,
+        "FLAGS NAME            NB_COMPONENTS BITS_PER_PIXEL BIT_DEPTHS"
+    )?;
+    writeln!(w, "-----")?;
+    // Reference order first, then anything we know that it does not — so a
+    // format we carry and it lacks is appended rather than silently dropped.
+    let mut all: Vec<_> = vaco_pixfmt::PixFmt::all().iter().copied().collect();
+    all.sort_by_key(|f| {
+        LISTING_ORDER
+            .iter()
+            .position(|n| *n == f.name())
+            .unwrap_or(usize::MAX)
+    });
+    for fmt in all {
+        let name = fmt.name();
+        // Measured: `vaco-pixfmt` carries one format the reference does not.
+        // See the divergence note above; not fixed in the model crate here.
+        if name == "cuarray" {
+            continue;
+        }
+        let d = fmt.descriptor();
+        let hw = d.flags.contains(vaco_pixfmt::PixFmtFlags::HW_ACCEL);
+        let palette = d.flags.contains(vaco_pixfmt::PixFmtFlags::PALETTE);
+        let bitstream = d.flags.contains(vaco_pixfmt::PixFmtFlags::BITSTREAM)
+            || BITSTREAM_FLAG_OVERRIDE.contains(&name);
+        let (input, output) = if hw {
+            (false, false)
+        } else if INPUT_ONLY.contains(&name) {
+            (true, false)
+        } else if OUTPUT_ONLY.contains(&name) {
+            (false, true)
+        } else if NEITHER.contains(&name) {
+            (false, false)
+        } else {
+            (true, true)
+        };
+
+        let mut flags = String::with_capacity(5);
+        flags.push(if input { 'I' } else { '.' });
+        flags.push(if output { 'O' } else { '.' });
+        flags.push(if hw { 'H' } else { '.' });
+        flags.push(if palette { 'P' } else { '.' });
+        flags.push(if bitstream { 'B' } else { '.' });
+
+        let (nb_components, depths) = DEPTHS_OVERRIDE
+            .iter()
+            .find(|(n, ..)| *n == name)
+            .map_or_else(
+                || {
+                    (
+                        d.components.len(),
+                        d.components
+                            .iter()
+                            .map(|c| c.depth.to_string())
+                            .collect::<Vec<_>>()
+                            .join("-"),
+                    )
+                },
+                |(_, nc, dep)| (*nc, (*dep).to_owned()),
+            );
+        let depths = if depths.is_empty() {
+            "0".to_owned()
+        } else {
+            depths
+        };
+
+        let mut line = format!("{flags} ");
+        line.push_str(name);
+        for _ in name.chars().count()..16 {
+            line.push(' ');
+        }
+        let nc_s = nb_components.to_string();
+        for _ in nc_s.chars().count()..8 {
+            line.push(' ');
+        }
+        line.push_str(&nc_s);
+        let bpp_s = d.bits_per_pixel.to_string();
+        for _ in bpp_s.chars().count()..15 {
+            line.push(' ');
+        }
+        line.push_str(&bpp_s);
+        line.push_str("      ");
+        line.push_str(&depths);
+        writeln!(w, "{line}")?;
+    }
+    Ok(())
+}
+
+/// Formats libswscale can convert *from* but not *to* — captured verbatim
+/// from `ffmpeg -hide_banner -pix_fmts`, ffmpeg 8.1; see [`write_pix_fmts`].
+const INPUT_ONLY: &[&str] = &[
+    "bayer_bggr16be",
+    "bayer_bggr16le",
+    "bayer_bggr8",
+    "bayer_gbrg16be",
+    "bayer_gbrg16le",
+    "bayer_gbrg8",
+    "bayer_grbg16be",
+    "bayer_grbg16le",
+    "bayer_grbg8",
+    "bayer_rggb16be",
+    "bayer_rggb16le",
+    "bayer_rggb8",
+    "gbrapf16be",
+    "gbrapf16le",
+    "gbrpf16be",
+    "gbrpf16le",
+    "grayf16be",
+    "grayf16le",
+    "pal8",
+    "rgbaf16be",
+    "rgbaf16le",
+    "rgbf16be",
+    "rgbf16le",
+    "rgbf32be",
+    "rgbf32le",
+    "uyyvyy411",
+    "yaf16be",
+    "yaf16le",
+    "yaf32be",
+    "yaf32le",
+];
+
+/// Formats libswscale can convert *to* but not *from*. See [`write_pix_fmts`].
+const OUTPUT_ONLY: &[&str] = &["bgr4", "rgb4"];
+
+/// Formats libswscale supports neither direction for, beyond the hardware
+/// surfaces (which are `NEITHER` unconditionally via `PixFmtFlags::HW_ACCEL`
+/// and do not need naming here). See [`write_pix_fmts`].
+const NEITHER: &[&str] = &[
+    "gbrap32be",
+    "gbrap32le",
+    "gray32be",
+    "gray32le",
+    "rgb96be",
+    "rgb96le",
+    "rgba128be",
+    "rgba128le",
+    "rgbaf32be",
+    "rgbaf32le",
+    "v30xbe",
+    "x2bgr10be",
+    "x2rgb10be",
+    "xv30be",
+    "y210be",
+    "y212be",
+    "y216be",
+];
+
+/// Display-only correction for the three named `vaco-pixfmt` divergences
+/// (`bgr8`'s component order, the twelve Bayer formats' component
+/// modelling). `(name, nb_components, bit_depths)`. See [`write_pix_fmts`].
+const DEPTHS_OVERRIDE: &[(&str, usize, &str)] = &[
+    ("bgr8", 3, "3-3-2"),
+    ("bayer_bggr8", 3, "2-4-2"),
+    ("bayer_rggb8", 3, "2-4-2"),
+    ("bayer_gbrg8", 3, "2-4-2"),
+    ("bayer_grbg8", 3, "2-4-2"),
+    ("bayer_bggr16le", 3, "4-8-4"),
+    ("bayer_bggr16be", 3, "4-8-4"),
+    ("bayer_rggb16le", 3, "4-8-4"),
+    ("bayer_rggb16be", 3, "4-8-4"),
+    ("bayer_gbrg16le", 3, "4-8-4"),
+    ("bayer_gbrg16be", 3, "4-8-4"),
+    ("bayer_grbg16le", 3, "4-8-4"),
+    ("bayer_grbg16be", 3, "4-8-4"),
+];
+
+/// Display-only correction for the `xv30be`/`v30xbe` `BITSTREAM`-flag gap in
+/// `vaco-pixfmt`. See [`write_pix_fmts`].
+const BITSTREAM_FLAG_OVERRIDE: &[&str] = &["xv30be", "v30xbe"];
+
+// ---------------------------------------------------------------------------
+// `-sample_fmts`
+// ---------------------------------------------------------------------------
+
+/// `-sample_fmts`: `vaco_sampfmt::SampleFmt::ALL` is already in the
+/// reference's own print order — see that constant's own doc comment, which
+/// records the D17 reasoning (the two 64-bit formats were appended after the
+/// rest to keep discriminants stable, so the reference's list is not simply
+/// "int types, then float types, then planar"). `name()` and
+/// `bytes_per_sample() * 8` are exactly the two columns; this function only
+/// formats.
+///
+/// Header and column widths measured (`ffmpeg -hide_banner -sample_fmts`,
+/// `LC_ALL=C`):
+///
+/// ```text
+/// name   depth
+/// u8        8·
+/// ```
+///
+/// (`·` marks a trailing space that is really there.) Two independent
+/// fixed-width layouts, not one shared algorithm: the header is a literal
+/// 12-byte string; each data row is `NAME` left-justified to **9**, `DEPTH`
+/// right-justified to **2**, then one literal trailing space — always 12
+/// bytes regardless of name or depth length, checked against `s64p` (the
+/// longest name, 4 characters) and `64` (the widest depth, 2 digits).
+fn write_sample_fmts<W: Write>(w: &mut W) -> std::io::Result<()> {
+    writeln!(w, "name   depth")?;
+    for f in vaco_sampfmt::SampleFmt::ALL {
+        let name = f.name();
+        let depth = (f.bytes_per_sample() * 8).to_string();
+        let mut line = String::with_capacity(12);
+        line.push_str(name);
+        for _ in name.chars().count()..9 {
+            line.push(' ');
+        }
+        for _ in depth.chars().count()..2 {
+            line.push(' ');
+        }
+        line.push_str(&depth);
+        line.push(' ');
+        writeln!(w, "{line}")?;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// `-layouts`
+// ---------------------------------------------------------------------------
+
+/// `-layouts`: two tables, `vaco_chlayout::Channel::named()` and
+/// `ChannelLayout::standard()`, both already in the reference's own print
+/// order (see those items' own doc comments — `vaco-chlayout` was built with
+/// exactly this listing in mind) — this function only formats.
+///
+/// Measured (`ffmpeg -hide_banner -layouts`, `LC_ALL=C`): both tables share
+/// one field algorithm, `NAME` left-justified to **15** with no separate
+/// trailing separator (the next field starts immediately at column 15 —
+/// checked against the longest name in each table, `7.1(wide-side)` at 14
+/// characters and `hexadecagonal` at 13, neither of which needs a
+/// fifteenth-column pad to reach the boundary). One blank line separates the
+/// two tables; there is no trailing blank line after the last row.
+/// Confirmed byte-for-byte against the reference for all 36 individual
+/// channels and all 40 standard layouts.
+fn write_layouts<W: Write>(w: &mut W) -> std::io::Result<()> {
+    writeln!(w, "Individual channels:")?;
+    writeln!(w, "NAME           DESCRIPTION")?;
+    for c in vaco_chlayout::Channel::named() {
+        let name = c.to_string();
+        let mut line = String::new();
+        line.push_str(&name);
+        for _ in name.chars().count()..15 {
+            line.push(' ');
+        }
+        line.push_str(c.description().unwrap_or(""));
+        writeln!(w, "{line}")?;
+    }
+    writeln!(w)?;
+    writeln!(w, "Standard channel layouts:")?;
+    writeln!(w, "NAME           DECOMPOSITION")?;
+    for (name, layout) in vaco_chlayout::ChannelLayout::standard() {
+        let mut line = String::new();
+        line.push_str(name);
+        for _ in name.chars().count()..15 {
+            line.push(' ');
+        }
+        let decomp: Vec<String> = layout.iter().map(|c| c.to_string()).collect();
+        line.push_str(&decomp.join("+"));
+        writeln!(w, "{line}")?;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// `-colors`
+// ---------------------------------------------------------------------------
+
+/// `-colors`: `vaco_core::parse::color_names()`/`color_by_name` already
+/// carry the RGB triples and the alphabetical order — both confirmed
+/// identical to the reference (measured `ffmpeg -hide_banner -colors`,
+/// `LC_ALL=C`, 140 rows). Two things that table does not carry, because they
+/// exist only for this listing:
+///
+/// 1. **Display capitalisation.** `vaco_core`'s table is lower-case —
+///    `color()` matches case-insensitively, so casing carries no information
+///    there — but `-colors` prints a fixed CamelCase spelling per name,
+///    including the reference's own inconsistency (`Darkorange`, not
+///    `DarkOrange` — checked twice against the raw probe output, not a
+///    transcription slip). [`COLOR_DISPLAY_NAMES`] is that spelling,
+///    captured verbatim.
+/// 2. **Which of the 147 names to show.** D17 records that `vaco_core`'s
+///    colour table is a strict superset of the reference's: it additionally
+///    *accepts as input* seven alternate `grey`-family spellings the
+///    reference rejects (`-fill_color darkgrey` works here, not there).
+///    [`COLOR_LISTING_EXCLUDED`] is those seven; the *listing* shows exactly
+///    the reference's 140 — confirmed the remaining set matches the probe's
+///    140 names exactly, one for one, including which spelling is canonical
+///    within each `gray`/`grey` pair (six pairs display `Gray`; `LightGrey`
+///    alone displays `Grey` — the reference's own inconsistency, reproduced).
+///
+/// Field width matches the `-pix_fmts`/`-formats` `pad_field` algorithm
+/// (minimum 32, giving a 33-wide field including the separator): measured
+/// against the longest display name, `LightGoldenRodYellow` at 20
+/// characters, well under the minimum.
+fn write_colors<W: Write>(w: &mut W) -> std::io::Result<()> {
+    let mut header = String::new();
+    pad_field(&mut header, "name", 32);
+    header.push_str("#RRGGBB");
+    writeln!(w, "{header}")?;
+    for lower in vaco_core::parse::color_names() {
+        if COLOR_LISTING_EXCLUDED.contains(&lower) {
+            continue;
+        }
+        let Some(rgba) = vaco_core::parse::color_by_name(lower) else {
+            continue;
+        };
+        let display = COLOR_DISPLAY_NAMES
+            .iter()
+            .find(|(l, _)| *l == lower)
+            .map_or(lower, |(_, d)| *d);
+        let mut line = String::new();
+        pad_field(&mut line, display, 32);
+        // `write!` into the `String`, not `push_str(&format!(...))`: the
+        // latter is an extra allocation clippy flags (`format_push_string`).
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!("#{:02x}{:02x}{:02x}", rgba.r, rgba.g, rgba.b),
+        );
+        writeln!(w, "{line}")?;
+    }
+    Ok(())
+}
+
+/// The reference's exact display capitalisation for named colours, measured
+/// from `ffmpeg -hide_banner -colors` (ffmpeg 8.1, `LC_ALL=C`). `(lower-case
+/// key into vaco_core::parse::COLORS, display spelling)`. See
+/// [`write_colors`].
+const COLOR_DISPLAY_NAMES: &[(&str, &str)] = &[
+    ("aliceblue", "AliceBlue"),
+    ("antiquewhite", "AntiqueWhite"),
+    ("aqua", "Aqua"),
+    ("aquamarine", "Aquamarine"),
+    ("azure", "Azure"),
+    ("beige", "Beige"),
+    ("bisque", "Bisque"),
+    ("black", "Black"),
+    ("blanchedalmond", "BlanchedAlmond"),
+    ("blue", "Blue"),
+    ("blueviolet", "BlueViolet"),
+    ("brown", "Brown"),
+    ("burlywood", "BurlyWood"),
+    ("cadetblue", "CadetBlue"),
+    ("chartreuse", "Chartreuse"),
+    ("chocolate", "Chocolate"),
+    ("coral", "Coral"),
+    ("cornflowerblue", "CornflowerBlue"),
+    ("cornsilk", "Cornsilk"),
+    ("crimson", "Crimson"),
+    ("cyan", "Cyan"),
+    ("darkblue", "DarkBlue"),
+    ("darkcyan", "DarkCyan"),
+    ("darkgoldenrod", "DarkGoldenRod"),
+    ("darkgray", "DarkGray"),
+    ("darkgreen", "DarkGreen"),
+    ("darkkhaki", "DarkKhaki"),
+    ("darkmagenta", "DarkMagenta"),
+    ("darkolivegreen", "DarkOliveGreen"),
+    ("darkorange", "Darkorange"),
+    ("darkorchid", "DarkOrchid"),
+    ("darkred", "DarkRed"),
+    ("darksalmon", "DarkSalmon"),
+    ("darkseagreen", "DarkSeaGreen"),
+    ("darkslateblue", "DarkSlateBlue"),
+    ("darkslategray", "DarkSlateGray"),
+    ("darkturquoise", "DarkTurquoise"),
+    ("darkviolet", "DarkViolet"),
+    ("deeppink", "DeepPink"),
+    ("deepskyblue", "DeepSkyBlue"),
+    ("dimgray", "DimGray"),
+    ("dodgerblue", "DodgerBlue"),
+    ("firebrick", "FireBrick"),
+    ("floralwhite", "FloralWhite"),
+    ("forestgreen", "ForestGreen"),
+    ("fuchsia", "Fuchsia"),
+    ("gainsboro", "Gainsboro"),
+    ("ghostwhite", "GhostWhite"),
+    ("gold", "Gold"),
+    ("goldenrod", "GoldenRod"),
+    ("gray", "Gray"),
+    ("green", "Green"),
+    ("greenyellow", "GreenYellow"),
+    ("honeydew", "HoneyDew"),
+    ("hotpink", "HotPink"),
+    ("indianred", "IndianRed"),
+    ("indigo", "Indigo"),
+    ("ivory", "Ivory"),
+    ("khaki", "Khaki"),
+    ("lavender", "Lavender"),
+    ("lavenderblush", "LavenderBlush"),
+    ("lawngreen", "LawnGreen"),
+    ("lemonchiffon", "LemonChiffon"),
+    ("lightblue", "LightBlue"),
+    ("lightcoral", "LightCoral"),
+    ("lightcyan", "LightCyan"),
+    ("lightgoldenrodyellow", "LightGoldenRodYellow"),
+    ("lightgreen", "LightGreen"),
+    ("lightgrey", "LightGrey"),
+    ("lightpink", "LightPink"),
+    ("lightsalmon", "LightSalmon"),
+    ("lightseagreen", "LightSeaGreen"),
+    ("lightskyblue", "LightSkyBlue"),
+    ("lightslategray", "LightSlateGray"),
+    ("lightsteelblue", "LightSteelBlue"),
+    ("lightyellow", "LightYellow"),
+    ("lime", "Lime"),
+    ("limegreen", "LimeGreen"),
+    ("linen", "Linen"),
+    ("magenta", "Magenta"),
+    ("maroon", "Maroon"),
+    ("mediumaquamarine", "MediumAquaMarine"),
+    ("mediumblue", "MediumBlue"),
+    ("mediumorchid", "MediumOrchid"),
+    ("mediumpurple", "MediumPurple"),
+    ("mediumseagreen", "MediumSeaGreen"),
+    ("mediumslateblue", "MediumSlateBlue"),
+    ("mediumspringgreen", "MediumSpringGreen"),
+    ("mediumturquoise", "MediumTurquoise"),
+    ("mediumvioletred", "MediumVioletRed"),
+    ("midnightblue", "MidnightBlue"),
+    ("mintcream", "MintCream"),
+    ("mistyrose", "MistyRose"),
+    ("moccasin", "Moccasin"),
+    ("navajowhite", "NavajoWhite"),
+    ("navy", "Navy"),
+    ("oldlace", "OldLace"),
+    ("olive", "Olive"),
+    ("olivedrab", "OliveDrab"),
+    ("orange", "Orange"),
+    ("orangered", "OrangeRed"),
+    ("orchid", "Orchid"),
+    ("palegoldenrod", "PaleGoldenRod"),
+    ("palegreen", "PaleGreen"),
+    ("paleturquoise", "PaleTurquoise"),
+    ("palevioletred", "PaleVioletRed"),
+    ("papayawhip", "PapayaWhip"),
+    ("peachpuff", "PeachPuff"),
+    ("peru", "Peru"),
+    ("pink", "Pink"),
+    ("plum", "Plum"),
+    ("powderblue", "PowderBlue"),
+    ("purple", "Purple"),
+    ("red", "Red"),
+    ("rosybrown", "RosyBrown"),
+    ("royalblue", "RoyalBlue"),
+    ("saddlebrown", "SaddleBrown"),
+    ("salmon", "Salmon"),
+    ("sandybrown", "SandyBrown"),
+    ("seagreen", "SeaGreen"),
+    ("seashell", "SeaShell"),
+    ("sienna", "Sienna"),
+    ("silver", "Silver"),
+    ("skyblue", "SkyBlue"),
+    ("slateblue", "SlateBlue"),
+    ("slategray", "SlateGray"),
+    ("snow", "Snow"),
+    ("springgreen", "SpringGreen"),
+    ("steelblue", "SteelBlue"),
+    ("tan", "Tan"),
+    ("teal", "Teal"),
+    ("thistle", "Thistle"),
+    ("tomato", "Tomato"),
+    ("turquoise", "Turquoise"),
+    ("violet", "Violet"),
+    ("wheat", "Wheat"),
+    ("white", "White"),
+    ("whitesmoke", "WhiteSmoke"),
+    ("yellow", "Yellow"),
+    ("yellowgreen", "YellowGreen"),
+];
+
+/// The seven alternate `grey`-family spellings `vaco_core::parse::COLORS`
+/// accepts as input (D17) that the reference's `-colors` listing does not
+/// show — the reference's own colour name for each is the paired `gray`
+/// spelling, except `lightgrey`, whose canonical spelling *is* `Grey`. See
+/// [`write_colors`].
+const COLOR_LISTING_EXCLUDED: &[&str] = &[
+    "grey",
+    "darkgrey",
+    "dimgrey",
+    "slategrey",
+    "darkslategrey",
+    "lightslategrey",
+    "lightgray",
+];
+
+// ---------------------------------------------------------------------------
+// `-hwaccels`, `-devices`, `-sources`, `-sinks`
+//
+// This build has no hardware backend and no device layer at all — D13's
+// `vaco-hw-*` crates are a separate, later work package. All four listings
+// below are the honest reproduction of that: a real, measured header (and,
+// for `-devices`, a real legend) with zero rows under it, which is what the
+// reference itself would print given none of the corresponding thing
+// registered. That is a stronger claim than "we don't know the shape" — the
+// shape *is* known and reproduced; only the row count is zero, and it is
+// zero for a real reason.
+// ---------------------------------------------------------------------------
+
+/// `-hwaccels`: header, one name per registered hardware-acceleration
+/// method, then one unconditional trailing blank line. Measured
+/// (`ffmpeg -hide_banner -hwaccels`, `LC_ALL=C`, a Homebrew build with
+/// `--enable-videotoolbox`):
+///
+/// ```text
+/// Hardware acceleration methods:
+/// videotoolbox
+///
+/// ```
+///
+/// This build registers no hardware backend, so the honest output is the
+/// same header and trailing blank line with zero names between them.
+fn write_hwaccels<W: Write>(w: &mut W) -> std::io::Result<()> {
+    writeln!(w, "Hardware acceleration methods:")?;
+    writeln!(w)?;
+    Ok(())
+}
+
+/// `-devices`: header, a two-flag legend — distinct from `-formats`' three-flag
+/// one; there is no "is a device" slot here because everything a device
+/// lister shows already is one — and a rule, then zero rows. Measured
+/// (`ffmpeg -hide_banner -devices`, `LC_ALL=C`, the same build):
+///
+/// ```text
+/// Devices:
+///  D. = Demuxing supported
+///  .E = Muxing supported
+///  ---
+///   E audiotoolbox    AudioToolbox output device
+/// ```
+///
+/// Header, legend and rule are reproduced verbatim. The row shape
+/// (` {D/.}{E/.} ` + `NAME` at the `-formats` minimum of 15 + long name) is
+/// recorded here for whoever adds a device but, like the zero-row
+/// `-decoders`/`-encoders`/`-filters` tables above, is unverified against a
+/// real row in *this* build.
+fn write_devices<W: Write>(w: &mut W) -> std::io::Result<()> {
+    writeln!(w, "Devices:")?;
+    writeln!(w, " D. = Demuxing supported")?;
+    writeln!(w, " .E = Muxing supported")?;
+    writeln!(w, " ---")?;
+    Ok(())
+}
+
+/// `-sources`/`-sinks`, shared: with no device named, the reference prints a
+/// fixed notice and then tries auto-detection against every registered input
+/// device (`-sources`) or output device (`-sinks`); with one named, it skips
+/// straight to that device's own attempt. Measured
+/// (`ffmpeg -hide_banner -sources` / `-sinks`, with and without a device
+/// name, `LC_ALL=C`): the no-name notice, verbatim, is
+///
+/// ```text
+///
+/// Device name is not provided.
+/// You can pass devicename[,opt1=val1[,opt2=val2...]] as an argument.
+///
+/// ```
+///
+/// followed by one `"Auto-detected sources for {name}:\n"` (or `sinks`) plus
+/// a result line per registered device of the matching direction.
+///
+/// This build has zero devices of either kind, so:
+///
+/// * **No name given:** the notice prints; the (empty) device loop
+///   contributes nothing after it. Same "real header, no rows" shape as
+///   [`write_devices`].
+/// * **A name given:** measured directly that an unmatched name produces
+///   **no output at all**, exit 0 — `ffmpeg -hide_banner -sources
+///   bogus_device_xyz` and, just as tellingly, `ffmpeg -hide_banner -sources
+///   matroska` (a real demuxer name that is not a device) both print
+///   nothing. The reference only reaches the "Auto-detected…" line once the
+///   name resolves to a registered device of the right direction. Since this
+///   build's device registry is always empty, every name is unmatched, so
+///   silent success reproduces that path exactly rather than shortcutting it.
+///
+/// Wiring this option to take an argument at all needed a fix in
+/// `vaco-cli-core`'s tables: `sources`/`sinks` carried a `device` argument
+/// placeholder for `-h`'s benefit but neither `ArgFlags::HAS_ARG` nor
+/// `ArgFlags::OPTIONAL_ARG`, so the value was never actually consumed. Fixed
+/// alongside this function — see `vaco-cli-core`'s doc file.
+fn write_sources_or_sinks<W: Write>(w: &mut W, device: Option<&OsStr>) -> std::io::Result<()> {
+    if device.is_some() {
+        // No device layer (D13): nothing this build knows about ever
+        // matches, so this mirrors the reference's own unmatched-name path
+        // exactly (measured silent, exit 0 — see the doc comment above).
+        return Ok(());
+    }
+    writeln!(w)?;
+    writeln!(w, "Device name is not provided.")?;
+    writeln!(
+        w,
+        "You can pass devicename[,opt1=val1[,opt2=val2...]] as an argument."
+    )?;
+    writeln!(w)?;
+    Ok(())
+}
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "test code")]
@@ -378,8 +1388,12 @@ mod tests {
     use super::*;
 
     fn text(name: &str) -> String {
+        text_with(name, None)
+    }
+
+    fn text_with(name: &str, value: Option<&str>) -> String {
         let mut buf = Vec::new();
-        render(&mut buf, name).unwrap();
+        render(&mut buf, name, value.map(OsStr::new)).unwrap();
         String::from_utf8(buf).unwrap()
     }
 
@@ -476,11 +1490,157 @@ mod tests {
     }
 
     #[test]
-    fn a_deferred_listing_names_the_gap_rather_than_half_rendering() {
+    fn an_unknown_listing_names_the_gap_rather_than_half_rendering() {
         let mut buf = Vec::new();
-        let e = render(&mut buf, "pix_fmts").unwrap_err();
+        let e = render(&mut buf, "not_a_real_listing", None).unwrap_err();
         assert!(e.render().contains("vaco-cli.md"), "{}", e.render());
         assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn pix_fmts_header_legend_and_a_measured_row() {
+        let s = text("pix_fmts");
+        assert!(
+            s.starts_with(
+                "Pixel formats:\n\
+                 I.... = Supported Input  format for conversion\n\
+                 .O... = Supported Output format for conversion\n\
+                 ..H.. = Hardware accelerated format\n\
+                 ...P. = Paletted format\n\
+                 ....B = Bitstream format\n\
+                 FLAGS NAME            NB_COMPONENTS BITS_PER_PIXEL BIT_DEPTHS\n\
+                 -----\n"
+            ),
+            "{s}"
+        );
+        // Measured: `ffmpeg -hide_banner -pix_fmts`, ffmpeg 8.1.
+        assert!(
+            s.lines()
+                .any(|l| l == "IO... yuv420p                3             12      8-8-8"),
+            "{s}"
+        );
+        // `cuarray` is a `vaco-pixfmt` addition the reference does not have
+        // (see write_pix_fmts's doc comment) — excluded from the listing.
+        assert!(!s.contains("cuarray"), "{s}");
+        // The two named component-order/structural divergences from
+        // `vaco-pixfmt`, corrected for display.
+        assert!(
+            s.lines()
+                .any(|l| l == "IO... bgr8                   3              8      3-3-2"),
+            "{s}"
+        );
+        assert!(
+            s.lines()
+                .any(|l| l == "I.... bayer_bggr8            3              8      2-4-2"),
+            "{s}"
+        );
+        // A hardware surface: zero components, and a literal `0` in the
+        // depths column rather than an empty field.
+        assert!(
+            s.lines()
+                .any(|l| l == "..H.. videotoolbox_vld       0              0      0"),
+            "{s}"
+        );
+    }
+
+    #[test]
+    fn sample_fmts_is_byte_identical_to_the_reference() {
+        // Measured: `ffmpeg -hide_banner -sample_fmts`, ffmpeg 8.1.
+        assert_eq!(
+            text("sample_fmts"),
+            "name   depth\n\
+             u8        8 \n\
+             s16      16 \n\
+             s32      32 \n\
+             flt      32 \n\
+             dbl      64 \n\
+             u8p       8 \n\
+             s16p     16 \n\
+             s32p     32 \n\
+             fltp     32 \n\
+             dblp     64 \n\
+             s64      64 \n\
+             s64p     64 \n"
+        );
+    }
+
+    #[test]
+    fn layouts_matches_the_reference_channel_and_layout_tables() {
+        let s = text("layouts");
+        assert!(
+            s.starts_with("Individual channels:\nNAME           DESCRIPTION\n"),
+            "{s}"
+        );
+        assert!(s.lines().any(|l| l == "FL             front left"), "{s}");
+        assert!(
+            s.contains("\n\nStandard channel layouts:\nNAME           DECOMPOSITION\n"),
+            "{s}"
+        );
+        assert!(s.lines().any(|l| l == "stereo         FL+FR"), "{s}");
+        assert!(
+            s.lines()
+                .any(|l| l == "7.1(wide-side) FL+FR+FC+LFE+FLC+FRC+SL+SR"),
+            "{s}"
+        );
+        assert!(!s.ends_with("\n\n"), "{s}");
+    }
+
+    #[test]
+    fn colors_header_and_measured_capitalisation() {
+        let s = text("colors");
+        let mut header = String::new();
+        pad_field(&mut header, "name", 32);
+        header.push_str("#RRGGBB");
+        assert!(s.starts_with(&format!("{header}\n")), "{s}");
+        assert!(
+            s.lines()
+                .any(|l| l.starts_with("AliceBlue") && l.ends_with("#f0f8ff")),
+            "{s}"
+        );
+        // The reference's own inconsistent capitalisation, reproduced.
+        assert!(s.lines().any(|l| l.starts_with("Darkorange")), "{s}");
+        assert!(
+            s.lines()
+                .any(|l| l.starts_with("Gray") && l.ends_with("#808080")),
+            "{s}"
+        );
+        assert!(s.lines().any(|l| l.starts_with("LightGrey")), "{s}");
+        // The seven extra `grey`-spelled aliases this crate accepts as input
+        // (D17) are not shown as separate rows.
+        assert_eq!(s.lines().count(), 141, "{s}"); // header + 140 colours
+        assert!(!s.lines().any(|l| l.starts_with("Grey")), "{s}");
+        assert!(!s.lines().any(|l| l.starts_with("Darkgrey")), "{s}");
+        assert!(!s.lines().any(|l| l.starts_with("LightGray")), "{s}");
+    }
+
+    #[test]
+    fn hwaccels_is_a_real_header_with_zero_rows() {
+        assert_eq!(text("hwaccels"), "Hardware acceleration methods:\n\n");
+    }
+
+    #[test]
+    fn devices_header_and_legend_with_zero_rows() {
+        assert_eq!(
+            text("devices"),
+            "Devices:\n D. = Demuxing supported\n .E = Muxing supported\n ---\n"
+        );
+    }
+
+    #[test]
+    fn sources_and_sinks_no_device_print_the_measured_notice() {
+        let expected = "\nDevice name is not provided.\n\
+             You can pass devicename[,opt1=val1[,opt2=val2...]] as an argument.\n\n";
+        assert_eq!(text("sources"), expected);
+        assert_eq!(text("sinks"), expected);
+    }
+
+    #[test]
+    fn sources_and_sinks_with_a_device_are_silent_since_none_ever_match() {
+        // Measured: an unmatched device name (even a real but non-device
+        // format name) produces no output at all and exit 0.
+        assert_eq!(text_with("sources", Some("bogus_device_xyz")), "");
+        assert_eq!(text_with("sources", Some("matroska")), "");
+        assert_eq!(text_with("sinks", Some("lavfi")), "");
     }
 
     #[test]

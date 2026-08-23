@@ -111,12 +111,18 @@ mod bit {
     pub const SUBTITLE: u32 = 1 << 12;
     pub const DATA: u32 = 1 << 13;
     /// Consumes the following argv entry **if one exists**, but does not error
-    /// when it does not. Only `-h`/`-?`/`-help`/`--help` carry this: measured
+    /// when it does not. `-h`/`-?`/`-help`/`--help` carry this: measured
     /// (`ffmpeg 8.1`, no pipe), a bare trailing `-h` prints the basic help
     /// rather than "Missing argument for option 'h'.", while `-h -i` swallows
     /// `-i` itself as the topic (`Unknown help option '-i'.`) — the consumed
-    /// token is never re-classified as an option name. No other option in
-    /// either table has this shape.
+    /// token is never re-classified as an option name.
+    ///
+    /// `-sources`/`-sinks` carry it too, measured the same way: a bare
+    /// trailing `-sources` prints the "Device name is not provided." notice
+    /// (not a missing-argument error), and `-sources -i x` silently consumes
+    /// `-i` as the device name — no device named `-i` exists, so the whole
+    /// invocation prints nothing and exits 0, and `x` is never reached. No
+    /// other option in either table has this shape.
     pub const OPTIONAL_ARG: u32 = 1 << 14;
 }
 

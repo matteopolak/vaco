@@ -101,6 +101,49 @@ cut away *before* the frame lengths are worked out from what is left; for a
 self-delimited packet the end is not known until the frames have been read, so
 the padding is skipped *afterwards*.
 
+### Packet duration: the TOC byte is the only source there is
+
+`OpusParser` implements `Parser::packet_duration`, returning
+`frames × Toc::frame_samples()` over `OUTPUT_SAMPLE_RATE` as an exact
+`Rational` — `960/48000` for an ordinary 20 ms packet.
+
+**This is not a convenience.** Matroska writes no `DefaultDuration` element for
+an Opus track and no `BlockDuration` on its blocks; the elements are absent from
+the file, so there is nothing for `vaco-demux-matroska` to have misread. Before
+this existed, every Opus packet in every Matroska and WebM file reported
+`duration=N/A` where the reference reports a number.
+
+Measured against `ffprobe 8.1`, one file per `-frame_duration`, each verified to
+contain no `DefaultDuration` (`xxd -p f.mka | grep -o 23e383` returns nothing):
+
+| frame | 48 kHz samples | Matroska/WebM 1/1000 | MP4, Ogg 1/48000 |
+|---|---:|---:|---:|
+| 2.5 ms | 120 | **2** | 120 |
+| 5 ms | 240 | 5 | 240 |
+| 10 ms | 480 | 10 | 480 |
+| 20 ms | 960 | 20 | 960 |
+| 40 ms | 1920 | 40 | 1920 |
+| 60 ms | 2880 | 60 | 2880 |
+
+The 2.5 ms row is the one to keep. 120 samples is exactly half a Matroska tick,
+and the reference prints **2**, not 3 — the consumer truncates. That is why this
+method returns an exact ratio and not a microsecond count: a value already
+rounded to microseconds reaches the truncation as 2500 µs and prints 3.
+
+Three further things it does **not** do:
+
+* **It does not use `input_sample_rate`.** Opus decodes at 48 kHz whatever the
+  identification header declares, which is already why the stream reports
+  `sample_rate=48000`. The denominator is always `OUTPUT_SAMPLE_RATE`.
+* **It does not drive the parser.** `&self`, no allocation, no budget movement,
+  no state change — it is called once per packet on `vaco-format-core`'s read
+  path, on bytes nothing has validated.
+* **It does not split a multi-stream packet.** RFC 7845 §3 requires every stream
+  in a packet to code the same duration, so only the first sub-stream is read,
+  in its self-delimiting framing. `split_streams` would allocate a `Vec` per
+  packet. Verified against a 5.1 libopus track in Matroska (`stream_count=4`),
+  where both implementations report `duration=20`.
+
 ## Registration: how a demuxer reaches this crate
 
 This crate ships a `vaco-component.toml` naming `vaco_parse_opus::PARSER`, a
@@ -116,7 +159,7 @@ is what makes `-show_streams` able to report bitstream fields without that edge.
 Two consequences worth knowing when changing anything here:
 
 * **Everything a demuxer can see goes through `dyn Parser`.** `parse`,
-  `parameters` and `set_extradata` are the whole surface. An inherent method,
+  `parameters`, `set_extradata` and `packet_duration` are the whole surface. An inherent method,
   however useful, is invisible from a container. `tests/provider.rs` is written
   entirely against `Box<dyn Parser>` for that reason — a version written against
   the concrete type would pass while the seam stayed broken.

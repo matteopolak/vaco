@@ -569,6 +569,135 @@ fn loas_mux_version_a_is_unsupported_not_invalid() {
 
 // -------------------------------------------------------------- properties
 
+// ------------------------------------------------ Parser::packet_duration
+
+/// `seconds` expressed in ticks of a `1/den` time base, truncated towards zero
+/// exactly as `vaco_format_core::time::quantise_duration` does. The consumer's
+/// half of the answer, so a codec-side test can assert the number the reference
+/// actually printed.
+fn ticks(seconds: vaco_core::Rational, den: i64) -> i64 {
+    i64::from(seconds.num)
+        .checked_mul(den)
+        .and_then(|n| n.checked_div(i64::from(seconds.den)))
+        .unwrap_or(0)
+}
+
+/// The configured path: a stream constant off the `AudioSpecificConfig`, with
+/// the packet's own bytes never consulted.
+///
+/// measured: `ffprobe 8.1` on 1 s sines in Matroska with no `DefaultDuration`
+/// element present — 44100 reports `duration=23` on a 1/1000 base, 48000
+/// reports `21`. Both are `1024 / rate` truncated into the base.
+#[test]
+fn packet_duration_from_a_configuration_record() {
+    for (asc, rate) in [
+        (&[0x12u8, 0x10][..], 44100i32), // LC 44100 stereo
+        (&[0x11, 0x90][..], 48000),      // LC 48000 stereo
+    ] {
+        let mut parser = AdtsParser::new(Limits::strict());
+        parser.set_extradata(asc).expect("asc");
+        let d = parser
+            .packet_duration(b"raw aac bytes")
+            .expect("a duration");
+        assert_eq!((d.num, d.den), (1024, rate), "{asc:02x?}");
+        // What the consumer makes of it on Matroska's 1 ms base.
+        assert_eq!(ticks(d, 1000), if rate == 44100 { 23 } else { 21 });
+    }
+}
+
+/// SBR is not a special case, because the answer is in seconds.
+///
+/// The HE-AAC configuration has a 22050 Hz core and a 44100 Hz extension, and
+/// the stream reports `sample_rate=44100`. Counting 1024 samples against the
+/// *reported* rate would halve every duration; counting them against the core
+/// rate gives the same number of seconds as 2048 against the extension rate.
+#[test]
+fn packet_duration_is_unchanged_by_sbr() {
+    let mut he = AdtsParser::new(Limits::strict());
+    he.set_extradata(&[0x13, 0x90, 0x56, 0xe5, 0xa0])
+        .expect("asc");
+    let d = he.packet_duration(b"raw").expect("a duration");
+    // 1024 core samples at 22050 Hz.
+    assert_eq!((d.num, d.den), (1024, 22050));
+    // Which is exactly 2048 output samples at the reported 44100 Hz.
+    assert_eq!(i64::from(d.num) * 44100, 2048 * i64::from(d.den));
+}
+
+/// `frameLengthFlag` shortens the frame, and the duration follows it.
+#[test]
+fn packet_duration_honours_the_frame_length_flag() {
+    // LC 44100 stereo with frameLengthFlag set: 960 samples, not 1024.
+    let mut parser = AdtsParser::new(Limits::strict());
+    let asc = [0x12u8, 0x14];
+    assert_eq!(
+        AudioSpecificConfig::parse(&asc)
+            .expect("asc")
+            .frame_length(),
+        960
+    );
+    parser.set_extradata(&asc).expect("asc");
+    let d = parser.packet_duration(b"raw").expect("a duration");
+    assert_eq!((d.num, d.den), (960, 44100));
+}
+
+/// The in-band path: an ADTS payload is walked and its frames are summed.
+///
+/// measured: `ffprobe 8.1` on `-f mpegts` AAC 44100 reports `duration=2089` on
+/// a 1/90000 base, which is 1024/44100 truncated — and 1024 × 90000 ÷ 44100 is
+/// 2089.79, so the row witnesses the truncation as well as the value.
+#[test]
+fn packet_duration_sums_the_adts_frames_in_a_payload() {
+    let parser = AdtsParser::new(Limits::strict());
+    let one = &ADTS_LC[..57]; // the first frame, whole
+    let d = parser.packet_duration(one).expect("a duration");
+    assert_eq!((d.num, d.den), (1024, 44100));
+    assert_eq!(ticks(d, 90_000), 2089);
+
+    // Both frames in one payload — what an MPEG-TS PES that is not re-framed
+    // into codec frames hands over.
+    let two = parser.packet_duration(&ADTS_LC).expect("a duration");
+    assert_eq!((two.num, two.den), (2048, 44100));
+}
+
+/// A configuration record wins over anything the payload looks like, which is
+/// the same rule `set_extradata` states for parameters.
+#[test]
+fn a_configuration_record_beats_a_sync_word_in_the_payload() {
+    let mut parser = AdtsParser::new(Limits::strict());
+    parser.set_extradata(&[0x12, 0x10]).expect("asc");
+    // Two real ADTS frames as the payload. Configured, the answer is still one
+    // frame: in MP4 and Matroska a sample *is* one frame and a sync word inside
+    // it is a coincidence.
+    let d = parser.packet_duration(&ADTS_LC).expect("a duration");
+    assert_eq!((d.num, d.den), (1024, 44100));
+}
+
+/// Nothing measurable is `None`, not an error and not a guess.
+#[test]
+fn packet_duration_refuses_what_it_cannot_measure() {
+    let parser = AdtsParser::new(Limits::strict());
+    assert_eq!(parser.packet_duration(&[]), None);
+    assert_eq!(parser.packet_duration(b"not aac at all"), None);
+}
+
+/// LOAS states its duration in the `StreamMuxConfig`, not in the frame.
+///
+/// measured: `ffprobe 8.1` on `-f latm` AAC 44100 reports `duration=655360` on
+/// a 1/28224000 base, which is exactly 1024/44100 s.
+#[test]
+fn loas_packet_duration_comes_from_the_mux_config() {
+    let mut parser = LoasParser::new(Limits::strict());
+    // Nothing seen yet: no configuration, so no answer.
+    assert_eq!(parser.packet_duration(&LOAS_LC), None);
+    // One frame with nothing after it: deferred, then flushed at end of
+    // stream. See `loas_stream_mux_config_carries_the_asc`.
+    let _ = parser.parse(&LOAS_LC).expect("LOAS frame");
+    let _ = parser.parse(&[]).expect("LOAS flush");
+    let d = parser.packet_duration(&LOAS_LC).expect("a duration");
+    assert_eq!((d.num, d.den), (1024, 44100));
+    assert_eq!(ticks(d, 28_224_000), 655_360);
+}
+
 proptest! {
     /// No byte string, of any length, may panic either parser or make it claim
     /// to have consumed more than it was given.

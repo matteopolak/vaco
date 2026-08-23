@@ -51,6 +51,17 @@ const TOKENS: &[&str] = &[
     "long", "full", "decoder=h264", "encoder=x", "demuxer=matroska", "demuxer=",
     "muxer=matroska", "protocol=file", "protocol=", "filter=scale", "bsf=x",
     "-buildconf", "-codecs", "-protocols", "-bsfs", "-dispositions",
+    // CL-04, second wave: the eight listings that used to return `ENOSYS`.
+    // `-sources`/`-sinks` share `-h`'s `OPTIONAL_ARG` shape (see
+    // `vaco_cli_core::table::ArgFlags::OPTIONAL_ARG`) — consumes the next
+    // argv entry unconditionally if one exists, including one that looks
+    // like another option, and does not error when argv runs out. "lavfi"
+    // and "avfoundation" are real reference device names this build's empty
+    // device registry never matches; exercised alongside a bare `-sources`
+    // (no name) and one immediately followed by another option, to hit both
+    // the "consumed as the device name" and "ran out of argv" paths.
+    "-pix_fmts", "-sample_fmts", "-layouts", "-colors", "-hwaccels", "-devices",
+    "-sources", "-sinks", "lavfi", "avfoundation",
 ];
 
 fn argv_from(u: &mut Unstructured<'_>) -> Vec<String> {

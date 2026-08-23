@@ -224,9 +224,20 @@ LC_ALL=C ffmpeg -h decoder=nonesuchxyz -h encoder=nonesuchxyz -h filter=x \
 * **`-h` always consumes the next argv entry if one exists, whatever it looks
   like**, and does not error when none does. `ffmpeg -h -i x` reports `Unknown
   help option '-i'.` — `-i` was consumed as the topic, `x` is never looked at.
-  This is the one option in either table with
-  [`table::ArgFlags::OPTIONAL_ARG`]; `split::split_with` treats a missing
-  value as `None` rather than [`error::CliError::MissingArgument`] only for it.
+  [`table::ArgFlags::OPTIONAL_ARG`] is that shape; `split::split_with` treats
+  a missing value as `None` rather than [`error::CliError::MissingArgument`]
+  only for options carrying it.
+* **`-sources`/`-sinks` carry the same `OPTIONAL_ARG` shape as `-h`, measured
+  the same way** (CL-04, second wave): `ffmpeg -hide_banner -sources` with no
+  device name prints "Device name is not provided." rather than a
+  missing-argument error, and `ffmpeg -hide_banner -sources -i x` silently
+  consumes `-i` as the device name (no device named `-i` exists, so the whole
+  invocation prints nothing and exits 0 — `x` is never reached). Both tables
+  declared a `device` argument placeholder for `-h`'s benefit from the start
+  but neither `HAS_ARG` nor `OPTIONAL_ARG`, so the value was never actually
+  consumed until this fix — a real bug, not a documentation gap: without it,
+  `-sources lavfi` treated `lavfi` as an unrelated positional token rather
+  than this option's own value.
 * **Name field: `max(18, len) + 1`, not `+ 8`.** Confirmed against `-h
   protocol=file`'s five options (name lengths 6–10, one field width
   throughout — not distinguishing enough on its own) and cross-checked against
@@ -459,10 +470,15 @@ build depend on the whole workspace compiling.
 
 ## What is deliberately not here
 
-* **The help system** (`-h`, `-h long/full`, `-h type=name`) and the listing
-  commands (`-formats`, `-codecs`, …). Roadmap CL-04. The table carries
-  everything they need — `EXPERT`, `VIDEO`/`AUDIO`/`SUBTITLE`/`DATA`, `argname`,
-  `help` — so this is rendering work, not modelling work.
+* **This section used to say the help system and the listing commands were
+  not here at all.** That was true when the table alone existed; it is now
+  stale. `help::render_options_help`/`render_schema_block` (this crate) and
+  `vaco-cli`'s `help.rs`/`listing.rs` (thirteen listings byte-identical or
+  structurally correct, plus `-h`/`-h long`/`-h full`/`-h <kind>=<name>`) are
+  CL-04's actual shape now — see [The help system](#the-help-system-help)
+  above and `docs/app/vaco-cli.md`'s own listing section for what shipped and
+  what remains: the private-options-block hook on four descriptor types, and
+  `vaco-probe`'s own dispatch to these renderers.
 * **The ratio and rate parsers.** `ValueKind::Rate` and the ratio-valued
   options (`-aspect`, `-time_base`) are *classified* here but parsed in
   `vaco-core::parse`, which is where the size, colour and duration grammars

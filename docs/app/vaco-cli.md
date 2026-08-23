@@ -242,31 +242,75 @@ build's contents allow it:**
   `-h protocol=file`/`-protocols` render structurally correctly but show
   nothing to test against without `--features protocol-http`.
 
-**Deliberately not attempted**, named rather than left silent:
+**The eight formerly-`ENOSYS` listings — all now render:**
 
-* `-pix_fmts`/`-sample_fmts`/`-layouts`/`-colors`/`-hwaccels`/`-devices`/
-  `-sources`/`-sinks` still return `ENOSYS`. The first three need per-format
-  component counts, bit depths and alpha/paletted/bitstream/hardware flags
-  that `vaco-pixfmt`/`vaco-sampfmt`/`vaco-chlayout` do not currently expose
-  through a public API this crate can reach; `-colors` was never wired to a
-  renderer either. The last four need a hardware/device registry this
-  project does not have yet (D13's `vaco-hw-*` crates are a separate work
-  package). Headers for `-pix_fmts`/`-sample_fmts`/`-layouts` were measured
-  and are recorded in `vaco-cli-core`'s doc file for whoever picks this up.
+* `-pix_fmts` renders from `vaco_pixfmt::PixFmt::all()`'s generated table —
+  name, component count, average bits-per-pixel and per-component depth, plus
+  `H`/`P`/`B` from `PixFmtFlags`. `I`/`O` ("supported for conversion") is
+  libswscale's own hand-maintained capability list, which no crate in this
+  workspace exposes; it is a small measured exception table in
+  `listing::{INPUT_ONLY,OUTPUT_ONLY,NEITHER}`, captured from the reference and
+  nothing else (49 of 267 formats are not simply "software implies both").
+  **Every one of 267 rendered rows is byte-identical to the reference in
+  content** (`diff <(sort ours) <(sort theirs)` is empty) after three named,
+  measured corrections for `vaco-pixfmt` data that disagrees with the
+  reference — see `write_pix_fmts`'s doc comment in `listing.rs` for exactly
+  which three, and `vaco-cli-core`'s doc file's "Reported upstream"-style note
+  below for the crate they belong to. **Row order does not match**: this
+  build's table is in family/subsampling order, not the reference's
+  `AVPixelFormat` enum-assignment history, which would mean hardcoding an
+  arbitrary authorial sequence rather than format-dictated data (D7) — the
+  same tradeoff `-codecs` already made, for the same reason.
+* `-sample_fmts` and `-layouts` are **fully byte-identical**, end to end,
+  confirmed against the running binary, not just the render function:
+  `vaco_sampfmt::SampleFmt::ALL` and `vaco_chlayout::{Channel::named,
+  ChannelLayout::standard}` were already built with the reference's own print
+  order in mind (see those crates' doc comments), so this crate only needed
+  to add the column layout.
+* `-colors` renders from `vaco_core::parse::{color_names,color_by_name}`,
+  plus two small tables this listing alone needs: the reference's exact
+  CamelCase display spelling (that table is lower-case, because `color()`
+  matches case-insensitively) and which 7 of the table's 147 names to
+  exclude — the alternate `grey`-family spellings D17 already documents this
+  crate accepting as *input* that the reference does not. **Fully
+  byte-identical**, confirmed end to end (140 rows).
+* `-hwaccels`/`-devices`/`-sources`/`-sinks` have no hardware backend or
+  device layer to draw on at all (D13's `vaco-hw-*` crates are a separate,
+  later work package), so each renders the real, measured header (and, for
+  `-devices`, the real legend) with zero rows under it — an empty list under
+  a real header, which is what the reference itself would print given none
+  of the corresponding thing registered, not a guess at what a populated one
+  would look like. `-sources -sinks` additionally needed a `vaco-cli-core`
+  table fix: they carried a `device` argument placeholder for `-h`'s benefit
+  but neither `ArgFlags::HAS_ARG` nor `ArgFlags::OPTIONAL_ARG`, so the
+  argument was declared but never actually consumed. Fixed alongside this
+  work — see `vaco-cli-core`'s doc file.
 * **The brief that scoped this work named `-colorspaces` as one of the
   fourteen listing commands to cover. It does not exist in ffmpeg 8.1** —
   measured directly: `ffmpeg -colorspaces` exits 8, "Unrecognized option
   'colorspaces'." (A first probe of it through a pipe reported exit 0 —
   `head`'s status, not ffmpeg's — plan 13 §1b's exact trap, caught by
   re-probing without a pipe.) The real option is `-colors` (named colours),
-  already tracked above as deferred; `-colorspaces` is not implemented under
-  either spelling because it is not a real target.
-* `vaco-probe`'s own `-h` dispatch is out of scope for this crate's
+  shipped above; `-colorspaces` is not implemented under either spelling
+  because it is not a real target.
+* `vaco-probe`'s own `-h` dispatch is still out of scope for this crate's
   Scope-declared area (`crates/app/vaco-cli/` and `crates/app/vaco-cli-core/`
-  only). The shared `ffprobe()` option table's `-h` entry was fixed alongside
-  `ffmpeg()`'s (same `OPTIONAL_ARG` bug, same fix), but wiring `vaco-probe`'s
-  binary to call `vaco_cli_core::help`'s renderers was not done, since that
-  binary's `src/` is a different crate.
+  only). The shared `ffprobe()` option table's `-h`/`sources`/`sinks` entries
+  carry the same fixes as `ffmpeg()`'s, but wiring `vaco-probe`'s binary to
+  call `vaco_cli_core::help`'s renderers, or this crate's listing renderers,
+  was not done, since that binary's `src/` is a different crate.
+
+**Reported upstream, not fixed here (`vaco-pixfmt`):** comparing every one of
+that crate's 268 formats against the reference's 267 found three gaps, all
+compensated for display in `listing.rs` rather than fixed at the source: (1)
+one extra format, `cuarray`, that ffmpeg 8.1 does not have; (2) `bgr8`'s
+component-depth array is in the wrong order (`2-3-3` where the reference and
+this crate's own documented logical-channel convention both say `3-3-2`); (3)
+the twelve Bayer formats model one raw-sample component where the reference
+models three uneven-depth ones, and `xv30be`/`v30xbe` are missing
+`PixFmtFlags::BITSTREAM` (their little-endian siblings correctly have neither
+implementation mark it). See `listing::write_pix_fmts`'s doc comment for the
+exact measurements.
 
 ### Known divergences
 
@@ -274,7 +318,8 @@ build's contents allow it:**
 |---|---|---|
 | **`-crf 20` is rejected** | The `AVOption` oracle answers from what this build contains, which is `FormatOptions` and nothing else — there are no encoders to declare `crf`. The reference applies the same rule to itself and gets a different answer because it has encoders. Closes on its own as codecs land. The alternative, accepting every unknown name, makes `-qwrty 3` a silent no-op. | `cli::Oracle` |
 | **Non-UTF-8 filenames are refused** | Every layer below takes a `&str`. The reference opens them. Reported rather than papered over with a lossy conversion that would open a *different* file. | `cli::url_of` |
-| **Eight listings are deferred** | `-pix_fmts`, `-sample_fmts`, `-layouts`, `-colors`, `-hwaccels`, `-devices`, `-sources`, `-sinks` return `ENOSYS` naming the gap. See [`-h` and the listing commands](#-h-and-the-listing-commands) below for what CL-04 shipped and what it deliberately did not. | `listing::render` |
+| **`-pix_fmts` row order does not match** | This build's table is in family/subsampling order, not the reference's historical `AVPixelFormat` enum order — see above. Every row's *content* is byte-identical; only the sequence differs. | `listing::write_pix_fmts` |
+| **`-pix_fmts`: three named `vaco-pixfmt` data gaps, compensated for display** | `cuarray` (extra format), `bgr8` (component order), the twelve Bayer formats (component count/depths) and `xv30be`/`v30xbe` (missing `BITSTREAM`) — see "Reported upstream" above. | `listing::write_pix_fmts` |
 | **No `av_dump_format` block** | The reference prints `Input #0, matroska,webm, from '…':` and a per-stream summary to stderr. Not reproduced; that is `vaco-probe`-shaped formatting work. | — |
 
 ## How to change it
@@ -316,7 +361,10 @@ Cargo features: none of its own. What the binary can *do* is decided by
 `Demuxer`/`Muxer` traits), `vaco-sched` (the pipeline), `vaco-io` +
 `vaco-protocol-core` + `vaco-protocol-file` (opening a URL), `vaco-codec-core`
 (`CodecParameters`), `vaco-packet`, `vaco-opts` (the option schema the oracle
-reads), `vaco-limits`, `vaco-core`.
+reads), `vaco-limits`, `vaco-core`. `vaco-pixfmt`, `vaco-sampfmt` and
+`vaco-chlayout` (CL-04, second wave) back `-pix_fmts`, `-sample_fmts` and
+`-layouts` respectively — all three are layer-1 model crates, so this is a
+downward dependency like every other one above, not a new kind of edge.
 
 Dev only: `proptest`, `tempfile`, `vaco-demux-matroska`.
 
@@ -384,7 +432,7 @@ down is a decision and one that is not is a surprise.
 
 | Deferred | Issue |
 |---|---|
-| `-h`, `-h full`, `-h <kind>=<name>`, byte-identical listings | CL-04 |
+| `-h <kind>=<name>` private-options blocks for `mp4`/`mpegts` (blocked on an options-schema hook in other crates); `vaco-probe`'s own `-h`/listing dispatch (a different crate) | CL-04 |
 | Metadata / disposition / chapter / program mapping | CL-16 |
 | `-progress`, `-stats`, `-report` | CL-17 |
 | Decoder and encoder nodes, `-frames`, `-pass` | CL-19 |
@@ -415,7 +463,15 @@ that selection is a *function* (same inputs, same answer), that every pick names
 a stream that exists, that `dropped` implies nothing was picked, and that a
 failure never exits 0.
 
+CL-04's second wave (the eight formerly-`ENOSYS` listings) extended `TOKENS`
+with `-pix_fmts`/`-sample_fmts`/`-layouts`/`-colors`/`-hwaccels`/`-devices`/
+`-sources`/`-sinks` and two real reference device names (`lavfi`,
+`avfoundation`) this build's empty device registry never matches — exercising
+`-sources`/`-sinks`' new `OPTIONAL_ARG` shape (consumes the next argv entry
+unconditionally, including one that looks like another option) alongside
+`-h`'s existing coverage of the same mechanism.
+
 ```
 cargo +nightly fuzz run cli_run --features cli -- -max_total_time=150
-exit=0  execs=3652690   find fuzz/artifacts -type f: empty
+exit=0  execs=2333991   find fuzz/artifacts -type f: empty
 ```

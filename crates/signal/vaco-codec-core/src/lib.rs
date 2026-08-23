@@ -396,6 +396,76 @@ pub trait Parser: Send {
         let _ = extradata;
         Ok(())
     }
+
+    /// How long one **already-framed** packet lasts, in seconds, when that is a
+    /// fact about the codec rather than about the container.
+    ///
+    /// `packet` is one whole access unit — a Matroska block frame, an MP4
+    /// sample, a PES payload — the same slice [`Parser::parse`] would be given.
+    /// `None` means "this codec does not state a packet duration", which is the
+    /// default and the right answer for every video codec in v0.1.
+    ///
+    /// # Why this is on `Parser` at all
+    ///
+    /// Because the fact is a *codec* fact and the layering (D14.1) forbids a
+    /// demuxer from naming a codec crate. Matroska writes no `DefaultDuration`
+    /// for an Opus track and no `BlockDuration` on its blocks — the element is
+    /// absent from the file, not misread — and the reference nonetheless
+    /// reports 20 ms per packet, because it reads Opus's own TOC byte. The only
+    /// seam a demuxer has onto codec code is
+    /// [`ParserProvider`](../../vaco_format_core/trait.ParserProvider.html),
+    /// which hands back a `dyn Parser`. So either the answer arrives through
+    /// this trait or it does not arrive at all.
+    ///
+    /// # Why seconds, and why a `Rational`
+    ///
+    /// Three constraints, and this is the only shape that meets all three.
+    ///
+    /// * **It must be exact.** The consumer converts into the stream's time
+    ///   base and the reference *truncates* that conversion (measured three
+    ///   ways — see `vaco_format_core::time::quantise_duration`), so an input
+    ///   that has already been rounded gives the wrong answer half a tick of
+    ///   the time. A 2.5 ms Opus packet on Matroska's 1 ms base is exactly the
+    ///   case: the reference prints `2`, and anything that reaches the
+    ///   truncation as microseconds prints `3`.
+    /// * **It must not need a second lookup.** "Samples" alone would make the
+    ///   caller supply a rate, and the rate a caller has is the one the
+    ///   *container* reports — which is wrong for both codecs here. Opus always
+    ///   runs at 48 kHz whatever `input_sample_rate` says, and an SBR AAC
+    ///   stream reports the *extension* rate while its frames are counted at
+    ///   the core rate. Dividing inside the parser, which knows both halves,
+    ///   removes the trap: 1024 core samples at 22050 Hz and 2048 output
+    ///   samples at 44100 Hz are the same `Rational`, so SBR stops being a
+    ///   special case anywhere else.
+    /// * **It must not add a concept.** [`Rational`] is already this
+    ///   workspace's exact ratio — it is what a `TimeBase` and a frame rate
+    ///   are — so nothing new is defined and D19 is satisfied by construction.
+    ///
+    /// A rejected alternative, for the record: a `fn(&[u8]) -> Option<u64>`
+    /// field on [`ParserDesc`] would be inspectable without constructing a
+    /// parser, but AAC's answer lives in an `AudioSpecificConfig` the parser
+    /// was handed by [`Parser::set_extradata`], so a free function cannot
+    /// produce it. A second rejected alternative: returning ticks of a
+    /// caller-supplied time base would put the truncation rule — a
+    /// reference-matching decision — inside every parser instead of in one
+    /// place.
+    ///
+    /// # Contract
+    ///
+    /// * `&self`, deliberately: this is a question, not a step. It must be
+    ///   callable once per packet on the read path without advancing any
+    ///   state, without allocating, and without the caller having fed the same
+    ///   bytes to [`Parser::parse`] first.
+    /// * A malformed packet is `None`, never an error and never a panic. The
+    ///   caller is a demuxer filling in a field the container left blank; a
+    ///   packet it cannot measure is one it reports without a duration, which
+    ///   is what the container said in the first place.
+    /// * The value is a duration, so it is non-negative and finite. A
+    ///   zero-valued or non-finite `Rational` is treated as `None` downstream.
+    fn packet_duration(&self, packet: &[u8]) -> Option<Rational> {
+        let _ = packet;
+        None
+    }
 }
 
 /// So a boxed parser is itself a [`Parser`], and can be handed to anything
@@ -418,6 +488,10 @@ impl<P: Parser + ?Sized> Parser for Box<P> {
 
     fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
         (**self).set_extradata(extradata)
+    }
+
+    fn packet_duration(&self, packet: &[u8]) -> Option<Rational> {
+        (**self).packet_duration(packet)
     }
 }
 

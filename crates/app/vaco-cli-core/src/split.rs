@@ -429,10 +429,11 @@ pub fn split_with<S: AsRef<OsStr>>(
                 // A deferred option always takes a value: nothing knows whether
                 // it is a flag, and the reference assumes it is not.
                 let wants_value = desc.is_none_or(OptDesc::takes_value);
-                // `-h` (and its `-?`/`-help`/`--help` spellings) is the one
-                // option in either table that tolerates running out of argv:
-                // a bare trailing `-h` is the basic help, not a missing-value
-                // error. See `ArgFlags::OPTIONAL_ARG`.
+                // `-h` (and its `-?`/`-help`/`--help` spellings), `-sources`
+                // and `-sinks` tolerate running out of argv: a bare trailing
+                // `-h` is the basic help, not a missing-value error, and a
+                // bare trailing `-sources` is "Device name is not provided."
+                // rather than the same. See `ArgFlags::OPTIONAL_ARG`.
                 let optional = desc.is_some_and(|d| d.flags.contains(ArgFlags::OPTIONAL_ARG));
                 let value = if wants_value {
                     match argv.get(i + 1) {

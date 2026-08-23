@@ -112,6 +112,31 @@ fuzz_target!(|data: &[u8]| {
             "framing changed when the same bytes arrived in {chunk}-byte chunks"
         );
     }
+
+    // 5. `packet_duration` is total and bounded, on both of its paths. The
+    //    in-band path walks ADTS headers inside the payload, which is the same
+    //    attacker-controlled scan the framing does — a frame length of zero
+    //    there would be an infinite loop rather than a wrong answer. The
+    //    configured path must ignore the payload entirely, so the assertion is
+    //    that the answer does not depend on it.
+    let plain = AdtsParser::new(Limits::strict());
+    if let Some(d) = plain.packet_duration(data) {
+        assert!(d.num > 0 && d.den > 0, "not a duration: {d:?}");
+        // At most one raw data block per 7-byte header, four blocks each,
+        // 1024 samples a block.
+        let cap = (data.len() / 7 + 1) * 4 * 1024;
+        assert!(u64::from(d.num.unsigned_abs()) <= cap as u64, "{d:?} over {cap}");
+    }
+
+    let mut configured = AdtsParser::new(Limits::strict());
+    if configured.set_extradata(data).is_ok() {
+        let a = configured.packet_duration(data);
+        let b = configured.packet_duration(&[]);
+        assert_eq!(a, b, "a configured parser must not read the payload");
+        if let Some(d) = a {
+            assert!(d.num > 0 && d.den > 0, "not a duration: {d:?}");
+        }
+    }
 });
 
 /// Take everything the driver will give up, and say whether the two runs are

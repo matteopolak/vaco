@@ -472,9 +472,16 @@ and matches on every packet whose ordering matches.
 
 The three divergences, all upstream of this crate:
 
-1. **`vaco-demux-matroska` sets no packet `dts` and no packet `duration`** on
-   most packets. Never a wrong value — always absent. 31 `dts` and 104
-   `duration` field values on the corpus.
+1. **`vaco-demux-matroska` sets no packet `dts`** on most packets. Never a wrong
+   value — always absent. 31 `dts` field values on the corpus. The 104 missing
+   `duration` values that used to sit beside them are **closed** — see *Packet
+   duration from the codec* below.
+
+   The measurement that made them look like a demuxer bug was itself wrong, and
+   it is worth recording why: Matroska writes **no `DefaultDuration` element for
+   an Opus track and no `BlockDuration` on its blocks**, so there was nothing
+   for the demuxer to have misread. The reference derives 20 ms from Opus's own
+   TOC byte, which is a codec fact reached through `ParserProvider`.
 2. **`vaco-demux-mpegts` reports half the packet duration.** `3600` ticks at
    1/90000 in the reference, `1800` in ours — a factor of exactly two, which is
    the field rate standing in for the frame rate. The first few packets carry no
@@ -486,6 +493,47 @@ The three divergences, all upstream of this crate:
 4. **`vaco_packet::PacketSideData` has no `MPEGTS Stream ID` variant**, which
    the reference attaches to every MPEG-TS packet. `Skip Samples` is modelled
    and matches on both MP4 and Matroska.
+
+### Packet duration from the codec (2026-08-22)
+
+`vaco-codec-core`'s `Parser` grew `packet_duration`, and
+`vaco_format_core::Discovery` calls it once per packet for any packet whose
+container stated no duration. `vaco-probe` needed **no change at all**: it
+already wraps every demuxer in `Discovery`, which already holds one parser per
+stream seeded from the container's configuration record.
+
+Re-measured on an eleven-file corpus, all eleven `[PACKET]` field values, `-of
+json -show_packets -read_intervals '%+#40'`:
+
+| | before | after |
+|---|---|---|
+| `duration` / `duration_time` | 191 / 420 each | **360 / 420** each |
+| Matroska / WebM, all fields | 2454 / 2860 | **2792 / 2860** |
+| MP4, all fields | 1320 / 1320 | 1320 / 1320 |
+| MPEG-TS, all fields | 98 / 440 | 98 / 440 |
+| total | 3872 / 4620 | **4210 / 4620** |
+
+MP4 is unchanged, which is the regression that mattered: `stts` states a
+duration per sample and the container's statement always wins over the codec's.
+
+Two files did not move, and each names a gap in another crate rather than here:
+
+* **`flac.mka`, 0 of 20.** FLAC in Matroska has exactly the same gap and the
+  reference reports 104 ms from the in-band frame header, but there is no
+  `vaco-parse-flac` in the tree. The seam now exists; that crate closes this
+  without any further work in the format layer.
+* **`av.ts`, 1 of 40.** `vaco-demux-mpegts` hands over whole PES payloads
+  instead of codec frames — one 2836-byte packet where the reference emits
+  thirteen of about 265 bytes. Our duration for it is exactly thirteen frames,
+  so the number is right for the packet as framed and the divergence is the
+  framing. Recorded under *Known gaps in other crates*.
+
+One divergence remains on Matroska AAC: the reference prints `duration=N/A` on
+the *first* packet of an AAC track in a single-track file and the value on every
+one after it — but prints the value on the first packet too when the file also
+has a video track. Measured eight ways; it is an artefact of the reference's
+probing order rather than a rule. Full transcript in
+`docs/codec/vaco-parse-aac.md`.
 
 ### The `-show_packets` option matrix
 

@@ -1310,6 +1310,7 @@ version = "0.1.0"
 name = "vaco-cli"
 version = "0.1.0"
 dependencies = [
+ "vaco-chlayout",
  "vaco-cli-core",
  "vaco-codec-core",
  "vaco-core",
@@ -1318,9 +1319,11 @@ dependencies = [
  "vaco-limits",
  "vaco-opts",
  "vaco-packet",
+ "vaco-pixfmt",
  "vaco-protocol-core",
  "vaco-protocol-file",
  "vaco-registry",
+ "vaco-sampfmt",
  "vaco-sched",
 ]
 

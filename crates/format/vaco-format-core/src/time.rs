@@ -572,6 +572,16 @@ impl TimestampFixer {
         // it at zero. The stronger source — the next packet's DTS delta — is
         // only available to a caller that reads ahead, which is why
         // `Discovery` applies it and this does not.
+        //
+        // R21b is the *codec's* answer — Opus's TOC byte, AAC's
+        // `AudioSpecificConfig` — and it needs a parser, which a pure state
+        // machine over `(stream_index, pts, dts, duration)` does not have. It
+        // therefore lives in `Discovery`, which owns one parser per stream, and
+        // runs **before** this: by the time R21 is reached the duration is
+        // already non-zero for a stream the codec could measure, so the two
+        // rules cannot both fire. `quantise_duration` below is the half of R21b
+        // that is a timestamp rule rather than a codec one, and it is here so
+        // that the truncation is defined once.
         if fill_in
             && packet.duration == Duration::ZERO
             && let Some(d) = duration_from_rate(frame_rate)
@@ -682,6 +692,79 @@ pub fn duration_from_rate(rate: Rational) -> Option<Duration> {
         return None;
     }
     Some(Duration::from_micros(micros))
+}
+
+/// R21b — a codec's exact packet duration, quantised into a stream's time base.
+///
+/// `seconds` is what
+/// [`Parser::packet_duration`](vaco_codec_core::Parser::packet_duration)
+/// returns: an exact ratio, never a rounded one. This truncates it to a whole
+/// number of `time_base` ticks and hands back the [`Duration`] a [`Packet`]
+/// carries. `None` for an unusable ratio or base, and for anything that
+/// truncates to zero — a zero-tick duration is reported as absent, which is the
+/// same rule the packet printer applies.
+///
+/// # Why truncation, and why the argument must be exact
+///
+/// The reference truncates towards zero. Measured three independent ways, each
+/// on a file whose container states no duration of its own:
+///
+/// | input | exact ticks | reference | nearest would give |
+/// |---|---:|---:|---:|
+/// | 960 samples @48 kHz, base 3/1000 | 6.667 | **6** | 7 |
+/// | 960 samples @48 kHz, base 7/10000 | 28.571 | **28** | 29 |
+/// | 1024 samples @44.1 kHz, base 1/90000 (MPEG-TS) | 2089.79 | **2089** | 2090 |
+///
+/// The first two are a Matroska `TimecodeScale` patched to 3 ms and to 0.7 ms;
+/// the third is an ordinary `-f mpegts` file, so this is not a Matroska rule.
+///
+/// Truncation is why the input may not arrive pre-rounded. A 2.5 ms Opus packet
+/// is exactly half a Matroska tick: from `120/48000` this yields 2, which is
+/// what the reference prints, and from a microsecond-rounded 2500 it would
+/// yield 3. Half of a tick's worth of error changes the answer whenever the
+/// exact value lands just below an integer, which is most of the time for a
+/// 1024-sample frame against a 1 ms base.
+///
+/// # The one place the packet model still loses
+///
+/// [`Packet::duration`](vaco_packet::Packet::duration) is microseconds, so the
+/// tick count is stored as its microsecond equivalent and recovered by the
+/// printer's round-to-nearest. That round trip is **exact for any time base
+/// whose tick is longer than 2 µs**, which is every container base in the
+/// corpus — 1/1000, 1/44100, 1/48000, 1/90000, 1/1000000. It is *not* exact for
+/// a base finer than that, such as the 1/28224000 a raw ADTS stream reports:
+/// 655360 ticks stores as 23220 µs and reads back as 655361. No demuxer in the
+/// tree produces such a base; closing it needs a tick-valued `Packet::duration`
+/// and is recorded in `docs/format/vaco-format-core.md`.
+#[must_use]
+pub fn quantise_duration(seconds: Rational, time_base: TimeBase) -> Option<Duration> {
+    if !seconds.is_defined() || seconds.is_infinite() || seconds.num <= 0 || seconds.den <= 0 {
+        return None;
+    }
+    if !time_base.is_defined() || time_base.is_infinite() || time_base.num <= 0 {
+        return None;
+    }
+    // seconds ÷ tick = num/den ÷ (tb.num/tb.den) = num × tb.den ÷ (den × tb.num).
+    // Both factors are built from `i32`s, so the denominator is at most 2^62 and
+    // `rescale_rnd` widens the product to `i128` itself.
+    let ticks = vaco_core::rescale_rnd(
+        i64::from(seconds.num),
+        i64::from(time_base.den),
+        i64::from(seconds.den).checked_mul(i64::from(time_base.num))?,
+        Rounding::Zero,
+    )?;
+    if ticks <= 0 {
+        return None;
+    }
+    // And the microsecond storage has to survive it. A base finer than 2 µs a
+    // tick can round a small positive tick count down to zero microseconds —
+    // 1 tick of 1/28224000 is 0.035 µs — and `Duration::ZERO` is the model's
+    // spelling of *absent*, so returning it would be a duration that silently
+    // disappears. Found by `format_timestamps`'s fuzz target, which asserts the
+    // postcondition this line establishes.
+    Timestamp::new(ticks)
+        .to_duration(time_base)
+        .filter(|d| d.as_micros() > 0)
 }
 
 // --------------------------------------------------------------- duration
@@ -1171,6 +1254,114 @@ mod tests {
         assert!(duration_from_rate(Rational::ZERO).is_none());
         assert!(duration_from_rate(Rational::UNDEFINED).is_none());
         assert!(duration_from_rate(Rational::INFINITY).is_none());
+    }
+
+    /// R21b's quantisation, against `ffprobe 8.1` measurements.
+    ///
+    /// Every row is a file whose container states no duration of its own, so
+    /// the number the reference prints can only have come from the codec.
+    #[test]
+    fn quantise_duration_truncates_towards_zero() {
+        // (samples, rate, time base, reference ticks, what nearest would give)
+        let cases: &[(i32, i32, Rational, i64, i64)] = &[
+            // Opus 20 ms on Matroska's ordinary 1 ms base.
+            (960, 48000, Rational::new(1, 1000), 20, 20),
+            // Opus 2.5 ms: exactly half a tick. The reference prints 2.
+            (120, 48000, Rational::new(1, 1000), 2, 3),
+            // Matroska with `TimecodeScale` patched to 3 ms: 6.667 ticks.
+            (960, 48000, Rational::new(3, 1000), 6, 7),
+            // …and to 0.7 ms: 28.571 ticks.
+            (960, 48000, Rational::new(7, 10_000), 28, 29),
+            // AAC 1024 @44100 in MPEG-TS: 2089.79 ticks.
+            (1024, 44100, Rational::new(1, 90_000), 2089, 2090),
+            // AAC 1024 @44100 and @48000 on a 1 ms base.
+            (1024, 44100, Rational::new(1, 1000), 23, 23),
+            (1024, 48000, Rational::new(1, 1000), 21, 21),
+            // Opus and AAC in MP4, where the base is the sample rate.
+            (960, 48000, Rational::new(1, 48000), 960, 960),
+            (1024, 44100, Rational::new(1, 44100), 1024, 1024),
+        ];
+        for &(samples, rate, tb, ticks, nearest) in cases {
+            let Some(d) = quantise_duration(Rational::new(samples, rate), tb) else {
+                unreachable!("{samples}/{rate} in {tb:?} is a duration")
+            };
+            // The stored microseconds must read back as the reference's ticks
+            // through the printer's round-to-nearest, which is the round trip
+            // `vaco-probe` actually performs.
+            assert_eq!(d.to_ticks(tb), Some(ticks), "{samples}/{rate} in {tb:?}");
+            let _ = nearest; // documented above; the point is that we do not do it
+        }
+    }
+
+    /// The rows above that distinguish truncation from rounding really do.
+    #[test]
+    fn nearest_rounding_would_give_a_different_answer() {
+        // 2.5 ms Opus on a 1 ms base: the exact value is 2.5 ticks.
+        let exact = Rational::new(120, 48000);
+        let tb = Rational::new(1, 1000);
+        assert_eq!(quantise_duration(exact, tb).unwrap().to_ticks(tb), Some(2));
+        // What a microsecond-first implementation produces, for contrast.
+        assert_eq!(Duration::from_micros(2500).to_ticks(tb), Some(3));
+    }
+
+    /// Nothing that is not a duration produces one.
+    #[test]
+    fn quantise_duration_rejects_what_is_not_a_duration() {
+        let tb = Rational::new(1, 1000);
+        assert_eq!(quantise_duration(Rational::ZERO, tb), None);
+        assert_eq!(quantise_duration(Rational::UNDEFINED, tb), None);
+        assert_eq!(quantise_duration(Rational::INFINITY, tb), None);
+        assert_eq!(quantise_duration(Rational::new(-1, 50), tb), None);
+        assert_eq!(quantise_duration(Rational::new(1, -50), tb), None);
+        // A base that names no tick length.
+        assert_eq!(
+            quantise_duration(Rational::new(1, 50), Rational::ZERO),
+            None
+        );
+        assert_eq!(
+            quantise_duration(Rational::new(1, 50), Rational::UNDEFINED),
+            None
+        );
+        assert_eq!(
+            quantise_duration(Rational::new(1, 50), Rational::INFINITY),
+            None
+        );
+        // Shorter than one tick truncates to zero, which is "absent".
+        assert_eq!(quantise_duration(Rational::new(1, 48000), tb), None);
+        // And a positive tick count that rounds to zero microseconds is also
+        // absent rather than a `Duration::ZERO` that would vanish downstream.
+        // One tick of 1/28224000 is 0.035 µs. Found by the fuzz target.
+        assert_eq!(
+            quantise_duration(Rational::new(1, 28_224_000), Rational::new(1, 28_224_000)),
+            None
+        );
+    }
+
+    /// The microsecond round trip is exact for every base whose tick exceeds
+    /// 2 µs, and the one place it is not is recorded rather than hidden.
+    #[test]
+    fn the_microsecond_round_trip_is_exact_above_two_microseconds() {
+        for den in [1000i32, 25, 30, 44100, 48000, 90_000, 100_000, 1_000_000] {
+            let tb = Rational::new(1, den);
+            for samples in [120i32, 480, 960, 1024, 2048, 2880] {
+                let exact = Rational::new(samples, 48000);
+                let Some(d) = quantise_duration(exact, tb) else {
+                    continue;
+                };
+                let want = i64::from(samples) * i64::from(den) / 48000;
+                assert_eq!(d.to_ticks(tb), Some(want), "{samples}/48000 in 1/{den}");
+            }
+        }
+        // The counter-example, pinned so that a future `Packet::duration` in
+        // ticks can delete this assertion rather than discover the problem.
+        // 1/28224000 is what a raw ADTS stream reports; its tick is 0.035 µs.
+        let adts = Rational::new(1, 28_224_000);
+        let d = quantise_duration(Rational::new(1024, 44100), adts).unwrap();
+        assert_eq!(
+            d.to_ticks(adts),
+            Some(655_361),
+            "known: exact value is 655360"
+        );
     }
 
     #[test]

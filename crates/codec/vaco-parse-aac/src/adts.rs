@@ -25,7 +25,7 @@ use vaco_core::{Error, Result};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::{Packet, PacketFlags};
 
-use crate::asc::AudioObjectType;
+use crate::asc::{AudioObjectType, AudioSpecificConfig};
 use crate::tables;
 
 /// Bytes in `adts_fixed_header()` plus `adts_variable_header()`.
@@ -280,14 +280,19 @@ pub struct AdtsParser {
     /// Whether the last frame was accepted, which is what lets the final frame
     /// of a file be emitted without a following sync word to confirm it.
     synced: bool,
-    /// Whether [`Parser::set_extradata`] supplied an `AudioSpecificConfig`.
+    /// The `AudioSpecificConfig` [`Parser::set_extradata`] supplied, if any.
     ///
-    /// When it did, that description wins over anything an ADTS header claims.
-    /// The reason is not preference but *correctness*: in MP4 and Matroska the
-    /// samples are raw AAC with no ADTS header at all, so any sync word the
-    /// scanner finds in them is a coincidence, and a coincidence must not be
-    /// allowed to overwrite a configuration record the container stated.
-    configured: bool,
+    /// When one arrived, that description wins over anything an ADTS header
+    /// claims. The reason is not preference but *correctness*: in MP4 and
+    /// Matroska the samples are raw AAC with no ADTS header at all, so any sync
+    /// word the scanner finds in them is a coincidence, and a coincidence must
+    /// not be allowed to overwrite a configuration record the container stated.
+    ///
+    /// Kept whole rather than reduced to a `configured` flag because
+    /// [`Parser::packet_duration`] needs two fields off it — `frame_length()`
+    /// and the *core* `sampling_frequency` — that `CodecParameters` does not
+    /// carry.
+    config: Option<AudioSpecificConfig>,
     frames: u64,
     resyncs: u64,
 }
@@ -302,7 +307,7 @@ impl AdtsParser {
             budget: Budget::new(limits),
             deferred: Vec::new(),
             synced: false,
-            configured: false,
+            config: None,
             frames: 0,
             resyncs: 0,
         }
@@ -344,7 +349,7 @@ impl AdtsParser {
         if !self.synced {
             self.resyncs = self.resyncs.saturating_add(1);
         }
-        if self.header != Some(header) && !self.configured {
+        if self.header != Some(header) && self.config.is_none() {
             self.params = Some(header.to_codec_parameters());
         }
         self.header = Some(header);
@@ -451,15 +456,119 @@ impl Parser for AdtsParser {
         if extradata.is_empty() {
             return Ok(());
         }
-        let config = crate::asc::AudioSpecificConfig::parse(extradata)?;
+        let config = AudioSpecificConfig::parse(extradata)?;
         self.params = Some(config.to_codec_parameters());
-        self.configured = true;
+        self.config = Some(config);
         Ok(())
     }
 
     fn parameters(&self) -> Option<&CodecParameters> {
         self.params.as_ref()
     }
+
+    /// One frame's worth of samples over the **core** sampling frequency.
+    ///
+    /// AAC states its packet duration in two incompatible places depending on
+    /// how the container framed it, and the split is the same one
+    /// [`Parser::set_extradata`]'s note describes:
+    ///
+    /// * **Configured** (MP4 `esds`, Matroska `CodecPrivate`) — the samples are
+    ///   raw AAC with no header of their own, so the answer is a stream
+    ///   constant read off the `AudioSpecificConfig`: `frame_length()` over
+    ///   `sampling_frequency`. The bytes are not consulted at all, and must not
+    ///   be: a sync word found inside raw AAC is a coincidence.
+    /// * **In-band** (MPEG-TS, a raw `.aac` file) — every frame carries an ADTS
+    ///   header, so the payload is walked and each frame's
+    ///   `raw_data_blocks × 1024` samples are summed at that header's rate. A
+    ///   PES payload holding two frames therefore reports twice one frame,
+    ///   which is what makes this right for a container that does not
+    ///   re-frame.
+    ///
+    /// # SBR is not a special case here, and that is the point
+    ///
+    /// The brief for this work said "1024 samples per frame, or 2048 for SBR".
+    /// Both are true and they are the *same duration*: SBR doubles the output
+    /// rate along with the sample count. Answering in seconds off the core rate
+    /// makes 1024/22050 and 2048/44100 the same value, so nothing downstream
+    /// has to know whether SBR is signalled — which matters, because a caller
+    /// reaching for `sample_rate` gets the reported *extension* rate and would
+    /// halve every duration. `AudioSpecificConfig::frame_length` counts core
+    /// samples and `sampling_frequency` is the core rate, so the pair agrees by
+    /// construction.
+    ///
+    /// # Measured
+    ///
+    /// `ffprobe 8.1`, one 1 s sine per row, no `DefaultDuration` in either
+    /// Matroska file:
+    ///
+    /// | file | stream base | reference | exact value |
+    /// |---|---|---:|---|
+    /// | AAC 44100 in Matroska | 1/1000 | 23 | 1024/44100 s |
+    /// | AAC 48000 in Matroska | 1/1000 | 21 | 1024/48000 s |
+    /// | AAC 44100 in MPEG-TS | 1/90000 | **2089** | 1024/44100 s |
+    /// | AAC 44100 in MP4 | 1/44100 | 1024 | from `stts`, not from here |
+    /// | AAC 22050 in MP4 | 1/22050 | 1024 | from `stts`, not from here |
+    ///
+    /// The MPEG-TS row is a rounding witness as well as a value: 1024 × 90000 ÷
+    /// 44100 is 2089.79, and the reference prints the truncation.
+    ///
+    /// **One divergence is left open deliberately.** The reference prints
+    /// `duration=N/A` on the *first* packet of an AAC track in Matroska and the
+    /// codec-derived value on every packet after it — reproduced on four files,
+    /// including one with `CodecDelay` patched to zero so no priming is
+    /// involved, and it is per-track rather than per-file. Opus in the same
+    /// container has a duration on its first packet, and so do FLAC in Matroska
+    /// and AAC in MPEG-TS, so the pattern is "the answer comes from the
+    /// configuration rather than from the packet". Reproducing it would mean
+    /// teaching this trait to report *where* its answer came from, to serve one
+    /// field per track. Recorded in `docs/codec/vaco-parse-aac.md` instead.
+    ///
+    /// # `number_of_raw_data_blocks_in_frame`
+    ///
+    /// Counted, at one frame of `frame_length` samples each — ISO/IEC 14496-3
+    /// makes every raw data block a full frame. Unmeasured against the
+    /// reference: no encoder reachable here emits more than one block per
+    /// frame, and [`AdtsHeader::raw_data_blocks`]'s own note records that the
+    /// reference ignores the field for *framing*. Following the specification
+    /// is what D17 asks for where the behaviour is not observable.
+    fn packet_duration(&self, packet: &[u8]) -> Option<vaco_core::Rational> {
+        if let Some(config) = self.config.as_ref() {
+            return duration(config.frame_length(), config.sampling_frequency);
+        }
+        // In-band: walk the frames this payload holds. Each step advances by
+        // `frame_length`, which `AdtsHeader::parse` has already checked is at
+        // least the header length, so the loop is bounded by the payload size.
+        let mut samples = 0u32;
+        let mut rate = 0u32;
+        let mut rest = packet;
+        while let Ok(header) = AdtsHeader::parse(rest) {
+            let step = usize::from(header.frame_length);
+            let Some(next) = rest.get(step..) else { break };
+            samples = samples.saturating_add(
+                u32::from(header.raw_data_blocks).saturating_mul(ADTS_FRAME_SAMPLES),
+            );
+            rate = header.sampling_frequency;
+            rest = next;
+        }
+        duration(samples, rate)
+    }
+}
+
+/// Samples per raw data block in an ADTS frame.
+///
+/// Always 1024: ADTS carries no `frameLengthFlag`, so the 960-sample variant
+/// cannot be signalled in-band at all. The configured path reads
+/// [`AudioSpecificConfig::frame_length`] instead, which does honour it.
+const ADTS_FRAME_SAMPLES: u32 = 1024;
+
+/// `samples / rate` seconds, or `None` for anything that is not a duration.
+pub(crate) fn duration(samples: u32, rate: u32) -> Option<vaco_core::Rational> {
+    let num = i32::try_from(samples).ok()?;
+    let den = i32::try_from(rate).ok()?;
+    if num <= 0 || den <= 0 {
+        return None;
+    }
+    Some(vaco_core::Rational::new(num, den))
 }
 
 /// The next offset at or after `from` that could begin a sync word.

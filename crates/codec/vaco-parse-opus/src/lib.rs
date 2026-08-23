@@ -223,6 +223,64 @@ impl Parser for OpusParser {
         self.set_identification_header(IdentificationHeader::parse(extradata)?);
         Ok(())
     }
+
+    /// Frames × `frame_samples()` over 48 000, straight off the TOC byte.
+    ///
+    /// **This is the only place the number exists.** Matroska writes no
+    /// `DefaultDuration` for an Opus track and no `BlockDuration` on its blocks
+    /// — verified by searching the file for the element ID, not by trusting a
+    /// demuxer — and the reference still reports one packet duration per
+    /// packet. It reads the TOC, and so do we.
+    ///
+    /// Measured against `ffprobe 8.1`, one file per `-frame_duration`, all with
+    /// no `DefaultDuration` present:
+    ///
+    /// | frame | 48 kHz samples | Matroska 1/1000 | MP4 & Ogg 1/48000 |
+    /// |---|---:|---:|---:|
+    /// | 2.5 ms | 120 | **2** | 120 |
+    /// | 5 ms | 240 | 5 | 240 |
+    /// | 10 ms | 480 | 10 | 480 |
+    /// | 20 ms | 960 | 20 | 960 |
+    /// | 40 ms | 1920 | 40 | 1920 |
+    /// | 60 ms | 2880 | 60 | 2880 |
+    ///
+    /// The 2.5 ms row is the one worth keeping: `2`, not `3`. That is the
+    /// truncation the consumer applies, and it is only reachable because this
+    /// method hands back `120/48000` rather than a rounded 2500 µs. See
+    /// [`vaco_codec_core::Parser::packet_duration`].
+    ///
+    /// # 48 kHz always, and the first byte always
+    ///
+    /// The denominator is [`OUTPUT_SAMPLE_RATE`], never the header's
+    /// `input_sample_rate`: Opus decodes at 48 kHz whatever the header
+    /// declares, which is already why the stream reports `sample_rate=48000`.
+    ///
+    /// For a multi-stream packet (mapping family 1, 2 or 255) only the *first*
+    /// sub-stream is read, in its self-delimiting framing. RFC 7845 §3 requires
+    /// every stream in a packet to code the same duration, so the first one
+    /// answers for all of them, and stopping there keeps this allocation-free —
+    /// [`OpusParser::split_streams`] would build a `Vec` per packet on the read
+    /// path.
+    fn packet_duration(&self, packet: &[u8]) -> Option<vaco_core::Rational> {
+        // `stream_count` alone: a plain stereo family-0 stream has
+        // `coupled_count == 1` and is still a single, non-self-delimited
+        // packet.
+        let multistream = self.head.as_ref().is_some_and(|h| h.stream_count > 1);
+        let parsed = if multistream {
+            OpusPacket::parse_self_delimited(packet)
+        } else {
+            OpusPacket::parse(packet)
+        }
+        .ok()?;
+        let samples = i32::try_from(parsed.samples()).ok()?;
+        if samples <= 0 {
+            return None;
+        }
+        Some(vaco_core::Rational::new(
+            samples,
+            i32::try_from(OUTPUT_SAMPLE_RATE).ok()?,
+        ))
+    }
 }
 
 #[cfg(test)]

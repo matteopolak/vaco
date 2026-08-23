@@ -21,7 +21,9 @@
 use libfuzzer_sys::fuzz_target;
 use vaco_core::{Duration, Rational, Timestamp};
 use vaco_format_core::seek::{IndexEntry, PacketIndex, SeekFlags};
-use vaco_format_core::time::{TimestampFixer, WrapState, decode_ts, estimate_duration};
+use vaco_format_core::time::{
+    TimestampFixer, WrapState, decode_ts, estimate_duration, quantise_duration,
+};
 use vaco_format_core::{FFlags, FormatFlags, FormatOptions};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
@@ -48,6 +50,28 @@ struct Input {
 }
 
 fuzz_target!(|input: Input| {
+    // ------------------------------------------------------ R21b quantisation
+    //
+    // Both arguments come from a file: the ratio is what a bitstream parser
+    // read out of a packet, the base is what the container declared. Neither is
+    // checked before it arrives here, and the multiplication is `num × tb.den`
+    // over `den × tb.num` — the shape that overflows if it is done in `i64`.
+    let seconds = Rational::new(input.rate_num, input.rate_den);
+    let base = Rational::new(input.tb_num, input.tb_den);
+    if let Some(d) = quantise_duration(seconds, base) {
+        // A filled-in duration is a duration: positive, and never longer than
+        // the exact value it came from. Truncation towards zero guarantees the
+        // second half; the `+ 1` is the half-microsecond the packet model's
+        // storage may add back.
+        assert!(d.as_micros() > 0, "not a duration: {d:?}");
+        assert!(seconds.num > 0 && seconds.den > 0);
+        let exact_micros = i128::from(seconds.num) * 1_000_000 / i128::from(seconds.den);
+        assert!(
+            i128::from(d.as_micros()) <= exact_micros + 1,
+            "{d:?} exceeds {seconds:?} in {base:?}"
+        );
+    }
+
     // ---------------------------------------------------------- wraparound
     let bits = u32::from(input.wrap_bits);
     let mut wrap = WrapState::new(bits);

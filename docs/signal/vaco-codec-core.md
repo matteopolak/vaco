@@ -271,6 +271,54 @@ An error from it is not fatal to a caller that is merely *offering* a record —
 stream discovery is — because a malformed record means "this told me nothing",
 not "stop reporting the file".
 
+#### `packet_duration`, and why the fact belongs on a *parser*
+
+`Parser::packet_duration(&self, packet: &[u8]) -> Option<Rational>` answers "how
+long is this already-framed packet, in seconds", and defaults to `None`.
+
+The gap it closes is narrow and load-bearing. Matroska writes **no
+`DefaultDuration` element for an Opus track and no `BlockDuration` on its
+blocks** — verified by searching the file for the element ID rather than by
+trusting a demuxer — and `ffprobe` still prints 20 ms per packet, because it
+reads Opus's own TOC byte. D14.1 forbids `vaco-demux-matroska` from naming
+`vaco-parse-opus`, and the only seam it has onto codec code is `ParserProvider`,
+which hands back a `dyn Parser`. So the answer arrives through this trait or it
+does not arrive at all.
+
+Four shape decisions, each with the measurement that forced it:
+
+* **Seconds, exactly, as a `Rational`.** The consumer truncates into the
+  stream's time base (see `vaco-format-core`'s `quantise_duration`), so an input
+  that has already been rounded is wrong half a tick of the time. A 2.5 ms Opus
+  packet on Matroska's 1 ms base is exactly that case: from `120/48000` the
+  answer is 2, which is what the reference prints, and from a
+  microsecond-rounded 2500 it is 3.
+* **Not "samples".** A sample count needs a rate, and the rate a caller has is
+  the one the *container* reports — wrong for both codecs that implement this.
+  Opus always runs at 48 kHz whatever `input_sample_rate` says, and an SBR AAC
+  stream reports the *extension* rate while its frames are counted at the core
+  rate. Dividing inside the parser makes 1024 core samples at 22050 Hz and 2048
+  output samples at 44100 Hz the same value, so SBR stops being a special case
+  anywhere else in the tree.
+* **Not a `fn` field on `ParserDesc`.** That would be inspectable without
+  constructing a parser, which is the registry's preference — but AAC's answer
+  lives in an `AudioSpecificConfig` the parser was handed by `set_extradata`, so
+  a free function cannot produce it.
+* **Not ticks of a caller-supplied base.** That would put the truncation rule —
+  a reference-matching decision, not a codec one — inside every parser instead
+  of in one place. D19.
+
+`&self`, and defaulted. It is a question, not a step: callable once per packet
+on the read path without advancing state, without allocating, and without the
+caller having fed the same bytes to `parse` first. The default is what keeps the
+change additive across the five crates that implement `Parser` — three of them
+(H.264, HEVC, AV1) have nothing to say, because a video packet's duration is the
+container's statement.
+
+A malformed packet is `None`, never an error and never a panic. The caller is
+filling in a field the container left blank; a packet it cannot measure is one
+it reports without a duration, which is what the container said.
+
 ### Registering a parser: `ParserDesc`
 
 The counterpart of `DecoderDesc`, and the descriptor type the registry's
@@ -481,6 +529,10 @@ actually consumes:
 
 ## Testing
 
+* `tests/parser.rs` — the driver's reassembly, end-of-stream and progress rules,
+  plus the two defaulted trait methods: `set_extradata` must be harmless when
+  ignored, and `packet_duration` must default to `None` and forward through
+  `Box<dyn Parser>` — the only way a provider-supplied parser is ever reached.
 * `tests/protocol.rs` — every state transition, both violation kinds caught, and
   the panic mode itself.
 * `tests/proptest_sendreceive.rs` — arbitrary legal call sequences against the

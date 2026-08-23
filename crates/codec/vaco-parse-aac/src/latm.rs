@@ -511,6 +511,36 @@ impl Parser for LoasParser {
     fn parameters(&self) -> Option<&CodecParameters> {
         self.params.as_ref()
     }
+
+    /// `numSubFrames × frame_length` samples over the first layer's core rate.
+    ///
+    /// A LOAS `AudioSyncStream` frame carries `numSubFrames + 1` `PayloadMux()`
+    /// elements, each one AAC frame, so a frame is that many frames long. The
+    /// rate and the frame length come from the `StreamMuxConfig` rather than
+    /// from the packet: `useSameStreamMux` lets a frame omit the configuration
+    /// entirely, so the last one read is the only reliable source, and a parser
+    /// that has not yet seen one answers `None` rather than guessing 1024.
+    ///
+    /// `allStreamsSameTimeFraming` is what makes reading only the first layer
+    /// sound. When it is set — which it is for every ordinary AAC-in-LATM
+    /// stream — every layer codes the same span of time, so layer zero answers
+    /// for all of them. When it is clear the layers are independently timed and
+    /// there is no single packet duration to report; we still report layer
+    /// zero's, which is the reference's own answer for the case and is what a
+    /// muxer would have written.
+    ///
+    /// Measured against `ffprobe 8.1` on `-f latm` output — see
+    /// `docs/codec/vaco-parse-aac.md` for the numbers.
+    fn packet_duration(&self, packet: &[u8]) -> Option<vaco_core::Rational> {
+        let _ = packet;
+        let config = self.config.as_ref()?;
+        let asc = config.primary_config()?;
+        let frames = u32::from(config.sub_frames).max(1);
+        crate::adts::duration(
+            frames.saturating_mul(asc.frame_length()),
+            asc.sampling_frequency,
+        )
+    }
 }
 
 /// The next offset at or after `from` whose byte could begin a sync word.

@@ -112,7 +112,7 @@ where
         if name == "h" {
             help::render(out, cli.listing_value.as_deref()).map_err(listing::io_diagnostic)?;
         } else {
-            listing::render(out, name)?;
+            listing::render(out, name, cli.listing_value.as_deref())?;
         }
         return Ok(ExitCode::OK);
     }

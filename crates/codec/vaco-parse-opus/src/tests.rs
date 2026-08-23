@@ -543,8 +543,130 @@ fn parser_passes_packets_through() {
 
 // -------------------------------------------------------------- properties
 
+// ------------------------------------------------ Parser::packet_duration
+
+/// `seconds` in ticks of a `1/den` base, truncated towards zero exactly as
+/// `vaco_format_core::time::quantise_duration` does.
+fn ticks(seconds: vaco_core::Rational, den: i64) -> i64 {
+    i64::from(seconds.num)
+        .checked_mul(den)
+        .and_then(|n| n.checked_div(i64::from(seconds.den)))
+        .unwrap_or(0)
+}
+
+/// One TOC byte per `-frame_duration` libopus accepts, mono, code 0.
+///
+/// `config` is chosen so `frame_samples()` gives the stated size; the low three
+/// bits are `s=0, code=0`.
+const FRAME_SIZE_TOCS: &[(u8, u32, i32)] = &[
+    // CELT fullband: configs 28..=31 step 2.5/5/10/20 ms.
+    (28 << 3, 120, 2),  // 2.5 ms -> 2 ticks on a 1 ms base, NOT 3
+    (29 << 3, 240, 5),  // 5 ms
+    (30 << 3, 480, 10), // 10 ms
+    (31 << 3, 960, 20), // 20 ms
+    // SILK wideband: configs 8..=11 step 10/20/40/60 ms.
+    (10 << 3, 1920, 40), // 40 ms
+    (11 << 3, 2880, 60), // 60 ms
+];
+
+/// Every libopus frame size, in 48 kHz samples, straight off the TOC.
+///
+/// measured: `ffprobe 8.1` on six `-frame_duration` files, none of which
+/// contains a `DefaultDuration` element — see the table on
+/// `<OpusParser as Parser>::packet_duration`.
+#[test]
+fn packet_duration_is_frames_over_48000() {
+    let parser = OpusParser::new(Limits::strict());
+    for &(toc, samples, ticks_at_1ms) in FRAME_SIZE_TOCS {
+        let packet = [toc, 0x11, 0x22, 0x33];
+        let d = parser.packet_duration(&packet).expect("a duration");
+        assert_eq!(d.num, i32::try_from(samples).unwrap(), "toc {toc:#04x}");
+        assert_eq!(d.den, 48000);
+        // And what the consumer makes of it on Matroska's base. The 2.5 ms row
+        // is the one that distinguishes truncation from rounding.
+        assert_eq!(ticks(d, 1000), i64::from(ticks_at_1ms), "toc {toc:#04x}");
+    }
+}
+
+/// The denominator is the output rate, never the header's `input_sample_rate`.
+#[test]
+fn packet_duration_ignores_the_declared_input_rate() {
+    let mut parser = OpusParser::new(Limits::strict());
+    // `OpusHead` declaring 8000 Hz input. Opus still runs at 48 kHz.
+    parser
+        .set_extradata(b"OpusHead\x01\x01\x38\x01\x40\x1f\0\0\0\0\0")
+        .expect("head");
+    let d = parser
+        .packet_duration(&[31 << 3, 0x11])
+        .expect("a duration");
+    assert_eq!((d.num, d.den), (960, 48000));
+}
+
+/// A code-3 CBR packet lasts frame count × frame size, up to the 120 ms cap.
+#[test]
+fn packet_duration_counts_the_frames_a_code_3_packet_declares() {
+    let parser = OpusParser::new(Limits::strict());
+    // config 31 (20 ms), code 3, CBR, no padding, three frames of one byte.
+    let packet = [(31 << 3) | 3, 3, 0xaa, 0xbb, 0xcc];
+    let d = parser.packet_duration(&packet).expect("a duration");
+    assert_eq!((d.num, d.den), (2880, 48000));
+}
+
+/// A multi-stream packet is read in the self-delimiting framing, and every
+/// stream in it codes the same duration (RFC 7845 §3), so the first answers.
+///
+/// measured: a 5.1 libopus track in Matroska (`stream_count=4`) reports
+/// `duration=20` per packet in `ffprobe 8.1`, and so do we.
+#[test]
+fn packet_duration_reads_the_first_substream_of_a_multistream_packet() {
+    let mut parser = OpusParser::new(Limits::strict());
+    // Mapping family 1, two streams, one coupled, three channels.
+    let head = [
+        b'O', b'p', b'u', b's', b'H', b'e', b'a', b'd', //
+        1,    // version
+        3,    // channel_count
+        0x38, 0x01, // pre_skip = 312
+        0x80, 0xbb, 0x00, 0x00, // input_sample_rate = 48000
+        0x00, 0x00, // output_gain
+        1,    // mapping_family
+        2,    // stream_count
+        1,    // coupled_count
+        0, 1, 2, // channel mapping
+    ];
+    parser.set_extradata(&head).expect("head");
+    // Stream 0: TOC, self-delimited length 2, two bytes. Stream 1 takes the rest.
+    let packet = [31 << 3, 2, 0xaa, 0xbb, 31 << 3, 0xcc, 0xdd];
+    let d = parser.packet_duration(&packet).expect("a duration");
+    assert_eq!((d.num, d.den), (960, 48000));
+}
+
+/// A packet that does not frame is reported as unmeasurable, not as an error.
+#[test]
+fn packet_duration_refuses_a_malformed_packet() {
+    let parser = OpusParser::new(Limits::strict());
+    assert_eq!(parser.packet_duration(&[]), None);
+    // Code 1 demands an even payload; three bytes cannot split in two.
+    assert_eq!(parser.packet_duration(&[(31 << 3) | 1, 1, 2, 3]), None);
+    // Code 3 declaring zero frames.
+    assert_eq!(parser.packet_duration(&[(31 << 3) | 3, 0]), None);
+}
+
 proptest! {
     /// No byte string may panic any of the parsers.
+    /// `packet_duration` is total, bounded, and never longer than the 120 ms
+    /// RFC 6716 §3.2.5 allows — over arbitrary bytes, with and without a
+    /// header, and in both framings.
+    #[test]
+    fn packet_duration_is_total_and_bounded(data: Vec<u8>, head: Vec<u8>) {
+        let mut parser = OpusParser::new(Limits::strict());
+        let _ = parser.set_extradata(&head);
+        if let Some(d) = parser.packet_duration(&data) {
+            prop_assert!(d.num > 0);
+            prop_assert_eq!(d.den, i32::try_from(OUTPUT_SAMPLE_RATE).unwrap());
+            prop_assert!(d.num <= i32::try_from(crate::packet::MAX_PACKET_SAMPLES).unwrap());
+        }
+    }
+
     #[test]
     fn parsers_never_panic(data: Vec<u8>) {
         let _ = IdentificationHeader::parse(&data);

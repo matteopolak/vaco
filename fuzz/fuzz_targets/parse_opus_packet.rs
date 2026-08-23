@@ -22,8 +22,10 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
+use vaco_codec_core::Parser;
+use vaco_limits::Limits;
 use vaco_parse_opus::packet::{MAX_PACKET_SAMPLES, OpusPacket};
-use vaco_parse_opus::{MAX_FRAME_BYTES, split_streams};
+use vaco_parse_opus::{MAX_FRAME_BYTES, OpusParser, split_streams};
 
 fn within(outer: &[u8], inner: &[u8]) -> bool {
     let base = outer.as_ptr() as usize;
@@ -55,6 +57,27 @@ fuzz_target!(|data: &[u8]| {
         assert!(packet.len > 0);
         for frame in &packet.frames {
             assert!(within(data, frame));
+        }
+    }
+
+    // `packet_duration` on the read path: it is called once per packet by
+    // `Discovery`, on bytes nothing has validated, and it must be total. The
+    // bound is RFC 6716 §3.2.5's 120 ms, which is also what stops a code-3
+    // frame count from multiplying into a nonsense duration.
+    for seed in [false, true] {
+        let mut parser = OpusParser::new(Limits::strict());
+        if seed {
+            // The same bytes offered as an `OpusHead`, so the multi-stream
+            // branch is reachable whenever they happen to parse as one.
+            let _ = parser.set_extradata(data);
+        }
+        if let Some(d) = parser.packet_duration(data) {
+            assert!(d.num > 0, "not a duration: {d:?}");
+            assert_eq!(d.den, 48000, "Opus runs at 48 kHz and nothing else");
+            assert!(
+                d.num as u32 <= MAX_PACKET_SAMPLES,
+                "{d:?} exceeds the 120 ms a packet may carry"
+            );
         }
     }
 

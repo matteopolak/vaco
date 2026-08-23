@@ -39,7 +39,7 @@
 use std::collections::VecDeque;
 
 use vaco_codec_core::{CodecId, Parser, ParserDriver};
-use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
+use vaco_core::{Duration, Error, MediaType, Rational, Result, TimeBase, Timestamp};
 use vaco_limits::{Limits, ProgressGuard};
 use vaco_packet::Packet;
 
@@ -333,11 +333,41 @@ impl<D: Demuxer> Discovery<D> {
             return;
         };
         let time_base = stream.time_base;
+        // Read before the parser runs, so R21's input is exactly what it was
+        // before R21b existed. `refine` can fill `params.video.frame_rate` in,
+        // and letting that reach the *same* packet's duration fill-in would be
+        // a behaviour change nothing here asked for.
         let rate = stream
             .params
             .video
             .as_ref()
             .map_or(Rational::ZERO, |v| v.frame_rate);
+
+        // Refine parameters from the payload, without decoding it.
+        //
+        // Ahead of `fix` so that R21b — the codec's own packet duration, filled
+        // in just below — is in place before the timestamp rules read
+        // `pkt.duration`. R21 skips a packet that already has one, R22's
+        // `last_duration` becomes the real step instead of 1, and
+        // `analyzed_us`/`last_end` stop under-counting an audio stream whose
+        // container states no duration at all.
+        let cap = u32::try_from(self.opts.max_probe_packets).unwrap_or(u32::MAX);
+        if !self.opts.fflags.contains(crate::options::FFlags::NOPARSE)
+            && st.parser_packets < cap
+            && let Some(id) = stream.params.codec_id
+            && self.opts.codec_allowed(id.name())
+        {
+            st.parser_packets = st.parser_packets.saturating_add(1);
+            if !st.parser_asked {
+                st.parser_asked = true;
+                *slot = build_parser(stream, id, parsers, limits);
+            }
+            if let Some(driver) = slot.as_mut() {
+                refine(stream, driver, pkt.payload());
+            }
+        }
+        fill_codec_duration(slot, pkt, time_base);
+
         self.fixer.fix(pkt, time_base, rate);
 
         st.packets = st.packets.saturating_add(1);
@@ -370,23 +400,6 @@ impl<D: Demuxer> Discovery<D> {
         }
         if pkt.dts.is_some() {
             st.last_dts = pkt.dts;
-        }
-
-        // Refine parameters from the payload, without decoding it.
-        let cap = u32::try_from(self.opts.max_probe_packets).unwrap_or(u32::MAX);
-        if !self.opts.fflags.contains(crate::options::FFlags::NOPARSE)
-            && st.parser_packets < cap
-            && let Some(id) = stream.params.codec_id
-            && self.opts.codec_allowed(id.name())
-        {
-            st.parser_packets = st.parser_packets.saturating_add(1);
-            if !st.parser_asked {
-                st.parser_asked = true;
-                *slot = build_parser(stream, id, parsers, limits);
-            }
-            if let Some(driver) = slot.as_mut() {
-                refine(stream, driver, pkt.payload());
-            }
         }
 
         // A stream is complete once it has parameters, a first timestamp and
@@ -636,6 +649,46 @@ fn build_parser(
     Some(driver)
 }
 
+/// R21b — fill in a packet duration the container did not state, from the
+/// codec's own bitstream.
+///
+/// The container wins whenever it said anything: this only ever writes over
+/// `Duration::ZERO`, which is the model's spelling of "absent". A `BlockDuration`,
+/// an `stts` delta or a `DefaultDuration` therefore stands untouched, and so does
+/// a duration an earlier call already filled in.
+///
+/// # Why here and not in the demuxer
+///
+/// D14.1 forbids `vaco-demux-matroska` from naming `vaco-parse-opus`, and the
+/// number is not in the Matroska file: an Opus track carries no
+/// `DefaultDuration` element at all, so there is nothing for the demuxer to
+/// misread. `Discovery` already holds one parser per stream, already seeded from
+/// the container's configuration record by [`build_parser`], and is already
+/// wrapped around every demuxer `vaco-probe` opens — so putting the rule here
+/// covers every container at once and costs the callers nothing. It is the same
+/// argument that put `start_time` here.
+///
+/// # Cost
+///
+/// One `&self` call per packet, on the read path, over attacker-controlled
+/// bytes. [`vaco_codec_core::Parser::packet_duration`] is specified to allocate
+/// nothing, advance nothing and never fail — the parser is *not* driven, so the
+/// packet is not copied into a `Packet` and no [`vaco_limits::Budget`] moves.
+/// A parser that cannot measure the packet says so and the field stays absent,
+/// which is what the container said.
+fn fill_codec_duration(slot: &ParserSlot, pkt: &mut Packet, time_base: TimeBase) {
+    if pkt.duration != Duration::ZERO {
+        return;
+    }
+    let Some(driver) = slot.as_ref() else { return };
+    let Some(seconds) = driver.parser().packet_duration(pkt.payload()) else {
+        return;
+    };
+    if let Some(d) = crate::time::quantise_duration(seconds, time_base) {
+        pkt.duration = d;
+    }
+}
+
 /// Feed one payload to a stream's parser and fold back what it learned.
 ///
 /// The direction is load-bearing: the container's own metadata wins and the
@@ -707,6 +760,11 @@ impl<D: Demuxer> Demuxer for Discovery<D> {
                         .map_or(Rational::ZERO, |v| v.frame_rate),
                 )
             });
+        if let Ok(i) = usize::try_from(pkt.stream_index)
+            && let Some(slot) = self.parsers.get(i)
+        {
+            fill_codec_duration(slot, &mut pkt, tb);
+        }
         self.fixer.fix(&mut pkt, tb, rate);
         Ok(pkt)
     }
@@ -1051,6 +1109,118 @@ mod tests {
             1,
             "one parser per stream, however many packets it sees"
         );
+    }
+
+    // ------------------------------------------------------- R21b, end to end
+
+    /// A parser that states a packet duration and nothing else.
+    ///
+    /// 120 samples at 48 kHz is a 2.5 ms Opus packet, which is exactly half a
+    /// tick of `MockDemuxer`'s 1/1000 base — the case that separates the
+    /// reference's truncation from rounding, and the reason
+    /// `Parser::packet_duration` returns an exact ratio rather than a
+    /// microsecond count.
+    #[derive(Debug, Default)]
+    struct TimedParser;
+
+    impl vaco_codec_core::Parser for TimedParser {
+        fn parse(&mut self, input: &[u8]) -> Result<(Option<Packet>, usize)> {
+            Ok((None, input.len()))
+        }
+        fn parameters(&self) -> Option<&vaco_codec_core::CodecParameters> {
+            None
+        }
+        fn packet_duration(&self, packet: &[u8]) -> Option<Rational> {
+            (!packet.is_empty()).then(|| Rational::new(120, 48000))
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct TimedProvider;
+
+    impl ParserProvider for TimedProvider {
+        fn parser_for(&self, _codec: CodecId) -> Option<Box<dyn vaco_codec_core::Parser>> {
+            Some(Box::new(TimedParser))
+        }
+    }
+
+    /// R21b — the codec's own duration reaches the packet, truncated into the
+    /// stream's time base.
+    ///
+    /// This is the gap the Matroska/Opus measurement exposed: the container
+    /// carries no `DefaultDuration` element and no `BlockDuration`, so nothing
+    /// downstream can derive the 20 ms the reference prints. `Discovery` owns
+    /// the parsers, so this is where it lands.
+    #[test]
+    fn a_codec_packet_duration_reaches_every_packet() {
+        let inner = MockDemuxer::new(1, MediaType::Audio).with_packets(6);
+        let mut d = Discovery::new(inner, FormatFlags::empty(), &opts());
+        d.run(&TimedProvider).unwrap();
+        for n in 0..6 {
+            let p = d.read_packet().unwrap();
+            // 2.5 ticks truncated, not rounded: 2. Stored as 2000 µs.
+            assert_eq!(p.duration.as_micros(), 2000, "packet {n}");
+            assert_eq!(p.duration.to_ticks(Rational::new(1, 1000)), Some(2));
+        }
+    }
+
+    /// The packets read *after* the discovery prefix get it too, from the
+    /// parser the prefix built. A rule that only applied to the replay queue
+    /// would fill in the first few packets of a file and no others.
+    #[test]
+    fn the_duration_survives_past_the_discovery_prefix() {
+        let mut o = opts();
+        o.max_probe_packets = 2;
+        let inner = MockDemuxer::new(1, MediaType::Audio).with_packets(40);
+        let mut d = Discovery::new(inner, FormatFlags::empty(), &o);
+        d.run(&TimedProvider).unwrap();
+        let mut seen = 0;
+        while let Ok(p) = d.read_packet() {
+            assert_eq!(p.duration.as_micros(), 2000, "packet {seen}");
+            seen += 1;
+        }
+        assert_eq!(seen, 40);
+    }
+
+    /// The container wins. `BlockDuration`, an `stts` delta and a
+    /// `DefaultDuration` are all statements the file made, and R21b only ever
+    /// writes over the model's spelling of "absent".
+    #[test]
+    fn a_stated_duration_is_never_overwritten() {
+        #[derive(Debug)]
+        struct Stating(MockDemuxer);
+        impl Demuxer for Stating {
+            fn streams(&self) -> &[Stream] {
+                self.0.streams()
+            }
+            fn read_packet(&mut self) -> Result<Packet> {
+                let mut p = self.0.read_packet()?;
+                p.duration = Duration::from_micros(40_000);
+                Ok(p)
+            }
+            fn seek(&mut self, t: crate::SeekTarget, f: crate::SeekFlags) -> Result<()> {
+                self.0.seek(t, f)
+            }
+        }
+        let inner = Stating(MockDemuxer::new(1, MediaType::Audio).with_packets(4));
+        let mut d = Discovery::new(inner, FormatFlags::empty(), &opts());
+        d.run(&TimedProvider).unwrap();
+        for _ in 0..4 {
+            assert_eq!(d.read_packet().unwrap().duration.as_micros(), 40_000);
+        }
+    }
+
+    /// No parser, no duration — and no failure. A build with
+    /// `--no-default-features` reports what the container stated, which is what
+    /// `NoParsers` exists to keep testable.
+    #[test]
+    fn no_parser_leaves_the_duration_absent() {
+        let inner = MockDemuxer::new(1, MediaType::Audio).with_packets(4);
+        let mut d = Discovery::new(inner, FormatFlags::empty(), &opts());
+        d.run(&NoParsers).unwrap();
+        for _ in 0..4 {
+            assert_eq!(d.read_packet().unwrap().duration, Duration::ZERO);
+        }
     }
 
     /// `fflags=noparse` must still mean no parser is even asked for.

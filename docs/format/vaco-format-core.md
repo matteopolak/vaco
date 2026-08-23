@@ -248,6 +248,13 @@ A record that fails to parse is not fatal. Discovery is *offering* the parser
 whatever the container happened to carry; a malformed record means "this told me
 nothing", and the container's own fields still stand.
 
+The parser held here is used for **two** things, not one: `refine` drives it to
+learn stream parameters, and `fill_codec_duration` asks it — through
+`Parser::packet_duration`, `&self`, without driving it — how long each packet
+is. See R21b under *Timestamps*. That second use is why the parser is reached
+again on every packet past the discovery prefix, in `read_packet`, where the
+first use has long since stopped.
+
 `Discovery` therefore has a hand-written `Debug`: a `Box<dyn Parser>` is not
 `Debug`, and the parsers are summarised by how many were built.
 
@@ -282,6 +289,105 @@ therefore applies the pivot to the **first** value only — the only one with no
 history to take a delta against — and folds it into the offset. Everything after
 it is delta tracking in raw space. A property test walks a wrapping clock across
 three periods and asserts strict monotonicity with the delta preserved exactly.
+
+#### R21b — the codec's own packet duration
+
+R21 fills a missing duration from the stream's frame rate, which answers for
+video and for nothing else: an audio stream's `avg_frame_rate` is `0/0`, and the
+reference prints `0/0` for it too. R21b is the other source — the *codec's*
+statement — and it closed the largest single gap in the `[PACKET]` section.
+
+**The gap.** Matroska writes no `DefaultDuration` element for an Opus track and
+no `BlockDuration` on its blocks. The element is absent from the file, so there
+is nothing for `vaco-demux-matroska` to have misread; the reference derives
+20 ms from Opus's own TOC byte. The same holds for AAC, which has no in-band
+header in Matroska at all and whose frame length lives in `CodecPrivate`.
+
+**Where it lives, and why here.** `Discovery` already holds one parser per
+stream, already seeded from the container's configuration record by
+`build_parser`, and is already wrapped around every demuxer `vaco-probe` opens.
+D14.1 forbids the demuxer from naming a codec crate, so the rule cannot live
+there; `TimestampFixer` is a pure state machine over `(stream_index, pts, dts,
+duration)` with no parser and no payload, so it cannot live there either — and
+making it carry `Box<dyn Parser>` would cost it both its `Clone` and its derived
+`Debug`. `Discovery::absorb` and `Discovery::read_packet` therefore both call
+one private `fill_codec_duration`, so the prefix and the tail behave the same.
+
+`absorb`'s parser block moved **ahead** of `fixer.fix` to make that work, with
+the frame rate read out first so R21's input is byte-for-byte what it was
+before. Two things improve as a side effect: R22's `last_duration` becomes the
+real step instead of 1, and `analyzed_us`/`last_end` stop under-counting an
+audio stream whose container states no duration at all.
+
+**The container always wins.** `fill_codec_duration` only ever writes over
+`Duration::ZERO`, the model's spelling of "absent", so a `BlockDuration`, an
+`stts` delta or a `DefaultDuration` stands untouched.
+
+**The quantisation is the measured half.** `time::quantise_duration` truncates
+the parser's exact `Rational` towards zero into the stream's time base.
+Three independent measurements, each on a file whose container states nothing:
+
+| input | exact ticks | `ffprobe 8.1` | nearest would give |
+|---|---:|---:|---:|
+| 960 samples @48 kHz, base 3/1000 | 6.667 | **6** | 7 |
+| 960 samples @48 kHz, base 7/10000 | 28.571 | **28** | 29 |
+| 1024 samples @44.1 kHz, base 1/90000 | 2089.79 | **2089** | 2090 |
+
+The first two are a Matroska `TimecodeScale` patched to 3 ms and to 0.7 ms; the
+third is an ordinary `-f mpegts` file, so truncation is not a Matroska rule.
+
+**Why the parser's answer has to be exact.** A 2.5 ms Opus packet is exactly
+half a Matroska tick. From `120/48000` the truncation gives 2, which is what the
+reference prints. From a microsecond-rounded 2500 it gives 3. Half a tick of
+error changes the answer whenever the exact value lands just below an integer,
+which is most of the time for a 1024-sample frame against a 1 ms base. That is
+the entire argument for `Parser::packet_duration` returning a `Rational` rather
+than a `Duration`.
+
+**Where the packet model still loses.** `Packet::duration` is microseconds, so
+the tick count is stored as its microsecond equivalent and recovered by the
+printer's round-to-nearest. That round trip is exact for **every time base whose
+tick is longer than 2 µs** — 1/1000, 1/44100, 1/48000, 1/90000, 1/1000000, which
+is every container base in the corpus. It is not exact for a finer one: 655360
+ticks of 1/28224000, which is what a raw ADTS stream reports, stores as 23220 µs
+and reads back as 655361. No demuxer in the tree produces such a base, and
+`the_microsecond_round_trip_is_exact_above_two_microseconds` pins both halves so
+a future tick-valued `Packet::duration` deletes an assertion rather than
+discovering a problem. `quantise_duration` also refuses a positive tick count
+that rounds to *zero* microseconds, because `Duration::ZERO` means absent and
+returning it would be a duration that silently vanished — found by the
+`format_timestamps` fuzz target, not by review.
+
+**Measured, on an eleven-file corpus** (`-of json -show_packets
+-read_intervals '%+#40'`, all eleven `[PACKET]` field values compared packet by
+packet against `ffprobe 8.1`):
+
+| | before | after |
+|---|---|---|
+| `duration` | 191 / 420 | **360 / 420** |
+| `duration_time` | 191 / 420 | **360 / 420** |
+| all fields, Matroska/WebM | 2454 / 2860 | **2792 / 2860** |
+| all fields, MP4 | 1320 / 1320 | 1320 / 1320 |
+| all fields, MPEG-TS | 98 / 440 | 98 / 440 |
+| all fields, total | 3872 / 4620 | **4210 / 4620** |
+
+Per file, `duration` alone: `opus.mka` 0/40 → 40/40, `opus.webm` 0/40 → 40/40,
+`op_st.webm` 13/40 → 40/40, `av.mkv` 16/40 → 40/40, `aac.mka` 1/40 → 39/40. MP4
+is unchanged at 40/40 on every file, which is the regression that mattered:
+`stts` states a duration and the container still wins.
+
+Two files did not move, and both name a gap elsewhere:
+
+* **`flac.mka` 0/20.** FLAC in Matroska has exactly the same gap — no
+  `DefaultDuration`, and the reference reports 104 ms from the in-band frame
+  header — but there is no `vaco-parse-flac` in the tree. The seam now exists,
+  so that crate closes this for free when it lands.
+* **`av.ts` 1/40.** `vaco-demux-mpegts` hands over whole PES payloads rather
+  than codec frames: one packet of 2836 bytes where the reference emits
+  thirteen of ~265. Our duration for it is 27167 ticks, which is exactly
+  thirteen frames and therefore *correct for the packet as framed* — the
+  divergence is the framing, not the number. The video half is the separately
+  recorded field-rate-for-frame-rate halving (1800 against 3600).
 
 ### Seeking
 
@@ -549,6 +655,12 @@ descending order of how much they cost.
 * **`vaco-codec-core`: `Parser::set_extradata` — done.** The trait grew a
   defaulted `set_extradata(&[u8]) -> Result<()>`, which is what makes a parser
   useful at all in MP4 and Matroska. See *How a parser is reached* above.
+* **`vaco-codec-core`: `Parser::packet_duration` — done.** A defaulted
+  `packet_duration(&self, &[u8]) -> Option<Rational>`, returning an exact
+  duration in seconds. It is what closes R21b: Matroska states no duration for
+  an Opus or AAC track, so the number only exists in the bitstream, and D14.1
+  keeps the demuxer from reaching it directly. See R21b under *Timestamps* for
+  the measurements and for why the return type is an exact ratio.
 * **`vaco-codec-core`: `impl Parser for Box<dyn Parser>` — done.** The
   orchestrator added `impl<P: Parser + ?Sized> Parser for Box<P>`, so
   `ParserDriver<P>` now accepts what `ParserProvider::parser_for` returns.
@@ -589,6 +701,15 @@ descending order of how much they cost.
   project.
 
 ### What the generated tests found
+
+**`format_timestamps` (fuzz), on the R21b widening.** `quantise_duration` could
+return `Some(Duration::ZERO)` for a positive tick count on a time base finer
+than 2 µs a tick. `Duration::ZERO` is the model's spelling of *absent*, so the
+value would have been a duration that silently disappeared one line later. The
+target asserts the postcondition — a filled-in duration is positive and never
+longer than the exact ratio it came from — and found it in under a minute;
+review had not. `exit=0 execs=#1579527` after the fix, with
+`find fuzz/artifacts -type f` empty.
 
 **`format_timestamps` (fuzz), first run.** R22's monotonic repair could saturate
 at `i64::MAX` and then claim to have repaired a stream it had left
