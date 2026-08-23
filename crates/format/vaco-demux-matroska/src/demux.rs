@@ -944,7 +944,9 @@ impl MatroskaDemuxer {
                 }
                 el::CHANNELS => channels = ebml::as_uint(child.data).unwrap_or(1),
                 el::BITDEPTH => {
-                    a.bits_per_raw_sample = ebml::as_uint(child.data)
+                    // `BitDepth` is the container's stored depth, so it is
+                    // `bits_per_coded_sample`. See the field's docs.
+                    a.bits_per_coded_sample = ebml::as_uint(child.data)
                         .and_then(|v| u8::try_from(v).ok())
                         .filter(|&v| v > 0);
                 }

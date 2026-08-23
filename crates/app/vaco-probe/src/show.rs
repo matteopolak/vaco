@@ -405,11 +405,32 @@ fn field_order_name(order: Option<vaco_codec_core::FieldOrder>) -> &'static str 
     }
 }
 
-/// Bits per *decoded* sample, which the reference reports as 0 for every
-/// compressed audio codec and as the container's word size for PCM.
+/// `bits_per_sample`: a function of the **codec**, not of the container.
 ///
-/// `CodecParameters` has no field for it and PCM's variants are not modelled
-/// separately yet, so this reports 0 — matching every non-PCM observation.
+/// This looks like it should read the container's stored depth and it must not.
+/// Measured:
+///
+/// ```text
+///                 bits_per_sample  bits_per_raw_sample  stsd sample_size
+/// pcm_s16le wav        16                N/A                  16
+/// pcm_s24le mov        24                 24                  16
+/// aac       mp4         0                N/A                  16
+/// ```
+///
+/// AAC's sample entry says 16 and the reference prints **0**; `pcm_s24le`'s
+/// sample entry also says 16 and the reference prints **24**. Neither follows
+/// the container. Both follow the codec: zero for anything compressed, and the
+/// PCM flavour's own depth for PCM — which the sample entry's *fourcc*
+/// (`in24`) states, not its `sample_size` field.
+///
+/// So this reports 0 for every codec Vaco models today, which is exact for all
+/// of them except PCM. `CodecId::Pcm` is one variant covering every flavour;
+/// giving it the flavours is what unblocks `pcm_s24le`, and this comment is the
+/// note to find when someone does.
+///
+/// Briefly wired to the container's depth while fixing the neighbouring
+/// `bits_per_raw_sample` bug, which regressed AAC from 0 to 16. Reverted after
+/// measuring — recorded here so it is not rediscovered as an improvement.
 const fn bits_per_sample(codec: Option<CodecId>) -> u32 {
     let _ = codec;
     0
@@ -428,33 +449,24 @@ const fn bits_per_sample(codec: Option<CodecId>) -> u32 {
 /// av1.mp4  av1  yuv420p     -> bits_per_raw_sample="N/A"
 /// ```
 ///
-/// # The float suppression, and the crate-level defect behind it
+/// # There used to be a float heuristic here
 ///
-/// `vaco-demux-mp4` and `vaco-demux-matroska` both fill
-/// `AudioParameters::bits_per_raw_sample` from the container's own sample
-/// depth — MP4's `stsd` sample entry `sample_size`, Matroska's `BitDepth` — so
-/// an AAC track reports 16 and an Opus track reports 32. The reference reports
-/// `N/A` for both. That number is not wrong, it is in the **wrong field**:
-/// probed on a WAV, `pcm_s16le` prints `bits_per_sample=16` and
-/// `bits_per_raw_sample="N/A"`, so the container's depth is
-/// `bits_per_coded_sample`, which `CodecParameters` has nowhere to put.
+/// The demuxers filed the container's sample depth as `bits_per_raw_sample`, so
+/// an AAC track reported 16 and an Opus track 32 where the reference reports
+/// `N/A`. This function papered over it by suppressing the value whenever the
+/// decoded sample format was floating point — true of every affected stream,
+/// and true for the wrong reason.
 ///
-/// Until it does, this suppresses the value for a stream whose decoded sample
-/// format is **floating point**. A raw-sample bit count is meaningless for a
-/// float decoder, and every float-output stream measured — AAC in MP4, MOV,
-/// Matroska and `MPEG-TS`, Opus in Matroska and `WebM` — reports `N/A`. Integer
-/// audio is untouched: `pcm_s24le` in MOV reports `24` and must keep doing so.
-/// Reported upstream rather than being called a fix; see the doc file.
+/// `AudioParameters::bits_per_coded_sample` now exists and the demuxers fill
+/// that instead, so the heuristic is gone and this is a plain read. Worth
+/// noting because the heuristic *worked*: every case it was measured against
+/// came out right, which is exactly what makes that kind of fix hard to
+/// dislodge later.
 fn bits_per_raw_sample(p: &CodecParameters) -> Option<u8> {
     if let Some(v) = p.video.as_ref() {
         return v.bits_per_raw_sample;
     }
-    let audio = p.audio.as_ref()?;
-    let bits = audio.bits_per_raw_sample?;
-    if audio.format.is_some_and(vaco_sampfmt::SampleFmt::is_float) {
-        return None;
-    }
-    Some(bits)
+    p.audio.as_ref()?.bits_per_raw_sample
 }
 
 /// `codec_tag_string`: printable ASCII kept, everything else as `[n]`.
@@ -835,33 +847,42 @@ mod tests {
         assert_eq!(field("nal_length_size").absent, crate::fields::Absent::Omit);
     }
 
-    /// `bits_per_raw_sample` is a codec property, and the container's own
-    /// sample depth is a *different* field the model cannot yet hold. See the
-    /// function's own note.
+    /// `bits_per_raw_sample` is a codec property. The container's own sample
+    /// depth is a different field — `bits_per_coded_sample` — and the demuxers
+    /// now fill that one, so this is a plain read with no heuristic in it.
     #[test]
-    fn bits_per_raw_sample_prefers_video_and_suppresses_float_audio() {
+    fn bits_per_raw_sample_is_a_codec_fact_not_a_container_one() {
         let mut video = CodecParameters::video().with_codec(CodecId::H264);
         if let Some(v) = video.video.as_mut() {
             v.bits_per_raw_sample = Some(8);
         }
         assert_eq!(bits_per_raw_sample(&video), Some(8));
 
-        // AAC: the demuxer supplies the container's 16, the reference prints
-        // `N/A`, and the decoder's output format is float.
+        // AAC: the container states 16, the reference prints `N/A`. The 16 now
+        // lands in `bits_per_coded_sample` and never reaches this field, which
+        // is what replaced the float-format heuristic that used to sit here.
         let mut aac = CodecParameters::audio().with_codec(CodecId::Aac);
         if let Some(a) = aac.audio.as_mut() {
-            a.bits_per_raw_sample = Some(16);
+            a.bits_per_coded_sample = Some(16);
             a.format = Some(vaco_sampfmt::SampleFmt::F32P);
         }
         assert_eq!(bits_per_raw_sample(&aac), None);
 
-        // Integer audio keeps its value: `pcm_s24le` in MOV reports 24.
+        // And a codec that genuinely states one still reports it.
         let mut pcm = CodecParameters::audio().with_codec(CodecId::Pcm);
         if let Some(a) = pcm.audio.as_mut() {
             a.bits_per_raw_sample = Some(24);
-            a.format = Some(vaco_sampfmt::SampleFmt::S32);
         }
         assert_eq!(bits_per_raw_sample(&pcm), Some(24));
+    }
+
+    /// `bits_per_sample` follows the codec, never the container — the trap this
+    /// pair sets. AAC's sample entry says 16 and the reference prints 0.
+    #[test]
+    fn bits_per_sample_is_zero_for_every_codec_modelled_today() {
+        assert_eq!(bits_per_sample(Some(CodecId::Aac)), 0);
+        assert_eq!(bits_per_sample(Some(CodecId::Opus)), 0);
+        assert_eq!(bits_per_sample(None), 0);
     }
 
     #[test]

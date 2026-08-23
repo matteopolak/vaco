@@ -74,6 +74,31 @@ pub struct AudioParameters {
     pub sample_rate: u32,
     pub format: Option<SampleFmt>,
     pub layout: Option<ChannelLayout>,
+    /// Bits per sample *as the container stores them*, when it says.
+    ///
+    /// Distinct from [`AudioParameters::bits_per_raw_sample`], and the two were
+    /// confused in exactly one direction: MP4's `stsd` `sample_size` and
+    /// Matroska's `BitDepth` were being filed as `bits_per_raw_sample`, so an
+    /// AAC track reported 16 and an Opus track 32 where the reference reports
+    /// `N/A`. The number was not wrong, it was in the wrong field.
+    ///
+    /// Measured, which is what separates them:
+    ///
+    /// ```text
+    ///                 bits_per_sample  bits_per_raw_sample
+    /// pcm_s16le wav        16                N/A
+    /// pcm_s24le mov        24                24
+    /// aac       mp4         0                N/A
+    /// ```
+    ///
+    /// So `bits_per_sample` is the container's stored depth and is `0` — not
+    /// absent — for a compressed codec, while `bits_per_raw_sample` is a codec
+    /// fact the reference states only when it differs from the sample format's
+    /// natural depth. `pcm_s16le` is 16-in-16 and says nothing; `pcm_s24le` is
+    /// 24-in-32 and says 24.
+    pub bits_per_coded_sample: Option<u8>,
+    /// Bits of real precision in each decoded sample, when the *codec* states
+    /// one. See [`AudioParameters::bits_per_coded_sample`] for the distinction.
     pub bits_per_raw_sample: Option<u8>,
     /// Encoder priming samples to discard.
     pub initial_padding: u32,
@@ -352,6 +377,9 @@ impl AudioParameters {
         }
         if self.bits_per_raw_sample.is_none() {
             self.bits_per_raw_sample = other.bits_per_raw_sample;
+        }
+        if self.bits_per_coded_sample.is_none() {
+            self.bits_per_coded_sample = other.bits_per_coded_sample;
         }
         if self.initial_padding == 0 {
             self.initial_padding = other.initial_padding;

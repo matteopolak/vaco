@@ -308,6 +308,9 @@ impl IdentificationHeader {
             layout: self
                 .channel_layout()
                 .or_else(|| Some(ChannelLayout::unspecified(u32::from(self.channel_count)))),
+            // A compressed codec states no stored depth; the container may,
+            // and fills this in through `fill_from`.
+            bits_per_coded_sample: None,
             bits_per_raw_sample: None,
             initial_padding: u32::from(self.pre_skip),
         });

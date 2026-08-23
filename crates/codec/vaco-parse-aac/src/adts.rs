@@ -248,6 +248,9 @@ impl AdtsHeader {
             format: Some(vaco_sampfmt::SampleFmt::F32P),
             layout: tables::layout_for_config(self.channel_configuration)
                 .or_else(|| self.channels().map(ChannelLayout::unspecified)),
+            // A compressed codec states no stored depth; the container may,
+            // and fills this in through `fill_from`.
+            bits_per_coded_sample: None,
             bits_per_raw_sample: None,
             initial_padding: 0,
         });

@@ -455,6 +455,10 @@ pub fn sample_entry_codec(format: FourCc) -> Option<CodecId> {
         b"sowt" | b"twos" | b"raw " | b"lpcm" | b"in24" | b"in32" | b"fl32" | b"fl64" | b"NONE" => {
             Some(CodecId::Pcm)
         }
+        // MPEG-4 timed text. Measured: the *same* SubRip content muxed into MP4
+        // prints `codec_name=mov_text`, not `subrip` — the reference treats the
+        // two carriages as different codecs, so this is not `CodecId::SubRip`.
+        b"tx3g" => Some(CodecId::MovText),
         _ => None,
     }
 }

@@ -83,6 +83,14 @@ pub enum CodecId {
     Pcm,
     Png,
     Jpeg,
+    /// SubRip (`.srt`), the text subtitle format Matroska carries as
+    /// `S_TEXT/UTF8`. `ffprobe` prints `codec_name=subrip`.
+    SubRip,
+    /// MPEG-4 timed text, the *same* subtitles inside MP4. A separate codec in
+    /// the reference rather than a framing — `ffprobe` prints
+    /// `codec_name=mov_text` for a track transcoded from the identical SubRip
+    /// source, so the two spellings are an interface fact (D9), not a choice.
+    MovText,
     // ... generated
 }
 
@@ -119,6 +127,7 @@ const fn entry(
 
 const V: MediaType = MediaType::Video;
 const A: MediaType = MediaType::Audio;
+const S: MediaType = MediaType::Subtitle;
 
 const CODECS: &[CodecEntry] = &[
     entry(
@@ -216,6 +225,22 @@ const CODECS: &[CodecEntry] = &[
         "Motion JPEG",
         V,
         CodecProperties::LOSSY.union(CodecProperties::INTRA_ONLY),
+    ),
+    // Both names measured from `ffprobe -show_entries stream=codec_name,
+    // codec_long_name` on the same subtitle content muxed two ways.
+    entry(
+        CodecId::SubRip,
+        "subrip",
+        "SubRip subtitle",
+        S,
+        CodecProperties::LOSSLESS.union(CodecProperties::INTRA_ONLY),
+    ),
+    entry(
+        CodecId::MovText,
+        "mov_text",
+        "MOV text",
+        S,
+        CodecProperties::LOSSLESS.union(CodecProperties::INTRA_ONLY),
     ),
 ];
 

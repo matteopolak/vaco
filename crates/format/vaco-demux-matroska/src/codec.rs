@@ -49,6 +49,17 @@ const fn s() -> Mapping {
         codec: None,
     }
 }
+/// A subtitle track whose codec `CodecId` can name.
+///
+/// Most cannot yet, which is why [`s`] exists and answers `None` — reporting a
+/// media type without a codec is honest, and better than guessing a name the
+/// reference does not print.
+const fn sc(codec: CodecId) -> Mapping {
+    Mapping {
+        media: MediaType::Subtitle,
+        codec: Some(codec),
+    }
+}
 
 /// Codec IDs matched in full, longest first is not required because the match is
 /// exact.
@@ -136,7 +147,8 @@ static EXACT: &[(&str, Mapping)] = &[
     ("S_TEXT/ASCII", s()),
     ("S_TEXT/SSA", s()),
     ("S_TEXT/USF", s()),
-    ("S_TEXT/UTF8", s()),
+    // Measured: `ffprobe` prints `codec_name=subrip` for this track.
+    ("S_TEXT/UTF8", sc(CodecId::SubRip)),
     ("S_TEXT/WEBVTT", s()),
     ("S_VOBSUB", s()),
     (

@@ -127,7 +127,10 @@ pub(crate) fn codec_parameters(
     } else if let Some(a) = entry.audio {
         params.audio = Some(AudioParameters {
             sample_rate: a.rate_hz(),
-            bits_per_raw_sample: (a.sample_size > 0 && a.sample_size <= 64)
+            // The container's stored depth, which is `bits_per_coded_sample`
+            // and not `bits_per_raw_sample`. Filing it as the latter made an
+            // AAC track report 16 where the reference reports N/A.
+            bits_per_coded_sample: (a.sample_size > 0 && a.sample_size <= 64)
                 .then_some(a.sample_size as u8),
             ..AudioParameters::default()
         });

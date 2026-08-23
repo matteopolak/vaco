@@ -432,6 +432,9 @@ impl AudioSpecificConfig {
             layout: self
                 .channel_layout()
                 .or_else(|| self.output_channels().map(ChannelLayout::unspecified)),
+            // A compressed codec states no stored depth; the container may,
+            // and fills this in through `fill_from`.
+            bits_per_coded_sample: None,
             bits_per_raw_sample: None,
             initial_padding: 0,
         });
