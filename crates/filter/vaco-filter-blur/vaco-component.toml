@@ -1,0 +1,105 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# FT-4.6a (GitHub #468): fourteen T2 blur/sharpen/convolution video filters.
+# The reference's real membership for this group was measured directly
+# (`ffmpeg -filters`, `ffmpeg -h filter=<name>`) rather than trusted from the
+# brief; see `docs/filter/vaco-filter-blur.md` for the full list of filters
+# this crate leaves for a follow-up.
+
+[[component]]
+kind = "filter"
+name = "avgblur"
+long_name = "Apply Average Blur filter"
+ctor = "vaco_filter_blur::avgblur::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "boxblur"
+long_name = "Blur the input"
+ctor = "vaco_filter_blur::boxblur::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "convolution"
+long_name = "Apply convolution filter"
+ctor = "vaco_filter_blur::convolution::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "dilation"
+long_name = "Apply dilation effect"
+ctor = "vaco_filter_blur::dilation::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "erosion"
+long_name = "Apply erosion effect"
+ctor = "vaco_filter_blur::erosion::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "gblur"
+long_name = "Apply Gaussian Blur filter"
+ctor = "vaco_filter_blur::gblur::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "kirsch"
+long_name = "Apply kirsch operator"
+ctor = "vaco_filter_blur::kirsch::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "maskedclamp"
+long_name = "Clamp first stream with second stream and third stream"
+ctor = "vaco_filter_blur::maskedclamp::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "median"
+long_name = "Apply Median filter"
+ctor = "vaco_filter_blur::median::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "prewitt"
+long_name = "Apply prewitt operator"
+ctor = "vaco_filter_blur::prewitt::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "roberts"
+long_name = "Apply roberts cross operator"
+ctor = "vaco_filter_blur::roberts::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "scharr"
+long_name = "Apply scharr operator"
+ctor = "vaco_filter_blur::scharr::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "sobel"
+long_name = "Apply sobel operator"
+ctor = "vaco_filter_blur::sobel::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "unsharp"
+long_name = "Sharpen or blur the input video"
+ctor = "vaco_filter_blur::unsharp::DESC"
+media = "video"
