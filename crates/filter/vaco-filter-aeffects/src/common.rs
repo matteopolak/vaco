@@ -1,6 +1,6 @@
 //! Shared option parsing for this crate's seven filters.
 //!
-//! As in `vaco-filter-audio-eq::common` and `vaco-filter-audio-dynamics::common`,
+//! As in `vaco-filter-aeq::common` and `vaco-filter-audio-dynamics::common`,
 //! options are read straight off [`Instantiate::named`] rather than through a
 //! strict `vaco_opts::Options`-derived parser, so a filtergraph string setting
 //! an option this crate does not implement is silently accepted rather than

@@ -37,7 +37,7 @@ Twenty-two of the twenty-five are implemented here. Three are not:
   choices, and a full HRTF convolution engine driven by caller-supplied
   impulse-response streams and a non-trivial channel-mapping grammar,
   respectively — each comparable in scope to
-  `vaco-filter-audio-eq::superequalizer`. They remain unimplemented for the
+  `vaco-filter-aeq::superequalizer`. They remain unimplemented for the
   same reason.
 - **`hdcd`** decodes a proprietary bit-level scheme: control codes for gain
   adjustment and peak extension are embedded in the low-order bits of the
@@ -53,7 +53,7 @@ Twenty-two of the twenty-five are implemented here. Three are not:
 One module per filter (`src/<name>.rs`), each exposing `pub const DESC:
 FilterDesc` and a crate-private `fn create`, aggregated by
 [`registry::AeffectsRegistry`](../../crates/filter/vaco-filter-aeffects/src/registry.rs)
-— the same shape `vaco-filter-audio-eq` and `vaco-filter-audio-dynamics`
+— the same shape `vaco-filter-aeq` and `vaco-filter-audio-dynamics`
 use. `src/sample.rs` is the same `f64`-domain frame decode/encode those two
 crates carry, duplicated rather than shared (see that module's own doc for
 why). `axcorrelate` is the one filter with two audio inputs that must be
@@ -67,12 +67,15 @@ wave-table generator and phase-accumulator `Lfo` rather than each
 reimplementing sine/triangle/square/sawtooth evaluation. `atempo` uses
 [`vaco-filter-adsp::wsola`](../../crates/filter/vaco-filter-adsp/src/wsola.rs),
 a time-domain WSOLA tempo-change core. `vaco-filter-adsp` did not exist
-before this work package; it is created per plan §4.1's row rather than
-putting shared kernels in this crate, and only implements the two kernels
-this crate's filters actually call (wave tables and WSOLA) — not the biquad
-design, EBU R128 core or partitioned FIR the plan's row also lists, since
-those have no caller here yet and `vaco-filter-audio-eq` already owns biquad
-design (D19: one definition per concept).
+before this work package; it was created per plan §4.1's row rather than
+putting shared kernels in this crate. It initially implemented only the two
+kernels this crate's filters called first (wave tables and WSOLA); `biquad`
+(RBJ Audio EQ Cookbook coefficient design) joined later, once
+`vaco-filter-aeq`'s own copy turned out to be `pub(crate)` and therefore
+unreachable — see `docs/filter/vaco-filter-adsp.md` for that move and what
+it found. The EBU R128 loudness core and partitioned FIR the plan's row
+also lists still have no caller in this crate and remain unadded (D19: a
+kernel moves here when a real caller needs it, not speculatively).
 
 Three filters (`chorus`, `flanger`, `vibrato`) share
 `common::InterpDelay`, a linearly-interpolated delay line — the building
@@ -228,7 +231,7 @@ after this one needs it):
 
 No environment variables or feature flags. Behaviour is entirely the
 per-filter options above, read at filtergraph-parse time via
-`Instantiate::named`, following `vaco-filter-audio-eq::common`'s precedent:
+`Instantiate::named`, following `vaco-filter-aeq::common`'s precedent:
 an option this crate does not implement is accepted and silently ignored
 rather than rejecting a filtergraph string that sets it (e.g.
 `dialoguenhance`'s `voice`, accepted and stored but not applied — see that

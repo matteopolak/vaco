@@ -11,103 +11,103 @@
 kind = "filter"
 name = "allpass"
 long_name = "Apply a two-pole all-pass filter"
-ctor = "vaco_filter_audio_eq::allpass::DESC"
+ctor = "vaco_filter_aeq::allpass::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "anequalizer"
 long_name = "Apply high-order audio parametric multi band equalizer"
-ctor = "vaco_filter_audio_eq::anequalizer::DESC"
+ctor = "vaco_filter_aeq::anequalizer::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "bandpass"
 long_name = "Apply a two-pole Butterworth band-pass filter"
-ctor = "vaco_filter_audio_eq::bandpass::DESC"
+ctor = "vaco_filter_aeq::bandpass::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "bandreject"
 long_name = "Apply a two-pole Butterworth band-reject filter"
-ctor = "vaco_filter_audio_eq::bandreject::DESC"
+ctor = "vaco_filter_aeq::bandreject::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "bass"
 long_name = "Boost or cut lower frequencies"
-ctor = "vaco_filter_audio_eq::bass::DESC"
+ctor = "vaco_filter_aeq::bass::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "biquad"
 long_name = "Apply a biquad IIR filter with the given coefficients"
-ctor = "vaco_filter_audio_eq::biquad::DESC"
+ctor = "vaco_filter_aeq::biquad::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "equalizer"
 long_name = "Apply two-pole peaking equalization (EQ) filter"
-ctor = "vaco_filter_audio_eq::equalizer::DESC"
+ctor = "vaco_filter_aeq::equalizer::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "firequalizer"
 long_name = "Finite Impulse Response Equalizer"
-ctor = "vaco_filter_audio_eq::firequalizer::DESC"
+ctor = "vaco_filter_aeq::firequalizer::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "highpass"
 long_name = "Apply a high-pass filter with 3dB point frequency"
-ctor = "vaco_filter_audio_eq::highpass::DESC"
+ctor = "vaco_filter_aeq::highpass::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "highshelf"
 long_name = "Apply a high shelf filter"
-ctor = "vaco_filter_audio_eq::highshelf::DESC"
+ctor = "vaco_filter_aeq::highshelf::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "lowpass"
 long_name = "Apply a low-pass filter with 3dB point frequency"
-ctor = "vaco_filter_audio_eq::lowpass::DESC"
+ctor = "vaco_filter_aeq::lowpass::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "lowshelf"
 long_name = "Apply a low shelf filter"
-ctor = "vaco_filter_audio_eq::lowshelf::DESC"
+ctor = "vaco_filter_aeq::lowshelf::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "superequalizer"
 long_name = "Apply 18 band equalization filter"
-ctor = "vaco_filter_audio_eq::superequalizer::DESC"
+ctor = "vaco_filter_aeq::superequalizer::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "tiltshelf"
 long_name = "Apply a tilt shelf filter"
-ctor = "vaco_filter_audio_eq::tiltshelf::DESC"
+ctor = "vaco_filter_aeq::tiltshelf::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "treble"
 long_name = "Boost or cut upper frequencies"
-ctor = "vaco_filter_audio_eq::treble::DESC"
+ctor = "vaco_filter_aeq::treble::DESC"
 media = "audio"

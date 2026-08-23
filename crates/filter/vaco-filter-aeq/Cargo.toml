@@ -1,5 +1,5 @@
 [package]
-name = "vaco-filter-audio-eq"
+name = "vaco-filter-aeq"
 description = "T2 audio EQ filters: the biquad family (equalizer, bass, lowshelf, treble, highshelf, tiltshelf, highpass, lowpass, bandpass, bandreject, allpass, biquad) plus anequalizer, firequalizer, superequalizer."
 version.workspace = true
 edition.workspace = true

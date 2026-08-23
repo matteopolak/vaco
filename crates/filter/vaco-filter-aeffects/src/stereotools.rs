@@ -8,7 +8,7 @@
 //! `mpan`, `base`, `delay`, `sclevel`, `phase`, `bmode_in`, `bmode_out` are
 //! accepted (so a filtergraph string that sets them is not rejected) but not
 //! applied — a structural gap in the same spirit as
-//! `vaco-filter-audio-eq::common`'s documented unimplemented options. See
+//! `vaco-filter-aeq::common`'s documented unimplemented options. See
 //! `docs/filter/vaco-filter-aeffects.md`.
 //!
 //! # Measured formulas (D17)

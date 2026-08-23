@@ -1,4 +1,4 @@
-//! Arbitrary filtergraph text against every `vaco-filter-audio-eq` filter's
+//! Arbitrary filtergraph text against every `vaco-filter-aeq` filter's
 //! option parser.
 //!
 //! Mirrors `filter_audio_options.rs` (the T1 audio crate's fuzz target)
@@ -11,17 +11,17 @@
 //! never a panic and never an unbounded allocation. This is also where the
 //! brief's specific worry — a cutoff of 0 Hz or above Nyquist driving a
 //! biquad's coefficients non-finite, and `NaN` propagating silently through
-//! a whole stream — is exercised: `engine::Coeffs::normalise` is supposed to
+//! a whole stream — is exercised: `vaco_filter_adsp::biquad::Coeffs::normalise` is supposed to
 //! catch every such case and this target is what would eventually surface a
 //! gap in that guard if creation itself doesn't panic (a frame would still
 //! be needed to observe `NaN` in the *output*, which this target does not
-//! push through the graph — see `docs/filter/vaco-filter-audio-eq.md`).
-//! fuzz-crate: vaco-filter-audio-eq
+//! push through the graph — see `docs/filter/vaco-filter-aeq.md`).
+//! fuzz-crate: vaco-filter-aeq
 
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use vaco_filter_audio_eq::registry::EqRegistry;
+use vaco_filter_aeq::registry::EqRegistry;
 use vaco_filter_graph::registry::{FilterRegistry, Instantiate};
 
 const NAMES: &[&str] = &[

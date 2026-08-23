@@ -1,5 +1,5 @@
 //! [`AeffectsRegistry`] — the [`FilterRegistry`] this crate's seven filters
-//! answer through. Mirrors `vaco-filter-audio-eq::registry::EqRegistry`'s
+//! answer through. Mirrors `vaco-filter-aeq::registry::EqRegistry`'s
 //! shape exactly.
 
 use vaco_filter_graph::registry::{FilterRegistry, Instance, Instantiate};

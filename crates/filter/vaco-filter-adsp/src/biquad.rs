@@ -12,7 +12,7 @@
 //!
 //! # Why this moved here (D19, FT — filter crate consolidation)
 //!
-//! This module was originally `vaco-filter-audio-eq::engine`, `pub(crate)`
+//! This module was originally `vaco-filter-aeq::engine`, `pub(crate)`
 //! — private to that crate on the theory that only the EQ family would ever
 //! need a biquad. That theory did not survive contact with the rest of
 //! `planning/16-filters.md` §4.3: `vaco-filter-aeffects`, `-ameasure` and

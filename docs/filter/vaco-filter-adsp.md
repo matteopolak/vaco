@@ -26,7 +26,7 @@ speculatively:
 
 ### `biquad` — one definition instead of five
 
-This module did not exist until this crate's second pass. `vaco-filter-audio-eq`
+This module did not exist until this crate's second pass. `vaco-filter-aeq`
 (now `vaco-filter-aeq`) had a `pub(crate)` `engine` module with the same
 math, on the theory that only the EQ family needed it. That theory turned
 out to be wrong: three other crates needed a two-pole IIR section and, each
@@ -46,7 +46,7 @@ their own instead of asking for it to move:
 All four now depend on this module instead. `vaco-filter-aeq` is the
 before-and-after case: its `engine.rs` is gone, its filters call
 `vaco_filter_adsp::biquad` directly, and its own doc
-(`docs/filter/vaco-filter-audio-eq.md`) explains the move from its side.
+(`docs/filter/vaco-filter-aeq.md`) explains the move from its side.
 
 **Two guarantees this module exists to make load-bearing everywhere, not
 just in one crate:**
@@ -72,7 +72,7 @@ just in one crate:**
    was meant to fix.
 
 Both guarantees, and the tests that pin them, moved unchanged from
-`vaco-filter-audio-eq::engine`.
+`vaco-filter-aeq::engine`.
 
 ### What the four call sites disagreed about
 
@@ -97,7 +97,7 @@ difference, not just four copies of the same formula:
   bug, but it was a real, silent divergence between two "the same
   fallback" implementations — the kind D19 exists to catch before it
   matters.
-* `vaco-filter-audio-eq`'s own two-layer fallback in `Coeffs::normalise`
+* `vaco-filter-aeq`'s own two-layer fallback in `Coeffs::normalise`
   (an early `a0 == 0 / non-finite` check, then a final all-fields-finite
   check) turned out to be defense in depth rather than two independent
   guards: for every currently tested degenerate input — 0 Hz, negative,

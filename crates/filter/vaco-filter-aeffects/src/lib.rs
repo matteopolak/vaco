@@ -14,7 +14,7 @@
 //! work package, in a commit kept separate from the new filters so the move
 //! is reviewable on its own. Built against `vaco-filter-core` (the `Filter`
 //! trait, the `Simple` adapter) and `vaco-filter-graph` (`FilterRegistry`),
-//! exactly as `vaco-filter-audio`, `vaco-filter-audio-eq` and
+//! exactly as `vaco-filter-audio`, `vaco-filter-aeq` and
 //! `vaco-filter-audio-dynamics` are — `axcorrelate` additionally uses
 //! `vaco-filter-framesync`'s `Synced` adapter, since it genuinely has two
 //! inputs to align. The LFO-driven filters share `vaco-filter-adsp`'s
@@ -35,7 +35,7 @@
 //!   original author as disproportionately large for this project's pace
 //!   (an STFT/overlap-add upmix and a full HRTF convolution engine,
 //!   respectively — each roughly the scale of
-//!   `vaco-filter-audio-eq::superequalizer`) and remain unimplemented for
+//!   `vaco-filter-aeq::superequalizer`) and remain unimplemented for
 //!   the same reason; picking either one up is future work, not a gap
 //!   introduced here.
 //! * **`hdcd`** decodes a proprietary, bit-level companding/peak-extend

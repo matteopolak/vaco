@@ -1,6 +1,6 @@
 //! Shared option parsing and the single-input compressor/gate `FrameFilter`.
 //!
-//! As in `vaco-filter-audio-eq::common`, options are read straight off
+//! As in `vaco-filter-aeq::common`, options are read straight off
 //! [`Instantiate::named`] rather than through a strict
 //! [`vaco_opts::Options`]-derived parser, so a filtergraph string setting an
 //! option this crate does not implement is silently accepted rather than

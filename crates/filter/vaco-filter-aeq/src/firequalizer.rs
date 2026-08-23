@@ -16,7 +16,7 @@
 //! Everything else — `scale`, `wfunc`'s specific window shapes beyond Hann,
 //! `delay`, `accuracy`, `multi`, `zero_phase`, `min_phase` — is accepted and
 //! ignored. This is the least-verified filter in the crate: see
-//! `docs/filter/vaco-filter-audio-eq.md`.
+//! `docs/filter/vaco-filter-aeq.md`.
 //!
 //! # Design method
 //!

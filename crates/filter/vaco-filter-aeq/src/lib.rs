@@ -57,7 +57,7 @@
 //! measured against a running filter), `superequalizer` (an IIR
 //! approximation of an FFT-domain reference filter bank), `firequalizer`
 //! (`gain_entry` control points only; the general `gain` expression is not
-//! implemented). See `docs/filter/vaco-filter-audio-eq.md`.
+//! implemented). See `docs/filter/vaco-filter-aeq.md`.
 #![forbid(unsafe_code)]
 
 pub mod allpass;

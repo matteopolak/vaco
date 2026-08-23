@@ -11,7 +11,7 @@ use vaco_filter_graph::registry::{FilterRegistry, Instance, Instantiate};
 /// `anequalizer`, `firequalizer`, `superequalizer` — GitHub #471's actual
 /// scope, which is thirteen names wider than this work package's brief
 /// (missing `tiltshelf` and `firequalizer`); see
-/// `docs/filter/vaco-filter-audio-eq.md` for the reconciliation.
+/// `docs/filter/vaco-filter-aeq.md` for the reconciliation.
 const NAMES: &[&str] = &[
     "allpass",
     "anequalizer",
@@ -56,7 +56,7 @@ impl FilterRegistry for EqRegistry {
             "superequalizer" => crate::superequalizer::create(req),
             "tiltshelf" => crate::tiltshelf::create(req),
             "treble" => crate::treble::create(req),
-            other => return Err(format!("vaco-filter-audio-eq: no filter named `{other}`")),
+            other => return Err(format!("vaco-filter-aeq: no filter named `{other}`")),
         })
     }
 }

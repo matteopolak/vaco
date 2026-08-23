@@ -4,7 +4,7 @@
 //! about the optional video meter (`video`, `size`, `meter`, `gauge`,
 //! `scale`) this crate does not produce — this filter's single output pad
 //! is audio-only here, a documented gap the same shape as
-//! `vaco-filter-audio-eq::anequalizer`'s undone video response curve. What
+//! `vaco-filter-aeq::anequalizer`'s undone video response curve. What
 //! is implemented: `peak` (`none`/`sample`/`true`, read but always reported
 //! as sample peak — see [`crate::loudness`] for why true peak specifically
 //! is not), `dualmono` and `panlaw` (accepted, not applied), and the

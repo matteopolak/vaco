@@ -16,7 +16,7 @@
 //! `compand`.
 //!
 //! This module used to carry its own duplicate of the cookbook Butterworth
-//! formula (on the theory that depending on `vaco-filter-audio-eq` for "a
+//! formula (on the theory that depending on `vaco-filter-aeq` for "a
 //! dozen lines" was not worth a cross-crate coupling). `vaco-filter-adsp`
 //! now exists as the shared home those lines belong in regardless of size
 //! (D19), so [`crossover_lowpass`] and [`crossover_highpass`] build on it

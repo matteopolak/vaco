@@ -2,7 +2,7 @@
 //! family plus loudness normalisation and measurement.
 //!
 //! FT-4.8b (GitHub #472), the other of two children FT-4.8 (#56) split into
-//! for single-writer ownership — the sibling is `vaco-filter-audio-eq`
+//! for single-writer ownership — the sibling is `vaco-filter-aeq`
 //! (#471).
 //!
 //! # Scope versus the brief that requested this crate

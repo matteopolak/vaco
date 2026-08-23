@@ -141,7 +141,7 @@ spread of what survives.
 - **Video output.** `ebur128`'s meter graphic and `aphasemeter`'s phase
   scope are both accepted-but-ignored options; only the audio-domain
   measurement each exists to drive is implemented. Same shape as
-  `vaco-filter-audio-eq::anequalizer`'s undone response-curve video.
+  `vaco-filter-aeq::anequalizer`'s undone response-curve video.
 - **`ashowinfo`'s checksum algorithm.** The reference prints
   `checksum:<hex>` and `plane_checksums: [ <hex> ... ]`; the field *names*
   are reproduced (D7: interface names are freely reusable) but the

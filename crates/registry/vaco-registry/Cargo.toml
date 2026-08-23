@@ -182,6 +182,9 @@ optional = true
 [dependencies.vaco-filter-aeffects]
 path = "../../filter/vaco-filter-aeffects"
 
+[dependencies.vaco-filter-aeq]
+path = "../../filter/vaco-filter-aeq"
+
 [dependencies.vaco-filter-ameasure]
 path = "../../filter/vaco-filter-ameasure"
 
@@ -196,9 +199,6 @@ path = "../../filter/vaco-filter-audio"
 
 [dependencies.vaco-filter-audio-dynamics]
 path = "../../filter/vaco-filter-audio-dynamics"
-
-[dependencies.vaco-filter-audio-eq]
-path = "../../filter/vaco-filter-audio-eq"
 
 [dependencies.vaco-filter-blur]
 path = "../../filter/vaco-filter-blur"

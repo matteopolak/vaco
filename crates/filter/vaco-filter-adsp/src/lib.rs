@@ -15,10 +15,10 @@
 //! filters actually called.
 //!
 //! [`biquad`] (RBJ Audio EQ Cookbook coefficient design) joined next. It was
-//! *not* added at FT-4.13d, on the theory that `vaco-filter-audio-eq::engine`
+//! *not* added at FT-4.13d, on the theory that `vaco-filter-aeq::engine`
 //! already owned biquad design and a second copy here would violate D19.
 //! That theory was wrong in a way that cost real correctness:
-//! `vaco-filter-audio-eq`'s biquad types were `pub(crate)`, not reusable, so
+//! `vaco-filter-aeq`'s biquad types were `pub(crate)`, not reusable, so
 //! every crate that needed one had already written its own —
 //! `vaco-filter-aeffects` shipped one-pole approximations in `aexciter`,
 //! `deesser` and `virtualbass` specifically because of it, and
@@ -26,7 +26,7 @@
 //! each duplicated the cookbook formulas outright. D19 says a shared concept
 //! moves to a shared home rather than staying duplicated *or* staying
 //! falsely believed to have one owner; this module is that move, and all
-//! four crates now depend on it instead (`vaco-filter-audio-eq`,
+//! four crates now depend on it instead (`vaco-filter-aeq`,
 //! `vaco-filter-ameasure` and `vaco-filter-audio-dynamics` are renamed to
 //! `-aeq`/`-aanalysis`/`-adynamics` in a separate, later commit per
 //! `planning/16-filters.md` §4.3 — this move happened under their original

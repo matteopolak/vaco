@@ -2,7 +2,7 @@
 
 T2 audio dynamics filters (FT-4.8b, GitHub issue #472, the other of two
 children FT-4.8/#56 split into for single-writer ownership — the sibling is
-`vaco-filter-audio-eq`/#471): the compressor/limiter/gate/expander/sidechain
+`vaco-filter-aeq`/#471): the compressor/limiter/gate/expander/sidechain
 family plus loudness normalisation and measurement.
 
 ## Scope reconciliation
@@ -30,7 +30,7 @@ useful audio-level tooling, not because #472 requested them.
 
 There is no single citable specification for a feed-forward dynamics
 processor the way the Audio EQ Cookbook is one for a biquad
-(`vaco-filter-audio-eq`'s "hard part"). `engine.rs`'s gain-computer curve
+(`vaco-filter-aeq`'s "hard part"). `engine.rs`'s gain-computer curve
 uses Giannoulis, Massberg & Reiss, "Digital Dynamic Range Compressor Design
 — A Tutorial and Analysis" (J. Audio Eng. Soc., 2012) for its soft-knee
 quadratic — a real, citable, independent formula — but the envelope
@@ -95,7 +95,7 @@ no `range` (no floor on attenuation). `alimiter`: `limit=1`, `attack=5ms`,
 `acompressor`'s class name printed by `ffmpeg -h filter=acompressor` is
 literally `acompressor/sidechaincompress` and `agate`'s is
 `agate/sidechaingate` (probed 2026-08-23) — confirming, the same way
-`vaco-filter-audio-eq` confirmed `bass`/`lowshelf`, that these are one
+`vaco-filter-aeq` confirmed `bass`/`lowshelf`, that these are one
 registered processor under two names in the reference, which is why this
 crate shares one `Dynamics`/`Curve` engine between each pair rather than
 writing sidechain variants from scratch.
@@ -152,7 +152,7 @@ etc.) but has not been probed byte-for-byte against `ffmpeg`'s output.
   `tests::below_threshold_is_untouched_downward` passing — they are the
   actual specification check, not a re-statement of the formula.
 * `common.rs`'s doc explains the same `Instantiate::named`-over-strict-
-  `Options` choice `vaco-filter-audio-eq::common` makes, for the same
+  `Options` choice `vaco-filter-aeq::common` makes, for the same
   reason (several reference options are accepted but not applied).
 
 ## Configuration
@@ -165,7 +165,7 @@ installs; with none installed, the events are simply dropped.
 
 `vaco-core`, `vaco-frame`, `vaco-sampfmt`, `vaco-chlayout`, `vaco-resample`
 (the shared `f64` sample domain, `sample.rs`, identical in approach to
-`vaco-filter-audio-eq::sample`), `vaco-filter-core` (`Filter`/`FrameFilter`/
+`vaco-filter-aeq::sample`), `vaco-filter-core` (`Filter`/`FrameFilter`/
 `AudioFilter`, the `Simple`/`Blocked` adapters), `vaco-filter-graph`
 (`FilterRegistry`), `vaco-filter-framesync` (`Synced`/`FrameSyncFilter`, for
 `sidechaincompress`/`sidechaingate`'s two inputs), `tracing` (the

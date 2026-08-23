@@ -2,7 +2,7 @@
 //! compressor/expander curve `acompressor`/`sidechaincompress` and
 //! `agate`/`sidechaingate` are both built from.
 //!
-//! Unlike `vaco-filter-audio-eq`'s biquad cookbook, there is no single named
+//! Unlike `vaco-filter-aeq`'s biquad cookbook, there is no single named
 //! specification for a feed-forward dynamics processor the way there is for
 //! an RBJ biquad — this is standard, widely-documented DSP practice (the
 //! same shape any audio DSP textbook's compressor chapter describes: an

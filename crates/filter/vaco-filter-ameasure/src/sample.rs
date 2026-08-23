@@ -1,6 +1,6 @@
 //! A common numeric domain for filters that do arithmetic on samples.
 //!
-//! Mirrors `vaco-filter-audio-eq::sample` and `vaco-filter-audio-dynamics::
+//! Mirrors `vaco-filter-aeq::sample` and `vaco-filter-audio-dynamics::
 //! sample` exactly: every filter here needs `f64` samples regardless of the
 //! link's negotiated `SampleFmt`, so this decodes a frame's planes to planar
 //! `f64` via `vaco_resample::convert::convert` and encodes back afterwards.
