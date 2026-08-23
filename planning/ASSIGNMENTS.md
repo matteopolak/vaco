@@ -57,6 +57,20 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-demux-mp4 | 4 | — | agent:demux-mp4 | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-demux-matroska | 4 | — | agent:matroska | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-demux-mpegts | 4 | — | agent:mpegts | done | 2026-08-22 | 2026-08-22 |  |
+| vaco-demux-raw | 4 | — | agent:raw | assigned | 2026-08-22 |  | 48 registrations; PCM, rawvideo, bitstream |
+| vaco-mux-raw | 4 | — | agent:raw | assigned | 2026-08-22 |  | 40 registrations |
+| vaco-format-audio-simple | 4 | — | agent:audio-simple | assigned | 2026-08-22 |  | wav w64 aiff caf au voc sox ircam rso |
+| vaco-format-apetag | 4 | — | agent:audio-simple | assigned | 2026-08-22 |  | APE tag + ReplayGain |
+| vaco-format-avlanguage | 4 | — | agent:audio-simple | assigned | 2026-08-22 |  | language-code tables |
+| vaco-demux-avi | 4 | — | agent:avi-flv | assigned | 2026-08-22 |  | RIFF walk, idx1/OpenDML |
+| vaco-mux-avi | 4 | — | agent:avi-flv | assigned | 2026-08-22 |  |  |
+| vaco-demux-flv | 4 | — | agent:avi-flv | assigned | 2026-08-22 |  | tag walk, AMF metadata |
+| vaco-mux-flv | 4 | — | agent:avi-flv | assigned | 2026-08-22 |  |  |
+| vaco-demux-ogg | 4 | — | agent:ogg | assigned | 2026-08-22 |  | page/packet layer, per-codec granule mapping |
+| vaco-mux-ogg | 4 | — | agent:ogg | assigned | 2026-08-22 |  |  |
+| vaco-demux-mpegps | 4 | — | agent:mpegps-dv | assigned | 2026-08-22 |  | shares PES with mpegts; D19 question open |
+| vaco-mux-mpegps | 4 | — | agent:mpegps-dv | assigned | 2026-08-22 |  | mpeg vob svcd vcd dvd |
+| vaco-format-dv | 4 | — | agent:mpegps-dv | assigned | 2026-08-22 |  | frame format, not really a container |
 | vaco-filter-core | 5 | — | agent:filter-core | done | 2026-08-22 | 2026-08-22 | frozen only |
 | vaco-filter-framesync | 5 | — | agent:filter-graph | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-filter-graph | 5 | — | agent:filter-graph | done | 2026-08-22 | 2026-08-22 |  |
