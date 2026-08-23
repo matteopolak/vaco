@@ -497,3 +497,60 @@ same class — an interface that cannot express what a caller needs:
   `vaco-mux-mp4`'s movie-timescale derivation and `vaco-mux-mpegts`'s PCR-PID
   assignment never ran at all. Fixed in place, since the ordering was simply
   wrong rather than inexpressible.
+- **Gap 8's own bullet above, updated 2026-08-23 (#349/#350):** a
+  `vaco-bsf-*` crate now exists — `vaco-bsf-core` (the `BitstreamFilter`
+  driver), `vaco-bsf-generic` (`null`, `extract_extradata`, `noise`,
+  `remove_extra`, `setts`, `chomp`, `dump_extra`, `filter_units`,
+  `trace_headers`) and `vaco-bsf-h2645` (`h264_mp4toannexb`,
+  `hevc_mp4toannexb`) — and `vaco-registry::Bsfs` implements `BsfProvider`
+  over all of them. `vaco-mux-avi` and `vaco-mux-mpegts` now implement
+  `check_bitstream`, asking for `h264_mp4toannexb`/`hevc_mp4toannexb` under
+  the same condition their own inline `maybe_convert` already used; that
+  inline conversion stays as the direct-`Muxer` path's behaviour (unchanged,
+  still framing-only) and is now also a safe no-op on a payload M6 already
+  converted (`starts_with_annexb_start_code`), rather than being deleted —
+  measured to diverge from the M6 path (missing SPS/PPS splicing) rather than
+  agreeing with it, so deleting it was not this wave's call to make. Still
+  open: VVC (no `vvc_mp4toannexb` — `vaco-mux-mpegts`'s VVC support keeps its
+  framing-only conversion permanently, not just until a filter lands);
+  `h264_redundant_pps` (see `vaco-bsf-h2645`'s own docs for why — a
+  CABAC-safe bit-precise rewrite this workspace has no writer layer for); and
+  `vaco-mux-mp4`'s fragmented mode, where the init segment's `stsd` is written
+  before any packet is seen, so `extract_extradata`'s result arrives too late
+  to help it the way it now helps progressive mode's deferred write.
+
+## 12. `BsfProvider::open` carries no per-instance option string
+
+Reported by #349/#350 while implementing `vaco-bsf-generic`/`vaco-bsf-h2645`.
+
+`vaco_format_core::mux::BsfProvider::open(&self, name: &str, params:
+&CodecParameters) -> Result<Box<dyn BitstreamFilter>>` has exactly two
+parameters, neither of which can carry `-bsf:v filtername=opt=value`'s
+right-hand side. Several real filters are close to meaningless without one:
+`setts` (its whole point is the expression), `noise` (`amount`/`dropamount`),
+`filter_units` (`pass_types`/`remove_types`/`discard`), `remove_extra`/
+`dump_extra`'s `freq=all`. Every one of them is implemented here as the
+reference's bare-name (all-default) behaviour, which for `setts` and
+`filter_units` is the identity transform — correct, and also the least
+interesting thing either filter does.
+
+This is the same shape as gaps 4/5: a construction-time entry point with
+nowhere to put per-instance configuration. Worked around here by not routing
+any: `vaco-bsf-generic`'s `noise` in particular defaults to identity rather
+than the reference's own nondeterministic bare-name corruption (see that
+module's doc comment — there is no reference answer to converge on there
+anyway, seeded or not).
+
+### Shape
+
+Likely additive, mirroring gap 5's `Muxer::set_option(&mut self, name: &str,
+value: &str) -> Result<()>`: a `BsfDesc`/`BitstreamFilter` could grow the same
+method, called after `open` and before the first packet. Not attempted here —
+picking the shape is a design decision for whoever wires a real `-bsf:v`
+option string through the CLI, which is a separate, larger piece of work
+(`FormatOptions`-style parsing) this wave did not touch.
+
+**Blocks:** any CLI spelling of `-bsf:v <name>=<options>` for every filter
+`vaco-bsf-generic`/`vaco-bsf-h2645` register; not blocking for the three
+containers already wired (M16's `extract_extradata` and the two
+`*_mp4toannexb` filters need no options to do their real job).
