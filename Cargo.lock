@@ -1917,6 +1917,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-filter-audio-dynamics"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "smallvec",
+ "tracing",
+ "vaco-chlayout",
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-filter-framesync",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-resample",
+ "vaco-sampfmt",
+]
+
+[[package]]
+name = "vaco-filter-audio-eq"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "smallvec",
+ "vaco-chlayout",
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-resample",
+ "vaco-sampfmt",
+]
+
+[[package]]
 name = "vaco-filter-core"
 version = "0.1.0"
 dependencies = [
@@ -1975,6 +2007,23 @@ dependencies = [
  "vaco-opts",
  "vaco-pixfmt",
  "vaco-sampfmt",
+]
+
+[[package]]
+name = "vaco-filter-video-composite"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-color",
+ "vaco-core",
+ "vaco-expr",
+ "vaco-filter-core",
+ "vaco-filter-framesync",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-opts",
+ "vaco-pixfmt",
+ "vaco-scale",
 ]
 
 [[package]]
@@ -2781,8 +2830,10 @@ dependencies = [
  "vaco-demux-raw",
  "vaco-demux-rtsp",
  "vaco-filter-audio",
+ "vaco-filter-audio-eq",
  "vaco-filter-core",
  "vaco-filter-plumbing",
+ "vaco-filter-video-composite",
  "vaco-filter-video-format",
  "vaco-filter-video-geometry",
  "vaco-filter-video-source",

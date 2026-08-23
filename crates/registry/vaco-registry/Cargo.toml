@@ -162,8 +162,14 @@ optional = true
 [dependencies.vaco-filter-audio]
 path = "../../filter/vaco-filter-audio"
 
+[dependencies.vaco-filter-audio-eq]
+path = "../../filter/vaco-filter-audio-eq"
+
 [dependencies.vaco-filter-plumbing]
 path = "../../filter/vaco-filter-plumbing"
+
+[dependencies.vaco-filter-video-composite]
+path = "../../filter/vaco-filter-video-composite"
 
 [dependencies.vaco-filter-video-format]
 path = "../../filter/vaco-filter-video-format"

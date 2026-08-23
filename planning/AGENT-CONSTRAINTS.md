@@ -163,6 +163,21 @@ let Some(name) = vaco_registry::demuxers().iter().map(|d| d.name)
     .find(|n| vaco_registry::muxer_by_name(n).is_none()) else { return };
 ```
 
+## Two citations this project keeps getting wrong
+
+**F1–F9 are in `planning/11-foundations.md`, not `16-filters.md`.** Three briefs
+have now sent an agent to the wrong file for them, and they are not filter rules
+at all: they are cross-cutting foundations decisions — `fuzz/` as a separate
+workspace, integer-cast discipline, `Option` instead of sentinels, runtime SIMD
+selection, layer-0 never naming a layer-1 type. Worth reading; just not where
+the briefs said.
+
+**There is no `14-io.md` and no `16-cli.md`.** I/O and protocols are in
+`18-formats.md`; the CLI is `14-cli.md`. Both have been cited twice.
+
+The plan index is in `AGENT-BRIEF-TEMPLATE.md`. Check a citation before writing
+it into a brief — every one of these cost an agent a detour.
+
 ## `git stash` in a shared tree is a loaded gun
 
 An agent ran `git stash` once to A/B-test a behaviour, recognised immediately

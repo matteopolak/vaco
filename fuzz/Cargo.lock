@@ -1663,6 +1663,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-filter-audio-eq"
+version = "0.1.0"
+dependencies = [
+ "smallvec",
+ "vaco-chlayout",
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-resample",
+ "vaco-sampfmt",
+]
+
+[[package]]
 name = "vaco-filter-core"
 version = "0.1.0"
 dependencies = [
@@ -1714,6 +1728,22 @@ dependencies = [
  "vaco-opts",
  "vaco-pixfmt",
  "vaco-sampfmt",
+]
+
+[[package]]
+name = "vaco-filter-video-composite"
+version = "0.1.0"
+dependencies = [
+ "vaco-color",
+ "vaco-core",
+ "vaco-expr",
+ "vaco-filter-core",
+ "vaco-filter-framesync",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-opts",
+ "vaco-pixfmt",
+ "vaco-scale",
 ]
 
 [[package]]
@@ -1973,10 +2003,12 @@ dependencies = [
  "vaco-demux-rtsp",
  "vaco-expr",
  "vaco-filter-audio",
+ "vaco-filter-audio-eq",
  "vaco-filter-core",
  "vaco-filter-framesync",
  "vaco-filter-graph",
  "vaco-filter-plumbing",
+ "vaco-filter-video-composite",
  "vaco-filter-video-format",
  "vaco-filter-video-geometry",
  "vaco-filter-video-source",
@@ -2233,6 +2265,21 @@ dependencies = [
  "vaco-limits",
  "vaco-packet",
  "vaco-pixfmt",
+]
+
+[[package]]
+name = "vaco-mux-rtp"
+version = "0.1.0"
+dependencies = [
+ "vaco-bitstream",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-format-core",
+ "vaco-format-rtp",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-packet",
+ "vaco-time",
 ]
 
 [[package]]
@@ -2505,9 +2552,12 @@ dependencies = [
  "vaco-demux-mxf",
  "vaco-demux-ogg",
  "vaco-demux-raw",
+ "vaco-demux-rtsp",
  "vaco-filter-audio",
+ "vaco-filter-audio-eq",
  "vaco-filter-core",
  "vaco-filter-plumbing",
+ "vaco-filter-video-composite",
  "vaco-filter-video-format",
  "vaco-filter-video-geometry",
  "vaco-filter-video-source",
@@ -2528,6 +2578,7 @@ dependencies = [
  "vaco-mux-mpegts",
  "vaco-mux-ogg",
  "vaco-mux-raw",
+ "vaco-mux-rtp",
  "vaco-mux-stream",
  "vaco-mux-utility",
  "vaco-parse-aac",

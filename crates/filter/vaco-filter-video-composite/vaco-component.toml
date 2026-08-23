@@ -1,0 +1,23 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Video composite filters: overlay, rotate. FT-4.1c (GitHub issue #465), the
+# compositing child of epic #54.
+#
+# Each `ctor` names the per-filter `pub const DESC: FilterDesc`; runtime
+# instantiation goes through
+# `vaco_filter_video_composite::registry::CompositeRegistry`, a
+# `vaco_filter_graph::registry::FilterRegistry` impl.
+
+[[component]]
+kind = "filter"
+name = "overlay"
+long_name = "Overlay a video source on top of the input"
+ctor = "vaco_filter_video_composite::overlay::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "rotate"
+long_name = "Rotate the input image"
+ctor = "vaco_filter_video_composite::rotate::DESC"
+media = "video"

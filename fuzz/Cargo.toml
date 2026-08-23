@@ -54,10 +54,12 @@ vaco-demux-raw = { path = "../crates/format/vaco-demux-raw" }
 vaco-demux-rtsp = { path = "../crates/format/vaco-demux-rtsp" }
 vaco-expr = { path = "../crates/core/vaco-expr" }
 vaco-filter-audio = { path = "../crates/filter/vaco-filter-audio" }
+vaco-filter-audio-eq = { path = "../crates/filter/vaco-filter-audio-eq" }
 vaco-filter-core = { path = "../crates/filter/vaco-filter-core" }
 vaco-filter-framesync = { path = "../crates/filter/vaco-filter-framesync" }
 vaco-filter-graph = { path = "../crates/filter/vaco-filter-graph" }
 vaco-filter-plumbing = { path = "../crates/filter/vaco-filter-plumbing" }
+vaco-filter-video-composite = { path = "../crates/filter/vaco-filter-video-composite" }
 vaco-filter-video-format = { path = "../crates/filter/vaco-filter-video-format" }
 vaco-filter-video-geometry = { path = "../crates/filter/vaco-filter-video-geometry" }
 vaco-filter-video-source = { path = "../crates/filter/vaco-filter-video-source" }
@@ -136,10 +138,12 @@ default = [
     "demux-rtsp",
     "expr",
     "filter-audio",
+    "filter-audio-eq",
     "filter-core",
     "filter-framesync",
     "filter-graph",
     "filter-plumbing",
+    "filter-video-composite",
     "filter-video-format",
     "filter-video-geometry",
     "filter-video-source",
@@ -212,10 +216,12 @@ demux-raw = []
 demux-rtsp = []
 expr = []
 filter-audio = []
+filter-audio-eq = []
 filter-core = []
 filter-framesync = []
 filter-graph = []
 filter-plumbing = []
+filter-video-composite = []
 filter-video-format = []
 filter-video-geometry = []
 filter-video-source = []
@@ -582,6 +588,14 @@ bench = false
 required-features = ["expr"]
 
 [[bin]]
+name = "filter_audio_eq_options"
+path = "fuzz_targets/filter_audio_eq_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-audio-eq"]
+
+[[bin]]
 name = "filter_audio_options"
 path = "fuzz_targets/filter_audio_options.rs"
 test = false
@@ -612,6 +626,14 @@ test = false
 doc = false
 bench = false
 required-features = ["filter-core"]
+
+[[bin]]
+name = "filter_video_composite_options"
+path = "fuzz_targets/filter_video_composite_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-video-composite"]
 
 [[bin]]
 name = "filter_video_format_options"
