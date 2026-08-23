@@ -452,7 +452,7 @@ new cases) and `progressive::tests::mov_gets_wide_every_other_brand_gets_free`,
 plus `tests/roundtrip.rs::a_non_faststart_file_puts_mdat_before_moov`
 updated for the new placeholder box.
 
-## 15. `vaco-mux-matroska`: no `SeekHead` **and no `CRC-32` on any level-1 element** — reclassified, both now fully measured
+## 15. `vaco-mux-matroska`: no `SeekHead` **and no `CRC-32` on any level-1 element** — **fixed, byte gap not fully closed**
 
 ```
 $ just conformance-run 'transcode-remux-bitexact/v-mp4/output=matroska'
@@ -529,6 +529,108 @@ Reclassified from "intentional omission, no behavioural gain" to **a real
 divergence worth closing**: with the CRC-32s absent as well, no Matroska output
 this project writes can ever be byte-identical, which takes an entire container
 family out of the byte-identity suite.
+
+### Fixed 2026-08-23 (agent:mkv) — and the byte gap is not fully closed
+
+Both halves landed in `crates/format/vaco-mux-matroska/src/mux.rs`, exactly as
+measured above.
+
+**`CRC-32`**: `mux::with_crc32` prefixes a `CRC-32` element to the body of
+every Level-1 element (`SeekHead`, `Info`, `Tracks`, `Chapters`,
+`Attachments`, `Tags`, `Cluster`, `Cues`) before it is wrapped in its own
+`write_element` call — `vaco_hash::crc32` (D11's single owner of the `crc`
+crate) supplies the algorithm, so no second table was added anywhere.
+Confirmed unconditional: `ffmpeg -h muxer=matroska` has no `-write_crc32`-
+shaped `AVOption`, and `-bitexact` does not touch it either. A new
+`tests/crc32_reference_fixture.rs` checks this crate's implementation against
+`tests/fixtures/ffmpeg_reference.mkv` — the reference's *own* output, not
+this crate's — recomputing and validating all six CRC-32-bearing Level-1
+elements the fixture carries, not only the one this finding was originally
+measured against.
+
+**`SeekHead`**: `mux::seekhead_and_void` reserves a **fixed** 161-byte budget
+for `SeekHead` plus its padding `Void`
+(`mux::SEEKHEAD_RESERVED_BYTES`) — re-measured while implementing this and
+found to be even more fixed than the finding above states: **stable across a
+3-, 4-, 5- and 6-entry `SeekHead`** (probed with `-metadata`-driven chapters
+and an attachment added on top of the original fixture) **and across file
+sizes from ~3 KB to ~300 KB**, not merely across the one file this finding
+measured. `Info`/`Tracks`/`Chapters`/`Attachments` get a `Seek` entry at
+`write_header` time (their positions are fully known — they sit back-to-back
+right after the reservation); `Cues`'s position is only known at
+`write_trailer`, after every `Cluster`.
+
+One thing this finding did not check, added during implementation:
+**non-seekable output**. `ffmpeg -f matroska -` piped into a plain redirect
+(the `pipe:` protocol disables seeking regardless of what the receiving
+descriptor could technically do) commits to `SeekHead` at `write_header` time
+with whatever it already has, and **omits `Cues` entirely** — not merely its
+`Seek` entry, the whole element is absent from the piped file. This crate now
+reproduces that: `write_trailer` gates writing `Cues` on
+`self.out.is_seekable()`, matching the reference measured both ways.
+
+**The byte gap is not fully closed.** `just conformance-run
+'transcode-remux-bitexact/v-mp4/output=matroska'` still fails:
+
+```
+exact-bytes — output file differs at byte 50; ours 8270 bytes, reference 8072 bytes
+```
+
+But the divergence has moved. Byte 50 is inside `Segment`'s own size field —
+it differs because the total file sizes differ, which is a downstream
+consequence of content differences elsewhere, not evidence of a `SeekHead`/
+`CRC-32` construction bug. Checked directly: bytes 52–213 (the entire
+`SeekHead`+`Void` reservation) contain only the expected differences —
+`SeekPosition` values and the `CRC-32` they roll up into, both of which *must*
+differ because the elements they describe are genuinely different sizes in
+the two files — and a self-consistency scan (parse every `Seek` entry, follow
+its position, confirm the element actually found there has the entry's
+target ID) passes on both files, including the `Cues` entry the seekable
+patch adds at trailer time.
+
+What actually still differs, measured directly against
+`ffmpeg -hide_banner -nostdin -i v-src.mp4 -c copy -f matroska -fflags
++bitexact` on both sides, none of it caused by this finding's two fixes and
+none of it this finding's scope:
+
+- **`Info`**: this crate's `MuxingApp`/`WritingApp` is `vaco-mux-matroska`
+  (this project's own identity, by design — not `ffmpeg`'s versioned
+  `Lavf62.12.100`, which `-bitexact` itself shortens to plain `Lavf`).
+  Separately — a real bug, unrelated to identity strings — `Info`'s
+  `Duration` element can **never** be written: `info_bytes`'s
+  `if self.max_end_ticks > 0` check runs inside `write_header`, before any
+  `write_packet` call has had a chance to grow `max_end_ticks` above zero.
+  Fixing it needs the same reserve-then-patch shape `SeekHead` just adopted,
+  and patching `Info`'s size after the fact would shift every position after
+  it — including the ones this finding just taught `SeekHead` to compute —
+  so it is a follow-on, not a one-line fix.
+- **`Tracks`**: this crate's `TrackEntry` field order and `TrackUID` octet
+  width do not match the reference's, and the reference writes two small
+  fields (inside `TrackEntry` and inside `Video`) this crate does not.
+- **`Tags`**: this crate never forwards MP4-level container metadata
+  (`major_brand`/`minor_version`/`compatible_brands`) into file-level `Tags`,
+  and — already documented in `docs/format/vaco-mux-matroska.md` — does not
+  reproduce the reference's own auto `ENCODER`/`DURATION`/`HANDLER_NAME`
+  `SimpleTag`s. Nothing upstream of `vaco-mux-matroska` currently supplies
+  either via `Muxer::set_metadata` for a plain `-c copy` remux.
+
+Each is recorded with its exact cause in
+`docs/format/vaco-mux-matroska.md`'s *Known gaps* item 6, so the next person
+closing one of them is not starting from a re-derivation.
+
+Tests: `cargo test -p vaco-mux-matroska` and `cargo test -p
+vaco-demux-matroska` both green (25+1 and 28+7 tests respectively, plus
+doctests) — a file this muxer writes still reads back. `cargo clippy -p
+vaco-mux-matroska --all-targets` clean. `layer-check`, `dup-check`,
+`time-gate`, `owner-gate`, `provenance-check` all green. Every fix falsified
+directly: `with_crc32` perturbed to write a wrong CRC (caught by
+`every_level1_element_this_muxer_writes_carries_a_validating_crc32`),
+`SEEKHEAD_RESERVED_BYTES` changed from 161 to 160 (caught by
+`seekhead_reservation_is_the_measured_fixed_budget`, which pins the literal
+161 rather than comparing the constant to itself), and the non-seekable
+`Cues` gate removed (caught by two tests, both failing with `NotSeekable`
+since the muxer then tries to patch a reservation on a sink that cannot seek)
+— each restored afterward and re-verified green.
 
 ## 16. `vaco-mux-avi`: no length-prefixed-to-Annex-B bitstream conversion at all — **fixed, byte gap not fully closed**
 

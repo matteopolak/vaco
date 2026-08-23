@@ -58,15 +58,65 @@
 //! `Cues` needs no such channel — every field it carries comes from the
 //! packets themselves — so it was already implemented in full.
 //!
-//! # What is still deliberately not here
+//! # `CRC-32` and `SeekHead` (CONFORMANCE-FINDINGS 15)
 //!
-//! `SeekHead` is left out, on purpose rather than by trait limitation: it is
-//! RFC 9559's optional fast-locate index, and every reader has to fall back
-//! to a linear scan for `Info`/`Tracks` when it is absent or wrong — this
-//! workspace's own `vaco-demux-matroska` does. Building it correctly needs
-//! either a second seek-patch pass or fixed-width placeholder arithmetic for
-//! no behavioural gain over the `Cues`-only index this crate already writes,
-//! so it is deferred rather than added for its own sake.
+//! Both measured directly against `ffmpeg 8.1`, `-bitexact`, on
+//! `ebmldump`-style byte inspection of a real muxed file (see
+//! `docs/format/vaco-mux-matroska.md`) — this is what closes the byte gap
+//! that made every Matroska output in the byte-identical conformance suite
+//! diverge, not a stylistic addition.
+//!
+//! **`CRC-32`.** Every Level-1 element (`SeekHead`, `Info`, `Tracks`,
+//! `Chapters`, `Attachments`, `Tags`, `Cluster`, `Cues`) opens with a
+//! `CRC-32` element (RFC 8794 §11.3.2) as its first child: standard CRC-32
+//! (IEEE, `vaco_hash::crc32` — D11's single owner of the `crc` crate, no
+//! second table here), little-endian, over the element's own payload
+//! excluding the `CRC-32` element itself. [`with_crc32`] is the one place
+//! that wrapping happens; every `*_bytes` builder in this file routes its
+//! body through it before handing it to `write_element`. Written
+//! unconditionally — `-bitexact` does not gate it, and there is no
+//! `-write_crc32`-shaped option on the muxer side to gate it with (measured:
+//! `ffmpeg -h muxer=matroska` lists no such `AVOption`; the CRC is simply
+//! always there).
+//!
+//! **`SeekHead`.** The crate's own former objection — that building it
+//! needs "either a second seek-patch pass or fixed-width placeholder
+//! arithmetic" — turned out to describe a harder problem than the reference
+//! actually solves. It reserves a **fixed** budget
+//! ([`SEEKHEAD_RESERVED_BYTES`], measured at 161 bytes and stable across a
+//! 3-, 4-, 5- and 6-entry `SeekHead`, a 3 KB file and a 300 KB one — i.e.
+//! independent of how many entries there are or how wide their
+//! `SeekPosition` values encode), writes whatever real `Seek` entries it
+//! already knows, and pads the remainder of that fixed budget with a `Void`
+//! element whose own size field is always the full eight-octet VINT width
+//! (measured on every sample: `Void`'s header is always 9 bytes, `0xEC` plus
+//! an 8-octet size), which is what lets the same reserved span be patched
+//! later without moving anything after it. [`seekhead_and_void`] builds this
+//! reserved region and both write sites — [`MatroskaMuxer::write_header`]'s
+//! initial commit and [`MatroskaMuxer::write_trailer`]'s later patch — call
+//! it, so the padding math lives in exactly one place. `patch_known_size`
+//! (already in `vaco-format-ebml`) is the same seek-and-overwrite primitive
+//! `Segment`'s own size field already used; nothing new needed adding there.
+//!
+//! `Info`, `Tracks`, `Chapters` and `Attachments` (whichever of the last two
+//! exist) get a `Seek` entry immediately, at `write_header` time, because
+//! their absolute positions are fully determined the moment their bodies are
+//! built — they sit back-to-back right after the fixed reservation, in the
+//! order this crate already writes them. `Cues` cannot: its content and
+//! position are only known after every `Cluster` has been written, at
+//! `write_trailer` time. So, measured on a **seekable** sink: the reference
+//! seeks back to the start of the reservation and rewrites it — same 161-byte
+//! span, recomputed from scratch with the `Cues` entry added — once `Cues`'
+//! position is known. On a **non-seekable** sink (a pipe: `ffmpeg -f
+//! matroska -` into a plain redirect, which disables seeking at the
+//! `pipe:` protocol layer regardless of what the receiving fd could
+//! technically do) it cannot go back, so it commits to the final `SeekHead`
+//! at `write_header` time with whatever it already knows — and, measured
+//! directly, **omits `Cues` entirely** rather than writing an unindexed one:
+//! there is no `Cues` element anywhere in the piped output, not merely a
+//! missing `Seek` entry for it. This crate reproduces exactly that asymmetry
+//! rather than writing `Cues` unconditionally and only varying whether it is
+//! indexed.
 
 use vaco_codec_core::{CodecId, CodecParameters};
 use vaco_core::{Error, MediaType, Rational, Result};
@@ -91,6 +141,75 @@ use crate::codec;
 /// a conservative, commonly used value and is not claimed to match the
 /// reference's own unbounded default byte-for-byte.
 const MAX_CLUSTER_MS: i64 = 5000;
+
+/// Bytes always reserved for `SeekHead` plus the `Void` that pads it out —
+/// see the module docs' *`CRC-32` and `SeekHead`* section for how this was
+/// measured and why it is a fixed budget rather than something computed per
+/// file. `ffmpeg 8.1` keeps this constant across a 3-, 4-, 5- and 6-entry
+/// `SeekHead` and across file sizes from ~3 KB to ~300 KB; nothing this
+/// crate ever seeks to (`Info`, `Tracks`, `Chapters`, `Attachments`, `Tags`,
+/// `Cues`) needs more than a fraction of it.
+const SEEKHEAD_RESERVED_BYTES: u64 = 161;
+
+/// The `Void`-header width the reference always uses inside the `SeekHead`
+/// reservation: element ID (one octet, `0xEC`) plus an eight-octet size
+/// field encoded at full VINT width rather than the shortest one — measured
+/// on every sample gathered for this crate (see the module docs), which is
+/// what lets the same reserved span be overwritten later without the
+/// `Void`'s own header width changing underneath it.
+const VOID_HEADER_BYTES: u64 = 1 + 8;
+
+/// One `Seek` entry: `SeekID` (the target's own element ID, stored as binary
+/// with its length marker intact — RFC 9559 §11.2) and `SeekPosition`
+/// (relative to the `Segment`'s data start, per the reference's own choice
+/// of the "fewest octets that hold the value" uinteger encoding, matching
+/// [`vaco_format_ebml::uint`]'s own scheme).
+fn seek_entry(target_id: u32, position_rel: u64) -> Vec<u8> {
+    let mut body = vaco_format_ebml::binary(el::SEEKID, &id_bytes(target_id));
+    body.extend_from_slice(&write_uint(el::SEEKPOSITION, position_rel));
+    write_element(el::SEEK, &body)
+}
+
+/// `SeekHead` plus its padding `Void`, sized to exactly
+/// [`SEEKHEAD_RESERVED_BYTES`] regardless of how many `entries` there are or
+/// how wide their positions encode — see the module docs. `entries` is
+/// `(target element ID, position relative to the Segment's data start)`,
+/// in the order the `Seek` entries should appear (this crate always passes
+/// them in file order, matching every sample measured).
+///
+/// Returns `None` if `entries` alone would not fit the reservation — not
+/// observed against the reference at up to six entries, but a real
+/// possibility this crate cannot rule out for a caller-supplied metadata set
+/// large enough to need wide `SeekPosition`s everywhere; the caller falls
+/// back to writing no `SeekHead` at all rather than corrupting the fixed
+/// span every other element's position depends on.
+fn seekhead_and_void(entries: &[(u32, u64)]) -> Option<Vec<u8>> {
+    let mut seekhead_body = Vec::new();
+    for &(id, pos) in entries {
+        seekhead_body.extend_from_slice(&seek_entry(id, pos));
+    }
+    let seekhead = write_element(el::SEEKHEAD, &with_crc32(&seekhead_body));
+    let seekhead_len = seekhead.len() as u64;
+    let void_total = SEEKHEAD_RESERVED_BYTES.checked_sub(seekhead_len)?;
+    let void_body_len = void_total.checked_sub(VOID_HEADER_BYTES)?;
+    let mut out = seekhead;
+    out.extend_from_slice(&id_bytes(el::VOID));
+    out.extend_from_slice(&vaco_format_ebml::vint(void_body_len, 8));
+    out.resize(out.len() + void_body_len as usize, 0);
+    Some(out)
+}
+
+/// Prefix `body` with an EBML `CRC-32` element (RFC 8794 §11.3.2): standard
+/// CRC-32 (IEEE — [`vaco_hash::crc32`], D11's single owner of the `crc`
+/// crate), emitted little-endian, over `body` itself — never over the
+/// `CRC-32` element this produces. Measured unconditional on every Level-1
+/// element the reference writes; see the module docs.
+fn with_crc32(body: &[u8]) -> Vec<u8> {
+    let crc = vaco_hash::crc32(body);
+    let mut out = vaco_format_ebml::binary(el::CRC32, &crc.to_le_bytes());
+    out.extend_from_slice(body);
+    out
+}
 
 /// A container profile: what differs between `matroska` and `webm` beyond
 /// the element tree, which both share in full.
@@ -206,6 +325,12 @@ struct CueEntry {
 
 /// The Matroska/`WebM` muxer.
 #[derive(Debug)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each bool is an independent one-way latch (header/trailer written once, \
+              DocType bumped once, SeekHead reservation present once), not related state \
+              that wants an enum"
+)]
 pub struct MatroskaMuxer {
     variant: Variant,
     out: IoWriter,
@@ -241,6 +366,21 @@ pub struct MatroskaMuxer {
     /// (M30, gap 1). Empty for every caller that never calls
     /// `MuxBuilder::with_metadata`, which is every pre-existing call site.
     metadata: MuxMetadata,
+    /// `(target element ID, position relative to the Segment's data start)`
+    /// for every `Seek` entry written into the `SeekHead` reservation at
+    /// `write_header` time — i.e. everything except `Cues`, whose position
+    /// is not yet known then. [`MatroskaMuxer::write_trailer`] reuses this
+    /// list, with `Cues` appended, to recompute the same reservation when the
+    /// sink is seekable — see the module docs' *`CRC-32` and `SeekHead`*
+    /// section.
+    seek_targets: Vec<(u32, u64)>,
+    /// Whether [`MatroskaMuxer::write_header`] actually wrote the `SeekHead`
+    /// reservation — false only in the unreached-in-practice case where
+    /// [`seekhead_and_void`] refuses because `seek_targets` alone would not
+    /// fit [`SEEKHEAD_RESERVED_BYTES`] (see that function's docs). Guards
+    /// [`MatroskaMuxer::write_trailer`]'s later patch: with no reservation to
+    /// begin with, there is no fixed span to seek back and overwrite.
+    seekhead_reserved: bool,
 }
 
 /// Matroska's epoch (2001-01-01T00:00:00 UTC) as Unix nanoseconds.
@@ -280,6 +420,8 @@ impl MatroskaMuxer {
             max_cluster_ms: MAX_CLUSTER_MS,
             cluster_starts: Vec::new(),
             metadata: MuxMetadata::default(),
+            seek_targets: Vec::new(),
+            seekhead_reserved: false,
         })
     }
 
@@ -356,7 +498,7 @@ impl MatroskaMuxer {
             // 1_000_000 ns/tick scale fixed above).
             body.extend_from_slice(&write_float(el::DURATION, self.max_end_ticks as f64));
         }
-        write_element(el::INFO, &body)
+        write_element(el::INFO, &with_crc32(&body))
     }
 
     /// `name`/`language` are resolved by the caller ([`MatroskaMuxer::tracks_bytes`])
@@ -415,7 +557,7 @@ impl MatroskaMuxer {
                 .map_or("und", |(_, v)| v.as_str());
             body.extend_from_slice(&Self::track_entry_bytes(t, name, language));
         }
-        write_element(el::TRACKS, &body)
+        write_element(el::TRACKS, &with_crc32(&body))
     }
 
     /// Flush the in-progress `Cluster`, if any, writing it as one complete
@@ -429,7 +571,7 @@ impl MatroskaMuxer {
             u64::try_from(cluster.start_ticks).unwrap_or(0),
         );
         body.extend_from_slice(&cluster.body);
-        let bytes = write_element(el::CLUSTER, &body);
+        let bytes = write_element(el::CLUSTER, &with_crc32(&body));
         // `byte_pos` was recorded before any of this cluster's bytes were
         // written, so it is exactly where `out.pos()` is now, before this
         // write — nothing to recompute.
@@ -485,7 +627,9 @@ impl MatroskaMuxer {
                 .metadata
                 .tags_for_stream(u32::try_from(track.number - 1).unwrap_or(0))
                 .iter()
-                .filter(|(k, _)| !k.eq_ignore_ascii_case("title") && !k.eq_ignore_ascii_case("language"))
+                .filter(|(k, _)| {
+                    !k.eq_ignore_ascii_case("title") && !k.eq_ignore_ascii_case("language")
+                })
                 .cloned()
                 .collect();
             if stream_tags.is_empty() {
@@ -497,7 +641,7 @@ impl MatroskaMuxer {
             body.extend_from_slice(&write_element(el::TAG, &tag));
         }
 
-        (!body.is_empty()).then(|| write_element(el::TAGS, &body))
+        (!body.is_empty()).then(|| write_element(el::TAGS, &with_crc32(&body)))
     }
 
     /// Rescale a chapter bound to RFC 9559's fixed nanosecond unit for
@@ -547,7 +691,7 @@ impl MatroskaMuxer {
             editions.extend_from_slice(&write_element(el::CHAPTERATOM, &atom));
         }
         let edition_entry = write_element(el::EDITIONENTRY, &editions);
-        Some(write_element(el::CHAPTERS, &edition_entry))
+        Some(write_element(el::CHAPTERS, &with_crc32(&edition_entry)))
     }
 
     /// `Attachments`, or `None` when [`MuxMetadata::attachments`] is empty.
@@ -572,7 +716,7 @@ impl MatroskaMuxer {
             file.extend_from_slice(&write_uint(el::FILEUID, uid));
             body.extend_from_slice(&write_element(el::ATTACHEDFILE, &file));
         }
-        Some(write_element(el::ATTACHMENTS, &body))
+        Some(write_element(el::ATTACHMENTS, &with_crc32(&body)))
     }
 
     /// A small, deterministic 64-bit value from `salt` and `text` — used
@@ -598,7 +742,7 @@ impl MatroskaMuxer {
             point.extend_from_slice(&write_element(el::CUETRACKPOSITIONS, &positions));
             body.extend_from_slice(&write_element(el::CUEPOINT, &point));
         }
-        write_element(el::CUES, &body)
+        write_element(el::CUES, &with_crc32(&body))
     }
 }
 
@@ -712,16 +856,51 @@ impl Muxer for MatroskaMuxer {
         self.segment_data_start = self.out.pos();
 
         let info = self.info_bytes();
-        self.out.write(&info)?;
         let tracks = self.tracks_bytes();
+        let chapters = self.chapters_bytes();
+        let attachments = self.attachments_bytes();
+        let tags = self.tags_bytes();
+
+        // `Info`, `Tracks`, `Chapters` and `Attachments` (whichever exist)
+        // sit back-to-back right after the fixed `SeekHead` reservation, in
+        // this same order — so their positions are fully known before any of
+        // them is written. `Tags` is deliberately not indexed yet: see below.
+        let mut pos = SEEKHEAD_RESERVED_BYTES;
+        let mut targets = vec![(el::INFO, pos)];
+        pos += info.len() as u64;
+        targets.push((el::TRACKS, pos));
+        pos += tracks.len() as u64;
+        if let Some(c) = &chapters {
+            targets.push((el::CHAPTERS, pos));
+            pos += c.len() as u64;
+        }
+        if let Some(a) = &attachments {
+            targets.push((el::ATTACHMENTS, pos));
+            pos += a.len() as u64;
+        }
+        if tags.is_some() {
+            targets.push((el::TAGS, pos));
+        }
+        self.seek_targets = targets;
+
+        // `Cues`' position is not known until `write_trailer` (after every
+        // `Cluster`), so it has no entry yet. A seekable sink rewrites this
+        // same reservation there once it does; a non-seekable one commits to
+        // this `SeekHead` as final — see the module docs.
+        if let Some(region) = seekhead_and_void(&self.seek_targets) {
+            self.out.write(&region)?;
+            self.seekhead_reserved = true;
+        }
+
+        self.out.write(&info)?;
         self.out.write(&tracks)?;
-        if let Some(chapters) = self.chapters_bytes() {
+        if let Some(chapters) = chapters {
             self.out.write(&chapters)?;
         }
-        if let Some(attachments) = self.attachments_bytes() {
+        if let Some(attachments) = attachments {
             self.out.write(&attachments)?;
         }
-        if let Some(tags) = self.tags_bytes() {
+        if let Some(tags) = tags {
             self.out.write(&tags)?;
         }
         Ok(())
@@ -843,12 +1022,32 @@ impl Muxer for MatroskaMuxer {
 
         self.flush_cluster()?;
 
-        if !self.cues.is_empty() {
+        let seekable = self.out.is_seekable();
+        // `Cues` is written only when the sink can later seek back and add
+        // its `Seek` entry to the `SeekHead` reservation — measured directly
+        // on a pipe: the reference omits `Cues` entirely there, not merely
+        // its index entry (see the module docs' *`CRC-32` and `SeekHead`*
+        // section). A seekable sink with nothing to index (no keyframe ever
+        // opened a cluster) keeps the pre-existing "nothing to write"
+        // behaviour.
+        if seekable && !self.cues.is_empty() {
+            let cues_pos_rel = self.out.pos().saturating_sub(self.segment_data_start);
             let cues = self.cues_bytes();
             self.out.write(&cues)?;
+
+            if self.seekhead_reserved {
+                let mut targets = self.seek_targets.clone();
+                targets.push((el::CUES, cues_pos_rel));
+                if let Some(region) = seekhead_and_void(&targets) {
+                    let end = self.out.pos();
+                    self.out.seek(self.segment_data_start)?;
+                    self.out.write(&region)?;
+                    self.out.seek(end)?;
+                }
+            }
         }
 
-        if self.out.is_seekable() {
+        if seekable {
             let end = self.out.pos();
             let size = end.saturating_sub(self.segment_data_start);
             self.out.seek(self.segment_size_at)?;
@@ -1020,6 +1219,208 @@ mod tests {
                 .windows(cues_id.len())
                 .any(|w| w == cues_id.as_slice())
         );
+    }
+
+    /// `Segment`'s direct children, as `(id, offset relative to Segment's
+    /// data start)` — the shape every `SeekHead`/reservation test below
+    /// needs, built once so each test only asserts.
+    fn segment_children(bytes: &[u8]) -> Vec<(u32, u64)> {
+        let caps = vaco_format_ebml::Caps::default();
+        let top: Vec<_> = vaco_format_ebml::Slice::new(bytes, caps)
+            .children()
+            .collect();
+        let segment = top.iter().find(|c| c.id == el::SEGMENT).unwrap();
+        vaco_format_ebml::Slice::new(segment.data, caps)
+            .children()
+            .map(|c| (c.id, c.offset as u64))
+            .collect()
+    }
+
+    #[test]
+    fn every_level1_element_this_muxer_writes_carries_a_validating_crc32() {
+        let s = MemorySink::new();
+        let buf = s.shared();
+        let mut mux = MatroskaMuxer::new_matroska(Box::new(s), &FormatOptions::default()).unwrap();
+        let idx = mux.add_stream(&h264_params()).unwrap();
+        mux.write_header().unwrap();
+        for i in 0..3i64 {
+            mux.write_packet(&pkt(idx, i * 40, i == 0)).unwrap();
+        }
+        mux.write_trailer().unwrap();
+        let bytes = buf.snapshot();
+
+        let caps = vaco_format_ebml::Caps::default();
+        let mut checked = Vec::new();
+        for (id, _) in segment_children(&bytes) {
+            let top: Vec<_> = vaco_format_ebml::Slice::new(&bytes, caps)
+                .children()
+                .collect();
+            let segment = top.iter().find(|c| c.id == el::SEGMENT).unwrap();
+            let child = vaco_format_ebml::Slice::new(segment.data, caps)
+                .children()
+                .find(|c| c.id == id && c.data.len() >= 6)
+                .unwrap();
+            let Ok((first_id, idl)) =
+                vaco_format_ebml::read_id(child.data, vaco_format_ebml::MAX_ID_LEN)
+            else {
+                continue;
+            };
+            if first_id != el::CRC32 {
+                continue; // `Void`: no CRC-32 child by design.
+            }
+            let (size, szl) =
+                vaco_format_ebml::read_size(&child.data[idl..], vaco_format_ebml::MAX_SIZE_LEN)
+                    .unwrap();
+            let crc_len = size.known().unwrap() as usize;
+            let crc_start = idl + szl;
+            let declared_bytes = &child.data[crc_start..crc_start + crc_len];
+            let mut declared_le = [0u8; 4];
+            declared_le[..declared_bytes.len().min(4)]
+                .copy_from_slice(&declared_bytes[..declared_bytes.len().min(4)]);
+            let declared = u32::from_le_bytes(declared_le);
+            let computed = vaco_hash::crc32(&child.data[crc_start + crc_len..]);
+            assert_eq!(declared, computed, "id=0x{id:X}");
+            checked.push(id);
+        }
+        // SeekHead, Info, Tracks, Cluster, Cues — every Level-1 element this
+        // fixture produces (no Tags/Chapters/Attachments: no metadata set).
+        assert_eq!(checked.len(), 5, "{checked:?}");
+    }
+
+    #[test]
+    fn seekhead_reservation_is_the_measured_fixed_budget() {
+        let s = MemorySink::new();
+        let buf = s.shared();
+        let mut mux = MatroskaMuxer::new_matroska(Box::new(s), &FormatOptions::default()).unwrap();
+        let idx = mux.add_stream(&h264_params()).unwrap();
+        mux.write_header().unwrap();
+        mux.write_packet(&pkt(idx, 0, true)).unwrap();
+        mux.write_trailer().unwrap();
+        let bytes = buf.snapshot();
+
+        let children = segment_children(&bytes);
+        assert_eq!(children[0].0, el::SEEKHEAD);
+        assert_eq!(children[1].0, el::VOID);
+        // `Info` starts exactly `SEEKHEAD_RESERVED_BYTES` into the Segment's
+        // data regardless of how large the real SeekHead body turned out —
+        // that fixed budget, not a per-file computation, is the whole point
+        // measured in the module docs.
+        assert_eq!(children[2].0, el::INFO);
+        // 161, not `SEEKHEAD_RESERVED_BYTES`: this pins the measured literal
+        // (see the module docs) so a future edit to the constant is caught
+        // here rather than silently redefining what "correct" means.
+        assert_eq!(children[2].1, 161);
+        assert_eq!(SEEKHEAD_RESERVED_BYTES, 161);
+    }
+
+    #[test]
+    fn a_non_seekable_sink_writes_seekhead_without_cues_and_omits_cues_entirely() {
+        let s = ForwardOnlySink::new();
+        let buf = s.shared();
+        let mut mux = MatroskaMuxer::new_matroska(Box::new(s), &FormatOptions::default()).unwrap();
+        let idx = mux.add_stream(&h264_params()).unwrap();
+        mux.write_header().unwrap();
+        mux.write_packet(&pkt(idx, 0, true)).unwrap();
+        mux.write_trailer().unwrap();
+        let bytes = buf.snapshot();
+
+        // Measured against `ffmpeg 8.1`: a non-seekable sink omits `Cues`
+        // entirely, not merely its `Seek` entry (see the module docs).
+        let cues_id = vaco_format_ebml::id_bytes(el::CUES);
+        assert!(
+            bytes
+                .windows(cues_id.len())
+                .all(|w| w != cues_id.as_slice()),
+            "no Cues element at all on a non-seekable sink"
+        );
+
+        let caps = vaco_format_ebml::Caps::default();
+        let children = segment_children(&bytes);
+        let seekhead = children
+            .iter()
+            .find(|&&(id, _)| id == el::SEEKHEAD)
+            .unwrap();
+        let (_, seekhead_offset) = *seekhead;
+        let top: Vec<_> = vaco_format_ebml::Slice::new(&bytes, caps)
+            .children()
+            .collect();
+        let segment = top.iter().find(|c| c.id == el::SEGMENT).unwrap();
+        let seekhead_child = vaco_format_ebml::Slice::new(segment.data, caps)
+            .children()
+            .find(|c| c.offset as u64 == seekhead_offset)
+            .unwrap();
+        let seek_count = vaco_format_ebml::Slice::new(seekhead_child.data, caps)
+            .children()
+            .filter(|c| c.id == el::SEEK)
+            .count();
+        assert_eq!(
+            seek_count, 2,
+            "Info and Tracks only: no Tags (no metadata set) and no Cues (non-seekable)"
+        );
+    }
+
+    #[test]
+    fn a_seekable_sinks_seekhead_indexes_cues_and_every_entry_points_at_its_real_target() {
+        let s = MemorySink::new();
+        let buf = s.shared();
+        let mut mux = MatroskaMuxer::new_matroska(Box::new(s), &FormatOptions::default()).unwrap();
+        let idx = mux.add_stream(&h264_params()).unwrap();
+        mux.write_header().unwrap();
+        mux.write_packet(&pkt(idx, 0, true)).unwrap();
+        mux.write_trailer().unwrap();
+        let bytes = buf.snapshot();
+
+        let caps = vaco_format_ebml::Caps::default();
+        let top: Vec<_> = vaco_format_ebml::Slice::new(&bytes, caps)
+            .children()
+            .collect();
+        let segment = top.iter().find(|c| c.id == el::SEGMENT).unwrap();
+        let children: Vec<_> = vaco_format_ebml::Slice::new(segment.data, caps)
+            .children()
+            .collect();
+        let seekhead = children.iter().find(|c| c.id == el::SEEKHEAD).unwrap();
+
+        let mut saw_cues = false;
+        let mut entries = 0;
+        for seek in vaco_format_ebml::Slice::new(seekhead.data, caps)
+            .children()
+            .filter(|c| c.id == el::SEEK)
+        {
+            let mut target_id = None;
+            let mut position = None;
+            for kid in vaco_format_ebml::Slice::new(seek.data, caps).children() {
+                match kid.id {
+                    el::SEEKID => {
+                        target_id =
+                            vaco_format_ebml::read_id(kid.data, vaco_format_ebml::MAX_ID_LEN)
+                                .ok()
+                                .map(|(v, _)| v);
+                    }
+                    el::SEEKPOSITION => position = vaco_format_ebml::as_uint(kid.data),
+                    _ => {}
+                }
+            }
+            let target_id = target_id.unwrap();
+            let position = position.unwrap();
+            if target_id == el::CUES {
+                saw_cues = true;
+            }
+            let real = children
+                .iter()
+                .find(|c| c.offset as u64 == position)
+                .unwrap();
+            assert_eq!(
+                real.id, target_id,
+                "Seek entry for 0x{target_id:X} points at the wrong element"
+            );
+            entries += 1;
+        }
+        assert!(
+            saw_cues,
+            "a seekable sink with a keyframe should index Cues too"
+        );
+        // Info, Tracks, Cues (no Tags: no metadata was set on this muxer).
+        assert_eq!(entries, 3);
     }
 
     #[test]

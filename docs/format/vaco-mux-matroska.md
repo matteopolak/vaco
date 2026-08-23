@@ -162,13 +162,79 @@ implemented in full from the start — one `CuePoint` per video keyframe,
 `CueClusterPosition` relative to the first byte of `Segment`'s data per
 RFC 9559 §11.8.
 
-`SeekHead` is a separate, deliberate omission, not a trait limitation: it is
-RFC 9559's optional fast-locate index, and `vaco-demux-matroska` itself
-falls back to a linear scan for `Info`/`Tracks` when it is absent — every
-reader has to. Writing it correctly needs either patching through a second
-seek pass or fixed-width placeholder arithmetic for `SeekPosition`, for no
-behavioural gain over the `Cues`-only index already written, so it is
-deferred.
+`SeekHead` and every Level-1 element's `CRC-32` are covered in their own
+section below — *`CRC-32` and `SeekHead` (CONFORMANCE-FINDINGS 15)* — since
+closing both is what makes this crate's output able to be byte-identical to
+the reference's at all, not a cosmetic addition.
+
+### `CRC-32` and `SeekHead` (CONFORMANCE-FINDINGS 15)
+
+Two structural omissions, previously the crate's entire byte gap against the
+reference (see the *Known gaps* item this replaces): every Level-1 element
+lacked the `CRC-32` the reference always writes, and `SeekHead` was left out
+entirely on the theory that building it needed either a second seek-patch
+pass or fixed-width placeholder arithmetic. Measured directly against
+`ffmpeg 8.1` (`ebmldump`-style byte inspection — see
+`planning/CONFORMANCE-FINDINGS.md` finding 15 for the full transcript), the
+reference does neither.
+
+**`CRC-32` is unconditional.** Every Level-1 element (`SeekHead`, `Info`,
+`Tracks`, `Chapters`, `Attachments`, `Tags`, `Cluster`, `Cues`) opens with a
+`CRC-32` element (RFC 8794 §11.3.2) as its first child: standard CRC-32
+(IEEE, the same table `zlib.crc32` uses), emitted **little-endian**, over the
+element's own payload excluding the `CRC-32` element itself. `-bitexact`
+does not gate it — `ffmpeg -h muxer=matroska` has no such `AVOption` — so it
+is simply always there. `mux::with_crc32` is the one place this happens;
+`vaco_hash::crc32` supplies the algorithm (D11: `vaco-hash` is the single
+owner of the `crc` crate, so this crate depends on it rather than adding a
+second table). Verified against two independent elements from a real
+reference file:
+
+```
+SeekHead  declared 32 30 7d 64   computed LE 32 30 7d 64
+Info      declared 62 15 80 73   computed LE 62 15 80 73
+```
+
+and, as a standing regression test rather than a one-off check,
+`tests/crc32_reference_fixture.rs` walks every Level-1 element of a checked-in
+`ffmpeg`-written file (`tests/fixtures/ffmpeg_reference.mkv`) and recomputes
+each one's `CRC-32` — six elements, not the one originally used to derive the
+algorithm.
+
+**`SeekHead` reserves a fixed budget instead of computing an exact size.**
+`Info`'s, `Tracks`'s, `Chapters`'s and `Attachments`'s absolute positions are
+fully known the moment their bodies are built (they sit back-to-back right
+after the reservation), so they get a `Seek` entry immediately, at
+`write_header` time. `Cues`'s position is not known until every `Cluster`
+has been written. Measured: the reference reserves exactly
+**161 bytes** (`mux::SEEKHEAD_RESERVED_BYTES`) for `SeekHead` plus the `Void`
+that pads it — stable across a `SeekHead` with 3, 4, 5 and 6 `Seek` entries
+and across file sizes from ~3 KB to ~300 KB, i.e. independent of both entry
+count and `SeekPosition` width. `Void`'s own size field is always the full
+eight-octet VINT width (not the shortest one), which is what lets the same
+161-byte span be overwritten later without anything after it moving.
+`mux::seekhead_and_void` builds this region; both write sites —
+`write_header`'s initial commit and `write_trailer`'s later patch, via
+`vaco_format_ebml::patch_known_size`'s sibling seek-and-overwrite — call it,
+so the padding arithmetic lives in exactly one place. This resolved the
+crate's own former objection: the reference needs neither a second seek-patch
+pass (it needs exactly one, already required for `Segment`'s own size) nor
+fixed-width `SeekPosition` arithmetic (it uses the reference's own
+fewest-octets uinteger encoding throughout, letting `Void` absorb whatever
+width difference results).
+
+**Seekable vs. non-seekable diverge on `Cues`, not just its index entry.**
+Measured with `ffmpeg -f matroska -` redirected into a plain file (the
+`pipe:` protocol disables seeking regardless of what the receiving
+descriptor could technically do, matching the size-field probe earlier in
+this document): a **seekable** sink gets `SeekHead` rewritten in place once
+`Cues`'s position is known, indexing all of `Info`/`Tracks`/`Tags`/`Cues`. A
+**non-seekable** sink commits to `SeekHead` at `write_header` time with
+whatever it already has (`Info`/`Tracks`/`Tags`, no `Cues` entry) and then
+**omits the `Cues` element entirely** — not merely its `Seek` entry. This
+crate reproduces exactly that asymmetry (`write_trailer` gates writing `Cues`
+on `self.out.is_seekable()`), rather than always writing an index-less `Cues`
+and only varying whether `SeekHead` points at it.
 
 ### `webm_chunk`: what a one-sink trait can and cannot do
 
@@ -236,9 +302,12 @@ without a `web` feature.
 `vaco-format-ebml` for the EBML layer (D19); `vaco-demux-matroska` for the
 Matroska element schema and its lacing decoder, reused by this crate's own
 tests to prove round-trip agreement rather than re-tabulated — the same
-pattern `vaco-mux-ogg` uses against `vaco-demux-ogg`; `vaco-format-core`,
-`vaco-io`, `vaco-core`, `vaco-codec-core`, `vaco-packet`, `vaco-chlayout`,
-`vaco-limits` for the rest of the container framework.
+pattern `vaco-mux-ogg` uses against `vaco-demux-ogg`; `vaco-hash` for
+`vaco_hash::crc32` (D11: the single owner of the `crc` crate — every
+Level-1 element's `CRC-32` goes through it rather than a second table);
+`vaco-format-core`, `vaco-io`, `vaco-core`, `vaco-codec-core`,
+`vaco-packet`, `vaco-chlayout`, `vaco-limits` for the rest of the container
+framework.
 
 ## Fuzzing
 
@@ -284,9 +353,9 @@ failure mode already documented for `DateUTC` below).
 
 ## Known gaps (say plainly what is not done)
 
-1. `SeekHead` is not written — see *SeekHead* above for why. `Tags`,
-   `Chapters` and `Attachments` **are** now written, driven by
-   `Muxer::set_metadata` — see the section above.
+1. ~~`SeekHead` is not written~~ — fixed (CONFORMANCE-FINDINGS 15), see
+   *`CRC-32` and `SeekHead`* above. `Tags`, `Chapters` and `Attachments`
+   **are** written, driven by `Muxer::set_metadata` — see the section above.
 2. `ReferenceBlock` always points at the immediately preceding frame on the
    same track in decode order. This is correct for the common single-past-
    reference case and is **not** a general reference-picture-list encoder;
@@ -302,14 +371,43 @@ failure mode already documented for `DateUTC` below).
    `ffmpeg 8.1`'s own (0 and 5000 ms), and a caller wanting different values
    must construct `WebmChunkMuxer` directly rather than through the
    registry.
-5. `write_crc32`-equivalent behaviour (the reference writes a `CRC-32`
-   element inside every Level-1 element by default) is not implemented;
-   every element this crate writes is CRC-unprotected. Legal per RFC 9559
-   (CRC-32 is optional) and verified not to break round-tripping through
-   `vaco-demux-matroska`, which treats an absent `CRC-32` as no check to
-   perform.
-6. Byte-for-byte identity with `ffmpeg 8.1`'s own output is not a design
-   goal and is not claimed anywhere above; every measurement in this
-   document is used to match a *structural* decision (unknown-vs-patched
-   size, `DocTypeVersion`, the rejection message), not to reproduce every
-   field's exact bytes.
+5. ~~`write_crc32`-equivalent behaviour ... is not implemented~~ — fixed
+   (CONFORMANCE-FINDINGS 15), see *`CRC-32` and `SeekHead`* above.
+6. Byte-for-byte identity with `ffmpeg 8.1`'s own output **is** now a design
+   goal for the `SeekHead`/`CRC-32` scaffolding specifically (finding 15's
+   scope), and `just conformance-run
+   'transcode-remux-bitexact/v-mp4/output=matroska'` was used to verify it —
+   but the case still fails overall, on content this crate writes elsewhere,
+   not on the scaffolding. Measured directly, comparing this crate's output
+   against the reference's for the exact case above with both fixes landed:
+   - **`Info`**: this crate's `MuxingApp`/`WritingApp` is the literal string
+     `vaco-mux-matroska`, by design (see *Configuration* — it is this
+     project's own identity, not a reproduction of `ffmpeg`'s versioned
+     `Lavf62.12.100`, which `-bitexact` itself shortens to plain `Lavf`).
+     Separately, `Info`'s `Duration` element can **never** be written: the
+     `if self.max_end_ticks > 0` check in `info_bytes` runs inside
+     `write_header`, before any `write_packet` call has had a chance to grow
+     `max_end_ticks` above zero — the condition is checked before it can ever
+     be true. That is a real, structural bug independent of finding 15;
+     fixing it needs the same reserve-then-patch shape `SeekHead` just
+     adopted (`Info`'s `Duration` would need a placeholder, and patching it
+     later would move every position after `Info`, including the ones this
+     finding just fixed `SeekHead` to compute) and is out of this finding's
+     scope.
+   - **`Tracks`**: this crate's `TrackEntry` field order and `TrackUID`
+     encoding width do not match the reference's (both write the same field
+     set, in different orders and, for `TrackUID`, a different octet count),
+     and the reference writes two small fields this crate does not.
+   - **`Tags`**: this crate never forwards MP4-level container metadata
+     (`major_brand`/`minor_version`/`compatible_brands`) into file-level
+     `Tags`, and (already documented above) does not reproduce the
+     reference's own auto `ENCODER`/`DURATION`/`HANDLER_NAME` `SimpleTag`s.
+     For a file remuxed from MP4, the reference's `Tags` carries all of
+     these; this crate's does not unless a caller supplies them via
+     `Muxer::set_metadata` — nothing upstream of this crate currently does
+     for a plain `-c copy` remux.
+   None of the above three are `vaco-mux-matroska` conformance gaps this
+   finding was scoped to close, and none of them existed because of
+   `SeekHead`/`CRC-32` — they are pre-existing content differences that
+   happen to be what the byte-identity case now hits once the structural gap
+   in front of them is gone.

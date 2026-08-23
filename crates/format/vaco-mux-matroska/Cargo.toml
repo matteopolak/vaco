@@ -16,6 +16,10 @@ vaco-packet = { path = "../../model/vaco-packet" }
 vaco-chlayout = { path = "../../model/vaco-chlayout" }
 vaco-format-core = { path = "../../format/vaco-format-core" }
 vaco-codec-core = { path = "../../signal/vaco-codec-core" }
+# The single owner of the `crc` crate (D11) — every level-1 element's
+# `CRC-32` (RFC 8794 section 11.3.2) is computed with `vaco_hash::crc32`
+# rather than a second copy of the CRC table. See docs/format/vaco-mux-matroska.md.
+vaco-hash = { path = "../../core/vaco-hash" }
 # The generic EBML reader/writer (D19) — see docs/format/vaco-format-ebml.md.
 vaco-format-ebml = { path = "../vaco-format-ebml" }
 # The Matroska element schema (RFC 9559 section 5's ID table) and its RFC 9559

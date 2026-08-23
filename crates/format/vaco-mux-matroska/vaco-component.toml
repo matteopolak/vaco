@@ -14,6 +14,7 @@ long_name  = "Matroska"
 feature    = "mux-matroska"
 ctor       = "vaco_mux_matroska::MUXER_MATROSKA"
 extensions = "mkv"
+mime_types = "video/x-matroska"
 
 [[component]]
 kind       = "muxer"
@@ -22,6 +23,7 @@ long_name  = "WebM"
 feature    = "mux-matroska"
 ctor       = "vaco_mux_matroska::MUXER_WEBM"
 extensions = "webm"
+mime_types = "video/webm"
 
 [[component]]
 kind       = "muxer"
@@ -30,3 +32,4 @@ long_name  = "WebM Chunk Muxer"
 feature    = "mux-matroska"
 ctor       = "vaco_mux_matroska::MUXER_WEBM_CHUNK"
 extensions = "chk"
+mime_types = "video/webm"
