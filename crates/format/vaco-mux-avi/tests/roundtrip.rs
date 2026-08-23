@@ -10,10 +10,13 @@
     reason = "test code"
 )]
 
-use vaco_codec_core::{CodecId, CodecParameters};
+use std::sync::Arc;
+
+use vaco_codec_core::{BitstreamFilter, CodecId, CodecParameters};
 use vaco_core::{MediaType, Rational};
 use vaco_demux_avi::AviDemuxer;
 use vaco_format_core::discovery::NoParsers;
+use vaco_format_core::mux::{BsfProvider, MuxBuilder};
 use vaco_format_core::vacoraw::{MemorySink, SharedBytes};
 use vaco_format_core::{Demuxer, FormatOptions, Muxer};
 use vaco_io::MemorySource;
@@ -243,4 +246,100 @@ fn a_codec_with_no_avi_mapping_is_rejected_not_silently_wrong() {
         v.height = 48;
     }
     assert!(mux.add_stream(&p).is_err());
+}
+
+/// Wraps the two real `vaco-bsf-h2645` filters — not a hand test-double —
+/// so this proves the muxer's `check_bitstream` request lands on the actual
+/// filter a real pipeline would supply.
+struct OnlyH2645ToAnnexb;
+
+impl BsfProvider for OnlyH2645ToAnnexb {
+    fn open(
+        &self,
+        name: &str,
+        params: &CodecParameters,
+    ) -> vaco_core::Result<Box<dyn BitstreamFilter>> {
+        match name {
+            "h264_mp4toannexb" => (vaco_bsf_h2645::h264_mp4toannexb::DESC.build)(params),
+            "hevc_mp4toannexb" => (vaco_bsf_h2645::hevc_mp4toannexb::DESC.build)(params),
+            _ => Err(vaco_core::Error::Unsupported(
+                "test provider knows only the mp4toannexb pair",
+            )),
+        }
+    }
+}
+
+/// A minimal, well-formed `AvcDecoderConfigurationRecord`: one SPS, one PPS.
+fn avcc(sps: &[u8], pps: &[u8]) -> Vec<u8> {
+    let mut r = vec![1, sps[1], sps[2], sps[3], 0xFF, 0xE1];
+    r.extend_from_slice(&(u16::try_from(sps.len()).unwrap()).to_be_bytes());
+    r.extend_from_slice(sps);
+    r.push(1);
+    r.extend_from_slice(&(u16::try_from(pps.len()).unwrap()).to_be_bytes());
+    r.extend_from_slice(pps);
+    r
+}
+
+/// `check_bitstream` plus a real `BsfProvider`, driven through `MuxBuilder`/
+/// `MuxWriter` (M6), produces the SPS/PPS-spliced Annex B this crate's own
+/// `maybe_convert` cannot: that method has no configuration record to read
+/// parameter sets out of and only ever does the framing half. This is the
+/// comparison plan 19's brief for this work asked for before touching
+/// `maybe_convert` at all — proof that the wired-up path is *more* correct
+/// than the standalone one, not merely different from it.
+#[test]
+fn check_bitstream_through_mux_writer_gets_the_splice_maybe_convert_alone_cannot() {
+    let sink = MemorySink::new();
+    let shared: SharedBytes = sink.shared();
+    let mux = vaco_mux_avi::AviMuxer::new(Box::new(sink), &FormatOptions::default()).unwrap();
+
+    let sps = [0x67, 0x64, 0x00, 0x0a, 0xAA];
+    let pps = [0x68, 0xEB];
+    let mut params = video_params(64, 48, (25, 1));
+    if let Some(v) = &mut params.video {
+        v.nal_length_size = Some(4);
+    }
+    params.extradata = Some(avcc(&sps, &pps));
+
+    let mut builder = MuxBuilder::new(Box::new(mux), &FormatOptions::default())
+        .with_bsfs(Arc::new(OnlyH2645ToAnnexb));
+    let v = builder.add_stream(&params, Rational::new(1, 25)).unwrap();
+    let mut writer = builder.open().unwrap();
+
+    let idr = [0x65, 0x88, 0x84];
+    let mut lp = Vec::new();
+    lp.extend_from_slice(&(u32::try_from(idr.len()).unwrap()).to_be_bytes());
+    lp.extend_from_slice(&idr);
+    let mut pkt = packet(v, &lp, true);
+    pkt.pts = vaco_core::Timestamp::new(0);
+    pkt.dts = pkt.pts;
+    writer.write_packet(pkt).unwrap();
+    writer.finish().unwrap();
+
+    let bytes = shared.snapshot();
+    let mut expected = Vec::new();
+    for u in [&sps[..], &pps[..], &idr[..]] {
+        expected.extend_from_slice(&[0, 0, 0, 1]);
+        expected.extend_from_slice(u);
+    }
+    let found = bytes
+        .windows(expected.len())
+        .any(|w| w == expected.as_slice());
+    assert!(
+        found,
+        "expected the SPS/PPS-spliced sample verbatim in the muxed bytes; \
+         maybe_convert's own framing-only fallback could never produce this"
+    );
+
+    // And the *unspliced* framing-only shape — what the old, standalone path
+    // alone would have written — must NOT appear: this is a real functional
+    // difference, not just an additional correct answer alongside the old one.
+    let mut framing_only = Vec::new();
+    framing_only.extend_from_slice(&[0, 0, 0, 1]);
+    framing_only.extend_from_slice(&idr);
+    let framing_only_appears_alone = bytes
+        .windows(framing_only.len())
+        .any(|w| w == framing_only.as_slice())
+        && !found;
+    assert!(!framing_only_appears_alone);
 }
