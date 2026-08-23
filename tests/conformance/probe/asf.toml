@@ -1,0 +1,59 @@
+# ASF/WMV probing, against reference-synthesised media (XF-01, issue #196).
+#
+# `generate` synthesises each file with the reference at run time and
+# discards it (D6). H.264 + AAC is the combination
+# `tests/conformance/transcode/remux-bitexact.toml` already established the
+# reference's own `asf` muxer accepts for `-c copy`.
+schema = 1
+suite  = "probe-asf"
+tool   = "probe"
+tier   = "core"
+owner  = "@orchestrator"
+
+[[media]]
+id       = "h264-video"
+source   = "generated://h264-video.asf"
+tags     = ["video"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1.2",
+            "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-f", "asf"]
+
+[[media]]
+id       = "h264-and-aac"
+source   = "generated://h264-and-aac.asf"
+tags     = ["video", "audio"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1.2",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=1.2",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-f", "asf"]
+
+[[axis]]
+name   = "section"
+values = [
+  { id = "format",  argv = ["-show_format"] },
+  { id = "streams", argv = ["-show_streams"] },
+  { id = "both",    argv = ["-show_format", "-show_streams"] },
+  { id = "packets", argv = ["-show_packets"] },
+]
+
+[[axis]]
+name   = "writer"
+values = [
+  { id = "default", argv = ["-of", "default"] },
+  { id = "json",    argv = ["-of", "json"] },
+  { id = "xml",     argv = ["-of", "xml"] },
+  { id = "compact", argv = ["-of", "compact"] },
+  { id = "csv",     argv = ["-of", "csv"] },
+  { id = "flat",    argv = ["-of", "flat"] },
+  { id = "ini",     argv = ["-of", "ini"] },
+]
+
+[[axis]]
+name   = "input"
+values = [{ id = "file", argv = ["-i", "{media}"] }]
+
+[compare]
+mode    = "exact-bytes"
+capture = ["stdout", "exit-code"]
+timeout = "30s"
+
+[normalise]
+invocation = ["bitexact", "hide-banner"]

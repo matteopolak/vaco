@@ -1,0 +1,61 @@
+# FLV probing, against reference-synthesised media (XF-01, issue #196).
+#
+# `generate` synthesises each file with the reference at run time and
+# discards it (D6). FLV's own codec set is narrower than the container
+# formats already covered — H.264 + AAC is the combination the reference's
+# own `flv` muxer accepts without a bitstream-filter argument, matching the
+# combination `tests/conformance/transcode/remux-bitexact.toml` already
+# established works for `-c copy`.
+schema = 1
+suite  = "probe-flv"
+tool   = "probe"
+tier   = "core"
+owner  = "@orchestrator"
+
+[[media]]
+id       = "h264-video"
+source   = "generated://h264-video.flv"
+tags     = ["video"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1.2",
+            "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-f", "flv"]
+
+[[media]]
+id       = "h264-and-aac"
+source   = "generated://h264-and-aac.flv"
+tags     = ["video", "audio"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1.2",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=1.2",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-f", "flv"]
+
+[[axis]]
+name   = "section"
+values = [
+  { id = "format",  argv = ["-show_format"] },
+  { id = "streams", argv = ["-show_streams"] },
+  { id = "both",    argv = ["-show_format", "-show_streams"] },
+  { id = "packets", argv = ["-show_packets"] },
+]
+
+[[axis]]
+name   = "writer"
+values = [
+  { id = "default", argv = ["-of", "default"] },
+  { id = "json",    argv = ["-of", "json"] },
+  { id = "xml",     argv = ["-of", "xml"] },
+  { id = "compact", argv = ["-of", "compact"] },
+  { id = "csv",     argv = ["-of", "csv"] },
+  { id = "flat",    argv = ["-of", "flat"] },
+  { id = "ini",     argv = ["-of", "ini"] },
+]
+
+[[axis]]
+name   = "input"
+values = [{ id = "file", argv = ["-i", "{media}"] }]
+
+[compare]
+mode    = "exact-bytes"
+capture = ["stdout", "exit-code"]
+timeout = "30s"
+
+[normalise]
+invocation = ["bitexact", "hide-banner"]

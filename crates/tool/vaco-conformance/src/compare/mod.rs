@@ -108,13 +108,47 @@ pub struct Pair<'a> {
     pub ours: &'a Observation,
     /// What the reference produced.
     pub theirs: &'a Observation,
+    /// Bytes of the file our side wrote, when the case names an `{output}`
+    /// token (transcode cases only). `None` both when the case wrote no file
+    /// and when it was supposed to but did not — [`exact::compare`]
+    /// distinguishes those by also consulting `capture = ["output-file"]`.
+    pub ours_output_file: Option<&'a [u8]>,
+    /// The reference's equivalent of [`Pair::ours_output_file`].
+    pub theirs_output_file: Option<&'a [u8]>,
+}
+
+impl<'a> Pair<'a> {
+    /// A pair with no output file captured — the common case for `probe`.
+    #[must_use]
+    pub const fn new(ours: &'a Observation, theirs: &'a Observation) -> Self {
+        Self {
+            ours,
+            theirs,
+            ours_output_file: None,
+            theirs_output_file: None,
+        }
+    }
 }
 
 /// Compare one case's observations.
 ///
-/// The exit code is a co-assertion on **every** mode (§1.2 C0), checked before
-/// the mode-specific comparison: a case where the two binaries disagree about
+/// The exit code is a co-assertion on **every byte-comparing mode** (§1.2
+/// C0: "exit codes, always, as a co-assertion"), checked before the
+/// mode-specific comparison: a case where the two binaries disagree about
 /// success has already failed, whatever the bytes say.
+///
+/// `behavioural` (C7) is deliberately exempted from *this* literal check.
+/// §1.2 C7 itself is defined as comparing "the class of the outcome... not
+/// the message text", and [`outcome_class`] exists precisely to be coarser
+/// than a numeric exit code — two independent codebases essentially never
+/// choose the same integer for "I rejected this input" (measured: `vaco`
+/// and `ffmpeg` produced 183, 218, 234, 0 across a ten-case suite with no
+/// two failing codes matching by anything but coincidence). A pre-check that
+/// demanded literal equality first would make every C7 case fail on exactly
+/// the inputs C7 exists to cover, and would make `outcome_class`'s whole
+/// reason for existing unreachable code. `behavioural` still receives the
+/// exit codes — [`behavioural`] reads them via [`outcome_class`] — it is
+/// only the *literal-equality short circuit* that does not apply to it.
 #[must_use]
 pub fn evaluate(case: &Case, pair: &Pair<'_>, allow: &Allowlist) -> Verdict {
     if pair.ours.timed_out {
@@ -123,7 +157,7 @@ pub fn evaluate(case: &Case, pair: &Pair<'_>, allow: &Allowlist) -> Verdict {
     if pair.theirs.timed_out {
         return Verdict::ReferenceFailed(FailureKind::Timeout);
     }
-    if pair.ours.exit != pair.theirs.exit {
+    if !matches!(case.compare, Compare::Behavioural) && pair.ours.exit != pair.theirs.exit {
         return Verdict::Divergence(DiffReport {
             mode: case.compare.mode_name(),
             summary: format!(
@@ -242,14 +276,7 @@ mod tests {
         });
         let a = obs("hello", Some(0));
         let b = obs("hello", Some(0));
-        let v = evaluate(
-            &c,
-            &Pair {
-                ours: &a,
-                theirs: &b,
-            },
-            &empty_allowlist(),
-        );
+        let v = evaluate(&c, &Pair::new(&a, &b), &empty_allowlist());
         assert!(matches!(v, Verdict::Agree), "{}", v.label());
     }
 
@@ -258,15 +285,45 @@ mod tests {
         let c = case(Compare::Behavioural);
         let a = obs("", Some(0));
         let b = obs("", Some(1));
-        let v = evaluate(
-            &c,
-            &Pair {
-                ours: &a,
-                theirs: &b,
-            },
-            &empty_allowlist(),
-        );
+        let v = evaluate(&c, &Pair::new(&a, &b), &empty_allowlist());
         assert!(v.is_failure());
+    }
+
+    #[test]
+    fn a_byte_comparing_mode_demands_the_exact_same_exit_code() {
+        // Two different *failing* codes: C0's literal co-assertion still
+        // applies here, unlike C7 below.
+        let c = case(Compare::ExactBytes {
+            captures: vec![Capture::Stdout],
+        });
+        let a = obs("", Some(183));
+        let b = obs("", Some(234));
+        let v = evaluate(&c, &Pair::new(&a, &b), &empty_allowlist());
+        assert!(v.is_failure(), "{}", v.label());
+    }
+
+    #[test]
+    fn behavioural_agrees_when_both_sides_reject_with_different_codes() {
+        // Measured on the transcode remux matrix: `vaco` and `ffmpeg` refuse
+        // the same known-incompatible (input, output) pairs but with
+        // unrelated numeric exit codes (183, 218, 234, ...). §1.2 C7 exists
+        // to be coarser than exact exit-code equality — outcome class
+        // (accepted / rejected / signalled) is the thing being compared, not
+        // the literal integer.
+        let c = case(Compare::Behavioural);
+        let a = obs("", Some(183));
+        let b = obs("", Some(234));
+        let v = evaluate(&c, &Pair::new(&a, &b), &empty_allowlist());
+        assert!(matches!(v, Verdict::Agree), "{}", v.label());
+    }
+
+    #[test]
+    fn behavioural_still_diverges_across_the_accept_reject_boundary() {
+        let c = case(Compare::Behavioural);
+        let a = obs("", Some(0));
+        let b = obs("", Some(183));
+        let v = evaluate(&c, &Pair::new(&a, &b), &empty_allowlist());
+        assert!(v.is_failure(), "{}", v.label());
     }
 
     #[test]
@@ -274,14 +331,7 @@ mod tests {
         let c = case(Compare::RawExact);
         let a = obs("x", Some(0));
         let b = obs("y", Some(0));
-        let v = evaluate(
-            &c,
-            &Pair {
-                ours: &a,
-                theirs: &b,
-            },
-            &empty_allowlist(),
-        );
+        let v = evaluate(&c, &Pair::new(&a, &b), &empty_allowlist());
         assert_eq!(
             v.label(),
             "skipped",
@@ -297,14 +347,7 @@ mod tests {
         a.stderr = b"our wording".to_vec();
         let mut b = obs("", Some(1));
         b.stderr = b"their wording".to_vec();
-        let v = evaluate(
-            &c,
-            &Pair {
-                ours: &a,
-                theirs: &b,
-            },
-            &empty_allowlist(),
-        );
+        let v = evaluate(&c, &Pair::new(&a, &b), &empty_allowlist());
         assert!(matches!(v, Verdict::Agree));
         assert_eq!(outcome_class(&a), "rejected");
     }
@@ -315,14 +358,7 @@ mod tests {
         let mut a = obs("", None);
         a.timed_out = true;
         let b = obs("", Some(0));
-        let v = evaluate(
-            &c,
-            &Pair {
-                ours: &a,
-                theirs: &b,
-            },
-            &empty_allowlist(),
-        );
+        let v = evaluate(&c, &Pair::new(&a, &b), &empty_allowlist());
         assert_eq!(v.label(), "OURS-FAILED");
     }
 }

@@ -30,10 +30,10 @@
 //! parallelise, and an untested thread pool in the harness would be a source of
 //! flakes rather than speed.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::case::{Case, FailureKind, SkipReason, Tier, Tool, Verdict};
+use crate::case::{Case, Compare, FailureKind, SkipReason, Tier, Tool, Verdict};
 use crate::compare::{self, Pair};
 use crate::divergence::Allowlist;
 use crate::refbin::Reference;
@@ -209,7 +209,11 @@ impl Tally {
         self.diverged > 0 || self.failed > 0
     }
 
-    fn record(&mut self, verdict: &Verdict) {
+    /// Fold one verdict into the tally. Public so a caller driving
+    /// [`Runner::run_case`] directly — bypassing [`Runner::run_all`]'s tier
+    /// filter, e.g. to reproduce one named case regardless of its declared
+    /// tier — can still build an accurate [`Tally`] for the report.
+    pub fn record(&mut self, verdict: &Verdict) {
         match verdict {
             Verdict::Agree => self.agreed += 1,
             Verdict::AllowedDivergence(_) => self.allowed += 1,
@@ -350,8 +354,19 @@ impl<'a> Runner<'a> {
             }
         };
 
-        let mut argv = case.normalise.argv_prefix(case.tool);
-        argv.extend(case.argv.iter().cloned());
+        let prefix = case.normalise.argv_prefix(case.tool);
+        let suffix = case.normalise.positional_suffix(case.tool);
+        let mut case_argv = case.argv.clone();
+        if !suffix.is_empty() {
+            // Positional for the transcode tools (§ `Chain::positional_suffix`):
+            // every transcode suite in this repository ends its own argv with
+            // the output path, so the insertion point is "just before the last
+            // element" rather than "the front of the command line".
+            let insert_at = case_argv.len().saturating_sub(1);
+            case_argv.splice(insert_at..insert_at, suffix);
+        }
+        let mut argv = prefix;
+        argv.extend(case_argv);
 
         // Substitute `{media}` / `{media:<id>}` with real paths. A case that
         // names media it does not declare fails loudly here rather than being
@@ -369,10 +384,43 @@ impl<'a> Runner<'a> {
             }
         }
 
-        let ours_inv = Invocation::new(ours_bin, argv.clone())
+        // `{output}` / `{output:<name>}` each resolve to a path **inside this
+        // side's own subdirectory**, not the shared case directory: the two
+        // binaries run the same argv, and if both wrote `out.mkv` into the
+        // same directory the second run would silently overwrite the first
+        // one's file before it was ever compared. Two subdirectories mean
+        // both files survive to the comparison stage.
+        let ours_out_dir = dir.path().join("ours-out");
+        let theirs_out_dir = dir.path().join("theirs-out");
+        let mut ours_argv = argv.clone();
+        let mut theirs_argv = argv;
+        let ours_output_path = substitute_output(&mut ours_argv, &ours_out_dir);
+        let theirs_output_path = substitute_output(&mut theirs_argv, &theirs_out_dir);
+        if ours_output_path.is_some()
+            && let Err(e) = std::fs::create_dir_all(&ours_out_dir)
+        {
+            return Outcome {
+                case: case.clone(),
+                verdict: Verdict::OursFailed(FailureKind::LaunchFailed(e.to_string())),
+                ours_command: String::new(),
+                theirs_command: String::new(),
+            };
+        }
+        if theirs_output_path.is_some()
+            && let Err(e) = std::fs::create_dir_all(&theirs_out_dir)
+        {
+            return Outcome {
+                case: case.clone(),
+                verdict: Verdict::ReferenceFailed(FailureKind::LaunchFailed(e.to_string())),
+                ours_command: String::new(),
+                theirs_command: String::new(),
+            };
+        }
+
+        let ours_inv = Invocation::new(ours_bin, ours_argv)
             .in_dir(dir.path())
             .with_timeout(case.timeout);
-        let theirs_inv = Invocation::new(theirs_bin, argv)
+        let theirs_inv = Invocation::new(theirs_bin, theirs_argv)
             .in_dir(dir.path())
             .with_timeout(case.timeout);
 
@@ -399,13 +447,114 @@ impl<'a> Runner<'a> {
             }
         };
 
+        // A `structured-diff` transcode case is not asking "did the two
+        // programs print the same thing to stdout" — a remuxer prints a
+        // progress summary, not the thing under test. It is asking "are the
+        // two files these programs just wrote structurally the same
+        // container", which means probing *those files*, not diffing stdout.
+        // Only takes over once both sides have actually produced a file: a
+        // transcode failure is still caught the ordinary way, by the
+        // exit-code co-assertion inside `compare::evaluate` below.
+        if matches!(case.compare, Compare::StructuredDiff { .. })
+            && case.tool == Tool::Transcode
+            && ours.succeeded()
+            && theirs.succeeded()
+            && let (Some(op), Some(tp)) =
+                (ours_output_path.as_deref(), theirs_output_path.as_deref())
+        {
+            return self.probe_produced_files(case, reference, op, tp);
+        }
+
+        let ours_output_file = ours_output_path
+            .as_deref()
+            .and_then(|p| std::fs::read(p).ok());
+        let theirs_output_file = theirs_output_path
+            .as_deref()
+            .and_then(|p| std::fs::read(p).ok());
+        let mut pair = Pair::new(&ours, &theirs);
+        pair.ours_output_file = ours_output_file.as_deref();
+        pair.theirs_output_file = theirs_output_file.as_deref();
+
+        Outcome {
+            verdict: compare::evaluate(case, &pair, self.allowlist),
+            case: case.clone(),
+            ours_command: ours_inv.command_line(),
+            theirs_command: theirs_inv.command_line(),
+        }
+    }
+
+    /// Probe two already-written files — one from each side of a transcode
+    /// case — and structurally diff the listings, reusing the tested C6
+    /// machinery in [`crate::compare::structured`] rather than inventing a
+    /// second one. `-show_format -show_streams` is what the brief for the
+    /// remux matrix asks for: stream count, codecs, durations, timestamps,
+    /// not byte layout.
+    ///
+    /// Skips (does not fail) when `vaco-probe` is not built — a case that
+    /// wants this needs *two* binaries under test, and a missing one is
+    /// coverage that erodes, not a divergence.
+    fn probe_produced_files(
+        &self,
+        case: &Case,
+        reference: &Reference,
+        ours_file: &Path,
+        theirs_file: &Path,
+    ) -> Outcome {
+        let probe_argv = |path: &Path| -> Vec<String> {
+            [
+                "-hide_banner",
+                "-bitexact",
+                "-of",
+                "default",
+                "-show_format",
+                "-show_streams",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .chain(std::iter::once(path.to_string_lossy().into_owned()))
+            .collect()
+        };
+        let Some(probe_bin) = self.under_test.probe.as_ref() else {
+            return Outcome {
+                case: case.clone(),
+                verdict: Verdict::Skipped(SkipReason::ToolNotBuilt(
+                    "structural comparison of a transcode case's output needs \
+                     `vaco-probe`; set VACO_BIN_PROBE or `cargo build` it"
+                        .to_owned(),
+                )),
+                ours_command: String::new(),
+                theirs_command: String::new(),
+            };
+        };
+        let ours_inv = Invocation::new(probe_bin, probe_argv(ours_file)).with_timeout(case.timeout);
+        let theirs_inv =
+            Invocation::new(&reference.ffprobe, probe_argv(theirs_file)).with_timeout(case.timeout);
+        let ours_probe = match run(&ours_inv) {
+            Ok(o) => o,
+            Err(e) => {
+                return Outcome {
+                    case: case.clone(),
+                    verdict: Verdict::OursFailed(FailureKind::LaunchFailed(e.to_string())),
+                    ours_command: ours_inv.command_line(),
+                    theirs_command: theirs_inv.command_line(),
+                };
+            }
+        };
+        let theirs_probe = match run(&theirs_inv) {
+            Ok(o) => o,
+            Err(e) => {
+                return Outcome {
+                    case: case.clone(),
+                    verdict: Verdict::ReferenceFailed(FailureKind::LaunchFailed(e.to_string())),
+                    ours_command: ours_inv.command_line(),
+                    theirs_command: theirs_inv.command_line(),
+                };
+            }
+        };
         Outcome {
             verdict: compare::evaluate(
                 case,
-                &Pair {
-                    ours: &ours,
-                    theirs: &theirs,
-                },
+                &Pair::new(&ours_probe, &theirs_probe),
                 self.allowlist,
             ),
             case: case.clone(),
@@ -413,6 +562,36 @@ impl<'a> Runner<'a> {
             theirs_command: theirs_inv.command_line(),
         }
     }
+}
+
+/// Replace a single `{output}` or `{output:<name>}` token with a path inside
+/// `out_dir`, and return that path if one was found.
+///
+/// Mirrors [`Runner::substitute_media`]'s token grammar. `{output}` names
+/// `out.bin`; `{output:<name>}` names `<name>` — a suite building a matrix of
+/// output containers writes `{output:out.mkv}`, `{output:out.avi}`, and so on,
+/// which is what lets the extension vary per axis value the way it would in a
+/// hand-typed command line.
+fn substitute_output(argv: &mut [String], out_dir: &Path) -> Option<PathBuf> {
+    let mut resolved = None;
+    for arg in argv.iter_mut() {
+        while let Some(start) = arg.find("{output") {
+            let Some(end) = arg
+                .get(start..)
+                .and_then(|r| r.find('}'))
+                .map(|i| start + i)
+            else {
+                break;
+            };
+            let token = arg.get(start + 1..end).unwrap_or_default();
+            let name = token.strip_prefix("output:").map_or("out.bin", str::trim);
+            let name = if name.is_empty() { "out.bin" } else { name };
+            let path = out_dir.join(name);
+            resolved = Some(path.clone());
+            arg.replace_range(start..=end, &path.to_string_lossy());
+        }
+    }
+    resolved
 }
 
 /// The default per-case budget when a suite does not name one.
@@ -498,5 +677,37 @@ mod tests {
         let _ = u.binary(Tool::Probe);
         let _ = u.binary(Tool::Transcode);
         let _ = u.binary(Tool::PlayHeadless);
+    }
+
+    #[test]
+    fn output_token_resolves_to_a_path_inside_the_given_directory() {
+        let mut argv = vec![
+            "-f".to_owned(),
+            "matroska".to_owned(),
+            "{output:out.mkv}".to_owned(),
+        ];
+        let dir = std::path::Path::new("/tmp/some-case-dir");
+        let resolved = super::substitute_output(&mut argv, dir);
+        assert_eq!(resolved, Some(dir.join("out.mkv")));
+        assert_eq!(
+            argv.get(2).map(String::as_str),
+            Some(dir.join("out.mkv").to_string_lossy().as_ref())
+        );
+    }
+
+    #[test]
+    fn a_bare_output_token_defaults_to_out_bin() {
+        let mut argv = vec!["{output}".to_owned()];
+        let dir = std::path::Path::new("/tmp/d");
+        let resolved = super::substitute_output(&mut argv, dir);
+        assert_eq!(resolved, Some(dir.join("out.bin")));
+    }
+
+    #[test]
+    fn no_output_token_resolves_to_nothing() {
+        let mut argv = vec!["-c".to_owned(), "copy".to_owned()];
+        let resolved = super::substitute_output(&mut argv, std::path::Path::new("/tmp/d"));
+        assert_eq!(resolved, None);
+        assert_eq!(argv, vec!["-c".to_owned(), "copy".to_owned()]);
     }
 }

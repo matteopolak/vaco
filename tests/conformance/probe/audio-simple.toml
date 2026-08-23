@@ -1,0 +1,74 @@
+# The audio-simple family — WAV, AIFF, AU, CAF — against reference-synthesised
+# media (XF-01, issue #196). All four share one crate (`vaco-format-audio-simple`)
+# and are amongst the highest-registration components (48 raw formats' nearest
+# neighbour in the "simple PCM container" family).
+#
+# AU uses big-endian PCM (`pcm_s16be`): OBSERVED (ffmpeg 8.1), its own `au`
+# muxer refuses `pcm_s16le` outright ("unsupported codec") — AU is historically
+# a Sun/NeXT format and big-endian is what its native encoding expects.
+schema = 1
+suite  = "probe-audio-simple"
+tool   = "probe"
+tier   = "core"
+owner  = "@orchestrator"
+
+[[media]]
+id       = "pcm-wav"
+source   = "generated://pcm.wav"
+tags     = ["audio"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1.2",
+            "-c:a", "pcm_s16le", "-f", "wav"]
+
+[[media]]
+id       = "pcm-aiff"
+source   = "generated://pcm.aiff"
+tags     = ["audio"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1.2",
+            "-c:a", "pcm_s16le", "-f", "aiff"]
+
+[[media]]
+id       = "pcm-au"
+source   = "generated://pcm.au"
+tags     = ["audio"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1.2",
+            "-c:a", "pcm_s16be", "-f", "au"]
+
+[[media]]
+id       = "pcm-caf"
+source   = "generated://pcm.caf"
+tags     = ["audio"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1.2",
+            "-c:a", "pcm_s16le", "-f", "caf"]
+
+[[axis]]
+name   = "section"
+values = [
+  { id = "format",  argv = ["-show_format"] },
+  { id = "streams", argv = ["-show_streams"] },
+  { id = "both",    argv = ["-show_format", "-show_streams"] },
+  { id = "packets", argv = ["-show_packets"] },
+]
+
+[[axis]]
+name   = "writer"
+values = [
+  { id = "default", argv = ["-of", "default"] },
+  { id = "json",    argv = ["-of", "json"] },
+  { id = "xml",     argv = ["-of", "xml"] },
+  { id = "compact", argv = ["-of", "compact"] },
+  { id = "csv",     argv = ["-of", "csv"] },
+  { id = "flat",    argv = ["-of", "flat"] },
+  { id = "ini",     argv = ["-of", "ini"] },
+]
+
+[[axis]]
+name   = "input"
+values = [{ id = "file", argv = ["-i", "{media}"] }]
+
+[compare]
+mode    = "exact-bytes"
+capture = ["stdout", "exit-code"]
+timeout = "30s"
+
+[normalise]
+invocation = ["bitexact", "hide-banner"]

@@ -298,15 +298,7 @@ bit_depth=8
         });
         let a = obs(SAMPLE, Some(0));
         let b = obs(SAMPLE, Some(0));
-        let v = super::compare(
-            &c,
-            &Pair {
-                ours: &a,
-                theirs: &b,
-            },
-            &empty_allowlist(),
-            "default",
-        );
+        let v = super::compare(&c, &Pair::new(&a, &b), &empty_allowlist(), "default");
         assert!(matches!(v, Verdict::Agree));
     }
 
@@ -320,15 +312,7 @@ bit_depth=8
             &SAMPLE.replace("nb_components=3", "nb_components=4"),
             Some(0),
         );
-        match super::compare(
-            &c,
-            &Pair {
-                ours: &a,
-                theirs: &b,
-            },
-            &empty_allowlist(),
-            "default",
-        ) {
+        match super::compare(&c, &Pair::new(&a, &b), &empty_allowlist(), "default") {
             Verdict::Divergence(r) => {
                 assert_eq!(r.fields.len(), 1);
                 assert_eq!(r.fields[0].field, "nb_components");
@@ -346,15 +330,7 @@ bit_depth=8
         });
         let a = obs("[PIXEL_FORMAT]\nname=yuv420p\n[/PIXEL_FORMAT]\n", Some(0));
         let b = obs(SAMPLE, Some(0));
-        match super::compare(
-            &c,
-            &Pair {
-                ours: &a,
-                theirs: &b,
-            },
-            &empty_allowlist(),
-            "default",
-        ) {
+        match super::compare(&c, &Pair::new(&a, &b), &empty_allowlist(), "default") {
             Verdict::Divergence(r) => {
                 let whole: Vec<_> = r
                     .fields
@@ -385,15 +361,7 @@ bit_depth=8
         });
         let a = obs("[PIXEL_FORMAT]\nname=ours\n[/PIXEL_FORMAT]\n", Some(0));
         let b = obs("[PIXEL_FORMAT]\nname=theirs\n[/PIXEL_FORMAT]\n", Some(0));
-        match super::compare(
-            &c,
-            &Pair {
-                ours: &a,
-                theirs: &b,
-            },
-            &allow,
-            "default",
-        ) {
+        match super::compare(&c, &Pair::new(&a, &b), &allow, "default") {
             Verdict::AllowedDivergence(ids) => assert_eq!(ids.len(), 1),
             other => panic!("expected an allowed divergence, got {}", other.label()),
         }
@@ -407,15 +375,7 @@ bit_depth=8
         });
         let a = obs("{}", Some(0));
         let b = obs("{\"a\":1}", Some(0));
-        let v = super::compare(
-            &c,
-            &Pair {
-                ours: &a,
-                theirs: &b,
-            },
-            &empty_allowlist(),
-            "json",
-        );
+        let v = super::compare(&c, &Pair::new(&a, &b), &empty_allowlist(), "json");
         assert_eq!(v.label(), "skipped");
     }
 }

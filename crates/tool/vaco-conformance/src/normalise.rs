@@ -31,7 +31,45 @@ pub enum Invocation {
     ///
     /// *Conceals:* nothing — it changes what both programs are asked to do,
     /// identically, and the non-bitexact behaviour is covered by its own suite.
+    ///
+    /// **Positional for the transcode tools.** `-fflags`/`-flags` are
+    /// *per-file* options: placed before every `-i` (which is where a naive
+    /// prefix would put them) they configure the *input*, not the output, and
+    /// a Matroska mux keeps writing a random Segment UID on every run.
+    /// OBSERVED (`ffmpeg` 8.1, two runs of the identical command line, byte
+    /// diff of the result): flags placed at the front of the command line
+    /// give two *different* files on successive runs of the *same* binary;
+    /// the same flags placed anywhere after the last `-i` and before the
+    /// output path give byte-identical files every time. [`Chain`] therefore
+    /// keeps this normaliser out of [`Chain::argv_prefix`] for anything but
+    /// `probe` and supplies it positionally through
+    /// [`Chain::positional_suffix`] instead — see that method.
+    ///
+    /// OBSERVED (`ffmpeg` 8.1): a `vaco` build as of this writing does not
+    /// parse a bare `-flags` option at all (`Unrecognized option 'flags'.
+    /// Error splitting the argument list`, exit 8) — every transcode case
+    /// declaring plain `bitexact` fails to launch until that CLI gap closes.
+    /// Recorded in `planning/CONFORMANCE-FINDINGS.md`, not silently patched
+    /// around here: this normaliser keeps emitting both flags because a case
+    /// that *encodes* (not just copies) needs `-flags +bitexact` too, and
+    /// papering over a real gap in the tool under test by quietly weakening
+    /// what the harness asks it to do is exactly the failure mode §1.4.2
+    /// exists to prevent. [`Invocation::BitExactCopy`] is the narrower,
+    /// already-usable alternative for `-c copy` cases.
     BitExact,
+    /// Adds `-fflags +bitexact` alone — never `-flags` — positioned the same
+    /// way as [`Invocation::BitExact`].
+    ///
+    /// *Conceals:* nothing, for a `-c copy` case specifically: `-flags`
+    /// selects encoder/decoder-level bitexact behaviour, and a stream copy
+    /// invokes neither. OBSERVED (`ffmpeg` 8.1): `-fflags +bitexact` alone is
+    /// sufficient for two-run byte determinism on every `-c copy` remux in
+    /// `tests/conformance/transcode/` — confirmed directly, not assumed,
+    /// because "adequate for this narrower case" is exactly the kind of claim
+    /// this crate does not get to make from a spec reading.
+    ///
+    /// Use [`Invocation::BitExact`] instead for any case that encodes.
+    BitExactCopy,
     /// Adds `-hide_banner`, plus `-nostdin` for the tools that have it.
     ///
     /// *Conceals:* build-configuration text, which is meaningless to compare
@@ -58,6 +96,7 @@ impl Invocation {
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "bitexact" => Some(Self::BitExact),
+            "bitexact-copy" => Some(Self::BitExactCopy),
             "hide-banner" => Some(Self::HideBanner),
             "loglevel" => Some(Self::LogLevel),
             "path-token" => Some(Self::PathToken),
@@ -70,19 +109,37 @@ impl Invocation {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::BitExact => "bitexact",
+            Self::BitExactCopy => "bitexact-copy",
             Self::HideBanner => "hide-banner",
             Self::LogLevel => "loglevel",
             Self::PathToken => "path-token",
         }
     }
 
-    /// Arguments this normaliser prepends, for `tool`.
+    /// Whether this normaliser's arguments must land after the last `-i` and
+    /// before the output path for `tool`, rather than at the front of the
+    /// command line. See [`Invocation::BitExact`]'s doc comment for the
+    /// measurement behind this.
+    #[must_use]
+    pub const fn is_positional_for(self, tool: crate::case::Tool) -> bool {
+        matches!(
+            (self, tool),
+            (
+                Self::BitExact | Self::BitExactCopy,
+                crate::case::Tool::Transcode | crate::case::Tool::PlayHeadless
+            )
+        )
+    }
+
+    /// Arguments this normaliser contributes, for `tool`. The caller decides
+    /// where they go — see [`Invocation::is_positional_for`].
     #[must_use]
     pub fn prefix(self, tool: crate::case::Tool, loglevel: &str) -> Vec<String> {
         let own = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect();
         match (self, tool) {
-            (Self::BitExact, crate::case::Tool::Probe) => own(&["-bitexact"]),
+            (Self::BitExact | Self::BitExactCopy, crate::case::Tool::Probe) => own(&["-bitexact"]),
             (Self::BitExact, _) => own(&["-fflags", "+bitexact", "-flags", "+bitexact"]),
+            (Self::BitExactCopy, _) => own(&["-fflags", "+bitexact"]),
             (Self::HideBanner, crate::case::Tool::Probe) => own(&["-hide_banner"]),
             (Self::HideBanner, _) => own(&["-hide_banner", "-nostdin"]),
             (Self::LogLevel, _) => vec!["-loglevel".to_owned(), loglevel.to_owned()],
@@ -182,17 +239,48 @@ impl Chain {
     }
 
     /// Arguments to prepend for `tool`.
+    ///
+    /// Excludes anything [`Invocation::is_positional_for`] `tool` — those
+    /// come from [`Chain::positional_suffix`] instead. Prepending
+    /// `bitexact`/`bitexact-copy` here would put `-fflags`/`-flags` before
+    /// `-i`, which sets them on the *input*; see [`Invocation::BitExact`]'s
+    /// doc comment for the measurement.
     #[must_use]
     pub fn argv_prefix(&self, tool: crate::case::Tool) -> Vec<String> {
-        let level = if self.loglevel.is_empty() {
+        let level = self.level();
+        self.invocation
+            .iter()
+            .filter(|n| !n.is_positional_for(tool))
+            .flat_map(|n| n.prefix(tool, level))
+            .collect()
+    }
+
+    /// Arguments that must land **after the last input and before the output
+    /// path**, for `tool` — every normaliser this chain declares for which
+    /// [`Invocation::is_positional_for`] `tool` is true, in declaration
+    /// order.
+    ///
+    /// The harness assembles a transcode case's argv as
+    /// `[prefix] ++ [case argv]`, and every transcode-tool suite in this
+    /// repository ends its own argv with the output path (the `{output}`
+    /// token is always the final axis value) — so the caller inserts this
+    /// immediately before the last element of the assembled argv.
+    #[must_use]
+    pub fn positional_suffix(&self, tool: crate::case::Tool) -> Vec<String> {
+        let level = self.level();
+        self.invocation
+            .iter()
+            .filter(|n| n.is_positional_for(tool))
+            .flat_map(|n| n.prefix(tool, level))
+            .collect()
+    }
+
+    fn level(&self) -> &str {
+        if self.loglevel.is_empty() {
             "error"
         } else {
             &self.loglevel
-        };
-        self.invocation
-            .iter()
-            .flat_map(|n| n.prefix(tool, level))
-            .collect()
+        }
     }
 
     /// Apply the output chain.
@@ -416,6 +504,60 @@ mod tests {
             .and_then(crate::toml::Value::as_table)
             .expect("table");
         assert!(Chain::from_manifest(t).is_err());
+    }
+
+    #[test]
+    fn bitexact_is_positional_for_transcode_but_not_for_probe() {
+        let doc = crate::toml::parse("[normalise]\ninvocation = [\"bitexact\"]\n").expect("parses");
+        let t = doc
+            .get("normalise")
+            .and_then(crate::toml::Value::as_table)
+            .expect("table");
+        let chain = Chain::from_manifest(t).expect("valid");
+
+        // Probe: the flag is a single prefix argument, never positional.
+        assert_eq!(chain.argv_prefix(Tool::Probe), vec!["-bitexact"]);
+        assert!(chain.positional_suffix(Tool::Probe).is_empty());
+
+        // Transcode: nothing is safe to prepend before `-i`; the flags come
+        // back from `positional_suffix` instead.
+        assert!(chain.argv_prefix(Tool::Transcode).is_empty());
+        assert_eq!(
+            chain.positional_suffix(Tool::Transcode),
+            vec!["-fflags", "+bitexact", "-flags", "+bitexact"]
+        );
+    }
+
+    #[test]
+    fn bitexact_copy_omits_the_flags_option_vaco_does_not_parse() {
+        let doc =
+            crate::toml::parse("[normalise]\ninvocation = [\"bitexact-copy\"]\n").expect("parses");
+        let t = doc
+            .get("normalise")
+            .and_then(crate::toml::Value::as_table)
+            .expect("table");
+        let chain = Chain::from_manifest(t).expect("valid");
+
+        assert!(chain.argv_prefix(Tool::Transcode).is_empty());
+        // Just `-fflags`, never `-flags`: OBSERVED (vaco, current build),
+        // `-flags` is an unrecognised option and any case that sends it never
+        // gets past argument parsing (exit 8).
+        assert_eq!(
+            chain.positional_suffix(Tool::Transcode),
+            vec!["-fflags", "+bitexact"]
+        );
+    }
+
+    #[test]
+    fn a_chain_without_bitexact_has_no_positional_suffix() {
+        let doc =
+            crate::toml::parse("[normalise]\ninvocation = [\"hide-banner\"]\n").expect("parses");
+        let t = doc
+            .get("normalise")
+            .and_then(crate::toml::Value::as_table)
+            .expect("table");
+        let chain = Chain::from_manifest(t).expect("valid");
+        assert!(chain.positional_suffix(Tool::Transcode).is_empty());
     }
 
     #[test]

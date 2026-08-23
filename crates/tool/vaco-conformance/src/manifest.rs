@@ -104,9 +104,20 @@ pub struct Axis {
 }
 
 /// A combination the suite declares meaningless.
+///
+/// `when` maps an axis name to the values it excludes, exactly as `[[axis]]`
+/// names them — with one synthetic exception: `media`, matched against the
+/// id of the `[[media]]` entry a case was built from. There is no `[[axis]]`
+/// named `media`; declaring several media entries is how a suite gets an
+/// input-container dimension at all (`Suite::expand` loops over them the same
+/// way it loops over an axis's values), and a remux matrix needs to say
+/// things like `when = { media = ["avi"], output = ["matroska"] }` — measured
+/// directly against the reference, not guessed, since AVI's H.264 packets
+/// have no timestamps and Matroska's muxer refuses to write one that lacks
+/// them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Exclusion {
-    /// Axis name to the values it excludes.
+    /// Axis name (or `media`, see above) to the values it excludes.
     pub when: BTreeMap<String, Vec<String>>,
     /// Why. Required — an unexplained exclusion is a hidden coverage hole.
     pub reason: String,
@@ -353,11 +364,21 @@ impl Suite {
         };
         let mut out = Vec::new();
         for media in media_list {
+            let media_id = media.map_or("none", |m| m.id.as_str());
             for selection in combinations(&self.axes) {
-                if self.excludes.iter().any(|e| e.matches(&selection)) {
+                // `media` is a synthetic pseudo-axis for exclusion matching
+                // only — never a real one, so it never contributes argv and
+                // never appears in the case id. Without this, a suite that
+                // declares several `[[media]]` (an input-container axis in
+                // every way but name) would have no way to say "this input
+                // does not accept that output", which the reference disagrees
+                // with often enough — measured directly, not guessed — that a
+                // remux matrix needs it on day one.
+                let mut for_matching = selection.clone();
+                for_matching.push(("media".to_owned(), media_id.to_owned()));
+                if self.excludes.iter().any(|e| e.matches(&for_matching)) {
                     continue;
                 }
-                let media_id = media.map_or("none", |m| m.id.as_str());
                 let mut argv = Vec::new();
                 let mut tier = self.tier;
                 if let Some(t) = media.and_then(|m| self.media_tier.get(&m.id)) {
@@ -570,6 +591,65 @@ timeout = "20s"
     fn an_exclusion_without_a_reason_is_rejected() {
         let text = SUITE.replace("reason = \"xml writer is not implemented yet\"", "");
         assert!(Suite::parse(&text).is_err());
+    }
+
+    #[test]
+    fn an_exclusion_may_bind_the_synthetic_media_pseudo_axis() {
+        let text = r#"
+schema = 1
+suite  = "remux-probe"
+tool   = "transcode"
+tier   = "core"
+owner  = "@correctness-owner"
+
+[[media]]
+id       = "avi-src"
+source   = "generated://avi-src.avi"
+generate = ["-f", "lavfi", "-i", "testsrc=d=1", "-c:v", "libx264", "-f", "avi"]
+
+[[media]]
+id       = "mp4-src"
+source   = "generated://mp4-src.mp4"
+generate = ["-f", "lavfi", "-i", "testsrc=d=1", "-c:v", "libx264", "-f", "mp4"]
+
+[[axis]]
+name = "output"
+values = [
+  { id = "matroska", argv = ["-f", "matroska"] },
+  { id = "mp4",      argv = ["-f", "mp4"] },
+]
+
+[[exclude]]
+when   = { media = ["avi-src"], output = ["matroska"] }
+reason = "OBSERVED (ffmpeg 8.1): AVI's H.264 packets carry no timestamps, and the Matroska muxer refuses to write a packet that lacks one."
+
+[compare]
+mode    = "exact-bytes"
+capture = ["output-file", "exit-code"]
+timeout = "20s"
+"#;
+        let s = Suite::parse(text).expect("parses");
+        let cases = s.expand();
+        // 2 media x 2 outputs, minus the one excluded combination.
+        assert_eq!(cases.len(), 3, "{cases:#?}");
+        assert!(
+            !cases
+                .iter()
+                .any(|c| c.id.as_str() == "remux-probe/avi-src/output=matroska"),
+            "the excluded combination must not appear: {cases:#?}"
+        );
+        assert!(
+            cases
+                .iter()
+                .any(|c| c.id.as_str() == "remux-probe/avi-src/output=mp4"),
+            "an unexcluded combination on the same media must still appear"
+        );
+        assert!(
+            cases
+                .iter()
+                .any(|c| c.id.as_str() == "remux-probe/mp4-src/output=matroska"),
+            "the same output excluded for one media must still run for another"
+        );
     }
 
     #[test]

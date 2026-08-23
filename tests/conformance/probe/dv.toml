@@ -1,0 +1,56 @@
+# DV probing, against reference-synthesised media (XF-01, issue #196).
+#
+# `generate` synthesises each file with the reference at run time and
+# discards it (D6). DV's frame geometry is fixed by its own spec (525/60 or
+# 625/50 systems) rather than freely chosen — `720x480` at `30000/1001` fps
+# with `yuv411p` is NTSC DV, the combination the reference's own `dvvideo`
+# encoder accepts without extra options.
+#
+# `duration=0.2` (about 6 frames): DV's raw frame size is fixed at 120000
+# bytes/frame for NTSC regardless of content, so a 1.2s clip here would be
+# ~7MB synthesised per case-run for no additional coverage.
+schema = 1
+suite  = "probe-dv"
+tool   = "probe"
+tier   = "core"
+owner  = "@orchestrator"
+
+[[media]]
+id       = "dv-ntsc"
+source   = "generated://dv-ntsc.dv"
+tags     = ["video", "audio"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=720x480:rate=30000/1001:d=0.2",
+            "-c:v", "dvvideo", "-pix_fmt", "yuv411p", "-f", "dv"]
+
+[[axis]]
+name   = "section"
+values = [
+  { id = "format",  argv = ["-show_format"] },
+  { id = "streams", argv = ["-show_streams"] },
+  { id = "both",    argv = ["-show_format", "-show_streams"] },
+  { id = "packets", argv = ["-show_packets"] },
+]
+
+[[axis]]
+name   = "writer"
+values = [
+  { id = "default", argv = ["-of", "default"] },
+  { id = "json",    argv = ["-of", "json"] },
+  { id = "xml",     argv = ["-of", "xml"] },
+  { id = "compact", argv = ["-of", "compact"] },
+  { id = "csv",     argv = ["-of", "csv"] },
+  { id = "flat",    argv = ["-of", "flat"] },
+  { id = "ini",     argv = ["-of", "ini"] },
+]
+
+[[axis]]
+name   = "input"
+values = [{ id = "file", argv = ["-i", "{media}"] }]
+
+[compare]
+mode    = "exact-bytes"
+capture = ["stdout", "exit-code"]
+timeout = "30s"
+
+[normalise]
+invocation = ["bitexact", "hide-banner"]

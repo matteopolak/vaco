@@ -1,0 +1,216 @@
+# The remux matrix (XF-03, issue #211): one axis of input containers, one of
+# output containers, `-c copy` throughout, compared byte for byte.
+#
+# This suite exists because it recently became possible to exist at all:
+# until the CLI resolved muxers through the registry, `vaco -c copy -f
+# matroska out.mkv` always built a null muxer and wrote nothing (see finding 6
+# in `planning/CONFORMANCE-FINDINGS.md`). There was nothing on the writing
+# side to compare.
+#
+# # Why exact-bytes, not container-structure
+#
+# The obvious assumption — that container bytes are rarely comparable because
+# a muxer stamps a creation time, a random Segment UID, or an encoder string
+# on every run — turned out not to hold here, and it was checked, not assumed
+# (§1.7.2: run the reference as often as you like). Two ffmpeg 8.1 runs of the
+# *identical* command line, for every (input, output) pair below, produce
+# byte-identical files once `-fflags +bitexact -flags +bitexact` sit in the
+# right place in the command line. "Right place" is the finding worth writing
+# down: those flags are *per-file* options, so placed before `-i` (where a
+# naive prefix normaliser puts them) they configure the *input* and Matroska
+# keeps writing a random Segment UID — two reference runs then differ by
+# ~60 bytes, which reads exactly like "the muxer is nondeterministic" and
+# is not. `crates/tool/vaco-conformance/src/normalise.rs`'s `bitexact`
+# normaliser now places them positionally (immediately before the output
+# path) for the transcode tools specifically because of this suite.
+#
+# # The exclusions are measurements, not guesses
+#
+# Every `[[exclude]]` below reproduces an actual `ffmpeg 8.1` stderr line,
+# quoted in the `reason`. Two independent constraints show up:
+#
+#   - **Annex-B vs length-prefixed H.264.** MP4/MOV/Matroska/FLV/ASF store
+#     H.264 length-prefixed (`avcC`); MPEG-TS and AVI expect Annex-B start
+#     codes. `ffmpeg`'s MPEG-TS muxer silently accepts a length-prefixed
+#     stream (it auto-inserts the equivalent of `h264_mp4toannexb`); its AVI
+#     muxer does not and rejects the packet outright. Matroska/FLV/ASF, going
+#     the other way from an Annex-B source, refuse for a different reason:
+#     those packets carry no PTS (see below), which fires first.
+#   - **AAC framing.** MPEG-TS carries AAC as ADTS; AVI and ASF require the
+#     raw `AudioSpecificConfig` framing (`aac_adtstoasc`) and reject ADTS
+#     outright ("ADTS is only supported with codec tag 0x1610").
+#   - **Timestamps.** AVI's demuxer does not populate a PTS for its packets
+#     (`ffmpeg` derives display time from the frame index instead), and
+#     Matroska/MPEG-TS refuse to write a packet with no timestamp at all.
+#
+# None of this is guessed from a spec reading — §1.7.3 step 3 (`explore`) is
+# exactly "vary flags, vary the input, read the exit message", unlimited, and
+# this is what it looks like used for real.
+schema = 1
+suite  = "transcode-remux-bitexact"
+tool   = "transcode"
+tier   = "core"
+owner  = "@orchestrator"
+
+# ---------------------------------------------------------------- video-only
+[[media]]
+id       = "v-mp4"
+source   = "generated://v-src.mp4"
+tags     = ["video"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1", "-an",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-f", "mp4"]
+
+[[media]]
+id       = "v-mov"
+source   = "generated://v-src.mov"
+tags     = ["video"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1", "-an",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-f", "mov"]
+
+[[media]]
+id       = "v-mkv"
+source   = "generated://v-src.mkv"
+tags     = ["video"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1", "-an",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-f", "matroska"]
+
+[[media]]
+id       = "v-avi"
+source   = "generated://v-src.avi"
+tags     = ["video"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1", "-an",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-f", "avi"]
+
+[[media]]
+id       = "v-ts"
+source   = "generated://v-src.ts"
+tags     = ["video"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1", "-an",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-f", "mpegts"]
+
+[[media]]
+id       = "v-flv"
+source   = "generated://v-src.flv"
+tags     = ["video"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1", "-an",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-f", "flv"]
+
+[[media]]
+id       = "v-asf"
+source   = "generated://v-src.asf"
+tags     = ["video"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1", "-an",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-f", "asf"]
+
+# ------------------------------------------------------------- video + audio
+[[media]]
+id       = "av-mp4"
+source   = "generated://av-src.mp4"
+tags     = ["video", "audio"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-f", "mp4"]
+
+[[media]]
+id       = "av-mov"
+source   = "generated://av-src.mov"
+tags     = ["video", "audio"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-f", "mov"]
+
+[[media]]
+id       = "av-mkv"
+source   = "generated://av-src.mkv"
+tags     = ["video", "audio"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-f", "matroska"]
+
+[[media]]
+id       = "av-avi"
+source   = "generated://av-src.avi"
+tags     = ["video", "audio"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-f", "avi"]
+
+[[media]]
+id       = "av-ts"
+source   = "generated://av-src.ts"
+tags     = ["video", "audio"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-f", "mpegts"]
+
+[[media]]
+id       = "av-flv"
+source   = "generated://av-src.flv"
+tags     = ["video", "audio"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-f", "flv"]
+
+[[media]]
+id       = "av-asf"
+source   = "generated://av-src.asf"
+tags     = ["video", "audio"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-f", "asf"]
+
+[[axis]]
+name   = "output"
+values = [
+  { id = "matroska", argv = ["-i", "{media}", "-c", "copy", "-f", "matroska", "{output:out.mkv}"] },
+  { id = "avi",       argv = ["-i", "{media}", "-c", "copy", "-f", "avi",      "{output:out.avi}"] },
+  { id = "mpegts",    argv = ["-i", "{media}", "-c", "copy", "-f", "mpegts",   "{output:out.ts}"] },
+  { id = "flv",       argv = ["-i", "{media}", "-c", "copy", "-f", "flv",      "{output:out.flv}"] },
+  { id = "mp4",       argv = ["-i", "{media}", "-c", "copy", "-f", "mp4",      "{output:out.mp4}"] },
+  { id = "mov",       argv = ["-i", "{media}", "-c", "copy", "-f", "mov",      "{output:out.mov}"] },
+  { id = "asf",       argv = ["-i", "{media}", "-c", "copy", "-f", "asf",      "{output:out.asf}"] },
+]
+
+[[exclude]]
+when   = { media = ["v-avi"], output = ["matroska", "mpegts", "flv"] }
+reason = "OBSERVED (ffmpeg 8.1): AVI's demuxer sets no PTS on its H.264 packets; Matroska/MPEG-TS/FLV refuse to write a packet with an unset timestamp ('Timestamps are unset in a packet for stream 0')."
+
+[[exclude]]
+when   = { media = ["v-mkv"], output = ["avi"] }
+reason = "OBSERVED (ffmpeg 8.1): Matroska stores H.264 length-prefixed (avcC); AVI's muxer requires Annex-B and rejects it outright ('h264 bitstream malformed, no startcode found, use the video bitstream filter h264_mp4toannexb')."
+
+[[exclude]]
+when   = { media = ["v-flv"], output = ["avi"] }
+reason = "Same constraint as v-mkv -> avi: FLV also stores H.264 length-prefixed."
+
+[[exclude]]
+when   = { media = ["v-asf"], output = ["matroska", "mpegts", "flv"] }
+reason = "Same constraint as v-avi's exclusion, and ASF turns out to share it: OBSERVED, its H.264 packets also carry no timestamp when copied out."
+
+[[exclude]]
+when   = { media = ["av-avi"], output = ["matroska", "mpegts", "flv"] }
+reason = "Same as v-avi -> {matroska,mpegts,flv}: AVI supplies no PTS."
+
+[[exclude]]
+when   = { media = ["av-mkv"], output = ["avi"] }
+reason = "Same as v-mkv -> avi: length-prefixed H.264 cannot be copied into AVI."
+
+[[exclude]]
+when   = { media = ["av-flv"], output = ["avi"] }
+reason = "Same as v-flv -> avi."
+
+[[exclude]]
+when   = { media = ["av-asf"], output = ["matroska", "mpegts", "flv"] }
+reason = "Same as v-asf -> {matroska,mpegts,flv}."
+
+[[exclude]]
+when   = { media = ["av-ts"], output = ["avi", "asf"] }
+reason = "OBSERVED (ffmpeg 8.1): MPEG-TS carries AAC as ADTS; AVI and ASF require the raw AudioSpecificConfig framing and reject ADTS outright ('ADTS is only supported with codec tag 0x1610')."
+
+[compare]
+mode    = "exact-bytes"
+capture = ["output-file", "exit-code"]
+timeout = "30s"
+
+[normalise]
+invocation = ["bitexact-copy", "hide-banner"]

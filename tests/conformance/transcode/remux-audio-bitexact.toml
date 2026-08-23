@@ -1,0 +1,48 @@
+# Audio-only remux, `-c copy`, byte-identical (same rationale as
+# `remux-bitexact.toml` — see that file's header for why `exact-bytes` rather
+# than a structural mode is the right bar here too; every cell below was
+# checked to reproduce byte-for-byte across two reference runs before being
+# included).
+#
+# This suite is expected to fail on our side for the `wav` column, and that
+# is the point of writing it down rather than skipping it: `wav -> wav` and
+# `m4a(aac) -> wav` both succeed on the reference (aac is a legal WAV payload
+# via the WAVEFORMATEX extensible tag; the reference's own `-c copy` proves it
+# without needing to trust that claim from anywhere else) and both currently
+# fail on `vaco`. See `planning/CONFORMANCE-FINDINGS.md` for the exact
+# reproduction and the owning crate.
+schema = 1
+suite  = "transcode-remux-audio-bitexact"
+tool   = "transcode"
+tier   = "core"
+owner  = "@orchestrator"
+
+[[media]]
+id       = "aac-m4a"
+source   = "generated://aac-src.m4a"
+tags     = ["audio"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+            "-c:a", "aac", "-f", "mp4"]
+
+[[media]]
+id       = "pcm-wav"
+source   = "generated://pcm-src.wav"
+tags     = ["audio"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+            "-c:a", "pcm_s16le", "-f", "wav"]
+
+[[axis]]
+name   = "output"
+values = [
+  { id = "matroska", argv = ["-i", "{media}", "-c", "copy", "-f", "matroska", "{output:out.mkv}"] },
+  { id = "avi",       argv = ["-i", "{media}", "-c", "copy", "-f", "avi",      "{output:out.avi}"] },
+  { id = "wav",       argv = ["-i", "{media}", "-c", "copy", "-f", "wav",      "{output:out.wav}"] },
+]
+
+[compare]
+mode    = "exact-bytes"
+capture = ["output-file", "exit-code"]
+timeout = "30s"
+
+[normalise]
+invocation = ["bitexact-copy", "hide-banner"]

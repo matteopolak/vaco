@@ -1,0 +1,55 @@
+# The structural tier of the remux matrix (XF-03, issue #211): does `vaco`'s
+# muxer output represent the *same stream content* as the reference's, even
+# where the two are not byte-identical?
+#
+# `remux-bitexact.toml` established that every combination here is
+# byte-*reproducible* on the reference (two reference runs agree), which is
+# what makes `exact-bytes` the right bar there. It says nothing about whether
+# **our** muxer reaches the same bytes, and as of this writing it does not —
+# every case in `remux-bitexact.toml` diverges, each for a real, specific
+# reason (a missing `SeekHead` in Matroska, no `avc1` compatible-brand entry
+# nor a `free`/`wide` placeholder before `mdat` in MP4/MOV, an empty
+# service-name/provider in the MPEG-TS SDT, a metadata-only subset of FLV's
+# `onMetaData`, and — the largest gap — no length-prefixed-to-Annex-B
+# bitstream conversion in the AVI muxer at all). See
+# `planning/CONFORMANCE-FINDINGS.md` for the full breakdown, crate by crate.
+#
+# This suite asks the narrower, still-real question a structural comparison
+# is for: whatever bytes `vaco` chose, does probing the *result* — stream
+# count, codec, duration, timestamps — agree with probing the reference's
+# result? `mode = "structured-diff"` on a `transcode`-tool case is special:
+# `Runner::probe_produced_files` (not the transcode tool's own stdout, which
+# is just a progress summary) probes the two written files with each side's
+# own probe binary and diffs *that*, reusing the C6 machinery byte-for-byte
+# rather than inventing a second one.
+schema = 1
+suite  = "transcode-remux-structural"
+tool   = "transcode"
+tier   = "core"
+owner  = "@orchestrator"
+
+[[media]]
+id       = "v-mp4"
+source   = "generated://struct-v-src.mp4"
+tags     = ["video"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1", "-an",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-f", "mp4"]
+
+[[axis]]
+name   = "output"
+values = [
+  { id = "matroska", argv = ["-i", "{media}", "-c", "copy", "-f", "matroska", "{output:out.mkv}"] },
+  { id = "avi",       argv = ["-i", "{media}", "-c", "copy", "-f", "avi",      "{output:out.avi}"] },
+  { id = "mpegts",    argv = ["-i", "{media}", "-c", "copy", "-f", "mpegts",   "{output:out.ts}"] },
+  { id = "flv",       argv = ["-i", "{media}", "-c", "copy", "-f", "flv",      "{output:out.flv}"] },
+  { id = "mp4",       argv = ["-i", "{media}", "-c", "copy", "-f", "mp4",      "{output:out.mp4}"] },
+  { id = "mov",       argv = ["-i", "{media}", "-c", "copy", "-f", "mov",      "{output:out.mov}"] },
+  { id = "asf",       argv = ["-i", "{media}", "-c", "copy", "-f", "asf",      "{output:out.asf}"] },
+]
+
+[compare]
+mode             = "structured-diff"
+downgrade_reason = "container byte layout is not comparable across independent muxer implementations (measured: vaco's output differs from the reference's for every format here, each for a specific and already-recorded reason); -show_format/-show_streams on the written file is the meaningful comparison for a remux, per plan 13 §1.2 C2's applicability note"
+
+[normalise]
+invocation = ["bitexact-copy", "hide-banner"]

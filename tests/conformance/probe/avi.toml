@@ -1,38 +1,28 @@
-# Matroska and WebM probing, against reference-synthesised media.
+# AVI probing, against reference-synthesised media (XF-01, issue #196).
+#
+# `generate` synthesises each file with the reference at run time and
+# discards it (D6). AVI is one of the highest-registration families in the
+# 276-component registry (`demux-avi`/`mux-avi`) without a probe suite yet.
 schema = 1
-suite  = "probe-matroska"
+suite  = "probe-avi"
 tool   = "probe"
 tier   = "core"
 owner  = "@orchestrator"
 
 [[media]]
 id       = "mpeg4-video"
-source   = "generated://mpeg4-video.mkv"
+source   = "generated://mpeg4-video.avi"
 tags     = ["video"]
 generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1.2",
-            "-c:v", "mpeg4", "-f", "matroska"]
+            "-c:v", "mpeg4", "-f", "avi"]
 
 [[media]]
-id       = "video-and-audio"
-source   = "generated://video-and-audio.mkv"
+id       = "mpeg4-and-pcm"
+source   = "generated://mpeg4-and-pcm.avi"
 tags     = ["video", "audio"]
 generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1.2",
             "-f", "lavfi", "-i", "sine=frequency=440:duration=1.2",
-            "-c:v", "mpeg4", "-c:a", "flac", "-f", "matroska"]
-
-[[media]]
-id       = "webm"
-source   = "generated://vp8-opus.webm"
-tags     = ["video", "audio", "webm"]
-# `libopus`, not `libvorbis`: OBSERVED, a stock `ffmpeg` build commonly ships
-# without `--enable-libvorbis` (it did on the machine this suite was
-# authored on — Homebrew's `ffmpeg` 8.1 has `--enable-libopus` but not
-# `--enable-libvorbis`), which used to fail 16 cases at media-synthesis time
-# with "Encoder not found" rather than testing anything about vaco. `libopus`
-# is exactly as valid a WebM audio codec and is far more commonly enabled.
-generate = ["-f", "lavfi", "-i", "testsrc=size=160x120:rate=10:d=1",
-            "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
-            "-c:v", "vp8", "-c:a", "libopus", "-f", "webm"]
+            "-c:v", "mpeg4", "-c:a", "pcm_s16le", "-f", "avi"]
 
 [[axis]]
 name   = "section"
@@ -50,6 +40,9 @@ values = [
   { id = "json",    argv = ["-of", "json"] },
   { id = "xml",     argv = ["-of", "xml"] },
   { id = "compact", argv = ["-of", "compact"] },
+  { id = "csv",     argv = ["-of", "csv"] },
+  { id = "flat",    argv = ["-of", "flat"] },
+  { id = "ini",     argv = ["-of", "ini"] },
 ]
 
 [[axis]]

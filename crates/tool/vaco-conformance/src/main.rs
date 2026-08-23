@@ -4,7 +4,7 @@
 //! ```text
 //! vaco-conformance tables [--deep] [--strict]   differential checks on our static tables
 //! vaco-conformance refbin                       what reference is installed, and does it gate
-//! vaco-conformance run [--suite S] [--tier T]   run declared suites
+//! vaco-conformance run [--suite S] [--tier T] [--case ID]   run declared suites
 //! vaco-conformance divergences                  the allowlist and its health
 //! vaco-conformance explore -- <argv…>           run both binaries and diff, writing nothing
 //! ```
@@ -20,7 +20,7 @@ use vaco_conformance::divergence::Allowlist;
 use vaco_conformance::extract::{self, Depth};
 use vaco_conformance::refbin::{self, Discovery, RefSpec};
 use vaco_conformance::report;
-use vaco_conformance::runner::Runner;
+use vaco_conformance::runner::{Runner, Tally};
 use vaco_conformance::{manifest, suite_roots};
 
 const USAGE: &str = "\
@@ -29,7 +29,7 @@ vaco-conformance — differential harness against the pinned reference binary
 USAGE:
     vaco-conformance tables [--deep] [--strict]
     vaco-conformance refbin
-    vaco-conformance run [--suite <name>] [--tier <tier>]
+    vaco-conformance run [--suite <name>] [--tier <tier>] [--case <id>]
     vaco-conformance divergences
     vaco-conformance explore -- <argv…>
 
@@ -85,6 +85,7 @@ fn main() -> ExitCode {
             &allow,
             value("--suite").as_deref(),
             value("--tier").as_deref(),
+            value("--case").as_deref(),
         ),
         "divergences" => cmd_divergences(&allow),
         "explore" => cmd_explore(&discovery, &args),
@@ -182,6 +183,7 @@ fn cmd_run(
     allow: &Allowlist,
     suite_filter: Option<&str>,
     tier_name: Option<&str>,
+    case_filter: Option<&str>,
 ) -> ExitCode {
     let tier = tier_name.and_then(Tier::parse).unwrap_or(Tier::Smoke);
     let mut cases = Vec::new();
@@ -214,6 +216,55 @@ fn cmd_run(
     }
     if load_errors > 0 {
         return ExitCode::from(2);
+    }
+
+    // `--case <id>` reproduces exactly one case, by the id printed with every
+    // failure (§1.5.2) — this is what `Case::reproduction`'s
+    // `just conformance-run '<id>'` line actually invokes. It bypasses the
+    // tier filter entirely rather than requiring `--tier exhaustive` too: a
+    // case declared `tier = "full"` or even `"manual"` must still be
+    // reproducible by pasting the one line a failure report gave you, and
+    // `Tier::included_by` deliberately never includes `manual` through tier
+    // selection at all (§1.8) — this is the other door.
+    if let Some(id) = case_filter {
+        let Some(case) = cases.iter().find(|c| c.id.as_str() == id) else {
+            eprintln!(
+                "no case with id `{id}` among the {} declared case(s) — case ids are \
+                 `suite/media/axis=value,...`; check the suite name and try `run --suite \
+                 <suite>` to list what it declares",
+                cases.len()
+            );
+            return ExitCode::from(2);
+        };
+        print!(
+            "{}",
+            report::render_reference(
+                discovery.reference(),
+                discovery.skip_reason().unwrap_or_default()
+            )
+        );
+        println!("case: {id} (tier gating bypassed)\n");
+        let mut runner = Runner::new(discovery.reference(), allow);
+        discovery
+            .skip_reason()
+            .unwrap_or_default()
+            .clone_into(&mut runner.absent_reason);
+        let outcome = runner.run_case(case);
+        let mut tally = Tally::default();
+        tally.record(&outcome.verdict);
+        print!(
+            "{}",
+            report::render_run(std::slice::from_ref(&outcome), tally, allow)
+        );
+        return if tally.is_failing()
+            && discovery
+                .reference()
+                .is_some_and(vaco_conformance::refbin::Reference::gates)
+        {
+            ExitCode::from(1)
+        } else {
+            ExitCode::SUCCESS
+        };
     }
 
     print!(

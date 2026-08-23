@@ -15,6 +15,14 @@
 //! window either side, because "42 bytes differ" is not something anyone can
 //! act on.
 //!
+//! `capture = ["output-file"]` compares the file a transcode case wrote via an
+//! `{output}` token (see [`crate::runner::Runner::run_case`]), not a captured
+//! stream. It is always compared as raw bytes with **no** output normaliser
+//! applied — every declared [`crate::normalise::Output`] variant is
+//! text-shaped (line endings, float spelling, stderr severity), and running
+//! one over an arbitrary container's bytes would coincidentally rewrite real
+//! data rather than hide a meaningless difference.
+//!
 //! # How to change it
 //!
 //! [`excerpt`] is the part worth tuning. Widen the window, do not soften the
@@ -63,7 +71,57 @@ pub fn compare(case: &Case, pair: &Pair<'_>, captures: &[Capture]) -> Verdict {
             ..DiffReport::default()
         });
     }
+
+    if wants(captures, Capture::OutputFile)
+        && let Some(report) = compare_output_file(mode, pair)
+    {
+        return Verdict::Divergence(report);
+    }
+
     Verdict::Agree
+}
+
+/// The `output-file` half of [`compare`], split out because it reasons about
+/// presence as well as content: a case can declare `output-file` without
+/// either side having written one (nothing to compare — not this
+/// comparator's business, `exit-code` already covers "did it run"), but a
+/// case where **one** side wrote a file and the other did not is exactly the
+/// silent-success failure mode §6 of `planning/CONFORMANCE-FINDINGS.md`
+/// records: exit 0, a plausible summary, and no file.
+fn compare_output_file(mode: &'static str, pair: &Pair<'_>) -> Option<DiffReport> {
+    match (pair.ours_output_file, pair.theirs_output_file) {
+        (None, None) => None,
+        (Some(ours), Some(theirs)) if ours == theirs => None,
+        (Some(ours), Some(theirs)) => {
+            let at = first_difference(ours, theirs);
+            Some(DiffReport {
+                mode,
+                summary: format!(
+                    "output file differs at byte {at}; ours {} bytes, reference {} bytes",
+                    ours.len(),
+                    theirs.len()
+                ),
+                excerpt: excerpt(ours, theirs, at),
+                ..DiffReport::default()
+            })
+        }
+        (None, Some(theirs)) => Some(DiffReport {
+            mode,
+            summary: format!(
+                "we wrote no output file; the reference wrote {} bytes",
+                theirs.len()
+            ),
+            ..DiffReport::default()
+        }),
+        (Some(ours), None) => Some(DiffReport {
+            mode,
+            summary: format!(
+                "the reference wrote no output file; we wrote {} bytes",
+                ours.len()
+            ),
+            ..DiffReport::default()
+        }),
+    }
 }
 
 fn normalised(case: &Case, raw: &[u8]) -> Vec<u8> {
@@ -149,14 +207,7 @@ mod tests {
         });
         let a = obs("format_name=mov\n", Some(0));
         let b = obs("format_name=mp4\n", Some(0));
-        match super::compare(
-            &c,
-            &Pair {
-                ours: &a,
-                theirs: &b,
-            },
-            &[Capture::Stdout],
-        ) {
+        match super::compare(&c, &Pair::new(&a, &b), &[Capture::Stdout]) {
             Verdict::Divergence(report) => {
                 assert!(report.summary.contains("byte 13"), "{}", report.summary);
                 assert!(report.excerpt.contains("ours"), "{}", report.excerpt);
@@ -174,14 +225,7 @@ mod tests {
         a.stderr = b"ours".to_vec();
         let mut b = obs("same", Some(0));
         b.stderr = b"theirs".to_vec();
-        let v = super::compare(
-            &c,
-            &Pair {
-                ours: &a,
-                theirs: &b,
-            },
-            &[Capture::Stdout],
-        );
+        let v = super::compare(&c, &Pair::new(&a, &b), &[Capture::Stdout]);
         assert!(matches!(v, Verdict::Agree));
     }
 
@@ -193,14 +237,76 @@ mod tests {
         c.normalise.output = vec![crate::normalise::Output::LineEndings];
         let a = obs("a\r\nb\r\n", Some(0));
         let b = obs("a\nb\n", Some(0));
-        let v = super::compare(
-            &c,
-            &Pair {
-                ours: &a,
-                theirs: &b,
-            },
-            &[Capture::Stdout],
-        );
+        let v = super::compare(&c, &Pair::new(&a, &b), &[Capture::Stdout]);
         assert!(matches!(v, Verdict::Agree), "normalisation must apply");
+    }
+
+    #[test]
+    fn identical_output_files_agree() {
+        let c = case(Compare::ExactBytes {
+            captures: vec![Capture::OutputFile],
+        });
+        let a = obs("", Some(0));
+        let b = obs("", Some(0));
+        let mut pair = Pair::new(&a, &b);
+        pair.ours_output_file = Some(b"same bytes");
+        pair.theirs_output_file = Some(b"same bytes");
+        let v = super::compare(&c, &pair, &[Capture::OutputFile]);
+        assert!(matches!(v, Verdict::Agree), "{v:?}");
+    }
+
+    #[test]
+    fn differing_output_files_diverge() {
+        let c = case(Compare::ExactBytes {
+            captures: vec![Capture::OutputFile],
+        });
+        let a = obs("", Some(0));
+        let b = obs("", Some(0));
+        let mut pair = Pair::new(&a, &b);
+        pair.ours_output_file = Some(b"ours");
+        pair.theirs_output_file = Some(b"theirs");
+        match super::compare(&c, &pair, &[Capture::OutputFile]) {
+            Verdict::Divergence(report) => {
+                assert!(
+                    report.summary.contains("output file differs"),
+                    "{}",
+                    report.summary
+                );
+            }
+            other => panic!("expected a divergence, got {}", other.label()),
+        }
+    }
+
+    #[test]
+    fn a_file_only_one_side_wrote_is_the_silent_success_failure_mode() {
+        let c = case(Compare::ExactBytes {
+            captures: vec![Capture::OutputFile],
+        });
+        let a = obs("", Some(0));
+        let b = obs("", Some(0));
+        let mut pair = Pair::new(&a, &b);
+        pair.theirs_output_file = Some(b"reference wrote this");
+        // ours_output_file stays None: exit 0, no file — exactly finding #6.
+        match super::compare(&c, &pair, &[Capture::OutputFile]) {
+            Verdict::Divergence(report) => {
+                assert!(
+                    report.summary.contains("we wrote no output file"),
+                    "{}",
+                    report.summary
+                );
+            }
+            other => panic!("expected a divergence, got {}", other.label()),
+        }
+    }
+
+    #[test]
+    fn a_case_that_names_no_output_file_on_either_side_is_not_this_comparators_business() {
+        let c = case(Compare::ExactBytes {
+            captures: vec![Capture::OutputFile],
+        });
+        let a = obs("", Some(0));
+        let b = obs("", Some(0));
+        let v = super::compare(&c, &Pair::new(&a, &b), &[Capture::OutputFile]);
+        assert!(matches!(v, Verdict::Agree), "{v:?}");
     }
 }

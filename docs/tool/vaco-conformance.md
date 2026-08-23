@@ -410,6 +410,70 @@ in by hand — that keeps a human in the loop on every case that lands.
 2. `structured-diff` requires a `downgrade_reason`. C6 is weaker than C0 by
    construction and must never be used to launder a failing C0 case.
 
+### Transcode suites and the `{output}` token
+
+`tests/conformance/transcode/` (XF-03, issue #211) drives the `transcode`
+tool — `vaco` against `ffmpeg`, not `vaco-probe` against `ffprobe` — and
+became possible only once the CLI resolved muxers through the registry
+instead of always building a null muxer (finding 6 in
+`planning/CONFORMANCE-FINDINGS.md`).
+
+A transcode case needs a place to write its output that the harness can then
+read back and diff, and `{media}` is read-only. `{output}` (bare, meaning
+`out.bin`) or `{output:<name>}` (e.g. `{output:out.mkv}`) resolves to a path
+inside **a subdirectory private to that side of the comparison** —
+`Runner::run_case` gives `ours` and `theirs` separate directories before
+substitution, because both binaries run the identical argv, and if both
+wrote `out.mkv` into the same directory the second run would silently
+overwrite the first one's file before anything compared them. Declare
+`capture = ["output-file", "exit-code"]` under `[compare]` to have
+`exact-bytes` diff that file's raw bytes instead of (or alongside) stdout —
+this is `Capture::OutputFile`, wired through `Pair::ours_output_file` /
+`theirs_output_file` in `compare::exact`.
+
+**The bitexact flags are positional for this tool, and the manifest-level
+name for it matters.** `-fflags`/`-flags` are *per-file* options: prepended
+before `-i` (where a naive normaliser puts them) they configure the *input*,
+not the output, and a Matroska mux keeps writing a random Segment UID —
+measured directly, two runs of the identical reference command line
+differing by ~60 bytes. `Chain::positional_suffix` inserts them immediately
+before the output path instead (every transcode suite here ends its own argv
+with the `{output...}` token for exactly this reason). Use invocation
+normaliser `bitexact-copy`, not `bitexact`, for any `-c copy` case: `vaco`
+does not currently parse a bare `-flags` option at all (`Unrecognized option
+'flags'`, exit 8), and `bitexact-copy` emits only `-fflags +bitexact` —
+confirmed sufficient for two-run byte determinism on every `-c copy` remux in
+this directory, because `-flags` selects encoder/decoder bitexact behaviour
+and a stream copy invokes neither. Reach for plain `bitexact` only for a case
+that actually encodes.
+
+**The `media` pseudo-axis.** A remux matrix is naturally "one axis of input
+containers, one axis of output containers", and several `[[media]]` entries
+already give a suite an input dimension the same way `[[axis]]` gives it an
+output one — `Suite::expand` loops over declared media exactly like it loops
+over an axis's values. `[[exclude]]` can bind `when = { media = [...], ... }`
+to say a given input cannot reach a given output, which real muxers disagree
+with the reference about constantly: MPEG-TS auto-converts a length-prefixed
+H.264 stream to Annex-B when muxing, AVI does not and rejects it outright;
+AVI's demuxer sets no PTS on its packets, and Matroska/MPEG-TS refuse to
+write a packet with none. Every exclusion in `remux-bitexact.toml` quotes the
+actual `ffmpeg 8.1` stderr line it is built from.
+
+**`behavioural` (C7) compares outcome class, not literal exit code, and the
+harness's own pre-check used to make that impossible.** `compare::evaluate`
+checks `ours.exit != theirs.exit` before dispatching to any mode — correct
+for the byte-comparing modes, where §1.2 C0 calls exit-code equality a
+co-assertion "on every mode". But two independent codebases essentially never
+choose the same integer for "I rejected this input" (measured: `vaco` and
+`ffmpeg` produced 183, 218, 234 and 0 across one ten-case suite, no two
+*failing* codes matching except by coincidence), so a literal pre-check
+before `Compare::Behavioural` ever got to classify accepted/rejected/
+signalled made that classification dead code exactly where C7 is supposed to
+apply. `evaluate` now exempts `Behavioural` from the literal check; the class
+comparison inside `behavioural()` still sees both exit codes and still
+diverges across the accept/reject boundary, just not on every mismatched
+integer within "both rejected".
+
 ### Adding a comparison mode
 
 A `Compare` variant in `case.rs`, its kebab-case name in
@@ -451,12 +515,18 @@ that.
 Commands:
 
 ```
-vaco-conformance tables [--deep] [--strict]   differential checks on our static tables
-vaco-conformance refbin                       what is installed, and does it gate
-vaco-conformance run [--suite S] [--tier T]   run declared suites
-vaco-conformance divergences                  the register and its health
-vaco-conformance explore -- <argv…>           interrogate the oracle
+vaco-conformance tables [--deep] [--strict]            differential checks on our static tables
+vaco-conformance refbin                                what is installed, and does it gate
+vaco-conformance run [--suite S] [--tier T] [--case ID] run declared suites
+vaco-conformance divergences                           the register and its health
+vaco-conformance explore -- <argv…>                    interrogate the oracle
 ```
+
+`--case <id>` reproduces exactly one case — the id printed with every failure,
+and what `just conformance-run '<id>'` actually invokes — and bypasses the
+tier filter entirely rather than requiring `--tier exhaustive` too, so a case
+declared `tier = "manual"` is still reproducible by pasting the one line a
+failure gave you.
 
 Exit codes: `0` clean (or advisory, or reference absent), `1` unexplained
 findings against the gating pin, `2` a usage or load error.

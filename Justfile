@@ -134,15 +134,28 @@ docs-check:
 # needs `ffmpeg`/`ffprobe` on PATH but no corpus. Without them every case skips
 # rather than failing, which is deliberate — `cargo test` must pass on a machine
 # that has no reference (plan 13 §1.5.4).
+#
+# Builds both binaries under test: `vaco-probe` for the `probe` tool suites,
+# `vaco` for the `transcode` tool suites (`tests/conformance/transcode/`) —
+# a suite whose binary is not built skips with a message naming which
+# `VACO_BIN_*` variable would point at it, rather than a mystery zero.
 conformance tier="core":
-    cargo build -p vaco-probe {{TD}}
-    VACO_BIN_PROBE="$(cargo metadata --format-version 1 --no-deps | \
-        sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')/debug/vaco-probe" \
+    cargo build -p vaco-probe -p vaco-cli {{TD}}
+    target_dir="$(cargo metadata --format-version 1 --no-deps | \
+        sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')"; \
+      VACO_BIN_PROBE="$target_dir/debug/vaco-probe" \
+      VACO_BIN_VACO="$target_dir/debug/vaco" \
       cargo run -p vaco-conformance {{TD}} -- run --tier {{tier}}
 
-# One case, by the id printed with every failure.
+# One case, by the id printed with every failure — reproduces it regardless of
+# its declared tier.
 conformance-run case:
-    cargo run -p vaco-conformance {{TD}} -- run --case "{{case}}"
+    cargo build -p vaco-probe -p vaco-cli {{TD}}
+    target_dir="$(cargo metadata --format-version 1 --no-deps | \
+        sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')"; \
+      VACO_BIN_PROBE="$target_dir/debug/vaco-probe" \
+      VACO_BIN_VACO="$target_dir/debug/vaco" \
+      cargo run -p vaco-conformance {{TD}} -- run --case "{{case}}"
 
 # ------------------------------------------------------ benchmarks & profiling
 
@@ -159,12 +172,6 @@ checkasm-bench:
 # Two-pass PGO build (plan 12 §7).
 build-pgo:
     cargo xtask pgo
-
-# ------------------------------------------------------------- conformance (D6)
-
-# Differential comparison against the pinned reference ffmpeg binary.
-conformance suite="smoke":
-    cargo run --release -p vaco-conformance {{TD}} -- --suite {{suite}}
 
 # Reclaim build scratch. Safe to run mid-wave: it never touches a target dir a
 # running agent owns, only the orchestrator's own and stale ones.

@@ -1,0 +1,109 @@
+# The (input, output) pairs `remux-bitexact.toml` excludes, because the
+# *reference itself* refuses to remux them — an Annex-B/length-prefixed H.264
+# mismatch, or ADTS-framed AAC into a container that wants raw
+# AudioSpecificConfig framing. See that suite's header for the exact stderr
+# lines.
+#
+# Excluding a combination from a byte-identical suite is not the same claim
+# as "our muxer handles this correctly", and it would be a coverage hole to
+# simply drop it. This suite asks a narrower, still-real question: does
+# `vaco`'s copy pipeline *reject the same combinations*? Mode `behavioural`
+# (C7) compares outcome class only — accepted / rejected / signalled — not
+# exit codes or messages, which is the right granularity here: matching
+# ffmpeg's exact exit code on a rejection it was never trying to match would
+# be a coincidence, not a claim either program makes.
+#
+# A combination where the reference rejects and vaco *accepts* is the
+# interesting failure mode this suite exists to catch: it would mean vaco
+# wrote a file its own muxer considered valid but that violates a real
+# container constraint (an Annex-B stream inside AVI with no bitstream
+# filter, say) — silently wrong output, which is worse than a matching
+# rejection.
+schema = 1
+suite  = "transcode-remux-known-incompatible"
+tool   = "transcode"
+tier   = "core"
+owner  = "@orchestrator"
+
+[[media]]
+id       = "av-avi"
+source   = "generated://inc-av-src.avi"
+tags     = ["video", "audio"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-f", "avi"]
+
+[[media]]
+id       = "av-mkv"
+source   = "generated://inc-av-src.mkv"
+tags     = ["video", "audio"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-f", "matroska"]
+
+[[media]]
+id       = "av-flv"
+source   = "generated://inc-av-src.flv"
+tags     = ["video", "audio"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-f", "flv"]
+
+[[media]]
+id       = "av-asf"
+source   = "generated://inc-av-src.asf"
+tags     = ["video", "audio"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-f", "asf"]
+
+[[media]]
+id       = "av-ts"
+source   = "generated://inc-av-src.ts"
+tags     = ["video", "audio"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-f", "mpegts"]
+
+[[axis]]
+name   = "output"
+values = [
+  { id = "to-matroska", argv = ["-i", "{media}", "-c", "copy", "-f", "matroska", "{output:out.mkv}"] },
+  { id = "to-avi",      argv = ["-i", "{media}", "-c", "copy", "-f", "avi",      "{output:out.avi}"] },
+  { id = "to-mpegts",   argv = ["-i", "{media}", "-c", "copy", "-f", "mpegts",   "{output:out.ts}"] },
+  { id = "to-flv",      argv = ["-i", "{media}", "-c", "copy", "-f", "flv",      "{output:out.flv}"] },
+  { id = "to-asf",      argv = ["-i", "{media}", "-c", "copy", "-f", "asf",      "{output:out.asf}"] },
+]
+
+# Keep only the nine pairs actually known to be incompatible; the rest of the
+# 5x5 grid (including every format copying into itself) is already exercised
+# — and expected to agree — in `remux-bitexact.toml`.
+[[exclude]]
+when   = { media = ["av-avi"], output = ["to-avi"] }
+reason = "self-remux is not a known-incompatible pair; covered by remux-bitexact.toml"
+
+[[exclude]]
+when   = { media = ["av-avi"], output = ["to-asf"] }
+reason = "AVI -> ASF is not a measured-incompatible pair (both are non-ADTS, non-length-prefixed-only); not this suite's business"
+
+[[exclude]]
+when   = { media = ["av-mkv"], output = ["to-matroska", "to-mpegts", "to-flv", "to-asf"] }
+reason = "only mkv -> avi is measured-incompatible; the rest belong to remux-bitexact.toml"
+
+[[exclude]]
+when   = { media = ["av-flv"], output = ["to-matroska", "to-mpegts", "to-flv", "to-asf"] }
+reason = "only flv -> avi is measured-incompatible; the rest belong to remux-bitexact.toml"
+
+[[exclude]]
+when   = { media = ["av-asf"], output = ["to-avi", "to-asf"] }
+reason = "asf -> avi is not measured-incompatible (both accept only raw AAC framing); asf -> asf is self-remux, covered elsewhere"
+
+[[exclude]]
+when   = { media = ["av-ts"], output = ["to-matroska", "to-mpegts", "to-flv"] }
+reason = "only ts -> {avi,asf} is measured-incompatible (ADTS framing); the rest belong to remux-bitexact.toml"
+
+[compare]
+mode = "behavioural"
+
+[normalise]
+invocation = ["bitexact-copy", "hide-banner"]
