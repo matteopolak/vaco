@@ -131,7 +131,7 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-cli | 7 | — | agent:cli-mux | done | 2026-08-23 | 2026-08-23 | muxers wired: -c copy remux writes a real file |
 | vaco-conformance | 10 | #172,#173 | agent:conformance | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-checkasm | 10 | — | — | free |  |  |
-| vaco-filter-blur | 5 | #468 | agent:blur | done | 2026-08-23 | 2026-08-23 | gblur boxblur unsharp smartblur convolution sobel and the rest of FT-4.6a |
+| vaco-filter-blur | 5 | #468 | agent:blur2 | done | 2026-08-23 | 2026-08-23 | gblur boxblur unsharp smartblur convolution sobel and the rest of FT-4.6a |
 | vaco-filter-denoise | 5 | #469 | agent:denoise | done | 2026-08-23 | 2026-08-23 | hqdn3d atadenoise removegrain nlmeans owdenoise |
 | vaco-filter-geometry | 5 | #470 | agent:geom2 | done | 2026-08-23 | 2026-08-23 | T2 geometry (~28) — distinct from vaco-filter-video-geometry's T1 set |
 | vaco-filter-color | 5 | #476 | agent:component | assigned | 2026-08-23 |  | redirected from the invented vaco-filter-component to plan 16 §4.3 rows |
@@ -140,13 +140,13 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-filter-achannel | 5 | #482 | agent:achannel | done | 2026-08-23 | 2026-08-23 | T3 channel, layout and mixing filters (~14) |
 | vaco-filter-ameasure | 5 | #483 | agent:ameasure | done | 2026-08-23 | 2026-08-23 | NAME DIVERGES: plan 16 §4.3 calls this vaco-filter-aanalysis |
 | vaco-demux-mpegts | 4 | #632 | agent:tspkt | done | 2026-08-23 | 2026-08-23 | part 2 residual: PES_packet_length==0 release timing, characterised not root-caused |
-| vaco-bsf-core | 3 | #349 | agent:bsf | assigned | 2026-08-23 |  | M6 stage is reachable but inert until this exists |
-| vaco-bsf-generic | 3 | #349 | agent:bsf | assigned | 2026-08-23 |  | extract_extradata closes CONFORMANCE-FINDINGS 26 |
-| vaco-bsf-h2645 | 3 | #350 | agent:bsf | assigned | 2026-08-23 |  | *_mp4toannexb; dedups vaco-mux-avi/mpegts converters |
+| vaco-bsf-core | 3 | #349 | agent:bsf | done | 2026-08-23 | 2026-08-23 | M6 stage is reachable but inert until this exists |
+| vaco-bsf-generic | 3 | #349 | agent:bsf | done | 2026-08-23 | 2026-08-23 | extract_extradata closes CONFORMANCE-FINDINGS 26 |
+| vaco-bsf-h2645 | 3 | #350 | agent:bsf | done | 2026-08-23 | 2026-08-23 | *_mp4toannexb; dedups vaco-mux-avi/mpegts converters |
 | vaco-filter-temporal | 5 | #475 | agent:temporal | done | 2026-08-23 | 2026-08-23 | plan 16 §4.3 row; fps already taken by vaco-filter-video-format |
-| vaco-filter-convolve | 5 | #468 | agent:blur2 | assigned | 2026-08-23 |  | remainder of the plan row: morpho inflate deflate edgedetect blurdetect convolve deconvolve corr xcorrelate |
+| vaco-filter-convolve | 5 | #468 | agent:blur2 | done | 2026-08-23 | 2026-08-23 | remainder of the plan row: morpho inflate deflate edgedetect blurdetect convolve deconvolve corr xcorrelate |
 | vaco-filter-core | 5 | — | agent:adapt | done | 2026-08-23 | 2026-08-23 | INTERFACE-GAPS 10: Paired + Fanout adapters, then the multi-input filters three agents declined |
-| vaco-mux-matroska | 4 | — | agent:mkv | assigned | 2026-08-23 |  | CONFORMANCE-FINDINGS 15: CRC-32 on every level-1 element, then SeekHead |
+| vaco-mux-matroska | 4 | — | agent:mkv | done | 2026-08-23 | 2026-08-23 | CONFORMANCE-FINDINGS 15: CRC-32 on every level-1 element, then SeekHead |
 | vaco-filter-vdsp | 5 | — | agent:deint | assigned | 2026-08-23 |  | created by agent:temporal for scene_sad; extend, do not duplicate |
 | vaco-filter-source | 5 | #474 | agent:src | assigned | 2026-08-23 |  | plan 16 §4.3 row; nullsrc/color already taken by vaco-filter-video-source |
 | vaco-filter-asource | 5 | #481 | agent:src | assigned | 2026-08-23 |  | anullsrc already taken |
