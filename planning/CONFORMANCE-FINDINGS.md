@@ -1112,6 +1112,76 @@ This closes the stream-info half of findings 21 and 22. What remains under
 finding 22 is only the original question — whether generic format tags
 propagate across `-c copy` into ASF.
 
+### The read half — extract_extradata, measured — **fixed**
+
+`vaco-bsf-generic`'s `extract_extradata` (the write half, above) already
+computed the exact assembly rule the reference uses. What was missing was
+anything on the *read* path calling it: `-show_streams` still reported no
+`extradata` at all for AVI/MPEG-TS-carried H.264/HEVC, because nothing ever
+ran the rule while probing.
+
+D19 governs the shape of the fix: the assembly rule gets exactly one
+definition, not a second copy living beside `vaco-format-core`'s stream
+discovery. Three ways to get there, in the order considered:
+
+1. **Move the rule into a crate both sides already depend on.** Chosen.
+   `vaco-format-nalu` already owns start-code framing (`units`, `Framing`,
+   `NalHeader`) and sits below both `vaco-bsf-generic` and
+   `vaco-format-core` in the crate graph (`cargo xtask layer-check` — both
+   are `codec | format` = layer 4, and the edge `vaco-format-core ->
+   vaco-format-nalu` is same-layer and acyclic, which the checker permits).
+   The new `vaco_format_nalu::extradata` module holds `parameter_sets`
+   (which NAL units in a payload are SPS/PPS/VPS) and `assemble_extradata`
+   (the three-byte-then-four-byte start-code rule); `extract_extradata` and
+   `Discovery::synthesize_extradata` both call it and neither keeps a local
+   copy.
+2. **Route `Discovery` through a `BsfProvider`**, symmetrical with
+   `ParserProvider`, and run the real filter. Rejected: no such seam exists
+   today, and building a provider, a registry lookup and a `BitstreamFilter`
+   instance to reach a function with no state of its own is machinery this
+   problem does not need — the filter's only other behaviour
+   (`remove=1`) is not reachable through the seam anyway (`vaco-bsf-generic`
+   docs, and INTERFACE-GAPS gap 12). Left as an option for whoever needs the
+   filter's other behaviour on the read side later.
+3. **Have `vaco-parse-h264`/`-hevc` expose the parameter sets they already
+   parsed**, and assemble from those. Rejected: strictly more surface for
+   the same answer. `Discovery` already holds the exact packet payload it is
+   about to feed the parser — reaching into the parser's private state for
+   bytes already in hand would only add a reason to widen `Parser`.
+
+The read-side half of the fix, `Discovery::synthesize_extradata`
+(`vaco-format-core`'s `discovery.rs`), runs independently of whether a
+`Parser` is even registered for the stream's codec — it needs nothing but
+`vaco-format-nalu` and the raw payload, so a `--no-default-features` build
+with no H.264/HEVC parser compiled in gets the same `extradata_size` a full
+build does. It fires once: the first packet in the probe window carrying a
+parameter set sets `extradata`, and the container's own record (when one
+exists — ASF, MP4) is checked first and never overwritten.
+
+Measured against `ffmpeg 8.1`, `-show_entries
+stream=codec_name,profile,pix_fmt,extradata_size`, same `testsrc`/`libx264`
+recipe as above, now covering all four shapes finding 26 named plus HEVC:
+
+```text
+                              ref                      ours
+a.avi   (h264, Annex B)      h264,High,yuv420p,37      h264,High,yuv420p,37
+a.ts    (h264, MPEG-TS)      h264,High,yuv420p,37      h264,High,yuv420p,37
+a.asf   (h264, avcC record)  h264,High,yuv420p,38      h264,High,yuv420p,38
+p.mp4   (h264, avcC record)  h264,High,yuv420p,45      h264,High,yuv420p,45
+h.ts    (hevc, MPEG-TS)      hevc,Main,yuv420p,82      hevc,Main,yuv420p,82
+```
+
+`a.avi` and `a.ts` are the ones this closes — both were empty before the fix
+and both are the exact 37 measured bytes now (three-byte start code on the
+SPS, four-byte on the PPS). `a.asf` and `p.mp4` already agreed after findings
+21/22's fix above and are unchanged, confirming the new code path does not
+touch a stream that already has a container-supplied record. `h.ts` is the
+HEVC case finding 26 originally said no local file could exercise — MPEG-TS
+turned out to produce one, so this is now measured rather than covered only
+by a synthetic unit test.
+
+This closes finding 26.
+
 ## 27. `-filters` printed a legend and no rows; `-h filter=` prints one line where the reference prints an option table
 
 Two divergences in the same surface, found by diffing `vaco -filters` against
