@@ -337,6 +337,12 @@ Deliberate, and each is a documented divergence rather than an oversight:
   `draft-ietf-cellar-codec` §3.3/§3.4/§3.5. The table is already complete
   against the draft; the rows that resolve to `None` are waiting on
   `vaco_codec_core::CodecId` variants, and filling one in is a one-word change.
+  Finding 4 (`planning/CONFORMANCE-FINDINGS.md`) found the table itself sitting
+  well behind what `CodecId` already offered — 28 rows, `V_MPEG1`/`A_AC3`/
+  `A_TRUEHD` among them, had a matching variant sitting unused — so before
+  assuming a row needs a new `CodecId` variant, check it is not simply an
+  unwired existing one; `V_AVS2`/`V_AVS3` are the two rows in this crate's
+  scope that genuinely still need one.
 * **Changing timestamp arithmetic**: everything goes through
   `vaco_core::rescale_rnd` with an explicit `Rounding`. Do not add a second
   path; the rounding modes were measured against the reference and the tests

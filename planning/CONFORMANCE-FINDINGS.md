@@ -51,34 +51,100 @@ and a confidently-detected transport stream scores **50**. Both numbers are
 measured against the reference, so neither is wrong on its own — the bug was
 entirely in the raw probes firing where the reference's do not.
 
-## 3. Raw H.264 probes as `avs2` — **open**, `vaco-demux-raw`
+## 3. Raw H.264 probes as `avs2` — **fixed**, `vaco-demux-raw`
 
-The same root cause, second half. Eleven formats share `Framing::StartCode3` and
-all of them now agree on any file that opens with a start code, so ties break
-alphabetically and `avs2` wins. `vaco-probe raw.h264` says `avs2`; the reference
-says `h264`.
+The same root cause, second half. This entry originally said **eleven**
+formats share `Framing::StartCode3`; counted directly from `bitstream.rs` it
+is **ten** — `h264`, `hevc`, `vvc`, `m4v`, `mpegvideo`, `cavsvideo`, `avs2`,
+`avs3`, `vc1`, `evc`. All ten agreed on any file that opens with a start code,
+so ties broke alphabetically and `avs2` won. `vaco-probe raw.h264` said
+`avs2`; the reference said `h264`.
 
 The fix is the part of §2 that was deliberately not attempted: match the
 start-code **identifier** — the byte or bytes after `00 00 01` — against the
-format. H.264 opens with a NAL whose `forbidden_zero_bit` is 0 and whose type is
-a parameter set or an access-unit delimiter; MPEG-1/2 video opens with a
-sequence header `0xB3`; VC-1 with `0x0F`; and so on for all eleven.
+format, in `bitstream.rs`'s new `start_code_identifier`. Measured with
+`ffmpeg -f lavfi -i testsrc=d=0.5 -c:v <codec> -f <rawformat> out.bin`, read
+back with `xxd`, for every member this `ffmpeg` 8.1 build has an encoder for:
 
-**This must be measured, not recalled.** Generate one elementary stream per
-format with the reference, read back what it detects, and encode only the
-distinctions that hold up. Guessing eleven formats' identifiers from memory is
-precisely the failure D17 exists to prevent.
+| format | encoder | identifier | reference detects |
+|---|---|---|---|
+| `h264` | `libx264` | `0x67` (SPS) / `0x09` (AUD, with `aud=1`) | `h264` |
+| `hevc` | `libx265` | `0x40 0x01` (VPS) / `0x46 0x01` (AUD, with `aud=1`) | `hevc` |
+| `mpegvideo` | `mpeg1video` / `mpeg2video` | `0xB3` (`sequence_header_code`, identical for both) | `mpegvideo` |
+| `m4v` | `mpeg4` | `0xB0` (`visual_object_sequence_start_code`) | `m4v` |
 
-## 4. `codec_name=unknown` on most streams — **open**, per-demuxer
+`avs2`, `avs3`, `cavsvideo`, `evc`, `vc1` and `vvc` have **no encoder in this
+`ffmpeg` 8.1 build** — confirmed via `ffmpeg -codecs`, not assumed — so there
+is no reference sample to read an identifier from. Per the brief, these six
+make no structural claim and fall back to `ProbeScore::from_extension`; a real
+elementary stream in one of these six formats is now honestly undetected by
+content rather than dishonestly detected as whichever of the ten sorts first
+alphabetically. `crates/format/vaco-demux-raw/tests/probe_matrix.rs` asserts
+the whole shape: every one of the ten's own sample wins its own probe, no
+`StartCode3` sibling ever outscores it, and the six unverified formats score
+`NONE` the moment their filename extension is wrong (proving the win came from
+the extension, not from an undisclosed structural claim).
+
+**This was measured, not recalled** — the table above is the second time this
+crate's probing was wrong in a way memory would not have caught (see §2): the
+lesson repeats because the failure mode is the same shape twice, not because
+the lesson was skipped the first time.
+
+## 4. `codec_name=unknown` on most streams — **fixed for MPEG-TS and Matroska**, MP4 not touched
 
 The largest remaining divergence class. `TsCodec::codec_id` in
-`vaco-format-mpegts-tables` maps eight of about thirty variants and returns
+`vaco-format-mpegts-tables` mapped eight of about thirty variants and returned
 `None` for the rest, so `mpeg2video`, `mp2`, `flac`, `vorbis`, `vp8` and `alac`
-all print `unknown` where the reference names them. The MP4 and Matroska
-demuxers have the same gap for their own codec tables.
+all printed `unknown` where the reference names them. The MP4 and Matroska
+demuxers had the same gap for their own codec tables.
 
-Belongs to whoever owns each demuxer; the mapping is mechanical once someone
-decides to complete it.
+The mapping was mechanical, but not for the reason it looked mechanical:
+`vaco_codec_core::CodecId` already had a variant for most of the gap —
+`Mpeg2video`, `Mp2`, `Ac3`, `Truehd`, `Vc1`, `Cavs`, `Dirac`, `Vvc`, `Mp1`,
+`Alac`, `Ass`, `Ssa`, `Webvtt`, `DvdSubtitle`, `HdmvPgsSubtitle` and more were
+sitting unused, not missing. (`Flac`, `Vorbis` and `Vp8` — the finding's own
+named examples — are real: Matroska's `A_FLAC`/`A_VORBIS`/`V_VP8` rows were
+already mapped before this fix; the unmapped instances of those three codecs
+are in MP4, which was not touched — see below.)
+
+* **MPEG-TS (`vaco-format-mpegts-tables`) — fixed.** `TsCodec::codec_id` now
+  maps 21 of its ~30 variants (was 8), every one checked against an existing
+  `CodecId` variant. Eight variants still have no `CodecId` counterpart at
+  all — `Avs2`, `Avs3`, `Jpeg2000`, `DvbSubtitle`, `DvbTeletext`, `Scte35`,
+  `TimedId3`, `Klv` — and their exact names/long names, probed from `ffmpeg
+  -codecs` 8.1, are in `stream_type.rs`'s module docs for whoever owns
+  `vaco-codec-core` next. Confirmed with a real `mpeg2video`+`ac3` transport
+  stream: `vaco-probe -show_streams` printed `codec_name=unknown` for both
+  before this fix and `codec_name=mpeg2video`/`codec_name=ac3` after it.
+* **Matroska (`vaco-demux-matroska`) — fixed.** `src/codec.rs`'s `EXACT` table
+  now resolves 28 rows that used to sit on `None` — `V_MPEG1`, `V_MPEG2`,
+  `V_CAVS`, `V_DIRAC`, `V_FFV1`, `V_MPEGI/ISO/VVC`, the three `V_MPEG4/ISO/*`
+  profiles, `V_MPEG4/MS/V3`, `V_PRORES`, `V_THEORA`, the three `A_AC3*` rows,
+  `A_ALAC`, the three `A_DTS*` rows, `A_EAC3`, `A_MPEG/L1`, `A_MPEG/L2`,
+  `A_TRUEHD`, `S_HDMV/PGS`, `S_TEXT/ASS`, `S_TEXT/SSA`, `S_TEXT/WEBVTT` and
+  `S_VOBSUB`. `V_AVS2`/`V_AVS3` are the only two rows in this crate's scope
+  still genuinely blocked on a missing `CodecId` variant (the same `Avs2`/
+  `Avs3` gap MPEG-TS reports). One collateral fix: `tests/demux.rs`'s
+  `a_track_whose_codec_has_no_codec_id_variant_still_becomes_a_stream` used
+  `A_AC3` as its example of an unmappable codec and started failing *because*
+  this fix mapped it — exactly the "never pin the absence of something the
+  project is building" trap in `planning/AGENT-CONSTRAINTS.md`. Swapped to
+  `A_MLP`, which is still genuinely unmapped.
+* **MP4 (`vaco-demux-mp4`) — not touched, and could not be from this brief's
+  scope.** The brief named `vaco-demux-mp4`'s codec-mapping table, but that
+  table does not live in that crate: `SampleEntry::codec`/`sample_entry_codec`
+  (the fourcc → `CodecId` table) and `EsDescriptor::codec` both live in
+  `vaco-format-isom`, a crate this brief did not grant write access to.
+  `vaco-demux-mp4` itself has no codec-mapping table of its own beyond a
+  two-entry cover-art image-type lookup in `lib.rs`, unrelated to this
+  finding. Per `planning/AGENT-CONSTRAINTS.md` ("If you need a change in a
+  crate you do not own, stop and report — do not work around it"), this was
+  left alone. `alac`/`flac`/`vorbis`/`vp8` in MP4 specifically (and this
+  finding's own `flac`/`vorbis`/`vp8` examples, which read most naturally as
+  MP4/Matroska streams rather than MPEG-TS ones — MPEG-TS has no `TsCodec`
+  variant for any of the three) still print `unknown` and are
+  `vaco-format-isom`'s to fix, the same shape of change as the two tables
+  above.
 
 ## 5. Packet order and count — **open**, `vaco-demux-mpegps`
 

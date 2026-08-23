@@ -226,11 +226,24 @@ registration, `mpegtsraw`, also reads `packet::PCR_HZ` directly for its
 ## What `vaco-codec-core` does not cover
 
 `CodecId` has grown since this note was first written — it now names AC-3,
-E-AC-3, DTS, TrueHD, VC-1, Mpeg1video/Mpeg2video, Vvc, Cavs and Dirac among
-others, and `for_codec` uses all of them. MPEG-TS still routinely carries
-**JPEG 2000, Avs2/Avs3, DVB subtitles, DVB teletext, PGS subtitles, SCTE-35
-splice information, timed ID3 and SMPTE KLV** — none of which have a
-`CodecId`, and none of which `vaco-mux-mpegts` can write for that reason.
+E-AC-3, DTS, TrueHD, VC-1, Mpeg1video/Mpeg2video, Vvc, Cavs, Dirac, Mp1/Mp2
+and HdmvPgsSubtitle among others, and both directions of this table use them:
+`for_codec` (the muxer's question) always did, and `TsCodec::codec_id` (the
+demuxer's question) now does too as of finding 4
+(`planning/CONFORMANCE-FINDINGS.md`) — it used to map eight of the roughly
+thirty `TsCodec` variants and fall through to `None`, i.e. `codec_name=unknown`
+in `vaco-probe`, for the rest **even where `CodecId` already had a matching
+variant sitting unused**: `mpeg2video`, `mp2`, `ac3`, `truehd` and others were
+gaps in this function, not in that enum. Fixed by checking every variant
+against the enum's actual contents rather than the eight originally wired up.
+
+MPEG-TS still routinely carries **JPEG 2000, AVS2/AVS3, DVB subtitles, DVB
+teletext, SCTE-35 splice information, timed ID3 and SMPTE KLV** — eight
+`TsCodec` variants (`Jpeg2000`, `Avs2`, `Avs3`, `DvbSubtitle`, `DvbTeletext`,
+`Scte35`, `TimedId3`, `Klv`) with genuinely no `CodecId` counterpart, and none
+of which `vaco-mux-mpegts` can write for that reason either. Their names and
+long names, probed from `ffmpeg -codecs` (8.1) rather than recalled, are in
+`stream_type.rs`'s module docs for whoever adds them.
 
 Collapsing them onto "unknown" would throw away the one fact the PMT actually
 stated, so `TsCodec` carries the full repertoire and `TsCodec::codec_id()`
@@ -239,9 +252,10 @@ codec is real and named; `vaco-codec-core` has no variant" — not "unknown
 codec" — and the demuxer keeps reporting the stream, with its media type, its
 PID and its language, under a `ts_codec` metadata tag.
 
-**This is the single largest gap between this crate and the reference's
-output**, because `codec_name` is a printed field. Reported rather than worked
-around.
+Before finding 4 this was the single largest gap between this crate and the
+reference's output, because `codec_name` is a printed field. The eight
+variants above are the honestly-remaining piece of it; the rest was this
+function not using what `vaco-codec-core` already had.
 
 ---
 

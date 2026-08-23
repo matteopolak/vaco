@@ -172,9 +172,19 @@ fn pixel_cropping_shrinks_the_reported_size() {
 
 #[test]
 fn a_track_whose_codec_has_no_codec_id_variant_still_becomes_a_stream() {
+    // `A_MLP` (Meridian Lossless Packing), not `A_AC3`: `vaco-codec-core` has
+    // no `CodecId::Mlp` variant, whereas `A_AC3` used to be the example here
+    // and stopped being one the day finding 4
+    // (`planning/CONFORMANCE-FINDINGS.md`) mapped it to `CodecId::Ac3` — a
+    // test that failed *because a real gap closed*, exactly the anti-pattern
+    // `planning/AGENT-CONSTRAINTS.md` "Never pin the absence of something the
+    // project is building" warns about. This still asserts the behaviour
+    // that matters (an unmappable codec is still reported as a stream, with
+    // its media type), just with an example that is not the demuxer's own
+    // codec table's job to keep current.
     let mut body = synth::uint(el::TRACKNUMBER, 1);
     body.extend_from_slice(&synth::uint(el::TRACKTYPE, 2));
-    body.extend_from_slice(&synth::string(el::CODECID, "A_AC3"));
+    body.extend_from_slice(&synth::string(el::CODECID, "A_MLP"));
     let track = synth::element(el::TRACKENTRY, &body);
     let bytes = synth::file(
         "matroska",

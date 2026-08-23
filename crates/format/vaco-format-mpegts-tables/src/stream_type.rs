@@ -21,6 +21,30 @@
 //! [`TsCodec::codec_id`] maps across where a `CodecId` exists. When the enum
 //! grows, only that one function changes.
 //!
+//! # The `CodecId` gap, closed
+//!
+//! Eight [`TsCodec`] variants had no [`CodecId`] counterpart, so
+//! [`TsCodec::codec_id`] returned `None` for them and `vaco-probe` printed
+//! `codec_name=unknown` for a stream whose PMT had said exactly what it was —
+//! the largest single divergence class the differential harness found.
+//!
+//! `vaco-codec-core` gained all eight (`avs2`, `avs3`, `jpeg2000`,
+//! `dvb_subtitle`, `dvb_teletext`, `scte_35`, `timed_id3`, `klv`), with names
+//! and long names probed from `ffmpeg -codecs` 8.1 rather than recalled. Four
+//! of them are `MediaType::Data`, which that table had no entry for at all
+//! until then: a transport stream carries SCTE-35 splice messages, timed ID3
+//! and SMPTE 336M KLV as elementary streams of their own.
+//!
+//! Two variants remain `None` deliberately. `PrivateData` is `stream_type`
+//! 0x06 with no descriptor saying what it holds, and `Unknown` is a type this
+//! build does not recognise — in both cases the PMT declared nothing more, so
+//! there is nothing to map and saying so is the accurate answer.
+//!
+//! The `(decoders: …)`/`(encoders: …)` suffix `ffmpeg -codecs` appends to
+//! `dvb_subtitle`'s long name is not part of `codec_long_name` — the same
+//! thing `vaco-codec-core`'s own docs note for `subrip` — so it is omitted
+//! above.
+//!
 //! # The mux direction
 //!
 //! [`resolve`] and [`from_stream_type`] answer "what codec does this
@@ -175,18 +199,61 @@ impl TsCodec {
     /// it, and `vaco-codec-core` has no variant for it". A demuxer must keep
     /// reporting the stream — with its media type, its PID and its language —
     /// rather than dropping it.
+    ///
+    /// Finding 4 of `planning/CONFORMANCE-FINDINGS.md`: this used to map
+    /// eight of the roughly thirty variants above and fall through to `None`
+    /// — "unknown codec" — for the rest, even where `vaco_codec_core::CodecId`
+    /// already had a matching variant sitting unused (`Mpeg2Video`, `Mp2`,
+    /// `Ac3`… were real gaps in this function, not in that enum). Every arm
+    /// below that resolves to `Some` was checked against an existing
+    /// [`CodecId`] variant, not added speculatively.
+    ///
+    /// Eight variants still have no home: [`Self::Avs2`], [`Self::Avs3`],
+    /// [`Self::Jpeg2000`], [`Self::DvbSubtitle`], [`Self::DvbTeletext`],
+    /// [`Self::Scte35`], [`Self::TimedId3`], [`Self::Klv`] all fall to `None`
+    /// because `vaco-codec-core` — owned by another agent — has no matching
+    /// variant. Their exact names and long names, probed from `ffmpeg
+    /// -codecs` (8.1) rather than recalled, are reported in this crate's
+    /// docs for whoever adds them. [`Self::Unknown`] and [`Self::PrivateData`]
+    /// are correctly `None` regardless: neither one names a real codec.
     #[must_use]
     pub const fn codec_id(self) -> Option<CodecId> {
         match self {
+            Self::Mpeg1Video => Some(CodecId::Mpeg1video),
+            Self::Mpeg2Video => Some(CodecId::Mpeg2video),
+            Self::Mpeg4Video => Some(CodecId::Mpeg4),
             Self::H264 => Some(CodecId::H264),
             Self::Hevc => Some(CodecId::Hevc),
+            Self::Vvc => Some(CodecId::Vvc),
             Self::Av1 => Some(CodecId::Av1),
+            Self::Vc1 => Some(CodecId::Vc1),
+            Self::Dirac => Some(CodecId::Dirac),
+            Self::Cavs => Some(CodecId::Cavs),
+            Self::Mp1 => Some(CodecId::Mp1),
+            Self::Mp2 => Some(CodecId::Mp2),
+            Self::Mp3 => Some(CodecId::Mp3),
             Self::Aac => Some(CodecId::Aac),
             Self::AacLatm => Some(CodecId::AacLatm),
+            Self::Ac3 => Some(CodecId::Ac3),
+            Self::Eac3 => Some(CodecId::Eac3),
+            Self::Dts => Some(CodecId::Dts),
+            Self::TrueHd => Some(CodecId::Truehd),
             Self::Opus => Some(CodecId::Opus),
-            Self::Mp3 => Some(CodecId::Mp3),
             Self::Pcm302m | Self::PcmBluray => Some(CodecId::Pcm),
-            _ => None,
+            Self::PgsSubtitle => Some(CodecId::HdmvPgsSubtitle),
+            Self::Avs2 => Some(CodecId::Avs2),
+            Self::Avs3 => Some(CodecId::Avs3),
+            Self::Jpeg2000 => Some(CodecId::Jpeg2000),
+            Self::DvbSubtitle => Some(CodecId::DvbSubtitle),
+            Self::DvbTeletext => Some(CodecId::DvbTeletext),
+            Self::Scte35 => Some(CodecId::Scte35),
+            Self::TimedId3 => Some(CodecId::TimedId3),
+            Self::Klv => Some(CodecId::Klv),
+            // `PrivateData` is `stream_type` 0x06 with no descriptor that says
+            // what it is — the PMT genuinely declared nothing more, so there is
+            // nothing to map. `Unknown` is the same statement for a type this
+            // build does not recognise. Both stay `None` on purpose.
+            Self::Unknown | Self::PrivateData => None,
         }
     }
 
@@ -535,18 +602,47 @@ mod tests {
 
     #[test]
     fn codec_ids_agree_with_media_types_where_they_exist() {
+        // Finding 4: every variant this table can map onto an existing
+        // `CodecId`, not just the eight it used to. Each one is asserted by
+        // name — the positive mapping, not the eight variants' absence,
+        // per `planning/AGENT-CONSTRAINTS.md` "Never pin the absence of
+        // something the project is building": `Avs2`/`Avs3`/`Jpeg2000`/
+        // `DvbSubtitle`/`DvbTeletext`/`Scte35`/`TimedId3`/`Klv` are
+        // deliberately not asserted `None` here, so this test does not fail
+        // on the day `vaco-codec-core` gains those variants.
         for c in [
+            TsCodec::Mpeg1Video,
+            TsCodec::Mpeg2Video,
+            TsCodec::Mpeg4Video,
             TsCodec::H264,
             TsCodec::Hevc,
+            TsCodec::Vvc,
             TsCodec::Av1,
+            TsCodec::Vc1,
+            TsCodec::Dirac,
+            TsCodec::Cavs,
+            TsCodec::Mp1,
+            TsCodec::Mp2,
+            TsCodec::Mp3,
             TsCodec::Aac,
             TsCodec::AacLatm,
+            TsCodec::Ac3,
+            TsCodec::Eac3,
+            TsCodec::Dts,
+            TsCodec::TrueHd,
             TsCodec::Opus,
-            TsCodec::Mp3,
+            TsCodec::PgsSubtitle,
         ] {
             let id = c.codec_id().unwrap();
             assert_eq!(id.media_type(), c.media_type(), "{}", c.name());
             assert_eq!(id.name(), c.name(), "{}", c.name());
+        }
+    }
+
+    #[test]
+    fn pcm_variants_map_to_the_generic_pcm_codec_id() {
+        for c in [TsCodec::Pcm302m, TsCodec::PcmBluray] {
+            assert_eq!(c.codec_id(), Some(CodecId::Pcm), "{}", c.name());
         }
     }
 

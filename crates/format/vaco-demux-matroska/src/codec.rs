@@ -11,13 +11,23 @@
 //!
 //! # What "unmapped" means
 //!
-//! The draft defines 84 codec IDs; `vaco_codec_core::CodecId` currently has 14
-//! variants. A row that the enum cannot name still resolves its **media type**,
-//! which is what decides the stream's `codec_type` and its position in the
-//! stream list — so an MKV with an AC-3 track reports the right number of
-//! streams in the right order, with the audio stream's codec left unknown. The
-//! table is complete against the draft, so the day `CodecId` grows a variant the
-//! only change here is one `Some(...)`.
+//! The draft defines 84 codec IDs; `vaco_codec_core::CodecId` has grown since
+//! this was written (84 variants as of finding 4's fix — see
+//! `planning/CONFORMANCE-FINDINGS.md`). A row that the enum cannot name still
+//! resolves its **media type**, which is what decides the stream's
+//! `codec_type` and its position in the stream list — so an MKV with an AC-3
+//! track reports the right number of streams in the right order, with the
+//! audio stream's codec left unknown. The table is complete against the
+//! draft, so the day `CodecId` grows a variant the only change here is one
+//! `Some(...)`.
+//!
+//! Finding 4 found this table mapping far fewer rows than `CodecId` could
+//! already support — `V_MPEG1`, `A_AC3`, `A_TRUEHD` and others sat on `None`
+//! while a matching variant existed unused. Every row below that changed to
+//! `Some(...)` was checked against an existing variant; nothing was added to
+//! `CodecId` to make this table more complete. `V_AVS2` and `V_AVS3` were the two
+//! exceptions, reported rather than worked around; `vaco-codec-core` gained
+//! `Avs2` and `Avs3` shortly afterwards and both now map.
 
 use vaco_codec_core::CodecId;
 use vaco_core::MediaType;
@@ -66,29 +76,41 @@ const fn sc(codec: CodecId) -> Mapping {
 static EXACT: &[(&str, Mapping)] = &[
     // draft-ietf-cellar-codec section 3.3 — video
     ("V_AV1", v(Some(CodecId::Av1))),
-    ("V_AVS2", v(None)),
-    ("V_AVS3", v(None)),
-    ("V_CAVS", v(None)),
-    ("V_DIRAC", v(None)),
-    ("V_FFV1", v(None)),
+    // AVS2/AVS3 have no `CodecId` variant yet — see the module docs.
+    ("V_AVS2", v(Some(CodecId::Avs2))),
+    ("V_AVS3", v(Some(CodecId::Avs3))),
+    ("V_CAVS", v(Some(CodecId::Cavs))),
+    ("V_DIRAC", v(Some(CodecId::Dirac))),
+    ("V_FFV1", v(Some(CodecId::Ffv1))),
     ("V_MJPEG", v(Some(CodecId::Jpeg))),
     ("V_MPEGH/ISO/HEVC", v(Some(CodecId::Hevc))),
-    ("V_MPEGI/ISO/VVC", v(None)),
-    ("V_MPEG1", v(None)),
-    ("V_MPEG2", v(None)),
+    ("V_MPEGI/ISO/VVC", v(Some(CodecId::Vvc))),
+    ("V_MPEG1", v(Some(CodecId::Mpeg1video))),
+    ("V_MPEG2", v(Some(CodecId::Mpeg2video))),
     ("V_MPEG4/ISO/AVC", v(Some(CodecId::H264))),
-    ("V_MPEG4/ISO/AP", v(None)),
-    ("V_MPEG4/ISO/ASP", v(None)),
-    ("V_MPEG4/ISO/SP", v(None)),
-    ("V_MPEG4/MS/V3", v(None)),
+    // The three ISO MPEG-4 part 2 profiles are one codec at the `CodecId`
+    // level, the same collapse this table already made for AAC's profile
+    // suffixes below.
+    ("V_MPEG4/ISO/AP", v(Some(CodecId::Mpeg4))),
+    ("V_MPEG4/ISO/ASP", v(Some(CodecId::Mpeg4))),
+    ("V_MPEG4/ISO/SP", v(Some(CodecId::Mpeg4))),
+    ("V_MPEG4/MS/V3", v(Some(CodecId::Msmpeg4v3))),
+    // The codec is named by an arbitrary FOURCC/BITMAPINFOHEADER carried in
+    // `CodecPrivate`, not by the `CodecID` string itself — genuinely
+    // unresolvable from this table alone, and doing it right needs
+    // `vaco-format-riff` to unwrap the structure first (see
+    // `private_is_extradata`'s docs).
     ("V_MS/VFW/FOURCC", v(None)),
     ("V_QUICKTIME", v(None)),
-    ("V_PRORES", v(None)),
+    ("V_PRORES", v(Some(CodecId::Prores))),
+    // RealVideo has no `CodecId` variant yet.
     ("V_REAL/RV10", v(None)),
     ("V_REAL/RV20", v(None)),
     ("V_REAL/RV30", v(None)),
     ("V_REAL/RV40", v(None)),
-    ("V_THEORA", v(None)),
+    ("V_THEORA", v(Some(CodecId::Theora))),
+    // Same shape as `V_MS/VFW/FOURCC`: the pixel format is in `CodecPrivate`,
+    // not in the `CodecID` string.
     ("V_UNCOMPRESSED", v(None)),
     ("V_VP8", v(Some(CodecId::Vp8))),
     ("V_VP9", v(Some(CodecId::Vp9))),
@@ -103,21 +125,30 @@ static EXACT: &[(&str, Mapping)] = &[
     ("A_AAC/MPEG4/LTP", a(Some(CodecId::Aac))),
     ("A_AAC/MPEG4/MAIN", a(Some(CodecId::Aac))),
     ("A_AAC/MPEG4/SSR", a(Some(CodecId::Aac))),
-    ("A_AC3", a(None)),
-    ("A_AC3/BSID9", a(None)),
-    ("A_AC3/BSID10", a(None)),
-    ("A_ALAC", a(None)),
+    // The three AC-3 rows and the three DTS rows are bitstream-ID/profile
+    // variants of one codec at the `CodecId` level, the same collapse this
+    // table already made for AAC's profile suffixes above.
+    ("A_AC3", a(Some(CodecId::Ac3))),
+    ("A_AC3/BSID9", a(Some(CodecId::Ac3))),
+    ("A_AC3/BSID10", a(Some(CodecId::Ac3))),
+    ("A_ALAC", a(Some(CodecId::Alac))),
+    // RealAudio (ATRAC/14_4/28_8/COOK/RALF/SIPR) has no `CodecId` variant yet.
     ("A_ATRAC/AT1", a(None)),
-    ("A_DTS", a(None)),
-    ("A_DTS/EXPRESS", a(None)),
-    ("A_DTS/LOSSLESS", a(None)),
-    ("A_EAC3", a(None)),
+    ("A_DTS", a(Some(CodecId::Dts))),
+    ("A_DTS/EXPRESS", a(Some(CodecId::Dts))),
+    ("A_DTS/LOSSLESS", a(Some(CodecId::Dts))),
+    ("A_EAC3", a(Some(CodecId::Eac3))),
     ("A_FLAC", a(Some(CodecId::Flac))),
+    // MLP (Meridian Lossless Packing, the layer TrueHD is built on) has no
+    // `CodecId` variant yet.
     ("A_MLP", a(None)),
+    // Musepack has no `CodecId` variant yet.
     ("A_MPC", a(None)),
-    ("A_MPEG/L1", a(None)),
-    ("A_MPEG/L2", a(None)),
+    ("A_MPEG/L1", a(Some(CodecId::Mp1))),
+    ("A_MPEG/L2", a(Some(CodecId::Mp2))),
     ("A_MPEG/L3", a(Some(CodecId::Mp3))),
+    // The codec is named by the `WAVEFORMATEX` tag in `CodecPrivate`, the
+    // audio counterpart of `V_MS/VFW/FOURCC` above — same reason, same fix.
     ("A_MS/ACM", a(None)),
     ("A_REAL/14_4", a(None)),
     ("A_REAL/28_8", a(None)),
@@ -132,25 +163,32 @@ static EXACT: &[(&str, Mapping)] = &[
     ("A_QUICKTIME", a(None)),
     ("A_QUICKTIME/QDMC", a(None)),
     ("A_QUICKTIME/QDM2", a(None)),
-    ("A_TRUEHD", a(None)),
+    ("A_TRUEHD", a(Some(CodecId::Truehd))),
+    // True Audio (TTA) has no `CodecId` variant yet.
     ("A_TTA1", a(None)),
     ("A_VORBIS", a(Some(CodecId::Vorbis))),
+    // WavPack has no `CodecId` variant yet.
     ("A_WAVPACK4", a(None)),
     // section 3.5 — subtitles, and the one button type
+    // ARIB, DVB and Kate subtitles, and HDMV TextST, have no `CodecId`
+    // variant yet.
     ("S_ARIBSUB", s()),
     ("S_DVBSUB", s()),
-    ("S_HDMV/PGS", s()),
+    ("S_HDMV/PGS", sc(CodecId::HdmvPgsSubtitle)),
     ("S_HDMV/TEXTST", s()),
     ("S_KATE", s()),
+    // The bitmap format is carried in `CodecPrivate`/the block data, not
+    // named unambiguously enough by the bare `CodecID` string to commit to a
+    // single `CodecId` here.
     ("S_IMAGE/BMP", s()),
-    ("S_TEXT/ASS", s()),
+    ("S_TEXT/ASS", sc(CodecId::Ass)),
     ("S_TEXT/ASCII", s()),
-    ("S_TEXT/SSA", s()),
+    ("S_TEXT/SSA", sc(CodecId::Ssa)),
     ("S_TEXT/USF", s()),
     // Measured: `ffprobe` prints `codec_name=subrip` for this track.
     ("S_TEXT/UTF8", sc(CodecId::SubRip)),
-    ("S_TEXT/WEBVTT", s()),
-    ("S_VOBSUB", s()),
+    ("S_TEXT/WEBVTT", sc(CodecId::Webvtt)),
+    ("S_VOBSUB", sc(CodecId::DvdSubtitle)),
     (
         "B_VOBBTN",
         Mapping {
@@ -229,9 +267,69 @@ mod tests {
 
     #[test]
     fn media_type_survives_an_unmapped_codec() {
-        let m = map("A_AC3").expect("A_AC3 is in the draft");
-        assert_eq!(m.media, MediaType::Audio);
+        // `V_MS/VFW/FOURCC` is still genuinely unmapped: the codec it names
+        // lives in `CodecPrivate`, not in the `CodecID` string, so this one
+        // stays `None` even after finding 4's fix (unlike `A_AC3`, which
+        // this test used to name and which now resolves to `CodecId::Ac3`).
+        let m = map("V_MS/VFW/FOURCC").expect("V_MS/VFW/FOURCC is in the draft");
+        assert_eq!(m.media, MediaType::Video);
         assert_eq!(m.codec, None);
+    }
+
+    /// Finding 4: rows that used to sit on `None` despite `CodecId` already
+    /// having a matching variant. Each assertion here is the positive
+    /// mapping, not a still-missing row's absence, per
+    /// `planning/AGENT-CONSTRAINTS.md` "Never pin the absence of something
+    /// the project is building".
+    #[test]
+    fn previously_unmapped_rows_now_resolve() {
+        let cases = [
+            ("V_CAVS", CodecId::Cavs),
+            ("V_DIRAC", CodecId::Dirac),
+            ("V_FFV1", CodecId::Ffv1),
+            ("V_MPEGI/ISO/VVC", CodecId::Vvc),
+            ("V_MPEG1", CodecId::Mpeg1video),
+            ("V_MPEG2", CodecId::Mpeg2video),
+            ("V_MPEG4/ISO/AP", CodecId::Mpeg4),
+            ("V_MPEG4/ISO/ASP", CodecId::Mpeg4),
+            ("V_MPEG4/ISO/SP", CodecId::Mpeg4),
+            ("V_MPEG4/MS/V3", CodecId::Msmpeg4v3),
+            ("V_PRORES", CodecId::Prores),
+            ("V_THEORA", CodecId::Theora),
+            ("A_AC3", CodecId::Ac3),
+            ("A_AC3/BSID9", CodecId::Ac3),
+            ("A_AC3/BSID10", CodecId::Ac3),
+            ("A_ALAC", CodecId::Alac),
+            ("A_DTS", CodecId::Dts),
+            ("A_DTS/EXPRESS", CodecId::Dts),
+            ("A_DTS/LOSSLESS", CodecId::Dts),
+            ("A_EAC3", CodecId::Eac3),
+            ("A_MPEG/L1", CodecId::Mp1),
+            ("A_MPEG/L2", CodecId::Mp2),
+            ("A_TRUEHD", CodecId::Truehd),
+            ("S_HDMV/PGS", CodecId::HdmvPgsSubtitle),
+            ("S_TEXT/ASS", CodecId::Ass),
+            ("S_TEXT/SSA", CodecId::Ssa),
+            ("S_TEXT/WEBVTT", CodecId::Webvtt),
+            ("S_VOBSUB", CodecId::DvdSubtitle),
+        ];
+        for (id, want) in cases {
+            assert_eq!(map(id).and_then(|m| m.codec), Some(want), "{id}");
+        }
+    }
+
+    /// Written when `V_AVS2`/`V_AVS3` had no `CodecId` to map onto, and
+    /// deliberately *not* asserting `None` as a permanent fact — that is the
+    /// "pin the absence" anti-pattern that has now cost this project six
+    /// tests, each of which failed on the day its gap was closed. The variants
+    /// arrived an hour later and this test needed no edit, which is the whole
+    /// argument for writing them this way.
+    #[test]
+    fn avs_rows_resolve_to_a_media_type_regardless_of_codec_id() {
+        for id in ["V_AVS2", "V_AVS3"] {
+            let m = map(id).expect("V_AVS2/V_AVS3 are in the draft");
+            assert_eq!(m.media, MediaType::Video, "{id}");
+        }
     }
 
     #[test]

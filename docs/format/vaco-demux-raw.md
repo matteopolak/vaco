@@ -129,13 +129,27 @@ once, bounded by the caller's `Limits` — see "How to change it" for why.
   functions call `ProbeScore::from_extension` and nothing else — the frozen
   `DemuxerDesc` gives every demuxer a mandatory `probe` field, so "no content
   check" has to be spelled out rather than omitted.
-* `StartCode3`/`Obu`/`Marker`/`Dirac` formats score **51** when structural
-  evidence is found (a start code, an OBU temporal unit, a JPEG/JP2 marker
-  pair, a `BBCD` magic), regardless of extension — measured directly on
-  `h264` and `obu` (both scored 51 with a `.bin` extension). This is
-  generalised to the other eight `StartCode3` members and to
-  `mjpeg`/`mjpeg_2000`/`dirac`, which is a real gap: only two of the eleven
-  structurally-scored formats were individually confirmed.
+* `Obu`/`Marker`/`Dirac` formats score **51** when structural evidence is
+  found (an OBU temporal unit, a JPEG/JP2 marker pair, a `BBCD` magic),
+  regardless of extension — measured directly on `obu` (scored 51 with a
+  `.bin` extension).
+* `StartCode3` formats also score **51**, but only when the byte(s)
+  immediately after the first `00 00 01` — the start-code *identifier* —
+  match what that specific format requires. This is the finding-3 fix
+  (`planning/CONFORMANCE-FINDINGS.md`): the first version only checked that a
+  start code was present at offset 0 or 1, which every one of the ten
+  `StartCode3` members satisfies on any of the other nine's real content, so
+  ties broke alphabetically and `avs2` beat `h264` on an actual H.264
+  elementary stream. `bitstream.rs`'s `start_code_identifier` has the full
+  measured table; the short version: `h264` and `hevc` are verified against
+  their NAL-header parameter-set/AUD types, `mpegvideo` and `m4v` against
+  their single-byte sequence/visual-object headers, all four generated with
+  `ffmpeg -f lavfi -i testsrc -c:v <codec> -f <rawformat>` and read back with
+  `xxd`. The other six (`avs2`, `avs3`, `cavsvideo`, `evc`, `vc1`, `vvc`) have
+  no encoder in the `ffmpeg` 8.1 build this was measured against, so they make
+  no structural claim at all and fall back to extension-only scoring —
+  `tests/probe_matrix.rs` asserts exactly that split, plus that no
+  `StartCode3` sibling ever outscores a real sample's true owner.
 * `yuv4mpegpipe` scores **100** on its full magic.
 
 ---
@@ -145,8 +159,8 @@ once, bounded by the caller's `Limits` — see "How to change it" for why.
 | Tier | Formats | Status |
 |---|---|---|
 | Measured end to end (names, extensions, options, timestamps, framing) | 21 PCM formats, `rawvideo`, `yuv4mpegpipe`, `data` | Exercised by unit tests |
-| Names/extensions/options measured; framing spec-derived and unit-tested, not cross-checked against a real encoder | `h264`, `hevc` (fallback path), `av1`, `obu`, `mjpeg` | Exercised by unit tests |
-| Names/extensions/options measured; framing is a documented simplification | `vvc`, `m4v`, `mpegvideo`, `cavsvideo`, `avs2`, `avs3`, `vc1`, `evc`, `mjpeg_2000`, `dirac` | Registered, lightly tested, not verified against a real encoder's exact packet count |
+| Names/extensions/options measured; framing spec-derived and unit-tested, not cross-checked against a real encoder; **probe identifier measured against a real encoder's output** (finding 3) | `h264`, `hevc` (fallback path), `av1`, `obu`, `mjpeg`, `mpegvideo`, `m4v` | Exercised by unit tests and `tests/probe_matrix.rs` |
+| Names/extensions/options measured; framing is a documented simplification; **no encoder in this `ffmpeg` build to measure a probe identifier against**, so probing is extension-only (finding 3) | `vvc`, `cavsvideo`, `avs2`, `avs3`, `vc1`, `evc`, `mjpeg_2000`, `dirac` | Registered, lightly tested, not verified against a real encoder's exact packet count |
 | Names/extensions/options measured; no structural framing attempted at all | `h261`, `h263`, `dnxhd`, `bit`, `s337m`, `loas` | Registered, structurally present, framing is flatly wrong for anything but `data`-style dumps |
 | Geometry formula from a public standard, unverified against the reference | `bitpacked`, `v210`, `v210x` | Registered, geometry best-effort |
 
@@ -250,6 +264,14 @@ under the headerless §2.8 family this crate implements. The 48-name inventory
 in §2.8 is the one this crate reproduces exactly; §3.4.9's prose predates
 that correction and double-counts a different crate's scope. This report
 follows the measured 48, not the brief's list.
+
+Separately, `planning/CONFORMANCE-FINDINGS.md` finding 3 (twice) and the
+finding-3 brief itself say **eleven** `StartCode3` formats share the
+tie-breaking bug. Counted directly from `bitstream.rs`: `h264`, `hevc`,
+`vvc`, `m4v`, `mpegvideo`, `cavsvideo`, `avs2`, `avs3`, `vc1`, `evc` — **ten**.
+The alphabetical tie-break `avs2` winning over `h264` still checks out either
+way (`avs2` sorts first among all ten), so the miscount did not change which
+bug was found, just its size.
 
 ---
 

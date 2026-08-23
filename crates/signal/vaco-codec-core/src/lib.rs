@@ -186,6 +186,24 @@ pub enum CodecId {
     Text,
     Ttml,
     Vplayer,
+    // The MPEG-TS repertoire. `vaco-format-mpegts-tables` carried its own
+    // `TsCodec` enum for these and mapped only eight of about thirty across,
+    // so a real `mpeg2video` stream printed `codec_name=unknown` — the largest
+    // single divergence class the differential harness found. Names and long
+    // names probed from `ffmpeg -codecs` 8.1.
+    //
+    // Four of them are `Data`, which is a media type this table had no entry
+    // for until now: SCTE-35 splice messages, timed ID3, and SMPTE 336M KLV are
+    // carried by a transport stream as their own elementary streams, and
+    // collapsing them onto "unknown" would discard the one fact the PMT stated.
+    Avs2,
+    Avs3,
+    Jpeg2000,
+    DvbSubtitle,
+    DvbTeletext,
+    Scte35,
+    TimedId3,
+    Klv,
 }
 
 /// One row of the codec identity table.
@@ -222,6 +240,7 @@ const fn entry(
 const V: MediaType = MediaType::Video;
 const A: MediaType = MediaType::Audio;
 const S: MediaType = MediaType::Subtitle;
+const D: MediaType = MediaType::Data;
 
 const CODECS: &[CodecEntry] = &[
     entry(
@@ -793,6 +812,62 @@ const CODECS: &[CodecEntry] = &[
         "vplayer",
         "VPlayer subtitle",
         S,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::Avs2,
+        "avs2",
+        "AVS2-P2/IEEE1857.4",
+        V,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::Avs3,
+        "avs3",
+        "AVS3-P2/IEEE1857.10",
+        V,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::Jpeg2000,
+        "jpeg2000",
+        "JPEG 2000",
+        V,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::DvbSubtitle,
+        "dvb_subtitle",
+        "DVB subtitles",
+        S,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::DvbTeletext,
+        "dvb_teletext",
+        "DVB teletext",
+        S,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::Scte35,
+        "scte_35",
+        "SCTE 35 Message Queue",
+        D,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::TimedId3,
+        "timed_id3",
+        "timed ID3 metadata",
+        D,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::Klv,
+        "klv",
+        "SMPTE 336M Key-Length-Value (KLV) metadata",
+        D,
         CodecProperties::empty(),
     ),
     entry(

@@ -613,13 +613,17 @@ fn probe_for(spec: &BitstreamSpec, data: &ProbeData<'_>) -> ProbeScore {
         //
         // A raw elementary stream **opens** with a start code, optionally after
         // one leading zero byte, so requiring offset 0 or 1 costs nothing real
-        // and rejects every container. It is not the final answer — the truly
-        // correct test also matches the start-code *identifier* against the
-        // format, so `h264` and `avs2` stop agreeing with each other — but it
-        // is the part that stops containers being stolen, and it is measurable.
+        // and rejects every container — but it does not stop the ten
+        // `StartCode3` formats agreeing with *each other*: every one of them
+        // opens with a start code, so all ten scored 51 on any of them and
+        // ties broke alphabetically (`avs2` beat `h264` on an actual H.264
+        // elementary stream). The second half of the fix is
+        // [`start_code_identifier`]: the byte or bytes immediately after the
+        // start code, checked against what that specific format is required
+        // to open with.
         Framing::StartCode3 => startcode::start_codes(data.buf)
             .first()
-            .is_some_and(|&i| i <= 1),
+            .is_some_and(|&i| i <= 1 && start_code_identifier(spec.name, data, i + 3)),
         // The strict test, not `temporal_units`: that one falls back to
         // reporting the whole buffer when nothing parses, which is right for
         // demuxing and makes every non-empty input look like AV1 when probing.
@@ -632,6 +636,58 @@ fn probe_for(spec: &BitstreamSpec, data: &ProbeData<'_>) -> ProbeScore {
         ProbeScore(51)
     } else {
         ProbeScore::from_extension(data, spec.extensions)
+    }
+}
+
+/// Whether the byte(s) at `at` (immediately after a `00 00 01` start code)
+/// are what `name`'s format is required to open with.
+///
+/// # Measured, per finding 3 of `planning/CONFORMANCE-FINDINGS.md`
+///
+/// Generated with `ffmpeg -f lavfi -i testsrc=d=0.5 -c:v <codec> -f
+/// <rawformat> out.bin` for every `StartCode3` member that this build's
+/// `ffmpeg -codecs` lists an encoder for, then read back with `xxd` and
+/// cross-checked with `ffprobe -show_entries format=format_name` on the
+/// unforced file:
+///
+/// | format | encoder used | first byte(s) after `00 00 01` | reference detects |
+/// |---|---|---|---|
+/// | `h264` | `libx264` | `0x67` (SPS, `nal_ref_idc` 3) | `h264` |
+/// | `h264` | `libx264 -x264-params aud=1` | `0x09` (AUD, `nal_ref_idc` 0) | `h264` |
+/// | `hevc` | `libx265` | `0x40 0x01` (VPS, type 32) | `hevc` |
+/// | `hevc` | `libx265 -x265-params aud=1` | `0x46 0x01` (AUD, type 35) | `hevc` |
+/// | `mpegvideo` | `mpeg1video` | `0xB3` (`sequence_header_code`) | `mpegvideo` |
+/// | `mpegvideo` | `mpeg2video` | `0xB3` (same code, both MPEG-1 and -2) | `mpegvideo` |
+/// | `m4v` | `mpeg4` | `0xB0` (`visual_object_sequence_start_code`) | `m4v` |
+///
+/// A PPS observed mid-stream (not first, so not load-bearing for detection)
+/// was `0x68`, added to `h264`'s accepted set on the strength of the H.264
+/// NAL-type enumeration it shares with the two identifiers actually measured
+/// at offset 0: parameter sets and the access-unit delimiter are the only
+/// units Annex B allows to open a stream with.
+///
+/// `avs2`, `avs3`, `cavsvideo`, `evc`, `vc1` and `vvc` have **no encoder in
+/// this `ffmpeg` 8.1 build** — `ffmpeg -codecs` shows `avs2`/`avs3`/`evc`
+/// with neither the `D` nor the `E` flag set (known to the codec table,
+/// nothing compiled in for either direction), `cavs`/`vc1`/`vvc` with `D`
+/// but no `E` (decode-only). There is no reference sample to read an
+/// identifier back from, so per the brief they make no structural claim
+/// here and fall back to [`ProbeScore::from_extension`]. Recording a value
+/// recalled rather than measured is the exact mistake this finding exists
+/// to prevent; the probe-matrix test below asserts these six lose to
+/// extension-scored siblings rather than pretending to detect them
+/// structurally.
+fn start_code_identifier(name: &str, data: &ProbeData<'_>, at: usize) -> bool {
+    match name {
+        "h264" => data
+            .get(at)
+            .is_some_and(|b0| b0 & 0x80 == 0 && matches!(b0 & 0x1F, 7..=9)),
+        "hevc" => data
+            .get(at)
+            .is_some_and(|b0| b0 & 0x80 == 0 && matches!((b0 >> 1) & 0x3F, 32..=35)),
+        "mpegvideo" => data.get(at) == Some(0xB3),
+        "m4v" => data.get(at) == Some(0xB0),
+        _ => false,
     }
 }
 
