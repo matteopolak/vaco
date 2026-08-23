@@ -25,14 +25,35 @@
 //! `vaco-filter-scale` and `cropdetect` in `vaco-filter-analysis`; all three
 //! were removed.
 //!
-//! ## Registered here (14)
+//! ## Registered here (18)
 //!
 //! [`scroll`], [`field`], [`il`], [`tile`], [`untile`], [`fillborders`] (4
 //! of its 7 modes — see that module), [`swaprect`], [`swapuv`],
 //! [`shuffleframes`], [`shuffleplanes`], [`alphaextract`], [`pixelize`]
 //! (kept from the earlier draft — not in the plan's row, but a genuine
 //! spatial-geometry filter with no other owner found; flagged for the
-//! orchestrator to confirm), [`perspective`].
+//! orchestrator to confirm), [`perspective`], [`framepack`],
+//! [`mergeplanes`], [`alphamerge`], [`extractplanes`].
+//!
+//! The last four were declined in an earlier pass of this crate (see the
+//! git history of this doc comment) on the theory that a multi-input or
+//! multi-output filter needed a capability `vaco-filter-core`'s adapters
+//! did not have. `planning/INTERFACE-GAPS.md` gap 10 records why that was
+//! wrong and what closed it: `Paired`/`Fanout`
+//! (`vaco_filter_core::adapt`), added specifically so this crate did not
+//! have to hand-roll the `Activity`-level synchronisation
+//! `vaco-filter-audio`'s `amix`/`amerge` do. `framepack` and `mergeplanes`
+//! use [`Paired`](vaco_filter_core::adapt::Paired) (`mergeplanes`
+//! generalising it past two inputs, since its own input count is fixed at
+//! construction from its `map<N>s` options); `extractplanes` uses
+//! [`Fanout`](vaco_filter_core::adapt::Fanout). `alphamerge` turned out to
+//! need **neither**: measured against the reference (see that module's
+//! doc), it carries the full `eof_action`/`shortest`/`repeatlast`/
+//! `ts_sync_mode` surface `vaco-filter-framesync`'s `Synced` already
+//! provides — the same adapter `vaco-filter-video-composite`'s `overlay`
+//! uses — so it is a third data point that the framesync surface, not
+//! this crate's registration list, is what decides which adapter a
+//! multi-input filter wants.
 //!
 //! ## Considered and left out, with the reason
 //!
@@ -49,19 +70,6 @@
 //!   (what the `cx`/`cy`/`k1`/`k2` parameters are normalised *by*) was not
 //!   pinned down to the same confidence as `rotate`'s trig convention in
 //!   the time available. Not implemented rather than guessed.
-//! * **`framepack`, `mergeplanes`, `alphamerge`** — all take more than one
-//!   video input (`VV->V` for the first two, `mergeplanes` is dynamic
-//!   `N->V`). Every filter in this crate uses
-//!   `vaco_filter_core::adapt::Simple` (one link in, one out); a correct
-//!   multi-input filter needs the `Activity`-level synchronisation
-//!   `vaco-filter-audio`'s `amix`/`amerge` hand-roll themselves (buffering
-//!   and end-of-stream handling *per input*), which is a materially bigger
-//!   and riskier lift than this issue's time budget affords well. Left
-//!   unregistered rather than half-built.
-//! * **`extractplanes`** — the mirror problem: dynamic *output* pad count
-//!   (1-4, depending on the `planes` option), which `Simple`'s "one output"
-//!   shape does not model any better than it models multiple inputs. Same
-//!   exclusion, opposite side of the filter.
 //! * **`shufflepixels`** — its permutation is seeded by a `seed` option and
 //!   almost certainly reproduces a specific PRNG's output sequence bit for
 //!   bit (the option table's `seed=-1` default and range up to
@@ -100,14 +108,21 @@
 //! `vaco-scale`, for limited-range-correct `black`/`color` options),
 //! [`warp`] (the 4-point projective transform `perspective` solves) and
 //! [`sample`] (the nearest/bilinear per-pixel sampler `perspective` uses).
+//! [`geom::blit`] (a second, additive copy of `tile.rs`'s private
+//! same-named helper — see that function's doc for why) is what
+//! `framepack`'s `sbs`/`tab` layouts place a source frame with.
 #![forbid(unsafe_code)]
 
 pub mod alphaextract;
+pub mod alphamerge;
+pub mod extractplanes;
 pub mod field;
 pub mod fill;
 pub mod fillborders;
+pub mod framepack;
 mod geom;
 pub mod il;
+pub mod mergeplanes;
 pub mod perspective;
 pub mod pixelize;
 mod sample;

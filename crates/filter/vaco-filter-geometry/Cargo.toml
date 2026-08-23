@@ -1,6 +1,6 @@
 [package]
 name = "vaco-filter-geometry"
-description = "T2 geometry video filters (issue #470): scroll, field, il, tile, untile, fillborders, swaprect, swapuv, shuffleframes, shuffleplanes, alphaextract, pixelize, perspective. crop/pad/transpose/hflip/vflip are vaco-filter-video-geometry's; rotate is vaco-filter-video-composite's."
+description = "T2 geometry video filters (issue #470): scroll, field, il, tile, untile, fillborders, swaprect, swapuv, shuffleframes, shuffleplanes, alphaextract, pixelize, perspective, framepack, mergeplanes, alphamerge, extractplanes. crop/pad/transpose/hflip/vflip are vaco-filter-video-geometry's; rotate is vaco-filter-video-composite's."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -17,6 +17,7 @@ vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
 vaco-color = { path = "../../model/vaco-color" }
 vaco-scale = { path = "../../signal/vaco-scale" }
 vaco-filter-core = { path = "../../filter/vaco-filter-core" }
+vaco-filter-framesync = { path = "../../filter/vaco-filter-framesync" }
 vaco-filter-graph = { path = "../../filter/vaco-filter-graph" }
 smallvec.workspace = true
 

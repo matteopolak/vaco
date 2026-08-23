@@ -11,9 +11,16 @@
 //! and `tile`/`untile`'s `layout` string parser and
 //! `shuffleframes`'s whitespace-separated `mapping` parser.
 //!
-//! Property: for any byte string, for any of this crate's thirteen
+//! Property: for any byte string, for any of this crate's seventeen
 //! registered names, either a clean `Err` comes back at some stage or a
 //! working `Instance`, never a panic and never an unbounded allocation.
+//! Four names — `framepack`, `mergeplanes`, `alphamerge`, `extractplanes`
+//! — were added when `vaco-filter-core::adapt::Paired`/`Fanout` closed
+//! `planning/INTERFACE-GAPS.md` gap 10 and let this crate register them;
+//! `mergeplanes`' dynamic input count (from its own `map<N>s` options) and
+//! `extractplanes`' dynamic output count (from `planes`) both go through
+//! the same `Instantiate` path as every other name here, so no separate
+//! harness is needed for the dynamic-pad-count machinery itself.
 //! fuzz-crate: vaco-filter-geometry
 
 #![no_main]
@@ -24,9 +31,13 @@ use vaco_filter_graph::registry::{FilterRegistry, Instantiate};
 
 const NAMES: &[&str] = &[
     "alphaextract",
+    "alphamerge",
+    "extractplanes",
     "field",
     "fillborders",
+    "framepack",
     "il",
+    "mergeplanes",
     "perspective",
     "pixelize",
     "scroll",

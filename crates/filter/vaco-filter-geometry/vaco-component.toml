@@ -22,6 +22,34 @@ media = "video"
 
 [[component]]
 kind = "filter"
+name = "alphamerge"
+long_name = "Copy the luma value of the second input into the alpha channel of the first input"
+ctor = "vaco_filter_geometry::alphamerge::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "extractplanes"
+long_name = "Extract planes as grayscale frames"
+ctor = "vaco_filter_geometry::extractplanes::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "framepack"
+long_name = "Generate a frame packed stereoscopic video"
+ctor = "vaco_filter_geometry::framepack::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "mergeplanes"
+long_name = "Merge planes"
+ctor = "vaco_filter_geometry::mergeplanes::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
 name = "field"
 long_name = "Extract a field from the input video"
 ctor = "vaco_filter_geometry::field::DESC"

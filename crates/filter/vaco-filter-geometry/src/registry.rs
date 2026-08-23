@@ -8,9 +8,13 @@ use vaco_filter_graph::registry::{FilterRegistry, Instance, Instantiate};
 /// prints them).
 const NAMES: &[&str] = &[
     "alphaextract",
+    "alphamerge",
+    "extractplanes",
     "field",
     "fillborders",
+    "framepack",
     "il",
+    "mergeplanes",
     "perspective",
     "pixelize",
     "scroll",
@@ -34,9 +38,13 @@ impl FilterRegistry for T2GeometryRegistry {
     fn create(&self, req: &Instantiate<'_>) -> Result<Instance, String> {
         match req.name {
             "alphaextract" => crate::alphaextract::create(req),
+            "alphamerge" => crate::alphamerge::create(req),
+            "extractplanes" => crate::extractplanes::create(req),
             "field" => crate::field::create(req),
             "fillborders" => crate::fillborders::create(req),
+            "framepack" => crate::framepack::create(req),
             "il" => crate::il::create(req),
+            "mergeplanes" => crate::mergeplanes::create(req),
             "perspective" => crate::perspective::create(req),
             "pixelize" => crate::pixelize::create(req),
             "scroll" => crate::scroll::create(req),

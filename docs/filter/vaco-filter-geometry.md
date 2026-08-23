@@ -11,7 +11,13 @@ crates already register: `crop`, `pad`, `transpose`, `hflip`, `vflip`
 discovered overlap, caught by `cargo xtask gen-registry`'s dup-check rather
 than any plan doc). Registered here: `scroll`, `field`, `il`, `tile`,
 `untile`, `fillborders` (4 of its 7 modes), `swaprect`, `swapuv`,
-`shuffleframes`, `shuffleplanes`, `alphaextract`, `pixelize`, `perspective`.
+`shuffleframes`, `shuffleplanes`, `alphaextract`, `pixelize`, `perspective`,
+`framepack`, `mergeplanes`, `alphamerge`, `extractplanes`.
+
+The last four were the multi-input/multi-output filters an earlier pass of
+this crate declined for lack of an adapter — see *Multi-input filters,
+picked up* below for what changed and closed `planning/INTERFACE-GAPS.md`
+gap 10.
 
 An earlier draft of this crate briefly registered `zoompan`, `scale2ref` and
 `cropdetect` before the orchestrator corrected this crate's scope: the plan
@@ -89,13 +95,54 @@ inverse), textbook numerical linear algebra, not reference-specific.
   fitted homography) are both implemented. `interpolation=cubic` falls back
   to bilinear (no bicubic kernel in this crate yet).
 
+### Multi-input filters, picked up
+
+`vaco-filter-core`'s `adapt.rs` gained two new adapters —
+[`Paired`](../filter/vaco-filter-core.md) (N-in 1-out, strict lockstep) and
+[`Fanout`](../filter/vaco-filter-core.md) (1-in N-out) — closing
+`planning/INTERFACE-GAPS.md` gap 10. That is what let this crate pick up
+the four filters an earlier pass declined:
+
+- **`framepack`** (`Paired`, two inputs) — `sbs`/`tab`/`lines`/`columns` are
+  measured byte-for-byte against a 4x2 `gray8` probe (constant `0x10` left,
+  `0x20` right): `sbs` is a plain horizontal concat, `tab` a plain vertical
+  one, `lines`/`columns` interleave whole rows/columns starting with
+  `left`. `frameseq` is temporal, not spatial — two full-size frames
+  (`left` then `right`) at half the input's frame period each, confirmed
+  via the `Stereo3D` side data's `view - left`/`view - right` ordering.
+  Measured refusal: a mismatched left/right time base is an error at
+  configure time (`Left and right time bases differ`), not something
+  `Paired` (or the reference) reconciles — one more confirmation that this
+  filter's shape is lockstep, not framesync.
+- **`mergeplanes`** (`Paired`, generalised past two inputs) — its input
+  count is fixed at construction from the non-deprecated `map<N>s`/
+  `map<N>p` options (1 to 4, `format`'s own plane count). This is
+  `Paired`'s reason to generalise past exactly two: `mergeplanes` is
+  genuinely N-in-1-out with the same strict-lockstep, no-repeat contract
+  `framepack` measures. The deprecated `mapping` hex option is not
+  implemented.
+- **`extractplanes`** (`Fanout`) — generalises `alphaextract`'s single
+  fixed-channel plane copy to any of `y`/`u`/`v`/`r`/`g`/`b`/`a`, with a
+  dynamic output pad per requested one. Measured: output pad order follows
+  the flags' *canonical* order (`y, u, v, r, g, b, a`), not the order
+  written in the option string — `planes=v+y+u` still gives pad 0 = Y, pad
+  1 = U, pad 2 = V, confirmed against each channel extracted separately.
+  Refuses (rather than silently mis-copying) a packed channel — one
+  sharing bytes with others in a single plane, like `rgb24`'s R/G/B.
+- **`alphamerge`** — the one genuine surprise: measured against the
+  reference, it carries the full `eof_action`/`shortest`/`repeatlast`/
+  `ts_sync_mode` surface, identical to `overlay`'s. It needs **neither**
+  new adapter; it uses `vaco-filter-framesync`'s `Synced`, exactly like
+  `vaco-filter-video-composite`'s `overlay` already does. Scope cut:
+  adds alpha *in place* (`yuv420p` → `yuva420p`, `gbrp` → `gbrap`, and
+  their `10le` variants) rather than reproducing the reference's own
+  format-negotiation quirk of converting an RGB-family main input to
+  packed `argb` — see `alphamerge.rs`'s doc for the measurement.
+
 ### Left out, with the reason (see `src/lib.rs` for the full list)
 
 `shear` and `lenscorrection` (measured formulas that a second probe
 contradicted, or a normalisation convention not pinned down in time);
-`framepack`, `mergeplanes`, `alphamerge` (multi-input — need `Activity`-
-level synchronisation `vaco_filter_core::adapt::Simple` does not provide);
-`extractplanes` (the mirror problem — dynamic *output* pad count);
 `shufflepixels` (its `seed` option strongly implies a specific PRNG this
 crate has not identified — shipping *a* shuffle would be confidently wrong
 at every seed but the identity one); `addroi` (needs a region-of-interest
@@ -114,9 +161,7 @@ means editing a crate this agent does not own); `ccrepack`, `stereo3d`,
   real, independently-discovered overlap (`rotate`) that `cargo xtask
   dup-check`/`gen-registry` caught only after the fact.
 - If you pin down `shear`, `lenscorrection`, `reflect`/`fade`/`margins` for
-  `fillborders`, `shufflepixels`'s PRNG, or build the `Activity`-level
-  machinery for a multi-input/multi-output filter, this is the crate to add
-  it to.
+  `fillborders`, or `shufflepixels`'s PRNG, this is the crate to add it to.
 
 ## Configuration
 
@@ -129,4 +174,5 @@ filter=<name>`, `ffmpeg 8.1`).
 `vaco-core`, `vaco-opts`, `vaco-expr` (option/expression parsing),
 `vaco-frame`, `vaco-pixfmt`, `vaco-color` (frame/format model),
 `vaco-scale` (solid-colour fill, `fill.rs`), `vaco-filter-core`,
-`vaco-filter-graph` (the filter framework itself).
+`vaco-filter-framesync` (`alphamerge`'s `Synced`), `vaco-filter-graph` (the
+filter framework itself).
