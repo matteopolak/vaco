@@ -190,6 +190,24 @@ and never `add -A`. In a shared working tree those destroy other agents' work.
    deferred a package, leave its issue open and say in the issue what is
    missing — that comment is worth more than the closure.
 
+   **Implemented counts as done, even if not exhaustively verified**
+   (2026-08-22, breadth phase). Close an issue when the functionality is
+   *there and plausibly correct* — the shape is right, the obvious cases work,
+   the tests you wrote pass. You do **not** need byte-identity against the
+   reference on every field, or a fully-explored edge-case matrix, before
+   closing.
+
+   This is a deliberate change of gear and it has a matching commitment: a
+   comprehensive differential and fuzzing pass runs over everything at the end,
+   and that is where edge cases get found. What makes it safe is that the
+   verification is *scheduled*, not hoped for.
+
+   So the bar is **honesty, not completeness**. Say in the closing comment what
+   you did and did not exercise, and name anything you know is approximate.
+   A closed issue whose comment says "structure complete, timestamps unverified
+   against the reference" is useful; one that implies more coverage than it has
+   is worse than leaving it open.
+
    If you are unsure whether an issue is yours, leave it open and name it in
    your report. A wrongly-closed issue is invisible; an open one is a question
    somebody can answer.
