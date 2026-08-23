@@ -282,6 +282,40 @@ otherwise the running total carries over. A source that cannot seek pulls one
 fragment's samples are emitted in decode order and therefore not read in file
 order.
 
+A non-seekable source starts every fragmented track's `FragEntry` list empty —
+`collect_fragments` is a no-op without a seekable source, by design, so there
+is nothing to list yet — and grows it one `moof` at a time as `refill` pulls
+them. Marking a reader `finished` just because that starting list is empty
+made every fragmented track on a pipe permanently empty: `ensure_head` checks
+`finished` *before* ever calling `refill`, so the pull-one-more-`moof` retry
+loop that exists for exactly this case never ran. Fixed by only drawing that
+conclusion when `collect_fragments` already ran to completion — i.e., the
+source is seekable — where an empty list really does mean "no fragments
+anywhere", not "haven't looked yet". Caught by
+`a_non_seekable_source_gets_no_fast_path_but_still_demuxes` in
+`tests/fragmented.rs`, which is a plain two-fragment file with no `sidx`/`mfra`
+involved at all — this was not a fast-path bug, it predates this pass.
+
+### `sidx` and `mfra`
+
+Both box-layer structures (`frag::SegmentIndex`, `frag::TrackFragmentRandomAccess`)
+are now read. `sidx` boxes are collected — there can be more than one; a
+`+dash` file writes one immediately before *each* `moof`, not one whole-file
+index the way this crate's own muxer does (measured against `ffmpeg 8.1
+-movflags +frag_keyframe+empty_moov+dash`; see `vaco-mux-mp4`'s doc file for
+the muxer's side of that difference) — and exposed via
+`Mp4Demuxer::segment_index`. Nothing in this crate's own seek path consults
+them yet; a caller that wants DASH-style subsegment addressing can already
+read `SegmentIndex::subsegments`.
+
+`mfra` is read once, from the file's trailer, at open: `mfro`'s own fixed
+sixteen bytes state `mfra`'s size, which is the one place ISO/IEC 14496-12
+lets a random-access structure be found without scanning anything
+(`Mp4Demuxer::read_mfra_trailer`). Absent, truncated or malformed trailers all
+resolve to "no fast path" rather than an error — a demuxer that can only seek
+by scanning is still a working demuxer. `Mp4Demuxer::fragment_random_access`
+exposes the parsed tables.
+
 ### Seeking
 
 Progressive files seek through the sample tables directly: invert the edit
@@ -302,9 +336,38 @@ are longer than its keyframe interval. Verified against
 Fragment start times are **scanned, not bisected**, and every entry is examined
 rather than stopping at the first one past the target: `tfdt` is written by the
 file, so a corrupt one can make the starts non-monotonic and an early exit would
-then land somewhere arbitrary.
+then land somewhere arbitrary — this is still the fallback, and it is still
+what a `tfra`-free file gets.
 
-There is no `sidx`/`mfra` fast path yet; see *Deferred*.
+When `mfra` was readable at open, `place_fragment` tries it first:
+`TrackFragmentRandomAccess::at_or_before` resolves a target time straight to a
+`moof_offset` in one step, which is looked up in the (offset-sorted)
+`fragments` list by binary search rather than the linear scan above. A miss —
+no `tfra` for this track, a target before its first entry, or an offset this
+demuxer has not collected — falls through to the scan unconditionally, so a
+wrong or absent `tfra` costs only the speedup, never correctness. Checked both
+ways: `tests/fragmented.rs`'s `fast_path_and_fallback_always_agree` proptest
+and `seeking_agrees_whether_or_not_mfra_is_present` build the identical
+fragment layout with and without a trailer and assert every seek target in
+range lands on the same sample regardless of which path answered; the unit
+test `tfra_and_the_fallback_scan_agree_on_every_landing` in `lib.rs` checks the
+same thing on one instance by clearing `tfra` mid-test, which is the version
+that can also assert on the *code path taken*, not just the outcome.
+
+A `moof_offset` beyond every fragment `collect_fragments` was allowed to keep
+(`MAX_FRAGMENTS`, 131072) is fetched directly rather than triggering a
+rescan — `fetch_fragment_at` seeks straight to it, reads that one `moof`, and
+appends it. This only ever *appends*: `fragments` is kept in ascending
+file-offset order everywhere else in this crate, and `FragEntry::fragment` is
+an index into it that is handed out once and never renumbered, so accepting an
+offset that would have to be inserted into the middle would silently
+invalidate every entry recorded past the insertion point. `mfra` naming an
+exact offset is what makes the append safe: there is nothing to guess at.
+Verified with the unit test `a_seek_past_the_collected_tail_is_fetched_via_tfra`,
+which truncates a real four-fragment file's `fragments` list down to one
+fragment to stand in for hitting the cap — building an actual
+`MAX_FRAGMENTS`-sized fixture is not practical, but the fetch primitive itself
+does not care how the tail got short.
 
 ### Bounding a uniform `stsz` — the gap the box layer left
 
@@ -379,6 +442,17 @@ reference prints. The same bound applies per `traf`, capped at `1 << 20`.
   The demuxer retains no packet, so a cumulative cap would refuse to read a file
   larger than the cap — which is what `vacoraw` does today. `max_alloc_single`
   still applies, which is the check that matters for a declared length.
+* **An empty `FragEntry` list means two different things.** On a seekable
+  source it means the track truly has no fragments (`collect_fragments` already
+  ran). On one that cannot seek it means "nothing pulled yet" — marking the
+  reader `finished` in that case, which used to happen unconditionally, made
+  every fragmented track on a pipe permanently empty. See *Fragmented files*.
+* **`fragments` must stay sorted by file offset, always.** `fetch_fragment_at`
+  (the `mfra`-beyond-`MAX_FRAGMENTS` fetch) only ever appends past the current
+  tail for exactly this reason: `FragEntry::fragment` is an index into this
+  list handed out once and never renumbered, so a mid-list insertion would
+  silently invalidate every later entry. Do not add a second way to grow
+  `fragments` without preserving this.
 
 ---
 
@@ -402,6 +476,13 @@ oversight: `use_absolute_path`, `advanced_editlist`, `use_mfra_for`,
 `export_all`, `export_xmp`, `activation_bytes`, `audible_key`, `audible_iv`,
 `audible_fixed_key`, `decryption_key`, `decryption_keys`.
 
+`use_mfra_for` is a different feature than it sounds like next to this crate's
+own `mfra` reading (below): the reference uses it to *correct a fragment's
+decode/presentation time* from `tfra`'s recorded time when `tfdt` is missing
+or distrusted. This crate reads `mfra` only as a seek index — `tfdt`/the
+running total still decide every sample's actual timestamp, unconditionally.
+The two are independent: implementing one does not imply the other.
+
 Constants:
 
 | Constant | Value | Bounds |
@@ -411,6 +492,8 @@ Constants:
 | `MAX_BUFFERED_MDAT_BYTES` | 64 MiB | an `mdat` buffered for a non-seekable source |
 | `MAX_FRAGMENTS` | 131 072 | `moof` boxes collected |
 | `MAX_TOP_LEVEL_BOXES` | 1 048 576 | boxes inspected while scanning |
+| `MAX_SIDX_BOXES` | 4096 | `sidx` boxes collected between `moov` and the first `moof` |
+| `MAX_SIDX_BYTES` | 1 MiB | one `sidx` payload (its own reference count is 16 bits, so this is generous) |
 | `ANALYSE_SAMPLES` | 4096 | samples read to estimate a frame rate or the minimum PTS |
 | `INTERLEAVE_WINDOW_US` | 1 000 000 | how far apart two tracks may be before DTS beats file order |
 | `read::BATCH_MIN` / `BATCH_MAX` | 4096 / 131 072 | queued samples per track |
@@ -448,10 +531,16 @@ just fuzz dem_mp4_chunked
 cargo run -p vaco-demux-mp4 --example mp4dump -- file.mp4 packets
 ```
 
-35 tests: 10 unit, 18 named integration cases, 6 property tests, 1 doctest.
-The integration cases build their fixtures box by box through
-`vaco_format_isom::build`, so the suite needs no media files and no reference
-binary.
+49 tests: 12 unit (in `lib.rs`, `read.rs`, `track.rs` — two of the twelve are
+the `tfra` fast-path/fallback-agreement and past-the-collected-tail-fetch
+checks, which need private field access an integration test cannot reach), 22
+named integration cases in `tests/demux.rs`, 8 in `tests/fragmented.rs`
+(`sidx`/`mfra`, including a `proptest` generalising the fast-path/fallback
+agreement over random fragment layouts and seek targets), 6 property tests in
+`tests/properties.rs`, 1 doctest. Every fixture is built box by box through
+`vaco_format_isom::build` (progressive) or by hand with `bx`/`fullbx`
+(fragmented, in `tests/common/mod.rs`'s `frag_moov`/`frag_unit`/`mfra`/`sidx`),
+so the suite needs no media files and no reference binary.
 
 Two fuzz targets, because the crate has two distinct surfaces:
 
@@ -534,12 +623,13 @@ Named so the next author knows what is absent rather than broken:
   different structure (items, not tracks) and the larger half of the issue it
   belongs to; `vaco-format-isom` has zero existing support to build on, unlike
   every other box family this crate reads.
-* **`sidx` and `mfra` fast paths.** `vaco-format-isom` parses both
-  (`frag::SegmentIndex`, `frag::TrackFragmentRandomAccess`); this crate still
-  does not call either. Seeking walks the collected `moof` list instead, which
-  is O(fragments) in memory and O(1) per seek once open — correct, but not
-  what `-fflags +fastseek` would use, and not able to reach a fragment beyond
-  `MAX_FRAGMENTS` without a full rescan. Not attempted this pass.
+* **`sidx` for seeking.** Collected (see *`sidx` and `mfra`* above) but not
+  consulted by `place_fragment` — `mfra`, when present, already answers the
+  same question more precisely (per-sample, not per-subsegment). A source
+  that has `sidx` but no `mfra` — plausible for a DASH segment produced by
+  something other than this project's own muxer, which always writes both —
+  still falls back to the O(fragments) scan rather than the coarser
+  subsegment-level jump `sidx` could offer.
 * **Multiple `stsd` entries.** The first is reported; extradata does not switch
   mid-stream through `NewExtradata` side data.
 * **`media_rate != 1` edits** and **multi-segment edit decision lists.**

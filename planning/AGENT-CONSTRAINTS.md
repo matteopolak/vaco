@@ -163,6 +163,29 @@ let Some(name) = vaco_registry::demuxers().iter().map(|d| d.name)
     .find(|n| vaco_registry::muxer_by_name(n).is_none()) else { return };
 ```
 
+## An empty collection at construction is not an answer
+
+Twice in one week, in unrelated crates:
+
+- **FLV reported zero streams for every file.** Streams are created by the first
+  tag that needs one — right, since FLV declares nothing until then — but
+  `Demuxer::streams()` is asked before any packet is read, so it answered with
+  the empty list it had been built with. `ffprobe` printed `nb_streams=0` on
+  files the reference reads perfectly.
+- **Fragmented MP4 over a pipe produced zero packets, always.** A reader was
+  marked `finished` at construction whenever its entry list started empty — and
+  on a non-seekable source, empty means *"I have not looked yet"*, not
+  *"there is nothing here"*.
+
+Both crates' own tests passed, because both read packets before asking. The
+differential harness found the first; a test written for something else found
+the second.
+
+**If a field starts empty because you have not populated it yet, do not let
+anything read it as a result.** Either populate it before the first observer can
+ask — bounded, since the input is untrusted — or make "not yet known"
+distinguishable from "known to be nothing" in the type.
+
 ## Detection and demuxing ask different questions
 
 A demuxer is *deliberately* forgiving. `vaco-demux-raw`'s `obu::temporal_units`

@@ -67,7 +67,9 @@ use vaco_format_core::{
 };
 use vaco_format_isom::boxes::{BoxHeader, IsoBox};
 use vaco_format_isom::fourcc::boxes as bt;
-use vaco_format_isom::frag::{MovieFragment, TrackExtends};
+use vaco_format_isom::frag::{
+    MovieFragment, SegmentIndex, TrackExtends, TrackFragmentRandomAccess, parse_mfra,
+};
 use vaco_format_isom::scan::{BoxSpan, ScanError, TopLevelScanner};
 use vaco_format_isom::stbl::SampleTable;
 use vaco_format_isom::{FileType, FourCc, Movie, Track, probe as isom_probe, stsd};
@@ -108,6 +110,27 @@ pub const MAX_TOP_LEVEL_BOXES: u32 = 1 << 20;
 
 /// Largest number of movie fragments collected.
 pub const MAX_FRAGMENTS: usize = 1 << 17;
+
+/// Largest number of `sidx` boxes collected between `moov` and the first
+/// `moof`.
+///
+/// Each is small — `reference_count` is sixteen bits — so this bounds count
+/// rather than bytes; a real DASH-style file has exactly one.
+pub const MAX_SIDX_BOXES: usize = 4096;
+
+/// Largest `sidx` payload read.
+///
+/// `reference_count` is 16 bits, so the whole reference table is at most
+/// `65535 * 12` bytes; this leaves generous room for the fixed header on top
+/// without trusting the declared box size any further than that.
+pub const MAX_SIDX_BYTES: u64 = 1 << 20;
+
+/// Fixed size of an `mfro` box: an 8-byte header, a 4-byte version/flags word
+/// and the 4-byte `size` field (ISO/IEC 14496-12 §8.8.11). Unlike almost every
+/// other box in the format, it never grows, which is what makes reading the
+/// last sixteen bytes of the file a reliable way to find `mfra` without a
+/// linear scan.
+const MFRO_BOX_LEN: u64 = 16;
 
 /// Samples examined when estimating a frame rate or the minimum presentation
 /// time. The reference analyses a prefix too (`fpsprobesize`); this is ours.
@@ -219,6 +242,20 @@ pub struct Mp4Demuxer {
     extends: Vec<TrackExtends>,
 
     fragments: Vec<Fragment>,
+    /// `mfra ▸ tfra`, read from the file's trailer once at open, if present.
+    ///
+    /// [`Mp4Demuxer::place_fragment`] tries this fast path first — a direct
+    /// lookup by presentation time instead of the linear scan over collected
+    /// fragments that is the only option without it — falling back to that
+    /// scan whenever the lookup does not resolve to something already known
+    /// or fetchable.
+    tfra: Vec<TrackFragmentRandomAccess>,
+    /// `sidx` boxes seen between `moov` and the first `moof`.
+    ///
+    /// Not yet consulted for seeking — see the crate doc's *Deferred*
+    /// section — but collected because the box-layer parse is free once the
+    /// scan is already walking past them to find `moof`.
+    sidx: Vec<SegmentIndex>,
     /// Where the top-level scan for further fragments has reached.
     scan_pos: u64,
     scan_end: u64,
@@ -323,6 +360,8 @@ impl Mp4Demuxer {
             slots: Vec::new(),
             extends: Vec::new(),
             fragments: Vec::new(),
+            tfra: Vec::new(),
+            sidx: Vec::new(),
             scan_pos: moov_span.end(),
             scan_end,
             scan_done: false,
@@ -364,6 +403,26 @@ impl Mp4Demuxer {
         &self.index
     }
 
+    /// The `mfra ▸ tfra` tables read from the file's trailer, if it had one.
+    ///
+    /// Empty for a fragmented file with no `mfra`, for a non-seekable source
+    /// (nothing to seek back to read a trailer with), and for every
+    /// non-fragmented file.
+    #[must_use]
+    pub fn fragment_random_access(&self) -> &[TrackFragmentRandomAccess] {
+        &self.tfra
+    }
+
+    /// The `sidx` boxes seen between `moov` and the first `moof`.
+    ///
+    /// Collected because the scan that finds `moof` passes over them for
+    /// free; not yet consulted by [`Mp4Demuxer::seek`] — see the crate doc's
+    /// *Deferred* section.
+    #[must_use]
+    pub fn segment_index(&self) -> &[SegmentIndex] {
+        &self.sidx
+    }
+
     // ------------------------------------------------------------------ open
 
     fn build(&mut self, seekable: bool) -> Result<()> {
@@ -379,6 +438,15 @@ impl Mp4Demuxer {
             self.extends = movie.extends.clone();
         }
         if self.fragmented {
+            // Cheap regardless of file size — a fixed seek to the last
+            // sixteen bytes and one more box read — so it happens before the
+            // fragment scan can, rather than depending on the scan reaching
+            // the end. A file with more fragments than `MAX_FRAGMENTS` is
+            // exactly the case this exists for: the scan below gives up long
+            // before `mfra`, so if this ran after it, it would never run.
+            if seekable {
+                self.tfra = self.read_mfra_trailer().unwrap_or_default();
+            }
             self.collect_fragments(seekable)?;
         }
 
@@ -685,7 +753,20 @@ impl Mp4Demuxer {
         };
         if self.fragmented {
             reader.entries = self.fragment_entries(trak.header.track_id, size);
-            if reader.entries.is_empty() {
+            // Empty means two different things depending on whether
+            // `collect_fragments` already ran to completion. On a seekable
+            // source it did (`Mp4Demuxer::build` calls it before any track is
+            // built), so an empty result here means the track truly has no
+            // fragments anywhere in the file — finished. On a source that
+            // cannot seek, `collect_fragments` never eagerly scans at all
+            // (see its own doc comment), so an empty result here means only
+            // "nothing pulled yet" — marking it finished would make every
+            // fragmented track on a non-seekable source permanently empty,
+            // since `ensure_head` checks `finished` before ever calling
+            // `refill`, and `refill`'s own retry-by-pulling-one-more-`moof`
+            // loop would then never run. Found by
+            // `a_non_seekable_source_gets_no_fast_path_but_still_demuxes`.
+            if reader.entries.is_empty() && self.io.seekability() != Seekability::None {
                 reader.finished = true;
             }
         }
@@ -856,6 +937,125 @@ impl Mp4Demuxer {
         Ok(())
     }
 
+    /// Read `mfra` from the file's trailer, if it is there.
+    ///
+    /// `mfro`, the very last box in a file that has one, states `mfra`'s own
+    /// size (ISO/IEC 14496-12 §8.8.11) — the one place this format lets a
+    /// random-access structure be found without a linear scan. Absent,
+    /// truncated, or malformed input all resolve to "no fast path", not an
+    /// error: a demuxer that cannot seek any faster than by scanning is still
+    /// a working demuxer.
+    fn read_mfra_trailer(&mut self) -> Option<Vec<TrackFragmentRandomAccess>> {
+        let size = self.io.size()?;
+        let mfro_offset = size.checked_sub(MFRO_BOX_LEN)?;
+        let mfro_span = {
+            let mut sc = TopLevelScanner::range(&mut self.io, mfro_offset, size);
+            sc.next_box(&mut self.budget).ok().flatten()?
+        };
+        if mfro_span.kind != bt::MFRO || mfro_span.offset != mfro_offset {
+            return None;
+        }
+        let mfro_payload =
+            read_payload_incremental(&mut self.io, &mut self.budget, mfro_span, MFRO_BOX_LEN)
+                .ok()?;
+        self.budget.release(mfro_payload.len() as u64);
+        // version(8) + flags(24) + size(32), all inside the 8-byte body.
+        let mfra_size = u64::from(u32::from_be_bytes(
+            *mfro_payload.get(4..8)?.first_chunk::<4>()?,
+        ));
+        if mfra_size < MFRO_BOX_LEN {
+            return None;
+        }
+        let mfra_offset = size.checked_sub(mfra_size)?;
+        let mfra_span = {
+            let mut sc = TopLevelScanner::range(&mut self.io, mfra_offset, size);
+            sc.next_box(&mut self.budget).ok().flatten()?
+        };
+        if mfra_span.kind != bt::MFRA
+            || mfra_span.offset != mfra_offset
+            || mfra_span.payload_len() > MAX_MOOV_BYTES
+        {
+            return None;
+        }
+        let payload =
+            read_payload_incremental(&mut self.io, &mut self.budget, mfra_span, MAX_MOOV_BYTES)
+                .ok()?;
+        self.budget.release(payload.len() as u64);
+        Some(parse_mfra(&reassemble(mfra_span, &payload)))
+    }
+
+    /// Fetch and append the single `moof` at `offset`, beyond every fragment
+    /// already known.
+    ///
+    /// Deliberately refuses anything that is not strictly past the current
+    /// tail of [`Mp4Demuxer::fragments`]: that vector is kept in ascending
+    /// file-offset order everywhere else in this crate (`FragEntry::fragment`
+    /// is an index into it, and those indices are handed out once and never
+    /// renumbered), so inserting into the middle would silently invalidate
+    /// every entry recorded past the insertion point. Appending past the tail
+    /// has no such hazard — it is exactly what the ordinary scan does, just
+    /// out of the file's own order, which `mfra` is what makes safe: it names
+    /// an exact `moof` offset instead of asking this function to guess where
+    /// one starts.
+    ///
+    /// This is what lets a seek reach a fragment beyond
+    /// [`MAX_FRAGMENTS`] without rescanning everything before it — the case
+    /// the ordinary eager scan gives up on.
+    fn fetch_fragment_at(&mut self, offset: u64) -> Result<Option<usize>> {
+        if self.fragments.last().is_some_and(|f| f.offset >= offset) {
+            return Ok(None);
+        }
+        let span = {
+            let mut sc = TopLevelScanner::range(&mut self.io, offset, self.scan_end);
+            sc.next_box(&mut self.budget).ok().flatten()
+        };
+        let Some(span) = span else { return Ok(None) };
+        if span.kind != bt::MOOF || span.offset != offset || span.payload_len() > MAX_MOOV_BYTES {
+            return Ok(None);
+        }
+        let data = read_payload_incremental(&mut self.io, &mut self.budget, span, MAX_MOOV_BYTES)?;
+        self.budget.release(data.len() as u64);
+        self.fragments.push(Fragment {
+            offset: span.offset,
+            header_len: span.header_len,
+            data,
+        });
+        self.extend_entries();
+        Ok(Some(self.fragments.len().saturating_sub(1)))
+    }
+
+    /// The `mfra`-backed fast path for [`Mp4Demuxer::place_fragment`].
+    ///
+    /// Resolves straight to the index in `reader.entries` a seek should start
+    /// from, using `tfra`'s own `(time, moof_offset)` pairs instead of
+    /// scanning every entry the slow path has to. Returns `None` whenever the
+    /// fast path cannot answer — no `tfra` for this track, a target before
+    /// its first entry, or a `moof_offset` this demuxer has neither collected
+    /// nor can fetch — and [`Mp4Demuxer::place_fragment`] falls back to its
+    /// own scan in every one of those cases, so a wrong or absent `tfra` never
+    /// costs correctness, only the speedup.
+    fn tfra_locate(&mut self, slot: usize, media: i64) -> Option<usize> {
+        let track_id = u32::try_from(self.streams.get(slot)?.id?).ok()?;
+        let media = u64::try_from(media).ok()?;
+        let entry = self
+            .tfra
+            .iter()
+            .find(|t| t.track_id == track_id)?
+            .at_or_before(media)?;
+        let fi = match self
+            .fragments
+            .binary_search_by_key(&entry.moof_offset, |f| f.offset)
+        {
+            Ok(fi) => fi,
+            Err(_) => self.fetch_fragment_at(entry.moof_offset).ok()??,
+        };
+        self.readers
+            .get(slot)?
+            .entries
+            .iter()
+            .position(|e| e.fragment == fi)
+    }
+
     /// Advance the top-level scan to the next `moof`, reading its payload.
     ///
     /// Returns `false` at the end of the source. On a source that cannot seek
@@ -882,6 +1082,25 @@ impl Mp4Demuxer {
                 return Ok(false);
             };
             self.scan_pos = span.end();
+            if span.kind == bt::SIDX && self.sidx.len() < MAX_SIDX_BOXES {
+                // Best-effort: a `sidx` that fails to parse or that declares
+                // more than `MAX_SIDX_BYTES` is skipped rather than treated
+                // as a reason to give up on the fragments after it.
+                if span.payload_len() <= MAX_SIDX_BYTES
+                    && let Ok(data) = read_payload_incremental(
+                        &mut self.io,
+                        &mut self.budget,
+                        span,
+                        MAX_SIDX_BYTES,
+                    )
+                {
+                    self.budget.release(data.len() as u64);
+                    if let Some(sidx) = SegmentIndex::parse(&reassemble(span, &data)) {
+                        self.sidx.push(sidx);
+                    }
+                }
+                continue;
+            }
             if span.kind == bt::MOOF {
                 if span.payload_len() > MAX_MOOV_BYTES {
                     self.scan_done = true;
@@ -1481,27 +1700,33 @@ impl Mp4Demuxer {
     /// fragments are longer than its keyframe interval — measured against the
     /// reference, which lands mid-fragment.
     fn place_fragment(&mut self, slot: usize, media: i64, any: bool) -> i64 {
-        // Scanned rather than bisected, and every entry is examined rather
-        // than stopping at the first one past the target: `tfdt` is written by
-        // the file, so a corrupt one can make the fragment start times
-        // non-monotonic, and an early `break` would then land somewhere
-        // arbitrary. Choosing the latest fragment at or before the target, and
-        // otherwise the earliest fragment there is, is well defined for any
-        // ordering — which is what makes "a backward seek lands at or before
-        // the target, or at the earliest packet the track has" true rather than
-        // true-for-well-formed-files.
-        let Some(chosen) = self.readers.get(slot).and_then(|r| {
-            let mut at_or_before: Option<(usize, i64)> = None;
-            let mut earliest: Option<(usize, i64)> = None;
-            for (i, e) in r.entries.iter().enumerate() {
-                if earliest.is_none_or(|(_, d)| e.start_dts < d) {
-                    earliest = Some((i, e.start_dts));
+        // `tfra` first, when it resolves — see `tfra_locate`'s own docs for
+        // why a miss here is never a correctness problem, only a missed
+        // speedup.
+        //
+        // Otherwise: scanned rather than bisected, and every entry is
+        // examined rather than stopping at the first one past the target:
+        // `tfdt` is written by the file, so a corrupt one can make the
+        // fragment start times non-monotonic, and an early `break` would then
+        // land somewhere arbitrary. Choosing the latest fragment at or before
+        // the target, and otherwise the earliest fragment there is, is well
+        // defined for any ordering — which is what makes "a backward seek
+        // lands at or before the target, or at the earliest packet the track
+        // has" true rather than true-for-well-formed-files.
+        let Some(chosen) = self.tfra_locate(slot, media).or_else(|| {
+            self.readers.get(slot).and_then(|r| {
+                let mut at_or_before: Option<(usize, i64)> = None;
+                let mut earliest: Option<(usize, i64)> = None;
+                for (i, e) in r.entries.iter().enumerate() {
+                    if earliest.is_none_or(|(_, d)| e.start_dts < d) {
+                        earliest = Some((i, e.start_dts));
+                    }
+                    if e.start_dts <= media && at_or_before.is_none_or(|(_, d)| e.start_dts > d) {
+                        at_or_before = Some((i, e.start_dts));
+                    }
                 }
-                if e.start_dts <= media && at_or_before.is_none_or(|(_, d)| e.start_dts > d) {
-                    at_or_before = Some((i, e.start_dts));
-                }
-            }
-            at_or_before.or(earliest).map(|(i, _)| i)
+                at_or_before.or(earliest).map(|(i, _)| i)
+            })
         }) else {
             if let Some(reader) = self.readers.get_mut(slot) {
                 reader.queue.clear();
@@ -1863,4 +2088,226 @@ fn cover_stream(index: u32, cover: meta::CoverArt) -> (Stream, Reader) {
         encrypted: false,
     };
     (stream, reader)
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    reason = "test code, and this module needs private fields the integration tests cannot reach"
+)]
+mod tests {
+    use super::*;
+    use vaco_format_isom::build::{StblSpec, TrackSpec, bx, fullbx, trak};
+
+    const TRACK_ID: u32 = 7;
+
+    fn moov() -> Vec<u8> {
+        let mut mvhd = Vec::new();
+        mvhd.extend_from_slice(&[0; 8]);
+        mvhd.extend_from_slice(&1000u32.to_be_bytes());
+        mvhd.extend_from_slice(&0u32.to_be_bytes());
+        mvhd.extend_from_slice(&0x0001_0000u32.to_be_bytes());
+        mvhd.extend_from_slice(&0x0100u16.to_be_bytes());
+        mvhd.extend_from_slice(&[0; 10]);
+        for v in vaco_format_isom::fixed::IDENTITY_MATRIX {
+            mvhd.extend_from_slice(&v.to_be_bytes());
+        }
+        mvhd.extend_from_slice(&[0; 24]);
+        mvhd.extend_from_slice(&2u32.to_be_bytes());
+        let mut out = fullbx(b"mvhd", 0, 0, &mvhd);
+        let spec = TrackSpec {
+            track_id: TRACK_ID,
+            track_duration: 0,
+            handler: *b"vide",
+            timescale: 1_000,
+            media_duration: 0,
+            language: 0x55C4,
+            elst: Vec::new(),
+            stbl: StblSpec {
+                stsd_box: Some({
+                    let mut entry = vec![0u8; 6];
+                    entry.extend_from_slice(&1u16.to_be_bytes());
+                    entry.extend_from_slice(&[0; 16]);
+                    entry.extend_from_slice(&160u16.to_be_bytes());
+                    entry.extend_from_slice(&120u16.to_be_bytes());
+                    entry.extend_from_slice(&[0; 14]);
+                    entry.extend_from_slice(&1u16.to_be_bytes());
+                    entry.extend_from_slice(&[0; 32]);
+                    entry.extend_from_slice(&24u16.to_be_bytes());
+                    entry.extend_from_slice(&0xFFFFu16.to_be_bytes());
+                    let mut body = 1u32.to_be_bytes().to_vec();
+                    body.extend_from_slice(&bx(b"avc1", &entry));
+                    fullbx(b"stsd", 0, 0, &body)
+                }),
+                ..StblSpec::default()
+            },
+            tref: Vec::new(),
+        };
+        out.extend_from_slice(&trak(&spec));
+        let mut trex = TRACK_ID.to_be_bytes().to_vec();
+        trex.extend_from_slice(&[0; 16]);
+        out.extend_from_slice(&bx(b"mvex", &fullbx(b"trex", 0, 0, &trex)));
+        out
+    }
+
+    /// One `moof` + `mdat` for `TRACK_ID`, `sizes.len()` samples of 1000
+    /// ticks each, `default-base-is-moof`. Mirrors
+    /// `tests/common/mod.rs::frag_unit` — duplicated rather than shared,
+    /// because a unit test module cannot depend on the integration tests'
+    /// support crate.
+    fn unit(sequence: u32, tfdt: u64, sizes: &[u32]) -> Vec<u8> {
+        let mfhd = fullbx(b"mfhd", 0, 0, &sequence.to_be_bytes());
+        let tfhd = fullbx(b"tfhd", 0, 0x02_0000, &TRACK_ID.to_be_bytes());
+        let tfdt_box = fullbx(b"tfdt", 1, 0, &tfdt.to_be_bytes());
+        let mut trun_body = u32::try_from(sizes.len())
+            .unwrap_or(0)
+            .to_be_bytes()
+            .to_vec();
+        let data_offset_at = trun_body.len();
+        trun_body.extend_from_slice(&0i32.to_be_bytes());
+        for (i, &size) in sizes.iter().enumerate() {
+            trun_body.extend_from_slice(&1_000u32.to_be_bytes());
+            trun_body.extend_from_slice(&size.to_be_bytes());
+            trun_body.extend_from_slice(
+                &(if i == 0 { 0x0200_0000u32 } else { 0x0101_0000 }).to_be_bytes(),
+            );
+        }
+        let trun = fullbx(b"trun", 0, 0x1 | 0x100 | 0x200 | 0x400, &trun_body);
+        let mut traf_body = tfhd;
+        traf_body.extend_from_slice(&tfdt_box);
+        let trun_pos = traf_body.len();
+        traf_body.extend_from_slice(&trun);
+        let traf = bx(b"traf", &traf_body);
+        let mut moof_body = mfhd;
+        let traf_pos = moof_body.len();
+        moof_body.extend_from_slice(&traf);
+        let mut moof = bx(b"moof", &moof_body);
+        let pos = 8 + traf_pos + 8 + trun_pos + 8 + 4 + data_offset_at;
+        let data_offset = i32::try_from(moof.len() as u64 + 8).unwrap_or(i32::MAX);
+        moof[pos..pos + 4].copy_from_slice(&data_offset.to_be_bytes());
+        let mdat: Vec<u8> = sizes
+            .iter()
+            .flat_map(|&s| std::iter::repeat_n(0xCDu8, s as usize))
+            .collect();
+        moof.extend_from_slice(&bx(b"mdat", &mdat));
+        moof
+    }
+
+    fn file(n: u32) -> Vec<u8> {
+        let mut ftyp = b"isom".to_vec();
+        ftyp.extend_from_slice(&512u32.to_be_bytes());
+        ftyp.extend_from_slice(b"isom");
+        let mut out = bx(b"ftyp", &ftyp);
+        out.extend_from_slice(&bx(b"moov", &moov()));
+        for i in 0..n {
+            out.extend_from_slice(&unit(i + 1, u64::from(i) * 2000, &[50, 50]));
+        }
+        out
+    }
+
+    fn open(data: Vec<u8>) -> Mp4Demuxer {
+        let src: Box<dyn MediaSource> = Box::new(vaco_io::MemorySource::new(data));
+        Mp4Demuxer::open(
+            src,
+            &vaco_format_core::discovery::NoParsers,
+            &FormatOptions::default(),
+            Mp4Options::default(),
+        )
+        .unwrap()
+    }
+
+    /// The exact capability the fast path exists for: a target beyond every
+    /// fragment `collect_fragments` was allowed to keep (simulated here by
+    /// truncating `self.fragments`/`self.readers[0].entries` and setting
+    /// `scan_done`, standing in for hitting [`MAX_FRAGMENTS`] without
+    /// building a file that large) is still reachable, by fetching exactly
+    /// the one fragment `tfra` names rather than re-scanning everything
+    /// before it.
+    #[test]
+    fn a_seek_past_the_collected_tail_is_fetched_via_tfra() {
+        let mut demux = open(file(4));
+        assert_eq!(demux.fragments.len(), 4);
+        let offsets: Vec<u64> = demux.fragments.iter().map(|f| f.offset).collect();
+        demux.tfra = vec![TrackFragmentRandomAccess {
+            track_id: TRACK_ID,
+            entries: (0..4u64)
+                .map(|i| vaco_format_isom::frag::RandomAccessEntry {
+                    time: i * 2000,
+                    moof_offset: offsets[i as usize],
+                    traf_number: 1,
+                    trun_number: 1,
+                    sample_number: 1,
+                })
+                .collect(),
+        }];
+
+        // Simulate "only the first fragment was ever collected", as
+        // `MAX_FRAGMENTS` would if the file had that many fragments —
+        // *after* recording `tfra` from the complete scan, matching how a
+        // real file's `mfra` trailer (read once, up front, regardless of how
+        // far the eager scan gets) would already know about fragments the
+        // scan itself has not reached yet.
+        demux.fragments.truncate(1);
+        demux.readers[0].entries.truncate(1);
+        demux.scan_done = true;
+
+        // Land inside fragment 2 (media time in [4000, 6000)).
+        let landed = demux.place_fragment(0, 4500, false);
+        assert_eq!(landed, 4000, "lands on fragment 2's sync sample");
+        // Exactly one fragment was fetched to answer this — not fragment 1,
+        // which the fast path had no reason to visit.
+        assert_eq!(demux.fragments.len(), 2);
+        assert_eq!(demux.fragments[1].offset, offsets[2]);
+    }
+
+    /// The fast path must never answer differently than the fallback scan —
+    /// only faster. Checked across every fragment boundary of a small file,
+    /// once with `tfra` available and once with it cleared on the same
+    /// instance (so everything else about the demuxer is held fixed).
+    #[test]
+    fn tfra_and_the_fallback_scan_agree_on_every_landing() {
+        let mut demux = open(file(6));
+        assert!(
+            demux.tfra.is_empty(),
+            "fixture file carries no mfra trailer yet"
+        );
+        // This fixture has no `mfra` trailer (`file` appends none), so build
+        // one directly from what `collect_fragments` already found — the
+        // fast path is then exercised exactly as a real file's `mfra` would
+        // drive it.
+        let offsets: Vec<u64> = demux.fragments.iter().map(|f| f.offset).collect();
+        demux.tfra = vec![TrackFragmentRandomAccess {
+            track_id: TRACK_ID,
+            entries: (0..offsets.len() as u64)
+                .map(|i| vaco_format_isom::frag::RandomAccessEntry {
+                    time: i * 2000,
+                    moof_offset: offsets[i as usize],
+                    traf_number: 1,
+                    trun_number: 1,
+                    sample_number: 1,
+                })
+                .collect(),
+        }];
+        for target in [-1i64, 0, 500, 1999, 2000, 5999, 11999, 100_000] {
+            let with_fast_path = demux.place_fragment(0, target, false);
+            demux.tfra.clear();
+            let with_fallback = demux.place_fragment(0, target, false);
+            // Restore `tfra` for the next iteration.
+            demux.tfra = vec![TrackFragmentRandomAccess {
+                track_id: TRACK_ID,
+                entries: (0..offsets.len() as u64)
+                    .map(|i| vaco_format_isom::frag::RandomAccessEntry {
+                        time: i * 2000,
+                        moof_offset: offsets[i as usize],
+                        traf_number: 1,
+                        trun_number: 1,
+                        sample_number: 1,
+                    })
+                    .collect(),
+            }];
+            assert_eq!(with_fast_path, with_fallback, "target {target}");
+        }
+    }
 }
