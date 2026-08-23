@@ -42,6 +42,13 @@ const DISTINCT: &[(&str, &str)] = &[
         "vaco-chlayout: an audio channel. vaco-conformance: a reporting channel.",
     ),
     (
+        "State",
+        "vaco-filter-adsp: a biquad's Direct Form I delay line (x1/x2/y1/y2). \
+         vaco-protocol-http: reconnect attempt counting. Same word, no shared \
+         concept — one is four f64 samples of filter memory, the other is a \
+         retry budget with a first-failure timestamp.",
+    ),
+    (
         "Component",
         "vaco-pixfmt: a pixel component. vaco-registry: a registered component.",
     ),
