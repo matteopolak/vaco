@@ -59,11 +59,15 @@ vaco-filter-audio = { path = "../crates/filter/vaco-filter-audio" }
 vaco-filter-audio-dynamics = { path = "../crates/filter/vaco-filter-audio-dynamics" }
 vaco-filter-audio-eq = { path = "../crates/filter/vaco-filter-audio-eq" }
 vaco-filter-blur = { path = "../crates/filter/vaco-filter-blur" }
+vaco-filter-color = { path = "../crates/filter/vaco-filter-color" }
+vaco-filter-convolve = { path = "../crates/filter/vaco-filter-convolve" }
 vaco-filter-core = { path = "../crates/filter/vaco-filter-core" }
 vaco-filter-denoise = { path = "../crates/filter/vaco-filter-denoise" }
 vaco-filter-framesync = { path = "../crates/filter/vaco-filter-framesync" }
 vaco-filter-geometry = { path = "../crates/filter/vaco-filter-geometry" }
 vaco-filter-graph = { path = "../crates/filter/vaco-filter-graph" }
+vaco-filter-key = { path = "../crates/filter/vaco-filter-key" }
+vaco-filter-lut = { path = "../crates/filter/vaco-filter-lut" }
 vaco-filter-plumbing = { path = "../crates/filter/vaco-filter-plumbing" }
 vaco-filter-video-composite = { path = "../crates/filter/vaco-filter-video-composite" }
 vaco-filter-video-format = { path = "../crates/filter/vaco-filter-video-format" }
@@ -149,11 +153,15 @@ default = [
     "filter-audio-dynamics",
     "filter-audio-eq",
     "filter-blur",
+    "filter-color",
+    "filter-convolve",
     "filter-core",
     "filter-denoise",
     "filter-framesync",
     "filter-geometry",
     "filter-graph",
+    "filter-key",
+    "filter-lut",
     "filter-plumbing",
     "filter-video-composite",
     "filter-video-format",
@@ -233,11 +241,15 @@ filter-audio = []
 filter-audio-dynamics = []
 filter-audio-eq = []
 filter-blur = []
+filter-color = []
+filter-convolve = []
 filter-core = []
 filter-denoise = []
 filter-framesync = []
 filter-geometry = []
 filter-graph = []
+filter-key = []
+filter-lut = []
 filter-plumbing = []
 filter-video-composite = []
 filter-video-format = []
@@ -654,6 +666,22 @@ bench = false
 required-features = ["filter-blur"]
 
 [[bin]]
+name = "filter_color_options"
+path = "fuzz_targets/filter_color_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-color"]
+
+[[bin]]
+name = "filter_convolve_options"
+path = "fuzz_targets/filter_convolve_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-convolve"]
+
+[[bin]]
 name = "filter_denoise_options"
 path = "fuzz_targets/filter_denoise_options.rs"
 test = false
@@ -676,6 +704,22 @@ test = false
 doc = false
 bench = false
 required-features = ["filter-core"]
+
+[[bin]]
+name = "filter_key_options"
+path = "fuzz_targets/filter_key_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-key"]
+
+[[bin]]
+name = "filter_lut_options"
+path = "fuzz_targets/filter_lut_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-lut"]
 
 [[bin]]
 name = "filter_plumbing_options"

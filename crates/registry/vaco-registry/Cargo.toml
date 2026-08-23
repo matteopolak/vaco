@@ -177,11 +177,23 @@ path = "../../filter/vaco-filter-audio-eq"
 [dependencies.vaco-filter-blur]
 path = "../../filter/vaco-filter-blur"
 
+[dependencies.vaco-filter-color]
+path = "../../filter/vaco-filter-color"
+
+[dependencies.vaco-filter-convolve]
+path = "../../filter/vaco-filter-convolve"
+
 [dependencies.vaco-filter-denoise]
 path = "../../filter/vaco-filter-denoise"
 
 [dependencies.vaco-filter-geometry]
 path = "../../filter/vaco-filter-geometry"
+
+[dependencies.vaco-filter-key]
+path = "../../filter/vaco-filter-key"
+
+[dependencies.vaco-filter-lut]
+path = "../../filter/vaco-filter-lut"
 
 [dependencies.vaco-filter-plumbing]
 path = "../../filter/vaco-filter-plumbing"

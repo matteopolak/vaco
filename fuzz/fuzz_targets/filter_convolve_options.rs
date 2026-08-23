@@ -1,31 +1,39 @@
 //! Arbitrary filtergraph text against every filter's option parser in
-//! `vaco-filter-blur`.
+//! `vaco-filter-convolve`.
 //!
-//! Same pattern as `filter_video_geometry_options`/`filter_audio_eq_options`:
-//! run the real `vaco_filter_graph::ast::parse`/`arguments()` pipeline (not a
-//! hand-built `Instantiate`) so the fuzzer also exercises the graph-string
-//! grammar's own escaping, not just each filter's `set_from_string`.
+//! Same pattern as `filter_blur_options`/`filter_video_geometry_options`:
+//! run the real `vaco_filter_graph::ast::parse`/`arguments()` pipeline (not
+//! a hand-built `Instantiate`) so the fuzzer also exercises the
+//! graph-string grammar's own escaping, not just each filter's
+//! `set_from_string`.
 //!
-//! This crate's option parsers include `boxblur`'s plain-integer radius
-//! parser and `avgblur`'s zero-as-sentinel `sizeY` handling worth fuzzing
-//! beyond the usual `vaco-opts` integer/float/string paths.
+//! This crate's option parsers include the one thing worth fuzzing beyond
+//! the usual `vaco-opts` integer/float/string paths: `convolution`'s
+//! whitespace-separated matrix parser (`Kernel::parse`, arbitrary length,
+//! `square`/`row`/`column` mode, and the `rdiv=0`-is-a-sentinel handling).
 //!
-//! See `filter_convolve_options` for the sibling crate `convolution`,
-//! `sobel`, `prewitt`, `roberts`, `scharr`, `kirsch`, `dilation`,
-//! `erosion` and `median` moved into.
-//!
-//! Property: for any byte string, for any of the four registered names,
+//! Property: for any byte string, for any of the nine registered names,
 //! either a clean `Err` comes back at some stage or a working `Instance`,
 //! never a panic and never an unbounded allocation.
-//! fuzz-crate: vaco-filter-blur
+//! fuzz-crate: vaco-filter-convolve
 
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use vaco_filter_blur::registry::BlurRegistry;
+use vaco_filter_convolve::registry::ConvolveRegistry;
 use vaco_filter_graph::registry::{FilterRegistry, Instantiate};
 
-const NAMES: &[&str] = &["avgblur", "boxblur", "gblur", "unsharp"];
+const NAMES: &[&str] = &[
+    "convolution",
+    "dilation",
+    "erosion",
+    "kirsch",
+    "median",
+    "prewitt",
+    "roberts",
+    "scharr",
+    "sobel",
+];
 
 fuzz_target!(|args: &str| {
     // 8 KiB is far past any real `-filter_complex` argument; beyond it the
@@ -34,7 +42,7 @@ fuzz_target!(|args: &str| {
     if args.len() > 8192 {
         return;
     }
-    let registry = BlurRegistry;
+    let registry = ConvolveRegistry;
     for &name in NAMES {
         let text = format!("{name}={args}");
         let Ok(ast) = vaco_filter_graph::parse(&text) else {

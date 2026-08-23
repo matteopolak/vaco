@@ -1,6 +1,6 @@
 [package]
-name = "vaco-filter-blur"
-description = "T2 blur and sharpen video filters: boxblur, avgblur, gblur, unsharp (of the eleven planning/16-filters.md §4.2 assigns here; see the crate docs for the rest)."
+name = "vaco-filter-convolve"
+description = "T2/T3 convolution and morphology video filters: convolution, sobel, prewitt, roberts, kirsch, scharr, dilation, erosion, median."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

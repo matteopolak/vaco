@@ -1,14 +1,28 @@
-//! T2 blur, sharpen and convolution video filters.
+//! T2 blur and sharpen video filters.
 //!
-//! FT-4.6a (GitHub #468). The reference's own grouping was probed directly
-//! (`ffmpeg -filters`, `ffmpeg -h filter=<name>`, 2026-08-23) rather than
-//! trusted from the brief, per this project's standing "measure, don't
-//! recall" practice — see [`registry`]'s module doc for the final list and
-//! the brief's discrepancies.
+//! FT-4.6a (GitHub #468). The reference's own grouping for "blur, sharpen
+//! and convolution" was probed directly (`ffmpeg -filters`, `ffmpeg -h
+//! filter=<name>`, 2026-08-23) rather than trusted from the brief that
+//! requested this crate — but the brief's own group boundary was also
+//! wrong, and the authority for it turned out to be a plan document rather
+//! than the reference binary: `planning/16-filters.md` §4.2 puts
+//! convolution and morphology (`convolution`, `sobel`, `prewitt`,
+//! `roberts`, `scharr`, `kirsch`, `dilation`, `erosion`, `median`, and
+//! more) in a *separate* crate, `vaco-filter-convolve`, which is where that
+//! code now lives — this crate shipped it first under the wrong name,
+//! caught by the orchestrator reading the plan's own crate-decomposition
+//! table before this issue closed. `maskedclamp` turned out to belong to a
+//! third crate again (`vaco-filter-key`) and was dropped entirely from
+//! both.
 //!
-//! Built against `vaco-filter-core` (the `Filter`/`FrameFilter` traits, the
-//! `Simple` adapter) and, for the one three-input filter in this crate
-//! (`maskedclamp`), `vaco-filter-framesync` (`FrameSyncFilter`, `Synced`).
+//! `vaco-filter-blur` itself owns: `unsharp`, `cas`, `avgblur`, `gblur`,
+//! `dblur`, `varblur`, `yaepblur`, `guided`, `boxblur`, `smartblur`, `sab`
+//! (eleven names). Four are implemented here; see [`registry`]'s module
+//! doc for which, and why the other seven are a follow-up rather than a
+//! silent gap.
+//!
+//! Built against `vaco-filter-core` (the `FrameFilter` trait, the `Simple`
+//! adapter), exactly as `vaco-filter-convolve` is.
 //!
 //! # Shape
 //!
@@ -16,13 +30,6 @@
 //!   format validation, frame metadata copying, the `planes` bitmask, and
 //!   [`common::box_pass`], the clamp-bordered box average [`boxblur`],
 //!   [`avgblur`] and [`unsharp`] all build on.
-//! * [`convolution`] — the generic per-plane matrix engine, also the base
-//!   [`edge`] reuses for `sobel`/`prewitt`/`scharr`.
-//! * [`edge`] — the shared two-gradient (`Gx`/`Gy` magnitude) engine for
-//!   `sobel`/`prewitt`/`scharr`. [`roberts`] and [`kirsch`] are separate
-//!   modules: measured to have different border behaviour from the three
-//!   that share this engine (see [`edge`]'s doc).
-//! * [`morph`] — the shared dilation/erosion engine.
 //! * One module per filter, each exposing `pub const DESC: FilterDesc` and
 //!   `pub(crate) fn create`, aggregated by [`registry::BlurRegistry`].
 //!
@@ -30,31 +37,25 @@
 //!
 //! Framecrc-level confidence (interior pixels, against small generated
 //! inputs run through the reference binary directly): `boxblur`,
-//! `avgblur`, `convolution`, `sobel`, `prewitt`, `scharr`, `dilation`,
-//! `erosion`, `median`. Interior-verified with a documented border gap:
-//! `unsharp` (analytic ramp invariant plus one measured off-by-one at the
-//! very edge), `roberts` and `kirsch` (interior matches a measured probe;
-//! the border does not fit any boundary model tried, and is flagged
-//! unverified rather than guessed). Structural only, not compared against
-//! the reference's actual algorithm: `gblur` (the reference's impulse
-//! response is not a plain discrete Gaussian — see [`gblur`]'s doc for the
-//! measurement that found this and the scope decision it led to) and
-//! `maskedclamp` (a pure per-pixel formula read directly off the option
-//! table, with no neighbourhood or border question to probe). See
+//! `avgblur`. Interior-verified with a documented border gap: `unsharp`
+//! (analytic ramp invariant plus one measured off-by-one at the very
+//! edge). Structural only, not compared against the reference's actual
+//! algorithm: `gblur` (the reference's impulse response is not a plain
+//! discrete Gaussian — see [`gblur`]'s doc for the measurement that found
+//! this and the scope decision it led to). See
 //! `docs/filter/vaco-filter-blur.md` for the full accounting.
 //!
 //! # Left for a follow-up (out of this brief's time budget)
 //!
-//! `smartblur`, `bilateral`, `guided`, `sab`, `dblur`, `varblur`,
-//! `yaepblur`, `cas`, `tmedian`, `xmedian`, `morpho`, `convolve`,
-//! `deconvolve` — thirteen more filters this project's own roadmap
-//! (`planning/16-filters.md` §8.4, "T2 blur/sharpen/convolve (~28)") counts
-//! in the same family. `convolve`/`deconvolve` need an FFT matched
-//! bit-exactly to the reference to be worth shipping at all; the rest are
-//! each a genuinely different per-pixel algorithm (adaptive radius,
-//! bilateral range weighting, a structuring-element second input) rather
-//! than a variation on what this crate already built, and none of them
-//! block the fourteen filters that did land.
+//! `cas`, `dblur`, `varblur`, `yaepblur`, `guided`, `sab`, `smartblur` —
+//! seven more filters this crate's own roadmap row names. Each is a
+//! genuinely different algorithm from what is implemented here (AMD's
+//! published Contrast Adaptive Sharpen formula, a directional/rotated
+//! blur, a per-pixel radius driven by a second video stream, an
+//! edge-preserving variance-gated blend, the He et al. guided filter, a
+//! shape-adaptive multi-pass blur) rather than a variation on
+//! `common::box_pass`, and none of them were reached in this pass. None of
+//! them block the four filters that did land.
 
 #![forbid(unsafe_code)]
 #![allow(
@@ -68,20 +69,8 @@
 pub mod avgblur;
 pub mod boxblur;
 mod common;
-pub mod convolution;
-pub mod dilation;
-mod edge;
-pub mod erosion;
 pub mod gblur;
-pub mod kirsch;
-pub mod maskedclamp;
-pub mod median;
-mod morph;
-pub mod prewitt;
 pub mod registry;
-pub mod roberts;
-pub mod scharr;
-pub mod sobel;
 pub mod unsharp;
 
 pub use registry::BlurRegistry;

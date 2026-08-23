@@ -1,0 +1,70 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Nine of the T2/T3 convolution and morphology video filters
+# `planning/16-filters.md` §4.2 assigns to `vaco-filter-convolve`, split out
+# of `vaco-filter-blur` (GitHub issue #468) after the crate boundary was
+# corrected against that table. See `docs/filter/vaco-filter-convolve.md`
+# for the nine filters this crate leaves for a follow-up.
+
+[[component]]
+kind = "filter"
+name = "convolution"
+long_name = "Apply convolution filter"
+ctor = "vaco_filter_convolve::convolution::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "dilation"
+long_name = "Apply dilation effect"
+ctor = "vaco_filter_convolve::dilation::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "erosion"
+long_name = "Apply erosion effect"
+ctor = "vaco_filter_convolve::erosion::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "kirsch"
+long_name = "Apply kirsch operator"
+ctor = "vaco_filter_convolve::kirsch::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "median"
+long_name = "Apply Median filter"
+ctor = "vaco_filter_convolve::median::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "prewitt"
+long_name = "Apply prewitt operator"
+ctor = "vaco_filter_convolve::prewitt::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "roberts"
+long_name = "Apply roberts cross operator"
+ctor = "vaco_filter_convolve::roberts::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "scharr"
+long_name = "Apply scharr operator"
+ctor = "vaco_filter_convolve::scharr::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "sobel"
+long_name = "Apply sobel operator"
+ctor = "vaco_filter_convolve::sobel::DESC"
+media = "video"
