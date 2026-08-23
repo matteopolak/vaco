@@ -347,6 +347,8 @@ pub static UDP_PROTOCOL: ProtocolDesc = ProtocolDesc {
         network: true,
         nested_scheme: false,
         server_capable: false,
+        readable: true,
+        writable: true,
     },
     // Measured (matching `tcp:`'s own): opens nothing nested.
     default_whitelist: &[],
@@ -362,6 +364,8 @@ pub static UDPLITE_PROTOCOL: ProtocolDesc = ProtocolDesc {
         network: true,
         nested_scheme: false,
         server_capable: false,
+        readable: true,
+        writable: true,
     },
     default_whitelist: &[],
     options: Some(udp_schema),

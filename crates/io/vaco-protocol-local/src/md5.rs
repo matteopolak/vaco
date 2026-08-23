@@ -180,6 +180,8 @@ pub static MD5_PROTOCOL: ProtocolDesc = ProtocolDesc {
         // `-protocol_whitelist` preset that recurses needs to know that.
         nested_scheme: true,
         server_capable: false,
+        readable: false,
+        writable: true,
     },
     default_whitelist: &[],
     options: None,

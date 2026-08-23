@@ -161,6 +161,8 @@ pub static TEE_PROTOCOL: ProtocolDesc = ProtocolDesc {
         network: false,
         nested_scheme: true,
         server_capable: false,
+        readable: false,
+        writable: true,
     },
     default_whitelist: &[],
     options: None,

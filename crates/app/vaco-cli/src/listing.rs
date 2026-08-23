@@ -383,22 +383,29 @@ fn pad_column(pads: &'static [vaco_filter_core::Pad], dynamic: bool) -> String {
 /// -protocols`) as one heading, an `Input:` section, and an `Output:` section,
 /// each a bare sorted name list.
 ///
-/// `vaco_protocol_core::ProtocolFlags` carries no read/write capability bit
-/// (see `docs/app/vaco-cli.md`) — a gap in that crate, not this one — so
-/// there is no way to tell an input-only protocol from an output-only one
-/// from the registry alone. Every enabled protocol is listed under **both**
-/// sections rather than guessed at; documented as a known divergence.
+/// A protocol appears under `Input:` if it can be read and `Output:` if it can
+/// be written, and plenty are one and not the other: `md5` and `tee` are
+/// output-only, `async`/`cache`/`concat`/`concatf`/`data`/`subfile` are
+/// input-only, `file` and `pipe` are both.
+///
+/// This used to list every protocol under **both** headings, because
+/// `ProtocolFlags` carried no read/write bit — so `-protocols` claimed `md5`
+/// could be read and `subfile` written, neither of which is true. The flags
+/// exist now (`readable`/`writable`, each measured against
+/// `ffmpeg -protocols`), and they are stated rather than derived because
+/// `Protocol::open` is required even for a protocol that only answers
+/// `Unsupported` from it.
 fn write_protocols<W: Write>(w: &mut W) -> std::io::Result<()> {
     writeln!(w, "Supported file protocols:")?;
-    let mut names: Vec<&str> = vaco_registry::protocols().iter().map(|p| p.name).collect();
-    names.sort_unstable();
+    let mut protos: Vec<_> = vaco_registry::protocols().to_vec();
+    protos.sort_unstable_by_key(|p| p.name);
     writeln!(w, "Input:")?;
-    for n in &names {
-        writeln!(w, "  {n}")?;
+    for p in protos.iter().filter(|p| p.flags.readable) {
+        writeln!(w, "  {}", p.name)?;
     }
     writeln!(w, "Output:")?;
-    for n in &names {
-        writeln!(w, "  {n}")?;
+    for p in protos.iter().filter(|p| p.flags.writable) {
+        writeln!(w, "  {}", p.name)?;
     }
     Ok(())
 }

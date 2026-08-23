@@ -259,6 +259,8 @@ pub static SUBFILE_PROTOCOL: ProtocolDesc = ProtocolDesc {
         network: false,
         nested_scheme: true,
         server_capable: false,
+        readable: true,
+        writable: false,
     },
     // Measured: no implicit grant. See the crate docs.
     default_whitelist: &[],

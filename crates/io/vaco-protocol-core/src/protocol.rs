@@ -69,6 +69,21 @@ pub struct ProtocolFlags {
     pub nested_scheme: bool,
     /// Implements `accept`.
     pub server_capable: bool,
+    /// Can be opened for reading. `-protocols` lists it under `Input:`.
+    ///
+    /// Not derivable from the trait: [`Protocol::open`] is required, so every
+    /// implementation has one even when it returns `Unsupported` — `md5` and
+    /// `tee` are output-only and still have to implement it. The reference
+    /// models the same fact the same way, as a non-null `url_read` pointer
+    /// rather than something inferred.
+    pub readable: bool,
+    /// Can be opened for writing. `-protocols` lists it under `Output:`.
+    ///
+    /// [`Protocol::create`] has a default implementation returning
+    /// `Unsupported`, and an overridden default is not detectable at runtime,
+    /// so this is stated rather than derived for the same reason as
+    /// [`ProtocolFlags::readable`].
+    pub writable: bool,
 }
 
 impl ProtocolFlags {
@@ -77,12 +92,16 @@ impl ProtocolFlags {
         network: false,
         nested_scheme: false,
         server_capable: false,
+        readable: true,
+        writable: true,
     };
     /// A network transport that opens nothing else: `tcp`, `udp`.
     pub const NETWORK: Self = Self {
         network: true,
         nested_scheme: false,
         server_capable: false,
+        readable: true,
+        writable: true,
     };
 }
 

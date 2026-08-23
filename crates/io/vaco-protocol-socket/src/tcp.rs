@@ -370,6 +370,8 @@ pub static TCP_PROTOCOL: ProtocolDesc = ProtocolDesc {
         network: true,
         nested_scheme: false,
         server_capable: true,
+        readable: true,
+        writable: true,
     },
     // `tcp:` opens nothing nested — measured: `ffmpeg -v debug -i tcp://…`
     // logs "No default whitelist set" for `tcp`. See the crate docs.

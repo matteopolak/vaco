@@ -181,6 +181,8 @@ pub static TLS_PROTOCOL: ProtocolDesc = ProtocolDesc {
         // `Protocol::open` call.
         nested_scheme: true,
         server_capable: false,
+        readable: true,
+        writable: true,
     },
     // Measured: `ffmpeg -v debug -i tls://…` logs "No default whitelist set"
     // — see the crate docs for the full transcript, including the whitelist

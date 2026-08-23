@@ -110,7 +110,14 @@ impl Protocol for DataProtocol {
 pub static DATA_PROTOCOL: ProtocolDesc = ProtocolDesc {
     name: "data",
     long_name: "data URI",
-    flags: ProtocolFlags::LOCAL,
+    // `data:` is read-only: `ffmpeg -protocols` lists it under `Input:` and
+    // not under `Output:`, which is the whole point of a URI that *is* its
+    // own payload. `LOCAL` is read+write because `file` and `pipe` are, so
+    // this one field is overridden rather than a third const invented.
+    flags: ProtocolFlags {
+        writable: false,
+        ..ProtocolFlags::LOCAL
+    },
     default_whitelist: &[],
     options: None,
     proto: &DataProtocol,

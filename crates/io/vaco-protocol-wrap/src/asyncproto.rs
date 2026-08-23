@@ -411,6 +411,8 @@ pub static ASYNC_PROTOCOL: ProtocolDesc = ProtocolDesc {
         network: false,
         nested_scheme: true,
         server_capable: false,
+        readable: true,
+        writable: false,
     },
     default_whitelist: &[],
     options: None,
