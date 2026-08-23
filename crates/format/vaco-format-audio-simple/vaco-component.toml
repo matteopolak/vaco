@@ -1,0 +1,151 @@
+# Registry fragment, per the frozen schema in planning/19-parallel-execution.md
+# §3.4. Nine demuxers, nine muxers — one crate, one fragment.
+
+[[component]]
+kind       = "demuxer"
+name       = "wav"
+long_name  = "WAV / WAVE (Waveform Audio)"
+feature    = "demux-wav"
+ctor       = "vaco_format_audio_simple::wav::DEMUXER"
+extensions = "wav"
+mime_types = "audio/x-wav,audio/wav"
+
+[[component]]
+kind       = "muxer"
+name       = "wav"
+long_name  = "WAV / WAVE (Waveform Audio)"
+feature    = "mux-wav"
+ctor       = "vaco_format_audio_simple::wav::MUXER"
+extensions = "wav"
+
+[[component]]
+kind       = "demuxer"
+name       = "w64"
+long_name  = "Sony Wave64"
+feature    = "demux-w64"
+ctor       = "vaco_format_audio_simple::w64::DEMUXER"
+extensions = "w64"
+
+[[component]]
+kind       = "muxer"
+name       = "w64"
+long_name  = "Sony Wave64"
+feature    = "mux-w64"
+ctor       = "vaco_format_audio_simple::w64::MUXER"
+extensions = "w64"
+
+[[component]]
+kind       = "demuxer"
+name       = "aiff"
+long_name  = "Audio IFF"
+feature    = "demux-aiff"
+ctor       = "vaco_format_audio_simple::aiff::DEMUXER"
+extensions = "aif,aiff,afc,aifc"
+mime_types = "audio/aiff,audio/x-aiff"
+
+[[component]]
+kind       = "muxer"
+name       = "aiff"
+long_name  = "Audio IFF"
+feature    = "mux-aiff"
+ctor       = "vaco_format_audio_simple::aiff::MUXER"
+extensions = "aif,aiff"
+
+[[component]]
+kind       = "demuxer"
+name       = "caf"
+long_name  = "Apple CAF (Core Audio Format)"
+feature    = "demux-caf"
+ctor       = "vaco_format_audio_simple::caf::DEMUXER"
+extensions = "caf"
+mime_types = "audio/x-caf"
+
+[[component]]
+kind       = "muxer"
+name       = "caf"
+long_name  = "Apple CAF (Core Audio Format)"
+feature    = "mux-caf"
+ctor       = "vaco_format_audio_simple::caf::MUXER"
+extensions = "caf"
+
+[[component]]
+kind       = "demuxer"
+name       = "au"
+long_name  = "Sun AU"
+feature    = "demux-au"
+ctor       = "vaco_format_audio_simple::au::DEMUXER"
+extensions = "au,snd"
+mime_types = "audio/basic"
+
+[[component]]
+kind       = "muxer"
+name       = "au"
+long_name  = "Sun AU"
+feature    = "mux-au"
+ctor       = "vaco_format_audio_simple::au::MUXER"
+extensions = "au"
+
+[[component]]
+kind       = "demuxer"
+name       = "voc"
+long_name  = "Creative Voice"
+feature    = "demux-voc"
+ctor       = "vaco_format_audio_simple::voc::DEMUXER"
+extensions = "voc"
+mime_types = "audio/x-voc"
+
+[[component]]
+kind       = "muxer"
+name       = "voc"
+long_name  = "Creative Voice"
+feature    = "mux-voc"
+ctor       = "vaco_format_audio_simple::voc::MUXER"
+extensions = "voc"
+
+[[component]]
+kind       = "demuxer"
+name       = "sox"
+long_name  = "SoX (Sound eXchange) native"
+feature    = "demux-sox"
+ctor       = "vaco_format_audio_simple::sox::DEMUXER"
+extensions = "sox"
+
+[[component]]
+kind       = "muxer"
+name       = "sox"
+long_name  = "SoX (Sound eXchange) native"
+feature    = "mux-sox"
+ctor       = "vaco_format_audio_simple::sox::MUXER"
+extensions = "sox"
+
+[[component]]
+kind       = "demuxer"
+name       = "ircam"
+long_name  = "Berkeley/IRCAM/CARL Sound Format"
+feature    = "demux-ircam"
+ctor       = "vaco_format_audio_simple::ircam::DEMUXER"
+extensions = "sf"
+
+[[component]]
+kind       = "muxer"
+name       = "ircam"
+long_name  = "Berkeley/IRCAM/CARL Sound Format"
+feature    = "mux-ircam"
+ctor       = "vaco_format_audio_simple::ircam::MUXER"
+extensions = "sf"
+
+[[component]]
+kind       = "demuxer"
+name       = "rso"
+long_name  = "Lego Mindstorms RSO"
+feature    = "demux-rso"
+ctor       = "vaco_format_audio_simple::rso::DEMUXER"
+extensions = "rso"
+
+[[component]]
+kind       = "muxer"
+name       = "rso"
+long_name  = "Lego Mindstorms RSO"
+feature    = "mux-rso"
+ctor       = "vaco_format_audio_simple::rso::MUXER"
+extensions = "rso"

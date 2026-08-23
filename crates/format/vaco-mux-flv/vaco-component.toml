@@ -1,0 +1,10 @@
+# Registry fragment, per the frozen schema in planning/19-parallel-execution.md
+# §3.4.
+
+[[component]]
+kind       = "muxer"
+name       = "flv"
+long_name  = "FLV (Flash Video)"
+feature    = "mux-flv"
+ctor       = "vaco_mux_flv::MUXER"
+extensions = "flv"

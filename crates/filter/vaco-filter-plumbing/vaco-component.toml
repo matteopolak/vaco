@@ -1,0 +1,149 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Twenty of the 24 T1 plumbing/sources/sinks/cutting filters FT-4.3 (GitHub
+# #467) names. `buffer`/`abuffer`/`buffersink`/`abuffersink` are not
+# registered here — see this crate's `lib.rs` doc for why: they already exist
+# as `vaco-filter-core`'s own privileged Graph I/O API, not as leaf filters.
+#
+# Each `ctor` names the per-filter `pub const DESC: FilterDesc`; runtime
+# instantiation goes through `vaco_filter_plumbing::registry::PlumbingRegistry`,
+# a `vaco_filter_graph::registry::FilterRegistry` impl.
+
+[[component]]
+kind = "filter"
+name = "acopy"
+long_name = "Copy the input audio unchanged to the output"
+ctor = "vaco_filter_plumbing::passthrough::acopy::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "anull"
+long_name = "Pass the source unchanged to the output"
+ctor = "vaco_filter_plumbing::passthrough::anull::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "anullsink"
+long_name = "Do absolutely nothing with the input audio"
+ctor = "vaco_filter_plumbing::nullsink::audio::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "anullsrc"
+long_name = "Null audio source, return empty audio frames"
+ctor = "vaco_filter_plumbing::nullsrc::audio::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "aselect"
+long_name = "Select audio frames to pass in output"
+ctor = "vaco_filter_plumbing::select::audio::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "asettb"
+long_name = "Set timebase for the audio output link"
+ctor = "vaco_filter_plumbing::settb::audio::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "asetpts"
+long_name = "Set PTS for the output audio frame"
+ctor = "vaco_filter_plumbing::setpts::audio::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "asplit"
+long_name = "Pass on the audio input to N audio outputs"
+ctor = "vaco_filter_plumbing::split::audio::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "atrim"
+long_name = "Pick one continuous section from the input, drop the rest"
+ctor = "vaco_filter_plumbing::trim::audio::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "color"
+long_name = "Provide an uniformly colored input"
+ctor = "vaco_filter_plumbing::color::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "concat"
+long_name = "Concatenate audio and video streams"
+ctor = "vaco_filter_plumbing::concat::DESC"
+
+[[component]]
+kind = "filter"
+name = "copy"
+long_name = "Copy the input video unchanged to the output"
+ctor = "vaco_filter_plumbing::passthrough::copy::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "null"
+long_name = "Pass the source unchanged to the output"
+ctor = "vaco_filter_plumbing::passthrough::null::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "nullsink"
+long_name = "Do absolutely nothing with the input video"
+ctor = "vaco_filter_plumbing::nullsink::video::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "nullsrc"
+long_name = "Null video source, return unprocessed video frames"
+ctor = "vaco_filter_plumbing::nullsrc::video::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "select"
+long_name = "Select video frames to pass in output"
+ctor = "vaco_filter_plumbing::select::video::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "settb"
+long_name = "Set timebase for the video output link"
+ctor = "vaco_filter_plumbing::settb::video::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "setpts"
+long_name = "Set PTS for the output video frame"
+ctor = "vaco_filter_plumbing::setpts::video::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "split"
+long_name = "Pass on the input to N video outputs"
+ctor = "vaco_filter_plumbing::split::video::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "trim"
+long_name = "Pick one continuous section from the input, drop the rest"
+ctor = "vaco_filter_plumbing::trim::video::DESC"
+media = "video"

@@ -410,6 +410,70 @@ M4 is an **error, never a repair**. Silently repairing a non-monotonic DTS here
 is how files with subtly wrong durations get made, and the caller is in a far
 better position to decide what to do about it.
 
+N6 and N7 are the two escapes from the queue. `interleave_none` is the
+pass-through policy MPEG-TS wants — it multiplexes at the 188-byte level against
+a PCR clock, so anything the queue reordered first would only be reordered again
+— and `Muxer::interleave` is the defaulted hook a container overrides to install
+it, or any other policy. `MuxWriter::write_frame` is the caller-ordered path;
+M4 still applies to it, so a caller that gets the order wrong is told.
+
+### The muxer state machine
+
+`MuxBuilder` and `MuxWriter` (`src/mux.rs`) own the `Box<dyn Muxer>` and expose
+only the operations that are legal next:
+
+```
+MuxBuilder ──add_stream──▶ MuxBuilder ──open()──▶ MuxWriter ──write_packet──▶ MuxWriter
+                                       init+header    │
+                                                      └──finish()──▶ MuxReport
+                                                          drain+trailer
+```
+
+`MuxBuilder` has no `write_packet`; `MuxWriter` has no `add_stream`; `open` and
+`finish` **consume** what they transition from. So "the header is written
+exactly once" and "no packet after the trailer" are not runtime checks that a
+caller might skip — they have no spelling that compiles.
+
+**Why a wrapper and not a trait change.** Five container crates were being
+written against `Muxer` in parallel when this landed. A trait change lands
+underneath all five at once, so every addition is a *defaulted* method
+(`init`, `interleave`, `check_bitstream`, `query_codec`, `write_flush`) or a new
+type. The wrapper gives callers the guarantee without asking implementors for
+anything. A phantom typestate (`Mux<Building>`) would give the same guarantee
+and put a type parameter in every signature that touches a muxer, buying nothing
+that a consuming transition does not. Runtime checks on the trait is what we had:
+`VacoRawMuxer` still carries its own `header_written`/`trailer_written` guards,
+and five more containers would have meant five more copies, each with its own
+error string.
+
+The honest cost: an implementor can still be driven directly through
+`dyn Muxer` and get the old, unpoliced behaviour. The wrapper is the supported
+path, not the only one — and `tests/mux_session.rs` asserts the two produce
+byte-identical files, so adopting it is a no-op for an existing caller.
+
+**The rule numbering.** `planning/18-formats.md` §8.2 names FW-08 as "M1–M28"
+and §7.1 repeats the span, but §1.7.7 defines **M1–M7** and nothing else. M8
+upward do not exist in the plan under any spelling. The table in `src/mux.rs`'s
+module doc is therefore *ours*, with each row citing the plan section that
+motivates it; if a real M8–M28 list turns up, renumber against it rather than
+re-deriving.
+
+### Bitstream-filter-in-muxer (§1.10)
+
+`Muxer::check_bitstream` is asked on a stream's first packet and the answer is
+cached for the file (B3). `BitstreamAction::Insert { name }` stacks a filter and
+re-asks, to `MAX_BSF_DEPTH` (4); asking for the same filter twice is treated as a
+loop and refused. Filters arrive through `BsfProvider`, the mux-side mirror of
+`ParserProvider` and the same D14.1 seam — no format crate names a `vaco-bsf-*`
+crate. `NoBsfs` is the default and **errors** when a filter is requested rather
+than passing the packet through unfiltered: a container that needed
+`aac_adtstoasc` and did not get it produces a file no player opens, and that is
+much cheaper to discover at mux time. `fflags -autobsf` disables the stage (B1).
+
+`global_header_action` is the one condition every `GLOBALHEADER` container
+shares — extradata wanted out of band and absent means `extract_extradata` —
+written once so each muxer does not re-derive it.
+
 ---
 
 ## How to change it
@@ -434,6 +498,18 @@ better position to decide what to do about it.
   whole list. If the reference does not have the option, say so in its doc
   comment — `recursion_limit` is the one such field today.
 * **Do not add a `HashMap` anywhere.** Iteration order is output order (DD2).
+* **Adding a `Muxer` method.** Default it. Container crates are written against
+  this trait in parallel with the core, and an undefaulted method breaks all of
+  them at once. If a method genuinely cannot be defaulted, that is a
+  coordination event, not an edit.
+* **`Muxer::query_codec` is `&self` and object-safe**, unlike plan 18 §1.3's
+  `where Self: Sized` spelling. A `Self: Sized` method cannot be called through
+  `dyn Muxer` and every caller in this workspace holds one.
+* **Plan 18 §1.3 spells the flush marker `write_packet(None)`.** We use a
+  separate defaulted `write_flush`, because changing `write_packet`'s signature
+  was the one thing that could not be done while five muxers were being written
+  against it. It is gated on `FormatFlags::ALLOW_FLUSH`, so a muxer that would
+  read `None` as end-of-stream never sees one.
 * **Gotcha — `TS_DISCONT` is load-bearing in three places**: it suppresses the
   monotonic repair, it disables bisection, and it changes what
   `SeekStrategy::choose` returns. Setting it on a format that does not need it
@@ -469,6 +545,51 @@ choice rather than presented as reproduction:
 | `DEFAULT_DURATION_PROBESIZE` | 250 KiB | Ours. The reference's value is unmeasured (VERIFY-T4) |
 | `MIN_SEEK_STEP` | 64 KiB | Ours. Bounds the bisection and the iteration count |
 | `PacketIndex` decimation | drop every second non-key, then every second key | Ours. Not observable through any output field |
+
+### `avoid_negative_ts`, measured
+
+Four modes and an `auto` whose resolution depends on the container, so it was
+measured rather than recalled. Method: mux the same input at each of the four
+values and **compare the output bytes**, because reading a timestamp back
+through `ffprobe` measures the *demuxer* — an MP4 written with a negative start
+reads back as `-0.040000` rather than `-1.000000` because the edit list is
+applied on the way out (plan 13 §1b's "the field you read back is not the field
+you set").
+
+```sh
+ffmpeg -y -i src.mp4 -c copy -copyts -fflags +bitexact \
+       -output_ts_offset -1 -avoid_negative_ts MODE -f FMT out
+```
+
+| `auto` resolves to | Muxers measured (ffmpeg 8.1) |
+|---|---|
+| `disabled` (container declares `TS_NEGATIVE`) | `mov`, `mp4`, `ismv`, `3gp`, `psp`, `ipod` |
+| `make_non_negative` | `matroska`, `mpegts`, `avi`, `asf`, `wtv`, `nut` |
+| unobservable — all four modes byte-identical | `wav`, `adts` (they store no timestamps) |
+
+Two further results:
+
+* **`make_zero` and `make_non_negative` differ only when the first timestamp is
+  positive.** At `-output_ts_offset +5`, `make_non_negative` produced bytes
+  identical to `disabled` while `make_zero` shifted back to zero. With a
+  negative first timestamp the two are identical. That is the modelled
+  behaviour, now measured in both directions.
+* **The shift is derived from `min(pts, dts)`, not from `dts`.** On an mpeg4
+  stream encoded `-bf 2` whose first packet reports `dts=0.000000
+  pts=-0.040000`, a dts-only rule shifts by nothing; every one of mp4, matroska,
+  mpegts, nut and avi shifted by exactly `+0.040000`. `MuxTimestamps` was
+  computing the offset from DTS alone and now takes the minimum. Only the
+  pts-negative branch was observed directly — the toolchain to hand could not
+  construct `dts < 0 <= pts` from a real file — and `min` degrades to the old
+  behaviour whenever `pts == dts`, which is every packet of every stream that
+  does not reorder.
+
+A measurement error worth recording, since it nearly became a finding:
+`-fflags +bitexact` placed **before** `-i` sets the flag on the *input*, and
+Matroska then writes random `SegmentUID`/`TrackUID` values, so two runs of the
+same command differ in 60 bytes. Placed as an output option it is deterministic.
+The flag is positional and the wrong position looks like nondeterminism in the
+muxer.
 
 `container_start_time` implements the plan's stated **minimum**-over-streams
 rule. The plan marks min-versus-max as VERIFY-T2 and we have not measured it, so
@@ -681,8 +802,14 @@ descending order of how much they cost.
 
 ## Testing
 
-* **120 tests**: 92 unit, 14 named integration cases, 13 property tests, 1
-  doctest.
+* **180 tests**: 138 unit, 23 named integration cases (14 `roundtrip.rs`, 9
+  `mux_session.rs`), 19 property tests, 1 doctest.
+* **The state machine's guarantees are not tested, because they are not
+  testable.** `MuxBuilder` has no `write_packet` and `MuxWriter` has no
+  `add_stream`, so the illegal sequences have no spelling that compiles.
+  `tests/mux_session.rs` covers what is left: that the M-chain reaches a real
+  muxer, that the file reads back, and that a session-written file is
+  byte-identical to a directly-written one given the same base.
 * **The worked example is the proof.** `vacoraw` is muxed and demuxed end to
   end, with the index path, the bisection path and the byte path each covered by
   a test that fails if the strategy is not the one taken.
@@ -698,7 +825,12 @@ descending order of how much they cost.
   `format_interleave`, `format_timestamps`. The last two fuzz a *call sequence*
   rather than a byte stream, the same shape as `codec_send_receive`, because the
   ordering and timestamp machinery is shared by every muxer and demuxer in the
-  project.
+  project. `format_interleave` has a second phase that drives the same op
+  sequence through `MuxBuilder` over a real muxer and a real sink, so the state
+  machine, the M6 filter stage and the muxer's own byte writing are reachable
+  from one corpus: `exit=0 execs=#1916517`, `find fuzz/artifacts -type f` empty.
+  `format_timestamps` after the same change: `exit=0 execs=#3440192`, artifacts
+  empty.
 
 ### What the generated tests found
 

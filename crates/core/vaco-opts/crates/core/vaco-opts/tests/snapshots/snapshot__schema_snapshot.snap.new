@@ -1,0 +1,41 @@
+---
+source: crates/core/vaco-opts/tests/snapshot.rs
+assertion_line: 63
+expression: "render(schema_of::<AllKinds>())"
+---
+AllKinds — every option base in one place
+  flags        flags        ED.V.......  engine flags (aka tflags) (default 0)
+     low_delay    1                  low delay
+     bitexact     2                  bit-exact output
+     unaligned    4                  unaligned access permitted
+  i            int          ...V.....T.  an int (default 0) (from -1000 to 1000)
+  i64          int64        ...V.......  an int64 (default 0) (from -9223372036854776000 to 9223372036854776000)
+  u            uint         ...V.......  a uint (default 0) (from 0 to 100)
+  u64          uint64       ...V.......  a uint64 (default 0)
+  d            double       ...V.......  a double (default 0.5) (from -1 to 1)
+  f            float        ...V.......  a float (default 0.25)
+  b            boolean      ...V.......  a bool (default false)
+  tri          boolean      ...V.......  a tri-state bool
+  s            string       ...V.......  a string
+  r            rational     ...V.......  a rational
+  bin          binary       ...V.......  opaque bytes
+  dict         dictionary   ...V.......  a nested dictionary
+  size         image_size   ...V.......  an image size
+  pixfmt       pix_fmt      ...V.......  a pixel format
+  samplefmt    sample_fmt   ....A......  a sample format
+  chlayout     channel_layout ....A......  a channel layout
+  rate         video_rate   ...V.......  a frame rate
+  dur          duration     ...V.......  a duration
+  colour       color        ...V.......  a colour
+  method       int          ...V.......  a named method (default none)
+     none         0                  no dithering
+     rectangular  1                  rectangular dither
+     triangular   2                  triangular dither
+     shibata      17                 Shibata noise shaping
+  arr          [int]        ...V.......  an int array
+  sarr         [string]     ...V.......  a string array
+  opt_i        int64        ...V.......  an optional int64
+
+ChildOpts — a nested object
+  child_gain   double       ....A....T.  gain (default 1.0) (from 0 to 10)
+  child_label  string       ....A......  label

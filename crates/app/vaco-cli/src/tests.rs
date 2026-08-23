@@ -270,13 +270,30 @@ fn h_swallows_the_next_token_even_when_it_looks_like_an_option() {
     );
 }
 
-// ---------------------------------------------------------- the no-muxer wall
+// ------------------------------------------------- reading without writing
 
 #[test]
 fn an_output_this_build_can_read_but_not_write_says_so() {
+    // The extension comes from the registry rather than being written in:
+    // this test named `mkv`, and the day the Matroska muxer landed it failed
+    // — on success. What it is really about is the wording used whenever a
+    // read-only format is asked to be an output.
+    let Some(ext) = vaco_registry::demuxers()
+        .iter()
+        .filter(|d| vaco_registry::muxer_by_name(d.name).is_none())
+        .filter_map(|d| d.extensions.first().copied())
+        .find(|e| {
+            vaco_registry::muxers_for_extension(&format!("x.{e}"))
+                .next()
+                .is_none()
+        })
+    else {
+        return;
+    };
     let f = fixture(&four_track_file());
-    let r = go(&["-i", &f.path, "-c", "copy", "out.mkv"]);
-    assert_eq!(r.code.code(), 8);
+    let out = format!("out.{ext}");
+    let r = go(&["-i", &f.path, "-c", "copy", &out]);
+    assert_eq!(r.code.code(), 8, "{ext}: {}", r.message());
     assert!(
         r.message()
             .contains("reads that format but cannot write it"),

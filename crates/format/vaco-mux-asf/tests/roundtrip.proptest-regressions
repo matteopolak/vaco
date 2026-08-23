@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc ba2839ed8fb2873fc417e8d6d782033139dfcd5d266d83ff4855f18fd964d920 # shrinks to packet_size = 1725, payload_lens = [0, 1698, 1698, 1698, 1698, 1698, 0, 1698, 0, 1698, 1698]

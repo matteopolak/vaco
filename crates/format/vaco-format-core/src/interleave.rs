@@ -367,6 +367,38 @@ pub fn interleave_per_dts(
     Ok(queue.next(flush))
 }
 
+/// The N7 pass-through policy: never buffer, never reorder.
+///
+/// MPEG-TS does not interleave in the queue sense — it multiplexes at the
+/// 188-byte packet level against a PCR clock, so the real scheduling lives in
+/// the muxer and anything this queue did first would be undone. The same
+/// applies to any muxer whose output order is fixed by the caller: N6's
+/// `write_frame` path, and the segmenting muxers driving a child muxer.
+///
+/// R26 still applies — [`MuxTimestamps::apply`] has already run, so a
+/// non-monotonic DTS was refused before it reached here.
+///
+/// # Errors
+///
+/// Never. The signature matches [`interleave_per_dts`] so the two are
+/// interchangeable as a [`crate::Muxer::interleave`] body.
+pub fn interleave_none(
+    queue: &mut InterleaveQueue,
+    pkt: Option<Packet>,
+    flush: bool,
+) -> Result<Option<Packet>> {
+    // A policy may be swapped at runtime, so honour anything an earlier
+    // buffering policy left behind before passing new packets straight through.
+    if let Some(held) = queue.next(true) {
+        if let Some(p) = pkt {
+            queue.push(p)?;
+        }
+        return Ok(Some(held));
+    }
+    let _ = flush;
+    Ok(pkt)
+}
+
 /// The M1 to M4 chain, applied before a packet reaches the interleave queue.
 ///
 /// One instance per muxer. It holds the single output offset and the per-stream
@@ -485,12 +517,39 @@ impl MuxTimestamps {
         Ok(())
     }
 
+    /// M3's offset, from the first packet across all streams.
+    ///
+    /// # The reference derives it from `min(pts, dts)`, not from `dts`
+    ///
+    /// Measured, ffmpeg 8.1, an mpeg4 stream encoded `-bf 2` whose first packet
+    /// in decode order reports `dts=0.000000 pts=-0.040000`:
+    ///
+    /// ```sh
+    /// ffmpeg -y -i bf.mp4 -c copy -copyts -fflags +bitexact \
+    ///        -avoid_negative_ts make_non_negative -f FMT out
+    /// ```
+    ///
+    /// DTS is already non-negative, so a dts-only rule shifts by nothing. Every
+    /// one of mp4, matroska, mpegts, nut and avi shifted by **+0.040000** —
+    /// exactly `-pts` — putting PTS at zero and DTS at 0.040000. So the trigger
+    /// and the magnitude both come from whichever of the two is smaller.
+    ///
+    /// Only the pts-negative branch was observed directly; the toolchain to
+    /// hand could not construct `dts < 0 <= pts` from a real file. `min` covers
+    /// both and degrades to the old behaviour whenever `pts == dts`, which is
+    /// every packet of every stream that does not reorder.
     fn establish_offset(&mut self, pkt: &Packet, to: TimeBase) {
         if self.offset_us.is_some() || self.policy == AvoidNegativeTs::Disabled {
             self.offset_us.get_or_insert(0);
             return;
         }
-        let Some(first_us) = pkt.dts.rescale(to, TIME_BASE_Q, Rounding::Down).ticks() else {
+        let dts_us = pkt.dts.rescale(to, TIME_BASE_Q, Rounding::Down).ticks();
+        let pts_us = pkt.pts.rescale(to, TIME_BASE_Q, Rounding::Down).ticks();
+        let earliest = match (pts_us, dts_us) {
+            (Some(p), Some(d)) => Some(p.min(d)),
+            (p, d) => p.or(d),
+        };
+        let Some(first_us) = earliest else {
             return;
         };
         self.offset_us = Some(match self.policy {

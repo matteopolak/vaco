@@ -1,0 +1,412 @@
+//! AIFF and AIFF-C (`AIFC`).
+//!
+//! Apple *Audio Interchange File Format* v1.3, and *AIFF-C* (the
+//! compression-carrying extension of the same spec). Big-endian throughout,
+//! including the audio data itself — the one thing every one of this
+//! crate's other formats except CAF and AU gets to skip.
+//!
+//! # Layout
+//!
+//! `FORM` + be32 size + form type (`AIFF` or `AIFC`), then IFF chunks (big-
+//! endian size, one pad byte when odd — the same grammar RIFF uses, just
+//! with the size field big-endian instead of little):
+//!
+//! ```text
+//! COMM (AIFF, 18 bytes):
+//!   numChannels:be16  numSampleFrames:be32  sampleSize:be16
+//!   sampleRate:extended80 (10 bytes, see crate::extended80)
+//!
+//! COMM (AIFC, >= 22 bytes): the above, plus
+//!   compressionType:FourCC  compressionName:pstring (1-byte length prefix)
+//!
+//! SSND:
+//!   offset:be32  blockSize:be32  soundData[...]
+//! ```
+//!
+//! # Measured: plain `AIFF` means big-endian signed integer PCM, full stop
+//!
+//! `ffmpeg -c:a pcm_s24be -f aiff` writes form type `AIFF` (not `AIFC`) with
+//! an 18-byte `COMM` — no `compressionType` at all — while every codec that
+//! is not big-endian signed integer PCM (`pcm_s16le` → `sowt`, `pcm_f32be` →
+//! `fl32`, `pcm_f64be` → `fl64`, `pcm_u8` → `raw `, `pcm_alaw`/`pcm_mulaw` →
+//! `alaw`/`ulaw`) gets form type `AIFC` with the compression type naming it.
+//! So `COMM`'s length alone (18 vs. longer) tells a reader which case it is
+//! in without needing to inspect the form type text, and this module uses
+//! exactly that.
+//!
+//! # What is not read
+//!
+//! `MARK`/`INST` (cue points and instrument loop data) and a leading/trailing
+//! `ID3 ` chunk are not parsed — deferred, per the brief's "structurally
+//! present but untested" allowance. `ANNO`/`COMT`/`NAME`/`AUTH`/`(c) `
+//! text chunks likewise.
+
+use vaco_codec_core::{CodecId, CodecParameters};
+use vaco_core::{Error, Rational, Result};
+use vaco_format_core::probe::{ProbeData, ProbeScore};
+use vaco_format_core::{
+    Demuxer, DemuxerDesc, FormatFlags, FormatOptions, Muxer, MuxerDesc, ParserProvider, SeekFlags,
+    SeekTarget, Stream,
+};
+use vaco_io::{IoContext, IoOptions, IoWriter, MediaSink, MediaSource};
+use vaco_limits::{Budget, Limits};
+use vaco_packet::Packet;
+
+use crate::extended80;
+use crate::pcm::{self, PcmLayout, RawPcmDemuxer};
+
+const FORM: [u8; 4] = *b"FORM";
+const AIFF: [u8; 4] = *b"AIFF";
+const AIFC: [u8; 4] = *b"AIFC";
+const COMM: [u8; 4] = *b"COMM";
+const SSND: [u8; 4] = *b"SSND";
+
+/// **Measured**: `ffprobe` 8.1's `format.probe_score` on a plain `ffmpeg -f
+/// aiff` file with no extension is `100`.
+pub const AIFF_SCORE: ProbeScore = ProbeScore::MAX;
+
+#[must_use]
+pub fn probe(data: &ProbeData<'_>) -> ProbeScore {
+    if data.tag(0) != Some(FORM) {
+        return ProbeScore::NONE;
+    }
+    match data.tag(8) {
+        Some(f) if f == AIFF || f == AIFC => AIFF_SCORE,
+        _ => ProbeScore::NONE,
+    }
+}
+
+pub const DEMUXER: DemuxerDesc = DemuxerDesc {
+    name: "aiff",
+    long_name: "Audio IFF",
+    extensions: &["aif", "aiff", "afc", "aifc"],
+    mime_types: &["audio/aiff", "audio/x-aiff"],
+    flags: FormatFlags::GENERIC_INDEX,
+    probe,
+    open: open_demuxer,
+};
+
+pub const MUXER: MuxerDesc = MuxerDesc {
+    name: "aiff",
+    long_name: "Audio IFF",
+    extensions: &["aif", "aiff"],
+    default_video: None,
+    default_audio: Some(CodecId::Pcm),
+    open: open_muxer,
+};
+
+fn open_demuxer(
+    src: Box<dyn MediaSource>,
+    _parsers: &dyn ParserProvider,
+) -> Result<Box<dyn Demuxer>> {
+    Ok(Box::new(AiffDemuxer::open(src, &FormatOptions::default())?))
+}
+
+fn open_muxer(sink: Box<dyn MediaSink>) -> Result<Box<dyn Muxer>> {
+    Ok(Box::new(AiffMuxer::new(sink)?))
+}
+
+/// The AIFF-C compression types this module has a mapping for.
+fn compression_to_format(
+    tag: [u8; 4],
+    sample_size: u8,
+) -> (
+    Option<CodecId>,
+    Option<vaco_sampfmt::SampleFmt>,
+    Option<u8>,
+    Option<u8>,
+) {
+    match &tag {
+        b"NONE" | b"sowt" | b"SOWT" | b"twos" => {
+            let (fmt, raw) = pcm::sample_fmt_for(sample_size, false);
+            (Some(CodecId::Pcm), fmt, Some(sample_size), raw)
+        }
+        b"fl32" | b"FL32" | b"fl64" | b"FL64" => {
+            let (fmt, raw) = pcm::sample_fmt_for(sample_size, true);
+            (Some(CodecId::Pcm), fmt, Some(sample_size), raw)
+        }
+        b"raw " | b"RAW " => (
+            Some(CodecId::Pcm),
+            Some(vaco_sampfmt::SampleFmt::U8),
+            Some(sample_size),
+            None,
+        ),
+        b"alaw" | b"ALAW" | b"ulaw" | b"ULAW" => (
+            Some(CodecId::Pcm),
+            Some(vaco_sampfmt::SampleFmt::S16),
+            Some(sample_size),
+            None,
+        ),
+        _ => (None, None, Some(0), None),
+    }
+}
+
+#[derive(Debug)]
+pub struct AiffDemuxer {
+    inner: RawPcmDemuxer,
+    budget: Budget,
+}
+
+impl AiffDemuxer {
+    /// # Errors
+    /// [`Error::InvalidData`] if the `FORM`/`AIFF`/`AIFC` signature or the
+    /// `COMM`/`SSND` chunks do not parse.
+    pub fn open(src: Box<dyn MediaSource>, _opts: &FormatOptions) -> Result<Self> {
+        let mut io = IoContext::new(src, &IoOptions::default())?;
+        if io.tag()? != FORM {
+            return Err(Error::InvalidData("aiff: missing FORM signature"));
+        }
+        let _size = io.rb32()?;
+        let form = io.tag()?;
+        if form != AIFF && form != AIFC {
+            return Err(Error::InvalidData("aiff: form type is not AIFF/AIFC"));
+        }
+
+        let mut budget = Budget::new(Limits::permissive());
+        let mut channels = 0u16;
+        let mut sample_size = 0u16;
+        let mut sample_rate = 0u32;
+        let mut compression = *b"NONE";
+        let mut have_comm = false;
+        let mut data_start = 0u64;
+        let mut data_declared: Option<u64> = None;
+
+        while let Ok(id) = io.tag() {
+            let size = io.rb32()?;
+            if id == COMM {
+                let take = usize::try_from(size).unwrap_or(0).min(4096);
+                let mut buf = budget.alloc::<u8>(take)?;
+                io.read_exact(&mut buf)?;
+                if size % 2 == 1 {
+                    io.skip(1)?;
+                }
+                let mut r = vaco_bitstream::ByteReader::new(&buf);
+                channels = r.be16();
+                let _frames = r.be32();
+                sample_size = r.be16();
+                let rate_bytes = r.bytes(10);
+                sample_rate = extended80::to_f64(rate_bytes).round() as u32;
+                if buf.len() >= 22 {
+                    let ct = r.bytes(4);
+                    compression = <[u8; 4]>::try_from(ct).unwrap_or(*b"NONE");
+                }
+                have_comm = true;
+            } else if id == SSND {
+                let offset = io.rb32()?;
+                let _block_size = io.rb32()?;
+                data_start = io.pos().saturating_add(u64::from(offset));
+                io.skip(u64::from(offset))?;
+                let payload = u64::from(size).saturating_sub(8);
+                data_declared = Some(payload);
+                break;
+            } else {
+                io.skip(u64::from(size).saturating_add(u64::from(size % 2)))?;
+            }
+        }
+
+        if !have_comm {
+            return Err(Error::InvalidData("aiff: no COMM chunk"));
+        }
+        let Some(declared_len) = data_declared else {
+            return Err(Error::InvalidData("aiff: no SSND chunk"));
+        };
+
+        let sample_size_u8 = u8::try_from(sample_size.min(255)).unwrap_or(255);
+        let (codec_id, format, bits_coded, bits_raw) = if form == AIFF {
+            let (fmt, raw) = pcm::sample_fmt_for(sample_size_u8, false);
+            (Some(CodecId::Pcm), fmt, Some(sample_size_u8), raw)
+        } else {
+            compression_to_format(compression, sample_size_u8)
+        };
+        let bytes_per_sample = u32::from(sample_size_u8.div_ceil(8).max(1));
+        let bytes_per_frame = u32::from(channels.max(1)) * bytes_per_sample;
+
+        let mut params: CodecParameters = pcm::params(
+            PcmLayout::new(sample_rate.max(1), channels, bytes_per_frame),
+            codec_id,
+            format,
+            bits_coded,
+            bits_raw,
+        );
+        params.codec_tag = Some(compression);
+
+        let mut stream = pcm::new_stream(Rational::new(1, sample_rate.max(1).cast_signed()));
+        stream.params = params;
+
+        let inner = RawPcmDemuxer::new(
+            io,
+            stream,
+            data_start,
+            Some(declared_len),
+            bytes_per_frame.max(1),
+        );
+        Ok(Self {
+            inner,
+            budget: Budget::new(Limits::permissive()),
+        })
+    }
+}
+
+impl Demuxer for AiffDemuxer {
+    fn streams(&self) -> &[Stream] {
+        self.inner.streams()
+    }
+    fn read_packet(&mut self) -> Result<Packet> {
+        self.inner.read_packet(&mut self.budget)
+    }
+    fn seek(&mut self, target: SeekTarget, flags: SeekFlags) -> Result<()> {
+        self.inner.seek(target, flags)
+    }
+    fn duration(&self) -> Option<vaco_core::Duration> {
+        self.inner.duration()
+    }
+}
+
+/// Writes plain big-endian signed integer PCM in a plain `AIFF` form (16-bit
+/// and 8-bit unsigned via `AIFC`/`raw `). Float and little-endian PCM
+/// (`fl32`/`fl64`/`sowt`) are not yet emitted — see
+/// `docs/format/vaco-format-audio-simple.md`.
+#[derive(Debug)]
+pub struct AiffMuxer {
+    out: IoWriter,
+    stream: Option<MuxStream>,
+    header_written: bool,
+    frames_written: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MuxStream {
+    sample_rate: u32,
+    channels: u16,
+    sample_size: u16,
+    bytes_per_frame: u32,
+}
+
+impl AiffMuxer {
+    /// # Errors
+    /// Propagates transport failure from `sink`.
+    pub fn new(sink: Box<dyn MediaSink>) -> Result<Self> {
+        Ok(Self {
+            out: IoWriter::new(sink, &IoOptions::default())?,
+            stream: None,
+            header_written: false,
+            frames_written: 0,
+        })
+    }
+}
+
+impl Muxer for AiffMuxer {
+    fn add_stream(&mut self, params: &CodecParameters) -> Result<u32> {
+        if self.stream.is_some() {
+            return Err(Error::Unsupported("aiff: only one stream is supported"));
+        }
+        let audio = params
+            .audio
+            .as_ref()
+            .ok_or(Error::InvalidData("aiff: not an audio stream"))?;
+        let format = audio
+            .format
+            .ok_or(Error::Unsupported("aiff: sample format must be known"))?;
+        if format.is_float() || format.is_planar() {
+            return Err(Error::Unsupported(
+                "aiff: only big-endian integer PCM is supported for writing",
+            ));
+        }
+        let channels = audio.layout.as_ref().map_or(1, |l| l.channels).max(1) as u16;
+        let sample_size = format.bits_per_sample() as u16;
+        self.stream = Some(MuxStream {
+            sample_rate: audio.sample_rate.max(1),
+            channels,
+            sample_size,
+            bytes_per_frame: u32::from(channels).saturating_mul(format.bytes_per_sample() as u32),
+        });
+        Ok(0)
+    }
+
+    fn write_header(&mut self) -> Result<()> {
+        let s = self
+            .stream
+            .ok_or(Error::InvalidData("aiff: no stream added"))?;
+        self.out.write(&FORM)?;
+        self.out.wb32(0)?; // patched in write_trailer
+        self.out.write(&AIFF)?;
+
+        self.out.write(&COMM)?;
+        self.out.wb32(18)?;
+        self.out.wb16(s.channels)?;
+        self.out.wb32(0)?; // numSampleFrames, patched in write_trailer
+        self.out.wb16(s.sample_size)?;
+        self.out
+            .write(&extended80::from_f64(f64::from(s.sample_rate)))?;
+
+        self.out.write(&SSND)?;
+        self.out.wb32(0)?; // patched in write_trailer
+        self.out.wb32(0)?; // offset
+        self.out.wb32(0)?; // blockSize
+        self.header_written = true;
+        Ok(())
+    }
+
+    fn write_packet(&mut self, packet: &Packet) -> Result<()> {
+        if !self.header_written {
+            return Err(Error::InvalidData("aiff: packet written before the header"));
+        }
+        self.out.write(packet.payload())?;
+        if let Some(s) = self.stream {
+            self.frames_written = self.frames_written.saturating_add(pcm::frames_in(
+                packet.payload().len() as u64,
+                s.bytes_per_frame,
+            ));
+        }
+        Ok(())
+    }
+
+    fn stream_time_base(&self, stream_index: u32) -> Option<Rational> {
+        if stream_index != 0 {
+            return None;
+        }
+        self.stream
+            .map(|s| Rational::new(1, s.sample_rate.cast_signed()))
+    }
+
+    fn write_trailer(&mut self) -> Result<()> {
+        if !self.header_written {
+            return Err(Error::InvalidData(
+                "aiff: trailer written before the header",
+            ));
+        }
+        let Some(s) = self.stream else {
+            return Err(Error::InvalidData("aiff: no stream added"));
+        };
+        if !self.out.is_seekable() {
+            return self.out.flush();
+        }
+        let data_bytes = self
+            .frames_written
+            .saturating_mul(u64::from(s.bytes_per_frame.max(1)));
+        let end = self.out.pos();
+
+        // FORM size: everything after the FORM id+size fields.
+        let form_size = 4 + (8 + 18) + (8 + 8 + data_bytes);
+        self.out.seek(4)?;
+        self.out
+            .wb32(u32::try_from(form_size).unwrap_or(u32::MAX))?;
+
+        // COMM.numSampleFrames: FORM header(12) + COMM tag+size(8) +
+        // channels(2) lands right at it.
+        self.out.seek(4 + 4 + 4 + (4 + 4) + 2)?;
+        self.out
+            .wb32(u32::try_from(self.frames_written).unwrap_or(u32::MAX))?;
+
+        // SSND size (8 header fields + data): FORM header(12) + COMM
+        // tag+size+payload(4+4+18) + SSND tag(4) lands right at SSND's own
+        // size field.
+        let ssnd_size_pos = 4 + 4 + 4 + (4 + 4 + 18) + 4;
+        self.out.seek(ssnd_size_pos)?;
+        self.out
+            .wb32(u32::try_from(8 + data_bytes).unwrap_or(u32::MAX))?;
+
+        self.out.seek(end)?;
+        self.out.flush()
+    }
+}

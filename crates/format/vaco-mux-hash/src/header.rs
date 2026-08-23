@@ -1,0 +1,236 @@
+//! What every muxer in this crate shares: the `#`-comment header block, the
+//! per-stream time base this crate assigns, and turning a [`CodecParameters`]
+//! into the codec-name spelling the header prints.
+//!
+//! # Field widths, verbatim from the reference (ffmpeg 8.1, `LC_ALL=C`)
+//!
+//! `ffmpeg -f lavfi -i testsrc=size=64x64:rate=5:duration=1 -pix_fmt yuv420p
+//! -c:v rawvideo -f framecrc -`, byte-inspected with `od -c` (a plain terminal
+//! capture hides the padding spaces):
+//!
+//! ```text
+//! #software: Lavf62.12.100
+//! #tb 0: 1/5
+//! #media_type 0: video
+//! #codec_id 0: rawvideo
+//! #dimensions 0: 64x64
+//! #sar 0: 1/1
+//! 0,          0,          0,        1,     6144, 0xb907b704
+//! ```
+//!
+//! and, for an audio stream in the same run, `#dimensions`/`#sar` are replaced
+//! by `#sample_rate 0: 44100` / `#channel_layout_name 0: mono`.
+//!
+//! `framemd5`/`framehash` print three more header lines and a column header
+//! that `framecrc` does not have at all (measured on the same command with
+//! `-f framemd5`):
+//!
+//! ```text
+//! #format: frame checksums
+//! #version: 2
+//! #hash: MD5
+//! #software: Lavf62.12.100
+//! ⋮
+//! #stream#, dts,        pts, duration,     size, hash
+//! ```
+//!
+//! `streamhash` has no header at all — its output is bare `stream,type,ALGO=hex`
+//! lines, nothing else.
+
+use core::fmt::Write as _;
+
+use vaco_codec_core::{CodecId, CodecParameters};
+use vaco_core::{MediaType, Rational, Result, TimeBase};
+use vaco_io::IoWriter;
+
+/// This crate's own `#software` identity.
+///
+/// The reference prints its own `Lavf<version>` build string here, which this
+/// crate cannot and should not imitate — claiming to be a build of ffmpeg
+/// would make the line actively misleading to whatever reads it. A
+/// differential pass over these dumps has to skip this one line on both sides
+/// regardless of what it says, so the exact spelling is not load-bearing; see
+/// `docs/format/vaco-mux-hash.md`.
+pub const SOFTWARE_LINE: &str = "vaco";
+
+/// This crate's opinion of a stream's time base, from its [`CodecParameters`]
+/// alone.
+///
+/// # Why this crate must have an opinion at all
+///
+/// [`vaco_format_core::Muxer::add_stream`] receives only `CodecParameters` —
+/// no time base — and [`vaco_format_core::Muxer::stream_time_base`] is a
+/// getter the *caller* queries, never a value the caller hands back. A muxer
+/// that answers `None` (§ "keep whatever the caller declared") therefore has
+/// no channel of its own to learn what base ended up governing its packets,
+/// which is fine for a muxer that never prints the base — `vaco-mux-raw`'s
+/// `RawMuxer` is exactly that. This crate prints `#tb` and rescales
+/// `Packet::duration` (stored in real microseconds, not stream ticks) back
+/// into ticks for display, so it needs a definite answer, not a shrug.
+///
+/// The reference's own rawvideo/PCM *encoders* set `time_base` to `1/fps` or
+/// `1/sample_rate` before any muxer sees the stream, which is what the header
+/// lines above show (`1/5` for a 5 fps `testsrc`, `1/44100` for 44.1 kHz
+/// audio). Recomputing that same formula from [`CodecParameters`] here
+/// reproduces it exactly for the case these muxers exist for — dumping raw or
+/// copied media — without this crate pretending to be an encoder.
+///
+/// `None` when the codec parameters don't say (frame rate or sample rate is
+/// zero or absent, or the stream is neither audio nor video). Callers of this
+/// function that need a value regardless should use [`display_time_base`],
+/// whose fallback ([`vaco_core::Rational::MICROSECONDS`] — the same one
+/// `vaco_format_core::mux` itself falls back to) this crate's `Muxer` impls
+/// also return from `stream_time_base` verbatim: by construction, whatever
+/// this crate *prints* as a stream's `#tb` is also what M1 actually rescaled
+/// that stream's packets into, so the two can never quietly disagree.
+#[must_use]
+pub fn resolve_time_base(params: &CodecParameters) -> Option<TimeBase> {
+    match params.effective_media_type() {
+        Some(MediaType::Video) => params.video.as_ref().and_then(|v| {
+            let fr = v.frame_rate;
+            (fr.num > 0 && fr.den > 0).then(|| Rational::new(fr.den, fr.num))
+        }),
+        Some(MediaType::Audio) => params.audio.as_ref().and_then(|a| {
+            let sr = i32::try_from(a.sample_rate).ok()?;
+            (sr > 0).then_some(Rational::new(1, sr))
+        }),
+        _ => None,
+    }
+}
+
+/// [`resolve_time_base`], with the display-only fallback described there.
+#[must_use]
+pub fn display_time_base(params: &CodecParameters) -> TimeBase {
+    resolve_time_base(params).unwrap_or(Rational::MICROSECONDS)
+}
+
+/// Per-stream facts the header block needs, gathered once at `add_stream`.
+#[derive(Debug, Clone)]
+pub struct StreamHeader {
+    pub params: CodecParameters,
+    pub time_base: TimeBase,
+}
+
+impl StreamHeader {
+    #[must_use]
+    pub fn new(params: &CodecParameters) -> Self {
+        Self {
+            time_base: display_time_base(params),
+            params: params.clone(),
+        }
+    }
+}
+
+/// Write the `#`-comment block shared by `framecrc`/`framemd5`/`framehash`.
+///
+/// `extra` runs after `#software` and before the per-stream lines — the three
+/// `#format`/`#version`/`#hash` lines for `framemd5`/`framehash`, or nothing
+/// for `framecrc`. Measured: the extra lines come *before* `#software`, not
+/// after — see the module docs' `framemd5` transcript.
+///
+/// # Errors
+///
+/// Whatever [`IoWriter::write`] returns.
+pub fn write_common_header(
+    out: &mut IoWriter,
+    streams: &[StreamHeader],
+    extra: &[String],
+) -> Result<()> {
+    let mut buf = String::new();
+    for line in extra {
+        let _ = writeln!(buf, "{line}");
+    }
+    let _ = writeln!(buf, "#software: {SOFTWARE_LINE}");
+    for (i, st) in streams.iter().enumerate() {
+        let _ = writeln!(buf, "#tb {i}: {}", st.time_base);
+        let media = st.params.effective_media_type();
+        if let Some(m) = media {
+            let _ = writeln!(buf, "#media_type {i}: {}", m.name());
+        }
+        if let Some(id) = st.params.codec_id {
+            let _ = writeln!(buf, "#codec_id {i}: {}", codec_name(id));
+        }
+        match media {
+            Some(MediaType::Video) => {
+                if let Some(v) = &st.params.video {
+                    let _ = writeln!(buf, "#dimensions {i}: {}x{}", v.width, v.height);
+                    let _ = writeln!(buf, "#sar {i}: {}", v.sample_aspect_ratio);
+                }
+            }
+            Some(MediaType::Audio) => {
+                if let Some(a) = &st.params.audio {
+                    let _ = writeln!(buf, "#sample_rate {i}: {}", a.sample_rate);
+                    if let Some(layout) = &a.layout {
+                        let _ = writeln!(buf, "#channel_layout_name {i}: {layout}");
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out.write(buf.as_bytes())
+}
+
+/// `CodecId`'s reference-style name (`h264`, `pcm_s16le`, `rawvideo`, …).
+///
+/// A generic PascalCase-to-`snake_case` conversion, since `CodecId`'s variant
+/// names were themselves chosen to mirror the reference's own spelling (see
+/// `vaco_codec_core`'s crate docs). Measured to hold for every variant checked
+/// against a real probe except one: `SubRip` prints as `subrip`, with no
+/// underscore, so it is special-cased. A variant this crate has not checked
+/// against the reference falls through the generic rule, which is right far
+/// more often than it is wrong (`Mpeg1video` → `mpeg1video`, `AacLatm` →
+/// `aac_latm`, `AmrNb` → `amr_nb`, `AdpcmImaWav` → `adpcm_ima_wav` all match)
+/// but is not a substitute for probing a specific codec this crate has not
+/// exercised yet.
+#[must_use]
+pub fn codec_name(id: CodecId) -> String {
+    if matches!(id, CodecId::SubRip) {
+        return "subrip".to_owned();
+    }
+    let debug = format!("{id:?}");
+    let mut out = String::with_capacity(debug.len() + 4);
+    for (i, ch) in debug.chars().enumerate() {
+        if i > 0 && ch.is_ascii_uppercase() {
+            out.push('_');
+        }
+        out.extend(ch.to_lowercase());
+    }
+    out
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test code")]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codec_name_matches_measured_spellings() {
+        assert_eq!(codec_name(CodecId::H264), "h264");
+        assert_eq!(codec_name(CodecId::Rawvideo), "rawvideo");
+        assert_eq!(codec_name(CodecId::PcmS16le), "pcm_s16le");
+        assert_eq!(codec_name(CodecId::AacLatm), "aac_latm");
+        assert_eq!(codec_name(CodecId::SubRip), "subrip");
+        assert_eq!(codec_name(CodecId::MovText), "mov_text");
+        assert_eq!(codec_name(CodecId::Mpeg1video), "mpeg1video");
+        assert_eq!(codec_name(CodecId::AmrNb), "amr_nb");
+    }
+
+    #[test]
+    fn time_base_follows_frame_rate_and_sample_rate() {
+        let mut p = CodecParameters::video();
+        p.video.as_mut().unwrap().frame_rate = Rational::new(5, 1);
+        assert_eq!(resolve_time_base(&p), Some(Rational::new(1, 5)));
+
+        let mut p = CodecParameters::audio();
+        p.audio.as_mut().unwrap().sample_rate = 44_100;
+        assert_eq!(resolve_time_base(&p), Some(Rational::new(1, 44_100)));
+    }
+
+    #[test]
+    fn an_unknown_rate_falls_back_to_microseconds_for_display_only() {
+        let p = CodecParameters::video();
+        assert_eq!(resolve_time_base(&p), None);
+        assert_eq!(display_time_base(&p), Rational::MICROSECONDS);
+    }
+}

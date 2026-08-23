@@ -1,0 +1,18 @@
+# Registry fragment, per the frozen schema in planning/19-parallel-execution.md
+# §3.4.
+
+[[component]]
+kind       = "demuxer"
+name       = "asf"
+long_name  = "ASF (Advanced / Active Streaming Format)"
+feature    = "demux-asf"
+ctor       = "vaco_demux_asf::DEMUXER"
+extensions = "asf,wmv,wma"
+mime_types = "video/x-ms-asf"
+
+[[component]]
+kind       = "demuxer"
+name       = "asf_o"
+long_name  = "ASF (Advanced / Active Streaming Format)"
+feature    = "demux-asf-o"
+ctor       = "vaco_demux_asf::DEMUXER_O"

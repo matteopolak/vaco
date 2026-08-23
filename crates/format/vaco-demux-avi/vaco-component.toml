@@ -1,0 +1,11 @@
+# Registry fragment, per the frozen schema in planning/19-parallel-execution.md
+# §3.4.
+
+[[component]]
+kind       = "demuxer"
+name       = "avi"
+long_name  = "AVI (Audio Video Interleaved)"
+feature    = "demux-avi"
+ctor       = "vaco_demux_avi::DEMUXER"
+extensions = "avi"
+mime_types = "video/x-msvideo"

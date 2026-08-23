@@ -1,0 +1,408 @@
+//! Non-fragmented muxing: `ftyp`/`mdat`/`moov`, chunked interleave, the
+//! trailer rewrite, and `-movflags faststart`.
+//!
+//! # Layout, and why there is no relocation in the common case
+//!
+//! By default (no `faststart`) `mdat` is written **immediately after `ftyp`**,
+//! directly to the sink, and every sample's absolute file offset is therefore
+//! known the instant it is written — nothing is ever shifted. `moov` is built
+//! afterward, at [`finish`], and appended: this is the same "moov at the end"
+//! shape `ffmpeg 8.1`'s own default `mov` muxer produces.
+//!
+//! `mdat` always uses the 16-byte `largesize` header (`size==1`, then an
+//! 8-byte real size) even for a small file. That is a legal, if slightly
+//! wasteful, ISOBMFF box, and it means the header never has to change size
+//! once written — which matters because [`finish`] patches the size field in
+//! place by seeking back to it.
+//!
+//! # `faststart`
+//!
+//! Putting `moov` *before* `mdat` needs `mdat`'s bytes to already exist when
+//! `moov`'s chunk offsets are computed, and this crate's sink
+//! ([`vaco_io::MediaSink`]) cannot be read back from — there is no way to
+//! "move" already-written bytes without a working read side. So under
+//! `faststart` every sample's payload is buffered in memory (`ProgressiveState::mdat_buf`)
+//! instead of being written to the sink as it arrives; [`finish`] then knows
+//! the whole file's size before it writes a single byte of it. This is a
+//! real memory cost for a large file and is documented as one rather than
+//! hidden — see `docs/format/vaco-mux-mp4.md`.
+//!
+//! Once every sample is buffered, the exact byte length of `moov` depends on
+//! the chunk offsets it carries, and the chunk offsets depend on how long the
+//! prefix (`ftyp`+`moov`+the `mdat` header) is — a fixed point. [`finish`]
+//! resolves it the same way any two-pass writer does: build `moov` assuming a
+//! trial prefix length, and if the built length does not match the trial,
+//! retry with the length just produced. Growing `moov` (by switching a
+//! track's `stco` to `co64`) can only ever push offsets *up*, never back
+//! below the threshold that required `co64` in the first place, so this
+//! converges within a small, bounded number of passes — [`MAX_FASTSTART_PASSES`].
+
+use vaco_core::{Error, Result};
+use vaco_format_isom::fourcc::boxes;
+use vaco_format_isom::writer;
+use vaco_io::IoWriter;
+
+use crate::meta::build_udta;
+use crate::options::MuxOptions;
+use crate::track::TrackState;
+
+/// Bytes of the `largesize` `mdat` header this crate always writes:
+/// `size==1`(4) + `"mdat"`(4) + `largesize`(8).
+const MDAT_HEADER_LEN: u64 = 16;
+
+/// Passes [`finish`]'s faststart fixed point is allowed before giving up —
+/// generous: the size argument in the module docs converges in at most two.
+const MAX_FASTSTART_PASSES: usize = 8;
+
+/// One in-progress chunk: which track it belongs to, where it starts, and how
+/// many samples it holds so far.
+#[derive(Debug, Clone, Copy)]
+struct OpenChunk {
+    track_index: usize,
+    offset: u64,
+    count: u32,
+}
+
+/// Progressive-mode session state, carried by [`crate::mux::MovMuxer`].
+#[derive(Debug)]
+pub struct ProgressiveState {
+    /// Absolute position of the 8-byte `largesize` field, once written.
+    mdat_size_field_at: u64,
+    open_chunk: Option<OpenChunk>,
+    /// `Some` under `faststart`: every sample's payload accumulates here
+    /// instead of being written to the sink, and `offset` fields recorded on
+    /// tracks are relative to the start of this buffer, not the file.
+    mdat_buf: Option<Vec<u8>>,
+}
+
+impl ProgressiveState {
+    /// A fresh session. `mdat_buf` starts `None` regardless of `faststart`;
+    /// [`write_header`] sets it to `Some(Vec::new())` once it knows buffering
+    /// is needed, so this constructor takes no argument at all.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            mdat_size_field_at: 0,
+            open_chunk: None,
+            mdat_buf: None,
+        }
+    }
+}
+
+impl Default for ProgressiveState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// `ftyp`, and either the real `mdat` header (streaming) or nothing yet
+/// (`faststart`, where `mdat`'s bytes are buffered until [`finish`]).
+///
+/// # Errors
+/// Propagates I/O failure.
+pub fn write_header(
+    out: &mut IoWriter,
+    opts: &MuxOptions,
+    state: &mut ProgressiveState,
+) -> Result<()> {
+    out.write(&crate::brand::file_type_box(opts.brand))?;
+    if opts.movflags.contains(crate::options::MovFlags::FASTSTART) {
+        state.mdat_buf = Some(Vec::new());
+    } else {
+        out.write(&1u32.to_be_bytes())?; // size == 1: largesize follows
+        out.write(b"mdat")?;
+        state.mdat_size_field_at = out.pos();
+        out.write(&0u64.to_be_bytes())?; // patched in `finish`
+    }
+    Ok(())
+}
+
+/// Write one sample's payload, recording its offset and updating chunk
+/// grouping: consecutive samples from the same track extend the current
+/// chunk, a track change starts a new one.
+///
+/// # Errors
+/// Propagates I/O failure.
+pub fn write_sample(
+    out: &mut IoWriter,
+    state: &mut ProgressiveState,
+    tracks: &mut [TrackState],
+    track_index: usize,
+    payload: &[u8],
+    dts: i64,
+    cts_offset: i32,
+    is_sync: bool,
+) -> Result<()> {
+    let offset = if let Some(buf) = &mut state.mdat_buf {
+        let at = u64::try_from(buf.len()).unwrap_or(u64::MAX);
+        buf.extend_from_slice(payload);
+        at
+    } else {
+        let at = out.pos();
+        out.write(payload)?;
+        at
+    };
+
+    let same_track = state
+        .open_chunk
+        .is_some_and(|c| c.track_index == track_index);
+    if same_track {
+        if let Some(c) = &mut state.open_chunk {
+            c.count = c.count.saturating_add(1);
+        }
+    } else {
+        close_chunk(state, tracks);
+        state.open_chunk = Some(OpenChunk {
+            track_index,
+            offset,
+            count: 1,
+        });
+    }
+
+    let size =
+        u32::try_from(payload.len()).map_err(|_| Error::Unsupported("mp4: sample too large"))?;
+    let Some(track) = tracks.get_mut(track_index) else {
+        return Err(Error::InvalidData("mp4: packet names an unknown track"));
+    };
+    track.samples.push(crate::track::SampleRecord {
+        offset,
+        size,
+        dts,
+        cts_offset,
+        is_sync,
+    });
+    Ok(())
+}
+
+fn close_chunk(state: &mut ProgressiveState, tracks: &mut [TrackState]) {
+    if let Some(c) = state.open_chunk.take()
+        && let Some(track) = tracks.get_mut(c.track_index)
+    {
+        track.chunks.push(crate::track::ChunkRecord {
+            offset: c.offset,
+            sample_count: c.count,
+        });
+    }
+}
+
+/// Finalise: close the last chunk, write `moov`, and either patch `mdat`'s
+/// size in place (streaming) or write the whole buffered file at once
+/// (`faststart` — this needs no seek at all, since every sample is already
+/// held in memory and the file is written once, in final order).
+///
+/// # Errors
+/// I/O failure. The streaming path patches `mdat`'s size by seeking; on a
+/// sink that cannot seek the placeholder `largesize` is left as `0` rather
+/// than failing the whole mux, the same tradeoff `vaco-mux-avi` makes for
+/// its own un-patchable fields on a non-seekable sink.
+pub fn finish(
+    out: &mut IoWriter,
+    state: &mut ProgressiveState,
+    tracks: &mut [TrackState],
+    opts: &MuxOptions,
+    movie_timescale: u32,
+) -> Result<()> {
+    close_chunk(state, tracks);
+
+    match state.mdat_buf.take() {
+        Some(buf) => finish_faststart(out, tracks, opts, movie_timescale, &buf),
+        None => finish_streaming(out, state, tracks, opts, movie_timescale),
+    }
+}
+
+fn finish_streaming(
+    out: &mut IoWriter,
+    state: &ProgressiveState,
+    tracks: &[TrackState],
+    opts: &MuxOptions,
+    movie_timescale: u32,
+) -> Result<()> {
+    let end = out.pos();
+    if out.is_seekable() {
+        let mdat_box_start = state.mdat_size_field_at.saturating_sub(8);
+        let total = end.saturating_sub(mdat_box_start);
+        out.seek(state.mdat_size_field_at)?;
+        out.write(&total.to_be_bytes())?;
+        out.seek(end)?;
+    }
+    let moov = build_moov(tracks, opts, movie_timescale, 0);
+    out.write(&moov)?;
+    out.flush()
+}
+
+fn finish_faststart(
+    out: &mut IoWriter,
+    tracks: &mut [TrackState],
+    opts: &MuxOptions,
+    movie_timescale: u32,
+    mdat_buf: &[u8],
+) -> Result<()> {
+    // No seek ever happens here — every sample is already buffered in
+    // `mdat_buf`, so the whole file is written once, in final order. `ftyp`
+    // is already on `out` (written in `write_header`), and its length is the
+    // base every chunk offset's shift starts from.
+    let ftyp_len = out.pos();
+    let prefix_before_mdat = |moov_len: u64| {
+        ftyp_len
+            .saturating_add(moov_len)
+            .saturating_add(MDAT_HEADER_LEN)
+    };
+
+    let mut trial_moov_len: u64 = 0;
+    let mut moov = Vec::new();
+    for _ in 0..MAX_FASTSTART_PASSES {
+        let shift = prefix_before_mdat(trial_moov_len);
+        moov = build_moov(tracks, opts, movie_timescale, shift);
+        let got = u64::try_from(moov.len()).unwrap_or(u64::MAX);
+        if got == trial_moov_len {
+            break;
+        }
+        trial_moov_len = got;
+    }
+
+    out.write(&moov)?;
+    let total = MDAT_HEADER_LEN.saturating_add(u64::try_from(mdat_buf.len()).unwrap_or(u64::MAX));
+    out.write(&1u32.to_be_bytes())?;
+    out.write(b"mdat")?;
+    out.write(&total.to_be_bytes())?;
+    out.write(mdat_buf)?;
+    out.flush()
+}
+
+/// Build the whole `moov`, with every track's chunk offsets shifted by
+/// `offset_shift` — `0` in streaming mode (offsets are already absolute),
+/// the trial prefix length under `faststart`.
+fn build_moov(
+    tracks: &[TrackState],
+    opts: &MuxOptions,
+    movie_timescale: u32,
+    offset_shift: u64,
+) -> Vec<u8> {
+    let creation_time = if opts.bitexact {
+        0
+    } else {
+        opts.creation_time_unix
+            .map_or(0, vaco_format_isom::movie::from_unix_time)
+    };
+
+    let movie_duration = tracks
+        .iter()
+        .map(|t| rescale(t.media_duration(), t.timescale, movie_timescale))
+        .max()
+        .unwrap_or(0);
+    let next_track_id = tracks
+        .iter()
+        .map(|t| t.track_id)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1);
+
+    let mut moov_body = writer::mvhd(&writer::MvhdFields {
+        creation_time,
+        modification_time: creation_time,
+        timescale: movie_timescale,
+        duration: movie_duration,
+        rate: 0x0001_0000,
+        volume: 0x0100,
+        matrix: vaco_format_isom::fixed::IDENTITY_MATRIX,
+        next_track_id,
+    });
+
+    for t in tracks {
+        moov_body.extend_from_slice(&build_trak(t, movie_timescale, creation_time, offset_shift));
+    }
+
+    if let Some(udta) = build_udta(opts) {
+        moov_body.extend_from_slice(&udta);
+    }
+
+    vaco_format_isom::build::bx(b"moov", &moov_body)
+}
+
+fn build_trak(
+    track: &TrackState,
+    movie_timescale: u32,
+    creation_time: u64,
+    offset_shift: u64,
+) -> Vec<u8> {
+    let track_duration = rescale(track.media_duration(), track.timescale, movie_timescale);
+
+    let mut minf = Vec::new();
+    minf.extend_from_slice(&match track.media {
+        vaco_core::MediaType::Audio => writer::smhd(),
+        _ => writer::vmhd(),
+    });
+    minf.extend_from_slice(&writer::dinf_self_contained());
+    minf.extend_from_slice(&build_stbl(track, offset_shift));
+
+    let mut mdia = Vec::new();
+    mdia.extend_from_slice(&writer::mdhd(&writer::MdhdFields {
+        creation_time,
+        modification_time: creation_time,
+        timescale: track.timescale,
+        duration: track.media_duration(),
+        language: track.language,
+    }));
+    mdia.extend_from_slice(&writer::hdlr(track.handler, handler_name(track.handler)));
+    mdia.extend_from_slice(&vaco_format_isom::build::bx(b"minf", &minf));
+
+    let mut trak = writer::tkhd(&writer::TkhdFields {
+        flags: writer::tkhd_flags::ENABLED | writer::tkhd_flags::IN_MOVIE,
+        creation_time,
+        modification_time: creation_time,
+        track_id: track.track_id,
+        duration: track_duration,
+        layer: 0,
+        alternate_group: 0,
+        volume: track.volume,
+        matrix: vaco_format_isom::fixed::IDENTITY_MATRIX,
+        width: track.width,
+        height: track.height,
+    });
+    trak.extend_from_slice(&vaco_format_isom::build::bx(b"mdia", &mdia));
+    vaco_format_isom::build::bx(b"trak", &trak)
+}
+
+fn build_stbl(track: &TrackState, offset_shift: u64) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(&writer::stsd(std::slice::from_ref(&track.entry.bytes)));
+    body.extend_from_slice(&writer::stts(&track.stts_runs()));
+    let ctts_runs = track.ctts_runs();
+    if !ctts_runs.is_empty() {
+        body.extend_from_slice(&writer::ctts(&ctts_runs));
+    }
+    if let Some(syncs) = track.stss_list() {
+        body.extend_from_slice(&writer::stss(&syncs));
+    }
+    body.extend_from_slice(&writer::stsc(&track.stsc_runs()));
+    body.extend_from_slice(&writer::stsz(&track.stsz_list()));
+    let offsets: Vec<u64> = track
+        .chunk_offset_list()
+        .into_iter()
+        .map(|o| o.saturating_add(offset_shift))
+        .collect();
+    body.extend_from_slice(&writer::chunk_offsets(&offsets));
+    vaco_format_isom::build::bx(b"stbl", &body)
+}
+
+fn handler_name(handler: vaco_format_isom::fourcc::FourCc) -> &'static str {
+    if handler == boxes::SOUN {
+        "SoundHandler"
+    } else {
+        "VideoHandler"
+    }
+}
+
+/// `value * to / from`, saturating and division-safe for a zero `from`.
+#[allow(
+    clippy::integer_division,
+    reason = "a timescale rescale is a genuine floor division, not a stand-in for an exact one"
+)]
+fn rescale(value: u64, from: u32, to: u32) -> u64 {
+    if from == 0 {
+        return 0;
+    }
+    let scaled = u128::from(value).saturating_mul(u128::from(to));
+    let out = scaled / u128::from(from);
+    u64::try_from(out).unwrap_or(u64::MAX)
+}

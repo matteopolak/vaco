@@ -1,0 +1,48 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Seven registrations. Names, long names captured under `LC_ALL=C` against
+# ffmpeg 8.1 (`ffmpeg -h muxer=<name>`) — see `docs/format/vaco-mux-hash.md`.
+# `uncodedframecrc` is an eighth name under the same issue (#572) that this
+# crate deliberately does not register; see that doc's final section.
+
+[[component]]
+kind      = "muxer"
+name      = "crc"
+long_name = "CRC testing"
+ctor      = "vaco_mux_hash::MUXER_CRC"
+
+[[component]]
+kind      = "muxer"
+name      = "md5"
+long_name = "MD5 testing"
+ctor      = "vaco_mux_hash::MUXER_MD5"
+
+[[component]]
+kind      = "muxer"
+name      = "hash"
+long_name = "Hash testing"
+ctor      = "vaco_mux_hash::MUXER_HASH"
+
+[[component]]
+kind      = "muxer"
+name      = "framecrc"
+long_name = "framecrc testing"
+ctor      = "vaco_mux_hash::MUXER_FRAMECRC"
+
+[[component]]
+kind      = "muxer"
+name      = "framemd5"
+long_name = "Per-frame MD5 testing"
+ctor      = "vaco_mux_hash::MUXER_FRAMEMD5"
+
+[[component]]
+kind      = "muxer"
+name      = "framehash"
+long_name = "Per-frame hash testing"
+ctor      = "vaco_mux_hash::MUXER_FRAMEHASH"
+
+[[component]]
+kind      = "muxer"
+name      = "streamhash"
+long_name = "Per-stream hash testing"
+ctor      = "vaco_mux_hash::MUXER_STREAMHASH"

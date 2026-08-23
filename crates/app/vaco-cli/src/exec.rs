@@ -537,18 +537,36 @@ mod tests {
     }
 
     #[test]
-    fn null_is_the_only_output_format() {
+    fn f_null_resolves_to_the_null_muxer() {
         let (_, o) = out_of(&["-i", "a.mkv", "-f", "null", "-"]);
         assert_eq!(muxer_for(&o).unwrap(), "null");
     }
 
+    /// A format this build demuxes and does not mux, or `None` if every
+    /// demuxable format is now also muxable.
+    ///
+    /// The tests below used to name `matroska`, which was demux-only when they
+    /// were written. That is a fact about one moment, and a test that pins one
+    /// fails the day the gap it describes is closed — which is the least useful
+    /// day for a test to fail. What is actually invariant is the *wording*:
+    /// whenever such a format exists, saying so beats reporting it unknown.
+    fn a_demux_only_format() -> Option<&'static str> {
+        vaco_registry::demuxers()
+            .iter()
+            .map(|d| d.name)
+            .find(|n| vaco_registry::muxer_by_name(n).is_none())
+    }
+
     #[test]
     fn a_readable_format_says_so_rather_than_pretending_it_is_unknown() {
-        let (_, o) = out_of(&["-i", "a.mkv", "-f", "matroska", "out.mkv"]);
+        let Some(name) = a_demux_only_format() else {
+            return;
+        };
+        let (_, o) = out_of(&["-i", "a.mkv", "-f", name, "out.bin"]);
         let e = muxer_for(&o).unwrap_err();
         assert!(
             e.render().contains("reads that format but cannot write it"),
-            "{}",
+            "{name}: {}",
             e.render()
         );
         assert!(
@@ -588,9 +606,27 @@ mod tests {
 
     #[test]
     fn an_extension_this_build_can_read_says_so() {
-        let (_, o) = out_of(&["-i", "a.mkv", "out.mkv"]);
+        // Chosen from the registry for the same reason as above: an extension
+        // that only demuxes today may well mux tomorrow.
+        let Some((ext, _)) = vaco_registry::demuxers()
+            .iter()
+            .filter(|d| vaco_registry::muxer_by_name(d.name).is_none())
+            .find_map(|d| d.extensions.first().map(|e| (*e, d.name)))
+            .filter(|(e, _)| {
+                vaco_registry::muxers_for_extension(&format!("x.{e}"))
+                    .next()
+                    .is_none()
+            })
+        else {
+            return;
+        };
+        let (_, o) = out_of(&["-i", "a.mkv", &format!("out.{ext}")]);
         let e = muxer_for(&o).unwrap_err();
-        assert!(e.render().contains("cannot write it"), "{}", e.render());
+        assert!(
+            e.render().contains("cannot write it"),
+            "{ext}: {}",
+            e.render()
+        );
     }
 
     #[test]

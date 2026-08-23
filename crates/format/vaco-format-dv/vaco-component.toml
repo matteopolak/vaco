@@ -1,0 +1,20 @@
+# Registry fragment, per the frozen schema in planning/19-parallel-execution.md
+# §3.4.
+
+[[component]]
+kind       = "demuxer"
+name       = "dv"
+long_name  = "DV (Digital Video)"
+feature    = "demux-dv"
+ctor       = "vaco_format_dv::DEMUXER"
+extensions = "dv,dif"
+mime_types = "video/x-dv"
+
+[[component]]
+kind       = "muxer"
+name       = "dv"
+long_name  = "DV (Digital Video)"
+feature    = "mux-dv"
+ctor       = "vaco_format_dv::MUXER"
+extensions = "dv"
+mime_types = "video/x-dv"

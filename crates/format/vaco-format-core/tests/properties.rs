@@ -38,6 +38,7 @@ use vaco_codec_core::{CodecId, CodecParameters};
 use vaco_core::{Error, Rational, Timestamp};
 use vaco_format_core::discovery::NoParsers;
 use vaco_format_core::interleave::{InterleaveQueue, MuxTimestamps};
+use vaco_format_core::mux::MuxBuilder;
 use vaco_format_core::probe::{Probe, ProbeData};
 use vaco_format_core::seek::{IndexEntry, PacketIndex, SeekFlags, SeekTarget};
 use vaco_format_core::time::{TimestampFixer, WrapState, decode_ts};
@@ -610,6 +611,60 @@ proptest! {
         // The derived view may round; the field may not.
         if let Some(d) = s.duration() {
             prop_assert!(d.as_micros() >= 0);
+        }
+    }
+
+    /// The state machine is not a filter: everything accepted reaches the
+    /// muxer, exactly once, in per-stream order, and the report agrees with
+    /// what came out the other end.
+    ///
+    /// This is the property that makes `MuxBuilder` safe to adopt. The queue
+    /// and the M-chain each have their own conservation property above; this
+    /// one is about the composition, which is where a packet gets dropped in
+    /// practice — a drain that stops one short, a filter flush that never
+    /// runs, an `end_stream` that discards instead of emitting.
+    #[test]
+    fn the_session_conserves_every_packet((streams, specs) in specs(3)) {
+        let opts = FormatOptions::default();
+        let tb = Rational::new(1, 1_000_000);
+        let sink = MemorySink::new();
+        let written = sink.shared();
+        let muxer = VacoRawMuxer::new(Box::new(sink), &opts).unwrap();
+        let mut builder = MuxBuilder::new(Box::new(muxer), &opts);
+        for _ in 0..streams {
+            builder
+                .add_stream(&CodecParameters::video().with_codec(CodecId::H264), tb)
+                .unwrap();
+        }
+        let mut writer = builder.open().unwrap();
+        let mut accepted = 0u64;
+        for spec in &specs {
+            let mut budget = Budget::new(Limits::strict());
+            let mut p = Packet::from_slice(&mut budget, &spec.payload).unwrap();
+            p.stream_index = spec.stream;
+            p.dts = Timestamp::new(spec.dts);
+            p.pts = p.dts;
+            if spec.key {
+                p.flags = PacketFlags::KEY;
+            }
+            if writer.write_packet(p).is_ok() {
+                accepted += 1;
+            }
+        }
+        let report = writer.finish().unwrap();
+        prop_assert_eq!(report.packets, accepted);
+        prop_assert!(report.trailer_written);
+        let summed: u64 = report.per_stream_packets.iter().sum();
+        prop_assert_eq!(summed, report.packets);
+
+        // And the file itself holds them, in per-stream order.
+        let mut d = open(written.snapshot());
+        let got = drain(&mut d);
+        prop_assert_eq!(got.len() as u64, accepted);
+        for stream in 0..streams {
+            let want: Vec<i64> = specs.iter().filter(|s| s.stream == stream).map(|s| s.dts).collect();
+            let have: Vec<i64> = got.iter().filter(|s| s.stream == stream).map(|s| s.dts).collect();
+            prop_assert_eq!(want, have);
         }
     }
 

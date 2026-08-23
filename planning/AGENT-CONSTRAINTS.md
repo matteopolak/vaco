@@ -155,6 +155,28 @@ is lenient and answers "what can I still recover?". Reusing the lenient one as
 the strict one silently claims every file on the system. Test detection against
 a file that is definitely *not* your format — prose is the cheapest one to hand.
 
+## A name in the reference is not a specification
+
+`framecrc` is not CRC-32. Measured 2026-08-23, while building the muxer the
+project's whole differential story depends on: it is **Adler-32**, and the
+per-packet variant seeds it `(a=0, b=0)` rather than the standard `(a=1, b=0)`.
+The whole-file `crc` muxer is Adler-32 too, standard-seeded. Real CRC-32 appears
+only when you ask for it by name, via `-hash crc32`.
+
+The agent got there by trying every catalogued CRC-32 variant against the actual
+bytes — all failed — then solving Adler-32's seed algebraically from the
+discrepancy, then confirming it independently with `framehash -hash adler32`.
+That is the shape of a real measurement: the hypothesis was refuted first, and
+the confirmation came from a different direction than the derivation.
+
+Two more from the same crate, in the same spirit: `-hash sha1` is **rejected** —
+the accepted spelling is `sha160`; and a missing pts prints as the literal
+`-9223372036854775808`, not `N/A`.
+
+The general rule this is an instance of: **the reference's own vocabulary is
+evidence about what it calls things, not about what it does.** When a name and a
+behaviour disagree, the behaviour is the fact. Measure it.
+
 ## Performance
 
 **Six confident performance predictions on this project have measured

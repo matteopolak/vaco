@@ -41,7 +41,7 @@
 //! 2. **Sizes may be unknown.** A `Segment` or a `Cluster` may declare no size
 //!    at all, which is what a live `WebM` stream does. Terminating one needs the
 //!    element schema, not the byte count: RFC 8794 section 6.2 ends it at the
-//!    first element that is not a legal child. [`ebml::Stack`] is that rule.
+//!    first element that is not a legal child. [`ebml::MatroskaStack`] is that rule.
 //! 3. **One block may be many packets.** All four lacings pack several frames
 //!    into one `Block`, so `read_packet` is a queue over a parser rather than a
 //!    one-element-one-packet loop.

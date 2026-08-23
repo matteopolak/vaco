@@ -22,6 +22,7 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-opts | 0 | — | agent:opts | done | 2026-08-21 | 2026-08-21 |  |
 | vaco-opts-derive | 0 | — | agent:opts | done | 2026-08-21 | 2026-08-21 |  |
 | vaco-time | 0 | — | orchestrator | done | 2026-08-22 | 2026-08-22 | D18: the clock, behind one door |
+| vaco-hash | 0 | — | orchestrator | done | 2026-08-23 | 2026-08-23 | D11 merge: the single owner of crc/md-5/sha1/sha2, split out of vaco-probe and vaco-mux-hash |
 | vaco-expr | 0 | — | agent:expr | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-bitstream | 0 | — | agent:bitstream | done | 2026-08-21 | 2026-08-21 |  |
 | vaco-pixfmt | 1 | — | agent:pixfmt | done | 2026-08-21 | 2026-08-21 |
@@ -71,8 +72,8 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-demux-mpegps | 4 | — | agent:mpegps-dv | done | 2026-08-22 | 2026-08-23 | shares PES with mpegts; D19 question open |
 | vaco-mux-mpegps | 4 | — | agent:mpegps-dv | done | 2026-08-22 | 2026-08-23 | mpeg vob svcd vcd dvd |
 | vaco-format-dv | 4 | — | agent:mpegps-dv | done | 2026-08-22 | 2026-08-23 | frame format, not really a container |
-| vaco-filter-audio | 5 | #466 | agent:filters-t1a | assigned | 2026-08-22 |  | aresample aformat volume amix amerge channelmap channelsplit join pan asetnsamples asetrate |
-| vaco-filter-plumbing | 5 | #467 | agent:filters-t1a | assigned | 2026-08-22 |  | trim/atrim, setpts, settb, fifo family |
+| vaco-filter-audio | 5 | #466 | agent:filters-t1a | done | 2026-08-22 | 2026-08-23 | aresample aformat volume amix amerge channelmap channelsplit join pan asetnsamples asetrate |
+| vaco-filter-plumbing | 5 | #467 | agent:filters-t1a | done | 2026-08-22 | 2026-08-23 | trim/atrim, setpts, settb, fifo family |
 | vaco-format-isom | 4 | #210,#573,#574 | agent:mux-mp4 | assigned | 2026-08-23 |  | reassigned from agent:demux-mp4 (done) to add box writers |
 | vaco-mux-mp4 | 4 | #210,#573,#574 | agent:mux-mp4 | assigned | 2026-08-23 |  |  |
 | vaco-format-ebml | 4 | #575 | agent:mux-matroska | assigned | 2026-08-23 |  | new: EBML reader extracted from the demuxer + writer |
@@ -81,11 +82,15 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-format-asf | 4 | #586,#587 | agent:asf | assigned | 2026-08-23 |  | new: shared object model |
 | vaco-demux-asf | 4 | #586 | agent:asf | assigned | 2026-08-23 |  |  |
 | vaco-mux-asf | 4 | #587 | agent:asf | assigned | 2026-08-23 |  |  |
-| vaco-mux-hash | 4 | #572 | agent:mux-hash | assigned | 2026-08-23 |  | crc framecrc framemd5 framehash hash md5 streamhash uncodedframecrc — the differential oracle |
+| vaco-mux-hash | 4 | #572 | agent:mux-hash | done | 2026-08-23 | 2026-08-23 | crc framecrc framemd5 framehash hash md5 streamhash uncodedframecrc — the differential oracle |
 | vaco-demux-image2 | 4 | #592 | agent:image2 | assigned | 2026-08-23 |  | glob/sequence patterns + 42 pipe splitters |
 | vaco-mux-image2 | 4 | #593 | agent:image2 | assigned | 2026-08-23 |  | filename patterns, -update, strftime, atomic write |
 | vaco-format-mpegts-tables | 4 | #576 | agent:mux-mpegts | assigned | 2026-08-23 |  | reassigned from agent:mpegts (done) to add table writers |
 | vaco-mux-mpegts | 4 | #576 | agent:mux-mpegts | assigned | 2026-08-23 |  |  |
+| vaco-format-mpegts-tables | 4 | #576 | agent:mux-mpegts | assigned | 2026-08-23 |  | reassigned from agent:mpegts (done) to add table writers |
+| vaco-mux-mpegts | 4 | #576 | agent:mux-mpegts | assigned | 2026-08-23 |  |  |
+| vaco-mux-utility | 4 | #572 | agent:mux-util | assigned | 2026-08-23 |  | null, mkvtimestamp_v2 — the last two of FM-20 bar uncodedframecrc |
+| vaco-mux-stream | 4 | #590 | agent:mux-util | assigned | 2026-08-23 |  | concat ffmetadata segment stream_segment tee fifo — meta-muxers |
 | vaco-filter-core | 5 | — | agent:filter-core | done | 2026-08-22 | 2026-08-22 | frozen only |
 | vaco-filter-framesync | 5 | — | agent:filter-graph | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-filter-graph | 5 | — | agent:filter-graph | done | 2026-08-22 | 2026-08-22 |  |

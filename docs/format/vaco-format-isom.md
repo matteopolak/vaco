@@ -28,6 +28,7 @@ play next.
 | `lang` | the packed ISO-639-2/T language field |
 | `probe` | content scoring, with the measurements behind it |
 | `build` | fixture construction, shared by the tests, benchmarks and fuzz targets |
+| `writer` | production box writers — `ftyp`/`mvhd`/`tkhd`/`mdhd`/`hdlr`, the sample tables, sample entries and their config boxes, `moof`/`traf`/`trun`, `sidx`, `mfra`, `udta`/`meta`/`ilst`. Used by `vaco-mux-mp4`. |
 
 Written from **ISO/IEC 14496-12** (base file format), **14496-14** (MP4),
 **14496-15** (`avcC`/`hvcC` carriage), **14496-1** (`esds`), and Apple's
@@ -195,6 +196,30 @@ cumulative byte counts are both non-decreasing sequences, so saturation
 preserves the ordering the binary searches depend on; wrapping would not, and
 panicking is not available to a parser of untrusted input (`unwrap`, `expect`,
 `panic` and `indexing_slicing` are all denied workspace-wide).
+
+### Writers
+
+`writer` is the production counterpart to every reader above it, and the only
+place `vaco-mux-mp4` builds a box from typed fields. Split from `build`
+deliberately: `build` is a fixture maker that will write a shape the spec
+forbids on request (half its callers are negative tests); `writer` never does.
+Both compose the same box-framing primitives, `build::bx`/`build::fullbx` —
+the one place the four-byte-size-plus-fourcc-plus-payload concept lives (D19).
+
+Two conventions worth knowing before extending it:
+
+* **Config records are opaque.** `avcc`/`hvcc`/`av1c`/`vpcc`/`dops`/`dfla` wrap
+  `CodecParameters::extradata` verbatim — no NAL or `AudioSpecificConfig`
+  parsing happens here or in the caller (D14.1: a `vaco-format-*` crate cannot
+  depend on a `vaco-parse-*` one). A caller with no extradata yet is a
+  bitstream-filter problem (`extract_extradata`), not this crate's.
+* **`stsz` is always non-uniform.** One shape to write correctly rather than
+  two; the uniform (constant-size) form is a valid but unwritten optimisation.
+
+`movie::from_unix_time` is the writer's counterpart to `movie::to_unix_time` —
+Unix seconds to the 1904-epoch `u64` `mvhd`/`tkhd`/`mdhd` store, saturating
+rather than panicking outside that range. Neither it nor anything else in
+`writer` reads the wall clock; the caller supplies (or omits) a timestamp.
 
 ---
 
@@ -503,9 +528,8 @@ Named so the demuxer's author knows what is not here:
 * **HEIF/AVIF item model.** `meta ▸ iloc/iinf/iprp/iref/idat` and the derived
   items. The `meta` box type exists; nothing reads it.
 * **`cmov`.** zlib-compressed `moov`; plan 18 already tiers it as v0.2.
-* **Box writing.** `build` writes exactly the boxes its fixtures need and is not
-  a muxer. `vaco-mux-mp4` will want a real writer; the natural place is a new
-  `write` module here, since the box-type constants and the fixed-point helpers
-  are already shared.
+* ~~**Box writing.**~~ Done: `writer` (below). `build` still exists separately
+  for deliberately-invalid fixtures; `writer` is the validated production path
+  `vaco-mux-mp4` drives.
 * **`tapt`, `gmhd`, hint tracks, `stsh`, `padb`, `subs`** — parsed structurally
   as unknown boxes, i.e. skipped by size.

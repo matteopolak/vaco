@@ -1,0 +1,87 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Eleven T1 audio filters (FT-4.2, GitHub #466). Each `ctor` names the
+# per-filter `pub const DESC: FilterDesc`, not a constructor function —
+# `FilterDesc` carries no `new` field (D19/D9: the interface is frozen as
+# `vaco-filter-core` actually shipped it, not as plan 16's draft sketched it).
+# Runtime instantiation from a parsed filtergraph goes through
+# `vaco_filter_audio::registry::AudioRegistry`, a
+# `vaco_filter_graph::registry::FilterRegistry` impl — this fragment is the
+# `-filters`/`-h filter=` listing surface, not the construction path.
+
+[[component]]
+kind = "filter"
+name = "aformat"
+long_name = "Convert the input audio to one of the specified formats"
+ctor = "vaco_filter_audio::aformat::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "amerge"
+long_name = "Merge two or more audio streams into a single multi-channel stream"
+ctor = "vaco_filter_audio::amerge::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "amix"
+long_name = "Audio mixing"
+ctor = "vaco_filter_audio::amix::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "aresample"
+long_name = "Resample audio data"
+ctor = "vaco_filter_audio::aresample::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "asetnsamples"
+long_name = "Set the number of samples for each output audio frame"
+ctor = "vaco_filter_audio::asetnsamples::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "asetrate"
+long_name = "Change the sample rate without altering the data"
+ctor = "vaco_filter_audio::asetrate::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "channelmap"
+long_name = "Remap audio channels"
+ctor = "vaco_filter_audio::channelmap::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "channelsplit"
+long_name = "Split audio into per-channel streams"
+ctor = "vaco_filter_audio::channelsplit::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "join"
+long_name = "Join multiple audio streams into multi-channel output"
+ctor = "vaco_filter_audio::join::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "pan"
+long_name = "Remix channels with coefficients (panning)"
+ctor = "vaco_filter_audio::pan::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "volume"
+long_name = "Change input volume"
+ctor = "vaco_filter_audio::volume::DESC"
+media = "audio"

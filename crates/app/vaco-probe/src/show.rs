@@ -774,7 +774,11 @@ pub fn packet<W: Write>(
         e.field(t, "data", &Val::s(format.render(pkt.payload())))?;
     }
     if let Some(alg) = payload.hash {
-        e.field(t, "data_hash", &Val::opt_s(alg.digest(pkt.payload())))?;
+        e.field(
+            t,
+            "data_hash",
+            &Val::opt_s(alg.labelled_digest(pkt.payload())),
+        )?;
     }
     packet_side_data(e, pkt)?;
     e.tf().close()

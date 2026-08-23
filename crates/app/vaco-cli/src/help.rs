@@ -343,12 +343,19 @@ mod tests {
     }
 
     #[test]
-    fn muxer_kind_reports_unknown_because_this_build_has_none() {
-        // D5: zero muxers, so `-h muxer=matroska` cannot succeed even though
-        // `matroska` is a real demuxer name in this build.
+    fn muxer_kind_describes_a_registered_muxer_and_rejects_anything_else() {
+        // This asserted `-h muxer=matroska` reports "Unknown format", which was
+        // true when the build had no muxers and became false the moment one
+        // landed. The invariant is the mapping, not the emptiness: a name the
+        // registry has is described, and one it does not have is unknown.
+        if let Some(m) = vaco_registry::muxers().first() {
+            let s = text(Some(&format!("muxer={}", m.name)));
+            assert!(s.starts_with(&format!("Muxer {} ", m.name)), "{s}");
+            assert!(s.ends_with("\n\nExiting with exit code 0\n"), "{s}");
+        }
         assert_eq!(
-            text(Some("muxer=matroska")),
-            "Unknown format 'matroska'.\n\nExiting with exit code 0\n"
+            text(Some("muxer=nonesuchxyz")),
+            "Unknown format 'nonesuchxyz'.\n\nExiting with exit code 0\n"
         );
     }
 

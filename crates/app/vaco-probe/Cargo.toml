@@ -43,15 +43,10 @@ vaco-limits = { path = "../../core/vaco-limits" }
 vaco-protocol-core = { path = "../../io/vaco-protocol-core" }
 vaco-protocol-file = { path = "../../io/vaco-protocol-file" }
 
-# Hashes for `-show_data_hash`, all pre-declared in `[workspace.dependencies]`
-# and all pure Rust (D10 Gate 1). Ten of the reference's fifteen algorithm names
-# are reachable this way; `murmur3` and the four RIPEMD variants have no
-# pre-declared crate, so `dump::HashAlg::implemented` names and refuses them
-# rather than emitting a wrong digest.
-crc.workspace = true
-md-5.workspace = true
-sha1.workspace = true
-sha2.workspace = true
+# `-show_data_hash`. This crate used to declare `crc`, `md-5`, `sha1` and `sha2`
+# directly and `vaco-mux-hash` declared the same four — a D11 violation that
+# `owner-gate` reported. `vaco-hash` is now their single owner.
+vaco-hash = { path = "../../core/vaco-hash" }
 
 [dev-dependencies]
 proptest.workspace = true

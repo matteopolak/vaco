@@ -16,6 +16,7 @@
 //! | [`seek`] | [`SeekTarget`], [`PacketIndex`] and the two generic strategies |
 //! | [`discovery`] | [`Discovery`] — the bounded, replayable stream-discovery pass |
 //! | [`interleave`] | [`InterleaveQueue`] and the muxer-side timestamp chain |
+//! | [`mux`] | [`MuxBuilder`]/[`MuxWriter`] — the muxer state machine |
 //! | [`vacoraw`] | a worked-example container that drives every one of the above |
 //!
 //! # The one idea worth reading first
@@ -76,6 +77,7 @@ use vaco_packet::Packet;
 pub mod discovery;
 pub mod flags;
 pub mod interleave;
+pub mod mux;
 pub mod options;
 pub mod probe;
 pub mod seek;
@@ -88,7 +90,12 @@ mod test_support;
 
 pub use discovery::{Discovery, DiscoveryReport, NoParsers, StopReason};
 pub use flags::FormatFlags;
-pub use interleave::{ChunkPolicy, InterleaveQueue, MuxTimestamps, interleave_per_dts};
+pub use interleave::{
+    ChunkPolicy, InterleaveQueue, MuxTimestamps, interleave_none, interleave_per_dts,
+};
+pub use mux::{
+    BitstreamAction, BsfChain, BsfProvider, CodecSupport, MuxBuilder, MuxReport, MuxWriter, NoBsfs,
+};
 pub use options::{AvoidNegativeTs, FFlags, FormatOptions};
 pub use probe::{Detected, Probe, ProbeData, ProbeScore};
 pub use seek::{IndexEntry, IndexFlags, PacketIndex, SeekFlags, SeekStrategy, SeekTarget};
@@ -427,9 +434,25 @@ pub trait Muxer: Send {
 
     /// Declare a stream. All streams must be added before [`Muxer::write_header`].
     ///
+    /// Prefer driving this through [`mux::MuxBuilder`], which makes the
+    /// ordering a property of the type rather than of the caller's discipline.
+    ///
     /// # Errors
     /// [`vaco_core::Error::Unsupported`] when this container cannot carry the codec.
     fn add_stream(&mut self, params: &CodecParameters) -> Result<u32>;
+
+    /// Called once after every stream is declared and before the header.
+    ///
+    /// The place to settle anything that depends on the whole stream set: a
+    /// timescale derived from the frame rates present, a track order, a
+    /// container profile. [`Muxer::stream_time_base`] is read *after* this, so
+    /// a muxer may rewrite what it will accept here (M12).
+    ///
+    /// # Errors
+    /// Whatever the container's own consistency checks find.
+    fn init(&mut self) -> Result<()> {
+        Ok(())
+    }
 
     /// # Errors
     /// Propagates I/O failure.
@@ -467,6 +490,127 @@ pub trait Muxer: Send {
     fn stream_time_base(&self, stream_index: u32) -> Option<Rational> {
         let _ = stream_index;
         None
+    }
+
+    /// This container's interleaving policy (§1.9 N7).
+    ///
+    /// The default is per-DTS. MOV in fragmented mode interleaves within a
+    /// fragment; MPEG-TS does not interleave in the queue sense at all and
+    /// wants [`interleave::interleave_none`], because it multiplexes at the
+    /// 188-byte level against a PCR clock and anything the queue reordered
+    /// first would only be reordered again.
+    ///
+    /// # Errors
+    /// As [`interleave::InterleaveQueue::push`].
+    fn interleave(
+        &mut self,
+        queue: &mut InterleaveQueue,
+        packet: Option<Packet>,
+        flush: bool,
+    ) -> Result<Option<Packet>> {
+        interleave::interleave_per_dts(queue, packet, flush)
+    }
+
+    /// Whether this stream's bitstream form needs converting first (§1.10).
+    ///
+    /// Asked on the stream's **first** packet, then again on each inserted
+    /// filter's notional output until it answers
+    /// [`mux::BitstreamAction::Keep`], to a depth of
+    /// [`mux::MAX_BSF_DEPTH`]. The answer is cached for the rest of the file
+    /// (B3): a stream that switches form mid-file is deliberately not
+    /// re-examined, which is what `avc3`/`hev1` sample entries exist for.
+    ///
+    /// [`mux::global_header_action`] is the answer a
+    /// [`FormatFlags::GLOBALHEADER`] container wants when it has no more
+    /// specific opinion.
+    ///
+    /// # Errors
+    /// When the packet is in a form this container cannot carry at all.
+    fn check_bitstream(
+        &mut self,
+        params: &CodecParameters,
+        packet: &Packet,
+    ) -> Result<mux::BitstreamAction> {
+        let _ = (params, packet);
+        Ok(mux::BitstreamAction::Keep)
+    }
+
+    /// Whether this container carries `codec`, at compliance level `strict`.
+    ///
+    /// Consulted by [`mux::MuxBuilder::add_stream`] *before* the muxer is asked
+    /// to do anything, so an impossible combination fails at the point the user
+    /// can still act on it rather than three seconds into a transcode.
+    ///
+    /// Deliberately `&self` and object-safe, unlike plan 18 §1.3's
+    /// `fn query_codec(codec, strict) -> CodecSupport where Self: Sized`: a
+    /// `where Self: Sized` method cannot be called through `dyn Muxer`, and
+    /// every caller in this workspace holds one.
+    fn query_codec(&self, codec: CodecId, strict: i32) -> mux::CodecSupport {
+        let _ = (codec, strict);
+        mux::CodecSupport::Supported
+    }
+
+    /// Flush whatever is buffered internally, without ending the file (M20).
+    ///
+    /// Only called on a muxer declaring [`FormatFlags::ALLOW_FLUSH`]. Plan 18
+    /// §1.3 spells this as `write_packet(None)`; a separate method says the
+    /// same thing without changing `write_packet`'s signature, which matters
+    /// because implementations of it are being written in parallel with this.
+    ///
+    /// # Errors
+    /// Propagates I/O failure.
+    fn write_flush(&mut self) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// So a boxed muxer is itself a [`Muxer`].
+///
+/// The mirror of the [`Demuxer`] impl above, and needed for the same reason:
+/// [`mux::MuxBuilder`] owns a `Box<dyn Muxer>`, and a caller wanting to wrap
+/// one (a `tee`, a segmenter, a counting shim) otherwise cannot.
+impl<M: Muxer + ?Sized> Muxer for Box<M> {
+    fn flags(&self) -> FormatFlags {
+        (**self).flags()
+    }
+    fn add_stream(&mut self, params: &CodecParameters) -> Result<u32> {
+        (**self).add_stream(params)
+    }
+    fn init(&mut self) -> Result<()> {
+        (**self).init()
+    }
+    fn write_header(&mut self) -> Result<()> {
+        (**self).write_header()
+    }
+    fn write_packet(&mut self, packet: &Packet) -> Result<()> {
+        (**self).write_packet(packet)
+    }
+    fn write_trailer(&mut self) -> Result<()> {
+        (**self).write_trailer()
+    }
+    fn stream_time_base(&self, stream_index: u32) -> Option<Rational> {
+        (**self).stream_time_base(stream_index)
+    }
+    fn interleave(
+        &mut self,
+        queue: &mut InterleaveQueue,
+        packet: Option<Packet>,
+        flush: bool,
+    ) -> Result<Option<Packet>> {
+        (**self).interleave(queue, packet, flush)
+    }
+    fn check_bitstream(
+        &mut self,
+        params: &CodecParameters,
+        packet: &Packet,
+    ) -> Result<mux::BitstreamAction> {
+        (**self).check_bitstream(params, packet)
+    }
+    fn query_codec(&self, codec: CodecId, strict: i32) -> mux::CodecSupport {
+        (**self).query_codec(codec, strict)
+    }
+    fn write_flush(&mut self) -> Result<()> {
+        (**self).write_flush()
     }
 }
 

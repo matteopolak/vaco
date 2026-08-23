@@ -13,13 +13,23 @@
 //!
 //! # Why this crate has its own codec enum
 //!
-//! [`vaco_codec_core::CodecId`] currently names fourteen codecs. MPEG-TS
-//! routinely carries MPEG-2 video, MPEG-1/2 audio, AC-3, E-AC-3, DTS, VC-1,
-//! DVB subtitles, teletext, SCTE-35 and timed ID3 — none of which have a
-//! `CodecId`. Collapsing them all onto "unknown" would lose the one fact the
+//! [`vaco_codec_core::CodecId`] has grown since this was written (it now
+//! names AC-3, E-AC-3, DTS and VC-1 among others), but MPEG-TS still routinely
+//! carries things with no `CodecId` at all: DVB subtitles, teletext, SCTE-35,
+//! timed ID3. Collapsing them all onto "unknown" would lose the one fact the
 //! PMT actually stated, so [`TsCodec`] carries the full repertoire and
 //! [`TsCodec::codec_id`] maps across where a `CodecId` exists. When the enum
 //! grows, only that one function changes.
+//!
+//! # The mux direction
+//!
+//! [`resolve`] and [`from_stream_type`] answer "what codec does this
+//! `stream_type` mean" for a demuxer. [`for_codec`] answers the reverse
+//! question a muxer asks — "what `stream_type` (and, in a private range,
+//! what `registration_descriptor`) does this codec need" — and lives here
+//! rather than being re-derived in `vaco-mux-mpegts`, per the one-definition-
+//! per-concept rule (D19): a demuxer and a muxer disagreeing about what
+//! `0x81` means is exactly the kind of drift a shared table is for.
 
 use vaco_codec_core::CodecId;
 use vaco_core::MediaType;

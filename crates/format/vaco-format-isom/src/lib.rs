@@ -52,6 +52,7 @@
 //! | [`lang`] | the packed ISO-639-2/T language field |
 //! | [`probe`] | content scoring, with the measurements it is based on |
 //! | [`build`] | fixture construction for tests, benchmarks and fuzz targets |
+//! | [`writer`] | production box writers, for `vaco-mux-mp4` |
 //!
 //! # The three design decisions worth knowing
 //!
@@ -102,6 +103,7 @@ pub mod scan;
 pub mod stbl;
 pub mod stsd;
 pub mod table;
+pub mod writer;
 
 pub use boxes::{BoxHeader, BoxIter, FullBox, IsoBox};
 pub use edit::{EditEntry, EditList, Segment, Timeline};

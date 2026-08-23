@@ -8,7 +8,7 @@
 //!
 //! The table is what makes RFC 8794 section 6.2 implementable: terminating an
 //! unknown-size element requires knowing, for an arbitrary ID, whether it is a
-//! legal child of the element currently open. See [`super::Stack`].
+//! legal child of the element currently open. See [`super::MatroskaStack`].
 //!
 //! # What is deliberately absent
 //!

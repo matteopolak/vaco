@@ -38,14 +38,28 @@ vaco-codec-golomb = { path = "../crates/signal/vaco-codec-golomb" }
 vaco-color = { path = "../crates/model/vaco-color" }
 vaco-conformance = { path = "../crates/tool/vaco-conformance" }
 vaco-core = { path = "../crates/core/vaco-core" }
+vaco-demux-asf = { path = "../crates/format/vaco-demux-asf" }
+vaco-demux-avi = { path = "../crates/format/vaco-demux-avi" }
+vaco-demux-flv = { path = "../crates/format/vaco-demux-flv" }
+vaco-demux-image2 = { path = "../crates/format/vaco-demux-image2" }
 vaco-demux-matroska = { path = "../crates/format/vaco-demux-matroska" }
 vaco-demux-mp4 = { path = "../crates/format/vaco-demux-mp4" }
+vaco-demux-mpegps = { path = "../crates/format/vaco-demux-mpegps" }
 vaco-demux-mpegts = { path = "../crates/format/vaco-demux-mpegts" }
+vaco-demux-ogg = { path = "../crates/format/vaco-demux-ogg" }
+vaco-demux-raw = { path = "../crates/format/vaco-demux-raw" }
 vaco-expr = { path = "../crates/core/vaco-expr" }
+vaco-filter-audio = { path = "../crates/filter/vaco-filter-audio" }
 vaco-filter-core = { path = "../crates/filter/vaco-filter-core" }
 vaco-filter-framesync = { path = "../crates/filter/vaco-filter-framesync" }
 vaco-filter-graph = { path = "../crates/filter/vaco-filter-graph" }
+vaco-filter-plumbing = { path = "../crates/filter/vaco-filter-plumbing" }
+vaco-format-apetag = { path = "../crates/format/vaco-format-apetag" }
+vaco-format-audio-simple = { path = "../crates/format/vaco-format-audio-simple" }
+vaco-format-avlanguage = { path = "../crates/format/vaco-format-avlanguage" }
 vaco-format-core = { path = "../crates/format/vaco-format-core" }
+vaco-format-dv = { path = "../crates/format/vaco-format-dv" }
+vaco-format-ebml = { path = "../crates/format/vaco-format-ebml" }
 vaco-format-id3 = { path = "../crates/format/vaco-format-id3" }
 vaco-format-isom = { path = "../crates/format/vaco-format-isom" }
 vaco-format-mpegts-tables = { path = "../crates/format/vaco-format-mpegts-tables" }
@@ -54,6 +68,9 @@ vaco-format-riff = { path = "../crates/format/vaco-format-riff" }
 vaco-frame = { path = "../crates/model/vaco-frame" }
 vaco-io = { path = "../crates/io/vaco-io" }
 vaco-limits = { path = "../crates/core/vaco-limits" }
+vaco-mux-mp4 = { path = "../crates/format/vaco-mux-mp4" }
+vaco-mux-mpegps = { path = "../crates/format/vaco-mux-mpegps" }
+vaco-opts = { path = "../crates/core/vaco-opts" }
 vaco-packet = { path = "../crates/model/vaco-packet" }
 vaco-parse-aac = { path = "../crates/codec/vaco-parse-aac" }
 vaco-parse-av1 = { path = "../crates/codec/vaco-parse-av1" }
@@ -84,14 +101,28 @@ default = [
     "color",
     "conformance",
     "core",
+    "demux-asf",
+    "demux-avi",
+    "demux-flv",
+    "demux-image2",
     "demux-matroska",
     "demux-mp4",
+    "demux-mpegps",
     "demux-mpegts",
+    "demux-ogg",
+    "demux-raw",
     "expr",
+    "filter-audio",
     "filter-core",
     "filter-framesync",
     "filter-graph",
+    "filter-plumbing",
+    "format-apetag",
+    "format-audio-simple",
+    "format-avlanguage",
     "format-core",
+    "format-dv",
+    "format-ebml",
     "format-id3",
     "format-isom",
     "format-mpegts-tables",
@@ -100,6 +131,8 @@ default = [
     "frame",
     "io",
     "limits",
+    "mux-mp4",
+    "mux-mpegps",
     "packet",
     "parse-aac",
     "parse-av1",
@@ -127,14 +160,28 @@ codec-golomb = []
 color = []
 conformance = []
 core = []
+demux-asf = []
+demux-avi = []
+demux-flv = []
+demux-image2 = []
 demux-matroska = []
 demux-mp4 = []
+demux-mpegps = []
 demux-mpegts = []
+demux-ogg = []
+demux-raw = []
 expr = []
+filter-audio = []
 filter-core = []
 filter-framesync = []
 filter-graph = []
+filter-plumbing = []
+format-apetag = []
+format-audio-simple = []
+format-avlanguage = []
 format-core = []
+format-dv = []
+format-ebml = []
 format-id3 = []
 format-isom = []
 format-mpegts-tables = []
@@ -143,6 +190,8 @@ format-riff = []
 frame = []
 io = []
 limits = []
+mux-mp4 = []
+mux-mpegps = []
 packet = []
 parse-aac = []
 parse-av1 = []
@@ -174,6 +223,46 @@ test = false
 doc = false
 bench = false
 required-features = ["bitstream"]
+
+[[bin]]
+name = "apetag_tag"
+path = "fuzz_targets/apetag_tag.rs"
+test = false
+doc = false
+bench = false
+required-features = ["format-apetag"]
+
+[[bin]]
+name = "asf_demux"
+path = "fuzz_targets/asf_demux.rs"
+test = false
+doc = false
+bench = false
+required-features = ["demux-asf"]
+
+[[bin]]
+name = "audio_simple_demux"
+path = "fuzz_targets/audio_simple_demux.rs"
+test = false
+doc = false
+bench = false
+required-features = ["format-audio-simple"]
+
+[[bin]]
+name = "avi_demux"
+path = "fuzz_targets/avi_demux.rs"
+test = false
+doc = false
+bench = false
+required-features = ["demux-avi"]
+
+[[bin]]
+name = "avlanguage_parse"
+path = "fuzz_targets/avlanguage_parse.rs"
+test = false
+doc = false
+bench = false
+required-features = ["format-avlanguage"]
 
 [[bin]]
 name = "bitreader_arbitrary"
@@ -376,12 +465,36 @@ bench = false
 required-features = ["demux-mp4"]
 
 [[bin]]
+name = "dem_raw"
+path = "fuzz_targets/dem_raw.rs"
+test = false
+doc = false
+bench = false
+required-features = ["demux-raw"]
+
+[[bin]]
 name = "dsp_idct"
 path = "fuzz_targets/dsp_idct.rs"
 test = false
 doc = false
 bench = false
 required-features = ["codec-dsp-idct"]
+
+[[bin]]
+name = "dv_demux"
+path = "fuzz_targets/dv_demux.rs"
+test = false
+doc = false
+bench = false
+required-features = ["format-dv"]
+
+[[bin]]
+name = "ebml_grammar"
+path = "fuzz_targets/ebml_grammar.rs"
+test = false
+doc = false
+bench = false
+required-features = ["format-ebml"]
 
 [[bin]]
 name = "expr_grammar"
@@ -400,6 +513,14 @@ bench = false
 required-features = ["expr"]
 
 [[bin]]
+name = "filter_audio_options"
+path = "fuzz_targets/filter_audio_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-audio"]
+
+[[bin]]
 name = "filter_graph_schedule"
 path = "fuzz_targets/filter_graph_schedule.rs"
 test = false
@@ -408,12 +529,28 @@ bench = false
 required-features = ["filter-core"]
 
 [[bin]]
+name = "filter_plumbing_options"
+path = "fuzz_targets/filter_plumbing_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-plumbing"]
+
+[[bin]]
 name = "filter_timeline_expr"
 path = "fuzz_targets/filter_timeline_expr.rs"
 test = false
 doc = false
 bench = false
 required-features = ["filter-core"]
+
+[[bin]]
+name = "flv_demux"
+path = "fuzz_targets/flv_demux.rs"
+test = false
+doc = false
+bench = false
+required-features = ["demux-flv"]
 
 [[bin]]
 name = "format_interleave"
@@ -504,6 +641,14 @@ bench = false
 required-features = ["format-id3"]
 
 [[bin]]
+name = "image2_pipe_framing"
+path = "fuzz_targets/image2_pipe_framing.rs"
+test = false
+doc = false
+bench = false
+required-features = ["demux-image2"]
+
+[[bin]]
 name = "io_buffered_reader"
 path = "fuzz_targets/io_buffered_reader.rs"
 test = false
@@ -576,6 +721,30 @@ bench = false
 required-features = ["demux-matroska"]
 
 [[bin]]
+name = "mp4_mux"
+path = "fuzz_targets/mp4_mux.rs"
+test = false
+doc = false
+bench = false
+required-features = ["mux-mp4"]
+
+[[bin]]
+name = "mpegps_demux"
+path = "fuzz_targets/mpegps_demux.rs"
+test = false
+doc = false
+bench = false
+required-features = ["demux-mpegps"]
+
+[[bin]]
+name = "mpegps_mux"
+path = "fuzz_targets/mpegps_mux.rs"
+test = false
+doc = false
+bench = false
+required-features = ["mux-mpegps"]
+
+[[bin]]
 name = "mpegts_demux"
 path = "fuzz_targets/mpegts_demux.rs"
 test = false
@@ -606,6 +775,14 @@ test = false
 doc = false
 bench = false
 required-features = ["format-nalu"]
+
+[[bin]]
+name = "ogg_demux"
+path = "fuzz_targets/ogg_demux.rs"
+test = false
+doc = false
+bench = false
+required-features = ["demux-ogg"]
 
 [[bin]]
 name = "packet_from_slice"

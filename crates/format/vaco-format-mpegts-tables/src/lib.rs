@@ -68,6 +68,7 @@ pub mod psi;
 pub mod section;
 pub mod stream_type;
 pub mod text;
+pub mod write;
 
 pub use crc::{crc32, section_crc_ok};
 pub use descriptor::{Descriptor, DescriptorIter, Iso639Entry, SubtitlingEntry, TeletextEntry};
@@ -78,6 +79,10 @@ pub use packet::{
 pub use psi::{Cat, Pat, PatEntry, Pmt, PmtStream, Sdt, SdtService};
 pub use section::{Section, SectionAssembler, SectionHeader};
 pub use stream_type::{Resolved, TsCodec, resolve};
+pub use write::{
+    PatEntryOut, PmtStreamOut, SdtServiceOut, build_descriptor, build_section,
+    registration_descriptor, service_descriptor, write_pat, write_pmt, write_sdt,
+};
 
 /// The presentation time base every MPEG-TS stream uses: 1/90000.
 ///

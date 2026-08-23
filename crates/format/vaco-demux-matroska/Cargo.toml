@@ -12,6 +12,10 @@ authors.workspace = true
 vaco-core = { path = "../../core/vaco-core" }
 vaco-io = { path = "../../io/vaco-io" }
 vaco-format-core = { path = "../../format/vaco-format-core" }
+# The generic RFC 8794 layer — VINTs, the element header, the reader and the
+# writer — moved here so a Matroska muxer shares one definition rather than
+# duplicating it (D19). See docs/format/vaco-format-ebml.md.
+vaco-format-ebml = { path = "../vaco-format-ebml" }
 vaco-codec-core = { path = "../../signal/vaco-codec-core" }
 vaco-limits = { path = "../../core/vaco-limits" }
 vaco-packet = { path = "../../model/vaco-packet" }

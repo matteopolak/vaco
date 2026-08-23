@@ -24,7 +24,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use vaco_demux_matroska::ebml::{self, Caps, Size};
+use vaco_demux_matroska::ebml::{self, Caps, MatroskaStack, Size};
 use vaco_demux_matroska::synth;
 
 /// Children walked before the run is treated as non-terminating.
@@ -82,10 +82,10 @@ fuzz_target!(|data: &[u8]| {
     }
 
     // --- RFC 8794 section 6.2, driven by IDs the input chose
-    let mut stack = ebml::Stack::new();
+    let mut stack = MatroskaStack::new();
     // Build a stack out of the input's own bytes, alternating known and unknown
     // sizes so both branches of the rule are exercised.
-    for (i, chunk) in data.chunks(4).take(ebml::Stack::MAX_FRAMES).enumerate() {
+    for (i, chunk) in data.chunks(4).take(MatroskaStack::MAX_FRAMES).enumerate() {
         let mut id = 0u32;
         for &b in chunk {
             id = (id << 8) | u32::from(b);

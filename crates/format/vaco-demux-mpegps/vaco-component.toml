@@ -1,0 +1,11 @@
+# Registry fragment, per the frozen schema in planning/19-parallel-execution.md
+# §3.4.
+
+[[component]]
+kind       = "demuxer"
+name       = "mpeg"
+long_name  = "MPEG-PS (MPEG-2 Program Stream)"
+feature    = "demux-mpegps"
+ctor       = "vaco_demux_mpegps::DEMUXER"
+extensions = "mpg,mpeg,m2p,vob,vcd"
+mime_types = "video/mpeg"

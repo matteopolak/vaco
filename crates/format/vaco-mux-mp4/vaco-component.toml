@@ -1,0 +1,82 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Eight names, one implementation (`vaco_mux_mp4::MovMuxer`) differing only in
+# the `Brand` each `open` closure passes to `MovMuxer::with_options` — see
+# `src/brand.rs`. `avif` is deliberately absent: `MUXER_AVIF` exists in code
+# for documentation (the measured `ftyp` bytes) but always returns
+# `Unsupported`, since AVIF is a HEIF item structure, not a `moov`/`trak`
+# track mux; registering a name that cannot produce output would only mislead
+# `-formats`.
+#
+# `movflags`, fragmentation thresholds and metadata are not reachable through
+# the registry's bare `open: fn(Box<dyn MediaSink>) -> Result<Box<dyn Muxer>>`
+# — a caller who needs them constructs `vaco_mux_mp4::MovMuxer::with_options`
+# directly, the same gap `vaco-mux-avi`'s own fragment leaves for its options.
+
+[[component]]
+kind       = "muxer"
+name       = "mp4"
+long_name  = "MP4 (MPEG-4 Part 14)"
+feature    = "mux-mp4"
+ctor       = "vaco_mux_mp4::MUXER_MP4"
+extensions = "mp4,m4a,m4v"
+mime_types = "video/mp4,audio/mp4,application/mp4"
+
+[[component]]
+kind       = "muxer"
+name       = "mov"
+long_name  = "QuickTime / MOV"
+feature    = "mux-mp4"
+ctor       = "vaco_mux_mp4::MUXER_MOV"
+extensions = "mov"
+mime_types = "video/quicktime"
+
+[[component]]
+kind       = "muxer"
+name       = "ipod"
+long_name  = "iPod H.264 MP4 (MPEG-4 Part 14)"
+feature    = "mux-mp4"
+ctor       = "vaco_mux_mp4::MUXER_IPOD"
+extensions = "m4v,m4a"
+
+[[component]]
+kind       = "muxer"
+name       = "ismv"
+long_name  = "ISMV/ISMA (Smooth Streaming)"
+feature    = "mux-mp4"
+ctor       = "vaco_mux_mp4::MUXER_ISMV"
+extensions = "ismv,isma"
+
+[[component]]
+kind       = "muxer"
+name       = "f4v"
+long_name  = "F4V Adobe Flash Video"
+feature    = "mux-mp4"
+ctor       = "vaco_mux_mp4::MUXER_F4V"
+extensions = "f4v"
+
+[[component]]
+kind       = "muxer"
+name       = "psp"
+long_name  = "PSP MP4 (MPEG-4 Part 14)"
+feature    = "mux-mp4"
+ctor       = "vaco_mux_mp4::MUXER_PSP"
+extensions = "mp4,psp"
+
+[[component]]
+kind       = "muxer"
+name       = "3gp"
+long_name  = "3GP (3GPP file format)"
+feature    = "mux-mp4"
+ctor       = "vaco_mux_mp4::MUXER_3GP"
+extensions = "3gp"
+mime_types = "video/3gpp"
+
+[[component]]
+kind       = "muxer"
+name       = "3g2"
+long_name  = "3GP2 (3GPP2 file format)"
+feature    = "mux-mp4"
+ctor       = "vaco_mux_mp4::MUXER_3G2"
+extensions = "3g2"
+mime_types = "video/3gpp2"

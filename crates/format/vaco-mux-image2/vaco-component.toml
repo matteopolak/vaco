@@ -1,0 +1,13 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# One muxer. The real multi-file `-update`/`-strftime`/`-atomic_writing`
+# writer (`Image2MuxWriter`) is not reachable through the registry seam at
+# all — see `docs/format/vaco-mux-image2.md` for why — so this row registers
+# the degenerate single-sink adapter, matching `image2pipe`'s shape.
+
+[[component]]
+kind       = "muxer"
+name       = "image2"
+long_name  = "image2 sequence"
+feature    = "mux-image2"
+ctor       = "vaco_mux_image2::MUXER_IMAGE2"

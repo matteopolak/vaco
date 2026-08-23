@@ -1,0 +1,32 @@
+[package]
+name = "vaco-mux-avi"
+description = "AVI (RIFF) muxer."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+vaco-core = { path = "../../core/vaco-core" }
+vaco-io = { path = "../../io/vaco-io" }
+vaco-limits = { path = "../../core/vaco-limits" }
+vaco-packet = { path = "../../model/vaco-packet" }
+vaco-format-core = { path = "../../format/vaco-format-core" }
+vaco-format-riff = { path = "../../format/vaco-format-riff" }
+vaco-codec-core = { path = "../../signal/vaco-codec-core" }
+
+[dev-dependencies]
+proptest.workspace = true
+# Round-trips this crate's own output through its sibling demuxer — the most
+# direct way to verify the byte layout is self-consistent, and it reuses
+# `vaco-demux-avi`'s own measured understanding of the format rather than
+# re-deriving a second, parallel one just for tests.
+vaco-demux-avi = { path = "../vaco-demux-avi" }
+
+[lints]
+workspace = true
+
+[package.metadata.vaco]
+layer = 4

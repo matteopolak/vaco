@@ -7,105 +7,70 @@
 //!
 //! This is **not** a muxer. It writes what it is told, including things a muxer
 //! must not write, which is the point.
+//!
+//! The generic VINT and element-building primitives below are thin
+//! delegations to [`vaco_format_ebml`], which now owns the one definition
+//! (D19); everything from [`block_body`] down is Matroska-specific (RFC 9559
+//! lacing and block shapes) and has no equivalent there.
 
 /// Encode `value` as an EBML data size in `len` octets (RFC 8794 §5).
 #[must_use]
 pub fn vint(value: u64, len: u8) -> Vec<u8> {
-    let len = len.clamp(1, 8);
-    let mut out = Vec::new();
-    for i in (0..len).rev() {
-        out.push(((value >> (8 * u32::from(i))) & 0xFF) as u8);
-    }
-    if let Some(first) = out.first_mut() {
-        *first |= 0x80 >> (len - 1);
-    }
-    out
+    vaco_format_ebml::vint(value, len)
 }
 
 /// The shortest data-size encoding of `value`.
 #[must_use]
 pub fn vint_min(value: u64) -> Vec<u8> {
-    for len in 1..=8u8 {
-        let bits = 7 * u32::from(len);
-        if bits < 64 && value < (1u64 << bits) - 1 {
-            return vint(value, len);
-        }
-    }
-    vint(value, 8)
+    vaco_format_ebml::vint_min(value)
 }
 
 /// The all-ones data size that marks an unknown-size element (RFC 8794 §6.2).
 #[must_use]
 pub fn vint_unknown(len: u8) -> Vec<u8> {
-    let len = len.clamp(1, 8);
-    let bits = 7 * u32::from(len);
-    let value = if bits >= 64 {
-        u64::MAX
-    } else {
-        (1u64 << bits) - 1
-    };
-    vint(value, len)
+    vaco_format_ebml::vint_unknown(len)
 }
 
 /// An element ID, big-endian with its marker already in place.
 #[must_use]
 pub fn id_bytes(id: u32) -> Vec<u8> {
-    let len = match id {
-        0x80..=0xFF => 1,
-        0x4000..=0xFFFF => 2,
-        0x20_0000..=0xFF_FFFF => 3,
-        _ => 4,
-    };
-    id.to_be_bytes()
-        .get(4 - len..)
-        .map(<[u8]>::to_vec)
-        .unwrap_or_default()
+    vaco_format_ebml::id_bytes(id)
 }
 
 /// One complete element: ID, shortest size, body.
 #[must_use]
 pub fn element(id: u32, body: &[u8]) -> Vec<u8> {
-    let mut out = id_bytes(id);
-    out.extend_from_slice(&vint_min(body.len() as u64));
-    out.extend_from_slice(body);
-    out
+    vaco_format_ebml::write_element(id, body)
 }
 
 /// An element whose size field is the unknown-size marker.
 #[must_use]
 pub fn element_unknown_size(id: u32, body: &[u8]) -> Vec<u8> {
-    let mut out = id_bytes(id);
-    out.extend_from_slice(&vint_unknown(8));
-    out.extend_from_slice(body);
-    out
+    vaco_format_ebml::element_unknown_size(id, body)
 }
 
 /// An unsigned-integer element, in the fewest octets that hold `value`.
 #[must_use]
 pub fn uint(id: u32, value: u64) -> Vec<u8> {
-    let mut bytes = value.to_be_bytes().to_vec();
-    while bytes.len() > 1 && bytes.first() == Some(&0) {
-        bytes.remove(0);
-    }
-    element(id, &bytes)
+    vaco_format_ebml::write_uint(id, value)
 }
 
 /// A signed-integer element.
 #[must_use]
 pub fn int(id: u32, value: i64) -> Vec<u8> {
-    element(id, &value.to_be_bytes())
+    vaco_format_ebml::write_int(id, value)
 }
 
 /// An eight-octet float element.
 #[must_use]
 pub fn float(id: u32, value: f64) -> Vec<u8> {
-    element(id, &value.to_be_bytes())
+    vaco_format_ebml::write_float(id, value)
 }
 
 /// A string element.
 #[must_use]
 pub fn string(id: u32, value: &str) -> Vec<u8> {
-    element(id, value.as_bytes())
+    vaco_format_ebml::write_string(id, value)
 }
 
 /// A `SimpleBlock` or `Block` body: header plus already-laced payload.
@@ -175,17 +140,7 @@ pub fn fixed_lace(frames: &[&[u8]]) -> Vec<u8> {
 /// The signed VINT of RFC 9559 §10.3.3: bias by `2^(7n-1) - 1`.
 #[must_use]
 pub fn signed_vint(value: i64) -> Vec<u8> {
-    for len in 1..=8u8 {
-        let bias = (1i64 << (7 * u32::from(len) - 1)) - 1;
-        let Some(biased) = value.checked_add(bias) else {
-            continue;
-        };
-        let bits = 7 * u32::from(len);
-        if biased >= 0 && (biased as u64) < (1u64 << bits) - 1 {
-            return vint(biased as u64, len);
-        }
-    }
-    vint(0, 8)
+    vaco_format_ebml::signed_vint(value)
 }
 
 /// A complete EBML header declaring `doc_type`.

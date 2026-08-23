@@ -1,0 +1,49 @@
+# Registry fragment, per the frozen schema in planning/19-parallel-execution.md
+# §3.4.
+#
+# Five names, measured against `ffmpeg -formats` / `ffmpeg -h muxer=<name>`
+# 8.1 rather than assumed: `ogg` (video+audio, default video theora, default
+# audio flac), `oga` (audio only, default flac), `ogv` (video, default vp8),
+# `opus` (audio, default opus), `spx` (audio, default speex). All five are
+# one implementation (`OggMuxer`) differing only in these declared defaults
+# and extensions — see `docs/format/vaco-mux-ogg.md`.
+
+[[component]]
+kind       = "muxer"
+name       = "ogg"
+long_name  = "Ogg"
+feature    = "mux-ogg"
+ctor       = "vaco_mux_ogg::MUXER_OGG"
+extensions = "ogg"
+
+[[component]]
+kind       = "muxer"
+name       = "oga"
+long_name  = "Ogg Audio"
+feature    = "mux-ogg"
+ctor       = "vaco_mux_ogg::MUXER_OGA"
+extensions = "oga"
+
+[[component]]
+kind       = "muxer"
+name       = "ogv"
+long_name  = "Ogg Video"
+feature    = "mux-ogg"
+ctor       = "vaco_mux_ogg::MUXER_OGV"
+extensions = "ogv"
+
+[[component]]
+kind       = "muxer"
+name       = "opus"
+long_name  = "Ogg Opus"
+feature    = "mux-ogg"
+ctor       = "vaco_mux_ogg::MUXER_OPUS"
+extensions = "opus"
+
+[[component]]
+kind       = "muxer"
+name       = "spx"
+long_name  = "Ogg Speex"
+feature    = "mux-ogg"
+ctor       = "vaco_mux_ogg::MUXER_SPX"
+extensions = "spx"

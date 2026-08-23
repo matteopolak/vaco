@@ -1,0 +1,10 @@
+# Registry fragment, per the frozen schema in planning/19-parallel-execution.md
+# §3.4.
+
+[[component]]
+kind       = "muxer"
+name       = "avi"
+long_name  = "AVI (Audio Video Interleaved)"
+feature    = "mux-avi"
+ctor       = "vaco_mux_avi::MUXER"
+extensions = "avi"

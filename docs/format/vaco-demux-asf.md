@@ -1,0 +1,189 @@
+# `vaco-demux-asf`
+
+Layer 4. The ASF demuxer: the Header Object walk, the fixed-size-packet
+Data Object walk, fragment reassembly, seeking, and DRM detection. Built on
+`vaco-format-asf`, which owns the GUID table and the object-header
+arithmetic — this crate is the ASF-specific interpretation on top of it, the
+way `vaco-demux-avi` is the `hdrl`/`strl`/`movi` walk on top of
+`vaco-format-riff`.
+
+Registered as `asf` (auto-probed) and `asf_o` (never auto-probed; see
+below).
+
+---
+
+## What it is
+
+| Module | Contents |
+|---|---|
+| `header` | File Properties, Stream Properties (built from `WAVEFORMATEX`/`BITMAPINFOHEADER` via `vaco-format-asf::codec`), Content Description, Extended Content Description, DRM detection |
+| `packet` | Data Packet / payload-parsing-information decoding — all four payload shapes (single, single-compressed, multiple, multiple-compressed) |
+| `index` | Simple Index Object and the top-level (non-simple) Index Object |
+| `demux` | `AsfDemuxer` — ties the above together: fragment reassembly across packets, the clock, seeking |
+
+Written from Microsoft's *"Advanced Systems Format (ASF) Specification"*,
+Revision 01.20.06, plus black-box probing of the installed `ffmpeg 8.1`
+binary's own `asf`/`asf_o`/`asf_stream` registrations and byte output
+(D6/D7/D17). Every place that draws on a probe rather than the spec text
+says so in its own doc comment; the packet-header byte layout below was
+additionally confirmed against a live `ffmpeg -f asf` dump, not just derived
+from the spec text.
+
+---
+
+## How it works
+
+### ASF is a fixed-size-packet format
+
+This is the one fact that shapes the whole crate. The File Properties
+Object states one Data Packet size up front (`Minimum`/`Maximum Data Packet
+Size`, which the spec requires to be equal), and every packet in the file is
+exactly that many bytes. A media object bigger than one packet is split into
+several *fragments* (ordinary payloads sharing a media object number, each
+carrying its own `Offset Into Media Object`); several small objects are
+packed behind one *multiple-payload* header. `packet::parse_packet` decodes
+one packet's payload list; `demux::AsfDemuxer`'s `PendingObject` map
+reassembles fragments across packets, keyed by ASF stream number.
+
+Fragment reassembly rule: a payload at `offset == 0` starts a new pending
+object (flushing whatever the previous one had collected, if its length was
+never known via Replicated Data and so was never auto-completed); any other
+payload extends the pending object only if its offset matches how much has
+been collected so far, and is otherwise dropped as desynchronised input.
+
+### Payload parsing information — measured against a real file
+
+`ffmpeg -f lavfi -i sine=d=1:r=8000 -c:a pcm_s16le -ac 1 -f asf outa.asf`,
+then a byte-level dump of the first Data Packet, confirmed:
+
+- The reference's own packets carry **Error Correction Data** (§5.2.1) even
+  though the stream's declared error-correction type is uncorrected
+  (`Type=0000, Number=0000`) — the ECC envelope is present, just empty of
+  real redundancy. `packet::parse_packet` skips it unconditionally when the
+  first byte's high bit says it is there.
+- The reference always sets **Multiple Payloads Present = 1**, even for a
+  packet holding exactly one payload. `vaco-mux-asf` does the same (see that
+  crate's docs) — one write path instead of two.
+- `Property Flags` is exactly `0x5D` (Replicated Data Length=BYTE, Offset
+  Into Media Object=DWORD, Media Object Number=BYTE, Stream Number=BYTE) —
+  the values the spec itself calls "should"/"shall" recommend, confirmed
+  byte-for-byte.
+- `Padding Length Type` is `WORD`, not `BYTE` — the reference does not rely
+  on padding always fitting in one byte.
+
+### Content Description / Extended Content Description tag mapping
+
+Measured (`ffmpeg -metadata title=… author=… copyright=… comment=… rating=…
+genre=… track=… date=… language=… album=… -f asf`, then `ffprobe
+-show_format`, then a raw byte dump of the Extended Content Description
+Object): the five Content Description fields map to `title`/`artist`/
+`copyright`/`comment`/`rating`; a handful of `WM/`-prefixed Extended Content
+Description names map to `genre`/`track`/`language`/`album`/`encoder`; a
+bare `date` (no `WM/` prefix — a genuine surprise the measurement caught) maps
+to `date` unchanged. Anything else is exposed under its own name with a
+`WM/` prefix stripped, an honest fallback rather than a claimed
+reproduction of the reference's full tag table — that table is large and
+this crate has verified only the entries above.
+
+### DRM: detected, not decrypted
+
+`header::parse_header_object` sets `HeaderInfo::encryption` when a Content
+Encryption Object, Extended Content Encryption Object, or Alternate
+Extended Content Encryption Object is present. `AsfDemuxer::open` still
+succeeds — a caller can see the stream list and container metadata of a
+protected file, the same as a probing tool would want to — but
+`AsfDemuxer::read_packet` refuses immediately with `Error::Unsupported`
+naming which object was found, before reading a single Data Packet byte.
+Implementing, circumventing, or working around the encryption is out of
+scope by design.
+
+Per-stream encryption (the Stream Properties Object's own `Encrypted
+Content Flag`, distinct from the whole-file DRM objects above) is recorded
+as `stream.metadata["encrypted"] = "1"` rather than refused — it is a
+declaration this crate has not seen combined with an actual DRM object in
+anything it measured, and is not itself something to fail a read over.
+
+### `asf_o`
+
+Measured (`ffmpeg -h demuxer=asf_o`): the reference registers this name with
+no options, and it is never the format `ffprobe` reports for an ordinary
+file — the "select it explicitly with `-f asf_o`, never auto-detected"
+shape. This crate's `asf_o` is the identical reader (`probe_opaque` always
+returns `ProbeScore::NONE`) with binary search and byte seeking additionally
+disabled via `FormatFlags::NO_BYTE_SEEK` — the honest amount of behaviour to
+claim without opening `~/repos/FFmpeg` to see what `asf_o` actually does
+differently there.
+
+### Seeking
+
+`FormatFlags::NOBINSEARCH` is set: a byte position does not imply a
+presentation time without decoding at least one packet header to read its
+Send Time, and this crate has not built or verified a bisection strategy
+against real multi-gigabyte content. Seeking instead goes through the
+Simple Index Object(s) / top-level Index Object (converted into one flat
+`PacketIndex`, merging every stream the same way `vaco-demux-avi` merges
+`idx1` across streams) or `FormatFlags::GENERIC_INDEX`'s packets-seen
+fallback. A seek always lands on a whole packet boundary and discards any
+fragment-reassembly state in flight — there is nothing salvageable
+mid-fragment after a seek.
+
+---
+
+## What was exercised, and what was not
+
+- **Exercised**: the full open → read-packets → EOF path against a
+  hand-built minimal file (`demux::tests::opens_and_reads_a_minimal_hand_built_file`)
+  and against `vaco-mux-asf`'s own output including a forced fragmentation
+  case (`vaco-mux-asf/tests/roundtrip.rs`); every payload shape
+  (single/multiple, compressed/uncompressed, with/without Replicated Data,
+  with Error Correction Data present) against hand-built packet bytes; the
+  Content Description / Extended Content Description tag mapping against
+  the measured set of tags; Simple Index Object and top-level Index Object
+  parsing against hand-built bytes.
+- **Structurally present, not exercised end-to-end**: the top-level Index
+  Object's *use* for seeking (parsed and converted, but only specifier 0 is
+  used — see `index`'s module docs for why); Extended Stream Properties
+  Object children of the Header Extension Object (walked for structural
+  validity, not parsed — a stream declared only there, with no free-standing
+  Stream Properties Object, is invisible to this crate); Media Object Index
+  Object and Timecode Index Object (not parsed at all).
+- **Not measured against ASF's DRM support directly**: no encrypted sample
+  was available to build in this environment; the detection path is
+  exercised against hand-built Content Encryption Object bytes only.
+
+---
+
+## How to change it
+
+- **Add a codec mapping**: this crate does not define its own tag tables —
+  it calls `vaco_format_asf::codec`. Add the mapping there.
+- **Change the fragment-reassembly heuristic**: `demux::AsfDemuxer::feed_payload`
+  is the one place it lives; the module docs on `PendingObject` explain the
+  exact rule an alternative would need to preserve (flush-on-offset-zero
+  when length is unknown, discard-on-mismatch otherwise).
+- **Support Extended Stream Properties Object streams**:
+  `header::parse_header_extension`'s doc comment names exactly what is
+  missing — walking its children for `ASF_Extended_Stream_Properties_Object`
+  and feeding the embedded Stream Properties Object through the same
+  `parse_stream_properties` this crate already has.
+- **Use more than one Index Object specifier**: `index::IndexObject`'s doc
+  comment explains the shape a multi-specifier-aware `PacketIndex` would
+  need, and why one flat table cannot represent it today.
+
+## Configuration
+
+None beyond the generic `vaco_format_core::FormatOptions` every demuxer
+takes (`max_streams`, `indexmem` via `PacketIndex::with_options`,
+`fflags`/`ignidx` via `vaco_format_core::seek::use_container_index`).
+
+## Dependencies
+
+`vaco-core`, `vaco-bitstream` (unused directly by `packet.rs`, which rolls
+its own tiny variable-width cursor — see that module's doc comment for why),
+`vaco-io` (`IoContext`, `Seekability`), `vaco-limits` (`Budget`,
+`IncrementalVec` for fragment reassembly buffers), `vaco-packet`,
+`vaco-chlayout` (`ChannelLayout::default_for`/`unspecified`),
+`vaco-format-core` (`Demuxer`, `DemuxerDesc`, `FormatFlags`, the seek
+machinery), `vaco-format-asf` (GUIDs, the object walk, codec mapping),
+`vaco-format-riff` (`WaveFormatEx`, `BitmapInfoHeader`), `vaco-codec-core`
+(`CodecParameters`, `CodecId`). No `vaco-parse-*` dependency (D14.1).

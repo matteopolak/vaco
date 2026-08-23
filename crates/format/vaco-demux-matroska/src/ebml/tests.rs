@@ -135,7 +135,7 @@ fn only_segment_and_cluster_may_be_unknown_sized() {
 /// RFC 8794 section 6.2, table 5, applied to Matroska's own shape.
 #[test]
 fn a_new_cluster_ends_an_unknown_size_cluster() {
-    let mut stack = Stack::new();
+    let mut stack = MatroskaStack::new();
     stack.push(el::SEGMENT, None).unwrap();
     stack.push(el::CLUSTER, None).unwrap();
     // Sibling: shares the same parent, so it ends the open one.
@@ -153,7 +153,7 @@ fn a_new_cluster_ends_an_unknown_size_cluster() {
 fn an_unknown_id_never_ends_an_unknown_size_element() {
     // RFC 8794 section 6.2 lists only *valid* elements as terminators, so an ID
     // the schema does not know cannot end anything — it is skipped by size.
-    let mut stack = Stack::new();
+    let mut stack = MatroskaStack::new();
     stack.push(el::SEGMENT, None).unwrap();
     stack.push(el::CLUSTER, None).unwrap();
     assert_eq!(stack.terminations_for(0x8F), None);
@@ -161,7 +161,7 @@ fn an_unknown_id_never_ends_an_unknown_size_element() {
 
 #[test]
 fn a_known_size_frame_is_never_ended_early() {
-    let mut stack = Stack::new();
+    let mut stack = MatroskaStack::new();
     stack.push(el::SEGMENT, None).unwrap();
     stack.push(el::CLUSTER, Some(1000)).unwrap();
     // `Cues` is not a legal child of `Cluster`, but the cluster's size says
@@ -171,7 +171,7 @@ fn a_known_size_frame_is_never_ended_early() {
 
 #[test]
 fn frames_close_when_their_end_is_reached() {
-    let mut stack = Stack::new();
+    let mut stack = MatroskaStack::new();
     stack.push(el::SEGMENT, Some(100)).unwrap();
     stack.push(el::CLUSTER, Some(50)).unwrap();
     assert_eq!(stack.close_finished(49), 0);
@@ -182,8 +182,8 @@ fn frames_close_when_their_end_is_reached() {
 
 #[test]
 fn the_stack_refuses_to_grow_past_its_ceiling() {
-    let mut stack = Stack::new();
-    for _ in 0..Stack::MAX_FRAMES {
+    let mut stack = MatroskaStack::new();
+    for _ in 0..MatroskaStack::MAX_FRAMES {
         stack.push(el::SIMPLETAG, None).unwrap();
     }
     assert!(stack.push(el::SIMPLETAG, None).is_err());

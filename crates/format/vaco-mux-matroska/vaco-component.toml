@@ -1,0 +1,32 @@
+# Registry fragment, per the frozen schema in planning/19-parallel-execution.md
+# §3.4.
+#
+# The brief this crate was built from named a fourth registration,
+# `matroska_audio`. Measured against `ffmpeg 8.1` (`ffmpeg -hide_banner
+# -muxers` and `ffmpeg -h muxer=matroska_audio` -> "Unknown format
+# 'matroska_audio'.") — no such muxer exists in the reference, so it is not
+# registered here. See docs/format/vaco-mux-matroska.md's note on this.
+
+[[component]]
+kind       = "muxer"
+name       = "matroska"
+long_name  = "Matroska"
+feature    = "mux-matroska"
+ctor       = "vaco_mux_matroska::MUXER_MATROSKA"
+extensions = "mkv"
+
+[[component]]
+kind       = "muxer"
+name       = "webm"
+long_name  = "WebM"
+feature    = "mux-matroska"
+ctor       = "vaco_mux_matroska::MUXER_WEBM"
+extensions = "webm"
+
+[[component]]
+kind       = "muxer"
+name       = "webm_chunk"
+long_name  = "WebM Chunk Muxer"
+feature    = "mux-matroska"
+ctor       = "vaco_mux_matroska::MUXER_WEBM_CHUNK"
+extensions = "chk"

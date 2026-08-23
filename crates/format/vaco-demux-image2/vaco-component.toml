@@ -1,0 +1,311 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# 38 demuxers, one shared feature: `image2` plus the 37 `*_pipe` splitters.
+# Names, long names and extensions are captured under `LC_ALL=C` against
+# ffmpeg 8.1 (`ffmpeg -demuxers`, `ffmpeg -h demuxer=<name>`) — see
+# `docs/format/vaco-demux-image2.md` for the exact commands, the measured
+# vs. assumed split, and why the count is 37 pipe splitters, not the
+# roadmap's 42.
+
+[[component]]
+kind       = "demuxer"
+name       = "image2"
+long_name  = "image2 sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::DEMUXER_IMAGE2"
+
+[[component]]
+kind       = "demuxer"
+name       = "bmp_pipe"
+long_name  = "piped bmp sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_BMP"
+extensions = "bmp"
+
+[[component]]
+kind       = "demuxer"
+name       = "cri_pipe"
+long_name  = "piped cri sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_CRI"
+extensions = "cri"
+
+[[component]]
+kind       = "demuxer"
+name       = "dds_pipe"
+long_name  = "piped dds sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_DDS"
+extensions = "dds"
+
+[[component]]
+kind       = "demuxer"
+name       = "dpx_pipe"
+long_name  = "piped dpx sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_DPX"
+extensions = "dpx"
+
+[[component]]
+kind       = "demuxer"
+name       = "exr_pipe"
+long_name  = "piped exr sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_EXR"
+extensions = "exr"
+
+[[component]]
+kind       = "demuxer"
+name       = "gem_pipe"
+long_name  = "piped gem sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_GEM"
+extensions = "gem"
+
+[[component]]
+kind       = "demuxer"
+name       = "gif_pipe"
+long_name  = "piped gif sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_GIF"
+extensions = "gif"
+
+[[component]]
+kind       = "demuxer"
+name       = "hdr_pipe"
+long_name  = "piped hdr sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_HDR"
+extensions = "hdr"
+
+[[component]]
+kind       = "demuxer"
+name       = "j2k_pipe"
+long_name  = "piped j2k sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_J2K"
+extensions = "j2k"
+
+[[component]]
+kind       = "demuxer"
+name       = "jpeg_pipe"
+long_name  = "piped jpeg sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_JPEG"
+extensions = "jpg,jpeg"
+
+[[component]]
+kind       = "demuxer"
+name       = "jpegls_pipe"
+long_name  = "piped jpegls sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_JPEGLS"
+extensions = "jls"
+
+[[component]]
+kind       = "demuxer"
+name       = "jpegxl_pipe"
+long_name  = "piped jpegxl sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_JPEGXL"
+extensions = "jxl"
+
+[[component]]
+kind       = "demuxer"
+name       = "jpegxs_pipe"
+long_name  = "piped jpegxs sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_JPEGXS"
+extensions = "jxs"
+
+[[component]]
+kind       = "demuxer"
+name       = "pam_pipe"
+long_name  = "piped pam sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_PAM"
+extensions = "pam"
+
+[[component]]
+kind       = "demuxer"
+name       = "pbm_pipe"
+long_name  = "piped pbm sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_PBM"
+extensions = "pbm"
+
+[[component]]
+kind       = "demuxer"
+name       = "pcx_pipe"
+long_name  = "piped pcx sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_PCX"
+extensions = "pcx"
+
+[[component]]
+kind       = "demuxer"
+name       = "pfm_pipe"
+long_name  = "piped pfm sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_PFM"
+extensions = "pfm"
+
+[[component]]
+kind       = "demuxer"
+name       = "pgm_pipe"
+long_name  = "piped pgm sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_PGM"
+extensions = "pgm"
+
+[[component]]
+kind       = "demuxer"
+name       = "pgmyuv_pipe"
+long_name  = "piped pgmyuv sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_PGMYUV"
+extensions = "pgmyuv"
+
+[[component]]
+kind       = "demuxer"
+name       = "pgx_pipe"
+long_name  = "piped pgx sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_PGX"
+extensions = "pgx"
+
+[[component]]
+kind       = "demuxer"
+name       = "phm_pipe"
+long_name  = "piped phm sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_PHM"
+extensions = "phm"
+
+[[component]]
+kind       = "demuxer"
+name       = "photocd_pipe"
+long_name  = "piped photocd sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_PHOTOCD"
+extensions = "pcd"
+
+[[component]]
+kind       = "demuxer"
+name       = "pictor_pipe"
+long_name  = "piped pictor sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_PICTOR"
+extensions = "pic"
+
+[[component]]
+kind       = "demuxer"
+name       = "png_pipe"
+long_name  = "piped png sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_PNG"
+extensions = "png"
+
+[[component]]
+kind       = "demuxer"
+name       = "ppm_pipe"
+long_name  = "piped ppm sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_PPM"
+extensions = "ppm"
+
+[[component]]
+kind       = "demuxer"
+name       = "psd_pipe"
+long_name  = "piped psd sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_PSD"
+extensions = "psd"
+
+[[component]]
+kind       = "demuxer"
+name       = "qdraw_pipe"
+long_name  = "piped qdraw sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_QDRAW"
+extensions = "pict,pct"
+
+[[component]]
+kind       = "demuxer"
+name       = "qoi_pipe"
+long_name  = "piped qoi sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_QOI"
+extensions = "qoi"
+
+[[component]]
+kind       = "demuxer"
+name       = "sgi_pipe"
+long_name  = "piped sgi sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_SGI"
+extensions = "sgi"
+
+[[component]]
+kind       = "demuxer"
+name       = "sunrast_pipe"
+long_name  = "piped sunrast sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_SUNRAST"
+extensions = "sun,ras"
+
+[[component]]
+kind       = "demuxer"
+name       = "svg_pipe"
+long_name  = "piped svg sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_SVG"
+extensions = "svg"
+
+[[component]]
+kind       = "demuxer"
+name       = "tiff_pipe"
+long_name  = "piped tiff sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_TIFF"
+extensions = "tiff,tif"
+
+[[component]]
+kind       = "demuxer"
+name       = "vbn_pipe"
+long_name  = "piped vbn sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_VBN"
+extensions = "vbn"
+
+[[component]]
+kind       = "demuxer"
+name       = "webp_pipe"
+long_name  = "piped webp sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_WEBP"
+extensions = "webp"
+
+[[component]]
+kind       = "demuxer"
+name       = "xbm_pipe"
+long_name  = "piped xbm sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_XBM"
+extensions = "xbm"
+
+[[component]]
+kind       = "demuxer"
+name       = "xpm_pipe"
+long_name  = "piped xpm sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_XPM"
+extensions = "xpm"
+
+[[component]]
+kind       = "demuxer"
+name       = "xwd_pipe"
+long_name  = "piped xwd sequence"
+feature    = "demux-image2"
+ctor       = "vaco_demux_image2::pipe::DEMUXER_XWD"
+extensions = "xwd"

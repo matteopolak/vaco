@@ -1,0 +1,30 @@
+[package]
+name = "vaco-format-audio-simple"
+description = "wav, w64, aiff, caf, au, voc, sox, ircam, rso: demux and mux."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+vaco-core = { path = "../../core/vaco-core" }
+vaco-io = { path = "../../io/vaco-io" }
+vaco-bitstream = { path = "../../core/vaco-bitstream" }
+vaco-limits = { path = "../../core/vaco-limits" }
+vaco-packet = { path = "../../model/vaco-packet" }
+vaco-sampfmt = { path = "../../model/vaco-sampfmt" }
+vaco-chlayout = { path = "../../model/vaco-chlayout" }
+vaco-format-core = { path = "../../format/vaco-format-core" }
+vaco-format-riff = { path = "../../format/vaco-format-riff" }
+vaco-codec-core = { path = "../../signal/vaco-codec-core" }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.vaco]
+layer = 4

@@ -735,6 +735,20 @@ pub fn to_unix_time(iso: u64) -> Option<i64> {
     i64::try_from(iso).ok()?.checked_sub(EPOCH_OFFSET_SECS)
 }
 
+/// The inverse of [`to_unix_time`], for `vaco-mux-mp4`.
+///
+/// Clamped to `0` rather than wrapping for a timestamp before the 1904 epoch —
+/// there is no ISOBMFF value for that, and `0` ("unspecified") is the least
+/// misleading substitute. Saturates upward too, so a caller-supplied far-future
+/// value cannot overflow the field it is written into.
+#[must_use]
+pub fn from_unix_time(unix_secs: i64) -> u64 {
+    unix_secs
+        .saturating_add(EPOCH_OFFSET_SECS)
+        .try_into()
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,

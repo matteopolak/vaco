@@ -1,0 +1,322 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# 40 muxers, one shared feature: `--features mux-raw` brings the whole crate
+# or none of it. Names, long names and extensions are captured under
+# `LC_ALL=C` against ffmpeg 8.1 (`ffmpeg -muxers`, `ffmpeg -h muxer=<name>`)
+# — see `docs/format/vaco-mux-raw.md`. Several long names/extensions differ
+# from the matching demuxer in `vaco-demux-raw`'s fragment; that is measured,
+# not a typo — see that file's `crate::raw` module docs for the list.
+
+# ---------------------------------------------------------------------- PCM
+
+[[component]]
+kind      = "muxer"
+name      = "alaw"
+long_name = "PCM A-law"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_ALAW"
+extensions = "al"
+
+[[component]]
+kind      = "muxer"
+name      = "mulaw"
+long_name = "PCM mu-law"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_MULAW"
+extensions = "ul"
+
+[[component]]
+kind      = "muxer"
+name      = "f32be"
+long_name = "PCM 32-bit floating-point big-endian"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_F32BE"
+
+[[component]]
+kind      = "muxer"
+name      = "f32le"
+long_name = "PCM 32-bit floating-point little-endian"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_F32LE"
+
+[[component]]
+kind      = "muxer"
+name      = "f64be"
+long_name = "PCM 64-bit floating-point big-endian"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_F64BE"
+
+[[component]]
+kind      = "muxer"
+name      = "f64le"
+long_name = "PCM 64-bit floating-point little-endian"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_F64LE"
+
+[[component]]
+kind      = "muxer"
+name      = "s16be"
+long_name = "PCM signed 16-bit big-endian"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_S16BE"
+
+[[component]]
+kind      = "muxer"
+name      = "s16le"
+long_name = "PCM signed 16-bit little-endian"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_S16LE"
+extensions = "sw"
+
+[[component]]
+kind      = "muxer"
+name      = "s24be"
+long_name = "PCM signed 24-bit big-endian"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_S24BE"
+
+[[component]]
+kind      = "muxer"
+name      = "s24le"
+long_name = "PCM signed 24-bit little-endian"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_S24LE"
+
+[[component]]
+kind      = "muxer"
+name      = "s32be"
+long_name = "PCM signed 32-bit big-endian"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_S32BE"
+
+[[component]]
+kind      = "muxer"
+name      = "s32le"
+long_name = "PCM signed 32-bit little-endian"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_S32LE"
+
+[[component]]
+kind      = "muxer"
+name      = "s8"
+long_name = "PCM signed 8-bit"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_S8"
+extensions = "sb"
+
+[[component]]
+kind      = "muxer"
+name      = "u16be"
+long_name = "PCM unsigned 16-bit big-endian"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_U16BE"
+
+[[component]]
+kind      = "muxer"
+name      = "u16le"
+long_name = "PCM unsigned 16-bit little-endian"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_U16LE"
+extensions = "uw"
+
+[[component]]
+kind      = "muxer"
+name      = "u24be"
+long_name = "PCM unsigned 24-bit big-endian"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_U24BE"
+
+[[component]]
+kind      = "muxer"
+name      = "u24le"
+long_name = "PCM unsigned 24-bit little-endian"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_U24LE"
+
+[[component]]
+kind      = "muxer"
+name      = "u32be"
+long_name = "PCM unsigned 32-bit big-endian"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_U32BE"
+
+[[component]]
+kind      = "muxer"
+name      = "u32le"
+long_name = "PCM unsigned 32-bit little-endian"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_U32LE"
+
+[[component]]
+kind      = "muxer"
+name      = "u8"
+long_name = "PCM unsigned 8-bit"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_U8"
+extensions = "ub"
+
+[[component]]
+kind      = "muxer"
+name      = "vidc"
+long_name = "PCM Archimedes VIDC"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_VIDC"
+
+# ---------------------------------------------------------------- raw video
+
+[[component]]
+kind      = "muxer"
+name      = "rawvideo"
+long_name = "raw video"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_RAWVIDEO"
+extensions = "yuv,rgb"
+
+[[component]]
+kind      = "muxer"
+name      = "yuv4mpegpipe"
+long_name = "YUV4MPEG pipe"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::y4m::MUXER_YUV4MPEGPIPE"
+extensions = "y4m"
+
+# ----------------------------------------------------------------- bitstream
+
+[[component]]
+kind      = "muxer"
+name      = "avs2"
+long_name = "raw AVS2-P2/IEEE1857.4 video"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_AVS2"
+extensions = "avs,avs2"
+
+[[component]]
+kind      = "muxer"
+name      = "avs3"
+long_name = "AVS3-P2/IEEE1857.10"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_AVS3"
+extensions = "avs3"
+
+[[component]]
+kind      = "muxer"
+name      = "bit"
+long_name = "G.729 BIT file format"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_BIT"
+extensions = "bit"
+mime_types = "audio/bit"
+
+[[component]]
+kind      = "muxer"
+name      = "cavsvideo"
+long_name = "raw Chinese AVS (Audio Video Standard) video"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_CAVSVIDEO"
+extensions = "cavs"
+
+[[component]]
+kind      = "muxer"
+name      = "data"
+long_name = "raw data"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_DATA"
+
+[[component]]
+kind      = "muxer"
+name      = "dirac"
+long_name = "raw Dirac"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_DIRAC"
+extensions = "drc,vc2"
+
+[[component]]
+kind      = "muxer"
+name      = "dnxhd"
+long_name = "raw DNxHD (SMPTE VC-3)"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_DNXHD"
+extensions = "dnxhd,dnxhr"
+
+[[component]]
+kind      = "muxer"
+name      = "evc"
+long_name = "raw EVC video"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_EVC"
+extensions = "evc"
+
+[[component]]
+kind      = "muxer"
+name      = "h261"
+long_name = "raw H.261"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_H261"
+extensions = "h261"
+mime_types = "video/x-h261"
+
+[[component]]
+kind      = "muxer"
+name      = "h263"
+long_name = "raw H.263"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_H263"
+extensions = "h263"
+mime_types = "video/x-h263"
+
+[[component]]
+kind      = "muxer"
+name      = "h264"
+long_name = "raw H.264 video"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_H264"
+extensions = "h264,264"
+
+[[component]]
+kind      = "muxer"
+name      = "hevc"
+long_name = "raw HEVC video"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_HEVC"
+extensions = "hevc,h265,265"
+
+[[component]]
+kind      = "muxer"
+name      = "m4v"
+long_name = "raw MPEG-4 video"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_M4V"
+extensions = "m4v"
+
+[[component]]
+kind      = "muxer"
+name      = "mjpeg"
+long_name = "raw MJPEG video"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_MJPEG"
+extensions = "mjpg,mjpeg"
+mime_types = "video/x-mjpeg"
+
+[[component]]
+kind      = "muxer"
+name      = "obu"
+long_name = "AV1 low overhead OBU"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_OBU"
+extensions = "obu"
+
+[[component]]
+kind      = "muxer"
+name      = "vc1"
+long_name = "raw VC-1 video"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_VC1"
+extensions = "vc1"
+
+[[component]]
+kind      = "muxer"
+name      = "vvc"
+long_name = "raw H.266/VVC video"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_VVC"
+extensions = "vvc,h266,266"

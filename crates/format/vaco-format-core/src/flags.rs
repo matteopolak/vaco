@@ -56,6 +56,14 @@ bitflags::bitflags! {
         const FIXED_FRAMESIZE = 1 << 16;
         /// Seek targets are PTS, not DTS.
         const SEEK_TO_PTS     = 1 << 17;
+        /// The muxer understands `write_packet(None)` as "flush what you have
+        /// buffered internally" (plan 18 §1.3, rule M20).
+        ///
+        /// Mux-side only, and **opt-in**: a muxer that does not declare it is
+        /// never handed a flush marker, because a muxer that treats `None` as
+        /// end-of-stream and one that treats it as a checkpoint cannot be told
+        /// apart from the outside.
+        const ALLOW_FLUSH     = 1 << 18;
     }
 }
 
@@ -93,6 +101,32 @@ impl FormatFlags {
     pub const fn requires_strict_dts(self) -> bool {
         !self.contains(Self::TS_NONSTRICT)
     }
+
+    /// Whether the muxer may be handed a `None` flush marker (M20).
+    #[must_use]
+    pub const fn allows_flush(self) -> bool {
+        self.contains(Self::ALLOW_FLUSH)
+    }
+
+    /// Whether this container stores no timestamps at all (M18).
+    #[must_use]
+    pub const fn has_no_timestamps(self) -> bool {
+        self.contains(Self::NOTIMESTAMPS)
+    }
+
+    /// Whether a valid file may contain no streams (M13).
+    #[must_use]
+    pub const fn allows_no_streams(self) -> bool {
+        self.contains(Self::NOSTREAMS)
+    }
+
+    /// Whether the container wants codec extradata out of band, in the header
+    /// (M16). Such a muxer needs `extract_extradata` inserted when the stream
+    /// carries its parameter sets in band.
+    #[must_use]
+    pub const fn wants_global_header(self) -> bool {
+        self.contains(Self::GLOBALHEADER)
+    }
 }
 
 /// The name each flag prints under, in bit order.
@@ -115,6 +149,7 @@ pub const FORMAT_FLAG_NAMES: &[(FormatFlags, &str)] = &[
     (FormatFlags::TS_NEGATIVE, "ts_negative"),
     (FormatFlags::FIXED_FRAMESIZE, "fixed_framesize"),
     (FormatFlags::SEEK_TO_PTS, "seek_to_pts"),
+    (FormatFlags::ALLOW_FLUSH, "allow_flush"),
 ];
 
 impl core::fmt::Display for FormatFlags {

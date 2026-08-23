@@ -1,0 +1,17 @@
+# Registry fragment, per the frozen schema in planning/19-parallel-execution.md
+# §3.4.
+
+[[component]]
+kind       = "muxer"
+name       = "asf"
+long_name  = "ASF (Advanced / Active Streaming Format)"
+feature    = "mux-asf"
+ctor       = "vaco_mux_asf::MUXER"
+extensions = "asf,wmv,wma"
+
+[[component]]
+kind       = "muxer"
+name       = "asf_stream"
+long_name  = "ASF (Advanced / Active Streaming Format)"
+feature    = "mux-asf-stream"
+ctor       = "vaco_mux_asf::MUXER_STREAM"

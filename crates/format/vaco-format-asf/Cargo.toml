@@ -1,0 +1,23 @@
+[package]
+name = "vaco-format-asf"
+description = "Shared ASF (Advanced Systems Format) object model: GUIDs, object headers, codec-ID mapping."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+vaco-core = { path = "../../core/vaco-core" }
+vaco-codec-core = { path = "../../signal/vaco-codec-core" }
+vaco-format-riff = { path = "../vaco-format-riff" }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.vaco]
+layer = 4

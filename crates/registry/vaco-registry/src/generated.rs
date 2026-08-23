@@ -40,6 +40,30 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["al"],
         mime_types: &[],
     },
+    #[cfg(feature = "demux-asf")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "asf",
+        long_name: Some("ASF (Advanced / Active Streaming Format)"),
+        krate: "vaco-demux-asf",
+        feature: Some("demux-asf"),
+        media: None,
+        codec: None,
+        extensions: &["asf", "wmv", "wma"],
+        mime_types: &["video/x-ms-asf"],
+    },
+    #[cfg(feature = "demux-asf-o")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "asf_o",
+        long_name: Some("ASF (Advanced / Active Streaming Format)"),
+        krate: "vaco-demux-asf",
+        feature: Some("demux-asf-o"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-au")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -124,6 +148,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["bitpacked"],
         mime_types: &[],
     },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "bmp_pipe",
+        long_name: Some("piped bmp sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["bmp"],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-caf")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -148,6 +184,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["avs"],
         mime_types: &[],
     },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "cri_pipe",
+        long_name: Some("piped cri sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["cri"],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-raw")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -158,6 +206,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "dds_pipe",
+        long_name: Some("piped dds sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["dds"],
         mime_types: &[],
     },
     #[cfg(feature = "demux-raw")]
@@ -184,6 +244,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "dpx_pipe",
+        long_name: Some("piped dpx sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["dpx"],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-dv")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -206,6 +278,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["evc"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "exr_pipe",
+        long_name: Some("piped exr sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["exr"],
         mime_types: &[],
     },
     #[cfg(feature = "demux-raw")]
@@ -268,6 +352,30 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["flv"],
         mime_types: &["video/x-flv"],
     },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "gem_pipe",
+        long_name: Some("piped gem sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["gem"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "gif_pipe",
+        long_name: Some("piped gif sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["gif"],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-raw")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -304,6 +412,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["h26l", "h264", "264", "avc"],
         mime_types: &[],
     },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "hdr_pipe",
+        long_name: Some("piped hdr sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["hdr"],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-raw")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -316,6 +436,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["hevc", "h265", "265"],
         mime_types: &[],
     },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "image2",
+        long_name: Some("image2 sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-ircam")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -326,6 +458,66 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["sf"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "j2k_pipe",
+        long_name: Some("piped j2k sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["j2k"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "jpeg_pipe",
+        long_name: Some("piped jpeg sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["jpg", "jpeg"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "jpegls_pipe",
+        long_name: Some("piped jpegls sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["jls"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "jpegxl_pipe",
+        long_name: Some("piped jpegxl sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["jxl"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "jpegxs_pipe",
+        long_name: Some("piped jpegxs sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["jxs"],
         mime_types: &[],
     },
     #[cfg(feature = "demux-raw")]
@@ -490,6 +682,186 @@ pub static COMPONENTS: &[crate::Component] = &[
             "audio/speex",
         ],
     },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "pam_pipe",
+        long_name: Some("piped pam sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["pam"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "pbm_pipe",
+        long_name: Some("piped pbm sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["pbm"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "pcx_pipe",
+        long_name: Some("piped pcx sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["pcx"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "pfm_pipe",
+        long_name: Some("piped pfm sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["pfm"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "pgm_pipe",
+        long_name: Some("piped pgm sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["pgm"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "pgmyuv_pipe",
+        long_name: Some("piped pgmyuv sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["pgmyuv"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "pgx_pipe",
+        long_name: Some("piped pgx sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["pgx"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "phm_pipe",
+        long_name: Some("piped phm sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["phm"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "photocd_pipe",
+        long_name: Some("piped photocd sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["pcd"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "pictor_pipe",
+        long_name: Some("piped pictor sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["pic"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "png_pipe",
+        long_name: Some("piped png sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["png"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "ppm_pipe",
+        long_name: Some("piped ppm sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["ppm"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "psd_pipe",
+        long_name: Some("piped psd sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["psd"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "qdraw_pipe",
+        long_name: Some("piped qdraw sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["pict", "pct"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "qoi_pipe",
+        long_name: Some("piped qoi sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["qoi"],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-raw")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -610,6 +982,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["sb"],
         mime_types: &[],
     },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "sgi_pipe",
+        long_name: Some("piped sgi sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["sgi"],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-sox")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -620,6 +1004,42 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["sox"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "sunrast_pipe",
+        long_name: Some("piped sunrast sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["sun", "ras"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "svg_pipe",
+        long_name: Some("piped svg sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["svg"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "tiff_pipe",
+        long_name: Some("piped tiff sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["tiff", "tif"],
         mime_types: &[],
     },
     #[cfg(feature = "demux-raw")]
@@ -730,6 +1150,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["yuv10"],
         mime_types: &[],
     },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "vbn_pipe",
+        long_name: Some("piped vbn sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["vbn"],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-raw")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -802,6 +1234,54 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["wav"],
         mime_types: &["audio/x-wav", "audio/wav"],
     },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "webp_pipe",
+        long_name: Some("piped webp sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["webp"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "xbm_pipe",
+        long_name: Some("piped xbm sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["xbm"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "xpm_pipe",
+        long_name: Some("piped xpm sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["xpm"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-image2")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "xwd_pipe",
+        long_name: Some("piped xwd sequence"),
+        krate: "vaco-demux-image2",
+        feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &["xwd"],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-raw")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -813,6 +1293,30 @@ pub static COMPONENTS: &[crate::Component] = &[
         codec: None,
         extensions: &["y4m"],
         mime_types: &[],
+    },
+    #[cfg(feature = "mux-mp4")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "3g2",
+        long_name: Some("3GP2 (3GPP2 file format)"),
+        krate: "vaco-mux-mp4",
+        feature: Some("mux-mp4"),
+        media: None,
+        codec: None,
+        extensions: &["3g2"],
+        mime_types: &["video/3gpp2"],
+    },
+    #[cfg(feature = "mux-mp4")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "3gp",
+        long_name: Some("3GP (3GPP file format)"),
+        krate: "vaco-mux-mp4",
+        feature: Some("mux-mp4"),
+        media: None,
+        codec: None,
+        extensions: &["3gp"],
+        mime_types: &["video/3gpp"],
     },
     #[cfg(feature = "mux-aiff")]
     crate::Component {
@@ -836,6 +1340,30 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["al"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-asf")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "asf",
+        long_name: Some("ASF (Advanced / Active Streaming Format)"),
+        krate: "vaco-mux-asf",
+        feature: Some("mux-asf"),
+        media: None,
+        codec: None,
+        extensions: &["asf", "wmv", "wma"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-asf-stream")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "asf_stream",
+        long_name: Some("ASF (Advanced / Active Streaming Format)"),
+        krate: "vaco-mux-asf",
+        feature: Some("mux-asf-stream"),
+        media: None,
+        codec: None,
+        extensions: &[],
         mime_types: &[],
     },
     #[cfg(feature = "mux-au")]
@@ -920,6 +1448,17 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["cavs"],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "crc",
+        long_name: Some("CRC testing"),
+        krate: "vaco-mux-hash",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
         mime_types: &[],
     },
     #[cfg(feature = "mux-raw")]
@@ -1018,6 +1557,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "mux-mp4")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "f4v",
+        long_name: Some("F4V Adobe Flash Video"),
+        krate: "vaco-mux-mp4",
+        feature: Some("mux-mp4"),
+        media: None,
+        codec: None,
+        extensions: &["f4v"],
+        mime_types: &[],
+    },
     #[cfg(feature = "mux-raw")]
     crate::Component {
         kind: crate::Kind::Muxer,
@@ -1052,6 +1603,39 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["flv"],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "framecrc",
+        long_name: Some("framecrc testing"),
+        krate: "vaco-mux-hash",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "framehash",
+        long_name: Some("Per-frame hash testing"),
+        krate: "vaco-mux-hash",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "framemd5",
+        long_name: Some("Per-frame MD5 testing"),
+        krate: "vaco-mux-hash",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
         mime_types: &[],
     },
     #[cfg(feature = "mux-raw")]
@@ -1090,6 +1674,17 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["h264", "264"],
         mime_types: &[],
     },
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "hash",
+        long_name: Some("Hash testing"),
+        krate: "vaco-mux-hash",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "mux-raw")]
     crate::Component {
         kind: crate::Kind::Muxer,
@@ -1100,6 +1695,30 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["hevc", "h265", "265"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-image2")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "image2",
+        long_name: Some("image2 sequence"),
+        krate: "vaco-mux-image2",
+        feature: Some("mux-image2"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-mp4")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "ipod",
+        long_name: Some("iPod H.264 MP4 (MPEG-4 Part 14)"),
+        krate: "vaco-mux-mp4",
+        feature: Some("mux-mp4"),
+        media: None,
+        codec: None,
+        extensions: &["m4v", "m4a"],
         mime_types: &[],
     },
     #[cfg(feature = "mux-ircam")]
@@ -1114,6 +1733,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["sf"],
         mime_types: &[],
     },
+    #[cfg(feature = "mux-mp4")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "ismv",
+        long_name: Some("ISMV/ISMA (Smooth Streaming)"),
+        krate: "vaco-mux-mp4",
+        feature: Some("mux-mp4"),
+        media: None,
+        codec: None,
+        extensions: &["ismv", "isma"],
+        mime_types: &[],
+    },
     #[cfg(feature = "mux-raw")]
     crate::Component {
         kind: crate::Kind::Muxer,
@@ -1124,6 +1755,29 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["m4v"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-matroska")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "matroska",
+        long_name: Some("Matroska"),
+        krate: "vaco-mux-matroska",
+        feature: Some("mux-matroska"),
+        media: None,
+        codec: None,
+        extensions: &["mkv"],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "md5",
+        long_name: Some("MD5 testing"),
+        krate: "vaco-mux-hash",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
         mime_types: &[],
     },
     #[cfg(feature = "mux-raw")]
@@ -1137,6 +1791,30 @@ pub static COMPONENTS: &[crate::Component] = &[
         codec: None,
         extensions: &["mjpg", "mjpeg"],
         mime_types: &["video/x-mjpeg"],
+    },
+    #[cfg(feature = "mux-mp4")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "mov",
+        long_name: Some("QuickTime / MOV"),
+        krate: "vaco-mux-mp4",
+        feature: Some("mux-mp4"),
+        media: None,
+        codec: None,
+        extensions: &["mov"],
+        mime_types: &["video/quicktime"],
+    },
+    #[cfg(feature = "mux-mp4")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "mp4",
+        long_name: Some("MP4 (MPEG-4 Part 14)"),
+        krate: "vaco-mux-mp4",
+        feature: Some("mux-mp4"),
+        media: None,
+        codec: None,
+        extensions: &["mp4", "m4a", "m4v"],
+        mime_types: &["video/mp4", "audio/mp4", "application/mp4"],
     },
     #[cfg(feature = "mux-mpeg")]
     crate::Component {
@@ -1220,6 +1898,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["opus"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-mp4")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "psp",
+        long_name: Some("PSP MP4 (MPEG-4 Part 14)"),
+        krate: "vaco-mux-mp4",
+        feature: Some("mux-mp4"),
+        media: None,
+        codec: None,
+        extensions: &["mp4", "psp"],
         mime_types: &[],
     },
     #[cfg(feature = "mux-raw")]
@@ -1352,6 +2042,17 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["spx"],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "streamhash",
+        long_name: Some("Per-stream hash testing"),
+        krate: "vaco-mux-hash",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
         mime_types: &[],
     },
     #[cfg(feature = "mux-svcd")]
@@ -1546,6 +2247,30 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["wav"],
         mime_types: &[],
     },
+    #[cfg(feature = "mux-matroska")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "webm",
+        long_name: Some("WebM"),
+        krate: "vaco-mux-matroska",
+        feature: Some("mux-matroska"),
+        media: None,
+        codec: None,
+        extensions: &["webm"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-matroska")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "webm_chunk",
+        long_name: Some("WebM Chunk Muxer"),
+        krate: "vaco-mux-matroska",
+        feature: Some("mux-matroska"),
+        media: None,
+        codec: None,
+        extensions: &["chk"],
+        mime_types: &[],
+    },
     #[cfg(feature = "mux-raw")]
     crate::Component {
         kind: crate::Kind::Muxer,
@@ -1630,6 +2355,347 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "acopy",
+        long_name: Some("Copy the input audio unchanged to the output"),
+        krate: "vaco-filter-plumbing",
+        feature: None,
+        media: Some("audio"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "aformat",
+        long_name: Some("Convert the input audio to one of the specified formats"),
+        krate: "vaco-filter-audio",
+        feature: None,
+        media: Some("audio"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "amerge",
+        long_name: Some("Merge two or more audio streams into a single multi-channel stream"),
+        krate: "vaco-filter-audio",
+        feature: None,
+        media: Some("audio"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "amix",
+        long_name: Some("Audio mixing"),
+        krate: "vaco-filter-audio",
+        feature: None,
+        media: Some("audio"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "anull",
+        long_name: Some("Pass the source unchanged to the output"),
+        krate: "vaco-filter-plumbing",
+        feature: None,
+        media: Some("audio"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "anullsink",
+        long_name: Some("Do absolutely nothing with the input audio"),
+        krate: "vaco-filter-plumbing",
+        feature: None,
+        media: Some("audio"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "anullsrc",
+        long_name: Some("Null audio source, return empty audio frames"),
+        krate: "vaco-filter-plumbing",
+        feature: None,
+        media: Some("audio"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "aresample",
+        long_name: Some("Resample audio data"),
+        krate: "vaco-filter-audio",
+        feature: None,
+        media: Some("audio"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "aselect",
+        long_name: Some("Select audio frames to pass in output"),
+        krate: "vaco-filter-plumbing",
+        feature: None,
+        media: Some("audio"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "asetnsamples",
+        long_name: Some("Set the number of samples for each output audio frame"),
+        krate: "vaco-filter-audio",
+        feature: None,
+        media: Some("audio"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "asetpts",
+        long_name: Some("Set PTS for the output audio frame"),
+        krate: "vaco-filter-plumbing",
+        feature: None,
+        media: Some("audio"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "asetrate",
+        long_name: Some("Change the sample rate without altering the data"),
+        krate: "vaco-filter-audio",
+        feature: None,
+        media: Some("audio"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "asettb",
+        long_name: Some("Set timebase for the audio output link"),
+        krate: "vaco-filter-plumbing",
+        feature: None,
+        media: Some("audio"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "asplit",
+        long_name: Some("Pass on the audio input to N audio outputs"),
+        krate: "vaco-filter-plumbing",
+        feature: None,
+        media: Some("audio"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "atrim",
+        long_name: Some("Pick one continuous section from the input, drop the rest"),
+        krate: "vaco-filter-plumbing",
+        feature: None,
+        media: Some("audio"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "channelmap",
+        long_name: Some("Remap audio channels"),
+        krate: "vaco-filter-audio",
+        feature: None,
+        media: Some("audio"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "channelsplit",
+        long_name: Some("Split audio into per-channel streams"),
+        krate: "vaco-filter-audio",
+        feature: None,
+        media: Some("audio"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "color",
+        long_name: Some("Provide an uniformly colored input"),
+        krate: "vaco-filter-plumbing",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "concat",
+        long_name: Some("Concatenate audio and video streams"),
+        krate: "vaco-filter-plumbing",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "copy",
+        long_name: Some("Copy the input video unchanged to the output"),
+        krate: "vaco-filter-plumbing",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "join",
+        long_name: Some("Join multiple audio streams into multi-channel output"),
+        krate: "vaco-filter-audio",
+        feature: None,
+        media: Some("audio"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "null",
+        long_name: Some("Pass the source unchanged to the output"),
+        krate: "vaco-filter-plumbing",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "nullsink",
+        long_name: Some("Do absolutely nothing with the input video"),
+        krate: "vaco-filter-plumbing",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "nullsrc",
+        long_name: Some("Null video source, return unprocessed video frames"),
+        krate: "vaco-filter-plumbing",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "pan",
+        long_name: Some("Remix channels with coefficients (panning)"),
+        krate: "vaco-filter-audio",
+        feature: None,
+        media: Some("audio"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "select",
+        long_name: Some("Select video frames to pass in output"),
+        krate: "vaco-filter-plumbing",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "setpts",
+        long_name: Some("Set PTS for the output video frame"),
+        krate: "vaco-filter-plumbing",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "settb",
+        long_name: Some("Set timebase for the video output link"),
+        krate: "vaco-filter-plumbing",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "split",
+        long_name: Some("Pass on the input to N video outputs"),
+        krate: "vaco-filter-plumbing",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "trim",
+        long_name: Some("Pick one continuous section from the input, drop the rest"),
+        krate: "vaco-filter-plumbing",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "volume",
+        long_name: Some("Change input volume"),
+        krate: "vaco-filter-audio",
+        feature: None,
+        media: Some("audio"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "protocol-http")]
     crate::Component {
         kind: crate::Kind::Protocol,
@@ -1680,6 +2746,10 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_format_audio_simple::aiff::DEMUXER,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::pcm::DEMUXER_ALAW,
+    #[cfg(feature = "demux-asf")]
+    &::vaco_demux_asf::DEMUXER,
+    #[cfg(feature = "demux-asf-o")]
+    &::vaco_demux_asf::DEMUXER_O,
     #[cfg(feature = "demux-au")]
     &::vaco_format_audio_simple::au::DEMUXER,
     #[cfg(feature = "demux-raw")]
@@ -1694,20 +2764,30 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_raw::bitstream::DEMUXER_BIT,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::rawvideo::DEMUXER_BITPACKED,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_BMP,
     #[cfg(feature = "demux-caf")]
     &::vaco_format_audio_simple::caf::DEMUXER,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::bitstream::DEMUXER_CAVSVIDEO,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_CRI,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::bitstream::DEMUXER_DATA,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_DDS,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::bitstream::DEMUXER_DIRAC,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::bitstream::DEMUXER_DNXHD,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_DPX,
     #[cfg(feature = "demux-dv")]
     &::vaco_format_dv::DEMUXER,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::bitstream::DEMUXER_EVC,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_EXR,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::pcm::DEMUXER_F32BE,
     #[cfg(feature = "demux-raw")]
@@ -1718,16 +2798,34 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_raw::pcm::DEMUXER_F64LE,
     #[cfg(feature = "demux-flv")]
     &::vaco_demux_flv::DEMUXER,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_GEM,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_GIF,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::bitstream::DEMUXER_H261,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::bitstream::DEMUXER_H263,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::bitstream::DEMUXER_H264,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_HDR,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::bitstream::DEMUXER_HEVC,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::DEMUXER_IMAGE2,
     #[cfg(feature = "demux-ircam")]
     &::vaco_format_audio_simple::ircam::DEMUXER,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_J2K,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_JPEG,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_JPEGLS,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_JPEGXL,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_JPEGXS,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::bitstream::DEMUXER_LOAS,
     #[cfg(feature = "demux-raw")]
@@ -1752,6 +2850,36 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_raw::bitstream::DEMUXER_OBU,
     #[cfg(feature = "demux-ogg")]
     &::vaco_demux_ogg::DEMUXER,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_PAM,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_PBM,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_PCX,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_PFM,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_PGM,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_PGMYUV,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_PGX,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_PHM,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_PHOTOCD,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_PICTOR,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_PNG,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_PPM,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_PSD,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_QDRAW,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_QOI,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::rawvideo::DEMUXER_RAWVIDEO,
     #[cfg(feature = "demux-rso")]
@@ -1772,8 +2900,16 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_raw::bitstream::DEMUXER_S337M,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::pcm::DEMUXER_S8,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_SGI,
     #[cfg(feature = "demux-sox")]
     &::vaco_format_audio_simple::sox::DEMUXER,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_SUNRAST,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_SVG,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_TIFF,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::pcm::DEMUXER_U16BE,
     #[cfg(feature = "demux-raw")]
@@ -1792,6 +2928,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_raw::rawvideo::DEMUXER_V210,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::rawvideo::DEMUXER_V210X,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_VBN,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::bitstream::DEMUXER_VC1,
     #[cfg(feature = "demux-raw")]
@@ -1804,16 +2942,32 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_format_audio_simple::w64::DEMUXER,
     #[cfg(feature = "demux-wav")]
     &::vaco_format_audio_simple::wav::DEMUXER,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_WEBP,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_XBM,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_XPM,
+    #[cfg(feature = "demux-image2")]
+    &::vaco_demux_image2::pipe::DEMUXER_XWD,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::y4m::DEMUXER_YUV4MPEGPIPE,
 ];
 
 /// Descriptors of every enabled muxer implementation.
 pub static MUXERS: &[&::vaco_format_core::MuxerDesc] = &[
+    #[cfg(feature = "mux-mp4")]
+    &::vaco_mux_mp4::MUXER_3G2,
+    #[cfg(feature = "mux-mp4")]
+    &::vaco_mux_mp4::MUXER_3GP,
     #[cfg(feature = "mux-aiff")]
     &::vaco_format_audio_simple::aiff::MUXER,
     #[cfg(feature = "mux-raw")]
     &::vaco_mux_raw::raw::MUXER_ALAW,
+    #[cfg(feature = "mux-asf")]
+    &::vaco_mux_asf::MUXER,
+    #[cfg(feature = "mux-asf-stream")]
+    &::vaco_mux_asf::MUXER_STREAM,
     #[cfg(feature = "mux-au")]
     &::vaco_format_audio_simple::au::MUXER,
     #[cfg(feature = "mux-avi")]
@@ -1828,6 +2982,7 @@ pub static MUXERS: &[&::vaco_format_core::MuxerDesc] = &[
     &::vaco_format_audio_simple::caf::MUXER,
     #[cfg(feature = "mux-raw")]
     &::vaco_mux_raw::raw::MUXER_CAVSVIDEO,
+    &::vaco_mux_hash::MUXER_CRC,
     #[cfg(feature = "mux-raw")]
     &::vaco_mux_raw::raw::MUXER_DATA,
     #[cfg(feature = "mux-raw")]
@@ -1844,26 +2999,45 @@ pub static MUXERS: &[&::vaco_format_core::MuxerDesc] = &[
     &::vaco_mux_raw::raw::MUXER_F32BE,
     #[cfg(feature = "mux-raw")]
     &::vaco_mux_raw::raw::MUXER_F32LE,
+    #[cfg(feature = "mux-mp4")]
+    &::vaco_mux_mp4::MUXER_F4V,
     #[cfg(feature = "mux-raw")]
     &::vaco_mux_raw::raw::MUXER_F64BE,
     #[cfg(feature = "mux-raw")]
     &::vaco_mux_raw::raw::MUXER_F64LE,
     #[cfg(feature = "mux-flv")]
     &::vaco_mux_flv::MUXER,
+    &::vaco_mux_hash::MUXER_FRAMECRC,
+    &::vaco_mux_hash::MUXER_FRAMEHASH,
+    &::vaco_mux_hash::MUXER_FRAMEMD5,
     #[cfg(feature = "mux-raw")]
     &::vaco_mux_raw::raw::MUXER_H261,
     #[cfg(feature = "mux-raw")]
     &::vaco_mux_raw::raw::MUXER_H263,
     #[cfg(feature = "mux-raw")]
     &::vaco_mux_raw::raw::MUXER_H264,
+    &::vaco_mux_hash::MUXER_HASH,
     #[cfg(feature = "mux-raw")]
     &::vaco_mux_raw::raw::MUXER_HEVC,
+    #[cfg(feature = "mux-image2")]
+    &::vaco_mux_image2::MUXER_IMAGE2,
+    #[cfg(feature = "mux-mp4")]
+    &::vaco_mux_mp4::MUXER_IPOD,
     #[cfg(feature = "mux-ircam")]
     &::vaco_format_audio_simple::ircam::MUXER,
+    #[cfg(feature = "mux-mp4")]
+    &::vaco_mux_mp4::MUXER_ISMV,
     #[cfg(feature = "mux-raw")]
     &::vaco_mux_raw::raw::MUXER_M4V,
+    #[cfg(feature = "mux-matroska")]
+    &::vaco_mux_matroska::MUXER_MATROSKA,
+    &::vaco_mux_hash::MUXER_MD5,
     #[cfg(feature = "mux-raw")]
     &::vaco_mux_raw::raw::MUXER_MJPEG,
+    #[cfg(feature = "mux-mp4")]
+    &::vaco_mux_mp4::MUXER_MOV,
+    #[cfg(feature = "mux-mp4")]
+    &::vaco_mux_mp4::MUXER_MP4,
     #[cfg(feature = "mux-mpeg")]
     &::vaco_mux_mpegps::MUXER_MPEG,
     #[cfg(feature = "mux-raw")]
@@ -1878,6 +3052,8 @@ pub static MUXERS: &[&::vaco_format_core::MuxerDesc] = &[
     &::vaco_mux_ogg::MUXER_OGV,
     #[cfg(feature = "mux-ogg")]
     &::vaco_mux_ogg::MUXER_OPUS,
+    #[cfg(feature = "mux-mp4")]
+    &::vaco_mux_mp4::MUXER_PSP,
     #[cfg(feature = "mux-raw")]
     &::vaco_mux_raw::raw::MUXER_RAWVIDEO,
     #[cfg(feature = "mux-rso")]
@@ -1900,6 +3076,7 @@ pub static MUXERS: &[&::vaco_format_core::MuxerDesc] = &[
     &::vaco_format_audio_simple::sox::MUXER,
     #[cfg(feature = "mux-ogg")]
     &::vaco_mux_ogg::MUXER_SPX,
+    &::vaco_mux_hash::MUXER_STREAMHASH,
     #[cfg(feature = "mux-svcd")]
     &::vaco_mux_mpegps::MUXER_SVCD,
     #[cfg(feature = "mux-raw")]
@@ -1932,6 +3109,10 @@ pub static MUXERS: &[&::vaco_format_core::MuxerDesc] = &[
     &::vaco_format_audio_simple::w64::MUXER,
     #[cfg(feature = "mux-wav")]
     &::vaco_format_audio_simple::wav::MUXER,
+    #[cfg(feature = "mux-matroska")]
+    &::vaco_mux_matroska::MUXER_WEBM,
+    #[cfg(feature = "mux-matroska")]
+    &::vaco_mux_matroska::MUXER_WEBM_CHUNK,
     #[cfg(feature = "mux-raw")]
     &::vaco_mux_raw::y4m::MUXER_YUV4MPEGPIPE,
 ];
@@ -1956,7 +3137,39 @@ pub static PARSERS: &[&::vaco_codec_core::ParserDesc] = &[
 ];
 
 /// Descriptors of every enabled filter implementation.
-pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[];
+pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[
+    &::vaco_filter_plumbing::passthrough::acopy::DESC,
+    &::vaco_filter_audio::aformat::DESC,
+    &::vaco_filter_audio::amerge::DESC,
+    &::vaco_filter_audio::amix::DESC,
+    &::vaco_filter_plumbing::passthrough::anull::DESC,
+    &::vaco_filter_plumbing::nullsink::audio::DESC,
+    &::vaco_filter_plumbing::nullsrc::audio::DESC,
+    &::vaco_filter_audio::aresample::DESC,
+    &::vaco_filter_plumbing::select::audio::DESC,
+    &::vaco_filter_audio::asetnsamples::DESC,
+    &::vaco_filter_plumbing::setpts::audio::DESC,
+    &::vaco_filter_audio::asetrate::DESC,
+    &::vaco_filter_plumbing::settb::audio::DESC,
+    &::vaco_filter_plumbing::split::audio::DESC,
+    &::vaco_filter_plumbing::trim::audio::DESC,
+    &::vaco_filter_audio::channelmap::DESC,
+    &::vaco_filter_audio::channelsplit::DESC,
+    &::vaco_filter_plumbing::color::DESC,
+    &::vaco_filter_plumbing::concat::DESC,
+    &::vaco_filter_plumbing::passthrough::copy::DESC,
+    &::vaco_filter_audio::join::DESC,
+    &::vaco_filter_plumbing::passthrough::null::DESC,
+    &::vaco_filter_plumbing::nullsink::video::DESC,
+    &::vaco_filter_plumbing::nullsrc::video::DESC,
+    &::vaco_filter_audio::pan::DESC,
+    &::vaco_filter_plumbing::select::video::DESC,
+    &::vaco_filter_plumbing::setpts::video::DESC,
+    &::vaco_filter_plumbing::settb::video::DESC,
+    &::vaco_filter_plumbing::split::video::DESC,
+    &::vaco_filter_plumbing::trim::video::DESC,
+    &::vaco_filter_audio::volume::DESC,
+];
 
 /// Descriptors of every enabled protocol implementation.
 pub static PROTOCOLS: &[&::vaco_protocol_core::ProtocolDesc] = &[

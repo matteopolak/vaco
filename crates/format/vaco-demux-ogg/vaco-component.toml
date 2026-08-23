@@ -1,0 +1,17 @@
+# Registry fragment, per the frozen schema in planning/19-parallel-execution.md
+# §3.4.
+#
+# Ogg is one physical container for several logical-bitstream mappings; the
+# reference registers the family under one probe/demuxer and lets the
+# extension/option layer pick a friendlier default name for the common single-
+# stream cases (`oga` audio-only, `ogv` video-only, `opus`, `spx`). We do the
+# same: one demuxer, several extensions.
+
+[[component]]
+kind       = "demuxer"
+name       = "ogg"
+long_name  = "Ogg"
+feature    = "demux-ogg"
+ctor       = "vaco_demux_ogg::DEMUXER"
+extensions = "ogg,oga,ogv,ogx,opus,spx"
+mime_types = "application/ogg,audio/ogg,video/ogg,audio/opus,audio/speex"

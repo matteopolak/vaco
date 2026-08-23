@@ -15,19 +15,32 @@ that design held and which did not.
 
 | Module | Contents |
 |---|---|
-| `ebml` | the whole EBML layer: VINTs, the element grammar, the 220-row schema table, unknown-size termination |
+| `ebml` | the Matroska schema (RFC 9559 §5's 220-row `ebml::schema` table) and the functions that read it; the generic RFC 8794 grammar it used to hold inline now lives in `vaco-format-ebml` and is re-exported here unchanged |
 | `ebml::schema` | every element RFC 9559 §5 and RFC 8794 §11.2 define, with its ID, type and parent |
 | `block` | `Block`/`SimpleBlock` headers and all four lacings |
 | `codec` | `CodecID` string → `CodecId`, the whole `draft-ietf-cellar-codec` registry |
 | `probe` | content detection |
-| `synth` | a minimal EBML **writer**, for fixtures no encoder we have can produce |
+| `synth` | a minimal EBML **writer**, for fixtures no encoder we have can produce — now a thin wrapper over `vaco-format-ebml`'s writer, keeping only the Matroska-specific block/lacing/fixture builders |
 | *(private)* `demux` | `MatroskaDemuxer` |
 
-`ebml` depends on nothing else in this crate. Nothing else in the workspace
-parses EBML today, so the layer lives here; when `vaco-mux-matroska` wants it,
-promoting it to `vaco-format-ebml` is a directory move and a manifest edit, not
-a rewrite. That is why it is a module boundary rather than a loose collection of
-functions in `demux.rs`.
+**2026-08-23: the generic EBML layer moved to `vaco-format-ebml`.** This
+crate's own docs used to say the module was "kept behind a module boundary
+... so that it can be promoted to `vaco-format-ebml` unchanged if a Matroska
+muxer ... wants it" — `vaco-mux-matroska` is that muxer, and the promotion
+happened exactly as predicted: `ebml/mod.rs`'s VINT codecs, `Header`/`Size`/
+`Caps`, the `Slice` reader, the value accessors, `read_header` and the
+mechanical half of `Stack` (frame push/pop/depth/bound, but not the
+schema-driven `is_child_of`/`is_root` answers) are now re-exports from
+`vaco-format-ebml`, byte-for-byte the same functions under the same names.
+What stays here is genuinely Matroska-specific: `ebml::schema`'s 220-row
+table (RFC 9559's element tree, not RFC 8794's business), the `ElementKind`/
+`ElementDef`/`lookup`/`is_child_of`/`is_root` functions that read it, and a
+`Stack` wrapper that closes the generic stack over this crate's own schema so
+every existing call site — including the `matroska_ebml` fuzz target — kept
+its exact one-argument `terminations_for(id)` shape. All 76 of this crate's
+pre-existing tests pass unchanged; see `docs/format/vaco-format-ebml.md` for
+the crate the layer moved into, and `docs/format/vaco-mux-matroska.md` for
+what it enabled.
 
 ## How it works
 
@@ -316,9 +329,10 @@ Crate-local ceilings, all in `src/demux.rs`:
 
 ## Dependencies
 
-`vaco-format-core` (traits, probing, seeking), `vaco-io` (`IoContext`),
-`vaco-packet`, `vaco-codec-core`, `vaco-chlayout`, `vaco-color` (the data
-model), `vaco-limits` (the budget), `vaco-core` (exact rational and timestamp
+`vaco-format-core` (traits, probing, seeking), `vaco-format-ebml` (the generic
+EBML VINT/reader layer, D19), `vaco-io` (`IoContext`), `vaco-packet`,
+`vaco-codec-core`, `vaco-chlayout`, `vaco-color` (the data model),
+`vaco-limits` (the budget), `vaco-core` (exact rational and timestamp
 arithmetic), and `miniz_oxide` for zlib content encodings. No dependency on any
 codec crate: parsers arrive through `ParserProvider` (D14.1).
 

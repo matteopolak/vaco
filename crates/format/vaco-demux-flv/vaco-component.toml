@@ -1,0 +1,11 @@
+# Registry fragment, per the frozen schema in planning/19-parallel-execution.md
+# §3.4.
+
+[[component]]
+kind       = "demuxer"
+name       = "flv"
+long_name  = "FLV (Flash Video)"
+feature    = "demux-flv"
+ctor       = "vaco_demux_flv::DEMUXER"
+extensions = "flv"
+mime_types = "video/x-flv"

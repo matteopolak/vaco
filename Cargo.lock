@@ -1648,6 +1648,64 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-demux-asf"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-bitstream",
+ "vaco-chlayout",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-format-asf",
+ "vaco-format-core",
+ "vaco-format-riff",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-packet",
+]
+
+[[package]]
+name = "vaco-demux-avi"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-bitstream",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-format-core",
+ "vaco-format-riff",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-packet",
+]
+
+[[package]]
+name = "vaco-demux-flv"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-format-core",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-packet",
+]
+
+[[package]]
+name = "vaco-demux-image2"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-format-core",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-packet",
+]
+
+[[package]]
 name = "vaco-demux-matroska"
 version = "0.1.0"
 dependencies = [
@@ -1659,6 +1717,7 @@ dependencies = [
  "vaco-color",
  "vaco-core",
  "vaco-format-core",
+ "vaco-format-ebml",
  "vaco-io",
  "vaco-limits",
  "vaco-packet",
@@ -1680,6 +1739,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-demux-mpegps"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-format-core",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-packet",
+]
+
+[[package]]
 name = "vaco-demux-mpegts"
 version = "0.1.0"
 dependencies = [
@@ -1694,6 +1766,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-demux-ogg"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "proptest",
+ "vaco-chlayout",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-format-core",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-packet",
+]
+
+[[package]]
+name = "vaco-demux-raw"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-chlayout",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-format-core",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-packet",
+ "vaco-pixfmt",
+ "vaco-sampfmt",
+]
+
+[[package]]
 name = "vaco-expr"
 version = "0.1.0"
 dependencies = [
@@ -1701,6 +1804,24 @@ dependencies = [
  "proptest",
  "thiserror",
  "vaco-time",
+]
+
+[[package]]
+name = "vaco-filter-audio"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "smallvec",
+ "vaco-chlayout",
+ "vaco-core",
+ "vaco-expr",
+ "vaco-filter-core",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-limits",
+ "vaco-opts",
+ "vaco-resample",
+ "vaco-sampfmt",
 ]
 
 [[package]]
@@ -1747,6 +1868,70 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-filter-plumbing"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "smallvec",
+ "vaco-chlayout",
+ "vaco-color",
+ "vaco-core",
+ "vaco-expr",
+ "vaco-filter-core",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-opts",
+ "vaco-pixfmt",
+ "vaco-sampfmt",
+]
+
+[[package]]
+name = "vaco-format-apetag"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "proptest",
+ "vaco-bitstream",
+ "vaco-core",
+ "vaco-io",
+ "vaco-limits",
+]
+
+[[package]]
+name = "vaco-format-asf"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-format-riff",
+]
+
+[[package]]
+name = "vaco-format-audio-simple"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-bitstream",
+ "vaco-chlayout",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-format-core",
+ "vaco-format-riff",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-packet",
+ "vaco-sampfmt",
+]
+
+[[package]]
+name = "vaco-format-avlanguage"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
 name = "vaco-format-core"
 version = "0.1.0"
 dependencies = [
@@ -1759,6 +1944,28 @@ dependencies = [
  "vaco-limits",
  "vaco-opts",
  "vaco-packet",
+]
+
+[[package]]
+name = "vaco-format-dv"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-format-core",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-packet",
+]
+
+[[package]]
+name = "vaco-format-ebml"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-core",
+ "vaco-io",
 ]
 
 [[package]]
@@ -1839,6 +2046,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-hash"
+version = "0.1.0"
+dependencies = [
+ "crc",
+ "md-5",
+ "sha1",
+ "sha2",
+ "vaco-core",
+]
+
+[[package]]
 name = "vaco-io"
 version = "0.1.0"
 dependencies = [
@@ -1855,6 +2073,153 @@ dependencies = [
  "thiserror",
  "vaco-core",
  "vaco-time",
+]
+
+[[package]]
+name = "vaco-mux-asf"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-demux-asf",
+ "vaco-format-asf",
+ "vaco-format-core",
+ "vaco-format-riff",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-packet",
+]
+
+[[package]]
+name = "vaco-mux-avi"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-demux-avi",
+ "vaco-format-core",
+ "vaco-format-riff",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-packet",
+]
+
+[[package]]
+name = "vaco-mux-flv"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-demux-flv",
+ "vaco-format-core",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-packet",
+]
+
+[[package]]
+name = "vaco-mux-hash"
+version = "0.1.0"
+dependencies = [
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-format-core",
+ "vaco-hash",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-packet",
+]
+
+[[package]]
+name = "vaco-mux-image2"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-demux-image2",
+ "vaco-format-core",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-packet",
+ "vaco-time",
+]
+
+[[package]]
+name = "vaco-mux-matroska"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-chlayout",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-demux-matroska",
+ "vaco-format-core",
+ "vaco-format-ebml",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-packet",
+]
+
+[[package]]
+name = "vaco-mux-mp4"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "proptest",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-demux-mp4",
+ "vaco-format-core",
+ "vaco-format-isom",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-packet",
+]
+
+[[package]]
+name = "vaco-mux-mpegps"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-demux-mpegps",
+ "vaco-format-core",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-packet",
+]
+
+[[package]]
+name = "vaco-mux-ogg"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-demux-ogg",
+ "vaco-format-core",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-packet",
+]
+
+[[package]]
+name = "vaco-mux-raw"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-format-core",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-packet",
+ "vaco-pixfmt",
 ]
 
 [[package]]
@@ -1997,17 +2362,14 @@ dependencies = [
 name = "vaco-probe"
 version = "0.1.0"
 dependencies = [
- "crc",
- "md-5",
  "proptest",
- "sha1",
- "sha2",
  "vaco-chlayout",
  "vaco-cli-core",
  "vaco-codec-core",
  "vaco-color",
  "vaco-core",
  "vaco-format-core",
+ "vaco-hash",
  "vaco-io",
  "vaco-limits",
  "vaco-opts",
@@ -2065,12 +2427,33 @@ version = "0.1.0"
 dependencies = [
  "vaco-codec-core",
  "vaco-core",
+ "vaco-demux-asf",
+ "vaco-demux-avi",
+ "vaco-demux-flv",
+ "vaco-demux-image2",
  "vaco-demux-matroska",
  "vaco-demux-mp4",
+ "vaco-demux-mpegps",
  "vaco-demux-mpegts",
+ "vaco-demux-ogg",
+ "vaco-demux-raw",
+ "vaco-filter-audio",
  "vaco-filter-core",
+ "vaco-filter-plumbing",
+ "vaco-format-audio-simple",
  "vaco-format-core",
+ "vaco-format-dv",
  "vaco-limits",
+ "vaco-mux-asf",
+ "vaco-mux-avi",
+ "vaco-mux-flv",
+ "vaco-mux-hash",
+ "vaco-mux-image2",
+ "vaco-mux-matroska",
+ "vaco-mux-mp4",
+ "vaco-mux-mpegps",
+ "vaco-mux-ogg",
+ "vaco-mux-raw",
  "vaco-parse-aac",
  "vaco-parse-av1",
  "vaco-parse-h264",

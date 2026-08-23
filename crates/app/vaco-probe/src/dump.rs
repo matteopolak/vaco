@@ -11,7 +11,7 @@
 //! # How it works
 //!
 //! [`xxd`] and [`base64`] build the string; [`HashAlg`] names an algorithm and
-//! [`HashAlg::digest`] runs it. Nothing here touches the section machinery —
+//! [`vaco_hash::HashAlgo::labelled_digest`] runs it. Nothing here touches the section machinery —
 //! `show::packet` decides *whether* to call it and in what order.
 //!
 //! # Provenance
@@ -186,149 +186,33 @@ pub fn base64(data: &[u8]) -> String {
 /// `CRC32` is the ordinary reflected IEEE polynomial and `adler32` is the
 /// ordinary one — both confirmed against Python's `zlib` on the same three
 /// bytes, which is the cheapest independent oracle available.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum HashAlg {
-    Md5,
-    Murmur3,
-    Ripemd128,
-    Ripemd160,
-    Ripemd256,
-    Ripemd320,
-    Sha160,
-    Sha224,
-    Sha256,
-    Sha512_224,
-    Sha512_256,
-    Sha384,
-    Sha512,
-    Crc32,
-    Adler32,
-}
+/// The `-hash` algorithms, from their single owner.
+///
+/// This was a local `HashAlg` enum with its own fifteen-name table and its own
+/// CRC-32 and Adler-32. `vaco-mux-hash` had a near-identical `HashAlgo`, and
+/// both crates declared `crc`, `md-5`, `sha1` and `sha2` directly —
+/// `cargo xtask owner-gate` reported the second half of that as a D11
+/// violation. Both now go through `crates/core/vaco-hash`.
+///
+/// It matters more here than duplication usually does: the checksum **is** the
+/// printed output, so two implementations disagreeing by a seed or a byte
+/// order are a byte-level divergence from the reference by definition. And one
+/// of the two consumers is `framemd5`, which the differential harness uses as
+/// its own oracle (D6) — an oracle with a private copy of the algorithm is not
+/// an oracle.
+pub use vaco_hash::{HashAlgo as HashAlg, NAMES as HASH_NAMES};
 
 /// Why a name this build knows but cannot compute is refused outright.
 ///
-/// The alternative is what the first version did: `digest` returns `None`, the
-/// field is `Absent::Omit`, and `-show_data_hash RIPEMD160` prints a perfectly
-/// ordinary `[PACKET]` block with no `data_hash` line and exits 0. That is the
-/// same failure shape as the empty `[PACKET]` section this work replaced —
-/// indistinguishable from success, and a differential harness scores it as a
-/// pass. Refusing is the ENOSYS pattern `vaco-cli` set.
-pub const HASH_UNSUPPORTED: &str = "-show_data_hash: murmur3 and RIPEMD128/160/256/320 are not implemented \u{2014} no pure-Rust crate for them is pre-declared (D10). The other ten names work.";
-
-/// The fifteen names, in the reference's own order — the order it prints them
-/// in when it rejects one ("Known algorithms: MD5 murmur3 RIPEMD128 …").
-pub const HASH_NAMES: &[(&str, HashAlg)] = &[
-    ("MD5", HashAlg::Md5),
-    ("murmur3", HashAlg::Murmur3),
-    ("RIPEMD128", HashAlg::Ripemd128),
-    ("RIPEMD160", HashAlg::Ripemd160),
-    ("RIPEMD256", HashAlg::Ripemd256),
-    ("RIPEMD320", HashAlg::Ripemd320),
-    ("SHA160", HashAlg::Sha160),
-    ("SHA224", HashAlg::Sha224),
-    ("SHA256", HashAlg::Sha256),
-    ("SHA512/224", HashAlg::Sha512_224),
-    ("SHA512/256", HashAlg::Sha512_256),
-    ("SHA384", HashAlg::Sha384),
-    ("SHA512", HashAlg::Sha512),
-    ("CRC32", HashAlg::Crc32),
-    ("adler32", HashAlg::Adler32),
-];
-
-impl HashAlg {
-    /// Look a name up, case-insensitively.
-    #[must_use]
-    pub fn parse(name: &str) -> Option<Self> {
-        HASH_NAMES
-            .iter()
-            .find(|(n, _)| n.eq_ignore_ascii_case(name))
-            .map(|&(_, a)| a)
-    }
-
-    /// The canonical spelling, which is what the field prints.
-    #[must_use]
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::Md5 => "MD5",
-            Self::Murmur3 => "murmur3",
-            Self::Ripemd128 => "RIPEMD128",
-            Self::Ripemd160 => "RIPEMD160",
-            Self::Ripemd256 => "RIPEMD256",
-            Self::Ripemd320 => "RIPEMD320",
-            Self::Sha160 => "SHA160",
-            Self::Sha224 => "SHA224",
-            Self::Sha256 => "SHA256",
-            Self::Sha512_224 => "SHA512/224",
-            Self::Sha512_256 => "SHA512/256",
-            Self::Sha384 => "SHA384",
-            Self::Sha512 => "SHA512",
-            Self::Crc32 => "CRC32",
-            Self::Adler32 => "adler32",
-        }
-    }
-
-    /// Whether this build can compute it.
-    ///
-    /// `murmur3` and the four RIPEMD variants have no pre-declared pure-Rust
-    /// dependency (D10 makes adding one a reviewed decision), so they are
-    /// **named and refused** rather than silently producing a wrong digest or
-    /// an empty field. Ten of the fifteen work.
-    #[must_use]
-    pub const fn implemented(self) -> bool {
-        !matches!(
-            self,
-            Self::Murmur3 | Self::Ripemd128 | Self::Ripemd160 | Self::Ripemd256 | Self::Ripemd320
-        )
-    }
-
-    /// `NAME:hex`, or `None` for an algorithm this build does not have.
-    #[must_use]
-    pub fn digest(self, data: &[u8]) -> Option<String> {
-        use md5::Digest as _;
-        let hex = |bytes: &[u8]| -> String {
-            let mut s = String::with_capacity(bytes.len() * 2);
-            for b in bytes {
-                s.push_str(&hex_byte(*b));
-            }
-            s
-        };
-        let body = match self {
-            Self::Md5 => hex(&md5::Md5::digest(data)),
-            Self::Sha160 => hex(&sha1::Sha1::digest(data)),
-            Self::Sha224 => hex(&sha2::Sha224::digest(data)),
-            Self::Sha256 => hex(&sha2::Sha256::digest(data)),
-            Self::Sha512_224 => hex(&sha2::Sha512_224::digest(data)),
-            Self::Sha512_256 => hex(&sha2::Sha512_256::digest(data)),
-            Self::Sha384 => hex(&sha2::Sha384::digest(data)),
-            Self::Sha512 => hex(&sha2::Sha512::digest(data)),
-            Self::Crc32 => hex(&crc32(data).to_be_bytes()),
-            Self::Adler32 => hex(&adler32(data).to_be_bytes()),
-            _ => return None,
-        };
-        Some(format!("{}:{body}", self.name()))
-    }
-}
-
-/// CRC-32/ISO-HDLC — the zlib polynomial, reflected, init and xorout all-ones.
-fn crc32(data: &[u8]) -> u32 {
-    const ALG: crc::Crc<u32> = crc::Crc::<u32>::new(&crc::CRC_32_ISO_HDLC);
-    ALG.checksum(data)
-}
-
-/// Adler-32, RFC 1950 §9.
+/// The alternative is what the first version did: the digest comes back
+/// `None`, the field is omitted, and `-show_data_hash RIPEMD160` prints a
+/// perfectly ordinary `[PACKET]` block with no `data_hash` line and exits 0.
+/// That is indistinguishable from success, and a differential harness scores
+/// it as a pass. Refusing is the ENOSYS pattern `vaco-cli` set.
 ///
-/// Written out rather than pulled in: it is nine lines, and a dependency that
-/// only ever computes this would be a D10 adoption for no reduction in code.
-fn adler32(data: &[u8]) -> u32 {
-    const BASE: u32 = 65_521;
-    let mut a: u32 = 1;
-    let mut b: u32 = 0;
-    for byte in data {
-        a = (a + u32::from(*byte)) % BASE;
-        b = (b + a) % BASE;
-    }
-    (b << 16) | a
-}
+/// The wording lives here rather than in `vaco-hash` because it is this
+/// binary's message about its own option, not a fact about the algorithms.
+pub const HASH_UNSUPPORTED: &str = "-show_data_hash: murmur3 and RIPEMD128/160/256/320 are not implemented \u{2014} no pure-Rust crate for them is pre-declared (D10). The other ten names work.";
 
 #[cfg(test)]
 #[allow(
@@ -426,10 +310,10 @@ mod tests {
         assert_eq!(HashAlg::parse("MD5"), Some(HashAlg::Md5));
         assert_eq!(HashAlg::parse("MuRmUr3"), Some(HashAlg::Murmur3));
         assert_eq!(
-            HashAlg::parse("ADLER32").map(HashAlg::name),
+            HashAlg::parse("ADLER32").map(HashAlg::label),
             Some("adler32")
         );
-        assert_eq!(HashAlg::parse("crc32").map(HashAlg::name), Some("CRC32"));
+        assert_eq!(HashAlg::parse("crc32").map(HashAlg::label), Some("CRC32"));
         // Observed: `sha1` is rejected. The name is SHA160.
         assert_eq!(HashAlg::parse("sha1"), None);
         assert_eq!(HashAlg::parse("nosuch"), None);
@@ -465,7 +349,12 @@ mod tests {
             (HashAlg::Crc32, "CRC32:0854897f"),
             (HashAlg::Adler32, "adler32:00070004"),
         ] {
-            assert_eq!(alg.digest(&d).as_deref(), Some(want), "{}", alg.name());
+            assert_eq!(
+                alg.labelled_digest(&d).as_deref(),
+                Some(want),
+                "{}",
+                alg.label()
+            );
         }
     }
 
@@ -478,8 +367,8 @@ mod tests {
             HashAlg::Ripemd256,
             HashAlg::Ripemd320,
         ] {
-            assert!(!alg.implemented(), "{}", alg.name());
-            assert_eq!(alg.digest(&[0, 1, 2]), None);
+            assert!(!alg.implemented(), "{}", alg.label());
+            assert_eq!(alg.labelled_digest(&[0, 1, 2]), None);
         }
         assert_eq!(
             HASH_NAMES.iter().filter(|(_, a)| a.implemented()).count(),

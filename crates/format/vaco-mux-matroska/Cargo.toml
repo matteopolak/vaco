@@ -1,0 +1,34 @@
+[package]
+name = "vaco-mux-matroska"
+description = "Matroska/WebM muxer, plus the webm_chunk segmented-output muxer."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+vaco-core = { path = "../../core/vaco-core" }
+vaco-io = { path = "../../io/vaco-io" }
+vaco-limits = { path = "../../core/vaco-limits" }
+vaco-packet = { path = "../../model/vaco-packet" }
+vaco-chlayout = { path = "../../model/vaco-chlayout" }
+vaco-format-core = { path = "../../format/vaco-format-core" }
+vaco-codec-core = { path = "../../signal/vaco-codec-core" }
+# The generic EBML reader/writer (D19) — see docs/format/vaco-format-ebml.md.
+vaco-format-ebml = { path = "../vaco-format-ebml" }
+# The Matroska element schema (RFC 9559 section 5's ID table) and its RFC 9559
+# lacing helpers, shared with the demuxer rather than re-tabulated (D19) — the
+# same pattern vaco-mux-ogg uses for vaco-demux-ogg's page/CRC definitions.
+# See docs/format/vaco-mux-matroska.md.
+vaco-demux-matroska = { path = "../vaco-demux-matroska" }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true
+
+[package.metadata.vaco]
+layer = 4

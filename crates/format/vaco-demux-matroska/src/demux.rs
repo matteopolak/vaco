@@ -19,7 +19,7 @@
 //!   arbitrarily large, and in a live `WebM` file arrives on a pipe.
 //!
 //! [`MatroskaDemuxer::read_packet`] is therefore a small state machine over
-//! [`ebml::Stack`] plus a queue, since one laced block yields many packets.
+//! [`ebml::MatroskaStack`] plus a queue, since one laced block yields many packets.
 
 use std::collections::VecDeque;
 
@@ -168,7 +168,7 @@ pub struct MatroskaDemuxer {
     first_cluster: Option<u64>,
 
     /// Open masters below `Segment`, for RFC 8794 section 6.2.
-    stack: ebml::Stack,
+    stack: ebml::MatroskaStack,
     /// `Cluster\Timestamp` of the cluster currently open, in ticks.
     cluster_timestamp: i64,
     /// Byte offset of the currently open `Cluster`'s ID octet.
@@ -230,7 +230,7 @@ impl MatroskaDemuxer {
             segment_data_pos: 0,
             segment_end: None,
             first_cluster: None,
-            stack: ebml::Stack::new(),
+            stack: ebml::MatroskaStack::new(),
             cluster_timestamp: 0,
             cluster_pos: 0,
             in_cluster: false,
