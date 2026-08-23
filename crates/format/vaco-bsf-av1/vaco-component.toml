@@ -1,0 +1,17 @@
+[[component]]
+kind      = "bitstream_filter"
+name      = "av1_frame_split"
+long_name = "Split AV1 frames into single OBUs"
+ctor      = "vaco_bsf_av1::frame_split::DESC"
+
+[[component]]
+kind      = "bitstream_filter"
+name      = "av1_frame_merge"
+long_name = "Merge AV1 OBU frames into temporal units"
+ctor      = "vaco_bsf_av1::frame_merge::DESC"
+
+[[component]]
+kind      = "bitstream_filter"
+name      = "av1_metadata"
+long_name = "Modify metadata embedded in an AV1 stream"
+ctor      = "vaco_bsf_av1::metadata::DESC"

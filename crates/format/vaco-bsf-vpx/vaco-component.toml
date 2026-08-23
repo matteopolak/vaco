@@ -1,0 +1,17 @@
+[[component]]
+kind      = "bitstream_filter"
+name      = "vp9_metadata"
+long_name = "Modify metadata embedded in a VP9 stream"
+ctor      = "vaco_bsf_vpx::metadata::DESC"
+
+[[component]]
+kind      = "bitstream_filter"
+name      = "vp9_superframe"
+long_name = "Merge VP9 frames into superframes"
+ctor      = "vaco_bsf_vpx::superframe::DESC"
+
+[[component]]
+kind      = "bitstream_filter"
+name      = "vp9_superframe_split"
+long_name = "Split VP9 superframes into single frames"
+ctor      = "vaco_bsf_vpx::superframe_split::DESC"

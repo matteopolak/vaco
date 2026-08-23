@@ -1,0 +1,17 @@
+[[component]]
+kind      = "bitstream_filter"
+name      = "aac_adtstoasc"
+long_name = "Convert MPEG-2/4 AAC ADTS to an MPEG-4 Audio Specific Configuration bitstream"
+ctor      = "vaco_bsf_audio::aac_adtstoasc::DESC"
+
+[[component]]
+kind      = "bitstream_filter"
+name      = "opus_metadata"
+long_name = "Modify metadata embedded in an Opus stream"
+ctor      = "vaco_bsf_audio::opus_metadata::DESC"
+
+[[component]]
+kind      = "bitstream_filter"
+name      = "pcm_rechunk"
+long_name = "PCM packet reformatting"
+ctor      = "vaco_bsf_audio::pcm_rechunk::DESC"
