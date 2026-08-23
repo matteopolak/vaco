@@ -167,18 +167,18 @@ pub enum Violation {
     /// Pushed a frame to a **full** output pad, so the frame was lost.
     ///
     /// [`FilterContext::push_output`] takes the frame by value, so a
-    /// backpressure refusal drops it. That is only survivable if a filter never
-    /// pushes to a full pad — and a filter cannot guarantee that, because a
-    /// multi-output node is scheduled when **any one** of its outputs has room,
-    /// not all of them. A `split` whose second consumer is slow is therefore
-    /// runnable, takes its input, and silently loses the copy bound for the
-    /// full pad.
+    /// backpressure refusal drops it — and the scheduler used to make that
+    /// reachable. Readiness asked for room on *any one* output rather than all
+    /// of them, and a node that had returned `Progressed` once was marked
+    /// self-driven and skipped the check entirely from then on. Both are fixed:
+    /// room is required on every open output, and it is checked *before* the
+    /// self-driven short-circuit.
     ///
-    /// Diagnosed rather than tolerated, which is this crate's whole posture: an
-    /// output short by exactly the frames it was busiest for is the hardest
-    /// class of bug to find from the outside. The structural fix is for
-    /// `push_output` to hand the frame back, which changes the contract every
-    /// filter is written against — a deliberate change, not a patch.
+    /// So this should now be unreachable through the scheduler, and it stays
+    /// because "should be unreachable" is a claim worth being able to falsify.
+    /// A filter reached from a custom driver, or a future change that
+    /// reintroduces a bypass, would surface here rather than silently shipping
+    /// an output short by exactly the frames the graph was busiest for.
     FrameDroppedByBackpressure,
 }
 
@@ -1086,6 +1086,34 @@ impl Graph {
             // the driver spinning.
             Kind::Source | Kind::Sink => None,
             Kind::Filter => {
+                // Room on every open output, checked **before** the
+                // self-driven short-circuit rather than after it.
+                //
+                // This is where the fan-out loss actually lived. A filter that
+                // returns `Progressed` is marked self-driven, and self-driven
+                // used to return immediately — so from its second run onward a
+                // node was scheduled without anyone asking whether its outputs
+                // could take a frame. Fixing the `any`/`all` distinction below
+                // and leaving this in place fixes nothing, because the node
+                // never reaches it.
+                let mut room = true;
+                let mut wanted = false;
+                for link in node.links.outputs().iter().flatten() {
+                    let Some(l) = self.links.get(*link) else {
+                        continue;
+                    };
+                    if l.is_wanted() {
+                        wanted = true;
+                    }
+                    // A *closed* output never drains, so requiring room on it
+                    // would strand the node forever.
+                    if l.is_full() && !l.is_closed() {
+                        room = false;
+                    }
+                }
+                if !room {
+                    return None;
+                }
                 if node.self_driven {
                     return Some(Priority::SelfDriven);
                 }
@@ -1101,20 +1129,21 @@ impl Graph {
                         has_status = true;
                     }
                 }
-                let mut wanted = false;
-                let mut room = node.links.outputs().is_empty();
-                for link in node.links.outputs().iter().flatten() {
-                    let Some(l) = self.links.get(*link) else {
-                        continue;
-                    };
-                    if l.is_wanted() {
-                        wanted = true;
-                    }
-                    if !l.is_full() && !l.is_closed() {
-                        room = true;
-                    }
-                }
-                if has_frame && room {
+                // `room` is computed above, before the self-driven return.
+                // Requiring it on *every* open output rather than any one is
+                // the other half of the fan-out fix: with `any`, a `split`
+                // whose second consumer was slow became runnable the moment the
+                // first one drained, took its input frame, delivered one copy
+                // and dropped the other — silently, reporting `Progressed`. The
+                // output ended up short by exactly the frames the graph was
+                // busiest for, which looks like a timing problem and does not
+                // reproduce under light load.
+                //
+                // `all` is what backpressure means. It cannot deadlock: the
+                // graph is a DAG, a full link is emptied by the node below it,
+                // and that node's readiness is computed the same way, so
+                // drainage starts at the sink and works upward.
+                if has_frame {
                     Some(Priority::HasFrame)
                 } else if has_status {
                     Some(Priority::HasStatus)

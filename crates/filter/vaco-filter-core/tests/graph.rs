@@ -725,6 +725,122 @@ fn a_filter_failure_surfaces_at_the_caller_and_closes_the_graph() -> Result<()> 
     Ok(())
 }
 
+// -------------------------------------------------- fan-out backpressure
+
+/// A two-output split that does **not** check for room before pushing.
+///
+/// The shipped `Split` in `vaco-filter-graph` guards itself with
+/// `output_has_room`, so it never lost a frame. This one is deliberately naive,
+/// because the question is whether the *scheduler* can put a filter into the
+/// lossy state at all — not whether one careful filter avoids it.
+#[derive(Debug)]
+struct NaiveSplit;
+
+impl Filter for NaiveSplit {
+    fn activate(&mut self, ctx: &mut FilterContext<'_>) -> Result<Activity> {
+        if let Some(frame) = ctx.take_input(0) {
+            ctx.push_output(0, frame.clone())?;
+            ctx.push_output(1, frame)?;
+            return Ok(Activity::Progressed);
+        }
+        if ctx.input_at_eof(0) {
+            ctx.close_all_outputs();
+            return Ok(Activity::Eof);
+        }
+        ctx.forward_wanted();
+        Ok(Activity::NeedInput)
+    }
+}
+
+/// Readiness requires room on **every** open output, not on any one of them.
+///
+/// With `any`, this filter was runnable the moment the drained sink had room:
+/// it took its input frame, delivered one copy, and dropped the copy bound for
+/// the full pad — silently, reporting `Progressed`. The output ended up short
+/// by exactly the frames the graph was busiest for.
+#[test]
+fn a_naive_split_cannot_be_scheduled_into_losing_a_frame() -> Result<()> {
+    const TWO_OUT: &[Pad] = &[
+        Pad {
+            name: "out0",
+            media_type: MediaType::Video,
+        },
+        Pad {
+            name: "out1",
+            media_type: MediaType::Video,
+        },
+    ];
+    const DESC: FilterDesc = FilterDesc {
+        name: "naivesplit",
+        description: "two-output split with no self-guard",
+        inputs: VIDEO_PAD,
+        outputs: TWO_OUT,
+        flags: FilterFlags::empty(),
+    };
+
+    let mut graph = Graph::new();
+    let src = graph.add_source(
+        "in",
+        MediaType::Video,
+        video_source_formats("in", PixFmt::Gray8),
+    );
+    let split = graph.add(
+        DESC,
+        NodeFormats::passthrough(1, 2, MediaType::Video, "naivesplit"),
+        Box::new(NaiveSplit),
+    );
+    let fast = graph.add_sink("fast", MediaType::Video, any_video_sink("fast"));
+    let slow = graph.add_sink("slow", MediaType::Video, any_video_sink("slow"));
+    graph.connect(src, 0, split, 0)?;
+    graph.connect(split, 0, fast, 0)?;
+    graph.connect(split, 1, slow, 0)?;
+    graph.set_source_format(src, gray_link(16, 16, Rational::new(1, 25)))?;
+    graph.configure()?;
+
+    // Push more than one link can hold while draining **only** `fast`, so
+    // `slow` backs up. That asymmetry is the whole experiment.
+    let mut fast_seen = 0_usize;
+    let mut slow_seen = 0_usize;
+    let mut sent = 0_i64;
+    for i in 0..64 {
+        if graph.send(src, gray_frame(16, 16, i, 0)).is_err() {
+            break;
+        }
+        sent += 1;
+        graph.run()?;
+        while graph.recv(fast).is_ok() {
+            fast_seen += 1;
+        }
+    }
+    graph.close_source(src, Timestamp::new(sent))?;
+
+    // Now drain both to exhaustion.
+    for _ in 0..1000 {
+        graph.run()?;
+        let mut moved = false;
+        while graph.recv(fast).is_ok() {
+            fast_seen += 1;
+            moved = true;
+        }
+        while graph.recv(slow).is_ok() {
+            slow_seen += 1;
+            moved = true;
+        }
+        if !moved {
+            break;
+        }
+    }
+    assert!(fast_seen > 0, "nothing got through at all");
+    assert_eq!(
+        fast_seen,
+        slow_seen,
+        "the slow consumer is short by {} frames",
+        fast_seen.saturating_sub(slow_seen)
+    );
+    assert!(graph.violations().is_empty(), "{:?}", graph.violations());
+    Ok(())
+}
+
 // ------------------------------------------------------------- zero copy
 
 #[test]
