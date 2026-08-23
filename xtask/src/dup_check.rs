@@ -108,6 +108,10 @@ const DISTINCT: &[(&str, &str)] = &[
         "vaco-cli-core: an argv token. vaco-filter-graph: a graph-string token.",
     ),
     (
+        "Variant",
+        "vaco-format-adaptive: an HLS/DASH bitrate-ladder rung (EXT-X-STREAM-INF / Representation). vaco-mux-matroska: which of Matroska/WebM a muxer instance writes.",
+    ),
+    (
         "Violation",
         "distinct violation reports in vaco-codec-core and vaco-filter-core.",
     ),

@@ -21,8 +21,9 @@ it is a shared helper, like `vaco-format-isom`.
 | `section` | `SectionHeader`, `Section`, `SectionAssembler` — `pointer_field` handling and packets that span |
 | `descriptor` | the descriptor loop plus the dozen descriptors that change observable output |
 | `psi` | `Pat`, `Pmt`, `Cat`, `Sdt` |
-| `stream_type` | `TsCodec`, `from_stream_type`, `from_registration`, `resolve` |
+| `stream_type` | `TsCodec`, `from_stream_type`, `from_registration`, `resolve`, `for_codec` (the mux direction) |
 | `text` | DVB text decoding (ISO 6937 and the selectable tables) |
+| `write` | PAT/PMT/SDT and descriptor **writers** — the mux direction of `psi`/`descriptor` |
 
 ### The two properties the whole crate holds to
 
@@ -102,6 +103,40 @@ except in the private range `0x80` and up, where the identifier is
 *definitionally* stronger because the range's meaning depends on which
 organisation's assignment applies.
 
+### Writers — the mux direction (added for FM-25, issue #576)
+
+`write::build_section` is the one function every table writer calls: it takes
+a `table_id`, `table_id_extension`, `version` and a body, and produces a
+complete section with `current_next_indicator` set and a correct trailing
+CRC-32 — the exact inverse of `SectionHeader::parse` plus `crc32`.
+`write_pat`/`write_pmt`/`write_sdt` build the body bytes on top of that, and
+`service_descriptor`/`registration_descriptor`/`build_descriptor` do the same
+for the three descriptor shapes a muxer needs. None of them span a table
+across more than one section (see *What this deliberately does not do*
+below) — a body that would not fit returns `None` rather than truncating.
+
+**Every writer is tested by feeding its own output back through the reader
+on the same page** (`Pat::parse`, `Pmt::parse`, `Sdt::parse`,
+`DescriptorIter`) — the strongest check available when both directions live
+in one crate, because there is only one place for the two to quietly agree on
+a wrong byte. `vaco-mux-mpegts` then checks the same bytes a second time, end
+to end, by demuxing its own muxer's output with `vaco-demux-mpegts`.
+
+`stream_type::for_codec(codec, dvb)` is the mux-side mirror of `resolve`:
+given a `vaco_codec_core::CodecId` and whether to conform to DVB System B or
+ATSC System A, it returns the `stream_type` (and, in the private `0x06`
+range, the `registration_descriptor` identifier) a muxer should write. It is
+tested by asserting the round trip through `resolve` directly — with one
+documented exception carried over from `from_stream_type` itself:
+`stream_type` `0x03` states only "MPEG-1 Audio", not which layer, so
+`CodecId::Mp1` and `CodecId::Mp3` both write `0x03` and both read back as
+`TsCodec::Mp2` until something parses the actual frames. AC-3/E-AC-3/DTS
+round-trip under **both** conventions: ATSC's own `stream_type` values
+(`0x81`/`0x87`/`0x8A`) and DVB's private `0x06` plus a registration
+descriptor (`"AC-3"`/`"EAC3"`/`"DTS1"`) both resolve back to the right
+`TsCodec` — matching `resolve`'s existing private-range handling rather than
+adding a new one.
+
 ### DVB text
 
 Every SI string may select its own character table with its first byte. The
@@ -142,6 +177,15 @@ is canonically equivalent but not byte-identical to an NFC renderer's.
 * **Gotcha — `section_length` is twelve bits but PSI tables cap at 1021.**
   `MAX_PSI_SECTION_LEN` records that; the assembler bounds by the buffer
   instead, deliberately, so a private section up to 4093 bytes still frames.
+* **Adding a mux-side codec mapping** means one arm in `stream_type::for_codec`
+  — pick the ATSC `stream_type` for `dvb == false` and, if the codec has no
+  unambiguous 13818-1 assignment, a `0x06` + registration identifier for both
+  branches. Add a case to `for_codec_round_trips_through_resolve` (or the
+  AC-3-family test, if it needs the two-convention treatment) so drift from
+  `resolve` fails a test instead of shipping.
+* **Adding a table writer** should build on `write::build_section` rather than
+  hand-rolling section framing again; that is the one place the header layout
+  and the CRC placement are allowed to be decided.
 
 ---
 
@@ -165,20 +209,28 @@ ETSI EN 300 468.
 ## Dependencies
 
 `vaco-core` (`MediaType`, `Rational`), `vaco-codec-core` (`CodecId`, for the
-`TsCodec` mapping only), `vaco-format-core` (nothing yet at runtime; the edge
-exists so the crate can grow a `ProbeScore` helper without a manifest change).
-`proptest` as a dev-dependency.
+`TsCodec` mapping and `for_codec` both), `vaco-format-core` (nothing yet at
+runtime; the edge exists so the crate can grow a `ProbeScore` helper without a
+manifest change). `proptest` as a dev-dependency.
 
-No external media crate.
+No external media crate. Consumers: `vaco-demux-mpegts` (readers),
+`vaco-mux-mpegts` (writers) — both depend on this crate rather than each
+carrying their own model of a PAT (D19). `vaco-demux-mpegts`'s second
+registration, `mpegtsraw`, also reads `packet::PCR_HZ` directly for its
+27 MHz `time_base` — measured against `ffprobe 8.1`'s
+`time_base=1/27000000` on that demuxer, distinct from the 90 kHz
+`TIME_BASE` the PES-reassembling `mpegts` demuxer uses.
 
 ---
 
 ## What `vaco-codec-core` does not cover
 
-`CodecId` names fourteen codecs. MPEG-TS routinely carries **MPEG-2 video,
-MPEG-1/2 audio (mp1/mp2), AC-3, E-AC-3, DTS, TrueHD, VC-1, Dirac, VVC, CAVS,
-JPEG 2000, DVB subtitles, DVB teletext, PGS subtitles, SCTE-35 splice
-information, timed ID3 and SMPTE KLV** — none of which have one.
+`CodecId` has grown since this note was first written — it now names AC-3,
+E-AC-3, DTS, TrueHD, VC-1, Mpeg1video/Mpeg2video, Vvc, Cavs and Dirac among
+others, and `for_codec` uses all of them. MPEG-TS still routinely carries
+**JPEG 2000, Avs2/Avs3, DVB subtitles, DVB teletext, PGS subtitles, SCTE-35
+splice information, timed ID3 and SMPTE KLV** — none of which have a
+`CodecId`, and none of which `vaco-mux-mpegts` can write for that reason.
 
 Collapsing them onto "unknown" would throw away the one fact the PMT actually
 stated, so `TsCodec` carries the full repertoire and `TsCodec::codec_id()`
@@ -195,7 +247,8 @@ around.
 
 ## Testing
 
-* **82 tests**: 77 unit, 5 property, 1 doctest.
+* **91 tests**: 85 unit, 5 property, 1 doctest. (Was 82 before FM-25's writer
+  module and `for_codec` landed.)
 * **`tests/properties.rs` is `proptest`.** The two properties that carry the
   layer are round trips no finite case set can cover: a section survives *any*
   split across packets, and a CRC catches *every* single-bit error.
@@ -203,6 +256,12 @@ around.
   `(payload_unit_start, payload)` pushes with the lengths taken from the input
   itself, so the fuzzer controls the packet *splitting* as well as the bytes,
   and every emitted section is offered to all four table parsers.
+* **No new fuzz target for `write`.** Every function there takes typed,
+  caller-constructed Rust values (a `u16` PID, a `Vec<PmtStreamOut>`) rather
+  than attacker-controlled bytes — the untrusted-input direction is still
+  entirely `psi`/`section`/`descriptor`, which `mpegts_section` already
+  covers. `vaco-mux-mpegts`'s own `mpegts_mux_packet` fuzz target is what
+  exercises this crate's writers under fuzzing, indirectly, on every call.
 
 ### What the generated tests found
 

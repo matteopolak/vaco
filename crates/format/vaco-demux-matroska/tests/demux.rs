@@ -728,6 +728,228 @@ fn discovery_turns_a_codec_delay_into_a_zero_start_time() {
     );
 }
 
+// ------------------------------------------- chapters, tags, attachments
+
+/// Nested `ChapterAtom`s are dropped, not flattened.
+///
+/// Measured against `ffprobe 8.1 -show_chapters` on a hand-built file with one
+/// top-level `ChapterAtom` (`ChapterUID` 1) holding two nested ones (`UID` 2
+/// and 3) as *children*, plus a second top-level atom (`UID` 4): the reference
+/// prints only chapters 1 and 4. The nested pair is silently ignored rather
+/// than flattened into the list, so this crate's existing behaviour — reading
+/// only `EditionEntry`'s direct children — already matches; this test pins it
+/// against a regression toward flattening.
+#[test]
+fn nested_chapter_atoms_are_ignored_like_the_reference() {
+    fn display(s: &str) -> Vec<u8> {
+        synth::element(el::CHAPTERDISPLAY, &synth::string(el::CHAPSTRING, s))
+    }
+    fn atom(uid: u64, start: u64, end: u64, title: &str, children: &[u8]) -> Vec<u8> {
+        let mut body = synth::uint(el::CHAPTERUID, uid);
+        body.extend_from_slice(&synth::uint(el::CHAPTERTIMESTART, start));
+        body.extend_from_slice(&synth::uint(el::CHAPTERTIMEEND, end));
+        body.extend_from_slice(&display(title));
+        body.extend_from_slice(children);
+        synth::element(el::CHAPTERATOM, &body)
+    }
+    let leaf_a = atom(2, 0, 2_000_000_000, "Part 1a", &[]);
+    let leaf_b = atom(3, 2_000_000_000, 5_000_000_000, "Part 1b", &[]);
+    let mut nested_children = leaf_a;
+    nested_children.extend_from_slice(&leaf_b);
+    let atom_1 = atom(1, 0, 5_000_000_000, "Part 1", &nested_children);
+    let atom_2 = atom(4, 5_000_000_000, 10_000_000_000, "Part 2", &[]);
+    let mut edition_body = atom_1;
+    edition_body.extend_from_slice(&atom_2);
+    let edition = synth::element(el::EDITIONENTRY, &edition_body);
+    let chapters = synth::element(el::CHAPTERS, &edition);
+
+    let mut segment = synth::element(el::INFO, &info(1_000_000));
+    segment.extend_from_slice(&synth::element(el::TRACKS, &audio_track()));
+    segment.extend_from_slice(&chapters);
+    let mut bytes = synth::ebml_header("matroska");
+    bytes.extend_from_slice(&synth::element(el::SEGMENT, &segment));
+
+    let d = open(bytes).unwrap();
+    assert_eq!(d.chapters().len(), 2, "the nested pair must not appear");
+    assert_eq!(d.chapters()[0].id, 1);
+    assert_eq!(d.chapters()[1].id, 4);
+}
+
+/// `Tags ▸ Targets ▸ TagChapterUID` and `TagAttachmentUID` reach the chapter
+/// and the attachment stream they name, matching `ffprobe 8.1`: a chapter tag
+/// merges into that chapter's `tags`, and an attachment tag merges into that
+/// attachment's stream metadata, alongside `filename`/`mimetype`.
+#[test]
+fn target_scoped_tags_reach_the_chapter_and_the_attachment_they_name() {
+    fn display(s: &str) -> Vec<u8> {
+        synth::element(el::CHAPTERDISPLAY, &synth::string(el::CHAPSTRING, s))
+    }
+    fn simple_tag(name: &str, value: &str) -> Vec<u8> {
+        let mut body = synth::string(el::TAGNAME, name);
+        body.extend_from_slice(&synth::string(el::TAGSTRING, value));
+        synth::element(el::SIMPLETAG, &body)
+    }
+    let mut atom_body = synth::uint(el::CHAPTERUID, 1);
+    atom_body.extend_from_slice(&synth::uint(el::CHAPTERTIMESTART, 0));
+    atom_body.extend_from_slice(&synth::uint(el::CHAPTERTIMEEND, 5_000_000_000));
+    atom_body.extend_from_slice(&display("Part 1"));
+    let atom = synth::element(el::CHAPTERATOM, &atom_body);
+    let edition = synth::element(el::EDITIONENTRY, &atom);
+    let chapters = synth::element(el::CHAPTERS, &edition);
+
+    let mut file_body = synth::uint(el::FILEUID, 555);
+    file_body.extend_from_slice(&synth::string(el::FILENAME, "cover.jpg"));
+    file_body.extend_from_slice(&synth::string(el::FILEMEDIATYPE, "image/jpeg"));
+    let attached = synth::element(el::ATTACHEDFILE, &file_body);
+    let attachments = synth::element(el::ATTACHMENTS, &attached);
+
+    let mut tag_chapter = synth::element(el::TARGETS, &synth::uint(el::TAGCHAPTERUID, 1));
+    tag_chapter.extend_from_slice(&simple_tag("COMMENT", "chapter comment"));
+    let mut tag_attachment = synth::element(el::TARGETS, &synth::uint(el::TAGATTACHMENTUID, 555));
+    tag_attachment.extend_from_slice(&simple_tag("DESCRIPTION", "attachment desc"));
+    let mut tags_body = synth::element(el::TAG, &tag_chapter);
+    tags_body.extend_from_slice(&synth::element(el::TAG, &tag_attachment));
+    let tags = synth::element(el::TAGS, &tags_body);
+
+    let mut segment = synth::element(el::INFO, &info(1_000_000));
+    segment.extend_from_slice(&synth::element(el::TRACKS, &audio_track()));
+    // `Tags` is written *before* `Chapters`/`Attachments` here on purpose:
+    // RFC 9559 does not order them, and resolving a target before the thing it
+    // names exists would silently drop the tag on a file written this way.
+    segment.extend_from_slice(&tags);
+    segment.extend_from_slice(&chapters);
+    segment.extend_from_slice(&attachments);
+    let mut bytes = synth::ebml_header("matroska");
+    bytes.extend_from_slice(&synth::element(el::SEGMENT, &segment));
+
+    let d = open(bytes).unwrap();
+    assert_eq!(d.chapters().len(), 1);
+    assert!(
+        d.chapters()[0]
+            .metadata
+            .iter()
+            .any(|(k, v)| k == "COMMENT" && v == "chapter comment")
+    );
+    let attachment = d
+        .streams()
+        .iter()
+        .find(|s| s.media_type() == Some(MediaType::Attachment))
+        .unwrap();
+    assert!(
+        attachment
+            .metadata
+            .iter()
+            .any(|(k, v)| k == "DESCRIPTION" && v == "attachment desc")
+    );
+    assert!(
+        attachment
+            .metadata
+            .iter()
+            .any(|(k, v)| k == "filename" && v == "cover.jpg")
+    );
+}
+
+/// A `Targets` naming no UID at all — only a `TargetTypeValue` — is
+/// indistinguishable from an untargeted tag. Measured against `ffprobe 8.1`:
+/// both land in the container's own tags.
+#[test]
+fn a_target_type_value_with_no_uid_is_still_container_metadata() {
+    let mut tag_body = synth::element(el::TARGETS, &synth::uint(el::TARGETTYPEVALUE, 50));
+    let mut simple = synth::string(el::TAGNAME, "ALBUM_ONLY_TAG");
+    simple.extend_from_slice(&synth::string(el::TAGSTRING, "hello"));
+    tag_body.extend_from_slice(&synth::element(el::SIMPLETAG, &simple));
+    let tags = synth::element(el::TAGS, &synth::element(el::TAG, &tag_body));
+
+    let mut segment = synth::element(el::INFO, &info(1_000_000));
+    segment.extend_from_slice(&synth::element(el::TRACKS, &audio_track()));
+    segment.extend_from_slice(&tags);
+    let mut bytes = synth::ebml_header("matroska");
+    bytes.extend_from_slice(&synth::element(el::SEGMENT, &segment));
+
+    let d = open(bytes).unwrap();
+    assert!(
+        d.metadata()
+            .iter()
+            .any(|(k, v)| k == "ALBUM_ONLY_TAG" && v == "hello")
+    );
+}
+
+/// `CodecDelay`'s leading `SkipSamples` is re-armed on every seek.
+///
+/// **Measured** against `ffmpeg 8.1`: `ffmpeg -v debug -ss <target> -i
+/// opus.webm -f null -` logs `demuxer injecting skip 312 / discard 0` — the
+/// track's own `CodecDelay` sample count — after a seek to 0.0s and again
+/// after a seek to 2.0s, unchanged even with the file's `SeekPreRoll` patched
+/// to zero. So the skip is re-applied on every discontinuity, not computed
+/// from `SeekPreRoll`, and not a one-time event at open.
+#[test]
+fn a_seek_rearms_the_codec_delay_skip_on_the_next_packet() {
+    use vaco_core::Timestamp;
+    use vaco_format_core::seek::{SeekFlags, SeekTarget};
+    use vaco_packet::{PacketSideData, PacketSideDataKind};
+
+    let mut audio = synth::float(el::SAMPLINGFREQUENCY, 48000.0);
+    audio.extend_from_slice(&synth::uint(el::CHANNELS, 1));
+    let mut body = synth::uint(el::TRACKNUMBER, 1);
+    body.extend_from_slice(&synth::uint(el::TRACKUID, 1));
+    body.extend_from_slice(&synth::uint(el::TRACKTYPE, 2));
+    body.extend_from_slice(&synth::string(el::CODECID, "A_OPUS"));
+    body.extend_from_slice(&synth::uint(el::CODECDELAY, 6_500_000));
+    body.extend_from_slice(&synth::element(el::AUDIO, &audio));
+    let track = synth::element(el::TRACKENTRY, &body);
+    let clusters: Vec<_> = (0..4u64)
+        .map(|i| {
+            synth::cluster(
+                i * 20,
+                &[simple_block(1, 0, 0x80, &[0x11; 8])],
+                SegmentSize::Known,
+            )
+        })
+        .collect();
+    let bytes = synth::file(
+        "matroska",
+        &info(1_000_000),
+        &track,
+        &clusters,
+        SegmentSize::Known,
+    );
+
+    let mut d = open(bytes.clone()).unwrap();
+    let first = d.read_packet().unwrap();
+    assert!(
+        matches!(
+            first.side_data(PacketSideDataKind::SkipSamples),
+            Some(PacketSideData::SkipSamples { start: 312, end: 0 })
+        ),
+        "the very first packet since open carries the skip"
+    );
+    let second = d.read_packet().unwrap();
+    assert!(
+        second.side_data(PacketSideDataKind::SkipSamples).is_none(),
+        "and the next one does not repeat it"
+    );
+    // Drain the rest so every cluster is indexed; the seek below needs an
+    // entry at or after its target for a forward, index-driven search to find.
+    while d.read_packet().is_ok() {}
+
+    d.seek(
+        SeekTarget::Timestamp {
+            stream_index: 0,
+            ts: Timestamp::new(40),
+        },
+        SeekFlags::empty(),
+    )
+    .unwrap();
+    let after_seek = d.read_packet().unwrap();
+    assert!(
+        matches!(
+            after_seek.side_data(PacketSideDataKind::SkipSamples),
+            Some(PacketSideData::SkipSamples { start: 312, end: 0 })
+        ),
+        "a seek is a discontinuity too, and the reference re-injects the same skip"
+    );
+}
+
 /// The fixture `discovery_turns_a_codec_delay_into_a_zero_start_time` uses.
 fn bytes_with_delay() -> Vec<u8> {
     let mut audio = synth::float(el::SAMPLINGFREQUENCY, 48000.0);

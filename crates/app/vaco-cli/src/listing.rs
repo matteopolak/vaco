@@ -493,7 +493,7 @@ fn enabled_features() -> Vec<&'static str> {
 /// producing observed outputs, and *recording observed behaviour of a shipped
 /// binary is not copying expression*. The order below was obtained by running
 /// `ffmpeg -hide_banner -pix_fmts` under `LC_ALL=C` and reading its output —
-/// the same technique that produced the ID3v1 genre table (probed across every
+/// the same technique that produced the `ID3v1` genre table (probed across every
 /// byte value 0–255) and the codec-tag tables. No source was consulted.
 ///
 /// The distinction that matters is *how you learned it*, not how arbitrary it
@@ -790,7 +790,7 @@ fn write_pix_fmts<W: Write>(w: &mut W) -> std::io::Result<()> {
     writeln!(w, "-----")?;
     // Reference order first, then anything we know that it does not — so a
     // format we carry and it lacks is appended rather than silently dropped.
-    let mut all: Vec<_> = vaco_pixfmt::PixFmt::all().iter().copied().collect();
+    let mut all: Vec<_> = vaco_pixfmt::PixFmt::all().to_vec();
     all.sort_by_key(|f| {
         LISTING_ORDER
             .iter()

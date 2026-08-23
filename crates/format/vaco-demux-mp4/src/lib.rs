@@ -383,7 +383,7 @@ impl Mp4Demuxer {
         }
 
         let size = self.io.size();
-        let (streams, readers, slots, found) = {
+        let (streams, readers, slots, found, qt_chapter_track, pssh_tags) = {
             let bx = moov_box(&self.moov, self.moov_offset, self.moov_header_len);
             let movie = Movie::parse(&bx)?;
             let mut streams = Vec::new();
@@ -407,11 +407,30 @@ impl Mp4Demuxer {
                 .udta
                 .as_ref()
                 .map(|u| meta::parse_udta(u, !self.mp4.ignore_chapters));
-            (streams, readers, slots, found)
+            // A QuickTime chapter *track*: some other track's `tref ▸ chap`
+            // names it, and its samples are the simple Apple `text`
+            // sample format (a big-endian length then that many UTF-8 bytes).
+            // Structural data only, extracted here because it borrows `movie`
+            // — the actual sample bytes need `self.io`, which cannot be
+            // borrowed at the same time, and are read once this block ends.
+            let qt_chapter_track = (!self.mp4.ignore_chapters)
+                .then(|| find_qt_chapter_track(&movie, size))
+                .flatten();
+            // `pssh` under `moov` is the progressive-file location (§8.1). A
+            // fragmented file's copy is a top-level box next to `moof`
+            // instead, which `collect_fragments`'s scan does not currently
+            // collect — see the crate's doc file's *Deferred* section.
+            let pssh_tags: Vec<(String, String)> = movie
+                .pssh
+                .iter()
+                .map(|p| ("encryption_system_id".to_owned(), hex16(&p.system_id)))
+                .collect();
+            (streams, readers, slots, found, qt_chapter_track, pssh_tags)
         };
         self.streams = streams;
         self.readers = readers;
         self.slots = slots;
+        self.metadata.extend(pssh_tags);
 
         if let Some(found) = found {
             self.metadata.extend(found.tags);
@@ -432,9 +451,63 @@ impl Mp4Demuxer {
                 self.slots.push(None);
             }
         }
+        // Nero `chpl` wins when both are present. Plan 18's VERIFY-M4 names
+        // this as the deciding case and records it as unmeasured; it still is
+        // — no reference file combining both was available this pass — so
+        // this is an assumption, not a measurement, and is documented as one.
+        if self.chapters.is_empty()
+            && let Some((track_tb, samples)) = qt_chapter_track
+        {
+            self.load_qt_chapter_track(track_tb, &samples);
+        }
         self.finish_durations();
         self.seed_index();
         Ok(())
+    }
+
+    /// Turn a `QuickTime` chapter track's samples into [`Chapter`]s.
+    ///
+    /// Each sample is read through [`Mp4Demuxer::payload`], the same path
+    /// ordinary packets use, so it costs nothing extra to support: a
+    /// non-seekable source simply yields no chapters from this path, the same
+    /// way `payload` already refuses a backward read on one.
+    fn load_qt_chapter_track(&mut self, track_tb: Rational, samples: &[(i64, u64, u32)]) {
+        for (i, &(dts, offset, size)) in samples.iter().enumerate() {
+            let Ok(mut pkt) = self.payload(offset, size) else {
+                continue;
+            };
+            let bytes = pkt.payload_mut();
+            let Some(len) = bytes.first_chunk::<2>().map(|b| u16::from_be_bytes(*b)) else {
+                continue;
+            };
+            let text = bytes
+                .get(2..2usize.saturating_add(usize::from(len)))
+                .map(|b| String::from_utf8_lossy(b).into_owned())
+                .unwrap_or_default();
+            if text.is_empty() {
+                continue;
+            }
+            let start = Timestamp::new(dts)
+                .checked_rescale(track_tb, CHAPTER_TIME_BASE, Rounding::NearestAwayFromZero)
+                .unwrap_or(Timestamp::new(dts));
+            let end = samples
+                .get(i.saturating_add(1))
+                .and_then(|&(next_dts, ..)| {
+                    Timestamp::new(next_dts).checked_rescale(
+                        track_tb,
+                        CHAPTER_TIME_BASE,
+                        Rounding::NearestAwayFromZero,
+                    )
+                })
+                .unwrap_or(Timestamp::NONE);
+            self.chapters.push(Chapter {
+                id: i64::try_from(i).unwrap_or(0),
+                time_base: CHAPTER_TIME_BASE,
+                start,
+                end,
+                metadata: vec![("title".to_owned(), text)],
+            });
+        }
     }
 
     /// Container duration: the largest `start_time + duration` over the
@@ -539,6 +612,28 @@ impl Mp4Demuxer {
         let compressor = entry.and_then(|e| e.visual.as_ref().and_then(|v| v.compressor()));
         stream.metadata = track::track_metadata(trak, vendor, compressor);
 
+        // Common Encryption (ISO/IEC 23001-7): report the scheme and key id,
+        // do not decrypt. `codec_name` already reads as the *original* codec
+        // via `SampleEntry::effective_format`, which is `vaco-format-isom`'s
+        // job and not repeated here; this is the part that is this crate's —
+        // deciding that the track cannot actually be read and saying why.
+        let cenc = entry
+            .and_then(vaco_format_isom::stsd::SampleEntry::cenc)
+            .filter(|c| !c.is_empty());
+        if let Some(cenc) = &cenc {
+            if let Some(scheme) = cenc.scheme {
+                stream.metadata.push((
+                    "encryption_scheme".to_owned(),
+                    String::from_utf8_lossy(&scheme.scheme_type.as_bytes()).into_owned(),
+                ));
+            }
+            if let Some(te) = cenc.track_encryption {
+                stream
+                    .metadata
+                    .push(("encryption_key_id".to_owned(), hex16(&te.default_kid)));
+            }
+        }
+
         let (r_rate, avg_rate) = self.frame_rate_estimate(trak, table, &totals, limit);
         if media_type == MediaType::Video {
             stream.r_frame_rate = r_rate;
@@ -586,6 +681,7 @@ impl Mp4Demuxer {
             batch: read::BATCH_MIN,
             finished: external,
             blocked: external,
+            encrypted: cenc.is_some(),
         };
         if self.fragmented {
             reader.entries = self.fragment_entries(trak.header.track_id, size);
@@ -948,6 +1044,15 @@ impl Mp4Demuxer {
             let Some(reader) = self.readers.get(slot) else {
                 return Ok(());
             };
+            // Reported, not decoded (see `Reader::encrypted`): a clear refusal
+            // rather than either silence or the encrypted bytes themselves.
+            if reader.encrypted {
+                return Err(Error::Unsupported(
+                    "mp4: track is protected by Common Encryption (cenc/cbcs); \
+                     decryption is not implemented — see the stream's \
+                     encryption_scheme/encryption_key_id tags",
+                ));
+            }
             if reader.finished || !reader.queue.is_empty() {
                 return Ok(());
             }
@@ -1591,6 +1696,59 @@ fn parse_fragment(frag: &Fragment) -> Option<MovieFragment<'_>> {
     MovieFragment::parse(&bx).ok()
 }
 
+/// Find a `QuickTime` chapter track: some other track's `tref ▸ chap`
+/// names it, and it carries the simple Apple `text` sample format (a
+/// big-endian length then that many bytes) rather than 3GPP `tx3g`, which is a
+/// different sample shape and is not read here.
+///
+/// Returns the chapter track's time base and `(dts, offset, size)` for each of
+/// its samples, in file order — structural only, so the caller can read the
+/// actual sample bytes once it is free to borrow `self.io` again.
+fn find_qt_chapter_track(
+    movie: &Movie<'_>,
+    size: Option<u64>,
+) -> Option<(Rational, Vec<(i64, u64, u32)>)> {
+    for trak in &movie.tracks {
+        for r in &trak.references {
+            if r.kind != FourCc::new(b"chap") {
+                continue;
+            }
+            for &chap_id in &r.track_ids {
+                let Some(chap_trak) = movie.track_by_id(chap_id) else {
+                    continue;
+                };
+                if !chap_trak.has_usable_timescale() {
+                    continue;
+                }
+                let entries = chap_trak
+                    .sample_table
+                    .sample_descriptions
+                    .as_ref()
+                    .and_then(|d| stsd::parse_stsd(d, chap_trak.handler).ok())
+                    .unwrap_or_default();
+                let is_apple_text = entries
+                    .first()
+                    .is_some_and(|e| e.format == FourCc::new(b"text"));
+                if !is_apple_text {
+                    continue;
+                }
+                let limit = read::sample_limit(u32::MAX, size);
+                let samples: Vec<(i64, u64, u32)> = chap_trak
+                    .sample_table
+                    .cursor_at(0)
+                    .take_while(|s| s.index < limit)
+                    .take(meta::MAX_ENTRIES)
+                    .map(|s| (s.dts, s.offset, s.size))
+                    .collect();
+                if !samples.is_empty() {
+                    return Some((chap_trak.time_base(), samples));
+                }
+            }
+        }
+    }
+    None
+}
+
 /// The `vendor` field of the first sample entry, which `ffprobe` prints as the
 /// `vendor_id` stream tag on `.mov` files.
 ///
@@ -1611,6 +1769,16 @@ fn vendor_id(table: &SampleTable<'_>) -> Option<[u8; 4]> {
 
 fn moov_box(data: &[u8], offset: u64, header_len: u64) -> IsoBox<'_> {
     reassemble_at(bt::MOOV, offset, header_len, data)
+}
+
+/// Lower-case hex, for a `default_KID` or a `pssh` system id.
+fn hex16(bytes: &[u8; 16]) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(32);
+    for b in bytes {
+        let _ = write!(out, "{b:02x}");
+    }
+    out
 }
 
 /// Sample-table totals: what every derived field divides by.
@@ -1692,6 +1860,7 @@ fn cover_stream(index: u32, cover: meta::CoverArt) -> (Stream, Reader) {
         batch: 1,
         finished: false,
         blocked: false,
+        encrypted: false,
     };
     (stream, reader)
 }

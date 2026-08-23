@@ -120,6 +120,11 @@ pub(crate) enum Source {
 
 /// One track's read state.
 #[derive(Debug)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each names an independent axis a real file can combine — audio-ness, exhaustion, \
+              permanent refusal, encryption — not a state machine with excluded combinations"
+)]
 pub(crate) struct Reader {
     pub stream_index: u32,
     pub time_base: Rational,
@@ -145,6 +150,19 @@ pub(crate) struct Reader {
     /// refusal with it. Found by the `dem_mp4` fuzz target, as "a seek produced
     /// a packet a straight read never did".
     pub blocked: bool,
+    /// `sinf ▸ schm`/`sinf ▸ schi ▸ tenc` named a Common Encryption scheme.
+    ///
+    /// Deliberately **not** folded into `blocked`: a blocked track silently
+    /// produces no packets forever, which is right for an unreachable `dref`
+    /// but wrong here — decryption is out of scope by design (see the crate's
+    /// doc file), and a caller who asks for packets from an encrypted track
+    /// should be told why it cannot have any, not handed an empty stream that
+    /// looks the same as a track with nothing in it. `ensure_head` turns this
+    /// into an [`vaco_core::Error::Unsupported`] the first time any packet is
+    /// requested, once — for every track, so a mixed encrypted/clear file
+    /// fails predictably rather than only once the encrypted track's turn in
+    /// the interleave happens to come up.
+    pub encrypted: bool,
 }
 
 impl Reader {
@@ -358,6 +376,7 @@ mod tests {
             batch: BATCH_MIN,
             finished: false,
             blocked: false,
+            encrypted: false,
         }
     }
 

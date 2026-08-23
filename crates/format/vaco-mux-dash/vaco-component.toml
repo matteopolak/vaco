@@ -1,0 +1,11 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Name and extensions measured against `ffmpeg -h muxer=dash` (ffmpeg 8.1).
+
+[[component]]
+kind       = "muxer"
+name       = "dash"
+long_name  = "DASH Muxer"
+feature    = "mux-dash"
+ctor       = "vaco_mux_dash::MUXER"
+extensions = "mpd"

@@ -76,8 +76,43 @@ go — and they should be fixed together.
 
 **Blocks:** every `-movflags` from the CLI, and the CLI half of FM-22 (#573).
 
+## 6. `MuxerDesc` has no `flags` field
+
+Reported by: the CLI muxer wiring.
+
+`DemuxerDesc` carries `flags: FormatFlags`; `MuxerDesc` does not. But the CLI
+has to know whether a muxer is `NOFILE` **before** it opens an output URL —
+`-f null` must not create a file — and the only way to ask is to construct the
+muxer and call `.flags()` on it.
+
+So `exec::open_output` builds every muxer **twice**: once against a throwaway
+`MemorySink` to read its flags, then again against the real sink. That works and
+is documented, but it is a construction with observable side effects being run
+for its return value, which is the kind of thing that stops working quietly the
+first time a muxer does something in its constructor.
+
+It is also asymmetric for no reason: the same information is a static field on
+the demuxer side.
+
+**Blocks:** nothing outright. It buys a double construction per output and an
+explanation in two places.
+
 ## Sequencing
 
-1 and 4 are additive and can land together behind default-implemented trait
-methods, so existing muxers and demuxers keep compiling. 2 and 3 are shape
-changes and want their own wave with nothing else running.
+1, 4, 5 and 6 are additive and can land together behind default-implemented
+trait methods and a new struct field, so existing muxers and demuxers keep
+compiling. 2 and 3 are shape changes and want their own wave with nothing else
+running.
+
+Two more findings from the same wiring pass, recorded here because they are the
+same class — an interface that cannot express what a caller needs:
+
+- **`vaco-sched`'s `MuxWork` never runs the M6 bitstream-filter stage.** It
+  drives a raw `dyn Muxer` rather than `MuxWriter`, so `BsfChain`/`BsfProvider`
+  are skipped and a stream needing conversion (Annex-B H.264 into MP4) is
+  written unfiltered instead of converted or refused. Common-case remuxing is
+  unaffected; the restructure is a wave-boundary change.
+- **`build_work` read `Muxer::stream_time_base` before calling `init()`** — so
+  `vaco-mux-mp4`'s movie-timescale derivation and `vaco-mux-mpegts`'s PCR-PID
+  assignment never ran at all. Fixed in place, since the ordering was simply
+  wrong rather than inexpressible.

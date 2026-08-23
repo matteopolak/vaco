@@ -23,6 +23,7 @@ play next.
 | `edit` | `elst` and the presentation ↔ media timeline |
 | `frag` | `mvex`/`trex`, `moof ▸ traf ▸ tfhd/tfdt/trun`, `sidx`, `mfra ▸ tfra` |
 | `stsd` | sample entries, configuration boxes, the four-character-code tables |
+| `cenc` | Common Encryption (ISO/IEC 23001-7): `pssh`, `schm`/`tenc`, `saiz`/`saio`, `senc` — reports the scheme and key id, decrypts nothing |
 | `esds` | the MPEG-4 descriptor tree and the object type indications |
 | `fixed` | 16.16 / 8.8 / 2.30 fixed point and the 3×3 display matrix |
 | `lang` | the packed ISO-639-2/T language field |
@@ -352,6 +353,36 @@ agree for a single-`traf` fragment and disagree for any file with more than one,
 and no fixture that distinguishes them could be produced with `ffmpeg` (it
 always writes an explicit base or sets the flag).
 
+### 7. Common Encryption box layouts — confirmed against a real encrypted file
+
+```sh
+ffmpeg -f lavfi -i testsrc2=size=64x64:rate=10:duration=1 -c:v libx264 -preset ultrafast \
+       -encryption_scheme cenc-aes-ctr \
+       -encryption_key 0123456789abcdef0123456789abcdef \
+       -encryption_kid 00000000000000000000000000000001 \
+       enc.mp4
+```
+
+Every field `cenc` reads was checked against this file's actual bytes, not just
+the spec text: `schm`'s `scheme_type`/`scheme_version` (`cenc`, `0x00010000`);
+`tenc` version 0's `default_isProtected=1`, `default_Per_Sample_IV_Size=8`,
+`default_KID` ending `…0001` exactly as passed to `-encryption_kid`; `senc`'s
+`sample_count` and per-sample `(IV, subsample_count, (clear, encrypted)*)`
+records with `flags & 2` set; and `saiz`/`saio`, which point at precisely the
+byte range `senc` itself occupies after its own `sample_count` field —
+`saio`'s single offset (11 819) is exactly `senc`'s file offset (11 803) plus
+its 8-byte box header plus 4 bytes of `sample_count`, confirmed by computing
+both independently and comparing. `pssh` and `tenc` version 1's
+`default_crypt_byte_block`/`default_skip_byte_block` were not exercised by this
+file (`ffmpeg`'s encoder does not emit a `pssh` on its own) and are transcribed
+directly from ISO/IEC 23001-7 instead — noted as such in the module doc
+comment, not presented as measured.
+
+Also measured, and recorded in `vaco-demux-mp4`'s doc file rather than here
+because it is about demuxing policy, not box shape: `ffprobe 8.1` surfaces
+**no** encryption information for this file at all, and `ffmpeg -i` decodes the
+still-encrypted bytes into corrupted frames rather than refusing to open it.
+
 ---
 
 ## How to change it
@@ -521,9 +552,15 @@ Named so the demuxer's author knows what is not here:
   `Movie::udta` hands over the box unparsed. Plan 18 §2928 assigns the
   conversion table to this crate; it is a table with no dependency on anything
   else here and can be added without touching the parse path.
-* **Common encryption.** `sinf ▸ frma`/`schm`/`schi ▸ tenc` are located far
-  enough to report the original four-character code (`SampleEntry::original_format`),
-  but `senc`, `saiz`/`saio` and `pssh` are not parsed.
+* ~~**Common encryption.**~~ Done 2026-08-23: `cenc` (below) parses `pssh`,
+  `schm`, `tenc` (both versions), `saiz` and `saio` structurally, plus
+  `senc`'s shape (`sample_count` and where its per-sample records start,
+  without decoding an individual IV or subsample table — nothing downstream
+  needs one, since the whole track is refused rather than partially decoded;
+  see `vaco-demux-mp4`'s doc file). `Movie::pssh` and `IsoFile::top_level_pssh`
+  collect the two locations a `pssh` legally occupies. `SampleEntry::cenc()`
+  ties `schm`/`tenc` to one sample entry, alongside the pre-existing
+  `original_format`.
 * **Sample groups.** `sbgp`/`sgpd` are skipped.
 * **HEIF/AVIF item model.** `meta ▸ iloc/iinf/iprp/iref/idat` and the derived
   items. The `meta` box type exists; nothing reads it.

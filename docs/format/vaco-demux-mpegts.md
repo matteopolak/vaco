@@ -26,6 +26,14 @@ that:
 | `probe` | content detection, scores measured against ffprobe 8.1 |
 | `pes` | PES packet headers and the 33-bit timestamp field |
 | `demux` | framing, PES assembly, the clock, duration, seeking |
+| `raw` | the `mpegtsraw` registration: one raw 188-byte transport packet per output `Packet`, no PES reassembly at all |
+
+This crate ships **two** registry descriptors, [`DEMUXER`] (`mpegts`) and
+[`raw::RAW_DEMUXER`] (`mpegtsraw`). `m2ts` is **not** a third: confirmed with
+`ffmpeg -demuxers`, which lists `mpegts` and `mpegtsraw` as distinct entries
+but no `m2ts` at all. Blu-ray's four-byte-timestamp-prefixed stride is one of
+`PacketStride`'s three variants and is autodetected the same way 188 and 204
+are — there is nothing for a third descriptor to do.
 
 ---
 
@@ -165,6 +173,75 @@ duration is therefore left out and the per-stream audio duration is short by
 exactly one audio frame. Measured: 23.211 ms on every AAC fixture, which is
 `1024/44100`.
 
+### `mpegtsraw` — the PID-level view
+
+A second, real demuxer (`raw.rs`), confirmed distinct from `mpegts` by
+`ffmpeg -demuxers` rather than assumed. Everything about its contract was
+measured against `ffprobe 8.1 -f mpegtsraw`, not derived:
+
+* **Never auto-detected.** `ffprobe -i file.ts` (no `-f`) reports
+  `format_name=mpegts`; `mpegtsraw` is reached only by naming it. Its probe is
+  `ProbeScore::NONE`, unconditionally — the same shape `vaco-demux-asf`'s
+  `asf_o` already uses for exactly this "same bytes, explicit-only" case.
+* **Exactly one stream**, `MediaType::Data`, `time_base = 1/27_000_000` — the
+  27 MHz PCR clock, not the 90 kHz PES clock `mpegts` uses.
+* **One `Packet` per transport packet**, always 188 bytes: an M2TS-strided
+  file's 4-byte `TP_extra_header` is stripped, measured by muxing an
+  `-mpegts_m2ts_mode 1` fixture and reading `size` back with `-show_packets`.
+* **`pos` is the offset *after* the packet**, including any stride prefix —
+  `192, 384, 576, …` on the M2TS fixture, not `188, 376, …`. Every packet
+  carries `flags=K__` (`PacketFlags::KEY`), matching the reference exactly.
+* **No timestamps by default.** `-show_packets` on a 105-packet fixture shows
+  `pts=N/A` on all of them. The reference's `-compute_pcr` option (default
+  `false`, per `ffmpeg -h demuxer=mpegtsraw`) turns this on, but even then the
+  values are a byte-position-interpolated PCR — not monotonic across PIDs, and
+  not implemented here (see *Deliberately deferred*). `FormatFlags::NOTIMESTAMPS`
+  is the honest declaration.
+* **Resynchronisation is bounded by 65536 bytes** (`ffmpeg -h demuxer=mpegtsraw`'s
+  `resync_size` default), reused as a fixed constant since `FormatOptions` has
+  no per-demuxer option slot to carry it through.
+* **Duration is `None`.** The reference derives an estimate from file size and
+  bitrate (`"Estimating duration from bitrate, this may be inaccurate"`), which
+  needs a bitrate this no-PES view has no way to learn — that lives one layer
+  up, in `mpegts`. Reported rather than guessed at.
+* **`codec_name` prints `unknown`, not `mpegts`.** `vaco-probe`'s `codec_name`
+  field reads `CodecParameters.codec_id` only, with no metadata-tag fallback —
+  confirmed by reading `crates/app/vaco-probe/src/show.rs` and
+  `fields.rs`, and consistent with how every other `MediaType::Data` stream in
+  this workspace (ASF, Ogg, Matroska's unmapped track types) already prints.
+  `vaco_codec_core::CodecId` has no "raw bytes" variant to point at; inventing
+  one would be worse than the honest gap. Same shape as `TsCodec::codec_id()`
+  returning `None` elsewhere in this crate — reported, not worked around.
+
+### PMT version changes
+
+`ffmpeg -h demuxer=mpegts` names the option directly: `-merge_pmt_versions
+<boolean>` — *"reuse streams when PMT's version/pids change"* — **default
+`false`**. That is a measured correction from inference to fact for what this
+doc already suspected: the reference's *default* behaviour is **not** to merge
+a version change into the existing stream set, but to create fresh stream
+entries for it, which is why a long recording of a re-multiplexing channel
+ends up with a dozen streams over time in the reference. This crate always
+merges (a PID already carrying a stream keeps it, permanently) and does not
+implement the option — see *Deliberately deferred* — because doing the
+default's thing needs the PID-to-many-streams mapping this crate does not
+have anywhere else either (teletext, subtitling: same gap, different
+descriptor).
+
+What *is* implemented: `DemuxStats::pmt_updates` counts a genuine
+`version_number` change on an already-known program, so a caller can at least
+observe that a splice happened instead of inferring it from a stream list that
+never shrinks. The counter is tracked separately from the public
+`Program::pmt_version` field and only advances once `read_header`'s internal
+scans are done (`!self.scanning`): both the head scan and the duration tail
+scan re-read PSI the caller never sees a `Packet` for, and on a file small
+enough to fit inside either scan's window, comparing directly against
+`pmt_version` double-counts the same live change, or invents one purely
+because a scan rewound to the start ahead of where the real read is. A named
+test pins both — the version bump is counted exactly once, and the PID it
+introduces is picked up — and a repeated identical section (the ordinary case;
+a PMT repeats roughly every 100 ms) is confirmed not to count at all.
+
 ### Seeking
 
 Three paths, and one of them deliberately bypasses `vaco-format-core`:
@@ -229,6 +306,7 @@ Constants that are ours:
 | `DURATION_READ_BACK` | 250 000 | **Measured** against ffprobe 8.1 |
 | `DURATION_MAX_RETRY` | 6 | **Measured**; the cap is 16 000 000 bytes |
 | `TS_SCORE_STRONG` / `TS_SCORE_WEAK` | 50 / 2 | **Measured**; `ProbeScore`'s table has no value for either |
+| `raw::RESYNC_SIZE` | 65 536 | **Measured** (`ffmpeg -h demuxer=mpegtsraw`'s `resync_size` default); `mpegtsraw` only |
 
 ### What opening costs
 
@@ -395,19 +473,25 @@ in descending order of cost.
 
 ## Deliberately deferred
 
-* **`mpegtsraw`** — the PID-level view that exposes raw 188-byte packets as one
-  data stream and skips the PES layer. A second `DemuxerDesc` over the same
-  framing; nothing in it is hard, and nothing depends on it yet.
+* **`mpegtsraw`'s `-compute_pcr`.** The default (`false`) behaviour — no
+  timestamps at all — is what `raw.rs` implements. The reference's
+  `compute_pcr=true` mode interpolates an "exact PCR" per packet from byte
+  position and the nearest two real PCR occurrences on that PID; it is not
+  monotonic across PIDs (measured: consecutive packets from different streams
+  can report *decreasing* `pts`), and `FormatOptions` has no per-demuxer
+  option slot to switch it on through anyway.
 * **M2TS arrival timestamps.** The 192-byte stride is detected and demuxed;
   the four-byte `TP_extra_header`'s 27 MHz arrival timestamp is skipped rather
   than exposed, because `PacketSideData` has no variant for it and plan 18
   §3.3.3 item 14 says it is "used for nothing else".
 * **`merge_pmt_versions` / `skip_changes` / `skip_clear`.** A PID already
   carrying a stream keeps it; a PMT version change does not currently create new
-  streams. The reference's default *does* create them, which is why a long
-  recording of a re-multiplexing channel ends up with a dozen streams. Matching
-  that needs the option set, and the option set needs the PID-to-many-streams
-  mapping above.
+  streams. The reference's *default* (`merge_pmt_versions=false`, measured via
+  `ffmpeg -h demuxer=mpegts`) does create them, which is why a long recording
+  of a re-multiplexing channel ends up with a dozen streams. Matching that
+  needs the option set, and the option set needs the PID-to-many-streams
+  mapping above. `DemuxStats::pmt_updates` at least makes the change visible;
+  see *PMT version changes* above.
 * **NIT, EIT, TDT/TOT.** Framed and CRC-checked by the tables crate, not acted
   on. Only SDT changes printed output today.
 * **CAT and descrambling.** The CAT is parsed and discarded. Scrambled packets
@@ -420,13 +504,26 @@ in descending order of cost.
 
 ## Testing
 
-* **51 tests**: 21 unit, 24 named integration cases, 5 property tests, 1
-  doctest, plus the `#[ignore]`d reference harness.
+* **62 tests**: 30 unit (9 of them `raw`'s), 25 named integration cases, 6
+  property tests, 1 doctest, plus the `#[ignore]`d reference harness.
 * **Every fixture is built in-process** by `tests/roundtrip.rs`'s `TsWriter`.
   A committed `.ts` file would be larger and less specific: the whole
   difficulty of this container is in cases — a wrap, a mid-stream PMT, an
   unbounded PES packet, a lost packet, a 192-byte stride — that a recorded file
   happens to contain or happens not to.
-* **Two fuzz targets** (D6): `mpegts_packet` for the stateless views and
-  `mpegts_demux` for whole-file demux, which opens with `Limits::strict`,
-  reads to the end, asserts `Eof` is stable, and then seeks three ways.
+* **The wrap invariant is a property, not just a named case.**
+  `wrapping_across_the_thirty_three_bit_boundary_stays_monotonic`
+  (`tests/roundtrip.rs`) fuzzes the frame delta, the run length and how far
+  before the boundary the run starts, and asserts every consecutive decoded
+  PTS difference equals the fixed delta — i.e. the crossing is invisible in
+  the decoded timeline, whatever the parameters. The hand-written
+  `a_thirty_three_bit_wrap_stays_monotonic` above it now pins one instance by
+  name for a quick, readable regression case; the property is what actually
+  covers the invariant D6 asks for.
+* **Three fuzz targets** (D6): `mpegts_packet` for the stateless views,
+  `mpegts_demux` for whole-file `mpegts` demux (opens with `Limits::strict`,
+  reads to the end, asserts `Eof` is stable, then seeks three ways), and
+  `mpegts_raw_demux` for `mpegtsraw` — its own target because it is a
+  different open path, a different resync bound (`RESYNC_SIZE`, not
+  `MAX_RESYNC_BYTES`) and no PSI/PES layer at all, so `mpegts_demux`'s coverage
+  does not reach it.

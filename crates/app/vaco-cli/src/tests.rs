@@ -1,9 +1,13 @@
 //! Whole-invocation tests: argv in, stderr text and an exit code out.
 //!
-//! The acceptance surface is deliberately *not* an output file, because with no
-//! muxers there is none (see the crate docs). It is the three things that are
-//! observable: **stream selection**, **stderr text and exit code**, and
-//! **packet counts through the pipeline**.
+//! Most of what is here predates the container wave and still checks exactly
+//! what it always did — **stream selection**, **stderr text and exit code**,
+//! and **packet counts through the pipeline**, all reachable without ever
+//! looking at a file on disk. That was the *whole* acceptance surface when
+//! there were no muxers to write one; now it is the surface every test that
+//! does not care about container bytes should keep using; see
+//! `an_actual_muxer_writes_bytes_a_prober_can_read_back` below for the one
+//! that does look at a real file.
 //!
 //! The fixtures are built with `vaco_demux_matroska::synth`, a dev-dependency.
 //! It is not a muxer — it writes exactly what it is told, including per-track
@@ -222,10 +226,21 @@ fn version_exits_zero_and_prints_to_stdout() {
 }
 
 #[test]
-fn formats_lists_the_demuxers_and_admits_to_no_muxers() {
+fn formats_lists_demuxers_and_muxers_by_what_the_registry_actually_has() {
+    // Named "admits to no muxers" until the container wave landed 63 of
+    // them; the mapping this test should pin is "a format shows `E` exactly
+    // when `vaco_registry::muxer_by_name` finds it", not a count.
     let r = go(&["-hide_banner", "-formats"]);
     assert_eq!(r.code, ExitCode::OK);
     assert!(r.out.contains("matroska"), "{}", r.out);
+    let Some(name) = vaco_registry::muxers().first().map(|m| m.name) else {
+        return;
+    };
+    assert!(
+        r.out.lines().any(|l| l.contains('E') && l.contains(name)),
+        "{name} is a registered muxer but -formats does not mark it E:\n{}",
+        r.out
+    );
 }
 
 // -------------------------------------------------------------------- -h end-to-end
@@ -463,6 +478,72 @@ fn monotonic_video_streamcopies_end_to_end() {
         r.message().contains("  Stream #0:0 -> #0:0 (copy)\n"),
         "{}",
         r.message()
+    );
+}
+
+/// The one test in this file that leaves the packet-count/stderr surface and
+/// looks at real bytes on disk: remux the same fixture `monotonic_video_
+/// streamcopies_end_to_end` uses, but to a real `.mkv` this time, then read
+/// the *result* back through a second, independent invocation of the whole
+/// binary.
+///
+/// This is what makes `exec::muxer_for` reaching the registry an observable
+/// fact rather than an implementation detail: before this pass, `-f matroska
+/// out.mkv` exited 0, printed a plausible summary and `out.mkv` did not
+/// exist (`planning/CONFORMANCE-FINDINGS.md` #6). A test that only checks the
+/// exit code and the stderr text cannot tell that apart from a real remux —
+/// only opening the file the run claims to have written can.
+#[test]
+fn an_actual_muxer_writes_bytes_a_prober_can_read_back() {
+    let f = fixture(&four_track_file());
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out_path = dir.path().join("out.mkv");
+    let out_str = out_path.to_str().expect("utf8 tempdir path").to_owned();
+
+    let r = go(&["-i", &f.path, "-c", "copy", "-f", "matroska", &out_str]);
+    assert_eq!(r.code, ExitCode::OK, "{}", r.message());
+    assert!(
+        r.message().contains(
+            "Stream mapping:\n  Stream #0:0 -> #0:0 (copy)\n  Stream #0:2 -> #0:1 (copy)\n"
+        ),
+        "{}",
+        r.message()
+    );
+    // `[out#0/matroska] video:0KiB audio:0KiB … muxing overhead: N%` — the
+    // 460-byte fixture rounds to 0KiB either side, so the number that matters
+    // here is the overhead figure: `unknown` would mean nothing was measured
+    // as actually written (the pre-fix behaviour, on a NullMuxer path this
+    // format no longer takes).
+    assert!(r.message().contains("[out#0/matroska]"), "{}", r.message());
+    assert!(
+        !r.message().contains("muxing overhead: unknown"),
+        "a real container's overhead must be measured, not unknown: {}",
+        r.message()
+    );
+
+    // A real file, not empty, not the `-f null` sink's silent nothing.
+    let meta = std::fs::metadata(&out_path).expect("the remux must have created a real file");
+    assert!(meta.len() > 0, "a remuxed file must not be empty");
+
+    // Read it back: a second, independent invocation, through the same
+    // protocol → probe → demux → discovery → selection spine the first run
+    // used to write it. `-f null -` on the *output* of the first run selects
+    // the same two streams `four_track_file()` was built to make `vaco`
+    // pick on the *input* — a mismatch here means the bytes on disk are not
+    // what the first run claimed to write.
+    let r2 = go(&["-i", &out_str, "-c", "copy", "-f", "null", "-"]);
+    assert_eq!(r2.code, ExitCode::OK, "{}", r2.message());
+    assert!(
+        r2.message().contains(
+            "Stream mapping:\n  Stream #0:0 -> #0:0 (copy)\n  Stream #0:1 -> #0:1 (copy)\n"
+        ),
+        "{}",
+        r2.message()
+    );
+    assert!(
+        r2.message().contains("video:0KiB audio:0KiB"),
+        "the round trip must carry the same payload back: {}",
+        r2.message()
     );
 }
 

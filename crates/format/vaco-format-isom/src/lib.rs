@@ -91,6 +91,7 @@
 
 pub mod boxes;
 pub mod build;
+pub mod cenc;
 pub mod edit;
 pub mod esds;
 pub mod fixed;

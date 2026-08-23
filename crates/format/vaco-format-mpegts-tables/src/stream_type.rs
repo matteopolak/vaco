@@ -341,6 +341,102 @@ const fn is_private_range(stream_type: u8) -> bool {
     stream_type >= 0x80
 }
 
+/// What a muxer must write into a PMT for one codec.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MuxStreamType {
+    pub stream_type: u8,
+    /// A `registration_descriptor` the elementary stream's `ES_info` loop
+    /// must also carry.
+    ///
+    /// Only set where `stream_type` alone is ambiguous — `0x06`, "private
+    /// data" — because that is the only case [`resolve`] needs the
+    /// descriptor to disambiguate on the read side. A codec that already has
+    /// an unambiguous Table 2-34 assignment gets `None`: adding a
+    /// registration descriptor nobody needs is not wrong, but it is not
+    /// measured against anything either, so this only writes one where the
+    /// round trip actually depends on it.
+    pub registration: Option<[u8; 4]>,
+}
+
+/// The `stream_type` (and, in a private range, the `registration_descriptor`)
+/// a muxer should write for `codec`.
+///
+/// `dvb` selects between the two real-world conventions for AC-3, E-AC-3 and
+/// DTS: ATSC (`-mpegts_flags` without `system_b`) assigns them their own
+/// `stream_type` values directly; DVB (`system_b`) instead uses the private
+/// `0x06` plus a registration descriptor, which is what
+/// [`resolve`]'s `is_private_range`/registration handling already expects on
+/// the read side. Every value returned here round-trips through [`resolve`]
+/// back to the same [`TsCodec`], with one documented exception: `stream_type`
+/// `0x03` means "MPEG-1 Audio, layer not yet known" on the wire — 13818-1
+/// gives layers I/II/III no separate values — so [`CodecId::Mp1`] and
+/// [`CodecId::Mp3`] both write `0x03` and both read back as [`TsCodec::Mp2`]
+/// until something parses the actual audio frames, exactly the caveat
+/// [`from_stream_type`]'s own docs already carry. Asserted, exception
+/// included, in this module's tests.
+///
+/// `None` for a codec this table has no TS mapping for at all (`SubRip`,
+/// `MovText`, image codecs, and the like): [`vaco_codec_core::CodecId`] names
+/// many things MPEG-TS has no assignment for, and a muxer must refuse those
+/// rather than invent a `stream_type`.
+#[must_use]
+pub fn for_codec(codec: CodecId, dvb: bool) -> Option<MuxStreamType> {
+    let plain = |stream_type: u8| {
+        Some(MuxStreamType {
+            stream_type,
+            registration: None,
+        })
+    };
+    let private = |id: [u8; 4]| {
+        Some(MuxStreamType {
+            stream_type: 0x06,
+            registration: Some(id),
+        })
+    };
+    match codec {
+        CodecId::Mpeg1video => plain(0x01),
+        CodecId::Mpeg2video => plain(0x02),
+        CodecId::Mpeg4 => plain(0x10),
+        CodecId::H264 => plain(0x1B),
+        CodecId::Hevc => plain(0x24),
+        CodecId::Vvc => plain(0x33),
+        CodecId::Cavs => plain(0x42),
+        CodecId::Dirac => plain(0xD1),
+        CodecId::Vc1 => private(*b"VC-1"),
+        // No Table 2-34 assignment exists; every real-world muxer and
+        // demuxer identifies AV1 in a transport stream by this registration
+        // on the private stream_type, per the AOM's own TS carriage note.
+        CodecId::Av1 => private(*b"AV01"),
+        CodecId::Aac => plain(0x0F),
+        CodecId::AacLatm => plain(0x11),
+        CodecId::Mp1 | CodecId::Mp2 | CodecId::Mp3 => plain(0x03),
+        CodecId::Ac3 => {
+            if dvb {
+                private(*b"AC-3")
+            } else {
+                plain(0x81)
+            }
+        }
+        CodecId::Eac3 => {
+            if dvb {
+                private(*b"EAC3")
+            } else {
+                plain(0x87)
+            }
+        }
+        CodecId::Dts => {
+            if dvb {
+                private(*b"DTS1")
+            } else {
+                plain(0x8A)
+            }
+        }
+        CodecId::Truehd => plain(0x83),
+        CodecId::HdmvPgsSubtitle => plain(0x90),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
 mod tests {
@@ -461,5 +557,75 @@ mod tests {
             let _ = r.codec.media_type();
             let _ = r.codec.codec_id();
         }
+    }
+
+    /// Muxer-direction assignments round-trip through `resolve`, with the
+    /// one documented MPEG audio layer exception `for_codec`'s own docs
+    /// carry.
+    #[test]
+    fn for_codec_round_trips_through_resolve() {
+        let cases = [
+            (CodecId::H264, TsCodec::H264),
+            (CodecId::Hevc, TsCodec::Hevc),
+            (CodecId::Vvc, TsCodec::Vvc),
+            (CodecId::Mpeg1video, TsCodec::Mpeg1Video),
+            (CodecId::Mpeg2video, TsCodec::Mpeg2Video),
+            (CodecId::Mpeg4, TsCodec::Mpeg4Video),
+            (CodecId::Cavs, TsCodec::Cavs),
+            (CodecId::Dirac, TsCodec::Dirac),
+            (CodecId::Aac, TsCodec::Aac),
+            (CodecId::AacLatm, TsCodec::AacLatm),
+            (CodecId::Mp2, TsCodec::Mp2),
+            (CodecId::Truehd, TsCodec::TrueHd),
+            (CodecId::HdmvPgsSubtitle, TsCodec::PgsSubtitle),
+        ];
+        for (codec, want) in cases {
+            for dvb in [false, true] {
+                let assign = for_codec(codec, dvb).unwrap();
+                let r = resolve(
+                    assign.stream_type,
+                    &assign
+                        .registration
+                        .map_or_else(Vec::new, crate::write::registration_descriptor),
+                );
+                assert_eq!(r.codec, want, "{codec:?} dvb={dvb}");
+            }
+        }
+        // The documented exception: layer is not recoverable from the PMT
+        // alone, so both Mp1 and Mp3 land on Mp2 until frame parsing corrects
+        // it — matching `from_stream_type`'s own behaviour.
+        for codec in [CodecId::Mp1, CodecId::Mp3] {
+            let assign = for_codec(codec, false).unwrap();
+            assert_eq!(assign.stream_type, 0x03);
+            assert_eq!(resolve(assign.stream_type, &[]).codec, TsCodec::Mp2);
+        }
+    }
+
+    /// The DVB and ATSC conventions for AC-3/E-AC-3/DTS both resolve to the
+    /// right codec, via two different mechanisms (a private `stream_type` with
+    /// a registration descriptor, versus a dedicated `stream_type`).
+    #[test]
+    fn ac3_family_resolves_under_both_atsc_and_dvb_conventions() {
+        for (codec, want) in [
+            (CodecId::Ac3, TsCodec::Ac3),
+            (CodecId::Eac3, TsCodec::Eac3),
+            (CodecId::Dts, TsCodec::Dts),
+        ] {
+            let atsc = for_codec(codec, false).unwrap();
+            assert_eq!(atsc.registration, None);
+            assert_eq!(resolve(atsc.stream_type, &[]).codec, want);
+
+            let dvb = for_codec(codec, true).unwrap();
+            assert_eq!(dvb.stream_type, 0x06);
+            let reg = dvb.registration.unwrap();
+            let desc = crate::write::registration_descriptor(reg);
+            assert_eq!(resolve(0x06, &desc).codec, want);
+        }
+    }
+
+    #[test]
+    fn for_codec_is_none_for_a_codec_ts_has_no_assignment_for() {
+        assert_eq!(for_codec(CodecId::SubRip, false), None);
+        assert_eq!(for_codec(CodecId::Flac, false), None);
     }
 }

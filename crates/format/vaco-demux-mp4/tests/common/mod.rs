@@ -119,6 +119,48 @@ pub fn avc1_stsd() -> Vec<u8> {
     vaco_format_isom::build::fullbx(b"stsd", 0, 0, &body)
 }
 
+/// A `stsd` holding one `encv` entry: `avc1` wrapped in `sinf ▸ schm(cenc)` /
+/// `sinf ▸ schi ▸ tenc`, byte-for-byte the shape read back from a real
+/// `ffmpeg 8.1 -encryption_scheme cenc-aes-ctr` file (see
+/// `vaco_format_isom::cenc`'s doc comment for the measurement).
+pub fn encv_stsd(kid: [u8; 16]) -> Vec<u8> {
+    let mut entry = Vec::new();
+    entry.extend_from_slice(&[0; 6]); // reserved
+    entry.extend_from_slice(&1u16.to_be_bytes()); // data_reference_index
+    entry.extend_from_slice(&[0; 16]); // pre_defined, reserved, pre_defined[3]
+    entry.extend_from_slice(&160u16.to_be_bytes());
+    entry.extend_from_slice(&120u16.to_be_bytes());
+    entry.extend_from_slice(&0x0048_0000u32.to_be_bytes());
+    entry.extend_from_slice(&0x0048_0000u32.to_be_bytes());
+    entry.extend_from_slice(&0u32.to_be_bytes());
+    entry.extend_from_slice(&1u16.to_be_bytes());
+    entry.extend_from_slice(&[0u8; 32]); // compressorname
+    entry.extend_from_slice(&24u16.to_be_bytes());
+    entry.extend_from_slice(&0xFFFFu16.to_be_bytes());
+
+    let frma = bx(b"frma", b"avc1");
+    let mut schm_body = b"cenc".to_vec();
+    schm_body.extend_from_slice(&1u32.to_be_bytes());
+    let schm = vaco_format_isom::build::fullbx(b"schm", 0, 0, &schm_body);
+    let mut tenc_body = vec![0u8, 0]; // reserved, reserved
+    tenc_body.push(1); // is_protected
+    tenc_body.push(8); // per_sample_iv_size
+    tenc_body.extend_from_slice(&kid);
+    let tenc = vaco_format_isom::build::fullbx(b"tenc", 0, 0, &tenc_body);
+    let schi = bx(b"schi", &tenc);
+    let mut sinf_body = frma;
+    sinf_body.extend_from_slice(&schm);
+    sinf_body.extend_from_slice(&schi);
+    let sinf = bx(b"sinf", &sinf_body);
+
+    entry.extend_from_slice(&sinf);
+
+    let mut stsd_body = 1u32.to_be_bytes().to_vec();
+    stsd_body.extend_from_slice(&bx(b"encv", &entry));
+    // A complete box: `StblSpec::stsd_box` writes it verbatim.
+    vaco_format_isom::build::fullbx(b"stsd", 0, 0, &stsd_body)
+}
+
 /// A track of `n` fixed-size samples, one per chunk, starting at `MDAT_PAYLOAD`.
 pub fn simple_track(track_id: u32, n: u32, size: u32, delta: u32) -> TrackSpec {
     TrackSpec {
@@ -130,7 +172,7 @@ pub fn simple_track(track_id: u32, n: u32, size: u32, delta: u32) -> TrackSpec {
         language: 0x55C4,
         elst: Vec::new(),
         stbl: StblSpec {
-            stsd: Some(avc1_stsd()),
+            stsd_box: Some(avc1_stsd()),
             stts: vec![(n, delta)],
             stsc: vec![(1, 1, 1)],
             stsz: (0..n).map(|_| size).collect(),
@@ -140,6 +182,7 @@ pub fn simple_track(track_id: u32, n: u32, size: u32, delta: u32) -> TrackSpec {
             has_stss: false,
             ..StblSpec::default()
         },
+        tref: Vec::new(),
     }
 }
 

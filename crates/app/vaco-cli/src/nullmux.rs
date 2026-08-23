@@ -1,33 +1,43 @@
-//! The `null` output: a muxer that writes nothing and counts everything.
+//! Packet and byte accounting for an output, plus (now redundant — see below)
+//! this crate's original standalone `null` muxer.
 //!
-//! # Why this exists
+//! # This module predates the container wave
 //!
-//! D5 puts **zero muxers** in v0.1, and `crates/format/` contains three
-//! `vaco-demux-*` crates and no `vaco-mux-*`. So `vaco -i in.mp4 out.mkv`
-//! cannot produce a file, and a binary that pretended otherwise would look
-//! finished and do nothing.
+//! It was written when D5 still put **zero muxers** in v0.1: `crates/format/`
+//! held three `vaco-demux-*` crates and no `vaco-mux-*`, so [`NullMuxer`] was
+//! the only way to make the spine — protocol → probe → demux → discovery →
+//! selection → `vaco-sched` → sink — runnable and observable at all, and
+//! [`NULL_MUXER`] was never registered anywhere because there was no registry
+//! entry to put it in.
 //!
-//! `null` is the honest half of that. It is a real format in the reference
-//! (`ffmpeg -i in.mkv -c copy -f null -` exits 0 and prints
-//! `video:7KiB audio:16KiB …`), it needs no container knowledge at all, and it
-//! makes the whole spine — protocol → probe → demux → discovery → selection →
-//! `vaco-sched` → sink — runnable and *observable*. The counts it keeps are the
-//! acceptance surface: with no bytes to compare, "the same packets reached the
-//! output" is the strongest statement available.
+//! Both of those are false now. `vaco-mux-utility::MUXER_NULL` is a real,
+//! registered `-f null` descriptor (`vaco-component.toml` in that crate), and
+//! [`crate::exec::muxer_for`] resolves `null` through `vaco_registry` like
+//! every other format rather than special-casing it. **[`NullMuxer`] and
+//! [`NULL_MUXER`] are therefore redundant** — kept rather than deleted, per
+//! this crate's standing instruction not to remove a module another agent's
+//! work might still be reaching for, and because they cost nothing to leave:
+//! nothing in `exec.rs` constructs them any more.
 //!
-//! The other half is [`crate::exec::muxer_for`], which refuses every other
-//! format with a message naming the real reason instead of a generic failure.
+//! What is *not* redundant is the counting itself. [`Sink`] and
+//! [`OutputTally`] are the source of the end-of-run summary line for every
+//! output now, real or `null` — see [`TallyingMuxer`], which wraps whatever
+//! [`vaco_registry::muxer_by_name`] returned and counts what actually reaches
+//! its `write_packet`, rather than a separate counter that might drift from
+//! it.
 //!
-//! # Deliberately no default encoders
+//! # Deliberately no default encoders on the local copy
 //!
 //! The reference's `null` muxer declares `wrapped_avframe` and `pcm_s16le` as
-//! its defaults, so `-f null -` transcodes. This build has no encoders and no
-//! decoders, so declaring defaults it cannot honour would move the failure from
-//! a clear message to a confusing one. [`NULL_MUXER`] declares none, which puts
-//! an output with no `-c copy` on the reference's own
-//! "Default encoder for format null (codec none) is probably disabled" path —
-//! the error the reference itself emits for a build that lacks an encoder,
-//! which is exactly our situation.
+//! its defaults, so `-f null -` transcodes. This build had no encoders and no
+//! decoders when [`NULL_MUXER`] was written, so declaring defaults it could not
+//! honour would have moved the failure from a clear message to a confusing
+//! one — it declares none, which puts an output with no `-c copy` on the
+//! reference's own "Default encoder for format null (codec none) is probably
+//! disabled" path. `vaco-mux-utility::MUXER_NULL` made the more accurate call
+//! once it existed: `default_audio` is `Some(PcmS16le)`, because that codec is
+//! representable in this workspace and a container's own defaults are a fact
+//! about the container, not about which encoders happen to be built yet.
 
 use std::sync::{Arc, Mutex};
 
@@ -211,6 +221,118 @@ fn open_null(_sink: Box<dyn MediaSink>) -> Result<Box<dyn Muxer>> {
     Ok(Box::new(NullMuxer::new(Sink::new())))
 }
 
+/// Wraps any [`Muxer`] the registry produced and counts what actually reaches
+/// [`Muxer::write_packet`], into the same [`Sink`]/[`OutputTally`] shape
+/// [`NullMuxer`] used to keep for itself.
+///
+/// # Why counting here rather than trusting the container's own byte count
+///
+/// No [`Muxer`] implementation in this workspace reports payload bytes back to
+/// its caller — that is `vaco_format_core::mux::MuxReport`'s job, and it is
+/// produced by [`vaco_format_core::mux::MuxWriter`], which `vaco-sched`'s own
+/// mux node does not use (see `vaco_sched::node::MuxWork`'s docs: it re-derives
+/// M1–M11 against a raw `dyn Muxer` rather than going through the wrapper, for
+/// reasons specific to a step-driven pipeline). So the CLI's own count is the
+/// only count there is, and this type is what makes it count *real* writes:
+/// every packet handed to `write_packet` here is the same packet the inner
+/// muxer receives and, `write_packet` having returned successfully, has
+/// already turned into bytes on the wire or on disk.
+pub struct TallyingMuxer {
+    inner: Box<dyn Muxer>,
+    sink: Sink,
+}
+
+impl core::fmt::Debug for TallyingMuxer {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("TallyingMuxer").finish_non_exhaustive()
+    }
+}
+
+impl TallyingMuxer {
+    #[must_use]
+    pub fn new(inner: Box<dyn Muxer>, sink: Sink) -> Self {
+        Self { inner, sink }
+    }
+}
+
+impl Muxer for TallyingMuxer {
+    fn flags(&self) -> FormatFlags {
+        self.inner.flags()
+    }
+
+    fn add_stream(&mut self, params: &CodecParameters) -> Result<u32> {
+        let index = self.inner.add_stream(params)?;
+        self.sink.with(|t| {
+            t.streams.push(StreamTally {
+                media: params.media_type,
+                packets: 0,
+                bytes: 0,
+            });
+        });
+        Ok(index)
+    }
+
+    fn init(&mut self) -> Result<()> {
+        self.inner.init()
+    }
+
+    fn write_header(&mut self) -> Result<()> {
+        self.inner.write_header()?;
+        self.sink.with(|t| t.header_written = true);
+        Ok(())
+    }
+
+    fn write_packet(&mut self, packet: &Packet) -> Result<()> {
+        self.inner.write_packet(packet)?;
+        self.sink.with(|t| {
+            if let Some(s) = t.streams.get_mut(packet.stream_index as usize) {
+                s.packets += 1;
+                s.bytes += packet.len as u64;
+            }
+        });
+        Ok(())
+    }
+
+    fn write_trailer(&mut self) -> Result<()> {
+        self.inner.write_trailer()?;
+        self.sink.with(|t| t.trailer_written = true);
+        Ok(())
+    }
+
+    fn stream_time_base(&self, stream_index: u32) -> Option<Rational> {
+        self.inner.stream_time_base(stream_index)
+    }
+
+    fn interleave(
+        &mut self,
+        queue: &mut vaco_format_core::interleave::InterleaveQueue,
+        packet: Option<Packet>,
+        flush: bool,
+    ) -> Result<Option<Packet>> {
+        self.inner.interleave(queue, packet, flush)
+    }
+
+    fn check_bitstream(
+        &mut self,
+        params: &CodecParameters,
+        packet: &Packet,
+    ) -> Result<vaco_format_core::mux::BitstreamAction> {
+        self.inner.check_bitstream(params, packet)
+    }
+
+    fn query_codec(
+        &self,
+        codec: vaco_codec_core::CodecId,
+        strict: i32,
+    ) -> vaco_format_core::mux::CodecSupport {
+        self.inner.query_codec(codec, strict)
+    }
+
+    fn write_flush(&mut self) -> Result<()> {
+        self.inner.write_flush()
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "test code")]
 mod tests {
@@ -283,5 +405,56 @@ mod tests {
         assert!(NULL_MUXER.default_codec(MediaType::Video).is_none());
         assert!(NULL_MUXER.default_codec(MediaType::Audio).is_none());
         assert!(NULL_MUXER.matches_name("null"));
+    }
+
+    #[test]
+    fn tallying_muxer_counts_what_the_inner_muxer_actually_accepted() {
+        // The inner muxer here is the same `NullMuxer` these tests already
+        // exercise, standing in for "any real container" — `TallyingMuxer`
+        // does not know or care what is underneath it, which is the point.
+        let inner_sink = Sink::new();
+        let inner = Box::new(NullMuxer::new(inner_sink));
+        let outer_sink = Sink::new();
+        let mut m = TallyingMuxer::new(inner, outer_sink.clone());
+
+        assert_eq!(m.add_stream(&params(MediaType::Video)).unwrap(), 0);
+        m.write_header().unwrap();
+        let mut p = packet(321);
+        p.stream_index = 0;
+        m.write_packet(&p).unwrap();
+        m.write_trailer().unwrap();
+
+        let t = outer_sink.tally();
+        assert!(t.header_written && t.trailer_written);
+        assert_eq!(t.packets(), 1);
+        assert_eq!(t.bytes_of(MediaType::Video), 321);
+    }
+
+    #[test]
+    fn tallying_muxer_forwards_a_failure_without_tallying_it() {
+        struct AlwaysFails;
+        impl Muxer for AlwaysFails {
+            fn add_stream(&mut self, _: &CodecParameters) -> Result<u32> {
+                Ok(0)
+            }
+            fn write_header(&mut self) -> Result<()> {
+                Ok(())
+            }
+            fn write_packet(&mut self, _: &Packet) -> Result<()> {
+                Err(vaco_core::Error::InvalidData("refused"))
+            }
+            fn write_trailer(&mut self) -> Result<()> {
+                Ok(())
+            }
+        }
+        let sink = Sink::new();
+        let mut m = TallyingMuxer::new(Box::new(AlwaysFails), sink.clone());
+        m.add_stream(&params(MediaType::Audio)).unwrap();
+        m.write_header().unwrap();
+        let mut p = packet(10);
+        p.stream_index = 0;
+        assert!(m.write_packet(&p).is_err());
+        // A write that failed is not a write that happened.
+        assert_eq!(sink.tally().packets(), 0);
     }
 }

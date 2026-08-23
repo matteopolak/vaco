@@ -1,0 +1,41 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Six wrapping protocols, one crate (see the crate docs for why they share
+# one): subfile, concat, concatf, cache, tee, async. No external dependency,
+# so no wasm opt-out is needed the way `vaco-protocol-http` needs one.
+
+[[component]]
+kind      = "protocol"
+name      = "subfile"
+long_name = "subfile"
+ctor      = "vaco_protocol_wrap::SUBFILE_PROTOCOL"
+
+[[component]]
+kind      = "protocol"
+name      = "concat"
+long_name = "Virtual concatenation script"
+ctor      = "vaco_protocol_wrap::CONCAT_PROTOCOL"
+
+[[component]]
+kind      = "protocol"
+name      = "concatf"
+long_name = "Virtual concatenation script (file list)"
+ctor      = "vaco_protocol_wrap::CONCATF_PROTOCOL"
+
+[[component]]
+kind      = "protocol"
+name      = "cache"
+long_name = "Cache wrapper"
+ctor      = "vaco_protocol_wrap::CACHE_PROTOCOL"
+
+[[component]]
+kind      = "protocol"
+name      = "tee"
+long_name = "Tee muxer"
+ctor      = "vaco_protocol_wrap::TEE_PROTOCOL"
+
+[[component]]
+kind      = "protocol"
+name      = "async"
+long_name = "Async"
+ctor      = "vaco_protocol_wrap::ASYNC_PROTOCOL"

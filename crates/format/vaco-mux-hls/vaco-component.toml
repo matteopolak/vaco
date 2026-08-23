@@ -1,0 +1,11 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Name and extensions measured against `ffmpeg -h muxer=hls` (ffmpeg 8.1).
+
+[[component]]
+kind       = "muxer"
+name       = "hls"
+long_name  = "Apple HTTP Live Streaming"
+feature    = "mux-hls"
+ctor       = "vaco_mux_hls::MUXER"
+extensions = "m3u8"

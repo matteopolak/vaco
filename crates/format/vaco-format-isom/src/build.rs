@@ -72,8 +72,24 @@ fn table_u32(kind: [u8; 4], version: u8, entries: &[u32]) -> Vec<u8> {
 /// A description of one `stbl`, in the terms the tables themselves use.
 #[derive(Debug, Clone)]
 pub struct StblSpec {
-    /// Raw `stsd` payload, written verbatim after the box header.
-    pub stsd: Option<Vec<u8>>,
+    /// A **complete `stsd` box**, written verbatim.
+    ///
+    /// It was previously the box *payload*, which this builder then wrapped —
+    /// and every caller in the tree supplied a whole box built with
+    /// `fullbx(b"stsd", …)`, so every fixture had an `stsd` nested inside an
+    /// `stsd`. The parser read the inner box's size field as the outer's
+    /// version and flags and its `FourCc` as the entry count, so `parse_stsd`
+    /// returned nothing useful and the tests that used those fixtures were
+    /// asserting behaviour against a corrupt file without knowing it.
+    ///
+    /// Nobody noticed because the failure was silent in exactly the wrong
+    /// direction: no sample entries parsed, codec parameters stayed `None`, and
+    /// the assertions those tests actually made were about timing and offsets,
+    /// which the corruption did not touch.
+    ///
+    /// Taking the whole box removes the ambiguity rather than documenting it:
+    /// there is no longer a wrapping step to get wrong.
+    pub stsd_box: Option<Vec<u8>>,
     /// `stts` runs of `(sample_count, sample_delta)`.
     pub stts: Vec<(u32, u32)>,
     /// `ctts` version 0 runs, written unsigned.
@@ -109,7 +125,7 @@ pub struct StblSpec {
 impl Default for StblSpec {
     fn default() -> Self {
         Self {
-            stsd: None,
+            stsd_box: None,
             stts: Vec::new(),
             ctts_v0: Vec::new(),
             ctts_v1: Vec::new(),
@@ -134,8 +150,8 @@ impl Default for StblSpec {
 #[must_use]
 pub fn stbl(spec: &StblSpec) -> Vec<u8> {
     let mut body = Vec::new();
-    if let Some(sd) = &spec.stsd {
-        body.extend_from_slice(&bx(b"stsd", sd));
+    if let Some(sd) = &spec.stsd_box {
+        body.extend_from_slice(sd);
     }
     {
         let mut b = Vec::new();
@@ -244,6 +260,9 @@ pub struct TrackSpec {
     pub elst: Vec<(u64, i64, i16)>,
     /// The sample table.
     pub stbl: StblSpec,
+    /// A whole `tref` box (header included), written verbatim when non-empty.
+    /// [`crate::writer::tref`] and [`crate::writer::tref_entry`] build one.
+    pub tref: Vec<u8>,
 }
 
 impl Default for TrackSpec {
@@ -257,6 +276,7 @@ impl Default for TrackSpec {
             language: 0x55C4,
             elst: Vec::new(),
             stbl: StblSpec::default(),
+            tref: Vec::new(),
         }
     }
 }
@@ -306,6 +326,9 @@ pub fn trak(spec: &TrackSpec) -> Vec<u8> {
 
     let mut out = Vec::new();
     out.extend_from_slice(&fullbx(b"tkhd", 0, 3, &tkhd));
+    if !spec.tref.is_empty() {
+        out.extend_from_slice(&spec.tref);
+    }
     if !spec.elst.is_empty() {
         let mut b = Vec::new();
         b.extend_from_slice(&u32::try_from(spec.elst.len()).unwrap_or(0).to_be_bytes());

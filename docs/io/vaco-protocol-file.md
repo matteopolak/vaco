@@ -101,6 +101,16 @@ reason rather than opening something wrong. The same argument applies to plan 18
   link rather than describing whatever it points at. Entries are sorted by name,
   because output order is a differential-test surface.
 
+## Registration
+
+Until this crate's `vaco-component.toml` was added, `file:` and `pipe:` were
+**not reachable through `vaco-registry`** — the fragment simply did not
+exist, so neither name appeared in `generated.rs`'s `PROTOCOLS` table despite
+the implementation being complete. Both are registered unconditionally (no
+`feature =`/`default = false`): a build with no `file:` protocol cannot open
+a bare path, which is rule U1's default scheme for every path the user types
+without a scheme at all.
+
 ## Configuration
 
 `FileOptions`, parsed from the option dictionary handed to `open`/`create`:

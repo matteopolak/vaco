@@ -53,6 +53,7 @@
 pub mod demux;
 pub mod pes;
 pub mod probe;
+pub mod raw;
 
 use vaco_core::Result;
 use vaco_format_core::{Demuxer, DemuxerDesc, FormatOptions, ParserProvider};
@@ -60,11 +61,18 @@ use vaco_io::MediaSource;
 
 pub use demux::{DemuxStats, FLAGS, MpegTsDemuxer};
 pub use probe::{TS_SCORE_STRONG, TS_SCORE_WEAK, probe};
+pub use raw::{MpegTsRawDemuxer, RAW_DEMUXER};
 
-/// The registry descriptor.
+/// The registry descriptor for reassembled-PES `mpegts`.
 ///
-/// `mpegtsraw` — the PID-level view that skips the PES layer entirely — is a
-/// second descriptor this crate does not yet ship; see the docs file.
+/// `mpegtsraw`, the PID-level view that skips PES reassembly, is
+/// [`RAW_DEMUXER`] — a second, real registration confirmed present in
+/// `ffmpeg -demuxers` (`mpegts` and `mpegtsraw` both list, distinctly from
+/// each other); see `raw` for what was measured about it. `m2ts`, by
+/// contrast, is **not** a third demuxer: `ffmpeg -demuxers` lists no such
+/// entry, and Blu-ray's four-byte-timestamp-prefixed stride is already one of
+/// [`vaco_format_mpegts_tables::packet::PacketStride`]'s three variants,
+/// autodetected the same way 188 and 204 are.
 pub const DEMUXER: DemuxerDesc = DemuxerDesc {
     name: "mpegts",
     long_name: "MPEG-TS (MPEG-2 Transport Stream)",

@@ -16,6 +16,7 @@ use vaco_io::{MediaSource, MemorySource};
 
 #[allow(
     clippy::unwrap_used,
+    clippy::expect_used,
     clippy::indexing_slicing,
     clippy::panic,
     clippy::integer_division,
@@ -333,7 +334,7 @@ mod tests {
         let track = TrackSpec {
             track_id: 1,
             stbl: StblSpec {
-                stsd: Some(common::avc1_stsd()),
+                stsd_box: Some(common::avc1_stsd()),
                 ..StblSpec::default()
             },
             ..TrackSpec::default()
@@ -341,5 +342,242 @@ mod tests {
         let demux = open(fixture(1000, 0, &[track], &[]));
         assert_eq!(demux.streams().len(), 1);
         assert_eq!(demux.streams()[0].frame_count, None);
+    }
+
+    /// A `tref \u{2023} chap` track carrying Apple's simple `text` samples
+    /// becomes chapters when there is no Nero `chpl` to take precedence.
+    #[test]
+    fn a_quicktime_chapter_track_becomes_chapters() {
+        use vaco_format_isom::FourCc;
+        use vaco_format_isom::writer;
+
+        // A bare `text` sample entry: no handler-specific body, so
+        // `SampleEntry::parse` treats everything after the eight-byte header
+        // as extensions, and none are needed for a chapter title to be read.
+        let mut text_entry_body = vec![0u8; 6]; // reserved
+        text_entry_body.extend_from_slice(&1u16.to_be_bytes()); // data_reference_index
+        let mut stsd_body = 1u32.to_be_bytes().to_vec();
+        stsd_body.extend_from_slice(&vaco_format_isom::build::bx(b"text", &text_entry_body));
+        // `StblSpec::stsd_box` takes a **complete** box, so build one.
+        //
+        // It used to take the fullbox content and wrap it, and the two
+        // conventions coexisted: `common::avc1_stsd` handed it a whole box,
+        // which got wrapped again into `stsd` inside `stsd` and parsed as
+        // nothing — silently, because the tests using it asserted timing and
+        // offsets rather than sample entries. This test was the first to need
+        // real `parse_stsd` output and had to compensate by hand.
+        let text_stsd = vaco_format_isom::build::fullbx(b"stsd", 0, 0, &stsd_body);
+
+        let mut video = simple_track(1, 1, 4, 1024);
+        video.tref = writer::tref(&writer::tref_entry(FourCc::new(b"chap"), &[2]));
+
+        let sample1 = {
+            let mut s = 2u16.to_be_bytes().to_vec();
+            s.extend_from_slice(b"AB");
+            s
+        };
+        let sample2 = {
+            let mut s = 2u16.to_be_bytes().to_vec();
+            s.extend_from_slice(b"CD");
+            s
+        };
+        let text_track = TrackSpec {
+            track_id: 2,
+            handler: *b"text",
+            timescale: 1000,
+            media_duration: 1000,
+            stbl: StblSpec {
+                stsd_box: Some(text_stsd),
+                stts: vec![(1, 500), (1, 500)],
+                stsc: vec![(1, 2, 1)],
+                stsz: vec![sample1.len() as u32, sample2.len() as u32],
+                stco: vec![MDAT_PAYLOAD as u32 + 4],
+                has_stss: false,
+                ..StblSpec::default()
+            },
+            ..TrackSpec::default()
+        };
+
+        let mut media = vec![0u8; 4]; // the video sample
+        media.extend_from_slice(&sample1);
+        media.extend_from_slice(&sample2);
+
+        let demux = open(fixture(1000, 0, &[video, text_track], &media));
+        let chapters = demux.chapters();
+        assert_eq!(chapters.len(), 2, "one chapter per text sample");
+        assert_eq!(
+            chapters[0].metadata[0],
+            ("title".to_owned(), "AB".to_owned())
+        );
+        assert_eq!(chapters[0].start.ticks(), Some(0));
+        // 500 ticks at 1/1000 is 0.5 s, which is 5 000 000 in the chapter time
+        // base's 100 ns units.
+        assert_eq!(chapters[0].end.ticks(), Some(5_000_000));
+        assert_eq!(
+            chapters[1].metadata[0],
+            ("title".to_owned(), "CD".to_owned())
+        );
+        assert_eq!(chapters[1].start.ticks(), Some(5_000_000));
+        assert!(
+            chapters[1].end.is_none(),
+            "the last chapter has no stated end"
+        );
+    }
+
+    /// Nero `chpl` wins over a `tref \u{2023} chap` track when both are
+    /// present — an assumption, not a measurement; see the crate's doc file.
+    #[test]
+    fn chpl_chapters_take_precedence_over_a_quicktime_chapter_track() {
+        use vaco_format_isom::FourCc;
+        use vaco_format_isom::writer;
+
+        let mut text_entry_body = vec![0u8; 6];
+        text_entry_body.extend_from_slice(&1u16.to_be_bytes());
+        let mut stsd_body = 1u32.to_be_bytes().to_vec();
+        stsd_body.extend_from_slice(&vaco_format_isom::build::bx(b"text", &text_entry_body));
+        // `StblSpec::stsd_box` takes a **complete** box, so build one.
+        //
+        // It used to take the fullbox content and wrap it, and the two
+        // conventions coexisted: `common::avc1_stsd` handed it a whole box,
+        // which got wrapped again into `stsd` inside `stsd` and parsed as
+        // nothing — silently, because the tests using it asserted timing and
+        // offsets rather than sample entries. This test was the first to need
+        // real `parse_stsd` output and had to compensate by hand.
+        let text_stsd = vaco_format_isom::build::fullbx(b"stsd", 0, 0, &stsd_body);
+
+        let mut video = simple_track(1, 1, 4, 1024);
+        video.tref = writer::tref(&writer::tref_entry(FourCc::new(b"chap"), &[2]));
+
+        let sample1 = {
+            let mut s = 2u16.to_be_bytes().to_vec();
+            s.extend_from_slice(b"AB");
+            s
+        };
+        let text_track = TrackSpec {
+            track_id: 2,
+            handler: *b"text",
+            timescale: 1000,
+            media_duration: 500,
+            stbl: StblSpec {
+                stsd_box: Some(text_stsd),
+                stts: vec![(1, 500)],
+                stsc: vec![(1, 1, 1)],
+                stsz: vec![sample1.len() as u32],
+                stco: vec![MDAT_PAYLOAD as u32 + 4],
+                has_stss: false,
+                ..StblSpec::default()
+            },
+            ..TrackSpec::default()
+        };
+
+        let mut media = vec![0u8; 4];
+        media.extend_from_slice(&sample1);
+
+        // `fixture` has no `udta`/`chpl` support of its own; build the file by
+        // hand instead, appending a Nero chapter list after the tracks.
+        let mut moov_tracks = Vec::new();
+        for t in [&video, &text_track] {
+            moov_tracks.extend_from_slice(&vaco_format_isom::build::trak(t));
+        }
+        let entries = vec![vaco_format_isom::writer::chpl_entry(0, "From chpl")];
+        let udta = vaco_format_isom::build::bx(b"udta", &vaco_format_isom::writer::chpl(&entries));
+
+        let mut mvhd = 0u32.to_be_bytes().to_vec();
+        mvhd.extend_from_slice(&0u32.to_be_bytes());
+        mvhd.extend_from_slice(&1000u32.to_be_bytes());
+        mvhd.extend_from_slice(&0u32.to_be_bytes());
+        mvhd.extend_from_slice(&0x0001_0000u32.to_be_bytes());
+        mvhd.extend_from_slice(&0x0100u16.to_be_bytes());
+        mvhd.extend_from_slice(&[0u8; 10]);
+        for v in vaco_format_isom::fixed::IDENTITY_MATRIX {
+            mvhd.extend_from_slice(&v.to_be_bytes());
+        }
+        mvhd.extend_from_slice(&[0u8; 24]);
+        mvhd.extend_from_slice(&2u32.to_be_bytes());
+        let mut moov = vaco_format_isom::build::fullbx(b"mvhd", 0, 0, &mvhd);
+        moov.extend_from_slice(&moov_tracks);
+        moov.extend_from_slice(&udta);
+
+        let mut out = vaco_format_isom::build::bx(b"ftyp", b"isom\x00\x00\x02\x00isom");
+        assert_eq!(out.len() as u64, MDAT_PAYLOAD - 8);
+        out.extend_from_slice(&vaco_format_isom::build::bx(b"mdat", &media));
+        out.extend_from_slice(&vaco_format_isom::build::bx(b"moov", &moov));
+
+        let demux = open(out);
+        let chapters = demux.chapters();
+        assert_eq!(chapters.len(), 1);
+        assert_eq!(
+            chapters[0].metadata[0],
+            ("title".to_owned(), "From chpl".to_owned())
+        );
+    }
+
+    /// The `avc1` fixture actually parses into a sample entry.
+    ///
+    /// This test exists because for a long time it would have failed. Every
+    /// fixture built with `common::avc1_stsd` handed `StblSpec` a complete
+    /// `stsd` box while the builder expected the fullbox *content*, so each one
+    /// became an `stsd` nested inside an `stsd`: the parser read the inner
+    /// box's size field as the outer's version and flags, and its `FourCc` as the
+    /// entry count. `parse_stsd` returned nothing useful and every codec
+    /// parameter stayed `None`.
+    ///
+    /// Nothing caught it because nothing asked. The tests using those fixtures
+    /// asserted timing, chunk offsets and packet boundaries — all of which the
+    /// corruption left alone. So the fix comes with the assertion that would
+    /// have failed before it, which is the only way to know a fix did anything.
+    #[test]
+    fn the_avc1_fixture_yields_real_codec_parameters() {
+        let track = simple_track(1, 1, 4, 1024);
+        let demux = open(fixture(1000, 0, &[track], &[0u8; 4]));
+        let s = &demux.streams()[0];
+        assert_eq!(
+            s.params.codec_id,
+            Some(vaco_codec_core::CodecId::H264),
+            "the sample entry did not parse; is `stsd` double-wrapped again?"
+        );
+        let v = s.params.video.as_ref().expect("a video sample entry");
+        assert_eq!((v.width, v.height), (160, 120));
+    }
+
+    /// Common Encryption is reported, not decoded: `encryption_scheme` and
+    /// `encryption_key_id` land on the stream, and reading a packet from it
+    /// fails with a message naming the reason rather than handing back the
+    /// still-encrypted bytes.
+    #[test]
+    fn cenc_is_reported_and_reading_it_is_refused() {
+        let kid = {
+            let mut k = [0u8; 16];
+            k[15] = 1;
+            k
+        };
+        let mut track = simple_track(1, 2, 4, 1024);
+        track.stbl.stsd_box = Some(common::encv_stsd(kid));
+        let mut demux = open(fixture(1000, 0, &[track], &[0u8; 8]));
+        assert_eq!(demux.streams().len(), 1);
+        assert_eq!(
+            demux.streams()[0]
+                .metadata
+                .iter()
+                .find(|(k, _)| k == "encryption_scheme")
+                .map(|(_, v)| v.as_str()),
+            Some("cenc")
+        );
+        assert_eq!(
+            demux.streams()[0]
+                .metadata
+                .iter()
+                .find(|(k, _)| k == "encryption_key_id")
+                .map(|(_, v)| v.as_str()),
+            Some("00000000000000000000000000000001")
+        );
+        let err = demux.read_packet().unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.to_lowercase().contains("encrypt")
+                || text.to_lowercase().contains("cenc")
+                || text.to_lowercase().contains("decrypt"),
+            "{text}"
+        );
     }
 }

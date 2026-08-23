@@ -9,43 +9,59 @@
 //! resolve codecs        (this module)   -> `copy`, or a diagnosis
 //! build a PipelineSpec  (vaco-sched)    -> map(tap, output, params) per stream
 //! drive it              (vaco-sched)    -> Finish
+//! open the real sink    (this module)   -> bytes on disk, or a diagnosis
 //! ```
 //!
-//! # There are no muxers, and that is the whole design constraint
+//! # The registry has 63 muxers now; this module reaches all of them
 //!
-//! D5 puts zero muxers in v0.1, so [`muxer_for`] can return exactly one thing:
-//! the [`null`](crate::nullmux) sink. Everything else is refused, and the
-//! refusal distinguishes three cases so the message names the real reason:
+//! This used to say the opposite: D5 put zero muxers in v0.1, `crates/format/`
+//! held three `vaco-demux-*` crates and no `vaco-mux-*`, and [`muxer_for`]
+//! could return exactly one thing — a local, unregistered `null` sink. That
+//! stopped being true when the container wave landed a `vaco-mux-*` crate per
+//! format and registered `null` itself as a real component
+//! (`vaco_mux_utility::MUXER_NULL`). [`muxer_for`] now resolves **every**
+//! `-f`/extension through `vaco_registry::muxer_by_name` /
+//! `muxers_for_extension` uniformly — `null` included, no special case — and
+//! [`run_pipeline`] opens whatever it names through the real protocol and
+//! format-registry stack (`crate::output`, then `(MuxerDesc::open)`) rather
+//! than always building a discard sink. The refusal path still distinguishes
+//! three cases, and it is what is left of the old design:
 //!
 //! | `-f` / extension | message | exit |
 //! |---|---|---|
-//! | a format this build can **read** (`matroska`, `mp4`, `mpegts`) | "no muxer for 'x': this build reads that format but cannot write it" | 8 |
+//! | a format this build can **read** but has no registered muxer for | "no muxer for 'x': this build reads that format but cannot write it" | 8 |
 //! | a name nothing claims (`-f nosuchformat`) | the reference's own "Requested output format 'x' is not known." | 234 |
 //! | no `-f` and an unhelpful extension | the reference's own "Unable to choose an output format for 'x'…" | 234 |
 //!
 //! The second and third are byte-identical to `ffmpeg` 8.1 modulo the pointer
-//! it prints in its log prefix. The first has no reference behaviour to match,
-//! because the reference is never built without muxers; `AVERROR_MUXER_NOT_FOUND`
-//! is the code that names the situation, and it exits 8 like every other
-//! four-character tag.
+//! it prints in its log prefix. The first now applies to *fewer* formats than
+//! it used to — every format with a landed `vaco-mux-*` crate moved out of it —
+//! but it is still correct for whatever remains: `AVERROR_MUXER_NOT_FOUND` is
+//! the code that names "this build demuxes it and cannot mux it", and it exits
+//! 8 like every other four-character tag.
 //!
-//! # There are no encoders either
+//! # There are still no encoders
 //!
 //! So an output stream must be `-c copy`. Without one, the run takes the
 //! reference's *own* path for a build missing an encoder — "Default encoder for
 //! format null (codec none) is probably disabled" — which is a message it
 //! already emits for exactly this situation and which is therefore the right
-//! one to reproduce rather than invent.
+//! one to reproduce rather than invent. Stream copy is enough to remux,
+//! though, which is the one thing this module is now actually for.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use vaco_cli_core::{MatchCtx, StreamInfo};
-use vaco_core::{MediaType, Result};
-use vaco_format_core::Stream;
+use vaco_core::{Error, MediaType, Result};
+use vaco_format_core::flags::FormatFlags;
+use vaco_format_core::{Muxer, Stream};
 use vaco_sched::{Driver, Finish, PipelineSpec};
 
 use crate::cli::{Cli, OutputSpec};
 use crate::exit::{AvError, Diagnostic};
 use crate::input::InputFile;
-use crate::nullmux::{NullMuxer, OutputTally, Sink};
+use crate::nullmux::{OutputTally, Sink, TallyingMuxer};
 use crate::select::{self, InputStreams, StreamPick};
 
 /// One resolved output stream, in output order.
@@ -193,11 +209,15 @@ pub fn resolve_output(
 
 /// Which muxer an output resolves to. See the module docs for the three
 /// refusals.
+///
+/// `null` is not special-cased here any more: `vaco_registry::muxer_by_name`
+/// finds it the same way it finds `matroska` or `mp4`, because
+/// `vaco-mux-utility` registers a real `MUXER_NULL` now. The only remaining
+/// special case is in [`run_pipeline`], which still must not touch the
+/// filesystem for a `NOFILE` container — that is a property of the
+/// *instantiated* muxer, not of its name, so it cannot be decided here.
 fn muxer_for(out: &OutputSpec) -> Result<&'static str, Diagnostic> {
     if let Some(name) = out.format.as_deref() {
-        if crate::nullmux::NULL_MUXER.matches_name(name) {
-            return Ok(crate::nullmux::NULL_MUXER.name);
-        }
         if let Some(desc) = vaco_registry::muxer_by_name(name) {
             return Ok(desc.name);
         }
@@ -374,18 +394,20 @@ pub fn run_pipeline(
     }
 
     let mut report = RunSpec::default();
-    let mut sinks = Vec::new();
+    // Per output, in the same order as `outputs.iter().filter(..)`: the packet
+    // tally and, unless the container is `NOFILE`, a handle to the real bytes
+    // written — `open_output`'s docs say why the two are not the same thing.
+    let mut sinks: Vec<(Sink, Option<Arc<AtomicU64>>)> = Vec::new();
     for out in outputs.iter().filter(|o| !o.dropped) {
-        let muxer = Box::new(NullMuxer::new(out.sink.clone()));
-        // `add_output_with`, not `add_output`: the flags decide whether the
-        // mux-side timestamp chain enforces strictly increasing DTS, and the
-        // default of "no flags" means "strict". See `nullmux::FLAGS`.
-        let oref = spec.add_output_with(
-            muxer,
-            crate::nullmux::FLAGS,
-            vaco_format_core::options::FormatOptions::default(),
-        );
-        sinks.push(out.sink.clone());
+        let (inner, high_water) = open_output(out)?;
+        let muxer: Box<dyn Muxer> = Box::new(TallyingMuxer::new(inner, out.sink.clone()));
+        // The plain `add_output`, not `add_output_with`: it reads the flags
+        // off the muxer itself, which for a real container is the container's
+        // own answer — `TS_NONSTRICT`, `NOTIMESTAMPS` and the rest are
+        // properties of the format, never a caller preference (see
+        // `Muxer::flags`'s own docs).
+        let oref = spec.add_output(muxer);
+        sinks.push((out.sink.clone(), high_water));
         for (i, s) in out.streams.iter().enumerate() {
             let Some(input) = refs.get(s.source.file as usize).copied() else {
                 return Err(internal("a map names an input that was not opened"));
@@ -438,13 +460,101 @@ pub fn run_pipeline(
         }
     }
 
-    for (out, sink) in outputs.iter().filter(|o| !o.dropped).zip(sinks) {
+    for (out, (sink, high_water)) in outputs.iter().filter(|o| !o.dropped).zip(sinks) {
         let t = sink.tally();
-        report.summary.push(summary_line(out, &t));
+        let total_bytes = high_water.map(|h| h.load(Ordering::Relaxed));
+        report.summary.push(summary_line(out, &t, total_bytes));
         report.tallies.push(t);
     }
     let _ = files;
     Ok(report)
+}
+
+/// Open the real muxer for one output: the registry descriptor's own
+/// [`vaco_format_core::MuxerDesc::open`], fed a sink from the protocol layer.
+///
+/// Returns the total-bytes-written handle alongside the muxer rather than
+/// making the caller dig it back out, because there is exactly one point
+/// where both are known at once — here, before the sink is boxed away inside
+/// the muxer for good.
+///
+/// # Two constructions for one output, and why
+///
+/// `MuxerDesc` carries no `flags` field the way `DemuxerDesc` does (compare
+/// the two definitions in `vaco_format_core::lib`), so whether a format is
+/// `FormatFlags::NOFILE` — `null`, `mkvtimestamp_v2` — is only knowable by
+/// asking an *instance*, which means constructing one. The reference never
+/// opens a real file for such a format at all (`ffmpeg -f null out.bin` leaves
+/// `out.bin` untouched), so the order has to be: construct once against a
+/// throwaway in-memory sink to ask, and only open the real protocol sink —
+/// which for `file:` truncates on open, a visible side effect — once the
+/// answer is "no". Reported as a gap in `docs/app/vaco-cli.md`; a `flags`
+/// field on `MuxerDesc` would remove the throwaway construction entirely.
+///
+/// # Errors
+///
+/// A [`Diagnostic`] if the descriptor's `open` rejects either sink, or if the
+/// protocol layer cannot open the destination (unwrapped so the exit code
+/// reflects the real `io::ErrorKind`, matching `input::open`'s side).
+fn open_output(
+    out: &ResolvedOutput,
+) -> Result<(Box<dyn Muxer>, Option<Arc<AtomicU64>>), Diagnostic> {
+    let desc = vaco_registry::muxer_by_name(out.format)
+        .ok_or_else(|| internal("a resolved output format is no longer in the registry"))?;
+
+    let probe = (desc.open)(Box::new(vaco_format_core::vacoraw::MemorySink::new()))
+        .map_err(|e| muxer_open_error(out, &e))?;
+    if probe.flags().contains(FormatFlags::NOFILE) {
+        return Ok((probe, None));
+    }
+    drop(probe);
+
+    let sink = crate::output::create(&out.url).map_err(|e| output_open_error(out, &e))?;
+    let counting = crate::output::HighWaterSink::new(sink);
+    let high_water = counting.high_water();
+    let muxer = (desc.open)(Box::new(counting)).map_err(|e| muxer_open_error(out, &e))?;
+    Ok((muxer, Some(high_water)))
+}
+
+/// Measured (`ffmpeg 8.1`): opening a real output that permission denies —
+/// `ffmpeg -i in.mp4 -c copy -f matroska ro/out.mkv` against a read-only
+/// `ro/` — prints
+///
+/// ```text
+/// [out#0/matroska @ 0x…] Error opening output ro/out.mkv: Permission denied
+/// Error opening output file ro/out.mkv.
+/// Error opening output files: Permission denied
+/// ```
+///
+/// and exits 243 (`EACCES`). `Diagnostic::opening` already produces the last
+/// two lines for `what = "output"`; this supplies the first, sans pointer.
+fn output_open_error(out: &ResolvedOutput, e: &Error) -> Diagnostic {
+    let av = AvError::of(e);
+    Diagnostic::opening(
+        av,
+        vec![format!(
+            "[out#{}/{}] Error opening output {}: {}",
+            out.index, out.format, out.url, av.text
+        )],
+        "output",
+        &out.url,
+    )
+}
+
+/// A muxer's own `open`/`init` rejecting the sink it was given — unmeasured
+/// against the reference (no probe here forced a real container to refuse
+/// construction), so this wording is our own rather than a reproduction.
+fn muxer_open_error(out: &ResolvedOutput, e: &Error) -> Diagnostic {
+    let av = AvError::of(e);
+    Diagnostic::opening(
+        av,
+        vec![format!(
+            "[out#{}/{}] Error opening output {}: {e}",
+            out.index, out.format, out.url
+        )],
+        "output",
+        &out.url,
+    )
 }
 
 /// The reference's end-of-run line, without the pointer it prints in the
@@ -471,8 +581,29 @@ pub fn run_pipeline(
 ///
 /// `muxing overhead` is `unknown` for `null` because nothing was written to
 /// compare the payload against.
+///
+/// # What it reads when it is *not* `unknown`, measured against `ffmpeg 8.1`
+///
+/// Remuxing one video+audio file (10 908 payload bytes by
+/// `ffprobe -show_entries packet=size`) three ways:
+///
+/// | destination | total bytes written | printed |
+/// |---|---|---|
+/// | seekable `.mkv` | 12 168 | `11.551155%` |
+/// | seekable `.mp4` | 12 650 | `15.969930%` |
+/// | `.mkv` over a real, unseekable pipe | 12 038 | `10.359369%` |
+///
+/// Every row is `100 * (total − payload) / payload`, printed with six decimal
+/// digits — a `%f` conversion, not a rounded percentage. `total` is bytes
+/// actually written, not `stat()` of the finished file: the pipe row has no
+/// file to `stat`, and still prints a number, which is why [`open_output`]
+/// tracks a high-water mark on the sink itself
+/// ([`crate::output::HighWaterSink`]) rather than asking the filesystem
+/// afterward. `unknown` is reserved for the case that mark never moved at all
+/// — a `NOFILE` container, which never touches a sink in the first place — not
+/// for "the destination happens to be unseekable".
 #[must_use]
-pub fn summary_line(out: &ResolvedOutput, t: &OutputTally) -> String {
+pub fn summary_line(out: &ResolvedOutput, t: &OutputTally, total_bytes: Option<u64>) -> String {
     let kib = |m: MediaType| kib_of(t.bytes_of(m));
     let other: u64 = t
         .streams
@@ -485,8 +616,18 @@ pub fn summary_line(out: &ResolvedOutput, t: &OutputTally) -> String {
         })
         .map(|s| s.bytes)
         .sum();
+    let payload: u64 = t.streams.iter().map(|s| s.bytes).sum();
+    let overhead = match total_bytes {
+        Some(total) if payload > 0 => {
+            format!(
+                "{:.6}%",
+                100.0 * (total as f64 - payload as f64) / payload as f64
+            )
+        }
+        _ => "unknown".to_owned(),
+    };
     format!(
-        "[out#{}/{}] video:{}KiB audio:{}KiB subtitle:{}KiB other streams:{}KiB global headers:0KiB muxing overhead: unknown",
+        "[out#{}/{}] video:{}KiB audio:{}KiB subtitle:{}KiB other streams:{}KiB global headers:0KiB muxing overhead: {overhead}",
         out.index,
         out.format,
         kib(MediaType::Video),
@@ -505,7 +646,7 @@ fn internal(what: &str) -> Diagnostic {
     Diagnostic::new(AvError::EINVAL, vec![format!("Internal error: {what}")])
 }
 
-fn internal_from(what: &str, e: &vaco_core::Error) -> Diagnostic {
+fn internal_from(what: &str, e: &Error) -> Diagnostic {
     Diagnostic::new(AvError::of(e), vec![format!("Error: {what}: {e}")])
 }
 
@@ -714,7 +855,7 @@ mod tests {
             trailer_written: true,
         };
         assert_eq!(
-            summary_line(&out, &t),
+            summary_line(&out, &t, None),
             "[out#0/null] video:7KiB audio:16KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: unknown"
         );
         // The three measured points, and the tie the two rounding rules
@@ -723,6 +864,42 @@ mod tests {
         assert_eq!(kib_of(16_354), 16);
         assert_eq!(kib_of(8992), 9);
         assert_eq!(kib_of(1536), 2, "1.5 KiB ties to even");
+    }
+
+    #[test]
+    fn the_summary_line_computes_overhead_from_bytes_actually_written() {
+        // Measured against `ffmpeg 8.1`: a 10 908-byte payload remuxed to a
+        // seekable `.mkv` produces a 12 168-byte file and prints
+        // `11.551155%`. See `summary_line`'s docs for the other two rows this
+        // was cross-checked against.
+        let out = ResolvedOutput {
+            index: 0,
+            url: "out.mkv".to_owned(),
+            format: "matroska",
+            streams: Vec::new(),
+            sink: Sink::new(),
+            dropped: false,
+        };
+        let t = OutputTally {
+            streams: vec![
+                crate::nullmux::StreamTally {
+                    media: Some(MediaType::Video),
+                    packets: 5,
+                    bytes: 2048,
+                },
+                crate::nullmux::StreamTally {
+                    media: Some(MediaType::Audio),
+                    packets: 45,
+                    bytes: 8860,
+                },
+            ],
+            header_written: true,
+            trailer_written: true,
+        };
+        assert_eq!(
+            summary_line(&out, &t, Some(12_168)),
+            "[out#0/matroska] video:2KiB audio:9KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: 11.551155%"
+        );
         assert_eq!(kib_of(2560), 2, "2.5 KiB ties to even");
         assert_eq!(kib_of(0), 0);
     }

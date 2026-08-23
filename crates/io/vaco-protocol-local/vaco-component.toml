@@ -1,0 +1,17 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# `data:` and `md5:`. No external dependency beyond the workspace's own
+# crates, so neither needs the `default = false` opt-out
+# `vaco-protocol-http` uses for its wasm/getrandom conflict.
+
+[[component]]
+kind      = "protocol"
+name      = "data"
+long_name = "data URI"
+ctor      = "vaco_protocol_local::DATA_PROTOCOL"
+
+[[component]]
+kind      = "protocol"
+name      = "md5"
+long_name = "MD5 testing"
+ctor      = "vaco_protocol_local::MD5_PROTOCOL"

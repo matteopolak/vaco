@@ -588,7 +588,16 @@ pub struct Movie<'a> {
     /// The `udta` box, unparsed. Metadata mapping is the demuxer's, not the box
     /// layer's; see the crate doc file's *Deferred* section.
     pub udta: Option<IsoBox<'a>>,
+    /// `pssh` boxes that are direct children of `moov` — the common location
+    /// for progressive Common Encryption. A fragmented file may carry more of
+    /// these as top-level boxes alongside `moof`, which is outside `moov` and
+    /// therefore a caller's own top-level scan to collect (`vaco-demux-mp4`'s
+    /// does).
+    pub pssh: Vec<crate::cenc::Pssh>,
 }
+
+/// Largest number of `pssh` boxes kept from one `moov`.
+pub const MAX_PSSH_BOXES: usize = 256;
 
 impl<'a> Movie<'a> {
     /// Parse a `moov` container.
@@ -604,6 +613,7 @@ impl<'a> Movie<'a> {
         let mut extends = Vec::new();
         let mut fragment_duration = None;
         let mut udta = None;
+        let mut pssh = Vec::new();
         for child in moov.children() {
             let child = child?;
             match child.kind() {
@@ -628,6 +638,11 @@ impl<'a> Movie<'a> {
                     }
                 }
                 boxes::UDTA => udta = Some(child),
+                boxes::PSSH if pssh.len() < MAX_PSSH_BOXES => {
+                    if let Ok(p) = crate::cenc::Pssh::parse(&child) {
+                        pssh.push(p);
+                    }
+                }
                 _ => {}
             }
         }
@@ -637,6 +652,7 @@ impl<'a> Movie<'a> {
             extends,
             fragment_duration,
             udta,
+            pssh,
         })
     }
 
@@ -682,6 +698,10 @@ pub struct IsoFile<'a> {
     pub random_access: Vec<TrackFragmentRandomAccess>,
     /// Absolute offset and size of each `mdat`.
     pub media_data: Vec<(u64, u64)>,
+    /// Top-level `pssh` boxes — the location a fragmented CENC file uses,
+    /// alongside `moof`. A progressive file's `pssh` is under `moov` instead
+    /// and is in `Movie::pssh`.
+    pub top_level_pssh: Vec<crate::cenc::Pssh>,
 }
 
 impl<'a> IsoFile<'a> {
@@ -718,6 +738,11 @@ impl<'a> IsoFile<'a> {
                 boxes::MDAT => me
                     .media_data
                     .push((b.payload_offset(), b.header.payload_len())),
+                boxes::PSSH if me.top_level_pssh.len() < MAX_PSSH_BOXES => {
+                    if let Ok(p) = crate::cenc::Pssh::parse(&b) {
+                        me.top_level_pssh.push(p);
+                    }
+                }
                 _ => {}
             }
         }

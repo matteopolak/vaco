@@ -64,6 +64,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "subtitle-text")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "ass,ssa",
+        long_name: Some("ASS (Advanced SubStation Alpha) subtitle"),
+        krate: "vaco-subtitle-text",
+        feature: Some("subtitle-text"),
+        media: Some("subtitle"),
+        codec: None,
+        extensions: &["ass", "ssa"],
+        mime_types: &["text/x-ass"],
+    },
     #[cfg(feature = "demux-au")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -184,6 +196,17 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["avs"],
         mime_types: &[],
     },
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "concat",
+        long_name: Some("Virtual concatenation script"),
+        krate: "vaco-mux-stream",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-image2")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -195,6 +218,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         codec: None,
         extensions: &["cri"],
         mime_types: &[],
+    },
+    #[cfg(feature = "demux-dash")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "dash",
+        long_name: Some("Dynamic Adaptive Streaming over HTTP"),
+        krate: "vaco-demux-dash",
+        feature: Some("demux-dash"),
+        media: None,
+        codec: None,
+        extensions: &["mpd"],
+        mime_types: &["application/dash+xml"],
     },
     #[cfg(feature = "demux-raw")]
     crate::Component {
@@ -436,6 +471,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["hevc", "h265", "265"],
         mime_types: &[],
     },
+    #[cfg(feature = "demux-hls")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "hls",
+        long_name: Some("Apple HTTP Live Streaming"),
+        krate: "vaco-demux-hls",
+        feature: Some("demux-hls"),
+        media: None,
+        codec: None,
+        extensions: &["m3u8", "m3u"],
+        mime_types: &["application/vnd.apple.mpegurl", "application/x-mpegurl"],
+    },
     #[cfg(feature = "demux-image2")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -471,6 +518,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         codec: None,
         extensions: &["j2k"],
         mime_types: &[],
+    },
+    #[cfg(feature = "subtitle-text")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "jacosub",
+        long_name: Some("JACOsub subtitle format"),
+        krate: "vaco-subtitle-text",
+        feature: Some("subtitle-text"),
+        media: Some("subtitle"),
+        codec: None,
+        extensions: &["jss", "js"],
+        mime_types: &["text/x-jacosub"],
     },
     #[cfg(feature = "demux-image2")]
     crate::Component {
@@ -532,6 +591,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "subtitle-text")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "lrc",
+        long_name: Some("LRC lyrics"),
+        krate: "vaco-subtitle-text",
+        feature: Some("subtitle-text"),
+        media: Some("subtitle"),
+        codec: None,
+        extensions: &["lrc"],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-raw")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -555,6 +626,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         codec: None,
         extensions: &["mkv", "mk3d", "mka", "mks", "webm"],
         mime_types: &[],
+    },
+    #[cfg(feature = "subtitle-text")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "microdvd",
+        long_name: Some("MicroDVD subtitle"),
+        krate: "vaco-subtitle-text",
+        feature: Some("subtitle-text"),
+        media: Some("subtitle"),
+        codec: None,
+        extensions: &["sub"],
+        mime_types: &["text/x-microdvd"],
     },
     #[cfg(feature = "demux-raw")]
     crate::Component {
@@ -628,6 +711,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["ts", "m2t", "m2ts", "mts", "mpegts"],
         mime_types: &["video/mp2t"],
     },
+    #[cfg(feature = "demux-mpegtsraw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "mpegtsraw",
+        long_name: Some("raw MPEG-TS (MPEG-2 Transport Stream)"),
+        krate: "vaco-demux-mpegts",
+        feature: Some("demux-mpegtsraw"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-raw")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -638,6 +733,30 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "subtitle-text")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "mpl2",
+        long_name: Some("MPL2 subtitles"),
+        krate: "vaco-subtitle-text",
+        feature: Some("subtitle-text"),
+        media: Some("subtitle"),
+        codec: None,
+        extensions: &["mpl2", "txt"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "subtitle-text")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "mpsub",
+        long_name: Some("MPlayer subtitles"),
+        krate: "vaco-subtitle-text",
+        feature: Some("subtitle-text"),
+        media: Some("subtitle"),
+        codec: None,
+        extensions: &["sub"],
         mime_types: &[],
     },
     #[cfg(feature = "demux-raw")]
@@ -802,6 +921,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["pic"],
         mime_types: &[],
     },
+    #[cfg(feature = "subtitle-text")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "pjs",
+        long_name: Some("PJS (Phoenix Japanimation Society) subtitles"),
+        krate: "vaco-subtitle-text",
+        feature: Some("subtitle-text"),
+        media: Some("subtitle"),
+        codec: None,
+        extensions: &["pjs"],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-image2")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -873,6 +1004,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         codec: None,
         extensions: &["yuv", "cif", "qcif", "rgb"],
         mime_types: &[],
+    },
+    #[cfg(feature = "subtitle-text")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "realtext",
+        long_name: Some("RealText subtitle format"),
+        krate: "vaco-subtitle-text",
+        feature: Some("subtitle-text"),
+        media: Some("subtitle"),
+        codec: None,
+        extensions: &["rt"],
+        mime_types: &["application/x-rt"],
     },
     #[cfg(feature = "demux-rso")]
     crate::Component {
@@ -982,6 +1125,30 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["sb"],
         mime_types: &[],
     },
+    #[cfg(feature = "subtitle-text")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "sami",
+        long_name: Some("SAMI subtitle format"),
+        krate: "vaco-subtitle-text",
+        feature: Some("subtitle-text"),
+        media: Some("subtitle"),
+        codec: None,
+        extensions: &["smi", "sami"],
+        mime_types: &["application/x-sami"],
+    },
+    #[cfg(feature = "subtitle-text")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "scc",
+        long_name: Some("Scenarist Closed Captions"),
+        krate: "vaco-subtitle-text",
+        feature: Some("subtitle-text"),
+        media: Some("subtitle"),
+        codec: None,
+        extensions: &["scc"],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-image2")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -1004,6 +1171,54 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["sox"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "subtitle-text")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "srt",
+        long_name: Some("SubRip subtitle"),
+        krate: "vaco-subtitle-text",
+        feature: Some("subtitle-text"),
+        media: Some("subtitle"),
+        codec: None,
+        extensions: &["srt"],
+        mime_types: &["application/x-subrip"],
+    },
+    #[cfg(feature = "subtitle-text")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "stl",
+        long_name: Some("Spruce subtitle format"),
+        krate: "vaco-subtitle-text",
+        feature: Some("subtitle-text"),
+        media: Some("subtitle"),
+        codec: None,
+        extensions: &["stl"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "subtitle-text")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "subviewer",
+        long_name: Some("SubViewer subtitle"),
+        krate: "vaco-subtitle-text",
+        feature: Some("subtitle-text"),
+        media: Some("subtitle"),
+        codec: None,
+        extensions: &["sub"],
+        mime_types: &["text/x-subviewer"],
+    },
+    #[cfg(feature = "subtitle-text")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "subviewer1",
+        long_name: Some("SubViewer v1 subtitle"),
+        krate: "vaco-subtitle-text",
+        feature: Some("subtitle-text"),
+        media: Some("subtitle"),
+        codec: None,
+        extensions: &["sub"],
         mime_types: &[],
     },
     #[cfg(feature = "demux-image2")]
@@ -1041,6 +1256,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         codec: None,
         extensions: &["tiff", "tif"],
         mime_types: &[],
+    },
+    #[cfg(feature = "subtitle-text")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "ttml",
+        long_name: Some("TTML subtitle"),
+        krate: "vaco-subtitle-text",
+        feature: Some("subtitle-text"),
+        media: Some("subtitle"),
+        codec: None,
+        extensions: &["ttml"],
+        mime_types: &["application/ttml+xml"],
     },
     #[cfg(feature = "demux-raw")]
     crate::Component {
@@ -1198,6 +1425,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["voc"],
         mime_types: &["audio/x-voc"],
     },
+    #[cfg(feature = "subtitle-text")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "vplayer",
+        long_name: Some("VPlayer subtitles"),
+        krate: "vaco-subtitle-text",
+        feature: Some("subtitle-text"),
+        media: Some("subtitle"),
+        codec: None,
+        extensions: &["txt"],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-raw")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -1245,6 +1484,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         codec: None,
         extensions: &["webp"],
         mime_types: &[],
+    },
+    #[cfg(feature = "subtitle-text")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "webvtt",
+        long_name: Some("WebVTT subtitle"),
+        krate: "vaco-subtitle-text",
+        feature: Some("subtitle-text"),
+        media: Some("subtitle"),
+        codec: None,
+        extensions: &["vtt"],
+        mime_types: &["text/vtt"],
     },
     #[cfg(feature = "demux-image2")]
     crate::Component {
@@ -1366,6 +1617,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "subtitle-text")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "ass",
+        long_name: Some("ASS (Advanced SubStation Alpha) subtitle"),
+        krate: "vaco-subtitle-text",
+        feature: Some("subtitle-text"),
+        media: None,
+        codec: None,
+        extensions: &["ass"],
+        mime_types: &[],
+    },
     #[cfg(feature = "mux-au")]
     crate::Component {
         kind: crate::Kind::Muxer,
@@ -1459,6 +1722,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-dash")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "dash",
+        long_name: Some("DASH Muxer"),
+        krate: "vaco-mux-dash",
+        feature: Some("mux-dash"),
+        media: None,
+        codec: None,
+        extensions: &["mpd"],
         mime_types: &[],
     },
     #[cfg(feature = "mux-raw")]
@@ -1593,6 +1868,28 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "ffmetadata",
+        long_name: Some("FFmpeg metadata in text"),
+        krate: "vaco-mux-stream",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "fifo",
+        long_name: Some("FIFO queue pseudo-muxer"),
+        krate: "vaco-mux-stream",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "mux-flv")]
     crate::Component {
         kind: crate::Kind::Muxer,
@@ -1697,6 +1994,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["hevc", "h265", "265"],
         mime_types: &[],
     },
+    #[cfg(feature = "mux-hls")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "hls",
+        long_name: Some("Apple HTTP Live Streaming"),
+        krate: "vaco-mux-hls",
+        feature: Some("mux-hls"),
+        media: None,
+        codec: None,
+        extensions: &["m3u8"],
+        mime_types: &[],
+    },
     #[cfg(feature = "mux-image2")]
     crate::Component {
         kind: crate::Kind::Muxer,
@@ -1745,6 +2054,30 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["ismv", "isma"],
         mime_types: &[],
     },
+    #[cfg(feature = "subtitle-text")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "jacosub",
+        long_name: Some("JACOsub subtitle format"),
+        krate: "vaco-subtitle-text",
+        feature: Some("subtitle-text"),
+        media: None,
+        codec: None,
+        extensions: &["jss"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "subtitle-text")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "lrc",
+        long_name: Some("LRC lyrics"),
+        krate: "vaco-subtitle-text",
+        feature: Some("subtitle-text"),
+        media: None,
+        codec: None,
+        extensions: &["lrc"],
+        mime_types: &[],
+    },
     #[cfg(feature = "mux-raw")]
     crate::Component {
         kind: crate::Kind::Muxer,
@@ -1780,6 +2113,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "subtitle-text")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "microdvd",
+        long_name: Some("MicroDVD subtitle"),
+        krate: "vaco-subtitle-text",
+        feature: Some("subtitle-text"),
+        media: None,
+        codec: None,
+        extensions: &["sub"],
+        mime_types: &[],
+    },
     #[cfg(feature = "mux-raw")]
     crate::Component {
         kind: crate::Kind::Muxer,
@@ -1791,6 +2136,17 @@ pub static COMPONENTS: &[crate::Component] = &[
         codec: None,
         extensions: &["mjpg", "mjpeg"],
         mime_types: &["video/x-mjpeg"],
+    },
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "mkvtimestamp_v2",
+        long_name: Some("extract pts as timecode v2 format, as defined by mkvtoolnix"),
+        krate: "vaco-mux-utility",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
     },
     #[cfg(feature = "mux-mp4")]
     crate::Component {
@@ -1828,6 +2184,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["mpg", "mpeg"],
         mime_types: &["video/mpeg"],
     },
+    #[cfg(feature = "mux-mpegts")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "mpegts",
+        long_name: Some("MPEG-TS (MPEG-2 Transport Stream)"),
+        krate: "vaco-mux-mpegts",
+        feature: Some("mux-mpegts"),
+        media: None,
+        codec: None,
+        extensions: &["ts", "m2t", "m2ts", "mts"],
+        mime_types: &["video/mp2t"],
+    },
     #[cfg(feature = "mux-raw")]
     crate::Component {
         kind: crate::Kind::Muxer,
@@ -1838,6 +2206,17 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["ul"],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "null",
+        long_name: Some("raw null video"),
+        krate: "vaco-mux-utility",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
         mime_types: &[],
     },
     #[cfg(feature = "mux-raw")]
@@ -2020,6 +2399,29 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["sb"],
         mime_types: &[],
     },
+    #[cfg(feature = "subtitle-text")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "scc",
+        long_name: Some("Scenarist Closed Captions"),
+        krate: "vaco-subtitle-text",
+        feature: Some("subtitle-text"),
+        media: None,
+        codec: None,
+        extensions: &["scc"],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "segment",
+        long_name: Some("segment"),
+        krate: "vaco-mux-stream",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "mux-sox")]
     crate::Component {
         kind: crate::Kind::Muxer,
@@ -2044,6 +2446,29 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["spx"],
         mime_types: &[],
     },
+    #[cfg(feature = "subtitle-text")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "srt",
+        long_name: Some("SubRip subtitle"),
+        krate: "vaco-subtitle-text",
+        feature: Some("subtitle-text"),
+        media: None,
+        codec: None,
+        extensions: &["srt"],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "stream_segment,ssegment",
+        long_name: Some("streaming segment muxer"),
+        krate: "vaco-mux-stream",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
     crate::Component {
         kind: crate::Kind::Muxer,
         name: "streamhash",
@@ -2066,6 +2491,29 @@ pub static COMPONENTS: &[crate::Component] = &[
         codec: None,
         extensions: &["mpg"],
         mime_types: &["video/mpeg"],
+    },
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "tee",
+        long_name: Some("Multiple muxer tee"),
+        krate: "vaco-mux-stream",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "subtitle-text")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "ttml",
+        long_name: Some("TTML subtitle"),
+        krate: "vaco-subtitle-text",
+        feature: Some("subtitle-text"),
+        media: None,
+        codec: None,
+        extensions: &["ttml"],
+        mime_types: &[],
     },
     #[cfg(feature = "mux-raw")]
     crate::Component {
@@ -2269,6 +2717,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["chk"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "subtitle-text")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "webvtt",
+        long_name: Some("WebVTT subtitle"),
+        krate: "vaco-subtitle-text",
+        feature: Some("subtitle-text"),
+        media: None,
+        codec: None,
+        extensions: &["vtt"],
         mime_types: &[],
     },
     #[cfg(feature = "mux-raw")]
@@ -2696,6 +3156,72 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    crate::Component {
+        kind: crate::Kind::Protocol,
+        name: "async",
+        long_name: Some("Async"),
+        krate: "vaco-protocol-wrap",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Protocol,
+        name: "cache",
+        long_name: Some("Cache wrapper"),
+        krate: "vaco-protocol-wrap",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Protocol,
+        name: "concat",
+        long_name: Some("Virtual concatenation script"),
+        krate: "vaco-protocol-wrap",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Protocol,
+        name: "concatf",
+        long_name: Some("Virtual concatenation script (file list)"),
+        krate: "vaco-protocol-wrap",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Protocol,
+        name: "data",
+        long_name: Some("data URI"),
+        krate: "vaco-protocol-local",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Protocol,
+        name: "file",
+        long_name: Some("local file"),
+        krate: "vaco-protocol-file",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "protocol-http")]
     crate::Component {
         kind: crate::Kind::Protocol,
@@ -2715,6 +3241,50 @@ pub static COMPONENTS: &[crate::Component] = &[
         long_name: Some("HTTPS"),
         krate: "vaco-protocol-http",
         feature: Some("protocol-http"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Protocol,
+        name: "md5",
+        long_name: Some("MD5 testing"),
+        krate: "vaco-protocol-local",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Protocol,
+        name: "pipe",
+        long_name: Some("standard input/output"),
+        krate: "vaco-protocol-file",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Protocol,
+        name: "subfile",
+        long_name: Some("subfile"),
+        krate: "vaco-protocol-wrap",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Protocol,
+        name: "tee",
+        long_name: Some("Tee muxer"),
+        krate: "vaco-protocol-wrap",
+        feature: None,
         media: None,
         codec: None,
         extensions: &[],
@@ -2750,6 +3320,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_asf::DEMUXER,
     #[cfg(feature = "demux-asf-o")]
     &::vaco_demux_asf::DEMUXER_O,
+    #[cfg(feature = "subtitle-text")]
+    &::vaco_subtitle_text::ass::DEMUXER,
     #[cfg(feature = "demux-au")]
     &::vaco_format_audio_simple::au::DEMUXER,
     #[cfg(feature = "demux-raw")]
@@ -2770,8 +3342,11 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_format_audio_simple::caf::DEMUXER,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::bitstream::DEMUXER_CAVSVIDEO,
+    &::vaco_mux_stream::DEMUXER_CONCAT,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_CRI,
+    #[cfg(feature = "demux-dash")]
+    &::vaco_demux_dash::DEMUXER,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::bitstream::DEMUXER_DATA,
     #[cfg(feature = "demux-image2")]
@@ -2812,12 +3387,16 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_image2::pipe::DEMUXER_HDR,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::bitstream::DEMUXER_HEVC,
+    #[cfg(feature = "demux-hls")]
+    &::vaco_demux_hls::DEMUXER,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::DEMUXER_IMAGE2,
     #[cfg(feature = "demux-ircam")]
     &::vaco_format_audio_simple::ircam::DEMUXER,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_J2K,
+    #[cfg(feature = "subtitle-text")]
+    &::vaco_subtitle_text::jacosub::DEMUXER,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_JPEG,
     #[cfg(feature = "demux-image2")]
@@ -2828,10 +3407,14 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_image2::pipe::DEMUXER_JPEGXS,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::bitstream::DEMUXER_LOAS,
+    #[cfg(feature = "subtitle-text")]
+    &::vaco_subtitle_text::lrc::DEMUXER,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::bitstream::DEMUXER_M4V,
     #[cfg(feature = "demux-matroska")]
     &::vaco_demux_matroska::DEMUXER,
+    #[cfg(feature = "subtitle-text")]
+    &::vaco_subtitle_text::microdvd::DEMUXER,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::bitstream::DEMUXER_MJPEG,
     #[cfg(feature = "demux-raw")]
@@ -2842,8 +3425,14 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_mpegps::DEMUXER,
     #[cfg(feature = "demux-mpegts")]
     &::vaco_demux_mpegts::DEMUXER,
+    #[cfg(feature = "demux-mpegtsraw")]
+    &::vaco_demux_mpegts::RAW_DEMUXER,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::bitstream::DEMUXER_MPEGVIDEO,
+    #[cfg(feature = "subtitle-text")]
+    &::vaco_subtitle_text::mpl2::DEMUXER,
+    #[cfg(feature = "subtitle-text")]
+    &::vaco_subtitle_text::mpsub::DEMUXER,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::pcm::DEMUXER_MULAW,
     #[cfg(feature = "demux-raw")]
@@ -2870,6 +3459,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_image2::pipe::DEMUXER_PHOTOCD,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_PICTOR,
+    #[cfg(feature = "subtitle-text")]
+    &::vaco_subtitle_text::pjs::DEMUXER,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_PNG,
     #[cfg(feature = "demux-image2")]
@@ -2882,6 +3473,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_image2::pipe::DEMUXER_QOI,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::rawvideo::DEMUXER_RAWVIDEO,
+    #[cfg(feature = "subtitle-text")]
+    &::vaco_subtitle_text::realtext::DEMUXER,
     #[cfg(feature = "demux-rso")]
     &::vaco_format_audio_simple::rso::DEMUXER,
     #[cfg(feature = "demux-raw")]
@@ -2900,16 +3493,30 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_raw::bitstream::DEMUXER_S337M,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::pcm::DEMUXER_S8,
+    #[cfg(feature = "subtitle-text")]
+    &::vaco_subtitle_text::sami::DEMUXER,
+    #[cfg(feature = "subtitle-text")]
+    &::vaco_subtitle_text::scc::DEMUXER,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_SGI,
     #[cfg(feature = "demux-sox")]
     &::vaco_format_audio_simple::sox::DEMUXER,
+    #[cfg(feature = "subtitle-text")]
+    &::vaco_subtitle_text::srt::DEMUXER,
+    #[cfg(feature = "subtitle-text")]
+    &::vaco_subtitle_text::stl::DEMUXER,
+    #[cfg(feature = "subtitle-text")]
+    &::vaco_subtitle_text::subviewer::DEMUXER,
+    #[cfg(feature = "subtitle-text")]
+    &::vaco_subtitle_text::subviewer1::DEMUXER,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_SUNRAST,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_SVG,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_TIFF,
+    #[cfg(feature = "subtitle-text")]
+    &::vaco_subtitle_text::ttml::DEMUXER,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::pcm::DEMUXER_U16BE,
     #[cfg(feature = "demux-raw")]
@@ -2936,6 +3543,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_raw::pcm::DEMUXER_VIDC,
     #[cfg(feature = "demux-voc")]
     &::vaco_format_audio_simple::voc::DEMUXER,
+    #[cfg(feature = "subtitle-text")]
+    &::vaco_subtitle_text::vplayer::DEMUXER,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::bitstream::DEMUXER_VVC,
     #[cfg(feature = "demux-w64")]
@@ -2944,6 +3553,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_format_audio_simple::wav::DEMUXER,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_WEBP,
+    #[cfg(feature = "subtitle-text")]
+    &::vaco_subtitle_text::webvtt::DEMUXER,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_XBM,
     #[cfg(feature = "demux-image2")]
@@ -2968,6 +3579,8 @@ pub static MUXERS: &[&::vaco_format_core::MuxerDesc] = &[
     &::vaco_mux_asf::MUXER,
     #[cfg(feature = "mux-asf-stream")]
     &::vaco_mux_asf::MUXER_STREAM,
+    #[cfg(feature = "subtitle-text")]
+    &::vaco_subtitle_text::ass::MUXER,
     #[cfg(feature = "mux-au")]
     &::vaco_format_audio_simple::au::MUXER,
     #[cfg(feature = "mux-avi")]
@@ -2983,6 +3596,8 @@ pub static MUXERS: &[&::vaco_format_core::MuxerDesc] = &[
     #[cfg(feature = "mux-raw")]
     &::vaco_mux_raw::raw::MUXER_CAVSVIDEO,
     &::vaco_mux_hash::MUXER_CRC,
+    #[cfg(feature = "mux-dash")]
+    &::vaco_mux_dash::MUXER,
     #[cfg(feature = "mux-raw")]
     &::vaco_mux_raw::raw::MUXER_DATA,
     #[cfg(feature = "mux-raw")]
@@ -3005,6 +3620,8 @@ pub static MUXERS: &[&::vaco_format_core::MuxerDesc] = &[
     &::vaco_mux_raw::raw::MUXER_F64BE,
     #[cfg(feature = "mux-raw")]
     &::vaco_mux_raw::raw::MUXER_F64LE,
+    &::vaco_mux_stream::MUXER_FFMETADATA,
+    &::vaco_mux_stream::MUXER_FIFO,
     #[cfg(feature = "mux-flv")]
     &::vaco_mux_flv::MUXER,
     &::vaco_mux_hash::MUXER_FRAMECRC,
@@ -3019,6 +3636,8 @@ pub static MUXERS: &[&::vaco_format_core::MuxerDesc] = &[
     &::vaco_mux_hash::MUXER_HASH,
     #[cfg(feature = "mux-raw")]
     &::vaco_mux_raw::raw::MUXER_HEVC,
+    #[cfg(feature = "mux-hls")]
+    &::vaco_mux_hls::MUXER,
     #[cfg(feature = "mux-image2")]
     &::vaco_mux_image2::MUXER_IMAGE2,
     #[cfg(feature = "mux-mp4")]
@@ -3027,21 +3646,31 @@ pub static MUXERS: &[&::vaco_format_core::MuxerDesc] = &[
     &::vaco_format_audio_simple::ircam::MUXER,
     #[cfg(feature = "mux-mp4")]
     &::vaco_mux_mp4::MUXER_ISMV,
+    #[cfg(feature = "subtitle-text")]
+    &::vaco_subtitle_text::jacosub::MUXER,
+    #[cfg(feature = "subtitle-text")]
+    &::vaco_subtitle_text::lrc::MUXER,
     #[cfg(feature = "mux-raw")]
     &::vaco_mux_raw::raw::MUXER_M4V,
     #[cfg(feature = "mux-matroska")]
     &::vaco_mux_matroska::MUXER_MATROSKA,
     &::vaco_mux_hash::MUXER_MD5,
+    #[cfg(feature = "subtitle-text")]
+    &::vaco_subtitle_text::microdvd::MUXER,
     #[cfg(feature = "mux-raw")]
     &::vaco_mux_raw::raw::MUXER_MJPEG,
+    &::vaco_mux_utility::MUXER_MKVTIMESTAMP_V2,
     #[cfg(feature = "mux-mp4")]
     &::vaco_mux_mp4::MUXER_MOV,
     #[cfg(feature = "mux-mp4")]
     &::vaco_mux_mp4::MUXER_MP4,
     #[cfg(feature = "mux-mpeg")]
     &::vaco_mux_mpegps::MUXER_MPEG,
+    #[cfg(feature = "mux-mpegts")]
+    &::vaco_mux_mpegts::MUXER,
     #[cfg(feature = "mux-raw")]
     &::vaco_mux_raw::raw::MUXER_MULAW,
+    &::vaco_mux_utility::MUXER_NULL,
     #[cfg(feature = "mux-raw")]
     &::vaco_mux_raw::raw::MUXER_OBU,
     #[cfg(feature = "mux-ogg")]
@@ -3072,13 +3701,22 @@ pub static MUXERS: &[&::vaco_format_core::MuxerDesc] = &[
     &::vaco_mux_raw::raw::MUXER_S32LE,
     #[cfg(feature = "mux-raw")]
     &::vaco_mux_raw::raw::MUXER_S8,
+    #[cfg(feature = "subtitle-text")]
+    &::vaco_subtitle_text::scc::MUXER,
+    &::vaco_mux_stream::MUXER_SEGMENT,
     #[cfg(feature = "mux-sox")]
     &::vaco_format_audio_simple::sox::MUXER,
     #[cfg(feature = "mux-ogg")]
     &::vaco_mux_ogg::MUXER_SPX,
+    #[cfg(feature = "subtitle-text")]
+    &::vaco_subtitle_text::srt::MUXER,
+    &::vaco_mux_stream::MUXER_STREAM_SEGMENT,
     &::vaco_mux_hash::MUXER_STREAMHASH,
     #[cfg(feature = "mux-svcd")]
     &::vaco_mux_mpegps::MUXER_SVCD,
+    &::vaco_mux_stream::MUXER_TEE,
+    #[cfg(feature = "subtitle-text")]
+    &::vaco_subtitle_text::ttml::MUXER,
     #[cfg(feature = "mux-raw")]
     &::vaco_mux_raw::raw::MUXER_U16BE,
     #[cfg(feature = "mux-raw")]
@@ -3113,6 +3751,8 @@ pub static MUXERS: &[&::vaco_format_core::MuxerDesc] = &[
     &::vaco_mux_matroska::MUXER_WEBM,
     #[cfg(feature = "mux-matroska")]
     &::vaco_mux_matroska::MUXER_WEBM_CHUNK,
+    #[cfg(feature = "subtitle-text")]
+    &::vaco_subtitle_text::webvtt::MUXER,
     #[cfg(feature = "mux-raw")]
     &::vaco_mux_raw::y4m::MUXER_YUV4MPEGPIPE,
 ];
@@ -3173,8 +3813,18 @@ pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[
 
 /// Descriptors of every enabled protocol implementation.
 pub static PROTOCOLS: &[&::vaco_protocol_core::ProtocolDesc] = &[
+    &::vaco_protocol_wrap::ASYNC_PROTOCOL,
+    &::vaco_protocol_wrap::CACHE_PROTOCOL,
+    &::vaco_protocol_wrap::CONCAT_PROTOCOL,
+    &::vaco_protocol_wrap::CONCATF_PROTOCOL,
+    &::vaco_protocol_local::DATA_PROTOCOL,
+    &::vaco_protocol_file::FILE_PROTOCOL,
     #[cfg(feature = "protocol-http")]
     &::vaco_protocol_http::HTTP_PROTOCOL,
     #[cfg(feature = "protocol-http")]
     &::vaco_protocol_http::HTTPS_PROTOCOL,
+    &::vaco_protocol_local::MD5_PROTOCOL,
+    &::vaco_protocol_file::PIPE_PROTOCOL,
+    &::vaco_protocol_wrap::SUBFILE_PROTOCOL,
+    &::vaco_protocol_wrap::TEE_PROTOCOL,
 ];

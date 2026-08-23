@@ -1,0 +1,14 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Name and extensions measured against `ffmpeg -demuxers | grep -i hls` and
+# `ffmpeg -h demuxer=hls` (ffmpeg 8.1): the demuxer's registered name is
+# `hls`, not `m3u8`.
+
+[[component]]
+kind       = "demuxer"
+name       = "hls"
+long_name  = "Apple HTTP Live Streaming"
+feature    = "demux-hls"
+ctor       = "vaco_demux_hls::DEMUXER"
+extensions = "m3u8,m3u"
+mime_types = "application/vnd.apple.mpegurl,application/x-mpegurl"

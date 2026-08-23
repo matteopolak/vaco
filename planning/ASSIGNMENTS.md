@@ -56,7 +56,7 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-parse-aac | 4 | — | agent:audio-parse | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-parse-opus | 4 | — | agent:audio-parse | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-demux-mp4 | 4 | — | agent:demux-mp4 | done | 2026-08-22 | 2026-08-22 |  |
-| vaco-demux-matroska | 4 | #570 | agent:demux-finish | assigned | 2026-08-23 |  | cues, tags, chapters, attachments, delay/preroll/padding |
+| vaco-demux-matroska | 4 | #570 | agent:demux-finish | done | 2026-08-23 | 2026-08-23 | cues, tags, chapters, attachments, delay/preroll/padding |
 | vaco-demux-mpegts | 4 | — | agent:mpegts | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-demux-raw | 4 | — | agent:raw | done | 2026-08-22 | 2026-08-23 | 48 registrations; PCM, rawvideo, bitstream |
 | vaco-mux-raw | 4 | — | agent:raw | done | 2026-08-22 | 2026-08-23 | 40 registrations |
@@ -77,7 +77,7 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-format-isom | 4 | #210,#573,#574 | agent:mux-mp4 | done | 2026-08-23 | 2026-08-23 | reassigned from agent:demux-mp4 (done) to add box writers |
 | vaco-mux-mp4 | 4 | #210,#573,#574 | agent:mux-mp4 | done | 2026-08-23 | 2026-08-23 |  |
 | vaco-format-ebml | 4 | #575 | agent:mux-matroska | done | 2026-08-23 | 2026-08-23 | new: EBML reader extracted from the demuxer + writer |
-| vaco-demux-matroska | 4 | #570 | agent:demux-finish | assigned | 2026-08-23 |  | cues, tags, chapters, attachments, delay/preroll/padding |
+| vaco-demux-matroska | 4 | #570 | agent:demux-finish | done | 2026-08-23 | 2026-08-23 | cues, tags, chapters, attachments, delay/preroll/padding |
 | vaco-mux-matroska | 4 | #575 | agent:mux-matroska | done | 2026-08-23 | 2026-08-23 | matroska webm matroska_audio webm_chunk |
 | vaco-format-asf | 4 | #586,#587 | agent:asf | done | 2026-08-23 | 2026-08-23 | new: shared object model |
 | vaco-demux-asf | 4 | #586 | agent:asf | done | 2026-08-23 | 2026-08-23 |  |
@@ -85,27 +85,31 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-mux-hash | 4 | #572 | agent:mux-hash | done | 2026-08-23 | 2026-08-23 | crc framecrc framemd5 framehash hash md5 streamhash uncodedframecrc — the differential oracle |
 | vaco-demux-image2 | 4 | #592 | agent:image2 | done | 2026-08-23 | 2026-08-23 | glob/sequence patterns + 42 pipe splitters |
 | vaco-mux-image2 | 4 | #593 | agent:image2 | done | 2026-08-23 | 2026-08-23 | filename patterns, -update, strftime, atomic write |
-| vaco-format-mpegts-tables | 4 | #576 | agent:mux-mpegts | assigned | 2026-08-23 |  | reassigned from agent:mpegts (done) to add table writers |
-| vaco-mux-mpegts | 4 | #576 | agent:mux-mpegts | assigned | 2026-08-23 |  |  |
-| vaco-format-mpegts-tables | 4 | #576 | agent:mux-mpegts | assigned | 2026-08-23 |  | reassigned from agent:mpegts (done) to add table writers |
-| vaco-mux-mpegts | 4 | #576 | agent:mux-mpegts | assigned | 2026-08-23 |  |  |
-| vaco-mux-utility | 4 | #572 | agent:mux-util | assigned | 2026-08-23 |  | null, mkvtimestamp_v2 — the last two of FM-20 bar uncodedframecrc |
-| vaco-mux-stream | 4 | #590 | agent:mux-util | assigned | 2026-08-23 |  | concat ffmetadata segment stream_segment tee fifo — meta-muxers |
-| vaco-demux-mp4 | 4 | #565,#566,#567 | agent:demux-finish | assigned | 2026-08-23 |  | fragmented, metadata, CENC reporting, HEIF items |
-| vaco-format-subtitle | 4 | #591 | agent:subs | assigned | 2026-08-23 |  | new: shared cue model |
-| vaco-subtitle-text | 4 | #591 | agent:subs | assigned | 2026-08-23 |  | 15 demux / 6 mux, count to be verified |
+| vaco-format-mpegts-tables | 4 | #576 | agent:mux-mpegts | done | 2026-08-23 | 2026-08-23 | reassigned from agent:mpegts (done) to add table writers |
+| vaco-mux-mpegts | 4 | #576 | agent:mux-mpegts | done | 2026-08-23 | 2026-08-23 |  |
+| vaco-format-mpegts-tables | 4 | #576 | agent:mux-mpegts | done | 2026-08-23 | 2026-08-23 | reassigned from agent:mpegts (done) to add table writers |
+| vaco-mux-mpegts | 4 | #576 | agent:mux-mpegts | done | 2026-08-23 | 2026-08-23 |  |
+| vaco-mux-utility | 4 | #572 | agent:mux-util | done | 2026-08-23 | 2026-08-23 | null, mkvtimestamp_v2 — the last two of FM-20 bar uncodedframecrc |
+| vaco-mux-stream | 4 | #590 | agent:mux-util | done | 2026-08-23 | 2026-08-23 | concat ffmetadata segment stream_segment tee fifo — meta-muxers |
+| vaco-demux-mp4 | 4 | #565,#566,#567 | agent:demux-finish | done | 2026-08-23 | 2026-08-23 | fragmented, metadata, CENC reporting, HEIF items |
+| vaco-format-subtitle | 4 | #591 | agent:subs | done | 2026-08-23 | 2026-08-23 | new: shared cue model |
+| vaco-subtitle-text | 4 | #591 | agent:subs | done | 2026-08-23 | 2026-08-23 | 15 demux / 6 mux, count to be verified |
 | vaco-demux-hls | 4 | #600 | agent:adaptive | assigned | 2026-08-23 |  |  |
 | vaco-mux-hls | 4 | #601 | agent:adaptive | assigned | 2026-08-23 |  |  |
 | vaco-demux-dash | 4 | #602 | agent:adaptive | assigned | 2026-08-23 |  | quick-xml |
 | vaco-mux-dash | 4 | #603 | agent:adaptive | assigned | 2026-08-23 |  |  |
+| vaco-protocol-local | 3 | #544 | agent:protocols | done | 2026-08-23 | 2026-08-23 | data:, md5:. fd: ruled out by D16 — needs unsafe FromRawFd |
+| vaco-protocol-wrap | 3 | #545 | agent:protocols | done | 2026-08-23 | 2026-08-23 | subfile concat concatf cache tee async |
+| vaco-protocol-file | 3 | #544 | agent:protocols | done | 2026-08-23 | 2026-08-23 | had NO vaco-component.toml — file:/pipe: were never registered |
+| vaco-hash | 0 | — | orchestrator | done | 2026-08-23 | 2026-08-23 | D11 merge of crc/md-5/sha1/sha2 |
 | vaco-filter-core | 5 | — | agent:filter-core | done | 2026-08-22 | 2026-08-22 | frozen only |
 | vaco-filter-framesync | 5 | — | agent:filter-graph | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-filter-graph | 5 | — | agent:filter-graph | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-registry | 6 | — | agent:probe | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-textformat | 7 | #188,#189 | agent:textformat | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-cli-core | 7 | — | agent:cli-core | done | 2026-08-22 | 2026-08-22 | needs vaco-expr edge for `-b:v 2*1000` |
-| vaco-sched | 7 | — | agent:sched | done | 2026-08-22 | 2026-08-22 | step function; threads are a driver choice, break-even ~20us/job |
+| vaco-sched | 7 | — | agent:cli-mux | done | 2026-08-23 | 2026-08-23 | build_work now calls Muxer::init() before reading stream_time_base |
 | vaco-probe | 7 | — | agent:probe | done | 2026-08-22 | 2026-08-22 |  |
-| vaco-cli | 7 | — | agent:cli | done | 2026-08-22 | 2026-08-22 | spine only; CL-16+ open. No muxers, so -f null is the observable path |
+| vaco-cli | 7 | — | agent:cli-mux | done | 2026-08-23 | 2026-08-23 | muxers wired: -c copy remux writes a real file |
 | vaco-conformance | 10 | #172,#173 | agent:conformance | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-checkasm | 10 | — | — | free |  |  |

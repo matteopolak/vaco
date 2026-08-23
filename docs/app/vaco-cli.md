@@ -20,57 +20,110 @@ exit code. The lib target also brings the crate inside `cargo xtask wasm-check`
 (D18), which it passes — the only OS coupling is `std::fs` behind `vaco-io`, and
 there is no clock.
 
-## The constraint that shapes everything: there are no muxers
+## Muxers reach the registry now; there are still no encoders
 
-D5 scopes v0.1 to demuxing. `crates/format/` contains three `vaco-demux-*`
-crates and no `vaco-mux-*`; `vaco_registry::muxers()` is empty; there are no
-decoders and no encoders either.
+Until the container wave, D5 scoped v0.1 to demuxing: `crates/format/` held
+three `vaco-demux-*` crates and no `vaco-mux-*`, `vaco_registry::muxers()` was
+empty, and this section described `-f null` as the *only* output a build like
+that could produce. That built correctly and then went stale the day the
+container wave landed: `exec::muxer_for` kept returning a format name, but
+`exec::run_pipeline` still always built the local `NullMuxer` regardless of
+what that name was — so `vaco -i in.mp4 -c copy -f matroska out.mkv` exited 0,
+printed a plausible stream mapping and summary line, and never created
+`out.mkv` at all. Silent success, found by trying the obvious command while a
+conformance run was fresh (`planning/CONFORMANCE-FINDINGS.md` #6). There are
+still no decoders and no encoders.
 
-The design decision, and the reasoning:
+The registry now has 63 muxers, and both halves of the CLI reach all of them:
 
-* **`-f null` is implemented as a real sink** (`src/nullmux.rs`). `null` is a
-  genuine format in the reference — `ffmpeg -i in.mkv -c copy -f null -` exits 0
-  and prints `video:7KiB audio:16KiB …` — it needs no container knowledge, and
-  it makes the whole spine runnable *and observable*: protocol → probe → demux →
-  discovery → selection → `vaco-sched` → a counting sink. Without it the binary
-  would compile, parse a command line and then have nowhere to send a packet,
-  which is indistinguishable from being broken.
-* **Every other output is refused with a message naming the real reason**, and
-  the refusal distinguishes three cases rather than collapsing them:
+* **`exec::muxer_for` resolves every `-f`/extension through the registry**,
+  `vaco_registry::muxer_by_name` and `muxers_for_extension`, uniformly — `null`
+  is one registered muxer among the 63 (`vaco_mux_utility::MUXER_NULL`) rather
+  than a name this crate special-cases. `-f null -` still works exactly as
+  before and is still this crate's own test workhorse; it needs no container
+  knowledge and makes every stage observable through packet counts alone.
+* **`exec::run_pipeline` opens what `muxer_for` named**, for real:
+  `crate::output::create` opens the destination through the same protocol
+  registry `input.rs` uses to read (`file:`/`pipe:`, with `-` mapped to
+  `pipe:1` — see `output::normalize`'s docs for why that mapping cannot live in
+  the generic URL parser), and `(MuxerDesc::open)` turns that into a
+  `Box<dyn Muxer>` `vaco-sched` drives exactly as it always has. Streamcopy end
+  to end — the one thing a build with no encoders can do — is now enough to
+  actually remux.
+* **Every output this build cannot write is still refused with a message
+  naming the real reason**, and the refusal still distinguishes three cases —
+  it is just that the first row now applies to far fewer formats:
 
   | `-f` / extension | first line | exit |
   |---|---|---|
-  | a format this build can **read** (`matroska`, `mp4`, `mpegts`) | `No muxer for 'matroska': this build reads that format but cannot write it. D5 scopes v0.1 to demuxing, so \`-f null\` is the only output.` | 8 |
+  | a format this build can **read** but has no registered muxer for | `No muxer for 'x': this build reads that format but cannot write it. D5 scopes v0.1 to demuxing, so \`-f null\` is the only output.` | 8 |
   | a name nothing claims (`-f nosuchformat`) | `Requested output format 'nosuchformat' is not known.` | 234 |
   | no `-f`, unhelpful extension | `Unable to choose an output format for 'out.zzz'; …` | 234 |
 
   The last two are the reference's own wording and status, byte-identical modulo
   the pointer it prints in its log prefix. The first has no reference behaviour
   to match, because the reference is never built without muxers;
-  `AVERROR_MUXER_NOT_FOUND` is the code that names the situation.
+  `AVERROR_MUXER_NOT_FOUND` is the code that names the situation. (The message
+  text still names D5 by number; it was true when written and is now only true
+  for the formats that remain demux-only — fixing the wording to say so
+  precisely, without hardcoding a list that will itself go stale, is a small
+  follow-up.)
 
-Both halves, because either alone is wrong: a null sink with no explanation
-leaves a user guessing why `out.mkv` produced nothing, and an error with no
-working path leaves the whole stack untestable.
-
-**There are no encoders either**, so an output stream must carry `-c copy`.
+**There are no encoders**, so an output stream must still carry `-c copy`.
 Without one the run takes the reference's *own* path for a build missing an
 encoder — `Automatic encoder selection failed Default encoder for format null
 (codec none) is probably disabled. Please choose an encoder manually.`, exit 8 —
 which is a message the reference already emits for exactly this situation, and
 therefore the right one to reproduce rather than invent. (The run-together
 "failed Default" is the reference's own missing separator; reproduced under
-D17.) This is why `nullmux::NULL_MUXER` declares **no** default codecs, unlike
-the reference's `null`, which declares `wrapped_avframe` and `pcm_s16le`.
+D17.)
 
-### What the acceptance criterion is instead
+### The two constructions every real output pays for
 
-Not byte identity of an output file — there is none. It is that the same argv
-produces:
+`MuxerDesc` has no `flags` field the way `DemuxerDesc` does, so whether a
+format is `FormatFlags::NOFILE` (`null`, `mkvtimestamp_v2`) is only knowable by
+constructing an instance and asking. The reference never opens a real file for
+such a format (`-f null out.bin` leaves `out.bin` untouched), so
+`exec::open_output` constructs once against a throwaway
+`vaco_format_core::vacoraw::MemorySink` to learn the answer, and only reaches
+the protocol layer — which for `file:` truncates on open, a visible side
+effect — once it knows the destination is real. A `flags` field on `MuxerDesc`
+would remove the throwaway construction; see "Reported upstream" below.
+
+### What the acceptance criterion is now
+
+For a real container: the bytes on disk, read back — see
+`tests.rs`'s `an_actual_muxer_writes_bytes_a_prober_can_read_back`, which
+remuxes a fixture to a real `.mkv` and reopens it through a second,
+independent invocation. For `-f null -`, and for anything else not worth a
+byte comparison yet, it remains what it always was: the same argv produces
 
 1. the same **stream selection** (`Stream #0:0 -> #0:0 (copy)`),
 2. the same **stderr text and exit code**,
-3. the same **packet counts through the pipeline** (`nullmux::OutputTally`).
+3. the same **packet counts through the pipeline** (`nullmux::OutputTally`,
+   now populated by `nullmux::TallyingMuxer` wrapping whatever the registry
+   returned, real or `null`).
+
+### The muxing-overhead line, measured both ways
+
+`[out#N/fmt] video:…KiB … muxing overhead: X` is `unknown` exactly when
+nothing was actually written to compare against (a `NOFILE` container).
+Everywhere else it is `100 * (total − payload) / payload`, six decimal digits,
+where `total` is bytes actually written — not `stat()` of the finished file.
+Measured against `ffmpeg 8.1` remuxing one 10 908-payload-byte file three ways:
+
+| destination | total bytes written | printed |
+|---|---|---|
+| seekable `.mkv` | 12 168 | `11.551155%` |
+| seekable `.mp4` | 12 650 | `15.969930%` |
+| `.mkv` over a real, unseekable pipe | 12 038 | `10.359369%` |
+
+The pipe row has no file to `stat`, and the reference still prints a number —
+which is why `total` here comes from `output::HighWaterSink`'s high-water mark
+on the sink itself (the furthest position any `write` call ever reached, not
+`position()` read once at the end: a container that seeks back to patch a
+header and does not seek forward again would otherwise under-report). See
+`exec::summary_line`'s doc comment for the full derivation.
 
 ## How it works
 
@@ -90,8 +143,9 @@ argv ─▶ [cli]      split, validate, bind          (vaco-cli-core, cli.rs)
 | `help` | CL-04: `-h`'s three depths and `-h <kind>=<name>`, wiring `vaco_cli_core::help`'s renderers to `vaco-registry` |
 | `select` | `-map` and the automatic selection rules |
 | `input` | opening one input: protocol env, probe, `Discovery` |
-| `nullmux` | the `null` sink and its counters |
-| `exec` | muxer resolution, the codec check, `PipelineSpec`, the driver |
+| `output` | opening one output for writing: protocol env, `-` → `pipe:1`, `HighWaterSink` |
+| `nullmux` | packet/byte tallying (`Sink`, `OutputTally`, `TallyingMuxer`); the original standalone `null` sink, now redundant — see the module's own doc comment |
+| `exec` | muxer resolution, opening the real muxer, the codec check, `PipelineSpec`, the driver |
 | `exit` | `AvError`, `ExitCode`, `Diagnostic` |
 | `listing` | `-version`, `-formats` and the other thirteen registry listings; CL-04 |
 
@@ -333,9 +387,20 @@ exact measurements.
   no pipe, or inside `bash -c`.
 * **Selection changes go in `select.rs` and nowhere else.** `exec.rs` consumes a
   `Selection` and does not second-guess it.
-* **When a muxer lands**, `exec::muxer_for` is the one function to change: it
+* **When a muxer lands, nothing here needs to change.** `exec::muxer_for`
   already asks `vaco_registry::muxer_by_name` and `muxers_for_extension` first
-  and only falls through to the refusals. `nullmux` stays as the test sink.
+  and only falls through to the refusals, and `exec::run_pipeline` opens
+  whatever descriptor comes back through `exec::open_output`. A new
+  `vaco-mux-*` crate registering itself is the whole of what is needed for
+  `vaco -f <its name>` to start writing real files.
+* **`-c copy` is still the only encoder path.** `check_codecs` rejects anything
+  else; adding a real encoder means adding a case there and to
+  `vaco-sched`'s `KindSpec::Encode`, not touching `exec::muxer_for`.
+* **Unreachable CLI options, and why**: `-movflags`, any other `-f`-specific
+  flag, `-metadata`, chapters and attachments all need somewhere to land that
+  does not exist yet. See "Reported upstream" below — both gaps are in
+  `vaco-format-core`, not here, and `exec::open_output`'s doc comment is the
+  code-level pointer to the first of them.
 * **Fixtures** are built with `vaco_demux_matroska::synth`, a dev-dependency. It
   is not a muxer: it writes exactly what it is told, including a per-track
   `FlagDefault`, which is the field the whole auto-selection rule turns on and
@@ -424,6 +489,35 @@ Findings that belong to other crates and were **not** worked around here.
 6. **`vaco-protocol-file` and `vaco-protocol-core` ship no `vaco-component.toml`**,
    so `vaco_registry::protocol_registry()` is empty and every tool registers
    `file:` by hand. Also already reported by `vaco-probe`.
+7. **`MuxerDesc::open` carries no options** (`fn(Box<dyn MediaSink>) ->
+   Result<Box<dyn Muxer>>`), so `-movflags`, `-fflags` and every other
+   per-muxer option that changes how a container should be *constructed*
+   cannot reach a muxer through the registry path at all — there is nowhere in
+   the signature to put them. `vaco-mux-mp4` already works around this with a
+   `MovMuxer::with_options` constructor the registry cannot call, which means
+   fragmented-MP4 output is implemented and unreachable from this crate.
+   Unreachable today, concretely: `-movflags` (any value), `-fflags` values a
+   muxer would otherwise consult (`bitexact` reaches `MuxWriter` already
+   through `FormatOptions`, but nothing here sets container-*construction*
+   flags), and any option a future `vaco-mux-*` crate declares along the same
+   lines. Already reported by `vaco-mux-mp4`; repeated here because it is now
+   the CLI's own blocker too, not just that crate's — `exec::open_output` is
+   the call site that would grow an options parameter.
+8. **`Muxer` has no metadata channel**, so `-metadata`, chapters and
+   attachments have nowhere to go even once the CLI parses them — CL-16 (#207)
+   is entirely blocked on this, not on anything in this crate. `add_stream`
+   takes only `CodecParameters`; nothing in the trait carries a title, a tag
+   list or a chapter table. Already reported by `vaco-mux-matroska`; repeated
+   for the same reason as #7.
+9. **`MuxerDesc` has no `flags` field**, unlike `DemuxerDesc`, which explicitly
+   carries one "so a caller composing `Discovery` can reach them through the
+   registry" (that crate's own doc comment). The same reasoning applies on the
+   mux side and does not have a field to land in: `exec::open_output` has to
+   construct a muxer against a throwaway sink just to read `.flags()` and learn
+   whether the format is `NOFILE`, before it can decide whether touching the
+   filesystem is even correct. A `flags: FormatFlags` field, populated the same
+   way `DemuxerDesc::flags` is, would remove that throwaway construction
+   entirely.
 
 ## Deferred
 
@@ -448,7 +542,7 @@ down is a decision and one that is not is a surprise.
 | Presets, hardware device options, `-sdp_file` | CL-34a |
 | Timestamp stages I–III and VI (streamcopy) | CL-15 |
 | Sync queue, interleaving, `-shortest` packet mode | CL-13 |
-| Differential remux tests (container bytes) | CL-18 — blocked on a muxer |
+| Differential remux tests (container bytes) | CL-18 — no longer blocked on a muxer (one landed and this crate reaches it), but the full byte-identity matrix (XF-03, #211) this issue depends on is still open. This crate's own `an_actual_muxer_writes_bytes_a_prober_can_read_back` is a single round-trip check, not that matrix. |
 
 ## Fuzzing
 

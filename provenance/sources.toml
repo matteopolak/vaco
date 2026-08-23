@@ -120,6 +120,41 @@ title    = "RFC 1950, ZLIB Compressed Data Format Specification (the Adler-32 de
 acquired = "2026-08-23"
 where    = "https://www.rfc-editor.org/rfc/rfc1950"
 
+[[source]]
+id       = "rfc-8216"
+kind     = "rfc"
+title    = "RFC 8216, HTTP Live Streaming"
+acquired = "2026-08-23"
+where    = "https://www.rfc-editor.org/rfc/rfc8216"
+
+[[source]]
+id       = "rfc-2397"
+kind     = "rfc"
+title    = "RFC 2397, The \"data\" URL scheme"
+acquired = "2026-08-23"
+where    = "https://www.rfc-editor.org/rfc/rfc2397"
+
+[[source]]
+id       = "iso-23009-1"
+kind     = "spec"
+title    = "ISO/IEC 23009-1, Dynamic adaptive streaming over HTTP (DASH), Part 1"
+acquired = "2026-08-23"
+where    = "ISO"
+
+[[source]]
+id       = "w3c-webvtt"
+kind     = "spec"
+title    = "W3C, WebVTT: The Web Video Text Tracks Format"
+acquired = "2026-08-23"
+where    = "https://www.w3.org/TR/webvtt1/"
+
+[[source]]
+id       = "w3c-ttml1"
+kind     = "spec"
+title    = "W3C, Timed Text Markup Language 1 (TTML1)"
+acquired = "2026-08-23"
+where    = "https://www.w3.org/TR/ttml1/"
+
 # ------------------------------------------- measured from the reference
 
 [[source]]

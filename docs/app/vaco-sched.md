@@ -118,7 +118,47 @@ out of a wire — the wire records the producer's base, the input port records t
 consumer's.
 
 Muxer-side ordering is *not* reimplemented here: `MuxTimestamps` (M1–M4) and
-`InterleaveQueue` come from `vaco-format-core`.
+`InterleaveQueue` come from `vaco-format-core`. What *is* reimplemented is the
+init/header/packet/trailer state machine around them — `node::MuxWork` drives a
+raw `Box<dyn Muxer>` directly rather than going through
+`vaco_format_core::mux::MuxBuilder`/`MuxWriter`, because that wrapper consumes
+`self` at each phase transition and a step-driven node needs to keep the
+component around between calls to `advance`. `MuxWork` re-derives the subset of
+M8–M12 it needs (streams before header, header once, packets between header and
+trailer, trailer once and only after every input has drained) rather than
+getting it from the wrapper for free.
+
+**M12 (`init` runs once, after every stream is declared, before anything reads
+a time base) was missing until this pass.** `PipelineSpec::build`'s
+`build_work` read `Muxer::stream_time_base` to seed the interleave queue's
+per-stream bases *before* ever calling `Muxer::init`, so a container whose
+`init` derives something `stream_time_base` depends on saw the pre-`init`
+state: `vaco-mux-mp4`'s `init` picks the movie timescale from the largest track
+timescale (and only takes that path when a track's timescale is nonzero, i.e.
+after `add_stream` has run — `init` is what makes that value trustworthy),
+and `vaco-mux-mpegts`'s `init` is also where `pcr_pid` gets assigned and where
+the "at least one stream" check lives. Neither ran before this fix, because
+nothing called `init` at all. `build_work` now calls `muxer.init()?`
+immediately after destructuring `KindSpec::Mux` and before the
+`stream_time_base` loop, matching `MuxBuilder::open`'s own ordering; `build_work`
+had to become fallible (`Result<Work>`) for the `?` to have somewhere to go.
+
+**M6 (the bitstream-filter-in-muxer stage) is not implemented in this node at
+all**, unlike `MuxBuilder`/`MuxWriter`, which carry `BsfChain` and a
+`BsfProvider`. `MuxWork::advance` pushes packets from the queue straight into
+`Muxer::write_packet` with no `check_bitstream`/filter step in between, so a
+stream whose bitstream form the destination container cannot carry as-is (Annex
+B H.264 into MP4 needing `h264_annexb2mp4`, for one) is written unfiltered
+rather than refused or converted. Reported rather than fixed here: closing it
+means either giving `MuxWork` its own `BsfChain` per stream plus a
+`BsfProvider` handle (duplicating machinery `mux.rs` already has) or
+restructuring `MuxWork` to hold an internal `MuxBuilder`/`MuxWriter` and drive
+*that* instead of the raw trait — the second is more consistent with "reuse
+what `vaco-format-core` already got right" but is a bigger change than this
+pass's scope (wiring `vaco-cli` to real muxers) justified making unreviewed.
+Most-common-case remuxing (matroska↔mp4↔mpegts stream copy, same bitstream
+convention on both sides) is unaffected; the gap only bites a container pairing
+that actually needs conversion.
 
 ### Why it cannot deadlock
 

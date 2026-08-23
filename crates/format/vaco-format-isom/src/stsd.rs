@@ -249,6 +249,18 @@ impl<'a> SampleEntry<'a> {
         self.original_format().unwrap_or(self.format)
     }
 
+    /// The Common Encryption scheme and default track parameters, from
+    /// `sinf ▸ schm` / `sinf ▸ schi ▸ tenc`.
+    ///
+    /// `None` when the entry has no `sinf` at all; a `sinf` with neither `schm`
+    /// nor `tenc` — malformed, but seen — reports
+    /// [`crate::cenc::CencInfo::is_empty`].
+    #[must_use]
+    pub fn cenc(&self) -> Option<crate::cenc::CencInfo> {
+        let sinf = self.extension_boxes().find(boxes::SINF)?;
+        Some(crate::cenc::CencInfo::from_sinf(&sinf))
+    }
+
     /// The configuration box for this entry, if it has a recognised one.
     ///
     /// Searches the extensions, then — for `QuickTime` audio — inside `wave`,

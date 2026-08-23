@@ -205,7 +205,7 @@ mod props {
             let track = TrackSpec {
                 track_id: 1,
                 stbl: vaco_format_isom::build::StblSpec {
-                    stsd: Some(common::avc1_stsd()),
+                    stsd_box: Some(common::avc1_stsd()),
                     stts: vec![(0, delta)],
                     ..vaco_format_isom::build::StblSpec::default()
                 },

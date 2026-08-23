@@ -26,7 +26,7 @@ use crate::section::MAX_PSI_SECTION_LEN;
 
 /// Bytes of long-form section header before the body: `table_id`,
 /// `section_length` (2 bytes), `table_id_extension` (2 bytes),
-/// version/current_next, `section_number`, `last_section_number`.
+/// `version`/`current_next`, `section_number`, `last_section_number`.
 const LONG_HEADER_LEN: usize = 8;
 /// Trailing CRC-32.
 const CRC_LEN: usize = 4;
@@ -335,7 +335,7 @@ mod tests {
     #[test]
     fn registration_descriptor_round_trips_through_the_generic_iterator() {
         let raw = registration_descriptor(*b"AC-3");
-        let mut iter = crate::descriptor::DescriptorIter::new(&raw);
+        let iter = crate::descriptor::DescriptorIter::new(&raw);
         assert_eq!(iter.registration(), Some(*b"AC-3"));
     }
 

@@ -40,7 +40,9 @@ vaco-conformance = { path = "../crates/tool/vaco-conformance" }
 vaco-core = { path = "../crates/core/vaco-core" }
 vaco-demux-asf = { path = "../crates/format/vaco-demux-asf" }
 vaco-demux-avi = { path = "../crates/format/vaco-demux-avi" }
+vaco-demux-dash = { path = "../crates/format/vaco-demux-dash" }
 vaco-demux-flv = { path = "../crates/format/vaco-demux-flv" }
+vaco-demux-hls = { path = "../crates/format/vaco-demux-hls" }
 vaco-demux-image2 = { path = "../crates/format/vaco-demux-image2" }
 vaco-demux-matroska = { path = "../crates/format/vaco-demux-matroska" }
 vaco-demux-mp4 = { path = "../crates/format/vaco-demux-mp4" }
@@ -54,6 +56,7 @@ vaco-filter-core = { path = "../crates/filter/vaco-filter-core" }
 vaco-filter-framesync = { path = "../crates/filter/vaco-filter-framesync" }
 vaco-filter-graph = { path = "../crates/filter/vaco-filter-graph" }
 vaco-filter-plumbing = { path = "../crates/filter/vaco-filter-plumbing" }
+vaco-format-adaptive = { path = "../crates/format/vaco-format-adaptive" }
 vaco-format-apetag = { path = "../crates/format/vaco-format-apetag" }
 vaco-format-audio-simple = { path = "../crates/format/vaco-format-audio-simple" }
 vaco-format-avlanguage = { path = "../crates/format/vaco-format-avlanguage" }
@@ -65,11 +68,14 @@ vaco-format-isom = { path = "../crates/format/vaco-format-isom" }
 vaco-format-mpegts-tables = { path = "../crates/format/vaco-format-mpegts-tables" }
 vaco-format-nalu = { path = "../crates/format/vaco-format-nalu" }
 vaco-format-riff = { path = "../crates/format/vaco-format-riff" }
+vaco-format-subtitle = { path = "../crates/format/vaco-format-subtitle" }
 vaco-frame = { path = "../crates/model/vaco-frame" }
 vaco-io = { path = "../crates/io/vaco-io" }
 vaco-limits = { path = "../crates/core/vaco-limits" }
 vaco-mux-mp4 = { path = "../crates/format/vaco-mux-mp4" }
 vaco-mux-mpegps = { path = "../crates/format/vaco-mux-mpegps" }
+vaco-mux-mpegts = { path = "../crates/format/vaco-mux-mpegts" }
+vaco-mux-stream = { path = "../crates/format/vaco-mux-stream" }
 vaco-opts = { path = "../crates/core/vaco-opts" }
 vaco-packet = { path = "../crates/model/vaco-packet" }
 vaco-parse-aac = { path = "../crates/codec/vaco-parse-aac" }
@@ -82,10 +88,13 @@ vaco-pool = { path = "../crates/model/vaco-pool" }
 vaco-probe = { path = "../crates/app/vaco-probe" }
 vaco-protocol-core = { path = "../crates/io/vaco-protocol-core" }
 vaco-protocol-http = { path = "../crates/io/vaco-protocol-http" }
+vaco-protocol-local = { path = "../crates/io/vaco-protocol-local" }
+vaco-protocol-wrap = { path = "../crates/io/vaco-protocol-wrap" }
 vaco-registry = { path = "../crates/registry/vaco-registry" }
 vaco-resample = { path = "../crates/signal/vaco-resample" }
 vaco-sampfmt = { path = "../crates/model/vaco-sampfmt" }
 vaco-scale = { path = "../crates/signal/vaco-scale" }
+vaco-subtitle-text = { path = "../crates/format/vaco-subtitle-text" }
 vaco-textformat = { path = "../crates/app/vaco-textformat" }
 
 [features]
@@ -103,7 +112,9 @@ default = [
     "core",
     "demux-asf",
     "demux-avi",
+    "demux-dash",
     "demux-flv",
+    "demux-hls",
     "demux-image2",
     "demux-matroska",
     "demux-mp4",
@@ -133,6 +144,8 @@ default = [
     "limits",
     "mux-mp4",
     "mux-mpegps",
+    "mux-mpegts",
+    "mux-stream",
     "packet",
     "parse-aac",
     "parse-av1",
@@ -143,10 +156,13 @@ default = [
     "probe",
     "protocol-core",
     "protocol-http",
+    "protocol-local",
+    "protocol-wrap",
     "registry",
     "resample",
     "sampfmt",
     "scale",
+    "subtitle-text",
     "textformat",
 ]
 bitstream = []
@@ -162,7 +178,9 @@ conformance = []
 core = []
 demux-asf = []
 demux-avi = []
+demux-dash = []
 demux-flv = []
+demux-hls = []
 demux-image2 = []
 demux-matroska = []
 demux-mp4 = []
@@ -192,6 +210,8 @@ io = []
 limits = []
 mux-mp4 = []
 mux-mpegps = []
+mux-mpegts = []
+mux-stream = []
 packet = []
 parse-aac = []
 parse-av1 = []
@@ -202,10 +222,13 @@ pool = []
 probe = []
 protocol-core = []
 protocol-http = []
+protocol-local = []
+protocol-wrap = []
 registry = []
 resample = []
 sampfmt = []
 scale = []
+subtitle-text = []
 textformat = []
 
 # Overflow checks ON in the profile the fuzzer actually runs, so arithmetic
@@ -449,6 +472,14 @@ bench = false
 required-features = ["core"]
 
 [[bin]]
+name = "dash_mpd_parse"
+path = "fuzz_targets/dash_mpd_parse.rs"
+test = false
+doc = false
+bench = false
+required-features = ["demux-dash"]
+
+[[bin]]
 name = "dem_mp4"
 path = "fuzz_targets/dem_mp4.rs"
 test = false
@@ -633,6 +664,14 @@ bench = false
 required-features = ["filter-graph"]
 
 [[bin]]
+name = "hls_playlist_parse"
+path = "fuzz_targets/hls_playlist_parse.rs"
+test = false
+doc = false
+bench = false
+required-features = ["demux-hls"]
+
+[[bin]]
 name = "id3_tag"
 path = "fuzz_targets/id3_tag.rs"
 test = false
@@ -753,8 +792,24 @@ bench = false
 required-features = ["demux-mpegts"]
 
 [[bin]]
+name = "mpegts_mux_packet"
+path = "fuzz_targets/mpegts_mux_packet.rs"
+test = false
+doc = false
+bench = false
+required-features = ["mux-mpegts"]
+
+[[bin]]
 name = "mpegts_packet"
 path = "fuzz_targets/mpegts_packet.rs"
+test = false
+doc = false
+bench = false
+required-features = ["demux-mpegts"]
+
+[[bin]]
+name = "mpegts_raw_demux"
+path = "fuzz_targets/mpegts_raw_demux.rs"
 test = false
 doc = false
 bench = false
@@ -767,6 +822,30 @@ test = false
 doc = false
 bench = false
 required-features = ["format-mpegts-tables"]
+
+[[bin]]
+name = "mux_stream_concat_script"
+path = "fuzz_targets/mux_stream_concat_script.rs"
+test = false
+doc = false
+bench = false
+required-features = ["mux-stream"]
+
+[[bin]]
+name = "mux_stream_ffmetadata_reader"
+path = "fuzz_targets/mux_stream_ffmetadata_reader.rs"
+test = false
+doc = false
+bench = false
+required-features = ["mux-stream"]
+
+[[bin]]
+name = "mux_stream_tee_grammar"
+path = "fuzz_targets/mux_stream_tee_grammar.rs"
+test = false
+doc = false
+bench = false
+required-features = ["mux-stream"]
 
 [[bin]]
 name = "nalu_framing"
@@ -889,6 +968,30 @@ bench = false
 required-features = ["protocol-http"]
 
 [[bin]]
+name = "protocol_local_data_url"
+path = "fuzz_targets/protocol_local_data_url.rs"
+test = false
+doc = false
+bench = false
+required-features = ["protocol-local"]
+
+[[bin]]
+name = "protocol_wrap_concat_list"
+path = "fuzz_targets/protocol_wrap_concat_list.rs"
+test = false
+doc = false
+bench = false
+required-features = ["protocol-wrap"]
+
+[[bin]]
+name = "protocol_wrap_subfile_args"
+path = "fuzz_targets/protocol_wrap_subfile_args.rs"
+test = false
+doc = false
+bench = false
+required-features = ["protocol-wrap"]
+
+[[bin]]
 name = "rbsp_roundtrip"
 path = "fuzz_targets/rbsp_roundtrip.rs"
 test = false
@@ -943,6 +1046,14 @@ test = false
 doc = false
 bench = false
 required-features = ["scale"]
+
+[[bin]]
+name = "subtitle_text_demux"
+path = "fuzz_targets/subtitle_text_demux.rs"
+test = false
+doc = false
+bench = false
+required-features = ["subtitle-text"]
 
 [[bin]]
 name = "textformat_escape"

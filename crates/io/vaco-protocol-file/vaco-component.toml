@@ -1,0 +1,23 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# This crate predates the registry generator and was never wired in — there
+# was no `vaco-component.toml` here at all, so `file:` and `pipe:` were absent
+# from `vaco_registry::protocols()`/`protocol_registry()` despite the crate
+# itself being complete. Found while adding the sibling `vaco-protocol-local`
+# and `vaco-protocol-wrap` fragments and noticing neither `file` nor `pipe`
+# showed up in `generated.rs`'s `PROTOCOLS` table to compare against.
+#
+# Always on: a build with no `file:` protocol cannot open a path typed on the
+# command line, which is the U1 default scheme for every bare path.
+
+[[component]]
+kind      = "protocol"
+name      = "file"
+long_name = "local file"
+ctor      = "vaco_protocol_file::FILE_PROTOCOL"
+
+[[component]]
+kind      = "protocol"
+name      = "pipe"
+long_name = "standard input/output"
+ctor      = "vaco_protocol_file::PIPE_PROTOCOL"

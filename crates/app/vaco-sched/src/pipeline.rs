@@ -631,7 +631,7 @@ impl PipelineSpec {
                 &outputs,
                 &inputs_tb,
                 max_input_errors,
-            )));
+            )?));
         }
 
         Ok(Pipeline {
@@ -653,8 +653,8 @@ fn build_work(
     outputs: &[Vec<usize>],
     input_time_bases: &[TimeBase],
     max_input_errors: u32,
-) -> Work {
-    match spec.kind {
+) -> Result<Work> {
+    Ok(match spec.kind {
         KindSpec::Demux {
             demuxer,
             stream_of_port,
@@ -713,11 +713,26 @@ fn build_work(
             }))
         }
         KindSpec::Mux {
-            muxer,
+            mut muxer,
             flags,
             options,
             stream_of_port,
         } => {
+            // M12: `init` runs once, after every stream is declared and before
+            // anything reads a time base. Skipping this used to mean every
+            // real container's `stream_time_base` was consulted on
+            // whatever state its fields happened to have at `add_stream`
+            // time — for `vaco-mux-mp4` that is the *default* movie
+            // timescale rather than the one `init` derives from the
+            // largest track, and for `vaco-mux-mpegts` it is a `pcr_pid` of
+            // `None` and no chance to reject a stream-less file. Both are
+            // exactly what `vaco_format_core::mux::MuxBuilder::open` does
+            // before it reads a single time base, and this node is the only
+            // other caller that drives a `dyn Muxer` from cold — the wrapper
+            // deliberately does not go through `MuxBuilder` (see
+            // `crate::node::MuxWork`'s docs), so it has to repeat this one
+            // step itself rather than get it for free.
+            muxer.init()?;
             let count = stream_of_port
                 .iter()
                 .copied()
@@ -747,7 +762,7 @@ fn build_work(
                 trailer_written: false,
             }))
         }
-    }
+    })
 }
 
 /// Sanity: a wire's flow and a tap's flow are the same thing, and the builder

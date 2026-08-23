@@ -1,0 +1,47 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Issue #590 (FM-33). Five muxers plus one demuxer — `concat` is a demuxer in
+# the reference (`ffmpeg -muxers | grep concat` is empty; `-demuxers` lists
+# it), not a muxer as the issue title assumed; see the crate docs and
+# `docs/format/vaco-mux-stream.md` for the full accounting, including which
+# of these five muxers' `open` paths are real versus a documented
+# `Error::Unsupported` stub (the registry seam has no channel for an inner
+# muxer/URL list/filename pattern for `tee`, `segment`, `stream_segment` or
+# `fifo` — only `ffmetadata` is fully driveable through it).
+
+[[component]]
+kind      = "demuxer"
+name      = "concat"
+long_name = "Virtual concatenation script"
+ctor      = "vaco_mux_stream::DEMUXER_CONCAT"
+
+[[component]]
+kind      = "muxer"
+name      = "ffmetadata"
+long_name = "FFmpeg metadata in text"
+ctor      = "vaco_mux_stream::MUXER_FFMETADATA"
+
+[[component]]
+kind      = "muxer"
+name      = "tee"
+long_name = "Multiple muxer tee"
+ctor      = "vaco_mux_stream::MUXER_TEE"
+
+[[component]]
+kind      = "muxer"
+name      = "segment"
+long_name = "segment"
+ctor      = "vaco_mux_stream::MUXER_SEGMENT"
+
+[[component]]
+kind      = "muxer"
+# `ssegment` is a real alias, measured in `ffmpeg -muxers`.
+name      = "stream_segment,ssegment"
+long_name = "streaming segment muxer"
+ctor      = "vaco_mux_stream::MUXER_STREAM_SEGMENT"
+
+[[component]]
+kind      = "muxer"
+name      = "fifo"
+long_name = "FIFO queue pseudo-muxer"
+ctor      = "vaco_mux_stream::MUXER_FIFO"

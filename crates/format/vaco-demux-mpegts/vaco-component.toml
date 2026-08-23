@@ -10,3 +10,10 @@ feature    = "demux-mpegts"
 ctor       = "vaco_demux_mpegts::DEMUXER"
 extensions = "ts,m2t,m2ts,mts,mpegts"
 mime_types = "video/mp2t"
+
+[[component]]
+kind       = "demuxer"
+name       = "mpegtsraw"
+long_name  = "raw MPEG-TS (MPEG-2 Transport Stream)"
+feature    = "demux-mpegtsraw"
+ctor       = "vaco_demux_mpegts::RAW_DEMUXER"

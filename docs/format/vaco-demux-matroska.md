@@ -109,12 +109,32 @@ by `BlockDuration / count` when it does not. Every frame of a lace reports the
 ### Timestamps and the three trims
 
 * **`CodecDelay`** (ns, per track) is subtracted from every timestamp on that
-  track and reported as `AudioParameters::initial_padding` in samples. The first
-  packet of the track also carries `SkipSamples { start, end: 0 }`.
-* **`SeekPreRoll`** is read but not yet consumed — see *What is not here*.
+  track and reported as `AudioParameters::initial_padding` in samples. The
+  first packet since the last discontinuity — the open, **or any seek** — also
+  carries `SkipSamples { start, end: 0 }`.
+* **`SeekPreRoll`** is read and kept on the track (for a future muxer
+  round-trip) but **measured to have no effect on anything this crate
+  produces**. `ffmpeg -v debug -ss <target> -i opus.webm -f null -` logs
+  `demuxer injecting skip 312 / discard 0` — exactly the track's own
+  `CodecDelay` sample count — after a seek to `0.0s` and again after a seek to
+  `2.0s`, and the number does not move even with `SeekPreRoll` patched to zero
+  in the file bytes. So the reference re-arms `CodecDelay`'s own skip on every
+  discontinuity; it does not derive a skip from `SeekPreRoll` at all. The gap
+  this closes is not "`SeekPreRoll` is unread" — it is that the skip was only
+  ever applied once, at open, and a seek left `emitted_delay` permanently
+  `true`. `Track::needs_delay_skip` now re-arms on every
+  `reset_stream_state`, which every seek path calls, and
+  `a_seek_rearms_the_codec_delay_skip_on_the_next_packet` pins the finding
+  against the value patch above (an equivalent test, in Rust, is not
+  possible without a real Opus stream; the ffmpeg debug log is the primary
+  source and is reproduced in the test's doc comment).
 * **`DiscardPadding`** (ns, per block) becomes `SkipSamples { start: 0, end }` on
   the last frame of that block, and **does not** shorten the packet duration:
-  `BlockDuration` is already the trimmed length.
+  `BlockDuration` is already the trimmed length. When the same frame is also
+  the first one since a discontinuity, `start` and `end` are combined into one
+  `SkipSamples` — `Packet::set_side_data` **replaces** rather than merges an
+  existing entry of the same kind, so writing the two trims as two calls would
+  make the second one silently erase the first for a one-frame lace.
 
 The `CodecDelay` conversion is the one arithmetic decision here that is not in
 any specification, and it was measured rather than guessed — see *Measured
@@ -259,7 +279,49 @@ Deliberate, and each is a documented divergence rather than an oversight:
   step 13 already scoped this out.
 * **`CRC-32` verification.** The element is parsed as a global and ignored;
   wiring it to `IoContext::start_checksum` needs `err_detect=crccheck` plumbing.
-* **`webm_dash_manifest` mode.**
+* **`webm_dash_manifest` mode.** Plan 18 §3.2.4 step 14 describes it as "a
+  demuxer mode, not a separate parser" that reports DASH-relevant properties as
+  container metadata, which read as a small, additive piece of work. Probing
+  the reference does not bear that out: `ffprobe -f webm_dash_manifest` on a
+  plain `ffmpeg`-written WebM — with `Cues` present, confirmed by searching the
+  bytes for the `Cues` ID — fails immediately with `Error parsing Cues`, for
+  every file tried, `-reserve_index_space`-muxed or not. Whatever shape of
+  `Cues` (or preceding structure) the mode actually demands was not found
+  within this pass's budget, and D7 rules out reading `libavformat`'s
+  `webmdashdec.c` to find out. Left undone rather than guessed at; a follow-up
+  needs either more probing budget or a real DASH-muxed corpus to compare
+  against.
+
+## Tags, chapters and attachments — the parts that reach each other
+
+* **Target-scoped `Tags`.** `Targets ▸ TagChapterUID` and `▸
+  TagAttachmentUID` route a tag's `SimpleTag`s to that chapter's or that
+  attachment stream's metadata, the same way `TagTrackUID` already routed to a
+  track. Measured against `ffprobe 8.1` on a hand-built file: a
+  chapter-targeted `COMMENT` appears in that chapter's own `tags` next to
+  `title`, and an attachment-targeted `DESCRIPTION` appears in that
+  attachment's stream tags next to `filename`/`mimetype`. `TagEditionUID` is
+  read and dropped — no edition is exposed as an entity to attach it to, and
+  `ffprobe` has nowhere to show it either. `TargetTypeValue` is read and
+  otherwise unused: a `Targets` naming only a type value, with no UID at all,
+  measured to be indistinguishable from an untargeted tag — both land as
+  container metadata.
+
+  `Tags` is applied only after the whole segment scan (main pass **and**
+  `SeekHead` recovery) has run, buffered as raw bytes in `pending_tags` until
+  then. RFC 9559 does not order `Tracks`/`Chapters`/`Attachments` relative to
+  `Tags`, and resolving a target against a UID table that is not fully built
+  yet would silently drop a tag on a file that happens to write `Tags` first.
+
+* **Nested `ChapterAtom`s are ignored, not flattened.** RFC 9559 lets a
+  `ChapterAtom` contain child `ChapterAtom`s (sub-chapters). Measured against
+  `ffprobe 8.1 -show_chapters` on a file with one top-level atom nesting two
+  children: only the top-level atoms are printed, and the nested pair does not
+  appear anywhere, flattened or otherwise. This crate's parser already reads
+  only `EditionEntry`'s *direct* children — a nested `ChapterAtom` falls into
+  the same catch-all as any other unrecognised child of the outer atom — so no
+  change was needed here; `nested_chapter_atoms_are_ignored_like_the_reference`
+  pins it against a regression toward "fixing" this into flattening.
 * **Bisection seeking.** Without `Cues` a timestamp seek restarts at the first
   cluster. The generic index built from packets already covers the common case,
   and `FormatFlags::GENERIC_INDEX` lets the core do the rest.

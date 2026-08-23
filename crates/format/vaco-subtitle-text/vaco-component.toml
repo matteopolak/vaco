@@ -1,0 +1,245 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Scope note (see `src/lib.rs`): the reference (`ffmpeg 8.1`) names 16 text
+# subtitle demuxers and 8 muxers in this family — not the 15/6 a plan once
+# counted. `ttml`'s demuxer has no reference counterpart at all (spec-only,
+# see `src/ttml.rs`); everything else here was checked against `ffprobe`.
+#
+# Every demuxer/muxer below now carries the `CodecId` its stream actually
+# produces (see `src/lib.rs`'s "CodecId gap" section for the history: eleven
+# formats initially had none, since only `vaco-codec-core` may add a variant
+# and it was out of this crate's scope; the variants have since landed
+# there). This fragment schema has no `codec` key for demuxer/muxer kinds —
+# the codec is a runtime fact of the stream, not a static descriptor field —
+# so nothing here changes as a result; it is recorded in each module's own
+# `DEMUXER`/`MUXER` doc comment instead.
+
+# ------------------------------------------------------------------ demuxers
+
+[[component]]
+kind       = "demuxer"
+name       = "srt"
+long_name  = "SubRip subtitle"
+feature    = "subtitle-text"
+ctor       = "vaco_subtitle_text::srt::DEMUXER"
+media      = "subtitle"
+extensions = "srt"
+mime_types = "application/x-subrip"
+
+[[component]]
+kind       = "demuxer"
+name       = "webvtt"
+long_name  = "WebVTT subtitle"
+feature    = "subtitle-text"
+ctor       = "vaco_subtitle_text::webvtt::DEMUXER"
+media      = "subtitle"
+extensions = "vtt"
+mime_types = "text/vtt"
+
+[[component]]
+kind       = "demuxer"
+name       = "ass,ssa"
+long_name  = "ASS (Advanced SubStation Alpha) subtitle"
+feature    = "subtitle-text"
+ctor       = "vaco_subtitle_text::ass::DEMUXER"
+media      = "subtitle"
+extensions = "ass,ssa"
+mime_types = "text/x-ass"
+
+[[component]]
+kind       = "demuxer"
+name       = "scc"
+long_name  = "Scenarist Closed Captions"
+feature    = "subtitle-text"
+ctor       = "vaco_subtitle_text::scc::DEMUXER"
+media      = "subtitle"
+extensions = "scc"
+
+[[component]]
+kind       = "demuxer"
+name       = "microdvd"
+long_name  = "MicroDVD subtitle"
+feature    = "subtitle-text"
+ctor       = "vaco_subtitle_text::microdvd::DEMUXER"
+media      = "subtitle"
+extensions = "sub"
+mime_types = "text/x-microdvd"
+
+[[component]]
+kind       = "demuxer"
+name       = "jacosub"
+long_name  = "JACOsub subtitle format"
+feature    = "subtitle-text"
+ctor       = "vaco_subtitle_text::jacosub::DEMUXER"
+media      = "subtitle"
+extensions = "jss,js"
+mime_types = "text/x-jacosub"
+
+[[component]]
+kind       = "demuxer"
+name       = "lrc"
+long_name  = "LRC lyrics"
+feature    = "subtitle-text"
+ctor       = "vaco_subtitle_text::lrc::DEMUXER"
+media      = "subtitle"
+extensions = "lrc"
+
+[[component]]
+kind       = "demuxer"
+name       = "ttml"
+long_name  = "TTML subtitle"
+feature    = "subtitle-text"
+ctor       = "vaco_subtitle_text::ttml::DEMUXER"
+media      = "subtitle"
+extensions = "ttml"
+mime_types = "application/ttml+xml"
+
+[[component]]
+kind       = "demuxer"
+name       = "subviewer"
+long_name  = "SubViewer subtitle"
+feature    = "subtitle-text"
+ctor       = "vaco_subtitle_text::subviewer::DEMUXER"
+media      = "subtitle"
+extensions = "sub"
+mime_types = "text/x-subviewer"
+
+[[component]]
+kind       = "demuxer"
+name       = "subviewer1"
+long_name  = "SubViewer v1 subtitle"
+feature    = "subtitle-text"
+ctor       = "vaco_subtitle_text::subviewer1::DEMUXER"
+media      = "subtitle"
+extensions = "sub"
+
+[[component]]
+kind       = "demuxer"
+name       = "mpsub"
+long_name  = "MPlayer subtitles"
+feature    = "subtitle-text"
+ctor       = "vaco_subtitle_text::mpsub::DEMUXER"
+media      = "subtitle"
+extensions = "sub"
+
+[[component]]
+kind       = "demuxer"
+name       = "pjs"
+long_name  = "PJS (Phoenix Japanimation Society) subtitles"
+feature    = "subtitle-text"
+ctor       = "vaco_subtitle_text::pjs::DEMUXER"
+media      = "subtitle"
+extensions = "pjs"
+
+[[component]]
+kind       = "demuxer"
+name       = "realtext"
+long_name  = "RealText subtitle format"
+feature    = "subtitle-text"
+ctor       = "vaco_subtitle_text::realtext::DEMUXER"
+media      = "subtitle"
+extensions = "rt"
+mime_types = "application/x-rt"
+
+[[component]]
+kind       = "demuxer"
+name       = "sami"
+long_name  = "SAMI subtitle format"
+feature    = "subtitle-text"
+ctor       = "vaco_subtitle_text::sami::DEMUXER"
+media      = "subtitle"
+extensions = "smi,sami"
+mime_types = "application/x-sami"
+
+[[component]]
+kind       = "demuxer"
+name       = "vplayer"
+long_name  = "VPlayer subtitles"
+feature    = "subtitle-text"
+ctor       = "vaco_subtitle_text::vplayer::DEMUXER"
+media      = "subtitle"
+extensions = "txt"
+
+[[component]]
+kind       = "demuxer"
+name       = "mpl2"
+long_name  = "MPL2 subtitles"
+feature    = "subtitle-text"
+ctor       = "vaco_subtitle_text::mpl2::DEMUXER"
+media      = "subtitle"
+extensions = "mpl2,txt"
+
+[[component]]
+kind       = "demuxer"
+name       = "stl"
+long_name  = "Spruce subtitle format"
+feature    = "subtitle-text"
+ctor       = "vaco_subtitle_text::stl::DEMUXER"
+media      = "subtitle"
+extensions = "stl"
+
+# -------------------------------------------------------------------- muxers
+
+[[component]]
+kind       = "muxer"
+name       = "srt"
+long_name  = "SubRip subtitle"
+feature    = "subtitle-text"
+ctor       = "vaco_subtitle_text::srt::MUXER"
+extensions = "srt"
+
+[[component]]
+kind       = "muxer"
+name       = "webvtt"
+long_name  = "WebVTT subtitle"
+feature    = "subtitle-text"
+ctor       = "vaco_subtitle_text::webvtt::MUXER"
+extensions = "vtt"
+
+[[component]]
+kind       = "muxer"
+name       = "ass"
+long_name  = "ASS (Advanced SubStation Alpha) subtitle"
+feature    = "subtitle-text"
+ctor       = "vaco_subtitle_text::ass::MUXER"
+extensions = "ass"
+
+[[component]]
+kind       = "muxer"
+name       = "scc"
+long_name  = "Scenarist Closed Captions"
+feature    = "subtitle-text"
+ctor       = "vaco_subtitle_text::scc::MUXER"
+extensions = "scc"
+
+[[component]]
+kind       = "muxer"
+name       = "microdvd"
+long_name  = "MicroDVD subtitle"
+feature    = "subtitle-text"
+ctor       = "vaco_subtitle_text::microdvd::MUXER"
+extensions = "sub"
+
+[[component]]
+kind       = "muxer"
+name       = "jacosub"
+long_name  = "JACOsub subtitle format"
+feature    = "subtitle-text"
+ctor       = "vaco_subtitle_text::jacosub::MUXER"
+extensions = "jss"
+
+[[component]]
+kind       = "muxer"
+name       = "lrc"
+long_name  = "LRC lyrics"
+feature    = "subtitle-text"
+ctor       = "vaco_subtitle_text::lrc::MUXER"
+extensions = "lrc"
+
+[[component]]
+kind       = "muxer"
+name       = "ttml"
+long_name  = "TTML subtitle"
+feature    = "subtitle-text"
+ctor       = "vaco_subtitle_text::ttml::MUXER"
+extensions = "ttml"

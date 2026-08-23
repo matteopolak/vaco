@@ -1,0 +1,14 @@
+# Registry fragment. Consumed by `cargo xtask gen-registry`.
+#
+# One registration: measured (`ffmpeg -muxers | grep -i ts`), the reference
+# has exactly one MPEG-TS muxer. `m2ts` is a mode of it
+# (`-mpegts_m2ts_mode`), not a second format name — see this crate's docs.
+
+[[component]]
+kind       = "muxer"
+name       = "mpegts"
+long_name  = "MPEG-TS (MPEG-2 Transport Stream)"
+feature    = "mux-mpegts"
+ctor       = "vaco_mux_mpegts::MUXER"
+extensions = "ts,m2t,m2ts,mts"
+mime_types = "video/mp2t"

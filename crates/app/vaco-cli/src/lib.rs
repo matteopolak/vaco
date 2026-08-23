@@ -20,24 +20,36 @@
 //!      ─▶ [exit]     stderr text and a status code   (exit.rs)
 //! ```
 //!
-//! # The thing to know before reading further: there are no muxers
+//! # There are muxers now; there are still no encoders
 //!
-//! D5 scopes v0.1 to demuxing, and `crates/format/` contains three
-//! `vaco-demux-*` crates and no `vaco-mux-*`. There are no decoders and no
-//! encoders either. So:
+//! Until the container wave, D5 scoped v0.1 to demuxing: `crates/format/` held
+//! three `vaco-demux-*` crates and no `vaco-mux-*`, and this section said so at
+//! length. It now holds a `vaco-mux-*` crate per container — 63 registered
+//! muxers — and [`exec::muxer_for`]/[`exec::run_pipeline`] reach every one of
+//! them through `vaco_registry`, not just a local `null` stand-in. There are
+//! still no decoders and no encoders, so:
 //!
-//! * `vaco -i in.mkv -c copy -f null -` **works**, end to end, and is the
-//!   acceptance path: protocol → probe → demux → discovery → selection →
-//!   `vaco-sched` → a counting sink.
-//! * `vaco -i in.mkv out.mkv` fails with a message naming the real reason,
-//!   and `vaco -i in.mkv -f null -` (no `-c copy`) fails on the reference's own
-//!   missing-encoder path. Neither pretends.
+//! * `vaco -i in.mkv -c copy -f matroska out.mkv` **writes a real file**:
+//!   protocol → probe → demux → discovery → selection → `vaco-sched` →
+//!   the registry's `matroska` muxer, opened on a real sink through the
+//!   protocol layer. Streamcopy end to end, which is the one thing a build
+//!   with no encoders can do — and enough to remux.
+//! * `vaco -i in.mkv -f null -` still works exactly as before: `null` is one
+//!   registered muxer among 63 now, not a special case, and it is still the
+//!   workhorse of this crate's own tests (`-f null -` needs no container
+//!   knowledge and makes every stage observable through packet counts alone).
+//! * `vaco -i in.mkv out.zzz` and `-f nosuchformat` still fail with a message
+//!   naming the real reason, and a stream with no `-c copy` still fails on the
+//!   reference's own missing-encoder path. Neither pretends.
 //!
-//! The acceptance criterion is therefore **not** byte identity of an output
-//! file — there is no file. It is that the same argv produces the same stream
-//! selection, the same stderr text, the same exit code, and the same packet
-//! counts through the pipeline. [`nullmux::OutputTally`] is what makes the last of
-//! those observable.
+//! The acceptance criterion for a real output is now the same as the
+//! reference's own: the bytes on disk, read back. For `-f null -` and for any
+//! output whose bytes are not yet worth comparing, it remains what it always
+//! was — the same stream selection, the same stderr text, the same exit code,
+//! and the same packet counts through the pipeline.
+//! [`nullmux::OutputTally`] is what makes the last of those observable, real
+//! muxer or not — see [`nullmux::TallyingMuxer`], which wraps whichever the
+//! registry returned.
 //!
 //! # A library plus a thin binary
 //!
@@ -61,6 +73,7 @@ pub mod help;
 pub mod input;
 pub mod listing;
 pub mod nullmux;
+pub mod output;
 pub mod select;
 
 use std::ffi::OsStr;

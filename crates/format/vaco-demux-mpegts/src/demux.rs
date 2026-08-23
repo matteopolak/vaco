@@ -194,6 +194,15 @@ pub struct DemuxStats {
     pub scrambled_packets: u64,
     /// PES packets abandoned for exceeding [`MAX_PES_BYTES`].
     pub oversized_pes: u64,
+    /// A program's PMT `version_number` changed from what was last applied.
+    ///
+    /// Counted, not acted on: `merge_pmt_versions` — creating a new stream set
+    /// rather than folding new PIDs into the existing one, which is the
+    /// reference's default behaviour — needs the PID-to-many-streams mapping
+    /// this crate does not have (see the docs file). A caller can at least see
+    /// that a splice happened, which today it cannot otherwise tell from a
+    /// stream list that never shrinks.
+    pub pmt_updates: u64,
 }
 
 /// The MPEG-TS demuxer.
@@ -224,6 +233,15 @@ pub struct MpegTsDemuxer {
     pmt_pids: Vec<(u16, u16)>,
     /// Clock index per program, parallel to `programs`.
     program_clocks: Vec<usize>,
+    /// The PMT version [`DemuxStats::pmt_updates`] last counted for each
+    /// program, parallel to `programs`. Deliberately **not** the same value as
+    /// `Program::pmt_version`: this one is only ever written while
+    /// `!self.scanning`, so the header scan and the duration tail scan — which
+    /// on a file small enough to fit inside either scan's window re-read the
+    /// same PMT bytes the real read later covers again — cannot leave a stale
+    /// "already seen" version behind that makes the real read's first PMT
+    /// look like a change it is not.
+    pmt_counted_version: Vec<Option<u8>>,
     transport_stream_id: Option<u16>,
 }
 
@@ -284,6 +302,7 @@ impl MpegTsDemuxer {
             scanning: false,
             pmt_pids: Vec::new(),
             program_clocks: Vec::new(),
+            pmt_counted_version: Vec::new(),
             transport_stream_id: None,
         };
         me.detect_stride()?;
@@ -478,6 +497,27 @@ impl MpegTsDemuxer {
             p.pcr_pid = Some(pmt.pcr_pid);
             p.pmt_version = Some(pmt.version);
         }
+        // A PMT repeats verbatim roughly every 100 ms in a healthy multiplex,
+        // so most calls here see the version unchanged; only a genuine change
+        // — new or dropped elementary streams, a new PCR PID — counts.
+        //
+        // Tracked separately from `Program::pmt_version` and only ever
+        // written while `!self.scanning`: the header scan and the duration
+        // tail scan both re-read PSI the caller never sees a `Packet` for,
+        // and on a file small enough that those internal passes revisit the
+        // same bytes the real read later covers again, comparing against
+        // `pmt_version` directly would count the same live change more than
+        // once — or, worse, invent one purely because a scan rewound to the
+        // start and the real read is now "behind" where the last scan left
+        // off.
+        if !self.scanning
+            && let Some(seen) = self.pmt_counted_version.get_mut(prog)
+        {
+            if seen.is_some_and(|v| v != pmt.version) {
+                self.stats.pmt_updates = self.stats.pmt_updates.saturating_add(1);
+            }
+            *seen = Some(pmt.version);
+        }
 
         let cap = usize::try_from(self.opts.max_streams).unwrap_or(usize::MAX);
         for entry in pmt.streams() {
@@ -589,6 +629,7 @@ impl MpegTsDemuxer {
         self.clocks.push(ProgramClock::new(&self.opts));
         let clock = self.clocks.len().saturating_sub(1);
         self.program_clocks.push(clock);
+        self.pmt_counted_version.push(None);
         (self.programs.len().saturating_sub(1), clock)
     }
 

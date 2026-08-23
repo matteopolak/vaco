@@ -1,0 +1,13 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Name and extensions measured against `ffmpeg -demuxers | grep -i dash` and
+# `ffmpeg -h demuxer=dash` (ffmpeg 8.1).
+
+[[component]]
+kind       = "demuxer"
+name       = "dash"
+long_name  = "Dynamic Adaptive Streaming over HTTP"
+feature    = "demux-dash"
+ctor       = "vaco_demux_dash::DEMUXER"
+extensions = "mpd"
+mime_types = "application/dash+xml"

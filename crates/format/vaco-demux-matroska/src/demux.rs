@@ -135,8 +135,30 @@ struct Track {
     /// `CodecDelay` in samples, the leading `SkipSamples` on the first packet.
     delay_samples: u32,
     sample_rate: u32,
-    /// Set once the first packet of this track has carried its leading skip.
-    emitted_delay: bool,
+    /// Whether the *next* packet emitted for this track must carry the
+    /// `CodecDelay` skip as leading `SkipSamples`.
+    ///
+    /// Starts `true` (the open path is itself a discontinuity) and is set
+    /// back to `true` by every seek. **Measured** against `ffmpeg 8.1`: `ffmpeg
+    /// -v debug -ss 2.0 -i opus.webm -f null -` logs `demuxer injecting skip
+    /// 312 / discard 0` — the same 312 samples `CodecDelay` implies at the very
+    /// start of the file — after a seek to 2.0s, and again after a seek to
+    /// 0.0s, and the value does not move even with `SeekPreRoll` patched to
+    /// zero in the file. So the reference re-arms the *same* `CodecDelay`
+    /// skip on every discontinuity; it does not derive anything from
+    /// `SeekPreRoll` for this. See `docs/format/vaco-demux-matroska.md`.
+    needs_delay_skip: bool,
+    /// `SeekPreRoll`, in nanoseconds (RFC 9559 section 5.1.4.1.14).
+    ///
+    /// Read and kept for a future consumer (a muxer round-trip, or a caller
+    /// that wants to fetch extra leading blocks before a seek target) but not
+    /// consulted here: the measurement above shows the reference's own
+    /// packet-level `SkipSamples` does not depend on it at all.
+    #[allow(
+        dead_code,
+        reason = "kept for round-trip completeness; no measured demuxer behaviour reads it"
+    )]
+    seek_preroll_ns: u64,
     encodings: Vec<Encoding>,
     /// Whether any encoding is one we cannot undo.
     droppable: bool,
@@ -158,6 +180,19 @@ pub struct MatroskaDemuxer {
     tracks: Vec<Track>,
     chapters: Vec<Chapter>,
     metadata: Vec<(String, String)>,
+    /// `FileUID` to stream index, so a `Tags ▸ Targets ▸ TagAttachmentUID` can
+    /// find the stream an `Attachments ▸ AttachedFile` became.
+    attachment_uids: Vec<(u64, u32)>,
+    /// Raw `Tags` bodies, applied after the whole segment scan (including
+    /// `SeekHead` recovery) has run.
+    ///
+    /// RFC 9559 does not order `Tracks`/`Chapters`/`Attachments` relative to
+    /// `Tags`, and a `Tags ▸ Targets` can name any of the three. Resolving a
+    /// target while the thing it names might not exist yet would silently drop
+    /// a tag on a file that happens to write `Tags` first; deferring to one
+    /// point after everything else is read makes the order the file used
+    /// irrelevant.
+    pending_tags: Vec<Vec<u8>>,
     index: PacketIndex,
     duration: Option<Duration>,
 
@@ -225,6 +260,8 @@ impl MatroskaDemuxer {
             tracks: Vec::new(),
             chapters: Vec::new(),
             metadata: Vec::new(),
+            attachment_uids: Vec::new(),
+            pending_tags: Vec::new(),
             index: PacketIndex::with_options(opts),
             duration: None,
             segment_data_pos: 0,
@@ -441,6 +478,12 @@ impl MatroskaDemuxer {
         if self.first_cluster.is_none() && seekable {
             self.first_cluster = self.first_cluster_from_cues();
         }
+        // Every `Tracks`/`Chapters`/`Attachments` this scan or `SeekHead` will
+        // ever find is in place now, so a `Tags ▸ Targets` can resolve
+        // regardless of which order the file wrote the four elements in.
+        for body in core::mem::take(&mut self.pending_tags) {
+            self.parse_tags(&body);
+        }
         // RFC 9559 section 5.1.2.9: TimestampScale is nanoseconds per tick, so
         // the time base is scale/1e9 — 1/1000 for the default 1 000 000, and
         // deliberately not the 1/1000 every implementation assumes.
@@ -461,7 +504,8 @@ impl MatroskaDemuxer {
             el::INFO => self.parse_info(body),
             el::TRACKS => self.parse_tracks(body, opts)?,
             el::CUES => self.parse_cues(body),
-            el::TAGS => self.parse_tags(body),
+            // Buffered rather than applied here — see `pending_tags`.
+            el::TAGS => self.pending_tags.push(body.to_vec()),
             el::CHAPTERS => self.parse_chapters(body),
             el::ATTACHMENTS => self.parse_attachments(body, opts)?,
             el::SEEKHEAD => parse_seek_head(body, self.caps, seek_entries),
@@ -658,6 +702,7 @@ impl MatroskaDemuxer {
         let mut language_bcp47: Option<String> = None;
         let mut default_duration: Option<u64> = None;
         let mut codec_delay = 0u64;
+        let mut seek_preroll = 0u64;
         let mut video: Option<&[u8]> = None;
         let mut audio: Option<&[u8]> = None;
         let mut encodings: Option<&[u8]> = None;
@@ -685,6 +730,7 @@ impl MatroskaDemuxer {
                     default_duration = ebml::as_uint(child.data).filter(|&v| v > 0);
                 }
                 el::CODECDELAY => codec_delay = ebml::as_uint(child.data).unwrap_or(0),
+                el::SEEKPREROLL => seek_preroll = ebml::as_uint(child.data).unwrap_or(0),
                 el::FLAGDEFAULT => flag_default = ebml::as_uint(child.data) != Some(0),
                 el::FLAGFORCED => {
                     disposition.set(Disposition::FORCED, ebml::as_uint(child.data) != Some(0));
@@ -800,7 +846,10 @@ impl MatroskaDemuxer {
             delay_ticks: 0,
             delay_samples: 0,
             sample_rate,
-            emitted_delay: false,
+            // The open path is itself a discontinuity, so the very first
+            // packet carries the leading skip too.
+            needs_delay_skip: true,
+            seek_preroll_ns: seek_preroll,
             encodings,
             droppable,
         });
@@ -1064,13 +1113,33 @@ impl MatroskaDemuxer {
                 continue;
             }
             let mut track_uid = 0u64;
+            let mut chapter_uid = 0u64;
+            let mut attachment_uid = 0u64;
+            let mut edition_uid = 0u64;
             let mut pairs: Vec<(String, String)> = Vec::new();
             for child in ebml::Slice::new(tag.data, self.caps).children() {
                 match child.id {
                     el::TARGETS => {
                         for t in ebml::Slice::new(child.data, self.caps).children() {
-                            if t.id == el::TAGTRACKUID {
-                                track_uid = ebml::as_uint(t.data).unwrap_or(0);
+                            match t.id {
+                                el::TAGTRACKUID => {
+                                    track_uid = ebml::as_uint(t.data).unwrap_or(0);
+                                }
+                                el::TAGCHAPTERUID => {
+                                    chapter_uid = ebml::as_uint(t.data).unwrap_or(0);
+                                }
+                                el::TAGATTACHMENTUID => {
+                                    attachment_uid = ebml::as_uint(t.data).unwrap_or(0);
+                                }
+                                el::TAGEDITIONUID => {
+                                    edition_uid = ebml::as_uint(t.data).unwrap_or(0);
+                                }
+                                // `TargetTypeValue` alone changes nothing:
+                                // measured against `ffprobe 8.1`, a `Targets`
+                                // naming only a type value (no UID) becomes
+                                // container metadata, indistinguishable from
+                                // no `Targets` at all.
+                                _ => {}
                             }
                         }
                     }
@@ -1080,25 +1149,50 @@ impl MatroskaDemuxer {
                     _ => {}
                 }
             }
-            // A tag with no target is container metadata; one targeting a track
-            // becomes that stream's. Chapter- and attachment-targeted tags are
-            // read but not attached to anything yet.
-            let target = (track_uid != 0)
-                .then(|| self.tracks.iter().find(|t| t.uid == track_uid))
-                .flatten()
-                .map(|t| t.stream_index);
-            match target.and_then(|i| self.streams.get_mut(i as usize)) {
-                Some(stream) => {
+            // RFC 9559 section 5.1.6.1 lets one `Targets` name several UIDs of
+            // the *same* kind but does not say what a file naming more than one
+            // kind at once should do; a well-formed file never does. Track wins
+            // on a conflict because it is the target every existing caller
+            // already relies on.
+            if track_uid != 0 {
+                let target = self
+                    .tracks
+                    .iter()
+                    .find(|t| t.uid == track_uid)
+                    .map(|t| t.stream_index);
+                if let Some(stream) = target.and_then(|i| self.streams.get_mut(i as usize)) {
                     for (k, v) in pairs {
                         push_meta(&mut stream.metadata, &k, &v);
                     }
                 }
-                None if track_uid == 0 => {
+            } else if chapter_uid != 0 {
+                let want = i64::try_from(chapter_uid).unwrap_or(i64::MIN);
+                if let Some(chapter) = self.chapters.iter_mut().find(|c| c.id == want) {
                     for (k, v) in pairs {
-                        push_meta(&mut self.metadata, &k, &v);
+                        push_meta(&mut chapter.metadata, &k, &v);
                     }
                 }
-                None => {}
+            } else if attachment_uid != 0 {
+                let target = self
+                    .attachment_uids
+                    .iter()
+                    .find(|&&(uid, _)| uid == attachment_uid)
+                    .map(|&(_, index)| index);
+                if let Some(stream) = target.and_then(|i| self.streams.get_mut(i as usize)) {
+                    for (k, v) in pairs {
+                        push_meta(&mut stream.metadata, &k, &v);
+                    }
+                }
+            } else if edition_uid != 0 {
+                // No edition is exposed as its own entity — only the first
+                // `EditionEntry` is read (RFC 9559 allows several; plan 18
+                // section 3.2.4 step 13 already scoped that out) — and
+                // `ffprobe 8.1` has nowhere to show such a tag either, so it is
+                // read and dropped rather than guessed at.
+            } else {
+                for (k, v) in pairs {
+                    push_meta(&mut self.metadata, &k, &v);
+                }
             }
         }
     }
@@ -1213,6 +1307,7 @@ impl MatroskaDemuxer {
             }
             let mut filename = String::new();
             let mut mime = String::new();
+            let mut uid = 0u64;
             for child in ebml::Slice::new(file.data, self.caps).children() {
                 match child.id {
                     el::FILENAME => {
@@ -1225,6 +1320,7 @@ impl MatroskaDemuxer {
                             .unwrap_or_default()
                             .clone_into(&mut mime);
                     }
+                    el::FILEUID => uid = ebml::as_uint(child.data).unwrap_or(0),
                     _ => {}
                 }
             }
@@ -1238,6 +1334,9 @@ impl MatroskaDemuxer {
                 push_meta(&mut stream.metadata, "mimetype", &mime);
             }
             self.streams.push(stream);
+            if uid != 0 {
+                self.attachment_uids.push((uid, index));
+            }
         }
         Ok(())
     }
@@ -1443,7 +1542,7 @@ impl MatroskaDemuxer {
         let delay_ticks = track.delay_ticks;
         let default_duration_ns = track.default_duration_ns;
         let sample_rate = track.sample_rate;
-        let emitted_delay = track.emitted_delay;
+        let needs_delay_skip = track.needs_delay_skip;
         let delay_samples = track.delay_samples;
         let lacing = header.lacing;
 
@@ -1489,31 +1588,40 @@ impl MatroskaDemuxer {
             let offset_ticks = i64::try_from(i).unwrap_or(0).saturating_mul(step_ticks);
             pkt.pts = Timestamp::new(base_ts.saturating_add(offset_ticks));
             pkt.duration = self.packet_duration(default_duration_ns, block_duration, count);
-            if i == 0 && !emitted_delay && delay_samples > 0 {
-                pkt.set_side_data(PacketSideData::SkipSamples {
-                    start: delay_samples,
-                    end: 0,
-                });
-            }
-            if i + 1 == count
+            // Both trims land on `PacketSideData::SkipSamples`, and
+            // `Packet::set_side_data` **replaces** an existing entry of the
+            // same kind rather than merging — so a lace of one frame that is
+            // simultaneously the track's first frame since a discontinuity and
+            // the frame `DiscardPadding` trims from the end has to combine
+            // `start` and `end` into one call, not two.
+            let start = if i == 0 && needs_delay_skip && delay_samples > 0 {
+                delay_samples
+            } else {
+                0
+            };
+            let end = if i + 1 == count
                 && let Some(pad) = discard_padding.filter(|&p| p > 0)
                 && sample_rate > 0
             {
-                let samples = rescale_rnd(
-                    pad,
-                    i64::from(sample_rate),
-                    NS,
-                    Rounding::NearestAwayFromZero,
-                )
-                .unwrap_or(0);
                 // Only the side data: `BlockDuration` is already the trimmed
                 // length. Measured — the reference reports duration 7 for the
                 // block whose BlockDuration is 7 and whose DiscardPadding is
                 // 13 500 000 ns, so subtracting the padding again would halve it.
-                pkt.set_side_data(PacketSideData::SkipSamples {
-                    start: 0,
-                    end: u32::try_from(samples).unwrap_or(0),
-                });
+                u32::try_from(
+                    rescale_rnd(
+                        pad,
+                        i64::from(sample_rate),
+                        NS,
+                        Rounding::NearestAwayFromZero,
+                    )
+                    .unwrap_or(0),
+                )
+                .unwrap_or(0)
+            } else {
+                0
+            };
+            if start > 0 || end > 0 {
+                pkt.set_side_data(PacketSideData::SkipSamples { start, end });
             }
             if keyframe && i == 0 {
                 self.index
@@ -1524,7 +1632,7 @@ impl MatroskaDemuxer {
         if let Some(t) = self.tracks.get_mut(track_idx)
             && delay_samples > 0
         {
-            t.emitted_delay = true;
+            t.needs_delay_skip = false;
         }
         Ok(())
     }
@@ -1642,6 +1750,17 @@ impl MatroskaDemuxer {
         self.cluster_pos = 0;
         self.queue.clear();
         self.eof = false;
+        // **Measured** against `ffmpeg 8.1`: `ffmpeg -v debug -ss <any target>
+        // -i opus.webm -f null -` logs `demuxer injecting skip 312 / discard 0`
+        // — exactly `CodecDelay`'s own sample count — after *every* seek, not
+        // only at open. Patching `SeekPreRoll` to zero in the file changes
+        // nothing, so the reference is re-arming `CodecDelay`'s skip on each
+        // discontinuity rather than deriving anything from `SeekPreRoll`.
+        for t in &mut self.tracks {
+            if t.delay_samples > 0 {
+                t.needs_delay_skip = true;
+            }
+        }
     }
 }
 

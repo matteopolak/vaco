@@ -120,21 +120,14 @@ impl<'a, W: Write> Emit<'a, W> {
     /// Matched on the suffix rather than a list of names, deliberately:
     /// `format_long_name` and `codec_long_name` exist today and a new section
     /// with its own long name should not have to remember to come back here.
-    const fn dropped_by_bitexact(name: &str) -> bool {
-        // `str::ends_with` is not const; the suffix is nine bytes.
-        let b = name.as_bytes();
-        let s = b"_long_name";
-        if b.len() < s.len() {
-            return false;
-        }
-        let mut i = 0;
-        while i < s.len() {
-            if b[b.len() - s.len() + i] != s[i] {
-                return false;
-            }
-            i += 1;
-        }
-        true
+    ///
+    /// Not `const`: the first version hand-rolled the suffix comparison to be
+    /// `const`, which meant indexing, which the workspace denies for exactly
+    /// the reason it should — a hand-rolled bounds calculation is where an
+    /// off-by-one panic lives. `str::ends_with` is not const and this is called
+    /// once per field, which is nothing.
+    fn dropped_by_bitexact(name: &str) -> bool {
+        name.ends_with("_long_name")
     }
 
     /// The wrapped formatter, for section open/close **only**.

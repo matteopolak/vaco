@@ -492,23 +492,54 @@ deltas are unsigned and monotonicity is guaranteed by construction.
 
 ---
 
+## Common Encryption — reported, not decrypted
+
+**2026-08-23.** `sinf ▸ schm` and `sinf ▸ schi ▸ tenc` are read through
+[`vaco_format_isom::stsd::SampleEntry::cenc`], which returns
+[`vaco_format_isom::cenc::CencInfo`]. When a track is protected, its `Stream`
+gets `encryption_scheme` (e.g. `cenc`) and `encryption_key_id` (the
+`default_KID`, lower-case hex) tags — `codec_name` already reads as the
+*original* codec via `effective_format`, which was true before this pass — and
+`udta`-adjacent `pssh` boxes under `moov` become container-level
+`encryption_system_id` tags. This is a deliberate scope boundary, not a
+half-measured decryption path: **reading a packet from a protected track fails
+with `Error::Unsupported`**, naming the reason, rather than handing back the
+still-encrypted bytes or silently producing nothing. `cenc_is_reported_and_reading_it_is_refused`
+pins both halves against a fixture built byte-for-byte from a real `ffmpeg 8.1
+-encryption_scheme cenc-aes-ctr` file — see `vaco-format-isom`'s `cenc` module
+doc comment for exactly which bytes were read back and which were transcribed
+from the spec instead (`pssh`, and `tenc` version 1's byte-block pattern,
+which that file did not exercise).
+
+Measured: `ffprobe 8.1` on the same file surfaces **no** encryption tag at all,
+and `ffmpeg -i` decodes the still-encrypted bytes into visibly corrupt frames
+without refusing the file. Reporting the scheme and refusing the read is
+therefore new behaviour relative to the reference, not a reproduction of it —
+exactly the boundary the brief for this work asked for.
+
+Not yet done, and worth naming precisely because the box layer is ready for
+it: `senc`/`saiz`/`saio` are parsed structurally in `vaco-format-isom::cenc`
+(shape and byte ranges) but never consulted here, because nothing downstream
+needs a per-sample IV once the whole track is refused; and a fragmented file's
+`pssh` — a top-level box beside `moof`, not under `moov` — is not collected,
+because `collect_fragments`' scan only recognises `moof` today.
+
 ## Deferred
 
 Named so the next author knows what is absent rather than broken:
 
-* **Common encryption.** `sinf ▸ frma` is honoured far enough to report the
-  *original* codec of an `encv`/`enca` track, so `ffprobe` on an encrypted file
-  reports the right `codec_name`. `senc`, `saiz`/`saio`, `tenc` and `pssh` are
-  not parsed, no per-packet encryption side data is attached, and
-  `-decryption_key` does nothing.
 * **HEIF/AVIF.** The extension list claims `.avif`/`.heic` because the reference
   does, but `meta ▸ iloc/iinf/iprp/iref` is not read and there is no
-  `TileGrid` stream group.
-* **`sidx` and `mfra` fast paths.** `vaco-format-isom` parses both; seeking
-  walks the collected `moof` list instead, which is O(fragments) in memory and
-  O(1) per seek once open. `-fflags +fastseek` would want `sidx`.
-* **Chapters from a `tref ▸ chap` text track.** Only Nero `chpl` is read. Plan
-  18's VERIFY-M4 (which wins when both are present) is unmeasured.
+  `TileGrid` stream group. Not attempted this pass — it is a genuinely
+  different structure (items, not tracks) and the larger half of the issue it
+  belongs to; `vaco-format-isom` has zero existing support to build on, unlike
+  every other box family this crate reads.
+* **`sidx` and `mfra` fast paths.** `vaco-format-isom` parses both
+  (`frag::SegmentIndex`, `frag::TrackFragmentRandomAccess`); this crate still
+  does not call either. Seeking walks the collected `moof` list instead, which
+  is O(fragments) in memory and O(1) per seek once open — correct, but not
+  what `-fflags +fastseek` would use, and not able to reach a fragment beyond
+  `MAX_FRAGMENTS` without a full rescan. Not attempted this pass.
 * **Multiple `stsd` entries.** The first is reported; extradata does not switch
   mid-stream through `NewExtradata` side data.
 * **`media_rate != 1` edits** and **multi-segment edit decision lists.**
@@ -516,11 +547,28 @@ Named so the next author knows what is absent rather than broken:
   `vaco-format-isom` has `EditList::resolve` and a `Timeline` ready for the
   general case. Both are on plan 18's documented-divergence list already.
 * **`cmov`** (zlib-compressed `moov`), **`tapt`**, **hint tracks**, **`uuid`
-  extension boxes** and **timecode tracks**.
+  extension boxes** and **`tmcd` timecode tracks.** Not attempted this pass;
+  `tmcd`'s sample is a 32-bit frame count that needs the sample entry's own
+  `time_scale`/`frame_duration`/drop-frame flag to turn into `HH:MM:SS:FF`,
+  none of which `vaco-format-isom` currently exposes from a `tmcd` entry.
 * **A benchmark.** The re-parse-per-refill policy is argued from
   `vaco-format-isom`'s own measured parse cost rather than from a measurement of
   this crate. A `divan` benchmark over a synthetic 300 000-sample table would
   turn that argument into a number.
+
+## QuickTime chapter tracks — done, with one unmeasured precedence rule
+
+**2026-08-23.** A video (or any) track's `tref ▸ chap` naming a track whose
+`stsd` entry is Apple's plain `text` type (not 3GPP `tx3g`, a different sample
+shape) is read as a chapter list: each sample is a big-endian length then that
+many UTF-8 bytes, and its decode time becomes the chapter's start. Nero `chpl`
+wins when both are present — `chpl_chapters_take_precedence_over_a_quicktime_chapter_track`
+pins that ordering — but this is an **assumption**, not a measurement: no file
+combining both was available this pass, so plan 18's VERIFY-M4 is still
+unmeasured, just handled defensibly rather than left undecided. There is no
+round-trip partner for this on the mux side yet: `vaco-mux-mp4::meta::build_chapter_tref`
+exists but nothing calls it, so the muxer writes only `chpl` today — see
+*Wanted from other crates*.
 
 ---
 
@@ -528,7 +576,29 @@ Named so the next author knows what is absent rather than broken:
 
 Reported, not worked around (plan 19 §6).
 
-1. **`vaco-format-isom`: an owned, resumable cursor state.** The batch machinery
+1. **`vaco-mux-mp4`: `meta::build_chapter_tref` is never called.** It builds a
+   correct `tref ▸ chap` box, but no code path in `progressive.rs`/
+   `fragmented.rs` invokes it or writes an accompanying chapter *track* — the
+   muxer's chapter support is `chpl` only. This crate's chapter-track reader
+   therefore has no muxer output of its own to round-trip against; the
+   `chpl`-wins-when-both-are-present rule above is an assumption because of
+   this gap, not despite it.
+2. **`vaco-format-isom`: `build::stbl` double-wraps a caller-supplied `stsd`
+   that already carries its own box header.** `TrackSpec::stbl.stsd` is
+   documented nowhere as to whether it wants a bare fullbox body or a complete
+   box, and `avc1_stsd()` (and every fixture built the same way, across two
+   crates' test suites) supplies a *complete* `stsd` box via `build::fullbx`,
+   which `stbl()` then wraps in a second `bx(b"stsd", ..)`. The result is a
+   `stsd` whose real first child is misparsed as a box named by the inner
+   entry count's raw bytes — reproduced while writing this pass's chapter-track
+   test, which needed `stsd::parse_stsd` to see a real `format`, not a
+   coincidence no existing assertion happened to depend on. Worked around
+   locally by passing the fullbox *body* instead of calling `fullbx` in the new
+   test helpers, which is the shape `stbl()` actually wants; not fixed at the
+   source because every existing caller would need re-auditing under this
+   pass's time budget, and a wrong fix here is silent (it produces a *different*
+   plausible-looking box, not a compile error).
+3. **`vaco-format-isom`: an owned, resumable cursor state.** The batch machinery
    in `read` exists entirely because `SampleTable<'a>` borrows and a
    `Box<dyn Demuxer>` is `'static`. Everything the cursor needs to resume is
    four integers — `(index, dts, chunk, within_chunk)` — and exposing them as a

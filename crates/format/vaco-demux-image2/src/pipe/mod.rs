@@ -285,13 +285,18 @@ fn read_all(io: &mut IoContext, budget: &mut Budget) -> Result<Vec<u8>> {
 
 /// Declare one `*_pipe` [`DemuxerDesc`] plus its [`PipeSpec`].
 ///
-/// `long_name` follows the reference's own uniform `"piped <x> sequence"`
-/// shape — every one of the 37 lines in `ffmpeg -demuxers` matches it, so it
-/// is generated here rather than typed 37 times.
+/// Both the registered name and the long name are **derived from `base`**:
+/// every one of the 37 lines in `ffmpeg -demuxers` is `<base>_pipe` with the
+/// long name `"piped <base> sequence"`, so neither is typed 37 times.
+///
+/// The name used to be a separate `name = "..."` argument, and nine of the 37
+/// were written without the `_pipe` suffix — so `bmp_pipe` in the
+/// `vaco-component.toml` fragment pointed at a descriptor calling itself
+/// `bmp`, which broke `vaco-registry`'s cross-check. Deriving it means the two
+/// cannot disagree, which is a better answer than fixing nine of them.
 macro_rules! pipe {
     (
         $desc:ident, $spec:ident,
-        name = $name:literal,
         base = $base:literal,
         extensions = $exts:expr,
         framing = $framing:expr,
@@ -299,9 +304,9 @@ macro_rules! pipe {
         raw_name = $raw:literal,
         magics = $magics:expr $(,)?
     ) => {
-        #[doc = concat!("`", $name, "`: piped ", $base, " sequence.")]
+        #[doc = concat!("`", $base, "_pipe`: piped ", $base, " sequence.")]
         pub const $spec: PipeSpec = PipeSpec {
-            name: $name,
+            name: concat!($base, "_pipe"),
             long_name: concat!("piped ", $base, " sequence"),
             extensions: $exts,
             framing: $framing,
@@ -353,7 +358,6 @@ const J2K_MARKER: ImageFraming = ImageFraming::Marker {
 pipe!(
     DEMUXER_BMP,
     SPEC_BMP,
-    name = "bmp",
     base = "bmp",
     extensions = &["bmp"],
     framing = ImageFraming::BmpSized,
@@ -365,7 +369,6 @@ pipe!(
 pipe!(
     DEMUXER_CRI,
     SPEC_CRI,
-    name = "cri",
     base = "cri",
     extensions = &["cri"],
     framing = ImageFraming::WholeRemaining,
@@ -377,7 +380,6 @@ pipe!(
 pipe!(
     DEMUXER_DDS,
     SPEC_DDS,
-    name = "dds",
     base = "dds",
     extensions = &["dds"],
     framing = ImageFraming::WholeRemaining,
@@ -389,7 +391,6 @@ pipe!(
 pipe!(
     DEMUXER_DPX,
     SPEC_DPX,
-    name = "dpx",
     base = "dpx",
     extensions = &["dpx"],
     framing = ImageFraming::WholeRemaining,
@@ -401,7 +402,6 @@ pipe!(
 pipe!(
     DEMUXER_EXR,
     SPEC_EXR,
-    name = "exr",
     base = "exr",
     extensions = &["exr"],
     framing = ImageFraming::WholeRemaining,
@@ -413,7 +413,6 @@ pipe!(
 pipe!(
     DEMUXER_GEM,
     SPEC_GEM,
-    name = "gem",
     base = "gem",
     extensions = &["gem"],
     framing = ImageFraming::WholeRemaining,
@@ -425,7 +424,6 @@ pipe!(
 pipe!(
     DEMUXER_GIF,
     SPEC_GIF,
-    name = "gif",
     base = "gif",
     extensions = &["gif"],
     framing = ImageFraming::WholeRemaining,
@@ -437,7 +435,6 @@ pipe!(
 pipe!(
     DEMUXER_HDR,
     SPEC_HDR,
-    name = "hdr",
     base = "hdr",
     extensions = &["hdr"],
     framing = ImageFraming::Radiance,
@@ -449,7 +446,6 @@ pipe!(
 pipe!(
     DEMUXER_J2K,
     SPEC_J2K,
-    name = "j2k",
     base = "j2k",
     extensions = &["j2k"],
     framing = J2K_MARKER,
@@ -461,7 +457,6 @@ pipe!(
 pipe!(
     DEMUXER_JPEG,
     SPEC_JPEG,
-    name = "jpeg_pipe",
     base = "jpeg",
     extensions = &["jpg", "jpeg"],
     framing = JPEG_MARKER,
@@ -473,7 +468,6 @@ pipe!(
 pipe!(
     DEMUXER_JPEGLS,
     SPEC_JPEGLS,
-    name = "jpegls_pipe",
     base = "jpegls",
     extensions = &["jls"],
     framing = JPEG_MARKER,
@@ -485,7 +479,6 @@ pipe!(
 pipe!(
     DEMUXER_JPEGXL,
     SPEC_JPEGXL,
-    name = "jpegxl_pipe",
     base = "jpegxl",
     extensions = &["jxl"],
     framing = ImageFraming::WholeRemaining,
@@ -505,7 +498,6 @@ pipe!(
 pipe!(
     DEMUXER_JPEGXS,
     SPEC_JPEGXS,
-    name = "jpegxs_pipe",
     base = "jpegxs",
     extensions = &["jxs"],
     framing = ImageFraming::WholeRemaining,
@@ -517,7 +509,6 @@ pipe!(
 pipe!(
     DEMUXER_PAM,
     SPEC_PAM,
-    name = "pam_pipe",
     base = "pam",
     extensions = &["pam"],
     framing = ImageFraming::Netpbm,
@@ -529,7 +520,6 @@ pipe!(
 pipe!(
     DEMUXER_PBM,
     SPEC_PBM,
-    name = "pbm_pipe",
     base = "pbm",
     extensions = &["pbm"],
     framing = ImageFraming::Netpbm,
@@ -541,7 +531,6 @@ pipe!(
 pipe!(
     DEMUXER_PCX,
     SPEC_PCX,
-    name = "pcx_pipe",
     base = "pcx",
     extensions = &["pcx"],
     framing = ImageFraming::WholeRemaining,
@@ -553,7 +542,6 @@ pipe!(
 pipe!(
     DEMUXER_PFM,
     SPEC_PFM,
-    name = "pfm_pipe",
     base = "pfm",
     extensions = &["pfm"],
     framing = ImageFraming::Netpbm,
@@ -565,7 +553,6 @@ pipe!(
 pipe!(
     DEMUXER_PGM,
     SPEC_PGM,
-    name = "pgm_pipe",
     base = "pgm",
     extensions = &["pgm"],
     framing = ImageFraming::Netpbm,
@@ -577,7 +564,6 @@ pipe!(
 pipe!(
     DEMUXER_PGMYUV,
     SPEC_PGMYUV,
-    name = "pgmyuv_pipe",
     base = "pgmyuv",
     extensions = &["pgmyuv"],
     framing = ImageFraming::Netpbm,
@@ -591,7 +577,6 @@ pipe!(
 pipe!(
     DEMUXER_PGX,
     SPEC_PGX,
-    name = "pgx_pipe",
     base = "pgx",
     extensions = &["pgx"],
     framing = ImageFraming::Pgx,
@@ -603,7 +588,6 @@ pipe!(
 pipe!(
     DEMUXER_PHM,
     SPEC_PHM,
-    name = "phm_pipe",
     base = "phm",
     extensions = &["phm"],
     framing = ImageFraming::Netpbm,
@@ -615,7 +599,6 @@ pipe!(
 pipe!(
     DEMUXER_PHOTOCD,
     SPEC_PHOTOCD,
-    name = "photocd_pipe",
     base = "photocd",
     extensions = &["pcd"],
     framing = ImageFraming::WholeRemaining,
@@ -627,7 +610,6 @@ pipe!(
 pipe!(
     DEMUXER_PICTOR,
     SPEC_PICTOR,
-    name = "pictor_pipe",
     base = "pictor",
     extensions = &["pic"],
     framing = ImageFraming::WholeRemaining,
@@ -639,7 +621,6 @@ pipe!(
 pipe!(
     DEMUXER_PNG,
     SPEC_PNG,
-    name = "png_pipe",
     base = "png",
     extensions = &["png"],
     framing = ImageFraming::Png,
@@ -651,7 +632,6 @@ pipe!(
 pipe!(
     DEMUXER_PPM,
     SPEC_PPM,
-    name = "ppm_pipe",
     base = "ppm",
     extensions = &["ppm"],
     framing = ImageFraming::Netpbm,
@@ -663,7 +643,6 @@ pipe!(
 pipe!(
     DEMUXER_PSD,
     SPEC_PSD,
-    name = "psd_pipe",
     base = "psd",
     extensions = &["psd"],
     framing = ImageFraming::WholeRemaining,
@@ -675,7 +654,6 @@ pipe!(
 pipe!(
     DEMUXER_QDRAW,
     SPEC_QDRAW,
-    name = "qdraw_pipe",
     base = "qdraw",
     extensions = &["pict", "pct"],
     framing = ImageFraming::WholeRemaining,
@@ -687,7 +665,6 @@ pipe!(
 pipe!(
     DEMUXER_QOI,
     SPEC_QOI,
-    name = "qoi_pipe",
     base = "qoi",
     extensions = &["qoi"],
     framing = ImageFraming::Qoi,
@@ -699,7 +676,6 @@ pipe!(
 pipe!(
     DEMUXER_SGI,
     SPEC_SGI,
-    name = "sgi_pipe",
     base = "sgi",
     extensions = &["sgi"],
     framing = ImageFraming::WholeRemaining,
@@ -711,7 +687,6 @@ pipe!(
 pipe!(
     DEMUXER_SUNRAST,
     SPEC_SUNRAST,
-    name = "sunrast_pipe",
     base = "sunrast",
     extensions = &["sun", "ras"],
     framing = ImageFraming::WholeRemaining,
@@ -723,7 +698,6 @@ pipe!(
 pipe!(
     DEMUXER_SVG,
     SPEC_SVG,
-    name = "svg_pipe",
     base = "svg",
     extensions = &["svg"],
     framing = ImageFraming::SvgText,
@@ -735,7 +709,6 @@ pipe!(
 pipe!(
     DEMUXER_TIFF,
     SPEC_TIFF,
-    name = "tiff_pipe",
     base = "tiff",
     extensions = &["tiff", "tif"],
     framing = ImageFraming::WholeRemaining,
@@ -747,7 +720,6 @@ pipe!(
 pipe!(
     DEMUXER_VBN,
     SPEC_VBN,
-    name = "vbn_pipe",
     base = "vbn",
     extensions = &["vbn"],
     framing = ImageFraming::WholeRemaining,
@@ -759,7 +731,6 @@ pipe!(
 pipe!(
     DEMUXER_WEBP,
     SPEC_WEBP,
-    name = "webp_pipe",
     base = "webp",
     extensions = &["webp"],
     framing = ImageFraming::RiffSized,
@@ -771,7 +742,6 @@ pipe!(
 pipe!(
     DEMUXER_XBM,
     SPEC_XBM,
-    name = "xbm_pipe",
     base = "xbm",
     extensions = &["xbm"],
     framing = ImageFraming::CArrayText,
@@ -783,7 +753,6 @@ pipe!(
 pipe!(
     DEMUXER_XPM,
     SPEC_XPM,
-    name = "xpm_pipe",
     base = "xpm",
     extensions = &["xpm"],
     framing = ImageFraming::CArrayText,
@@ -795,7 +764,6 @@ pipe!(
 pipe!(
     DEMUXER_XWD,
     SPEC_XWD,
-    name = "xwd_pipe",
     base = "xwd",
     extensions = &["xwd"],
     framing = ImageFraming::Xwd,

@@ -801,6 +801,71 @@ fn a_file_with_no_packet_rhythm_is_refused() {
 }
 
 #[test]
+fn a_pmt_version_bump_is_counted_once_and_picks_up_the_new_pid() {
+    let mut w = TsWriter::new();
+    w.section(PAT_PID, &pat(&[(1, PMT_PID)]));
+    w.section(
+        PMT_PID,
+        &pmt(1, 0, VIDEO_PID, &[(0x1B, VIDEO_PID, Vec::new())]),
+    );
+    w.pes(
+        VIDEO_PID,
+        0xE0,
+        Some(90_000),
+        Some(90_000),
+        &[0u8; 40],
+        true,
+        true,
+    );
+    // A genuine change: version bumps from 0 to 1 and a second elementary
+    // stream appears. `apply_pmt` reprocesses every PMT it sees — repeats are
+    // ordinary in a live multiplex — so the version is what tells a real
+    // change from the same section arriving again.
+    w.section(
+        PMT_PID,
+        &pmt(
+            1,
+            1,
+            VIDEO_PID,
+            &[(0x1B, VIDEO_PID, Vec::new()), (0x0F, AUDIO_PID, Vec::new())],
+        ),
+    );
+    w.pes(
+        AUDIO_PID,
+        0xC0,
+        Some(90_000),
+        None,
+        &[0xAAu8; 40],
+        true,
+        true,
+    );
+    // The same version repeated, as a healthy multiplex does every ~100 ms.
+    // This must not count as a second update.
+    w.section(
+        PMT_PID,
+        &pmt(
+            1,
+            1,
+            VIDEO_PID,
+            &[(0x1B, VIDEO_PID, Vec::new()), (0x0F, AUDIO_PID, Vec::new())],
+        ),
+    );
+    let mut d = open(w.out);
+    let _ = drain(&mut d);
+    assert_eq!(d.programs()[0].pmt_version, Some(1));
+    assert_eq!(
+        d.streams().len(),
+        2,
+        "the PID the version bump introduced must be picked up"
+    );
+    assert_eq!(
+        d.stats().pmt_updates,
+        1,
+        "one genuine version change, not one per repeated section"
+    );
+}
+
+#[test]
 fn discovery_can_wrap_the_demuxer_and_replays_every_packet() {
     use vaco_format_core::discovery::Discovery;
     let d = open(simple_file(12));
@@ -812,4 +877,62 @@ fn discovery_can_wrap_the_demuxer_and_replays_every_packet() {
         assert!(n < 10_000);
     }
     assert_eq!(n, 24);
+}
+
+// ------------------------------------------------------------- properties
+
+proptest::proptest! {
+    /// Unwrapping a synthesised sequence that crosses the 33-bit boundary
+    /// must produce a strictly monotonic timeline, whatever the crossing
+    /// point, frame spacing or run length.
+    ///
+    /// `a_thirty_three_bit_wrap_stays_monotonic` above pins one instance of
+    /// this by hand (ten frames of lead-in, a fixed 3600-tick delta); this
+    /// generalises across the parameters that instance fixed, which is the
+    /// shape D6 asks for wherever a round-trip or an invariant exists — the
+    /// wrap is exactly that invariant, since the raw wire value goes
+    /// backwards at the crossing and the decoded value must not.
+    #[test]
+    fn wrapping_across_the_thirty_three_bit_boundary_stays_monotonic(
+        delta in 1i64..=7200,
+        packet_count in 5usize..40,
+        lead_in in 0i64..20,
+    ) {
+        const PERIOD: i64 = 1 << 33;
+        let mut w = TsWriter::new();
+        w.section(PAT_PID, &pat(&[(1, PMT_PID)]));
+        w.section(
+            PMT_PID,
+            &pmt(1, 0, VIDEO_PID, &[(0x1B, VIDEO_PID, Vec::new())]),
+        );
+        // Anchored so the run crosses the wrap partway through regardless of
+        // how `delta` and `packet_count` land: `lead_in` packets before the
+        // boundary, the rest after it.
+        let base = PERIOD - lead_in * delta;
+        for i in 0..packet_count as i64 {
+            let raw = (base + i * delta).rem_euclid(PERIOD);
+            w.pes(
+                VIDEO_PID,
+                0xE0,
+                Some(raw),
+                Some(raw),
+                &[0u8; 40],
+                i == 0,
+                true,
+            );
+        }
+        let mut d = open(w.out);
+        let packets = drain(&mut d);
+        proptest::prop_assert_eq!(packets.len(), packet_count);
+        let ts: Vec<i64> = packets.iter().filter_map(|p| p.pts.ticks()).collect();
+        proptest::prop_assert_eq!(ts.len(), packet_count);
+        for pair in ts.windows(2) {
+            proptest::prop_assert_eq!(
+                pair[1] - pair[0],
+                delta,
+                "must stay strictly monotonic across the wrap: {:?}",
+                ts
+            );
+        }
+    }
 }
