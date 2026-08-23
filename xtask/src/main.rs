@@ -39,6 +39,7 @@ fn main() {
         "time-gate" => time_gate::run(check),
         "patent-gate" => patent_gate::run(check),
         "provenance-check" => provenance::run(check),
+        "check-message" => check_message(args.get(1).map(String::as_str)),
         "owner-gate" => owner_gate::run(check),
         "gen-registry" => registry::run(check),
         "gen-docs-index" => docs::run(check),
@@ -74,6 +75,36 @@ fn main() {
             std::process::exit(1);
         }
     }
+}
+
+/// Validate one commit message file's trailers — the `commit-msg` hook.
+///
+/// Separate from `provenance-check` because it runs before the commit exists,
+/// so it reads the message from a file and asks git what is staged.
+fn check_message(path: Option<&str>) -> Task {
+    let path = path.ok_or("check-message needs a path to the message file")?;
+    let body = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+    // Comment lines are stripped by git after this hook runs, so strip them here.
+    let body: String = body
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let staged = capture(
+        Command::new("git")
+            .args(["diff", "--cached", "--name-only"])
+            .current_dir(repo_root()),
+    )?;
+    const CODE: &[&str] = &[
+        "crates/codec/",
+        "crates/format/",
+        "crates/filter/",
+        "crates/signal/",
+    ];
+    let touches_code = staged
+        .lines()
+        .any(|f| CODE.iter().any(|p| f.starts_with(p)));
+    provenance::check_message(&repo_root(), &body, touches_code)
 }
 
 /// Repository root, found by walking up from the manifest directory.

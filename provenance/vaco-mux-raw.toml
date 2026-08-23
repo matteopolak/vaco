@@ -1,13 +1,3 @@
-[[source]]
-id       = "ffmpeg-muxers-probe"
-kind     = "blackbox"
-title    = "Observed output of `ffmpeg -muxers` and `ffmpeg -h muxer=…`, ffmpeg 8.1"
-acquired = "2026-08-22"
-where    = "the reference binary installed on the development machine"
-
-# Which raw muxers exist, their names, long names and extensions is a fact about
-# the reference, not about any format specification — so it is probed, and the
-# listing output is the test.
 [[table]]
 name   = "RAW_MUXERS"
 file   = "crates/format/vaco-mux-raw/src/raw.rs"

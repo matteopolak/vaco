@@ -1,14 +1,3 @@
-[[source]]
-id       = "ffmpeg-pix-fmts-probe"
-kind     = "blackbox"
-title    = "Observed output of `ffmpeg -pix_fmts`, ffmpeg 8.1"
-acquired = "2026-08-21"
-where    = "the reference binary installed on the development machine"
-
-# The descriptor rows are expanded from family declarations by
-# `cargo xtask gen-pixfmt`; the *set* of formats, their names and aliases, and
-# the printed component/bit-depth columns are what the probe fixes. Byte
-# identity of `-pix_fmts` is the test.
 [[table]]
 name   = "DESCRIPTORS"
 file   = "crates/model/vaco-pixfmt/src/table.rs"

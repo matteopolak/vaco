@@ -70,6 +70,7 @@ pub fn run(check: bool) -> crate::Task {
     let root = repo_root();
     let mut findings = Vec::new();
 
+    findings.extend(resolve(&root)?);
     findings.extend(tables(&root)?);
     findings.extend(trailers(&root)?);
 
@@ -94,7 +95,15 @@ struct Source {
     kind: String,
 }
 
-/// Read `provenance/<crate>.toml` into (sources by id, tables by (file, name)).
+/// Read one `provenance/*.toml` into (sources it declares, tables it records).
+///
+/// A table's `source` is **not** resolved here. Documents are declared once
+/// anywhere under `provenance/` and cited from everywhere, because the same
+/// standard backs several crates — ISO/IEC 14496-12 backs the MP4 demuxer, the
+/// MP4 muxer and the shared ISOBMFF crate — and declaring it once per crate
+/// would be three records of one acquisition, which is the failure mode this
+/// whole directory exists to avoid (D19). [`resolve`] does the checking against
+/// the union.
 fn record(path: &Path) -> Result<(Map<String, Source>, Map<(String, String), usize>), String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let parsed = crate::toml::tables(&text, &["source", "table"])
@@ -135,17 +144,8 @@ fn record(path: &Path) -> Result<(Map<String, Source>, Map<(String, String), usi
             let file = t
                 .need("file")
                 .map_err(|e| format!("{}: {e}", path.display()))?;
-            let src = t
-                .need("source")
+            t.need("source")
                 .map_err(|e| format!("{}: {e}", path.display()))?;
-            if !sources.contains_key(src) {
-                return Err(format!(
-                    "{}: line {}: table `{name}` cites source `{src}`, which no \
-                     `[[source]]` in this file declares",
-                    path.display(),
-                    t.origin_line
-                ));
-            }
             let method = t
                 .need("method")
                 .map_err(|e| format!("{}: {e}", path.display()))?;
@@ -157,21 +157,74 @@ fn record(path: &Path) -> Result<(Map<String, Source>, Map<(String, String), usi
                     METHODS.join(" | ")
                 ));
             }
-            if CITED.contains(&sources[src].kind.as_str())
-                && t.get("clause").is_none_or(str::is_empty)
-            {
-                return Err(format!(
-                    "{}: line {}: table `{name}` cites the document `{src}` but \
-                     names no `clause` — a document reference without a clause \
-                     cannot be checked by a human either",
-                    path.display(),
-                    t.origin_line
-                ));
-            }
             rows.insert((file.to_owned(), name.to_owned()), t.origin_line);
         }
     }
     Ok((sources, rows))
+}
+
+/// Check every `[[table]]` row's `source` and `clause` against the union
+/// register. Separated from parsing because the register is not complete until
+/// every file has been read.
+fn resolve(root: &Path) -> Result<Vec<String>, String> {
+    let dir = root.join("provenance");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Ok(Vec::new());
+    };
+    let mut files: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "toml"))
+        .collect();
+    files.sort();
+
+    let mut register: Map<String, Source> = Map::new();
+    for f in &files {
+        let (sources, _) = record(f)?;
+        for (id, src) in sources {
+            if register.insert(id.clone(), src).is_some() {
+                return Err(format!(
+                    "{}: source `{id}` is declared more than once under provenance/ \
+                     — one document, one record",
+                    f.display()
+                ));
+            }
+        }
+    }
+
+    let mut findings = Vec::new();
+    for f in &files {
+        let text = std::fs::read_to_string(f).map_err(|e| format!("{}: {e}", f.display()))?;
+        for t in crate::toml::tables(&text, &["source", "table"])
+            .map_err(|e| format!("{}: {e}", f.display()))?
+        {
+            if t.name != "table" {
+                continue;
+            }
+            let (Some(name), Some(src)) = (t.get("name"), t.get("source")) else {
+                continue;
+            };
+            let Some(source) = register.get(src) else {
+                findings.push(format!(
+                    "{}: line {}: table `{name}` cites source `{src}`, which no \
+                     `[[source]]` under provenance/ declares",
+                    f.display(),
+                    t.origin_line
+                ));
+                continue;
+            };
+            if CITED.contains(&source.kind.as_str()) && t.get("clause").is_none_or(str::is_empty) {
+                findings.push(format!(
+                    "{}: line {}: table `{name}` cites the document `{src}` but names \
+                     no `clause` — a document reference without a clause cannot be \
+                     checked by a human either",
+                    f.display(),
+                    t.origin_line
+                ));
+            }
+        }
+    }
+    Ok(findings)
 }
 
 fn tables(root: &Path) -> Result<Vec<String>, String> {
@@ -503,44 +556,117 @@ fn trailers(root: &Path) -> Result<Vec<String>, String> {
         if !touches_code {
             continue;
         }
-        let Some(kind) = trailer(body, "Vaco-Provenance") else {
+        // Both trailers may repeat. A single-value rule was the first design
+        // and it broke on the first commit that aggregated a wave: fifteen
+        // crates implemented from a dozen documents do not have *one*
+        // provenance, and forcing them to pick one would have made the record
+        // less true rather than more.
+        let kinds = values(body, "Vaco-Provenance");
+        if kinds.is_empty() {
             findings.push(format!(
                 "{short}: touches implementation code and has no `Vaco-Provenance:` trailer"
             ));
             continue;
-        };
-        let base = kind.split(':').next().unwrap_or(&kind).to_owned();
-        if base != "cleanroom-doc" && !KINDS.contains(&base.as_str()) {
+        }
+        let mut wants_citation = false;
+        for kind in &kinds {
+            let base = kind.split(':').next().unwrap_or(kind);
+            if base != "cleanroom-doc" && !KINDS.contains(&base) {
+                findings.push(format!(
+                    "{short}: `Vaco-Provenance: {kind}` is not one of {} | cleanroom-doc:<path>",
+                    KINDS.join(" | ")
+                ));
+            }
+            wants_citation |= CITED.contains(&base);
+        }
+        let refs = values(body, "Vaco-Spec-Ref");
+        if wants_citation && refs.is_empty() {
             findings.push(format!(
-                "{short}: `Vaco-Provenance: {kind}` is not one of {} | cleanroom-doc:<path>",
-                KINDS.join(" | ")
+                "{short}: `Vaco-Provenance: {}` needs at least one `Vaco-Spec-Ref:` trailer",
+                kinds.join(", ")
             ));
         }
-        if CITED.contains(&base.as_str()) {
-            match trailer(body, "Vaco-Spec-Ref") {
-                None => findings.push(format!(
-                    "{short}: `Vaco-Provenance: {kind}` needs a `Vaco-Spec-Ref:` trailer"
-                )),
-                Some(r) => {
-                    let id = r.split_whitespace().next().unwrap_or_default();
-                    if !sources.contains(id) {
-                        findings.push(format!(
-                            "{short}: `Vaco-Spec-Ref: {r}` starts with `{id}`, which no \
-                             `[[source]]` in provenance/ declares — a citation to a \
-                             document we never recorded acquiring proves nothing"
-                        ));
-                    }
-                }
+        for r in &refs {
+            let id = r.split_whitespace().next().unwrap_or_default();
+            if !sources.contains(id) {
+                findings.push(format!(
+                    "{short}: `Vaco-Spec-Ref: {r}` starts with `{id}`, which no \
+                     `[[source]]` in provenance/ declares — a citation to a document \
+                     we never recorded acquiring proves nothing"
+                ));
             }
         }
     }
     Ok(findings)
 }
 
-fn trailer(body: &str, key: &str) -> Option<String> {
+/// Every value of a trailer key, in order. A key may legitimately repeat.
+fn values(body: &str, key: &str) -> Vec<String> {
+    let prefix = format!("{key}:");
     body.lines()
-        .find_map(|l| l.strip_prefix(&format!("{key}:")))
+        .filter_map(|l| l.strip_prefix(&prefix))
         .map(|v| v.trim().to_owned())
+        .filter(|v| !v.is_empty())
+        .collect()
+}
+
+/// Validate one commit message's trailers without consulting git.
+///
+/// The `commit-msg` hook's entry point: it is the only moment at which a bad
+/// trailer costs nothing to fix. The first version of this gate had no such
+/// hook, and the placeholder `prepare-commit-msg` writes went straight into a
+/// pushed commit, where fixing it meant a rewrite.
+///
+/// # Errors
+/// One line per problem.
+pub fn check_message(root: &Path, body: &str, touches_code: bool) -> Result<(), String> {
+    let sources = all_source_ids(root)?;
+    let mut findings = Vec::new();
+    if !body.lines().any(|l| l.starts_with("Signed-off-by:")) {
+        findings.push("no `Signed-off-by:` trailer".to_owned());
+    }
+    if touches_code {
+        let kinds = values(body, "Vaco-Provenance");
+        if kinds.is_empty() {
+            findings.push(
+                "touches implementation code and has no `Vaco-Provenance:` trailer".to_owned(),
+            );
+        }
+        let mut wants_citation = false;
+        for kind in &kinds {
+            let base = kind.split(':').next().unwrap_or(kind);
+            if base != "cleanroom-doc" && !KINDS.contains(&base) {
+                findings.push(format!(
+                    "`Vaco-Provenance: {kind}` is not one of {} | cleanroom-doc:<path>",
+                    KINDS.join(" | ")
+                ));
+            }
+            wants_citation |= CITED.contains(&base);
+        }
+        let refs = values(body, "Vaco-Spec-Ref");
+        if wants_citation && refs.is_empty() {
+            findings.push("a document provenance needs a `Vaco-Spec-Ref:` trailer".to_owned());
+        }
+        for r in &refs {
+            let id = r.split_whitespace().next().unwrap_or_default();
+            if !sources.contains(id) {
+                findings.push(format!(
+                    "`Vaco-Spec-Ref: {r}` starts with `{id}`, which no `[[source]]` in \
+                     provenance/ declares. Known ids: {}",
+                    {
+                        let mut v: Vec<&str> = sources.iter().map(String::as_str).collect();
+                        v.sort_unstable();
+                        v.join(" ")
+                    }
+                ));
+            }
+        }
+    }
+    if findings.is_empty() {
+        Ok(())
+    } else {
+        Err(findings.join("\n"))
+    }
 }
 
 fn all_source_ids(root: &Path) -> Result<Set<String>, String> {

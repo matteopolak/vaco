@@ -316,7 +316,20 @@ macro_rules! pipe {
             long_name: $spec.long_name,
             extensions: $spec.extensions,
             mime_types: &[],
-            flags: FormatFlags::empty(),
+            // Not `empty()`. Every packet is a whole image and therefore a keyframe, the
+            // timestamps are synthesised from `-framerate` rather than read from the
+            // stream, and the only exact seek is by frame number — so all three
+            // timestamp-search strategies are inapplicable and say so, rather than
+            // being left unstated. `empty()` would *suppress* nothing and *express*
+            // nothing: it reads as "the field was forgotten", which is exactly what
+            // `vaco-probe`'s `every_registered_demuxer_declares_flags` is looking for.
+            //
+            // `NOTIMESTAMPS` is deliberately absent: this demuxer does stamp its
+            // packets. They are derived rather than carried, which is a different
+            // thing from having none.
+            flags: FormatFlags::NOBINSEARCH
+                .union(FormatFlags::NOGENSEARCH)
+                .union(FormatFlags::NO_BYTE_SEEK),
             probe: |data: &ProbeData<'_>| pipe_probe(&$spec, data),
             open: |src: Box<dyn MediaSource>, parsers: &dyn ParserProvider| {
                 let _ = parsers;

@@ -37,11 +37,8 @@ fi
 
 [ -n "$block" ] || exit 0
 printf '\n%s\n' "$block" >> "$msg_file"
-cat >> "$msg_file" <<'EOF'
-
-# Vaco-Provenance: spec | rfc | paper | blackbox | cleanroom-doc:<path> | original
-# Vaco-Spec-Ref must START with a source id declared in provenance/*.toml.
-#   e.g. Vaco-Spec-Ref: itu-t-h264-202108 Table 9-44, clause 9.3.3.2.1.1
-# Use `blackbox` (and drop Vaco-Spec-Ref) when the behaviour was measured from
-# the reference binary rather than read from a document.
-EOF
+# No `#` guidance block here, deliberately. `git commit -F` defaults to
+# `--cleanup=whitespace`, which does NOT strip comment lines — so a helpful
+# block written here lands verbatim in the commit body. It did, once. The
+# guidance lives in the `commit-msg` hook's failure message instead, which is
+# the moment you actually need it.

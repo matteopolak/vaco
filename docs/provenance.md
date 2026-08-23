@@ -16,6 +16,13 @@ landed" is not.
 
 ### Tables
 
+Documents are declared **once**, in `provenance/sources.toml`, and cited from
+anywhere — a `[[table]]` row in any crate's file, or a commit's `Vaco-Spec-Ref`
+trailer. ISO/IEC 14496-12 backs the MP4 demuxer, the MP4 muxer and the shared
+ISOBMFF crate; three copies of that one acquisition record would be three
+chances for them to disagree, which is the failure mode this directory exists to
+prevent (D19). Declaring the same id twice is an error.
+
 Every `static`/`const` array of **32 or more elements** in a `codec`, `format`,
 `filter`, `signal` or `model` crate must have a `[[table]]` entry in
 `provenance/<crate>.toml`. Below 32 elements a table is a handful of magic
@@ -57,6 +64,11 @@ Vaco-Clean-Room: yes
 Vaco-AI-Assisted: yes
 ```
 
+**Both trailers may repeat.** A single-value rule was the first design and it
+broke on the first commit that aggregated a wave: fifteen crates implemented
+from a dozen documents do not have *one* provenance, and forcing them to pick
+one would have made the record less true rather than more.
+
 `Vaco-Spec-Ref` must **start with a source id declared in `provenance/*.toml`**.
 Plan 13 §6.2 wrote the reference as free text; requiring the id first is what
 makes it checkable, and a citation to a document nobody recorded acquiring looks
@@ -94,10 +106,21 @@ too.
 
 ## Configuration
 
+- `provenance/sources.toml` — the document register.
 - `provenance/baseline` — the commit from which trailers are checked.
 - `.git/vaco-attestation` — per-clone, written by `.githooks/attest`, read by
   the `prepare-commit-msg` hook. Not committed.
-- `git config core.hooksPath .githooks` — installed by `just setup`.
+- `git config core.hooksPath .githooks` — installed by `just setup`. Three
+  hooks: `prepare-commit-msg` fills the trailer block, `commit-msg` **blocks**
+  on a bad one (a bad trailer is cheap to fix at that moment and expensive at
+  every later one — the first version had no such hook, and the
+  `TODO-source-id` placeholder went straight into a pushed commit), and
+  `pre-commit` reports table findings without blocking.
+
+  A note for anyone editing `prepare-commit-msg`: `git commit -F` defaults to
+  `--cleanup=whitespace`, which does **not** strip `#` comment lines. A helpful
+  guidance block written into the message file lands verbatim in the commit
+  body. It did, once.
 
 ## Dependencies
 

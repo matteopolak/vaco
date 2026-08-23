@@ -1,0 +1,5 @@
+[[table]]
+name   = "PIPE_DEMUXERS"
+file   = "crates/format/vaco-demux-image2/src/pipe/mod.rs"
+source = "ffmpeg-demuxers-probe"
+method = "probed"

@@ -1,0 +1,18 @@
+#!/bin/sh
+# Validate the trailers of the message about to be committed.
+#
+# This hook exists because the first version of the provenance gate did not have
+# one. `prepare-commit-msg` writes a `Vaco-Spec-Ref: TODO-source-id` placeholder
+# for the human to fill in, and with nothing checking the result the placeholder
+# went straight into a pushed commit — where fixing it costs a history rewrite
+# instead of five seconds.
+#
+# Unlike `pre-commit`, this one BLOCKS. A bad trailer is cheap to fix at exactly
+# this moment and expensive at every later one, which is the whole argument for
+# a blocking check.
+cargo run -q -p xtask -- check-message "$1" || {
+  echo
+  echo "The commit message is not written yet — nothing was lost. Fix the"
+  echo "trailers above and commit again. See docs/provenance.md."
+  exit 1
+}

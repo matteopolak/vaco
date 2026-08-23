@@ -1,10 +1,3 @@
-[[source]]
-id       = "ffmpeg-codecs-probe"
-kind     = "blackbox"
-title    = "Observed output of `ffmpeg -codecs` and `ffmpeg -h decoder=…`, ffmpeg 8.1"
-acquired = "2026-08-22"
-where    = "the reference binary installed on the development machine"
-
 [[table]]
 name   = "CODECS"
 file   = "crates/signal/vaco-codec-core/src/lib.rs"

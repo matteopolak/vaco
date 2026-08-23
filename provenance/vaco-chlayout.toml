@@ -1,13 +1,3 @@
-[[source]]
-id       = "ffmpeg-layouts-probe"
-kind     = "blackbox"
-title    = "Observed output of `ffmpeg -layouts`, ffmpeg 8.1"
-acquired = "2026-08-22"
-where    = "the reference binary installed on the development machine"
-
-# The description column is display text and is reproduced exactly, because
-# `-layouts` is required to be byte-identical. Short factual labels for a fixed
-# enumeration; recorded here so the choice is visible rather than implicit.
 [[table]]
 name   = "CHANNELS"
 file   = "crates/model/vaco-chlayout/src/table.rs"

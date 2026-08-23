@@ -1,0 +1,177 @@
+# The document register.
+#
+# Every source is declared **once**, here, and cited from anywhere: from a
+# `[[table]]` row in a crate's file, or from a commit's `Vaco-Spec-Ref` trailer.
+# ISO/IEC 14496-12 backs the MP4 demuxer, the MP4 muxer and the shared ISOBMFF
+# crate; three copies of that acquisition record would be three chances for them
+# to disagree, which is the failure mode this directory exists to prevent (D19).
+#
+# `kind`: spec | rfc | paper | blackbox | original.
+# `blackbox` means measured from the reference binary rather than read from a
+# document — permitted by D6, and a different kind of evidence, so it is
+# labelled as one.
+
+# ---------------------------------------------------------------- standards
+
+[[source]]
+id       = "itu-t-h264-202108"
+kind     = "spec"
+title    = "ITU-T Rec. H.264 (08/2021), Advanced video coding for generic audiovisual services"
+acquired = "2026-08-21"
+where    = "https://www.itu.int/rec/T-REC-H.264"
+
+[[source]]
+id       = "itu-t-h265-202108"
+kind     = "spec"
+title    = "ITU-T Rec. H.265 (08/2021), High efficiency video coding"
+acquired = "2026-08-21"
+where    = "https://www.itu.int/rec/T-REC-H.265"
+
+[[source]]
+id       = "iso-14496-12"
+kind     = "spec"
+title    = "ISO/IEC 14496-12, ISO base media file format"
+acquired = "2026-08-22"
+where    = "ISO"
+
+[[source]]
+id       = "iso-13818-1"
+kind     = "spec"
+title    = "ISO/IEC 13818-1, MPEG-2 Systems: transport and program streams"
+acquired = "2026-08-22"
+where    = "ISO"
+
+[[source]]
+id       = "iso-23001-7"
+kind     = "spec"
+title    = "ISO/IEC 23001-7, Common encryption in ISO base media file format files"
+acquired = "2026-08-23"
+where    = "ISO"
+
+[[source]]
+id       = "iso-23008-12"
+kind     = "spec"
+title    = "ISO/IEC 23008-12, High Efficiency Image File Format (HEIF)"
+acquired = "2026-08-23"
+where    = "ISO"
+
+[[source]]
+id       = "etsi-en-300-468"
+kind     = "spec"
+title    = "ETSI EN 300 468, Specification for Service Information (SI) in DVB systems"
+acquired = "2026-08-22"
+where    = "https://www.etsi.org/deliver/etsi_en/300400_300499/300468/"
+
+[[source]]
+id       = "microsoft-asf-012006"
+kind     = "spec"
+title    = "Microsoft, Advanced Systems Format (ASF) Specification, Revision 01.20.06"
+acquired = "2026-08-23"
+where    = "Microsoft Open Specifications; fetched as PDF and read with pdftotext"
+
+[[source]]
+id       = "apple-qtff"
+kind     = "spec"
+title    = "Apple, QuickTime File Format Specification"
+acquired = "2026-08-22"
+where    = "https://developer.apple.com/library/archive/documentation/QuickTime/QTFF/"
+
+[[source]]
+id       = "mp4ra-brands"
+kind     = "spec"
+title    = "MP4 Registration Authority brand registry, with 3GPP TS 26.244 and the HEIF/AVIF brand definitions"
+acquired = "2026-08-22"
+where    = "https://mp4ra.org/registered-types/brands"
+
+[[source]]
+id       = "iso-639-2"
+kind     = "spec"
+title    = "ISO 639-2 language code registry (Library of Congress registration authority)"
+acquired = "2026-08-22"
+where    = "https://www.loc.gov/standards/iso639-2/"
+
+# -------------------------------------------------------------------- RFCs
+
+[[source]]
+id       = "rfc-9559"
+kind     = "rfc"
+title    = "RFC 9559, Matroska Media Container Format Specification"
+acquired = "2026-08-22"
+where    = "https://www.rfc-editor.org/rfc/rfc9559"
+
+[[source]]
+id       = "rfc-8794"
+kind     = "rfc"
+title    = "RFC 8794, Extensible Binary Meta Language"
+acquired = "2026-08-22"
+where    = "https://www.rfc-editor.org/rfc/rfc8794"
+
+[[source]]
+id       = "rfc-3533"
+kind     = "rfc"
+title    = "RFC 3533, The Ogg Encapsulation Format Version 0"
+acquired = "2026-08-22"
+where    = "https://www.rfc-editor.org/rfc/rfc3533"
+
+[[source]]
+id       = "rfc-1950"
+kind     = "rfc"
+title    = "RFC 1950, ZLIB Compressed Data Format Specification (the Adler-32 definition)"
+acquired = "2026-08-23"
+where    = "https://www.rfc-editor.org/rfc/rfc1950"
+
+# ------------------------------------------- measured from the reference
+
+[[source]]
+id       = "ffmpeg-pix-fmts-probe"
+kind     = "blackbox"
+title    = "Observed output of `ffmpeg -pix_fmts`, ffmpeg 8.1"
+acquired = "2026-08-21"
+where    = "the reference binary installed on the development machine"
+
+[[source]]
+id       = "ffmpeg-layouts-probe"
+kind     = "blackbox"
+title    = "Observed output of `ffmpeg -layouts`, ffmpeg 8.1"
+acquired = "2026-08-22"
+where    = "the reference binary installed on the development machine"
+
+[[source]]
+id       = "ffmpeg-codecs-probe"
+kind     = "blackbox"
+title    = "Observed output of `ffmpeg -codecs` and `ffmpeg -h decoder=…`, ffmpeg 8.1"
+acquired = "2026-08-22"
+where    = "the reference binary installed on the development machine"
+
+[[source]]
+id       = "ffmpeg-muxers-probe"
+kind     = "blackbox"
+title    = "Observed output of `ffmpeg -muxers` and `ffmpeg -h muxer=…`, ffmpeg 8.1"
+acquired = "2026-08-22"
+where    = "the reference binary installed on the development machine"
+
+[[source]]
+id       = "ffmpeg-demuxers-probe"
+kind     = "blackbox"
+title    = "Observed output of `ffmpeg -demuxers`, `ffmpeg -h demuxer=…` and per-format concatenation experiments, ffmpeg 8.1"
+acquired = "2026-08-23"
+where    = "the reference binary installed on the development machine"
+
+# The `framecrc`/`crc` finding: not CRC-32 at all, but Adler-32, and the
+# per-packet variant seeded (a=0, b=0) rather than RFC 1950's (a=1, b=0).
+# Established by refuting every catalogued CRC-32 variant against the bytes,
+# solving the seed algebraically, then confirming from a different direction
+# with `framehash -hash adler32`. See docs/core/vaco-hash.md.
+[[source]]
+id       = "ffmpeg-hash-probe"
+kind     = "blackbox"
+title    = "Observed output of `ffmpeg -f hash/-f crc/-f framecrc/-f framehash`, ffmpeg 8.1"
+acquired = "2026-08-23"
+where    = "the reference binary installed on the development machine"
+
+[[source]]
+id       = "id3v1-genre-list"
+kind     = "blackbox"
+title    = "The ID3v1 genre list: indices 0-79 original, 80-191 the Winamp extensions"
+acquired = "2026-08-22"
+where    = "re-derived by script against the pinned reference version"

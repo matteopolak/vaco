@@ -1,17 +1,3 @@
-[[source]]
-id       = "iso-639-2"
-kind     = "spec"
-title    = "ISO 639-2 language code registry (Library of Congress registration authority)"
-acquired = "2026-08-22"
-where    = "https://www.loc.gov/standards/iso639-2/"
-
-[[source]]
-id       = "apple-qtff"
-kind     = "spec"
-title    = "Apple, QuickTime File Format Specification, the legacy Macintosh language codes"
-acquired = "2026-08-22"
-where    = "https://developer.apple.com/library/archive/documentation/QuickTime/QTFF/"
-
 [[table]]
 name   = "LANGUAGES"
 file   = "crates/format/vaco-format-avlanguage/src/table.rs"

@@ -402,7 +402,12 @@ pub const DEMUXER_IMAGE2: DemuxerDesc = DemuxerDesc {
     long_name: "image2 sequence",
     extensions: &[],
     mime_types: &[],
-    flags: FormatFlags::empty(),
+    // See the note in `pipe/mod.rs`: derived timestamps, whole-image keyframes,
+    // exact frame-number seeking only. Stating the three inapplicable search
+    // strategies is a decision; `empty()` is an omission that reads like one.
+    flags: FormatFlags::NOBINSEARCH
+        .union(FormatFlags::NOGENSEARCH)
+        .union(FormatFlags::NO_BYTE_SEEK),
     probe: probe_image2,
     open: open_boxed,
 };

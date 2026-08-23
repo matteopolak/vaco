@@ -60,6 +60,22 @@ D19 failure mode: the same concept defined once per crate.
 **Blocks:** FW-11 (#537, the 40 generic options), and quietly weakens every
 fuzz target — a demuxer that cannot see a budget cannot be fuzzed against one.
 
+## 5. `MuxerDesc::open` carries no options
+
+Reported by: `vaco-mux-mp4`, and `vaco-mux-avi` already had it.
+
+The registry constructs a muxer through `MuxerDesc::open`, whose signature has
+no room for `-movflags`, `-fflags` or any other per-muxer option. `vaco-mux-mp4`
+works around it with a `MovMuxer::with_options` constructor the registry path
+cannot reach, which means every fragmented-MP4 option is unreachable from the
+CLI even though it is implemented.
+
+This is the muxer-side twin of gap 4. Both are the same shape — a descriptor
+that constructs without seeing the options that change how construction should
+go — and they should be fixed together.
+
+**Blocks:** every `-movflags` from the CLI, and the CLI half of FM-22 (#573).
+
 ## Sequencing
 
 1 and 4 are additive and can land together behind default-implemented trait

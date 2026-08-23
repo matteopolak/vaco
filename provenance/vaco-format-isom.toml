@@ -1,14 +1,3 @@
-[[source]]
-id       = "mp4ra-brands"
-kind     = "spec"
-title    = "MP4 Registration Authority brand registry, with 3GPP TS 26.244 and the HEIF/AVIF brand definitions"
-acquired = "2026-08-22"
-where    = "https://mp4ra.org/registered-types/brands"
-
-# Recognising a brand changes no probe score — measurement showed the reference
-# does not grade brands — so this list exists for callers that report or filter
-# on it. That is worth recording: a reader would otherwise assume it feeds
-# detection and try to "fix" the scoring around it.
 [[table]]
 name   = "KNOWN_BRANDS"
 file   = "crates/format/vaco-format-isom/src/probe.rs"
