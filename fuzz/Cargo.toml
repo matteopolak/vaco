@@ -65,6 +65,7 @@ vaco-filter-blur = { path = "../crates/filter/vaco-filter-blur" }
 vaco-filter-color = { path = "../crates/filter/vaco-filter-color" }
 vaco-filter-convolve = { path = "../crates/filter/vaco-filter-convolve" }
 vaco-filter-core = { path = "../crates/filter/vaco-filter-core" }
+vaco-filter-deinterlace = { path = "../crates/filter/vaco-filter-deinterlace" }
 vaco-filter-denoise = { path = "../crates/filter/vaco-filter-denoise" }
 vaco-filter-framesync = { path = "../crates/filter/vaco-filter-framesync" }
 vaco-filter-geometry = { path = "../crates/filter/vaco-filter-geometry" }
@@ -163,6 +164,7 @@ default = [
     "filter-color",
     "filter-convolve",
     "filter-core",
+    "filter-deinterlace",
     "filter-denoise",
     "filter-framesync",
     "filter-geometry",
@@ -255,6 +257,7 @@ filter-blur = []
 filter-color = []
 filter-convolve = []
 filter-core = []
+filter-deinterlace = []
 filter-denoise = []
 filter-framesync = []
 filter-geometry = []
@@ -709,6 +712,14 @@ test = false
 doc = false
 bench = false
 required-features = ["filter-convolve"]
+
+[[bin]]
+name = "filter_deinterlace_options"
+path = "fuzz_targets/filter_deinterlace_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-deinterlace"]
 
 [[bin]]
 name = "filter_denoise_options"

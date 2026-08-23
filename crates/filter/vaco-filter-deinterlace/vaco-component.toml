@@ -1,0 +1,154 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# T2/T3 field-order and deinterlace filters, FT-4.12 long tail (#480, no
+# dedicated issue): yadif, bwdif, w3fdif, estdif, separatefields, weave,
+# doubleweave, fieldorder, fieldmatch, fieldhint, detelecine, telecine,
+# idet, vfrdet, interlace, tinterlace, kerndeint, pullup, repeatfields,
+# phase. Every name checked against `ffmpeg -hide_banner -filters` and
+# `ffmpeg -h filter=<name>` (ffmpeg 8.1, 2026-08-23) — see
+# `vaco_filter_deinterlace`'s crate-root doc for the full accounting.
+#
+# Each `ctor` names the per-filter `pub const DESC: FilterDesc`; runtime
+# instantiation goes through `vaco_filter_deinterlace::registry::
+# DeinterlaceRegistry`, a `vaco_filter_graph::registry::FilterRegistry`
+# impl — the same shape `vaco-filter-temporal` and `vaco-filter-denoise` use.
+
+[[component]]
+kind = "filter"
+name = "yadif"
+long_name = "Deinterlace the input image."
+ctor = "vaco_filter_deinterlace::yadif::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "bwdif"
+long_name = "Deinterlace the input image."
+ctor = "vaco_filter_deinterlace::bwdif::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "w3fdif"
+long_name = "Apply Martin Weston three field deinterlace."
+ctor = "vaco_filter_deinterlace::w3fdif::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "estdif"
+long_name = "Apply Edge Slope Tracing deinterlace."
+ctor = "vaco_filter_deinterlace::estdif::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "separatefields"
+long_name = "Split input video frames into fields."
+ctor = "vaco_filter_deinterlace::separatefields::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "weave"
+long_name = "Weave input video fields into frames."
+ctor = "vaco_filter_deinterlace::weave::WEAVE_DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "doubleweave"
+long_name = "Weave input video fields into double number of frames."
+ctor = "vaco_filter_deinterlace::weave::DOUBLEWEAVE_DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "fieldorder"
+long_name = "Set the field order."
+ctor = "vaco_filter_deinterlace::fieldorder::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "fieldmatch"
+long_name = "Field matching for inverse telecine."
+ctor = "vaco_filter_deinterlace::fieldmatch::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "fieldhint"
+long_name = "Field matching using hints."
+ctor = "vaco_filter_deinterlace::fieldhint::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "detelecine"
+long_name = "Apply an inverse telecine pattern."
+ctor = "vaco_filter_deinterlace::detelecine::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "telecine"
+long_name = "Apply a telecine pattern."
+ctor = "vaco_filter_deinterlace::telecine::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "idet"
+long_name = "Interlace detect Filter."
+ctor = "vaco_filter_deinterlace::idet::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "vfrdet"
+long_name = "Variable frame rate detect filter."
+ctor = "vaco_filter_deinterlace::vfrdet::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "interlace"
+long_name = "Convert progressive video into interlaced."
+ctor = "vaco_filter_deinterlace::interlace::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "tinterlace"
+long_name = "Perform temporal field interlacing."
+ctor = "vaco_filter_deinterlace::tinterlace::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "kerndeint"
+long_name = "Apply kernel deinterlacing to the input."
+ctor = "vaco_filter_deinterlace::kerndeint::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "pullup"
+long_name = "Pullup from field sequence to frames."
+ctor = "vaco_filter_deinterlace::pullup::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "repeatfields"
+long_name = "Hard repeat fields based on MPEG repeat field flag."
+ctor = "vaco_filter_deinterlace::repeatfields::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "phase"
+long_name = "Phase shift fields."
+ctor = "vaco_filter_deinterlace::phase::DESC"
+media = "video"
