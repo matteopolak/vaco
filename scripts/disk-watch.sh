@@ -35,6 +35,13 @@ reclaim() {
   # Other projects' build outputs. `-prune` so we never descend into one, and
   # an explicit skip of this repo so a running build is never pulled out from
   # under an agent.
+  # Other projects' debug targets first: they are the biggest and the cheapest
+  # to rebuild. Measured 2026-08-23 — one of them had grown to 57GB and was the
+  # entire reason free space fell from 77GiB to 20GiB with six agents running.
+  # `-mtime +0` rather than `+2`: under this load a day-old target is stale
+  # enough, and waiting two days is how the floor gets breached.
+  find "$HOME/projects" -maxdepth 4 -type d -name debug -path "*/target/*" \
+       -not -path "$REPO/*" -mtime +0 -prune -print -exec rm -rf {} + 2>/dev/null
   find "$HOME/projects" -maxdepth 3 -type d -name target \
        -not -path "$REPO/*" -mtime +2 -prune -print -exec rm -rf {} + 2>/dev/null
   rm -rf /tmp/vaco-p0 /tmp/vaco-fresh /tmp/vaco-fuzzlog 2>/dev/null
