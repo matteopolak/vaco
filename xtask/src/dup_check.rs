@@ -177,21 +177,26 @@ const DISTINCT: &[(&str, &str)] = &[
 ///
 /// Distinct from [`DISTINCT`]: these are the same concept twice, tracked so they
 /// cannot be forgotten and cannot grow silently.
-const KNOWN_DUPLICATE: &[(&str, &str)] = &[
-    (
-        "CancelToken",
-        "vaco-io and vaco-codec-core both define Arc<AtomicBool>. Same primitive, \
-         different semantics on top. Shared home is vaco-core; neither crate \
-         depends on the other today.",
-    ),
-    (
-        "Disposition",
-        "vaco-cli-core and vaco-format-core. Aligned numerically (both 19 flags, \
-         same bits) so nothing is wrong today, but it is one concept twice. \
-         cli-core does not depend on format-core, so the shared home has to sit \
-         below both.",
-    ),
-];
+const KNOWN_DUPLICATE: &[(&str, &str)] = &[];
+
+// Both original entries are resolved. `CancelToken` and `Disposition` now live
+// in `vaco-core`, below every crate that wanted them, and the old spellings are
+// re-exports.
+//
+// Worth recording what merging them found, because it is the argument for D19
+// that a "nothing is wrong today" note cannot make:
+//
+// - The two `CancelToken`s were byte-identical, so a transcode held one I/O
+//   token and one decode token and cancelling either left the other running.
+//   "Stop" meant whichever half the caller reached for.
+// - The two `Disposition`s disagreed about **case**. One matched names
+//   case-insensitively and one did not, and the reference is case-sensitive —
+//   measured, and it says so: `Undefined constant or missing \'(\' in
+//   \'DEFAULT\'`. One duplication was quietly two behaviours, and the
+//   case-insensitive half accepted input the reference rejects.
+//
+// Duplication is not merely wasteful. It is where two behaviours hide behind
+// one name, and neither shows up until someone puts them side by side.
 
 pub fn run(_check: bool) -> Task {
     let mut seen: Map<String, Vec<String>> = Map::new();

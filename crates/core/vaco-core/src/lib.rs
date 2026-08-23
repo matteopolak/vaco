@@ -28,14 +28,18 @@
 //! that every operation handles.
 #![forbid(unsafe_code)]
 
+pub mod cancel;
 pub mod dict;
+pub mod disposition;
 pub mod error;
 pub mod escape;
 pub mod parse;
 pub mod rational;
 pub mod time;
 
+pub use cancel::CancelToken;
 pub use dict::{Dict, DictFlags};
+pub use disposition::Disposition;
 pub use error::{Error, Result};
 pub use escape::EscapeError;
 pub use parse::Rgba;

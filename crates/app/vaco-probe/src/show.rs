@@ -577,7 +577,7 @@ pub fn disposition<W: Write>(
 ) -> Result<()> {
     e.tf().open(section)?;
     for &(_, name) in vaco_cli_core::Disposition::ALL {
-        let set = vaco_format_core::Disposition::from_cli_name(name).is_some_and(|f| d.contains(f));
+        let set = vaco_format_core::Disposition::by_name(name).is_some_and(|f| d.contains(f));
         e.tf().int(name, i64::from(set))?;
     }
     e.tf().close()

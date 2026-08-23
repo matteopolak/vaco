@@ -1130,12 +1130,24 @@ that mean the same thing under different names, and it cannot see a duplicated
 *table* or constant. Those still need a person. It is a ratchet against
 regression, not a proof of non-duplication.
 
-### Outstanding, with plans
+### Resolved (2026-08-22), and both found something
 
-| name | crates | plan |
-|---|---|---|
-| `CancelToken` | `vaco-io`, `vaco-codec-core` | Both are `Arc<AtomicBool>` with different semantics on top. Shared primitive belongs in `vaco-core`; neither crate depends on the other today. |
-| `Disposition` | `vaco-cli-core`, `vaco-format-core` | Aligned numerically (19 flags, same bits) so nothing is wrong today. cli-core does not depend on format-core, so the shared home has to sit below both. |
+The `KNOWN_DUPLICATE` list is empty. `CancelToken` and `Disposition` now live in
+`vaco-core`, below every crate that wanted them, with the old spellings kept as
+re-exports.
+
+Neither merge was cosmetic, which is the part worth recording — the original
+notes for both said some version of "nothing is wrong today":
+
+| name | what merging it found |
+|---|---|
+| `CancelToken` | The two were byte-identical, so a transcode held one I/O token and one decode token and **cancelling either left the other running**. "Stop" meant whichever half the caller happened to reach for. The merged version also stopped reporting cancellation as `Io(ErrorKind::Interrupted)`, which is the one kind the standard library tells you to retry — and this workspace has two correct EINTR retry loops that would have done exactly that. It is `Error::Cancelled` now. |
+| `Disposition` | The two disagreed about **case**. One matched names case-insensitively, one did not. Measured: the reference is case-sensitive and says so — `-disposition:v:0 DEFAULT` gives `Undefined constant or missing '(' in 'DEFAULT'`, because it resolves these through its expression evaluator's named-constant table. The case-insensitive half accepted input the reference rejects. |
+
+**Duplication is not merely wasteful. It is where two behaviours hide behind one
+name**, and neither shows up until somebody puts them side by side. A note
+saying "aligned numerically, so nothing is wrong today" is exactly the note that
+cannot see a case-sensitivity difference.
 
 #### `OptFlags` was on that list and should not have been (resolved 2026-08-22)
 

@@ -530,7 +530,7 @@ mod tests {
         // A compile-time-adjacent assertion, in the spirit of the
         // `BITSTREAM_PADDING` pattern D19 praises.
         for &(flag, name) in vaco_cli_core::Disposition::ALL {
-            let other = vaco_format_core::Disposition::from_cli_name(name)
+            let other = vaco_format_core::Disposition::by_name(name)
                 .unwrap_or_else(vaco_format_core::Disposition::empty);
             assert_eq!(flag.bits(), other.bits(), "{name}");
         }

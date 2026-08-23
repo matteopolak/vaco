@@ -52,7 +52,6 @@
 
 #![forbid(unsafe_code)]
 
-mod cancel;
 mod checksum;
 mod ctx;
 mod dynbuf;
@@ -60,12 +59,18 @@ mod memory;
 mod raw;
 mod writer;
 
-pub use cancel::CancelToken;
 pub use checksum::{Checksum, ChecksumKind};
 pub use ctx::{DEFAULT_BLOCK_SIZE, IoContext, IoOptions};
 pub use dynbuf::{DynBuf, SharedDynBuf};
 pub use memory::MemorySource;
 pub use raw::{PeekSource, RawSource, ReaderSource, WriterSink};
+/// Re-exported from `vaco-core`, where it now lives.
+///
+/// This crate defined its own until D19's duplicate audit: `vaco-codec-core`
+/// had a byte-for-byte identical one, and a transcode holding both meant
+/// "stop" cancelled whichever half the caller reached for. The re-export keeps
+/// `vaco_io::CancelToken` spelling the same thing it always did.
+pub use vaco_core::CancelToken;
 pub use writer::{DataMarker, IoWriter};
 
 use vaco_core::{Error, Result};

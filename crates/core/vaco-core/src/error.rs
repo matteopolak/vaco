@@ -56,6 +56,14 @@ pub enum Error {
 
     /// The requested seek target is not reachable in this stream.
     NotSeekable,
+
+    /// The operation was cancelled through a [`crate::CancelToken`].
+    ///
+    /// Its own variant rather than `Io(ErrorKind::Interrupted)`, which is what
+    /// this used to be. `Interrupted` is the one kind the standard library
+    /// tells you to retry, and cancellation is precisely the signal that must
+    /// not be retried — see [`crate::cancel`].
+    Cancelled,
 }
 
 impl Error {
@@ -91,6 +99,7 @@ impl fmt::Display for Error {
             Self::Option { name, detail } => write!(f, "option `{name}`: {detail}"),
             Self::Io(e) => write!(f, "io: {e}"),
             Self::NotSeekable => f.write_str("stream is not seekable"),
+            Self::Cancelled => f.write_str("cancelled"),
         }
     }
 }

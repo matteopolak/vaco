@@ -410,7 +410,7 @@ fn disposition_names_match_the_reference_exactly() {
         "still_image",
         "multilayer",
     ];
-    let names: Vec<&str> = vaco_format_core::DISPOSITION_NAMES
+    let names: Vec<&str> = vaco_format_core::Disposition::ALL
         .iter()
         .map(|&(_, n)| n)
         .collect();

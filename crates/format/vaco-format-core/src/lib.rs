@@ -241,90 +241,18 @@ impl Stream {
     }
 }
 
-bitflags::bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-    pub struct Disposition: u32 {
-        const DEFAULT          = 1 << 0;
-        const DUB              = 1 << 1;
-        const ORIGINAL         = 1 << 2;
-        const COMMENT          = 1 << 3;
-        const LYRICS           = 1 << 4;
-        const KARAOKE          = 1 << 5;
-        const FORCED           = 1 << 6;
-        const HEARING_IMPAIRED = 1 << 7;
-        const VISUAL_IMPAIRED  = 1 << 8;
-        const CLEAN_EFFECTS    = 1 << 9;
-        const ATTACHED_PIC     = 1 << 10;
-        const TIMED_THUMBNAILS = 1 << 11;
-        const NON_DIEGETIC     = 1 << 12;
-        const CAPTIONS         = 1 << 13;
-        const DESCRIPTIONS     = 1 << 14;
-        const METADATA         = 1 << 15;
-        const DEPENDENT        = 1 << 16;
-        const STILL_IMAGE      = 1 << 17;
-        const MULTILAYER       = 1 << 18;
-    }
-}
-
-/// The name each disposition flag prints under.
+/// Re-exported from `vaco-core`, where it now lives.
 ///
-/// `vaco-probe`'s DISPOSITION section prints one field per flag, so these names
-/// are interface facts (D9) and the order is output order. All nineteen were
-/// read straight out of `ffprobe -show_streams` on a real file, in the order it
-/// prints them; four were missing here and the numbering diverged from bit 9,
-/// which `vaco-probe`'s author found while making the section byte-identical.
+/// This crate and `vaco-cli-core` each defined one, with the same nineteen
+/// flags at the same bits. This crate's `from_cli_name` matched
+/// case-*insensitively* and cli-core's `by_name` did not — so one duplication
+/// was quietly two behaviours. Measured: the reference is case-sensitive, and
+/// says so (`Undefined constant or missing '(' in 'DEFAULT'`), because it
+/// resolves these through its expression evaluator's named-constant table.
 ///
-/// The bit positions match `vaco_cli_core::Disposition`'s deliberately. **There
-/// are two `Disposition` types in this workspace and there should be one** —
-/// `vaco-cli-core` needs it for `-disposition:s:0` and does not depend on this
-/// crate. They are aligned numerically so nothing is wrong today; deduplicating
-/// them is a layering decision, not a rename, because the shared home would have
-/// to sit below both.
-pub const DISPOSITION_NAMES: &[(Disposition, &str)] = &[
-    (Disposition::DEFAULT, "default"),
-    (Disposition::DUB, "dub"),
-    (Disposition::ORIGINAL, "original"),
-    (Disposition::COMMENT, "comment"),
-    (Disposition::LYRICS, "lyrics"),
-    (Disposition::KARAOKE, "karaoke"),
-    (Disposition::FORCED, "forced"),
-    (Disposition::HEARING_IMPAIRED, "hearing_impaired"),
-    (Disposition::VISUAL_IMPAIRED, "visual_impaired"),
-    (Disposition::CLEAN_EFFECTS, "clean_effects"),
-    (Disposition::ATTACHED_PIC, "attached_pic"),
-    (Disposition::TIMED_THUMBNAILS, "timed_thumbnails"),
-    (Disposition::NON_DIEGETIC, "non_diegetic"),
-    (Disposition::CAPTIONS, "captions"),
-    (Disposition::DESCRIPTIONS, "descriptions"),
-    (Disposition::METADATA, "metadata"),
-    (Disposition::DEPENDENT, "dependent"),
-    (Disposition::STILL_IMAGE, "still_image"),
-    (Disposition::MULTILAYER, "multilayer"),
-];
-
-impl Disposition {
-    /// Resolve one flag by the name `vaco-probe` prints.
-    ///
-    /// Named `from_cli_name` rather than `from_name` because `bitflags`
-    /// generates a `from_name` of its own that matches the *constant* spelling
-    /// (`"ATTACHED_PIC"`); this one matches what the tool prints
-    /// (`"attached_pic"`). `vaco_codec_core::Caps` resolves the same collision
-    /// the same way.
-    #[must_use]
-    pub fn from_cli_name(name: &str) -> Option<Self> {
-        DISPOSITION_NAMES
-            .iter()
-            .find(|(_, n)| n.eq_ignore_ascii_case(name))
-            .map(|&(d, _)| d)
-    }
-
-    /// Every flag paired with whether it is set, in output order.
-    pub fn fields(self) -> impl Iterator<Item = (&'static str, bool)> {
-        DISPOSITION_NAMES
-            .iter()
-            .map(move |&(d, n)| (n, self.contains(d)))
-    }
-}
+/// `DISPOSITION_NAMES` is now [`Disposition::ALL`] and `from_cli_name` is
+/// [`Disposition::by_name`]. See [`vaco_core::disposition`].
+pub use vaco_core::Disposition;
 
 /// A named group of streams, as MPEG-TS programs and similar express.
 ///
@@ -653,14 +581,10 @@ mod tests {
 
     #[test]
     fn disposition_names_round_trip() {
-        for &(flag, name) in DISPOSITION_NAMES {
-            assert_eq!(Disposition::from_cli_name(name), Some(flag));
+        for &(flag, name) in Disposition::ALL {
+            assert_eq!(Disposition::by_name(name), Some(flag));
         }
-        assert_eq!(Disposition::from_cli_name("nonesuch"), None);
-        let named = DISPOSITION_NAMES
-            .iter()
-            .fold(Disposition::empty(), |a, &(f, _)| a.union(f));
-        assert_eq!(named, Disposition::all());
+        assert_eq!(Disposition::by_name("nonesuch"), None);
     }
 
     #[test]
@@ -668,7 +592,7 @@ mod tests {
         let d = Disposition::DEFAULT | Disposition::FORCED;
         let set: Vec<&str> = d.fields().filter(|&(_, on)| on).map(|(n, _)| n).collect();
         assert_eq!(set, vec!["default", "forced"]);
-        assert_eq!(d.fields().count(), DISPOSITION_NAMES.len());
+        assert_eq!(d.fields().count(), Disposition::ALL.len());
     }
 
     #[test]

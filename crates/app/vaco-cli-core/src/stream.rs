@@ -7,115 +7,12 @@
 
 use vaco_core::{Dict, DictFlags, MediaType};
 
-/// The 19 stream disposition flags, in the reference's bit order.
+/// Re-exported from `vaco-core`, where it now lives.
 ///
-/// The order is an interface fact: `ffmpeg -dispositions` prints exactly this
-/// list, `-disposition:v default+forced` parses against it, and the
-/// `stream_disposition` ffprobe section prints one field per name in this
-/// order. Bit *n* is the *n*-th name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
-pub struct Disposition(u32);
-
-macro_rules! dispositions {
-    ($($bit:literal => $konst:ident, $name:literal;)*) => {
-        impl Disposition {
-            $(
-                #[doc = concat!("`", $name, "`")]
-                pub const $konst: Self = Self(1 << $bit);
-            )*
-
-            /// Every flag, paired with its CLI name, in bit order.
-            pub const ALL: &'static [(Self, &'static str)] = &[
-                $((Self(1 << $bit), $name),)*
-            ];
-        }
-    };
-}
-
-dispositions! {
-     0 => DEFAULT,           "default";
-     1 => DUB,               "dub";
-     2 => ORIGINAL,          "original";
-     3 => COMMENT,           "comment";
-     4 => LYRICS,            "lyrics";
-     5 => KARAOKE,           "karaoke";
-     6 => FORCED,            "forced";
-     7 => HEARING_IMPAIRED,  "hearing_impaired";
-     8 => VISUAL_IMPAIRED,   "visual_impaired";
-     9 => CLEAN_EFFECTS,     "clean_effects";
-    10 => ATTACHED_PIC,      "attached_pic";
-    11 => TIMED_THUMBNAILS,  "timed_thumbnails";
-    12 => NON_DIEGETIC,      "non_diegetic";
-    13 => CAPTIONS,          "captions";
-    14 => DESCRIPTIONS,      "descriptions";
-    15 => METADATA,          "metadata";
-    16 => DEPENDENT,         "dependent";
-    17 => STILL_IMAGE,       "still_image";
-    18 => MULTILAYER,        "multilayer";
-}
-
-impl Disposition {
-    /// No flags set.
-    pub const NONE: Self = Self(0);
-
-    #[must_use]
-    pub const fn bits(self) -> u32 {
-        self.0
-    }
-
-    #[must_use]
-    pub const fn from_bits(bits: u32) -> Self {
-        Self(bits)
-    }
-
-    /// Whether every bit of `other` is set here. An empty `other` always
-    /// matches, which is what makes `disp:0` select every stream.
-    #[must_use]
-    pub const fn contains(self, other: Self) -> bool {
-        self.0 & other.0 == other.0
-    }
-
-    #[must_use]
-    pub const fn intersects(self, other: Self) -> bool {
-        self.0 & other.0 != 0
-    }
-
-    #[must_use]
-    pub const fn union(self, other: Self) -> Self {
-        Self(self.0 | other.0)
-    }
-
-    /// Look a single flag up by its CLI name. Case-sensitive, as the reference's
-    /// named-constant lookup is.
-    #[must_use]
-    pub fn by_name(name: &str) -> Option<Self> {
-        Self::ALL
-            .iter()
-            .find(|(_, n)| *n == name)
-            .map(|&(flag, _)| flag)
-    }
-
-    /// The names of the set bits, in bit order.
-    pub fn names(self) -> impl Iterator<Item = &'static str> {
-        Self::ALL
-            .iter()
-            .filter(move |(f, _)| self.contains(*f))
-            .map(|&(_, n)| n)
-    }
-}
-
-impl core::ops::BitOr for Disposition {
-    type Output = Self;
-    fn bitor(self, rhs: Self) -> Self {
-        self.union(rhs)
-    }
-}
-
-impl core::ops::BitOrAssign for Disposition {
-    fn bitor_assign(&mut self, rhs: Self) {
-        self.0 |= rhs.0;
-    }
-}
+/// This crate and `vaco-format-core` each defined one, with the same nineteen
+/// flags at the same bits — and they disagreed about **case**, which is how one
+/// duplication turned into one divergence. See [`vaco_core::disposition`].
+pub use vaco_core::Disposition;
 
 /// One stream, as far as the specifier grammar is concerned.
 ///

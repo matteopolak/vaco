@@ -26,8 +26,7 @@
 //! single-digit percentage of decode time, and it is where the reference
 //! semantics live, which is the part you most want single-threaded.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+pub use vaco_core::CancelToken;
 
 use vaco_core::{Error, Result};
 use vaco_frame::Frame;
@@ -156,33 +155,6 @@ impl Threading {
                 delay,
             },
         }
-    }
-}
-
-/// A cooperative cancellation flag shared by every task of one decode.
-///
-/// Cheap to clone and `Sync`; a task polls it at picture, slice or row
-/// granularity. Cancelling also unblocks readers, because the cancelled task
-/// drops its [`PictureWriter`], which marks its picture failed.
-#[derive(Debug, Clone, Default)]
-pub struct CancelToken(Arc<AtomicBool>);
-
-impl CancelToken {
-    /// A token that is not cancelled.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Cancel every task holding this token.
-    pub fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
-    }
-
-    /// Whether cancellation has been requested.
-    #[must_use]
-    pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
     }
 }
 
