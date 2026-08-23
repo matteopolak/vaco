@@ -216,6 +216,21 @@ pub enum CodecId {
     Vp6f,
     Nellymoser,
     AdpcmSwf,
+    // The RTP static and dynamic payload repertoire (RFC 3551 and the
+    // per-codec RFCs). `vaco-format-rtp` mapped 24 payload types onto 22
+    // codecs and could name only some of them, so the rest reported as
+    // `unknown`. Names and long names probed from `ffmpeg -codecs` 8.1.
+    Gsm,
+    GsmMs,
+    AdpcmG722,
+    AdpcmG726,
+    G7231,
+    G729,
+    Qcelp,
+    Ilbc,
+    Dvvideo,
+    Cljr,
+    G728,
 }
 
 /// One row of the codec identity table.
@@ -932,6 +947,65 @@ const CODECS: &[CodecEntry] = &[
         A,
         CodecProperties::empty(),
     ),
+    entry(CodecId::Gsm, "gsm", "GSM", A, CodecProperties::empty()),
+    entry(
+        CodecId::GsmMs,
+        "gsm_ms",
+        "GSM Microsoft variant",
+        A,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::AdpcmG722,
+        "adpcm_g722",
+        "G.722 ADPCM",
+        A,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::AdpcmG726,
+        "adpcm_g726",
+        "G.726 ADPCM",
+        A,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::G7231,
+        "g723_1",
+        "G.723.1",
+        A,
+        CodecProperties::empty(),
+    ),
+    entry(CodecId::G729, "g729", "G.729", A, CodecProperties::empty()),
+    entry(
+        CodecId::Qcelp,
+        "qcelp",
+        "QCELP / PureVoice",
+        A,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::Ilbc,
+        "ilbc",
+        "iLBC (Internet Low Bitrate Codec)",
+        A,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::Dvvideo,
+        "dvvideo",
+        "DV (Digital Video)",
+        V,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::Cljr,
+        "cljr",
+        "Cirrus Logic AccuPak",
+        V,
+        CodecProperties::empty(),
+    ),
+    entry(CodecId::G728, "g728", "G.728", A, CodecProperties::empty()),
     entry(
         CodecId::Eia608,
         "eia_608",

@@ -1,0 +1,33 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Three components. `rtsp`'s registered `open` always returns `Unsupported`
+# — DemuxerDesc::open carries no URL/registry, and RTSP genuinely cannot
+# function through that path (see `vaco_demux_rtsp::demux`'s module docs).
+# It is still registered so `-h demuxer=rtsp`/format-name lookups resolve
+# it, exactly the shape `vaco-demux-hls`'s own gap gets. `rtp` and `sdp`
+# work through their registered path for the cases documented in that same
+# module (static payload types only, and no-network-access respectively).
+
+[[component]]
+kind       = "demuxer"
+name       = "rtsp"
+long_name  = "RTSP input"
+feature    = "demux-rtsp"
+ctor       = "vaco_demux_rtsp::RTSP_DEMUXER"
+
+[[component]]
+kind       = "demuxer"
+name       = "rtp"
+long_name  = "RTP input"
+feature    = "demux-rtp"
+ctor       = "vaco_demux_rtsp::RTP_DEMUXER"
+mime_types = "audio/rtp,video/rtp"
+
+[[component]]
+kind       = "demuxer"
+name       = "sdp"
+long_name  = "SDP"
+feature    = "demux-sdp"
+ctor       = "vaco_demux_rtsp::SDP_DEMUXER"
+extensions = "sdp"
+mime_types = "application/sdp"

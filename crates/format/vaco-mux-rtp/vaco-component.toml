@@ -1,0 +1,21 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# `rtp_mpegts` is registered with its real, working scope — see
+# `vaco_mux_rtp::rtp_mpegts`'s module docs for the difference from the
+# reference's own nested-muxer behaviour (it expects already-muxed TS bytes
+# as its stream's packet payload, rather than running a nested MPEG-TS
+# muxer itself).
+
+[[component]]
+kind      = "muxer"
+name      = "rtp"
+long_name = "RTP output"
+feature   = "mux-rtp"
+ctor      = "vaco_mux_rtp::MUXER"
+
+[[component]]
+kind      = "muxer"
+name      = "rtp_mpegts"
+long_name = "RTP/mpegts output format"
+feature   = "mux-rtp-mpegts"
+ctor      = "vaco_mux_rtp::MUXER_RTP_MPEGTS"

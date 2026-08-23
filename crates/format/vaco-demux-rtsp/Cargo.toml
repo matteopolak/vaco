@@ -1,0 +1,36 @@
+[package]
+name = "vaco-demux-rtsp"
+description = "RTSP 1.0/2.0 session layer and the rtp/sdp container demuxers."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+vaco-core = { path = "../../core/vaco-core" }
+vaco-time = { path = "../../core/vaco-time" }
+vaco-limits = { path = "../../core/vaco-limits" }
+vaco-hash = { path = "../../core/vaco-hash" }
+vaco-opts = { path = "../../core/vaco-opts" }
+vaco-io = { path = "../../io/vaco-io" }
+vaco-protocol-core = { path = "../../io/vaco-protocol-core" }
+vaco-protocol-socket = { path = "../../io/vaco-protocol-socket" }
+vaco-format-core = { path = "../../format/vaco-format-core" }
+vaco-format-rtp = { path = "../../format/vaco-format-rtp" }
+vaco-codec-core = { path = "../../signal/vaco-codec-core" }
+vaco-packet = { path = "../../model/vaco-packet" }
+
+[dev-dependencies]
+proptest.workspace = true
+# Dev-only, to build a real `ProtocolRegistry` against loopback sockets in
+# tests (rule W2: never a production dependency — the same pattern
+# `vaco-demux-hls`'s tests use `vaco-protocol-file` for).
+vaco-protocol-file = { path = "../../io/vaco-protocol-file" }
+
+[lints]
+workspace = true
+
+[package.metadata.vaco]
+layer = 4

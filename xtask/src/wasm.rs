@@ -66,6 +66,22 @@ const NATIVE_ONLY: &[(&str, &str)] = &[
          vaco-protocol-http). A wasm build reaches TLS through the browser's \
          own TLS-terminated fetch/WebSocket, not this crate.",
     ),
+    (
+        "vaco-demux-rtsp",
+        "RTSP's control connection is inherently duplex (send a request, read \
+         its response) before there is anything to hand a caller, so — exactly \
+         like vaco-protocol-tls's own connect module — this crate connects its \
+         own std::net::TcpStream directly via vaco_protocol_socket::addr::connect \
+         rather than going through vaco-protocol-core's read-only Protocol::open, \
+         and its SETUP-negotiated UDP transports go through \
+         vaco_protocol_socket's registered udp: protocol. Both paths pull in \
+         vaco-protocol-socket, which is itself NATIVE_ONLY above for depending \
+         on socket2 (measured: E0583 'file not found for module `sys`' when \
+         cargo check --target wasm32-unknown-unknown is run on this crate, the \
+         same underlying wall one level removed). A wasm build reaches RTSP \
+         through the host runtime's own duplex socket API, a different \
+         transport behind the same seam, not a wasm build of this crate.",
+    ),
 ];
 
 const TARGET: &str = "wasm32-unknown-unknown";
