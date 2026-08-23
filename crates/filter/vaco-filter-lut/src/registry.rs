@@ -5,7 +5,7 @@ use vaco_filter_graph::registry::{FilterRegistry, Instance, Instantiate};
 
 /// The names this crate answers to, alphabetical (as `ffmpeg -filters`
 /// prints them).
-const NAMES: &[&str] = &["haldclut", "lut3d"];
+const NAMES: &[&str] = &["haldclut", "haldclutsrc", "lut1d", "lut3d"];
 
 /// Implements [`FilterRegistry`] for every filter in this crate.
 #[derive(Debug, Clone, Copy, Default)]
@@ -19,6 +19,8 @@ impl FilterRegistry for LutRegistry {
     fn create(&self, req: &Instantiate<'_>) -> Result<Instance, String> {
         match req.name {
             "haldclut" => crate::haldclut::create(req),
+            "haldclutsrc" => crate::haldclutsrc::create(req),
+            "lut1d" => crate::lut1d::create(req),
             "lut3d" => crate::lut3d::create(req),
             other => Err(format!("vaco-filter-lut: no filter named `{other}`")),
         }

@@ -38,6 +38,39 @@
 //! `is_rgb()`, forcing an upstream conversion for a YUV input (mirroring
 //! [`crate::swapuv`]'s family-restriction pattern). Alpha, if present,
 //! passes through unchanged.
+//!
+//! # Corrected: the reference truncates the final sample, it does not round
+//!
+//! This filter shipped calling `.round()` when converting an interpolated
+//! `[0, 1]` value back to an integer sample. A follow-up probe while
+//! building [`crate::lut1d`] (see that module's doc for the full
+//! measurement) found the opposite: a size-2 cube worth `0.5*(r, g, b)`
+//! applied to `0x808080` under `interp=nearest` measures `0x7f7f7f`
+//! (`127, 127, 127`), not `0x80808080`'s rounded `128` — the nearest grid
+//! corner's value `0.5` scales to exactly `127.5`, and the reference kept
+//! the `127`. Confirmed independently by `lut1d` (a different code path,
+//! same rule) and by `haldclutsrc`'s pixel generation. `to_u16` here (and
+//! in [`crate::haldclut`]) now truncates rather than rounds; see
+//! `truncates_rather_than_rounds_the_final_sample` for the regression
+//! test this measurement produced.
+//!
+//! # Attempted and abandoned: `.3dl`/`.dat`/`.m3d`
+//!
+//! `planning/16-filters.md`'s row for this crate also names `.3dl`/`.dat`/
+//! `.m3d` parsers. `.3dl` (Autodesk Lustre's format) was probed twice: a
+//! two-point mesh header (`0 1023`) followed by 8 `"r g b"` rows for a
+//! 2-level cube, and the same 8 rows with no mesh header at all. Both
+//! produced `Parsed_lut3d_0: Unexpected EOF` rather than a result — the
+//! reference expects substantially more input than either guess supplied,
+//! which means its mesh-size detection does not work the way either probe
+//! assumed, and a third guess would be exactly the failure mode
+//! `planning/AGENT-CONSTRAINTS.md` warns against (a formula that matches
+//! one probe and is silently wrong elsewhere — see that file's
+//! `fillborders=reflect` example). Rather than ship a `.3dl` reader tested
+//! against zero successful reference round-trips, this crate leaves it
+//! unimplemented: `Cube3d::parse` only understands `.cube`. `.dat`/`.m3d`
+//! were not attempted at all, for the same reason one level up — no
+//! working `.3dl` parse to generalise from.
 
 use std::path::Path;
 
@@ -275,9 +308,9 @@ impl Filter {
                 #[allow(
                     clippy::cast_possible_truncation,
                     clippy::cast_sign_loss,
-                    reason = "clamped to [0, max] and max fits in u16 by construction"
+                    reason = "clamped to [0, 1] before scaling, so the product is in [0, max] and max fits in u16 by construction; truncation (not rounding) is the measured reference behaviour, see this module's doc"
                 )]
-                let to_u16 = |v: f64, max: f64| v.clamp(0.0, 1.0).mul_add(max, 0.0).round() as u16;
+                let to_u16 = |v: f64, max: f64| v.clamp(0.0, 1.0).mul_add(max, 0.0) as u16;
                 if let Some(row) = planes.get_mut(cr.plane as usize).and_then(|p| p.row_mut(y)) {
                     sample::write(row, x, cr, big_endian, to_u16(out[0], max_r));
                 }
@@ -375,5 +408,33 @@ mod tests {
         f.apply_frame(&mut frame);
         let row = frame.plane(0).unwrap().row(0).unwrap();
         assert_eq!(row, &[0x12, 0x34, 0x56]);
+    }
+
+    #[test]
+    fn truncates_rather_than_rounds_the_final_sample() {
+        // Measured: ffmpeg 8.1, a size-2 cube worth exactly half the input
+        // (every corner but (0,0,0) scaled by 0.5) applied to rgb24
+        // 0x808080 under interp=nearest measures 0x7f7f7f, not the
+        // 0x80808080-rounded 0x80: the nearest corner's value 0.5 scales to
+        // exactly 127.5, and the reference keeps 127 (this module's doc).
+        let cube = Cube3d::parse(
+            "LUT_3D_SIZE 2\n\
+             0 0 0\n0.5 0 0\n0 0.5 0\n0.5 0.5 0\n\
+             0 0 0.5\n0.5 0 0.5\n0 0.5 0.5\n0.5 0.5 0.5\n",
+        )
+        .unwrap();
+        let mut budget = Budget::new(Limits::strict());
+        let mut frame = Frame::alloc_video(&mut budget, PixFmt::Rgb24, 1, 1).unwrap();
+        {
+            let mut p = frame.plane_mut(0).unwrap();
+            let row = p.row_mut(0).unwrap();
+            row[0] = 0x80;
+            row[1] = 0x80;
+            row[2] = 0x80;
+        }
+        let f = Filter { cube, interp: Interp::Nearest };
+        f.apply_frame(&mut frame);
+        let row = frame.plane(0).unwrap().row(0).unwrap();
+        assert_eq!(row, &[0x7f, 0x7f, 0x7f]);
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "vaco-filter-lut"
-description = "3D/Hald LUT video filters (plan 16 4.2's vaco-filter-lut row): lut3d, haldclut implemented; lut1d and haldclutsrc not yet implemented."
+description = "3D/Hald LUT video filters (plan 16 4.2's vaco-filter-lut row): lut3d, haldclut, lut1d, haldclutsrc all implemented; .3dl/.dat/.m3d file parsing is not."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -199,9 +199,9 @@ impl FrameSyncFilter for HaldClut {
                 #[allow(
                     clippy::cast_possible_truncation,
                     clippy::cast_sign_loss,
-                    reason = "clamped to [0, max] and max fits in u16 by construction"
+                    reason = "clamped to [0, 1] before scaling, so the product is in [0, max] and max fits in u16 by construction; truncation (not rounding) is the measured reference behaviour, see vaco_filter_lut::lut3d's module doc"
                 )]
-                let to_u16 = |v: f64, max: f64| v.clamp(0.0, 1.0).mul_add(max, 0.0).round() as u16;
+                let to_u16 = |v: f64, max: f64| v.clamp(0.0, 1.0).mul_add(max, 0.0) as u16;
                 if let Some(row) = out_planes.get_mut(cr.plane as usize).and_then(|p| p.row_mut(y)) {
                     sample::write(row, x, cr, big_endian, to_u16(out_v[0], max_r));
                 }
@@ -269,33 +269,33 @@ mod tests {
 
     /// A level-2 identity Hald CLUT: `N = 4`, image side `= 2^3 = 8`.
     fn identity_hald(level: u32) -> Frame {
-        let n = level * level;
+        let count = level * level;
         let side = level.saturating_pow(3);
         let mut budget = Budget::new(Limits::strict());
         let mut frame = Frame::alloc_video(&mut budget, PixFmt::Rgb24, side, side).unwrap();
         let comp = sample::component(PixFmt::Rgb24, 0).unwrap();
         let cg = sample::component(PixFmt::Rgb24, 1).unwrap();
         let cb = sample::component(PixFmt::Rgb24, 2).unwrap();
-        let total = (n * n * n) as usize;
-        let w = side as usize;
+        let total = (count * count * count) as usize;
+        let row_width = side as usize;
         let scale = |i: u32| -> u16 {
-            if n <= 1 {
+            if count <= 1 {
                 0
             } else {
-                ((f64::from(i) * 255.0) / f64::from(n - 1)).round() as u16
+                ((f64::from(i) * 255.0) / f64::from(count - 1)).round() as u16
             }
         };
         for idx in 0..total {
-            let r = (idx as u32) % n;
-            let g = (idx as u32).checked_div(n).unwrap_or(0) % n;
-            let b = (idx as u32).checked_div(n.saturating_mul(n)).unwrap_or(0);
-            let x = idx % w;
-            let y = idx.checked_div(w).unwrap_or(0);
-            let mut p = frame.plane_mut(0).unwrap();
-            if let Some(row) = p.row_mut(y) {
-                sample::write(row, x, comp, false, scale(r));
-                sample::write(row, x, cg, false, scale(g));
-                sample::write(row, x, cb, false, scale(b));
+            let red_idx = (idx as u32) % count;
+            let green_idx = (idx as u32).checked_div(count).unwrap_or(0) % count;
+            let blue_idx = (idx as u32).checked_div(count.saturating_mul(count)).unwrap_or(0);
+            let px = idx % row_width;
+            let py = idx.checked_div(row_width).unwrap_or(0);
+            let mut plane = frame.plane_mut(0).unwrap();
+            if let Some(row) = plane.row_mut(py) {
+                sample::write(row, px, comp, false, scale(red_idx));
+                sample::write(row, px, cg, false, scale(green_idx));
+                sample::write(row, px, cb, false, scale(blue_idx));
             }
         }
         frame
