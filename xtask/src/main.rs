@@ -15,6 +15,7 @@ mod dup_check;
 mod gen_fuzz;
 mod gen_pixfmt;
 mod layers;
+mod owner_gate;
 mod patent_gate;
 mod registry;
 mod time_gate;
@@ -35,6 +36,7 @@ fn main() {
         "wasm-check" => wasm::run(check),
         "time-gate" => time_gate::run(check),
         "patent-gate" => patent_gate::run(check),
+        "owner-gate" => owner_gate::run(check),
         "gen-registry" => registry::run(check),
         "gen-docs-index" => docs::run(check),
         "gen-pixfmt" => gen_pixfmt::run(check),
@@ -48,6 +50,7 @@ fn main() {
             eprintln!("  wasm-check      every library still builds for wasm32 (D18)");
             eprintln!("  time-gate       the OS clock is reached only through vaco-time (D18)");
             eprintln!("  patent-gate     no encumbered component is in the default build (D4)");
+            eprintln!("  owner-gate      each third-party media crate has exactly one owner (D11)");
             eprintln!("  dup-check       one definition per concept (D19)");
             eprintln!("  dead-code       public API that only tests use (report, not a gate)");
             eprintln!("  gen-registry    assemble the registry from crate fragments");

@@ -303,7 +303,24 @@ crate, and that crate exposes only our own API.**
   in an error variant, not in a re-export, not in a trait bound.
 - No other crate in the workspace may list that external crate as a dependency. **CI enforces this**:
   a check asserts every third-party media crate appears in exactly one `Cargo.toml` under
-  `crates/`. A second occurrence fails the build.
+  `crates/`. A second occurrence fails the build. Implemented as
+  `cargo xtask owner-gate` (2026-08-22).
+
+  **The gate names the media crates rather than checking every external
+  dependency**, and that is not a shortcut. Five external crates in this
+  workspace have more than one owner today — `bitflags` in ten crates,
+  `smallvec` and `thiserror` in six each, `tracing` and `parking_lot` in two —
+  and none of them is what this rule guards. There is no "swap the bitflags
+  backend" migration to contain. An unfiltered gate would fire ten times on its
+  first run for reasons nobody can act on, and a gate that cries wolf is one
+  people learn to suppress. The test for the list is *"could swapping this
+  change a byte of our output?"*, not *"is this third-party?"*, and adding a row
+  is part of the D10 review that admits a media crate in the first place.
+
+  It reads `[dependencies]` only — a dev-dependency does not ship and so cannot
+  change output. And it catches a second *declared* owner; it cannot see a crate
+  re-exporting an external type through its public API, which is this decision's
+  other half and still needs a person.
 - Errors are translated at the boundary into our error taxonomy. Panics from a dependency are a
   defect we track, not something callers see.
 

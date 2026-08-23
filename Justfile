@@ -192,6 +192,15 @@ time-gate:
 patent-gate:
     cargo xtask patent-gate
 
+# Each third-party media crate has exactly one owner (D11).
+#
+# Deliberately a named list rather than "every external dependency": bitflags is
+# in ten crates and smallvec in six, and neither is what D11 guards. A gate that
+# fires ten times on its first run for reasons nobody can act on is one people
+# learn to suppress.
+owner-gate:
+    cargo xtask owner-gate
+
 # One definition per concept (D19).
 dup-check:
     cargo xtask dup-check

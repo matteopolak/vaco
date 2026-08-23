@@ -36,6 +36,9 @@ jobs:
       # D4: no patent-encumbered component in the published build. Asserts on
       # the compiled feature list, not on what a manifest claims.
       - run: cargo xtask patent-gate
+      # D11: each third-party media crate is reachable from exactly one Vaco
+      # crate, so swapping a backend rewrites one crate and nothing else.
+      - run: cargo xtask owner-gate
       # D19: one definition per concept.
       - run: cargo xtask dup-check
       # The crate graph stays acyclic and downward (D14.1).
