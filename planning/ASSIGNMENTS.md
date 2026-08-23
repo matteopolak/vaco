@@ -135,5 +135,6 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-filter-denoise | 5 | #469 | agent:denoise | assigned | 2026-08-23 |  | hqdn3d atadenoise removegrain nlmeans owdenoise |
 | vaco-filter-geometry | 5 | #470 | agent:geom2 | assigned | 2026-08-23 |  | T2 geometry (~28) — distinct from vaco-filter-video-geometry's T1 set |
 | vaco-filter-component | 5 | #476 | agent:component | assigned | 2026-08-23 |  | T3 pixel-format, bit-depth and component filters (~20) |
-| vaco-filter-achannel | 5 | #482 | agent:achannel | assigned | 2026-08-23 |  | T3 channel, layout and mixing filters (~14) |
+| vaco-filter-achannel | 5 | #482 | agent:achannel | done | 2026-08-23 | 2026-08-23 | T3 channel, layout and mixing filters (~14) |
 | vaco-filter-ameasure | 5 | #483 | agent:ameasure | assigned | 2026-08-23 |  | T3 audio analysis and measurement filters (~14) |
+| vaco-demux-mpegts | 4 | #632 | agent:tspkt | assigned | 2026-08-23 |  | packet duration halved + packet ordering + MPEGTS Stream ID side data |
