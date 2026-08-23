@@ -488,6 +488,40 @@ Every assignment carries exactly this, and an agent that cannot satisfy it stops
 8. **Report** — what it built, what it deferred, what it needs from other crates, and its D11 fidelity
    grade if it wraps an external crate.
 
+### Measured: prerequisite reading, not research, was the cost
+
+"The agents seem to be taking a long time" is a claim worth a number, and the
+number is not where it feels like it should be. Measured 2026-08-23, warm:
+
+| step | time |
+|---|---|
+| `dup-check`, `time-gate`, `layer-check`, `owner-gate` | **< 0.5s each** |
+| `patent-gate` (compiles an example) | 3s |
+| `wasm-check` (**fifty** crate builds) | 7s |
+| `cargo check`/`test`/`clippy -p <crate>` | sub-second, cached |
+
+So the gates cost seconds and compilation is cached. A typical agent run was
+~50 minutes across ~220 tool calls — about 13 seconds a call — and almost none
+of that is the toolchain.
+
+What it was: **the briefs mandated reading five planning documents, about 9,100
+lines and 110k tokens, before any code.** That is a handful of tool calls once,
+and then a tax on every one of the ~220 turns that follow, because the context
+comes with them.
+
+`planning/AGENT-CONSTRAINTS.md` replaces the mandate — one page, ~2k tokens,
+carrying every enforced rule, the manifest trap, the generated files, the
+layering rule and the probing traps. Briefs name a specific deeper section when
+one genuinely matters (a specification clause, plan 12's PF-0.x amendments
+before optimising, plan 16's F1–F9 before writing a filter) and skip the rest.
+
+**The general lesson is about where an orchestrator's costs actually land.**
+Every "read this first" in a brief is paid once in latency and then repeatedly
+in context, and the second cost is invisible unless you go looking. It is worth
+periodically asking which of your own instructions are still earning their
+place — the reading list here had accreted one document per wave and nobody had
+subtracted.
+
 ### Escalation, not improvisation
 An agent **stops and reports** — it does not work around — when it needs a signature change in another
 crate, a new external dependency, a change to a shared file, or a decision that contradicts

@@ -9,6 +9,28 @@ moved, an interface froze); they may not change a constraint.
 
 ---
 
+## Read this first, and mostly only this
+
+**`planning/AGENT-CONSTRAINTS.md`** — one page, ~2k tokens. It carries every
+rule that is actually enforced, the manifest trap, the generated files, the
+layering rule, the probing traps, and what to run before reporting.
+
+**Do not open the full plans by default.** The briefs used to say "read
+`00-decisions.md`, `10-architecture.md`, `13-correctness.md`, `18-formats.md`,
+`19-parallel-execution.md`" — about **9,100 lines and 110k tokens** — before a
+line of code, and every one of the ~220 turns that followed carried all of it.
+
+Measured 2026-08-23, because "the agents feel slow" deserved a number rather
+than a guess: `dup-check`, `time-gate`, `layer-check` and `owner-gate` are all
+**under half a second**, `patent-gate` is 3s, and `wasm-check` builds fifty
+crates in **7s**. Builds are cached. So neither the gates nor compilation
+explained a ~50-minute run at ~220 tool calls — the prerequisite reading, and
+the context it left behind on every subsequent turn, did.
+
+A brief names the *specific* section to read when one genuinely matters — a
+codec's specification clause, plan 12's PF-0.x amendments before optimising,
+plan 16's rules F1–F9 before writing a filter. Read those. Skip the rest.
+
 ## The plan index — check a citation before you write it
 
 Briefs are hand-written and plan numbers get mistyped. Three briefs in wave 6
