@@ -194,15 +194,44 @@ impl H264Parser {
         self
     }
 
-    /// Seed the parser from an `avcC` record, as a container does before the
-    /// first sample. Returns the in-band framing the record declares.
+    /// Seed the parser from a container's extradata, in either shape it comes
+    /// in. Returns the in-band framing the extradata implies.
+    ///
+    /// Two shapes, and telling them apart matters:
+    ///
+    /// * An **`avcC` record** (ISO/IEC 14496-15) — what MP4 carries. Its first
+    ///   byte is `configurationVersion`, which is 1.
+    /// * **Raw Annex B** — a start-code-prefixed SPS and PPS, which is what ASF
+    ///   carries in the tail of its `BITMAPINFOHEADER`, and what any container
+    ///   holding an unframed elementary stream carries. Its first byte is the
+    ///   first byte of a start code, which is 0.
+    ///
+    /// So `extradata[0] == 1` discriminates, and that is what the reference
+    /// tests too. Measured on files this reference build wrote:
+    ///
+    /// ```text
+    /// p.mp4  avcC payload  01 64 00 0a ff e1 …   -> avcC, length-prefixed
+    /// a.asf  BITMAPINFO tail  00 00 00 01 67 64 …  -> Annex B (0x67 = SPS)
+    /// ```
+    ///
+    /// This used to parse everything as `avcC`. Annex-B extradata therefore
+    /// failed, and `vaco-format-core`'s `build_parser` discards the error, so
+    /// the failure was silent: ASF probed with `profile=unknown`,
+    /// `level=-99` and `pix_fmt=unknown` while holding a perfectly good SPS
+    /// (CONFORMANCE-FINDINGS 21 and 22).
     ///
     /// # Errors
     ///
-    /// Whatever `AvcDecoderConfigurationRecord::parse` returns. A parameter set
-    /// inside the record that fails to parse is *skipped* rather than fatal: a
-    /// record often carries several, and one bad one should not lose the rest.
+    /// Whatever `AvcDecoderConfigurationRecord::parse` returns, for the `avcC`
+    /// shape. A parameter set that fails to parse is *skipped* rather than
+    /// fatal, in either shape: extradata often carries several, and one bad one
+    /// should not lose the rest. Annex-B extradata cannot fail as a whole —
+    /// there is no header to reject — so it reports `Ok` even if every unit in
+    /// it is unusable, which is the same thing an in-band scan would do.
     pub fn set_extradata(&mut self, extradata: &[u8]) -> Result<Framing> {
+        if extradata.first() != Some(&1) {
+            return self.set_annexb_extradata(extradata);
+        }
         let record = crate::AvcDecoderConfigurationRecord::parse(extradata, &mut self.budget)?;
         for nal in record.sps.iter().chain(&record.sps_ext) {
             self.rbsp.fill(nal, &mut self.budget)?;
@@ -213,6 +242,34 @@ impl H264Parser {
             let _ = self.sets.add_pps(self.rbsp.as_slice(), &mut self.budget);
         }
         self.framing = Framing::LengthPrefixed(record.length_size);
+        self.refresh_parameters();
+        Ok(self.framing)
+    }
+
+    /// Seed from start-code-prefixed parameter sets, leaving framing Annex B.
+    ///
+    /// Only SPS and PPS are taken. Anything else in the extradata — an SEI, or
+    /// a slice a careless writer left behind — is skipped rather than fed to
+    /// the picture machinery, because extradata is not a sample and treating it
+    /// as one would invent an access unit that is not in the stream.
+    fn set_annexb_extradata(&mut self, extradata: &[u8]) -> Result<Framing> {
+        const NAL_SPS: u8 = 7;
+        const NAL_PPS: u8 = 8;
+        const NAL_SPS_EXT: u8 = 13;
+        for nal in vaco_bitstream::annexb::nal_units(extradata) {
+            let Some(&header) = nal.first() else { continue };
+            let kind = header & 0x1F;
+            if kind != NAL_SPS && kind != NAL_PPS && kind != NAL_SPS_EXT {
+                continue;
+            }
+            self.rbsp.fill(nal, &mut self.budget)?;
+            let _ = if kind == NAL_PPS {
+                self.sets.add_pps(self.rbsp.as_slice(), &mut self.budget)
+            } else {
+                self.sets.add_sps(self.rbsp.as_slice(), &mut self.budget)
+            };
+        }
+        self.framing = Framing::AnnexB;
         self.refresh_parameters();
         Ok(self.framing)
     }
@@ -1053,6 +1110,59 @@ mod tests {
             let mut p = H264Parser::new(Limits::strict());
             let _ = p.parse(&data[..n]);
             let _ = p.parse(&[]);
+        }
+    }
+
+    /// The exact 38 bytes an ASF file's `BITMAPINFOHEADER` tail carries, read
+    /// off a file this reference build wrote:
+    ///
+    /// ```sh
+    /// ffmpeg -f lavfi -i testsrc=size=64x64:rate=25:duration=1 \
+    ///        -pix_fmt yuv420p -c:v libx264 -f asf a.asf
+    /// ```
+    ///
+    /// Start code, SPS (`0x67`), start code, PPS (`0x68`) — no `avcC` header
+    /// anywhere. `ffprobe` reports `profile=High`, `level=10`,
+    /// `pix_fmt=yuv420p` for this stream; `vaco-probe` reported
+    /// `unknown/-99/unknown` until `set_extradata` learned the second shape.
+    const ASF_ANNEXB_EXTRADATA: &[u8] = &[
+        0x00, 0x00, 0x00, 0x01, 0x67, 0x64, 0x00, 0x0a, 0xac, 0xd9, 0x44, 0x26, 0xc0, 0x44, 0x00,
+        0x00, 0x03, 0x00, 0x04, 0x00, 0x00, 0x03, 0x00, 0xc8, 0x3c, 0x48, 0x96, 0x58, 0x00, 0x00,
+        0x00, 0x01, 0x68, 0xeb, 0xe3, 0xcb, 0x22, 0xc0,
+    ];
+
+    #[test]
+    fn annexb_extradata_seeds_the_parameter_sets() {
+        let mut p = H264Parser::new(Limits::strict());
+        let framing = p
+            .set_extradata(ASF_ANNEXB_EXTRADATA)
+            .expect("Annex-B extradata is not an avcC and must not be read as one");
+        // The framing the *stream* uses, not the one an avcC would declare.
+        assert_eq!(framing, Framing::AnnexB);
+        let params = p.parameters().expect("an SPS was read");
+        let video = params.video.as_ref().expect("a video stream");
+        assert_eq!(video.width, 64);
+        assert_eq!(video.height, 64);
+        let profile = params.profile.expect("High");
+        assert_eq!(profile.name, "High");
+        assert_eq!(video.format, vaco_pixfmt::PixFmt::from_name("yuv420p").ok());
+    }
+
+    /// The discriminator itself: an `avcC` still goes down the `avcC` path.
+    ///
+    /// A minimal record — version 1, then the three profile bytes, then the
+    /// length-size byte and zero SPS and PPS counts. It carries no parameter
+    /// set, which is the point: it must still be *recognised* as an `avcC` and
+    /// set length-prefixed framing, not be mistaken for Annex B.
+    #[test]
+    fn a_configuration_record_is_still_read_as_one() {
+        let avcc = [0x01, 0x64, 0x00, 0x0a, 0xff, 0xe0, 0x00];
+        let mut p = H264Parser::new(Limits::strict());
+        if let Ok(framing) = p.set_extradata(&avcc) {
+            assert!(
+                matches!(framing, Framing::LengthPrefixed(_)),
+                "an avcC must not be read as Annex B: {framing:?}"
+            );
         }
     }
 }

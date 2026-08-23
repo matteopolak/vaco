@@ -184,16 +184,34 @@ impl HevcParser {
         self
     }
 
-    /// Seed the parser from an `hvcC` record, as a container does before the
-    /// first sample. Returns the in-band framing the record declares.
+    /// Seed the parser from a container's extradata, in either shape.
+    ///
+    /// The same two-shape problem [`crate::parser`]'s H.264 sibling has, in the
+    /// same code: an `hvcC` record (ISO/IEC 14496-15, what MP4 and Matroska
+    /// carry) begins with `configurationVersion`, which is 1, and raw Annex-B
+    /// extradata begins with the first byte of a start code, which is 0. A
+    /// caller handing this the second shape used to get a parse error that
+    /// `vaco-format-core`'s `build_parser` discards, so the stream silently
+    /// reported no profile, no level and no pixel format.
+    ///
+    /// The H.264 case is measured — ASF carries Annex-B extradata in its
+    /// `BITMAPINFOHEADER` tail (`00 00 00 01 67 …`) and probed as
+    /// `profile=unknown` until this discrimination existed. This one is not:
+    /// no container/HEVC combination on the development machine produces
+    /// Annex-B extradata, so the shape is covered by a unit test that builds
+    /// one rather than by a reference file. Recorded that way rather than
+    /// implied to be measured.
     ///
     /// # Errors
     ///
     /// Whatever [`HevcDecoderConfigurationRecord::parse`](crate::hvcc::HevcDecoderConfigurationRecord::parse)
-    /// returns. A parameter set inside the record that fails to parse is
-    /// *skipped* rather than fatal: a record carries several, and one bad one
-    /// should not lose the rest.
+    /// returns, for the `hvcC` shape. A parameter set that fails to parse is
+    /// *skipped* rather than fatal in either shape: extradata carries several,
+    /// and one bad one should not lose the rest.
     pub fn set_extradata(&mut self, extradata: &[u8]) -> Result<Framing> {
+        if extradata.first() != Some(&1) {
+            return self.set_annexb_extradata(extradata);
+        }
         let record =
             crate::hvcc::HevcDecoderConfigurationRecord::parse(extradata, &mut self.budget)?;
         // VPS, then SPS, then PPS — a record may list them in any order, and an
@@ -212,6 +230,38 @@ impl HevcParser {
             let _ = self.sets.add_pps(self.rbsp.as_slice(), &mut self.budget);
         }
         self.framing = Framing::LengthPrefixed(record.length_size);
+        self.refresh_parameters();
+        Ok(self.framing)
+    }
+
+    /// Seed from start-code-prefixed parameter sets, leaving framing Annex B.
+    ///
+    /// VPS, SPS and PPS only. Anything else — an SEI, a stray slice — is
+    /// skipped rather than fed to the picture machinery: extradata is not a
+    /// sample, and treating it as one would invent an access unit that is not
+    /// in the stream.
+    ///
+    /// HEVC's NAL header is two bytes and the type is bits 1..7 of the first,
+    /// not the low five bits H.264 uses.
+    fn set_annexb_extradata(&mut self, extradata: &[u8]) -> Result<Framing> {
+        const NAL_VPS: u8 = 32;
+        const NAL_SPS: u8 = 33;
+        const NAL_PPS: u8 = 34;
+        for nal in vaco_bitstream::annexb::nal_units(extradata) {
+            let Some(&header) = nal.first() else { continue };
+            let kind = (header >> 1) & 0x3F;
+            if kind != NAL_VPS && kind != NAL_SPS && kind != NAL_PPS {
+                continue;
+            }
+            self.rbsp.fill(nal, &mut self.budget)?;
+            let slice = self.rbsp.as_slice();
+            let _ = match kind {
+                NAL_VPS => self.sets.add_vps(slice, &mut self.budget),
+                NAL_SPS => self.sets.add_sps(slice, &mut self.budget),
+                _ => self.sets.add_pps(slice, &mut self.budget),
+            };
+        }
+        self.framing = Framing::AnnexB;
         self.refresh_parameters();
         Ok(self.framing)
     }
@@ -952,5 +1002,55 @@ mod tests {
         assert!(parser.parameter_sets().has_sps());
         parser.flush();
         assert!(parser.parameter_sets().has_sps());
+    }
+
+    /// The VPS, SPS and PPS from [`stream`], start-code prefixed and nothing
+    /// else — the shape a container carries when it holds an unframed
+    /// elementary stream rather than an `hvcC`.
+    fn annexb_extradata() -> Vec<u8> {
+        let all = stream();
+        // Three parameter sets, then the first slice. Cut before the slice.
+        let slice = all
+            .windows(5)
+            .position(|w| w == [0, 0, 0, 1, 0x28])
+            .expect("the IDR slice is in the fixture");
+        all.get(..slice).unwrap_or_default().to_vec()
+    }
+
+    /// Annex-B extradata seeds the parameter sets instead of being discarded.
+    ///
+    /// Before the discrimination existed this went straight into
+    /// `HevcDecoderConfigurationRecord::parse`, failed, and the error was
+    /// dropped by `vaco-format-core`'s `build_parser` — so a stream whose
+    /// parameter sets were entirely out of band reported nothing at all.
+    #[test]
+    fn annexb_extradata_seeds_the_parameter_sets() {
+        let extradata = annexb_extradata();
+        assert_eq!(extradata.first(), Some(&0), "this fixture is Annex B");
+        let mut p = HevcParser::new(Limits::strict());
+        let framing = p
+            .set_extradata(&extradata)
+            .expect("Annex-B extradata must not be read as an hvcC");
+        assert_eq!(framing, Framing::AnnexB);
+        let params = p.parameters().expect("an SPS was read");
+        assert!(params.video.is_some(), "the SPS describes a picture");
+    }
+
+    /// The discriminator: a record still takes the record path.
+    #[test]
+    fn a_configuration_record_is_still_read_as_one() {
+        let mut p = HevcParser::new(Limits::strict());
+        // configurationVersion = 1 is the whole test; whether the rest of this
+        // minimal record parses is the record path's business, not this one's.
+        let hvcc = [
+            0x01u8, 0x01, 0x60, 0x00, 0x00, 0x00, 0xb0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3f, 0xf0,
+            0x00, 0xfc, 0xfd, 0xf8, 0xf8, 0x00, 0x00, 0x0f, 0x03,
+        ];
+        if let Ok(framing) = p.set_extradata(&hvcc) {
+            assert!(
+                matches!(framing, Framing::LengthPrefixed(_)),
+                "an hvcC must not be read as Annex B: {framing:?}"
+            );
+        }
     }
 }

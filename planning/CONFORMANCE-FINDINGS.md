@@ -904,10 +904,45 @@ h264,unknown,H264,unknown,-99
 ASF is *worse* than AVI, not the same: `extradata_size` is 38 on both sides,
 so the container's own extradata does reach `vaco` — and yet `profile`,
 `level` and `pix_fmt` are all unset, which is exactly what AVI gets right
-from the in-band SPS. Whatever the H.264 parser is being fed on the ASF path,
-it is not reaching a sequence parameter set. That is a `vaco-demux-asf`
-payload-assembly question and it is the last open piece of findings 21 and
-22.
+from the in-band SPS.
+
+**Fixed, and it was not `vaco-demux-asf`.** The demuxer was right: it reads
+the `BITMAPINFOHEADER` tail and hands over all 38 bytes. Those bytes are
+**Annex B**, not an `avcC` — read straight off the file:
+
+```text
+00 00 00 01 67 64 00 0a …     (start code, then NAL type 0x67 = SPS)
+```
+
+`H264Parser::set_extradata` parsed everything as an
+`AvcDecoderConfigurationRecord`, so it returned an error — and
+`vaco-format-core`'s `build_parser` does `let _ = parser.set_extradata(…)`,
+so the failure was silent. The parser held a perfectly good SPS's worth of
+bytes and never looked at them.
+
+`extradata[0]` discriminates: an `avcC` begins with `configurationVersion`,
+which is 1; Annex B begins with the first byte of a start code, which is 0.
+Confirmed on files this reference build wrote — `p.mp4`'s `avcC` payload
+starts `01 64 00 0a ff e1`, `a.asf`'s tail starts `00 00 00 01 67 64`.
+
+After the fix all four containers agree with the reference exactly:
+
+```text
+         ref                        ours
+a.asf    h264,High,yuv420p,10       h264,High,yuv420p,10
+a.avi    h264,High,yuv420p,10       h264,High,yuv420p,10
+p.mp4    h264,High,yuv420p,10       h264,High,yuv420p,10
+p.flv    h264,High,yuv420p,10       h264,High,yuv420p,10
+```
+
+`vaco-parse-hevc` had the identical fault in the identical place and got the
+identical fix. That one is **not** measured: no container/HEVC combination on
+this machine produces Annex-B extradata, so it is covered by a unit test that
+builds one rather than by a reference file, and the code says so.
+
+This closes the stream-info half of findings 21 and 22. What remains under
+finding 22 is only the original question — whether generic format tags
+propagate across `-c copy` into ASF.
 
 ## Harness changes, summarised
 
