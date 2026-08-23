@@ -354,6 +354,60 @@ up in one pass once the adapter exists: `framepack`, `mergeplanes`,
 `alphamerge` and `extractplanes` (`vaco-filter-geometry`), and whatever the
 in-flight `vaco-filter-key` and `vaco-filter-temporal` crates report.
 
+## 11. `vaco_frame::Frame` has no per-frame metadata dictionary
+
+Reported by the `vaco-filter-color`/`-key`/`-lut` agent on 2026-08-23, which hit
+it while trying to place `msad` and `bitplanenoise` and found they had nowhere
+to put their answer.
+
+`Frame` carries `side_data: SmallVec<[FrameSideData; 2]>`, and `FrameSideData`
+is a closed enum of *typed* variants — display matrix, closed captions,
+mastering display, content light level, cropping. There is no string-keyed
+dictionary. The reference's equivalent is `AVFrame::metadata`, and a whole
+family of filters exists to write into it:
+
+```sh
+$ ffprobe -of json -show_frames -f lavfi -i "movie=s.nut,signalstats"
+"tags": {
+    "lavfi.signalstats.YMIN":  "22",
+    "lavfi.signalstats.YAVG":  "59.6797",
+    "lavfi.signalstats.YMAX":  "210",
+    …
+}
+```
+
+Measured above. The `lavfi.<filter>.<key>` convention is not decorative — it is
+the only output channel those filters have.
+
+### What it blocks
+
+Three whole rows of plan 16 §4.3, not a filter or two:
+
+* `vaco-filter-analysis` — `psnr`, `ssim`, `ssim360`, `xpsnr`, `vif`,
+  `vmafmotion`, `msad`, `identity`, `blackdetect`, `blockdetect`,
+  `bitplanenoise`, `entropy`, `siti`, `signalstats`, `scdet`, `bbox`,
+  `blackframe`, `cropdetect`, `freezedetect`. Every one of them *is* a
+  measurement whose result goes nowhere else.
+* `vaco-filter-aanalysis` — the audio half of the same thing.
+* `vaco-filter-mm` — `metadata` and `ametadata` exist to **read and filter on**
+  these keys, and `select`/`aselect`'s expression language exposes a
+  `metadata()` function over them.
+
+And on the consuming side, `vaco-probe`'s `-show_frames` has `FRAME_TAGS`
+plumbing for stream/format/chapter/program tags but nothing frame-level to
+fill it from.
+
+### Shape
+
+Additive: one more field on `Frame`, or one more `FrameSideData` variant
+holding a small ordered map. Ordered, not hashed — the reference prints these
+in insertion order and `-show_frames` output is compared byte for byte.
+
+Worth settling **before** `vaco-filter-analysis` is dispatched, because
+otherwise its author will do what three agents already did with gap 10:
+discover the limitation, write it up, and leave the filters undone.
+Twenty-plus filters is too many to rediscover it with.
+
 ## Sequencing
 
 1, 4, 5 and 6 are additive and can land together behind default-implemented
