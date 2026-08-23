@@ -165,6 +165,27 @@ pub enum CodecId {
     DvdSubtitle,
     HdmvPgsSubtitle,
     Eia608,
+    // The text-subtitle family. Added when `vaco-subtitle-text` landed
+    // seventeen demuxers and reported — correctly, rather than working around
+    // it — that it could not name any of them: only this crate may add a
+    // variant, and a demuxer that sets `codec_id: None` makes `vaco-probe`
+    // print `codec_name=unknown` where the reference prints a real name.
+    //
+    // Names and long names probed from `ffmpeg -codecs`, 8.1. Note what is
+    // *not* here: LRC and MPsub, which the reference reports as the generic
+    // `text` rather than as formats of their own — so they take `Text`.
+    Jacosub,
+    Microdvd,
+    Mpl2,
+    Pjs,
+    Realtext,
+    Sami,
+    Stl,
+    Subviewer,
+    Subviewer1,
+    Text,
+    Ttml,
+    Vplayer,
 }
 
 /// One row of the codec identity table.
@@ -685,6 +706,92 @@ const CODECS: &[CodecEntry] = &[
         CodecId::HdmvPgsSubtitle,
         "hdmv_pgs_subtitle",
         "HDMV Presentation Graphic Stream subtitles",
+        S,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::Jacosub,
+        "jacosub",
+        "JACOsub subtitle",
+        S,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::Microdvd,
+        "microdvd",
+        "MicroDVD subtitle",
+        S,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::Mpl2,
+        "mpl2",
+        "MPL2 subtitle",
+        S,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::Pjs,
+        "pjs",
+        "PJS (Phoenix Japanimation Society) subtitle",
+        S,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::Realtext,
+        "realtext",
+        "RealText subtitle",
+        S,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::Sami,
+        "sami",
+        "SAMI subtitle",
+        S,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::Stl,
+        "stl",
+        "Spruce subtitle format",
+        S,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::Subviewer,
+        "subviewer",
+        "SubViewer subtitle",
+        S,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::Subviewer1,
+        "subviewer1",
+        "SubViewer v1 subtitle",
+        S,
+        CodecProperties::empty(),
+    ),
+    // `text` is the reference's catch-all for a subtitle stream whose format
+    // has no codec of its own — LRC and MPsub both measure as this.
+    entry(
+        CodecId::Text,
+        "text",
+        "raw UTF-8 text",
+        S,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::Ttml,
+        "ttml",
+        "Timed Text Markup Language",
+        S,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::Vplayer,
+        "vplayer",
+        "VPlayer subtitle",
         S,
         CodecProperties::empty(),
     ),
