@@ -387,6 +387,55 @@ awkward API is paid for 560 times.
 | `Simple<F: FrameFilter>` | 1-in 1-out, one frame in → zero or more out | demand checking, status ordering, the flush loop at end of stream, timeline gating, holding back frames a full link refused |
 | `Sourced<F: SourceFilter>` | 0-in 1-out | producing only on demand, the end-of-stream timestamp |
 | `Blocked<F: AudioFilter>` | a `FrameFilter` that sees exactly `frame_size` samples | the FIFO, and a correctly short final block |
+| `Paired<F: PairedFilter>` | N-in 1-out (N fixed at construction, two by default), strict lockstep | pulling one frame per input before calling the filter, and ending the whole filter the instant any one input runs dry |
+| `Fanout<F: FanoutFilter>` | 1-in N-out (N fixed at construction) | waiting for room on **every** output pad before consuming, and the flush loop |
+
+### `Paired`/`Fanout`, and why they are not `Synced`
+
+Three filter agents independently reported `framepack`, `mergeplanes`,
+`alphamerge` and `extractplanes` as blocked, on the theory that a multi-input or
+multi-output filter needed a capability `Filter::activate` did not have. It
+already had it — `vaco-filter-video-composite`'s `overlay` is two inputs, two
+independent timelines, driven by `vaco-filter-framesync`'s `Synced` — so what was
+actually missing was the *convenience*: `Simple`-shaped adapters for the other
+two multi-pad cases, so every such filter does not re-derive the same forty
+lines. `Paired` and `Fanout` are that.
+
+`Paired<F>` is **not** a framesync-free reimplementation of `Synced`, and the
+difference is measured rather than a layering excuse (this crate cannot depend
+on `vaco-filter-framesync` regardless — `layer-check` would refuse it, since
+framesync depends on core, not the reverse). `ffmpeg -h filter=framepack` and
+`=mergeplanes` carry no `eof_action`/`shortest`/`repeatlast`/`ts_sync_mode`
+section at all, unlike `alphamerge`'s, which has one verbatim. `framepack`
+**refuses** two inputs whose time bases differ (`Left and right time bases
+differ (1/10 vs 1/5)`) rather than reconciling them, and feeding it a 10-frame
+and a 5-frame input at the same rate produces exactly 5 outputs — not 10 with
+the shorter input's last frame repeated, which is what `eof_action=repeat` (the
+framesync default) would do. `mergeplanes` measures identically. So "paired"
+really is a different, simpler shape: every input contributes one frame per
+call or the whole filter ends, with **no** per-input timeline in between — not
+"framesync with the options hardcoded to `endall`".
+
+A filter that *does* need `eof_action`/`shortest`/`repeatlast`/`ts_sync_mode` —
+`alphamerge`, `maskedmerge`, and the rest of the 68 — wants
+`vaco-filter-framesync`'s `Synced`, unchanged, exactly as `overlay` already
+uses it. `Paired` was not made to fit that case; porting `overlay` onto it was
+tried and does not fit; see *The worked examples are the proof*, below, for
+what that attempt found.
+
+`Paired<F>` generalises to N inputs rather than being hardcoded to two, because
+`mergeplanes` needs up to four (fixed at construction from its own `mapN`s
+options) and the alternative — a second, nearly identical adapter for "N-in,
+lockstep" — is exactly the kind of duplicate-by-omission D19 exists to prevent.
+`PairedFilter::input_count` defaults to two, the common case (`framepack`); a
+filter with a construction-time count overrides it.
+
+`Fanout<F>` generalises `vaco-filter-plumbing`'s `split`/`asplit` from "push N
+*clones* of the one input frame" to "push N *different* frames the filter
+derives from it", which is `extractplanes`' shape (one pad per requested
+plane). It keeps `split`'s exact backpressure discipline: check every output
+pad has room *before* reading the input, so the N derived frames can always be
+pushed immediately afterwards and no per-pad pending queue is needed.
 
 `Simple`'s step order is fixed and matters: **drain what was held back → check
 demand → take one input or observe end of stream → evaluate the timeline → call
@@ -441,6 +490,41 @@ found:
    from 10 inputs instead of 20. Deriving the reach from the frame's own
    `duration` fixed it. The slot mapping also had to be floor rather than
    round-to-nearest, or one second of 25 fps yields eleven frames at 10 fps.
+
+### `overlay` was not ported onto `Paired`, and here is why
+
+When `Paired` landed, the natural next question was whether
+`vaco-filter-video-composite`'s `overlay` — the existing multi-input witness —
+could be rewritten on top of it instead of `vaco-filter-framesync`'s `Synced`,
+which would have been a nice demonstration that the new adapter subsumes the
+old pattern. It does not, and not for a narrow implementation reason:
+
+* **`Paired` cannot express `overlay`'s default behaviour at all.**
+  `overlay`'s default `eof_action` is `repeat`: once the secondary input ends,
+  its last frame is held and composited onto every subsequent main frame,
+  and the *main* input keeps driving output past the secondary's end of
+  stream. `Paired`'s termination rule is the opposite by design — the first
+  input to run dry ends the whole filter, unconditionally, no repeat. Every
+  one of `overlay`'s existing tests exercises the default options, so a
+  `Paired`-backed `overlay` would not merely differ in some untested corner;
+  it would end the stream early on the two-input test graphs
+  `vaco-filter-video-composite`'s own suite already uses.
+* **`Paired` has no timestamp-based event selection.** `overlay` samples its
+  secondary input at "the most recent frame at or before the main's current
+  timestamp" (`ts_sync_mode=default`) or the nearest one
+  (`ts_sync_mode=nearest`), which only means something because the two
+  inputs can run at different frame rates. `Paired` just pulls the next
+  available frame from each input on every call — correct for `framepack`
+  and `mergeplanes`, which refuse or do not need mismatched rates, and wrong
+  for `overlay`, which is *routinely* used with a lower-rate overlay.
+
+Both were confirmed rather than assumed: `cargo test -p
+vaco-filter-video-composite` was run before touching anything (43 passed,
+recorded above) and the crate was **not** edited — `overlay` still wraps
+`Synced`, unchanged, and the same 43 tests still pass. This is the "if it does
+not fit, leave it alone" outcome plan 16 flags as an acceptable answer, not a
+shortfall: a witness that stops passing its own tests to prove a point is
+worse than a slightly redundant adapter.
 
 ---
 
@@ -697,7 +781,10 @@ descending order of what they cost.
   anyway.
 * **`Synced` / framesync.** It lives in `vaco-filter-framesync` by plan 16 §4.1,
   and it is that crate's to write against `FilterContext::peek_input`, which
-  exists for it.
+  exists for it. `Paired`/`Fanout` (this crate) are a different, simpler
+  shape for the multi-pad filters that do not need a per-input timeline — see
+  *`Paired`/`Fanout`, and why they are not `Synced`*, above — not a
+  replacement for it.
 * **The graph DSL, escaping, and auto-conversion policy.** `vaco-filter-graph`'s.
   Core supplies `ConverterFactory`, `ConverterSpec`, `NegotiationPlan::splice`
   and `Graph::configure_converting`; the policy — that `scale` fixes pixel

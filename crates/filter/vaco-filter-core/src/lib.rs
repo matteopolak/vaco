@@ -95,7 +95,10 @@ pub mod sched;
 mod test_support;
 pub mod timeline;
 
-pub use adapt::{AudioFilter, Blocked, FrameFilter, FrameOut, Simple, SourceFilter, Sourced};
+pub use adapt::{
+    AudioFilter, Blocked, Fanout, FanoutFilter, FrameFilter, FrameOut, Paired, PairedFilter,
+    Simple, SourceFilter, Sourced,
+};
 pub use context::NodeLinks;
 pub use link::{Direction, Link, LinkArena, LinkId, LinkStats, NodeId, PadRef, Rejected, Status};
 pub use negotiate::{

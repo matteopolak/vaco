@@ -12,10 +12,14 @@
 //! | [`Simple`] | 1-in 1-out, one frame in → zero or more out, plus a flush at end of stream |
 //! | [`Sourced`] | 0-in 1-out, produces on demand |
 //! | [`AudioFilter`] | like [`FrameFilter`] but sees exactly `frame_size` samples, with a correctly short final frame |
+//! | [`Paired`] | N-in 1-out, strict lockstep: one frame from every input or the filter ends |
+//! | [`Fanout`] | 1-in N-out (N fixed at construction), one frame in → exactly N out |
 //!
 //! Not here: `SliceFilter`, which needs a thread pool this crate does not depend
-//! on, and `Synced`, which lives in `vaco-filter-framesync`. See
-//! `docs/filter/vaco-filter-core.md`.
+//! on, and `Synced`, which lives in `vaco-filter-framesync` and is the *other*
+//! multi-input shape — see [`Paired`]'s own doc for the measured difference
+//! between the two, which is not just "this crate cannot depend on that one".
+//! See `docs/filter/vaco-filter-core.md`.
 
 use smallvec::SmallVec;
 use vaco_core::{Result, Timestamp};
@@ -298,6 +302,362 @@ fn push_pending(
         pushed = true;
     }
     Ok(None)
+}
+
+/// A filter that consumes exactly one frame from each of several inputs at a
+/// time, strictly in lockstep.
+///
+/// # This is not `vaco-filter-framesync`, and the difference is measured, not architectural
+///
+/// The 68 filters `vaco-filter-framesync` names (`overlay`, `blend`, `lut2`,
+/// `alphamerge` and the rest) give every input its **own timeline**: a
+/// secondary that starts late is invisible until it starts, one that ends
+/// early is held or dropped per `eof_action`/`shortest`/`repeatlast`, and
+/// `ts_sync_mode` picks which of several buffered frames a given instant
+/// samples. `framepack` and `mergeplanes` do not do any of that, and it is
+/// measured rather than assumed:
+///
+/// ```text
+/// $ ffmpeg -h filter=framepack   # no eof_action/shortest/repeatlast/ts_sync_mode section at all
+/// $ ffmpeg -h filter=alphamerge  # has one, verbatim the framesync surface
+/// ```
+///
+/// and, more sharply, `framepack` **refuses** two inputs with different time
+/// bases outright (`Left and right time bases differ (1/10 vs 1/5)`) rather
+/// than reconciling them — there is no timeline to reconcile onto. Feeding it
+/// a 10-frame main and a 5-frame secondary at the same time base produces
+/// exactly 5 output frames: not 10 with the last secondary frame repeated
+/// (`eof_action=repeat`'s behaviour), not an error — the filter simply stops
+/// the instant either input is exhausted, discarding whatever the longer
+/// input still had queued. `mergeplanes` measures identically. That is what
+/// "paired" means here: every input contributes one frame per call or the
+/// whole filter ends, with no per-input timeline in between.
+///
+/// A filter that *does* need `eof_action`/`shortest`/`repeatlast`/
+/// `ts_sync_mode` — a real per-input timeline, like `alphamerge` — wants
+/// [`vaco_filter_framesync`](../../vaco_filter_framesync/index.html)'s
+/// `Synced` instead, not this adapter. `vaco-filter-core` cannot depend on
+/// `vaco-filter-framesync` regardless (layering: framesync depends on core,
+/// not the reverse — `cargo xtask layer-check`), so this is not "framesync
+/// without the crate"; it is the genuinely simpler shape those two filters
+/// turn out to need, kept separate rather than duplicating framesync's event
+/// loop for a filter that was never going to use most of it (D19).
+///
+/// # Generalised to N inputs
+///
+/// `framepack` is exactly two inputs, which is the shape this adapter is
+/// named for. `mergeplanes` needs up to four, fixed at construction by its
+/// own `mapN`s options — the same "N decided before the graph runs" shape
+/// `vaco-filter-audio`'s `amix`/`amerge` hand-roll for a *different* policy
+/// (theirs hold a per-input timeline too; see [`PairedFilter::input_count`]
+/// vs. those crates' own `activate`). Rather than add a third adapter for
+/// "N-in-1-out, lockstep" as a copy of "2-in-1-out, lockstep", this one
+/// generalises: [`PairedFilter::input_count`] defaults to two and a filter
+/// that needs more overrides it.
+pub trait PairedFilter: Send {
+    /// How many inputs this filter has. Two is the default and the common
+    /// case (`framepack`); a filter with a construction-time input count
+    /// (`mergeplanes`) overrides this to report it.
+    fn input_count(&self) -> usize {
+        2
+    }
+
+    /// Handle one aligned set: exactly [`PairedFilter::input_count`] frames,
+    /// one per input pad, in pad order.
+    ///
+    /// # Errors
+    /// Whatever the filter's own work reports.
+    fn filter_frames(
+        &mut self,
+        ctx: &mut FilterContext<'_>,
+        inputs: SmallVec<[Frame; 4]>,
+    ) -> Result<FrameOut>;
+
+    /// Called once when link formats have been agreed.
+    ///
+    /// # Errors
+    /// [`vaco_core::Error::Unsupported`] if the negotiated formats are unusable.
+    fn configure(&mut self, ctx: &mut FilterContext<'_>) -> Result<()> {
+        let _ = ctx;
+        Ok(())
+    }
+
+    /// Discard buffered state after a seek.
+    ///
+    /// Frames already pulled from an input but not yet paired with the
+    /// others are part of that state: the adapter clears them itself, so
+    /// this is for whatever the filter holds beyond that.
+    fn flush_state(&mut self) {}
+}
+
+/// Adapts a [`PairedFilter`] to [`Filter`].
+#[derive(Debug)]
+pub struct Paired<F> {
+    inner: F,
+    /// One slot per input, filled as frames arrive. A call fires only once
+    /// every slot is `Some`.
+    held: SmallVec<[Option<Frame>; 4]>,
+    pending: std::collections::VecDeque<Frame>,
+    done: bool,
+}
+
+impl<F: PairedFilter> Paired<F> {
+    /// Wrap a filter.
+    pub fn new(inner: F) -> Self {
+        let n = inner.input_count();
+        Self {
+            inner,
+            held: std::iter::repeat_with(|| None).take(n).collect(),
+            pending: std::collections::VecDeque::new(),
+            done: false,
+        }
+    }
+
+    /// Borrow the wrapped filter.
+    pub const fn inner(&self) -> &F {
+        &self.inner
+    }
+
+    /// Recover the wrapped filter.
+    pub fn into_inner(self) -> F {
+        self.inner
+    }
+}
+
+impl<F: PairedFilter> Filter for Paired<F> {
+    fn configure(&mut self, ctx: &mut FilterContext<'_>) -> Result<()> {
+        self.inner.configure(ctx)
+    }
+
+    fn flush(&mut self) {
+        for slot in &mut self.held {
+            *slot = None;
+        }
+        self.pending.clear();
+        self.done = false;
+        self.inner.flush_state();
+    }
+
+    fn activate(&mut self, ctx: &mut FilterContext<'_>) -> Result<Activity> {
+        if self.done {
+            ctx.close_all_outputs();
+            return Ok(Activity::Eof);
+        }
+        if let Some(activity) = push_pending(ctx, &mut self.pending)? {
+            return Ok(activity);
+        }
+        if !ctx.output_has_room(0) {
+            return Ok(Activity::Blocked);
+        }
+
+        let mut progressed = false;
+        let mut ended = false;
+        for (pad, slot) in self.held.iter_mut().enumerate() {
+            if slot.is_some() {
+                continue;
+            }
+            if let Some(frame) = ctx.take_input(pad) {
+                *slot = Some(frame);
+                progressed = true;
+            } else if ctx.input_at_eof(pad) {
+                // No repeat, no independent timeline (see this type's doc):
+                // the first input to run dry ends the whole filter, even if
+                // the others still have frames queued.
+                ended = true;
+            } else {
+                ctx.request_input(pad);
+            }
+        }
+
+        if ended {
+            ctx.close_all_outputs();
+            self.done = true;
+            return Ok(Activity::Eof);
+        }
+
+        if self.held.iter().all(Option::is_some) {
+            let frames: SmallVec<[Frame; 4]> =
+                self.held.iter_mut().filter_map(Option::take).collect();
+            let out = self.inner.filter_frames(ctx, frames)?;
+            out.drain_into(&mut self.pending);
+            let _ = push_pending(ctx, &mut self.pending)?;
+            return Ok(Activity::Progressed);
+        }
+
+        Ok(if progressed {
+            Activity::Progressed
+        } else {
+            Activity::NeedInput
+        })
+    }
+
+    fn command(&mut self, name: &str, value: &str) -> Result<()> {
+        let _ = (name, value);
+        Err(vaco_core::Error::Unsupported(
+            "filter accepts no runtime commands",
+        ))
+    }
+}
+
+/// A filter that turns one input frame into a fixed number of output frames,
+/// one per output pad — `extractplanes`' shape, with the pad count decided by
+/// options (`planes=y+u+v` is three pads) before the graph runs.
+///
+/// # The witness this generalises
+///
+/// `vaco-filter-plumbing`'s `split`/`asplit` already fan one input out to N
+/// *identical* outputs (`DYNAMIC_OUTPUTS`, cloning the frame — cheap, since a
+/// [`Frame`] clone is `Arc` refcount bumps, never a pixel copy). This adapter
+/// is the same backpressure shape — wait until every output pad has room,
+/// then take one input frame — generalised from "push N clones" to "push N
+/// *different* frames the filter derives from the one input", which is what
+/// `extractplanes` needs and `split` does not.
+///
+/// # Why the room check comes before the read, for every pad
+///
+/// Consuming the input before every output can take a frame would mean
+/// holding N frames the adapter cannot get rid of if only some pads are
+/// blocked — a queue per pad, sized to the graph's discretion, for a case
+/// that need not exist: the input is not read until every pad already has
+/// room, so pushing the derived N frames immediately afterwards cannot fail
+/// on backpressure. Same reasoning as `split.rs`; this adapter just has more
+/// than one destination frame per call to account for.
+pub trait FanoutFilter: Send {
+    /// How many output pads this filter has, fixed at construction from its
+    /// own options.
+    fn output_count(&self) -> usize;
+
+    /// Turn one input frame into exactly [`FanoutFilter::output_count`]
+    /// frames, one per output pad, in pad order.
+    ///
+    /// # Errors
+    /// Whatever the filter's own work reports.
+    fn split_frame(
+        &mut self,
+        ctx: &mut FilterContext<'_>,
+        input: Frame,
+    ) -> Result<SmallVec<[Frame; 4]>>;
+
+    /// Release anything buffered at end of stream, one full set of
+    /// [`FanoutFilter::output_count`] frames at a time. `None` when nothing
+    /// more comes out — the common case, since `extractplanes` holds nothing.
+    ///
+    /// # Errors
+    /// Whatever the filter's own work reports.
+    fn flush(&mut self, ctx: &mut FilterContext<'_>) -> Result<Option<SmallVec<[Frame; 4]>>> {
+        let _ = ctx;
+        Ok(None)
+    }
+
+    /// Called once when link formats have been agreed.
+    ///
+    /// # Errors
+    /// [`vaco_core::Error::Unsupported`] if the negotiated formats are unusable.
+    fn configure(&mut self, ctx: &mut FilterContext<'_>) -> Result<()> {
+        let _ = ctx;
+        Ok(())
+    }
+
+    /// Discard buffered state after a seek.
+    fn flush_state(&mut self) {}
+}
+
+/// Adapts a [`FanoutFilter`] to [`Filter`].
+#[derive(Debug)]
+pub struct Fanout<F> {
+    inner: F,
+    outputs: usize,
+    flushing: bool,
+    done: bool,
+}
+
+impl<F: FanoutFilter> Fanout<F> {
+    /// Wrap a filter.
+    pub fn new(inner: F) -> Self {
+        let outputs = inner.output_count();
+        Self {
+            inner,
+            outputs,
+            flushing: false,
+            done: false,
+        }
+    }
+
+    /// Borrow the wrapped filter.
+    pub const fn inner(&self) -> &F {
+        &self.inner
+    }
+
+    /// Recover the wrapped filter.
+    pub fn into_inner(self) -> F {
+        self.inner
+    }
+}
+
+impl<F: FanoutFilter> Fanout<F> {
+    fn push_all(&self, ctx: &mut FilterContext<'_>, frames: SmallVec<[Frame; 4]>) -> Result<()> {
+        if frames.len() != self.outputs {
+            return Err(vaco_core::Error::InvalidData(
+                "fanout filter produced the wrong number of frames",
+            ));
+        }
+        for (pad, frame) in frames.into_iter().enumerate() {
+            ctx.push_output(pad, frame)?;
+        }
+        Ok(())
+    }
+}
+
+impl<F: FanoutFilter> Filter for Fanout<F> {
+    fn configure(&mut self, ctx: &mut FilterContext<'_>) -> Result<()> {
+        self.inner.configure(ctx)
+    }
+
+    fn flush(&mut self) {
+        self.flushing = false;
+        self.done = false;
+        self.inner.flush_state();
+    }
+
+    fn activate(&mut self, ctx: &mut FilterContext<'_>) -> Result<Activity> {
+        if self.done {
+            ctx.close_all_outputs();
+            return Ok(Activity::Eof);
+        }
+        if (0..self.outputs).any(|p| !ctx.output_has_room(p)) {
+            return Ok(if ctx.output_closed(0) {
+                Activity::Eof
+            } else {
+                Activity::Blocked
+            });
+        }
+        if let Some(frame) = ctx.take_input(0) {
+            let outs = self.inner.split_frame(ctx, frame)?;
+            self.push_all(ctx, outs)?;
+            return Ok(Activity::Progressed);
+        }
+        if ctx.input_at_eof(0) {
+            if !self.flushing {
+                self.flushing = true;
+            }
+            if let Some(outs) = self.inner.flush(ctx)? {
+                self.push_all(ctx, outs)?;
+                return Ok(Activity::Progressed);
+            }
+            ctx.close_all_outputs();
+            self.done = true;
+            return Ok(Activity::Eof);
+        }
+        ctx.forward_wanted();
+        Ok(Activity::NeedInput)
+    }
+
+    fn command(&mut self, name: &str, value: &str) -> Result<()> {
+        let _ = (name, value);
+        Err(vaco_core::Error::Unsupported(
+            "filter accepts no runtime commands",
+        ))
+    }
 }
 
 /// A filter with no inputs: it makes frames rather than transforming them.

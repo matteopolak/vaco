@@ -19,6 +19,7 @@
     reason = "test code"
 )]
 
+use smallvec::SmallVec;
 use vaco_chlayout::ChannelLayout;
 use vaco_core::{Error, MediaType, Rational, Result, Timestamp};
 use vaco_filter_core::mock::{
@@ -29,8 +30,8 @@ use vaco_filter_core::negotiate::{
     ConverterFactory, ConverterSpec, FormatSet, NodeFormats, Property, loss,
 };
 use vaco_filter_core::{
-    Activity, Filter, FilterContext, FilterDesc, FilterFlags, Graph, GraphStatus, LinkFormat,
-    NodeId, Pad, Violation,
+    Activity, Fanout, FanoutFilter, Filter, FilterContext, FilterDesc, FilterFlags, FrameOut,
+    Graph, GraphStatus, LinkFormat, NodeId, Pad, Paired, PairedFilter, Violation,
 };
 use vaco_pixfmt::PixFmt;
 use vaco_sampfmt::SampleFmt;
@@ -993,6 +994,385 @@ fn a_seek_reaches_the_filter_and_drops_what_it_was_holding() -> Result<()> {
 }
 
 // -------------------------------------------------------------- descriptors
+
+// ------------------------------------------------------------ Paired
+
+/// Sums the first byte of every input into a copy of input 0.
+///
+/// Proves the adapter delivers exactly `n` frames together, in pad order —
+/// not just "a pair" — since the sum only comes out right if every input
+/// contributed the frame from the same step.
+#[derive(Debug)]
+struct SumInputs {
+    n: usize,
+}
+
+impl PairedFilter for SumInputs {
+    fn input_count(&self) -> usize {
+        self.n
+    }
+
+    fn filter_frames(
+        &mut self,
+        _ctx: &mut FilterContext<'_>,
+        inputs: SmallVec<[vaco_frame::Frame; 4]>,
+    ) -> Result<FrameOut> {
+        let sum: u32 = inputs.iter().filter_map(first_byte).map(u32::from).sum();
+        let byte = u8::try_from(sum & 0xff).unwrap_or(0);
+        let mut iter = inputs.into_iter();
+        let Some(mut main) = iter.next() else {
+            return Ok(FrameOut::None);
+        };
+        if let Some(mut plane) = main.plane_mut(0) {
+            plane.fill(byte);
+        }
+        Ok(FrameOut::One(main))
+    }
+}
+
+const TWO_INPUT_PADS: &[Pad] = &[
+    Pad {
+        name: "a",
+        media_type: MediaType::Video,
+    },
+    Pad {
+        name: "b",
+        media_type: MediaType::Video,
+    },
+];
+
+const THREE_INPUT_PADS: &[Pad] = &[
+    Pad {
+        name: "a",
+        media_type: MediaType::Video,
+    },
+    Pad {
+        name: "b",
+        media_type: MediaType::Video,
+    },
+    Pad {
+        name: "c",
+        media_type: MediaType::Video,
+    },
+];
+
+/// Measured against `ffmpeg -h filter=framepack`/`=mergeplanes` (see
+/// `Paired`'s own doc): unlike `vaco-filter-framesync`'s `overlay`/`blend`,
+/// there is no `eof_action=repeat`. Feeding a 5-frame and a 3-frame input at
+/// the same rate produces exactly 3 outputs, not 5 with the last of the
+/// shorter input repeated.
+#[test]
+fn paired_stops_at_the_first_input_to_run_dry() -> Result<()> {
+    const DESC: FilterDesc = FilterDesc {
+        name: "sum2",
+        description: "test: pairs two inputs and sums their pixel values",
+        inputs: TWO_INPUT_PADS,
+        outputs: VIDEO_PAD,
+        flags: FilterFlags::empty(),
+    };
+    let mut graph = Graph::new();
+    let src_a = graph.add_source(
+        "a",
+        MediaType::Video,
+        video_source_formats("a", PixFmt::Gray8),
+    );
+    let src_b = graph.add_source(
+        "b",
+        MediaType::Video,
+        video_source_formats("b", PixFmt::Gray8),
+    );
+    let node = graph.add(
+        DESC,
+        NodeFormats::passthrough(2, 1, MediaType::Video, "sum2"),
+        Box::new(Paired::new(SumInputs { n: 2 })),
+    );
+    let sink = graph.add_sink("out", MediaType::Video, any_video_sink("out"));
+    graph.connect(src_a, 0, node, 0)?;
+    graph.connect(src_b, 0, node, 1)?;
+    graph.connect(node, 0, sink, 0)?;
+    graph.set_source_format(src_a, gray_link(16, 16, Rational::new(1, 25)))?;
+    graph.set_source_format(src_b, gray_link(16, 16, Rational::new(1, 25)))?;
+    graph.configure()?;
+
+    for i in 0..5u8 {
+        graph.send(src_a, gray_frame(16, 16, i64::from(i), i))?;
+    }
+    graph.close_source(src_a, Timestamp::new(5))?;
+    for i in 0..3u8 {
+        graph.send(src_b, gray_frame(16, 16, i64::from(i), i * 10))?;
+    }
+    graph.close_source(src_b, Timestamp::new(3))?;
+
+    let mut out = Vec::new();
+    for _ in 0..1000 {
+        match graph.run()? {
+            GraphStatus::Eof => break,
+            GraphStatus::HasOutput(_) => {}
+            other => panic!("unexpected graph status: {other:?}"),
+        }
+        loop {
+            match graph.recv(sink) {
+                Ok(f) => out.push(f),
+                Err(Error::NeedMoreInput | Error::Eof) => break,
+                Err(e) => return Err(e),
+            }
+        }
+    }
+    assert_eq!(
+        out.len(),
+        3,
+        "stops the instant the shorter input is exhausted, discarding the rest of the longer one"
+    );
+    let values: Vec<u8> = out.iter().filter_map(first_byte).collect();
+    assert_eq!(values, vec![0, 11, 22]);
+    assert!(graph.violations().is_empty(), "{:?}", graph.violations());
+    Ok(())
+}
+
+/// `mergeplanes` needs more than two inputs (up to four, fixed at
+/// construction). `PairedFilter::input_count` is what makes that the same
+/// adapter rather than a second one: three inputs, still strict lockstep,
+/// still stopping at the shortest.
+#[test]
+fn paired_generalises_beyond_two_inputs() -> Result<()> {
+    const DESC: FilterDesc = FilterDesc {
+        name: "sum3",
+        description: "test: pairs three inputs and sums their pixel values",
+        inputs: THREE_INPUT_PADS,
+        outputs: VIDEO_PAD,
+        flags: FilterFlags::empty(),
+    };
+    let mut graph = Graph::new();
+    let src_a = graph.add_source(
+        "a",
+        MediaType::Video,
+        video_source_formats("a", PixFmt::Gray8),
+    );
+    let src_b = graph.add_source(
+        "b",
+        MediaType::Video,
+        video_source_formats("b", PixFmt::Gray8),
+    );
+    let src_c = graph.add_source(
+        "c",
+        MediaType::Video,
+        video_source_formats("c", PixFmt::Gray8),
+    );
+    let node = graph.add(
+        DESC,
+        NodeFormats::passthrough(3, 1, MediaType::Video, "sum3"),
+        Box::new(Paired::new(SumInputs { n: 3 })),
+    );
+    let sink = graph.add_sink("out", MediaType::Video, any_video_sink("out"));
+    graph.connect(src_a, 0, node, 0)?;
+    graph.connect(src_b, 0, node, 1)?;
+    graph.connect(src_c, 0, node, 2)?;
+    graph.connect(node, 0, sink, 0)?;
+    graph.set_source_format(src_a, gray_link(16, 16, Rational::new(1, 25)))?;
+    graph.set_source_format(src_b, gray_link(16, 16, Rational::new(1, 25)))?;
+    graph.set_source_format(src_c, gray_link(16, 16, Rational::new(1, 25)))?;
+    graph.configure()?;
+
+    for i in 0..4u8 {
+        graph.send(src_a, gray_frame(16, 16, i64::from(i), i))?;
+    }
+    graph.close_source(src_a, Timestamp::new(4))?;
+    for i in 0..6u8 {
+        graph.send(src_b, gray_frame(16, 16, i64::from(i), i * 10))?;
+    }
+    graph.close_source(src_b, Timestamp::new(6))?;
+    for i in 0..2u8 {
+        graph.send(src_c, gray_frame(16, 16, i64::from(i), i * 100))?;
+    }
+    graph.close_source(src_c, Timestamp::new(2))?;
+
+    let mut out = Vec::new();
+    for _ in 0..1000 {
+        match graph.run()? {
+            GraphStatus::Eof => break,
+            GraphStatus::HasOutput(_) => {}
+            other => panic!("unexpected graph status: {other:?}"),
+        }
+        loop {
+            match graph.recv(sink) {
+                Ok(f) => out.push(f),
+                Err(Error::NeedMoreInput | Error::Eof) => break,
+                Err(e) => return Err(e),
+            }
+        }
+    }
+    assert_eq!(out.len(), 2, "stops at the shortest of the three: `c`");
+    let values: Vec<u8> = out.iter().filter_map(first_byte).collect();
+    // i=0: 0 + 0 + 0 = 0. i=1: 1 + 10 + 100 = 111.
+    assert_eq!(values, vec![0, 111]);
+    Ok(())
+}
+
+// ------------------------------------------------------------ Fanout
+
+/// Splits one frame into two derived outputs: pad 0 unchanged, pad 1 the
+/// value plus one. Proves each pad gets its *own* frame in pad order, which a
+/// plain N-way clone (`split`) does not exercise.
+#[derive(Debug)]
+struct SplitPlusOne;
+
+impl FanoutFilter for SplitPlusOne {
+    fn output_count(&self) -> usize {
+        2
+    }
+
+    fn split_frame(
+        &mut self,
+        _ctx: &mut FilterContext<'_>,
+        input: vaco_frame::Frame,
+    ) -> Result<SmallVec<[vaco_frame::Frame; 4]>> {
+        let value = first_byte(&input).unwrap_or(0);
+        let mut second = input.clone();
+        if let Some(mut plane) = second.plane_mut(0) {
+            plane.fill(value.wrapping_add(1));
+        }
+        Ok(SmallVec::from_iter([input, second]))
+    }
+}
+
+#[test]
+fn fanout_delivers_one_frame_per_output_pad() -> Result<()> {
+    const TWO_OUT: &[Pad] = &[
+        Pad {
+            name: "a",
+            media_type: MediaType::Video,
+        },
+        Pad {
+            name: "b",
+            media_type: MediaType::Video,
+        },
+    ];
+    const DESC: FilterDesc = FilterDesc {
+        name: "split_plus_one",
+        description: "test: fans one input into two derived outputs",
+        inputs: VIDEO_PAD,
+        outputs: TWO_OUT,
+        flags: FilterFlags::DYNAMIC_OUTPUTS,
+    };
+    let mut graph = Graph::new();
+    let src = graph.add_source(
+        "in",
+        MediaType::Video,
+        video_source_formats("in", PixFmt::Gray8),
+    );
+    let node = graph.add(
+        DESC,
+        NodeFormats::passthrough(1, 2, MediaType::Video, "split_plus_one"),
+        Box::new(Fanout::new(SplitPlusOne)),
+    );
+    let sink_a = graph.add_sink("a", MediaType::Video, any_video_sink("a"));
+    let sink_b = graph.add_sink("b", MediaType::Video, any_video_sink("b"));
+    graph.connect(src, 0, node, 0)?;
+    graph.connect(node, 0, sink_a, 0)?;
+    graph.connect(node, 1, sink_b, 0)?;
+    graph.set_source_format(src, gray_link(16, 16, Rational::new(1, 25)))?;
+    graph.configure()?;
+
+    for i in 0..3u8 {
+        graph.send(src, gray_frame(16, 16, i64::from(i), i * 5))?;
+    }
+    graph.close_source(src, Timestamp::new(3))?;
+
+    let mut out_a = Vec::new();
+    let mut out_b = Vec::new();
+    for _ in 0..1000 {
+        match graph.run()? {
+            GraphStatus::Eof => break,
+            GraphStatus::HasOutput(_) => {}
+            other => panic!("unexpected graph status: {other:?}"),
+        }
+        loop {
+            match graph.recv(sink_a) {
+                Ok(f) => out_a.push(f),
+                Err(Error::NeedMoreInput | Error::Eof) => break,
+                Err(e) => return Err(e),
+            }
+        }
+        loop {
+            match graph.recv(sink_b) {
+                Ok(f) => out_b.push(f),
+                Err(Error::NeedMoreInput | Error::Eof) => break,
+                Err(e) => return Err(e),
+            }
+        }
+    }
+    let a: Vec<u8> = out_a.iter().filter_map(first_byte).collect();
+    let b: Vec<u8> = out_b.iter().filter_map(first_byte).collect();
+    assert_eq!(a, vec![0, 5, 10]);
+    assert_eq!(b, vec![1, 6, 11]);
+    assert!(graph.violations().is_empty(), "{:?}", graph.violations());
+    Ok(())
+}
+
+/// A fanout filter that lies about how many frames it produces is a defect
+/// the adapter catches rather than silently under- or over-delivering pads.
+#[derive(Debug)]
+struct WrongCount;
+
+impl FanoutFilter for WrongCount {
+    fn output_count(&self) -> usize {
+        2
+    }
+
+    fn split_frame(
+        &mut self,
+        _ctx: &mut FilterContext<'_>,
+        input: vaco_frame::Frame,
+    ) -> Result<SmallVec<[vaco_frame::Frame; 4]>> {
+        Ok(SmallVec::from_iter([input]))
+    }
+}
+
+#[test]
+fn fanout_catches_a_filter_that_produces_the_wrong_count() -> Result<()> {
+    const TWO_OUT: &[Pad] = &[
+        Pad {
+            name: "a",
+            media_type: MediaType::Video,
+        },
+        Pad {
+            name: "b",
+            media_type: MediaType::Video,
+        },
+    ];
+    const DESC: FilterDesc = FilterDesc {
+        name: "wrong_count",
+        description: "test: claims two outputs, delivers one",
+        inputs: VIDEO_PAD,
+        outputs: TWO_OUT,
+        flags: FilterFlags::DYNAMIC_OUTPUTS,
+    };
+    let mut graph = Graph::new();
+    let src = graph.add_source(
+        "in",
+        MediaType::Video,
+        video_source_formats("in", PixFmt::Gray8),
+    );
+    let node = graph.add(
+        DESC,
+        NodeFormats::passthrough(1, 2, MediaType::Video, "wrong_count"),
+        Box::new(Fanout::new(WrongCount)),
+    );
+    let sink_a = graph.add_sink("a", MediaType::Video, any_video_sink("a"));
+    let sink_b = graph.add_sink("b", MediaType::Video, any_video_sink("b"));
+    graph.connect(src, 0, node, 0)?;
+    graph.connect(node, 0, sink_a, 0)?;
+    graph.connect(node, 1, sink_b, 0)?;
+    graph.set_source_format(src, gray_link(16, 16, Rational::new(1, 25)))?;
+    graph.configure()?;
+    graph.send(src, gray_frame(16, 16, 0, 0))?;
+    let e = graph.run();
+    assert!(
+        matches!(e, Err(Error::InvalidData(_))),
+        "a mismatched frame count must surface as an error, not a dropped pad: {e:?}"
+    );
+    Ok(())
+}
 
 #[test]
 fn a_generic_timeline_filter_must_be_one_in_one_out() {
