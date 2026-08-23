@@ -26,6 +26,10 @@ proptest = { workspace = true }
 # single most error-prone field here (see the crate docs). Dev-only: the
 # production dependency graph does not include the demuxer.
 vaco-demux-mpegts = { path = "../vaco-demux-mpegts" }
+# The comparison oracle for `check_bitstream`'s M6 request — see
+# `vaco-mux-avi`'s identical dependency for why a real filter, not a hand
+# test-double.
+vaco-bsf-h2645 = { path = "../vaco-bsf-h2645" }
 
 [lints]
 workspace = true

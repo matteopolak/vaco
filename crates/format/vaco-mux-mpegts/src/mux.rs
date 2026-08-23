@@ -19,6 +19,7 @@
 use vaco_codec_core::{CodecId, CodecParameters};
 use vaco_core::{Error, MediaType, Rational, Result};
 use vaco_format_core::interleave::{InterleaveQueue, interleave_none};
+use vaco_format_core::mux::BitstreamAction;
 use vaco_format_core::{FormatFlags, Muxer};
 use vaco_format_mpegts_tables::packet::Pcr;
 use vaco_format_mpegts_tables::stream_type::for_codec;
@@ -67,10 +68,22 @@ struct MuxStream {
     /// Annex B, or not applicable to this codec.
     length_size: Option<LengthSize>,
     first_packet_written: bool,
+    /// Set the first time [`MpegTsMuxer::check_bitstream`] answers `Insert`
+    /// for this stream — mirrors `vaco-mux-avi::StreamOut::bsf_decided`; see
+    /// that field's doc comment for why a muxer needs this at all.
+    bsf_decided: bool,
 }
 
 fn is_h264_or_hevc(codec: CodecId) -> bool {
     matches!(codec, CodecId::H264 | CodecId::Hevc | CodecId::Vvc)
+}
+
+/// Whether `payload` already opens with an Annex B start code (`00 00 01` or
+/// `00 00 00 01`) — see `vaco-mux-avi`'s identical helper for why this makes
+/// [`MpegTsMuxer::maybe_convert`] safe to call unconditionally even after M6
+/// has already reframed the payload.
+fn starts_with_annexb_start_code(payload: &[u8]) -> bool {
+    payload.starts_with(&[0, 0, 1]) || payload.starts_with(&[0, 0, 0, 1])
 }
 
 /// The MPEG-TS muxer.
@@ -261,6 +274,14 @@ impl MpegTsMuxer {
     /// out-of-band configuration record, so H.264/HEVC/VVC must carry their
     /// NAL units Annex-B-framed, start codes and all (ISO/IEC 13818-1 has no
     /// other convention for these codecs in a PES payload).
+    ///
+    /// Framing only — no parameter-set splicing, and never will be for VVC
+    /// (this crate offers no `vvc_mp4toannexb` through
+    /// [`MpegTsMuxer::check_bitstream`], so VVC keeps this method as its only
+    /// conversion). For H.264/HEVC, a caller driven through
+    /// [`vaco_format_core::mux::MuxWriter`] with a real `BsfProvider` never
+    /// reaches this with length-prefixed bytes at all — [`starts_with_annexb_start_code`]
+    /// is what makes that safe to call anyway rather than assumed.
     fn maybe_convert(&mut self, index: usize, payload: &[u8]) -> Result<Vec<u8>> {
         let Some(stream) = self.streams.get(index) else {
             return Ok(payload.to_vec());
@@ -268,6 +289,9 @@ impl MpegTsMuxer {
         let Some(length_size) = stream.length_size else {
             return Ok(payload.to_vec());
         };
+        if starts_with_annexb_start_code(payload) {
+            return Ok(payload.to_vec());
+        }
         let mut out = Vec::new();
         length_prefixed_to_annexb(payload, length_size, &mut out, &mut self.convert_budget)?;
         Ok(out)
@@ -331,6 +355,7 @@ impl Muxer for MpegTsMuxer {
             registration: assign.registration,
             length_size,
             first_packet_written: false,
+            bsf_decided: false,
         });
         Ok(index)
     }
@@ -508,6 +533,36 @@ impl Muxer for MpegTsMuxer {
         Some(TIME_BASE)
     }
 
+    /// Ask M6 for `h264_mp4toannexb`/`hevc_mp4toannexb` when the stream
+    /// declared length-prefixed framing — the same condition
+    /// [`MpegTsMuxer::maybe_convert`] uses. VVC is deliberately excluded:
+    /// this crate has no `vvc_mp4toannexb` to ask for, so it keeps
+    /// `maybe_convert`'s framing-only behaviour as its only conversion.
+    fn check_bitstream(&mut self, params: &CodecParameters, pkt: &Packet) -> Result<BitstreamAction> {
+        let idx = usize::try_from(pkt.stream_index).ok();
+        if idx.and_then(|i| self.streams.get(i)).is_some_and(|s| s.bsf_decided) {
+            return Ok(BitstreamAction::Keep);
+        }
+        if let Some(s) = idx.and_then(|i| self.streams.get_mut(i)) {
+            s.bsf_decided = true;
+        }
+        let asks_for_splice = matches!(params.codec_id, Some(CodecId::H264 | CodecId::Hevc))
+            && params
+                .video
+                .as_ref()
+                .and_then(|v| v.nal_length_size)
+                .is_some_and(|n| n > 0);
+        if !asks_for_splice {
+            return Ok(BitstreamAction::Keep);
+        }
+        Ok(BitstreamAction::Insert {
+            name: match params.codec_id {
+                Some(CodecId::Hevc) => "hevc_mp4toannexb",
+                _ => "h264_mp4toannexb",
+            },
+        })
+    }
+
     fn interleave(
         &mut self,
         queue: &mut InterleaveQueue,
@@ -632,6 +687,95 @@ mod tests {
         let bytes = mirror.take();
         // The Annex B start code must appear somewhere in the output stream.
         assert!(bytes.windows(4).any(|w| w == [0, 0, 0, 1]));
+    }
+
+    /// Wraps the real `vaco-bsf-h2645` filter, not a hand test-double — see
+    /// `vaco-mux-avi`'s identical provider for the reasoning.
+    struct OnlyH2645ToAnnexb;
+
+    impl vaco_format_core::mux::BsfProvider for OnlyH2645ToAnnexb {
+        fn open(
+            &self,
+            name: &str,
+            params: &CodecParameters,
+        ) -> Result<Box<dyn vaco_codec_core::BitstreamFilter>> {
+            match name {
+                "h264_mp4toannexb" => (vaco_bsf_h2645::h264_mp4toannexb::DESC.build)(params),
+                "hevc_mp4toannexb" => (vaco_bsf_h2645::hevc_mp4toannexb::DESC.build)(params),
+                _ => Err(Error::Unsupported("test provider knows only the mp4toannexb pair")),
+            }
+        }
+    }
+
+    fn avcc(sps: &[u8], pps: &[u8]) -> Vec<u8> {
+        let mut r = vec![1, sps[1], sps[2], sps[3], 0xFF, 0xE1];
+        r.extend_from_slice(&(u16::try_from(sps.len()).unwrap()).to_be_bytes());
+        r.extend_from_slice(sps);
+        r.push(1);
+        r.extend_from_slice(&(u16::try_from(pps.len()).unwrap()).to_be_bytes());
+        r.extend_from_slice(pps);
+        r
+    }
+
+    /// The comparison this crate's brief asked for before touching
+    /// `maybe_convert`: driven through `MuxBuilder`/`MuxWriter` (M6) with a
+    /// real `BsfProvider`, the output carries the SPS/PPS-spliced Annex B
+    /// [`MpegTsMuxer::maybe_convert`] alone can never produce — it has no
+    /// configuration record to read parameter sets out of. The two paths
+    /// disagree, and per the brief, the reference (which
+    /// `vaco-bsf-h2645::h264_mp4toannexb` was checked against directly)
+    /// decides: this is the more correct output, not merely a different one.
+    #[test]
+    fn check_bitstream_through_mux_writer_gets_the_splice_maybe_convert_alone_cannot() {
+        let sink = SharedDynBuf::new();
+        let mirror = sink.clone();
+        let mux = MpegTsMuxer::new(Box::new(sink));
+
+        let sps = [0x67, 0x64, 0x00, 0x0a, 0xAA];
+        let pps = [0x68, 0xEB];
+        let params = CodecParameters {
+            media_type: Some(MediaType::Video),
+            codec_id: Some(CodecId::H264),
+            extradata: Some(avcc(&sps, &pps)),
+            video: Some(VideoParameters {
+                nal_length_size: Some(4),
+                ..VideoParameters::default()
+            }),
+            ..CodecParameters::new(MediaType::Video)
+        };
+
+        let mut builder = vaco_format_core::mux::MuxBuilder::new(
+            Box::new(mux),
+            &vaco_format_core::FormatOptions::default(),
+        )
+        .with_bsfs(std::sync::Arc::new(OnlyH2645ToAnnexb));
+        let v = builder
+            .add_stream(&params, vaco_core::TimeBase::new(1, 90_000))
+            .unwrap();
+        let mut writer = builder.open().unwrap();
+
+        let idr = [0x65, 0x88, 0x84];
+        let mut lp = Vec::new();
+        lp.extend_from_slice(&(u32::try_from(idr.len()).unwrap()).to_be_bytes());
+        lp.extend_from_slice(&idr);
+        writer.write_packet(packet(v, 0, true, &lp)).unwrap();
+        writer.finish().unwrap();
+
+        let bytes = mirror.take();
+        let mut expected = Vec::new();
+        for u in [&sps[..], &pps[..], &idr[..]] {
+            expected.extend_from_slice(&[0, 0, 0, 1]);
+            expected.extend_from_slice(u);
+        }
+        // Small enough to land in one PES packet's payload with no 188-byte
+        // transport-packet split in the middle, so a raw byte window is a
+        // valid check here — the same assumption the existing
+        // `a_length_prefixed_h264_packet_is_converted_to_annex_b` test above
+        // already makes.
+        assert!(
+            bytes.windows(expected.len()).any(|w| w == expected.as_slice()),
+            "expected the SPS/PPS-spliced sample verbatim in the muxed bytes"
+        );
     }
 
     /// Finding 19 (`planning/CONFORMANCE-FINDINGS.md`): measured directly
