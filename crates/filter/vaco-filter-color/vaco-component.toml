@@ -1,12 +1,13 @@
 # Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
 #
 # Colour/LUT video filters, plan 16 §4.2's `vaco-filter-color` row.
-# Implemented: colorchannelmixer, lut, lutrgb, lutyuv, lut2, pseudocolor.
-# The rest of the row (curves, colorbalance, colorcontrast, colorcorrect,
-# colorize, colorlevels, colortemperature, huesaturation, hue, vibrance,
+# Implemented: colorchannelmixer, lut, lutrgb, lutyuv, lut2, pseudocolor,
+# colorlevels. The rest of the row (curves, colorbalance, colorcontrast,
+# colorcorrect, colorize, colortemperature, huesaturation, hue, vibrance,
 # exposure, selectivecolor, grayworld, greyedge, normalize, monochrome,
 # midequalizer, geq, colormap, limitdiff, tonemap, eq, histeq, colormatrix)
-# is not registered here.
+# is not registered here — see `vaco_filter_color`'s crate-level doc for
+# what stopped colorbalance/exposure/grayworld specifically.
 #
 # Each `ctor` names the per-filter `pub const DESC: FilterDesc`; runtime
 # instantiation goes through `vaco_filter_color::registry::ColorRegistry`,
@@ -52,4 +53,11 @@ kind = "filter"
 name = "pseudocolor"
 long_name = "Make pseudocolored video frames"
 ctor = "vaco_filter_color::pseudocolor::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "colorlevels"
+long_name = "Adjust the color levels"
+ctor = "vaco_filter_color::colorlevels::DESC"
 media = "video"

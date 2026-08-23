@@ -5,7 +5,8 @@ use vaco_filter_graph::registry::{FilterRegistry, Instance, Instantiate};
 
 /// The names this crate answers to, alphabetical (as `ffmpeg -filters`
 /// prints them).
-const NAMES: &[&str] = &["colorchannelmixer", "lut", "lut2", "lutrgb", "lutyuv", "pseudocolor"];
+const NAMES: &[&str] =
+    &["colorchannelmixer", "colorlevels", "lut", "lut2", "lutrgb", "lutyuv", "pseudocolor"];
 
 /// Implements [`FilterRegistry`] for every filter in this crate.
 #[derive(Debug, Clone, Copy, Default)]
@@ -19,6 +20,7 @@ impl FilterRegistry for ColorRegistry {
     fn create(&self, req: &Instantiate<'_>) -> Result<Instance, String> {
         match req.name {
             "colorchannelmixer" => crate::colorchannelmixer::create(req),
+            "colorlevels" => crate::colorlevels::create(req),
             "lut" => crate::lut::lut::create(req),
             "lutrgb" => crate::lut::lutrgb::create(req),
             "lutyuv" => crate::lut::lutyuv::create(req),

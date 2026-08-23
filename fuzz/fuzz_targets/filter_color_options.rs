@@ -5,12 +5,13 @@
 //! `lut`/`lutrgb`/`lutyuv` parse four `vaco-expr` expressions each
 //! (`c0..c3`, aliased `y`/`u`/`v`/`r`/`g`/`b`/`a`); `lut2` parses four more
 //! plus an integer `d`; `pseudocolor` parses four expressions, an index
-//! and a preset. Every one of those goes through `vaco-expr`'s own parser
+//! and a preset; `colorlevels` parses sixteen `f64` range endpoints plus
+//! `preserve`. Every one of those goes through `vaco-expr`'s own parser
 //! or `vaco-opts`'s typed option parser, neither of which this crate
 //! trusts blindly — matching the pattern in
 //! `vaco-filter-video-format`'s `filter_video_format_options.rs`.
 //!
-//! Property: for any byte string, for any of the six registered names,
+//! Property: for any byte string, for any of the seven registered names,
 //! either a clean `Err` comes back or a working `Instance`, never a panic
 //! and never an unbounded allocation.
 //! fuzz-crate: vaco-filter-color
@@ -21,7 +22,8 @@ use libfuzzer_sys::fuzz_target;
 use vaco_filter_color::registry::ColorRegistry;
 use vaco_filter_graph::registry::{FilterRegistry, Instantiate};
 
-const NAMES: &[&str] = &["colorchannelmixer", "lut", "lut2", "lutrgb", "lutyuv", "pseudocolor"];
+const NAMES: &[&str] =
+    &["colorchannelmixer", "colorlevels", "lut", "lut2", "lutrgb", "lutyuv", "pseudocolor"];
 
 fuzz_target!(|args: &str| {
     if args.len() > 8192 {

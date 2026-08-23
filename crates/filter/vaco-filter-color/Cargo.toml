@@ -1,6 +1,6 @@
 [package]
 name = "vaco-filter-color"
-description = "Colour and LUT-adjacent video filters (plan 16 4.2's vaco-filter-color row): colorchannelmixer, lut, lutrgb, lutyuv, lut2, pseudocolor implemented; the rest of the row (curves, colorbalance, colorcontrast, colorcorrect, colorize, colorlevels, colortemperature, huesaturation, hue, vibrance, exposure, selectivecolor, grayworld, greyedge, normalize, monochrome, midequalizer, geq, colormap, limitdiff, tonemap, eq, histeq, colormatrix) not yet implemented."
+description = "Colour and LUT-adjacent video filters (plan 16 4.2's vaco-filter-color row): colorchannelmixer, lut, lutrgb, lutyuv, lut2, pseudocolor, colorlevels implemented (7/29); the rest of the row (curves, colorbalance, colorcontrast, colorcorrect, colorize, colortemperature, huesaturation, hue, vibrance, exposure, selectivecolor, grayworld, greyedge, normalize, monochrome, midequalizer, geq, colormap, limitdiff, tonemap, eq, histeq, colormatrix) not yet implemented."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

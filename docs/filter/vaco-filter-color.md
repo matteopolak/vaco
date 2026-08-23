@@ -1,26 +1,46 @@
 # vaco-filter-color
 
 Colour and LUT-driven video filters: `colorchannelmixer`, `lut`, `lutrgb`,
-`lutyuv`, `lut2`, `pseudocolor`.
+`lutyuv`, `lut2`, `pseudocolor`, `colorlevels` (7/29).
 
 **Scope note**: `planning/16-filters.md` §4.2's `vaco-filter-color` row
-lists 29 filters (`curves`, `colorbalance`, `colorcontrast`,
-`colorcorrect`, `colorize`, `colorlevels`, `colortemperature`,
-`huesaturation`, `hue`, `vibrance`, `exposure`, `selectivecolor`,
-`grayworld`, `greyedge`, `normalize`, `monochrome`, `midequalizer`, `geq`,
-`colormap`, `limitdiff`, `tonemap`, `eq`, `histeq`, `colormatrix`, plus the
-six implemented here). Only the six are built; the crate began life
-mis-scoped as a plane/component-shuffling crate (`vaco-filter-component`,
-GitHub issue #476) and was corrected into this row mid-flight — see the
-issue for the full story. The other 23 filters are a separate,
-not-yet-scheduled unit of work.
+is 29 filters, all verified against `ffmpeg -filters`/`ffmpeg -h
+filter=<name>` (8.1) with no discrepancy from the plan in either
+direction: `curves`, `colorbalance`, `colorcontrast`, `colorcorrect`,
+`colorize`, `colorlevels`, `colortemperature`, `huesaturation`, `hue`,
+`vibrance`, `exposure`, `selectivecolor`, `grayworld`, `greyedge`,
+`normalize`, `monochrome`, `midequalizer`, `geq`, `colormap`, `limitdiff`,
+`tonemap`, `eq`, `histeq`, `colormatrix`, plus the seven implemented
+here. The crate began life mis-scoped as a plane/component-shuffling
+crate (`vaco-filter-component`, GitHub issue #476) and was corrected
+into this row mid-flight — see the issue for the full story.
+`colorlevels` landed in this pass; the six before it carried over from
+before the correction.
+
+**Left for follow-up, stated honestly** (22 filters): each is a real
+GitHub-issue-sized unit of work, but three deserve a specific note
+because probing them found real walls rather than just "not attempted":
+
+- `colorbalance`'s shadows/midtones/highlights weighting is not a simple
+  threshold or linear ramp — a sweep of `rs=1.0` found a flat plateau
+  from `v=0` to `v≈24`, then a non-linear falloff to `0` by `v=64`. The
+  linear-in-`rs` scaling is confirmed; the per-pixel weighting curve
+  itself is not.
+- `exposure` and `grayworld` both force `gbrpf32le` (planar 32-bit float)
+  output, which this crate's whole `sample` engine deliberately excludes
+  (`PixFmtFlags::FLOAT`) — these need a float-sample accessor this crate
+  does not have yet, not just a new filter module.
+- `geq`/`tonemap` were flagged in advance as the likely filters to leave
+  (a full expression-evaluated generator, and dynamic-range conversion)
+  and were not investigated in this pass either.
 
 ## What it is
 
-Six filters that recolour a frame from its own pixel data: a 4x4 linear
-channel mixer, three names for one lookup-table engine (`lut`/`lutrgb`/
-`lutyuv`), a two-input lookup table (`lut2`), and a false-colour remap
-(`pseudocolor`).
+Seven filters that recolour a frame from its own pixel data: a 4x4
+linear channel mixer, three names for one lookup-table engine
+(`lut`/`lutrgb`/`lutyuv`), a two-input lookup table (`lut2`), a
+false-colour remap (`pseudocolor`), and a per-channel input/output range
+remap (`colorlevels`).
 
 ## How it works
 
@@ -65,6 +85,20 @@ and clamped. Confirmed with a controlled two-colour probe. `pc`
 (preserve-colour mode) and `pa` are parsed but inert — reproducing the
 seven preserve-colour blends needs source access this project's D7
 forbids.
+
+### `colorlevels`: measured formula and its truncation rule
+
+`t = clamp((in/max - imin) / (imax - imin), 0, 1)`, `out = floor((omin +
+t*(omax-omin)) * max)`, independently per R/G/B(/A) channel. Confirmed at
+an input white point, a value clamping past it, and exactly at an input
+black point — including that the reference truncates rather than rounds
+the final sample, the same rule `vaco-filter-lut` measured independently
+for a completely different filter family. Requires an RGB pixel format
+(measured: forces an `rgb24` conversion for YUV input, same restriction
+as `colorkey`/`lut3d` elsewhere in this project). `preserve` (seven
+colour-preservation modes) is parsed but inert, for the same reason
+`colorchannelmixer`'s `pc`/`pa` are: the reference does not document the
+blending formula and reproducing it needs source access D7 forbids.
 
 ## How to change it
 
