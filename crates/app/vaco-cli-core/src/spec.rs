@@ -429,7 +429,15 @@ impl StreamSpecifier {
             // `disp:0` is legal and means "no bits required", which matches
             // everything — the same as omitting the token, but preserved so the
             // round-trip is exact.
-            let names: Vec<&str> = d.names().collect();
+            let mut names: Vec<String> = d.names().map(str::to_owned).collect();
+            // Bits this build has no name for still have to come back out, or
+            // the render is not an inverse: `parse_disposition` accepts a plain
+            // integer as a term, so the residue rides along as one. Found by
+            // proptest on `disp:999910`, whose unnamed high bits vanished.
+            let residue = d.difference(Disposition::all()).bits();
+            if residue != 0 {
+                names.push(format!("0x{residue:x}"));
+            }
             if names.is_empty() {
                 parts.push("disp:0".to_owned());
             } else {
@@ -889,6 +897,14 @@ mod tests {
         );
         assert_eq!(ok("disp:0").disposition, Some(Disposition::NONE));
         assert_eq!(ok("disp:0x1").disposition, Some(Disposition::DEFAULT));
+
+        // A bit this build has no name for survives the canonical render, as a
+        // numeric term beside the named ones. Without the residue it reparsed
+        // to a *different* disposition and nothing said so.
+        let wild = ok("disp:0xf4166");
+        let text = wild.canonical();
+        assert!(text.contains("+0x"), "{text}");
+        assert_eq!(ok(&text).disposition, wild.disposition);
     }
 
     // ---------------------------------------------------------------- matching
