@@ -17,8 +17,8 @@
 //!
 //! `vaco-filter-blur` itself owns: `unsharp`, `cas`, `avgblur`, `gblur`,
 //! `dblur`, `varblur`, `yaepblur`, `guided`, `boxblur`, `smartblur`, `sab`
-//! (eleven names). Four are implemented here; see [`registry`]'s module
-//! doc for which, and why the other seven are a follow-up rather than a
+//! (eleven names). Nine are implemented here; see [`registry`]'s module
+//! doc for which, and why `sab`/`smartblur` are a follow-up rather than a
 //! silent gap.
 //!
 //! Built against `vaco-filter-core` (the `FrameFilter` trait, the `Simple`
@@ -40,22 +40,28 @@
 //! `avgblur`. Interior-verified with a documented border gap: `unsharp`
 //! (analytic ramp invariant plus one measured off-by-one at the very
 //! edge). Structural only, not compared against the reference's actual
-//! algorithm: `gblur` (the reference's impulse response is not a plain
-//! discrete Gaussian — see [`gblur`]'s doc for the measurement that found
-//! this and the scope decision it led to). See
+//! algorithm, each with a measured refutation of the naive reading and an
+//! independent algebraic invariant in place of a framecrc pin: `gblur` (IIR
+//! impulse response, not FIR — see [`gblur`]'s doc), `cas` (published AMD
+//! formula shape confirmed, exact constants not solved — see [`cas`]'s
+//! doc), `dblur` (measured asymmetric/order-dependent response rules out a
+//! plain symmetric kernel — see [`dblur`]'s doc), `yaepblur` (measured
+//! sigma-dependent blend trend confirmed, exact weight formula not solved —
+//! see [`yaepblur`]'s doc), `varblur` (two measured anomalies, including a
+//! non-identity `radius=0` case — see [`varblur`]'s doc), `guided`
+//! (`guidance=off` only, published He et al. formula implemented directly
+//! but not probed against the reference — see [`guided`]'s doc). See
 //! `docs/filter/vaco-filter-blur.md` for the full accounting.
 //!
 //! # Left for a follow-up (out of this brief's time budget)
 //!
-//! `cas`, `dblur`, `varblur`, `yaepblur`, `guided`, `sab`, `smartblur` —
-//! seven more filters this crate's own roadmap row names. Each is a
-//! genuinely different algorithm from what is implemented here (AMD's
-//! published Contrast Adaptive Sharpen formula, a directional/rotated
-//! blur, a per-pixel radius driven by a second video stream, an
-//! edge-preserving variance-gated blend, the He et al. guided filter, a
-//! shape-adaptive multi-pass blur) rather than a variation on
-//! `common::box_pass`, and none of them were reached in this pass. None of
-//! them block the four filters that did land.
+//! `sab` (shape-adaptive blur, a multi-pass per-pixel-adaptive-radius
+//! algorithm) and `smartblur` (edge-aware blur) — the two filters this
+//! crate's own roadmap row still does not implement. `guided=on` (a second,
+//! external guide stream) and `guided`'s fast/subsampled mode are also
+//! deliberately unimplemented — see [`guided`]'s doc — and rejected at
+//! creation rather than silently downgraded to the self-guided case. None
+//! of them block the nine filters that did land.
 
 #![forbid(unsafe_code)]
 #![allow(
@@ -68,9 +74,17 @@
 
 pub mod avgblur;
 pub mod boxblur;
+pub mod cas;
 mod common;
+pub mod dblur;
 pub mod gblur;
+pub mod guided;
 pub mod registry;
 pub mod unsharp;
+pub mod varblur;
+pub mod yaepblur;
+
+#[cfg(test)]
+mod tests_graph;
 
 pub use registry::BlurRegistry;

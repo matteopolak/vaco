@@ -1,21 +1,23 @@
-//! [`BlurRegistry`] — the [`FilterRegistry`] this crate's four filters
+//! [`BlurRegistry`] — the [`FilterRegistry`] this crate's nine filters
 //! answer through. Same shape as `vaco-filter-convolve::registry`.
 //!
 //! `planning/16-filters.md` §4.2 assigns eleven names to this crate:
 //! `unsharp, cas, avgblur, gblur, dblur, varblur, yaepblur, guided,
-//! boxblur, smartblur, sab`. Four are implemented — `avgblur`, `boxblur`,
-//! `gblur`, `unsharp` — and registered below. `cas`, `dblur`, `guided`,
-//! `sab`, `smartblur`, `varblur`, `yaepblur` are left for a follow-up (see
-//! the crate's own top-level doc and `docs/filter/vaco-filter-blur.md`);
-//! nothing this project's dup-check/registry tooling can see would be
-//! satisfied by registering a name with no `create` function behind it, so
-//! they are simply absent rather than stubbed.
+//! boxblur, smartblur, sab`. Nine are implemented — every name except
+//! `sab` and `smartblur` — and registered below. Those two are left for a
+//! follow-up (see the crate's own top-level doc and
+//! `docs/filter/vaco-filter-blur.md`); nothing this project's
+//! dup-check/registry tooling can see would be satisfied by registering a
+//! name with no `create` function behind it, so they are simply absent
+//! rather than stubbed.
 
 use vaco_filter_graph::registry::{FilterRegistry, Instance, Instantiate};
 
 /// The names this crate answers to, alphabetical (as `ffmpeg -filters`
 /// prints them).
-const NAMES: &[&str] = &["avgblur", "boxblur", "gblur", "unsharp"];
+const NAMES: &[&str] = &[
+    "avgblur", "boxblur", "cas", "dblur", "gblur", "guided", "unsharp", "varblur", "yaepblur",
+];
 
 /// Implements [`FilterRegistry`] for every filter in this crate.
 #[derive(Debug, Clone, Copy, Default)]
@@ -30,8 +32,13 @@ impl FilterRegistry for BlurRegistry {
         match req.name {
             "avgblur" => crate::avgblur::create(req),
             "boxblur" => crate::boxblur::create(req),
+            "cas" => crate::cas::create(req),
+            "dblur" => crate::dblur::create(req),
             "gblur" => crate::gblur::create(req),
+            "guided" => crate::guided::create(req),
             "unsharp" => crate::unsharp::create(req),
+            "varblur" => crate::varblur::create(req),
+            "yaepblur" => crate::yaepblur::create(req),
             other => Err(format!("vaco-filter-blur: no filter named `{other}`")),
         }
     }

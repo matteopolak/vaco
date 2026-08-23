@@ -426,3 +426,17 @@ kind     = "paper"
 title    = "Peeters, \"A large set of audio features for sound description (similarity and classification) in the CUIDADO project\", IRCAM, 2004 — the thirteen spectral-shape statistics (centroid, spread, skewness, kurtosis, flatness, crest, flux, slope, decrease, rolloff, ...) `aspectralstats` computes"
 acquired = "2026-08-23"
 where    = "http://recherche.ircam.fr/anasyn/peeters/ARTICLES/Peeters_2003_cuidadoaudiofeatures.pdf"
+
+[[source]]
+id       = "he-sun-tang-2010-guided-filter"
+kind     = "paper"
+title    = "He, Sun & Tang, \"Guided Image Filtering\", ECCV 2010 — the box-filter-of-I/I*I, per-pixel linear coefficients a = var_I/(var_I+eps), b = mean_I - a*mean_I formula `vaco-filter-blur::guided` implements in its self-guided (guidance=off) mode"
+acquired = "2026-08-23"
+where    = "https://doi.org/10.1007/978-3-642-15549-9_1"
+
+[[source]]
+id       = "amd-2019-fidelityfx-cas"
+kind     = "paper"
+title    = "AMD, \"FidelityFX Contrast Adaptive Sharpening (CAS)\", GPUOpen technical publication, 2019 — the plus-shaped four-neighbour min/max amplification ratio and strength-interpolated peak sharpening weight `vaco-filter-blur::cas` implements the shape of (see that module's doc for the measured constants this pass could not fully reconcile)"
+acquired = "2026-08-23"
+where    = "https://gpuopen.com/fidelityfx-cas/"

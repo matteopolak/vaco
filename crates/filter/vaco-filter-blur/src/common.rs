@@ -102,6 +102,28 @@ pub(crate) fn sample_clamped(rows: &[&[u8]], x: i32, y: i32, w: i32, h: i32) -> 
     rows.get(uy).and_then(|r| r.get(ux)).copied().unwrap_or(0)
 }
 
+/// Bilinear sample of an 8-bit-unit plane at fractional coordinates,
+/// clamp-to-edge at the border (consistent with [`sample_clamped`]). Used by
+/// filters that need off-grid sampling along an arbitrary direction
+/// ([`crate::dblur`]'s rotated line), which [`sample_clamped`]'s
+/// nearest-pixel lookup cannot provide.
+#[must_use]
+pub(crate) fn sample_bilinear(rows: &[&[u8]], x: f64, y: f64, w: i32, h: i32) -> f64 {
+    let x0 = x.floor();
+    let y0 = y.floor();
+    let fx = x - x0;
+    let fy = y - y0;
+    let x0i = x0 as i32;
+    let y0i = y0 as i32;
+    let p00 = f64::from(sample_clamped(rows, x0i, y0i, w, h));
+    let p10 = f64::from(sample_clamped(rows, x0i + 1, y0i, w, h));
+    let p01 = f64::from(sample_clamped(rows, x0i, y0i + 1, w, h));
+    let p11 = f64::from(sample_clamped(rows, x0i + 1, y0i + 1, w, h));
+    let top = p00 * (1.0 - fx) + p10 * fx;
+    let bottom = p01 * (1.0 - fx) + p11 * fx;
+    top * (1.0 - fy) + bottom * fy
+}
+
 /// Collect `plane`'s rows as borrowed slices, for repeated clamp-indexed
 /// sampling by [`sample_clamped`]. Missing rows (never expected, but a frame
 /// pool bug would rather show up as an empty slice than a panic) read as

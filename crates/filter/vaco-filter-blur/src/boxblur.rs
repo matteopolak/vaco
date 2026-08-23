@@ -132,9 +132,9 @@ impl Opts {
 }
 
 fn parse_radius(s: &str) -> std::result::Result<i32, String> {
-    s.trim()
-        .parse::<i32>()
-        .map_err(|_| format!("boxblur: bad radius expression `{s}` (only plain integers are implemented)"))
+    s.trim().parse::<i32>().map_err(|_| {
+        format!("boxblur: bad radius expression `{s}` (only plain integers are implemented)")
+    })
 }
 
 /// Resolved radius/power for one plane group.
@@ -211,7 +211,14 @@ fn blur_plane(rows: &[&[u8]], w: i32, h: i32, params: PlaneParams) -> Vec<Vec<u8
     let mut current: Vec<Vec<u8>> = rows.iter().map(|r| r.to_vec()).collect();
     for _ in 0..params.power {
         let borrowed: Vec<&[u8]> = current.iter().map(Vec::as_slice).collect();
-        current = common::box_pass(&borrowed, w, h, params.radius, params.radius, Rounding::Nearest);
+        current = common::box_pass(
+            &borrowed,
+            w,
+            h,
+            params.radius,
+            params.radius,
+            Rounding::Nearest,
+        );
     }
     current
 }

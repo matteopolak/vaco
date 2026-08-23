@@ -156,7 +156,11 @@ pub(crate) struct Filter {
 
 impl Filter {
     const fn new(opts: &Opts) -> Self {
-        let sigma_y = if opts.sigma_v < 0.0 { opts.sigma } else { opts.sigma_v };
+        let sigma_y = if opts.sigma_v < 0.0 {
+            opts.sigma
+        } else {
+            opts.sigma_v
+        };
         Self {
             sigma_x: opts.sigma,
             sigma_y,
@@ -251,7 +255,9 @@ mod tests {
     /// image at all.
     #[test]
     fn zero_sigma_is_identity() {
-        let img: Vec<Vec<u8>> = (0..5).map(|y| (0..5).map(|x| (x * 7 + y) as u8).collect()).collect();
+        let img: Vec<Vec<u8>> = (0..5)
+            .map(|y| (0..5).map(|x| (x * 7 + y) as u8).collect())
+            .collect();
         let rows: Vec<&[u8]> = img.iter().map(Vec::as_slice).collect();
         let out = blur_plane(&rows, 5, 5, 0.0, 0.0);
         assert_eq!(out, img);

@@ -7,14 +7,18 @@
 //! grammar's own escaping, not just each filter's `set_from_string`.
 //!
 //! This crate's option parsers include `boxblur`'s plain-integer radius
-//! parser and `avgblur`'s zero-as-sentinel `sizeY` handling worth fuzzing
-//! beyond the usual `vaco-opts` integer/float/string paths.
+//! parser and `avgblur`'s zero-as-sentinel `sizeY` handling, plus, since
+//! this crate grew a two-input filter, `varblur`'s `create` path (which
+//! this fuzz target still only exercises through option parsing —
+//! `create` never needs a second frame to succeed) and `guided`'s
+//! `mode`/`guidance` named-string options, worth fuzzing beyond the usual
+//! `vaco-opts` integer/float/string paths.
 //!
 //! See `filter_convolve_options` for the sibling crate `convolution`,
 //! `sobel`, `prewitt`, `roberts`, `scharr`, `kirsch`, `dilation`,
 //! `erosion` and `median` moved into.
 //!
-//! Property: for any byte string, for any of the four registered names,
+//! Property: for any byte string, for any of the nine registered names,
 //! either a clean `Err` comes back at some stage or a working `Instance`,
 //! never a panic and never an unbounded allocation.
 //! fuzz-crate: vaco-filter-blur
@@ -25,7 +29,9 @@ use libfuzzer_sys::fuzz_target;
 use vaco_filter_blur::registry::BlurRegistry;
 use vaco_filter_graph::registry::{FilterRegistry, Instantiate};
 
-const NAMES: &[&str] = &["avgblur", "boxblur", "gblur", "unsharp"];
+const NAMES: &[&str] = &[
+    "avgblur", "boxblur", "cas", "dblur", "gblur", "guided", "unsharp", "varblur", "yaepblur",
+];
 
 fuzz_target!(|args: &str| {
     // 8 KiB is far past any real `-filter_complex` argument; beyond it the

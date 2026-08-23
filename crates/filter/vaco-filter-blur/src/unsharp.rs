@@ -317,7 +317,16 @@ mod tests {
         assert!((filter.luma.amount - 1.0).abs() < f64::EPSILON);
         let rows_owned: Vec<Vec<u8>> = (0..5).map(|_| vec![0, 10, 20, 30, 40]).collect();
         let rows: Vec<&[u8]> = rows_owned.iter().map(Vec::as_slice).collect();
-        let out = sharpen_plane(&rows, 5, 5, PlaneParams { rx: 1, ry: 1, amount: filter.luma.amount });
+        let out = sharpen_plane(
+            &rows,
+            5,
+            5,
+            PlaneParams {
+                rx: 1,
+                ry: 1,
+                amount: filter.luma.amount,
+            },
+        );
         for y in 1..4 {
             for x in 1..4 {
                 assert_eq!(out[y][x], rows_owned[y][x], "interior pixel ({x},{y})");

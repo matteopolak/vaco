@@ -1,7 +1,9 @@
 # vaco-filter-blur
 
-T2 blur and sharpen video filters (FT-4.6a, GitHub issue #468). Four
-implemented: `boxblur`, `avgblur`, `gblur`, `unsharp`.
+T2 blur and sharpen video filters (FT-4.6a, GitHub issue #468). Nine
+implemented: `boxblur`, `avgblur`, `gblur`, `unsharp`, `cas`, `dblur`,
+`guided` (self-guided mode only), `varblur`, `yaepblur`. Two left for a
+follow-up: `sab`, `smartblur`.
 
 ## Scope correction
 
@@ -35,8 +37,12 @@ already written and measured, so nothing was discarded, only refiled.
 either agent working these two crates, and was dropped from both.
 
 This crate's own eleven-name list is `unsharp, cas, avgblur, gblur, dblur,
-varblur, yaepblur, guided, boxblur, smartblur, sab`. Four are implemented;
-see "Left for a follow-up" below for the other seven and why.
+varblur, yaepblur, guided, boxblur, smartblur, sab`. All eleven names were
+re-verified against `ffmpeg -hide_banner -filters` and `ffmpeg -h
+filter=<name>` a second time (2026-08-23, `ffmpeg 8.1`) before this pass's
+work started — every name the plan lists exists in this reference build,
+and none of the option tables the plan implies were missing. Nine are now
+implemented; see "Left for a follow-up" below for the other two and why.
 
 ## What it is
 
@@ -46,7 +52,15 @@ FilterDesc` and a crate-private `fn create`, aggregated by
 — the same shape `vaco-filter-convolve`/`vaco-filter-audio-eq` use.
 `src/common.rs` holds the shared 8-bit plane helpers every filter here
 builds on, in particular `box_pass` — the clamp-bordered box average
-`boxblur`, `avgblur` and `unsharp`'s internal blur all share.
+`boxblur`, `avgblur` and `unsharp`'s internal blur all share — and, new
+this pass, `sample_bilinear`, the off-grid sampling `dblur`'s rotated line
+needs and no other filter here does.
+
+`varblur` is this crate's first two-input filter: it is built directly
+against `vaco-filter-framesync` (`FrameSyncFilter`, `Synced`), following
+`vaco-filter-video-composite::overlay`'s pattern rather than waiting on
+`vaco-filter-core`'s not-yet-landed `Paired<F>` adapter
+(`planning/INTERFACE-GAPS.md` gap 10).
 
 ## How it works
 
@@ -102,51 +116,141 @@ have (normalises to `1`; blurring a constant field is the identity) — but
 it is **not** framecrc-equal to the reference. `steps` is parsed but does
 not change behaviour.
 
+### `cas`: AMD's published formula, right shape, unresolved constants
+
+Implemented from AMD's own public FidelityFX Contrast Adaptive Sharpen
+description (an independently published spec, not FFmpeg source — a
+legitimate `AGENT-CONSTRAINTS.md`/D7 source): a per-pixel four-neighbour
+cross feeds a min/max-ratio "amplification" term, scaled by a
+strength-dependent peak weight, into a renormalised sharpening blend.
+
+Measured against the reference (`ffmpeg 8.1`, a `mod(X*53+Y*19,256)` test
+pattern): even `strength=0` visibly sharpens (`106 -> 105` at one pixel),
+refuting "`strength` gates sharpening on/off" and confirming the peak
+weight range does not reach `0` at either end — consistent with AMD's own
+"mild" (`-1/8`) to "aggressive" (`-1/5`) framing. But inverting the blend
+formula against the measured `strength=0`/`strength=1` samples did not
+converge on one clean constant set: several interior pixels imply a
+saturated weight the plain formula does not reproduce. Shipped as a
+structural, published-spec implementation — verified via the flat-field
+identity invariant (a property of the blend's own algebra, holds for any
+`strength`) — not a framecrc pin. See `src/cas.rs`'s doc.
+
+### `dblur`: directional box blur, not the reference's asymmetric kernel
+
+Measured (`angle=0:radius=1` on a single-pixel impulse): the reference's
+response along the blur line is `23, 46, 115, 44, 17` — **not symmetric**
+around the impulse — which rules out any plain symmetric box or triangular
+kernel taken along the line. That is the signature of a recursive or
+otherwise order-dependent construction, the same class of finding as
+`gblur`'s. This crate ships a symmetric box blur sampled with
+`common::sample_bilinear` along `(cos(angle), sin(angle))`, verified via
+`radius=0` identity and flat-field fixed-point invariants — a real,
+well-defined directional blur, but not the reference's exact algorithm.
+See `src/dblur.rs`'s doc.
+
+### `yaepblur`: variance-gated blend, sigma trend confirmed, formula not solved
+
+Measured (`radius=1`, an interior step edge): larger `sigma` visibly blurs
+more (`sigma=1000000` moves a pixel most of the way to its local box
+average; `sigma=1` barely moves it), confirming `sigma` trades blur
+strength against edge preservation — but even the `sigma=1000000` limit
+came out one count off a plain box average at one probed pixel and exact
+at another, ruling out "large `sigma` reduces to `common::box_pass`
+exactly" as a description of the reference. This crate ships a standard,
+independently published adaptive-smoothing formula (local variance versus
+`sigma`, the same shape as a Wiener/MMSE filter), verified via the
+flat-field identity invariant, which happens to match the reference's own
+flat-field behaviour exactly (not just structurally — a real measured
+point of agreement), and a directional "more sigma, more blur" trend test.
+See `src/yaepblur.rs`'s doc.
+
+### `varblur`: two-input variable-radius blur, two open anomalies
+
+Built as a `FrameSyncFilter` (`vaco-filter-framesync`, `FsInput::dual`).
+Measured (`ffmpeg 8.1`, `yuv420p`): the reference's `varblur` produced an
+all-zero output for a `gray8` input under this crate's probe setup, even
+though every sibling filter in this crate accepts `gray8` — unexplained,
+not reproduced deliberately. With `yuv420p`, a radius map reading a
+constant `0` (which, with `min_r=0`, should mean "no blur, identity") still
+measurably spread an impulse across two adjacent columns at equal weight
+rather than leaving it untouched. Both anomalies are recorded rather than
+silently modelled around. This crate ships the straightforward reading —
+`radius(x,y) = round(min_r + (max_r-min_r)*ctrl(x,y)/255)`, then an
+ordinary clamp-bordered, truncating box average — verified via a
+constant-main-field fixed-point invariant that holds regardless of how the
+per-pixel radius is actually computed, and exercised end-to-end through
+the real `Graph`/`Synced` scheduler in `tests_graph.rs` (not just its pure
+helper functions). See `src/varblur.rs`'s doc.
+
+### `guided`: the He et al. (2010) formula, self-guided mode only
+
+`guidance=off` (self-guided, the default) is implemented directly from the
+published algorithm (box filters of `I`, `I*I`, and the derived
+coefficients `a`/`b`); `guidance=on` (a second, external guide stream) and
+`mode=fast` (subsampled) are **not** implemented and `create` rejects them
+explicitly rather than silently downgrading to the self-guided/basic case.
+Verified via a flat-field identity invariant that is a property of the
+published formula's own algebra (`var_I = 0` forces `a = 0`, `b = I`,
+regardless of `radius`/`eps`) — not probed against the reference in this
+pass. See `src/guided.rs`'s doc.
+
 ## What is verified versus structural
 
 | Confidence | Filters |
 |---|---|
 | Framecrc-level (interior, against small generated inputs run through the reference directly) | `boxblur`, `avgblur` |
 | Interior verified, border a documented gap | `unsharp` |
-| Structural only | `gblur` (not the reference's algorithm — see above) |
+| Structural only, each with a measured refutation of the naive reading and an independent algebraic invariant | `gblur` (IIR, not FIR), `cas` (right shape, constants not solved), `dblur` (measured asymmetric response), `yaepblur` (sigma trend confirmed, formula not solved), `varblur` (two measured anomalies, including non-identity `radius=0`), `guided` (`guidance=off` only, not probed against the reference) |
 
 Independent oracles used (never the implementation re-run against itself,
 per `AGENT-CONSTRAINTS.md`): a DC/constant-field fixed point for every
-blur; a direct analytic invariant for `unsharp` (a box average of a linear
-ramp equals the ramp's own centre value); Gaussian-kernel normalisation for
-`gblur`; and, for every filter, the reference binary's own raw pixel
-output on a small generated `lavfi`/`geq` input, pinned into a regression
-test.
+blur (including `cas`, `dblur`, `yaepblur`, `varblur`, `guided`, each shown
+to be a property of that filter's own formula's algebra, not merely
+asserted); a direct analytic invariant for `unsharp` (a box average of a
+linear ramp equals the ramp's own centre value); Gaussian-kernel
+normalisation for `gblur`; a monotonic sigma-versus-blur trend for
+`yaepblur`; and, for every framecrc-level filter, the reference binary's
+own raw pixel output on a small generated `lavfi`/`geq` input, pinned into
+a regression test. Every fix in this pass was falsified once (the
+underlying bug reintroduced, the test confirmed to fail, then reverted) —
+see the crate's git history for the three concrete cases (`inflate`'s
+rounding, `morpho`'s self-exclusion, `cas`'s flat-field algebra — the
+first two live in `vaco-filter-convolve`, checked from this crate's sibling
+work in the same pass).
 
 ## Left for a follow-up
 
-Seven more filters this crate's own roadmap row names: `cas` (AMD's
-published Contrast Adaptive Sharpen, a specific per-pixel min/max-ratio
-formula), `dblur` (directional blur — a 1D blur rotated to an arbitrary
-angle, needing bilinear sampling this crate's nearest-pixel
-`common::sample_clamped` does not provide), `varblur` (a per-pixel radius
-read from a second video stream — needs `vaco-filter-framesync`, not yet a
-dependency here), `yaepblur` (edge-preserving blur via a local-variance
-gate whose exact threshold formula was not measured), `guided` (the He et
-al. 2010 guided filter — well published, and the best candidate for a
-follow-up, but its box-filter-of-products construction was not reached),
-`sab` (shape-adaptive blur, a multi-pass per-pixel-adaptive-radius
-algorithm), `smartblur` (edge-aware blur, likewise not reached). None of
-them block the four filters that landed.
+Two filters this crate's own roadmap row still does not implement: `sab`
+(shape-adaptive blur, a multi-pass per-pixel-adaptive-radius algorithm) and
+`smartblur` (edge-aware blur). Both were not reached in this pass's time
+budget; neither was probed enough to know whether they share `gblur`'s IIR
+blocker, so no claim is made either way. `guided=on` and `guided`'s
+fast/subsampled mode are also deliberately unimplemented (see above) and
+rejected at creation rather than silently downgraded. None of them block
+the nine filters that did land.
 
 ## How to change it
 
 - `boxblur`, `avgblur` and `unsharp` all call `common::box_pass`; a change
   to its rounding or border behaviour changes all three at once — check
   every module's pinned regression test before changing it.
-- A new filter driven by a second video stream (`varblur`, `guided`'s
-  "on" guidance mode) needs `vaco-filter-framesync` added as a dependency;
-  see `vaco-filter-convolve`'s sibling `maskedclamp` (before it moved to
-  `vaco-filter-key`) or `vaco-filter-video-composite::overlay` for the
-  `Synced`/`FrameSyncFilter` pattern.
+- `dblur` is this crate's only user of `common::sample_bilinear`; a change
+  to its border convention changes only `dblur`.
+- A new filter driven by a second video stream follows `varblur`'s pattern
+  (a `FrameSyncFilter` over `FsInput::dual`, `event.get(1)` for the
+  secondary frame) or `vaco-filter-video-composite::overlay`'s — check
+  `planning/INTERFACE-GAPS.md` gap 10 first in case `Paired<F>` has landed
+  by the time you read this, which would remove the need to hand-write the
+  event loop.
 - Gotcha: `common::plane_selected`'s bitmask, `common::to_i32`'s saturating
   cast, and `common::sample_clamped`'s clamp-to-edge are used by every
-  filter in this crate; a change to any of them is a change to all four.
+  filter in this crate; a change to any of them is a change to all nine.
+- Gotcha: `cas`'s `create` and `guided`'s `create` both parse named string
+  options (`mode`, `guidance`) rather than plain integers, because
+  `vaco-opts` has no named-integer-option support — see
+  `vaco-filter-video-composite::overlay`'s `eval`/`format`/`alpha` fields
+  for the established pattern this follows.
 
 ## Configuration
 
@@ -158,7 +262,6 @@ structs per module), documented in each module's own doc comment against
 ## Dependencies
 
 `vaco-core`, `vaco-opts`, `vaco-frame`, `vaco-pixfmt`, `vaco-filter-core`,
-`vaco-filter-graph` (all internal, layer 5). No external crates. No
-`vaco-filter-framesync` dependency at present — the one filter here that
-would have needed it (`maskedclamp`) turned out not to belong to this
-crate at all.
+`vaco-filter-graph` (all internal, layer 5), and, new this pass,
+`vaco-filter-framesync` for `varblur`'s two-input wiring. No external
+crates.

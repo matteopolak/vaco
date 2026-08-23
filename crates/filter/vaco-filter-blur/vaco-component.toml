@@ -1,12 +1,11 @@
 # Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
 #
-# Four of the eleven T2 blur/sharpen video filters `planning/16-filters.md`
+# Nine of the eleven T2 blur/sharpen video filters `planning/16-filters.md`
 # §4.2 assigns to this crate (GitHub issue #468). `convolution`, `sobel`,
 # `prewitt`, `roberts`, `scharr`, `kirsch`, `dilation`, `erosion`, `median`
 # moved to `vaco-filter-convolve` after the crate boundary was corrected
-# against that table. See `docs/filter/vaco-filter-blur.md` for the seven
-# filters (`cas`, `dblur`, `guided`, `sab`, `smartblur`, `varblur`,
-# `yaepblur`) this crate leaves for a follow-up.
+# against that table. See `docs/filter/vaco-filter-blur.md` for the two
+# filters (`sab`, `smartblur`) this crate leaves for a follow-up.
 
 [[component]]
 kind = "filter"
@@ -24,6 +23,20 @@ media = "video"
 
 [[component]]
 kind = "filter"
+name = "cas"
+long_name = "Contrast Adaptive Sharpen"
+ctor = "vaco_filter_blur::cas::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "dblur"
+long_name = "Apply Directional Blur filter"
+ctor = "vaco_filter_blur::dblur::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
 name = "gblur"
 long_name = "Apply Gaussian Blur filter"
 ctor = "vaco_filter_blur::gblur::DESC"
@@ -31,7 +44,28 @@ media = "video"
 
 [[component]]
 kind = "filter"
+name = "guided"
+long_name = "Apply Guided filter"
+ctor = "vaco_filter_blur::guided::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
 name = "unsharp"
 long_name = "Sharpen or blur the input video"
 ctor = "vaco_filter_blur::unsharp::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "varblur"
+long_name = "Apply Variable Blur filter"
+ctor = "vaco_filter_blur::varblur::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "yaepblur"
+long_name = "Yet another edge preserving blur filter"
+ctor = "vaco_filter_blur::yaepblur::DESC"
 media = "video"
