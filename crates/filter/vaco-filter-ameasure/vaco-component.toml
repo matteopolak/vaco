@@ -1,0 +1,89 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Eleven T3 audio analysis and measurement filters (FT-4.13c, GitHub #483).
+# Plan 16 §4.3's `vaco-filter-aanalysis` row names fourteen; `astats` and
+# `silencedetect` are excluded because `vaco-filter-audio-dynamics` already
+# registers both, and `axcorrelate` because `vaco-filter-achannel`
+# (FT-4.13b, GitHub #482, landed first) already registers it — a genuine
+# two-issue overlap (see `src/lib.rs` and
+# `docs/filter/vaco-filter-ameasure.md` for the full reconciliation,
+# including where GitHub #483's own suggested list was wrong in other
+# ways). Each `ctor` names the per-filter `pub const DESC: FilterDesc`,
+# matching every sibling audio crate's convention.
+
+[[component]]
+kind = "filter"
+name = "aderivative"
+long_name = "Compute derivative of input audio"
+ctor = "vaco_filter_ameasure::aderivative::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "aintegral"
+long_name = "Compute integral of input audio"
+ctor = "vaco_filter_ameasure::aintegral::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "aphasemeter"
+long_name = "Convert input audio to phase meter video output"
+ctor = "vaco_filter_ameasure::aphasemeter::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "apsnr"
+long_name = "Measure Audio Peak Signal-to-Noise Ratio"
+ctor = "vaco_filter_ameasure::apsnr::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "asdr"
+long_name = "Measure Audio Signal-to-Distortion Ratio"
+ctor = "vaco_filter_ameasure::asdr::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "asisdr"
+long_name = "Measure Audio Scale-Invariant Signal-to-Distortion Ratio"
+ctor = "vaco_filter_ameasure::asisdr::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "aspectralstats"
+long_name = "Show frequency domain statistics about audio frames"
+ctor = "vaco_filter_ameasure::aspectralstats::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "ashowinfo"
+long_name = "Show textual information for each audio frame"
+ctor = "vaco_filter_ameasure::ashowinfo::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "drmeter"
+long_name = "Measure audio dynamic range"
+ctor = "vaco_filter_ameasure::drmeter::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "ebur128"
+long_name = "EBU R128 scanner"
+ctor = "vaco_filter_ameasure::ebur128::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "replaygain"
+long_name = "ReplayGain scanner"
+ctor = "vaco_filter_ameasure::replaygain::DESC"
+media = "audio"

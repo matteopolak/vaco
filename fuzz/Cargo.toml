@@ -54,12 +54,15 @@ vaco-demux-raw = { path = "../crates/format/vaco-demux-raw" }
 vaco-demux-rtsp = { path = "../crates/format/vaco-demux-rtsp" }
 vaco-expr = { path = "../crates/core/vaco-expr" }
 vaco-filter-achannel = { path = "../crates/filter/vaco-filter-achannel" }
+vaco-filter-ameasure = { path = "../crates/filter/vaco-filter-ameasure" }
 vaco-filter-audio = { path = "../crates/filter/vaco-filter-audio" }
 vaco-filter-audio-dynamics = { path = "../crates/filter/vaco-filter-audio-dynamics" }
 vaco-filter-audio-eq = { path = "../crates/filter/vaco-filter-audio-eq" }
+vaco-filter-blur = { path = "../crates/filter/vaco-filter-blur" }
 vaco-filter-core = { path = "../crates/filter/vaco-filter-core" }
 vaco-filter-denoise = { path = "../crates/filter/vaco-filter-denoise" }
 vaco-filter-framesync = { path = "../crates/filter/vaco-filter-framesync" }
+vaco-filter-geometry = { path = "../crates/filter/vaco-filter-geometry" }
 vaco-filter-graph = { path = "../crates/filter/vaco-filter-graph" }
 vaco-filter-plumbing = { path = "../crates/filter/vaco-filter-plumbing" }
 vaco-filter-video-composite = { path = "../crates/filter/vaco-filter-video-composite" }
@@ -141,12 +144,15 @@ default = [
     "demux-rtsp",
     "expr",
     "filter-achannel",
+    "filter-ameasure",
     "filter-audio",
     "filter-audio-dynamics",
     "filter-audio-eq",
+    "filter-blur",
     "filter-core",
     "filter-denoise",
     "filter-framesync",
+    "filter-geometry",
     "filter-graph",
     "filter-plumbing",
     "filter-video-composite",
@@ -222,12 +228,15 @@ demux-raw = []
 demux-rtsp = []
 expr = []
 filter-achannel = []
+filter-ameasure = []
 filter-audio = []
 filter-audio-dynamics = []
 filter-audio-eq = []
+filter-blur = []
 filter-core = []
 filter-denoise = []
 filter-framesync = []
+filter-geometry = []
 filter-graph = []
 filter-plumbing = []
 filter-video-composite = []
@@ -605,6 +614,14 @@ bench = false
 required-features = ["filter-achannel"]
 
 [[bin]]
+name = "filter_ameasure_options"
+path = "fuzz_targets/filter_ameasure_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-ameasure"]
+
+[[bin]]
 name = "filter_audio_dynamics_options"
 path = "fuzz_targets/filter_audio_dynamics_options.rs"
 test = false
@@ -629,12 +646,28 @@ bench = false
 required-features = ["filter-audio"]
 
 [[bin]]
+name = "filter_blur_options"
+path = "fuzz_targets/filter_blur_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-blur"]
+
+[[bin]]
 name = "filter_denoise_options"
 path = "fuzz_targets/filter_denoise_options.rs"
 test = false
 doc = false
 bench = false
 required-features = ["filter-denoise"]
+
+[[bin]]
+name = "filter_geometry_options"
+path = "fuzz_targets/filter_geometry_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-geometry"]
 
 [[bin]]
 name = "filter_graph_schedule"

@@ -1,0 +1,31 @@
+[package]
+name = "vaco-filter-ameasure"
+description = "T3 audio analysis and measurement filters (FT-4.13c, GitHub #483): ashowinfo, aspectralstats, apsnr, asdr, asisdr, drmeter, ebur128, replaygain, aphasemeter, aderivative, aintegral."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+vaco-core = { path = "../../core/vaco-core" }
+vaco-frame = { path = "../../model/vaco-frame" }
+vaco-sampfmt = { path = "../../model/vaco-sampfmt" }
+vaco-chlayout = { path = "../../model/vaco-chlayout" }
+vaco-resample = { path = "../../signal/vaco-resample" }
+vaco-tx = { path = "../../signal/vaco-tx" }
+vaco-filter-core = { path = "../../filter/vaco-filter-core" }
+vaco-filter-graph = { path = "../../filter/vaco-filter-graph" }
+vaco-filter-framesync = { path = "../../filter/vaco-filter-framesync" }
+tracing.workspace = true
+smallvec.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.vaco]
+layer = 5

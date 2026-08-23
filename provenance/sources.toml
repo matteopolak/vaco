@@ -398,3 +398,24 @@ kind     = "paper"
 title    = "Chang, Yu & Vetterli, \"Adaptive wavelet thresholding for image denoising and compression\", IEEE Transactions on Image Processing, 2000 — the per-band adaptive (BayesShrink) threshold `vaguedenoiser`'s `type=bayes` uses"
 acquired = "2026-08-23"
 where    = "https://doi.org/10.1109/83.862633"
+
+[[source]]
+id       = "itu-r-bs1770-4"
+kind     = "spec"
+title    = "ITU-R BS.1770-4 (10/2015), Algorithms to measure audio programme loudness and true-peak audio level — the K-weighting pre-filter, 400 ms/75%-overlap gating and -0.691 + 10*log10(mean square) loudness map `vaco-filter-ameasure::kweight`/`loudness` implement, and (per EBU Tech 3341/3342) the Loudness Range percentile method"
+acquired = "2026-08-23"
+where    = "https://www.itu.int/rec/R-REC-BS.1770"
+
+[[source]]
+id       = "leroux-2019-sisdr"
+kind     = "paper"
+title    = "Le Roux, Wisdom, Erdogan & Hershey, \"SDR – half-baked or well done?\", ICASSP 2019 — the scale-invariant projection `alpha = <estimate, reference> / <reference, reference>` `asisdr` implements, and the contrast with plain (scale-variant) SDR `asdr` uses"
+acquired = "2026-08-23"
+where    = "https://doi.org/10.1109/ICASSP.2019.8683855"
+
+[[source]]
+id       = "peeters-2004-audio-features"
+kind     = "paper"
+title    = "Peeters, \"A large set of audio features for sound description (similarity and classification) in the CUIDADO project\", IRCAM, 2004 — the thirteen spectral-shape statistics (centroid, spread, skewness, kurtosis, flatness, crest, flux, slope, decrease, rolloff, ...) `aspectralstats` computes"
+acquired = "2026-08-23"
+where    = "http://recherche.ircam.fr/anasyn/peeters/ARTICLES/Peeters_2003_cuidadoaudiofeatures.pdf"
