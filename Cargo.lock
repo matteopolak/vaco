@@ -2830,6 +2830,7 @@ dependencies = [
  "vaco-demux-raw",
  "vaco-demux-rtsp",
  "vaco-filter-audio",
+ "vaco-filter-audio-dynamics",
  "vaco-filter-audio-eq",
  "vaco-filter-core",
  "vaco-filter-plumbing",

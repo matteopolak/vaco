@@ -1663,6 +1663,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-filter-audio-dynamics"
+version = "0.1.0"
+dependencies = [
+ "smallvec",
+ "tracing",
+ "vaco-chlayout",
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-filter-framesync",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-resample",
+ "vaco-sampfmt",
+]
+
+[[package]]
 name = "vaco-filter-audio-eq"
 version = "0.1.0"
 dependencies = [
@@ -2003,6 +2019,7 @@ dependencies = [
  "vaco-demux-rtsp",
  "vaco-expr",
  "vaco-filter-audio",
+ "vaco-filter-audio-dynamics",
  "vaco-filter-audio-eq",
  "vaco-filter-core",
  "vaco-filter-framesync",
@@ -2554,6 +2571,7 @@ dependencies = [
  "vaco-demux-raw",
  "vaco-demux-rtsp",
  "vaco-filter-audio",
+ "vaco-filter-audio-dynamics",
  "vaco-filter-audio-eq",
  "vaco-filter-core",
  "vaco-filter-plumbing",

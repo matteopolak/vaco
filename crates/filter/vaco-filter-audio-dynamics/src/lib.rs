@@ -1,0 +1,46 @@
+//! T2 audio dynamics filters: compressor/limiter/gate/expander/sidechain
+//! family plus loudness normalisation and measurement.
+//!
+//! FT-4.8b (GitHub #472), the other of two children FT-4.8 (#56) split into
+//! for single-writer ownership — the sibling is `vaco-filter-audio-eq`
+//! (#471).
+//!
+//! # Scope versus the brief that requested this crate
+//!
+//! GitHub #472's own text — checked directly rather than trusted from the
+//! brief's restatement, per this project's practice after an earlier agent
+//! found its epic named a different grouping than its brief claimed — reads
+//! "Dynamics: compressor/limiter/gate/expander/sidechain family plus
+//! `loudnorm` and `dynaudnorm`." That maps to nine filters counted against
+//! `ffmpeg -filters` (2026-08-23): `acompressor`, `alimiter`, `agate`,
+//! `compand` and `mcompand` (the "expander" family — `compand`'s own
+//! description is literally "Compress or expand audio dynamic range"),
+//! `sidechaincompress`, `sidechaingate`, `loudnorm`, `dynaudnorm`. The
+//! brief that requested this crate additionally named `speechnorm`,
+//! `volumedetect`, `astats`, `silencedetect`, `silenceremove` — five
+//! measurement/silence filters #472's own text does not mention. All
+//! fourteen are implemented here; see
+//! `docs/filter/vaco-filter-audio-dynamics.md` for which are numerically
+//! verified against a real property and which are structural.
+#![forbid(unsafe_code)]
+
+pub mod acompressor;
+pub mod agate;
+pub mod alimiter;
+pub mod astats;
+mod common;
+pub mod compand;
+pub mod dynaudnorm;
+mod engine;
+pub mod loudnorm;
+pub mod mcompand;
+pub mod registry;
+mod sample;
+pub mod sidechaincompress;
+pub mod sidechaingate;
+pub mod silencedetect;
+pub mod silenceremove;
+pub mod speechnorm;
+pub mod volumedetect;
+
+pub use registry::DynamicsRegistry;

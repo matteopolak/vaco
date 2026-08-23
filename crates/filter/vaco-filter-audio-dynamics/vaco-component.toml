@@ -1,0 +1,104 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Fourteen T2 audio dynamics filters (FT-4.8b, GitHub #472): the
+# compressor/limiter/gate/expander/sidechain family plus loudness
+# normalisation and measurement. Each `ctor` names the per-filter
+# `pub const DESC: FilterDesc`, matching `vaco-filter-audio`'s convention.
+
+[[component]]
+kind = "filter"
+name = "acompressor"
+long_name = "Audio compressor"
+ctor = "vaco_filter_audio_dynamics::acompressor::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "agate"
+long_name = "Audio gate"
+ctor = "vaco_filter_audio_dynamics::agate::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "alimiter"
+long_name = "Audio lookahead limiter"
+ctor = "vaco_filter_audio_dynamics::alimiter::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "astats"
+long_name = "Show time domain statistics about audio frames"
+ctor = "vaco_filter_audio_dynamics::astats::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "compand"
+long_name = "Compress or expand dynamic range of audio"
+ctor = "vaco_filter_audio_dynamics::compand::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "dynaudnorm"
+long_name = "Dynamic Audio Normalizer"
+ctor = "vaco_filter_audio_dynamics::dynaudnorm::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "loudnorm"
+long_name = "EBU R128 loudness normalization"
+ctor = "vaco_filter_audio_dynamics::loudnorm::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "mcompand"
+long_name = "Multiband Compress or expand dynamic range of audio"
+ctor = "vaco_filter_audio_dynamics::mcompand::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "sidechaincompress"
+long_name = "Sidechain compressor"
+ctor = "vaco_filter_audio_dynamics::sidechaincompress::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "sidechaingate"
+long_name = "Audio sidechain gate"
+ctor = "vaco_filter_audio_dynamics::sidechaingate::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "silencedetect"
+long_name = "Detect silence"
+ctor = "vaco_filter_audio_dynamics::silencedetect::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "silenceremove"
+long_name = "Remove silence"
+ctor = "vaco_filter_audio_dynamics::silenceremove::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "speechnorm"
+long_name = "Speech Normalizer"
+ctor = "vaco_filter_audio_dynamics::speechnorm::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "volumedetect"
+long_name = "Detect audio volume"
+ctor = "vaco_filter_audio_dynamics::volumedetect::DESC"
+media = "audio"

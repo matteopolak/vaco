@@ -1,0 +1,113 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Fifteen T2 audio EQ filters (FT-4.8a, GitHub #471): the twelve-filter
+# biquad family from one file (`equalizer`, `bass`, `lowshelf`, `treble`,
+# `highshelf`, `tiltshelf`, `highpass`, `lowpass`, `bandpass`, `bandreject`,
+# `allpass`, `biquad`) plus `anequalizer`, `firequalizer`, `superequalizer`.
+# Each `ctor` names the per-filter `pub const DESC: FilterDesc`, matching
+# `vaco-filter-audio`'s convention exactly.
+
+[[component]]
+kind = "filter"
+name = "allpass"
+long_name = "Apply a two-pole all-pass filter"
+ctor = "vaco_filter_audio_eq::allpass::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "anequalizer"
+long_name = "Apply high-order audio parametric multi band equalizer"
+ctor = "vaco_filter_audio_eq::anequalizer::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "bandpass"
+long_name = "Apply a two-pole Butterworth band-pass filter"
+ctor = "vaco_filter_audio_eq::bandpass::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "bandreject"
+long_name = "Apply a two-pole Butterworth band-reject filter"
+ctor = "vaco_filter_audio_eq::bandreject::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "bass"
+long_name = "Boost or cut lower frequencies"
+ctor = "vaco_filter_audio_eq::bass::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "biquad"
+long_name = "Apply a biquad IIR filter with the given coefficients"
+ctor = "vaco_filter_audio_eq::biquad::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "equalizer"
+long_name = "Apply two-pole peaking equalization (EQ) filter"
+ctor = "vaco_filter_audio_eq::equalizer::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "firequalizer"
+long_name = "Finite Impulse Response Equalizer"
+ctor = "vaco_filter_audio_eq::firequalizer::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "highpass"
+long_name = "Apply a high-pass filter with 3dB point frequency"
+ctor = "vaco_filter_audio_eq::highpass::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "highshelf"
+long_name = "Apply a high shelf filter"
+ctor = "vaco_filter_audio_eq::highshelf::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "lowpass"
+long_name = "Apply a low-pass filter with 3dB point frequency"
+ctor = "vaco_filter_audio_eq::lowpass::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "lowshelf"
+long_name = "Apply a low shelf filter"
+ctor = "vaco_filter_audio_eq::lowshelf::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "superequalizer"
+long_name = "Apply 18 band equalization filter"
+ctor = "vaco_filter_audio_eq::superequalizer::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "tiltshelf"
+long_name = "Apply a tilt shelf filter"
+ctor = "vaco_filter_audio_eq::tiltshelf::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "treble"
+long_name = "Boost or cut upper frequencies"
+ctor = "vaco_filter_audio_eq::treble::DESC"
+media = "audio"

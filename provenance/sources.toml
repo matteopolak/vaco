@@ -335,3 +335,17 @@ kind     = "blackbox"
 title    = "Observed `ffmpeg -h demuxer=rtsp` / `-h demuxer=rtp` option tables and `-protocol_whitelist` defaults for rtsp/tls, ffmpeg 8.1"
 acquired = "2026-08-23"
 where    = "the reference binary installed on the development machine"
+
+[[source]]
+id       = "rbj-audio-eq-cookbook"
+kind     = "spec"
+title    = "Robert Bristow-Johnson, \"Audio EQ Cookbook\" — the standard RBJ biquad coefficient formulas for lowpass/highpass/bandpass/notch/allpass/peaking-EQ/shelving filters"
+acquired = "2026-08-23"
+where    = "https://www.w3.org/TR/audio-eq-cookbook/"
+
+[[source]]
+id       = "giannoulis-2012-drc-tutorial"
+kind     = "paper"
+title    = "Giannoulis, Massberg & Reiss, \"Digital Dynamic Range Compressor Design — A Tutorial and Analysis\", Journal of the Audio Engineering Society, 2012 — the soft-knee quadratic gain-computer formula"
+acquired = "2026-08-23"
+where    = "https://www.eecs.qmul.ac.uk/~josh/documents/2012/GiannoulisMassbergReiss-dynamicrangecompression-JAES2012.pdf"
