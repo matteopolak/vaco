@@ -210,3 +210,63 @@ kind     = "blackbox"
 title    = "The ID3v1 genre list: indices 0-79 original, 80-191 the Winamp extensions"
 acquired = "2026-08-22"
 where    = "re-derived by script against the pinned reference version"
+
+[[source]]
+id       = "mp4ra-object-types"
+kind     = "spec"
+title    = "MP4 Registration Authority object type indication registry (ISO/IEC 14496-1 Table 5, extended)"
+acquired = "2026-08-23"
+where    = "https://mp4ra.org/registered-types/object-types"
+
+[[source]]
+id       = "smpte-st377-1"
+kind     = "spec"
+title    = "SMPTE ST 377-1, Material Exchange Format (MXF) — File Format Specification"
+acquired = "2026-08-23"
+where    = "SMPTE"
+
+[[source]]
+id       = "smpte-st379-1"
+kind     = "spec"
+title    = "SMPTE ST 379-1, Material Exchange Format (MXF) — MXF Generic Container"
+acquired = "2026-08-23"
+where    = "SMPTE"
+
+[[source]]
+id       = "smpte-st386"
+kind     = "spec"
+title    = "SMPTE ST 386, Material Exchange Format (MXF) — Mapping Type D-10 Essence Data to the MXF Generic Container"
+acquired = "2026-08-23"
+where    = "SMPTE"
+
+[[source]]
+id       = "smpte-st390"
+kind     = "spec"
+title    = "SMPTE ST 390, Material Exchange Format (MXF) — MXF Operational Pattern 1a"
+acquired = "2026-08-23"
+where    = "SMPTE"
+
+[[source]]
+id       = "smpte-st336"
+kind     = "spec"
+title    = "SMPTE ST 336, Data Encoding Protocol using Key-Length-Value"
+acquired = "2026-08-23"
+where    = "SMPTE"
+
+[[source]]
+id       = "smpte-rp210"
+kind     = "spec"
+title    = "SMPTE RP 210, SMPTE Metadata Dictionary"
+acquired = "2026-08-23"
+where    = "SMPTE"
+
+# The local-tag → UL property table: SMPTE RP 210 registers every value, but
+# the transcription route was a real primer pack and the local-set items it
+# unlocks, not the RP 210 text — see properties.rs's module docs for why that
+# distinction is recorded rather than collapsed into a spec citation.
+[[source]]
+id       = "ffmpeg-mxf-probe"
+kind     = "blackbox"
+title    = "Observed byte layout of `ffmpeg -f mxf` / `-f mxf_opatom` output, ffmpeg 8.1"
+acquired = "2026-08-23"
+where    = "the reference binary installed on the development machine"

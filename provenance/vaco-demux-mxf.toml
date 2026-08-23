@@ -1,0 +1,12 @@
+# See docs/provenance.md for the schema. `method = "probed"` even though the
+# underlying document is a spec: every UL in this table was read off a real
+# primer pack and the local-set items it unlocks (a file `ffmpeg 8.1` wrote),
+# not transcribed from the RP 210 text — see properties.rs's module docs for
+# why that route is recorded rather than collapsed into a spec citation.
+
+[[table]]
+name   = "TABLE"
+file   = "crates/format/vaco-demux-mxf/src/properties.rs"
+source = "ffmpeg-mxf-probe"
+clause = "Local-tag-to-UL property dictionary, cross-referenced against SMPTE RP 210"
+method = "probed"

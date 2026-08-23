@@ -4,3 +4,10 @@ file   = "crates/format/vaco-format-isom/src/probe.rs"
 source = "mp4ra-brands"
 clause = "the registered brand list"
 method = "transcribed"
+
+[[table]]
+name   = "OBJECT_TYPE_TABLE"
+file   = "crates/format/vaco-format-isom/src/esds.rs"
+source = "mp4ra-object-types"
+clause = "the object type indication registry"
+method = "transcribed"

@@ -1,0 +1,10 @@
+# Registry fragment. Consumed by `cargo xtask gen-registry`.
+
+[[component]]
+kind       = "demuxer"
+name       = "mxf"
+long_name  = "MXF (Material eXchange Format)"
+feature    = "demux-mxf"
+ctor       = "vaco_demux_mxf::DEMUXER"
+extensions = "mxf"
+mime_types = "application/mxf"
