@@ -1428,6 +1428,60 @@ generators of all, are **not implemented**: `testsrc` needs bitmap-font
 rendering and `testsrc2`'s animation did not resolve to a verifiable formula.
 Neither was guessed at.
 
+## 31. Filter options are not range-checked, and the reference's own ranges are the missing bound
+
+The fuzzer found one instance of this — `cellauto=size=911111x91111` asking for
+an 83 GB `Vec<bool>` — and it is a class, not an instance. Reading the option
+parsers rather than fuzzing them finds more, and shows the fix is the same
+thing as a conformance fix.
+
+`ffmpeg -h filter=<name>` states every option's range:
+
+```text
+haas           left_delay      <double>  (from 0 to 40)      default 2.05
+stereowiden    delay           <float>   (from 1 to 100)     default 20
+asetnsamples   nb_out_samples  <int>     (from 1 to INT_MAX) default 1024
+```
+
+Ours read the value and use it:
+
+```rust
+// vaco-filter-aeffects/src/haas.rs
+common::f64_opt(req, &["left_delay"], 2.05),          // no bound
+// vaco-filter-aeffects/src/stereowiden.rs
+let delay_ms = common::f64_opt(req, &["delay"], 20.0); // no bound
+// vaco-filter-audio/src/asetnsamples.rs
+.and_then(|s| s.parse::<usize>().ok()).unwrap_or(1024).max(1);  // lower only
+```
+
+and then size a buffer from it:
+
+```rust
+self.delay_samples = ((self.delay_ms * sample_rate) / 1000.0) as usize;
+self.hist.resize(self.delay_samples.max(1), 0.0);     // Vec<f64>
+```
+
+`stereowiden=delay=1e12` at 48 kHz is a 384 TB allocation attempt, and the
+reference simply rejects it, because 1e12 is outside `1..100`.
+
+Across the filter crates, **50 of 173 numeric option reads clamp; 123 do
+not.** Not every unclamped one is dangerous — most feed arithmetic rather than
+an allocation — but every one of them is a *conformance* divergence regardless,
+because the reference's parser refuses out-of-range values and ours accepts
+them.
+
+`compensationdelay` is the counter-example and shows the shape of the fix: its
+`mm`/`cm`/`m` options are clamped to the reference's own `0..10`, `0..100`,
+`0..100`, so it is both correct and safe for free.
+
+### Why this is one job, not two
+
+Finding 27 records that `-h filter=<name>` prints no option table. The ranges
+needed to *print* that table are exactly the ranges needed to *enforce* these
+bounds. Building an option schema with min/max per filter closes both, and
+gives the fuzzer a much smaller space to search. Doing them separately means
+transcribing every range from the reference twice.
+
 ## Harness changes, summarised
 
 Everything below is a change to `crates/tool/vaco-conformance/`,
