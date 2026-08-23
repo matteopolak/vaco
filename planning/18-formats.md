@@ -901,6 +901,15 @@ pkt (input stream time base)
  M5  interleave queue                                                 (§1.9)
  M6  bitstream filter chain                                           (§1.10)
  M7  Muxer::write_packet
+
+**These seven are the whole chain.** FW-08's description in §8.2 and in the
+roadmap said "M1–M28" for months; there is no M8 and never was, and an agent
+implementing it had to work that out and then invent an enumeration of its own
+for the rules the plan describes in prose. Corrected 2026-08-23.
+
+Note also that `M1`–`M7` is **two namespaces**: this mux chain, and the VERIFY
+experiments M1–M7 in §8.4 (`M1` there is "MP4 packet emission order"). They are
+unrelated. Cite the section, not just the number.
 ```
 
 - **R25 — `avoid_negative_ts`.** Values `auto` (−1, default), `disabled` (0), `make_non_negative`
@@ -2962,7 +2971,7 @@ sections. Zero encoders, zero filters, zero muxers.
 | `vaco-io` | `IoContext` read path, buffering, seek, size, short seek, sticky EOF/error, `bytes_read` accounting. Write path only for the `md5`/`crc` protocol sinks used by the harness. |
 | `vaco-protocol-core` | URL splitting, dispatch, whitelist/blacklist plumbing. |
 | Protocols | `file`, `pipe`, `fd`, `data`, `md5`. **No network.** |
-| `vaco-format-core` | Full object model (§1.1); probing (§1.5) including tie-break calibration; stream discovery (§1.6); the whole demux-side timestamp model (§1.7 R1–R24); duration estimation (R14–R18); index and generic/binary/format seek (§1.8) — needed by `-read_intervals`; the 40 generic options (§1.11), of which the mux-only ones are parsed and inert. |
+| `vaco-format-core` | Full object model (§1.1); probing (§1.5) including tie-break calibration; stream discovery (§1.6); the whole demux-side timestamp model (§1.7 R1–R24); duration estimation (R14–R18); index and generic/binary/format seek (§1.8) — needed by `-read_intervals`; the 39 generic options (§1.11), of which the mux-only ones are parsed and inert. |
 | Shared helpers | `vaco-format-isom`, `vaco-format-mpegts-tables`, `vaco-format-mpeg-common`, `vaco-format-nalu`, `vaco-format-metadata`, `vaco-format-avlanguage`, and `vaco-format-riff` (Matroska's `V_MS/VFW/FOURCC` and `A_MS/ACM` tracks need it, and the corpus will contain one). |
 | Demuxers | `mp4` (edit lists, fragmented, CENC *reporting*, metadata, chapters, cover art, HEIF tile groups), `matroska`/`webm` (lacing, content encodings, cues, tags, chapters, attachments, `CodecDelay`/`SeekPreRoll`/`DiscardPadding`), `mpegts`/`mpegtsraw` (PSI, programs, PES, descriptors, seek, duration). |
 | Conformance | `tests/conformance/probe/{isobmff,matroska,mpegts}.toml`, the tie-break corpus, and the timestamp matrix from §1.7.8 restricted to its demux half. |
@@ -2970,7 +2979,7 @@ sections. Zero encoders, zero filters, zero muxers.
 
 **Deferred, explicitly.**
 
-- Every muxer, and therefore §1.9 interleaving, §1.10 BSF-in-muxer, and §1.7's M1–M28 mux chain.
+- Every muxer, and therefore §1.9 interleaving, §1.10 BSF-in-muxer, and §1.7's M1–M7 mux chain.
   The `Muxer` trait is *defined* in v0.1 (it must be, since `vaco-format-core`'s surface is being
   frozen) but has no implementations except the utility sinks the harness needs.
 - All network protocols, TLS, HLS, DASH, RTP/RTSP.
@@ -3067,7 +3076,7 @@ and plan 16 (phase-numbered).
 | FW-01 | `vaco-format-core`: object model §1.1 (`Stream`, `Program`, `Chapter`, `StreamGroup`, `Metadata`, dispositions, side data) | `vaco-codec-core` (plan 15 F-01) | 3 | **Blocks everything. Do first, review hard, then freeze.** |
 | FW-02 | `Demuxer`/`Muxer` traits, `DemuxCtx`/`MuxCtx`, descriptors, `ParserProvider`/`BsfProvider` seams, registry codegen | FW-01 | 2 | The §1.0 layering amendment lands here. |
 | FW-03 | Probing §1.5: padded `ProbeData`, scoring, retry, forced format, whitelist, tie-break table + `just calibrate-probe` | FW-02 | 3 | Directly byte-verified via `probe_score`. |
-| FW-11 | The 40 generic options + `vaco-opts` wiring + `-h demuxer=`/`-h muxer=` introspection | FW-02, `vaco-opts` | 2 | |
+| FW-11 | The 39 generic options + `vaco-opts` wiring + `-h demuxer=`/`-h muxer=` introspection | FW-02, `vaco-opts` | 2 | |
 
 ## 8.2 Wave F1 — the framework's hard parts (partly serial; ~3 people)
 
@@ -3078,7 +3087,7 @@ and plan 16 (phase-numbered).
 | FW-06 | Timestamp model §1.7 R14–R24: duration estimation, generation, monotonic repair, fill-in | FW-05, FW-04 | 4 | after FW-05 |
 | FW-07 | Seek §1.8: index, generic seek, binary search, byte seek, flags, the `-ss` contract | FW-04, FW-05 | 6 | after FW-05 |
 | FW-12 | Metadata/chapter/program/stream-group model + `MetadataConv` driver + `vaco-format-metadata` | FW-01 | 3 | yes |
-| FW-08 | Muxer core: init/header/packet/trailer state machine, M1–M28, `avoid_negative_ts`, monotonicity | FW-02, IO-02 | 4 | yes |
+| FW-08 | Muxer core: init/header/packet/trailer state machine, the §1.7 mux chain M1–M7, `avoid_negative_ts`, monotonicity | FW-02, IO-02 | 4 | yes |
 | FW-09 | Interleaving §1.9: per-DTS, chunked, sparse escape, custom policies | FW-08 | 4 | after FW-08 |
 | FW-10 | BSF-in-muxer §1.10 | FW-08, plan 15 B-01 | 2 | after FW-08 |
 

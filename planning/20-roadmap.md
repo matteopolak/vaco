@@ -674,10 +674,10 @@ new estimation in this roadmap. They cover only what is *not* already budgeted a
 | FW-05 | Timestamp model R1–R13: rescaling, NOPTS, wrap state, `start_time` | `vaco-format-core` | 18 §8.2 | 4.0 | FW-01 | 2 |
 | FW-06 | Timestamp model R14–R24: duration estimation, generation, monotonic repair, fill-in | `vaco-format-core` | 18 §8.2 | 4.0 | FW-05, FW-04 | 2 |
 | FW-07 | Seek §1.8: index, generic seek, binary search, byte seek, flags, the `-ss` contract | `vaco-format-core` | 18 §8.2 | 6.0 | FW-04, FW-05 | 2 |
-| FW-08 | Muxer core: init/header/packet/trailer state machine, M1–M28, `avoid_negative_ts`, monotonicity | `vaco-format-core` | 18 §8.2 | 4.0 | FW-02, IO-02 | 4 |
+| FW-08 | Muxer core: init/header/packet/trailer state machine, the §1.7 mux chain M1–M7, `avoid_negative_ts`, monotonicity | `vaco-format-core` | 18 §8.2 | 4.0 | FW-02, IO-02 | 4 |
 | FW-09 | Interleaving §1.9: per-DTS, chunked, sparse escape, custom policies | `vaco-format-core` | 18 §8.2 | 4.0 | FW-08 | 4 |
 | FW-10 | BSF-in-muxer §1.10 | `vaco-format-core` | 18 §8.2 | 2.0 | FW-08, B-01 | 4 |
-| FW-11 | The 40 generic options + `vaco-opts` wiring + `-h demuxer=`/`-h muxer=` introspection | `vaco-format-core` | 18 §8.1 | 2.0 | FW-02, FD-05 | 2 |
+| FW-11 | The 39 generic options + `vaco-opts` wiring + `-h demuxer=`/`-h muxer=` introspection | `vaco-format-core` | 18 §8.1 | 2.0 | FW-02, FD-05 | 2 |
 | FW-12 | Metadata/chapter/program/stream-group model + `MetadataConv` driver | `vaco-format-metadata` | 18 §8.2 | 3.0 | FW-01 | 2 |
 | SH-01 | ISO base media file format shared tables and helpers | `vaco-format-isom` | 18 §8.3 | 4.0 | FW-02 | 2 |
 | SH-02 | RIFF shared tables and helpers | `vaco-format-riff` | 18 §8.3 | 3.0 | FW-02 | 2 |
