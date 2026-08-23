@@ -67,6 +67,44 @@ two-frame raw-video probe) to be temporal — one input, comparing the current
 frame against its own immediately preceding one — unlike the two-*stream*
 `lut2` it is named after.
 
+## `freezedetect`: metadata export (interface gap 11, closed)
+
+`freezedetect` only ever had one output channel worth reporting to a
+caller — the reference writes `lavfi.freezedetect.freeze_start`,
+`.freeze_duration` and `.freeze_end` into the frame's metadata dictionary,
+and until `vaco_frame::Frame` grew one (`planning/INTERFACE-GAPS.md` gap
+11), this filter's `Filter::events()` accessor was the only way to get the
+same information out — real detection, but not the reference's export
+mechanism, and unreachable from anywhere that only sees `Frame`s (`vaco-probe`,
+`metadata`/`select`'s `metadata()` expression function once those exist).
+
+Now wired: `step` calls `frame.set_metadata(...)` at the same two points
+`events()` already tracked them (the confirming frame gets `freeze_start`
+alone; the frame that breaks the run gets `freeze_duration` then
+`freeze_end`, together). `events()` stays, for tests only — comparing a
+`Vec<FreezeEvent>` is less code than parsing tags back out of a `Frame`.
+
+Two things were measured against `ffmpeg 8.1` rather than assumed, because
+both are easy to get subtly wrong:
+
+- **Value formatting**: six decimal digits, trailing zeros trimmed, then a
+  bare trailing `.` trimmed — `0.0` prints `0`, not `0.000000`; `1.001000`
+  prints `1.001`; `1.000001` keeps all six digits. See
+  `freezedetect::format_lavfi_time`.
+- **Which frame's timestamp `end`/`duration` use**: the frame that *breaks*
+  the freeze (the first one that differs again), not the last frozen frame.
+  The two are indistinguishable at a uniform frame rate — a uniform-rate test
+  alone would have passed with either formula, the same shape of false
+  confirmation `tblend`'s 256-vs-255 divisor mistake was. Distinguished with
+  an irregular-timestamp test
+  (`freeze_end_uses_the_breaking_frame_not_the_last_frozen_one`) and
+  confirmed on the real binary at 10 fps, at `29.97`, and at `24000/1001`.
+
+A frame with nothing to report carries no `Metadata` side-data entry at all
+(`Frame::metadata()` returns `&[]`), not an empty one — and a freeze still
+open when the stream ends never gets an `end`/`duration` tag, matching the
+reference, which has no later frame to attach one to either.
+
 ## Correctness discipline: independent oracles per filter
 
 | Filter | Independent oracle |
@@ -81,7 +119,7 @@ frame against its own immediately preceding one — unlike the two-*stream*
 | `mpdecimate` | A stream of `N` distinct values each repeated `k` times keeps exactly `N` frames, independent of `k` — the first occurrence of each value is never a duplicate of anything before it, and every exact repeat scores zero block SAD unconditionally. |
 | `deflicker` | A constant-brightness stream is the identity (every mean of a constant sequence is that constant); a single bright outlier is scaled *down* toward the window's hand-computed arithmetic mean, never up. |
 | `lagfun` | Pinned against a measured 5-frame reference byte sequence (`200,50,50,200,0` through `decay=0.5` → `200,100,50,200,100`); a non-decreasing stream is the identity (`max(in, decayed_prev) == in` whenever `in` never drops); `decay=0` is the identity after frame one. |
-| `freezedetect` | A genuinely frozen synthetic stream (identical frames spanning more than `duration`) must report a freeze event; a moving one (a ramp) must report none; a freeze shorter than `duration` never confirms. |
+| `freezedetect` | A genuinely frozen synthetic stream (identical frames spanning more than `duration`) must report a freeze event; a moving one (a ramp) must report none; a freeze shorter than `duration` never confirms. Metadata placement/formatting checked separately against `ffmpeg 8.1` — see the section below. |
 | `freezeframes` | With known `first`/`last`/`replace` and a five-frame source against a one-frame replace stream, the expected output sequence is computed directly from the inputs and compared to the filter's actual output. |
 | `dejudder` | Alternating instantaneous durations (`2,4,2,4,...`) settle, once the window fills, to their hand-computed mean (`3`); a perfectly even stream is unaffected. |
 | `fsync` | A target list with a repeated timestamp duplicates the held frame exactly that many times — output count from input count is predictable and counted directly, mirroring `fps`'s own upsampling oracle. |

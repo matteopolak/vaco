@@ -5,19 +5,29 @@
 //! a fraction-of-full-scale mean-absolute-frame-difference tolerance) and
 //! `d`/`duration` (a time spec, default `2` seconds).
 //!
-//! # What this crate cannot reproduce: metadata export
+//! # Metadata export
 //!
-//! The reference reports freeze events as frame-attached dictionary entries
-//! (`lavfi.freezedetect.freeze_start`/`freeze_duration`/`freeze_end`) and log
-//! lines. `vaco_frame::Frame` has no open-ended per-frame metadata
-//! dictionary — [`vaco_frame::FrameSideData`] is a closed, `#[non_exhaustive]`
-//! enum generated from a fixed side-data table this crate does not own, so
-//! there is nowhere to attach an arbitrary key/value pair without editing
-//! `vaco-frame`, which is out of this brief's scope. [`Filter::events`]
-//! exposes the same information (start/end timestamps, in seconds) as a
-//! plain accessor on the concrete filter type instead — real detection
-//! logic, just not the reference's export mechanism. Documented here and in
-//! `docs/filter/vaco-filter-temporal.md` rather than silently dropped.
+//! The reference reports freeze events as frame-attached dictionary entries —
+//! `lavfi.freezedetect.freeze_start`, `.freeze_duration`, `.freeze_end` — and
+//! log lines. Now that `vaco_frame::Frame` carries a metadata dictionary
+//! (interface gap 11, closed), this filter writes the same three keys onto
+//! the frame that carries the corresponding event, in the same order the
+//! reference does (`freeze_start` alone on the confirming frame;
+//! `freeze_duration` then `freeze_end`, together, on the frame that breaks
+//! the run). [`Filter::events`] still exists as a plain accessor for tests —
+//! it predates the metadata export and stayed because comparing a `Vec` is
+//! easier in a unit test than parsing tags back out of a `Frame`.
+//!
+//! Value formatting is measured against `ffmpeg 8.1`, not guessed: each value
+//! is seconds since stream start, printed with [`format_lavfi_time`] — six
+//! decimal digits, then trailing zeros trimmed, then a bare trailing `.`
+//! trimmed too, so an exact whole number prints as `0` rather than
+//! `0.000000` while `1.001001` prints in full. The end/duration values use
+//! the timestamp of the frame that *breaks* the freeze (the first frame that
+//! differs again), not the last frozen frame — checked against the reference
+//! at multiple frame rates including one (`24000/1001`) chosen specifically
+//! to distinguish the two, since they agree whenever the frame spacing
+//! divides evenly into the confirmation point.
 //!
 //! # Algorithm
 //!
@@ -89,6 +99,26 @@ fn seconds(pts: Timestamp, tb: Rational) -> f64 {
     }
 }
 
+/// The reference's `lavfi.freezedetect.*` value formatting: six decimal
+/// digits, then trailing zeros trimmed, then a bare trailing `.` trimmed.
+///
+/// Measured against `ffmpeg 8.1`, at frame rates chosen so the value lands on
+/// a whole number (`0` → `"0"`, not `"0.000000"`), on a value with trailing
+/// zeros short of six digits (`1.001000` → `"1.001"`), and on a value using
+/// the full six digits (`1.000001` stays `1.000001`).
+fn format_lavfi_time(value: f64) -> String {
+    let mut s = format!("{value:.6}");
+    if s.contains('.') {
+        while s.ends_with('0') {
+            s.pop();
+        }
+        if s.ends_with('.') {
+            s.pop();
+        }
+    }
+    s
+}
+
 impl Filter {
     pub(crate) fn new(opts: Options) -> Self {
         Self {
@@ -108,8 +138,9 @@ impl Filter {
     #[must_use]
     #[allow(
         dead_code,
-        reason = "exercised by this module's tests; not yet wired to a production \
-                  metadata-export sink (see the module doc's metadata-export note)"
+        reason = "exercised by this module's tests only; production consumers read the \
+                  same information from the frame's `lavfi.freezedetect.*` metadata \
+                  instead, set alongside this in `step`"
     )]
     pub(crate) fn events(&self) -> Vec<FreezeEvent> {
         let mut all = self.events.clone();
@@ -126,7 +157,7 @@ impl Filter {
         all
     }
 
-    fn step(&mut self, frame: Frame, tb: Rational) -> FrameOut {
+    fn step(&mut self, mut frame: Frame, tb: Rational) -> FrameOut {
         let now = seconds(frame.pts, tb);
         if let Some(prev) = &self.prev {
             let similar = match (frame.plane(0), prev.plane(0)) {
@@ -143,15 +174,24 @@ impl Filter {
                     && now - start >= self.opts.duration_secs
                 {
                     self.confirmed = true;
+                    // Tagged on the *confirming* frame — the one being
+                    // processed right now, not the one the freeze started
+                    // on. Measured: the reference's `freeze_start` tag lands
+                    // on `now`'s frame with `start`'s value.
+                    frame.set_metadata("lavfi.freezedetect.freeze_start", format_lavfi_time(start));
                 }
             } else {
                 if self.confirmed
                     && let Some(start) = self.run_start_secs
                 {
-                    self.events.push(FreezeEvent {
-                        start,
-                        end: Some(seconds(prev.pts, tb)),
-                    });
+                    // `end` is `now` — the first frame that differs again —
+                    // not the last frozen frame. The two agree whenever the
+                    // frame spacing divides the confirmation point evenly,
+                    // which is why a naive check against round-number frame
+                    // rates alone would not have caught using the wrong one.
+                    self.events.push(FreezeEvent { start, end: Some(now) });
+                    frame.set_metadata("lavfi.freezedetect.freeze_duration", format_lavfi_time(now - start));
+                    frame.set_metadata("lavfi.freezedetect.freeze_end", format_lavfi_time(now));
                 }
                 self.run_start_secs = None;
                 self.confirmed = false;
@@ -266,5 +306,127 @@ mod tests {
             let _ = f.step(frame_at(128, n, tb), tb);
         }
         assert!(f.events().is_empty());
+    }
+
+    fn out_frame(out: FrameOut) -> Frame {
+        match out {
+            FrameOut::One(f) => f,
+            _ => panic!("freezedetect is 1:1, expected exactly one frame out"),
+        }
+    }
+
+    /// `format_lavfi_time` against the reference's measured behaviour:
+    /// `ffprobe -show_frames` on a `freezedetect` graph at 10 fps, at
+    /// `29.97` (a value that keeps its full six digits), and at
+    /// `24000/1001` (a value with trailing zeros to trim).
+    #[test]
+    fn value_formatting_matches_the_reference() {
+        assert_eq!(format_lavfi_time(0.0), "0");
+        assert_eq!(format_lavfi_time(1.0), "1");
+        assert_eq!(format_lavfi_time(1.000_001), "1.000001");
+        assert_eq!(format_lavfi_time(1.001), "1.001");
+        assert_eq!(format_lavfi_time(0.333_333), "0.333333");
+    }
+
+    /// The confirming frame carries `freeze_start` alone; no other frame in
+    /// the run does, matching `ffprobe -show_frames`'s tag placement (each
+    /// tag on exactly the one frame the reference attaches it to, no
+    /// re-emission on every subsequent frame of the same run).
+    #[test]
+    fn freeze_start_lands_on_the_confirming_frame_only() {
+        let tb = Rational::new(1, 10); // 10 fps
+        let opts = Options {
+            noise: 0.001,
+            duration_secs: 0.5,
+        };
+        let mut f = Filter::new(opts);
+        let mut tagged_frames = Vec::new();
+        for n in 0..10i64 {
+            let out = out_frame(f.step(frame_at(128, n, tb), tb));
+            if !out.metadata().is_empty() {
+                tagged_frames.push((n, out.metadata().to_vec()));
+            }
+        }
+        // Reference, measured: exactly frame index 5 (t=0.5s) carries the
+        // tag, with the run's start time (t=0), not its own timestamp.
+        assert_eq!(tagged_frames.len(), 1);
+        assert_eq!(tagged_frames[0].0, 5);
+        assert_eq!(
+            tagged_frames[0].1,
+            &[("lavfi.freezedetect.freeze_start".to_string(), "0".to_string())]
+        );
+    }
+
+    /// `freeze_duration`/`freeze_end` use the timestamp of the frame that
+    /// *breaks* the freeze, not the last frozen frame — the two are
+    /// indistinguishable at a uniform frame rate, so this test uses an
+    /// irregular one on purpose. A run of four frames at pts 0,1,2,3 (last
+    /// similar frame at pts 3) is broken by a frame at pts 10: the reference
+    /// (measured on `ffmpeg 8.1`, `planning/AGENT-CONSTRAINTS.md`'s
+    /// `tblend`/256-vs-255 caution taken to heart) reports `end`/`duration`
+    /// from pts 10, not pts 3.
+    #[test]
+    fn freeze_end_uses_the_breaking_frame_not_the_last_frozen_one() {
+        let tb = Rational::new(1, 1);
+        let opts = Options {
+            noise: 0.001,
+            duration_secs: 2.5,
+        };
+        let mut f = Filter::new(opts);
+        let _ = f.step(frame_at(1, 0, tb), tb);
+        let _ = f.step(frame_at(1, 1, tb), tb);
+        let _ = f.step(frame_at(1, 2, tb), tb);
+        let confirming = out_frame(f.step(frame_at(1, 3, tb), tb));
+        assert_eq!(
+            confirming.metadata(),
+            &[("lavfi.freezedetect.freeze_start".to_string(), "0".to_string())]
+        );
+        let breaking = out_frame(f.step(frame_at(2, 10, tb), tb));
+        // The wrong-neighbour hypothesis (end = last similar frame's pts = 3)
+        // would print "3"/"3" here; the reference prints "10"/"10".
+        assert_eq!(
+            breaking.metadata(),
+            &[
+                ("lavfi.freezedetect.freeze_duration".to_string(), "10".to_string()),
+                ("lavfi.freezedetect.freeze_end".to_string(), "10".to_string()),
+            ]
+        );
+    }
+
+    /// A frame with nothing to report carries no metadata entry at all — not
+    /// an empty one (`AGENT-CONSTRAINTS.md`'s "empty collection at
+    /// construction" trap).
+    #[test]
+    fn frames_outside_an_event_carry_no_metadata() {
+        let tb = Rational::new(1, 10);
+        let opts = Options {
+            noise: 0.001,
+            duration_secs: 5.0, // never confirms within this short stream
+        };
+        let mut f = Filter::new(opts);
+        for n in 0..5i64 {
+            let out = out_frame(f.step(frame_at(128, n, tb), tb));
+            assert!(out.metadata().is_empty());
+        }
+    }
+
+    /// A freeze still ongoing when the stream ends never gets an `end`/
+    /// `duration` tag — matching the reference, which has no later frame to
+    /// attach one to either.
+    #[test]
+    fn a_freeze_still_open_at_end_of_stream_never_gets_an_end_tag() {
+        let tb = Rational::new(1, 10);
+        let opts = Options {
+            noise: 0.001,
+            duration_secs: 0.5,
+        };
+        let mut f = Filter::new(opts);
+        for n in 0..10i64 {
+            let out = out_frame(f.step(frame_at(128, n, tb), tb));
+            assert!(out.metadata_get("lavfi.freezedetect.freeze_duration").is_none());
+            assert!(out.metadata_get("lavfi.freezedetect.freeze_end").is_none());
+        }
+        // Confirmed and still open per `events()`'s existing accessor.
+        assert_eq!(f.events().last().map(|e| e.end), Some(None));
     }
 }
