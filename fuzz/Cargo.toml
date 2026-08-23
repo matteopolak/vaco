@@ -72,6 +72,7 @@ vaco-filter-graph = { path = "../crates/filter/vaco-filter-graph" }
 vaco-filter-key = { path = "../crates/filter/vaco-filter-key" }
 vaco-filter-lut = { path = "../crates/filter/vaco-filter-lut" }
 vaco-filter-plumbing = { path = "../crates/filter/vaco-filter-plumbing" }
+vaco-filter-source = { path = "../crates/filter/vaco-filter-source" }
 vaco-filter-temporal = { path = "../crates/filter/vaco-filter-temporal" }
 vaco-filter-video-composite = { path = "../crates/filter/vaco-filter-video-composite" }
 vaco-filter-video-format = { path = "../crates/filter/vaco-filter-video-format" }
@@ -169,6 +170,7 @@ default = [
     "filter-key",
     "filter-lut",
     "filter-plumbing",
+    "filter-source",
     "filter-temporal",
     "filter-video-composite",
     "filter-video-format",
@@ -260,6 +262,7 @@ filter-graph = []
 filter-key = []
 filter-lut = []
 filter-plumbing = []
+filter-source = []
 filter-temporal = []
 filter-video-composite = []
 filter-video-format = []
@@ -754,6 +757,14 @@ test = false
 doc = false
 bench = false
 required-features = ["filter-plumbing"]
+
+[[bin]]
+name = "filter_source_options"
+path = "fuzz_targets/filter_source_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-source"]
 
 [[bin]]
 name = "filter_temporal_options"
