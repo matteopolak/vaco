@@ -27,9 +27,12 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
 vaco-bitstream = { path = "../crates/core/vaco-bitstream" }
+vaco-bsf-audio = { path = "../crates/format/vaco-bsf-audio" }
+vaco-bsf-av1 = { path = "../crates/format/vaco-bsf-av1" }
 vaco-bsf-core = { path = "../crates/format/vaco-bsf-core" }
 vaco-bsf-generic = { path = "../crates/format/vaco-bsf-generic" }
 vaco-bsf-h2645 = { path = "../crates/format/vaco-bsf-h2645" }
+vaco-bsf-vpx = { path = "../crates/format/vaco-bsf-vpx" }
 vaco-chlayout = { path = "../crates/model/vaco-chlayout" }
 vaco-cli = { path = "../crates/app/vaco-cli" }
 vaco-cli-core = { path = "../crates/app/vaco-cli-core" }
@@ -130,8 +133,11 @@ vaco-textformat = { path = "../crates/app/vaco-textformat" }
 [features]
 default = [
     "bitstream",
+    "bsf-audio",
+    "bsf-av1",
     "bsf-generic",
     "bsf-h2645",
+    "bsf-vpx",
     "chlayout",
     "cli",
     "cli-core",
@@ -225,8 +231,11 @@ default = [
     "textformat",
 ]
 bitstream = []
+bsf-audio = []
+bsf-av1 = []
 bsf-generic = []
 bsf-h2645 = []
+bsf-vpx = []
 chlayout = []
 cli = []
 cli-core = []
@@ -400,6 +409,22 @@ bench = false
 required-features = ["bitstream"]
 
 [[bin]]
+name = "bsf_audio"
+path = "fuzz_targets/bsf_audio.rs"
+test = false
+doc = false
+bench = false
+required-features = ["bsf-audio"]
+
+[[bin]]
+name = "bsf_av1"
+path = "fuzz_targets/bsf_av1.rs"
+test = false
+doc = false
+bench = false
+required-features = ["bsf-av1"]
+
+[[bin]]
 name = "bsf_generic"
 path = "fuzz_targets/bsf_generic.rs"
 test = false
@@ -414,6 +439,14 @@ test = false
 doc = false
 bench = false
 required-features = ["bsf-h2645"]
+
+[[bin]]
+name = "bsf_vpx"
+path = "fuzz_targets/bsf_vpx.rs"
+test = false
+doc = false
+bench = false
+required-features = ["bsf-vpx"]
 
 [[bin]]
 name = "bytereader_arbitrary"
