@@ -102,13 +102,24 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-protocol-wrap | 3 | #545 | agent:protocols | done | 2026-08-23 | 2026-08-23 | subfile concat concatf cache tee async |
 | vaco-protocol-file | 3 | #544 | agent:protocols | done | 2026-08-23 | 2026-08-23 | had NO vaco-component.toml — file:/pipe: were never registered |
 | vaco-hash | 0 | — | orchestrator | done | 2026-08-23 | 2026-08-23 | D11 merge of crc/md-5/sha1/sha2 |
-| vaco-format-core | 4 | — | agent:iface | assigned | 2026-08-23 |  | INTERFACE-GAPS 1/4/5/6: metadata channel, options on open, MuxerDesc flags |
-| vaco-demux-mxf | 4 | #604-607 | agent:mxf | assigned | 2026-08-23 |  | KLV, structural metadata, essence, index tables |
-| vaco-protocol-socket | 3 | #547 | agent:net | assigned | 2026-08-23 |  | tcp udp udplite unix |
-| vaco-protocol-tls | 3 | #548 | agent:net | assigned | 2026-08-23 |  | rustls + D14.2 root store |
-| vaco-protocol-http | 3 | #549 | agent:net | assigned | 2026-08-23 |  | range/seek/reconnect/ICY/chunked POST |
-| vaco-conformance | 10 | #196,#211 | agent:conf | assigned | 2026-08-23 |  | the remux byte-identity matrix — possible now the CLI writes files |
-| vaco-demux-raw | 4 | — | agent:probefix | assigned | 2026-08-23 |  | CONFORMANCE-FINDINGS 3: start-code identifiers per format |
+| vaco-format-core | 4 | — | agent:iface | done | 2026-08-23 | 2026-08-23 | INTERFACE-GAPS 1/4/5/6: metadata channel, options on open, MuxerDesc flags |
+| vaco-demux-mxf | 4 | #604-607 | agent:mxf | done | 2026-08-23 | 2026-08-23 | KLV, structural metadata, essence, index tables |
+| vaco-protocol-socket | 3 | #547 | agent:net | done | 2026-08-23 | 2026-08-23 | tcp udp udplite unix |
+| vaco-protocol-tls | 3 | #548 | agent:net | done | 2026-08-23 | 2026-08-23 | rustls + D14.2 root store |
+| vaco-protocol-http | 3 | #549 | agent:net | done | 2026-08-23 | 2026-08-23 | range/seek/reconnect/ICY/chunked POST |
+| vaco-conformance | 10 | #196,#211 | agent:conf | done | 2026-08-23 | 2026-08-23 | the remux byte-identity matrix — possible now the CLI writes files |
+| vaco-demux-raw | 4 | — | agent:probefix | done | 2026-08-23 | 2026-08-23 | CONFORMANCE-FINDINGS 3: start-code identifiers per format |
+| vaco-format-isom | 4 | — | agent:isom-codec | done | 2026-08-23 | 2026-08-23 | PCM resolution needs fourcc + bits + enda; 53-row ESDS table |
+| vaco-format-subtitle-bitmap | 4 | #611 | agent:subbmp | done | 2026-08-23 | 2026-08-23 |  |
+| vaco-subtitle-bitmap | 4 | #611 | agent:subbmp | done | 2026-08-23 | 2026-08-23 | dvbsub dvbtxt sup vobsub |
+| vaco-mux-avi | 4 | — | agent:muxfix | assigned | 2026-08-23 |  | CONFORMANCE-FINDINGS 14,16-22 |
+| vaco-mux-flv | 4 | — | agent:muxfix | assigned | 2026-08-23 |  |  |
+| vaco-format-rtp | 4 | #597-599 | agent:rtp | assigned | 2026-08-23 |  | RTP/RTCP model + SDP |
+| vaco-demux-rtsp | 4 | #597 | agent:rtp | assigned | 2026-08-23 |  |  |
+| vaco-mux-rtp | 4 | #599 | agent:rtp | assigned | 2026-08-23 |  |  |
+| vaco-filter-video-geometry | 5 | #54 | agent:vfilt | assigned | 2026-08-23 |  | scale crop pad transpose flips |
+| vaco-filter-video-format | 5 | #54 | agent:vfilt | assigned | 2026-08-23 |  | format setsar setdar fps |
+| vaco-filter-video-source | 5 | #54 | agent:vfilt | assigned | 2026-08-23 |  | color testsrc smptebars sinks |
 | vaco-filter-core | 5 | — | agent:filter-core | done | 2026-08-22 | 2026-08-22 | frozen only |
 | vaco-filter-framesync | 5 | — | agent:filter-graph | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-filter-graph | 5 | — | agent:filter-graph | done | 2026-08-22 | 2026-08-22 |  |
