@@ -321,7 +321,72 @@ neither codec parameters nor file-level metadata.
 Same class as gap 1, and the reason #207 (CL-16) stayed open after tags and
 chapters worked.
 
-## 10. `vaco-filter-core` has no adapter for a multi-input or multi-output filter
+## 10. `vaco-filter-core` has no adapter for a multi-input or multi-output filter — CLOSED 2026-08-23
+
+Two adapters landed in `vaco-filter-core::adapt`, additive, no change to
+`Filter`: **`Paired<F: PairedFilter>`** (N inputs, one output, strict
+lockstep — one frame from every input per call, or the whole filter ends
+the instant any one input runs dry) and **`Fanout<F: FanoutFilter>`** (one
+input, N outputs fixed at construction, one input frame in → exactly N
+derived frames out, generalising `vaco-filter-plumbing`'s `split`/`asplit`
+from N *clones* to N *different* frames). `cargo test -p vaco-filter-core`
+covers both end-to-end against real `Graph`s, including `Paired`
+generalised to three inputs and a defensive test that a `Fanout` filter
+lying about its own output count surfaces as an error rather than silently
+misdirecting a pad.
+
+**`Paired` turned out not to be "`Simple` for two frames, over `framesync`"
+— it is a materially different, simpler contract, and that difference is
+measured, not assumed.** `ffmpeg -h filter=framepack` and `=mergeplanes`
+carry no `eof_action`/`shortest`/`repeatlast`/`ts_sync_mode` section at all,
+unlike `alphamerge`'s, which has one verbatim identical to `overlay`'s.
+Feeding `framepack` a 10-frame and a 5-frame input at the same rate
+produces exactly 5 outputs, not 10 with the shorter input's last frame
+repeated (`eof_action=repeat`, the framesync default) — and `framepack`
+refuses two inputs with different time bases outright rather than
+reconciling them. So `vaco-filter-core` still cannot depend on
+`vaco-filter-framesync` (layering: framesync depends on core, not the
+reverse, and `layer-check` would refuse it regardless) **and does not need
+to**: `Paired` is the honest, separate shape those filters actually have,
+not framesync with a dependency problem.
+
+One consequence found only by trying: **`alphamerge` needs neither new
+adapter.** Measured, it carries the full framesync option surface, so it
+is registered on top of `vaco-filter-framesync`'s existing `Synced` —
+exactly what `vaco-filter-video-composite`'s `overlay` already does. Three
+data points (`overlay`, `alphamerge`, and `framepack`/`mergeplanes`'s
+absence of the surface) now confirm the dividing line is the measured
+option surface, not which crate a filter happens to be assigned to.
+
+`Paired` also generalises past exactly two inputs — `mergeplanes`'s input
+count is fixed at construction from its own `map<N>s` options (1 to 4) —
+rather than adding a third, near-duplicate adapter for "N-in-1-out,
+lockstep" once a real filter needed N > 2 (D19).
+
+`overlay` was evaluated for a port onto `Paired`, to see whether the new
+adapter could subsume the witness it generalises from, and was **not**
+ported: `Paired` cannot express `overlay`'s default `eof_action=repeat` at
+all (every existing `overlay` test exercises the default) and has no
+timestamp-based event selection for the differing input frame rates
+`overlay` routinely runs at. `cargo test -p vaco-filter-video-composite`
+was run before and after this wave with zero edits to that crate; its 43
+tests pass unmodified. Leaving a working witness alone rather than forcing
+a port that would have changed its tested behaviour was the right call,
+not a shortfall — see `docs/filter/vaco-filter-core.md`'s "`overlay` was
+not ported onto `Paired`" section for the detail.
+
+`framepack`, `mergeplanes`, `alphamerge` and `extractplanes` are now
+registered in `vaco-filter-geometry` (18 filters total in that crate). The
+"whatever the in-flight `vaco-filter-key` and `vaco-filter-temporal`
+crates report" half of the original note below was not followed up in this
+pass: at the time, `planning/ASSIGNMENTS.md` showed `vaco-filter-color`,
+`vaco-filter-key`, `vaco-filter-lut` and `vaco-filter-temporal` all
+`assigned` with no finished date, and each had uncommitted work already on
+disk, so they were left untouched per the do-not-race rule rather than
+guessed at from outside. See `docs/filter/vaco-filter-core.md` and
+`docs/filter/vaco-filter-geometry.md` for the full detail.
+
+Original report, kept for the *why*:
 
 Reported by three filter agents independently, on 2026-08-23, each reaching the
 same conclusion from a different crate: `framepack`, `mergeplanes`,
