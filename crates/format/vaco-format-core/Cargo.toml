@@ -16,6 +16,7 @@ vaco-packet = { path = "../../model/vaco-packet" }
 vaco-opts = { path = "../../core/vaco-opts" }
 vaco-codec-core = { path = "../../signal/vaco-codec-core" }
 vaco-limits = { path = "../../core/vaco-limits" }
+vaco-format-nalu = { path = "../vaco-format-nalu" }
 smallvec.workspace = true
 
 [dev-dependencies]

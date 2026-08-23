@@ -371,6 +371,11 @@ impl<D: Demuxer> Discovery<D> {
             if let Some(driver) = slot.as_mut() {
                 refine(stream, driver, pkt.payload());
             }
+            // Independent of whether a `Parser` is registered for this
+            // codec at all (a `--no-default-features` build, say): the
+            // extradata-synthesis rule needs nothing but the payload bytes
+            // and the codec id, see [`synthesize_extradata`].
+            synthesize_extradata(stream, pkt.payload());
         }
         fill_codec_duration(slot, pkt, time_base);
 
@@ -752,6 +757,86 @@ fn refine(stream: &mut Stream, driver: &mut ParserDriver<Box<dyn Parser>>, paylo
     }
 }
 
+/// CONFORMANCE-FINDINGS 26's read half: fill in `extradata` for a stream
+/// whose container carries no out-of-band configuration record — AVI,
+/// MPEG-TS, raw Annex B — by pulling H.264/HEVC parameter sets back out of
+/// the packets discovery is already reading.
+///
+/// Mirrors the reference's own mechanism: `avformat_find_stream_info` runs
+/// its `extract_extradata` bitstream filter over the probe window and stores
+/// whatever it collects. The assembly rule — which units count as parameter
+/// sets, and how their bytes are laid out — lives in
+/// [`vaco_format_nalu::extradata`], the one place D19 allows it; this
+/// function only decides *when* to call it, which is the read side's own
+/// question and not part of the shared rule.
+///
+/// # Why here, and why on the raw payload rather than through the parser
+///
+/// `Discovery` already holds exactly the bytes a container-supplied parser
+/// never gets to see whole in MP4/Matroska (there the SPS lives in `avcC`,
+/// not in a packet) but sees in full here, because AVI/MPEG-TS/raw Annex B
+/// carry every parameter set in-band. Reaching into `vaco-parse-h264`'s or
+/// `vaco-parse-hevc`'s private state to ask what SPS/PPS it already parsed
+/// would be a second way to get the same bytes this function already has in
+/// hand, and would need `Parser` widened to expose them (a rejected
+/// alternative — see `vaco_format_nalu::extradata`'s module docs). Layering
+/// also rules out reaching for `vaco-bsf-generic`'s filter directly: D14.1
+/// keeps a `vaco-format-*` crate off `vaco-parse-*`, and going through it
+/// would mean either a new `BsfProvider` seam (an interface change, recorded
+/// in `planning/INTERFACE-GAPS.md` if ever taken) or depending on a crate two
+/// hops removed from what this needs — a `Vec<&[u8]>` in, a `Vec<u8>` out.
+///
+/// Called from [`Discovery::absorb`] rather than from [`refine`], and
+/// unconditionally on whether a `Parser` was actually built for the stream:
+/// a `--no-default-features` build with no H.264/HEVC parser compiled in
+/// still has every byte this needs, and still gets the same `-show_streams`
+/// answer, because the rule only touches `vaco-format-nalu` and never asks a
+/// codec crate for anything.
+///
+/// # Why only once
+///
+/// The container's own record always wins once it has supplied a non-empty
+/// `extradata` — checked first, so an MP4/Matroska stream is never touched.
+/// Absent that, this fires only while `extradata` is still empty: the first
+/// packet in the probe window carrying a parameter set sets it, and later
+/// packets are left alone. A file whose SPS/PPS change mid-stream (rare, and
+/// not exercised by any of finding 26's measured containers) keeps whatever
+/// the first keyframe stated, which is what `-show_streams` reports for
+/// every container this was checked against.
+fn synthesize_extradata(stream: &mut Stream, payload: &[u8]) {
+    if stream
+        .params
+        .extradata
+        .as_ref()
+        .is_some_and(|e| !e.is_empty())
+    {
+        return;
+    }
+    let Some(id) = stream.params.codec_id else {
+        return;
+    };
+    let header_kind = match id {
+        CodecId::H264 => vaco_format_nalu::HeaderKind::H264,
+        CodecId::Hevc => vaco_format_nalu::HeaderKind::H265,
+        _ => return,
+    };
+    // Mirrors `vaco-bsf-generic`'s own framing choice: `nal_length_size`
+    // absent or `Some(0)` (no configuration record) means Annex B, anything
+    // else names the length-prefix width.
+    let framing = stream
+        .params
+        .video
+        .as_ref()
+        .and_then(|v| v.nal_length_size)
+        .and_then(vaco_format_nalu::LengthSize::new)
+        .map_or(vaco_format_nalu::Framing::AnnexB, vaco_format_nalu::Framing::LengthPrefixed);
+    let sets = vaco_format_nalu::parameter_sets(payload, framing, header_kind);
+    if sets.is_empty() {
+        return;
+    }
+    stream.params.extradata = Some(vaco_format_nalu::assemble_extradata(sets));
+}
+
 impl<D: Demuxer> Demuxer for Discovery<D> {
     fn streams(&self) -> &[Stream] {
         &self.streams
@@ -835,8 +920,11 @@ impl ParserProvider for NoParsers {
 mod tests {
     use super::*;
     use crate::test_support::MockDemuxer;
+    use crate::{SeekFlags, SeekTarget};
     use std::sync::{Arc, Mutex};
     use vaco_core::MediaType;
+    use vaco_limits::Budget;
+    use vaco_packet::PacketFlags;
 
     fn opts() -> FormatOptions {
         FormatOptions::default()
@@ -1375,4 +1463,217 @@ mod tests {
         assert_eq!(r.stop_reason, StopReason::Eof);
         assert_eq!(d.streams().len(), 1);
     }
+
+    // ------------------------------------------ CONFORMANCE-FINDINGS 26, read half
+
+    /// A demuxer that hands out a fixed payload on every packet, instead of
+    /// [`MockDemuxer`]'s content-free `[0u8; 8]` — needed here because the
+    /// thing under test reads the bytes, not just their length.
+    #[derive(Debug)]
+    struct FixedPayload {
+        inner: MockDemuxer,
+        payload: Vec<u8>,
+    }
+
+    impl Demuxer for FixedPayload {
+        fn streams(&self) -> &[Stream] {
+            self.inner.streams()
+        }
+        fn read_packet(&mut self) -> Result<Packet> {
+            let template = self.inner.read_packet()?;
+            let mut budget = Budget::new(Limits::permissive());
+            let mut p = Packet::from_slice(&mut budget, &self.payload)?;
+            p.stream_index = template.stream_index;
+            p.pts = template.pts;
+            p.dts = template.dts;
+            p.flags = template.flags;
+            Ok(p)
+        }
+        fn seek(&mut self, t: SeekTarget, f: SeekFlags) -> Result<()> {
+            self.inner.seek(t, f)
+        }
+    }
+
+    /// H.264 SPS/PPS measured in `planning/CONFORMANCE-FINDINGS.md` finding
+    /// 26 (the `a.avi` example), Annex-B framed with a four-byte start code
+    /// on both units — the framing AVI's own in-band stream actually uses,
+    /// distinct from the *output* convention finding 26 documents.
+    fn h264_annexb_sps_pps_slice() -> Vec<u8> {
+        let sps = [
+            0x67, 0x64, 0x00, 0x0a, 0xac, 0xd9, 0x44, 0x26, 0xc0, 0x44, 0x00, 0x00, 0x03, 0x00,
+            0x04, 0x00, 0x00, 0x03, 0x00, 0xc8, 0x3c, 0x48, 0x96, 0x58,
+        ];
+        let pps = [0x68, 0xeb, 0xe3, 0xcb, 0x22, 0xc0];
+        let mut buf = vec![0, 0, 0, 1];
+        buf.extend_from_slice(&sps);
+        buf.extend_from_slice(&[0, 0, 0, 1]);
+        buf.extend_from_slice(&pps);
+        buf.extend_from_slice(&[0, 0, 0, 1, 0x65, 0xAA, 0xBB]); // an IDR slice
+        buf
+    }
+
+    /// The read half of finding 26: an AVI-shaped stream — H.264 in-band,
+    /// no `avcC`, `nal_length_size` never stated — gets `extradata`
+    /// synthesised from the SPS/PPS its own packets carry, exactly as
+    /// `avformat_find_stream_info` does by running `extract_extradata`.
+    ///
+    /// Runs with [`NoParsers`], deliberately: the point under test is that
+    /// this rule does not need a `vaco-parse-h264` at all, only the raw
+    /// bytes discovery already has (see [`synthesize_extradata`]'s docs).
+    #[test]
+    fn h264_extradata_is_synthesised_from_in_band_parameter_sets() {
+        let inner = FixedPayload {
+            inner: MockDemuxer::new(1, MediaType::Video).with_packets(3),
+            payload: h264_annexb_sps_pps_slice(),
+        };
+        let mut d = Discovery::new(inner, FormatFlags::empty(), &opts());
+        d.run(&NoParsers).unwrap();
+
+        let extra = d.streams()[0].params.extradata.clone().unwrap();
+        let mut expected = vec![0, 0, 1]; // first unit: three-byte start code
+        expected.extend_from_slice(&h264_annexb_sps_pps_slice()[4..4 + 24]); // sps
+        expected.extend_from_slice(&[0, 0, 0, 1]); // later unit: four-byte
+        expected.extend_from_slice(&h264_annexb_sps_pps_slice()[32..38]); // pps
+        assert_eq!(extra, expected);
+    }
+
+    /// Falsifies the naive reading: if extraction used a four-byte start
+    /// code on the first unit too, this would still pass. It must not.
+    #[test]
+    fn falsified_a_naive_four_byte_first_start_code_would_be_wrong() {
+        let inner = FixedPayload {
+            inner: MockDemuxer::new(1, MediaType::Video).with_packets(1),
+            payload: h264_annexb_sps_pps_slice(),
+        };
+        let mut d = Discovery::new(inner, FormatFlags::empty(), &opts());
+        d.run(&NoParsers).unwrap();
+        let extra = d.streams()[0].params.extradata.clone().unwrap();
+        assert_eq!(&extra[..3], &[0, 0, 1], "first unit must be three bytes");
+        assert_ne!(&extra[..4], &[0, 0, 0, 1]);
+    }
+
+    /// A one-stream HEVC demuxer that emits a fixed payload on every packet.
+    /// Not built on [`MockDemuxer`], which hardcodes `CodecId::H264` for
+    /// video and has no public way to change it.
+    #[derive(Debug)]
+    struct HevcDemuxer {
+        streams: [Stream; 1],
+        payload: Vec<u8>,
+        remaining: u64,
+        budget: Budget,
+    }
+
+    impl HevcDemuxer {
+        fn new(payload: Vec<u8>, packets: u64) -> Self {
+            let mut params = vaco_codec_core::CodecParameters::video();
+            params = params.with_codec(CodecId::Hevc);
+            let mut s = Stream::new(0, MediaType::Video, Rational::new(1, 1000));
+            s.params = params;
+            Self {
+                streams: [s],
+                payload,
+                remaining: packets,
+                budget: Budget::new(Limits::permissive()),
+            }
+        }
+    }
+
+    impl Demuxer for HevcDemuxer {
+        fn streams(&self) -> &[Stream] {
+            &self.streams
+        }
+        fn read_packet(&mut self) -> Result<Packet> {
+            if self.remaining == 0 {
+                return Err(Error::Eof);
+            }
+            self.remaining -= 1;
+            let mut p = Packet::from_slice(&mut self.budget, &self.payload)?;
+            p.stream_index = 0;
+            p.flags = PacketFlags::KEY;
+            Ok(p)
+        }
+        fn seek(&mut self, _t: SeekTarget, _f: SeekFlags) -> Result<()> {
+            Err(Error::NotSeekable)
+        }
+    }
+
+    /// HEVC's identical fault, identical fix. No container/HEVC combination
+    /// on this machine produces Annex-B extradata to measure against
+    /// (finding 26's own note), so this is a synthetic VPS/SPS/PPS rather
+    /// than a captured file — the assembly rule itself is what
+    /// `vaco_format_nalu::extradata`'s tests check against measured bytes.
+    #[test]
+    fn hevc_extradata_is_synthesised_from_in_band_parameter_sets() {
+        let vps = [0x40, 0x01, 0x0c, 0x01];
+        let sps = [0x42, 0x01, 0x01, 0x02];
+        let pps = [0x44, 0x01, 0xc0];
+        let mut payload = Vec::new();
+        for unit in [&vps[..], &sps[..], &pps[..]] {
+            payload.extend_from_slice(&[0, 0, 0, 1]);
+            payload.extend_from_slice(unit);
+        }
+        payload.extend_from_slice(&[0, 0, 0, 1, 0x02, 0x01]); // a slice, ignored
+
+        let inner = HevcDemuxer::new(payload, 1);
+        let mut d = Discovery::new(inner, FormatFlags::empty(), &opts());
+        d.run(&NoParsers).unwrap();
+
+        let extra = d.streams()[0].params.extradata.clone().unwrap();
+        let mut expected = vec![0, 0, 1];
+        expected.extend_from_slice(&vps);
+        expected.extend_from_slice(&[0, 0, 0, 1]);
+        expected.extend_from_slice(&sps);
+        expected.extend_from_slice(&[0, 0, 0, 1]);
+        expected.extend_from_slice(&pps);
+        assert_eq!(extra, expected);
+    }
+
+    /// ASF's half of finding 26: the container already supplies an Annex-B
+    /// configuration record, so nothing here should touch it — synthesis is
+    /// only for a stream discovery finds with no extradata of its own.
+    #[test]
+    fn a_container_supplied_extradata_is_never_overwritten() {
+        let inner = FixedPayload {
+            inner: MockDemuxer::new(1, MediaType::Video)
+                .with_packets(3)
+                .with_extradata(&[0, 0, 0, 1, 0x67, 0x11, 0x22]),
+            payload: h264_annexb_sps_pps_slice(),
+        };
+        let mut d = Discovery::new(inner, FormatFlags::empty(), &opts());
+        d.run(&NoParsers).unwrap();
+        assert_eq!(
+            d.streams()[0].params.extradata.as_deref(),
+            Some(&[0, 0, 0, 1, 0x67, 0x11, 0x22][..])
+        );
+    }
+
+    /// A packet with no parameter sets in it — an ordinary non-keyframe —
+    /// must not manufacture extradata out of nothing.
+    #[test]
+    fn a_payload_with_no_parameter_sets_synthesises_nothing() {
+        let inner = FixedPayload {
+            inner: MockDemuxer::new(1, MediaType::Video).with_packets(2),
+            payload: vec![0, 0, 0, 1, 0x65, 0xAA, 0xBB], // slice only
+        };
+        let mut d = Discovery::new(inner, FormatFlags::empty(), &opts());
+        d.run(&NoParsers).unwrap();
+        assert!(d.streams()[0].params.extradata.is_none());
+    }
+
+    /// `fflags=noparse` disables bitstream inspection outright — extradata
+    /// synthesis is exactly that, so it must be disabled with everything
+    /// else the flag turns off.
+    #[test]
+    fn noparse_also_disables_extradata_synthesis() {
+        let mut o = opts();
+        o.fflags = o.fflags.union(crate::options::FFlags::NOPARSE);
+        let inner = FixedPayload {
+            inner: MockDemuxer::new(1, MediaType::Video).with_packets(2),
+            payload: h264_annexb_sps_pps_slice(),
+        };
+        let mut d = Discovery::new(inner, FormatFlags::empty(), &o);
+        d.run(&NoParsers).unwrap();
+        assert!(d.streams()[0].params.extradata.is_none());
+    }
+
 }
