@@ -1,6 +1,6 @@
 [package]
 name = "vaco-filter-key"
-description = "Keying/masking video filters (plan 16 4.2's vaco-filter-key row): premultiply, unpremultiply, maskedmerge implemented; the rest of the row (chromakey, chromahold, colorkey, colorhold, hsvkey, hsvhold, lumakey, backgroundkey, despill, premultiply_dynamic, maskedclamp, maskedmax, maskedmin, maskedthreshold, maskfun, threshold, hysteresis, floodfill) not yet implemented."
+description = "Keying/masking video filters (plan 16 4.2's vaco-filter-key row): premultiply, unpremultiply, maskedmerge, colorkey, colorhold, maskedclamp, maskedmax, maskedmin, maskedthreshold, threshold implemented (10/20); chromakey, chromahold, hsvkey, hsvhold, lumakey, backgroundkey, despill, premultiply_dynamic, maskfun, hysteresis, floodfill not yet implemented."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -16,6 +16,7 @@ vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
 vaco-filter-core = { path = "../../filter/vaco-filter-core" }
 vaco-filter-graph = { path = "../../filter/vaco-filter-graph" }
 vaco-filter-framesync = { path = "../../filter/vaco-filter-framesync" }
+smallvec.workspace = true
 
 [dev-dependencies]
 vaco-limits = { path = "../../core/vaco-limits" }

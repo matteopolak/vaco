@@ -2,13 +2,16 @@
 //! `vaco-filter-key`.
 //!
 //! `premultiply`/`unpremultiply` parse a `planes` bitmask and an `inplace`
-//! bool; `maskedmerge` parses just a `planes` bitmask. Small option
-//! surfaces, but each goes through `vaco-opts`'s typed parser and this
+//! bool; `maskedmerge`/`maskedclamp`/`maskedmax`/`maskedmin`/
+//! `maskedthreshold`/`threshold` parse `planes` plus a handful of small
+//! integers; `colorkey`/`colorhold` parse a `color` spec (`vaco_core::
+//! parse::color`, itself untrusted-input-bearing) plus two floats. Every
+//! one of those goes through `vaco-opts`'s typed option parser or this
 //! crate's own `eof_action`/`ts_sync_mode` name lookups (`premultiply`),
 //! matching the pattern in
 //! `vaco-filter-video-format`'s `filter_video_format_options.rs`.
 //!
-//! Property: for any byte string, for any of the three registered names,
+//! Property: for any byte string, for any of the ten registered names,
 //! either a clean `Err` comes back or a working `Instance`, never a panic
 //! and never an unbounded allocation.
 //! fuzz-crate: vaco-filter-key
@@ -19,7 +22,18 @@ use libfuzzer_sys::fuzz_target;
 use vaco_filter_graph::registry::{FilterRegistry, Instantiate};
 use vaco_filter_key::registry::KeyRegistry;
 
-const NAMES: &[&str] = &["maskedmerge", "premultiply", "unpremultiply"];
+const NAMES: &[&str] = &[
+    "colorhold",
+    "colorkey",
+    "maskedclamp",
+    "maskedmax",
+    "maskedmerge",
+    "maskedmin",
+    "maskedthreshold",
+    "premultiply",
+    "threshold",
+    "unpremultiply",
+];
 
 fuzz_target!(|args: &str| {
     if args.len() > 8192 {

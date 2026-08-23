@@ -5,7 +5,18 @@ use vaco_filter_graph::registry::{FilterRegistry, Instance, Instantiate};
 
 /// The names this crate answers to, alphabetical (as `ffmpeg -filters`
 /// prints them).
-const NAMES: &[&str] = &["maskedmerge", "premultiply", "unpremultiply"];
+const NAMES: &[&str] = &[
+    "colorhold",
+    "colorkey",
+    "maskedclamp",
+    "maskedmax",
+    "maskedmerge",
+    "maskedmin",
+    "maskedthreshold",
+    "premultiply",
+    "threshold",
+    "unpremultiply",
+];
 
 /// Implements [`FilterRegistry`] for every filter in this crate.
 #[derive(Debug, Clone, Copy, Default)]
@@ -18,8 +29,15 @@ impl FilterRegistry for KeyRegistry {
 
     fn create(&self, req: &Instantiate<'_>) -> Result<Instance, String> {
         match req.name {
+            "colorhold" => crate::colorhold::create(req),
+            "colorkey" => crate::colorkey::create(req),
+            "maskedclamp" => crate::maskedclamp::create(req),
+            "maskedmax" => crate::masked_pick::maskedmax::create(req),
             "maskedmerge" => crate::maskedmerge::create(req),
+            "maskedmin" => crate::masked_pick::maskedmin::create(req),
+            "maskedthreshold" => crate::maskedthreshold::create(req),
             "premultiply" => crate::premultiply::premultiply::create(req),
+            "threshold" => crate::threshold::create(req),
             "unpremultiply" => crate::premultiply::unpremultiply::create(req),
             other => Err(format!("vaco-filter-key: no filter named `{other}`")),
         }

@@ -1,23 +1,52 @@
 # vaco-filter-key
 
 Keying/masking video filters: `premultiply`, `unpremultiply`,
-`maskedmerge`.
+`maskedmerge`, `colorkey`, `colorhold`, `maskedclamp`, `maskedmax`,
+`maskedmin`, `maskedthreshold`, `threshold` (10/20).
 
-**Scope note**: `planning/16-filters.md` §4.2's `vaco-filter-key` row lists
-20 filters (`chromakey`, `chromahold`, `colorkey`, `colorhold`, `hsvkey`,
-`hsvhold`, `lumakey`, `backgroundkey`, `despill`, `premultiply_dynamic`,
-`maskedclamp`, `maskedmax`, `maskedmin`, `maskedthreshold`, `maskfun`,
-`threshold`, `hysteresis`, `floodfill`, plus the three implemented here).
-Only the three are built — carried over from a prior mis-scoped crate
-(GitHub issue #476's `vaco-filter-component`; see that issue for the
-correction). The other 17 filters are a separate, not-yet-scheduled unit
-of work.
+**Scope note**: `planning/16-filters.md` §4.2's `vaco-filter-key` row is
+20 filters, all verified against `ffmpeg -filters`/`ffmpeg -h
+filter=<name>` (8.1) with no discrepancy from the plan in either
+direction. Ten are built. `premultiply`/`unpremultiply`/`maskedmerge`
+carried over from a prior mis-scoped crate (GitHub issue #476's
+`vaco-filter-component`; see that issue for the correction);
+`colorkey`/`colorhold`/`maskedclamp`/`maskedmax`/`maskedmin`/
+`maskedthreshold`/`threshold` landed in this pass.
+
+**Correction to a prior brief**: something told a previous agent that
+`vaco-filter-framesync` should carry `maskedmerge`'s `masked*` siblings.
+Measured, it does not: `ffmpeg -h filter=maskedclamp` (and
+`maskedmax`/`maskedmin`/`maskedthreshold`/`threshold`) expose no
+`eof_action`/`shortest`/`ts_sync_mode` section — the same test
+`maskedmerge.rs` already used to justify a lockstep implementation
+instead. All six went through `vaco-filter-core`'s new
+[`Paired`](../../crates/filter/vaco-filter-core/src/adapt.rs) adapter,
+the N-in-1-out strict-lockstep shape built for exactly this case, rather
+than through framesync.
+
+**Left for follow-up, stated honestly** (10 filters): `chromakey`/
+`chromahold`, `hsvkey`/`hsvhold`, `lumakey`, `backgroundkey`, `despill`,
+`premultiply_dynamic`, `maskfun`, `hysteresis`, `floodfill` — see
+`vaco_filter_key`'s crate-level doc (`lib.rs`) for the specific probe
+that stopped each one, not just "not attempted". Three are worth
+repeating here because they turned out to be more than "measure and
+implement": `chromakey`/`chromahold` need the reference's internal chroma
+upsampling reproduced to be byte-exact (a uniform-colour `yuv420p` frame
+produced two different alpha values on pixels sharing one subsampled
+chroma sample); `lumakey`'s transparent band is measurably **not**
+symmetric around its threshold, ruling out the simple band formula this
+crate's other keying filters use; `maskfun` returned the same constant
+for every uniform-input probe, meaning it is a neighbourhood/segmentation
+operation, not a per-pixel threshold its option names suggest.
 
 ## What it is
 
-Alpha-compositing primitives: multiply/divide colour by alpha
-(`premultiply`/`unpremultiply`) and a three-input linear blend
-(`maskedmerge`).
+Two families: alpha-compositing primitives (`premultiply`/
+`unpremultiply`, `maskedmerge`, `colorkey`, `colorhold`) and multi-stream
+per-pixel arithmetic pickers (`maskedclamp`, `maskedmax`/`maskedmin`,
+`maskedthreshold`, `threshold`) — every one of the second group is exact
+integer comparison/selection/clamping, no interpolation, and all four
+were pinned down with a handful of hand-verifiable probes each.
 
 ## How it works
 
@@ -28,9 +57,49 @@ Alpha-compositing primitives: multiply/divide colour by alpha
 concrete probe: base `0x64` (100), overlay `0xc8` (200), mask `0x80`
 (128) produced `0x96` (150) — exactly `100 + 100*128/255`. Implemented as
 a direct three-input `vaco_filter_core::Filter` (lockstep consumption of
-one frame per pad), not through `vaco-filter-framesync`: the reference's
-own `-h filter=maskedmerge` exposes no `eof_action`/`shortest` surface,
-unlike the framesync-shaped filters elsewhere in this project.
+one frame per pad; predates `Paired`, which the four new masked-family
+filters below use instead of hand-rolling the same loop again).
+
+### `colorkey`/`colorhold`: one measured distance/ramp, two outputs
+
+[`keying::rgb_distance`](../../crates/filter/vaco-filter-key/src/keying.rs)
+is `sqrt(sum((p_i - k_i)^2)) / sqrt(3)` over `[0,1]`-normalised RGB —
+pinned down by sweeping `colorkey`'s `similarity` against pure red on a
+black key and finding the opaque/transparent boundary sitting at exactly
+`1/sqrt(3)` to five decimal places. `keying::ramp` is
+`clamp((distance - similarity) / blend, 0, 1)`, `blend <= 0` treated as a
+hard step; five interior points on a `blend=0.2` sweep matched this
+exactly for `colorkey` (which writes the ramp straight to the alpha
+channel).
+
+`colorhold` reuses the identical ramp to blend a pixel toward its own
+plain RGB mean (`mean(R,G,B)`, not luma-weighted — confirmed: red against
+a black key produces exactly `85 = mean(255,0,0)`) rather than adding
+transparency; the *matching* colour range is what stays untouched (a
+near-red inside `similarity` of a `red` key reproduces the input
+byte-for-byte). **Not byte-exact**: two of `colorhold`'s four interior
+blend probes came out one ULP off this crate's `f64` computation of the
+documented formula (`colorhold.rs`'s doc has both cases) — shipped as
+measured, with the mismatch stated rather than rounded away to hide it.
+
+### The masked-family pickers: each pinned down with 3–7 probes
+
+- `maskedmax(source, f1, f2)` = whichever of `f1`/`f2` is **farther**
+  from `source` by absolute difference (ties favour `f1`); `maskedmin`
+  picks whichever is **nearer** (same tie-break). Confirmed with `source`
+  above, below and between both inputs, and a genuine tie.
+- `maskedclamp(base, dark, bright)` = `clamp(base, dark - undershoot,
+  bright + overshoot)`. Confirmed in-range, below-range, above-range, and
+  with non-zero `undershoot`/`overshoot`.
+- `maskedthreshold(source, reference)`, `mode=abs` (the default): `source`
+  if `|source - reference| <= threshold`, else `reference`. Confirmed at
+  and either side of the boundary. `mode=diff` produced a genuinely
+  different (non-pick) value on probing and is **not implemented** —
+  falls back to `mode=abs` rather than guessing (`maskedthreshold.rs`'s
+  doc has the probe).
+- `threshold(source, threshold, min, max)` = `max` if `source > threshold`
+  else `min` (strict `>`, confirmed at the equal-value case landing on
+  `min`).
 
 ### `premultiply`/`unpremultiply`: what is measured and what is not
 
@@ -54,12 +123,17 @@ wired to a dynamic pad count.
 
 ## How to change it
 
-- A new keying filter from the row above: for a 2-or-3-input filter with
-  no framesync options exposed by the reference, follow `maskedmerge.rs`
-  (a raw `Filter` impl, lockstep pad consumption); for one that does
-  (or that the reference's `-loglevel verbose` shows using framesync
-  internally, per `premultiply.rs`'s note), follow `premultiply.rs`
+- A new keying filter from the row above: measure its `-h` output for a
+  framesync surface first. None → follow `maskedclamp.rs`/
+  `masked_pick.rs` (`vaco_filter_core::adapt::Paired`, the N-in-1-out
+  lockstep shape) for a fixed multi-input filter, or `colorkey.rs` for a
+  single-input one. A framesync surface (`hysteresis` has one; the
+  `masked*` family does not) → follow `premultiply.rs`
   (`vaco_filter_framesync::FrameSyncFilter`).
+- `chromakey`/`chromahold`/`hsvkey`/`hsvhold`/`lumakey`: start by finding
+  the actual distance metric via more targeted probing than this pass had
+  time for — `keying.rs`'s RGB metric is the wrong starting assumption
+  for at least `lumakey` (see `lib.rs`'s scope note).
 - Register in `vaco-component.toml`, run `cargo xtask gen-registry`, and
   add the name to `registry.rs`.
 
@@ -70,6 +144,8 @@ No crate-level configuration; each filter's options are its own
 
 ## Dependencies
 
-`vaco-core`, `vaco-opts`, `vaco-frame`, `vaco-pixfmt`, `vaco-filter-core`,
-`vaco-filter-graph`, `vaco-filter-framesync` (for `premultiply`/
-`unpremultiply`).
+`vaco-core` (also `vaco_core::parse::color` for `colorkey`/`colorhold`'s
+`color` option), `vaco-opts`, `vaco-frame`, `vaco-pixfmt`,
+`vaco-filter-core` (also its `Paired` adapter), `vaco-filter-graph`,
+`vaco-filter-framesync` (for `premultiply`/`unpremultiply`), `smallvec`
+(the `Paired`-based filters' input collection).
