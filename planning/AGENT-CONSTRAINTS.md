@@ -336,3 +336,32 @@ agents and the orchestrator, for as long as the gap lasts. Measured
 reverse when you delete a crate: remove the directory in one move, not the
 `src/` first.
 
+## `let _ =` on a fallible seed is where bugs go to live
+
+Two separate faults today were invisible for the same reason: something
+failed, and the failure was discarded rather than reported.
+
+`vaco-format-core`'s `build_parser` does
+
+```rust
+let _ = parser.set_extradata(&extra);
+```
+
+which is a defensible policy — extradata a parser cannot use should not kill
+the stream. But it meant that when `H264Parser::set_extradata` refused every
+Annex-B extradata it was ever handed, ASF reported `profile=unknown`,
+`level=-99` and `pix_fmt=unknown` for *months* while holding a complete
+sequence parameter set, and nothing anywhere said a word.
+
+The rule is not "never discard an error". It is: **if you discard one, make
+the discard countable.** A counter on the discovery report, a `DemuxStats`
+field, a `log` line at trace level — anything that turns "silently wrong" into
+"visibly degraded". When you write `let _ =` on a fallible call, ask what the
+symptom would look like if that call *always* failed, and whether anyone would
+notice.
+
+The same shape appeared in `xtask`'s `wasm-check`, which reported a crate name
+taken from the first `--> ` line in stderr — a line that belonged to a
+*warning* from an unrelated crate. Not a discarded error, but the same class:
+a plausible-looking wrong answer where a missing one would have been caught.
+
