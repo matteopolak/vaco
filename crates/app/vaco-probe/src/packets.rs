@@ -102,7 +102,7 @@ pub fn read<W: Write>(
 
     'intervals: for interval in opts.intervals {
         if let Some(start) = interval.start
-            && seek(demuxer, streams, start).is_err()
+            && seek(demuxer, streams, opts.selected, start).is_err()
         {
             // The reference gives up on the whole read when a seek fails
             // ("could not seek to position"), rather than falling back to a
@@ -169,22 +169,46 @@ fn stream_of(streams: &[Stream], index: u32) -> Option<&Stream> {
 
 /// Seek to an interval start.
 ///
-/// The reference seeks with stream `-1`, i.e. against `AV_TIME_BASE_Q` and
-/// letting libavformat pick a stream. [`SeekTarget`] has no such spelling — it
-/// names a stream and a timestamp in that stream's base — so the reference
-/// stream is chosen here: the first video stream with a usable time base, else
-/// the first stream. That is a **documented approximation**, and it is visible
-/// only on a file whose streams have keyframes in different places.
+/// # The seek follows `-select_streams`, which is measurable
+///
+/// The reference seeks with stream `-1` and lets libavformat pick, which looked
+/// like an approximation nothing could pin down. It is not — two probes settle
+/// it. On a five-second file with one video keyframe at 0:
+///
+/// ```text
+/// -read_intervals '2%+#6'                     -> video 0.000000, audio -0.023220
+/// -read_intervals '2%+#3' -select_streams a   -> audio 1.996916
+/// ```
+///
+/// Without a selection everything rewinds to the video keyframe at 0, audio
+/// included. Narrow the selection to audio and the audio lands at ~2 s instead.
+/// So the reference seeks **in the selected stream**, and "the first selected
+/// stream" reproduces both rows: with no `-select_streams` the first selected
+/// stream *is* the first video stream.
+///
+/// This used to seek the first video stream unconditionally, which is right for
+/// the common case and wrong for every `-select_streams a` with a start bound —
+/// 420 invocations of one option matrix, all the same shape.
 ///
 /// `Bound::Relative` is a `+OFFSET` start, which is defined as "from the
 /// current position" and therefore performs no seek at all (plan 14 §5.3).
-fn seek(demuxer: &mut dyn Demuxer, streams: &[Stream], start: Bound) -> Result<()> {
+fn seek(
+    demuxer: &mut dyn Demuxer,
+    streams: &[Stream],
+    selected: &[u32],
+    start: Bound,
+) -> Result<()> {
     let Bound::Absolute(micros) = start else {
         return Ok(());
     };
     let reference = streams
         .iter()
-        .find(|s| s.media_type() == Some(vaco_core::MediaType::Video) && s.time_base.is_defined())
+        .find(|s| selected.contains(&s.index) && s.time_base.is_defined())
+        .or_else(|| {
+            streams
+                .iter()
+                .find(|s| s.media_type() == Some(vaco_core::MediaType::Video))
+        })
         .or_else(|| streams.first())
         .ok_or(Error::NotSeekable)?;
     let ts = vaco_core::Duration(micros)

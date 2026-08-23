@@ -137,8 +137,20 @@ impl TextWriter for IniWriter {
     fn section_footer(&mut self, o: &mut Out<'_>, _ctx: &Ctx<'_>, produced: bool) -> Result<()> {
         if !produced {
             o.c('\n')?;
-            self.last_was_header = false;
         }
+        // Closing *any* section ends the run of headers, whether or not it
+        // produced anything. Without this, a section that wrote a header and no
+        // fields left `last_was_header` set, so rule 1 suppressed the blank
+        // before its sibling:
+        //
+        //   [streams.stream.0.disposition]
+        //   [streams.stream.0.tags]          <- reference has a blank here
+        //
+        // Unreachable until `-show_optional_fields never` arrived, because
+        // before that a headed section always had fields to write and `field`
+        // cleared the flag itself. `produced` is true for a headed section — it
+        // did produce a header — which is why testing it is not enough.
+        self.last_was_header = false;
         Ok(())
     }
 
