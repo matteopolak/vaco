@@ -281,8 +281,38 @@ fn write_codec_impl_listing<W: Write>(w: &mut W, which: &str) -> std::io::Result
     Ok(())
 }
 
-/// `-filters`: the seven-line legend. Zero rows: `FILTERS` is always empty
-/// (no filter crate exists yet).
+/// `-filters`: the seven-line legend, then one row per registered filter.
+///
+/// The row format is measured, not inferred — `ffmpeg -filters` 8.1, with the
+/// widths read off a name that exactly fills its column so the padding cannot
+/// be mistaken for a separator:
+///
+/// ```text
+///  TS aap               AA->A      Apply Affine Projection algorithm to first audio stream.
+///  .. abench            A->A       Benchmark part of a filtergraph.
+///  TS colorchannelmixer V->V       Adjust colors by mixing color channels.
+///  .. anullsrc          |->A       Null audio source, return empty audio frames.
+///  .. nullsink          V->|       Do absolutely nothing with the input video.
+///  .. split             V->N       Pass on the input to N video outputs.
+///  .. concat            N->N       Concatenate audio and video streams.
+/// ```
+///
+/// `colorchannelmixer` is seventeen characters and still has a single space
+/// before its pad column, so the field is `{:<17}` plus a literal space rather
+/// than `{:<18}`. Same reasoning for `{:<10}` on the pad column, read off
+/// `AA->A`.
+///
+/// The pad column is one letter per pad — `A` or `V` — with `|` standing in
+/// for "no pads on this side" (a source or a sink) and `N` for a count the
+/// options decide. Sorted by name, which is the reference's own order.
+///
+/// This printed the legend and **zero rows** until 2026-08-23, on the strength
+/// of a comment saying "no filter crate exists yet". Twenty filter crates and
+/// 282 registered filters existed by then, every one of which resolved through
+/// `-h filter=<name>`. The test beside it asserted the output *ended* at the
+/// legend, so it passed for exactly as long as the bug lasted — the "never pin
+/// the absence of something the project is building" trap, caught by comparing
+/// `-filters` against the reference rather than by any test.
 fn write_filters<W: Write>(w: &mut W) -> std::io::Result<()> {
     writeln!(w, "Filters:")?;
     writeln!(w, "  T.. = Timeline support")?;
@@ -292,7 +322,61 @@ fn write_filters<W: Write>(w: &mut W) -> std::io::Result<()> {
     writeln!(w, "  N = Dynamic number and/or type of input/output")?;
     writeln!(w, "  | = Source or sink filter")?;
     writeln!(w, "  ------")?;
+
+    let mut rows: Vec<&'static vaco_filter_core::FilterDesc> =
+        vaco_registry::filters().to_vec();
+    rows.sort_unstable_by_key(|f| f.name);
+    for f in rows {
+        let timeline = match f.flags.timeline() {
+            vaco_filter_core::TimelineSupport::None => '.',
+            _ => 'T',
+        };
+        let slice = if f.flags.contains(vaco_filter_core::FilterFlags::SLICE_THREADS) {
+            'S'
+        } else {
+            '.'
+        };
+        let pads = format!(
+            "{}->{}",
+            pad_column(
+                f.inputs,
+                f.flags
+                    .contains(vaco_filter_core::FilterFlags::DYNAMIC_INPUTS)
+            ),
+            pad_column(
+                f.outputs,
+                f.flags
+                    .contains(vaco_filter_core::FilterFlags::DYNAMIC_OUTPUTS)
+            ),
+        );
+        writeln!(
+            w,
+            " {timeline}{slice} {:<17} {:<10} {}",
+            f.name, pads, f.description
+        )?;
+    }
     Ok(())
+}
+
+/// One side of a filter's pad column: a letter per pad, `|` for none, `N` for
+/// a count the options decide.
+///
+/// `N` wins over the declared pads rather than being appended to them: the
+/// reference prints `concat` as `N->N` and `split` as `V->N`, never the pads a
+/// default instantiation happens to have.
+fn pad_column(pads: &'static [vaco_filter_core::Pad], dynamic: bool) -> String {
+    if dynamic {
+        return "N".to_owned();
+    }
+    if pads.is_empty() {
+        return "|".to_owned();
+    }
+    pads.iter()
+        .map(|p| match p.media_type {
+            vaco_core::MediaType::Audio => 'A',
+            _ => 'V',
+        })
+        .collect()
 }
 
 /// `-protocols`: not a flag-column table at all — measured (`ffmpeg
@@ -1468,16 +1552,74 @@ mod tests {
         assert!(e.starts_with("Encoders:\n"), "{e}");
     }
 
+    /// Both of these used to assert the listing *stopped* at its header.
+    ///
+    /// They passed for exactly as long as the corresponding bug lasted, and
+    /// failed the moment it was fixed — the "never pin the absence of something
+    /// the project is building" trap in `planning/AGENT-CONSTRAINTS.md`, in its
+    /// purest form. `-filters` printed a legend and no rows while 142 filters
+    /// were registered and resolving through `-h filter=<name>`.
+    ///
+    /// What replaces them asserts the *shape* of a row, which stays true as the
+    /// registry grows.
     #[test]
-    fn filters_header_with_zero_rows() {
+    fn filters_lists_every_registered_filter() {
         let s = text("filters");
         assert!(s.starts_with("Filters:\n"), "{s}");
-        assert!(s.ends_with("  ------\n"), "{s}");
+        let rows: Vec<&str> = s.lines().skip(8).collect();
+        assert_eq!(rows.len(), vaco_registry::filters().len(), "one row each");
+        // Measured against `ffmpeg -filters` 8.1: two flag characters, a name
+        // column of 17 plus a space, a pad column of 10 plus a space.
+        for r in &rows {
+            let flags = r.get(1..3).unwrap_or_default();
+            assert!(
+                matches!(flags.as_bytes(), [b'T' | b'.', b'S' | b'.']),
+                "flag column: {r:?}"
+            );
+            let pads = r.get(21..31).unwrap_or_default().trim();
+            assert!(pads.contains("->"), "pad column: {r:?}");
+        }
+    }
+
+    /// The pad column is a letter per pad, `|` for a source or sink, `N` for a
+    /// count the options decide. Measured: `anullsrc` is `|->A`, `nullsink` is
+    /// `V->|`, `split` is `V->N`, `concat` is `N->N`, `overlay` is `VV->V`.
+    #[test]
+    fn the_pad_column_marks_sources_sinks_and_dynamic_pads() {
+        use vaco_core::MediaType;
+        use vaco_filter_core::{FilterFlags, Pad};
+        const AUDIO: &[Pad] = &[Pad {
+            name: "default",
+            media_type: MediaType::Audio,
+        }];
+        const TWO_VIDEO: &[Pad] = &[
+            Pad {
+                name: "main",
+                media_type: MediaType::Video,
+            },
+            Pad {
+                name: "overlay",
+                media_type: MediaType::Video,
+            },
+        ];
+        assert_eq!(pad_column(&[], false), "|");
+        assert_eq!(pad_column(AUDIO, false), "A");
+        assert_eq!(pad_column(TWO_VIDEO, false), "VV");
+        // Dynamic wins over the declared pads: the reference prints `split` as
+        // `V->N`, never the pads a default instantiation happens to have.
+        assert_eq!(pad_column(TWO_VIDEO, true), "N");
+        assert_eq!(pad_column(&[], true), "N");
+        let _ = FilterFlags::DYNAMIC_INPUTS;
     }
 
     #[test]
-    fn bsfs_header_with_zero_rows() {
-        assert_eq!(text("bsfs"), "Bitstream filters:\n");
+    fn bsfs_lists_every_registered_bitstream_filter() {
+        let s = text("bsfs");
+        assert!(s.starts_with("Bitstream filters:\n"), "{s}");
+        assert_eq!(
+            s.lines().count(),
+            1 + components_of_kind(Kind::BitstreamFilter).count()
+        );
     }
 
     #[test]

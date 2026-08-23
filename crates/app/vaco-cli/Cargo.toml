@@ -33,6 +33,7 @@ vaco-opts = { path = "../../core/vaco-opts" }
 vaco-cli-core = { path = "../../app/vaco-cli-core" }
 vaco-sched = { path = "../../app/vaco-sched" }
 vaco-registry = { path = "../../registry/vaco-registry" }
+vaco-filter-core = { path = "../../filter/vaco-filter-core" }
 vaco-format-core = { path = "../../format/vaco-format-core" }
 vaco-codec-core = { path = "../../signal/vaco-codec-core" }
 vaco-packet = { path = "../../model/vaco-packet" }

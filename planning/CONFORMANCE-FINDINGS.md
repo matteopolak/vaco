@@ -1007,6 +1007,80 @@ This closes the stream-info half of findings 21 and 22. What remains under
 finding 22 is only the original question — whether generic format tags
 propagate across `-c copy` into ASF.
 
+## 27. `-filters` printed a legend and no rows; `-h filter=` prints one line where the reference prints an option table
+
+Two divergences in the same surface, found by diffing `vaco -filters` against
+`ffmpeg -filters` rather than by any test — and the reason no test caught them
+is itself the finding.
+
+### `-filters` had zero rows — **fixed**
+
+`write_filters` emitted the seven-line legend and stopped, on the strength of a
+comment reading "Zero rows: `FILTERS` is always empty (no filter crate exists
+yet)". Twenty filter crates and 142 registered filters existed by then, every
+one of which already resolved through `-h filter=<name>`.
+
+The test beside it asserted the output *ended* at the legend:
+
+```rust
+assert!(s.ends_with("  ------\n"), "{s}");
+```
+
+so it passed for exactly as long as the bug lasted and failed the moment the
+bug was fixed. `bsfs_header_with_zero_rows` was the same shape and had already
+started failing on its own, because the bitstream-filter work landed rows under
+it. This is the "never pin the absence of something the project is building"
+trap in `AGENT-CONSTRAINTS.md`, twice, in one file.
+
+Fixed, with the row format measured off `ffmpeg -filters` 8.1 rather than
+guessed — including reading the column widths off `colorchannelmixer`, a name
+that exactly fills its 17-character field, so the padding could not be mistaken
+for a separator. **All 142 of our filters appear in the reference's list and
+none is invented**, which is the useful half of the check.
+
+### 133 of 142 descriptions differ — open
+
+Consistent and mechanical: our `long_name` values are lower-case initial and
+have no trailing period.
+
+```text
+acompressor   ours "audio compressor"                  ref "Audio compressor."
+aderivative   ours "compute derivative of input audio"  ref "Compute derivative of input audio."
+acopy         ours "Copy the input audio unchanged to the output"
+              ref  "Copy the input audio unchanged to the output."
+```
+
+The strings live in each crate's `vaco-component.toml`, so this is a
+one-command sweep — but those files were owned by five concurrent agents when
+this was found, so it is recorded rather than done. It should be a single
+mechanical pass regenerating `long_name` from `ffmpeg -filters`, not 133
+hand-edits.
+
+### `-h filter=<name>` is a stub — open
+
+```text
+$ ffmpeg -h filter=volume            $ vaco -h filter=volume
+Filter volume                        Filter volume [change input volume]:
+  Change input volume.
+    Inputs:
+       #0: default (audio)
+    Outputs:
+       #0: default (audio)
+volume AVOptions:
+   volume  <string>  ..F.A....T. set volume adjustment expression (default "1.0")
+   …
+```
+
+Ours prints one line and exits. The reference prints the description, the input
+and output pads with names and media types, and the full `AVOptions` table with
+type, flag field, help text, default, and the named constants for each enum
+option. `-h muxer=` and `-h demuxer=` in this codebase already render an option
+table, so the machinery exists and this surface is simply not wired to it.
+
+Every filter registered so far declares its options — that is what the fuzz
+targets exercise — so the data is present. Worth doing as one piece of work
+across all filters rather than per crate.
+
 ## Harness changes, summarised
 
 Everything below is a change to `crates/tool/vaco-conformance/`,
