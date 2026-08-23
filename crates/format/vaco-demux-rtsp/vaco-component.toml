@@ -8,11 +8,24 @@
 # work through their registered path for the cases documented in that same
 # module (static payload types only, and no-network-access respectively).
 
+# `default = false` on all three, for the same reason `vaco-protocol-socket`'s
+# own fragment gives: this crate reaches its sockets through
+# `vaco-protocol-socket`, which depends on `socket2` and does not build for
+# `wasm32-unknown-unknown` (this crate is `NATIVE_ONLY` in
+# `xtask/src/wasm.rs` for exactly that, one level removed). Registering
+# unconditionally makes `vaco-demux-rtsp` a *default* optional dependency of
+# `vaco-registry` and regresses `vaco-registry`'s own `wasm-check` — measured:
+# `vaco-registry`, `vaco-cli-core`, `vaco-cli` and `vaco-probe` all fail with
+# E0583 from inside `socket2` without this line. Nothing is lost in a default
+# build that was not already absent: RTSP/RTP need `tcp:`/`udp:`, and those are
+# themselves behind the non-default `protocol-socket` feature.
+
 [[component]]
 kind       = "demuxer"
 name       = "rtsp"
 long_name  = "RTSP input"
 feature    = "demux-rtsp"
+default    = false
 ctor       = "vaco_demux_rtsp::RTSP_DEMUXER"
 
 [[component]]
@@ -20,6 +33,7 @@ kind       = "demuxer"
 name       = "rtp"
 long_name  = "RTP input"
 feature    = "demux-rtp"
+default    = false
 ctor       = "vaco_demux_rtsp::RTP_DEMUXER"
 mime_types = "audio/rtp,video/rtp"
 
@@ -28,6 +42,7 @@ kind       = "demuxer"
 name       = "sdp"
 long_name  = "SDP"
 feature    = "demux-sdp"
+default    = false
 ctor       = "vaco_demux_rtsp::SDP_DEMUXER"
 extensions = "sdp"
 mime_types = "application/sdp"

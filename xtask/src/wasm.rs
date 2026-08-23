@@ -130,17 +130,19 @@ pub fn run(_check: bool) -> Task {
         checked += 1;
         if !out.status.success() {
             let err = String::from_utf8_lossy(&out.stderr);
-            let first = err
-                .lines()
-                .find(|l| l.starts_with("error"))
-                .unwrap_or("(no error line)")
-                .to_string();
+            let mut after = err.lines().skip_while(|l| !l.starts_with("error"));
+            let first = after.next().unwrap_or("(no error line)").to_string();
             // Blame the crate the error is IN, not the one we asked cargo for.
             // Building `-p a` also builds `a`'s dependencies, so the first error
             // is often in a different crate — and a gate that names the wrong
             // one sends people to the wrong file. Take it from the `-->` path.
-            let blame = err
-                .lines()
+            //
+            // Scan from the error line, not from the top: a warning carries a
+            // `-->` too, and warnings come first. The version that searched all
+            // of stderr blamed `vaco-protocol-wrap` — whose only crime was an
+            // unused import — for four `socket2` failures it had no part in.
+            let blame = after
+                .take_while(|l| !l.starts_with("error") && !l.starts_with("warning"))
                 .find_map(|l| l.trim().strip_prefix("--> "))
                 .and_then(blame_from_path)
                 .unwrap_or_else(|| name.clone());
