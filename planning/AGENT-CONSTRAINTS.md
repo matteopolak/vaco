@@ -386,3 +386,46 @@ and the second implemented it, tested it and deleted it. See
 If the reference has a filter the table places nowhere, that is a change to
 the table, proposed in a commit that says why — not a new crate.
 
+## `git add` then `git commit` will commit other agents' staged files too
+
+The index is **shared**. Every agent in this tree stages into the same
+`.git/index`. So this, which looks careful:
+
+```sh
+git add crates/mine/a.rs crates/mine/b.rs
+git commit -F msg.txt
+```
+
+commits *everything currently staged*, including the twenty-seven files
+another agent staged thirty seconds ago and was about to commit under its own
+message.
+
+That is not hypothetical. On 2026-08-23 the orchestrator staged one planning
+file, committed, and swept an entire filter agent's work — three crates, three
+fuzz targets, docs and registry regeneration — into `df3a742`, a commit whose
+message says "chore(planning)" and whose trailer says
+`Vaco-Provenance: original`. Nothing was lost and nothing was corrupted, but
+the provenance record for 3,700 lines of code is now attached to the wrong
+message and the wrong provenance kind. In a project whose clean-room defence
+*is* the commit trail, that is the expensive kind of harmless.
+
+**Use a pathspec-limited commit. Never `git add` followed by a bare
+`git commit`.**
+
+```sh
+git commit -F msg.txt -- crates/mine/a.rs crates/mine/b.rs
+```
+
+`git commit -- <paths>` commits the working-tree content of exactly those
+paths and ignores the index for everything else, so a concurrent stage cannot
+ride along. It also means you never have to remember what you staged.
+
+Two caveats: pass the paths for files you are *deleting* too, and note that
+this form takes the working tree rather than what you staged — which is what
+you wanted anyway.
+
+If you find your work has already been absorbed into someone else's commit,
+**report it and do not fix it**. Rewriting shared history while five agents
+hold uncommitted work in the same tree is far worse than a wrong commit
+message. The orchestrator will add a correcting note.
+

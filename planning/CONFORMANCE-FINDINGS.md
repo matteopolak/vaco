@@ -452,7 +452,7 @@ new cases) and `progressive::tests::mov_gets_wide_every_other_brand_gets_free`,
 plus `tests/roundtrip.rs::a_non_faststart_file_puts_mdat_before_moov`
 updated for the new placeholder box.
 
-## 15. `vaco-mux-matroska`: no `SeekHead` — open, but recorded as intentional in-crate
+## 15. `vaco-mux-matroska`: no `SeekHead` **and no `CRC-32` on any level-1 element** — reclassified, both now fully measured
 
 ```
 $ just conformance-run 'transcode-remux-bitexact/v-mp4/output=matroska'
@@ -466,6 +466,69 @@ byte-identical suite diverges (the `Info` element's `MuxingApp`/`WritingApp`
 strings start immediately where the reference's `SeekHead` would be).
 Recording it here because XF-03 is where the byte cost becomes visible and
 measured (126 bytes on this fixture), not because it is news to the crate.
+
+### Measured 2026-08-23 — and `SeekHead` is the smaller half
+
+Dumped the reference's own Matroska output element by element. Two things the
+finding did not say:
+
+**1. Every level-1 element begins with a `CRC-32`, and `vaco-mux-matroska`
+writes none.**
+
+```
+$ ffmpeg -bitexact -f lavfi -i testsrc=size=64x64:rate=25:d=1 \
+         -pix_fmt yuv420p -c:v libx264 m.mkv
+id=0x114D9B74 SeekHead size=64   first child 0xBF
+id=0xEC       Void     size=83
+id=0x1549A966 Info     size=75   first child 0xBF
+id=0x1654AE6B Tracks   size=151  first child 0xBF
+id=0x1254C367 Tags     size=131  first child 0xBF
+id=0x1F43B675 Cluster  size=2274 first child 0xBF
+id=0x1C53BB6B Cues     size=23   first child 0xBF
+```
+
+`vaco-demux-matroska`'s schema knows `CRC32 = 0xBF`; the muxer has no mention
+of it anywhere. So *every* level-1 element diverges, not only the region
+`SeekHead` would occupy — which makes the byte gap structural rather than the
+one-off 126 bytes this finding recorded.
+
+The algorithm is pinned, not guessed. Standard CRC-32 (IEEE, as `zlib.crc32`
+computes it), emitted **little-endian**, over the element's payload *excluding
+the `CRC-32` element itself*. Verified against two independent elements:
+
+```
+SeekHead  declared 32 30 7d 64   computed LE 32 30 7d 64
+Info      declared 62 15 80 73   computed LE 62 15 80 73
+```
+
+`vaco-hash` is D11's single owner of the `crc` crate, so the implementation has
+a home and must not add a second CRC table.
+
+**2. The `SeekHead` layout is fully determined and reproducible.**
+
+64-byte `SeekHead` = one `CRC-32` (6 bytes) + four `Seek` entries, then an
+83-byte `Void` padding it out to a reserved region. Positions are relative to
+the **Segment payload start**, not the file:
+
+```
+Seek -> Info    (0x1549A966)  position 161
+Seek -> Tracks  (0x1654AE6B)  position 241
+Seek -> Tags    (0x1254C367)  position 398
+Seek -> Cues    (0x1C53BB6B)  position 2815
+```
+
+Entry sizes vary with the position's encoded width (11 bytes for a one-byte
+position, 12 for two), which is precisely why the reference reserves a fixed
+region and pads the remainder with `Void` rather than computing an exact size
+up front. That resolves the crate's own stated objection — it needs neither "a
+second seek-patch pass" nor "fixed-width placeholder arithmetic", because the
+reference does not use either. It reserves, writes what it has, and voids the
+rest, and `patch_known_size` is already in `vaco-format-ebml`.
+
+Reclassified from "intentional omission, no behavioural gain" to **a real
+divergence worth closing**: with the CRC-32s absent as well, no Matroska output
+this project writes can ever be byte-identical, which takes an entire container
+family out of the byte-identity suite.
 
 ## 16. `vaco-mux-avi`: no length-prefixed-to-Annex-B bitstream conversion at all — **fixed, byte gap not fully closed**
 
