@@ -482,6 +482,21 @@ impl<D: Demuxer + ?Sized> Demuxer for Box<D> {
 
 /// Write packets into a container.
 pub trait Muxer: Send {
+    /// This container's own flags.
+    ///
+    /// Not a caller preference: they decide whether `avoid_negative_ts`
+    /// resolves to shifting, whether DTS must strictly increase, and whether
+    /// the container stores timestamps at all. Only the muxer knows.
+    ///
+    /// **The default is the strictest reading**, and deliberately so — an
+    /// absent [`FormatFlags::TS_NONSTRICT`] *means* strictly increasing DTS, so
+    /// a muxer that forgets to answer gets the conservative behaviour rather
+    /// than a permissive one. Override it; the default is a safety net, not a
+    /// sensible value.
+    fn flags(&self) -> FormatFlags {
+        FormatFlags::empty()
+    }
+
     /// Declare a stream. All streams must be added before [`Muxer::write_header`].
     ///
     /// # Errors

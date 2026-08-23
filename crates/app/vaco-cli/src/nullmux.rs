@@ -118,6 +118,10 @@ impl NullMuxer {
 }
 
 impl Muxer for NullMuxer {
+    fn flags(&self) -> FormatFlags {
+        FLAGS
+    }
+
     fn add_stream(&mut self, params: &CodecParameters) -> Result<u32> {
         let index = self.next_index;
         self.next_index += 1;
@@ -179,44 +183,11 @@ impl Muxer for NullMuxer {
 /// means *strict* — the default is the strictest container, not the loosest
 /// one.
 ///
-/// # The divergence this leaves
-///
-/// [`REORDERED_VIDEO_DIVERGENCE`] describes what still fails.
 pub const FLAGS: FormatFlags = FormatFlags::NOFILE
     .union(FormatFlags::VARIABLE_FPS)
     .union(FormatFlags::TS_NONSTRICT)
-    .union(FormatFlags::TS_NEGATIVE);
-
-/// Reordered video cannot be streamcopied by this build, and the reason is not
-/// in this crate.
-///
-/// Matroska stores no DTS. `vaco_format_core::time`'s rule R19 correctly
-/// declines to set `dts = pts` for a codec that reorders, and no rule then
-/// supplies one — R20 generates PTS *from* DTS through `push_reorder`, and the
-/// mirror rule does not exist. So every packet of a reordered H.264 track
-/// reaches the mux side with `dts = None`, even though
-/// `params.video.has_b_frames` is `Some(2)` and `set_stream_delay` has already
-/// been told. The reference reconstructs it: `ffprobe -show_entries
-/// packet=pts,dts` on the same file prints `dts = N/A, N/A, 0, 40, 80, …`
-/// against `pts = 0, 160, 80, 40, 120, …`.
-///
-/// `MuxTimestamps` then fills the missing DTS from PTS, and the fabricated
-/// sequence `0, 160, 80` is decreasing, so the run stops with
-/// "decreasing dts: this container requires non-decreasing timestamps".
-///
-/// Files without frame reordering — audio, intra-only video, `-bf 0` H.264 —
-/// stream-copy end to end today.
-///
-/// The name exists so a conformance audit finds it, per D17.1's pattern. It is
-/// **not** pinned by a synthetic fixture, and that is deliberate rather than an
-/// omission: a synthetic Matroska track carries no `CodecPrivate`, so nothing
-/// marks its codec as reordering and `DemuxTimestamps` takes the R19 path
-/// instead. The divergence was established against a reference-produced H.264
-/// file; the adjacent behaviour that *is* reachable synthetically — R22's
-/// silent repair — is pinned in
-/// `tests::a_reordered_pts_sequence_on_a_non_reordering_codec_is_repaired_not_refused`.
-pub const REORDERED_VIDEO_DIVERGENCE: &str = "streamcopy of a reordered video stream fails: the container states no DTS and \
-     nothing reconstructs it from has_b_frames";
+    .union(FormatFlags::TS_NEGATIVE)
+    .union(FormatFlags::NOTIMESTAMPS);
 
 /// The descriptor `-f null` resolves to.
 ///
@@ -299,9 +270,12 @@ mod tests {
         // which is the strictest container, and a null sink is the loosest.
         assert!(FormatFlags::empty().requires_strict_dts());
         assert!(!FLAGS.requires_strict_dts());
-        // And NOTIMESTAMPS is deliberately absent — see the constant's docs.
-        assert!(!FLAGS.contains(FormatFlags::NOTIMESTAMPS));
-        assert!(!REORDERED_VIDEO_DIVERGENCE.is_empty());
+        // NOTIMESTAMPS is present now that `vaco-format-core` accepts what it
+        // implies: `MuxTimestamps::apply` clears the fields and
+        // `InterleaveQueue::without_timestamps` takes the result. It was
+        // omitted before because the two disagreed and this was the only
+        // workaround available from inside this crate.
+        assert!(FLAGS.contains(FormatFlags::NOTIMESTAMPS));
     }
 
     #[test]

@@ -90,6 +90,8 @@ pub struct InterleaveQueue {
     run_stream: Option<usize>,
     run_bytes: u64,
     run_start_us: Option<i64>,
+    /// Accept packets with no DTS. See [`InterleaveQueue::without_timestamps`].
+    notimestamps: bool,
 }
 
 impl InterleaveQueue {
@@ -112,6 +114,7 @@ impl InterleaveQueue {
             run_stream: None,
             run_bytes: 0,
             run_start_us: None,
+            notimestamps: false,
         }
     }
 
@@ -152,6 +155,31 @@ impl InterleaveQueue {
         self.live.iter().filter(|&&l| l).count()
     }
 
+    /// Accept packets with no DTS, ordering them by arrival (`notimestamps`).
+    ///
+    /// # The contradiction this resolves
+    ///
+    /// [`MuxTimestamps::apply`] under [`FormatFlags::NOTIMESTAMPS`] *clears*
+    /// `pts` and `dts` — that is the flag's entire meaning, and the reference's
+    /// `null` and raw muxers carry it. [`InterleaveQueue::push`] then rejected
+    /// exactly the packet the other function had just produced. Two parts of
+    /// one module disagreeing about what a valid packet is, and between them a
+    /// faithful null sink was unbuildable.
+    ///
+    /// A container that stores no timestamps has nothing to interleave *by*, so
+    /// ordering falls back to arrival — which the queue already tracks in `seq`
+    /// as its tie-break. Every packet simply ties.
+    ///
+    /// Opt-in rather than inferred from the flags passed to `new`, because a
+    /// missing DTS in a *timestamped* container is a real bug and must keep
+    /// erroring. Set this only when the muxer's own `FormatFlags` carry
+    /// `NOTIMESTAMPS`.
+    #[must_use]
+    pub const fn without_timestamps(mut self) -> Self {
+        self.notimestamps = true;
+        self
+    }
+
     /// Declare a stream finished (N4).
     ///
     /// The queue then interleaves whatever remains among the survivors, so a
@@ -180,13 +208,22 @@ impl InterleaveQueue {
                 "packet names a stream the muxer does not have",
             ))?;
         let tb = self.time_bases.get(i).copied().unwrap_or(TIME_BASE_Q);
-        let dts_us = pkt
+        let dts_us = match pkt
             .dts
             .rescale(tb, TIME_BASE_Q, Rounding::default())
             .ticks()
-            .ok_or(vaco_core::Error::InvalidData(
-                "packet has no dts; interleaving cannot order it",
-            ))?;
+        {
+            Some(t) => t,
+            // A `notimestamps` container has nothing to order by, so everything
+            // ties at zero and `seq` — the existing tie-break — puts them in
+            // arrival order. See `without_timestamps`.
+            None if self.notimestamps => 0,
+            None => {
+                return Err(vaco_core::Error::InvalidData(
+                    "packet has no dts; interleaving cannot order it",
+                ));
+            }
+        };
         let key_us = if self.preload.get(i).copied().unwrap_or(false) {
             dts_us.saturating_sub(self.chunk.audio_preload_us)
         } else {
@@ -689,6 +726,33 @@ mod tests {
         m.apply(&mut pkt(0, 10, 1), tb, tb).unwrap();
         let mut p = pkt(0, 9, 1);
         assert!(m.apply(&mut p, tb, tb).is_err());
+    }
+
+    /// The two halves of `notimestamps` now agree. `MuxTimestamps` clears the
+    /// fields and `InterleaveQueue` accepts what it produced — which is the
+    /// whole point of the flag, and was impossible before: one function made a
+    /// packet the other rejected.
+    #[test]
+    fn notimestamps_survives_the_round_trip_through_the_queue() {
+        let opts = FormatOptions::default();
+        let tb = Rational::new(1, 1000);
+        let mut m = MuxTimestamps::new(1, FormatFlags::NOTIMESTAMPS, &opts);
+        let mut q = InterleaveQueue::new(1, &opts).without_timestamps();
+
+        for pts in [0_i64, 100, 200] {
+            let mut p = pkt(0, pts, 1);
+            m.apply(&mut p, tb, tb).unwrap();
+            assert!(p.dts.is_none(), "notimestamps must clear dts");
+            // A notimestamps queue accepts a packet with no dts; that is the
+            // whole assertion.
+            q.push(p).unwrap();
+        }
+        // Arrival order, since everything ties at zero and `seq` breaks it.
+        let mut seen = 0;
+        while q.next(true).is_some() {
+            seen += 1;
+        }
+        assert_eq!(seen, 3, "every packet must come back out");
     }
 
     #[test]

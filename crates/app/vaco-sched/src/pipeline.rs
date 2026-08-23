@@ -723,7 +723,13 @@ fn build_work(
                 .copied()
                 .max()
                 .map_or(0, |m| m as usize + 1);
+            // A `notimestamps` container stores no timestamps, so
+            // `MuxTimestamps::apply` clears them — and the queue has to be
+            // told, or it rejects the very packets that function produced.
             let mut queue = InterleaveQueue::new(count, &options);
+            if flags.contains(vaco_format_core::flags::FormatFlags::NOTIMESTAMPS) {
+                queue = queue.without_timestamps();
+            }
             let mut to_time_base = Vec::new();
             for index in &stream_of_port {
                 let tb = PipelineSpec::muxer_time_base(muxer.as_ref(), *index);

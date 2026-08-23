@@ -317,9 +317,16 @@ impl PipelineSpec {
             .map_or(0, |n| n.outputs.len())
     }
 
-    /// Add an output file with default container options.
+    /// Add an output file, taking the container's flags from the muxer itself.
+    ///
+    /// This used to pass `FormatFlags::empty()`, which reads as "nothing
+    /// special" and is in fact the *strictest* container: `requires_strict_dts`
+    /// is `!TS_NONSTRICT`, so an empty set silently opted every caller into
+    /// strictly increasing DTS. Asking the muxer is both correct and impossible
+    /// to get wrong by omission.
     pub fn add_output(&mut self, muxer: Box<dyn Muxer>) -> OutputRef {
-        self.add_output_with(muxer, FormatFlags::empty(), FormatOptions::default())
+        let flags = muxer.flags();
+        self.add_output_with(muxer, flags, FormatOptions::default())
     }
 
     /// Add an output file, declaring the container's flags and options.

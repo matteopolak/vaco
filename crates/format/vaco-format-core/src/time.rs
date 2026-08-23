@@ -333,7 +333,8 @@ const MAX_REORDER: usize = 16;
 )]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct FixReport {
-    /// DTS was copied from PTS (R19).
+    /// DTS was derived from PTS — copied outright (R19) for a codec that does
+    /// not reorder, or taken from the reorder window (R19b) for one that does.
     pub dts_from_pts: bool,
     /// PTS was generated from the reorder window (R20).
     pub pts_generated: bool,
@@ -354,6 +355,26 @@ pub struct FixReport {
     /// that assumes it does will loop or mis-order. So the exception is
     /// *reported* rather than left for the caller to discover.
     pub dts_overflow: bool,
+    /// R22's repair pushed DTS past this packet's own PTS.
+    ///
+    /// `dts > pts` is not a valid packet in any container — it tells a decoder
+    /// to decode a frame after the moment it must be shown. The repair does not
+    /// check for it, because the two rules answer different questions: R22
+    /// restores monotonicity within the DTS sequence and knows nothing about
+    /// presentation.
+    ///
+    /// Deliberately **reported rather than corrected**. Both corrections are
+    /// worse than the disease without a measurement nobody has taken yet:
+    /// clamping DTS to PTS re-breaks the monotonicity R22 exists to restore, and
+    /// pushing PTS forward invents a presentation time the file never claimed.
+    /// What the reference does here is unknown — D17 says a measured deviation
+    /// is reproduced, so the honest move is to surface the state and decide once
+    /// somebody has probed it.
+    ///
+    /// Reachable only through R22, and only on a stream whose PTS are out of
+    /// order while its codec is marked as not reordering — a corrupt or
+    /// mislabelled file, not a conforming one.
+    pub dts_exceeds_pts: bool,
 }
 
 impl FixReport {
@@ -365,7 +386,8 @@ impl FixReport {
             || self.duration_filled
             || self.dts_repaired
             || self.dts_ignored
-            || self.dts_overflow)
+            || self.dts_overflow
+            || self.dts_exceeds_pts)
     }
 }
 
@@ -476,6 +498,36 @@ impl TimestampFixer {
             report.dts_from_pts = true;
         }
 
+        // R19b — DTS from PTS through the reorder window, where the codec
+        // *does* reorder. R19's mirror, and its absence meant every packet of a
+        // B-frame stream reached the muxer with no DTS at all — enough to make
+        // streamcopy of ordinary H.264 impossible.
+        //
+        // The transform is the same one R20 uses, run over PTS instead of DTS:
+        // insert, and once the window is deeper than `delay`, emit its minimum.
+        // Measured against ffprobe 8.1 on x264 with `-bf 2`:
+        //
+        //   pts  0    200  100  300  400
+        //   dts  N/A  N/A  0    100  200
+        //
+        // The two leading `N/A`s are the window filling, not an error, and they
+        // are what a container writes as "no decode time yet".
+        //
+        // Sharing one window with R20 is safe because the two guards are
+        // mutually exclusive — a packet cannot be missing its DTS and its PTS
+        // and be usable by either rule — and it is *right*, because a stream is
+        // in one mode or the other for its whole life.
+        if fill_in
+            && packet.dts.is_none()
+            && packet.pts.is_some()
+            && st.reorders
+            && st.delay > 0
+            && let Some(dts) = push_reorder(st, packet.pts)
+        {
+            packet.dts = dts;
+            report.dts_from_pts = true;
+        }
+
         // R20 — PTS from DTS, only under `+genpts`.
         if genpts
             && packet.pts.is_none()
@@ -513,6 +565,10 @@ impl TimestampFixer {
             // because "dts is strictly increasing after a repair" is exactly
             // the invariant a scheduler leans on.
             report.dts_overflow = repaired <= cur;
+            // And the repair may have pushed DTS past this packet's own PTS,
+            // which no container accepts. See `FixReport::dts_exceeds_pts` for
+            // why this reports rather than corrects.
+            report.dts_exceeds_pts = packet.pts.ticks().is_some_and(|pts| repaired > pts);
         }
 
         if let Some(dts) = packet.dts.ticks() {
@@ -896,6 +952,48 @@ mod tests {
         );
     }
 
+    /// The measured sequence, from ffprobe 8.1 on x264 with `-bf 2`:
+    ///
+    /// ```text
+    /// pts  0    200  100  300  400
+    /// dts  N/A  N/A  0    100  200
+    /// ```
+    ///
+    /// The two leading absences are the reorder window filling. A rule that
+    /// emitted a DTS for the first packet would hand out a value the third
+    /// packet has the better claim to.
+    #[test]
+    fn dts_is_reconstructed_through_the_reorder_window() {
+        let opts = FormatOptions::default();
+        let mut f = TimestampFixer::new(1, FormatFlags::empty(), &opts);
+        f.set_stream_delay(0, 2, true);
+
+        let pts = [0_i64, 200, 100, 300, 400];
+        let want = [None, None, Some(0), Some(100), Some(200)];
+        for (&pts, &want) in pts.iter().zip(want.iter()) {
+            let mut p = pkt(Some(pts), None);
+            f.fix(&mut p, TIME_BASE_Q, Rational::ZERO);
+            assert_eq!(p.dts.ticks(), want, "pts {pts}");
+        }
+    }
+
+    /// DTS never exceeds PTS on a reconstructed stream, which is the invariant
+    /// a container actually requires — a frame cannot be decoded after the
+    /// moment it must be shown.
+    #[test]
+    fn reconstructed_dts_never_exceeds_its_own_pts() {
+        let opts = FormatOptions::default();
+        let mut f = TimestampFixer::new(1, FormatFlags::empty(), &opts);
+        f.set_stream_delay(0, 2, true);
+        for pts in [0_i64, 200, 100, 300, 400, 700, 500, 600] {
+            let mut p = pkt(Some(pts), None);
+            f.fix(&mut p, TIME_BASE_Q, Rational::ZERO);
+            if let (Some(d), Some(pt)) = (p.dts.ticks(), p.pts.ticks()) {
+                assert!(d <= pt, "dts {d} > pts {pt}");
+            }
+        }
+    }
+
     #[test]
     fn dts_copied_from_pts_only_without_reordering() {
         let opts = FormatOptions::default();
@@ -907,11 +1005,41 @@ mod tests {
         assert_eq!(p.dts.ticks(), Some(100));
         assert!(r.dts_from_pts);
 
+        // A reordering stream gets no DTS from its *first* packet — the
+        // window is still filling. That is R19b delaying, not R19 refusing;
+        // `dts_is_reconstructed_through_the_reorder_window` covers the rest.
         let mut p = pkt(Some(100), None);
         p.stream_index = 1;
         let r = f.fix(&mut p, TIME_BASE_Q, Rational::ZERO);
         assert!(p.dts.is_none());
         assert!(!r.dts_from_pts);
+    }
+
+    /// R22 restores monotonicity within the DTS sequence and knows nothing
+    /// about presentation, so it can push DTS past the packet's own PTS. That
+    /// is an invalid packet in every container, and it used to happen silently.
+    #[test]
+    fn a_repair_past_the_packets_own_pts_is_reported() {
+        let opts = FormatOptions::default();
+        let mut f = TimestampFixer::new(1, FormatFlags::empty(), &opts);
+        // Not reordering, so R19b stays out of it and R22 is the only rule
+        // touching DTS.
+        f.set_stream_delay(0, 0, false);
+
+        let mut seen = false;
+        for pts in [0_i64, 160, 80, 40, 120] {
+            let mut p = pkt(Some(pts), Some(pts));
+            let r = f.fix(&mut p, TIME_BASE_Q, Rational::ZERO);
+            if let (Some(d), Some(pt)) = (p.dts.ticks(), p.pts.ticks())
+                && d > pt
+            {
+                assert!(r.dts_exceeds_pts, "dts {d} > pts {pt} went unreported");
+                seen = true;
+            } else {
+                assert!(!r.dts_exceeds_pts);
+            }
+        }
+        assert!(seen, "this sequence is supposed to provoke the repair");
     }
 
     #[test]

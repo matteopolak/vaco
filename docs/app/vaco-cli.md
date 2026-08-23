@@ -192,7 +192,6 @@ the three that do not are all the reordered-video gap below.
 
 | what | why | where |
 |---|---|---|
-| **Reordered video cannot be streamcopied** | Matroska stores no DTS; the reference's demuxer reconstructs one from the codec's reorder delay, ours reports `dts=None` even though `has_b_frames` is `Some(2)`. `MuxTimestamps` then fills DTS from PTS, the fabricated sequence `0, 160, 80` decreases, and the run stops. Files without reordering (audio, intra-only, `-bf 0`) copy end to end. | `nullmux::REORDERED_VIDEO_DIVERGENCE` |
 | **`-crf 20` is rejected** | The `AVOption` oracle answers from what this build contains, which is `FormatOptions` and nothing else — there are no encoders to declare `crf`. The reference applies the same rule to itself and gets a different answer because it has encoders. Closes on its own as codecs land. The alternative, accepting every unknown name, makes `-qwrty 3` a silent no-op. | `cli::Oracle` |
 | **Non-UTF-8 filenames are refused** | Every layer below takes a `&str`. The reference opens them. Reported rather than papered over with a lossy conversion that would open a *different* file. | `cli::url_of` |
 | **`-h` and four listings are unimplemented** | CL-04 owns the help system. `-pix_fmts`, `-layouts`, `-sample_fmts`, `-colors` and the device listings return `ENOSYS` naming the issue rather than half-rendering. | `listing::render` |
