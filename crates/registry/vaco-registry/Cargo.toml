@@ -159,6 +159,9 @@ optional = true
 path = "../../format/vaco-demux-rtsp"
 optional = true
 
+[dependencies.vaco-filter-achannel]
+path = "../../filter/vaco-filter-achannel"
+
 [dependencies.vaco-filter-audio]
 path = "../../filter/vaco-filter-audio"
 
@@ -167,6 +170,12 @@ path = "../../filter/vaco-filter-audio-dynamics"
 
 [dependencies.vaco-filter-audio-eq]
 path = "../../filter/vaco-filter-audio-eq"
+
+[dependencies.vaco-filter-blur]
+path = "../../filter/vaco-filter-blur"
+
+[dependencies.vaco-filter-denoise]
+path = "../../filter/vaco-filter-denoise"
 
 [dependencies.vaco-filter-plumbing]
 path = "../../filter/vaco-filter-plumbing"

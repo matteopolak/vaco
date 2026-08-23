@@ -702,6 +702,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "num-complex"
+version = "0.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73f88a1307638156682bada9d7604135552957b7818057dcef22705b4d509495"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "num-integer"
 version = "0.1.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -878,6 +887,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9"
 dependencies = [
  "zerocopy",
+]
+
+[[package]]
+name = "primal-check"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc0d895b311e3af9902528fbb8f928688abbd95872819320517cc24ca6b2bd08"
+dependencies = [
+ "num-integer",
 ]
 
 [[package]]
@@ -1116,6 +1134,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustfft"
+version = "6.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21db5f9893e91f41798c88680037dba611ca6674703c1a18601b01a72c8adb89"
+dependencies = [
+ "num-complex",
+ "num-integer",
+ "num-traits",
+ "primal-check",
+ "strength_reduce",
+ "transpose",
+]
+
+[[package]]
 name = "rustix"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1347,6 +1379,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "strength_reduce"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe895eb47f22e2ddd4dabc02bce419d2e643c8e3b585c78158b349195bc24d82"
+
+[[package]]
 name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1446,6 +1484,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 dependencies = [
  "once_cell",
+]
+
+[[package]]
+name = "transpose"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ad61aed86bc3faea4300c7aee358b4c6d0c8d6ccc36524c96e4c92ccf26e77e"
+dependencies = [
+ "num-integer",
+ "strength_reduce",
 ]
 
 [[package]]
@@ -1850,6 +1898,7 @@ dependencies = [
  "vaco-io",
  "vaco-limits",
  "vaco-packet",
+ "vaco-sampfmt",
 ]
 
 [[package]]
@@ -1896,6 +1945,40 @@ dependencies = [
  "proptest",
  "thiserror",
  "vaco-time",
+]
+
+[[package]]
+name = "vaco-filter-achannel"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "smallvec",
+ "vaco-chlayout",
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-filter-framesync",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-resample",
+ "vaco-sampfmt",
+]
+
+[[package]]
+name = "vaco-filter-ameasure"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "smallvec",
+ "tracing",
+ "vaco-chlayout",
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-filter-framesync",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-resample",
+ "vaco-sampfmt",
+ "vaco-tx",
 ]
 
 [[package]]
@@ -1949,6 +2032,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-filter-blur"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-filter-framesync",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-opts",
+ "vaco-pixfmt",
+]
+
+[[package]]
+name = "vaco-filter-component"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "smallvec",
+ "vaco-core",
+ "vaco-expr",
+ "vaco-filter-core",
+ "vaco-filter-framesync",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-limits",
+ "vaco-opts",
+ "vaco-pixfmt",
+]
+
+[[package]]
 name = "vaco-filter-core"
 version = "0.1.0"
 dependencies = [
@@ -1966,6 +2080,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-filter-denoise"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "rustfft",
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-limits",
+ "vaco-pixfmt",
+]
+
+[[package]]
 name = "vaco-filter-framesync"
 version = "0.1.0"
 dependencies = [
@@ -1974,6 +2102,23 @@ dependencies = [
  "vaco-filter-core",
  "vaco-frame",
  "vaco-pixfmt",
+]
+
+[[package]]
+name = "vaco-filter-geometry"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "smallvec",
+ "vaco-color",
+ "vaco-core",
+ "vaco-expr",
+ "vaco-filter-core",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-opts",
+ "vaco-pixfmt",
+ "vaco-scale",
 ]
 
 [[package]]
@@ -2160,6 +2305,8 @@ dependencies = [
  "vaco-io",
  "vaco-limits",
  "vaco-packet",
+ "vaco-pixfmt",
+ "vaco-sampfmt",
 ]
 
 [[package]]
@@ -2829,10 +2976,13 @@ dependencies = [
  "vaco-demux-ogg",
  "vaco-demux-raw",
  "vaco-demux-rtsp",
+ "vaco-filter-achannel",
  "vaco-filter-audio",
  "vaco-filter-audio-dynamics",
  "vaco-filter-audio-eq",
+ "vaco-filter-blur",
  "vaco-filter-core",
+ "vaco-filter-denoise",
  "vaco-filter-plumbing",
  "vaco-filter-video-composite",
  "vaco-filter-video-format",

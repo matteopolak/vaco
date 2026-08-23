@@ -1602,6 +1602,7 @@ dependencies = [
  "vaco-io",
  "vaco-limits",
  "vaco-packet",
+ "vaco-sampfmt",
 ]
 
 [[package]]
@@ -1643,6 +1644,21 @@ version = "0.1.0"
 dependencies = [
  "thiserror",
  "vaco-time",
+]
+
+[[package]]
+name = "vaco-filter-achannel"
+version = "0.1.0"
+dependencies = [
+ "smallvec",
+ "vaco-chlayout",
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-filter-framesync",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-resample",
+ "vaco-sampfmt",
 ]
 
 [[package]]
@@ -1882,6 +1898,8 @@ dependencies = [
  "vaco-io",
  "vaco-limits",
  "vaco-packet",
+ "vaco-pixfmt",
+ "vaco-sampfmt",
 ]
 
 [[package]]
@@ -2018,6 +2036,7 @@ dependencies = [
  "vaco-demux-raw",
  "vaco-demux-rtsp",
  "vaco-expr",
+ "vaco-filter-achannel",
  "vaco-filter-audio",
  "vaco-filter-audio-dynamics",
  "vaco-filter-audio-eq",
@@ -2569,7 +2588,7 @@ dependencies = [
  "vaco-demux-mxf",
  "vaco-demux-ogg",
  "vaco-demux-raw",
- "vaco-demux-rtsp",
+ "vaco-filter-achannel",
  "vaco-filter-audio",
  "vaco-filter-audio-dynamics",
  "vaco-filter-audio-eq",

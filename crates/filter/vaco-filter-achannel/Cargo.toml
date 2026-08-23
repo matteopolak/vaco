@@ -1,0 +1,29 @@
+[package]
+name = "vaco-filter-achannel"
+description = "T3 audio channel, layout and mixing filters: axcorrelate, crossfeed, earwax, extrastereo, haas, stereotools, stereowiden."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+vaco-core = { path = "../../core/vaco-core" }
+vaco-frame = { path = "../../model/vaco-frame" }
+vaco-sampfmt = { path = "../../model/vaco-sampfmt" }
+vaco-chlayout = { path = "../../model/vaco-chlayout" }
+vaco-resample = { path = "../../signal/vaco-resample" }
+vaco-filter-core = { path = "../../filter/vaco-filter-core" }
+vaco-filter-graph = { path = "../../filter/vaco-filter-graph" }
+vaco-filter-framesync = { path = "../../filter/vaco-filter-framesync" }
+smallvec.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.vaco]
+layer = 5

@@ -53,6 +53,7 @@ vaco-demux-ogg = { path = "../crates/format/vaco-demux-ogg" }
 vaco-demux-raw = { path = "../crates/format/vaco-demux-raw" }
 vaco-demux-rtsp = { path = "../crates/format/vaco-demux-rtsp" }
 vaco-expr = { path = "../crates/core/vaco-expr" }
+vaco-filter-achannel = { path = "../crates/filter/vaco-filter-achannel" }
 vaco-filter-audio = { path = "../crates/filter/vaco-filter-audio" }
 vaco-filter-audio-dynamics = { path = "../crates/filter/vaco-filter-audio-dynamics" }
 vaco-filter-audio-eq = { path = "../crates/filter/vaco-filter-audio-eq" }
@@ -138,6 +139,7 @@ default = [
     "demux-raw",
     "demux-rtsp",
     "expr",
+    "filter-achannel",
     "filter-audio",
     "filter-audio-dynamics",
     "filter-audio-eq",
@@ -217,6 +219,7 @@ demux-ogg = []
 demux-raw = []
 demux-rtsp = []
 expr = []
+filter-achannel = []
 filter-audio = []
 filter-audio-dynamics = []
 filter-audio-eq = []
@@ -589,6 +592,14 @@ test = false
 doc = false
 bench = false
 required-features = ["expr"]
+
+[[bin]]
+name = "filter_achannel_options"
+path = "fuzz_targets/filter_achannel_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-achannel"]
 
 [[bin]]
 name = "filter_audio_dynamics_options"

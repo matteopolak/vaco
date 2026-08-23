@@ -1,0 +1,60 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Seven T3 audio channel/layout/mixing filters (FT-4.13b, GitHub #482):
+# axcorrelate, crossfeed, earwax, extrastereo, haas, stereotools, stereowiden.
+# `amerge`, `amix`, `channelmap`, `channelsplit`, `join`, `pan` are already
+# registered by `vaco-filter-audio`, and `asplit` by `vaco-filter-plumbing` —
+# this fragment does not repeat them (D19). `headphone`, `sofalizer` and
+# `surround` are documented as not implemented; see this crate's `lib.rs`
+# doc for why. Each `ctor` names the per-filter `pub const DESC: FilterDesc`,
+# matching `vaco-filter-audio-eq`'s and `vaco-filter-audio-dynamics`'s
+# convention.
+
+[[component]]
+kind = "filter"
+name = "axcorrelate"
+long_name = "Cross-correlate two audio streams"
+ctor = "vaco_filter_achannel::axcorrelate::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "crossfeed"
+long_name = "Apply headphone crossfeed filter"
+ctor = "vaco_filter_achannel::crossfeed::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "earwax"
+long_name = "Widen the stereo image"
+ctor = "vaco_filter_achannel::earwax::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "extrastereo"
+long_name = "Increase difference between stereo audio channels"
+ctor = "vaco_filter_achannel::extrastereo::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "haas"
+long_name = "Apply Haas Stereo Enhancer"
+ctor = "vaco_filter_achannel::haas::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "stereotools"
+long_name = "Apply various stereo tools"
+ctor = "vaco_filter_achannel::stereotools::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "stereowiden"
+long_name = "Apply stereo widening effect"
+ctor = "vaco_filter_achannel::stereowiden::DESC"
+media = "audio"
