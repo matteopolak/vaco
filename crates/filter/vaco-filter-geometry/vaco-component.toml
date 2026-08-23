@@ -1,0 +1,105 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# T2 geometry filters, GitHub issue #470 (FT-4.7). Membership is
+# `planning/16-filters.md` §4.3's `vaco-filter-geometry` row minus what is
+# already registered elsewhere — see this crate's `lib.rs` doc for the full
+# accounting. `crop`, `pad`, `transpose`, `hflip`, `vflip` are
+# `vaco-filter-video-geometry`'s T1 set; `rotate` is
+# `vaco-filter-video-composite`'s (issue #465) — both discovered as overlaps
+# via `gen-registry`'s dup-check rather than any plan doc, and neither is
+# registered here.
+#
+# Each `ctor` names the per-filter `pub const DESC: FilterDesc`; runtime
+# instantiation goes through `vaco_filter_geometry::registry::T2GeometryRegistry`,
+# a `vaco_filter_graph::registry::FilterRegistry` impl.
+
+[[component]]
+kind = "filter"
+name = "alphaextract"
+long_name = "Extract an alpha channel as a grayscale image component"
+ctor = "vaco_filter_geometry::alphaextract::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "field"
+long_name = "Extract a field from the input video"
+ctor = "vaco_filter_geometry::field::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "fillborders"
+long_name = "Fill borders of the input video"
+ctor = "vaco_filter_geometry::fillborders::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "il"
+long_name = "Deinterleave or interleave fields"
+ctor = "vaco_filter_geometry::il::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "perspective"
+long_name = "Correct the perspective of video"
+ctor = "vaco_filter_geometry::perspective::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "pixelize"
+long_name = "Pixelize video"
+ctor = "vaco_filter_geometry::pixelize::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "scroll"
+long_name = "Scroll input video"
+ctor = "vaco_filter_geometry::scroll::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "shuffleframes"
+long_name = "Shuffle video frames"
+ctor = "vaco_filter_geometry::shuffleframes::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "shuffleplanes"
+long_name = "Shuffle video planes"
+ctor = "vaco_filter_geometry::shuffleplanes::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "swaprect"
+long_name = "Swap 2 rectangular objects in video"
+ctor = "vaco_filter_geometry::swaprect::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "swapuv"
+long_name = "Swap U and V components"
+ctor = "vaco_filter_geometry::swapuv::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "tile"
+long_name = "Tile several successive frames together"
+ctor = "vaco_filter_geometry::tile::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "untile"
+long_name = "Untile a frame into a sequence of frames"
+ctor = "vaco_filter_geometry::untile::DESC"
+media = "video"
