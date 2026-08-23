@@ -1,0 +1,126 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# T1/T2 temporal and interleave filters, FT-4.12b (GitHub #475): framestep,
+# tpad, tmix, tblend, tmedian, tlut2, tmidequalizer, decimate, mpdecimate,
+# deflicker, lagfun, freezedetect, freezeframes, dejudder, fsync, random.
+# `fps` — the seventeenth name in plan 16 §4.3's row — is *not* registered
+# here: it is already registered by `vaco-filter-video-format::fps`, and
+# registering it a second time would collide in `cargo xtask dup-check`.
+# See `vaco_filter_temporal`'s crate-root doc for the full accounting.
+#
+# Each `ctor` names the per-filter `pub const DESC: FilterDesc`; runtime
+# instantiation goes through `vaco_filter_temporal::registry::TemporalRegistry`,
+# a `vaco_filter_graph::registry::FilterRegistry` impl — the same shape
+# `vaco-filter-denoise` and `vaco-filter-audio-eq` use.
+
+[[component]]
+kind = "filter"
+name = "decimate"
+long_name = "Decimate frames (post field matching filter)."
+ctor = "vaco_filter_temporal::decimate::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "deflicker"
+long_name = "Remove temporal frame luminance variations."
+ctor = "vaco_filter_temporal::deflicker::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "dejudder"
+long_name = "Remove judder produced by pullup."
+ctor = "vaco_filter_temporal::dejudder::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "framestep"
+long_name = "Select one frame every N frames."
+ctor = "vaco_filter_temporal::framestep::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "freezedetect"
+long_name = "Detects frozen video input."
+ctor = "vaco_filter_temporal::freezedetect::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "freezeframes"
+long_name = "Freeze video frames."
+ctor = "vaco_filter_temporal::freezeframes::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "fsync"
+long_name = "Synchronize video frames from external source."
+ctor = "vaco_filter_temporal::fsync::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "lagfun"
+long_name = "Slowly update darker pixels."
+ctor = "vaco_filter_temporal::lagfun::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "mpdecimate"
+long_name = "Remove near-duplicate frames."
+ctor = "vaco_filter_temporal::mpdecimate::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "random"
+long_name = "Return random frames."
+ctor = "vaco_filter_temporal::random::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "tblend"
+long_name = "Blend successive frames."
+ctor = "vaco_filter_temporal::tblend::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "tlut2"
+long_name = "Compute and apply a lookup table from two successive frames."
+ctor = "vaco_filter_temporal::tlut2::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "tmedian"
+long_name = "Pick median pixels from successive frames."
+ctor = "vaco_filter_temporal::tmedian::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "tmidequalizer"
+long_name = "Apply Temporal Midway Equalization."
+ctor = "vaco_filter_temporal::tmidequalizer::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "tmix"
+long_name = "Mix successive video frames."
+ctor = "vaco_filter_temporal::tmix::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "tpad"
+long_name = "Temporarily pad video frames."
+ctor = "vaco_filter_temporal::tpad::DESC"
+media = "video"

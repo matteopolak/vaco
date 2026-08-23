@@ -27,6 +27,9 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
 vaco-bitstream = { path = "../crates/core/vaco-bitstream" }
+vaco-bsf-core = { path = "../crates/format/vaco-bsf-core" }
+vaco-bsf-generic = { path = "../crates/format/vaco-bsf-generic" }
+vaco-bsf-h2645 = { path = "../crates/format/vaco-bsf-h2645" }
 vaco-chlayout = { path = "../crates/model/vaco-chlayout" }
 vaco-cli = { path = "../crates/app/vaco-cli" }
 vaco-cli-core = { path = "../crates/app/vaco-cli-core" }
@@ -69,6 +72,7 @@ vaco-filter-graph = { path = "../crates/filter/vaco-filter-graph" }
 vaco-filter-key = { path = "../crates/filter/vaco-filter-key" }
 vaco-filter-lut = { path = "../crates/filter/vaco-filter-lut" }
 vaco-filter-plumbing = { path = "../crates/filter/vaco-filter-plumbing" }
+vaco-filter-temporal = { path = "../crates/filter/vaco-filter-temporal" }
 vaco-filter-video-composite = { path = "../crates/filter/vaco-filter-video-composite" }
 vaco-filter-video-format = { path = "../crates/filter/vaco-filter-video-format" }
 vaco-filter-video-geometry = { path = "../crates/filter/vaco-filter-video-geometry" }
@@ -122,6 +126,8 @@ vaco-textformat = { path = "../crates/app/vaco-textformat" }
 [features]
 default = [
     "bitstream",
+    "bsf-generic",
+    "bsf-h2645",
     "chlayout",
     "cli",
     "cli-core",
@@ -163,6 +169,7 @@ default = [
     "filter-key",
     "filter-lut",
     "filter-plumbing",
+    "filter-temporal",
     "filter-video-composite",
     "filter-video-format",
     "filter-video-geometry",
@@ -210,6 +217,8 @@ default = [
     "textformat",
 ]
 bitstream = []
+bsf-generic = []
+bsf-h2645 = []
 chlayout = []
 cli = []
 cli-core = []
@@ -251,6 +260,7 @@ filter-graph = []
 filter-key = []
 filter-lut = []
 filter-plumbing = []
+filter-temporal = []
 filter-video-composite = []
 filter-video-format = []
 filter-video-geometry = []
@@ -376,6 +386,22 @@ test = false
 doc = false
 bench = false
 required-features = ["bitstream"]
+
+[[bin]]
+name = "bsf_generic"
+path = "fuzz_targets/bsf_generic.rs"
+test = false
+doc = false
+bench = false
+required-features = ["bsf-generic"]
+
+[[bin]]
+name = "bsf_h2645"
+path = "fuzz_targets/bsf_h2645.rs"
+test = false
+doc = false
+bench = false
+required-features = ["bsf-h2645"]
 
 [[bin]]
 name = "bytereader_arbitrary"
@@ -728,6 +754,14 @@ test = false
 doc = false
 bench = false
 required-features = ["filter-plumbing"]
+
+[[bin]]
+name = "filter_temporal_options"
+path = "fuzz_targets/filter_temporal_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-temporal"]
 
 [[bin]]
 name = "filter_timeline_expr"
