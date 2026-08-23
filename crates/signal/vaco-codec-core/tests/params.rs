@@ -36,6 +36,87 @@ fn codec_identity_round_trips_through_its_name() {
     );
 }
 
+/// Every row of the table agrees with `ffmpeg -codecs`.
+///
+/// The table was **generated** by probing that listing, so checking it against
+/// the same listing is not circular in the way it first looks: the generator
+/// ran once, by hand, and its output was pasted in. Nothing re-runs it. This is
+/// what catches a row edited afterwards, a variant added by hand, or a change
+/// in the reference between versions.
+///
+/// Two rules the generator had to learn, both re-asserted here because they are
+/// exactly what a hand edit would get wrong:
+///
+/// - `-codecs` appends `(decoders: …)` / `(encoders: …)` to a long name when the
+///   codec has differently-named implementations, and that suffix is **not**
+///   part of `codec_long_name`. `subrip` is the witness — the listing says
+///   `"SubRip subtitle (decoders: srt subrip)"` and `ffprobe` prints
+///   `"SubRip subtitle"`.
+/// - DTS's codec is `dts` with the long name `"DCA (DTS Coherent Acoustics)"`,
+///   while its decoder is `dca`. `-h decoder=dts` gives the wrong string.
+///
+/// Skipped rather than failed when `ffmpeg` is absent: CI has it, a contributor
+/// may not, and a test that cannot run is not a test that failed.
+#[test]
+fn the_codec_table_agrees_with_the_reference() {
+    let Ok(out) = std::process::Command::new("ffmpeg")
+        .args(["-hide_banner", "-codecs"])
+        .env("LC_ALL", "C")
+        .output()
+    else {
+        eprintln!("skipping: ffmpeg not on PATH");
+        return;
+    };
+    let listing = String::from_utf8_lossy(&out.stdout);
+
+    let mut reference: std::collections::BTreeMap<&str, String> = std::collections::BTreeMap::new();
+    for line in listing.lines() {
+        // ` DEVILS name  Long name`, six flag columns then two fields.
+        let Some(rest) = line.strip_prefix(' ') else {
+            continue;
+        };
+        let (flags, rest) = rest.split_at(rest.char_indices().nth(6).map_or(0, |(i, _)| i));
+        if flags.len() != 6 || !flags.chars().all(|c| "DEVASIL.S-".contains(c)) {
+            continue;
+        }
+        let mut it = rest.split_whitespace();
+        let Some(name) = it.next() else { continue };
+        let long = rest[rest.find(name).map_or(0, |i| i + name.len())..].trim();
+        // Strip the listing's own annotation; see the doc comment.
+        let long = long.split(" (decoders:").next().unwrap_or(long);
+        let long = long.split(" (encoders:").next().unwrap_or(long);
+        reference.insert(name, long.to_owned());
+    }
+    assert!(
+        reference.len() > 100,
+        "parsed only {} rows from -codecs; the listing format changed",
+        reference.len()
+    );
+
+    let mut wrong = Vec::new();
+    for id in CodecId::all() {
+        let Some(long) = reference.get(id.name()) else {
+            // A name the reference does not have is a different question —
+            // `-pix_fmts` found one of those in vaco-pixfmt — but it is not
+            // what this test is for, and several of ours are deliberate.
+            continue;
+        };
+        if long != id.long_name() {
+            wrong.push(format!(
+                "  {}: ours {:?}, reference {:?}",
+                id.name(),
+                id.long_name(),
+                long
+            ));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "long names disagree:\n{}",
+        wrong.join("\n")
+    );
+}
+
 #[test]
 fn capability_names_round_trip_and_print() {
     for (cap, name) in [
