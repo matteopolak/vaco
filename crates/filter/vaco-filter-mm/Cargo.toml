@@ -1,5 +1,5 @@
 [package]
-name = "vaco-filter-plumbing"
+name = "vaco-filter-mm"
 description = "T1 graph plumbing, sources/sinks, trim/concat: split, null, copy, setpts, settb, select, trim, concat, nullsrc, nullsink, color."
 version.workspace = true
 edition.workspace = true

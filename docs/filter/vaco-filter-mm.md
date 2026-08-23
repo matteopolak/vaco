@@ -1,4 +1,4 @@
-# vaco-filter-plumbing
+# vaco-filter-mm
 
 T1 graph plumbing, sources/sinks, cutting/joining (FT-4.3, GitHub issue #467):
 `split`/`asplit`, `null`/`anull`, `copy`/`acopy`, `setpts`/`asetpts`,
@@ -10,7 +10,7 @@ T1 graph plumbing, sources/sinks, cutting/joining (FT-4.3, GitHub issue #467):
 20 of the 24 filters `planning/16-filters.md` §5.3 groups as "Graph plumbing"
 (12), "Cutting and joining" (3) and "Sources and sinks" (9) for the T1 set.
 Each filter is a module exposing `pub const DESC: FilterDesc` plus a
-crate-private `create`; [`registry::PlumbingRegistry`] dispatches by name.
+crate-private `create`; [`registry::MmRegistry`] dispatches by name.
 
 ## What is missing, and why: `buffer`/`abuffer`/`buffersink`/`abuffersink`
 
@@ -123,7 +123,7 @@ rescaling silently does exactly what F9 says it will.
   `trim`/`atrim`) nests them as `pub mod video { .. }` / `pub mod audio { .. }`
   rather than reusing the filter names themselves as submodule names — naming
   a submodule `setpts` inside `setpts.rs` would shadow the file's own module
-  path (`vaco_filter_plumbing::setpts::setpts`), which is legal but confusing
+  path (`vaco_filter_mm::setpts::setpts`), which is legal but confusing
   and makes the component-fragment `ctor` path read oddly.
 - Keep new option/filter/state types `pub(crate)` — see
   `vaco-filter-audio`'s crate doc for why that is what keeps this crate off

@@ -1,4 +1,4 @@
-//! [`PlumbingRegistry`] — the [`FilterRegistry`] this crate's twenty filters
+//! [`MmRegistry`] — the [`FilterRegistry`] this crate's twenty filters
 //! answer through. See `vaco-filter-audio::registry` for why this pattern
 //! (one dispatching `FilterRegistry` per leaf crate) is what stands in for
 //! an aggregator that does not exist yet.
@@ -30,9 +30,9 @@ const NAMES: &[&str] = &[
 
 /// Implements [`FilterRegistry`] for every filter in this crate.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct PlumbingRegistry;
+pub struct MmRegistry;
 
-impl FilterRegistry for PlumbingRegistry {
+impl FilterRegistry for MmRegistry {
     fn names(&self) -> Vec<&str> {
         NAMES.to_vec()
     }
@@ -59,7 +59,7 @@ impl FilterRegistry for PlumbingRegistry {
             "setpts" => crate::setpts::video::create(req),
             "split" => crate::split::video::create(req),
             "trim" => crate::trim::video::create(req),
-            other => Err(format!("vaco-filter-plumbing: no filter named `{other}`")),
+            other => Err(format!("vaco-filter-mm: no filter named `{other}`")),
         }
     }
 }
@@ -70,7 +70,7 @@ mod tests {
 
     #[test]
     fn every_declared_name_is_creatable_with_no_arguments() {
-        let registry = PlumbingRegistry;
+        let registry = MmRegistry;
         for &name in NAMES {
             let req = Instantiate {
                 name,
@@ -84,7 +84,7 @@ mod tests {
 
     #[test]
     fn an_unknown_name_is_a_clean_error_not_a_panic() {
-        let registry = PlumbingRegistry;
+        let registry = MmRegistry;
         let req = Instantiate {
             name: "not-a-real-filter",
             instance: "not-a-real-filter",

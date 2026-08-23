@@ -77,7 +77,7 @@ vaco-filter-geometry = { path = "../crates/filter/vaco-filter-geometry" }
 vaco-filter-graph = { path = "../crates/filter/vaco-filter-graph" }
 vaco-filter-key = { path = "../crates/filter/vaco-filter-key" }
 vaco-filter-lut = { path = "../crates/filter/vaco-filter-lut" }
-vaco-filter-plumbing = { path = "../crates/filter/vaco-filter-plumbing" }
+vaco-filter-mm = { path = "../crates/filter/vaco-filter-mm" }
 vaco-filter-source = { path = "../crates/filter/vaco-filter-source" }
 vaco-filter-temporal = { path = "../crates/filter/vaco-filter-temporal" }
 vaco-filter-video-composite = { path = "../crates/filter/vaco-filter-video-composite" }
@@ -181,7 +181,7 @@ default = [
     "filter-graph",
     "filter-key",
     "filter-lut",
-    "filter-plumbing",
+    "filter-mm",
     "filter-source",
     "filter-temporal",
     "filter-video-composite",
@@ -279,7 +279,7 @@ filter-geometry = []
 filter-graph = []
 filter-key = []
 filter-lut = []
-filter-plumbing = []
+filter-mm = []
 filter-source = []
 filter-temporal = []
 filter-video-composite = []
@@ -817,12 +817,12 @@ bench = false
 required-features = ["filter-lut"]
 
 [[bin]]
-name = "filter_plumbing_options"
-path = "fuzz_targets/filter_plumbing_options.rs"
+name = "filter_mm_options"
+path = "fuzz_targets/filter_mm_options.rs"
 test = false
 doc = false
 bench = false
-required-features = ["filter-plumbing"]
+required-features = ["filter-mm"]
 
 [[bin]]
 name = "filter_source_options"

@@ -18,13 +18,13 @@
 //! Property: for any byte string, for any of the twenty registered names,
 //! either a clean `Err` comes back at some stage or a working `Instance`,
 //! never a panic and never an unbounded allocation.
-//! fuzz-crate: vaco-filter-plumbing
+//! fuzz-crate: vaco-filter-mm
 
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
 use vaco_filter_graph::registry::{FilterRegistry, Instantiate};
-use vaco_filter_plumbing::registry::PlumbingRegistry;
+use vaco_filter_mm::registry::MmRegistry;
 
 const NAMES: &[&str] = &[
     "acopy",
@@ -56,7 +56,7 @@ fuzz_target!(|args: &str| {
     if args.len() > 8192 {
         return;
     }
-    let registry = PlumbingRegistry;
+    let registry = MmRegistry;
     for &name in NAMES {
         // Route through the real graph-string grammar so the filter's parser
         // sees text the way it actually would from `-filter_complex`,

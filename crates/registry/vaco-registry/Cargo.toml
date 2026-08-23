@@ -224,8 +224,8 @@ path = "../../filter/vaco-filter-key"
 [dependencies.vaco-filter-lut]
 path = "../../filter/vaco-filter-lut"
 
-[dependencies.vaco-filter-plumbing]
-path = "../../filter/vaco-filter-plumbing"
+[dependencies.vaco-filter-mm]
+path = "../../filter/vaco-filter-mm"
 
 [dependencies.vaco-filter-source]
 path = "../../filter/vaco-filter-source"

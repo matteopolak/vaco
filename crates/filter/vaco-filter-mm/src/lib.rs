@@ -25,7 +25,7 @@
 //! One module per filter (or per closely related pair — `null`+`anull`+
 //! `copy`+`acopy` in `passthrough.rs`, the two `setpts` variants together, and
 //! so on), each exposing `pub const DESC: FilterDesc` and a crate-private
-//! `create`. [`registry::PlumbingRegistry`] dispatches by name.
+//! `create`. [`registry::MmRegistry`] dispatches by name.
 //!
 //! Every per-filter `Options`/`State`/`Mode` type is `pub(crate)` — see
 //! `vaco-filter-audio`'s crate doc for why that, not a `dup-check` allowlist
@@ -46,4 +46,4 @@ pub mod trim;
 
 pub mod registry;
 
-pub use registry::PlumbingRegistry;
+pub use registry::MmRegistry;

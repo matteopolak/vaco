@@ -11,7 +11,7 @@
 //! `NaN`: `RTCTIME`/`RTCSTART` (wall clock — `vaco-time` gives monotonic and
 //! epoch time but wiring a real value through `vaco-expr`'s fixed binding
 //! list is future work), `PREV_INT`/`PREV_OUTT`, `INTERLACED`, `S`, `SR`.
-//! `strip_fps` is parsed but not applied — see `docs/filter/vaco-filter-plumbing.md`.
+//! `strip_fps` is parsed but not applied — see `docs/filter/vaco-filter-mm.md`.
 
 use vaco_core::{MediaType, Result, Timestamp};
 use vaco_expr::{Bindings, Expr};
