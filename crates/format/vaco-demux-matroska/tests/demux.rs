@@ -929,7 +929,12 @@ fn a_seek_rearms_the_codec_delay_skip_on_the_next_packet() {
     assert!(
         matches!(
             first.side_data(PacketSideDataKind::SkipSamples),
-            Some(PacketSideData::SkipSamples { start: 312, end: 0 })
+            Some(PacketSideData::SkipSamples {
+                start: 312,
+                end: 0,
+                skip_reason: 0,
+                discard_reason: 0,
+            })
         ),
         "the very first packet since open carries the skip"
     );
@@ -954,7 +959,12 @@ fn a_seek_rearms_the_codec_delay_skip_on_the_next_packet() {
     assert!(
         matches!(
             after_seek.side_data(PacketSideDataKind::SkipSamples),
-            Some(PacketSideData::SkipSamples { start: 312, end: 0 })
+            Some(PacketSideData::SkipSamples {
+                start: 312,
+                end: 0,
+                skip_reason: 0,
+                discard_reason: 0,
+            })
         ),
         "a seek is a discontinuity too, and the reference re-injects the same skip"
     );

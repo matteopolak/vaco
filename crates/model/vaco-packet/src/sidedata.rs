@@ -10,6 +10,7 @@ pub enum PacketSideDataKind {
     NewExtradata,
     DisplayMatrix,
     SkipSamples,
+    MpegtsStreamId,
 }
 
 impl PacketSideData {
@@ -21,6 +22,7 @@ impl PacketSideData {
             Self::NewExtradata(_) => PacketSideDataKind::NewExtradata,
             Self::DisplayMatrix(_) => PacketSideDataKind::DisplayMatrix,
             Self::SkipSamples { .. } => PacketSideDataKind::SkipSamples,
+            Self::MpegtsStreamId(_) => PacketSideDataKind::MpegtsStreamId,
         }
     }
 }

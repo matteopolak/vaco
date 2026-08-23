@@ -68,6 +68,13 @@ the microsecond form is the better model.
 - **Side data is a typed enum.** `PacketSideData` is `#[non_exhaustive]`; add
   variants with a matching `PacketSideDataKind` as the containers that carry them
   arrive. Bulk payloads should be `Buffer` or `Arc<[u8]>` so cloning stays cheap.
+  `SkipSamples` carries `skip_reason: u8` / `discard_reason: u8` alongside
+  `start`/`end` (issue #632) — the reference's `ffprobe -show_packets` prints
+  all four as one `Skip Samples` block, and every producer in this workspace
+  sets both reasons to `0` today (measured; no source has anything else to
+  say), but they are real fields now rather than a literal `0` a writer
+  invents. `MpegtsStreamId(u8)` is the PES `stream_id` byte MPEG-TS attaches
+  to every packet it demuxes; see `vaco-demux-mpegts`'s doc file.
 - The `opaque: Option<Arc<dyn Any + Send + Sync>>` scheduler correlation token
   from plan 11 §14.1 is **not** in the frozen struct and has not been added. If
   `vaco-sched` needs it, that is a coordinated change, not a local one.

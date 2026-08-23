@@ -148,7 +148,12 @@ fn sub_packet_copies_and_carries_metadata() {
     pkt.duration = Duration::from_micros(1000);
     pkt.pos = Some(42);
     pkt.flags = PacketFlags::KEY;
-    pkt.set_side_data(PacketSideData::SkipSamples { start: 1, end: 2 });
+    pkt.set_side_data(PacketSideData::SkipSamples {
+        start: 1,
+        end: 2,
+        skip_reason: 0,
+        discard_reason: 0,
+    });
 
     let sub = pkt.sub_packet(&mut b, 2..6).unwrap();
     assert_eq!(sub.payload(), b"2345");
@@ -203,7 +208,12 @@ fn side_data_set_get_replace_remove() {
     let mut pkt = Packet::empty();
     assert!(pkt.side_data(PacketSideDataKind::DisplayMatrix).is_none());
     pkt.set_side_data(PacketSideData::DisplayMatrix([1; 9]));
-    pkt.set_side_data(PacketSideData::SkipSamples { start: 0, end: 5 });
+    pkt.set_side_data(PacketSideData::SkipSamples {
+        start: 0,
+        end: 5,
+        skip_reason: 0,
+        discard_reason: 0,
+    });
     assert_eq!(pkt.side_data.len(), 2);
     pkt.set_side_data(PacketSideData::DisplayMatrix([7; 9]));
     assert_eq!(pkt.side_data.len(), 2);

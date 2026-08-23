@@ -73,7 +73,26 @@ pub enum PacketSideData {
     Palette(Buffer),
     NewExtradata(Buffer),
     DisplayMatrix([i32; 9]),
-    SkipSamples { start: u32, end: u32 },
+    /// `start`/`end` are sample counts to drop from the front/back of the
+    /// decoded output; `skip_reason`/`discard_reason` are the reason byte
+    /// that goes with each trim. The reference's own `ffprobe -show_packets`
+    /// prints all four (`skip_samples`, `discard_padding`, `skip_reason`,
+    /// `discard_reason`) as one block — an MP4 or Matroska stream with only a
+    /// leading `CodecDelay` skip and no reason on record reports `0` for
+    /// both reason bytes, which is why every producer in this workspace sets
+    /// them to `0` today rather than because the fields do not exist.
+    SkipSamples {
+        start: u32,
+        end: u32,
+        skip_reason: u8,
+        discard_reason: u8,
+    },
+    /// The PES packet's `stream_id` byte (ITU-T H.222.0 §2.4.3.7 table 2-22),
+    /// e.g. `0xe0` for the first video stream, `0xc0` for the first audio
+    /// stream. `ffprobe -show_packets` on an MPEG-TS file prints this as its
+    /// own `MPEGTS Stream ID` side-data block, one per packet — measured
+    /// against `ffmpeg 8.1`, see `vaco-demux-mpegts`'s docs.
+    MpegtsStreamId(u8),
     // ... generated from the side-data table
 }
 

@@ -1585,6 +1585,10 @@ impl Mp4Demuxer {
             pkt.side_data.push(PacketSideData::SkipSamples {
                 start: sample.skip,
                 end: 0,
+                // D17: measured 0 on every MP4 file tried so far — an
+                // `elst`-derived leading skip carries no reason of its own.
+                skip_reason: 0,
+                discard_reason: 0,
             });
         }
         if sample.key {

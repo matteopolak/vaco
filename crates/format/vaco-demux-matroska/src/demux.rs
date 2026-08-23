@@ -1621,7 +1621,15 @@ impl MatroskaDemuxer {
                 0
             };
             if start > 0 || end > 0 {
-                pkt.set_side_data(PacketSideData::SkipSamples { start, end });
+                pkt.set_side_data(PacketSideData::SkipSamples {
+                    start,
+                    end,
+                    // D17: measured 0 on every Matroska file tried so far —
+                    // neither `CodecDelay` nor `DiscardPadding` carries a
+                    // reason of its own.
+                    skip_reason: 0,
+                    discard_reason: 0,
+                });
             }
             if keyframe && i == 0 {
                 self.index

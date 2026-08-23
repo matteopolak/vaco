@@ -189,6 +189,8 @@ fn av_mp4_packets() -> Vec<Packet> {
             p.side_data.push(PacketSideData::SkipSamples {
                 start: 1024,
                 end: 0,
+                skip_reason: 0,
+                discard_reason: 0,
             });
             p
         },

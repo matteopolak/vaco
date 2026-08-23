@@ -791,9 +791,10 @@ pub fn packet<W: Write>(
 
 /// The packet's `side_data_list`, when it carries any.
 ///
-/// Only `Skip Samples` is measured, because it is the only kind our demuxers
-/// produce: MP4 and Matroska both attach it to the first audio packet, and the
-/// reference prints
+/// `Skip Samples` and `MPEGTS Stream ID` are measured, because they are the
+/// only kinds our demuxers produce: MP4 and Matroska both attach `Skip
+/// Samples` to the first audio packet after a discontinuity, and MPEG-TS
+/// attaches `MPEGTS Stream ID` to every packet. The reference prints
 ///
 /// ```text
 /// [SIDE_DATA]
@@ -803,12 +804,17 @@ pub fn packet<W: Write>(
 /// skip_reason=0
 /// discard_reason=0
 /// [/SIDE_DATA]
+/// [SIDE_DATA]
+/// side_data_type=MPEGTS Stream ID
+/// id=224
+/// [/SIDE_DATA]
 /// ```
 ///
-/// `skip_reason` and `discard_reason` are not in `vaco_packet::PacketSideData`
-/// at all; both are 0 in every file measured, and they are emitted as 0 rather
-/// than omitted so the block's shape matches. If a container ever sets them
-/// this becomes a divergence, which is why it is written down here.
+/// `skip_reason`/`discard_reason` are 0 in every file measured so far — no
+/// producer in this workspace has a source for anything else — but they are
+/// real fields on [`PacketSideData::SkipSamples`] now, not a literal `0`
+/// written here regardless of what the packet says, so a producer that ever
+/// learns a reason still prints correctly.
 ///
 /// The other three kinds print their type name and nothing else. Their names
 /// are **not** measured — no demuxer in this build emits one — so they are
@@ -822,24 +828,37 @@ fn packet_side_data<W: Write>(e: &mut Emit<'_, W>, pkt: &Packet) -> Result<()> {
         let name = packet_side_data_name(datum);
         e.tf().open_typed(SectionId::PACKET_SIDE_DATA, name)?;
         e.str("side_data_type", name)?;
-        if let PacketSideData::SkipSamples { start, end } = *datum {
-            e.int("skip_samples", i64::from(start))?;
-            e.int("discard_padding", i64::from(end))?;
-            e.int("skip_reason", 0)?;
-            e.int("discard_reason", 0)?;
+        match *datum {
+            PacketSideData::SkipSamples {
+                start,
+                end,
+                skip_reason,
+                discard_reason,
+            } => {
+                e.int("skip_samples", i64::from(start))?;
+                e.int("discard_padding", i64::from(end))?;
+                e.int("skip_reason", i64::from(skip_reason))?;
+                e.int("discard_reason", i64::from(discard_reason))?;
+            }
+            PacketSideData::MpegtsStreamId(id) => {
+                e.int("id", i64::from(id))?;
+            }
+            _ => {}
         }
         e.tf().close()?;
     }
     e.tf().close()
 }
 
-/// Measured for `SkipSamples`; the rest are unverified (see above).
+/// Measured for `SkipSamples` and `MpegtsStreamId`; the rest are unverified
+/// (see above).
 const fn packet_side_data_name(d: &PacketSideData) -> &'static str {
     match d {
         PacketSideData::Palette(_) => "Palette",
         PacketSideData::NewExtradata(_) => "New Extradata",
         PacketSideData::DisplayMatrix(_) => "Display Matrix",
         PacketSideData::SkipSamples { .. } => "Skip Samples",
+        PacketSideData::MpegtsStreamId(_) => "MPEGTS Stream ID",
         _ => "Unknown",
     }
 }
