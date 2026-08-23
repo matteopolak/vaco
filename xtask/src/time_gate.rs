@@ -101,6 +101,16 @@ const NATIVE_ONLY: &[(&str, &str)] = &[
         "already NATIVE_ONLY for wasm-check: sockets and TLS. Socket timeouts \
          are std::net's own API and take std durations.",
     ),
+    (
+        "vaco-protocol-tls",
+        "already NATIVE_ONLY for wasm-check: rustls-rustcrypto/getrandom. \
+         `rustls` itself reaches the wall clock internally for certificate \
+         expiry checks (not this crate's implementation to route through \
+         vaco-time), and this crate's own test suite spawns a real thread to \
+         drive an in-process TLS server for a loopback handshake test — a \
+         differential-harness-shaped use, same reasoning as vaco-conformance \
+         above, not production code running on a target this would matter for.",
+    ),
 ];
 
 /// Whether the item enclosing `line` is compiled out of wasm.

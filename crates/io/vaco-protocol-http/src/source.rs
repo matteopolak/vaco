@@ -44,9 +44,25 @@ use vaco_time::Instant;
 
 use crate::headers::{self, RequestRange};
 use crate::options::HttpOptions;
-use crate::parse::{parse_content_range, parse_retry_after_secs};
+use crate::parse::{parse_content_range, parse_icy_metaint, parse_retry_after_secs};
 use crate::reconnect::{self, Decision, Failure, State};
 use crate::transport;
+
+/// Read `icy-metaint` off `response` and start a fresh [`IcyState`] from it,
+/// or `None` when the server did not send the header (it did not honour our
+/// `Icy-MetaData: 1` request, or `-icy 0` meant we never sent it).
+fn icy_state_from(response: &Response<Body>) -> Option<IcyState> {
+    let metaint = response
+        .headers()
+        .get("icy-metaint")
+        .and_then(|v| v.to_str().ok())
+        .and_then(parse_icy_metaint)?;
+    Some(IcyState {
+        metaint,
+        until_meta: metaint,
+        last_metadata: None,
+    })
+}
 
 /// An open `http:`/`https:` read stream.
 pub struct HttpSource {
@@ -60,10 +76,41 @@ pub struct HttpSource {
 
     reader: Box<dyn Read + Send>,
     /// Logical position of the next byte [`RawSource::read`] will return.
+    ///
+    /// Counts bytes on the wire (the raw response body), **including** any
+    /// interleaved ICY metadata blocks when [`Self::icy`] is active — the
+    /// server's own byte accounting (and therefore anything a future
+    /// `-offset`/seek against an ICY stream would mean) is in terms of the
+    /// raw entity, not the de-interleaved audio alone.
     pos: u64,
     total_size: Option<u64>,
     seekable: bool,
     reconnect_state: State,
+    /// ICY metadata de-interleaving state, present only when the server
+    /// answered `Icy-MetaData: 1` with an `icy-metaint` header. See
+    /// [`IcyState`] and [`Self::read`]'s split into `read_raw`/`read`.
+    icy: Option<IcyState>,
+}
+
+/// ICY/SHOUTcast in-band metadata: every `metaint` bytes of audio, the stream
+/// carries one length-prefixed metadata block (`ffmpeg`'s own `icy.c`
+/// documents no RFC for this — probed directly against a loopback server
+/// this crate's own tests spin up, per the brief).
+///
+/// Wire shape: one length byte `L`, then `L * 16` bytes of `key='value';`
+/// pairs (`StreamTitle`, sometimes `StreamUrl`), NUL-padded to that exact
+/// length. `L == 0` means "no metadata changed this interval" — the block is
+/// still present on the wire (just empty), so it must still be consumed, or
+/// every later byte in the stream is shifted and the audio decodes as noise.
+struct IcyState {
+    /// `icy-metaint`'s value: audio bytes between metadata blocks.
+    metaint: u64,
+    /// Audio bytes remaining before the next metadata block.
+    until_meta: u64,
+    /// The most recently seen non-empty metadata block's text, decoded
+    /// lossily (a malformed or truncated block from a hostile/broken server
+    /// must not be a demuxer-visible failure — ICY metadata is advisory).
+    last_metadata: Option<String>,
 }
 
 /// Why [`HttpSource::reopen_at`] could not hand back a usable body.
@@ -110,6 +157,7 @@ impl HttpSource {
             total_size: None,
             seekable: false,
             reconnect_state: State::new(),
+            icy: None,
         };
         source
             .adopt(response, requested_start, seekable_override)
@@ -145,6 +193,7 @@ impl HttpSource {
                 self.total_size = total;
                 self.seekable = matches!(seekable_override, Seekable::Always);
                 self.pos = 0;
+                self.icy = icy_state_from(&response);
                 self.reader = Box::new(response.into_body().into_reader());
                 Ok(())
             }
@@ -159,6 +208,7 @@ impl HttpSource {
                 self.total_size = content_range.and_then(|cr| cr.total);
                 self.seekable = !matches!(seekable_override, Seekable::Never);
                 self.pos = start;
+                self.icy = icy_state_from(&response);
                 self.reader = Box::new(response.into_body().into_reader());
                 Ok(())
             }
@@ -175,6 +225,83 @@ impl HttpSource {
                 })
             }
         }
+    }
+
+    /// The most recently seen ICY metadata block's text (typically
+    /// `StreamTitle='...';`), when this stream has one. `None` both before
+    /// the first metadata block and when the server never sent
+    /// `icy-metaint` at all.
+    ///
+    /// **Not yet reachable through [`vaco_io::MediaSource`]**: the trait has
+    /// no metadata side channel, and `Protocol::open` erases this type behind
+    /// `Box<dyn MediaSource>` before a caller ever sees it. Kept as a public
+    /// method anyway — a caller that downcasts, or a future demuxer-level
+    /// metadata event this crate does not yet have anywhere to plug into,
+    /// both need it to exist. See the crate docs' "What is deliberately not
+    /// implemented".
+    #[must_use]
+    pub fn icy_metadata(&self) -> Option<&str> {
+        self.icy.as_ref()?.last_metadata.as_deref()
+    }
+
+    /// Fill `buf` completely from `read_raw`, reporting whether the stream
+    /// ended first. A partial fill followed by EOF is reported as `Ok(false)`
+    /// — there is no way to "put back" the bytes already consumed, but the
+    /// only caller ([`Self::consume_icy_metadata_block`]) only ever asks for
+    /// this mid-block, where a partial block is already a protocol violation
+    /// this crate treats as "the stream ended", not as data loss to recover.
+    fn read_exact_raw(&mut self, buf: &mut [u8]) -> CoreResult<bool> {
+        let mut filled = 0usize;
+        while filled < buf.len() {
+            let Some(rest) = buf.get_mut(filled..) else {
+                break;
+            };
+            let n = self.read_raw(rest)?;
+            if n == 0 {
+                return Ok(false);
+            }
+            filled = filled.saturating_add(n);
+        }
+        Ok(true)
+    }
+
+    /// Consume one ICY metadata block (a length byte, then `length * 16`
+    /// bytes) and reset the audio-byte countdown. Returns `Ok(false)` if the
+    /// stream ended while reading it.
+    ///
+    /// A block that is present but empty (`length == 0`, "nothing changed
+    /// this interval") still has to be consumed — skipping it would leave
+    /// the length byte itself in the audio stream, corrupting every
+    /// subsequent frame boundary.
+    fn consume_icy_metadata_block(&mut self) -> CoreResult<bool> {
+        let mut len_byte = [0u8; 1];
+        if !self.read_exact_raw(&mut len_byte)? {
+            return Ok(false);
+        }
+        // The maximum possible value (255) times 16 is 4080, comfortably
+        // stack-sized — no `vaco_limits::Budget` needed, this is not an
+        // attacker-controlled allocation, it is a fixed-size buffer indexed
+        // by a single byte.
+        let block_len = usize::from(len_byte[0]) * 16;
+        let mut block = [0u8; 4080];
+        let Some(slice) = block.get_mut(..block_len) else {
+            return Ok(false);
+        };
+        if !self.read_exact_raw(slice)? {
+            return Ok(false);
+        }
+        if block_len > 0 {
+            let text = String::from_utf8_lossy(slice)
+                .trim_end_matches('\0')
+                .to_owned();
+            if let Some(icy) = self.icy.as_mut() {
+                icy.last_metadata = if text.is_empty() { None } else { Some(text) };
+            }
+        }
+        if let Some(icy) = self.icy.as_mut() {
+            icy.until_meta = icy.metaint;
+        }
+        Ok(true)
     }
 
     fn issue(&self, start: u64) -> Result<Response<Body>, vaco_protocol_core::ProtocolError> {
@@ -307,8 +434,12 @@ impl std::fmt::Debug for HttpSource {
     }
 }
 
-impl RawSource for HttpSource {
-    fn read(&mut self, buf: &mut [u8]) -> CoreResult<usize> {
+impl HttpSource {
+    /// The unfiltered wire read: reconnect/retry logic, no ICY awareness.
+    /// [`RawSource::read`] is the public entry point and adds the
+    /// metadata-de-interleaving layer on top of this when [`Self::icy`] is
+    /// active.
+    fn read_raw(&mut self, buf: &mut [u8]) -> CoreResult<usize> {
         if buf.is_empty() {
             return Ok(0);
         }
@@ -343,6 +474,43 @@ impl RawSource for HttpSource {
                     }
                 }
             }
+        }
+    }
+}
+
+impl RawSource for HttpSource {
+    /// The ICY-aware entry point. When [`Self::icy`] is `None` (the common
+    /// case: no `icy-metaint` header, or `-icy 0`), this is exactly
+    /// `read_raw` with no extra cost. When it is `Some`, audio bytes and
+    /// metadata blocks share one wire, so returning "audio only" to the
+    /// caller means intercepting and consuming each metadata block as the
+    /// audio-byte countdown reaches zero, in a loop rather than recursion —
+    /// several zero-length metadata blocks in a row (a server with nothing
+    /// to say for a while) must not grow the call stack.
+    fn read(&mut self, buf: &mut [u8]) -> CoreResult<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        if self.icy.is_none() {
+            return self.read_raw(buf);
+        }
+        loop {
+            let until = self.icy.as_ref().map_or(0, |s| s.until_meta);
+            if until == 0 {
+                if !self.consume_icy_metadata_block()? {
+                    return Ok(0);
+                }
+                continue;
+            }
+            let want = usize::try_from(until).unwrap_or(usize::MAX).min(buf.len()).max(1);
+            let Some(slice) = buf.get_mut(..want) else {
+                return self.read_raw(buf);
+            };
+            let n = self.read_raw(slice)?;
+            if let Some(icy) = self.icy.as_mut() {
+                icy.until_meta = icy.until_meta.saturating_sub(n as u64);
+            }
+            return Ok(n);
         }
     }
 

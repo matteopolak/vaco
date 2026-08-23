@@ -14,14 +14,17 @@
 //! # What is deliberately not here
 //!
 //! `-http_proxy`, `-listen`/`-resource`/`-reply_code` (server mode),
-//! `-post_data`/`-content_type`/`-chunked_post`/`-send_expect_100` (POST
-//! bodies) and `-request_size`/`-initial_request_size` (chunked readahead
-//! sizing) are all write-side, proxy, or server-mode surface. D5 scopes v0.1 to
-//! demuxing with zero muxers, so nothing in this crate ever calls
-//! [`Protocol::create`](vaco_protocol_core::Protocol::create), and adding a
-//! correct proxy/server implementation is a separate, substantial piece of
-//! work better done — and tested — on its own. See the crate docs for the full
-//! list of scoped-out options.
+//! `-post_data` (one-shot CLI body injection — `Protocol::create`'s
+//! [`MediaSink::write`](vaco_io::MediaSink::write) calls are this crate's
+//! streaming equivalent), `-send_expect_100` (100-continue handshaking) and
+//! `-request_size`/`-initial_request_size` (chunked readahead sizing) are
+//! write-side-adjacent, proxy, or server-mode surface not implemented here.
+//! `-chunked_post` and `-content_type` **are** implemented (`crate::post`) —
+//! D5's "zero muxers" no longer means "nothing calls `Protocol::create`" now
+//! that this crate's own `create()` does something, though nothing *else* in
+//! the project calls it yet either. See the crate docs for the full list of
+//! scoped-out options and `crate::post`'s docs for what "chunked POST" means
+//! here specifically.
 
 use vaco_opts::{ConstDesc, Options};
 
@@ -304,6 +307,29 @@ pub struct HttpOptions {
         flags(decoding)
     )]
     pub max_redirects: i32,
+
+    /// Use chunked transfer-encoding for `Protocol::create`'s POST body.
+    /// Measured default: `true`. `false` (a fixed-length, `Content-Length`
+    /// POST) is accepted but not implemented — see the crate docs.
+    #[opt(
+        name = "chunked_post",
+        help = "use chunked transfer-encoding for posts",
+        default = true,
+        flags(encoding)
+    )]
+    pub chunked_post: bool,
+
+    /// `Content-Type` for a POST body. Empty means: send none (matching the
+    /// reference's own "unset" default — measured: no `-h`-visible default
+    /// value is printed for this option).
+    #[opt(
+        name = "content_type",
+        help = "set a specific content type for the POST messages",
+        default = String::new(),
+        default_repr = "",
+        flags(param)
+    )]
+    pub content_type: String,
 }
 
 impl HttpOptions {

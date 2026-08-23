@@ -1,0 +1,16 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# `default = false`, matching `vaco-protocol-http`'s and `vaco-protocol-socket`'s
+# own reasoning: this crate depends on `rustls-rustcrypto`, which does not
+# build for `wasm32-unknown-unknown` (measured — see the crate's `lib.rs`
+# module docs and `xtask/src/wasm.rs`'s `NATIVE_ONLY` entry). Registering
+# unconditionally would make `protocol-tls` a *default* optional dependency of
+# `vaco-registry`, regressing its own `wasm-check`.
+
+[[component]]
+kind      = "protocol"
+name      = "tls"
+long_name = "TLS"
+feature   = "protocol-tls"
+default   = false
+ctor      = "vaco_protocol_tls::TLS_PROTOCOL"

@@ -10,7 +10,7 @@
 //! type carries.
 
 use std::io::ErrorKind;
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 use std::time::Duration as StdDuration;
 
 use ureq::config::Config;
@@ -28,7 +28,11 @@ use vaco_protocol_core::{ProtocolError, Result};
 fn agent() -> &'static Agent {
     static AGENT: OnceLock<Agent> = OnceLock::new();
     AGENT.get_or_init(|| {
-        let crypto = Arc::new(rustls_rustcrypto::provider());
+        // The crypto provider is `vaco-protocol-tls`'s to build, not ours
+        // (D11 — see that crate's docs, "Who owns rustls"): this is the same
+        // `Arc<rustls::crypto::CryptoProvider>` its own `tls:` connections
+        // use, not an independently constructed one.
+        let crypto = vaco_protocol_tls::crypto::shared_provider();
         let tls_config = TlsConfig::builder()
             .provider(TlsProvider::Rustls)
             .unversioned_rustls_crypto_provider(crypto)
@@ -73,6 +77,46 @@ pub fn send(
         scheme: "http",
         detail: malformed_reason(&e),
     })?;
+
+    let agent = agent();
+    let configured = agent.configure_request(request);
+    let configured = match timeout {
+        Some(t) => configured.timeout_global(Some(t)),
+        None => configured,
+    };
+    let request = configured.build();
+
+    agent.run(request).map_err(map_ureq_error)
+}
+
+/// As [`send`], but with a request body streamed from `body`.
+///
+/// Built from [`ureq::SendBody::from_reader`] rather than a byte slice with a
+/// known length: `ureq` reports no `Content-Length` it was not given one for,
+/// so it sends `Transfer-Encoding: chunked` — which is the point of
+/// `crate::source::HttpSink` buffering the whole body itself rather than
+/// letting a caller hand it a pre-sized buffer (see that type's docs for why
+/// this is "chunked on the wire" rather than "streamed while being written").
+///
+/// # Errors
+/// As [`send`].
+pub fn send_body(
+    method: &str,
+    target: &str,
+    headers: &[(String, String)],
+    timeout: Option<StdDuration>,
+    body: &mut dyn std::io::Read,
+) -> Result<Response<Body>> {
+    let mut builder = Request::builder().method(method).uri(target);
+    for (name, value) in headers {
+        builder = builder.header(name.as_str(), value.as_str());
+    }
+    let request = builder
+        .body(ureq::SendBody::from_reader(body))
+        .map_err(|e| ProtocolError::Malformed {
+            scheme: "http",
+            detail: malformed_reason(&e),
+        })?;
 
     let agent = agent();
     let configured = agent.configure_request(request);

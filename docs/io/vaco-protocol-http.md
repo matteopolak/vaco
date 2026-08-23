@@ -8,9 +8,20 @@ A `vaco_protocol_core::Protocol` implementation over a pure-Rust HTTP client
 (`ureq`, with `rustls` and a pure-Rust crypto provider): ranged reads so
 seeking a remote file does not download it from the start, redirects gated by
 the same whitelist every nested protocol open goes through, custom headers
-and user agent, cookies, ICY metadata request, HTTP Basic auth from URL
-userinfo, and the `-reconnect*` family. It is the one crate on the wasm
-`NATIVE_ONLY` list (see "Portability" below).
+and user agent, cookies, ICY metadata **de-interleaving** (not just the
+request header — see "ICY metadata" below), HTTP Basic auth from URL
+userinfo, persistent connections (`-multiple_requests`), chunked `POST`
+(`Protocol::create` — see "Chunked POST" below), and the `-reconnect*`
+family. It is the one crate on the wasm `NATIVE_ONLY` list (see "Portability"
+below).
+
+**Update (D11): this crate no longer declares `rustls`/`rustls-rustcrypto`
+itself.** `vaco-protocol-tls` (the `tls:` protocol) owns them now — see that
+crate's docs, "Who owns rustls" — and this crate depends on it purely for
+`vaco_protocol_tls::crypto::shared_provider()`, called from `transport::agent()`
+in place of building an independent `Arc<rustls::crypto::CryptoProvider>`.
+The D14.2 gate-by-gate record in "Dependencies" below is unchanged and still
+accurate; only which `Cargo.toml` declares the dependency moved.
 
 ## How it works
 
@@ -23,9 +34,10 @@ Three layers, in increasing order of how OS-specific they are:
 | `headers` | Assembling the default header set plus `-headers` overrides, from options and a byte range. | Yes |
 | `parse` | Parsing bytes a *server* controls: `Content-Range`, `Retry-After`, the `-reconnect_on_http_error` list. This is the fuzz target's surface. | Yes |
 | `reconnect` | Whether to retry a failure and how long to wait first. Takes/returns plain values, never sleeps itself. | Yes |
-| `transport` | The `ureq::Agent`, TLS configuration, and turning `ureq::Error` into `ProtocolError`. | **No** — sockets and TLS. |
-| `source` | `HttpSource`: ties the above into a `vaco_io::RawSource`, including the reconnect loop and the "server ignored my `Range`" safety net. | Mostly not (drives `ureq::Body`), but its only call into `transport` is one function. |
-| `protocol` | `HttpProtocol`: the `Protocol::open` entry point, and the redirect-through-the-whitelist loop. | No. |
+| `transport` | The `ureq::Agent` (crypto provider from `vaco_protocol_tls::crypto::shared_provider`), and turning `ureq::Error` into `ProtocolError`. `send`/`send_body` (the latter for `POST`). | **No** — sockets and TLS. |
+| `source` | `HttpSource`: ties the above into a `vaco_io::RawSource`, including the reconnect loop, ICY metadata de-interleaving, and the "server ignored my `Range`" safety net. | Mostly not (drives `ureq::Body`), but its only call into `transport` is one function. |
+| `post` | `HttpSink`: `Protocol::create`'s buffered, chunked `POST`. | Portable in the same sense as `source` — one call into `transport`. |
+| `protocol` | `HttpProtocol`: the `Protocol::open`/`create` entry points, and the redirect-through-the-whitelist loop. | No. |
 
 ### Ranged reads
 
@@ -107,6 +119,58 @@ that call). Redirects are resolved once, at open time; a resource whose
 location changes between the initial connect and a later seek is treated as
 a connection failure, not as an implicit trust extension.
 
+### ICY metadata
+
+There is no RFC for this (`ffmpeg`'s own `icy.c` has none either) — probed
+directly against a loopback server built for `tests/icy_metadata.rs`, since
+`-icy`/`Icy-MetaData: 1` is the one part of this crate's brief that no public
+specification covers. Wire shape: when the server answers with
+`icy-metaint: N`, the response body interleaves one length-prefixed metadata
+block after every `N` audio bytes — one length byte `L`, then `L * 16` bytes
+of `key='value';` pairs (`StreamTitle`, sometimes `StreamUrl`), NUL-padded to
+that exact length; `L == 0` means "nothing changed this interval" but the
+(empty) block is still on the wire and must still be consumed.
+
+`HttpSource::read` splits into an unfiltered `read_raw` (unchanged reconnect
+logic, all the existing tests exercise this path when `icy-metaint` was not
+sent) and the public, ICY-aware `read`, which counts audio bytes down from
+`icy-metaint`, intercepts each metadata block via `consume_icy_metadata_block`,
+and returns only audio bytes to the caller — a raw pass-through would
+otherwise corrupt every subsequent frame boundary a demuxer tries to parse.
+The most recently seen non-empty block's text is kept on
+`HttpSource::icy_metadata()`.
+
+**Not yet reachable from outside this crate**: `Protocol::open` returns
+`Box<dyn vaco_io::MediaSource>`, which erases `HttpSource` before a caller
+ever sees it, and `MediaSource` has no metadata side channel. So
+`icy_metadata()` exists and is tested, but nothing in the project's demuxer
+pipeline calls it yet — the same "implemented, not yet wired to a caller"
+shape as `vaco-protocol-tls`'s deferred client-cert auth.
+
+### Chunked POST
+
+`Protocol::create` now returns a real `HttpSink` (`crate::post`) instead of
+`Unsupported`. `MediaSink` (`vaco-io`) has no `close`/`finish` method — only
+`write`, `seek`, `position`, `is_seekable` and `flush` — so `flush()` is the
+one available "no more bytes are coming" signal: `HttpSink` buffers every
+`write()` call and sends the whole thing as one request on the first
+`flush()`, using `ureq::SendBody::from_reader` (no length hint) so `ureq`
+emits `Transfer-Encoding: chunked` rather than `Content-Length` —
+`tests/chunked_post.rs` decodes a real chunked request by hand against a
+loopback server and asserts both the framing and the reassembled body.
+
+This is "chunked on the wire", not "streamed while being written" — the
+whole body sits in memory between the first `write()` and the `flush()` that
+sends it. A truly incremental version needs a background thread reading from
+a channel `write()` feeds while `ureq`'s body reader drains it on another
+thread, which was considered and deferred: nothing in the project calls
+`Protocol::create` on this crate today (D5, zero muxers), so the extra
+moving parts have no current caller to justify them yet. `-chunked_post 0`
+(a fixed-`Content-Length` POST) is accepted as an option and returns
+`Unsupported` when actually used — implementing it is a small, well-scoped
+follow-up (compute the buffered body's length, send it as a slice-backed
+`SendBody` instead of a reader-backed one) rather than a design question.
+
 ### Where the values came from
 
 Not from a plan and not from memory: from `ffprobe -h protocol=http` on the
@@ -140,12 +204,15 @@ D6/D7 permit. Specifically measured:
   wording where one exists. Names are interface facts (D9).
 * **The fuzz target's surface is `parse.rs` and `url.rs`, not `source.rs`.**
   `fuzz/fuzz_targets/protocol_http_response.rs` drives `parse_content_range`,
-  `parse_retry_after_secs`, `parse_reconnect_codes`, `cookie_header`,
-  `parse_header_block`, `resolve_location`, `remove_dot_segments`,
-  `request_target` and `split_userinfo` — the parts that take server bytes
-  (per the crate's own brief), never the socket. A new function that parses
-  a header value belongs in `parse.rs` and should be added to the fuzz
-  target's `Input` struct in the same change.
+  `parse_retry_after_secs`, `parse_reconnect_codes`, `parse_icy_metaint`,
+  `cookie_header`, `parse_header_block`, `resolve_location`,
+  `remove_dot_segments`, `request_target` and `split_userinfo` — the parts
+  that take server bytes (per the crate's own brief), never the socket. A new
+  function that parses a header value belongs in `parse.rs` and should be
+  added to the fuzz target's `Input` struct in the same change.
+  `consume_icy_metadata_block` (`source.rs`) reads the *body*, not a header,
+  and is bounded by construction (a `u8` length byte times 16 is at most
+  4080, a fixed-size stack buffer) rather than fuzzed separately.
 * **Gotcha — `remove_dot_segments`.** Implemented as RFC 3986 §5.2.4's own
   two-buffer algorithm rather than a segment stack; re-derive from the RFC
   text, not from memory, if it ever needs revisiting — the bare `.`/`..`
@@ -167,16 +234,15 @@ D6/D7 permit. Specifically measured:
   re-running `cargo xtask gen-registry` fixes it, and is why that fragment
   is `default = false` rather than the generator's ordinary default.
 * **Not implemented, deliberately**: `-http_proxy`, `-listen`/`-resource`/
-  `-reply_code` (server mode), `-post_data`/`-content_type`/`-chunked_post`/
-  `-send_expect_100` (POST bodies), `-request_size`/`-initial_request_size`
-  (chunked readahead sizing), `-method` (this crate only ever issues `GET`),
-  parsing the ICY metadata interleaved *in the body* (the `Icy-MetaData: 1`
-  request header is still sent, for fidelity), and the `Retry-After`
-  HTTP-date form (only the delay-seconds form is parsed). D5 scopes v0.1 to
-  zero muxers, so nothing calls `Protocol::create` on this crate yet, and a
+  `-reply_code` (server mode), `-post_data` (one-shot CLI body injection —
+  `MediaSink::write` is this crate's streaming equivalent),
+  `-send_expect_100` (100-continue handshaking), `-request_size`/
+  `-initial_request_size` (chunked readahead sizing), `-method` (this crate
+  only ever issues `GET` for reads, `POST` for writes), `-chunked_post 0`
+  (fixed-`Content-Length` POST — see "Chunked POST" above), and the
+  `Retry-After` HTTP-date form (only the delay-seconds form is parsed). A
   correct proxy/server implementation is substantial enough to deserve its
-  own review rather than riding along here. `Protocol::create` returns
-  `Unsupported`.
+  own review rather than riding along here.
 
 ## Configuration
 
@@ -207,6 +273,8 @@ crate implements):
 | `respect_retry_after` | bool | `true` | Honour a numeric `Retry-After` on a reconnect-eligible response. |
 | `short_seek_size` | int | `0` | Below this many bytes, a forward seek reads-and-discards. |
 | `max_redirects` | int | `8` | Redirect hops permitted; `0` makes a redirect itself an error. |
+| `chunked_post` | bool | `true` | `Transfer-Encoding: chunked` for `Protocol::create`'s POST body. `false` is accepted but not implemented — see "Chunked POST". |
+| `content_type` | string | empty (unset) | `Content-Type` for `Protocol::create`'s POST body. |
 
 `ProtocolEnv` supplies the rest: `rw_timeout` becomes a per-request global
 timeout (connect + send + receive-headers, not the whole body read), and
@@ -215,20 +283,29 @@ every nested open — every redirect — is gated by `check_scheme`.
 ## Dependencies
 
 Every adoption here is D14.2's decision, not a new one this crate makes; its
-own contribution was wiring `ureq` to the crypto provider that decision
-requires, rather than accepting `ureq`'s own `rustls` feature default
-(`ring`).
+own original contribution was wiring `ureq` to the crypto provider that
+decision requires, rather than accepting `ureq`'s own `rustls` feature
+default (`ring`). **`rustls` and `rustls-rustcrypto` are no longer declared
+in this crate's own `Cargo.toml`** — see the top of this document and
+`vaco-protocol-tls`'s crate docs ("Who owns rustls", D11): this crate now
+depends on `vaco-protocol-tls` and calls
+`vaco_protocol_tls::crypto::shared_provider()` from `transport::agent()`. The
+gate-by-gate record below is unchanged and still the accurate account of
+*why* this trio was chosen.
 
 | Crate | Gate 1 (pure Rust) | Gate 2 (licence) | Gate 3 (trusted) |
 |---|---|---|---|
 | `ureq` 3.x, features `rustls-no-provider` + `rustls-webpki-roots` (**not** `rustls` — that feature pulls `ring`) | Pass: no `-sys`, no build script compiling native code. | MIT OR Apache-2.0. | Widely used pure-Rust HTTP client; active. |
-| `rustls` 0.23, `default-features = false`, `features = ["std", "tls12"]` | Pass, and carries no crypto provider of its own — the entire point of the feature choice above. | Apache-2.0 OR ISC OR MIT. | The de facto standard pure-Rust TLS library. |
-| `rustls-rustcrypto` 0.0.2-alpha | Pass: every dependency it pulls (`aes-gcm`, `chacha20poly1305`, `p256`, `p384`, `rsa`, `ed25519-dalek`, `x25519-dalek`, `sha2`, `hmac`, `der`, `pkcs8`, `sec1`, `signature`, `rand_core`) is a RustCrypto pure-Rust crate. | MIT OR Apache-2.0. | **Honest caveat**: `0.0.2-alpha` does not clear D10's "adopted" bar on reputation alone. Taken up because D14.2 already decided this at the workspace level — `ring` and `aws-lc-rs`, rustls's two production providers, both vendor and compile C/assembly and fail Gate 1 — and it is the only *other* zero-FFI rustls provider. `cargo xtask dep-gate` denies `ring`/`aws-lc-rs`/`aws-lc-sys` by name in CI. Re-check this provider's maturity at every release. |
-| `vaco-core`, `vaco-io`, `vaco-limits`, `vaco-opts`, `vaco-protocol-core`, `vaco-time` | — | — | Workspace crates. |
+| `rustls` 0.23, `default-features = false`, `features = ["std", "tls12"]` (declared by `vaco-protocol-tls`, reached here transitively) | Pass, and carries no crypto provider of its own — the entire point of the feature choice above. | Apache-2.0 OR ISC OR MIT. | The de facto standard pure-Rust TLS library. |
+| `rustls-rustcrypto` 0.0.2-alpha (declared by `vaco-protocol-tls`) | Pass: every dependency it pulls (`aes-gcm`, `chacha20poly1305`, `p256`, `p384`, `rsa`, `ed25519-dalek`, `x25519-dalek`, `sha2`, `hmac`, `der`, `pkcs8`, `sec1`, `signature`, `rand_core`) is a RustCrypto pure-Rust crate. | MIT OR Apache-2.0. | **Honest caveat**: `0.0.2-alpha` does not clear D10's "adopted" bar on reputation alone. Taken up because D14.2 already decided this at the workspace level — `ring` and `aws-lc-rs`, rustls's two production providers, both vendor and compile C/assembly and fail Gate 1 — and it is the only *other* zero-FFI rustls provider. `cargo xtask dep-gate` denies `ring`/`aws-lc-rs`/`aws-lc-sys` by name in CI. Re-check this provider's maturity at every release. |
+| `vaco-core`, `vaco-io`, `vaco-limits`, `vaco-opts`, `vaco-protocol-core`, `vaco-protocol-tls`, `vaco-time` | — | — | Workspace crates. |
 
-`webpki-roots` is **not** a direct dependency of this crate — it is reached
-transitively through `ureq`'s `rustls-webpki-roots` feature, which builds
-the default `RootCertStore`. `proptest` is a dev-dependency.
+`webpki-roots` is **not** a direct dependency of this crate either way — this
+crate reaches Mozilla's root bundle transitively through `ureq`'s
+`rustls-webpki-roots` feature (which builds the default `RootCertStore`),
+while `vaco-protocol-tls` declares `webpki-roots` directly for its own `tls:`
+root store construction; the two paths happen to use the same bundle without
+sharing a dependency edge. `proptest` is a dev-dependency.
 
 `std::net`/`std::io`/`std::thread::sleep` are the only OS surface beyond
 `ureq` itself; D14.3 permits `std` everywhere. `#![forbid(unsafe_code)]`, no

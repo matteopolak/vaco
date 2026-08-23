@@ -68,6 +68,23 @@ pub fn parse_retry_after_secs(v: &str) -> Option<u64> {
     v.trim().parse::<u64>().ok()
 }
 
+/// Parse an `icy-metaint` header value: the number of audio bytes between
+/// interleaved ICY metadata blocks.
+///
+/// `0` is rejected (returns `None`) rather than accepted as "no metadata
+/// interval" — a real server signalling "no interleaving" simply omits the
+/// header, and treating `0` as a byte count would make
+/// [`crate::source::HttpSource::read`] try to read a metadata block before
+/// every single audio byte, which is not what any observed server means by
+/// sending this header at all.
+#[must_use]
+pub fn parse_icy_metaint(v: &str) -> Option<u64> {
+    match v.trim().parse::<u64>() {
+        Ok(0) | Err(_) => None,
+        Ok(n) => Some(n),
+    }
+}
+
 /// Parse `-reconnect_on_http_error`'s comma-separated status code list.
 ///
 /// Silently drops an entry that is not a bare 3-digit-shaped number, rather
@@ -141,6 +158,20 @@ pub fn parse_header_block(block: &str) -> Vec<(String, String)> {
 #[allow(clippy::unwrap_used, clippy::panic, reason = "tests")]
 mod tests {
     use super::*;
+
+    #[test]
+    fn icy_metaint_parses_a_positive_integer() {
+        assert_eq!(parse_icy_metaint("8192"), Some(8192));
+        assert_eq!(parse_icy_metaint(" 16000 "), Some(16000));
+    }
+
+    #[test]
+    fn icy_metaint_rejects_zero_and_garbage() {
+        assert_eq!(parse_icy_metaint("0"), None);
+        assert_eq!(parse_icy_metaint("-1"), None);
+        assert_eq!(parse_icy_metaint("not a number"), None);
+        assert_eq!(parse_icy_metaint(""), None);
+    }
 
     #[test]
     fn content_range_parses_the_normal_form() {
@@ -217,6 +248,11 @@ mod tests {
         #[test]
         fn content_range_never_panics(s in ".*") {
             let _ = parse_content_range(&s);
+        }
+
+        #[test]
+        fn icy_metaint_never_panics(s in ".*") {
+            let _ = parse_icy_metaint(&s);
         }
 
         #[test]

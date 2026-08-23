@@ -216,15 +216,23 @@ impl Protocol for HttpProtocol {
 
     fn create(
         &self,
-        _url: &Url,
+        url: &Url,
         _flags: IoFlags,
-        _opts: &Dict,
-        _env: &ProtocolEnv<'_>,
+        opts_dict: &Dict,
+        env: &ProtocolEnv<'_>,
     ) -> Result<Box<dyn MediaSink>> {
-        Err(ProtocolError::Unsupported {
+        let opts = Self::options(opts_dict)?;
+        let target = http_url::request_target(url).map_err(|_| ProtocolError::Malformed {
             scheme: "http",
-            operation: "create (POST/PUT output is not implemented; see the crate docs)",
-        })
+            detail: "http:/https: cannot be the outer half of a +-joined nested scheme",
+        })?;
+        let (credentials, clean_target) = http_url::split_userinfo(&target);
+        Ok(Box::new(crate::post::HttpSink::new(
+            clean_target,
+            credentials,
+            opts,
+            env.rw_timeout,
+        )))
     }
 }
 

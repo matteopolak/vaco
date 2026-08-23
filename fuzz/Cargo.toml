@@ -48,6 +48,7 @@ vaco-demux-matroska = { path = "../crates/format/vaco-demux-matroska" }
 vaco-demux-mp4 = { path = "../crates/format/vaco-demux-mp4" }
 vaco-demux-mpegps = { path = "../crates/format/vaco-demux-mpegps" }
 vaco-demux-mpegts = { path = "../crates/format/vaco-demux-mpegts" }
+vaco-demux-mxf = { path = "../crates/format/vaco-demux-mxf" }
 vaco-demux-ogg = { path = "../crates/format/vaco-demux-ogg" }
 vaco-demux-raw = { path = "../crates/format/vaco-demux-raw" }
 vaco-expr = { path = "../crates/core/vaco-expr" }
@@ -89,6 +90,8 @@ vaco-probe = { path = "../crates/app/vaco-probe" }
 vaco-protocol-core = { path = "../crates/io/vaco-protocol-core" }
 vaco-protocol-http = { path = "../crates/io/vaco-protocol-http" }
 vaco-protocol-local = { path = "../crates/io/vaco-protocol-local" }
+vaco-protocol-socket = { path = "../crates/io/vaco-protocol-socket" }
+vaco-protocol-tls = { path = "../crates/io/vaco-protocol-tls" }
 vaco-protocol-wrap = { path = "../crates/io/vaco-protocol-wrap" }
 vaco-registry = { path = "../crates/registry/vaco-registry" }
 vaco-resample = { path = "../crates/signal/vaco-resample" }
@@ -120,6 +123,7 @@ default = [
     "demux-mp4",
     "demux-mpegps",
     "demux-mpegts",
+    "demux-mxf",
     "demux-ogg",
     "demux-raw",
     "expr",
@@ -157,6 +161,8 @@ default = [
     "protocol-core",
     "protocol-http",
     "protocol-local",
+    "protocol-socket",
+    "protocol-tls",
     "protocol-wrap",
     "registry",
     "resample",
@@ -186,6 +192,7 @@ demux-matroska = []
 demux-mp4 = []
 demux-mpegps = []
 demux-mpegts = []
+demux-mxf = []
 demux-ogg = []
 demux-raw = []
 expr = []
@@ -223,6 +230,8 @@ probe = []
 protocol-core = []
 protocol-http = []
 protocol-local = []
+protocol-socket = []
+protocol-tls = []
 protocol-wrap = []
 registry = []
 resample = []
@@ -848,6 +857,14 @@ bench = false
 required-features = ["mux-stream"]
 
 [[bin]]
+name = "mxf_demux"
+path = "fuzz_targets/mxf_demux.rs"
+test = false
+doc = false
+bench = false
+required-features = ["demux-mxf"]
+
+[[bin]]
 name = "nalu_framing"
 path = "fuzz_targets/nalu_framing.rs"
 test = false
@@ -1048,6 +1065,14 @@ bench = false
 required-features = ["scale"]
 
 [[bin]]
+name = "socket_url_parse"
+path = "fuzz_targets/socket_url_parse.rs"
+test = false
+doc = false
+bench = false
+required-features = ["protocol-socket"]
+
+[[bin]]
 name = "subtitle_text_demux"
 path = "fuzz_targets/subtitle_text_demux.rs"
 test = false
@@ -1062,3 +1087,11 @@ test = false
 doc = false
 bench = false
 required-features = ["textformat"]
+
+[[bin]]
+name = "tls_pem_parse"
+path = "fuzz_targets/tls_pem_parse.rs"
+test = false
+doc = false
+bench = false
+required-features = ["protocol-tls"]

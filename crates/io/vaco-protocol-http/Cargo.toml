@@ -14,14 +14,19 @@ vaco-io = { path = "../../io/vaco-io" }
 vaco-limits = { path = "../../core/vaco-limits" }
 vaco-opts = { path = "../../core/vaco-opts" }
 vaco-protocol-core = { path = "../../io/vaco-protocol-core" }
+vaco-protocol-tls = { path = "../../io/vaco-protocol-tls" }
 vaco-time = { path = "../../core/vaco-time" }
 # `rustls-no-provider` + `rustls-webpki-roots` rather than the `rustls` feature:
 # the latter pulls in `ring` (`rustls?/ring`), which D14.2 rejects for vendoring
 # and compiling C and assembly (D10 Gate 1). See docs/io/vaco-protocol-http.md
 # "Dependencies" for the full gate-by-gate record.
+#
+# `rustls`/`rustls-rustcrypto` are NOT declared here (D11 — see
+# `vaco-protocol-tls`'s crate docs, "Who owns rustls"): this crate reaches the
+# shared crypto provider through `vaco_protocol_tls::crypto::shared_provider`
+# instead of building its own. `cargo xtask owner-gate` enforces this — it
+# fails the build the moment two crates both declare either dependency.
 ureq = { workspace = true, features = ["rustls-no-provider", "rustls-webpki-roots"] }
-rustls.workspace = true
-rustls-rustcrypto.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

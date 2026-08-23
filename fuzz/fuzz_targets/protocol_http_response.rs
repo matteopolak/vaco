@@ -21,8 +21,8 @@ use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 use vaco_protocol_core::split_url;
 use vaco_protocol_http::parse::{
-    cookie_header, parse_content_range, parse_header_block, parse_reconnect_codes,
-    parse_retry_after_secs,
+    cookie_header, parse_content_range, parse_header_block, parse_icy_metaint,
+    parse_reconnect_codes, parse_retry_after_secs,
 };
 use vaco_protocol_http::url::{remove_dot_segments, request_target, resolve_location, split_userinfo};
 
@@ -37,6 +37,7 @@ struct Input {
     location: String,
     userinfo_target: String,
     dot_segments: String,
+    icy_metaint: String,
 }
 
 fuzz_target!(|input: Input| {
@@ -45,6 +46,12 @@ fuzz_target!(|input: Input| {
     let _ = parse_reconnect_codes(&input.reconnect_codes);
     let _ = cookie_header(&input.cookies);
     let _ = parse_header_block(&input.header_block);
+    // `icy-metaint` is a response header exactly like the others above: a
+    // remote server's own byte string, and `0` must never be accepted as a
+    // valid interval (see the function's own doc comment for why).
+    if let Some(n) = parse_icy_metaint(&input.icy_metaint) {
+        assert_ne!(n, 0, "parse_icy_metaint must never accept zero");
+    }
 
     // `resolve_location` is the security-relevant one: a `Location` header is
     // chosen by the server, and its output feeds directly into

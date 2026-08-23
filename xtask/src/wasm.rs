@@ -28,17 +28,45 @@ use crate::{Task, crates, repo_root};
 
 /// Crates that legitimately cannot build for wasm, each with the reason.
 ///
-/// Empty today, and worth keeping that way. `vaco-time` exists so that the
-/// clock — the one thing that genuinely panics on wasm — is behind a single
-/// door instead of being a reason to add entries here.
-const NATIVE_ONLY: &[(&str, &str)] = &[(
-    "vaco-protocol-http",
-    "ureq + rustls is a socket-and-TLS stack; wasm32-unknown-unknown has no \
-     sockets, and a browser port would go through fetch rather than this crate. \
-     Portability here means a *different* protocol implementation behind the \
-     same `vaco-protocol-core` trait, which is the D11 adapter rule doing its \
-     job — not a wasm build of this one.",
-)];
+/// Kept as short as the sockets/TLS layer actually requires, and no shorter:
+/// `vaco-time` exists so that the clock — the one thing that genuinely panics
+/// on wasm — is behind a single door instead of being a reason to add entries
+/// here. Every entry below is a real, measured build failure (`E0308`/`E0061`/
+/// `E0583` for `socket2`, `getrandom`'s own `compile_error!` for
+/// `rustls-rustcrypto`), not a precaution.
+const NATIVE_ONLY: &[(&str, &str)] = &[
+    (
+        "vaco-protocol-http",
+        "ureq + rustls is a socket-and-TLS stack; wasm32-unknown-unknown has no \
+         sockets, and a browser port would go through fetch rather than this crate. \
+         Portability here means a *different* protocol implementation behind the \
+         same `vaco-protocol-core` trait, which is the D11 adapter rule doing its \
+         job — not a wasm build of this one.",
+    ),
+    (
+        "vaco-protocol-socket",
+        "depends on socket2 for tcp:/udp:/udplite:/unix:. Measured, not assumed: \
+         a throwaway crate depending on socket2 alone fails to build for \
+         wasm32-unknown-unknown with nine E0308/E0061/E0583 errors inside \
+         socket2 itself (it assumes std::net::{TcpStream,TcpListener,UdpSocket} \
+         exist, which they do not on that target — std::net alone does compile \
+         there, as a stub returning io::Error rather than a compile_error!, but \
+         socket2 does not). A wasm build reaches a socket through the host \
+         runtime's own APIs (WebSocket/WebTransport), a different protocol \
+         behind the same `vaco-protocol-core` trait — the same D11 argument as \
+         vaco-protocol-http's entry above.",
+    ),
+    (
+        "vaco-protocol-tls",
+        "depends on rustls-rustcrypto, which pulls getrandom without wasm's js \
+         feature enabled and fails wasm32-unknown-unknown on getrandom's own \
+         hard compile_error! (measured directly against a throwaway crate \
+         depending on rustls-rustcrypto alone — the same wall vaco-registry's \
+         own vaco-component.toml fragments already document for \
+         vaco-protocol-http). A wasm build reaches TLS through the browser's \
+         own TLS-terminated fetch/WebSocket, not this crate.",
+    ),
+];
 
 const TARGET: &str = "wasm32-unknown-unknown";
 

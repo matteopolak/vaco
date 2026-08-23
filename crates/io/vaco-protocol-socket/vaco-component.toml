@@ -1,0 +1,48 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# `tcp`, `udp`, `udplite`, `unix` — four protocols, one crate (see the crate
+# docs for why: they are all bare-socket transports with the same shape).
+#
+# `default = false`, matching `vaco-protocol-http`'s own reasoning exactly:
+# this crate depends on `socket2`, which does not build for
+# `wasm32-unknown-unknown` (measured directly — see the crate's `lib.rs`
+# module docs and `xtask/src/wasm.rs`'s `NATIVE_ONLY` entry for this crate).
+# Registering unconditionally would make `protocol-socket` a *default*
+# optional dependency of `vaco-registry`, regressing `vaco-registry`'s own
+# `wasm-check` the same way an unconditional `vaco-protocol-http` fragment
+# once did.
+
+[[component]]
+kind      = "protocol"
+name      = "tcp"
+long_name = "TCP"
+feature   = "protocol-socket"
+default   = false
+ctor      = "vaco_protocol_socket::TCP_PROTOCOL"
+
+[[component]]
+kind      = "protocol"
+name      = "udp"
+long_name = "UDP"
+feature   = "protocol-socket"
+default   = false
+ctor      = "vaco_protocol_socket::UDP_PROTOCOL"
+
+[[component]]
+kind      = "protocol"
+name      = "udplite"
+long_name = "UDP-Lite"
+feature   = "protocol-socket"
+default   = false
+ctor      = "vaco_protocol_socket::UDPLITE_PROTOCOL"
+
+# `unix:` registers unconditionally even on a target with no `AF_UNIX` — see
+# `src/unix.rs`'s module docs — so its ctor path resolves everywhere and this
+# row needs no platform condition (the fragment schema has none to give it).
+[[component]]
+kind      = "protocol"
+name      = "unix"
+long_name = "Unix domain socket"
+feature   = "protocol-socket"
+default   = false
+ctor      = "vaco_protocol_socket::UNIX_PROTOCOL"

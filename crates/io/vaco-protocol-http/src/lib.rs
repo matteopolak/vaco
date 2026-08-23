@@ -47,17 +47,37 @@
 //! connects to it. `tests/redirect_whitelist.rs` proves a redirect to `file:`
 //! is refused, without a real network.
 //!
+//! # ICY/SHOUTcast metadata
+//!
+//! `Icy-MetaData: 1` is sent whenever `-icy` is on (the default); when a
+//! server answers with `icy-metaint`, [`source::HttpSource`] strips the
+//! interleaved metadata blocks out of the byte stream it hands to a demuxer
+//! (there is no RFC for this wire format — probed against a loopback server,
+//! `tests/icy_metadata.rs`) and keeps the most recently seen block's text
+//! reachable through [`source::HttpSource::icy_metadata`]. That accessor is
+//! not yet reachable from a `Box<dyn` [`vaco_io::MediaSource`]`>` — the trait
+//! has no metadata side channel — so nothing in the project routes it to a
+//! demuxer's own metadata table yet; see that method's doc comment.
+//!
+//! # Chunked POST
+//!
+//! [`Protocol::create`](vaco_protocol_core::Protocol::create) now does
+//! something: [`post::HttpSink`] buffers a caller's
+//! [`vaco_io::MediaSink::write`] calls and sends them as one
+//! `Transfer-Encoding: chunked` `POST` on the first
+//! [`vaco_io::MediaSink::flush`] call (`MediaSink` has no dedicated
+//! finish/close hook, so `flush` is the only "no more bytes are coming"
+//! signal available — see [`post`]'s module docs for the full reasoning,
+//! including why the body is buffered rather than streamed onto the socket
+//! as each `write` happens). `-chunked_post 0` (a fixed-`Content-Length`
+//! POST) is accepted as an option but not implemented.
+//!
 //! # What is deliberately not implemented
 //!
 //! See [`options`]'s module docs for the full list (proxy, server/`-listen`
-//! mode, POST bodies, chunked-readahead sizing) and why: v0.1 has zero
-//! muxers (D5), so nothing in the project calls
-//! [`Protocol::create`](vaco_protocol_core::Protocol::create) on this crate
-//! yet, and a correct proxy/server implementation is substantial enough to
-//! deserve its own review rather than riding along here. Also not
-//! implemented: parsing the ICY metadata *interleaved in the body* (the
-//! `Icy-MetaData: 1` request header is sent, for fidelity, but the metadata
-//! blocks it asks the server to interleave are not extracted) and the
+//! mode, `-post_data`, `-send_expect_100`, chunked-readahead sizing) and why.
+//! A correct proxy/server implementation is substantial enough to deserve
+//! its own review rather than riding along here. Also not implemented: the
 //! `Retry-After` HTTP-date form (only the delay-seconds form is parsed — see
 //! [`parse::parse_retry_after_secs`]).
 //!
@@ -70,10 +90,23 @@
 //! | `rustls-rustcrypto` 0.0.2-alpha | Pass: every dependency it pulls (`aes-gcm`, `chacha20poly1305`, `p256`, `p384`, `rsa`, `ed25519-dalek`, `x25519-dalek`, `sha2`, `hmac`, `der`, `pkcs8`, `sec1`, `signature`, `rand_core`) is a `RustCrypto` pure-Rust crate; `cargo tree` on this crate contains nothing that links or compiles a foreign library. | MIT OR Apache-2.0. | **The honest caveat, per D10/D14.2**: `0.0.2-alpha` is a pre-1.0, low-download crate — it does *not* clear D10's "adopted" bar on reputation alone. It is taken up anyway because D14.2 already made this call at the workspace level (`ring` and `aws-lc-rs`, rustls's two production providers, both vendor and compile C/assembly and fail Gate 1 outright — see `planning/00-decisions.md` D14.2), and it is the only *other* rustls crypto provider available with zero FFI. `Cargo.lock`/`cargo tree` confirm nothing in this crate's dependency graph is `ring` or `aws-lc-rs`/`aws-lc-sys`; `cargo xtask dep-gate` checks this in CI, denying exactly those three names. Re-check this provider's maturity at every release, per D10's "re-checked each release" — this is the one dependency in this crate's graph that has not yet earned trust by track record, only by being the sole pure-Rust alternative. |
 //! | `webpki-roots` | Not a direct dependency of this crate — reached transitively through `ureq`'s `rustls-webpki-roots` feature, which builds the default `RootCertStore` from it. Removed from this crate's own `Cargo.toml` after the initial stub, since nothing here touches the crate directly. | MIT OR Apache-2.0. | Mozilla's own root bundle, repackaged; itself widely used (`rustls` depends on it in most deployments). |
 //!
-//! No dependency change was needed beyond what the stub already declared, and
-//! the `ureq`/`rustls`/`rustls-rustcrypto` trio was already the exact D14.2
-//! answer to "which TLS provider" — this crate's contribution was wiring
-//! `ureq`'s `unversioned_rustls_crypto_provider` to it (`crate::transport`)
+//! **Update (D11, `vaco-protocol-tls` landed later): this crate's own
+//! `Cargo.toml` no longer declares `rustls`/`rustls-rustcrypto` directly.**
+//! `cargo xtask owner-gate` fails the build the moment two Vaco crates both
+//! declare either — both are on its `MEDIA` list ("a transport swap changes
+//! what bytes arrive") — and `vaco-protocol-tls` is now the crate that owns
+//! them, for the `tls:` protocol it registers. This crate depends on
+//! `vaco-protocol-tls` instead and calls
+//! [`vaco_protocol_tls::crypto::shared_provider`] from `crate::transport`'s
+//! `agent()` in place of building its own `Arc<rustls::crypto::CryptoProvider>`.
+//! The gate-by-gate record above is left exactly as it was written — it is
+//! still an accurate account of *why* this trio was chosen, just no longer of
+//! which `Cargo.toml` declares it. See `docs/io/vaco-protocol-tls.md`'s "Who
+//! owns rustls" for the other half of this arrangement.
+//!
+//! The `ureq`/`rustls`/`rustls-rustcrypto` trio was already the exact D14.2
+//! answer to "which TLS provider" before that move — this crate's original
+//! contribution was wiring `ureq`'s `unversioned_rustls_crypto_provider` to it
 //! rather than accepting `ureq`'s own `rustls` feature default, which is
 //! `ring`.
 //!
@@ -88,6 +121,7 @@
 pub mod headers;
 pub mod options;
 pub mod parse;
+pub mod post;
 pub mod protocol;
 pub mod reconnect;
 pub mod source;
@@ -95,6 +129,7 @@ pub mod transport;
 pub mod url;
 
 pub use options::HttpOptions;
+pub use post::HttpSink;
 pub use protocol::{HTTP_PROTOCOL, HTTPS_PROTOCOL, HttpProtocol};
 pub use source::HttpSource;
 
