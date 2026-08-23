@@ -1,27 +1,77 @@
 //! [`MatroskaMuxer`]: the shared implementation behind the `matroska` and
 //! `webm` registrations.
 //!
-//! # What is deliberately not here
+//! # Metadata, chapters and attachments (M30, gap 1)
 //!
-//! [`vaco_format_core::Muxer`] gives a muxer no channel for file-level
-//! metadata or chapters — `add_stream` takes only [`CodecParameters`], and
-//! nothing else in the trait carries a title, a tag list, or a chapter table.
-//! `Tags`, `Chapters` and `Attachments` are therefore not written: there is
-//! nothing for this crate to write from. `Cues` needs no such channel — every
-//! field it carries comes from the packets themselves — so it is implemented
-//! in full.
+//! [`Muxer::set_metadata`] stores the [`MuxMetadata`] it is handed; the
+//! actual `Tags`/`Chapters`/`Attachments` elements are built in
+//! [`MatroskaMuxer::write_header`], right after `Tracks` — matching the
+//! element order measured against `ffmpeg 8.1` (`Info`, `Tracks`,
+//! `Chapters`, `Attachments`, `Tags`, then the first `Cluster`).
 //!
-//! `SeekHead` is left out too, on purpose rather than by trait limitation: it
-//! is RFC 9559's optional fast-locate index, and every reader has to fall
-//! back to a linear scan for `Info`/`Tracks` when it is absent or wrong —
-//! this workspace's own `vaco-demux-matroska` does. Building it correctly
-//! needs either a second seek-patch pass or fixed-width placeholder
-//! arithmetic for no behavioural gain over the `Cues`-only index this crate
-//! already writes, so it is deferred rather than added for its own sake.
+//! Three keys route to a dedicated element instead of a `SimpleTag`, each
+//! measured directly (`ebmldump`-style byte inspection of `ffmpeg -metadata
+//! title=... -metadata:s:v:0 language=eng -metadata:s:v:0 title=...`):
+//!
+//! * A file-level `title` tag becomes `Info > Title`, not a `Tags` entry.
+//! * A per-stream `title` tag becomes that `TrackEntry`'s `Name` (`0x536E`).
+//! * A per-stream `language` tag becomes that `TrackEntry`'s `Language`,
+//!   replacing the `"und"` default — [`crate::codec`] and the rest of this
+//!   file are otherwise unaware any language was ever stated.
+//!
+//! Every other tag becomes a `SimpleTag` inside a `Tag`: one `Tag` with an
+//! empty `Targets` for file-level tags, one `Tag` per stream that has any
+//! left over with `Targets > TagTrackUID` naming it. `TagName` is the
+//! caller's key **uppercased** — measured: `-metadata artist=X` writes
+//! `TagName=ARTIST`, not `TagName=artist`. This crate does not reproduce the
+//! reference's own auto `ENCODER`/`DURATION` `SimpleTag`s (those stamp the
+//! reference's own build identity and a duration this trait cannot see
+//! ahead of time; `Info > WritingApp` already carries this crate's own
+//! identity).
+//!
+//! Chapters map [`vaco_core::Chapter`] fields directly: `ChapterUID` is the
+//! chapter's `id` when positive (matching the reference, which — for a
+//! `[CHAPTER]` script with no explicit `id` — numbers chapters `1, 2, ...` in
+//! order) or the chapter's 1-based position otherwise; `ChapterTimeStart`/
+//! `ChapterTimeEnd` are the timestamps rescaled to nanoseconds (RFC 9559's
+//! unit for these two fields, independent of `TimestampScale`); a `title` key
+//! in the chapter's own metadata becomes `ChapterDisplay > ChapString`, and a
+//! `language` key becomes `ChapLanguage` (default `"und"`).
+//!
+//! Attachments map [`vaco_format_core::MuxAttachment`] directly onto
+//! `AttachedFile`: `filename` → `FileName`, `mime_type` → `FileMimeType`,
+//! `description` → `FileDescription` (omitted when empty), `data` →
+//! `FileData`. `FileUID` has no caller-supplied source (`MuxAttachment` has
+//! no UID field) and is derived deterministically from the attachment's
+//! position and filename rather than drawn from a clock or an RNG — neither
+//! is reachable from `wasm32` and a random `FileUID` would make output
+//! non-reproducible under `-fflags +bitexact`, which is exactly the failure
+//! mode this crate's own module docs already record for `DateUTC`. `webm`
+//! measured as rejecting attachments outright (the reference silently drops
+//! the input stream); this crate does not special-case that — `webm` has no
+//! attachment allow-list the way `codec::webm_allows_video` does for tracks,
+//! so an attachment handed to a `webm` output is written anyway rather than
+//! silently dropped, which is the more honest failure (a reader ignores an
+//! element it does not expect; a silent drop looks like the caller's data
+//! vanished).
+//!
+//! `Cues` needs no such channel — every field it carries comes from the
+//! packets themselves — so it was already implemented in full.
+//!
+//! # What is still deliberately not here
+//!
+//! `SeekHead` is left out, on purpose rather than by trait limitation: it is
+//! RFC 9559's optional fast-locate index, and every reader has to fall back
+//! to a linear scan for `Info`/`Tracks` when it is absent or wrong — this
+//! workspace's own `vaco-demux-matroska` does. Building it correctly needs
+//! either a second seek-patch pass or fixed-width placeholder arithmetic for
+//! no behavioural gain over the `Cues`-only index this crate already writes,
+//! so it is deferred rather than added for its own sake.
 
 use vaco_codec_core::{CodecId, CodecParameters};
 use vaco_core::{Error, MediaType, Rational, Result};
 use vaco_demux_matroska::ebml::schema as el;
+use vaco_format_core::metadata::MuxMetadata;
 use vaco_format_core::options::{FFlags, FormatOptions};
 use vaco_format_core::{FormatFlags, Muxer, MuxerDesc};
 use vaco_format_ebml::{
@@ -119,6 +169,13 @@ struct TrackOut {
     prev_ts: Option<i64>,
 }
 
+/// `FileMimeType`. Not in `vaco-demux-matroska::ebml::schema` (that crate has
+/// no attachment reader yet), so it lives here rather than adding a field to
+/// a crate this one only reads from (D19's reuse, not ownership) — this is
+/// the reference's own RFC 9559 element ID, the same way every other `el::*`
+/// constant this file uses is.
+const FILEMIMETYPE: u32 = 0x4660;
+
 /// One buffered `Cluster`, built fully in memory before it is written.
 ///
 /// Measured against `ffmpeg 8.1` (see the crate's module docs): a `Cluster`'s
@@ -180,6 +237,10 @@ pub struct MatroskaMuxer {
     /// know where each chunk begins in the single stream this trait can
     /// write to (see that module's docs for why it needs to).
     cluster_starts: Vec<u64>,
+    /// Set by [`Muxer::set_metadata`], read by [`MatroskaMuxer::write_header`]
+    /// (M30, gap 1). Empty for every caller that never calls
+    /// `MuxBuilder::with_metadata`, which is every pre-existing call site.
+    metadata: MuxMetadata,
 }
 
 /// Matroska's epoch (2001-01-01T00:00:00 UTC) as Unix nanoseconds.
@@ -218,6 +279,7 @@ impl MatroskaMuxer {
             max_end_ticks: 0,
             max_cluster_ms: MAX_CLUSTER_MS,
             cluster_starts: Vec::new(),
+            metadata: MuxMetadata::default(),
         })
     }
 
@@ -267,8 +329,23 @@ impl MatroskaMuxer {
         write_element(el::EBML, &body)
     }
 
+    /// File-level `title`, matched case-insensitively against
+    /// [`MuxMetadata::tags`] — measured: the reference routes a `-metadata
+    /// title=...` value into `Info > Title`, never into `Tags` (see the
+    /// module docs).
+    fn title(&self) -> Option<&str> {
+        self.metadata
+            .tags
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("title"))
+            .map(|(_, v)| v.as_str())
+    }
+
     fn info_bytes(&self) -> Vec<u8> {
         let mut body = write_uint(el::TIMESTAMPSCALE, 1_000_000);
+        if let Some(title) = self.title().filter(|t| !t.is_empty()) {
+            body.extend_from_slice(&write_string(el::TITLE, title));
+        }
         body.extend_from_slice(&write_string(el::MUXINGAPP, "vaco-mux-matroska"));
         body.extend_from_slice(&write_string(el::WRITINGAPP, "vaco-mux-matroska"));
         if let Some(ns) = self.date_utc_ns {
@@ -282,7 +359,14 @@ impl MatroskaMuxer {
         write_element(el::INFO, &body)
     }
 
-    fn track_entry_bytes(t: &TrackOut) -> Vec<u8> {
+    /// `name`/`language` are resolved by the caller ([`MatroskaMuxer::tracks_bytes`])
+    /// from [`MatroskaMuxer::metadata`] at write time rather than stored on
+    /// [`TrackOut`] — deliberately, so this box's content does not depend on
+    /// whether [`Muxer::set_metadata`] was called before or after
+    /// [`Muxer::add_stream`] (a caller driving the muxer directly through
+    /// `dyn Muxer`, as `vaco-cli`'s scheduler does, has no way to guarantee
+    /// that order — see `docs/format/vaco-mux-matroska.md`).
+    fn track_entry_bytes(t: &TrackOut, name: Option<&str>, language: &str) -> Vec<u8> {
         let mut body = write_uint(el::TRACKNUMBER, t.number);
         body.extend_from_slice(&write_uint(el::TRACKUID, t.number));
         body.extend_from_slice(&write_uint(el::TRACKTYPE, if t.is_video { 1 } else { 2 }));
@@ -290,7 +374,10 @@ impl MatroskaMuxer {
         // and is always 0 — this crate never emits a laced block by default
         // (see `crate::block`'s module docs).
         body.extend_from_slice(&write_uint(el::FLAGLACING, 0));
-        body.extend_from_slice(&write_string(el::LANGUAGE, "und"));
+        if let Some(name) = name.filter(|n| !n.is_empty()) {
+            body.extend_from_slice(&write_string(el::NAME, name));
+        }
+        body.extend_from_slice(&write_string(el::LANGUAGE, language));
         body.extend_from_slice(&write_string(el::CODECID, t.codec_id));
         if let Some(dur) = t.default_duration_ns {
             body.extend_from_slice(&write_uint(el::DEFAULTDURATION, dur));
@@ -315,8 +402,18 @@ impl MatroskaMuxer {
 
     fn tracks_bytes(&self) -> Vec<u8> {
         let mut body = Vec::new();
-        for t in &self.tracks {
-            body.extend_from_slice(&Self::track_entry_bytes(t));
+        for (i, t) in self.tracks.iter().enumerate() {
+            let stream_index = u32::try_from(i).unwrap_or(0);
+            let stream_tags = self.metadata.tags_for_stream(stream_index);
+            let name = stream_tags
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("title"))
+                .map(|(_, v)| v.as_str());
+            let language = stream_tags
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("language"))
+                .map_or("und", |(_, v)| v.as_str());
+            body.extend_from_slice(&Self::track_entry_bytes(t, name, language));
         }
         write_element(el::TRACKS, &body)
     }
@@ -349,6 +446,147 @@ impl MatroskaMuxer {
             }
         }
         Ok(())
+    }
+
+    /// Build one `SimpleTag` per `(key, value)` pair, uppercasing `key` for
+    /// `TagName` — measured, see the module docs.
+    fn simple_tags(pairs: &[(String, String)]) -> Vec<u8> {
+        let mut body = Vec::new();
+        for (k, v) in pairs {
+            let mut tag = write_string(el::TAGNAME, &k.to_ascii_uppercase());
+            tag.extend_from_slice(&write_string(el::TAGSTRING, v));
+            body.extend_from_slice(&write_element(el::SIMPLETAG, &tag));
+        }
+        body
+    }
+
+    /// `Tags`, or `None` if there is nothing left to write once `title` (file
+    /// level) and `title`/`language` (per-stream) have been routed to their
+    /// own dedicated elements.
+    fn tags_bytes(&self) -> Option<Vec<u8>> {
+        let mut body = Vec::new();
+
+        let file_tags: Vec<(String, String)> = self
+            .metadata
+            .tags
+            .iter()
+            .filter(|(k, _)| !k.eq_ignore_ascii_case("title"))
+            .cloned()
+            .collect();
+        if !file_tags.is_empty() {
+            let targets = write_element(el::TARGETS, &[]);
+            let mut tag = targets;
+            tag.extend_from_slice(&Self::simple_tags(&file_tags));
+            body.extend_from_slice(&write_element(el::TAG, &tag));
+        }
+
+        for track in &self.tracks {
+            let stream_tags: Vec<(String, String)> = self
+                .metadata
+                .tags_for_stream(u32::try_from(track.number - 1).unwrap_or(0))
+                .iter()
+                .filter(|(k, _)| !k.eq_ignore_ascii_case("title") && !k.eq_ignore_ascii_case("language"))
+                .cloned()
+                .collect();
+            if stream_tags.is_empty() {
+                continue;
+            }
+            let targets_body = write_uint(el::TAGTRACKUID, track.number);
+            let mut tag = write_element(el::TARGETS, &targets_body);
+            tag.extend_from_slice(&Self::simple_tags(&stream_tags));
+            body.extend_from_slice(&write_element(el::TAG, &tag));
+        }
+
+        (!body.is_empty()).then(|| write_element(el::TAGS, &body))
+    }
+
+    /// Rescale a chapter bound to RFC 9559's fixed nanosecond unit for
+    /// `ChapterTimeStart`/`ChapterTimeEnd`, independent of `TimestampScale`.
+    /// An absent timestamp (a chapter with no stated start, say) becomes `0`
+    /// rather than being omitted, since both fields are mandatory.
+    fn chapter_time_ns(ts: vaco_core::Timestamp, base: Rational) -> u64 {
+        ts.to_duration(base)
+            .map(|d| d.as_micros().saturating_mul(1000))
+            .and_then(|ns| u64::try_from(ns).ok())
+            .unwrap_or(0)
+    }
+
+    /// `Chapters`, or `None` when [`MuxMetadata::chapters`] is empty.
+    fn chapters_bytes(&self) -> Option<Vec<u8>> {
+        if self.metadata.chapters.is_empty() {
+            return None;
+        }
+        let mut editions = Vec::new();
+        for (i, chapter) in self.metadata.chapters.iter().enumerate() {
+            let uid = u64::try_from(chapter.id)
+                .ok()
+                .filter(|&id| id != 0)
+                .unwrap_or_else(|| i as u64 + 1);
+            let mut atom = write_uint(el::CHAPTERUID, uid);
+            atom.extend_from_slice(&write_uint(
+                el::CHAPTERTIMESTART,
+                Self::chapter_time_ns(chapter.start, chapter.time_base),
+            ));
+            atom.extend_from_slice(&write_uint(
+                el::CHAPTERTIMEEND,
+                Self::chapter_time_ns(chapter.end, chapter.time_base),
+            ));
+            let title = chapter
+                .metadata
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("title"))
+                .map_or("", |(_, v)| v.as_str());
+            let language = chapter
+                .metadata
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("language"))
+                .map_or("und", |(_, v)| v.as_str());
+            let mut display = write_string(el::CHAPSTRING, title);
+            display.extend_from_slice(&write_string(el::CHAPLANGUAGE, language));
+            atom.extend_from_slice(&write_element(el::CHAPTERDISPLAY, &display));
+            editions.extend_from_slice(&write_element(el::CHAPTERATOM, &atom));
+        }
+        let edition_entry = write_element(el::EDITIONENTRY, &editions);
+        Some(write_element(el::CHAPTERS, &edition_entry))
+    }
+
+    /// `Attachments`, or `None` when [`MuxMetadata::attachments`] is empty.
+    /// See the module docs for `FileUID`'s derivation and the `webm` note.
+    fn attachments_bytes(&self) -> Option<Vec<u8>> {
+        if self.metadata.attachments.is_empty() {
+            return None;
+        }
+        let mut body = Vec::new();
+        for (i, att) in self.metadata.attachments.iter().enumerate() {
+            let mut file = Vec::new();
+            if !att.description.is_empty() {
+                file.extend_from_slice(&write_string(el::FILEDESCRIPTION, &att.description));
+            }
+            file.extend_from_slice(&write_string(el::FILENAME, &att.filename));
+            file.extend_from_slice(&write_string(FILEMIMETYPE, &att.mime_type));
+            file.extend_from_slice(&vaco_format_ebml::binary(el::FILEDATA, &att.data));
+            // Deterministic rather than random (see module docs): a
+            // simple hash of position and filename, never the clock or an
+            // RNG, so `wasm32` and `-fflags +bitexact` both stay reachable.
+            let uid = Self::deterministic_uid(i, &att.filename);
+            file.extend_from_slice(&write_uint(el::FILEUID, uid));
+            body.extend_from_slice(&write_element(el::ATTACHEDFILE, &file));
+        }
+        Some(write_element(el::ATTACHMENTS, &body))
+    }
+
+    /// A small, deterministic 64-bit value from `salt` and `text` — used
+    /// where RFC 9559 wants a UID but this crate has no caller-supplied one
+    /// and, per the module docs, will not draw one from a clock or an RNG.
+    /// Not cryptographic; only needs to differ across attachments in the
+    /// same file, which a per-position salt already guarantees on its own.
+    fn deterministic_uid(salt: usize, text: &str) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ (salt as u64);
+        for b in text.bytes() {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0000_0100_0000_01B3);
+        }
+        h | 1 // never zero, which some readers treat as "absent"
     }
 
     fn cues_bytes(&self) -> Vec<u8> {
@@ -477,6 +715,15 @@ impl Muxer for MatroskaMuxer {
         self.out.write(&info)?;
         let tracks = self.tracks_bytes();
         self.out.write(&tracks)?;
+        if let Some(chapters) = self.chapters_bytes() {
+            self.out.write(&chapters)?;
+        }
+        if let Some(attachments) = self.attachments_bytes() {
+            self.out.write(&attachments)?;
+        }
+        if let Some(tags) = self.tags_bytes() {
+            self.out.write(&tags)?;
+        }
         Ok(())
     }
 
@@ -612,6 +859,17 @@ impl Muxer for MatroskaMuxer {
         // `write_header`, matching the reference measured on a pipe.
 
         self.out.flush()
+    }
+
+    fn set_metadata(&mut self, metadata: &MuxMetadata) -> Result<()> {
+        // Just storage: every field this crate derives from `metadata` is
+        // resolved lazily at `write_header` time (`tracks_bytes`,
+        // `chapters_bytes`, `attachments_bytes`, `tags_bytes`, `title`) so
+        // that `set_metadata` may run before or after `add_stream` — see
+        // `tracks_bytes`'s docs for why that matters to a caller that drives
+        // this muxer directly through `dyn Muxer`.
+        self.metadata = metadata.clone();
+        Ok(())
     }
 }
 
@@ -801,5 +1059,168 @@ mod tests {
             count += 1;
         }
         assert_eq!(count, 5);
+    }
+
+    // ----------------------------------------- gap 1: set_metadata round trip
+
+    /// Sets file tags, a per-stream language/title and a custom per-stream
+    /// tag, and a chapter, muxes, then reads every bit of it back through
+    /// [`vaco_demux_matroska::MatroskaDemuxer`] — the "best test" the CL-16
+    /// brief asks for, exercised inside this crate rather than only at the
+    /// CLI layer.
+    #[test]
+    fn set_metadata_round_trips_through_the_demuxer() {
+        use vaco_format_core::Chapter;
+        use vaco_format_core::metadata::MuxMetadata;
+
+        let s = MemorySink::new();
+        let buf: SharedBytes = s.shared();
+        let mut mux = MatroskaMuxer::new_matroska(Box::new(s), &FormatOptions::default()).unwrap();
+        let idx = mux.add_stream(&h264_params()).unwrap();
+
+        let mut meta = MuxMetadata {
+            tags: vec![
+                ("title".to_owned(), "Global Title".to_owned()),
+                ("comment".to_owned(), "a global comment".to_owned()),
+            ],
+            chapters: vec![Chapter {
+                id: 0,
+                time_base: Rational::new(1, 1000),
+                start: Timestamp::new(0),
+                end: Timestamp::new(1000),
+                metadata: vec![("title".to_owned(), "Chapter One".to_owned())],
+            }],
+            ..MuxMetadata::default()
+        };
+        meta.stream_tags = vec![vec![
+            ("language".to_owned(), "eng".to_owned()),
+            ("title".to_owned(), "Video Track".to_owned()),
+            ("custom".to_owned(), "custom-value".to_owned()),
+        ]];
+        mux.set_metadata(&meta).unwrap();
+
+        mux.write_header().unwrap();
+        mux.write_packet(&pkt(idx, 0, true)).unwrap();
+        mux.write_trailer().unwrap();
+
+        let bytes = buf.snapshot();
+        let src: Box<dyn vaco_io::MediaSource> = Box::new(MemorySource::new(bytes));
+        let demux =
+            vaco_demux_matroska::MatroskaDemuxer::open(src, &NoParsers, &FormatOptions::default())
+                .unwrap();
+
+        assert!(
+            demux
+                .metadata()
+                .contains(&("title".to_owned(), "Global Title".to_owned()))
+        );
+        assert!(
+            demux
+                .metadata()
+                .contains(&("COMMENT".to_owned(), "a global comment".to_owned())),
+            "non-dedicated global tags go through Tags, uppercased: {:?}",
+            demux.metadata()
+        );
+
+        let stream = &demux.streams()[0];
+        assert!(
+            stream
+                .metadata
+                .contains(&("language".to_owned(), "eng".to_owned()))
+        );
+        assert!(
+            stream
+                .metadata
+                .contains(&("title".to_owned(), "Video Track".to_owned()))
+        );
+        assert!(
+            stream
+                .metadata
+                .contains(&("CUSTOM".to_owned(), "custom-value".to_owned())),
+            "non-dedicated per-stream tags go through Tags, uppercased: {:?}",
+            stream.metadata
+        );
+
+        assert_eq!(demux.chapters().len(), 1);
+        assert!(
+            demux.chapters()[0]
+                .metadata
+                .contains(&("title".to_owned(), "Chapter One".to_owned()))
+        );
+        assert_eq!(demux.chapters()[0].start.ticks(), Some(0));
+    }
+
+    /// `vaco-cli`'s scheduler drives a raw `dyn Muxer` and has no way to
+    /// guarantee `set_metadata` runs after `add_stream` (see
+    /// `planning/INTERFACE-GAPS.md` gap 2's sibling note on `MuxWork`) — so
+    /// this crate must not depend on that order. Same assertions as
+    /// [`set_metadata_round_trips_through_the_demuxer`], with `set_metadata`
+    /// moved before `add_stream`.
+    #[test]
+    fn set_metadata_before_add_stream_still_resolves_per_stream_fields() {
+        use vaco_format_core::metadata::MuxMetadata;
+
+        let s = MemorySink::new();
+        let buf: SharedBytes = s.shared();
+        let mut mux = MatroskaMuxer::new_matroska(Box::new(s), &FormatOptions::default()).unwrap();
+
+        let meta = MuxMetadata {
+            stream_tags: vec![vec![
+                ("language".to_owned(), "fra".to_owned()),
+                ("title".to_owned(), "Piste Video".to_owned()),
+            ]],
+            ..MuxMetadata::default()
+        };
+        mux.set_metadata(&meta).unwrap();
+
+        let idx = mux.add_stream(&h264_params()).unwrap();
+        mux.write_header().unwrap();
+        mux.write_packet(&pkt(idx, 0, true)).unwrap();
+        mux.write_trailer().unwrap();
+
+        let bytes = buf.snapshot();
+        let src: Box<dyn vaco_io::MediaSource> = Box::new(MemorySource::new(bytes));
+        let demux =
+            vaco_demux_matroska::MatroskaDemuxer::open(src, &NoParsers, &FormatOptions::default())
+                .unwrap();
+        let stream = &demux.streams()[0];
+        assert!(
+            stream
+                .metadata
+                .contains(&("language".to_owned(), "fra".to_owned()))
+        );
+        assert!(
+            stream
+                .metadata
+                .contains(&("title".to_owned(), "Piste Video".to_owned()))
+        );
+    }
+
+    #[test]
+    fn set_metadata_default_writes_nothing_extra() {
+        // Every pre-existing call site never calls `set_metadata` at all, so
+        // this exercises the same "nothing changes" property directly rather
+        // than through the default trait method.
+        let s = MemorySink::new();
+        let buf = s.shared();
+        let mut mux = MatroskaMuxer::new_matroska(Box::new(s), &FormatOptions::default()).unwrap();
+        let idx = mux.add_stream(&h264_params()).unwrap();
+        mux.write_header().unwrap();
+        mux.write_packet(&pkt(idx, 0, true)).unwrap();
+        mux.write_trailer().unwrap();
+        let bytes = buf.snapshot();
+
+        assert!(
+            bytes
+                .windows(vaco_format_ebml::id_bytes(el::TAGS).len())
+                .all(|w| w != vaco_format_ebml::id_bytes(el::TAGS).as_slice()),
+            "no Tags element without set_metadata"
+        );
+        assert!(
+            bytes
+                .windows(vaco_format_ebml::id_bytes(el::CHAPTERS).len())
+                .all(|w| w != vaco_format_ebml::id_bytes(el::CHAPTERS).as_slice()),
+            "no Chapters element without set_metadata"
+        );
     }
 }

@@ -24,12 +24,13 @@
 
 use std::ffi::OsStr;
 
+use vaco_cli_core::num::strtol_base0;
 use vaco_cli_core::split::AvOptionOracle;
 use vaco_cli_core::{
     CliError, CommandLine, GroupKind, OptionGroup, ParsedOption, table::ArgFlags, table::ffmpeg,
 };
 use vaco_format_core::FormatOptions;
-use vaco_opts::Options as _;
+use vaco_opts::{Options as _, OptionsExt as _};
 
 use crate::exit::{AvError, Diagnostic};
 use crate::select::{MapEntry, Suppressed};
@@ -56,6 +57,12 @@ pub struct InputSpec {
     pub whitelist: Option<Vec<String>>,
     /// `-protocol_blacklist`, split on `,`.
     pub blacklist: Option<Vec<String>>,
+    /// Every `-probesize`/`-analyzeduration`/`-fflags`/… (FW-11, the generic
+    /// `AVFormatContext` options) this group named, folded onto the default —
+    /// see [`format_options_of`]. Fed to [`crate::input::open`] and, through
+    /// it, to [`vaco_format_core::Demuxer::reconfigure`] via
+    /// [`vaco_format_core::Discovery::run`].
+    pub format_opts: FormatOptions,
 }
 
 /// One output group, bound.
@@ -67,6 +74,20 @@ pub struct OutputSpec {
     pub format: Option<String>,
     pub maps: Vec<MapEntry>,
     pub blocked: Suppressed,
+    /// Every generic `AVFormatContext` option this group named — the output
+    /// side's share of FW-11 (`-avoid_negative_ts`, `-max_interleave_delta`,
+    /// and the rest [`vaco_format_core::interleave`] and
+    /// [`vaco_sched::spec::PipelineSpec::add_output_with`] consume).
+    pub format_opts: FormatOptions,
+    /// `-map_chapters <n>`. `None` when unstated (the reference's own
+    /// default: copy from the first input file that has chapters); `Some(-1)`
+    /// disables chapter copying outright.
+    pub map_chapters: Option<i64>,
+    /// `-map_metadata <n>`, the leading integer only — the reference's
+    /// `outfile[,metadata]:infile[,metadata]` per-scope qualifiers are not
+    /// implemented (CL-16 breadth phase; global-to-global is the overwhelming
+    /// common case). `None` defaults to input `0`; `Some(-1)` disables.
+    pub map_metadata: Option<i64>,
 }
 
 /// A whole invocation, bound.
@@ -159,6 +180,7 @@ pub fn parse<S: AsRef<OsStr>>(argv: &[S]) -> Result<Cli, Diagnostic> {
             format: last_value(g, "f")?,
             whitelist: last_value(g, "protocol_whitelist")?.map(|v| split_list(&v)),
             blacklist: last_value(g, "protocol_blacklist")?.map(|v| split_list(&v)),
+            format_opts: format_options_of(g)?,
         });
     }
 
@@ -174,6 +196,13 @@ pub fn parse<S: AsRef<OsStr>>(argv: &[S]) -> Result<Cli, Diagnostic> {
                 subtitle: g.last("sn").is_some(),
                 data: g.last("dn").is_some(),
             },
+            format_opts: format_options_of(g)?,
+            map_chapters: last_value(g, "map_chapters")?
+                .as_deref()
+                .map(leading_int),
+            map_metadata: last_value(g, "map_metadata")?
+                .as_deref()
+                .map(leading_int),
         });
     }
 
@@ -204,7 +233,52 @@ fn last_value(g: &OptionGroup, name: &str) -> Result<Option<String>, Diagnostic>
     value_str(opt).map(Some)
 }
 
-fn value_str(opt: &ParsedOption) -> Result<String, Diagnostic> {
+/// Fold every generic `AVFormatContext` option (FW-11: `-probesize`,
+/// `-analyzeduration`, `-fflags`, `-avoid_negative_ts`, and the rest
+/// [`FormatOptions`]'s schema names) named in `g` onto the default, in argv
+/// order — so a later occurrence of the same name wins, and `-fflags
+/// +genpts -fflags +ignidx` accumulates rather than one replacing the other,
+/// exactly as [`vaco_opts::OptionsExt::set_str`] already does for any other
+/// caller of an `#[derive(Options)]` struct.
+///
+/// Filtered by [`Oracle::knows`]'s own rule — a schema-field match — so this
+/// never touches an option this binary models itself (`-map`, `-f`, `-c`, …
+/// are never [`FormatOptions`] fields and so never reach `set_str` here).
+///
+/// # Errors
+///
+/// A [`Diagnostic`] carrying [`vaco_opts::OptError`]'s message when a value
+/// this option's own type rejects reaches `set_str` (an out-of-range
+/// `-probesize`, an unrecognised `-strict` name, and the like).
+fn format_options_of(g: &OptionGroup) -> Result<FormatOptions, Diagnostic> {
+    let mut opts = FormatOptions::default();
+    let schema = opts.schema();
+    for opt in &g.opts {
+        let (name, _spec) = opt.resolved();
+        if schema.find(name).is_none() {
+            continue;
+        }
+        let value = value_str(opt)?;
+        opts.set_str(name, &value).map_err(|e| {
+            Diagnostic::new(
+                AvError::EINVAL,
+                vec![format!("Error parsing option '{name}' with value '{value}': {e}")],
+            )
+        })?;
+    }
+    Ok(opts)
+}
+
+/// The leading `strtol`-base-0 integer of a value string, ignoring anything
+/// after the first non-numeric character — the same leniency
+/// [`vaco_cli_core::metaspec`]'s `c:`/`p:` parsing documents, applied here to
+/// `-map_chapters`/`-map_metadata`'s leading file index so a `,metadata`
+/// qualifier this crate does not implement does not turn into a parse error.
+fn leading_int(s: &str) -> i64 {
+    strtol_base0(s).value
+}
+
+pub(crate) fn value_str(opt: &ParsedOption) -> Result<String, Diagnostic> {
     opt.value
         .as_ref()
         .and_then(|v| v.to_str())
@@ -326,6 +400,85 @@ mod tests {
         // No encoders in this build, so no `crf`. Divergence, documented.
         assert!(!Oracle.knows("crf"));
         assert!(!Oracle.knows("qwerty"));
+    }
+
+    #[test]
+    fn generic_format_options_reach_input_spec() {
+        // FW-11: `-probesize`/`-analyzeduration`/`-fflags` are `FormatOptions`
+        // schema fields, so `format_options_of` must have applied them —
+        // where `input::open` (untested here; see that module) reads them
+        // from, once opened.
+        let cli = parse(&[
+            "-probesize",
+            "12345",
+            "-analyzeduration",
+            "999",
+            "-fflags",
+            "+genpts",
+            "-i",
+            "a.mkv",
+            "-f",
+            "null",
+            "-",
+        ])
+        .unwrap();
+        let opts = &cli.inputs.first().unwrap().format_opts;
+        assert_eq!(opts.probesize, 12345);
+        assert_eq!(opts.analyzeduration, 999);
+        assert!(opts.fflags.contains(vaco_format_core::options::FFlags::GENPTS));
+    }
+
+    #[test]
+    fn generic_format_options_reach_output_spec_too() {
+        // FW-11's output-side share: `-avoid_negative_ts` is `encoding`-flagged
+        // (see `vaco-format-core`'s own doc table), so it only ever matters on
+        // an output group.
+        let cli = parse(&[
+            "-i",
+            "a.mkv",
+            "-avoid_negative_ts",
+            "make_zero",
+            "-f",
+            "null",
+            "-",
+        ])
+        .unwrap();
+        assert_eq!(cli.outputs.first().unwrap().format_opts.avoid_negative_ts, 2);
+    }
+
+    #[test]
+    fn an_option_this_build_does_not_model_is_left_alone() {
+        // `-map`/`-f`/`-c` are never `FormatOptions` fields; `format_options_of`
+        // must not choke on them or silently absorb their values.
+        let cli = parse(&["-i", "a.mkv", "-map", "0", "-c", "copy", "-f", "null", "-"]).unwrap();
+        assert_eq!(cli.outputs.first().unwrap().format_opts.probesize, 5_000_000);
+    }
+
+    #[test]
+    fn map_chapters_and_map_metadata_parse_their_leading_index() {
+        let cli = parse(&[
+            "-i",
+            "a.mkv",
+            "-map_chapters",
+            "-1",
+            "-map_metadata",
+            "0",
+            "-f",
+            "null",
+            "-",
+        ])
+        .unwrap();
+        let o = cli.outputs.first().unwrap();
+        assert_eq!(o.map_chapters, Some(-1));
+        assert_eq!(o.map_metadata, Some(0));
+    }
+
+    #[test]
+    fn map_chapters_and_map_metadata_default_to_unstated() {
+        let cli = parse(&["-i", "a.mkv", "-f", "null", "-"]).unwrap();
+        let o = cli.outputs.first().unwrap();
+        assert_eq!(o.map_chapters, None);
+        assert_eq!(o.map_metadata, None);
     }
 
     #[test]

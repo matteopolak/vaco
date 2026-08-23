@@ -188,6 +188,36 @@ signature that ~90 crates already implement — so the additive fix is the same
 shape: a defaulted trait method that hands over the extra sources after
 construction, not a wider `open`.
 
+## 8. `vaco-sched` cannot call `set_metadata` between `add_stream` and `write_header`
+
+Reported by: the CLI metadata wiring, immediately after gap 1 was closed to
+enable it.
+
+`Muxer::set_metadata` exists and `MuxBuilder::open` calls it at the right point.
+But `vaco-sched`'s `MuxWork` drives a raw `dyn Muxer` rather than `MuxWriter`
+(the same reason it skips the bitstream-filter stage), so the CLI calls
+`set_metadata` **before** the muxer has any streams.
+
+Both MP4 and Matroska had to make per-stream metadata resolution **lazy** —
+resolved at `write_header` time by re-reading the stored metadata, rather than
+eagerly mutating tracks inside `set_metadata` — because the eager version
+silently dropped everything. Both crates carry a regression test for
+`set_metadata` before `add_stream`.
+
+Lazy resolution is defensible on its own terms, so this is not urgent. But it is
+a constraint every future muxer inherits without being told, and the honest fix
+is the same one gap 2 needs: `MuxWork` driving `MuxWriter` instead of a bare
+`dyn Muxer`.
+
+## 9. `Muxer::add_stream` takes only `CodecParameters`
+
+Reported by: the same pass. `-disposition` and `-program` parse correctly and
+have nowhere to go — a stream's disposition flags and its program membership are
+neither codec parameters nor file-level metadata.
+
+Same class as gap 1, and the reason #207 (CL-16) stayed open after tags and
+chapters worked.
+
 ## Sequencing
 
 1, 4, 5 and 6 are additive and can land together behind default-implemented

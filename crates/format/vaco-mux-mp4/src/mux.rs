@@ -3,14 +3,15 @@
 
 use vaco_codec_core::{CodecId, CodecParameters};
 use vaco_core::{Error, MediaType, Rational, Result};
+use vaco_format_core::metadata::MuxMetadata;
 use vaco_format_core::mux::{BitstreamAction, CodecSupport, global_header_action};
 use vaco_format_core::{FormatFlags, Muxer};
 use vaco_io::{IoOptions, IoWriter, MediaSink};
 use vaco_packet::Packet;
 
-use crate::options::MuxOptions;
+use crate::options::{ChapterMark, CoverArt, MuxOptions};
 use crate::track::TrackState;
-use crate::{entry, fragmented, progressive};
+use crate::{entry, fragmented, meta, progressive};
 
 /// The default movie timescale this crate writes: high enough that no common
 /// frame rate needs `mvhd`'s duration field to round, and the same order of
@@ -44,6 +45,11 @@ pub struct MovMuxer {
     header_written: bool,
     trailer_written: bool,
     mode: Mode,
+    /// Set by [`Muxer::set_metadata`], resolved into `opts`/`tracks` at the
+    /// top of [`MovMuxer::write_header`] rather than at `set_metadata` time —
+    /// see that method's docs for why the order it runs in relative to
+    /// [`Muxer::add_stream`] cannot be assumed.
+    metadata: MuxMetadata,
 }
 
 impl core::fmt::Debug for MovMuxer {
@@ -86,6 +92,7 @@ impl MovMuxer {
             movie_timescale: DEFAULT_MOVIE_TIMESCALE,
             header_written: false,
             trailer_written: false,
+            metadata: MuxMetadata::default(),
         })
     }
 
@@ -180,6 +187,7 @@ impl Muxer for MovMuxer {
         if self.tracks.is_empty() {
             return Err(Error::Unsupported("mp4: no streams to mux"));
         }
+        self.resolve_metadata();
         match &mut self.mode {
             Mode::Progressive(state) => {
                 progressive::write_header(&mut self.out, &self.opts, state)?;
@@ -284,6 +292,94 @@ impl Muxer for MovMuxer {
         _pkt: &Packet,
     ) -> Result<BitstreamAction> {
         Ok(global_header_action(self.flags(), params))
+    }
+
+    fn set_metadata(&mut self, metadata: &MuxMetadata) -> Result<()> {
+        // Just storage — see `MovMuxer::metadata`'s field docs for why
+        // resolution is deferred to `write_header` rather than done here.
+        self.metadata = metadata.clone();
+        Ok(())
+    }
+}
+
+impl MovMuxer {
+    /// Fold `self.metadata` into `self.opts`/`self.tracks`, once, at the top
+    /// of [`write_header`](Muxer::write_header) — by which point every
+    /// `add_stream` call has already happened regardless of when
+    /// [`Muxer::set_metadata`] itself ran (M30, gap 1; see that method's
+    /// docs and `crate::meta`'s module docs for the exact key mapping).
+    fn resolve_metadata(&mut self) {
+        // File-level tags: only the keys `meta::itunes_fourcc` maps reach
+        // `ilst` at all (see that function's docs for why the rest are
+        // dropped rather than guessed at). A later `-metadata` for the same
+        // key replaces rather than duplicates the atom.
+        for (key, value) in &self.metadata.tags {
+            if let Some(fourcc) = meta::itunes_fourcc(key) {
+                self.opts.tags.retain(|(k, _)| *k != fourcc);
+                self.opts.tags.push((fourcc, value.clone()));
+            }
+        }
+
+        // Per-stream `language`: the only per-stream concept this container
+        // format has a field for outside `ilst` (there is no per-track
+        // title box this crate writes). Anything else in a per-stream tag
+        // list has nowhere to go in MP4 and is silently dropped, matching
+        // `itunes_fourcc`'s own policy for an unmapped file-level key.
+        for (i, track) in self.tracks.iter_mut().enumerate() {
+            let Ok(stream_index) = u32::try_from(i) else {
+                continue;
+            };
+            for (k, v) in self.metadata.tags_for_stream(stream_index) {
+                if k.eq_ignore_ascii_case("language")
+                    && let Some(lang) = meta::parse_iso639(v)
+                {
+                    track.language = lang.pack();
+                }
+            }
+        }
+
+        // The first attachment whose `mime_type` measures as an image
+        // becomes `covr` — `MuxOptions::cover_art` holds at most one, so a
+        // caller-supplied `-vf`-driven `MovMuxer::with_options` cover art
+        // wins over anything `set_metadata` would add.
+        if self.opts.cover_art.is_none() {
+            self.opts.cover_art = self.metadata.attachments.iter().find_map(|att| {
+                let mime = att.mime_type.to_ascii_lowercase();
+                if mime.contains("png") {
+                    Some(CoverArt {
+                        is_png: true,
+                        data: att.data.clone(),
+                    })
+                } else if mime.contains("jpeg") || mime.contains("jpg") {
+                    Some(CoverArt {
+                        is_png: false,
+                        data: att.data.clone(),
+                    })
+                } else {
+                    None
+                }
+            });
+        }
+
+        if self.opts.chapters.is_empty() {
+            self.opts.chapters = self
+                .metadata
+                .chapters
+                .iter()
+                .map(|c| {
+                    let title = c
+                        .metadata
+                        .iter()
+                        .find(|(k, _)| k.eq_ignore_ascii_case("title"))
+                        .map_or_else(String::new, |(_, v)| v.clone());
+                    ChapterMark {
+                        start: c.start,
+                        time_base: c.time_base,
+                        title,
+                    }
+                })
+                .collect();
+        }
     }
 }
 

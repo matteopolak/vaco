@@ -121,6 +121,14 @@ wrote down.**
   two runs differ by ~60 bytes — which reads as "the muxer is nondeterministic".
   When a probe implies the reference is doing something surprising, check the
   flag's position before believing it.
+- **`-bitexact` and `-fflags +bitexact` are different flags** and it is easy to
+  write one meaning the other, as this document previously did. `-fflags
+  +bitexact` is marked `E` in the reference's own flag columns — **encoding
+  only, no effect on demuxing at all**. The flag that suppresses every
+  `*_long_name` in `ffprobe` output, and that every `exact-bytes` conformance
+  case depends on, is the *top-level* `-bitexact`. Measured while wiring the
+  generic format options, after a brief asked what `-fflags +bitexact` changes
+  on the demux side. The answer is nothing.
 
 ## An oracle you wrote shares your misreading
 

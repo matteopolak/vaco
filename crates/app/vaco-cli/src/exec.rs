@@ -48,13 +48,47 @@
 //! already emits for exactly this situation and which is therefore the right
 //! one to reproduce rather than invent. Stream copy is enough to remux,
 //! though, which is the one thing this module is now actually for.
+//!
+//! # CL-16: `-metadata`, `-map_metadata`, `-map_chapters`, and FW-11
+//!
+//! [`metadata_of`] resolves `-metadata`/`-metadata:s:…` against an output's
+//! own stream list into a [`vaco_format_core::metadata::MuxMetadata`];
+//! [`resolve_mapped_metadata`] finishes it with `-map_chapters`/
+//! `-map_metadata`'s source input once one is actually open; [`run_pipeline`]
+//! calls [`Muxer::set_metadata`] on the freshly opened muxer directly —
+//! *before* handing it to [`PipelineSpec::add_output_with`] — because
+//! `vaco-sched`'s `MuxWork` drives a raw `dyn Muxer` with no way for this
+//! module to reach back into it afterward (`planning/INTERFACE-GAPS.md`'s
+//! note on that struct). That ordering constraint is also why
+//! `vaco-mux-mp4`/`vaco-mux-matroska`/`vaco-mux-stream`'s `ffmetadata`
+//! resolve every per-stream field lazily, at `write_header` time, rather than
+//! eagerly inside their own `set_metadata` — see each crate's module docs.
+//!
+//! `-metadata:c:N`/`-metadata:p:N` parse (a malformed one still reports the
+//! reference's own specifier error) but land nowhere: chapter-scoped tag
+//! overrides are not implemented, and a *program*'s metadata has no
+//! representation in `MuxMetadata` at all. **`-disposition` and `-program`
+//! are parsed by `vaco-cli-core`'s option tables but not resolved here** —
+//! `Muxer::add_stream` takes only `CodecParameters`, which carries neither a
+//! disposition bit nor a program membership, so writing either one needs a
+//! channel this trait does not have, the same class of gap `MuxMetadata`
+//! closed for tags/chapters/attachments (gap 1) but does not itself cover.
+//! Reported rather than worked around, per this crate's brief.
+//!
+//! `add_output_with` (not the plain `add_output`) carries the output side's
+//! [`vaco_format_core::FormatOptions`] (FW-11: `-avoid_negative_ts`,
+//! `-max_interleave_delta`, …) into the scheduler; the input side reaches
+//! [`vaco_format_core::Demuxer::reconfigure`] through
+//! [`crate::input::OpenRequest::format_opts`] instead, since discovery runs
+//! long before any `PipelineSpec` exists.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use vaco_cli_core::{MatchCtx, StreamInfo};
+use vaco_cli_core::{MatchCtx, MetadataSpecifier, StreamInfo};
 use vaco_core::{Error, MediaType, Result};
 use vaco_format_core::flags::FormatFlags;
+use vaco_format_core::metadata::MuxMetadata;
 use vaco_format_core::{Muxer, Stream};
 use vaco_sched::{Driver, Finish, PipelineSpec};
 
@@ -82,6 +116,19 @@ pub struct ResolvedOutput {
     /// Every `-map` on this output matched nothing, so the reference drops the
     /// file and exits 0. See [`crate::select::Selection::dropped`].
     pub dropped: bool,
+    /// CL-16: file- and stream-level `-metadata`/`-metadata:s:…`, already
+    /// resolved against this output's own stream list. `chapters` is left
+    /// empty here — [`run_pipeline`] fills it from `-map_chapters`'s source
+    /// input, which this function never sees (see that function's docs).
+    pub metadata: MuxMetadata,
+    /// `-map_chapters <n>` ([`crate::cli::OutputSpec::map_chapters`]).
+    pub map_chapters: Option<i64>,
+    /// `-map_metadata <n>` ([`crate::cli::OutputSpec::map_metadata`]).
+    pub map_metadata: Option<i64>,
+    /// FW-11: the output side's generic `AVFormatContext` options
+    /// (`-avoid_negative_ts`, `-max_interleave_delta`, …), fed to
+    /// [`vaco_sched::spec::PipelineSpec::add_output_with`] in [`run_pipeline`].
+    pub format_opts: vaco_format_core::FormatOptions,
 }
 
 /// Everything a completed run reports.
@@ -180,6 +227,10 @@ pub fn resolve_output(
             streams: Vec::new(),
             sink: Sink::new(),
             dropped: true,
+            metadata: MuxMetadata::default(),
+            map_chapters: out.map_chapters,
+            map_metadata: out.map_metadata,
+            format_opts: out.format_opts.clone(),
         });
     }
 
@@ -197,6 +248,8 @@ pub fn resolve_output(
 
     check_codecs(cli, out, &streams)?;
 
+    let metadata = metadata_of(cli, out, &streams)?;
+
     Ok(ResolvedOutput {
         index: out.index,
         url: out.url.clone(),
@@ -204,7 +257,143 @@ pub fn resolve_output(
         streams,
         sink: Sink::new(),
         dropped: false,
+        metadata,
+        map_chapters: out.map_chapters,
+        map_metadata: out.map_metadata,
+        format_opts: out.format_opts.clone(),
     })
+}
+
+/// Build the `MuxMetadata` this output's `-metadata`/`-metadata:s:…` options
+/// describe (CL-16), resolved against the output's *own* stream list — the
+/// same `MatchCtx` shape [`check_codecs`] builds for `-c`, reused here for
+/// the same reason: `-metadata:s:v:0` counts within the output, not the
+/// input, the same way `-c:v:0` does.
+///
+/// `-metadata:c:N` and `-metadata:p:N` are parsed (so a malformed one still
+/// reports the reference's own specifier error) but have nowhere to land: a
+/// chapter's own metadata is filled in by [`run_pipeline`] from whichever
+/// input `-map_chapters` names, at a point this function cannot see, and a
+/// *program*'s metadata has no representation in
+/// [`vaco_format_core::metadata::MuxMetadata`] at all (same class of gap as
+/// `planning/INTERFACE-GAPS.md`'s gap 1, not closed by it — see this crate's
+/// docs).
+fn metadata_of(
+    cli: &Cli,
+    out: &OutputSpec,
+    streams: &[OutStream],
+) -> Result<MuxMetadata, Diagnostic> {
+    let view: Vec<StreamInfo> = streams
+        .iter()
+        .enumerate()
+        .map(|(i, s)| StreamInfo {
+            index: i as u32,
+            media_type: s.media,
+            codec_known: true,
+            ..StreamInfo::default()
+        })
+        .collect();
+    let ctx = MatchCtx::streams(&view);
+
+    let mut meta = MuxMetadata {
+        stream_tags: vec![Vec::new(); streams.len()],
+        ..MuxMetadata::default()
+    };
+    let Some(group) = cli.output_group(out.index) else {
+        return Ok(meta);
+    };
+
+    for opt in &group.opts {
+        if opt.resolved().0 != "metadata" {
+            continue;
+        }
+        let spec = opt
+            .metadata_spec()
+            .map_err(|e| {
+                Diagnostic::new(
+                    AvError::EINVAL,
+                    vec![format!("Invalid metadata specifier: {e}")],
+                )
+            })?
+            .unwrap_or(MetadataSpecifier::Global);
+        let raw = crate::cli::value_str(opt)?;
+        // Measured (reference, `-metadata key` with no `=` at all): the whole
+        // string becomes the key with an empty value, which deletes it —
+        // matching `-metadata key=`'s own deletion rule below.
+        let (key, value) = raw.split_once('=').unwrap_or((raw.as_str(), ""));
+        match spec {
+            MetadataSpecifier::Global => set_tag(&mut meta.tags, key, value),
+            MetadataSpecifier::Stream(s) => {
+                for (i, slot) in meta.stream_tags.iter_mut().enumerate() {
+                    if s.matches(&ctx, i as u32) {
+                        set_tag(slot, key, value);
+                    }
+                }
+            }
+            // Deferred — see this function's docs.
+            MetadataSpecifier::Chapter(_) | MetadataSpecifier::Program(_) => {}
+        }
+    }
+    Ok(meta)
+}
+
+/// `-metadata key=value` sets; `-metadata key=` (empty value) deletes —
+/// measured against the reference, which never keeps a same-key duplicate
+/// either way.
+fn set_tag(tags: &mut Vec<(String, String)>, key: &str, value: &str) {
+    tags.retain(|(k, _)| k != key);
+    if !value.is_empty() {
+        tags.push((key.to_owned(), value.to_owned()));
+    }
+}
+
+/// Finish [`ResolvedOutput::metadata`] with `-map_chapters`/`-map_metadata`'s
+/// source data (CL-16), which [`metadata_of`] cannot see (it runs before any
+/// input is opened).
+///
+/// Chapters: `out.map_chapters`, or — absent one — the first input that has
+/// any, our own reading of the reference's "chapters are copied from the
+/// first input file that has any" default; `Some(-1)` (explicit or, for
+/// metadata, the computed default when nothing qualifies) copies nothing.
+///
+/// Global tags: `out.map_metadata`, or input `0` by default (the reference's
+/// own stated default); explicit `-metadata` always wins over a copied value
+/// for the same key, since it is folded in *after* the copy.
+fn resolve_mapped_metadata(
+    out: &ResolvedOutput,
+    input_chapters: &[Vec<vaco_format_core::Chapter>],
+    input_metadata: &[Vec<(String, String)>],
+) -> MuxMetadata {
+    let mut meta = out.metadata.clone();
+
+    let chapters_from = out
+        .map_chapters
+        .unwrap_or_else(|| {
+            input_chapters
+                .iter()
+                .position(|c| !c.is_empty())
+                .and_then(|i| i64::try_from(i).ok())
+                .unwrap_or(-1)
+        })
+        .max(-1);
+    if let Ok(i) = usize::try_from(chapters_from)
+        && let Some(chapters) = input_chapters.get(i)
+    {
+        meta.chapters.clone_from(chapters);
+    }
+
+    let metadata_from = out.map_metadata.unwrap_or(0).max(-1);
+    if let Ok(i) = usize::try_from(metadata_from)
+        && let Some(copied) = input_metadata.get(i)
+    {
+        let mut tags = copied.clone();
+        for (k, v) in &out.metadata.tags {
+            set_tag(&mut tags, k, v);
+        }
+        meta.tags = tags;
+    }
+
+    meta
 }
 
 /// Which muxer an output resolves to. See the module docs for the three
@@ -387,6 +576,19 @@ pub fn run_pipeline(
         })
         .collect();
 
+    // CL-16, `-map_chapters`/`-map_metadata`'s source data: read here, from
+    // `&inputs`, because the loop below moves each `f.demuxer` into `spec`
+    // one at a time and a `Demuxer` gives up `chapters()`/`metadata()` for
+    // good the moment that happens.
+    let input_chapters: Vec<Vec<vaco_format_core::Chapter>> = inputs
+        .iter()
+        .map(|f| f.demuxer.chapters().to_vec())
+        .collect();
+    let input_metadata: Vec<Vec<(String, String)>> = inputs
+        .iter()
+        .map(|f| f.demuxer.metadata().to_vec())
+        .collect();
+
     let mut spec = PipelineSpec::new();
     let mut refs = Vec::new();
     for f in inputs {
@@ -400,13 +602,31 @@ pub fn run_pipeline(
     let mut sinks: Vec<(Sink, Option<Arc<AtomicU64>>)> = Vec::new();
     for out in outputs.iter().filter(|o| !o.dropped) {
         let (inner, high_water) = open_output(out)?;
-        let muxer: Box<dyn Muxer> = Box::new(TallyingMuxer::new(inner, out.sink.clone()));
-        // The plain `add_output`, not `add_output_with`: it reads the flags
-        // off the muxer itself, which for a real container is the container's
-        // own answer — `TS_NONSTRICT`, `NOTIMESTAMPS` and the rest are
-        // properties of the format, never a caller preference (see
-        // `Muxer::flags`'s own docs).
-        let oref = spec.add_output(muxer);
+        let mut muxer: Box<dyn Muxer> = Box::new(TallyingMuxer::new(inner, out.sink.clone()));
+
+        // CL-16 (gap 1): resolve `-map_chapters`/`-map_metadata` against the
+        // inputs actually opened, then hand the whole thing to the muxer.
+        // Called here, before `add_stream` runs inside `spec.map` below,
+        // deliberately — every `set_metadata` override this workspace ships
+        // (`vaco-mux-mp4`, `vaco-mux-matroska`, `vaco-mux-stream`'s
+        // `ffmetadata`) resolves per-stream fields lazily at `write_header`
+        // time for exactly this reason: `vaco-sched`'s `MuxWork` drives a raw
+        // `dyn Muxer` (see `planning/INTERFACE-GAPS.md`'s note on it), so
+        // there is no later point at which this module could still reach the
+        // muxer to call `set_metadata` after `spec.add_output` has taken it.
+        let meta = resolve_mapped_metadata(out, &input_chapters, &input_metadata);
+        muxer
+            .set_metadata(&meta)
+            .map_err(|e| internal_from("the muxer refused metadata", &e))?;
+
+        // `add_output_with`, not the plain `add_output`: flags still come
+        // from the muxer itself (a caller preference cannot override
+        // `TS_NONSTRICT`/`NOTIMESTAMPS`, which are properties of the
+        // container), but `options` is now FW-11's output-side share of the
+        // generic `AVFormatContext` table (`-avoid_negative_ts`,
+        // `-max_interleave_delta`, …) instead of always `default()`.
+        let flags = muxer.flags();
+        let oref = spec.add_output_with(muxer, flags, out.format_opts.clone());
         sinks.push((out.sink.clone(), high_water));
         for (i, s) in out.streams.iter().enumerate() {
             let Some(input) = refs.get(s.source.file as usize).copied() else {
@@ -843,6 +1063,10 @@ mod tests {
             streams: Vec::new(),
             sink: Sink::new(),
             dropped: false,
+            metadata: MuxMetadata::default(),
+            map_chapters: None,
+            map_metadata: None,
+            format_opts: vaco_format_core::FormatOptions::default(),
         };
         let t = OutputTally {
             streams: vec![
@@ -885,6 +1109,10 @@ mod tests {
             streams: Vec::new(),
             sink: Sink::new(),
             dropped: false,
+            metadata: MuxMetadata::default(),
+            map_chapters: None,
+            map_metadata: None,
+            format_opts: vaco_format_core::FormatOptions::default(),
         };
         let t = OutputTally {
             streams: vec![

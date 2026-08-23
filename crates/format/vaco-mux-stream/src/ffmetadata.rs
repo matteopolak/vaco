@@ -353,33 +353,34 @@ fn write_kv(out: &mut String, key: &str, value: &str) {
 use vaco_codec_core::CodecParameters;
 use vaco_core::Rational;
 use vaco_format_core::flags::FormatFlags;
+use vaco_format_core::metadata::MuxMetadata;
 use vaco_format_core::{Muxer, MuxerDesc};
 use vaco_io::{IoOptions, IoWriter, MediaSink};
 use vaco_packet::Packet;
 
-/// The `Muxer`-trait-only path, which the module docs' "Configuration" gap
-/// applies to in full.
+/// The `Muxer`-trait-only path.
 ///
-/// # Why this writes only the header and the auto `encoder=` tag
+/// # How metadata reaches the document
 ///
-/// [`vaco_format_core::Muxer`] has no channel for file-level metadata,
-/// per-stream metadata or chapters — `add_stream` takes only
-/// [`CodecParameters`], and nothing else in the trait carries a tag list or a
-/// chapter table. `vaco-mux-matroska`'s `MatroskaMuxer` documents the
-/// identical gap for `Tags`/`Chapters`/`Attachments` (see its `mux.rs` module
-/// docs) — this is not a shortfall specific to this crate, it is what every
-/// muxer in the workspace gets from this frozen trait today. So
-/// [`FfmetadataMuxer`], driven only through `dyn Muxer`, always produces
-/// exactly `;FFMETADATA1\nencoder=vaco\n` and nothing else, regardless of
-/// how many streams are added or what packets arrive — there is nothing
-/// upstream of it to report. A caller that actually has metadata, per-stream
-/// tags or chapters to write calls [`write`] directly and hands the bytes to
-/// its own sink; that is the real, useful entry point this module provides,
-/// and it is what this module's own tests exercise.
+/// [`vaco_format_core::mux::MuxBuilder::open`] calls [`Muxer::set_metadata`]
+/// once, after `init` and stream time bases but before [`Muxer::write_header`]
+/// (M30, `planning/INTERFACE-GAPS.md` gap 1). This muxer's override just
+/// stores the [`MuxMetadata`] it is handed; [`Muxer::write_header`] is what
+/// turns it into the actual `;FFMETADATA1` document via [`write`] — file tags
+/// as global lines, [`MuxMetadata::stream_tags`] as `[STREAM]` blocks in
+/// `add_stream` order, [`MuxMetadata::chapters`] as `[CHAPTER]` blocks. A
+/// caller driven only through `dyn Muxer` with a caller that never calls
+/// `with_metadata` (every pre-existing call site) still gets exactly
+/// `;FFMETADATA1\nencoder=vaco\n`, since [`MuxMetadata::default`] is empty —
+/// this is the same "the default drops what was always dropped" shape as
+/// [`Muxer::set_metadata`]'s own default. [`MuxMetadata::attachments`] has no
+/// representation in this format and is silently ignored, matching the
+/// reference (`ffmpeg -f ffmetadata` has no attachment section either).
 #[derive(Debug)]
 pub struct FfmetadataMuxer {
     out: IoWriter,
     stream_count: u32,
+    metadata: MuxMetadata,
 }
 
 impl FfmetadataMuxer {
@@ -389,7 +390,25 @@ impl FfmetadataMuxer {
         Ok(Self {
             out: IoWriter::new(sink, &IoOptions::default())?,
             stream_count: 0,
+            metadata: MuxMetadata::default(),
         })
+    }
+}
+
+/// Build one [`ChapterMeta`] from a [`crate::Chapter`]-shaped value.
+///
+/// `TIMEBASE`/`START`/`END` are always written as a triple (see [`write`]'s
+/// docs on section ordering); an absent `start`/`end` timestamp writes as `0`
+/// rather than being omitted, since the format has no "absent" spelling for
+/// those three keys and `0` is closer to the reference's own behaviour when a
+/// demuxer supplies a chapter with an unset bound than silently dropping the
+/// whole chapter would be.
+fn chapter_meta(chapter: &vaco_format_core::Chapter) -> ChapterMeta {
+    ChapterMeta {
+        time_base: (chapter.time_base.num, chapter.time_base.den),
+        start: chapter.start.ticks().unwrap_or(0),
+        end: chapter.end.ticks().unwrap_or(0),
+        metadata: chapter.metadata.clone(),
     }
 }
 
@@ -408,9 +427,11 @@ impl Muxer for FfmetadataMuxer {
     }
 
     fn write_header(&mut self) -> vaco_core::Result<()> {
-        // No `[STREAM]`/`[CHAPTER]` blocks: see the type docs for why there is
-        // nothing to put in one via this trait.
-        let doc = write(&[], &[], &[]);
+        let streams: Vec<Vec<(String, String)>> = (0..self.stream_count)
+            .map(|i| self.metadata.tags_for_stream(i).to_vec())
+            .collect();
+        let chapters: Vec<ChapterMeta> = self.metadata.chapters.iter().map(chapter_meta).collect();
+        let doc = write(&self.metadata.tags, &streams, &chapters);
         self.out.write(doc.as_bytes())
     }
 
@@ -424,6 +445,11 @@ impl Muxer for FfmetadataMuxer {
 
     fn stream_time_base(&self, _stream_index: u32) -> Option<Rational> {
         None
+    }
+
+    fn set_metadata(&mut self, metadata: &MuxMetadata) -> vaco_core::Result<()> {
+        self.metadata = metadata.clone();
+        Ok(())
     }
 }
 
@@ -642,7 +668,14 @@ mod tests {
         use vaco_format_core::vacoraw::MemorySink;
 
         #[test]
-        fn accepts_any_stream_and_writes_only_header_and_encoder() {
+        fn accepts_any_stream_and_writes_one_stream_block_per_added_stream() {
+            // Was pinned as "writes only header and encoder" — the emptiness
+            // `planning/AGENT-CONSTRAINTS.md` warns against asserting, since
+            // `[STREAM]` blocks are exactly what `set_metadata`/`write_header`
+            // (CL-16, gap 1) now write once a stream exists. Assert the
+            // mapping instead: one `[STREAM]` per `add_stream` call, in
+            // order, still empty of keys when `set_metadata` is never called
+            // (every pre-existing caller).
             let sink = MemorySink::new();
             let shared = sink.shared();
             let mut m = FfmetadataMuxer::new(Box::new(sink)).unwrap();
@@ -659,7 +692,33 @@ mod tests {
             m.write_header().unwrap();
             m.write_trailer().unwrap();
             let text = String::from_utf8(shared.snapshot()).unwrap();
-            assert_eq!(text, ";FFMETADATA1\nencoder=vaco\n");
+            assert_eq!(text, ";FFMETADATA1\nencoder=vaco\n[STREAM]\n[STREAM]\n");
+        }
+
+        #[test]
+        fn set_metadata_populates_the_stream_blocks_it_is_given() {
+            let sink = MemorySink::new();
+            let shared = sink.shared();
+            let mut m = FfmetadataMuxer::new(Box::new(sink)).unwrap();
+            m.add_stream(&CodecParameters::new(MediaType::Video))
+                .unwrap();
+            m.add_stream(&CodecParameters::new(MediaType::Audio))
+                .unwrap();
+            let meta = MuxMetadata {
+                stream_tags: vec![
+                    vec![("language".to_owned(), "eng".to_owned())],
+                    Vec::new(),
+                ],
+                ..MuxMetadata::default()
+            };
+            m.set_metadata(&meta).unwrap();
+            m.write_header().unwrap();
+            m.write_trailer().unwrap();
+            let text = String::from_utf8(shared.snapshot()).unwrap();
+            assert_eq!(
+                text,
+                ";FFMETADATA1\nencoder=vaco\n[STREAM]\nlanguage=eng\n[STREAM]\n"
+            );
         }
 
         #[test]

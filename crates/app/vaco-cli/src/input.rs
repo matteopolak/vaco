@@ -63,6 +63,14 @@ pub struct OpenRequest<'a> {
     pub whitelist: Option<&'a [&'a str]>,
     /// `-protocol_blacklist`.
     pub blacklist: Option<&'a [&'a str]>,
+    /// FW-11: `-probesize`, `-analyzeduration`, `-fflags` and the rest of the
+    /// generic `AVFormatContext` options this input group named
+    /// ([`crate::cli::InputSpec::format_opts`]). `None` (every pre-existing
+    /// caller, including this module's own tests) means
+    /// [`FormatOptions::default`]. Fed to [`Probe`] and [`Discovery`] below —
+    /// `Discovery::run` is what actually reaches
+    /// [`vaco_format_core::Demuxer::reconfigure`] with it (gap 4).
+    pub format_opts: Option<&'a FormatOptions>,
 }
 
 /// Open, probe and wrap one input.
@@ -84,8 +92,14 @@ pub fn open(index: u32, url: &str, req: &OpenRequest<'_>) -> Result<InputFile> {
     let env = build_env(&protocols, &cancel, req);
     let opener = |u: &str| -> Result<Box<dyn MediaSource>> { open_source(&protocols, &env, u) };
 
-    let format_opts = FormatOptions::default();
-    let probe = Probe::new(vaco_registry::demuxers(), &format_opts);
+    let owned_default;
+    let format_opts: &FormatOptions = if let Some(o) = req.format_opts {
+        o
+    } else {
+        owned_default = FormatOptions::default();
+        &owned_default
+    };
+    let probe = Probe::new(vaco_registry::demuxers(), format_opts);
 
     let desc: DemuxerDesc = if let Some(name) = req.force_format {
         *probe.force(name)?.desc
@@ -96,7 +110,7 @@ pub fn open(index: u32, url: &str, req: &OpenRequest<'_>) -> Result<InputFile> {
 
     let inner = (desc.open)(opener(url)?, &vaco_registry::Parsers)?;
 
-    let mut discovery = Discovery::new(inner, desc.flags, &format_opts);
+    let mut discovery = Discovery::new(inner, desc.flags, format_opts);
     // A failed discovery pass is not a failed open: it keeps whatever it
     // learned, and `read_header` already produced a usable stream list.
     let _ = discovery.run(&vaco_registry::Parsers);

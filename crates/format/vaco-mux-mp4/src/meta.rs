@@ -3,11 +3,64 @@
 //!
 //! Box bytes come from [`vaco_format_isom::writer`]; this module only decides
 //! which boxes to build from [`MuxOptions`].
+//!
+//! # Reaching this from `Muxer::set_metadata` (M30, gap 1)
+//!
+//! [`MuxOptions::tags`]/`cover_art`/`chapters` are this crate's own shapes —
+//! a fourcc-keyed tag list, not the generic string-keyed
+//! [`vaco_format_core::metadata::MuxMetadata`] every muxer in the workspace
+//! now receives. [`itunes_fourcc`] is the one measured against `ffmpeg 8.1`
+//! (`ffmpeg -metadata title=... -metadata artist=... ... -f mp4 -`,
+//! byte-inspected for which `ilst` child each key produced): [`crate::mux`]'s
+//! `Muxer::set_metadata` override calls it once per `MuxMetadata::tags` entry
+//! and drops a key with no mapping — MP4's `ilst` has no free-text fallback
+//! atom this crate writes (`----` `mean`/`name`/`data` triples exist in the
+//! format but are not implemented here; a key with no [`itunes_fourcc`] entry
+//! is silently omitted rather than guessed at).
 
 use vaco_format_isom::fourcc::FourCc;
+use vaco_format_isom::lang::Language;
 use vaco_format_isom::writer;
 
 use crate::options::MuxOptions;
+
+/// Map a generic `-metadata`-style key to the iTunes-style `ilst` child atom
+/// it becomes, case-insensitively. Measured against `ffmpeg 8.1`: `copyright`
+/// and `description` map to plain `cprt`/`desc` (no `0xA9` lead byte), unlike
+/// every other text key here.
+#[must_use]
+pub fn itunes_fourcc(key: &str) -> Option<[u8; 4]> {
+    let lower = key.to_ascii_lowercase();
+    Some(match lower.as_str() {
+        "title" => *b"\xa9nam",
+        "artist" => *b"\xa9ART",
+        "album_artist" => *b"aART",
+        "album" => *b"\xa9alb",
+        "comment" => *b"\xa9cmt",
+        "genre" => *b"\xa9gen",
+        "date" | "year" => *b"\xa9day",
+        "composer" => *b"\xa9wrt",
+        "copyright" => *b"cprt",
+        "description" => *b"desc",
+        "encoder" => *b"\xa9too",
+        _ => return None,
+    })
+}
+
+/// Parse a lowercase three-letter ISO-639-2/T code into [`Language`],
+/// or `None` for anything else (an empty string, a BCP-47 tag with a
+/// region subtag, "und") — `set_metadata` leaves the track's language
+/// unchanged in every one of those cases rather than writing a bogus code.
+#[must_use]
+pub fn parse_iso639(s: &str) -> Option<Language> {
+    let bytes = s.as_bytes();
+    let [a, b, c] = <[u8; 3]>::try_from(bytes).ok()?;
+    if [a, b, c].iter().all(u8::is_ascii_lowercase) {
+        Some(Language::Iso639([a, b, c]))
+    } else {
+        None
+    }
+}
 
 /// `udta`, built from `opts.tags`/`opts.cover_art`/`opts.chapters`. `None`
 /// when there is nothing to write — an empty `udta` is legal but pointless.

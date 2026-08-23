@@ -331,6 +331,18 @@ impl Muxer for TallyingMuxer {
     fn write_flush(&mut self) -> Result<()> {
         self.inner.write_flush()
     }
+
+    fn set_metadata(&mut self, metadata: &vaco_format_core::metadata::MuxMetadata) -> Result<()> {
+        // Not overriding this would silently fall through to `Muxer::set_metadata`'s
+        // own no-op default *on this wrapper*, dropping every `-metadata` on
+        // the floor without an error — `TallyingMuxer` wraps the container
+        // that actually needs to see it (CL-16, gap 1).
+        self.inner.set_metadata(metadata)
+    }
+
+    fn set_option(&mut self, name: &str, value: &str) -> Result<()> {
+        self.inner.set_option(name, value)
+    }
 }
 
 #[cfg(test)]

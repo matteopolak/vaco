@@ -483,3 +483,134 @@ fn nero_chapters_round_trip() {
         .collect();
     assert_eq!(titles, vec!["Intro", "Chapter Two"]);
 }
+
+/// [`Muxer::set_metadata`] (M30, gap 1) is the path `vaco-cli`'s `-metadata`
+/// actually drives — [`itunes_style_tags_round_trip`] and
+/// [`nero_chapters_round_trip`] above exercise the same boxes through
+/// [`MovMuxer::with_options`] instead, which is a different, lower-level
+/// entry point. This is the "best test" the CL-16 brief asks for: set
+/// metadata with the generic, container-agnostic
+/// [`vaco_format_core::metadata::MuxMetadata`], mux, and read every bit of it
+/// back through `vaco-demux-mp4`.
+#[test]
+fn set_metadata_round_trips_through_the_demuxer() {
+    use vaco_format_core::Chapter;
+    use vaco_format_core::metadata::{MuxAttachment, MuxMetadata};
+
+    let sink = SharedDynBuf::with_limits(Limits::permissive());
+    let mut mux = MovMuxer::new(Box::new(sink.clone()) as Box<dyn MediaSink>).unwrap();
+    let idx = mux.add_stream(&h264_params()).unwrap();
+    assert_eq!(idx, 0);
+    mux.init().unwrap();
+
+    let mut meta = MuxMetadata {
+        tags: vec![
+            ("title".to_owned(), "Hello Title".to_owned()),
+            ("artist".to_owned(), "Some Artist".to_owned()),
+            // No `itunes_fourcc` mapping: dropped rather than guessed at.
+            ("no_such_mapping".to_owned(), "ignored".to_owned()),
+        ],
+        chapters: vec![Chapter {
+            id: 0,
+            time_base: Rational::new(1, 1),
+            start: Timestamp::new(0),
+            end: Timestamp::new(5),
+            metadata: vec![("title".to_owned(), "Intro".to_owned())],
+        }],
+        attachments: vec![MuxAttachment {
+            filename: "cover.png".to_owned(),
+            mime_type: "image/png".to_owned(),
+            description: String::new(),
+            data: vec![0x89, b'P', b'N', b'G', 1, 2, 3, 4],
+        }],
+        ..MuxMetadata::default()
+    };
+    meta.stream_tags = vec![vec![("language".to_owned(), "eng".to_owned())]];
+    mux.set_metadata(&meta).unwrap();
+
+    mux.write_header().unwrap();
+    for i in 0..2i64 {
+        let payload = nal_payload(&[0x65, i as u8, 0xAA, 0xBB, 0xCC]);
+        mux.write_packet(&packet(idx, i * 100, true, &payload))
+            .unwrap();
+    }
+    mux.write_trailer().unwrap();
+
+    let mut demux = open_demux(sink.snapshot());
+
+    let title = demux
+        .metadata()
+        .iter()
+        .find(|(k, _)| k == "title")
+        .map(|(_, v)| v.clone());
+    assert_eq!(title.as_deref(), Some("Hello Title"));
+    let artist = demux
+        .metadata()
+        .iter()
+        .find(|(k, _)| k == "artist")
+        .map(|(_, v)| v.clone());
+    assert_eq!(artist.as_deref(), Some("Some Artist"));
+    assert!(
+        demux.metadata().iter().all(|(k, _)| k != "no_such_mapping"),
+        "an unmapped key must not silently invent an ilst atom"
+    );
+
+    let chapter_titles: Vec<&str> = demux
+        .chapters()
+        .iter()
+        .flat_map(|c| c.metadata.iter())
+        .filter(|(k, _)| k == "title")
+        .map(|(_, v)| v.as_str())
+        .collect();
+    assert_eq!(chapter_titles, vec!["Intro"]);
+
+    let stream_language = demux.streams()[0]
+        .metadata
+        .iter()
+        .find(|(k, _)| k == "language")
+        .map(|(_, v)| v.clone());
+    assert_eq!(stream_language.as_deref(), Some("eng"));
+
+    // 2 video samples plus one packet for the `covr` cover image, which
+    // `vaco-demux-mp4` exposes as its own `ATTACHED_PIC` stream (measured:
+    // see that crate's `cover_stream`) rather than folding into `metadata`.
+    let mut count = 0;
+    while demux.read_packet().is_ok() {
+        count += 1;
+    }
+    assert_eq!(count, 3);
+}
+
+/// `vaco-cli`'s scheduler drives a raw `dyn Muxer` (per
+/// `planning/INTERFACE-GAPS.md`'s `MuxWork` note) and cannot guarantee
+/// `set_metadata` runs after `add_stream`, so `MovMuxer` must not depend on
+/// that order either — this is the MP4 analogue of the same test in
+/// `vaco-mux-matroska`.
+#[test]
+fn set_metadata_before_add_stream_still_resolves_per_stream_language() {
+    use vaco_format_core::metadata::MuxMetadata;
+
+    let sink = SharedDynBuf::with_limits(Limits::permissive());
+    let mut mux = MovMuxer::new(Box::new(sink.clone()) as Box<dyn MediaSink>).unwrap();
+
+    let meta = MuxMetadata {
+        stream_tags: vec![vec![("language".to_owned(), "fra".to_owned())]],
+        ..MuxMetadata::default()
+    };
+    mux.set_metadata(&meta).unwrap();
+
+    let idx = mux.add_stream(&h264_params()).unwrap();
+    mux.init().unwrap();
+    mux.write_header().unwrap();
+    mux.write_packet(&packet(idx, 0, true, &nal_payload(&[0x65])))
+        .unwrap();
+    mux.write_trailer().unwrap();
+
+    let demux = open_demux(sink.snapshot());
+    let language = demux.streams()[0]
+        .metadata
+        .iter()
+        .find(|(k, _)| k == "language")
+        .map(|(_, v)| v.clone());
+    assert_eq!(language.as_deref(), Some("fra"));
+}

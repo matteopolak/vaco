@@ -489,26 +489,38 @@ Findings that belong to other crates and were **not** worked around here.
 6. **`vaco-protocol-file` and `vaco-protocol-core` ship no `vaco-component.toml`**,
    so `vaco_registry::protocol_registry()` is empty and every tool registers
    `file:` by hand. Also already reported by `vaco-probe`.
-7. **`MuxerDesc::open` carries no options** (`fn(Box<dyn MediaSink>) ->
-   Result<Box<dyn Muxer>>`), so `-movflags`, `-fflags` and every other
-   per-muxer option that changes how a container should be *constructed*
-   cannot reach a muxer through the registry path at all — there is nowhere in
-   the signature to put them. `vaco-mux-mp4` already works around this with a
-   `MovMuxer::with_options` constructor the registry cannot call, which means
-   fragmented-MP4 output is implemented and unreachable from this crate.
-   Unreachable today, concretely: `-movflags` (any value), `-fflags` values a
-   muxer would otherwise consult (`bitexact` reaches `MuxWriter` already
-   through `FormatOptions`, but nothing here sets container-*construction*
-   flags), and any option a future `vaco-mux-*` crate declares along the same
-   lines. Already reported by `vaco-mux-mp4`; repeated here because it is now
-   the CLI's own blocker too, not just that crate's — `exec::open_output` is
-   the call site that would grow an options parameter.
-8. **`Muxer` has no metadata channel**, so `-metadata`, chapters and
-   attachments have nowhere to go even once the CLI parses them — CL-16 (#207)
-   is entirely blocked on this, not on anything in this crate. `add_stream`
-   takes only `CodecParameters`; nothing in the trait carries a title, a tag
-   list or a chapter table. Already reported by `vaco-mux-matroska`; repeated
-   for the same reason as #7.
+7. **RESOLVED (2026-08-23), still worth recording why it took two steps.**
+   `MuxerDesc::open` carries no options, so `-movflags`/`-fflags`-shaped
+   per-muxer construction options could not reach a muxer through the
+   registry. `planning/INTERFACE-GAPS.md` gap 5 substituted
+   `Muxer::set_option(&mut self, name, value)` (mirroring
+   `vaco_opts::OptionsExt::set_str`'s contract) rather than widening
+   `MuxerDesc::open`'s signature, which turned out not to be additive on this
+   workspace's ~90 already-declared descriptors. This crate does not yet call
+   `set_option` from `exec::open_output` for a private per-muxer option (no
+   `-movflags` CLI wiring landed in this wave); it does call
+   `Muxer::set_metadata` (see #8) and pass the generic
+   `vaco_format_core::FormatOptions` table through
+   `PipelineSpec::add_output_with` — the *shared* option surface FW-11 covers.
+   A caller-facing `-movflags`/`-id3v2_version`-class per-muxer option is
+   still unimplemented in this crate, tracked separately from CL-16/FW-11.
+8. **RESOLVED (CL-16, this wave).** `Muxer` had no metadata channel, so
+   `-metadata`/chapters/attachments had nowhere to go even once parsed.
+   `planning/INTERFACE-GAPS.md` gap 1 added
+   `vaco_format_core::metadata::MuxMetadata` and `Muxer::set_metadata`.
+   `exec::metadata_of` resolves `-metadata`/`-metadata:s:…` against an
+   output's own stream list; `exec::resolve_mapped_metadata` finishes it with
+   `-map_chapters`/`-map_metadata`'s source input; `run_pipeline` calls
+   `set_metadata` on the freshly opened muxer *before* handing it to
+   `PipelineSpec::add_output_with`, since `vaco-sched`'s `MuxWork` drives a
+   raw `dyn Muxer` with no way to reach back into it afterward. **Not
+   resolved**, and reported fresh rather than worked around: `-disposition`
+   and `-program` parse (`vaco-cli-core`'s option tables already declare
+   them) but have no channel to write through — `Muxer::add_stream` takes
+   only `CodecParameters`, which carries neither a disposition bit nor a
+   program membership, and `MuxMetadata` (gap 1's fix) does not cover either.
+   Closing this needs the same shape of addition gap 1 was, scoped to
+   disposition/program specifically.
 9. **`MuxerDesc` has no `flags` field**, unlike `DemuxerDesc`, which explicitly
    carries one "so a caller composing `Discovery` can reach them through the
    registry" (that crate's own doc comment). The same reasoning applies on the
@@ -527,7 +539,7 @@ down is a decision and one that is not is a surprise.
 | Deferred | Issue |
 |---|---|
 | `-h <kind>=<name>` private-options blocks for `mp4`/`mpegts` (blocked on an options-schema hook in other crates); `vaco-probe`'s own `-h`/listing dispatch (a different crate) | CL-04 |
-| Metadata / disposition / chapter / program mapping | CL-16 |
+| `-metadata`/`-map_metadata`/`-map_chapters` implemented; `-disposition`/`-program` parse but have no `Muxer` channel to write through (see "Reported upstream" #8) | CL-16 |
 | `-progress`, `-stats`, `-report` | CL-17 |
 | Decoder and encoder nodes, `-frames`, `-pass` | CL-19 |
 | Simple filtergraph binding, `-s`/`-aspect`/`-pix_fmt` | CL-20 |

@@ -151,6 +151,7 @@ where
             force_format: spec.format.as_deref(),
             whitelist: white.as_deref(),
             blacklist: black.as_deref(),
+            format_opts: Some(&spec.format_opts),
         };
         let opened = input::open(spec.index, &spec.url, &req).map_err(|e| {
             let av = AvError::of(&e);

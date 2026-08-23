@@ -26,6 +26,7 @@ use std::io::Write as _;
 
 use vaco_demux_matroska::ebml::schema as el;
 use vaco_demux_matroska::synth::{self, SegmentSize};
+use vaco_format_core::Demuxer as _;
 
 use crate::{ExitCode, run};
 
@@ -675,6 +676,69 @@ fn a_protocol_whitelist_that_excludes_file_blocks_the_input() {
 }
 
 // ---------------------------------------------------------------- properties
+
+/// CL-16, end to end: `-metadata`/`-metadata:s:v:0` on a real remux, read
+/// back through `vaco_demux_matroska::MatroskaDemuxer` — the same demuxer
+/// `vaco-probe` uses via the registry, so this is that binary's own read
+/// path, exercised in-process rather than by shelling out to it. The "best
+/// test" the CL-16 brief asks for, at the CLI layer rather than the muxer
+/// unit-test layer `vaco-mux-matroska`/`vaco-mux-mp4` already cover.
+#[test]
+fn metadata_options_reach_a_real_remuxed_file() {
+    let f = fixture(&four_track_file());
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out_path = dir.path().join("out.mkv");
+    let out_str = out_path.to_str().expect("utf8 tempdir path").to_owned();
+
+    // The fixture auto-selects video track #0 and audio track #2 (see
+    // `four_track_file`'s docs), which land at output positions `v:0`/`a:0`.
+    let r = go(&[
+        "-i",
+        &f.path,
+        "-metadata",
+        "title=Integration Title",
+        "-metadata:s:v:0",
+        "language=eng",
+        "-c",
+        "copy",
+        "-f",
+        "matroska",
+        &out_str,
+    ]);
+    assert_eq!(r.code, ExitCode::OK, "{}", r.message());
+
+    let bytes = std::fs::read(&out_path).expect("read the remuxed file back");
+    let src: Box<dyn vaco_io::MediaSource> = Box::new(vaco_io::MemorySource::new(bytes));
+    let demux = vaco_demux_matroska::MatroskaDemuxer::open(
+        src,
+        &vaco_format_core::discovery::NoParsers,
+        &vaco_format_core::FormatOptions::default(),
+    )
+    .expect("the remuxed file must be a valid matroska file");
+
+    assert!(
+        demux
+            .metadata()
+            .iter()
+            .any(|(k, v)| k == "title" && v == "Integration Title"),
+        "global -metadata must reach the file: {:?}",
+        demux.metadata()
+    );
+
+    let video = demux
+        .streams()
+        .iter()
+        .find(|s| s.params.media_type == Some(vaco_core::MediaType::Video))
+        .expect("the copied video stream");
+    assert!(
+        video
+            .metadata
+            .iter()
+            .any(|(k, v)| k == "language" && v == "eng"),
+        "-metadata:s:v:0 must reach exactly the video track: {:?}",
+        video.metadata
+    );
+}
 
 #[test]
 fn every_run_terminates_and_never_panics_on_arbitrary_argv() {
