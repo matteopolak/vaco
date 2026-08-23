@@ -5844,6 +5844,19 @@ pub static COMPONENTS: &[crate::Component] = &[
     },
     crate::Component {
         kind: crate::Kind::BitstreamFilter,
+        name: "aac_adtstoasc",
+        long_name: Some(
+            "Convert MPEG-2/4 AAC ADTS to an MPEG-4 Audio Specific Configuration bitstream",
+        ),
+        krate: "vaco-bsf-audio",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::BitstreamFilter,
         name: "av1_frame_merge",
         long_name: Some("Merge AV1 OBU frames into temporal units"),
         krate: "vaco-bsf-av1",
@@ -5957,6 +5970,28 @@ pub static COMPONENTS: &[crate::Component] = &[
         name: "null",
         long_name: Some("Null bitstream filter"),
         krate: "vaco-bsf-generic",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::BitstreamFilter,
+        name: "opus_metadata",
+        long_name: Some("Modify metadata embedded in an Opus stream"),
+        krate: "vaco-bsf-audio",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::BitstreamFilter,
+        name: "pcm_rechunk",
+        long_name: Some("PCM packet reformatting"),
+        krate: "vaco-bsf-audio",
         feature: None,
         media: None,
         codec: None,
@@ -6819,6 +6854,7 @@ pub static PROTOCOLS: &[&::vaco_protocol_core::ProtocolDesc] = &[
 // silently is not there. Taking a reference needs no trait bound, which is
 // what makes this work without knowing the type.
 const _: () = {
+    let _ = &::vaco_bsf_audio::aac_adtstoasc::DESC;
     let _ = &::vaco_bsf_av1::frame_merge::DESC;
     let _ = &::vaco_bsf_av1::frame_split::DESC;
     let _ = &::vaco_bsf_av1::metadata::DESC;
@@ -6830,6 +6866,8 @@ const _: () = {
     let _ = &::vaco_bsf_h2645::hevc_mp4toannexb::DESC;
     let _ = &::vaco_bsf_generic::noise::DESC;
     let _ = &::vaco_bsf_generic::null::DESC;
+    let _ = &::vaco_bsf_audio::opus_metadata::DESC;
+    let _ = &::vaco_bsf_audio::pcm_rechunk::DESC;
     let _ = &::vaco_bsf_generic::remove_extra::DESC;
     let _ = &::vaco_bsf_generic::setts::DESC;
     let _ = &::vaco_bsf_generic::trace_headers::DESC;

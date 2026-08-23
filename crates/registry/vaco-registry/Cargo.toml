@@ -108,6 +108,9 @@ default = ["demux-aiff", "demux-asf", "demux-asf-o", "demux-au", "demux-avi", "d
 "subtitle-bitmap" = ["dep:vaco-subtitle-bitmap"]
 "subtitle-text" = ["dep:vaco-subtitle-text"]
 
+[dependencies.vaco-bsf-audio]
+path = "../../format/vaco-bsf-audio"
+
 [dependencies.vaco-bsf-av1]
 path = "../../format/vaco-bsf-av1"
 

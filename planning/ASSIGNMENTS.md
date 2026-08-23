@@ -140,9 +140,9 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-filter-achannel | 5 | #482 | agent:achannel | done | 2026-08-23 | 2026-08-23 | T3 channel, layout and mixing filters (~14) |
 | vaco-filter-ameasure | 5 | #483 | agent:ameasure | done | 2026-08-23 | 2026-08-23 | NAME DIVERGES: plan 16 §4.3 calls this vaco-filter-aanalysis |
 | vaco-demux-mpegts | 4 | #632 | agent:tspkt | done | 2026-08-23 | 2026-08-23 | part 2 residual: PES_packet_length==0 release timing, characterised not root-caused |
-| vaco-bsf-core | 3 | #349 | agent:extradata | assigned | 2026-08-23 |  | M6 stage is reachable but inert until this exists |
-| vaco-bsf-generic | 3 | #349 | agent:extradata | assigned | 2026-08-23 |  | extract_extradata closes CONFORMANCE-FINDINGS 26 |
-| vaco-bsf-h2645 | 3 | #350,#351,#352 | agent:extradata | assigned | 2026-08-23 |  | *_mp4toannexb; dedups vaco-mux-avi/mpegts converters |
+| vaco-bsf-core | 3 | #349 | agent:extradata | done | 2026-08-23 | 2026-08-23 | M6 stage is reachable but inert until this exists |
+| vaco-bsf-generic | 3 | #349 | agent:extradata | done | 2026-08-23 | 2026-08-23 | extract_extradata closes CONFORMANCE-FINDINGS 26 |
+| vaco-bsf-h2645 | 3 | #350,#351,#352 | agent:extradata | done | 2026-08-23 | 2026-08-23 | *_mp4toannexb; dedups vaco-mux-avi/mpegts converters |
 | vaco-filter-temporal | 5 | #475 | agent:temporal | done | 2026-08-23 | 2026-08-23 | plan 16 §4.3 row; fps already taken by vaco-filter-video-format |
 | vaco-filter-convolve | 5 | #468 | agent:blur2 | done | 2026-08-23 | 2026-08-23 | remainder of the plan row: morpho inflate deflate edgedetect blurdetect convolve deconvolve corr xcorrelate |
 | vaco-filter-core | 5 | — | agent:adapt | done | 2026-08-23 | 2026-08-23 | INTERFACE-GAPS 10: Paired + Fanout adapters, then the multi-input filters three agents declined |
@@ -162,3 +162,7 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-filter-audio-eq | 5 | — | agent:audiotidy | assigned | 2026-08-23 |  | rename to vaco-filter-aeq |
 | vaco-filter-audio-dynamics | 5 | — | agent:audiotidy | assigned | 2026-08-23 |  | rename to vaco-filter-adynamics |
 | vaco-filter-ameasure | 5 | — | agent:audiotidy | assigned | 2026-08-23 |  | rename to vaco-filter-aanalysis |
+| vaco-bsf-av1 | 3 | #351 | agent:extradata | done | 2026-08-23 | 2026-08-23 | av1_frame_split/merge, av1_metadata |
+| vaco-bsf-vpx | 3 | #351 | agent:extradata | done | 2026-08-23 | 2026-08-23 | VP9 only — no VP8 bsf exists in the reference |
+| vaco-bsf-audio | 3 | #352 | agent:extradata | done | 2026-08-23 | 2026-08-23 | aac_adtstoasc, opus_metadata, pcm_rechunk |
+| vaco-format-nalu | 4 | — | agent:extradata | done | 2026-08-23 | 2026-08-23 | now owns the one extradata-assembly rule (D19) |

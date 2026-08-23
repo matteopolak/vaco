@@ -1576,6 +1576,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-bsf-audio"
+version = "0.1.0"
+dependencies = [
+ "vaco-bsf-core",
+ "vaco-chlayout",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-limits",
+ "vaco-packet",
+ "vaco-pool",
+]
+
+[[package]]
 name = "vaco-bsf-av1"
 version = "0.1.0"
 dependencies = [
@@ -2044,6 +2057,7 @@ dependencies = [
  "tracing",
  "vaco-chlayout",
  "vaco-core",
+ "vaco-filter-adsp",
  "vaco-filter-core",
  "vaco-filter-framesync",
  "vaco-filter-graph",
@@ -2109,6 +2123,7 @@ dependencies = [
  "tracing",
  "vaco-chlayout",
  "vaco-core",
+ "vaco-filter-adsp",
  "vaco-filter-core",
  "vaco-filter-framesync",
  "vaco-filter-graph",
@@ -3166,6 +3181,7 @@ dependencies = [
 name = "vaco-registry"
 version = "0.1.0"
 dependencies = [
+ "vaco-bsf-audio",
  "vaco-bsf-av1",
  "vaco-bsf-core",
  "vaco-bsf-generic",
