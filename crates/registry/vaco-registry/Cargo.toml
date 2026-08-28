@@ -39,7 +39,7 @@ layer = 6
 # `default = false` in its own fragment; nothing here is hand-maintained.
 
 [features]
-default = ["codec-ac3", "codec-image-simple", "codec-jpeg", "codec-mpegaudio", "codec-pnm", "codec-qoi", "codec-subtitle-bitmap", "demux-adx", "demux-aiff", "demux-amr", "demux-amrnb", "demux-amrwb", "demux-aptx", "demux-aptx-hd", "demux-asf", "demux-asf-o", "demux-au", "demux-avi", "demux-caf", "demux-cdg", "demux-dash", "demux-dfpwm", "demux-dv", "demux-ffmetadata", "demux-flic", "demux-flv", "demux-g722", "demux-g723-1", "demux-g726", "demux-g726le", "demux-g728", "demux-g729", "demux-gsm", "demux-hls", "demux-image2", "demux-ircam", "demux-ivf", "demux-matroska", "demux-mp3", "demux-mp4", "demux-mpegps", "demux-mpegts", "demux-mpegtsraw", "demux-mpjpeg", "demux-mxf", "demux-nistsphere", "demux-nut", "demux-ogg", "demux-pvf", "demux-raw", "demux-roq", "demux-rso", "demux-sbc", "demux-sln", "demux-sox", "demux-spdif", "demux-swf", "demux-tta", "demux-voc", "demux-w64", "demux-wav", "demux-wv", "mux-aiff", "mux-asf", "mux-asf-stream", "mux-au", "mux-avi", "mux-caf", "mux-dash", "mux-dv", "mux-dvd", "mux-flv", "mux-hls", "mux-image2", "mux-ircam", "mux-ivf", "mux-matroska", "mux-mp3", "mux-mp4", "mux-mpeg", "mux-mpegts", "mux-mpjpeg", "mux-nut", "mux-ogg", "mux-raw", "mux-rso", "mux-rtp", "mux-rtp-mpegts", "mux-sox", "mux-spdif", "mux-svcd", "mux-swf", "mux-vcd", "mux-vob", "mux-voc", "mux-w64", "mux-wav", "parse-aac", "parse-av1", "parse-h264", "parse-hevc", "parse-image", "parse-mpegvideo", "parse-opus", "parse-vpx", "subtitle-bitmap", "subtitle-text"]
+default = ["codec-ac3", "codec-image-simple", "codec-jpeg", "codec-mpegaudio", "codec-pnm", "codec-qoi", "codec-subtitle-bitmap", "codec-vp8", "demux-adx", "demux-aiff", "demux-amr", "demux-amrnb", "demux-amrwb", "demux-aptx", "demux-aptx-hd", "demux-asf", "demux-asf-o", "demux-au", "demux-avi", "demux-bink", "demux-caf", "demux-cdg", "demux-dash", "demux-dfpwm", "demux-dv", "demux-ffmetadata", "demux-flic", "demux-flv", "demux-g722", "demux-g723-1", "demux-g726", "demux-g726le", "demux-g728", "demux-g729", "demux-gsm", "demux-hls", "demux-image2", "demux-ircam", "demux-ivf", "demux-matroska", "demux-mp3", "demux-mp4", "demux-mpegps", "demux-mpegts", "demux-mpegtsraw", "demux-mpjpeg", "demux-mxf", "demux-nistsphere", "demux-nut", "demux-ogg", "demux-pvf", "demux-raw", "demux-roq", "demux-rso", "demux-sbc", "demux-sln", "demux-smk", "demux-sox", "demux-spdif", "demux-swf", "demux-tta", "demux-voc", "demux-w64", "demux-wav", "demux-wv", "mux-aiff", "mux-asf", "mux-asf-stream", "mux-au", "mux-avi", "mux-caf", "mux-dash", "mux-dv", "mux-dvd", "mux-flv", "mux-hls", "mux-image2", "mux-ircam", "mux-ivf", "mux-matroska", "mux-mp3", "mux-mp4", "mux-mpeg", "mux-mpegts", "mux-mpjpeg", "mux-nut", "mux-ogg", "mux-raw", "mux-rso", "mux-rtp", "mux-rtp-mpegts", "mux-sox", "mux-spdif", "mux-svcd", "mux-swf", "mux-vcd", "mux-vob", "mux-voc", "mux-w64", "mux-wav", "parse-aac", "parse-av1", "parse-h264", "parse-hevc", "parse-image", "parse-mpegvideo", "parse-opus", "parse-vpx", "subtitle-bitmap", "subtitle-text"]
 "codec-ac3" = ["dep:vaco-codec-ac3"]
 "codec-image-simple" = ["dep:vaco-codec-image-simple"]
 "codec-jpeg" = ["dep:vaco-codec-jpeg"]
@@ -47,6 +47,7 @@ default = ["codec-ac3", "codec-image-simple", "codec-jpeg", "codec-mpegaudio", "
 "codec-pnm" = ["dep:vaco-codec-pnm"]
 "codec-qoi" = ["dep:vaco-codec-qoi"]
 "codec-subtitle-bitmap" = ["dep:vaco-codec-subtitle-bitmap"]
+"codec-vp8" = ["dep:vaco-codec-vp8"]
 "demux-adx" = ["dep:vaco-format-misc-audio"]
 "demux-aiff" = ["dep:vaco-format-audio-simple"]
 "demux-amr" = ["dep:vaco-format-misc-audio"]
@@ -58,6 +59,7 @@ default = ["codec-ac3", "codec-image-simple", "codec-jpeg", "codec-mpegaudio", "
 "demux-asf-o" = ["dep:vaco-demux-asf"]
 "demux-au" = ["dep:vaco-format-audio-simple"]
 "demux-avi" = ["dep:vaco-demux-avi"]
+"demux-bink" = ["dep:vaco-format-misc"]
 "demux-caf" = ["dep:vaco-format-audio-simple"]
 "demux-cdg" = ["dep:vaco-format-misc"]
 "demux-dash" = ["dep:vaco-demux-dash"]
@@ -97,6 +99,7 @@ default = ["codec-ac3", "codec-image-simple", "codec-jpeg", "codec-mpegaudio", "
 "demux-sbc" = ["dep:vaco-format-misc-audio"]
 "demux-sdp" = ["dep:vaco-demux-rtsp"]
 "demux-sln" = ["dep:vaco-format-misc-audio"]
+"demux-smk" = ["dep:vaco-format-misc"]
 "demux-sox" = ["dep:vaco-format-audio-simple"]
 "demux-spdif" = ["dep:vaco-format-spdif"]
 "demux-swf" = ["dep:vaco-format-swf"]
@@ -205,6 +208,10 @@ optional = true
 
 [dependencies.vaco-codec-subtitle-bitmap]
 path = "../../codec/vaco-codec-subtitle-bitmap"
+optional = true
+
+[dependencies.vaco-codec-vp8]
+path = "../../codec/vaco-codec-vp8"
 optional = true
 
 [dependencies.vaco-demux-asf]

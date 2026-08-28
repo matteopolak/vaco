@@ -1940,6 +1940,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-codec-msac"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-bitstream",
+ "vaco-core",
+]
+
+[[package]]
 name = "vaco-codec-pnm"
 version = "0.1.0"
 dependencies = [
@@ -1998,6 +2007,23 @@ version = "0.1.0"
 dependencies = [
  "proptest",
  "quick-xml",
+]
+
+[[package]]
+name = "vaco-codec-vp8"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-bitstream",
+ "vaco-codec-core",
+ "vaco-codec-msac",
+ "vaco-core",
+ "vaco-frame",
+ "vaco-limits",
+ "vaco-packet",
+ "vaco-parse-vpx",
+ "vaco-pixfmt",
+ "vaco-pool",
 ]
 
 [[package]]
@@ -3738,6 +3764,7 @@ dependencies = [
  "vaco-codec-pnm",
  "vaco-codec-qoi",
  "vaco-codec-subtitle-bitmap",
+ "vaco-codec-vp8",
  "vaco-core",
  "vaco-demux-asf",
  "vaco-demux-avi",

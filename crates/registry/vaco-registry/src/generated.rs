@@ -220,6 +220,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["avs3"],
         mime_types: &[],
     },
+    #[cfg(feature = "demux-bink")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "bink",
+        long_name: Some("Bink"),
+        krate: "vaco-format-misc",
+        feature: Some("demux-bink"),
+        media: None,
+        codec: None,
+        extensions: &["bik", "bk2"],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-raw")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -1567,6 +1579,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["sln"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-smk")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "smk",
+        long_name: Some("Smacker"),
+        krate: "vaco-format-misc",
+        feature: Some("demux-smk"),
+        media: None,
+        codec: None,
+        extensions: &["smk"],
         mime_types: &[],
     },
     #[cfg(feature = "demux-sox")]
@@ -3587,6 +3611,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         feature: Some("codec-image-simple"),
         media: Some("video"),
         codec: Some("targa"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-vp8")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "vp8",
+        long_name: Some("On2 VP8 (RFC 6386)"),
+        krate: "vaco-codec-vp8",
+        feature: Some("codec-vp8"),
+        media: Some("video"),
+        codec: Some("vp8"),
         extensions: &[],
         mime_types: &[],
     },
@@ -7802,6 +7838,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_raw::bitstream::DEMUXER_AVS2,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::bitstream::DEMUXER_AVS3,
+    #[cfg(feature = "demux-bink")]
+    &::vaco_format_misc::bink::DEMUXER,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::bitstream::DEMUXER_BIT,
     #[cfg(feature = "demux-raw")]
@@ -8023,6 +8061,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_image2::pipe::DEMUXER_SGI,
     #[cfg(feature = "demux-sln")]
     &::vaco_format_misc_audio::rawcodec::DEMUXER_SLN,
+    #[cfg(feature = "demux-smk")]
+    &::vaco_format_misc::smk::DEMUXER,
     #[cfg(feature = "demux-sox")]
     &::vaco_format_audio_simple::sox::DEMUXER,
     #[cfg(feature = "demux-spdif")]
@@ -8355,6 +8395,8 @@ pub static DECODERS: &[&::vaco_codec_core::DecoderDesc] = &[
     &::vaco_codec_image_simple::SGI_DECODER,
     #[cfg(feature = "codec-image-simple")]
     &::vaco_codec_image_simple::TGA_DECODER,
+    #[cfg(feature = "codec-vp8")]
+    &::vaco_codec_vp8::VP8_DECODER,
     #[cfg(feature = "codec-image-simple")]
     &::vaco_codec_image_simple::XBM_DECODER,
     #[cfg(feature = "codec-image-simple")]
