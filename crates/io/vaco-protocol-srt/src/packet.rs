@@ -263,9 +263,11 @@ impl DataPacket {
         }
         let seq_no = w0 & 0x7fff_ffff;
         let w1 = be32(data, 4)?;
-        let position = PacketPosition::from_bits(u8::try_from(w1 >> 30).unwrap_or(0));
+        // Top 2 bits of a u32, always in u8 range.
+        let position = PacketPosition::from_bits((w1 >> 30) as u8);
         let in_order = (w1 >> 29) & 1 != 0;
-        let key = KeyFlag::from_bits(u8::try_from((w1 >> 27) & 0b11).unwrap_or(0));
+        // Masked to 2 bits (0..=3), always in u8 range.
+        let key = KeyFlag::from_bits(((w1 >> 27) & 0b11) as u8);
         let retransmitted = (w1 >> 26) & 1 != 0;
         let msg_no = w1 & 0x03ff_ffff;
         let timestamp = be32(data, 8)?;
@@ -343,8 +345,10 @@ impl ControlPacket {
         if !is_control_packet(w0) {
             return Err(malformed("F bit clear: this is a data packet"));
         }
-        let control_type = ControlType::from_u15(u16::try_from((w0 >> 16) & 0x7fff).unwrap_or(0));
-        let subtype_or_reserved = u16::try_from(w0 & 0xffff).unwrap_or(0);
+        // Masked to 15 bits, always in u16 range.
+        let control_type = ControlType::from_u15(((w0 >> 16) & 0x7fff) as u16);
+        // Masked to 16 bits, always in u16 range.
+        let subtype_or_reserved = (w0 & 0xffff) as u16;
         let type_specific = be32(data, 4)?;
         let timestamp = be32(data, 8)?;
         let dest_socket_id = be32(data, 12)?;

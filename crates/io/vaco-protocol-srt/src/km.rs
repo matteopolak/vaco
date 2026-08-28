@@ -130,19 +130,26 @@ impl KmMessage {
             return Err(malformed("KM message shorter than the 16-byte fixed header"));
         }
         let w0 = be32(data, 0)?;
-        let version = u8::try_from((w0 >> 28) & 0b111).unwrap_or(0);
-        let sign = u16::try_from((w0 >> 8) & 0xffff).unwrap_or(0);
+        // Masked to 3 bits (0..=7), always in u8 range.
+        let version = ((w0 >> 28) & 0b111) as u8;
+        // Masked to 16 bits, always in u16 range.
+        let sign = ((w0 >> 8) & 0xffff) as u16;
         if sign != SIGN {
             return Err(malformed("KM message Sign field does not match 0x2029"));
         }
-        let key_flags = KeyFlags::from_bits(u8::try_from(w0 & 0b11).unwrap_or(0));
+        // Masked to 2 bits (0..=3), always in u8 range.
+        let key_flags = KeyFlags::from_bits((w0 & 0b11) as u8);
         let keki = be32(data, 4)?;
         let w2 = be32(data, 8)?;
-        let cipher = u8::try_from(w2 >> 24).unwrap_or(0);
-        let auth = u8::try_from((w2 >> 16) & 0xff).unwrap_or(0);
-        let stream_encapsulation = u8::try_from((w2 >> 8) & 0xff).unwrap_or(0);
+        // Top 8 bits of a u32, always in u8 range.
+        let cipher = (w2 >> 24) as u8;
+        // Masked to 8 bits, always in u8 range.
+        let auth = ((w2 >> 16) & 0xff) as u8;
+        // Masked to 8 bits, always in u8 range.
+        let stream_encapsulation = ((w2 >> 8) & 0xff) as u8;
         let w3 = be32(data, 12)?;
-        let slen = (usize::try_from((w3 >> 8) & 0xff).unwrap_or(0)).saturating_mul(4);
+        // Masked to 8 bits; widening a u32 into usize always fits.
+        let slen = (((w3 >> 8) & 0xff) as usize).saturating_mul(4);
 
         let salt_start = FIXED_LEN;
         let salt = data

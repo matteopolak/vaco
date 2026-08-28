@@ -299,8 +299,10 @@ impl HandshakeCif {
         }
         let version = be32(data, 0)?;
         let w1 = be32(data, 4)?;
-        let encryption = EncryptionField::from_u16(u16::try_from(w1 >> 16).unwrap_or(0));
-        let extension_field = u16::try_from(w1 & 0xffff).unwrap_or(0);
+        // `w1 >> 16` is the top 16 bits of a u32, always in u16 range.
+        let encryption = EncryptionField::from_u16((w1 >> 16) as u16);
+        // Masked to 16 bits, always in u16 range.
+        let extension_field = (w1 & 0xffff) as u16;
         let initial_seq_no = be32(data, 8)?;
         let mtu = be32(data, 12)?;
         let max_flow_window = be32(data, 16)?;
@@ -360,7 +362,8 @@ pub fn parse_extensions(data: &[u8]) -> Result<Vec<Extension>> {
     let mut out = Vec::new();
     let mut pos = 0usize;
     while pos + 4 <= data.len() {
-        let ext_type = u16::try_from(be32(data, pos)? >> 16).unwrap_or(0);
+        // Top 16 bits of a u32, always in u16 range.
+        let ext_type = (be32(data, pos)? >> 16) as u16;
         let ext_len_blocks = be32(data, pos)? & 0xffff;
         let ext_len_bytes = (ext_len_blocks as usize).saturating_mul(4);
         let contents_start = pos + 4;
@@ -408,8 +411,10 @@ impl HsReqBody {
         let srt_version = be32(contents, 0)?;
         let srt_flags = be32(contents, 4)?;
         let w2 = be32(contents, 8)?;
-        let receiver_tsbpd_delay = u16::try_from(w2 >> 16).unwrap_or(0);
-        let sender_tsbpd_delay = u16::try_from(w2 & 0xffff).unwrap_or(0);
+        // Top 16 bits of a u32, always in u16 range.
+        let receiver_tsbpd_delay = (w2 >> 16) as u16;
+        // Masked to 16 bits, always in u16 range.
+        let sender_tsbpd_delay = (w2 & 0xffff) as u16;
         Ok(Self {
             srt_version,
             srt_flags,
