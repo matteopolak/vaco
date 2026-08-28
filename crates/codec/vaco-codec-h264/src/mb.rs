@@ -1529,6 +1529,21 @@ struct CabacGrids {
     /// component `iCbCr` of macroblock `mbAddrN`", one block per component
     /// per whole macroblock).
     cbf_chroma_dc: [Vec<Option<bool>>; 2],
+    /// Luma DC's own `coded_block_flag`, one per macroblock (`ctxBlockCat`
+    /// 0's neighbour derivation is macroblock-granular for the same reason
+    /// `cbf_chroma_dc` is -- clause 9.3.3.1.1.9's own text for `ctxBlockCat
+    /// == 0` looks at "the luma DC block of macroblock `mbAddrN`", one
+    /// block per whole macroblock, not per 4x4 position). This used to be
+    /// folded into `cbf_luma` at luma4x4BlkIdx 0's own grid position, but
+    /// that position is *also* where block 0's own AC `coded_block_flag`
+    /// is written a few lines later in the same macroblock's own decode --
+    /// the AC write silently overwrote the DC write, so any later
+    /// macroblock reading "my Intra_16x16 neighbour's DC flag" back out of
+    /// `cbf_luma` actually got that neighbour's AC-block-0 flag instead.
+    /// Invisible until the first Intra_16x16-to-Intra_16x16 macroblock
+    /// adjacency in a decode, since the read is gated on the neighbour
+    /// being Intra_16x16 in the first place.
+    cbf_luma_dc: Vec<Option<bool>>,
     mv: Vec<MvInfo>,
     /// `Intra4x4PredMode[luma4x4BlkIdx]` (Table 8-2), one per global 4x4
     /// luma block position across the whole picture -- clause 8.3.1.1's
@@ -1540,6 +1555,21 @@ struct CabacGrids {
     /// all) -- clause 8.3.1.1's own `dcOnlyPredictionFlag` substitution
     /// reads as "treat as DC" for exactly this case.
     intra4x4_pred_mode: Vec<Option<u8>>,
+    /// The macroblock `decode_macroblock_cabac` is *currently* decoding,
+    /// if any -- set by [`Self::begin_macroblock`] and cleared by
+    /// [`Self::set_mb_info`] (the same call that makes this macroblock's
+    /// own `CabacMbInfo` real). Exists purely so [`Self::mb_info_at`] can
+    /// `debug_assert` against the one input it can never correctly
+    /// answer for, rather than silently returning `None` and letting a
+    /// caller misread that as "not available" -- the exact shape of bug
+    /// this crate already shipped once (a same-macroblock
+    /// `coded_block_flag` neighbour routed through `mb_info_at` before
+    /// this macroblock's own info existed, silently substituting
+    /// `current_is_intra` for the real value, invisible on any corpus
+    /// dense enough that the substitution happened to coincide with the
+    /// truth). See [`CabacGrids::current_macroblock_info`] for the
+    /// answer a same-macroblock reference actually wants.
+    currently_decoding: Option<(u32, u32)>,
 }
 
 impl CabacGrids {
@@ -1556,9 +1586,47 @@ impl CabacGrids {
             cbf_luma: budget.alloc(n_luma4)?,
             cbf_chroma: [budget.alloc(n_chroma4)?, budget.alloc(n_chroma4)?],
             cbf_chroma_dc: [budget.alloc(n_mb)?, budget.alloc(n_mb)?],
+            cbf_luma_dc: budget.alloc(n_mb)?,
             mv: budget.alloc(n_luma4)?,
             intra4x4_pred_mode: budget.alloc(n_luma4)?,
+            currently_decoding: None,
         })
+    }
+
+    /// Marks `(mb_x, mb_y)` as the macroblock now being decoded --
+    /// [`Self::mb_info_at`] uses this to catch, immediately and loudly, a
+    /// lookup this crate cannot correctly answer instead of silently
+    /// returning `None` for it. Call once per macroblock, before its own
+    /// decode begins (skipped or not); [`Self::set_mb_info`] clears it
+    /// again once this macroblock's own `CabacMbInfo` is real.
+    fn begin_macroblock(&mut self, mb_x: u32, mb_y: u32) {
+        self.currently_decoding = Some((mb_x, mb_y));
+    }
+
+    /// The answer a same-macroblock neighbour reference actually wants
+    /// (clause 9.3.3.1.1.9 and friends' own "this is the same macroblock,
+    /// an earlier-decoded block of it" case): trivially available, never
+    /// `I_PCM` -- every caller in this module that can legitimately reach
+    /// this case has already passed I_PCM's own early return in
+    /// `decode_macroblock_cabac`, so the macroblock being decoded is
+    /// never I_PCM by the time any of them run. Use this instead of
+    /// [`Self::mb_info_at`] for "the left/above 4x4 (or 8x8, or whole
+    /// macroblock) reference resolves to the macroblock I am decoding
+    /// right now" -- that is precisely the input `mb_info_at` cannot
+    /// answer yet.
+    const fn current_macroblock_info() -> CabacMbInfo {
+        CabacMbInfo {
+            available: true,
+            skipped: false,
+            is_intra4x4: false,
+            is_intra: false,
+            is_intra16x16: false,
+            is_ipcm: false,
+            cbp_luma: 0,
+            cbp_chroma: 0,
+            intra_chroma_pred_mode: 0,
+            intra16x16_pred_mode: 0,
+        }
     }
 
     fn mb_info_idx(&self, mb_x: u32, mb_y: u32) -> Option<usize> {
@@ -1577,7 +1645,27 @@ impl CabacGrids {
         }
     }
 
+    fn cbf_luma_dc_at(&self, mb_x: u32, mb_y: u32) -> Option<bool> {
+        self.mb_info_idx(mb_x, mb_y).and_then(|i| self.cbf_luma_dc.get(i)).copied().flatten()
+    }
+
+    fn set_cbf_luma_dc(&mut self, mb_x: u32, mb_y: u32, v: bool) {
+        if let Some(i) = self.mb_info_idx(mb_x, mb_y)
+            && let Some(slot) = self.cbf_luma_dc.get_mut(i)
+        {
+            *slot = Some(v);
+        }
+    }
+
     fn mb_info_at(&self, mb_x: u32, mb_y: u32) -> Option<CabacMbInfo> {
+        debug_assert_ne!(
+            self.currently_decoding,
+            Some((mb_x, mb_y)),
+            "mb_info_at({mb_x}, {mb_y}) queried for the macroblock currently being decoded -- \
+             its own CabacMbInfo cannot exist yet (set_mb_info runs only at the end of \
+             decode_macroblock_cabac); use CabacGrids::current_macroblock_info() instead, which \
+             is what a same-macroblock neighbour reference actually means"
+        );
         let info = *self.mb_info_idx(mb_x, mb_y).and_then(|i| self.mb_info.get(i))?;
         info.available.then_some(info)
     }
@@ -1591,6 +1679,9 @@ impl CabacGrids {
     }
 
     fn set_mb_info(&mut self, mb_x: u32, mb_y: u32, info: CabacMbInfo) {
+        if self.currently_decoding == Some((mb_x, mb_y)) {
+            self.currently_decoding = None;
+        }
         if let Some(i) = self.mb_info_idx(mb_x, mb_y)
             && let Some(slot) = self.mb_info.get_mut(i)
         {
@@ -2186,6 +2277,7 @@ pub fn decode_slice_cabac(
         };
 
         let is_first_mb_in_slice = curr_mb_addr == header.first_mb_in_slice;
+        grids.begin_macroblock(mb_x, mb_y);
         if skipped {
             grids.set_mb_info(
                 mb_x,
@@ -2821,37 +2913,45 @@ fn decode_residual_cabac(
     // earlier-decoded block of *this same* macroblock, not a different
     // one) needs `cbf_cond_term` to take its `Some(info)` branch and use
     // the real `trans_available`/`trans_cbf` values -- `grids.mb_info_at`
-    // cannot be used for this: it (correctly) returns `None` until
-    // `set_mb_info` runs at the very end of `decode_macroblock_cabac`,
-    // long after this function returns, so it was silently taking the
-    // `None` branch (`condTermFlagN = current_is_intra`, clause
-    // 9.3.3.1.1.9's own "mbAddrN not available" case) for the *available,
-    // already-decoded, real* same-macroblock case instead -- discarding
-    // that earlier block's real `coded_block_flag` and substituting a
-    // constant `1` (`current_is_intra` is always true here; this
-    // function is never reached for Inter/IPCM) regardless of what it
-    // actually was. `decode_residual_cabac` is never reached for I_PCM
-    // (its own early return in `decode_macroblock_cabac`), so `is_ipcm`
-    // is always false for the macroblock this function is decoding.
-    let current_mb_info = Some(CabacMbInfo { available: true, is_ipcm: false, ..CabacMbInfo::default() });
+    // must never be used for this (its own `debug_assert` catches a
+    // future reintroduction immediately): it correctly returns `None`
+    // until `set_mb_info` runs at the very end of
+    // `decode_macroblock_cabac`, long after this function returns, so
+    // this used to silently take the `None` branch
+    // (`condTermFlagN = current_is_intra`, clause 9.3.3.1.1.9's own
+    // "mbAddrN not available" case) for the *available, already-decoded,
+    // real* same-macroblock case instead -- discarding that earlier
+    // block's real `coded_block_flag` and substituting a constant `1`
+    // (`current_is_intra` is always true here; this function is never
+    // reached for Inter/IPCM) regardless of what it actually was.
+    // `CabacGrids::current_macroblock_info` is the real answer, built to
+    // make this call site unambiguous rather than routed through a
+    // lookup that cannot answer yet.
+    let current_mb_info = Some(CabacGrids::current_macroblock_info());
 
     if is_16x16 {
-        let x = mb_x * 4;
-        let y = mb_y * 4;
         // Luma DC (ctxBlockCat 0) is one flag per macroblock: its own
         // neighbour is the neighbouring macroblock's DC block, available
         // only when that neighbour is itself coded Intra_16x16 (clause
-        // 9.3.3.1.1.9's `transBlockN` rule for `ctxBlockCat == 0`).
+        // 9.3.3.1.1.9's `transBlockN` rule for `ctxBlockCat == 0`). Stored
+        // in `CabacGrids::cbf_luma_dc`, not `cbf_luma` -- `cbf_luma` is
+        // indexed per 4x4 block, and luma4x4BlkIdx 0's own slot there gets
+        // overwritten by that same block's *AC* `coded_block_flag` a few
+        // lines below, in the same macroblock's own decode. Routing the DC
+        // flag through that shared slot silently handed a later
+        // Intra_16x16 neighbour's *AC block 0* flag to any macroblock
+        // asking for its DC flag instead.
         let left_dc = grids.mb_left(mb_x, mb_y);
         let above_dc = grids.mb_above(mb_x, mb_y);
-        let left_dc_flag = left_dc.filter(|i| i.is_intra16x16).and_then(|_| grids.cbf_luma_at(x.wrapping_sub(4), y));
+        let left_dc_flag =
+            left_dc.filter(|i| i.is_intra16x16).and_then(|_| grids.cbf_luma_dc_at(mb_x.wrapping_sub(1), mb_y));
         let above_dc_flag =
-            above_dc.filter(|i| i.is_intra16x16).and_then(|_| grids.cbf_luma_at(x, y.wrapping_sub(4)));
+            above_dc.filter(|i| i.is_intra16x16).and_then(|_| grids.cbf_luma_dc_at(mb_x, mb_y.wrapping_sub(1)));
         let cond_a = cbf_cond_term(left_dc, left_dc.is_some_and(|i| i.is_intra16x16), left_dc_flag.unwrap_or(false), current_is_intra);
         let cond_b = cbf_cond_term(above_dc, above_dc.is_some_and(|i| i.is_intra16x16), above_dc_flag.unwrap_or(false), current_is_intra);
         let inc = cond_a + 2 * cond_b;
         let coded = decide(cabac, &mut ctx.cbf_luma_dc, inc as usize) == 1;
-        grids.set_cbf_luma(x, y, coded);
+        grids.set_cbf_luma_dc(mb_x, mb_y, coded);
         if coded {
             out.luma_dc = Some(residual_block_cabac(cabac, &mut ctx.residual_luma_dc, 16, budget)?);
         }
@@ -2961,4 +3061,55 @@ fn decode_residual_cabac(
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test code")]
+mod tests {
+    use super::*;
+    use vaco_limits::Limits;
+
+    /// Locks in the guard `CabacGrids::mb_info_at` now carries: a lookup
+    /// for the macroblock currently being decoded can never be answered
+    /// correctly (its own `CabacMbInfo` does not exist until
+    /// `set_mb_info` runs at the very end of `decode_macroblock_cabac`),
+    /// so it must fail loudly rather than silently return `None` and let
+    /// a caller misread that as "not available" -- the exact shape of
+    /// bug this crate shipped once (a same-macroblock `coded_block_flag`
+    /// neighbour routed through `mb_info_at` before this macroblock's own
+    /// info existed, invisible on any corpus dense enough that the
+    /// resulting substitution happened to coincide with the truth).
+    #[test]
+    #[should_panic(expected = "queried for the macroblock currently being decoded")]
+    fn mb_info_at_panics_for_the_macroblock_currently_being_decoded() {
+        let mut budget = Budget::new(Limits::default());
+        let mut grids = CabacGrids::new(2, 2, &mut budget).unwrap();
+        grids.begin_macroblock(0, 0);
+        let _ = grids.mb_info_at(0, 0);
+    }
+
+    /// The same lookup is fine once `set_mb_info` makes this macroblock's
+    /// own info real -- the guard is specific to the in-progress window,
+    /// not a blanket ban on a macroblock ever looking up its own address.
+    #[test]
+    fn mb_info_at_is_fine_once_set_mb_info_runs() {
+        let mut budget = Budget::new(Limits::default());
+        let mut grids = CabacGrids::new(2, 2, &mut budget).unwrap();
+        grids.begin_macroblock(0, 0);
+        grids.set_mb_info(0, 0, CabacGrids::current_macroblock_info());
+        assert!(grids.mb_info_at(0, 0).is_some(), "a finalised macroblock must be visible to itself too");
+    }
+
+    /// A *different* macroblock's own lookup must never trip the guard,
+    /// even while some other macroblock is mid-decode -- the guard is
+    /// keyed to the exact `(mb_x, mb_y)` currently being decoded, not to
+    /// "any lookup while a decode is in progress".
+    #[test]
+    fn mb_info_at_for_a_different_macroblock_never_panics() {
+        let mut budget = Budget::new(Limits::default());
+        let mut grids = CabacGrids::new(2, 2, &mut budget).unwrap();
+        grids.set_mb_info(0, 0, CabacGrids::current_macroblock_info());
+        grids.begin_macroblock(1, 0);
+        assert!(grids.mb_info_at(0, 0).is_some());
+    }
 }
