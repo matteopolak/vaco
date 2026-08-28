@@ -146,8 +146,8 @@ impl Drop for CryptoSink {
 /// the next chain value, which reads more clearly returned than threaded
 /// through a second in/out parameter.
 fn cbc_encrypt_block(key: &[u8; BLOCK], chain: &[u8; BLOCK], plain: &[u8; BLOCK]) -> [u8; BLOCK] {
-    use aes::Aes128;
-    use aes::cipher::{Array, BlockCipherEncrypt, KeyInit};
+    use vaco_crypto::aes::Aes128;
+    use vaco_crypto::aes::cipher::{Array, BlockCipherEncrypt, KeyInit};
 
     let mut xored = [0u8; BLOCK];
     for ((o, p), c) in xored.iter_mut().zip(plain.iter()).zip(chain.iter()) {

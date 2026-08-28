@@ -1,7 +1,7 @@
 # `vaco-protocol-crypto`
 
 Layer 2. `crypto:` — and the one crate in this workspace that declares
-`aes`/`cbc` (D11).
+`cbc` (D11); `aes` moved to `vaco-crypto` on 2026-08-28.
 
 ## What it is
 
@@ -179,19 +179,27 @@ same as any other bare path.
 
 ## Dependencies
 
-`aes` and `cbc` (RustCrypto), both pre-declared in
-`[workspace.dependencies]` since the workspace's initial commit but unused by
-any crate until this one — this crate is the sole owner
-(`cargo xtask owner-gate`; both are listed in `MEDIA`, added alongside this
-crate). `ctr` (also pre-declared, presumably for a future CENC user) is
-deliberately **not** taken here, since the protocol turned out to be CBC.
+`cbc` (RustCrypto) — this crate is its sole owner (`cargo xtask
+owner-gate`). `aes` moved to `vaco-crypto` on 2026-08-28 once a second
+consumer (`vaco-protocol-rist`'s PSK/AES-CTR) appeared alongside this
+crate's own CBC use — see `docs/core/vaco-crypto.md`. This crate now
+reaches `Aes128` through `vaco_crypto::aes::Aes128` rather than declaring
+`aes` itself; nothing about the measured-against-`ffmpeg` behaviour below
+changed, only the import path (verified: all 24 of this crate's own tests,
+unchanged, still pass byte-for-byte).
 
 `cbc`'s declared workspace version (`"0.4"`) did not exist on crates.io — the
 highest published version is `0.2.x`. Corrected to `"0.2"` as part of landing
 this crate (`Cargo.toml`, one line). `aes`'s declared version (`"0.8"`) also
 needed bumping to `"0.9"`, since `cbc 0.2` depends on `cipher 0.5` and `aes
 0.8` depends on the incompatible `cipher 0.4` — the two must be upgraded
-together.
+together. **`ctr`'s own pre-declared version (`"0.9"`) had the identical
+problem, undiscovered until `vaco-crypto` actually tried to compose `aes`
+and `ctr` together**: `ctr 0.9` depends on `cipher 0.4`, incompatible with
+`aes 0.9.2`/`cbc 0.2`'s `cipher 0.5` — invisible as long as nothing used
+`ctr` for real. Corrected to `"0.10"` in `vaco-crypto`'s own landing
+commit; unlike `aes`, `ctr` still had no consumer here (this crate stays
+CBC-only), so nothing in this crate needed to change for that fix.
 
 No `unsafe` in this crate's own code (`#![forbid(unsafe_code)]`, matching
 D2); `aes`'s runtime-dispatched AES-NI/ARMv8-crypto backends use `unsafe`

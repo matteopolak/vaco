@@ -71,3 +71,9 @@ None. No features, no options.
 `vaco-core` for the error type; `crc`, `md-5`, `sha1`, `sha2` — all pure Rust,
 no FFI, no build scripts (D10 Gate 1). Adler-32 is nine lines here rather than a
 fifth dependency.
+
+`sha2` is also re-exported (`pub use sha2;`, added 2026-08-28) so
+`vaco-crypto` (layer 0) can build `Hmac<Sha256>` for PBKDF2-HMAC-SHA256
+without declaring a second direct `sha2` dependency — this crate stays
+`sha2`'s one D11 owner; `vaco-crypto` composes on the concrete type rather
+than re-declaring it. See `docs/core/vaco-crypto.md`.

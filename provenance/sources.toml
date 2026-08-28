@@ -1104,3 +1104,38 @@ kind     = "spec"
 title    = "\"The SRT Protocol\", draft-sharabayko-srt-01, IETF Internet-Draft (Haivision engineers: M. Sharabayko et al.). Common SRT packet header and data/control packet framing (Sec. 3, Fig. 2-4), the Handshake control packet's fixed CIF and its HSREQ/HSRSP extension body (Sec. 3.2.1, Fig. 5-6, Tables 4-6), the Key Material message shape (Sec. 3.2.2, Fig. 10-11), the Keep-Alive/ACK/NAK/Congestion-Warning/Shutdown/ACKACK/DropReq/PeerError control packet figures (Sec. 3.2.3-3.2.10), Control Type and Handshake Extension Type numeric tables (Table 1, Table 5), rejection reason codes (Table 7), and the caller-listener and rendezvous handshake message sequences including the cookie-contest role-resolution rule (Sec. 4.3.1-4.3.2) underlying vaco-protocol-srt::packet/handshake/km/session. Freely published; no clean-room blocker (D3/D7)."
 acquired = "2026-08-28"
 where    = "https://datatracker.ietf.org/doc/html/draft-sharabayko-srt-01 (IETF Datatracker's own free public rendering)"
+
+[[source]]
+id       = "vsf-tr-06-1-2020"
+kind     = "spec"
+title    = "Video Services Forum (VSF) Technical Recommendation TR-06-1:2020, \"Reliable Internet Stream Transport (RIST) Protocol Specification - Simple Profile\". RTP/RTCP baseline (Sec. 5.1-5.2: unicast/multicast port assignments, compound RTCP packet composition, SR/empty-RR/RR/SDES field-value constraints, the RTCP RTT Echo Request/Response APP message, Fig. 9-12), the NACK-based recovery protocol (Sec. 5.3: the two-section reorder/retransmission-reassembly receiver buffer and its Fig. 1, bitmask-based Generic NACK per RFC 4585, range-based APP-message NACK, retransmitted-packet SSRC-LSB tagging, Sec. 5.3.2-5.3.3), and Appendix A's own worked bitmask/range retransmission-request example underlying vaco-protocol-rist::rtcp/retransmit/buffer. Freely published, CC BY-ND 4.0; no clean-room blocker (D7/D15) -- the ND clause restricts redistributing the document itself, not independent conformant software. Carries a third-party patent (IPR) notice over most of Sec. 4/5 (Video-Flow Ltd, RAND-style license-to-any-implementer assurance) -- see planning/00-decisions.md D4's 2026-08-28 amendment."
+acquired = "2026-08-28"
+where    = "https://static.vsf.tv/download/technical_recommendations/VSF_TR-06-1_2020_06_25.pdf (VSF's own public download)"
+
+[[source]]
+id       = "vsf-tr-06-2-2022"
+kind     = "spec"
+title    = "Video Services Forum (VSF) Technical Recommendation TR-06-2:2022, \"Reliable Internet Stream Transport (RIST) Protocol Specification - Main Profile\". GRE tunnelling (Sec. 5), DTLS support (Sec. 6, named blocked/deferred to PR-12 -- see #619/#559's closing notes), Pre-Shared Key encryption (Sec. 7.1-7.4: the GRE Key/Nonce field, AES-128/256-CTR keyed by a PBKDF2-HMAC-SHA256-derived key, the sequence-number-derived IV construction, Fig. 9-11) and PSK authentication (Sec. 7.5, pointing to the Normative Annex D EAP SHA256-SRP6a protocol -- filed separately as issue #657, not built as part of #559), and Annex B's own worked PBKDF2 key-derivation example underlying vaco-protocol-rist's Main Profile work and vaco-crypto::kdf. Freely published, CC BY-ND 4.0; no clean-room blocker (D7/D15). Carries the same class of third-party patent notice as TR-06-1 (Sec. 5 excl. 5.6.4, 6, 7)."
+acquired = "2026-08-28"
+where    = "https://static.vsf.tv/download/technical_recommendations/VSF_TR-06-2_2022-08-11.pdf (VSF's own public download)"
+
+[[source]]
+id       = "rfc-3686"
+kind     = "rfc"
+title    = "RFC 3686, Using Advanced Encryption Standard (AES) Counter Mode With IPsec Encapsulating Security Payload (ESP). Sec. 4's CTRBLK (nonce/IV/32-bit-counter) layout and Sec. 6's nine AES-128/192/256-CTR key/counter-block/plaintext/ciphertext test vectors, used as RFC-vector-derived (independent, not self-consistency) evidence for vaco-crypto::ctr_apply_aes128/192/256."
+acquired = "2026-08-28"
+where    = "https://www.rfc-editor.org/rfc/rfc3686"
+
+[[source]]
+id       = "rfc-8018"
+kind     = "rfc"
+title    = "RFC 8018, PKCS #5: Password-Based Cryptography Specification Version 2.1. Sec. 5.2's PBKDF2 algorithm definition underlying vaco-crypto::pbkdf2_hmac_sha256. Checked directly and confirmed to contain no test vectors of its own (no appendix titled \"Test Vectors\"; full-text search for \"Test Vector\" and for \"6070\" both return zero matches) -- cited here only for the algorithm definition, not as a source of test data; see rfc-7914 for the vectors actually used."
+acquired = "2026-08-28"
+where    = "https://www.rfc-editor.org/rfc/rfc8018"
+
+[[source]]
+id       = "rfc-7914"
+kind     = "rfc"
+title    = "RFC 7914, The scrypt Password-Based Key Derivation Function. Sec. 11's two PBKDF2-HMAC-SHA256 test vectors (P=\"passwd\"/S=\"salt\"/c=1 and P=\"Password\"/S=\"NaCl\"/c=80000, both dkLen=64), used as RFC-vector-derived (independent, not self-consistency) evidence for vaco-crypto::pbkdf2_hmac_sha256 -- RFC 8018 itself defines the algorithm but publishes no vectors of its own."
+acquired = "2026-08-28"
+where    = "https://www.rfc-editor.org/rfc/rfc7914"

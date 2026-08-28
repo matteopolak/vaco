@@ -1,6 +1,6 @@
 [package]
 name = "vaco-protocol-crypto"
-description = "The crypto: protocol: AES-128-CBC over a nested URL, and this workspace's one aes/cbc dependency (D11)."
+description = "The crypto: protocol: AES-128-CBC over a nested URL. Sole owner of cbc (D11); aes moved to vaco-crypto."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,18 +10,18 @@ authors.workspace = true
 
 [dependencies]
 vaco-core = { path = "../../core/vaco-core" }
+vaco-crypto = { path = "../../core/vaco-crypto" }
 vaco-io = { path = "../../io/vaco-io" }
 vaco-opts = { path = "../../core/vaco-opts" }
 vaco-protocol-core = { path = "../../io/vaco-protocol-core" }
-# D10/D11: pure-Rust RustCrypto AES, declared in `[workspace.dependencies]`
-# since the workspace's initial commit but unused by any crate until this one.
-# See docs/dependencies.md for the adoption record — this crate is the sole
-# owner (`cargo xtask owner-gate`). `ctr` (also pre-declared, for a future
-# CENC user) is deliberately NOT taken here: measurement against `ffmpeg 8.1`
-# (see `docs/io/vaco-protocol-crypto.md`) found the `crypto:` protocol is
-# AES-128-**CBC** with PKCS#7 padding, not the CTR the work package's own
-# title assumed. `cbc` is taken instead of `ctr`.
-aes = { workspace = true }
+# D11: `aes` moved to `vaco-crypto` on 2026-08-28 once a second consumer
+# (`vaco-protocol-rist`'s PSK/AES-CTR) made the shared home load-bearing
+# rather than speculative — this crate now reaches `Aes128` through
+# `vaco_crypto::aes` rather than declaring `aes` itself. `cbc` stays a
+# direct dependency here: this is still the only crate doing CBC mode
+# (measured against `ffmpeg 8.1`, see `docs/io/vaco-protocol-crypto.md` —
+# `ctr`, pre-declared for the same future CENC user, was and remains
+# untaken by this crate).
 cbc = { workspace = true, features = ["alloc"] }
 
 [dev-dependencies]

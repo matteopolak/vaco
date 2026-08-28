@@ -15,8 +15,8 @@
 //! this crate does not support AES-192/256 (see [`crate::options`]; the
 //! reference itself rejects any key that is not exactly 16 bytes).
 
-use aes::Aes128;
-use aes::cipher::{Array, BlockCipherDecrypt, BlockModeEncrypt, KeyInit, KeyIvInit, block_padding::Pkcs7};
+use vaco_crypto::aes::Aes128;
+use vaco_crypto::aes::cipher::{Array, BlockCipherDecrypt, BlockModeEncrypt, KeyInit, KeyIvInit, block_padding::Pkcs7};
 
 /// AES's (and this protocol's) block size. Every key and IV this protocol
 /// accepts is exactly one block, and every ciphertext this protocol produces

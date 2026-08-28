@@ -75,6 +75,12 @@
 use md5::Digest as _;
 use vaco_core::{Error, Result};
 
+/// Re-exported so `vaco-crypto` (layer 0, added 2026-08-28) can build
+/// `Hmac<Sha256>` for PBKDF2-HMAC-SHA256 without a second direct `sha2`
+/// dependency — this crate stays `sha2`'s one D11 owner, `vaco-crypto`
+/// composes on top of the concrete type rather than re-declaring it.
+pub use sha2;
+
 /// One of the fifteen `-hash` algorithm names the reference accepts.
 ///
 /// Ten are computable here; [`HashAlgo::implemented`] says which. The other
