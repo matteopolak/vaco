@@ -26,7 +26,7 @@
 use vaco_bitstream::{BitReader, Mark};
 use vaco_chlayout::ChannelLayout;
 use vaco_core::{Error, Result};
-use vaco_format_mpegaudio::{ChannelMode, MpegAudioHeader};
+use vaco_format_mpegaudio::{ChannelMode, MpegAudioHeader, Version};
 use vaco_frame::Frame;
 use vaco_limits::Budget;
 use vaco_sampfmt::SampleFmt;
@@ -69,10 +69,18 @@ struct GranuleInfo {
     part2_3_length: u16,
     big_values: u16,
     global_gain: u8,
-    scalefac_compress: u8,
+    /// 4 bits at MPEG-1 (max 15), 9 bits under the low-sample-rate
+    /// extension (max 511, `Vaco-Spec-Ref: iso-13818-3` §2.4.1.2) — `u16`
+    /// covers both without a separate field.
+    scalefac_compress: u16,
     block_type: u8,
     table_select: [u8; 3],
     region_count: [u8; 2],
+    /// MPEG-1: a transmitted bit. Low-sample-rate: not transmitted at all —
+    /// derived from which `scalefac_compress` range applies
+    /// (`lsf_scalefac_compress`) — so this is left at its default (`false`)
+    /// by `parse_side_info` under LSF and set by `decode_granule` itself
+    /// once it has decomposed `scalefac_compress`.
     preflag: bool,
     scalefac_scale: bool,
     count1table_select: bool,
@@ -80,26 +88,43 @@ struct GranuleInfo {
 
 struct SideInfo {
     main_data_begin: u16,
+    /// Only meaningful for indices `< num_granules`; the low-sample-rate
+    /// extension has exactly one granule (`Vaco-Spec-Ref: iso-13818-3`
+    /// §2.4.1.2's `audio_data()` has no outer granule loop at all, unlike
+    /// `Vaco-Spec-Ref: iso-11172-3`'s two), so there is no second granule's
+    /// side info to have scfsi for, no scfsi field in the bit stream to
+    /// read, and no cross-granule scalefactor reuse question to ask.
     scfsi: [[bool; 4]; 2],
     granules: [[GranuleInfo; 2]; GRANULES],
+    num_granules: usize,
 }
 
-fn parse_side_info(r: &mut BitReader<'_>, channels: usize) -> SideInfo {
-    let main_data_begin = r.get(9) as u16;
-    let _private_bits = r.get(if channels == 1 { 5 } else { 3 });
+fn parse_side_info(r: &mut BitReader<'_>, channels: usize, is_lsf: bool) -> SideInfo {
+    let main_data_begin = r.get(if is_lsf { 8 } else { 9 }) as u16;
+    let private_bits_len = if is_lsf {
+        if channels == 1 { 1 } else { 2 }
+    } else if channels == 1 {
+        5
+    } else {
+        3
+    };
+    let _private_bits = r.get(private_bits_len);
     let mut scfsi = [[false; 4]; 2];
-    for ch in scfsi.iter_mut().take(channels) {
-        for band in ch.iter_mut() {
-            *band = r.get(1) == 1;
+    if !is_lsf {
+        for ch in scfsi.iter_mut().take(channels) {
+            for band in ch.iter_mut() {
+                *band = r.get(1) == 1;
+            }
         }
     }
+    let num_granules = if is_lsf { 1 } else { 2 };
     let mut granules = [[GranuleInfo::default(); 2]; GRANULES];
-    for gr in &mut granules {
+    for gr in granules.iter_mut().take(num_granules) {
         for ch in gr.iter_mut().take(channels) {
             ch.part2_3_length = r.get(12) as u16;
             ch.big_values = r.get(9) as u16;
             ch.global_gain = r.get(8) as u8;
-            ch.scalefac_compress = r.get(4) as u8;
+            ch.scalefac_compress = r.get(if is_lsf { 9 } else { 4 }) as u16;
             let blocksplit = r.get(1) == 1;
             if blocksplit {
                 let block_type = r.get(2) as u8;
@@ -121,7 +146,9 @@ fn parse_side_info(r: &mut BitReader<'_>, channels: usize) -> SideInfo {
                 ch.region_count = [r.get(4) as u8, r.get(3) as u8];
                 ch.block_type = 0;
             }
-            ch.preflag = r.get(1) == 1;
+            if !is_lsf {
+                ch.preflag = r.get(1) == 1;
+            }
             ch.scalefac_scale = r.get(1) == 1;
             ch.count1table_select = r.get(1) == 1;
         }
@@ -130,6 +157,53 @@ fn parse_side_info(r: &mut BitReader<'_>, channels: usize) -> SideInfo {
         main_data_begin,
         scfsi,
         granules,
+        num_granules,
+    }
+}
+
+/// `Vaco-Spec-Ref: iso-13818-3` §2.4.2.7's replacement for
+/// `Vaco-Spec-Ref: iso-11172-3` §2.4.3.4's "Scalefactors" paragraph: the
+/// low-sample-rate extension splits the 21 long-block scalefactor bands
+/// into four partitions (`nr_of_sfb1..4` bands, `slen1..4` bits each)
+/// instead of MPEG-1's two (`slen1` for bands 0-10, `slen2` for 11-20), and
+/// derives `preflag` from which range `scalefac_compress` falls in rather
+/// than transmitting it. Intensity stereo's own further split of this
+/// table (`scalefac_compress` odd/even, `mode_extension`-gated) is not
+/// implemented — a pre-existing, disclosed gap this does not touch — so
+/// this only covers the non-intensity-stereo case, which is every case this
+/// crate reaches since it never sets up an intensity-stereo read to begin
+/// with.
+///
+/// Returns `(slen[4], nr_of_sfb[4], preflag)` for a `block_type != 2`
+/// granule (short/mixed blocks' own row of `nr_of_sfb` is not included —
+/// short blocks are a separate, pre-existing, disclosed gap).
+#[allow(
+    clippy::integer_division,
+    reason = "the spec states this decomposition as truncating integer division, not a precision loss"
+)]
+fn lsf_scalefac_compress(sc: u16) -> ([u8; 4], [u8; 4], bool) {
+    if sc < 400 {
+        let slen = [(sc >> 4) / 5, (sc >> 4) % 5, (sc % 16) >> 2, sc % 4];
+        (
+            [slen[0] as u8, slen[1] as u8, slen[2] as u8, slen[3] as u8],
+            [6, 5, 5, 5],
+            false,
+        )
+    } else if sc < 500 {
+        let x = sc - 400;
+        let slen = [(x >> 2) / 5, (x >> 2) % 5, x % 4, 0];
+        (
+            [slen[0] as u8, slen[1] as u8, slen[2] as u8, slen[3] as u8],
+            [6, 5, 7, 3],
+            false,
+        )
+    } else {
+        let x = sc.min(511) - 500;
+        (
+            [(x / 3) as u8, (x % 3) as u8, 0, 0],
+            [11, 10, 0, 0],
+            true,
+        )
     }
 }
 
@@ -148,14 +222,15 @@ const fn scfsi_group(band: usize) -> usize {
 /// Decode one long-block (`block_type` 0, 1 or 3) granule's scalefactors and
 /// Huffman-coded spectral lines into 576 requantised `xr` values. Returns
 /// all zeros for `block_type == 2` — see the module doc's short-block gap.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "one granule's worth of side-info-derived context")]
 fn decode_granule(
     r: &mut BitReader<'_>,
-    g: &GranuleInfo,
+    g: &mut GranuleInfo,
     sfb: &[u16],
     prev_scalefac: Option<&[u8; 21]>,
     scfsi: [bool; 4],
     is_second_granule: bool,
+    is_lsf: bool,
     granule_end_bit: u64,
 ) -> ([f32; LINES], [u8; 21]) {
     let mut xr = [0.0f32; LINES];
@@ -164,19 +239,35 @@ fn decode_granule(
         return (xr, scalefac);
     }
 
-    let (slen1, slen2) = SCALEFAC_COMPRESS
-        .get(usize::from(g.scalefac_compress))
-        .copied()
-        .unwrap_or((0, 0));
-    for (band, slot) in scalefac.iter_mut().enumerate() {
-        let bits = if band < 11 { slen1 } else { slen2 };
-        *slot = if bits == 0 {
-            0
-        } else if is_second_granule && scfsi.get(scfsi_group(band)).copied().unwrap_or(false) {
-            prev_scalefac.and_then(|p| p.get(band)).copied().unwrap_or(0)
-        } else {
-            r.get(u32::from(bits)) as u8
-        };
+    if is_lsf {
+        // §2.4.2.7: four partitions instead of MPEG-1's two, and no scfsi —
+        // the low-sample-rate extension has only one granule, so there is
+        // no earlier granule's scalefactors to ever reuse.
+        let (slen, nr_of_sfb, preflag) = lsf_scalefac_compress(g.scalefac_compress);
+        g.preflag = preflag;
+        let mut band = 0usize;
+        for (bits, &count) in slen.iter().zip(nr_of_sfb.iter()) {
+            for _ in 0..count {
+                let Some(slot) = scalefac.get_mut(band) else { break };
+                *slot = if *bits == 0 { 0 } else { r.get(u32::from(*bits)) as u8 };
+                band += 1;
+            }
+        }
+    } else {
+        let (slen1, slen2) = SCALEFAC_COMPRESS
+            .get(usize::from(g.scalefac_compress))
+            .copied()
+            .unwrap_or((0, 0));
+        for (band, slot) in scalefac.iter_mut().enumerate() {
+            let bits = if band < 11 { slen1 } else { slen2 };
+            *slot = if bits == 0 {
+                0
+            } else if is_second_granule && scfsi.get(scfsi_group(band)).copied().unwrap_or(false) {
+                prev_scalefac.and_then(|p| p.get(band)).copied().unwrap_or(0)
+            } else {
+                r.get(u32::from(bits)) as u8
+            };
+        }
     }
 
     // Huffman decode: three "big values" regions, then the count1 quads.
@@ -375,11 +466,33 @@ pub(crate) fn decode(
     synth: &mut [Synthesis],
     budget: &mut Budget,
 ) -> Result<Frame> {
-    if header.version.is_low_sample_rate() {
+    // MPEG-2's low-sample-rate extension (16000/22050/24000 Hz) is ISO/IEC
+    // 13818-3, and its side-info layout, `scalefac_compress` decomposition
+    // and `Vaco-Spec-Ref: iso-13818-3` §2.4.1.2/§2.4.2.7-derived scalefactor
+    // decoding are implemented and measured against real `ffmpeg`-encoded
+    // files (see `docs/codec/vaco-codec-mpegaudio.md`). MPEG-2.5
+    // (8000/11025/12000 Hz) is not an ISO standard at all — no body ever
+    // ratified it — so there is no primary text for its own scalefactor-
+    // band tables to check against. This crate's first attempt assumed
+    // MPEG-2.5 reuses MPEG-2's own tables for the corresponding halved
+    // rate, on the strength of every public description of the extension
+    // agreeing it does; measured against real `ffmpeg`-encoded MPEG-2.5
+    // files, that assumption is wrong for at least 8000 Hz (correlation
+    // ~0.10-0.32 against the reference, at both a low and a high bitrate,
+    // ruling out bitrate as the variable) and unreliable for 12000 Hz
+    // (~0.79) — only 11025 Hz measured close to correct (~0.98), which
+    // reads as content that happens not to exercise the wrong bands rather
+    // than confirmation the assumption holds. Shipping a decoder that is
+    // right for one of three rates and silently wrong for the other two
+    // would be worse than refusing them, so MPEG-2.5 stays `Unsupported`
+    // until its real tables are found or independently derived — tracked
+    // in `docs/codec/vaco-codec-mpegaudio.md`'s "Known gaps".
+    if matches!(header.version, Version::Mpeg25) {
         return Err(Error::Unsupported(
-            "mpegaudio: MPEG-2/2.5 (low sample rate) Layer III scalefactor layout is not implemented",
+            "mpegaudio: MPEG-2.5 Layer III scalefactor-band tables are unverified (not an ISO standard; no primary text to check them against) and measurably wrong for at least one of its three sample rates — see docs/codec/vaco-codec-mpegaudio.md",
         ));
     }
+    let is_lsf = header.version.is_low_sample_rate();
     let channels = usize::from(header.channels());
     if synth.len() < channels || state.overlap.len() < channels {
         return Err(Error::Unsupported("mpegaudio: missing per-channel decode state"));
@@ -393,7 +506,7 @@ pub(crate) fn decode(
     let this_frame_main_data = body.get(side_info_len..).unwrap_or(&[]);
 
     let mut side_reader = BitReader::new(side_bytes);
-    let side = parse_side_info(&mut side_reader, channels);
+    let mut side = parse_side_info(&mut side_reader, channels, is_lsf);
 
     state.reservoir.extend_from_slice(this_frame_main_data);
     let begin = usize::from(side.main_data_begin);
@@ -416,9 +529,10 @@ pub(crate) fn decode(
         && (header.mode_extension & 0b10) != 0
         && channels == 2;
 
-    for (gr_idx, gr) in side.granules.iter().enumerate() {
+    let num_granules = side.num_granules;
+    for (gr_idx, gr) in side.granules.iter_mut().take(num_granules).enumerate() {
         let mut xr_ch: Vec<[f32; LINES]> = Vec::new();
-        for (ch, info) in gr.iter().enumerate().take(channels) {
+        for (ch, info) in gr.iter_mut().enumerate().take(channels) {
             let scfsi = side.scfsi.get(ch).copied().unwrap_or([false; 4]);
             let granule_end_bit = cumulative_bits + u64::from(info.part2_3_length);
             let (xr, scalefac) = decode_granule(
@@ -428,6 +542,7 @@ pub(crate) fn decode(
                 prev_scalefac.get(ch).and_then(|s| s.as_ref()),
                 scfsi,
                 gr_idx == 1,
+                is_lsf,
                 granule_end_bit,
             );
             if gr_idx == 0 && let Some(slot) = prev_scalefac.get_mut(ch) {
@@ -529,10 +644,19 @@ pub(crate) fn decode(
 }
 
 fn sfb_long_for(sample_rate_hz: u32) -> &'static [u16] {
-    use crate::tables::{SFB_LONG_32000, SFB_LONG_44100, SFB_LONG_48000};
+    use crate::tables::{
+        SFB_LONG_8000, SFB_LONG_11025, SFB_LONG_12000, SFB_LONG_16000, SFB_LONG_22050,
+        SFB_LONG_24000, SFB_LONG_32000, SFB_LONG_44100, SFB_LONG_48000,
+    };
     match sample_rate_hz {
         32000 => &SFB_LONG_32000,
         48000 => &SFB_LONG_48000,
+        16000 => &SFB_LONG_16000,
+        22050 => &SFB_LONG_22050,
+        24000 => &SFB_LONG_24000,
+        8000 => &SFB_LONG_8000,
+        11025 => &SFB_LONG_11025,
+        12000 => &SFB_LONG_12000,
         _ => &SFB_LONG_44100,
     }
 }

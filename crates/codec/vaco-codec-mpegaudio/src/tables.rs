@@ -89,23 +89,44 @@ pub(crate) const SFB_SHORT_44100: [u16; 13] = [0, 4, 8, 12, 16, 22, 30, 40, 52, 
 pub(crate) const SFB_LONG_48000: [u16; 22] = [0, 4, 8, 12, 16, 20, 24, 30, 36, 42, 50, 60, 72, 88, 106, 128, 156, 190, 230, 276, 330, 384];
 #[allow(dead_code, reason = "reserved for the short-block decode path, not yet implemented")]
 pub(crate) const SFB_SHORT_48000: [u16; 13] = [0, 4, 8, 12, 16, 22, 28, 38, 50, 64, 80, 100, 126];
-// Not yet consulted by any decode path: `SFB_LONG_16000`/`22050`/`24000` are
-// the MPEG-2 low-sample-rate long tables, and every `SFB_SHORT_*` is a
-// short-block boundary table — both wait on the short-block/LSF decode gaps
-// `layer3.rs`'s module doc names, kept here (already correctly sourced) so
-// that work does not have to re-derive them.
-#[allow(dead_code, reason = "reserved for the low-sample-rate Layer III path, not yet implemented")]
+// `SFB_LONG_16000`/`22050`/`24000` are the MPEG-2 low-sample-rate long
+// tables (`Vaco-Spec-Ref: iso-13818-3` Annex B, referenced from Table B.2 —
+// this crate's extracted copy of ISO/IEC 13818-3 does not include Annex B's
+// own numeric tables, only the clauses that reference them, so these were
+// already present before this pass and are used here without a fresh
+// primary-text re-check of the exact values; empirically verified below by
+// decoding real `ffmpeg`-produced MPEG-2 low-sample-rate files).
+// Every `SFB_SHORT_*` waits on the short-block decode gap `layer3.rs`'s
+// module doc names and is not consulted by any decode path yet.
 pub(crate) const SFB_LONG_16000: [u16; 23] = [0, 6, 12, 18, 24, 30, 36, 44, 54, 66, 80, 96, 116, 140, 168, 200, 238, 284, 336, 396, 464, 522, 576];
 #[allow(dead_code, reason = "reserved for the short-block decode path, not yet implemented")]
 pub(crate) const SFB_SHORT_16000: [u16; 14] = [0, 4, 8, 12, 18, 26, 36, 48, 62, 80, 104, 134, 174, 192];
-#[allow(dead_code, reason = "reserved for the low-sample-rate Layer III path, not yet implemented")]
 pub(crate) const SFB_LONG_22050: [u16; 23] = [0, 6, 12, 18, 24, 30, 36, 44, 54, 66, 80, 96, 116, 140, 168, 200, 238, 284, 336, 396, 464, 522, 576];
 #[allow(dead_code, reason = "reserved for the short-block decode path, not yet implemented")]
 pub(crate) const SFB_SHORT_22050: [u16; 14] = [0, 4, 8, 12, 18, 24, 32, 42, 56, 74, 100, 132, 174, 192];
-#[allow(dead_code, reason = "reserved for the low-sample-rate Layer III path, not yet implemented")]
 pub(crate) const SFB_LONG_24000: [u16; 23] = [0, 6, 12, 18, 24, 30, 36, 44, 54, 66, 80, 96, 114, 136, 162, 194, 232, 278, 332, 394, 464, 540, 576];
 #[allow(dead_code, reason = "reserved for the short-block decode path, not yet implemented")]
 pub(crate) const SFB_SHORT_24000: [u16; 14] = [0, 4, 8, 12, 18, 26, 36, 48, 62, 80, 104, 136, 180, 192];
+// MPEG-2.5 (unofficial-but-universal; not part of any ISO standard — ISO/IEC
+// 13818-3 defines MPEG-2 only) is not covered by any primary text this crate
+// has access to. Every public description of the extension claims it reuses
+// MPEG-2's own long-block scalefactor-band tables unchanged for the
+// corresponding halved sample rate (8000 Hz shares 16000's table, 11025
+// shares 22050's, 12000 shares 24000's) rather than defining new geometry.
+// TESTED AND FOUND WRONG for at least two of the three rates: decoding real
+// `ffmpeg`-produced MPEG-2.5 fixtures against these tables measured
+// correlation ~0.10-0.32 at 8000 Hz and ~0.79 at 12000 Hz (both clearly
+// broken, confirmed independent of bitrate), while 11025 Hz measured ~0.98 —
+// read as a fixture that doesn't exercise the wrong bands rather than
+// confirmation the sharing is correct, given the other two rates falsify the
+// premise outright. Consequently `layer3::decode` rejects all of
+// `Version::Mpeg25` with `Error::Unsupported` before these constants are
+// ever reached; they are kept (rather than deleted) only as a record of the
+// assumption that was tried and disproven, should someone later find the
+// actual MPEG-2.5 geometry to implement correctly.
+pub(crate) const SFB_LONG_8000: [u16; 23] = SFB_LONG_16000;
+pub(crate) const SFB_LONG_11025: [u16; 23] = SFB_LONG_22050;
+pub(crate) const SFB_LONG_12000: [u16; 23] = SFB_LONG_24000;
 // Layer II bit-allocation tables, machine-generated from ISO/IEC 11172-3
 // Annex B Tables 3-B.2a-d and Table 3-B.4.
 
