@@ -11,3 +11,17 @@ name      = "hevc_mp4toannexb"
 long_name = "Convert an HEVC bitstream from length prefixed to Annex B"
 codec     = "hevc"
 ctor      = "vaco_bsf_h2645::hevc_mp4toannexb::DESC"
+
+[[component]]
+kind      = "bitstream_filter"
+name      = "h264_metadata"
+long_name = "Modify metadata embedded in an H.264 stream"
+codec     = "h264"
+ctor      = "vaco_bsf_h2645::h264_metadata::DESC"
+
+[[component]]
+kind      = "bitstream_filter"
+name      = "hevc_metadata"
+long_name = "Modify metadata embedded in an HEVC stream"
+codec     = "hevc"
+ctor      = "vaco_bsf_h2645::hevc_metadata::DESC"

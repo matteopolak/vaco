@@ -1,6 +1,6 @@
 [package]
 name = "vaco-bsf-h2645"
-description = "H.264/HEVC bitstream filters: h264_mp4toannexb, hevc_mp4toannexb."
+description = "H.264/HEVC bitstream filters: h264_mp4toannexb, hevc_mp4toannexb, h264_metadata, hevc_metadata."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -1,14 +1,44 @@
 # `vaco-bsf-h2645`
 
-Layer 4. H.264/HEVC bitstream filters. Issue #350.
+Layer 4. H.264/HEVC bitstream filters. Issues #350, #353 (B-05), #354 (B-06).
 
 ---
 
 ## What it is
 
 `h264_mp4toannexb` and `hevc_mp4toannexb`: the two filters `vaco-mux-avi` and
-`vaco-mux-mpegts` were waiting on. `h264_redundant_pps` is **measured but not
-implemented** — see below.
+`vaco-mux-mpegts` were waiting on. `h264_metadata`/`hevc_metadata` (#353) are
+here too, registered as the measured identity transform. `h264_redundant_pps`
+and `dts2pts` (#354) are **measured but not implemented** — see below.
+
+## The CBS write path (#353) — scaffolded, not built
+
+`vaco-codec-cbs` has the general shape of a write path
+(`CbsCodec::{read_unit, write_unit, assemble}`), but the only implementation
+for either codec, `vaco_parse_hevc::cbs::HevcCbs`, can write back a raw
+(undecoded) unit only — every typed variant (`Sps`/`Pps`/`Vps`/`Sei`) returns
+`Error::Unsupported`. `vaco-parse-h264` has no `CbsCodec` implementation at
+all. **No bit-exact H.264/HEVC parameter-set writer exists in this tree.**
+That is the real, unstarted work B-05's title names.
+
+It turns out not to be needed for `h264_metadata`/`hevc_metadata` themselves:
+every option either filter exposes defaults to "leave the bitstream alone"
+(`ffmpeg -h bsf=h264_metadata`/`hevc_metadata`), and gap 12 (below) means no
+option can reach a filter instance regardless. Measured directly against
+`ffmpeg 8.1` across five adversarial inputs each (plain, AUD-already-present,
+non-16-multiple crop, explicit level + forced colour description, a longer
+B-frame-bearing clip), the bare-name behaviour is byte-identical to the
+input every time. Building the writer now would have no caller in this
+workspace able to exercise it with anything but the default — left unbuilt.
+
+## Gap 12 (`BsfProvider::open` has no option string) — not closed here
+
+A trait method, not a bare fn pointer, so — mirroring the same day's
+`Muxer::set_option` substitution for gaps 4/5/6 — it could plausibly be
+closed by a defaulted `BitstreamFilter::set_option(&mut self, name: &str,
+value: &str) -> Result<()>`. That trait lives in `vaco-codec-core`, outside
+this issue owner's single-writer scope, so the shape is recorded in
+`planning/INTERFACE-GAPS.md` and here rather than applied silently.
 
 ## How it works
 
@@ -55,6 +85,20 @@ docs call "not yet supported," for the identical reason: a writer that is not
 bit-exact silently corrupts a stream rather than failing. `vaco-parse-h264`
 has no bit-writer layer at all (unlike HEVC's `cbs` module). Left out rather
 than landed wrong.
+
+### `dts2pts` — measured, not implemented (#354)
+
+Its name suggests DTS audio; `ffmpeg -h bsf=dts2pts` reports `Supported
+codecs: h264 hevc` — "dts" is *decode timestamp*, not the codec. It touches
+no bytes, only `Packet::pts`, so the CBS write path above is irrelevant to
+it. Measured directly: assigned `pts` values are **not** a fixed
+reorder-delay shift (`pts[3] == dts[3]`, no delay, while `pts[0] == dts[2]`
+and `pts[1]` matches a `dts` four positions further out) — the signature of a
+real picture-order-count computation (H.264 §8.2.1 / HEVC §8.3.1) over a
+hierarchical B-frame structure, not a constant offset. Building that
+correctly needs a decoder-adjacent reorder buffer validated against more than
+one GOP shape; left unimplemented rather than shipped on an unverified guess
+at the general rule.
 
 ## How to change it
 
