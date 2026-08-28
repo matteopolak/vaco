@@ -127,6 +127,32 @@ fn render(spec: &str, streams: &[Stream]) -> String {
     String::from_utf8(tf.finish().expect("finish")).expect("utf8")
 }
 
+/// Issue #635, end to end through `show::stream`: `ts_id`/`ts_packetsize`
+/// must reach the `[STREAM]` fields (checked elsewhere) but never the `TAG:`
+/// lines, while a real container tag right beside them still does. Unlike
+/// `show::tests::ts_id_and_ts_packetsize_are_filtered_out_of_the_visible_tags`
+/// (which calls the filtering helper directly), this goes through the public
+/// `show::stream` entry point every writer actually uses, so it would have
+/// caught the filter being wired to the wrong call.
+#[test]
+fn ts_id_and_ts_packetsize_never_reach_the_tag_lines() {
+    let mut s = Stream::new(0, MediaType::Video, Rational::new(1, 90_000));
+    s.metadata = vec![
+        ("ts_id".to_owned(), "1".to_owned()),
+        ("ts_packetsize".to_owned(), "188".to_owned()),
+        ("language".to_owned(), "eng".to_owned()),
+    ];
+    let text = render("flat", std::slice::from_ref(&s));
+    assert!(
+        !text.contains("tags.ts_id") && !text.contains("tags.ts_packetsize"),
+        "ts_id/ts_packetsize must not appear as tags: {text}"
+    );
+    assert!(
+        text.contains("tags.language=\"eng\""),
+        "a real tag must still come through: {text}"
+    );
+}
+
 /// The `flat` writer's keys, in emission order, up to the disposition block.
 fn stream_keys(s: &Stream) -> Vec<String> {
     render("flat", std::slice::from_ref(s))

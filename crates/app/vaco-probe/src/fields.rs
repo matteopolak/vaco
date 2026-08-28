@@ -225,6 +225,15 @@ pub static STREAM: &[Field] = &[
     a("channel_layout", Str, Word("unknown")),
     a("bits_per_sample", Int, Never),
     a("initial_padding", Int, Never),
+    // Issue #635: `[STREAM]`-scoped, not per-media — measured on an MPEG-TS
+    // file's video *and* audio streams, both `ts_id=1 ts_packetsize=188`.
+    // `Scope::Always` (`f`, not `v`/`a`) puts them after both the video- and
+    // audio-only blocks above, which is where they land on every stream
+    // measured, video or audio. `Omit`: absent outright for every other
+    // container, the same policy as `nal_length_size` just above — measured,
+    // an MP4 stream shows neither field at all, no placeholder.
+    f("ts_id", Int, Omit),
+    f("ts_packetsize", Int, Omit),
     f("id", Str, Na),
     f("r_frame_rate", Str, Never),
     f("avg_frame_rate", Str, Never),
@@ -429,6 +438,8 @@ mod tests {
                 "channels",
                 "bits_per_sample",
                 "initial_padding",
+                "ts_id",
+                "ts_packetsize",
                 "start_pts",
                 "duration_ts",
                 "extradata_size",

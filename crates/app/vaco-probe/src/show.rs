@@ -156,9 +156,29 @@ pub fn stream<W: Write>(
     e.tf().open(SectionId::STREAM)?;
     stream_fields(e, s, show_ids, counts)?;
     disposition(e, SectionId::STREAM_DISPOSITION, s.disposition)?;
-    tags(e, SectionId::STREAM_TAGS, &s.metadata)?;
+    tags(e, SectionId::STREAM_TAGS, &stream_visible_metadata(s))?;
     side_data(e, s)?;
     e.tf().close()
+}
+
+/// `s.metadata` minus the keys `stream_value` already surfaced as their own
+/// `[STREAM]` fields (`ts_id`, `ts_packetsize` — issue #635).
+///
+/// `Stream::metadata` is the one channel this crate has for a demuxer to hand
+/// back an out-of-band fact, and `vaco-demux-mpegts` uses it for two purposes
+/// that must render completely differently: a real container tag (the SDT's
+/// service name, say) is genuinely user-visible metadata and belongs in the
+/// `tags` sub-section as `TAG:`, while `ts_id`/`ts_packetsize` are dedicated
+/// fields the reference prints inline, never as a `TAG:`. Filtering by key
+/// here — rather than a second field on `Stream` — keeps that distinction
+/// entirely inside the two crates that already agree on the two names,
+/// without widening `vaco_format_core::Stream`'s public shape for it.
+fn stream_visible_metadata(s: &Stream) -> Vec<(String, String)> {
+    s.metadata
+        .iter()
+        .filter(|(k, _)| !matches!(k.as_str(), "ts_id" | "ts_packetsize"))
+        .cloned()
+        .collect()
 }
 
 /// The `side_data_list` sub-section, emitted only when the stream carries side
@@ -378,6 +398,15 @@ fn stream_value(
         ),
         "bits_per_sample" => Val::opt_i(audio.map(|_| i64::from(bits_per_sample(p.codec_id)))),
         "initial_padding" => Val::opt_i(audio.map(|a| i64::from(a.initial_padding))),
+        // Issue #635: `vaco-demux-mpegts` is the one demuxer that sets these
+        // two, via `Stream::metadata` — see `stream`'s `tags` call below for
+        // the other half (they must not *also* print as `TAG:`). Absent on
+        // every other container, since nothing else sets the key, which is
+        // exactly `Absent::Omit`'s "no placeholder" behaviour.
+        "ts_id" => Val::opt_i(s.metadata_get("ts_id").and_then(|v| v.parse().ok())),
+        "ts_packetsize" => {
+            Val::opt_i(s.metadata_get("ts_packetsize").and_then(|v| v.parse().ok()))
+        }
         "id" => Val::opt_s(s.id.map(num::id)),
         // Two fields, two sources. They differ on a variable-rate file:
         // a 1/600-timescale MP4 whose `stts` holds mostly 60-tick deltas
@@ -1060,6 +1089,81 @@ mod tests {
         assert!(matches!(render(None, "nal_length_size"), Val::Absent));
         assert_eq!(field("is_avc").absent, crate::fields::Absent::Omit);
         assert_eq!(field("nal_length_size").absent, crate::fields::Absent::Omit);
+    }
+
+    /// Issue #635: `ts_id`/`ts_packetsize` read back through `Stream::metadata`
+    /// — the one channel `vaco-demux-mpegts` has to hand them to this crate —
+    /// and parse cleanly back to integers. Absent (not `0`) when the key is
+    /// missing, same `Omit` policy as `nal_length_size` above, so a non-TS
+    /// container prints neither field at all.
+    #[test]
+    fn ts_id_and_ts_packetsize_come_from_stream_metadata() {
+        let field = crate::fields::STREAM
+            .iter()
+            .find(|f| f.name == "ts_id")
+            .copied()
+            .expect("in the table");
+        assert_eq!(field.absent, crate::fields::Absent::Omit);
+        assert!(field.ty.is_int());
+
+        let mut stream = Stream::new(0, MediaType::Video, vaco_core::Rational::new(1, 1000));
+        let p = CodecParameters::video().with_codec(CodecId::H264);
+        let int = |v: Val| match v {
+            Val::I(i) => Some(i),
+            _ => None,
+        };
+
+        assert!(matches!(
+            stream_value(&field, &stream, &p, Some(MediaType::Video), Counts::NONE, false),
+            Val::Absent
+        ));
+
+        stream.metadata_set("ts_id", "1");
+        stream.metadata_set("ts_packetsize", "188");
+        assert_eq!(
+            int(stream_value(
+                &field,
+                &stream,
+                &p,
+                Some(MediaType::Video),
+                Counts::NONE,
+                false
+            )),
+            Some(1)
+        );
+        let packetsize_field = crate::fields::STREAM
+            .iter()
+            .find(|f| f.name == "ts_packetsize")
+            .copied()
+            .expect("in the table");
+        assert_eq!(
+            int(stream_value(
+                &packetsize_field,
+                &stream,
+                &p,
+                Some(MediaType::Video),
+                Counts::NONE,
+                false
+            )),
+            Some(188)
+        );
+    }
+
+    /// The other half of #635: `ts_id`/`ts_packetsize` must not *also* appear
+    /// as `TAG:` lines — they are dedicated fields, read by the arms tested
+    /// above, not user-visible container metadata. A real tag (`language`,
+    /// say) must still come through untouched.
+    #[test]
+    fn ts_id_and_ts_packetsize_are_filtered_out_of_the_visible_tags() {
+        let mut stream = Stream::new(0, MediaType::Video, vaco_core::Rational::new(1, 1000));
+        stream.metadata_set("ts_id", "1");
+        stream.metadata_set("ts_packetsize", "188");
+        stream.metadata_set("language", "eng");
+        let visible = stream_visible_metadata(&stream);
+        assert_eq!(
+            visible,
+            vec![("language".to_owned(), "eng".to_owned())]
+        );
     }
 
     /// A codec with no profile is *absent*, not the string `unknown`.
