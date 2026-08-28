@@ -64,6 +64,7 @@ vaco-codec-subtitle-cc = { path = "../crates/codec/vaco-codec-subtitle-cc", opti
 vaco-codec-subtitle-teletext = { path = "../crates/codec/vaco-codec-subtitle-teletext", optional = true }
 vaco-codec-subtitle-text = { path = "../crates/codec/vaco-codec-subtitle-text", optional = true }
 vaco-codec-vp8 = { path = "../crates/codec/vaco-codec-vp8", optional = true }
+vaco-codec-vp9 = { path = "../crates/codec/vaco-codec-vp9", optional = true }
 vaco-color = { path = "../crates/model/vaco-color", optional = true }
 vaco-conformance = { path = "../crates/tool/vaco-conformance", optional = true }
 vaco-core = { path = "../crates/core/vaco-core", optional = true }
@@ -207,6 +208,7 @@ default = [
     "codec-subtitle-teletext",
     "codec-subtitle-text",
     "codec-vp8",
+    "codec-vp9",
     "color",
     "conformance",
     "core",
@@ -342,6 +344,7 @@ codec-subtitle-cc = ["dep:vaco-codec-subtitle-cc"]
 codec-subtitle-teletext = ["dep:vaco-codec-subtitle-teletext"]
 codec-subtitle-text = ["dep:vaco-codec-subtitle-text"]
 codec-vp8 = ["dep:vaco-codec-core", "dep:vaco-codec-vp8", "dep:vaco-limits", "dep:vaco-packet"]
+codec-vp9 = ["dep:vaco-codec-core", "dep:vaco-codec-vp9", "dep:vaco-limits", "dep:vaco-packet"]
 color = ["dep:vaco-color"]
 conformance = ["dep:vaco-conformance"]
 core = ["dep:vaco-core"]
@@ -1895,3 +1898,11 @@ test = false
 doc = false
 bench = false
 required-features = ["codec-vp8"]
+
+[[bin]]
+name = "vp9_decode"
+path = "fuzz_targets/vp9_decode.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-vp9"]

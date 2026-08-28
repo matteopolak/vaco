@@ -3686,6 +3686,20 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "codec-vp9")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "vp9",
+        long_name: Some(
+            "VP9 (key-frame intra decode; VP9 Bitstream & Decoding Process Specification v0.6)",
+        ),
+        krate: "vaco-codec-vp9",
+        feature: Some("codec-vp9"),
+        media: Some("video"),
+        codec: Some("vp9"),
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "codec-image-simple")]
     crate::Component {
         kind: crate::Kind::Decoder,
@@ -5760,6 +5774,17 @@ pub static COMPONENTS: &[crate::Component] = &[
     },
     crate::Component {
         kind: crate::Kind::Filter,
+        name: "histogram",
+        long_name: Some("Compute and draw a histogram."),
+        krate: "vaco-filter-scope",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
         name: "hqdn3d",
         long_name: Some("Apply a High Quality 3D Denoiser."),
         krate: "vaco-filter-denoise",
@@ -7247,6 +7272,17 @@ pub static COMPONENTS: &[crate::Component] = &[
     },
     crate::Component {
         kind: crate::Kind::Filter,
+        name: "waveform",
+        long_name: Some("Video waveform monitor."),
+        krate: "vaco-filter-scope",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
         name: "weave",
         long_name: Some("Weave input video fields into frames."),
         krate: "vaco-filter-deinterlace",
@@ -8514,6 +8550,8 @@ pub static DECODERS: &[&::vaco_codec_core::DecoderDesc] = &[
     &::vaco_codec_image_simple::TGA_DECODER,
     #[cfg(feature = "codec-vp8")]
     &::vaco_codec_vp8::VP8_DECODER,
+    #[cfg(feature = "codec-vp9")]
+    &::vaco_codec_vp9::VP9_DECODER,
     #[cfg(feature = "codec-image-simple")]
     &::vaco_codec_image_simple::XBM_DECODER,
     #[cfg(feature = "codec-image-simple")]
@@ -8744,6 +8782,7 @@ pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[
     &::vaco_filter_aeq::highpass::DESC,
     &::vaco_filter_aeq::highshelf::DESC,
     &::vaco_filter_asource::hilbert::DESC,
+    &::vaco_filter_scope::histogram::DESC,
     &::vaco_filter_denoise::hqdn3d::DESC,
     &::vaco_filter_color::hue::DESC,
     &::vaco_filter_analysis::identity::DESC,
@@ -8879,6 +8918,7 @@ pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[
     &::vaco_filter_audio::volume::DESC,
     &::vaco_filter_adynamics::volumedetect::DESC,
     &::vaco_filter_deinterlace::w3fdif::DESC,
+    &::vaco_filter_scope::waveform::DESC,
     &::vaco_filter_deinterlace::weave::WEAVE_DESC,
     &::vaco_filter_deinterlace::yadif::DESC,
     &::vaco_filter_blur::yaepblur::DESC,

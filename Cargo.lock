@@ -1817,6 +1817,7 @@ version = "0.1.0"
 dependencies = [
  "vaco-bitstream",
  "vaco-codec-core",
+ "vaco-codec-vlc",
  "vaco-core",
  "vaco-frame",
  "vaco-limits",
@@ -2055,6 +2056,24 @@ dependencies = [
  "proptest",
  "vaco-bitstream",
  "vaco-codec-core",
+ "vaco-codec-msac",
+ "vaco-core",
+ "vaco-frame",
+ "vaco-limits",
+ "vaco-packet",
+ "vaco-parse-vpx",
+ "vaco-pixfmt",
+ "vaco-pool",
+]
+
+[[package]]
+name = "vaco-codec-vp9"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-bitstream",
+ "vaco-codec-core",
+ "vaco-codec-dsp-idct",
  "vaco-codec-msac",
  "vaco-core",
  "vaco-frame",
@@ -2668,6 +2687,19 @@ dependencies = [
  "vaco-pixfmt",
  "vaco-sampfmt",
  "vaco-time",
+]
+
+[[package]]
+name = "vaco-filter-scope"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-opts",
+ "vaco-pixfmt",
 ]
 
 [[package]]
@@ -3807,6 +3839,7 @@ dependencies = [
  "vaco-codec-qoi",
  "vaco-codec-subtitle-bitmap",
  "vaco-codec-vp8",
+ "vaco-codec-vp9",
  "vaco-core",
  "vaco-demux-asf",
  "vaco-demux-avi",
@@ -3841,6 +3874,7 @@ dependencies = [
  "vaco-filter-key",
  "vaco-filter-lut",
  "vaco-filter-mm",
+ "vaco-filter-scope",
  "vaco-filter-source",
  "vaco-filter-temporal",
  "vaco-filter-video-composite",
