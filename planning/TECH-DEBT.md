@@ -2440,3 +2440,63 @@ miss a snapshot taken through an intermediate variable, a `Vec::from_iter`,
 or any indirection beyond the exact one-line idiom above. Worth re-running
 by hand the next time this class of bug is suspected; not worth promoting
 to an enforced check on the strength of one positive.
+
+## `vaco-mux-mxf`: `KAGSize` fixed, D-10/OP-Atom variants added, byte-identity still open on two named divergences
+
+Closes out the `KAGSize` gap the entry above ("bitexact byte-identity
+chase: two more structural fixes, one remains") left open: `KAGSize = 512`
+plus `klv::pad_to_kag`'s Fill Item padding now match a real file exactly,
+confirmed byte-for-byte via the same `cmp`-real-frames methodology up to
+the Primer Pack. This was a real prerequisite for D-10, whose layout is
+KAG-disciplined throughout (every edit unit's System Item and essence
+element independently padded to the grid, not just the header region) —
+`mux::round_up_to_kag` reproduces that arithmetic to predict D-10's
+`EditUnitByteCount` before any packet arrives, since D-10 embeds its Index
+Table Segment in the header rather than deferring it to the footer.
+
+D-10 (`MUXER_D10`, `mxf_d10`, video-only in this crate) and OP-Atom
+(`MUXER_OPATOM`, `mxf_opatom`, exactly one essence track) are both
+implemented now — full account in `docs/format/vaco-mux-mxf.md`'s new
+sections and byte-identity matrix. Two findings worth flagging beyond the
+crate's own docs:
+
+- **OP-Atom's essence is genuinely clip-wrapped** (one Generic Container
+  element for the whole file), confirmed by generating the first
+  producible OP-Atom sample this crate's installed `ffmpeg 8.1` could make
+  (`mxf`/`mxf_d10` have no clip-wrap option; `mxf_opatom` always
+  clip-wraps). Reading it back, this workspace's own
+  `vaco-demux-mxf::demux::MxfDemuxer::read_packet` returns the whole clip
+  as one packet, not one per frame — that crate's own `essence.rs` module
+  docs already explain why (`clip_wrapped_spans` exists, was never wired
+  in). Checked directly: a real `ffmpeg -i`/`ffprobe -show_packets` on this
+  crate's own OP-Atom output reports the identical shape (one packet, same
+  size). Not treated as a gap to fix — the reference agrees with this
+  workspace's own reader.
+- **D-10's real header is larger than this crate's own by exactly `1536`
+  bytes (three KAG blocks)**, for otherwise-identical input — most likely
+  an unidentified structural set at class byte `0x23`, present in both a
+  real D-10 and a real OP-Atom fixture generated this session, not
+  identified with confidence (would need an RP210 register lookup this
+  session did not do, per D6/D17 "measure, do not guess"). Alongside the
+  already-known Primer-Pack-BER-width divergence
+  (`crates/format/vaco-mux-mxf/src/ber.rs`'s own doc comment has the exact
+  bytes: a real file's Primer Pack length is `82 07 10`, 3 bytes, where
+  this crate always writes the fixed 4-byte form), this is the concrete
+  next pair of divergences for whoever picks byte-identity back up — no
+  variant reached `cmp`-identity this session.
+
+`AspectRatio` (tag `0x320e`) is now written for every video descriptor
+across all three variants — a real, previously-unwritten read-side
+property (`vaco-demux-mxf::properties::PropertyId::AspectRatio`), not just
+a byte-identity nicety, confirmed against a third real fixture (D-10) this
+session. `VideoLineMap` (tag `0x320d`, tentative) now has a third data
+point (`[23, 336]` on the D-10 fixture, consistent with `FrameLayout`) but
+still is not written: `vaco-demux-mxf` has no `PropertyId` for it either,
+so there is nothing on the read side to round-trip against yet, and three
+data points without a register-table cross-check is still an inference,
+not a confirmation.
+
+D-10 audio (the fixed 8-slot AES3 bundle, already measured on the read
+side — `provenance/sources.toml`'s `ffmpeg-mxf-sound-essence-probe`) is
+not implemented: `MUXER_D10`'s `add_stream` rejects an audio stream
+outright rather than writing something unverified.
