@@ -2121,3 +2121,34 @@ Also missing from `hdrl` (4710 vs our 192): a `vprp` video-properties chunk
 (68 bytes) and three `JUNK` paddings — 4120 inside `strl`, 260 after it, and
 1016 after `hdrl` itself. The large one is an alignment reservation; the
 reference pads `movi` to a 2048-byte boundary.
+
+## 40. FLV: the input's container metadata is dropped, and the end-of-sequence tag is missing
+
+`-c copy -fflags +bitexact -f flv`: ref 9585 bytes, ours 9486. Two causes, and
+the 99 bytes divide cleanly between them.
+
+**The `onMetaData` script tag does not carry the input's container metadata**
+(238 bytes against our 159):
+
+```text
+ref   onMetaData duration width height videodatarate framerate videocodecid
+      major_brand minor_version compatible_brands filesize
+ours  onMetaData duration width height videodatarate framerate videocodecid
+      filesize
+```
+
+`major_brand`, `minor_version` and `compatible_brands` are the *input* MP4's
+format-level metadata, which `-map_metadata`'s default forwards to the output.
+The seven keys we do write are all derived from the stream; none is forwarded.
+So this is not an FLV-specific gap so much as the format-metadata channel not
+reaching this muxer.
+
+**The stream is not terminated.** The reference's last tag is
+
+```text
+type 9 (video), 5 bytes: 17 02 00 00 00
+```
+
+— keyframe, codec 7 (AVC), `AVCPacketType = 2`, "end of sequence". Ours ends on
+an ordinary NALU tag. A reader that trusts the terminator to know the sequence
+is complete sees a truncated file.
