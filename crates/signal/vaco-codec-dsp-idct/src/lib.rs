@@ -26,6 +26,16 @@
 //! | [`mpeg2`] | ISO/IEC 13818-2 Annex A / IEEE 1180 | the classical real-valued 8×8 IDCT, built on [`vaco_tx`]'s existing DCT machinery, to the accuracy the standard requires rather than a normative bit pattern |
 //! | [`vp9`] | VP9 Bitstream & Decoding Process Specification v0.6 §8.7 | the 4/8/16/32-point inverse DCT, 4/8/16-point inverse ADST, and the lossless inverse Walsh-Hadamard transform, plus the row/column 2-D combination |
 //!
+//! Two more modules sit either side of the transform rather than inside it
+//! (D-11 names both alongside the transforms because every block-based
+//! codec needs them too, and D19 makes this crate their one home):
+//! [`pixblockdsp`] extracts a source (or source-minus-prediction) block
+//! into the contiguous, widened form a forward transform consumes, and
+//! [`blockdsp`] writes a transformed block back into a pixel plane —
+//! `add_pixels_clamped`, the `Clip1(pred + residual)` reconstruction
+//! equation every one of these standards defines identically (H.264 §8.5,
+//! HEVC §8.6.5, MPEG-2's equivalent).
+//!
 //! # Why this is not built on `vaco-tx`'s transforms, except for MPEG-2
 //!
 //! `vaco-tx` already has a complete, tested DCT-I/II/III family in `f32`, `f64`
@@ -91,8 +101,10 @@
 //! for the full derivation.
 #![forbid(unsafe_code)]
 
+pub mod blockdsp;
 pub mod h264;
 pub mod hevc;
 pub mod mpeg2;
+pub mod pixblockdsp;
 mod util;
 pub mod vp9;

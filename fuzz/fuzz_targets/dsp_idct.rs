@@ -37,7 +37,7 @@
 
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
-use vaco_codec_dsp_idct::{h264, hevc, mpeg2};
+use vaco_codec_dsp_idct::{blockdsp, h264, hevc, mpeg2, pixblockdsp};
 
 #[derive(Arbitrary, Debug)]
 struct Input {
@@ -62,6 +62,20 @@ struct Input {
     /// product nor the sum saturates `i32`.
     hevc_lin_a: [i16; 8],
     hevc_lin_b: [i16; 8],
+
+    /// D-11's block-plumbing addition: arbitrary strided-plane geometry and
+    /// small pixel/coefficient buffers, so `get_pixels`/`diff_pixels`/
+    /// `add_pixels_clamped`/`fill_block` see undersized buffers, zero
+    /// dimensions and strides shorter than the block width in the same
+    /// process as the transforms they feed.
+    block_src: Vec<u8>,
+    block_src2: Vec<u8>,
+    block_dst_u8: Vec<u8>,
+    block_i16: Vec<i16>,
+    block_stride: u8,
+    block_stride2: u8,
+    block_w: u8,
+    block_h: u8,
 }
 
 /// Clamp into `tests/properties.rs`'s own `-10_000..10_000` DC range,
@@ -160,5 +174,36 @@ fuzz_target!(|input: Input| {
             mout.iter().all(|v| v.is_finite()),
             "finite, bounded input produced a non-finite mpeg2 idct8x8 output: {mout:?}"
         );
+    }
+
+    // D-11: block extraction/reconstruction never panics on any
+    // combination of buffer length, stride and block geometry, including
+    // strides shorter than the block width and dimensions larger than
+    // either buffer.
+    {
+        let w = usize::from(input.block_w);
+        let h = usize::from(input.block_h);
+        let stride = usize::from(input.block_stride);
+        let stride2 = usize::from(input.block_stride2);
+
+        let mut dst_i16 = vec![0i16; w.saturating_mul(h)];
+        pixblockdsp::get_pixels(&mut dst_i16, &input.block_src, stride, w, h);
+        pixblockdsp::diff_pixels(
+            &mut dst_i16,
+            &input.block_src,
+            stride,
+            &input.block_src2,
+            stride2,
+            w,
+            h,
+        );
+
+        let mut coeff_block = input.block_i16.clone();
+        blockdsp::clear_block(&mut coeff_block);
+
+        let mut plane = input.block_dst_u8.clone();
+        blockdsp::fill_block(&mut plane, stride, w, h, 0x55);
+        blockdsp::put_pixels_clamped(&input.block_i16, &mut plane, stride, w, h);
+        blockdsp::add_pixels_clamped(&input.block_i16, &mut plane, stride, w, h);
     }
 });

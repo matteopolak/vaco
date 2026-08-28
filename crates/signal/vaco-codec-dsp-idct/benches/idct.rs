@@ -26,7 +26,7 @@
 //! cargo bench -p vaco-codec-dsp-idct
 //! ```
 
-use vaco_codec_dsp_idct::{h264, mpeg2};
+use vaco_codec_dsp_idct::{blockdsp, h264, mpeg2, pixblockdsp};
 
 fn main() {
     divan::main();
@@ -133,4 +133,18 @@ fn mpeg2_idct8x8_f32(bencher: divan::Bencher<'_, '_>) {
         idct.apply(divan::black_box(&input), &mut out);
         out
     });
+}
+
+#[divan::bench]
+fn pixblockdsp_get_pixels_16x16(bencher: divan::Bencher<'_, '_>) {
+    let src = [7u8; 16 * 20];
+    let mut dst = [0i16; 256];
+    bencher.bench_local(|| pixblockdsp::get_pixels(&mut dst, &src, 20, 16, 16));
+}
+
+#[divan::bench]
+fn blockdsp_add_pixels_clamped_16x16(bencher: divan::Bencher<'_, '_>) {
+    let residual = [3i16; 256];
+    let mut dst = [100u8; 16 * 20];
+    bencher.bench_local(|| blockdsp::add_pixels_clamped(&residual, &mut dst, 20, 16, 16));
 }

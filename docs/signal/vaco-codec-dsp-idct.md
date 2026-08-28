@@ -12,6 +12,8 @@ families that need one:
 | [`h264`](../../crates/signal/vaco-codec-dsp-idct/src/h264.rs) | ITU-T H.264 §8.5.10, §8.5.11.1, §8.5.12.2, §8.5.13.2 | 4×4, 8×8, plus the 4×4 luma-16×16 DC and 2×2/2×4 chroma DC Hadamards | **Yes — normative** |
 | [`hevc`](../../crates/signal/vaco-codec-dsp-idct/src/hevc.rs) | ITU-T H.265 §8.6.4 | 4×4, 8×8, 16×16, 32×32 DCT-II, plus the 4×4 DST-VII for intra luma | **Yes — normative** |
 | [`mpeg2`](../../crates/signal/vaco-codec-dsp-idct/src/mpeg2.rs) | ISO/IEC 13818-2 Annex A / IEEE 1180 | 8×8 | Accuracy-bound, not bit-exact — the standard does not mandate one algorithm |
+| [`pixblockdsp`](../../crates/signal/vaco-codec-dsp-idct/src/pixblockdsp.rs) | — (shared plumbing, D-11) | any `w x h` | n/a — pure data movement |
+| [`blockdsp`](../../crates/signal/vaco-codec-dsp-idct/src/blockdsp.rs) | H.264 §8.5 / HEVC §8.6.5 reconstruction eq. | any `w x h` | **Yes — `add_pixels_clamped` is the shared `Clip1(pred + residual)` step** |
 
 H.264 and HEVC specify their transforms as exact integer procedures: a
 conforming decoder must reproduce the standard's arithmetic bit for bit, so
@@ -91,6 +93,26 @@ before running the DCT-III down each axis, then scaling the final result by
 `f64` evaluation to ~1e-13 before being trusted, and pinned in this crate's
 tests against the same direct evaluation to within `vaco-tx`'s own Class C
 bound.
+
+### 2.4 `pixblockdsp`/`blockdsp` — the plumbing either side of a transform
+
+D-11 named these two modules alongside the transforms (issue #123) because
+every block-based codec needs the same extraction/reconstruction step
+regardless of which transform it uses. `pixblockdsp::get_pixels`/
+`diff_pixels` widen a `w x h` region out of a strided `u8` plane into a
+contiguous `i16` buffer (an encoder's residual-formation step, before the
+forward transform); `blockdsp::clear_block`/`fill_block`/
+`put_pixels_clamped`/`add_pixels_clamped` go the other way, after the
+inverse transform. `add_pixels_clamped`'s `Clip1(pred + residual)` is
+transcribed identically from H.264 §8.5 and HEVC §8.6.5's own
+reconstruction equations — every conforming decoder computes this, so it is
+merger-doctrine functional necessity rather than an authorial choice (D7).
+
+Both modules process `min` of whatever lengths the caller's buffers,
+stride and `w`/`h` imply rather than panicking on a mismatch — a decoder's
+`w`/`h` ultimately trace back to bitstream-signalled block sizes, so this
+follows `get`/`try_get`'s own truncate-don't-panic contract elsewhere in
+the tree.
 
 ## 3. How to change it
 
