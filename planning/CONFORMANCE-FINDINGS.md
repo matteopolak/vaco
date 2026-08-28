@@ -2067,3 +2067,57 @@ version/flags bytes, not just the record fields — confirmed by hex-dumping a
 real `vpcC` box (`01 00 00 00 02 0a a2 02 02 02 00 00`: version, flags,
 profile=2, level=10, bitDepth=10/chromaSubsampling=1/fullRange=0 packed into
 one byte, three colour code points, then a zero `codecIntializationDataSize`).
+
+## 39. AVI is written on a fixed 600 Hz grid, padded with empty chunks
+
+`-c copy -fflags +bitexact -f avi` gives 98430 bytes from the reference and
+10126 from us — nearly ten times the size for the same 150 frames of payload.
+The difference is not padding in the ordinary sense; it is the whole timing
+model.
+
+```text
+              ref                     ours
+strh          600/1  length 3600      25/1  length 150
+avih          totalFrames 3600        totalFrames 150
+              usPerFrame  78          usPerFrame  0
+movi          150 real + 3450 empty   150 real
+idx1          57600 (3600 x 16)       2400 (150 x 16)
+hdrl          4710                    192
+```
+
+**AVI has no per-packet timestamp.** It is strictly constant-rate, and a frame's
+presentation time is its ordinal. So the reference does not write the stream's
+frame rate; it writes a **fixed 600 Hz grid** and places each real frame in the
+slot its timestamp falls in, filling every unused slot with a zero-length
+`00dc` chunk. 3450 of the 3600 slots are empty here.
+
+600 is constant, not derived. Measured across six source rates:
+
+```text
+src fps    10     24     25    29.97    30     50
+strh      600/1  600/1  600/1  600/1  600/1  600/1
+```
+
+`length` is then `duration x 600` every time.
+
+**`dwMicroSecPerFrame` is not the grid period.** It would be 1667 if it were.
+It tracks the *source* time base instead — `1e6 / time_base.den`:
+
+```text
+src tb   1/10240  1/12288  1/12800  1/15360  1/30000
+avih          97       81       78       65       33
+```
+
+That is internally inconsistent with `strh`, and it is what the reference
+writes. We write `0`, which is not a plausible value under any reading.
+
+Writing 25/1 and 150 frames the way we do is not a smaller version of this —
+it is a different file. A player takes `strh` at its word, so our output plays
+at the right speed only because our frame count and rate happen to agree with
+each other; the moment the source is variable-rate or has gaps, the two files
+diverge in *content*, not just in bytes.
+
+Also missing from `hdrl` (4710 vs our 192): a `vprp` video-properties chunk
+(68 bytes) and three `JUNK` paddings — 4120 inside `strl`, 260 after it, and
+1016 after `hdrl` itself. The large one is an alignment reservation; the
+reference pads `movi` to a 2048-byte boundary.
