@@ -1034,3 +1034,10 @@ kind     = "blackbox"
 title    = "Observed local-tag numbers and structural detail in a real ffmpeg 8.1 -f mxf header (and, separately, a real two-essence-track file's six Sequence sets) needed to write vaco-mux-mxf's structural-metadata graph: the conventional RP210 tag assigned to each property vaco-demux-mxf's properties.rs only ever needed the resolved UL for, not the tag; the three DataDefinition labels (timecode/picture/sound, differing only in bytes 11 and 12) and which one a timecode-track TrackID=1 vs an essence-track TrackID>=2 actually carries; and confirmation via `ffmpeg -fflags +bitexact -bitexact -f mxf` that two independent runs produce byte-identical output (the Package UMID's material-number field zeroed rather than random/time-based under bitexact)"
 acquired = "2026-08-28"
 where    = "the reference binary installed on the development machine"
+
+[[source]]
+id       = "ffmpeg-mxf-mux-bitexact-probe"
+kind     = "blackbox"
+title    = "A second, follow-up probing session against real ffmpeg 8.1 -f mxf output, driven by cross-checking vaco-mux-mxf's own generated files against ffprobe/ffmpeg -i: the real local tag (0x3f01, not an invented 0x0603) a MultipleDescriptor's SubDescriptorUIDs property uses, which ffmpeg's own resolution of that specific property evidently keys off directly rather than through general per-file primer/UL matching; the distinct EssenceContainer labels a picture vs a sound descriptor vs a MultipleDescriptor itself state; a literal byte comparison (cmp) between vaco-mux-mxf's output and a real -fflags +bitexact file fed the identical real MPEG-2 essence bytes, which found the Partition Pack's real minor version (3, not 2) and that a genuine Body Partition Pack precedes essence in a real single-essence-track OP1a file too, not just a two-track one; and a strong-but-not-fully-confirmed identification of two further MPEGVideoDescriptor properties (AspectRatio at tag 0x320e, likely VideoLineMap at tag 0x320d) from comparing two real fixtures of different resolution/field structure"
+acquired = "2026-08-28"
+where    = "the reference binary installed on the development machine"
