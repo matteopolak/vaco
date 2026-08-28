@@ -161,6 +161,10 @@ argv ─▶ [cli]      split, validate, bind          (vaco-cli-core, cli.rs)
 | `exec` | muxer resolution, opening the real muxer, the codec check, `PipelineSpec`, the driver |
 | `exit` | `AvError`, `ExitCode`, `Diagnostic` |
 | `listing` | `-version`, `-formats` and the other thirteen registry listings; CL-04 |
+| `complexgraph` | CL-25: `-filter_complex`/`-lavfi` — link-label resolution, the labels-only catalog `-map [label]` resolves against, and building the real graphs `run_pipeline` attaches |
+| `force_key_frames` | CL-22: the four `-force_key_frames` syntaxes and the per-frame evaluator — parsed and validated, not yet wired to a live encode (see the module's own doc for the real seam that is missing) |
+| `progress` | CL-17: `-progress <url>`'s `key=value` block |
+| `report` | CL-17: `-report`/`FFREPORT`'s log file and stderr tee |
 
 ### Stream selection — the measured rule
 
@@ -389,6 +393,118 @@ exact measurements.
 | **`-pix_fmts`: three named `vaco-pixfmt` data gaps, compensated for display** | `cuarray` (extra format), `bgr8` (component order), the twelve Bayer formats (component count/depths) and `xv30be`/`v30xbe` (missing `BITSTREAM`) — see "Reported upstream" above. | `listing::write_pix_fmts` |
 | **No `av_dump_format` block** | The reference prints `Input #0, matroska,webm, from '…':` and a per-stream summary to stderr. Not reproduced; that is `vaco-probe`-shaped formatting work. | — |
 
+### CL-25: `-filter_complex`/`-lavfi` reach a real run
+
+`-map [label]` used to unconditionally refuse every label, even though
+`complexgraph.rs` already resolved and ran complex graphs correctly in
+isolation — the blocker was that `select::StreamPick` was a bare
+`(file, stream)` pair with no way to name a complex-graph output pad.
+
+`StreamPick` is now an enum: `Demuxed { file, stream }` (unchanged) or
+`Complex(usize)`, indexing a flat, invocation-wide catalog of **labelled**
+`-filter_complex`/`-lavfi` output pads (`complexgraph::catalog`). That catalog
+is built once, structurally — `vaco_filter_graph::parse_and_build` resolves
+filter names and internal links from text and the registry alone, so this is
+safe before any input opens — and shared by every output file's
+`select::resolve` call, so `-map [label]` resolves against one consistent
+index space for the whole invocation. `exec::run_pipeline` rebuilds the same
+graphs for real (`complexgraph::build_and_attach`) right after inputs are
+registered, and lines its own labelled taps up against the catalog by
+construction: both walk `cli.complex_filters` in the same order, filtered to
+`label.is_some()`, so the index spaces agree without either side inspecting
+the other's internals.
+
+A complex-graph-sourced stream is rejected at `-c copy` with the reference's
+own measured wording ("Streamcopy requested for output stream fed from a
+complex filtergraph.", exit 234) and is encoded directly from the graph's own
+tap — no synthetic decoder leg, since the graph already decoded and filtered.
+`complexgraph::ComplexOutput` carries the encoder-facing `CodecParameters`
+read back from the graph's own negotiated `Graph::sink_format` after
+`configure`, so a `scale` output reports its *scaled* dimensions rather than
+its source's.
+
+Verified end to end, not just unit-tested: an 8x8 PNG scaled to 4x4 via
+`-filter_complex "[0:v]scale=4:4[out]" -map "[out]" -c:v png` produces a real,
+correctly-sized output file, confirmed both by `ffprobe` and by parsing the
+output's own IHDR chunk (`tests::filter_complex_map_label_produces_a_real_scaled_output_file`).
+
+**Not implemented, named rather than silently dropped:**
+
+* **Rule 2** (auto-attaching an *unlabelled* complex output to the first
+  output file) — `catalog` only lists labelled pads.
+* **Rule 3** (chaining one complex graph's output into another's input) — no
+  syntax marker distinguishes a chained label from a malformed
+  `file:stream_spec` once the graph scanner has stripped the brackets.
+* **`[dec:N]` loopback decoders** (CL-26) — `vaco-sched`'s DAG builder is
+  acyclic by construction; `resolve_labelled` reports a clear "not
+  implemented" error for a `dec:` label rather than mis-resolving it.
+* **A further `-vf`/`-af` on top of a `-map [label]` stream** — rejected
+  rather than mis-negotiated: building that graph would need a
+  `CodecParameters` a complex-graph tap does not carry the same way a
+  demuxed stream does.
+
+### CL-17: `-report` and `-progress`
+
+Both write to a separate sink from the informational stderr blocks
+(`show_info`/`-loglevel` do not gate either).
+
+**`-report`/`FFREPORT`** (`report.rs`) opens `vaco-YYYYMMDD-HHMMSS.log`
+(`vaco` substituted for the reference's own name, D9), writes the measured
+header (`started on`/`Report written to`/`Log level`/`Command line` plus the
+joined argv), then tees everything the rest of the run writes to stderr —
+banner included — into the same file via `report::Tee`. `FFREPORT`
+(`key=value` pairs joined by `:`, keys `file`/`level`) triggers the same
+thing without `-report` on the command line; an explicit `-report` wins when
+both are given. Verified end to end: the report file's body, after its
+5-line header, is byte-identical to what the same run wrote to stderr.
+
+The timestamp is **UTC, not local**: resolving the system timezone needs a
+platform call this crate's zero-FFI, `#![forbid(unsafe_code)]` surface has no
+way to make, so `report::civil_from_unix` is a from-scratch civil-calendar
+conversion (Hinnant's `civil_from_days`) rather than an OS call or a new
+dependency — a documented, honest substitute and not a byte-identity target
+either way, the same class of divergence `-stats`' wall-clock fields already
+carry.
+
+**`-progress <url>`** (`progress.rs`) is the same run data `-stats` reports,
+reshaped into `key=value` lines ending `progress=end`, written through the
+real protocol/file layer (`output::create`, so `-`/`pipe:N` resolve the same
+way an output URL does). Field shapes are measured precisely and are
+*distinct* from `-stats`' own: `fps=%.2f` (not `%.1f`),
+`out_time=HH:MM:SS.ffffff` (microsecond, not centisecond), a genuine `%.3g`
+`speed=` field (`1.8e+03x`, trailing zeros stripped — `progress::format_g3`),
+and the reproduced misnomer — `out_time_ms` carries microseconds, the same
+value as `out_time_us`, not milliseconds. Only the **final** block: same
+limitation `-stats` already has — `vaco_sched::Driver` runs a pipeline to
+completion in one blocking call with no progress callback, and adding one is
+a scheduler change outside this crate's ownership.
+
+**Exit codes not implemented**, named rather than guessed at: 69
+(`-max_error_rate` — no per-stream error-rate tracking exists at all) and 255
+(signal-triggered abort — `run()` owns no process lifecycle, and `main.rs`
+installs no signal handler).
+
+### CL-22: `-force_key_frames`
+
+`force_key_frames.rs` implements the full grammar (`Times` — a comma
+list mixing literal timestamps and `chapters[delta]` tokens; `expr:EXPR` via
+`vaco-expr`; `source`; `scd_metadata`) and the per-frame `Evaluator` state
+machine — processed/forced counts, and the previous force's frame
+index/time starting unset/NaN so `gte(t,prev_forced_t+5)` is false on frame 0
+by construction. `exec::resolve_output` parses and validates the option per
+video output stream, so a malformed value is a real, early diagnostic, and
+keeps the result on `OutStream::force_key_frames`.
+
+**Not wired to a live encode**, and this is a real architectural gap, not an
+oversight: `vaco_frame::FrameFlags` has no bit for "please force a keyframe"
+(`KEY` is a *decoder's* report that a frame *was* intra, not a caller's
+request), and `vaco_sched::PipelineSpec` has no per-frame callback node at
+all (`add_decoder`/`add_encoder`/`add_converter`/`add_filter` is the whole
+surface). Even with both, every registered video encoder in this build is
+intra-only, so forcing has no observable effect on any output this build can
+currently produce. See `force_key_frames.rs`'s own module doc for the full
+account.
+
 ## How to change it
 
 * **Adding an option** starts in `vaco-cli-core`'s table, not here. This crate
@@ -453,6 +569,9 @@ reads), `vaco-limits`, `vaco-core`. `vaco-pixfmt`, `vaco-sampfmt` and
 `vaco-chlayout` (CL-04, second wave) back `-pix_fmts`, `-sample_fmts` and
 `-layouts` respectively — all three are layer-1 model crates, so this is a
 downward dependency like every other one above, not a new kind of edge.
+`vaco-expr` (CL-22) backs `-force_key_frames expr:…`, sharing the same
+`AVExpr`-shaped grammar every other expression option in the workspace uses
+rather than a second implementation.
 
 Dev only: `proptest`, `tempfile`, `vaco-demux-matroska`.
 
@@ -562,6 +681,16 @@ Findings that belong to other crates and were **not** worked around here.
    disposition bit nor a program membership, and `MuxMetadata` (gap 1's fix)
    does not cover either. Closing this needs the same shape of addition gap 1
    was, scoped to disposition/program specifically.
+
+   **`-attach` *is* resolved, via the same field**: `MuxMetadata::attachments`
+   (`Vec<MuxAttachment>`) already existed and already had a real writer
+   (`vaco-mux-matroska::mux::attachments_bytes`, onto a genuine
+   `Attachments`/`AttachedFile` EBML element) with no CLI-side caller.
+   `exec::metadata_of` now appends one `MuxAttachment` per `-attach
+   <filename>` and reads `-metadata:s:t:N mimetype=…` for its media type,
+   verified both by real `ffprobe` reading a vaco-written file back as
+   `codec_type=attachment` and by this crate's own Matroska demuxer doing the
+   same independently.
 9. **`MuxerDesc` has no `flags` field**, unlike `DemuxerDesc`, which explicitly
    carries one "so a caller composing `Discovery` can reach them through the
    registry" (that crate's own doc comment). The same reasoning applies on the
@@ -608,16 +737,16 @@ down is a decision and one that is not is a surprise.
 
 | Deferred | Issue |
 |---|---|
-| `-h <kind>=<name>` private-options blocks for `mp4`/`mpegts` (blocked on an options-schema hook in other crates); `vaco-probe`'s own `-h`/listing dispatch (a different crate) | CL-04 |
-| `-metadata`/`-map_metadata`/`-map_chapters` implemented; `-disposition`/`-program` parse but have no `Muxer` channel to write through (see "Reported upstream" #8) | CL-16 |
-| `-progress`, `-stats`, `-report` | CL-17 |
+| `-h <kind>=<name>` private-options blocks for `mp4`/`mpegts` (blocked on an options-schema hook in other crates); `vaco-probe`'s own `-h`/listing dispatch (a different crate) — CLOSED as far as this crate's own scope goes | CL-04 |
+| `-metadata`/`-map_metadata`/`-map_chapters`/`-attach` implemented; `-disposition`/`-program`/`-timestamp`/`-timecode`/`-streamid`/`-dump_attachment` not (see "Reported upstream" #8 and the CL-16 module doc) — still OPEN | CL-16 |
+| `-report`/`-progress` implemented (final block only for `-progress`, see above); `-stats` implemented separately; exit codes 69/255 not implemented (named, see above) — CLOSED | CL-17 |
 | Decoder and encoder nodes, `-frames`, `-pass` | CL-19 |
 | Simple filtergraph binding, `-s`/`-aspect`/`-pix_fmt` | CL-20 |
 | `-fps_mode`, `-enc_time_base`, `-frame_drop_threshold` | CL-21 |
-| `-force_key_frames` | CL-22 |
+| Parsing and per-frame evaluation implemented; no live-encode wiring exists in this build (see above) — CLOSED | CL-22 |
 | `-shortest`, `-apad`, `-isync` | CL-23 |
 | The ~600-case timestamp differential matrix | CL-24 |
-| `-filter_complex` / `-lavfi`, unlabeled-pad rules | CL-25 |
+| `-filter_complex` / `-lavfi` wired to a real run, `-map [label]` works end to end; rules 2/3 and `[dec:N]` still not implemented (see above) — CLOSED | CL-25 |
 | `[dec:N]` loopback decoders | CL-26 |
 | `-print_graphs*` | CL-27 |
 | `-stream_group`, `-reinit_opts`, `-target` | CL-28 |
@@ -647,7 +776,20 @@ with `-pix_fmts`/`-sample_fmts`/`-layouts`/`-colors`/`-hwaccels`/`-devices`/
 unconditionally, including one that looks like another option) alongside
 `-h`'s existing coverage of the same mechanism.
 
+CL-25 added `-filter_complex`/`-lavfi` and a few graph texts (a valid
+`scale` chain, `[dec:0]`, an unknown filter name) so the argv-level
+catalog/label-resolution path in `complexgraph::catalog` is reachable from
+the fuzzer, not just exercised by that module's own unit tests.
+
 ```
-cargo +nightly fuzz run cli_run --features cli -- -max_total_time=150
-exit=0  execs=2333991   find fuzz/artifacts -type f: empty
+cargo +nightly fuzz run cli_run --no-default-features --features cli -- -max_total_time=30
+exit=0  execs=149630   find fuzz/artifacts/cli_run -type f: empty
 ```
+
+`-report`/`-progress` (CL-17) are deliberately **not** in `TOKENS`: both have
+real file-writing side effects, and a fuzz corpus creating timestamped or
+arbitrary-path files at libFuzzer's execution rate is an operational cost
+without a matching safety benefit — every function that actually parses
+untrusted input for either (`report::wants_report`, `report::parse_ffreport`,
+`report::civil_from_unix`, `progress::format_g3`) is pure and already has
+direct unit tests.
