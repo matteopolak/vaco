@@ -97,10 +97,15 @@ measured, with the mismatch stated rather than rounded away to hide it.
   with non-zero `undershoot`/`overshoot`.
 - `maskedthreshold(source, reference)`, `mode=abs` (the default): `source`
   if `|source - reference| <= threshold`, else `reference`. Confirmed at
-  and either side of the boundary. `mode=diff` produced a genuinely
-  different (non-pick) value on probing and is **not implemented** —
-  falls back to `mode=abs` rather than guessing (`maskedthreshold.rs`'s
-  doc has the probe).
+  and either side of the boundary. `mode=diff` = `min(source,
+  max(reference - threshold, 0))`, recovered 2026-08-28 by sweeping
+  `source`'s full `0..=255` range at eight `(reference, threshold)` pairs
+  rather than trusting the single ambiguous probe that used to leave this
+  "not implemented" — the same sweep-not-sample technique that closed a
+  nine-round MPEG-1 investigation and pinned `sobel`'s border rule.
+  `mode` also needed the named-string fix (`mode=diff`/`mode=abs`, not
+  just the bare integer) `pixelize`/`convolution` already needed for the
+  same reason: `vaco-opts` has no named-integer-option support.
 - `threshold(source, threshold, min, max)` = `max` if `source > threshold`
   else `min` (strict `>`, confirmed at the equal-value case landing on
   `min`).
@@ -109,15 +114,26 @@ measured, with the mismatch stated rather than rounded away to hide it.
 also this project's first multi-input `filter`-tool conformance target
 (`vaco-conformance`'s `filterexec.rs`, which used to build exactly one
 source node, now builds one per declared input pad — see that crate's own
-doc for the design). `maskedmerge` (a hand-rolled `Filter`, 3 pads) and
-`maskedmax`/`maskedmin` (`Paired`-wrapped, also 3 pads — the *other*
-multi-input adapter shape this crate uses) all agree with real
-`ffmpeg 8.1` byte-for-byte on a discriminating, non-flat source (a mask
-that ramps across its own range, not just the two saturated endpoints —
-`tests/conformance/filter/vaco-filter-key-multi.toml`), confirming the
-formulas measured above by hand-probing are correct against a genuinely
-independent execution path, not merely self-consistent with the probes
-that derived them.
+doc for the design). All eight cases in
+`tests/conformance/filter/vaco-filter-key-multi.toml` agree with real
+`ffmpeg 8.1` byte-for-byte, covering every multi-input adapter shape the
+crate uses — `maskedmerge` (a hand-rolled `Filter`, 3 pads),
+`maskedmax`/`maskedmin`/`maskedclamp`/`maskedthreshold` (`Paired`, 3/3/3/2
+pads), `threshold` (`Paired` with an `input_count` override to 4, the
+load-bearing case for "the harness reads the filter's own declared
+arity" rather than assuming one), and `premultiply` (`Synced` —
+`vaco-filter-framesync`, the third and last adapter shape) — on
+discriminating, non-flat sources throughout (a mask that ramps across
+its own range rather than just the two saturated endpoints, a
+`maskedthreshold` case that spans both the unchanged and flattened
+regions of `mode=diff` in one pass), confirming the formulas measured
+above by hand-probing are correct against a genuinely independent
+execution path, not merely self-consistent with the probes that derived
+them. `premultiply`'s case also settles a question this doc used to
+carry as open: see `premultiply.rs`'s own "Settled, 2026-08-28" for why
+`gray8` with no alpha channel turned out to be the *entire* rule, not a
+corner of a richer one that a packed alpha format would have exercised
+differently.
 
 ### `premultiply`/`unpremultiply`: what is measured and what is not
 
