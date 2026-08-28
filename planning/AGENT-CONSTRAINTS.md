@@ -384,6 +384,28 @@ was read as a diagnosis rather than as a question. A signal with no period —
 an impulse — or a second parameter varied independently will usually tell you
 which of the two is lying, faster than reasoning about either will.
 
+### A test that asserts well-formedness does not assert correctness
+
+Two full dispatch rounds on H.264 CABAC reported divergence points that were
+not there. The harness asserted `!malformed()` and a matching macroblock count
+— both of which hold when every decoded value is wrong, because a decoder fed
+plausible bits produces a plausible *count* of plausible-looking macroblocks.
+Adding one assertion that the arithmetic engine ends exactly at
+`rbsp_trailing_bits()` moved the reported divergence from "late, in one
+corpus" to "slice 0, in all three". The earlier reports were honest; their
+locations were artifacts of a measurement with no teeth.
+
+The tell is generic. **If an assertion would still pass against a decoder that
+got the right shape from the wrong values, it measures shape, not values.**
+Counts, "did not error", "produced the expected number of frames", and "the
+output re-parses" are all shape. The assertions with teeth are the ones only
+an exactly-correct decode can satisfy: a stream consumed to precisely its
+documented end, a checksum, a byte comparison, a first-divergence locate.
+
+This compounds worse than an ordinary weak test, because the shape assertions
+usually *do* fail while the decoder is badly broken. They pass at exactly the
+point the work gets hard — which reads as progress.
+
 ## A wrapper swallows what it does not forward — five instances so far
 
 Every one was found reactively, because something downstream was silently
