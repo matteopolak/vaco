@@ -175,6 +175,11 @@ fn resolve(root: &Path) -> Result<Vec<String>, String> {
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|x| x == "toml"))
+        // `corrections.toml` is this directory's one file that is not a source
+        // record: it carries `[[correction]]`, not `[[source]]`/`[[table]]`,
+        // and reading it with that schema is a parse error rather than an
+        // empty result.
+        .filter(|p| p.file_name().is_some_and(|n| n != "corrections.toml"))
         .collect();
     files.sort();
 
@@ -487,6 +492,47 @@ fn elements(init: &str) -> Option<usize> {
 
 // -------------------------------------------------------------- trailers
 
+/// One row of `provenance/corrections.toml`: the public commit, the citation
+/// it actually carries, and the registered source id its author meant.
+struct Correction {
+    commit: String,
+    cited: String,
+    id: String,
+}
+
+/// Parse `provenance/corrections.toml`.
+///
+/// Absent is fine and means "no corrections" — the common case, and the one
+/// this file should stay close to. Every field is required, because a
+/// correction that does not say which citation it replaces would waive the
+/// whole commit rather than one trailer.
+fn read_corrections(root: &Path) -> Result<Vec<Correction>, String> {
+    let path = root.join("provenance/corrections.toml");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Ok(Vec::new());
+    };
+    let tables = crate::toml::tables(&text, &["correction"])
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut out = Vec::new();
+    for t in tables {
+        out.push(Correction {
+            commit: t
+                .need("commit")
+                .map_err(|e| format!("{}: {e}", path.display()))?
+                .to_owned(),
+            cited: t
+                .need("cited")
+                .map_err(|e| format!("{}: {e}", path.display()))?
+                .to_owned(),
+            id: t
+                .need("id")
+                .map_err(|e| format!("{}: {e}", path.display()))?
+                .to_owned(),
+        });
+    }
+    Ok(out)
+}
+
 fn trailers(root: &Path) -> Result<Vec<String>, String> {
     let baseline_file = root.join("provenance/baseline");
     let Ok(baseline) = std::fs::read_to_string(&baseline_file) else {
@@ -518,6 +564,7 @@ fn trailers(root: &Path) -> Result<Vec<String>, String> {
     }
 
     let sources = all_source_ids(root)?;
+    let corrections = read_corrections(root)?;
     let log = capture(
         std::process::Command::new("git")
             .args([
@@ -562,6 +609,17 @@ fn trailers(root: &Path) -> Result<Vec<String>, String> {
         // and this gate said OK because `crates/app/` is not in CODE_PATHS.
         for r in &values(body, "Vaco-Spec-Ref") {
             let id = r.split_whitespace().next().unwrap_or_default();
+            // A correction supplies the registered id the author meant, for a
+            // commit that is already public. It waives nothing: the id it names
+            // still has to exist, and every other commit is checked as before.
+            // See `provenance/corrections.toml` for why this is not just a
+            // baseline bump.
+            if corrections
+                .iter()
+                .any(|c| sha.starts_with(&c.commit) && c.cited == *r && sources.contains(&c.id))
+            {
+                continue;
+            }
             if !sources.contains(id) {
                 findings.push(format!(
                     "{short}: `Vaco-Spec-Ref: {r}` starts with `{id}`, which no \
@@ -689,6 +747,11 @@ fn all_source_ids(root: &Path) -> Result<Set<String>, String> {
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|x| x == "toml"))
+        // `corrections.toml` is this directory's one file that is not a source
+        // record: it carries `[[correction]]`, not `[[source]]`/`[[table]]`,
+        // and reading it with that schema is a parse error rather than an
+        // empty result.
+        .filter(|p| p.file_name().is_some_and(|n| n != "corrections.toml"))
         .collect();
     files.sort();
     for f in files {

@@ -1,0 +1,22 @@
+# Trailer corrections for commits that are already public.
+#
+# The trailers on a commit cannot be edited after it is pushed without
+# rewriting history, and this tree is shared by many agents working
+# concurrently — a rebase moves HEAD under everyone mid-edit. Moving
+# `provenance/baseline` forward would exempt every commit in between, which
+# trades one bad record for a hundred unchecked ones.
+#
+# So a correction is recorded here instead, and `provenance-check` accepts the
+# named commit's citation as if it had cited `id`. This is deliberately
+# narrower than an exemption: it does not waive the check, it supplies the
+# registered source the author meant. The `[[source]]` must still exist, and
+# every future commit is checked exactly as before.
+#
+# Add a row only for a commit that is already pushed. A commit still in your
+# own working tree should be amended, not corrected here.
+
+[[correction]]
+commit = "3f927f9dcdcaddb1903261f0f7e09d1234309b17"
+cited  = "ffprobe -bitexact -show_entries stream=profile on H.264/AAC/VP9/AV1"
+id     = "ffprobe-codec-identity-probe"
+reason = "The author wrote the probe out longhand instead of naming its registered id. The measurement is real and is exactly what ffprobe-codec-identity-probe covers; only the citation's form was wrong. Caught after the commit was pushed and built on."
