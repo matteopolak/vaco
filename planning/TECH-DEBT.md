@@ -4307,3 +4307,93 @@ Gates green (`cargo test/clippy -p vaco-codec-mpeg12`, full `layer-check`/
 `vlc-scan`). `provenance-check`'s pre-existing failures unrelated.
 
 `Vaco-Spec-Ref: itu-t-h262` Annex D.9.7.
+
+
+## H.264 CABAC: coded_block_pattern established against an independent instrument, not inferred (#418)
+
+Answering the standing question directly: which instrument, and why,
+before what it found.
+
+**Rejected**: patching bytes directly into a real CABAC bitstream, the
+technique a sibling agent used successfully for an MPEG-2 problem this
+session. It does not transfer. MPEG-2's syntax is VLC-coded with
+recoverable codeword boundaries a patch can respect; CABAC's `range`/
+`offset` state evolves continuously across every decision in the slice,
+with no such boundary — overwriting compressed bytes at a chosen offset
+would desynchronise everything downstream of the patch, not cleanly
+substitute one value. Also on the table: inferring CBP from reconstructed
+pixel output, strictly weaker evidence (visible residual magnitude, but
+not which luma quadrant or chroma component carried it).
+
+**Chosen**: construct genuine encoder *input* — raw YUV, not a hand-built
+bitstream — fed through real, unmodified `libx264`, and cross-check this
+crate's own decode against two independent ground truths:
+
+1. **Structural, no reference needed at all.** Every Y/Cb/Cr sample in the
+   source frame set to exactly 128, the same value clause 8.3.1.2.1
+   substitutes for unavailable neighbours. Any intra prediction mode
+   applied to an already-128 neighbourhood predicts 128 again, exactly
+   matching an already-128 source — residual is zero everywhere by
+   construction, for every macroblock, regardless of mode or QP.
+   `coded_block_pattern` must be `(0, 0)` by argument alone.
+2. **Encoder-log ground truth, independent of this crate.** A frame of
+   independent random noise in Y/Cb/Cr, encoded at low QP. `libx264`'s own
+   per-macroblock accounting (`coded y,uvDC,uvAC intra: 100.0% 100.0%
+   100.0%`, printed by the real encoder, unrelated to anything this crate
+   does) states every macroblock has luma, chroma-DC, and chroma-AC
+   residual — Table 9-4 maps that combination to `cbp_chroma == 2`, and
+   100% `I_NxN` classification (0% `I_16x16`) confirms `decode_cbp_cabac`'s
+   explicit CABAC path is what runs, not `mb_type`'s embedded `cbp`
+   encoding. `cbp_chroma == 2` is also exactly the value previously
+   reported, unverified, for `cabac_ip_simple.264`'s own address 0.
+
+Both fixtures target address 0 specifically — first macroblock of the
+slice, every neighbour unavailable, the exact structural position
+addresses 0-4 of the real corpora occupy — and both match this decoder's
+own `decode_cbp_cabac` output exactly. Landed as two permanent tests,
+`cabac_cbp_oracle.rs`'s `cbp_oracle_flat_frame_decodes_to_zero_everywhere`
+and `cbp_oracle_noise_frame_matches_libx264s_own_accounting`, backed by
+new fixtures `cabac_cbp_oracle_flat.264`/`cabac_cbp_oracle_noise.264`.
+Required one small, purpose-built public-API addition:
+`SliceStats::first_slice_mb_cbp: Option<(u8, u8)>` — the `(cbp_luma,
+cbp_chroma)` of the first macroblock actually decoded in a slice — rather
+than a general per-macroblock trace hook, since that field is the exact
+value this multi-round investigation has needed and never had.
+
+**Where this leaves the search.** `coded_block_pattern` for addresses 0-4
+is no longer an open, unverified inference — it is confirmed, by an
+instrument independent of this decoder's own trace, for the exact
+structural case in question. Combined with everything already cleared
+(mb_type against `ffmpeg -debug mb_type`, the CBP neighbour derivation,
+`CBF_CHROMA_AC`, `ref_idx_cond_term`, table duplication both directions,
+the bypass path, `decode_decision`'s round-trip, `qp_delta_ctx_inc`,
+`cbf_cond_term`, I_PCM), the remaining, not-yet-isolated candidates for
+addresses 0-4's own wrong bit consumption are residual coefficient decode
+itself (`residual_block_cabac`'s actual value decode, as opposed to its
+context tables, now separately verified) and the per-4x4-block intra
+prediction mode flags (`prev_intra4x4_pred_mode_flag`/
+`rem_intra4x4_pred_mode`) — the same two candidates named two rounds ago,
+now with everything else around them checked off.
+
+This round did not attempt the residual bin-by-bin trace itself — the
+assigned and completed work was solving the CBP instrument problem, which
+the coordinator was explicit had to be settled, and stated, before
+anything downstream could be trusted.
+
+Gates: full clean sweep (`layer-check`, `dep-gate`, `unsafe-audit`,
+`dup-check`, `owner-gate`, `patent-gate`), `clippy -p vaco-codec-h264
+--all-targets` clean, full `vaco-codec-h264` test suite (29 integration
+tests across 7 files including the 2 new, 22 `--lib` unit tests) passing
+outside the three known-`#[ignore]`d CABAC macroblock tests (unaffected
+by this round — no real corpus's bit count changed). `h264_entropy` fuzz
+target ran ~26s / ~3.9M execs, no new crashes. `vaco-codec-cabac`/
+`fuzz/fuzz_targets/cabac_engine.rs` confirmed untouched. The scratch
+worktree used for temporary per-macroblock dump instrumentation while
+developing the fixtures was removed before committing; nothing from it
+was committed.
+
+#419 not reopened; no standing fix revisited.
+
+`Vaco-Spec-Ref: iso-iec-14496-10-2002-draft` clause 8.3.1.2.1
+(unavailable-neighbour substitution), Table 9-4 (`coded_block_pattern`
+chroma coding).
