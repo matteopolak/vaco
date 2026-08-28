@@ -111,6 +111,12 @@ pub struct Cli {
     /// The split command line, kept because per-stream option resolution needs
     /// the original groups.
     pub line: CommandLine,
+    /// CL-25: every `-filter_complex`/`-lavfi` occurrence's text, in argv
+    /// order — each is a separate, repeatable global graph. Parsed here so
+    /// the option does not raise "unrecognized option"; **not yet wired into
+    /// a real run** — see `crate::complexgraph`'s module doc for exactly
+    /// what that would still take.
+    pub complex_filters: Vec<String>,
 }
 
 impl Cli {
@@ -170,6 +176,12 @@ pub fn parse<S: AsRef<OsStr>>(argv: &[S]) -> Result<Cli, Diagnostic> {
             .iter()
             .map(|o| format!("-{}", o.name))
             .collect(),
+        complex_filters: line
+            .global
+            .iter()
+            .filter(|o| o.resolved().0 == "filter_complex")
+            .map(value_str)
+            .collect::<Result<Vec<_>, _>>()?,
         ..Cli::default()
     };
 
@@ -609,6 +621,26 @@ mod tests {
         assert_eq!(cli.listing, Some("version"));
         let cli = parse(&["-formats"]).unwrap();
         assert_eq!(cli.listing, Some("formats"));
+    }
+
+    #[test]
+    fn filter_complex_and_lavfi_occurrences_are_captured_in_argv_order() {
+        let cli = parse(&[
+            "-i",
+            "a.mkv",
+            "-filter_complex",
+            "[0:v]scale=320:240[out]",
+            "-lavfi",
+            "anull",
+            "-f",
+            "null",
+            "-",
+        ])
+        .unwrap();
+        assert_eq!(
+            cli.complex_filters,
+            vec!["[0:v]scale=320:240[out]".to_owned(), "anull".to_owned()]
+        );
     }
 
     #[test]

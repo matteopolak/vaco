@@ -67,6 +67,7 @@
 #![forbid(unsafe_code)]
 
 pub mod cli;
+pub mod complexgraph;
 pub mod dump;
 pub mod exec;
 pub mod exit;
