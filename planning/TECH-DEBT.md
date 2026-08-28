@@ -4668,3 +4668,73 @@ are pre-existing, none from this round's commit.
 
 `Vaco-Spec-Ref: iso-iec-14496-10-2002-draft` clause 9.3.3.2.4
 (`DecodeTerminate`), clause 9.3.1.2 (I_PCM re-initialisation).
+
+
+### The escape-level sentinel hypothesis for the P-picture max-97 residual is eliminated (#355)
+
+The previous round's reframing (the residual is exactly two macroblocks
+in one picture, not a P-picture-wide phenomenon) reopened a candidate an
+earlier round had dismissed on usage count: MPEG-1's Annex D.9.3
+escape-level 22-bit sentinel sub-case (`decode_coefficients`'s
+`mpeg1`-gated branch, triggered when the 8-bit direct escape-level field
+is exactly `0x00` or `0x80`, meaning "the magnitude doesn't fit in 7
+bits, read a further 8-bit unsigned magnitude instead"). It is one of
+only two `mpeg1`-gated branches in the crate, sits upstream of
+dequantisation and the IDCT (both independently ruled out the previous
+round), and large magnitudes are exactly what the two defective
+macroblocks' dense (~58/64 nonzero), sharp-edge coefficient sets
+produce. The old "fires twice, too rare to be the primary mechanism"
+argument was sound under the old (P-picture-wide) framing and void under
+the new one, so it was worth re-checking rather than trusting.
+
+**Re-measured directly: the sentinel fires 9 times in `m1_ip.m1v`, not
+2.** Two at frame 0 (`mb=(3,1)`, blocks `i=1`/`i=3`, magnitudes 125/124)
+and five at frame 15 — the fixture's defective second I-picture. Of
+those five, exactly two are the known-broken macroblocks (`mb=(3,1)`
+`i=1`/`i=3` again, magnitudes 60/58; `mb=(0,1)` `i=0`/`i=2`, magnitudes
+78/73). **The other three are not**: `mb=(0,2)` `i=2` (magnitude 145)
+and `mb=(2,2)` `i=0`/`i=4` (magnitudes 134/119) fire the identical code
+path, at larger magnitudes than either broken macroblock, and
+reconstruct to within max diff 1 of reference. `mb=(3,1)` itself fires
+the sentinel correctly at frame 0 (magnitude 125, within the known small
+ceiling) and incorrectly at frame 15 (magnitude 60) — the same code,
+the same macroblock, a smaller magnitude, opposite outcomes.
+
+**This eliminates the hypothesis rather than confirming it.** A wrong
+byte-layout, sign convention, or bit-width in the sentinel decode would
+misdecode every occurrence that exercises it, not 2 of 9 selectively,
+and specifically would not spare `mb=(0,2)`/`mb=(2,2)` in the very same
+picture while breaking `mb=(3,1)`/`mb=(0,1)`. Sentinel usage correlates
+with the defect (dense, escape-heavy blocks are exactly where a genuine
+sharp edge needs one) without causing it — the same relationship a
+wrong reading of "fires twice" almost obscured in the other direction
+last time.
+
+**Not chased further this round, per instruction:** since the sentinel
+hypothesis did not fall, `m1_i`'s own separate max-9 residual (the
+question of whether it shares a mechanism with this one, now that both
+are known to be intra defects) was not investigated.
+
+**State of the search after this round:** dequantisation, both AC VLC
+tables' base codes, mismatch control, full-pel vectors, the
+`sequence_header()` matrix-reset semantics, and now the escape-level
+sentinel sub-case are all confirmed correct against either primary text
+or independent re-derivation. What remains implicated is entropy
+decoding of the *non-escape* run/level VLC codes specifically for these
+two macroblocks' bitstreams — `tables::TABLE_ZERO`'s ordinary codewords,
+or the run-accumulation around them, rather than any `mpeg1`-specific
+branch. The most direct next test is a full bit-by-bit hand-decode of
+one defective macroblock's raw slice bits against `tables::TABLE_ZERO`'s
+own rows, not another black-box correlation — this is smaller in scope
+than a bounded round but larger than one measurement, and was not
+started here.
+
+Gates green (`cargo test/clippy -p vaco-codec-mpeg12`, full
+`layer-check`/`dep-gate`/`unsafe-audit`/`dup-check`/`time-gate`/
+`owner-gate`/`vlc-scan`). Debug instrumentation (three temporary
+`eprintln!`s gated on `MPEG12_ESC_DEBUG`, in `decoder.rs`,
+`macroblock.rs`, and `block.rs`) fully reverted before committing;
+nothing from it landed except this entry and the corresponding
+`docs/codec/vaco-codec-mpeg12.md` update.
+
+`Vaco-Spec-Ref: itu-t-h262` Annex D.9.3.
