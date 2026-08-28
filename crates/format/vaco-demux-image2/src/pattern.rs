@@ -107,6 +107,39 @@ impl SequencePattern {
         Self::parse(pattern).is_ok()
     }
 
+    /// Whether `pattern` contains at least one `%d`/`%0Nd` token, ignoring a
+    /// doubled `%%`.
+    ///
+    /// [`SequencePattern::parse`] collapses "no placeholder" and "more than
+    /// one placeholder" into the same `Err` variant, which is right for a
+    /// caller that treats a pattern as a pattern or an error either way. A
+    /// caller that instead wants to fall back to *literal filename* only when
+    /// there is no placeholder at all — the mux side's bare-filename case —
+    /// needs the two told apart, and matching `parse`'s error text would make
+    /// that message an interface rather than prose.
+    #[must_use]
+    pub fn has_placeholder(pattern: &str) -> bool {
+        let mut chars = pattern.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c != '%' {
+                continue;
+            }
+            let mut saw_digit = false;
+            while chars.peek().is_some_and(char::is_ascii_digit) {
+                chars.next();
+                saw_digit = true;
+            }
+            match chars.peek() {
+                Some('%') if !saw_digit => {
+                    chars.next();
+                }
+                Some('d') => return true,
+                _ => {}
+            }
+        }
+        false
+    }
+
     /// The filename for `index`, e.g. `out%03d.png` at index 7 is `out007.png`.
     #[must_use]
     pub fn format(&self, index: i64) -> String {
@@ -167,6 +200,15 @@ mod tests {
     #[test]
     fn rejects_missing_placeholder() {
         assert!(SequencePattern::parse("out.png").is_err());
+    }
+
+    #[test]
+    fn has_placeholder_finds_a_bare_pattern() {
+        assert!(!SequencePattern::has_placeholder("out.png"));
+        assert!(SequencePattern::has_placeholder("out%03d.png"));
+        assert!(SequencePattern::has_placeholder("out%d.png"));
+        assert!(SequencePattern::has_placeholder("a%d_%d.png"));
+        assert!(!SequencePattern::has_placeholder("100%%.png"));
     }
 
     #[test]

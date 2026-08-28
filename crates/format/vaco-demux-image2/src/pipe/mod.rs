@@ -514,7 +514,7 @@ pipe!(
     base = "pam",
     extensions = &["pam"],
     framing = ImageFraming::Netpbm,
-    codec = None,
+    codec = Some(CodecId::Pam),
     raw_name = "pam",
     magics = &[&[(0, b"P7")]]
 );
@@ -525,7 +525,7 @@ pipe!(
     base = "pbm",
     extensions = &["pbm"],
     framing = ImageFraming::Netpbm,
-    codec = None,
+    codec = Some(CodecId::Pbm),
     raw_name = "pbm",
     magics = &[&[(0, b"P4")], &[(0, b"P1")]]
 );
@@ -536,7 +536,7 @@ pipe!(
     base = "pcx",
     extensions = &["pcx"],
     framing = ImageFraming::WholeRemaining,
-    codec = None,
+    codec = Some(CodecId::Pcx),
     raw_name = "pcx",
     magics = &[&[(0, &[0x0A])]]
 );
@@ -547,7 +547,7 @@ pipe!(
     base = "pfm",
     extensions = &["pfm"],
     framing = ImageFraming::Netpbm,
-    codec = None,
+    codec = Some(CodecId::Pfm),
     raw_name = "pfm",
     magics = &[&[(0, b"PF")], &[(0, b"Pf")]]
 );
@@ -558,7 +558,7 @@ pipe!(
     base = "pgm",
     extensions = &["pgm"],
     framing = ImageFraming::Netpbm,
-    codec = None,
+    codec = Some(CodecId::Pgm),
     raw_name = "pgm",
     magics = &[&[(0, b"P5")], &[(0, b"P2")]]
 );
@@ -593,7 +593,7 @@ pipe!(
     base = "phm",
     extensions = &["phm"],
     framing = ImageFraming::Netpbm,
-    codec = None,
+    codec = Some(CodecId::Phm),
     raw_name = "phm",
     magics = &[&[(0, b"PH")], &[(0, b"Ph")]]
 );
@@ -637,7 +637,7 @@ pipe!(
     base = "ppm",
     extensions = &["ppm"],
     framing = ImageFraming::Netpbm,
-    codec = None,
+    codec = Some(CodecId::Ppm),
     raw_name = "ppm",
     magics = &[&[(0, b"P6")], &[(0, b"P3")]]
 );
@@ -670,7 +670,7 @@ pipe!(
     base = "qoi",
     extensions = &["qoi"],
     framing = ImageFraming::Qoi,
-    codec = None,
+    codec = Some(CodecId::Qoi),
     raw_name = "qoi",
     magics = &[&[(0, b"qoif")]]
 );
@@ -681,7 +681,7 @@ pipe!(
     base = "sgi",
     extensions = &["sgi"],
     framing = ImageFraming::WholeRemaining,
-    codec = None,
+    codec = Some(CodecId::Sgi),
     raw_name = "sgi",
     magics = &[&[(0, &[0x01, 0xDA])]]
 );
@@ -747,7 +747,7 @@ pipe!(
     base = "xbm",
     extensions = &["xbm"],
     framing = ImageFraming::CArrayText,
-    codec = None,
+    codec = Some(CodecId::Xbm),
     raw_name = "xbm",
     magics = &[]
 );
@@ -769,7 +769,7 @@ pipe!(
     base = "xwd",
     extensions = &["xwd"],
     framing = ImageFraming::Xwd,
-    codec = None,
+    codec = Some(CodecId::Xwd),
     raw_name = "xwd",
     magics = &[]
 );
