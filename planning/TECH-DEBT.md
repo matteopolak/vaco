@@ -1485,3 +1485,50 @@ if two of them tried to `pub use` the same path, which none do. Whoever next
 owns `vaco-filter-vdsp` (or whoever does the filter-crate reconciliation
 sweep `planning/FILTER-CRATE-DIVERGENCE.md` already tracks) is the natural
 one to move it there and update three `use` statements.
+
+### `vaco-cli`'s `exec.rs` discards a `Decoder::set_extradata` refusal with no counter
+
+Closing interface gap 19 (`INTERFACE-GAPS.md`) added `p.extradata.as_deref()`
+offered to the decoder at `exec.rs`'s `decoder_desc.build(limits)` call site,
+discarded with `let _ =` on the theory that offering extradata is not a
+promise it will be used — the same convention `vaco-format-core::discovery`'s
+`build_parser` already uses for `Parser::set_extradata`, and the one
+`Decoder::set_extradata`'s own doc states explicitly.
+
+`AGENT-CONSTRAINTS.md`'s rule about a discarded fallible call ("make the
+discard countable") applies here in principle, and nothing in `vaco-cli`
+currently counts it. In practice the only implementor as of this change
+(`VobSubSubtitleDecoder::set_extradata`) always returns `Ok(())` regardless of
+whether the bytes parsed to a real palette, so there is no error path being
+silently swallowed today — but a future decoder whose `set_extradata`
+legitimately fails (a malformed `avcC` it cannot even partially use, say)
+would fail exactly as invisibly as `H264Parser::set_extradata` did for
+months. `exec.rs` has no logging or warnings channel at all right now
+(checked: no `tracing`/`log`/`eprintln!` anywhere in the file), so wiring
+this properly means either adding one or growing `RunSpec` a field for
+degraded-but-not-fatal configuration — both bigger than this change's scope.
+Whoever adds the next `Decoder::set_extradata` override with a real failure
+mode should revisit this call site first.
+
+### `vaco-codec-subtitle-bitmap`'s `VobSubSubtitleDecoder` cannot shift `Frame::pts` for a delayed `SP_STA_DSP`
+
+Closing interface gap 20 found its own premise wrong — `Frame::duration` is
+`vaco_core::Duration` (always real microseconds), not ticks of the stream's
+time base, so the codec's own display *length* converts with no time base at
+all and now does (`decoder.rs`'s `display_duration`). What is still true and
+still open: `VobSub`'s `SP_STA_DSP` can state a display *start* delayed past
+the packet's own PTS (`SubtitleEvent::start` non-zero), and expressing that
+delay as a shift on `Frame::pts` (a tick count in the stream's time base)
+would need that time base, which no `Decoder` in this tree receives. `Frame::pts`
+is therefore left equal to `packet.pts` unconditionally, and a stream that
+sets a non-zero start delay will show its subtitle slightly early.
+
+No test can currently fail on this, because nothing in the fixture set states
+a non-zero `SP_STA_DSP` delay — `vobsub_spu()` (`decoder.rs`'s own test
+helper, and `vobsub.rs`'s private `sample_spu()` it was copied from) always
+puts `STA_DSP` at `SP_DCSQ_STM = 0`. Whoever finds or builds a real disc SPU
+with a delayed start should add it as a regression fixture; until then this
+is a known, undetected gap rather than a verified-absent one. Not chased
+further here: a `Decoder::set_time_base` built to fix a case this narrow
+would be speculative interface surface (D19) for a fact no fixture currently
+demonstrates matters.

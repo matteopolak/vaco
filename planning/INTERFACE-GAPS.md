@@ -1189,7 +1189,7 @@ works.
 on the decoder side. Not blocking `vaco-codec-subtitle-cc`'s own correctness,
 which is verified directly against hand-built and extracted `cc_data` bytes.
 
-## 19. `Decoder` has no channel for a codec's out-of-band configuration
+## 19. `Decoder` has no channel for a codec's out-of-band configuration — CLOSED 2026-08-28
 
 Found wiring `vaco-codec-subtitle-bitmap`'s three decoders to the registry —
 the first subtitle decoders in this build, and the first consumer of gap 17's
@@ -1232,7 +1232,52 @@ neither was attempted.
 Does not block `vobsub` decode itself, which is correct when the palette is
 supplied directly.
 
-## 20. A decoded `Frame` cannot express a display window the codec states in absolute time
+### Status, 2026-08-28
+
+Landed exactly as sketched above. `Decoder::set_extradata` is a defaulted
+`fn(&mut self, &[u8]) -> Result<()>` (`crates/signal/vaco-codec-core/src/lib.rs`),
+with the identical default on `SendReceive` so `AsDecoder` has something to
+forward to. Every layer between a registered decoder and its `Box<dyn
+Decoder>` forwards explicitly: `SendReceive` itself, `AsDecoder`,
+`DecoderProtocol`, `Validated`, and a new `impl<D: Decoder + ?Sized> Decoder
+for Box<D>` mirroring the existing `Box<dyn Parser>` one. `vaco-cli`'s
+`exec.rs` offers `p.extradata` at the `decoder_desc.build(limits)` call site,
+discarding a refusal the same way `Parser::set_extradata`'s own callers do.
+
+**The forwarding trap named in this gap's own text bit on the first attempt**,
+caught by a dedicated test rather than in review: an `AsDecoder<Validated<T>>`
+built without overriding `set_extradata` on `AsDecoder`'s `impl Decoder`
+compiles cleanly and silently answers `Ok(())` from the trait default,
+never reaching `T`. `vaco-codec-core/tests/protocol.rs`'s
+`set_extradata_forwards_through_as_decoder_validated_and_the_box` pins this:
+an inner `SendReceive` whose `set_extradata` always errs with a distinctive
+message is wrapped exactly as `vaco-codec-subtitle-bitmap`'s three registered
+decoders are (`Box::new(AsDecoder(Validated::new(inner)))`), and the test
+requires that exact error to surface through the box. Deliberately reverted
+the `AsDecoder` forwarding line and re-ran the test to confirm it fails
+before restoring it — it does.
+
+**The DVD colour measurement this gap asked for.** `VobSubSubtitleDecoder`
+now holds a palette field, initialised to the documented grey ramp and
+overwritten by `set_extradata` when the bytes parse as `.idx`-style text with
+a `palette:` line (`vaco_subtitle_bitmap::vobsub::idx::parse`, already
+written for the demuxer side — reused rather than re-implemented). Matroska's
+own subtitle-mapping page (`matroska-subtitles-mapping` in
+`provenance/sources.toml`) states a `S_VOBSUB` track's `CodecPrivate` is
+exactly the `.idx` file's `size:`/`palette:` lines with the `id:`/
+`timestamp:`/comment lines stripped, so that parser is the right one to feed
+raw `extradata` bytes into unchanged. Measured on a hand-built 4×2 SPU whose
+`SET_COLOR` command indexes palette slot 3: before `set_extradata` is called,
+`DVDSUB_DECODER.build(..)` paints that pixel `[51, 51, 51, 255]` (the grey
+ramp, `3 * 17`); after offering `b"size: 720x480\npalette: 000000, 0a141e,
+ffffff, 010203\n"`, the identical SPU bytes paint `[1, 2, 3, 255]` — slot 3 of
+the offered palette. Both the private `make_vobsub` path and the real
+`DVDSUB_DECODER.build` (`Box<dyn Decoder>`) path are exercised
+(`crates/codec/vaco-codec-subtitle-bitmap/src/decoder.rs`'s
+`dvd_subtitle_colours_come_from_extradata_not_the_grey_ramp` and
+`the_registered_dvdsub_decoder_forwards_set_extradata_through_the_box`).
+
+## 20. A decoded `Frame` cannot express a display window the codec states in absolute time — CLOSED 2026-08-28 (narrowed — no `Decoder` or `vaco-sched` change needed)
 
 Same origin as gap 19, and a genuinely different problem from it.
 
@@ -1276,3 +1321,51 @@ crate's scope.
 
 **Blocks:** a subtitle renderer knowing how long to leave a DVB or DVD
 subtitle on screen, when the container does not state a packet duration.
+
+### Status, 2026-08-28 — the premise above does not hold
+
+This entry's claim that "converting either into `Frame::duration` requires
+the stream's time base" was checked against the actual types rather than
+taken on report, and it is wrong. `Frame::duration`/`Packet::duration` are
+`vaco_core::Duration` — always real microseconds by construction
+(`Duration::from_micros`/`as_micros`, and `Timestamp::to_duration`/
+`Duration::to_ticks` are the only things in the tree that convert *between*
+Duration and a time base, never Duration alone). `SubtitleEvent::start`/`end`
+(`crates/codec/vaco-codec-subtitle-bitmap/src/lib.rs`) are already the same
+`Duration` type: DVB's `dvb.rs` builds `end` as
+`Duration::from_micros(i64::from(page_time_out).saturating_mul(1_000_000))`
+and `vobsub.rs`'s `ticks_to_micros` does the 90 kHz/1024 conversion before
+`decode_spu` ever returns. So the codec's own display
+window arrives at `frame_of_event` in exactly the unit `Frame::duration`
+wants, with no time base anywhere in the path — confirmed independently by
+grepping every other decoder in the tree (`vaco-codec-vp8`, `vaco-codec-mpeg12`)
+for the same `frame.duration = packet.duration` copy with no rescale, which
+only makes sense if `Duration` is already time-base-free.
+
+**What landed:** `frame_of_event` now computes `Frame::duration` as
+`event.end - event.start` when the codec stated an `end` (DVB and `VobSub`
+always do; PGS never does, per `SubtitleEvent`'s own doc, so PGS frames are
+unaffected and keep the packet's duration), entirely inside
+`vaco-codec-subtitle-bitmap` — no change to `Decoder`, `vaco-sched`, or
+`PipelineSpec::add_decoder`. `Frame::pts` is left as the packet's own `pts`
+unconditionally, unchanged from before. Confirmed against the existing
+`dvb_packet_becomes_a_subtitle_frame_carrying_the_librarys_own_rects` test,
+whose fixture states a 5-second `page_time_out`: `frame.duration` now reads
+`5_000_000` microseconds (the codec's stated window) rather than the test
+packet helper's fixed `2_000_000` — the test's own assertion was updated to
+match, since it had been pinning the discarded behaviour this gap exists to
+fix, the same "test holding the bug in place" shape `AGENT-CONSTRAINTS.md`
+warns about for `codec_tag`.
+
+**What is still open, narrower than the original gap:** `VobSub`'s
+`SP_STA_DSP` can state a non-zero `start` (a delayed display, separate from
+the packet's own PTS), and shifting `Frame::pts` forward by that amount
+*would* need the stream's time base to turn a microsecond delay into ticks —
+that part of the original problem is real, just much smaller than "the whole
+display window needs a time base". Left as `Frame::pts = packet.pts`
+unconditionally; the display *length* this close now reports is correct
+regardless, only the display *start* can be off by that delay on the rare
+stream that sets one. Not chased further here, since a `Decoder::set_time_base`
+built to fix a case this narrow would be solving a problem `vaco-codec-subtitle-bitmap`
+does not currently have evidence needs it (D19) — recorded in
+`planning/TECH-DEBT.md` instead of speculatively adding the interface surface.
