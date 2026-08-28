@@ -49,6 +49,7 @@ vaco-codec-jpeg = { path = "../crates/codec/vaco-codec-jpeg" }
 vaco-codec-mpegaudio = { path = "../crates/codec/vaco-codec-mpegaudio" }
 vaco-codec-pnm = { path = "../crates/codec/vaco-codec-pnm" }
 vaco-codec-qoi = { path = "../crates/codec/vaco-codec-qoi" }
+vaco-codec-subtitle-teletext = { path = "../crates/codec/vaco-codec-subtitle-teletext" }
 vaco-color = { path = "../crates/model/vaco-color" }
 vaco-conformance = { path = "../crates/tool/vaco-conformance" }
 vaco-core = { path = "../crates/core/vaco-core" }
@@ -180,6 +181,7 @@ default = [
     "codec-mpegaudio",
     "codec-pnm",
     "codec-qoi",
+    "codec-subtitle-teletext",
     "color",
     "conformance",
     "core",
@@ -304,6 +306,7 @@ codec-jpeg = []
 codec-mpegaudio = []
 codec-pnm = []
 codec-qoi = []
+codec-subtitle-teletext = []
 color = []
 conformance = []
 core = []
@@ -1718,6 +1721,22 @@ test = false
 doc = false
 bench = false
 required-features = ["format-swf"]
+
+[[bin]]
+name = "teletext_hamming_decode"
+path = "fuzz_targets/teletext_hamming_decode.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-subtitle-teletext"]
+
+[[bin]]
+name = "teletext_packet_parse"
+path = "fuzz_targets/teletext_packet_parse.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-subtitle-teletext"]
 
 [[bin]]
 name = "textformat_escape"

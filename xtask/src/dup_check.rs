@@ -217,6 +217,26 @@ const DISTINCT: &[(&str, &str)] = &[
          analogue. Merging would mean grafting an unrelated field onto whichever \
          one people notice least.",
     ),
+    (
+        "Cell",
+        "vaco-codec-subtitle-teletext: one 40x25 page-grid character cell \
+         (glyph plus Table 26 spacing attributes). vaco-codec-subtitle-cc: a \
+         closed-caption cell. Same shape, unrelated wire formats and control \
+         codes (EN 300 706 vs CEA-608/708).",
+    ),
+    (
+        "Color",
+        "vaco-codec-subtitle-teletext: one of Teletext's eight fixed CLUT-0 \
+         colours. vaco-codec-subtitle-cc: a closed-caption colour.",
+    ),
+    (
+        "Packet",
+        "vaco-packet: a demuxed elementary-stream packet, the type most of \
+         this workspace passes around. vaco-codec-subtitle-teletext: one raw \
+         42-byte EN 300 706 packet (magazine/packet address plus 40 data \
+         bytes) before Hamming/parity decode — never leaves this crate's \
+         `packet` module.",
+    ),
 ];
 
 /// Known duplicates that are *not* yet resolved, with the plan.

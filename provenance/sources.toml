@@ -816,3 +816,17 @@ kind     = "paper"
 title    = "MPUCoder, \"Sub-Pictures\" (mpucoder.com/DVD/spu.html) — the DVD subpicture (SPU) unit header, SP_DCSQT control-sequence structure, all eight SP_DCSQ commands (FSTA_DSP/STA_DSP/STP_DSP/SET_COLOR/SET_CONTR/SET_DAREA/SET_DSPXA/CHG_COLCON) and the 4/8/12/16-bit nibble-escalation run-length grammar, used since no formal DVD subpicture specification is public; the live site is gone, fetched via the Wayback Machine"
 acquired = "2026-08-28"
 where    = "https://web.archive.org/web/20260807015919/http://mpucoder.com/DVD/spu.html"
+
+[[source]]
+id       = "etsi-en-300-706"
+kind     = "spec"
+title    = "ETSI EN 300 706 V1.2.1 (2003-04), Enhanced Teletext specification — used for the Hamming 8/4 (clause 8.2) and Hamming 24/18 (clause 8.3) encoding equations (the decoder is derived algebraically from these, not transcribed from the clause's own decision tables), odd parity (8.1), packet address/page header structure (7.1.2, 9.3.1), Table 2's C4-C14 control-bit locations, Table 26's spacing attributes (12.2), Table 35's Latin G0 primary set and Table 36's English national-option sub-set (15.6.1-15.6.2)"
+acquired = "2026-08-28"
+where    = "https://www.etsi.org/deliver/etsi_en/300700_300799/300706/01.02.01_60/en_300706v010201p.pdf"
+
+[[source]]
+id       = "etsi-en-300-472"
+kind     = "spec"
+title    = "ETSI EN 300 472 V1.4.1, Specification for conveying ITU-R System B Teletext in DVB bitstreams — the 46-byte data-unit framing (data_unit_id/data_unit_length/line-and-field byte/framing_code, wrapping one EN 300 706 packet) that vaco-codec-subtitle-teletext's input is shaped as"
+acquired = "2026-08-28"
+where    = "https://www.etsi.org/deliver/etsi_en/300400_300499/300472/01.04.01_60/en_300472v010401p.pdf"

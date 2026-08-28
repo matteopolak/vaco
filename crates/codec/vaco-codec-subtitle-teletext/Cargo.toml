@@ -1,0 +1,20 @@
+[package]
+name = "vaco-codec-subtitle-teletext"
+description = "EBU/ETSI Teletext (EN 300 706) decode: Hamming 8/4 and 24/18 correction, odd-parity Latin text, page header and level-1 page-grid assembly."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.vaco]
+layer = 4
