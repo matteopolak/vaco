@@ -232,7 +232,7 @@ fn stream_fields<W: Write>(
         if !in_scope(field, media) {
             continue;
         }
-        let mut val = stream_value(field, s, p, media, counts);
+        let mut val = stream_value(field, s, p, media, counts, e.is_bitexact());
         // `id` is printed only by a container that declares
         // `FormatFlags::SHOW_IDS`. Measured: the same H.264 track reports
         // `id=0x1` from MP4 and `id=N/A` from Matroska, and Matroska's
@@ -270,6 +270,7 @@ fn stream_value(
     p: &CodecParameters,
     media: Option<MediaType>,
     counts: Counts,
+    bitexact: bool,
 ) -> Val {
     let video = p.video.as_ref();
     let audio = p.audio.as_ref();
@@ -285,7 +286,21 @@ fn stream_value(
         //
         //   ffprobe -v quiet -of json    -show_entries stream=profile f.flac  # no key
         //   ffprobe -v quiet -of default -show_entries stream=profile f.flac  # profile=unknown
-        "profile" => Val::opt_s(p.profile.map(|x: Profile| x.name)),
+        // `-bitexact` swaps the library name for the raw numeric value —
+        // measured on H.264 (`High` -> `100`), AAC (`LC` -> `1`), VP9
+        // (`Profile 0` -> `0`) and AV1 (`Main` -> `0`); `level` is unaffected,
+        // it is already numeric in both modes. A profile with no name at all
+        // (VP8, or an H.264 `profile_idc` the standard never named) prints
+        // the number in *both* modes — `x.name` is `""` for those, per
+        // `vaco_codec_core::Profile`'s own convention, so the empty-name case
+        // takes the same branch as bitexact rather than printing `""`.
+        "profile" => Val::opt_s(p.profile.map(|x: Profile| {
+            if bitexact || x.name.is_empty() {
+                x.value.to_string()
+            } else {
+                x.name.to_string()
+            }
+        })),
         "codec_type" => Val::opt_s(media.map(MediaType::name)),
         "codec_tag_string" => Val::s(codec_tag_string(p.codec_tag)),
         "codec_tag" => Val::s(num::codec_tag(codec_tag_u32(p.codec_tag))),
@@ -1022,6 +1037,7 @@ mod tests {
                 &p,
                 Some(MediaType::Video),
                 Counts::NONE,
+                false,
             )
         };
         let text = |v: Val| match v {
@@ -1066,10 +1082,63 @@ mod tests {
             .expect("in the table");
         let stream = Stream::new(0, MediaType::Audio, vaco_core::Rational::new(1, 1000));
         let p = CodecParameters::audio().with_codec(CodecId::Flac);
-        let v = stream_value(&field, &stream, &p, Some(MediaType::Audio), Counts::NONE);
+        let v = stream_value(
+            &field,
+            &stream,
+            &p,
+            Some(MediaType::Audio),
+            Counts::NONE,
+            false,
+        );
         assert!(matches!(v, Val::Absent), "{v:?}");
         // …and the table still carries the word, so `-of default` prints it.
         assert_eq!(field.absent, crate::fields::Absent::Word("unknown"));
+    }
+
+    /// `-bitexact` prints the raw numeric profile instead of the library
+    /// name; `level` is untouched because it was never a name. Measured
+    /// against `ffprobe 8.1` on H.264 (`High`/`100`) and AV1 (`Main`/`0`);
+    /// see `stream_value`'s `"profile"` arm for the other two codecs probed.
+    #[test]
+    fn bitexact_swaps_the_profile_name_for_its_number() {
+        let field = crate::fields::STREAM
+            .iter()
+            .find(|f| f.name == "profile")
+            .copied()
+            .expect("in the table");
+        let stream = Stream::new(0, MediaType::Video, vaco_core::Rational::new(1, 1000));
+        let mut p = CodecParameters::video().with_codec(CodecId::H264);
+        p.profile = Some(vaco_codec_core::Profile::new(100, "High"));
+        let text = |v: Val| match v {
+            Val::S(s) => Some(s),
+            _ => None,
+        };
+        let named = stream_value(&field, &stream, &p, Some(MediaType::Video), Counts::NONE, false);
+        assert_eq!(text(named).as_deref(), Some("High"));
+        let numeric = stream_value(&field, &stream, &p, Some(MediaType::Video), Counts::NONE, true);
+        assert_eq!(text(numeric).as_deref(), Some("100"));
+    }
+
+    /// A profile with no name at all (VP8's bare `version` number, or an
+    /// H.264 `profile_idc` the standard never assigned a name) prints the
+    /// number in *both* modes — measured, `ffprobe` never prints an empty
+    /// `profile=` value.
+    #[test]
+    fn an_unnamed_profile_is_numeric_even_without_bitexact() {
+        let field = crate::fields::STREAM
+            .iter()
+            .find(|f| f.name == "profile")
+            .copied()
+            .expect("in the table");
+        let stream = Stream::new(0, MediaType::Video, vaco_core::Rational::new(1, 1000));
+        let mut p = CodecParameters::video().with_codec(CodecId::Vp8);
+        p.profile = Some(vaco_codec_core::Profile::new(0, ""));
+        let v = stream_value(&field, &stream, &p, Some(MediaType::Video), Counts::NONE, false);
+        let text = match v {
+            Val::S(s) => Some(s),
+            _ => None,
+        };
+        assert_eq!(text.as_deref(), Some("0"));
     }
 
     /// `bits_per_raw_sample` is a codec property. The container's own sample

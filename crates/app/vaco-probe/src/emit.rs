@@ -99,6 +99,20 @@ impl<'a, W: Write> Emit<'a, W> {
         self
     }
 
+    /// Whether `-bitexact` is on.
+    ///
+    /// Separate from [`Emit::dropped_by_bitexact`]: that answers "is this
+    /// *field* suppressed", for `*_long_name`. This answers "is bitexact mode
+    /// active at all", for a field that stays present but changes *value* —
+    /// `profile` is the one measured case: `ffprobe -bitexact` prints the raw
+    /// numeric profile (`100`) where a plain run prints the library's name
+    /// (`High`), on every codec whose profile has one. Measured on H.264,
+    /// AAC, VP9 and AV1; see `stream_value`'s `"profile"` arm.
+    #[must_use]
+    pub const fn is_bitexact(&self) -> bool {
+        self.bitexact
+    }
+
     /// Whether `-bitexact` drops this field.
     ///
     /// **It drops every `*_long_name`.** Measured on ffprobe 8.1, and nowhere
