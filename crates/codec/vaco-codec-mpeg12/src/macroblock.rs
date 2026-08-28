@@ -143,6 +143,18 @@ pub(crate) fn decode_slice(
     loop {
         let mut increment: i64 = 0;
         loop {
+            // §D.9.2 (`Vaco-Spec-Ref: itu-t-h262` D.9.2): MPEG-1's
+            // `macroblock_stuffing` ("0000 0001 111", 11 bits) may appear
+            // any number of times directly before a real
+            // `macroblock_address_increment` code and must be discarded.
+            // MPEG-2 reserves this exact bit pattern and never emits it,
+            // so this is gated on `ap.mpeg1` rather than checked
+            // unconditionally.
+            if ap.mpeg1 {
+                while r.peek(11) == 0b000_0000_1111 {
+                    r.skip(11);
+                }
+            }
             let Some(&(_, val)) = vlc::decode(
                 &mut r,
                 tables::MACROBLOCK_ADDRESS_INCREMENT,

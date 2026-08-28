@@ -112,10 +112,10 @@ pub(crate) fn decode_coefficients(
             let run = r.get(6) as usize;
             let level = if mpeg1 {
                 // H.262 Annex D.9.3 ("Run-level escape syntax"): MPEG-1
-                // follows the 6-bit run with an 8-bit sign-magnitude level,
-                // giving a 14-bit escape overall (level in -127..=127) —
-                // *not* MPEG-2's fixed 12-bit two's-complement field two
-                // lines below. The 8-bit field's two sentinel patterns,
+                // follows the 6-bit run with an 8-bit level field, giving a
+                // 14-bit escape overall (level in -127..=127) — *not*
+                // MPEG-2's fixed 12-bit two's-complement field two lines
+                // below. The 8-bit field's two sentinel patterns,
                 // 0000_0000 and 1000_0000, are reserved: they mean "the
                 // real magnitude doesn't fit in 7 bits", and are followed
                 // by a further 8-bit unsigned magnitude instead (a 22-bit
@@ -124,6 +124,22 @@ pub(crate) fn decode_coefficients(
                 // of MPEG-2's — using the 12-bit field against an MPEG-1
                 // stream desyncs the reader by a few bits the moment an
                 // encoder emits an escape code at all.
+                //
+                // D.9.3 (H.262's own brief difference-summary — the
+                // actual normative bit layout is in ISO/IEC 11172-2's own
+                // text, which this project does not have legitimate
+                // access to; see the removed `iso-11172-2` provenance
+                // placeholder) does not state whether the 8-bit direct
+                // field below is sign-magnitude or two's complement. An
+                // earlier version of this comment asserted "sign-
+                // magnitude" without having verified it; tried against
+                // this crate's own MPEG-1 fixtures, a genuine sign-
+                // magnitude decode (sign bit + 7-bit magnitude) measured
+                // far *worse* (avg MAD 209-224, versus 12.9-44.8 below)
+                // than the two's-complement interpretation the code below
+                // actually implements — so two's complement is what
+                // shipped, on differential-testing evidence, not because
+                // either was read from the actual standard.
                 let first = r.get(8);
                 if first == 0 {
                     i32::try_from(r.get(8)).unwrap_or(0)
@@ -333,10 +349,13 @@ mod tests {
     }
 
     #[test]
-    fn mpeg1_escape_uses_an_8_bit_sign_magnitude_level_not_12_bits() {
+    fn mpeg1_escape_uses_an_8_bit_level_not_12_bits() {
         // H.262 Annex D.9.3: escape "000001", run=2 "000010", level=-50 as
         // an 8-bit two's-complement byte "11001110" (256-50=206), then EOB
-        // "10" — 14 bits after the escape code, not MPEG-2's 18.
+        // "10" — 14 bits after the escape code, not MPEG-2's 18. Two's
+        // complement, not sign-magnitude — see this function's own doc
+        // comment on the escape branch for why (empirically the better of
+        // the two against this crate's own MPEG-1 fixtures).
         let bytes = bits_from_str("0000010000101100111010");
         let mut r = BitReader::new(&bytes);
         let qfs = decode_coefficients(&mut r, CoeffTable::Zero, None, true).unwrap_or([0; 64]);

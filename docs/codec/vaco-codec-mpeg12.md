@@ -173,6 +173,22 @@ narrowed the visible corruption from "the rest of the picture and every
 later picture in the GOP" down to "one slice, sometimes two," which is
 what made hand-tracing bug 4 to its exact bit position tractable at all.
 
+5. **`macroblock_stuffing` (H.262 Annex D.9.2), an MPEG-1-only VLC code,
+   was not implemented at all.** Unlike bugs 1-4, this was not found by
+   hand-tracing a bit-position desync — it was found by re-reading D.9's
+   own "differences from ISO/IEC 11172-2" list while investigating the
+   still-open MPEG-1 accuracy gap (see "Measured accuracy" below) and
+   noticing this crate's `macroblock_address_increment` decode loop
+   (`macroblock.rs`) had no handling whatsoever for the one VLC code
+   ("0000 0001 111") MPEG-1 permits any number of times directly before a
+   real address-increment code, which a decoder must silently discard.
+   MPEG-2 reserves this exact bit pattern and never emits it. Fixed by
+   peeking for and skipping it, gated on `ap.mpeg1`, before every
+   address-increment decode attempt. Measured to make no difference on
+   any fixture on hand (ffmpeg's own MPEG-1 encoder apparently never
+   emits it for this content) — kept anyway as a genuine, cost-free,
+   spec-required correctness fix, not a fix for the accuracy gap itself.
+
 ## Measured accuracy
 
 Differential-tested against `ffmpeg`-decoded reference `yuv420p` (max-abs-
@@ -217,24 +233,83 @@ bit-exact algorithm — the same choice and the same caveat as
 against a specific reference decoder's own rounding without reimplementing
 that reference's exact integer IDCT, which is out of this session's scope.
 
-**MPEG-1 remains genuinely wrong**, and differently: the error is small,
-diffuse across nearly every macroblock (not concentrated in one, unlike
-the CBP bug above), present from frame 0 of an intra-only fixture (ruling
-out any inter-prediction or reference-propagation explanation), and grows
-with content complexity — not a bitstream desync, something closer to a
-per-coefficient rounding or reconstruction difference specific to MPEG-1.
-One concrete hypothesis was tested this session and eliminated: H.262
-Annex D.9.1's description of ISO/IEC 11172-2's different IDCT mismatch
-control (correcting every nonzero-even coefficient independently, instead
-of MPEG-2's single sum-parity-conditional `F[7][7]` correction) was
-implemented and measured *worse* than not implementing it at all, in both
-possible correction directions (avg MAD rose from ~12-44 to ~24-51 across
-the three MPEG-1 fixtures) — so this crate deliberately keeps applying
-MPEG-2's rule unconditionally rather than a worse, unverified MPEG-1-
-specific one. DC precision tables, the linear `quantiser_scale` row (the
-only one MPEG-1 uses), and `intra_vlc_format`/escape-coding selection were
-all re-checked correct. The actual cause is not yet found — see
-`TECH-DEBT.md`.
+**MPEG-1 remains genuinely wrong.** A later session re-examined this with
+two techniques that were not available the first time: reading the
+per-frame error curve's own *shape*, not just its average, and building a
+matched MPEG-2 control fixture (same content, same GOP structure, same
+dimensions) to isolate what is actually MPEG-1-specific.
+
+That re-examination corrects the previous paragraph's own framing:
+`m1_i`/`m2_i` and the rest of the "`_i`" fixtures are **not** intra-only —
+`ffprobe` shows frame 0 as `I` and every frame after it as `P`. The
+earlier "present from frame 0 of an intra-only fixture... ruling out
+inter-prediction" claim was wrong on the "intra-only" premise, though its
+conclusion (frame 0 is genuinely wrong on its own) still holds: frame 0's
+own error (mean abs diff 0.38, max 9) is real and far larger than the
+matched MPEG-2 control's own frame 0 (mean 0.01, max 1) — so there is a
+real intra-decode-path difference, not only an inter-prediction one. But
+the *growth* across the P-picture sequence is also far faster than the
+control's own float-IDCT reference-chain creep (MPEG-1: mean 0.38 → 1.78
+over 25 frames; matched MPEG-2 control: mean 0.01 → 0.06) — so whatever is
+wrong is not confined to intra blocks either. Spatially, the error
+concentrates in specific 8x8 blocks rather than every block equally (a
+per-block heatmap on `m1_i`'s frame 0 shows many blocks at zero difference
+and a few — plausibly the ones using escape-coded coefficients, given the
+error's own rough correlation with content complexity — at the frame's
+worst values).
+
+Three hypotheses were tested this pass and eliminated:
+
+- **The escape-level field's sign representation.** MPEG-1's escape
+  syntax uses an 8-bit level field this crate's own comment previously
+  (incorrectly) called "sign-magnitude" while the code beside it actually
+  implemented two's complement — a real discrepancy between what the
+  comment claimed and what shipped. Trying genuine sign-magnitude
+  (matching the comment) measured *far* worse (avg MAD 209-224 across the
+  three fixtures) than the existing two's-complement code (12.9-44.8) —
+  so two's complement is confirmed, empirically, as the better of the two,
+  and the misleading comment is fixed to say so plainly: this crate does
+  not have legitimate access to ISO/IEC 11172-2's own normative text (see
+  the removed `iso-11172-2` provenance placeholder, the same "looks
+  registered but wasn't acquired" pattern as `iso-14496-2` for #360), so
+  this one field's exact bit semantics were only ever knowable by
+  differential testing, not by reading the standard.
+- **Full-pel motion vectors** (`full_pel_forward_vector`, D.9.7) — parsed
+  but not consumed by this crate, a documented gap. Checked directly
+  against these fixtures' own picture headers: `false` throughout, so
+  this is not why P-pictures diverge here (though it remains a real gap
+  for a stream that does set it).
+- **`macroblock_stuffing`** (D.9.2): MPEG-1's `"0000 0001 111"` VLC code,
+  insertable any number of times before a `macroblock_address_increment`
+  and required to be discarded, that MPEG-2 reserves and never emits.
+  This crate did not implement it at all — a genuine, spec-required gap,
+  now fixed (`macroblock.rs`, gated on `ap.mpeg1`) — but empirically makes
+  no difference to any fixture on hand (avg MAD unchanged before/after),
+  meaning ffmpeg's own MPEG-1 encoder does not emit this code for this
+  content. Kept as a correctness fix regardless, since it is real,
+  spec-required for MPEG-1, and cannot regress anything (MPEG-2 never
+  matches the pattern being skipped).
+
+Still holding from before: the dequantisation formula (hand-verified
+coefficient-by-coefficient against §7.4.2.3 for a real macroblock —
+matches exactly), both DCT-coefficient VLC tables (mechanically
+re-extracted from the primary text independently of the existing
+transcription and diffed — zero mismatches), the linear `quantiser_scale`
+table (cross-checked against Table 7-6 directly), `intra_dc_precision`/
+predictor-reset defaults, and the IDCT mismatch control question (already
+eliminated in both directions in an earlier pass; not re-derived here).
+
+**The actual cause is still not found**, but the search space is
+narrower and better characterised than before: it is not the coefficient
+VLC tables, not the dequantisation arithmetic, not the escape-level sign
+convention, not full-pel vectors, and not macroblock stuffing. It is
+present (smaller) in a genuine I-picture and grows (faster than plain
+float-IDCT drift) across P-pictures, concentrated in specific blocks
+rather than spread uniformly — consistent with something that both (a)
+affects intra decode in a still-unidentified way and (b) compounds
+further once motion compensation is added on top, rather than two
+unrelated bugs. See `TECH-DEBT.md` for the fuller writeup and where to
+look next.
 
 **This means T2-01a's own "framemd5-identical to reference" acceptance bar
 is not met for either format**, so no issue claiming it is closed by this
@@ -259,11 +334,18 @@ differential testing can measure short of that literal bit-exactness bar.
   new instance of this symptom should now be visibly narrower (one slice,
   maybe two) and easier to isolate to the exact failing VLC call than it
   was before that split existed.
-- **The remaining MPEG-1-specific accuracy gap**: not a desync (see
-  "Measured accuracy" above) — start by comparing per-coefficient
-  dequantised values, not bit positions, against a hand-computed reference
-  for one intra macroblock in `m1_i`, since the error is present from
-  frame 0 of intra-only content and grows with coefficient count.
+- **The remaining MPEG-1-specific accuracy gap**: not a desync, not the
+  coefficient VLC tables, not the dequantisation formula, not the escape-
+  level sign convention, not full-pel vectors, not macroblock stuffing —
+  see "Measured accuracy" above for what a later pass eliminated and the
+  two techniques (per-frame error-curve shape; a matched MPEG-2 control
+  fixture of the same content/GOP/dimensions) that did the eliminating.
+  Next: since the error is present in a genuine I-picture but concentrated
+  in specific blocks rather than uniform, compare per-coefficient
+  dequantised values against a hand-computed reference specifically for
+  one of `m1_i`'s *worst* blocks (per-8x8-block max-diff heatmap, not a
+  block picked at random), since the interior/low-detail blocks already
+  decode pixel-perfect.
 - **A new picture type or extension**: header parsing lives entirely in
   `headers.rs`; wiring a newly-parsed field into decode means threading it
   through `ActivePicture` (`macroblock.rs`) the same way `mpeg1`/`pce` are.
@@ -303,7 +385,9 @@ prediction, 16x8 motion compensation, MPEG-1's full-pel motion vector
 modes, 4:2:2/4:4:4 chroma sampling (this crate only ever allocates
 `Yuv420p` frames — T2-01b/#356, not attempted this session), and
 spatial/SNR/temporal scalability extensions (not parsed at all). See
-`TECH-DEBT.md` for the open MPEG-1-specific accuracy gap (small, diffuse,
-present from frame 0 of intra-only content — not a decode desync), which
-is this crate's remaining accuracy blocker now that MPEG-2 measures
-reference-quality across every fixture on hand.
+`TECH-DEBT.md` for the open MPEG-1-specific accuracy gap (present, smaller,
+in a genuine I-picture and growing faster than plain float-IDCT drift
+across P-pictures — not a decode desync, not the fixtures' GOP structure
+being intra-only, which it isn't), which is this crate's remaining
+accuracy blocker now that MPEG-2 measures reference-quality across every
+fixture on hand.
