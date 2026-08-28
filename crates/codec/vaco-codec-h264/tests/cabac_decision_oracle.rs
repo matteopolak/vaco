@@ -16,7 +16,7 @@
 //! Result: clean. Both a long deliberately-adapted run (30 zeros, one
 //! one, ten more zeros — mirroring the real corpus shape) and 200
 //! pseudorandom bit sequences round-trip exactly. The engine's
-//! `decode_decision` is not where the H.264 mb_type misclassification
+//! `decode_decision` is not where the H.264 `mb_type` misclassification
 //! documented in `mb.rs`'s own module doc comes from.
 
 use vaco_codec_cabac::{CabacDecoder, CabacEncoder, ContextModel};
@@ -28,10 +28,9 @@ fn decode_decision_round_trips_after_a_long_run_of_the_same_bin() {
     // a single 1 (a genuine Intra16x16), then more zeros -- exactly the
     // shape observed on real corpora.
     let slice_qp = 26i8;
-    let bits: Vec<u32> = std::iter::repeat(0u32)
-        .take(30)
+    let bits: Vec<u32> = std::iter::repeat_n(0u32, 30)
         .chain(std::iter::once(1u32))
-        .chain(std::iter::repeat(0u32).take(10))
+        .chain(std::iter::repeat_n(0u32, 10))
         .collect();
 
     let mut enc = CabacEncoder::new();
