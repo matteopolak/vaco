@@ -1,0 +1,55 @@
+[[source]]
+id       = "rfc9043"
+kind     = "rfc"
+title    = "RFC 9043: FFV1 Video Coding Format Version 0, 1, and 3"
+acquired = "2026-08-27"
+where    = "https://www.rfc-editor.org/rfc/rfc9043"
+
+[[table]]
+name   = "DEFAULT_STATE_TRANSITION"
+file   = "crates/codec/vaco-codec-ffv1/src/rangecoder.rs"
+source = "rfc9043"
+clause = "§3.8.1.5, Figure 24 (default_state_transition, 256 entries)"
+method = "transcribed"
+
+[[table]]
+name   = "LOG2_RUN"
+file   = "crates/codec/vaco-codec-ffv1/src/rice.rs"
+source = "rfc9043"
+clause = "§3.8.2.2, Figure 32/log2_run (41 entries)"
+method = "transcribed"
+
+[[source]]
+id       = "ffv1-blackbox-coder-default"
+kind     = "blackbox"
+title    = "ffmpeg 8.1's ffv1 encoder help text: -coder default is rice (Golomb-Rice, coder_type 0), not the range coder"
+acquired = "2026-08-27"
+where    = "Local measurement, not a document: `ffmpeg -h encoder=ffv1`, which lists `-coder <int>` with default `0` (`rice`) among `range_def`/`range_tab`/`ac` aliases. Confirmed against a real encode's Configuration Record (see ffv1-blackbox-config-record below): a plain `ffmpeg ... -c:v ffv1 out.mkv` with no explicit `-coder` writes coder_type = 0."
+
+[[source]]
+id       = "ffv1-blackbox-multislice"
+kind     = "blackbox"
+title    = "A 64x64 ffmpeg ffv1 encode defaults to a 2x2 (4-slice) grid, well under RFC 9043 §5's 101376-pixel multi-slice-recommendation threshold"
+acquired = "2026-08-27"
+where    = "Local measurement, not a document: `ffmpeg -f lavfi -i \"testsrc=size=64x64:rate=5:duration=1\" -pix_fmt yuv420p -coder range_def -c:v ffv1 out.mkv`, then a hand-written Matroska EBML walk (no container-parsing crate) to pull the Configuration Record out of CodecPrivate and range-decode its Parameters(): num_h_slices = num_v_slices = 2. Repeated with `-threads 1` (no change) and against a second, larger 176x144 fixture (`ffmpeg -f lavfi -i \"testsrc=size=176x144:rate=5:duration=1\" -pix_fmt yuv420p -c:v ffv1 out.mkv`, also 2x2). This forced vaco-codec-ffv1's decoder to implement full multi-slice decode via SliceFooter.slice_size backward-chaining (RFC 9043 §4.9.1) rather than assuming a single slice, even though this crate's own encoder still only ever writes one."
+
+[[source]]
+id       = "ffv1-blackbox-crc-variant"
+kind     = "blackbox"
+title    = "RFC 9043 §4.9.3's \"standard IEEE CRC polynomial... without pre/post-inversion\" is the non-reflected (MSB-first) CRC-32, not the more familiar reflected zlib/gzip/PNG variant"
+acquired = "2026-08-27"
+where    = "Local measurement, not a document: the trailing 4 bytes of a real ffmpeg-encoded FFV1 Configuration Record (extracted from `ffmpeg -f lavfi -i \"testsrc=size=176x144:rate=5:duration=1\" -pix_fmt yuv420p -c:v ffv1 out.mkv`'s Matroska CodecPrivate) were run through both the reflected and non-reflected CRC-32(poly 0x04C11DB7, init 0, no final complement) algorithms as a whole-record check (RFC 9043's own \"equivalent to storing the CRC remainder... as parity\" self-check). Only the non-reflected variant reduces the whole record, parity included, to exactly 0; the reflected variant this crate's crc.rs originally implemented gave a nonzero, meaningless value on the same bytes. See crc.rs's own doc comment and its real_ffmpeg_configuration_record_crc_checks_out test, which pins this against tests/fixtures/yuv420_extradata.bin."
+
+[[source]]
+id       = "ffv1-blackbox-fixtures"
+kind     = "blackbox"
+title    = "Exact ffmpeg commands used to produce this crate's real-file cross-check fixtures under tests/fixtures/"
+acquired = "2026-08-27"
+where    = "Local measurement, not a document. Fixture 1 (yuv420_*, default coder): `ffmpeg -f lavfi -i \"testsrc=size=176x144:rate=5:duration=1\" -pix_fmt yuv420p -c:v ffv1 out.mkv`. Fixture 2 (yuv420_range_*, range coder): `ffmpeg -f lavfi -i \"testsrc=size=64x64:rate=5:duration=1\" -pix_fmt yuv420p -coder range_def -c:v ffv1 out.mkv`. Both were pulled apart by a hand-written Matroska EBML walk (Segment/Tracks/TrackEntry/CodecPrivate/Cluster/SimpleBlock — never ffmpeg's own demuxer or decoder) into the raw Configuration Record and per-frame coded bytes; ffmpeg's own raw-YUV decode of the same source (`ffmpeg -i out.mkv -f rawvideo -pix_fmt yuv420p ref.raw`) supplied the pixel-exact reference used by tests/roundtrip.rs's real-ffmpeg cross-checks."
+
+# This crate's other tables (RiceState/RunState initial-value constants, the
+# quantized-gradient sign/scale bookkeeping in quant.rs) are either under the
+# 32-element provenance threshold or this crate's own original bookkeeping
+# built from RFC 9043's prose/pseudocode rather than transcribed from a table
+# in the spec -- see quant.rs's and rice.rs's own doc comments and
+# `Vaco-Spec-Ref` trailers on the commits that added them.
