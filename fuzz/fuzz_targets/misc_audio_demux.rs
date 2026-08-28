@@ -1,13 +1,19 @@
-//! Whole-file demux over arbitrary bytes, for all twenty `DemuxerDesc`s this
-//! crate registers, tried against the same input in one run.
+//! Whole-file demux over arbitrary bytes, for all twenty-two `DemuxerDesc`s
+//! this crate registers, tried against the same input in one run.
 //!
 //! Every format here either has a distinct fixed-offset signature (`wv`,
-//! `tta`, `adx`, `#!AMR\n`, `NIST_1A\n`, `PVF1\n`) or none at all (the
-//! headerless ITU/3GPP/Bluetooth codecs, `amrnb`/`amrwb`), so trying all
-//! twenty `open`s against one input cannot make one format's parser see
-//! bytes another format produced — each either rejects the input at its own
-//! header check or, for the headerless ones, treats the whole input as its
-//! own raw stream independently.
+//! `tta`, `adx`, `#!AMR\n`, `NIST_1A\n`, `PVF1\n`, `VAGp`, `RIFF`…`XWMA`) or
+//! none at all (the headerless ITU/3GPP/Bluetooth codecs, `amrnb`/`amrwb`),
+//! so trying all twenty-two `open`s against one input cannot make one
+//! format's parser see bytes another format produced — each either rejects
+//! the input at its own header check or, for the headerless ones, treats
+//! the whole input as its own raw stream independently.
+//!
+//! `vag` and `xwma` are exactly the "every length is attacker-controlled"
+//! case this target exists for: `vag`'s `data_size` header field and
+//! `xwma`'s RIFF chunk sizes (including a `fmt` chunk's own `cbSize`) are
+//! all read directly from the input before being used to size a read or an
+//! allocation.
 //!
 //! What is asserted beyond "does not panic":
 //!
@@ -32,7 +38,7 @@ use vaco_format_core::discovery::NoParsers;
 use vaco_format_core::{Demuxer, DemuxerDesc};
 use vaco_io::MediaSource;
 
-use vaco_format_misc_audio::{adx, amr, g723, nistsphere, pvf, rawcodec, sbc, tta, wavpack};
+use vaco_format_misc_audio::{adx, amr, g723, nistsphere, pvf, rawcodec, sbc, tta, vag, wavpack, xwma};
 
 const MAX_PACKETS: u32 = 50_000;
 
@@ -91,6 +97,8 @@ fuzz_target!(|data: &[u8]| {
         &rawcodec::DEMUXER_G729,
         &rawcodec::DEMUXER_APTX,
         &rawcodec::DEMUXER_APTX_HD,
+        &vag::DEMUXER,
+        &xwma::DEMUXER,
     ] {
         check(desc, data);
     }

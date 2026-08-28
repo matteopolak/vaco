@@ -10,7 +10,7 @@ use vaco_core::{Error, MediaType, Rational};
 use vaco_format_core::discovery::NoParsers;
 use vaco_format_core::DemuxerDesc;
 use vaco_format_misc_audio::block::BlockDemuxer;
-use vaco_format_misc_audio::{adx, amr, g723, nistsphere, pvf, rawcodec, sbc, tta, wavpack};
+use vaco_format_misc_audio::{adx, amr, g723, nistsphere, pvf, rawcodec, sbc, tta, vag, wavpack, xwma};
 use vaco_io::{IoContext, IoOptions, MemorySource};
 use vaco_limits::{Budget, Limits};
 
@@ -36,6 +36,8 @@ fn all_descs() -> Vec<DemuxerDesc> {
         rawcodec::DEMUXER_G729,
         rawcodec::DEMUXER_APTX,
         rawcodec::DEMUXER_APTX_HD,
+        vag::DEMUXER,
+        xwma::DEMUXER,
     ]
 }
 

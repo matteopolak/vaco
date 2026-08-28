@@ -48,7 +48,7 @@ fn fixture(name: &str) -> std::path::PathBuf {
 
 #[test]
 fn every_fixture_matches_the_measured_reference_row() {
-    use vaco_format_misc_audio::{adx, g723, rawcodec, sbc, tta, wavpack};
+    use vaco_format_misc_audio::{adx, g723, rawcodec, sbc, tta, vag, wavpack, xwma};
 
     let rows = [
         Row {
@@ -121,6 +121,24 @@ fn every_fixture_matches_the_measured_reference_row() {
             channels: 1,
             reference_duration_us: None,
         },
+        Row {
+            file: "vag.vag",
+            desc: vag::DEMUXER,
+            sample_rate: 22_050,
+            channels: 1,
+            reference_duration_us: Some(12_698),
+        },
+        Row {
+            file: "xwma.xwma",
+            desc: xwma::DEMUXER,
+            sample_rate: 8000,
+            channels: 1,
+            // This fixture deliberately has no `dpds` chunk — see xwma's
+            // module doc for the measured, unreproduced anomaly a `dpds`
+            // chunk's mere presence causes in the reference's own
+            // `duration_ts` (independent of the chunk's content).
+            reference_duration_us: Some(350_000),
+        },
     ];
 
     let mut failures = Vec::new();
@@ -192,7 +210,7 @@ fn every_fixture_matches_the_measured_reference_row() {
 /// The probe for every registered demuxer must not claim a plain text file.
 #[test]
 fn no_probe_claims_prose() {
-    use vaco_format_misc_audio::{adx, amr, nistsphere, pvf, rawcodec, sbc, tta, wavpack};
+    use vaco_format_misc_audio::{adx, amr, nistsphere, pvf, rawcodec, sbc, tta, vag, wavpack, xwma};
 
     let text = ProbeData::new(b"The quick brown fox jumps over the lazy dog. Not media.");
     let probes: &[fn(&ProbeData<'_>) -> vaco_format_core::probe::ProbeScore] = &[
@@ -213,6 +231,8 @@ fn no_probe_claims_prose() {
         rawcodec::probe_g729,
         rawcodec::probe_aptx,
         rawcodec::probe_aptx_hd,
+        vag::probe,
+        xwma::probe,
     ];
     for p in probes {
         assert_eq!(p(&text), vaco_format_core::probe::ProbeScore::NONE);

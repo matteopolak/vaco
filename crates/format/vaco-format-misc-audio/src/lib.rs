@@ -16,4 +16,6 @@ pub mod pvf;
 pub mod rawcodec;
 pub mod sbc;
 pub mod tta;
+pub mod vag;
 pub mod wavpack;
+pub mod xwma;

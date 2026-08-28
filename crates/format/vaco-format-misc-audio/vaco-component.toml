@@ -165,3 +165,19 @@ long_name  = "raw aptX HD (Audio Processing Technology for Bluetooth)"
 feature    = "demux-aptx-hd"
 ctor       = "vaco_format_misc_audio::rawcodec::DEMUXER_APTX_HD"
 extensions = "aptx_hd"
+
+[[component]]
+kind       = "demuxer"
+name       = "vag"
+long_name  = "Sony PS2 VAG"
+feature    = "demux-vag"
+ctor       = "vaco_format_misc_audio::vag::DEMUXER"
+extensions = "vag"
+
+[[component]]
+kind       = "demuxer"
+name       = "xwma"
+long_name  = "Microsoft xWMA"
+feature    = "demux-xwma"
+ctor       = "vaco_format_misc_audio::xwma::DEMUXER"
+extensions = "xwma"
