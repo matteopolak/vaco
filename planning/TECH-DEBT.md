@@ -2686,3 +2686,45 @@ vlc-scan`/`layer-check`/`dep-gate`/`unsafe-audit`/`dup-check`/`time-gate`/
 numbers to the previous entry) or on `m1_i`/`m1_ip`/`m1_ipb` (the
 `macroblock_stuffing` fix is a genuine no-op on these specific streams,
 confirmed by re-running the full comparison before and after).
+
+## `vaco-mux-mxf`: the byte-identity gap resolved into a ceiling, a non-goal, and a small backlog item — #609/#610 closed on a replacement bar
+
+Follow-up to every prior `vaco-mux-mxf` byte-identity entry above. After
+fixing `KAGSize`, the BER-length-width split, the missing
+`EssenceContainerData` set, and the Random Index Pack, the residual `cmp`
+gap was measured exactly (per-structural-set size differences, summed,
+against real bitexact fixtures for all three variants) rather than left
+as "some bytes still differ." The sum equals the measured gap to the byte
+for OP1a (`1319`), D-10 (`1352`), and OP-Atom (`1369`) alike, and splits
+into three named things:
+
+1. **A permanent ceiling** (`243`-`273` bytes): `Identification`'s
+   `CompanyName`/`ProductName`/`VersionString`/`Platform`/`ProductUID`,
+   plus admin timestamp/version fields in `Preface`
+   (`LastModifiedDate`/`Version`/`ObjectModelVersion`/`PrimaryPackage`) and
+   both `Package`s (`PackageCreationDate`/`PackageModifiedDate`). These
+   properties honestly record which program wrote the file. A real file
+   states `CompanyName = "FFmpeg"`; matching it byte-for-byte means
+   claiming to be `ffmpeg`, which this crate will not do. Same shape as
+   the text-drawing filters' glyph-table ceiling recorded elsewhere in
+   this file — different substance, same structural reason a stated
+   framecrc/byte-identity criterion cannot close.
+2. **A deliberate non-goal** (`918` bytes, identical across all three
+   variants): a real file's Primer Pack registers a fixed ~100-tag
+   dictionary regardless of which properties the specific file actually
+   uses. This crate's own primer lists only what it writes — smaller,
+   equally correct (`vaco-demux-mxf` reads either shape identically), no
+   functional payoff to matching a static internal table.
+3. **A real, non-blocking backlog item** (`158`-`178` bytes): video-
+   descriptor and administrative properties this crate does not write yet
+   (`SampledXOffset`/`YOffset`, `DisplayXOffset`/`YOffset`,
+   `ComponentDepth`, `Horizontal`/`VerticalSubsampling`, `ColorSiting`,
+   `Black`/`WhiteRefLevel`, `ColorRange`, `VideoLineMap`). Nothing fails to
+   resolve without them today; genuinely unimplemented, not a limit.
+
+Closed #609 and #610 on a replacement bar instead of the stated
+`cmp`-identity criterion: own-demuxer round trip, real `ffprobe`/
+`ffmpeg -i` resolution, correct packet counts/positions, and a `cmp` diff
+whose every remaining byte is named. All three variants meet it. Full
+accounting in `docs/format/vaco-mux-mxf.md`'s "The byte-identity ceiling,
+and the bar that replaces it" section.
