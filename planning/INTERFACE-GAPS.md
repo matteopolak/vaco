@@ -36,7 +36,7 @@ or an attachment.
 `ffmetadata` in FM-33 (#590) — which is *entirely* metadata — and every
 `-metadata` CLI option in CL-16 (#207).
 
-## 2. `Muxer` is single-sink
+## 2. `Muxer` is single-sink — SUBSTITUTED for `image2`, not closed, 2026-08-28
 
 Reported by: `vaco-mux-matroska` (`webm_chunk`), and structural for
 `vaco-mux-image2`, `segment`/`stream_segment` and `tee`.
@@ -47,8 +47,39 @@ image, several sinks at once). `webm_chunk` currently exposes a
 `chunk_boundaries()` accessor as a workaround, which is honest but is not the
 feature.
 
-**Blocks:** FM-35b (#593), the segment family in FM-33 (#590), `tee`, and
-`-f segment` from the CLI.
+Substituted with `Muxer::bind_url(&mut self, url: &str) -> Result<()>`, a
+defaulted trait method (default: `Unsupported`) a caller invokes once, right
+after `open` returns, with the destination URL a `MuxerDesc::open`-shaped
+signature has nowhere to carry (same root cause as gaps 5/9: `open` is a bare
+`fn` pointer ~90 registered muxers already implement at a fixed
+`Box<dyn MediaSink>` signature). A muxer that opts in typically replaces its
+own state outright (`*self = Self::for_pattern(url, ..)?`). No implementor
+needed an edit. `impl Muxer for Box<M>` and `vaco-cli`'s `TallyingMuxer` both
+forward it explicitly, the same trap gap 9's `add_stream_with` found.
+
+**What this actually closes: `image2` only, verified end to end (#649).**
+`vaco-mux-image2`'s registry entry now starts as the old degenerate
+one-sink shape and becomes the real `Image2MuxWriter`-backed writer on the
+first `bind_url` call; `Muxer::flags()` reports the (previously unused)
+`FormatFlags::NEEDNUMBER` so `vaco-cli`'s `open_output` knows to keep a
+throwaway-sink-backed instance and bind it rather than ever opening a real
+destination for the literal pattern string. `-f image2 -i in_%03d.png -c
+copy -f image2 out_%03d.png` now produces `cmp`-identical output to the
+input sequence, and `ffmpeg -f rawvideo -pix_fmt rgb24 - | md5` matches on
+both sides.
+
+**Still open:** `segment`/`stream_segment`, HLS/DASH's segmenting muxers,
+`webm_chunk` and `tee` do not implement `bind_url` and are not registered
+as needing it — closing them is unaffected by this substitute except that
+the seam now exists for whoever picks them up. `tee` in particular may not
+need this method at all: fanning out to several *independently configured*
+sinks reads more like a wrapper `Muxer` holding several `Box<dyn Muxer>`
+than like one muxer rebinding to one new destination.
+
+See `docs/format/vaco-format-core.md`'s "gaps 2 and 7" section.
+
+**Blocks:** FM-35b (#593) — closed for `image2`; the segment family in
+FM-33 (#590), `tee`, and `-f segment` from the CLI remain blocked.
 
 ## 3. `Muxer::write_packet` takes packets, and some muxers want frames
 
@@ -166,7 +197,7 @@ the demuxer side.
 **Blocks:** nothing outright. It buys a double construction per output and an
 explanation in two places.
 
-## 7. `DemuxerDesc::open` receives exactly one `MediaSource`
+## 7. `DemuxerDesc::open` receives exactly one `MediaSource` — SUBSTITUTED for `image2`, not closed, 2026-08-28
 
 Reported by: `vaco-subtitle-bitmap`.
 
@@ -178,15 +209,43 @@ produces correct timing with empty payloads. The real entry point,
 `image2` has the same shape from the other direction — a sequence of files
 rather than a pair — and solved it by owning the file enumeration itself, which
 works because the pattern names them. VobSub cannot: the second file's name is a
-convention, not something the first file states.
+convention relative to the first, and the first `MediaSource` has no `path()`
+to read its own filename back from, so nothing downstream of the protocol
+layer can construct the sidecar name at all.
 
-**Blocks:** VobSub payloads, and any future format whose unit of demuxing is a
-set rather than a file (MXF OP-Atom is the other one already in the tree).
+Substituted with `Demuxer::bind_url(&mut self, url: &str) -> Result<()>`, a
+defaulted trait method (default: `Unsupported`) a caller invokes once, right
+after `open` returns and before reading anything, with the URL the caller
+already resolved to reach that descriptor — the fix needs the *string*, not
+a second opened `MediaSource`, so no `MediaSource::path()` accessor and no
+change to any caller's I/O layer was needed either. Same root cause as gaps
+4/5 — `open` is a bare `fn` pointer ~90 crates already implement at a fixed
+signature. No implementor needed an edit; `impl Demuxer for Box<D>` forwards
+the new method explicitly, the same trap gap 9 found on the mux side.
 
-Same root cause as gaps 4 and 5 — `open` is a bare `fn` pointer with a fixed
-signature that ~90 crates already implement — so the additive fix is the same
-shape: a defaulted trait method that hands over the extra sources after
-construction, not a wider `open`.
+**What this actually closes: `image2` only, verified end to end (#649).**
+`DEMUXER_IMAGE2.flags` gained `FormatFlags::NEEDNUMBER` (declared since this
+crate's foundations wave, never read by anything until now) as the signal
+`vaco-cli`'s `input::open` checks *before* attempting to open a `%d` pattern
+as a literal file — when set, it hands `open` an empty placeholder and calls
+`bind_url` directly instead. `vaco-demux-image2`'s registry entry starts in
+the old degenerate one-source shape and becomes the real, already-correct
+`Image2Demuxer::open_pattern` on that call. `-f image2 -i img_%03d.png -c
+copy -f rawvideo out.bin` now matches `cat img_001.png img_002.png …`
+byte-for-byte, where it previously failed outright with "No such file or
+directory".
+
+**Still open:** `vaco-subtitle-bitmap`'s `VobSubDemuxer` does not implement
+`bind_url` — this substitute makes it reachable (a normally-opened `.idx`
+gets a best-effort `bind_url(url)` call from `input::open` today, ignoring
+only `Unsupported`) but the sidecar-deriving override itself is unwritten.
+MXF OP-Atom, the gap's other named future case, is unaffected either way.
+
+See `docs/format/vaco-format-core.md`'s "gaps 2 and 7" section.
+
+**Blocks:** VobSub payloads — the seam now exists, the override does not;
+and any future format whose unit of demuxing is a set rather than a file
+(MXF OP-Atom is the other one already in the tree).
 
 ## 8. `vaco-sched` drives a raw `dyn Muxer` instead of `MuxWriter` — CLOSED 2026-08-23
 
@@ -786,7 +845,29 @@ a two-filter fix, and picking that shape is left for whoever is dispatched
 filter in this workspace that needs to read or write a `PixFmtFlags::FLOAT`
 format through a `u16`-shaped sample engine would hit the identical wall.
 
-## 16. `vaco-demux-raw`'s `BitstreamSpec.parser_codec` cannot distinguish MPEG-1 from MPEG-2
+## 16. `vaco-demux-raw`'s `BitstreamSpec.parser_codec` cannot distinguish MPEG-1 from MPEG-2 — CLOSED 2026-08-28 (narrowed)
+
+Closed by setting `M4V.parser_codec = Some(CodecId::Mpeg4)` (unconditional —
+MPEG-4 part 2 has no MPEG-1/2-style ambiguity) and
+`MPEGVIDEO.parser_codec = Some(CodecId::Mpeg2video)`, per the "Shape"
+section's second option below: `PARSER_MPEG1` and `PARSER_MPEG2` both
+construct the exact same `Mpeg12Parser`, differing only in which `CodecId`
+reaches them through `ParserProvider::parser_for`, so either answer reaches
+the right parser — this only leaves the *reported* `codec_name` wrong for a
+genuine bare MPEG-1 elementary stream, accepted as the narrower, documented
+limitation the original report already named as an option, rather than
+solved with a per-spec probe or two specs.
+
+Verified against `ffmpeg 8.1` (`-f lavfi -i testsrc -c:v mpeg2video -f
+mpeg2video out.m2v` — `mpegvideo` is demux-only in this reference build, so
+`mpeg2video` is the muxer name to use): `ffprobe` and `vaco-probe
+-show_streams -f mpegvideo` agree on `codec_name=mpeg2video`,
+`codec_long_name=MPEG-2 video`, `profile=Main`, `64x64` — `profile=Main`
+confirms the real `Mpeg12Parser` ran through the registry's actual
+`ParserProvider`, not just the static `codec_id` guess.
+
+Original report, kept for the *why* and for the still-open MPEG-1
+disambiguation:
 
 `vaco-parse-mpegvideo` (P-07, #277) ships a real `Mpeg12Parser` for both raw
 `CodecId::Mpeg1video` and `CodecId::Mpeg2video`, verified byte-for-byte
@@ -808,12 +889,7 @@ own `Sequence` type already resolves the two the same way — `sequence_
 extension()`'s presence). `BitstreamSpec.parser_codec` is a single static
 `Option<CodecId>` per spec row, decided once when the row is declared, so
 it cannot express "ask a parser after inspecting the first sequence header
-and only then know which of two `CodecId`s this is." Not attempted here —
-`vaco-demux-raw` is not a crate this issue's brief named as owned, and the
-fix is a design decision (a `parser_codec` that can look at the first few
-bytes, or two specs, `mpegvideo`/`mpeg2video`, replacing the reference's
-one name, which would itself be a divergence worth checking against
-`ffmpeg -demuxers`) for whoever owns that crate next.
+and only then know which of two `CodecId`s this is."
 
 ### Shape
 
@@ -823,9 +899,9 @@ seen (a small enum, or a `fn(&[u8]) -> Option<CodecId>` probe run once the
 first bytes are in hand), or accept a `CodecId::Mpeg2video`-only default for
 the `mpegvideo` raw demuxer (matching every practical `.m2v` file, since
 plain MPEG-1 elementary streams are rare in the wild) and file the MPEG-1
-raw case as a known, narrower gap instead.
+raw case as a known, narrower gap instead — **the option taken above.**
 
-**Blocks:** raw `.m2v`/`.m4v`/bare-MPEG-1 files opened directly (not inside
-an MPEG-PS/TS/MP4 container, which already reach `vaco-parse-mpegvideo`
-through their own demuxers' `ParserProvider` calls) reporting
-`profile`/`level`/`pix_fmt`/dimensions from the bitstream.
+**Blocks:** nothing now for MPEG-2/MPEG-4 raw streams. A genuine bare
+MPEG-1 elementary stream still states `codec_name=mpeg2video` instead of
+`mpeg1video`, and no fixture exercising that specific case was measured —
+the narrower gap the original report anticipated.
