@@ -33,7 +33,10 @@ use vaco_core::{Error, Rational, Result, Timestamp};
 use vaco_filter_core::{Graph, GraphStatus, LinkFormat, NodeId};
 use vaco_format_core::Demuxer;
 use vaco_format_core::mux::MuxWriter;
-use vaco_frame::Frame;
+use vaco_frame::{Frame, FrameData};
+use vaco_limits::{Budget, Limits};
+use vaco_pixfmt::PixFmt;
+use vaco_scale::{ImageSpec, ScaleOptions, Scaler};
 
 use crate::wire::Payload;
 
@@ -153,6 +156,7 @@ pub(crate) enum Work {
     Demux(DemuxWork),
     Decode(CodecWork<DecoderSide>),
     Encode(CodecWork<EncoderSide>),
+    Convert(Box<CodecWork<ConverterSide>>),
     Filter(Box<FilterWork>),
     Mux(Box<MuxWork>),
 }
@@ -168,6 +172,7 @@ impl Work {
             Self::Demux(d) => d.finished,
             Self::Decode(c) => c.stage == Stage::Drained,
             Self::Encode(c) => c.stage == Stage::Drained,
+            Self::Convert(c) => c.stage == Stage::Drained,
             Self::Filter(f) => f.sink_closed.iter().all(|c| *c),
             Self::Mux(m) => m.writer.is_none(),
         }
@@ -183,6 +188,7 @@ impl Work {
             Self::Demux(d) => !ports.stop_reading && !d.finished && ports.all_out_room(),
             Self::Decode(c) => c.ready(ports),
             Self::Encode(c) => c.ready(ports),
+            Self::Convert(c) => c.ready(ports),
             Self::Filter(f) => f.ready(ports),
             Self::Mux(m) => m.ready(ports),
         }
@@ -209,7 +215,7 @@ impl Work {
     pub(crate) const fn batch(&self) -> usize {
         match self {
             Self::Demux(_) => 0,
-            Self::Decode(_) | Self::Encode(_) | Self::Filter(_) => 1,
+            Self::Decode(_) | Self::Encode(_) | Self::Convert(_) | Self::Filter(_) => 1,
             Self::Mux(_) => 16,
         }
     }
@@ -226,6 +232,7 @@ impl Work {
             Self::Demux(d) => d.advance(out, close),
             Self::Decode(c) => c.advance(inputs, ended, out, close),
             Self::Encode(c) => c.advance(inputs, ended, out, close),
+            Self::Convert(c) => c.advance(inputs, ended, out, close),
             Self::Filter(f) => f.advance(inputs, ended, out, close),
             Self::Mux(m) => m.advance(inputs, ended, all_ended),
         }
@@ -376,6 +383,123 @@ impl Side for EncoderSide {
 
     fn recv(&mut self) -> Result<Payload> {
         self.0.receive_packet().map(Payload::Packet)
+    }
+}
+
+/// Frames in, frames out: a pixel-format bridge between a decoder and an
+/// encoder that does not accept what the decoder produces.
+///
+/// One converter per instance covers one destination format; `vaco-scale`'s
+/// own `Scaler` reconfigures itself when a frame's dimensions change, so this
+/// only has to notice a *format* mismatch and rebuild the plan the first time
+/// it sees one, or whenever the source geometry changes. A frame already in
+/// `dst_format` is cloned through untouched — cheap, since a `Frame`'s planes
+/// are reference-counted — rather than run through the scaler as a same-format
+/// no-op.
+pub(crate) struct ConverterSide {
+    dst_format: PixFmt,
+    limits: Limits,
+    scaler: Option<Scaler>,
+    budget: Budget,
+    pending: Option<Frame>,
+    eof: bool,
+}
+
+impl std::fmt::Debug for ConverterSide {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConverterSide")
+            .field("dst_format", &self.dst_format)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ConverterSide {
+    pub(crate) fn new(dst_format: PixFmt, limits: Limits) -> Self {
+        Self {
+            dst_format,
+            budget: Budget::new(limits.clone()),
+            limits,
+            scaler: None,
+            pending: None,
+            eof: false,
+        }
+    }
+
+    fn convert(&mut self, src: &Frame) -> Result<Frame> {
+        let FrameData::Video {
+            format,
+            width,
+            height,
+            ..
+        } = src.data
+        else {
+            return Err(Error::InvalidData(
+                "a format converter received a non-video frame",
+            ));
+        };
+        if format == self.dst_format {
+            return Ok(src.clone());
+        }
+        let src_spec = ImageSpec {
+            format,
+            width,
+            height,
+            color: src.color,
+        };
+        let dst_spec = ImageSpec {
+            format: self.dst_format,
+            width,
+            height,
+            color: src.color,
+        };
+        let scaler = if let Some(s) = &mut self.scaler {
+            s
+        } else {
+            let s = Scaler::with_limits(
+                &src_spec,
+                &dst_spec,
+                &ScaleOptions::default(),
+                self.limits.clone(),
+            )?;
+            self.scaler.insert(s)
+        };
+        let mut dst = Frame::alloc_video(&mut self.budget, self.dst_format, width, height)?;
+        scaler.scale_frame(src, &mut dst)?;
+        dst.pts = src.pts;
+        dst.duration = src.duration;
+        dst.time_base = src.time_base;
+        dst.color = src.color;
+        dst.sample_aspect_ratio = src.sample_aspect_ratio;
+        dst.flags = src.flags;
+        Ok(dst)
+    }
+}
+
+impl Side for ConverterSide {
+    fn send(&mut self, item: Option<&Payload>) -> Result<()> {
+        match item {
+            Some(Payload::Frame(f)) => {
+                self.pending = Some(self.convert(f)?);
+                Ok(())
+            }
+            Some(Payload::Packet(_)) => Err(Error::InvalidData(
+                "a packet reached a format converter",
+            )),
+            None => {
+                self.eof = true;
+                Ok(())
+            }
+        }
+    }
+
+    fn recv(&mut self) -> Result<Payload> {
+        if let Some(f) = self.pending.take() {
+            return Ok(Payload::Frame(f));
+        }
+        if self.eof {
+            return Err(Error::Eof);
+        }
+        Err(Error::NeedMoreInput)
     }
 }
 

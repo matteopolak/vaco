@@ -37,8 +37,8 @@ use vaco_core::{Error, Result, TimeBase};
 use vaco_limits::{Budget, ProgressGuard};
 
 use crate::node::{
-    CodecWork, DecoderSide, DemuxWork, Done, EncoderSide, FilterWork, Job, MuxWork, PortIn, Ports,
-    Work,
+    CodecWork, ConverterSide, DecoderSide, DemuxWork, Done, EncoderSide, FilterWork, Job, MuxWork,
+    PortIn, Ports, Work,
 };
 use crate::spec::{KindSpec, PipelineSpec};
 use crate::timing;
@@ -576,7 +576,7 @@ impl PipelineSpec {
                 priority: match s.kind {
                     KindSpec::Mux { .. } => 4,
                     KindSpec::Encode(_) => 3,
-                    KindSpec::Filter { .. } => 2,
+                    KindSpec::Filter { .. } | KindSpec::Convert { .. } => 2,
                     KindSpec::Decode(_) => 1,
                     KindSpec::Demux { .. } => 0,
                 },
@@ -679,6 +679,14 @@ fn build_work(
             pending_eof: None,
             end_pts: vaco_core::Timestamp::NONE,
         }),
+        KindSpec::Convert { dst_format, limits } => Work::Convert(Box::new(CodecWork {
+            side: ConverterSide::new(dst_format, limits),
+            stage: Stage::Feeding,
+            last_pts: vaco_core::Timestamp::NONE,
+            stashed: None,
+            pending_eof: None,
+            end_pts: vaco_core::Timestamp::NONE,
+        })),
         KindSpec::Filter {
             graph,
             sources,

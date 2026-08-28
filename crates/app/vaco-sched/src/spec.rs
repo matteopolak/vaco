@@ -45,6 +45,7 @@ use vaco_format_core::mux::{BsfProvider, MuxBuilder};
 use vaco_format_core::options::FormatOptions;
 use vaco_format_core::{Demuxer, Muxer};
 use vaco_limits::Limits;
+use vaco_pixfmt::PixFmt;
 
 use crate::wire::{Capacity, Flow};
 
@@ -148,6 +149,10 @@ pub(crate) enum KindSpec {
     },
     Decode(Box<dyn Decoder>),
     Encode(Box<dyn Encoder>),
+    Convert {
+        dst_format: PixFmt,
+        limits: Limits,
+    },
     Filter {
         graph: Box<Graph>,
         sources: Vec<NodeId>,
@@ -178,6 +183,7 @@ impl std::fmt::Debug for KindSpec {
             Self::Demux { .. } => "Demux",
             Self::Decode(_) => "Decode",
             Self::Encode(_) => "Encode",
+            Self::Convert { .. } => "Convert",
             Self::Filter { .. } => "Filter",
             Self::Mux { .. } => "Mux",
         })
@@ -468,6 +474,35 @@ impl PipelineSpec {
             outputs: vec![(Flow::Packets, time_base)],
         });
         Ok(PacketTap { node: id, port: 0 })
+    }
+
+    /// Insert a pixel-format converter between a frame producer and whatever
+    /// reads it next.
+    ///
+    /// The general case this closes: a decoder's output format and an
+    /// encoder's [`Encoder::accepted_pix_fmts`] disagree, and nothing sits
+    /// between them. `vaco-scale` does the conversion; this is only the
+    /// wiring, and it needs no width or height up front — the node reads the
+    /// frame's own dimensions and rebuilds its plan if they change.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidData`] if the tap does not exist.
+    pub fn add_converter(
+        &mut self,
+        from: FrameTap,
+        dst_format: PixFmt,
+        time_base: Rational,
+        limits: Limits,
+    ) -> Result<FrameTap> {
+        self.out_of(from.into())?;
+        let id = self.push(NodeSpec {
+            label: format!("convert {}:{} -> {}", from.node, from.port, dst_format.name()),
+            kind: KindSpec::Convert { dst_format, limits },
+            inputs: vec![(from.into(), time_base)],
+            outputs: vec![(Flow::Frames, time_base)],
+        });
+        Ok(FrameTap { node: id, port: 0 })
     }
 
     /// Attach a configured filter graph.

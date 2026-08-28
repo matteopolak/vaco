@@ -1074,3 +1074,95 @@ fn a_filter_graph_feeds_two_outputs() {
     assert_eq!(copy_log.lock().unwrap().packets.len(), 15);
     assert_eq!(filt_log.lock().unwrap().packets.len(), 15);
 }
+
+// -------------------------------------------------------- format converter
+
+/// Records the pixel format of every frame it is handed, standing in for an
+/// encoder that declared [`Encoder::accepted_pix_fmts`] and is now downstream
+/// of a converter.
+struct RecordingSink(Arc<Mutex<Vec<vaco_pixfmt::PixFmt>>>);
+
+impl Encoder for RecordingSink {
+    fn send_frame(&mut self, frame: Option<&Frame>) -> Result<()> {
+        if let Some(f) = frame
+            && let vaco_frame::FrameData::Video { format, .. } = f.data
+        {
+            self.0.lock().unwrap().push(format);
+        }
+        Ok(())
+    }
+
+    fn receive_packet(&mut self) -> Result<Packet> {
+        Err(Error::Eof)
+    }
+
+    fn flush(&mut self) {}
+}
+
+#[test]
+fn a_converter_turns_gray8_into_the_encoders_declared_format() {
+    let mut spec = PipelineSpec::new();
+    let input = spec.add_input(Box::new(ScriptedDemuxer::new(
+        vec![video_stream(0, TB)],
+        packets(0, 3, 0),
+    )));
+    let tap = spec.input_stream(input, 0).unwrap();
+    let frames = spec
+        .add_decoder(tap, Box::new(GrayDecoder::new(0)))
+        .unwrap();
+    let converted = spec
+        .add_converter(
+            frames,
+            vaco_pixfmt::PixFmt::Rgb24,
+            TB,
+            Limits::permissive(),
+        )
+        .unwrap();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let encoded = spec
+        .add_encoder(converted, Box::new(RecordingSink(seen.clone())), TB)
+        .unwrap();
+    let (mux, _log) = RecordingMuxer::pair(TB);
+    let out = spec.add_output(Box::new(mux));
+    spec.map(encoded, out, &CodecParameters::new(MediaType::Video))
+        .unwrap();
+
+    let mut pipeline = spec.build().unwrap();
+    pipeline.run().unwrap();
+
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 3);
+    assert!(
+        seen.iter().all(|f| *f == vaco_pixfmt::PixFmt::Rgb24),
+        "every frame reaching the encoder should have been converted to rgb24, got {seen:?}"
+    );
+}
+
+#[test]
+fn a_converter_is_a_cheap_passthrough_when_formats_already_agree() {
+    // Gray8 -> Gray8: no scaler should even need to run, and the frame that
+    // comes out should be the same pixel data, not a re-encoded copy.
+    let mut spec = PipelineSpec::new();
+    let input = spec.add_input(Box::new(ScriptedDemuxer::new(
+        vec![video_stream(0, TB)],
+        packets(0, 1, 0),
+    )));
+    let tap = spec.input_stream(input, 0).unwrap();
+    let frames = spec
+        .add_decoder(tap, Box::new(GrayDecoder::new(0)))
+        .unwrap();
+    let converted = spec
+        .add_converter(frames, vaco_pixfmt::PixFmt::Gray8, TB, Limits::permissive())
+        .unwrap();
+    let encoded = spec
+        .add_encoder(converted, Box::new(MockEncoder::new(0)), TB)
+        .unwrap();
+    let (mux, log) = RecordingMuxer::pair(TB);
+    let out = spec.add_output(Box::new(mux));
+    spec.map(encoded, out, &CodecParameters::new(MediaType::Video))
+        .unwrap();
+
+    let mut pipeline = spec.build().unwrap();
+    assert_eq!(pipeline.run().unwrap(), Finish::Complete);
+    assert_eq!(log.lock().unwrap().packets.len(), 1);
+}
