@@ -1583,6 +1583,68 @@ ours with -bitexact:     #software: vaco
   synthesises extradata for exactly these copied streams, so the 45 bytes are
   there to measure and CRC.
 
+## 33. `-formats` prints 130 formats twice, and `-demuxers`/`-muxers` do not mask the flag column
+
+Three separate faults in one function, all in `crates/app/vaco-cli/src/listing.rs`.
+Each is the *obvious* implementation, which is why they are worth writing down.
+
+### `-formats` is a union, not a concatenation
+
+```text
+$ vaco -formats | sed -n '5p;135,138p'
+ DE  aiff            Audio IFF
+ D   xpm_pipe        piped xpm sequence
+ DE  yuv4mpegpipe    YUV4MPEG pipe
+ DE  3g2             3GP2 (3GPP2 file format)     <- the list starts over
+ DE  3gp             3GP (3GPP file format)
+```
+
+The demuxer pass ran, then the muxer pass ran, so every format that goes both
+ways appeared twice and the output was not sorted as a whole. In the reference
+that is **130 of 413 names** — not an edge case.
+
+Measured: `ffmpeg -formats` emits one ASCII-sorted row per name, `413` rows
+against a `413`-name union of its `-demuxers` and `-muxers` lists.
+
+### `-demuxers` and `-muxers` mask the flag column to the direction asked for
+
+```text
+$ ffmpeg -demuxers | grep ' avi '
+ D   avi             AVI (Audio Video Interleaved)
+$ ffmpeg -muxers   | grep ' avi '
+  E  avi             AVI (Audio Video Interleaved)
+$ ffmpeg -formats  | grep ' avi '
+ DE  avi             AVI (Audio Video Interleaved)
+```
+
+`avi` both demuxes and muxes in all three, yet only `-formats` says so. We
+printed `DE` in all three, because the row was built by asking the registry
+about both directions regardless of which listing was running.
+
+### A both-ways format takes its **muxer's** long name
+
+The two spellings are not always the same, and the reference prefers the
+muxer's:
+
+```text
+-demuxers   mp3    MP2/3 (MPEG audio layer 2/3)
+-muxers     mp3    MP3 (MPEG audio layer 3)
+-formats    mp3    MP3 (MPEG audio layer 3)      <- muxer wins
+```
+
+They differ for **20 of the 130** both-way formats, including `rtp`/`rtsp`/`sap`
+(`… input` vs `… output`), `codec2`/`codec2raw` (`… demuxer` vs `… muxer`),
+`g726`/`g726le` (`"left aligned"` vs `"left-justified"`) and `spdif`.
+
+### Also confirmed, and not a bug
+
+The `..d` device slot really is always blank for us, and that is honest: the
+reference sets it for exactly three entries in this build (`avfoundation`,
+`lavfi`, `audiotoolbox`), all of which are out of scope for v1.0 per plan 18
+§9.3 — see `docs/why-some-formats-are-not-included.md`. Devices appear in
+`-formats`, `-demuxers` and `-muxers` as well as in `-devices`, so when devices
+arrive the slot is the only thing that needs filling, not the row set.
+
 ## Harness changes, summarised
 
 Everything below is a change to `crates/tool/vaco-conformance/`,
