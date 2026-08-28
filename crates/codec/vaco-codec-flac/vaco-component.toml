@@ -1,0 +1,23 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# FLAC decode and encode are both patent-free (D9 marks FLAC GREEN), so both
+# ship unconditionally like any other GREEN codec: no `encumbered` feature,
+# `default` left at its normal `true`.
+
+[[component]]
+kind      = "decoder"
+name      = "flac"
+long_name = "FLAC (Free Lossless Audio Codec), decode via claxon"
+feature   = "codec-flac"
+ctor      = "vaco_codec_flac::DECODER_FLAC"
+media     = "audio"
+codec     = "flac"
+
+[[component]]
+kind      = "encoder"
+name      = "flac"
+long_name = "FLAC (Free Lossless Audio Codec), native encode"
+feature   = "codec-flac"
+ctor      = "vaco_codec_flac::ENCODER_FLAC"
+media     = "audio"
+codec     = "flac"
