@@ -970,3 +970,10 @@ kind     = "blackbox"
 title    = "ffmpeg/ffprobe 8.1, measured against hand-built vag and xwma fixtures (no reference encoder exists for either): vag's one-packet-per-16-byte-block emission and adpcm_psx codec naming; xwma's nBlockAlign-aligned packetisation (not the dpds table's declared split), the fixed 6-byte WMAv2 extradata the reference synthesises when the fmt chunk carries none, and the dpds-chunk-presence duration_ts anomaly"
 acquired = "2026-08-28"
 where    = "the reference binary installed on the development machine"
+
+[[source]]
+id       = "scale2x-algorithm"
+kind     = "spec"
+title    = "scale2x.it, \"The Scale2x/Scale3x algorithm\" (AdvanceMAME project) — the public pixel-art upscaling algorithm underlying ffmpeg's `epx` filter: the 3x3-neighbourhood, four-comparison (B!=H, D!=F) rule that decides whether each output sub-pixel copies an orthogonal neighbour or the source pixel, at both the 2x (4 sub-pixels) and 3x (9 sub-pixels) scale factors"
+acquired = "2026-08-28"
+where    = "https://www.scale2x.it/algorithm"
