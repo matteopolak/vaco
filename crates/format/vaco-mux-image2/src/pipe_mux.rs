@@ -13,9 +13,11 @@
 
 use vaco_codec_core::CodecParameters;
 use vaco_core::{Error, Result};
-use vaco_format_core::{Muxer, MuxerDesc};
+use vaco_format_core::{FormatFlags, Muxer, MuxerDesc};
 use vaco_io::{IoOptions, IoWriter, MediaSink};
 use vaco_packet::Packet;
+
+use crate::writer::{Image2MuxOptions, Image2MuxWriter};
 
 /// Writes every packet's payload back to back into one sink. Mirrors
 /// `vaco-mux-raw::raw::RawMuxer` almost exactly, for the same reason: no
@@ -62,6 +64,121 @@ impl Muxer for Image2SinkMuxer {
     }
 }
 
+/// The real per-file writer, reached through the registry once
+/// [`Muxer::bind_url`] supplies the pattern (gap 2, `planning/INTERFACE-GAPS.md`).
+/// Wraps [`Image2MuxWriter`], which already does the real, correct
+/// per-frame filesystem work — it was simply unreachable from the registry
+/// path before `bind_url` existed.
+#[derive(Debug)]
+struct PatternWriterMuxer {
+    writer: Image2MuxWriter,
+    has_stream: bool,
+}
+
+impl Muxer for PatternWriterMuxer {
+    fn add_stream(&mut self, _params: &CodecParameters) -> Result<u32> {
+        if self.has_stream {
+            return Err(Error::Unsupported(
+                "image2 carries exactly one stream; use vaco_mux_image2::Image2MuxWriter \
+                 directly for multiple inputs",
+            ));
+        }
+        self.has_stream = true;
+        Ok(0)
+    }
+
+    fn write_header(&mut self) -> Result<()> {
+        // Nothing to write: image2 has no container-level header, only files.
+        Ok(())
+    }
+
+    fn write_packet(&mut self, packet: &Packet) -> Result<()> {
+        self.writer.write_frame(packet.payload(), packet.pts.ticks())
+    }
+
+    fn write_trailer(&mut self) -> Result<()> {
+        // Every frame is already a complete, flushed file by the time
+        // `write_packet` returns; there is nothing left to finalise.
+        Ok(())
+    }
+}
+
+/// The `image2` muxer as reached through the registry.
+///
+/// Starts as [`Image2SinkMuxer`], because that is all [`MuxerDesc::open`]'s
+/// frozen signature can construct against one already-open sink, and
+/// becomes the real [`PatternWriterMuxer`] the moment a caller supplies the
+/// destination pattern through [`Muxer::bind_url`] — #649's write-side
+/// symptom (a file literally named `out_%03d.png`) was this seam having no
+/// way to reach [`Image2MuxWriter`] at all.
+#[derive(Debug)]
+enum RegistryMuxer {
+    Sink(Image2SinkMuxer),
+    Pattern(PatternWriterMuxer),
+}
+
+impl Muxer for RegistryMuxer {
+    // `NEEDNUMBER` is what tells `vaco-cli`'s `open_output` (mirroring the
+    // read side's `DemuxerDesc.flags` check) to skip creating a real
+    // destination file for the literal pattern string and call `bind_url`
+    // on this throwaway-sink-backed instance instead.
+    fn flags(&self) -> FormatFlags {
+        FormatFlags::NEEDNUMBER
+    }
+
+    fn add_stream(&mut self, params: &CodecParameters) -> Result<u32> {
+        match self {
+            Self::Sink(m) => m.add_stream(params),
+            Self::Pattern(m) => m.add_stream(params),
+        }
+    }
+
+    fn write_header(&mut self) -> Result<()> {
+        match self {
+            Self::Sink(m) => m.write_header(),
+            Self::Pattern(m) => m.write_header(),
+        }
+    }
+
+    fn write_packet(&mut self, packet: &Packet) -> Result<()> {
+        match self {
+            Self::Sink(m) => m.write_packet(packet),
+            Self::Pattern(m) => m.write_packet(packet),
+        }
+    }
+
+    fn write_trailer(&mut self) -> Result<()> {
+        match self {
+            Self::Sink(m) => m.write_trailer(),
+            Self::Pattern(m) => m.write_trailer(),
+        }
+    }
+
+    /// Replace the placeholder sink-backed state with the real per-file
+    /// writer, preserving whether a stream was already declared (the order
+    /// [`Muxer::bind_url`]'s own doc comment recommends — right after `open`
+    /// — is not enforced here defensively, the same way the read-side
+    /// `RegistryDemuxer::bind_url` is not).
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] if already bound. Otherwise whatever
+    /// [`Image2MuxWriter::create`] finds wrong with `url` (no `%d`
+    /// placeholder when numbering is required).
+    fn bind_url(&mut self, url: &str) -> Result<()> {
+        let has_stream = match self {
+            Self::Sink(m) => m.has_stream,
+            Self::Pattern(_) => {
+                return Err(Error::Unsupported(
+                    "this image2 muxer is already bound to a pattern",
+                ));
+            }
+        };
+        let writer = Image2MuxWriter::create(url, Image2MuxOptions::default())?;
+        *self = Self::Pattern(PatternWriterMuxer { writer, has_stream });
+        Ok(())
+    }
+}
+
 /// The `image2` muxer's registry entry.
 pub const MUXER_IMAGE2: MuxerDesc = MuxerDesc {
     name: "image2",
@@ -71,7 +188,9 @@ pub const MUXER_IMAGE2: MuxerDesc = MuxerDesc {
     // (`CodecId::Jpeg` is spelled `mjpeg` in the reference's own listing.)
     default_video: Some(vaco_codec_core::CodecId::Jpeg),
     default_audio: None,
-    open: |sink: Box<dyn MediaSink>| Ok(Box::new(Image2SinkMuxer::new(sink)?) as Box<dyn Muxer>),
+    open: |sink: Box<dyn MediaSink>| {
+        Ok(Box::new(RegistryMuxer::Sink(Image2SinkMuxer::new(sink)?)) as Box<dyn Muxer>)
+    },
 };
 
 #[cfg(test)]
@@ -118,5 +237,52 @@ mod tests {
             m.add_stream(&CodecParameters::new(MediaType::Video))
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn declares_neednumber() {
+        let sink = SharedDynBuf::new();
+        let m = (MUXER_IMAGE2.open)(Box::new(sink)).unwrap();
+        assert_eq!(m.flags(), FormatFlags::NEEDNUMBER);
+    }
+
+    /// Gap 2/#649: the registry's frozen `open` can only ever produce the
+    /// degenerate one-sink shape, but `Muxer::bind_url` — called with the
+    /// real destination pattern right after `open`, exactly as
+    /// `vaco-cli`'s `open_output` now does for a `NEEDNUMBER` muxer —
+    /// rebinds to the real per-file writer.
+    #[test]
+    fn open_then_bind_url_writes_one_real_file_per_frame() {
+        let dir =
+            std::env::temp_dir().join(format!("vaco-mux-image2-test-bind-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let pattern = dir.join("out%03d.png");
+        let pattern = pattern.to_str().unwrap();
+
+        // The registry path's only option: a throwaway placeholder sink,
+        // exactly as a caller unable to write the literal pattern string
+        // as a real file would pass.
+        let placeholder = SharedDynBuf::new();
+        let mut m = (MUXER_IMAGE2.open)(Box::new(placeholder)).unwrap();
+        m.add_stream(&CodecParameters::new(MediaType::Video))
+            .unwrap();
+        m.bind_url(pattern).unwrap();
+        m.write_header().unwrap();
+
+        let mut budget = vaco_limits::Budget::new(vaco_limits::Limits::permissive());
+        let p1 = Packet::from_slice(&mut budget, b"one").unwrap();
+        let p2 = Packet::from_slice(&mut budget, b"two").unwrap();
+        m.write_packet(&p1).unwrap();
+        m.write_packet(&p2).unwrap();
+        m.write_trailer().unwrap();
+
+        assert_eq!(std::fs::read(dir.join("out001.png")).unwrap(), b"one");
+        assert_eq!(std::fs::read(dir.join("out002.png")).unwrap(), b"two");
+
+        // A second bind is refused rather than silently re-resolving.
+        assert!(matches!(m.bind_url(pattern), Err(Error::Unsupported(_))));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -377,6 +377,69 @@ impl Demuxer for SingleSourceDemuxer {
     }
 }
 
+/// The `image2` demuxer as reached through the registry.
+///
+/// Starts as [`SingleSourceDemuxer`], because that is all
+/// [`DemuxerDesc::open`]'s frozen signature can construct from one
+/// already-open source. Becomes the real [`Image2Demuxer`] the moment a
+/// caller supplies the pattern's URL through [`Demuxer::bind_url`] (gap 7,
+/// `planning/INTERFACE-GAPS.md`) — [`Image2Demuxer::open_pattern`] already
+/// resolves `img_%03d.png`-style patterns against the filesystem correctly;
+/// it was simply unreachable from the registry path before this method
+/// existed, which is exactly #649's read-side symptom.
+#[derive(Debug)]
+enum RegistryDemuxer {
+    Single(SingleSourceDemuxer),
+    Pattern(Image2Demuxer),
+}
+
+impl Demuxer for RegistryDemuxer {
+    fn streams(&self) -> &[Stream] {
+        match self {
+            Self::Single(d) => d.streams(),
+            Self::Pattern(d) => d.streams(),
+        }
+    }
+
+    fn read_packet(&mut self) -> Result<Packet> {
+        match self {
+            Self::Single(d) => d.read_packet(),
+            Self::Pattern(d) => d.read_packet(),
+        }
+    }
+
+    fn seek(&mut self, target: SeekTarget, flags: SeekFlags) -> Result<()> {
+        match self {
+            Self::Single(d) => d.seek(target, flags),
+            Self::Pattern(d) => d.seek(target, flags),
+        }
+    }
+
+    /// Replace the placeholder single-source state with the real
+    /// pattern-resolved demuxer.
+    ///
+    /// Options (`-pattern_type`, `-start_number`, …) have no channel to this
+    /// point yet either — the read-side twin of gap 5, not attempted here —
+    /// so this binds with [`Image2Options::default`]; a caller that needs
+    /// non-default options still has [`Image2Demuxer::open_pattern`] itself.
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] if already bound: this method is documented as
+    /// a one-time call, and re-resolving against a second, possibly
+    /// different URL is not this crate's decision to make silently.
+    /// Otherwise whatever [`Image2Demuxer::open_pattern`] finds wrong with
+    /// `url` (no match, an unparseable pattern).
+    fn bind_url(&mut self, url: &str) -> Result<()> {
+        if matches!(self, Self::Pattern(_)) {
+            return Err(Error::Unsupported(
+                "this image2 demuxer is already bound to a pattern",
+            ));
+        }
+        *self = Self::Pattern(Image2Demuxer::open_pattern(url, Image2Options::default())?);
+        Ok(())
+    }
+}
+
 /// Largest single source this adapter will buffer, mirroring
 /// `pipe::MAX_BUFFERED` for the same "computed once, up front" trade-off.
 const MAX_SINGLE_SOURCE: u64 = 512 << 20;
@@ -416,11 +479,11 @@ fn open_boxed(src: Box<dyn MediaSource>, parsers: &dyn ParserProvider) -> Result
     stream.params.media_type = Some(MediaType::Video);
     stream.params.video = Some(stream_video(framerate));
     let remaining = (!bytes.is_empty()).then_some(bytes);
-    Ok(Box::new(SingleSourceDemuxer {
+    Ok(Box::new(RegistryDemuxer::Single(SingleSourceDemuxer {
         stream,
         remaining,
         budget: Budget::new(Limits::permissive()),
-    }))
+    })))
 }
 
 fn probe_image2(data: &ProbeData<'_>) -> ProbeScore {
@@ -448,9 +511,14 @@ pub const DEMUXER_IMAGE2: DemuxerDesc = DemuxerDesc {
     // See the note in `pipe/mod.rs`: derived timestamps, whole-image keyframes,
     // exact frame-number seeking only. Stating the three inapplicable search
     // strategies is a decision; `empty()` is an omission that reads like one.
+    // `NEEDNUMBER` is the CLI's signal (gap 7/#649) that this descriptor's
+    // `open` cannot be reached with a literally-opened source at all — the
+    // URL is a `%d` pattern — and must instead get a placeholder plus a
+    // `Demuxer::bind_url` call. See `RegistryDemuxer::bind_url` above.
     flags: FormatFlags::NOBINSEARCH
         .union(FormatFlags::NOGENSEARCH)
-        .union(FormatFlags::NO_BYTE_SEEK),
+        .union(FormatFlags::NO_BYTE_SEEK)
+        .union(FormatFlags::NEEDNUMBER),
     probe: probe_image2,
     open: open_boxed,
 };
@@ -604,5 +672,37 @@ mod tests {
         let mut d = (DEMUXER_IMAGE2.open)(src, &NoParsers).unwrap();
         assert_eq!(d.read_packet().unwrap().payload(), b"whole file");
         assert!(matches!(d.read_packet(), Err(Error::Eof)));
+    }
+
+    /// Gap 7/#649: a pattern reached through the registry's frozen `open`
+    /// cannot open anything real (the pattern string is not a file), but
+    /// `Demuxer::bind_url` — called with the same URL right after `open` —
+    /// rebinds to the real, already-correct multi-file resolution.
+    #[test]
+    fn registry_open_then_bind_url_reads_the_whole_pattern() {
+        use vaco_format_core::discovery::NoParsers;
+        use vaco_io::MemorySource;
+
+        let dir = scratch_dir("registry-bind-url");
+        fs::write(dir.join("img001.png"), b"one").unwrap();
+        fs::write(dir.join("img002.png"), b"two").unwrap();
+        let pattern = dir.join("img%03d.png");
+        let pattern = pattern.to_str().unwrap();
+
+        // The registry path's only option: a throwaway placeholder source,
+        // exactly as a caller unable to open the literal pattern string
+        // would pass.
+        let placeholder = Box::new(MemorySource::new(Vec::new()));
+        let mut d = (DEMUXER_IMAGE2.open)(placeholder, &NoParsers).unwrap();
+        d.bind_url(pattern).unwrap();
+
+        assert_eq!(d.read_packet().unwrap().payload(), b"one");
+        assert_eq!(d.read_packet().unwrap().payload(), b"two");
+        assert!(matches!(d.read_packet(), Err(Error::Eof)));
+
+        // A second bind is refused rather than silently re-resolving.
+        assert!(matches!(d.bind_url(pattern), Err(Error::Unsupported(_))));
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }
