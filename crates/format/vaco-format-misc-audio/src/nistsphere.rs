@@ -145,7 +145,19 @@ impl NistSphereDemuxer {
 
         let bytes_per_frame = bytes_per_sample.saturating_mul(u32::from(channels));
         let size = io.size();
-        let inner = BlockDemuxer::new(io, stream, header_len, size, bytes_per_frame.max(1), 1);
+        // This crate's per-format packet-size measurement did not cover
+        // nistsphere's raw-PCM tail (see block.rs's module doc);
+        // DEFAULT_TARGET_PACKET_BYTES is an unmeasured approximation, not a
+        // confirmed match to the reference.
+        let inner = BlockDemuxer::new(
+            io,
+            stream,
+            header_len,
+            size,
+            bytes_per_frame.max(1),
+            1,
+            crate::block::DEFAULT_TARGET_PACKET_BYTES,
+        );
         Ok(Self { inner, budget })
     }
 }

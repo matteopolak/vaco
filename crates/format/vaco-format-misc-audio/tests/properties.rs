@@ -9,7 +9,7 @@ use vaco_codec_core::CodecParameters;
 use vaco_core::{Error, MediaType, Rational};
 use vaco_format_core::discovery::NoParsers;
 use vaco_format_core::DemuxerDesc;
-use vaco_format_misc_audio::block::BlockDemuxer;
+use vaco_format_misc_audio::block::{BlockDemuxer, DEFAULT_TARGET_PACKET_BYTES};
 use vaco_format_misc_audio::{adx, amr, g723, nistsphere, pvf, rawcodec, sbc, tta, vag, wavpack, xwma};
 use vaco_io::{IoContext, IoOptions, MemorySource};
 use vaco_limits::{Budget, Limits};
@@ -50,7 +50,15 @@ fn build(data: Vec<u8>, bytes_per_block: u32, frames_per_block: u32) -> BlockDem
     if let Some(a) = stream.params.audio.as_mut() {
         a.sample_rate = 8000;
     }
-    BlockDemuxer::new(io, stream, 0, Some(len), bytes_per_block, frames_per_block)
+    BlockDemuxer::new(
+        io,
+        stream,
+        0,
+        Some(len),
+        bytes_per_block,
+        frames_per_block,
+        DEFAULT_TARGET_PACKET_BYTES,
+    )
 }
 
 proptest! {

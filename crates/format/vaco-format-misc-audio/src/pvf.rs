@@ -124,7 +124,18 @@ impl PvfDemuxer {
 
         let bytes_per_frame = bytes_per_sample.saturating_mul(u32::from(channels));
         let size = io.size();
-        let inner = BlockDemuxer::new(io, stream, data_start, size, bytes_per_frame.max(1), 1);
+        // This crate's per-format packet-size measurement did not cover pvf's
+        // raw-PCM tail (see block.rs's module doc); DEFAULT_TARGET_PACKET_BYTES
+        // is an unmeasured approximation, not a confirmed match to the reference.
+        let inner = BlockDemuxer::new(
+            io,
+            stream,
+            data_start,
+            size,
+            bytes_per_frame.max(1),
+            1,
+            crate::block::DEFAULT_TARGET_PACKET_BYTES,
+        );
         Ok(Self {
             inner,
             budget: Budget::new(vaco_limits::Limits::permissive()),

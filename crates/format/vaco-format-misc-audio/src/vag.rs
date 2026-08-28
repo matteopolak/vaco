@@ -22,17 +22,21 @@
 //! of them, and measured against `ffprobe` to confirm the reference reads
 //! it the same way.
 //!
-//! # A real, measured divergence: packet granularity
+//! # Packet granularity
 //!
 //! The reference emits **one packet per 16-byte block** — ten blocks, ten
 //! `-show_packets` entries, `size=16` each, `pts`/`dts` advancing by 28
 //! (one block's samples) every packet. This module reproduces that
-//! block-per-packet granularity deliberately, rather than batching several
-//! blocks into one larger packet the way this crate's `BlockDemuxer` does
-//! for `adx`/`pvf`/`nistsphere` and the headerless codecs in `rawcodec.rs`
-//! — see `planning/TECH-DEBT.md` for why that batching is itself a
-//! separate, pre-existing divergence from the reference and out of scope
-//! for this module to fix.
+//! directly with its own loop rather than going through `BlockDemuxer`.
+//!
+//! Finding this here surfaced that `BlockDemuxer` itself batched several
+//! blocks into one oversized packet for `adx` and every `rawcodec.rs`
+//! entry — a real, pre-existing divergence from the reference, since fixed
+//! (see `block.rs`'s module doc for the full per-format measurement and
+//! `planning/TECH-DEBT.md` for the record). `pvf`/`nistsphere`'s raw-PCM
+//! tail remains an open, unmeasured approximation for a different reason
+//! (the reference's batching there depends on sample rate in a way that
+//! was not pinned down) — also recorded in `planning/TECH-DEBT.md`.
 //!
 //! # What is not read
 //!

@@ -51,6 +51,11 @@ pub struct RawCodecSpec {
     pub bytes_per_block: u32,
     pub frames_per_block: u32,
     pub codec_id: Option<CodecId>,
+    /// The reference's own packet size, measured directly against
+    /// `ffprobe -show_packets` over a large hand-built fixture — see
+    /// `block.rs`'s module doc for the full measurement and why it is not
+    /// one formula shared across every entry here.
+    pub target_packet_bytes: u32,
 }
 
 pub const GSM: RawCodecSpec = RawCodecSpec {
@@ -62,6 +67,7 @@ pub const GSM: RawCodecSpec = RawCodecSpec {
     bytes_per_block: 33,
     frames_per_block: 160,
     codec_id: Some(CodecId::Gsm),
+    target_packet_bytes: 33,
 };
 
 pub const SLN: RawCodecSpec = RawCodecSpec {
@@ -73,6 +79,7 @@ pub const SLN: RawCodecSpec = RawCodecSpec {
     bytes_per_block: 2,
     frames_per_block: 1,
     codec_id: Some(CodecId::PcmS16le),
+    target_packet_bytes: 1024,
 };
 
 pub const DFPWM: RawCodecSpec = RawCodecSpec {
@@ -84,6 +91,7 @@ pub const DFPWM: RawCodecSpec = RawCodecSpec {
     bytes_per_block: 1,
     frames_per_block: 8,
     codec_id: Some(CodecId::Dfpwm),
+    target_packet_bytes: 512,
 };
 
 pub const G722: RawCodecSpec = RawCodecSpec {
@@ -95,6 +103,7 @@ pub const G722: RawCodecSpec = RawCodecSpec {
     bytes_per_block: 1,
     frames_per_block: 2,
     codec_id: Some(CodecId::AdpcmG722),
+    target_packet_bytes: 1024,
 };
 
 pub const G726: RawCodecSpec = RawCodecSpec {
@@ -106,6 +115,7 @@ pub const G726: RawCodecSpec = RawCodecSpec {
     bytes_per_block: 1,
     frames_per_block: 2,
     codec_id: Some(CodecId::AdpcmG726),
+    target_packet_bytes: 1020,
 };
 
 pub const G726LE: RawCodecSpec = RawCodecSpec {
@@ -117,6 +127,7 @@ pub const G726LE: RawCodecSpec = RawCodecSpec {
     bytes_per_block: 1,
     frames_per_block: 2,
     codec_id: Some(CodecId::AdpcmG726),
+    target_packet_bytes: 1020,
 };
 
 pub const G728: RawCodecSpec = RawCodecSpec {
@@ -128,6 +139,7 @@ pub const G728: RawCodecSpec = RawCodecSpec {
     bytes_per_block: 1,
     frames_per_block: 4,
     codec_id: Some(CodecId::G728),
+    target_packet_bytes: 1020,
 };
 
 pub const G729: RawCodecSpec = RawCodecSpec {
@@ -139,6 +151,7 @@ pub const G729: RawCodecSpec = RawCodecSpec {
     bytes_per_block: 10,
     frames_per_block: 80,
     codec_id: Some(CodecId::G729),
+    target_packet_bytes: 10,
 };
 
 pub const APTX: RawCodecSpec = RawCodecSpec {
@@ -150,6 +163,7 @@ pub const APTX: RawCodecSpec = RawCodecSpec {
     bytes_per_block: 4,
     frames_per_block: 4,
     codec_id: Some(CodecId::Aptx),
+    target_packet_bytes: 1024,
 };
 
 pub const APTX_HD: RawCodecSpec = RawCodecSpec {
@@ -161,6 +175,7 @@ pub const APTX_HD: RawCodecSpec = RawCodecSpec {
     bytes_per_block: 6,
     frames_per_block: 4,
     codec_id: Some(CodecId::AptxHd),
+    target_packet_bytes: 1536,
 };
 
 /// Every [`probe`] in this module answers only from the filename extension,
@@ -189,7 +204,15 @@ fn build(spec: &RawCodecSpec, src: Box<dyn MediaSource>) -> Result<RawCodecDemux
     }
     stream.params = params;
     let size = io.size();
-    let inner = BlockDemuxer::new(io, stream, 0, size, spec.bytes_per_block, spec.frames_per_block);
+    let inner = BlockDemuxer::new(
+        io,
+        stream,
+        0,
+        size,
+        spec.bytes_per_block,
+        spec.frames_per_block,
+        spec.target_packet_bytes,
+    );
     Ok(RawCodecDemuxer {
         inner,
         budget: Budget::new(vaco_limits::Limits::permissive()),

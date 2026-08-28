@@ -115,6 +115,10 @@ impl AdxDemuxer {
         stream.frame_count = Some(u64::from(total_samples));
 
         let size = io.size();
+        // Measured against `ffprobe -show_packets`: the reference emits
+        // exactly one packet per block (see `block.rs`'s module doc for the
+        // full per-format measurement), so the target packet size is the
+        // block size itself, not a larger batched read.
         let inner = BlockDemuxer::new(
             io,
             stream,
@@ -122,6 +126,7 @@ impl AdxDemuxer {
             size,
             u32::from(block_size),
             samples_per_block.max(1),
+            u32::from(block_size),
         );
         Ok(Self {
             inner,
@@ -150,7 +155,7 @@ impl Demuxer for AdxDemuxer {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, reason = "test code")]
+#[allow(clippy::unwrap_used, clippy::panic, reason = "test code")]
 mod tests {
     use super::*;
     use vaco_io::MemorySource;
@@ -184,8 +189,21 @@ mod tests {
         let s = d.streams().first().unwrap();
         assert_eq!(s.params.audio.as_ref().unwrap().sample_rate, 8000);
         assert_eq!(s.duration_ts, Some(2432));
-        let pkt = d.read_packet().unwrap();
-        assert_eq!(pkt.len, 18 * 76);
+        // Measured against `ffprobe -show_packets` on the real fixture this
+        // was built from: the reference emits one 18-byte packet per block
+        // (76 packets total), not one large batched packet.
+        let mut count = 0;
+        loop {
+            match d.read_packet() {
+                Ok(pkt) => {
+                    assert_eq!(pkt.len, 18);
+                    count += 1;
+                }
+                Err(vaco_core::Error::Eof) => break,
+                Err(e) => panic!("unexpected error {e:?}"),
+            }
+        }
+        assert_eq!(count, 76);
     }
 
     #[test]

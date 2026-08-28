@@ -35,6 +35,12 @@ struct Row {
     /// `ffprobe -show_entries format=duration`, in microseconds; `None`
     /// where the reference itself reports `N/A`.
     reference_duration_us: Option<i64>,
+    /// `ffprobe -show_entries packet=size`, the exact sequence of packet
+    /// byte sizes the reference produces for this fixture (forcing `-f
+    /// <name>` for the headerless formats, which have no magic to
+    /// auto-detect and are otherwise misidentified). `None` for fixtures
+    /// this check was not extended to.
+    reference_packet_sizes: Option<&'static [usize]>,
 }
 
 fn open_file(path: &Path) -> Box<dyn MediaSource> {
@@ -57,6 +63,7 @@ fn every_fixture_matches_the_measured_reference_row() {
             sample_rate: 44_100,
             channels: 2,
             reference_duration_us: Some(300_000),
+            reference_packet_sizes: None,
         },
         Row {
             file: "tta.tta",
@@ -64,6 +71,7 @@ fn every_fixture_matches_the_measured_reference_row() {
             sample_rate: 44_100,
             channels: 2,
             reference_duration_us: Some(300_000),
+            reference_packet_sizes: None,
         },
         Row {
             file: "adx.adx",
@@ -71,6 +79,7 @@ fn every_fixture_matches_the_measured_reference_row() {
             sample_rate: 8000,
             channels: 1,
             reference_duration_us: Some(304_000),
+            reference_packet_sizes: Some(&[18; 76]),
         },
         Row {
             file: "g722.g722",
@@ -78,6 +87,7 @@ fn every_fixture_matches_the_measured_reference_row() {
             sample_rate: 16_000,
             channels: 1,
             reference_duration_us: Some(150_000),
+            reference_packet_sizes: Some(&[1024, 176]),
         },
         Row {
             file: "g726.g726",
@@ -85,6 +95,7 @@ fn every_fixture_matches_the_measured_reference_row() {
             sample_rate: 8000,
             channels: 1,
             reference_duration_us: Some(300_000),
+            reference_packet_sizes: Some(&[1020, 180]),
         },
         Row {
             file: "g726le.g726le",
@@ -92,6 +103,7 @@ fn every_fixture_matches_the_measured_reference_row() {
             sample_rate: 8000,
             channels: 1,
             reference_duration_us: Some(300_000),
+            reference_packet_sizes: Some(&[1020, 180]),
         },
         Row {
             file: "aptx.aptx",
@@ -99,6 +111,7 @@ fn every_fixture_matches_the_measured_reference_row() {
             sample_rate: 48_000,
             channels: 2,
             reference_duration_us: None,
+            reference_packet_sizes: Some(&[1024,1024,1024,1024,1024,1024,1024,1024,1024,1024,1024,1024,944]),
         },
         Row {
             file: "aptx_hd.aptx_hd",
@@ -106,6 +119,7 @@ fn every_fixture_matches_the_measured_reference_row() {
             sample_rate: 48_000,
             channels: 2,
             reference_duration_us: None,
+            reference_packet_sizes: Some(&[1536,1536,1536,1536,1536,1536,1536,1536,1536,1536,1536,1536,1536,1536,96]),
         },
         Row {
             file: "sbc.sbc",
@@ -113,6 +127,7 @@ fn every_fixture_matches_the_measured_reference_row() {
             sample_rate: 16_000,
             channels: 1,
             reference_duration_us: None,
+            reference_packet_sizes: None,
         },
         Row {
             file: "g723_1.g723_1",
@@ -120,6 +135,7 @@ fn every_fixture_matches_the_measured_reference_row() {
             sample_rate: 8000,
             channels: 1,
             reference_duration_us: None,
+            reference_packet_sizes: None,
         },
         Row {
             file: "vag.vag",
@@ -127,6 +143,7 @@ fn every_fixture_matches_the_measured_reference_row() {
             sample_rate: 22_050,
             channels: 1,
             reference_duration_us: Some(12_698),
+            reference_packet_sizes: Some(&[16; 10]),
         },
         Row {
             file: "xwma.xwma",
@@ -138,6 +155,7 @@ fn every_fixture_matches_the_measured_reference_row() {
             // chunk's mere presence causes in the reference's own
             // `duration_ts` (independent of the chunk's content).
             reference_duration_us: Some(350_000),
+            reference_packet_sizes: Some(&[100, 100, 100, 50]),
         },
     ];
 
@@ -187,11 +205,15 @@ fn every_fixture_matches_the_measured_reference_row() {
         }
 
         // Drain packets: every fixture must produce at least one, and the
-        // format must not error out before EOF.
-        let mut packets = 0usize;
+        // format must not error out before EOF. Where a measured reference
+        // packet-size sequence exists, the sizes must match exactly, not
+        // just the total byte count -- this is the check that would have
+        // caught BlockDemuxer's old batching-versus-one-per-block
+        // divergence, which the total/duration checks above did not.
+        let mut sizes = Vec::new();
         loop {
             match demux.read_packet() {
-                Ok(_) => packets += 1,
+                Ok(pkt) => sizes.push(pkt.len),
                 Err(vaco_core::Error::Eof) => break,
                 Err(e) => {
                     failures.push(format!("{}: read_packet failed: {e:?}", row.file));
@@ -199,8 +221,16 @@ fn every_fixture_matches_the_measured_reference_row() {
                 }
             }
         }
-        if packets == 0 {
+        if sizes.is_empty() {
             failures.push(format!("{}: produced zero packets", row.file));
+        }
+        if let Some(want) = row.reference_packet_sizes
+            && sizes != want
+        {
+            failures.push(format!(
+                "{}: packet sizes {sizes:?} != reference {want:?}",
+                row.file
+            ));
         }
     }
 

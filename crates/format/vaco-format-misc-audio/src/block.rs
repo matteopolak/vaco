@@ -7,6 +7,35 @@
 //! ADPCM chunk), and the plain-PCM tail of `nistsphere`/`pvf` alike — the
 //! same shape [`vaco_format_audio_simple::pcm::RawPcmDemuxer`] gives
 //! byte-for-byte PCM, generalised to a block covering more than one frame.
+//!
+//! # `target_packet_bytes`: measured per format, not assumed
+//!
+//! `BlockDemuxer::new` takes the packet size to emit as an explicit,
+//! required argument rather than picking one itself — this used to be a
+//! single hardcoded `4096`-byte constant, which was **wrong**: measuring
+//! every consumer against `ffprobe`/`ffmpeg` 8.1 found the reference emits
+//! **one packet per block** for `adx`, `gsm` and `g729` (`18`/`33`/`10`
+//! bytes respectively — confirmed directly against `-show_packets` on real
+//! and hand-built fixtures), and a *different*, format-specific fixed byte
+//! count for every other codec in `rawcodec.rs`: `1024` for `g722`, `1020`
+//! for `g726`/`g726le`/`g728`, `512` for `dfpwm`, `1024` for `aptx`, `1536`
+//! for `aptx_hd`, `1024` for `sln`. None of these divide evenly into a
+//! single formula (`g722` and `g726` share the same 1:2 byte:frame ratio
+//! and a fixed 8000/16000 Hz rate, yet batch into different byte counts),
+//! so each is a directly measured, hardcoded constant on its own
+//! `RawCodecSpec`/call site — see `planning/TECH-DEBT.md` for the
+//! measurement log and why an underlying formula was not chased further.
+//!
+//! `nistsphere` and `pvf` still pass [`DEFAULT_TARGET_PACKET_BYTES`]
+//! (`4096`), which is **not** measured against the reference: their raw-PCM
+//! payload showed the reference batching by a packet size that scales with
+//! the stream's own sample rate in a way that was measured at several
+//! points (roughly 64 ms of audio at low rates, rounded to a nearby power
+//! of two, with an unexplained early transition somewhere between 16 kHz
+//! and 32 kHz that broke every closed-form guess tried) but never reduced
+//! to one clean rule — see `planning/TECH-DEBT.md`. Reproducing it would
+//! mean guessing at un-pinned behaviour, which is worse than an honestly
+//! approximate constant.
 
 use vaco_core::{Duration, Error, Result, Timestamp};
 use vaco_format_core::seek::{SeekFlags, SeekTarget};
@@ -15,9 +44,10 @@ use vaco_io::{IoContext, Seekability};
 use vaco_limits::Budget;
 use vaco_packet::{Packet, PacketFlags};
 
-/// Packets are sized to roughly this many bytes, rounded down to a whole
-/// number of blocks (never zero).
-const TARGET_PACKET_BYTES: usize = 4096;
+/// The old, unmeasured default packet size, kept only for `nistsphere`/
+/// `pvf`'s raw-PCM tail — see the module doc for why those two do not have
+/// a measured value to use instead.
+pub const DEFAULT_TARGET_PACKET_BYTES: u32 = 4096;
 
 /// One elementary stream, framed as fixed-size blocks after `data_start`.
 #[derive(Debug)]
@@ -30,6 +60,10 @@ pub struct BlockDemuxer {
     data_len: Option<u64>,
     bytes_per_block: u32,
     frames_per_block: u32,
+    /// Packets are sized to roughly this many bytes, rounded down to a
+    /// whole number of blocks (never zero). Measured per format at the call
+    /// site — see the module doc.
+    target_packet_bytes: u32,
     blocks_emitted: u64,
     eof: bool,
 }
@@ -49,9 +83,11 @@ impl BlockDemuxer {
         declared_len: Option<u64>,
         bytes_per_block: u32,
         frames_per_block: u32,
+        target_packet_bytes: u32,
     ) -> Self {
         let bytes_per_block = bytes_per_block.max(1);
         let frames_per_block = frames_per_block.max(1);
+        let target_packet_bytes = target_packet_bytes.max(bytes_per_block);
         let data_len = declared_len.map(|n| match io.size() {
             Some(size) => n.min(size.saturating_sub(data_start)),
             None => n,
@@ -69,6 +105,7 @@ impl BlockDemuxer {
             data_len,
             bytes_per_block,
             frames_per_block,
+            target_packet_bytes,
             blocks_emitted: 0,
             eof: false,
         }
@@ -121,7 +158,8 @@ impl BlockDemuxer {
             return Err(Error::Eof);
         }
 
-        let mut want = TARGET_PACKET_BYTES - TARGET_PACKET_BYTES % self.bytes_per_block as usize;
+        let target = self.target_packet_bytes as usize;
+        let mut want = target - target % self.bytes_per_block as usize;
         if want == 0 {
             want = self.bytes_per_block as usize;
         }
@@ -231,6 +269,16 @@ mod tests {
     use vaco_limits::Limits;
 
     fn demux_of(data: Vec<u8>, bpb: u32, fpb: u32, declared_len: Option<u64>) -> BlockDemuxer {
+        demux_of_with_target(data, bpb, fpb, declared_len, DEFAULT_TARGET_PACKET_BYTES)
+    }
+
+    fn demux_of_with_target(
+        data: Vec<u8>,
+        bpb: u32,
+        fpb: u32,
+        declared_len: Option<u64>,
+        target_packet_bytes: u32,
+    ) -> BlockDemuxer {
         let src = Box::new(MemorySource::new(data));
         let io = IoContext::new(src, &IoOptions::default()).unwrap();
         let mut stream = Stream::new(0, MediaType::Audio, Rational::new(1, 8000));
@@ -238,12 +286,12 @@ mod tests {
         if let Some(a) = stream.params.audio.as_mut() {
             a.sample_rate = 8000;
         }
-        BlockDemuxer::new(io, stream, 0, declared_len, bpb, fpb)
+        BlockDemuxer::new(io, stream, 0, declared_len, bpb, fpb, target_packet_bytes)
     }
 
     #[test]
     fn packets_cover_the_whole_stream_with_increasing_pts() {
-        let data = vec![0xABu8; TARGET_PACKET_BYTES * 2 + 40];
+        let data = vec![0xABu8; DEFAULT_TARGET_PACKET_BYTES as usize * 2 + 40];
         let mut d = demux_of(data.clone(), 4, 2, Some(data.len() as u64));
         let mut budget = Budget::new(Limits::permissive());
         let mut total = 0usize;
