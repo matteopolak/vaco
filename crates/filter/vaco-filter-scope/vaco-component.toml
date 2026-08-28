@@ -1,0 +1,20 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Two of the twelve T3 measurement/visualisation video filters
+# `planning/16-filters.md` §4.2 assigns to `vaco-filter-scope`. See
+# `docs/filter/vaco-filter-scope.md` for the rest, left as a follow-up or
+# excluded, each for its own recorded reason.
+
+[[component]]
+kind = "filter"
+name = "histogram"
+long_name = "Compute and draw a histogram."
+ctor = "vaco_filter_scope::histogram::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "waveform"
+long_name = "Video waveform monitor."
+ctor = "vaco_filter_scope::waveform::DESC"
+media = "video"
