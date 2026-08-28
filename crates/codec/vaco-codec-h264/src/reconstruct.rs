@@ -745,24 +745,25 @@ mod tests {
     /// prediction families and real cross-macroblock neighbour
     /// propagation in the same picture.
     #[test]
-    #[ignore = "known incomplete, localised rather than merely observed: this fixture's \
-        macroblock (1, 0), block 0 needs Intra4x4PredMode == 1 (Intra_4x4_Horizontal, \
-        confirmed by hand -- its real left neighbour is macroblock (0, 0)'s already-correct \
-        block 5, whose reconstructed column is [147, 145, 53, 52], and the reference decode's \
-        flat-147 first row with zero residual is exactly what mode 1 with that left column \
-        produces, and nothing else does) but this decode currently computes mode 2 (DC), giving \
-        99 instead. dcOnlyPredictionFlag's own joint reading (clause 8.3.1.1, confirmed correct \
-        against the full noise.264 corpus -- see infer_intra4x4_neighbour_modes's own doc for \
-        that story) predicts mode_a=2 (forced, this macroblock's own above-neighbour is \
-        unavailable) and prev_intra4x4_pred_mode_flag=true, giving mode=predIntra4x4PredMode=2 \
-        directly -- consistent with what this decode computes, and NOT with the mode 1 the \
-        pixel oracle demands. Since dcOnlyPredictionFlag itself is independently verified \
-        correct, the remaining suspect is prev_intra4x4_pred_mode_flag/rem_intra4x4_pred_mode's \
-        own bit read for this specific block reading a stale/wrong value -- i.e. a \
-        bit-consumption drift somewhere in macroblock (0, 0)'s own decode before this point, \
-        the same shape of defect #418 has hunted for across eleven rounds, now localised to \
-        one exact macroblock boundary for the first time. Not resolved this round; multi.264 \
-        fails identically (same content) and is ignored for the same reason."]
+    #[ignore = "known incomplete, but substantially improved and re-localised this round: \
+        macroblock (1, 0)'s own divergence (block 0 needing Intra4x4PredMode == 1 but computing \
+        mode 2, traced to dcOnlyPredictionFlag using grids.mb_info_at(mb_x, mb_y) for a \
+        same-macroblock cbf neighbour -- that lookup is (correctly) None until set_mb_info runs \
+        at the very end of decode_macroblock_cabac, so every same-macroblock coded_block_flag \
+        context silently fell back to condTermFlagN = current_is_intra = 1 regardless of the \
+        real earlier block's own flag) is FIXED: mb-row 0 (macroblocks (0,0)..(3,0)) and the \
+        first two macroblocks of mb-row 1 now reconstruct byte-exact. Confirmed against \
+        noise.264 as the reason this stayed invisible for so long: 0 of noise.264's 256 \
+        Intra_4x4 luma AC blocks have coded_block_flag == 0 (every one has real residual, so \
+        the buggy 'assume 1' fallback always coincided with the true value), while testsrc.264 \
+        has 141 of 256 -- the bug needed a same-macroblock coded_block_flag == 0 neighbour to \
+        become visible at all. Divergence now starts at macroblock (2, 1), block 0 instead -- \
+        both its real left (macroblock (1,1)) and above (macroblock (2,0)) neighbours are \
+        independently confirmed byte-exact, so this is not the same same-macroblock-lookup bug \
+        (block 0's own left/above are both genuinely cross-macroblock, using the already-correct \
+        grids.mb_left/mb_above path) -- a second, still-unlocalised issue, not yet the same shape \
+        as the one just fixed. Not resolved this round; multi.264 fails identically (same \
+        content) and is ignored for the same reason."]
     fn testsrc_fixture_matches_ffmpeg_byte_for_byte() {
         let data: &[u8] = include_bytes!("../tests/fixtures/cabac_intra_oracle_testsrc.264");
         let reference: &[u8] =
@@ -793,9 +794,9 @@ mod tests {
     /// [`decode_all_frames_luma`] leans on holds across multiple pictures
     /// in one file, not just within a single one.
     #[test]
-    #[ignore = "known incomplete, same root cause as testsrc_fixture_matches_ffmpeg_byte_for_byte \
-        (identical content, replicated across independent frames) -- see that test's own ignore \
-        reason for the full account."]
+    #[ignore = "known incomplete, same root cause (now partially fixed, partially remaining) as \
+        testsrc_fixture_matches_ffmpeg_byte_for_byte (identical content, replicated across \
+        independent frames) -- see that test's own ignore reason for the full account."]
     fn multi_fixture_matches_ffmpeg_byte_for_byte_on_every_frame() {
         let data: &[u8] = include_bytes!("../tests/fixtures/cabac_intra_oracle_multi.264");
         let reference: &[u8] = include_bytes!("../tests/fixtures/cabac_intra_oracle_multi_ref.yuv");
@@ -825,25 +826,24 @@ mod tests {
     /// deblocking-explained -- see this round's own report for the actual
     /// per-frame numbers and this test's role in producing them.
     #[test]
-    #[ignore = "known incomplete, and decisive rather than merely another data point: this is \
-        #418's own corpus, decoded end to end for the first time via a real reconstruction \
-        pipeline rather than only a bit-consumption measurement. Frame 0 hits \
-        CabacDecoder::malformed() outright -- consistent with this exact corpus's own \
-        long-established 'diverges at slice 0' finding, unresolved across eleven prior rounds. \
-        Frames 1..24 do NOT hit malformed() but reconstruct almost entirely wrong (1.53% of \
-        luma samples match ffmpeg overall, far beyond anything a missing deblocking filter -- \
-        the confound this test's own doc warns about -- could explain), diverging from within \
-        the very first macroblock of the picture (e.g. frame 1: first mismatch at pixel (2, 0), \
-        inside macroblock (0, 0)'s own block 0 -- not even at a macroblock boundary). This\
-        crate's own Intra_4x4 implementation and mode inference are independently confirmed\
-        correct against a full, clean, unconfounded corpus (cabac_intra_oracle_noise.264,\
-        byte-exact, see noise_fixture_matches_ffmpeg_byte_for_byte), so the most likely\
-        explanation is not a defect in this round's own reconstruction code but the same\
-        pre-existing macroblock-layer bit-consumption divergence #418's own investigation has\
-        chased for eleven rounds, now visible as wrong pixels with an exact first-differing\
-        position for the first time, rather than only a downstream bit-count mismatch. Does\
-        not retire assert_slice_ends_at_rbsp_trailing_bits -- if anything, this is evidence\
-        the assertion is catching a real defect, not a false positive."]
+    #[ignore = "known incomplete, substantially improved this round rather than merely \
+        re-measured: this is #418's own corpus, decoded end to end via a real reconstruction \
+        pipeline. Before this round's same-macroblock coded_block_flag fix (see \
+        testsrc_fixture_matches_ffmpeg_byte_for_byte's own ignore reason for the exact bug), \
+        frame 0 hit CabacDecoder::malformed() outright and overall match was 1.53%. After the \
+        fix: all 25 frames now decode without hitting malformed() at all, and overall match is \
+        60.90% (up from 1.53%) -- frame 0 alone improved from a total decode failure to 81% of \
+        its own luma samples matching. Divergence is still real and not deblocking-explained \
+        (60.90% is far below what a missing loop filter alone could cost), typically starting \
+        one to a few macroblocks into each frame rather than at macroblock (0, 0) as before. \
+        This crate's own Intra_4x4 implementation and mode inference remain independently \
+        confirmed correct against a full, clean, unconfounded corpus \
+        (cabac_intra_oracle_noise.264, byte-exact). The remaining gap is presumably the same \
+        family of bug as testsrc.264's own still-open macroblock (2, 1) divergence -- a second, \
+        distinct issue from the one fixed this round, not yet localised. Does not retire \
+        assert_slice_ends_at_rbsp_trailing_bits -- if anything, this round's numbers are still \
+        evidence the assertion is catching a real defect, now substantially smaller but not \
+        eliminated."]
     fn cabac_i_only_reconstructs_without_error_and_mostly_matches_ffmpeg() {
         let data: &[u8] = include_bytes!("../tests/fixtures/cabac_i_only.264");
         let reference: &[u8] = include_bytes!("../tests/fixtures/cabac_i_only_ref.yuv");

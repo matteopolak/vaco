@@ -2817,6 +2817,23 @@ fn decode_residual_cabac(
     let mut out = MbResidual::default();
     let is_16x16 = matches!(kind, MbKind::Intra16x16 { .. });
     let current_is_intra = kind.is_intra();
+    // A within-macroblock cbf reference (the left/above 4x4 block is an
+    // earlier-decoded block of *this same* macroblock, not a different
+    // one) needs `cbf_cond_term` to take its `Some(info)` branch and use
+    // the real `trans_available`/`trans_cbf` values -- `grids.mb_info_at`
+    // cannot be used for this: it (correctly) returns `None` until
+    // `set_mb_info` runs at the very end of `decode_macroblock_cabac`,
+    // long after this function returns, so it was silently taking the
+    // `None` branch (`condTermFlagN = current_is_intra`, clause
+    // 9.3.3.1.1.9's own "mbAddrN not available" case) for the *available,
+    // already-decoded, real* same-macroblock case instead -- discarding
+    // that earlier block's real `coded_block_flag` and substituting a
+    // constant `1` (`current_is_intra` is always true here; this
+    // function is never reached for Inter/IPCM) regardless of what it
+    // actually was. `decode_residual_cabac` is never reached for I_PCM
+    // (its own early return in `decode_macroblock_cabac`), so `is_ipcm`
+    // is always false for the macroblock this function is decoding.
+    let current_mb_info = Some(CabacMbInfo { available: true, is_ipcm: false, ..CabacMbInfo::default() });
 
     if is_16x16 {
         let x = mb_x * 4;
@@ -2850,10 +2867,10 @@ fn decode_residual_cabac(
                 let left_bit = grids.cbf_luma_at(x.wrapping_sub(1), y);
                 let above_bit = grids.cbf_luma_at(x, y.wrapping_sub(1));
                 let left_mb = x.checked_sub(1).and_then(|_| {
-                    if bx == 0 { grids.mb_left(mb_x, mb_y) } else { grids.mb_info_at(mb_x, mb_y) }
+                    if bx == 0 { grids.mb_left(mb_x, mb_y) } else { current_mb_info }
                 });
                 let above_mb = y.checked_sub(1).and_then(|_| {
-                    if by == 0 { grids.mb_above(mb_x, mb_y) } else { grids.mb_info_at(mb_x, mb_y) }
+                    if by == 0 { grids.mb_above(mb_x, mb_y) } else { current_mb_info }
                 });
                 let left_avail = x > 0 && left_bit.is_some();
                 let above_avail = y > 0 && above_bit.is_some();
@@ -2923,8 +2940,8 @@ fn decode_residual_cabac(
             if cbp_chroma & 2 != 0 {
                 let left_bit = grids.cbf_chroma_at(comp, x.wrapping_sub(1), y);
                 let above_bit = grids.cbf_chroma_at(comp, x, y.wrapping_sub(1));
-                let left_mb = if bx == 0 { grids.mb_left(mb_x, mb_y) } else { grids.mb_info_at(mb_x, mb_y) };
-                let above_mb = if by == 0 { grids.mb_above(mb_x, mb_y) } else { grids.mb_info_at(mb_x, mb_y) };
+                let left_mb = if bx == 0 { grids.mb_left(mb_x, mb_y) } else { current_mb_info };
+                let above_mb = if by == 0 { grids.mb_above(mb_x, mb_y) } else { current_mb_info };
                 let left_avail = x > 0 && left_bit.is_some();
                 let above_avail = y > 0 && above_bit.is_some();
                 let cond_a = cbf_cond_term(left_mb, left_avail, left_bit.unwrap_or(false), current_is_intra);
