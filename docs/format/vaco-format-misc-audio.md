@@ -1,11 +1,13 @@
 # `vaco-format-misc-audio`
 
 Layer 4. Demux-only: `wv`, `tta`, `amr`/`amrnb`/`amrwb`, `adx`,
-`nistsphere`, `pvf`, `g723_1`, `sbc`, and the headerless ITU-T/3GPP2
+`nistsphere`, `pvf`, `g723_1`, `sbc`, the headerless ITU-T/3GPP2
 speech-codec tail (`gsm`, `sln`, `dfpwm`, `g722`, `g726`, `g726le`, `g728`,
-`g729`, `aptx`, `aptx_hd`) — twenty registered demuxers in one crate
-(FM-58). These are containers: the job is finding frame/block boundaries and
-reporting stream parameters, not decoding audio.
+`g729`, `aptx`, `aptx_hd`), and — added in a later pass at #620's
+chiptune-adjacent game-audio containers — `vag` and `xwma`. Twenty-two
+registered demuxers in one crate (FM-58). These are containers: the job is
+finding frame/block boundaries and reporting stream parameters, not
+decoding audio.
 
 ---
 
@@ -22,6 +24,8 @@ reporting stream parameters, not decoding audio.
 | `g723` | `g723_1` | headerless; each frame's first two bits select one of four fixed sizes (24/20/4/1 bytes) |
 | `sbc` | `sbc` | headerless; each frame's own header states blocks/subbands/bitpool, which a published formula turns into the frame's exact byte length |
 | `rawcodec` | `gsm`, `sln`, `dfpwm`, `g722`, `g726`, `g726le`, `g728`, `g729`, `aptx`, `aptx_hd` | headerless, constant bytes-per-block : frames-per-block ratio, fixed by the codec's own bitrate |
+| `vag` | `vag` | fixed 48-byte header (`VAGp` magic, big-endian `data_size`/`sample_rate`), then 16-byte PS-ADPCM blocks; a bespoke, non-`BlockDemuxer` loop — see below |
+| `xwma` | `xwma` | RIFF container (`fmt `/`dpds`/`data` chunks); packets are `nBlockAlign`-aligned reads of `data`, not the `dpds` table's declared split — see below |
 | `block` | shared | `BlockDemuxer` — the fixed-ratio block engine `adx`, `nistsphere`, `pvf` and every `rawcodec` entry reduce to |
 
 ### Deliberately not in this crate
@@ -48,13 +52,33 @@ past what this pass's time budget covered.
 **#620 (tracker/module and chiptune-adjacent):** the tracker half (IT, XM,
 S3M, MOD, and the rest of the family the reference reaches through
 `libopenmpt`) is recorded as a D10 exclusion — see
-`docs/why-some-formats-are-not-included.md`. The chiptune-adjacent game
-containers (`bfstm`, `brstm`, `binka`, `genh`, `hca`, `msf`, `xa`, `vag`,
-`svag`, `xvag`, `xwma`, `fsb`) are ordinary containers and fair game, but
-none of them has an `ffmpeg` encoder in this build to differentially test
-against, and this pass did not want to hand-build fixtures for a header
-layout recalled rather than measured or freshly fetched. Not started, not
-excluded.
+`docs/why-some-formats-are-not-included.md`. Of the twelve chiptune-adjacent
+game-audio containers, `vag` and `xwma` landed in a later pass (below); the
+other ten were evaluated and not attempted, each for a specific,
+recorded reason rather than simply "ran out of time":
+
+- `binka` (raw Bink Audio) and `genh` (a generic fixed-struct header) — the
+  only independent public documentation found was either explicitly hedged
+  (a community writeup of `binka`'s header flagged several fields as
+  "probably" and admitted to never having seen one of its own claimed frame
+  markers in a real file) or explicitly deferred to a specific decoder's
+  own source code for the formal definition (`genh`). Building a
+  "spec-conformant" fixture from either would mean guessing at the
+  uncertain parts or reading another project's implementation — the second
+  of which risks exactly the kind of contamination D7/D9 exist to prevent,
+  even though the source in question is not FFmpeg's. Neither was
+  attempted.
+- `hca` — public write-ups describe the container at a high level (magic,
+  a subkey byte for AWB archives) but no independently-sourced byte-level
+  chunk table (`fmt`/`comp`/`dec`/`vbr`/`ath`/`loop`/…) was found; not
+  attempted.
+- `svag`, `xvag`, `msf`, `xa`, `bfstm`, `brstm`, `fsb` — same family, same
+  technique as `vag`/`xwma` would likely apply, but not researched this
+  pass; stopped once the returns on `vag`/`xwma` themselves had already
+  crossed from measuring container framing into open-ended,
+  decoder-dependent investigation (see `xwma`'s `dpds`-duration anomaly
+  below), which was read as the signal to stop rather than push toward a
+  count.
 
 ---
 
@@ -70,6 +94,41 @@ size, reads ~4096-byte packets rounded down to a whole number of blocks
 if it were whole), and stamps `pts`/`duration` from a running block count.
 `adx`, `nistsphere`, `pvf`, and every entry in `rawcodec` are this engine
 plus their own header.
+
+### `vag` and `xwma` — hand-built fixtures, measured against `ffprobe`
+
+Neither format has an `ffmpeg` encoder, so both fixtures were hand-built
+directly from public documentation (`Vaco-Spec-Ref vag-format-doc` /
+`multimedia-wiki-xwma` / `microsoft-riff-xaudio2`) and then measured
+against `ffprobe`/`ffmpeg` 8.1 — the same technique `vaco-format-misc`'s
+`roq`/`flic`/`cdg`/`bink`/`smk` used, and, like `bink`/`smk`, it surfaced
+behaviour a reading of the format documentation alone would not have
+predicted:
+
+- **`vag` emits one packet per 16-byte block**, not batched — confirmed
+  directly against `-show_packets` (ten blocks, ten packets, `pts`
+  advancing by 28 samples each). This is why `vag.rs` does **not** reuse
+  this crate's own `BlockDemuxer` (which batches, see "A real, measured
+  divergence" in `vag.rs`'s own module doc, and the tech-debt entry it
+  cross-references for that pre-existing divergence in five *other*
+  formats in this crate).
+- **`xwma`'s packets are `nBlockAlign`-aligned reads of `data`, not the
+  `dpds` chunk's declared split.** `dpds` looks exactly like a per-packet
+  byte-offset table and MultimediaWiki describes it that way, but a
+  fixture whose `dpds` declares four packets of `100/150/120/90` bytes
+  still demuxes, in the reference, to packets of `100/100/100/50` bytes —
+  block-aligned, matching `nBlockAlign = 100`, and ignoring `dpds`
+  entirely. `xwma.rs` parses `dpds` only far enough to skip over it.
+- **A `WMAv2` stream with an empty `fmt` chunk gets 6 bytes of extradata
+  the reference synthesises, not zero.** Verified byte-exact via
+  `ffprobe -show_data_hash md5`: `00 00 00 00 1F 00`. A `WMAv1` stream in
+  the same situation gets none. `xwma.rs` reproduces this for `WMAv2`
+  only.
+- **`xwma`'s stream-level `duration_ts` has an unexplained dependency on
+  whether a `dpds` chunk exists at all**, independent of that chunk's
+  content — see the module doc and `planning/TECH-DEBT.md` for the full
+  measurement. Not reproduced; this crate always uses the plain
+  byte-rate formula.
 
 ### The measured comparison table
 
@@ -92,6 +151,8 @@ stream=sample_rate,channels -show_entries format=duration`:
 | `aptx_hd.aptx_hd` | 48000 | 2 | *(reference: N/A)* | as `aptx` |
 | `sbc.sbc` | 16000 | 1 | *(reference: N/A)* | self-delimited, no declared total |
 | `g723_1.g723_1` | 8000 | 1 | *(reference: N/A)* | self-delimited, no declared total |
+| `vag.vag` | 22050 | 1 | 0.012698 s | one packet per 16-byte block, matching the reference exactly |
+| `xwma.xwma` | 8000 | 1 | 0.350 s | fixture deliberately has no `dpds` chunk — see the `duration_ts` anomaly above |
 
 Two genuinely measured divergences are recorded here rather than "fixed",
 because fixing them would mean discarding information rather than
@@ -165,4 +226,10 @@ module is built on), `vaco-limits` (`Budget`), `vaco-packet`,
 `AptxHd`, `Sbc`, `AdpcmAdx`) added there by this crate, following the
 precedent set by the RTP/FLV/subtitle-text crates of adding to that
 hand-maintained enum directly when a new format needs an identity it does
-not yet have.
+not yet have. `xwma` needed no new variant (`wFormatTag` maps onto the
+existing `Wmav1`/`Wmav2`/`Wmapro`); `vag`'s codec (`adpcm_psx`) still has
+none — see `planning/INTERFACE-GAPS.md` gap 21, extended with this
+crate's own tenth entry rather than a new gap, since gap 21 is the
+established place this family of finding gets tracked (`vaco-format-misc`
+found the first nine). `vag`'s stream carries `codec_id: None` until that
+lands.
