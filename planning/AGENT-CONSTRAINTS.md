@@ -318,14 +318,17 @@ hazard — **any read whose value decides whether the loop continues** wants
 This is a shared primitive under every parser in the tree, so the shape is
 worth checking wherever a loop reads a sentinel, a marker, or an element type.
 
-## Omit `Vaco-Spec-Ref` when there is nothing to cite
+## `Vaco-Spec-Ref: none` is accepted, and means the trailer is absent
 
-The trailer is optional. Writing `Vaco-Spec-Ref: none — an internal
-architecture finding` fails `provenance-check` permanently, because `none` is
-not a registered `[[source]]` and the gate cannot tell a deliberate absence
-from a citation to a document nobody recorded acquiring. Leave the line out
-instead. `corrections.toml` cannot repair this after the fact either — it maps
-a citation to the registered id its author meant, and here there is no id.
+Write it when there is genuinely nothing to cite, or omit the line — they are
+the same thing to the gate. Two commits failed permanently before that was
+true, because `none` resolved as an unregistered source id.
+
+It opens no hole: omitting the trailer is already allowed, so `none` grants
+nothing a author did not already have. And a `Vaco-Provenance` kind that
+*requires* a citation still fails, now with the accurate message that it needs
+one — three tests pin that, including the case where `none` must not satisfy a
+`spec` provenance.
 
 ## Check a recorded blocker before you accept it
 

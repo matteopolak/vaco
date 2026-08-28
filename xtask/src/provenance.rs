@@ -693,12 +693,24 @@ fn trailers(root: &Path) -> Result<Vec<String>, String> {
 }
 
 /// Every value of a trailer key, in order. A key may legitimately repeat.
+///
+/// A `Vaco-Spec-Ref` whose first token is `none` is dropped, so it reads
+/// exactly as an absent trailer does. Authors write it to say "deliberately
+/// nothing to cite" and it cost two commits a permanent gate failure before
+/// this existed. It opens no hole: omitting the trailer entirely is already
+/// allowed, so `none` grants no capability the author did not already have —
+/// and a provenance kind that *requires* a citation still fails below, now
+/// with the accurate message that it needs one rather than that `none` is
+/// unregistered.
 fn values(body: &str, key: &str) -> Vec<String> {
     let prefix = format!("{key}:");
     body.lines()
         .filter_map(|l| l.strip_prefix(&prefix))
         .map(|v| v.trim().to_owned())
         .filter(|v| !v.is_empty())
+        .filter(|v| {
+            key != "Vaco-Spec-Ref" || v.split_whitespace().next() != Some("none")
+        })
         .collect()
 }
 
@@ -826,6 +838,33 @@ mod tests {
     fn a_nested_array_counts_rows_not_cells() {
         let v = scan("const M: [[u8; 2]; 3] = [[1, 2], [3, 4], [5, 6]];", here());
         assert_eq!(v, [("M".to_owned(), 3)]);
+    }
+
+    #[test]
+    fn a_none_spec_ref_reads_as_no_spec_ref() {
+        // Authors write it to mean "deliberately nothing to cite". It must
+        // behave exactly as omitting the trailer does — no more, no less.
+        let body = "feat(x): y\n\nVaco-Spec-Ref: none — an internal finding\n\
+                    Signed-off-by: A <a@b>\nVaco-Provenance: original\n";
+        assert!(check_message(here(), body, true).is_ok());
+    }
+
+    #[test]
+    fn a_none_spec_ref_does_not_satisfy_a_provenance_that_demands_one() {
+        // The hole this would open if `none` were merely accepted as a valid
+        // id: a `spec` provenance would cite nothing and pass.
+        let body = "feat(x): y\n\nVaco-Spec-Ref: none — nothing to see\n\
+                    Signed-off-by: A <a@b>\nVaco-Provenance: spec\n";
+        let e = check_message(here(), body, true).unwrap_err();
+        assert!(e.contains("needs a `Vaco-Spec-Ref:`"), "{e}");
+    }
+
+    #[test]
+    fn an_unregistered_id_is_still_rejected() {
+        let body = "feat(x): y\n\nVaco-Spec-Ref: nonesuch-document\n\
+                    Signed-off-by: A <a@b>\nVaco-Provenance: spec\n";
+        let e = check_message(here(), body, true).unwrap_err();
+        assert!(e.contains("nonesuch-document"), "{e}");
     }
 
     #[test]
