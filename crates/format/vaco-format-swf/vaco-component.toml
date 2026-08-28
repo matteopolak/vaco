@@ -1,0 +1,18 @@
+# Registry fragment, per the frozen schema in planning/19-parallel-execution.md
+# §3.4.
+
+[[component]]
+kind       = "demuxer"
+name       = "swf"
+long_name  = "SWF (ShockWave Flash)"
+feature    = "demux-swf"
+ctor       = "vaco_format_swf::DEMUXER"
+
+[[component]]
+kind       = "muxer"
+name       = "swf"
+long_name  = "SWF (ShockWave Flash)"
+feature    = "mux-swf"
+ctor       = "vaco_format_swf::MUXER"
+extensions = "swf"
+mime_types = "application/x-shockwave-flash"

@@ -458,3 +458,10 @@ kind     = "paper"
 title    = "AMD, \"FidelityFX Contrast Adaptive Sharpening (CAS)\", GPUOpen technical publication, 2019 — the plus-shaped four-neighbour min/max amplification ratio and strength-interpolated peak sharpening weight `vaco-filter-blur::cas` implements the shape of (see that module's doc for the measured constants this pass could not fully reconcile)"
 acquired = "2026-08-23"
 where    = "https://gpuopen.com/fidelityfx-cas/"
+
+[[source]]
+id       = "adobe-swf-19"
+kind     = "spec"
+title    = "Adobe, \"SWF File Format Specification\", Version 19 (2013) — the fixed header/RECT/tag-header (10-bit code + 6-bit length, escaping to a u32) layout, and the DefineVideoStream/VideoFrame/SoundStreamHead(2)/SoundStreamBlock tag payloads `vaco-format-swf` reads and writes. Field layouts were verified against real `ffmpeg -f swf` output (see that crate's docs for exactly what was measured) rather than read once and trusted"
+acquired = "2026-08-27"
+where    = "https://www.adobe.com/content/dam/acom/en/devnet/pdf/swf-file-format-spec.pdf"
