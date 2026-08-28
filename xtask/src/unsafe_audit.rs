@@ -20,6 +20,18 @@ use crate::{Task, crates, repo_root, rust_files};
 /// alternative exists (`wgpu` does not expose video decode).
 const ALLOWED_PREFIX: &str = "vaco-hw-";
 
+/// Named exceptions, each for a reason that is not D13's.
+///
+/// `GlobalAlloc` is an `unsafe trait`: a counting allocator cannot be written
+/// safely in any amount of effort, because the language does not offer a safe
+/// spelling of it. This is narrower than D13's prefix rule deliberately — it
+/// admits one crate by name, and that crate is a dependency of nothing, so no
+/// shipped binary links it. It exists to measure allocation while fuzzing.
+///
+/// Add to this list only when `unsafe` is unavoidable *by language design* and
+/// the crate stays out of the shipping build. "It was easier" is not a reason.
+const ALLOWED_NAMES: &[&str] = &["vaco-fuzz-alloc"];
+
 pub fn run() -> Task {
     // xtask is audited too. It enforces these policies, so it does not get to be
     // exempt from them, and sitting outside `crates/` it would otherwise be the
@@ -33,7 +45,7 @@ pub fn run() -> Task {
     for (_, name, path) in targets {
         let manifest = std::fs::read_to_string(path.join("Cargo.toml")).unwrap_or_default();
 
-        if name.starts_with(ALLOWED_PREFIX) {
+        if name.starts_with(ALLOWED_PREFIX) || ALLOWED_NAMES.contains(&name.as_str()) {
             // Permitted. Report the volume so the audited surface stays visible.
             let mut blocks = 0usize;
             for f in rust_files(&path.join("src")) {
