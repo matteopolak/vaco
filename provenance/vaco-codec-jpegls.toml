@@ -1,0 +1,6 @@
+[[table]]
+name   = "RUN_ADAPT"
+file   = "crates/codec/vaco-codec-jpegls/src/context.rs"
+source = "jpegls-blackbox-runmode"
+clause = "run-mode Golomb-parameter adaptation table; not given numerically in locoi-hpl98-193 (only in the paywalled ISO/ITU text), reconstructed and checked against ffmpeg -c:v jpegls's decode of synthetic flat/run images"
+method = "probed"
