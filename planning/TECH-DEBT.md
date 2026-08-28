@@ -1810,3 +1810,47 @@ than silently producing wrong pixels (`Mpeg12Decoder::unsupported_pictures`
 counts these); a stream declaring 4:2:2/4:4:4 chroma is out of scope
 entirely (this crate only allocates `Yuv420p` frames). Spatial/SNR/temporal
 scalability extensions are not parsed or decoded.
+
+### `vaco-format-misc-audio`'s `BlockDemuxer` batches packets the reference emits one-per-block
+
+Found implementing `vag` (FM-58, issue #620) and comparing its packet
+granularity against `ffprobe -show_packets`: the reference emits **one
+packet per 16-byte PS-ADPCM block**, ten blocks in a ten-block fixture,
+`pts` advancing by 28 samples each time. `vag.rs` was written to match
+that directly (see its own module doc). But this crate's shared
+`BlockDemuxer` helper — used by `adx`, `pvf`, `nistsphere` and every
+`rawcodec.rs` format, all closed under issues #621/#622 — batches many
+blocks into one packet up to `TARGET_PACKET_BYTES` (4096 bytes): `adx`'s
+own fixture (76 blocks of 18 bytes) demuxes to a **single** 1368-byte
+packet in this crate today, where `ffprobe -show_packets` on the same
+fixture reports 76 separate 18-byte packets, one per block, `pts`
+advancing by 1 each time. This was not caught by `tests/differential.rs`,
+which checks stream-level sample_rate/channels/duration and "at least one
+packet produced", never packet count or per-packet size.
+
+Not fixed here: `BlockDemuxer` is shared by five already-closed formats,
+and changing its packetisation policy is a wider, riskier change than
+this session's own dispatch (`vag`/`xwma`) called for — it would need
+`adx.rs`'s own committed test (`assert_eq!(pkt.len, 18 * 76)`, which
+explicitly encodes the batched-packet assumption) rewritten along with
+every other `BlockDemuxer` consumer's expectations, and re-verification
+that nothing downstream (a caller doing per-packet seeking or timing
+math) depends on the current batching. Whoever picks this up: the fix is
+narrow in principle (drop `TARGET_PACKET_BYTES` batching, emit exactly
+`bytes_per_block` per packet, matching `vag.rs`'s bespoke loop) but wide
+in blast radius (five formats' tests and two closed issues).
+
+### `vaco-format-misc-audio`'s `xwma` has an unreproduced `duration_ts` anomaly when a `dpds` chunk is present
+
+See `xwma.rs`'s own module doc for the full measurement: a `data` chunk's
+byte-rate-formula duration (`bytes * sample_rate / avg_bytes_per_sec`) is
+exactly what the reference reports when no `dpds` chunk exists, but adding
+any `dpds` chunk — one entry or many, any byte content — collapses the
+reported `duration_ts` to a fixed, much smaller value unrelated to the
+formula, independent of the `dpds` chunk's own size or content. This
+crate always uses the plain byte-rate formula and does not reproduce
+whatever this is; the working hypothesis (an `ffprobe` generic duration-
+estimation fallback reacting to a `dpds`-signalled "real WMA container" by
+attempting a codec-probe against this crate's non-decodable synthetic
+payload) was not confirmed, since confirming it needs genuinely valid WMA
+bitstream data, out of scope for framing work.
