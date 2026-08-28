@@ -3801,3 +3801,81 @@ section leaves its other items: measured precisely, not fixed, for whoever
 next has room to touch `vaco-probe::show` and every format that depends on
 its current fallback behaviour. No GitHub issue found tracking this specific
 sentinel gap either.
+
+### Dispatch 5: `bit_rate` classified into four causes (1531 mpegts mismatches); none fixed
+
+Per dispatch 4's own residual: `bit_rate` mismatches (1531, unchanged by the
+duration fix) were the largest remaining class with no tracking issue.
+Classified by grepping the full campaign detail output
+(`fuzz/seeds/diff/mpegts`, 1500 iterations, `--rng-seed 42`), not just the
+aggregate count:
+
+- **1114 — `streams.stream.1.bit_rate: ours="N/A" reference="<value>"`.**
+  The audio (AAC) stream never gets a stream-level `bit_rate` on our side, on
+  *every* file including the unmutated seed itself (confirmed directly:
+  `fuzz/seeds/diff/mpegts/h264-aac.ts`, no mutation, reference states
+  `bit_rate=73310` for the AAC stream, ours states `N/A` — this was already
+  true before any mutation, not a mutation-revealed gap). `vaco-demux-mpegts`
+  never sets `CodecParameters::bit_rate` for any stream, and no code in
+  `vaco-format-core::discovery` estimates one — that module's only per-stream
+  estimate is the video-only frame-rate one. Checked whether this is generic:
+  it is not. MP4 states an explicit per-stream `bit_rate` in its own `esds`
+  box for both video and audio, read directly by both sides and matching
+  exactly (`fuzz/seeds/diff/mp4/h264-aac.mp4`: 21568/72367 on both sides) —
+  MP4 needs no estimate at all. MPEG-TS carries no equivalent per-ES
+  descriptor in these fixtures, so the reference is estimating it, and video
+  on MPEG-TS gets no such estimate either (`bit_rate=N/A` on both sides,
+  reference included, across six controlled clean fixtures from 0.5s to
+  10s) — this is audio/parseable-codec-specific, not a blanket per-stream
+  average the reference applies to every codec.
+
+  Attempted to pin the exact formula by reconstructing it from
+  `-show_packets` byte sums against the declared stream duration on two
+  controlled fixtures (the seed file and a locally-generated 1s CBR AAC-in-TS
+  file). The magnitude confirms a bytes-over-duration-style average — sums
+  over the packets falling inside the stream's own `duration`/`duration_ts`
+  window land within roughly 1% of the reported value on both fixtures — but
+  neither a raw byte sum, an ADTS-header-stripped sum, nor a sample-count-based
+  duration reproduces the reported value exactly on both. Not fixed: an
+  approximate formula would replace a highly visible `N/A` with a plausible
+  but subtly wrong number, which is the same trade dispatch 4's `r_frame_rate`
+  attempt already showed is a worse outcome than leaving the gap alone.
+
+- **333 + 82 (415 total) — `format.bit_rate` mismatches are not a `bit_rate`
+  bug.** Sampled every case in this shape and found `format.duration` (or,
+  under heavier corruption, the whole detected format identity —
+  `format.format_name`/`format_long_name`) differing in the same case every
+  time. Confirmed the arithmetic itself is exact: on three clean, unmutated
+  fixtures (1s/3s/10s CBR MPEG-TS), `format.bit_rate` (`size * 8 / duration`,
+  truncated — the existing formula in `crates/app/vaco-probe/src/show.rs`)
+  matches the reference bit for bit once `duration` matches. Every mismatch
+  in this shape is downstream of a pre-existing container-duration or
+  format-detection divergence under mutation, not a `bit_rate`-specific
+  cause — the same "second symptom of one underlying gap" shape dispatch 4
+  asked to watch for, just a different underlying gap (container duration
+  under corruption, not the `r_frame_rate` declined-vs-absent one). Not
+  investigated further — that gap is a `format.duration`/probe-robustness
+  question, outside this dispatch's `bit_rate` scope.
+
+- **2 — `streams.stream.0.bit_rate: ours=<absent> reference="N/A"`.** Noise
+  level, both heavily-corrupted-video-stream cases. Not classified further.
+
+**Does `bit_rate` share `r_frame_rate`'s declined-vs-absent shape?** No.
+Every Class-A instance observed had the reference stating a real number and
+ours stating `N/A` — no case was found where the reference itself declined
+with a sentinel the way it does for `r_frame_rate`'s `1/0`. This is a plain
+missing capability (an estimate the reference has and we do not), not a
+"can't tell two kinds of absence apart" problem, so it is a separate gap from
+`planning/INTERFACE-GAPS.md` gap 23, not a second instance of it.
+
+No GitHub issue found tracking the `bit_rate` gap or the `format.duration`/
+probe-robustness gap it turns out to mostly be (searched "bit_rate mpegts",
+"mpegts audio bitrate", "AAC ADTS bitrate estimate", "format.duration mpegts
+corrupted"); nothing to close.
+
+No code changed in `vaco-demux-mpegts`, `vaco-probe` or `vaco-format-core`
+this dispatch — investigation only. A workspace-wide `cargo check` was
+blocked for part of this session by an unrelated, transient concurrent
+change (a new crate directory, `crates/filter/vaco-filter-stack`, mid-created
+without its `Cargo.toml` by another agent); not investigated further as it
+is not this dispatch's crate.
