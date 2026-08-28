@@ -317,6 +317,56 @@ fn trivial<S: Lanes>(_simd: S, x: u32) -> u32 {
 }
 
 // ---------------------------------------------------------------------------
+// masked-lane select (#127's spike): is there a composition gap at all, and
+// if the native op is free, does a hand-rolled bitwise blend cost anything?
+// ---------------------------------------------------------------------------
+
+/// The substrate's own select, reached through the dedicated `mask8x16` type
+/// rather than composed from bitwise ops. `mask_i8` must already be
+/// canonical (every lane `0` or `-1`) — that is `mask8x16::from_slice`'s own
+/// documented input shape, matching what a real `simd_gt`/`simd_eq` produces.
+#[inline(always)]
+fn c_select_native<S: Lanes>(
+    simd: S,
+    mask_i8: &[i8],
+    a: &[u8],
+    b: &[u8],
+    out: &mut [u8],
+) {
+    for (((mc, ac), bc), oc) in mask_i8
+        .chunks_exact(16)
+        .zip(a.chunks_exact(16))
+        .zip(b.chunks_exact(16))
+        .zip(out.chunks_exact_mut(16))
+    {
+        let m = fearless_simd::mask8x16::<S>::from_slice(simd, mc);
+        let va = fearless_simd::u8x16::<S>::from_slice(simd, ac);
+        let vb = fearless_simd::u8x16::<S>::from_slice(simd, bc);
+        m.select(va, vb).store_slice(oc);
+    }
+}
+
+/// The same result composed from `and`/`andnot`/`or` on the canonical
+/// `0x00`/`0xFF` byte mask directly, with no dedicated mask type at all.
+/// `mask_u8` carries the same canonical pattern as `mask_i8` above, just
+/// reinterpreted as unsigned bytes rather than converted to the substrate's
+/// opaque mask representation.
+#[inline(always)]
+fn c_select_bitwise<S: Lanes>(simd: S, mask_u8: &[u8], a: &[u8], b: &[u8], out: &mut [u8]) {
+    for (((mc, ac), bc), oc) in mask_u8
+        .chunks_exact(16)
+        .zip(a.chunks_exact(16))
+        .zip(b.chunks_exact(16))
+        .zip(out.chunks_exact_mut(16))
+    {
+        let vm = fearless_simd::u8x16::<S>::from_slice(simd, mc);
+        let va = fearless_simd::u8x16::<S>::from_slice(simd, ac);
+        let vb = fearless_simd::u8x16::<S>::from_slice(simd, bc);
+        ((vm & va) | (!vm & vb)).store_slice(oc);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // probes — the only implementations that are timed, and the only ones to
 // disassemble. `#[inline(never)]` so each keeps a symbol after fat LTO.
 // ---------------------------------------------------------------------------
@@ -460,6 +510,29 @@ pub mod probes {
     #[inline(never)]
     pub fn composed_fir8_slide(caps: Caps, src: &[u8], dst: &mut [u8]) {
         dispatch_kernel!(caps, s => fir8_slide(s, src, dst));
+    }
+
+    #[inline(never)]
+    pub fn scalar_select(mask: &[u8], a: &[u8], b: &[u8], out: &mut [u8]) {
+        for (((m, x), y), o) in mask.iter().zip(a).zip(b).zip(out.iter_mut()) {
+            *o = if *m != 0 { *x } else { *y };
+        }
+    }
+
+    #[inline(never)]
+    pub fn composed_select_native(
+        caps: Caps,
+        mask_i8: &[i8],
+        a: &[u8],
+        b: &[u8],
+        out: &mut [u8],
+    ) {
+        dispatch_kernel!(caps, s => c_select_native(s, mask_i8, a, b, out));
+    }
+
+    #[inline(never)]
+    pub fn composed_select_bitwise(caps: Caps, mask_u8: &[u8], a: &[u8], b: &[u8], out: &mut [u8]) {
+        dispatch_kernel!(caps, s => c_select_bitwise(s, mask_u8, a, b, out));
     }
 
     #[inline(never)]
@@ -794,6 +867,75 @@ fn group_fir(caps: Caps) {
     t.print();
 }
 
+/// **#127's spike.** Deblocking's own text names "masked-lane select" as the
+/// technique to gate the design on. The substrate already provides it
+/// natively (`mask8x16::select`, backed by `pblendvb`/`bsl`/`vpternlog` per
+/// target) — so the real question is not "how do we compose select", it is
+/// "does using the dedicated mask type cost anything over a plain bitwise
+/// blend of canonical `0x00`/`0xFF` bytes computed some other way". Both
+/// sides here start from the *same* canonical pattern, so this isolates
+/// exactly that choice.
+fn group_select(caps: Caps) {
+    // A non-trivial, non-degenerate split: not all-true or all-false (which
+    // some backends could special-case) and not a simple period-2 alternation
+    // (which is exactly [`vaco_simd::testing::edge_patterns`]'s own pattern
+    // and would not show whether a *mixed* mask changes anything).
+    let mask_u8: Vec<u8> = (0..N)
+        .map(|i| if (i * 2_654_435_761_u32 as usize) % 5 < 2 { 0xFF } else { 0x00 })
+        .collect();
+    let mask_i8: Vec<i8> = mask_u8.iter().map(|&m| if m != 0 { -1 } else { 0 }).collect();
+    let a: Vec<u8> = (0..N).map(|i| ((i * 37) & 0xFF) as u8).collect();
+    let b: Vec<u8> = (0..N).map(|i| ((i * 91) & 0xFF) as u8).collect();
+    let mut x = vec![0u8; N];
+    let mut y = vec![0u8; N];
+
+    probes::scalar_select(&mask_u8, &a, &b, &mut x);
+    probes::composed_select_native(caps, &mask_i8, &a, &b, &mut y);
+    assert_eq!(x, y, "select (native mask type): composition diverged");
+    y.fill(0);
+    probes::composed_select_bitwise(caps, &mask_u8, &a, &b, &mut y);
+    assert_eq!(x, y, "select (bitwise blend): composition diverged");
+
+    let mut t = Table::new("Group 7 — masked-lane select (#127's spike)");
+    let (n, native) = time_pair(
+        || probes::scalar_select(black_box(&mask_u8), black_box(&a), black_box(&b), black_box(&mut x)),
+        || {
+            probes::composed_select_native(
+                caps,
+                black_box(&mask_i8),
+                black_box(&a),
+                black_box(&b),
+                black_box(&mut y),
+            );
+        },
+    );
+    let (_, bitwise) = time_pair(
+        || probes::scalar_select(black_box(&mask_u8), black_box(&a), black_box(&b), black_box(&mut x)),
+        || {
+            probes::composed_select_bitwise(
+                caps,
+                black_box(&mask_u8),
+                black_box(&a),
+                black_box(&b),
+                black_box(&mut y),
+            );
+        },
+    );
+    t.row(
+        "select (mask8x16::select, native)",
+        n,
+        native,
+        "the dedicated mask type; one instruction per vector on every tier",
+    );
+    t.row(
+        "select (and/andnot/or on canonical bytes)",
+        n,
+        bitwise,
+        "`(m&a)|(!m&b)`, 3 ops vs 1 — the fallback when a mask never existed as a first-class value",
+    );
+    t.print();
+}
+
 fn group_dispatch(caps: Caps) {
     println!("\n### Group 5 — dispatch overhead\n");
     println!(
@@ -896,6 +1038,7 @@ fn main() {
     group_reduction(caps);
     group_madd(caps);
     group_fir(caps);
+    group_select(caps);
     group_dispatch(caps);
     group_example();
 }

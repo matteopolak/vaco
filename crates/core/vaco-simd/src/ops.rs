@@ -151,6 +151,17 @@ pub const fn clip_u8(x: i32) -> u8 {
     }
 }
 
+/// Scalar reference for the masked-lane-select row op ([`dispatched_select_u8_row`]):
+/// pick `a` where `mask` is nonzero, else `b`.
+///
+/// `mask` need not be canonical (`0`/`0xFF`) here — only [`simd::select_u8`]'s
+/// substrate-level input has that requirement, and this oracle exists
+/// precisely so a caller can hand it whatever the mask actually is.
+#[must_use]
+pub const fn select_u8(mask: u8, a: u8, b: u8) -> u8 {
+    if mask != 0 { a } else { b }
+}
+
 /// The vector compositions. Same names, same semantics, N lanes at a time.
 ///
 /// Every function here is `#[inline(always)]`, without exception: that is how
@@ -159,7 +170,7 @@ pub const fn clip_u8(x: i32) -> u8 {
 /// compile at the ambient baseline, silently.
 pub mod simd {
     use crate::Lanes;
-    use fearless_simd::{Bytes, SimdBase, SimdInt, SimdNarrow, SimdWiden};
+    use fearless_simd::{Bytes, Select, SimdBase, SimdInt, SimdNarrow, SimdWiden};
 
     /// Unsigned saturating add: `min(a, !b) + b`.
     ///
@@ -382,6 +393,26 @@ pub mod simd {
         lo.saturating_narrow(hi)
     }
 
+    /// Lanewise select at native width: pick `a` where `mask` is true, else `b`.
+    ///
+    /// **Not a composition.** `S::mask8s` already implements `Select<S::u8s>`
+    /// (#127's spike measured this directly: there was no gap to fill), so
+    /// this is a one-line pass to the substrate's native masked-lane select —
+    /// `pblendvb`/`vpternlog` on x86, `bsl` on NEON. It is named here anyway
+    /// so a kernel body reaches it under this crate's own vocabulary rather
+    /// than importing `fearless_simd::Select` directly, matching every other
+    /// name in this module.
+    ///
+    /// `mask` must be canonical: every lane exactly `0` or `!0`, the same
+    /// requirement `fearless_simd::Select`'s own docs state and the shape a
+    /// real `simd_gt`/`simd_eq` produces. [`crate::ops::select_u8`] is the
+    /// scalar oracle and does not share that requirement — canonicalise
+    /// before crossing into this function, not after.
+    #[inline(always)]
+    pub fn select_u8<S: Lanes>(mask: S::mask8s, a: S::u8s, b: S::u8s) -> S::u8s {
+        mask.select(a, b)
+    }
+
     /// Clamp `i16` lanes to `0..=255` and pack two vectors into one `u8` vector.
     ///
     /// **This is `packuswb` / `sqxtun`, and the substrate does not have it.**
@@ -397,5 +428,70 @@ pub mod simd {
         let lo = lo.max(zero).bitcast::<S::u16s>();
         let hi = hi.max(zero).bitcast::<S::u16s>();
         lo.saturating_narrow(hi)
+    }
+}
+
+/// Dispatched, ready-to-call masked-lane select over a whole row.
+///
+/// The one exception to this module's own rule that [`ops`](self) holds only
+/// `S`-generic compositions for a kernel body to call: every other crate that
+/// wants [`simd::select_u8`] would otherwise have to depend on `fearless_simd`
+/// directly to canonicalise a mask and drive the chunk loop, which is exactly
+/// the coupling the D11 boundary exists to avoid (`fearless_simd` is meant to
+/// appear in exactly one manifest under `crates/`). This function is that
+/// boundary: callers pass plain byte slices, `mask` need not be canonical
+/// (see [`select_u8`]), and dispatch/canonicalisation/tail handling all
+/// happen inside.
+///
+/// `mask`, `a`, `b` and `out` must be the same length; a length mismatch is
+/// handled by processing only the shared prefix, since this is a library
+/// entry point over caller-controlled slices and should not panic on it.
+pub fn dispatched_select_u8_row(caps: crate::Caps, mask: &[u8], a: &[u8], b: &[u8], out: &mut [u8]) {
+    let n = mask.len().min(a.len()).min(b.len()).min(out.len());
+    let (Some(mask), Some(a), Some(b), Some(out)) =
+        (mask.get(..n), a.get(..n), b.get(..n), out.get_mut(..n))
+    else {
+        // Every slice is at least `n` long by construction (`n` is the
+        // minimum of all four lengths), so this is unreachable; the `else`
+        // exists only so the shared-prefix truncation above never needs
+        // indexing or an `unwrap`.
+        return;
+    };
+    crate::dispatch_kernel!(caps, s => select_row(s, mask, a, b, out));
+}
+
+/// The level-generic body behind [`dispatched_select_u8_row`].
+#[inline(always)]
+#[allow(
+    clippy::integer_division,
+    reason = "computing the largest multiple-of-native-width prefix length; truncation is the point"
+)]
+fn select_row<S: crate::Lanes>(simd: S, mask: &[u8], a: &[u8], b: &[u8], out: &mut [u8]) {
+    use fearless_simd::{Select, SimdBase, SimdMask};
+
+    let n = <S::u8s as SimdBase<S>>::N;
+    let full = (mask.len() / n) * n;
+    let (mask_full, mask_tail) = mask.split_at(full);
+    let (a_full, a_tail) = a.split_at(full);
+    let (b_full, b_tail) = b.split_at(full);
+    let (out_full, out_tail) = out.split_at_mut(full);
+
+    for (((mc, ac), bc), oc) in mask_full
+        .chunks_exact(n)
+        .zip(a_full.chunks_exact(n))
+        .zip(b_full.chunks_exact(n))
+        .zip(out_full.chunks_exact_mut(n))
+    {
+        // Canonicalise to the substrate's documented mask shape (every lane
+        // exactly `0` or `-1`) before naming the mask type at all.
+        let mask_i8: Vec<i8> = mc.iter().map(|&m| if m != 0 { -1 } else { 0 }).collect();
+        let m = <S::mask8s as SimdMask<S>>::from_slice(simd, &mask_i8);
+        let va = <S::u8s as SimdBase<S>>::from_slice(simd, ac);
+        let vb = <S::u8s as SimdBase<S>>::from_slice(simd, bc);
+        m.select(va, vb).store_slice(oc);
+    }
+
+    for (((m, a), b), o) in mask_tail.iter().zip(a_tail).zip(b_tail).zip(out_tail.iter_mut()) {
+        *o = select_u8(*m, *a, *b);
     }
 }

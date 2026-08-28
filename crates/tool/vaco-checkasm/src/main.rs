@@ -15,6 +15,7 @@
 //! and call `Differential::<K>::run()` from its own tests — that is how
 //! `vaco-checkasm`'s own `kernels::scale_affine` module is itself tested.
 
+use vaco_checkasm::kernels::masked_select::MaskedSelectKernel;
 use vaco_checkasm::kernels::scale_affine::AffineRowKernel;
 use vaco_checkasm::{Differential, Kernel, Report};
 
@@ -61,10 +62,16 @@ where
     report.is_clean()
 }
 
-const ENTRIES: &[Entry] = &[Entry {
-    name: AffineRowKernel::NAME,
-    verify: verify_report::<AffineRowKernel>,
-}];
+const ENTRIES: &[Entry] = &[
+    Entry {
+        name: AffineRowKernel::NAME,
+        verify: verify_report::<AffineRowKernel>,
+    },
+    Entry {
+        name: MaskedSelectKernel::NAME,
+        verify: verify_report::<MaskedSelectKernel>,
+    },
+];
 
 fn run_all() -> i32 {
     if ENTRIES.is_empty() {

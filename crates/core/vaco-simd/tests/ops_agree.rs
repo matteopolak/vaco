@@ -182,6 +182,26 @@ fn edge_corpus_abs_diff_u8() {
     testing::check_binary_u8("abs_diff_u8", v_abs_diff, ops::abs_diff_u8);
 }
 
+/// `select_u8` is ternary, so it does not fit [`testing::check_binary_u8`]'s
+/// shape; sweep [`testing::edge_patterns`] directly as the mask source
+/// against two distinguishable ramps.
+#[test]
+fn edge_corpus_select_u8() {
+    for len in 0..=200usize {
+        let a: Vec<u8> = (0..len).map(|i| (i & 0xFF) as u8).collect();
+        let b: Vec<u8> = a.iter().rev().copied().collect();
+        for mask in testing::edge_patterns(len) {
+            let want: Vec<u8> = mask
+                .iter()
+                .zip(&a)
+                .zip(&b)
+                .map(|((&m, &x), &y)| ops::select_u8(m, x, y))
+                .collect();
+            assert_eq!(v_select(&mask, &a, &b), want, "select_u8 len={len}");
+        }
+    }
+}
+
 // --- the reductions and the widening shapes -----------------------------
 
 /// The three horizontal reductions, plus the explicit rotate tree, over exactly
@@ -264,6 +284,15 @@ fn pack(lo: &[i16], hi: &[i16]) -> (Vec<u8>, Vec<u8>) {
     vaco_simd::dispatch_kernel!(caps, simd => body(simd, lo, hi))
 }
 
+/// Drives [`ops::dispatched_select_u8_row`] — already whole-slice and
+/// tail-handling on its own, so unlike the other drivers above this needs no
+/// `dispatch_kernel!`/native-width plumbing of its own.
+fn v_select(mask: &[u8], a: &[u8], b: &[u8]) -> Vec<u8> {
+    let mut out = vec![0u8; a.len()];
+    ops::dispatched_select_u8_row(Caps::detect(), mask, a, b, &mut out);
+    out
+}
+
 // --- proptests ----------------------------------------------------------
 
 proptest! {
@@ -336,6 +365,22 @@ proptest! {
         let (a, b): (Vec<u8>, Vec<u8>) = pairs.into_iter().unzip();
         let want: Vec<u8> = a.iter().zip(&b).map(|(&x, &y)| x.abs_diff(y)).collect();
         prop_assert_eq!(v_abs_diff(&a, &b), want);
+    }
+
+    #[test]
+    fn select_u8_agrees(triples in prop::collection::vec(any::<(u8, u8, u8)>(), 0..200)) {
+        let mut mask = Vec::new();
+        let mut a = Vec::new();
+        let mut b = Vec::new();
+        for (m, x, y) in triples {
+            mask.push(m);
+            a.push(x);
+            b.push(y);
+        }
+        let want: Vec<u8> = mask.iter().zip(&a).zip(&b)
+            .map(|((&m, &x), &y)| ops::select_u8(m, x, y))
+            .collect();
+        prop_assert_eq!(v_select(&mask, &a, &b), want);
     }
 
     #[test]
