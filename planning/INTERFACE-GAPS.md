@@ -1624,3 +1624,29 @@ than one fuzzer-found mismatch justifies fixing alone.
 Not fixed here: `vaco-probe` continues to print `"16/1"` for the corrupted-MP4
 `r_frame_rate` fixture where the reference prints `"1/0"`, recorded as an
 accepted, precisely diagnosed divergence rather than worked around.
+
+## Gap 24 — no adapter for a 2-in/2-out filter with a feedback loop (`feedback`, `vaco-filter-overlay`)
+
+`ffmpeg -filters` lists `feedback` as `VV->VV`: two inputs and **two
+outputs**. The reference's own use (`[0][fb]feedback[out][fb]`) loops one
+output back as the filter's own second input on the next frame — a
+genuine cycle in the filtergraph, not just an unusual arity.
+
+Checked every adapter in `vaco-filter-core::adapt` before concluding this,
+the same way gap 10's own report checked before it turned out `overlay`
+already proved the capability existed: `Simple`/`Blocked` are 1-in-1-out,
+`Sourced` is 0-in-1-out, `Fanout` (gap 10) is 1-in-*N*-out, `Paired`
+(also gap 10) is *N*-in-**1**-out. None is 2-in-2-out, and none of gap
+10's own generalisations (`Paired` past two inputs, `Fanout`'s dynamic
+output count) reach this shape by composing them — the missing dimension
+is a second *output* pad on a filter that also has more than one input,
+which nothing in this tree produces today.
+
+Whether the feedback *loop itself* (a link whose source is downstream of
+its own destination) is separately expressible in `vaco-filter-graph`'s
+graph construction is a second, unexplored question — this entry is about
+the adapter shape only, found first and blocking before the loop
+question could even be tested.
+
+`crates/filter/vaco-filter-overlay`'s `feedback` is not implemented for
+this reason. Not worked around inside that crate, per the standing rule.
