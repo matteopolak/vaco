@@ -905,3 +905,88 @@ raw case as a known, narrower gap instead — **the option taken above.**
 MPEG-1 elementary stream still states `codec_name=mpeg2video` instead of
 `mpeg1video`, and no fixture exercising that specific case was measured —
 the narrower gap the original report anticipated.
+
+
+## 17. No decoder in this workspace can produce a subtitle: `FrameData` has no `Subtitle` variant, and `Decoder` is fixed to return `Frame`
+
+Reported by the epic #44 agent (T2-13: DVB/VobSub/PGS/CEA-608/708/Teletext
+decode), before writing any of the three new codec crates that epic asks for.
+
+`vaco_codec_core::Decoder::receive_frame(&mut self) -> Result<Frame>`
+(`crates/signal/vaco-codec-core/src/lib.rs`) is monomorphic: every decoder the
+registry can hold returns exactly a `vaco_frame::Frame`. `Frame::data` is
+`FrameData`, a closed enum with exactly two variants, `Video` and `Audio`
+(`crates/model/vaco-frame/src/lib.rs`). There is no representable output for a
+subtitle decoder anywhere between `Packet` and `Frame` — not a missing
+`CodecId` (`DvdSubtitle`, `HdmvPgsSubtitle`, `DvbSubtitle`, `DvbTeletext` and
+`Eia608` already exist and are already used by the two subtitle *muxer*
+crates, `vaco-subtitle-bitmap` and `vaco-subtitle-text`) but a missing shape
+for the thing a subtitle decoder hands back. Confirmed by grepping every
+`vaco-component.toml` in the tree: zero components register `media =
+"subtitle"` for `kind = "decoder"`, and none can, honestly, today.
+
+This is different from gap 13/14, which are about a *filter's* measurement
+channel (`showinfo`'s log line, `codecview`'s motion vectors) — this is
+upstream of any filter: a subtitle decoder has nowhere to put its output at
+all, so `-c:s <name>` cannot dispatch to a real implementation regardless of
+how complete that implementation is.
+
+### Shape
+
+`FrameData` needs a third variant — something like a rectangle list (position,
+size, indexed-bitmap-plus-palette or plain text-with-attributes) matching what
+the reference calls `AVSubtitleRect`/`AVSubtitle`, since that is the smallest
+shape the five formats in T2-13 already converge on independently (DVB, VobSub
+and PGS all decode to a palette-index bitmap rectangle; CEA-608/708 and
+Teletext both decode to positioned text). `Decoder::receive_frame`'s
+`Result<Frame>` return type stays unchanged — the new variant is what carries
+subtitle output through the same channel video and audio already use — but
+every existing call site that matches on `FrameData::{Video,Audio}`
+exhaustively would need a third arm, so this is not a purely additive change
+the way gap 11's `Metadata` variant was. Not attempted here: picking the exact
+rectangle/text shape is a design decision for whoever owns `vaco-frame`, and
+widening `Decoder`'s contract (or the call sites that match on `FrameData`)
+is `vaco-codec-core`/`vaco-filter-core`/`vaco-cli` territory, all outside a
+subtitle-decoder crate's single-writer scope.
+
+**Blocks:** `-c:s <name>` ever reaching a live decoder for any subtitle
+codec — not only the five T2-13 formats but the text ones too
+(`SubRip`/`Ass`/`Webvtt`/`Ttml`/... all already have `CodecId` rows and none
+have a decoder either, for the same reason). T2-13's three new crates
+(`vaco-codec-subtitle-bitmap`, `vaco-codec-subtitle-cc`,
+`vaco-codec-subtitle-teletext`) are built as standalone libraries with their
+own decode-result types instead of implementing `Decoder`, specifically so
+their real parsing/RLE/Hamming/DTVCC work does not sit idle waiting on this —
+they are ready to be wired in the moment this gap closes, but none of them
+register a `vaco-component.toml` `kind = "decoder"` fragment today, so none
+are reachable from the CLI yet.
+
+## 18. Nothing in this workspace populates `FrameSideData::ClosedCaptions`
+
+Reported by the same agent, scoping CEA-608/708 (`vaco-codec-subtitle-cc`).
+
+The variant exists (`crates/model/vaco-frame/src/sidedata.rs`,
+`FrameSideDataKind::ClosedCaptions`, added for gap 11's side-data table) and
+`vaco-filter-mm`'s `sidedata` filter already knows how to delete or report it
+(`mapped_kind`'s `1 => Some(FrameSideDataKind::ClosedCaptions), // A53_CC`).
+But no decoder or parser in this workspace ever constructs one: grepping
+`vaco-parse-h264`, `vaco-parse-hevc` and `vaco-parse-mpegvideo` for
+`user_data_registered_itu_t_t35`/A/53 caption SEI or user-data extraction
+finds nothing. So even once gap 17 above is closed, a CEA-608/708 decoder has
+no real `cc_data` to decode from an actual compressed video file in this
+tree today — only from bytes constructed by hand or extracted out-of-band.
+
+### Shape
+
+Additive: an SEI/user-data extraction step in the relevant video parser(s)
+that appends the raw `cc_data` triplet bytes (the same three-byte-per-triplet
+shape ffmpeg's own `a53_caption` side data carries, and the shape
+`vaco-codec-subtitle-cc`'s decode API already takes as input, precisely so
+this gap does not block *implementing* the decoder, only *reaching* it end to
+end) into `FrameSideData::ClosedCaptions`. Not attempted here: it is a change
+to the H.264/HEVC/MPEG-2 parser crates, all outside this scope.
+
+**Blocks:** end-to-end CEA-608/708 decode from a real broadcast file. Not
+blocking `vaco-codec-subtitle-cc`'s own correctness, which is verified
+directly against hand-built (and, where obtained, extracted) `cc_data`
+bytes.
