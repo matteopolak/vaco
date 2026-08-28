@@ -1929,3 +1929,94 @@ each `stream<N>Seg1-Frag<M>`) sits flat in the manifest's own directory,
 the same flat convention `vaco-mux-dash`/`vaco-mux-hls` already use. Smooth
 Streaming's `QualityLevels(<bitrate>)/` layout remains, so far, the only
 format in this workspace that actually needs `Protocol::create_dir`.
+
+## Gap 28 — no protocol in this workspace owns a socket outright and drives its own clock; SRT needs both, and a proposed seam that needs no `vaco-protocol-core` change
+
+Found scoping `vaco-protocol-srt` (epic PR-10, issue #62, split into #555/
+#556/#557). Every protocol registered today is one of two shapes:
+request/response over a stream one side opens and the other replies on
+(`http`, `ftp`, RTMP's future registration), or a plain duplex byte pipe
+handed to the caller once connected (`tcp`, `tls`). `Protocol::open`/
+`create` (`crates/io/vaco-protocol-core/src/protocol.rs`) return a
+[`vaco_io::MediaSource`]/[`vaco_io::MediaSink`] — one direction, driven
+entirely by the caller's own `read`/`write` calls, with no notion of work
+happening between them.
+
+SRT does not fit either shape. It is UDP with its own reliability layer:
+one socket carries data packets and control packets (handshake, ACK, NAK,
+keepalive, shutdown) in both directions at once, and correctness depends
+on **wall-clock timers that fire whether or not the caller is calling
+`read`/`write`** — periodic ACKs, NAK-triggered retransmission, a latency
+window that drops packets that missed their deadline. A `MediaSource`
+whose `read` only does work when called cannot service a timer that must
+fire during a gap in reads. `vaco-protocol-dial`'s "complete a duplex
+round trip, then hand back a stream" shape (built for RTMP-style
+handshake-then-stream protocols) does not apply either — SRT never hands
+back a stream at all; the packet/timer layer runs for the connection's
+entire life.
+
+### The proposed seam: contained inside `vaco-protocol-srt`, not a core change
+
+**`vaco-protocol-wrap`'s `async:` protocol (`src/asyncproto.rs`) already
+solves the adjacent problem** — a worker that must do time-driven work the
+caller's synchronous `read` calls do not control — for background
+read-ahead, and its own module docs record the precedent this follows:
+`vaco-sched::driver::run_threaded` spawns `std::thread::spawn` inside a
+`#[cfg(not(target_family = "wasm"))]` item, with the *same* public API
+working (serially, not ahead) on wasm, exactly what D18 asks for
+("parallelism optional at the API level") and exactly what
+`xtask/src/time_gate.rs`'s own `FORBIDDEN` table sanctions
+(`std::thread::spawn` → "a driver the caller supplies (D18)", not a
+finding). `AsyncSource`'s `Threaded` backend — one worker owns `inner`
+outright, streams it over a bounded `mpsc` channel, and a second
+single-slot command channel carries requests back — is the shape to
+extend, not a novel design:
+
+- A worker thread (native-only; see below) owns the raw UDP socket via
+  `vaco-protocol-socket`'s existing `socket2`-backed primitives (`udp.rs`
+  already preserves datagram boundaries — one `recv` per `read` — which is
+  exactly the framing SRT's own packet parser needs) and runs the actual
+  engine: handshake, ARQ, congestion control, encryption — everything
+  #555/#556 build. It drives its clock through `vaco_time::{Instant,
+  sleep}`, never raw `std::time`/`std::thread::sleep` (time-gate).
+- The worker talks to a foreground handle over channels: reassembled,
+  in-order, decrypted application payload flows out on one channel (a thin
+  `MediaSource` impl just pulls from it); application payload to send
+  flows in on another (a thin `MediaSink` impl just pushes to it, and the
+  worker packetises/encrypts/schedules it). All ACK/NAK/keepalive/timer
+  traffic is internal to the worker and invisible to both traits.
+- `Protocol::open`/`create`'s existing split already matches SRT's actual
+  application-facing shape: a caller reading `srt://` wants a
+  `MediaSource`, a caller writing one wants a `MediaSink` — the fact that
+  the protocol is bidirectional *underneath* (ACKs flow opposite to data
+  regardless of which way the application uses it) is exactly the kind of
+  internal-to-the-worker fact this seam is for.
+- **Wasm is not actually a new question here**: `wasm32-unknown-unknown`
+  has no raw UDP socket at all, the same reason `vaco-protocol-http` is
+  already the one `NATIVE_ONLY` entry in `xtask/src/wasm.rs` ("a different
+  protocol implementation behind the same `vaco-protocol-core` trait...
+  not a hole in the design"). `vaco-protocol-srt` is native-only from the
+  socket layer up, so it does not need `asyncproto`'s serial-fallback path
+  at all — one `NATIVE_ONLY` entry is the whole story.
+
+This needs no change to `vaco_protocol_core::Protocol`, `vaco_io::
+MediaSource`/`MediaSink`, or any trait another protocol depends on — the
+entire answer lives inside one new crate, using primitives and a threading
+pattern this workspace has already reviewed and sanctioned once. Recorded
+as a gap anyway because it is the first UDP/timer-driven protocol in this
+tree (RIST, PR-11, is next in line for the identical shape) and the next
+person should not have to re-derive that `Protocol::open`/`create` do fit,
+just not directly.
+
+### Not load-bearing for #555 itself
+
+#555's own scope — packet framing, the handshake state machine (caller/
+listener/rendezvous), encryption negotiation — is sans-io: header
+serialisation/deserialisation and state transitions over byte slices, no
+socket, no thread, mirroring both `vaco-protocol-rtmp`'s own PR-09a
+("a transport-framing library, not yet a `Protocol`... the building
+blocks that package will call") and the plan's own note that
+`srt-protocol` (the suggested accelerant/oracle, not adopted) is
+"sans-io... no I/O ownership, since we drive the socket." The worker-
+thread seam above becomes load-bearing once a later child wires this
+engine to a live socket and registers `srt:`/`srts:` — not before.
