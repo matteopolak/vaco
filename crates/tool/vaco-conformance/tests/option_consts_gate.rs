@@ -69,56 +69,10 @@ use std::time::Duration;
 
 use vaco_conformance::refbin::{self, Discovery, RefSpec};
 use vaco_conformance::refhelp;
+use vaco_conformance::registries::REGISTRIES;
 use vaco_conformance::run::{self, Invocation};
 use vaco_filter_graph::ast;
-use vaco_filter_graph::registry::{FilterRegistry, Instantiate};
-
-/// Every filter crate in the tree that exposes a [`FilterRegistry`], tried
-/// in this fixed, explicit order. See the module doc's "How to change it".
-const REGISTRIES: &[(&str, &dyn FilterRegistry)] = &[
-    ("vaco-filter-aanalysis", &vaco_filter_aanalysis::AmeasureRegistry),
-    ("vaco-filter-adynamics", &vaco_filter_adynamics::DynamicsRegistry),
-    ("vaco-filter-aeffects", &vaco_filter_aeffects::AeffectsRegistry),
-    ("vaco-filter-aeq", &vaco_filter_aeq::EqRegistry),
-    (
-        "vaco-filter-analysis",
-        &vaco_filter_analysis::registry::AnalysisRegistry,
-    ),
-    ("vaco-filter-artistic", &vaco_filter_artistic::ArtisticRegistry),
-    ("vaco-filter-asource", &vaco_filter_asource::AsourceRegistry),
-    ("vaco-filter-audio", &vaco_filter_audio::AudioRegistry),
-    ("vaco-filter-blur", &vaco_filter_blur::BlurRegistry),
-    ("vaco-filter-color", &vaco_filter_color::ColorRegistry),
-    ("vaco-filter-convolve", &vaco_filter_convolve::ConvolveRegistry),
-    ("vaco-filter-deinterlace", &vaco_filter_deinterlace::DeinterlaceRegistry),
-    ("vaco-filter-denoise", &vaco_filter_denoise::DenoiseRegistry),
-    ("vaco-filter-draw-vf", &vaco_filter_draw_vf::DrawVfRegistry),
-    ("vaco-filter-geometry", &vaco_filter_geometry::T2GeometryRegistry),
-    ("vaco-filter-key", &vaco_filter_key::KeyRegistry),
-    ("vaco-filter-lut", &vaco_filter_lut::LutRegistry),
-    ("vaco-filter-mm", &vaco_filter_mm::MmRegistry),
-    ("vaco-filter-overlay", &vaco_filter_overlay::OverlayRegistry),
-    ("vaco-filter-scope", &vaco_filter_scope::ScopeRegistry),
-    ("vaco-filter-source", &vaco_filter_source::GeneratorRegistry),
-    ("vaco-filter-stack", &vaco_filter_stack::StackRegistry),
-    ("vaco-filter-temporal", &vaco_filter_temporal::TemporalRegistry),
-    (
-        "vaco-filter-video-composite",
-        &vaco_filter_video_composite::CompositeRegistry,
-    ),
-    (
-        "vaco-filter-video-format",
-        &vaco_filter_video_format::FormatRegistry,
-    ),
-    (
-        "vaco-filter-video-geometry",
-        &vaco_filter_video_geometry::GeometryRegistry,
-    ),
-    (
-        "vaco-filter-video-source",
-        &vaco_filter_video_source::SourceRegistry,
-    ),
-];
+use vaco_filter_graph::registry::Instantiate;
 
 /// `(filter, option)` pairs this gate already knows do not parse named
 /// constants, and does not fail on, because the crate that owns them is a
@@ -226,8 +180,7 @@ fn named_integer_constants_parse_through_the_real_registry() {
                     // exists for is specifically "the raw integer works but
                     // the reference's own name for it does not", the exact
                     // shape pixelize/convolution/maskedthreshold all had.
-                    if instantiate_with_one_option(name, option, &raw_value.to_string()).is_err()
-                    {
+                    if instantiate_with_one_option(name, option, &raw_value.to_string()).is_err() {
                         continue;
                     }
                     checked += 1;
