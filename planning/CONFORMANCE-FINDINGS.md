@@ -2981,3 +2981,70 @@ Tests: `vaco-mux-avi/tests/roundtrip.rs` gained four —
 to keep one iteration fast) so the new backfill loop and its `Budget`
 accounting get exercised; 30s run, `exit=0`, `execs≈1,660,000`,
 `find fuzz/artifacts -type f` empty.
+
+## 51. C-13 (#291/#292/#293): BMP/PCX/TGA/SGI/XWD/XBM/PNM-family/QOI decode and encode, measured against the reference codec directly (no registry path exists yet)
+
+Built three new crates — `vaco-codec-qoi`, `vaco-codec-pnm` (pbm/pgm/ppm/pam/pfm/phm),
+`vaco-codec-image-simple` (bmp/pcx/tga/sgi/xwd/xbm) — the first real
+`Decoder`/`Encoder` implementations in this tree (`vaco-codec-core` had only
+`mock.rs` before this). Because no `CodecId`/`EncoderDesc`/CLI dispatch
+exists yet for any of the fifteen formats (see `planning/TECH-DEBT.md`'s
+C-13 entry), verification was done by calling the pure `decode`/`encode`
+functions directly against `ffmpeg`-produced fixtures rather than through
+`vaco-cli -c:v <codec>`, which cannot reach these decoders/encoders at all
+today. Every fixture below was a real ffmpeg encode/decode of a `testsrc`/
+`mandelbrot`/`life`/hand-built source, compared byte-for-byte.
+
+| Codec | Encode byte-identical to reference | Decode pixel-identical to reference | Notes |
+|---|---|---|---|
+| QOI | yes (5 fixtures: gradient, noise, solid, pattern, RGBA) | yes | full spec implementation |
+| PBM | yes | yes | |
+| PGM (8-bit) | yes | yes | |
+| PGM (16-bit) | yes | yes | reference is always big-endian regardless of source pix_fmt |
+| PPM (8-bit) | yes | yes | |
+| PPM (16-bit) | yes | yes | |
+| PAM (GRAYSCALE) | yes | yes | |
+| PAM (RGB_ALPHA) | yes | yes | |
+| PAM (GRAYSCALE_ALPHA) | yes | yes | |
+| PAM (BLACKANDWHITE) | yes | yes | decodes to `monoblack`, not a literal byte-per-sample copy — see below |
+| PFM (gray + colour) | yes | yes | rows are bottom-to-top in the file; scale sign selects endianness |
+| PHM (gray + colour) | yes | yes | same layout as PFM, half-float samples treated as opaque 16-bit lanes |
+| BMP | yes (24bpp `bgr24`/32bpp `bgra`) | yes | 1/4/8bpp decode expands through the palette to `rgb24` (no round-trip; see TECH-DEBT) |
+| PCX | yes (3-plane 8-bit RGB) | yes | single-plane paletted 8bpp not implemented |
+| TGA | no reference encoder exists in this ffmpeg build | yes (hand-built fixtures, uncompressed both orientations) | encoder is spec-conformant, unverified against a reference |
+| SGI | no (writes uncompressed; reference defaults to RLE) | yes (both RLE and verbatim) | RLE table index order (channel-major) and bottom-up row order confirmed by decoding the reference's own RLE output |
+| XWD | no (omits the reference's embedded `lavcxwdenc` window-name string) | yes | that string is an ffmpeg implementation detail, not part of the XWD format |
+| XBM | yes | yes | reference converts bit order by reversing each byte whole, carrying trailing padding bits through unchanged rather than zeroing them — matched by doing the same |
+
+Three measurements worth recording independently of the table:
+
+- **PGM/PPM `maxval` rescaling, when `maxval` is not 255/65535.** The
+  reference does *not* pass samples through unchanged for other maxvals —
+  it rescales to fill the declared output range. Non-tie roundings all
+  matched ordinary round-to-nearest, but two probes at different maxvals
+  (`maxval=100`, `maxval=4`) disagreed on which way an exact `.5` tie
+  rounds (100's ties rounded down, 4's rounded up) — bisecting further did
+  not resolve it before the batch had to move on. `vaco-codec-pnm`
+  implements round-half-up and documents the discrepancy in
+  `netpbm.rs`'s module doc rather than claiming a formula that was not
+  actually confirmed at the boundary.
+- **PAM's `BLACKANDWHITE` tuple type decodes to the bit-packed
+  `monoblack` pixel format, not a literal byte-per-sample copy of its own
+  on-disk layout** (which is one `0`/`1` byte per pixel, unlike PBM's
+  bit-packing). Confirmed by building a `BLACKANDWHITE` PAM and a `P4` PBM
+  from the same source image and finding their reference-decoded output
+  byte-identical; `PixFmt::MonoBlack` vs `PixFmt::MonoWhite`'s opposite
+  polarity accounts for the differing on-disk bit values representing the
+  same image.
+- **XBM's LSB-first bit order is a whole-byte reversal of the MSB-first
+  `monowhite` layout, including whatever is in a row's trailing padding
+  bits** — not a per-pixel remap that leaves padding at zero. A first
+  implementation that masked padding to zero produced byte-identical pixel
+  content but failed exact-byte comparison against the reference on every
+  fixture with a non-multiple-of-8 width; reversing the whole byte fixed it
+  and confirmed the padding bits are not "uninitialised", just carried
+  through a symmetric transform.
+
+Fuzz targets: `parse_qoi`, `parse_pnm`, `parse_image_simple` (30s each,
+`exit=0`, `find fuzz/artifacts -type f` empty — see the closing report for
+exact exec counts).
