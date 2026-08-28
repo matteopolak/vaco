@@ -27,6 +27,21 @@ title    = "ITU-T Rec. H.265 (08/2021), High efficiency video coding"
 acquired = "2026-08-21"
 where    = "https://www.itu.int/rec/T-REC-H.265"
 
+# A second, independently-hosted edition of the same recommendation,
+# fetched specifically to cross-check vaco-codec-h264's CAVLC tables
+# against a primary source after an exhaustive self-consistency check
+# (not a second source) found real transcription errors in the original
+# pass. This edition predates 4:2:2 chroma-DC support and the
+# level_prefix >= 16 high-bit-depth extension, both later amendments —
+# see crates/codec/vaco-codec-h264/src/cavlc_tables.rs and cavlc.rs for
+# exactly what that leaves unverified.
+[[source]]
+id       = "iso-iec-14496-10-2002-draft"
+kind     = "spec"
+title    = "DRAFT ISO/IEC 14496-10 : 2002 (E) / DRAFT ITU-T Rec. H.264 (2002 E)"
+acquired = "2026-08-28"
+where    = "https://www.hlevkin.com/hlevkin/Standards/h264.pdf"
+
 # The AV1 OBU framing in `vaco-demux-raw` cites §5.3 of this and was written
 # from it, but the source itself was never registered — so `provenance-check`
 # accepted the citation only because nothing referenced it by id. Registered
