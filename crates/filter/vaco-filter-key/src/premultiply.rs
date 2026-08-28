@@ -27,22 +27,60 @@
 //! #    tested alpha value (0 and 200 both probed).
 //! ```
 //!
-//! # Not fully pinned down: the second input's exact role when main *does*
-//! have alpha
+//! # Settled, 2026-08-28: the second stream never contributes, because
+//! *no* format lets main's own alpha survive to reach the filter either
 //!
-//! The doc string says "`PreMultiply` first stream with first plane of
-//! second stream", but a `yuva420p` main input forced a pixel-format
-//! conversion that made the raw output bytes ambiguous between "used
-//! main's own alpha" and "used the second stream's plane", and pinning
-//! that down exactly was out of this crate's time budget. Given the clean,
-//! unambiguous no-alpha-is-a-no-op measurement above, this implementation
-//! takes the conservative, testable reading: when main's resolved format
-//! has its own alpha channel, that channel is what gets multiplied against
-//! (standard alpha-premultiplication algebra, `color' = color * alpha /
-//! maxval`); the second input is still required (matching the fixed
-//! two-pad shape) but is not read for this case. **This is a documented
-//! simplification, not a confirmed match** — flagged rather than guessed
-//! silently.
+//! The gap above stood on a `yuva420p` probe whose own pixel-format
+//! conversion made the raw output bytes ambiguous between "used main's
+//! own alpha" and "used the second stream's plane" -- not a wrong
+//! measurement, just an inconclusive one. `vaco-conformance`'s new
+//! multi-input harness (which needed an alpha-capable *planar* format
+//! anyway, to stay inside its own byte-layout assumptions) made a cleaner
+//! instrument available: `-v verbose`'s own filtergraph negotiation log,
+//! which names the *actual* pixel format each auto-inserted `auto_scale`
+//! step converts to, before the filter ever runs.
+//!
+//! Sweeping every alpha-capable format this build's `ffmpeg -pix_fmts`
+//! lists a converter for -- `yuva444p`, `yuva420p`, `rgba`, `argb`,
+//! `bgra`, `abgr` -- every single one gets `auto_scale`'d to an
+//! alpha-*less* format (`yuv444p`/`yuv420p`/`gbrp` respectively) on
+//! *both* input pads before `Parsed_premultiply_0`/`Parsed_unpremultiply_0`
+//! runs, even when both streams are already identical and already the
+//! target format (a same-format self-comparison, so this is not a
+//! mismatched-input-properties artifact). Forcing an explicit `format=`
+//! filter directly in front of `premultiply` in the graph string, instead
+//! of relying on the input's own declared format, changes nothing --
+//! the same conversion still happens right after it.
+//!
+//! **This means real `ffmpeg 8.1`'s `premultiply`/`unpremultiply` never
+//! actually receives a frame with alpha, for any input format this build
+//! supports**: the reference's own query-formats negotiation excludes
+//! alpha-bearing formats from this filter's accepted list entirely, so
+//! "what happens when main has alpha" was never a live question to
+//! settle -- it cannot happen, structurally, regardless of what a case's
+//! own input claims to be. The already-measured "no alpha channel is an
+//! exact no-op" is consequently not a special case of a richer rule; it
+//! is *the whole rule*, universally, because alpha never reaches the
+//! filter under any circumstance this crate (or the reference) can be
+//! handed. The second stream's "role" is likewise moot: this crate's own
+//! `Filter::on_event` already only ever calls `event.take(0)` (main),
+//! never reading the second input for anything, which this finding shows
+//! is not an omission to fix -- there is nothing the reference could be
+//! doing with it that this implementation would need to match.
+//!
+//! **Fixed accordingly**: [`build`]'s `FormatSet` now excludes any format
+//! with an alpha channel (`PixFmt::has_alpha`), so this crate's own
+//! negotiation can never hand `premultiply`/`unpremultiply` a format the
+//! reference would never accept either -- previously, an alpha-bearing
+//! format was accepted and *would* have driven the "multiply by main's
+//! own alpha" branch in [`apply`], a real divergence risk the moment any
+//! surrounding graph happened to negotiate one. That branch is now
+//! unreachable through the registered format set, kept rather than
+//! deleted as a documented dead path (identical in spirit to
+//! `masked_pick.rs`/`maskedthreshold.rs`'s own "measured, not guessed"
+//! discipline: harmless code a future change could resurrect by loosening
+//! the format set again, which is exactly when this comment needs to be
+//! read).
 //!
 //! # Not implemented: `inplace=1`'s single-input shape
 //!
@@ -93,7 +131,11 @@ impl Opts {
 
 /// Multiply (or divide) `frame`'s colour channels by its own alpha,
 /// in place. A no-op if the format has no alpha channel — the measured
-/// reference behaviour this module's doc records.
+/// reference behaviour this module's doc records. [`build`]'s `FormatSet`
+/// now excludes every alpha-bearing format this filter could be
+/// negotiated to, so the alpha-present branch below is unreachable in
+/// practice — kept, not deleted, as a documented dead path; see this
+/// module's doc, "Settled, 2026-08-28".
 pub(crate) fn apply(frame: &mut Frame, planes: i64, divide: bool) {
     let FrameData::Video { format, .. } = frame.data else {
         return;
@@ -182,7 +224,14 @@ impl FrameSyncFilter for Filter {
 
 fn build(desc: FilterDesc, divide: bool, req: &Instantiate<'_>) -> std::result::Result<Instance, String> {
     let opts = Opts::parse(req.args)?;
-    let set = FormatSet::video_list(common::formats_where(sample::is_addressable));
+    // Excludes alpha-bearing formats -- see this module's doc, "Settled,
+    // 2026-08-28": real ffmpeg's own negotiation never lets one reach
+    // this filter either, on any format tested, so offering one here is
+    // pure divergence surface with no matching reference behaviour to
+    // exercise.
+    let set = FormatSet::video_list(common::formats_where(|f| {
+        sample::is_addressable(f) && !f.has_alpha()
+    }));
     let formats = NodeFormats {
         inputs: vec![set.clone(), set.clone()],
         outputs: vec![set],
