@@ -724,6 +724,49 @@ part of the signal). The fix needs a primary or independently-transcribed
 copy of Annex A's tables, diffed against `tables_bitalloc.rs`, then
 re-measured against the same conformance fixtures to see which rows move.
 
+### Update: AC-3 bit-allocation constants are now verified against ATSC A/52:2012 — the accuracy question is not resolved
+
+The row above ("AC-3 bit-allocation model's masking-curve constants are
+unverified against the primary spec") is now out of date on its central
+claim. ATSC A/52:2012 (17 December 2012 revision) is reachable from this
+tree; `BNDSZ`, `MASKTAB`, `LATAB`, `HTH`, `FASTDECAY`/`SLOWDECAY`/
+`FASTGAIN`/`SLOWGAIN`/`DBKNEE`/`FLOOR` and `BAPTAB` in
+`vaco-codec-ac3::tables_bitalloc` are now transcribed directly from the
+clause text (§7.2.3, Tables 7.6-7.16), not reconstructed from the
+algorithm's shape, and `bitalloc::compute_bap` was checked line-by-line
+against §7.2.2.1-7.2.2.7's own pseudocode. The bit allocation clause is
+§7.2.2/§7.2.3, not "Annex A" — the earlier row's citation was wrong
+independently of being unverified (Annex A is the MPEG-2-multiplex mapping,
+unrelated to bit allocation). Two real, unrelated bugs turned up doing this
+comparison and are fixed: `cplstre` was gated on `nfchans > 1` where the
+spec reads it unconditionally (desyncing every mono block), and
+`phsflginu` was re-read as a fresh bit in the coupling-coordinates section
+instead of reusing the value persisted from the coupling-strategy section
+(a spurious bit on any 2/0 stream that sends coupling coordinates).
+
+Despite this, the conformance matrix does not reach bit-exactness and, on
+several fixtures, is worse than before this pass, not better — see the
+commit that made this change (`fix(codec): verify AC-3 bit-allocation
+constants against ATSC A/52:2012 (#367, #368)`) for the measured numbers.
+The mono fixture cannot use coupling at all and still shows `max_abs_err`
+far above 1.0 after both bug fixes above, which rules out the constants,
+the audblk() syntax gates checked in that pass, and coupling as mono's
+cause. Per-block mantissa-bit consumption (measured directly from `bap`
+sums during decode) exceeds the fixture's fixed CBR frame budget by
+roughly 1.5-2x, which says the remaining bug still desyncs the bitstream
+somewhere this pass did not isolate — most likely in `compute_bap`'s
+address-to-`bap` mapping or in an unverified interaction between exponent
+persistence and the mask/psd arithmetic, neither of which was ruled out.
+Coupling-channel mantissas remain unimplemented regardless (see the row
+below on coupling), which independently accounts for the stereo/5.1
+fixtures.
+
+Next step for whoever picks this up: extend the same clause-by-clause
+comparison to `mantissa.rs`'s `Quant` dispatch and to whether `exps`/`bap`
+array lengths ever silently disagree with `endmant` across a `Reuse`
+boundary — both were spot-checked, not exhaustively verified, in this
+pass.
+
 ### AC-3 IMDCT window is a KBD(alpha=5) approximation, not the spec's own table
 
 `vaco-codec-ac3::imdct::kbd_window` approximates AC-3's specific 256-tap
