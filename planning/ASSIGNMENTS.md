@@ -159,7 +159,7 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-filter-lut | 5 | #476 | agent:color2 | done | 2026-08-23 | 2026-08-23 | lut1d, haldclutsrc, the .3dl/.dat/.m3d parsers |
 | vaco-filter-analysis | 5 | #477 | agent:analysis2 | assigned | 2026-08-23 |  | unblocked by INTERFACE-GAPS 11 closing; may extend vaco-filter-vdsp |
 | vaco-filter-adsp | 5 | — | agent:audiotidy | assigned | 2026-08-23 |  | D19: one biquad design, not five; plan 16 §4.2 says it lives here |
-| vaco-filter-audio-eq | 5 | — | agent:audiotidy | assigned | 2026-08-23 |  | rename to vaco-filter-aeq |
+| vaco-filter-aeq | 5 | — | agent:audiotidy | done | 2026-08-23 | 2026-08-23 | renamed from vaco-filter-audio-eq |
 | vaco-filter-audio-dynamics | 5 | — | agent:audiotidy | assigned | 2026-08-23 |  | rename to vaco-filter-adynamics |
 | vaco-filter-ameasure | 5 | — | agent:audiotidy | assigned | 2026-08-23 |  | rename to vaco-filter-aanalysis |
 | vaco-bsf-av1 | 3 | #351 | agent:extradata | done | 2026-08-23 | 2026-08-23 | av1_frame_split/merge, av1_metadata |
@@ -167,3 +167,9 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-bsf-audio | 3 | #352 | agent:extradata | done | 2026-08-23 | 2026-08-23 | aac_adtstoasc, opus_metadata, pcm_rechunk |
 | vaco-format-nalu | 4 | — | agent:extradata | done | 2026-08-23 | 2026-08-23 | now owns the one extradata-assembly rule (D19) |
 | vaco-bsf-* (all six) | 3 | #353,#354 | agent:bsf3 | assigned | 2026-08-23 |  | *_metadata needs a CBS write path; INTERFACE-GAPS 12 blocks options |
+| vaco-format-mpjpeg | 4 | #596 | agent:smallfmt | assigned | 2026-08-23 |  | |
+| vaco-format-spdif | 4 | #612 | agent:smallfmt | assigned | 2026-08-23 |  | S/PDIF + s337m |
+| vaco-format-swf | 4 | #616 | agent:smallfmt | assigned | 2026-08-23 |  | |
+| vaco-format-nut | 4 | #594 | agent:smallfmt | assigned | 2026-08-23 |  | fully specified, so byte-identity is reachable |
+| vaco-protocol-crypto | 2 | #546 | agent:proto | assigned | 2026-08-23 |  | AES-CTR over a nested URL; D10 dependency decision |
+| crates/io (all) | 2 | #550 | agent:proto | assigned | 2026-08-23 |  | httpproxy ftp gopher gophers icecast ipfs/ipns gateways |
