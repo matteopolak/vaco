@@ -560,13 +560,6 @@ acquired = "2026-08-27"
 where    = "the reference binary installed on the development machine"
 
 [[source]]
-id       = "iso-11172-2"
-kind     = "spec"
-title    = "ISO/IEC 11172-2, Information technology — Coding of moving pictures and associated audio for digital storage media at up to about 1.5 Mbit/s — Part 2: Video"
-acquired = "2026-08-27"
-where    = "ISO"
-
-[[source]]
 id       = "itu-t-h262"
 kind     = "spec"
 title    = "ITU-T Rec. H.262 | ISO/IEC 13818-2, Generic coding of moving pictures and associated audio information: Video"
