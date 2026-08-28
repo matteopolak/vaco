@@ -154,7 +154,7 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-probe | 7 | — | agent:probe | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-cli | 7 | — | agent:cli-mux | done | 2026-08-23 | 2026-08-23 | muxers wired: -c copy remux writes a real file |
 | vaco-conformance | 10 | #172,#173 | agent:conformance | done | 2026-08-22 | 2026-08-22 |  |
-| vaco-checkasm | 10 | #92 | agent:checkasm | assigned | 2026-08-28 | — | claimed: PF-0.2, Kernel trait + Differential builder + edge-case generators + mismatch reporting; also unblocks #423, #127 |
+| vaco-checkasm | 10 | #92 | agent:checkasm | done | 2026-08-28 | 2026-08-28 | Kernel trait + Differential<K> + edge generators (vector-width tails, integer saturation, float specials) + CLI verify/list; wired vaco-scale::affine_row (a real production kernel) end to end, 92 cases clean; two synthetic seeded-bug kernels prove the harness catches an induced mismatch. Cross-tier-in-one-run is out of scope (needs unsafe assume_supported); coverage accumulates per-CI-machine instead. Unblocks #423, #127 — see comments there. |
 | vaco-filter-blur | 5 | #468 | agent:blur2 | done | 2026-08-23 | 2026-08-23 | gblur boxblur unsharp smartblur convolution sobel and the rest of FT-4.6a |
 | vaco-filter-denoise | 5 | #469 | agent:denoise | done | 2026-08-23 | 2026-08-23 | hqdn3d atadenoise removegrain nlmeans owdenoise |
 | vaco-filter-geometry | 5 | #470 | agent:geom2 | done | 2026-08-23 | 2026-08-23 | T2 geometry (~28) — distinct from vaco-filter-video-geometry's T1 set |
