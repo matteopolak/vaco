@@ -1,0 +1,128 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+# The standardised ADPCM subset (issue #280, C-02): 7 decoders / 7 encoders.
+
+[[component]]
+kind      = "decoder"
+name      = "adpcm_ima_wav"
+long_name = "ADPCM IMA WAV"
+feature   = "codec-adpcm"
+ctor      = "vaco_codec_adpcm::ADPCM_IMA_WAV_DECODER"
+media     = "audio"
+codec     = "adpcm_ima_wav"
+
+[[component]]
+kind      = "encoder"
+name      = "adpcm_ima_wav"
+long_name = "ADPCM IMA WAV"
+feature   = "codec-adpcm"
+ctor      = "vaco_codec_adpcm::ADPCM_IMA_WAV_ENCODER"
+media     = "audio"
+codec     = "adpcm_ima_wav"
+
+[[component]]
+kind      = "decoder"
+name      = "adpcm_ima_qt"
+long_name = "ADPCM IMA QuickTime"
+feature   = "codec-adpcm"
+ctor      = "vaco_codec_adpcm::ADPCM_IMA_QT_DECODER"
+media     = "audio"
+codec     = "adpcm_ima_qt"
+
+[[component]]
+kind      = "encoder"
+name      = "adpcm_ima_qt"
+long_name = "ADPCM IMA QuickTime"
+feature   = "codec-adpcm"
+ctor      = "vaco_codec_adpcm::ADPCM_IMA_QT_ENCODER"
+media     = "audio"
+codec     = "adpcm_ima_qt"
+
+[[component]]
+kind      = "decoder"
+name      = "adpcm_ms"
+long_name = "ADPCM Microsoft"
+feature   = "codec-adpcm"
+ctor      = "vaco_codec_adpcm::ADPCM_MS_DECODER"
+media     = "audio"
+codec     = "adpcm_ms"
+
+[[component]]
+kind      = "encoder"
+name      = "adpcm_ms"
+long_name = "ADPCM Microsoft"
+feature   = "codec-adpcm"
+ctor      = "vaco_codec_adpcm::ADPCM_MS_ENCODER"
+media     = "audio"
+codec     = "adpcm_ms"
+
+[[component]]
+kind      = "decoder"
+name      = "adpcm_swf"
+long_name = "ADPCM Shockwave Flash"
+feature   = "codec-adpcm"
+ctor      = "vaco_codec_adpcm::ADPCM_SWF_DECODER"
+media     = "audio"
+codec     = "adpcm_swf"
+
+[[component]]
+kind      = "encoder"
+name      = "adpcm_swf"
+long_name = "ADPCM Shockwave Flash"
+feature   = "codec-adpcm"
+ctor      = "vaco_codec_adpcm::ADPCM_SWF_ENCODER"
+media     = "audio"
+codec     = "adpcm_swf"
+
+[[component]]
+kind      = "decoder"
+name      = "adpcm_g726"
+long_name = "G.726 ADPCM"
+feature   = "codec-adpcm"
+ctor      = "vaco_codec_adpcm::ADPCM_G726_DECODER"
+media     = "audio"
+codec     = "adpcm_g726"
+
+[[component]]
+kind      = "encoder"
+name      = "adpcm_g726"
+long_name = "G.726 ADPCM"
+feature   = "codec-adpcm"
+ctor      = "vaco_codec_adpcm::ADPCM_G726_ENCODER"
+media     = "audio"
+codec     = "adpcm_g726"
+
+[[component]]
+kind      = "decoder"
+name      = "adpcm_g726le"
+long_name = "G.726 ADPCM little-endian"
+feature   = "codec-adpcm"
+ctor      = "vaco_codec_adpcm::ADPCM_G726LE_DECODER"
+media     = "audio"
+codec     = "adpcm_g726le"
+
+[[component]]
+kind      = "encoder"
+name      = "adpcm_g726le"
+long_name = "G.726 little endian ADPCM"
+feature   = "codec-adpcm"
+ctor      = "vaco_codec_adpcm::ADPCM_G726LE_ENCODER"
+media     = "audio"
+codec     = "adpcm_g726le"
+
+[[component]]
+kind      = "decoder"
+name      = "adpcm_g722"
+long_name = "G.722 ADPCM"
+feature   = "codec-adpcm"
+ctor      = "vaco_codec_adpcm::ADPCM_G722_DECODER"
+media     = "audio"
+codec     = "adpcm_g722"
+
+[[component]]
+kind      = "encoder"
+name      = "adpcm_g722"
+long_name = "G.722 ADPCM"
+feature   = "codec-adpcm"
+ctor      = "vaco_codec_adpcm::ADPCM_G722_ENCODER"
+media     = "audio"
+codec     = "adpcm_g722"
