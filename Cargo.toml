@@ -88,8 +88,8 @@ miniz_oxide = "0.8"
 lzma-rs     = "0.3"
 
 # --- crypto and hashing (CENC, HLS AES-128, checksums) — RustCrypto, pure Rust
-aes    = "0.8"
-cbc    = "0.4"
+aes    = "0.9"
+cbc    = "0.2"
 ctr    = "0.9"
 sha1   = "0.10"
 sha2   = "0.10"

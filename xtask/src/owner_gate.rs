@@ -98,6 +98,17 @@ const MEDIA: &[(&str, &str)] = &[
         "sha2",
         "SHA-256/512 for -show_data_hash. Printed verbatim, same as crc.",
     ),
+    (
+        "aes",
+        "AES-128 block cipher behind the crypto: protocol. A disagreeing \
+         implementation decrypts to different bytes, full stop.",
+    ),
+    (
+        "cbc",
+        "CBC chaining behind the crypto: protocol. Added alongside aes: \
+         measured against ffmpeg 8.1 to be CBC, not the CTR the work package \
+         naming it assumed — see docs/io/vaco-protocol-crypto.md.",
+    ),
 ];
 
 /// Read the `[dependencies]` table of one manifest.

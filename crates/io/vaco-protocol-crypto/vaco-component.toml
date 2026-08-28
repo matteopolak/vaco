@@ -1,0 +1,10 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# `crypto:` — AES-128-CBC over a nested URL. See the crate docs for why this
+# is CBC and not the CTR the work package's own title assumed.
+
+[[component]]
+kind      = "protocol"
+name      = "crypto"
+long_name = "AES-128-CBC encryption/decryption"
+ctor      = "vaco_protocol_crypto::CRYPTO_PROTOCOL"
