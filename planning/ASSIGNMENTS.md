@@ -248,6 +248,9 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-filter-scope | 5 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
 | vaco-filter-stack | 5 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
 | vaco-filter-video-composite | 5 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-filter-motion | 5 | #57 | agent:t3-longtail | assigned | 2026-08-28 |  | plan 16 SS4.2 row: mestimate, minterpolate, framerate, deshake — real gap, crate never created; extends vaco-filter-vdsp (motion search, affine transform) |
+| vaco-filter-palette | 5 | #111 | agent:t3-longtail | assigned | 2026-08-28 |  | plan 16 SS4.2 row: palettegen, paletteuse, elbg (latticepal not present in ffmpeg 8.1 per vaco-filter-stack's own scoping comment) — real gap flagged unclaimed by vaco-filter-stack's crate doc |
+| vaco-filter-avvis | 5 | — | agent:t3-longtail | assigned | 2026-08-28 |  | plan 16 SS4.4 row: showwaves/showwavespic/ahistogram/abitscope subset attempted (audio visualisation, real gap, crate never created) |
 | vaco-format-adaptive | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
 | vaco-format-gxf | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
 | vaco-format-imf | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
