@@ -614,3 +614,25 @@ Grep your own crate for `with_capacity`, `vec![`, and `resize` and check where
 each length comes from. This is the one class of bug in filter option parsing
 that fuzzing reliably finds and review reliably misses.
 
+**The workspace already denies the three obvious ones.** `clippy.toml` has
+carried this since wave 0:
+
+```toml
+disallowed-methods = [
+  { path = "std::vec::Vec::with_capacity", reason = "size an allocation through vaco_limits::Budget::alloc instead" },
+  { path = "std::vec::Vec::reserve",       reason = "..." },
+  { path = "std::vec::Vec::reserve_exact", reason = "..." },
+]
+```
+
+So `with_capacity` is a clippy **error**, not a warning, and not one to
+`#[allow]` past — the reason field tells you what to do instead. Two agents hit
+it on the same afternoon and it blocked clippy *transitively* for everyone
+downstream of their crate, because most filter crates are dependencies of
+`vaco-registry`. If you trip it, fix it in an early separate commit rather than
+at the end of your work.
+
+Note what the rule does **not** cover: `vec![x; n]`, `resize`, and collecting an
+iterator whose length an option decides are all still yours to check by hand.
+The lint catches the spelling, not the class.
+
