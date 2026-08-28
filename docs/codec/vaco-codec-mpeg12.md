@@ -466,6 +466,30 @@ fixture's own bitstream (both occurrences read `load_intra_quantiser_matrix
 reset-every-time implementation was already correct, recorded as a doc
 comment rather than changed.
 
+**A further round tested the leading VLC/entropy-coding candidate this
+crate has: MPEG-1's escape-level 22-bit sentinel sub-case (Annex D.9.3),
+the one `mpeg1`-gated branch upstream of dequantisation that specifically
+handles large magnitudes — exactly what a dense, sharp-edge macroblock
+produces.** An earlier round had ruled this out by usage count (fires
+twice in the whole fixture); the reframing above (the defect is two
+specific macroblocks, not something P-picture-wide) reopened the
+question, since "fires twice" is no longer obviously too rare to matter.
+Re-measured directly rather than reasoning from the old count: the
+sentinel fires **9** times in `m1_ip.m1v`, not 2 — 2 at frame 0
+(`mb=(3,1)`, both correctly reconstructed within the known small ceiling)
+and **5** at frame 15 alone. Of those 5, exactly 2 are the known-broken
+macroblocks (`mb=(3,1)`, `mb=(0,1)`) — but the other 3
+(`mb=(0,2)` and `mb=(2,2)`, a different slice) fire the same mechanism,
+at larger magnitudes (119-145 vs. 58-78), and reconstruct essentially
+exactly (max diff 1). The sentinel path is exercised correctly in 7 of
+its 9 occurrences in this fixture, including at the same magnitude order
+in the very macroblock that is broken elsewhere. **This eliminates the
+sentinel hypothesis**: if its byte-layout or sign interpretation were
+wrong, every firing would misdecode, not 2 of 9 selectively. Sentinel
+usage correlates with the defect (dense blocks need escape coding) without
+causing it. Per instruction, `m1_i`'s own separate max-9 thread was not
+chased this round, since the first hypothesis did not fall.
+
 **This means T2-01a's own "framemd5-identical to reference" acceptance bar
 is not met for either format**, so no issue claiming it is closed by this
 work — but MPEG-2 decode is now correct in every way this session's
