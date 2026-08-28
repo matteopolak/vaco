@@ -1481,3 +1481,34 @@ earlier. **Capture BASE once, and when a git step's output is ambiguous, check
 whether it already worked before running it again.**
 
 An empty commit in the history is not a problem. A retry against a stale base is.
+
+## `dup-check` catches colliding names, not duplicated logic
+
+`cargo xtask dup-check` compares **public type names**. That is a genuine gate —
+it caught `vaco-fuzz-support` redefining `ProgressGuard` when `vaco-limits`
+already had one, and it caught a filter crate's first-draft colour type
+duplicating `vaco-core::Rgba`. Both became re-exports instead of second
+implementations.
+
+It cannot catch the more common case: the same *algorithm* written twice under
+two different names, or written as free functions. Two agents hit exactly that
+today. One drafted `edge_common`, a box-blur core, morphology and LUT sampling
+before finding, by reading rather than by gate, that `vaco-filter-convolve`,
+`vaco-filter-blur` and `vaco-filter-lut` already had real, tested versions of
+all four. Another found the same for EBU R128 and window functions. In both
+cases a green `dup-check` would have signed off on the duplicate.
+
+So before writing any primitive, **grep for the concept, not the name**. If
+something plausibly already exists, it probably does — this tree now has ~200
+crates and no one holds all of them in their head.
+
+The specific reason this matters more than tidiness: the existing
+implementations have absorbed corrections a fresh copy will not have. The
+box-blur in `vaco-filter-blur` carries a `reflect-101` versus `replicate`
+border distinction that was measured, not guessed. A clean-room rewrite of it
+would look correct, pass its own tests, and be subtly wrong at every edge — the
+same failure that produced a VP8 encoder missing a bitstream partition, an Opus
+decoder at 0.03 correlation, and a self-interoperable-only ALAC, all in one day.
+
+A second implementation is not neutral. It is a place for a fixed bug to come
+back.
