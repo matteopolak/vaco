@@ -830,3 +830,70 @@ through: unlike `Box<dyn Muxer>`/`Box<dyn Demuxer>` and `vaco-cli`'s
 `TallyingMuxer` (which do forward both `add_stream_with`-shaped methods and
 `bind_url` explicitly, per those types' own doc comments), `Discovery` was
 never meant to be driven that way and its docs do not yet say so.
+
+### `vaco-codec-mpegaudio` Layer III does not decode real content accurately yet
+
+Side-info parsing, the bit reservoir, MS stereo, alias reduction and the
+requantisation formula are all implemented, and two real bugs in this path
+were found and fixed by comparing decoded PCM to `ffmpeg` (the global-gain
+constant, and a silent-granule Huffman-decode loop reading past its
+`part2_3_length` budget) — but real-file decode is still measurably wrong:
+a 440 Hz test tone reaches only ~0.44 sample correlation against
+`ffmpeg`'s own decode after finding the best time alignment, and a 6000 Hz
+tone comes out at a measurably wrong output frequency (~4316 Hz instead of
+6000 Hz). A dedicated unit test
+(`vaco-codec-mpegaudio`'s `layer3::frequency_placement_tests`) proves the
+subband-splitting/IMDCT/windowing/overlap-add/synthesis half of the
+pipeline places a known spectral line at its correct frequency in
+isolation, which narrows the remaining bug to the side-info/Huffman-decode
+half without identifying it. Next step: compare `is[]` (post-Huffman,
+pre-requantisation) for one hand-constructed granule against a known-good
+value, since the transform half is already ruled out.
+
+### `vaco-codec-mpegaudio` Layer III short blocks (`block_type == 2`) decode to silence
+
+Neither the short-block scalefactor layout (band-major, window-minor over
+12 bands × 3 windows) nor the per-window 12-point IMDCT reassembly (three
+windowed 12-sample blocks overlapped with a 6-sample stride, then padded
+with 6 zero samples at each end to reach 36 — worked out from ISO/IEC
+11172-3's own prose describing the process, but not yet implemented) is
+built. A `block_type == 2` granule's side info parses correctly and the
+granule still resynchronises to its declared `part2_3_length`, so this
+does not corrupt anything else in the frame, but that granule's own audio
+is lost (rendered as silence) rather than decoded. Most likely to matter on
+transient/percussive material, which is exactly what triggers short
+blocks.
+
+### `vaco-codec-mpegaudio` has no intensity stereo for any layer
+
+Layer I/II's `intensity_stereo` channel mode (only one subband's worth of
+allocation/scalefactor/samples transmitted above `bound`, shared by both
+output channels with independent scalefactors) and Layer III's
+`mode_extension` intensity bit (the "side" channel's scalefactors reused as
+`is_ratio = tan(is_pos·π/12)` positions) are both unimplemented. Content
+encoded with either falls back to treating both channels as independently
+coded, which is wrong for the shared subbands/bands. Plain stereo, dual
+channel, mono, and (Layer III only) MS stereo all decode correctly.
+
+### `vaco-codec-mpegaudio` MPEG-2/2.5 (low sample rate) Layer III is `Unsupported`
+
+The low-sample-rate extension's different `scalefac_compress` decomposition
+(three ranges of the 9-bit field, further split under intensity stereo) is
+not implemented; `MpegAudioDecoder` returns `Error::Unsupported` for any
+16000/22050/24000/11025/12000/8000 Hz Layer III packet rather than
+attempting a wrong decode. Layer I/II's low-sample-rate bit-allocation
+table (`LAYER2_TABLE_LSF`, `provenance/vaco-codec-mpegaudio.toml`) is
+transcribed from ISO/IEC 13818-3 but untested against real audio — no
+MPEG-2/2.5 encoder was available on this machine to generate a fixture.
+
+### `vaco-codec-mpegaudio` does not apply the demuxer's gapless trim
+
+`vaco-demux-mpegaudio` (issue #644) already produces `SkipSamples` packet
+side data from the LAME tag's encoder delay/padding, but nothing consumes
+it: `MpegAudioDecoder::send_packet`/`receive_frame` decode every sample the
+bitstream carries, including the encoder's priming delay and trailing
+padding. Trimming needs a component that owns both the packet's side data
+and the decoded frame's sample count — today that is neither this crate
+(which only sees one packet/frame at a time, with no stream-level state for
+"how many total samples has this stream produced so far") nor `vaco-cli`
+(issue #652 — no decoder is reachable from the CLI at all yet).
