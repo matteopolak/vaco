@@ -102,6 +102,57 @@ example.
 Three agents have independently refused briefs of mine that offered such a
 dependency. They were right to.
 
+## Byte-exactness is a check, not the bar (**owner ruling, 2026-08-28**)
+
+The repository owner has ruled directly:
+
+> byte-exact isn't a hard requirement, as long as we know it isn't broken it's
+> fine. the ffmpeg oracle is just to keep it in check and not wrong. if we have
+> a couple differences here and there it's fine — even better if we make
+> differences to improve perf without sacrificing quality.
+
+**This supersedes every "bit-exact" or "framemd5-identical" acceptance
+criterion written into an issue.** Those were written before this ruling and
+are not binding where they conflict with it.
+
+### What to ship on
+
+Ship when the thing is **demonstrably not broken**:
+
+- it decodes/encodes/filters real input without error, panic, or hang;
+- its output is *structurally* right — no wrong geometry, no channel swap, no
+  drift accumulating over a sequence, no artefacts a viewer would see;
+- the deviation from the reference is **small and unstructured** — a scatter of
+  ±1s from rounding is fine, and a measured mean error is enough evidence;
+- round-trips hold where the format is lossless;
+- fuzzing finds no panic.
+
+That is a complete, closeable result. Say what the deviation is and move on.
+
+### The distinction that still matters
+
+**Small and unstructured is fine. Structured is a bug.** The shape of the error
+carries the diagnosis, not its size:
+
+- max deviation 1–2 spread across a frame → rounding. Ship it.
+- error concentrated in specific blocks, or on every row but the first, or on
+  every macroblock of one type → **a real defect**, however small the average.
+  A structured error means something is *wrong*, not imprecise.
+
+This project has both cases on record. MPEG-1/2's float-IDCT ceiling is a
+measured, permanent ±1–2 scatter — fine, ship, done. But the error that
+correlated with coefficient count, and the one that hit every row except row 0,
+were both genuine bugs that a "close enough on average" reading would have
+shipped.
+
+### What does not change
+
+Deliberate divergence for performance is welcome, provided quality is not worse
+— measure both sides and say so. **Clean-room rules are untouched**: run the
+reference binary and read its output; never read its source. Provenance
+trailers, the ownership table and the commit discipline all stand.
+
+
 ## Measure, do not recall (**D17**)
 
 The reference binary is a black box you probe; its source is never consulted
