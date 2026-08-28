@@ -2081,3 +2081,99 @@ actual mechanism needed no bitstream at all, only a wider sweep of the
 same synthetic-fixture technique already in use. Recorded here so a
 similar "this looks decoder-dependent" call elsewhere gets one more
 targeted sweep before being written off.
+
+### `vaco-codec-vp9` decodes key frames only — inter prediction is unimplemented (C-31/#325)
+
+`vaco-codec-vp9::decode::Vp9Decoder::decode_one_frame` checks
+`fh.show_existing_frame || !fh.is_key_frame` and returns without emitting a
+frame for either case. There is no motion-vector decode, no reference-frame
+buffer, and no inter residual path anywhere in this crate — a real VP9
+stream (which is virtually always key frame plus many inter frames) will
+have every inter frame silently dropped, not decoded wrong. This is by
+design for C-29/C-30's scope, not an oversight: see
+`docs/codec/vaco-codec-vp9.md`'s Verification table, which confirms this
+crate reconstructs every pixel it is responsible for bit-exactly (modulo
+the loop filter, next entry) and states plainly that inter prediction is
+the only thing left standing between this decoder and a real picture.
+
+### `vaco-codec-vp9`'s loop filter (§8.8), profiles 1-3, and multi-tile-column decode are unimplemented (epic #32)
+
+`header::LoopFilterParams` is parsed and stored but `decode.rs` never
+applies it — a stream whose loop filter level is nonzero decodes every
+pixel this crate touches bit-exactly and then differs from a reference
+decoder by the filter's own small (single-digit, per-edge) smoothing; see
+`docs/codec/vaco-codec-vp9.md`'s Verification table for measured
+deviations (max per-pixel deviation 3, MAD under 0.03, across every
+lossy fixture tested). Profiles 1 and 3 (independently-signalled chroma
+subsampling) and 2/3 (10/12-bit `BitDepth`) are parsed for totality
+(`header::color_config`, `pic_to_frame`'s pixel-format match already has
+the extra arms) but never exercised by any fixture reachable from this
+crate's key-frame-only scope. Separately,
+`decode::decode_frame_tiles`'s comment on `decode_block`'s `AvailL` check
+notes that it assumes `MiColStart == 0` (single tile column) — a
+multi-tile-column stream still decodes each column's own bits correctly,
+but `AvailL` at a non-first tile column's left edge is not spec-exact
+there. None of this is exercised by any test in this repository.
+
+### `vaco-codec-vp9`: backward probability adaptation (§8.3/8.4) is not implemented, and cannot be verified from this crate's scope
+
+Not an oversight: every key frame's `setup_past_independence()` call
+unconditionally resets `EntropyContext` to the specification's defaults
+before that frame's own compressed-header forward update runs
+(`FrameIsIntra` is always 1 on a real key frame, and the uncompressed
+header's own syntax makes the reset call unconditional in that case, per
+§6.2's `frame_sync_code()`/`intra_only`/`reset_frame_context` handling
+re-read specifically to check this rather than assumed). A stream of
+consecutive key frames — the only kind of stream this crate can fully
+decode — therefore never carries adapted probabilities from one key frame
+to the next: backward adaptation's counting process (§8.3) and the
+adaptation formula itself (§8.4) have no observable effect on any
+bitstream reachable from C-29/C-30's scope, and no fixture within that
+scope could exercise or verify an implementation of either. Left
+unimplemented rather than implemented-but-untestable; would need to be
+added alongside inter prediction (previous entry), since a real
+multi-key-frame-with-inter-frames-between-them GOP is the only kind of
+stream where it would ever run.
+
+### `vaco-codec-vp9`'s large spec tables split into `tables/*.in` files are not machine-verified by `provenance-check`
+
+Most of `vaco-codec-vp9::tables`'s large numeric tables (`dc_qlookup`,
+`ac_qlookup`, the `kf_*_probs` tables, `default_coef_probs`,
+`default_tx_probs`, `default_skip_prob`, `coefband_4x4`,
+`default_scan_4x4`/`col_scan_4x4`/`row_scan_4x4`) are declared as
+`pub const NAME: [[T; N]; M] = include!("tables/name.in")`, one file per
+table, so each could be independently extracted from the spec PDF and
+shape/count-validated before being trusted (this caught two real
+silent-truncation bugs in the extraction tooling — `kf_y_mode_probs` and
+`pareto_table` — before either could reach decoded pixels). `xtask`'s
+`provenance-check` gate (`xtask/src/provenance.rs`) originally could not
+see through `include!()` at all: its element-counting scanner only reads
+literal `[...]` array bodies out of the `.rs` file's own text, and
+`include!("tables/foo.in")` has none. That half of the gap is now fixed —
+`elements()` resolves an `include!(...)` argument to the file it names,
+relative to the including file's own directory, and counts elements in
+*that* file's content instead (see `xtask/src/provenance.rs`'s
+`include_path`/`resolves_an_include_relative_to_the_including_file`).
+
+What remains, and is **not** a bug — `elements()` counts a nested array's
+top-level rows, not its total scalar cells (documented on `elements()`
+itself, and covered by
+`a_nested_array_counts_rows_not_cells`), which is a deliberate calibration
+of `TABLE_THRESHOLD = 32` for arrays whatever their shape. A handful of
+VP9's tables have very deep nesting and few top-level rows —
+`dc_qlookup`/`ac_qlookup` are `[[T; 256]; 3]` (3 rows), `default_coef_probs`
+is six levels deep with only 4 top-level rows, the `kf_*_probs` tables have
+10-16 rows — so even after the `include!` fix, `provenance-check` does not
+require (and `provenance/vaco-codec-vp9.toml` therefore does not carry) a
+registered entry for any of them, despite every one being a genuine,
+spec-mandated transcription. `provenance/vaco-codec-vp9.toml` registers the
+tables the gate *can* see (`pareto_table`, `inv_map_table`,
+`coefband_8x8plus`, and the 8x8/16x16/32x32 scan tables, all of which have
+32+ top-level rows); the rest are documented instead by `tables.rs`'s own
+per-table doc comment citing the exact spec section (`dc_qlookup` cites
+§8.6.1, `kf_y_mode_probs` cites §10.4, and so on) — real provenance, just
+not the machine-checked kind. Widening `TABLE_THRESHOLD`'s row-vs-cell rule
+to also flag a deeply-nested-but-few-rows table would need a decision
+about what "32" should mean for those shapes, which is a call for whoever
+owns `xtask/src/provenance.rs`'s design, not something to make
+unilaterally while fixing an unrelated crate's provenance file.
