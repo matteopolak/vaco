@@ -1007,3 +1007,34 @@ registers a `tga_pipe` demuxer (`ffmpeg -demuxers` lists it); TGA has no
 fixed magic number, so its `pipe!` entry would need `magics = &[]` and rely
 on the extension, the same shape already used for `photocd`/`pictor`/`gem`/
 `svg`/`vbn`/`qdraw`/`pgmyuv` in that file.
+
+### `hevc_metadata`'s `aud` was not ported alongside `h264_metadata`'s (gap 12)
+
+`h264_metadata`'s `aud=insert`/`remove` shipped this session (interface gap
+12); `hevc_metadata` exposes the identical option name and was left at the
+bare-name default rather than mirrored. Not an oversight: HEVC's NAL header
+is two bytes (`forbidden_zero_bit(1) nal_unit_type(6) nuh_layer_id(6)
+nuh_temporal_id_plus1(3)`, `vaco_format_nalu::HeaderKind::H265`) rather than
+H.264's one, and the AUD payload/`pic_type` layout for HEVC was not measured
+in this pass — porting the H.264 logic unchanged would be guessing the byte
+layout, not reproducing it. Whoever picks this up should measure
+`ffmpeg 8.1 -bsf:v hevc_metadata=aud=insert/remove` the same way
+`h264_metadata`'s module doc did (five-ish adversarial HEVC streams: I-only,
+already-AUD'd, non-16-multiple crop, forced VUI, a B-frame GOP) before
+reusing any of the H.264 byte offsets.
+
+### `vaco_frame::Frame` has no picture-type field at all
+
+Found while implementing `showinfo` (interface gap 13): the reference's
+`type:I`/`P`/`B` field comes from `AVFrame::pict_type`, which this
+workspace's `Frame` has no equivalent of — not because it was scoped out for
+`showinfo` specifically, but because no decoder in this workspace exists to
+set one (D5). `showinfo` hard-codes `type:I`, which happens to be correct
+for every frame this workspace's filter graphs can currently produce
+(source-generated or filter-transformed, never decoded), and is recorded
+as such in that filter's own doc rather than silently guessed. The same gap
+will resurface for any future filter or `vaco-probe -show_frames` field that
+needs a real picture type — worth a `FrameFlags`-adjacent field (or a fourth
+`FrameSideData` variant, if it should stay optional) once a real decoder is
+in the tree to populate it, rather than each caller re-discovering the
+absence independently.
