@@ -20,11 +20,26 @@
 //!
 //! # Threading
 //!
-//! Not implemented. RFC 6386 §9.5's multiple DCT-coefficient token
-//! partitions exist precisely to let a decoder split residual decode across
-//! threads; this crate reads only the first (or only) partition. See
-//! `planning/TECH-DEBT.md` for the row this leaves open against C-16d's
-//! threading requirement.
+//! RFC 6386 §9.5's multiple DCT-coefficient token partitions (1, 2, 4 or 8,
+//! `log2_nbr_of_dct_partitions` in the header) exist precisely to let rows
+//! be decoded in parallel: `decode_frame` now parses the partition-size
+//! table and reads macroblock row `r`'s tokens from partition
+//! `r % num_partitions` (`decode::split_token_partitions`), which is the
+//! part multi-partition streams actually need to decode *correctly* —
+//! previously every row read from partition 0 regardless of the header's
+//! count, corrupting anything past the first row of a multi-partition
+//! stream. Verified against `vpxenc --token-parts={0,1,2,3}` (1/2/4/8
+//! partitions) at two resolutions, decoded output byte-identical to
+//! `ffmpeg -c:v libvpx` in every case.
+//!
+//! What is **not** here yet: actually running those per-partition decodes
+//! on separate OS threads. `decode_frame`'s row loop is still one
+//! sequential pass; the per-partition `BoolDecoder`s it now builds are the
+//! precondition for splitting that loop across threads, not the threading
+//! itself. A single-threaded decode is therefore always byte-identical to
+//! any future multi-threaded one by construction (there is only one
+//! implementation), but the `Threading`/`SliceThreadedDecoder` machinery in
+//! `vaco-codec-core` is not wired up here.
 //!
 //! # Specification
 //!

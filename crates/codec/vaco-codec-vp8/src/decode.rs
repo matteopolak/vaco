@@ -1098,6 +1098,45 @@ struct State {
 }
 
 
+/// RFC 6386 §9.5: split the token-partition byte range into `num_partitions`
+/// slices. When there is one partition it is the whole range unmodified;
+/// otherwise every partition but the last is preceded by its own 3-byte
+/// little-endian size, and the last partition takes whatever remains.
+///
+/// Never panics or errors on a malformed size table: a size that runs past
+/// the end of `residual`, or a table that does not fit at all, truncates the
+/// affected partition(s) to empty rather than reading out of bounds --
+/// `Vp8BoolDecoder` already treats an empty slice as an immediately-EOF
+/// stream, which is the same graceful-degradation behaviour this crate
+/// already relies on for a truncated single-partition frame.
+fn split_token_partitions(residual: &[u8], num_partitions: usize) -> Vec<&[u8]> {
+    let empty: &[u8] = residual.get(..0).unwrap_or(&[]);
+    let num_partitions = num_partitions.max(1);
+    if num_partitions == 1 {
+        return vec![residual];
+    }
+    let table_len = 3 * (num_partitions - 1);
+    let Some(size_table) = residual.get(..table_len) else {
+        // Table itself does not fit: every partition is empty.
+        return vec![empty; num_partitions];
+    };
+    let mut offset = table_len;
+    let mut out: Vec<&[u8]> = Vec::new();
+    for i in 0..num_partitions - 1 {
+        let Some(&[b0, b1, b2]) = size_table.get(i * 3..i * 3 + 3) else {
+            out.push(empty);
+            continue;
+        };
+        let size = usize::from(b0) | (usize::from(b1) << 8) | (usize::from(b2) << 16);
+        let end = offset.saturating_add(size).min(residual.len());
+        out.push(residual.get(offset..end).unwrap_or(empty));
+        offset = end;
+    }
+    // The last partition takes whatever remains, per RFC 6386 §9.5.
+    out.push(residual.get(offset..).unwrap_or(empty));
+    out
+}
+
 fn decode_frame(state: &mut State, budget: &mut Budget, data: &[u8]) -> Result<Option<Frame>> {
     let Some(tag) = parse_frame_tag(data) else {
         return Err(Error::InvalidData("vp8: bad frame tag"));
@@ -1137,16 +1176,22 @@ fn decode_frame(state: &mut State, budget: &mut Budget, data: &[u8]) -> Result<O
         &mut state.lf_deltas,
     );
 
-    // The first data partition ends at `first_part_size`; the residual
-    // partition(s) start right after it. This crate only reads a single
-    // residual partition (RFC 6386 permits multiple for threading, out of
-    // scope here -- see the crate doc's threading note).
+    // The first data partition ends at `first_part_size`; the token
+    // partition(s) start right after it. RFC 6386 §9.5: when there is more
+    // than one token partition, each partition but the last is preceded by
+    // a 3-byte little-endian size; the last partition takes whatever bytes
+    // remain. `split_token_partitions` turns that layout into one slice per
+    // partition, and macroblock row `r` reads its tokens from partition
+    // `r % num_partitions` (RFC 6386 §9.5's stated reason for the split:
+    // "the decoder can perform parallel decoding" one row group per
+    // partition).
     let residual_start = header_offset + tag.first_part_size as usize;
     let residual = first_partition
         .get(tag.first_part_size as usize..)
         .filter(|_| residual_start <= data.len())
         .unwrap_or(&[]);
-    let mut residual_bd = Bd::new(residual);
+    let token_partitions = split_token_partitions(residual, fh.num_partitions);
+    let mut token_bds: Vec<Bd<'_>> = token_partitions.iter().map(|p| Bd::new(p)).collect();
 
     let mut mbs = vec![MbInfo::default(); state.mb_cols * state.mb_rows];
     let mut picture = Picture::new(budget, state.mb_cols, state.mb_rows)?;
@@ -1175,14 +1220,20 @@ fn decode_frame(state: &mut State, budget: &mut Budget, data: &[u8]) -> Result<O
             left_bmode: [tables::B_DC_PRED; 4],
         };
 
+        let num_token_partitions = token_bds.len().max(1);
         for row in 0..state.mb_rows {
             ctx.left_y = [false; 4];
             ctx.left_u = [false; 2];
             ctx.left_v = [false; 2];
             ctx.left_y2 = false;
             ctx.left_bmode = [tables::B_DC_PRED; 4];
+            // RFC 6386 §9.5: macroblock row `row` reads its coefficient
+            // tokens from partition `row % num_partitions`.
+            let Some(token_bd) = token_bds.get_mut(row % num_token_partitions) else {
+                continue;
+            };
             for col in 0..state.mb_cols {
-                decode_macroblock(&mut bd, &mut residual_bd, &mut ctx, &state.entropy, &state.refs, sign_bias, col, row);
+                decode_macroblock(&mut bd, token_bd, &mut ctx, &state.entropy, &state.refs, sign_bias, col, row);
             }
         }
 
@@ -1309,3 +1360,54 @@ pub static VP8_DECODER: DecoderDesc = DecoderDesc {
     supported_rates: &[],
     make: |limits| Box::new(Vp8Decoder::new(limits)),
 };
+
+#[cfg(test)]
+mod token_partition_tests {
+    use super::split_token_partitions;
+
+    #[test]
+    fn single_partition_is_the_whole_slice_unmodified() {
+        let residual = [1u8, 2, 3, 4, 5];
+        let parts = split_token_partitions(&residual, 1);
+        assert_eq!(parts, vec![&residual[..]]);
+    }
+
+    #[test]
+    fn four_partitions_split_on_the_rfc_6386_9_5_size_table() {
+        // Size table (3 bytes each, little-endian) for 3 non-last
+        // partitions of sizes 2, 3 and 1, followed by their data and then
+        // whatever remains for the fourth (last) partition.
+        let mut residual = Vec::new();
+        residual.extend_from_slice(&[2, 0, 0]); // partition 0 size = 2
+        residual.extend_from_slice(&[3, 0, 0]); // partition 1 size = 3
+        residual.extend_from_slice(&[1, 0, 0]); // partition 2 size = 1
+        residual.extend_from_slice(&[0xAA, 0xAB]); // partition 0 data (2 bytes)
+        residual.extend_from_slice(&[0xBA, 0xBB, 0xBC]); // partition 1 data (3 bytes)
+        residual.extend_from_slice(&[0xCA]); // partition 2 data (1 byte)
+        residual.extend_from_slice(&[0xDA, 0xDB, 0xDC, 0xDD]); // partition 3 (last, remainder)
+
+        let parts = split_token_partitions(&residual, 4);
+        let want: [&[u8]; 4] = [&[0xAA, 0xAB], &[0xBA, 0xBB, 0xBC], &[0xCA], &[0xDA, 0xDB, 0xDC, 0xDD]];
+        assert_eq!(parts, want);
+    }
+
+    #[test]
+    fn a_size_table_that_does_not_fit_yields_empty_partitions_rather_than_panicking() {
+        let residual = [0u8, 1]; // far too short for an 8-partition table (21 bytes)
+        let parts = split_token_partitions(&residual, 8);
+        assert_eq!(parts.len(), 8);
+        assert!(parts.iter().all(|p| p.is_empty()));
+    }
+
+    #[test]
+    fn a_size_that_overruns_the_buffer_is_clamped_not_out_of_bounds() {
+        let mut residual = Vec::new();
+        residual.extend_from_slice(&[0xFF, 0xFF, 0xFF]); // partition 0 "size" = 16MB-ish, way past the buffer
+        residual.extend_from_slice(&[1, 2, 3]); // only 3 bytes actually follow
+        let parts = split_token_partitions(&residual, 2);
+        // Clamped to whatever is actually left, and the last partition gets
+        // nothing since the first one already consumed the rest.
+        let want: [&[u8]; 2] = [&[1, 2, 3], &[]];
+        assert_eq!(parts, want);
+    }
+}

@@ -31,10 +31,16 @@ codec id `vp8` via `VP8_DECODER`.
 
 ### What is deliberately not here
 
-**Threading.** RFC 6386 allows multiple DCT token partitions specifically so
-rows can be decoded in parallel; this decoder reads only the first token
-partition regardless of `log2_nbr_of_dct_partitions`, so a stream with more
-than one token partition will decode incorrectly. See `TECH-DEBT.md`.
+**Actual multi-threaded decode.** RFC 6386 allows multiple DCT token
+partitions specifically so rows can be decoded in parallel, and this
+decoder now reads the *correct* partition for every row
+(`decode::split_token_partitions`, row `r` reads partition
+`r % num_partitions`) -- verified byte-identical against
+`ffmpeg -c:v libvpx` for 1/2/4/8-partition streams from `vpxenc
+--token-parts={0,1,2,3}`. What is still missing is running those partitions
+on separate OS threads: the row loop in `decode_frame` is one sequential
+pass over one `Vec<BoolDecoder>`, not `vaco-codec-core`'s
+`SliceThreadedDecoder` machinery.
 
 **AV1/VP9.** `vaco-codec-msac`'s VP9 boolean engine and this crate's own
 prediction/transform math are written so a VP9 base decoder can reuse the
@@ -129,12 +135,13 @@ it through.
 
 ## How to change it
 
-- **Adding threading / multiple token partitions** — the two-`BoolDecoder`
-  split in `decode_macroblock` already keeps mode/MV records and coefficient
-  tokens on separate streams; the remaining work is picking the right token
-  partition per macroblock row (`header.rs` already parses
-  `log2_nbr_of_dct_partitions` and the partition-size table, see
-  `FrameHeader`) rather than hardcoding partition 0.
+- **Adding actual multi-threaded decode** — `decode_frame` already builds
+  one `BoolDecoder` per token partition and picks the right one per
+  macroblock row (`split_token_partitions`, `row % num_partitions`); what is
+  left is splitting the row loop itself across OS threads (likely via
+  `vaco-codec-core::threading`'s `SliceThreadedDecoder`), which needs a
+  synchronisation point per row for intra/inter prediction's above-row
+  context, not just for the token partitions.
 - **Touching Y2 DC folding** — there are two copies
   (`decode::predict_and_write_16` for intra, `decode::reconstruct_inter`'s Y
   loop for inter). Fix both, or better, factor them into one function; see
@@ -220,6 +227,18 @@ Dev-only: `proptest`. No external runtime dependencies.
   112 frames total, 0 non-bit-exact, across all four RFC 6386 version
   profiles (0-3), both key and inter frames, SPLITMV, golden/altref
   reference usage, segmentation and non-16-multiple cropping.
+
+- **Multi-partition token decode** (C-16d): built `vpxenc` from source
+  (`v1.16.0`, `--enable-examples`) since neither `vpxenc` nor `vpxdec` ships
+  in the `libvpx` Homebrew bottle ffmpeg links against, then encoded the
+  same `testsrc2` content with `--token-parts={0,1,2,3}` (1, 2, 4 and 8
+  token partitions) at 176x144 and 352x288. Decoded each with this crate
+  and separately with `ffmpeg -c:v libvpx`, `cmp`-compared the raw YUV 4:2:0
+  output: byte-identical in every case, including the 352x288/8-partition
+  case where `mb_rows` (18) exceeds `num_partitions`, exercising the
+  `row % num_partitions` wraparound. The single-partition case was
+  re-verified at the same time as a regression check (unchanged from the
+  original 112-frame result).
 
 ## Specification
 
