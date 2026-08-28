@@ -9,11 +9,19 @@
 //! afterward, at [`finish`], and appended: this is the same "moov at the end"
 //! shape `ffmpeg 8.1`'s own default `mov` muxer produces.
 //!
-//! `mdat` always uses the 16-byte `largesize` header (`size==1`, then an
-//! 8-byte real size) even for a small file. That is a legal, if slightly
-//! wasteful, ISOBMFF box, and it means the header never has to change size
-//! once written — which matters because [`finish`] patches the size field in
-//! place by seeking back to it.
+//! `mdat` is written with an 8-byte small header (`size`+`"mdat"`) and its
+//! size field is a zero placeholder until [`finish`] seeks back and patches
+//! it. The `free`/`wide` box written just before it ([`placeholder_box`]) is
+//! not decoration: it is the reference's own **reservation** for the case
+//! where the payload turns out to need a 64-bit size. A small header can only
+//! ever state a size up to `u32::MAX`; if the final payload does not fit,
+//! [`finish`] backs up *into* the reservation and overwrites both boxes at
+//! once with one 16-byte extended header (`size==1`, `"mdat"`, an 8-byte
+//! `largesize`) — the placeholder's 8 bytes plus the small header's 8 bytes
+//! being exactly the 16 the extended form needs, so nothing already written
+//! after it ever has to move. Measured against `ffmpeg -c copy -f mp4`
+//! (CONFORMANCE-FINDINGS 49): a 6242-byte payload gets the small, 32-bit
+//! form; this crate wrote the extended form unconditionally before this fix.
 //!
 //! # `faststart`
 //!
@@ -46,8 +54,11 @@ use crate::meta::build_udta;
 use crate::options::{Brand, MuxOptions};
 use crate::track::TrackState;
 
-/// Bytes of the `largesize` `mdat` header this crate always writes:
-/// `size==1`(4) + `"mdat"`(4) + `largesize`(8).
+/// Bytes of the extended `largesize` `mdat` header: 4-byte `size==1`, 4-byte
+/// `"mdat"`, 8-byte `largesize`. Used unconditionally by the `faststart`
+/// path, which knows the final payload length before writing a single byte
+/// and so never needs the small-header/reservation dance [`finish_streaming`]
+/// does.
 const MDAT_HEADER_LEN: u64 = 16;
 
 /// Passes [`finish`]'s faststart fixed point is allowed before giving up —
@@ -66,7 +77,9 @@ struct OpenChunk {
 /// Progressive-mode session state, carried by [`crate::mux::MovMuxer`].
 #[derive(Debug)]
 pub struct ProgressiveState {
-    /// Absolute position of the 8-byte `largesize` field, once written.
+    /// Absolute position of the small header's 4-byte `size` field, once
+    /// written — the *start* of the small `mdat` box, 8 bytes after the
+    /// `free`/`wide` reservation's own start.
     mdat_size_field_at: u64,
     open_chunk: Option<OpenChunk>,
     /// `Some` under `faststart`: every sample's payload accumulates here
@@ -114,10 +127,11 @@ pub fn write_header(
         state.mdat_buf = Some(Vec::new());
     } else {
         out.write(&placeholder_box(opts.brand))?;
-        out.write(&1u32.to_be_bytes())?; // size == 1: largesize follows
-        out.write(b"mdat")?;
         state.mdat_size_field_at = out.pos();
-        out.write(&0u64.to_be_bytes())?; // patched in `finish`
+        out.write(&0u32.to_be_bytes())?; // patched in `finish`: a 32-bit size,
+        // or backed into the reservation above to form a 64-bit one — see the
+        // module docs.
+        out.write(b"mdat")?;
     }
     Ok(())
 }
@@ -242,10 +256,25 @@ fn finish_streaming(
 ) -> Result<()> {
     let end = out.pos();
     if out.is_seekable() {
-        let mdat_box_start = state.mdat_size_field_at.saturating_sub(8);
-        let total = end.saturating_sub(mdat_box_start);
-        out.seek(state.mdat_size_field_at)?;
-        out.write(&total.to_be_bytes())?;
+        // `total` is the small header (8 bytes) plus the payload — exactly
+        // what the box's own `size` field states when it fits in 32 bits.
+        let total = end.saturating_sub(state.mdat_size_field_at);
+        if let Ok(total32) = u32::try_from(total) {
+            out.seek(state.mdat_size_field_at)?;
+            out.write(&total32.to_be_bytes())?;
+        } else {
+            // Does not fit: back up into the `free`/`wide` reservation
+            // written just before this box (module docs) and overwrite both
+            // as one 16-byte extended header. `ext_total` adds the
+            // reservation's own 8 bytes back in, since they are now part of
+            // the header rather than a separate box.
+            let ext_start = state.mdat_size_field_at.saturating_sub(8);
+            let ext_total = total.saturating_add(8);
+            out.seek(ext_start)?;
+            out.write(&1u32.to_be_bytes())?; // size == 1: largesize follows
+            out.write(b"mdat")?;
+            out.write(&ext_total.to_be_bytes())?;
+        }
         out.seek(end)?;
     }
     let moov = build_moov(tracks, opts, movie_timescale, 0);
@@ -308,9 +337,13 @@ fn build_moov(
             .map_or(0, vaco_format_isom::movie::from_unix_time)
     };
 
+    // `presented_duration`, not `media_duration`: the reference's `mvhd`
+    // duration excludes the initial reorder-delay lead-in an edit list skips
+    // over, the same adjustment `build_trak`'s `tkhd` duration makes
+    // (CONFORMANCE-FINDINGS 49).
     let movie_duration = tracks
         .iter()
-        .map(|t| rescale(t.media_duration(), t.timescale, movie_timescale))
+        .map(|t| rescale(t.presented_duration(), t.timescale, movie_timescale))
         .max()
         .unwrap_or(0);
     let next_track_id = tracks
@@ -348,7 +381,9 @@ fn build_trak(
     creation_time: u64,
     offset_shift: u64,
 ) -> Vec<u8> {
-    let track_duration = rescale(track.media_duration(), track.timescale, movie_timescale);
+    // Post-edit duration (see `build_moov`'s comment on the same call) —
+    // `mdhd`, below, uses the raw, un-adjusted `media_duration` instead.
+    let track_duration = rescale(track.presented_duration(), track.timescale, movie_timescale);
 
     let mut minf = Vec::new();
     minf.extend_from_slice(&match track.media {
@@ -382,13 +417,34 @@ fn build_trak(
         width: track.width,
         height: track.height,
     });
+    trak.extend_from_slice(&build_edts(track, movie_timescale));
     trak.extend_from_slice(&vaco_format_isom::build::bx(b"mdia", &mdia));
     vaco_format_isom::build::bx(b"trak", &trak)
 }
 
+/// `edts`/`elst`: one entry, always. Measured on `ffmpeg -c copy -f mp4`
+/// across three inputs — a reordered stream, a non-reordered one, and a raw
+/// H.264 elementary stream with no container edit-list concept of its own —
+/// and every track in every one of them gets exactly one `elst` entry, `0`
+/// `media_time` included, so this is not conditioned on reordering being
+/// present at all (CONFORMANCE-FINDINGS 49). `rate` is always `1.0`
+/// (`0x0001_0000`, 16.16 fixed) — no measurement has produced anything else.
+fn build_edts(track: &TrackState, movie_timescale: u32) -> Vec<u8> {
+    let media_time = track.media_time();
+    let segment_duration = rescale(track.presented_duration(), track.timescale, movie_timescale);
+    let mut body = Vec::new();
+    body.extend_from_slice(&1u32.to_be_bytes()); // entry_count
+    body.extend_from_slice(&u32::try_from(segment_duration).unwrap_or(u32::MAX).to_be_bytes());
+    body.extend_from_slice(&media_time.to_be_bytes());
+    body.extend_from_slice(&0x0001_0000u32.to_be_bytes()); // rate 1.0
+    let elst = vaco_format_isom::build::fullbx(b"elst", 0, 0, &body);
+    vaco_format_isom::build::bx(b"edts", &elst)
+}
+
 fn build_stbl(track: &TrackState, offset_shift: u64) -> Vec<u8> {
     let mut body = Vec::new();
-    body.extend_from_slice(&writer::stsd(std::slice::from_ref(&track.entry.bytes)));
+    let entry = with_btrt(track);
+    body.extend_from_slice(&writer::stsd(std::slice::from_ref(&entry)));
     body.extend_from_slice(&writer::stts(&track.stts_runs()));
     // `stss` before `ctts`. The order of `stbl`'s children is unconstrained by
     // the specification and load-bearing for byte-identity; measured on
@@ -411,6 +467,62 @@ fn build_stbl(track: &TrackState, offset_shift: u64) -> Vec<u8> {
         .collect();
     body.extend_from_slice(&writer::chunk_offsets(&offsets));
     vaco_format_isom::build::bx(b"stbl", &body)
+}
+
+/// [`TrackState::entry`]'s bytes plus a trailing `btrt`. Appended here
+/// instead of at [`crate::entry::build`] time because the fallback bitrate
+/// (used when the source declared none at all) needs the total payload size
+/// and the track's own duration, neither of which exists until every sample
+/// has been written. Measured, written unconditionally for both video and
+/// audio (CONFORMANCE-FINDINGS 49): `bufferSizeDB` is always `0`,
+/// `maxBitrate == avgBitrate`.
+fn with_btrt(track: &TrackState) -> Vec<u8> {
+    let (max_bitrate, avg_bitrate) = track_bitrate(track);
+    let btrt = writer::btrt(0, max_bitrate, avg_bitrate);
+    append_child(&track.entry.bytes, &btrt)
+}
+
+/// The bitrate `btrt` carries: the container's own declared `bit_rate`,
+/// copied straight through, when there is one — measured, an MP4-sourced
+/// H.264 track's `bit_rate=8312` becomes `0x2078` verbatim on a stream copy —
+/// or a derived average (total payload bits over the track's own presented
+/// duration) when the source declares none at all, which a raw H.264
+/// elementary stream never does. Measured: the reference still writes a
+/// `btrt` in that case rather than omitting it, so this crate must produce
+/// *some* number rather than leaving the box out.
+fn track_bitrate(track: &TrackState) -> (u32, u32) {
+    if let Some(bit_rate) = track.params.bit_rate.filter(|&b| b > 0) {
+        let v = u32::try_from(bit_rate).unwrap_or(u32::MAX);
+        return (v, v);
+    }
+    let total_bytes: u64 = track.samples.iter().map(|s| u64::from(s.size)).sum();
+    let duration_ticks = track.media_duration();
+    if duration_ticks == 0 || track.timescale == 0 {
+        return (0, 0);
+    }
+    let bits = total_bytes.saturating_mul(8);
+    let scaled = u128::from(bits).saturating_mul(u128::from(track.timescale));
+    #[allow(
+        clippy::integer_division,
+        reason = "an average bitrate is a genuine floor division of total bits by duration, not a stand-in for an exact one"
+    )]
+    let rate = scaled / u128::from(duration_ticks);
+    let v = u32::try_from(rate).unwrap_or(u32::MAX);
+    (v, v)
+}
+
+/// Append `child` to an already-framed box's bytes, patching the leading
+/// 4-byte size field in place — how [`with_btrt`] adds a `btrt` after
+/// [`crate::entry::build`] already framed the sample entry, without that
+/// function needing to know a fallback bitrate it cannot yet compute.
+fn append_child(entry_bytes: &[u8], child: &[u8]) -> Vec<u8> {
+    let mut out = entry_bytes.to_vec();
+    out.extend_from_slice(child);
+    let new_len = u32::try_from(out.len()).unwrap_or(u32::MAX);
+    if let Some(size_field) = out.get_mut(0..4) {
+        size_field.copy_from_slice(&new_len.to_be_bytes());
+    }
+    out
 }
 
 fn handler_name(handler: vaco_format_isom::fourcc::FourCc) -> &'static str {

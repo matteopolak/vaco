@@ -62,27 +62,33 @@ pub fn parse_iso639(s: &str) -> Option<Language> {
     }
 }
 
-/// `udta`, built from `opts.tags`/`opts.cover_art`/`opts.chapters`. `None`
-/// when there is nothing to write — an empty `udta` is legal but pointless.
+/// `udta`, built from `opts.tags`/`opts.cover_art`/`opts.chapters`.
+///
+/// The `udta ▸ meta ▸ hdlr ▸ ilst` shell is written **unconditionally** —
+/// measured on `ffmpeg -c copy -f mp4` across four inputs, including a raw
+/// H.264 elementary stream with no metadata of its own at all: every one
+/// gets the shell, with an 8-byte, childless `ilst` when there is nothing to
+/// put in it (CONFORMANCE-FINDINGS 49). `None` only when even the shell would
+/// be pointless — never true for the progressive path, which always calls
+/// this, but kept so a future caller with no shell to write is not forced to
+/// invent one.
 #[must_use]
 pub fn build_udta(opts: &MuxOptions) -> Option<Vec<u8>> {
     let mut udta_children = Vec::new();
 
-    if !opts.tags.is_empty() || opts.cover_art.is_some() {
-        let mut items = Vec::new();
-        for (key, value) in &opts.tags {
-            items.extend_from_slice(&writer::ilst_text(FourCc::new(key), value));
-        }
-        if let Some(art) = &opts.cover_art {
-            items.extend_from_slice(&writer::covr(art.is_png, &art.data));
-        }
-        let ilst_bytes = writer::ilst(&items);
-        // `mdir`/`mdta` handler type, matching what `ffmpeg 8.1` writes for
-        // its iTunes-style `meta` (measured against a file muxed with
-        // `-metadata title=...`).
-        let hdlr_bytes = writer::hdlr(FourCc::new(b"mdir"), "");
-        udta_children.extend_from_slice(&writer::meta(&hdlr_bytes, &ilst_bytes));
+    let mut items = Vec::new();
+    for (key, value) in &opts.tags {
+        items.extend_from_slice(&writer::ilst_text(FourCc::new(key), value));
     }
+    if let Some(art) = &opts.cover_art {
+        items.extend_from_slice(&writer::covr(art.is_png, &art.data));
+    }
+    let ilst_bytes = writer::ilst(&items);
+    // `mdir`/`mdta` handler type, matching what `ffmpeg 8.1` writes for
+    // its iTunes-style `meta` (measured against a file muxed with
+    // `-metadata title=...`).
+    let hdlr_bytes = writer::hdlr(FourCc::new(b"mdir"), "");
+    udta_children.extend_from_slice(&writer::meta(&hdlr_bytes, &ilst_bytes));
 
     if !opts.chapters.is_empty() {
         let entries: Vec<Vec<u8>> = opts

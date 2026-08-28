@@ -164,12 +164,18 @@ impl Muxer for MovMuxer {
     }
 
     fn init(&mut self) -> Result<()> {
-        // A caller may still want a specific movie timescale; absent one,
-        // the largest track timescale keeps every track's duration an exact
-        // (or close) multiple, which is what `ffmpeg 8.1` itself gravitates
-        // toward for a single-track file (measured: an audio-only AAC/48000
-        // file's `mvhd.timescale` is `48000`, not `1000`).
-        if let Some(max_ts) = self.tracks.iter().map(|t| t.timescale).max()
+        // `DEFAULT_MOVIE_TIMESCALE` (1000) whenever any track is video —
+        // measured on `ffmpeg -c copy -f mp4` across a video-only reordered
+        // stream, a video-only non-reordered one, a raw H.264 elementary
+        // stream, and a video+audio file: `mvhd.timescale` is `1000` in every
+        // one, never the video track's own (CONFORMANCE-FINDINGS 49; a
+        // 12800Hz video track timescale stays `1000` at the movie level).
+        // Audio-only is the one case that gets the track's own timescale
+        // instead (measured: an audio-only AAC/48000 file's `mvhd.timescale`
+        // is `48000`), which is what this falls through to below.
+        let has_video = self.tracks.iter().any(|t| t.media == MediaType::Video);
+        if !has_video
+            && let Some(max_ts) = self.tracks.iter().map(|t| t.timescale).max()
             && max_ts > 0
         {
             self.movie_timescale = max_ts;
@@ -300,6 +306,18 @@ impl Muxer for MovMuxer {
             .map(TrackState::time_base)
     }
 
+    /// Reaches [`MuxOptions::bitexact`], which existed already (it already
+    /// suppresses `creation_time_unix`) but had no caller: nothing in this
+    /// crate overrode the trait's no-op default, so `-fflags +bitexact` on
+    /// the output never actually reached it — the same "an API with no
+    /// caller is invisible to every test you will write" shape
+    /// `planning/AGENT-CONSTRAINTS.md` warns about, found the same way it
+    /// says to find it: running the command a user would run and comparing
+    /// against the reference (CONFORMANCE-FINDINGS 49).
+    fn set_bitexact(&mut self, bitexact: bool) {
+        self.opts.bitexact = bitexact;
+    }
+
     fn check_bitstream(&mut self, params: &CodecParameters, pkt: &Packet) -> Result<BitstreamAction> {
         // Without this, a `GLOBALHEADER` track with empty extradata asks for
         // `extract_extradata` on every one of `decide_bitstream`'s re-asks:
@@ -378,7 +396,19 @@ impl MovMuxer {
         // `ilst` at all (see that function's docs for why the rest are
         // dropped rather than guessed at). A later `-metadata` for the same
         // key replaces rather than duplicates the atom.
+        //
+        // `encoder` is dropped outright under `bitexact`: measured, an
+        // MP4-sourced `encoder=Lavf62.12.100` tag (carried in from the
+        // *input's* own metadata on a stream copy, not fabricated by this
+        // crate) reaches `©too` under a plain remux but is absent from the
+        // reference's own bitexact output — and an *explicit*
+        // `-metadata title=...` still comes through under bitexact, so this
+        // is specifically the auto-populated tool tag, not metadata in
+        // general (CONFORMANCE-FINDINGS 49).
         for (key, value) in &self.metadata.tags {
+            if self.opts.bitexact && key.eq_ignore_ascii_case("encoder") {
+                continue;
+            }
             if let Some(fourcc) = meta::itunes_fourcc(key) {
                 self.opts.tags.retain(|(k, _)| *k != fourcc);
                 self.opts.tags.push((fourcc, value.clone()));

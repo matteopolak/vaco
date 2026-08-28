@@ -177,6 +177,58 @@ impl TrackState {
         self.chunks.iter().map(|c| c.offset).collect()
     }
 
+    /// The `elst`/`media_time` value this crate can actually produce: the
+    /// decode-order-first sample's composition offset (`cts_offset`, clamped
+    /// to non-negative), *not* `-dts` of that sample.
+    ///
+    /// The reference derives `media_time` from the encoder's original,
+    /// possibly-negative `dts` (measured, CONFORMANCE-FINDINGS 49: an AAC
+    /// track with `pts == dts` throughout, so every `cts_offset` is `0`,
+    /// still gets a nonzero `media_time` when its own first `dts` is
+    /// negative — a fact `cts_offset` alone cannot see). This crate cannot
+    /// reproduce that in general: by the time a packet reaches
+    /// [`crate::mux::MovMuxer::write_packet`], whatever normalized its `dts`
+    /// upstream (outside this crate — the pipeline the CLI drives, not
+    /// `vaco-mux-mp4`) has already shifted decode-order-first `dts` to `0`,
+    /// discarding the original negative baseline `-dts` would need.
+    /// `cts_offset` is the one piece of that shift's *effect* survives the
+    /// normalization unchanged, since a uniform shift to both `pts` and
+    /// `dts` cancels out of their difference — and it happens to equal the
+    /// true `media_time` exactly whenever the encoder's original
+    /// presentation actually starts at `pts == 0`, which every measured case
+    /// except encoder-priming audio does. See `presented_duration`'s docs
+    /// for the other half of the same gap.
+    #[must_use]
+    pub fn media_time(&self) -> u32 {
+        let v = self.samples.first().map_or(0, |s| s.cts_offset).max(0);
+        u32::try_from(v).unwrap_or(u32::MAX)
+    }
+
+    /// [`TrackState::media_duration`] minus however far the decode-order-
+    /// first sample's `pts` (`dts + cts_offset`) sits below zero — `0`
+    /// whenever [`TrackState::media_time`]'s normalized `dts` starts at `0`
+    /// and `cts_offset` is non-negative there, which is every case this
+    /// crate can currently observe (see that method's docs on why the
+    /// upstream `dts` normalization makes this the effective default).
+    /// Measured (CONFORMANCE-FINDINGS 49): a reordered video track's
+    /// `elst.segment_duration`/`tkhd`/`mvhd` state its **full**, un-adjusted
+    /// duration — the reorder delay is not lost time, only reordered time —
+    /// while the reference's own encoder-priming audio case (not
+    /// reproducible here, see `media_time`) loses exactly its priming delay.
+    /// Subtracting `media_time` unconditionally, rather than this
+    /// pts-below-zero check, was tried and measured wrong: it shrank the
+    /// reordered video track's duration by its `dts` lead-in even though
+    /// nothing was actually cut from it.
+    #[must_use]
+    pub fn presented_duration(&self) -> u64 {
+        let pts0 = self
+            .samples
+            .first()
+            .map_or(0, |s| s.dts.saturating_add(i64::from(s.cts_offset)));
+        let lead = u64::try_from(pts0.saturating_neg().max(0)).unwrap_or(0);
+        self.media_duration().saturating_sub(lead)
+    }
+
     /// `stsc`: `(first_chunk, samples_per_chunk, sample_description_index)`
     /// runs, one-based chunk numbers, compressed from consecutive equal
     /// per-chunk sample counts. `sample_description_index` is always `1` —
@@ -297,6 +349,55 @@ mod tests {
         });
         assert_eq!(t.stsc_runs(), vec![(1, 3, 1), (3, 1, 1)]);
         assert_eq!(t.chunk_offset_list(), vec![0, 30, 60]);
+    }
+
+    #[test]
+    fn media_time_is_zero_with_no_reordering_or_priming() {
+        let mut t = TrackState::new(1, 1000, entry(), params());
+        push(&mut t, 0, 10, 0, 0, true);
+        push(&mut t, 10, 10, 100, 0, false);
+        t.last_duration_hint = 100;
+        assert_eq!(t.media_time(), 0);
+        assert_eq!(t.presented_duration(), t.media_duration());
+    }
+
+    /// A reordered video track: `dts` starts negative (decode-ahead delay)
+    /// but the first sample's `pts` is still `0`, so nothing is actually
+    /// missing from what gets presented — `media_time` is nonzero but
+    /// `presented_duration` keeps the full span (CONFORMANCE-FINDINGS 49).
+    #[test]
+    fn reordering_sets_media_time_without_shrinking_the_presented_duration() {
+        let mut t = TrackState::new(1, 12800, entry(), params());
+        // First sample in decode order: pts = dts + cts_offset = -1024 + 1024 = 0.
+        push(&mut t, 0, 10, -1024, 1024, true);
+        push(&mut t, 10, 10, -512, 2560, false);
+        push(&mut t, 20, 10, 0, 1024, false);
+        t.last_duration_hint = 512;
+        assert_eq!(t.media_time(), 1024);
+        assert_eq!(t.presented_duration(), t.media_duration());
+    }
+
+    /// An AAC-style priming case: no reordering at all (`cts_offset` is
+    /// always `0`), but the first sample's `dts` (and so its `pts`, since
+    /// they are equal) starts negative. `presented_duration` still gets this
+    /// right given a genuinely negative `dts` — but `media_time` cannot: it
+    /// only ever sees `cts_offset`, which is `0` here, so it reports `0`
+    /// where the reference would state `1024`. This is
+    /// `TrackState::media_time`'s documented pipeline-normalization gap,
+    /// demonstrated directly rather than only asserted in prose
+    /// (CONFORMANCE-FINDINGS 49): the real pipeline never actually hands
+    /// this crate a negative `dts` (something upstream already normalizes it
+    /// to `0` first), so `media_time` degrades to this rather than doing
+    /// worse than it does.
+    #[test]
+    fn media_time_cannot_see_a_priming_delay_that_presented_duration_can() {
+        let mut t = TrackState::new(1, 44_100, entry(), params());
+        push(&mut t, 0, 10, -1024, 0, true);
+        push(&mut t, 10, 10, 0, 0, false);
+        push(&mut t, 20, 10, 1024, 0, false);
+        t.last_duration_hint = 1024;
+        assert_eq!(t.media_time(), 0, "cts_offset alone cannot see a negative dts");
+        assert_eq!(t.presented_duration(), t.media_duration() - 1024);
     }
 
     #[test]
