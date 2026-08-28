@@ -49,6 +49,10 @@ container needs one to know its frame size. `hcom`, `epaf`, `mmf`, `qcp`,
 turned out to nest a further `Atsq`/`Awa` sub-chunk structure once measured,
 past what this pass's time budget covered.
 
+**`nistsphere`/`pvf`'s raw-PCM packet batching**, unlike everything above,
+is not an unattempted format — it is a real, partially-measured divergence
+left unresolved on purpose. See "The `BlockDemuxer` batching bug" below.
+
 **#620 (tracker/module and chiptune-adjacent):** the tracker half (IT, XM,
 S3M, MOD, and the rest of the family the reference reaches through
 `libopenmpt`) is recorded as a D10 exclusion — see
@@ -89,11 +93,29 @@ recorded reason rather than simply "ran out of time":
 Once a format's header (if it has one) is parsed down to `(sample_rate,
 channels, bytes_per_block, frames_per_block, data_start, declared_len)`,
 `BlockDemuxer` does the rest: clamps `declared_len` against the source's own
-size, reads ~4096-byte packets rounded down to a whole number of blocks
-(discarding a partial trailing block, never emitting a short final block as
-if it were whole), and stamps `pts`/`duration` from a running block count.
-`adx`, `nistsphere`, `pvf`, and every entry in `rawcodec` are this engine
-plus their own header.
+size, reads packets sized to a **required, per-caller `target_packet_bytes`**
+rounded down to a whole number of blocks (discarding a partial trailing
+block, never emitting a short final block as if it were whole), and stamps
+`pts`/`duration` from a running block count. `adx`, `nistsphere`, `pvf`, and
+every entry in `rawcodec` are this engine plus their own header.
+
+**`target_packet_bytes` is a measured constant, not a shared default.**
+This used to be a single hardcoded 4096-byte target for every consumer —
+found wrong via `vag` (see below), which does not use `BlockDemuxer` at
+all specifically because its reference packet size (16 bytes, one per
+block) is nothing like 4096. Measuring every `BlockDemuxer` consumer
+individually against `ffprobe -show_packets` found the reference emits
+**one packet per block** for `adx`, `gsm` and `g729` (18/33/10 bytes), and
+a *different fixed byte count per format* for everything else in
+`rawcodec`: 1024 for `g722`/`aptx`/`sln`, 1020 for `g726`/`g726le`/`g728`,
+512 for `dfpwm`, 1536 for `aptx_hd`. These do not reduce to one formula —
+`g722` and `g726` share the same 1:2 byte:frame ratio and the same fixed
+sample rate family, yet batch into different byte counts — so each is its
+own hardcoded, measured constant (`RawCodecSpec::target_packet_bytes`, or
+the literal block size for `adx`). `nistsphere`/`pvf`'s raw-PCM tail still
+pass the old, **unmeasured** `4096` (`block::DEFAULT_TARGET_PACKET_BYTES`)
+— see "Deliberately not in this crate" below for why that one was not
+chased to ground.
 
 ### `vag` and `xwma` — hand-built fixtures, measured against `ffprobe`
 
@@ -107,11 +129,13 @@ predicted:
 
 - **`vag` emits one packet per 16-byte block**, not batched — confirmed
   directly against `-show_packets` (ten blocks, ten packets, `pts`
-  advancing by 28 samples each). This is why `vag.rs` does **not** reuse
-  this crate's own `BlockDemuxer` (which batches, see "A real, measured
-  divergence" in `vag.rs`'s own module doc, and the tech-debt entry it
-  cross-references for that pre-existing divergence in five *other*
-  formats in this crate).
+  advancing by 28 samples each). `vag.rs` does not reuse this crate's own
+  `BlockDemuxer` (it predates the fix below and its own small loop was
+  simpler than threading a new parameter through). Finding this here is
+  what surfaced that `BlockDemuxer` itself batched every other consumer
+  into oversized packets — a real, pre-existing divergence affecting
+  `adx` and all ten `rawcodec` formats, since fixed (see
+  `block::BlockDemuxer`'s entry above and `planning/TECH-DEBT.md`).
 - **`xwma`'s packets are `nBlockAlign`-aligned reads of `data`, not the
   `dpds` chunk's declared split.** `dpds` looks exactly like a per-packet
   byte-offset table and MultimediaWiki describes it that way, but a
@@ -139,20 +163,26 @@ duration for. `tests/differential.rs` opens each fixture through its real
 `DemuxerDesc` and checks it against `ffprobe -show_entries
 stream=sample_rate,channels -show_entries format=duration`:
 
-| Fixture | `sample_rate` | `channels` | reference duration | notes |
-|---|---:|---:|---:|---|
-| `wavpack.wv` | 44100 | 2 | 0.300 s | |
-| `tta.tta` | 44100 | 2 | 0.300 s | |
-| `adx.adx` | 8000 | 1 | 0.304 s | reference `duration_ts` is block ticks (`time_base=1/250`), not samples — see below |
-| `g722.g722` | 16000 | 1 | 0.150 s | |
-| `g726.g726` | 8000 | 1 | 0.300 s | reference `time_base=1/90000` (a generic raw-audio fallback), not samples |
-| `g726le.g726le` | 8000 | 1 | 0.300 s | as `g726` |
-| `aptx.aptx` | 48000 | 2 | *(reference: N/A)* | this crate estimates a duration from the file size; the reference's raw `aptx` demuxer declines to |
-| `aptx_hd.aptx_hd` | 48000 | 2 | *(reference: N/A)* | as `aptx` |
-| `sbc.sbc` | 16000 | 1 | *(reference: N/A)* | self-delimited, no declared total |
-| `g723_1.g723_1` | 8000 | 1 | *(reference: N/A)* | self-delimited, no declared total |
-| `vag.vag` | 22050 | 1 | 0.012698 s | one packet per 16-byte block, matching the reference exactly |
-| `xwma.xwma` | 8000 | 1 | 0.350 s | fixture deliberately has no `dpds` chunk — see the `duration_ts` anomaly above |
+| Fixture | `sample_rate` | `channels` | reference duration | reference packet sizes | notes |
+|---|---:|---:|---:|---|---|
+| `wavpack.wv` | 44100 | 2 | 0.300 s | not checked | |
+| `tta.tta` | 44100 | 2 | 0.300 s | not checked | |
+| `adx.adx` | 8000 | 1 | 0.304 s | 76×18 bytes | reference `duration_ts` is block ticks (`time_base=1/250`), not samples — see below. One packet per block, not batched (fixed, see below) |
+| `g722.g722` | 16000 | 1 | 0.150 s | 1024, 176 bytes | |
+| `g726.g726` | 8000 | 1 | 0.300 s | 1020, 180 bytes | reference `time_base=1/90000` (a generic raw-audio fallback), not samples |
+| `g726le.g726le` | 8000 | 1 | 0.300 s | 1020, 180 bytes | as `g726` |
+| `aptx.aptx` | 48000 | 2 | *(reference: N/A)* | 12×1024, 944 bytes | this crate estimates a duration from the file size; the reference's raw `aptx` demuxer declines to |
+| `aptx_hd.aptx_hd` | 48000 | 2 | *(reference: N/A)* | 14×1536, 96 bytes | as `aptx` |
+| `sbc.sbc` | 16000 | 1 | *(reference: N/A)* | not checked | self-delimited, no declared total |
+| `g723_1.g723_1` | 8000 | 1 | *(reference: N/A)* | not checked | self-delimited, no declared total |
+| `vag.vag` | 22050 | 1 | 0.012698 s | 10×16 bytes | one packet per 16-byte block, matching the reference exactly |
+| `xwma.xwma` | 8000 | 1 | 0.350 s | 100, 100, 100, 50 bytes | fixture deliberately has no `dpds` chunk — see the `duration_ts` anomaly above |
+
+`tests/differential.rs` asserts every "reference packet sizes" cell
+byte-for-byte, not just total bytes or duration — this is the check that
+was missing when `BlockDemuxer`'s batching bug first shipped (see below),
+and it now exists specifically so a future regression here fails a test
+instead of surfacing as a silent divergence again.
 
 Two genuinely measured divergences are recorded here rather than "fixed",
 because fixing them would mean discarding information rather than
@@ -170,6 +200,39 @@ correcting an error:
   `BlockDemuxer` estimates a duration from the file size the same way
   `vaco-format-audio-simple`'s `RawPcmDemuxer` does for headerless PCM; the
   reference's own raw `aptx`/`aptx_hd` demuxer just does not bother.
+
+### The `BlockDemuxer` batching bug, found and fixed
+
+`BlockDemuxer` originally batched many blocks into one packet, targeting
+roughly 4096 bytes, for every consumer — `adx`, `nistsphere`, `pvf`, and
+all ten `rawcodec` formats. Building `vag` and measuring its packet
+granularity against `ffprobe -show_packets` (one packet per 16-byte
+block) surfaced that this batching itself was a divergence from the
+reference, not a design choice: on `adx.adx`'s own 76-block fixture, the
+reference emits 76 separate 18-byte packets, where this crate emitted a
+single 1368-byte one. `#621` and `#622` closed on the strength of
+stream-level fields and "at least one packet produced" — packet-level
+shape was never checked, which is exactly how this survived.
+
+Fixed by measuring **every** `BlockDemuxer` consumer individually rather
+than assuming `vag`'s one-packet-per-block answer generalised: it does
+not. `adx`, `gsm` and `g729` get one packet per block; `g722`, `g726`,
+`g726le`, `g728`, `dfpwm`, `aptx`, `aptx_hd` and `sln` each batch into
+their own distinct, measured, fixed byte count (see the table above and
+`block.rs`'s module doc for the full readout). `BlockDemuxer::new` now
+takes `target_packet_bytes` as a required argument instead of picking one
+itself, so every call site states its own measured answer explicitly.
+
+**Not fixed, for a different and better-justified reason:** `nistsphere`
+and `pvf`'s raw-PCM tail still use the old, unmeasured `4096`-byte
+default (`block::DEFAULT_TARGET_PACKET_BYTES`). Their batching was
+measured to depend on sample rate — a clean "~64 ms per packet, rounded
+to a power of two" formula held from 250 Hz through 16 kHz, then broke
+between 20.4 kHz and 20.6 kHz in a way that did not match any
+closed-form rule tried (not "64 ms", not a simple power-of-two-of-rate
+bracket). Shipping a guessed formula here would risk exactly what this
+whole fix was about avoiding — trading one silent divergence for
+another — so it is recorded honestly in `planning/TECH-DEBT.md` instead.
 
 ### Measured field layouts, not recalled ones
 
