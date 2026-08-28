@@ -146,6 +146,7 @@ vaco-format-spdif = { path = "../crates/format/vaco-format-spdif", optional = tr
 vaco-format-subtitle = { path = "../crates/format/vaco-format-subtitle", optional = true }
 vaco-format-subtitle-bitmap = { path = "../crates/format/vaco-format-subtitle-bitmap", optional = true }
 vaco-format-swf = { path = "../crates/format/vaco-format-swf", optional = true }
+vaco-format-vorbiscomment = { path = "../crates/format/vaco-format-vorbiscomment", optional = true }
 vaco-frame = { path = "../crates/model/vaco-frame", optional = true }
 vaco-io = { path = "../crates/io/vaco-io", optional = true }
 vaco-limits = { path = "../crates/core/vaco-limits", optional = true }
@@ -157,10 +158,12 @@ vaco-mux-stream = { path = "../crates/format/vaco-mux-stream", optional = true }
 vaco-opts = { path = "../crates/core/vaco-opts", optional = true }
 vaco-packet = { path = "../crates/model/vaco-packet", optional = true }
 vaco-parse-aac = { path = "../crates/codec/vaco-parse-aac", optional = true }
+vaco-parse-audio-misc = { path = "../crates/codec/vaco-parse-audio-misc", optional = true }
 vaco-parse-av1 = { path = "../crates/codec/vaco-parse-av1", optional = true }
 vaco-parse-h264 = { path = "../crates/codec/vaco-parse-h264", optional = true }
 vaco-parse-hevc = { path = "../crates/codec/vaco-parse-hevc", optional = true }
 vaco-parse-image = { path = "../crates/codec/vaco-parse-image", optional = true }
+vaco-parse-mpegaudio = { path = "../crates/codec/vaco-parse-mpegaudio", optional = true }
 vaco-parse-mpegvideo = { path = "../crates/codec/vaco-parse-mpegvideo", optional = true }
 vaco-parse-opus = { path = "../crates/codec/vaco-parse-opus", optional = true }
 vaco-parse-vpx = { path = "../crates/codec/vaco-parse-vpx", optional = true }
@@ -304,6 +307,7 @@ default = [
     "format-rtp",
     "format-spdif",
     "format-swf",
+    "format-vorbiscomment",
     "frame",
     "io",
     "limits",
@@ -314,10 +318,12 @@ default = [
     "mux-stream",
     "packet",
     "parse-aac",
+    "parse-audio-misc",
     "parse-av1",
     "parse-h264",
     "parse-hevc",
     "parse-image",
+    "parse-mpegaudio",
     "parse-mpegvideo",
     "parse-opus",
     "parse-vpx",
@@ -457,6 +463,7 @@ format-riff = ["dep:vaco-format-riff", "dep:vaco-limits"]
 format-rtp = ["dep:vaco-format-rtp"]
 format-spdif = ["dep:vaco-core", "dep:vaco-format-core", "dep:vaco-format-spdif", "dep:vaco-io", "dep:vaco-limits"]
 format-swf = ["dep:vaco-core", "dep:vaco-format-core", "dep:vaco-format-swf", "dep:vaco-io", "dep:vaco-limits"]
+format-vorbiscomment = ["dep:vaco-format-vorbiscomment"]
 frame = ["dep:vaco-frame", "dep:vaco-limits", "dep:vaco-pixfmt", "dep:vaco-pool"]
 io = ["dep:vaco-io"]
 limits = ["dep:vaco-limits"]
@@ -467,10 +474,12 @@ mux-mpegts = ["dep:vaco-codec-core", "dep:vaco-core", "dep:vaco-format-core", "d
 mux-stream = ["dep:vaco-core", "dep:vaco-mux-stream"]
 packet = ["dep:vaco-bitstream", "dep:vaco-limits", "dep:vaco-packet", "dep:vaco-pool"]
 parse-aac = ["dep:vaco-bitstream", "dep:vaco-codec-core", "dep:vaco-core", "dep:vaco-limits", "dep:vaco-parse-aac"]
+parse-audio-misc = ["dep:vaco-parse-audio-misc"]
 parse-av1 = ["dep:vaco-codec-cbs", "dep:vaco-codec-core", "dep:vaco-limits", "dep:vaco-parse-av1"]
 parse-h264 = ["dep:vaco-bitstream", "dep:vaco-codec-core", "dep:vaco-core", "dep:vaco-format-nalu", "dep:vaco-limits", "dep:vaco-parse-h264"]
 parse-hevc = ["dep:vaco-bitstream", "dep:vaco-codec-cbs", "dep:vaco-codec-core", "dep:vaco-format-nalu", "dep:vaco-limits", "dep:vaco-parse-hevc"]
 parse-image = ["dep:vaco-codec-core", "dep:vaco-limits", "dep:vaco-parse-image"]
+parse-mpegaudio = ["dep:vaco-codec-core", "dep:vaco-core", "dep:vaco-limits", "dep:vaco-parse-mpegaudio"]
 parse-mpegvideo = ["dep:vaco-codec-core", "dep:vaco-limits", "dep:vaco-parse-mpegvideo"]
 parse-opus = ["dep:vaco-codec-core", "dep:vaco-limits", "dep:vaco-parse-opus"]
 parse-vpx = ["dep:vaco-codec-core", "dep:vaco-limits", "dep:vaco-parse-vpx"]
@@ -1576,6 +1585,14 @@ bench = false
 required-features = ["parse-aac"]
 
 [[bin]]
+name = "parse_audio_misc"
+path = "fuzz_targets/parse_audio_misc.rs"
+test = false
+doc = false
+bench = false
+required-features = ["parse-audio-misc"]
+
+[[bin]]
 name = "parse_av1"
 path = "fuzz_targets/parse_av1.rs"
 test = false
@@ -1624,6 +1641,14 @@ bench = false
 required-features = ["format-mpegaudio"]
 
 [[bin]]
+name = "parse_mpegaudio_stream"
+path = "fuzz_targets/parse_mpegaudio_stream.rs"
+test = false
+doc = false
+bench = false
+required-features = ["parse-mpegaudio"]
+
+[[bin]]
 name = "parse_mpegvideo"
 path = "fuzz_targets/parse_mpegvideo.rs"
 test = false
@@ -1662,6 +1687,14 @@ test = false
 doc = false
 bench = false
 required-features = ["codec-qoi"]
+
+[[bin]]
+name = "parse_vorbiscomment"
+path = "fuzz_targets/parse_vorbiscomment.rs"
+test = false
+doc = false
+bench = false
+required-features = ["format-vorbiscomment"]
 
 [[bin]]
 name = "parse_vpx"
