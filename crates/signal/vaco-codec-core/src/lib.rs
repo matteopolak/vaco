@@ -320,6 +320,39 @@ pub enum CodecId {
     BinkAudioRdft,
     Smacker,
     SmackAudio,
+
+    // ------------------------------------------- C-01/C-02/C-03 (#279-#281)
+    //
+    // The remainder of the standardised ADPCM subset and the raw/uncompressed
+    // video family those issues need a `CodecId` for. `AdpcmG726` already
+    // existed but `adpcm_g726le` is a *distinct* codec in the reference (its
+    // own `-decoders`/`-encoders` row, "G.726 ADPCM little-endian (codec
+    // adpcm_g726le)" — a different bit-packing of the same state machine, not
+    // an alias), and `adpcm_ima_qt` had no variant at all. Names and long
+    // names probed from `ffmpeg -codecs`/`-decoders`/`-encoders`, 8.1.
+    AdpcmG726le,
+    AdpcmImaQt,
+    /// `v210`. `AV_CODEC_ID_V210` in the reference; SMPTE 292M/424M 10-bit
+    /// 4:2:2 packing.
+    V210,
+    /// `v210x`, the decode-only sibling `vaco-demux-raw` already frames.
+    V210x,
+    /// `r10k`, AJA Kona's 10-bit RGB packing.
+    R10k,
+    /// `r210`, uncompressed 10-bit RGB.
+    R210,
+    /// `y41p`, uncompressed 4:1:1 12-bit YUV.
+    Y41p,
+    /// `avui`, Avid Meridien's uncompressed packing.
+    Avui,
+    /// `bitpacked`, `QuickTime`'s generic bit-packed raw family.
+    Bitpacked,
+    /// `vnull`, the reference's dummy video encoder — produces no packets,
+    /// exists so `-c:v vnull` and `-an`-style discard pipelines resolve to a
+    /// real codec identity instead of failing to find one.
+    Vnull,
+    /// `anull`, `vnull`'s audio counterpart.
+    Anull,
 }
 
 /// One row of the codec identity table.
@@ -1322,6 +1355,84 @@ const CODECS: &[CodecEntry] = &[
         "Smacker audio",
         A,
         CodecProperties::LOSSY.union(CodecProperties::INTRA_ONLY),
+    ),
+    // ---------------------------------------------- C-01/C-02/C-03 (#279-#281)
+    entry(
+        CodecId::AdpcmG726le,
+        "adpcm_g726le",
+        "G.726 ADPCM little-endian",
+        A,
+        CodecProperties::LOSSY.union(CodecProperties::INTRA_ONLY),
+    ),
+    entry(
+        CodecId::AdpcmImaQt,
+        "adpcm_ima_qt",
+        "ADPCM IMA QuickTime",
+        A,
+        CodecProperties::LOSSY.union(CodecProperties::INTRA_ONLY),
+    ),
+    entry(
+        CodecId::V210,
+        "v210",
+        "Uncompressed 4:2:2 10-bit",
+        V,
+        CodecProperties::LOSSLESS.union(CodecProperties::INTRA_ONLY),
+    ),
+    entry(
+        CodecId::V210x,
+        "v210x",
+        "Uncompressed 4:2:2 10-bit",
+        V,
+        CodecProperties::LOSSLESS.union(CodecProperties::INTRA_ONLY),
+    ),
+    entry(
+        CodecId::R10k,
+        "r10k",
+        "AJA Kona 10-bit RGB Codec",
+        V,
+        CodecProperties::LOSSLESS.union(CodecProperties::INTRA_ONLY),
+    ),
+    entry(
+        CodecId::R210,
+        "r210",
+        "Uncompressed RGB 10-bit",
+        V,
+        CodecProperties::LOSSLESS.union(CodecProperties::INTRA_ONLY),
+    ),
+    entry(
+        CodecId::Y41p,
+        "y41p",
+        "Uncompressed YUV 4:1:1 12-bit",
+        V,
+        CodecProperties::LOSSLESS.union(CodecProperties::INTRA_ONLY),
+    ),
+    entry(
+        CodecId::Avui,
+        "avui",
+        "Avid Meridien Uncompressed",
+        V,
+        CodecProperties::LOSSLESS.union(CodecProperties::INTRA_ONLY),
+    ),
+    entry(
+        CodecId::Bitpacked,
+        "bitpacked",
+        "Bitpacked",
+        V,
+        CodecProperties::LOSSLESS.union(CodecProperties::INTRA_ONLY),
+    ),
+    entry(
+        CodecId::Vnull,
+        "vnull",
+        "Null video codec",
+        V,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::Anull,
+        "anull",
+        "Null audio codec",
+        A,
+        CodecProperties::empty(),
     ),
 ];
 
