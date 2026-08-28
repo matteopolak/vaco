@@ -232,17 +232,20 @@ directly. `DemuxerDesc::open` (the registry path) always uses
    is the same gap `vaco-demux-mpegts`/`vaco-demux-mp4` already carry for the
    generic `FormatOptions`, generalised to formats whose entire behaviour is
    option-driven.
-2. **`CodecId` has 16 variants**: `H264`, `Hevc`, `Av1`, `Vp8`, `Vp9`, `Aac`,
-   `AacLatm`, `Opus`, `Flac`, `Vorbis`, `Mp3`, `Pcm`, `Png`, `Jpeg`, `SubRip`,
-   `MovText`. This crate needs `Rawvideo`, per-subtype PCM tags
-   (`pcm_s16le`, not one shared `Pcm`), and one each for `Vc1`, `Mpeg1Video`/
-   `Mpeg2Video` (`mpegvideo`), `H263`, `Mpeg4` (`m4v`), `Vvc`, `Evc`, `Avs2`,
-   `Avs3`, `Cavs`, `Dirac`, `Dnxhd`. Every demuxer here that hits this gap
-   sets `codec_id = None` and records the reference's exact name as stream
-   metadata (`raw_codec_name`) — the same convention `vaco-demux-mpegts` uses
-   for `TsCodec` values `CodecId` cannot express. **Roughly 40 of this
-   crate's 48 registrations cannot yet print a byte-identical `codec_name`**
-   through `vaco-probe -show_streams`.
+2. **`CodecId` was missing several variants this crate needs; two of them
+   are now closed.** `Mpeg1video`, `Mpeg2video` and `Mpeg4` all exist in
+   `vaco-codec-core` as of the wave that landed P-05..P-08
+   (`vaco-parse-mpegvideo`), and `M4V.parser_codec`/`MPEGVIDEO.parser_codec`
+   now name `Mpeg4`/`Mpeg2video` respectively (gap 16, closed 2026-08-28 —
+   `MPEGVIDEO` still cannot distinguish a genuine bare MPEG-1 elementary
+   stream from MPEG-2, since both share one `BitstreamSpec` row and one
+   static `parser_codec`; see `bitstream.rs`'s comment on that const for the
+   trade-off). `Vc1`, `H263`, `Vvc`, `Evc`, `Avs2`, `Avs3`, `Cavs`, `Dirac`,
+   `Dnxhd` and a dedicated `Rawvideo`/per-subtype PCM tags (`pcm_s16le`, not
+   one shared `Pcm`) are still missing — every demuxer here that hits one of
+   those sets `codec_id = None` and records the reference's exact name as
+   stream metadata (`raw_codec_name`) instead, the same convention
+   `vaco-demux-mpegts` uses for `TsCodec` values `CodecId` cannot express.
 3. **`ProbeScore`'s convention table has no entry matching the measured 51**
    for start-code/OBU/marker evidence — the same situation
    `vaco-demux-mpegts` found and reported for its own measured 50. `51` is

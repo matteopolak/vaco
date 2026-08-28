@@ -18,21 +18,32 @@ which is specifically about depending on a codec/parser crate.
 
 ## How it works
 
-### The registry seam does not fit this format either
+### The registry seam, closed via `bind_url` (2026-08-28)
 
 `MuxerDesc::open` is `fn(Box<dyn MediaSink>) -> Result<Box<dyn Muxer>>` —
 one already-open sink, no filename, so it cannot express "open a new file
 per frame" any more than the demux side's `DemuxerDesc::open` can express
-"open many files by pattern." `MUXER_IMAGE2` gets `image2pipe`'s shape
-instead: every frame's payload written back to back into the one sink it is
-given (`pipe_mux::Image2SinkMuxer`, essentially `vaco-mux-raw::RawMuxer` with
-one stream limit). This is not an approximation of the real muxer — it is
-the literal correct behaviour for "one sink, no pattern," and it is the
-write-side mirror of what `vaco-demux-image2`'s pipe splitters already expect
-to be fed (`ffmpeg -f image2pipe ... | ffmpeg -f png_pipe -i -` is a real,
-supported reference pipeline).
+"open many files by pattern."
 
-Use `Image2MuxWriter::create` directly for the real thing.
+`MUXER_IMAGE2`'s registry `open` constructs `pipe_mux::RegistryMuxer`,
+which starts as `Sink(Image2SinkMuxer)` — `image2pipe`'s shape, every
+frame's payload written back to back into the one sink it is given, still
+the literal correct behaviour for "one sink, no pattern," and still the
+write-side mirror of what `vaco-demux-image2`'s pipe splitters expect to be
+fed (`ffmpeg -f image2pipe ... | ffmpeg -f png_pipe -i -` is a real,
+supported reference pipeline) — and becomes `Pattern(PatternWriterMuxer)`,
+wrapping `Image2MuxWriter`, the moment a caller calls
+[`vaco_format_core::Muxer::bind_url`] with the real destination pattern.
+`RegistryMuxer::flags()` reports `FormatFlags::NEEDNUMBER` so a caller (see
+`vaco-cli`'s `open_output`) knows to keep a throwaway-sink-backed instance
+alive and call `bind_url` on it rather than ever opening a real destination
+for the literal pattern string. See `docs/format/vaco-format-core.md`'s
+"gaps 2 and 7" section for the full mechanism.
+
+**Still not reachable through this path:** `-update`/`-strftime`/
+`-frame_pts`/`-atomic_writing` — `bind_url` constructs with
+`Image2MuxOptions::default()`. Use `Image2MuxWriter::create` directly for a
+caller that needs non-default options.
 
 ### `-update`, `-strftime`, `-frame_pts`, numbering — resolution order
 

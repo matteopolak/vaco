@@ -37,30 +37,35 @@ above), so they are correctly excluded from that count, not missed.
 
 ## How it works
 
-### `image2`: the registry seam does not fit this format
+### `image2`: the registry seam, closed via `bind_url` (2026-08-28)
 
 `DemuxerDesc::open` is `fn(Box<dyn MediaSource>, &dyn ParserProvider) ->
 Result<Box<dyn Demuxer>>` — one already-open source, no filename. `image2`'s
-entire job is opening *many* files by a name pattern that has nowhere to go
-through that signature at all (worse than `vaco-demux-raw`'s "the registry
-gets reference defaults for `-pixel_format`" gap — there, at least a *path*
-exists; here there is no `MediaSource::path()` to read one from).
+entire job is opening *many* files by a name pattern, which has nowhere to
+go through that signature at all.
 
-So there are two ways in:
+`DEMUXER_IMAGE2`'s registry `open` now constructs `multi::RegistryDemuxer`,
+which starts in the same degenerate `Single(SingleSourceDemuxer)` shape this
+section used to describe as the whole story — one already-open source
+treated as `-pattern_type none` on an already-resolved file — and becomes
+`Pattern(Image2Demuxer)` the moment a caller calls
+[`vaco_format_core::Demuxer::bind_url`] with the real pattern string. That
+method exists precisely because there is no `MediaSource::path()`: the
+caller already has the URL (it is what resolved to this descriptor in the
+first place), so handing it over after construction sidesteps needing one.
 
-* `Image2Demuxer::open_pattern(pattern, Image2Options)` — the real thing, for
-  a caller that has both (an embedder, the eventual CLI layer, this crate's
-  own tests).
-* `DEMUXER_IMAGE2`'s registry `open` — receives one already-open source and
-  treats it as `-pattern_type none` pointed at an already-resolved file: the
-  whole source is one packet, second `read_packet` is `Eof`. Correct for
-  "one source, no pattern," not a fallback approximation of the real thing.
+`DEMUXER_IMAGE2.flags` carries `FormatFlags::NEEDNUMBER` so a caller (see
+`vaco-cli`'s `input::open`) knows to skip trying to open the literal pattern
+string as a file at all, and to pass a throwaway placeholder to `open`
+followed immediately by `bind_url`. See `docs/format/vaco-format-core.md`'s
+"gaps 2 and 7" section for the full mechanism and its CLI wiring, and
+`RegistryDemuxer::bind_url`'s own doc comment for why a second `bind_url`
+call is refused rather than silently re-resolving.
 
-**Fixing the gap properly** would mean adding a `fn path(&self) ->
-Option<&str>` (or similar) to `vaco_io::MediaSource`/`ProbeData`, so a
-demuxer whose whole job is opening more files by name has something to read
-the pattern from. That is a `vaco-io`/`vaco-format-core` change, outside this
-crate's scope — reported here rather than worked around.
+**Still not reachable through this path:** `-pattern_type`/`-start_number`/
+other `Image2Options` fields — `bind_url` constructs with
+`Image2Options::default()`. A caller that needs non-default options still
+has `Image2Demuxer::open_pattern` directly.
 
 ### `image2`'s options, measured via `ffmpeg -h demuxer=image2`
 

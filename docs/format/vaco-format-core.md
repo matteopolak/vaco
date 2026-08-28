@@ -951,6 +951,92 @@ MPEG-TS timestamp-origin/side-data gap) found during this verification and
 deliberately left open — neither is a fact this crate's header or this
 trait's signature carries.
 
+## The 2026-08-28 addition: `bind_url`, closing gaps 2 and 7
+
+Issue #649 gave gaps 2 and 7 a concrete, measurable symptom: `-f image2`
+failed on a `%d`-pattern both ways — write side wrote a file literally named
+`out_%03d.png`, read side refused `img_%03d.png` outright with "No such file
+or directory" — because `DemuxerDesc::open`/`MuxerDesc::open` receive one
+already-open source/sink and no filename at all, and `vaco-demux-image2`'s
+`Image2Demuxer::open_pattern`/`vaco-mux-image2`'s `Image2MuxWriter` (which
+already resolve/write patterns against the filesystem correctly) had no way
+to be reached with the real destination.
+
+### Why not a parameter on `open`
+
+Same root cause gaps 4/5/9 already found and the same conclusion: `open` is
+a bare `fn` pointer roughly 90 registered demuxers/muxers already implement
+at a fixed one-source/one-sink signature. A function item only coerces to a
+function-pointer type with a matching parameter list, so widening either
+signature would mean editing every one of those functions, not just the
+descriptor literals naming them — the edit every prior wave in this file
+has declined for the same reason.
+
+### `Demuxer::bind_url` / `Muxer::bind_url`
+
+Two new defaulted trait methods (default: `Err(Unsupported)`), one per
+trait, both named the same for the same reason: a caller invokes either
+once, immediately after `open` returns and before reading/writing anything,
+with the URL string it already resolved to reach that descriptor — no new
+`MediaSource::path()`/`MediaSink::path()` accessor needed, and no second
+`MediaSource` a caller has to open itself. A demuxer/muxer that opts in
+typically replaces its own state outright
+(`*self = Self::open_pattern(url, ..)?`), which is exactly what a format
+whose primary `open` call could never have succeeded with a literal source
+needs: the caller passes a throwaway placeholder (an empty
+`vaco_io::MemorySource`, a `vacoraw::MemorySink`) to `open`, and `bind_url`
+does the real work.
+
+**The `Box<dyn Muxer>`/`Box<dyn Demuxer>` trap applies again, by
+construction, and was checked the same way gap 9's was:** both `impl
+Muxer for Box<M>` and `impl Demuxer for Box<D>` forward the new method
+explicitly. `vaco-cli`'s `TallyingMuxer` has the same obligation and was
+fixed the same way, in its own crate.
+
+### `vaco-demux-image2`/`vaco-mux-image2`: real implementors, not just callers
+
+Both crates' registry entries now start in their old degenerate shape
+(unchanged for a caller that never calls `bind_url`, so this is additive for
+them too) and become the real thing on the first `bind_url` call:
+`RegistryDemuxer::Single(SingleSourceDemuxer)` → `Pattern(Image2Demuxer)`,
+`RegistryMuxer::Sink(Image2SinkMuxer)` → `Pattern(PatternWriterMuxer)`
+wrapping `Image2MuxWriter`. Both refuse a second `bind_url` call
+(`Unsupported`) rather than silently re-resolving against a possibly
+different URL.
+
+`DEMUXER_IMAGE2.flags` gained `FormatFlags::NEEDNUMBER` — declared since
+this crate's foundations wave but never read by anything — as the signal a
+caller checks **before** attempting to open the literal pattern string as a
+file at all. `Muxer::flags()` reports the same flag on the write side,
+read through `MuxerDesc::probe_flags()` (gap 6) since `MuxerDesc` itself
+still carries no flags field.
+
+### `vaco-cli` wiring
+
+`input::open` checks `desc.flags.contains(NEEDNUMBER)` before its usual
+`opener(url)?`: if set, it hands `(desc.open)` an empty placeholder source
+and calls `bind_url(url)?` directly, propagating any error (a `NEEDNUMBER`
+format has nothing else to fall back to); otherwise it opens the real
+source as before and calls `bind_url(url)` best-effort, swallowing only
+`Unsupported` — the shape a future VobSub implementation (gap 7's other
+named case: a `.sub` sidecar next to a normally-opened `.idx`) needs with no
+further CLI change. `exec::open_output` extends its existing
+`probe_flags`-style throwaway-sink construction (already there for
+`NOFILE`) with the mirror check: a `NEEDNUMBER` muxer keeps the
+throwaway-sink-backed probe instance and calls `bind_url` on it instead of
+ever calling `crate::output::create` on the literal pattern string.
+
+### Verification
+
+Against the installed ffmpeg 8.1, isolating the container-level fix from
+the separate encoder-selection gap `-i in.mp4 -f image2 out-%03d.png`
+currently hits (`Unknown encoder 'png'`, #652's territory): `vaco -f image2
+-i in_%03d.png -c copy -f image2 out_%03d.png` on a 3-file PNG sequence
+produces `cmp`-identical files, and `ffmpeg -f rawvideo -pix_fmt rgb24 -i
+'…_%03d.png' -f rawvideo - | md5` matches on both sequences. The read side
+alone (`-f image2 -i in_%03d.png -c copy -f rawvideo out.bin`) matches
+`cat in_001.png in_002.png in_003.png` byte-for-byte.
+
 ## Signature gaps
 
 Interfaces are frozen (plan 19 §6), so these are **reported, not changed**. In
