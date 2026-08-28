@@ -1,0 +1,22 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+# Not run by this agent — see planning/AGENT-CONSTRAINTS.md's "export your
+# descriptor before writing vaco-component.toml": FFV1_DECODER/FFV1_ENCODER
+# are exported from src/lib.rs before this file was written.
+
+[[component]]
+kind      = "decoder"
+name      = "ffv1"
+long_name = "FFmpeg video codec #1"
+feature   = "codec-ffv1"
+ctor      = "vaco_codec_ffv1::FFV1_DECODER"
+media     = "video"
+codec     = "ffv1"
+
+[[component]]
+kind      = "encoder"
+name      = "ffv1"
+long_name = "FFmpeg video codec #1"
+feature   = "codec-ffv1"
+ctor      = "vaco_codec_ffv1::FFV1_ENCODER"
+media     = "video"
+codec     = "ffv1"
