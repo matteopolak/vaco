@@ -2,12 +2,10 @@
 
 Plan 16 §4.4's multimedia/T1-plumbing row (GitHub #479, FT-4.12f), plus the
 graph-plumbing/source-sink filters this crate carried under its previous name
-`vaco-filter-plumbing` (FT-4.3, GitHub #467): `concat`, `select`/`aselect`,
-`trim`/`atrim`, `split`/`asplit`, `setpts`/`asetpts`, `null`/`anull`,
-`metadata`/`ametadata`, `copy`/`acopy`, `settb`/`asettb`,
-`nullsrc`/`anullsrc`, `nullsink`/`anullsink`, `color`. This document is being
-updated incrementally as the row's remaining filters land; see each filter's
-own module doc for the fullest detail in the meantime.
+`vaco-filter-plumbing` (FT-4.3, GitHub #467). 37 of the row's 41 filter
+names are registered here; `avsynctest`, `cmdsocket`/`acmdsocket` and
+`aeval` are the four left, deliberately — see the exactness table below for
+why each one.
 
 ## What it is
 
@@ -15,6 +13,38 @@ Filters from two plan rows sharing one crate through a rename
 (`planning/FILTER-CRATE-DIVERGENCE.md`). Each filter is a module exposing
 `pub const DESC: FilterDesc` plus a crate-private `create`;
 [`registry::MmRegistry`] dispatches by name.
+
+## Per-filter exactness, at a glance
+
+Every claim below is backed by a probe or a test cited in "How it works" or
+in the filter's own module doc; this table is the index, not the evidence.
+
+| Filter(s) | Exact? | Why not, if not |
+|---|---|---|
+| `null`/`anull`/`copy`/`acopy` | Yes | Zero options, pure passthrough. |
+| `split`/`asplit` | Yes | Fan-out only; `Frame` clone is Arc-cheap. |
+| `trim`/`atrim` | Yes | Half-open boundary and the sample-straddle cut both measured. |
+| `setpts`/`asetpts` | Partial | `RTCTIME`/`RTCSTART`/`INTERLACED`/`S`/`SR` unimplemented (`NaN`); `strip_fps` parsed, not applied. |
+| `settb`/`asettb` | Partial | Literal `num/den`, `intb`, `AVTB` measured exact; a mixed expression's evaluation order is not. |
+| `select`/`aselect` | Partial | Routing (`ceil`, NaN/negative→0) and most variables measured exact; `scene` is a structural stand-in (see below); `pict_type`/`interlace_type`/`key` unimplemented. |
+| `concat` | Partial | Per-stream independent segment advance, not the reference's shortest-stream-in-segment rule; indistinguishable except when a segment's own tracks disagree in length. |
+| `color`/`nullsrc`/`nullsink`/`anullsrc` | — | Correct but misfiled — see the divergence note below. |
+| `metadata`/`ametadata` | Partial | Every mode/function measured except `function=expr`'s exact reference evaluation; `print` computes but has nowhere to emit without `file` (no log sink exists yet). |
+| `loop`/`aloop` | Partial | Frame-count/PTS semantics measured exact for `loop`; `aloop`'s sample `size`/`start` are frame-granular, not sample-exact. |
+| `reverse`/`areverse` | Partial | Content-reversal and idempotence measured; non-uniform frame-duration handling is a structural reading. |
+| `segment`/`asegment` | Structural | The "opposite of concat" reading, not independently measured against the reference's own timestamp handling. |
+| `interleave`/`ainterleave` | Structural | Merge-by-timestamp measured; `duration`'s three end conditions are a structural reading of the option names. |
+| `streamselect`/`astreamselect` | Partial | `map` routing and the runtime `map` command both measured/implemented; duplicate `map` entries (fan-out) are a known, documented gap. |
+| `sendcmd`/`asendcmd` | Parses only | Grammar and enter/leave edge detection measured exact against every `filters.texi` worked example; command **dispatch** to another node is impossible from a leaf filter today (see below) — every frame passes through unchanged. |
+| `cue`/`acue` | Partial | `cue=0` (the default) is a measured, deterministic no-op; a non-zero cue depends on real wall-clock time, not covered by a fast test. |
+| `realtime`/`arealtime` | Structural | Implements the documented pacing/discontinuity rule; not measured against the reference's own wall-clock precision. |
+| `latency`/`alatency` | Honest no-op | No per-link latency instrumentation exists in this framework for a leaf filter to read. |
+| `bench`/`abench` | Partial | `start`/`stop`/elapsed-time accumulation measured against the reference's metadata-key mechanism; no log sink to report through. |
+| `perms`/`aperms` | Honest no-op | This project's `Frame` has no read-only/writable bit — an architecture mismatch, not an oversight. |
+| `sidedata`/`asidedata` | Partial | 4 of the reference's 28 `type` values map to a `FrameSideDataKind` this project models; `type` is a ranged integer, not named constants (a time-accepted divergence from `metadata`'s treatment). |
+| `avsynctest` | Not implemented | A synthetic A/V generator disproportionate to this row — the `vaco-filter-aeffects` precedent for `surround`/`headphone`. |
+| `cmdsocket`/`acmdsocket` | Not implemented | Need a real listening socket, outside a filter's normal scope. |
+| `aeval` | Not implemented | Deferred for time; the reference's own documentation calls it "slow… for faster processing use a dedicated filter", which is why it was the lowest priority left when the row's budget ran out. |
 
 ## `color`/`nullsrc`/`nullsink`/`anullsrc`: a recorded divergence, not an oversight
 
@@ -158,6 +188,109 @@ implemented (evaluate to `NaN`): `RTCTIME`/`RTCSTART` (wall clock),
 `PREV_INT`/`PREV_OUTT`, `INTERLACED`, `S`, `SR`. `strip_fps` is parsed but not
 applied.
 
+### `loop`/`aloop` — a *suffix* looper, not an in-place one (`looping.rs`)
+
+The natural reading of "loop the `[start, start+size)` window" is that
+those frames get replayed in place. Measured against ffmpeg 8.1
+(`looping.rs`'s module doc has the full probe table): the whole input
+stream always plays through unchanged first, and the window — captured as
+it streamed past — is *appended* after it, `loop` more times, with PTS
+continuing the original stream's arithmetic progression rather than
+reusing the window frame's own original timestamp. `loop=0` is a true
+no-op, measured identical to no filter at all. The window is bounded by a
+`vaco_limits::Budget` charged from real frame bytes, not from the `size`
+option directly, since `size`'s own declared range (32767 frames for
+`loop`, unbounded samples for `aloop`) does not itself bound memory.
+`aloop`'s `size`/`start` are frame-granular rather than sample-exact.
+
+### `reverse`/`areverse` — content flips, timing does not (`reverse.rs`)
+
+Measured with a luma-stamped-by-frame-index source so content order is
+distinguishable from timing: reversing flips the frame *content* order but
+keeps the original *pts sequence* — output position `k` gets position
+`k`'s original timing paired with position `N-1-k`'s pixel data. The
+stronger check this row's brief calls for (a hypothesis that would look
+right from one direction and wrong from the other): `reverse,reverse`
+composes to the identity, measured against the reference and pinned as a
+test. Every retained frame is charged against a `Budget` by its real bytes,
+since this filter's whole contract — buffer the entire clip — has no
+`size` option to derive a safer bound from.
+
+### `segment`/`asegment` — the structural mirror of `concat` (`segment.rs`)
+
+`filters.texi` calls this filter "the opposite of concat" in so many
+words. Where `concat` rebases N segments into one continuous stream,
+`segment` cuts one stream into N outputs at a `|`-separated (optionally
+`+`-relative) boundary list, with no reason to rebase anything — each
+output keeps its slice of the original timeline. Not independently
+measured against the reference's own timestamp handling the way `concat`'s
+rebasing rule was. Output pad count is capped through the same
+`pads::of`/`pads::MAX` limit `concat`/`split` already enforce.
+
+### `interleave`/`ainterleave` — merge by timestamp (`interleave.rs`)
+
+Peeks one frame ahead on every still-relevant input and always takes
+whichever has the smallest timestamp in seconds, converted through that
+input's own link time base. Measured with two inputs carrying disjoint
+even/odd pts sequences, confirming the output is the fully sorted union.
+`duration`'s three end conditions (`longest`/`shortest`/`first`) are a
+structural reading of the option names — `-h filter=interleave` shows
+neither `eof_action` nor `shortest`/`repeatlast`/`ts_sync_mode`, so per
+`AGENT-CONSTRAINTS.md` this does not ride on `vaco-filter-framesync`.
+
+### `streamselect`/`astreamselect` — output count follows `map`, not `inputs` (`streamselect.rs`)
+
+The reference's own worked example (`streamselect=inputs=2:map=0`) creates
+exactly one output and switches it at runtime with `sendcmd`. Output count
+is however many indexes `map` names, not `inputs` itself — an empty `map`
+defaults to the identity. The runtime `map` command `filters.texi`
+documents is implemented through `Filter::command`, and a command cannot
+change the output count (rejected, since pads are fixed at configuration).
+**Fuzz-found and fixed**: `inputs` is now bounded through `pads::of` before
+`parse_map`'s empty-`map` fallback (`0..inputs`) ever runs — the ordering
+used to be reversed, and `streamselect=inputs=999999999` requested an 8 GB
+`Vec<usize>` before construction ever got to reject it. Duplicate `map`
+entries (two outputs reading one input) are a known, documented gap: only
+the first to run in a given step gets that input's next frame.
+
+### `sendcmd`/`asendcmd` — parses and tracks, cannot dispatch (`sendcmd.rs`)
+
+The command-script grammar is only in `filters.texi`, not `-h` output;
+fetched from the public documentation and implemented in full — interval
+start/end, `,`-separated commands, `[enter+leave]` flags (default
+`[enter]`), `#` comments, and the `expr` flag's expression evaluation.
+Every one of `filters.texi`'s own worked examples is reproduced verbatim
+as a test, including the three-interval commented-file example. What
+cannot be implemented from inside a leaf filter: `TARGET` names *another*
+filter instance in the graph, and nothing reachable from a filter's own
+`FilterContext` can address a different node by label and call
+`Filter::command` on it — `vaco_filter_core::sched::Graph` has no such
+public method today. So every frame passes straight through unchanged;
+the filter correctly identifies which commands would fire when
+(`Filter::fired`, test-only) without delivering them anywhere.
+
+### `cue`/`acue`, `realtime`/`arealtime`, `latency`/`alatency`, `bench`/`abench`, `perms`/`aperms`, `sidedata`/`asidedata` (`misc.rs`)
+
+Six small filters sharing one file. `cue`/`acue` pass `preroll` seconds
+immediately then buffer (Budget-charged) until wall-clock time `cue`
+arrives — `cue=0`, the default, is a measured, deterministic no-op, and is
+the only path a fast unit test can exercise; a non-zero cue depends on real
+time. `realtime`/`arealtime` pace output to wall-clock time via
+`vaco-time` (not `std::time`, which panics on wasm32 — D18); a gap past
+`limit` resets the timer rather than trying to catch up, per
+`filters.texi`. `latency`/`alatency` is an honest no-op: this framework's
+cooperative scheduler exposes no per-link latency a leaf filter can read.
+`bench`/`abench` is reachable now that the frame metadata dictionary exists
+(interface gap 11) — `start`/`stop` and the running avg/max/min are
+measured against the reference's own metadata-key mechanism, with no log
+sink to report through. `perms`/`aperms` is an architecture mismatch: this
+project's `Frame` has no read-only/writable bit, so every mode is a
+passthrough. `sidedata`/`asidedata`'s `type` maps 4 of the reference's 28
+`AVFrameSideDataType` names to the `FrameSideDataKind` this project
+actually models, as a plain ranged integer rather than named constants —
+accepted as a time-bounded divergence from `metadata`'s `OptEnum`
+treatment.
+
 ### A framework fact this crate's tests surfaced
 
 `Graph::send` (and, by the same F9 rule, `FilterContext::push_output`)
@@ -200,21 +333,27 @@ exactly which of the reference's options are implemented.
 - `vaco-filter-graph` — `FilterRegistry`/`Instantiate`/`Instance`, `pads::of`
   for dynamic pad counts.
 - `vaco-expr` — `setpts`/`asetpts`, `settb`/`asettb`, `select`/`aselect`,
-  `metadata`/`ametadata`'s `function=expr`.
+  `metadata`/`ametadata`'s `function=expr`, `sendcmd`/`asendcmd`'s `expr` flag.
 - `vaco-filter-vdsp` — `normalised_sad`, for `select`'s `scene`.
 - `vaco-limits` — `Budget`, for the row's size/count/duration-bounded
-  filters (`loop`, `aloop`, `reverse`, `areverse`, `segment`).
+  filters (`loop`, `aloop`, `reverse`, `areverse`, `segment`, `cue`).
+- `vaco-time` — `Instant`/`unix_nanos`/`sleep`, for `realtime`/`cue`/`bench`'s
+  wall-clock and pacing needs (D18: never `std::time` directly, which panics
+  on wasm32).
 - `vaco-opts` — option parsing, including `#[derive(OptEnum)]` for
-  `metadata`'s `mode`/`function`.
+  `metadata`'s `mode`/`function`, `interleave`'s `duration`, `bench`'s
+  `action`, `perms`'s `mode`, `sidedata`'s `mode`.
+- `bitflags` — `sendcmd`'s enter/leave edge flags.
 - `vaco-core::parse` — `color` (`Rgba`), `nullsrc`/`color` (`image_size`,
   `video_rate`, `duration`'s exact reference grammar).
 
 ## Issues
 
 Closes GitHub #467 (FT-4.3) for the 20 filters this crate originally
-implemented, and is landing GitHub #479 (FT-4.12f, plan 16 §4.4) on top —
-see this document's header for what has arrived so far and this crate's
-`lib.rs` doc for what is deliberately left and why.
+implemented, and closes GitHub #479 (FT-4.12f, plan 16 §4.4): 37 of the
+row's 41 filters landed; `avsynctest`, `cmdsocket`/`acmdsocket` and `aeval`
+are left, with reasons in the exactness table above and in `lib.rs`'s crate
+doc.
 `buffer`/`abuffer`/`buffersink`/`abuffersink` are named in #467's 24 but
 are out of this crate's scope — see "What is missing, and why" above; left
 open, or to be handled by whichever of `vaco-filter-graph`/`vaco-cli-core`

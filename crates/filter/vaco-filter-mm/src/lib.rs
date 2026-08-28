@@ -1,9 +1,14 @@
 //! Plan 16 §4.4's multimedia/T1-plumbing row (`vaco-filter-mm`, GitHub
-//! #479, FT-4.12f): `concat`, `select`/`aselect`, `trim`/`atrim`,
+//! #479, FT-4.12f): `concat`, `select`/`aselect`, `segment`/`asegment`,
+//! `streamselect`/`astreamselect`, `trim`/`atrim`, `loop`/`aloop`,
+//! `reverse`/`areverse`, `cue`/`acue`, `realtime`/`arealtime`,
+//! `latency`/`alatency`, `bench`/`abench`, `perms`/`aperms`,
+//! `metadata`/`ametadata`, `sidedata`/`asidedata`, `sendcmd`/`asendcmd`,
 //! `split`/`asplit`, `setpts`/`asetpts`, `null`/`anull`,
-//! `metadata`/`ametadata`, plus the graph-plumbing/source-sink filters this
-//! crate carried under its previous name (`vaco-filter-plumbing`, FT-4.3,
-//! GitHub #467): `copy`/`acopy`, `settb`/`asettb`, `nullsrc`/`anullsrc`,
+//! `interleave`/`ainterleave` — 37 of the row's 41 names — plus the
+//! graph-plumbing/source-sink filters this crate carried under its
+//! previous name (`vaco-filter-plumbing`, FT-4.3, GitHub #467):
+//! `copy`/`acopy`, `settb`/`asettb`, `nullsrc`/`anullsrc`,
 //! `nullsink`/`anullsink`, `color`.
 //!
 //! `color`/`nullsrc`/`nullsink`/`anullsrc` are **not** in the §4.4 row — the
@@ -13,20 +18,28 @@
 //! single-writer rule, and deleting working filters with nothing to replace
 //! them would regress the CLI. See `planning/FILTER-CRATE-DIVERGENCE.md`.
 //!
-//! Not yet landed from the §4.4 row, with reasons: `avsynctest` (a synthetic
+//! Not landed from the §4.4 row, with reasons: `avsynctest` (a synthetic
 //! A/V generator disproportionate to this row's plumbing character — the
 //! `vaco-filter-aeffects` precedent for `surround`/`headphone`);
 //! `cmdsocket`/`acmdsocket` (need a real listening socket, out of a filter's
-//! normal scope). `sendcmd`/`asendcmd` implement the command-script grammar
-//! and per-frame passthrough but cannot dispatch to another named filter
-//! instance — that needs a graph-level "send this filter a command" API
-//! `vaco-filter-core` does not expose yet; see `sendcmd`'s module doc.
+//! normal scope); `aeval` (deferred for time — the reference's own
+//! documentation calls it "slow… for faster processing use a dedicated
+//! filter", the lowest-priority item left when the row's time budget ran
+//! out). `sendcmd`/`asendcmd` implement the command-script grammar, the
+//! enter/leave edge detection and per-frame passthrough in full, but cannot
+//! dispatch a parsed command to another named filter instance — that needs
+//! a graph-level "send this node a command" API `vaco-filter-core` does not
+//! expose yet; see `sendcmd`'s module doc.
 //!
 //! `select`'s `scene` variable and its `ceil`-not-`round` multi-output
 //! routing (a real bug, found by reading the reference's own documentation
-//! and confirmed against `ffmpeg 8.1`) landed alongside `metadata` in the
-//! same pass, since both were already this crate's before the row's other
-//! filters arrived.
+//! and confirmed against `ffmpeg 8.1`) landed alongside `metadata`, since
+//! both were already this crate's before the row's other filters arrived.
+//! `streamselect`'s huge-`inputs=` allocation (found by fuzzing, fixed by
+//! reordering a pad-count check ahead of the allocation it was meant to
+//! bound) is the row's one fuzzing finding so far — see `streamselect`'s
+//! module doc and `docs/filter/vaco-filter-mm.md`'s exactness table for the
+//! full account of every filter's fidelity.
 //!
 //! # The other four: `buffer`/`abuffer`/`buffersink`/`abuffersink`
 //!
