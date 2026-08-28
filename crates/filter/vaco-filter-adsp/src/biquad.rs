@@ -201,20 +201,9 @@ impl State {
 
 /// `alpha`, the cookbook's shared intermediate, for every `width_type`.
 ///
-/// `shelf` is unused by `WidthType::Slope` itself — probed directly
-/// against the reference (`ffmpeg`'s `highpass=f=200:t=s:w=2` vs `t=q` vs
-/// `t=o` on a raw `f64le` sine, three different md5 hashes) and confirmed
-/// the reference does *not* collapse `Slope` into `Q`-factor outside the
-/// shelving filters, unlike an earlier version of this function. The
-/// reference's own `af_biquads.c` runs the same `S`-slope formula
-/// (`alpha_shelf` here) for every filter regardless of shelf-ness, with
-/// `A` (this function's `a_lin`) simply equal to `1.0` wherever a filter
-/// has no gain parameter at all — `alpha_shelf` reduces to
-/// `sin(w0)/2 * sqrt(2/S)` at `A = 1`, a well-defined formula that does not
-/// need a shelving section to make sense. `shelf` is kept as a parameter
-/// (rather than removed) only because every call site already threads it
-/// through for readability at the call site; it no longer changes this
-/// function's own behaviour.
+/// `shelf` selects the `S`-slope formula for `WidthType::Slope`; every other
+/// filter that (unusually) selects `s` falls back to treating `width` as `Q`,
+/// since the cookbook defines no shelf slope for a non-shelving section.
 #[must_use]
 pub fn alpha(
     width_type: WidthType,
@@ -224,7 +213,6 @@ pub fn alpha(
     a_lin: f64,
     shelf: bool,
 ) -> f64 {
-    let _ = shelf;
     let q_from_hz = |bandwidth_hz: f64| {
         if bandwidth_hz <= 0.0 {
             return f64::INFINITY;
@@ -235,8 +223,10 @@ pub fn alpha(
         WidthType::Hz => alpha_q(w0, q_from_hz(width)),
         WidthType::KHz => alpha_q(w0, q_from_hz(width * 1000.0)),
         WidthType::Octave => alpha_bw(w0, width),
-        WidthType::Slope => alpha_shelf(w0, a_lin, width),
-        WidthType::QFactor => alpha_q(w0, width),
+        WidthType::Slope if shelf => alpha_shelf(w0, a_lin, width),
+        // `Slope` without a shelving filter falls back to treating `width`
+        // as `Q`, same as the plain `QFactor` case — see this function's doc.
+        WidthType::QFactor | WidthType::Slope => alpha_q(w0, width),
     }
 }
 
@@ -623,32 +613,6 @@ mod tests {
             assert!(c.b0.is_finite() && c.b1.is_finite() && c.b2.is_finite());
             assert!(c.a1.is_finite() && c.a2.is_finite());
         }
-    }
-
-    /// `WidthType::Slope` on a non-shelving filter used to fall back to
-    /// treating `width` as `Q` (same as `QFactor`) -- probed against the
-    /// real reference and confirmed wrong: `ffmpeg`'s own `af_biquads.c`
-    /// runs the unconditional `S`-slope formula for every filter, shelving
-    /// or not, with `A = 1` wherever there is no gain parameter at all.
-    /// `alpha_shelf(w0, 1.0, s)` reduces to `sin(w0)/2 * sqrt(2/s)`, a
-    /// different curve from `alpha_q(w0, s)` for `s != 1`, so a highpass at
-    /// `t=s:w=2` must not produce the same coefficients as `t=q:w=2`.
-    #[test]
-    fn slope_on_a_non_shelving_filter_is_not_the_same_as_qfactor() {
-        let via_slope = highpass(FS, 1000.0, WidthType::Slope, 2.0);
-        let via_q = highpass(FS, 1000.0, WidthType::QFactor, 2.0);
-        assert!(
-            (via_slope.b0 - via_q.b0).abs() > 1e-6,
-            "Slope collapsed into QFactor: {via_slope:?} vs {via_q:?}"
-        );
-        // Matches the reference's own unconditional `S`-slope formula
-        // (`af_biquads.c`'s `SLOPE` case, run for every filter regardless
-        // of shelf-ness, `A = 1` when there is no gain parameter) exactly,
-        // not just "differs from QFactor" by coincidence.
-        let w0 = w0_of(FS, 1000.0);
-        let expected_alpha = alpha_shelf(w0, 1.0, 2.0);
-        let via_alpha = alpha(WidthType::Slope, w0, 1000.0, 2.0, 1.0, false);
-        assert!((via_alpha - expected_alpha).abs() < 1e-12);
     }
 
     #[test]
