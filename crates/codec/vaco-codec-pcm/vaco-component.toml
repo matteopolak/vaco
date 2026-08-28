@@ -1,0 +1,372 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+# 21 decoders / 20 encoders, one row per `CodecId::Pcm*` variant this build
+# declares (issue #279, C-01).
+
+[[component]]
+kind      = "decoder"
+name      = "pcm_alaw"
+long_name = "PCM A-law / G.711 A-law"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_ALAW_DECODER"
+media     = "audio"
+codec     = "pcm_alaw"
+
+[[component]]
+kind      = "encoder"
+name      = "pcm_alaw"
+long_name = "PCM A-law / G.711 A-law"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_ALAW_ENCODER"
+media     = "audio"
+codec     = "pcm_alaw"
+
+[[component]]
+kind      = "decoder"
+name      = "pcm_mulaw"
+long_name = "PCM mu-law / G.711 mu-law"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_MULAW_DECODER"
+media     = "audio"
+codec     = "pcm_mulaw"
+
+[[component]]
+kind      = "encoder"
+name      = "pcm_mulaw"
+long_name = "PCM mu-law / G.711 mu-law"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_MULAW_ENCODER"
+media     = "audio"
+codec     = "pcm_mulaw"
+
+[[component]]
+kind      = "decoder"
+name      = "pcm_s8"
+long_name = "PCM signed 8-bit"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_S8_DECODER"
+media     = "audio"
+codec     = "pcm_s8"
+
+[[component]]
+kind      = "encoder"
+name      = "pcm_s8"
+long_name = "PCM signed 8-bit"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_S8_ENCODER"
+media     = "audio"
+codec     = "pcm_s8"
+
+[[component]]
+kind      = "decoder"
+name      = "pcm_u8"
+long_name = "PCM unsigned 8-bit"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_U8_DECODER"
+media     = "audio"
+codec     = "pcm_u8"
+
+[[component]]
+kind      = "encoder"
+name      = "pcm_u8"
+long_name = "PCM unsigned 8-bit"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_U8_ENCODER"
+media     = "audio"
+codec     = "pcm_u8"
+
+[[component]]
+kind      = "decoder"
+name      = "pcm_s16le"
+long_name = "PCM signed 16-bit little-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_S16LE_DECODER"
+media     = "audio"
+codec     = "pcm_s16le"
+
+[[component]]
+kind      = "encoder"
+name      = "pcm_s16le"
+long_name = "PCM signed 16-bit little-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_S16LE_ENCODER"
+media     = "audio"
+codec     = "pcm_s16le"
+
+[[component]]
+kind      = "decoder"
+name      = "pcm_s16be"
+long_name = "PCM signed 16-bit big-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_S16BE_DECODER"
+media     = "audio"
+codec     = "pcm_s16be"
+
+[[component]]
+kind      = "encoder"
+name      = "pcm_s16be"
+long_name = "PCM signed 16-bit big-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_S16BE_ENCODER"
+media     = "audio"
+codec     = "pcm_s16be"
+
+[[component]]
+kind      = "decoder"
+name      = "pcm_u16le"
+long_name = "PCM unsigned 16-bit little-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_U16LE_DECODER"
+media     = "audio"
+codec     = "pcm_u16le"
+
+[[component]]
+kind      = "encoder"
+name      = "pcm_u16le"
+long_name = "PCM unsigned 16-bit little-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_U16LE_ENCODER"
+media     = "audio"
+codec     = "pcm_u16le"
+
+[[component]]
+kind      = "decoder"
+name      = "pcm_u16be"
+long_name = "PCM unsigned 16-bit big-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_U16BE_DECODER"
+media     = "audio"
+codec     = "pcm_u16be"
+
+[[component]]
+kind      = "encoder"
+name      = "pcm_u16be"
+long_name = "PCM unsigned 16-bit big-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_U16BE_ENCODER"
+media     = "audio"
+codec     = "pcm_u16be"
+
+[[component]]
+kind      = "decoder"
+name      = "pcm_s24le"
+long_name = "PCM signed 24-bit little-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_S24LE_DECODER"
+media     = "audio"
+codec     = "pcm_s24le"
+
+[[component]]
+kind      = "encoder"
+name      = "pcm_s24le"
+long_name = "PCM signed 24-bit little-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_S24LE_ENCODER"
+media     = "audio"
+codec     = "pcm_s24le"
+
+[[component]]
+kind      = "decoder"
+name      = "pcm_s24be"
+long_name = "PCM signed 24-bit big-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_S24BE_DECODER"
+media     = "audio"
+codec     = "pcm_s24be"
+
+[[component]]
+kind      = "encoder"
+name      = "pcm_s24be"
+long_name = "PCM signed 24-bit big-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_S24BE_ENCODER"
+media     = "audio"
+codec     = "pcm_s24be"
+
+[[component]]
+kind      = "decoder"
+name      = "pcm_u24le"
+long_name = "PCM unsigned 24-bit little-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_U24LE_DECODER"
+media     = "audio"
+codec     = "pcm_u24le"
+
+[[component]]
+kind      = "encoder"
+name      = "pcm_u24le"
+long_name = "PCM unsigned 24-bit little-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_U24LE_ENCODER"
+media     = "audio"
+codec     = "pcm_u24le"
+
+[[component]]
+kind      = "decoder"
+name      = "pcm_u24be"
+long_name = "PCM unsigned 24-bit big-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_U24BE_DECODER"
+media     = "audio"
+codec     = "pcm_u24be"
+
+[[component]]
+kind      = "encoder"
+name      = "pcm_u24be"
+long_name = "PCM unsigned 24-bit big-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_U24BE_ENCODER"
+media     = "audio"
+codec     = "pcm_u24be"
+
+[[component]]
+kind      = "decoder"
+name      = "pcm_s32le"
+long_name = "PCM signed 32-bit little-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_S32LE_DECODER"
+media     = "audio"
+codec     = "pcm_s32le"
+
+[[component]]
+kind      = "encoder"
+name      = "pcm_s32le"
+long_name = "PCM signed 32-bit little-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_S32LE_ENCODER"
+media     = "audio"
+codec     = "pcm_s32le"
+
+[[component]]
+kind      = "decoder"
+name      = "pcm_s32be"
+long_name = "PCM signed 32-bit big-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_S32BE_DECODER"
+media     = "audio"
+codec     = "pcm_s32be"
+
+[[component]]
+kind      = "encoder"
+name      = "pcm_s32be"
+long_name = "PCM signed 32-bit big-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_S32BE_ENCODER"
+media     = "audio"
+codec     = "pcm_s32be"
+
+[[component]]
+kind      = "decoder"
+name      = "pcm_u32le"
+long_name = "PCM unsigned 32-bit little-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_U32LE_DECODER"
+media     = "audio"
+codec     = "pcm_u32le"
+
+[[component]]
+kind      = "encoder"
+name      = "pcm_u32le"
+long_name = "PCM unsigned 32-bit little-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_U32LE_ENCODER"
+media     = "audio"
+codec     = "pcm_u32le"
+
+[[component]]
+kind      = "decoder"
+name      = "pcm_u32be"
+long_name = "PCM unsigned 32-bit big-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_U32BE_DECODER"
+media     = "audio"
+codec     = "pcm_u32be"
+
+[[component]]
+kind      = "encoder"
+name      = "pcm_u32be"
+long_name = "PCM unsigned 32-bit big-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_U32BE_ENCODER"
+media     = "audio"
+codec     = "pcm_u32be"
+
+[[component]]
+kind      = "decoder"
+name      = "pcm_f32le"
+long_name = "PCM 32-bit floating point little-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_F32LE_DECODER"
+media     = "audio"
+codec     = "pcm_f32le"
+
+[[component]]
+kind      = "encoder"
+name      = "pcm_f32le"
+long_name = "PCM 32-bit floating point little-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_F32LE_ENCODER"
+media     = "audio"
+codec     = "pcm_f32le"
+
+[[component]]
+kind      = "decoder"
+name      = "pcm_f32be"
+long_name = "PCM 32-bit floating point big-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_F32BE_DECODER"
+media     = "audio"
+codec     = "pcm_f32be"
+
+[[component]]
+kind      = "encoder"
+name      = "pcm_f32be"
+long_name = "PCM 32-bit floating point big-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_F32BE_ENCODER"
+media     = "audio"
+codec     = "pcm_f32be"
+
+[[component]]
+kind      = "decoder"
+name      = "pcm_f64le"
+long_name = "PCM 64-bit floating point little-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_F64LE_DECODER"
+media     = "audio"
+codec     = "pcm_f64le"
+
+[[component]]
+kind      = "encoder"
+name      = "pcm_f64le"
+long_name = "PCM 64-bit floating point little-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_F64LE_ENCODER"
+media     = "audio"
+codec     = "pcm_f64le"
+
+[[component]]
+kind      = "decoder"
+name      = "pcm_f64be"
+long_name = "PCM 64-bit floating point big-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_F64BE_DECODER"
+media     = "audio"
+codec     = "pcm_f64be"
+
+[[component]]
+kind      = "encoder"
+name      = "pcm_f64be"
+long_name = "PCM 64-bit floating point big-endian"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_F64BE_ENCODER"
+media     = "audio"
+codec     = "pcm_f64be"
+
+[[component]]
+kind      = "decoder"
+name      = "pcm_vidc"
+long_name = "PCM Archimedes VIDC"
+feature   = "codec-pcm"
+ctor      = "vaco_codec_pcm::PCM_VIDC_DECODER"
+media     = "audio"
+codec     = "pcm_vidc"
