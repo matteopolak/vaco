@@ -190,3 +190,62 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-format-nut | 4 | #594 | agent:smallfmt | assigned | 2026-08-23 |  | fully specified, so byte-identity is reachable |
 | vaco-protocol-crypto | 2 | #546 | agent:proto | assigned | 2026-08-23 |  | AES-CTR over a nested URL; D10 dependency decision |
 | crates/io (all) | 2 | #550 | agent:proto | assigned | 2026-08-23 |  | httpproxy ftp gopher gophers icecast ipfs/ipns gateways |
+# Fan-out plan: core first, then leaves in batches
+
+## Why this order
+
+A leaf crate — a codec, a container, a filter — already touches nothing another
+agent owns. Measured across every new crate landed on 2026-08-27/28, the only
+files outside its own directory are `docs/<layer>/<crate>.md`,
+`fuzz/fuzz_targets/<name>.rs` and `provenance/<crate>.toml`, all uniquely named
+per crate. Shared core files run at roughly two commits a day. **Contention is
+not the constraint.**
+
+The constraint is that leaf work is not yet *usable*. Fifteen image codecs, a
+JPEG codec, an MP3 decoder and an AC-3 decoder have landed and none can perform
+a transcode, because the layer between decode and encode has three gaps. Writing
+more codecs before that closes produces more inert crates.
+
+So: finish the core, then fan out wide.
+
+## Core (in flight)
+
+| Package | What it unblocks |
+|---|---|
+| #655 — pixel-format conversion, image2 extension mapping | every codec pair whose formats differ; today only pairs that happen to agree work |
+| INTERFACE-GAPS 2, 7, 16 + #649 | image2 sequences, the segmenting muxers behind HLS and DASH, raw MPEG-1/2 input |
+| INTERFACE-GAPS 12, 13, 14, 15 | every BSF that takes an option, `showinfo`, `codecview`, every filter on float formats |
+| #652 (done) | `-c:v <name>` resolving at all |
+
+## Then: leaves, 3–5 per agent
+
+Each batch is one agent, one comparison loop, one table at the end. The pattern
+that has worked: implement the family, build the loop once, run every item
+through it, falsify each formula against it so a broken fix shows as a changed
+row.
+
+Candidate batches, roughly in value order:
+
+- **VP8 + VP9 decode** — epics #28, #32. Both already have parsers.
+- **MPEG-1/2 video decode** — epic #36, with `vaco-parse-mpegvideo` already landed.
+- **Subtitle decoders** — epic #44: DVB, DVD, PGS, CEA-608/708, Teletext. Five
+  formats, one crate family, and the containers already carry them.
+- **T3 audio containers** — epics #58, #76.
+- **The T3 video filter long tail** — epic #57, ~150 filters, explicitly the most
+  parallelisable work in the project; several agents can run here at once.
+- **Remaining protocols** — SRT (#62), RIST (#63), SCTP/DTLS (#64), now that
+  `vaco-protocol-dial` exists.
+- **MXF, GXF, IMF** — epics #72, #73, #74, #75.
+
+A filter batch and a codec batch can run concurrently without touching each
+other; two codec batches can too, as long as they are different codecs.
+
+## What would break the fan-out
+
+- A new codec still needs a `CodecId` variant, which is a `vaco-codec-core` edit.
+  Thirteen were added at once for the image codecs and that was fine; a *batch*
+  adding its variants in one commit is fine, an agent adding one per codec is
+  not. Plan 15 §1.1's generated table is the seam if this ever bites.
+- `xtask/src/dup_check.rs`'s `DISTINCT` list and `xtask/src/wasm.rs`'s
+  `NATIVE_ONLY` list are both hand-maintained and both take an entry per crate
+  occasionally. Neither is hot enough to fix yet.
