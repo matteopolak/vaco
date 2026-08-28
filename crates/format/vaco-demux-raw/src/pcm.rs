@@ -347,7 +347,12 @@ impl PcmDemuxer {
         params.audio = Some(audio);
         let mut stream = Stream::new(0, MediaType::Audio, time_base);
         stream.params = params;
-        stream.metadata_set("raw_codec_name", spec.codec_name);
+        // No `metadata_set("raw_codec_name", ...)` here: now that `codec_id`
+        // above carries the exact subtype, nothing needs the string fallback
+        // — and nothing ever read it (grepped the tree), so it only ever
+        // reached output as an invented `TAG:raw_codec_name` the reference
+        // does not print. Same mistake as `ogg_codec`/`ts_codec`, caught here
+        // before a caller made it visible instead of after.
         let bytes_per_frame = u64::from(spec.container_bytes) * u64::from(opts.layout.channels);
         Ok(Self {
             spec,
