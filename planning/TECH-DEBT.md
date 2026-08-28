@@ -3784,3 +3784,98 @@ was changed this round.
 
 `Vaco-Spec-Ref: itu-t-h262` Annex A (the accuracy-bound requirement this
 whole question turns on).
+
+
+## H.264 CABAC: the `coded_block_pattern`-matches-reference premise was inferred, not observed, and `CBF_CHROMA_AC` had its own copy-paste bug (#418)
+
+Answering the coordinator's specific question first, as instructed: the
+prior round's handoff stated that addresses 0-4's `mb_type`
+classification *and* `coded_block_pattern` values "already match the
+reference." Only the `mb_type` half was ever actually checked against
+an independent source (`ffmpeg -debug mb_type`). The `coded_block_pattern`
+half was never independently verified — checked every `-debug` sub-flag
+`ffmpeg 8.1 -h full` lists (`pict`, `rc`, `bitstream`, `mb_type`, `qp`,
+`dct_coeff`, `green_metadata`, `skip`, `startcode`, `er`, `mmco`, and the
+rest) and none of them prints per-macroblock `coded_block_pattern`. The
+values reported as "matching" came entirely from this decoder's own
+self-reported trace output — self-consistency, not observation. This is
+the same shape as the two premises the coordinator named as already
+collapsed this investigation: the `!malformed()` assertion (measured
+shape, not values) and the `mb_type`-only cross-check that ran against an
+all-`Intra4x4` corpus. Reported plainly rather than left standing:
+**`coded_block_pattern` for addresses 0-4 is back in the search space.**
+Every other clearance from prior rounds (CBP's neighbour derivation, the
+bypass path, `decode_decision`'s own round-trip, `qp_delta_ctx_inc`
+against 9.3.3.1.1.5, `cbf_cond_term`'s unavailable-neighbour case, both
+checked this round by the coordinator directly) stands.
+
+**The finding.** While gathering `coded_block_flag`'s five
+`ctxBlockCat`-indexed context-init tables in `cabac_mb_tables.rs` to
+build an independent oracle for the bin-by-bin residual trace the
+coordinator asked for, `CBF_CHROMA_AC` (ctxIdx 101..=104, `ctxBlockCat ==
+4`) turned out to be an exact byte-for-byte duplicate of its sibling
+`CBF_CHROMA_DC` (ctxIdx 97..=100) — not its own row of Table 9-18. A
+transcription bug, not an algorithmic one: prefix-free-shaped, byte-valid,
+would have passed every weaker check in this project's own three-tier
+table-confidence hierarchy (prefix-free/complete, exact bit length) and
+only failed the strongest tier, primary-text line-by-line comparison.
+Not caught by the residual-layer table audit two rounds ago, which
+verified `significant_coeff_flag`/`last_significant_coeff_flag`/
+`coeff_abs_level_minus1`'s tables in `cabac_residual.rs` row by row but
+not `coded_block_flag`'s own five tables here. Found by noticing the
+suspicious duplication, not by a fresh systematic re-audit; confirmed
+wrong against primary text (`iso-iec-14496-10-2002-draft` Table 9-18) and
+fixed. `CBF_LUMA_DC`/`CBF_LUMA_AC`/`CBF_LUMA4X4`/`CBF_CHROMA_DC` (ctxIdx
+85..=100) were re-checked against the same table at the same time and are
+correct — the bug is isolated to `CBF_CHROMA_AC` alone. This table backs
+every macroblock whose `cbp_chroma` includes AC residual (`cbp_chroma ==
+2`), across all three test corpora, starting at address 0 of the very
+first slice of `cabac_ip_simple.264`.
+
+**Measured effect — real, but not a resolution on any corpus.** All
+three CABAC macroblock-layer tests still fail after the fix, but not
+identically to before it (see `macroblock_layer_cabac.rs`'s `#[ignore]`
+reasons for the exact per-corpus values):
+
+- `cabac_ip_simple.264` — previously failed the stop-bit-and-padding
+  half of `assert_slice_ends_at_rbsp_trailing_bits`; now *clears* that
+  check and fails the later all-zero `cabac_zero_word` padding check
+  instead. The divergence moved later in the stream, not away.
+- `cabac_ip_multiref.264` — still fails the same stop-bit comparison as
+  before, but at a different bit pattern (`expected 0b00001000, found
+  0b00000010` post-fix). A real, confirmed behavioural change.
+- `cabac_i_only.264` — the *failure mode itself* changed: previously
+  reached (and failed) the trailing-bits comparison; now trips
+  `CabacDecoder::malformed()` before that check ever runs.
+
+Unlike the CBP neighbour-derivation fix from two rounds ago (byte-for-byte
+identical before/after for `cabac_ip_simple.264` specifically), this fix
+is not a no-op on any corpus — but it does not by itself reach
+bit-exactness anywhere either. The bug is real and the fix stays kept
+regardless, per this project's standing precedent that verified-correct
+fixes are retained even when they don't singlehandedly resolve the
+issue.
+
+**What this round did not do.** The originally-planned independent
+Python bin-by-bin oracle for address 0's residual decode was not
+completed — the `CBF_CHROMA_AC` bug was found first, by inspection,
+while merely transcribing the constants that oracle would have needed.
+The bin-by-bin trace the coordinator asked for is still outstanding;
+`coded_block_pattern` for addresses 0-4 is now explicitly back in scope
+for it, alongside residual decode and the per-4x4-block intra prediction
+mode flags already named in the prior round's handoff.
+
+Full gate sweep clean (`layer-check`, `dep-gate`, `unsafe-audit`,
+`dup-check`, `owner-gate`, `patent-gate`); `h264_entropy` fuzz target ran
+~26s / 4.1M execs post-fix with no new crashes; full `vaco-codec-h264`
+test suite (18 non-CABAC-macroblock tests) unaffected.
+`vaco-codec-cabac`/`fuzz/fuzz_targets/cabac_engine.rs` untouched
+(`agent:codec-bits`'s crate). `provenance-check`'s 8 pre-existing
+failures on this branch are unrelated to this commit.
+
+Round did not fall — bit-exactness not yet achieved on any corpus — but
+the fix is genuine, kept, and the search space is now correctly stated
+rather than resting on an unverified inference.
+
+`Vaco-Spec-Ref: iso-iec-14496-10-2002-draft` Table 9-18, `coded_block_flag`
+context initialisation (`ctxBlockCat` 4, chroma AC).
