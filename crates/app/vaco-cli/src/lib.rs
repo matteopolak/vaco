@@ -70,6 +70,8 @@ pub mod cli;
 pub mod dump;
 pub mod exec;
 pub mod exit;
+pub mod filtergraph;
+pub mod filterreg;
 pub mod help;
 pub mod input;
 pub mod listing;

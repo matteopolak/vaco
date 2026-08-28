@@ -98,22 +98,28 @@ use vaco_format_core::flags::FormatFlags;
 use vaco_format_core::metadata::MuxMetadata;
 use vaco_format_core::{Muxer, Stream};
 use vaco_pixfmt::PixFmt;
-use vaco_sched::{Driver, Finish, PipelineSpec};
+use vaco_sched::{Driver, Finish, PipelineSpec, SourceBind};
 
-use crate::cli::{Cli, OutputSpec};
+use crate::cli::{Cli, OutputSpec, value_str};
 use crate::exit::{AvError, Diagnostic};
 use crate::input::InputFile;
 use crate::nullmux::{OutputTally, Sink, TallyingMuxer};
 use crate::select::{self, InputStreams, StreamPick};
 
 /// One resolved output stream, in output order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct OutStream {
     pub source: StreamPick,
     pub media: Option<MediaType>,
     /// What `-c`/`-c:v`/`-c:a` resolved to for this stream. [`check_codecs`]
     /// is where this is decided; [`run_pipeline`] is where it is acted on.
     pub codec: StreamCodec,
+    /// CL-20: `-vf`/`-af`/`-filter`, `-s`, `-aspect`, `-pix_fmt` for this
+    /// stream. [`graph_options_of`] is where this is decided;
+    /// [`run_pipeline`] is where it is acted on — and only for a stream that
+    /// is actually being transcoded, per [`graph_options_of`]'s own
+    /// streamcopy-conflict check.
+    pub graph_opts: crate::filtergraph::SimpleGraphOptions,
 }
 
 /// What `-c` resolved to for one output stream: pass packets
@@ -259,6 +265,9 @@ pub fn resolve_output(
             // Placeholder until `check_codecs` below decides it; every branch
             // that returns `streams` to a caller has run that check first.
             codec: StreamCodec::Copy,
+            // Placeholder until `graph_options_of` below decides it, same as
+            // `codec` above.
+            graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
         })
         .collect();
 
@@ -294,6 +303,14 @@ pub fn resolve_output(
     let codecs = check_codecs(cli, out, &streams)?;
     for (s, c) in streams.iter_mut().zip(codecs) {
         s.codec = c;
+    }
+
+    // CL-20: resolved after `codec`, because the streamcopy/filtergraph
+    // conflict check needs to know which streams are actually being
+    // transcoded.
+    let graph_opts = graph_options_of(cli, out, &streams)?;
+    for (s, g) in streams.iter_mut().zip(graph_opts) {
+        s.graph_opts = g;
     }
 
     let metadata = metadata_of(cli, out, &streams)?;
@@ -593,20 +610,131 @@ fn check_codecs(
     Ok(chosen_codecs)
 }
 
-fn encoder_error(out: &OutputSpec, s: &OutStream, i: usize, detail: &str) -> Diagnostic {
-    let tag = match s.media {
+/// The `vost`/`aost`/`sost`/`dost` tag the reference prefixes an output
+/// stream's own diagnostics with, by media type.
+fn stream_tag(media: Option<MediaType>) -> &'static str {
+    match media {
         Some(MediaType::Video) => "vost",
         Some(MediaType::Audio) => "aost",
         Some(MediaType::Subtitle) => "sost",
         _ => "dost",
-    };
-    let prefix = format!("[{tag}#{}:{i}]", out.index);
+    }
+}
+
+fn encoder_error(out: &OutputSpec, s: &OutStream, i: usize, detail: &str) -> Diagnostic {
+    let prefix = format!("[{}#{}:{i}]", stream_tag(s.media), out.index);
     Diagnostic::opening(
         AvError::ENCODER_NOT_FOUND,
         vec![
             format!("{prefix} {detail}"),
             format!("{prefix} Error selecting an encoder"),
         ],
+        "output",
+        &out.url,
+    )
+}
+
+/// CL-20: `-vf`/`-af`/`-filter`, `-s`, `-aspect`, `-pix_fmt` for every stream
+/// in `streams` — resolved against the output's own stream list, the same
+/// [`MatchCtx`] shape [`check_codecs`] and [`metadata_of`] already build for
+/// the same reason (a specifier like `-pix_fmt:v:0` counts within the output,
+/// not the input).
+///
+/// Must run after `streams`' `codec` field is decided: `-vf`/`-af`/`-filter`
+/// on a stream resolved to [`StreamCodec::Copy`] is the reference's own
+/// "Filtering and streamcopy cannot be used together" error (measured,
+/// `ffmpeg 8.1`, exit 234) — but `-s`/`-aspect`/`-pix_fmt` alone on a copied
+/// stream are silently ignored (also measured: `-c copy -s 32x32` exits 0
+/// with the stream's original geometry unchanged), so only `filter_text`
+/// triggers the conflict here.
+///
+/// # Errors
+///
+/// A [`Diagnostic`] for the streamcopy/filtergraph conflict above, an invalid
+/// `-s` value, or non-UTF-8 option text.
+fn graph_options_of(
+    cli: &Cli,
+    out: &OutputSpec,
+    streams: &[OutStream],
+) -> Result<Vec<crate::filtergraph::SimpleGraphOptions>, Diagnostic> {
+    let view: Vec<StreamInfo> = streams
+        .iter()
+        .enumerate()
+        .map(|(i, s)| StreamInfo {
+            index: i as u32,
+            media_type: s.media,
+            codec_known: true,
+            ..StreamInfo::default()
+        })
+        .collect();
+    let ctx = MatchCtx::streams(&view);
+    let group = cli.output_group(out.index);
+    // `-auto_conversion_filters` is `bit::GLOBAL`, not per-stream, so this is
+    // decided once for the whole output.
+    let auto_conversion = !cli
+        .line
+        .last_global("auto_conversion_filters")
+        .is_some_and(|o| o.negated);
+
+    let mut out_opts = Vec::new();
+    for (i, s) in streams.iter().enumerate() {
+        let mut opts = crate::filtergraph::SimpleGraphOptions {
+            auto_conversion,
+            ..crate::filtergraph::SimpleGraphOptions::default()
+        };
+        if let Some(g) = group {
+            let idx = i as u32;
+            if let Ok(Some(o)) = g.stream_option("filter", &ctx, idx) {
+                opts.filter_text = Some(value_str(o)?);
+            }
+            if s.media == Some(MediaType::Video) {
+                if let Ok(Some(o)) = g.stream_option("s", &ctx, idx) {
+                    let raw = value_str(o)?;
+                    let (w, h) = vaco_core::parse::image_size(&raw).ok_or_else(|| {
+                        Diagnostic::new(
+                            AvError::EINVAL,
+                            vec![format!("Invalid size '{raw}'")],
+                        )
+                    })?;
+                    opts.size = Some((w, h));
+                }
+                if let Ok(Some(o)) = g.stream_option("aspect", &ctx, idx) {
+                    opts.aspect = Some(value_str(o)?);
+                }
+                if let Ok(Some(o)) = g.stream_option("pix_fmt", &ctx, idx) {
+                    opts.pix_fmt = Some(value_str(o)?);
+                }
+            }
+        }
+        if opts.filter_text.is_some() && matches!(s.codec, StreamCodec::Copy) {
+            return Err(filter_streamcopy_conflict(
+                out,
+                s,
+                i,
+                opts.filter_text.as_deref().unwrap_or_default(),
+            ));
+        }
+        out_opts.push(opts);
+    }
+    Ok(out_opts)
+}
+
+/// Measured (`ffmpeg 8.1`, `-c copy -vf hflip`): a filtergraph named on a
+/// stream resolved to streamcopy is a hard error, exit 234, sans pointer:
+///
+/// ```text
+/// [vost#0:0/copy] Filtergraph 'hflip' was specified, but codec copy was selected. Filtering and streamcopy cannot be used together.
+/// Error opening output file -.
+/// Error opening output files: Invalid argument
+/// ```
+fn filter_streamcopy_conflict(out: &OutputSpec, s: &OutStream, i: usize, text: &str) -> Diagnostic {
+    let prefix = format!("[{}#{}:{i}/copy]", stream_tag(s.media), out.index);
+    Diagnostic::opening(
+        AvError::EINVAL,
+        vec![format!(
+            "{prefix} Filtergraph '{text}' was specified, but codec copy was selected. \
+             Filtering and streamcopy cannot be used together."
+        )],
         "output",
         &out.url,
     )
@@ -789,16 +917,44 @@ pub fn run_pipeline(
                     // An encoder that does not care lists nothing, so this is
                     // a no-op for the common case.
                     let accepted = encoder.accepted_pix_fmts();
-                    let source_format = p.video.as_ref().and_then(|v| v.format);
-                    let target = converter_target(source_format, accepted);
-                    let frames = match target {
-                        Some(t) if Some(t) != source_format => {
-                            spec.add_converter(frames, t, time_base, limits.clone())
+                    let frames = if s.graph_opts.wants_graph() {
+                        // CL-20: a real `-vf`/`-af`/`-filter`/`-s`/`-aspect`/
+                        // `-pix_fmt` graph replaces the ad-hoc
+                        // `converter_target`/`add_converter` path below —
+                        // `SimpleGraph::build`'s own `configure` already runs
+                        // the same auto-conversion policy for whatever the
+                        // user's chain leaves unresolved against `accepted`.
+                        let built = crate::filtergraph::build(
+                            &s.graph_opts,
+                            s.media.unwrap_or(MediaType::Data),
+                            p.video.as_ref(),
+                            p.audio.as_ref(),
+                            time_base,
+                            accepted,
+                        )
+                        .map_err(|e| {
+                            Diagnostic::new(AvError::EINVAL, vec![format!("Error: {e}")])
+                        })?;
+                        spec.add_filter(
+                            built.graph,
+                            &[SourceBind::new(frames, built.source, time_base)],
+                            &[built.sink],
+                        )
+                        .map_err(|e| internal_from("could not attach a filtergraph", &e))?
+                        .into_iter()
+                        .next()
+                        .ok_or_else(|| internal("a configured filtergraph produced no sink tap"))?
+                    } else {
+                        let source_format = p.video.as_ref().and_then(|v| v.format);
+                        let target = converter_target(source_format, accepted);
+                        match target {
+                            Some(t) if Some(t) != source_format => spec
+                                .add_converter(frames, t, time_base, limits.clone())
                                 .map_err(|e| {
                                     internal_from("could not attach a format converter", &e)
-                                })?
+                                })?,
+                            _ => frames,
                         }
-                        _ => frames,
                     };
                     let packets = spec
                         .add_encoder(frames, encoder, time_base)
@@ -1245,6 +1401,7 @@ mod tests {
             source: StreamPick { file: 0, stream: 0 },
             media: Some(MediaType::Video),
             codec: StreamCodec::Copy,
+            graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
         };
         let e = check_codecs(&c, &o, &[s]).unwrap_err();
         assert_eq!(
@@ -1264,8 +1421,9 @@ mod tests {
             source: StreamPick { file: 0, stream: 0 },
             media: Some(MediaType::Video),
             codec: StreamCodec::Copy,
+            graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
         };
-        assert!(check_codecs(&c, &o, &[s]).is_ok());
+        assert!(check_codecs(&c, &o, std::slice::from_ref(&s)).is_ok());
 
         let (c, o) = out_of(&["-i", "a.mkv", "-c:v", "libx264", "-f", "null", "-"]);
         let e = check_codecs(&c, &o, &[s]).unwrap_err();
@@ -1312,6 +1470,7 @@ mod tests {
             source: StreamPick { file: 0, stream: 0 },
             media: Some(MediaType::Video),
             codec: StreamCodec::Copy,
+            graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
         };
         let resolved = check_codecs(&c, &o, &[s]).unwrap();
         assert_eq!(resolved, vec![StreamCodec::Encode("qoi")]);
@@ -1328,11 +1487,13 @@ mod tests {
                 source: StreamPick { file: 0, stream: 0 },
                 media: Some(MediaType::Audio),
                 codec: StreamCodec::Copy,
+                graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
             },
             OutStream {
                 source: StreamPick { file: 0, stream: 1 },
                 media: Some(MediaType::Audio),
                 codec: StreamCodec::Copy,
+                graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
             },
         ];
         assert!(check_codecs(&c, &o, &streams).is_ok());

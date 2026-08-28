@@ -150,6 +150,7 @@ static FFMPEG_OPTIONS: &[OptDesc] = &[
     o("max_muxing_queue_size", Some("packets"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT, ValueKind::Int, "packets buffered while streams initialise"),
     o("muxing_queue_data_threshold", Some("bytes"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT, ValueKind::Int, "bytes buffered before the queue limit applies"),
     o("r", Some("rate"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::OUTPUT | bit::PER_STREAM | bit::VIDEO, ValueKind::Rate, "set the frame rate"),
+    o("s", Some("size"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::OUTPUT | bit::PER_STREAM | bit::VIDEO, ValueKind::Size, "set frame size"),
     o("aspect", Some("aspect"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::VIDEO, ValueKind::Expr, "set the display aspect ratio"),
     o("vn", None, bit::PER_FILE | bit::INPUT | bit::OUTPUT | bit::VIDEO, ValueKind::None, "drop video streams"),
     alias("vcodec", Some("codec"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::OUTPUT | bit::VIDEO, ValueKind::Str, "select the video codec", "c", "v"),
