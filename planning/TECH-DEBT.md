@@ -545,3 +545,87 @@ encoder meets; extending it to progressive output would also need the
 `ac_refine`-side bug above resolved first, since a progressive encoder is
 only useful if this crate's own progressive decoder can be trusted to check
 it against.
+
+### C-13 update: `EncoderDesc`, `DecoderDesc::make` and CLI dispatch landed; a payload-carrying `CodecId::Ext` did not
+
+The three parts C-13 asked for are done: `vaco-codec-core` has `EncoderDesc`
+(mirroring `DecoderDesc`, which now carries a `make: fn(Limits) -> Box<dyn
+Decoder>` it did not have either), `xtask/src/registry.rs`'s `KINDS` maps
+`"encoder"` to a real typed table, and `vaco-cli`'s `check_codecs`/
+`run_pipeline` resolve a named `-c:v`/`-c:a` through `vaco_registry::
+encoder_by_name` and build a real decode-then-encode leg instead of only
+accepting `"copy"`. QOI, the PNM family and the simple-image repertoire
+(PCX/TGA/SGI/XWD/XBM; BMP already had a `CodecId`) are registered as
+decoders and encoders. `vaco -i in8.bmp -c:v qoi -f null -` now runs an
+actual decode(bmp)-then-encode(qoi) pipeline and exits 0.
+
+The "policy for adding a codec id without a core-crate edit" half did not
+survive contact with the rest of the tree. A `CodecId::Ext(&'static
+ExtCodec)` payload-carrying variant was built, tested and then reverted: at
+least one existing call site (`vaco-bsf-generic`'s noise generator) casts
+`CodecId as u64` for a hash seed, and Rust only permits that cast when
+*every* variant of the enum is fieldless — confirmed directly (`cargo check
+-p vaco-bsf-generic` fails with E0605 the moment any variant carries data,
+regardless of which variant a given run actually constructs). Thirteen
+`CodecId` variants were hand-added instead (the same shape every prior
+codec-family addition to this table already took), which is a real,
+un-avoided core-crate edit per codec.
+
+**Proposed seam, unbuilt:** the doc comment on `CodecEntry` already names
+plan 15 §1.1's intended fix — generate the enum and table from a
+`codecs.toml` the way `vaco-pixfmt` generates its own tables — and that
+would still keep every variant fieldless (a generator can emit plain unit
+variants same as a human can). It was not attempted here: transcribing the
+existing ~150-entry table into a generator's input without introducing a
+silent drift risk is a larger, separate piece of work, and the reachability
+fix did not depend on it. Whoever picks up plan 15 §1.1 should read this
+entry first — the fieldless constraint is the one design fact that rules out
+the runtime-registration shortcut that looks obvious otherwise.
+
+### A single still image demuxed with no timeline cannot be muxed to almost any real container
+
+`vaco-demux-image2`'s `SingleSourceDemuxer` (the path a bare `-i in.bmp`
+takes, no glob pattern) sets `packet.pts = Timestamp::NONE` deliberately —
+measured against the reference, which reports no timeline at all for a lone
+still image rather than a synthetic `0`. `vaco-format-core::interleave`
+refuses any packet with neither `pts` nor `dts` unless the muxer declares
+`FormatFlags::NOTIMESTAMPS`, and only `null` and `ffmetadata` declare it
+today. The result: `vaco -i in.bmp -c copy -f image2 out.bmp` (no codec
+change at all) fails with "this container needs timestamps and the packet
+has none", and so does every other muxer tried (`md5`, `matroska` was not
+tried but shares the same `interleave` path). Found verifying #652's
+decode-then-encode leg — `-f null -` was the only output that accepted the
+same pipeline. `vaco-mux-image2` (and plausibly other single-shot-friendly
+muxers) is missing `FormatFlags::NOTIMESTAMPS`; that crate is not owned by
+this session.
+
+### `vaco-demux-image2` does not map most image codecs' extensions to a `CodecId`
+
+With QOI/PNM-family/PCX/TGA/SGI/XWD/XBM now registered as decoders (see the
+C-13 update above), `vaco -i in.ppm -c:v qoi -f null -` still fails —
+"Internal error: a stream being transcoded has no known input codec" — because
+`vaco-demux-image2`'s extension table only knows a handful of codecs
+(BMP among them) and reports `codec_id: None` for the rest. The decoders
+exist and are reachable by name; they are simply never selected as the
+*input* side of a transcode until that demuxer's extension table is
+extended. Not attempted here: `vaco-demux-image2` is not owned by this
+session, and the finding was made verifying #652's CLI dispatch, not while
+working in that crate.
+
+### The simple-image codecs' pixel formats do not round-trip through each other without a filter stage
+
+`vaco-cli`'s new decode-then-encode leg (#652) has no scale/pixel-format
+conversion between the decoder's output and the encoder's input — a decoded
+frame in a format the target encoder does not accept fails with that
+encoder's own `Unsupported` message rather than being converted. This is
+visible even within `vaco-codec-image-simple` alone: a paletted (1/4/8bpp)
+BMP decodes to `Rgb24`, which `vaco-codec-qoi`'s encoder accepts, but
+`vaco-codec-image-simple`'s own BMP *encoder* only accepts `bgr24`/`bgra` —
+so `bmp(paletted) -> qoi -> bmp` fails on the final step with "bmp: encoder
+needs bgr24 or bgra input", even though both codecs are correctly registered
+and reachable. Reproducible with a 24bpp source instead: BMP decodes that to
+`Bgr24`, which `vaco-codec-qoi`'s encoder then refuses ("qoi: encoder needs
+rgb24 or rgba input"). Neither codec is wrong on its own — the gap is the
+missing conversion stage between them, which is `vaco-cli`/`vaco-sched`'s to
+add (a scale/format filter node between the decoder and encoder legs), not
+either codec crate's.
