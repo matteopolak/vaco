@@ -574,8 +574,10 @@ one day on `planning/TECH-DEBT.md`, once by the orchestrator, and both times the
 commit message described only the committer's own work while the diff carried
 somebody else's.
 
-For an append-only shared document — `CONFORMANCE-FINDINGS.md`, `TECH-DEBT.md`
-— build your half from `HEAD`, never from the working tree:
+The append-only shared documents are `planning/CONFORMANCE-FINDINGS.md`,
+`planning/TECH-DEBT.md`, `planning/ASSIGNMENTS.md` and
+`provenance/sources.toml`. All four have been absorbed at least once. For any
+of them, build your half from `HEAD`, never from the working tree:
 
 ```sh
 git show HEAD:planning/TECH-DEBT.md > /tmp/mine.md   # NOT the working-tree file
