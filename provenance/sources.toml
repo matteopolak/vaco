@@ -991,3 +991,10 @@ kind     = "blackbox"
 title    = "Observed byte layout of `ffmpeg -f mxf_d10` output at 30/40/50 Mbit/s, ffmpeg 8.1: the single-partition header-carries-essence file shape, the per-frame Generic Container essence element key (item-type byte 0x05, twenty-five separate KLVs not one clip KLV), the three bitrate-specific PictureEssenceCoding ULs, the SeparateFields height-halving in the CDCIEssenceDescriptor, and a real Index Table Segment stating IndexDuration=0 despite a definite frame count"
 acquired = "2026-08-28"
 where    = "the reference binary installed on the development machine"
+
+[[source]]
+id       = "unscii-8-font"
+kind     = "original"
+title    = "Unscii, an independent Public Domain bitmap font project by Viznut — `unscii-8.hex`, the plain 8x8 variant (not the GPL-Unifont-derived `-full` variant), covering ASCII 0x20-0x7E: the source of `vaco-filter-scope`'s embedded glyph table, used because the reference's own `datascope`/`pixscope`/`oscilloscope` filters draw text with a compiled-in fixed-width bitmap font that is itself authorial data under D7 and cannot be transcribed"
+acquired = "2026-08-28"
+where    = "https://github.com/viznut/unscii (fontfiles/unscii-8.hex); see also http://viznut.fi/unscii/"
