@@ -21,6 +21,7 @@ mod owner_gate;
 mod patent_gate;
 mod provenance;
 mod registry;
+mod similarity;
 mod time_gate;
 mod toml;
 mod unsafe_audit;
@@ -47,6 +48,7 @@ fn main() {
         "check-message" => check_message(args.get(1).map(String::as_str)),
         "owner-gate" => owner_gate::run(check),
         "gen-registry" => registry::run(check),
+        "similarity-scan" => similarity::run(&args[1..]),
         "gen-docs-index" => docs::run(check),
         "gen-coverage" => coverage::run(check),
         "gen-pixfmt" => gen_pixfmt::run(check),
@@ -73,6 +75,10 @@ fn main() {
             );
             eprintln!("  gen-fuzz        assemble fuzz/Cargo.toml from target front-matter");
             eprintln!("  gen-coverage    generate docs/format-coverage.md");
+            eprintln!(
+                "  similarity-scan winnowing fingerprint scan (QA-08, plan 13 §6.4); \
+                 needs --against <corpus-dir>"
+            );
             std::process::exit(2);
         }
     };
