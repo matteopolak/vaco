@@ -82,26 +82,34 @@
 //! in full.
 //!
 //! **What is not**: full bit-exactness for CABAC's macroblock layer.
-//! [`mb::decode_slice_cabac`] now exists and drives I/P slices through
-//! real `libx264 -coder cabac` corpora (`tests/macroblock_layer_cabac.rs`),
-//! and building it caught four real bugs across two passes — first,
-//! `cabac_residual.rs`'s context tables were a single shared table
-//! ignoring `cabac_init_idc` entirely (not merely imprecise, structurally
-//! wrong), and chroma DC's `coded_block_flag` was never actually read; a
-//! second pass found `intra_chroma_pred_mode` was decoded but never
-//! stored (so a neighbour-dependent `ctxIdxInc` derivation could never see
-//! its real value — this one alone ate the entire first-pass repro, since
-//! it corrupts the arithmetic engine's state from the very first
-//! context-coded read in every intra macroblock), and `ref_idx_cond_term`
-//! had a clause 9.3.3.1.1.6 comparison inverted. All four fixed against
-//! primary text. But bit consumption still diverges, later and on
-//! different corpora each time this has been measured, in a way not
-//! root-caused within either dispatch — see [`mb`]'s own module doc and
-//! `docs/codec/vaco-codec-h264.md` for the current exact minimal repro per
-//! corpus. Reporting that honestly, rather than claiming the same
-//! bit-exact bar CAVLC holds, is the same choice a previous dispatch on
-//! this project was asked to make for the specification-only-dressed-as-
-//! verified gap.
+//! [`mb::decode_slice_cabac`] now exists, handles `I_PCM`, and drives I/P
+//! slices through real `libx264 -coder cabac` corpora
+//! (`tests/macroblock_layer_cabac.rs`). Building it caught five real bugs
+//! across three passes: `cabac_residual.rs`'s context tables were a
+//! single shared table ignoring `cabac_init_idc` entirely, and chroma
+//! DC's `coded_block_flag` was never read; `intra_chroma_pred_mode` was
+//! decoded but never stored for a neighbour-dependent `ctxIdxInc` to see,
+//! and `ref_idx_cond_term` had a clause 9.3.3.1.1.6 comparison inverted;
+//! and the *test's own assertions* were too weak to prove bit-exactness
+//! in the first place — `!malformed()` and a matching macroblock count
+//! can both hold while every decoded value is wrong, since
+//! `end_of_slice_flag` can plausibly fire at a macroblock-count-correct
+//! point regardless. Adding the CABAC counterpart to the CAVLC test's
+//! `more_rbsp_data()` check (verifying what follows `end_of_slice_flag`
+//! really is `rbsp_slice_trailing_bits()`) found that **no slice in any
+//! of the three corpora had ever actually been bit-exact** — the earlier,
+//! more specific-sounding progress reports (a later slice number, more
+//! macroblocks visited, a scope refusal reached) were all real progress
+//! on the bugs they found, just measured too weakly to see the whole
+//! picture. That is the same failure shape `AGENT-CONSTRAINTS.md` already
+//! tracks for a too-narrow fuzz harness, a too-narrow metric, and a gate
+//! with an incomplete target list — here it was this crate's own test.
+//! See [`mb`]'s own module doc, `docs/codec/vaco-codec-h264.md`, and
+//! `planning/TECH-DEBT.md` for the current, corrected minimal repro per
+//! corpus and the handoff. Reporting that honestly, rather than claiming
+//! the same bit-exact bar CAVLC holds, is the same choice a previous
+//! dispatch on this project was asked to make for the
+//! specification-only-dressed-as-verified gap.
 
 #![forbid(unsafe_code)]
 

@@ -40,12 +40,16 @@
 //!   `TotalCoeff` at all when this flag is set). Not implemented; the test
 //!   corpus is encoded with it off (x264's default), and
 //!   [`decode_slice_cavlc`] refuses a slice whose PPS has it set.
-//! - **4:2:2/4:4:4 chroma, `SI` slices, `I_PCM`, weighted prediction's actual
+//! - **4:2:2/4:4:4 chroma, `SI` slices, weighted prediction's actual
 //!   weights** (the syntax elements they would need — `pred_weight_table`
 //!   — are already fully parsed by `vaco-parse-h264`'s slice header, so
-//!   nothing here re-reads them). `I_PCM` specifically refuses rather than
-//!   guessing at its byte-alignment padding's exact bit count from this
-//!   module alone.
+//!   nothing here re-reads them).
+//! - **`I_PCM` on the CAVLC side only.** [`decode_slice_cavlc`] still
+//!   refuses it rather than guessing at its byte-alignment padding's exact
+//!   bit count from this module alone. CABAC's own [`decode_slice_cabac`]
+//!   *does* handle `I_PCM` — see the CABAC section below — because CABAC's
+//!   `mb_type` binarisation signals it unambiguously via
+//!   `decode_terminate`, so there was nothing to guess.
 //! - **CABAC B slices** — [`decode_slice_cabac`] refuses them outright.
 //!   Table 9-27/9-28's B-slice `mb_type`/`sub_mb_type` bin strings do not
 //!   decompose into the same clean arithmetic form as the I-slice and P/SP
@@ -812,17 +816,39 @@ fn decode_residual(
 // engine's range/offset for everything read afterward, so "chroma DC
 // looks wrong" was a downstream symptom, not the defect's location.
 //
-// KNOWN GAP, not yet closed: bit consumption still diverges, later and on
-// different corpora than before — `tests/macroblock_layer_cabac.rs`'s
-// three tests are `#[ignore]`d with the current exact minimal
-// reproduction for each. Every table and ctxIdxInc formula reachable
-// before each new divergence point has been re-verified against primary
-// text and matches; the fixed `h264_entropy` fuzz harness was run against
-// the newly-reachable `ChromaDc` cross product before any hand-debugging
-// and found nothing (clean — meaning whatever remains is a silent
-// semantic divergence, not a panic/hang this fuzz target could catch).
-// Reported honestly rather than claimed; see the coordinator report for
-// this dispatch.
+// A third pass added I_PCM support (byte-align, skip 384 raw pcm_byte[i]
+// reads per the 2002 draft's fixed-8-bit clause 7.3.5, re-initialise only
+// the arithmetic engine per 9.3.1.2) — cheap, as expected, since
+// `CabacDecoder`'s own renormalisation never reads ahead of what it has
+// consumed. But that same pass found the real problem was the
+// *measurement*: `tests/macroblock_layer_cabac.rs`'s assertions
+// (`!malformed()`, `macroblock_count == total_mbs`) can both hold even
+// when every decoded value is wrong, since `end_of_slice_flag`'s fixed
+// context can plausibly fire at a macroblock-count-correct point
+// regardless of what was actually decoded before it. Adding a check that
+// what follows `end_of_slice_flag` really is clause 7.3.2.10's
+// `rbsp_slice_trailing_bits()` (mirroring what `more_rbsp_data()` already
+// gives the CAVLC test) found all three corpora diverge at **slice 0** —
+// not slice 10, not "36 of 36 macroblocks", not "reaches I_PCM at slice
+// 6" as reported after the second pass. Those were real, correctly
+// described bugs and fixes; the measurement reporting them as progress
+// toward bit-exactness was not strong enough to have noticed that no
+// slice had ever actually been bit-exact.
+//
+// KNOWN GAP, not yet closed: address-by-address cross-checking against
+// `ffmpeg -debug mb_type` (letter meanings read from FFmpeg's own
+// `libavcodec/mpegutils.c`, not assumed) shows every macroblock
+// classification in `cabac_i_only.264`'s slice 0 — an all-`Intra4x4`
+// slice — matches the reference exactly, yet the engine ends short of
+// `rbsp_trailing_bits()` by a bit or two. Every `ctxIdxInc`/context table
+// reachable before residual decode in an all-intra slice has been
+// re-verified against primary text this round (`MB_TYPE_I` Table 9-12,
+// `SKIP_P`/`MB_TYPE_P` Table 9-13, `PREV_INTRA4X4`/`REM_INTRA4X4`/
+// `INTRA_CHROMA_PRED_MODE`/`QP_DELTA` Table 9-17, `CBP_LUMA`/`CBP_CHROMA`
+// Table 9-18) and matches, which leaves `residual_block_cabac` — never
+// before driven by real encoder output — the leading suspect. Not
+// isolated further within this round's time budget. Reported honestly
+// rather than claimed; see `planning/TECH-DEBT.md` for the handoff.
 use crate::cabac_mb_tables::{inits_by_col, inits_by_idc, inits_fixed};
 
 /// `CabacDecoder::decode_decision` over a context array, indexed safely —
@@ -1484,7 +1510,37 @@ fn decode_macroblock_cabac(
     };
     let kind = classify_mb_type(header.kind, raw_code)?;
     if matches!(kind, MbKind::IPcm) {
-        return Err(Error::Unsupported("vaco-codec-h264: I_PCM is out of scope for #419 (CABAC)"));
+        // Clause 7.3.5's macroblock_layer(): I_PCM's own branch is just
+        // `while(!byte_aligned()) pcm_alignment_zero_bit; for(i=0;
+        // i<256*ChromaFormatFactor;i++) pcm_byte[i] u(8)` — no
+        // coded_block_pattern, no mb_qp_delta, no residual() at all, and
+        // (per the 2002 draft this crate's tables are checked against,
+        // clause 6.3.3/Table 6-1) every pcm_byte is a fixed 8 bits
+        // regardless of bit depth; that extension postdates this edition
+        // the same way the 8x8 transform and 4:2:2 chroma DC do. For
+        // 4:2:0 (this crate's only supported chroma format),
+        // ChromaFormatFactor = 1.5, so 256*1.5 = 384 bytes total.
+        //
+        // Clause 9.3.1.2 is invoked again right after: the arithmetic
+        // *engine* re-initialises (fresh ivlCurrRange = 510, ivlOffset
+        // from the next 9 bits) but the *context models* do not — 9.3.1.1
+        // is not re-invoked, so `ctx` is untouched here. `CabacDecoder`
+        // renormalises exactly one bit at a time with no read-ahead (see
+        // its own module doc), so `into_reader()` hands back a
+        // `BitReader` positioned exactly where the raw byte data starts.
+        let mut reader = core::mem::replace(cabac, CabacDecoder::new(&[])).into_reader();
+        reader.align();
+        for _ in 0..384u32 {
+            let _ = reader.get(8);
+        }
+        *cabac = CabacDecoder::from_reader(reader);
+        *prev_qp = PrevMbQp { available: true, skipped: false, is_ipcm: true, ..PrevMbQp::default() };
+        grids.set_mb_info(
+            mb_x,
+            mb_y,
+            CabacMbInfo { available: true, skipped: false, is_ipcm: true, ..CabacMbInfo::default() },
+        );
+        return Ok(());
     }
 
     let is_intra = kind.is_intra();
