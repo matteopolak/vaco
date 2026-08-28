@@ -283,7 +283,14 @@ already tier-3 verified so any diff is IDCT-only) and confirmed it holds
 not assumed" for the method and the decisive finding (two coefficients
 that each alone produce a lone ±1 difference cancel to zero when combined,
 proving the mismatch is a genuinely non-linear function of the whole
-coefficient set, not a fixed per-basis-function bias).
+coefficient set, not a fixed per-basis-function bias). A follow-up round
+asked whether closing that gap by continued measurement would converge
+or diverge — it diverges (row/column separability fails, a magnitude
+sweep relocates the error to unrelated pixels with no discoverable
+pattern, and each probe's constraint yield is too small and unstable to
+compose): see that same file's "The IDCT reverse-engineering-by-
+measurement project: diverges" for the three checks. This is now a
+permanent ceiling, not an open project.
 
 **MPEG-1 remains genuinely wrong.** A later session re-examined this with
 two techniques that were not available the first time: reading the
