@@ -940,7 +940,7 @@ fn reconstruct_macroblock(
             } else {
                 ap.non_intra_matrix
             };
-            let dequant = block::dequantise(&qf, &matrix, quantiser_scale, intra, intra_dc_mult);
+            let dequant = block::dequantise(&qf, &matrix, quantiser_scale, intra, intra_dc_mult, ap.mpeg1);
             block::inverse_transform(idct, &dequant)
         } else {
             [0i32; 64]

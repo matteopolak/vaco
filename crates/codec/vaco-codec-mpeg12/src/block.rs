@@ -205,6 +205,7 @@ pub(crate) fn dequantise(
     quantiser_scale: u16,
     intra: bool,
     intra_dc_mult: u16,
+    mpeg1: bool,
 ) -> [i32; 64] {
     let mut f = [0i32; 64];
     for (i, slot) in f.iter_mut().enumerate() {
@@ -226,28 +227,62 @@ pub(crate) fn dequantise(
         };
         *slot = i32::try_from(raw.clamp(-2048, 2047)).unwrap_or(0);
     }
-    // §7.4.4 mismatch control: applies to every block (intra and
-    // non-intra) except the trivial all-zero block, which the standard's
-    // own summary loop (7.4.5) does not special-case either — an all-zero
-    // sum is even and toggles F[7][7] to +-1, which is exactly the
-    // specified behaviour, not an omission.
-    //
-    // H.262 Annex D.9.1 documents that ISO/IEC 11172-2 (MPEG-1) uses a
-    // different rule here (correcting every nonzero-even coefficient
-    // independently, rather than one sum-parity-conditional coefficient).
-    // Implementing that as "toggle every such coefficient's LSB" was tried
-    // in both directions (+1 and -1) against this crate's MPEG-1 fixtures
-    // and measured *worse* than applying this MPEG-2 rule unconditionally
-    // in both cases (avg MAD rose from ~12-44 to ~24-51) — the hypothesis
-    // that this specific rule is both the cause and correctly reconstructed
-    // from the free text alone is not supported by the fixtures on hand,
-    // so this crate deliberately applies the one rule below to every
-    // stream rather than a worse, unverified MPEG-1-specific one.
-    let sum: i64 = f.iter().map(|&v| i64::from(v)).sum();
-    if sum & 1 == 0
-        && let Some(last) = f.get_mut(63)
-    {
-        *last = if *last & 1 != 0 { *last - 1 } else { *last + 1 };
+    // §7.4.4 / Annex D.9.1: the two formats' IDCT mismatch control rules
+    // are genuinely different operations, not a shared one applied with
+    // different parameters, and are mutually exclusive — MPEG-1 has no
+    // sum-parity F[7][7] concept at all (D.9.1: "MPEG-2 — ... adding (or
+    // removing) one to coefficient [7][7] if the sum of all coefficients
+    // is even" is stated as the *MPEG-2* rule, contrasted with MPEG-1's
+    // own paragraph above it), so applying the MPEG-2 rule to an MPEG-1
+    // stream is a real, separate bug from having the MPEG-1 rule itself
+    // wrong: it hands out a correction the format never specifies, on
+    // top of whichever correction it does specify going missing.
+    if mpeg1 {
+        // D.9.1, MPEG-1: "adding (or removing) one to each non-zero
+        // coefficient that would have been even after inverse
+        // quantisation." The direction is not "+1" or "-1" applied
+        // uniformly — that reads the same six words as two different,
+        // both-wrong rules (uniform +1 is right for negative
+        // coefficients and wrong for positive ones; uniform -1 is the
+        // mirror image), which is indistinguishable from a coin flip on
+        // any given coefficient and would measure worse than no
+        // correction at all, which is exactly what an earlier version of
+        // this function's own testing found. The direction implied by
+        // "adding (or removing)" as a single per-coefficient rule is
+        // sign-dependent: move the coefficient one step *toward* zero
+        // (`rec -= sign(rec)`), the direction that reduces the
+        // reconstruction's own magnitude rather than growing it — the
+        // same purpose §7.4.4's own summary text on this page cites for
+        // mismatch control generally ("so that mismatch errors... cannot
+        // build up excessively").
+        //
+        // Never applied to an intra block's own DC coefficient (`i ==
+        // 0`): that position is reconstructed through `intra_dc_mult`
+        // above, a completely different mechanism from the
+        // matrix/quantiser-scale AC formula this correction is stated
+        // against, and is not a "non-zero coefficient" in the AC sense
+        // D.9.1 is describing at all.
+        for (i, slot) in f.iter_mut().enumerate() {
+            if intra && i == 0 {
+                continue;
+            }
+            let v = *slot;
+            if v != 0 && v % 2 == 0 {
+                *slot = v - v.signum();
+            }
+        }
+    } else {
+        // §7.4.4 mismatch control: applies to every block (intra and
+        // non-intra) except the trivial all-zero block, which the
+        // standard's own summary loop (7.4.5) does not special-case
+        // either — an all-zero sum is even and toggles F[7][7] to +-1,
+        // which is exactly the specified behaviour, not an omission.
+        let sum: i64 = f.iter().map(|&v| i64::from(v)).sum();
+        if sum & 1 == 0
+            && let Some(last) = f.get_mut(63)
+        {
+            *last = if *last & 1 != 0 { *last - 1 } else { *last + 1 };
+        }
     }
     f
 }
@@ -386,7 +421,7 @@ mod tests {
             *v = 10;
         }
         let matrix = tables::DEFAULT_INTRA_MATRIX;
-        let f = dequantise(&qf, &matrix, 1, true, 8);
+        let f = dequantise(&qf, &matrix, 1, true, 8, false);
         // intra_dc_mult=8: F''[0][0] = 10*8 = 80, unaffected by matrix/scale.
         assert_eq!(f.first().copied(), Some(80));
     }
@@ -395,7 +430,7 @@ mod tests {
     fn mismatch_control_toggles_f77_on_an_even_sum() {
         let qf = [0i32; 64]; // sum = 0, even.
         let matrix = tables::DEFAULT_NON_INTRA_MATRIX;
-        let f = dequantise(&qf, &matrix, 1, false, 8);
+        let f = dequantise(&qf, &matrix, 1, false, 8, false);
         assert_eq!(f.get(63).copied(), Some(1));
     }
 }
