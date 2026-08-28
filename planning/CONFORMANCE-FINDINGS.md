@@ -2560,3 +2560,81 @@ reference does, and which has consequences the harness already documents
 (`remux-bitexact.toml` excludes AVI-sourced remuxes precisely because
 "Timestamps are unset in a packet for stream 0"). One cosmetic field is not
 worth destabilising the timestamps on a path that now remuxes byte-identically.
+
+## 47. AVI and Ogg demuxers: extradata never reaches stream info, and two invented fields
+
+Sweeping `ffprobe -show_streams` across every container we can both read
+produced three clean results and three with something to say. `long.mp4` is
+**identical**. MPEG-TS became identical earlier today (#635). CAF became
+identical with finding 44. The remaining three:
+
+### AVI: the H.264 extradata is never parsed
+
+Eighteen fields differ, and they are all downstream of one thing:
+
+```text
+                       reference        ours
+profile                100              unknown
+level                  10               -99
+pix_fmt                yuv420p          unknown
+has_b_frames           2                0
+sample_aspect_ratio    1:1              N/A
+display_aspect_ratio   1:1              N/A
+chroma_location        left             unspecified
+is_avc                 true             (absent)
+nal_length_size        4                (absent)
+extradata_size         45               (absent)
+mime_codec_string      avc1.64000a      (absent)
+bits_per_raw_sample    8                N/A
+```
+
+`strf` carries the 45-byte `avcC` and we do not hand it to stream info, so
+nothing that depends on the SPS is filled in. Note `is_avc=true` and
+`nal_length_size=4`: the reference stores H.264 in AVI **length-prefixed**, not
+Annex-B, which is worth knowing before anyone writes the muxer half.
+
+One field is not extradata:
+
+```text
+r_frame_rate           25/1             600/1
+nb_frames              3600             N/A
+```
+
+We read `r_frame_rate` straight out of `strh`, which is the 600 Hz slot grid
+(see finding 39, "AVI is written on a fixed 600 Hz grid"). The reference
+derives it from the timestamps of the frames that actually carry data, giving
+the real 25/1 — while still reporting `nb_frames=3600`, the slot count. Both
+numbers are right and they answer different questions.
+
+### Ogg: the serial number is not the stream id
+
+```text
+id                     N/A              0xaf733afc
+duration_ts            48312            N/A
+duration               1.006500         N/A
+TAG:encoder            Lavc62.28.100 libopus   (absent)
+```
+
+The Ogg bitstream serial is a demultiplexing key, not a container-assigned
+stream identifier, and the reference reports none. We expose it as `id`, which
+is the same class of mistake as the `TAG:ts_codec` just removed from MPEG-TS:
+a real internal value published through a field that means something else.
+
+**And `ogg_codec` is that mistake exactly.** `vaco-demux-ogg`'s `codec` module
+records unrecognised codec names in `Stream::metadata` under `"ogg_codec"`, and
+its doc comment cites `vaco-demux-mpegts`'s `ts_codec` as the precedent for
+doing so. That precedent was removed today because stream metadata is what
+`ffprobe` prints as `TAG:`, so the value shows up in output the reference never
+produces. `ogg_codec` will do the same on any Theora or Speex stream — the two
+cases it exists for — and it has not been measured only because neither is easy
+to produce here. The comment citing the removed precedent is now stale either
+way.
+
+The Vorbis comment header is also not read, so `TAG:encoder` and everything
+else in it is missing.
+
+### FLV
+
+Covered by finding 40 ("FLV: the input's container metadata is dropped"): the
+read side is missing `bit_rate` and the same three container tags the write side
+fails to forward, which suggests one cause rather than two.
