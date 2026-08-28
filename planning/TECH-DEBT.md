@@ -6560,3 +6560,36 @@ the commit was simply never created) — recovered via the private-index
 recipe rather than by resetting anyone else's staged work.
 
 `Vaco-Spec-Ref: itu-t-h263` Annex F §F.3.
+
+## vaco-codec-h264: luma DC coded_block_flag aliased AC block 0's own grid slot
+
+`decode_residual_cabac`'s luma DC (`ctxBlockCat == 0`) `coded_block_flag`
+was written via `grids.set_cbf_luma(mb_x * 4, mb_y * 4, coded)` -- the
+same per-4x4-block grid position later overwritten, a few lines further
+down in the same macroblock's own decode, by luma4x4BlkIdx 0's own AC
+`coded_block_flag`. Any later `Intra_16x16` macroblock reading "my
+`Intra_16x16` neighbour's DC flag" back out of `cbf_luma` silently got
+that neighbour's AC-block-0 flag instead. Invisible until the first
+`Intra_16x16`-to-`Intra_16x16` macroblock adjacency in a decode, since
+the read is gated on the neighbour being `Intra_16x16` at all --
+`cabac_intra_oracle_noise.264` (all `Intra_4x4`) never exercised the
+path, and even `cabac_intra_oracle_testsrc.264`'s own macroblock (1, 1)
+(also `Intra_16x16`, but both of *its* neighbours are `Intra_4x4`)
+never triggered the read either. Macroblock (2, 1), whose left
+neighbour is (1, 1), is the first place both conditions hold at once.
+
+Fixed by giving luma DC its own macroblock-granular grid,
+`CabacGrids::cbf_luma_dc` (`cbf_luma_dc_at`/`set_cbf_luma_dc`), mirroring
+`cbf_chroma_dc`'s own existing pattern and its own documented reasoning
+for exactly this class of `ctxBlockCat` (one flag per whole macroblock,
+not per 4x4 position). `cabac_intra_oracle_testsrc.264` and `_multi.264`
+are now byte-exact; `cabac_i_only.264` improves from 60.90% to 63.77%
+(still open, still not localised).
+
+Also swept for (and found no further instances of) the adjacent
+same-macroblock-cbf timing hazard fixed the previous round, and added
+type-level prevention: `CabacGrids::currently_decoding` plus a
+`debug_assert_ne!` in `mb_info_at` that fires immediately if that exact
+bug shape is ever reintroduced, backed by three new unit tests.
+
+`Vaco-Spec-Ref: iso-iec-14496-10-2002-draft` clause 9.3.3.1.1.9.
