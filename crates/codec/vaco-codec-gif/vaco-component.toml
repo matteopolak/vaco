@@ -1,0 +1,19 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+
+[[component]]
+kind      = "decoder"
+name      = "gif"
+long_name = "CompuServe GIF (Graphics Interchange Format), wrapping the `gif` crate (D11)"
+feature   = "codec-gif"
+ctor      = "vaco_codec_gif::GIF_DECODER"
+media     = "video"
+codec     = "gif"
+
+[[component]]
+kind      = "encoder"
+name      = "gif"
+long_name = "CompuServe GIF (Graphics Interchange Format), wrapping the `gif` crate (D11)"
+feature   = "codec-gif"
+ctor      = "vaco_codec_gif::GIF_ENCODER"
+media     = "video"
+codec     = "gif"
