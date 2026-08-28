@@ -2928,13 +2928,14 @@ fn decode_sub_mb_pred_cabac(
     mb_y: u32,
     ref0_inferred: bool,
 ) -> Result<()> {
-    let mut subs: Vec<(u8, Option<PartPred>)> = budget_alloc_four();
+    let mut subs: Vec<(u8, u8, Option<PartPred>)> = budget_alloc_four();
     for _ in 0..4 {
         let code = decode_sub_mb_type_p(cabac, &mut ctx.sub_mb_type_p);
-        subs.push(classify_sub_mb_type(false, code)?);
+        let (num_sub, pred) = classify_sub_mb_type(false, code)?;
+        subs.push((u8::try_from(code).unwrap_or(0), num_sub, pred));
     }
     let n0 = header.num_ref_idx_l0_active_minus1;
-    for (i, &(num_sub, pred)) in subs.iter().enumerate() {
+    for (i, &(code, num_sub, pred)) in subs.iter().enumerate() {
         let Some(pred) = pred else { continue };
         let quad = u32::try_from(i).unwrap_or(0);
         let (qx, qy) = (quad % 2, quad / 2);
@@ -2951,31 +2952,44 @@ fn decode_sub_mb_pred_cabac(
         // `num_sub` sub-partitions inside this 8x8 quadrant share one
         // ref_idx but each read their own mvd. `sub_positions` is where
         // each sub-partition's own context/prediction *neighbour lookup*
-        // happens (its own top-left 4x4 corner); `owner_of` (below) is
-        // the separate question of which of the quadrant's own 4 4x4
-        // grid positions that sub-partition's *result* gets written to
-        // -- num_sub == 1 (P_L0_8x8, the common real-corpus case) writes
-        // the same one computed mv/mvd to all 4, not just the corner
-        // position the neighbour lookup used. Distinguishing 8x4 from
-        // 4x8 (both num_sub == 2) is not implemented -- both are treated
-        // as a horizontal top/bottom split, an approximation this
-        // crate's own oracle comparison has not yet been used to check
-        // (see #422's own scope note); num_sub == 4 (P_L0_4x4) is exact.
+        // happens (its own top-left 4x4 corner), `sub_right_x` is that
+        // same sub-partition's own top-*right* corner (clause 8.4.1.3.2's
+        // `C` neighbour needs the partition's real right edge, not always
+        // its left one), and `owner_of` (below) is the separate question
+        // of which of the quadrant's own 4 4x4 grid positions that
+        // sub-partition's *result* gets written to -- num_sub == 1
+        // (P_L0_8x8, the common real-corpus case) writes the same one
+        // computed mv/mvd to all 4, not just the corner position the
+        // neighbour lookup used. Table 7-14's two `num_sub == 2` codes
+        // are genuinely different shapes: code 1 (`P_L0_8x4`) splits the
+        // quadrant top/bottom (varies in `y`, each sub-partition 8
+        // wide), code 2 (`P_L0_4x8`) splits it left/right (varies in
+        // `x`, each sub-partition 8 tall) -- `classify_sub_mb_type`
+        // collapses both to `num_sub == 2` for the CAVLC bit-consumption
+        // path, which never needs the shape, so `code` is read back here
+        // instead of trusting `num_sub` alone. num_sub == 4 (P_L0_4x4)
+        // is exact either way.
+        let top_bottom = num_sub == 2 && code == 1;
         let sub_positions: [(u32, u32); 4] = match num_sub {
             1 => [(x0, y0), (x0, y0), (x0, y0), (x0, y0)],
+            2 if top_bottom => [(x0, y0), (x0, y1), (x0, y0), (x0, y1)],
             2 => [(x0, y0), (x1, y0), (x0, y0), (x1, y0)],
             _ => [(x0, y0), (x1, y0), (x0, y1), (x1, y1)],
         };
+        let sub_right_x: [u32; 4] =
+            if num_sub == 1 || top_bottom { [x1, x1, x1, x1] } else { [x0, x1, x0, x1] };
         let owner_of = |x: u32, y: u32| -> usize {
             match num_sub {
                 1 => 0,
-                2 => usize::from(x == x1), // left half = sub 0, right half = sub 1 (see the 8x4/4x8 note above)
+                2 if top_bottom => usize::from(y == y1), // top half = sub 0, bottom half = sub 1
+                2 => usize::from(x == x1),                // left half = sub 0, right half = sub 1
                 _ => usize::from(x == x1) + 2 * usize::from(y == y1),
             }
         };
         let mut computed = [MvInfo::default(); 4];
         for s in 0..num_sub {
             let (sx, sy) = sub_positions[usize::from(s).min(3)];
+            let srx = sub_right_x[usize::from(s).min(3)];
             let sax = mb_x * 4 + sx;
             let say = mb_y * 4 + sy;
             let sleft = sax.checked_sub(1).map_or_else(MvInfo::default, |lx| grids.mv_at(lx, say));
@@ -2985,7 +2999,7 @@ fn decode_sub_mb_pred_cabac(
             let sum_y = mvd_abs_term(sleft, 0, 1) + mvd_abs_term(sabove, 0, 1);
             let y = decode_mvd_component(cabac, &mut ctx.mvd_comp1, sum_y);
             let mvd = [(i16::try_from(x).unwrap_or(i16::MAX), i16::try_from(y).unwrap_or(i16::MAX)), (0, 0)];
-            let c_neighbour = resolve_c(grids, sax, sax, say);
+            let c_neighbour = resolve_c(grids, sax, mb_x * 4 + srx, say);
             let pmv = crate::motion::predict_mv(
                 crate::motion::PartitionShape::Whole,
                 sleft.as_motion_neighbour(0),
