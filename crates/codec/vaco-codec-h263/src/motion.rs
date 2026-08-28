@@ -150,6 +150,7 @@ pub(crate) fn sample_half_pel(
     src_y: i32,
     mv_x: i32,
     mv_y: i32,
+    rcontrol: bool,
 ) -> u8 {
     let int_x = mv_x.div_euclid(2);
     let int_y = mv_y.div_euclid(2);
@@ -160,29 +161,42 @@ pub(crate) fn sample_half_pel(
 
     match (half_x, half_y) {
         (false, false) => refp.sample(plane, x, y),
-        (true, false) => avg2(refp.sample(plane, x, y), refp.sample(plane, x + 1, y)),
-        (false, true) => avg2(refp.sample(plane, x, y), refp.sample(plane, x, y + 1)),
+        (true, false) => avg2(refp.sample(plane, x, y), refp.sample(plane, x + 1, y), rcontrol),
+        (false, true) => avg2(refp.sample(plane, x, y), refp.sample(plane, x, y + 1), rcontrol),
         (true, true) => avg4(
             refp.sample(plane, x, y),
             refp.sample(plane, x + 1, y),
             refp.sample(plane, x, y + 1),
             refp.sample(plane, x + 1, y + 1),
+            rcontrol,
         ),
     }
 }
 
 /// `b = (A + B + 1) / 2` — round to nearest, ties away from zero, which
 /// for a non-negative sum is simply "round half up".
-fn avg2(a: u8, b: u8) -> u8 {
-    (u16::from(a) + u16::from(b)).div_ceil(2) as u8
+#[allow(
+    clippy::integer_division,
+    reason = "`b = c = (A + B + 1 - RCONTROL) / 2` is the literal formula (H.263 Figure 13) — the add-then-truncate form is round-to-nearest for a divisor of 2 when RCONTROL == 0, or plain truncation when RCONTROL == 1, not an approximation of either"
+)]
+fn avg2(a: u8, b: u8, rcontrol: bool) -> u8 {
+    // `Vaco-Spec-Ref: itu-t-h263` 6.1.2, Figure 13: `b = c = (A + B + 1 -
+    // RCONTROL) / 2`. `RCONTROL == 0` (every non-PLUSPTYPE picture, and
+    // any PLUSPTYPE one with RTYPE off) is the round-up-on-ties case this
+    // crate always used before RTYPE was read at all; `RCONTROL == 1`
+    // truncates instead, matching the encoder's own rounding-alternation
+    // recommendation (5.1.4.3's own text) for its reference picture.
+    let bias = u16::from(!rcontrol);
+    ((u16::from(a) + u16::from(b) + bias) / 2) as u8
 }
 
 #[allow(
     clippy::integer_division,
-    reason = "`d = (A + B + C + D + 2) / 4` is the literal formula (H.263 Figure 12 / H.261 §3.2.1's identical bilinear scheme) — the +2-then-truncate form is round-to-nearest for a divisor of 4, not an approximation"
+    reason = "`d = (A + B + C + D + 2 - RCONTROL) / 4` is the literal formula (H.263 Figure 13 / H.261 §3.2.1's identical bilinear scheme) — the add-then-truncate form is round-to-nearest for a divisor of 4 (or plain truncation when RCONTROL == 1), not an approximation"
 )]
-fn avg4(a: u8, b: u8, c: u8, d: u8) -> u8 {
-    ((u16::from(a) + u16::from(b) + u16::from(c) + u16::from(d) + 2) / 4) as u8
+fn avg4(a: u8, b: u8, c: u8, d: u8, rcontrol: bool) -> u8 {
+    let bias: u16 = if rcontrol { 1 } else { 2 };
+    ((u16::from(a) + u16::from(b) + u16::from(c) + u16::from(d) + bias) / 4) as u8
 }
 
 /// H.261 §3.2.3's optional loop filter (`FIL`): separable 2-D, taps
@@ -259,5 +273,23 @@ mod tests {
     fn umv_vector_plus_is_a_plain_sum() {
         assert_eq!(h263_umv_vector_plus(60, 10), 70);
         assert_eq!(h263_umv_vector_plus(-60, -10), -70);
+    }
+
+    #[test]
+    fn avg2_rounds_up_on_ties_when_rcontrol_is_off() {
+        // A=10, B=11: (10+11+1)/2 = 11 with RCONTROL off (this crate's
+        // own behaviour before RTYPE was read at all).
+        assert_eq!(avg2(10, 11, false), 11);
+        // Same inputs, RCONTROL on: (10+11)/2 = 10, truncated.
+        assert_eq!(avg2(10, 11, true), 10);
+    }
+
+    #[test]
+    fn avg4_matches_figure_13s_two_bias_values() {
+        // A+B+C+D = 10: RCONTROL off -> (10+2)/4 = 3; RCONTROL on ->
+        // (10+1)/4 = 2 (truncated either way) — the one bias value that
+        // actually crosses an integer boundary between the two rules.
+        assert_eq!(avg4(2, 2, 3, 3, false), 3);
+        assert_eq!(avg4(2, 2, 3, 3, true), 2);
     }
 }

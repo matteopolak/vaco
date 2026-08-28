@@ -97,6 +97,11 @@ struct ActivePicture {
     /// what that clause's rule 1 requires a neighbour referencing it to
     /// see.
     mv_grid: Vec<[i32; 2]>,
+    /// §6.1.2's `RCONTROL` (the Rounding Type, `RTYPE`, bit in `MPPTYPE`):
+    /// which of the two half-pel interpolation rounding conventions this
+    /// picture's own motion compensation uses. Always `false` outside
+    /// `PLUSPTYPE` — see `plus::PlusHeader::rtype`'s own docs.
+    rcontrol: bool,
     /// Annex K §K.1 rule 1: which slice each macroblock was decoded in,
     /// parallel to `mv_grid` — consulted by [`predictors`] only when
     /// `slice_structured`, so it stays all-zero (and unused) otherwise.
@@ -240,6 +245,7 @@ impl H263Decoder {
                         mq: false,
                         slice_structured: false,
                         rectangular_slices: false,
+                        rcontrol: false,
                     });
                     // §5.2: "For the first GOB in each picture (with
                     // number 0), no GOB header shall be transmitted" —
@@ -326,6 +332,7 @@ impl H263Decoder {
             mq: modes.modified_quantization,
             slice_structured: modes.slice_structured,
             rectangular_slices: modes.rectangular_slices,
+            rcontrol: header.as_ref().is_some_and(|hdr| hdr.rtype),
         });
 
         if unsupported {
@@ -861,7 +868,7 @@ fn reconstruct_macroblock(
                             let sx = i32::try_from(px_ox + x).unwrap_or(0);
                             let sy = i32::try_from(px_oy + y).unwrap_or(0);
                             if let Some(slot) = pred.get_mut((y * bw + x) as usize) {
-                                *slot = motion::sample_half_pel(refp, plane, sx, sy, mv_x, mv_y);
+                                *slot = motion::sample_half_pel(refp, plane, sx, sy, mv_x, mv_y, ap.rcontrol);
                             }
                         }
                     }

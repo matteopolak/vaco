@@ -68,6 +68,12 @@ pub(crate) struct PlusHeader {
     pub height: u32,
     pub intra: bool,
     pub cpm: bool,
+    /// Rounding Type (`RTYPE`), MPPTYPE bit 6 (`Vaco-Spec-Ref: itu-t-h263`
+    /// 6.1.2): selects which of the two half-pel interpolation rounding
+    /// conventions (`RCONTROL`) this picture's own motion compensation
+    /// uses. Always `false` outside `PLUSPTYPE` (§6.1.2's own text: "RCONTROL
+    /// has an implied value of 0" when the extended header is absent).
+    pub rtype: bool,
 }
 
 /// §5.1.4–§5.1.10: parse `PLUSPTYPE` and its optional trailing fields,
@@ -134,6 +140,10 @@ pub(crate) fn parse(r: &mut BitReader<'_>, modes: &mut PlusModes, fallback_dims:
     let picture_type_code = (mpptype >> 6) & 0b111;
     let rpr = (mpptype >> 5) & 1 == 1;
     let rru = (mpptype >> 4) & 1 == 1;
+    // §6.1.2/§5.1.4.3: bit 6 of MPPTYPE, only meaningful for P/Improved-PB/
+    // EP pictures (always 0 otherwise, per the encoder-side restriction
+    // this decoder does not need to itself enforce).
+    let rtype = (mpptype >> 3) & 1 == 1;
 
     // §5.1.4.7: CPM follows PLUSPTYPE directly here (not after PQUANT,
     // as in the non-extended header) — the caller reads PQUANT itself,
@@ -213,5 +223,5 @@ pub(crate) fn parse(r: &mut BitReader<'_>, modes: &mut PlusModes, fallback_dims:
     if width == 0 || height == 0 {
         return None;
     }
-    Some(PlusHeader { width, height, intra, cpm })
+    Some(PlusHeader { width, height, intra, cpm, rtype })
 }

@@ -169,8 +169,27 @@ decision, not a provenance one:**
   patterns), and a chroma-vector rounding table (F.1) distinct from the
   one this crate already has. This is the single biggest, riskiest
   remaining piece — a genuine rewrite of the motion-compensation
-  pipeline, not an additive change — and was set aside rather than rushed
-  in the same pass as D/K/T.
+  pipeline, not an additive change.
+
+  A later pass in this same series (after the P-picture drift fix below)
+  attempted Figure F.1 specifically, rendering the relevant PDF page at
+  300dpi and reading the four sub-figures' cell boundaries directly
+  (`pdftoppm`, then pixel-position analysis of the box edges) rather than
+  the flattened, spacing-collapsed `pdftotext` rendering used elsewhere
+  in this crate. Three of the four blocks' predictor definitions read
+  unambiguously this way (block 2's and block 3's are fully internal to
+  the macroblock, with no external-neighbour case to misjudge; block 0's
+  is pinned down exactly by a second, independent constraint — F.2's own
+  text that its definition must equal the existing single-vector
+  §6.1.1 rule bit-for-bit). Block 1's `MV3` source could not be pinned
+  down to the same confidence from the figure and this cross-check alone
+  — resolving it correctly would need either a real `-obmc` differential
+  fixture (not yet built) or clearer secondary confirmation. Rather than
+  ship a per-block predictor table that is three-quarters verified and
+  one-quarter a reasoned best guess, this crate still does not implement
+  Annex F. The OBMC weighting matrices (Figures F.2-F.4) and the remote-
+  vector substitution rules (§F.3) were also read in full and are not
+  in question — only the block-1 predictor source is.
 - **Annex E (Syntax-based Arithmetic Coding)** replaces every VLC in the
   format with arithmetic coding — a different entropy layer entirely, not
   an additive mode on top of the existing one.
@@ -267,9 +286,22 @@ already tested against `vaco-codec-mpeg12`'s D-22 list, from inside a
 single crate this time rather than across crates — a different angle on
 the same question. Mixed results again:
 
-- **Held: half-pel interpolation, unchanged.** Annex D's extended-range
-  vectors still resolve to the same `motion::sample_half_pel` call; only
-  the *value* the vector holds changed, not how it's used to sample.
+- **Held partially, then corrected: half-pel interpolation's formula,
+  not its parameterisation.** Annex D's extended-range vectors resolve
+  through the same `motion::sample_half_pel` call unchanged — the
+  formula itself held. But `PLUSPTYPE` pictures also gained a parameter
+  the formula already had a slot for and this crate had never
+  populated: `RCONTROL` (§6.1.2/Figure 13), `0` outside `PLUSPTYPE` but
+  equal to `MPPTYPE`'s own `RTYPE` bit once it's present. Nothing in
+  this pass's own D/K/T work needed it directly, but reaching
+  `PLUSPTYPE` at all is what exposed a field this crate had always been
+  able to read (it's part of the same `MPPTYPE` byte the picture-type
+  code and RPR/RRU bits live in) but never had a reason to. Recorded
+  here rather than only in the bugs list because it's a seam-shaped
+  finding in its own right: "the formula transfers" and "every input the
+  formula needs is already wired up" are two different claims, and this
+  crate had only verified the first one until a real fixture's growing
+  P-picture error forced verifying the second.
 - **Held, in a new way: the three-stage block pipeline's shape.**
   Annex T's `QUANT_C` substitution and widened clip
   (`block::dequantise_ranged`) slot into the *existing* `dequantise`
@@ -453,6 +485,32 @@ all.
    *growing* per-frame error — the signature of a systematically wrong
    (rather than occasionally wrong) motion-vector predictor, not a
    remaining VLC or dequantisation bug.
+9. **Half-pel interpolation never read `RTYPE`/`RCONTROL` at all.**
+   §6.1.2/Figure 13 defines half-pel bilinear interpolation with a
+   `RCONTROL` term (`b = c = (A + B + 1 - RCONTROL) / 2`, `d = (A + B + C
+   + D + 2 - RCONTROL) / 4`) that is `0` outside `PLUSPTYPE` but equal to
+   `MPPTYPE`'s own `RTYPE` bit when `PLUSPTYPE` is present — the
+   mechanism §5.1.4.3's own text says an encoder should use to alternate
+   rounding between a P-picture and its own reference, specifically to
+   prevent rounding bias from accumulating picture to picture. This
+   crate's `plus.rs` parsed `MPPTYPE` far enough to reach `RTYPE`'s bit
+   position but never read it, and `motion::avg2`/`avg4` had no
+   `RCONTROL` parameter at all — every `PLUSPTYPE` picture's motion
+   compensation used the `RCONTROL = 0` rounding rule regardless of what
+   the bitstream's own `RTYPE` bit said. ffmpeg's `h263p` encoder does
+   alternate `RTYPE`, so every other reconstructed P-picture rounded
+   every half-pel tie the wrong way — individually a ±1 difference, but
+   feeding back into the next P-picture's own reference, compounding
+   frame over frame. This was, by a wide margin, the dominant remaining
+   source of the P-picture drift reported against this crate's own
+   annex work (see "Measured accuracy" below for the before/after
+   numbers) — found by recognising the failure shape (avg MAD rising in
+   *matched pairs* of consecutive frames, e.g. 0.058, 0.058, 0.093,
+   0.092, ... — exactly what an every-other-frame rounding-convention
+   error produces) rather than a smoothly growing curve, and confirmed
+   by reading §6.1.2 directly rather than guessing from the symptom.
+   Fixed by threading `rtype`/`rcontrol` from `plus::PlusHeader` through
+   `ActivePicture` to `motion::sample_half_pel`, `avg2`, and `avg4`.
 
 ## Measured accuracy
 
@@ -472,27 +530,37 @@ for both formats:
 | QCIF, mixed I/P | H.263 | 5/5 | 0.008 – 0.011 | 1 | 98.9 – 99.2% |
 | CIF, mixed I/P | H.263 | 5/5 | 0.003 – 0.004 | 2 | 99.6 – 99.7% |
 | QCIF, UMV + Annex K, I-only | H.263+ | 1/1 | 0.008 | 1 | 99.2% |
-| QCIF, UMV + Annex K, mixed I/P (50 frames) | H.263+ | 50/50 | 0.008 – 0.78 (growing) | 1 – 17 | 99.2% – 85.9% |
+| QCIF, UMV + Annex K, mixed I/P (50 frames) | H.263+ | 50/50 | 0.008 – 0.031 | 1 – 3 | 99.2% – 97.0% |
+| QCIF, baseline (no UMV/Annex K), mixed I/P (50 frames), control | H.263 | 50/50 | 0.008 – 0.028 | 1 – 3 | 99.2% – 97.3% |
 
-The last row is the one real-world differential fixture available for
-the annex work (`ffmpeg -c:v h263p -bitexact -umv 1`, which — per the
+The first annex row is the one real-world differential fixture available
+for the annex work (`ffmpeg -c:v h263p -bitexact -umv 1`, which — per the
 finding above — always couples Annex D's `PLUSPTYPE` path with Annex K).
 Its own I-picture (frame 0, no motion vectors at all) matches this
 crate's established baseline accuracy exactly, confirming the picture-
-header and slice-layer work is sound; the P-pictures accumulate a small,
-slowly growing error not yet root-caused beyond ruling out the two bugs
-above (both fixed, and responsible for the bulk of a much larger error
-before the fix — avg MAD peaked at 9.07 by frame 49 pre-fix, 0.78
-post-fix). The remaining gap is sparse (roughly 1 in 40 pixels by frame
-49) and small in magnitude (1-2 of 255 code values per affected pixel) —
-consistent with one more small, not-yet-isolated rounding or edge-case
-difference in the UMV/Annex-K motion-vector path, not a structural
-misread. Annex T and the legacy (non-`PLUSPTYPE`) Annex D path have no
-equivalent real-fixture number at all — see the bugs section above for
-why — only the hand-crafted-bitstream unit tests in `block::tests` and
-`motion::tests`, verified against the spec's own worked examples (Table
-D.3's `-13` example; Table T.1/T.2's own examples) rather than against a
-second independent implementation.
+header and slice-layer work is sound. The P-pictures initially showed a
+much larger, steadily growing error — avg MAD reaching 9.07, ~14% exact,
+by frame 49 — traced to bug 9 above (`RCONTROL` never read); fixing it
+brought frame 49 down to the 0.031/97.0% shown here, a roughly 25x
+reduction. To find out whether the *remaining* growth (0.008 to 0.031
+over 49 frames) was still an annex-specific defect, a second, matched-
+length control fixture was built: the same source content, same GOP
+structure, same frame count, encoded with the plain `h263` encoder
+instead of `h263p` — no `PLUSPTYPE`, no `UMV`, no Annex K at all. Its own
+curve (the table's last row) is statistically indistinguishable from the
+annex fixture's, both in shape and in final value (0.028 vs 0.031, 97.3%
+vs 97.0% by frame 49) — this is this crate's own pre-existing, already-
+documented floating-point IDCT/reference-chain drift (see the closing
+paragraph of this section), present in *any* sufficiently long P-only
+GOP regardless of which annexes are in use, simply never measured past
+5 frames before this pass built a 50-frame fixture. Nothing annex-
+specific remains open in the motion-compensation path. Annex T and the
+legacy (non-`PLUSPTYPE`) Annex D path have no equivalent real-fixture
+number at all — see the bugs section above for why — only the hand-
+crafted-bitstream unit tests in `block::tests` and `motion::tests`,
+verified against the spec's own worked examples (Table D.3's `-13`
+example; Table T.1/T.2's own examples) rather than against a second
+independent implementation.
 
 Not literally framemd5-identical to the reference in any of these —
 `vaco-codec-jpeg`'s own precedent applies here too: `vaco-codec-dsp-idct`
@@ -595,16 +663,15 @@ the same way every other decoder in this workspace does.
   Structured mode alongside any other `PLUSPTYPE` mode), and Annex T has
   no exposed ffmpeg encoder toggle at all — see "Measured accuracy" for
   what tier of testing each annex actually got.
-- **A small, not-yet-isolated residual error accumulates across
-  P-pictures in the one real UMV+Annex-K fixture available** (avg MAD
-  0.78, ~86% pixel-exact by frame 49, down from an intra-picture 99.2%)
-  — see "Measured accuracy" for the numbers and the two bugs already
-  ruled out.
 - **Neither decoder reaches literal framemd5-identical output** — see
-  "Measured accuracy". Reference-quality (±1, no localized error) on
-  every *baseline* fixture checked and on the one annex fixture's
-  intra picture; not bit-exact anywhere, and not yet reference-quality on
-  the annex fixture's P-pictures specifically (see the point above).
+  "Measured accuracy". Reference-quality (±1, small and slowly growing
+  over a long P-only GOP, matching a plain baseline control fixture of
+  the same length) on every fixture checked, annex and baseline alike;
+  not bit-exact anywhere. The P-picture drift this section previously
+  listed as "not yet isolated" turned out to be, once `RCONTROL`
+  (bug 9) was fixed, indistinguishable from this same pre-existing
+  floating-point IDCT/reference-chain characteristic — not a remaining
+  annex-specific defect.
 - **No B-frame, PB-frame, or field-picture support** — neither format's
   baseline syntax has any of these; not a gap relative to this crate's
   stated scope, listed here only so a future annex pass knows what
