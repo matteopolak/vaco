@@ -213,20 +213,67 @@ decision, not a provenance one:**
   300dpi and reading the four sub-figures' cell boundaries directly
   (`pdftoppm`, then pixel-position analysis of the box edges) rather than
   the flattened, spacing-collapsed `pdftotext` rendering used elsewhere
-  in this crate. Three of the four blocks' predictor definitions read
-  unambiguously this way (block 2's and block 3's are fully internal to
-  the macroblock, with no external-neighbour case to misjudge; block 0's
-  is pinned down exactly by a second, independent constraint — F.2's own
-  text that its definition must equal the existing single-vector
-  §6.1.1 rule bit-for-bit). Block 1's `MV3` source could not be pinned
-  down to the same confidence from the figure and this cross-check alone
-  — resolving it correctly would need either a real `-obmc` differential
-  fixture (not yet built) or clearer secondary confirmation. Rather than
-  ship a per-block predictor table that is three-quarters verified and
-  one-quarter a reasoned best guess, this crate still does not implement
-  Annex F. The OBMC weighting matrices (Figures F.2-F.4) and the remote-
-  vector substitution rules (§F.3) were also read in full and are not
-  in question — only the block-1 predictor source is.
+  in this crate. That pass left block 1's `MV3` source unresolved and
+  reported it as such (three of four blocks pinned down, block 1 not).
+
+  **A further pass resolved block 1, and corrected an error in the pass
+  above's own reading of block 2, both by measurement rather than
+  eyeballing the render.** The earlier pixel-position check had been
+  read visually; this pass instead measured line *thickness* directly
+  (`PIL`/`numpy`: for each sampled row inside a sub-figure, group
+  contiguous dark pixels and record each group's width in pixels) on a
+  freshly-cropped, 2x-upscaled render of each of the four sub-figures.
+  Figure F.1's own convention, confirmed by this measurement: a
+  **thick-ruled** border (4px in the render) encloses cells that are
+  other, already-decoded blocks *within the current macroblock*
+  (internal); a cell drawn in a separate box outside that thick border,
+  with only a thin (1px) rule of its own, is a *different, neighbouring*
+  macroblock's block (external) — exactly the convention the existing
+  §6.1.1/Figure 12 diagram already uses for the single-vector case.
+  Measured per block:
+  - **Block 0** — thick border encloses only the "MV" cell itself (plus
+    the still-undecided block-1 position in the same macroblock); `MV1`,
+    `MV2`, `MV3` all sit outside it, each its own thin box. All three
+    external: left, above, above-right neighbouring macroblocks — this
+    is the §6.1.1/Figure 12 rule verbatim, matching F.2's own text that
+    block 0 must equal it bit-for-bit (unchanged from the earlier pass).
+  - **Block 1** — thick border encloses `MV1` together with "MV": `MV1`
+    is **internal**, the current macroblock's own block 0 (already
+    decoded, immediately to block 1's left). `MV2` and `MV3` each sit in
+    their own thin external box: **external**, the above and
+    above-right neighbouring macroblocks' own block-in-that-column
+    (their block 2 and block 3 respectively, by position). This is the
+    reading the earlier pass could not pin down.
+  - **Block 2** — thick border encloses `MV2` and `MV3` together with
+    "MV": both **internal** (the current macroblock's own block 0 and
+    block 1). `MV1` sits in its own separate thin box: **external**, the
+    left neighbouring macroblock's own block 3. **This corrects the
+    earlier pass's own claim that block 2 was "fully internal" — it is
+    not; only two of its three predictors are.** The earlier pass's
+    visual read conflated block 2's case with block 3's below.
+  - **Block 3** — a single thick border encloses `MV1`, `MV2`, `MV3` and
+    "MV" together, with no separate external box anywhere in the
+    sub-figure: fully internal, all three predictors are the current
+    macroblock's own already-decoded blocks 2, 0 and 1. This is the one
+    block the earlier pass's "fully internal" claim correctly describes.
+
+  All four blocks' predictor sources are now pinned down from the
+  primary text alone, at the same confidence the rest of this crate's
+  Annex work is held to. This has **not** been cross-checked against a
+  real `-obmc` differential fixture (`ffmpeg -flags +obmc` is confirmed,
+  in an earlier round, to exist and to change encoder output, so the
+  fixture side is buildable) — a real-decode differential is still the
+  right final check before shipping, since it would exercise the
+  predictor reading, F.3's remote-vector substitution rules and the
+  OBMC weighting matrices together, against real decoder behaviour,
+  rather than the primary text alone. Doing that, plus the OBMC
+  weighting/remote-vector/4-vector-MCBPC wiring itself, is a
+  substantially sized implementation in its own right and was not
+  attempted in the same pass as this figure re-read; **this crate still
+  does not implement Annex F.** The OBMC weighting matrices
+  (Figures F.2-F.4) and the remote-vector substitution rules (§F.3) were
+  read in full in the earlier pass and are not in question — only the
+  per-block predictor source was, and that is now closed.
 - **Annex E (Syntax-based Arithmetic Coding)** replaces every VLC in the
   format with arithmetic coding — a different entropy layer entirely, not
   an additive mode on top of the existing one.
