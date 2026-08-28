@@ -25,6 +25,25 @@
 //! byte the first code of a group lands in (the reference calls the `le`
 //! variant "right-justified"); [`pack_codes`]/[`unpack_codes`] implement both
 //! orderings behind `left_justified`.
+//!
+//! # Not wired up as the `adpcm_g726`/`adpcm_g726le` codecs — and deliberately never was
+//!
+//! A caller pointing a decoder built from this module at a real G.726
+//! bitstream gets a value for every sample and no error — which is strictly
+//! worse than an absent decoder, because nothing tells them it failed. The
+//! repository owner's ruling (`planning/AGENT-CONSTRAINTS.md`, "byte-
+//! exactness is a check, not the bar") permits small, unstructured
+//! deviation, not a structurally different transform answering to the same
+//! name. So `AdpcmG726Decoder`/`AdpcmG726Encoder` in `crate::lib` always
+//! return `Error::Unsupported` and are **not** registered in
+//! `vaco-component.toml` — `-c:a g726`/`g726le` will not resolve to this
+//! code. The functions below stay, still exercised by their own round-trip
+//! tests, for whoever implements the real two-pole/six-zero predictor next.
+
+#![allow(
+    dead_code,
+    reason = "kept for whoever implements the real ITU-T G.726 two-pole/six-zero predictor               next; not reachable from the registered codec path, see the module doc above"
+)]
 
 use vaco_core::{Error, Result};
 

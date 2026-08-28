@@ -1,5 +1,11 @@
 # Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
-# The standardised ADPCM subset (issue #280, C-02): 7 decoders / 7 encoders.
+# The standardised ADPCM subset (issue #280, C-02): 4 of the 7 codecs named
+# in that issue are registered here (8 components: adpcm_ima_wav, adpcm_ima_qt,
+# adpcm_ms, adpcm_swf, decoder + encoder each). adpcm_g722, adpcm_g726 and
+# adpcm_g726le are deliberately NOT listed: src/lib.rs's crate doc and
+# src/g722.rs / src/g726.rs explain why (a structurally different transform
+# from the real ITU-T algorithms, not a byte-inexact implementation of it —
+# registering it would hand a caller wrong output with no error).
 
 [[component]]
 kind      = "decoder"
@@ -72,57 +78,3 @@ feature   = "codec-adpcm"
 ctor      = "vaco_codec_adpcm::ADPCM_SWF_ENCODER"
 media     = "audio"
 codec     = "adpcm_swf"
-
-[[component]]
-kind      = "decoder"
-name      = "adpcm_g726"
-long_name = "G.726 ADPCM"
-feature   = "codec-adpcm"
-ctor      = "vaco_codec_adpcm::ADPCM_G726_DECODER"
-media     = "audio"
-codec     = "adpcm_g726"
-
-[[component]]
-kind      = "encoder"
-name      = "adpcm_g726"
-long_name = "G.726 ADPCM"
-feature   = "codec-adpcm"
-ctor      = "vaco_codec_adpcm::ADPCM_G726_ENCODER"
-media     = "audio"
-codec     = "adpcm_g726"
-
-[[component]]
-kind      = "decoder"
-name      = "adpcm_g726le"
-long_name = "G.726 ADPCM little-endian"
-feature   = "codec-adpcm"
-ctor      = "vaco_codec_adpcm::ADPCM_G726LE_DECODER"
-media     = "audio"
-codec     = "adpcm_g726le"
-
-[[component]]
-kind      = "encoder"
-name      = "adpcm_g726le"
-long_name = "G.726 little endian ADPCM"
-feature   = "codec-adpcm"
-ctor      = "vaco_codec_adpcm::ADPCM_G726LE_ENCODER"
-media     = "audio"
-codec     = "adpcm_g726le"
-
-[[component]]
-kind      = "decoder"
-name      = "adpcm_g722"
-long_name = "G.722 ADPCM"
-feature   = "codec-adpcm"
-ctor      = "vaco_codec_adpcm::ADPCM_G722_DECODER"
-media     = "audio"
-codec     = "adpcm_g722"
-
-[[component]]
-kind      = "encoder"
-name      = "adpcm_g722"
-long_name = "G.722 ADPCM"
-feature   = "codec-adpcm"
-ctor      = "vaco_codec_adpcm::ADPCM_G722_ENCODER"
-media     = "audio"
-codec     = "adpcm_g722"

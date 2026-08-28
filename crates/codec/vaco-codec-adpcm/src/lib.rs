@@ -1,34 +1,28 @@
 //! The standardised ADPCM subset (issue #280, C-02): G.722, G.726/le, MS,
-//! SWF, IMA-WAV and IMA-QT — 7 codec identities, each with a real decoder and
-//! encoder.
+//! SWF, IMA-WAV and IMA-QT — 7 codec identities. **5 of 7 are real,
+//! registered decoders and encoders; G.722 and G.726/G.726le are not** — see
+//! "What is not covered" below before assuming otherwise.
 //!
 //! # What it is
 //!
-//! Unlike PCM's single shared table (`vaco-codec-pcm`), these six families
-//! are genuinely different algorithms — different adaptive predictors,
-//! different block framing, different bit-packing — so this crate is six
-//! small modules ([`ima`], [`ms`], [`swf`], [`g726`], [`g722`]) each owning
-//! one family's pure decode/encode functions, plus the `SendReceive`
-//! wrappers and registrations in this file. `ima` covers both `adpcm_ima_wav`
-//! and `adpcm_ima_qt` (same nibble codec, different container framing);
-//! `g726` covers both `adpcm_g726` and `adpcm_g726le` (same codec, different
-//! bit-packing).
+//! Unlike PCM's single shared table (`vaco-codec-pcm`), these families are
+//! genuinely different algorithms — different adaptive predictors, different
+//! block framing, different bit-packing — so this crate is six small modules
+//! ([`ima`], [`ms`], [`swf`], [`g726`], [`g722`]) each owning one family's
+//! pure decode/encode functions, plus the `SendReceive` wrappers and
+//! registrations in this file. `ima` covers both `adpcm_ima_wav` and
+//! `adpcm_ima_qt` (same nibble codec, different container framing).
 //!
 //! # How it works
 //!
-//! Every family follows the same `Machine`-backed `SendReceive` shape
-//! `vaco-codec-pcm`/`vaco-codec-qoi` use. The block-oriented families
-//! (IMA-WAV, IMA-QT, MS, SWF) treat one packet as one block — a real
-//! container typically does too, but a caller free to choose its own
-//! packetisation should keep block boundaries aligned with codec boundaries,
-//! since state does not carry across a `send` call for these. The
-//! continuous families (G.722, G.726/le) reset their adaptive state at the
-//! start of every packet for the same reason — documented explicitly where
-//! it matters (their own module docs) since a real G.722/G.726 stream is
-//! usually one continuous run with no such resets.
+//! Every registered family follows the same `Machine`-backed `SendReceive`
+//! shape `vaco-codec-pcm`/`vaco-codec-qoi` use, treating one packet as one
+//! block — a real container typically does too, but a caller free to choose
+//! its own packetisation should keep block boundaries aligned with codec
+//! boundaries, since state does not carry across a `send` call.
 //!
 //! Like `vaco-codec-pcm`, none of these codecs' bitstreams self-describe a
-//! sample rate or channel count (block-based ones self-describe the *codec*
+//! sample rate or channel count (a block self-describes its own *codec*
 //! state — predictor, step index — but never the *container* facts). See
 //! [`parse_audio_extradata`], copied from `vaco-codec-pcm`'s identical
 //! mechanism (no shared crate exists yet for this small a helper; duplicated
@@ -38,35 +32,39 @@
 //!
 //! A new *standardised* ADPCM variant gets its own module here, following
 //! whichever existing family's shape is closest (a block-header family looks
-//! like [`ima`]/[`ms`]; a continuous bit-packed family looks like [`g726`]).
-//! The ~30 game-specific ADPCM variants the roadmap explicitly excludes
-//! (plan 15 §4.9) do not belong in this crate — they are T4/T5 per that
-//! plan's own triage.
+//! like [`ima`]/[`ms`]). The ~30 game-specific ADPCM variants the roadmap
+//! explicitly excludes (plan 15 §4.9) do not belong in this crate — they are
+//! T4/T5 per that plan's own triage. Implementing the *real* ITU-T G.722/
+//! G.726 predictors is exactly this shape of task; [`g722`]/[`g726`]'s
+//! module docs say precisely what is missing.
 //!
 //! # Configuration
 //!
 //! [`vaco_limits::Limits`] bounds decode allocation. Sample rate/channel
-//! layout default to [`DEFAULT_SAMPLE_RATE`]/mono for the block-oriented
-//! families (matching `vaco-codec-pcm`'s own default), and to the codecs'
-//! natural mono rate for G.722 (16 kHz — G.722 always outputs at 16 kHz
-//! regardless of what a container's own rate field says) and G.726 (8 kHz,
-//! the ordinary telephony rate), until overridden the same way
-//! `vaco-codec-pcm` allows.
+//! layout default to [`DEFAULT_SAMPLE_RATE`]/mono, until overridden the same
+//! way `vaco-codec-pcm` allows.
 //!
 //! # What is not covered, and why
 //!
-//! **G.722 and G.726/G.726le do not implement the ITU-T two-pole/six-zero
-//! adaptive predictor** — see [`g722`]'s and [`g726`]'s own module docs for
-//! exactly what is implemented instead (a simpler but real adaptive-delta
-//! coder, in G.722's case over a reversible two-point lifting split rather
-//! than the true 24-tap QMF) and why. Both round-trip correctly through
-//! their own encoder and are registered/tested; neither is expected to be
-//! bit-exact, or even necessarily interoperable, with the reference decoder
-//! on a bitstream from a different encoder. IMA-WAV/IMA-QT/MS-ADPCM/SWF are
-//! implemented at what I believe is the real published algorithm and framing
-//! for each, at ordinary confidence for a spec-first, unverified-against-a-
-//! real-file implementation — see this crate's closing comment on #280 for
-//! the honest accounting.
+//! **`adpcm_g722` and `adpcm_g726`/`adpcm_g726le` are not registered.**
+//! [`g722`] and [`g726`] contain a *structurally different* transform from
+//! the real ITU-T algorithms (an IMA-shaped adaptive-delta coder instead of
+//! the two-pole/six-zero predictor; for G.722, a reversible two-point
+//! lifting split instead of the real 24-tap QMF) — see those modules' own
+//! docs for exactly what and why. Both round-trip correctly through their
+//! own encoder, but neither can decode a real G.722/G.726 bitstream from
+//! another encoder, and would hand back plausible-looking wrong samples with
+//! no error if wired up as if they worked. The repository owner's ruling
+//! (`planning/AGENT-CONSTRAINTS.md`, "byte-exactness is a check, not the
+//! bar") permits small, unstructured deviation from a reference implementation
+//! — not a different transform answering to the same codec name — so
+//! `AdpcmG722Decoder`/`AdpcmG722Encoder`/`AdpcmG726Decoder`/`AdpcmG726Encoder`
+//! in this file always return [`vaco_core::Error::Unsupported`] and carry no
+//! `DecoderDesc`/`EncoderDesc` at all: there is nothing to be careful not to
+//! register. IMA-WAV/IMA-QT/MS-ADPCM/SWF **are** real implementations of the
+//! published algorithm and framing for each, at ordinary confidence for a
+//! spec-first, unverified-against-a-real-file implementation — see the
+//! closing comment on #280 for the full accounting.
 
 #![forbid(unsafe_code)]
 
@@ -695,33 +693,28 @@ impl SendReceive for AdpcmSwfEncoder {
 }
 
 // -------------------------------------------------------------- G.726/le
+//
+// **Not implemented as real codecs.** `crate::g726` is a structurally
+// different transform from ITU-T G.726 (see that module's doc) — it
+// round-trips through its own encoder but cannot decode a real G.726
+// bitstream, and would hand a caller plausible-looking wrong samples with no
+// error if wired up as if it worked. The repository owner's ruling
+// (`planning/AGENT-CONSTRAINTS.md`, "byte-exactness is a check, not the
+// bar") permits small, unstructured deviation — rounding noise — but not a
+// different transform wearing the codec's name. So these two wrappers exist
+// only to refuse loudly and are deliberately **not** registered in
+// `vaco-component.toml`; `crate::g726`'s functions and their own
+// self-consistency tests stay, for whoever implements the real two-pole/
+// six-zero predictor next.
 
 #[derive(Debug)]
 pub struct AdpcmG726Decoder {
     machine: Machine<Frame>,
-    limits: Limits,
-    sample_rate: u32,
-    left_justified: bool,
-    bits: u32,
 }
 impl AdpcmG726Decoder {
     #[must_use]
-    pub fn new(limits: Limits, left_justified: bool) -> Self {
-        Self {
-            machine: Machine::new(Caps::empty()),
-            limits,
-            sample_rate: G726_SAMPLE_RATE,
-            left_justified,
-            bits: 4,
-        }
-    }
-    #[must_use]
-    pub fn with_audio_params(mut self, sample_rate: u32, bits: u32) -> Self {
-        if sample_rate > 0 {
-            self.sample_rate = sample_rate;
-        }
-        self.bits = bits.clamp(2, 5);
-        self
+    pub fn new(_limits: Limits, _left_justified: bool) -> Self {
+        Self { machine: Machine::new(Caps::empty()) }
     }
 }
 impl SendReceive for AdpcmG726Decoder {
@@ -730,31 +723,11 @@ impl SendReceive for AdpcmG726Decoder {
     fn caps(&self) -> Caps {
         self.machine.caps()
     }
-    fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
-        if let Some((sr, _)) = parse_audio_extradata(extradata) {
-            self.sample_rate = sr;
-        }
-        Ok(())
-    }
-    #[allow(
-        clippy::integer_division,
-        reason = "estimating a sample count from a packed byte length is a deliberate floor division"
-    )]
-    fn send(&mut self, input: Option<&Packet>) -> Result<()> {
-        match self.machine.accept(input.is_none())? {
-            Accept::Drain => {
-                self.machine.finish();
-                Ok(())
-            }
-            Accept::Input => {
-                let Some(pkt) = input else { return Ok(()) };
-                let sample_count = (pkt.payload().len() * 8) / self.bits as usize;
-                let samples = g726::decode(pkt.payload(), self.bits, self.left_justified, sample_count)?;
-                let frame = frame_from_samples(&self.limits, &samples, 1, self.sample_rate, pkt.pts)?;
-                self.machine.emit(frame);
-                Ok(())
-            }
-        }
+    fn send(&mut self, _input: Option<&Packet>) -> Result<()> {
+        Err(Error::Unsupported(
+            "adpcm_g726: no real ITU-T G.726 two-pole/six-zero predictor is implemented \
+             (crate::g726 is a structurally different stand-in; see its module doc)",
+        ))
     }
     fn receive(&mut self) -> Result<Frame> {
         self.machine.receive()
@@ -767,19 +740,11 @@ impl SendReceive for AdpcmG726Decoder {
 #[derive(Debug)]
 pub struct AdpcmG726Encoder {
     machine: Machine<Packet>,
-    limits: Limits,
-    left_justified: bool,
-    bits: u32,
 }
 impl AdpcmG726Encoder {
     #[must_use]
-    pub fn new(limits: Limits, left_justified: bool) -> Self {
-        Self { machine: Machine::new(Caps::empty()), limits, left_justified, bits: 4 }
-    }
-    #[must_use]
-    pub fn with_bits(mut self, bits: u32) -> Self {
-        self.bits = bits.clamp(2, 5);
-        self
+    pub fn new(_limits: Limits, _left_justified: bool) -> Self {
+        Self { machine: Machine::new(Caps::empty()) }
     }
 }
 impl SendReceive for AdpcmG726Encoder {
@@ -788,23 +753,11 @@ impl SendReceive for AdpcmG726Encoder {
     fn caps(&self) -> Caps {
         self.machine.caps()
     }
-    fn send(&mut self, input: Option<&Frame>) -> Result<()> {
-        match self.machine.accept(input.is_none())? {
-            Accept::Drain => {
-                self.machine.finish();
-                Ok(())
-            }
-            Accept::Input => {
-                let Some(frame) = input else { return Ok(()) };
-                let (samples, _channels) = frame_samples_owned(frame)?;
-                let wire = g726::encode(&samples, self.bits, self.left_justified);
-                let mut budget = Budget::new(self.limits.clone());
-                let mut packet = Packet::from_slice(&mut budget, &wire)?;
-                packet.pts = frame.pts;
-                self.machine.emit(packet);
-                Ok(())
-            }
-        }
+    fn send(&mut self, _input: Option<&Frame>) -> Result<()> {
+        Err(Error::Unsupported(
+            "adpcm_g726: no real ITU-T G.726 two-pole/six-zero predictor is implemented \
+             (crate::g726 is a structurally different stand-in; see its module doc)",
+        ))
     }
     fn receive(&mut self) -> Result<Packet> {
         self.machine.receive()
@@ -815,16 +768,21 @@ impl SendReceive for AdpcmG726Encoder {
 }
 
 // ----------------------------------------------------------------- G.722
+//
+// **Not implemented as a real codec**, for the identical reason as G.726
+// above: `crate::g722` stands a reversible two-point lifting split in for
+// the real 24-tap QMF and shares G.726's simplified per-band coder, which
+// round-trips through its own encoder but cannot decode a real G.722
+// bitstream. Deliberately unregistered; see `crate::g722`'s module doc.
 
 #[derive(Debug)]
 pub struct AdpcmG722Decoder {
     machine: Machine<Frame>,
-    limits: Limits,
 }
 impl AdpcmG722Decoder {
     #[must_use]
-    pub fn new(limits: Limits) -> Self {
-        Self { machine: Machine::new(Caps::empty()), limits }
+    pub fn new(_limits: Limits) -> Self {
+        Self { machine: Machine::new(Caps::empty()) }
     }
 }
 impl SendReceive for AdpcmG722Decoder {
@@ -833,21 +791,11 @@ impl SendReceive for AdpcmG722Decoder {
     fn caps(&self) -> Caps {
         self.machine.caps()
     }
-    fn send(&mut self, input: Option<&Packet>) -> Result<()> {
-        match self.machine.accept(input.is_none())? {
-            Accept::Drain => {
-                self.machine.finish();
-                Ok(())
-            }
-            Accept::Input => {
-                let Some(pkt) = input else { return Ok(()) };
-                let sample_count = pkt.payload().len() * 2;
-                let samples = g722::decode(pkt.payload(), sample_count)?;
-                let frame = frame_from_samples(&self.limits, &samples, 1, G722_SAMPLE_RATE, pkt.pts)?;
-                self.machine.emit(frame);
-                Ok(())
-            }
-        }
+    fn send(&mut self, _input: Option<&Packet>) -> Result<()> {
+        Err(Error::Unsupported(
+            "adpcm_g722: no real ITU-T G.722 QMF/predictor is implemented \
+             (crate::g722 is a structurally different stand-in; see its module doc)",
+        ))
     }
     fn receive(&mut self) -> Result<Frame> {
         self.machine.receive()
@@ -860,12 +808,11 @@ impl SendReceive for AdpcmG722Decoder {
 #[derive(Debug)]
 pub struct AdpcmG722Encoder {
     machine: Machine<Packet>,
-    limits: Limits,
 }
 impl AdpcmG722Encoder {
     #[must_use]
-    pub fn new(limits: Limits) -> Self {
-        Self { machine: Machine::new(Caps::empty()), limits }
+    pub fn new(_limits: Limits) -> Self {
+        Self { machine: Machine::new(Caps::empty()) }
     }
 }
 impl SendReceive for AdpcmG722Encoder {
@@ -874,23 +821,11 @@ impl SendReceive for AdpcmG722Encoder {
     fn caps(&self) -> Caps {
         self.machine.caps()
     }
-    fn send(&mut self, input: Option<&Frame>) -> Result<()> {
-        match self.machine.accept(input.is_none())? {
-            Accept::Drain => {
-                self.machine.finish();
-                Ok(())
-            }
-            Accept::Input => {
-                let Some(frame) = input else { return Ok(()) };
-                let (samples, _channels) = frame_samples_owned(frame)?;
-                let wire = g722::encode(&samples);
-                let mut budget = Budget::new(self.limits.clone());
-                let mut packet = Packet::from_slice(&mut budget, &wire)?;
-                packet.pts = frame.pts;
-                self.machine.emit(packet);
-                Ok(())
-            }
-        }
+    fn send(&mut self, _input: Option<&Frame>) -> Result<()> {
+        Err(Error::Unsupported(
+            "adpcm_g722: no real ITU-T G.722 QMF/predictor is implemented \
+             (crate::g722 is a structurally different stand-in; see its module doc)",
+        ))
     }
     fn receive(&mut self) -> Result<Packet> {
         self.machine.receive()
@@ -1017,6 +952,9 @@ pub static ADPCM_SWF_ENCODER: EncoderDesc = EncoderDesc {
     supported_rates: &[],
     make: make_swf_encoder,
 };
+/// **Not listed in `vaco-component.toml`** — always returns
+/// [`vaco_core::Error::Unsupported`]; see the crate/module docs on why. Kept
+/// as a compilable identity for whoever implements the real predictor.
 pub static ADPCM_G726_DECODER: DecoderDesc = DecoderDesc {
     name: "adpcm_g726",
     long_name: "G.726 ADPCM",
@@ -1026,6 +964,7 @@ pub static ADPCM_G726_DECODER: DecoderDesc = DecoderDesc {
     supported_rates: &[],
     make: make_g726_decoder,
 };
+/// **Not listed in `vaco-component.toml`** — see [`ADPCM_G726_DECODER`].
 pub static ADPCM_G726_ENCODER: EncoderDesc = EncoderDesc {
     name: "adpcm_g726",
     long_name: "G.726 ADPCM",
@@ -1035,6 +974,7 @@ pub static ADPCM_G726_ENCODER: EncoderDesc = EncoderDesc {
     supported_rates: &[],
     make: make_g726_encoder,
 };
+/// **Not listed in `vaco-component.toml`** — see [`ADPCM_G726_DECODER`].
 pub static ADPCM_G726LE_DECODER: DecoderDesc = DecoderDesc {
     name: "adpcm_g726le",
     long_name: "G.726 ADPCM little-endian",
@@ -1044,6 +984,7 @@ pub static ADPCM_G726LE_DECODER: DecoderDesc = DecoderDesc {
     supported_rates: &[],
     make: make_g726le_decoder,
 };
+/// **Not listed in `vaco-component.toml`** — see [`ADPCM_G726_DECODER`].
 pub static ADPCM_G726LE_ENCODER: EncoderDesc = EncoderDesc {
     name: "adpcm_g726le",
     long_name: "G.726 little endian ADPCM",
@@ -1053,6 +994,9 @@ pub static ADPCM_G726LE_ENCODER: EncoderDesc = EncoderDesc {
     supported_rates: &[],
     make: make_g726le_encoder,
 };
+/// **Not listed in `vaco-component.toml`** — always returns
+/// [`vaco_core::Error::Unsupported`]; see the crate/module docs on why. Kept
+/// as a compilable identity for whoever implements the real QMF/predictor.
 pub static ADPCM_G722_DECODER: DecoderDesc = DecoderDesc {
     name: "adpcm_g722",
     long_name: "G.722 ADPCM",
@@ -1062,6 +1006,7 @@ pub static ADPCM_G722_DECODER: DecoderDesc = DecoderDesc {
     supported_rates: &[],
     make: make_g722_decoder,
 };
+/// **Not listed in `vaco-component.toml`** — see [`ADPCM_G722_DECODER`].
 pub static ADPCM_G722_ENCODER: EncoderDesc = EncoderDesc {
     name: "adpcm_g722",
     long_name: "G.722 ADPCM",
@@ -1157,42 +1102,45 @@ mod tests {
     }
 
     #[test]
-    fn g726_send_receive_round_trips() {
+    fn g726_decoder_and_encoder_refuse_rather_than_produce_wrong_output() {
+        // g726/g726le have no real ITU-T predictor implemented (see the
+        // crate/module docs) — the wrapper must fail loudly, never hand back
+        // plausible-looking wrong samples.
         let samples = tone(50);
         let mut enc = AdpcmG726Encoder::new(Limits::permissive(), false);
-        enc.send(Some(&frame_of(&samples, 1))).unwrap();
-        let pkt = enc.receive().unwrap();
+        assert!(matches!(
+            enc.send(Some(&frame_of(&samples, 1))),
+            Err(Error::Unsupported(_))
+        ));
         let mut dec = AdpcmG726Decoder::new(Limits::permissive(), false);
-        dec.send(Some(&pkt)).unwrap();
-        let frame = dec.receive().unwrap();
-        let (decoded, _) = frame_samples_owned(&frame).unwrap();
-        assert_eq!(decoded.len(), samples.len());
+        let dummy = Packet::from_slice(&mut Budget::new(Limits::permissive()), &[0u8; 4]).unwrap();
+        assert!(matches!(dec.send(Some(&dummy)), Err(Error::Unsupported(_))));
     }
 
     #[test]
-    fn g726le_send_receive_round_trips() {
+    fn g726le_decoder_and_encoder_refuse_rather_than_produce_wrong_output() {
         let samples = tone(50);
         let mut enc = AdpcmG726Encoder::new(Limits::permissive(), true);
-        enc.send(Some(&frame_of(&samples, 1))).unwrap();
-        let pkt = enc.receive().unwrap();
+        assert!(matches!(
+            enc.send(Some(&frame_of(&samples, 1))),
+            Err(Error::Unsupported(_))
+        ));
         let mut dec = AdpcmG726Decoder::new(Limits::permissive(), true);
-        dec.send(Some(&pkt)).unwrap();
-        let frame = dec.receive().unwrap();
-        let (decoded, _) = frame_samples_owned(&frame).unwrap();
-        assert_eq!(decoded.len(), samples.len());
+        let dummy = Packet::from_slice(&mut Budget::new(Limits::permissive()), &[0u8; 4]).unwrap();
+        assert!(matches!(dec.send(Some(&dummy)), Err(Error::Unsupported(_))));
     }
 
     #[test]
-    fn g722_send_receive_round_trips() {
+    fn g722_decoder_and_encoder_refuse_rather_than_produce_wrong_output() {
         let samples = tone(64);
         let mut enc = AdpcmG722Encoder::new(Limits::permissive());
-        enc.send(Some(&frame_of(&samples, 1))).unwrap();
-        let pkt = enc.receive().unwrap();
+        assert!(matches!(
+            enc.send(Some(&frame_of(&samples, 1))),
+            Err(Error::Unsupported(_))
+        ));
         let mut dec = AdpcmG722Decoder::new(Limits::permissive());
-        dec.send(Some(&pkt)).unwrap();
-        let frame = dec.receive().unwrap();
-        let (decoded, _) = frame_samples_owned(&frame).unwrap();
-        assert_eq!(decoded.len(), samples.len());
+        let dummy = Packet::from_slice(&mut Budget::new(Limits::permissive()), &[0u8; 4]).unwrap();
+        assert!(matches!(dec.send(Some(&dummy)), Err(Error::Unsupported(_))));
     }
 
     #[test]
@@ -1210,7 +1158,13 @@ mod tests {
     }
 
     #[test]
-    fn all_fourteen_descriptors_are_registered() {
+    fn all_fourteen_descriptors_compile_but_only_eight_are_registered() {
+        // All 14 static descriptors exist (g722/g726/g726le kept as
+        // compilable identities per the crate doc), but only the 8 backing
+        // real implementations are listed in vaco-component.toml — checked
+        // structurally here since the toml file itself isn't parsed by this
+        // test; see that file's own header comment for the authoritative
+        // list.
         let decoders: &[&DecoderDesc] = &[
             &ADPCM_IMA_WAV_DECODER,
             &ADPCM_IMA_QT_DECODER,
@@ -1231,5 +1185,14 @@ mod tests {
         ];
         assert_eq!(decoders.len(), 7);
         assert_eq!(encoders.len(), 7);
+        let registered = ["adpcm_ima_wav", "adpcm_ima_qt", "adpcm_ms", "adpcm_swf"];
+        let unsupported = ["adpcm_g726", "adpcm_g726le", "adpcm_g722"];
+        for d in decoders {
+            assert!(
+                registered.contains(&d.name) || unsupported.contains(&d.name),
+                "{}",
+                d.name
+            );
+        }
     }
 }
