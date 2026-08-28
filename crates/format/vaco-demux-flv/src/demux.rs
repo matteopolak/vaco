@@ -489,6 +489,13 @@ impl FlvDemuxer {
             ("title", "title"),
             ("artist", "artist"),
             ("creationdate", "creation_time"),
+            // The muxer's own `Lavf...` signature — measured directly
+            // (`fuzz/seeds/diff/flv/h264-video-only.flv`, offset `0xa1`):
+            // `onMetaData` carries it as a plain AMF0 string keyed
+            // `encoder`, the same name `ffprobe -show_format` reports it
+            // under, so no translation is needed, just a mapping this loop
+            // never had.
+            ("encoder", "encoder"),
         ] {
             if let Some(v) = meta.get(key).and_then(AmfValue::as_str) {
                 self.metadata.push((out_key.to_owned(), v.to_owned()));

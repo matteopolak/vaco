@@ -1910,6 +1910,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-codec-h263"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-bitstream",
+ "vaco-codec-core",
+ "vaco-codec-dsp-idct",
+ "vaco-core",
+ "vaco-frame",
+ "vaco-limits",
+ "vaco-packet",
+ "vaco-pixfmt",
+]
+
+[[package]]
 name = "vaco-codec-h264"
 version = "0.1.0"
 dependencies = [
@@ -1919,6 +1934,7 @@ dependencies = [
  "vaco-codec-core",
  "vaco-codec-golomb",
  "vaco-core",
+ "vaco-format-nalu",
  "vaco-frame",
  "vaco-limits",
  "vaco-packet",
@@ -2617,6 +2633,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-filter-draw-vf"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-core",
+ "vaco-expr",
+ "vaco-filter-core",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-opts",
+ "vaco-pixfmt",
+]
+
+[[package]]
 name = "vaco-filter-framesync"
 version = "0.1.0"
 dependencies = [
@@ -2731,12 +2761,14 @@ name = "vaco-filter-scope"
 version = "0.1.0"
 dependencies = [
  "proptest",
+ "vaco-chlayout",
  "vaco-core",
  "vaco-filter-core",
  "vaco-filter-graph",
  "vaco-frame",
  "vaco-opts",
  "vaco-pixfmt",
+ "vaco-sampfmt",
 ]
 
 [[package]]
@@ -3400,6 +3432,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-mux-mxf"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-chlayout",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-demux-mxf",
+ "vaco-format-core",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-packet",
+ "vaco-time",
+]
+
+[[package]]
 name = "vaco-mux-ogg"
 version = "0.1.0"
 dependencies = [
@@ -3577,6 +3625,7 @@ dependencies = [
  "proptest",
  "vaco-bitstream",
  "vaco-codec-core",
+ "vaco-color",
  "vaco-core",
  "vaco-limits",
  "vaco-packet",
@@ -3882,6 +3931,7 @@ dependencies = [
  "vaco-codec-aac",
  "vaco-codec-ac3",
  "vaco-codec-core",
+ "vaco-codec-h263",
  "vaco-codec-h264",
  "vaco-codec-image-simple",
  "vaco-codec-jpeg",
@@ -3926,10 +3976,8 @@ dependencies = [
  "vaco-filter-key",
  "vaco-filter-lut",
  "vaco-filter-mm",
- "vaco-filter-overlay",
  "vaco-filter-scope",
  "vaco-filter-source",
- "vaco-filter-stack",
  "vaco-filter-temporal",
  "vaco-filter-video-composite",
  "vaco-filter-video-format",

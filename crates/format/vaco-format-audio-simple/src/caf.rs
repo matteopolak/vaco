@@ -32,14 +32,24 @@
 //! bytesPerSample`, which is what this module uses to derive
 //! `bytes_per_frame` rather than trusting a second, redundant field.
 //!
+//! # `info`: measured, not assumed
+//!
+//! Apple's spec calls this "similar to" Vorbis comments, which is loose
+//! enough to be wrong: measured directly (`ffmpeg -c:a pcm_s16be -f caf`,
+//! hexdump), the real layout is `mNumEntries:be32` followed by that many
+//! **NUL-terminated** C-string pairs (key, then value) — no length prefix on
+//! either string, unlike an actual Vorbis comment. `("encoder",
+//! "Lavf62.12.100")` round-trips through this exact shape on a real fixture
+//! (`fuzz/seeds/diff/caf/pcm16-mono-8k.caf`, offset `0x49`).
+//!
 //! # What is not read
 //!
-//! `chan` (channel layout), `info` (a Vorbis-comment-shaped key/value list),
-//! `pakt` (the variable packet table compressed formats need), `kuki`
-//! (codec magic cookie) and `free` are skipped, not decoded — deferred, and
-//! the reason compressed CAF streams (anything whose `mFormatID` is not
-//! `lpcm`/`ulaw`/`alaw`) get `codec_id: None`: without `pakt`, packet
-//! boundaries for a variable-bitrate codec cannot be recovered.
+//! `chan` (channel layout), `pakt` (the variable packet table compressed
+//! formats need), `kuki` (codec magic cookie) and `free` are skipped, not
+//! decoded — deferred, and the reason compressed CAF streams (anything whose
+//! `mFormatID` is not `lpcm`/`ulaw`/`alaw`) get `codec_id: None`: without
+//! `pakt`, packet boundaries for a variable-bitrate codec cannot be
+//! recovered.
 
 use vaco_codec_core::{CodecId, CodecParameters};
 use vaco_core::{Error, Rational, Result};
@@ -57,6 +67,7 @@ use crate::pcm::{self, PcmLayout, RawPcmDemuxer};
 const CAFF: [u8; 4] = *b"caff";
 const DESC: [u8; 4] = *b"desc";
 const DATA: [u8; 4] = *b"data";
+const INFO: [u8; 4] = *b"info";
 const LPCM: [u8; 4] = *b"lpcm";
 
 const FLAG_FLOAT: u32 = 1 << 0;
@@ -116,10 +127,52 @@ fn open_muxer(sink: Box<dyn MediaSink>) -> Result<Box<dyn Muxer>> {
     Ok(Box::new(CafMuxer::new(sink)?))
 }
 
+/// Parse an `info` chunk payload (`mNumEntries:be32` then that many
+/// NUL-terminated `(key, value)` C-string pairs — see the module docs for
+/// why this is not actually Vorbis-comment-shaped despite Apple's wording).
+///
+/// Never panics or over-reads: a truncated or malformed payload yields
+/// whatever complete pairs were read before the truncation, not an error —
+/// the same "a container's own metadata is advisory" treatment
+/// `vaco_format_riff::info::list_info_tags` gives `LIST/INFO`.
+fn parse_info_chunk(payload: &[u8]) -> Vec<(String, String)> {
+    let mut r = vaco_bitstream::ByteReader::new(payload);
+    if r.remaining() < 4 {
+        return Vec::new();
+    }
+    let count = r.be32();
+    let mut tags = Vec::new();
+    for _ in 0..count {
+        let Some(key) = read_cstring(&mut r) else {
+            break;
+        };
+        let Some(value) = read_cstring(&mut r) else {
+            break;
+        };
+        if !key.is_empty() {
+            tags.push((key, value));
+        }
+    }
+    tags
+}
+
+/// One NUL-terminated string, or `None` if the reader ran out of bytes
+/// before finding the terminator (a truncated file, not a well-formed empty
+/// string — an empty string is still `Some(String::new())`).
+fn read_cstring(r: &mut vaco_bitstream::ByteReader<'_>) -> Option<String> {
+    let rest = r.rest();
+    let nul_at = rest.iter().position(|&b| b == 0)?;
+    let (text, _) = rest.split_at(nul_at);
+    let s = String::from_utf8_lossy(text).into_owned();
+    r.skip(nul_at + 1);
+    Some(s)
+}
+
 #[derive(Debug)]
 pub struct CafDemuxer {
     inner: RawPcmDemuxer,
     budget: Budget,
+    metadata: Vec<(String, String)>,
 }
 
 impl CafDemuxer {
@@ -145,6 +198,7 @@ impl CafDemuxer {
         let mut have_data = false;
         let mut data_start = 0u64;
         let mut data_declared: Option<u64> = None;
+        let mut metadata: Vec<(String, String)> = Vec::new();
 
         while let Ok(id) = io.tag() {
             let size = io.rb64()?.cast_signed();
@@ -171,6 +225,11 @@ impl CafDemuxer {
                 };
                 have_data = true;
                 break;
+            } else if id == INFO && size >= 0 {
+                let take = usize::try_from(size).unwrap_or(0);
+                let mut buf = budget.alloc::<u8>(take)?;
+                io.read_exact(&mut buf)?;
+                metadata = parse_info_chunk(&buf);
             } else if size >= 0 {
                 io.skip(u64::try_from(size).unwrap_or(0))?;
             } else {
@@ -246,6 +305,7 @@ impl CafDemuxer {
         Ok(Self {
             inner,
             budget: Budget::new(Limits::permissive()),
+            metadata,
         })
     }
 }
@@ -253,6 +313,9 @@ impl CafDemuxer {
 impl Demuxer for CafDemuxer {
     fn streams(&self) -> &[Stream] {
         self.inner.streams()
+    }
+    fn metadata(&self) -> &[(String, String)] {
+        &self.metadata
     }
     fn read_packet(&mut self) -> Result<Packet> {
         self.inner.read_packet(&mut self.budget)
@@ -431,5 +494,133 @@ impl Muxer for CafMuxer {
         self.out.wb64(self.data_bytes + 4)?;
         self.out.seek(end)?;
         self.out.flush()
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
+mod info_tests {
+    use super::{CafDemuxer, parse_info_chunk};
+    use vaco_format_core::{Demuxer, FormatOptions};
+    use vaco_io::MemorySource;
+
+    /// The exact `info` chunk payload measured on a real `ffmpeg -c:a
+    /// pcm_s16be -f caf` file (`fuzz/seeds/diff/caf/pcm16-mono-8k.caf`,
+    /// offset `0x49`): `mNumEntries=1`, then the two NUL-terminated strings
+    /// `"encoder\0"` and `"Lavf62.12.100\0"` — not length-prefixed, despite
+    /// the spec calling this "similar to" a Vorbis comment.
+    fn measured_info_payload() -> Vec<u8> {
+        let mut v = 1u32.to_be_bytes().to_vec();
+        v.extend_from_slice(b"encoder\0");
+        v.extend_from_slice(b"Lavf62.12.100\0");
+        v
+    }
+
+    #[test]
+    fn parse_info_chunk_matches_the_measured_shape() {
+        assert_eq!(
+            parse_info_chunk(&measured_info_payload()),
+            vec![("encoder".to_owned(), "Lavf62.12.100".to_owned())]
+        );
+    }
+
+    #[test]
+    fn parse_info_chunk_reads_more_than_one_entry() {
+        let mut v = 2u32.to_be_bytes().to_vec();
+        v.extend_from_slice(b"encoder\0Lavf62.12.100\0");
+        v.extend_from_slice(b"title\0a caf file\0");
+        assert_eq!(
+            parse_info_chunk(&v),
+            vec![
+                ("encoder".to_owned(), "Lavf62.12.100".to_owned()),
+                ("title".to_owned(), "a caf file".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_info_chunk_stops_cleanly_on_truncation_rather_than_panicking() {
+        let full = measured_info_payload();
+        for n in 0..full.len() {
+            let _ = parse_info_chunk(&full[..n]);
+        }
+        // A payload cut mid-value yields no complete pair, not a panic.
+        assert!(parse_info_chunk(&full[..full.len() - 3]).is_empty());
+    }
+
+    #[test]
+    fn parse_info_chunk_on_an_empty_payload_is_empty() {
+        assert!(parse_info_chunk(&[]).is_empty());
+    }
+
+    /// Builds a minimal, real `desc`+`info`+`data` CAF file by hand — the
+    /// same "construct the exact measured chunk shape" style
+    /// `vaco_format_riff::info`'s own tests use for `LIST/INFO` — and opens
+    /// it through the real demuxer, not just `parse_info_chunk` in
+    /// isolation, to prove `Demuxer::metadata` actually surfaces what the
+    /// chunk loop found.
+    fn minimal_caf_with_info(info_payload: &[u8]) -> Vec<u8> {
+        let mut f = Vec::new();
+        f.extend_from_slice(b"caff");
+        f.extend_from_slice(&1u16.to_be_bytes()); // mFileVersion
+        f.extend_from_slice(&0u16.to_be_bytes()); // mFileFlags
+
+        // 'desc': mono, 8-bit little-endian PCM, so `desc` alone (no
+        // `chan`) is enough for `CafDemuxer::open` to accept the file.
+        f.extend_from_slice(b"desc");
+        f.extend_from_slice(&32u64.to_be_bytes());
+        f.extend_from_slice(&8000.0f64.to_be_bytes()); // mSampleRate
+        f.extend_from_slice(b"lpcm"); // mFormatID
+        f.extend_from_slice(&0u32.to_be_bytes()); // mFormatFlags (big-endian int)
+        f.extend_from_slice(&1u32.to_be_bytes()); // mBytesPerPacket
+        f.extend_from_slice(&1u32.to_be_bytes()); // mFramesPerPacket
+        f.extend_from_slice(&1u32.to_be_bytes()); // mChannelsPerFrame
+        f.extend_from_slice(&8u32.to_be_bytes()); // mBitsPerChannel
+
+        f.extend_from_slice(b"info");
+        f.extend_from_slice(&(info_payload.len() as u64).to_be_bytes());
+        f.extend_from_slice(info_payload);
+
+        f.extend_from_slice(b"data");
+        f.extend_from_slice(&4u64.to_be_bytes()); // mEditCount(4) + no payload
+        f.extend_from_slice(&0u32.to_be_bytes()); // mEditCount
+
+        f
+    }
+
+    #[test]
+    fn caf_demuxer_metadata_reports_the_encoder_tag_from_a_real_file_shape() {
+        let bytes = minimal_caf_with_info(&measured_info_payload());
+        let demuxer =
+            CafDemuxer::open(Box::new(MemorySource::new(bytes)), &FormatOptions::default())
+                .unwrap();
+        assert_eq!(
+            demuxer.metadata(),
+            &[("encoder".to_owned(), "Lavf62.12.100".to_owned())]
+        );
+    }
+
+    #[test]
+    fn caf_demuxer_metadata_is_empty_without_an_info_chunk() {
+        let mut f = Vec::new();
+        f.extend_from_slice(b"caff");
+        f.extend_from_slice(&1u16.to_be_bytes());
+        f.extend_from_slice(&0u16.to_be_bytes());
+        f.extend_from_slice(b"desc");
+        f.extend_from_slice(&32u64.to_be_bytes());
+        f.extend_from_slice(&8000.0f64.to_be_bytes());
+        f.extend_from_slice(b"lpcm");
+        f.extend_from_slice(&0u32.to_be_bytes());
+        f.extend_from_slice(&1u32.to_be_bytes());
+        f.extend_from_slice(&1u32.to_be_bytes());
+        f.extend_from_slice(&1u32.to_be_bytes());
+        f.extend_from_slice(&8u32.to_be_bytes());
+        f.extend_from_slice(b"data");
+        f.extend_from_slice(&4u64.to_be_bytes());
+        f.extend_from_slice(&0u32.to_be_bytes());
+
+        let demuxer =
+            CafDemuxer::open(Box::new(MemorySource::new(f)), &FormatOptions::default()).unwrap();
+        assert!(demuxer.metadata().is_empty());
     }
 }

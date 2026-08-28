@@ -200,3 +200,32 @@ fn byte_seek_before_the_first_tag_never_panics() {
         let _ = demux.read_packet();
     }
 }
+
+/// The muxer's own `Lavf...` signature — measured directly on a real
+/// `ffmpeg -f flv` file (`fuzz/seeds/diff/flv/h264-video-only.flv`, offset
+/// `0xa1`): `onMetaData` carries a plain AMF0 string keyed `encoder`, and
+/// before this test's fix `handle_script_tag`'s title/artist/creationdate
+/// loop had no entry for it, so it was silently dropped no matter what a
+/// real file stated.
+#[test]
+fn on_meta_data_encoder_field_reaches_demuxer_metadata() {
+    let mut file = b"FLV".to_vec();
+    file.push(1);
+    file.push(0x01); // has video only
+    file.extend_from_slice(&9u32.to_be_bytes());
+
+    let mut script = Vec::new();
+    vaco_demux_flv::AmfValue::String("onMetaData".to_owned()).encode(&mut script);
+    vaco_demux_flv::AmfValue::EcmaArray(vec![(
+        "encoder".to_owned(),
+        vaco_demux_flv::AmfValue::String("Lavf62.12.100".to_owned()),
+    )])
+    .encode(&mut script);
+    file.extend_from_slice(&tag(18, 0, &script));
+
+    let demux = open(file);
+    assert_eq!(
+        demux.metadata(),
+        &[("encoder".to_owned(), "Lavf62.12.100".to_owned())]
+    );
+}
