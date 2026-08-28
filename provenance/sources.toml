@@ -984,3 +984,10 @@ kind     = "spec"
 title    = "ISO/IEC 14496-3, Coding of audio-visual objects — Part 3: Audio (subpart 1 general/AudioSpecificConfig/program config element, subpart 4 AAC)"
 acquired = "2026-08-28"
 where    = "ISO"
+
+[[source]]
+id       = "ffmpeg-mxf-d10-probe"
+kind     = "blackbox"
+title    = "Observed byte layout of `ffmpeg -f mxf_d10` output at 30/40/50 Mbit/s, ffmpeg 8.1: the single-partition header-carries-essence file shape, the per-frame Generic Container essence element key (item-type byte 0x05, twenty-five separate KLVs not one clip KLV), the three bitrate-specific PictureEssenceCoding ULs, the SeparateFields height-halving in the CDCIEssenceDescriptor, and a real Index Table Segment stating IndexDuration=0 despite a definite frame count"
+acquired = "2026-08-28"
+where    = "the reference binary installed on the development machine"
