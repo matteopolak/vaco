@@ -524,6 +524,22 @@ rewrites files rather than reading them. **Formatting is not exempt from the
 rule that you write only your own paths.** To format one file, run
 `rustfmt <path>` directly, or format inside a worktree.
 
+**`rustfmt <path>` is narrower but still not narrow.** It follows `mod`
+declarations out of the file you named and reformats what it finds, so
+pointing it at a `lib.rs` reformats the crate. Two agents hit this. The
+reliable check is not the command, it is the diff: **`git diff --stat` before
+staging, and the file list must be exactly what you meant to touch.**
+
+And narrower still, since the same principle applies inside one file: if
+`rustfmt` on a file you legitimately own would rewrite hunks that predate you
+— formatting drift is common in this tree — leave them, format only your own
+added lines by hand, and confirm with `git diff` that no pre-existing line
+moved. Two agents have made that call correctly; it is the rule's purpose
+rather than its literal text.
+
+The same reasoning covers `Cargo.lock`: if regenerating it sweeps in entries
+for another agent's not-yet-locked crates, commit your own change without it.
+
 The general form: before staging, `git diff --stat` and confirm the file list
 is *exactly* what you meant to touch. A tool that edited more than you asked
 is indistinguishable from your own mistake once it is committed.
