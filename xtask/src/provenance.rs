@@ -694,7 +694,8 @@ fn trailers(root: &Path) -> Result<Vec<String>, String> {
 
 /// Every value of a trailer key, in order. A key may legitimately repeat.
 ///
-/// A `Vaco-Spec-Ref` whose first token is `none` is dropped, so it reads
+/// A `Vaco-Spec-Ref` whose first token is `none` or `n/a` (either case) is
+/// dropped, so it reads
 /// exactly as an absent trailer does. Authors write it to say "deliberately
 /// nothing to cite" and it cost two commits a permanent gate failure before
 /// this existed. It opens no hole: omitting the trailer entirely is already
@@ -709,7 +710,11 @@ fn values(body: &str, key: &str) -> Vec<String> {
         .map(|v| v.trim().to_owned())
         .filter(|v| !v.is_empty())
         .filter(|v| {
-            key != "Vaco-Spec-Ref" || v.split_whitespace().next() != Some("none")
+            key != "Vaco-Spec-Ref"
+                || !matches!(
+                    v.split_whitespace().next().map(str::to_ascii_lowercase).as_deref(),
+                    Some("none" | "n/a")
+                )
         })
         .collect()
 }
@@ -838,6 +843,15 @@ mod tests {
     fn a_nested_array_counts_rows_not_cells() {
         let v = scan("const M: [[u8; 2]; 3] = [[1, 2], [3, 4], [5, 6]];", here());
         assert_eq!(v, [("M".to_owned(), 3)]);
+    }
+
+    #[test]
+    fn an_n_a_spec_ref_reads_as_no_spec_ref_too() {
+        // `N/A` is the other spelling authors reach for, and it meant the same
+        // thing every time it appeared. Accepting only `none` left it failing.
+        let body = "feat(x): y\n\nVaco-Spec-Ref: N/A (git-history repair)\n\
+                    Vaco-Provenance: original\n";
+        assert!(values(body, "Vaco-Spec-Ref").is_empty());
     }
 
     #[test]
