@@ -2263,3 +2263,58 @@ Three shapes to reproduce, all measured:
 - **`-bitexact` does not suppress `encoder : Lavf62.12.100` here.** That looks
   like the version-string rule and is not: this is metadata *read from the
   file*, not our identity. The suppression rule applies to strings we author.
+
+## 42. Every WAV stream reported `sample_fmt=unknown`, and `-c copy` to a PCM container failed outright
+
+`vaco -i in.wav -c copy out.wav` — about as basic as this program gets — did
+not work:
+
+```text
+Error: the muxer refused a stream: unsupported: wav: sample format must be known
+```
+
+So did `-f w64` and `-f caf`. The muxers were right to refuse: the demuxer
+handed them a stream whose sample format was `None`.
+
+### One dead condition, in two files
+
+`wav.rs` and `w64.rs` both derived the sample format inside
+
+```rust
+if codec_id == Some(vaco_codec_core::CodecId::Pcm) { … } else { (None, None) }
+```
+
+and `wave_tags::codec_id` returns the **specific** variant — `PcmS16le`,
+`PcmF32le`, `PcmAlaw` — never the generic `CodecId::Pcm`. The branch could not
+fire for any real file. `Pcm` is the placeholder for a width the enum has no
+variant for, which today is 64-bit integer PCM only.
+
+Measured before, on eight `-c:a` variants of the same source, every one wrong:
+
+```text
+            reference                    ours
+pcm_u8      pcm_u8,u8,N/A                pcm_u8,unknown,N/A
+pcm_s16le   pcm_s16le,s16,N/A            pcm_s16le,unknown,N/A
+pcm_s24le   pcm_s24le,s32,24             pcm_s24le,unknown,24
+pcm_s32le   pcm_s32le,s32,32             pcm_s32le,unknown,32
+pcm_f32le   pcm_f32le,flt,N/A            pcm_f32le,unknown,N/A
+pcm_f64le   pcm_f64le,dbl,N/A            pcm_f64le,unknown,N/A
+pcm_alaw    pcm_alaw,s16,N/A             pcm_alaw,unknown,N/A
+pcm_mulaw   pcm_mulaw,s16,N/A            pcm_mulaw,unknown,N/A
+```
+
+All eight match now, and **`-f wav` and `-f w64` are byte-identical to the
+reference** for a PCM stream copy.
+
+### Why the lookup is keyed on the codec and not on the width
+
+`sample_fmt_for(bits, is_float)` already existed and is not the right tool here.
+Two rows in `codec_id_for`'s own measured table say why: A-law and µ-law are
+eight bits coded and decode to `s16`, and `pcm_s8` decodes to `u8` because there
+is no signed 8-bit sample format. A width lookup gets both wrong. The new
+`pcm::sample_fmt_of(CodecId)` answers `None` for anything not PCM-shaped, so it
+doubles as the family test the dead condition was reaching for.
+
+`aiff`, `au`, `caf` and `sox` were already right — they go through a different
+path. Only the two RIFF-shaped readers shared the bug, and they shared it
+because one was written from the other.

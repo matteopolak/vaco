@@ -45,7 +45,7 @@ use vaco_io::{IoContext, IoOptions, IoWriter, MediaSink, MediaSource};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
 
-use vaco_format_riff::wave::{WAVE_FORMAT_IEEE_FLOAT, WaveFormatEx};
+use vaco_format_riff::wave::WaveFormatEx;
 use vaco_format_riff::wave_tags;
 
 use crate::pcm::{self, PcmLayout, RawPcmDemuxer};
@@ -166,18 +166,15 @@ impl W64Demuxer {
         };
 
         let channels = fmt.channels;
-        let sub_tag = fmt
-            .extensible()
-            .and_then(|e| e.sub_format_tag())
-            .unwrap_or(fmt.format_tag);
-        let is_float = sub_tag == WAVE_FORMAT_IEEE_FLOAT;
         let codec_id = wave_tags::codec_id(&fmt);
-        let (format, bits_raw) = if codec_id == Some(vaco_codec_core::CodecId::Pcm) {
-            pcm::sample_fmt_for(fmt.bits_per_sample.min(255) as u8, is_float)
-        } else {
-            (None, None)
+        // Keyed on the codec, not on equality with the generic `CodecId::Pcm`
+        // — see `wav.rs`, which had the identical dead condition.
+        let pcm_fmt = codec_id.and_then(pcm::sample_fmt_of);
+        let (format, bits_raw) = match pcm_fmt {
+            Some((sf, raw)) => (Some(sf), raw),
+            None => (None, None),
         };
-        let bits_coded = if codec_id == Some(vaco_codec_core::CodecId::Pcm) {
+        let bits_coded = if pcm_fmt.is_some() {
             Some(fmt.bits_per_sample.min(255) as u8)
         } else {
             Some(0)

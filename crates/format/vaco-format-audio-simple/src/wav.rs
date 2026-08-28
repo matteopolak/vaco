@@ -46,7 +46,7 @@ use vaco_packet::Packet;
 
 use vaco_format_riff::chunk::ids;
 use vaco_format_riff::rf64::Ds64;
-use vaco_format_riff::wave::{WAVE_FORMAT_IEEE_FLOAT, WaveFormatEx};
+use vaco_format_riff::wave::WaveFormatEx;
 use vaco_format_riff::wave_tags;
 
 use crate::pcm::{self, PcmLayout, RawPcmDemuxer};
@@ -207,14 +207,19 @@ impl WavDemuxer {
             .extensible()
             .and_then(|e| e.sub_format_tag())
             .unwrap_or(fmt.format_tag);
-        let is_float = sub_tag == WAVE_FORMAT_IEEE_FLOAT;
         let codec_id = wave_tags::codec_id(&fmt);
-        let (format, bits_per_raw) = if codec_id == Some(vaco_codec_core::CodecId::Pcm) {
-            pcm::sample_fmt_for(fmt.bits_per_sample.min(255) as u8, is_float)
-        } else {
-            (None, None)
+        // Keyed on the codec, not on equality with the generic `CodecId::Pcm`.
+        // `wave_tags::codec_id` returns the *specific* variant — `PcmS16le`, not
+        // `Pcm` — so this condition was never true for a real file and every WAV
+        // stream came out with `sample_fmt=unknown`. That broke more than the
+        // probe: `vaco -i in.wav -c copy out.wav` failed outright with "wav:
+        // sample format must be known" (CONFORMANCE-FINDINGS 42).
+        let pcm_fmt = codec_id.and_then(pcm::sample_fmt_of);
+        let (format, bits_per_raw) = match pcm_fmt {
+            Some((sf, raw)) => (Some(sf), raw),
+            None => (None, None),
         };
-        let bits_per_coded = if codec_id == Some(vaco_codec_core::CodecId::Pcm) {
+        let bits_per_coded = if pcm_fmt.is_some() {
             Some(fmt.bits_per_sample.min(255) as u8)
         } else {
             Some(0)

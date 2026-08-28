@@ -171,6 +171,32 @@ pub const fn codec_id_for(
     }
 }
 
+/// The decoded sample format for a PCM-shaped `CodecId`, keyed on the codec
+/// rather than on the coded width.
+///
+/// The width is not enough on its own, which is what makes this a separate
+/// function rather than a call to [`sample_fmt_for`]: A-law and µ-law are
+/// eight bits coded and decode to `s16`, and `pcm_s8` decodes to `u8` because
+/// there is no signed 8-bit sample format. Both rows are in
+/// [`codec_id_for`]'s measured table.
+///
+/// Returns `None` for anything that is not PCM-shaped, so a caller can use it
+/// as the family test as well as the lookup.
+#[must_use]
+pub const fn sample_fmt_of(codec_id: CodecId) -> Option<(SampleFmt, Option<u8>)> {
+    match codec_id {
+        CodecId::PcmU8 | CodecId::PcmS8 => Some((SampleFmt::U8, None)),
+        CodecId::PcmS16le | CodecId::PcmS16be | CodecId::PcmAlaw | CodecId::PcmMulaw => {
+            Some((SampleFmt::S16, None))
+        }
+        CodecId::PcmS24le | CodecId::PcmS24be => Some((SampleFmt::S32, Some(24))),
+        CodecId::PcmS32le | CodecId::PcmS32be => Some((SampleFmt::S32, None)),
+        CodecId::PcmF32le | CodecId::PcmF32be => Some((SampleFmt::F32, None)),
+        CodecId::PcmF64le | CodecId::PcmF64be => Some((SampleFmt::F64, None)),
+        _ => None,
+    }
+}
+
 /// Build [`CodecParameters`] for one PCM (or PCM-shaped, e.g. A-law/µ-law)
 /// stream.
 ///
@@ -484,6 +510,43 @@ mod tests {
         let mut d = demux_of(data, 0, Some(8));
         let mut budget = Budget::new(Limits::permissive());
         assert!(d.read_packet(&mut budget).is_ok());
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test code")]
+mod sample_fmt_of_tests {
+    use super::*;
+
+    /// The whole measured table, and the two rows that make it a codec lookup
+    /// rather than a width lookup.
+    #[test]
+    fn every_pcm_codec_maps_to_the_format_the_reference_reports() {
+        for (id, want, raw) in [
+            (CodecId::PcmU8, SampleFmt::U8, None),
+            (CodecId::PcmS8, SampleFmt::U8, None),
+            (CodecId::PcmS16le, SampleFmt::S16, None),
+            (CodecId::PcmS16be, SampleFmt::S16, None),
+            (CodecId::PcmS24le, SampleFmt::S32, Some(24)),
+            (CodecId::PcmS32le, SampleFmt::S32, None),
+            (CodecId::PcmF32le, SampleFmt::F32, None),
+            (CodecId::PcmF64le, SampleFmt::F64, None),
+            // Eight bits coded, sixteen decoded. A width lookup gets these
+            // wrong, which is the whole reason this function exists.
+            (CodecId::PcmAlaw, SampleFmt::S16, None),
+            (CodecId::PcmMulaw, SampleFmt::S16, None),
+        ] {
+            assert_eq!(sample_fmt_of(id), Some((want, raw)), "{id:?}");
+        }
+    }
+
+    #[test]
+    fn a_non_pcm_codec_answers_none_so_it_doubles_as_the_family_test() {
+        assert_eq!(sample_fmt_of(CodecId::Mp3), None);
+        assert_eq!(sample_fmt_of(CodecId::H264), None);
+        // Including the generic placeholder: it states no width, so it cannot
+        // state a sample format either.
+        assert_eq!(sample_fmt_of(CodecId::Pcm), None);
     }
 }
 
