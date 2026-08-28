@@ -147,8 +147,17 @@ impl Muxer for RawMuxer {
             Some(MediaType::Audio) => self.expected_audio,
             _ => None,
         };
+        // `rawvideo` is the one registration this check must not apply to,
+        // despite naming a `default_video`: measured directly, `ffmpeg -c
+        // copy -f rawvideo` on an H.264 source is accepted (no "muxer
+        // supports only codec" refusal, unlike every other registration
+        // here that names one) — `default_video` states what a bare `-f
+        // rawvideo` encodes *to* by default, not a hard restriction on
+        // what `-c copy` may carry. `rawenc.c`'s generic dump has no
+        // codec check at all for it, same as `data`.
         if let (Some(expected), Some(actual)) = (expected, params.codec_id)
             && expected != actual
+            && expected != CodecId::Rawvideo
         {
             return Err(Error::Unsupported(
                 "this raw muxer supports only its one declared codec",
@@ -630,6 +639,18 @@ mod tests {
         // own generic dump.
         let sink = Box::new(MemorySink::new());
         let mut m = RawMuxer::new(sink, None, None).unwrap();
+        let mut params = CodecParameters::video();
+        params.codec_id = Some(CodecId::H264);
+        assert!(m.add_stream(&params).is_ok());
+    }
+
+    #[test]
+    fn rawvideo_accepts_any_video_codec_despite_naming_one() {
+        // Measured: `ffmpeg -c copy -f rawvideo` on an H.264 source is
+        // accepted, unlike `vc1`/`h264`/every other single-codec
+        // registration — see the doc comment on the check this exempts.
+        let sink = Box::new(MemorySink::new());
+        let mut m = RawMuxer::new(sink, Some(CodecId::Rawvideo), None).unwrap();
         let mut params = CodecParameters::video();
         params.codec_id = Some(CodecId::H264);
         assert!(m.add_stream(&params).is_ok());
