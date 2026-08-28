@@ -1037,8 +1037,27 @@ fn read_tx_size(ctx: &FrameCtx, ts: &mut TileState<'_>, r: usize, c: usize, mi_s
     }
     let max_tx_w = u32::from(tables::TX_WIDTH.get(usize::from(max_rect_tx)).copied().unwrap_or(4));
     let max_tx_h = u32::from(tables::TX_HEIGHT.get(usize::from(max_rect_tx)).copied().unwrap_or(4));
-    let above_w = if avail_u { ctx.mi_at(ix(r) - 1, ix(c)).map_or(0, |m| tables::block_width(m.mi_size)) } else { 0 };
-    let left_h = if avail_l { ctx.mi_at(ix(r), ix(c) - 1).map_or(0, |m| tables::block_height(m.mi_size)) } else { 0 };
+    // tx_depth's own context formula, §8.3.2: `aboveW`/`leftH` are 0 when
+    // the neighbour is unavailable (a plain `else` in the specification's
+    // own text, not a call to get_above_tx_width()/get_left_tx_height() --
+    // those are only invoked in the "available and not inter" branch).
+    // Since this crate is always intra (IsInters is always 0), the
+    // available case always takes that branch: Tx_Width/Tx_Height of the
+    // *neighbour's own selected transform size* (InterTxSizes in the
+    // specification's own naming, tracked here as `MiCell::tx_size`
+    // regardless of inter/intra) -- not Block_Width/Block_Height of the
+    // neighbour's *coding* block size, which is what this function used to
+    // read here.
+    let above_w = if avail_u {
+        ctx.mi_at(ix(r) - 1, ix(c)).map_or(0, |m| u32::from(tables::TX_WIDTH.get(usize::from(m.tx_size)).copied().unwrap_or(4)))
+    } else {
+        0
+    };
+    let left_h = if avail_l {
+        ctx.mi_at(ix(r), ix(c) - 1).map_or(0, |m| u32::from(tables::TX_HEIGHT.get(usize::from(m.tx_size)).copied().unwrap_or(4)))
+    } else {
+        0
+    };
     let ctx_v = usize::from(above_w >= max_tx_w) + usize::from(left_h >= max_tx_h);
 
     let mut cdf: Vec<u16> = match max_tx_depth {

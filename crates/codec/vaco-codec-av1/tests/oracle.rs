@@ -28,23 +28,46 @@
 //! directional/`SMOOTH`/`PAETH` intra modes, ADST/flip-ADST transforms)
 //! still shows real, structured pixel error against `ffmpeg`'s decode —
 //! not the diffuse, small deviation the project's own shipping bar treats
-//! as acceptable. The flat fixtures above pin down that the symbol
-//! decoder, CDF machinery, coefficient decode, dequantization, and
-//! DCT-only reconstruction are correct end to end (that is where this
-//! batch's own investigation found and fixed several real bugs: a
-//! `coeff_base_eob` context computed in the wrong range for its own CDF
-//! table, a swapped `TX_CLASS_HORIZ`/`TX_CLASS_VERT` numbering, a wrong
-//! `cfl_alpha_u`/`cfl_alpha_v` context formula, missing `read_cdef()`/
-//! `palette_mode_info()` bit consumption, and a symbol-decoder-ending
-//! panic). What is *not* yet isolated is why a block using `SMOOTH_PRED`
-//! with an already-correct left neighbour, or ADST/flip-ADST-transformed
-//! residual, drifts from the reference — `predict_smooth`'s own formula
-//! and `Sm_Weights_Tx_*` tables were checked line-for-line against the
-//! specification and matched, so the remaining defect is somewhere this
-//! batch did not have the budget left to localize further. Named here
-//! rather than silently left un-tested, per this crate's own "return
+//! as acceptable.
+//!
+//! `checkerboard_dc_pred_dct_dct_matches_ffmpeg_byte_for_byte` below
+//! narrows this considerably past what the flat fixtures alone show: a
+//! real `libsvtav1` stream using nothing but `DC_PRED` + `DCT_DCT`, but
+//! spanning every partition size (8x8 through 32x32) and every
+//! neighbour-availability combination a frame offers (`AvailU`/`AvailL`
+//! both false, either one true, both true — including contexts that pull
+//! from a CDF cell an earlier block has already adapted, not just the
+//! pristine default), decodes **byte-exact**. That rules out "the second
+//! block in a tile" or "any context keyed off `AvailU`/`AvailL`" as the
+//! shape of the remaining bug — it is specifically tied to `SMOOTH_PRED`
+//! and/or `UV_CFL_PRED` and/or an ADST-family transform, not to position
+//! or availability in general.
+//!
+//! Manually isolated one step further, on `testsrc64.obu` itself: the
+//! first block whose reconstruction diverges from `ffmpeg`'s decode is
+//! `SMOOTH_PRED` + `ADST_ADST`, immediately following a `DC_PRED` +
+//! `DCT_DCT` block that reconstructs byte-exact (both luma and, on a CFL
+//! variant of the same content, chroma). `predict_smooth`'s formula and
+//! `Sm_Weights_Tx_*` tables were hand-verified against the diverging
+//! block's own actual edge pixels (themselves already confirmed correct)
+//! and matched to the unit; the ADST inverse transform was cross-checked
+//! against an independent synthetic probe with the same input and
+//! matched. Neither piece is wrong in isolation, which is why this batch
+//! did not close the gap: the defect is either in a context/CDF selection
+//! this investigation did not reach, or in an interaction between
+//! `SMOOTH_PRED` and/or CFL and ADST-family reconstruction that neither
+//! piece's own isolated correctness rules out. Left as a named, `#[ignore]`d
+//! gap rather than silently dropped, per this crate's own "return
 //! Unsupported by name, do not ship confidently wrong" standard applied to
 //! *what this test asserts*, not just what the decoder returns.
+//!
+//! Also fixed in the course of this investigation (real, spec-confirmed,
+//! but not the root cause above): `read_tx_size`'s `tx_depth` context used
+//! the neighbour's *coding block* width/height (`Block_Width`/
+//! `Block_Height` of `MiSize`) instead of the neighbour's own *selected
+//! transform* width/height (`Tx_Width`/`Tx_Height` of its stored
+//! `tx_size`) — correct only when a neighbour's chosen transform happens
+//! to match its coding block size exactly.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -139,4 +162,43 @@ fn testsrc64_matches_ffmpeg_byte_for_byte() {
     let reference: &[u8] = include_bytes!("fixtures/testsrc64_ref.yuv");
     let luma = decode_luma(fixture, 64, 64).expect("decode must succeed");
     assert_luma_matches("testsrc64", &luma, &reference[..64 * 64], 64, 64);
+}
+
+/// `checker.obu`: a 64x64, 8x8-tile checkerboard of two flat luma values
+/// (60/200), which `libsvtav1` codes entirely as `DC_PRED` + `DCT_DCT`
+/// across every partition size and neighbour-availability combination the
+/// frame offers (`AvailU`/`AvailL` both false, one true, both true; 8x8
+/// through 32x32 blocks; contexts pulling from a just-adapted CDF cell,
+/// not just the pristine default). Isolates the `DC_PRED`+`DCT_DCT` path from
+/// the `SMOOTH`/`CFL`/ADST-adjacent gap `testsrc64_matches_ffmpeg_byte_for_byte`
+/// names above: byte-exact here, across every one of those availability
+/// combinations, narrows that gap specifically to `SMOOTH_PRED` and/or
+/// `UV_CFL_PRED` and/or ADST-family transforms — not to "the second block
+/// in a tile" or "any context using an already-adapted CDF cell" in
+/// general, both of which this fixture would have caught.
+///
+/// Regenerate with:
+/// ```text
+/// python3 -c "
+/// w=h=64
+/// y=bytearray(w*h)
+/// for row in range(h):
+///     for col in range(w):
+///         bx,by = col//8, row//8
+///         y[row*w+col] = 60 if (bx+by)%2==0 else 200
+/// uv=bytes([128])*(w*h//4)*2
+/// open('checker.yuv','wb').write(bytes(y)+uv)
+/// "
+/// ffmpeg -y -f rawvideo -pix_fmt yuv420p -s 64x64 -i checker.yuv -frames:v 1 \
+///        -c:v libsvtav1 -qp 36 \
+///        -svtav1-params "enable-cdef=0:enable-restoration=0:enable-tf=0:film-grain=0:scm=0" \
+///        -f obu checker.obu
+/// dav1d --inloopfilters nodeblock -i checker.obu -o checker_ref.yuv --muxer yuv
+/// ```
+#[test]
+fn checkerboard_dc_pred_dct_dct_matches_ffmpeg_byte_for_byte() {
+    let fixture: &[u8] = include_bytes!("fixtures/checker.obu");
+    let reference: &[u8] = include_bytes!("fixtures/checker_ref.yuv");
+    let luma = decode_luma(fixture, 64, 64).expect("decode of a real libsvtav1 checkerboard keyframe must not fail");
+    assert_luma_matches("checker", &luma, &reference[..64 * 64], 64, 64);
 }
