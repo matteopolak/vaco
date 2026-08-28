@@ -1153,3 +1153,91 @@ to the H.264/HEVC/MPEG-2 parser crates, all outside this scope.
 blocking `vaco-codec-subtitle-cc`'s own correctness, which is verified
 directly against hand-built (and, where obtained, extracted) `cc_data`
 bytes.
+
+## 19. `Decoder` has no channel for a codec's out-of-band configuration
+
+Found wiring `vaco-codec-subtitle-bitmap`'s three decoders to the registry —
+the first subtitle decoders in this build, and the first consumer of gap 17's
+`FrameData::Subtitle`.
+
+`Parser` has `set_extradata` (`crates/signal/vaco-codec-core/src/lib.rs`), and
+its own doc calls that "the mechanism that makes a parser useful at all in MP4
+and Matroska". `Decoder` has no equivalent: the whole trait surface is
+`send_packet`/`receive_frame`/`flush`, and `DecoderDesc::make` takes only
+`Limits`. So a decoder reached through `vaco_registry::decoder_for` cannot be
+told anything the container knows.
+
+DVD/`VobSub` is the concrete case. An SPU's `SET_COLOR` command does not carry
+colours — it carries four 4-bit *indices* into a 16-entry palette that lives
+entirely outside the SPU bytes: in the `.idx` sidecar, or in a Matroska
+`S_VOBSUB` track's `CodecPrivate`. `vaco_codec_subtitle_bitmap::vobsub::decode_spu`
+takes that palette as an explicit parameter and works correctly when a caller
+has it (`VobSubDemuxer::open_pair` is such a caller). The *registered* decoder
+cannot be one, so `decoder::DVDSUB_DECODER` paints with a documented grey-ramp
+fallback: geometry and pixel indices are right, colours are not the disc's.
+This is deliberately visible in `decoder::fallback_palette`'s doc rather than
+silently wrong.
+
+Not a subtitle-only problem — it is the same shape as any codec whose
+configuration is in the container (an `avcC`, an `AudioSpecificConfig`), which
+is why it is recorded here rather than in the crate.
+
+### Shape
+
+Additive, mirroring `Parser`: a defaulted `fn set_extradata(&mut self, &[u8])
+-> Result<()>` on `Decoder`, forwarded by `Box<dyn Decoder>` and by any
+wrapper (`AsDecoder`/`Validated`) the way `Box<dyn Parser>` already forwards
+`Parser::set_extradata` — the `Box<dyn Muxer>`-shaped trap gap 9 named. Then a
+call site: `vaco-cli`'s transcode leg has the demuxer's `CodecParameters` in
+hand at `exec.rs`'s `decoder_desc.build(limits)` and could offer
+`params.extradata` there. Both halves are outside this crate's scope, so
+neither was attempted.
+
+**Blocks:** correct DVD subtitle colours through any registry-driven path.
+Does not block `vobsub` decode itself, which is correct when the palette is
+supplied directly.
+
+## 20. A decoded `Frame` cannot express a display window the codec states in absolute time
+
+Same origin as gap 19, and a genuinely different problem from it.
+
+`FrameData::Subtitle`'s author recorded (correctly, and this consumer agrees)
+that the display window should be `Frame::pts`/`Frame::duration` rather than
+new fields, so one frame cannot hold two disagreeing ideas of when it
+displays. Those two fields are counted in the stream's time base — which is
+what `PipelineSpec::add_decoder` propagates onto the graph edge it creates.
+
+Two of the three bitmap subtitle formats state a display window *in absolute
+time* rather than in the container's units:
+
+* DVB's `page_time_out` (EN 300 743 §7.2.2) is a whole number of **seconds**.
+* `VobSub`'s SPU `SP_DCSQ_STM` start/stop delays are **90 kHz / 1024 ticks**
+  relative to the packet, which this crate already converts to microseconds.
+
+Both are real, useful, and unrepresentable: converting either into
+`Frame::duration` requires the stream's time base, and the `Decoder` trait
+never receives it (gap 19's surface note applies — `send_packet`/
+`receive_frame`/`flush` is all there is). `vaco-codec-subtitle-bitmap`
+therefore copies `Frame::pts`/`Frame::duration` straight from the packet,
+which is correct and mutually consistent but discards what the codec itself
+said about how long the subtitle should stay up. `SubtitleEvent::start`/`end`
+still carry it for a direct caller.
+
+Worth distinguishing from gap 19: adding `set_extradata` alone would **not**
+fix this. A time base is not extradata — it is a property of the stream the
+graph already knows and simply does not pass down.
+
+### Shape
+
+Either a defaulted `fn set_time_base(&mut self, Rational)` on `Decoder`
+(cheapest; the graph edge already has the value at
+`PipelineSpec::add_decoder`), or letting a decoder set `Frame::time_base`
+itself and having the frame consumer rescale — the latter is closer to what
+`Frame::time_base` looks like it was meant for, since today every decoder in
+this tree leaves it at `Rational::ONE` while stamping `pts` in the stream's
+units (`vaco-codec-qoi` does exactly this, so the inconsistency predates
+subtitles). Both are `vaco-codec-core`/`vaco-sched` changes, outside this
+crate's scope.
+
+**Blocks:** a subtitle renderer knowing how long to leave a DVB or DVD
+subtitle on screen, when the container does not state a packet duration.
