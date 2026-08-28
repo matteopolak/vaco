@@ -13,16 +13,32 @@
 //! #    converting from YUV first if necessary.
 //! ```
 //!
-//! # Not measured: interaction with pre-existing alpha
+//! # Measured, 2026-08-28: pre-existing alpha is overwritten, not composited
 //!
-//! Every probe used an opaque source, so whether `colorkey` multiplies
-//! its computed alpha into an existing alpha channel or overwrites it
-//! outright was not disambiguated. This implementation overwrites —
-//! consistent with the reference always forcing a fresh alpha-capable
-//! format, which suggests the alpha channel is being *produced* here
-//! rather than composited with one that already existed — but this is a
-//! documented assumption, not a confirmed match, in the same spirit as
-//! `premultiply.rs`'s own flagged simplification.
+//! The gap above was closed with a source that actually carries
+//! non-trivial alpha before `colorkey` runs (every earlier probe used an
+//! opaque source, which cannot distinguish the two hypotheses):
+//!
+//! ```text
+//! ffmpeg -f lavfi -i "color=blue:s=4x4,format=argb,geq=a=200:r=0:g=0:b=255,format=argb" \
+//!   -vf colorkey=color=black:similarity=0.01:blend=0 -f rawvideo -pix_fmt argb -
+//! # -> pixel (unmatched colour, alpha 200 going in) comes back with
+//! #    alpha 255, not 200: if the reference multiplied 200 into a
+//! #    computed 255, an untouched pixel would keep its original 200.
+//!
+//! ffmpeg -f lavfi -i "color=black:s=4x4,format=argb,geq=a=200:r=0:g=0:b=0,format=argb" \
+//!   -vf colorkey=color=black:similarity=0.01:blend=0 -f rawvideo -pix_fmt argb -
+//! # -> pixel (matched colour, alpha 200 going in) comes back with alpha 0.
+//! ```
+//!
+//! Both results are consistent only with **overwrite**, never with
+//! multiplying into whatever alpha the pixel already carried (a
+//! multiply against 255 for the unmatched case would still read back
+//! `200`, not `255`). This confirms the implementation's existing
+//! behaviour — `filter_frame` already calls [`sample::write`] on the
+//! alpha component unconditionally, never reading it first — so no code
+//! change was needed, only retiring the "documented assumption, not
+//! confirmed" caveat this section used to carry.
 
 use vaco_core::{MediaType, Result};
 use vaco_filter_core::adapt::{FrameFilter, FrameOut, Simple};
@@ -195,6 +211,29 @@ mod tests {
             row[1] = 255;
             row[2] = 255;
             row[3] = 255;
+        }
+        let f = Filter { key: [0.0, 0.0, 0.0], similarity: 0.01, blend: 0.0 };
+        f.apply_frame(&mut frame);
+        assert_eq!(frame.plane(0).unwrap().row(0).unwrap()[3], 255);
+    }
+
+    /// Pinned against the reference probe in this module's doc, 2026-08-28:
+    /// pre-existing alpha is overwritten, not multiplied against the
+    /// computed key alpha. A starting alpha of `200` on an unmatched pixel
+    /// must come back `255` (overwrite), not `200` (an untouched multiply
+    /// against a computed factor of `1.0` would leave it at `200`).
+    #[test]
+    fn pre_existing_alpha_is_overwritten_not_multiplied() {
+        let mut budget = Budget::new(Limits::strict());
+        let mut frame = Frame::alloc_video(&mut budget, PixFmt::Rgba, 1, 1).unwrap();
+        {
+            let mut p = frame.plane_mut(0).unwrap();
+            let row = p.row_mut(0).unwrap();
+            // Blue, far from the black key -- fully unmatched.
+            row[0] = 0;
+            row[1] = 0;
+            row[2] = 255;
+            row[3] = 200;
         }
         let f = Filter { key: [0.0, 0.0, 0.0], similarity: 0.01, blend: 0.0 };
         f.apply_frame(&mut frame);

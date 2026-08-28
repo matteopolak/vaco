@@ -70,7 +70,11 @@ black key and finding the opaque/transparent boundary sitting at exactly
 `clamp((distance - similarity) / blend, 0, 1)`, `blend <= 0` treated as a
 hard step; five interior points on a `blend=0.2` sweep matched this
 exactly for `colorkey` (which writes the ramp straight to the alpha
-channel).
+channel). That write is an unconditional overwrite, not a multiply
+against whatever alpha the pixel already carried — confirmed 2026-08-28
+with a source that has non-trivial alpha before `colorkey` runs (an
+opaque source cannot tell the two apart); see `src/colorkey.rs`'s doc for
+the two-probe measurement.
 
 `colorhold` reuses the identical ramp to blend a pixel toward its own
 plain RGB mean (`mean(R,G,B)`, not luma-weighted — confirmed: red against
