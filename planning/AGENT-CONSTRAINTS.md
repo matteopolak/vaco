@@ -384,6 +384,36 @@ was read as a diagnosis rather than as a question. A signal with no period —
 an impulse — or a second parameter varied independently will usually tell you
 which of the two is lying, faster than reasoning about either will.
 
+### A source that cannot separate two rules validates neither
+
+Three divergences this campaign hid behind a test input that collapsed the
+competing hypotheses into one answer. In each case the measurement was run
+carefully and the conclusion drawn from it was wrong.
+
+- **`vectorscope`'s intensity**: frame size was varied to vary hit count, so
+  the two were never independent. Holding hit count fixed gave an exact rule
+  at 35 points.
+- **`waveform`'s accumulation**: probed only at `intensity=1`, where the
+  per-hit step is already the integer 255 — so "sum then truncate" and
+  "truncate then sum" produce identical output. The filter's own default,
+  `0.04`, separates them, and the shipped rule was wrong.
+- **`sobel`'s border rule**: checked against a source varying in one axis
+  only, which cannot distinguish "force out-of-bounds taps to zero" from
+  "compute normally, and the border is legitimately zero because a
+  one-axis-invariant image has no gradient in the other axis." A genuinely
+  two-axis source shows the reference's border is mostly nonzero.
+
+The failure is not carelessness — each probe was real and its arithmetic was
+right. It is that **the input was chosen to be valid rather than to be
+discriminating.** A flat source saturates any accumulator. A single frame
+hides temporal state. An axis-aligned source hides an axis.
+
+So before trusting a measured rule, ask: **what other rule would produce this
+same output on this same input?** If you can name one, the input has not
+tested what you think, and the fix is a different input, not more points of
+the same kind. Prefer values where candidate rules visibly disagree — which
+is usually *not* the default, and usually not the roundest number.
+
 ### A test that asserts well-formedness does not assert correctness
 
 Two full dispatch rounds on H.264 CABAC reported divergence points that were
