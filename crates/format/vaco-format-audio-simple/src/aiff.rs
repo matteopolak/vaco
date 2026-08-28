@@ -320,18 +320,8 @@ struct MuxStream {
     sample_size: u16,
     /// The AIFF-C `compressionType`, or `None` for a plain `AIFF`.
     ///
-    /// Measured across twelve `-c:a` values. Plain `AIFF` with an 18-byte
-    /// `COMM` is written **only** for big-endian signed integer PCM —
-    /// `pcm_s8`, `pcm_s16be`, `pcm_s24be`, `pcm_s32be`. Everything else gets
-    /// `AIFC`, an `FVER` chunk and a 24-byte `COMM`:
-    ///
-    /// ```text
-    /// pcm_u8 -> raw     pcm_s16le -> sowt   pcm_alaw -> alaw
-    /// pcm_mulaw -> ulaw pcm_f32be -> fl32   pcm_f64be -> fl64
-    /// ```
-    ///
-    /// `pcm_s24le` and `pcm_s32le` the reference refuses outright, and so do
-    /// we: `sowt` is defined for 16-bit only.
+    /// Plain `AIFF` is written only for big-endian signed integer PCM;
+    /// everything else needs `AIFC`, an `FVER` chunk and a 24-byte `COMM`.
     compression: Option<[u8; 4]>,
     bytes_per_frame: u32,
 }
@@ -352,10 +342,8 @@ impl AiffMuxer {
     }
 }
 
-/// `COMM`'s payload length: 18 for a plain `AIFF`, 24 for `AIFF-C` — the
-/// extra four bytes of `compressionType` and a two-byte empty
-/// `compressionName`. `COMM`'s length alone is what tells a reader which case
-/// it is looking at, which is why it is derived here rather than written twice.
+/// `COMM`'s payload length: 18 for `AIFF`, 24 for `AIFF-C` — four bytes of
+/// `compressionType` and a two-byte empty `compressionName`.
 const fn comm_size(compression: Option<[u8; 4]>) -> u32 {
     if compression.is_some() { 24 } else { 18 }
 }
@@ -377,13 +365,8 @@ impl Muxer for AiffMuxer {
                 "aiff: planar sample formats are not supported",
             ));
         }
-        // The compression type comes from the *codec*, not from the decoded
-        // sample format, and that is the bug this replaced. `pcm_s16le` is
-        // neither float nor planar, so it passed the old guard, and its
-        // little-endian bytes were written verbatim under a plain `AIFF`
-        // header — which is big-endian by definition. The reference read our
-        // own output back as `pcm_s16be`: every sample byte-swapped, silently
-        // (CONFORMANCE-FINDINGS 43).
+        // From the codec: AIFF is big-endian by definition, and endianness is
+        // not in the sample format.
         let codec = params
             .codec_id
             .ok_or(Error::Unsupported("aiff: the codec must be known"))?;
@@ -439,9 +422,7 @@ impl Muxer for AiffMuxer {
             .write(&extended80::from_f64(f64::from(s.sample_rate)))?;
         if let Some(tag) = s.compression {
             self.out.write(&tag)?;
-            // `compressionName`, a pstring: length 0, then one pad byte to an
-            // even total. Measured — the reference writes `00 00`, not a
-            // spelled-out name.
+            // `compressionName`: an empty pstring, padded to an even total.
             self.out.wb16(0)?;
         }
 
@@ -458,12 +439,8 @@ impl Muxer for AiffMuxer {
             return Err(Error::InvalidData("aiff: packet written before the header"));
         }
         self.out.write(packet.payload())?;
-        // Bytes, then one division at the end — not a per-packet frame count.
-        // `frames_in` floors, so counting per packet loses up to
-        // `bytes_per_frame - 1` bytes *every packet* whenever a packet is not
-        // a whole number of frames. A 24-bit stream lost nine bytes across the
-        // file and declared an `SSND` three frames short of what it had
-        // actually written (CONFORMANCE-FINDINGS 43).
+        // Bytes, divided once at the end: `frames_in` floors, so a per-packet
+        // count loses a partial frame every packet.
         self.data_bytes = self
             .data_bytes
             .saturating_add(packet.payload().len() as u64);
@@ -509,11 +486,7 @@ impl Muxer for AiffMuxer {
         self.out
             .wb32(u32::try_from(frames).unwrap_or(u32::MAX))?;
 
-        // SSND size (8 header fields + data): FORM header(12) + FVER when
-        // present + COMM tag+size+payload + SSND tag(4) lands right at SSND's
-        // own size field. Both offsets move with the form type, which is the
-        // trap: inserting a chunk without updating them patches the *wrong*
-        // field with a plausible-looking length.
+        // Both offsets move with the form type.
         let ssnd_size_pos = 12 + fver + (4 + 4 + comm) + 4;
         self.out.seek(ssnd_size_pos)?;
         self.out

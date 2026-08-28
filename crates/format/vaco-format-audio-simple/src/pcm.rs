@@ -39,30 +39,11 @@ pub fn frames_in(bytes: u64, bytes_per_frame: u32) -> u64 {
     bytes / u64::from(bpf)
 }
 
-/// The packet size a raw-PCM reader aims for: 4096 of something.
-///
-/// **Which "something" is per-format, and it was measured, not chosen.** The
-/// RIFF-shaped readers count frames; everything else counts bytes.
-///
-/// ```text
-///                block_align   packet size   packet duration
-/// wav  s16 mono            2          8192              4096
-/// wav  s16 stereo          4         16384              4096
-/// wav  s24 mono            3         12288              4096
-/// wav  f32 stereo          8         32768              4096
-/// w64  s16 mono            2          8192              4096
-/// aiff s16 mono            2          4096              2048
-/// aiff f64 mono            8          4096               512
-/// caf  s16 mono            2          4096              2048
-/// ```
-///
-/// So `wav`/`w64` hold the frame count constant and let the byte count vary,
-/// and `aiff`/`caf` do the opposite. The final packet is whatever is left —
-/// 3140 frames on a 44100-frame file — and carries that as its duration.
+/// The packet size a raw-PCM reader aims for: 4096 frames for `wav`/`w64`,
+/// 4096 bytes for the rest. Both are measured off the reference.
 pub const TARGET_PACKET: usize = 4096;
 
-/// Whether [`TARGET_PACKET`] counts frames or bytes for a given format. See
-/// its table.
+/// Whether [`TARGET_PACKET`] counts frames or bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PacketSizing {
     /// 4096 bytes, rounded down to a whole frame. `aiff`, `caf`, and the rest.
@@ -197,17 +178,14 @@ pub const fn codec_id_for(
     }
 }
 
-/// The decoded sample format for a PCM-shaped `CodecId`, keyed on the codec
-/// rather than on the coded width.
+/// The decoded sample format for a PCM-shaped `CodecId`, and its
+/// `bits_per_raw_sample` where that differs from the format's own width.
 ///
-/// The width is not enough on its own, which is what makes this a separate
-/// function rather than a call to [`sample_fmt_for`]: A-law and µ-law are
-/// eight bits coded and decode to `s16`, and `pcm_s8` decodes to `u8` because
-/// there is no signed 8-bit sample format. Both rows are in
-/// [`codec_id_for`]'s measured table.
+/// Keyed on the codec, not the coded width: A-law and µ-law store eight bits
+/// and decode to `s16`, and `pcm_s8` decodes to `u8`.
 ///
-/// Returns `None` for anything that is not PCM-shaped, so a caller can use it
-/// as the family test as well as the lookup.
+/// `None` for anything that is not PCM-shaped, so this doubles as the family
+/// test.
 #[must_use]
 pub const fn sample_fmt_of(codec_id: CodecId) -> Option<(SampleFmt, Option<u8>)> {
     match codec_id {
@@ -223,12 +201,9 @@ pub const fn sample_fmt_of(codec_id: CodecId) -> Option<(SampleFmt, Option<u8>)>
     }
 }
 
-/// Bits actually **stored** per sample, which is not always the decoded
-/// format's width.
-///
-/// A-law and µ-law store eight and decode to `s16`; 24-bit PCM stores 24 and
-/// decodes to `s32`. A muxer writing a container header needs the stored
-/// width, and [`sample_fmt_of`] deliberately answers the other question.
+/// Bits stored per sample, which is not the decoded format's width: A-law
+/// stores eight and decodes to `s16`, 24-bit PCM stores 24 and decodes to
+/// `s32`. A container header wants this one.
 #[must_use]
 pub const fn coded_bits(codec_id: CodecId) -> Option<u8> {
     match codec_id {
@@ -241,12 +216,8 @@ pub const fn coded_bits(codec_id: CodecId) -> Option<u8> {
     }
 }
 
-/// Whether a PCM-shaped codec stores its samples little-endian.
-///
-/// `Some(false)` is big-endian; `None` means endianness does not apply — one
-/// byte per sample, so there is no order to state. Containers that carry a
-/// byte-order flag need the distinction, and a container that assumes
-/// big-endian silently corrupts a little-endian copy.
+/// Whether a PCM-shaped codec stores its samples little-endian. `None` where
+/// endianness does not apply — one byte per sample states no order.
 #[must_use]
 pub const fn is_little_endian(codec_id: CodecId) -> Option<bool> {
     match codec_id {
@@ -312,27 +283,13 @@ pub struct RawPcmDemuxer {
 }
 
 impl RawPcmDemuxer {
-    /// Count [`TARGET_PACKET`] in frames rather than bytes. See
-    /// [`PacketSizing`]'s table for which formats do which.
+    /// Count [`TARGET_PACKET`] in frames rather than bytes.
     pub fn size_packets_in_frames(&mut self) {
         self.sizing = PacketSizing::Frames;
     }
 
-    /// Withhold the frame count this demuxer derived.
-    ///
-    /// The reference is not consistent about this and the inconsistency is
-    /// per-format, so it cannot live in the shared constructor. Measured on
-    /// one-second 44.1 kHz mono files:
-    ///
-    /// ```text
-    ///        duration_ts   nb_frames
-    /// wav          44100         N/A
-    /// aiff         44100       44100
-    /// caf          44100       44100
-    /// ```
-    ///
-    /// Both numbers come from the same division, and the reference states one
-    /// and not the other for WAV alone. Reproduced rather than tidied up.
+    /// Withhold the frame count. `wav` states `duration_ts` and not
+    /// `nb_frames`; `aiff` and `caf` state both, from the same division.
     pub fn forget_frame_count(&mut self) {
         self.stream.frame_count = None;
     }
@@ -354,15 +311,7 @@ impl RawPcmDemuxer {
         });
         let bytes_per_frame = bytes_per_frame.max(1);
 
-        // Duration, frame count and bit rate, all derivable from the data
-        // length and none of which this demuxer used to state — `ffprobe`
-        // reported `duration=N/A bit_rate=N/A nb_frames=N/A` for every WAV,
-        // AIFF and CAF file while the reference printed all three
-        // (CONFORMANCE-FINDINGS 44).
-        //
-        // The time base is 1/sample_rate for these formats, so a tick *is* a
-        // frame and `duration_ts` is the frame count. Measured: 44100 for a
-        // one-second 44.1 kHz file, matching the reference exactly.
+        // The time base is 1/sample_rate here, so a tick is a frame.
         let mut stream = stream;
         if let Some(len) = data_len {
             let frames = frames_in(len, bytes_per_frame);
@@ -447,11 +396,8 @@ impl RawPcmDemuxer {
         }
 
         let mut pkt = Packet::alloc(budget, want)?;
-        // Fill the packet, rather than taking whatever one read returns. A
-        // short read is normal on a buffered source and used to end up as the
-        // packet size, so `-show_packets` reported 8114 bytes where the
-        // reference reported 8192 — the packetisation followed the transport's
-        // buffer boundaries instead of the format's own framing.
+        // Fill the packet: a short read must not become the packet size, or
+        // packetisation follows the transport's buffer rather than the format.
         let mut n = 0usize;
         loop {
             let Some(rest) = pkt.payload_mut().get_mut(n..) else {
@@ -487,10 +433,6 @@ impl RawPcmDemuxer {
         if whole_frames == 0 {
             self.eof = true;
         }
-        // The reference states a duration on every raw-PCM packet and we
-        // stated none, so `ffprobe -show_packets` printed `duration=N/A` for
-        // every one. It is the packet's own frame count, which is also the
-        // tick count here: the time base is `1/sample_rate`.
         if let Some(audio) = self.stream.params.audio.as_ref() {
             let rate = u64::from(audio.sample_rate.max(1));
             let micros = whole_frames

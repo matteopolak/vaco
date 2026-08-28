@@ -204,12 +204,8 @@ impl WavDemuxer {
 
         let channels = fmt.channels;
         let codec_id = wave_tags::codec_id(&fmt);
-        // Keyed on the codec, not on equality with the generic `CodecId::Pcm`.
-        // `wave_tags::codec_id` returns the *specific* variant — `PcmS16le`, not
-        // `Pcm` — so this condition was never true for a real file and every WAV
-        // stream came out with `sample_fmt=unknown`. That broke more than the
-        // probe: `vaco -i in.wav -c copy out.wav` failed outright with "wav:
-        // sample format must be known" (CONFORMANCE-FINDINGS 42).
+        // `wave_tags::codec_id` returns the specific variant, never the
+        // generic `CodecId::Pcm`.
         let pcm_fmt = codec_id.and_then(pcm::sample_fmt_of);
         let (format, bits_per_raw) = match pcm_fmt {
             Some((sf, raw)) => (Some(sf), raw),
@@ -246,9 +242,6 @@ impl WavDemuxer {
 
         let mut inner =
             RawPcmDemuxer::new(io, stream, data_start, declared_len, bytes_per_frame.max(1));
-        // See `RawPcmDemuxer::forget_frame_count`: the reference states
-        // `duration_ts` and not `nb_frames` for WAV, and both for AIFF and CAF,
-        // from the same division.
         inner.forget_frame_count();
         inner.size_packets_in_frames();
         Ok(Self {
@@ -335,11 +328,8 @@ impl Muxer for WavMuxer {
                 "wav: planar sample formats are not supported",
             ));
         }
-        // The *coded* width, not the decoded format's. `pcm_s24le` decodes to
-        // `s32`, so `format.bits_per_sample()` answers 32 and this muxer
-        // labelled 24-bit data as `pcm_s32le` — the reference read our own
-        // output back as `pcm_s32le,32` and its MD5 did not match the source.
-        // Corrupt, not merely non-identical (CONFORMANCE-FINDINGS 43).
+        // The coded width, not the decoded format's: `pcm_s24le` decodes to
+        // `s32` and would be written as 32-bit.
         let codec = params
             .codec_id
             .ok_or(Error::Unsupported("wav: the codec must be known"))?;

@@ -167,8 +167,6 @@ impl W64Demuxer {
 
         let channels = fmt.channels;
         let codec_id = wave_tags::codec_id(&fmt);
-        // Keyed on the codec, not on equality with the generic `CodecId::Pcm`
-        // — see `wav.rs`, which had the identical dead condition.
         let pcm_fmt = codec_id.and_then(pcm::sample_fmt_of);
         let (format, bits_raw) = match pcm_fmt {
             Some((sf, raw)) => (Some(sf), raw),
@@ -210,9 +208,6 @@ impl W64Demuxer {
             Some(declared_len),
             bytes_per_frame.max(1),
         );
-        // Same two per-format quirks as `wav.rs`, measured the same way: the
-        // reference states `duration_ts` and not `nb_frames`, and it sizes
-        // packets in frames rather than bytes for the RIFF-shaped readers.
         inner.forget_frame_count();
         inner.size_packets_in_frames();
         Ok(Self {
@@ -293,11 +288,7 @@ impl Muxer for W64Muxer {
                 "w64: planar sample formats are not supported",
             ));
         }
-        // The *coded* width, not the decoded format's. `pcm_s24le` decodes to
-        // `s32`, so `format.bits_per_sample()` answers 32 and this muxer
-        // labelled 24-bit data as `pcm_s32le` — the reference read our own
-        // output back as `pcm_s32le,32` and its MD5 did not match the source.
-        // Corrupt, not merely non-identical (CONFORMANCE-FINDINGS 43).
+        // The coded width, not the decoded format's.
         let codec = params
             .codec_id
             .ok_or(Error::Unsupported("w64: the codec must be known"))?;
