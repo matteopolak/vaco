@@ -1165,3 +1165,27 @@ normally one whole epoch), so this only matters for a caller driving the
 raw `dvbsub` format directly -- worth knowing if a future MPEG-TS wiring
 ever wants to hand this decoder individual segments instead of whole PES
 payloads, since the buffering assumes it may have to reassemble.
+
+## `provenance-check` is red: five orchestrator commits lack `Signed-off-by`
+
+`cd56f8c4`, `b0f4fd15`, `c6ce3870`, `2903fc20` and `0c9369bc` carry the three
+`Vaco-*` trailers and no `Signed-off-by:`. CI runs `cargo xtask
+provenance-check` (`.github/workflows/ci.yml`), so the workflow fails on every
+push until these are fixed. Nothing else in the tree fails that gate.
+
+Cause: `git commit-tree`, which the private-index recipe uses, does not add the
+trailer the way `git commit -s` does. The trailer block was copied from
+`git log -1 --format='%B' | tail -4`, and four lines was one short — it showed
+the three `Vaco-*` lines and cut off the `Signed-off-by:` above them. Later
+commits from the same recipe include it.
+
+Fix: rewrite those five commits to add the trailer and force-push. Deliberately
+**not** done when found — nine agents were committing into the shared tree, and
+a rewrite plus force-push would orphan any commit landing in the window. The
+trees are identical either way, so this is metadata-only and safe to do the
+moment the tree is quiet. Do it before anything else at the next lull.
+
+Do **not** "fix" this by widening the gate or by moving `provenance/baseline`
+forward: the baseline exempts every commit in between, trading one bad record
+for a hundred unchecked ones, and `provenance/corrections.toml` maps a citation
+to a registered source id, which is a different axis entirely.
