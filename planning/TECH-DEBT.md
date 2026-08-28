@@ -2987,3 +2987,64 @@ from the three CABAC macroblock tests' `#[ignore]` reasons (updated with
 the corrected repro, still `#[ignore]`d), `h264_entropy` fuzz target
 clean (5M+ execs, no crash), `patent-gate` still "0 of 2". #418 and #419
 stay open.
+
+## `provenance-check` is red on three more commits, and one of them is a claim, not a formatting slip
+
+`cargo xtask provenance-check` currently reports eight failures. Five are the
+orchestrator's missing `Signed-off-by:` trailers already recorded above. The
+other three are new, and they are not all the same kind of problem.
+
+**Two are metadata on legitimate repair commits**, and fold into the same
+single metadata-only history rewrite the five above are waiting on:
+
+- `d3b27acd` — "restore vaco-codec-vp9 files lost to a stale-base commit".
+  Touches implementation code with no `Vaco-Provenance:` trailer. The commit
+  itself is a good one: it caught a concurrent commit that had built its tree
+  from a base predating `791a428` and landed without a compare-and-swap,
+  silently carrying reverted content forward for every commit since. That is
+  R14 shared-tree corruption, found and repaired, and the repair correctly
+  staged the whole crate directory rather than a narrow pathspec.
+- `16e59dd9` — `Vaco-Spec-Ref: N/A (git-history repair, not spec-derived
+  content)`. `N/A` is not a registered source id. The correct form for a
+  commit that is not spec-derived is to **omit** the trailer, exactly as
+  `none` is now handled: the gate reads an absent trailer as absent, and a
+  citation to a document we never recorded acquiring proves nothing. See the
+  `Vaco-Spec-Ref: none` row above — same shape, third occurrence.
+
+**The third is substantive and needs a person who knows what actually
+happened.** `157714fe` ("add vaco-parse-mpegvideo") carries two
+`Vaco-Spec-Ref` trailers citing `iso-11172-2` and `iso-14496-2`. Neither id
+is declared in `provenance/sources.toml`, and `vaco-parse-mpegvideo` has no
+`provenance/<crate>.toml` at all.
+
+There are two honest resolutions and they are not interchangeable:
+
+1. We do hold those documents and simply never declared them — then declare
+   them in the register, with a real `acquired` date and `where`, and add the
+   crate's own provenance file.
+2. The code was **not** derived from those texts. The commit message itself
+   says access-unit boundaries were "measured against the reference's own
+   packetiser (`ffprobe -f mpegvideo|m4v -show_packets`), not assumed from the
+   syntax alone", and describes two boundary rules discovered by measurement.
+   That is `kind = "blackbox"` evidence, which D6 permits and which the
+   register deliberately labels differently. If that is what happened, the
+   trailer claims spec derivation for something measured, and the fix is to
+   cite the blackbox source rather than to declare an ISO text we do not hold.
+
+**Do not resolve this by declaring the documents unless we actually have
+them.** The register exists so that a citation means acquisition; back-filling
+an entry to turn a gate green would destroy the only thing the gate measures.
+
+`iso-14496-2` is ISO/IEC 14496-2 — the same MPEG-4 part 2 standard **#360 is
+blocked on**, pending the repository owner's ruling. Note what did and did not
+land here: `src/mpeg4.rs` reads `VisualObjectSequence` / `VideoObjectLayer` /
+`VideoObjectPlane` **headers** for the rectangular-shape, no-explicit-VBV case,
+and contains **no coding tables at all** (its single `const` array is a test
+fixture). It returns `None` for `width`/`height` on the shapes and branches it
+does not model rather than guessing. So the specific clean-room hazard behind
+#360 — coding tables that cannot honestly be distinguished as recalled from the
+ISO text or from having seen an open-source decoder — is not what this file
+contains. That distinction is worth making explicitly, because "MPEG-4 part 2
+code already landed" is otherwise an easy and wrong thing to conclude from the
+gate output.
+
