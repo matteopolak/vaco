@@ -2177,3 +2177,16 @@ to also flag a deeply-nested-but-few-rows table would need a decision
 about what "32" should mean for those shapes, which is a call for whoever
 owns `xtask/src/provenance.rs`'s design, not something to make
 unilaterally while fixing an unrelated crate's provenance file.
+
+
+## `61b26ff9` carries a `Vaco-Spec-Ref: none` trailer that cannot be corrected
+
+`provenance-check` fails on it permanently: `none` is not a registered
+`[[source]]`, and `provenance/corrections.toml` cannot help, since it maps a
+citation to the registered id its author meant and there is no id here. The
+trailer should simply have been omitted.
+
+Fix it in the same history rewrite as the five orchestrator commits missing
+`Signed-off-by:` recorded above — all six are metadata-only, all six are safe
+the moment the tree is quiet, and doing them together costs one rewrite rather
+than two. The rule that prevents recurrence is now on the constraints page.

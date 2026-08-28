@@ -299,6 +299,34 @@ four `--check` generators) at the wave boundary. **Do not run them all
 yourself** unless your brief says to — they are cheap individually and the
 round-trips are not.
 
+## `BitReader::get` pads with zeros — a parse loop must use `try_get`
+
+`get` never fails. Past the end of the buffer it returns zeros, which is the
+right behaviour for a reader that flags its own error state and lets a caller
+check once at the end — and a trap for any loop whose *termination* depends on
+reading something.
+
+An AAC `raw_data_block()` element loop looked for the `ID_END` marker. A
+truncated stream never produced one, `get` kept handing back zeros, and the
+loop allocated until it died: a real libFuzzer OOM from an **11-byte input**.
+
+`try_get` fails immediately on truncation and consumes nothing. Its own doc
+names length prefixes about to size an allocation, which is narrower than the
+hazard — **any read whose value decides whether the loop continues** wants
+`try_get`, not just one that sizes a buffer.
+
+This is a shared primitive under every parser in the tree, so the shape is
+worth checking wherever a loop reads a sentinel, a marker, or an element type.
+
+## Omit `Vaco-Spec-Ref` when there is nothing to cite
+
+The trailer is optional. Writing `Vaco-Spec-Ref: none — an internal
+architecture finding` fails `provenance-check` permanently, because `none` is
+not a registered `[[source]]` and the gate cannot tell a deliberate absence
+from a citation to a document nobody recorded acquiring. Leave the line out
+instead. `corrections.toml` cannot repair this after the fact either — it maps
+a citation to the registered id its author meant, and here there is no id.
+
 ## Check a recorded blocker before you accept it
 
 A doc comment or a `TECH-DEBT.md` row saying something is not tractable is
