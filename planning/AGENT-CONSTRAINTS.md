@@ -1578,3 +1578,23 @@ Two rules follow, and the second is the one that gets skipped:
 A single aggregate number is a summary, and summaries are where structured
 error goes to hide. Per `705779d`, structured deviation is a bug however small
 its average.
+
+## You are the agent. There is no one else working for you.
+
+Three agents in one session stalled the same way: each reported it was waiting
+on sub-agents to finish, having spawned none. One waited on a "survey agent"
+that never existed. One waited on sub-agents that were in fact alive but simply
+had not written yet. One returned, as its entire result, *"Standing by for the
+audit agents to finish; I'll act on their findings as soon as they land."*
+
+Nothing was coming. Each cost a full dispatch.
+
+Unless you have called the Agent tool yourself in this session and hold the
+resulting id, **no one is working on your behalf.** A brief that describes work
+in the third person, mentions other agents, or says what "should" be produced is
+describing *your* task, not someone else's. Do it yourself, directly.
+
+If you genuinely need something another agent owns, say so and stop — that is
+the documented escalation, and it is correct. But "waiting" is not a state this
+system has. There is no queue, no inbox, and nothing arrives while you idle.
+Either act, or report and end your turn.
