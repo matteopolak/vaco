@@ -153,15 +153,15 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-filter-deinterlace | 5 | #480 | agent:deint | done | 2026-08-23 | 2026-08-23 | plan 16 §4.3 row; idet/vfrdet blocked on INTERFACE-GAPS 11 |
 | vaco-frame | 2 | — | agent:framemeta | done | 2026-08-23 | 2026-08-23 | INTERFACE-GAPS 11: per-frame metadata dictionary |
 | vaco-probe | 7 | — | agent:framemeta | done | 2026-08-23 | 2026-08-23 | -show_frames FRAME_TAGS consumer side |
-| vaco-filter-aeffects | 5 | #484 | agent:audiotidy | assigned | 2026-08-23 |  | renamed from vaco-filter-achannel per plan 16 §4.3 |
+| vaco-filter-aeffects | 5 | #484 | agent:audiotidy | done | 2026-08-23 | 2026-08-23 | renamed from vaco-filter-achannel per plan 16 §4.3 |
 | vaco-filter-color | 5 | #476 | agent:analysis2 | assigned | 2026-08-23 |  | remainder of the 29-filter row |
 | vaco-filter-key | 5 | #476 | agent:color2 | done | 2026-08-23 | 2026-08-23 | remainder of the 20-filter row |
 | vaco-filter-lut | 5 | #476 | agent:color2 | done | 2026-08-23 | 2026-08-23 | lut1d, haldclutsrc, the .3dl/.dat/.m3d parsers |
 | vaco-filter-analysis | 5 | #477 | agent:analysis2 | assigned | 2026-08-23 |  | unblocked by INTERFACE-GAPS 11 closing; may extend vaco-filter-vdsp |
-| vaco-filter-adsp | 5 | — | agent:audiotidy | assigned | 2026-08-23 |  | D19: one biquad design, not five; plan 16 §4.2 says it lives here |
+| vaco-filter-adsp | 5 | — | agent:audiotidy | done | 2026-08-23 | 2026-08-23 | D19: one biquad design, not five; plan 16 §4.2 says it lives here |
 | vaco-filter-aeq | 5 | — | agent:audiotidy | done | 2026-08-23 | 2026-08-23 | renamed from vaco-filter-audio-eq |
-| vaco-filter-audio-dynamics | 5 | — | agent:audiotidy | assigned | 2026-08-23 |  | rename to vaco-filter-adynamics |
-| vaco-filter-ameasure | 5 | — | agent:audiotidy | assigned | 2026-08-23 |  | rename to vaco-filter-aanalysis |
+| vaco-filter-audio-dynamics | 5 | — | agent:audiotidy | done | 2026-08-23 | 2026-08-23  | renamed |
+| vaco-filter-ameasure | 5 | — | agent:audiotidy | done | 2026-08-23 | 2026-08-23  | renamed |
 | vaco-bsf-av1 | 3 | #351 | agent:extradata | done | 2026-08-23 | 2026-08-23 | av1_frame_split/merge, av1_metadata |
 | vaco-bsf-vpx | 3 | #351 | agent:extradata | done | 2026-08-23 | 2026-08-23 | VP9 only — no VP8 bsf exists in the reference |
 | vaco-bsf-audio | 3 | #352 | agent:extradata | done | 2026-08-23 | 2026-08-23 | aac_adtstoasc, opus_metadata, pcm_rechunk |
