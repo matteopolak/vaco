@@ -291,17 +291,55 @@ fn ac_refine(
             Some(if er.get_bit() == 1 { p1 } else { m1 })
         };
 
-        while k <= se {
-            let nat = ZIGZAG.get(k as usize).copied().unwrap_or(0);
-            let existing = block.get(nat).copied().unwrap_or(0);
-            if existing == 0 {
-                if run == 0 {
-                    break;
+        // `run` counts only zero-history coefficients; every nonzero one
+        // the walk passes gets a free correction (Annex G.1.2.3) and never
+        // decrements it. What happens once `run` reaches zero depends on
+        // *why* this symbol ran a skip at all:
+        //
+        // - A ZRL (`new_value` is `None`) is a fixed unit of work — exactly
+        //   16 zero-history positions, wherever they fall relative to any
+        //   nonzero ones corrected along the way — and stops the instant
+        //   that count is spent, whatever position it lands on. That
+        //   position is left untouched for the next `RS` symbol's own walk
+        //   to visit fresh.
+        // - A sized symbol carries a coefficient that has to go somewhere,
+        //   and a valid stream never targets a position with a prior
+        //   value: if the walk's `run`-many zero-history positions are
+        //   spent but the current position is still nonzero, that is not
+        //   the landing spot the encoder meant, only a nonzero coefficient
+        //   the skip happened to pass on its way there. Emit its free
+        //   correction like any other and keep walking to the position
+        //   that is actually zero.
+        //
+        // Conflating the two (stopping unconditionally the moment `run`
+        // hits zero, landing spot or not) reads a correction bit a
+        // still-occupied coefficient was never encoded with in the ZRL
+        // case, or overwrites an already-established coefficient in the
+        // sized case — both silently desynchronise every symbol decoded
+        // later in the block.
+        if new_value.is_some() {
+            while k <= se {
+                let nat = ZIGZAG.get(k as usize).copied().unwrap_or(0);
+                let existing = block.get(nat).copied().unwrap_or(0);
+                if existing == 0 {
+                    if run == 0 {
+                        break;
+                    }
+                    run -= 1;
+                } else {
+                    apply_correction(er, block, nat, p1, m1);
                 }
-                run -= 1;
                 k += 1;
-            } else {
-                apply_correction(er, block, nat, p1, m1);
+            }
+        } else {
+            while k <= se && run != 0 {
+                let nat = ZIGZAG.get(k as usize).copied().unwrap_or(0);
+                let existing = block.get(nat).copied().unwrap_or(0);
+                if existing == 0 {
+                    run -= 1;
+                } else {
+                    apply_correction(er, block, nat, p1, m1);
+                }
                 k += 1;
             }
         }
@@ -865,6 +903,80 @@ mod tests {
         ac_first(&mut er, &table, &mut block_b, 1, 63, 0, &mut eobrun).unwrap();
         assert_eq!(eobrun, 1);
         assert!(block_b.iter().all(|&v| v == 0));
+    }
+
+    #[test]
+    fn ac_refine_keeps_walking_past_a_nonzero_landing_spot_to_place_a_new_coefficient() {
+        // A sized `RS` symbol's `run` counts only zero-history positions;
+        // it is not guaranteed that the position where `run` happens to
+        // reach zero is itself one of them (a nonzero coefficient the walk
+        // passed over, corrected for free, does not consume `run`). This
+        // table's one sized symbol says "skip 2 zero-history positions,
+        // then place a new coefficient": with an existing nonzero sitting
+        // at the third position overall, the walk must correct it and keep
+        // going rather than overwrite it.
+        let counts: [u8; 16] = {
+            let mut c = [0u8; 16];
+            c[0] = 1;
+            c
+        };
+        let values: [u8; 1] = [0x21]; // R=2, S=1
+        let table = DecodeTable::build(&counts, &values);
+        let enc = crate::huffman::EncodeTable::build(&counts, &values);
+        let (len, code) = enc.code_for(0x21).unwrap();
+        let mut w = crate::bits::EntropyWriter::new();
+        w.put_bits(u32::from(len), u32::from(code));
+        w.put_bits(1, 1); // sign bit: positive -> new coefficient is +1
+        w.put_bits(1, 0); // correction bit for the nonzero coefficient the walk passes
+        w.flush_to_byte();
+        let bytes = w.finish();
+        let mut er = EntropyReader::new(&bytes, 0);
+        let mut eobrun = 0u32;
+        let mut block = [0i32; 64];
+        block[ZIGZAG[3]] = 6; // sits at the position where `run` would hit zero
+        ac_refine(&mut er, &table, &mut block, 1, 4, 0, &mut eobrun).unwrap();
+        assert_eq!(
+            block[ZIGZAG[3]], 6,
+            "the nonzero coefficient the walk passed is corrected, not overwritten"
+        );
+        assert_eq!(
+            block[ZIGZAG[4]], 1,
+            "the new coefficient lands one position further, on the actual zero"
+        );
+    }
+
+    #[test]
+    fn ac_refine_zrl_stops_the_instant_its_run_is_spent_without_touching_the_landing_spot() {
+        // A ZRL has nothing to place, so once its 16 zero-history positions
+        // are spent it simply stops — even if the position it lands on
+        // happens to already be nonzero. That coefficient is left for the
+        // *next* `RS` symbol to visit fresh, not corrected twice or
+        // skipped entirely.
+        let counts: [u8; 16] = {
+            let mut c = [0u8; 16];
+            c[0] = 2;
+            c
+        };
+        let values: [u8; 2] = [0xF0, 0x00]; // ZRL, then EOB0
+        let table = DecodeTable::build(&counts, &values);
+        let enc = crate::huffman::EncodeTable::build(&counts, &values);
+        let (zrl_len, zrl_code) = enc.code_for(0xF0).unwrap();
+        let (eob_len, eob_code) = enc.code_for(0x00).unwrap();
+        let mut w = crate::bits::EntropyWriter::new();
+        w.put_bits(u32::from(zrl_len), u32::from(zrl_code));
+        w.put_bits(u32::from(eob_len), u32::from(eob_code));
+        w.put_bits(1, 1); // the EOB0 correction sweep's one bit, for the landing coefficient
+        w.flush_to_byte();
+        let bytes = w.finish();
+        let mut er = EntropyReader::new(&bytes, 0);
+        let mut eobrun = 0u32;
+        let mut block = [0i32; 64];
+        block[ZIGZAG[17]] = 9; // exactly where the ZRL's 16-count runs out
+        ac_refine(&mut er, &table, &mut block, 1, 17, 0, &mut eobrun).unwrap();
+        assert_eq!(
+            block[ZIGZAG[17]], 10,
+            "corrected once, by the EOB0 sweep that follows — not by the ZRL that landed there"
+        );
     }
 
     #[test]
