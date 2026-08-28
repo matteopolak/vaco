@@ -84,7 +84,7 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-mux-asf | 4 | #587 | agent:asf | done | 2026-08-23 | 2026-08-23 |  |
 | vaco-mux-hash | 4 | #572 | agent:mux-hash | done | 2026-08-23 | 2026-08-23 | crc framecrc framemd5 framehash hash md5 streamhash uncodedframecrc — the differential oracle |
 | vaco-filter-* T3 audio long tail | 4 | #485 (closes epic #58) | agent:audio-tail | active | 2026-08-27 | — | last open child of FT-4.13 |
-| vaco-cli stderr reporting | 7 | #641 #208 | agent:cli-report | active | 2026-08-27 | — | the Input #0/Output #0 dump and -stats/-progress/-report; shares loglevel::prints_info |
+| vaco-cli stderr reporting | 7 | #641 #208 | agent:cli-report | done | 2026-08-27 | 2026-08-28 | the Input #0/Output #0 dump and -stats landed 08-27; -progress/-report finished by agent:cli-batch 08-28 (see next row) |
 | vaco-protocol-dial (new) + vaco-protocol-rtmp (epic #61) | 2 | TECH-DEBT row 1, #552 | agent:rtmp | done | 2026-08-27 | — | pays down the five-copy dial duplication first, then RTMP is the test of whether the seam was right |
 | mp3 demux/mux + vaco-codec-mpegaudio (epic #38 decode half) | 3 | #644 #362 (#363/#364 open) | agent:mpeg-audio | done | 2026-08-27 | — | `.mp3` cannot be opened at all today; demuxer first, then Layers I/II/III |
 | vaco-codec-mpeg12 (epic #36) | 3 | MPEG-1/2 video decode | agent:mpeg2 | active | 2026-08-28 | — | decoder landed; three bugs fixed, one non-intra coefficient desync open on busy content, #355 open |
@@ -156,6 +156,7 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-sched | 7 | — | agent:cli-mux | done | 2026-08-23 | 2026-08-23 | build_work now calls Muxer::init() before reading stream_time_base |
 | vaco-probe | 7 | — | agent:probe | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-cli | 7 | — | agent:cli-mux | done | 2026-08-23 | 2026-08-23 | muxers wired: -c copy remux writes a real file |
+| vaco-cli (CL-04/CL-16/CL-17/CL-22/CL-25/CL-11) | 7 | #187 #207 #208 #223 #226 #198 | agent:cli-batch | done | 2026-08-28 | 2026-08-28 | #187/#208/#223/#226/#198 closed; #207 left OPEN (-disposition/-program blocked on a vaco-format-core channel that does not exist; -timestamp/-timecode/-streamid/-dump_attachment not attempted). CL-25's StreamPick enum refactor + real -map [label] wiring is the headline change; commits 71adfbc/630d30f/bd7f167/383716e/add7323/d28246e |
 | vaco-conformance | 10 | #172,#173 | agent:conformance | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-checkasm | 10 | #92 | agent:checkasm | done | 2026-08-28 | 2026-08-28 | Kernel trait + Differential<K> + edge generators (vector-width tails, integer saturation, float specials) + CLI verify/list; wired vaco-scale::affine_row (a real production kernel) end to end, 92 cases clean; two synthetic seeded-bug kernels prove the harness catches an induced mismatch. Cross-tier-in-one-run is out of scope (needs unsafe assume_supported); coverage accumulates per-CI-machine instead. Unblocks #423, #127 — see comments there. |
 | vaco-filter-blur | 5 | #468 | agent:blur2 | done | 2026-08-23 | 2026-08-23 | gblur boxblur unsharp smartblur convolution sobel and the rest of FT-4.6a |
