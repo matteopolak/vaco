@@ -977,3 +977,10 @@ kind     = "spec"
 title    = "scale2x.it, \"The Scale2x/Scale3x algorithm\" (AdvanceMAME project) — the public pixel-art upscaling algorithm underlying ffmpeg's `epx` filter: the 3x3-neighbourhood, four-comparison (B!=H, D!=F) rule that decides whether each output sub-pixel copies an orthogonal neighbour or the source pixel, at both the 2x (4 sub-pixels) and 3x (9 sub-pixels) scale factors"
 acquired = "2026-08-28"
 where    = "https://www.scale2x.it/algorithm"
+
+[[source]]
+id       = "iso-14496-3"
+kind     = "spec"
+title    = "ISO/IEC 14496-3, Coding of audio-visual objects — Part 3: Audio (subpart 1 general/AudioSpecificConfig/program config element, subpart 4 AAC)"
+acquired = "2026-08-28"
+where    = "ISO"
