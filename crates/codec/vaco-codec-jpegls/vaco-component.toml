@@ -1,0 +1,26 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# JPEG-LS is not listed as RED/AMBER anywhere in
+# planning/research/07-legal-patents-licensing.md, and the LOCO-I paper
+# itself records (§ "Results", final paragraph): "The organizations holding
+# patents covering aspects of JPEG-LS have agreed to allow payment-free
+# licensing of these patents for use in the standard." GREEN, default build,
+# same as every other unlisted codec (D4).
+
+[[component]]
+kind      = "decoder"
+name      = "jpegls"
+long_name = "JPEG-LS (ITU-T T.87 / ISO/IEC 14495-1)"
+feature   = "codec-jpegls"
+ctor      = "vaco_codec_jpegls::JPEGLS_DECODER"
+media     = "video"
+codec     = "jpegls"
+
+[[component]]
+kind      = "encoder"
+name      = "jpegls"
+long_name = "JPEG-LS (ITU-T T.87 / ISO/IEC 14495-1)"
+feature   = "codec-jpegls"
+ctor      = "vaco_codec_jpegls::JPEGLS_ENCODER"
+media     = "video"
+codec     = "jpegls"
