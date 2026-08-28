@@ -1407,3 +1407,29 @@ reference" and "match the specification" give different answers, and a future
 agent reading only the spec would reasonably think the six-name table is a bug.
 If the reference ever gains the full table, the change is confined to
 `webvtt::entity`.
+
+### `vaco-format-misc`'s `roq` stream discovery stops at the first packet, not the first audio-or-video pair
+
+`RoqDemuxer::open` (`crates/format/vaco-format-misc/src/roq.rs`) has to decide
+whether an audio stream exists before returning `streams()` for the first
+time, but the container states nothing about audio up front — the only way to
+find out is to read chunks. The loop it uses stops as soon as **any** packet
+(`self.pending` gains an entry) is produced, not specifically after a video
+packet. For every real-world layout this format's own documentation shows —
+audio before the first codebook, repeated every frame — that is the same
+thing, because the first chunk that produces a packet at all is the audio
+chunk. But a file that opens with video only and interleaves its first audio
+chunk starting at, say, frame 50 would report `streams().len() == 1` forever:
+discovery already stopped at frame 1's video packet and never looks again.
+
+Not fixed here because no such file exists to verify against — every hand-built
+fixture and every RoQ file this crate's author is aware of interleaves audio
+from the start. The honest fix is either a larger, unconditional lookahead (at
+real cost: `MAX_LOOKAHEAD_CHUNKS` bounds it at 4096 chunks today, chosen for
+"generous for a real file," not for "provably scans past a stream nobody
+happens to use immediately") or accepting that a late-starting audio stream is
+a genuine documented divergence, the way `vaco-demux-flv`'s equivalent
+first-tag-creates-a-stream problem (`AGENT-CONSTRAINTS.md`'s "an empty
+collection at construction is not an answer") was accepted rather than solved
+generically. Whoever next touches `roq` should decide which, with a real
+multi-hundred-frame fixture in hand rather than a synthetic three-chunk one.
