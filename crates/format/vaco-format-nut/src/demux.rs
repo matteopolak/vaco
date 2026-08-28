@@ -216,6 +216,28 @@ impl NutDemuxer {
             _ => MediaType::Data,
         };
         let mut params = CodecParameters::new(media_type);
+        // NUT's `codec_specific_data` is the codec's own extradata verbatim
+        // -- an `ffmpeg -f nut` mux of H.264 stores it Annex-B (measured:
+        // `00 00 00 01 67 ...`/`00 00 00 01 68 ...` SPS/PPS straight in the
+        // stream header), the same shape a raw `.h264` elementary stream's
+        // packets already carry with no extradata at all. Copying it into
+        // `params.extradata` is what `vaco-demux-matroska`'s
+        // `private_is_extradata` and MP4's `avcC` path both do for their own
+        // codec-private blobs; without it, nothing here was wrong on
+        // purpose, it was simply never done, and every SPS-derived field
+        // (`profile`, `pix_fmt`, `level`, `sample_aspect_ratio`,
+        // `has_b_frames`) stayed unset.
+        if !sh.codec_specific_data.is_empty() {
+            params.extradata = Some(sh.codec_specific_data.clone());
+        }
+        // The container's own fourcc, exposed the same way AVI's
+        // `hdrl.rs` exposes `strh`/`strf`'s: verbatim, 4 bytes, only when it
+        // is exactly that wide (NUT's own spec allows a longer fourcc for a
+        // private/unrecognised codec, which `codec_tag`'s fixed `[u8; 4]`
+        // cannot hold and this does not try to truncate into).
+        if let Ok(tag) = <[u8; 4]>::try_from(sh.fourcc.as_slice()) {
+            params.codec_tag = Some(tag);
+        }
         match &sh.class_data {
             StreamClassData::Video { width, height, .. } => {
                 let codec = video_codec_from_fourcc(&sh.fourcc);

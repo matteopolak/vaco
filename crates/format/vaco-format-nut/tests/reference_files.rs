@@ -143,3 +143,35 @@ fn timestamps_are_monotone_per_stream_and_dts_never_exceeds_pts() {
         }
     }
 }
+
+/// `codec_specific_data` copied verbatim into `params.extradata`, and the
+/// container's own fourcc into `params.codec_tag` — measured on this same
+/// real file: 30 bytes of MPEG-4 VOL header starting `00 00 01 b0`
+/// (`visual_object_sequence_start_code`), and fourcc `FMP4`/WAVE tag `0x0055`
+/// zero-extended for MP3. Regression: both were previously dropped
+/// entirely, leaving every SPS/VOL-derived field (`profile`, `pix_fmt`,
+/// `level`, `has_b_frames`, `sample_aspect_ratio` for H.264 elsewhere) and
+/// `codec_tag_string` unset for every NUT file.
+#[test]
+fn a_real_sample_carries_its_extradata_and_container_fourcc() {
+    let demux = open();
+    let video = demux
+        .streams()
+        .iter()
+        .find(|s| s.media_type() == Some(vaco_core::MediaType::Video))
+        .expect("a video stream");
+    assert_eq!(video.params.codec_tag, Some(*b"FMP4"));
+    let extradata = video.params.extradata.as_deref().expect("video extradata");
+    assert_eq!(extradata.len(), 30);
+    assert_eq!(&extradata[..4], &[0x00, 0x00, 0x01, 0xb0]);
+
+    let audio = demux
+        .streams()
+        .iter()
+        .find(|s| s.media_type() == Some(vaco_core::MediaType::Audio))
+        .expect("an audio stream");
+    // WAVE_FORMAT_MP3 (0x0055), zero-extended to 4 bytes little-endian.
+    assert_eq!(audio.params.codec_tag, Some([0x55, 0x00, 0x00, 0x00]));
+    // MP3 needs no extradata; this stays `None` rather than `Some(vec![])`.
+    assert_eq!(audio.params.extradata, None);
+}
