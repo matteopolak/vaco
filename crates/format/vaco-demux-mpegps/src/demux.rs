@@ -37,7 +37,7 @@
 
 use std::collections::VecDeque;
 
-use vaco_codec_core::{CodecParameters, Parser};
+use vaco_codec_core::{CodecId, CodecParameters, Parser};
 use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
 use vaco_format_core::flags::FormatFlags;
 use vaco_format_core::options::FormatOptions;
@@ -209,12 +209,24 @@ impl MpegPsDemuxer {
         {
             return i;
         }
-        let media = if (0xC0..=0xDF).contains(&stream_id) {
-            MediaType::Audio
+        // `stream_id` alone cannot say whether video is MPEG-1 or MPEG-2, or
+        // which MPEG audio layer this is — the same ambiguity
+        // `vaco-demux-raw`'s `MPEGVIDEO` bitstream spec already documents
+        // and accepts a static answer for. `Mpeg2video` matches that
+        // spec's own choice (plain MPEG-1 streams are rare, and
+        // `PARSER_MPEG1`/`PARSER_MPEG2` both build the same `Mpeg12Parser`,
+        // so either answer reaches a parser that reads the bitstream
+        // correctly regardless). `Mp2` matches `vaco-mux-mpegps`'s own
+        // `default_audio` for every DVD/VCD/SVCD profile it mux. Neither is
+        // sniffed from the payload, so a genuine MPEG-1 video or MP1/MP3
+        // audio stream states the wrong `codec_name` — the same accepted,
+        // narrower limitation as the raw-bitstream spec, not solved here.
+        let (media, codec_id) = if (0xC0..=0xDF).contains(&stream_id) {
+            (MediaType::Audio, CodecId::Mp2)
         } else {
-            MediaType::Video
+            (MediaType::Video, CodecId::Mpeg2video)
         };
-        self.register(stream_id, None, media, None, parsers)
+        self.register(stream_id, None, media, Some(codec_id), None, parsers)
     }
 
     /// Find or register a `private_stream_1` substream, returning its index,
@@ -236,6 +248,7 @@ impl MpegPsDemuxer {
             SID_PRIVATE_1,
             Some(sub_id),
             kind.media_type(),
+            None,
             Some(kind),
             parsers,
         ))
@@ -246,6 +259,7 @@ impl MpegPsDemuxer {
         stream_id: u8,
         sub_id: Option<u8>,
         media: MediaType,
+        codec_id: Option<CodecId>,
         kind: Option<SubstreamKind>,
         parsers: Option<&dyn ParserProvider>,
     ) -> usize {
@@ -263,16 +277,24 @@ impl MpegPsDemuxer {
         if let Some(k) = kind {
             stream.metadata_set("mpegps_substream", k.name());
         }
-        // No CodecId exists yet for MPEG-1/2 video, MPEG audio, AC-3, DTS or
-        // DVD LPCM (surveyed 2026-08-23): `params.codec_id` stays `None`,
-        // matching the precedent `vaco-demux-matroska::codec` already set for
-        // codecs its own table cannot name. `params.media_type` and the
-        // stream's position in the list are still correct.
-        let params = CodecParameters::new(media);
+        // `AC-3`/DTS/DVD-LPCM substreams (`kind: Some(_)`) still get no
+        // `codec_id`: `CodecId::Ac3`/`Eac3` exist now, but classifying those
+        // substreams correctly is untouched here — this fix is scoped to the
+        // plain `stream_id`-keyed streams `stream_for_id` registers, which
+        // is what reported `codec_name=unknown` on an ordinary, unmutated
+        // file. `params.media_type` and the stream's position in the list
+        // are unaffected either way.
+        let mut params = match media {
+            MediaType::Video => CodecParameters::video(),
+            MediaType::Audio => CodecParameters::audio(),
+            _ => CodecParameters::new(media),
+        };
+        if let Some(id) = codec_id {
+            params = params.with_codec(id);
+        }
         stream.params = params;
         let es_index = self.es.len();
-        let parser = None::<Box<dyn Parser>>;
-        let _ = parsers; // no CodecId to look up yet; see docs file.
+        let parser = codec_id.and_then(|id| parsers.and_then(|p| p.parser_for(id)));
         self.es.push(EsEntry {
             stream_id,
             sub_id,
