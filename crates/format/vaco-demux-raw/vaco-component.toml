@@ -1,6 +1,7 @@
 # Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
 #
-# 48 demuxers, one shared feature: `--features demux-raw` brings the whole
+# 47 demuxers (48 minus `s337m`, moved to `vaco-format-spdif` — see
+# `planning/TECH-DEBT.md`), one shared feature: `--features demux-raw` brings the whole
 # crate or none of it, the same convention `vaco-parse-aac` uses for its two
 # components. Names, long names and extensions are captured under `LC_ALL=C`
 # against ffmpeg 8.1 (`ffmpeg -demuxers`, `ffmpeg -h demuxer=<name>`) — see
@@ -351,13 +352,6 @@ long_name = "AV1 low overhead OBU"
 feature   = "demux-raw"
 ctor      = "vaco_demux_raw::bitstream::DEMUXER_OBU"
 extensions = "obu"
-
-[[component]]
-kind      = "demuxer"
-name      = "s337m"
-long_name = "SMPTE 337M"
-feature   = "demux-raw"
-ctor      = "vaco_demux_raw::bitstream::DEMUXER_S337M"
 
 [[component]]
 kind      = "demuxer"

@@ -1,4 +1,4 @@
-//! Raw / headerless elementary-stream demuxers: 50 registrations across
+//! Raw / headerless elementary-stream demuxers: 49 registrations across
 //! four families.
 //!
 //! A raw format has no container: the file *is* the elementary stream.
@@ -14,10 +14,12 @@
 //! | [`pcm`] | Linear PCM: `alaw` … `vidc` | 21 |
 //! | [`rawvideo`] | `rawvideo`, `bitpacked`, `v210`, `v210x` | 4 |
 //! | [`y4m`] | `yuv4mpegpipe` (self-describing) | 1 |
-//! | [`bitstream`] | Bitstream-with-sync-pattern: `h264`, `hevc`, `av1`/`obu`, and 18 more | 22 |
+//! | [`bitstream`] | Bitstream-with-sync-pattern: `h264`, `hevc`, `av1`/`obu`, and 17 more | 21 |
 //! | [`ac3`] | `ac3`, `eac3`: syncframe-driven, own streaming demuxer (not the whole-buffer `bitstream` shape — frame length and sample count come from the header, so per-packet timestamps are exact) | 2 |
 //!
-//! 21 + 4 + 1 + 22 + 2 = 50. The first 48 matched FM-26a and
+//! 21 + 4 + 1 + 21 + 2 = 49. `s337m` moved to `vaco-format-spdif` (see
+//! `planning/TECH-DEBT.md`), dropping this family from 22 to 21. The first
+//! 48 (before that move) matched FM-26a and
 //! `ffmpeg -demuxers`' own count for this family (captured under `LC_ALL=C`
 //! against ffmpeg 8.1 — see `docs/format/vaco-demux-raw.md` for the exact
 //! commands); `ac3`/`eac3` are FM-26a's one deferred pair (#653).
@@ -32,7 +34,8 @@
 //! `vaco-demux-mp4` and `vaco-demux-mpegts` do. Every other codec in this
 //! crate's scope (the other 18 bitstream registrations) has no parser
 //! anywhere in the workspace yet, so they fall back to the structural
-//! framing documented in [`bitstream`].
+//! framing documented in [`bitstream`]. (17, not 18, since `s337m` moved
+//! to `vaco-format-spdif`.)
 //!
 //! # `CodecId` cannot yet name most of these codecs
 //!
@@ -46,7 +49,7 @@
 //! stream metadata (`raw_codec_name`), the same convention
 //! `vaco-demux-mpegts` uses for `TsCodec` values `CodecId` cannot express.
 //! **This means `vaco-probe -show_streams` cannot yet print a byte-identical
-//! `codec_name` for roughly forty of this crate's forty-eight registrations**
+//! `codec_name` for roughly forty of this crate's forty-seven registrations**
 //! — the single biggest reported gap in this delivery. See the docs file.
 //!
 //! # The registry seam has no options parameter
@@ -103,8 +106,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn there_are_exactly_fifty_registrations() {
-        assert_eq!(all_demuxers().len(), 50);
+    fn there_are_exactly_forty_nine_registrations() {
+        assert_eq!(all_demuxers().len(), 49);
     }
 
     #[test]

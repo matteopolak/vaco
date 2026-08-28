@@ -7,15 +7,20 @@
 # working the next package in this same series (FM-36/NUT, #594) and
 # noticing there was no `vaco-component.toml` in this crate at all.
 #
-# `vaco_format_spdif::S337M_DEMUXER` is deliberately NOT registered here:
-# `vaco-demux-raw` already registers a demuxer named "s337m"
-# (`vaco_demux_raw::bitstream::DEMUXER_S337M`), and `gen-registry`'s
-# `check_unique` rejects a same-kind name collision across crates (see
-# `xtask/src/registry.rs`'s `duplicate_names_within_a_kind_are_rejected`
-# test) — registering both would fail the gate. This is a genuine
-# two-implementations-of-one-format situation, not a naming accident; see
-# `planning/TECH-DEBT.md` for the writeup and who needs to decide which one
-# the registry should keep.
+# `vaco_format_spdif::S337M_DEMUXER` used to collide here with
+# `vaco-demux-raw`'s own demuxer named "s337m"
+# (`vaco_demux_raw::bitstream::DEMUXER_S337M`) — `gen-registry`'s
+# `check_unique` rejects a same-kind name collision across crates, so only
+# one could ever be registered. Resolved: this crate's `S337M_DEMUXER`
+# actually parses the SMPTE 337M burst preamble (`Pa`/`Pb` sync words,
+# `Pc`/`Pd` data-type/length) and is measured byte-identical against
+# `ffmpeg -f spdif`; `vaco-demux-raw`'s entry was a `Framing::FixedBlock`
+# stand-in with no real framing, added by a mechanical sweep of ffmpeg's
+# raw-demuxer names. `vaco-demux-raw` dropped its registration (kept the
+# dead code, per D19 there is exactly one real implementation now) and this
+# is that implementation's registration. See `planning/TECH-DEBT.md`'s
+# "`s337m` is registered twice" entry for the full writeup, now marked
+# resolved.
 
 [[component]]
 kind       = "demuxer"
@@ -23,6 +28,13 @@ name       = "spdif"
 long_name  = "IEC 61937 (compressed data in S/PDIF)"
 feature    = "demux-spdif"
 ctor       = "vaco_format_spdif::DEMUXER"
+
+[[component]]
+kind       = "demuxer"
+name       = "s337m"
+long_name  = "SMPTE 337M"
+feature    = "demux-spdif"
+ctor       = "vaco_format_spdif::S337M_DEMUXER"
 
 [[component]]
 kind       = "muxer"

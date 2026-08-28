@@ -255,6 +255,15 @@ pub const MPEGVIDEO: BitstreamSpec = spec!(
     Some(CodecId::Mpeg2video),
     true
 );
+/// A generic `Framing::FixedBlock` stand-in with no real SMPTE 337M framing
+/// (no `Pa`/`Pb` sync words, no `Pc`/`Pd` data-type/length fields) — added by
+/// this crate's mechanical sweep of ffmpeg's raw-demuxer names before
+/// `vaco-format-spdif` existed. No longer registered under `s337m`: that
+/// name now resolves to `vaco_format_spdif::S337M_DEMUXER`, a real burst
+/// parser measured byte-identical against `ffmpeg -f spdif` (see
+/// `planning/TECH-DEBT.md`'s now-resolved "`s337m` is registered twice"
+/// entry). Left defined and unregistered rather than deleted, in case a
+/// genuinely distinct bare-bitstream use ever turns up.
 pub const S337M: BitstreamSpec =
     spec!("s337m", "SMPTE 337M", &[], Framing::FixedBlock, None, false);
 pub const VC1: BitstreamSpec = spec!("vc1", "raw VC-1", &["vc1"], Framing::StartCode3, None, true);
@@ -267,10 +276,12 @@ pub const VVC: BitstreamSpec = spec!(
     true
 );
 
-/// All 22 bitstream-family specs, in `ffmpeg -demuxers` order.
+/// All 21 registered bitstream-family specs, in `ffmpeg -demuxers` order.
+///
+/// `S337M` is deliberately not in this list — see its own doc comment.
 pub const BITSTREAM_FORMATS: &[BitstreamSpec] = &[
     AV1, AVS2, AVS3, BIT, CAVSVIDEO, DATA, DIRAC, DNXHD, EVC, H261, H263, H264, HEVC, LOAS, M4V,
-    MJPEG, MJPEG_2000, MPEGVIDEO, OBU, S337M, VC1, VVC,
+    MJPEG, MJPEG_2000, MPEGVIDEO, OBU, VC1, VVC,
 ];
 
 /// Options private to this family: `-framerate` (ignored where
@@ -724,11 +735,15 @@ bitstream_reg!(DEMUXER_MJPEG, MJPEG);
 bitstream_reg!(DEMUXER_MJPEG_2000, MJPEG_2000);
 bitstream_reg!(DEMUXER_MPEGVIDEO, MPEGVIDEO);
 bitstream_reg!(DEMUXER_OBU, OBU);
+// Defined for parity with `S337M` but deliberately absent from
+// `BITSTREAM_DEMUXERS` — see that const's doc comment.
 bitstream_reg!(DEMUXER_S337M, S337M);
 bitstream_reg!(DEMUXER_VC1, VC1);
 bitstream_reg!(DEMUXER_VVC, VVC);
 
-/// All 22 bitstream-family descriptors, in [`BITSTREAM_FORMATS`] order.
+/// All 21 registered bitstream-family descriptors, in [`BITSTREAM_FORMATS`]
+/// order. `DEMUXER_S337M` is deliberately not in this list: `s337m` is
+/// registered from `vaco-format-spdif` instead (see `S337M`'s doc comment).
 pub const BITSTREAM_DEMUXERS: &[&DemuxerDesc] = &[
     &DEMUXER_AV1,
     &DEMUXER_AVS2,
@@ -749,7 +764,6 @@ pub const BITSTREAM_DEMUXERS: &[&DemuxerDesc] = &[
     &DEMUXER_MJPEG_2000,
     &DEMUXER_MPEGVIDEO,
     &DEMUXER_OBU,
-    &DEMUXER_S337M,
     &DEMUXER_VC1,
     &DEMUXER_VVC,
 ];
@@ -762,9 +776,12 @@ mod tests {
     use vaco_io::MemorySource;
 
     #[test]
-    fn there_are_twenty_two_registrations() {
-        assert_eq!(BITSTREAM_FORMATS.len(), 22);
-        assert_eq!(BITSTREAM_DEMUXERS.len(), 22);
+    fn there_are_twenty_one_registrations() {
+        // `s337m` moved to `vaco-format-spdif::S337M_DEMUXER`; `S337M`/
+        // `DEMUXER_S337M` stay defined here but are no longer registered
+        // (see `S337M`'s own doc comment).
+        assert_eq!(BITSTREAM_FORMATS.len(), 21);
+        assert_eq!(BITSTREAM_DEMUXERS.len(), 21);
     }
 
     #[test]

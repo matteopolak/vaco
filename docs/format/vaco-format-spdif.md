@@ -79,6 +79,13 @@ unprompted (`probe_score=100`) for every sample this crate can generate, so
 there is no positive evidence for what should make `vaco` auto-select
 `s337m` instead. `-f s337m` still opens content by explicit name.
 
+`S337M_DEMUXER` went unregistered for a while after it was written: FM-54
+landed before `vaco-demux-raw`'s own (much less complete) `s337m` demuxer
+was noticed, and `gen-registry` refuses two components claiming one name.
+Resolved in `planning/TECH-DEBT.md`'s "`s337m` is registered twice" entry —
+this crate's parser is the one that actually reads the burst preamble, so
+it kept the name; `vaco-demux-raw` dropped its registration.
+
 ## How to change it
 
 * **MPEG-1 layer 2/3, DTS, E-AC-3 support**: needs the same measurement

@@ -161,6 +161,31 @@ inputs. Not something `dup-check` catches at all — it checks Rust type
 names, not registry component names, so this collision was silent until
 `gen-registry` itself refused it.
 
+**Resolved 2026-08-28.** Read both implementations rather than picking
+blind. `vaco-format-spdif::S337M_DEMUXER` actually parses the SMPTE 337M
+burst preamble (`Pa`/`Pb` sync words, `Pc` data type, `Pd` length) and is
+measured byte-identical against `ffmpeg -f spdif` (FM-54's own commit
+record); `vaco-demux-raw`'s `DEMUXER_S337M` is a `Framing::FixedBlock`
+stand-in — arbitrary 1024-byte reads, no sync words, no data-type/length
+fields at all — added by its mechanical sweep of ffmpeg's raw-demuxer
+names, and its own module doc already said as much.
+
+The "split the namespace" option is not available: `vaco-format-spdif`'s
+own doc comment establishes that IEC 61937 (what `spdif.rs` implements) is
+*a specific 16-bit-word profile of SMPTE 337M's burst encapsulation* — same
+sync words, same `Pc`/`Pd` fields, same AC-3 framing. There is one format
+here, not two, so a name split would only have enshrined the placeholder
+under a permanent second name.
+
+`s337m` now resolves to `vaco_format_spdif::S337M_DEMUXER`.
+`vaco-demux-raw` dropped its registration fragment and pulled `S337M` out
+of `BITSTREAM_FORMATS`/`BITSTREAM_DEMUXERS` (49 registrations, was 50); the
+dead `S337M`/`DEMUXER_S337M` consts are left in place rather than deleted,
+in case a genuinely distinct bare-bitstream use ever turns up. Both
+`vaco-component.toml` fragments and the registration-count assertions in
+both crates were updated in the same commit, since `gen-registry` will
+refuse two fragments naming one demuxer simultaneously.
+
 ### Private-index commits, worked example from this session
 
 `GIT_INDEX_FILE` + `write-tree` + `commit-tree` (plan 19 §5/§6) is the

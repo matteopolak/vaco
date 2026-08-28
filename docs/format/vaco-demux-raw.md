@@ -1,7 +1,10 @@
 # `vaco-demux-raw`
 
-Layer 4. Raw / headerless elementary-stream demuxers: 48 registrations across
-three families (PCM, raw video, bitstream-with-sync-pattern). Companion crate:
+Layer 4. Raw / headerless elementary-stream demuxers: 47 registrations across
+three families (PCM, raw video, bitstream-with-sync-pattern). `s337m` moved
+to `vaco-format-spdif::S337M_DEMUXER` (see `planning/TECH-DEBT.md`'s
+resolved "`s337m` is registered twice" entry); the `S337M`/`DEMUXER_S337M`
+consts stay in `bitstream.rs`, unregistered. Companion crate:
 `vaco-mux-raw` (the write side, FM-26b).
 
 ---
@@ -95,7 +98,7 @@ Measured on `h264` (`ffmpeg -f lavfi ... -c:v libx264 -f h264 t.h264`):
   internal tick base — so this crate stamps `duration_from_rate(framerate)`
   directly rather than reproducing the tick arithmetic.
 * `data` (and, by inference, every format with no `-framerate` option: `bit`,
-  `loas`, `s337m`) has **no duration at all** and is chunked into flat
+  `loas`) has **no duration at all** and is chunked into flat
   1024-byte reads (`raw_packet_size`, default 1024) — measured directly on
   `data`.
 
@@ -107,7 +110,7 @@ Framing dispatches on `Framing`:
 | `Obu` | `av1`\*, `obu`\* | AV1 OBU leb128 framing, split into temporal units at `OBU_TEMPORAL_DELIMITER` (`obu.rs`) |
 | `Marker` | `mjpeg` (SOI/EOI `FFD8`/`FFD9`), `mjpeg_2000` (SOC/EOC `FF4F`/`FFD9`) | Scan for the start marker, then the next end marker |
 | `Dirac` | `dirac` | SMPTE 2042 parse-info header's `next_parse_offset` field |
-| `FixedBlock` | `h261`, `h263`, `dnxhd`, `bit`, `data`, `s337m`, `loas` | Flat 1024-byte reads, no structure at all |
+| `FixedBlock` | `h261`, `h263`, `dnxhd`, `bit`, `data`, `loas` | Flat 1024-byte reads, no structure at all |
 
 \* When the caller's `ParserProvider` supplies a real parser for the codec
 (the real registry does, for `h264`/`hevc`/`av1`; this crate's own tests use
@@ -161,12 +164,15 @@ once, bounded by the caller's `Limits` — see "How to change it" for why.
 | Measured end to end (names, extensions, options, timestamps, framing) | 21 PCM formats, `rawvideo`, `yuv4mpegpipe`, `data` | Exercised by unit tests |
 | Names/extensions/options measured; framing spec-derived and unit-tested, not cross-checked against a real encoder; **probe identifier measured against a real encoder's output** (finding 3) | `h264`, `hevc` (fallback path), `av1`, `obu`, `mjpeg`, `mpegvideo`, `m4v` | Exercised by unit tests and `tests/probe_matrix.rs` |
 | Names/extensions/options measured; framing is a documented simplification; **no encoder in this `ffmpeg` build to measure a probe identifier against**, so probing is extension-only (finding 3) | `vvc`, `cavsvideo`, `avs2`, `avs3`, `vc1`, `evc`, `mjpeg_2000`, `dirac` | Registered, lightly tested, not verified against a real encoder's exact packet count |
-| Names/extensions/options measured; no structural framing attempted at all | `h261`, `h263`, `dnxhd`, `bit`, `s337m`, `loas` | Registered, structurally present, framing is flatly wrong for anything but `data`-style dumps |
+| Names/extensions/options measured; no structural framing attempted at all | `h261`, `h263`, `dnxhd`, `bit`, `loas` | Registered, structurally present, framing is flatly wrong for anything but `data`-style dumps |
 | Geometry formula from a public standard, unverified against the reference | `bitpacked`, `v210`, `v210x` | Registered, geometry best-effort |
 
-Nothing in this crate was left unregistered. Per-registration status is also
-recorded in each module's doc comment, which is the version to trust if this
-table and the code ever disagree.
+One format, `s337m`, is deliberately left unregistered here: it now
+resolves to `vaco-format-spdif::S337M_DEMUXER`, a real SMPTE 337M parser,
+rather than this crate's `Framing::FixedBlock` placeholder (see
+`planning/TECH-DEBT.md`). Nothing else in this crate was left unregistered.
+Per-registration status is also recorded in each module's doc comment,
+which is the version to trust if this table and the code ever disagree.
 
 ---
 
@@ -214,7 +220,7 @@ reference's own measured defaults:
 |---|---|---|
 | `PcmOptions` | `sample_rate`, `layout` | 44100 Hz, mono |
 | `RawVideoOptions` | `width`, `height`, `pixel_format`, `framerate`, `stride` | 0×0 (must be set), `yuv420p`, 25 fps, no override |
-| `BitstreamOptions` | `framerate` | 25 fps (ignored for `bit`/`data`/`loas`/`s337m`) |
+| `BitstreamOptions` | `framerate` | 25 fps (ignored for `bit`/`data`/`loas`) |
 
 Each `*Demuxer::open`/`open_with_limits` inherent constructor takes the
 matching options struct explicitly, for a caller that reaches the type
