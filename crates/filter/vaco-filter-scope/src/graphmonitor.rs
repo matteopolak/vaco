@@ -125,12 +125,22 @@
 //! mimicking one specific default subset of it.
 //!
 //! `mode=compact`/`nozero`/`noeof`/`nodisabled` (only the default,
-//! `full`-shaped per-node listing is implemented); `opacity` (the canvas is
-//! solid black under the text, same as `datascope`'s own unexplained
-//! `opacity`); colour (this module draws in `Gray8`, not the reference's
-//! `rgb24` — every field this crate can show is a plain counter, none of
-//! them needs a second colour to distinguish, and matching the pixel
-//! format buys nothing once text already rules out a byte-exact frame).
+//! `full`-shaped per-node listing is implemented); non-default `opacity`
+//! (the canvas is solid black under the text, same as `datascope`'s own
+//! unexplained `opacity`); non-default `flags` (this module always draws
+//! its own fixed field set regardless of which flags are named — see
+//! "Available on `LinkView` but not drawn" above for what that set is and
+//! why). All three used to parse fine at any value and run identically to
+//! the default — accepted, silently ignored, no error; `create` now
+//! rejects a value that actually differs from the field's own default by
+//! name instead (restating the exact default is indistinguishable from
+//! never mentioning the option, so it harmlessly still creates). Colour
+//! (this module draws in `Gray8`, not the reference's `rgb24` — every
+//! field this crate can show is a plain counter, none of them needs a
+//! second colour to distinguish, and matching the pixel format buys
+//! nothing once text already rules out a byte-exact frame) stays
+//! unimplemented with no rejection, since there is no `flags`-shaped
+//! option value to name.
 
 use vaco_core::{Duration, MediaType, Rational, Result, Rounding, Timestamp};
 use vaco_filter_core::adapt::{FrameFilter, FrameOut, Simple};
@@ -396,8 +406,43 @@ impl FrameFilter for Filter {
 
 fn create_with(desc: FilterDesc, req: &Instantiate<'_>) -> std::result::Result<Instance, String> {
     let opts = Opts::parse(req.args)?;
+    // `opacity`/`mode`/`flags` used to parse fine at any value -- including
+    // the reference's own defaults -- and be silently discarded regardless:
+    // this filter always draws its own fixed field set, solid black, no
+    // per-node/per-link filtering, whatever those three options say. That
+    // is a real gap for every value, not just non-default ones (see the
+    // module doc's "Not measured/implemented"), so a value that actually
+    // differs from the field's own default is rejected here -- restating
+    // the exact default (indistinguishable, once parsed, from never
+    // mentioning the option at all) harmlessly still creates, matching
+    // `datascope`'s narrower "non-default rejected" shape as closely as
+    // three fully-unimplemented options allow.
+    #[allow(
+        clippy::float_cmp,
+        reason = "0.9 is the field's own literal default, not computed"
+    )]
+    if opts.opacity != 0.9 {
+        return Err(format!(
+            "{}: opacity is not implemented (the canvas is always solid black under the text; \
+             see this module's doc)",
+            desc.name
+        ));
+    }
+    if !opts.mode.is_empty() {
+        return Err(format!(
+            "{}: mode is not implemented (only the default, full-shaped per-node listing is \
+             drawn; see this module's doc)",
+            desc.name
+        ));
+    }
+    if opts.flags != "all+queue" {
+        return Err(format!(
+            "{}: flags is not implemented (this filter always draws its own fixed field set \
+             regardless of flags; see this module's doc)",
+            desc.name
+        ));
+    }
     let filter = Filter::new(opts.size.0.max(1), opts.size.1.max(1), opts.rate.0);
-    let _ = (opts.opacity, opts.mode, opts.flags);
     Ok(Instance {
         desc,
         formats: NodeFormats::converter(
@@ -444,6 +489,31 @@ mod tests {
         assert!(create(&req).is_ok());
         let req = Instantiate { name: "agraphmonitor", instance: "agraphmonitor", args: None, arguments: &[] };
         assert!(create_audio(&req).is_ok());
+    }
+
+    /// `opacity`/`mode`/`flags` used to parse fine at any value -- even
+    /// the reference's own default -- and be silently discarded either
+    /// way. A value that actually differs from the field's own default is
+    /// now a named error (there is no way to distinguish "never
+    /// mentioned" from "explicitly restated the exact default" once
+    /// parsed, so restating the default harmlessly still creates -- it
+    /// asks for exactly what already happens); see
+    /// `creatable_with_defaults` for the never-mentioned case.
+    #[test]
+    fn unimplemented_options_are_a_named_error_not_a_silent_substitution() {
+        for args in ["opacity=0.5", "mode=full", "flags=queue"] {
+            let req = Instantiate {
+                name: "graphmonitor",
+                instance: "graphmonitor",
+                args: Some(args),
+                arguments: &[],
+            };
+            let err = create(&req).unwrap_err();
+            assert!(
+                err.contains("graphmonitor") && err.contains("not implemented"),
+                "{args}: unexpected error text: {err}"
+            );
+        }
     }
 
     /// A node with one input and one output produces exactly three lines

@@ -86,9 +86,12 @@
 //!
 //! `inplace=1` makes the reference accept exactly one input (using its own
 //! alpha in place) — measured, but this crate always registers the fixed
-//! two-input shape (`inplace`'s default) and parses `inplace` without
-//! switching pad count. `vaco-filter-plumbing::split`'s `outputs`-driven
-//! `DYNAMIC_OUTPUTS` shape is the template for adding that later.
+//! two-input shape (`inplace`'s default). `inplace=1` used to parse fine
+//! and silently keep the two-input shape regardless — accepted, and the
+//! reference's own actual pad count ignored, with no error. `build` now
+//! rejects it explicitly instead. `vaco-filter-plumbing::split`'s
+//! `outputs`-driven `DYNAMIC_OUTPUTS` shape is the template for adding
+//! the real single-input mode later.
 
 use vaco_core::{MediaType, Result};
 use vaco_filter_core::adapt::FrameOut;
@@ -224,6 +227,14 @@ impl FrameSyncFilter for Filter {
 
 fn build(desc: FilterDesc, divide: bool, req: &Instantiate<'_>) -> std::result::Result<Instance, String> {
     let opts = Opts::parse(req.args)?;
+    if opts.inplace {
+        return Err(format!(
+            "{}: inplace=1 is not implemented (it changes the reference's own pad count to a \
+             single input, which this crate's fixed two-input registration does not follow -- \
+             see this module's doc)",
+            desc.name
+        ));
+    }
     // Excludes alpha-bearing formats -- see this module's doc, "Settled,
     // 2026-08-28": real ffmpeg's own negotiation never lets one reach
     // this filter either, on any format tested, so offering one here is
@@ -338,5 +349,34 @@ mod tests {
         apply(&mut frame, 15, false);
         let row = frame.plane(0).unwrap().row(0).unwrap();
         assert_eq!(row[0], (200.0f64 * 128.0 / 255.0).round() as u8);
+    }
+
+    /// `inplace=1` used to parse fine and silently keep this crate's fixed
+    /// two-input shape regardless of the reference's own single-input
+    /// behaviour under it. `build` now rejects it by name.
+    #[test]
+    fn inplace_is_a_named_error_not_a_silent_substitution() {
+        let req = Instantiate {
+            name: "premultiply",
+            instance: "premultiply",
+            args: Some("inplace=1"),
+            arguments: &[],
+        };
+        let err = premultiply::create(&req).unwrap_err();
+        assert!(
+            err.contains("premultiply") && err.contains("not implemented"),
+            "unexpected error text: {err}"
+        );
+    }
+
+    #[test]
+    fn inplace_default_still_creates() {
+        let req = Instantiate {
+            name: "premultiply",
+            instance: "premultiply",
+            args: None,
+            arguments: &[],
+        };
+        assert!(premultiply::create(&req).is_ok());
     }
 }

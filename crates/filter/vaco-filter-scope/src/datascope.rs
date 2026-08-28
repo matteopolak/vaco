@@ -46,18 +46,17 @@
 //! # Not measured/implemented
 //!
 //! `mode=color`/`mode=color2` (colour-coded text per component; only
-//! `mode=mono` is implemented). `axis` (row/column index labels drawn in
-//! a margin). `opacity` (a background-box blend that this crate's own
-//! probes could not isolate a visible effect for against a canvas that is
-//! already solid black outside the glyphs — plausibly a highlight
-//! reserved for `axis` mode or for use when overlaid over another
-//! filter's output, neither of which this pass measured). RGB pixel
-//! formats (`is_rgb()` — plane 0 is not a luma/value channel there, so
-//! this filter declines rather than drawing garbage). Bit depths above 8.
-//! `components` beyond the first selected plane (matches this crate's
-//! `histogram` precedent: verified for the single-plane case, multi-plane
-//! stacking is a documented, unverified extrapolation — here, not even
-//! attempted, since no multi-plane probe was run).
+//! `mode=mono` is implemented) and non-default `components` used to parse
+//! fine and run identically to the default — accepted, silently ignored,
+//! no error; `create` now rejects each by name instead. `axis` (row/
+//! column index labels drawn in a margin). `opacity` (a background-box
+//! blend that this crate's own probes could not isolate a visible effect
+//! for against a canvas that is already solid black outside the glyphs —
+//! plausibly a highlight reserved for `axis` mode or for use when
+//! overlaid over another filter's output, neither of which this pass
+//! measured). RGB pixel formats (`is_rgb()` — plane 0 is not a luma/value
+//! channel there, so this filter declines rather than drawing garbage).
+//! Bit depths above 8.
 //!
 //! The exact inter-cell gap this module uses (a flat "one glyph pitch"
 //! margin after each number, i.e. `CELL_W_HEX = 20`, `CELL_W_DEC = 30`,
@@ -290,7 +289,28 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
     let opts = Opts::parse(req.args)?;
     let format = NumberFormat::from_name(&opts.format)
         .ok_or_else(|| format!("datascope: bad `format` `{}`", opts.format))?;
-    let mono = opts.mode == "mono";
+    let mono = match opts.mode.as_str() {
+        "mono" => true,
+        "color" | "color2" => {
+            return Err(format!(
+                "datascope: mode={} is not implemented (only mode=mono draws; see this \
+                 module's doc)",
+                opts.mode
+            ));
+        }
+        other => {
+            return Err(format!(
+                "datascope: mode={other} is not a reference-documented mode"
+            ));
+        }
+    };
+    if opts.components != 15 {
+        return Err(
+            "datascope: components is not implemented (every value beyond the default, 15 -- \
+             all components -- is accepted and silently ignored; see this module's doc)"
+                .to_owned(),
+        );
+    }
     let filter = Filter {
         width: opts.size.0.max(1),
         height: opts.size.1.max(1),
@@ -299,7 +319,6 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
         format,
         mono,
     };
-    let _ = opts.components;
     Ok(Instance {
         desc: DESC,
         formats: NodeFormats::passthrough(1, 1, MediaType::Video, req.instance),
@@ -345,6 +364,27 @@ mod tests {
             arguments: &[],
         };
         assert!(create(&req).is_ok());
+    }
+
+    /// `mode=color`/`color2` and any non-default `components` used to
+    /// parse fine and run identically to `mode=mono`/`components=15` --
+    /// accepted, silently ignored, no error. `create` now rejects each by
+    /// name instead.
+    #[test]
+    fn unimplemented_values_are_a_named_error_not_a_silent_substitution() {
+        for args in ["mode=color", "mode=color2", "components=1", "components=7"] {
+            let req = Instantiate {
+                name: "datascope",
+                instance: "datascope",
+                args: Some(args),
+                arguments: &[],
+            };
+            let err = create(&req).unwrap_err();
+            assert!(
+                err.contains("datascope") && err.contains("not implemented"),
+                "{args}: unexpected error text: {err}"
+            );
+        }
     }
 
     #[test]
