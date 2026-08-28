@@ -39,6 +39,10 @@ const AUDIO_BODY_V0: usize = 20;
 const AUDIO_EXTRA_V1: usize = 16;
 /// Additional bytes in a `QuickTime` sound description version 2.
 const AUDIO_EXTRA_V2: usize = 36;
+/// Bytes of a `tmcd` (timecode) sample entry body: `Reserved`(4) +
+/// `Flags`(4) + `TimeScale`(4) + `FrameDuration`(4) + `NumberOfFrames`(1) +
+/// `Reserved`(1), per the `QuickTime` File Format specification.
+const TMCD_BODY_LEN: usize = 18;
 
 /// The fixed fields of a `VisualSampleEntry`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -116,6 +120,65 @@ pub struct AudioSampleEntry {
     pub format_flags: Option<u32>,
 }
 
+/// The fixed fields of a `tmcd` (timecode) sample entry.
+///
+/// One sample of a `tmcd` track is a big-endian `u32` frame count from
+/// midnight (or from a counter's start, when [`Self::is_counter`]); these
+/// fields are what turns that count into `HH:MM:SS:FF`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TimecodeSampleEntry {
+    /// Bit 0 drop-frame, bit 1 24-hour-max, bit 2 negative times allowed,
+    /// bit 3 the sample is a plain counter rather than a timecode.
+    pub flags: u32,
+    /// The timecode track's own time scale — not necessarily the media
+    /// timescale of the track this one annotates.
+    pub time_scale: u32,
+    /// Duration of one frame, in `time_scale` units.
+    pub frame_duration: u32,
+    /// Frames per second, rounded — the modulus `HH:MM:SS:FF` counts against.
+    pub number_of_frames: u8,
+}
+
+impl TimecodeSampleEntry {
+    const DROP_FRAME: u32 = 1 << 0;
+    const COUNTER: u32 = 1 << 3;
+
+    /// Whether the drop-frame flag (bit 0) is set.
+    #[must_use]
+    pub const fn is_drop_frame(&self) -> bool {
+        self.flags & Self::DROP_FRAME != 0
+    }
+
+    /// Whether this track is a plain frame counter (bit 3) rather than a
+    /// wall-clock timecode.
+    #[must_use]
+    pub const fn is_counter(&self) -> bool {
+        self.flags & Self::COUNTER != 0
+    }
+
+    /// Render one sample's frame count as `HH:MM:SS:FF` (`;` before `FF` for
+    /// drop-frame, matching the reference's own formatting), or `None` when
+    /// [`Self::number_of_frames`] is zero and the modulus is undefined.
+    #[must_use]
+    #[allow(
+        clippy::integer_division,
+        reason = "a timecode's HH/MM/SS/FF fields are exact integer moduli of a frame count, not an approximation of a real-valued quotient"
+    )]
+    pub fn format(&self, frame_count: u32) -> Option<String> {
+        let fps = u32::from(self.number_of_frames);
+        if fps == 0 {
+            return None;
+        }
+        let total_seconds = frame_count / fps;
+        let ff = frame_count % fps;
+        let hh = total_seconds / 3600;
+        let mm = (total_seconds / 60) % 60;
+        let ss = total_seconds % 60;
+        let sep = if self.is_drop_frame() { ';' } else { ':' };
+        Some(format!("{hh:02}:{mm:02}:{ss:02}{sep}{ff:02}"))
+    }
+}
+
 impl AudioSampleEntry {
     /// The sample rate in whole hertz, preferring version 2's double.
     #[must_use]
@@ -190,6 +253,8 @@ pub struct SampleEntry<'a> {
     pub visual: Option<VisualSampleEntry>,
     /// The audio body, when the handler is `soun`.
     pub audio: Option<AudioSampleEntry>,
+    /// The timecode body, when the handler is `tmcd`.
+    pub tmcd: Option<TimecodeSampleEntry>,
     /// The extension boxes following the fixed fields.
     pub extensions: &'a [u8],
     /// Absolute file offset of [`SampleEntry::extensions`].
@@ -214,6 +279,7 @@ impl<'a> SampleEntry<'a> {
             data_reference_index,
             visual: None,
             audio: None,
+            tmcd: None,
             extensions: &[],
             extensions_offset: entry.payload_offset(),
         };
@@ -226,6 +292,10 @@ impl<'a> SampleEntry<'a> {
                 let (audio, len) = parse_audio(&mut r);
                 me.audio = Some(audio);
                 len
+            }
+            boxes::TMCD => {
+                me.tmcd = Some(parse_tmcd(&mut r));
+                TMCD_BODY_LEN
             }
             _ => 0,
         };
@@ -538,6 +608,80 @@ fn parse_audio(r: &mut vaco_bitstream::ByteReader<'_>) -> (AudioSampleEntry, usi
             (me, AUDIO_BODY_V0.saturating_add(AUDIO_EXTRA_V2))
         }
         _ => (me, AUDIO_BODY_V0),
+    }
+}
+
+fn parse_tmcd(r: &mut vaco_bitstream::ByteReader<'_>) -> TimecodeSampleEntry {
+    let _reserved = r.be32();
+    let flags = r.be32();
+    let time_scale = r.be32();
+    let frame_duration = r.be32();
+    let number_of_frames = r.u8();
+    let _reserved2 = r.u8();
+    TimecodeSampleEntry {
+        flags,
+        time_scale,
+        frame_duration,
+        number_of_frames,
+    }
+}
+
+/// `colr` — colour information (ISO/IEC 14496-12 §12.1.5; `nclc` is the
+/// pre-standard `QuickTime` spelling of the same three CICP-shaped codes,
+/// without the trailing `full_range` byte).
+///
+/// The three codes are CICP indices (ISO/IEC 23091-2 / ITU-T H.273) —
+/// the same numeric space `vaco-color`'s enums already parse for H.264/HEVC
+/// VUI and Matroska's `Colour` element, so this box layer reports the raw
+/// `u16`s and leaves the lookup to a caller that already links that crate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ColourInfo {
+    /// `nclx`, `nclc`, `rICC` or `prof`.
+    pub colour_type: FourCc,
+    /// `None` for an ICC-profile colour type (`rICC`/`prof`), which carries
+    /// no CICP codes at all.
+    pub primaries: Option<u16>,
+    pub transfer: Option<u16>,
+    pub matrix: Option<u16>,
+    /// `nclx` only; `nclc` and the ICC types leave this `false`.
+    pub full_range: bool,
+}
+
+impl ColourInfo {
+    /// Parse a `colr` box's payload (not a full box).
+    #[must_use]
+    pub fn parse(payload: &[u8]) -> Option<Self> {
+        let mut r = vaco_bitstream::ByteReader::new(payload);
+        let colour_type = FourCc(r.bytes(4).try_into().ok()?);
+        if colour_type != FourCc::new(b"nclx") && colour_type != FourCc::new(b"nclc") {
+            return Some(Self {
+                colour_type,
+                primaries: None,
+                transfer: None,
+                matrix: None,
+                full_range: false,
+            });
+        }
+        let primaries = r.be16();
+        let transfer = r.be16();
+        let matrix = r.be16();
+        let full_range = colour_type == FourCc::new(b"nclx") && (r.u8() & 0x80) != 0;
+        Some(Self {
+            colour_type,
+            primaries: Some(primaries),
+            transfer: Some(transfer),
+            matrix: Some(matrix),
+            full_range,
+        })
+    }
+}
+
+impl SampleEntry<'_> {
+    /// The `colr` box's contents, if this entry's extensions carry one.
+    #[must_use]
+    pub fn colour(&self) -> Option<ColourInfo> {
+        let colr = self.extension_boxes().find(boxes::COLR)?;
+        ColourInfo::parse(colr.payload)
     }
 }
 
@@ -1143,5 +1287,107 @@ mod tests {
         assert_eq!(e.endian(), None);
         // But the codec still resolves, defaulting to big-endian.
         assert_eq!(e.codec(), Some(CodecId::PcmS24be));
+    }
+
+    /// Bytes read back from a real `ffmpeg 8.1` `-movflags write_colr` file
+    /// (`libx264`, `-colorspace bt709 -color_range tv`): `nclx`, primaries and
+    /// transfer left unspecified (`2`), matrix `bt709` (`1`), limited range.
+    #[test]
+    fn colr_matches_a_real_ffmpeg_nclx_atom() {
+        let payload = [
+            b'n', b'c', b'l', b'x', 0, 2, 0, 2, 0, 1, 0x00,
+        ];
+        let c = ColourInfo::parse(&payload).unwrap();
+        assert_eq!(c.colour_type, FourCc::new(b"nclx"));
+        assert_eq!(c.primaries, Some(2));
+        assert_eq!(c.transfer, Some(2));
+        assert_eq!(c.matrix, Some(1));
+        assert!(!c.full_range);
+    }
+
+    #[test]
+    fn colr_full_range_bit_is_the_top_bit_of_the_last_byte() {
+        let payload = [b'n', b'c', b'l', b'x', 0, 1, 0, 1, 0, 1, 0x80];
+        let c = ColourInfo::parse(&payload).unwrap();
+        assert!(c.full_range);
+    }
+
+    #[test]
+    fn colr_nclc_has_no_full_range_byte_at_all() {
+        let payload = [b'n', b'c', b'l', b'c', 0, 1, 0, 1, 0, 6];
+        let c = ColourInfo::parse(&payload).unwrap();
+        assert_eq!(c.colour_type, FourCc::new(b"nclc"));
+        assert_eq!(c.matrix, Some(6));
+        assert!(!c.full_range);
+    }
+
+    #[test]
+    fn colr_icc_profile_reports_only_its_type() {
+        let payload = [b'r', b'I', b'C', b'C', 1, 2, 3, 4];
+        let c = ColourInfo::parse(&payload).unwrap();
+        assert_eq!(c.colour_type, FourCc::new(b"rICC"));
+        assert!(c.primaries.is_none());
+    }
+
+    #[test]
+    fn a_visual_entry_reports_its_colr_box() {
+        let colr = bx(
+            b"colr",
+            &[b'n', b'c', b'l', b'x', 0, 1, 0, 1, 0, 1, 0x80],
+        );
+        let raw = visual_entry(*b"avc1", 640, 480, &colr);
+        let e = SampleEntry::parse(&first_box(&raw), boxes::VIDE);
+        let c = e.colour().unwrap();
+        assert_eq!(c.matrix, Some(1));
+        assert!(c.full_range);
+    }
+
+    #[test]
+    fn tmcd_entry_reports_its_fixed_fields() {
+        let mut body = vec![0u8; 6]; // reserved
+        body.extend_from_slice(&1u16.to_be_bytes()); // data_reference_index
+        body.extend_from_slice(&0u32.to_be_bytes()); // reserved
+        body.extend_from_slice(&1u32.to_be_bytes()); // flags: drop-frame
+        body.extend_from_slice(&30_000u32.to_be_bytes()); // time_scale
+        body.extend_from_slice(&1001u32.to_be_bytes()); // frame_duration
+        body.push(30); // number_of_frames
+        body.push(0); // reserved
+        let raw = bx(b"tmcd", &body);
+        let e = SampleEntry::parse(&first_box(&raw), boxes::TMCD);
+        let t = e.tmcd.unwrap();
+        assert!(t.is_drop_frame());
+        assert_eq!(t.time_scale, 30_000);
+        assert_eq!(t.frame_duration, 1001);
+        assert_eq!(t.number_of_frames, 30);
+    }
+
+    #[test]
+    fn tmcd_format_renders_hh_mm_ss_ff() {
+        let entry = TimecodeSampleEntry {
+            flags: 0,
+            time_scale: 25,
+            frame_duration: 1,
+            number_of_frames: 25,
+        };
+        // One hour of 25 fps frames, non-drop-frame separator.
+        assert_eq!(entry.format(90_000).as_deref(), Some("01:00:00:00"));
+        assert_eq!(entry.format(90_001).as_deref(), Some("01:00:00:01"));
+    }
+
+    #[test]
+    fn tmcd_drop_frame_uses_a_semicolon_before_the_frame_count() {
+        let entry = TimecodeSampleEntry {
+            flags: TimecodeSampleEntry::DROP_FRAME,
+            time_scale: 30_000,
+            frame_duration: 1001,
+            number_of_frames: 30,
+        };
+        assert_eq!(entry.format(30).as_deref(), Some("00:00:01;00"));
+    }
+
+    #[test]
+    fn tmcd_format_is_none_when_frame_rate_is_unknown() {
+        let entry = TimecodeSampleEntry::default();
+        assert_eq!(entry.format(100), None);
     }
 }

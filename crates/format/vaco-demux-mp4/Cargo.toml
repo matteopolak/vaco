@@ -14,6 +14,7 @@ vaco-io = { path = "../../io/vaco-io" }
 vaco-format-core = { path = "../../format/vaco-format-core" }
 vaco-format-isom = { path = "../../format/vaco-format-isom" }
 vaco-codec-core = { path = "../../signal/vaco-codec-core" }
+vaco-color = { path = "../../model/vaco-color" }
 vaco-bitstream = { path = "../../core/vaco-bitstream" }
 vaco-limits = { path = "../../core/vaco-limits" }
 vaco-packet = { path = "../../model/vaco-packet" }

@@ -451,7 +451,7 @@ impl Mp4Demuxer {
         }
 
         let size = self.io.size();
-        let (streams, readers, slots, found, qt_chapter_track, pssh_tags) = {
+        let (streams, readers, slots, found, qt_chapter_track, pssh_tags, timecode_tracks) = {
             let bx = moov_box(&self.moov, self.moov_offset, self.moov_header_len);
             let movie = Movie::parse(&bx)?;
             let mut streams = Vec::new();
@@ -484,6 +484,10 @@ impl Mp4Demuxer {
             let qt_chapter_track = (!self.mp4.ignore_chapters)
                 .then(|| find_qt_chapter_track(&movie, size))
                 .flatten();
+            // `tmcd` tracks: structural only here, for the same reason as the
+            // chapter track above — the sample byte needs `self.io`, which
+            // cannot be borrowed while `movie` still is.
+            let timecode_tracks = find_timecode_tracks(&movie);
             // `pssh` under `moov` is the progressive-file location (§8.1). A
             // fragmented file's copy is a top-level box next to `moof`
             // instead, which `collect_fragments`'s scan does not currently
@@ -493,7 +497,15 @@ impl Mp4Demuxer {
                 .iter()
                 .map(|p| ("encryption_system_id".to_owned(), hex16(&p.system_id)))
                 .collect();
-            (streams, readers, slots, found, qt_chapter_track, pssh_tags)
+            (
+                streams,
+                readers,
+                slots,
+                found,
+                qt_chapter_track,
+                pssh_tags,
+                timecode_tracks,
+            )
         };
         self.streams = streams;
         self.readers = readers;
@@ -528,6 +540,7 @@ impl Mp4Demuxer {
         {
             self.load_qt_chapter_track(track_tb, &samples);
         }
+        self.load_timecode_tracks(timecode_tracks);
         self.finish_durations();
         self.seed_index();
         Ok(())
@@ -575,6 +588,37 @@ impl Mp4Demuxer {
                 end,
                 metadata: vec![("title".to_owned(), text)],
             });
+        }
+    }
+
+    /// Turn each `tmcd` track's first sample into a `timecode` tag.
+    ///
+    /// **Measured** (`ffmpeg -timecode 01:00:00:00`, real `.mov`): the tag
+    /// lands on the `tmcd` track's own stream *and* on every other track
+    /// whose `tref ▸ tmcd` names it — a video track carries the same
+    /// `TAG:timecode` value the reference prints for its data stream.
+    fn load_timecode_tracks(&mut self, tracks: Vec<TimecodeTrack>) {
+        for t in tracks {
+            let Ok(mut pkt) = self.payload(t.offset, t.size) else {
+                continue;
+            };
+            let Some(count) = pkt
+                .payload_mut()
+                .first_chunk::<4>()
+                .map(|b| u32::from_be_bytes(*b))
+            else {
+                continue;
+            };
+            let Some(text) = t.entry.format(count) else {
+                continue;
+            };
+            let mut targets: Vec<i64> = t.referenced_by.iter().map(|&id| i64::from(id)).collect();
+            targets.push(i64::from(t.track_id));
+            for s in &mut self.streams {
+                if s.id.is_some_and(|id| targets.contains(&id)) {
+                    s.metadata.push(("timecode".to_owned(), text.clone()));
+                }
+            }
         }
     }
 
@@ -1936,6 +1980,59 @@ fn reassemble_at(kind: FourCc, offset: u64, header_len: u64, payload: &[u8]) -> 
 fn parse_fragment(frag: &Fragment) -> Option<MovieFragment<'_>> {
     let bx = reassemble_at(bt::MOOF, frag.offset, frag.header_len, &frag.data);
     MovieFragment::parse(&bx).ok()
+}
+
+/// One `tmcd` track, located but not yet read — see [`find_timecode_tracks`].
+struct TimecodeTrack {
+    track_id: u32,
+    entry: stsd::TimecodeSampleEntry,
+    offset: u64,
+    size: u32,
+    /// Track ids of other tracks whose `tref ▸ tmcd` names this one.
+    referenced_by: Vec<u32>,
+}
+
+/// Every `tmcd` track with a readable first sample, plus which other tracks
+/// reference it. Structural only, for the same borrow-splitting reason as
+/// [`find_qt_chapter_track`].
+fn find_timecode_tracks(movie: &Movie<'_>) -> Vec<TimecodeTrack> {
+    let mut out = Vec::new();
+    for trak in &movie.tracks {
+        if trak.handler != bt::TMCD || !trak.has_usable_timescale() {
+            continue;
+        }
+        let Some(entry) = trak
+            .sample_table
+            .sample_descriptions
+            .as_ref()
+            .and_then(|d| stsd::parse_stsd(d, trak.handler).ok())
+            .and_then(|v| v.first().and_then(|e| e.tmcd))
+        else {
+            continue;
+        };
+        let Some(sample) = trak.sample_table.cursor_at(0).next() else {
+            continue;
+        };
+        let mut referenced_by = Vec::new();
+        for other in &movie.tracks {
+            if other.header.track_id == trak.header.track_id {
+                continue;
+            }
+            for r in &other.references {
+                if r.kind == FourCc::new(b"tmcd") && r.track_ids.contains(&trak.header.track_id) {
+                    referenced_by.push(other.header.track_id);
+                }
+            }
+        }
+        out.push(TimecodeTrack {
+            track_id: trak.header.track_id,
+            entry,
+            offset: sample.offset,
+            size: sample.size,
+            referenced_by,
+        });
+    }
+    out
 }
 
 /// Find a `QuickTime` chapter track: some other track's `tref ▸ chap`

@@ -14,6 +14,7 @@
 //!   parser to supply.
 
 use vaco_codec_core::{AudioParameters, CodecParameters, VideoParameters};
+use vaco_color::{ColorPrimaries, MatrixCoefficients, TransferCharacteristic};
 use vaco_core::{MediaType, Rational, Timestamp};
 use vaco_format_core::{Disposition, Stream};
 use vaco_format_isom::stsd::{ConfigFlavour, SampleEntry};
@@ -129,6 +130,23 @@ pub(crate) fn codec_parameters(
             ..VideoParameters::default()
         };
         video.sample_aspect_ratio = sample_aspect_ratio(entry, track, &v).unwrap_or(Rational::ZERO);
+        if let Some(colour) = entry.colour() {
+            video.color.primaries = colour
+                .primaries
+                .and_then(|c| ColorPrimaries::from_u8(c.try_into().unwrap_or(u8::MAX)))
+                .unwrap_or_default();
+            video.color.transfer = colour
+                .transfer
+                .and_then(|c| TransferCharacteristic::from_u8(c.try_into().unwrap_or(u8::MAX)))
+                .unwrap_or_default();
+            video.color.matrix = colour
+                .matrix
+                .and_then(|c| MatrixCoefficients::from_u8(c.try_into().unwrap_or(u8::MAX)))
+                .unwrap_or_default();
+            if colour.full_range {
+                video.color.range = vaco_color::ColorRange::Full;
+            }
+        }
         params.video = Some(video);
     } else if let Some(a) = entry.audio {
         params.audio = Some(AudioParameters {

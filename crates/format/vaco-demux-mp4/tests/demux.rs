@@ -609,4 +609,88 @@ mod tests {
             "{text}"
         );
     }
+
+    /// A `colr ▸ nclx` extension box, byte-for-byte the shape read back from a
+    /// real `ffmpeg 8.1 -movflags write_colr -colorspace bt709` file (see
+    /// `vaco_format_isom::stsd`'s own `colr_matches_a_real_ffmpeg_nclx_atom`),
+    /// maps onto `VideoParameters::color`.
+    #[test]
+    fn a_colr_box_sets_the_video_color_info() {
+        use vaco_color::{ColorPrimaries, ColorRange, MatrixCoefficients, TransferCharacteristic};
+
+        let colr = vaco_format_isom::build::bx(
+            b"colr",
+            &[b'n', b'c', b'l', b'x', 0, 1, 0, 1, 0, 1, 0x80],
+        );
+        let mut track = simple_track(1, 1, 4, 1024);
+        track.stbl.stsd_box = Some(common::avc1_stsd_with_extension(&colr));
+        let demux = open(fixture(1000, 0, &[track], &[0u8; 4]));
+        let color = demux.streams()[0].params.video.as_ref().unwrap().color;
+        assert_eq!(color.primaries, ColorPrimaries::Bt709);
+        assert_eq!(color.transfer, TransferCharacteristic::Bt709);
+        assert_eq!(color.matrix, MatrixCoefficients::Bt709);
+        assert_eq!(color.range, ColorRange::Full);
+    }
+
+    /// A `tmcd` track's single sample becomes a `timecode` tag on its own
+    /// stream *and* on the video track whose `tref ▸ tmcd` names it —
+    /// measured against a real `ffmpeg -timecode 01:00:00:00` `.mov`, where
+    /// `ffprobe` prints the same `TAG:timecode` on both streams.
+    #[test]
+    fn a_tmcd_track_tags_itself_and_its_referencing_track() {
+        use vaco_format_isom::FourCc;
+        use vaco_format_isom::writer;
+
+        let mut tmcd_entry = vec![0u8; 6]; // reserved
+        tmcd_entry.extend_from_slice(&1u16.to_be_bytes()); // data_reference_index
+        tmcd_entry.extend_from_slice(&0u32.to_be_bytes()); // reserved
+        tmcd_entry.extend_from_slice(&0u32.to_be_bytes()); // flags: non-drop
+        tmcd_entry.extend_from_slice(&2_500u32.to_be_bytes()); // time_scale
+        tmcd_entry.extend_from_slice(&100u32.to_be_bytes()); // frame_duration
+        tmcd_entry.push(25); // number_of_frames
+        tmcd_entry.push(0); // reserved
+        let mut stsd_body = 1u32.to_be_bytes().to_vec();
+        stsd_body.extend_from_slice(&vaco_format_isom::build::bx(b"tmcd", &tmcd_entry));
+        let tmcd_stsd = vaco_format_isom::build::fullbx(b"stsd", 0, 0, &stsd_body);
+
+        let mut video = simple_track(1, 1, 4, 1024);
+        video.tref = writer::tref(&writer::tref_entry(FourCc::new(b"tmcd"), &[2]));
+
+        // One sample: a big-endian frame count of 90 000 at 25 fps = one hour.
+        let sample = 90_000u32.to_be_bytes().to_vec();
+        let tmcd_track = TrackSpec {
+            track_id: 2,
+            handler: *b"tmcd",
+            timescale: 2_500,
+            media_duration: 100,
+            stbl: StblSpec {
+                stsd_box: Some(tmcd_stsd),
+                stts: vec![(1, 100)],
+                stsc: vec![(1, 1, 1)],
+                stsz: vec![sample.len() as u32],
+                stco: vec![MDAT_PAYLOAD as u32 + 4],
+                has_stss: false,
+                ..StblSpec::default()
+            },
+            ..TrackSpec::default()
+        };
+
+        let mut media = vec![0u8; 4]; // the video sample
+        media.extend_from_slice(&sample);
+
+        let demux = open(fixture(1000, 0, &[video, tmcd_track], &media));
+        assert_eq!(demux.streams().len(), 2);
+        for s in demux.streams() {
+            assert_eq!(
+                s.metadata
+                    .iter()
+                    .find(|(k, _)| k == "timecode")
+                    .map(|(_, v)| v.as_str()),
+                Some("01:00:00:00"),
+                "stream {} (id {:?}) missing the timecode tag",
+                s.index,
+                s.id
+            );
+        }
+    }
 }

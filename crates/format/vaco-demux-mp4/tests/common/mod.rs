@@ -119,6 +119,33 @@ pub fn avc1_stsd() -> Vec<u8> {
     vaco_format_isom::build::fullbx(b"stsd", 0, 0, &body)
 }
 
+/// [`avc1_stsd`], with one extra extension box appended after `avcC` — for
+/// tests that need a `colr` or similar sibling extension on the same entry.
+pub fn avc1_stsd_with_extension(extension: &[u8]) -> Vec<u8> {
+    let mut entry = Vec::new();
+    entry.extend_from_slice(&[0; 6]);
+    entry.extend_from_slice(&1u16.to_be_bytes());
+    entry.extend_from_slice(&[0; 16]);
+    entry.extend_from_slice(&160u16.to_be_bytes());
+    entry.extend_from_slice(&120u16.to_be_bytes());
+    entry.extend_from_slice(&0x0048_0000u32.to_be_bytes());
+    entry.extend_from_slice(&0x0048_0000u32.to_be_bytes());
+    entry.extend_from_slice(&0u32.to_be_bytes());
+    entry.extend_from_slice(&1u16.to_be_bytes());
+    let mut name = [0u8; 32];
+    name[0] = 4;
+    name[1..5].copy_from_slice(b"test");
+    entry.extend_from_slice(&name);
+    entry.extend_from_slice(&24u16.to_be_bytes());
+    entry.extend_from_slice(&0xFFFFu16.to_be_bytes());
+    entry.extend_from_slice(&bx(b"avcC", &[1, 0x4d, 0x40, 0x0b]));
+    entry.extend_from_slice(extension);
+    let mut body = Vec::new();
+    body.extend_from_slice(&1u32.to_be_bytes());
+    body.extend_from_slice(&bx(b"avc1", &entry));
+    vaco_format_isom::build::fullbx(b"stsd", 0, 0, &body)
+}
+
 /// A `stsd` holding one `encv` entry: `avc1` wrapped in `sinf ▸ schm(cenc)` /
 /// `sinf ▸ schi ▸ tenc`, byte-for-byte the shape read back from a real
 /// `ffmpeg 8.1 -encryption_scheme cenc-aes-ctr` file (see

@@ -684,6 +684,13 @@ Named so the demuxer's author knows what is not here:
   collect the two locations a `pssh` legally occupies. `SampleEntry::cenc()`
   ties `schm`/`tenc` to one sample entry, alongside the pre-existing
   `original_format`.
+* ~~**`colr` and `tmcd`.**~~ Done 2026-08-28: `stsd::ColourInfo::parse` reads
+  `colr`'s `nclx`/`nclc` CICP codes (an ICC profile type reports only its
+  `colour_type`), and `SampleEntry::tmcd`/`TimecodeSampleEntry` expose a
+  `tmcd` sample entry's fixed fields plus a `format()` helper that turns one
+  sample's frame count into `HH:MM:SS:FF`. Both are box-layer only — mapping
+  the CICP codes onto `vaco_color`'s enums and reading the `tmcd` track's
+  actual sample is `vaco-demux-mp4`'s job.
 * **Sample groups.** `sbgp`/`sgpd` are skipped.
 * **HEIF/AVIF item model.** `meta ▸ iloc/iinf/iprp/iref/idat` and the derived
   items. The `meta` box type exists; nothing reads it.

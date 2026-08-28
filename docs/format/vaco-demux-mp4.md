@@ -650,11 +650,12 @@ Named so the next author knows what is absent rather than broken:
   `EditList::is_simple` is not consulted; the single shift is applied.
   `vaco-format-isom` has `EditList::resolve` and a `Timeline` ready for the
   general case. Both are on plan 18's documented-divergence list already.
-* **`cmov`** (zlib-compressed `moov`), **`tapt`**, **hint tracks**, **`uuid`
-  extension boxes** and **`tmcd` timecode tracks.** Not attempted this pass;
-  `tmcd`'s sample is a 32-bit frame count that needs the sample entry's own
-  `time_scale`/`frame_duration`/drop-frame flag to turn into `HH:MM:SS:FF`,
-  none of which `vaco-format-isom` currently exposes from a `tmcd` entry.
+* **`cmov`** (zlib-compressed `moov`), **`tapt`**, **hint tracks** and **`uuid`
+  extension boxes.** Not attempted.
+* **`rICC`/`prof` colour profiles.** `colr`'s CICP path (`nclx`/`nclc`) is read
+  and mapped onto `VideoParameters::color`; an embedded ICC profile is
+  reported by `colour_type` only (`ColourInfo::primaries` etc. are `None`) and
+  never parsed or exposed as a `StreamSideData`.
 * **A benchmark.** The re-parse-per-refill policy is argued from
   `vaco-format-isom`'s own measured parse cost rather than from a measurement of
   this crate. A `divan` benchmark over a synthetic 300 000-sample table would
@@ -673,6 +674,24 @@ unmeasured, just handled defensibly rather than left undecided. There is no
 round-trip partner for this on the mux side yet: `vaco-mux-mp4::meta::build_chapter_tref`
 exists but nothing calls it, so the muxer writes only `chpl` today — see
 *Wanted from other crates*.
+
+## `colr` and `tmcd` — colour side data and timecodes
+
+**2026-08-28.** `colr ▸ nclx`/`nclc`'s three CICP codes (ISO/IEC 23091-2 —
+the same numeric space H.264/HEVC VUI and Matroska's `Colour` element already
+use) map onto `VideoParameters::color` via `vaco_color`'s `from_u8`;
+`full_range` sets `ColorRange::Full`. Measured against a real
+`ffmpeg -movflags write_colr -colorspace bt709` file — see
+`vaco_format_isom::stsd`'s `colr_matches_a_real_ffmpeg_nclx_atom`.
+
+A `tmcd` track's fixed fields (`time_scale`/`frame_duration`/
+`number_of_frames`/the drop-frame flag) are now exposed by
+`vaco_format_isom::stsd::SampleEntry::tmcd`, and this crate turns the track's
+one sample (a big-endian frame count) into a `timecode` tag — placed on the
+`tmcd` track's own stream *and* propagated to every track whose
+`tref ▸ tmcd` names it, matching a real `ffmpeg -timecode 01:00:00:00 .mov`
+file where `ffprobe` prints the same `TAG:timecode` on both. Drop-frame uses
+`;` before the frame count rather than `:`, the reference's own formatting.
 
 ---
 
