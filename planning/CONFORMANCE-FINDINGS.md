@@ -1888,6 +1888,64 @@ The remaining Matroska divergences are the other direction — our `Info` (53 vs
 75), `Tracks` (109 vs 152) and `Tags` (132 vs 255) are all smaller, so there
 are elements we do not write.
 
+## 38. Matroska: what is left after the `SimpleBlock` fix, and one thing that cannot be fixed
+
+First, a correction to my own measurement, worth recording because it is the
+trap the suite header already warns about and I walked into it anyway.
+
+Comparing with top-level `-bitexact`, three successive **reference** runs
+produced three different files, with a random `SegmentUUID` and `TrackUID`
+each time. That reads exactly like "the Matroska muxer is nondeterministic",
+and it is not. `-fflags`/`-flags` are *per-file* options: the flags have to sit
+**immediately before the output path**, and top-level `-bitexact` does not
+reach the muxer. With them placed correctly the reference is byte-identical
+run to run, writes no `SegmentUUID` at all, and writes `TrackUID` as a
+deterministic 1. `remux-bitexact.toml` says all of this in its header. Measure
+with the harness's own command line, not a simplified one.
+
+### The remaining divergences
+
+`-c copy -fflags +bitexact -f matroska`: ref 7841 bytes, ours 7715.
+
+| | reference | ours |
+|---|---|---|
+| `Info/Duration` | 8 bytes | absent |
+| `TrackUID` | `00 00 00 00 00 00 00 01` | `01` |
+| `Video/FlagInterlaced` | present | absent |
+| `Video/Colour` | 8 bytes | absent |
+| `MaxBlockAdditionID` | present | absent |
+| `Void` after it | 2 bytes | absent |
+| `Tags` | 226, two `Tag`s | 132, one `Tag` |
+
+`TrackUID` is the interesting small one: EBML lets a uinteger be encoded in as
+few bytes as it needs, and we take that option. The reference always writes
+eight. Both are valid; only one is byte-identical.
+
+`TrackEntry`'s child order also differs, and Matroska does not constrain it:
+
+```text
+ref   TrackNumber TrackUID FlagLacing Language CodecID TrackType
+      DefaultDuration Video MaxBlockAdditionID Void CodecPrivate
+ours  TrackNumber TrackUID TrackType FlagLacing Language CodecID
+      DefaultDuration CodecPrivate Video
+```
+
+### `MuxingApp`/`WritingApp` cannot be made byte-identical, and should not be
+
+Under bitexact the reference writes `Lavf` — four bytes, no version. We write
+`vaco-mux-matroska`, seventeen. That is the right choice: it is our identity,
+the same call as `#software` in `framecrc` and the `-version` banner, and
+writing `Lavf` into a file we produced would be a false claim about what made
+it.
+
+The consequence is that **Matroska output can never be byte-identical to the
+reference**, no matter how many of the rows above are closed — there are 26
+bytes of honest divergence in every file. Either the harness needs a normaliser
+for these two elements specifically, or Matroska belongs in
+`remux-structural.toml` rather than `remux-bitexact.toml`. This is a harness
+decision, not a muxer bug, and it should be made deliberately rather than
+discovered when the last row closes and the comparison still fails.
+
 ## Harness changes, summarised
 
 Everything below is a change to `crates/tool/vaco-conformance/`,
