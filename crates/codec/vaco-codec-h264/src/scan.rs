@@ -61,10 +61,10 @@ fn inverse_zigzag_scan_4x4(residual: Option<&CabacResidual>, position_offset: us
     let Some(res) = residual else { return c };
     for (&level, &pos) in res.levels.iter().zip(res.positions.iter()) {
         let idx = usize::from(pos) + position_offset;
-        if let Some(&(i, j)) = ZIGZAG_4X4.get(idx) {
-            if let Some(slot) = c.get_mut(usize::from(i) * 4 + usize::from(j)) {
-                *slot = level;
-            }
+        if let Some(&(i, j)) = ZIGZAG_4X4.get(idx)
+            && let Some(slot) = c.get_mut(usize::from(i) * 4 + usize::from(j))
+        {
+            *slot = level;
         }
     }
     c
@@ -140,6 +140,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::needless_range_loop,
+        reason = "both a and b are indices into the same array (a pairwise uniqueness check) and are also used directly in the assertion message -- an iterator/enumerate form would still need both back"
+    )]
     fn no_two_zigzag_entries_are_the_same_position() {
         for a in 0..16 {
             for b in (a + 1)..16 {
