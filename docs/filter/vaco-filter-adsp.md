@@ -39,7 +39,7 @@ their own instead of asking for it to move:
 * `vaco-filter-ameasure::kweight` (BS.1770-4 K-weighting) duplicated the
   cookbook high-shelf and high-pass formulas outright, with its own
   `Coeffs`/`BiquadState` types.
-* `vaco-filter-audio-dynamics::mcompand` duplicated the cookbook Butterworth
+* `vaco-filter-adynamics::mcompand` duplicated the cookbook Butterworth
   low-pass/high-pass formula for its crossover splitter, with its own
   `Biquad2` type.
 
@@ -79,7 +79,7 @@ Both guarantees, and the tests that pin them, moved unchanged from
 Auditing the duplicates before deleting them found one genuine behavioural
 difference, not just four copies of the same formula:
 
-* `vaco-filter-audio-dynamics::mcompand`'s old `Biquad2::build` special-cased
+* `vaco-filter-adynamics::mcompand`'s old `Biquad2::build` special-cased
   a crossover frequency at/below DC or at/above Nyquist, substituting an
   explicit identity (lowpass) or zero (highpass) section. This module's
   `lowpass`/`highpass` do **not** do that — their contract is "coefficients

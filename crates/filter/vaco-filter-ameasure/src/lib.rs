@@ -5,7 +5,7 @@
 //! `vaco-filter-audio`/`-eq`/`-dynamics` are; the two-input filters here
 //! (`apsnr`, `asdr`, `asisdr`) go through `vaco-filter-framesync`'s
 //! `Synced` adapter instead, the same way
-//! `vaco-filter-audio-dynamics::sidechaincompress` does.
+//! `vaco-filter-adynamics::sidechaincompress` does.
 //!
 //! # Scope versus the brief that requested this crate
 //!
@@ -53,7 +53,7 @@
 //! `silencedetect`, `replaygain`, `apsnr`, `asdr`, `asisdr`, `axcorrelate`,
 //! `aderivative`, `aintegral`, `ashowinfo`, `aphasemeter`. Three of those —
 //! `astats` and `silencedetect` (already registered by
-//! `vaco-filter-audio-dynamics`, whose own scope drifted to include them)
+//! `vaco-filter-adynamics`, whose own scope drifted to include them)
 //! and `axcorrelate` (point 4 above) — are excluded here; registering any
 //! of them would be exactly the D19 violation the dup-check gate exists to
 //! catch. This crate implements and registers the remaining eleven.

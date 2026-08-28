@@ -22,12 +22,12 @@
 //! every crate that needed one had already written its own —
 //! `vaco-filter-aeffects` shipped one-pole approximations in `aexciter`,
 //! `deesser` and `virtualbass` specifically because of it, and
-//! `vaco-filter-ameasure::kweight` and `vaco-filter-audio-dynamics::mcompand`
+//! `vaco-filter-ameasure::kweight` and `vaco-filter-adynamics::mcompand`
 //! each duplicated the cookbook formulas outright. D19 says a shared concept
 //! moves to a shared home rather than staying duplicated *or* staying
 //! falsely believed to have one owner; this module is that move, and all
 //! four crates now depend on it instead (`vaco-filter-aeq`,
-//! `vaco-filter-ameasure` and `vaco-filter-audio-dynamics` are renamed to
+//! `vaco-filter-ameasure` and `vaco-filter-adynamics` are renamed to
 //! `-aeq`/`-aanalysis`/`-adynamics` in a separate, later commit per
 //! `planning/16-filters.md` §4.3 — this move happened under their original
 //! names). The row's remaining two kernels — the EBU R128 loudness core and

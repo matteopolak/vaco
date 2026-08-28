@@ -15,7 +15,7 @@
 //! is reviewable on its own. Built against `vaco-filter-core` (the `Filter`
 //! trait, the `Simple` adapter) and `vaco-filter-graph` (`FilterRegistry`),
 //! exactly as `vaco-filter-audio`, `vaco-filter-aeq` and
-//! `vaco-filter-audio-dynamics` are — `axcorrelate` additionally uses
+//! `vaco-filter-adynamics` are — `axcorrelate` additionally uses
 //! `vaco-filter-framesync`'s `Synced` adapter, since it genuinely has two
 //! inputs to align. The LFO-driven filters share `vaco-filter-adsp`'s
 //! wave-table module for their oscillators, and `atempo` uses that crate's

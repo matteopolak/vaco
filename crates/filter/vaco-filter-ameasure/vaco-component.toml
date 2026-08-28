@@ -2,7 +2,7 @@
 #
 # Eleven T3 audio analysis and measurement filters (FT-4.13c, GitHub #483).
 # Plan 16 §4.3's `vaco-filter-aanalysis` row names fourteen; `astats` and
-# `silencedetect` are excluded because `vaco-filter-audio-dynamics` already
+# `silencedetect` are excluded because `vaco-filter-adynamics` already
 # registers both, and `axcorrelate` because `vaco-filter-achannel`
 # (FT-4.13b, GitHub #482, landed first) already registers it — a genuine
 # two-issue overlap (see `src/lib.rs` and

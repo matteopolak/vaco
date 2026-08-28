@@ -10,7 +10,7 @@ use vaco_filter_graph::registry::{FilterRegistry, Instance, Instantiate};
 /// `replaygain`, `apsnr`, `asdr`, `asisdr`, `axcorrelate`, `aderivative`,
 /// `aintegral`, `ashowinfo`, `aphasemeter`); this crate registers eleven of
 /// them. `astats` and `silencedetect` are excluded because
-/// `vaco-filter-audio-dynamics` already registers both. `axcorrelate` is
+/// `vaco-filter-adynamics` already registers both. `axcorrelate` is
 /// excluded because `vaco-filter-achannel` (FT-4.13b, GitHub #482, landed
 /// first) already registers it too — a genuine cross-issue overlap (two
 /// work packages independently listed the same filter), not a mistake

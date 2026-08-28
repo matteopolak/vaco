@@ -13,7 +13,7 @@
 //! `sum(L*R) / sqrt(sum(L^2) * sum(R^2))`, computed over `1/rate`-second
 //! blocks (the same granularity the reference draws one video column at),
 //! feeding a `silencedetect`-shaped event state machine
-//! (`vaco-filter-audio-dynamics::silencedetect` is the model this follows)
+//! (`vaco-filter-adynamics::silencedetect` is the model this follows)
 //! for `mono_start`/`mono_end` (correlation at or above `1 - tolerance`)
 //! and `out_phase_start`/`out_phase_end` (correlation at or below
 //! `cos(angle)`, i.e. the angle between channels exceeds the threshold),

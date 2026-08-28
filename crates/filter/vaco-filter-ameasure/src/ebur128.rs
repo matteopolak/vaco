@@ -11,7 +11,7 @@
 //! measurement itself — `integrated`, `range`, `lra_low`, `lra_high` and
 //! `sample_peak` are logged at end of stream using the reference's own
 //! option names, per this crate's established convention
-//! (`vaco-filter-audio-dynamics::loudnorm` does the same for its
+//! (`vaco-filter-adynamics::loudnorm` does the same for its
 //! `measured_*` fields).
 //!
 //! The gating algorithm, its provenance and its oracle are

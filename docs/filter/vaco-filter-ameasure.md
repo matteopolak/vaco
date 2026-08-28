@@ -47,7 +47,7 @@ Plan 16 §4.3's `vaco-filter-aanalysis` row names fourteen filters in total:
 `replaygain`, `apsnr`, `asdr`, `asisdr`, `axcorrelate`, `aderivative`,
 `aintegral`, `ashowinfo`, `aphasemeter`. Three are excluded from this
 crate's registration: `astats` and `silencedetect` because
-`vaco-filter-audio-dynamics` already registers both (its own scope drifted
+`vaco-filter-adynamics` already registers both (its own scope drifted
 to include them — see that crate's doc), and `axcorrelate` per point 4
 above. The remaining eleven are implemented and registered here.
 
@@ -72,7 +72,7 @@ underneath:
 `apsnr`, `asdr` and `asisdr` are the two-input filters here; they go
 through `vaco-filter-framesync`'s `Synced`/`FrameSyncFilter` adapter
 instead of `vaco-filter-core`'s `Simple`, the same way
-`vaco-filter-audio-dynamics::sidechaincompress` does. They share one
+`vaco-filter-adynamics::sidechaincompress` does. They share one
 accumulator, [`common::PairStats`](../../crates/filter/vaco-filter-ameasure/src/common.rs)
 (`sum_ref_sq`/`sum_est_sq`/`sum_diff_sq`/`sum_cross`/`count`), each
 filter reducing it with a different closed-form formula.
@@ -136,7 +136,7 @@ spread of what survives.
 
 - **True peak** (BS.1770-4 Annex 2's 4x-oversampled peak). `ebur128` and
   `replaygain` report the plain sample peak instead — the same documented
-  simplification `vaco-filter-audio-dynamics::loudnorm` already makes, for
+  simplification `vaco-filter-adynamics::loudnorm` already makes, for
   the same reason (no oversampling filter exists in this codebase yet).
 - **Video output.** `ebur128`'s meter graphic and `aphasemeter`'s phase
   scope are both accepted-but-ignored options; only the audio-domain

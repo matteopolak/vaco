@@ -22,7 +22,7 @@
 //!
 //! **What is not implemented**: true peak (a 4x-oversampled peak per
 //! BS.1770-4 Annex 2). This crate reports the plain sample peak instead —
-//! the same documented simplification `vaco-filter-audio-dynamics::loudnorm`
+//! the same documented simplification `vaco-filter-adynamics::loudnorm`
 //! already makes for the same reason (no oversampling filter here yet).
 
 use std::collections::VecDeque;

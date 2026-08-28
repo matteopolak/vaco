@@ -52,7 +52,7 @@ impl FrameFilter for VolumeDetect {
         if self.count > 0 {
             let mean_sq = self.sum_sq / self.count as f64;
             tracing::info!(
-                target: "vaco_filter_audio_dynamics::volumedetect",
+                target: "vaco_filter_adynamics::volumedetect",
                 "max_volume: {:.1} dB, mean_volume: {:.1} dB",
                 db(self.peak),
                 db(mean_sq.sqrt()),

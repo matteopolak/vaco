@@ -9,96 +9,96 @@
 kind = "filter"
 name = "acompressor"
 long_name = "Audio compressor"
-ctor = "vaco_filter_audio_dynamics::acompressor::DESC"
+ctor = "vaco_filter_adynamics::acompressor::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "agate"
 long_name = "Audio gate"
-ctor = "vaco_filter_audio_dynamics::agate::DESC"
+ctor = "vaco_filter_adynamics::agate::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "alimiter"
 long_name = "Audio lookahead limiter"
-ctor = "vaco_filter_audio_dynamics::alimiter::DESC"
+ctor = "vaco_filter_adynamics::alimiter::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "astats"
 long_name = "Show time domain statistics about audio frames"
-ctor = "vaco_filter_audio_dynamics::astats::DESC"
+ctor = "vaco_filter_adynamics::astats::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "compand"
 long_name = "Compress or expand dynamic range of audio"
-ctor = "vaco_filter_audio_dynamics::compand::DESC"
+ctor = "vaco_filter_adynamics::compand::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "dynaudnorm"
 long_name = "Dynamic Audio Normalizer"
-ctor = "vaco_filter_audio_dynamics::dynaudnorm::DESC"
+ctor = "vaco_filter_adynamics::dynaudnorm::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "loudnorm"
 long_name = "EBU R128 loudness normalization"
-ctor = "vaco_filter_audio_dynamics::loudnorm::DESC"
+ctor = "vaco_filter_adynamics::loudnorm::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "mcompand"
 long_name = "Multiband Compress or expand dynamic range of audio"
-ctor = "vaco_filter_audio_dynamics::mcompand::DESC"
+ctor = "vaco_filter_adynamics::mcompand::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "sidechaincompress"
 long_name = "Sidechain compressor"
-ctor = "vaco_filter_audio_dynamics::sidechaincompress::DESC"
+ctor = "vaco_filter_adynamics::sidechaincompress::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "sidechaingate"
 long_name = "Audio sidechain gate"
-ctor = "vaco_filter_audio_dynamics::sidechaingate::DESC"
+ctor = "vaco_filter_adynamics::sidechaingate::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "silencedetect"
 long_name = "Detect silence"
-ctor = "vaco_filter_audio_dynamics::silencedetect::DESC"
+ctor = "vaco_filter_adynamics::silencedetect::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "silenceremove"
 long_name = "Remove silence"
-ctor = "vaco_filter_audio_dynamics::silenceremove::DESC"
+ctor = "vaco_filter_adynamics::silenceremove::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "speechnorm"
 long_name = "Speech Normalizer"
-ctor = "vaco_filter_audio_dynamics::speechnorm::DESC"
+ctor = "vaco_filter_adynamics::speechnorm::DESC"
 media = "audio"
 
 [[component]]
 kind = "filter"
 name = "volumedetect"
 long_name = "Detect audio volume"
-ctor = "vaco_filter_audio_dynamics::volumedetect::DESC"
+ctor = "vaco_filter_adynamics::volumedetect::DESC"
 media = "audio"

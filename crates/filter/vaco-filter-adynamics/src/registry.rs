@@ -46,9 +46,7 @@ impl FilterRegistry for DynamicsRegistry {
             "speechnorm" => crate::speechnorm::create(req),
             "volumedetect" => crate::volumedetect::create(req),
             other => {
-                return Err(format!(
-                    "vaco-filter-audio-dynamics: no filter named `{other}`"
-                ));
+                return Err(format!("vaco-filter-adynamics: no filter named `{other}`"));
             }
         })
     }

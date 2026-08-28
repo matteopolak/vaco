@@ -1,5 +1,5 @@
 [package]
-name = "vaco-filter-audio-dynamics"
+name = "vaco-filter-adynamics"
 description = "T2 audio dynamics filters: compressor/limiter/gate/expander/sidechain family plus loudness normalisation and measurement (acompressor, alimiter, agate, sidechaincompress, sidechaingate, compand, mcompand, loudnorm, dynaudnorm, speechnorm, volumedetect, astats, silencedetect, silenceremove)."
 version.workspace = true
 edition.workspace = true

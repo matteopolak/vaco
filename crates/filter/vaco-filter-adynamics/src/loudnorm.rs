@@ -111,7 +111,7 @@ impl AudioFilter for LoudNorm {
     fn flush(&mut self, _ctx: &mut FilterContext<'_>) -> Result<FrameOut> {
         if self.print {
             tracing::info!(
-                target: "vaco_filter_audio_dynamics::loudnorm",
+                target: "vaco_filter_adynamics::loudnorm",
                 "input_i: {:.2} output_i: {:.2} target_offset: {:.2} input_tp: {:.2}",
                 self.running_db,
                 self.target_db,

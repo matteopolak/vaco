@@ -53,7 +53,7 @@ Twenty-two of the twenty-five are implemented here. Three are not:
 One module per filter (`src/<name>.rs`), each exposing `pub const DESC:
 FilterDesc` and a crate-private `fn create`, aggregated by
 [`registry::AeffectsRegistry`](../../crates/filter/vaco-filter-aeffects/src/registry.rs)
-— the same shape `vaco-filter-aeq` and `vaco-filter-audio-dynamics`
+— the same shape `vaco-filter-aeq` and `vaco-filter-adynamics`
 use. `src/sample.rs` is the same `f64`-domain frame decode/encode those two
 crates carry, duplicated rather than shared (see that module's own doc for
 why). `axcorrelate` is the one filter with two audio inputs that must be

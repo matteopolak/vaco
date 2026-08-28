@@ -1,4 +1,4 @@
-# vaco-filter-audio-dynamics
+# vaco-filter-adynamics
 
 T2 audio dynamics filters (FT-4.8b, GitHub issue #472, the other of two
 children FT-4.8/#56 split into for single-writer ownership — the sibling is
@@ -137,7 +137,7 @@ one period, a documented gap rather than a probed equivalence.
 None of these filters' actual contract is their audio output (which they
 pass through unchanged) — it is the text they print. This crate has no
 `av_log` equivalent, so all three log through `tracing::info!` instead,
-under `target: "vaco_filter_audio_dynamics::<name>"`. The exact line format
+under `target: "vaco_filter_adynamics::<name>"`. The exact line format
 approximates the reference's (`max_volume: <N> dB`, `silence_start: <t>`,
 etc.) but has not been probed byte-for-byte against `ffmpeg`'s output.
 

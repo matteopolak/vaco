@@ -1,4 +1,4 @@
-//! Arbitrary filtergraph text against every `vaco-filter-audio-dynamics`
+//! Arbitrary filtergraph text against every `vaco-filter-adynamics`
 //! filter's option parser.
 //!
 //! Mirrors `filter_audio_options.rs`/`filter_audio_eq_options.rs`: routed
@@ -11,12 +11,12 @@
 //! Property: for any byte string, for any of the fourteen registered names,
 //! either a clean `Err` comes back at some stage or a working `Instance`,
 //! never a panic and never an unbounded allocation.
-//! fuzz-crate: vaco-filter-audio-dynamics
+//! fuzz-crate: vaco-filter-adynamics
 
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use vaco_filter_audio_dynamics::registry::DynamicsRegistry;
+use vaco_filter_adynamics::registry::DynamicsRegistry;
 use vaco_filter_graph::registry::{FilterRegistry, Instantiate};
 
 const NAMES: &[&str] = &[

@@ -6,7 +6,7 @@
 # landed here. `headphone`, `surround` and `hdcd` are the row's three
 # unimplemented names; see this crate's `lib.rs` doc for why. Each `ctor`
 # names the per-filter `pub const DESC: FilterDesc`, matching
-# `vaco-filter-aeq`'s and `vaco-filter-audio-dynamics`'s convention.
+# `vaco-filter-aeq`'s and `vaco-filter-adynamics`'s convention.
 
 [[component]]
 kind = "filter"

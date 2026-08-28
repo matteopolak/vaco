@@ -1,6 +1,6 @@
 //! Shared option parsing for this crate's seven filters.
 //!
-//! As in `vaco-filter-aeq::common` and `vaco-filter-audio-dynamics::common`,
+//! As in `vaco-filter-aeq::common` and `vaco-filter-adynamics::common`,
 //! options are read straight off [`Instantiate::named`] rather than through a
 //! strict `vaco_opts::Options`-derived parser, so a filtergraph string setting
 //! an option this crate does not implement is silently accepted rather than
@@ -18,7 +18,7 @@ pub(crate) const AUDIO_PAD: &[Pad] = &[Pad {
 
 /// `axcorrelate`'s two named input pads, matching `ffmpeg -h filter=axcorrelate`
 /// (`axcorrelate0`, `axcorrelate1`) rather than the generic `main`/`sidechain`
-/// naming `vaco-filter-audio-dynamics` uses for its own dual-input filters.
+/// naming `vaco-filter-adynamics` uses for its own dual-input filters.
 pub(crate) const AXCORRELATE_PADS: &[Pad] = &[
     Pad {
         name: "axcorrelate0",

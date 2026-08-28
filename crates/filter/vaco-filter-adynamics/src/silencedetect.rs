@@ -71,7 +71,7 @@ impl FrameFilter for SilenceDetect {
                 let run_s = self.run_samples as f64 / self.sample_rate;
                 if !self.reported && run_s >= self.min_duration_s {
                     tracing::info!(
-                        target: "vaco_filter_audio_dynamics::silencedetect",
+                        target: "vaco_filter_adynamics::silencedetect",
                         "silence_start: {:.6}",
                         self.silence_start_s
                     );
@@ -81,7 +81,7 @@ impl FrameFilter for SilenceDetect {
                 if self.in_silence && self.reported {
                     let run_s = self.run_samples as f64 / self.sample_rate;
                     tracing::info!(
-                        target: "vaco_filter_audio_dynamics::silencedetect",
+                        target: "vaco_filter_adynamics::silencedetect",
                         "silence_end: {:.6} | silence_duration: {:.6}",
                         t,
                         run_s

@@ -20,7 +20,7 @@
 //! `volumedetect`, `astats`, `silencedetect`, `silenceremove` — five
 //! measurement/silence filters #472's own text does not mention. All
 //! fourteen are implemented here; see
-//! `docs/filter/vaco-filter-audio-dynamics.md` for which are numerically
+//! `docs/filter/vaco-filter-adynamics.md` for which are numerically
 //! verified against a real property and which are structural.
 #![forbid(unsafe_code)]
 

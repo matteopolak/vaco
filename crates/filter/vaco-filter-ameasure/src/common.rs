@@ -1,6 +1,6 @@
 //! Shared option parsing and pad descriptors.
 //!
-//! Mirrors `vaco-filter-audio-dynamics::common` exactly: options are read
+//! Mirrors `vaco-filter-adynamics::common` exactly: options are read
 //! straight off [`Instantiate::named`] rather than through a strict
 //! `vaco_opts::Options`-derived parser, so a filtergraph string setting an
 //! option this crate does not implement is silently accepted rather than
@@ -71,7 +71,7 @@ pub(crate) fn bool_opt(req: &Instantiate<'_>, keys: &[&str], default: bool) -> b
 
 /// Linear amplitude to dB, clamped rather than producing `-inf` for silence —
 /// same convention and same floor as
-/// `vaco-filter-audio-dynamics::common::db`.
+/// `vaco-filter-adynamics::common::db`.
 pub(crate) fn db(linear: f64) -> f64 {
     if linear.is_finite() && linear > 1e-12 {
         20.0 * linear.abs().log10()

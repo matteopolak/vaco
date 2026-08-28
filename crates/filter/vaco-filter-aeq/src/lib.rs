@@ -4,7 +4,7 @@
 //! `superequalizer`.
 //!
 //! FT-4.8a (GitHub #471), one of two children FT-4.8 (#56) split into for
-//! single-writer ownership — the other is `vaco-filter-audio-dynamics`
+//! single-writer ownership — the other is `vaco-filter-adynamics`
 //! (#472). Built against `vaco-filter-core` (the `Filter` trait, the
 //! `Simple` adapter) and `vaco-filter-graph` (`FilterRegistry`), exactly as
 //! `vaco-filter-audio` is.

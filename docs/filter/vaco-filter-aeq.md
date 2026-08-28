@@ -2,7 +2,7 @@
 
 T2 audio EQ filters (FT-4.8a, GitHub issue #471, one of two children epic
 FT-4.8/#56 split into for single-writer ownership — the other is
-`vaco-filter-audio-dynamics`/#472): the biquad family (`equalizer`, `bass`,
+`vaco-filter-adynamics`/#472): the biquad family (`equalizer`, `bass`,
 `lowshelf`, `treble`, `highshelf`, `tiltshelf`, `highpass`, `lowpass`,
 `bandpass`, `bandreject`, `allpass`, `biquad`) plus `anequalizer`,
 `firequalizer`, `superequalizer`.
@@ -58,7 +58,7 @@ never from an implementation.
 **This math used to live in this crate, as a `pub(crate)` module named
 `engine`.** It moved to `vaco-filter-adsp::biquad` (D19) once three other
 crates — `vaco-filter-aeffects`, `vaco-filter-ameasure` and
-`vaco-filter-audio-dynamics` — turned out to need the same two-pole design
+`vaco-filter-adynamics` — turned out to need the same two-pole design
 and, finding this crate's copy crate-private and therefore unreachable,
 each either wrote a fallback (`aeffects`'s one-pole approximations in
 `aexciter`/`deesser`/`virtualbass`) or duplicated the cookbook formulas

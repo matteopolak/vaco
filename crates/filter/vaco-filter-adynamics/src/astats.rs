@@ -75,7 +75,7 @@ impl ChannelStats {
             0.0
         };
         tracing::info!(
-            target: "vaco_filter_audio_dynamics::astats",
+            target: "vaco_filter_adynamics::astats",
             "Channel {index}: DC_offset={mean:.6} Min_level={:.6} Max_level={:.6} \
              Peak_level={:.3}dB RMS_level={:.3}dB Crest_factor={crest:.6} \
              Number_of_samples={} Zero_crossings={} Zero_crossings_rate={zc_rate:.6}",
