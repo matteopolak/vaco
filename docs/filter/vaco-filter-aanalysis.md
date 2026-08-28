@@ -1,4 +1,4 @@
-# vaco-filter-ameasure
+# vaco-filter-aanalysis
 
 T3 audio analysis and measurement filters (FT-4.13c, GitHub issue #483,
 origin plan `16-filters.md` §4.3/§8.4): `ashowinfo`, `aspectralstats`,
@@ -55,14 +55,14 @@ above. The remaining eleven are implemented and registered here.
 
 One module per filter (`src/<name>.rs`), each exposing `pub const DESC:
 FilterDesc` and a crate-private `fn create`, aggregated by
-[`registry::AmeasureRegistry`](../../crates/filter/vaco-filter-ameasure/src/registry.rs)
+[`registry::AmeasureRegistry`](../../crates/filter/vaco-filter-aanalysis/src/registry.rs)
 — the same shape every sibling audio crate uses. Two shared pieces sit
 underneath:
 
-- [`kweight`](../../crates/filter/vaco-filter-ameasure/src/kweight.rs) — the
+- [`kweight`](../../crates/filter/vaco-filter-aanalysis/src/kweight.rs) — the
   ITU-R BS.1770-4 K-weighting filter design (a high-shelf and a high-pass,
   recomputed from `(f0, Q, gain)` at the link's actual sample rate).
-- [`loudness`](../../crates/filter/vaco-filter-ameasure/src/loudness.rs) —
+- [`loudness`](../../crates/filter/vaco-filter-aanalysis/src/loudness.rs) —
   the gated BS.1770-4 loudness scanner built on `kweight`: 100 ms
   sub-blocks, the 400 ms/75%-overlap window and two-stage gate for
   Integrated Loudness, the 3 s window and percentile method for Loudness
@@ -73,7 +73,7 @@ underneath:
 through `vaco-filter-framesync`'s `Synced`/`FrameSyncFilter` adapter
 instead of `vaco-filter-core`'s `Simple`, the same way
 `vaco-filter-adynamics::sidechaincompress` does. They share one
-accumulator, [`common::PairStats`](../../crates/filter/vaco-filter-ameasure/src/common.rs)
+accumulator, [`common::PairStats`](../../crates/filter/vaco-filter-aanalysis/src/common.rs)
 (`sum_ref_sq`/`sum_est_sq`/`sum_diff_sq`/`sum_cross`/`count`), each
 filter reducing it with a different closed-form formula.
 
@@ -92,7 +92,7 @@ from its own implementation:
 | `apsnr` | `PSNR = 10*log10(peak^2/MSE)`, hand-computed on two-sample inputs (`[1,0]` vs `[0,0]` gives exactly `10*log10(2) ≈ 3.01 dB`). |
 | `asdr` | Plain SDR (`10*log10(‖ref‖²/‖ref-est‖²)`), and specifically that it is scale-*variant*: a doubled estimate still reads distortion. |
 | `asisdr` | Scale-invariant SDR (Le Roux et al. 2019, `provenance/sources.toml`'s `leroux-2019-sisdr`): the same doubled-estimate case `asdr` penalises reads as `+infinity` here — the contrast between the two filters' tests is what proves two different formulas were implemented, not one formula copied twice. |
-| `aspectralstats` | [`aspectralstats::engine::measures`](../../crates/filter/vaco-filter-ameasure/src/aspectralstats/engine.rs) is a pure function of `(magnitude, frequency)` pairs, checked against synthetic spectra with known shapes (a single-bin spectrum's centroid is that bin's frequency and its spread is exactly zero; a flat spectrum has flatness `== 1`; a spectrum symmetric about its centroid has zero skewness) — never against a second FFT run. |
+| `aspectralstats` | [`aspectralstats::engine::measures`](../../crates/filter/vaco-filter-aanalysis/src/aspectralstats/engine.rs) is a pure function of `(magnitude, frequency)` pairs, checked against synthetic spectra with known shapes (a single-bin spectrum's centroid is that bin's frequency and its spread is exactly zero; a flat spectrum has flatness `== 1`; a spectrum symmetric about its centroid has zero skewness) — never against a second FFT run. |
 | `drmeter` | The published TT Dynamic Range Meter algorithm's own fixed point (a full-scale sine reads `DR == 0` exactly) and its defining property (at *equal* sustained loudness, a higher peak-to-RMS crest factor reads a higher DR). |
 | `ebur128`/`replaygain` | A calibrated loudness reference tone: an amplitude derived independently from the closed-form loudness map (`-0.691 + 10*log10(mean square)`, not from a second gating loop) must read close to -23 LUFS, and digital silence must be fully gated away by the -70 LUFS absolute gate. |
 | `aphasemeter` | Pearson-correlation fixed points: identical channels correlate at exactly `1.0`, exact opposites at exactly `-1.0`, and channels constructed to be exactly orthogonal (not merely uncorrelated by chance) at exactly `0.0`. |

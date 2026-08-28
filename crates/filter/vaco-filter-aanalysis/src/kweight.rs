@@ -22,7 +22,7 @@
 //! shared, reusable home for them (D19). It now builds on that module
 //! directly instead of duplicating it a fourth time.
 //!
-//! **Oracle**, per `docs/filter/vaco-filter-ameasure.md`: not a second
+//! **Oracle**, per `docs/filter/vaco-filter-aanalysis.md`: not a second
 //! transcription of the same coefficients. [`crate::ebur128`]'s tests check
 //! the frequency-response *shape* this filter must have (attenuating well
 //! below 38 Hz, near-unity around 1 kHz, +4 dB well above the shelf) against

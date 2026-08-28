@@ -1,4 +1,4 @@
-//! Arbitrary filtergraph text against every `vaco-filter-ameasure` filter's
+//! Arbitrary filtergraph text against every `vaco-filter-aanalysis` filter's
 //! option parser.
 //!
 //! Mirrors `filter_audio_dynamics_options.rs`/`filter_audio_eq_options.rs`:
@@ -15,12 +15,12 @@
 //! feeds a `vaco-tx` FFT plan length, and this target is what proves a
 //! hostile `win_size=` string cannot turn into an unbounded or panicking
 //! allocation despite the reference accepting up to `65536`.
-//! fuzz-crate: vaco-filter-ameasure
+//! fuzz-crate: vaco-filter-aanalysis
 
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use vaco_filter_ameasure::registry::AmeasureRegistry;
+use vaco_filter_aanalysis::registry::AmeasureRegistry;
 use vaco_filter_graph::registry::{FilterRegistry, Instantiate};
 
 const NAMES: &[&str] = &[

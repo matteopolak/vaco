@@ -2,7 +2,7 @@
 //!
 //! `ffmpeg -h filter=apsnr` (2026-08-23): two inputs (`input0`/`input1`),
 //! one audio output; no options besides the generic `enable=` timeline
-//! (accepted, not applied — see `docs/filter/vaco-filter-ameasure.md`).
+//! (accepted, not applied — see `docs/filter/vaco-filter-aanalysis.md`).
 //! `input0` is treated as the reference and passed through unchanged;
 //! `input1` is the signal under test. That direction is this crate's own
 //! documented convention, not a measured fact about the reference. The
@@ -67,7 +67,7 @@ impl FrameSyncFilter for Apsnr {
             }
             if let Some(psnr) = self.stats.psnr_db() {
                 tracing::info!(
-                    target: "vaco_filter_ameasure::apsnr",
+                    target: "vaco_filter_aanalysis::apsnr",
                     "psnr_avg: {}",
                     if psnr.is_finite() { format!("{psnr:.2}") } else { "inf".to_owned() },
                 );

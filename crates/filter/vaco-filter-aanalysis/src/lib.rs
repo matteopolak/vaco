@@ -88,7 +88,7 @@
 //! match to the reference's unmeasured algorithm; see that module's doc).
 //! `ebur128`'s and `aphasemeter`'s video output, and BS.1770's true-peak
 //! oversampling filter, are documented gaps, not implemented at all. See
-//! `docs/filter/vaco-filter-ameasure.md`.
+//! `docs/filter/vaco-filter-aanalysis.md`.
 #![forbid(unsafe_code)]
 
 pub mod aderivative;
@@ -96,9 +96,9 @@ pub mod aintegral;
 pub mod aphasemeter;
 pub mod apsnr;
 pub mod asdr;
+pub mod ashowinfo;
 pub mod asisdr;
 pub mod aspectralstats;
-pub mod ashowinfo;
 mod common;
 pub mod drmeter;
 pub mod ebur128;

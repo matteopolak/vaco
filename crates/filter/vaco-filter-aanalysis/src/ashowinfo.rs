@@ -39,7 +39,9 @@ pub const DESC: FilterDesc = FilterDesc {
 fn fnv1a(bytes: &[u8]) -> u32 {
     const OFFSET: u32 = 0x811c_9dc5;
     const PRIME: u32 = 0x0100_0193;
-    bytes.iter().fold(OFFSET, |h, &b| (h ^ u32::from(b)).wrapping_mul(PRIME))
+    bytes
+        .iter()
+        .fold(OFFSET, |h, &b| (h ^ u32::from(b)).wrapping_mul(PRIME))
 }
 
 #[derive(Debug, Clone, Default)]
@@ -87,7 +89,7 @@ impl FrameFilter for ShowInfo {
             .join(" ");
 
         tracing::info!(
-            target: "vaco_filter_ameasure::ashowinfo",
+            target: "vaco_filter_aanalysis::ashowinfo",
             "n:{} pts:{} pts_time:{:.6} fmt:{} channels:{} chlayout:{} rate:{} \
              nb_samples:{} checksum:{:08X} plane_checksums: [ {} ]",
             self.index,

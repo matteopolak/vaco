@@ -64,11 +64,11 @@ impl FrameFilter for ReplayGain {
         let track_gain = TARGET_LUFS - measured;
         let track_peak = self.meter.sample_peak_linear();
         tracing::info!(
-            target: "vaco_filter_ameasure::replaygain",
+            target: "vaco_filter_aanalysis::replaygain",
             "track_gain = {track_gain:+.2} dB",
         );
         tracing::info!(
-            target: "vaco_filter_ameasure::replaygain",
+            target: "vaco_filter_aanalysis::replaygain",
             "track_peak = {track_peak:.6}",
         );
         Ok(FrameOut::None)

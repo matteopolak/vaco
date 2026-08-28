@@ -86,10 +86,7 @@ fn hann(n: usize) -> Vec<f64> {
         return vec![1.0; n];
     }
     (0..n)
-        .map(|i| {
-            0.5 - 0.5
-                * (2.0 * std::f64::consts::PI * i as f64 / n as f64).cos()
-        })
+        .map(|i| 0.5 - 0.5 * (2.0 * std::f64::consts::PI * i as f64 / n as f64).cos())
         .collect()
 }
 
@@ -148,7 +145,7 @@ impl SpectralStats {
             };
             let m = engine::measures(&mag, &freqs, prev);
             tracing::info!(
-                target: "vaco_filter_ameasure::aspectralstats",
+                target: "vaco_filter_aanalysis::aspectralstats",
                 channel = index,
                 mean = m.mean,
                 variance = m.variance,
@@ -184,7 +181,8 @@ impl FrameFilter for SpectralStats {
     fn filter_frame(&mut self, _ctx: &mut FilterContext<'_>, input: Frame) -> Result<FrameOut> {
         let (_fmt, _rate, _samples, _layout, channels) = crate::sample::decode(&input)?;
         if self.channels.len() != channels.len() {
-            self.channels.resize_with(channels.len(), ChannelWindow::default);
+            self.channels
+                .resize_with(channels.len(), ChannelWindow::default);
         }
         for (i, ch) in channels.iter().enumerate() {
             if let Some(slot) = self.channels.get_mut(i) {

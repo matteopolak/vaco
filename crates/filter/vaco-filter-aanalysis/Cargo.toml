@@ -1,5 +1,5 @@
 [package]
-name = "vaco-filter-ameasure"
+name = "vaco-filter-aanalysis"
 description = "T3 audio analysis and measurement filters (FT-4.13c, GitHub #483): ashowinfo, aspectralstats, apsnr, asdr, asisdr, drmeter, ebur128, replaygain, aphasemeter, aderivative, aintegral."
 version.workspace = true
 edition.workspace = true

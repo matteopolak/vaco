@@ -15,7 +15,7 @@ use vaco_filter_graph::registry::{FilterRegistry, Instance, Instantiate};
 /// first) already registers it too — a genuine cross-issue overlap (two
 /// work packages independently listed the same filter), not a mistake
 /// either agent could see coming without cross-referencing the other's
-/// fragment. See `docs/filter/vaco-filter-ameasure.md` for the full
+/// fragment. See `docs/filter/vaco-filter-aanalysis.md` for the full
 /// reconciliation, including where GitHub #483's own suggested list was
 /// wrong in other ways.
 const NAMES: &[&str] = &[
@@ -54,7 +54,7 @@ impl FilterRegistry for AmeasureRegistry {
             "drmeter" => crate::drmeter::create(req),
             "ebur128" => crate::ebur128::create(req),
             "replaygain" => crate::replaygain::create(req),
-            other => return Err(format!("vaco-filter-ameasure: no filter named `{other}`")),
+            other => return Err(format!("vaco-filter-aanalysis: no filter named `{other}`")),
         })
     }
 }

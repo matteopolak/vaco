@@ -5,7 +5,7 @@
 //! `aderivative/aintegral AVOptions` header). Timeline (`enable=`) is
 //! reported as supported; not implemented here — this filter always runs,
 //! a documented gap shared with the rest of this crate's dual-input
-//! filters (see `docs/filter/vaco-filter-ameasure.md`).
+//! filters (see `docs/filter/vaco-filter-aanalysis.md`).
 //!
 //! `y[n] = x[n] - x[n-1]`, first-order backward difference, per channel,
 //! with each channel's own last-sample memory carried across frames.

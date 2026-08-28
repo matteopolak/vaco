@@ -65,7 +65,7 @@ impl FrameSyncFilter for Asisdr {
             }
             if let Some(si_sdr) = self.stats.si_sdr_db() {
                 tracing::info!(
-                    target: "vaco_filter_ameasure::asisdr",
+                    target: "vaco_filter_aanalysis::asisdr",
                     "si_sdr_avg: {}",
                     if si_sdr.is_finite() { format!("{si_sdr:.2}") } else { "inf".to_owned() },
                 );

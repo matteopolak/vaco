@@ -179,6 +179,9 @@ optional = true
 path = "../../format/vaco-demux-rtsp"
 optional = true
 
+[dependencies.vaco-filter-aanalysis]
+path = "../../filter/vaco-filter-aanalysis"
+
 [dependencies.vaco-filter-adynamics]
 path = "../../filter/vaco-filter-adynamics"
 
@@ -187,9 +190,6 @@ path = "../../filter/vaco-filter-aeffects"
 
 [dependencies.vaco-filter-aeq]
 path = "../../filter/vaco-filter-aeq"
-
-[dependencies.vaco-filter-ameasure]
-path = "../../filter/vaco-filter-ameasure"
 
 [dependencies.vaco-filter-analysis]
 path = "../../filter/vaco-filter-analysis"

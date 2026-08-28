@@ -66,7 +66,7 @@ impl FrameSyncFilter for Asdr {
             }
             if let Some(sdr) = self.stats.sdr_db() {
                 tracing::info!(
-                    target: "vaco_filter_ameasure::asdr",
+                    target: "vaco_filter_aanalysis::asdr",
                     "sdr_avg: {}",
                     if sdr.is_finite() { format!("{sdr:.2}") } else { "inf".to_owned() },
                 );

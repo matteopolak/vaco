@@ -36,7 +36,7 @@ their own instead of asking for it to move:
 * `vaco-filter-aeffects` shipped one-pole approximations in `aexciter`,
   `deesser` and `virtualbass` — documented in those modules as "no
   cross-crate biquad access".
-* `vaco-filter-ameasure::kweight` (BS.1770-4 K-weighting) duplicated the
+* `vaco-filter-aanalysis::kweight` (BS.1770-4 K-weighting) duplicated the
   cookbook high-shelf and high-pass formulas outright, with its own
   `Coeffs`/`BiquadState` types.
 * `vaco-filter-adynamics::mcompand` duplicated the cookbook Butterworth
@@ -89,7 +89,7 @@ difference, not just four copies of the same formula:
   `mcompand`'s prior exact behaviour meant keeping that guard in
   `mcompand.rs` itself (`crossover_lowpass`/`crossover_highpass`), calling
   into this module only inside the valid range — see that crate's doc.
-* `vaco-filter-ameasure::kweight`'s old `normalize` used a different,
+* `vaco-filter-aanalysis::kweight`'s old `normalize` used a different,
   looser zero-`a0` fallback: it replaced `a0` with `1.0` and left the
   numerator coefficients as computed, rather than returning the identity
   section. For the fixed BS.1770-4 design points that module uses this

@@ -79,7 +79,9 @@ impl LoudnessMeter {
         if self.kw.len() == channels {
             return;
         }
-        self.kw = (0..channels).map(|_| KWeight::new(self.sample_rate)).collect();
+        self.kw = (0..channels)
+            .map(|_| KWeight::new(self.sample_rate))
+            .collect();
         self.weights = (0..channels)
             .map(|i| {
                 let ch = u32::try_from(i).ok().and_then(|i| layout.channel_at(i));
@@ -97,7 +99,9 @@ impl LoudnessMeter {
             for (c, ch) in channels.iter().enumerate() {
                 let Some(&x) = ch.get(i) else { continue };
                 self.sample_peak = self.sample_peak.max(x.abs());
-                let Some(kw) = self.kw.get_mut(c) else { continue };
+                let Some(kw) = self.kw.get_mut(c) else {
+                    continue;
+                };
                 let y = kw.process(x);
                 if let Some(slot) = self.cur_sumsq.get_mut(c) {
                     *slot += y * y;

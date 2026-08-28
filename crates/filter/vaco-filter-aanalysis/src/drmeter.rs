@@ -136,7 +136,8 @@ impl FrameFilter for DrMeter {
     fn filter_frame(&mut self, _ctx: &mut FilterContext<'_>, input: Frame) -> Result<FrameOut> {
         let (_fmt, _rate, _samples, _layout, channels) = crate::sample::decode(&input)?;
         if self.channels.len() != channels.len() {
-            self.channels.resize(channels.len(), ChannelBlocks::default());
+            self.channels
+                .resize(channels.len(), ChannelBlocks::default());
         }
         let block_len = ((self.length_s * self.sample_rate).round().max(1.0)) as usize;
         for (acc, ch) in self.channels.iter_mut().zip(channels.iter()) {
@@ -154,7 +155,7 @@ impl FrameFilter for DrMeter {
             acc.finish_block();
             let dr = acc.dr();
             tracing::info!(
-                target: "vaco_filter_ameasure::drmeter",
+                target: "vaco_filter_aanalysis::drmeter",
                 "Channel {}: DR: {}",
                 i + 1,
                 dr.map_or_else(|| "nan".to_owned(), |v| format!("{v:.1}")),
@@ -170,7 +171,7 @@ impl FrameFilter for DrMeter {
             "nan".to_owned()
         };
         tracing::info!(
-            target: "vaco_filter_ameasure::drmeter",
+            target: "vaco_filter_aanalysis::drmeter",
             "Overall DR: {overall}",
         );
         self.channels.clear();

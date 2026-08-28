@@ -57,7 +57,7 @@ never from an implementation.
 
 **This math used to live in this crate, as a `pub(crate)` module named
 `engine`.** It moved to `vaco-filter-adsp::biquad` (D19) once three other
-crates — `vaco-filter-aeffects`, `vaco-filter-ameasure` and
+crates — `vaco-filter-aeffects`, `vaco-filter-aanalysis` and
 `vaco-filter-adynamics` — turned out to need the same two-pole design
 and, finding this crate's copy crate-private and therefore unreachable,
 each either wrote a fallback (`aeffects`'s one-pole approximations in

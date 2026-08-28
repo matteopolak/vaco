@@ -64,7 +64,7 @@ impl FrameFilter for Ebur128 {
         let range = self.meter.loudness_range_lu();
         let sample_peak_db = db(self.meter.sample_peak_linear());
         tracing::info!(
-            target: "vaco_filter_ameasure::ebur128",
+            target: "vaco_filter_aanalysis::ebur128",
             "integrated: {integrated:.1} LUFS range: {range:.1} LU \
              sample_peak: {sample_peak_db:.1} dBFS true_peak: {sample_peak_db:.1} dBFS",
         );

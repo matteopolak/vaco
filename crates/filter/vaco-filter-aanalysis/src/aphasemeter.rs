@@ -88,7 +88,7 @@ impl EventTracker {
             self.run_seconds += block_seconds;
             if !self.reported && self.run_seconds >= duration {
                 tracing::info!(
-                    target: "vaco_filter_ameasure::aphasemeter",
+                    target: "vaco_filter_aanalysis::aphasemeter",
                     "{name}_start: {:.6}",
                     self.start_seconds,
                 );
@@ -97,7 +97,7 @@ impl EventTracker {
         } else {
             if self.active && self.reported {
                 tracing::info!(
-                    target: "vaco_filter_ameasure::aphasemeter",
+                    target: "vaco_filter_aanalysis::aphasemeter",
                     "{name}_end: {t:.6} | {name}_duration: {:.6}",
                     self.run_seconds,
                 );
@@ -143,9 +143,7 @@ impl FrameFilter for PhaseMeter {
         let Some(r) = channels.get(1) else {
             return Ok(FrameOut::One(input));
         };
-        let block_len = (self.sample_rate / self.rate_hz.max(1e-6))
-            .round()
-            .max(1.0) as usize;
+        let block_len = (self.sample_rate / self.rate_hz.max(1e-6)).round().max(1.0) as usize;
         let block_seconds = block_len as f64 / self.sample_rate;
         let angle_cos = (self.angle_deg.to_radians()).cos();
         let mono_threshold = 1.0 - self.tolerance;
@@ -159,8 +157,13 @@ impl FrameFilter for PhaseMeter {
             };
             let corr = correlation(lw, rw);
             let t = self.elapsed_seconds;
-            self.mono
-                .observe(corr >= mono_threshold, t, block_seconds, self.duration_s, "mono");
+            self.mono.observe(
+                corr >= mono_threshold,
+                t,
+                block_seconds,
+                self.duration_s,
+                "mono",
+            );
             self.out_phase.observe(
                 corr <= angle_cos,
                 t,
