@@ -814,6 +814,20 @@ acquired = "2026-08-28"
 where    = "https://www.atsc.org/wp-content/uploads/2015/03/A52-201212-17.pdf"
 
 [[source]]
+id       = "xiph-vorbis-i"
+kind     = "spec"
+title    = "Vorbis I specification (Xiph.Org Foundation), Ogg Vorbis I format specification"
+acquired = "2026-08-28"
+where    = "https://xiph.org/vorbis/doc/Vorbis_I_spec.html"
+
+[[source]]
+id       = "ffmpeg-vorbis-flac-alac-probe"
+kind     = "blackbox"
+title    = "ffmpeg 8.1 -c:a vorbis/flac/alac, measured: Vorbis identification/comment header byte layout, the Xiph header-packing convention Matroska CodecPrivate carries (packet count, lace-encoded lengths, concatenated packets), FLAC STREAMINFO/METADATA_BLOCK_PICTURE byte layout, ALAC ALACSpecificConfig byte layout inside MP4's nested alac box, and each codec's sample_fmt/bits_per_raw_sample"
+acquired = "2026-08-28"
+where    = "ffmpeg/ffprobe 8.1 binaries, black-box"
+
+[[source]]
 id       = "etsi-en-300-743"
 kind     = "spec"
 title    = "ETSI EN 300 743 V1.5.1 (2014-01), Digital Video Broadcasting (DVB); Subtitling systems — used directly for clause 7.2 (segment/page/region/CLUT/object syntax), clause 7.2.5.2 (2-/4-/8-bit pixel-code run-length grammars) and clause 10 (default CLUT/map-table contents)"
