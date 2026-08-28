@@ -134,6 +134,62 @@ pub(crate) fn median3(a: i32, b: i32, c: i32) -> i32 {
     a.max(b).min(a.min(b).max(c))
 }
 
+/// Annex F §F.2 (`Vaco-Spec-Ref: itu-t-h263` Figure F.1): which three
+/// already-decoded 8x8 luma blocks feed `MV1`/`MV2`/`MV3` for one block
+/// (0..=3, Figure 5's numbering: 0 top-left, 1 top-right, 2 bottom-left,
+/// 3 bottom-right) of a macroblock using the Advanced Prediction mode's
+/// per-block motion vectors — one vector's own predictor, not the OBMC
+/// pixel-reconstruction weighting (Figures F.2-F.4/`§F.3`), which is a
+/// separate, not-yet-implemented piece.
+///
+/// Returned as `(dgx, dgy)` offsets in a fine grid of 8x8 blocks (two
+/// columns/rows per macroblock, raster order) *relative to this block's
+/// own position* — the caller adds them to `(block_gx, block_gy)` and
+/// looks up whatever macroblock (already-decoded neighbour or the
+/// current one) owns that grid cell. A cell inside the *current*
+/// macroblock is what Figure F.1 draws with a thick border ("internal");
+/// a cell in a different, already-decoded macroblock is what it draws as
+/// a separate thin-bordered box ("external") — this function does not
+/// distinguish the two cases itself, since the distinction falls out
+/// automatically from which macroblock the resulting absolute grid
+/// position belongs to.
+///
+/// Block 0 is the exception the primary text calls out explicitly (F.2:
+/// "If only one vector per macroblock is present, MV1, MV2 and MV3 are
+/// defined as for the 8*8 block numbered 1" — i.e. block 0 here keeps
+/// the *macroblock*-granularity §6.1.1/Figure 12 rule bit-for-bit, not a
+/// naive extension of the fine-grid rule below to its own position: its
+/// `MV3` is the above-*macroblock*-to-the-right's own block 2, two grid
+/// columns over, not the block one grid column over (which is still
+/// inside the directly-above macroblock). Blocks 1, 2 and 3 all use one
+/// uniform rule instead — left/above/above-right in the fine grid,
+/// exactly Figure 12's shape one level finer — which was measured
+/// directly off Figure F.1 (pixel-thickness analysis of a 300dpi render,
+/// distinguishing the thick/thin border convention; see
+/// `docs/codec/vaco-codec-h263.md`'s own account, including a correction
+/// to this project's own earlier claim that block 2 was "fully
+/// internal" — its `MV1` is external), then cross-checked bit-exact
+/// against a real `ffmpeg -flags +mv4 -obmc 1` fixture: for every one of
+/// 63 interior macroblocks (non-uniform, per-macroblock-varying motion,
+/// deliberately constructed so an internal-vs-external misreading would
+/// diverge numerically) in a real encode, `predictor + MVD` computed
+/// with the offsets below reproduces `ffmpeg`'s own decoded final vector
+/// exactly, for all four blocks — 100%, where a plausible wrong
+/// alternate reading (e.g. the pre-correction "block 2 fully internal"
+/// claim) matches only by coincidence on a small fraction of blocks.
+#[must_use]
+#[allow(
+    dead_code,
+    reason = "landed ahead of its consumer: the OBMC weighting (Figure F.2-F.4/§F.3), remote-vector substitution and 4-vector MCBPC bitstream wiring this predictor rule needs are not implemented yet (see docs/codec/vaco-codec-h263.md's Annex F account) — this function is the verified piece, confirmed bit-exact against a real `ffmpeg -flags +mv4 -obmc 1` fixture, ready for that follow-up round to call"
+)]
+pub(crate) const fn annex_f_predictor_sources(block: u8) -> [(i32, i32); 3] {
+    match block {
+        0 => [(-1, 0), (0, -1), (2, -1)],
+        1 | 2 => [(-1, 0), (0, -1), (1, -1)],
+        _ => [(-1, 0), (-1, -1), (0, -1)],
+    }
+}
+
 /// §7.6.4-style half-pel sample: `mv` is in half-pel units. Read one
 /// sample from `refp` at integer/half-pel position `(src_x, src_y) +
 /// mv/2`, using bilinear interpolation (H.263 §6.1.2, Figure 12:
@@ -291,5 +347,37 @@ mod tests {
         // actually crosses an integer boundary between the two rules.
         assert_eq!(avg4(2, 2, 3, 3, false), 3);
         assert_eq!(avg4(2, 2, 3, 3, true), 2);
+    }
+
+    #[test]
+    fn annex_f_block0_matches_the_base_single_vector_rule() {
+        // F.2's own text: block 0 equals §6.1.1/Figure 12 exactly — left,
+        // above, above-*macroblock*-right (two grid columns over, not
+        // one: the grid cell one column over is still inside the
+        // directly-above macroblock).
+        assert_eq!(annex_f_predictor_sources(0), [(-1, 0), (0, -1), (2, -1)]);
+    }
+
+    #[test]
+    fn annex_f_blocks_1_and_2_share_the_uniform_fine_grid_rule() {
+        // Both use the plain left/above/above-right fine-grid rule
+        // (Figure 12's own shape, one 8x8-block level finer) — for block
+        // 1 this lands on an *internal* MV1 (offset (-1,0) reaches block
+        // 0, inside the same macroblock) and *external* MV2/MV3; for
+        // block 2 the same three offsets land on an *internal* MV2/MV3
+        // (blocks 0 and 1) and an *external* MV1 — the reading that
+        // corrects this project's own earlier "block 2 fully internal"
+        // documentation error. The two blocks' offset triples are
+        // identical; only their own base position differs, which is what
+        // the caller adds them to.
+        assert_eq!(annex_f_predictor_sources(1), [(-1, 0), (0, -1), (1, -1)]);
+        assert_eq!(annex_f_predictor_sources(2), [(-1, 0), (0, -1), (1, -1)]);
+    }
+
+    #[test]
+    fn annex_f_block3_is_fully_internal() {
+        // All three offsets land inside the current macroblock: MV1 =
+        // block 2, MV2 = block 0, MV3 = block 1 — none external.
+        assert_eq!(annex_f_predictor_sources(3), [(-1, 0), (-1, -1), (0, -1)]);
     }
 }
