@@ -114,6 +114,21 @@ const NATIVE_ONLY: &[(&str, &str)] = &[
          `sys`'). A wasm build reaches an HTTP proxy tunnel through the host \
          runtime's own fetch/WebSocket machinery, not this crate.",
     ),
+    (
+        "vaco-protocol-icecast",
+        "depends on vaco-protocol-socket and vaco-protocol-tls (the SOURCE/PUT \
+         handshake dials its own duplex TcpStream or TlsStream directly, \
+         exactly like vaco-protocol-tls/-gopher/-ftp/-httpproxy, rather than \
+         through the registry's one-directional Protocol::open/create — see \
+         the crate docs). Measured: cargo check --target wasm32-unknown-unknown \
+         on this crate fails inside getrandom (pulled in transitively through \
+         vaco-protocol-tls's TLS stack) with 'the wasm*-unknown-unknown \
+         targets are not supported by default' — a different symptom than \
+         socket2's own E0583, but the same underlying wall: this dependency \
+         chain assumes a native OS. A wasm build reaches an Icecast source \
+         through the host runtime's own fetch/WebSocket machinery, not this \
+         crate.",
+    ),
 ];
 
 const TARGET: &str = "wasm32-unknown-unknown";

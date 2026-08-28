@@ -1,0 +1,18 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# `default = false`, same reasoning and same measurement as
+# `vaco-protocol-http`'s fragment: this crate depends on
+# `vaco-protocol-socket` (`socket2`, via `vaco-protocol-tls` and directly),
+# which is `NATIVE_ONLY` in `cargo xtask wasm-check`. Without `default =
+# false` here, `protocol-icecast` becomes a *default* optional dependency of
+# `vaco-registry`, and anything depending on `vaco-registry` with default
+# features (`vaco-cli` included) drags `socket2` into its own wasm build and
+# fails on the same wall.
+
+[[component]]
+kind      = "protocol"
+name      = "icecast"
+long_name = "Icecast protocol"
+feature   = "protocol-icecast"
+default   = false
+ctor      = "vaco_protocol_icecast::ICECAST_PROTOCOL"
