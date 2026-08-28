@@ -4847,3 +4847,95 @@ not committed — left for the orchestrator's sweep, per standing
 instruction).
 
 Vaco-Spec-Ref: ffmpeg-smoothstreaming-mux-probe
+
+
+### #355's residual localised to the escape-sentinel coefficient via a controlled same-position pair, not resolved
+
+The previous round eliminated "the sentinel decode is unconditionally
+wrong" (7 of 9 firings in the fixture decode correctly, including two
+other macroblocks in the same defective picture). That elimination left
+a genuine puzzle rather than a closed case: the mechanism correlates with
+the defect without an established causal link. This round exploited a
+controlled comparison the investigation had not yet used: `mb=(3,1)`,
+decoded at frame 0 (works, within the known small ceiling) and frame 15
+(broken, max diff 97) — same macroblock position, same code path, one
+correct output and one wrong one, from already-dumped data (no new
+instrumentation needed for this half of the round).
+
+**Method.** Converted each frame's already-dumped, inverse-scanned
+(`block::inverse_scan`'s natural-order) coefficient array back to decode
+order (`tables::ZIGZAG_SCAN`'s own permutation, inverted) to recover the
+literal run/level token sequence each frame's slice bits produced.
+Compared token-for-token across the two frames' `mb=(3,1)` (`i=1`, `i=3`)
+and, for a second independent macroblock, `mb=(0,1)` (`i=0`, `i=2`) — four
+sub-blocks total, chosen because each contains exactly one escape+
+sentinel-decoded coefficient (already identified last round) alongside
+several ordinary VLC-decoded ones.
+
+**Result.** Every ordinary (non-escape) coefficient's zero/non-zero
+position matches exactly between frame 0 and frame 15 in all four
+sub-blocks, and its magnitude scales in a tight band (1.33x-2.0x,
+clustering almost exactly on 1.5x) between the two frames — matching the
+frame 0:frame 15 quantiser-scale ratio (6:4) essentially exactly, which
+is what a genuinely similar underlying image encoded at two different
+precisions should produce. 16 such ordinary-coefficient pairs checked
+across the four sub-blocks, zero exceptions.
+
+**Exactly one coefficient per sub-block breaks this pattern, every
+single time: the escape+sentinel-decoded one — always the block's first
+AC coefficient, always its largest-magnitude one.** Its frame15:frame0
+ratio is 0.47, 0.47, 0.60, and 0.66 across the four sub-blocks
+respectively — smaller than frame 0's own value, the opposite direction
+every other coefficient in the same blocks moves. This is the first (and
+only) point at which the two decodes diverge from their shared structure;
+everything before and after it, within each block, tracks perfectly.
+
+**The DC-predictor chain was checked at frame 15 specifically, not
+carried over by assumption from an earlier round's frame-0-only
+elimination** (flagged as untested at the picture that actually shows the
+defect, and the same trap this investigation has fallen into twice
+before with corpus-wide or single-frame eliminations). All twelve
+reconstructed DC values across `mb=(3,1)`'s and `mb=(0,1)`'s six blocks
+each are byte-identical between frame 0 and frame 15. Predictor-state
+corruption at frame 15 is ruled out directly, not assumed.
+
+**What this does and does not establish.** It sharpens the previous
+elimination into a specific, four-times-reproduced symptom rather than a
+diffuse correlation: not "escape/sentinel decode sometimes misfires
+somewhere in this picture" but "the escape/sentinel-decoded coefficient
+specifically, and only it, breaks an otherwise-exact scaling relationship
+in every defective sub-block, in a consistent direction." It does not
+establish a verified root cause or a fix. `mb=(0,2)`/`mb=(2,2)`'s sentinel
+firings in the same picture still match reference exactly, so whatever is
+wrong is conditional, not universal to the sub-case; the specific
+condition was not identified this round. No fix was attempted: this
+project has no legitimate access to ISO/IEC 11172-2's own text for the
+sentinel sub-case's exact byte semantics (the existing implementation's
+own comment already documents choosing its non-sentinel escape's sign
+convention by differential testing rather than from the standard, for the
+same reason), and proposing a specific alternate formula without a way to
+verify it against either primary text or a passing measurement would
+repeat a pattern already paid for more than once in this investigation.
+
+**Not chased further this round, per instruction:** `m1_i`'s own separate
+max-9 residual.
+
+**Handoff for a future round:** the divergence is narrower than "entropy
+decoding of dense AC runs" (the previous round's framing) — it is
+specifically the escape+sentinel byte-pair's magnitude computation, under
+a condition `mb=(0,2)`/`mb=(2,2)`'s own sentinel firings don't hit. A
+productive next step is checking whether that condition tracks something
+observable without primary-text access: e.g., whether the *sign* of the
+sentinel byte (`0x00` vs `0x80`) or the specific second-byte value range
+correlates with correctness across a larger corpus than this one
+fixture's nine firings, since nine data points (7 correct one place, 2
+wrong another) is not yet enough to separate "a real conditional bug" from
+"coincidence with this particular content."
+
+Gates green (`cargo test/clippy -p vaco-codec-mpeg12`, full
+`layer-check`/`dep-gate`/`unsafe-audit`/`dup-check`/`time-gate`/
+`owner-gate`/`vlc-scan`) — no code touched this round, analysis only,
+against data already dumped by the previous round's (reverted)
+instrumentation.
+
+`Vaco-Spec-Ref: itu-t-h262` Annex D.9.3.
