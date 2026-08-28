@@ -375,6 +375,83 @@ is not met for either format**, so no issue claiming it is closed by this
 work — but MPEG-2 decode is now correct in every way this session's
 differential testing can measure short of that literal bit-exactness bar.
 
+### #356 closed on a replacement bar; #355 stays open — the split, and why
+
+A later round proved (`planning/TECH-DEBT.md`'s two IDCT entries) that the
+"framemd5-identical" bar above is not just unmet but **permanently
+unreachable** for this crate without adopting a specific reference
+decoder's own integer IDCT verbatim — measured by black-box bitstream
+probing, not asserted. That finding forces a judgement on both open
+issues carrying this bar, and they do not land the same way.
+
+**#356 (T2-01b: 4:2:2, alternate scan, intra-VLC, all chroma formats)
+closes on a replacement bar**, the same shape `vaco-mux-mxf`'s #609/#610
+used for their own unreachable byte-identity criterion:
+
+- **Reference-quality on every fixture that can be built.** The five
+  fixtures this work package added (`m2_422`, `m2_422_ipb`, `m2_altscan`,
+  `m2_intravlc`, `m2_422_alt_ivlc`) all sit in the same avg/max-MAD band
+  the pre-existing 4:2:0 corpus already occupies (avg MAD 1.6-4.3, max MAD
+  2-5 — see "Measured accuracy" above). The one fixture with a higher
+  plateau (`m2_422_alt_ivlc`, max MAD 5 against every other fixture's 2)
+  was checked per-frame rather than accepted at face value: it grows
+  frame 0 (max 1) to frame 2 (max 5) and then holds flat through frame 9,
+  the identical *shape* (fast growth, then plateau, smooth `mean` growth,
+  no spikes) every other P-chain fixture in this crate shows at its own
+  plateau value — combining three format changes at once shifts which
+  coefficient patterns get exercised, and the proven-non-linear IDCT
+  mismatch (see the TECH-DEBT entries) produces a different but equally
+  bounded, equally smooth plateau. Not a new defect; the same one,
+  landing slightly differently on different content.
+- **Tier-3 verification on every table this round touched**:
+  `TABLE_ZERO`/`TABLE_ONE`/`CODED_BLOCK_PATTERN`/`ALTERNATE_SCAN`, each
+  checked line by line against two independent extractions of the primary
+  text, zero mismatches.
+- **Every scan/VLC combination the issue names is exercised**: zigzag and
+  alternate scan, Table B.14 and B.15, each independently and combined,
+  against real `ffmpeg`-encoded fixtures confirmed (via `ffprobe`) to
+  actually carry the relevant flags.
+- **4:4:4 is named as a real, structural, permanent limit, not hidden**:
+  `ffmpeg`'s own `mpeg2video` encoder cannot produce `yuv444p` output at
+  all, so this chroma format has zero possible differential-fixture
+  coverage from this project's own tooling and never can — covered only
+  by hand-crafted `ChromaFormat` unit tests, with the one apparent
+  dimensional defect in H.262's own `coded_block_pattern_2` pseudocode
+  implemented literally rather than guessed at (see "Known gaps").
+
+Every part of that bar is met, so #356 is closed on it.
+
+**#355 (T2-01a) stays open, because the ceiling only accounts for part of
+its own gap.** #355's scope covers both formats, and the two do not carry
+the same evidence:
+
+- The **MPEG-2 portion** of #355's own corpus sits in the exact same
+  reference-quality band as #356's (avg MAD 1.0-1.8, max MAD 2 across
+  every MPEG-2 fixture — `m2_i`/`m2_ip`/`m2_ipb`/`m2_ilme`/`m2_oddsize`/
+  `m2_qcif_ipb`/`m2_cif_ipb`). That part of #355's gap is fully explained
+  by the same measured, permanent IDCT ceiling #356 closes on.
+- The **MPEG-1 portion is not.** `m1_i`/`m1_ip`/`m1_ipb` measure avg MAD
+  12.9-44.8, max MAD 21-97 — ten to fifty times larger than anything the
+  IDCT ceiling produces anywhere it has been measured, on MPEG-2 or
+  MPEG-1 content alike. A rounding-schedule mismatch bounded to a few
+  pixel-units per block, even compounded across a full P-chain, does not
+  reach a max deviation of 97 out of 255 — every long MPEG-2 P-chain
+  fixture in this corpus (`m2_qcif_ipb`, `m2_cif_ipb`, 25 frames each)
+  plateaus at max MAD 2 despite being longer than any MPEG-1 fixture
+  measured. This gap has had five investigation rounds (`TECH-DEBT.md`)
+  without a root cause, and the IDCT ceiling does not retroactively
+  explain it — it explains a different, much smaller gap that happens to
+  share the same two issues.
+
+**"The IDCT explains some of #355's gap" is not "the IDCT explains all of
+it,"** and closing #355 on the same replacement bar #356 uses would
+misrepresent the second, larger, still-unexplained MPEG-1 defect as
+covered when it isn't. #355 stays open specifically and only for that
+MPEG-1 gap; the MPEG-2 half of its own scope is settled. Epic #36 does
+not close on this pair either way — #357 (MPEG-1/2 encode) is a real,
+untouched gap, not a ceiling, and nothing about closing #356 or partially
+resolving #355's attribution touches it.
+
 ## How to change it
 
 - **A wrong pixel value, not a crash**: suspect `block.rs` (coefficient
