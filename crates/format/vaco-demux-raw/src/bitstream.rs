@@ -208,7 +208,10 @@ pub const M4V: BitstreamSpec = spec!(
     "raw MPEG-4 video",
     &["m4v"],
     Framing::StartCode3,
-    None,
+    // MPEG-4 part 2 raw streams have no MPEG-1/2-style start-code ambiguity
+    // (see `MPEGVIDEO` below), so this reaches `vaco-parse-mpegvideo`'s
+    // `Mpeg4Parser` unconditionally.
+    Some(CodecId::Mpeg4),
     true
 );
 pub const MJPEG: BitstreamSpec = spec!(
@@ -238,7 +241,18 @@ pub const MPEGVIDEO: BitstreamSpec = spec!(
     "raw MPEG video",
     &[],
     Framing::StartCode3,
-    None,
+    // `parser_codec` is a single static `CodecId` chosen once here, so it
+    // cannot defer to "MPEG-1 or MPEG-2, decided after the first sequence
+    // header is seen" — the reference's own `mpegvideo` raw demuxer covers
+    // both off the identical `00 00 01 xx` start-code space.
+    // `PARSER_MPEG1`/`PARSER_MPEG2` both construct the same `Mpeg12Parser`
+    // and differ only in which `CodecId` reaches them through
+    // `ParserProvider::parser_for`, so either answer reaches the right
+    // parser; `Mpeg2video` is chosen because plain MPEG-1 elementary streams
+    // are rare in the wild, matching every practical `.m2v` file. A bare
+    // MPEG-1 stream opened this way states the wrong `codec_name`, which is
+    // the known, narrower limitation this accepts rather than solves.
+    Some(CodecId::Mpeg2video),
     true
 );
 pub const S337M: BitstreamSpec =
@@ -760,6 +774,29 @@ mod tests {
             assert_eq!(desc.long_name, spec.long_name);
             assert_eq!(desc.extensions, spec.extensions);
         }
+    }
+
+    #[test]
+    fn m4v_and_mpegvideo_each_name_a_parser_codec() {
+        assert_eq!(M4V.parser_codec, Some(CodecId::Mpeg4));
+        assert_eq!(MPEGVIDEO.parser_codec, Some(CodecId::Mpeg2video));
+    }
+
+    #[test]
+    fn mpegvideo_reports_its_codec_id_even_with_no_parser_available() {
+        // `NoParsers` (D14.1: this crate depends on no `vaco-parse-*` crate,
+        // so its own tests can never construct a real one) means
+        // `parser_for` always answers `None` here, exercising the
+        // `Frames::Spans` fallback — but `parser_codec` being `Some` still
+        // means `CodecParameters.codec_id` is set from it, and the
+        // `raw_codec_name` fallback (for a spec with no parser codec at all)
+        // is not invented alongside it.
+        let src = Box::new(MemorySource::new(vec![0, 0, 1, 0xB3, 1, 2, 3]));
+        let d =
+            BitstreamDemuxer::open(&MPEGVIDEO, src, &NoParsers, &BitstreamOptions::default())
+                .unwrap();
+        assert_eq!(d.streams()[0].params.codec_id, Some(CodecId::Mpeg2video));
+        assert_eq!(d.streams()[0].metadata_get("raw_codec_name"), None);
     }
 
     #[test]
