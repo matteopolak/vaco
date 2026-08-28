@@ -39,7 +39,7 @@ use vaco_parse_h264::{H264NalHeader, NalUnitType, ParameterSets, SliceHeader};
 /// `more_rbsp_data()` closes it for CAVLC.
 fn assert_slice_ends_at_rbsp_trailing_bits(reader: &mut BitReader<'_>, slice_count: u32) {
     let pos = reader.bit_pos();
-    let pad_bits = if pos % 8 == 0 { 8 } else { 8 - (pos % 8) };
+    let pad_bits = if pos.is_multiple_of(8) { 8 } else { 8 - (pos % 8) };
     let stop_pattern = reader.get(u32::try_from(pad_bits).unwrap());
     let expected = 1u32 << (pad_bits - 1);
     assert_eq!(
