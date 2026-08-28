@@ -479,3 +479,10 @@ kind     = "rfc"
 title    = "RFC 2428, FTP Extensions for IPv6 and NATs — the EPSV command and its (|||port|) reply format `vaco-protocol-ftp::control::parse_epsv` parses"
 acquired = "2026-08-27"
 where    = "https://www.rfc-editor.org/rfc/rfc2428"
+
+[[source]]
+id       = "rfc-1436"
+kind     = "rfc"
+title    = "RFC 1436, The Internet Gopher Protocol — the selector-line request (a bare string terminated by CRLF) and single-character item-type model `vaco-protocol-gopher` implements. Which item types this crate's client actually accepts (5, 9, s) was measured against ffmpeg 8.1 rather than taken from the RFC's full type table, since the RFC specifies what a type character means, not which ones a given client chooses to fetch"
+acquired = "2026-08-27"
+where    = "https://www.rfc-editor.org/rfc/rfc1436"

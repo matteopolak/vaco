@@ -83,6 +83,16 @@ const NATIVE_ONLY: &[(&str, &str)] = &[
          transport behind the same seam, not a wasm build of this crate.",
     ),
     (
+        "vaco-protocol-gopher",
+        "depends on vaco-protocol-socket (both directly and via \
+         vaco-protocol-tls, for gophers:) for HostPort/addr::connect — the \
+         selector round trip dials its own duplex stream directly, exactly \
+         like vaco-protocol-tls, rather than through the registry's \
+         one-directional Protocol::open/create — so it inherits the same \
+         socket2 wall vaco-protocol-socket's own NATIVE_ONLY entry \
+         documents.",
+    ),
+    (
         "vaco-protocol-ftp",
         "depends on vaco-protocol-socket for HostPort/addr::connect (both the \
          control connection and each passive data connection dial their own \
