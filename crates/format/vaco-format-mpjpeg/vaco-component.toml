@@ -1,0 +1,19 @@
+# Registry fragment, per the frozen schema in planning/19-parallel-execution.md
+# §3.4.
+
+[[component]]
+kind       = "demuxer"
+name       = "mpjpeg"
+long_name  = "MIME multipart JPEG"
+feature    = "demux-mpjpeg"
+ctor       = "vaco_format_mpjpeg::DEMUXER"
+extensions = "mjpg"
+
+[[component]]
+kind       = "muxer"
+name       = "mpjpeg"
+long_name  = "MIME multipart JPEG"
+feature    = "mux-mpjpeg"
+ctor       = "vaco_format_mpjpeg::MUXER"
+extensions = "mjpg"
+mime_types = "multipart/x-mixed-replace;boundary=ffmpeg"
