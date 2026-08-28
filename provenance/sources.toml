@@ -830,3 +830,17 @@ kind     = "spec"
 title    = "ETSI EN 300 472 V1.4.1, Specification for conveying ITU-R System B Teletext in DVB bitstreams — the 46-byte data-unit framing (data_unit_id/data_unit_length/line-and-field byte/framing_code, wrapping one EN 300 706 packet) that vaco-codec-subtitle-teletext's input is shaped as"
 acquired = "2026-08-28"
 where    = "https://www.etsi.org/deliver/etsi_en/300400_300499/300472/01.04.01_60/en_300472v010401p.pdf"
+
+[[source]]
+id       = "atsc-a53-part4-2009"
+kind     = "spec"
+title    = "ATSC A/53, Part 4:2009, ATSC Digital Television Standard, Part 4 — MPEG-2 Video System Characteristics — used directly for §6.2.3.1/Table 6.10 (MPEG_cc_data(), which packs cc_data() as defined by CEA-708 Table 2 into MPEG-2 picture user data under the \"GA94\" user_data_identifier and ATSC_user_data_type_code 0x03)"
+acquired = "2026-08-28"
+where    = "https://www.atsc.org/wp-content/uploads/2021/04/A_53-Part-4-2009.pdf"
+
+[[source]]
+id       = "smpte-eg43-2009"
+kind     = "spec"
+title    = "SMPTE EG 43:2009, System Implementation of CEA-708 and CEA-608 Closed Captioning and Program-Related Data — used directly for §6.3.4 (at most one CEA-608 datastream per program, carrying up to four channels CC1-CC4, two per field)"
+acquired = "2026-08-28"
+where    = "https://pub.smpte.org/latest/eg43/eg0043-2009.pdf"

@@ -767,47 +767,6 @@ array lengths ever silently disagree with `endmant` across a `Reuse`
 boundary — both were spot-checked, not exhaustively verified, in this
 pass.
 
-### Update 2: grouped-mantissa bugs fixed; mono's desync localised to block 2's bit-allocation output, not yet root-caused
-
-Following the constants-verification update above, pursued the coordinator's
-hypothesis that bap 1/2/4's grouped-mantissa handling was the more likely
-source of the remaining desync (an arithmetic slip there does not desync
-immediately, and shows up as accumulated drift). §7.3.5 confirmed two real,
-independent bugs in `mantissa.rs`, now fixed: the decoder equations assign
-the *first*-decomposed group digit to the current bin (the code was taking
-the *last* one, misordering every group's values without misaligning bit
-position); and a group's leftover, not-yet-full members must carry from one
-channel's mantissa stream into the next channel's ("the next exponent set
-in the block continues filling the partial groups") — `mantissa::decode`
-was resetting this state on every call instead of threading one instance
-through a whole block's channels-then-LFE sequence.
-
-5.1 improved substantially on this fix (max_abs_err 42.59 -> 16.06, rms
-1.54 -> 0.93), consistent with it being real and load-bearing. Mono is
-unchanged (6.27 / 0.85): with one channel and no LFE in that fixture there
-is no channel boundary for a partial group to hand off to, so this fix
-cannot reach mono's own cause.
-
-Localised mono's remaining desync further by independently re-deriving the
-raw bitstream (outside this crate, directly from file bytes) at the level
-of individual fields: `csnroffst`'s exact bit position, one channel's full
-D25 differential-exponent group decode, and the block-to-block bit-position
-handoff across all six blocks of frame 0. All matched this crate's own
-reader exactly, through block 2's own `snroffset` field — ruling out a
-field-order or field-width bug anywhere from the start of the frame up to
-that point. What remains: block 2's `csnroffst` (confirmed genuinely large,
-not misread) combined with `floorcod == 7`'s `floortab` entry (confirmed
-correct against Table 7.10) drives `compute_bap` to assign the maximum bap
-to nearly every bin in a block whose signal never exceeds -18 dBFS, and
-that over-allocation compounds until block 3 exhausts the frame's actual
-6144-bit budget and starts reading past the end of real data. Whether this
-is a genuine remaining bug in `compute_bap`'s downstream arithmetic given
-those two verified-correct inputs, or a real encoder choice this pass does
-not yet understand the interaction of, is the open question for whoever
-picks this up next — not yet resolved, and not something to guess at
-further without re-reading §7.2.2.5-§7.2.2.7 against a wider set of
-`(snroffset, floorcod)` combinations than this pass had time to try.
-
 ### AC-3 IMDCT window is a KBD(alpha=5) approximation, not the spec's own table
 
 `vaco-codec-ac3::imdct::kbd_window` approximates AC-3's specific 256-tap

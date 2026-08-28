@@ -49,7 +49,7 @@ vaco-codec-jpeg = { path = "../crates/codec/vaco-codec-jpeg" }
 vaco-codec-mpegaudio = { path = "../crates/codec/vaco-codec-mpegaudio" }
 vaco-codec-pnm = { path = "../crates/codec/vaco-codec-pnm" }
 vaco-codec-qoi = { path = "../crates/codec/vaco-codec-qoi" }
-vaco-codec-subtitle-bitmap = { path = "../crates/codec/vaco-codec-subtitle-bitmap" }
+vaco-codec-subtitle-cc = { path = "../crates/codec/vaco-codec-subtitle-cc" }
 vaco-codec-subtitle-teletext = { path = "../crates/codec/vaco-codec-subtitle-teletext" }
 vaco-color = { path = "../crates/model/vaco-color" }
 vaco-conformance = { path = "../crates/tool/vaco-conformance" }
@@ -115,7 +115,6 @@ vaco-format-riff = { path = "../crates/format/vaco-format-riff" }
 vaco-format-rtp = { path = "../crates/format/vaco-format-rtp" }
 vaco-format-spdif = { path = "../crates/format/vaco-format-spdif" }
 vaco-format-subtitle = { path = "../crates/format/vaco-format-subtitle" }
-vaco-format-subtitle-bitmap = { path = "../crates/format/vaco-format-subtitle-bitmap" }
 vaco-format-swf = { path = "../crates/format/vaco-format-swf" }
 vaco-frame = { path = "../crates/model/vaco-frame" }
 vaco-io = { path = "../crates/io/vaco-io" }
@@ -183,7 +182,7 @@ default = [
     "codec-mpegaudio",
     "codec-pnm",
     "codec-qoi",
-    "codec-subtitle-bitmap",
+    "codec-subtitle-cc",
     "codec-subtitle-teletext",
     "color",
     "conformance",
@@ -309,7 +308,7 @@ codec-jpeg = []
 codec-mpegaudio = []
 codec-pnm = []
 codec-qoi = []
-codec-subtitle-bitmap = []
+codec-subtitle-cc = []
 codec-subtitle-teletext = []
 color = []
 conformance = []
@@ -1711,28 +1710,12 @@ bench = false
 required-features = ["subtitle-bitmap"]
 
 [[bin]]
-name = "subtitle_bitmap_dvb"
-path = "fuzz_targets/subtitle_bitmap_dvb.rs"
+name = "subtitle_cc_data"
+path = "fuzz_targets/subtitle_cc_data.rs"
 test = false
 doc = false
 bench = false
-required-features = ["codec-subtitle-bitmap"]
-
-[[bin]]
-name = "subtitle_bitmap_pgs"
-path = "fuzz_targets/subtitle_bitmap_pgs.rs"
-test = false
-doc = false
-bench = false
-required-features = ["codec-subtitle-bitmap"]
-
-[[bin]]
-name = "subtitle_bitmap_vobsub"
-path = "fuzz_targets/subtitle_bitmap_vobsub.rs"
-test = false
-doc = false
-bench = false
-required-features = ["codec-subtitle-bitmap"]
+required-features = ["codec-subtitle-cc"]
 
 [[bin]]
 name = "subtitle_text_demux"
