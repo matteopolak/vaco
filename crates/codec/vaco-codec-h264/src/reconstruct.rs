@@ -32,7 +32,7 @@
 //! `cabac_i_only.264`'s own gap against `ffmpeg`'s real, deblocked
 //! output: 99.78% match, up from 63.77% before that filter existed and
 //! 98.97% before a hand-traced, oracle-verified tC0 table correction
-//! (vaco_codec_dsp_deblock::tables's own doc), with 18 of 25 whole
+//! (`vaco_codec_dsp_deblock::tables`'s own doc), with 18 of 25 whole
 //! frames now byte-exact and the remaining mismatches narrowed further
 //! -- see
 //! `cabac_i_only_reconstructs_without_error_and_mostly_matches_ffmpeg`'s
@@ -245,15 +245,30 @@ impl PictureBuffer {
     }
 }
 
+/// Widens a picture-space `u32` coordinate or a small fixed-bound `usize`
+/// array index to the signed space this module's neighbour-availability
+/// arithmetic needs (negative means "off the picture edge", clause 6.4.8).
+/// `vaco-limits`'s `Limits::max_dimension` bounds every real macroblock
+/// coordinate reaching this module to at most a few tens of thousands
+/// (enforced in `vaco-parse-h264`'s SPS parsing, `ue_v_max`), far below
+/// `i32::MAX`; the saturating fallback exists so this can never wrap if
+/// that bound is ever raised, not because it is expected to run --
+/// saturating keeps the result positive and past `width()`/`height()`, so
+/// `PictureBuffer::available`/`pixel` still correctly treat it as
+/// off-picture.
+fn coord<T: TryInto<i32>>(v: T) -> i32 {
+    v.try_into().unwrap_or(i32::MAX)
+}
+
 /// Builds one `Intra_4x4` block's [`crate::intra::Neighbours4`] from real
 /// picture state -- clause 8.3.1.2's own 13 neighbouring samples, plus
 /// the substitution rule for an unavailable top-right when `p[3,-1]` is
 /// itself available.
 fn intra4x4_neighbours(buf: &PictureBuffer, x: i32, y: i32) -> Neighbours4 {
     let top_available = (0..4).all(|dx| buf.available(x + dx, y - 1));
-    let top = core::array::from_fn(|dx| buf.pixel(x + dx as i32, y - 1));
+    let top = core::array::from_fn(|dx| buf.pixel(x + coord(dx), y - 1));
     let left_available = (0..4).all(|dy| buf.available(x - 1, y + dy));
-    let left = core::array::from_fn(|dy| buf.pixel(x - 1, y + dy as i32));
+    let left = core::array::from_fn(|dy| buf.pixel(x - 1, y + coord(dy)));
     let corner_available = buf.available(x - 1, y - 1);
     let corner = if corner_available {
         buf.pixel(x - 1, y - 1)
@@ -263,7 +278,7 @@ fn intra4x4_neighbours(buf: &PictureBuffer, x: i32, y: i32) -> Neighbours4 {
 
     let top_right_available = (4..8).all(|dx| buf.available(x + dx, y - 1));
     let top_right = if top_right_available {
-        core::array::from_fn(|dx| buf.pixel(x + 4 + dx as i32, y - 1))
+        core::array::from_fn(|dx| buf.pixel(x + 4 + coord(dx), y - 1))
     } else if top_available {
         // Clause 8.3.1.2's own substitution: p[3,-1]'s value stands in for
         // all four, and they are treated as available from here on.
@@ -289,6 +304,10 @@ fn intra4x4_neighbours(buf: &PictureBuffer, x: i32, y: i32) -> Neighbours4 {
 /// frame prior to decoding of the next block"), not
 /// [`reconstruct_intra16x16_luma`]'s predict-the-whole-macroblock-then-add
 /// shape.
+#[allow(
+    clippy::many_single_char_names,
+    reason = "x/y/n/c/d/r/p mirror clause 8.5's own variable names (pixel position, neighbours, coefficients, dequantised, residual, prediction sample) -- renaming would lose the direct correspondence to the spec"
+)]
 fn reconstruct_intra4x4_mb(
     buf: &mut PictureBuffer,
     mb_x: u32,
@@ -300,7 +319,7 @@ fn reconstruct_intra4x4_mb(
         let (bx, by) = blk_xy(blk);
         let x = mb_x * 16 + bx * 4;
         let y = mb_y * 16 + by * 4;
-        let n = intra4x4_neighbours(buf, x as i32, y as i32);
+        let n = intra4x4_neighbours(buf, coord(x), coord(y));
         let mode = residual
             .intra4x4_pred_mode
             .get(blk as usize)
@@ -368,10 +387,10 @@ pub(crate) fn reconstruct_picture_luma(
         if mb.is_intra16x16 {
             let x = mb.mb_x * 16;
             let y = mb.mb_y * 16;
-            let top_available = (0..16).all(|dx| buf.available(x as i32 + dx, y as i32 - 1));
-            let top = core::array::from_fn(|dx| buf.pixel(x as i32 + dx as i32, y as i32 - 1));
-            let left_available = (0..16).all(|dy| buf.available(x as i32 - 1, y as i32 + dy));
-            let left = core::array::from_fn(|dy| buf.pixel(x as i32 - 1, y as i32 + dy as i32));
+            let top_available = (0..16).all(|dx| buf.available(coord(x) + dx, coord(y) - 1));
+            let top = core::array::from_fn(|dx| buf.pixel(coord(x) + coord(dx), coord(y) - 1));
+            let left_available = (0..16).all(|dy| buf.available(coord(x) - 1, coord(y) + dy));
+            let left = core::array::from_fn(|dy| buf.pixel(coord(x) - 1, coord(y) + coord(dy)));
             let neighbours = Neighbours16 {
                 top_available,
                 top,
@@ -407,7 +426,7 @@ pub(crate) fn reconstruct_picture_luma(
 /// Clause 8.4.2's inter prediction (six-tap qpel luma via `crate::interp`)
 /// plus the same residual-add path `reconstruct_picture_luma`'s own
 /// `Intra_4x4` branch already uses -- an inter macroblock's own luma
-/// residual is the same "no DC/AC split, one CabacResidual per 4x4
+/// residual is the same "no DC/AC split, one `CabacResidual` per 4x4
 /// block" shape `Intra_4x4` uses (clause 8.5.4), just added onto a
 /// motion-compensated prediction instead of a spatial one.
 ///
@@ -436,10 +455,10 @@ pub(crate) fn reconstruct_picture_with_inter(
         if mb.is_intra16x16 {
             let x = mb.mb_x * 16;
             let y = mb.mb_y * 16;
-            let top_available = (0..16).all(|dx| buf.available(x as i32 + dx, y as i32 - 1));
-            let top = core::array::from_fn(|dx| buf.pixel(x as i32 + dx as i32, y as i32 - 1));
-            let left_available = (0..16).all(|dy| buf.available(x as i32 - 1, y as i32 + dy));
-            let left = core::array::from_fn(|dy| buf.pixel(x as i32 - 1, y as i32 + dy as i32));
+            let top_available = (0..16).all(|dx| buf.available(coord(x) + dx, coord(y) - 1));
+            let top = core::array::from_fn(|dx| buf.pixel(coord(x) + coord(dx), coord(y) - 1));
+            let left_available = (0..16).all(|dy| buf.available(coord(x) - 1, coord(y) + dy));
+            let left = core::array::from_fn(|dy| buf.pixel(coord(x) - 1, coord(y) + coord(dy)));
             let neighbours = Neighbours16 {
                 top_available,
                 top,
@@ -475,7 +494,8 @@ pub(crate) fn reconstruct_picture_with_inter(
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
     clippy::cast_possible_truncation,
-    reason = "blk/i/j are fixed 0..4 or 0..16 loop bounds; mv/pixel arithmetic is checked at the fetch closure's own clamp"
+    clippy::many_single_char_names,
+    reason = "blk/i/j are fixed 0..4 or 0..16 loop bounds; mv/pixel arithmetic is checked at the fetch closure's own clamp; x/y/c/d/r mirror clause 8.5's own variable names"
 )]
 fn reconstruct_inter_mb(
     buf: &mut PictureBuffer,
@@ -575,11 +595,13 @@ mod tests {
     /// is a flat block per clause 8.5.12.2's own separable sum).
     #[test]
     fn dc_only_residual_shifts_every_sample_uniformly() {
-        let mut residual = MbResidual::default();
-        residual.luma_dc = Some(CabacResidual {
-            levels: vec![10],
-            positions: vec![0],
-        });
+        let residual = MbResidual {
+            luma_dc: Some(CabacResidual {
+                levels: vec![10],
+                positions: vec![0],
+            }),
+            ..Default::default()
+        };
         let out = reconstruct_intra16x16_luma(2, unavailable(), 26, &residual);
         let first = out[0][0];
         assert!(
@@ -1086,7 +1108,7 @@ mod tests {
 
     /// Decodes a full I/P stream, maintaining a simple single-list DPB
     /// (P slices only; every picture is one slice; no MMCO/long-term
-    /// refs -- RefPicList0 is just every previously-decoded picture,
+    /// refs -- `RefPicList0` is just every previously-decoded picture,
     /// most recent first, clause 8.2.4.2.1's own simplest case) across
     /// pictures, exercising `crate::motion`/`crate::interp`/
     /// `reconstruct_picture_with_inter` end to end for the first time.
