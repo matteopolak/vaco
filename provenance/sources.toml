@@ -1227,3 +1227,17 @@ kind     = "spec"
 title    = "libvpx (BSD-3-Clause), vp8/encoder/dct.c: vp8_short_fdct4x4_c and vp8_short_walsh4x4_c, the forward DCT/WHT RFC 6386 gives no encoder-side pseudocode for. Tier A per planning/AGENT-CONSTRAINTS.md's clean-room section (permissively-licensed reference implementation, already cleared in the register); read for vaco-codec-vp8's encoder, which needs a real mathematical inverse of RFC 6386 S14's decode-side transforms and has no other primary source to derive one from."
 acquired = "2026-08-28"
 where    = "https://raw.githubusercontent.com/webmproject/libvpx/main/vp8/encoder/dct.c"
+
+[[source]]
+id       = "locoi-hpl98-193"
+kind     = "paper"
+title    = "M. Weinberger, G. Seroussi, G. Sapiro, \"The LOCO-I Lossless Image Compression Algorithm: Principles and Standardization into JPEG-LS\", HP Labs technical report HPL-98-193, Nov 1998 (later published in IEEE Trans. Image Processing, 2000). The algorithm JPEG-LS (ITU-T T.87 / ISO/IEC 14495-1) standardizes; the paper documents the regular-mode model (MED predictor, context quantization, bias cancellation, Golomb coding) in full detail, and states the ISO/ITU text itself was too obscure to reproduce that from. vaco-codec-jpegls's run-mode adaptation table and run-interruption sample formulas are not given numerically here and were instead measured against ffmpeg -c:v jpegls's own decode (D17), documented in that crate's own module docs."
+acquired = "2026-08-28"
+where    = "http://shiftleft.com/mirrors/www.hpl.hp.com/techreports/98/HPL-98-193.pdf"
+
+[[source]]
+id       = "theora-spec-20170603"
+kind     = "spec"
+title    = "Theora Specification, Xiph.Org Foundation, June 3, 2017 edition"
+acquired = "2026-08-28"
+where    = "https://theora.org/doc/Theora.pdf"
