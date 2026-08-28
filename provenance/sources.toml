@@ -1220,3 +1220,10 @@ kind     = "rfc"
 title    = "RFC 9639, Free Lossless Audio Codec (FLAC). Section 9.2.6's linear-predictor subframe arithmetic (coefficient/history multiply-sum, shared shift, coefficient ordering) backs vaco-codec-dsp-lpc's predict/synthesize."
 acquired = "2026-08-28"
 where    = "https://www.rfc-editor.org/rfc/rfc9639"
+
+[[source]]
+id       = "libvpx-vp8-encoder"
+kind     = "spec"
+title    = "libvpx (BSD-3-Clause), vp8/encoder/dct.c: vp8_short_fdct4x4_c and vp8_short_walsh4x4_c, the forward DCT/WHT RFC 6386 gives no encoder-side pseudocode for. Tier A per planning/AGENT-CONSTRAINTS.md's clean-room section (permissively-licensed reference implementation, already cleared in the register); read for vaco-codec-vp8's encoder, which needs a real mathematical inverse of RFC 6386 S14's decode-side transforms and has no other primary source to derive one from."
+acquired = "2026-08-28"
+where    = "https://raw.githubusercontent.com/webmproject/libvpx/main/vp8/encoder/dct.c"
