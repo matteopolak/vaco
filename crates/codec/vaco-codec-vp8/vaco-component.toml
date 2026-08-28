@@ -8,3 +8,12 @@ feature   = "codec-vp8"
 ctor      = "vaco_codec_vp8::VP8_DECODER"
 media     = "video"
 codec     = "vp8"
+
+[[component]]
+kind      = "encoder"
+name      = "vp8"
+long_name = "On2 VP8 (all-intra skeleton: fixed DC_PRED/skip, no residual — see crate::encode)"
+feature   = "codec-vp8"
+ctor      = "vaco_codec_vp8::VP8_ENCODER"
+media     = "video"
+codec     = "vp8"

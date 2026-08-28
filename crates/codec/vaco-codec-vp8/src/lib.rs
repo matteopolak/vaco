@@ -13,6 +13,7 @@
 //! | [`interpolate`] | §18 sub-pixel motion compensation |
 //! | [`framebuf`] | the three reference-frame slots (last/golden/altref) |
 //! | [`decode`] | the per-macroblock orchestration and [`Decoder`](vaco_codec_core::Decoder) impl |
+//! | [`encode`] | the all-intra skeleton encoder and its own bool writer (issue #302, C-17a) |
 //!
 //! The boolean entropy decoder itself lives in `vaco-codec-msac` (D-04),
 //! shared with VP9; header syntax parsing for the uncompressed frame tag
@@ -66,6 +67,7 @@
 )]
 
 pub mod decode;
+pub mod encode;
 pub mod framebuf;
 pub mod header;
 pub mod interpolate;
@@ -77,3 +79,4 @@ pub mod tokens;
 pub mod transform;
 
 pub use decode::{VP8_DECODER, Vp8Decoder};
+pub use encode::{VP8_ENCODER, Vp8Encoder};
