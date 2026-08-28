@@ -26,6 +26,12 @@ pub(crate) struct TnsFilter {
     pub(crate) direction: bool,
     /// Only meaningful when `order > 0`.
     pub(crate) coef_compress: bool,
+    /// `coef_res[w]`, the *window's* resolution flag (`tns_decode_coef`'s
+    /// `coef_res_bits = coef_res + 3`) — carried per filter, redundantly
+    /// with its siblings in the same window, so `tns_apply` can inverse-
+    /// quantise a filter without threading a second array alongside
+    /// [`TnsData::per_window`].
+    pub(crate) coef_res: bool,
     /// `order` raw (not yet inverse-quantised) coefficients.
     pub(crate) coef: Vec<u8>,
 }
@@ -78,6 +84,7 @@ impl TnsData {
                     order,
                     direction,
                     coef_compress,
+                    coef_res,
                     coef,
                 });
             }

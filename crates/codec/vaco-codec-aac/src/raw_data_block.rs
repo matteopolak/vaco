@@ -6,8 +6,8 @@
 //!
 //! - `SCE`, `LFE`: one [`crate::ics_stream`] each (`common_window = false`).
 //! - `CPE`: `common_window`, and — when set — a shared `ics_info()` plus
-//!   `ms_mask_present`/`ms_used` (read, not applied: M/S stereo application
-//!   is #445's "joint stereo"), then two `individual_channel_stream()`s.
+//!   `ms_mask_present`/`ms_used` (stored as [`MsMask`] for `reconstruct`'s
+//!   "joint stereo" step), then two `individual_channel_stream()`s.
 //! - `DSE`, `FIL`: **skipped wholesale**. Both are self-delimiting by their
 //!   own leading byte count (`data_stream_element()`'s `cnt`,
 //!   `fill_element()`'s `cnt`) — everything inside either one (ancillary
@@ -50,9 +50,22 @@ const ID_END: u32 = 7;
 )]
 pub(crate) enum Element {
     Single(IcsStream),
-    Pair(bool, IcsStream, IcsStream), // (common_window, ch0, ch1)
+    /// `(ms_mask, ch0, ch1)`. `common_window` is implied: `ms_mask` is
+    /// `None` exactly when `common_window` was `0` (M/S is never legal
+    /// without a shared `ics_info()` for AAC-LC — §4.6.8.1.1).
+    Pair(Option<MsMask>, IcsStream, IcsStream),
     Lfe(IcsStream),
     ProgramConfig(ProgramConfigElement),
+}
+
+/// A `channel_pair_element()`'s M/S signalling (Table 4.5, §4.6.8.1.2):
+/// `ms_mask_present == 0` means no band uses M/S, `== 2` means every band
+/// does, and `== 1` carries an explicit per-`(group, band)` bit — `used`
+/// covers all three uniformly, one entry per `(group, band)` pair in the
+/// same order [`crate::section::read_all_groups`] produces.
+#[derive(Debug, Clone)]
+pub(crate) struct MsMask {
+    pub(crate) used: Vec<Vec<bool>>,
 }
 
 /// Skip a `data_stream_element()`: `element_instance_tag`(4),
@@ -85,21 +98,32 @@ fn skip_fill_element(r: &mut BitReader<'_>) -> Result<()> {
     Ok(r.check()?)
 }
 
-/// Read `ms_mask_present`/`ms_used` for a `common_window` `CPE` — recorded
-/// nowhere yet (M/S application is #445's), consumed only so the reader
-/// lands in the right place for the two `individual_channel_stream()`s that
-/// follow.
-fn skip_ms_mask(r: &mut BitReader<'_>, ics: &IcsInfo) -> Result<()> {
+/// Read `ms_mask_present`/`ms_used` for a `common_window` `CPE`
+/// (§4.6.8.1.2/Table 4.5): `0` = no band uses M/S, `1` = an explicit
+/// per-`(group, band)` bit follows, `2` = every band does (no further
+/// bits), `3` is reserved and treated as `0` (no bits follow it either,
+/// matching the syntax table exactly — only value `1` has a payload).
+fn read_ms_mask(r: &mut BitReader<'_>, ics: &IcsInfo) -> Result<MsMask> {
     let ms_mask_present = r.get(2);
-    if ms_mask_present == 1 {
-        let num_groups = ics.num_window_groups();
-        for _ in 0..num_groups {
-            for _ in 0..ics.max_sfb {
-                r.get_bit();
+    let num_groups = ics.num_window_groups();
+    let max_sfb = usize::from(ics.max_sfb);
+    let used = match ms_mask_present {
+        1 => {
+            let mut used = Vec::new();
+            for _ in 0..num_groups {
+                let mut group = Vec::new();
+                for _ in 0..max_sfb {
+                    group.push(r.get_bit() != 0);
+                }
+                used.push(group);
             }
+            used
         }
-    }
-    Ok(r.check()?)
+        2 => vec![vec![true; max_sfb]; num_groups],
+        _ => vec![vec![false; max_sfb]; num_groups],
+    };
+    r.check()?;
+    Ok(MsMask { used })
 }
 
 /// Read `raw_data_block()`: every element up to and including `ID_END`,
@@ -133,16 +157,16 @@ pub(crate) fn read(r: &mut BitReader<'_>, sfi: u8) -> Result<Vec<Element>> {
             ID_CPE => {
                 let _tag = r.get(4);
                 let common_window = r.get_bit() != 0;
-                let shared_ics = if common_window {
+                let (shared_ics, ms_mask) = if common_window {
                     let ics = IcsInfo::read(r)?;
-                    skip_ms_mask(r, &ics)?;
-                    Some(ics)
+                    let mask = read_ms_mask(r, &ics)?;
+                    (Some(ics), Some(mask))
                 } else {
-                    None
+                    (None, None)
                 };
                 let ch0 = ics_stream::read(r, common_window, shared_ics.as_ref(), sfi)?;
                 let ch1 = ics_stream::read(r, common_window, shared_ics.as_ref(), sfi)?;
-                elements.push(Element::Pair(common_window, ch0, ch1));
+                elements.push(Element::Pair(ms_mask, ch0, ch1));
             }
             ID_CCE => {
                 return Err(Error::Unsupported(
@@ -261,5 +285,3 @@ mod tests {
         assert!(r.is_aligned());
     }
 }
-
-

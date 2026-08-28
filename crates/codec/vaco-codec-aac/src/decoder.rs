@@ -2,58 +2,84 @@
 //!
 //! # What this decoder can and cannot do today
 //!
-//! It resolves configuration completely (T3-03a / #443) and fully parses
-//! `raw_data_block()`'s syntax (T3-03b / #444): window sequences and
-//! shapes, section data, scalefactor/intensity/noise DPCM decode, pulse
-//! data, TNS syntax (read, not applied), and the spectral Huffman codebooks
-//! — every bit the frame declares is consumed, and the reader lands exactly
-//! where the next frame begins. What it does not do is turn that parsed
-//! syntax into PCM: inverse quantisation, TNS application, joint stereo
-//! (M/S and intensity) and the IMDCT/overlap-add (T3-03c / #445) are
-//! unimplemented. [`AacDecoder::send_packet`] accepts a packet, fully
-//! resolves and parses it, and only then returns [`Error::Unsupported`] —
-//! never fabricating PCM it cannot yet produce correctly, the same choice
-//! this workspace made for MPEG-2.5 Layer III.
+//! It resolves configuration (T3-03a / #443), fully parses
+//! `raw_data_block()`'s syntax (T3-03b / #444), and reconstructs PCM
+//! (T3-03c / #445): inverse quantisation, perceptual noise substitution,
+//! joint stereo (M/S and intensity), TNS application, and the
+//! IMDCT/windowing/overlap-add filterbank — see `crate::reconstruct` for
+//! the pipeline and `docs/codec/vaco-codec-aac.md` for the measured
+//! `correlation/max_abs/rms` table (AAC, like every lossy codec this
+//! workspace has decoded, defines a compliance tolerance rather than one
+//! correct output — this crate does not claim or chase bit-exactness).
+//!
+//! Known gaps, disclosed rather than silently approximated: `CCE`
+//! (coupling) is refused; `channelConfiguration` 3/4/5/7/11/12/14 are
+//! gated at the configuration layer; intensity stereo always assumes
+//! in-phase (`INTENSITY_HCB`), since `IcsStream` does not retain which of
+//! the two intensity codebooks a band used; the `LongStart`/`LongStop`
+//! window-transition boundary arithmetic follows the standard,
+//! widely-implemented convention rather than a clean primary-text
+//! citation (see `crate::reconstruct::build_window`'s doc). Real
+//! ffmpeg-encoded fixtures use KBD windows (`window_shape == 1`), which
+//! `vaco-codec-dsp-sinewin` now implements (extended past its original
+//! sine-only scope — see that crate's own doc).
+
+use std::collections::VecDeque;
 
 use vaco_bitstream::BitReader;
+use vaco_chlayout::ChannelLayout;
 use vaco_codec_core::Decoder;
 use vaco_core::{Error, Result};
 use vaco_frame::Frame;
-use vaco_limits::Limits;
+use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
 use vaco_parse_aac::{AdtsHeader, AudioSpecificConfig};
+use vaco_sampfmt::SampleFmt;
 
 use crate::config::DecoderConfig;
-use crate::raw_data_block;
+use crate::raw_data_block::{self, Element};
+use crate::reconstruct::{self, OverlapState};
+use crate::swb_tables::{swb_offset_long, swb_offset_short};
+use crate::tns_apply::tns_max_bands;
 
 /// The AAC-LC decoder. See the module doc for exactly what is and is not
 /// implemented yet.
 #[derive(Debug)]
 pub struct AacDecoder {
-    #[expect(dead_code, reason = "sized allocations are #444/#445's concern; carried now so the constructor's shape does not change later")]
-    limits: Limits,
+    budget: Budget,
     /// Set by [`Decoder::set_extradata`], when the container offered one.
     extradata_config: Option<DecoderConfig>,
     /// The configuration currently in force — from `extradata_config` if
     /// present, otherwise (re-)derived per packet from a leading ADTS
     /// header.
     config: Option<DecoderConfig>,
+    /// One [`OverlapState`] per output channel, in decode order (matching
+    /// `raw_data_block()`'s own element order — `SCE`/`LFE` contribute one
+    /// channel each, `CPE` two). Reset by [`Decoder::flush`] and
+    /// re-sized lazily on the first packet, since the channel count is not
+    /// known until then for every path except an already-resolved
+    /// `AudioSpecificConfig`.
+    overlap: Vec<OverlapState>,
+    /// A running counter feeding perceptual-noise-substitution's
+    /// pseudo-random generator a different (but fully deterministic) seed
+    /// per channel per frame — PNS is explicitly not required to be
+    /// bit-exact across decoders (§4.6.13.3), so nothing depends on this
+    /// beyond "not identical across channels".
+    prng_counter: u32,
+    pending: VecDeque<Frame>,
 }
 
 impl AacDecoder {
-    /// Build a decoder bounded by `limits`. `limits` is not consulted yet —
-    /// #444/#445's spectral-array and PCM-frame allocations are what would
-    /// need to charge against it — but every other `Decoder` in this
-    /// workspace takes one at construction, and taking it now means the
-    /// constructor's signature does not change out from under
-    /// `vaco-registry`'s generated `make: fn(Limits) -> Box<dyn Decoder>`
-    /// the day spectral decode lands.
+    /// Build a decoder bounded by `limits`.
     #[must_use]
     pub fn new(limits: Limits) -> Self {
         Self {
-            limits,
+            budget: Budget::new(limits),
             extradata_config: None,
             config: None,
+            overlap: Vec::new(),
+            prng_counter: 0,
+            pending: VecDeque::new(),
         }
     }
 
@@ -79,14 +105,54 @@ impl AacDecoder {
         }
         Ok((cfg, body))
     }
+
+    fn next_prng_seed(&mut self) -> u32 {
+        self.prng_counter = self.prng_counter.wrapping_add(0x9e37_79b9);
+        self.prng_counter | 1 // never zero: an all-zero LCG state stays zero
+    }
+}
+
+/// Permute `channels` from `raw_data_block`'s syntactic element order into
+/// the conventional front-left-first output order for the
+/// `channelConfiguration` values this crate resolves without a program
+/// config element (`known_channel_count` in `crate::config`: 1, 2, 6).
+///
+/// The entry for each configuration is `output_index -> source_index`,
+/// derived from Table 1.19's syntactic element order (`SCE`, `CPE`, `CPE`,
+/// `LFE`, in that order) against the output order
+/// `vaco_parse_aac::tables::layout_for_config`'s channel mask implies:
+///
+/// - 1 (mono, centre only) and 2 (stereo, front L/R): already in output
+///   order — the single `SCE` or `CPE` maps straight through.
+/// - 6 (5.1): syntactic order is `[C, L, R, Ls, Rs, LFE]` (one `SCE`, one
+///   front `CPE`, one back `CPE`, one `LFE`); output order is
+///   `[FL, FR, FC, LFE, BL, BR]`. Confirmed empirically against
+///   `ffmpeg -bitexact`'s own channel order for a real 5.1 fixture (see
+///   `docs/codec/vaco-codec-aac.md`) — before this reorder, per-channel
+///   correlation was solid (~0.98) but the *global* interleaved
+///   correlation was near zero because channel 0 held centre content
+///   while the reference's channel 0 held front-left silence.
+///
+/// Any other `channel_configuration` (including 0/PCE-explicit, and the
+/// 3/4/5/7/11/12/14 values gated at the configuration layer) is left in
+/// its parsed order — this crate does not yet know their intended output
+/// order, and reordering by count alone would be a guess.
+fn reorder_to_output_channel_order(channels: &mut Vec<Vec<f32>>, channel_configuration: u8) {
+    let perm: &[usize] = match (channel_configuration, channels.len()) {
+        (6, 6) => &[1, 2, 0, 5, 3, 4],
+        _ => return,
+    };
+    let reordered: Vec<Vec<f32>> =
+        perm.iter().map(|&i| channels.get_mut(i).map(std::mem::take).unwrap_or_default()).collect();
+    *channels = reordered;
 }
 
 impl Decoder for AacDecoder {
     fn send_packet(&mut self, packet: Option<&Packet>) -> Result<()> {
         let Some(packet) = packet else {
-            // Draining at EOF: nothing is ever buffered (every real call
-            // errors before reaching a state that would need to be), so
-            // there is nothing to flush out here.
+            // Draining at EOF: nothing is buffered across packets (each
+            // frame is independently decodable once its overlap-add state
+            // exists), so there is nothing further to flush out here.
             return Err(Error::Eof);
         };
         let (cfg, body) = self.resolve_packet(packet.payload())?;
@@ -97,27 +163,120 @@ impl Decoder for AacDecoder {
             ));
         }
         let sfi = vaco_parse_aac::tables::index_for_frequency(cfg.sample_rate);
+        let swb_long = swb_offset_long(sfi).ok_or(Error::Unsupported(
+            "vaco-codec-aac: no scalefactor band table for this sampling rate (7350 Hz)",
+        ))?;
+        let swb_short = swb_offset_short(sfi).ok_or(Error::Unsupported(
+            "vaco-codec-aac: no scalefactor band table for this sampling rate (7350 Hz)",
+        ))?;
+        let max_bands_long = tns_max_bands(sfi, false);
+        let max_bands_short = tns_max_bands(sfi, true);
+
         let mut r = BitReader::new(body);
         let elements = raw_data_block::read(&mut r, sfi)?;
+
+        // Count output channels first, so `self.overlap` can be sized
+        // before any element needs it.
+        let total_channels: usize = elements
+            .iter()
+            .map(|e| match e {
+                Element::Single(_) | Element::Lfe(_) => 1,
+                Element::Pair(..) => 2,
+                Element::ProgramConfig(_) => 0,
+            })
+            .sum();
+        if self.overlap.len() != total_channels {
+            self.overlap = (0..total_channels).map(|_| OverlapState::new()).collect();
+        }
+
+        let mut channels: Vec<Vec<f32>> = Vec::new();
+        let mut overlap_iter = 0usize;
+        for element in &elements {
+            match element {
+                Element::Single(stream) | Element::Lfe(stream) => {
+                    let seed = self.next_prng_seed();
+                    let spec = reconstruct::deinterleave_channel(stream, swb_long, swb_short, seed);
+                    let Some(overlap) = self.overlap.get_mut(overlap_iter) else {
+                        continue;
+                    };
+                    let out = reconstruct::finalize_channel(
+                        stream, spec, swb_long, swb_short, max_bands_long, max_bands_short, overlap,
+                    );
+                    channels.push(out);
+                    overlap_iter += 1;
+                }
+                Element::Pair(ms_mask, ch0, ch1) => {
+                    let seed0 = self.next_prng_seed();
+                    let seed1 = self.next_prng_seed();
+                    let mut spec0 = reconstruct::deinterleave_channel(ch0, swb_long, swb_short, seed0);
+                    let mut spec1 = reconstruct::deinterleave_channel(ch1, swb_long, swb_short, seed1);
+                    if let Some(mask) = ms_mask {
+                        reconstruct::apply_joint_stereo(&mut spec0, &mut spec1, ch1, swb_long, swb_short, mask);
+                    }
+                    let (Some(overlap0_idx), Some(overlap1_idx)) = (overlap_iter.checked_add(0), overlap_iter.checked_add(1))
+                    else {
+                        continue;
+                    };
+                    let out0 = {
+                        let Some(overlap) = self.overlap.get_mut(overlap0_idx) else { continue };
+                        reconstruct::finalize_channel(
+                            ch0, spec0, swb_long, swb_short, max_bands_long, max_bands_short, overlap,
+                        )
+                    };
+                    let out1 = {
+                        let Some(overlap) = self.overlap.get_mut(overlap1_idx) else { continue };
+                        reconstruct::finalize_channel(
+                            ch1, spec1, swb_long, swb_short, max_bands_long, max_bands_short, overlap,
+                        )
+                    };
+                    channels.push(out0);
+                    channels.push(out1);
+                    overlap_iter += 2;
+                }
+                Element::ProgramConfig(_) => {}
+            }
+        }
+
+        if channels.is_empty() {
+            return Err(Error::Unsupported(
+                "vaco-codec-aac: raw_data_block parsed with no audio elements",
+            ));
+        }
+
+        // `channels` is in raw_data_block's *syntactic* element order
+        // (SCE/CPE/LFE parse order), which is not the conventional
+        // front-left-first output order this crate's callers (and
+        // `ffmpeg -bitexact`, used for this crate's own verification)
+        // expect. Reorder it for the configurations this crate resolves.
+        reorder_to_output_channel_order(&mut channels, cfg.channel_configuration);
+
+        let samples = channels.first().map_or(0, Vec::len) as u32;
+        let layout = vaco_parse_aac::tables::layout_for_config(cfg.channel_configuration)
+            .unwrap_or_else(|| ChannelLayout::unspecified(channels.len() as u32));
+        let mut frame = Frame::alloc_audio(&mut self.budget, SampleFmt::F32P, layout, samples, cfg.sample_rate)?;
+        for (ch, data) in channels.iter().enumerate() {
+            let Some(mut plane) = frame.plane_mut(ch) else { continue };
+            let Some(row) = plane.row_mut(0) else { continue };
+            for (i, &v) in data.iter().enumerate() {
+                let bytes = v.to_le_bytes();
+                if let Some(dst) = row.get_mut(i * 4..i * 4 + 4) {
+                    dst.copy_from_slice(&bytes);
+                }
+            }
+        }
         self.config = Some(cfg);
-        Err(Error::Unsupported(
-            match elements.len() {
-                0 => "vaco-codec-aac: raw_data_block parsed with no audio elements",
-                _ => "vaco-codec-aac: raw_data_block fully parsed (window sequences, \
-                      section data, scalefactor decode, pulse data, TNS syntax, \
-                      spectral Huffman decode), but reconstruction — inverse \
-                      quantisation, TNS application, joint stereo, IMDCT/overlap-add \
-                      — is not implemented — see docs/codec/vaco-codec-aac.md",
-            },
-        ))
+        self.pending.push_back(frame);
+        Ok(())
     }
 
     fn receive_frame(&mut self) -> Result<Frame> {
-        Err(Error::NeedMoreInput)
+        self.pending.pop_front().ok_or(Error::NeedMoreInput)
     }
 
     fn flush(&mut self) {
         self.config = None;
+        self.overlap.clear();
+        self.pending.clear();
     }
 
     fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
@@ -132,6 +291,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic, reason = "test code")]
     use super::AacDecoder;
     use vaco_codec_core::Decoder;
+    use vaco_frame::FrameData;
     use vaco_limits::{Budget, Limits};
     use vaco_packet::Packet;
 
@@ -179,24 +339,41 @@ mod tests {
     }
 
     #[test]
-    fn a_fully_parsed_frame_is_rejected_only_at_the_reconstruction_boundary() {
+    fn an_all_zero_frame_produces_1024_silent_samples() {
         let mut dec = AacDecoder::new(Limits::permissive());
         let bytes = adts_frame_with_minimal_raw_data_block();
         let mut budget = Budget::new(Limits::permissive());
         let packet = Packet::from_slice(&mut budget, &bytes).unwrap();
-        let err = dec.send_packet(Some(&packet)).unwrap_err();
-        // The point is *which* error: configuration and the full
-        // raw_data_block syntax (ics_info, section_data, scale_factor_data,
-        // pulse/TNS presence, spectral_data) must all have parsed
-        // successfully — a bug anywhere in that chain would surface as a
-        // different error — and only reconstruction (PCM synthesis) is
-        // missing.
-        assert!(format!("{err}").contains("reconstruction"), "{err}");
+        dec.send_packet(Some(&packet)).unwrap();
+        let frame = dec.receive_frame().unwrap();
+        let FrameData::Audio { samples, planes, .. } = &frame.data else {
+            panic!("expected an audio frame");
+        };
+        assert_eq!(*samples, 1024);
+        assert_eq!(planes.len(), 1);
+        let plane = frame.plane(0).unwrap();
+        let row = plane.row(0).unwrap();
+        // The very first frame's overlap-add half is all-zero (nothing to
+        // add from a previous frame yet), and this ICS is all-zero
+        // spectral data, so the output must be exactly silent.
+        assert!(row.chunks_exact(4).all(|c| f32::from_le_bytes(c.try_into().unwrap()) == 0.0));
     }
 
     #[test]
     fn draining_with_nothing_sent_reports_eof() {
         let mut dec = AacDecoder::new(Limits::permissive());
         assert!(dec.send_packet(None).is_err());
+    }
+
+    #[test]
+    fn flush_resets_overlap_state_so_a_stale_history_is_not_reused() {
+        let mut dec = AacDecoder::new(Limits::permissive());
+        let bytes = adts_frame_with_minimal_raw_data_block();
+        let mut budget = Budget::new(Limits::permissive());
+        let packet = Packet::from_slice(&mut budget, &bytes).unwrap();
+        dec.send_packet(Some(&packet)).unwrap();
+        let _ = dec.receive_frame().unwrap();
+        dec.flush();
+        assert!(dec.overlap.is_empty());
     }
 }

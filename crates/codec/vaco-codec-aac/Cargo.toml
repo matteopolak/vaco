@@ -17,11 +17,10 @@ vaco-frame = { path = "../../model/vaco-frame" }
 vaco-packet = { path = "../../model/vaco-packet" }
 vaco-parse-aac = { path = "../vaco-parse-aac" }
 vaco-codec-vlc = { path = "../../signal/vaco-codec-vlc" }
-
-# T3-03c (#445, not yet implemented — see `docs/codec/vaco-codec-aac.md`) will add
-# `vaco-codec-dsp-sinewin` (window generation) and `vaco-tx` (the IMDCT, already
-# built for SP-C6) here, once there is code that actually calls them. `vaco-codec-vlc`
-# (#152) is used above, by this crate's own spectral Huffman decode (#444).
+vaco-codec-dsp-sinewin = { path = "../../signal/vaco-codec-dsp-sinewin" }
+vaco-tx = { path = "../../signal/vaco-tx" }
+vaco-chlayout = { path = "../../model/vaco-chlayout" }
+vaco-sampfmt = { path = "../../model/vaco-sampfmt" }
 
 [lints]
 workspace = true

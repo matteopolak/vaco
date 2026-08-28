@@ -63,6 +63,8 @@ mod section;
 mod spectral;
 mod swb_tables;
 mod tns;
+mod tns_apply;
+mod reconstruct;
 
 pub use config::{ChannelResolution, DecoderConfig};
 pub use decoder::AacDecoder;
