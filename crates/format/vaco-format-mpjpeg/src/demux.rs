@@ -87,9 +87,7 @@ impl MpjpegDemuxer {
             pending: None,
         };
         // Read the first part up front so `streams()` never answers with an
-        // empty list before the caller has read anything — see
-        // `planning/AGENT-CONSTRAINTS.md`'s "an empty collection at
-        // construction is not an answer".
+        // empty list before the caller has read anything.
         demux.read_part()?;
         Ok(demux)
     }

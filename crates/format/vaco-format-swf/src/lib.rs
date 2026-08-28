@@ -12,24 +12,16 @@
 //! own declared length, never interpreted. See [`demux`] for exactly which
 //! tags are read and [`mux`] for which are written.
 //!
-//! # What was measured
+//! Every field layout here was measured against a real `ffmpeg -f swf`
+//! capture (see [`header`], [`demux`]) rather than assumed from the spec.
 //!
-//! Every field layout here comes from `ffmpeg -f lavfi ... -c:v flv1 -c:a
-//! mp3 -f swf out.swf` (8.1), captured 2026-08-27: the fixed header +
-//! `RECT` (see [`header`]), `DefineVideoStream`/`VideoFrame`,
-//! `SoundStreamHead2`/`SoundStreamBlock` (see [`demux`]).
-//!
-//! **A finding worth calling out because it directly shaped this crate's
-//! mux-side scope**: stripping every `PlaceObject2` tag out of a real
-//! reference `.swf` file and re-running `ffprobe -f swf` on the result
-//! still reports the correct codec/dimensions/sample rate/channels and the
-//! full packet count. `PlaceObject2` (the display-list placement of the
-//! video/sound character, including a `Matrix` record and an
-//! ffmpeg-specific incrementing `Ratio` field) is genuinely part of what
-//! the reference muxer writes, but it is not needed to read the media back
-//! — so [`mux::SwfMuxer`] does not write it. This is a real, checked
-//! divergence from byte-identical output, not an oversight: see
-//! [`mux`]'s module docs.
+//! One finding shaped this crate's mux-side scope: stripping every
+//! `PlaceObject2` tag (the display-list placement of the video/sound
+//! character) out of a real reference `.swf` and re-probing it still
+//! reports the correct codec, dimensions, rates and packet count —
+//! `PlaceObject2` is part of what the reference muxer writes, but it is not
+//! needed to read the media back, so [`mux::SwfMuxer`] omits it (see its
+//! module docs for the rest of what mux-side does not attempt).
 //!
 //! # Layout
 //!

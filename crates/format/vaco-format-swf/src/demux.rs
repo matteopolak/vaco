@@ -156,9 +156,7 @@ impl SwfDemuxer {
             eof: false,
         };
         // Read until the first media packet (or `End`), so `streams()`
-        // never answers with an empty list before a packet has been read —
-        // see `planning/AGENT-CONSTRAINTS.md` on an empty collection at
-        // construction not being an answer.
+        // never answers with an empty list before a packet has been read.
         while demux.queue.is_empty() && !demux.eof {
             demux.read_one_tag()?;
         }

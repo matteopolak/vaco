@@ -16,12 +16,11 @@
 //! ```
 //!
 //! Measured against `ffmpeg -f mpjpeg` (8.1): the boundary tag defaults to
-//! `ffmpeg` (the muxer's `-boundary_tag` option), every part's headers are
-//! exactly `Content-type: image/jpeg\r\n` then `Content-length: N\r\n` (that
-//! capitalisation, in that order), the JPEG payload is followed by a bare
-//! `\r\n`, and [`mux::MpjpegMuxer::write_trailer`] emits one final boundary
-//! line and nothing else — there is no closing `--boundary--`, because this
-//! format exists for streams with no defined end.
+//! `ffmpeg`, every part's headers are exactly `Content-type: image/jpeg\r\n`
+//! then `Content-length: N\r\n` in that order and capitalisation, and
+//! [`mux::MpjpegMuxer::write_trailer`] emits one final boundary line and
+//! nothing else — no closing `--boundary--`, since the format is for
+//! streams with no defined end.
 //!
 //! # Layout
 //!
@@ -33,17 +32,12 @@
 //! # What the demuxer tolerates that the muxer never produces
 //!
 //! `ffmpeg -h demuxer=mpjpeg` exposes `-strict_mime_boundary` (default
-//! `false`): a lenient reader does not have to verify that every boundary
-//! line repeats the same tag byte-for-byte. This demuxer models exactly that
-//! knob (see [`demux::MpjpegDemuxer::strict_mime_boundary`]) — non-strict
-//! mode does not check the boundary text at all past requiring the leading
-//! `--`, which is what makes it tolerant of a producer whose boundary tag
-//! this crate does not know in advance. What it does **not** attempt is
-//! recovering a part whose `Content-length` header is missing: the one
-//! reference sample this crate can generate always sends it, and guessing a
-//! JPEG's length by scanning for an EOI marker inside data that may
-//! legitimately contain `0xFFD9` in an entropy-coded scan is exactly the kind
-//! of unverifiable heuristic `vaco-format-dv`'s docs warn against shipping.
+//! `false`): a lenient reader need not verify that every boundary line
+//! repeats the same tag byte-for-byte. This demuxer models that knob (see
+//! [`demux::MpjpegDemuxer::strict_mime_boundary`]) by checking only the
+//! leading `--` in non-strict mode. It does **not** recover a part whose
+//! `Content-length` is missing: every reference sample sends the header,
+//! and scanning for an EOI marker instead is an unverifiable heuristic.
 
 #![forbid(unsafe_code)]
 

@@ -3,9 +3,8 @@
 //! The attack surface: `Content-length` is an attacker-chosen number parsed
 //! straight out of a header line and used to size one allocation
 //! (`Packet::alloc` in `demux.rs`), and the header-line scanner grows its
-//! peek window on an unterminated line. Both are exactly the "declared
-//! length vs actual remaining bytes" shape `planning/AGENT-CONSTRAINTS.md`
-//! calls out for container demuxers.
+//! peek window on an unterminated line — declared length versus actual
+//! remaining bytes, the recurring hazard for container demuxers.
 //!
 //! fuzz-crate: vaco-format-mpjpeg
 
