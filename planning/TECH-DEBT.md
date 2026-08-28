@@ -2728,3 +2728,154 @@ Closed #609 and #610 on a replacement bar instead of the stated
 whose every remaining byte is named. All three variants meet it. Full
 accounting in `docs/format/vaco-mux-mxf.md`'s "The byte-identity ceiling,
 and the bar that replaces it" section.
+
+### Update: `vaco-codec-mpeg12`'s MPEG-1 accuracy gap — handoff, not a fix (#355)
+
+Fifth pass on this gap, following directly from the entry above. That
+entry's own next step ("compare per-coefficient dequantised values
+against a hand-computed reference for one of `m1_i`'s own worst blocks")
+is exactly what this pass did, plus the two checks explicitly asked for:
+whether the wrong blocks sit at slice boundaries or at picture edges. No
+fix resulted. This is the handoff the prior entry's author asked the next
+pass to start from, written because a sixth round on the same evidence
+would not be a better use of anyone's time than recording where the five
+rounds actually got to.
+
+**What the heatmap correlates with.** Built the same 8x8-block max-diff
+heatmap as before for `m1_i` frame 0 (a genuine I-picture — 4 macroblocks
+wide, 3 tall, one slice per row), and paired it with each block's decoded
+coefficient count (`nz`, non-zero positions in `QFS` before inverse scan)
+and coefficient-magnitude sum ("energy"). The result is about as clean a
+separation as real data gets:
+
+- Every block with `nz == 1` (DC-only, no AC content at all) — 20 of 48
+  blocks in this frame, including the very first block of the very first
+  slice and blocks throughout the interior — decodes with **exactly
+  zero** pixel error. No exceptions.
+- Every block with `nz >= 30` (busy — real AC content across much of the
+  8x8 array) — 12 of 48 blocks — has **nonzero** pixel error, from 1 up
+  to 9. No exceptions.
+- The mid-range (`nz` roughly 5-20) is not perfectly clean but is
+  overwhelmingly the same direction: of ~16 such blocks, 15 show nonzero
+  error and only one (`nz = 5`) decodes exactly. Error magnitude tracks
+  `nz`/energy loosely but visibly (the two worst blocks in the frame,
+  diff 7 and 9, are also two of the three highest-`nz` blocks).
+
+This is a content/complexity correlation, not a spatial one. It directly
+answers the third of the three checks this pass was asked to make ("do
+they correlate with macroblock type, coded-block-pattern value, or a
+quantiser change rather than with position") — the answer is: with
+coefficient count, specifically, more than with anything positional.
+
+**Slice boundaries (check 1): does not hold as a clean explanation.**
+The DC predictor resets at the start of each of the 3 slices in this
+frame (§7.2.1, Table 7-2 — verified in `macroblock.rs`: the reset fires
+once at `decode_slice()` entry, to `128` for `intra_dc_precision == 0`,
+before any macroblock in that slice is read). If a wrong reset value or a
+wrong reset trigger were the cause, the first macroblock of each slice
+should show a position-driven error that low-`nz` blocks at that same
+position do not escape. That is not what happens: `mb_x == 0` in frame 0
+(literally the first macroblock decoded after each of the 3 resets) has
+per-macroblock max error `3, 3, 9` across the three rows — but every one
+of those macroblocks also happens to carry real AC energy (their `nz`
+values are `{1,36,15,1}`-ish per block, i.e. the row's DC-only blocks
+still show 0 there too, examined block-by-block rather than at
+macroblock granularity). The one luma block in `mb_x == 0` with `nz == 1`
+is exactly-zero error even though it is the very first block decoded
+after a predictor reset, on every one of the three slices. A wrong
+reset cannot spare a block only because that block happens to be
+simple — reset timing does not distinguish blocks by content. This
+rules the DC-predictor-reset hypothesis out for good rather than leaving
+it "never eliminated": it is eliminated now, on a same-position,
+different-content comparison, which is the one comparison that
+actually separates the two candidate causes.
+
+**Picture edges (check 2): not applicable in the way asked, and not
+supported by what data exists.** Frame 0 is pure intra — no motion
+compensation runs on it at all, so there is no MC edge-clamping path to
+implicate for this frame. `mb_x == 3` (the right edge of every row) is
+also somewhat elevated (`5, 9, 2`), which could look edge-adjacent, but
+those same three macroblocks are also the highest-`nz` macroblocks in
+their rows — the same content confound as above, not independent
+evidence of an edge effect. P-picture frames were not re-examined for MC
+edge-clamping specifically this pass; that remains untested, not
+eliminated, and is the one item from this dispatch's three checks that a
+next pass should pick up before anything else, since it is the cheapest
+of the three still open.
+
+**What else this pass mechanically re-verified and found clean** (in
+addition to the dequantisation formula, the run/level VLC tables, and the
+linear `quantiser_scale` table already re-checked in the entry above):
+
+- `tables::ZIGZAG_SCAN` reconstructed independently from the standard
+  zigzag ordering and compared byte-for-byte against the table in
+  `tables.rs` — exact match, all 64 entries.
+- `headers.rs::read_quant_matrix` (custom intra/non-intra weighting
+  matrix download) correctly de-zigzags the bitstream's scan-order values
+  back into raster order before storing — reviewed, not merely assumed;
+  `m1_i.m1v` was confirmed not to exercise this path at all (no
+  `load_intra_quantiser_matrix`/`load_non_intra_quantiser_matrix` bits
+  set), so it is not itself implicated in this fixture's error, but it is
+  not a place a future pass needs to re-look either.
+- `intra_vlc_format`-gated table selection (`CoeffTable::Zero` vs `::One`)
+  correctly always selects `Zero` for MPEG-1, since `PictureCodingExtension::mpeg1_default`
+  sets `intra_vlc_format: false` and MPEG-1 has no bitstream field to
+  override it.
+- The MPEG-1 escape-level "sentinel" sub-case (`first == 0x00` or `0x80`,
+  the rare 22-bit form for magnitudes that don't fit the direct 8-bit
+  field) fires exactly twice in the whole of `m1_i.m1v` (99 escape codes
+  total across all 25 frames). Two occurrences cannot be the mechanism
+  behind an error pattern present in roughly half of frame 0's blocks —
+  ruled out as the *primary* cause by usage count, though its own
+  correctness (replace-vs-add semantics for the follow-up magnitude field)
+  is still unverified against real ISO/IEC 11172-2 text, same access
+  limitation as the sign convention below it.
+- Confirmed (again, mechanically rather than by re-deriving) that the
+  only two `mpeg1`-gated branches anywhere in this crate are the
+  escape-level field widths and `macroblock_stuffing` — grepped
+  exhaustively. Everything else that differs between MPEG-1 and MPEG-2
+  streams does so purely through `PictureCodingExtension::mpeg1_default`'s
+  field values (`q_scale_type: false` → linear table, row-selection
+  verified correct; `alternate_scan: false`; `intra_dc_precision: 0` →
+  reset value `128`, multiplier `8`), not through separate code paths —
+  meaning a bug specific to MPEG-1 almost has to live in one of those two
+  gated branches or in how a default value was chosen, not in a
+  third, undiscovered `if mpeg1` branch.
+
+**What this pass did not find:** the actual mechanism. The correlation
+with `nz`/energy is real and load-bearing, but "more AC coefficients means
+more error" is consistent with several different remaining bugs this pass
+did not have room to separate: a rounding difference in the two's-complement
+escape-level decode that only shows up for certain magnitudes (not the
+sign convention itself, which is already confirmed correct in aggregate);
+something in how multiple VLC codes accumulate `n` across a busy block
+that a low-`nz` block never exercises enough to expose; or a residual
+IDCT/dequantisation interaction specific to blocks with many AC terms
+that the earlier per-fixture aggregate checks were not granular enough to
+catch. None of these has been tested directly.
+
+**Handoff for the next pass, in order of cost:**
+
+1. MC edge-clamping on a P-picture frame — cheapest, untested this round.
+2. Pick the single worst block in `m1_i` frame 0 (row 2, `mb_x = 3`,
+   luma block with `nz = 55`, pixel diff 7) and hand-trace every decoded
+   `(run, level)` pair against a from-scratch VLC-table lookup done by
+   eye, bit position by bit position, the way the DC half-range bug in
+   the entry above was originally found — this pass built the
+   infrastructure (the per-block heatmap plus `nz`/energy instrumentation)
+   to make that trace fast, but ran out of round budget before doing it
+   for this specific block.
+3. If (2) shows the decoded coefficients are already correct at the
+   `QFS` level, the bug is downstream (inverse scan, dequantisation, or
+   IDCT) and specific to coefficient count/position within the block
+   rather than to decoding — narrower than anything eliminated so far,
+   and worth its own pass rather than folding into a sixth round on
+   decode alone.
+
+Per this round's dispatch: #355 stays open. No code changed this pass —
+the only edits were temporary debug instrumentation (per-block
+energy/`nz` dump, escape-sentinel-hit logging), built, used, and removed
+before this entry was written; `git diff` against the commit before this
+one is empty for `block.rs` and `macroblock.rs`. Gates green: `cargo
+test -p vaco-codec-mpeg12` (29 passed, unchanged), no fixture regression
+(no fixture was re-decoded with different code, since none changed).
