@@ -844,3 +844,24 @@ kind     = "spec"
 title    = "SMPTE EG 43:2009, System Implementation of CEA-708 and CEA-608 Closed Captioning and Program-Related Data — used directly for §6.3.4 (at most one CEA-608 datastream per program, carrying up to four channels CC1-CC4, two per field)"
 acquired = "2026-08-28"
 where    = "https://pub.smpte.org/latest/eg43/eg0043-2009.pdf"
+
+[[source]]
+id       = "wavpack-file-format"
+kind     = "spec"
+title    = "WavPack 4 & 5 Binary File / Block Format, David Bryant, 2020-04-12 — the WavpackHeader struct and the metadata sub-block framing vaco-format-misc-audio::wavpack walks"
+acquired = "2026-08-28"
+where    = "https://raw.githubusercontent.com/dbry/WavPack/master/doc/WavPack5FileFormat.pdf"
+
+[[source]]
+id       = "ietf-rfc4867"
+kind     = "rfc"
+title    = "RFC 4867, RTP Payload Format and File Storage Format for the Adaptive Multi-Rate (AMR) and Adaptive Multi-Rate Wideband (AMR-WB) Audio Codecs — Table 1's per-mode speech-bit counts, used for vaco-format-misc-audio::amr's narrowband frame-size table"
+acquired = "2026-08-28"
+where    = "https://www.rfc-editor.org/rfc/rfc4867.txt"
+
+[[source]]
+id       = "ffmpeg-misc-audio-fixtures-probe"
+kind     = "blackbox"
+title    = "Observed byte layout and ffprobe-reported stream/format fields for ffmpeg-generated wv/tta/adx/g722/g726/g726le/g723_1/aptx/aptx_hd/sbc fixtures, ffmpeg 8.1 — used to reconstruct wv's block header, tta's header and seek-table format, adx's header field layout, and sbc's frame-length formula, none of which could be confirmed from true-audio.com (domain-squatted at the time)"
+acquired = "2026-08-28"
+where    = "the reference binary installed on the development machine"
