@@ -53,6 +53,8 @@ vaco-codec-core = { path = "../crates/signal/vaco-codec-core", optional = true }
 vaco-codec-dsp-idct = { path = "../crates/signal/vaco-codec-dsp-idct", optional = true }
 vaco-codec-dsp-intrapred = { path = "../crates/signal/vaco-codec-dsp-intrapred", optional = true }
 vaco-codec-dsp-lpc = { path = "../crates/signal/vaco-codec-dsp-lpc", optional = true }
+vaco-codec-dsp-me = { path = "../crates/signal/vaco-codec-dsp-me", optional = true }
+vaco-codec-dsp-mecmp = { path = "../crates/signal/vaco-codec-dsp-mecmp", optional = true }
 vaco-codec-exr = { path = "../crates/codec/vaco-codec-exr", optional = true }
 vaco-codec-gif = { path = "../crates/codec/vaco-codec-gif", optional = true }
 vaco-codec-golomb = { path = "../crates/signal/vaco-codec-golomb", optional = true }
@@ -195,6 +197,7 @@ vaco-resample = { path = "../crates/signal/vaco-resample", optional = true }
 vaco-rtp = { path = "../crates/model/vaco-rtp", optional = true }
 vaco-sampfmt = { path = "../crates/model/vaco-sampfmt", optional = true }
 vaco-scale = { path = "../crates/signal/vaco-scale", optional = true }
+vaco-simd = { path = "../crates/core/vaco-simd", optional = true }
 vaco-subtitle-bitmap = { path = "../crates/format/vaco-subtitle-bitmap", optional = true }
 vaco-subtitle-text = { path = "../crates/format/vaco-subtitle-text", optional = true }
 vaco-textformat = { path = "../crates/app/vaco-textformat", optional = true }
@@ -219,6 +222,7 @@ default = [
     "codec-dsp-idct",
     "codec-dsp-intrapred",
     "codec-dsp-lpc",
+    "codec-dsp-me",
     "codec-exr",
     "codec-gif",
     "codec-golomb",
@@ -376,6 +380,7 @@ codec-core = ["dep:vaco-codec-core", "dep:vaco-core", "dep:vaco-limits"]
 codec-dsp-idct = ["dep:vaco-codec-dsp-idct"]
 codec-dsp-intrapred = ["dep:vaco-codec-dsp-intrapred"]
 codec-dsp-lpc = ["dep:vaco-codec-dsp-lpc"]
+codec-dsp-me = ["dep:vaco-codec-dsp-me", "dep:vaco-codec-dsp-mecmp", "dep:vaco-simd"]
 codec-exr = ["dep:vaco-codec-exr", "dep:vaco-frame", "dep:vaco-limits"]
 codec-gif = ["dep:vaco-codec-gif", "dep:vaco-frame", "dep:vaco-limits"]
 codec-golomb = ["dep:vaco-bitstream", "dep:vaco-codec-golomb", "dep:vaco-limits"]
@@ -898,6 +903,14 @@ test = false
 doc = false
 bench = false
 required-features = ["codec-dsp-lpc"]
+
+[[bin]]
+name = "dsp_me"
+path = "fuzz_targets/dsp_me.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-dsp-me"]
 
 [[bin]]
 name = "dv_demux"
