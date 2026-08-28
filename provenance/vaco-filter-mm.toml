@@ -1,0 +1,5 @@
+[[table]]
+name   = "NAMES"
+file   = "crates/filter/vaco-filter-mm/src/registry.rs"
+source = "ffmpeg-filters-probe"
+method = "probed"
