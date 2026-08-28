@@ -123,10 +123,14 @@ fn build_video(params: &CodecParameters, codec: CodecId, extradata: &[u8]) -> Re
         }
     };
 
-    if v.sample_aspect_ratio.is_defined()
-        && !v.sample_aspect_ratio.is_zero()
-        && v.sample_aspect_ratio.num != v.sample_aspect_ratio.den
-    {
+    // `pasp` whenever the aspect ratio is known, **including 1:1**. The
+    // `num != den` guard here was the natural reading — a square-pixel `pasp`
+    // says nothing a reader did not already assume — and it is not what the
+    // reference does. Measured on `ffmpeg -c copy -f mp4` across three inputs:
+    // a 1:1 source, a raw H.264 stream with no container SAR at all, and a
+    // 16:11 source. All three got a `pasp`, carrying `1/1`, `1/1` and `16/11`
+    // respectively (CONFORMANCE-FINDINGS 36).
+    if v.sample_aspect_ratio.is_defined() && !v.sample_aspect_ratio.is_zero() {
         extensions.extend_from_slice(&writer::pasp(
             u32::try_from(v.sample_aspect_ratio.num).unwrap_or(1),
             u32::try_from(v.sample_aspect_ratio.den).unwrap_or(1),

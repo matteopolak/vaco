@@ -390,12 +390,17 @@ fn build_stbl(track: &TrackState, offset_shift: u64) -> Vec<u8> {
     let mut body = Vec::new();
     body.extend_from_slice(&writer::stsd(std::slice::from_ref(&track.entry.bytes)));
     body.extend_from_slice(&writer::stts(&track.stts_runs()));
+    // `stss` before `ctts`. The order of `stbl`'s children is unconstrained by
+    // the specification and load-bearing for byte-identity; measured on
+    // `ffmpeg -c copy -f mp4`, the reference writes
+    // `stsd stts stss ctts stsc stsz stco` and we had these two the other way
+    // round (CONFORMANCE-FINDINGS 36).
+    if let Some(syncs) = track.stss_list() {
+        body.extend_from_slice(&writer::stss(&syncs));
+    }
     let ctts_runs = track.ctts_runs();
     if !ctts_runs.is_empty() {
         body.extend_from_slice(&writer::ctts(&ctts_runs));
-    }
-    if let Some(syncs) = track.stss_list() {
-        body.extend_from_slice(&writer::stss(&syncs));
     }
     body.extend_from_slice(&writer::stsc(&track.stsc_runs()));
     body.extend_from_slice(&writer::stsz(&track.stsz_list()));
