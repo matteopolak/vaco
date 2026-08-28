@@ -2226,3 +2226,57 @@ channel count, or whether it can be 4 (SMPTE 386M permits both 4 and 8); a
 with an apparently unrelated `ffmpeg 8.1` `mxf_d10` muxer error ("frame
 size does not match index unit size") that did not reproduce with 2 or 8
 channels and was not investigated further.
+
+## `vaco-mux-mxf`'s two-essence-track files do not resolve descriptors under a real `ffmpeg -i`
+
+`vaco-demux-mxf`'s own `MultipleDescriptor` expansion (`SubDescriptorUIDs`
+matched by `LinkedTrackId`, the mechanism `metadata::resolve_track_descriptor`
+implements) correctly resolves both tracks' real parameters from a real
+`vaco-mux-mxf` two-essence-track file — proven byte-for-byte by
+`vaco-mux-mxf/tests/roundtrip.rs`'s
+`a_video_and_audio_file_reports_both_streams_via_the_multiple_descriptor_expansion`.
+A real `ffmpeg -i` on the identical file correctly identifies both
+streams' media type (video/audio — the `TrackID=1`-reserved-for-timecode
+and three-way `DataDefinition` fixes recorded in
+`docs/format/vaco-mux-mxf.md` apply here too) but logs `source track N:
+stream M, no descriptor found` and reports `codec_name=unknown`,
+`width=0`, `height=0`, `sample_rate=0` for both tracks.
+
+Not root-caused. The leading untested hypothesis: `ffmpeg`'s own
+`SubDescriptorUIDs` resolution might match by *array position* against the
+Source Package's `PackageTracks` order rather than by `LinkedTrackId`
+value — `vaco-mux-mxf` prepends a timecode track (`TrackID=1`) to
+`PackageTracks` ahead of the two essence tracks, which would shift any
+positional indexing by one and explain a total miss for both tracks while
+`LinkedTrackId`-based matching (what `vaco-demux-mxf` implements and what
+this session's read-side measurement of a real `ffmpeg`-written two-track
+file showed `LinkedTrackId` doing) still succeeds. Cheapest next step: mux
+a two-essence-track file with the timecode track appended *after* the
+essence tracks in `PackageTracks` instead of before, and see if `ffmpeg -i`
+starts resolving descriptors — if it does, the fix is a `PackageTracks`
+ordering change, not a `LinkedTrackId` value change. `vaco-mux-mxf/src/metadata.rs`'s
+`build_sets` is where `mp_track_uids`/`sp_track_uids` are assembled.
+
+## `vaco-mux-mxf` confirmed `-fflags +bitexact` determinism, did not chase byte-identity
+
+`ffmpeg -fflags +bitexact -bitexact -f mxf` produces byte-identical output
+across two independent runs (verified this session, `cmp` empty diff) — the
+Package UMID's material-number field is zeroed under bitexact rather than
+time/random-based, which is what makes this possible. `vaco-mux-mxf`'s own
+issue (#609) states byte-identity as its acceptance criterion, and this
+finding means it is not the unreachable bar the original dispatch assumed
+("UMIDs... cannot be byte-identical without controlling them" undersold
+what `ffmpeg` itself already does for exactly this purpose).
+
+Matching it would need `vaco-mux-mxf` to replicate, byte-for-byte: `ffmpeg`'s
+literal partition count and its duplicate-metadata-in-the-footer layout
+(`vaco-mux-mxf` deliberately does not restate metadata in its footer — see
+`docs/format/vaco-mux-mxf.md`'s "Partition layout" section for why),
+System Item placement per edit unit rather than per essence element, a
+zeroed/deterministic UMID convention of its own, and at least one
+descriptor property this crate does not yet write at all (`AspectRatio`;
+a 16-byte property at real tag `0x320d` whose meaning was not identified
+during this session's byte-level measurement). This is a substantially
+larger undertaking than landing the muxer itself was, and was not
+attempted — the round trip (this crate's own demuxer, and a real `ffprobe`/
+`ffmpeg`) is what this crate is verified against instead.
