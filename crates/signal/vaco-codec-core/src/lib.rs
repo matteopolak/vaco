@@ -1745,6 +1745,34 @@ pub trait Encoder: Send {
     fn accepted_pix_fmts(&self) -> &'static [vaco_pixfmt::PixFmt] {
         &[]
     }
+
+    /// Configure a generic encoder option by name, mirroring the CLI's
+    /// `-<name>[:<spec>] <value>` surface (`"b"` for bitrate, `"qscale"` for a
+    /// fixed quality) after the encoder is built but before the first
+    /// [`send_frame`](Encoder::send_frame).
+    ///
+    /// This is the channel [`EncoderDesc::build`] itself deliberately does not
+    /// have — `make: fn(Limits) -> Box<dyn Encoder>` takes no options, so
+    /// before this method existed there was no way for a caller to reach an
+    /// encoder's own configuration at all: a working rate controller
+    /// (`vaco-codec-vp8`'s CBR/VBR/constant-quality modes) was reachable only
+    /// by calling a codec-specific constructor directly, which
+    /// [`vaco_registry::encoder_by_name`]'s uniform `EncoderDesc` cannot do.
+    ///
+    /// The default rejects nothing and changes nothing: a generic `AVOption`
+    /// the reference defines on every codec context (`bit_rate`, for one) is
+    /// accepted silently by codecs that have no use for it — measured against
+    /// `ffmpeg 8.1`, `-c:v png -b:v 1M` exits 0 and writes an unchanged PNG. A
+    /// value this specific encoder cannot honour is the one case that should
+    /// fail, via [`vaco_core::Error::Option`].
+    ///
+    /// # Errors
+    /// [`vaco_core::Error::Option`] naming `key` when its value does not
+    /// parse for a key this encoder does recognise.
+    fn set_option(&mut self, key: &str, value: &str) -> Result<()> {
+        let _ = (key, value);
+        Ok(())
+    }
 }
 
 /// Splits a byte stream into packets and reads enough header syntax to describe
