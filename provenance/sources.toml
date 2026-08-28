@@ -1069,3 +1069,17 @@ kind     = "blackbox"
 title    = "Byte-position measurement against the real fixture opatom_mpeg2_sample.mxf (an OP-Atom/clip-wrapped MXF file): located the file's single Generic Container essence element (key at offset 5632, item-type byte 0x15) and its BER length prefix (9-byte wide form, value length 41809, value starting at offset 5657); the existing VBE Index Table Segment's IndexEntryArray::StreamOffset values (0, 26049, 39902) land exactly on real MPEG-2 00 00 01 start codes only when read as offsets from the essence element's value start (5657), not its key start (5632) -- the two coincide for a frame-wrapped file but not a clip-wrapped one, which vaco-demux-mxf::demux.rs::build_indices had not previously distinguished"
 acquired = "2026-08-28"
 where    = "byte-level inspection of the fixture file already present in vaco-demux-mxf's own test suite"
+
+[[source]]
+id       = "smpte-st360-2009-gxf"
+kind     = "spec"
+title    = "SMPTE 360-2009, General Exchange Format (GXF), revision of SMPTE 360M-2004 -- distributed by SMPTE itself as a free \"Stable\"/\"Archived\" engineering document. Packet header layout (clause 6, Table 2), MAP packet material/track-description tag-length-value sections (clause 7.1, Tables 3-10), field locator table (clause 7.2), unified material format (clause 7.3, Tables 12-18), media packet preambles and per-media-type payload shapes (clause 7.4, Tables 18-23), end-of-stream packet (clause 7.5), and Annex B's audio-sample/video-field synchronization arithmetic underlying vaco-format-gxf::packet/map/media/demux/mux"
+acquired = "2026-08-28"
+where    = "https://pub.smpte.org/pub/st360/st0360-2009_stable2016.pdf (SMPTE's own free public distribution of this Stable document)"
+
+[[source]]
+id       = "ffmpeg-gxf-demux-mux-probe"
+kind     = "blackbox"
+title    = "ffmpeg 8.1's gxf demuxer and muxer, both confirmed present on this machine (ffmpeg -demuxers/-muxers), measured two ways for vaco-format-gxf: (1) a real file this machine's ffmpeg -f gxf wrote (testsrc/sine inputs, mpeg2video/pcm_s16le, 720x576 25fps PAL, committed as tests/fixtures/ffmpeg_pal_mpeg2_pcm.gxf) -- byte-level inspection confirmed the packet header layout, MAP packet's material/track tag values (media file names, first/last/mark field numbers, estimated size in 1024-byte units, MPEG auxiliary parameter string, frame-rate/lines/fields-per-frame codes), and three real audio MEDIA packets' field numbers (0, 35, 69) matching Annex B's synchronization formula inverted; (2) vaco-format-gxf's own GxfMuxer output fed back through real ffmpeg/ffprobe, which found and then confirmed the fix for a real interop divergence: declaring an audio packet's true (short) valid-sample count in field_info, as the Standard's own text permits, made ffmpeg's own gxf demuxer visibly truncate the packet it reported, whereas ffmpeg's own muxer always declares full validity (00 00 80 00) even for its own genuinely-partial last packet of a clip -- matching that convention (rather than the Standard's more literal option) is what real interop needs"
+acquired = "2026-08-28"
+where    = "the reference binary installed on the development machine"

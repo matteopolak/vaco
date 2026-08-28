@@ -1,0 +1,22 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Name and extension measured against `ffmpeg -demuxers`/`-muxers` and
+# `ffmpeg -h demuxer=gxf`/`-h muxer=gxf` (ffmpeg 8.1) — this machine has
+# both a real gxf demuxer and muxer, confirmed not assumed. See this
+# crate's own top-level docs.
+
+[[component]]
+kind      = "demuxer"
+name      = "gxf"
+long_name = "GXF (General eXchange Format)"
+feature   = "demux-gxf"
+ctor      = "vaco_format_gxf::DEMUXER"
+extensions = "gxf"
+
+[[component]]
+kind      = "muxer"
+name      = "gxf"
+long_name = "GXF (General eXchange Format)"
+feature   = "mux-gxf"
+ctor      = "vaco_format_gxf::MUXER"
+extensions = "gxf"
