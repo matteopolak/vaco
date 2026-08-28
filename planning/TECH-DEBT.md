@@ -4260,3 +4260,50 @@ green (`cargo test/clippy -p vaco-codec-mpeg12`, full `layer-check`/
 unchanged by this commit.
 
 `Vaco-Spec-Ref: itu-t-h262` Annex D.9.1.
+
+
+### Full-pel motion vectors measured false, killed cheaply, implemented anyway (#355)
+
+One-measurement test of the leading candidate for #355's remaining
+P-picture max-MAD-97 residual: Annex D.9.7's full-pel motion vector mode
+is MPEG-1-only, affects only motion-compensated pictures (matching the
+now-clean-intra/still-broken-P-picture shape the mismatch-control fix
+left behind), and a halved vector produces exactly max-MAD-97-scale
+localised error, not max-MAD-2-scale drift. Cheap to check before writing
+any fix: dumped `full_pel_forward_vector`/`full_pel_backward_vector` from
+every picture header in `m1_ip.m1v` and `m1_ipb.m1v` (25 pictures each,
+50 total). `false` on every single one. Hypothesis dead, at the cost of
+one debug build and one decode run.
+
+Implemented the mode anyway — genuinely missing before (parsed, never
+consumed), a real gap independent of whether it explains anything on
+this specific corpus. D.9.7: "motion vector coordinates must be
+multiplied by two before being used for the prediction." The doubling
+belongs at the point a reconstructed vector is used to address the
+reference picture, not at `motion::decode_vector` itself, since the PMV
+predictor chain must stay in whatever units the encoder coded (a
+delta's predictor has to match the delta's own units) — implemented as a
+`full_pel_scale` helper inside `form_macroblock_prediction`, the single
+point a coded macroblock's own vectors and a B-picture skip's re-read of
+the stored PMV chain both funnel through before sampling.
+
+Confirmed byte-identical on all 15 fixtures this crate has ever measured
+(3 MPEG-1 + 7 MPEG-2 baseline + 5 from #356's own corpus) — a true no-op
+everywhere, as expected. Covered only by a hand-crafted unit test on the
+extracted scaling helper, since no fixture on hand sets either flag.
+
+**Does not address #355.** Two open threads recorded separately rather
+than conflated: the P-picture max-97 outlier is still unexplained —
+dequantisation, both VLC tables, mismatch control, and now full-pel
+vectors are all confirmed correct, so the next candidates are MPEG-1's
+own `motion_code`/`motion_r` reconstruction (its modular wraparound range
+differs from MPEG-2's `f_code` derivation) or MPEG-1's half-pel
+interpolation rounding specifically. `m1_i`'s own residual max of 9,
+identical across all 25 of its frames, is a second, separate question —
+noted, not chased this round, per instruction.
+
+Gates green (`cargo test/clippy -p vaco-codec-mpeg12`, full `layer-check`/
+`dep-gate`/`unsafe-audit`/`dup-check`/`time-gate`/`owner-gate`/
+`vlc-scan`). `provenance-check`'s pre-existing failures unrelated.
+
+`Vaco-Spec-Ref: itu-t-h262` Annex D.9.7.
