@@ -97,6 +97,7 @@ use vaco_core::{Error, MediaType, Result};
 use vaco_format_core::flags::FormatFlags;
 use vaco_format_core::metadata::MuxMetadata;
 use vaco_format_core::{Muxer, Stream};
+use vaco_pixfmt::PixFmt;
 use vaco_sched::{Driver, Finish, PipelineSpec};
 
 use crate::cli::{Cli, OutputSpec};
@@ -778,7 +779,7 @@ pub fn run_pipeline(
                     // a no-op for the common case.
                     let accepted = encoder.accepted_pix_fmts();
                     let source_format = p.video.as_ref().and_then(|v| v.format);
-                    let target = source_format.and_then(|f| f.best_of(accepted));
+                    let target = converter_target(source_format, accepted);
                     let frames = match target {
                         Some(t) if Some(t) != source_format => {
                             spec.add_converter(frames, t, time_base, limits.clone())
@@ -1038,6 +1039,21 @@ fn internal(what: &str) -> Diagnostic {
     Diagnostic::new(AvError::EINVAL, vec![format!("Internal error: {what}")])
 }
 
+/// The format a decode leg must convert to before an encoder will take it, or
+/// `None` when it can be fed as it is.
+///
+/// An empty `accepted` means the encoder does not care. An unknown
+/// `source` cannot be ranked against, so the encoder's own first preference is
+/// the best guess available — `image2`'s pipe demuxers report no format at
+/// probe time, and returning `None` for them skips a conversion that is still
+/// needed.
+fn converter_target(source: Option<PixFmt>, accepted: &[PixFmt]) -> Option<PixFmt> {
+    match source {
+        Some(f) => f.best_of(accepted),
+        None => accepted.first().copied(),
+    }
+}
+
 fn internal_from(what: &str, e: &Error) -> Diagnostic {
     Diagnostic::new(AvError::of(e), vec![format!("Error: {what}: {e}")])
 }
@@ -1254,6 +1270,30 @@ mod tests {
     /// A registered encoder name resolves through
     /// `vaco_registry::encoder_by_name` instead of hitting the "Unknown
     /// encoder" catch-all. `qoi` is always in this build's default features.
+    #[test]
+    fn an_unknown_source_format_still_gets_a_converter() {
+        // image2's pipe demuxers report no format at probe time. Ranking is
+        // impossible without a source, but skipping the conversion is worse
+        // than guessing: the encoder's first preference is the guess.
+        let accepted = [PixFmt::Rgb24, PixFmt::Gray8];
+        assert_eq!(converter_target(None, &accepted), Some(PixFmt::Rgb24));
+    }
+
+    #[test]
+    fn an_encoder_that_accepts_anything_never_gets_a_converter() {
+        assert_eq!(converter_target(None, &[]), None);
+        assert_eq!(converter_target(Some(PixFmt::Rgb24), &[]), None);
+    }
+
+    #[test]
+    fn a_known_source_is_ranked_rather_than_taking_the_first_entry() {
+        let accepted = [PixFmt::MonoBlack, PixFmt::Rgb24];
+        assert_eq!(
+            converter_target(Some(PixFmt::Bgr24), &accepted),
+            Some(PixFmt::Rgb24)
+        );
+    }
+
     #[test]
     fn a_registered_encoder_name_resolves_through_the_registry() {
         let (c, o) = out_of(&["-i", "a.mkv", "-c:v", "qoi", "-f", "null", "-"]);
