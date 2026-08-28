@@ -49,7 +49,18 @@ fn silk_rate_for_bandwidth(bw: Bandwidth, hybrid: bool) -> InternalRate {
 /// channels, its own persistent CELT/SILK/resampler state.
 #[derive(Debug)]
 struct StreamDecoder {
+    /// The stream's declared/negotiated output channel count (from the
+    /// mapping table) -- fixed for the stream's lifetime, and the width of
+    /// every PCM buffer this type hands back.
     channels: usize,
+    /// The *coded* channel count SILK/CELT were last configured for --
+    /// `Toc::coded_channels()`'s per-packet stereo flag (RFC 6716 SS3.1),
+    /// not `channels` above. A "coupled" (2-channel) stream can still code
+    /// an individual packet mono (e.g. during silence), and SILK/CELT then
+    /// only carry that packet's worth of bits for one channel -- decoding
+    /// with the stream's fixed channel count instead of the packet's own
+    /// desyncs every subsequent field for the rest of the packet.
+    coded_channels: usize,
     celt: CeltDecoder,
     silk: SilkDecoder,
     silk_ready: bool,
@@ -61,6 +72,7 @@ impl StreamDecoder {
         let channels = channels.clamp(1, 2);
         Self {
             channels,
+            coded_channels: channels,
             celt: CeltDecoder::new(channels),
             silk: SilkDecoder::new(channels, InternalRate::Wideband, 20),
             silk_ready: false,
@@ -68,12 +80,13 @@ impl StreamDecoder {
         }
     }
 
-    fn ensure_silk(&mut self, rate: InternalRate, frame_ms: u32) {
-        if !self.silk_ready || self.silk.internal_khz() != rate.khz() {
-            self.silk.reconfigure(self.channels, rate, frame_ms);
+    fn ensure_silk(&mut self, channels: usize, rate: InternalRate, frame_ms: u32) {
+        if !self.silk_ready || self.silk.internal_khz() != rate.khz() || self.coded_channels != channels {
+            self.silk.reconfigure(channels, rate, frame_ms);
             self.silk_ready = true;
+            self.coded_channels = channels;
             let factor = (48 / rate.khz()).max(1) as usize;
-            self.resamplers = (0..self.channels).map(|_| crate::silk::resample::Upsampler::new(factor)).collect();
+            self.resamplers = (0..channels).map(|_| crate::silk::resample::Upsampler::new(factor)).collect();
         }
     }
 
@@ -97,23 +110,28 @@ impl StreamDecoder {
             return (0..self.channels).map(|_| vec![0.0f32; n]).collect();
         }
         let mut dec = crate::range::RangeDecoder::new(payload);
-        let channels = self.channels.max(1);
+        // The *packet's own* coded channel count (RFC 6716 SS3.1's TOC
+        // stereo flag), not the stream's fixed `self.channels` -- a
+        // "coupled" stream can still code an individual packet mono, and
+        // SILK/CELT must decode exactly as many channels' worth of fields
+        // as this packet actually carries.
+        let channels = toc.coded_channels().clamp(1, 2) as usize;
         let bandwidth = toc.bandwidth();
         let frame_samples = toc.frame_samples() as usize;
 
-        match toc.mode() {
+        let pcm = match toc.mode() {
             Mode::CeltOnly => self.celt.decode(&mut dec, payload.len(), frame_samples, channels, 0, celt_end_band(bandwidth)),
             Mode::SilkOnly => {
                 let rate = silk_rate_for_bandwidth(bandwidth, false);
                 let frame_ms = (frame_samples / 48).max(10) as u32;
-                self.ensure_silk(rate, frame_ms);
+                self.ensure_silk(channels, rate, frame_ms);
                 let silk_pcm = self.silk.decode(&mut dec, frame_ms);
                 self.resample_and_normalize(&silk_pcm)
             }
             Mode::Hybrid => {
                 let rate = silk_rate_for_bandwidth(bandwidth, true);
                 let frame_ms = (frame_samples / 48).max(10) as u32;
-                self.ensure_silk(rate, frame_ms);
+                self.ensure_silk(channels, rate, frame_ms);
                 let silk_pcm = self.silk.decode(&mut dec, frame_ms);
                 let silk_48k = self.resample_and_normalize(&silk_pcm);
                 let celt_48k = self.celt.decode(&mut dec, payload.len(), frame_samples, channels, HYBRID_START_BAND, celt_end_band(bandwidth));
@@ -130,6 +148,17 @@ impl StreamDecoder {
                 }
                 mixed
             }
+        };
+
+        // `dec_API.c`'s "Create two channel output from mono stream": a
+        // mono-coded packet inside a coupled stream duplicates its one
+        // decoded channel into both outputs, rather than leaving the
+        // second output silent.
+        if self.channels == 2 && pcm.len() == 1 {
+            let mono = pcm.into_iter().next().unwrap_or_default();
+            vec![mono.clone(), mono]
+        } else {
+            pcm
         }
     }
 

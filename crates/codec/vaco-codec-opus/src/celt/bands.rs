@@ -388,8 +388,28 @@ fn quant_band(
             }
             collapse_mask = cmx | cmy;
             lowband_out = lbo;
-            out_x = rx;
-            out_y = Some(ry);
+            if stereo {
+                out_x = rx;
+                out_y = Some(ry);
+            } else {
+                // `celt/bands.c` aliases `Y = X+N` into the *same* buffer
+                // `X` occupies, so writing each recursive half in place
+                // reassembles the whole band automatically -- a mono
+                // self-split's two halves are contiguous pieces of ONE
+                // band, not a second channel. This owned-`Vec` design's
+                // equivalent of that aliasing is to concatenate them
+                // explicitly; returning them as separate `x`/`y` here
+                // silently dropped every mono self-split's second half
+                // whenever the caller had no real second channel to hand
+                // it to (any band that self-splits for extra resolution
+                // inside a channel that isn't itself part of a genuine
+                // stereo pair -- i.e. essentially always, since real
+                // stereo bands hit the dedicated stereo branches instead).
+                let mut combined = rx;
+                combined.extend(ry);
+                out_x = combined;
+                out_y = None;
+            }
         }
 
         if stereo {
@@ -449,11 +469,20 @@ fn quant_band(
             collapse_mask = fill;
             renormalise_vector(&mut x, gain);
         } else {
+            // `celt/bands.c` calls `renormalise_vector(X, N, gain, ...)`
+            // unconditionally after filling `X`, whether that fill came
+            // from the lowband-fold branch above or this pure-noise one --
+            // the raw `seed>>20` values have no defined scale on their own
+            // (a 32-bit LCG output right-shifted by 20 is nowhere near the
+            // ~unit-norm PVQ vectors this band's `gain` expects). Missing
+            // the call here left every zero-pulse band with no folding
+            // source at a magnitude in the thousands instead of ~`gain`.
             for v in &mut x {
                 *ctx.seed = celt_lcg_rand(*ctx.seed);
                 *v = ((*ctx.seed as i32) >> 20) as f32;
             }
             collapse_mask = cm_mask;
+            renormalise_vector(&mut x, gain);
         }
     }
 
