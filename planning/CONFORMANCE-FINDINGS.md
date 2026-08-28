@@ -1585,6 +1585,9 @@ ours with -bitexact:     #software: vaco
 
 ## 33. `-formats` prints 130 formats twice, and `-demuxers`/`-muxers` do not mask the flag column
 
+**Fixed 2026-08-27** (`a02c76a`). All three rules now hold, and each has a test
+that fails without it.
+
 Three separate faults in one function, all in `crates/app/vaco-cli/src/listing.rs`.
 Each is the *obvious* implementation, which is why they are worth writing down.
 
@@ -1647,6 +1650,10 @@ arrive the slot is the only thing that needs filling, not the row set.
 
 ## 34. The banner follows the log level, and `-bitexact` makes `profile=` numeric
 
+**Banner half fixed 2026-08-27** (`a02c76a`), in a shared
+`vaco_cli_core::loglevel` both binaries use. The `profile=` half belongs to
+P-05 (#275) and is open.
+
 Both found by diffing `ffprobe -v error [-bitexact] -show_streams` against ours
 on a plain H.264 MP4. That command produced exactly two differences, and each
 turned out to be a rule rather than a one-off.
@@ -1699,6 +1706,49 @@ We print `High` in both modes. This is P-05's (#275) to fix, and the constraint
 it puts on that work is worth stating: the profile table has to carry the number
 *and* the name per row, because a name-only lookup cannot answer the
 `-bitexact` question at all.
+
+## 35. MPEG-TS: two stream fields missing, and one we invent
+
+`ffprobe -show_format -show_streams` on an MPEG-TS file now differs in exactly
+three lines, and the interesting one is the line we add.
+
+```text
+$ diff <(ffprobe … long.ts) <(vaco-probe … long.ts)
+< ts_id=1
+< ts_packetsize=188
+> TAG:ts_codec=h264
+```
+
+### `ts_id` and `ts_packetsize` are `[STREAM]` fields
+
+They sit between `nal_length_size` and `id`:
+
+```text
+is_avc=false
+nal_length_size=0
+ts_id=1
+ts_packetsize=188
+id=0x100
+```
+
+`ts_id` is the transport stream id from the PAT; `ts_packetsize` is 188 or 192
+depending on whether the file carries timestamped packets. Both are printed in
+both modes — `-bitexact` does not touch them. Neither reaches the dump today.
+
+### `TAG:ts_codec` is ours, and the reference has no such tag
+
+The reference prints no `ts_codec` in either mode. `vaco-demux-mpegts` sets it
+as stream metadata (`demux.rs:578`, `raw.rs:146`) to carry the TS-level codec
+name onward, and stream metadata is exactly what `ffprobe` prints as `TAG:`.
+
+A missing field is a gap; an invented one is a wrong answer, and it is worse
+here than it looks — anything comparing our `-show_streams` output against the
+reference sees a spurious line on **every** TS stream. The value itself is not
+wrong, only the channel: this wants an out-of-band field on the stream rather
+than a metadata entry that is user-visible by construction. Note the tests in
+`vaco-demux-mpegts/tests/{reference,roundtrip}.rs` read it back through
+`metadata_get`, and `vaco-demux-ogg`'s `codec.rs` cites it as precedent, so the
+change is not a one-line deletion.
 
 ## Harness changes, summarised
 
