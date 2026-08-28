@@ -156,5 +156,14 @@ pub mod boxes {
         // Track reference types.
         CHAP = b"chap", CDSC = b"cdsc", DPND = b"dpnd", FALL = b"fall", VDEP = b"vdep",
         VPLX = b"vplx",
+
+        // HEIF/AVIF item model (ISO/IEC 23008-12 §9), inside a `meta` box.
+        PITM = b"pitm", ILOC = b"iloc", IINF = b"iinf", INFE = b"infe",
+        IPRP = b"iprp", IPCO = b"ipco", IPMA = b"ipma", IREF = b"iref",
+        IDAT = b"idat", ISPE = b"ispe", PIXI = b"pixi", PICT = b"pict",
+        // `iref` reference types. `cdsc` ("content describes") is the same
+        // four bytes as the `tref` reference type above (`boxes::CDSC`) —
+        // reused rather than redeclared.
+        DIMG = b"dimg", THMB = b"thmb", AUXL = b"auxl",
     }
 }

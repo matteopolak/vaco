@@ -97,6 +97,7 @@ pub mod esds;
 pub mod fixed;
 pub mod fourcc;
 pub mod frag;
+pub mod heif;
 pub mod lang;
 pub mod movie;
 pub mod probe;

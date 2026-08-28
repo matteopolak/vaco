@@ -1,0 +1,474 @@
+//! HEIF/AVIF item model (ISO/IEC 23008-12 §9): `hdlr(pict)`, `pitm`, `iloc`,
+//! `iinf`/`infe`, `iprp`/`ipco`/`ipma`, `iref`.
+//!
+//! A HEIF/AVIF file's `meta` box describes *items* — one coded image, or a
+//! derived image (a tile grid, an overlay) composed from others — rather
+//! than the *tracks* every other box family this crate reads describes.
+//! That is a genuinely different shape, which is why it is its own module.
+//!
+//! # What was measured, and what was transcribed
+//!
+//! A real `ffmpeg 8.1 -c:v libsvtav1 -f avif` single-image file was read
+//! back byte for byte: `iloc` version 0 (`offset_size=4`, `length_size=4`,
+//! `base_offset_size=0`, one item, one extent — the extent's offset and
+//! length landed exactly on that file's `mdat` payload), `infe` version 2
+//! (16-bit `item_ID`, `item_type='av01'`, a null-terminated `item_name`),
+//! `ipma` version 0 with `flags=0` (one-byte associations: bit 7 essential,
+//! bits 6-0 a 1-based `ipco` index — `ipco`'s own children in that file were
+//! `[ispe, pixi, av1C, colr]`, matched by `ipma`'s four associations
+//! `1, 2, 0x83, 4`). `iref`, a multi-item/grid `iloc` (`construction_method`,
+//! multiple extents, non-zero `base_offset`) and `infe` versions other than
+//! 2 were not exercised by that file and are transcribed directly from the
+//! specification instead.
+
+use crate::boxes::IsoBox;
+use crate::fourcc::{FourCc, boxes};
+
+/// Largest number of items this crate reads from one `iinf`/`iloc`/`ipma`.
+pub const MAX_ITEMS: usize = 4096;
+/// Largest number of extents read from one `iloc` entry.
+pub const MAX_EXTENTS_PER_ITEM: usize = 256;
+/// Largest number of `to_item_ID`s read from one `iref` entry.
+pub const MAX_REFS_PER_ENTRY: usize = 4096;
+
+/// One `infe` entry: what an item *is*.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ItemInfo {
+    pub item_id: u32,
+    /// The coding format (`av01`, `hvc1`, ...) or a derived-image type
+    /// (`grid`, `iovl`). All-zero for `infe` versions before 2, which name
+    /// the type in a field this crate does not read (unmeasured — every
+    /// writer this crate has seen uses version 2).
+    pub item_type: FourCc,
+    /// `flags & 1` (§9.2): a hidden item is a building block — a grid's own
+    /// tiles, an auxiliary alpha/depth plane — not meant to be presented on
+    /// its own.
+    pub hidden: bool,
+}
+
+impl ItemInfo {
+    fn parse(infe: &IsoBox<'_>) -> Option<Self> {
+        let full = infe.full().ok()?;
+        let mut r = full.reader();
+        let item_id = if full.version >= 3 {
+            r.be32()
+        } else {
+            u32::from(r.be16())
+        };
+        let _protection_index = r.be16();
+        let item_type = if full.version >= 2 {
+            let raw = r.bytes(4);
+            let mut buf = [0u8; 4];
+            let n = raw.len().min(4);
+            if let (Some(dst), Some(src)) = (buf.get_mut(..n), raw.get(..n)) {
+                dst.copy_from_slice(src);
+            }
+            FourCc(buf)
+        } else {
+            FourCc::new(b"\0\0\0\0")
+        };
+        Some(Self {
+            item_id,
+            item_type,
+            hidden: full.flags & 1 != 0,
+        })
+    }
+}
+
+/// `iinf` — every item's `infe`.
+#[must_use]
+pub fn parse_iinf(iinf: &IsoBox<'_>) -> Vec<ItemInfo> {
+    let Ok(full) = iinf.full() else {
+        return Vec::new();
+    };
+    // `entry_count` is 16 bits in version 0, 32 bits otherwise (§8.11.6.2).
+    let count_width = if full.version == 0 { 2 } else { 4 };
+    iinf.children_after(4usize.saturating_add(count_width))
+        .flatten()
+        .filter(|b| b.kind() == boxes::INFE)
+        .filter_map(|b| ItemInfo::parse(&b))
+        .take(MAX_ITEMS)
+        .collect()
+}
+
+/// `pitm` — the primary item id.
+#[must_use]
+pub fn parse_pitm(pitm: &IsoBox<'_>) -> Option<u32> {
+    let full = pitm.full().ok()?;
+    let mut r = full.reader();
+    Some(if full.version == 0 {
+        u32::from(r.be16())
+    } else {
+        r.be32()
+    })
+}
+
+/// `construction_method` (§8.11.3.3): where an extent's offset is measured
+/// from. Only `FileOffset` is resolved to bytes anywhere in this crate — the
+/// other two need context (`idat`'s own location, or another item's already-
+/// resolved extents) that a caller, not this parse step, has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ConstructionMethod {
+    #[default]
+    FileOffset,
+    IdatOffset,
+    ItemOffset,
+}
+
+/// One item's byte ranges, from `iloc`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ItemLocation {
+    pub item_id: u32,
+    pub construction_method: ConstructionMethod,
+    /// `(offset, length)` pairs, `base_offset` already folded in.
+    pub extents: Vec<(u64, u64)>,
+}
+
+/// Read a big-endian value `size` bytes wide. `iloc`'s size nibbles are
+/// specified to be `0`, `4` or `8`; anything else reports `0` rather than
+/// misreading a width this format does not define.
+fn read_sized(r: &mut vaco_bitstream::ByteReader<'_>, size: u8) -> u64 {
+    match size {
+        4 => u64::from(r.be32()),
+        8 => r.be64(),
+        _ => 0,
+    }
+}
+
+/// Parse `iloc` (§8.11.3) fully — bounded by [`MAX_ITEMS`] and
+/// [`MAX_EXTENTS_PER_ITEM`], and by the reader's own truncation flag, which
+/// stops the loop the instant a declared count runs past the payload rather
+/// than reading zeros for the rest.
+#[must_use]
+pub fn parse_iloc(iloc: &IsoBox<'_>) -> Vec<ItemLocation> {
+    let Ok(full) = iloc.full() else {
+        return Vec::new();
+    };
+    let mut r = full.reader();
+    let sizes_a = r.u8();
+    let (offset_size, length_size) = (sizes_a >> 4, sizes_a & 0x0F);
+    let sizes_b = r.u8();
+    let base_offset_size = sizes_b >> 4;
+    let index_size = if full.version == 1 || full.version == 2 {
+        sizes_b & 0x0F
+    } else {
+        0
+    };
+    let item_count = if full.version < 2 {
+        u32::from(r.be16())
+    } else {
+        r.be32()
+    };
+    let mut out = Vec::new();
+    for _ in 0..item_count.min(u32::try_from(MAX_ITEMS).unwrap_or(u32::MAX)) {
+        let item_id = if full.version < 2 {
+            u32::from(r.be16())
+        } else {
+            r.be32()
+        };
+        let construction_method = if full.version >= 1 {
+            match r.be16() & 0x0F {
+                1 => ConstructionMethod::IdatOffset,
+                2 => ConstructionMethod::ItemOffset,
+                _ => ConstructionMethod::FileOffset,
+            }
+        } else {
+            ConstructionMethod::FileOffset
+        };
+        let _data_reference_index = r.be16();
+        let base_offset = read_sized(&mut r, base_offset_size);
+        let extent_count = r.be16();
+        let mut extents = Vec::new();
+        for _ in 0..u32::from(extent_count).min(u32::try_from(MAX_EXTENTS_PER_ITEM).unwrap_or(u32::MAX))
+        {
+            if (full.version == 1 || full.version == 2) && index_size > 0 {
+                let _extent_index = read_sized(&mut r, index_size);
+            }
+            let extent_offset = read_sized(&mut r, offset_size);
+            let extent_length = read_sized(&mut r, length_size);
+            extents.push((base_offset.saturating_add(extent_offset), extent_length));
+        }
+        out.push(ItemLocation {
+            item_id,
+            construction_method,
+            extents,
+        });
+        if r.overrun() {
+            break;
+        }
+    }
+    out
+}
+
+/// `iprp ▸ ipco` — the property boxes, in file order. `ipma`'s
+/// `property_index` is 1-based into this list.
+#[must_use]
+pub fn parse_ipco<'a>(iprp: &IsoBox<'a>) -> Vec<IsoBox<'a>> {
+    let Some(ipco) = iprp.children().find(boxes::IPCO) else {
+        return Vec::new();
+    };
+    ipco.children().flatten().take(MAX_ITEMS).collect()
+}
+
+/// One item's property associations: `(essential, 1-based ipco index)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ItemPropertyAssociation {
+    pub item_id: u32,
+    pub properties: Vec<(bool, u16)>,
+}
+
+/// `iprp ▸ ipma`.
+#[must_use]
+pub fn parse_ipma(iprp: &IsoBox<'_>) -> Vec<ItemPropertyAssociation> {
+    let Some(ipma) = iprp.children().find(boxes::IPMA) else {
+        return Vec::new();
+    };
+    let Ok(full) = ipma.full() else {
+        return Vec::new();
+    };
+    let mut r = full.reader();
+    let entry_count = r.be32();
+    let large_index = full.flags & 1 != 0;
+    let mut out = Vec::new();
+    for _ in 0..entry_count.min(u32::try_from(MAX_ITEMS).unwrap_or(u32::MAX)) {
+        let item_id = if full.version < 1 {
+            u32::from(r.be16())
+        } else {
+            r.be32()
+        };
+        let association_count = r.u8();
+        let mut properties = Vec::new();
+        for _ in 0..association_count {
+            if large_index {
+                let v = r.be16();
+                properties.push((v & 0x8000 != 0, v & 0x7FFF));
+            } else {
+                let v = r.u8();
+                properties.push((v & 0x80 != 0, u16::from(v & 0x7F)));
+            }
+        }
+        out.push(ItemPropertyAssociation {
+            item_id,
+            properties,
+        });
+        if r.overrun() {
+            break;
+        }
+    }
+    out
+}
+
+/// One `iref` entry: a reference type and the item ids it names, from one
+/// item to potentially several — a grid's own tiles are `dimg` references
+/// from the grid item to each tile, in raster order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ItemReference {
+    pub kind: FourCc,
+    pub from_item_id: u32,
+    pub to_item_ids: Vec<u32>,
+}
+
+/// `iref` (§8.11.12): a full box whose children are themselves typed
+/// reference records, not boxes wrapping a further full-box header.
+#[must_use]
+pub fn parse_iref(iref: &IsoBox<'_>) -> Vec<ItemReference> {
+    let Ok(full) = iref.full() else {
+        return Vec::new();
+    };
+    let wide = full.version >= 1;
+    let mut out = Vec::new();
+    for child in iref.children_after(4).flatten().take(MAX_ITEMS) {
+        let mut r = vaco_bitstream::ByteReader::new(child.payload);
+        let from_item_id = if wide { r.be32() } else { u32::from(r.be16()) };
+        let ref_count = r.be16();
+        let mut to_item_ids = Vec::new();
+        for _ in 0..u32::from(ref_count).min(u32::try_from(MAX_REFS_PER_ENTRY).unwrap_or(u32::MAX))
+        {
+            to_item_ids.push(if wide { r.be32() } else { u32::from(r.be16()) });
+            if r.overrun() {
+                break;
+            }
+        }
+        out.push(ItemReference {
+            kind: child.kind(),
+            from_item_id,
+            to_item_ids,
+        });
+    }
+    out
+}
+
+/// `ispe` (`ImageSpatialExtentsProperty`, §6.5.3.1): an item's pixel
+/// dimensions.
+#[must_use]
+pub fn parse_ispe(ispe: &IsoBox<'_>) -> Option<(u32, u32)> {
+    let full = ispe.full().ok()?;
+    let mut r = full.reader();
+    let width = r.be32();
+    let height = r.be32();
+    r.check().ok()?;
+    Some((width, height))
+}
+
+/// `ImageGrid` (§6.6.2.3.2): a derived image's own bytes (located via
+/// `iloc` exactly like a coded item's, but holding this small descriptor
+/// instead of compressed data) — the grid's output size and how many tiles
+/// (referenced by a sibling `iref ▸ dimg`) tile it, in raster order. Actually
+/// compositing the tiles into one image is decode-level work this box layer
+/// does not do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImageGrid {
+    pub rows: u32,
+    pub columns: u32,
+    pub output_width: u32,
+    pub output_height: u32,
+}
+
+impl ImageGrid {
+    /// Parse a `grid` item's own payload bytes (not a box — `ImageGrid` has
+    /// no four-character-code header of its own).
+    #[must_use]
+    pub fn parse(data: &[u8]) -> Option<Self> {
+        let mut r = vaco_bitstream::ByteReader::new(data);
+        let _version = r.u8();
+        let flags = r.u8();
+        let rows = u32::from(r.u8()).saturating_add(1);
+        let columns = u32::from(r.u8()).saturating_add(1);
+        let large = flags & 1 != 0;
+        let (output_width, output_height) = if large {
+            (r.be32(), r.be32())
+        } else {
+            (u32::from(r.be16()), u32::from(r.be16()))
+        };
+        r.check().ok()?;
+        Some(Self {
+            rows,
+            columns,
+            output_width,
+            output_height,
+        })
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
+mod tests {
+    use super::*;
+    use crate::testutil::{bx, first_box, fullbx};
+
+    fn hex_bytes(hex: &str) -> Vec<u8> {
+        (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    /// Bytes read back from a real `ffmpeg 8.1 -c:v libsvtav1 -f avif`
+    /// single-image file (see the module doc): `infe` version 2, item id 1,
+    /// type `av01`, name `"Color"`.
+    #[test]
+    fn infe_matches_a_real_ffmpeg_avif_file() {
+        let body = hex_bytes("0001000061763031436f6c6f7200");
+        let raw = fullbx(b"infe", 2, 0, &body);
+        let info = ItemInfo::parse(&first_box(&raw)).unwrap();
+        assert_eq!(info.item_id, 1);
+        assert_eq!(info.item_type, FourCc::new(b"av01"));
+        assert!(!info.hidden);
+    }
+
+    /// `iloc` bytes from the same file: version 0, one item, one extent
+    /// whose offset/length landed exactly on that file's `mdat` payload.
+    #[test]
+    fn iloc_matches_a_real_ffmpeg_avif_file() {
+        let body = hex_bytes("4400000100010000000100000121000002f9");
+        let raw = fullbx(b"iloc", 0, 0, &body);
+        let items = parse_iloc(&first_box(&raw));
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].item_id, 1);
+        assert_eq!(items[0].construction_method, ConstructionMethod::FileOffset);
+        assert_eq!(items[0].extents, vec![(0x121, 0x2f9)]);
+    }
+
+    #[test]
+    fn ispe_reports_width_and_height() {
+        let body = [0, 0, 0, 0x40, 0, 0, 0, 0x30];
+        let raw = fullbx(b"ispe", 0, 0, &body);
+        assert_eq!(parse_ispe(&first_box(&raw)), Some((64, 48)));
+    }
+
+    /// `ipma` bytes from the same file: one entry, item id 1, four
+    /// associations `1, 2, 0x83, 4` — matching that file's `ipco` order
+    /// `[ispe, pixi, av1C, colr]`, with `av1C` marked essential.
+    #[test]
+    fn ipma_matches_a_real_ffmpeg_avif_file() {
+        let ipma_body = hex_bytes("0000000100010401028304");
+        let ipma = fullbx(b"ipma", 0, 0, &ipma_body);
+        let ipco = bx(
+            b"ipco",
+            &[
+                bx(b"ispe", &[]),
+                bx(b"pixi", &[]),
+                bx(b"av1C", &[]),
+                bx(b"colr", &[]),
+            ]
+            .concat(),
+        );
+        let mut iprp_body = ipco;
+        iprp_body.extend_from_slice(&ipma);
+        let iprp = bx(b"iprp", &iprp_body);
+        let entry = first_box(&iprp);
+        assert_eq!(parse_ipco(&entry).len(), 4);
+        let assocs = parse_ipma(&entry);
+        assert_eq!(assocs.len(), 1);
+        assert_eq!(assocs[0].item_id, 1);
+        assert_eq!(
+            assocs[0].properties,
+            vec![(false, 1), (false, 2), (true, 3), (false, 4)]
+        );
+    }
+
+    #[test]
+    fn iref_reads_dimg_references_for_a_grid() {
+        // One `dimg` record: from item 1, to items 2 and 3.
+        let mut record = 1u16.to_be_bytes().to_vec(); // from_item_id
+        record.extend_from_slice(&2u16.to_be_bytes()); // reference_count
+        record.extend_from_slice(&2u16.to_be_bytes());
+        record.extend_from_slice(&3u16.to_be_bytes());
+        let mut body = 0u32.to_be_bytes().to_vec(); // version/flags
+        body.extend_from_slice(&bx(b"dimg", &record));
+        let raw = bx(b"iref", &body);
+        let refs = parse_iref(&first_box(&raw));
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].kind, FourCc::new(b"dimg"));
+        assert_eq!(refs[0].from_item_id, 1);
+        assert_eq!(refs[0].to_item_ids, vec![2, 3]);
+    }
+
+    #[test]
+    fn image_grid_parses_rows_columns_and_output_size() {
+        // version 0, flags 0 (16-bit output size): 1 row, 2 columns
+        // (rows_minus_one=0, columns_minus_one=1), output 128x64.
+        let data = [0, 0, 0, 1, 0, 128, 0, 64];
+        let grid = ImageGrid::parse(&data).unwrap();
+        assert_eq!(grid.rows, 1);
+        assert_eq!(grid.columns, 2);
+        assert_eq!((grid.output_width, grid.output_height), (128, 64));
+    }
+
+    #[test]
+    fn a_truncated_iloc_never_panics() {
+        for n in 0..40 {
+            let raw = fullbx(b"iloc", 0, 0, &vec![0u8; n]);
+            let _ = parse_iloc(&first_box(&raw));
+        }
+    }
+
+    #[test]
+    fn a_truncated_ipma_never_panics() {
+        for n in 0..40 {
+            let ipma = fullbx(b"ipma", 0, 0, &vec![0u8; n]);
+            let raw = bx(b"iprp", &ipma);
+            let _ = parse_ipma(&first_box(&raw));
+        }
+    }
+}
