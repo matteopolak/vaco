@@ -59,6 +59,7 @@
 
 pub mod color;
 pub mod concat;
+pub mod interleave;
 pub mod looping;
 pub mod metadata;
 pub mod nullsink;

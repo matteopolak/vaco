@@ -203,3 +203,17 @@ name = "asegment"
 long_name = "Split single input stream into multiple audio streams"
 ctor = "vaco_filter_mm::segment::audio::DESC"
 media = "audio"
+
+[[component]]
+kind = "filter"
+name = "interleave"
+long_name = "Temporally interleave video inputs"
+ctor = "vaco_filter_mm::interleave::video::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "ainterleave"
+long_name = "Temporally interleave audio inputs"
+ctor = "vaco_filter_mm::interleave::audio::DESC"
+media = "audio"
