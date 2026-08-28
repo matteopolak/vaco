@@ -688,15 +688,47 @@ covered by a new unit test (`9d81baf`). `repeat_first_field` has nowhere
 to go: together with `top_field_first` it selects 2, 3 or 4 field-display
 periods (the shape of `ffmpeg`'s own `AVFrame::repeat_pict`), not a plain
 boolean, and `vaco_frame::Frame` has no numeric field for it — only two
-booleans exist. This crate does not own `vaco-frame`, and the project's
-single-writer rule forbids editing it from here, so the field stays
-parsed-and-discarded, now documented rather than silently dropped.
-**Independently corroborated, not just asserted**: `vaco-filter-
-deinterlace`'s own `repeatfields.rs` reached the identical conclusion
-from the consuming side — its whole job is to act on this exact signal,
-and it has nothing to read because no decoder in this workspace can
-produce it. Both findings point at the same open interface question for
-whoever owns `vaco-frame`.
+booleans exist. **A further round closed this properly rather than
+leaving it as a documented gap.** `vaco-filter-deinterlace`'s own
+`repeatfields.rs` had already reached the identical conclusion
+independently, from the consuming side — its whole job is to act on
+this exact signal, and it had nothing to read because no decoder in
+this workspace could produce it; two crates reaching the same missing
+concept from opposite ends is what made this actionable rather than one
+crate's convenience.
+
+Checked before choosing a shape, not assumed: `Frame`'s fields are
+deliberately public and struct-literal-constructible everywhere (`vaco-
+frame/src/alloc.rs`'s own module doc — "the fields stay public and a
+struct literal still works"), 88 files in this tree write `Frame { ...
+}` literals directly, and `Frame` has no `Default` impl — a new
+*required field* would be a tree-wide breaking change with no
+`..Default::default()` escape hatch, exactly the shape that once broke
+thirteen crates adding a field to `AudioParameters` elsewhere in this
+project's history. `FrameSideData`/`FrameSideDataKind` are both
+`#[non_exhaustive]` specifically so a new *variant* is additive instead
+— confirmed by building the whole workspace (`cargo check --workspace`)
+both before and after adding one, zero errors either time, not assumed
+from the attribute alone. Added `FrameSideData::Pulldown(u8)` (planning/
+INTERFACE-GAPS.md's gap 29) following the existing `Cropping`/`set_crop`
+pattern (`Frame::repeat_pict()`/`Frame::set_repeat_pict()`), carrying an
+*already-combined* field-period count rather than a raw bit — the
+producer has every flag H.262's three-case combination rule needs
+(`progressive_sequence` at sequence level, `progressive_frame`/
+`repeat_first_field`/`top_field_first` at picture level), so a consumer
+like `repeatfields.rs` reads one resolved number instead of re-deriving
+the combination itself.
+
+`vaco-codec-mpeg12` is gap 29's first producer:
+`picture_coding_extension()`'s `repeat_first_field` is now stored (was
+discarded) and `sequence_extension()`'s `progressive_sequence` is now
+consumed (was dead code, defaulting to `true` for a `None` extension per
+D.9.14's MPEG-1 compatibility statement). `pulldown_extra_fields`
+implements H.262 §6.3.10's exact combination rule, verified against the
+primary text directly rather than recalled, covered by a table-driven
+unit test for all three cases plus a `begin_picture` integration test.
+No pixel output changes anywhere (side-data only, confirmed
+byte-identical on every fixture on hand).
 
 **Field pictures were checked, not planned blind, and the checking is
 what closed this round.** The obvious question first: does the
@@ -746,12 +778,26 @@ against the primary text's own worked examples for its whole life, the
 position Annex T and the legacy UMV path are already in for
 `vaco-codec-h263`.
 
-**Per instruction: land pulldown, report the field-picture scope, and
-stop — not a half-implementation that reports `CORRUPT` less often but
-still wrongly.** #355 is not re-judged this round, since field pictures
-have not landed; its reasoning stands exactly as recorded above (stays
-open, specifically for field-picture decode and pulldown-flag
-propagation), now with pulldown half-closed rather than fully open.
+**Re-judging #355 against its now-complete pulldown half.** Its stated
+scope — "sequence/GOP/picture headers and extensions, MB layer over
+D-22, field and frame pictures, pulldown flags" — now stands as:
+headers/extensions/MB layer/frame-picture reconstruction accuracy
+settled (long since); pulldown flags complete (`top_field_first` and
+`repeat_first_field` both consumed and propagated, as of this round);
+field pictures unimplemented **and** measured unverifiable against this
+project's own tooling, for two independent reasons recorded above,
+exactly the form Annex P's exclusion was recorded in for
+`vaco-codec-h263` — a decision, not an omission.
+
+**#355 stays open.** Every part of its scope *this crate could close* is
+closed; the one remaining part (field pictures) is a real, substantial,
+unimplemented decode path — not a rounding ceiling, not a documentation
+gap, not something "the numbers moved" on. Closing the issue would
+misrepresent a genuine missing feature as done. What changed this round
+is that #355's remaining scope is now exactly one item, precisely
+characterized, rather than an open-ended "and also pulldown, somehow."
+Epic #36 does not close on this either way — #357 (MPEG-1/2 encode)
+remains untouched.
 
 ## How to change it
 
