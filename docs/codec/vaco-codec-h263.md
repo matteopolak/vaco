@@ -240,7 +240,24 @@ decision, not a provenance one:**
   picture's own geometry between pictures (resampling to a new size) —
   `plus::parse` already turns away any picture whose `MPPTYPE` sets the
   `RPR` bit, since this crate's single-`RefPicture` design assumes the
-  reference is always the previous decoded frame at the same size.
+  reference is always the previous decoded frame at the same size. Two
+  independent reasons to leave it out, not one: on top of that
+  architectural mismatch, `ffmpeg -h encoder=h263p` exposes no RPR option
+  at all (checked directly, the same way `yuv444p` support was checked
+  for `vaco-codec-mpeg12`'s #356) — there is no way to build a real
+  differential fixture for this annex from this project's own tooling
+  even if the architecture supported it.
+- **Annex L (Supplemental Enhancement Information)** is read in full but
+  has nothing pixel-affecting to land, which is a different conclusion
+  from "skipped for cost": it defines how `PSUPP` octets carry optional
+  signalling (full-picture-freeze requests, chroma-keying hints, GOB/
+  segment tagging) for a real-time interactive decoder to *act* on —
+  freezing a display, compositing a chroma-keyed region — not anything
+  that changes reconstructed pixels. `skip_pei_chain` already consumes
+  `PSUPP` octets bit-correctly regardless of their internal structure
+  (see the false-alarm investigation in "Bugs found while building the
+  H.263+ annex differential harness" below), so there is no reconstruction
+  behaviour left to add for a non-interactive, whole-file decoder.
 
 `plus::parse` bails to `unsupported` (same flat-mid-grey `CORRUPT`
 convention as the baseline decoder) for any picture using one of the six
