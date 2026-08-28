@@ -1,7 +1,8 @@
 # `vaco-format-rtp`
 
-Layer 4. The shared RTP/RTCP packet model, the RFC 3551 static payload-type
-table, the RTP depacketisers, and the SDP parser.
+Layer 4. The RFC 3551 static payload-type table, the RTP depacketisers, and
+the SDP parser. `rtp`/`rtcp` are re-exported unchanged from `vaco-rtp`
+(layer 1) — see below.
 
 ## What it is
 
@@ -9,8 +10,15 @@ Everything `vaco-demux-rtsp` and `vaco-mux-rtp` both need and neither should
 duplicate:
 
 * `rtp` — RFC 3550 §5.1 header parse/build (`RtpPacket`, `RtpHeader`).
+  **Moved to `vaco-rtp` on 2026-08-28** and re-exported here as
+  `pub use vaco_rtp::rtp;` — nothing that already wrote `vaco_format_rtp::rtp`
+  or `vaco_format_rtp::RtpPacket` needed to change. It moved because RIST's
+  Simple Profile (VSF TR-06-1, `vaco-protocol-rist`, layer 2) needs the same
+  RFC 3550 framing, and `xtask/src/layers.rs` forbids a layer-2 crate
+  depending on a layer-4 one. See `docs/model/vaco-rtp.md`.
 * `rtcp` — RFC 3550 §6 sender/receiver reports, `SDES`, `BYE` (`RtcpPacket`,
-  `build_sr`/`build_rr`/`build_bye`).
+  `build_sr`/`build_rr`/`build_bye`). Moved to `vaco-rtp` at the same time,
+  for the same reason, re-exported the same way.
 * `payload` — the RFC 3551 static payload-type table (`STATIC_PAYLOADS`, 35
   rows including the RFC's own reserved/unassigned entries).
 * `sdp` — RFC 4566 session descriptions (`SessionDescription`,
@@ -57,9 +65,10 @@ in `vaco-demux-rtsp::RtspOptions`.
 
 ## Dependencies
 
-`vaco-core`, `vaco-limits`, `vaco-packet`, `vaco-codec-core` — no protocol or
-I/O crate. This crate never opens a socket; see `vaco-demux-rtsp`'s docs for
-where the transport-security boundary actually lives.
+`vaco-core`, `vaco-limits`, `vaco-packet`, `vaco-codec-core`, `vaco-rtp`
+(the RTP/RTCP wire format, layer 1) — no protocol or I/O crate. This crate
+never opens a socket; see `vaco-demux-rtsp`'s docs for where the
+transport-security boundary actually lives.
 
 ## wasm
 

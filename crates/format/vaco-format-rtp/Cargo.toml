@@ -1,6 +1,6 @@
 [package]
 name = "vaco-format-rtp"
-description = "RTP/RTCP packet model, RFC 3551 payload-type table, RTP depacketisers and the SDP parser."
+description = "RFC 3551 payload-type table, RTP depacketisers and the SDP parser (RTP/RTCP wire format re-exported from vaco-rtp)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,6 +13,7 @@ vaco-core = { path = "../../core/vaco-core" }
 vaco-limits = { path = "../../core/vaco-limits" }
 vaco-packet = { path = "../../model/vaco-packet" }
 vaco-codec-core = { path = "../../signal/vaco-codec-core" }
+vaco-rtp = { path = "../../model/vaco-rtp" }
 
 [dev-dependencies]
 proptest.workspace = true
