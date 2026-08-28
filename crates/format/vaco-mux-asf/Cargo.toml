@@ -16,6 +16,7 @@ vaco-packet = { path = "../../model/vaco-packet" }
 vaco-format-core = { path = "../../format/vaco-format-core" }
 vaco-format-asf = { path = "../vaco-format-asf" }
 vaco-format-riff = { path = "../vaco-format-riff" }
+vaco-format-nalu = { path = "../vaco-format-nalu" }
 vaco-codec-core = { path = "../../signal/vaco-codec-core" }
 
 [dev-dependencies]

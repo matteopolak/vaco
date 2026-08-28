@@ -44,11 +44,36 @@ use vaco_codec_core::{CodecId, CodecParameters};
 use vaco_core::{Error, MediaType, Rational, Result};
 use vaco_format_asf::guid::Guid;
 use vaco_format_asf::well_known;
+use vaco_format_core::mux::BitstreamAction;
 use vaco_format_core::{FormatOptions, Muxer, MuxerDesc};
+use vaco_format_nalu::{LengthSize, convert::length_prefixed_to_annexb};
 use vaco_io::{IoOptions, IoWriter, MediaSink};
+use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
 
 use crate::codec;
+
+/// Whether `codec` needs its length-prefixed (`avcC`/`hvcC`-style) samples
+/// rewritten to Annex B before they can go in an ASF Data Packet.
+///
+/// ASF's own [\[ASF\]] spec has no length-prefixed convention for these
+/// codecs' payloads — measured directly: `ffmpeg -c copy -f asf` on an
+/// `avcC`-framed H.264 MP4 source writes Annex-B-framed samples, and a
+/// decoder fed this crate's previous verbatim copy reported "No start code
+/// is found" and failed every access unit. Same two codecs `vaco-mux-raw`
+/// and `vaco-mux-mpegts` convert, for the same reason; VVC is not included
+/// because [`codec::video_fourcc`] has no VVC mapping at all.
+const fn needs_annexb_framing(codec: CodecId) -> bool {
+    matches!(codec, CodecId::H264 | CodecId::Hevc)
+}
+
+/// Whether `payload` already opens with an Annex B start code (`00 00 01` or
+/// `00 00 00 01`) — see `vaco-mux-mpegts`'s identical helper for why this
+/// makes [`AsfMuxer::maybe_convert`] safe to call unconditionally even after
+/// M6 has already reframed the payload.
+fn starts_with_annexb_start_code(payload: &[u8]) -> bool {
+    payload.starts_with(&[0, 0, 1]) || payload.starts_with(&[0, 0, 0, 1])
+}
 
 /// Default fixed Data Packet size, in bytes. Measured: `ffmpeg -h
 /// muxer=asf_stream` reports `-packet_size <int> … (default 3200)`, and a
@@ -119,6 +144,14 @@ fn open_muxer(sink: Box<dyn MediaSink>) -> Result<Box<dyn Muxer>> {
 struct StreamOut {
     stream_number: u8,
     media_object_counter: u8,
+    /// `Some(n)`, `n > 0`: this stream's samples are length-prefixed
+    /// (`avcC`/`hvcC` style) with an `n`-byte length and must be rewritten to
+    /// Annex B before they can go in a Data Packet — see
+    /// [`needs_annexb_framing`]. `None`: already Annex B, or not applicable.
+    length_size: Option<LengthSize>,
+    /// Set the first time [`AsfMuxer::check_bitstream`] answers for this
+    /// stream, mirroring `vaco-mux-mpegts::MuxStream::bsf_decided`.
+    bsf_decided: bool,
 }
 
 /// One already-length-known payload, ready to be placed in a physical
@@ -197,6 +230,8 @@ pub struct AsfMuxer {
     send_duration_at: u64,
     data_object_size_at: u64,
     data_object_total_packets_at: u64,
+    /// Bounds [`length_prefixed_to_annexb`]'s output allocation.
+    convert_budget: Budget,
 }
 
 /// `ASF_Index_Entry_Time_Interval` this crate writes for every Simple Index
@@ -229,6 +264,7 @@ impl AsfMuxer {
             send_duration_at: 0,
             data_object_size_at: 0,
             data_object_total_packets_at: 0,
+            convert_budget: Budget::new(Limits::permissive()),
         })
     }
 
@@ -375,6 +411,27 @@ impl AsfMuxer {
         }
         Ok(())
     }
+
+    /// Rewrite `payload` to Annex B if `index`'s stream declared a
+    /// length-prefixed framing at [`Muxer::add_stream`] time — the fallback
+    /// a caller with no `BsfProvider` still needs, and a no-op once a real
+    /// BSF (requested through [`AsfMuxer::check_bitstream`]) has already run,
+    /// guarded by [`starts_with_annexb_start_code`]. Mirrors
+    /// `vaco-mux-mpegts::MpegTsMuxer::maybe_convert`.
+    fn maybe_convert(&mut self, index: usize, payload: &[u8]) -> Result<Vec<u8>> {
+        let Some(stream) = self.streams.get(index) else {
+            return Ok(payload.to_vec());
+        };
+        let Some(length_size) = stream.length_size else {
+            return Ok(payload.to_vec());
+        };
+        if starts_with_annexb_start_code(payload) {
+            return Ok(payload.to_vec());
+        }
+        let mut out = Vec::new();
+        length_prefixed_to_annexb(payload, length_size, &mut out, &mut self.convert_budget)?;
+        Ok(out)
+    }
 }
 
 impl Muxer for AsfMuxer {
@@ -430,11 +487,24 @@ impl Muxer for AsfMuxer {
             build_audio_type_specific(tag, channels, a.sample_rate, bits, block_align)
         };
 
+        let length_size = if media == MediaType::Video && needs_annexb_framing(codec_id) {
+            params
+                .video
+                .as_ref()
+                .and_then(|v| v.nal_length_size)
+                .filter(|&n| n > 0)
+                .and_then(LengthSize::new)
+        } else {
+            None
+        };
+
         let sp = build_stream_properties(stream_number, media, &type_specific);
         self.stream_codec_bytes.push(sp);
         self.streams.push(StreamOut {
             stream_number,
             media_object_counter: 0,
+            length_size,
+            bsf_decided: false,
         });
         if media == MediaType::Video {
             self.simple_index
@@ -508,7 +578,13 @@ impl Muxer for AsfMuxer {
             let s = self.stream_out(idx)?;
             (s.stream_number, packet.is_key())
         };
-        let pts_ms = u32::try_from(packet.pts.ticks().unwrap_or(0).max(0)).unwrap_or(u32::MAX);
+        // Every payload's Replicated Data carries one "Presentation Time" in
+        // ms ([\[ASF\] §5.2.2](vaco_format_asf)); despite the name, it wants
+        // `packet.dts`, not `packet.pts` — measured on a B-frame H.264
+        // source, where PTS is not monotonic across `write_packet` calls but
+        // a real ASF reader requires it to be, and silently decodes the
+        // wrong picture into each slot otherwise.
+        let pts_ms = u32::try_from(packet.dts.ticks().unwrap_or(0).max(0)).unwrap_or(u32::MAX);
         self.max_pts_ms = self.max_pts_ms.max(pts_ms);
 
         let mo_number = {
@@ -518,7 +594,8 @@ impl Muxer for AsfMuxer {
             n
         };
 
-        let data = packet.payload();
+        let converted = self.maybe_convert(idx, packet.payload())?;
+        let data = converted.as_slice();
         let total_len = u32::try_from(data.len()).unwrap_or(u32::MAX);
         let whole_entry_len = PAYLOAD_HEADER_OVERHEAD + data.len();
         if PACKET_FIXED_OVERHEAD + whole_entry_len <= self.packet_size as usize {
@@ -542,6 +619,35 @@ impl Muxer for AsfMuxer {
             .ok()
             .and_then(|i| self.streams.get(i))
             .map(|_| Rational::new(1, 1000))
+    }
+
+    /// Ask M6 for `h264_mp4toannexb`/`hevc_mp4toannexb` when the stream
+    /// declared length-prefixed framing — the same condition
+    /// [`AsfMuxer::maybe_convert`] uses, and the same shape as
+    /// `vaco-mux-mpegts::MpegTsMuxer::check_bitstream`.
+    fn check_bitstream(&mut self, params: &CodecParameters, pkt: &Packet) -> Result<BitstreamAction> {
+        let idx = usize::try_from(pkt.stream_index).ok();
+        if idx.and_then(|i| self.streams.get(i)).is_some_and(|s| s.bsf_decided) {
+            return Ok(BitstreamAction::Keep);
+        }
+        if let Some(s) = idx.and_then(|i| self.streams.get_mut(i)) {
+            s.bsf_decided = true;
+        }
+        let asks_for_splice = matches!(params.codec_id, Some(CodecId::H264 | CodecId::Hevc))
+            && params
+                .video
+                .as_ref()
+                .and_then(|v| v.nal_length_size)
+                .is_some_and(|n| n > 0);
+        if !asks_for_splice {
+            return Ok(BitstreamAction::Keep);
+        }
+        Ok(BitstreamAction::Insert {
+            name: match params.codec_id {
+                Some(CodecId::Hevc) => "hevc_mp4toannexb",
+                _ => "h264_mp4toannexb",
+            },
+        })
     }
 
     fn write_trailer(&mut self) -> Result<()> {

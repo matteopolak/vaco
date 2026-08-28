@@ -124,6 +124,29 @@ side.
 
 ---
 
+## H.264/HEVC framing, and the Presentation Time field
+
+`-c copy` from an `avcC`/`hvcC`-framed source (MP4, say) needed two fixes to
+decode cleanly out of ASF, neither obvious from the byte layout alone:
+
+- **Length-prefixed samples must become Annex B first.** ASF has no
+  length-prefixed convention for H.264/HEVC payloads — measured, a
+  length-prefixed sample fed straight through decoded as "No start code is
+  found" on every access unit. `AsfMuxer::maybe_convert` and
+  `AsfMuxer::check_bitstream` mirror `vaco-mux-mpegts`'s pair exactly:
+  `StreamOut::length_size` records the container's declared length width at
+  `add_stream` time, `maybe_convert` rewrites to Annex B as a fallback with no
+  `BsfProvider`, and `check_bitstream` asks M6 for `h264_mp4toannexb`/
+  `hevc_mp4toannexb` when one is wired.
+- **The "Presentation Time" field wants decode order, not display order.**
+  `write_packet` used `packet.pts`; with a B-frame source that is not
+  monotonic across calls, and a real ASF reader treats a non-monotonic value
+  as corrupt framing — it decoded a different (wrong) picture into each slot,
+  same access-unit count, different YUV bytes throughout. Swapping to
+  `packet.dts` (monotonic by construction) made a decoded-video MD5 match the
+  reference exactly. See the comment at the `pts_ms` assignment in
+  `write_packet` for the measurement.
+
 ## How to change it
 
 - **Add a codec mapping**: `codec::video_fourcc`/`audio_format_tag` are the

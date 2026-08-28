@@ -54,6 +54,13 @@ fn packet(stream_index: u32, pts_ms: i64, payload: &[u8], key: bool) -> Packet {
     let mut pkt = Packet::from_slice(&mut budget, payload).unwrap();
     pkt.stream_index = stream_index;
     pkt.pts = Timestamp::new(pts_ms);
+    // No reordering in this fixture (no B-frames), so dts equals pts — this
+    // crate's muxer now writes ASF's "Presentation Time" from `packet.dts`
+    // (decode order, monotonic even with real B-frame content), not `pts`;
+    // leaving `dts` at its `Timestamp::NONE` default here would zero out
+    // every payload's Replicated Data and, downstream, the muxer's own
+    // `max_pts_ms`/trailer duration patch this file's own tests check.
+    pkt.dts = pkt.pts;
     pkt.flags = if key {
         PacketFlags::KEY
     } else {
