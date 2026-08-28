@@ -63,6 +63,7 @@ vaco-codec-h263 = { path = "../crates/codec/vaco-codec-h263", optional = true }
 vaco-codec-h264 = { path = "../crates/codec/vaco-codec-h264", optional = true }
 vaco-codec-image-simple = { path = "../crates/codec/vaco-codec-image-simple", optional = true }
 vaco-codec-jpeg = { path = "../crates/codec/vaco-codec-jpeg", optional = true }
+vaco-codec-jpegls = { path = "../crates/codec/vaco-codec-jpegls", optional = true }
 vaco-codec-jpegxl = { path = "../crates/codec/vaco-codec-jpegxl", optional = true }
 vaco-codec-mpeg12 = { path = "../crates/codec/vaco-codec-mpeg12", optional = true }
 vaco-codec-mpegaudio = { path = "../crates/codec/vaco-codec-mpegaudio", optional = true }
@@ -232,6 +233,7 @@ default = [
     "codec-h264",
     "codec-image-simple",
     "codec-jpeg",
+    "codec-jpegls",
     "codec-jpegxl",
     "codec-mpeg12",
     "codec-mpegaudio",
@@ -391,6 +393,7 @@ codec-h263 = ["dep:vaco-codec-core", "dep:vaco-codec-h263", "dep:vaco-limits", "
 codec-h264 = ["dep:vaco-bitstream", "dep:vaco-codec-cabac", "dep:vaco-codec-h264", "dep:vaco-limits"]
 codec-image-simple = ["dep:vaco-codec-image-simple", "dep:vaco-core", "dep:vaco-frame", "dep:vaco-limits"]
 codec-jpeg = ["dep:vaco-codec-jpeg", "dep:vaco-frame", "dep:vaco-limits", "dep:vaco-pixfmt"]
+codec-jpegls = ["dep:vaco-codec-jpegls", "dep:vaco-frame", "dep:vaco-limits", "dep:vaco-pixfmt"]
 codec-jpegxl = ["dep:vaco-codec-jpegxl", "dep:vaco-limits"]
 codec-mpeg12 = ["dep:vaco-codec-core", "dep:vaco-codec-mpeg12", "dep:vaco-limits", "dep:vaco-packet"]
 codec-mpegaudio = ["dep:vaco-codec-core", "dep:vaco-codec-mpegaudio", "dep:vaco-frame", "dep:vaco-limits", "dep:vaco-packet"]
@@ -1354,6 +1357,14 @@ test = false
 doc = false
 bench = false
 required-features = ["codec-jpeg"]
+
+[[bin]]
+name = "jpegls_decode"
+path = "fuzz_targets/jpegls_decode.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-jpegls"]
 
 [[bin]]
 name = "jpegxl_decode"
