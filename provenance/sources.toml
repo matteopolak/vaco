@@ -942,3 +942,31 @@ kind     = "spec"
 title    = "MultimediaWiki, Smacker — the format's public specification: the 104-byte header, FrameSizes/FrameTypes/HuffmanTrees side tables, per-frame palette/audio-track/video chunk layout, and the AudioRate bit-field and frame-rate formulas"
 acquired = "2026-08-28"
 where    = "https://wiki.multimedia.cx/index.php/Smacker"
+
+[[source]]
+id       = "vag-format-doc"
+kind     = "spec"
+title    = "Sony PS2 VAG header layout, corroborated field-for-field across three independent community references: the PlayStation Reverse-Engineering wiki, the Just Solve the File Format Problem wiki's VAG (PlayStation) entry, and fmjsoft's format collection — the 48-byte header (VAGp magic, version, reserved, big-endian data_size/sample_rate, 16-byte name) and the 16-byte/28-sample PS-ADPCM block shape"
+acquired = "2026-08-28"
+where    = "https://rewiki.miraheze.org/wiki/PlayStation_VAG_Audio ; http://justsolve.archiveteam.org/wiki/VAG_(PlayStation) ; https://www.fmjsoft.com/fmt/vag.htm"
+
+[[source]]
+id       = "multimedia-wiki-xwma"
+kind     = "spec"
+title    = "MultimediaWiki, Microsoft xWMA — the RIFF/XWMA chunk set (fmt /dpds/data), the dpds chunk's declared per-packet cumulative-byte-offset shape, and the WAVEFORMATEX-based fmt chunk layout"
+acquired = "2026-08-28"
+where    = "https://wiki.multimedia.cx/index.php/Microsoft_xWMA"
+
+[[source]]
+id       = "microsoft-riff-xaudio2"
+kind     = "spec"
+title    = "Microsoft Learn, \"Resource Interchange File Format (RIFF)\" (XAudio2 docs) — the generic RIFF chunk grammar (FOURCC id, size, data, word-padded) and the WAVEFORMATEX-family struct layout xWMA's fmt chunk reuses"
+acquired = "2026-08-28"
+where    = "https://learn.microsoft.com/en-us/windows/win32/xaudio2/resource-interchange-file-format--riff-"
+
+[[source]]
+id       = "vaco-format-misc-audio-vag-xwma-fixtures-probe"
+kind     = "blackbox"
+title    = "ffmpeg/ffprobe 8.1, measured against hand-built vag and xwma fixtures (no reference encoder exists for either): vag's one-packet-per-16-byte-block emission and adpcm_psx codec naming; xwma's nBlockAlign-aligned packetisation (not the dpds table's declared split), the fixed 6-byte WMAv2 extradata the reference synthesises when the fmt chunk carries none, and the dpds-chunk-presence duration_ts anomaly"
+acquired = "2026-08-28"
+where    = "the reference binary installed on the development machine"
