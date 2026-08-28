@@ -928,3 +928,17 @@ kind     = "spec"
 title    = "matroska.org, Subtitles (Codec Mappings) — used for the S_VOBSUB CodecPrivate content rule: it carries the .idx file's `size:`/`palette:` lines (and any other non-id/timestamp/comment line) verbatim, with `id:`/`langidx:`/`timestamp:`/comment lines removed"
 acquired = "2026-08-28"
 where    = "https://www.matroska.org/technical/subtitles.html"
+
+[[source]]
+id       = "multimedia-wiki-bink-container"
+kind     = "spec"
+title    = "MultimediaWiki, Bink Container — the current maintained form of Mike Melanson's \"Description of the Bink File Format\", giving the 44-byte fixed header, per-track audio headers, frame index table (absolute offsets, low-bit keyframe flag) and per-frame audio/video chunk layout"
+acquired = "2026-08-28"
+where    = "https://wiki.multimedia.cx/index.php/Bink_Container"
+
+[[source]]
+id       = "multimedia-wiki-smacker"
+kind     = "spec"
+title    = "MultimediaWiki, Smacker — the format's public specification: the 104-byte header, FrameSizes/FrameTypes/HuffmanTrees side tables, per-frame palette/audio-track/video chunk layout, and the AudioRate bit-field and frame-rate formulas"
+acquired = "2026-08-28"
+where    = "https://wiki.multimedia.cx/index.php/Smacker"
