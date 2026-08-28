@@ -68,6 +68,11 @@ fn report_what_we_say_about_a_real_file() {
                 .and_then(|a| a.layout.as_ref())
                 .map(ToString::to_string),
         );
+        println!(
+            "  initial_padding={:?} extradata_size={:?}",
+            s.params.audio.as_ref().map(|a| a.initial_padding),
+            s.params.extradata.as_ref().map(Vec::len),
+        );
     }
     let mut n = 0u64;
     let mut first = vec![None; d.streams().len()];

@@ -412,6 +412,77 @@ pub fn parse_comment_header(packet: &[u8], magic: &[u8]) -> Vec<(String, String)
     out
 }
 
+/// Packs 2+ Ogg header packets (Vorbis: identification, comment, setup;
+/// Theora shares the same three-packet shape) into one `extradata` blob,
+/// Xiph-style: a packet count minus one, then every packet's length
+/// *except the last's* lace-encoded the same way an Ogg segment table
+/// lace-encodes a packet spanning 255+ bytes (a run of `0xFF` bytes summing
+/// 255 each, terminated by a final byte `< 255`), then every packet's raw
+/// bytes concatenated in order. The last packet's length is never stated —
+/// it is simply what remains.
+///
+/// Measured, not assumed: `ffmpeg -f nut` remuxing a real
+/// `ffmpeg -c:a vorbis` Ogg file and reading `codec_specific_data` back
+/// (NUT stores a stream's extradata verbatim) gives exactly this shape for
+/// three headers of 30/29/3247 bytes — `[0x02, 0x1e, 0x1d, <30 bytes
+/// starting `01 76 6f 72 62 69 73`>, <29 bytes starting
+/// `03 76 6f 72 62 69 73`>, <3247 bytes starting `05 76 6f 72 62 69 73`>]`
+/// — byte for byte, including that a length under 255 (both of the first
+/// two headers here) is a single byte with no lace continuation.
+#[must_use]
+pub fn pack_xiph_headers(headers: &[Vec<u8>]) -> Vec<u8> {
+    let count = headers.len();
+    let mut out = Vec::new();
+    out.push(u8::try_from(count.saturating_sub(1)).unwrap_or(u8::MAX));
+    for h in headers.iter().take(count.saturating_sub(1)) {
+        let mut len = h.len();
+        while len >= 255 {
+            out.push(255);
+            len -= 255;
+        }
+        out.push(u8::try_from(len).unwrap_or(u8::MAX));
+    }
+    for h in headers {
+        out.extend_from_slice(h);
+    }
+    out
+}
+
+/// The inverse of [`pack_xiph_headers`]: splits one packed `extradata` blob
+/// back into its original header packets. `None` for anything that does not
+/// parse as this shape — a lace-encoded length running past the end of the
+/// blob, or fewer bytes left than the last declared length needs — rather
+/// than returning a wrong split.
+#[must_use]
+pub fn split_xiph_headers(data: &[u8]) -> Option<Vec<Vec<u8>>> {
+    let (&count_minus_one, mut cursor) = data.split_first()?;
+    let count = usize::from(count_minus_one).saturating_add(1);
+    let mut lens = Vec::new();
+    for _ in 0..count.saturating_sub(1) {
+        let mut len = 0usize;
+        loop {
+            let (&b, rest) = cursor.split_first()?;
+            cursor = rest;
+            len = len.saturating_add(usize::from(b));
+            if b != 255 {
+                break;
+            }
+        }
+        lens.push(len);
+    }
+    let mut headers = Vec::new();
+    for len in lens {
+        if cursor.len() < len {
+            return None;
+        }
+        let (head, rest) = cursor.split_at(len);
+        headers.push(head.to_vec());
+        cursor = rest;
+    }
+    headers.push(cursor.to_vec());
+    Some(headers)
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -614,5 +685,83 @@ mod tests {
     fn wrong_magic_or_empty_input_yields_no_comments() {
         assert!(parse_comment_header(b"", VORBIS_COMMENT_MAGIC).is_empty());
         assert!(parse_comment_header(b"not vorbis at all", VORBIS_COMMENT_MAGIC).is_empty());
+    }
+
+    /// Byte-for-byte against a real `ffmpeg -c:a vorbis -strict -2` Ogg
+    /// file, read back through `ffmpeg -f nut` (NUT stores extradata
+    /// verbatim): three headers of 30/29/3247 bytes pack to a 3309-byte
+    /// blob starting `02 1e 1d`, matching this crate's own measurement in
+    /// `pack_xiph_headers`'s doc comment.
+    #[test]
+    fn pack_xiph_headers_matches_the_measured_vorbis_layout() {
+        let ident = {
+            let mut h = vec![0x01];
+            h.extend_from_slice(b"vorbis");
+            h.resize(30, 0);
+            h
+        };
+        let comment = {
+            let mut h = vec![0x03];
+            h.extend_from_slice(b"vorbis");
+            h.resize(29, 0);
+            h
+        };
+        let setup = {
+            let mut h = vec![0x05];
+            h.extend_from_slice(b"vorbis");
+            h.resize(3247, 0);
+            h
+        };
+        let packed = pack_xiph_headers(&[ident.clone(), comment.clone(), setup.clone()]);
+        assert_eq!(packed.len(), 3309);
+        assert_eq!(&packed[..3], &[0x02, 0x1e, 0x1d]);
+        assert_eq!(&packed[3..33], ident.as_slice());
+        assert_eq!(&packed[33..62], comment.as_slice());
+        assert_eq!(&packed[62..], setup.as_slice());
+    }
+
+    #[test]
+    fn split_xiph_headers_is_the_exact_inverse_of_pack() {
+        let headers = vec![vec![1, 2, 3], vec![4, 5], vec![6, 7, 8, 9]];
+        let packed = pack_xiph_headers(&headers);
+        assert_eq!(split_xiph_headers(&packed), Some(headers));
+    }
+
+    /// A header at or past 255 bytes needs a lace-continuation byte, the
+    /// same rule an Ogg segment table already follows for a packet that
+    /// long — exercised because the real-file measurement above happens to
+    /// have both non-last headers under 255 bytes.
+    #[test]
+    fn a_header_of_255_or_more_bytes_lace_encodes_its_length() {
+        let long_header = vec![0xAB; 300];
+        let headers = vec![long_header.clone(), vec![1, 2, 3]];
+        let packed = pack_xiph_headers(&headers);
+        // 300 = 255 + 45: one 0xff continuation byte, then the 45 remainder.
+        assert_eq!(&packed[..3], &[0x01, 0xff, 45]);
+        assert_eq!(split_xiph_headers(&packed), Some(headers));
+    }
+
+    #[test]
+    fn split_xiph_headers_rejects_a_length_past_the_end() {
+        // Declares one 200-byte header (count=2) but supplies far fewer
+        // bytes than that.
+        let malformed = [1u8, 200, 1, 2, 3];
+        assert_eq!(split_xiph_headers(&malformed), None);
+    }
+
+    #[test]
+    fn split_xiph_headers_rejects_a_lace_run_with_no_terminator() {
+        // A length byte of 255 with nothing after it: the loop should stop
+        // rather than read past the slice.
+        let malformed = [1u8, 255];
+        assert_eq!(split_xiph_headers(&malformed), None);
+    }
+
+    #[test]
+    fn pack_xiph_headers_of_a_single_header_is_just_the_header() {
+        let headers = vec![vec![9, 9, 9]];
+        let packed = pack_xiph_headers(&headers);
+        assert_eq!(packed, vec![0, 9, 9, 9]);
+        assert_eq!(split_xiph_headers(&packed), Some(headers));
     }
 }

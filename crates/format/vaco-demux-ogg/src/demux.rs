@@ -124,6 +124,13 @@ struct LogicalStream {
     pending_open: bool,
     last_sequence: Option<u32>,
     eos: bool,
+    /// Every header packet seen so far, in order — accumulated so the last
+    /// one arriving can trigger [`codec::pack_xiph_headers`] into
+    /// `Stream::params.extradata`. Empty once the stream has emitted its
+    /// packed extradata (or immediately, for a codec whose one-packet
+    /// `extradata` convention `describe` already sets correctly), so this
+    /// never holds more than one stream's worth of header bytes at a time.
+    header_bytes: Vec<Vec<u8>>,
     /// Only ever `Some` for Opus, and only when [`OggDemuxer::open`] itself
     /// discovered the stream — see the module docs.
     parser: Option<Box<dyn Parser>>,
@@ -149,6 +156,7 @@ impl core::fmt::Debug for LogicalStream {
             .field("pending_open", &self.pending_open)
             .field("last_sequence", &self.last_sequence)
             .field("eos", &self.eos)
+            .field("header_bytes_len", &self.header_bytes.len())
             .field("has_parser", &self.parser.is_some())
             .finish()
     }
@@ -475,6 +483,32 @@ impl OggDemuxer {
                         }
                     }
                 }
+                // Vorbis's `extradata` convention needs every header packet,
+                // not just the identification one `describe` already stored
+                // (see `codec::pack_xiph_headers`'s doc comment for the
+                // measured layout) — accumulated here and packed once the
+                // last one arrives, since that is the first point all of
+                // them exist. `header_index` was read before this packet's
+                // own increment above, so `header_index + 1 == header_total`
+                // means this member of `completed` was that last header.
+                let is_last_header = header_index.saturating_add(1) == header_total;
+                if codec == OggCodec::Vorbis {
+                    if let Some(l) = self.logical.get_mut(idx) {
+                        l.header_bytes.push(bytes);
+                    }
+                    if is_last_header {
+                        let packed = self
+                            .logical
+                            .get_mut(idx)
+                            .map(|l| codec::pack_xiph_headers(&core::mem::take(&mut l.header_bytes)));
+                        if let Some(packed) = packed {
+                            let si = usize::try_from(stream_index).unwrap_or(usize::MAX);
+                            if let Some(stream) = self.streams.get_mut(si) {
+                                stream.params.extradata = Some(packed);
+                            }
+                        }
+                    }
+                }
                 continue;
             }
             data_bytes.push(bytes);
@@ -619,6 +653,7 @@ impl OggDemuxer {
             pending_open: false,
             last_sequence: None,
             eos: false,
+            header_bytes: Vec::new(),
             parser,
         });
         self.logical.len().saturating_sub(1)
@@ -648,10 +683,21 @@ fn describe(codec: OggCodec, bos: &[u8]) -> (MediaType, Rational, CodecParameter
             let ident = codec::parse_vorbis_ident(bos);
             let rate = ident.map_or(0, |v| v.sample_rate);
             let mut params = CodecParameters::new(MediaType::Audio).with_codec(CodecId::Vorbis);
+            // Placeholder until `classify_and_emit` sees the comment and
+            // setup headers too and replaces this with
+            // `codec::pack_xiph_headers`'s packed blob — see its doc
+            // comment. Left as the identification packet alone in the
+            // meantime rather than `None`, so a caller that only ever reads
+            // this far still gets something.
             params.extradata = Some(bos.to_vec());
             params.audio = Some(AudioParameters {
                 sample_rate: rate,
                 layout: ident.and_then(|v| ChannelLayout::default_for(u32::from(v.channels))),
+                // Measured, not assumed:
+                //   ffprobe -of csv=p=0 -show_entries stream=sample_fmt t.ogg  # fltp
+                // Same answer as Opus above and for the same reason: both
+                // decode to ffmpeg's internal float-planar representation.
+                format: Some(SampleFmt::F32P),
                 ..AudioParameters::default()
             });
             let tb = safe_rational(1, rate);
