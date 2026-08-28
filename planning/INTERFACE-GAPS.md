@@ -1881,3 +1881,43 @@ crate's fix and exactly the caution finding 55 already gives for touching
 Not fixed here: `vaco-demux-ogg` still reports `start_pts`/`start_time` as
 the raw, uncompensated negative value for Vorbis, unchanged from before
 this investigation.
+
+## Gap 27 — `vaco_protocol_core::Protocol` has no directory-creation verb
+
+Found building `vaco-mux-smoothstreaming` (epic #75, issue #617). Real
+`ffmpeg -f smoothstreaming` writes each `QualityLevel`'s fragments under its
+own `QualityLevels(<bitrate>)/` subdirectory, created fresh alongside the
+`Manifest` — measured directly: running it against an empty output
+directory produces the subdirectories with no separate mkdir step from the
+caller.
+
+`vaco-format-adaptive::WriteAccess` and the `Protocol` trait it wraps
+(`crates/io/vaco-protocol-core/src/protocol.rs`) expose `open`/`create`/
+`check`/`list_dir`/`delete`/`rename` and nothing that creates a directory.
+`vaco-protocol-file`'s own `create` (`crates/io/vaco-protocol-file/src/file.rs`)
+opens the target path directly via `OpenOptions::create(true)` with no
+parent-directory handling, so `WriteAccess::create` on a path whose parent
+does not yet exist fails with the underlying `NotFound` I/O error.
+
+`vaco-mux-dash` and `vaco-mux-hls` never hit this: both name every segment
+file flat, in the same directory as the manifest
+(`init-stream$RepresentationID$.m4s`, `chunk-stream$RepresentationID$-$Number$.m4s`),
+which reads as a deliberate design choice in hindsight rather than proof
+this gap does not exist — Smooth Streaming's `QualityLevels(<bitrate>)/`
+layout is the first multi-file format in this workspace whose own naming
+convention requires a subdirectory.
+
+Not fixed here: `vaco-protocol-file` is owned and closed (`agent:protocols`,
+`planning/ASSIGNMENTS.md`), so adding a `create_dir`/`mkdir` verb to
+`Protocol` and wiring it through `WriteAccess` is out of scope for a crate
+I do not own (D11). `vaco-mux-smoothstreaming`'s own test suite works
+around it locally (pre-creating the two `QualityLevels(<bitrate>)/`
+directories before exercising the muxer against a `file:` output), and its
+module docs name the gap rather than silently relying on the workaround
+generalizing. A real caller (`vaco-cli` or an equivalent orchestrator)
+driving this muxer against local output needs the same pre-creation step,
+generically, for any future subdirectory-shaped multi-file format — the
+natural complete fix is a `Protocol::create_dir` default-`Unsupported`
+method, implemented for `file:` (and left unsupported for e.g. `http:`,
+where a PUT target's directory structure is the server's concern, not the
+client's).

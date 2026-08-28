@@ -4738,3 +4738,112 @@ nothing from it landed except this entry and the corresponding
 `docs/codec/vaco-codec-mpeg12.md` update.
 
 `Vaco-Spec-Ref: itu-t-h262` Annex D.9.3.
+
+## `vaco-mux-smoothstreaming` (new, #617): MS-SSTR muxer built on `vaco-format-isom`'s existing fMP4 fragment writers; `tfrf` and per-bitrate directory creation both named and scoped out rather than built unverifiable
+
+New crate, epic #75. Checked first whether Smooth Streaming's own
+manifest/fragment machinery already existed alongside the adjacent
+`vaco-demux-dash`/`vaco-mux-dash`/`vaco-demux-hls`/`vaco-mux-hls`/
+`vaco-format-adaptive` family — it substantially did: `vaco-format-isom::
+writer`/`build` already has working `mfhd`/`tfhd`/`trun`/`traf`/`moof`
+box writers and `vaco-format-adaptive::WriteAccess` is exactly the
+multi-file-write primitive this format needs, so this crate calls both
+rather than re-encoding ISO-BMFF boxes or reinventing owned-protocol-access
+plumbing. `SmoothStreamingMuxer` follows the same two-tier
+`MuxerDesc::open`(degraded)/real-constructor split `vaco-mux-dash`/
+`vaco-mux-hls` already established for the identical "no filename, no
+protocol access" gap.
+
+No demuxer for this format exists anywhere — in this project or in
+`ffmpeg` itself (`ffmpeg -demuxers`, confirmed) — so every structural fact
+this crate relies on came from generating and byte-walking two real
+`ffmpeg -f smoothstreaming` reference trees (3s/one-fragment and
+12s/three-fragment) rather than any published Microsoft spec text or a
+round-trip through this project's own reader (`provenance/sources.toml`'s
+`ffmpeg-smoothstreaming-mux-probe` entry). That measurement surfaced a real
+self-inconsistency in the reference's own output, reproduced deliberately
+rather than "fixed": the `Manifest`'s `Url` template implies a client
+derives each fragment's `{start time}` by summing preceding `<c>` `d`
+values from `t=0`, but the reference's own fragment *filenames* use the
+track's true encoder-timeline absolute time — for the measured fixture,
+video's first fragment is literally `Fragments(video=800000)` while the
+`Manifest` states only `<c n="0" d="30000000" />`, no `t`. This crate's own
+`manifest::build_manifest` reproduces the reference's `d`-only convention
+rather than inventing a `t` attribute never observed, and names the
+disagreement in its own docs rather than silently picking one side.
+
+**Two things named and scoped out rather than built to an unverifiable or
+disproportionate bar, per this dispatch's own instruction:**
+
+- **`tfrf`** (the `uuid` look-ahead box naming *future* fragments' start
+  times/durations, UUID `d4807ef2-ca39-4695-8e54-26cb9e46a79f`, distinct
+  from the required-and-implemented `tfxd`): measured in both reference
+  trees, present on every fragment but the last, and its own encoding
+  requires a seek-back rewrite of already-written `FragmentInfo`/
+  `Fragments` files once a later fragment becomes known (confirmed: the
+  first fragment's `tfrf` in the 12s fixture carries *two* look-ahead
+  entries, naming fragments that had not been produced yet when that
+  fragment was first flushed). It is a live-streaming latency optimisation
+  with no VOD correctness role — a client holding the full `Manifest`
+  chunk list does not need it — so this crate does not write it. If this
+  muxer is later asked to serve genuinely live output, `tfrf` needs
+  `WriteAccess`-based re-open-and-patch of prior fragment files, which
+  nothing in this crate does today.
+- **`QualityLevels(<bitrate>)/` directory creation**: `ffmpeg
+  -f smoothstreaming` creates this subdirectory itself when it does not
+  exist (measured: running it against an empty output directory produced
+  the subdirectories with no separate step). `vaco_protocol_core::Protocol`
+  has no directory-creation verb at all (`open`/`create`/`check`/
+  `list_dir`/`delete`/`rename` only), and `vaco-protocol-file`'s own
+  `create` opens the target path directly with no parent-directory
+  handling — recorded as `planning/INTERFACE-GAPS.md` gap 27.
+  `vaco-mux-dash`/`vaco-mux-hls` never hit this because both name every
+  segment flat, in the manifest's own directory; Smooth Streaming's
+  `QualityLevels(<bitrate>)/` layout is measured, not chosen, and is the
+  first multi-file format in this workspace whose own naming convention
+  needs a subdirectory. Not fixed here: `vaco-protocol-file` is owned and
+  closed (`agent:protocols`) and out of scope for a crate I do not own
+  (D11). This crate's own test suite (`tests/roundtrip.rs`) pre-creates the
+  two directories it needs; a real caller driving this muxer against local
+  `file:` output needs the same step until gap 27 is closed properly.
+
+**avcC unpacking is hand-written, not routed through `vaco-parse-h264`**
+(`avcc.rs`): per D14.1, a format/mux crate reaches codec-level parsing only
+through the injected `ParserProvider` seam, never a direct crate
+dependency, and `avcC`'s box layout (version byte, then length-prefixed SPS
+array, then length-prefixed PPS array) is small enough that a local,
+bounds-checked parser (no `unwrap`/direct indexing — every read goes
+through `slice::get`) is less machinery than that seam for a handful of
+byte copies. Cross-checked against the real fixture's own
+`CodecPrivateData` hex, not just a synthetic example.
+
+**Verification ceiling stated honestly, not assumed satisfied**: issue
+#617's "plays back through a reference client" acceptance criterion is not
+reachable on this machine — no Smooth Streaming/Silverlight client is
+available here. This crate's actual bar is structural/self-consistency
+verification against the two measured reference trees (Manifest schema,
+`FragmentInfo`-equals-`moof`-alone byte relationship, `tfhd`/`trun` flag
+sets per track kind, `tfxd` field values), exercised end to end in
+`tests/roundtrip.rs` against real `file:` output via `WriteAccess`, not
+just unit tests of the box-building functions in isolation.
+
+**No fuzz target added.** This crate's only externally-influenced parsing
+surface is `avcc::avcc_to_annexb` over `CodecParameters::extradata`, which
+arrives already extracted by an upstream demuxer/encoder rather than as raw
+file bytes this crate reads itself — the same shape every other pure muxer
+crate in this workspace has (`vaco-mux-dash`, `vaco-mux-hls`, neither of
+which carries a fuzz target either), and the function itself only uses
+`slice::get`-bounds-checked reads with `u8`-bounded loop counts (at most
+255 SPS plus 255 PPS), so it cannot loop unboundedly or panic on malformed
+input by construction, checked by `avcc::tests::rejects_truncated_or_non_avcc_input`.
+
+Gates: `cargo test`/`cargo clippy -p vaco-mux-smoothstreaming --all-targets
+-- -D warnings` clean (workspace lints, including `indexing_slicing`,
+`unwrap_used`, `expect_used`, `disallowed_methods`); builds for
+`wasm32-unknown-unknown`; `layer-check`/`dep-gate`/`unsafe-audit`/
+`dup-check`/`owner-gate` all clean; `cargo xtask gen-registry`/
+`gen-docs-index` both pick up the new crate correctly (verified locally,
+not committed — left for the orchestrator's sweep, per standing
+instruction).
+
+Vaco-Spec-Ref: ffmpeg-smoothstreaming-mux-probe

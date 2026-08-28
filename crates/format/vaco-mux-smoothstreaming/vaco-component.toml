@@ -1,0 +1,13 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Name and extensions measured against `ffmpeg -h muxer=smoothstreaming`
+# (ffmpeg 8.1). No demuxer exists for this format, in this project or in
+# `ffmpeg` itself — mux-only is a real constraint, not a gap.
+
+[[component]]
+kind       = "muxer"
+name       = "smoothstreaming"
+long_name  = "Smooth Streaming Muxer"
+feature    = "mux-smoothstreaming"
+ctor       = "vaco_mux_smoothstreaming::MUXER"
+extensions = "ism,ismv,isma"
