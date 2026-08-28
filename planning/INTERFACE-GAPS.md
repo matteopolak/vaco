@@ -785,3 +785,47 @@ a two-filter fix, and picking that shape is left for whoever is dispatched
 **Blocks:** `exposure`, `grayworld` (`vaco-filter-color`'s row); any other
 filter in this workspace that needs to read or write a `PixFmtFlags::FLOAT`
 format through a `u16`-shaped sample engine would hit the identical wall.
+
+## 16. `vaco-demux-raw`'s `BitstreamSpec.parser_codec` cannot distinguish MPEG-1 from MPEG-2
+
+`vaco-parse-mpegvideo` (P-07, #277) ships a real `Mpeg12Parser` for both raw
+`CodecId::Mpeg1video` and `CodecId::Mpeg2video`, verified byte-for-byte
+against `ffprobe -f mpegvideo -show_packets` on real encodes of both. But
+`vaco-demux-raw::bitstream`'s `MPEGVIDEO` and `M4V` `BitstreamSpec` entries
+(the raw-elementary-stream demuxers a bare `.m2v`/`.m4v` file opens through)
+still carry `parser_codec: None`, so a raw MPEG-1/2/4 file never reaches
+either parser today: `BitstreamDemuxer::open_with_limits` only calls
+`parsers.parser_for(c)` when `spec.parser_codec` names a `CodecId` at all,
+and falls back to `Framing::StartCode3`'s plain span-splitting with
+`codec_id` left unset otherwise (`vaco-demux-raw/src/bitstream.rs`,
+`compute_spans`/the `Frames::Spans` arm).
+
+Setting `M4V.parser_codec = Some(CodecId::Mpeg4)` is a one-line fix — MPEG-4
+part 2 raw streams have no MPEG-1/2-style ambiguity. `MPEGVIDEO` is the real
+gap: ffmpeg's own `mpegvideo` raw demuxer covers *both* MPEG-1 and MPEG-2
+(they share the identical `00 00 01 xx` start-code space, and `mpeg12.rs`'s
+own `Sequence` type already resolves the two the same way — `sequence_
+extension()`'s presence). `BitstreamSpec.parser_codec` is a single static
+`Option<CodecId>` per spec row, decided once when the row is declared, so
+it cannot express "ask a parser after inspecting the first sequence header
+and only then know which of two `CodecId`s this is." Not attempted here —
+`vaco-demux-raw` is not a crate this issue's brief named as owned, and the
+fix is a design decision (a `parser_codec` that can look at the first few
+bytes, or two specs, `mpegvideo`/`mpeg2video`, replacing the reference's
+one name, which would itself be a divergence worth checking against
+`ffmpeg -demuxers`) for whoever owns that crate next.
+
+### Shape
+
+Either widen `BitstreamSpec.parser_codec` from `Option<CodecId>` to
+something that can defer the choice until the first sequence header is
+seen (a small enum, or a `fn(&[u8]) -> Option<CodecId>` probe run once the
+first bytes are in hand), or accept a `CodecId::Mpeg2video`-only default for
+the `mpegvideo` raw demuxer (matching every practical `.m2v` file, since
+plain MPEG-1 elementary streams are rare in the wild) and file the MPEG-1
+raw case as a known, narrower gap instead.
+
+**Blocks:** raw `.m2v`/`.m4v`/bare-MPEG-1 files opened directly (not inside
+an MPEG-PS/TS/MP4 container, which already reach `vaco-parse-mpegvideo`
+through their own demuxers' `ParserProvider` calls) reporting
+`profile`/`level`/`pix_fmt`/dimensions from the bitstream.
