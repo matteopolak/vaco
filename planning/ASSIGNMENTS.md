@@ -85,8 +85,9 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-mux-hash | 4 | #572 | agent:mux-hash | done | 2026-08-23 | 2026-08-23 | crc framecrc framemd5 framehash hash md5 streamhash uncodedframecrc — the differential oracle |
 | vaco-filter-* T3 audio long tail | 4 | #485 (closes epic #58) | agent:audio-tail | active | 2026-08-27 | — | last open child of FT-4.13 |
 | vaco-cli stderr reporting | 7 | #641 #208 | agent:cli-report | active | 2026-08-27 | — | the Input #0/Output #0 dump and -stats/-progress/-report; shares loglevel::prints_info |
-| vaco-protocol-dial (new) + vaco-protocol-rtmp (epic #61) | 2 | TECH-DEBT row 1, #552 #553 #554 | agent:rtmp | active | 2026-08-27 | — | pays down the five-copy dial duplication first, then RTMP is the test of whether the seam was right |
+| vaco-protocol-dial (new) + vaco-protocol-rtmp (epic #61) | 2 | TECH-DEBT row 1, #552 | agent:rtmp | done | 2026-08-27 | — | pays down the five-copy dial duplication first, then RTMP is the test of whether the seam was right |
 | mp3 demux/mux + vaco-codec-mpegaudio (epic #38 decode half) | 3 | #644 #362 #363 #364 | agent:mpeg-audio | active | 2026-08-27 | — | `.mp3` cannot be opened at all today; demuxer first, then Layers I/II/III |
+| vaco-format-ac3 + vaco-codec-ac3 (epic #39) | 3 | #653 #367 #368 #369 #370 | agent:ac3 | active | 2026-08-27 | — | demuxer first; `.ac3` cannot be opened today |
 | vaco-codec-core + vaco-registry + xtask + vaco-cli (codec path) | 3 | #652 | agent:codec-path | active | 2026-08-27 | — | P0: no leaf decoder or encoder is reachable from the CLI; blocks three codec agents' output |
 | container sweep follow-ups | 4 | #647 #648 #649 #650 #651 #643 | agent:sweep-followup | active | 2026-08-27 | — | six issues the sweep filed |
 | vaco-demux-avi + vaco-mux-avi (finish AVI) | 4 | #642 + finding 50's three open items | agent:avi-finish | active | 2026-08-27 | — | extradata to stream info, length-prefixed H.264, JUNK sizing, the audio grid gap |
