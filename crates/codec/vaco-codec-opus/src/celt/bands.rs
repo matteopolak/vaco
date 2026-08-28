@@ -93,15 +93,21 @@ fn quant_band(
 ) -> BandResult {
     let n0 = n_in;
     let mut lowband = lowband;
-    let b0 = block_count.max(1);
-    let mut n_b = n_in / b0;
-    let n_b0 = n_b;
-    let long_blocks = b0 == 1;
+    let entry_block_count = block_count.max(1);
+    let mut n_b = n_in / entry_block_count;
+    // `celt/bands.c`'s `quant_band` sets `longBlocks = B0==1` from the
+    // *entry* block count, before recombining/time-dividing touch it.
+    let long_blocks = entry_block_count == 1;
     let mut recombine = 0i32;
     let mut time_divide = 0i32;
 
     // Special case: a single-sample band only ever needs a sign bit.
     if n_in == 1 {
+        // `celt/bands.c`'s `quant_band_n1` decodes X's and (if stereo) Y's
+        // sign as two *independent* bits, each separately gated on and
+        // debiting `remaining_bits` — reusing X's sign for Y here skipped
+        // Y's bit entirely, desyncing every stereo N=1 band (RFC 6716's
+        // narrowest bands, e.g. LM=0's band 0) by one bit.
         let mut sign = false;
         if *remaining_bits >= 1 << BITRES {
             sign = ctx.dec.dec_bits(1) != 0;
@@ -110,7 +116,12 @@ fn quant_band(
         x[0] = if sign { -1.0 } else { 1.0 };
         let mut y_out = y_in;
         if let Some(yv) = y_out.as_mut() {
-            yv[0] = if sign { -1.0 } else { 1.0 };
+            let mut y_sign = false;
+            if *remaining_bits >= 1 << BITRES {
+                y_sign = ctx.dec.dec_bits(1) != 0;
+                *remaining_bits -= 1 << BITRES;
+            }
+            yv[0] = if y_sign { -1.0 } else { 1.0 };
         }
         let lowband_out = want_lowband_out.then(|| vec![x[0] / 16.0]);
         return BandResult { x, y: y_out, collapse_mask: 1, lowband_out };
@@ -153,6 +164,17 @@ fn quant_band(
             }
         }
     }
+
+    // `celt/bands.c`'s `quant_band` reassigns `B0=B; N_B0=N_B;` here, i.e.
+    // *after* recombining/time-dividing — this is the block count the
+    // top-level split (`quant_partition`'s own `B0`) actually splits from,
+    // not the pre-preprocessing entry value. Using the entry value here
+    // made every top-level split of a non-transient band (`block_count==1`
+    // on entry, but `>1` after time-dividing for a negative `tf_change`)
+    // wrongly skip the low-energy delta-boost gate (`B0>1`) and pick the
+    // triangular- vs uniform-pdf itheta decode on the wrong side.
+    let b0 = block_count.max(1);
+    let n_b0 = n_b;
 
     // Decide whether to split for extra resolution (mono self-split) or
     // because the caller passed a genuine second channel.
@@ -253,7 +275,13 @@ fn quant_band(
         } else {
             imid = i32::from(bitexact_cos(itheta as i16));
             iside = i32::from(bitexact_cos((16384 - itheta) as i16));
-            delta_raw = (((n as i32 - 1) << 7) * bitexact_log2tan(iside, imid) + 8192) >> 14;
+            // `celt/bands.c`'s `compute_theta` uses `FRAC_MUL16((N-1)<<7,
+            // bitexact_log2tan(iside,imid))`, i.e. a Q15 fixed-point
+            // multiply-and-round (`(16384 + a*b) >> 15`), not a Q14 one —
+            // using `>> 14` here doubled `delta`, which cascaded into wildly
+            // wrong `mbits`/`sbits` splits for any band that both self-splits
+            // and needs the low-energy bit-boost adjustment.
+            delta_raw = (((n as i32 - 1) << 7) * bitexact_log2tan(iside, imid) + 16384) >> 15;
         }
         let mid = f32::from(imid as i16) / 32768.0;
         let side = f32::from(iside as i16) / 32768.0;
@@ -386,14 +414,18 @@ fn quant_band(
     }
 
     // --- no-split base case: direct PVQ (or noise/fold fill) ---
-    let lm_clamped = lm.max(0);
-    let mut q = bits2pulses(lm_clamped, ctx.band, b);
-    let mut curr_bits = pulses2bits(lm_clamped, ctx.band, q);
+    // `celt/rate.h`'s `bits2pulses`/`pulses2bits` take the raw `LM` (which
+    // is legitimately `-1` for the smallest split leaves) and do `LM++`
+    // internally to address the cache row — clamping to 0 here before the
+    // call shifted every `LM==-1` leaf onto the next cache row, roughly
+    // halving `K` for the deepest-recursion leaves in wide bands.
+    let mut q = bits2pulses(lm, ctx.band, b);
+    let mut curr_bits = pulses2bits(lm, ctx.band, q);
     *remaining_bits -= curr_bits;
     while *remaining_bits < 0 && q > 0 {
         *remaining_bits += curr_bits;
         q -= 1;
-        curr_bits = pulses2bits(lm_clamped, ctx.band, q);
+        curr_bits = pulses2bits(lm, ctx.band, q);
         *remaining_bits -= curr_bits;
     }
 
@@ -535,7 +567,12 @@ pub fn quant_all_bands(
             0
         };
 
-        if band_start >= start_bin + n && (update_lowband || lowband_offset == 0) {
+        // `celt/bands.c`'s `quant_all_bands` sets `lowband_offset = i` when
+        // `M*eBands[i]-N >= M*eBands[start]` OR `i == start+1` — the second
+        // arm unconditionally seeds folding from the band right after
+        // `start` even when it's too small to satisfy the size check, and
+        // was missing here.
+        if (band_start >= start_bin + n || i == start + 1) && (update_lowband || lowband_offset == 0) {
             lowband_offset = i;
         }
         let tf_change = tf_res.get(i).copied().unwrap_or(0);
@@ -585,6 +622,13 @@ pub fn quant_all_bands(
         let mut ctx = BandCtx { dec, band: i, intensity, seed };
 
         if dual_stereo {
+            // `celt/bands.c`'s per-band `ctx.remaining_bits` is a single
+            // field shared by both `quant_band` calls here — X's recursive
+            // splits can drive it negative or leave it high, and that
+            // *carries into* Y's decode (it feeds the leaf bit-reduction
+            // loop and split rebalancing), not just X's own. Giving each
+            // channel its own fresh copy of `remaining_bits_start` made Y's
+            // allocation decisions independent of what X actually spent.
             let mut remaining = remaining_bits_start;
             let rx = quant_band(
                 &mut ctx, x_slice, None, false, n, b / 2, spread, block_count, tf_change, lowband_src.clone(),
@@ -596,9 +640,8 @@ pub fn quant_all_bands(
 
             let y_slice: Vec<f32> =
                 y_all.as_deref().and_then(|y| y.get(band_start..band_end_bin)).map(<[f32]>::to_vec).unwrap_or_default();
-            let mut remaining_y = remaining_bits_start;
             let ry = quant_band(
-                &mut ctx, y_slice, None, false, n, b / 2, spread, block_count, tf_change, lowband_src, &mut remaining_y,
+                &mut ctx, y_slice, None, false, n, b / 2, spread, block_count, tf_change, lowband_src, &mut remaining,
                 lm, true, 0, 1.0, y_cm,
             );
             copy_back(&mut norm2, band_start, ry.lowband_out.as_deref());
