@@ -37,8 +37,8 @@
 pub mod mpeg12;
 pub mod mpeg4;
 
-pub use mpeg12::{Mpeg12Parser, aspect_ratio, frame_rate, pixel_format, profile_name};
 pub use mpeg4::Mpeg4Parser;
+pub use mpeg12::{Mpeg12Parser, aspect_ratio, frame_rate, pixel_format, profile_name};
 
 // Re-exported so a caller can describe a stream without also depending on
 // `vaco-codec-core` directly.

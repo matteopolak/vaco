@@ -172,7 +172,11 @@ fn video_object_layer(payload: &[u8]) -> VideoObjectLayer {
 /// `fixed_vop_time_increment` sizing. `0` and `1` both need one bit — the
 /// specification's own floor, since a zero-width field is not meaningful.
 const fn bits_for(n: u32) -> u32 {
-    if n <= 1 { 1 } else { 32 - (n - 1).leading_zeros() }
+    if n <= 1 {
+        1
+    } else {
+        32 - (n - 1).leading_zeros()
+    }
 }
 
 /// `vop_coding_type`, from just after `vop_start_code`. `0` is `I`, `1` is

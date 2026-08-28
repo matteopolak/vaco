@@ -586,10 +586,7 @@ mod tests {
         let pkt1 = pkt1.expect("first access unit is complete");
         // The boundary is the *second* picture start code, not the first —
         // everything before it (headers included) belongs to picture one.
-        let first_start = data
-            .windows(4)
-            .position(|w| w == [0, 0, 1, 0])
-            .unwrap();
+        let first_start = data.windows(4).position(|w| w == [0, 0, 1, 0]).unwrap();
         let second_start = first_start
             + 1
             + data
@@ -599,19 +596,28 @@ mod tests {
                 .position(|w| w == [0, 0, 1, 0])
                 .unwrap();
         assert_eq!(used1, second_start);
-        assert!(pkt1.flags.contains(PacketFlags::KEY), "picture_coding_type 1 is I");
+        assert!(
+            pkt1.flags.contains(PacketFlags::KEY),
+            "picture_coding_type 1 is I"
+        );
 
         let rest = data.get(used1..).unwrap();
         let (pkt2, used2) = p.parse(rest).unwrap();
         let pkt2 = pkt2;
-        assert!(pkt2.is_none(), "a P picture with nothing after it is incomplete");
+        assert!(
+            pkt2.is_none(),
+            "a P picture with nothing after it is incomplete"
+        );
         assert_eq!(used2, 0);
 
         // End of stream: the buffered P picture flushes.
         let (final_pkt, used3) = p.parse(&[]).unwrap();
         let final_pkt = final_pkt.expect("the trailing picture flushes at EOS");
         assert_eq!(used3, 0);
-        assert!(!final_pkt.flags.contains(PacketFlags::KEY), "picture_coding_type 2 is P");
+        assert!(
+            !final_pkt.flags.contains(PacketFlags::KEY),
+            "picture_coding_type 2 is P"
+        );
     }
 
     /// Regression for the bug the module doc describes: a `find_au_boundary`
