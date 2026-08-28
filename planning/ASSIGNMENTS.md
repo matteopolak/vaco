@@ -85,6 +85,7 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-mux-hash | 4 | #572 | agent:mux-hash | done | 2026-08-23 | 2026-08-23 | crc framecrc framemd5 framehash hash md5 streamhash uncodedframecrc — the differential oracle |
 | vaco-filter-* T3 audio long tail | 4 | #485 (closes epic #58) | agent:audio-tail | active | 2026-08-27 | — | last open child of FT-4.13 |
 | vaco-cli stderr reporting | 7 | #641 #208 | agent:cli-report | active | 2026-08-27 | — | the Input #0/Output #0 dump and -stats/-progress/-report; shares loglevel::prints_info |
+| vaco-protocol-dial (new) + vaco-protocol-rtmp (epic #61) | 2 | TECH-DEBT row 1, #552 #553 #554 | agent:rtmp | active | 2026-08-27 | — | pays down the five-copy dial duplication first, then RTMP is the test of whether the seam was right |
 | mp3 demux/mux + vaco-codec-mpegaudio (epic #38 decode half) | 3 | #644 #362 #363 #364 | agent:mpeg-audio | active | 2026-08-27 | — | `.mp3` cannot be opened at all today; demuxer first, then Layers I/II/III |
 | vaco-codec-bmp/-pnm/-qoi (C-13, epic #26) | 3 | #291 #292 #293 | agent:image-codecs | active | 2026-08-27 | — | ~15 codecs, one dispatch: encode byte-identity + decode MD5 table |
 | container sweep (~60 formats, excl. the nine under active ownership) | 4 | #643 + whatever it files | agent:container-sweep | active | 2026-08-27 | — | one comparison loop over every both-direction format |
