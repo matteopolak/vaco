@@ -930,3 +930,70 @@ fn a_complex_output_label_used_twice_is_the_references_own_wording() {
         r.message()
     );
 }
+
+// -------------------------------------------------------------- CL-17 -progress
+
+#[test]
+fn progress_writes_the_measured_key_value_block_to_its_target() {
+    // `four_track_file()` selects streams #0:0 and #0:2 by the default
+    // rules, which land at output positions 0 and 1 — hence
+    // `stream_0_0_q`/`stream_0_1_q` below, not `stream_0_2_q`.
+    let f = fixture(&four_track_file());
+    let dir = tempfile::tempdir().expect("tempdir");
+    let progress_path = dir.path().join("progress.txt");
+    let progress_str = progress_path.to_str().expect("utf8 tempdir path").to_owned();
+
+    let r = go(&[
+        "-i",
+        &f.path,
+        "-c",
+        "copy",
+        "-progress",
+        &progress_str,
+        "-f",
+        "null",
+        "-",
+    ]);
+    assert_eq!(r.code, ExitCode::OK, "{}", r.message());
+
+    let content =
+        std::fs::read_to_string(&progress_path).expect("-progress must have written a file");
+    assert!(content.starts_with("frame="), "{content}");
+    assert!(content.ends_with("progress=end\n"), "{content}");
+    assert!(content.contains("stream_0_0_q=-1.0"), "{content}");
+    assert!(content.contains("stream_0_1_q=-1.0"), "{content}");
+    assert!(content.contains("out_time_us="), "{content}");
+    // Reproduced verbatim: the reference's own misnomer, `out_time_ms`
+    // carries microseconds too.
+    assert!(content.contains("out_time_ms="), "{content}");
+}
+
+#[test]
+fn a_dropped_output_writes_no_progress_file() {
+    // OBSERVED: the reference does not touch a `-progress` target for a run
+    // that wrote nothing (mirrors `outputs.iter().all(|o| o.dropped)`'s own
+    // early return in `exec::run_pipeline`).
+    let f = fixture(&four_track_file());
+    let dir = tempfile::tempdir().expect("tempdir");
+    let progress_path = dir.path().join("progress.txt");
+    let progress_str = progress_path.to_str().expect("utf8 tempdir path").to_owned();
+
+    let r = go(&[
+        "-i",
+        &f.path,
+        "-map",
+        "0:v:9?",
+        "-c",
+        "copy",
+        "-progress",
+        &progress_str,
+        "-f",
+        "null",
+        "-",
+    ]);
+    assert_eq!(r.code, ExitCode::OK, "{}", r.message());
+    assert!(
+        !progress_path.exists(),
+        "a dropped output must write no progress file"
+    );
+}

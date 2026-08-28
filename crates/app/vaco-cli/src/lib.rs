@@ -78,11 +78,14 @@ pub mod input;
 pub mod listing;
 pub mod nullmux;
 pub mod output;
+pub mod progress;
+pub mod report;
 pub mod select;
 pub mod stats;
 
 use std::ffi::OsStr;
 use std::io::Write;
+
 
 pub use exit::{AvError, Diagnostic, ExitCode};
 pub use listing::VERSION;
@@ -93,6 +96,25 @@ pub use listing::VERSION;
 /// goes to `out` or `err`; nothing reaches the real stdio, which is what makes
 /// the whole binary testable and fuzzable without spawning a process.
 pub fn run<S, O, E>(argv: &[S], out: &mut O, err: &mut E) -> ExitCode
+where
+    S: AsRef<OsStr>,
+    O: Write,
+    E: Write,
+{
+    // CL-17: `-report`/`FFREPORT` mirrors everything this run writes to
+    // stderr — the banner included — into a log file. Opened here, before
+    // the banner, so both share one sink for the whole run; see
+    // `report`'s module docs for the header this writes and why a failure to
+    // open it is not fatal.
+    let ffreport_env = std::env::var("FFREPORT").ok();
+    let report_req = report::wants_report(argv, ffreport_env.as_deref());
+    match report_req.as_ref().and_then(|r| report::open(r, argv).ok()) {
+        Some((file, _name)) => run_banner_and_execute(argv, out, &mut report::Tee::new(err, file)),
+        None => run_banner_and_execute(argv, out, err),
+    }
+}
+
+fn run_banner_and_execute<S, O, E>(argv: &[S], out: &mut O, err: &mut E) -> ExitCode
 where
     S: AsRef<OsStr>,
     O: Write,
@@ -288,6 +310,18 @@ where
         }
         if any_output && stats::wants_stats(argv) {
             let _ = writeln!(err, "{}", stats::render(&report, started));
+        }
+    }
+    // CL-17: `-progress <url>` — a separate output channel from the
+    // informational blocks above, so it is not gated on `show_info`/
+    // `-loglevel` the way they are; the reference writes it regardless.
+    // A URL this build cannot open silently gets no progress data, the same
+    // "not fatal" policy `report::open`'s caller already applies.
+    if any_output && let Some(target) = progress::target(argv) {
+        if let Ok(mut sink) = output::create(&target) {
+            let block = progress::render(&report, started);
+            let _ = sink.write(block.as_bytes());
+            let _ = sink.flush();
         }
     }
     Ok(ExitCode::OK)
