@@ -1,0 +1,49 @@
+# Sources for vaco-codec-flac (issues #283/#284). Kept in its own file per
+# AGENT-CONSTRAINTS.md rather than appended to the shared provenance/sources.toml,
+# which is a multi-writer hotspot.
+
+[[source]]
+id       = "rfc-9639-flac"
+kind     = "spec"
+title    = "RFC 9639: Free Lossless Audio Codec (FLAC)"
+acquired = "2026-08-28"
+where    = "https://www.rfc-editor.org/rfc/rfc9639"
+
+# Confirms two facts this crate's design depends on, both surprising enough
+# to be worth recording as measurements rather than assumptions:
+#
+# - Claxon 0.4.3's frame-header parser never implements the "bit depth
+#   comes from STREAMINFO" case (frame header code 0b000) at all — it
+#   returns `Error::Unsupported("header without bits per sample info")`
+#   outright, a `// TODO` left in its own source. This crate's encoder
+#   therefore always writes an explicit bit-depth code (16 or 24), never
+#   the STREAMINFO-deferred one, even though the sample-rate field's
+#   equivalent "from STREAMINFO" case (0b0000) *is* handled fine (nothing
+#   in Claxon's frame decode actually needs the sample rate value).
+# - Claxon 0.4.3's Rice-partition decoder returns
+#   `Error::Unsupported("unencoded binary is not yet implemented")` for
+#   the escaped/unencoded partition (Rice parameter `0b1111`). This
+#   crate's own encoder (`src/rice.rs`) therefore never emits that escape
+#   code, capping its Rice parameter search at 14.
+#
+# Established by reading crates.io's cached claxon-0.4.3 source
+# (frame.rs's `read_frame_header_or_eof` and `decode_rice_partition`)
+# after a round-trip test produced exactly the first error message above.
+[[source]]
+id       = "claxon-0.4.3-decode-boundary-probe"
+kind     = "blackbox"
+title    = "Observed behaviour of the claxon 0.4.3 crate's FlacReader: which parts of RFC 9639's frame header and residual coding it actually implements"
+acquired = "2026-08-28"
+where    = "claxon 0.4.3 as vendored by crates.io, exercised via this crate's own encoder/decoder round-trip tests"
+
+# The encoder/decoder cross-check against a real ffmpeg-produced FLAC
+# stream (tests/ffmpeg_fixture.rs): ffmpeg 8.1's `-c:a flac` muxed to
+# native `.flac` framing via `-f flac`, decoded both by this crate's
+# claxon boundary and by ffmpeg's own `-f s16le`, and compared sample for
+# sample at zero tolerance.
+[[source]]
+id       = "ffmpeg-flac-fixture-probe"
+kind     = "blackbox"
+title    = "ffmpeg 8.1, -c:a flac -f flac output and its own -f s16le decode, used as a lossless cross-check fixture"
+acquired = "2026-08-28"
+where    = "the reference binary (ffmpeg 8.1) installed on the development machine"
