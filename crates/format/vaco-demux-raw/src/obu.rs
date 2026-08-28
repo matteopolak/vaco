@@ -127,6 +127,24 @@ pub fn looks_like_obu_stream(data: &[u8]) -> bool {
     if kind != OBU_TEMPORAL_DELIMITER && kind != OBU_SEQUENCE_HEADER {
         return false;
     }
+    // `obu_reserved_1bit` (§5.3.2) is required to be 0, and `obu_has_size_field`
+    // is required by the low-overhead bitstream format this demuxer reads (see
+    // the module docs). Unlike the forbidden bit, other formats really do set
+    // these — which is the third time this probe has been caught over-claiming,
+    // and the first time the file it stole was a real media file rather than
+    // prose:
+    //
+    //     $ ffprobe -show_entries format=format_name ac3.ac3    -> ac3
+    //     $ vaco     -show_entries format=format_name ac3.ac3    -> av1
+    //
+    // AC-3 and E-AC-3 both open with the `0x0B77` syncword. `0x0B` reads as a
+    // sequence-header OBU with a size field and passes every check above, so a
+    // raw AC-3 file scored `av1` at 51 and came out as one *video* stream. Its
+    // low bit is `obu_reserved_1bit`, and it is 1; a real stream's first byte is
+    // `0x12`, and its is 0. Cheap, spec-required, and decisive.
+    if header & 0x01 != 0 || header & 0x02 == 0 {
+        return false;
+    }
     parse_one(data, 0).is_some_and(|obu| obu.end > obu.start)
 }
 
@@ -190,6 +208,40 @@ mod tests {
         assert!(!looks_like_obu_stream(&[0x80, 0x00]));
         // A reserved type (11), which prose hits far more often than video.
         assert!(!looks_like_obu_stream(&[0b0101_1010, 0x00]));
+    }
+
+    /// AC-3 and E-AC-3 are not AV1, and this is where the probe used to say
+    /// they were.
+    ///
+    /// Both open with the `0x0B77` syncword. `0x0B` is `obu_forbidden_bit = 0`,
+    /// `obu_type = 1` (sequence header) and `obu_has_size_field = 1` — every
+    /// check the probe had — so a raw AC-3 file scored `av1` at 51 and
+    /// `ffprobe` reported one *video* stream where the reference reports `ac3`
+    /// and one audio stream. The discriminator is `obu_reserved_1bit`, which
+    /// §5.3.2 requires to be 0 and which `0x0B` sets.
+    #[test]
+    fn an_ac3_syncword_is_not_an_obu_stream() {
+        // The leading bytes of a real AC-3 and a real E-AC-3 file, padded out.
+        // The padding is load-bearing: `0x77` is read as a leb128 declaring a
+        // 119-byte payload, so on a short buffer `parse_one` fails for want of
+        // bytes and the probe answers correctly for the wrong reason. A file
+        // this small is not the case that bit us.
+        let pad = |head: &[u8]| {
+            let mut v = head.to_vec();
+            v.resize(256, 0);
+            v
+        };
+        assert!(!looks_like_obu_stream(&pad(&[
+            0x0b, 0x77, 0x9c, 0xb1, 0x14, 0x40, 0x43, 0xe1
+        ])));
+        assert!(!looks_like_obu_stream(&pad(&[
+            0x0b, 0x77, 0x03, 0x7f, 0x3f, 0x87, 0xc0, 0x00
+        ])));
+        // And the leading bytes of a real AV1 stream, so this does not pass by
+        // rejecting everything: `libsvtav1 -f obu` opens `12 00 0a 0a …`.
+        assert!(looks_like_obu_stream(&pad(&[
+            0x12, 0x00, 0x0a, 0x0a, 0x00, 0x00, 0x00, 0x02
+        ])));
     }
 
     /// A temporal delimiter with a size field is what a real stream opens with.

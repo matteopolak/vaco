@@ -27,6 +27,17 @@ title    = "ITU-T Rec. H.265 (08/2021), High efficiency video coding"
 acquired = "2026-08-21"
 where    = "https://www.itu.int/rec/T-REC-H.265"
 
+# The AV1 OBU framing in `vaco-demux-raw` cites §5.3 of this and was written
+# from it, but the source itself was never registered — so `provenance-check`
+# accepted the citation only because nothing referenced it by id. Registered
+# on the first commit that did.
+[[source]]
+id       = "aom-av1-spec"
+kind     = "spec"
+title    = "AOMedia AV1 Bitstream & Decoding Process Specification, version 1.0.0 with Errata 1"
+acquired = "2026-08-27"
+where    = "https://aomediacodec.github.io/av1-spec/"
+
 [[source]]
 id       = "iso-14496-12"
 kind     = "spec"
