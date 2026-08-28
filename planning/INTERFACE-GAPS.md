@@ -1124,7 +1124,7 @@ says "`FrameData` has exactly two variants" as of this close — stale now,
 left for that crate's own owner to update when it wires in, since this
 pass does not touch that crate.
 
-## 18. Nothing in this workspace populates `FrameSideData::ClosedCaptions`
+## 18. Nothing in this workspace populates `FrameSideData::ClosedCaptions` — PARTIALLY CLOSED 2026-08-28
 
 Reported by the same agent, scoping CEA-608/708 (`vaco-codec-subtitle-cc`).
 
@@ -1139,20 +1139,55 @@ finds nothing. So even once gap 17 above is closed, a CEA-608/708 decoder has
 no real `cc_data` to decode from an actual compressed video file in this
 tree today — only from bytes constructed by hand or extracted out-of-band.
 
-### Shape
+### What landed
 
-Additive: an SEI/user-data extraction step in the relevant video parser(s)
-that appends the raw `cc_data` triplet bytes (the same three-byte-per-triplet
-shape ffmpeg's own `a53_caption` side data carries, and the shape
-`vaco-codec-subtitle-cc`'s decode API already takes as input, precisely so
-this gap does not block *implementing* the decoder, only *reaching* it end to
-end) into `FrameSideData::ClosedCaptions`. Not attempted here: it is a change
-to the H.264/HEVC/MPEG-2 parser crates, all outside this scope.
+**The extraction half, for all three sources.** Each parser gained an `a53`
+module returning the raw `cc_data` triplet bytes — the `cc_count * 3` payload
+only, dropping `cc_data()`'s two-byte header and trailing marker, which is
+exactly the shape `vaco-codec-subtitle-cc` consumes and the reference's own
+`A53_CC` side data carries:
 
-**Blocks:** end-to-end CEA-608/708 decode from a real broadcast file. Not
-blocking `vaco-codec-subtitle-cc`'s own correctness, which is verified
-directly against hand-built (and, where obtained, extracted) `cc_data`
-bytes.
+| Crate | Entry point | Mechanism |
+|---|---|---|
+| `vaco-parse-h264` | `a53::cc_data_from_sei` | SEI type 4, T.35 `0xB5`/`0x0031`, `GA94`, type `0x03` |
+| `vaco-parse-hevc` | `a53::cc_data_from_sei` | same prefix and payload type; 2-byte NAL header and prefix/suffix SEI handled upstream |
+| `vaco-parse-mpegvideo` | `a53::iter_cc_data`, `a53::find_cc_data` | `user_data_start_code` `0x000001B2`, no T.35 prefix at all |
+
+Every constant was verified against a real broadcast capture
+(`transformers_EIA608_H264.ts`) rather than recalled, and each path was
+differentially checked against the reference's own `A53_CC` side data —
+identical as a multiset for all three codecs (361 H.264 frames, 120 each for
+HEVC and MPEG-2 transcodes). No allocation anywhere: `cc_count` is a 5-bit
+field, so every return is a borrowed subslice of at most 93 bytes.
+
+### What is still open
+
+**The attachment half.** These are *parsers*: they emit `CodecParameters` and
+packet boundaries, not `Frame`s, so there is nothing here to hang a
+`FrameSideData::ClosedCaptions` on. Constructing that variant belongs to
+whatever produces the `Frame` — a decoder — and this workspace has no H.264,
+HEVC or MPEG-2 decoder. The bytes are now available at the exact point such a
+decoder would need them; nothing more can be done from the parser side.
+
+### The trap anyone doing the attachment half must know about
+
+**Captions must be consumed in presentation order, and getting it wrong fails
+silently.** CEA-608 is a stateful sequential command language, so
+concatenating payloads in *decode* order interleaves and destroys the caption
+stream. Measured, on the real capture: the same 361 payloads decode to
+`" its cities now."` in presentation order and to `"    s  itesciti. now"` in
+decode order — **both with zero parity errors**, because every byte pair is
+individually valid and only their sequence is wrong. Nothing in the caption
+layer signals the mistake.
+
+Attaching each payload to *its own* `Frame` is what makes this correct by
+construction, since frames are reordered before output. Accumulating payloads
+into a buffer as pictures are parsed is the wrong shape and will look like it
+works.
+
+**Blocks:** end-to-end CEA-608/708 decode from a real broadcast file, now only
+on the decoder side. Not blocking `vaco-codec-subtitle-cc`'s own correctness,
+which is verified directly against hand-built and extracted `cc_data` bytes.
 
 ## 19. `Decoder` has no channel for a codec's out-of-band configuration
 
@@ -1241,46 +1276,3 @@ crate's scope.
 
 **Blocks:** a subtitle renderer knowing how long to leave a DVB or DVD
 subtitle on screen, when the container does not state a packet duration.
-
-## 21. `vaco-codec-core`'s `CodecId` has no variants for any game-video/game-audio codec
-
-Found implementing `vaco-format-misc` (FM-59, issues #623/#624/#625): `ivf`,
-`ffmetadata`, `roq`, `flic` and `cdg`. Of these, `roq` (video and audio),
-`flic` and `cdg` all need a `CodecId` the enum does not have —
-`Roq`/`RoqDpcm`, `Flic`, `Cdgraphics` — and every other game-video/legacy-
-video container this package's brief named (`bink`/`BinkAudio`,
-`smk`/`SmackAudio`, `vmd`, `idcin`, `interplayvideo`/`interplaydpcm`,
-`cinepak`, `truemotion1`/`2`, `xan`, and roughly forty more) would need the
-same. `vaco-format-misc`'s streams for `roq`/`flic`/`cdg` therefore carry
-`codec_id: None`, so `vaco-probe -show_streams` prints `codec_name=unknown`
-where the reference prints a real name (`roq`, `roq_dpcm`, `flic`,
-`cdgraphics`) — measured directly, see that crate's own module docs and
-`docs/format/vaco-format-misc.md`.
-
-This is the same shape as gap 17/18's `FrameData`/`FrameSideData` variant
-additions and the codec-core doc's own precedent ("twelve text-subtitle
-codec ids, so seventeen demuxers can name themselves" — commit `9d9655b`,
-"56 more CodecId variants, generated by probing" — commit `d68c8fe`): a
-format crate discovers the gap because it is the first consumer, but only
-`vaco-codec-core` may add the variant, since `CodecId` is a fieldless enum
-several call sites (at least `vaco-bsf-generic`'s noise generator) cast to
-`u64`, which Rust only allows when every variant is fieldless — a
-`CodecId::Ext(&'static ExtCodec)` escape hatch was considered and rejected
-for exactly that reason when the image-codec family hit this same wall.
-
-### Shape
-
-Add variants to `vaco-codec-core::CodecId` (name, long name, media type,
-`CodecProperties`, probed from `ffmpeg -codecs` the way every prior batch in
-that file was) for at minimum: `Roq`, `RoqDpcm`, `Flic`, `Cdgraphics` — the
-four this crate's streams need today. `Bink`/`BinkAudio` and
-`Smacker`/`SmackAudio` are the next two worth adding, since `vaco-format-misc`
-found their chunk/frame-index-table framing well-documented enough to demux
-structurally (see the agent report for `vaco-format-misc` for the specific
-layouts) but did not implement them this session.
-
-**Blocks:** `-show_streams`/`-show_format` byte-identical `codec_name`/
-`codec_long_name` for every container in this family; a decoder ever being
-registered for any of them (`vaco_registry::decoder_for` matches on
-`CodecId`, so a codec cannot be found by identity without one, same as gap
-17 noted for subtitle bitmap codecs).
