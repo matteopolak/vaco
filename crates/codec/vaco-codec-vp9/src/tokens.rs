@@ -25,18 +25,14 @@ fn pareto(node: usize, prob: u8) -> u8 {
     }
 }
 
-/// The 3 stored probabilities for one `(txSz, plane>0, isInter, band, ctx)`
-/// coefficient-probability row: `[more_coefs, node0, node1-and-beyond-seed]`.
-/// §8.6.2/9.3.2's `coef_probs` is indexed by `is_inter` (the "ref" dimension,
-/// `REF_TYPES` = 2) as well as tx size/plane type/band/context — an inter
-/// block reads an entirely different probability table from an intra block
-/// at the same position, not just a different `TxType` selection.
-fn coef_row(entropy: &EntropyContext, tx_sz: usize, plane0: usize, is_inter: bool, band: usize, ctx: usize) -> &[u8; 3] {
+/// The 3 stored probabilities for one `(txSz, plane>0, isInter=0, band,
+/// ctx)` coefficient-probability row: `[more_coefs, node0, node1-and-beyond-seed]`.
+fn coef_row(entropy: &EntropyContext, tx_sz: usize, plane0: usize, band: usize, ctx: usize) -> &[u8; 3] {
     entropy
         .coef_probs
         .get(tx_sz)
         .and_then(|a| a.get(plane0))
-        .and_then(|a| a.get(usize::from(is_inter)))
+        .and_then(|a| a.first()) // is_inter always 0 for a key frame
         .and_then(|a| a.get(band))
         .and_then(|a| a.get(ctx))
         .unwrap_or(&[128, 128, 128])
@@ -83,7 +79,6 @@ pub(crate) fn decode_tokens(
     tx_sz: i32,
     scan: &[usize],
     tx_type: vaco_codec_dsp_idct::vp9::TxType,
-    is_inter: bool,
     subsampling_x: bool,
     subsampling_y: bool,
     bit_depth: u32,
@@ -130,7 +125,7 @@ pub(crate) fn decode_tokens(
             let b = token_cache.get(nb1).copied().unwrap_or(0);
             (1 + a + b) >> 1
         };
-        let row = coef_row(entropy, tx_sz_u, plane0, is_inter, band, bctx.min(5));
+        let row = coef_row(entropy, tx_sz_u, plane0, band, bctx.min(5));
 
         if check_eob {
             let more_coefs = bd.read_bool(row.first().copied().unwrap_or(128));

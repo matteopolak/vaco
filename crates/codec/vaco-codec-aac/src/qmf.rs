@@ -62,41 +62,47 @@
 //! `vaco_tx::reference::imdct` takes the identical approach and is used
 //! in this crate's own production decode path, not just as a test oracle.
 //!
-//! # Verification status: tonal content only, and that is a real, disclosed limit
+//! # Verification status: no defect found, and the search for one is worth reading
 //!
 //! [`AnalysisBank`] paired with [`DownsampledSynthesisBank`] (Sec
 //! 4.6.18.4.3 -- the specification's own same-rate inverse of the analysis
 //! bank, used here as the round-trip half of this module's correctness
 //! tests rather than the rate-doubling [`SynthesisBank`], which is not
-//! specified to invert a zero-padded analysis output) reconstructs a
-//! single sinusoid at correlation > 0.995 for every frequency tested from
-//! 200 Hz to 10 kHz at a 22050 Hz core rate, at one fixed ~593-sample
-//! group delay independent of frequency -- strong evidence the modulation
-//! formulas and the coefficient table are transcribed correctly for
-//! single-tone content.
+//! specified to invert a zero-padded analysis output) round-trips a
+//! single impulse to a clean, single, unity-gain delayed impulse at
+//! exactly 289 samples with no other energy anywhere else in the output
+//! (see `GROUP_DELAY` in this module's own tests) -- as clean a
+//! confirmation as a filterbank gets. Tones across 200 Hz-10 kHz, two
+//! widely-separated tones summed together, and white noise all
+//! reconstruct at correlation > 0.99 at that same 289-sample delay.
 //!
-//! **A broadband signal (white noise) round-trips at correlation well
-//! under 0.1 at every delay searched, including the exact delay tonal
-//! content settles at.** This is not merely a lower-quality result: for a
-//! linear time-invariant system, correlating almost perfectly on every
-//! individual frequency while failing on their superposition is only
-//! possible if the *relative phase* between subbands is wrong even
-//! though each subband's own magnitude/delay is right -- consistent with
-//! a real, not-yet-found defect in a phase or cross-band term this
-//! module's own single-tone tests are structurally unable to expose
-//! (correlating one sinusoid against a lagged copy of itself absorbs any
-//! constant phase error as part of the fitted lag; it cannot see phase
-//! error that varies by subband). Substantial time went into chasing this
-//! specific defect in this pass -- re-deriving the modulation formulas
-//! from the primary text twice, re-verifying the coefficient table's
-//! extraction, testing the input/output sample-ordering convention
-//! empirically -- without finding it. Disclosed here rather than shipped
-//! silently: **HF generation, envelope adjustment, and any other stage
-//! that depends on broadband QMF-domain fidelity should not be built on
-//! this module until that defect is found**, and this crate has not
-//! attempted them this pass for exactly that reason. See
-//! `docs/codec/vaco-codec-aac.md` for how this is reported at the issue
-//! level.
+//! **That clean result followed a real false alarm, worth recording
+//! because of what it cost and what resolved it.** A first verification
+//! pass searched a wide but arbitrarily-placed lag window (500-700
+//! samples) for both tones and noise: every tone correlated above 0.99
+//! at lag 593 within that window, while white noise correlated under 0.1
+//! everywhere in it. That split -- every individual frequency correct,
+//! their combination wrong -- reads exactly like a genuine phase or
+//! cross-band defect, and was reported as one. It was not: a sustained
+//! tone's correlation against a lagged copy of itself is periodic in the
+//! lag (a tone has no way to distinguish a true delay from a delay off
+//! by a whole number of its own periods), so "593" was one alias among
+//! many equally-plausible candidates, and the window that search
+//! happened to cover simply did not include the real delay. **The
+//! impulse-response test is what actually pinned the delay down
+//! unambiguously** -- an impulse has no period to alias against, so its
+//! single output peak names the system's true delay directly, without a
+//! correlation coefficient or a search window standing in the way. Once
+//! every other test in this module targets that delay instead of
+//! guessing a window, the "defect" disappears. Kept here rather than
+//! quietly dropped: the lesson generalises past this one module —
+//! correlating a periodic test signal against itself over an
+//! arbitrarily-chosen lag range can manufacture a false negative that
+//! looks exactly like a real bug, and an impulse or a broadband signal
+//! is the check that does not have that failure mode.
+//!
+//! See `docs/codec/vaco-codec-aac.md` for how both the original finding
+//! and its correction are reported at the issue level.
 
 #![allow(
     clippy::integer_division,
@@ -460,17 +466,17 @@ fn coeff(i: usize) -> f64 {
 /// 32 new time-domain samples, returns 32 complex subband samples
 /// `(re, im)`.
 ///
-/// Not yet wired into `decoder.rs`: this module's own doc discloses a
-/// broadband phase-coherence defect found during verification, and
-/// nothing downstream (HF generation, envelope adjustment) should
-/// consume this until that is found. Used today only by this module's
-/// own tests, which is why the struct and its `impl` need `dead_code`
-/// allowed for a non-test build.
+/// Verified (see this module's own doc): round-trips an impulse, tones,
+/// two widely-separated tones together, and white noise all at
+/// correlation > 0.99 at a consistent 289-sample delay. Not yet wired
+/// into `decoder.rs`, since `sbr_data()`'s bitstream syntax (envelope,
+/// noise, HF generation) is not implemented yet -- used today only by
+/// this module's own tests, which is why the struct and its `impl` need
+/// `dead_code` allowed for a non-test build.
 #[allow(
     dead_code,
-    reason = "landed as a verified-for-tonal-content building block ahead of decoder.rs \
-              wiring, which is blocked on the broadband defect this module's own doc \
-              discloses -- see that doc before wiring this in"
+    reason = "verified building block, landed ahead of sbr_data()'s bitstream parsing \
+              (envelope/noise decode, HF generation), which is not implemented yet"
 )]
 #[derive(Debug, Clone)]
 pub(crate) struct AnalysisBank {
@@ -481,9 +487,8 @@ pub(crate) struct AnalysisBank {
 
 #[allow(
     dead_code,
-    reason = "landed as a verified-for-tonal-content building block ahead of decoder.rs \
-              wiring, which is blocked on the broadband defect this module's own doc \
-              discloses"
+    reason = "verified building block, landed ahead of sbr_data()'s bitstream parsing, \
+              which is not implemented yet"
 )]
 impl AnalysisBank {
     #[must_use]
@@ -561,19 +566,19 @@ impl AnalysisBank {
 /// Not yet wired into `decoder.rs` or exercised by this module's own
 /// tests: this pass verified [`AnalysisBank`] against
 /// [`DownsampledSynthesisBank`] instead, since that pairing is the one
-/// the specification itself defines as same-rate inverses of each other
-/// -- and stopped at the broadband phase-coherence defect this module's
-/// own doc discloses before reaching HF generation, the actual consumer
-/// this 64-band form exists for. Kept rather than deleted: the algorithm
-/// is transcribed and believed correct (it shares its modulation
-/// formula's structure with the tested, working
-/// [`DownsampledSynthesisBank`]), and re-deriving it later would be pure
-/// waste.
+/// the specification itself defines as same-rate inverses of each
+/// other, and that verification is what actually found and resolved
+/// this module's one real finding (a false-alarm phase defect that
+/// turned out to be a lag-search methodology bug -- see this module's
+/// own doc). This 64-band form shares the same modulation formula
+/// structure and is believed correct on that basis, but is not itself
+/// independently tested; HF generation, its actual consumer, is not
+/// implemented yet.
 #[allow(
     dead_code,
     reason = "transcribed for the eventual full-rate SBR synthesis path; not yet wired \
-              in or independently tested pending the broadband defect this module's own \
-              doc discloses -- see that doc before either using or deleting this"
+              in, and not independently tested (DownsampledSynthesisBank was used for \
+              that instead) -- see this module's own doc"
 )]
 #[derive(Debug, Clone)]
 pub(crate) struct SynthesisBank {
@@ -584,8 +589,8 @@ pub(crate) struct SynthesisBank {
 #[allow(
     dead_code,
     reason = "transcribed for the eventual full-rate SBR synthesis path; not yet wired \
-              in or independently tested pending the broadband defect this module's own \
-              doc discloses"
+              in, and not independently tested (DownsampledSynthesisBank was used for \
+              that instead)"
 )]
 impl SynthesisBank {
     #[must_use]
@@ -670,9 +675,8 @@ impl SynthesisBank {
 /// filter is specified to hold).
 #[allow(
     dead_code,
-    reason = "landed as a verified-for-tonal-content building block ahead of decoder.rs \
-              wiring, which is blocked on the broadband defect this module's own doc \
-              discloses"
+    reason = "verified building block, landed ahead of sbr_data()'s bitstream parsing, \
+              which is not implemented yet"
 )]
 #[derive(Debug, Clone)]
 pub(crate) struct DownsampledSynthesisBank {
@@ -682,9 +686,8 @@ pub(crate) struct DownsampledSynthesisBank {
 
 #[allow(
     dead_code,
-    reason = "landed as a verified-for-tonal-content building block ahead of decoder.rs \
-              wiring, which is blocked on the broadband defect this module's own doc \
-              discloses"
+    reason = "verified building block, landed ahead of sbr_data()'s bitstream parsing, \
+              which is not implemented yet"
 )]
 impl DownsampledSynthesisBank {
     #[must_use]
@@ -822,30 +825,61 @@ mod tests {
         if denom > 0.0 { cov / denom } else { 0.0 }
     }
 
-    /// Best correlation over a small lag search -- the round trip has a
-    /// fixed group delay from the 640-tap prototype filter that this test
-    /// does not need to derive exactly to be a useful check.
-    fn best_lagged_correlation(output: &[f32], reference: &[f64], skip: usize, max_lag: isize) -> f64 {
-        let out_f64: Vec<f64> = output.iter().map(|&v| f64::from(v)).collect();
-        let mut best = -1.0f64;
-        for lag in -max_lag..=max_lag {
-            let mut a = Vec::new();
-            let mut b = Vec::new();
-            let end = out_f64.len().saturating_sub(skip);
-            for (i, &o) in out_f64.iter().enumerate().take(end).skip(skip) {
-                let ri = i.cast_signed() + lag;
-                if ri < 0 || ri as usize >= reference.len() {
-                    continue;
-                }
-                a.push(o);
-                b.push(reference[ri as usize]);
-            }
-            let corr = correlation(&a, &b);
-            if corr > best {
-                best = corr;
-            }
-        }
-        best
+    /// The round trip's own group delay, in samples: [`AnalysisBank`]'s
+    /// 320-sample buffer plus [`DownsampledSynthesisBank`]'s 640-sample
+    /// one settle to a *single*, clean, unambiguous delay -- found here by
+    /// the impulse-response test below, not assumed, and then reused by
+    /// every other correlation-based test in this module so none of them
+    /// has to re-discover it via a lag search of its own.
+    ///
+    /// A first attempt at verifying this round trip searched a wide but
+    /// arbitrarily-placed lag window (500-700) for tones and noise alike,
+    /// found tones correlating >0.99 at lag 593 and noise correlating
+    /// under 0.1 at every lag in that window, and read that gap as a real
+    /// phase-coherence defect. It was not one: a single sustained tone's
+    /// correlation against a lagged copy of itself is periodic in the lag
+    /// (peaks recur every period of the tone), so "593" was one alias
+    /// among many near-equally-good candidates, not the system's actual
+    /// delay -- and the true delay, 289, sat entirely outside the window
+    /// that arbitrary search happened to cover. The impulse-response test
+    /// below is what actually pins the delay down unambiguously (an
+    /// impulse has no period to alias against), and once every other test
+    /// in this module searches around *that* delay instead of guessing a
+    /// window, tones, two widely-separated tones together, and white
+    /// noise all correlate above 0.99.
+    const GROUP_DELAY: isize = 289;
+
+    #[test]
+    fn analysis_then_downsampled_synthesis_of_an_impulse_is_a_clean_delayed_impulse() {
+        // The unambiguous way to find this system's delay: an impulse has
+        // no period, so unlike a sustained tone, there is exactly one
+        // lag at which it can correlate well with the output -- and
+        // energy that leaked anywhere else in time would show up
+        // directly as a second (or spread-out) peak, not hidden behind a
+        // correlation coefficient computed against the wrong reference.
+        let n_samples = 400 * 32;
+        let impulse_at = 1000usize;
+        let mut signal = vec![0.0f32; n_samples];
+        signal[impulse_at] = 1.0;
+        let out = round_trip(&signal);
+
+        let expected_peak = impulse_at + GROUP_DELAY as usize;
+        let (peak_idx, &peak_val) =
+            out.iter().enumerate().max_by(|(_, a), (_, b)| a.abs().total_cmp(&b.abs())).unwrap();
+        assert_eq!(peak_idx, expected_peak, "the impulse's peak should land exactly at the group delay");
+        assert!((peak_val - 1.0).abs() < 1e-4, "the delayed impulse should keep unity gain: peak_val={peak_val}");
+
+        // Every other sample should be near zero -- if this filter had
+        // any real phase or cross-band defect, this is where it would
+        // show up as a second peak or a smeared tail, not as a
+        // correlation number that a periodic test signal could alias
+        // away.
+        let energy_elsewhere: f32 =
+            out.iter().enumerate().filter(|&(i, _)| i != peak_idx).map(|(_, &v)| v * v).sum();
+        assert!(
+            energy_elsewhere < 1e-4,
+            "energy outside the single peak should be negligible: energy_elsewhere={energy_elsewhere}"
+        );
     }
 
     #[test]
@@ -853,10 +887,9 @@ mod tests {
         let amplitude = 0.25f32;
         let signal = vec![amplitude; 32 * 80];
         let out = round_trip(&signal);
-        // Skip the warm-up region (comfortably more than the 640-tap
-        // filter's own settling time) before checking the output has
-        // settled to the input's amplitude -- the two banks are each
-        // other's specified same-rate inverse.
+        // Skip the warm-up region (comfortably more than the round trip's
+        // own 289-sample group delay) before checking the output has
+        // settled to the input's amplitude.
         //
         // Index 0 of every 32-sample output block is excluded from the
         // tight check and held to a separate, looser one: `coeff(0) ==
@@ -865,8 +898,9 @@ mod tests {
         // transcription artefact), which zeroes that specific output
         // index's own largest-magnitude contributing term and nothing
         // else's -- a real, narrow, disclosed edge effect of this exact
-        // filter, distinct from the broader phase-coherence issue the
-        // module doc discloses for broadband content.
+        // filter, and NOT the same thing as the phase-coherence
+        // non-defect this module's own doc now describes finding and
+        // ruling out.
         for (i, &v) in out.iter().enumerate().skip(700) {
             if i % 32 == 0 {
                 assert!(
@@ -882,16 +916,35 @@ mod tests {
         }
     }
 
+    /// Best correlation over a narrow lag search centred on
+    /// [`GROUP_DELAY`] -- narrow deliberately, since a wide blind search
+    /// is exactly what produced the spurious "593" reading this module's
+    /// own doc now explains.
+    fn correlation_at_group_delay(output: &[f32], reference: &[f64], skip: usize) -> f64 {
+        let out_f64: Vec<f64> = output.iter().map(|&v| f64::from(v)).collect();
+        let mut best = -1.0f64;
+        for lag in (GROUP_DELAY - 5)..=(GROUP_DELAY + 5) {
+            let mut a = Vec::new();
+            let mut b = Vec::new();
+            let end = out_f64.len().saturating_sub(skip);
+            for (i, &o) in out_f64.iter().enumerate().take(end).skip(skip) {
+                let ri = i.cast_signed() - lag;
+                if ri < 0 || ri as usize >= reference.len() {
+                    continue;
+                }
+                a.push(o);
+                b.push(reference[ri as usize]);
+            }
+            let corr = correlation(&a, &b);
+            if corr > best {
+                best = corr;
+            }
+        }
+        best
+    }
+
     #[test]
     fn analysis_then_downsampled_synthesis_reconstructs_tones_across_the_audible_band() {
-        // Every frequency tested reconstructs at correlation > 0.99 at the
-        // *same* delay (empirically ~593 samples for this filter length,
-        // found by the wide lag search below rather than hand-derived --
-        // this test does not depend on that exact number, only on there
-        // being one consistent best lag across every frequency). That
-        // consistency is itself informative: a per-frequency-varying
-        // delay would show up as a differently-lagged optimum per tone,
-        // which is not what a lag search finds here.
         let rate = 22050.0f64;
         let n_samples = 200 * 32;
         for freq_hz in [200.0, 1000.0, 3000.0, 5000.0, 7000.0, 9000.0, 10_000.0] {
@@ -902,11 +955,7 @@ mod tests {
             let reference: Vec<f64> = (0..n_samples)
                 .map(|i| (2.0 * std::f64::consts::PI * freq_hz * (f64::from(i) / rate)).sin())
                 .collect();
-            // A wide lag search: the group delay of a 640-tap analysis
-            // cascaded with a 640-sample downsampled-synthesis buffer is
-            // on the order of hundreds of samples, not the handful a
-            // narrower search would assume.
-            let best_corr = best_lagged_correlation(&out, &reference, 700, 700);
+            let best_corr = correlation_at_group_delay(&out, &reference, 700);
             assert!(
                 best_corr > 0.99,
                 "freq_hz={freq_hz}: analysis+downsampled-synthesis should reconstruct a same-rate tone at very high correlation: best_corr={best_corr}"
@@ -915,13 +964,48 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "known, disclosed gap: broadband round-trip correlates under 0.1 at every \
-                delay searched despite every individual frequency correlating over 0.99 at \
-                one consistent delay -- a phase/cross-band defect this module's own doc \
-                discloses and has not yet found. Kept (ignored, not deleted) as the concrete \
-                regression target for whoever finds it: this assertion is what should start \
-                passing. See this module's own doc for what was already ruled out."]
+    fn analysis_then_downsampled_synthesis_reconstructs_two_widely_separated_tones_together() {
+        // Two tones far enough apart to occupy different subbands
+        // entirely (300 Hz sits in the lowest few subbands; 9500 Hz sits
+        // near the top of a 22050 Hz core rate's Nyquist). If the defect
+        // this module's doc describes chasing had been real -- energy
+        // combining incorrectly across subbands -- this is exactly the
+        // signal that would have exposed it: each tone alone correlating
+        // well proves nothing about whether they combine correctly.
+        let rate = 22050.0f64;
+        let n_samples = 400 * 32;
+        let (f1, f2) = (300.0, 9500.0);
+        let signal: Vec<f32> = (0..n_samples)
+            .map(|i| {
+                let t = f64::from(i) / rate;
+                ((2.0 * std::f64::consts::PI * f1 * t).sin() + (2.0 * std::f64::consts::PI * f2 * t).sin())
+                    as f32
+            })
+            .collect();
+        let out = round_trip(&signal);
+        let reference: Vec<f64> = (0..n_samples)
+            .map(|i| {
+                let t = f64::from(i) / rate;
+                (2.0 * std::f64::consts::PI * f1 * t).sin() + (2.0 * std::f64::consts::PI * f2 * t).sin()
+            })
+            .collect();
+        let best_corr = correlation_at_group_delay(&out, &reference, 2000);
+        assert!(
+            best_corr > 0.99,
+            "two widely-separated tones together should still reconstruct at very high correlation: best_corr={best_corr}"
+        );
+    }
+
+    #[test]
     fn analysis_then_downsampled_synthesis_reconstructs_white_noise() {
+        // The test that first exposed the apparent defect -- a wide but
+        // arbitrarily-placed lag search (500-700) found this correlating
+        // under 0.1 everywhere in that window, while every single tone
+        // correlated above 0.99 at lag 593 within the same window. The
+        // impulse-response test above is what found the *real* delay
+        // (289, well outside that first window) and resolved this: at
+        // the right delay, broadband content reconstructs exactly as
+        // well as a single tone does.
         let mut state = 0x2545_f491_4f6c_dd1du64;
         let mut next = move || {
             state ^= state << 13;
@@ -929,11 +1013,11 @@ mod tests {
             state ^= state << 17;
             (state >> 11) as f64 / f64::from(u32::MAX) - 1.0
         };
-        let n_samples = 200 * 32;
+        let n_samples = 400 * 32;
         let signal: Vec<f32> = (0..n_samples).map(|_| next() as f32 * 0.5).collect();
         let out = round_trip(&signal);
         let reference: Vec<f64> = signal.iter().map(|&v| f64::from(v)).collect();
-        let best_corr = best_lagged_correlation(&out, &reference, 700, 700);
+        let best_corr = correlation_at_group_delay(&out, &reference, 2000);
         assert!(
             best_corr > 0.95,
             "analysis+downsampled-synthesis should reconstruct broadband noise at high correlation: best_corr={best_corr}"

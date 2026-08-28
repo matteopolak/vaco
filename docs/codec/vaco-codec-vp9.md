@@ -1,41 +1,33 @@
 # `vaco-codec-vp9`
 
 Layer 4. VP9 video decode (VP9 Bitstream & Decoding Process Specification
-v0.6) — key and inter frames, single and compound reference prediction,
-switchable sub-pel interpolation. Builds on `vaco-codec-msac` (the shared
-VP8/VP9 boolean entropy engine) and `vaco-codec-dsp-idct` (the shared
-DCT/ADST/WHT transform math). The loop filter, profiles 1-3 and threading
-remain out of scope — see "What is deliberately not here" below.
+v0.6), **key-frame intra decode only** — see "What is deliberately not here"
+below before assuming this is a full decoder. Builds on `vaco-codec-msac`
+(the shared VP8/VP9 boolean entropy engine) and `vaco-codec-dsp-idct`
+(the shared DCT/ADST/WHT transform math).
 
 ## What it is
 
-A from-scratch VP9 decoder covering C-29/C-30 (headers, superframes, the
-boolean decoder, the probability model, intra prediction and transforms) and
-C-31 (inter prediction): the uncompressed header (§6.2), the compressed
-header's forward probability update (§6.3), Annex B superframe splitting,
-the partition/mode-info bitstream walk (§6.4) for both intra and inter
-frames, motion-vector prediction and the candidate scan (§6.5), coefficient
-token decode (§6.4.24-26, §9.3.2's Pareto-table probability expansion),
-dequantization and the inverse transform (§8.6-8.7: DCT4/8/16/32, ADST4/8/16,
-the lossless Walsh-Hadamard transform), all ten §8.5.1 intra prediction
-modes, and §8.5.2's inter prediction process (reference-frame selection and
-scaling, motion-vector clamping, the two-pass 8-tap sub-pel filter,
-compound-reference averaging). It registers a `Decoder` for codec id `vp9`
-via `VP9_DECODER`.
+A from-scratch VP9 decoder covering C-29 (headers, superframes, the boolean
+decoder, the probability model) and C-30 (intra prediction and transforms):
+the uncompressed header (§6.2), the compressed header's forward probability
+update (§6.3), Annex B superframe splitting, the partition/mode-info
+bitstream walk (§6.4), coefficient token decode (§6.4.24-26, §9.3.2's
+Pareto-table probability expansion), dequantization and the inverse
+transform (§8.6-8.7: DCT4/8/16/32, ADST4/8/16, the lossless Walsh-Hadamard
+transform), and all ten §8.5.1 intra prediction modes. It registers a
+`Decoder` for codec id `vp9` via `VP9_DECODER`.
 
 | Module | Contents |
 |---|---|
-| `header` | `FrameHeader`, `ColorConfig`, `LoopFilterParams`, `QuantParams`, `Segmentation`, `TileInfo`, `EntropyContext`, `parse_uncompressed_header`/`parse_compressed_header` (now covering the inter-frame compressed-header fields: `reference_mode`, `inter_mode_probs`, `interp_filter_probs`, `is_inter_prob`, `comp_mode`/`comp_ref`/`single_ref_prob`, `mv_probs`) and the `diff_update_prob`/`decode_term_subexp`/`inv_remap_prob` forward-update machinery |
-| `tables` | The spec's constants, trees and large data tables (`kf_*_probs`, `default_coef_probs`, `pareto_table`, the scan tables, `dc_qlookup`/`ac_qlookup`, `mv_ref_blocks`, `subpel_filters`, the inter-mode/interp-filter/mv trees, the 18 new `default_*` inter probability tables) — the large ones via `include!` from `tables/*.in`, extracted from the spec PDF and shape/count-validated separately from this crate |
-| `tokens` | §6.4.24's `tokens()`/`read_coef`, §9.3.2's `pareto`/neighbour-context derivation, indexed by `is_inter` as well as tx size/plane/band/context |
+| `header` | `FrameHeader`, `ColorConfig`, `LoopFilterParams`, `QuantParams`, `Segmentation`, `TileInfo`, `EntropyContext`, `parse_uncompressed_header`/`parse_compressed_header` and the `diff_update_prob`/`decode_term_subexp`/`inv_remap_prob` forward-update machinery |
+| `tables` | The spec's constants, trees and large data tables (`kf_*_probs`, `default_coef_probs`, `pareto_table`, the scan tables, `dc_qlookup`/`ac_qlookup`) — the large ones via `include!` from `tables/*.in`, extracted from the spec PDF and shape/count-validated separately from this crate |
+| `tokens` | §6.4.24's `tokens()`/`read_coef`, §9.3.2's `pareto`/neighbour-context derivation |
 | `predict` | §8.5.1's ten intra prediction modes, one implementation per mode generic over block size (unlike VP8, which has separate 16x16/8x8/4x4 formulas) |
-| `mvpred` | §6.5's motion-vector prediction: `find_mv_refs`'s spatial+temporal candidate scan, `find_best_ref_mvs`, `append_sub8x8_mvs`, `read_mv`/`read_mv_component` |
-| `interpredict` | §8.5.2's inter prediction process: motion-vector selection (with chroma sub-block averaging), clamping, reference-frame scaling, and the two-pass 8-tap sub-pel convolution with compound averaging |
-| `refframe` | The 8-slot reference-frame store (`RefFrameStore`/`RefSlot`), `Arc<Picture>`-shared since a typical GOP refreshes only one or two slots per frame |
 | `transform` | §8.6's dequantization and reconstruct process, built on `vaco_codec_dsp_idct::vp9` |
 | `superframe` | Annex B's superframe index parsing, returning every sub-frame (not just the display-relevant last one — see below) |
 | `framebuf` | `Plane` (`u16`-backed, holds 8/10/12-bit samples), `Picture` |
-| `decode` | The per-superblock orchestrator (`decode_partition`/`decode_block`/`intra_frame_mode_info`/`inter_frame_mode_info`/`residual`) plus the `Decoder` impl, reference-frame refresh, and hidden-frame (non-shown alt-ref) decode |
+| `decode` | The per-superblock orchestrator (`decode_partition`/`decode_block`/`intra_frame_mode_info`/`residual`) plus the `Decoder` impl |
 
 The inverse transform math itself (`TxType`, `inverse_transform_2d`, the
 butterfly network) lives in `vaco_codec_dsp_idct::vp9`, not in this crate —
@@ -46,6 +38,15 @@ than being re-derived independently by a future AV1 decoder that shares
 VP9's DCT/ADST family almost exactly.
 
 ### What is deliberately not here
+
+**Inter prediction (C-31/#325).** This crate decodes exactly one frame type:
+key frames. `Vp9Decoder::decode_one_frame` checks
+`fh.show_existing_frame || !fh.is_key_frame` and returns without emitting a
+frame for anything else — an inter frame or a shown-existing-frame pointer
+is *skipped*, not decoded wrong. A stream that is anything other than
+all-intra will visibly drop frames rather than reconstruct them, which is
+the honest behaviour: this crate has no motion-vector decode, no reference
+frame buffer, and no inter residual path at all.
 
 **The loop filter, profiles 1-3, threading (epic #32).** §8.8's in-loop
 deblocking filter is parsed (`LoopFilterParams` is a real, populated
@@ -58,24 +59,19 @@ combinations) and 2/3 (10/12-bit) are parsed for totality but not exercised
 by any fixture this crate's scope can reach; multi-tile-column decode has a
 known `AvailL` simplification (see `planning/TECH-DEBT.md`).
 
-**Backward probability adaptation (§8.3/8.4).** Not implemented. Unlike
-Phase B (key frames only, where `setup_past_independence()` resets
-`EntropyContext` before every frame's own forward update, making backward
-adaptation provably inert), this is now a real, live gap: `refresh_probs()`
-should fold this frame's own observed symbol counts into the loaded context
-before saving it (`if (!error_resilient_mode && !frame_parallel_decoding_mode)
-{ load_probs(...); adapt_coef_probs(); ...adapt_noncoef_probs(); }`), and
-this crate instead saves the forward-updated `entropy` back to
-`frame_contexts[frame_context_idx]` verbatim, with no counting/adaptation
-step. Every fixture verified below still decodes bit-exact because forward
-updates alone are enough to track the tested content's actual probabilities
-— but a longer real-world GOP whose encoder relies on backward adaptation to
-converge (rather than repeating full forward updates every frame) is exactly
-the case this gap would surface in. See `planning/TECH-DEBT.md`.
+**Backward probability adaptation (§8.3/8.4).** Not implemented, and not an
+oversight: every key frame's `setup_past_independence()` call
+unconditionally resets `EntropyContext` to the specification's defaults
+before that frame's own compressed header forward-updates it (`FrameIsIntra`
+is always 1 on a real key frame, and the uncompressed header's syntax makes
+the reset call unconditional in that case). A stream of consecutive key
+frames therefore never carries adapted probabilities from one key frame to
+the next — backward adaptation cannot affect, or be verified against, any
+bitstream this crate can fully decode. See `crate::header`'s module doc.
 
 ## How it works
 
-### Phase B: the `inv_remap_prob` bug, and why it looked like a bitstream desync
+### The `inv_remap_prob` bug, and why it looked like a bitstream desync
 
 The one real, subtle bug found while bringing this decoder to bit-exact:
 §6.3.5's `inv_remap_prob` decrements its `prob` argument (`m--`) immediately
@@ -123,74 +119,6 @@ chroma block from the very first frame onward — caught the same way, by
 comparing traced `tx_sz` values against a hand-computation of
 `get_plane_block_size`.
 
-### Phase C: four real bugs, all invisible to a first-block-only check
-
-Bringing inter prediction to bit-exact needed four independent fixes, each
-with the same shape as the Phase B bug above: individually-correct-looking
-code that only misbehaves once a *second* real block, superblock, or
-reference type is actually exercised — so a fixture with only one inter
-block, or only one interpolation filter, or only single-reference content,
-would have shipped every one of these silently.
-
-1. **`tokens::coef_row` always read the `is_inter = 0` (intra) half of
-   `coef_probs`.** §8.6.2/9.3.2's coefficient probabilities are indexed by
-   `is_inter` (`REF_TYPES`, 2 entries) as well as tx size/plane/band/context
-   — an inter block reads an entirely different probability table from an
-   intra block at the same position. The Phase B code hardcoded index 0 with
-   a comment noting "is_inter always 0 for a key frame", true at the time
-   and silently wrong the moment a real inter block called it. Symptom:
-   every inter block's residual decoded to plausible-looking but wrong
-   coefficients — not a crash, not an obviously-corrupt value, just the
-   wrong picture.
-2. **`decode_partition` always read `KF_PARTITION_PROBS`.** §9.3.2's own
-   prose has a well-known erratum here — "If FrameIsIntra is equal to 0, the
-   probability is given by `kf_partition_probs`" is inverted from the actual
-   (libvpx-matching) behaviour, which is "a key frame reads the fixed
-   `kf_partition_probs`; every other frame reads the adaptive,
-   forward-updatable `partition_probs`". The Phase B code, correctly
-   decoding only key frames, never had reason to notice the inversion.
-   Symptom: a frame's first superblock (whose partition context, `pctx`, is
-   often the all-zero fallback where the two tables happen to be close
-   enough to still decode the right shape) looked fine; the second
-   superblock in a row — the first one whose context differs — read the
-   wrong probability and desynced everything after it.
-3. **`parse_compressed_header` called `read_interp_filter_probs`
-   unconditionally.** §6.3's `compressed_header()` syntax guards this call
-   with `if (interpolation_filter == SWITCHABLE)` — plenty of real encoder
-   output fixes one filter for a frame's whole duration and never writes
-   this table's update bits at all. Reading it unconditionally consumes
-   bits the encoder never wrote, which does not corrupt *this* read (the
-   probabilities it produces are simply garbage and never used) but shifts
-   every subsequent read in the *same* compressed header — `is_inter_prob`,
-   `frame_reference_mode`, `frame_reference_mode_probs`, `y_mode_probs`,
-   `partition_probs`, `mv_probs` — off by however many bits the phantom read
-   consumed. This was the deepest of the four: every one of those tables'
-   own context-derivation formulas and default values checked out correct
-   against the spec text in isolation, because the bug was never in what
-   they computed, only in where in the bitstream they started reading from.
-4. **`clamp_mv`/`clamp_mv_row`/`clamp_mv_col` clamped `MiRows - bh - MiRow`
-   (and the column equivalent) to zero before it could go negative.**
-   §6.5.4/6.5.5 and §8.5.2.2 compute this as a genuinely signed quantity —
-   negative for any block whose nominal size overhangs the frame edge, which
-   is the common case whenever a frame's height or width is not an exact
-   multiple of the block-size grid (this crate's own 176x144 fixtures:
-   `mi_rows = 18` is not a multiple of 8). A `saturating_sub` chain
-   (`mi_rows.saturating_sub(bh).saturating_sub(mi_row)`) silently narrows
-   the legal motion-vector clamp range for every boundary block, which only
-   ever showed up as a handful of wrong pixels in the last superblock row or
-   column of a frame — easy to miss next to the far larger errors bugs 1-3
-   were producing at the time, and the last of the four to be isolated once
-   the rest of a frame was already bit-exact.
-
-Isolating each one used the same method as the `inv_remap_prob` bug: a
-localized, per-8x8-block deviation map (`VP9CHECK_LOCALIZE`) plus a
-per-pixel window dump (`VP9CHECK_WINDOW`) against the real reference YUV,
-narrowing "which block, which plane, which pixel" until the pattern (a
-sharp all-or-nothing boundary for bugs 1-3; a small, edge-confined deviation
-for bug 4) pointed at a specific syntax element, then checking that
-element's exact spec text word-for-word rather than trusting the existing
-transcription.
-
 ### Superframes: every sub-frame, not just the last
 
 `vaco-parse-vpx::superframe::last_subframe` (used by the format layer for
@@ -205,23 +133,14 @@ independently rather than sharing it.
 
 ## How to change it
 
-- **Adding backward probability adaptation (§8.3/8.4):** `refresh_probs()`'s
-  gap (see "What is deliberately not here") is the natural next piece —
-  `decode_one_frame` would need to count symbol occurrences during
-  `decode_frame_tiles` (a `Counts` struct paralleling `EntropyContext`'s own
-  shape) and fold them into the *loaded* context, not the forward-updated
-  one, before `save_probs`.
-- **Touching any inter-frame compressed-header field:** re-read §6.3's exact
-  `compressed_header()` call order before adding or reordering anything —
-  bug 3 above (an unconditional `read_interp_filter_probs`) shows how one
-  wrongly-guarded call corrupts every *later* read in the same header while
-  leaving every earlier one, and every later one's own formula, looking
-  correct in isolation.
-- **Touching partition or motion-vector-clamp arithmetic:** bugs 2 and 4
-  above are both "this looks like a saturating/simplifying transformation of
-  the spec's formula, and it is not" — `MiRows - bh - MiRow` (and the
-  column equivalent) must stay signed, and `kf_partition_probs` vs.
-  `partition_probs` selection must key off `FrameIsIntra`, not be hardcoded.
+- **Adding inter prediction (C-31/#325):** the natural extension point is
+  `decode::decode_block` — `intra_frame_mode_info` and its unconditional
+  `is_inter = 0` would need to become a real `is_inter` branch reading
+  `inter_frame_mode_info()`, a reference-frame buffer would need to be
+  threaded into `FrameCtx`, and `residual`'s `if (is_inter) predict_inter`
+  branch (currently entirely absent, since it is never true here) would
+  need real motion compensation. `predict_block`'s intra-only prediction
+  call is the one place that would need an `is_inter` fork.
 - **Adding the loop filter:** §8.8 operates on `CurrFrame` after every
   superblock in a tile has been reconstructed, reading `LoopFilterParams`
   (already parsed, in `FrameHeader`) and the per-block `tx_size`/`skip`/mode
@@ -294,10 +213,8 @@ Dev-only: `proptest`. No external runtime dependencies.
   clean, including `indexing_slicing`/`cast_possible_wrap`/
   `integer_division` denied workspace-wide.
 - Fuzzed via `fuzz_targets/vp9_decode.rs` (`cargo +nightly fuzz run
-  vp9_decode --no-default-features --features codec-vp9 -- -max_total_time=30`),
-  no crashes; coverage now reaches into `inter_block_mode_info` (confirmed
-  via the run's `NEW_FUNC` log line), i.e. the corpus is exercising the new
-  inter-prediction code, not just re-covering the Phase B intra paths.
+  vp9_decode --no-default-features --features codec-vp9`), no crashes in
+  5.8M executions over 30s.
 - **Differential testing against `ffmpeg -c:v libvpx-vp9` reference
   output** (rawvideo YUV 4:2:0), comparing every plane of every decoded
   frame byte-for-byte, is what found and confirmed the fix for both bugs
@@ -317,67 +234,26 @@ Dev-only: `proptest`. No external runtime dependencies.
   | larger frame | 256x256 | 1 (key) | `testsrc2`, lossless | level 0 | bit-exact |
   | complex content | 192x192 | 1 (key) | `mandelbrot`, lossless | level 0 | bit-exact |
   | noisy content | 96x96 | 1 (key) | `testsrc` + heavy noise, lossless | level 0 | bit-exact |
-  | multi-frame GOP (all key) | 176x144 | 5 (all key) | `testsrc`, lossless | level 0 | 5/5 bit-exact |
-
-  **C-31 (inter prediction) fixtures**, added this phase specifically to
-  exercise the branches a single-inter-block fixture cannot reach — the
-  three classes the four bugs above were hiding behind:
-
-  | Fixture | Resolution | Frames | Content / encoder settings | Loop filter | Reference mode | Interp filter | Result |
-  |---|---|---|---|---|---|---|---|
-  | real inter GOP, lossless | 176x144 | 15 (1 key + 14 inter) | `testsrc2`, `-lossless 1` | level 0 | single | fixed | **15/15 bit-exact**, all 14 inter frames |
-  | compound prediction, lossless | 176x144 | 30 | `testsrc2`, `-lossless 1 -auto-alt-ref 1 -lag-in-frames 25` (2-pass) | level 0 | **REFERENCE_MODE_SELECT** reachable, but libvpx chose single-ref throughout at this quality — see note below | fixed | 30/30 bit-exact (no compound block actually coded) |
-  | compound prediction, lossy | 176x144 | 30 | as above, `-crf 20` instead of `-lossless 1` | level >0 | **REFERENCE_MODE_SELECT**, compound blocks confirmed present (`comp_fixed_ref=ALTREF_FRAME`, `comp_var_ref=[LAST,GOLDEN]`) | switchable | MAD ≤0.08 every frame, max deviation 2-7 (loop filter) |
-  | switchable interpolation filter | 176x144 | 10-15 (various) | `testsrc2` at several `-speed`/`-crf` combinations | level >0 | single | **switchable** (`interpolation_filter == SWITCHABLE`, confirmed via per-frame header trace) | MAD ≤0.2, max deviation 2-24 (loop filter) |
-  | slow pan (real, non-zero motion) | 176x144 | 15 | `testsrc2` cropped with a per-frame moving origin | level >0 | single | fixed | MAD ≤0.14, max deviation 2-8 (loop filter) |
-  | edge/boundary superblocks | 176x144 | all of the above | `mi_rows = 18`, not a multiple of 8 — every fixture above already exercises this | — | — | — | bug 4's fix is what makes the last superblock row/column of every 176x144 fixture above bit-exact-modulo-loop-filter rather than visibly wrong |
-
-  **Compound prediction reachability, answered directly:** yes, under
-  `ffmpeg -c:v libvpx-vp9 -auto-alt-ref 1 -lag-in-frames 25` with 2-pass
-  encoding (`reference_mode` reads back as `REFERENCE_MODE_SELECT`,
-  `comp_fixed_ref = ALTREF_FRAME`, `comp_var_ref = [LAST_FRAME,
-  GOLDEN_FRAME]`), but *not* at `-lossless 1` — libvpx's own encoder
-  heuristics never actually chose a compound block at that quality in
-  testing, only at normal lossy `-crf`. A byte-perfect, loop-filter-free
-  proof of compound prediction specifically was therefore not obtained (the
-  lossless attempt above decodes bit-exact but never exercises compound);
-  the lossy compound fixture's deviations are the same small, smoothly
-  growing, per-pixel pattern as every other non-lossless fixture in this
-  table, which is consistent with (not conclusive proof of) correctness.
-
-  **Interpolation filter, answered directly:** there is no
-  `-vp9-interp-filter`-style ffmpeg option (checked `ffmpeg -h
-  encoder=libvpx-vp9`'s full private-option list; no such flag exists).
-  `SWITCHABLE` — the mode that actually reads a per-block filter choice from
-  the bitstream — turned out to be libvpx's own *default* for most
-  `-speed`/`-crf` combinations tried; only one narrow setting combination in
-  testing produced a fixed (non-switchable) filter for a whole frame. No
-  further forcing was needed once that was known.
-
-  **MV candidate scan diversity:** the switchable-filter and pan fixtures
-  above collectively exercise `NEARESTMV`/`NEARMV`/`ZEROMV`/`NEWMV`, sub-8x8
-  blocks with per-4x4 motion vectors (`append_sub8x8_mvs`), and real
-  `read_mv`/`read_mv_component` decode (non-zero motion, both magnitude
-  classes) — confirmed via a per-block trace during debugging, not merely
-  inferred from bit-exactness.
+  | multi-frame GOP | 176x144 | 5 (all key) | `testsrc`, lossless | level 0 | 5/5 bit-exact |
+  | mixed key/inter stream | 176x144 | 8 (1 key + 7 inter) | `testsrc`, `-auto-alt-ref` | level >0 | key frame decoded within loop-filter tolerance; 7 inter frames correctly skipped, no crash, no wrong pixels emitted |
 
   Every non-bit-exact row above differs from the reference only by the
-  unimplemented loop filter's own small, expected smoothing (deviations
-  that grow gradually frame-to-frame as the loop-filtered reference the real
-  decoder uses for its own motion compensation slowly diverges from this
-  crate's unfiltered one — exactly the shape loop-filter-only drift
-  produces, and unlike anything the four bugs above looked like before they
-  were fixed) — every pixel this crate is actually responsible for (header
-  parse, partition, mode decode, motion-vector prediction, motion
-  compensation including compound averaging, token decode, dequantization,
-  transform, intra and inter prediction) is bit-exact in every lossless
-  fixture tested, and within loop-filter tolerance in every lossy one.
+  unimplemented loop filter's own small, expected smoothing (maximum
+  per-pixel deviation of 3, mean absolute deviation under 0.03) — every
+  pixel this crate is actually responsible for (header parse, partition,
+  mode decode, token decode, dequantization, transform, intra prediction)
+  is bit-exact in every fixture tested, lossless or not. No superframe with
+  more than one physical sub-frame was reachable from pure key-frame
+  content with the encoders available (`-auto-alt-ref` did not produce one
+  for any test clip small/simple enough to keep purely intra); the
+  superframe splitter itself is covered by unit tests instead.
 
-  **A real picture comes out of this decoder now.** Fifteen consecutive
-  frames of a genuine key-then-inter GOP — 14 real motion-compensated
-  frames, not one of them a key frame — reconstruct byte-for-byte identical
-  to `ffmpeg -c:v libvpx-vp9`'s own output. This is the first VP9 frame this
-  project has decoded that was not a key frame.
+  If a full picture, not just this crate's slice of one, is the goal:
+  **inter prediction (C-31) is the only thing standing between this
+  decoder and decoding an arbitrary real-world VP9 stream correctly.**
+  Every other piece — headers, the probability model, the partition and
+  mode walk, coefficient decode, dequantization, the transform, intra
+  prediction — is implemented and verified bit-exact.
 
 ## Specification
 

@@ -2082,31 +2082,19 @@ same synthetic-fixture technique already in use. Recorded here so a
 similar "this looks decoder-dependent" call elsewhere gets one more
 targeted sweep before being written off.
 
-### `vaco-codec-vp9` C-31 (inter prediction) is implemented and verified bit-exact; four real bugs found along the way
+### `vaco-codec-vp9` decodes key frames only — inter prediction is unimplemented (C-31/#325)
 
-C-31 landed this phase: `Vp9Decoder::decode_one_frame` now decodes inter
-frames (motion-vector prediction and the candidate scan, single and
-compound reference selection, switchable sub-pel interpolation,
-reference-frame management including hidden alt-ref frames), not just key
-frames. Fifteen consecutive frames of a real key-then-inter GOP (14 inter
-frames) decode byte-for-byte identical to `ffmpeg -c:v libvpx-vp9` at
-`-lossless 1`; compound prediction and switchable-filter content decode
-within the loop filter's documented tolerance. Four real bugs were found
-and fixed getting here — `tokens::coef_row` ignoring the `is_inter`
-dimension of `coef_probs`, `decode_partition` using the fixed
-`kf_partition_probs` table unconditionally instead of switching on
-`FrameIsIntra` (the spec's own §9.3.2 prose has this condition inverted —
-a documented erratum), `parse_compressed_header` calling
-`read_interp_filter_probs` without the `interpolation_filter == SWITCHABLE`
-guard §6.3 requires, and `clamp_mv`/`clamp_mv_row`/`clamp_mv_col` clamping
-`MiRows - bh - MiRow` (and the column equivalent) to zero via
-`saturating_sub` instead of leaving it a genuinely signed quantity per
-§6.5.4/6.5.5/§8.5.2.2. See `docs/codec/vaco-codec-vp9.md`'s "Phase C" `How
-it works` section for the full story of each, and its Verification table
-for the fixture-by-fixture results. What is *not* covered: see the loop
-filter/profiles-1-3 entry below (unaffected by this phase) and the backward
-probability adaptation entry below (now a live gap, not a provably-inert
-one).
+`vaco-codec-vp9::decode::Vp9Decoder::decode_one_frame` checks
+`fh.show_existing_frame || !fh.is_key_frame` and returns without emitting a
+frame for either case. There is no motion-vector decode, no reference-frame
+buffer, and no inter residual path anywhere in this crate — a real VP9
+stream (which is virtually always key frame plus many inter frames) will
+have every inter frame silently dropped, not decoded wrong. This is by
+design for C-29/C-30's scope, not an oversight: see
+`docs/codec/vaco-codec-vp9.md`'s Verification table, which confirms this
+crate reconstructs every pixel it is responsible for bit-exactly (modulo
+the loop filter, next entry) and states plainly that inter prediction is
+the only thing left standing between this decoder and a real picture.
 
 ### `vaco-codec-vp9`'s loop filter (§8.8), profiles 1-3, and multi-tile-column decode are unimplemented (epic #32)
 
@@ -2127,28 +2115,25 @@ multi-tile-column stream still decodes each column's own bits correctly,
 but `AvailL` at a non-first tile column's left edge is not spec-exact
 there. None of this is exercised by any test in this repository.
 
-### `vaco-codec-vp9`: backward probability adaptation (§8.3/8.4) is not implemented — now a live gap, not a provably-inert one
+### `vaco-codec-vp9`: backward probability adaptation (§8.3/8.4) is not implemented, and cannot be verified from this crate's scope
 
-Through C-29/C-30 (key frames only), this was provably inert: every key
-frame's `setup_past_independence()` unconditionally resets `EntropyContext`
-to defaults before that frame's own forward update runs, so a stream of
-consecutive key frames never carried adapted probabilities from one to the
-next. C-31 (inter prediction) changes this: `refresh_probs()` should fold
-each frame's own observed symbol counts into the *loaded* context
-(`load_probs`/`load_probs2`, then `adapt_coef_probs`/`adapt_noncoef_probs`)
-before `save_probs` runs, and this crate instead saves the
-forward-updated `entropy` back to `frame_contexts[frame_context_idx]`
-verbatim — no counting step exists anywhere in `decode_frame_tiles`. Every
-fixture verified in `docs/codec/vaco-codec-vp9.md` still decodes bit-exact
-because the tested GOPs are short enough (up to 30 frames) that per-frame
-forward updates alone track the content's real probabilities; a longer
-real-world stream whose encoder leans on backward adaptation to converge,
-rather than repeating expensive forward updates every frame, is exactly the
-case where this gap would first produce a visible (not just theoretical)
-divergence. Adding it needs a `Counts` struct paralleling `EntropyContext`'s
-own shape, populated during `decode_block`/`residual`'s existing decode
-calls, folded in at `refresh_probs` time — see
-`docs/codec/vaco-codec-vp9.md`'s "How to change it".
+Not an oversight: every key frame's `setup_past_independence()` call
+unconditionally resets `EntropyContext` to the specification's defaults
+before that frame's own compressed-header forward update runs
+(`FrameIsIntra` is always 1 on a real key frame, and the uncompressed
+header's own syntax makes the reset call unconditional in that case, per
+§6.2's `frame_sync_code()`/`intra_only`/`reset_frame_context` handling
+re-read specifically to check this rather than assumed). A stream of
+consecutive key frames — the only kind of stream this crate can fully
+decode — therefore never carries adapted probabilities from one key frame
+to the next: backward adaptation's counting process (§8.3) and the
+adaptation formula itself (§8.4) have no observable effect on any
+bitstream reachable from C-29/C-30's scope, and no fixture within that
+scope could exercise or verify an implementation of either. Left
+unimplemented rather than implemented-but-untestable; would need to be
+added alongside inter prediction (previous entry), since a real
+multi-key-frame-with-inter-frames-between-them GOP is the only kind of
+stream where it would ever run.
 
 ### `vaco-codec-vp9`'s large spec tables split into `tables/*.in` files are not machine-verified by `provenance-check`
 

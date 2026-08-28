@@ -31,14 +31,17 @@ measured against and "Known gaps" for what is still approximated or
 unsupported.
 
 **#446 (SBR/HE-AAC) is in progress, not landed.** This pass built and
-independently verified the QMF analysis/synthesis filterbanks (`qmf.rs`)
-and all ten SBR envelope/noise Huffman tables (`sbr_huffman_tables.rs`),
-but found — and could not root-cause — a broadband phase-coherence defect
-in the QMF round trip serious enough that nothing downstream (bitstream
-envelope/noise decode, HF generation, envelope adjustment) was built on
-top of it this pass. See "SBR (#446) — what landed and what did not"
-below for the full account, including what was verified, what was ruled
-out, and exactly where this stopped.
+verified the QMF analysis/synthesis filterbanks (`qmf.rs`) and all ten
+SBR envelope/noise Huffman tables (`sbr_huffman_tables.rs`). An initial
+verification round reported a broadband phase-coherence defect in the QMF
+round trip; a follow-up round found it was a test-methodology false
+alarm (a lag-search window that missed the filter's actual delay) rather
+than a real bug, and the QMF foundation is now verified clean at
+correlation > 0.99 for tones, two widely-separated tones together, white
+noise, and a round-tripped impulse. `sbr_data()`'s bitstream syntax, HF
+generation and envelope adjustment remain unbuilt regardless — each is a
+substantial remaining piece, not blocked on anything found this pass. See
+"SBR (#446) — what landed and what did not" below for the full account.
 
 ## Why this is gated (D4)
 
@@ -338,8 +341,12 @@ envelope adjustment) with no equivalent in AAC-LC's own decode.
   128), the same "PDF extraction drops or adds a minus sign" failure shape
   as #445's `LongStart`/`LongStop` boundary fractions.
 - **The rate-doubling `SynthesisBank`** (§4.6.18.4.2, 64-band, 1280-sample
-  shift register) is also transcribed but not independently tested — see
-  below for why.
+  shift register) is also transcribed but not independently tested —
+  `DownsampledSynthesisBank` was used for verification instead, since
+  it's the variant the specification defines as `AnalysisBank`'s
+  same-rate inverse; `SynthesisBank` shares the same modulation formula
+  structure and is believed correct on that basis, but its actual
+  consumer (HF generation) doesn't exist yet to test it against.
 - **All ten SBR envelope/noise-floor Huffman tables** (`sbr_huffman_tables.rs`,
   Tables 4.A.79-4.A.88), transcribed the same way #444 transcribed AAC-LC's
   own spectral codebooks: every table independently verified prefix-free
@@ -347,55 +354,59 @@ envelope adjustment) with no equivalent in AAC-LC's own decode.
   the QMF window table, which needed the mirror cross-check to catch its
   two flipped signs.
 
-### The verification result, and why nothing was built on top of it
+### The verification result: a false alarm, found and resolved
 
-Round-tripping `AnalysisBank` through `DownsampledSynthesisBank` — the
-pair the specification itself defines as same-rate inverses, used here
-in place of the rate-doubling `SynthesisBank` because that one is not
-specified to invert a zero-padded analysis output — **reconstructs a
-single sinusoid at correlation > 0.99 for every frequency tested from 200
-Hz to 10 kHz (a 22050 Hz core rate's Nyquist is 11025 Hz), all at one
-consistent ~593-sample group delay independent of frequency.** That is
-strong evidence the modulation formulas and the coefficient table are
-transcribed correctly.
+**Update, superseding an earlier finding in this same section:** a first
+verification pass reported a "broadband phase-coherence defect" here —
+tones round-tripping at correlation > 0.99 while white noise round-tripped
+under 0.1 at every delay in the (arbitrarily chosen) 500-700 sample window
+that first pass searched. That defect did not exist. Two more targeted
+tests found the actual explanation:
 
-**White noise round-trips at correlation under 0.1, at every delay
-searched, including the exact delay every single tone settles at.** For a
-linear time-invariant system — which this filterbank is, being pure fixed
-FIR/modulation arithmetic — correlating almost perfectly on every
-individual frequency while failing badly on their superposition is only
-possible if the *relative phase* between subbands is wrong even though
-each subband's own magnitude and delay are right. A single-tone
-correlation test is structurally blind to this (a wrong-but-constant
-phase for one frequency is absorbed into the fitted lag); a broadband
-signal is not.
+- **A round-tripped impulse** (`AnalysisBank` through
+  `DownsampledSynthesisBank` — the pair the specification defines as
+  same-rate inverses) comes back as a single, clean, unity-gain delayed
+  impulse at exactly **289 samples**, with no other energy anywhere else
+  in the output. An impulse has no period, so unlike a sustained tone it
+  cannot alias against a wrong delay — this is as unambiguous as a
+  filterbank verification gets.
+- **Two widely-separated tones summed together** (300 Hz and 9500 Hz — far
+  enough apart to land in different subbands entirely) round-trip at
+  correlation > 0.99 at that same 289-sample delay.
 
-Substantial effort went into finding this defect before concluding it
-would not yield further this pass: re-deriving the modulation formulas
-from the primary text twice (independently re-checking the constant
-offset terms — `-0.5`, `-255`, `-127.5` — that would explain exactly this
-symptom if subtly wrong), re-verifying the coefficient table's own
-extraction, and empirically testing the input/output sample-ordering
-convention (the flowchart reads new samples into the shift register in
-reverse chronological order, a real and necessary fix made during this
-pass — but not the remaining defect). None of it found the fault. It is
-disclosed in `qmf.rs`'s own module doc, with one test
-(`analysis_then_downsampled_synthesis_reconstructs_white_noise`) marked
-`#[ignore]` rather than deleted, kept as the concrete regression target
-for whoever finds it.
+The original "593-sample" tone delay was real but misleading: a single
+sustained tone's correlation against a lagged copy of itself is periodic
+in the lag (a wrong delay off by a whole number of the tone's own periods
+correlates just as well as the true one), so "593" was one alias among
+many equally-plausible candidates within the window that first search
+happened to cover — and the window did not include 289, the actual delay.
+Once white noise is checked at the delay the impulse test names, it
+reconstructs at correlation **> 0.99**, same as everything else.
 
-**Nothing downstream was built on this pass as a result.** `sbr_data()`'s
-bitstream syntax (`sbr_header`, `sbr_grid`, the delta-coded envelope/noise
-values the Huffman tables above decode), HF generation (patching QMF
-subbands from the low band to the high band), and envelope adjustment
-were all explicitly not attempted — building any of them on an
-unverified QMF foundation would risk the same failure shape this
-workspace keeps finding and fixing: plausible-looking code that is
-silently wrong, except here the wrongness would be compounded by three
-more unverified layers before ever reaching a fixture comparison. The
-dispatch that opened this issue named exactly this fallback in advance:
-"the QMF banks alone are a real, reusable deliverable — say so and stop
-there rather than shipping a half-wired high-frequency path."
+**The lesson generalises past this one module.** Correlating a periodic
+test signal against itself over an arbitrarily-chosen lag range can
+manufacture a false negative indistinguishable from a real bug. An
+impulse or a broadband signal doesn't have that failure mode, and should
+be the first check reached for, not the last. `qmf.rs`'s own module doc
+carries the full account; the test that once failed and was marked
+`#[ignore]`
+(`analysis_then_downsampled_synthesis_reconstructs_white_noise`) now
+passes outright and the `#[ignore]` is gone.
+
+### Where this leaves #446
+
+The QMF foundation is now verified clean: impulse, single tones across
+200 Hz-10 kHz, two widely-separated tones together, and white noise all
+reconstruct at correlation > 0.99 at one consistent delay. **Nothing
+downstream was built this pass regardless** — not because the foundation
+is in doubt any longer, but because `sbr_data()`'s bitstream syntax
+(`sbr_header`, the frequency band table algorithm §4.6.18.3.2 depends on,
+`sbr_grid`'s four frame classes, the delta-coded envelope/noise values the
+Huffman tables above decode), HF generation, and envelope adjustment are
+each a substantial remaining piece in their own right — comparable in
+scope to everything landed this pass, not a quick follow-on. Continuing
+into them is real, valuable next work, not blocked on anything found this
+pass.
 
 ### Fixture access for #446
 
@@ -551,16 +562,19 @@ plausible-looking implementation that a real bitstream falsifies.
 ## Known gaps
 
 - **HE-AAC/SBR (#446) is not decoded — `Error::Unsupported` for any
-  configuration signalling it.** The QMF filterbanks and Huffman tables
-  are transcribed and partially verified (see "SBR (#446)" above), but a
-  broadband phase-coherence defect in the QMF round trip was found and not
-  root-caused, so `sbr_data()` parsing, HF generation and envelope
-  adjustment were not attempted. `DecoderConfig::from_audio_specific_config`
+  configuration signalling it.** The QMF filterbanks are transcribed and
+  fully verified (correlation > 0.99 for tones, two widely-separated tones
+  together, white noise, and a round-tripped impulse — see "SBR (#446)"
+  above) and the ten envelope/noise Huffman tables are transcribed and
+  verified prefix-free/Kraft-complete, but `sbr_data()`'s own bitstream
+  syntax (which needs the frequency band table algorithm, §4.6.18.3.2, to
+  parse correctly), HF generation and envelope adjustment were not
+  attempted — each is a substantial remaining piece, not blocked on
+  anything found this pass. `DecoderConfig::from_audio_specific_config`
   still rejects `cfg.has_sbr()`; implicit signalling (SBR data inside a
   `FIL` element with no `AudioSpecificConfig` hint at all) is not detected
   either, since detecting it usefully requires the same downstream
-  pipeline. See `qmf.rs`'s own module doc for what was and was not ruled
-  out chasing the defect.
+  pipeline.
 - **Intensity stereo always assumes the in-phase codebook
   (`INTENSITY_HCB`).** Both intensity codebooks (in-phase `INTENSITY_HCB`
   and out-of-phase `INTENSITY_HCB2`) decode to the same
@@ -639,34 +653,31 @@ plausible-looking implementation that a real bitstream falsifies.
   list, an SBR hook ahead of the filterbank) can insert itself at the right
   point in the pipeline without restructuring the whole thing. Keep that
   shape rather than collapsing it back down.
-- **Finding SBR's broadband phase-coherence defect:** read `qmf.rs`'s own
-  module doc first for what this pass already ruled out (the modulation
-  formulas' constant terms, the coefficient table's extraction, the
-  input/output sample-ordering convention). `analysis_then_downsampled_synthesis_reconstructs_white_noise`
-  (marked `#[ignore]`, not deleted) is the regression target — get it
-  passing at `> 0.95` correlation without regressing
-  `analysis_then_downsampled_synthesis_reconstructs_tones_across_the_audible_band`
-  (currently `> 0.99` for every tested frequency). A profitable next step
-  neither this pass's time nor its remaining budget reached: construct a
-  two-tone (not single-tone, not full-spectrum-noise) test signal and
-  check whether the *relative* phase between the two reconstructed tones
-  matches their relative phase in the original — narrower than white
-  noise, broader than one tone, and might localise whether the defect is
-  frequency-pair-dependent or global.
-- **Continuing SBR once the QMF defect is found:** `sbr_huffman_tables.rs`
-  is ready to consume; `sbr_data()`'s syntax (`sbr_header`, `sbr_grid`'s
-  four frame classes, `sbr_dtdf`, `sbr_envelope`/`sbr_noise`'s delta-coded
-  Huffman decode) was read from the primary text during this pass but not
-  transcribed into code, so that reading is not yet captured anywhere
-  except this doc and should be redone against the primary text directly
-  rather than trusted from memory. `raw_data_block.rs`'s `FIL` element
-  (`skip_fill_element`) is where `extension_payload()`'s `extension_type`
-  needs to be inspected for `EXT_SBR_DATA`/`EXT_SBR_DATA_CRC` (values
-  `0b1101`/`0b1110`, Table 4.121) instead of being skipped wholesale — note
-  the sibling `SCE`/`CPE` a `FIL`'s SBR data belongs to needs tracking
-  across the element loop, since `sbr_extension_data(id_aac, crc_flag)`'s
-  `id_aac` selects `sbr_single_channel_element()` vs
-  `sbr_channel_pair_element()`.
+- **Continuing SBR now that the QMF banks are verified:** the frequency
+  band table algorithm (§4.6.18.3.2.1's `fMaster` flowcharts, Figures
+  4.39/4.40 — logarithmic band spacing with a two-region split and an
+  `NINT`-rounding sort step, genuinely one of the more intricate pieces of
+  the whole tool) is the next dependency: `sbr_grid`/`sbr_envelope`/
+  `sbr_noise`'s own bit-level structure (how many bands each envelope/noise
+  loop reads) cannot be parsed correctly without it. `sbr_huffman_tables.rs`
+  is ready to consume once that's in place. `sbr_data()`'s syntax
+  (`sbr_header`, `sbr_grid`'s four frame classes, `sbr_dtdf`,
+  `sbr_envelope`/`sbr_noise`'s delta-coded Huffman decode) was read from
+  the primary text during this pass but not transcribed into code, so
+  that reading is not yet captured anywhere except this doc and should be
+  redone against the primary text directly rather than trusted from
+  memory. `raw_data_block.rs`'s `FIL` element (`skip_fill_element`) is
+  where `extension_payload()`'s `extension_type` needs to be inspected
+  for `EXT_SBR_DATA`/`EXT_SBR_DATA_CRC` (values `0b1101`/`0b1110`, Table
+  4.121) instead of being skipped wholesale — note the sibling `SCE`/`CPE`
+  a `FIL`'s SBR data belongs to needs tracking across the element loop,
+  since `sbr_extension_data(id_aac, crc_flag)`'s `id_aac` selects
+  `sbr_single_channel_element()` vs `sbr_channel_pair_element()`.
+- **If a future QMF change ever needs re-verifying:** round-trip an
+  impulse first, not a tone. `qmf.rs`'s own module doc explains why a
+  sustained tone's correlation against a lagged copy of itself is
+  ambiguous (periodic in the lag) in a way an impulse's is not — this
+  pass lost real time to exactly that trap before finding it.
 
 ## Configuration
 
