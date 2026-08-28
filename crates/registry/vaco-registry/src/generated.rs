@@ -280,6 +280,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["avs"],
         mime_types: &[],
     },
+    #[cfg(feature = "demux-cdg")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "cdg",
+        long_name: Some("CD Graphics"),
+        krate: "vaco-format-misc",
+        feature: Some("demux-cdg"),
+        media: None,
+        codec: None,
+        extensions: &["cdg"],
+        mime_types: &[],
+    },
     crate::Component {
         kind: crate::Kind::Demuxer,
         name: "concat",
@@ -507,6 +519,30 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "demux-ffmetadata")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "ffmetadata",
+        long_name: Some("FFmpeg metadata in text"),
+        krate: "vaco-format-misc",
+        feature: Some("demux-ffmetadata"),
+        media: None,
+        codec: None,
+        extensions: &["ffmeta"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-flic")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "flic",
+        long_name: Some("FLI/FLC/FLX animation"),
+        krate: "vaco-format-misc",
+        feature: Some("demux-flic"),
+        media: None,
+        codec: None,
+        extensions: &["fli", "flc", "flx"],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-flv")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -721,6 +757,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["sf"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-ivf")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "ivf",
+        long_name: Some("On2 IVF"),
+        krate: "vaco-format-misc",
+        feature: Some("demux-ivf"),
+        media: None,
+        codec: None,
+        extensions: &["ivf"],
         mime_types: &[],
     },
     #[cfg(feature = "demux-image2")]
@@ -1304,6 +1352,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         codec: None,
         extensions: &["rt"],
         mime_types: &["application/x-rt"],
+    },
+    #[cfg(feature = "demux-roq")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "roq",
+        long_name: Some("id RoQ"),
+        krate: "vaco-format-misc",
+        feature: Some("demux-roq"),
+        media: None,
+        codec: None,
+        extensions: &["roq"],
+        mime_types: &[],
     },
     #[cfg(feature = "demux-rso")]
     crate::Component {
@@ -2502,6 +2562,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         codec: None,
         extensions: &["ismv", "isma"],
         mime_types: &["video/mp4"],
+    },
+    #[cfg(feature = "mux-ivf")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "ivf",
+        long_name: Some("On2 IVF"),
+        krate: "vaco-format-misc",
+        feature: Some("mux-ivf"),
+        media: None,
+        codec: None,
+        extensions: &["ivf"],
+        mime_types: &[],
     },
     #[cfg(feature = "subtitle-text")]
     crate::Component {
@@ -7718,6 +7790,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_format_audio_simple::caf::DEMUXER,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::bitstream::DEMUXER_CAVSVIDEO,
+    #[cfg(feature = "demux-cdg")]
+    &::vaco_format_misc::cdg::DEMUXER,
     &::vaco_mux_stream::DEMUXER_CONCAT,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_CRI,
@@ -7755,6 +7829,10 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_raw::pcm::DEMUXER_F64BE,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::pcm::DEMUXER_F64LE,
+    #[cfg(feature = "demux-ffmetadata")]
+    &::vaco_format_misc::ffmetadata::DEMUXER,
+    #[cfg(feature = "demux-flic")]
+    &::vaco_format_misc::flic::DEMUXER,
     #[cfg(feature = "demux-flv")]
     &::vaco_demux_flv::DEMUXER,
     #[cfg(feature = "demux-g722")]
@@ -7791,6 +7869,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_image2::DEMUXER_IMAGE2,
     #[cfg(feature = "demux-ircam")]
     &::vaco_format_audio_simple::ircam::DEMUXER,
+    #[cfg(feature = "demux-ivf")]
+    &::vaco_format_misc::ivf::DEMUXER,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_J2K,
     #[cfg(feature = "subtitle-text")]
@@ -7885,6 +7965,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_raw::rawvideo::DEMUXER_RAWVIDEO,
     #[cfg(feature = "subtitle-text")]
     &::vaco_subtitle_text::realtext::DEMUXER,
+    #[cfg(feature = "demux-roq")]
+    &::vaco_format_misc::roq::DEMUXER,
     #[cfg(feature = "demux-rso")]
     &::vaco_format_audio_simple::rso::DEMUXER,
     #[cfg(feature = "demux-rtp")]
@@ -8082,6 +8164,8 @@ pub static MUXERS: &[&::vaco_format_core::MuxerDesc] = &[
     &::vaco_format_audio_simple::ircam::MUXER,
     #[cfg(feature = "mux-mp4")]
     &::vaco_mux_mp4::MUXER_ISMV,
+    #[cfg(feature = "mux-ivf")]
+    &::vaco_format_misc::ivf::MUXER,
     #[cfg(feature = "subtitle-text")]
     &::vaco_subtitle_text::jacosub::MUXER,
     #[cfg(feature = "subtitle-text")]

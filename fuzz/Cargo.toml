@@ -52,6 +52,7 @@ vaco-codec-qoi = { path = "../crates/codec/vaco-codec-qoi" }
 vaco-codec-subtitle-bitmap = { path = "../crates/codec/vaco-codec-subtitle-bitmap" }
 vaco-codec-subtitle-cc = { path = "../crates/codec/vaco-codec-subtitle-cc" }
 vaco-codec-subtitle-teletext = { path = "../crates/codec/vaco-codec-subtitle-teletext" }
+vaco-codec-subtitle-text = { path = "../crates/codec/vaco-codec-subtitle-text" }
 vaco-color = { path = "../crates/model/vaco-color" }
 vaco-conformance = { path = "../crates/tool/vaco-conformance" }
 vaco-core = { path = "../crates/core/vaco-core" }
@@ -107,6 +108,7 @@ vaco-format-dv = { path = "../crates/format/vaco-format-dv" }
 vaco-format-ebml = { path = "../crates/format/vaco-format-ebml" }
 vaco-format-id3 = { path = "../crates/format/vaco-format-id3" }
 vaco-format-isom = { path = "../crates/format/vaco-format-isom" }
+vaco-format-misc = { path = "../crates/format/vaco-format-misc" }
 vaco-format-misc-audio = { path = "../crates/format/vaco-format-misc-audio" }
 vaco-format-mpegaudio = { path = "../crates/format/vaco-format-mpegaudio" }
 vaco-format-mpegts-tables = { path = "../crates/format/vaco-format-mpegts-tables" }
@@ -188,6 +190,7 @@ default = [
     "codec-subtitle-bitmap",
     "codec-subtitle-cc",
     "codec-subtitle-teletext",
+    "codec-subtitle-text",
     "color",
     "conformance",
     "core",
@@ -241,6 +244,7 @@ default = [
     "format-ebml",
     "format-id3",
     "format-isom",
+    "format-misc",
     "format-misc-audio",
     "format-mpegaudio",
     "format-mpegts-tables",
@@ -316,6 +320,7 @@ codec-qoi = []
 codec-subtitle-bitmap = []
 codec-subtitle-cc = []
 codec-subtitle-teletext = []
+codec-subtitle-text = []
 color = []
 conformance = []
 core = []
@@ -369,6 +374,7 @@ format-dv = []
 format-ebml = []
 format-id3 = []
 format-isom = []
+format-misc = []
 format-misc-audio = []
 format-mpegaudio = []
 format-mpegts-tables = []
@@ -1205,6 +1211,14 @@ bench = false
 required-features = ["format-misc-audio"]
 
 [[bin]]
+name = "misc_demux"
+path = "fuzz_targets/misc_demux.rs"
+test = false
+doc = false
+bench = false
+required-features = ["format-misc"]
+
+[[bin]]
 name = "mp4_mux"
 path = "fuzz_targets/mp4_mux.rs"
 test = false
@@ -1763,6 +1777,14 @@ test = false
 doc = false
 bench = false
 required-features = ["codec-subtitle-cc"]
+
+[[bin]]
+name = "subtitle_text_decode"
+path = "fuzz_targets/subtitle_text_decode.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-subtitle-text"]
 
 [[bin]]
 name = "subtitle_text_demux"

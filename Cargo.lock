@@ -1993,6 +1993,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-codec-subtitle-text"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "quick-xml",
+]
+
+[[package]]
 name = "vaco-color"
 version = "0.1.0"
 dependencies = [
@@ -2818,6 +2826,21 @@ dependencies = [
  "vaco-format-core",
  "vaco-io",
  "vaco-limits",
+]
+
+[[package]]
+name = "vaco-format-misc"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-chlayout",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-format-core",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-packet",
+ "vaco-sampfmt",
 ]
 
 [[package]]
@@ -3742,6 +3765,7 @@ dependencies = [
  "vaco-format-audio-simple",
  "vaco-format-core",
  "vaco-format-dv",
+ "vaco-format-misc",
  "vaco-format-misc-audio",
  "vaco-format-mpjpeg",
  "vaco-format-nut",
