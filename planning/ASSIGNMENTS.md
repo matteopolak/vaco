@@ -87,6 +87,7 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-cli stderr reporting | 7 | #641 #208 | agent:cli-report | active | 2026-08-27 | — | the Input #0/Output #0 dump and -stats/-progress/-report; shares loglevel::prints_info |
 | vaco-protocol-dial (new) + vaco-protocol-rtmp (epic #61) | 2 | TECH-DEBT row 1, #552 | agent:rtmp | done | 2026-08-27 | — | pays down the five-copy dial duplication first, then RTMP is the test of whether the seam was right |
 | mp3 demux/mux + vaco-codec-mpegaudio (epic #38 decode half) | 3 | #644 #362 #363 #364 | agent:mpeg-audio | active | 2026-08-27 | — | `.mp3` cannot be opened at all today; demuxer first, then Layers I/II/III |
+| vaco-codec-vpx (epics #28, #32) | 3 | VP8 + VP9 decode | agent:vpx | active | 2026-08-28 | — | second leaf batch; `vaco-parse-vpx` already carries the headers |
 | vaco-codec-subtitle (epic #44) | 4 | DVB, DVD, PGS, CEA-608/708, Teletext | agent:subtitles | active | 2026-08-28 | — | first leaf batch of the fan-out; CEA-608/708 depends on the FrameSideData gaps |
 | pixel-format conversion + image2 codec mapping | 4 | #655 | agent:transcode-core | active | 2026-08-28 | — | core: no codec pair whose formats differ can transcode |
 | INTERFACE-GAPS 12/13/14/15 | 4 | BSF options, FrameSideData log + motion vectors, float pixel formats | agent:filter-gaps | active | 2026-08-28 | — | core: unblocks the filter fan-out |
@@ -95,7 +96,7 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-codec-core + vaco-registry + xtask + vaco-cli (codec path) | 3 | #652 | agent:codec-path | active | 2026-08-27 | — | P0: no leaf decoder or encoder is reachable from the CLI; blocks three codec agents' output |
 | container sweep follow-ups | 4 | #647 #648 #650 #651 #643 | agent:sweep-followup | done | 2026-08-27 | — | six issues the sweep filed |
 | vaco-demux-avi + vaco-mux-avi (finish AVI) | 4 | #642 + finding 50's three open items | agent:avi-finish | active | 2026-08-27 | — | extradata to stream info, length-prefixed H.264, JUNK sizing, the audio grid gap |
-| vaco-codec-jpeg (C-15, epic #27) | 3 | #295 #296 #297 | agent:jpeg | active | 2026-08-27 | — | baseline, progressive, MJPEG framing + encoder |
+| vaco-codec-jpeg (C-15, epic #27) | 3 | #295 #296 #297 | agent:jpeg | done | 2026-08-27 | — | baseline, progressive, MJPEG framing + encoder |
 | vaco-codec-qoi/-pnm/-image-simple (C-13, epic #26) | 3 | #291 #292 #293 | agent:image-codecs | done | 2026-08-27 | — | ~15 codecs, one dispatch: encode byte-identity + decode MD5 table |
 | container sweep (~60 formats, excl. the nine under active ownership) | 4 | #643 + whatever it files | agent:container-sweep | done | 2026-08-27 | — | one comparison loop over every both-direction format |
 | vaco-mux-avi + vaco-mux-flv | 4 | #639 #640 | agent:avi-flv | done | 2026-08-27 | — | AVI's 600 Hz slot grid (correctness, not byte-identity); FLV metadata forwarding + end-of-sequence |
