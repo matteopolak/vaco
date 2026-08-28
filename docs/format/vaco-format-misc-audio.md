@@ -77,12 +77,11 @@ recorded reason rather than simply "ran out of time":
   chunk table (`fmt`/`comp`/`dec`/`vbr`/`ath`/`loop`/…) was found; not
   attempted.
 - `svag`, `xvag`, `msf`, `xa`, `bfstm`, `brstm`, `fsb` — same family, same
-  technique as `vag`/`xwma` would likely apply, but not researched this
-  pass; stopped once the returns on `vag`/`xwma` themselves had already
-  crossed from measuring container framing into open-ended,
-  decoder-dependent investigation (see `xwma`'s `dpds`-duration anomaly
-  below), which was read as the signal to stop rather than push toward a
-  count.
+  technique as `vag`/`xwma` would likely apply, but not researched: this
+  pass's remaining time went to the `BlockDemuxer` packet-batching fix
+  (below) and pinning down `xwma`'s `dpds`-duration formula instead of an
+  eleventh container, per the coordinator's own call that either was worth
+  more than an eleventh format.
 
 ---
 
@@ -148,11 +147,15 @@ predicted:
   `ffprobe -show_data_hash md5`: `00 00 00 00 1F 00`. A `WMAv1` stream in
   the same situation gets none. `xwma.rs` reproduces this for `WMAv2`
   only.
-- **`xwma`'s stream-level `duration_ts` has an unexplained dependency on
-  whether a `dpds` chunk exists at all**, independent of that chunk's
-  content — see the module doc and `planning/TECH-DEBT.md` for the full
-  measurement. Not reproduced; this crate always uses the plain
-  byte-rate formula.
+- **`xwma`'s stream-level `duration_ts` depends on whether a `dpds` chunk
+  exists at all — and the exact rule is now pinned down and reproduced.**
+  Sweeping `channels`/`bits_per_sample`/`data_len` independently found:
+  `duration_ts = data_len / (channels * bytes_per_sample)` whenever a
+  `dpds` chunk is present, i.e. the reference treats the raw compressed
+  bytes as if they were already decoded PCM at the `fmt` chunk's own
+  channel count and bit depth. Confirmed across mono/stereo, 8/16-bit,
+  and `wmav1`/`wmav2`. `xwma.rs` reproduces this exactly, falling back to
+  the byte-rate formula only when no `dpds` chunk was seen.
 
 ### The measured comparison table
 
@@ -176,7 +179,7 @@ stream=sample_rate,channels -show_entries format=duration`:
 | `sbc.sbc` | 16000 | 1 | *(reference: N/A)* | not checked | self-delimited, no declared total |
 | `g723_1.g723_1` | 8000 | 1 | *(reference: N/A)* | not checked | self-delimited, no declared total |
 | `vag.vag` | 22050 | 1 | 0.012698 s | 10×16 bytes | one packet per 16-byte block, matching the reference exactly |
-| `xwma.xwma` | 8000 | 1 | 0.350 s | 100, 100, 100, 50 bytes | fixture deliberately has no `dpds` chunk — see the `duration_ts` anomaly above |
+| `xwma.xwma` | 8000 | 1 | 0.350 s | 100, 100, 100, 50 bytes | fixture deliberately has no `dpds` chunk, so this exercises the byte-rate duration formula, not the (also reproduced) `dpds`-present PCM-frame-size one — see above |
 
 `tests/differential.rs` asserts every "reference packet sizes" cell
 byte-for-byte, not just total bytes or duration — this is the check that

@@ -63,30 +63,30 @@
 //! `floor(460*44100/8000)`). `pts`/`dts` accumulate that per-packet sample
 //! count.
 //!
-//! # A real, unresolved divergence: stream-level duration when `dpds` exists
+//! # A `dpds`-dependent `duration_ts` quirk, since pinned down and reproduced
 //!
 //! The per-packet duration formula above holds whether or not a `dpds`
 //! chunk is present. The **stream-level** `duration_ts`/`duration` do not:
 //! on a 350-byte `data` chunk at 8000 Hz / 1000 B/s with no `dpds` chunk,
 //! the reference reports `duration_ts=2800` (`350*8000/1000`, the same
 //! formula as the packet level, applied to the whole chunk). Add *any*
-//! `dpds` chunk — one entry, two, four, seven, with any content — and the
-//! reported `duration_ts` becomes a fixed `175` regardless of what is in
-//! it, `2800 / 16` for no principled reason this crate could find (`16`
-//! being the byte size of one four-entry `dpds` chunk tried, but the same
-//! `175` also came back for one-, two- and seven-entry `dpds` chunks of
-//! different byte sizes, ruling out "divided by the `dpds` chunk's byte
-//! length" as the mechanism). This looks like a symptom of `ffprobe`'s
-//! generic duration-estimation fallback reacting to `dpds`-signalled "real
-//! WMA container" by attempting something codec-probe-dependent against
-//! this crate's non-decodable synthetic payload, rather than a fact about
-//! xWMA's container framing — but that is a hypothesis, not a measurement,
-//! and confirming it would mean building genuinely valid WMA bitstream
-//! data, which is out of scope for framing work. This crate always uses
-//! the plain byte-rate formula for `duration_ts` and does not attempt to
-//! reproduce whatever this is; the fixture this crate's own tests
-//! differentially check against was deliberately built without a `dpds`
-//! chunk so the comparison is against the unambiguous number.
+//! `dpds` chunk and the number changes completely and does not scale with
+//! the `dpds` chunk's own size or content — first measured as an
+//! unexplained fixed `175` and treated as an open question.
+//!
+//! Sweeping `channels`/`bits_per_sample`/`data_len` independently (with a
+//! `dpds` chunk always present) pinned the actual rule exactly:
+//! `duration_ts = data_len / (channels * bytes_per_sample)`, where
+//! `bytes_per_sample = wBitsPerSample / 8`, all from the `fmt` chunk —
+//! confirmed across mono/stereo, 8-bit/16-bit, and both `wmav1`/`wmav2`.
+//! In other words: when a `dpds` chunk exists, the reference computes
+//! `duration_ts` as though the compressed `data` bytes were already
+//! decoded PCM at the container's own declared channel count and bit
+//! depth — never decoding anything, just reusing the PCM frame-size
+//! arithmetic a raw-PCM container would use. This module reproduces that
+//! exactly: `duration_ts`/`duration` switch to this formula whenever a
+//! `dpds` chunk was seen while scanning, and fall back to the byte-rate
+//! formula otherwise.
 //!
 //! # `codec_id` mapping
 //!
@@ -156,6 +156,14 @@ pub struct XwmaDemuxer {
     block_align: u32,
     sample_rate: u32,
     avg_bytes_per_sec: u32,
+    /// `channels * bytes_per_sample` from the `fmt` chunk — used only for
+    /// the `dpds`-present `duration_ts` quirk below, never for packet
+    /// framing (packets are `block_align`-sized regardless).
+    pcm_frame_bytes: u32,
+    /// Whether a `dpds` chunk was seen while scanning. See the module doc:
+    /// its mere presence, not its content, changes how the reference
+    /// computes `duration_ts`.
+    has_dpds: bool,
     bytes_read: u64,
     eof: bool,
     budget: Budget,
@@ -187,6 +195,8 @@ impl XwmaDemuxer {
         let mut extra: Vec<u8> = Vec::new();
         let mut data_start = None;
         let mut data_len = 0u64;
+        let mut bits_per_sample: u16 = 0;
+        let mut has_dpds = false;
 
         loop {
             let mut id = [0u8; 4];
@@ -205,7 +215,7 @@ impl XwmaDemuxer {
                     sample_rate = io.rl32()?;
                     avg_bytes_per_sec = io.rl32()?;
                     block_align = u32::from(io.rl16()?);
-                    let _bits_per_sample = io.rl16()?;
+                    bits_per_sample = io.rl16()?;
                     if io.pos() < chunk_start.saturating_add(size) {
                         let cb_size = usize::from(io.rl16()?);
                         let cb_size = cb_size.min(MAX_FMT_EXTRA);
@@ -216,14 +226,20 @@ impl XwmaDemuxer {
                     data_start = Some(chunk_start);
                     data_len = size;
                 }
+                b"dpds" => {
+                    has_dpds = true;
+                }
                 _ => {}
             }
             let padded = size.saturating_add(size & 1);
             io.seek(chunk_start.saturating_add(padded))?;
             if id == *b"data" {
-                // The data chunk can be large; nothing after it matters for
-                // framing, and `dpds` (whichever side of `data` it falls on)
-                // is not read for anything — see the module doc.
+                // The data chunk can be large, so the scan stops here rather
+                // than reading past it looking for a trailing `dpds` — every
+                // real xWMA file orders chunks `fmt `/`dpds`/`data`, so a
+                // `dpds` chunk after `data` (legal RIFF, not a shape any
+                // known encoder produces) would not be detected. `dpds`'s
+                // own content is never read either way — see the module doc.
                 break;
             }
         }
@@ -254,7 +270,20 @@ impl XwmaDemuxer {
             audio.layout = ChannelLayout::default_for(u32::from(channels));
         }
         stream.params = params;
-        if avg_bytes_per_sec > 0 {
+        #[allow(clippy::integer_division, reason = "bytes_per_sample from a bit depth measured to always be byte-aligned")]
+        let bytes_per_sample = u32::from(bits_per_sample) / 8;
+        let pcm_frame_bytes = bytes_per_sample.saturating_mul(u32::from(channels));
+        if has_dpds && pcm_frame_bytes > 0 {
+            // Measured, not guessed: a `dpds` chunk's mere presence makes
+            // the reference compute `duration_ts` as if `data` were already
+            // decoded PCM at the `fmt` chunk's own channels/bits-per-sample
+            // — confirmed exactly across mono/stereo and 8/16-bit fixtures
+            // (`data_len / (channels * bytes_per_sample)`, verified against
+            // both `wmav1`/`wmav2`). See the module doc.
+            #[allow(clippy::integer_division, reason = "matches the measured reference formula exactly")]
+            let frames = clamped_len / u64::from(pcm_frame_bytes);
+            stream.duration_ts = i64::try_from(frames).ok();
+        } else if avg_bytes_per_sec > 0 {
             #[allow(
                 clippy::integer_division,
                 reason = "sample-count estimate from a byte count; matches the measured reference formula"
@@ -272,6 +301,8 @@ impl XwmaDemuxer {
             block_align: block_align.max(1),
             sample_rate,
             avg_bytes_per_sec: avg_bytes_per_sec.max(1),
+            pcm_frame_bytes,
+            has_dpds,
             bytes_read: 0,
             eof: false,
             budget: Budget::new(vaco_limits::Limits::permissive()),
@@ -366,8 +397,13 @@ impl Demuxer for XwmaDemuxer {
         clippy::integer_division,
         reason = "sample-count estimate from a byte count; matches the measured reference formula"
     )]
+    #[allow(clippy::integer_division, reason = "matches the measured reference formula exactly, both branches")]
     fn duration(&self) -> Option<Duration> {
-        let frames = self.data_len.saturating_mul(u64::from(self.sample_rate)) / u64::from(self.avg_bytes_per_sec);
+        let frames = if self.has_dpds && self.pcm_frame_bytes > 0 {
+            self.data_len / u64::from(self.pcm_frame_bytes)
+        } else {
+            self.data_len.saturating_mul(u64::from(self.sample_rate)) / u64::from(self.avg_bytes_per_sec)
+        };
         let micros = frames.checked_mul(1_000_000)?.checked_div(u64::from(self.sample_rate))?;
         Some(Duration::from_micros(i64::try_from(micros).unwrap_or(i64::MAX)))
     }
@@ -422,6 +458,63 @@ mod tests {
         v.extend_from_slice(&(body.len() as u32).to_le_bytes());
         v.extend(body);
         v
+    }
+
+    fn build_file_without_dpds(
+        format_tag: u16,
+        channels: u16,
+        sample_rate: u32,
+        avg_bytes_per_sec: u32,
+        block_align: u32,
+        bits_per_sample: u16,
+        data: &[u8],
+    ) -> Vec<u8> {
+        let fmt_payload = {
+            let mut v = Vec::new();
+            v.extend_from_slice(&format_tag.to_le_bytes());
+            v.extend_from_slice(&channels.to_le_bytes());
+            v.extend_from_slice(&sample_rate.to_le_bytes());
+            v.extend_from_slice(&avg_bytes_per_sec.to_le_bytes());
+            v.extend_from_slice(&(block_align as u16).to_le_bytes());
+            v.extend_from_slice(&bits_per_sample.to_le_bytes());
+            v.extend_from_slice(&0u16.to_le_bytes());
+            v
+        };
+        let mut body = b"XWMA".to_vec();
+        body.extend(chunk(*b"fmt ", &fmt_payload));
+        body.extend(chunk(*b"data", data));
+        let mut v = b"RIFF".to_vec();
+        v.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        v.extend(body);
+        v
+    }
+
+    #[test]
+    fn duration_ts_uses_the_byte_rate_formula_with_no_dpds_chunk() {
+        let data = vec![0xABu8; 350];
+        let file = build_file_without_dpds(0x0161, 1, 8000, 1000, 100, 16, &data);
+        let d = XwmaDemuxer::open(Box::new(MemorySource::new(file))).unwrap();
+        // 350 * 8000 / 1000 = 2800, the byte-rate formula, not the
+        // dpds-present PCM-frame-size formula.
+        assert_eq!(d.streams().first().unwrap().duration_ts, Some(2800));
+    }
+
+    #[test]
+    fn duration_ts_uses_the_pcm_frame_size_formula_when_dpds_is_present() {
+        // build_file always includes a dpds chunk and fixes bits_per_sample
+        // at 16, so the expected divisor is channels * 2.
+        let data = vec![0xABu8; 2000];
+        let mono = XwmaDemuxer::open(Box::new(MemorySource::new(build_file(
+            0x0161, 1, 8000, 1000, 100, &data,
+        ))))
+        .unwrap();
+        assert_eq!(mono.streams().first().unwrap().duration_ts, Some(1000)); // 2000 / (1*2)
+
+        let stereo = XwmaDemuxer::open(Box::new(MemorySource::new(build_file(
+            0x0161, 2, 44_100, 8000, 2230, &data,
+        ))))
+        .unwrap();
+        assert_eq!(stereo.streams().first().unwrap().duration_ts, Some(500)); // 2000 / (2*2)
     }
 
     #[test]
