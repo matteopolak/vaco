@@ -231,7 +231,6 @@ pub const fn is_little_endian(codec_id: CodecId) -> Option<bool> {
         | CodecId::PcmS32be
         | CodecId::PcmF32be
         | CodecId::PcmF64be => Some(false),
-        CodecId::PcmU8 | CodecId::PcmS8 | CodecId::PcmAlaw | CodecId::PcmMulaw => None,
         _ => None,
     }
 }
@@ -382,10 +381,7 @@ impl RawPcmDemuxer {
 
         let mut want = match self.sizing {
             PacketSizing::Frames => TARGET_PACKET.saturating_mul(self.bytes_per_frame as usize),
-            PacketSizing::Bytes => {
-                let n = TARGET_PACKET - TARGET_PACKET % self.bytes_per_frame as usize;
-                n
-            }
+            PacketSizing::Bytes => TARGET_PACKET - TARGET_PACKET % self.bytes_per_frame as usize,
         };
         if want == 0 {
             want = self.bytes_per_frame as usize;
@@ -399,10 +395,7 @@ impl RawPcmDemuxer {
         // Fill the packet: a short read must not become the packet size, or
         // packetisation follows the transport's buffer rather than the format.
         let mut n = 0usize;
-        loop {
-            let Some(rest) = pkt.payload_mut().get_mut(n..) else {
-                break;
-            };
+        while let Some(rest) = pkt.payload_mut().get_mut(n..) {
             if rest.is_empty() {
                 break;
             }

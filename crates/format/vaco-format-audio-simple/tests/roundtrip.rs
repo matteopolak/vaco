@@ -38,10 +38,10 @@ fn audio_params(format: SampleFmt, channels: u32) -> CodecParameters {
     // the reference could not read back.
     p.codec_id = Some(match format {
         SampleFmt::U8 => CodecId::PcmU8,
-        SampleFmt::S16 => CodecId::PcmS16le,
         SampleFmt::S32 => CodecId::PcmS32le,
         SampleFmt::F32 => CodecId::PcmF32le,
         SampleFmt::F64 => CodecId::PcmF64le,
+        // Covers `SampleFmt::S16` and every other (e.g. planar) format.
         _ => CodecId::PcmS16le,
     });
     if let Some(a) = p.audio.as_mut() {
@@ -64,11 +64,34 @@ fn roundtrip(
     open_mux: impl FnOnce(Box<dyn vaco_io::MediaSink>) -> vaco_core::Result<Box<dyn Muxer>>,
     open_demux: impl FnOnce(Box<dyn vaco_io::MediaSource>) -> vaco_core::Result<Box<dyn Demuxer>>,
 ) {
+    roundtrip_with_params(
+        name,
+        &audio_params(format, channels),
+        channels,
+        payload,
+        open_mux,
+        open_demux,
+    );
+}
+
+/// As [`roundtrip`], but the caller supplies `CodecParameters` directly
+/// instead of letting [`audio_params`] pick a codec from the sample format.
+/// `.au` needs this: it has no little-endian PCM encoding at all, so its
+/// test payload and codec must agree on a big-endian one specifically,
+/// which the shared little-endian default `audio_params` picks does not.
+fn roundtrip_with_params(
+    name: &str,
+    params: &CodecParameters,
+    channels: u32,
+    payload: &[u8],
+    open_mux: impl FnOnce(Box<dyn vaco_io::MediaSink>) -> vaco_core::Result<Box<dyn Muxer>>,
+    open_demux: impl FnOnce(Box<dyn vaco_io::MediaSource>) -> vaco_core::Result<Box<dyn Demuxer>>,
+) {
     let sink = MemorySink::new();
     let written = sink.shared();
     let mut mux = open_mux(Box::new(sink)).unwrap_or_else(|e| panic!("{name}: open muxer: {e}"));
     let idx = mux
-        .add_stream(&audio_params(format, channels))
+        .add_stream(params)
         .unwrap_or_else(|e| panic!("{name}: add_stream: {e}"));
     mux.write_header()
         .unwrap_or_else(|e| panic!("{name}: write_header: {e}"));
@@ -216,9 +239,16 @@ fn caf_round_trips_stereo_s16() {
 
 #[test]
 fn au_round_trips_mono_s32() {
-    roundtrip(
+    // `.au` is big-endian only (no little-endian PCM encoding exists in the
+    // format at all — see `au::codec_to_encoding`), so this needs its own
+    // `CodecParameters` rather than `audio_params`'s little-endian default:
+    // the payload below is genuinely big-endian (`tone_s32be`), and the
+    // codec must say so for `AuMuxer::add_stream` to accept it.
+    let mut params = audio_params(SampleFmt::S32, 1);
+    params.codec_id = Some(CodecId::PcmS32be);
+    roundtrip_with_params(
         "au",
-        SampleFmt::S32,
+        &params,
         1,
         &tone_s32be(64, 1),
         |s| Ok(Box::new(au::AuMuxer::new(s)?)),

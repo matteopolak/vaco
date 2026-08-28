@@ -148,6 +148,29 @@ fn encoding_to_codec(encoding: u32) -> Option<CodecId> {
     }
 }
 
+/// The `.au` encoding value for one codec — [`encoding_to_codec`] inverted,
+/// and what [`AuMuxer::add_stream`] must key off of instead of the decoded
+/// sample format. `.au` is big-endian throughout: `pcm_s16le` has no
+/// encoding here (there is no little-endian linear-16 value in the
+/// registry), even though its *decoded* format is the same `SampleFmt::S16`
+/// `pcm_s16be` decodes to. Deriving the header from `audio.format` instead
+/// of `codec_id` — the mistake this replaces — could not tell the two
+/// apart, so `-c copy` from a `pcm_s16le` source wrote a file tagged
+/// `ENC_PCM16` (big-endian) over bytes that were never byte-swapped.
+fn codec_to_encoding(codec: CodecId) -> Option<u32> {
+    match codec {
+        CodecId::PcmMulaw => Some(ENC_MULAW8),
+        CodecId::PcmAlaw => Some(ENC_ALAW8),
+        CodecId::PcmS8 => Some(ENC_PCM8),
+        CodecId::PcmS16be => Some(ENC_PCM16),
+        CodecId::PcmS24be => Some(ENC_PCM24),
+        CodecId::PcmS32be => Some(ENC_PCM32),
+        CodecId::PcmF32be => Some(ENC_FLOAT32),
+        CodecId::PcmF64be => Some(ENC_FLOAT64),
+        _ => None,
+    }
+}
+
 #[derive(Debug)]
 pub struct AuDemuxer {
     inner: RawPcmDemuxer,
@@ -279,23 +302,14 @@ impl Muxer for AuMuxer {
             .audio
             .as_ref()
             .ok_or(Error::InvalidData("au: not an audio stream"))?;
-        let format = audio
-            .format
-            .ok_or(Error::Unsupported("au: sample format must be known"))?;
-        if format.is_planar() {
-            return Err(Error::Unsupported(
-                "au: planar sample formats are not supported",
-            ));
-        }
-        let encoding = match format {
-            SampleFmt::U8 => ENC_PCM8,
-            SampleFmt::S16 => ENC_PCM16,
-            SampleFmt::S32 if audio.bits_per_coded_sample == Some(24) => ENC_PCM24,
-            SampleFmt::S32 => ENC_PCM32,
-            SampleFmt::F32 => ENC_FLOAT32,
-            SampleFmt::F64 => ENC_FLOAT64,
-            _ => return Err(Error::Unsupported("au: sample format has no .au encoding")),
-        };
+        // Keyed on the codec, not the decoded sample format: see
+        // `codec_to_encoding`'s doc for why `audio.format` cannot tell
+        // `pcm_s16le` and `pcm_s16be` apart and `.au` very much can.
+        let codec_id = params
+            .codec_id
+            .ok_or(Error::Unsupported("au: stream has no codec_id"))?;
+        let encoding = codec_to_encoding(codec_id)
+            .ok_or(Error::Unsupported("au: codec has no .au encoding"))?;
         let channels = audio.layout.as_ref().map_or(1, |l| l.channels).max(1);
         self.stream = Some(MuxStream {
             sample_rate: audio.sample_rate.max(1),
