@@ -15,10 +15,10 @@ provenance. A blank note means we match the reference for that format.
 
 | | Demux | Mux |
 |---|---|---|
-| Vaco | 138 | 108 |
+| Vaco | 141 | 111 |
 | Reference | 359 | 183 |
 
-Of the 412 format names either side registers, **241** are still to be
+Of the 412 format names either side registers, **238** are still to be
 written and **1** is excluded by a decision record. The
 ratio between those two numbers is the point of the other document —
 nearly everything Vaco lacks, it lacks because nobody has written it yet.
@@ -39,7 +39,7 @@ playback devices are not in `-demuxers`/`-muxers` output, they are in
 | `aa` | — |  | not yet |
 | `aac` | — |  | not yet |
 | `aax` | — |  | not yet |
-| `ac3` | — | — | not yet |
+| `ac3` | `vaco-demux-raw` | `vaco-mux-raw` |  |
 | `ac4` | — | — | not yet |
 | `ace` | — |  | not yet |
 | `acm` | — |  | not yet |
@@ -138,7 +138,7 @@ playback devices are not in `-demuxers`/`-muxers` output, they are in
 | `dxa` | — |  | not yet |
 | `ea` | — |  | not yet |
 | `ea_cdata` | — |  | not yet |
-| `eac3` | — | — | not yet |
+| `eac3` | `vaco-demux-raw` | `vaco-mux-raw` |  |
 | `epaf` | — |  | not yet |
 | `evc` | `vaco-demux-raw` | `vaco-mux-raw` |  |
 | `exr_pipe` | `vaco-demux-image2` |  |  |
@@ -245,7 +245,7 @@ playback devices are not in `-demuxers`/`-muxers` output, they are in
 | `mov` |  | `vaco-mux-mp4` |  |
 | `mov,mp4,m4a,3gp,3g2,mj2` | `vaco-demux-mp4` |  |  |
 | `mp2` |  | — | not yet |
-| `mp3` | — | — | not yet |
+| `mp3` | `vaco-demux-mpegaudio` | `vaco-mux-mpegaudio` |  |
 | `mp4` |  | `vaco-mux-mp4` |  |
 | `mpc` | — |  | not yet |
 | `mpc8` | — |  | not yet |

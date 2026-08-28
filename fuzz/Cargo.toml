@@ -32,15 +32,22 @@ vaco-bsf-av1 = { path = "../crates/format/vaco-bsf-av1" }
 vaco-bsf-core = { path = "../crates/format/vaco-bsf-core" }
 vaco-bsf-generic = { path = "../crates/format/vaco-bsf-generic" }
 vaco-bsf-h2645 = { path = "../crates/format/vaco-bsf-h2645" }
+vaco-bsf-legacy = { path = "../crates/format/vaco-bsf-legacy" }
+vaco-bsf-subtitle = { path = "../crates/format/vaco-bsf-subtitle" }
 vaco-bsf-vpx = { path = "../crates/format/vaco-bsf-vpx" }
 vaco-chlayout = { path = "../crates/model/vaco-chlayout" }
 vaco-cli = { path = "../crates/app/vaco-cli" }
 vaco-cli-core = { path = "../crates/app/vaco-cli-core" }
+vaco-codec-ac3 = { path = "../crates/codec/vaco-codec-ac3" }
 vaco-codec-cabac = { path = "../crates/signal/vaco-codec-cabac" }
 vaco-codec-cbs = { path = "../crates/signal/vaco-codec-cbs" }
 vaco-codec-core = { path = "../crates/signal/vaco-codec-core" }
 vaco-codec-dsp-idct = { path = "../crates/signal/vaco-codec-dsp-idct" }
 vaco-codec-golomb = { path = "../crates/signal/vaco-codec-golomb" }
+vaco-codec-image-simple = { path = "../crates/codec/vaco-codec-image-simple" }
+vaco-codec-jpeg = { path = "../crates/codec/vaco-codec-jpeg" }
+vaco-codec-pnm = { path = "../crates/codec/vaco-codec-pnm" }
+vaco-codec-qoi = { path = "../crates/codec/vaco-codec-qoi" }
 vaco-color = { path = "../crates/model/vaco-color" }
 vaco-conformance = { path = "../crates/tool/vaco-conformance" }
 vaco-core = { path = "../crates/core/vaco-core" }
@@ -52,6 +59,7 @@ vaco-demux-hls = { path = "../crates/format/vaco-demux-hls" }
 vaco-demux-image2 = { path = "../crates/format/vaco-demux-image2" }
 vaco-demux-matroska = { path = "../crates/format/vaco-demux-matroska" }
 vaco-demux-mp4 = { path = "../crates/format/vaco-demux-mp4" }
+vaco-demux-mpegaudio = { path = "../crates/format/vaco-demux-mpegaudio" }
 vaco-demux-mpegps = { path = "../crates/format/vaco-demux-mpegps" }
 vaco-demux-mpegts = { path = "../crates/format/vaco-demux-mpegts" }
 vaco-demux-mxf = { path = "../crates/format/vaco-demux-mxf" }
@@ -59,13 +67,14 @@ vaco-demux-ogg = { path = "../crates/format/vaco-demux-ogg" }
 vaco-demux-raw = { path = "../crates/format/vaco-demux-raw" }
 vaco-demux-rtsp = { path = "../crates/format/vaco-demux-rtsp" }
 vaco-expr = { path = "../crates/core/vaco-expr" }
+vaco-filter-aanalysis = { path = "../crates/filter/vaco-filter-aanalysis" }
+vaco-filter-adsp = { path = "../crates/filter/vaco-filter-adsp" }
+vaco-filter-adynamics = { path = "../crates/filter/vaco-filter-adynamics" }
 vaco-filter-aeffects = { path = "../crates/filter/vaco-filter-aeffects" }
-vaco-filter-ameasure = { path = "../crates/filter/vaco-filter-ameasure" }
+vaco-filter-aeq = { path = "../crates/filter/vaco-filter-aeq" }
 vaco-filter-analysis = { path = "../crates/filter/vaco-filter-analysis" }
 vaco-filter-asource = { path = "../crates/filter/vaco-filter-asource" }
 vaco-filter-audio = { path = "../crates/filter/vaco-filter-audio" }
-vaco-filter-audio-dynamics = { path = "../crates/filter/vaco-filter-audio-dynamics" }
-vaco-filter-audio-eq = { path = "../crates/filter/vaco-filter-audio-eq" }
 vaco-filter-blur = { path = "../crates/filter/vaco-filter-blur" }
 vaco-filter-color = { path = "../crates/filter/vaco-filter-color" }
 vaco-filter-convolve = { path = "../crates/filter/vaco-filter-convolve" }
@@ -84,6 +93,7 @@ vaco-filter-video-composite = { path = "../crates/filter/vaco-filter-video-compo
 vaco-filter-video-format = { path = "../crates/filter/vaco-filter-video-format" }
 vaco-filter-video-geometry = { path = "../crates/filter/vaco-filter-video-geometry" }
 vaco-filter-video-source = { path = "../crates/filter/vaco-filter-video-source" }
+vaco-format-ac3 = { path = "../crates/format/vaco-format-ac3" }
 vaco-format-adaptive = { path = "../crates/format/vaco-format-adaptive" }
 vaco-format-apetag = { path = "../crates/format/vaco-format-apetag" }
 vaco-format-audio-simple = { path = "../crates/format/vaco-format-audio-simple" }
@@ -93,11 +103,16 @@ vaco-format-dv = { path = "../crates/format/vaco-format-dv" }
 vaco-format-ebml = { path = "../crates/format/vaco-format-ebml" }
 vaco-format-id3 = { path = "../crates/format/vaco-format-id3" }
 vaco-format-isom = { path = "../crates/format/vaco-format-isom" }
+vaco-format-mpegaudio = { path = "../crates/format/vaco-format-mpegaudio" }
 vaco-format-mpegts-tables = { path = "../crates/format/vaco-format-mpegts-tables" }
+vaco-format-mpjpeg = { path = "../crates/format/vaco-format-mpjpeg" }
 vaco-format-nalu = { path = "../crates/format/vaco-format-nalu" }
+vaco-format-nut = { path = "../crates/format/vaco-format-nut" }
 vaco-format-riff = { path = "../crates/format/vaco-format-riff" }
 vaco-format-rtp = { path = "../crates/format/vaco-format-rtp" }
+vaco-format-spdif = { path = "../crates/format/vaco-format-spdif" }
 vaco-format-subtitle = { path = "../crates/format/vaco-format-subtitle" }
+vaco-format-swf = { path = "../crates/format/vaco-format-swf" }
 vaco-frame = { path = "../crates/model/vaco-frame" }
 vaco-io = { path = "../crates/io/vaco-io" }
 vaco-limits = { path = "../crates/core/vaco-limits" }
@@ -112,13 +127,24 @@ vaco-parse-aac = { path = "../crates/codec/vaco-parse-aac" }
 vaco-parse-av1 = { path = "../crates/codec/vaco-parse-av1" }
 vaco-parse-h264 = { path = "../crates/codec/vaco-parse-h264" }
 vaco-parse-hevc = { path = "../crates/codec/vaco-parse-hevc" }
+vaco-parse-image = { path = "../crates/codec/vaco-parse-image" }
+vaco-parse-mpegvideo = { path = "../crates/codec/vaco-parse-mpegvideo" }
 vaco-parse-opus = { path = "../crates/codec/vaco-parse-opus" }
+vaco-parse-vpx = { path = "../crates/codec/vaco-parse-vpx" }
 vaco-pixfmt = { path = "../crates/model/vaco-pixfmt" }
 vaco-pool = { path = "../crates/model/vaco-pool" }
 vaco-probe = { path = "../crates/app/vaco-probe" }
 vaco-protocol-core = { path = "../crates/io/vaco-protocol-core" }
+vaco-protocol-crypto = { path = "../crates/io/vaco-protocol-crypto" }
+vaco-protocol-dial = { path = "../crates/io/vaco-protocol-dial" }
+vaco-protocol-ftp = { path = "../crates/io/vaco-protocol-ftp" }
+vaco-protocol-gopher = { path = "../crates/io/vaco-protocol-gopher" }
 vaco-protocol-http = { path = "../crates/io/vaco-protocol-http" }
+vaco-protocol-httpproxy = { path = "../crates/io/vaco-protocol-httpproxy" }
+vaco-protocol-icecast = { path = "../crates/io/vaco-protocol-icecast" }
+vaco-protocol-ipfs = { path = "../crates/io/vaco-protocol-ipfs" }
 vaco-protocol-local = { path = "../crates/io/vaco-protocol-local" }
+vaco-protocol-rtmp = { path = "../crates/io/vaco-protocol-rtmp" }
 vaco-protocol-socket = { path = "../crates/io/vaco-protocol-socket" }
 vaco-protocol-tls = { path = "../crates/io/vaco-protocol-tls" }
 vaco-protocol-wrap = { path = "../crates/io/vaco-protocol-wrap" }
@@ -137,14 +163,21 @@ default = [
     "bsf-av1",
     "bsf-generic",
     "bsf-h2645",
+    "bsf-legacy",
+    "bsf-subtitle",
     "bsf-vpx",
     "chlayout",
     "cli",
     "cli-core",
+    "codec-ac3",
     "codec-cabac",
     "codec-core",
     "codec-dsp-idct",
     "codec-golomb",
+    "codec-image-simple",
+    "codec-jpeg",
+    "codec-pnm",
+    "codec-qoi",
     "color",
     "conformance",
     "core",
@@ -156,6 +189,7 @@ default = [
     "demux-image2",
     "demux-matroska",
     "demux-mp4",
+    "demux-mpegaudio",
     "demux-mpegps",
     "demux-mpegts",
     "demux-mxf",
@@ -163,13 +197,13 @@ default = [
     "demux-raw",
     "demux-rtsp",
     "expr",
+    "filter-aanalysis",
+    "filter-adynamics",
     "filter-aeffects",
-    "filter-ameasure",
+    "filter-aeq",
     "filter-analysis",
     "filter-asource",
     "filter-audio",
-    "filter-audio-dynamics",
-    "filter-audio-eq",
     "filter-blur",
     "filter-color",
     "filter-convolve",
@@ -188,6 +222,7 @@ default = [
     "filter-video-format",
     "filter-video-geometry",
     "filter-video-source",
+    "format-ac3",
     "format-apetag",
     "format-audio-simple",
     "format-avlanguage",
@@ -196,10 +231,15 @@ default = [
     "format-ebml",
     "format-id3",
     "format-isom",
+    "format-mpegaudio",
     "format-mpegts-tables",
+    "format-mpjpeg",
     "format-nalu",
+    "format-nut",
     "format-riff",
     "format-rtp",
+    "format-spdif",
+    "format-swf",
     "frame",
     "io",
     "limits",
@@ -213,12 +253,23 @@ default = [
     "parse-av1",
     "parse-h264",
     "parse-hevc",
+    "parse-image",
+    "parse-mpegvideo",
     "parse-opus",
+    "parse-vpx",
     "pool",
     "probe",
     "protocol-core",
+    "protocol-crypto",
+    "protocol-dial",
+    "protocol-ftp",
+    "protocol-gopher",
     "protocol-http",
+    "protocol-httpproxy",
+    "protocol-icecast",
+    "protocol-ipfs",
     "protocol-local",
+    "protocol-rtmp",
     "protocol-socket",
     "protocol-tls",
     "protocol-wrap",
@@ -235,14 +286,21 @@ bsf-audio = []
 bsf-av1 = []
 bsf-generic = []
 bsf-h2645 = []
+bsf-legacy = []
+bsf-subtitle = []
 bsf-vpx = []
 chlayout = []
 cli = []
 cli-core = []
+codec-ac3 = []
 codec-cabac = []
 codec-core = []
 codec-dsp-idct = []
 codec-golomb = []
+codec-image-simple = []
+codec-jpeg = []
+codec-pnm = []
+codec-qoi = []
 color = []
 conformance = []
 core = []
@@ -254,6 +312,7 @@ demux-hls = []
 demux-image2 = []
 demux-matroska = []
 demux-mp4 = []
+demux-mpegaudio = []
 demux-mpegps = []
 demux-mpegts = []
 demux-mxf = []
@@ -261,13 +320,13 @@ demux-ogg = []
 demux-raw = []
 demux-rtsp = []
 expr = []
+filter-aanalysis = []
+filter-adynamics = []
 filter-aeffects = []
-filter-ameasure = []
+filter-aeq = []
 filter-analysis = []
 filter-asource = []
 filter-audio = []
-filter-audio-dynamics = []
-filter-audio-eq = []
 filter-blur = []
 filter-color = []
 filter-convolve = []
@@ -286,6 +345,7 @@ filter-video-composite = []
 filter-video-format = []
 filter-video-geometry = []
 filter-video-source = []
+format-ac3 = []
 format-apetag = []
 format-audio-simple = []
 format-avlanguage = []
@@ -294,10 +354,15 @@ format-dv = []
 format-ebml = []
 format-id3 = []
 format-isom = []
+format-mpegaudio = []
 format-mpegts-tables = []
+format-mpjpeg = []
 format-nalu = []
+format-nut = []
 format-riff = []
 format-rtp = []
+format-spdif = []
+format-swf = []
 frame = []
 io = []
 limits = []
@@ -311,12 +376,23 @@ parse-aac = []
 parse-av1 = []
 parse-h264 = []
 parse-hevc = []
+parse-image = []
+parse-mpegvideo = []
 parse-opus = []
+parse-vpx = []
 pool = []
 probe = []
 protocol-core = []
+protocol-crypto = []
+protocol-dial = []
+protocol-ftp = []
+protocol-gopher = []
 protocol-http = []
+protocol-httpproxy = []
+protocol-icecast = []
+protocol-ipfs = []
 protocol-local = []
+protocol-rtmp = []
 protocol-socket = []
 protocol-tls = []
 protocol-wrap = []
@@ -335,6 +411,22 @@ textformat = []
 [profile.release]
 overflow-checks = true
 debug-assertions = true
+
+[[bin]]
+name = "ac3_bsi_parse"
+path = "fuzz_targets/ac3_bsi_parse.rs"
+test = false
+doc = false
+bench = false
+required-features = ["format-ac3"]
+
+[[bin]]
+name = "ac3_decode"
+path = "fuzz_targets/ac3_decode.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-ac3"]
 
 [[bin]]
 name = "annexb_nal_iter"
@@ -439,6 +531,22 @@ test = false
 doc = false
 bench = false
 required-features = ["bsf-h2645"]
+
+[[bin]]
+name = "bsf_legacy"
+path = "fuzz_targets/bsf_legacy.rs"
+test = false
+doc = false
+bench = false
+required-features = ["bsf-legacy"]
+
+[[bin]]
+name = "bsf_subtitle"
+path = "fuzz_targets/bsf_subtitle.rs"
+test = false
+doc = false
+bench = false
+required-features = ["bsf-subtitle"]
 
 [[bin]]
 name = "bsf_vpx"
@@ -689,6 +797,22 @@ bench = false
 required-features = ["expr"]
 
 [[bin]]
+name = "filter_aanalysis_options"
+path = "fuzz_targets/filter_aanalysis_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-aanalysis"]
+
+[[bin]]
+name = "filter_adynamics_options"
+path = "fuzz_targets/filter_adynamics_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-adynamics"]
+
+[[bin]]
 name = "filter_aeffects_options"
 path = "fuzz_targets/filter_aeffects_options.rs"
 test = false
@@ -697,12 +821,12 @@ bench = false
 required-features = ["filter-aeffects"]
 
 [[bin]]
-name = "filter_ameasure_options"
-path = "fuzz_targets/filter_ameasure_options.rs"
+name = "filter_aeq_options"
+path = "fuzz_targets/filter_aeq_options.rs"
 test = false
 doc = false
 bench = false
-required-features = ["filter-ameasure"]
+required-features = ["filter-aeq"]
 
 [[bin]]
 name = "filter_analysis_options"
@@ -719,22 +843,6 @@ test = false
 doc = false
 bench = false
 required-features = ["filter-asource"]
-
-[[bin]]
-name = "filter_audio_dynamics_options"
-path = "fuzz_targets/filter_audio_dynamics_options.rs"
-test = false
-doc = false
-bench = false
-required-features = ["filter-audio-dynamics"]
-
-[[bin]]
-name = "filter_audio_eq_options"
-path = "fuzz_targets/filter_audio_eq_options.rs"
-test = false
-doc = false
-bench = false
-required-features = ["filter-audio-eq"]
 
 [[bin]]
 name = "filter_audio_options"
@@ -1033,6 +1141,14 @@ bench = false
 required-features = ["format-isom"]
 
 [[bin]]
+name = "jpeg_decode"
+path = "fuzz_targets/jpeg_decode.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-jpeg"]
+
+[[bin]]
 name = "limit_budget"
 path = "fuzz_targets/limit_budget.rs"
 test = false
@@ -1071,6 +1187,14 @@ test = false
 doc = false
 bench = false
 required-features = ["mux-mp4"]
+
+[[bin]]
+name = "mpegaudio_demux"
+path = "fuzz_targets/mpegaudio_demux.rs"
+test = false
+doc = false
+bench = false
+required-features = ["demux-mpegaudio"]
 
 [[bin]]
 name = "mpegps_demux"
@@ -1129,6 +1253,14 @@ bench = false
 required-features = ["format-mpegts-tables"]
 
 [[bin]]
+name = "mpjpeg_demux"
+path = "fuzz_targets/mpjpeg_demux.rs"
+test = false
+doc = false
+bench = false
+required-features = ["format-mpjpeg"]
+
+[[bin]]
 name = "mux_stream_concat_script"
 path = "fuzz_targets/mux_stream_concat_script.rs"
 test = false
@@ -1167,6 +1299,14 @@ test = false
 doc = false
 bench = false
 required-features = ["format-nalu"]
+
+[[bin]]
+name = "nut_demux"
+path = "fuzz_targets/nut_demux.rs"
+test = false
+doc = false
+bench = false
+required-features = ["format-nut"]
 
 [[bin]]
 name = "ogg_demux"
@@ -1233,6 +1373,38 @@ bench = false
 required-features = ["parse-hevc"]
 
 [[bin]]
+name = "parse_image"
+path = "fuzz_targets/parse_image.rs"
+test = false
+doc = false
+bench = false
+required-features = ["parse-image"]
+
+[[bin]]
+name = "parse_image_simple"
+path = "fuzz_targets/parse_image_simple.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-image-simple"]
+
+[[bin]]
+name = "parse_mpegaudio"
+path = "fuzz_targets/parse_mpegaudio.rs"
+test = false
+doc = false
+bench = false
+required-features = ["format-mpegaudio"]
+
+[[bin]]
+name = "parse_mpegvideo"
+path = "fuzz_targets/parse_mpegvideo.rs"
+test = false
+doc = false
+bench = false
+required-features = ["parse-mpegvideo"]
+
+[[bin]]
 name = "parse_opus_head"
 path = "fuzz_targets/parse_opus_head.rs"
 test = false
@@ -1247,6 +1419,30 @@ test = false
 doc = false
 bench = false
 required-features = ["parse-opus"]
+
+[[bin]]
+name = "parse_pnm"
+path = "fuzz_targets/parse_pnm.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-pnm"]
+
+[[bin]]
+name = "parse_qoi"
+path = "fuzz_targets/parse_qoi.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-qoi"]
+
+[[bin]]
+name = "parse_vpx"
+path = "fuzz_targets/parse_vpx.rs"
+test = false
+doc = false
+bench = false
+required-features = ["parse-vpx"]
 
 [[bin]]
 name = "pool_acquire"
@@ -1273,6 +1469,38 @@ bench = false
 required-features = ["probe"]
 
 [[bin]]
+name = "protocol_crypto_roundtrip"
+path = "fuzz_targets/protocol_crypto_roundtrip.rs"
+test = false
+doc = false
+bench = false
+required-features = ["protocol-crypto"]
+
+[[bin]]
+name = "protocol_dial_read_header_block"
+path = "fuzz_targets/protocol_dial_read_header_block.rs"
+test = false
+doc = false
+bench = false
+required-features = ["protocol-dial"]
+
+[[bin]]
+name = "protocol_ftp_parse"
+path = "fuzz_targets/protocol_ftp_parse.rs"
+test = false
+doc = false
+bench = false
+required-features = ["protocol-ftp"]
+
+[[bin]]
+name = "protocol_gopher_parse"
+path = "fuzz_targets/protocol_gopher_parse.rs"
+test = false
+doc = false
+bench = false
+required-features = ["protocol-gopher"]
+
+[[bin]]
 name = "protocol_http_response"
 path = "fuzz_targets/protocol_http_response.rs"
 test = false
@@ -1281,12 +1509,60 @@ bench = false
 required-features = ["protocol-http"]
 
 [[bin]]
+name = "protocol_httpproxy_parse"
+path = "fuzz_targets/protocol_httpproxy_parse.rs"
+test = false
+doc = false
+bench = false
+required-features = ["protocol-httpproxy"]
+
+[[bin]]
+name = "protocol_icecast_parse"
+path = "fuzz_targets/protocol_icecast_parse.rs"
+test = false
+doc = false
+bench = false
+required-features = ["protocol-icecast"]
+
+[[bin]]
+name = "protocol_ipfs_parse"
+path = "fuzz_targets/protocol_ipfs_parse.rs"
+test = false
+doc = false
+bench = false
+required-features = ["protocol-ipfs"]
+
+[[bin]]
 name = "protocol_local_data_url"
 path = "fuzz_targets/protocol_local_data_url.rs"
 test = false
 doc = false
 bench = false
 required-features = ["protocol-local"]
+
+[[bin]]
+name = "protocol_rtmp_control"
+path = "fuzz_targets/protocol_rtmp_control.rs"
+test = false
+doc = false
+bench = false
+required-features = ["protocol-rtmp"]
+
+[[bin]]
+name = "protocol_rtmp_dechunk"
+path = "fuzz_targets/protocol_rtmp_dechunk.rs"
+test = false
+doc = false
+bench = false
+required-features = ["protocol-rtmp"]
+
+[[bin]]
+name = "protocol_rtmp_handshake_digest"
+path = "fuzz_targets/protocol_rtmp_handshake_digest.rs"
+test = false
+doc = false
+bench = false
+required-features = ["protocol-rtmp"]
 
 [[bin]]
 name = "protocol_wrap_concat_list"
@@ -1361,6 +1637,14 @@ bench = false
 required-features = ["demux-rtsp"]
 
 [[bin]]
+name = "s337m_demux"
+path = "fuzz_targets/s337m_demux.rs"
+test = false
+doc = false
+bench = false
+required-features = ["format-spdif"]
+
+[[bin]]
 name = "sampfmt_parse"
 path = "fuzz_targets/sampfmt_parse.rs"
 test = false
@@ -1393,6 +1677,14 @@ bench = false
 required-features = ["protocol-socket"]
 
 [[bin]]
+name = "spdif_demux"
+path = "fuzz_targets/spdif_demux.rs"
+test = false
+doc = false
+bench = false
+required-features = ["format-spdif"]
+
+[[bin]]
 name = "subtitle_bitmap_demux"
 path = "fuzz_targets/subtitle_bitmap_demux.rs"
 test = false
@@ -1407,6 +1699,14 @@ test = false
 doc = false
 bench = false
 required-features = ["subtitle-text"]
+
+[[bin]]
+name = "swf_demux"
+path = "fuzz_targets/swf_demux.rs"
+test = false
+doc = false
+bench = false
+required-features = ["format-swf"]
 
 [[bin]]
 name = "textformat_escape"

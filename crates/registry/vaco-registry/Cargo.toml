@@ -39,7 +39,12 @@ layer = 6
 # `default = false` in its own fragment; nothing here is hand-maintained.
 
 [features]
-default = ["demux-aiff", "demux-asf", "demux-asf-o", "demux-au", "demux-avi", "demux-caf", "demux-dash", "demux-dv", "demux-flv", "demux-hls", "demux-image2", "demux-ircam", "demux-matroska", "demux-mp4", "demux-mpegps", "demux-mpegts", "demux-mpegtsraw", "demux-mxf", "demux-ogg", "demux-raw", "demux-rso", "demux-sox", "demux-voc", "demux-w64", "demux-wav", "mux-aiff", "mux-asf", "mux-asf-stream", "mux-au", "mux-avi", "mux-caf", "mux-dash", "mux-dv", "mux-dvd", "mux-flv", "mux-hls", "mux-image2", "mux-ircam", "mux-matroska", "mux-mp4", "mux-mpeg", "mux-mpegts", "mux-ogg", "mux-raw", "mux-rso", "mux-rtp", "mux-rtp-mpegts", "mux-sox", "mux-svcd", "mux-vcd", "mux-vob", "mux-voc", "mux-w64", "mux-wav", "parse-aac", "parse-av1", "parse-h264", "parse-hevc", "parse-opus", "subtitle-bitmap", "subtitle-text"]
+default = ["codec-ac3", "codec-image-simple", "codec-jpeg", "codec-pnm", "codec-qoi", "demux-aiff", "demux-asf", "demux-asf-o", "demux-au", "demux-avi", "demux-caf", "demux-dash", "demux-dv", "demux-flv", "demux-hls", "demux-image2", "demux-ircam", "demux-matroska", "demux-mp3", "demux-mp4", "demux-mpegps", "demux-mpegts", "demux-mpegtsraw", "demux-mpjpeg", "demux-mxf", "demux-nut", "demux-ogg", "demux-raw", "demux-rso", "demux-sox", "demux-spdif", "demux-swf", "demux-voc", "demux-w64", "demux-wav", "mux-aiff", "mux-asf", "mux-asf-stream", "mux-au", "mux-avi", "mux-caf", "mux-dash", "mux-dv", "mux-dvd", "mux-flv", "mux-hls", "mux-image2", "mux-ircam", "mux-matroska", "mux-mp3", "mux-mp4", "mux-mpeg", "mux-mpegts", "mux-mpjpeg", "mux-nut", "mux-ogg", "mux-raw", "mux-rso", "mux-rtp", "mux-rtp-mpegts", "mux-sox", "mux-spdif", "mux-svcd", "mux-swf", "mux-vcd", "mux-vob", "mux-voc", "mux-w64", "mux-wav", "parse-aac", "parse-av1", "parse-h264", "parse-hevc", "parse-image", "parse-mpegvideo", "parse-opus", "parse-vpx", "subtitle-bitmap", "subtitle-text"]
+"codec-ac3" = ["dep:vaco-codec-ac3"]
+"codec-image-simple" = ["dep:vaco-codec-image-simple"]
+"codec-jpeg" = ["dep:vaco-codec-jpeg"]
+"codec-pnm" = ["dep:vaco-codec-pnm"]
+"codec-qoi" = ["dep:vaco-codec-qoi"]
 "demux-aiff" = ["dep:vaco-format-audio-simple"]
 "demux-asf" = ["dep:vaco-demux-asf"]
 "demux-asf-o" = ["dep:vaco-demux-asf"]
@@ -53,11 +58,14 @@ default = ["demux-aiff", "demux-asf", "demux-asf-o", "demux-au", "demux-avi", "d
 "demux-image2" = ["dep:vaco-demux-image2"]
 "demux-ircam" = ["dep:vaco-format-audio-simple"]
 "demux-matroska" = ["dep:vaco-demux-matroska"]
+"demux-mp3" = ["dep:vaco-demux-mpegaudio"]
 "demux-mp4" = ["dep:vaco-demux-mp4"]
 "demux-mpegps" = ["dep:vaco-demux-mpegps"]
 "demux-mpegts" = ["dep:vaco-demux-mpegts"]
 "demux-mpegtsraw" = ["dep:vaco-demux-mpegts"]
+"demux-mpjpeg" = ["dep:vaco-format-mpjpeg"]
 "demux-mxf" = ["dep:vaco-demux-mxf"]
+"demux-nut" = ["dep:vaco-format-nut"]
 "demux-ogg" = ["dep:vaco-demux-ogg"]
 "demux-raw" = ["dep:vaco-demux-raw"]
 "demux-rso" = ["dep:vaco-format-audio-simple"]
@@ -65,6 +73,8 @@ default = ["demux-aiff", "demux-asf", "demux-asf-o", "demux-au", "demux-avi", "d
 "demux-rtsp" = ["dep:vaco-demux-rtsp"]
 "demux-sdp" = ["dep:vaco-demux-rtsp"]
 "demux-sox" = ["dep:vaco-format-audio-simple"]
+"demux-spdif" = ["dep:vaco-format-spdif"]
+"demux-swf" = ["dep:vaco-format-swf"]
 "demux-voc" = ["dep:vaco-format-audio-simple"]
 "demux-w64" = ["dep:vaco-format-audio-simple"]
 "demux-wav" = ["dep:vaco-format-audio-simple"]
@@ -82,16 +92,21 @@ default = ["demux-aiff", "demux-asf", "demux-asf-o", "demux-au", "demux-avi", "d
 "mux-image2" = ["dep:vaco-mux-image2"]
 "mux-ircam" = ["dep:vaco-format-audio-simple"]
 "mux-matroska" = ["dep:vaco-mux-matroska"]
+"mux-mp3" = ["dep:vaco-mux-mpegaudio"]
 "mux-mp4" = ["dep:vaco-mux-mp4"]
 "mux-mpeg" = ["dep:vaco-mux-mpegps"]
 "mux-mpegts" = ["dep:vaco-mux-mpegts"]
+"mux-mpjpeg" = ["dep:vaco-format-mpjpeg"]
+"mux-nut" = ["dep:vaco-format-nut"]
 "mux-ogg" = ["dep:vaco-mux-ogg"]
 "mux-raw" = ["dep:vaco-mux-raw"]
 "mux-rso" = ["dep:vaco-format-audio-simple"]
 "mux-rtp" = ["dep:vaco-mux-rtp"]
 "mux-rtp-mpegts" = ["dep:vaco-mux-rtp"]
 "mux-sox" = ["dep:vaco-format-audio-simple"]
+"mux-spdif" = ["dep:vaco-format-spdif"]
 "mux-svcd" = ["dep:vaco-mux-mpegps"]
+"mux-swf" = ["dep:vaco-format-swf"]
 "mux-vcd" = ["dep:vaco-mux-mpegps"]
 "mux-vob" = ["dep:vaco-mux-mpegps"]
 "mux-voc" = ["dep:vaco-format-audio-simple"]
@@ -101,8 +116,15 @@ default = ["demux-aiff", "demux-asf", "demux-asf-o", "demux-au", "demux-avi", "d
 "parse-av1" = ["dep:vaco-parse-av1"]
 "parse-h264" = ["dep:vaco-parse-h264"]
 "parse-hevc" = ["dep:vaco-parse-hevc"]
+"parse-image" = ["dep:vaco-parse-image"]
+"parse-mpegvideo" = ["dep:vaco-parse-mpegvideo"]
 "parse-opus" = ["dep:vaco-parse-opus"]
+"parse-vpx" = ["dep:vaco-parse-vpx"]
+"protocol-ftp" = ["dep:vaco-protocol-ftp"]
+"protocol-gopher" = ["dep:vaco-protocol-gopher"]
 "protocol-http" = ["dep:vaco-protocol-http"]
+"protocol-httpproxy" = ["dep:vaco-protocol-httpproxy"]
+"protocol-icecast" = ["dep:vaco-protocol-icecast"]
 "protocol-socket" = ["dep:vaco-protocol-socket"]
 "protocol-tls" = ["dep:vaco-protocol-tls"]
 "subtitle-bitmap" = ["dep:vaco-subtitle-bitmap"]
@@ -120,8 +142,34 @@ path = "../../format/vaco-bsf-generic"
 [dependencies.vaco-bsf-h2645]
 path = "../../format/vaco-bsf-h2645"
 
+[dependencies.vaco-bsf-legacy]
+path = "../../format/vaco-bsf-legacy"
+
+[dependencies.vaco-bsf-subtitle]
+path = "../../format/vaco-bsf-subtitle"
+
 [dependencies.vaco-bsf-vpx]
 path = "../../format/vaco-bsf-vpx"
+
+[dependencies.vaco-codec-ac3]
+path = "../../codec/vaco-codec-ac3"
+optional = true
+
+[dependencies.vaco-codec-image-simple]
+path = "../../codec/vaco-codec-image-simple"
+optional = true
+
+[dependencies.vaco-codec-jpeg]
+path = "../../codec/vaco-codec-jpeg"
+optional = true
+
+[dependencies.vaco-codec-pnm]
+path = "../../codec/vaco-codec-pnm"
+optional = true
+
+[dependencies.vaco-codec-qoi]
+path = "../../codec/vaco-codec-qoi"
+optional = true
 
 [dependencies.vaco-demux-asf]
 path = "../../format/vaco-demux-asf"
@@ -153,6 +201,10 @@ optional = true
 
 [dependencies.vaco-demux-mp4]
 path = "../../format/vaco-demux-mp4"
+optional = true
+
+[dependencies.vaco-demux-mpegaudio]
+path = "../../format/vaco-demux-mpegaudio"
 optional = true
 
 [dependencies.vaco-demux-mpegps]
@@ -253,6 +305,22 @@ optional = true
 path = "../../format/vaco-format-dv"
 optional = true
 
+[dependencies.vaco-format-mpjpeg]
+path = "../../format/vaco-format-mpjpeg"
+optional = true
+
+[dependencies.vaco-format-nut]
+path = "../../format/vaco-format-nut"
+optional = true
+
+[dependencies.vaco-format-spdif]
+path = "../../format/vaco-format-spdif"
+optional = true
+
+[dependencies.vaco-format-swf]
+path = "../../format/vaco-format-swf"
+optional = true
+
 [dependencies.vaco-mux-asf]
 path = "../../format/vaco-mux-asf"
 optional = true
@@ -286,6 +354,10 @@ optional = true
 
 [dependencies.vaco-mux-mp4]
 path = "../../format/vaco-mux-mp4"
+optional = true
+
+[dependencies.vaco-mux-mpegaudio]
+path = "../../format/vaco-mux-mpegaudio"
 optional = true
 
 [dependencies.vaco-mux-mpegps]
@@ -330,16 +402,50 @@ optional = true
 path = "../../codec/vaco-parse-hevc"
 optional = true
 
+[dependencies.vaco-parse-image]
+path = "../../codec/vaco-parse-image"
+optional = true
+
+[dependencies.vaco-parse-mpegvideo]
+path = "../../codec/vaco-parse-mpegvideo"
+optional = true
+
 [dependencies.vaco-parse-opus]
 path = "../../codec/vaco-parse-opus"
 optional = true
 
+[dependencies.vaco-parse-vpx]
+path = "../../codec/vaco-parse-vpx"
+optional = true
+
+[dependencies.vaco-protocol-crypto]
+path = "../../io/vaco-protocol-crypto"
+
 [dependencies.vaco-protocol-file]
 path = "../../io/vaco-protocol-file"
+
+[dependencies.vaco-protocol-ftp]
+path = "../../io/vaco-protocol-ftp"
+optional = true
+
+[dependencies.vaco-protocol-gopher]
+path = "../../io/vaco-protocol-gopher"
+optional = true
 
 [dependencies.vaco-protocol-http]
 path = "../../io/vaco-protocol-http"
 optional = true
+
+[dependencies.vaco-protocol-httpproxy]
+path = "../../io/vaco-protocol-httpproxy"
+optional = true
+
+[dependencies.vaco-protocol-icecast]
+path = "../../io/vaco-protocol-icecast"
+optional = true
+
+[dependencies.vaco-protocol-ipfs]
+path = "../../io/vaco-protocol-ipfs"
 
 [dependencies.vaco-protocol-local]
 path = "../../io/vaco-protocol-local"
