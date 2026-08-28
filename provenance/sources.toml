@@ -907,3 +907,17 @@ kind     = "blackbox"
 title    = "ffmpeg/ffprobe 8.1, measured against ffmpeg-encoded ivf fixtures and hand-built roq/flic/cdg fixtures — ivf's probe_score (98) and avg_frame_rate quirk, ffmetadata's probe magic and phantom-stream behaviour, roq's order-dependent audio/video packetisation and fixed 22050 Hz audio rate, flic's probe magic set and positional keyframe rule, and cdg's probe_score formula (min(valid_packet_count, 85))"
 acquired = "2026-08-28"
 where    = "the reference binary installed on the development machine"
+
+[[source]]
+id       = "3gpp-ts-26245"
+kind     = "spec"
+title    = "3GPP TS 26.245 V19.0.0 (2025-10), Transparent end-to-end packet switched streaming service (PSS); Timed text format — used for the tx3g text sample layout (§5.17), the StyleRecord field layout and its face-style-flag values (§5.15), the TextStyleBox `styl` ordering rules (§5.17.1.1) and the catalogue of other sample modifier boxes (§5.17.1). The u32-size/u32-type box header every modifier box inherits is defined in ISO/IEC 14496-12 §4.2, which is paywalled and was NOT retrieved; it is used here as universally-implemented common knowledge and confirmed against measured bytes, not read from that clause."
+acquired = "2026-08-28"
+where    = "https://www.3gpp.org/ftp/Specs/archive/26_series/26.245/26245-j00.zip"
+
+[[source]]
+id       = "ffmpeg-subtitle-text-decoders-probe"
+kind     = "blackbox"
+title    = "ffmpeg 8.1 subrip/webvtt/ass/mov_text/text subtitle decoders, measured via `ffmpeg -bitexact -i FIXTURE -f ass -` over purpose-written fixtures: that every text subtitle decoder emits ASS override markup rather than plain text; SubRip's tag table (i/b/u/s, font colour/size/face) and its BGR leading-zero-stripped colour spelling; that SubRip does not decode character references while WebVTT decodes exactly six (&amp; &lt; &gt; &lrm; &rlm; &nbsp;) and maps &nbsp; to ASS \\h; that `</font>` closes in attribute-opening order while b/i/u/s nest in reverse; the ASS demuxer's nine-field ReadOrder,Layer,Style,Name,MarginL,MarginR,MarginV,Effect,Text packet chunk; mov_text's tx3g sample bytes including that text_len counts bytes while styl offsets count Unicode scalars (not UTF-16 units) and that spans close with {\\r}; and that ffmpeg ships no ttml decoder and no ttml or text demuxer"
+acquired = "2026-08-28"
+where    = "ffmpeg/ffprobe 8.1 binaries, black-box"

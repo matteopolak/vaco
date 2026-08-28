@@ -1339,3 +1339,71 @@ above was written. `cargo +nightly fuzz run misc_audio_demux --
 `find fuzz/artifacts -type f` is empty. Left the original entry in place
 rather than deleting it, since the record of *why* it was missing at the
 time is still accurate; this note is the resolution.
+
+### `vaco-subtitle-text`'s ASS demuxer emits a bare `Text` field, not the reference's nine-field chunk
+
+Measured while building `vaco-codec-subtitle-text` (C-04). The reference's ASS
+demuxer hands its decoder a nine-field chunk with the timestamps stripped —
+`ffmpeg -i in.ass -c:s copy -f data -` gives
+`0,0,Default,Speaker,5,6,7,fx,{\i1}hi{\i0} there, with, commas`, i.e.
+`ReadOrder,Layer,Style,Name,MarginL,MarginR,MarginV,Effect,Text`. This
+workspace's `crates/format/vaco-subtitle-text/src/ass.rs` instead puts only the
+`Text` field in the packet (`parts.last()`), discarding layer, style, actor,
+margins and effect.
+
+Nothing is broken today: the decoder handles both shapes, and the ASS *muxer*
+re-emits from `Cue` so a demux/mux round trip is lossless in practice. But a
+consumer that wants the style name (any real ASS renderer does) cannot get it
+from the packet, and a `-c copy` from ASS into Matroska will not produce the
+byte stream Matroska readers expect, because that container carries the
+nine-field chunk. Belongs to whoever owns `vaco-subtitle-text` next; the
+decoder side is already written to accept the reference shape when it arrives.
+
+### `FrameData::Subtitle` wiring for the text subtitle decoders
+
+`vaco-codec-subtitle-text` is a standalone library with no `Decoder` impl, for
+the same reason `vaco-codec-subtitle-bitmap` and `vaco-codec-subtitle-teletext`
+are: interface gap 17 was still uncommitted in another agent's tree when it was
+written, and a crate at `HEAD` calling into it would not build for anyone else.
+
+Unlike the other two, the target type fits with nothing left over —
+`SubtitleContent::Ass` is exactly what every decoder in that crate emits, and
+that variant's own docs name ASS/SSA as its reason for existing. Each `to_ass`
+returns the `String` that `SubtitleRect::ass(0, 0, 0, 0, false, …)` wants, so
+the wiring is a `Decoder` impl and a `vaco-component.toml` fragment per codec
+and nothing more. Worth doing in one pass across all three subtitle codec
+crates rather than three times.
+
+### The generated `fuzz/Cargo.toml` lists every path dependency unconditionally
+
+So one crate that does not compile blocks **every** fuzz target in the tree, not
+just its own. Hit twice in one session: `vaco-codec-ac3` (a call to
+`all_snr_offsets_raw_zero`, which did not exist) and then `vaco-codec-vp8` (a
+`decode_macroblock` call missing an argument) — both transient mid-edit states
+in other agents' crates, both of which made
+`cargo fuzz run subtitle_text_decode` fail to build. `--no-default-features
+--features <mine>` does not help, because the `[dependencies]` block is not
+feature-gated; only waiting does.
+
+`xtask/src/gen_fuzz.rs` already computes `referenced` (the crates each target
+actually mentions) and could emit each path dependency as
+`optional = true` with the per-crate feature turning it on, which is what the
+existing `required-features` on each `[[bin]]` already implies. That would make
+a single-target fuzz build independent of the rest of the tree. Not attempted
+here — it is a change to a generator every agent depends on, and it wants its
+own package rather than riding along with a codec crate.
+
+### `WebVTT` character references: reference and specification have diverged
+
+`vaco-codec-subtitle-text` implements the six names `WebVTT` defined before it
+adopted HTML's full table in November 2015 (`&amp;`, `&lt;`, `&gt;`, `&lrm;`,
+`&rlm;`, `&nbsp;`), because that is what the reference implements — measured:
+`&quot;`, `&apos;`, `&hellip;`, `&#65;` and `&#x42;` all come back verbatim from
+`ffmpeg -f ass -`. The current spec (§4.2.2, §6.4) requires HTML's ~2,200-name
+table plus numeric references with the missing-semicolon longest-match rule.
+
+Recording it because it is the one place in that crate where "match the
+reference" and "match the specification" give different answers, and a future
+agent reading only the spec would reasonably think the six-name table is a bug.
+If the reference ever gains the full table, the change is confined to
+`webvtt::entity`.
