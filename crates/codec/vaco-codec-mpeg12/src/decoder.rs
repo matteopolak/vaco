@@ -347,4 +347,33 @@ mod tests {
         dec.flush();
         assert!(dec.recent.is_none());
     }
+
+    proptest::proptest! {
+        /// No arbitrary byte sequence, handed to the decoder as a single
+        /// packet (the same shape `fuzz/fuzz_targets/mpeg12_decode.rs`
+        /// exercises with a coverage-guided corpus), may panic — this is a
+        /// property of the whole `send_packet`/`receive_frame` pipeline,
+        /// not any one function, so it belongs at this level rather than
+        /// as a table- or block-level unit test. Every plane a produced
+        /// frame claims to have written must also be addressable, which
+        /// would catch a size/stride bug a pixel-accuracy comparison
+        /// alone would not.
+        #[test]
+        fn decode_never_panics_on_arbitrary_bytes(data in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..4096)) {
+            let mut budget = Budget::new(Limits::strict());
+            let Ok(packet) = vaco_packet::Packet::from_slice(&mut budget, &data) else {
+                return Ok(());
+            };
+            let mut dec = Mpeg12Decoder::new(Limits::strict());
+            if dec.send_packet(Some(&packet)).is_ok() {
+                while let Ok(frame) = dec.receive_frame() {
+                    for idx in 0..3 {
+                        if let Some(plane) = frame.plane(idx) {
+                            let _ = plane.row(0);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
