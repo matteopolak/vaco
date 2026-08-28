@@ -44,10 +44,20 @@
 //!
 //! Every function writes into a caller-provided output buffer.
 #![forbid(unsafe_code)]
+// `#[inline(always)]` on a SIMD kernel body is not a tuning knob in this
+// crate: it is how the dispatched level's target-feature context reaches
+// the body. A kernel that fails to inline is compiled at the ambient
+// baseline -- still correct, silently slow, and invisible to every
+// correctness test.
+#![allow(
+    clippy::inline_always,
+    reason = "mandatory for target-feature propagation in vaco_simd kernel bodies"
+)]
 
 mod angular;
 mod dc;
 mod planar;
+pub mod simd;
 
 pub use angular::angular_project;
 pub use dc::dc_predict;

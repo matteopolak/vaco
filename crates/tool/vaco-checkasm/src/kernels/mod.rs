@@ -7,6 +7,7 @@
 pub mod blockdsp;
 pub mod fir_mc;
 pub mod fmtconvert;
+pub mod intrapred;
 pub mod lpc;
 pub mod masked_select;
 pub mod mecmp;

@@ -48,12 +48,12 @@ fn average(samples: &[u16]) -> u16 {
     clippy::integer_division,
     reason = "count is max(1)'d by both call sites; this is a rounded average, not truncation"
 )]
-fn round_div(sum: u32, count: u32) -> u16 {
+pub(crate) fn round_div(sum: u32, count: u32) -> u16 {
     let v = (sum + count / 2) / count;
     u16::try_from(v).unwrap_or(u16::MAX)
 }
 
-fn mid_grey(bit_depth: u32) -> u16 {
+pub(crate) fn mid_grey(bit_depth: u32) -> u16 {
     let shift = bit_depth.saturating_sub(1).min(15);
     1u16 << shift
 }

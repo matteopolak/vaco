@@ -5,7 +5,8 @@
 //! cargo bench -p vaco-codec-dsp-intrapred
 //! ```
 
-use vaco_codec_dsp_intrapred::{angular_project, dc_predict, planar_predict};
+use vaco_codec_dsp_intrapred::{angular_project, dc_predict, planar_predict, simd};
+use vaco_simd::Caps;
 
 fn main() {
     divan::main();
@@ -14,10 +15,20 @@ fn main() {
 const SIZE: usize = 32;
 
 #[divan::bench]
-fn dc_predict_32(bencher: divan::Bencher<'_, '_>) {
+fn dc_predict_scalar_32(bencher: divan::Bencher<'_, '_>) {
     let top = [128u16; SIZE];
     let left = [64u16; SIZE];
-    bencher.bench_local(|| dc_predict(&top, &left, SIZE, 8));
+    bencher.bench_local(|| dc_predict(divan::black_box(&top), divan::black_box(&left), SIZE, 8));
+}
+
+#[divan::bench]
+fn dc_predict_dispatched_32(bencher: divan::Bencher<'_, '_>) {
+    let top = [128u16; SIZE];
+    let left = [64u16; SIZE];
+    let caps = Caps::detect();
+    bencher.bench_local(|| {
+        simd::dc_predict(caps, divan::black_box(&top), divan::black_box(&left), SIZE, 8)
+    });
 }
 
 #[divan::bench]

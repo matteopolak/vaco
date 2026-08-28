@@ -18,6 +18,7 @@
 use vaco_checkasm::kernels::blockdsp::AddPixelsClampedKernel;
 use vaco_checkasm::kernels::fir_mc::FirMcKernel;
 use vaco_checkasm::kernels::fmtconvert::{Int16ToFloatKernel, Int32ToFloatKernel};
+use vaco_checkasm::kernels::intrapred::DcPredictKernel;
 use vaco_checkasm::kernels::lpc::AutocorrelateKernel;
 use vaco_checkasm::kernels::masked_select::MaskedSelectKernel;
 use vaco_checkasm::kernels::mecmp::{SadKernel, SsdKernel, VarianceKernel};
@@ -107,6 +108,10 @@ const ENTRIES: &[Entry] = &[
     Entry {
         name: AddPixelsClampedKernel::NAME,
         verify: verify_report::<AddPixelsClampedKernel>,
+    },
+    Entry {
+        name: DcPredictKernel::NAME,
+        verify: verify_report::<DcPredictKernel>,
     },
 ];
 
