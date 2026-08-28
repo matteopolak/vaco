@@ -552,7 +552,7 @@ specifiers against input streams at bind time and forbid them on output-only opt
 
 ### 3.4 Metadata specifiers (a different grammar on the same syntactic slot)
 
-`-metadata`, `-map_metadata` and `-keep_metadata` take a *metadata* specifier, not a stream specifier:
+`-metadata` and `-map_metadata` take a *metadata* specifier, not a stream specifier:
 
 ```ebnf
 meta_spec ::= ε | 'g' | 's' [ ':' spec ] | 'c' ':' INT | 'p' ':' INT
@@ -1153,7 +1153,7 @@ Contract §2 is the source. Reorganised by what has to exist for the option to m
 | Selection | `-map` (all forms), `-vn/-an/-sn/-dn`, `-ignore_unknown`, `-copy_unknown` |
 | Codec | `-c`/`-codec` restricted to `copy`, `-tag`/`-vtag`/`-atag`, `-bsf` |
 | Timing | `-ss`, `-to`, `-t`, `-sseof`, `-itsoffset`, `-itsscale`, `-copyts`, `-start_at_zero`, `-copytb`, `-copyinkf`, `-dts_delta_threshold`, `-dts_error_threshold`, `-muxdelay`, `-muxpreload`, `-avoid_negative_ts` (a muxer AVOption) |
-| Metadata | `-metadata`, `-map_metadata`, `-map_chapters`, `-keep_metadata`, `-disposition`, `-timestamp`, `-timecode`, `-program`, `-streamid`, `-attach`, `-dump_attachment` |
+| Metadata | `-metadata`, `-map_metadata`, `-map_chapters`, `-disposition`, `-timestamp`, `-timecode`, `-program`, `-streamid`, `-attach`, `-dump_attachment` |
 | Rate/robustness | `-stream_loop`, `-readrate`, `-re`, `-readrate_initial_burst`, `-readrate_catchup`, `-fs`, `-frames`, `-abort_on`, `-max_error_rate`, `-xerror`, `-thread_queue_size`, `-max_muxing_queue_size`, `-muxing_queue_data_threshold`, `-discard`, `-bitexact` |
 | Reporting | `-stats`, `-nostats`, `-stats_period`, `-progress`, `-report`, `-benchmark`, `-timelimit`, `-dump`, `-hex`, `-debug_ts`, `-stdin`/`-nostdin` |
 
