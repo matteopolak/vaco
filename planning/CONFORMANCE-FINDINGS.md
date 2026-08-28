@@ -2706,3 +2706,159 @@ not comma-joined into one).
 
 Landed: #641 (closed) and the dump/`-stats` half of #208 (left open, scoped to
 `-progress`/`-report`).
+
+## 49. #637/#638: `mdat`, `elst`, `btrt`, and six Matroska items closed; two gaps found that neither muxer can fix alone
+
+`-c copy -fflags +bitexact` (flag placed correctly, per finding 38's own
+warning), `long.mp4` remuxed:
+
+```text
+        before        after
+mp4     8860 / 8908   8871 / 8871   (byte count now exact; see the timescale
+                                      gap below for why content still differs)
+matroska 7715 / 7841  7770 / 7841   (remaining gap is entirely the CLI gap
+                                      below, not a muxer bug)
+```
+
+### MP4 (#637)
+
+The three items landed as measured: `mdat` now writes a 32-bit size for a
+payload that fits (the `free`/`wide` box before it really is the reference's
+own reservation for the 64-bit case — backing up into it at patch time
+reuses the same 16 bytes rather than moving anything); `edts`/`elst` is
+written unconditionally, one entry, `rate` always `1.0`; `btrt` is written
+for both video and audio, using the container's own `bit_rate` when there is
+one and a total-bits-over-duration fallback when there is not (measured
+against a raw H.264 elementary stream, which never has one).
+
+Three more, found while measuring rather than assigned:
+
+- **`Muxer::set_bitexact` had no caller in this crate.** `MuxOptions::bitexact`
+  already existed and was already used to suppress `creation_time_unix` —
+  nothing overrode the trait's no-op default, so `-fflags +bitexact` on the
+  output never reached it. Exactly the "API with no caller" shape
+  `planning/AGENT-CONSTRAINTS.md` already names, found the same way it says
+  to: running the actual command and comparing bytes, not a unit test.
+- **The `udta ▸ meta ▸ hdlr ▸ ilst` shell is unconditional.** Measured across
+  four inputs including a raw H.264 stream with no metadata of its own at
+  all: every one gets the shell, with an 8-byte childless `ilst` when there
+  is nothing to put in it. This crate previously omitted the whole `udta`
+  when there were no tags.
+- **`encoder` is dropped under `bitexact`, file-level only.** An MP4-sourced
+  `encoder=Lavf62.12.100` tag is carried in from the *input's* own metadata
+  on a stream copy (not fabricated by this crate — confirmed by remuxing a
+  raw H.264 stream with no such tag at all: under `-c copy -f mp4`, *this
+  crate's own* muxer never invents one) and reaches `©too` under a plain
+  remux, but the reference's own bitexact output omits it. An explicit
+  `-metadata title=...` still comes through under bitexact, so this is
+  specifically the auto-populated tool tag.
+- **`mvhd.timescale` is `1000` whenever any track is video**, not the
+  largest track timescale — this crate's own prior rule, written for the
+  audio-only case (`AudioParameters.sample_rate`, still correct and still
+  the fallback here), silently mis-fired the moment a video track was also
+  present. Measured across a reordered stream, a non-reordered one, a raw
+  H.264 stream, and a video+audio file: all four keep `1000` at the movie
+  level regardless of the video track's own timescale.
+
+**Two gaps neither muxer can close alone**, both found by measuring past the
+four assigned items rather than stopping at them:
+
+1. **The pipeline normalizes `dts` to start at `0` before a muxer ever sees
+   it.** Instrumented `MovMuxer::write_packet` directly: the first sample of
+   a two-frame-reorder H.264 track that `ffprobe`/this crate's own probe both
+   report as `pts=0 dts=-1024` on the *input* arrives at the muxer as
+   `dts=0 pts=2` (rescaled units) — same `cts_offset`, because a uniform
+   shift to both `pts` and `dts` cancels out of their difference, but the
+   original negative `dts` baseline `elst.media_time` needs is gone. Nothing
+   in `vaco-mux-mp4` or `vaco-mux-matroska` does this shift; it happens
+   upstream, before `write_packet`, in the copy pipeline `vaco-cli`
+   drives — outside both of my crates. `TrackState::media_time` (mp4) uses
+   `cts_offset` as the best available proxy, which is exact whenever the
+   original presentation starts at `pts == 0` (every case measured except
+   encoder-priming audio) and undercounts by the priming delay otherwise —
+   documented in the method's own doc comment rather than silently
+   producing a value that looks right and sometimes is not.
+2. **MP4's own per-track timescale is derived from `frame_rate`/`sample_rate`,
+   never the input container's own timescale.** The reference preserves the
+   input's native track timescale exactly on a stream copy (measured: this
+   fixture's input `mdhd.timescale` is `12800`; a real `-c copy` output
+   keeps `12800`). `vaco-mux-mp4::MovMuxer::track_time_base` has no way to
+   see that fact — `CodecParameters` (`vaco-codec-core`) carries no
+   `time_base` field, and packets already arrive pre-rescaled into whatever
+   timescale `add_stream` picked. This is why the MP4 byte *count* now
+   matches exactly (8871 = 8871) while `mdhd`/`stts`/`ctts`'s raw *values*
+   still differ: this crate picks `25` (the frame rate) where the reference
+   keeps `12800`, and every duration/offset scales consistently within
+   that choice, landing on the same real-world durations through `mvhd`/
+   `tkhd`/`elst` (all rescaled to the *movie* timescale, which stays `1000`
+   either way) but not the same raw per-track tick values. Closing this
+   needs a `CodecParameters`/pipeline change neither `vaco-mux-mp4` nor
+   `vaco-mux-matroska` owns — flagged rather than worked around, per
+   `planning/AGENT-CONSTRAINTS.md`'s scope rule.
+
+### Matroska (#638)
+
+Six of the seven listed items, plus the `TrackEntry` order, landed as
+measured: `Info > Duration` (a `0.0` placeholder on a seekable sink, rewritten
+whole — not patched in place — once the real total is known at
+`write_trailer`, because `Info`'s body carries its own `CRC-32` and a
+narrower patch would have left that checksum wrong; omitted entirely on a
+non-seekable sink, matching the same asymmetry this crate already had for
+`Cues`); `TrackUID` now always 8 bytes; `Video > FlagInterlaced` (`2` for
+progressive, measured; the interlaced field orders map to `1` by the field's
+own name, unverified — no interlaced sample was available); `Video > Colour`
+(`ChromaSitingHorz=1, ChromaSitingVert=2` for `ChromaLocation::Left`, the one
+value measured; every other siting is omitted rather than guessed);
+`MaxBlockAdditionID` plus its trailing 2-byte `Void` (both video-track-only,
+confirmed absent from an audio track in the same file); the `TrackEntry`
+child order.
+
+One more, found the same way as MP4's `set_bitexact` gap: **`encoder` is
+dropped under `bitexact`, file-level tags only** — same reasoning, same
+measurement (an MP4-sourced `encoder=Lavf62.12.100` file tag disappears from
+the reference's bitexact output; a *per-track* `encoder` tag, e.g.
+`Lavc62.28.100 libx264`, is a different fact — which codec made that
+stream's data, not which tool made the container — and is not suppressed,
+confirmed present in the reference's own bitexact output right alongside
+it). The crate's own module doc previously asserted the opposite: "this
+crate does not reproduce the reference's own auto `ENCODER`/`DURATION`
+`SimpleTag`s (those stamp the reference's own build identity...)" — reasoned
+from the field's name rather than measured, and wrong in the same way the
+`BlockGroup` finding (37) was: `ENCODER`'s value here is `Lavc...`, the
+*codec's* identity from the *input*, not the muxer's own. That comment is
+now corrected in the module docs.
+
+Also found, not assigned: **`TrackEntry`'s own size field is the full
+8-octet VINT width**, not the shortest one this crate's general `element()`
+helper picks — measured directly (`Tracks`, `Tag` and `SimpleTag` all use
+the shortest width right alongside it, so this is specific to `TrackEntry`).
+
+**The remaining `Tags` gap (one `Tag` vs the reference's two) is a `vaco-cli`
+bug, not a `vaco-mux-matroska` one.** `MatroskaMuxer::tags_bytes` already
+builds a per-track `Tag` from `MuxMetadata::tags_for_stream` — confirmed by
+passing `-metadata:s:v:0 foo=bar` through the real CLI pipeline, which
+produces exactly the right `Targets ▸ TagTrackUID` + `SimpleTag` shape. The
+input's own per-stream tags (`handler_name`, `encoder=Lavc...`) never reach
+there: `crates/app/vaco-cli/src/exec.rs`'s `resolve_mapped_metadata` copies
+the input's *file-level* tags into the output's `MuxMetadata.tags` (mirroring
+`-metadata`) but has no equivalent copy for *per-stream* tags into
+`MuxMetadata.stream_tags` — that field is populated only from an explicit
+`-metadata:s:` CLI option. `vaco-cli` is outside this brief's two crates, so
+this is reported rather than fixed; a task suggestion was filed for it. The
+`CueClusterPosition` width difference downstream of this (10 bytes in the
+reference vs 7 here) is a direct consequence of the reference's larger file
+needing a wider offset encoding, not a separate bug.
+
+**Not touched, and not attempted**: a `long_av.mp4` (video+audio) spot check
+surfaced two more, smaller Matroska divergences past the seven-item list —
+a `BitDepth` (`0x6264`) element apparently written for the AAC audio track
+even though `TrackOut::bit_depth` here is only ever set for PCM codecs, and
+`MaxBlockAdditionID` appearing on that same audio track (with no trailing
+`Void`), where the H.264-only sample this pass measured against showed it
+video-track-only. Both need a second reference sample to resolve correctly
+rather than one-off pattern-matching from a single file, and are left for
+whoever picks up the next Matroska pass. The same spot check confirms this
+crate's `MAX_CLUSTER_MS = 5000` cluster-splitting heuristic is a pre-existing,
+already-documented approximation (the module's own comment says as much) —
+a three-`Cluster` reference file came back five `Cluster`s here — unrelated
+to today's items and not touched.
