@@ -321,6 +321,23 @@ neither codec parameters nor file-level metadata.
 Same class as gap 1, and the reason #207 (CL-16) stayed open after tags and
 chapters worked.
 
+**Raised in priority 2026-08-27: it also corrupts `framecrc`.** See
+`CONFORMANCE-FINDINGS.md` 32. `vaco-mux-hash` prints a `#tb` line and rescales
+packet durations, so it needs a definite time base; `add_stream` gives it only
+`CodecParameters`, so it recomputes `1/frame_rate`. That is right for freshly
+encoded raw media and wrong for stream copy, where the reference keeps the
+input's base — `1/12800` for an MP4 and `1/90000` for a TS, against our `1/25`
+and `1/50`. Every timestamp column of every `framecrc` line is therefore wrong,
+in one of the ten comparison modes the conformance suite runs, while the
+checksums themselves are correct.
+
+So this gap is no longer just interface tidiness. The additive shape still
+works — a default-implemented `add_stream_with(&mut self, params, spec)` that
+forwards to `add_stream`, so none of the ~57 implementors change — but `spec`
+now needs to carry the stream's **time base** as well as its disposition and
+program membership. Remember that `impl<M: Muxer + ?Sized> Muxer for Box<M>`
+must forward the new method too, or a boxed muxer silently takes the default.
+
 ## 10. `vaco-filter-core` has no adapter for a multi-input or multi-output filter — CLOSED 2026-08-23
 
 Two adapters landed in `vaco-filter-core::adapt`, additive, no change to

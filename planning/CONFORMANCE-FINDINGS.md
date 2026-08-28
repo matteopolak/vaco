@@ -1503,6 +1503,86 @@ bounds. Building an option schema with min/max per filter closes both, and
 gives the fuzzer a much smaller space to search. Doing them separately means
 transcribing every range from the reference twice.
 
+## 32. `framecrc`'s `#tb` follows the input in the reference and the frame rate in ours — which breaks the harness's own comparison mode
+
+The utility muxers are in better shape than FM-20 (#572) suggests. `crc`,
+`md5`, `hash` and `streamhash` are **byte-identical to the reference**,
+including the digests:
+
+```text
+crc         CRC=0xc72be0fe                      identical
+md5         MD5=6da5754c4a6f4c67449a02c903e59232 identical
+hash        SHA256=02c27837…937010              identical
+streamhash  0,v,SHA256=02c27837…937010          identical
+```
+
+`framecrc` is the exception, and it is the one the differential harness
+compares with.
+
+### The per-frame CRCs are right; the timestamps are in the wrong base
+
+```text
+$ ffmpeg     -i long.mp4 -c copy -bitexact -f framecrc -
+#tb 0: 1/12800
+0,      -1024,          0,      512,     1516, 0x458c7be9
+$ vaco       -i long.mp4 -c copy -bitexact -f framecrc -
+#tb 0: 1/25
+0,          0,          2,        1,     1516, 0x458c7be9
+```
+
+The checksums match exactly — `0x458c7be9` — so the packet payloads are
+right. Every timestamp column is wrong, because the base is.
+
+The reference's `#tb` **follows the input stream's time base**; ours derives
+`1/frame_rate` from `CodecParameters`. Measured on two containers:
+
+```text
+             ref       ours
+long.mp4     1/12800   1/25
+long.ts      1/90000   1/50
+```
+
+The TS row is wrong twice: the wrong *source*, and then `1/50` rather than
+`1/25` because an H.264 stream's `CodecParameters::frame_rate` is deliberately
+the **tick** rate, which is what issue #632 was about.
+
+### It is `INTERFACE-GAPS.md` gap 9, and this raises its priority
+
+`crates/format/vaco-mux-hash/src/header.rs` explains itself honestly and the
+explanation is the diagnosis:
+
+> `Muxer::add_stream` receives only `CodecParameters` — no time base — and
+> `Muxer::stream_time_base` is a getter the *caller* queries, never a value the
+> caller hands back. A muxer that answers `None` therefore has no channel of
+> its own to learn what base ended up governing its packets.
+
+Its fallback (recompute `1/fps` the way the reference's raw/PCM *encoders* do)
+is right for the case it was written for — dumping freshly encoded raw media —
+and wrong for stream copy, which is exactly what the harness does.
+
+So gap 9 is not only "`-disposition` and `-program` have nowhere to go". It
+also silently corrupts `framecrc`, one of the ten comparison modes the
+conformance suite runs. That moves it from an interface tidiness item to a
+correctness blocker.
+
+### Two smaller `framecrc` header divergences, both now fixable
+
+```text
+ref  with -bitexact:     #extradata 0:       45, 0x27ba0f4a
+ref  without -bitexact:  #extradata 0:       45, 0x27ba0f4a
+                         #software: Lavf62.12.100
+ours with -bitexact:     #software: vaco
+```
+
+- **`#software:` is suppressed by `-bitexact`**, because it carries a library
+  version — the same family as the `*_long_name` suppression already recorded
+  in `AGENT-CONSTRAINTS.md`. We have it backwards: we print it *only* under
+  `-bitexact`, and print a name where the reference prints a version.
+- **`#extradata <n>: <len>, 0x<crc32>`** is printed in both modes and we never
+  print it. This became reproducible only today: finding 26's read half now
+  synthesises extradata for exactly these copied streams, so the 45 bytes are
+  there to measure and CRC.
+
 ## Harness changes, summarised
 
 Everything below is a change to `crates/tool/vaco-conformance/`,
