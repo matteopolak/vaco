@@ -669,3 +669,32 @@ mpegts out.ts` to find, and neither was findable any other way.
 And when you add a public item, either call it in the same change or say in the
 commit message who is going to. `dead-code`'s orphan list is a list of promises
 nobody has kept yet.
+
+## `Vaco-Spec-Ref` starts with a registered id, not with prose
+
+The gate reads the **first whitespace-delimited token** of the trailer and
+requires it to be an `id` declared by some `[[source]]` in `provenance/`. So
+
+```text
+Vaco-Spec-Ref: ffprobe -bitexact -show_entries stream=profile on H.264/AAC/VP9/AV1
+```
+
+fails on `ffprobe`, and the failure is tree-wide: `provenance-check` walks
+every commit since the baseline, so one bad trailer turns the gate red for
+every agent and fails CI until it is dealt with.
+
+The form is `Vaco-Spec-Ref: <id> <free text saying what you measured>`. The free
+text is encouraged — it is the part a reader actually wants — but the id has to
+come first. `git log -1` on any recent commit shows a working example.
+
+If the source you measured has no id yet, **register it in
+`provenance/sources.toml` in the same commit**. Do not describe it inline
+instead. The AV1 specification had been cited in prose in `vaco-demux-raw`'s
+module docs for weeks and was never declared, which the gate could not see until
+a commit finally referenced it by id.
+
+If you find you have already pushed a bad trailer, do **not** rebase to fix it.
+Add a row to `provenance/corrections.toml` naming the commit, the citation it
+carries and the id you meant. Rewriting history in a tree this many agents share
+moves HEAD under all of them mid-edit, and moving `provenance/baseline` forward
+would exempt every commit in between.
