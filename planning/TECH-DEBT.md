@@ -6143,3 +6143,121 @@ recovered the shared index with no working-tree loss, and the
 private-index recipe carried the actual commit through cleanly).
 
 `Vaco-Spec-Ref: itu-t-h263` Annex F §F.2 (Figure F.1).
+
+
+## H.264: `Intra_4x4` and multi-macroblock reconstruction landed — byte-exact on a full corpus, and #418's own corpus finally decoded end to end (#418, #420)
+
+**The last prediction mode #420 needed, plus the real multi-macroblock
+neighbour propagation it requires**, both landed this round. All nine
+`Intra_4x4` modes (clauses 8.3.1.2.1..8.3.1.2.9) via a single unified
+`p[x, y]` addressing helper matching the spec's own notation (equations
+copied close to verbatim, including the cases where the algebra drifts
+to `x = -1` and correctly lands on the corner rather than the top row).
+Mode inference (clause 8.3.1.1, eq. 8-42) as a standalone pure function,
+with a dedicated test for the exact trap flagged going in: neighbour A
+and B *disagreeing*, so `Min(modeA, modeB)` actually matters rather than
+passing by coincidence. A new `PictureBuffer` in `reconstruct.rs` gives
+every macroblock after the first real, already-reconstructed neighbour
+samples from whichever macroblock is genuinely adjacent to it — clause
+6.4.7.3/6.4.8's combined availability effect, for frame pictures, reduces
+to one test (is a global 4x4 block's owning macroblock already fully
+reconstructed, or is it the current macroblock and this block came
+earlier in its own z-order), which catches clause 8.3.1.2's own "`x > 3`
+and `luma4x4BlkIdx == 3` or `11`" special case for free rather than as a
+hardcoded exception.
+
+**A backwards-looking spec reading, caught by re-running an
+already-passing corpus rather than trusted on paper.** This crate's own
+2002 draft literally describes `dcOnlyPredictionFlag` as a *joint*
+condition over both neighbours (either one unavailable forces *both* to
+DC). A per-neighbour-independent reading seemed more intuitive and even
+"fixed" one macroblock that looked wrong under the literal joint
+reading — but re-running `cabac_intra_oracle_noise.264` (already
+byte-exact) against the "fixed" version broke several macroblocks that
+were previously correct. Reverted to the literal joint reading, which
+matches `noise.264` byte-for-byte. Kept as a cautionary story in
+`infer_intra4x4_neighbour_modes`'s own doc rather than silently
+"corrected" and forgotten: a plausible-looking, intuition-driven fix,
+checked against only the single case that motivated it, would have
+shipped a real regression.
+
+**Results, byte-for-byte against real `ffmpeg 8.1`, luma only:**
+
+- `cabac_intra_oracle_noise.264` (16 macroblocks, 100% `Intra_4x4`,
+  no-deblock): **byte-exact.** The cleanest, most direct multi-macroblock
+  check available for `Intra_4x4` + mode inference + real neighbour
+  propagation together, and it passes outright.
+- `cabac_intra_oracle_flat.264`/`gradient.264` (`Intra_16x16`, prior
+  rounds): still byte-exact, unaffected.
+- `cabac_intra_oracle_testsrc.264`/`multi.264` (same content, one frame
+  vs. five independent frames): diverge at exactly **one** macroblock
+  boundary — macroblock (1, 0), block 0. Hand-verified via the pixel
+  oracle that `Intra4x4PredMode == 1` (Horizontal) is required there (its
+  real left neighbour, independently confirmed correct, is flat
+  147/145/53/52 down the four rows, and the reference's own flat-147
+  first row with zero residual is exactly and only what mode 1
+  produces), but this decode computes mode 2 (DC) instead. Since
+  `dcOnlyPredictionFlag` is independently confirmed correct (via
+  `noise.264` above), the remaining suspect is a bit-consumption drift
+  somewhere in the *preceding* macroblock's own decode, not this
+  specific derivation. Marked `#[ignore]` with the full hand-verified
+  account; not resolved this round.
+- **`cabac_i_only.264` (#418's own corpus, 25 independent all-`Intra_4x4`
+  pictures): decoded end to end for the first time via a real
+  reconstruction pipeline, not only a bit-consumption measurement.**
+  Frame 0 hits `CabacDecoder::malformed()` outright — matching this
+  exact corpus's own long-established "diverges at slice 0" finding from
+  eleven prior rounds. Frames 1..24 do *not* hit `malformed()` but
+  reconstruct almost entirely wrong (1.53% of luma samples match
+  `ffmpeg` overall — far beyond anything a missing deblocking filter
+  could explain), diverging from within the very first macroblock's own
+  first block in most frames. Given this round's `Intra_4x4`
+  implementation is independently confirmed correct on a full, clean,
+  unconfounded corpus, the most likely explanation is the same
+  pre-existing macroblock-layer bit-consumption divergence #418 has
+  chased for eleven rounds — now visible as **wrong pixels with an exact
+  first-differing position**, for the first time, rather than only a
+  downstream bit-count mismatch. Marked `#[ignore]` with the full
+  per-frame account.
+
+**#418's own assertion is not retired.** The coordinator's own framing
+going in was explicit: retire `assert_slice_ends_at_rbsp_trailing_bits`
+*on evidence* if pixels reconstruct exactly while the bit assertion
+still fails, or use a genuine first-differing-macroblock locate to
+resolve the bug directly if pixels diverge. Pixels diverge, badly, from
+the first macroblock onward on most of this corpus's frames — this
+round's own evidence, if anything, is a point *in favour of* the
+assertion catching a real defect, not a false positive. `#418` stays
+open, untouched; `assert_slice_ends_at_rbsp_trailing_bits` not weakened,
+not touched, not reopened as `#419`.
+
+Gates: full clean sweep (`layer-check`, `dep-gate`, `unsafe-audit`,
+`dup-check`, `owner-gate`, `patent-gate`). `clippy -p vaco-codec-h264
+--all-targets` clean. `rustfmt` run directly only on the two touched,
+self-contained files (`intra.rs`, `reconstruct.rs` — no `mod`
+declarations pulling in others); `mb.rs`'s own pre-existing drift left
+alone. 55 `--lib` tests (up from 48), 3 newly `#[ignore]`d with full
+hand-verified reasons (`testsrc`, `multi`, `cabac_i_only`), no
+regressions elsewhere. No live writer on `vaco-codec-h264` confirmed via
+`ASSIGNMENTS.md`, both before starting and immediately before the
+commit — checked against the *whole* repo's `git status --porcelain`,
+not just the staged set, per the coordinator's own standing instruction
+after today's near-miss on shared files.
+
+**Not done this round:** chroma residual reconstruction (still unwired,
+per `reconstruct.rs`'s own scope note), `I_PCM`, multi-slice-per-picture
+neighbour handling, and — the main open item — the bit-consumption drift
+behind both `testsrc`/`multi`'s single-macroblock divergence and
+`cabac_i_only`'s much broader one. Given `noise.264`'s byte-exact result
+already rules out `Intra_4x4`'s own prediction math, mode inference, and
+neighbour propagation as the cause, the search is now narrower than at
+any point in this eleven-round investigation: somewhere in the
+macroblock-layer sequence preceding these specific divergence points,
+not in reconstruction itself.
+
+`Vaco-Spec-Ref: iso-iec-14496-10-2002-draft` clause 6.4.3 (inverse 4x4
+luma block scanning), clause 6.4.5 (neighbouring macroblock
+availability), clause 6.4.7.3 (neighbouring 4x4 luma blocks), clause
+6.4.8 (neighbouring locations, Table 6-3), clause 8.3.1 (eq. 8-41..8-42,
+Table 8-2), clause 8.3.1.2 (eq. 8-45..8-69, clauses
+8.3.1.2.1..8.3.1.2.9).
