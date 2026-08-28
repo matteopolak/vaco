@@ -270,4 +270,23 @@ impl Frame {
         m.set(key, value);
         self.side_data.push(FrameSideData::Metadata(m));
     }
+
+    /// Remove one metadata entry, returning its value if it was present.
+    ///
+    /// Added alongside `vaco-filter-mm`'s `metadata`/`ametadata` (the first
+    /// consumer to need single-key removal — freezedetect and the analysis
+    /// filters only ever add), which needs it for the reference's own
+    /// `mode=delete:key=...` semantics: removing one entry without
+    /// disturbing the rest of the dictionary. [`Frame::remove_side_data`]
+    /// already covers "delete the whole dictionary"
+    /// (`FrameSideDataKind::Metadata`); this is the finer-grained half that
+    /// was missing.
+    pub fn remove_metadata(&mut self, key: &str) -> Option<String> {
+        if let Some(FrameSideData::Metadata(m)) =
+            self.side_data.iter_mut().find(|d| d.kind() == FrameSideDataKind::Metadata)
+        {
+            return m.remove(key);
+        }
+        None
+    }
 }
