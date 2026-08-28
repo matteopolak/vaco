@@ -3,16 +3,11 @@
 //! specification text, not from any existing decoder; see
 //! `provenance/vaco-codec-vp9.toml`).
 //!
-//! Only the tables a **key-frame-only** decoder needs are here: every
-//! inter-prediction-only table (`default_inter_mode_probs`,
-//! `default_interp_filter_probs`, the MV probability tables,
-//! `default_y_mode_probs`/`default_uv_mode_probs`/`default_partition_probs`
-//! — the *adaptive* forms used by `inter_frame_mode_info`/
-//! `intra_block_mode_info`, as opposed to the fixed `kf_*` forms
-//! `intra_frame_mode_info` uses — see §9.3.2's `partition`/`default_intra_mode`
-//! rules and §6.3's `compressed_header`, which gates every inter-only
-//! forward-update call behind `if (FrameIsIntra == 0)`) is out of scope for
-//! C-29/C-30 and is not transcribed here.
+//! Covers both the fixed `kf_*` tables `intra_frame_mode_info` (key frames)
+//! reads and the adaptive `default_*` tables `inter_frame_mode_info`/
+//! `intra_block_mode_info`/motion-vector prediction (inter frames, C-31)
+//! read and forward-update — see §9.3.2's `partition`/`default_intra_mode`
+//! rules for exactly which frames read which table.
 
 // -- Block sizes, RFC-numbered per §3's constants table and the ordering
 // -- `mode2txfm_map`'s own comments establish (`// DC`, `// V`, ... in index
@@ -65,6 +60,15 @@ pub const SEG_LVL_REF_FRAME: usize = 2;
 pub const SEG_LVL_SKIP: usize = 3;
 pub const SEG_LVL_MAX: usize = 4;
 pub const MAX_SEGMENTS: usize = 8;
+/// §3 — `MAX_LOOP_FILTER`, the ceiling every §8.8.1 `Clip3` clamps a
+/// derived filter level to.
+pub const MAX_LOOP_FILTER: i32 = 63;
+/// §3 — `MAX_MODE_LF_DELTAS`, the number of §8.8.1 `loop_filter_mode_deltas`
+/// entries (also `LvlLookup`'s mode dimension).
+pub const MAX_MODE_LF_DELTAS: usize = 2;
+/// §3 — `MAX_REF_FRAMES`, also `LvlLookup`'s and `loop_filter_ref_deltas`'
+/// ref dimension (`INTRA_FRAME`/`LAST_FRAME`/`GOLDEN_FRAME`/`ALTREF_FRAME`).
+pub const MAX_REF_FRAMES: usize = 4;
 
 /// §6.2.11 — `segmentation_feature_bits[SEG_LVL_MAX]`.
 pub const SEGMENTATION_FEATURE_BITS: [u32; SEG_LVL_MAX] = [8, 6, 2, 0];
@@ -279,7 +283,7 @@ pub const SS_SIZE_LOOKUP: [[[i32; 2]; 2]; 13] = [
 /// §8.5.1/§6.4.25 — `mode2txfm_map[MB_MODE_COUNT]`, restricted to the 10
 /// intra modes (the 4 inter-mode entries are never reached from a key
 /// frame's `is_inter == 0` path).
-pub const MODE2TXFM_MAP: [vaco_codec_dsp_idct::vp9::TxType; 10] = {
+pub const MODE2TXFM_MAP: [vaco_codec_dsp_idct::vp9::TxType; 14] = {
     use vaco_codec_dsp_idct::vp9::TxType::{AdstAdst, AdstDct, DctAdst, DctDct};
     [
         DctDct,  // DC
@@ -292,5 +296,151 @@ pub const MODE2TXFM_MAP: [vaco_codec_dsp_idct::vp9::TxType; 10] = {
         DctAdst, // D207
         AdstDct, // D63
         AdstAdst, // TM
+        DctDct,  // NEARESTMV
+        DctDct,  // NEARMV
+        DctDct,  // ZEROMV
+        DctDct,  // NEWMV
     ]
 };
+
+// -- §7.4.11/§7.4.12's inter-mode-info value names, and §3's inter-related
+// -- constants (MV prediction, compound reference selection, interpolation).
+
+/// §7.4.11 — `y_mode` values for inter blocks start at 10 (intra modes take
+/// 0..9); `inter_mode` (0..3, as read from the bitstream) plus `NEARESTMV`
+/// gives `y_mode`.
+pub const NEARESTMV: i32 = 10;
+pub const NEARMV: i32 = 11;
+pub const ZEROMV: i32 = 12;
+pub const NEWMV: i32 = 13;
+
+/// §7.4.12 — `ref_frame[0]`/`ref_frame[1]` value names. `NONE` and
+/// `INTRA_FRAME` share the numeric value 0 per the spec's own two
+/// (differently-named, never-confused-in-context) semantics tables.
+pub const INTRA_FRAME: i32 = 0;
+pub const NONE: i32 = 0;
+pub const LAST_FRAME: i32 = 1;
+pub const GOLDEN_FRAME: i32 = 2;
+pub const ALTREF_FRAME: i32 = 3;
+
+/// §7.3.12 — `reference_mode` value names.
+pub const SINGLE_REFERENCE: i32 = 0;
+pub const COMPOUND_REFERENCE: i32 = 1;
+pub const REFERENCE_MODE_SELECT: i32 = 2;
+
+/// §7.2.7 — `interpolation_filter`/`interp_filter` value names.
+pub const EIGHTTAP: i32 = 0;
+pub const EIGHTTAP_SMOOTH: i32 = 1;
+pub const EIGHTTAP_SHARP: i32 = 2;
+pub const BILINEAR: i32 = 3;
+pub const SWITCHABLE: i32 = 4;
+/// §6.2.7 — `literal_to_type[4]`.
+pub const LITERAL_TO_TYPE: [i32; 4] = [EIGHTTAP_SMOOTH, EIGHTTAP, EIGHTTAP_SHARP, BILINEAR];
+
+/// §7.4.13 — `mv_joint` value names.
+pub const MV_JOINT_ZERO: i32 = 0;
+pub const MV_JOINT_HNZVZ: i32 = 1;
+pub const MV_JOINT_HZVNZ: i32 = 2;
+pub const MV_JOINT_HNZVNZ: i32 = 3;
+/// §7.4.14 — `mv_class` value naming `MV_CLASS_0`; classes 1..10 are used
+/// only as plain integers (`mv_class` itself), never named individually.
+pub const MV_CLASS_0: i32 = 0;
+
+/// §3 — the `ModeContext`/`counter_to_context` enum `find_mv_refs` selects
+/// from (`INVALID_CASE` can never actually be selected by a conforming
+/// bitstream, but `counter_to_context` still names it for the entries the
+/// context-counter sum can never reach).
+pub const BOTH_ZERO: i32 = 0;
+pub const ZERO_PLUS_PREDICTED: i32 = 1;
+pub const BOTH_PREDICTED: i32 = 2;
+pub const NEW_PLUS_NON_INTRA: i32 = 3;
+pub const BOTH_NEW: i32 = 4;
+pub const INTRA_PLUS_NON_INTRA: i32 = 5;
+pub const BOTH_INTRA: i32 = 6;
+pub const INVALID_CASE: i32 = 9;
+
+/// §3's plain numeric constants this module's inter-prediction machinery
+/// needs (grouped here rather than scattered, since none of them are
+/// tables).
+pub const REFS_PER_FRAME: usize = 3;
+pub const NUM_REF_FRAMES: usize = 8;
+pub const MVREF_NEIGHBOURS: usize = 8;
+pub const MAX_MV_REF_CANDIDATES: usize = 2;
+pub const MV_BORDER: i32 = 128;
+pub const COMPANDED_MVREF_THRESH: i32 = 8;
+pub const BORDERINPIXELS: i32 = 160;
+pub const INTERP_EXTEND: i32 = 4;
+pub const MI_SIZE: i32 = 8;
+pub const REF_SCALE_SHIFT: u32 = 14;
+pub const SUBPEL_BITS: u32 = 4;
+pub const SUBPEL_SHIFTS: i32 = 16;
+pub const SUBPEL_MASK: i32 = 15;
+pub const CLASS0_SIZE: usize = 2;
+pub const MV_OFFSET_BITS: usize = 10;
+
+/// §9.3.1 — `inter_mode_tree[6]` (leaves are `y_mode - NEARESTMV`, i.e.
+/// `inter_mode` itself, matching the `read_tree` result this crate then
+/// adds `NEARESTMV` to).
+pub const INTER_MODE_TREE: [i8; 6] = [-(ZEROMV - NEARESTMV) as i8, 2, -0i8 /* NEARESTMV - NEARESTMV */, 4, -(NEARMV - NEARESTMV) as i8, -(NEWMV - NEARESTMV) as i8];
+/// §9.3.1 — `interp_filter_tree[4]`.
+pub const INTERP_FILTER_TREE: [i8; 4] = [-(EIGHTTAP as i8), 2, -(EIGHTTAP_SMOOTH as i8), -(EIGHTTAP_SHARP as i8)];
+/// §9.3.1 — `mv_joint_tree[6]`.
+pub const MV_JOINT_TREE: [i8; 6] = [-(MV_JOINT_ZERO as i8), 2, -(MV_JOINT_HNZVZ as i8), 4, -(MV_JOINT_HZVNZ as i8), -(MV_JOINT_HNZVNZ as i8)];
+/// §9.3.1 — `mv_class_tree[20]` (leaves are the plain `mv_class` integer 0..10).
+pub const MV_CLASS_TREE: [i8; 20] = [-0, 2, -1, 4, 6, 8, -2, -3, 10, 12, -4, -5, -6, 14, 16, 18, -7, -8, -9, -10];
+/// §9.3.1 — `mv_fr_tree[6]`, shared by `mv_class0_fr` and `mv_fr`.
+pub const MV_FR_TREE: [i8; 6] = [-0, 2, -1, 4, -2, -3];
+
+/// §6.5.1's `mv_ref_blocks[BLOCK_SIZES][MVREF_NEIGHBOURS][2]`: candidate MI
+/// offsets (row, col) `find_mv_refs` searches, in priority order, per block
+/// size.
+pub const MV_REF_BLOCKS: [[[i32; 2]; MVREF_NEIGHBOURS]; 13] = [
+    [[-1, 0], [0, -1], [-1, -1], [-2, 0], [0, -2], [-2, -1], [-1, -2], [-2, -2]],
+    [[-1, 0], [0, -1], [-1, -1], [-2, 0], [0, -2], [-2, -1], [-1, -2], [-2, -2]],
+    [[-1, 0], [0, -1], [-1, -1], [-2, 0], [0, -2], [-2, -1], [-1, -2], [-2, -2]],
+    [[-1, 0], [0, -1], [-1, -1], [-2, 0], [0, -2], [-2, -1], [-1, -2], [-2, -2]],
+    [[0, -1], [-1, 0], [1, -1], [-1, -1], [0, -2], [-2, 0], [-2, -1], [-1, -2]],
+    [[-1, 0], [0, -1], [-1, 1], [-1, -1], [-2, 0], [0, -2], [-1, -2], [-2, -1]],
+    [[-1, 0], [0, -1], [-1, 1], [1, -1], [-1, -1], [-3, 0], [0, -3], [-3, -3]],
+    [[0, -1], [-1, 0], [2, -1], [-1, -1], [-1, 1], [0, -3], [-3, 0], [-3, -3]],
+    [[-1, 0], [0, -1], [-1, 2], [-1, -1], [1, -1], [-3, 0], [0, -3], [-3, -3]],
+    [[-1, 1], [1, -1], [-1, 2], [2, -1], [-1, -1], [-3, 0], [0, -3], [-3, -3]],
+    [[0, -1], [-1, 0], [4, -1], [-1, 2], [-1, -1], [0, -3], [-3, 0], [2, -1]],
+    [[-1, 0], [0, -1], [-1, 4], [2, -1], [-1, -1], [-3, 0], [0, -3], [-1, 2]],
+    [[-1, 3], [3, -1], [-1, 4], [4, -1], [-1, -1], [-1, 0], [0, -1], [-1, 6]],
+];
+
+/// §6.5.1's `mode_2_counter[MB_MODE_COUNT]`, indexed by a neighbour's
+/// `y_mode`.
+pub const MODE_2_COUNTER: [i32; 14] = [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 0, 0, 3, 1];
+/// §6.5.1's `counter_to_context[19]`, indexed by the summed `mode_2_counter`
+/// contribution of up to two neighbours (range 0..18).
+pub const COUNTER_TO_CONTEXT: [i32; 19] =
+    [BOTH_PREDICTED, NEW_PLUS_NON_INTRA, BOTH_NEW, ZERO_PLUS_PREDICTED, NEW_PLUS_NON_INTRA, INVALID_CASE, BOTH_ZERO, INVALID_CASE, INVALID_CASE, INTRA_PLUS_NON_INTRA, INTRA_PLUS_NON_INTRA, INVALID_CASE, INTRA_PLUS_NON_INTRA, INVALID_CASE, INVALID_CASE, INVALID_CASE, INVALID_CASE, INVALID_CASE, BOTH_INTRA];
+/// §6.5.11's `idx_n_column_to_subblock[4][2]`.
+pub const IDX_N_COLUMN_TO_SUBBLOCK: [[usize; 2]; 4] = [[1, 2], [1, 3], [3, 2], [3, 3]];
+
+/// §8.5.2.4's `subpel_filters[4][16][8]`, indexed `[interp_filter][phase][tap]`.
+pub const SUBPEL_FILTERS: [[[i32; 8]; 16]; 4] = include!("tables/subpel_filters.in");
+
+/// §10.5 — the adaptive (forward-updated) tables `intra_block_mode_info`/
+/// `inter_frame_mode_info`/`inter_block_mode_info`/motion-vector prediction
+/// read, as opposed to the fixed `kf_*` tables above.
+pub const DEFAULT_PARTITION_PROBS: [[u8; 3]; 16] = include!("tables/default_partition_probs.in");
+pub const DEFAULT_Y_MODE_PROBS: [[u8; 9]; 4] = include!("tables/default_y_mode_probs.in");
+pub const DEFAULT_UV_MODE_PROBS: [[u8; 9]; 10] = include!("tables/default_uv_mode_probs.in");
+pub const DEFAULT_IS_INTER_PROB: [u8; 4] = include!("tables/default_is_inter_prob.in");
+pub const DEFAULT_COMP_MODE_PROB: [u8; 5] = include!("tables/default_comp_mode_prob.in");
+pub const DEFAULT_COMP_REF_PROB: [u8; 5] = include!("tables/default_comp_ref_prob.in");
+pub const DEFAULT_SINGLE_REF_PROB: [[u8; 2]; 5] = include!("tables/default_single_ref_prob.in");
+pub const DEFAULT_INTER_MODE_PROBS: [[u8; 3]; 7] = include!("tables/default_inter_mode_probs.in");
+pub const DEFAULT_INTERP_FILTER_PROBS: [[u8; 2]; 4] = include!("tables/default_interp_filter_probs.in");
+pub const DEFAULT_MV_JOINT_PROBS: [u8; 3] = include!("tables/default_mv_joint_probs.in");
+pub const DEFAULT_MV_SIGN_PROB: [u8; 2] = include!("tables/default_mv_sign_prob.in");
+pub const DEFAULT_MV_CLASS_PROBS: [[u8; 10]; 2] = include!("tables/default_mv_class_probs.in");
+pub const DEFAULT_MV_CLASS0_BIT_PROB: [u8; 2] = include!("tables/default_mv_class0_bit_prob.in");
+pub const DEFAULT_MV_BITS_PROB: [[u8; MV_OFFSET_BITS]; 2] = include!("tables/default_mv_bits_prob.in");
+pub const DEFAULT_MV_CLASS0_FR_PROBS: [[[u8; 3]; CLASS0_SIZE]; 2] = include!("tables/default_mv_class0_fr_probs.in");
+pub const DEFAULT_MV_FR_PROBS: [[u8; 3]; 2] = include!("tables/default_mv_fr_probs.in");
+pub const DEFAULT_MV_CLASS0_HP_PROB: [u8; 2] = include!("tables/default_mv_class0_hp_prob.in");
+pub const DEFAULT_MV_HP_PROB: [u8; 2] = include!("tables/default_mv_hp_prob.in");
