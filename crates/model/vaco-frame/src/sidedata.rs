@@ -87,6 +87,8 @@ pub enum FrameSideDataKind {
     Log,
     /// Per-block motion vectors (gap 14).
     MotionVectors,
+    /// Pulldown extra-field-period count (gap 29).
+    Pulldown,
 }
 
 impl FrameSideData {
@@ -102,6 +104,7 @@ impl FrameSideData {
             Self::Metadata(_) => FrameSideDataKind::Metadata,
             Self::Log(_) => FrameSideDataKind::Log,
             Self::MotionVectors(_) => FrameSideDataKind::MotionVectors,
+            Self::Pulldown(_) => FrameSideDataKind::Pulldown,
         }
     }
 }
@@ -234,6 +237,31 @@ impl Frame {
         }
         self.set_side_data(FrameSideData::Cropping(crop));
         Ok(())
+    }
+
+    /// How many extra field periods this frame's presentation should be
+    /// held for (H.262 `repeat_first_field`/`top_field_first`, `ffmpeg`'s
+    /// `AVFrame::repeat_pict` concept — gap 29). `0` if the frame carries
+    /// no [`FrameSideData::Pulldown`] entry, which is the normal case and
+    /// not distinguished from an explicit `0` — neither means anything
+    /// should repeat.
+    #[must_use]
+    pub fn repeat_pict(&self) -> u8 {
+        match self.side_data(FrameSideDataKind::Pulldown) {
+            Some(FrameSideData::Pulldown(n)) => *n,
+            _ => 0,
+        }
+    }
+
+    /// Attach a pulldown repeat count. `0` removes any existing entry
+    /// rather than attaching a no-op one, so [`Frame::repeat_pict`] and
+    /// "does this frame carry a `Pulldown` entry at all" always agree.
+    pub fn set_repeat_pict(&mut self, extra_field_periods: u8) {
+        if extra_field_periods == 0 {
+            self.remove_side_data(FrameSideDataKind::Pulldown);
+        } else {
+            self.set_side_data(FrameSideData::Pulldown(extra_field_periods));
+        }
     }
 
     /// This frame's metadata entries, in insertion order, or `&[]` if it

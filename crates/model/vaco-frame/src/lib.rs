@@ -179,6 +179,25 @@ pub enum FrameSideData {
     /// exists. See [`MotionVector`]'s own doc for the field shape and what
     /// it is (and is not) measured against.
     MotionVectors(Vec<MotionVector>),
+    /// How many *extra* field periods this frame's presentation should be
+    /// held for, beyond the one it normally gets — MPEG-2's
+    /// `repeat_first_field`/`top_field_first` combination (H.262 §6.3.10),
+    /// the `AVFrame::repeat_pict` concept `ffmpeg`'s own `repeatfields`
+    /// filter reads (`vaco-filter-deinterlace`'s own `repeatfields.rs`
+    /// documents needing exactly this, independently of any decoder —
+    /// interface gap 29, `planning/INTERFACE-GAPS.md`).
+    ///
+    /// Always in units of one field period, always one of `0` (no repeat,
+    /// the overwhelmingly common case — this variant is normally absent
+    /// rather than present with `0`, see [`Frame::repeat_pict`]), `1`
+    /// (one repeated field), `2` (one repeated frame) or `4` (two repeated
+    /// frames) under a conforming bitstream: the codec that computes this
+    /// must combine sequence-level and picture-level flags itself (H.262's
+    /// combination rule depends on `progressive_sequence`, a
+    /// sequence-level flag, as well as two picture-level ones), so a
+    /// consumer reads one already-resolved number rather than re-deriving
+    /// the combination.
+    Pulldown(u8),
     // ... generated from the side-data table
 }
 

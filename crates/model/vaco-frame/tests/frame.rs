@@ -355,6 +355,28 @@ fn side_data_set_get_replace_remove() {
 }
 
 #[test]
+fn repeat_pict_defaults_to_zero_and_set_zero_removes_the_entry() {
+    let mut b = budget();
+    let mut frame = Frame::alloc_video(&mut b, PixFmt::Rgb24, 8, 8).unwrap();
+    assert_eq!(frame.repeat_pict(), 0);
+    assert!(frame.side_data(FrameSideDataKind::Pulldown).is_none());
+
+    frame.set_repeat_pict(2);
+    assert_eq!(frame.repeat_pict(), 2);
+    assert!(matches!(
+        frame.side_data(FrameSideDataKind::Pulldown),
+        Some(FrameSideData::Pulldown(2))
+    ));
+
+    // 0 removes the entry rather than attaching a no-op `Pulldown(0)` --
+    // `repeat_pict() == 0` and "no entry" stay indistinguishable, matching
+    // the getter's own documented contract.
+    frame.set_repeat_pict(0);
+    assert_eq!(frame.repeat_pict(), 0);
+    assert!(frame.side_data(FrameSideDataKind::Pulldown).is_none());
+}
+
+#[test]
 fn metadata_is_empty_by_default_and_costs_no_side_data_entry() {
     let mut b = budget();
     let frame = Frame::alloc_video(&mut b, PixFmt::Rgb24, 8, 8).unwrap();
