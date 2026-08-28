@@ -497,9 +497,18 @@ pub const CODED_BLOCK_PATTERN: &[(&str, u8)] = &[
     ("000000110", 47),
     ("000000101", 55),
     ("000000100", 59),
-    ("0000000011", 27),
-    ("0000000010", 39),
-    ("0000000001", 0),
+    // Table B.9's last three rows are 9 bits ("0000 0001 1", "0000 0001 0",
+    // "0000 0000 1"), one bit shorter than the previous four despite the
+    // visual column alignment in the spec's own printed table — a
+    // hand-transcription trap this row's own length briefly fell into
+    // (10 bits, one zero too many, silently valid VLC-wise since it just
+    // shifted three codes one bit later without colliding with anything,
+    // so the crate's own prefix-free/value-coverage tests never caught
+    // it). Confirmed against a real encoder's bitstream: the 9-bit form
+    // is what a real bitstream actually contains at this code.
+    ("000000011", 27),
+    ("000000010", 39),
+    ("000000001", 0),
 ];
 
 /// Table B.10 — `motion_code`.
@@ -725,6 +734,24 @@ mod tests {
         let mut vals: Vec<u8> = CODED_BLOCK_PATTERN.iter().map(|(_, v)| *v).collect();
         vals.sort_unstable();
         assert_eq!(vals, (0..64).collect::<Vec<u8>>());
+    }
+
+    #[test]
+    fn coded_block_pattern_shortest_codes_are_exactly_9_bits() {
+        // Regression for a real transcription bug: Table B.9's last three
+        // rows (cbp 27, 39, 0) are 9 bits, one bit shorter than the four
+        // rows just above them in the spec's own printed layout — easy to
+        // miscount by one zero since prefix-freedom and 64-value coverage
+        // both still hold with an extra leading zero (it just shifts
+        // three codes one bit later without colliding with anything), so
+        // neither check above would have caught it. A real MPEG-2
+        // bitstream using cbp 39 at this exact 9-bit code was what
+        // actually exposed the bug: the reader landed one bit early for
+        // every macroblock after it.
+        for (bits, cbp) in [("000000011", 27u8), ("000000010", 39), ("000000001", 0)] {
+            let found = CODED_BLOCK_PATTERN.iter().find(|(_, v)| *v == cbp);
+            assert_eq!(found.map(|(b, _)| *b), Some(bits));
+        }
     }
 
     #[test]

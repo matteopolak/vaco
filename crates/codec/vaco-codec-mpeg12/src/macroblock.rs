@@ -55,7 +55,24 @@ pub(crate) struct ActivePicture {
     pub bwd_pred: MotionPredictor,
     pub prev_mb_forward: bool,
     pub prev_mb_backward: bool,
+    /// This picture's coding mode is not implemented at all (a field
+    /// picture, dual-prime, a D-picture): checked once at `begin_picture`
+    /// and, since dual-prime can only be discovered once macroblock data
+    /// is actually read, escalated from inside `decode_coded_macroblock`
+    /// too. Distinct from [`Self::slice_ok`]: this means the picture's
+    /// *coding mode* is unimplemented, not that one slice's bitstream
+    /// desynced, so it is checked once per picture (at the top of
+    /// `decode_slice`) rather than reset per slice.
     pub supported: bool,
+    /// This slice's own bitstream produced a VLC code no table row
+    /// matches — a genuine local decode failure (corrupt or adversarial
+    /// input, or a bug in this crate's own bit consumption), not an
+    /// unimplemented feature. Reset to `true` at the start of every
+    /// `decode_slice` call; `decode_slice`'s own loop stops as soon as it
+    /// goes `false`, but a later, independent slice in the same picture
+    /// gets a fresh `true` and is decoded normally — unlike [`Self::supported`],
+    /// one bad slice must not cost the rest of the picture.
+    pub slice_ok: bool,
     pub previous: Option<RefPicture>,
     pub recent: Option<RefPicture>,
     /// No `sequence_extension()` seen for the current sequence — an
@@ -120,6 +137,7 @@ pub(crate) fn decode_slice(
     ap.dc_pred = [tables::intra_dc_reset(ap.pce.intra_dc_precision); 3];
     ap.prev_mb_forward = false;
     ap.prev_mb_backward = false;
+    ap.slice_ok = true;
 
     let total_mbs = i64::from(seq.mb_width) * i64::from(seq.mb_height);
     loop {
@@ -151,6 +169,9 @@ pub(crate) fn decode_slice(
             return;
         }
         decode_coded_macroblock(&mut r, idct, ap, seq, mb_addr as u32);
+        if !ap.slice_ok {
+            return;
+        }
     }
 }
 
@@ -195,7 +216,7 @@ fn decode_coded_macroblock(
     };
     let Some(mbt) = vlc::decode(r, mb_type_table.iter(), |row| (row.bits, 0), MAX_MB_TYPE_LEN)
     else {
-        ap.supported = false;
+        ap.slice_ok = false;
         return;
     };
     let mbt = *mbt;
@@ -283,7 +304,7 @@ fn decode_coded_macroblock(
             |row| (row.0, 0),
             MAX_CBP_LEN,
         ) else {
-            ap.supported = false;
+            ap.slice_ok = false;
             return;
         };
         for (i, slot) in cbp.iter_mut().enumerate() {
@@ -650,7 +671,7 @@ fn reconstruct_macroblock(
                 let Some(&(_, size)) =
                     vlc::decode(r, size_table, |row| (row.0, 0), MAX_DC_SIZE_LEN)
                 else {
-                    ap.supported = false;
+                    ap.slice_ok = false;
                     return;
                 };
                 let diff = if size == 0 {
@@ -688,7 +709,7 @@ fn reconstruct_macroblock(
                 CoeffTable::Zero
             };
             let Ok(qfs) = block::decode_coefficients(r, table, intra_dc, ap.mpeg1) else {
-                ap.supported = false;
+                ap.slice_ok = false;
                 return;
             };
             let qf = block::inverse_scan(&qfs, alternate_scan);

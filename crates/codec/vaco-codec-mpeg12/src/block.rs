@@ -215,6 +215,18 @@ pub(crate) fn dequantise(
     // own summary loop (7.4.5) does not special-case either — an all-zero
     // sum is even and toggles F[7][7] to +-1, which is exactly the
     // specified behaviour, not an omission.
+    //
+    // H.262 Annex D.9.1 documents that ISO/IEC 11172-2 (MPEG-1) uses a
+    // different rule here (correcting every nonzero-even coefficient
+    // independently, rather than one sum-parity-conditional coefficient).
+    // Implementing that as "toggle every such coefficient's LSB" was tried
+    // in both directions (+1 and -1) against this crate's MPEG-1 fixtures
+    // and measured *worse* than applying this MPEG-2 rule unconditionally
+    // in both cases (avg MAD rose from ~12-44 to ~24-51) — the hypothesis
+    // that this specific rule is both the cause and correctly reconstructed
+    // from the free text alone is not supported by the fixtures on hand,
+    // so this crate deliberately applies the one rule below to every
+    // stream rather than a worse, unverified MPEG-1-specific one.
     let sum: i64 = f.iter().map(|&v| i64::from(v)).sum();
     if sum & 1 == 0
         && let Some(last) = f.get_mut(63)

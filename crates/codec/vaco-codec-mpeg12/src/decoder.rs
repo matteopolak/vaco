@@ -146,6 +146,7 @@ impl Mpeg12Decoder {
             prev_mb_forward: false,
             prev_mb_backward: false,
             supported,
+            slice_ok: true,
             previous: self.previous.clone(),
             recent: self.recent.clone(),
             mpeg1: seq.ext.is_none(),
