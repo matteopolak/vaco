@@ -49,10 +49,10 @@ const TAG_SAMPLES_PER_PIXEL: u16 = 277;
 /// Bytes one value of an IFD entry's `type` field occupies, TIFF 6.0 §2.
 const fn type_size(field_type: u16) -> Option<u32> {
     Some(match field_type {
-        1 | 2 | 6 | 7 => 1,             // BYTE, ASCII, SBYTE, UNDEFINED
-        3 | 8 => 2,                     // SHORT, SSHORT
-        4 | 9 | 11 => 4,                // LONG, SLONG, FLOAT
-        5 | 10 | 12 => 8,               // RATIONAL, SRATIONAL, DOUBLE
+        1 | 2 | 6 | 7 => 1, // BYTE, ASCII, SBYTE, UNDEFINED
+        3 | 8 => 2,         // SHORT, SSHORT
+        4 | 9 | 11 => 4,    // LONG, SLONG, FLOAT
+        5 | 10 | 12 => 8,   // RATIONAL, SRATIONAL, DOUBLE
         _ => return None,
     })
 }
@@ -71,7 +71,11 @@ struct Tags {
 /// The [`PixFmt`] a sample count, bit depth and byte order denote. See the
 /// module doc for what is measured.
 #[must_use]
-pub fn pixel_format(samples_per_pixel: u16, bits_per_sample: u16, little_endian: bool) -> Option<PixFmt> {
+pub fn pixel_format(
+    samples_per_pixel: u16,
+    bits_per_sample: u16,
+    little_endian: bool,
+) -> Option<PixFmt> {
     let name = match (samples_per_pixel, bits_per_sample, little_endian) {
         (1, 8, _) => "gray".to_string(),
         (1, 16, le) => format!("gray16{}", if le { "le" } else { "be" }),
@@ -84,7 +88,12 @@ pub fn pixel_format(samples_per_pixel: u16, bits_per_sample: u16, little_endian:
 
 /// One IFD entry's decoded value, when it is a single small integer — every
 /// tag this crate reads is exactly that shape.
-fn entry_value(r: &mut ByteReader<'_>, little_endian: bool, field_type: u16, count: u32) -> Option<u32> {
+fn entry_value(
+    r: &mut ByteReader<'_>,
+    little_endian: bool,
+    field_type: u16,
+    count: u32,
+) -> Option<u32> {
     let size = type_size(field_type)?;
     let total = size.checked_mul(count)?;
     // Inline (fits the 4-byte value/offset field) or an offset elsewhere in

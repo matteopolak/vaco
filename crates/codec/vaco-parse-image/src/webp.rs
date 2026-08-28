@@ -57,9 +57,7 @@ fn chunks(mut data: &[u8]) -> impl Iterator<Item = Chunk<'_>> {
         }
         // Chunks are padded to an even length; the pad byte is not part of
         // any chunk's payload.
-        let consumed = 8usize
-            .checked_add(size)?
-            .checked_add(size % 2)?;
+        let consumed = 8usize.checked_add(size)?.checked_add(size % 2)?;
         data = data.get(consumed..).unwrap_or(&[]);
         Some(Chunk { fourcc, payload })
     })
