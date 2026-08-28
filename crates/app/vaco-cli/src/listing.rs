@@ -256,24 +256,27 @@ fn write_format_row(
     writeln!(w, "{line}")
 }
 
-/// `-decoders`/`-encoders`: the eight-line legend plus a `------` rule.
+/// `-decoders`/`-encoders`: the eight-line legend, a `------` rule, then one
+/// row per registered decoder/encoder.
 ///
-/// Measured (`ffmpeg -decoders`, `LC_ALL=C`): the legend is identical for
-/// both commands, only the heading word changes. This build has zero
-/// decoders and zero encoders (D5 — v0.1 is parse-only), so the table under
-/// the rule is always empty; the header is still worth getting exactly right
-/// because a build that later ships one decoder must not need this function
-/// touched.
+/// Measured (`ffmpeg -decoders`/`-encoders`, `LC_ALL=C`): the legend is
+/// identical for both commands, only the heading word changes, and the row
+/// shape is the same `" {flags} " + pad_field(name, 20) + long_name` family
+/// `-codecs` uses.
+///
+/// This printed the legend and zero rows from D5 (v0.1 was
+/// parse-only) until `EncoderDesc` and `DecoderDesc::make` existed to
+/// register something behind. `Caps::FRAME_THREADS`/`SLICE_THREADS`/
+/// `EXPERIMENTAL` are real data this build tracks per implementation, so
+/// those three flag columns are drawn from them; `draw_horiz_band` and
+/// "direct rendering method 1" are internal facts about the *reference's*
+/// decoder objects that nothing in this crate's model corresponds to, so
+/// those two columns are always `.` here rather than guessed — the same
+/// honesty `-codecs`' own doc comment already applies to the columns it
+/// draws from data this build does not have.
 fn write_codec_impl_listing<W: Write>(w: &mut W, which: &str) -> std::io::Result<()> {
-    writeln!(
-        w,
-        "{}:",
-        if which == "encoders" {
-            "Encoders"
-        } else {
-            "Decoders"
-        }
-    )?;
+    let is_encoder = which == "encoders";
+    writeln!(w, "{}:", if is_encoder { "Encoders" } else { "Decoders" })?;
     writeln!(w, " V..... = Video")?;
     writeln!(w, " A..... = Audio")?;
     writeln!(w, " S..... = Subtitle")?;
@@ -283,12 +286,55 @@ fn write_codec_impl_listing<W: Write>(w: &mut W, which: &str) -> std::io::Result
     writeln!(w, " ....B. = Supports draw_horiz_band")?;
     writeln!(w, " .....D = Supports direct rendering method 1")?;
     writeln!(w, " ------")?;
-    // Nothing to list: `vaco_registry::decoders()`/component(Kind::Encoder)
-    // are always empty in this build. When a decoder lands, its row is
-    // `" {media}....." ` + the same `max(20, len)+1` name field as `-codecs`,
-    // per the shared family of AVOption-adjacent listing tables — but that is
-    // unverified against a real row, since there is nothing to check it
-    // against yet.
+
+    let media_letter = |m: vaco_core::MediaType| match m {
+        vaco_core::MediaType::Video => 'V',
+        vaco_core::MediaType::Audio => 'A',
+        vaco_core::MediaType::Subtitle => 'S',
+        vaco_core::MediaType::Data => 'D',
+        vaco_core::MediaType::Attachment => 'T',
+    };
+    let row = |name: &str, long_name: &str, media: vaco_core::MediaType, caps: vaco_codec_core::Caps| {
+        let mut flags = String::with_capacity(6);
+        flags.push(media_letter(media));
+        flags.push(if caps.contains(vaco_codec_core::Caps::FRAME_THREADS) {
+            'F'
+        } else {
+            '.'
+        });
+        flags.push(if caps.contains(vaco_codec_core::Caps::SLICE_THREADS) {
+            'S'
+        } else {
+            '.'
+        });
+        flags.push(if caps.contains(vaco_codec_core::Caps::EXPERIMENTAL) {
+            'X'
+        } else {
+            '.'
+        });
+        flags.push('.'); // draw_horiz_band: not a concept this build models.
+        flags.push('.'); // direct rendering method 1: likewise.
+        let mut line = format!(" {flags} ");
+        pad_field(&mut line, name, 20);
+        line.push_str(long_name);
+        line
+    };
+
+    if is_encoder {
+        let mut rows: Vec<&'static vaco_codec_core::EncoderDesc> =
+            vaco_registry::encoders().to_vec();
+        rows.sort_unstable_by_key(|e| e.name);
+        for e in rows {
+            writeln!(w, "{}", row(e.name, e.long_name, e.media_type, e.caps))?;
+        }
+    } else {
+        let mut rows: Vec<&'static vaco_codec_core::DecoderDesc> =
+            vaco_registry::decoders().to_vec();
+        rows.sort_unstable_by_key(|d| d.name);
+        for d in rows {
+            writeln!(w, "{}", row(d.name, d.long_name, d.media_type, d.caps))?;
+        }
+    }
     Ok(())
 }
 
@@ -1665,12 +1711,24 @@ mod tests {
     }
 
     #[test]
-    fn decoders_and_encoders_headers_with_zero_rows() {
+    fn decoders_and_encoders_list_every_registered_implementation() {
+        // This build's first decoders and encoders landed here — asserting
+        // the table stayed empty past the legend would be the exact "pin the
+        // absence of something the project is building" trap the comment below
+        // names for `-filters`, so this asserts the row count instead, the way
+        // `filters_lists_every_registered_filter` does.
         let d = text("decoders");
         assert!(d.starts_with("Decoders:\n"), "{d}");
-        assert!(d.ends_with(" ------\n"), "{d}");
+        let d_rows: Vec<&str> = d.lines().skip(10).collect();
+        assert_eq!(d_rows.len(), vaco_registry::decoders().len(), "one row each");
+        for r in &d_rows {
+            assert!(r.starts_with(' '), "{r:?}");
+        }
+
         let e = text("encoders");
         assert!(e.starts_with("Encoders:\n"), "{e}");
+        let e_rows: Vec<&str> = e.lines().skip(10).collect();
+        assert_eq!(e_rows.len(), vaco_registry::encoders().len(), "one row each");
     }
 
     /// Both of these used to assert the listing *stopped* at its header.

@@ -31,8 +31,15 @@ container wave landed: `exec::muxer_for` kept returning a format name, but
 what that name was — so `vaco -i in.mp4 -c copy -f matroska out.mkv` exited 0,
 printed a plausible stream mapping and summary line, and never created
 `out.mkv` at all. Silent success, found by trying the obvious command while a
-conformance run was fresh (`planning/CONFORMANCE-FINDINGS.md` #6). There are
-still no decoders and no encoders.
+conformance run was fresh (`planning/CONFORMANCE-FINDINGS.md` #6).
+
+Decoders and encoders reach the CLI now too (#652/C-13): `check_codecs`
+resolves a named `-c:v`/`-c:a` through `vaco_registry::encoder_by_name`
+instead of rejecting everything but `"copy"`, and `run_pipeline` builds a
+real decode-then-encode leg (`vaco_registry::decoder_for` +
+`vaco-sched::spec::PipelineSpec::add_decoder`/`add_encoder`) for a resolved
+name rather than always taking the streamcopy path. See "`-c copy` is no
+longer the only encoder path" below.
 
 The registry now has 63 muxers, and both halves of the CLI reach all of them:
 
@@ -73,11 +80,13 @@ The registry now has 63 muxers, and both halves of the CLI reach all of them:
   precisely, without hardcoding a list that will itself go stale, is a small
   follow-up.)
 
-**There are no encoders**, so an output stream must still carry `-c copy`.
-Without one the run takes the reference's *own* path for a build missing an
-encoder — `Automatic encoder selection failed Default encoder for format null
-(codec none) is probably disabled. Please choose an encoder manually.`, exit 8 —
-which is a message the reference already emits for exactly this situation, and
+**An output stream needs `-c copy` or a name the registry resolves** —
+`vaco_registry::encoder_by_name`, C-13. Naming nothing at all (`-c` omitted)
+still takes the reference's *own* path for a build with no default codec for
+the format — `Automatic encoder selection failed Default encoder for format
+null (codec none) is probably disabled. Please choose an encoder manually.`,
+exit 8 — which is a message the reference already emits for exactly this
+situation, and
 therefore the right one to reproduce rather than invent. (The run-together
 "failed Default" is the reference's own missing separator; reproduced under
 D17.)
@@ -397,9 +406,19 @@ exact measurements.
   whatever descriptor comes back through `exec::open_output`. A new
   `vaco-mux-*` crate registering itself is the whole of what is needed for
   `vaco -f <its name>` to start writing real files.
-* **`-c copy` is still the only encoder path.** `check_codecs` rejects anything
-  else; adding a real encoder means adding a case there and to
-  `vaco-sched`'s `KindSpec::Encode`, not touching `exec::muxer_for`.
+* **`-c copy` is no longer the only encoder path (#652/C-13).** `check_codecs`
+  resolves a named codec through `vaco_registry::encoder_by_name` and returns
+  a `StreamCodec::Copy`/`Encode(name)` choice per stream; `run_pipeline`
+  branches on it, wiring `spec.add_decoder`/`add_encoder` (already-existing,
+  already-tested `vaco-sched` API — nothing there needed to change) for a
+  resolved name. `encoder_by_name`'s message on a miss is still the reference's
+  own `Unknown encoder '{name}'`, just reached only after the lookup fails
+  rather than unconditionally. Not covered by this pass: automatic codec
+  selection when `-c` is omitted (still the "Automatic encoder selection
+  failed" path above, unconditionally), and any pixel-format/rate conversion
+  between a decoder's output and an encoder's input — a stream whose decoded
+  format the target encoder does not accept fails with that encoder's own
+  `Unsupported` message rather than being converted.
 * **Unreachable CLI options, and why**: `-movflags`, any other `-f`-specific
   flag, `-metadata`, chapters and attachments all need somewhere to land that
   does not exist yet. See "Reported upstream" below — both gaps are in

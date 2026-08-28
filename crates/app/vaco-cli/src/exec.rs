@@ -110,6 +110,26 @@ use crate::select::{self, InputStreams, StreamPick};
 pub struct OutStream {
     pub source: StreamPick,
     pub media: Option<MediaType>,
+    /// What `-c`/`-c:v`/`-c:a` resolved to for this stream. [`check_codecs`]
+    /// is where this is decided; [`run_pipeline`] is where it is acted on.
+    pub codec: StreamCodec,
+}
+
+/// What `-c` resolved to for one output stream: pass packets
+/// through unchanged, or decode then encode through a specific registered
+/// encoder. `Copy` is the field's default only in the sense that
+/// [`resolve_output`] has to put *something* in [`OutStream`] before
+/// [`check_codecs`] has run; every stream this crate actually builds a
+/// pipeline leg for has had this decided by then.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamCodec {
+    Copy,
+    /// The registered encoder's own name, e.g. `"qoi"` — not necessarily
+    /// byte-identical to what `-c:v` was given, the same way
+    /// `vaco_registry::decoder_by_name` normalises nothing today but a future
+    /// alias table would read off the descriptor rather than off the
+    /// argument.
+    Encode(&'static str),
 }
 
 /// What one output file resolved to.
@@ -226,7 +246,7 @@ pub fn resolve_output(
     let format = muxer_for(out)?;
     let selection = select::resolve(files, &out.maps, out.blocked, &|_| true)?;
 
-    let streams: Vec<OutStream> = selection
+    let mut streams: Vec<OutStream> = selection
         .picks
         .iter()
         .map(|p| OutStream {
@@ -235,6 +255,9 @@ pub fn resolve_output(
                 .get(p.file as usize)
                 .and_then(|f| f.streams.iter().find(|s| s.index == p.stream))
                 .and_then(|s| s.media_type),
+            // Placeholder until `check_codecs` below decides it; every branch
+            // that returns `streams` to a caller has run that check first.
+            codec: StreamCodec::Copy,
         })
         .collect();
 
@@ -267,7 +290,10 @@ pub fn resolve_output(
         ));
     }
 
-    check_codecs(cli, out, &streams)?;
+    let codecs = check_codecs(cli, out, &streams)?;
+    for (s, c) in streams.iter_mut().zip(codecs) {
+        s.codec = c;
+    }
 
     let metadata = metadata_of(cli, out, &streams)?;
 
@@ -496,8 +522,24 @@ fn no_muxer(out: &OutputSpec, name: &str) -> Diagnostic {
     )
 }
 
-/// Every output stream must be `-c copy`, because there are no encoders.
-fn check_codecs(cli: &Cli, out: &OutputSpec, streams: &[OutStream]) -> Result<(), Diagnostic> {
+/// Resolve `-c`/`-c:v`/`-c:a` for every output stream: `copy`, a name the
+/// registry resolves to a real encoder, or a diagnosis.
+///
+/// This used to accept only the literal string `"copy"` — every
+/// other name was `Unknown encoder '{name}'`, correct behaviour when there
+/// were no encoders and wrong the moment one landed. `vaco_registry::
+/// encoder_by_name` is what a name is checked against now, so that message is
+/// still exactly right, it is just reached only *after* a real lookup fails
+/// rather than unconditionally. Measured against the reference (`ffmpeg -c:v
+/// mjpegb`, a codec it can decode but not encode): a codec this build merely
+/// has no *encoder* for gets the identical "Unknown encoder" message and exit
+/// code as a name that names no codec at all — there is no separate "known
+/// but unbuilt" message to reproduce.
+fn check_codecs(
+    cli: &Cli,
+    out: &OutputSpec,
+    streams: &[OutStream],
+) -> Result<Vec<StreamCodec>, Diagnostic> {
     // `-c:v copy` is a per-*output*-stream option, so the specifier is matched
     // against the output's own stream list, not the input's. Building that view
     // is what makes `-c:a:1 flac -c:a copy` resolve the way the reference does
@@ -515,21 +557,25 @@ fn check_codecs(cli: &Cli, out: &OutputSpec, streams: &[OutStream]) -> Result<()
     let ctx = MatchCtx::streams(&view);
     let group = cli.output_group(out.index);
 
+    let mut chosen_codecs = Vec::new();
     for (i, s) in streams.iter().enumerate() {
         let chosen = group
             .and_then(|g| g.stream_option("c", &ctx, i as u32).ok().flatten())
             .and_then(|o| o.value.as_ref())
             .and_then(|v| v.to_str());
         match chosen {
-            Some("copy") => {}
-            Some(name) => {
-                return Err(encoder_error(
-                    out,
-                    s,
-                    i,
-                    &format!("Unknown encoder '{name}'"),
-                ));
-            }
+            Some("copy") => chosen_codecs.push(StreamCodec::Copy),
+            Some(name) => match vaco_registry::encoder_by_name(name) {
+                Some(desc) => chosen_codecs.push(StreamCodec::Encode(desc.name)),
+                None => {
+                    return Err(encoder_error(
+                        out,
+                        s,
+                        i,
+                        &format!("Unknown encoder '{name}'"),
+                    ));
+                }
+            },
             None => {
                 return Err(encoder_error(
                     out,
@@ -543,7 +589,7 @@ fn check_codecs(cli: &Cli, out: &OutputSpec, streams: &[OutStream]) -> Result<()
             }
         }
     }
-    Ok(())
+    Ok(chosen_codecs)
 }
 
 fn encoder_error(out: &OutputSpec, s: &OutStream, i: usize, detail: &str) -> Diagnostic {
@@ -586,13 +632,18 @@ pub fn run_pipeline(
         return Ok(RunSpec::default());
     }
 
-    let params: Vec<Vec<(u32, vaco_codec_core::CodecParameters)>> = inputs
+    // The time base rides alongside the params rather than in them —
+    // `CodecParameters` has no such field, `vaco_format_core::Stream` does —
+    // and a transcoded stream needs its input's time base: an
+    // encoder's `add_encoder` takes one explicitly, and there is no other
+    // demuxer left to ask once `f.demuxer` moves into `spec` below.
+    let params: Vec<Vec<(u32, vaco_codec_core::CodecParameters, vaco_core::Rational)>> = inputs
         .iter()
         .map(|f| {
             f.demuxer
                 .streams()
                 .iter()
-                .map(|s| (s.index, s.params.clone()))
+                .map(|s| (s.index, s.params.clone(), s.time_base))
                 .collect()
         })
         .collect();
@@ -687,17 +738,51 @@ pub fn run_pipeline(
             let tap = spec
                 .input_stream(input, s.source.stream)
                 .map_err(|_| internal("a map names a stream the demuxer does not have"))?;
-            let p = params
+            let (p, time_base) = params
                 .get(s.source.file as usize)
-                .and_then(|v| v.iter().find(|(idx, _)| *idx == s.source.stream))
+                .and_then(|v| v.iter().find(|(idx, _, _)| *idx == s.source.stream))
                 .map_or_else(
-                    || vaco_codec_core::CodecParameters::new(MediaType::Data),
-                    |(_, p)| p.clone(),
+                    || {
+                        (
+                            vaco_codec_core::CodecParameters::new(MediaType::Data),
+                            vaco_core::Rational::new(1, 1),
+                        )
+                    },
+                    |(_, p, tb)| (p.clone(), *tb),
                 );
-            spec.map(tap, oref, &p)
+
+            // A stream this crate copies has no decoder or encoder
+            // in the graph at all — `spec.map` on the demuxer's own tap is
+            // what makes it a copy. A stream with a resolved encoder gets a
+            // decode leg and an encode leg in between, per `vaco-sched`'s own
+            // `add_decoder`/`add_encoder` (already exercised by its mocks;
+            // nothing there needed to change for this).
+            let (packet_tap, out_params, label) = match s.codec {
+                StreamCodec::Copy => (tap, p, "copy".to_owned()),
+                StreamCodec::Encode(name) => {
+                    let codec_id = p.codec_id.ok_or_else(|| {
+                        internal("a stream being transcoded has no known input codec")
+                    })?;
+                    let decoder_desc = vaco_registry::decoder_for(codec_id).ok_or_else(|| {
+                        internal("this build has no decoder for the input codec")
+                    })?;
+                    let encoder_desc = vaco_registry::encoder_by_name(name).ok_or_else(|| {
+                        internal("the resolved encoder is no longer in the registry")
+                    })?;
+                    let limits = vaco_limits::Limits::default();
+                    let frames = spec
+                        .add_decoder(tap, decoder_desc.build(limits.clone()))
+                        .map_err(|e| internal_from("could not attach a decoder", &e))?;
+                    let packets = spec
+                        .add_encoder(frames, encoder_desc.build(limits), time_base)
+                        .map_err(|e| internal_from("could not attach an encoder", &e))?;
+                    (packets, p.with_codec(encoder_desc.id), name.to_owned())
+                }
+            };
+            spec.map(packet_tap, oref, &out_params)
                 .map_err(|e| internal_from("the muxer refused a stream", &e))?;
             report.mapping.push(format!(
-                "  Stream #{}:{} -> #{}:{} (copy)",
+                "  Stream #{}:{} -> #{}:{} ({label})",
                 s.source.file, s.source.stream, out.index, i
             ));
         }
@@ -1057,6 +1142,7 @@ mod tests {
         let s = OutStream {
             source: StreamPick { file: 0, stream: 0 },
             media: Some(MediaType::Video),
+            codec: StreamCodec::Copy,
         };
         let e = check_codecs(&c, &o, &[s]).unwrap_err();
         assert_eq!(
@@ -1075,6 +1161,7 @@ mod tests {
         let s = OutStream {
             source: StreamPick { file: 0, stream: 0 },
             media: Some(MediaType::Video),
+            codec: StreamCodec::Copy,
         };
         assert!(check_codecs(&c, &o, &[s]).is_ok());
 
@@ -1089,6 +1176,21 @@ mod tests {
         assert_eq!(e.exit.code(), 8);
     }
 
+    /// A registered encoder name resolves through
+    /// `vaco_registry::encoder_by_name` instead of hitting the "Unknown
+    /// encoder" catch-all. `qoi` is always in this build's default features.
+    #[test]
+    fn a_registered_encoder_name_resolves_through_the_registry() {
+        let (c, o) = out_of(&["-i", "a.mkv", "-c:v", "qoi", "-f", "null", "-"]);
+        let s = OutStream {
+            source: StreamPick { file: 0, stream: 0 },
+            media: Some(MediaType::Video),
+            codec: StreamCodec::Copy,
+        };
+        let resolved = check_codecs(&c, &o, &[s]).expect("qoi is registered");
+        assert_eq!(resolved, vec![StreamCodec::Encode("qoi")]);
+    }
+
     #[test]
     fn last_match_wins_across_per_stream_codec_options() {
         // `-c:a:1 flac -c:a copy` gives stream a:1 `copy`, not `flac`.
@@ -1099,10 +1201,12 @@ mod tests {
             OutStream {
                 source: StreamPick { file: 0, stream: 0 },
                 media: Some(MediaType::Audio),
+                codec: StreamCodec::Copy,
             },
             OutStream {
                 source: StreamPick { file: 0, stream: 1 },
                 media: Some(MediaType::Audio),
+                codec: StreamCodec::Copy,
             },
         ];
         assert!(check_codecs(&c, &o, &streams).is_ok());
