@@ -865,3 +865,45 @@ kind     = "blackbox"
 title    = "Observed byte layout and ffprobe-reported stream/format fields for ffmpeg-generated wv/tta/adx/g722/g726/g726le/g723_1/aptx/aptx_hd/sbc fixtures, ffmpeg 8.1 — used to reconstruct wv's block header, tta's header and seek-table format, adx's header field layout, and sbc's frame-length formula, none of which could be confirmed from true-audio.com (domain-squatted at the time)"
 acquired = "2026-08-28"
 where    = "the reference binary installed on the development machine"
+
+[[source]]
+id       = "ffmpeg-formats-doc-metadata"
+kind     = "spec"
+title    = "FFmpeg Documentation, ffmpeg-formats.html chapter 5 \"Metadata\" and section 4.32 \"ffmetadata\" — the ;FFMETADATA1 file grammar (header, comments, key=value escaping, [CHAPTER]/[STREAM] sections)"
+acquired = "2026-08-28"
+where    = "https://ffmpeg.org/ffmpeg-formats.html#Metadata-1"
+
+[[source]]
+id       = "multimedia-wiki-duck-ivf"
+kind     = "spec"
+title    = "MultimediaWiki, Duck IVF — the On2/Duck IVF container's 32-byte file header and 12-byte frame header layout"
+acquired = "2026-08-28"
+where    = "https://wiki.multimedia.cx/index.php/Duck_IVF"
+
+[[source]]
+id       = "idroq-format-doc"
+kind     = "spec"
+title    = "Dr. Tim Ferguson, \"Id Software's .RoQ Video File Format\" (2001) — the RoQ chunk header, RoQ_INFO/RoQ_QUAD_CODEBOOK/RoQ_QUAD_VQ/RoQ_SOUND_MONO/RoQ_SOUND_STEREO layouts; the format's only public technical writeup, mirrored at multimedia.cx since id Software never published one"
+acquired = "2026-08-28"
+where    = "http://multimedia.cx/mirror/idroq.txt"
+
+[[source]]
+id       = "compuphase-flic-doc"
+kind     = "spec"
+title    = "compuphase.com, \"The FLIC file format\" — the 128-byte FLIC file header, 16-byte FRAME_TYPE header and 6-byte sub-chunk header, plus the chunk-type table"
+acquired = "2026-08-28"
+where    = "https://www.compuphase.com/flic.htm"
+
+[[source]]
+id       = "cdg-revealed"
+kind     = "spec"
+title    = "Jim Bumgardner, \"CD+G Revealed\" (1995) — the 24-byte CD+Graphics subcode packet layout (command/instruction/parity/data) and the 300-packets-per-second playback rate"
+acquired = "2026-08-28"
+where    = "https://jbum.com/cdg_revealed.html"
+
+[[source]]
+id       = "vaco-format-misc-fixtures-probe"
+kind     = "blackbox"
+title    = "ffmpeg/ffprobe 8.1, measured against ffmpeg-encoded ivf fixtures and hand-built roq/flic/cdg fixtures — ivf's probe_score (98) and avg_frame_rate quirk, ffmetadata's probe magic and phantom-stream behaviour, roq's order-dependent audio/video packetisation and fixed 22050 Hz audio rate, flic's probe magic set and positional keyframe rule, and cdg's probe_score formula (min(valid_packet_count, 85))"
+acquired = "2026-08-28"
+where    = "the reference binary installed on the development machine"
