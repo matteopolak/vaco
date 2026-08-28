@@ -384,70 +384,39 @@ generic `SingleShotDecoder<F>`/`SingleShotEncoder<F>` in `vaco-codec-core`
 itself (next to `mock.rs`), parameterised the same way, so the fourth crate
 that needs it depends on the framework instead of re-deriving it.
 
-### "Codec-shaped, not sample-format-shaped" is a bug class, not a bug — and this sweep found a fifth instance
+### The same mistake in five muxers: header fields derived from the decoded sample format
 
-`vaco-format-audio-simple::au::AuMuxer::add_stream` derived its header's
-encoding tag from `AudioParameters::format` (a `SampleFmt`, which has no
-concept of byte order) instead of `params.codec_id`, so `-c copy` from any
-little-endian PCM source tagged the output as the format's own big-endian
-encoding over bytes that were never byte-swapped — silent corruption, fixed
-in 95e39ea. This is the same mistake as four muxers found and fixed earlier
-in the same sweep (24-bit written as 32-bit, A-law tagged as linear PCM,
-little-endian bytes under a big-endian header): a decoded `SampleFmt` throws
-away exactly the distinction (byte order, codec identity) that a container's
-header needs to be honest about what is actually in the file. **Nobody has
-grepped the remaining muxers for `.format` (or `.audio.format`/`.video.
-format`) driving a header field instead of `.codec_id`** — five hits in one
-project within what looks like a single week is not a coincidence, and the
-sixth one is still out there. A short, mechanical audit (grep every
-`fn add_stream`/`fn write_header` in every mux crate for a match on
-`SampleFmt`/`PixFmt` that decides a container tag) would find it faster than
-another differential sweep will.
+Fixed, recorded because the *pattern* is the finding rather than any one bug.
 
-### `raw_codec_name` stream metadata: written in five places, read in none
+Five muxers independently built a container header field from
+`AudioParameters::format` — the decoded sample format — instead of from
+`CodecId`. The two disagree in exactly the ways `pcm.rs`'s own measured table
+has always said:
 
-`vaco-demux-raw`'s `pcm.rs` (fixed in 283b546), `bitstream.rs`, `y4m.rs` and
-`rawvideo.rs`, plus `vaco-demux-image2`'s `pipe/mod.rs`, all call
-`stream.metadata_set("raw_codec_name", ...)` on every stream they construct.
-Grepping the whole tree for a reader of that key finds nothing, anywhere —
-the API has no caller, exactly the shape `AGENT-CONSTRAINTS.md`'s
-`Bsfs`/`BsfProvider` story warns about. For `pcm.rs` it was pure dead weight
-once `CodecId::from_name` could resolve the real subtype instead (fixed).
-For the other four, it is *not* pure dead weight: `bitstream.rs`'s
-parser-less codecs (`avs2`, `avs3`, `vc1`, `dirac`, `dnxhd`, `cavsvideo`,
-`evc`, `h261`, `h263`) still have no `CodecId` assignment at all in that
-code path, so this string is the only place their real name survives
-construction — and it still never reaches `-show_streams`'s `codec_name`,
-because nothing reads it. Two ways to close this, and both are one
-afternoon's work, not a redesign: give those nine codecs the same
-`CodecId::from_name`-style resolution `pcm.rs` just got (`CodecId::Vc1`,
-`CodecId::Dirac`, etc. already exist — confirmed by `vaco-mux-raw`'s own
-registrations, which use them; `vaco-mux-raw/src/lib.rs`'s module doc still
-claims `CodecId` has no `Vc1`/`H261`/`H263`/etc. variant, which stopped
-being true on 2026-08-23 and needs its own trim), or wire a genuine consumer
-in `vaco-probe` that falls back to `raw_codec_name` only when `codec_id` is
-absent. The first is strictly better (it also fixes the `-c copy` codec-match
-validation these codecs currently skip only because their `codec_id` is
-`None` — that gap is silent today because nothing has tried to feed a
-mismatched codec through one of them yet, but the H.264/rawvideo history two
-paragraphs up says that is a when, not an if).
+```text
+pcm_s24le   decodes to s32   -> width written as 32-bit
+pcm_alaw    decodes to s16   -> one-byte samples tagged as two-byte linear PCM
+pcm_s16le   decodes to s16   -> endianness absent from the format entirely
+```
 
-### The `au`/RSO/`.au`-adjacent pattern: a muxer's `default_video`/`default_audio` is not always a hard restriction
+`wav`, `w64`, `caf` and `aiff` were found in one session; `au` was found by a
+sweep across sixty containers a few hours later, in the *same crate* as the
+first four. That is the part worth keeping: the shared helpers
+(`pcm::sample_fmt_of`, `coded_bits`, `is_little_endian`, `is_float`) existed by
+then, and `au` simply had not been moved onto them. A partial migration reads as
+a finished one.
 
-`vaco-mux-raw::RawMuxer::add_stream` was given a codec-match check this
-sweep (83bda8d) on the strength of one measurement (`vc1` refusing an H.264
-source with "muxer supports only codec vc1 for type video"). Measuring the
-other eleven single-codec registrations confirmed the same refusal — except
-`rawvideo`, which the reference accepts an H.264 source into without
-complaint (e3c3212). One field (`RawSpec::default_video`/`default_audio`)
-is being asked to answer two different questions — "what does a bare
-`-f <fmt>` encode to by default" and "what does `-c copy` refuse" — and for
-every registration but one those two answers happen to agree. `rso`
-(`vaco-format-audio-simple::rso`, issue #651) looks like the same shape from
-the other side: it hard-refuses everything but `pcm_u8` even though the
-reference accepts `pcm_s16le` too, i.e. its *actual* accepted set is wider
-than its stated default, the opposite direction from `rawvideo`'s gap.
-Anywhere a "default codec" field is read as "the only accepted codec"
-(or vice versa) is worth a second look before trusting it either way —
-this sweep found the assumption wrong in both directions in the same
-family of formats within one afternoon.
+All five produced files that were the right length, had plausible headers, and
+decoded to the wrong bytes, with every unit test green. Only a decode-MD5 check
+against the source finds this class.
+
+**Now closed:** every header field in these muxers comes from `CodecId`, and a
+grep for a muxer reading `format.bits_per_sample()`, `bytes_per_sample()` or
+`is_float()` returns nothing. The last three were not wrong — `is_float` agrees
+between codec and format — and were changed anyway, because they were the shape
+the next person would copy.
+
+**Not gated.** No cheap mechanical check distinguishes "asked the format a
+question the codec should answer" from legitimate uses of `SampleFmt`. The
+defence is the helper being the obvious thing to reach for, plus the decode-MD5
+check in the conformance loop.
