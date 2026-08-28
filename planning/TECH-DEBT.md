@@ -162,3 +162,53 @@ git update-ref refs/heads/main "$COMMIT"
 git read-tree HEAD   # refresh the real index only; never touches the working tree
 unset GIT_INDEX_FILE
 ```
+
+### `vaco-demux-avi`'s `strf` parsing captures extradata for audio, never video
+
+Found while independently re-measuring AVI's H.264 framing during the
+600 Hz grid work (`vaco-mux-avi`, #639/#640). `hdrl.rs::parse_strf` has two
+branches, `b"vids"` and `b"auds"`. The audio branch takes `WaveFormatEx`'s
+trailing bytes as `CodecParameters::extradata` whenever there are any
+(MS-ADPCM coefficients, AAC's `AudioSpecificConfig`); the video branch reads
+`BitmapInfoHeader`'s fixed 40-byte fields and stops — any bytes after that
+(an `avcC`/`hvcC`-style configuration record, which is exactly what a real
+`avc1`/`hvc1`-tagged `strf` carries per the measurement below) are simply
+never looked at. This is not a forgotten line so much as a structural
+asymmetry: the audio path already has the "trailing bytes are extradata"
+idea, and the video path was never given it.
+
+Consequence, independently confirmed by probing `ffmpeg -c copy -f avi`
+output directly rather than reading the demuxer's own field list: the
+reference stores H.264 in AVI **length-prefixed** (`strf` FourCC `avc1`,
+`is_avc=true`, `nal_length_size=4`, a 45-byte `avcC` following the base
+header), not Annex-B. `vaco-mux-avi` currently writes the opposite shape
+(Annex-B, `H264` FourCC, no configuration record at all) — a real,
+independently-verified divergence from the reference, not fixed as part of
+this session's work since it touches `write_packet`/`strf`/
+`check_bitstream` machinery that finding 16 already shaped for a different
+answer, and deserves its own measurement pass across both mux and demux
+rather than a drive-by change to one side.
+
+**Proposed seam:** give `parse_strf`'s video branch the same "trailing bytes
+are extradata" treatment the audio branch already has, gated on the FourCC
+being one this crate maps to H.264/HEVC (`video_tags::codec_id`) so the
+bytes are only interpreted as `avcC`/`hvcC` where that framing applies.
+`vaco_codec_core::VideoParameters::nal_length_size` also needs setting from
+the record's own length-size byte, mirroring the demuxer's own AAC/ADTS
+config handling on the audio side.
+
+### `AviMuxer`'s new slot-grid budgets hardcode `Limits::permissive()`
+
+`convert_budget` (pre-existing) and `grid_budget` (new, for the 600 Hz
+grid's empty-slot backfill) are both constructed with
+`Budget::new(Limits::permissive())` inside `AviMuxer::new`, ignoring the
+`FormatOptions` the caller passed in. Consistent with the crate's existing
+pattern, and permissive's 1 GiB/2^32-fuel caps are generous enough that no
+real recording should ever hit them — but an embedder who wants a stricter
+bound (the `Limits::strict()`/library-embedding case
+`vaco_limits::Limits`'s own docs describe) cannot get one without a
+`vaco-mux-avi` code change, since nothing threads a caller-supplied
+`Limits` through `Muxer::new`/`FormatOptions` today. Not fixed here: it is
+the same shape as `convert_budget`'s pre-existing choice, not a regression,
+and widening it is a `FormatOptions`/`Muxer` interface question bigger than
+one crate.
