@@ -8,15 +8,19 @@ RTCP messages Simple Profile adds (bitmask/range retransmission requests,
 the optional RTT-echo message), retransmitted-packet matching, the
 receiver's two-section reorder/retransmission-reassembly buffer (#558,
 `TR-06-1`), GRE tunnelling, and Pre-Shared Key encryption (#559,
-`TR-06-2`). This is PR-11a/PR-11b of epic PR-11/#63 — two of three
-packages (#560 remains). Like `vaco-protocol-srt`'s PR-10a, there is no
-`rist:` `Protocol` implementation and no registry entry here: no socket,
-no clock. §6's DTLS is named blocked/deferred to PR-12 (the same T4-tiered
-gap already blocking WHIP/#619); §7.5's Annex D (EAP-SHA256-SRP6a
-authentication) is filed separately as #657, not built here — see that
-issue and this crate's own `lib.rs` docs for why the split is legitimate
-rather than a shortcut. Bonding, the statistics surface, and the interop
-matrix are #560.
+`TR-06-2`), plus bonding/multi-link support and a statistics surface
+(#560, both profiles). This is PR-11a/PR-11b/PR-11c of epic PR-11/#63 —
+all three packages now land here. Like `vaco-protocol-srt`'s PR-10a,
+there is no `rist:` `Protocol` implementation and no registry entry
+here: no socket, no clock. §6's DTLS is named blocked/deferred to PR-12
+(the same T4-tiered gap already blocking WHIP/#619); §7.5's Annex D
+(EAP-SHA256-SRP6a authentication) is filed separately as #657, not built
+here — see that issue and this crate's own `lib.rs` docs for why the
+split is legitimate rather than a shortcut. #560's interop-matrix clause
+is named unreachable up front (no `librist` on this machine, same as the
+other reference-peer requirements below) — the replacement bar built and
+tested instead is #560's own Acceptance Criterion: a bonded two-link
+session survives the loss of either link with no delivered-packet loss.
 
 ## No reference implementation on this machine
 
@@ -40,7 +44,8 @@ evidence-class labels:
   page — see `vaco-crypto`'s own docs).
 - **self-consistency** — this crate's own two sides agreeing (a fake
   sender/receiver pair completing a session, in both directions for
-  #559's PSK work).
+  #559's PSK work; #560's bonded-receiver tests feeding the same
+  sequence stream through two links and checking nothing is lost).
 
 ## Patent posture (D4)
 
@@ -117,20 +122,46 @@ behind `patent-encumbered-rist`, `default = false`.**
   directly on `vaco-crypto`. §7.4's on-the-fly passphrase rotation and
   §7.6's Future Nonce Announcement message are not built — the rotation
   *policy* is a session concern above this crate's framing layer.
+- `bonding` (#560) — §5.4 (Simple Profile bonding across raw network
+  connections) and §5.5 (Main Profile tunnel-level multi-path over GRE
+  paths) are one mechanism at this crate's level of abstraction:
+  `BondedReceiver` wraps `buffer::ReceiveBuffer` and adds only what the
+  buffer does not already track — which link an arrival came in on
+  (`LinkStats::packets_received` per link ID). Deduplication of
+  replicated copies needs no new logic: it falls straight out of
+  `ReceiveBuffer`'s existing sequence-number keying, per §5.4's own
+  requirement that replicated copies "shall have the same RTP sequence
+  number and timestamp". Exercised directly against #560's own
+  Acceptance Criterion by
+  `losing_one_of_two_replicated_links_loses_no_packets` and its symmetric
+  counterpart for the other link, plus a combining-mode (split-traffic)
+  test.
+- `stats` (#560) — a small statistics surface; neither profile names a
+  required statistics API, so this is this crate's own choice of what to
+  expose, not a spec-mandated shape. `SessionStats::total_accounted_for`
+  is **independently-computed** (checked in its own test against a total
+  the test derives separately from the packets it feeds in);
+  `SessionStats::packets_delivered`/`packets_dropped` are
+  **merely-reported** (read straight off `buffer::BufferEvent`) — the
+  same distinction `vaco-protocol-srt`'s PR-10c stats module drew.
+  `link_reports` surfaces per-link `LinkStats` from a `BondedReceiver`.
 
 ## What is not verified
 
-No interop — see above. §5.1's port-assignment rules (unicast/multicast,
-NAT firewall interaction) are socket/deployment concerns with nothing to
-unit-test at this layer; documented, not coded. §5.3.4/§5.3.5 (burst
-control, SSRC filtering) are explicitly informative in the spec itself
-("details... left to the discretion of the implementer") and are not
-built as a result. Appendix B's suggested buffer sizes (1000 ms total,
-70 ms reorder section) are informative defaults this crate carries
-forward as its own defaults (`buffer::DEFAULT_TOTAL_MS`/
-`DEFAULT_REORDER_MS`), not values the spec requires. §6 (DTLS) and Annex D
-(EAP-SHA256-SRP6a) are named blocked/deferred, not attempted — see #619
-and #657.
+No interop — see above, and #560's interop-matrix clause specifically:
+no `librist` build exists on this machine, so it is named unreachable
+rather than attempted, with the Acceptance Criterion itself (bonded
+two-link survival) built and tested as the replacement bar instead.
+§5.1's port-assignment rules (unicast/multicast, NAT firewall
+interaction) are socket/deployment concerns with nothing to unit-test at
+this layer; documented, not coded. §5.3.4/§5.3.5 (burst control, SSRC
+filtering) are explicitly informative in the spec itself ("details...
+left to the discretion of the implementer") and are not built as a
+result. Appendix B's suggested buffer sizes (1000 ms total, 70 ms reorder
+section) are informative defaults this crate carries forward as its own
+defaults (`buffer::DEFAULT_TOTAL_MS`/`DEFAULT_REORDER_MS`), not values
+the spec requires. §6 (DTLS) and Annex D (EAP-SHA256-SRP6a) are named
+blocked/deferred, not attempted — see #619 and #657.
 
 ## How to change it
 

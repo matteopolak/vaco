@@ -1,6 +1,6 @@
 [package]
 name = "vaco-protocol-rist"
-description = "RIST Simple and Main Profile framing: RTP/RTCP reuse, RIST-specific RTCP messages, retransmission and reassembly (TR-06-1); GRE tunnelling and PSK encryption (TR-06-2). DTLS and EAP-SRP6a authentication and bonding land in later packages."
+description = "RIST Simple and Main Profile framing: RTP/RTCP reuse, RIST-specific RTCP messages, retransmission and reassembly (TR-06-1); GRE tunnelling and PSK encryption (TR-06-2); bonding/multi-link and a statistics surface. DTLS and EAP-SRP6a authentication land in a later package."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

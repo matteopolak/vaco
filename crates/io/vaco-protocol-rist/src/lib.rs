@@ -27,8 +27,21 @@
 //!
 //! Like `vaco-protocol-srt`'s PR-10a, this is a framing/state library,
 //! not yet a [`vaco_protocol_core::Protocol`] — no `rist:` registry
-//! entry, no socket. Bonding, the statistics surface and the interop
-//! matrix are #560.
+//! entry, no socket.
+//!
+//! Bonding and the statistics surface (#560): §5.4/§5.5's multi-link
+//! replication and combining ([`bonding`]) and this crate's own
+//! statistics surface ([`stats`]) — neither profile names a required
+//! statistics API, so [`stats`] is this crate's own choice of what to
+//! expose, not a spec-mandated shape. #560's own interop-matrix clause is
+//! **named unreachable up front, before implementation, the same way
+//! #557-#559 named their own reference-peer requirements unreachable**:
+//! there is no `librist` build on this machine (see "No reference
+//! implementation" below), so no cross-implementation matrix can be run.
+//! The replacement bar actually built against instead: *a bonded
+//! two-link session survives the loss of either link with no
+//! delivered-packet loss* — #560's own Acceptance Criterion, exercised
+//! directly by [`bonding`]'s own tests.
 //!
 //! # No reference implementation on this machine
 //!
@@ -109,17 +122,39 @@
 //!   sequence number as the counter block's high 4 bytes). §7.4's
 //!   passphrase-rotation policy and §7.6's Future Nonce Announcement are
 //!   not built — see the module's own docs on why.
+//! - [`bonding`] (#560) — §5.4 (Simple Profile: bonding across raw
+//!   network connections) and §5.5 (Main Profile: tunnel-level
+//!   multi-path over GRE paths) are one mechanism at this crate's level
+//!   of abstraction, not two: [`bonding::BondedReceiver`] is a thin
+//!   wrapper over [`buffer::ReceiveBuffer`] that adds only the one thing
+//!   the buffer does not already track — which link an arrival came in
+//!   on. Deduplication of replicated copies falls out of
+//!   [`buffer::ReceiveBuffer`]'s existing sequence-number keying with no
+//!   new logic, per §5.4's own requirement that replicated copies "shall
+//!   have the same RTP sequence number and timestamp".
+//! - [`stats`] (#560) — a small statistics surface, not a spec-mandated
+//!   one. Counters are labelled **independently-computed**
+//!   ([`stats::SessionStats::total_accounted_for`], checked in its own
+//!   test against a total the test itself derives separately) versus
+//!   **merely-reported** ([`stats::SessionStats::packets_delivered`]/
+//!   [`stats::SessionStats::packets_dropped`], read straight off
+//!   [`buffer::BufferEvent`]) — the same distinction
+//!   `vaco-protocol-srt`'s PR-10c stats module drew.
 //!
 //! # What is not verified
 //!
-//! No interop — see above. §5.1's port-assignment rules (unicast/
-//! multicast, NAT firewall interaction) are socket/deployment concerns
-//! with nothing to unit-test at this layer; they are documented, not
-//! coded. §5.3.4/§5.3.5 (burst control, SSRC filtering) are explicitly
-//! informative in the spec itself ("details... left to the discretion of
-//! the implementer") and are not built as a result — there is nothing
-//! normative to conform to. §6 (DTLS) and Annex D (EAP-SHA256-SRP6a) are
-//! named blocked/deferred above, not attempted.
+//! No interop — see above, and #560's interop-matrix clause specifically:
+//! no `librist` build exists on this machine, so it is named unreachable
+//! rather than attempted, with the Acceptance Criterion itself (bonded
+//! two-link survival) built and tested as the replacement bar instead.
+//! §5.1's port-assignment rules (unicast/ multicast, NAT firewall
+//! interaction) are socket/deployment concerns with nothing to unit-test
+//! at this layer; they are documented, not coded. §5.3.4/§5.3.5 (burst
+//! control, SSRC filtering) are explicitly informative in the spec itself
+//! ("details... left to the discretion of the implementer") and are not
+//! built as a result — there is nothing normative to conform to. §6
+//! (DTLS) and Annex D (EAP-SHA256-SRP6a) are named blocked/deferred
+//! above, not attempted.
 //!
 //! # Configuration
 //!
@@ -135,11 +170,13 @@
 
 #![forbid(unsafe_code)]
 
+pub mod bonding;
 pub mod buffer;
 pub mod gre;
 pub mod keepalive;
 pub mod psk;
 pub mod retransmit;
 pub mod rtcp;
+pub mod stats;
 
 pub use vaco_protocol_core::{ProtocolError, Result};
