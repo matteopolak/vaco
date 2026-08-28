@@ -18,6 +18,8 @@ vaco-filter-graph = { path = "../../filter/vaco-filter-graph" }
 
 [dev-dependencies]
 proptest.workspace = true
+vaco-sampfmt = { path = "../../model/vaco-sampfmt" }
+vaco-chlayout = { path = "../../model/vaco-chlayout" }
 
 [lints]
 workspace = true

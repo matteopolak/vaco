@@ -3,7 +3,14 @@
 
 use vaco_filter_graph::registry::{FilterRegistry, Instance, Instantiate};
 
-const NAMES: &[&str] = &["histogram", "waveform", "datascope", "thistogram"];
+const NAMES: &[&str] = &[
+    "histogram",
+    "waveform",
+    "datascope",
+    "thistogram",
+    "graphmonitor",
+    "agraphmonitor",
+];
 
 /// Implements [`FilterRegistry`] for every filter in this crate.
 #[derive(Debug, Clone, Copy, Default)]
@@ -20,6 +27,8 @@ impl FilterRegistry for ScopeRegistry {
             "waveform" => crate::waveform::create(req),
             "datascope" => crate::datascope::create(req),
             "thistogram" => crate::thistogram::create(req),
+            "graphmonitor" => crate::graphmonitor::create(req),
+            "agraphmonitor" => crate::graphmonitor::create_audio(req),
             other => Err(format!("vaco-filter-scope: no filter named `{other}`")),
         }
     }

@@ -1,6 +1,7 @@
 //! An embedded fixed-width 8x8 bitmap font, for the "scope" filters that
-//! draw digits and labels directly into a frame (`datascope`, and later
-//! `pixscope`/`oscilloscope`).
+//! draw digits and labels directly into a frame (`datascope`,
+//! `graphmonitor`/`agraphmonitor`, and if shipped, `pixscope`/
+//! `oscilloscope`).
 //!
 //! # Why this exists, and why it is not the reference's font
 //!

@@ -1,8 +1,9 @@
 # vaco-filter-scope
 
 T3 measurement/visualisation video filters — `planning/16-filters.md` §4.2's
-`vaco-filter-scope` row, GitHub issue #480 ("FT-4.12g"). Four implemented:
-`histogram`, `waveform`, `datascope`, `thistogram`.
+`vaco-filter-scope` row, GitHub issue #480 ("FT-4.12g"). Six implemented:
+`histogram`, `waveform`, `datascope`, `thistogram`, `graphmonitor`,
+`agraphmonitor`.
 
 ## Scope reconciliation
 
@@ -18,22 +19,27 @@ exist. Before writing any code, `planning/ASSIGNMENTS.md`, every sibling
 | `scale2ref`, `colorspace`, `colordetect`, `pixdesctest`, `zoompan` | The T1-tier remainder of `vaco-filter-scale`'s row, orphaned by #463 (FT-4.1a)'s narrower scope — a real gap, but not T3 and not ticketed under #480 |
 | `histogram`, `thistogram`, `waveform`, `vectorscope`, `oscilloscope`, `datascope`, `pixscope`, `ciescope`, `graphmonitor`, `agraphmonitor`, `drawgraph`, `adrawgraph` | `planning/16-filters.md`'s `vaco-filter-scope` row — the actual unclaimed T3 remainder, confirmed absent from every `vaco-component.toml` and the generated registry |
 
-This crate implements three of those twelve. The rest are excluded or
-deferred, each for a distinct, specific reason (see below) rather than a
-blanket "out of time".
+This crate implements five of those twelve (`graphmonitor`/`agraphmonitor`
+count as one pair). The rest are excluded or deferred, each for a distinct,
+specific reason (see below) rather than a blanket "out of time".
 
 ## What it is
 
-One module per filter (`src/{histogram,waveform,datascope}.rs`), each
-exposing `pub const DESC: FilterDesc` and a crate-private `fn create`,
-aggregated by
+One module per filter (`src/{histogram,waveform,datascope,graphmonitor}.rs`
+— `graphmonitor.rs` covers both `graphmonitor` and `agraphmonitor`, since
+the only difference is the input pad's media type), each exposing
+`pub const DESC: FilterDesc` and a crate-private `fn create`, aggregated by
 [`registry::ScopeRegistry`](../../crates/filter/vaco-filter-scope/src/registry.rs)
 — the same shape every other T2/T3 filter crate in this project uses.
 `src/common.rs` carries the small 8-bit-plane helpers this whole filter
 family carries its own copy of (D19 governs shared *types*, not these tiny
-per-crate predicates). `src/font8x8.rs` carries the embedded bitmap font
-`datascope` (and, next, `pixscope`/`oscilloscope`) draws text with — see
-its own doc comment and the "The bitmap-font hypothesis" section below.
+per-crate predicates) — including, as of this pass, the font-blit helpers
+(`draw_glyph`/`draw_text`) `datascope` and `graphmonitor` both need,
+moved there from `datascope`'s own module when a second consumer showed
+up. `src/font8x8.rs` carries the embedded bitmap font `datascope` and
+`graphmonitor`/`agraphmonitor` draw text with (and, if shipped,
+`pixscope`/`oscilloscope` would too) — see its own doc comment and the
+"The bitmap-font hypothesis" section below.
 
 `histogram` and `waveform` are **converters**, not passthrough filters:
 they always synthesise a new picture (fixed dimensions, fixed `Gray8`
@@ -164,6 +170,70 @@ compositing via `overlay`, neither measured here); RGB pixel formats;
 input, no matter how exactly the rest of its behaviour is measured — see
 "The bitmap-font hypothesis" below.
 
+### `graphmonitor`/`agraphmonitor`
+
+Draws the *live filtergraph's own* node and link state as text — the real
+consumer that proves `planning/INTERFACE-GAPS.md` gap 22 closed rather
+than merely asserting it: `FilterContext::graph_nodes`/`graph_links`
+(`vaco-filter-core`) exist because these two filters need them, and this
+crate wiring them up with a real, passing `Graph`-based test
+(`tests/graphmonitor.rs`) is what settles that they actually serve the two
+filters that asked for them.
+
+Measured directly (`ffmpeg 8.1`, real filtergraphs, pixel-dumped):
+output is always `rgb24` at exactly the `size`/`s` option's dimensions
+(a converter, like `histogram`, not a passthrough); the canvas is redrawn
+from scratch every rendered frame; output is **rate-gated**, not
+one-frame-in-one-frame-out (a `10fps` source through
+`graphmonitor=rate=2` for `2s` produced `5` frames, not `20`, confirmed
+independently for `agraphmonitor` against a `48kHz` sine); the picture is
+one block per graph node — **including the monitor's own node**, and the
+scheduler's own auto-inserted nodes (buffer sources, buffersinks, format
+converters) — each block a header line (`"{label} {filter_name}"`) then
+one line per pad, inputs before outputs, naming the peer node and a live
+counter; and the **inter-line pitch is not one constant**: `10`px from a
+header to its first pad line and between two consecutive pad lines of the
+same direction, `12`px on the one transition from the last input line to
+the first output line, `15`px from a block's last line to the next
+block's header — measured by cropping an 8-block, 24-line render and
+finding the same three numbers repeat exactly, block after block, and
+implemented exactly rather than approximated (unlike `datascope`'s own
+margin arithmetic, this one had to be chased to the pixel, because the
+line count here varies with the graph rather than being a fixed grid).
+
+Implements `size`/`s`, `rate`/`r`, and (via `FilterDesc`) the `V->V` /
+`A->V` shape difference between the two names. Deliberately **not**
+implemented, split by *why*:
+
+- **Cannot be, because `NodeView`/`LinkView` genuinely do not carry the
+  data** — `format`/`size`/`rate`/`timebase` (link geometry and timing are
+  outside gap 22's deliberately narrow snapshot) and `pts`/`pts_delta`/
+  `time`/`time_delta` (`LinkStats` counts frames and samples but never
+  records a timestamp *value*). This is itself a finding about gap 22's
+  own scope, not a time-boxing choice — see `vaco-filter-core`'s own
+  `context.rs` doc for the design note this traces back to.
+- **Available, but a scope choice not to draw it**: the reference's
+  `frame_count_in`/`out`/`delta` (and `sample_count_*`) are a genuine
+  *pair* of counters (arrived-at-source vs. consumed-at-destination);
+  `LinkStats` keeps one post-dequeue counter, so the exact three-field
+  shape isn't reproducible without also tracking a push-side count this
+  crate does not keep. What is drawn instead uses every other field
+  `LinkView`/`LinkStats` carries (queue depth/capacity, `at_eof`, the
+  one-sided frame/sample count, peak depth, backpressure-blocked count) —
+  more of gap 22's own surface than the reference's *default* `flags`
+  selection shows, since no rendering here can match the reference
+  byte-for-byte regardless of which fields are picked.
+- `mode=compact`/`nozero`/`noeof`/`nodisabled` (only the default,
+  `full`-shaped listing); `opacity` (solid-black canvas, same
+  unimplemented-effect choice `datascope`'s own `opacity` already made);
+  colour (`Gray8` output, not the reference's `rgb24` — no field this
+  module draws needs a second colour to distinguish it, and matching the
+  pixel format buys nothing once text already rules out a byte-exact
+  frame).
+
+**Cannot be framecrc-identical to the reference**, for the same permanent
+reason as `datascope` — see "The bitmap-font hypothesis" below.
+
 ## The bitmap-font hypothesis (resolved: held)
 
 `oscilloscope`/`datascope`/`pixscope` were previously blocked on the same
@@ -215,9 +285,8 @@ the `rustybuzz` question.
 | Filter | Why |
 |---|---|
 | `vectorscope` | **Partially cracked, not shipped.** The coordinate mapping is fully measured: `x = component_x` directly, `y = 255 - component_y`. The intensity accumulation is confirmed nonlinear (independent of frame size — same hit count gives the same output at both `100` and `10000` total pixels) but does not fit any single-parameter model tried (linear, `ceil`/`round`/floor, power law, exponential-IIR); reported as characterised, not shipped, rather than guessed. |
-| `pixscope` | Attempted, not shipped — not for the font reason (confirmed shared with `datascope`, see above). Its "zoom" box does not magnify: a `7x7` window (`o=1`) over a hand-built period-2 checkerboard shows the checkerboard's own period unchanged inside a `1`px-bordered outline — a location marker, not a magnifier. This pass further measured the panel's *shape*: one marker box (`10x10`px) plus eight text lines in two groups (a `3`-line, wide header block and a `4`-line, `9`px-pitched, narrower block — plausibly per-statistic rows). Exact positions are in the crate doc. The label text and value formatting themselves were not extracted. |
-| `oscilloscope` | Not attempted this pass. Confirmed to share the same font mechanism (no font option; same glyph-grid signature), but its trace/grid layout and `st`-gated statistics text were not separately measured. |
-| `graphmonitor`, `agraphmonitor` | **Not expressible against the current `vaco-filter-core` surface**, checked directly: `FilterContext` exposes only the current node's own pads — there is no API to enumerate other nodes, their links, or queue depths, which is exactly what these filters draw. Recorded as `planning/INTERFACE-GAPS.md` gap 22. |
+| `pixscope` | **Substantially re-characterised this pass; a prior finding corrected.** A previous pass reported the "zoom" window as a plain, unmagnified location marker. That was wrong, or measured under a condition (an all-black source) that could not have shown otherwise: against a real striped/checkerboard source at the reference's documented `640x480` minimum resolution (smaller inputs are refused — `"min supported resolution is 640x480"`, also newly found), the window **does magnify** — a `7x7` (default `w`/`h`) source region blown up to a crisp, non-antialiased `~294x294`px block grid (`294 / 7 = 42`px per source pixel exactly), sitting above the stats panel. The panel itself is now fully read (not guessed — a label is UI text on a rendered frame, not the reference's source or its font bitmap, so reading it off a pixel dump is the same black-box measurement this whole project is built on): two 4-line groups, `"CH   AVG   MIN   MAX   RMS"` then one row per active channel (`Y`/`U`/`V` for a YUV source, colour-coded — white/blue/red respectively, matching each channel's own colour), and a second `"CH   STD"` group with the same per-channel rows. Number formats read off directly: `AVG`/`RMS` are `%05.1f`-shaped (`"00016.0"`), `MIN`/`MAX` are `%05d` (`"00016"`, no decimal), `STD` is `%04.2f`-shaped (`"0000.00"`) — inferred from digit *count* and decimal-point position, not from decoding the reference's own glyph shapes. **Still not shipped**: the exact AVG/RMS/STD arithmetic (mean, root-mean-square, standard deviation are the plausible read of the labels, but the precise rounding rule was not pinned the way `histogram`'s `ceil` was), the marker-box styling, `wx`/`wy`'s exact placement formula, and RGB-mode channel labels are all unmeasured — a real implementation attempt should start from this panel structure rather than re-deriving it, but still has genuine measurement work ahead of it. |
+| `oscilloscope` | Briefly probed this pass, not shipped. Confirmed to share the same font mechanism in principle (no font option), and confirmed its trace/grid rendering (`g=1` draws a plain grid, each enabled component (`c`, default `7`) traces as a distinct-coloured connected line across the trace box, sitting at partial opacity — the source's own diagonal tilt-strip pattern is visibly bleeding through beneath it). `st=1`'s statistics text was **not located** in two probes (default and enlarged trace geometry) — unlike `pixscope`, where widening the canvas past the reference's `640x480` floor immediately revealed the whole panel, oscilloscope's stats did not appear at any tried size; it may need a specific `sc`/`sc`+`st` combination, a non-flat source, or several accumulated frames rather than one, none of which this brief pass tried. |
 | `ciescope` | **Not a D7 case.** Every `system` value names a published international-standard primary set (BT.709, BT.2020, DCI-P3, SMPTE-C, …) and the CIE 1931 observer data is public. The blocker is reproducing the reference's exact chromaticity-diagram *rendering* (spectral-locus rasterisation, anti-aliasing, gamut-triangle lines) — not itself specified by any colorimetry standard, so verifying it would need extensive black-box probing this pass's time did not cover. |
 | `drawgraph`, `adrawgraph` | Not attempted. These plot frame metadata rather than pixel data (the metadata mechanism itself exists in this tree — gap 11's dictionary, gap 13's console-log channel, both closed elsewhere), but connected-line/bar/dot rendering exactness is a real question `waveform` sidestepped by drawing independent per-pixel hits. Deferred for time, not blocked. |
 
@@ -234,14 +303,14 @@ plan document).
 `histogram`, `waveform` and `thistogram` draw no text, so nothing rules
 out framecrc-exactness for them — `thistogram` reaching it this pass
 closes that question for every non-text filter this crate is likely to
-implement. `datascope`, and (once shipped) `pixscope`/`oscilloscope`,
-draw with an independently-sourced font (D7 forbids transcribing the
-reference's own table — see "The bitmap-font hypothesis" above), so no
-frame containing their text can *ever* match the reference byte-for-byte.
-"Framecrc-identical across this crate's whole corpus" is therefore not a
-temporarily-unmet goal for the text-drawing third of this row — it is
-provably unreachable, the same way `hqx` is provably unimplementable in
-`vaco-filter-artistic`.
+implement. `datascope`, `graphmonitor`/`agraphmonitor`, and (once shipped)
+`pixscope`/`oscilloscope`, draw with an independently-sourced font (D7
+forbids transcribing the reference's own table — see "The bitmap-font
+hypothesis" above), so no frame containing their text can *ever* match
+the reference byte-for-byte. "Framecrc-identical across this crate's
+whole corpus" is therefore not a temporarily-unmet goal for the
+text-drawing filters — it is provably unreachable, the same way `hqx` is
+provably unimplementable in `vaco-filter-artistic`.
 
 | Filter | Args | Source | Result |
 |---|---|---|---|
@@ -257,6 +326,8 @@ provably unreachable, the same way `hqx` is provably unimplementable in
 | `thistogram` | `w=2:components=1:slide=frame`, 4-frame flat-value sequence | `gray` | **exact** — persistent-canvas mechanics confirmed: column advances one per frame, whole canvas clears on wraparound |
 | `thistogram` | `w=2:components=1:slide=replace` (default), same 4 frames | `gray` | **exact** — ring-buffer overwrite confirmed: the non-target column survives each new frame unchanged |
 | `thistogram` | any, `12`:`4`-style count ratios (`round`, not `ceil`) | `gray` | **exact** — three ratios pinned, including an exact `0.5` tie, ruling out `ceil` and truncation |
+| `graphmonitor` | `s=96x32:rate=25`, a real 3-node `Graph` (source → monitor → sink) | any | **structural, not exact** — real `NodeView`/`LinkView` data confirmed reaching the render (`tests/graphmonitor.rs`, a genuine end-to-end `Graph` run, deliberately broken and restored to confirm the test has teeth); text pixels can never match byte-for-byte (independent font) |
+| `agraphmonitor` | `s=96x32:rate=25`, a real audio source → monitor → video sink | any | **runs end-to-end** — confirmed the one shape difference from `graphmonitor` (reading `pts`/`time_base` off an audio frame, not a video one) does not need separate logic |
 
 ## How to change it
 
@@ -276,13 +347,21 @@ provably unreachable, the same way `hqx` is provably unimplementable in
   it is already sourced, registered and tested; do not re-derive or
   re-source a font. Re-measure each filter's own layout (cell/margin
   positions, what text it draws) independently; do not assume
-  `datascope`'s pitch constants apply verbatim. For `pixscope` in
-  particular, do not assume the "zoom" box magnifies pixels — measured to
-  be a plain unmagnified marker outline. This pass measured the panel's
-  band structure (one `10x10` marker box, a `3`-line header block, a
-  `4`-line `9`px-pitched stats block — see the `pixscope` section above
-  for exact row/column spans); the label text and value formatting
-  themselves are the next thing to measure, not the band positions.
+  `datascope`'s pitch constants apply verbatim. **`pixscope` needs a
+  source at least `640x480`** (smaller inputs are refused outright) — a
+  prior pass's "the zoom box does not magnify" finding was measured
+  without knowing this and is superseded: see the `pixscope` section
+  above for the corrected panel structure (`CH`/`AVG`/`MIN`/`MAX`/`RMS`
+  then `CH`/`STD`, per-channel colour-coded rows, and the number formats
+  read directly off a real render) and what is still unmeasured before it
+  can ship (the exact statistic formulas, marker styling, `wx`/`wy`
+  placement, RGB-mode labels).
+- `graphmonitor`/`agraphmonitor` are done; `src/graphmonitor.rs` is the
+  template for any future filter that needs `FilterContext::
+  graph_nodes`/`graph_links` — the `render()` function is a pure,
+  independently unit-tested layout pass over `&[NodeView]`/`&[LinkView]`,
+  kept separate from the `FrameFilter` glue specifically so its pixel
+  positions can be asserted exactly without decoding rendered glyphs.
 - If you add `vectorscope`, its coordinate mapping (`x` direct, `y`
   inverted) is done — reuse it rather than re-measuring. Its intensity
   curve is the open problem: confirmed nonlinear and confirmed
@@ -295,10 +374,6 @@ provably unreachable, the same way `hqx` is provably unimplementable in
   denser intensity/count grid before proposing one — guessing a formula
   that merely interpolates the points on record here would be worse than
   leaving it open.
-- `graphmonitor`/`agraphmonitor` need a real `vaco-filter-core` capability
-  (cross-node link/queue introspection) before they are attempted again —
-  see `planning/INTERFACE-GAPS.md` gap 22 for what specifically is missing.
-
 ## Configuration
 
 No crate-level configuration, environment variables, or feature flags.
@@ -308,5 +383,8 @@ Runtime configuration is entirely per-filter-instance, via each filter's
 ## Dependencies
 
 `vaco-core`, `vaco-opts`, `vaco-frame`, `vaco-pixfmt`, `vaco-filter-core`,
-`vaco-filter-graph`. No external crate beyond what the workspace already
-declares; no new dependency was added to the workspace's `Cargo.toml`.
+`vaco-filter-graph`. Dev-only: `vaco-sampfmt`, `vaco-chlayout` (both
+already workspace crates), needed by `tests/graphmonitor.rs` to build a
+real audio source node for the `agraphmonitor` end-to-end test. No
+external crate beyond what the workspace already declares; no new
+dependency was added to the workspace's `Cargo.toml`.
