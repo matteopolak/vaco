@@ -1704,13 +1704,18 @@ this reason. Not worked around inside that crate, per the standing rule.
 ### Status, 2026-08-28 — `Dual`/`DualFilter` adapter added; `feedback` itself still blocked on a cycle, filed as gap 25
 
 Closed for the adapter-shape question specifically: `crates/filter/vaco-filter-core/src/adapt.rs`
-gained `DualFilter` (a trait for a fixed 2-in/2-out filter body) and
-`Dual<F>` (the `Filter` adapter), built by combining `Paired`'s lockstep
--input rule with `Fanout`'s all-outputs-have-room backpressure rule, plus
-one genuinely new piece neither existing adapter needed: a pending queue
-per output pad, since neither `Paired` (one output) nor `Fanout` (one
-input) had more than one of both. Built as a fixed 2-in/2-out shape, not
-generalised to N-in/M-out, per D19 — `feedback` is the only consumer.
+gained `DualFilter` (a trait for a fixed-arity multi-in/multi-out filter
+body) and `Dual<F>` (the `Filter` adapter), built by combining `Paired`'s
+lockstep-input rule with `Fanout`'s all-outputs-have-room backpressure
+rule, plus one genuinely new piece neither existing adapter needed: a
+pending queue per output pad, since neither `Paired` (one output) nor
+`Fanout` (one input) had more than one of both. Like `Paired`,
+`DualFilter::input_count`/`output_count` default to two (`feedback`'s own
+arity) but may be overridden at construction, generalising to N-in/M-out
+the same low-cost way `Paired` already generalises past two inputs — not
+a hardcoded-two adapter, just one with a single, two-and-two consumer so
+far; D19 argues against speculative new capability, not against reusing a
+pattern this crate already had.
 
 Verified with real `Graph`-based tests in `tests/graph.rs`
 (`dual_routes_each_output_to_its_own_pad`, using a filter that swaps its
