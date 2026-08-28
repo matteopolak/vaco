@@ -17,7 +17,7 @@ name.
 | Built | Plan says | Note |
 |---|---|---|
 | ~~`vaco-filter-audio-eq`~~ `vaco-filter-aeq` | `vaco-filter-aeq` | **Done**: renamed, membership unchanged. Landed alongside the `vaco-filter-adsp::biquad` consolidation (its `engine` module moved there, D19), so the rename commit is separate from that move. |
-| ~~`vaco-filter-audio-dynamics`~~ `vaco-filter-adynamics` | `vaco-filter-adynamics` | **Done**: renamed, membership unchanged. |
+| `vaco-filter-audio-dynamics` | `vaco-filter-adynamics` | membership matches; name only |
 | `vaco-filter-ameasure` | `vaco-filter-aanalysis` | membership matches exactly; name only |
 | ~~`vaco-filter-achannel`~~ `vaco-filter-aeffects` | `vaco-filter-aeffects` | **Done** (FT-4.13d, GitHub #484): renamed, and the crate now implements 22 of the row's 25 filters — `surround`/`headphone` remain deferred as disproportionately large (flagged by this crate's original author), and `hdcd`'s proprietary bit-level decode is out of reach for black-box probing at this project's clean-room standard. |
 | `vaco-filter-video-geometry` | `vaco-filter-geometry` | holds the T1 subset of one plan row |
@@ -101,4 +101,42 @@ and neither covers it.
 Several dispatch briefs cited §4.3 for *video* rows. The `vaco-filter-color`
 agent caught it and said so; the rows it needed were in §4.2. Cite the right
 one, or just say "the table in §4" and let the agent find its row.
+
+## The same D19 problem the biquads had, in three more shared kernels
+
+The biquad consolidation (`vaco-filter-adsp` gaining `Coeffs`, `normalise`,
+`response_db` and the RBJ design family, so five crates stop carrying their
+own) fixed one instance of a pattern. Auditing plan 16 §4.1's other
+shared-kernel rows finds three more, all live right now:
+
+| Kernel | §4.1 says it lives in | Where it actually is |
+|---|---|---|
+| EBU R128 loudness core | `vaco-filter-adsp` | `vaco-filter-aanalysis` (`kweight.rs`, `loudness.rs`, `ebur128.rs`, `replaygain.rs`) **and** `vaco-filter-adynamics/loudnorm.rs` |
+| Window functions | `vaco-filter-adsp` | `vaco-filter-aanalysis/aspectralstats.rs` (`hann`), `vaco-filter-asource/window.rs` (five funcs), `vaco-resample/design.rs` (`kaiser`, `blackman_nuttall`) |
+| Box-blur core | `vaco-filter-vdsp` | `vaco-filter-blur/common.rs`, reached again from `vaco-filter-convolve` |
+
+**`dup-check` cannot see any of these**, and that is the important part. It
+compares *type names* across crates, and these are free functions with
+different names for the same mathematics — `hann` here, `value(WinFunc::Hann,
+…)` there, `blackman_nuttall` somewhere else. The gate's own module docs already
+say "it cannot see two types that mean the same thing under different names.
+That needs a person." This is what that sentence looks like in practice.
+
+Two of the three are worth consolidating and one may not be:
+
+- **Windows** are the clearest case: three implementations of the same closed
+  forms, and a window function is exactly the kind of thing that is subtly
+  wrong in one place and right in two. `vaco-resample`'s pair is at a different
+  layer (`crates/signal`, not `crates/filter`) so the merge target needs
+  thought — possibly `vaco-tx` or a new shared crate rather than `adsp`.
+- **EBU R128** is one core used by `ebur128`, `replaygain` and `loudnorm`
+  across two crates. `loudnorm` reaching into `vaco-filter-aanalysis` is the
+  wrong direction; the core moving down to `adsp` is the plan's answer.
+- **Box blur** is used by `boxblur`, `avgblur` and `unsharp` in one crate and
+  by `convolve` in another. Smallest of the three, and the one where the two
+  callers may genuinely want different edge handling — `vaco-filter-blur`'s own
+  docs record that this family has two incompatible border conventions.
+
+Recorded rather than done: four of these five crates had a live owner when the
+audit ran.
 
