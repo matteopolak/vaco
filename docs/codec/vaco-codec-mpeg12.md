@@ -425,6 +425,47 @@ residual max of 9, identical across all 25 frames of that fixture, which
 looks deterministic and content-independent rather than data-dependent
 and is a second, separate question from the P-picture one.
 
+**A further round correlated the P-picture max-97 residual against motion
+vector magnitude and parity, to discriminate between the two candidates
+above — and eliminated both, while reframing the defect entirely.** Every
+worst-error macroblock in `m1_ip`'s P-picture chain has `fwd=(0,0)`: no
+motion vector, integer or fractional, at all. A wraparound bug needs a
+vector near the `f_code` range limit; a half-pel rounding bug needs a
+fractional component; zero has neither, so both candidates are wrong on
+their own predicted shape. Tracing the exact macroblocks carrying the
+outlier across all 25 frames shows why: the residual is flat at the
+already-known intra ceiling for frames 0-14, jumps to 97/77 at frame
+index 15 — this fixture's *second* I-picture, immediately after its one
+repeated `sequence_header()` — and stays exactly flat through frame 24.
+**"P-picture max-97" has been a mislabelling from the start**: the second
+I-picture mis-decodes two macroblocks once, and every subsequent
+P-picture macroblock at that position has zero motion vector and zero
+residual, so it copies the wrong reconstruction forward unchanged rather
+than re-deriving it. There is no P-picture-specific or motion-compensation
+mechanism here to find.
+
+Independently re-deriving the affected block's IDCT by hand (a textbook
+2D 8-point IDCT-III, not this crate's own implementation) from its own
+dumped, already-dequantised coefficients reproduces this crate's residual
+exactly, ruling out `dequantise()`/`inverse_transform()` arithmetic
+directly rather than by assumption — the defect is upstream, in how the
+affected macroblocks' AC coefficient levels were entropy-decoded (both are
+dense, near-full-spectrum blocks, ~58 of 64 AC coefficients non-zero,
+consistent with a genuine sharp edge in the source content), for a reason
+not yet identified. The motion-vector search space named above (`motion_code`/
+`motion_r` wraparound, half-pel interpolation rounding) can be set aside
+entirely for this residual; a further round would need a VLC/entropy-coding
+hypothesis instead. One real candidate was raised and killed along the
+way: whether `sequence_header()`'s intra/non-intra matrices should persist
+across the fixture's repeated `sequence_header()` rather than reset to
+default. Checked directly against H.262 §6.3.11 ("When a
+sequence_header_code is decoded all matrices shall be reset to their
+default values" — unconditional, every occurrence) and against this
+fixture's own bitstream (both occurrences read `load_intra_quantiser_matrix
+= 0`, so even the wrong reading would be a no-op here): the existing
+reset-every-time implementation was already correct, recorded as a doc
+comment rather than changed.
+
 **This means T2-01a's own "framemd5-identical to reference" acceptance bar
 is not met for either format**, so no issue claiming it is closed by this
 work — but MPEG-2 decode is now correct in every way this session's
