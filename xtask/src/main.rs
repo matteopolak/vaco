@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod comment_check;
 mod coverage;
 mod dead_code;
 mod deps;
@@ -35,6 +36,7 @@ fn main() {
         "dep-gate" => deps::run(),
         "unsafe-audit" => unsafe_audit::run(),
         "dup-check" => dup_check::run(check),
+        "comment-check" => comment_check::run(check),
         "dead-code" => dead_code::run(check),
         "wasm-check" => wasm::run(check),
         "time-gate" => time_gate::run(check),
@@ -58,6 +60,7 @@ fn main() {
             eprintln!("  patent-gate     no encumbered component is in the default build (D4)");
             eprintln!("  owner-gate      each third-party media crate has exactly one owner (D11)");
             eprintln!("  dup-check       one definition per concept (D19)");
+            eprintln!("  comment-check   comments stay short and self-contained");
             eprintln!("  provenance-check  every large constant table names its source (D15)");
             eprintln!("  dead-code       public API that only tests use (report, not a gate)");
             eprintln!("  gen-registry    assemble the registry from crate fragments");

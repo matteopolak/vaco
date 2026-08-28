@@ -722,3 +722,41 @@ Two consequences worth knowing:
 - **Cite findings by title, not only by number**, wherever the citation has to
   survive — issue bodies especially. A number can be renumbered out from under
   you; a title cannot.
+
+## Comments: fewer, shorter, and about the code in front of you
+
+Comments are 23% of this tree — 80,000 lines across 349,000. Individual files
+run to 54% comment, and 263 files carry a single unbroken block of more than
+forty comment lines. That is too much, and most of it was written this month.
+
+`cargo xtask comment-check` enforces the mechanical part:
+
+- **No comment may cite a planning document.** `CONFORMANCE-FINDINGS`,
+  `INTERFACE-GAPS`, `TECH-DEBT`, `AGENT-CONSTRAINTS`, or any `planning/` path.
+  Those documents get renumbered — two findings were renumbered the same day
+  they were written — and a comment pointing into one is wrong from then on.
+  The measurement belongs in the planning doc; the code says what it does.
+- **No comment may cite an issue number.** Say what the code does, not which
+  ticket asked for it.
+- **No unbroken run of more than forty comment lines.**
+
+What the gate cannot check, and matters more:
+
+- **A doc comment says what a function is for and what its contract is.** That
+  is what `///` is for and it earns its place.
+- **A history lesson does not belong in the source.** "This used to do X, which
+  was wrong because Y, and the reference actually does Z, measured across six
+  inputs" is a *commit message*, and git already has it. Keep the one sentence a
+  reader needs — "A-law stores one byte per sample and decodes to `s16`" — and
+  delete the rest.
+- **A comment restating the code is worse than none**, because it is one edit
+  away from lying. Three bugs this month were in code whose comment described
+  the correct behaviour while the code did something else, and the comment is
+  why nobody looked.
+- **Prefer making the code say it.** A named constant, a named function, an
+  early return with a clear condition. If a block needs a paragraph, that is
+  usually a sign it wants a name.
+
+Where a genuinely surprising fact has to be recorded — a specification clause
+the code would otherwise look wrong against, a measured reference behaviour that
+contradicts the obvious reading — keep it, and keep it to a sentence or two.
