@@ -264,6 +264,10 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-protocol-srt | 2 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
 | vaco-protocol-srtp | 2 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
 | vaco-rtp | 1 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-codec-dsp-fmtconvert | 3 | #122 (D-05) | agent:dsp-shared | assigned | 2026-08-28 | — | format conversion DSP, no current caller yet (like D-07/D-09) |
+| vaco-codec-dsp-lpc | 3 | #257 (D-07) | agent:dsp-shared | assigned | 2026-08-28 | — | LPC analysis/synthesis; FLAC/ALAC/Opus-SILK each still have their own local implementation, not touched -- this is the shared primitive for future consolidation |
+| vaco-codec-dsp-idct (blockdsp/pixblockdsp extension) | 3 | #123 (D-11) | agent:dsp-shared | assigned | 2026-08-28 | — | reassigned from agent:idct (done, IDCT-only) to add the blockdsp/pixblockdsp modules D-11 also names; new files only, existing h264/hevc/mpeg2/vp9 modules untouched |
+| vaco-codec-dsp-intrapred | 3 | #126 (D-09) | agent:dsp-shared | assigned | 2026-08-28 | — | generic DC/planar/angular-projection primitives shared by HEVC-family and AV1-family intra pred; H.264/VP8/VP9 already ship their own local intra pred and were not touched |
 # Fan-out plan: core first, then leaves in batches
 
 ## Why this order
