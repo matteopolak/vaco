@@ -658,6 +658,19 @@ git diff HEAD -- planning/ASSIGNMENTS.md
 Lines your own commit added must not appear there as deletions. If they do, the
 working tree is stale and the next writer will undo you.
 
+**The commit-msg hook reads `provenance/sources.toml` from disk, not from
+`HEAD`.** So the usual two-step — register a source in one commit, cite it with
+`Vaco-Spec-Ref` in the next — fails at the second commit if you built the first
+one purely through a private index, because the hook looks at a working-tree
+file your private-index commit never touched. This cost one agent two commits
+before it worked out what was happening.
+
+The fix is the write-back step above, applied to `sources.toml` specifically:
+after the registration commit, append your entry to the working-tree file as
+well. That is not a workaround for the hook, it is the same rule this page
+already states — a private-index commit that does not write back leaves the
+working tree behind `HEAD` — and the hook is simply the first thing to notice.
+
 **Never skip the closing `git reset -q HEAD -- <path>`. This is the step that
 has done the most damage of anything on this page.** A private-index commit
 does not touch the main index, so afterwards the main index still holds the
