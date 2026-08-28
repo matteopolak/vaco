@@ -486,3 +486,115 @@ kind     = "rfc"
 title    = "RFC 1436, The Internet Gopher Protocol — the selector-line request (a bare string terminated by CRLF) and single-character item-type model `vaco-protocol-gopher` implements. Which item types this crate's client actually accepts (5, 9, s) was measured against ffmpeg 8.1 rather than taken from the RFC's full type table, since the RFC specifies what a type character means, not which ones a given client chooses to fetch"
 acquired = "2026-08-27"
 where    = "https://www.rfc-editor.org/rfc/rfc1436"
+
+[[source]]
+id       = "rfc-6386"
+kind     = "rfc"
+title    = "RFC 6386, VP8 Data Format and Decoding Guide"
+acquired = "2026-08-27"
+where    = "https://www.rfc-editor.org/rfc/rfc6386"
+
+[[source]]
+id       = "vp9-bitstream-spec-v0.6"
+kind     = "spec"
+title    = "VP9 Bitstream & Decoding Process Specification, version 0.6 (8 December 2016)"
+acquired = "2026-08-27"
+where    = "https://storage.googleapis.com/downloads.webmproject.org/docs/vp9/vp9-bitstream-specification-v0.6-20160331-draft.pdf"
+
+[[source]]
+id       = "webm-vp-codec-iso-media-file-format-binding"
+kind     = "spec"
+title    = "WebM Project, VP Codec ISO Media File Format Binding (VPCodecConfigurationBox)"
+acquired = "2026-08-27"
+where    = "https://www.webmproject.org/vp9/mp4/"
+
+[[source]]
+id       = "webp-container-spec"
+kind     = "spec"
+title    = "Google, WebP Container Specification"
+acquired = "2026-08-27"
+where    = "https://developers.google.com/speed/webp/docs/riff_container"
+
+[[source]]
+id       = "webp-lossless-bitstream-spec"
+kind     = "spec"
+title    = "Google, WebP Lossless Bitstream Specification"
+acquired = "2026-08-27"
+where    = "https://developers.google.com/speed/webp/docs/webp_lossless_bitstream_specification"
+
+[[source]]
+id       = "ffprobe-vpx-webp-probe"
+kind     = "blackbox"
+title    = "Observed ffprobe profile/level/pix_fmt for VP8 (RFC 6386 frame tag), VP9 (color_space/color_range/subsampling/vpcC, and the -bitexact profile-name-vs-number behaviour), and WebP (VP8 lossy, VP8L lossless, VP8X extended with ALPH), ffmpeg 8.1 with libvpx/libvpx-vp9 encoders plus Pillow-written WebP fixtures (this environment's ffmpeg has no WebP encoder)"
+acquired = "2026-08-27"
+where    = "the reference binary installed on the development machine"
+
+[[source]]
+id       = "iso-11172-2"
+kind     = "spec"
+title    = "ISO/IEC 11172-2, Information technology — Coding of moving pictures and associated audio for digital storage media at up to about 1.5 Mbit/s — Part 2: Video"
+acquired = "2026-08-27"
+where    = "ISO"
+
+[[source]]
+id       = "itu-t-h262"
+kind     = "spec"
+title    = "ITU-T Rec. H.262 | ISO/IEC 13818-2, Generic coding of moving pictures and associated audio information: Video"
+acquired = "2026-08-27"
+where    = "https://www.itu.int/rec/T-REC-H.262"
+
+[[source]]
+id       = "iso-14496-2"
+kind     = "spec"
+title    = "ISO/IEC 14496-2, Coding of audio-visual objects — Part 2: Visual"
+acquired = "2026-08-27"
+where    = "ISO"
+
+[[source]]
+id       = "ffprobe-mpegvideo-probe"
+kind     = "blackbox"
+title    = "Observed ffprobe -f mpegvideo/-f m4v packet boundaries (pos/size/flags), profile/level, and sequence_extension/VideoObjectLayer header fields for MPEG-1, MPEG-2 (profile_and_level_indication byte at six -profile:v values and four -level:v values) and MPEG-4 part 2, ffmpeg 8.1"
+acquired = "2026-08-27"
+where    = "the reference binary installed on the development machine"
+
+[[source]]
+id       = "w3c-png-2"
+kind     = "spec"
+title    = "W3C/ISO/IEC 15948, Portable Network Graphics (PNG) Specification, second edition"
+acquired = "2026-08-27"
+where    = "https://www.w3.org/TR/2003/REC-PNG-20031110/"
+
+[[source]]
+id       = "itu-t-t81"
+kind     = "spec"
+title    = "ITU-T Rec. T.81 | ISO/IEC 10918-1, Digital compression and coding of continuous-tone still images: Requirements and guidelines"
+acquired = "2026-08-27"
+where    = "https://www.itu.int/rec/T-REC-T.81"
+
+[[source]]
+id       = "gif89a-spec"
+kind     = "spec"
+title    = "CompuServe, Graphics Interchange Format Version 89a"
+acquired = "2026-08-27"
+where    = "https://www.w3.org/Graphics/GIF/spec-gif89a.txt"
+
+[[source]]
+id       = "microsoft-bmp-format"
+kind     = "spec"
+title    = "Microsoft, Bitmap Storage: BITMAPFILEHEADER and BITMAPINFOHEADER structures (Windows and OS/2 bitmap)"
+acquired = "2026-08-27"
+where    = "https://learn.microsoft.com/en-us/windows/win32/gdi/bitmap-storage"
+
+[[source]]
+id       = "adobe-tiff-6"
+kind     = "spec"
+title    = "Adobe, TIFF Revision 6.0"
+acquired = "2026-08-27"
+where    = "https://download.osgeo.org/libtiff/doc/TIFF6.pdf"
+
+[[source]]
+id       = "ffprobe-image-headers-probe"
+kind     = "blackbox"
+title    = "Observed ffprobe profile/pix_fmt/bits_per_raw_sample for PNG (six color_type/bit_depth combinations via Pillow), JPEG (SOF0/SOF2, 4:2:0/4:2:2/4:4:4 sampling), GIF (Logical Screen Descriptor, pix_fmt is always bgra), BMP (1/8/16/24/32 bpp via Pillow and ffmpeg), and TIFF (grayscale/RGB at 8 and 16 bits via Pillow), ffmpeg 8.1"
+acquired = "2026-08-27"
+where    = "the reference binary installed on the development machine"

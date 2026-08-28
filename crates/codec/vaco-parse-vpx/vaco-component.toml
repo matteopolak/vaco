@@ -1,0 +1,24 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Two components from one crate, same shape as `vaco-parse-aac`'s
+# `aac`/`aac_latm` split: VP8 and VP9 are different `CodecId`s with different
+# frame-header syntax, so they get two `ParserDesc`s even though one crate
+# implements both.
+
+[[component]]
+kind      = "parser"
+name      = "vp8"
+long_name = "On2 VP8"
+feature   = "parse-vpx"
+ctor      = "vaco_parse_vpx::PARSER"
+media     = "video"
+codec     = "vp8"
+
+[[component]]
+kind      = "parser"
+name      = "vp9"
+long_name = "Google VP9"
+feature   = "parse-vpx"
+ctor      = "vaco_parse_vpx::PARSER_VP9"
+media     = "video"
+codec     = "vp9"
