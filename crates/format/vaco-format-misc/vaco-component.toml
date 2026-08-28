@@ -1,0 +1,50 @@
+# Registry fragment, per the frozen schema in planning/19-parallel-execution.md
+# §3.4.
+
+[[component]]
+kind       = "demuxer"
+name       = "ivf"
+long_name  = "On2 IVF"
+feature    = "demux-ivf"
+ctor       = "vaco_format_misc::ivf::DEMUXER"
+extensions = "ivf"
+
+[[component]]
+kind       = "muxer"
+name       = "ivf"
+long_name  = "On2 IVF"
+feature    = "mux-ivf"
+ctor       = "vaco_format_misc::ivf::MUXER"
+extensions = "ivf"
+
+[[component]]
+kind       = "demuxer"
+name       = "ffmetadata"
+long_name  = "FFmpeg metadata in text"
+feature    = "demux-ffmetadata"
+ctor       = "vaco_format_misc::ffmetadata::DEMUXER"
+extensions = "ffmeta"
+
+[[component]]
+kind       = "demuxer"
+name       = "roq"
+long_name  = "id RoQ"
+feature    = "demux-roq"
+ctor       = "vaco_format_misc::roq::DEMUXER"
+extensions = "roq"
+
+[[component]]
+kind       = "demuxer"
+name       = "flic"
+long_name  = "FLI/FLC/FLX animation"
+feature    = "demux-flic"
+ctor       = "vaco_format_misc::flic::DEMUXER"
+extensions = "fli,flc,flx"
+
+[[component]]
+kind       = "demuxer"
+name       = "cdg"
+long_name  = "CD Graphics"
+feature    = "demux-cdg"
+ctor       = "vaco_format_misc::cdg::DEMUXER"
+extensions = "cdg"
