@@ -128,13 +128,18 @@
 //! send more than one frame per source, which is a genuine, separate
 //! extension, not attempted here.
 //!
-//! A filter crate whose input needs a non-planar pixel format is out of
-//! scope for [`fill_planes`]/[`extract_output`] as written — both assume
-//! full-resolution planar 8-bit, 1-to-3-plane formats, which is every
-//! format this project's own T3 scope/draw filters and the multi-input
-//! filters reached so far use. Extending either function to a new format
-//! means adding an arm to [`parse_pixfmt`] and to the plane-copy loops;
-//! nothing here special-cases a particular filter.
+//! A filter crate whose input needs a *packed* pixel format (`rgba`,
+//! `argb` — multiple components interleaved in one plane, not one
+//! component per plane) is out of scope for [`fill_planes`]/
+//! [`extract_output`]/[`plane_size_sum`] as written — all three assume
+//! full-resolution planar 8-bit, one byte per component per plane, which
+//! covers every format this project's own T3 scope/draw filters and the
+//! multi-input filters reached so far use, `yuva444p` included (4:4:4 has
+//! no chroma subsampling, so its fourth, alpha, plane is still exactly
+//! `width * height` bytes, same as the other three). Reaching a packed or
+//! subsampled format needs `plane_size_sum`'s per-plane byte formula
+//! generalised, not just an arm added to [`parse_pixfmt`] the way
+//! `yuva444p` only needed.
 
 use vaco_color::ColorInfo;
 use vaco_core::{Duration, MediaType, Rational, Timestamp};
@@ -174,18 +179,30 @@ fn parse_pixfmt(token: &str) -> Result<PixFmt, String> {
         "gray8" => Ok(PixFmt::Gray8),
         "yuv444p" => Ok(PixFmt::Yuv444p),
         "gbrp" => Ok(PixFmt::Gbrp),
+        // Added for `premultiply`/`unpremultiply`'s conformance case: the
+        // only alpha-capable format this module can reach without also
+        // generalising to *packed* layouts (`rgba`/`argb`), because
+        // `yuva444p` is planar and 4:4:4 -- every plane is still exactly
+        // `width * height` bytes, same as the three formats above, so
+        // `plane_size_sum`'s formula needs no change, only `fmt.plane_count()`
+        // (below) to report the right number of them.
+        "yuva444p" => Ok(PixFmt::Yuva444p),
         other => Err(format!(
-            "filterexec: pixel format `{other}` is not one of gray8/yuv444p/gbrp \
+            "filterexec: pixel format `{other}` is not one of gray8/yuv444p/gbrp/yuva444p \
              (see filterexec's own doc for why this list is short)"
         )),
     }
 }
 
+/// The real per-format plane count ([`PixFmt::plane_count`]), not a
+/// hand-rolled guess. [`plane_size_sum`] still assumes every plane is
+/// exactly `width * height` bytes (no chroma subsampling, no packed
+/// multi-component-per-plane layout) -- true for all four formats
+/// [`parse_pixfmt`] accepts today, but a future addition that is
+/// subsampled (`yuv420p`) or packed (`rgba`) would need that formula
+/// generalised too, not just this one.
 fn plane_count(fmt: PixFmt) -> usize {
-    match fmt {
-        PixFmt::Gray8 => 1,
-        _ => 3,
-    }
+    fmt.plane_count()
 }
 
 /// One input pad's declared shape: a group of four tokens, either the

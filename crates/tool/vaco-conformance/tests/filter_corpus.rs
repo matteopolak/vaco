@@ -111,17 +111,20 @@ fn pixelize_agrees_with_the_reference() {
     }
 }
 
-/// The first multi-input `filter`-tool cases: `maskedmerge` (3 inputs,
-/// base/overlay/mask, a hand-rolled `Filter`) and `maskedmax`/`maskedmin`
-/// (3 inputs, source/filter1/filter2, `Paired`-wrapped instead — the
-/// *other* multi-input shape this crate uses) through `filterexec.rs`'s
-/// N-source-node support. Also pins the case *count*, not just that every
-/// case that ran agreed — six `[[media]]` entries, all marked `fixed` (see
-/// the suite's own comment), across three axis values must expand to
-/// exactly three cases, not six, nine, or zero, which is exactly the shape
-/// of bug (`Tier::Smoke` silently excluding every case earlier in this
-/// campaign) a bare "for o in outcomes" loop cannot catch on its own if
-/// the corpus quietly produced the wrong number of outcomes.
+/// The multi-input `filter`-tool cases in `vaco-filter-key`, covering
+/// every multi-input adapter shape the crate uses: `maskedmerge` (3
+/// inputs, a hand-rolled `Filter`), `maskedmax`/`maskedmin` (3 inputs,
+/// `Paired`), `threshold` (4 inputs, `Paired` with an `input_count`
+/// override), `maskedclamp` (3 inputs, `Paired`), `maskedthreshold` (2
+/// inputs, `Paired`), and `premultiply` (2 inputs, `Synced` —
+/// `vaco-filter-framesync`, the third and last shape) through
+/// `filterexec.rs`'s N-source-node support. Also pins the case *count*,
+/// not just that every case that ran agreed — every `[[media]]` entry is
+/// `fixed` (see the suite's own comment), so seven axis values must expand
+/// to exactly seven cases, never more (media multiplying a case) or fewer
+/// (a case silently dropped), which is exactly the shape of bug
+/// (`Tier::Smoke` silently excluding every case earlier in this campaign)
+/// a bare "for o in outcomes" loop cannot catch on its own.
 #[test]
 fn multi_input_key_filters_agree_with_the_reference() {
     let Some(outcomes) = run_suite("vaco-filter-key-multi.toml") else {
@@ -129,8 +132,8 @@ fn multi_input_key_filters_agree_with_the_reference() {
     };
     assert_eq!(
         outcomes.len(),
-        3,
-        "expected exactly three cases (six `fixed` media, three axis values); got {outcomes:?}"
+        7,
+        "expected exactly seven cases (all media `fixed`, seven axis values); got {outcomes:?}"
     );
     for o in &outcomes {
         println!("{}: {:?}", o.case.id, o.verdict.label());

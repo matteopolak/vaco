@@ -84,6 +84,104 @@ generate = ["-f", "lavfi", "-i", "color=c=black:s=10x10:d=1:r=25",
             "-vf", "geq=lum='255-X*20':cb=128:cr=128",
             "-frames:v", "1", "-pix_fmt", "gray8", "-f", "rawvideo"]
 
+[[media]]
+id       = "thr-source-10"
+source   = "generated://thr-source-10.raw"
+tags     = ["video"]
+fixed    = true
+generate = ["-f", "lavfi", "-i", "color=c=black:s=10x10:d=1:r=25",
+            "-vf", "geq=lum='X*25':cb=128:cr=128",
+            "-frames:v", "1", "-pix_fmt", "gray8", "-f", "rawvideo"]
+
+[[media]]
+id       = "thr-threshold-10"
+source   = "generated://thr-threshold-10.raw"
+tags     = ["video"]
+fixed    = true
+generate = ["-f", "lavfi", "-i", "color=c=gray:s=10x10:d=1:r=25",
+            "-vf", "geq=lum='100':cb=128:cr=128",
+            "-frames:v", "1", "-pix_fmt", "gray8", "-f", "rawvideo"]
+
+[[media]]
+id       = "thr-min-10"
+source   = "generated://thr-min-10.raw"
+tags     = ["video"]
+fixed    = true
+generate = ["-f", "lavfi", "-i", "color=c=gray:s=10x10:d=1:r=25",
+            "-vf", "geq=lum='10':cb=128:cr=128",
+            "-frames:v", "1", "-pix_fmt", "gray8", "-f", "rawvideo"]
+
+[[media]]
+id       = "thr-max-10"
+source   = "generated://thr-max-10.raw"
+tags     = ["video"]
+fixed    = true
+generate = ["-f", "lavfi", "-i", "color=c=gray:s=10x10:d=1:r=25",
+            "-vf", "geq=lum='240':cb=128:cr=128",
+            "-frames:v", "1", "-pix_fmt", "gray8", "-f", "rawvideo"]
+
+[[media]]
+id       = "mc-base-10"
+source   = "generated://mc-base-10.raw"
+tags     = ["video"]
+fixed    = true
+generate = ["-f", "lavfi", "-i", "color=c=black:s=10x10:d=1:r=25",
+            "-vf", "geq=lum='X*25':cb=128:cr=128",
+            "-frames:v", "1", "-pix_fmt", "gray8", "-f", "rawvideo"]
+
+[[media]]
+id       = "mc-dark-10"
+source   = "generated://mc-dark-10.raw"
+tags     = ["video"]
+fixed    = true
+generate = ["-f", "lavfi", "-i", "color=c=gray:s=10x10:d=1:r=25",
+            "-vf", "geq=lum='50':cb=128:cr=128",
+            "-frames:v", "1", "-pix_fmt", "gray8", "-f", "rawvideo"]
+
+[[media]]
+id       = "mc-bright-10"
+source   = "generated://mc-bright-10.raw"
+tags     = ["video"]
+fixed    = true
+generate = ["-f", "lavfi", "-i", "color=c=gray:s=10x10:d=1:r=25",
+            "-vf", "geq=lum='150':cb=128:cr=128",
+            "-frames:v", "1", "-pix_fmt", "gray8", "-f", "rawvideo"]
+
+[[media]]
+id       = "mt-source-10"
+source   = "generated://mt-source-10.raw"
+tags     = ["video"]
+fixed    = true
+generate = ["-f", "lavfi", "-i", "color=c=gray:s=10x10:d=1:r=25",
+            "-vf", "geq=lum='100':cb=128:cr=128",
+            "-frames:v", "1", "-pix_fmt", "gray8", "-f", "rawvideo"]
+
+[[media]]
+id       = "mt-reference-10"
+source   = "generated://mt-reference-10.raw"
+tags     = ["video"]
+fixed    = true
+generate = ["-f", "lavfi", "-i", "color=c=black:s=10x10:d=1:r=25",
+            "-vf", "geq=lum='100+(X-5)*3':cb=128:cr=128",
+            "-frames:v", "1", "-pix_fmt", "gray8", "-f", "rawvideo"]
+
+[[media]]
+id       = "pm-main-10"
+source   = "generated://pm-main-10.raw"
+tags     = ["video"]
+fixed    = true
+generate = ["-f", "lavfi", "-i", "color=c=black:s=10x10:d=1:r=25",
+            "-vf", "geq=lum='X*20+Y':cb=128:cr=128",
+            "-frames:v", "1", "-pix_fmt", "gray8", "-f", "rawvideo"]
+
+[[media]]
+id       = "pm-alpha-10"
+source   = "generated://pm-alpha-10.raw"
+tags     = ["video"]
+fixed    = true
+generate = ["-f", "lavfi", "-i", "color=c=gray:s=10x10:d=1:r=25",
+            "-vf", "geq=lum='60':cb=128:cr=128",
+            "-frames:v", "1", "-pix_fmt", "gray8", "-f", "rawvideo"]
 [[axis]]
 name   = "filter"
 values = [
@@ -107,6 +205,41 @@ values = [
             "gray8", "10", "10",
             "{media:mm-filter1-10}", "gray8", "10", "10",
             "{media:mm-filter2-10}", "gray8", "10", "10"] },
+  # `threshold` is the 4-input case: `Paired`'s `input_count` override
+  # (default is 2) matters here specifically, not just the multi-input
+  # plumbing -- a design that only handled a fixed/default arity would
+  # not have caught an override being wrong.
+  { id = "threshold-default",
+    extra_media = ["thr-source-10", "thr-threshold-10", "thr-min-10", "thr-max-10"],
+    argv = ["{media:thr-source-10}", "threshold", "", "gray8", "10", "10",
+            "gray8", "10", "10",
+            "{media:thr-threshold-10}", "gray8", "10", "10",
+            "{media:thr-min-10}", "gray8", "10", "10",
+            "{media:thr-max-10}", "gray8", "10", "10"] },
+  { id = "maskedclamp-default",
+    extra_media = ["mc-base-10", "mc-dark-10", "mc-bright-10"],
+    argv = ["{media:mc-base-10}", "maskedclamp", "", "gray8", "10", "10",
+            "gray8", "10", "10",
+            "{media:mc-dark-10}", "gray8", "10", "10",
+            "{media:mc-bright-10}", "gray8", "10", "10"] },
+  { id = "maskedthreshold-default",
+    extra_media = ["mt-source-10", "mt-reference-10"],
+    argv = ["{media:mt-source-10}", "maskedthreshold", "threshold=5", "gray8", "10", "10",
+            "gray8", "10", "10",
+            "{media:mt-reference-10}", "gray8", "10", "10"] },
+  # `premultiply` is `Synced`-shaped (`vaco-filter-framesync`), not
+  # `Paired` or a hand-rolled `Filter` -- the third multi-input adapter
+  # shape in this crate. Both inputs are plain `gray8` (no alpha
+  # channel), which -- per this filter's own module doc -- is not a
+  # weaker case that happens to dodge the interesting question: it is
+  # now the *only* case real ffmpeg's own negotiation ever lets this
+  # filter run with (see premultiply.rs's "Settled, 2026-08-28"), so
+  # this is the actual, universal behaviour, not a corner of it.
+  { id = "premultiply-no-alpha-is-a-no-op",
+    extra_media = ["pm-main-10", "pm-alpha-10"],
+    argv = ["{media:pm-main-10}", "premultiply", "", "gray8", "10", "10",
+            "gray8", "10", "10",
+            "{media:pm-alpha-10}", "gray8", "10", "10"] },
 ]
 
 [compare]
