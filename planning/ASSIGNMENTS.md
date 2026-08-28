@@ -197,6 +197,73 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-format-nut | 4 | #594 | agent:smallfmt | done | 2026-08-23 | 2026-08-28 | fully specified, so byte-identity is reachable — Work package CLOSED; row was never updated. Corrected 2026-08-28. |
 | vaco-protocol-crypto | 2 | #546 | agent:proto | done | 2026-08-23 | 2026-08-28 | AES-CTR over a nested URL; D10 dependency decision — Work package CLOSED; row was never updated. Corrected 2026-08-28. |
 | crates/io (all) | 2 | #550 | agent:proto | done | 2026-08-23 | 2026-08-28 | httpproxy ftp gopher gophers icecast ipfs/ipns gateways — Work package CLOSED; row was never updated. Corrected 2026-08-28. |
+| vaco-bsf-legacy | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-bsf-subtitle | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-codec-aac | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-codec-ac3 | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-codec-adpcm | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-codec-alac | 4 | — | agent:codec-batch | active | 2026-08-28 | — | in flight; backfilled row, was missing entirely |
+| vaco-codec-dsp-sinewin | 3 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-codec-exr | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-codec-ffv1 | 4 | — | agent:codec-batch | active | 2026-08-28 | — | in flight; backfilled row, was missing entirely |
+| vaco-codec-flac | 4 | — | agent:codec-batch | active | 2026-08-28 | — | in flight; backfilled row, was missing entirely |
+| vaco-codec-gif | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-codec-h263 | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-codec-image-simple | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-codec-jpegxl | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-codec-mpegaudio | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-codec-msac | 3 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-codec-null | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-codec-opus | 4 | — | agent:codec-batch | active | 2026-08-28 | — | in flight; backfilled row, was missing entirely |
+| vaco-codec-pcm | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-codec-png | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-codec-pnm | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-codec-qoi | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-codec-rawvideo | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-codec-subtitle-bitmap | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-codec-subtitle-cc | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-codec-subtitle-teletext | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-codec-subtitle-text | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-codec-tiff | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-codec-vlc | 3 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-codec-vorbis | 4 | — | agent:codec-batch | active | 2026-08-28 | — | in flight; backfilled row, was missing entirely |
+| vaco-codec-vp8 | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-codec-vp9 | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-codec-webp | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-crypto | 0 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-demux-mpegaudio | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-filter-aanalysis | 5 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-filter-adynamics | 5 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-filter-artistic | 5 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-filter-draw-vf | 5 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-filter-mm | 5 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-filter-overlay | 5 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-filter-scope | 5 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-filter-stack | 5 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-filter-video-composite | 5 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-format-adaptive | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-format-gxf | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-format-imf | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-format-misc | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-format-misc-audio | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-format-mpegaudio | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-mux-hds | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-mux-mpegaudio | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-mux-mxf | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-mux-smoothstreaming | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-parse-image | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-parse-mpegvideo | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-protocol-ftp | 2 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-protocol-gopher | 2 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-protocol-httpproxy | 2 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-protocol-icecast | 2 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-protocol-ipfs | 2 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-protocol-rist | 2 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-protocol-rtmp | 2 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-protocol-rtp | 2 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-protocol-srt | 2 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-protocol-srtp | 2 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
+| vaco-rtp | 1 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
 # Fan-out plan: core first, then leaves in batches
 
 ## Why this order
