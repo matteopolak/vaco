@@ -358,31 +358,71 @@ anybody writes it.
 
 The same applies to a blocker you recorded yourself an hour ago.
 
-## A VLC table test must assert exact code lengths
+## How confident should a transcribed table be — three tiers, not two
 
-Prefix-freedom and full-value coverage are the obvious properties to check on a
-transcribed variable-length code table, and **neither can catch a wrong code
-length.** An extra leading zero preserves both: the code stays prefix-free, the
-table still covers every value, and the reader silently consumes one bit too
-many from that point on.
+There are three levels of checking a hand-transcribed variable-length code
+table can receive, and this section used to present the middle one as the
+answer. It is not. The tiers, weakest to strongest:
 
-This is not hypothetical. MPEG-2's `CODED_BLOCK_PATTERN` (H.262 Table B.9) had
-its last three codes transcribed at 10 bits where the specification has them at
-9 — one shorter than the four rows above them, an easy miscount. The existing
-prefix-free-and-coverage test passed. Average per-frame deviation on a CIF
-fixture was **234 out of 255**, and the cause was found only by hand-tracing a
-real encoder's bits to one macroblock and reading the nine bits the stream
-actually contained.
+1. **Prefix-free and complete.** Cheap, structural, catches nothing about
+   individual values — see the `CODED_BLOCK_PATTERN` story below for exactly
+   what it misses.
+2. **Prefix-free, complete, and exact per-entry bit length.** Catches the
+   `CODED_BLOCK_PATTERN` class of bug (a code transcribed one bit shorter or
+   longer than the specification states). It does **not** catch a
+   *transposed pair of equal-length codes* — swap two codewords' values
+   between two rows of the same length, and the table is still prefix-free,
+   still complete, and every length is still exactly right. Only the meaning
+   is wrong.
+3. **Checked line-by-line against primary specification text.** The only
+   tier that is actually sufficient. Nothing weaker can be, because tiers 1
+   and 2 are both properties of the table considered as a set — they cannot
+   see that entry number 14 and entry number 31 have swapped meanings.
 
-So for every table you transcribe: assert the **exact bit length of every
-code**, not only that the set is prefix-free and complete. Kraft's inequality
-is a cheaper partial check — a complete code sums to exactly 1, so a too-long
-entry makes the sum fall short — but it is weaker than per-entry lengths and
-cannot localise the error.
+This was corrected after tier 2 was shipped as "the mitigation" and then
+found to not be one: `vaco-codec-h264`'s CAVLC tables were transcribed from
+recollection, checked against both tier-1 and tier-2 tests, and still had
+real errors — several `COEFF_TOKEN_NC2` rows and over half of `RUN_BEFORE`'s
+highest-risk row were **wrong but still prefix-free and correctly
+lengthed**, passing both checks cleanly. Only re-checking every entry
+against a primary edition of the ITU-T text found them.
 
-This applies to every VLC table in the tree, including the shared
-`vaco-codec-vlc` crate, whose own `is_prefix_free` and `kraft_numerator`
-helpers have exactly the blind spot described above.
+The `CODED_BLOCK_PATTERN` story that originally motivated tier 2, kept
+because it is real and still worth knowing: MPEG-2's `CODED_BLOCK_PATTERN`
+(H.262 Table B.9) had its last three codes transcribed at 10 bits where the
+specification has them at 9 — one shorter than the four rows above them, an
+easy miscount. The existing prefix-free-and-coverage test (tier 1) passed.
+Average per-frame deviation on a CIF fixture was **234 out of 255**, and the
+cause was found only by hand-tracing a real encoder's bits to one
+macroblock and reading the nine bits the stream actually contained.
+
+**What this means in practice**: tier 1 (`cargo xtask vlc-scan`, workspace-
+wide — see below) and tier 2 (per-entry length assertions, written where a
+table is tested at all) are both worth doing, because they are cheap and
+each catches a real class of error tier 3 alone would also catch but more
+expensively. Neither is a substitute for tier 3, and a table's own
+documentation — or a commit message reporting it as "verified" — must say
+which tier it actually received, not imply the stronger one from having
+passed the weaker one. `provenance/*.toml`'s `method = "transcribed"` rows
+do not currently distinguish tiers; a table verified against primary text
+line-by-line (H.264's CAVLC tables, now) is not distinguished there from one
+that has only ever passed tier 1, which is worth fixing separately from this
+correction.
+
+`cargo xtask vlc-scan` runs tier 1 across every hand-transcribed
+`(bit-length, code)`-shaped table in the tree it knows about (see that
+module's own doc for exactly which tables and why some codecs — AC-3 has no
+VLC tables at all; VP8/VP9's mode/coefficient tables are binary-tree
+traversal structures, not independently-transcribed bit-strings that could
+collide) — cheap enough to run on every change, and it is a *gate*: a real
+conflict fails the build. It does not import `vaco-codec-vlc`'s own
+`is_prefix_free` (`xtask` is deliberately dependency-free, so that a
+transient compile break in a codec crate cannot take every gate down with
+it) — the same ~15-line algorithm is re-derived there instead. A crate whose
+tables are already shaped as `vaco-codec-vlc::VlcEntry` (`vaco-codec-aac`'s
+spectral codebooks, for instance) should call `is_prefix_free`/
+`kraft_numerator` directly in its own test suite instead — that is tier 1
+too, just run where the table already lives rather than swept externally.
 
 ## Fuzzing (**D6**)
 
