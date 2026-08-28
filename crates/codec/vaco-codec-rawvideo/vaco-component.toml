@@ -1,0 +1,167 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+# 9 decoders / 9 encoders, one row per CodecId this family declares (issue
+# #281, C-03). `avui`'s pair is registered like every other identity here even
+# though both directions currently return `Error::Unsupported` — see the
+# crate docs for why that is the honest option rather than a guess.
+
+[[component]]
+kind      = "decoder"
+name      = "rawvideo"
+long_name = "raw video"
+feature   = "codec-rawvideo"
+ctor      = "vaco_codec_rawvideo::RAWVIDEO_DECODER"
+media     = "video"
+codec     = "rawvideo"
+
+[[component]]
+kind      = "encoder"
+name      = "rawvideo"
+long_name = "raw video"
+feature   = "codec-rawvideo"
+ctor      = "vaco_codec_rawvideo::RAWVIDEO_ENCODER"
+media     = "video"
+codec     = "rawvideo"
+
+[[component]]
+kind      = "decoder"
+name      = "bitpacked"
+long_name = "Bitpacked"
+feature   = "codec-rawvideo"
+ctor      = "vaco_codec_rawvideo::BITPACKED_DECODER"
+media     = "video"
+codec     = "bitpacked"
+
+[[component]]
+kind      = "encoder"
+name      = "bitpacked"
+long_name = "Bitpacked"
+feature   = "codec-rawvideo"
+ctor      = "vaco_codec_rawvideo::BITPACKED_ENCODER"
+media     = "video"
+codec     = "bitpacked"
+
+[[component]]
+kind      = "decoder"
+name      = "wrapped_avframe"
+long_name = "AVFrame to AVPacket passthrough"
+feature   = "codec-rawvideo"
+ctor      = "vaco_codec_rawvideo::WRAPPED_AVFRAME_DECODER"
+media     = "video"
+codec     = "wrapped_avframe"
+
+[[component]]
+kind      = "encoder"
+name      = "wrapped_avframe"
+long_name = "AVFrame to AVPacket passthrough"
+feature   = "codec-rawvideo"
+ctor      = "vaco_codec_rawvideo::WRAPPED_AVFRAME_ENCODER"
+media     = "video"
+codec     = "wrapped_avframe"
+
+[[component]]
+kind      = "decoder"
+name      = "v210"
+long_name = "Uncompressed 4:2:2 10-bit"
+feature   = "codec-rawvideo"
+ctor      = "vaco_codec_rawvideo::V210_DECODER"
+media     = "video"
+codec     = "v210"
+
+[[component]]
+kind      = "encoder"
+name      = "v210"
+long_name = "Uncompressed 4:2:2 10-bit"
+feature   = "codec-rawvideo"
+ctor      = "vaco_codec_rawvideo::V210_ENCODER"
+media     = "video"
+codec     = "v210"
+
+[[component]]
+kind      = "decoder"
+name      = "v210x"
+long_name = "Uncompressed 4:2:2 10-bit"
+feature   = "codec-rawvideo"
+ctor      = "vaco_codec_rawvideo::V210X_DECODER"
+media     = "video"
+codec     = "v210x"
+
+[[component]]
+kind      = "encoder"
+name      = "v210x"
+long_name = "Uncompressed 4:2:2 10-bit"
+feature   = "codec-rawvideo"
+ctor      = "vaco_codec_rawvideo::V210X_ENCODER"
+media     = "video"
+codec     = "v210x"
+
+[[component]]
+kind      = "decoder"
+name      = "r210"
+long_name = "Uncompressed RGB 10-bit"
+feature   = "codec-rawvideo"
+ctor      = "vaco_codec_rawvideo::R210_DECODER"
+media     = "video"
+codec     = "r210"
+
+[[component]]
+kind      = "encoder"
+name      = "r210"
+long_name = "Uncompressed RGB 10-bit"
+feature   = "codec-rawvideo"
+ctor      = "vaco_codec_rawvideo::R210_ENCODER"
+media     = "video"
+codec     = "r210"
+
+[[component]]
+kind      = "decoder"
+name      = "r10k"
+long_name = "AJA Kona 10-bit RGB Codec"
+feature   = "codec-rawvideo"
+ctor      = "vaco_codec_rawvideo::R10K_DECODER"
+media     = "video"
+codec     = "r10k"
+
+[[component]]
+kind      = "encoder"
+name      = "r10k"
+long_name = "AJA Kona 10-bit RGB Codec"
+feature   = "codec-rawvideo"
+ctor      = "vaco_codec_rawvideo::R10K_ENCODER"
+media     = "video"
+codec     = "r10k"
+
+[[component]]
+kind      = "decoder"
+name      = "y41p"
+long_name = "Uncompressed YUV 4:1:1 12-bit"
+feature   = "codec-rawvideo"
+ctor      = "vaco_codec_rawvideo::Y41P_DECODER"
+media     = "video"
+codec     = "y41p"
+
+[[component]]
+kind      = "encoder"
+name      = "y41p"
+long_name = "Uncompressed YUV 4:1:1 12-bit"
+feature   = "codec-rawvideo"
+ctor      = "vaco_codec_rawvideo::Y41P_ENCODER"
+media     = "video"
+codec     = "y41p"
+
+[[component]]
+kind      = "decoder"
+name      = "avui"
+long_name = "Avid Meridien Uncompressed"
+feature   = "codec-rawvideo"
+ctor      = "vaco_codec_rawvideo::AVUI_DECODER"
+media     = "video"
+codec     = "avui"
+
+[[component]]
+kind      = "encoder"
+name      = "avui"
+long_name = "Avid Meridien Uncompressed"
+feature   = "codec-rawvideo"
+ctor      = "vaco_codec_rawvideo::AVUI_ENCODER"
+media     = "video"
+codec     = "avui"
