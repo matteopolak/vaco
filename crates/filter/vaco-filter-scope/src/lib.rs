@@ -67,6 +67,7 @@
 mod common;
 pub mod datascope;
 mod font8x8;
+pub mod oscilloscope;
 pub mod drawgraph;
 pub mod graphmonitor;
 pub mod histogram;

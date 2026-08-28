@@ -259,3 +259,25 @@ fn the_text_ceiling_filters_still_produce_a_frame() {
         );
     }
 }
+
+/// `oscilloscope` at `behavioural`, not `raw-tolerant` -- see
+/// `vaco-filter-scope-oscilloscope.toml`'s own comment for why the
+/// measured formulas do not yet add up to a small, defensible byte
+/// tolerance.
+#[test]
+fn oscilloscope_still_produces_a_frame() {
+    let Some(outcomes) = run_suite("vaco-filter-scope-oscilloscope.toml") else {
+        return;
+    };
+    for o in &outcomes {
+        println!("{}: {:?}", o.case.id, o.verdict.label());
+        assert!(
+            matches!(o.verdict, Verdict::Agree),
+            "case `{}` did not agree at the behavioural (outcome-class-only) level: {:?}\n  ours:   {}\n  theirs: {}",
+            o.case.id,
+            o.verdict,
+            o.ours_command,
+            o.theirs_command
+        );
+    }
+}

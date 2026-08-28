@@ -1,0 +1,53 @@
+# `oscilloscope`'s own suite.
+#
+# `src/oscilloscope.rs`'s own doc records real, individually-measured
+# formulas for the `sc` line's axis-aligned geometry, the trace box's
+# rectangle, the fill blend, and the value-to-row mapping. What those
+# measurements do NOT support is a `raw-tolerant` claim at a small,
+# scharr-style bound: re-measured directly against this suite's own
+# `gray8-ramp-100` media (2026-08-28), the default (`t=0.5`, horizontal)
+# case alone already shows 732 of 10000 bytes differing, several of them
+# a full fill-vs-trace swap (a byte reading `235` on one side and a
+# background-range value on the other) caused by a sub-pixel row/column
+# rounding boundary landing on a different integer pixel than the
+# reference's own -- individually a one-pixel-boundary difference, but
+# rendered as a large byte-value swap because the two things being told
+# apart (background fill vs. the trace's own fixed `235`) are far apart
+# in value, not because the underlying geometry is wrong. That is a
+# real, disclosed residual, not a `small max_abs` case honestly, so this
+# suite checks the weaker, still real thing: both sides produce a frame
+# at all, at C7 `behavioural`, the same tier `vaco-filter-scope-text-
+# ceiling.toml` already uses for a different, permanent reason. A tilted
+# (non-default `t`/`x`/`y`/`s`) line combined with the default trace box
+# was also measured and found to diverge far more (roughly a quarter of
+# the box), recorded in the module doc as an unresolved residual rather
+# than shipped at all -- not covered by this suite even at `behavioural`.
+
+schema = 1
+suite  = "filter-vaco-filter-scope-oscilloscope"
+tool   = "filter"
+tier   = "core"
+owner  = "@filter-scope-owner"
+
+[[media]]
+id       = "gray8-ramp-100"
+source   = "generated://gray8-ramp-100.raw"
+tags     = ["video"]
+generate = ["-f", "lavfi", "-i", "color=c=black:s=100x100:d=1:r=25",
+            "-vf", "geq=lum='mod(X*5+Y*7,256)':cb=128:cr=128",
+            "-frames:v", "1", "-pix_fmt", "gray8", "-f", "rawvideo"]
+
+[[axis]]
+name   = "filter"
+values = [
+  { id = "default", argv = ["{media}", "oscilloscope", "", "gray8", "100", "100", "gray8", "100", "100"] },
+  { id = "no-grid-no-stats", argv = ["{media}", "oscilloscope", "g=0:st=0", "gray8", "100", "100", "gray8", "100", "100"] },
+]
+
+[compare]
+mode             = "behavioural"
+downgrade_reason = "the sc line's axis-aligned geometry, the trace box rectangle, the fill blend, and the value-to-row mapping are individually measured formulas (see src/oscilloscope.rs's own doc), but their combination lands a meaningful fraction of pixels on the wrong side of a fill-vs-trace rounding boundary -- a real, disclosed residual, not yet pinned tightly enough for a raw-tolerant claim at a defensible bound. \"did both sides produce a frame\" is still a real, falsifiable assertion in the meantime."
+timeout          = "10s"
+
+[normalise]
+invocation = ["bitexact", "hide-banner"]

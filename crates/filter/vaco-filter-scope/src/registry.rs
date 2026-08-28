@@ -14,6 +14,7 @@ const NAMES: &[&str] = &[
     "drawgraph",
     "adrawgraph",
     "vectorscope",
+    "oscilloscope",
 ];
 
 /// Implements [`FilterRegistry`] for every filter in this crate.
@@ -37,6 +38,7 @@ impl FilterRegistry for ScopeRegistry {
             "drawgraph" => crate::drawgraph::create(req),
             "adrawgraph" => crate::drawgraph::create_audio(req),
             "vectorscope" => crate::vectorscope::create(req),
+            "oscilloscope" => crate::oscilloscope::create(req),
             other => Err(format!("vaco-filter-scope: no filter named `{other}`")),
         }
     }
