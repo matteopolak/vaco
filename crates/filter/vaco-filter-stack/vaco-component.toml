@@ -1,0 +1,25 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Plan 16 §4.2's `vaco-filter-stack` row: hstack, vstack, xstack (grid mode
+# only — see `docs/filter/vaco-filter-stack.md` for `layout=`'s disposition).
+
+[[component]]
+kind = "filter"
+name = "hstack"
+long_name = "Stack video inputs horizontally."
+ctor = "vaco_filter_stack::hstack::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "vstack"
+long_name = "Stack video inputs vertically."
+ctor = "vaco_filter_stack::vstack::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "xstack"
+long_name = "Stack video inputs into custom layout."
+ctor = "vaco_filter_stack::xstack::DESC"
+media = "video"
