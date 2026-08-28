@@ -6724,3 +6724,61 @@ reopened as anything -- surfaced here for whoever next looks at #419.
 
 `Vaco-Spec-Ref: iso-iec-14496-10-2002-draft` clause 8.7 (deblocking
 filter process, not implemented).
+## vaco-codec-h263: Annex I's tables and reconstruction math landed, decode-path wiring still open
+
+Issue #359 judged this round: D/K/T/J/F are implemented, E/G/P are
+ruled out on the two-independent-reasons bar (architectural mismatch
+plus no `ffmpeg` encoder option), L closed as nothing pixel-affecting.
+Annex I does not qualify for that closure -- `ffmpeg -h full` confirms
+`-flags +aic` genuinely exists on this build -- so #359 stays open,
+narrowed to Annex I alone. Committed as `1465970`.
+
+Annex I (Advanced INTRA Coding) work landed this round, `bf1858c`:
+Table I.1 (`H263_INTRA_MODE`) and Table I.2 (`H263_INTRA_TCOEF`, 102
+rows) transcribed and verified three ways -- self-consistency (exact
+codeword-set equality with the shipped baseline `H263_TCOEF`, prefix-
+freedom), primary-text spot checks, and a full independent
+re-extraction straight from the primary text (zero mismatches across
+all 102 rows, done specifically because the real-bitstream validation
+below raised a doubt the self-consistency check alone couldn't settle).
+The §I.3 reconstruction math (`annex_i_dequant`'s no-dead-zone
+doubling, `clip_ac`, `oddify_clip_dc`, and `annex_i_reconstruct` for
+prediction modes 0/1/2 including their neighbour-unavailable
+fallbacks) is implemented and unit-tested per mode against the primary
+text's own pseudocode. Both are `dead_code` -- nothing wired into the
+decode path yet.
+
+Attempted the "cross-check against a real fixture before building the
+reconstruction on top of it" validation the coordinator asked for, in
+scratch (a from-scratch Python replica of the macroblock/block layer,
+checked against a real `ffmpeg -flags +aic` encode -- no `ffmpeg`
+source read, per D6/D7). It decoded 11 real INTRA macroblocks (255
+TCOEF events) cleanly before diverging. Along the way it caught one
+real bug: `DQUANT` belongs *before* `CBPY` for an INTRA+Q macroblock,
+contradicting the field order Figures 9/10/I.1 list left-to-right --
+confirmed against this crate's own already-validated baseline decoder,
+which reads them in that order (the figures document field presence,
+not transmission order, it seems). This ffmpeg build also couples
+`+aic` with `slice_structured`, `custom_pcf`, and Modified
+Quantization automatically, so the validation script had to parse
+Annex K slice headers and Annex T's variable-length `DQUANT` too. The
+eventual divergence was not root-caused -- most likely candidate is
+Annex I's own `INTRADC`/`CBPY` presence-gate reinterpretation, stated
+in prose rather than a diagram, but not confirmed. Reported rather than
+guessed past: wiring macroblock-layer `INTRA_MODE` dispatch,
+neighbour-availability tracking, and alternate-scan selection on top of
+an unconfirmed presence-gate model would risk landing decode logic no
+fixture actually confirms, which is exactly the `sobel` border-rule
+shape the coordinator warned against.
+
+Gates: `cargo test/clippy -p vaco-codec-h263` clean (65 unit + 4
+regression-guard tests). `git status --porcelain` (unscoped) checked
+before every commit; the shared index had other agents' work staged
+mid-round (registry/filter crates) and an in-progress
+`vaco-codec-dsp-deblock` scaffold with an empty `src/`, cleared with
+`scripts/unblock-manifests.py` per `planning/AGENT-CONSTRAINTS.md`
+rather than touched by hand. Pathspec-scoped commits confirmed once
+again to leave concurrent agents' unrelated staged files untouched.
+
+`Vaco-Spec-Ref: itu-t-h263` Annex I §I.2 (Table I.1), §I.3 (Table I.2,
+dequantisation, `clipAC`/`oddifyclipDC`, prediction modes 0/1/2).

@@ -481,8 +481,50 @@ the replacement bar above:**
   correcting an earlier working assumption that it might not exist) —
   a real differential fixture is available, so the annex is both
   architecturally additive (an `MCBPC`-adjacent per-block prediction
-  step, not a different reconstruction pipeline) and checkable. Not yet
-  implemented.
+  step, not a different reconstruction pipeline) and checkable.
+
+  Landed so far (`block.rs`, `tables.rs`): Table I.1 (`H263_INTRA_MODE`)
+  and Table I.2 (`H263_INTRA_TCOEF`) are transcribed and verified —
+  self-consistency (Table I.2's codeword set is exactly the shipped
+  baseline `H263_TCOEF`'s own set, prefix-free), primary-text spot
+  checks, and, after a real-bitstream validation surfaced a doubt about
+  whether the earlier hand-typed pass had been fully clean, a second,
+  completely independent extraction straight from the primary text with
+  zero mismatches against the shipped table across all 102 rows. The
+  §I.3 reconstruction math (`annex_i_dequant`, `clip_ac`,
+  `oddify_clip_dc`, `annex_i_reconstruct` for prediction modes 0/1/2 and
+  their neighbour-unavailable fallbacks) is implemented and unit-tested
+  per mode directly against the primary text's own pseudocode, including
+  the DC average's truncate-towards-zero rounding. Both are marked
+  `dead_code` — nothing here is wired into the decode path yet.
+
+  Not yet done, and the harder remaining piece: macroblock-layer
+  `INTRA_MODE` parsing, the MCBPC/CBPY presence-gate reinterpretation
+  Annex I specifies for `INTRADC` ("no longer handled as a separate
+  case ... treated in the same way as the AC coefficients"), alternate
+  DCT scan selection, and same-segment neighbour-availability tracking.
+  A real `-flags +aic` fixture was built and validated by hand at the
+  bitstream level (a from-scratch Python replica of the macroblock/block
+  layer, checked against Table I.2 directly — no `ffmpeg` source read,
+  per D6/D7): it decoded 11 real INTRA macroblocks (255 TCOEF events,
+  several via the escape path, three different `INTRA_MODE` values)
+  cleanly before diverging. That process caught one real ordering bug
+  along the way (`DQUANT` belongs *before* `CBPY` for an INTRA+Q
+  macroblock, contradicting the field order Figures 9/10/I.1 list
+  left-to-right — confirmed against this crate's own already-validated
+  baseline decoder, which reads them in that order) — evidence the
+  cross-check is doing its job, not evidence the remaining wiring is
+  understood well enough to land. The fixture also confirmed this
+  `ffmpeg` build couples `+aic` with `slice_structured`, `custom_pcf`,
+  and Modified Quantization automatically, so any full wiring attempt
+  has to parse Annex K slice headers and Annex T's variable-length
+  `DQUANT` correctly too, not just Annex I in isolation. The divergence
+  itself is not yet root-caused; the most likely remaining gap is in the
+  exact `INTRADC`/`CBPY` presence semantics Annex I redefines, which the
+  primary text states in prose rather than a diagram. Reported rather
+  than landed, per "land what is verified and report" — wiring this in
+  without resolving that gap would risk shipping decode logic no
+  fixture confirms is correct.
 
 `plus::parse` bails to `unsupported` (same flat-mid-grey `CORRUPT`
 convention as the baseline decoder) for any picture using Annex E, G, I,
