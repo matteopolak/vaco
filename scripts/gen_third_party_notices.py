@@ -41,25 +41,43 @@ NOTICES_TOML = ROOT / "provenance" / "third-party-notices.toml"
 PROVENANCE_DIR = ROOT / "provenance"
 DEFAULT_OUTPUT = ROOT / "THIRD_PARTY_LICENSES.html"
 
-# Keywords that mean "this provenance entry describes code under a licence
+# Patterns that mean "this provenance entry describes code under a licence
 # that carries a redistribution/attribution duty", as opposed to a bare
 # specification/RFC citation (which carries no such duty -- reading and
 # implementing from a spec is not copying its expression) or an observed
 # ffmpeg-binary behaviour (probing a binary's behaviour is not redistributing
-# its code). Deliberately narrow and reviewed by a human each time it fires,
+# its code). Deliberately broad and reviewed by a human each time one fires,
 # not a legal classifier: see the docstring's "Skipping (2)" paragraph for
 # why a false negative here is the expensive direction to be wrong in.
+#
+# Kept as regex, not plain substrings, after a real miss: a provenance entry
+# landed the same day as this script (provenance/sources.toml's
+# libvpx-vp8-encoder, "libvpx (BSD-3-Clause)") in the hyphenated SPDX-id
+# spelling, which no plain-substring form here matched. The bare `\bBSD\b`
+# and `\bMIT\b` fallbacks are deliberately wide for the same reason --
+# checked against the whole provenance/ corpus at the time they were added
+# and produced no false positive that wasn't already covered by a more
+# specific pattern above it.
 LICENCE_KEYWORDS = (
-    "Apache License",
-    "BSD License",
-    "3-clause BSD",
-    "2-clause BSD",
-    "Simplified BSD",
-    "MIT License",
-    "ISC License",
-    "zlib license",
+    r"Apache License",
+    r"Apache-2\.0",
+    r"BSD License",
+    r"BSD-\d-Clause",
+    r"\d-clause BSD",
+    r"Simplified BSD",
+    r"\bBSD\b",
+    r"MIT License",
+    r"\bMIT\b",
+    r"ISC License",
+    r"zlib license",
 )
-SOURCE_ID_RE = re.compile(r'^\s*id\s*=\s*"([^"]+)"', re.MULTILINE)
+LICENCE_KEYWORD_RES = [re.compile(pat, re.IGNORECASE) for pat in LICENCE_KEYWORDS]
+# `[[source]]` blocks name themselves with `id = "..."`; `[[table]]` blocks
+# (which don't declare a source, only cite one) use `source = "..."`
+# instead. Match either so a licence-keyword hit inside a table-only file
+# (vaco-codec-opus.toml has no [[source]] blocks at all) still resolves to
+# the source id it is actually citing, rather than reporting "no id found".
+SOURCE_ID_RE = re.compile(r'^\s*(?:id|source)\s*=\s*"([^"]+)"', re.MULTILINE)
 SOURCE_BLOCK_RE = re.compile(r"^\[\[source\]\]\s*$", re.MULTILINE)
 
 
@@ -134,7 +152,8 @@ def scan_provenance_gaps(covered_ids: set[str]) -> list[str]:
             (m.start(), m.group(1)) for m in SOURCE_ID_RE.finditer(text)
         ]
         for lineno, line in enumerate(lines):
-            if not any(kw.lower() in line.lower() for kw in LICENCE_KEYWORDS):
+            matches = [rx.pattern for rx in LICENCE_KEYWORD_RES if rx.search(line)]
+            if not matches:
                 continue
             offset = sum(len(l) + 1 for l in lines[:lineno])
             after = [pos for pos in source_positions if pos[0] >= offset]
@@ -154,9 +173,8 @@ def scan_provenance_gaps(covered_ids: set[str]) -> list[str]:
             if nearest_id is None or nearest_id not in covered_ids:
                 gaps.append(
                     f"{path.relative_to(ROOT)}:{lineno + 1}: matched "
-                    f"{[kw for kw in LICENCE_KEYWORDS if kw.lower() in line.lower()][0]!r}, "
-                    f"nearest source id = {nearest_id!r} -- not in "
-                    f"provenance/third-party-notices.toml"
+                    f"{matches[0]!r}, nearest source id = {nearest_id!r} -- "
+                    f"not in provenance/third-party-notices.toml"
                 )
     return gaps
 

@@ -47,6 +47,24 @@ BSD-licensed from the RFC's own IETF-Trust prose licence), not a
 clean-room violation."""
 
 [[notice]]
+id        = "libvpx-vp8-encoder-reference"
+sources   = ["libvpx-vp8-encoder"]
+crates    = ["vaco-codec-vp8"]
+name      = "libvpx reference implementation (vp8/encoder/dct.c)"
+copyright = "Copyright (c) 2010, The WebM Project authors. All rights reserved."
+license   = "BSD-3-Clause"
+# Fetched 2026-08-28 directly from
+# https://raw.githubusercontent.com/webmproject/libvpx/main/LICENSE
+license_text_file = "LICENSES/libvpx-bsd-3-clause.txt"
+note = """
+RFC 6386 S14 only gives decode-side WHT/DCT pseudocode; vaco-codec-vp8's
+encoder needed the real mathematical inverse, which was derived by reading
+libvpx's vp8_short_fdct4x4_c and vp8_short_walsh4x4_c
+(vp8/encoder/dct.c). Tier A per D7/D15 (libvpx is BSD-3-Clause, already
+cleared in the register), not a clean-room violation -- see
+provenance/sources.toml's libvpx-vp8-encoder entry."""
+
+[[notice]]
 id        = "alac-apple-reference"
 sources   = ["alac-agc-source"]
 crates    = ["vaco-codec-alac"]
