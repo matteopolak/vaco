@@ -2712,6 +2712,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-filter-overlay"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "smallvec",
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-filter-framesync",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-opts",
+ "vaco-pixfmt",
+]
+
+[[package]]
 name = "vaco-filter-scope"
 version = "0.1.0"
 dependencies = [
@@ -3911,6 +3926,7 @@ dependencies = [
  "vaco-filter-key",
  "vaco-filter-lut",
  "vaco-filter-mm",
+ "vaco-filter-overlay",
  "vaco-filter-scope",
  "vaco-filter-source",
  "vaco-filter-stack",

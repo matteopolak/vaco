@@ -347,6 +347,9 @@ path = "../../filter/vaco-filter-lut"
 [dependencies.vaco-filter-mm]
 path = "../../filter/vaco-filter-mm"
 
+[dependencies.vaco-filter-overlay]
+path = "../../filter/vaco-filter-overlay"
+
 [dependencies.vaco-filter-scope]
 path = "../../filter/vaco-filter-scope"
 
