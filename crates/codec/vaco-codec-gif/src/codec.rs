@@ -153,6 +153,13 @@ pub fn encode(frames: &[Frame]) -> Result<Vec<u8>> {
     let FrameData::Video { width, height, .. } = &first.data else {
         return Err(Error::Unsupported("gif: audio frame"));
     };
+    if *width == 0 || *height == 0 {
+        // A zero-width or zero-height frame has no meaningful GIF
+        // encoding: found by fuzzing, where a degenerate decoded frame
+        // (dimensions from a malformed logical screen descriptor) produced
+        // bytes that failed to re-decode rather than erroring outright.
+        return Err(Error::InvalidData("gif: zero-sized frame"));
+    }
     let (width, height) = (
         u16::try_from(*width).map_err(|_| Error::InvalidData("gif: width exceeds u16"))?,
         u16::try_from(*height).map_err(|_| Error::InvalidData("gif: height exceeds u16"))?,
