@@ -1,0 +1,10 @@
+# Registry fragment. Consumed by `cargo xtask gen-registry`.
+
+[[component]]
+kind      = "decoder"
+name      = "av1"
+long_name = "AV1 (intra-only; AV1 Bitstream & Decoding Process Specification v1.0.0 with Errata 1)"
+feature   = "codec-av1"
+ctor      = "vaco_codec_av1::AV1_DECODER"
+media     = "video"
+codec     = "av1"
