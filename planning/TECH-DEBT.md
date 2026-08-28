@@ -1433,3 +1433,35 @@ first-tag-creates-a-stream problem (`AGENT-CONSTRAINTS.md`'s "an empty
 collection at construction is not an answer") was accepted rather than solved
 generically. Whoever next touches `roq` should decide which, with a real
 multi-hundred-frame fixture in hand rather than a synthetic three-chunk one.
+
+### Correction: the generated `fuzz/Cargo.toml` blocking-on-one-crate item above is resolved
+
+`xtask/src/gen_fuzz.rs` now emits every path dependency as `optional = true`,
+gated behind the feature named after the crate whose target declares it —
+exactly the change this entry proposed and did not attempt. `default` still
+lists every feature, so a plain `cargo fuzz run <target>` (no flags) keeps
+building everything, matching the existing behaviour when the tree is
+healthy; `--no-default-features --features <feature>` now genuinely scopes
+the build to one target's own crate and whatever it references.
+
+Verified behaviourally: introduced a one-line unclosed delimiter into
+`vaco-codec-golomb/src/lib.rs` (idle at the time, unrelated to `vaco-expr`),
+then built and ran `expr_parse --no-default-features --features expr` while
+`vaco-codec-golomb` stayed broken on disk. It built and ran to completion
+(exit=0, execs=4939095) without ever compiling the broken crate; the same
+target without `--no-default-features` failed to build, confirming the flag
+is load-bearing and `default` alone does not fix the blocking. Reverted the
+golomb file immediately after.
+
+`Justfile`'s `fuzz` and `fuzz-all` recipes previously passed neither
+`--features` nor `--no-default-features` at all — worse than the incantation
+the briefs documented, since they always built the full default set
+regardless of target. Both now resolve the target's feature from the
+generated manifest and pass `--no-default-features --features <feature>`.
+
+Not done here, reported instead: `planning/AGENT-CONSTRAINTS.md` and
+`planning/AGENT-BRIEF-TEMPLATE.md` both still say
+`cargo +nightly fuzz run <target> --features <feature> -- ...` with no
+`--no-default-features`, which is now the difference between an isolated
+build and a build that still depends on every other crate in the tree
+compiling. Whoever edits those next should add the flag.
