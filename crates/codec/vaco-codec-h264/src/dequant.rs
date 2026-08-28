@@ -78,9 +78,9 @@ pub(crate) fn level_scale(m: u32, i: u32, j: u32) -> i32 {
         .get((m % 6) as usize)
         .copied()
         .unwrap_or([16, 16, 16]);
-    let col = if (i % 2 == 0) && (j % 2 == 0) {
+    let col = if i.is_multiple_of(2) && j.is_multiple_of(2) {
         0
-    } else if (i % 2 == 1) && (j % 2 == 1) {
+    } else if !i.is_multiple_of(2) && !j.is_multiple_of(2) {
         1
     } else {
         2
@@ -162,7 +162,7 @@ pub(crate) fn dequant_4x4(c: &[i32; 16], qp: i32, dc_already_scaled: bool) -> [i
             d[idx] = if dc_already_scaled && i == 0 && j == 0 {
                 c[idx]
             } else {
-                c[idx] * level_scale(m, i, j) << shift
+                (c[idx] * level_scale(m, i, j)) << shift
             };
         }
     }
