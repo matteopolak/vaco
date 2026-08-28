@@ -1,0 +1,36 @@
+[package]
+name = "vaco-fuzz-support"
+description = "Shared fuzz-target scaffolding: progress/deadline guards, bounded structured-input types, and corpus/regression replay."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+name = "vaco_fuzz_support"
+path = "src/lib.rs"
+
+[dependencies]
+vaco-limits = { path = "../../core/vaco-limits" }
+# `arbitrary` is not in [workspace.dependencies] — it is deliberately confined
+# to `fuzz/Cargo.toml` (a separate, excluded workspace) everywhere else in
+# this tree, so that it never enters a shipped artifact's dependency graph.
+# This crate is the one exception: it is itself fuzz-only scaffolding (never
+# depended on by `vaco`, `vaco-probe` or `vaco-play`), and its whole purpose
+# is to give every `fuzz/fuzz_targets/*.rs` file a shared, tested `Arbitrary`
+# vocabulary instead of each hand-rolling its own. Declared directly here
+# (not via `[workspace.dependencies]`), the same pattern `vaco-codec-alac`
+# and `vaco-codec-flac` already use for `alac`/`claxon` — a per-crate D10
+# adoption, not a workspace-wide one.
+arbitrary = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.vaco]
+layer = 10
