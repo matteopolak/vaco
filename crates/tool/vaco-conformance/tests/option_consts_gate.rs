@@ -75,25 +75,13 @@ use vaco_filter_graph::ast;
 use vaco_filter_graph::registry::Instantiate;
 
 /// `(filter, option)` pairs this gate already knows do not parse named
-/// constants, and does not fail on, because the crate that owns them is a
-/// separate, currently open assignment — `vaco-filter-color`, "assigned,
-/// no completion date" in `planning/ASSIGNMENTS.md` as of this gate's
-/// construction — not this dispatch's to fix. Every other filter this
-/// gate reaches (including this same crate's own `hilbert`, `telecine`,
-/// and `asidedata`/`sidedata`, all fixed alongside this gate) has zero
-/// entries here; a fresh failure anywhere else still fails the build.
-///
-/// Whoever finishes `vaco-filter-color`'s `pc`/`preserve`/`p`/`preset`
-/// named constants should delete the corresponding line below — the gate
-/// does not do this automatically (an entry that stops failing is quietly
-/// ignored rather than flagged as stale), which is a known limitation, not
-/// a design goal.
-const KNOWN_GAPS: &[(&str, &str)] = &[
-    ("colorchannelmixer", "pc"),
-    ("colorlevels", "preserve"),
-    ("pseudocolor", "p"),
-    ("pseudocolor", "preset"),
-];
+/// constants, and does not fail on. Empty now: `vaco-filter-color`'s
+/// `colorchannelmixer`'s `pc`, `colorlevels`'s `preserve`, and
+/// `pseudocolor`'s `p`/`preset` (one field, two names via `alias`) were
+/// the last four here, closed once that crate's stale `ASSIGNMENTS.md` row
+/// was reclaimed 2026-08-28. A fresh failure anywhere fails the build; see
+/// this file's own module doc for what "failure" means here.
+const KNOWN_GAPS: &[(&str, &str)] = &[];
 
 /// Run `ffmpeg -hide_banner -h filter=<name>` and return stdout+stderr,
 /// concatenated in that order — the reference's own `-h` output has always

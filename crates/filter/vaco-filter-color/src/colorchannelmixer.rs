@@ -97,6 +97,8 @@ pub(crate) struct Opts {
     #[opt(
         name = "pc",
         help = "set the preserve color mode (not implemented; parsed only)",
+        unit = "preserve_color",
+        consts = crate::common::PRESERVE_COLOR_CONSTS,
         default = 0,
         range = 0..=6,
         flags(video, filtering)

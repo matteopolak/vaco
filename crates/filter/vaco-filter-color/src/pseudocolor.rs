@@ -63,6 +63,166 @@ pub const DESC: FilterDesc = FilterDesc {
 
 const VARS: &[&str] = &["val", "ymin", "ymax", "umin", "umax", "vmin", "vmax", "w", "h"];
 
+/// `ffmpeg -h filter=pseudocolor`'s own named constants for `preset`/`p`
+/// (one field, two names via `alias`). Not implemented (see the field's
+/// own doc) -- only the name needs to parse for `option_consts_gate.rs`.
+const PRESET_CONSTS: &[vaco_opts::ConstDesc] = &[
+    vaco_opts::ConstDesc {
+        name: "none",
+        help: "",
+        unit: "preset",
+        value: vaco_opts::ConstValue::Int(-1),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "magma",
+        help: "",
+        unit: "preset",
+        value: vaco_opts::ConstValue::Int(0),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "inferno",
+        help: "",
+        unit: "preset",
+        value: vaco_opts::ConstValue::Int(1),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "plasma",
+        help: "",
+        unit: "preset",
+        value: vaco_opts::ConstValue::Int(2),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "viridis",
+        help: "",
+        unit: "preset",
+        value: vaco_opts::ConstValue::Int(3),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "turbo",
+        help: "",
+        unit: "preset",
+        value: vaco_opts::ConstValue::Int(4),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "cividis",
+        help: "",
+        unit: "preset",
+        value: vaco_opts::ConstValue::Int(5),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "range1",
+        help: "",
+        unit: "preset",
+        value: vaco_opts::ConstValue::Int(6),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "range2",
+        help: "",
+        unit: "preset",
+        value: vaco_opts::ConstValue::Int(7),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "shadows",
+        help: "",
+        unit: "preset",
+        value: vaco_opts::ConstValue::Int(8),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "highlights",
+        help: "",
+        unit: "preset",
+        value: vaco_opts::ConstValue::Int(9),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "solar",
+        help: "",
+        unit: "preset",
+        value: vaco_opts::ConstValue::Int(10),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "nominal",
+        help: "",
+        unit: "preset",
+        value: vaco_opts::ConstValue::Int(11),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "preferred",
+        help: "",
+        unit: "preset",
+        value: vaco_opts::ConstValue::Int(12),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "total",
+        help: "",
+        unit: "preset",
+        value: vaco_opts::ConstValue::Int(13),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "spectral",
+        help: "",
+        unit: "preset",
+        value: vaco_opts::ConstValue::Int(14),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "cool",
+        help: "",
+        unit: "preset",
+        value: vaco_opts::ConstValue::Int(15),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "heat",
+        help: "",
+        unit: "preset",
+        value: vaco_opts::ConstValue::Int(16),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "fiery",
+        help: "",
+        unit: "preset",
+        value: vaco_opts::ConstValue::Int(17),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "blues",
+        help: "",
+        unit: "preset",
+        value: vaco_opts::ConstValue::Int(18),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "green",
+        help: "",
+        unit: "preset",
+        value: vaco_opts::ConstValue::Int(19),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "helix",
+        help: "",
+        unit: "preset",
+        value: vaco_opts::ConstValue::Int(20),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+];
+
 #[derive(Debug, Clone, vaco_opts::Options)]
 #[options(name = "pseudocolor", help = "Make pseudocolored video frames")]
 pub(crate) struct Opts {
@@ -76,7 +236,7 @@ pub(crate) struct Opts {
     pub c3: String,
     #[opt(name = "index", alias = "i", help = "set component as base", default = 0, range = 0..=3, flags(video, filtering))]
     pub index: i32,
-    #[opt(name = "preset", alias = "p", help = "set preset (not implemented; parsed only)", default = -1, range = -1..=20, flags(video, filtering))]
+    #[opt(name = "preset", alias = "p", help = "set preset (not implemented; parsed only)", unit = "preset", consts = PRESET_CONSTS, default = -1, range = -1..=20, flags(video, filtering))]
     pub preset: i32,
     #[opt(name = "opacity", help = "set pseudocolor opacity", default = 1.0, range = 0.0..=1.0, flags(video, filtering))]
     pub opacity: f64,
