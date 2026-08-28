@@ -53,6 +53,7 @@ vaco-codec-dsp-idct = { path = "../crates/signal/vaco-codec-dsp-idct", optional 
 vaco-codec-golomb = { path = "../crates/signal/vaco-codec-golomb", optional = true }
 vaco-codec-image-simple = { path = "../crates/codec/vaco-codec-image-simple", optional = true }
 vaco-codec-jpeg = { path = "../crates/codec/vaco-codec-jpeg", optional = true }
+vaco-codec-mpeg12 = { path = "../crates/codec/vaco-codec-mpeg12", optional = true }
 vaco-codec-mpegaudio = { path = "../crates/codec/vaco-codec-mpegaudio", optional = true }
 vaco-codec-msac = { path = "../crates/signal/vaco-codec-msac", optional = true }
 vaco-codec-pnm = { path = "../crates/codec/vaco-codec-pnm", optional = true }
@@ -193,6 +194,7 @@ default = [
     "codec-golomb",
     "codec-image-simple",
     "codec-jpeg",
+    "codec-mpeg12",
     "codec-mpegaudio",
     "codec-msac",
     "codec-pnm",
@@ -325,6 +327,7 @@ codec-dsp-idct = ["dep:vaco-codec-dsp-idct"]
 codec-golomb = ["dep:vaco-bitstream", "dep:vaco-codec-golomb", "dep:vaco-limits"]
 codec-image-simple = ["dep:vaco-codec-image-simple", "dep:vaco-limits"]
 codec-jpeg = ["dep:vaco-codec-jpeg", "dep:vaco-limits"]
+codec-mpeg12 = ["dep:vaco-codec-core", "dep:vaco-codec-mpeg12", "dep:vaco-limits", "dep:vaco-packet"]
 codec-mpegaudio = ["dep:vaco-codec-core", "dep:vaco-codec-mpegaudio", "dep:vaco-frame", "dep:vaco-limits", "dep:vaco-packet"]
 codec-msac = ["dep:vaco-codec-msac"]
 codec-pnm = ["dep:vaco-codec-pnm", "dep:vaco-limits"]
@@ -1238,6 +1241,14 @@ test = false
 doc = false
 bench = false
 required-features = ["mux-mp4"]
+
+[[bin]]
+name = "mpeg12_decode"
+path = "fuzz_targets/mpeg12_decode.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-mpeg12"]
 
 [[bin]]
 name = "mpegaudio_decode"

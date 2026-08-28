@@ -1,0 +1,97 @@
+[[table]]
+name   = "MACROBLOCK_ADDRESS_INCREMENT"
+file   = "crates/codec/vaco-codec-mpeg12/src/tables.rs"
+source = "itu-t-h262"
+clause = "Table B.1, variable length codes for macroblock_address_increment"
+method = "transcribed"
+
+# Table B.2/B.3/B.4's macroblock_type rows (MB_TYPE_I/P/B) are each well
+# under this project's 32-element provenance threshold (2, 7 and 11 rows
+# respectively), so they carry no row of their own here. Two hand-
+# transcription bugs in MB_TYPE_P/B's row codes were caught and fixed by
+# this crate's own mechanical Python re-parse of the same spec text before
+# being trusted; see this crate's git history for the fix.
+
+[[table]]
+name   = "CODED_BLOCK_PATTERN"
+file   = "crates/codec/vaco-codec-mpeg12/src/tables.rs"
+source = "itu-t-h262"
+clause = "Table B.9, variable length codes for coded_block_pattern"
+method = "transcribed"
+
+[[table]]
+name   = "MOTION_CODE"
+file   = "crates/codec/vaco-codec-mpeg12/src/tables.rs"
+source = "itu-t-h262"
+clause = "Table B.10, variable length codes for motion_code"
+method = "transcribed"
+
+# Table B.11's dmvector[t] (DMVECTOR) has 3 rows, below this project's
+# 32-element provenance threshold.
+
+# Table B.12/B.13's dct_dc_size_luminance/chrominance (DCT_DC_SIZE_LUMA/
+# CHROMA) have 12 rows each, below this project's 32-element provenance
+# threshold. Both hand-verified against the spec text directly (see this
+# crate's TECH-DEBT.md entry for the specific values checked while
+# investigating a still-open residual-decode bug).
+
+[[table]]
+name   = "TABLE_ZERO"
+file   = "crates/codec/vaco-codec-mpeg12/src/tables.rs"
+source = "itu-t-h262"
+clause = "Table B.14, DCT coefficients Table zero (§7.2.2.1/§7.2.2.2, including the first-coefficient-of-a-non-intra-block modification)"
+method = "transcribed"
+
+[[table]]
+name   = "TABLE_ONE"
+file   = "crates/codec/vaco-codec-mpeg12/src/tables.rs"
+source = "itu-t-h262"
+clause = "Table B.15, DCT coefficients Table one"
+method = "transcribed"
+
+[[table]]
+name   = "ZIGZAG_SCAN"
+file   = "crates/codec/vaco-codec-mpeg12/src/tables.rs"
+source = "itu-t-h262"
+clause = "Figure 7-2, scan[0][v][u] (default zigzag inverse scan)"
+method = "transcribed"
+
+[[table]]
+name   = "ALTERNATE_SCAN"
+file   = "crates/codec/vaco-codec-mpeg12/src/tables.rs"
+source = "itu-t-h262"
+clause = "Figure 7-3, scan[1][v][u] (alternate inverse scan)"
+method = "transcribed"
+
+[[table]]
+name   = "DEFAULT_INTRA_MATRIX"
+file   = "crates/codec/vaco-codec-mpeg12/src/tables.rs"
+source = "itu-t-h262"
+clause = "§6.3.11, default matrix for intra blocks"
+method = "transcribed"
+
+# DEFAULT_NON_INTRA_MATRIX is `[16; 64]` — a single repeated value, not a
+# 64-entry literal — so `provenance-check`'s element count does not see it
+# as a large table. Its source is the same §6.3.11 text as
+# DEFAULT_INTRA_MATRIX above: "The default matrix for non-intra blocks
+# (both luminance and chrominance) is" a flat 16 at every position.
+
+# QUANTISER_SCALE is `[[u8; 32]; 2]` — two 32-entry rows rather than one
+# flat 64+-entry literal — so `provenance-check`'s element count does not
+# see it as a large table either. Both rows (linear and non-linear
+# quantiser_scale_code mappings, selected by q_scale_type) are transcribed
+# from Table 7-6, "Relation between quantiser_scale and
+# quantiser_scale_code".
+
+# The MPEG-1 (ISO/IEC 11172-2) escape-coding rule implemented in
+# block::decode_coefficients (an 8-bit sign-magnitude level, extended to
+# 16 bits when the first byte is the 0x00/0x80 sentinel) is not
+# transcribed from ISO/IEC 11172-2 directly — that document is not freely
+# available and was not consulted (clean-room per this project's D6/D7
+# rules). It is derived entirely from itu-t-h262's own free text, Annex
+# D.9.3 ("Run-level escape syntax"), which states the exact field widths
+# (14-bit and 22-bit escapes, level ranges -127..127 and -255..255) as a
+# documented difference from this Specification's own 12-bit form; the
+# sentinel-extension mechanism connecting those two widths is the only
+# construction consistent with the stated widths and ranges, not a fact
+# read from an unlicensed source.

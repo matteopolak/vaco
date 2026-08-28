@@ -1,0 +1,24 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# MPEG-1/MPEG-2 video decode-only. Both patents are widely considered lapsed
+# (planning/research's patent table; D4 decode-only scheduling depends on
+# this), so this ships unconditionally like AC-3 and every other GREEN
+# codec: no `encumbered` feature, `default` left at its normal `true`.
+
+[[component]]
+kind      = "decoder"
+name      = "mpeg1video"
+long_name = "MPEG-1 video"
+feature   = "codec-mpeg12"
+ctor      = "vaco_codec_mpeg12::DECODER_MPEG1"
+media     = "video"
+codec     = "mpeg1video"
+
+[[component]]
+kind      = "decoder"
+name      = "mpeg2video"
+long_name = "MPEG-2 video"
+feature   = "codec-mpeg12"
+ctor      = "vaco_codec_mpeg12::DECODER_MPEG2"
+media     = "video"
+codec     = "mpeg2video"
