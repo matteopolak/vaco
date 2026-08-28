@@ -18,14 +18,14 @@ name.
 |---|---|---|
 | ~~`vaco-filter-audio-eq`~~ `vaco-filter-aeq` | `vaco-filter-aeq` | **Done**: renamed, membership unchanged. Landed alongside the `vaco-filter-adsp::biquad` consolidation (its `engine` module moved there, D19), so the rename commit is separate from that move. |
 | `vaco-filter-audio-dynamics` | `vaco-filter-adynamics` | membership matches; name only |
-| ~~`vaco-filter-ameasure`~~ `vaco-filter-aanalysis` | `vaco-filter-aanalysis` | **Done**: renamed, membership unchanged. |
+| `vaco-filter-ameasure` | `vaco-filter-aanalysis` | membership matches exactly; name only |
 | ~~`vaco-filter-achannel`~~ `vaco-filter-aeffects` | `vaco-filter-aeffects` | **Done** (FT-4.13d, GitHub #484): renamed, and the crate now implements 22 of the row's 25 filters — `surround`/`headphone` remain deferred as disproportionately large (flagged by this crate's original author), and `hdcd`'s proprietary bit-level decode is out of reach for black-box probing at this project's clean-room standard. |
 | `vaco-filter-video-geometry` | `vaco-filter-geometry` | holds the T1 subset of one plan row |
 | `vaco-filter-video-format` | `vaco-filter-scale` | |
 | `vaco-filter-video-source` | `vaco-filter-source` | |
 | `vaco-filter-component` | *(no such row)* | its filters belong to `geometry`, `color`, `key` and `lut` |
 | `vaco-filter-audio` | *(no such row)* | spans `aformat`, `amix`, `adynamics` |
-| `vaco-filter-plumbing` | `vaco-filter-mm` | |
+| ~~`vaco-filter-plumbing`~~ `vaco-filter-mm` | `vaco-filter-mm` | **Done** (FT-4.12f, GitHub #479): renamed, and the crate now implements 37 of the row's 41 filters — `avsynctest` deferred as a synthetic A/V generator disproportionate to the row (the `aeffects` precedent for `surround`/`headphone`), `cmdsocket`/`acmdsocket` need a real listening socket, and `aeval` was deferred for time (the reference's own docs call it "slow"). `sendcmd`/`asendcmd` parse the command grammar and detect enter/leave edges exactly but cannot dispatch to another named filter instance — `vaco-filter-core` has no graph-level "send this node a command" API yet, which is a gap in that crate, not this one. `color`/`nullsrc`/`nullsink`/`anullsrc` are carried in this crate rather than `vaco-filter-source`/`vaco-filter-asource` (the row those four actually belong to, per §4.2/§4.3): both crates exist but do not yet register these four names, and deleting working filters with nothing to replace them would regress the CLI with no gain — left as a recorded, not silent, divergence for whoever owns those two crates to resolve, with `dup-check` as the day-they-collide safety net. |
 | `vaco-filter-blur` | `vaco-filter-blur` | name right; brief added the `convolve` row's filters to it |
 | `vaco-filter-denoise` | `vaco-filter-denoise` | correct, both name and membership |
 
@@ -58,6 +58,20 @@ Two of them are more than a rename and need a decision first:
   T1/T2 split. Merging is truer to §4.2.
 - `vaco-filter-audio` spans three plan rows and predates all of this. Splitting
   it is the largest single piece of the reconciliation.
+
+## `vaco-filter-mm`'s row: membership right, one dependency wrong
+
+Every one of the row's 41 filter names was checked against `ffmpeg -filters`
+and `ffmpeg -h filter=<name>` while building `vaco-filter-mm` (GitHub #479);
+all 41 exist under exactly those names, so the row's membership needs no
+correction. Its "extra deps" column does, in one place: it lists `framesync
+(streamselect)`, and `-h filter=streamselect` shows neither `eof_action` nor
+`shortest`/`repeatlast`/`ts_sync_mode` — the option surface
+`planning/AGENT-CONSTRAINTS.md`'s "two inputs does not mean framesync" rule
+says to check before reaching for it. `streamselect` does not use
+`vaco-filter-framesync`; it is implemented as plain per-pad lockstep
+passthrough. A small correction to the row's own text, recorded rather than
+silently diverged from.
 
 ## Resolved during the wave
 
