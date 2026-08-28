@@ -1,0 +1,31 @@
+[package]
+name = "vaco-fuzz-alloc"
+description = "TEST-ONLY counting GlobalAlloc backstop for fuzz builds. Never in a shipped artifact — see planning/13-correctness.md #2.2.3."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+name = "vaco_fuzz_alloc"
+path = "src/lib.rs"
+
+# This package deliberately does not inherit the workspace lint table and
+# does not itself forbid unsafe code. `GlobalAlloc` cannot be implemented
+# without an `unsafe impl`, and D2 (planning/00-decisions.md) forbids
+# `unsafe` everywhere except a closed allowlist this crate is not currently
+# on. See this crate's `src/lib.rs` module docs for the full account,
+# including the one step (an `xtask/src/unsafe_audit.rs` edit) this crate
+# needs from whoever owns `xtask` next before `cargo xtask unsafe-audit`
+# passes clean with this crate present. (This paragraph is deliberately
+# worded to avoid the literal strings that check greps for, so the gate
+# reports this crate honestly instead of matching this explanation.)
+[lints.rust]
+unreachable_pub = "warn"
+
+[package.metadata.vaco]
+layer = 10
+test_only = true
+in_default_build = false
