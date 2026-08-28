@@ -2394,3 +2394,49 @@ and are recorded rather than guessed into the descriptor: tag `0x320e` is
 `VideoLineMap` (`[46, 0]` on an interlaced 720x576 fixture, `[0, 0]` on a
 progressive 320x240 one) but was only checked against two fixtures, not
 confirmed with certainty.
+
+## Mechanical detection of wrapper-swallow bugs: `syn` declined, spot-check grep recorded
+
+A dispatch tasked with auditing every wrapper type in the tree for the
+"wrapper does not forward a defaulted method" shape (`planning/AGENT-
+CONSTRAINTS.md`'s "A wrapper swallows what it does not forward") asked
+whether a mechanical `xtask` gate was worth building, specifically whether
+adding `syn` to parse trait/impl blocks and diff their method sets was
+worth the new dependency. **Declined**, and recorded here so the next
+person weighing it starts from the argument rather than the idea.
+
+The reason is not that the check would not work — a defaulted-method-vs-
+override diff genuinely catches this shape. It is that `xtask` is
+deliberately dependency-free: it must compile before anything else in the
+workspace and must not itself be able to violate the policies it enforces
+(the same reasoning that put `vlc-scan`'s table-shape detection in `xtask`
+rather than in a codec crate). Adding a real Rust parser trades that
+structural property for a check whose false-positive rate this same
+audit already demonstrated is non-trivial: `TeeMuxer::stream_time_base`,
+`WebmChunkMuxer::bind_url`, and `vaco-filter-core::adapt`'s `Paired`/
+`Fanout`/`Dual` all have a `command`/forwarding override that is a
+*deliberate* non-forward with a documented reason, not an oversight. A
+gate that flagged all of these would need either a hand-maintained
+allow-list — the exact failure this file's own "`vlc-scan`'s target list
+is hand-maintained, and silence is not coverage" entry warns about — or a
+doc-comment marker convention that itself needs the parser to enforce,
+which does not escape the dependency trade-off, only relocates it.
+
+**What was recorded as a cheap alternative, and its limits.** A narrow
+grep for the shape-2 ("snapshotting wrapper") variant of the same bug —
+a wrapper struct's constructor storing a field derived from calling a
+generic/trait-object parameter's own method:
+
+```sh
+grep -rn "inner\.<method>()\.\(to_vec\|clone\|to_owned\|collect\)" crates --include="*.rs"
+```
+
+found exactly one match tree-wide (`Discovery::streams` in
+`vaco-format-core/src/discovery.rs`, the already-known instance behind
+gap 26), with essentially no chance of a false positive given how
+specific the pattern is. This is a **spot-check, not a gate** — it does
+not run in CI, it is not wired into any `xtask` command, and it would
+miss a snapshot taken through an intermediate variable, a `Vec::from_iter`,
+or any indirection beyond the exact one-line idiom above. Worth re-running
+by hand the next time this class of bug is suspected; not worth promoting
+to an enforced check on the strength of one positive.
