@@ -61,6 +61,7 @@ pub mod case;
 pub mod compare;
 pub mod divergence;
 pub mod extract;
+pub mod filterexec;
 pub mod manifest;
 pub mod normalise;
 pub mod refbin;

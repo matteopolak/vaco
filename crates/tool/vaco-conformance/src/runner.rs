@@ -139,6 +139,12 @@ impl UnderTest {
             Tool::Probe => self.probe.as_ref(),
             Tool::Transcode => self.transcode.as_ref(),
             Tool::PlayHeadless => self.play.as_ref(),
+            // `filter` never runs a subprocess for "ours" — see
+            // `Runner::run_filter_case`, which returns before this ever
+            // gets called for a filter case. `None` here would read as
+            // "not built" if it were ever reached by mistake, which is the
+            // right failure mode for a bug, not a silent pass.
+            Tool::Filter => None,
         }
     }
 }
@@ -325,6 +331,17 @@ impl<'a> Runner<'a> {
                 self.absent_reason.clone()
             }));
         };
+
+        // `filter` has no subprocess on "our" side at all (no `vaco -vf`
+        // CLI exists yet), so it cannot go through the binary-discovery
+        // check below, which exists to skip when a *subprocess* binary is
+        // missing — a filter case is never in that position, and forcing
+        // it through that check would either wrongly skip it or need a
+        // fake binary path. See `Runner::run_filter_case`'s own doc.
+        if case.tool == Tool::Filter {
+            return self.run_filter_case(case, reference);
+        }
+
         let Some(ours_bin) = self.under_test.binary(case.tool) else {
             return skip(SkipReason::ToolNotBuilt(format!(
                 "the `{}` binary under test is not built; set VACO_BIN_{} or \
@@ -334,12 +351,14 @@ impl<'a> Runner<'a> {
                     Tool::Probe => "PROBE",
                     Tool::Transcode => "VACO",
                     Tool::PlayHeadless => "PLAY",
+                    Tool::Filter => unreachable!("returned above"),
                 }
             )));
         };
         let theirs_bin = match case.tool {
             Tool::Probe => &reference.ffprobe,
             Tool::Transcode | Tool::PlayHeadless => &reference.ffmpeg,
+            Tool::Filter => unreachable!("returned above"),
         };
 
         let dir = match tempfile::tempdir() {
@@ -481,6 +500,101 @@ impl<'a> Runner<'a> {
             ours_command: ours_inv.command_line(),
             theirs_command: theirs_inv.command_line(),
         }
+    }
+
+    /// Run a `filter`-tool case. The reference side is a real `ffmpeg`
+    /// subprocess reading the generated raw media and writing raw video to
+    /// stdout, the same shape every other tool's `theirs` invocation has.
+    /// "Ours" is not a second subprocess — [`crate::filterexec::run`]
+    /// builds a real `vaco_filter_core::Graph` in-process and returns an
+    /// [`crate::run::Observation`] shaped the same way, so the rest of this
+    /// function — media substitution, the shared `compare::evaluate` call,
+    /// the `Outcome` it returns — is identical in shape to every other
+    /// case, and a filter case's `Verdict` means the same thing a
+    /// transcode case's does.
+    fn run_filter_case(&self, case: &Case, reference: &Reference) -> Outcome {
+        let outcome = |verdict: Verdict, ours_command: String, theirs_command: String| Outcome {
+            case: case.clone(),
+            verdict,
+            ours_command,
+            theirs_command,
+        };
+
+        let mut argv = case.argv.clone();
+        if let Err(e) = self.substitute_media(case, &mut argv) {
+            return outcome(
+                Verdict::OursFailed(FailureKind::LaunchFailed(e)),
+                String::new(),
+                String::new(),
+            );
+        }
+
+        let args = match crate::filterexec::FilterArgs::parse(&argv) {
+            Ok(a) => a,
+            Err(e) => {
+                return outcome(
+                    Verdict::OursFailed(FailureKind::LaunchFailed(e)),
+                    String::new(),
+                    String::new(),
+                );
+            }
+        };
+
+        let vf = if args.filter_args.is_empty() {
+            args.filter_name.to_owned()
+        } else {
+            format!("{}={}", args.filter_name, args.filter_args)
+        };
+        let theirs_argv: Vec<String> = [
+            "-nostdin", "-hide_banner", "-y", "-fflags", "+bitexact", "-flags", "+bitexact", "-f",
+            "rawvideo", "-pix_fmt", args.in_pixfmt, "-s",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .chain(std::iter::once(format!("{}x{}", args.in_width, args.in_height)))
+        .chain(["-i".to_owned(), args.media_path.to_owned(), "-vf".to_owned(), vf])
+        .chain(
+            ["-f", "rawvideo", "-pix_fmt"]
+                .into_iter()
+                .map(str::to_owned),
+        )
+        .chain([args.out_pixfmt.to_owned(), "-".to_owned()])
+        .collect();
+        let theirs_inv = Invocation::new(&reference.ffmpeg, theirs_argv).with_timeout(case.timeout);
+        let theirs_command = theirs_inv.command_line();
+
+        let theirs = match run(&theirs_inv) {
+            Ok(o) => o,
+            Err(e) => {
+                return outcome(
+                    Verdict::ReferenceFailed(FailureKind::LaunchFailed(e.to_string())),
+                    String::new(),
+                    theirs_command,
+                );
+            }
+        };
+
+        let ours_command = format!(
+            "<in-process> {}={}",
+            args.filter_name, args.filter_args
+        );
+        let ours = match crate::filterexec::run(&args) {
+            Ok(o) => o,
+            Err(e) => {
+                return outcome(
+                    Verdict::OursFailed(FailureKind::LaunchFailed(e)),
+                    ours_command,
+                    theirs_command,
+                );
+            }
+        };
+
+        let pair = Pair::new(&ours, &theirs);
+        outcome(
+            compare::evaluate(case, &pair, self.allowlist),
+            ours_command,
+            theirs_command,
+        )
     }
 
     /// Probe two already-written files — one from each side of a transcode

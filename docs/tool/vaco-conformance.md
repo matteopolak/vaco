@@ -120,7 +120,7 @@ a regression test for it.
 | C1 | `exact-bytes-normalised` | **implemented** | C0 with a declared normalisation chain |
 | C2 | `container-structure` | seam | remuxes where byte equality is unattainable but structure is meaningful |
 | C3 | `frame-hash` | seam | decoder conformance at scale |
-| C4 | `raw-exact` | seam | any decoder we claim is bit-exact — which is all of them |
+| C4 | `raw-exact` | **implemented, for the `filter` tool** (see "The `filter` tool" below); still a seam for decoders | any decoder we claim is bit-exact, and every filter's pixel output |
 | C5 | `raw-tolerant` | seam | codecs whose *spec* defines conformance as a bounded error |
 | C6 | `structured-diff` | **implemented** (`default` writer) | the metadata surface where a few divergences are expected |
 | C7 | `behavioural` | **implemented** | malformed input, unsupported paths, the differential fuzzer |
@@ -146,6 +146,60 @@ belongs in the crate that owns image metrics. `compare/quality.rs` defines the
 `Metric` trait, the `Registry` extension point and the band arithmetic (which is
 unit-tested without needing an encoder), and returns an honest skip until a
 metric is registered.
+
+### The `filter` tool (FT-6.1, #500)
+
+Every other tool (`probe`, `transcode`, `play-headless`) compares two
+**subprocesses** run against the same argv. `filter` cannot: there is no
+`vaco -vf` CLI yet (a separate, larger piece of work — FT-2.x territory,
+not this harness's), so "what `vaco` does with this filter" can only be
+observed by calling the filter crate's own `FilterRegistry` directly,
+through a real `vaco_filter_core::Graph`. `src/filterexec.rs` does exactly
+that, in-process, and hands back a [`crate::run::Observation`] shaped the
+same way a subprocess's would have been — `stdout` carries the raw output
+frame, plane by plane, row-major, no padding, exactly what `ffmpeg -f
+rawvideo` writes for `gray8`/`yuv444p`/`gbrp` — so `raw-exact` (C4) diffs
+the two streams with no format-specific knowledge at all.
+
+A `filter`-tool case's `argv`, after `{media}` substitution, is nine
+positional tokens, not CLI flags (there is no CLI to hand them to):
+
+```text
+[0] path to the generated raw input file
+[1] filter name, e.g. "histogram"
+[2] filter args string, e.g. "level_height=50:scale_height=0:components=1"
+[3] input pixel format: "gray8" | "yuv444p" | "gbrp"
+[4] input width       [5] input height
+[6] output pixel format
+[7] output width      [8] output height
+```
+
+Output geometry is declared, not derived — every filter in the first
+corpus (`tests/conformance/filter/`) already has a fixed, filter-specific
+output shape, and deriving it generically would mean re-implementing each
+filter's own `configure` logic a second time in the harness, exactly the
+"looks measured, is not" risk this project has already paid for once. A
+case with the wrong declared geometry fails loudly, not silently — see
+`filterexec::extract_output`.
+
+`filterexec::REGISTRIES` is the explicit, short list of `FilterRegistry`s
+this tool tries. There is no aggregate registry combining every filter
+crate in the tree yet (see `planning/INTERFACE-GAPS.md`); adding a filter
+crate to the corpus means adding its registry to that list, a genuine
+reviewable change, not an oversight to fix later.
+
+**The permanent D7 font-table ceiling gets a declared downgrade, not a
+silent omission or a case left failing forever.** `datascope`,
+`graphmonitor`, `agraphmonitor` and `pixscope` draw text with an
+independently-sourced font (D7 forbids transcribing the reference's own
+glyph table), so no frame they draw text into can ever be `raw-exact`
+against the reference. `manifest.rs`'s rule 3 makes this the same
+declared move `structured-diff` already makes relative to C0: a
+`filter`-tool suite using `behavioural` (C7 — "did both sides produce a
+frame at all", not "was it the same frame") must carry a
+`downgrade_reason` in its `[compare]` block, or the suite fails to load.
+See `tests/conformance/filter/vaco-filter-scope-text-ceiling.toml` for
+the shape.
 
 ### Normalisation
 
@@ -402,13 +456,64 @@ The inner loop is `vaco-conformance explore -- <argv…>`: it runs the oracle an
 shows you the output, and it writes nothing to the repository. Copy the stanza
 in by hand — that keeps a human in the loop on every case that lands.
 
-**Two rules the loader enforces**, and both exist to keep the harness honest:
+**Three rules the loader enforces**, and all exist to keep the harness honest:
 
 1. A non-empty normalisation chain requires mode `exact-bytes-normalised`, not
    `exact-bytes`. Keeping the modes distinct is what makes the permitted
    blindness visible in review.
 2. `structured-diff` requires a `downgrade_reason`. C6 is weaker than C0 by
    construction and must never be used to launder a failing C0 case.
+3. A `filter`-tool suite using `behavioural` requires a `downgrade_reason`
+   too — the same move rule 2 makes, for the same reason: filter output is
+   pixel data with an exact-or-not answer, so settling for outcome-class-only
+   needs a declared justification, not a bare `mode = "behavioural"` a future
+   reader has to reverse-engineer.
+
+### Adding a filter test case
+
+`filter`-tool cases do not use CLI-flag argv — see "The `filter` tool"
+above for the nine-token convention `filterexec.rs` expects. A minimal
+case:
+
+```toml
+schema = 1
+suite  = "filter-my-crate-exact"
+tool   = "filter"
+tier   = "core"
+owner  = "@my-crate-owner"
+
+[[media]]
+id       = "gray8-64"
+source   = "generated://gray8-64.raw"
+tags     = ["video"]
+generate = ["-f", "lavfi", "-i", "color=c=gray:s=64x64:d=1:r=25",
+            "-frames:v", "1", "-pix_fmt", "gray8", "-f", "rawvideo"]
+
+[[axis]]
+name   = "filter"
+values = [
+  { id = "myfilter", argv = ["{media}", "myfilter", "opt=value", "gray8", "64", "64", "gray8", "64", "64"] },
+]
+
+[compare]
+mode    = "raw-exact"
+timeout = "10s"
+
+[normalise]
+invocation = ["bitexact", "hide-banner"]
+```
+
+If your filter can never be byte-identical for a structural, permanent
+reason (the same D7 font-table ceiling `datascope`/`pixscope` carry, or
+something new), use `mode = "behavioural"` with a `downgrade_reason`
+explaining *why* and *what* the divergence is — see
+`tests/conformance/filter/vaco-filter-scope-text-ceiling.toml`. Do not
+reach for `behavioural` to avoid a `raw-exact` failure you have not
+diagnosed yet; that is the "a failure nobody looks at again" failure mode
+this rule exists to prevent, not a shortcut it offers.
+
+If your filter crate is not yet in `filterexec::REGISTRIES`, add it —
+one line, reviewed like any other code change.
 
 ### Transcode suites and the `{output}` token
 
@@ -566,3 +671,4 @@ is to request a workspace dependency, not to keep extending a bespoke parser.
 | §1.2 says "eight modes … C0–C8" then lists ten | ten modes, C0–C10 | an editing artifact in the plan; §1.10 and §1.11.2 add C9 and C10 explicitly |
 | §1.4.2 calls them "the six categories" and lists seven | seven | same kind of artifact; the table itself has seven rows |
 | Divergence rules use regexes (`ours_pattern`) | substring rules (`ours_contains`) | no regex crate in the workspace dependency list; a substring is enough for every rule shape the plan's own examples use |
+| Every tool compares two subprocesses (implied by §1.9's `Runner` design, written before FT-6.1 existed) | `filter` compares one subprocess (the reference) against one in-process `vaco_filter_core::Graph` run | there is no `vaco -vf` CLI yet to be the second subprocess (a separate, larger FT-2.x task); `filterexec.rs` gets a real signal today instead of a permanent skip, and `Runner::run_filter_case` still ends at the same shared `compare::evaluate` every other tool uses |

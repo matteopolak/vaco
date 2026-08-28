@@ -26,6 +26,14 @@ pub enum Tool {
     Transcode,
     /// `vaco-play --headless` against `ffplay`.
     PlayHeadless,
+    /// One `vaco-filter-*` crate's filter, invoked in-process through its own
+    /// `FilterRegistry`, against `ffmpeg -vf`/`-af`. Unlike the other three
+    /// tools, "ours" here is never a subprocess — there is no `vaco -vf` CLI
+    /// yet (FT-2.x territory, not this harness's), so [`crate::filterexec`]
+    /// builds a real `vaco_filter_core::Graph` directly and reports its
+    /// output the same shape a subprocess's stdout would have been. See
+    /// `crate::filterexec`'s own doc for the argv convention this implies.
+    Filter,
 }
 
 impl Tool {
@@ -36,6 +44,7 @@ impl Tool {
             "probe" => Some(Self::Probe),
             "transcode" => Some(Self::Transcode),
             "play-headless" => Some(Self::PlayHeadless),
+            "filter" => Some(Self::Filter),
             _ => None,
         }
     }
@@ -47,6 +56,7 @@ impl Tool {
             Self::Probe => "probe",
             Self::Transcode => "transcode",
             Self::PlayHeadless => "play-headless",
+            Self::Filter => "filter",
         }
     }
 }

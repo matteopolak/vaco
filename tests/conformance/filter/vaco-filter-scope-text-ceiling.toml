@@ -1,0 +1,73 @@
+# FT-6.1 (#500)'s filter category, first corpus, the permanent D7 ceiling
+# half.
+#
+# `datascope` and `pixscope` draw with this crate's own, independently-
+# sourced bitmap font (see `vaco-filter-scope`'s own doc's "The bitmap-font
+# hypothesis") — no frame they draw text into can ever be byte-identical to
+# the reference's, by design, permanently, the same way `hqx` is a
+# permanent exception in `vaco-filter-artistic`'s own row. `graphmonitor`
+# shares the ceiling but is not in this suite at all: it needs a real
+# multi-node graph to draw anything meaningful (its whole point is showing
+# *other* nodes' link state), and a single-filter smoke case here would
+# only prove the ceiling a second time, not exercise anything new.
+#
+# Declared here at C7 `behavioural` rather than left out of the corpus
+# silently, or left to fail `raw-exact` forever: "did both sides produce a
+# frame at all" is still a real, falsifiable assertion — a `datascope` that
+# panics or emits nothing fails this the same way a broken `histogram`
+# fails `raw-exact` in the sibling suite. `manifest.rs`'s own rule 3 is
+# what makes this declaration mandatory rather than a convention someone
+# could forget: a `filter`-tool suite using `behavioural` with no
+# `downgrade_reason` fails to load at all, the same way `structured-diff`
+# already requires one relative to C0.
+
+schema = 1
+suite  = "filter-vaco-filter-scope-text-ceiling"
+tool   = "filter"
+tier   = "core"
+owner  = "@filter-scope-owner"
+
+[[media]]
+id       = "gray8-64"
+source   = "generated://gray8-64.raw"
+tags     = ["video"]
+generate = ["-f", "lavfi", "-i", "color=c=gray:s=64x64:d=1:r=25",
+            "-frames:v", "1", "-pix_fmt", "gray8", "-f", "rawvideo"]
+
+[[media]]
+id       = "yuv444p-640x480"
+source   = "generated://yuv444p-640x480.raw"
+tags     = ["video"]
+generate = ["-f", "lavfi", "-i", "color=c=0x646464:s=640x480:d=1:r=25",
+            "-frames:v", "1", "-pix_fmt", "yuv444p", "-f", "rawvideo"]
+
+[[axis]]
+name   = "filter"
+values = [
+  { id = "datascope", argv = ["{media}", "datascope", "s=64x32:mode=mono:components=1", "gray8", "64", "64", "gray8", "64", "32"] },
+  # `pixscope` refuses anything smaller than `640x480` — an undocumented
+  # reference floor this crate measured directly (see `vaco-filter-scope`'s
+  # own doc). Below it, the reference rejects the input outright, which
+  # this suite's own first real run against a real reference caught: an
+  # earlier `64x64` case here reported `ours=accepted, theirs=rejected` at
+  # the `behavioural` level, a real, correct divergence report rather than
+  # a false pass — exactly proof the harness reaches real output rather
+  # than reporting green because it could not.
+  { id = "pixscope",  argv = ["{media}", "pixscope", "", "yuv444p", "640", "480", "yuv444p", "640", "480"] },
+]
+
+[[exclude]]
+when   = { media = ["yuv444p-640x480"], filter = ["datascope"] }
+reason = "gray8-input; only paired with gray8-64."
+
+[[exclude]]
+when   = { media = ["gray8-64"], filter = ["pixscope"] }
+reason = "yuv444p-input, and must clear the reference's undocumented 640x480 floor; only paired with yuv444p-640x480."
+
+[compare]
+mode             = "behavioural"
+downgrade_reason = "permanent D7 font-table ceiling: this crate draws datascope/pixscope's text with an independently-sourced font (Unscii), not the reference's own embedded glyph table, which D7 forbids transcribing. No frame either filter draws text into can ever be byte-identical to the reference's, so raw-exact can never pass here regardless of how correct the rest of the implementation is — see vaco-filter-scope's own doc, 'The bitmap-font hypothesis', for the full measurement."
+timeout          = "10s"
+
+[normalise]
+invocation = ["bitexact", "hide-banner"]

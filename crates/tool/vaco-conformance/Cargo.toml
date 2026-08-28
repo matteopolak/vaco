@@ -19,6 +19,12 @@ path = "src/main.rs"
 [dependencies]
 vaco-core = { path = "../../core/vaco-core" }
 vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
+vaco-color = { path = "../../model/vaco-color" }
+vaco-frame = { path = "../../model/vaco-frame" }
+vaco-filter-core = { path = "../../filter/vaco-filter-core" }
+vaco-filter-graph = { path = "../../filter/vaco-filter-graph" }
+vaco-filter-scope = { path = "../../filter/vaco-filter-scope" }
+vaco-filter-draw-vf = { path = "../../filter/vaco-filter-draw-vf" }
 tempfile.workspace = true
 
 [lints]

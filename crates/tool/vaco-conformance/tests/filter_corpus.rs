@@ -1,0 +1,94 @@
+//! End-to-end proof that the `filter` tool actually runs: this crate's own
+//! `tests/conformance/filter/*.toml` corpus, driven through the real
+//! `Runner` against a real reference, in-process against a real
+//! `vaco_filter_core::Graph` — not a mock of either side.
+//!
+//! # Why this file, distinct from `tables.rs`
+//!
+//! `tables.rs` tests the probe-table extractors, which report findings
+//! rather than asserting cleanliness (this crate has no authority over
+//! ffmpeg/vaco disagreements it did not create). A `filter`-tool case is
+//! different: `vaco-filter-scope`'s own filters are already measured to
+//! `raw-exact`/`behavioural` and shipped on that basis, so a divergence
+//! here — on the very media this suite declares — means either this
+//! corpus's own case is wrong, or a real regression landed. Both are this
+//! crate's business to fail loudly on, which is why this file *does*
+//! assert `Agree` rather than merely "the tool ran".
+//!
+//! Skips gracefully (never fails) when no reference is installed, the
+//! same §1.5.4 contract every other test in this crate honours.
+
+#![expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "a failing expectation in a test is a failing test"
+)]
+
+use vaco_conformance::case::{Tier, Verdict};
+use vaco_conformance::divergence::Allowlist;
+use vaco_conformance::manifest;
+use vaco_conformance::refbin::{self, Discovery, RefSpec};
+use vaco_conformance::runner::Runner;
+
+fn run_suite(file_name: &str) -> Option<Vec<vaco_conformance::runner::Outcome>> {
+    let spec = RefSpec::load().expect("refspec.toml loads");
+    let discovery = refbin::discover(&spec);
+    let Discovery::Found(reference) = &discovery else {
+        println!("SKIPPED (no reference): {discovery:?}");
+        return None;
+    };
+
+    let crate_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = crate_dir.join("..").join("..").join("..");
+    let path = repo_root
+        .join("tests")
+        .join("conformance")
+        .join("filter")
+        .join(file_name);
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+    let suite = manifest::Suite::parse(&text).unwrap_or_else(|e| panic!("{file_name}: {e}"));
+    let cases = suite.expand();
+    assert!(!cases.is_empty(), "{file_name} expanded to zero cases");
+
+    let allowlist = Allowlist::load().expect("the shipped divergence register loads");
+    let runner = Runner::new(Some(reference), &allowlist);
+    let (outcomes, _tally) = runner.run_all(&cases, Tier::Core);
+    Some(outcomes)
+}
+
+#[test]
+fn the_exact_filters_agree_with_the_reference() {
+    let Some(outcomes) = run_suite("vaco-filter-scope-exact.toml") else {
+        return;
+    };
+    for o in &outcomes {
+        println!("{}: {:?}", o.case.id, o.verdict.label());
+        assert!(
+            matches!(o.verdict, Verdict::Agree),
+            "case `{}` did not agree: {:?}\n  ours:   {}\n  theirs: {}",
+            o.case.id,
+            o.verdict,
+            o.ours_command,
+            o.theirs_command
+        );
+    }
+}
+
+#[test]
+fn the_text_ceiling_filters_still_produce_a_frame() {
+    let Some(outcomes) = run_suite("vaco-filter-scope-text-ceiling.toml") else {
+        return;
+    };
+    for o in &outcomes {
+        println!("{}: {:?}", o.case.id, o.verdict.label());
+        assert!(
+            matches!(o.verdict, Verdict::Agree),
+            "case `{}` did not agree at the behavioural (outcome-class-only) level: {:?}\n  ours:   {}\n  theirs: {}",
+            o.case.id,
+            o.verdict,
+            o.ours_command,
+            o.theirs_command
+        );
+    }
+}

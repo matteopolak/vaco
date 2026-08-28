@@ -11,10 +11,11 @@
 //! | Mode | State |
 //! |---|---|
 //! | C0 `exact-bytes`, C1 `exact-bytes-normalised` | implemented ([`exact`]) |
+//! | C4 `raw-exact` | implemented ([`raw`]) — the `filter`-tool's own byte-equality mode, fed by [`crate::filterexec`] rather than a subprocess |
 //! | C6 `structured-diff` | implemented ([`structured`]) |
 //! | C7 `behavioural` | implemented (outcome class only) |
 //! | C10 `quality-band` | **seam only** ([`quality`]) — the metrics are not written |
-//! | C2, C3, C4, C5, C8, C9 | seams; they need machinery from crates that do not exist yet |
+//! | C2, C3, C5, C8, C9 | seams; they need machinery from crates that do not exist yet |
 //!
 //! An unimplemented mode returns [`Verdict::Skipped`] with
 //! [`SkipReason::ModeUnimplemented`], never a false pass. That distinction is
@@ -30,6 +31,7 @@
 
 pub mod exact;
 pub mod quality;
+pub mod raw;
 pub mod structured;
 
 use std::fmt;
@@ -175,9 +177,9 @@ pub fn evaluate(case: &Case, pair: &Pair<'_>, allow: &Allowlist) -> Verdict {
         Compare::StructuredDiff { writer } => structured::compare(case, pair, allow, writer),
         Compare::Behavioural => behavioural(case, pair),
         Compare::QualityBand { band } => quality::compare(case, pair, band),
+        Compare::RawExact => raw::compare(case, pair),
         Compare::ContainerStructure { .. }
         | Compare::FrameHash { .. }
-        | Compare::RawExact
         | Compare::RawTolerant { .. }
         | Compare::CrossDecode { .. }
         | Compare::ThreeWay { .. } => {
@@ -328,7 +330,12 @@ mod tests {
 
     #[test]
     fn unimplemented_modes_skip_rather_than_pass() {
-        let c = case(Compare::RawExact);
+        // `raw-exact` moved out of this list once `filterexec`/`raw::compare`
+        // implemented it (see `compare::raw`'s own tests for its coverage
+        // now) — `frame-hash` is still a genuine seam.
+        let c = case(Compare::FrameHash {
+            variant: "framecrc".to_owned(),
+        });
         let a = obs("x", Some(0));
         let b = obs("y", Some(0));
         let v = evaluate(&c, &Pair::new(&a, &b), &empty_allowlist());

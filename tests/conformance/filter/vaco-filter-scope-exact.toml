@@ -1,0 +1,90 @@
+# FT-6.1 (#500)'s filter category, first corpus, exact half: the
+# `vaco-filter-scope`/`vaco-filter-draw-vf` filters this project has
+# measured to `raw-exact` (drawgraph/adrawgraph's own crate is
+# `vaco-filter-scope`, per `docs/filter/vaco-filter-draw-vf.md`'s
+# reconciliation — not in this corpus yet, see below).
+#
+# # Why this suite, not a bigger one
+#
+# Deliberately scoped to what `crates/tool/vaco-conformance/src/
+# filterexec.rs` can actually run today: single video-in, single
+# video-out filters over 8-bit gray8/yuv444p/gbrp planar formats, fed one
+# frame. Filters this narrows away, and why:
+#
+#   - `agraphmonitor`/`adrawgraph` — audio-input. `filterexec`'s
+#     `FilterArgs` has no audio-frame shape yet; a real corpus entry needs
+#     that extended, not a video frame guessed into an audio filter's
+#     clothing.
+#   - `drawgraph` (video-input half) — needs `Frame::set_metadata` on the
+#     input, which a plain raw-bytes file cannot carry. A real case needs
+#     `filterexec` to inject metadata after building the frame, a genuine
+#     argv-convention extension, not this pass's job.
+#   - `datascope`/`pixscope` (and `graphmonitor`) — the permanent D7
+#     font-table ceiling; see the sibling suite
+#     `vaco-filter-scope-text-ceiling.toml`, which runs them at a
+#     deliberately weaker, declared mode instead of omitting them
+#     silently.
+#
+# The six filters below are exactly `docs/filter/vaco-filter-scope.md`'s
+# own framecrc table's "exact" rows, reduced to arguments this suite's
+# three flat media can actually exercise (the doc's own measurements used
+# more varied sources per filter; this corpus asserts each formula still
+# holds against one more, independently generated input, not that it
+# reproduces every probe in that table).
+
+schema = 1
+suite  = "filter-vaco-filter-scope-exact"
+tool   = "filter"
+tier   = "core"
+owner  = "@filter-scope-owner"
+
+[[media]]
+id       = "gray8-64"
+source   = "generated://gray8-64.raw"
+tags     = ["video"]
+generate = ["-f", "lavfi", "-i", "color=c=gray:s=64x64:d=1:r=25",
+            "-frames:v", "1", "-pix_fmt", "gray8", "-f", "rawvideo"]
+
+[[media]]
+id       = "yuv444p-64"
+source   = "generated://yuv444p-64.raw"
+tags     = ["video"]
+generate = ["-f", "lavfi", "-i", "color=c=0x646464:s=64x64:d=1:r=25",
+            "-frames:v", "1", "-pix_fmt", "yuv444p", "-f", "rawvideo"]
+
+[[media]]
+id       = "gbrp-64"
+source   = "generated://gbrp-64.raw"
+tags     = ["video"]
+generate = ["-f", "lavfi", "-i", "color=c=0x203040:s=64x64:d=1:r=25",
+            "-frames:v", "1", "-pix_fmt", "gbrp", "-f", "rawvideo"]
+
+[[axis]]
+name   = "filter"
+values = [
+  { id = "histogram",   argv = ["{media}", "histogram", "level_height=50:scale_height=0:components=1", "gray8", "64", "64", "gray8", "256", "50"] },
+  { id = "waveform",    argv = ["{media}", "waveform", "intensity=1", "gray8", "64", "64", "gray8", "64", "256"] },
+  { id = "thistogram",  argv = ["{media}", "thistogram", "", "gray8", "64", "64", "gray8", "64", "256"] },
+  { id = "vectorscope", argv = ["{media}", "vectorscope", "", "yuv444p", "64", "64", "yuv444p", "256", "256"] },
+  { id = "drawbox",     argv = ["{media}", "drawbox", "x=10:y=10:width=30:height=30:color=red:thickness=2", "gbrp", "64", "64", "gbrp", "64", "64"] },
+  { id = "drawgrid",    argv = ["{media}", "drawgrid", "x=0:y=0:width=8:height=8:color=white:thickness=1", "gbrp", "64", "64", "gbrp", "64", "64"] },
+]
+
+[[exclude]]
+when   = { media = ["yuv444p-64", "gbrp-64"], filter = ["histogram", "waveform", "thistogram"] }
+reason = "gray8-input filters; only paired with the gray8-64 media."
+
+[[exclude]]
+when   = { media = ["gray8-64", "gbrp-64"], filter = ["vectorscope"] }
+reason = "yuv444p-input (vectorscope's own coordinate mapping reads Cb/Cr); only paired with yuv444p-64."
+
+[[exclude]]
+when   = { media = ["gray8-64", "yuv444p-64"], filter = ["drawbox", "drawgrid"] }
+reason = "gbrp-only geometry filters (measured against RGB to avoid YUV colour-conversion ambiguity, see vaco-filter-draw-vf's own doc); only paired with gbrp-64."
+
+[compare]
+mode    = "raw-exact"
+timeout = "10s"
+
+[normalise]
+invocation = ["bitexact", "hide-banner"]

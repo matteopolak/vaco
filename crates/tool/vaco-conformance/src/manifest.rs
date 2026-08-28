@@ -321,6 +321,33 @@ impl Suite {
                     .to_owned(),
             );
         }
+        // Rule 3, the filter-tool mirror of rule 2. `raw-exact` (C4) and
+        // `raw-tolerant` (C5, with its own mandatory `justification`) are the
+        // modes a filter case reaches for by default — pixel data has an
+        // exact-or-not answer, the same way C0 does for probe/transcode
+        // output. A filter suite that settles for `behavioural` (C7, "did
+        // both sides produce a frame", not "was it the same frame") is
+        // making the identical move `structured-diff` makes relative to C0:
+        // deliberately weaker, and only acceptable with the reason written
+        // down where a reviewer sees it. The D7 font-table ceiling
+        // (`datascope`/`graphmonitor`/`agraphmonitor`/`pixscope`, see
+        // `vaco-filter-scope`'s own doc) is the case this exists for: a
+        // permanent, structural reason a filter can never reach `raw-exact`,
+        // not a temporary gap — and a suite that has one must say so here,
+        // not leave a bare `mode = "behavioural"` a future reader has to
+        // reverse-engineer the reason for.
+        if tool == Tool::Filter
+            && matches!(compare, Compare::Behavioural)
+            && string(compare_t, "downgrade_reason").is_none()
+        {
+            return Err(
+                "a `filter`-tool case using mode `behavioural` needs a \
+                 `downgrade_reason`: filter output is pixel data with an exact-or-not \
+                 answer, so settling for outcome-class-only needs the same declared \
+                 justification `structured-diff` needs relative to C0"
+                    .to_owned(),
+            );
+        }
 
         Ok(Self {
             name,
