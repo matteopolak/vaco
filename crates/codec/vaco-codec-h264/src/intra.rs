@@ -1,26 +1,28 @@
-//! T3-01g (#420)'s own scope, started rather than finished: pure intra
-//! prediction sample-generation functions, following the exact split
-//! `dequant.rs` established last round -- primary-text equations as
-//! standalone, independently testable functions, not yet wired into
-//! `mb.rs`'s macroblock loop for the general case.
+//! T3-01g (#420)'s own scope: pure intra prediction sample-generation
+//! functions, following the exact split `dequant.rs` established -- primary-
+//! text equations as standalone, independently testable functions, not
+//! wired into `mb.rs`'s macroblock loop for the general multi-macroblock
+//! case here (see `crate::reconstruct` for that composition).
 //!
 //! # What is implemented, and why not more
 //!
 //! `Intra_16x16` (clause 8.3.2): Vertical, Horizontal, DC. **Not Plane**
 //! (clause 8.3.2.4) -- deferred, not attempted incorrectly; it needs a
-//! weighted-sum-of-differences formula this round's budget did not reach.
+//! weighted-sum-of-differences formula not yet reached.
 //!
 //! Chroma (clause 8.3.3): DC, Horizontal, Vertical, all four 4x4
 //! quadrants' worth of clause 8.3.3.1's own case split for DC. **Not
 //! Plane** (clause 8.3.3.4), same reason.
 //!
-//! **Not implemented at all: `Intra_4x4`** (clause 8.3.1). Its own
-//! mode-inference step (clause 8.3.1.1's `predIntra4x4PredMode`) and nine
-//! prediction modes are a materially larger piece than the four `Intra_16x16`
-//! modes, and this round's own oracle corpus's simplest fixture
-//! (`cabac_intra_oracle_flat.264`) is `Intra_16x16` throughout -- landing
-//! that end to end first, verified against the reference, is worth more
-//! than a partially-checked `Intra_4x4` path.
+//! `Intra_4x4` (clause 8.3.1): all nine prediction modes (clauses
+//! 8.3.1.2.1..8.3.1.2.9, Table 8-2) via a single unified `p[x, y]`
+//! addressing helper matching the spec's own notation, plus mode
+//! inference (clause 8.3.1.1, eq. (8-42)) as a standalone pure function
+//! taking each neighbour's already-resolved effective mode -- neighbour
+//! derivation itself (clause 6.4.7.3/6.4.8, the `dcOnlyPredictionFlag`
+//! substitution, real per-4x4-block picture state) is `crate::reconstruct`'s
+//! job, the same "resolved before this module sees it" split every other
+//! function here already keeps.
 //!
 //! **No 8x8 intra prediction at all.** Checked rather than assumed: this
 //! crate's own `iso-iec-14496-10-2002-draft` source has no `Intra_8x8`
@@ -46,9 +48,9 @@
 
 #![allow(
     dead_code,
-    reason = "exercised by this module's own tests; not wired into mb.rs's \
-              macroblock loop for the general multi-macroblock case yet -- \
-              see this module's own doc"
+    reason = "exercised by this module's own tests and by crate::reconstruct; \
+              not wired into mb.rs's macroblock loop for the general \
+              multi-macroblock case directly -- see this module's own doc"
 )]
 
 /// One row (or column, transposed) of 16 luma neighbour samples plus
@@ -221,6 +223,280 @@ pub(crate) fn predict_intra_chroma(mode: u8, n: NeighboursChroma) -> [[u8; 8]; 8
             out
         }
     }
+}
+
+/// Clause 8.3.1's own "13 neighbouring samples p[x,y]", already resolved
+/// to concrete values (or a harmless default where genuinely unused) by
+/// the caller -- this struct's own job is the nine equations of clause
+/// 8.3.1.2.1..8.3.1.2.9, not neighbour derivation (clause 6.4.7.3/6.4.8),
+/// which needs a real, multi-macroblock picture buffer this module still
+/// does not have (see the module doc's own "not yet general" section).
+///
+/// `top` and `top_right` are kept separate (rather than one 8-element
+/// array) because clause 8.3.1.2's own substitution rule -- when
+/// `p[4..8,-1]` are unavailable but `p[3,-1]` is available, substitute
+/// `p[3,-1]`'s value for all four and mark them available -- is exactly
+/// the kind of caller-side resolution step this struct expects to have
+/// already happened, the same "resolved before this module sees it"
+/// contract [`Neighbours16`]/[`NeighboursChroma`] already keep.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Neighbours4 {
+    pub(crate) top_available: bool,
+    pub(crate) top: [u8; 4],
+    /// `p[4..8,-1]` -- already substituted per the rule above if the real
+    /// top-right was unavailable but `p[3,-1]` was available. Modes that
+    /// need it (`Diagonal_Down_Left`, `Vertical_Left`) are only ever
+    /// selected by a conformant encoder when this precondition already
+    /// holds, so this struct does not separately track "was this the
+    /// genuine value or a substitution" -- by the time a mode reads it,
+    /// the distinction is spec-irrelevant.
+    pub(crate) top_right: [u8; 4],
+    pub(crate) left_available: bool,
+    pub(crate) left: [u8; 4],
+    /// `p[-1,-1]`, needed by `Diagonal_Down_Right`/`Vertical_Right`/
+    /// `Horizontal_Down`'s own `x == y` (or `zVR`/`zHD == -1`) case.
+    pub(crate) corner: u8,
+}
+
+/// Clause 8.3.1.2's own unified `p[x, y]` notation, `x = -1..=7`,
+/// `y = -1..=3` -- a single addressable function lets every equation
+/// below be copied close to verbatim, including the cases where an
+/// equation's own algebra (e.g. eq. (8-53)'s `p[x-y-2,-1]`) drifts to
+/// `x = -1` and lands back on the corner rather than the top row, which
+/// is exactly what the spec's own shared `p[x,y]` space means by that
+/// notation in the first place.
+fn p4(n: &Neighbours4, x: i32, y: i32) -> i32 {
+    if x == -1 && y == -1 {
+        return i32::from(n.corner);
+    }
+    if y == -1 {
+        // Top row (`x` may run 0..=7): index 0..3 is `top`, 4..=7 is
+        // `top_right`. `.get()` rather than raw indexing even though
+        // every call site in this module is provably in range (checked
+        // by hand against each of the nine modes' own equations,
+        // documented on `predict_intra4x4` below) -- a defensive `0`
+        // default costs nothing here and keeps this function itself
+        // panic-free regardless of a future caller's own arithmetic.
+        return usize::try_from(x)
+            .ok()
+            .and_then(|i| {
+                if i < 4 {
+                    n.top.get(i)
+                } else {
+                    n.top_right.get(i - 4)
+                }
+            })
+            .copied()
+            .map_or(0, i32::from);
+    }
+    // Left column (`x == -1`, `y` runs 0..=3).
+    usize::try_from(y)
+        .ok()
+        .and_then(|i| n.left.get(i))
+        .copied()
+        .map_or(0, i32::from)
+}
+
+/// Clause 8.3.1.1, eq. (8-42): `Intra4x4PredMode[luma4x4BlkIdx]` from the
+/// two neighbouring blocks' own effective modes plus the two syntax
+/// elements read for this block. `mode_a`/`mode_b` are already resolved
+/// to `2` (DC) by the caller for any neighbour that is unavailable or
+/// whose own macroblock is not coded `Intra_4x4` (clause 8.3.1.1's own
+/// `dcOnlyPredictionFlag` substitution) -- this function's only job is
+/// `predIntra4x4PredMode = Min(...)` and the `prev`/`rem` combination,
+/// not neighbour derivation.
+#[must_use]
+pub(crate) const fn infer_intra4x4_pred_mode(
+    mode_a: u8,
+    mode_b: u8,
+    prev_flag: bool,
+    rem: u8,
+) -> u8 {
+    let pred = if mode_a < mode_b { mode_a } else { mode_b };
+    if prev_flag {
+        pred
+    } else if rem < pred {
+        rem
+    } else {
+        rem + 1
+    }
+}
+
+/// Clause 8.3.1.2.1..8.3.1.2.9: the nine `Intra_4x4` modes (Table 8-2),
+/// transcribed directly against this crate's own
+/// `iso-iec-14496-10-2002-draft` source. `mode` is assumed already
+/// resolved (e.g. by [`infer_intra4x4_pred_mode`]) and assumed valid for
+/// `n`'s own availability (a conformant encoder never selects a mode
+/// whose own "shall be used only when..." precondition `n` does not
+/// satisfy) -- out-of-range `mode` values fall back to DC (mode 2)
+/// rather than panicking, matching this crate's established "defensive
+/// default over an indexing panic" idiom.
+#[must_use]
+pub(crate) fn predict_intra4x4(mode: u8, n: Neighbours4) -> [[u8; 4]; 4] {
+    let mut out = [[0u8; 4]; 4];
+    match mode {
+        0 => {
+            // eq. (8-45), Vertical.
+            for row in &mut out {
+                *row = n.top;
+            }
+        }
+        1 => {
+            // eq. (8-46), Horizontal.
+            for (y, row) in out.iter_mut().enumerate() {
+                *row = [n.left.get(y).copied().unwrap_or(0); 4];
+            }
+        }
+        3 => {
+            // eq. (8-51)/(8-52), Diagonal_Down_Left.
+            for (y, row) in out.iter_mut().enumerate() {
+                for (x, v) in row.iter_mut().enumerate() {
+                    let (x, y) = (x as i32, y as i32);
+                    *v = if x == 3 && y == 3 {
+                        (p4(&n, 6, -1) + 3 * p4(&n, 7, -1) + 2) >> 2
+                    } else {
+                        (p4(&n, x + y, -1) + 2 * p4(&n, x + y + 1, -1) + p4(&n, x + y + 2, -1) + 2)
+                            >> 2
+                    } as u8;
+                }
+            }
+        }
+        4 => {
+            // eq. (8-53)/(8-54)/(8-55), Diagonal_Down_Right.
+            for (y, row) in out.iter_mut().enumerate() {
+                for (x, v) in row.iter_mut().enumerate() {
+                    let (x, y) = (x as i32, y as i32);
+                    *v = match x.cmp(&y) {
+                        core::cmp::Ordering::Greater => {
+                            (p4(&n, x - y - 2, -1)
+                                + 2 * p4(&n, x - y - 1, -1)
+                                + p4(&n, x - y, -1)
+                                + 2)
+                                >> 2
+                        }
+                        core::cmp::Ordering::Less => {
+                            (p4(&n, -1, y - x - 2)
+                                + 2 * p4(&n, -1, y - x - 1)
+                                + p4(&n, -1, y - x)
+                                + 2)
+                                >> 2
+                        }
+                        core::cmp::Ordering::Equal => {
+                            (p4(&n, 0, -1) + 2 * p4(&n, -1, -1) + p4(&n, -1, 0) + 2) >> 2
+                        }
+                    } as u8;
+                }
+            }
+        }
+        5 => {
+            // eq. (8-56)..(8-59), Vertical_Right.
+            for (y, row) in out.iter_mut().enumerate() {
+                for (x, v) in row.iter_mut().enumerate() {
+                    let (x, y) = (x as i32, y as i32);
+                    let z_vr = 2 * x - y;
+                    *v = if z_vr >= 0 && z_vr % 2 == 0 {
+                        (p4(&n, x - (y >> 1) - 1, -1) + p4(&n, x - (y >> 1), -1) + 1) >> 1
+                    } else if z_vr == 1 || z_vr == 3 || z_vr == 5 {
+                        (p4(&n, x - (y >> 1) - 2, -1)
+                            + 2 * p4(&n, x - (y >> 1) - 1, -1)
+                            + p4(&n, x - (y >> 1), -1)
+                            + 2)
+                            >> 2
+                    } else if z_vr == -1 {
+                        (p4(&n, -1, 0) + 2 * p4(&n, -1, -1) + p4(&n, 0, -1) + 2) >> 2
+                    } else {
+                        (p4(&n, -1, y - 1) + 2 * p4(&n, -1, y - 2) + p4(&n, -1, y - 3) + 2) >> 2
+                    } as u8;
+                }
+            }
+        }
+        6 => {
+            // eq. (8-60)..(8-63), Horizontal_Down.
+            for (y, row) in out.iter_mut().enumerate() {
+                for (x, v) in row.iter_mut().enumerate() {
+                    let (x, y) = (x as i32, y as i32);
+                    let z_hd = 2 * y - x;
+                    *v = if z_hd >= 0 && z_hd % 2 == 0 {
+                        (p4(&n, -1, y - (x >> 1) - 1) + p4(&n, -1, y - (x >> 1)) + 1) >> 1
+                    } else if z_hd == 1 || z_hd == 3 || z_hd == 5 {
+                        (p4(&n, -1, y - (x >> 1) - 2)
+                            + 2 * p4(&n, -1, y - (x >> 1) - 1)
+                            + p4(&n, -1, y - (x >> 1))
+                            + 2)
+                            >> 2
+                    } else if z_hd == -1 {
+                        (p4(&n, -1, 0) + 2 * p4(&n, -1, -1) + p4(&n, 0, -1) + 2) >> 2
+                    } else {
+                        (p4(&n, x - 1, -1) + 2 * p4(&n, x - 2, -1) + p4(&n, x - 3, -1) + 2) >> 2
+                    } as u8;
+                }
+            }
+        }
+        7 => {
+            // eq. (8-64)/(8-65), Vertical_Left.
+            for (y, row) in out.iter_mut().enumerate() {
+                for (x, v) in row.iter_mut().enumerate() {
+                    let (x, y) = (x as i32, y as i32);
+                    *v = if y == 0 || y == 2 {
+                        (p4(&n, x + (y >> 1), -1) + p4(&n, x + (y >> 1) + 1, -1) + 1) >> 1
+                    } else {
+                        (p4(&n, x + (y >> 1), -1)
+                            + 2 * p4(&n, x + (y >> 1) + 1, -1)
+                            + p4(&n, x + (y >> 1) + 2, -1)
+                            + 2)
+                            >> 2
+                    } as u8;
+                }
+            }
+        }
+        8 => {
+            // eq. (8-66)..(8-69), Horizontal_Up.
+            for (y, row) in out.iter_mut().enumerate() {
+                for (x, v) in row.iter_mut().enumerate() {
+                    let (x, y) = (x as i32, y as i32);
+                    let z_hu = x + 2 * y;
+                    *v = if z_hu == 0 || z_hu == 2 || z_hu == 4 {
+                        (p4(&n, -1, y + (x >> 1)) + p4(&n, -1, y + (x >> 1) + 1) + 1) >> 1
+                    } else if z_hu == 1 || z_hu == 3 {
+                        (p4(&n, -1, y + (x >> 1))
+                            + 2 * p4(&n, -1, y + (x >> 1) + 1)
+                            + p4(&n, -1, y + (x >> 1) + 2)
+                            + 2)
+                            >> 2
+                    } else if z_hu == 5 {
+                        (p4(&n, -1, 2) + 3 * p4(&n, -1, 3) + 2) >> 2
+                    } else {
+                        p4(&n, -1, 3)
+                    } as u8;
+                }
+            }
+        }
+        // mode 2 (DC) and any out-of-range value.
+        _ => {
+            let dc = match (n.top_available, n.left_available) {
+                (true, true) => {
+                    let sum: u32 = n
+                        .top
+                        .iter()
+                        .chain(n.left.iter())
+                        .map(|&v| u32::from(v))
+                        .sum();
+                    ((sum + 4) >> 3) as u8
+                }
+                (false, true) => {
+                    let sum: u32 = n.left.iter().map(|&v| u32::from(v)).sum();
+                    ((sum + 2) >> 2) as u8
+                }
+                (true, false) => {
+                    let sum: u32 = n.top.iter().map(|&v| u32::from(v)).sum();
+                    ((sum + 2) >> 2) as u8
+                }
+                (false, false) => 128,
+            };
+            out = [[dc; 4]; 4];
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -446,5 +722,103 @@ mod tests {
             cr.iter().all(|row| row.iter().all(|&v| v == 128)),
             "flat fixture: reconstructed Cr is not uniformly 128"
         );
+    }
+
+    fn unavailable4() -> Neighbours4 {
+        Neighbours4 {
+            top_available: false,
+            top: [0; 4],
+            top_right: [0; 4],
+            left_available: false,
+            left: [0; 4],
+            corner: 0,
+        }
+    }
+
+    /// Clause 8.3.1.2.1, eq. (8-45): every row of the 4x4 block is a copy
+    /// of the top neighbour row.
+    #[test]
+    fn intra4x4_vertical_copies_top_row_down_every_row() {
+        let mut n = unavailable4();
+        n.top_available = true;
+        n.top = [10, 20, 30, 40];
+        let out = predict_intra4x4(0, n);
+        assert!(out.iter().all(|row| *row == [10, 20, 30, 40]));
+    }
+
+    /// Clause 8.3.1.2.2, eq. (8-46): every column is a copy of the left
+    /// neighbour column.
+    #[test]
+    fn intra4x4_horizontal_copies_left_column_across_every_row() {
+        let mut n = unavailable4();
+        n.left_available = true;
+        n.left = [1, 2, 3, 4];
+        let out = predict_intra4x4(1, n);
+        for (y, row) in out.iter().enumerate() {
+            assert_eq!(*row, [n.left[y]; 4]);
+        }
+    }
+
+    /// Clause 8.3.1.2.3, eq. (8-50): the one case this module's flat
+    /// fixture and gradient fixture never exercise (both are
+    /// `Intra_16x16`) but that `cabac_i_only.264`'s own macroblock 0 does.
+    #[test]
+    fn intra4x4_dc_with_no_neighbours_is_128() {
+        let out = predict_intra4x4(2, unavailable4());
+        assert!(out.iter().all(|row| row.iter().all(|&v| v == 128)));
+    }
+
+    /// Clause 8.3.1.2.4, eq. (8-51): the one hand-checkable corner of
+    /// `Diagonal_Down_Left` -- `x = y = 3` uses a different (three-tap,
+    /// asymmetric) formula from every other position in the block.
+    #[test]
+    fn intra4x4_diagonal_down_left_corner_uses_its_own_formula() {
+        let mut n = unavailable4();
+        n.top_available = true;
+        n.top = [0, 0, 0, 0];
+        n.top_right = [0, 0, 0, 8];
+        let out = predict_intra4x4(3, n);
+        // eq. (8-51): (p[6,-1] + 3*p[7,-1] + 2) >> 2 = (0 + 24 + 2) >> 2 = 6.
+        assert_eq!(out[3][3], 6);
+    }
+
+    /// Clause 8.3.1.1, eq. (8-42) -- the exact case the coordinator asked
+    /// to be checked deliberately: neighbour A and neighbour B disagree,
+    /// so `Min(intra4x4PredModeA, intra4x4PredModeB)` actually matters
+    /// (a test where both neighbours coincidentally agree could pass with
+    /// the fallback backwards, e.g. `Max` instead of `Min`, or with the
+    /// wrong neighbour's value used outright).
+    #[test]
+    fn mode_inference_uses_min_of_disagreeing_neighbours() {
+        // A = Horizontal (1), B = Diagonal_Down_Left (3): predIntra4x4PredMode
+        // must be Min(1, 3) = 1, not 3, not either neighbour picked
+        // arbitrarily.
+        let pred = infer_intra4x4_pred_mode(1, 3, true, 0);
+        assert_eq!(
+            pred, 1,
+            "prev_flag set: must equal predIntra4x4PredMode = Min(1, 3) = 1"
+        );
+
+        // Swapping which neighbour holds which value must not change the
+        // result -- Min is commutative, a backwards implementation that
+        // picks "A" or "B" specifically would not be.
+        let pred_swapped = infer_intra4x4_pred_mode(3, 1, true, 0);
+        assert_eq!(
+            pred_swapped, 1,
+            "Min must be commutative in which argument is A vs B"
+        );
+    }
+
+    /// Clause 8.3.1.1, eq. (8-42)'s own `rem >= pred` branch: this is the
+    /// one that would silently produce a plausible-looking wrong mode if
+    /// the `< pred` / `>= pred` comparison were flipped -- both branches
+    /// produce a valid mode number (0..8), so only checking against the
+    /// primary text's exact comparison direction catches a swap.
+    #[test]
+    fn mode_inference_rem_at_or_above_pred_is_incremented() {
+        // predIntra4x4PredMode = Min(4, 6) = 4. rem = 4 (>= pred) -> mode = rem + 1 = 5.
+        assert_eq!(infer_intra4x4_pred_mode(4, 6, false, 4), 5);
+        // rem = 2 (< pred) -> mode = rem = 2, unchanged.
+        assert_eq!(infer_intra4x4_pred_mode(4, 6, false, 2), 2);
     }
 }

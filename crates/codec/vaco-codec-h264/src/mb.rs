@@ -386,6 +386,14 @@ pub(crate) struct MbResidual {
     pub(crate) luma_ac: [Option<CabacResidual>; 16],
     pub(crate) chroma_dc: [Option<CabacResidual>; 2],
     pub(crate) chroma_ac: [[Option<CabacResidual>; 4]; 2],
+    /// `Intra4x4PredMode[luma4x4BlkIdx]` (Table 8-2), already resolved by
+    /// clause 8.3.1.1's own mode inference during this macroblock's live
+    /// decode -- `[2; 16]` (every block DC) when `kind` is not
+    /// `MbKind::Intra4x4`. Grown onto this struct rather than named
+    /// separately since every consumer that wants a macroblock's residual
+    /// also wants to know how to predict it before adding that residual
+    /// in -- see `crate::reconstruct`.
+    pub(crate) intra4x4_pred_mode: [u8; 16],
 }
 
 impl Default for MbResidual {
@@ -395,6 +403,7 @@ impl Default for MbResidual {
             luma_ac: core::array::from_fn(|_| None),
             chroma_dc: [None, None],
             chroma_ac: [core::array::from_fn(|_| None), core::array::from_fn(|_| None)],
+            intra4x4_pred_mode: [2; 16],
         }
     }
 }
@@ -450,6 +459,36 @@ pub struct SliceStats {
     /// macroblock had no residual at all (zero CBP, or skipped), `None`
     /// only if the slice contained no macroblocks at all.
     pub(crate) first_slice_mb_residual: Option<MbResidual>,
+    /// Every macroblock this call decoded (CABAC I-slices only -- see
+    /// `decode_slice_cabac`'s own scope line), in raster (decode) order,
+    /// for a real multi-macroblock reconstruction to walk in
+    /// `crate::reconstruct` without a caller needing to duplicate this
+    /// module's own CABAC decode. `first_slice_mb_*` above predates this
+    /// and is kept for the tests that already depend on it; this is the
+    /// general form the same data belongs in.
+    pub(crate) macroblocks: Vec<MbSummary>,
+}
+
+/// One macroblock's worth of everything [`crate::reconstruct`] needs to
+/// turn a live CABAC decode into actual samples, without re-deriving any
+/// of it: which kind it was, its own `Intra16x16PredMode`/
+/// `intra_chroma_pred_mode` (only meaningful when the corresponding
+/// `is_*` flag is set), the `QPY` its own residual was scaled against,
+/// and the residual coefficients themselves (including, inside
+/// `residual.intra4x4_pred_mode`, the resolved per-block `Intra_4x4`
+/// modes when `is_intra4x4`).
+#[derive(Debug, Clone)]
+pub(crate) struct MbSummary {
+    pub(crate) mb_x: u32,
+    pub(crate) mb_y: u32,
+    pub(crate) skipped: bool,
+    pub(crate) is_ipcm: bool,
+    pub(crate) is_intra4x4: bool,
+    pub(crate) is_intra16x16: bool,
+    pub(crate) intra16x16_pred_mode: u8,
+    pub(crate) intra_chroma_pred_mode: u8,
+    pub(crate) qpy: i32,
+    pub(crate) residual: MbResidual,
 }
 
 /// Refusal reasons this module names explicitly rather than trying and
@@ -1491,6 +1530,16 @@ struct CabacGrids {
     /// per whole macroblock).
     cbf_chroma_dc: [Vec<Option<bool>>; 2],
     mv: Vec<MvInfo>,
+    /// `Intra4x4PredMode[luma4x4BlkIdx]` (Table 8-2), one per global 4x4
+    /// luma block position across the whole picture -- clause 8.3.1.1's
+    /// own mode-inference needs a *previously decoded macroblock's*
+    /// resolved mode, not merely its availability, the same "store the
+    /// actual value a later derivation needs" shape `intra_chroma_pred_mode`
+    /// and `cbf_luma` already follow. `None` for any block whose own
+    /// macroblock is not coded `Intra_4x4` (including not yet decoded at
+    /// all) -- clause 8.3.1.1's own `dcOnlyPredictionFlag` substitution
+    /// reads as "treat as DC" for exactly this case.
+    intra4x4_pred_mode: Vec<Option<u8>>,
 }
 
 impl CabacGrids {
@@ -1508,6 +1557,7 @@ impl CabacGrids {
             cbf_chroma: [budget.alloc(n_chroma4)?, budget.alloc(n_chroma4)?],
             cbf_chroma_dc: [budget.alloc(n_mb)?, budget.alloc(n_mb)?],
             mv: budget.alloc(n_luma4)?,
+            intra4x4_pred_mode: budget.alloc(n_luma4)?,
         })
     }
 
@@ -1591,6 +1641,111 @@ impl CabacGrids {
             *slot = v;
         }
     }
+
+    fn intra4x4_pred_mode_at(&self, x: u32, y: u32) -> Option<u8> {
+        self.luma4_idx(x, y).and_then(|i| self.intra4x4_pred_mode.get(i)).copied().flatten()
+    }
+
+    fn set_intra4x4_pred_mode(&mut self, x: u32, y: u32, mode: u8) {
+        if let Some(i) = self.luma4_idx(x, y)
+            && let Some(slot) = self.intra4x4_pred_mode.get_mut(i)
+        {
+            *slot = Some(mode);
+        }
+    }
+
+    /// Clause 6.4.5's own macroblock availability, evaluated at whichever
+    /// macroblock owns global 4x4 luma block position `(gx, gy)` -- shared
+    /// by clause 8.3.1.1's `dcOnlyPredictionFlag` derivation
+    /// ([`infer_intra4x4_neighbour_modes`] below). `(gx, gy)` may be
+    /// negative (off the top/left picture edge) or beyond this picture's
+    /// own extent, both "not available"; the macroblock currently being
+    /// decoded (`cur_mb_x, cur_mb_y`) is always available to itself, since
+    /// this is invoked mid-decode of that very macroblock for its own
+    /// earlier (in z-order) blocks.
+    #[allow(
+        clippy::integer_division,
+        reason = "gx/4, gy/4 is clause 6.4.7.3's own 4x4-block-to-macroblock \
+                  conversion (16 luma pixels wide/high per mb, 4 4x4 blocks \
+                  per row/column), not a precision-loss bug"
+    )]
+    fn mb4x4_available(&self, gx: i32, gy: i32, cur_mb_x: u32, cur_mb_y: u32) -> bool {
+        let (Ok(gx), Ok(gy)) = (u32::try_from(gx), u32::try_from(gy)) else { return false };
+        let (mb_x, mb_y) = (gx / 4, gy / 4);
+        if mb_x >= self.mbs_wide || mb_y >= self.mbs_high {
+            return false;
+        }
+        (mb_x, mb_y) == (cur_mb_x, cur_mb_y) || self.mb_info_at(mb_x, mb_y).is_some()
+    }
+}
+
+/// Clause 8.3.1.1's own `intra4x4PredModeA`/`intra4x4PredModeB`
+/// derivation for luma4x4BlkIdx `blk` of the macroblock currently being
+/// decoded at `(cur_mb_x, cur_mb_y)`, implementing `dcOnlyPredictionFlag`
+/// exactly as clause 8.3.1.1 literally states it: "the macroblock with
+/// address mbAddrA is not available OR mbAddrB is not available OR
+/// [constrained-intra cases] -> dcOnlyPredictionFlag = 1", and *both*
+/// `intra4x4PredModeA`/`intra4x4PredModeB` are forced to 2 (DC) whenever
+/// that one shared flag is 1 -- a *joint* condition over both neighbours
+/// together, not two independent per-neighbour checks.
+/// `constrained_intra_pred_flag`'s own Inter-neighbour case is
+/// unreachable here -- `check_scope` refuses that flag entirely.
+///
+/// # Checked against a real corpus specifically because this looked backwards
+///
+/// A per-neighbour-independent reading (resolve A on its own merits,
+/// resolve B on its own, never letting one neighbour's unavailability
+/// affect the other) seemed more intuitive at first, and was implemented
+/// that way briefly -- it even fixed one specific macroblock this draft's
+/// literal joint reading gets wrong-looking on paper (a macroblock at a
+/// picture's top edge whose *left* neighbour is a real, available,
+/// already-decoded `Intra_4x4` macroblock). But re-running the *already
+/// byte-exact* `cabac_intra_oracle_noise.264` fixture (a full,
+/// multi-macroblock, all-`Intra_4x4`, no-deblock corpus -- the cleanest,
+/// most direct check this repository has for exactly this derivation)
+/// against that "fixed" version broke it: several macroblocks that
+/// reconstructed correctly under the literal joint reading stopped
+/// matching. The joint reading, exactly as this draft states it, is what
+/// a real `libx264`/`ffmpeg` pair actually agrees on for the
+/// overwhelming majority of cross-macroblock cases this corpus exercises
+/// -- reverted to it here. The one specific macroblock that still does
+/// not reconstruct correctly under this reading (`cabac_intra_oracle_testsrc.264`,
+/// macroblock (1, 0)) is reported separately, not fixed by re-breaking
+/// this derivation -- see this round's own report; the evidence points
+/// at a bit-consumption issue somewhere upstream of this specific
+/// macroblock's own `prev_intra4x4_pred_mode_flag`/`rem_intra4x4_pred_mode`
+/// reads, not at this function.
+fn infer_intra4x4_neighbour_modes(grids: &CabacGrids, cur_mb_x: u32, cur_mb_y: u32, blk: u32) -> (u8, u8) {
+    let (lbx, lby) = blk_xy(blk);
+    let (gbx, gby) = ((cur_mb_x * 4 + lbx) as i32, (cur_mb_y * 4 + lby) as i32);
+    let (gxa, gya) = (gbx - 1, gby);
+    let (gxb, gyb) = (gbx, gby - 1);
+    let avail_a = grids.mb4x4_available(gxa, gya, cur_mb_x, cur_mb_y);
+    let avail_b = grids.mb4x4_available(gxb, gyb, cur_mb_x, cur_mb_y);
+    // Clause 8.3.1.1's own dcOnlyPredictionFlag: a *joint* condition over
+    // *both* neighbours, confirmed correct exactly as written (not the
+    // per-neighbour-independent reading that seemed more intuitive) --
+    // see this function's own doc for how that got settled.
+    let dc_only = !avail_a || !avail_b;
+    let mode_a = if dc_only {
+        2
+    } else {
+        u32::try_from(gxa)
+            .ok()
+            .zip(u32::try_from(gya).ok())
+            .and_then(|(x, y)| grids.intra4x4_pred_mode_at(x, y))
+            .unwrap_or(2)
+    };
+    let mode_b = if dc_only {
+        2
+    } else {
+        u32::try_from(gxb)
+            .ok()
+            .zip(u32::try_from(gyb).ok())
+            .and_then(|(x, y)| grids.intra4x4_pred_mode_at(x, y))
+            .unwrap_or(2)
+    };
+    (mode_a, mode_b)
 }
 
 /// clause 9.3.3.1.1.9's `condTermFlagN` for `coded_block_flag` — see this
@@ -2043,6 +2198,18 @@ pub fn decode_slice_cabac(
             // eq. (7-23) with mb_qp_delta = 0 leaves `qpy` unchanged.
             stats.skipped_count += 1;
             stats.macroblock_count += 1;
+            stats.macroblocks.push(MbSummary {
+                mb_x,
+                mb_y,
+                skipped: true,
+                is_ipcm: false,
+                is_intra4x4: false,
+                is_intra16x16: false,
+                intra16x16_pred_mode: 0,
+                intra_chroma_pred_mode: 0,
+                qpy,
+                residual: MbResidual::default(),
+            });
             if is_first_mb_in_slice {
                 stats.first_slice_mb_cbp = Some((0, 0));
                 stats.first_slice_mb_qpy = Some(qpy);
@@ -2061,8 +2228,20 @@ pub fn decode_slice_cabac(
                 mb_y,
             )?;
             stats.macroblock_count += 1;
+            let info = grids.mb_info_at(mb_x, mb_y);
+            stats.macroblocks.push(MbSummary {
+                mb_x,
+                mb_y,
+                skipped: false,
+                is_ipcm: info.is_some_and(|i| i.is_ipcm),
+                is_intra4x4: info.is_some_and(|i| i.is_intra4x4),
+                is_intra16x16: info.is_some_and(|i| i.is_intra16x16),
+                intra16x16_pred_mode: info.map(|i| i.intra16x16_pred_mode).unwrap_or(0),
+                intra_chroma_pred_mode: info.map(|i| i.intra_chroma_pred_mode).unwrap_or(0),
+                qpy,
+                residual: residual.clone(),
+            });
             if is_first_mb_in_slice {
-                let info = grids.mb_info_at(mb_x, mb_y);
                 stats.first_slice_mb_cbp = info.map(|i| (i.cbp_luma, i.cbp_chroma));
                 stats.first_slice_mb_intra16x16_pred_mode =
                     info.filter(|i| i.is_intra16x16).map(|i| i.intra16x16_pred_mode);
@@ -2157,14 +2336,35 @@ fn decode_macroblock_cabac(
     // below, the same "actually store what a later ctxIdxInc derivation
     // needs" fix chroma DC's coded_block_flag got.
     let mut intra_chroma_pred_mode = 0u8;
+    // Only meaningful (and only ever read back) when `kind` is
+    // `MbKind::Intra4x4`; `[2; 16]` (every block DC) elsewhere, matching
+    // this section's own "unused when the flag it's gated on is false"
+    // convention.
+    let mut intra4x4_pred_mode = [2u8; 16];
     if is_intra {
         if matches!(kind, MbKind::Intra4x4) {
-            for _ in 0..16 {
-                if cabac.decode_decision(&mut ctx.prev_intra4x4) == 0 {
-                    let _ = cabac.decode_decision(&mut ctx.rem_intra4x4);
-                    let _ = cabac.decode_decision(&mut ctx.rem_intra4x4);
-                    let _ = cabac.decode_decision(&mut ctx.rem_intra4x4);
+            for blk in 0u32..16 {
+                let prev_flag = cabac.decode_decision(&mut ctx.prev_intra4x4) == 1;
+                let rem = if prev_flag {
+                    0
+                } else {
+                    // clause 9.3.2.4's own FL binarisation: binIdx 0 is the
+                    // *least* significant bit, increasing towards the most
+                    // significant one -- the opposite order a naive
+                    // "shift left as you read" reading of "3 bits" would
+                    // assume.
+                    let b0 = cabac.decode_decision(&mut ctx.rem_intra4x4);
+                    let b1 = cabac.decode_decision(&mut ctx.rem_intra4x4);
+                    let b2 = cabac.decode_decision(&mut ctx.rem_intra4x4);
+                    ((b2 << 2) | (b1 << 1) | b0) as u8
+                };
+                let (mode_a, mode_b) = infer_intra4x4_neighbour_modes(grids, mb_x, mb_y, blk);
+                let mode = crate::intra::infer_intra4x4_pred_mode(mode_a, mode_b, prev_flag, rem);
+                if let Some(slot) = intra4x4_pred_mode.get_mut(blk as usize) {
+                    *slot = mode;
                 }
+                let (lbx, lby) = blk_xy(blk);
+                grids.set_intra4x4_pred_mode(mb_x * 4 + lbx, mb_y * 4 + lby, mode);
             }
         }
         let inc0 =
@@ -2268,7 +2468,7 @@ fn decode_macroblock_cabac(
     // this same macroblock's own dequantisation, not the next one's.
     *qpy = crate::dequant::next_qpy(*qpy, mb_qp_delta);
 
-    let residual = if cbp_luma > 0 || cbp_chroma > 0 || matches!(kind, MbKind::Intra16x16 { .. }) {
+    let mut residual = if cbp_luma > 0 || cbp_chroma > 0 || matches!(kind, MbKind::Intra16x16 { .. }) {
         decode_residual_cabac(cabac, budget, ctx, grids, &kind, cbp_luma, cbp_chroma, mb_x, mb_y)?
     } else {
         for blk in 0..16u32 {
@@ -2283,6 +2483,13 @@ fn decode_macroblock_cabac(
         }
         MbResidual::default()
     };
+    // `decode_residual_cabac`'s own `MbResidual::default()` (the
+    // `cbp_luma == 0` `Intra_4x4` case, e.g. a fully-flat 4x4 region with
+    // no coefficients at all) would otherwise silently drop the mode
+    // inference already resolved above -- an `Intra_4x4` macroblock with
+    // zero residual is still a real macroblock, its prediction still
+    // needs the right mode.
+    residual.intra4x4_pred_mode = intra4x4_pred_mode;
 
     grids.set_mb_info(
         mb_x,
