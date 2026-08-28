@@ -259,21 +259,86 @@ decision, not a provenance one:**
 
   All four blocks' predictor sources are now pinned down from the
   primary text alone, at the same confidence the rest of this crate's
-  Annex work is held to. This has **not** been cross-checked against a
-  real `-obmc` differential fixture (`ffmpeg -flags +obmc` is confirmed,
-  in an earlier round, to exist and to change encoder output, so the
-  fixture side is buildable) — a real-decode differential is still the
-  right final check before shipping, since it would exercise the
-  predictor reading, F.3's remote-vector substitution rules and the
-  OBMC weighting matrices together, against real decoder behaviour,
-  rather than the primary text alone. Doing that, plus the OBMC
-  weighting/remote-vector/4-vector-MCBPC wiring itself, is a
-  substantially sized implementation in its own right and was not
-  attempted in the same pass as this figure re-read; **this crate still
-  does not implement Annex F.** The OBMC weighting matrices
-  (Figures F.2-F.4) and the remote-vector substitution rules (§F.3) were
-  read in full in the earlier pass and are not in question — only the
-  per-block predictor source was, and that is now closed.
+  Annex work is held to.
+
+  **A further pass cross-checked the predictor table against a real
+  `ffmpeg -flags +mv4 -obmc 1` fixture, bit-exact, before any weighting
+  work started, per instruction.** Built content with a distinct,
+  non-periodic motion vector per 8x8 sub-block *and* per macroblock
+  (uniform motion would make every candidate predictor-source
+  coincide — the same trap `intensity=1`'s one-axis source fell into on
+  the filter side), confirmed via `ffmpeg`'s own decoded motion-vector
+  side data (`PyAV`, `flags2=+export_mvs`) that every macroblock
+  genuinely carried four distinct vectors, then extracted the real
+  `MVD` codewords with this crate's own already-tested `H263_MVD` VLC
+  table (a temporary, fully-reverted scratch decode branch — verified
+  clean via `git status --porcelain` before anything was committed) and
+  compared `predictor(candidate) + real_MVD` against `ffmpeg`'s own
+  decoded final vectors, independently, in Python. Result: **63/63
+  exact** matches for every one of the four blocks on 63 interior
+  macroblocks, where a plausible wrong alternate reading matched only
+  12-19/63, by coincidence. Landed the verified rule as real crate code:
+  `motion::annex_f_predictor_sources` (`crates/codec/vaco-codec-h263/src/motion.rs`).
+
+  **The OBMC weighting values (Figures F.2-F.4) were then transcribed
+  line-by-line from the primary text** (not eyeballed for shape or
+  plausibility — this project's own MPEG-2 sibling crate had a
+  single-bit width error survive exactly that weaker check) — three
+  8x8 matrices, `H0`/`H1`/`H2`, one per prediction source (own block,
+  vertical remote, horizontal remote). Self-consistency confirmed
+  directly: every one of the 64 cells across all three tables sums to
+  exactly 8, the divisor Annex F's own rounding formula uses — a
+  transcription slip would almost certainly break this invariant, not
+  just look slightly off. Landed as `motion::annex_f_obmc_luma_block`
+  plus the chrominance combination rule (Table F.1's own three-bucket
+  sixteenth-pixel snap, distinct from this crate's existing single-vector
+  chroma rule) as `motion::annex_f_chroma_mv`, both unit-tested against
+  hand-worked values from the primary text.
+
+  **Wiring all of this into real reconstruction surfaced a genuine
+  architectural gap, not a small bug.** Annex F's OBMC prediction for a
+  block on the right-hand column of a macroblock needs the *next*
+  macroblock's own already-decoded vector (§F.3's "the block... to the
+  right of the current luminance block") — but in raster decode order,
+  that neighbour has not been decoded yet at the point this crate's
+  existing macroblock loop reconstructs pixels immediately after
+  parsing each macroblock's own syntax, the same one-pass shape every
+  other mode in this crate uses successfully. Confirmed by building the
+  wiring, decoding a real fixture end-to-end, and finding the resulting
+  picture's rightmost-neighbour lookups reading a genuinely-not-yet-
+  written default (not a coded-status or border misread — every other
+  neighbour direction, including the previously-tricky block-1 and
+  block-2 cases and the picture-border cases, matched a fixture built
+  specifically with non-uniform per-macroblock motion exactly, including
+  after finding and fixing a second real bug this same pass: a
+  one-vector macroblock's *own* predictor must also use the fine-grid,
+  per-block rule under Advanced Prediction mode — not the older
+  macroblock-granularity `predictors()` — whenever its neighbour is a
+  four-vector macroblock, since "the corresponding macroblock's vector"
+  is no longer well-defined once a neighbour can have four different
+  ones; §F.2's own text turned out to require this for *every*
+  macroblock, one-vector or four, once Advanced Prediction is active).
+  Fixing the raster-order gap needs a one-macroblock lookahead (or a
+  full two-pass parse-then-reconstruct split) in the GOB decode loop —
+  real, scoped follow-up work, not attempted in the same pass as
+  finding it. The picture-header bail this crate already had for
+  Advanced Prediction was **kept in place** rather than removed, so a
+  picture using this mode is still cleanly marked unsupported rather
+  than silently mis-decoded — a half-wired OBMC path would be worse
+  than the honest "not implemented" this crate already reports.
+
+  **`vaco-codec-h263` still does not implement Annex F.** What is now
+  landed and verified in isolation: the per-block predictor rule
+  (bit-exact against real `ffmpeg`, twice over — once by direct MVD
+  comparison, once by decoding a full fixture through the real
+  reconstruction path and finding every neighbour direction correct
+  except the one architectural gap above), the OBMC weighting
+  arithmetic, and the chrominance combination rule. Not yet landed:
+  the raster-order restructuring the reconstruction wiring needs, and
+  the 4-vector `MCBPC` bitstream dispatch that was reverted alongside
+  it (built, and confirmed correct against the same fixture, but its
+  only caller — the OBMC reconstruction path — is the piece still
+  gated on the restructuring above).
 - **Annex E (Syntax-based Arithmetic Coding)** replaces every VLC in the
   format with arithmetic coding — a different entropy layer entirely, not
   an additive mode on top of the existing one.
