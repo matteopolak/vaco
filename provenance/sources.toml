@@ -767,3 +767,17 @@ kind     = "blackbox"
 title    = "ffmpeg 8.1 mp3 demuxer/muxer, measured: frame sync/header layout, Xing/Info/VBRI/LAME tag byte offsets, ID3v2/ID3v1 handling, stream time base, gapless skip_samples derivation"
 acquired = "2026-08-27"
 where    = "ffmpeg/ffprobe 8.1 binaries, black-box"
+
+[[source]]
+id       = "atsc-a52-2018"
+kind     = "spec"
+title    = "ATSC A/52:2018, Digital Audio Compression (AC-3, E-AC-3) Standard"
+acquired = "2026-08-27"
+where    = "https://www.atsc.org/atsc-documents/a522018-digital-audio-compression-ac-3-e-ac-3-standard/"
+
+[[source]]
+id       = "ffmpeg-ac3-container"
+kind     = "blackbox"
+title    = "ffmpeg 8.1 ac3/eac3 raw demuxer/muxer, measured: syncframe header layout for both bsid ranges, frame-size formula (classic AC-3's frmsizecod-table relationship and E-AC-3's stated frmsiz), stream time base, acmod/lfeon channel mapping, probe_score"
+acquired = "2026-08-27"
+where    = "ffmpeg/ffprobe 8.1 binaries, black-box"
