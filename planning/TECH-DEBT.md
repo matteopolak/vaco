@@ -2082,58 +2082,82 @@ same synthetic-fixture technique already in use. Recorded here so a
 similar "this looks decoder-dependent" call elsewhere gets one more
 targeted sweep before being written off.
 
-### `vaco-codec-vp9` decodes key frames only — inter prediction is unimplemented (C-31/#325)
+### `vaco-codec-vp9` C-31 (inter prediction) and C-32a (loop filter) are both implemented and verified bit-exact
 
-`vaco-codec-vp9::decode::Vp9Decoder::decode_one_frame` checks
-`fh.show_existing_frame || !fh.is_key_frame` and returns without emitting a
-frame for either case. There is no motion-vector decode, no reference-frame
-buffer, and no inter residual path anywhere in this crate — a real VP9
-stream (which is virtually always key frame plus many inter frames) will
-have every inter frame silently dropped, not decoded wrong. This is by
-design for C-29/C-30's scope, not an oversight: see
-`docs/codec/vaco-codec-vp9.md`'s Verification table, which confirms this
-crate reconstructs every pixel it is responsible for bit-exactly (modulo
-the loop filter, next entry) and states plainly that inter prediction is
-the only thing left standing between this decoder and a real picture.
+Both landed since the "key frames only" state this entry used to describe.
+C-31: reference-frame management, motion-vector prediction (the
+spatial+temporal candidate scan, sub-8x8 per-4x4 motion vectors), single
+and compound reference selection, switchable sub-pel interpolation. C-32a:
+§8.8's in-loop deblocking filter (level/sharpness derivation, segment and
+reference-frame level deltas, all three filter widths, the vertical-then-
+horizontal superblock-raster filter order). A real 15-frame key+inter GOP
+(14 inter frames) decodes byte-for-byte identical to `ffmpeg -c:v
+libvpx-vp9` at `-lossless 1`, and — since C-32a — every *lossy* fixture in
+the corpus is now bit-exact too, not merely within a loop-filter tolerance.
+See `docs/codec/vaco-codec-vp9.md`'s Verification table for the full
+fixture matrix and its "Phase B"/"Phase C"/"Phase C-32a" sections for every
+bug found getting here (five total: C-31's `coef_probs` is_inter-dimension
+miss, `decode_partition`'s unconditional `kf_partition_probs` read — the
+spec's own §9.3.2 has this condition inverted, a documented erratum —
+`parse_compressed_header`'s unguarded `read_interp_filter_probs`, and a
+`saturating_sub`-instead-of-signed-arithmetic bug in the motion-vector edge
+clamp; C-32a needed no code fix, only a documented, hand-verified reading
+of a genuinely ambiguous (not wrong) pair of ordered steps in §8.8.1).
 
-### `vaco-codec-vp9`'s loop filter (§8.8), profiles 1-3, and multi-tile-column decode are unimplemented (epic #32)
+**A separate, real, unrelated bug was found and flagged (not fixed) while
+building C-32a's verification corpus**: lossy-encoded `mandelbrot`-sourced
+content decodes catastrophically wrong (MAD ~50/255, not a small
+tolerance) even on a single 64x64 intra key frame with no inter prediction
+or loop filter involved — confirmed by direct bisection to reproduce
+identically with the loop filter call removed, and to be independent of
+frame count/resolution/multi-superblock interaction. The identical content
+encoded *losslessly* has been bit-exact since Phase B, so this is specific
+to the lossy decode path (dequantization / coefficient token decode /
+intra prediction mode selection under whatever mandelbrot's fractal
+gradients trigger there — not yet root-caused). The same failure mode, at
+smaller magnitude, also appears a few frames into `-aq-mode 1`/`-aq-mode 2`
+(per-segment quantizer delta) content, which points at dequantization
+under an unusual quantizer value/range rather than at mandelbrot pixel
+content specifically. This sits in C-29/C-30's scope (intra decode), not
+C-31's or C-32a's — flagged as its own follow-up task rather than fixed in
+either package. See `docs/codec/vaco-codec-vp9.md`'s "What is deliberately
+not here" for the full repro.
 
-`header::LoopFilterParams` is parsed and stored but `decode.rs` never
-applies it — a stream whose loop filter level is nonzero decodes every
-pixel this crate touches bit-exactly and then differs from a reference
-decoder by the filter's own small (single-digit, per-edge) smoothing; see
-`docs/codec/vaco-codec-vp9.md`'s Verification table for measured
-deviations (max per-pixel deviation 3, MAD under 0.03, across every
-lossy fixture tested). Profiles 1 and 3 (independently-signalled chroma
-subsampling) and 2/3 (10/12-bit `BitDepth`) are parsed for totality
-(`header::color_config`, `pic_to_frame`'s pixel-format match already has
-the extra arms) but never exercised by any fixture reachable from this
-crate's key-frame-only scope. Separately,
-`decode::decode_frame_tiles`'s comment on `decode_block`'s `AvailL` check
-notes that it assumes `MiColStart == 0` (single tile column) — a
-multi-tile-column stream still decodes each column's own bits correctly,
-but `AvailL` at a non-first tile column's left edge is not spec-exact
-there. None of this is exercised by any test in this repository.
+### `vaco-codec-vp9`'s profiles 1-3 and multi-tile-column decode are unimplemented (rest of epic #32)
 
-### `vaco-codec-vp9`: backward probability adaptation (§8.3/8.4) is not implemented, and cannot be verified from this crate's scope
+Profiles 1 and 3 (independently-signalled chroma subsampling) and 2/3
+(10/12-bit `BitDepth`) are parsed for totality (`header::color_config`,
+`pic_to_frame`'s pixel-format match already has the extra arms) but never
+exercised by any fixture reachable from this crate's scope so far.
+Separately, `decode::decode_frame_tiles`'s comment on `decode_block`'s
+`AvailL` check notes that it assumes `MiColStart == 0` (single tile
+column) — a multi-tile-column stream still decodes each column's own bits
+correctly, but `AvailL` at a non-first tile column's left edge is not
+spec-exact there. Threading (also epic #32) is likewise untouched. None of
+this is exercised by any test in this repository.
 
-Not an oversight: every key frame's `setup_past_independence()` call
-unconditionally resets `EntropyContext` to the specification's defaults
-before that frame's own compressed-header forward update runs
-(`FrameIsIntra` is always 1 on a real key frame, and the uncompressed
-header's own syntax makes the reset call unconditional in that case, per
-§6.2's `frame_sync_code()`/`intra_only`/`reset_frame_context` handling
-re-read specifically to check this rather than assumed). A stream of
-consecutive key frames — the only kind of stream this crate can fully
-decode — therefore never carries adapted probabilities from one key frame
-to the next: backward adaptation's counting process (§8.3) and the
-adaptation formula itself (§8.4) have no observable effect on any
-bitstream reachable from C-29/C-30's scope, and no fixture within that
-scope could exercise or verify an implementation of either. Left
-unimplemented rather than implemented-but-untestable; would need to be
-added alongside inter prediction (previous entry), since a real
-multi-key-frame-with-inter-frames-between-them GOP is the only kind of
-stream where it would ever run.
+### `vaco-codec-vp9`: backward probability adaptation (§8.3/8.4) is not implemented — now a live gap, not a provably-inert one
+
+Through C-29/C-30 (key frames only), this was provably inert: every key
+frame's `setup_past_independence()` unconditionally resets `EntropyContext`
+to defaults before that frame's own forward update runs, so a stream of
+consecutive key frames never carried adapted probabilities from one to the
+next. C-31 (inter prediction) changes this: `refresh_probs()` should fold
+each frame's own observed symbol counts into the *loaded* context
+(`load_probs`/`load_probs2`, then `adapt_coef_probs`/`adapt_noncoef_probs`)
+before `save_probs` runs, and this crate instead saves the forward-updated
+`entropy` back to `frame_contexts[frame_context_idx]` verbatim — no
+counting step exists anywhere in `decode_frame_tiles`. Every fixture
+verified in `docs/codec/vaco-codec-vp9.md` still decodes bit-exact because
+the tested GOPs are short enough (up to 30 frames) that per-frame forward
+updates alone track the content's real probabilities; a longer real-world
+stream whose encoder leans on backward adaptation to converge, rather than
+repeating expensive forward updates every frame, is exactly the case where
+this gap would first produce a visible (not just theoretical) divergence.
+Adding it needs a `Counts` struct paralleling `EntropyContext`'s own shape,
+populated during `decode_block`/`residual`'s existing decode calls, folded
+in at `refresh_probs` time — see `docs/codec/vaco-codec-vp9.md`'s "How to
+change it".
 
 ### `vaco-codec-vp9`'s large spec tables split into `tables/*.in` files are not machine-verified by `provenance-check`
 
