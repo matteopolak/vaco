@@ -366,6 +366,10 @@ pub enum CodecId {
     // a distinct bitstream identity the way `AacLatm` is.
     Exr,
     JpegXl,
+    /// `jpegls`, ITU-T T.87 / ISO/IEC 14495-1. Neither had a variant, same
+    /// gap as C-11/C-12 above. Name/long name measured from `ffmpeg
+    /// -codecs`, 8.1: `jpegls`/"JPEG-LS".
+    JpegLs,
 }
 
 /// One row of the codec identity table.
@@ -1464,6 +1468,19 @@ const CODECS: &[CodecEntry] = &[
         CodecId::JpegXl,
         "jpegxl",
         "JPEG XL",
+        V,
+        CodecProperties::LOSSY
+            .union(CodecProperties::LOSSLESS)
+            .union(CodecProperties::INTRA_ONLY),
+    ),
+    // Measured `ffmpeg -codecs`, 8.1: `DEVILS jpegls` — decode and encode,
+    // video, intra-only, and (like Exr/JpegXl above) the format itself
+    // covers both lossy (near-lossless) and lossless operation even though
+    // `vaco-codec-jpegls` implements only the lossless case today.
+    entry(
+        CodecId::JpegLs,
+        "jpegls",
+        "JPEG-LS",
         V,
         CodecProperties::LOSSY
             .union(CodecProperties::LOSSLESS)
