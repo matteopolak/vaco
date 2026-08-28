@@ -29,6 +29,14 @@ use vaco_limits::{Budget, Limits};
 use vaco_mux_mpegts::mux::MpegTsMuxer;
 use vaco_packet::{Packet, PacketFlags};
 
+// `MUX_DELAY_TICKS * 2` (`vaco_mux_mpegts::mux`, private): the reference's
+// default `-max_delay`/`-muxdelay` (0.7 s @ 90 kHz) shift this muxer now
+// applies to every on-wire PTS/DTS (issue #636) — measured against
+// `ffmpeg -bitexact -c copy -f mpegts`. `vaco-demux-mpegts` reads the wire
+// value as-is, so a round trip sees the shifted value, not the one handed to
+// `write_packet`.
+const MUX_DELAY_SHIFT: i64 = 126_000;
+
 fn packet(stream_index: u32, pts: i64, dts: i64, key: bool, payload: &[u8]) -> Packet {
     let mut budget = Budget::new(Limits::permissive());
     let mut pkt = Packet::from_slice(&mut budget, payload).expect("alloc");
@@ -124,7 +132,7 @@ fn round_trip_recovers_both_streams_with_correct_payloads_and_timestamps() {
         assert_eq!(p.payload(), &[0xABu8; 200][..], "video packet {i}");
         assert_eq!(
             p.pts.ticks(),
-            Some(i64::try_from(i).unwrap() * 3600),
+            Some(i64::try_from(i).unwrap() * 3600 + MUX_DELAY_SHIFT),
             "video pts {i}"
         );
     }
@@ -132,7 +140,7 @@ fn round_trip_recovers_both_streams_with_correct_payloads_and_timestamps() {
         assert_eq!(p.payload(), &[0xCDu8; 64][..], "audio packet {i}");
         assert_eq!(
             p.pts.ticks(),
-            Some(i64::try_from(i).unwrap() * 1920),
+            Some(i64::try_from(i).unwrap() * 1920 + MUX_DELAY_SHIFT),
             "audio pts {i}"
         );
     }

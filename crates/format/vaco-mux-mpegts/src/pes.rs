@@ -56,8 +56,12 @@ pub enum PesTimestamps {
 pub struct PesHeaderOut {
     pub stream_id: u8,
     pub timestamps: PesTimestamps,
-    /// `data_alignment_indicator`: set for every stream this muxer writes —
-    /// each PES packet here always starts on an access-unit boundary.
+    /// `data_alignment_indicator`. Every PES packet `crate::mux::MpegTsMuxer`
+    /// writes does start on an access-unit boundary, but measured against the
+    /// reference (`ffmpeg -bitexact -c copy -f mpegts`, video and audio both)
+    /// it clears this bit regardless, so `crate::mux` always passes `false`.
+    /// Kept as a real field rather than hardcoded here since a PES header is
+    /// legal either way and a future caller of this encoder may need `true`.
     pub data_alignment: bool,
     /// `PES_packet_length`. `None` means write `0`, the "unbounded, ends at
     /// the next PES packet on this PID" convention §2.4.3.7 permits and every

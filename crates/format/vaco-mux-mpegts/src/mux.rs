@@ -55,6 +55,27 @@ pub const TIME_BASE: Rational = Rational {
 /// instead of reconstructing that schedule.
 pub const DEFAULT_PCR_PERIOD_MS: u32 = 100;
 
+/// The reference's resolved `-max_delay`/`-muxdelay` default (0.7 s), applied
+/// to every PCR, PTS and DTS this muxer writes.
+///
+/// Measured directly (`ffmpeg -bitexact -c copy -f mpegts`, both plain and
+/// with `-muxdelay 0.3`/`-muxdelay 1.0`/`-max_delay 700000`, against fixtures
+/// with and without B-frames): the on-wire PCR is always `raw_dts +
+/// MUX_DELAY_TICKS`, and the on-wire PTS/DTS is always `raw_pts_or_dts + 2 *
+/// MUX_DELAY_TICKS` — a pure additive shift, constant across the whole file
+/// and independent of any B-frame reorder delay (which still shows up as the
+/// usual PTS-DTS gap on top of the shift). `-muxdelay 0.7`/an unset
+/// `-max_delay` both produced the same 63 000-tick default, so this is the
+/// reference's fallback when neither is given.
+///
+/// `MpegTsMuxOptions` has no live path from the generic `max_delay` format
+/// option yet — nothing constructs this muxer with anything but
+/// [`MpegTsMuxOptions::default`] today (see [`crate::MUXER`]'s doc) — so this
+/// bakes in the reference's *default* rather than resolving a real option.
+/// Wiring an actual `-max_delay`/`-muxdelay` override through is separate
+/// follow-up work.
+const MUX_DELAY_TICKS: i64 = 63_000;
+
 /// A stream this muxer has been told about.
 struct MuxStream {
     media_type: MediaType,
@@ -76,6 +97,31 @@ struct MuxStream {
 
 fn is_h264_or_hevc(codec: CodecId) -> bool {
     matches!(codec, CodecId::H264 | CodecId::Hevc | CodecId::Vvc)
+}
+
+/// The Access Unit Delimiter (H.264 NAL type 9) the reference prepends to
+/// **every** H.264 access unit it writes into MPEG-TS.
+///
+/// Measured directly: `ffmpeg -bitexact -c copy -f mpegts` on a source whose
+/// samples carry no AUD at all (`ffprobe -show_data` on the MP4 confirms the
+/// first NAL of every sample is the SEI, `06 05 ff ff…`) still shows `00 00
+/// 00 01 09 f0` before that SEI on every single video PES packet — I-frame,
+/// P-frame and B-frame alike, `primary_pic_type` always `7` ("any"), never
+/// varying with slice type. This is specific to the MPEG-TS muxer, not the
+/// `h264_mp4toannexb` conversion: the same BSF applied standalone
+/// (`-bsf:v h264_mp4toannexb -f h264`) produces no AUD at all. Round-tripping
+/// an MPEG-TS source that already carries one AUD per access unit does not
+/// double it, hence [`starts_with_h264_aud`] guarding the insertion below.
+const H264_AUD_NAL: [u8; 6] = [0x00, 0x00, 0x00, 0x01, 0x09, 0xf0];
+
+/// Whether `payload` already opens with an H.264 Access Unit Delimiter (NAL
+/// type 9) after a 3- or 4-byte Annex B start code — see [`H264_AUD_NAL`]'s
+/// doc for why this muxer must not insert a second one.
+fn starts_with_h264_aud(payload: &[u8]) -> bool {
+    let rest = payload
+        .strip_prefix([0, 0, 0, 1].as_slice())
+        .or_else(|| payload.strip_prefix([0, 0, 1].as_slice()));
+    rest.is_some_and(|r| r.first().is_some_and(|&b| b & 0x1F == 9))
 }
 
 /// Whether `payload` already opens with an Annex B start code (`00 00 01` or
@@ -463,11 +509,33 @@ impl Muxer for MpegTsMuxer {
 
         // --- payload framing -------------------------------------------
         let converted = self.maybe_convert(index, packet.payload())?;
+        let converted = if codec_id == CodecId::H264
+            && media_type == MediaType::Video
+            && !starts_with_h264_aud(&converted)
+        {
+            let mut with_aud = Vec::new();
+            with_aud.extend_from_slice(&H264_AUD_NAL);
+            with_aud.extend_from_slice(&converted);
+            with_aud
+        } else {
+            converted
+        };
 
         // --- PES header ---------------------------------------------------
         let stream_id = Self::pes_stream_id(codec_id, media_type);
-        let pts = packet.pts.ticks();
-        let dts = packet.dts.ticks();
+        // On-wire PTS/DTS carry the reference's default mux-delay shift; the
+        // scheduling `clock` above (PAT/PMT/SDT periods, PCR due-check) stays
+        // on the raw, unshifted ticks throughout this function, since only
+        // the *differences* between those matter and a constant shift would
+        // cancel out anyway — see `MUX_DELAY_TICKS`'s doc for the measurement.
+        let pts = packet
+            .pts
+            .ticks()
+            .map(|p| p.saturating_add(MUX_DELAY_TICKS * 2));
+        let dts = packet
+            .dts
+            .ticks()
+            .map(|d| d.saturating_add(MUX_DELAY_TICKS * 2));
         let timestamps = match (pts, dts) {
             (Some(p), Some(d)) if p != d => PesTimestamps::PtsDts(p, d),
             (Some(p), _) => PesTimestamps::PtsOnly(p),
@@ -488,7 +556,12 @@ impl Muxer for MpegTsMuxer {
         let header = PesHeaderOut {
             stream_id,
             timestamps,
-            data_alignment: true,
+            // Measured (`ffmpeg -bitexact -c copy -f mpegts`, video and
+            // audio PES headers both): the reference always clears
+            // `data_alignment_indicator` here, even though every packet this
+            // muxer writes does start on an access-unit boundary — see
+            // `PesHeaderOut::data_alignment`'s doc.
+            data_alignment: false,
             packet_length,
         };
         let mut pes = encode_pes_header(&header);
@@ -503,7 +576,7 @@ impl Muxer for MpegTsMuxer {
             if due {
                 self.last_pcr_clock = Some(clock);
                 Some(Pcr {
-                    base: clock,
+                    base: clock.saturating_add(MUX_DELAY_TICKS),
                     extension: 0,
                 })
             } else {
@@ -703,6 +776,134 @@ mod tests {
         let bytes = mirror.take();
         // The Annex B start code must appear somewhere in the output stream.
         assert!(bytes.windows(4).any(|w| w == [0, 0, 0, 1]));
+    }
+
+    /// Issue #636, the other two named causes: the reference's default
+    /// mux-delay shift on PCR/PTS/DTS, and `data_alignment_indicator` always
+    /// cleared. Measured against `ffmpeg -bitexact -c copy -f mpegts`; see
+    /// [`MUX_DELAY_TICKS`] and [`PesHeaderOut::data_alignment`]'s docs.
+    #[test]
+    fn pcr_and_pts_dts_carry_the_reference_mux_delay_and_no_data_alignment_bit() {
+        let sink = SharedDynBuf::new();
+        let mirror = sink.clone();
+        let mut mux = MpegTsMuxer::new(Box::new(sink));
+        let v = mux.add_stream(&video_params(CodecId::Mpeg2video)).unwrap();
+        mux.init().unwrap();
+        mux.write_header().unwrap();
+        mux.write_packet(&packet(v, 0, true, &[0u8; 8])).unwrap();
+        mux.write_trailer().unwrap();
+        let bytes = mirror.take();
+
+        let mut saw_pcr = false;
+        for chunk in bytes.chunks(188) {
+            if chunk.len() < 188 {
+                continue;
+            }
+            if let Some(pkt) = vaco_format_mpegts_tables::packet::TsPacket::parse(chunk)
+                && let Some(pcr) = pkt.pcr()
+            {
+                assert_eq!(pcr.base, MUX_DELAY_TICKS, "PCR should be raw_dts + delay");
+                saw_pcr = true;
+            }
+        }
+        assert!(saw_pcr, "expected at least one PCR-carrying packet");
+
+        // Find the PES header (payload_unit_start on the video PID) and check
+        // both the shifted PTS and the cleared alignment bit through the
+        // sibling demuxer's own independent parser.
+        let mut found_pes = false;
+        for chunk in bytes.chunks(188) {
+            if chunk.len() < 188 {
+                continue;
+            }
+            let pid = (u16::from(chunk[1] & 0x1F) << 8) | u16::from(chunk[2]);
+            let payload_unit_start = chunk[1] & 0x40 != 0;
+            if pid != 0x0100 || !payload_unit_start {
+                continue;
+            }
+            if let Some(pkt) = vaco_format_mpegts_tables::packet::TsPacket::parse(chunk)
+                && let Some(pes) = vaco_demux_mpegts::pes::PesHeader::parse(pkt.payload)
+            {
+                assert_eq!(pes.pts.ticks(), Some(MUX_DELAY_TICKS * 2));
+                assert!(
+                    !pes.data_alignment,
+                    "the reference clears data_alignment_indicator"
+                );
+                found_pes = true;
+            }
+        }
+        assert!(found_pes, "expected to find the video PES header");
+    }
+
+    /// Issue #636: the reference prepends a fixed Access Unit Delimiter to
+    /// every H.264 access unit written into MPEG-TS, even when the source
+    /// sample carries no AUD at all (see [`H264_AUD_NAL`]'s doc for the
+    /// measurement). `maybe_convert` alone (no BSF, no `avcC`) is enough to
+    /// exercise this — the AUD insertion does not depend on the SPS/PPS
+    /// splice path.
+    #[test]
+    fn an_h264_access_unit_gets_the_reference_aud_prepended() {
+        let sink = SharedDynBuf::new();
+        let mirror = sink.clone();
+        let mut mux = MpegTsMuxer::new(Box::new(sink));
+        let params = CodecParameters {
+            media_type: Some(MediaType::Video),
+            codec_id: Some(CodecId::H264),
+            video: Some(VideoParameters {
+                nal_length_size: Some(4),
+                ..VideoParameters::default()
+            }),
+            ..CodecParameters::new(MediaType::Video)
+        };
+        let v = mux.add_stream(&params).unwrap();
+        mux.init().unwrap();
+        mux.write_header().unwrap();
+        let idr = [0x65u8, 0x88, 0x84];
+        let mut length_prefixed = (u32::try_from(idr.len()).unwrap()).to_be_bytes().to_vec();
+        length_prefixed.extend_from_slice(&idr);
+        mux.write_packet(&packet(v, 0, true, &length_prefixed))
+            .unwrap();
+        mux.write_trailer().unwrap();
+        let bytes = mirror.take();
+        let mut expected = H264_AUD_NAL.to_vec();
+        expected.extend_from_slice(&[0, 0, 0, 1]);
+        expected.extend_from_slice(&idr);
+        assert!(
+            bytes.windows(expected.len()).any(|w| w == expected.as_slice()),
+            "expected the AUD immediately before the converted access unit"
+        );
+    }
+
+    /// The other half of #636's AUD fix: a source that already carries its
+    /// own AUD (e.g. re-muxing an MPEG-TS whose elementary stream already has
+    /// one per access unit — measured directly, see [`H264_AUD_NAL`]'s doc)
+    /// must not get a second one spliced in front of it.
+    #[test]
+    fn an_h264_access_unit_that_already_has_an_aud_is_not_given_a_second_one() {
+        let sink = SharedDynBuf::new();
+        let mirror = sink.clone();
+        let mut mux = MpegTsMuxer::new(Box::new(sink));
+        let params = CodecParameters {
+            media_type: Some(MediaType::Video),
+            codec_id: Some(CodecId::H264),
+            // `nal_length_size: None`: already Annex B, so `maybe_convert`
+            // passes the payload through unchanged and `write_packet` sees
+            // exactly what `starts_with_h264_aud` must recognise.
+            ..CodecParameters::new(MediaType::Video)
+        };
+        let v = mux.add_stream(&params).unwrap();
+        mux.init().unwrap();
+        mux.write_header().unwrap();
+        let mut payload = H264_AUD_NAL.to_vec();
+        payload.extend_from_slice(&[0, 0, 0, 1, 0x65, 0x88, 0x84]);
+        mux.write_packet(&packet(v, 0, true, &payload)).unwrap();
+        mux.write_trailer().unwrap();
+        let bytes = mirror.take();
+        let aud_count = bytes
+            .windows(H264_AUD_NAL.len())
+            .filter(|w| *w == H264_AUD_NAL.as_slice())
+            .count();
+        assert_eq!(aud_count, 1, "the existing AUD must not be duplicated");
     }
 
     /// Wraps the real `vaco-bsf-h2645` filter, not a hand test-double — see
