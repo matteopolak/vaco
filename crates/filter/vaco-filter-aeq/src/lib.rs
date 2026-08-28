@@ -58,10 +58,20 @@
 //! approximation of an FFT-domain reference filter bank), `firequalizer`
 //! (`gain_entry` control points only; the general `gain` expression is not
 //! implemented). See `docs/filter/vaco-filter-aeq.md`.
+//!
+//! Plus `aemphasis` and `atilt` (FT-4.13e, GitHub #485, closing epic #58):
+//! the remaining `vaco-filter-aeq`-row filters plan 16 §4.3 lists. Both are
+//! structural rather than measured matches to the reference — see each
+//! module's own doc for exactly what is and is not verified, and why an
+//! exact reproduction was not attempted (an undocumented per-`order`
+//! cascade for `atilt`; three historical curves with no confidently
+//! available published time constants for `aemphasis`'s `col`/`emi`/`bsi`).
 #![forbid(unsafe_code)]
 
+pub mod aemphasis;
 pub mod allpass;
 pub mod anequalizer;
+pub mod atilt;
 pub mod bandpass;
 pub mod bandreject;
 pub mod bass;

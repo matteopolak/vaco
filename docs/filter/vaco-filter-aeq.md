@@ -7,6 +7,9 @@ FT-4.8/#56 split into for single-writer ownership — the other is
 `bandpass`, `bandreject`, `allpass`, `biquad`) plus `anequalizer`,
 `firequalizer`, `superequalizer`.
 
+Plus `aemphasis` and `atilt` (FT-4.13e, GitHub #485, closing epic #58) — see
+"The FT-4.13e additions" below.
+
 ## Scope reconciliation
 
 The brief that requested this crate named thirteen filters and omitted
@@ -210,6 +213,38 @@ behaviour for a linear-phase FIR (not a bug) but means output is not
 sample-for-sample identical to input even at a flat gain curve — only
 delayed.
 
+### The FT-4.13e additions
+
+**`atilt`** is not the same filter as `tiltshelf` despite the similar
+name and description — its own option set (`freq`/`slope`/`width`/`order`/
+`level`, confirmed via `ffmpeg -h filter=atilt`) has no `width_type`, no
+`mix`, and an `order` parameter (2 to 30) `tiltshelf` does not have at all.
+`order` is the tell that this is a variable-order filter, not one shelf
+pair, and there is no public description of how the reference maps
+`order`/`slope`/`width` onto a specific cascade — probing cannot recover an
+undocumented internal structure. Built instead from the one tilt
+construction this crate already has and can verify
+(`vaco_filter_adsp::biquad::tilt`), cascaded `(order/2).max(1)` times with
+`slope` mapped linearly to a `slope*24 dB` total swing split evenly across
+stages — a real, standard filter-design technique (cascading identical
+shelving sections to steepen a transition), not a reproduction of the
+reference's specific realisation. See `atilt.rs`'s module doc.
+
+**`aemphasis`** measures direction and rough shape correctly (`reproduction`
+cuts highs, `production` boosts them, confirmed via a sine sweep against the
+reference) but not the exact curve. `50fm`/`75fm`/`50kf`/`75kf`/`cd` use
+[`vaco_filter_adsp::biquad::lowpass_one_pole`] at the standard published FM
+broadcast/CD time constants (50/75 µs); `production` is that filter's exact
+digital inverse (a two-tap FIR), verified by the real property that
+cascading `reproduction` then `production` is the identity
+(`tests::production_exactly_inverts_reproduction`). `riaa` simplifies the
+true three-time-constant curve to its single dominant corner (318 µs);
+`col`/`emi`/`bsi` (historical 78 rpm curves) use an explicitly-flagged
+**unverified placeholder** time constant — no published values for these
+three were confidently available within this pass, and this is called out
+rather than shipped as if measured. See `aemphasis.rs`'s module doc for the
+full measurement.
+
 ## How to change it
 
 * New biquad-family filter: add a formula function to `vaco-filter-adsp`'s `src/biquad.rs`, a
@@ -242,3 +277,9 @@ moved there). `vaco-tx` (FFT/MDCT/DCT)
 was considered for `firequalizer`/`superequalizer` but not needed — the
 frequency-sampling FIR design and the fixed IIR band cascade are both direct
 summations, not full transforms.
+
+## Issues
+
+Also closes its share of GitHub #485 (FT-4.13e, closing epic #58):
+`aemphasis` and `atilt` (both structural — see "The FT-4.13e additions"
+above for exactly what is and is not measured).

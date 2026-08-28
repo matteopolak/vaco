@@ -6,8 +6,10 @@
 //! this exercises the filtergraph's own escaping ahead of each filter's
 //! `Instantiate::named` reads, not a hand-built `Instantiate`.
 //!
-//! Property: for any byte string, for any of the fifteen registered names,
-//! either a clean `Err` comes back at some stage or a working `Instance`,
+//! Property: for any byte string, for any of the seventeen registered names
+//! (fifteen from FT-4.8a, plus `aemphasis`/`atilt` from FT-4.13e, GitHub
+//! #485), either a clean `Err` comes back at some stage or a working
+//! `Instance`,
 //! never a panic and never an unbounded allocation. This is also where the
 //! brief's specific worry — a cutoff of 0 Hz or above Nyquist driving a
 //! biquad's coefficients non-finite, and `NaN` propagating silently through
@@ -25,8 +27,10 @@ use vaco_filter_aeq::registry::EqRegistry;
 use vaco_filter_graph::registry::{FilterRegistry, Instantiate};
 
 const NAMES: &[&str] = &[
+    "aemphasis",
     "allpass",
     "anequalizer",
+    "atilt",
     "bandpass",
     "bandreject",
     "bass",

@@ -13,8 +13,10 @@ use vaco_filter_graph::registry::{FilterRegistry, Instance, Instantiate};
 /// (missing `tiltshelf` and `firequalizer`); see
 /// `docs/filter/vaco-filter-aeq.md` for the reconciliation.
 const NAMES: &[&str] = &[
+    "aemphasis",
     "allpass",
     "anequalizer",
+    "atilt",
     "bandpass",
     "bandreject",
     "bass",
@@ -41,8 +43,10 @@ impl FilterRegistry for EqRegistry {
 
     fn create(&self, req: &Instantiate<'_>) -> Result<Instance, String> {
         Ok(match req.name {
+            "aemphasis" => crate::aemphasis::create(req),
             "allpass" => crate::allpass::create(req),
             "anequalizer" => crate::anequalizer::create(req),
+            "atilt" => crate::atilt::create(req),
             "bandpass" => crate::bandpass::create(req),
             "bandreject" => crate::bandreject::create(req),
             "bass" => crate::bass::create(req),

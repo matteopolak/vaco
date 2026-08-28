@@ -9,6 +9,13 @@
 
 [[component]]
 kind = "filter"
+name = "aemphasis"
+long_name = "Audio emphasis"
+ctor = "vaco_filter_aeq::aemphasis::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
 name = "allpass"
 long_name = "Apply a two-pole all-pass filter"
 ctor = "vaco_filter_aeq::allpass::DESC"
@@ -19,6 +26,13 @@ kind = "filter"
 name = "anequalizer"
 long_name = "Apply high-order audio parametric multi band equalizer"
 ctor = "vaco_filter_aeq::anequalizer::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "atilt"
+long_name = "Apply spectral tilt to audio"
+ctor = "vaco_filter_aeq::atilt::DESC"
 media = "audio"
 
 [[component]]
