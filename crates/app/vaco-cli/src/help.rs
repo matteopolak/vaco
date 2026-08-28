@@ -216,8 +216,7 @@ fn format_kind(name: Option<&str>, is_muxer: bool) -> String {
 ///   MIME field — `vaco_registry::Component` does — which is why this takes a
 ///   name and looks it up rather than reading it off `m`.
 fn push_mime(out: &mut String, name: &str) {
-    let Some(mime) = vaco_registry::component(Kind::Muxer, name)
-        .and_then(|c| c.mime_types.first())
+    let Some(mime) = vaco_registry::component(Kind::Muxer, name).and_then(|c| c.mime_types.first())
     else {
         return;
     };

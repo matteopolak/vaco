@@ -496,11 +496,7 @@ mod tests {
         fn add_stream(&mut self, _: &CodecParameters) -> Result<u32> {
             Ok(0)
         }
-        fn add_stream_with(
-            &mut self,
-            _params: &CodecParameters,
-            spec: &StreamSpec,
-        ) -> Result<u32> {
+        fn add_stream_with(&mut self, _params: &CodecParameters, spec: &StreamSpec) -> Result<u32> {
             self.0.0.lock().unwrap_or_else(|e| e.into_inner()).0 = spec.time_base;
             Ok(0)
         }
@@ -527,8 +523,7 @@ mod tests {
         let spec = StreamSpec {
             time_base: Some(vaco_core::Rational::new(1, 12_800)),
         };
-        m.add_stream_with(&params(MediaType::Video), &spec)
-            .unwrap();
+        m.add_stream_with(&params(MediaType::Video), &spec).unwrap();
         m.set_bitexact(true);
 
         let got = received.0.lock().unwrap_or_else(|e| e.into_inner());
