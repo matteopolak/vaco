@@ -282,6 +282,9 @@ path = "../../filter/vaco-filter-aeq"
 [dependencies.vaco-filter-analysis]
 path = "../../filter/vaco-filter-analysis"
 
+[dependencies.vaco-filter-artistic]
+path = "../../filter/vaco-filter-artistic"
+
 [dependencies.vaco-filter-asource]
 path = "../../filter/vaco-filter-asource"
 

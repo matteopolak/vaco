@@ -2371,6 +2371,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-filter-artistic"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "proptest",
+ "vaco-core",
+ "vaco-expr",
+ "vaco-filter-core",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-opts",
+ "vaco-pixfmt",
+]
+
+[[package]]
 name = "vaco-filter-asource"
 version = "0.1.0"
 dependencies = [
@@ -3744,6 +3759,7 @@ dependencies = [
  "vaco-filter-aeffects",
  "vaco-filter-aeq",
  "vaco-filter-analysis",
+ "vaco-filter-artistic",
  "vaco-filter-asource",
  "vaco-filter-audio",
  "vaco-filter-blur",
