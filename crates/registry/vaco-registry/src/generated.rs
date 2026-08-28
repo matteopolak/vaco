@@ -28,6 +28,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["ac3"],
         mime_types: &["audio/x-ac3"],
     },
+    #[cfg(feature = "demux-adx")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "adx",
+        long_name: Some("CRI ADX"),
+        krate: "vaco-format-misc-audio",
+        feature: Some("demux-adx"),
+        media: None,
+        codec: None,
+        extensions: &["adx"],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-aiff")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -50,6 +62,66 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["al"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-amr")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "amr",
+        long_name: Some("3GPP AMR"),
+        krate: "vaco-format-misc-audio",
+        feature: Some("demux-amr"),
+        media: None,
+        codec: None,
+        extensions: &["amr"],
+        mime_types: &["audio/amr", "audio/amr-wb"],
+    },
+    #[cfg(feature = "demux-amrnb")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "amrnb",
+        long_name: Some("raw AMR-NB"),
+        krate: "vaco-format-misc-audio",
+        feature: Some("demux-amrnb"),
+        media: None,
+        codec: None,
+        extensions: &["amrnb"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-amrwb")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "amrwb",
+        long_name: Some("raw AMR-WB"),
+        krate: "vaco-format-misc-audio",
+        feature: Some("demux-amrwb"),
+        media: None,
+        codec: None,
+        extensions: &["amrwb", "awb"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-aptx")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "aptx",
+        long_name: Some("raw aptX (Audio Processing Technology for Bluetooth)"),
+        krate: "vaco-format-misc-audio",
+        feature: Some("demux-aptx"),
+        media: None,
+        codec: None,
+        extensions: &["aptx"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-aptx-hd")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "aptx_hd",
+        long_name: Some("raw aptX HD (Audio Processing Technology for Bluetooth)"),
+        krate: "vaco-format-misc-audio",
+        feature: Some("demux-aptx-hd"),
+        media: None,
+        codec: None,
+        extensions: &["aptx_hd"],
         mime_types: &[],
     },
     #[cfg(feature = "demux-asf")]
@@ -267,6 +339,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["dds"],
         mime_types: &[],
     },
+    #[cfg(feature = "demux-dfpwm")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "dfpwm",
+        long_name: Some("raw DFPWM1a"),
+        krate: "vaco-format-misc-audio",
+        feature: Some("demux-dfpwm"),
+        media: None,
+        codec: None,
+        extensions: &["dfpwm"],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-raw")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -435,6 +519,78 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["flv"],
         mime_types: &["video/x-flv"],
     },
+    #[cfg(feature = "demux-g722")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "g722",
+        long_name: Some("raw G.722"),
+        krate: "vaco-format-misc-audio",
+        feature: Some("demux-g722"),
+        media: None,
+        codec: None,
+        extensions: &["g722"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-g723-1")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "g723_1",
+        long_name: Some("raw G.723.1"),
+        krate: "vaco-format-misc-audio",
+        feature: Some("demux-g723-1"),
+        media: None,
+        codec: None,
+        extensions: &["g723_1"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-g726")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "g726",
+        long_name: Some("raw big-endian G.726 (\"left-justified\")"),
+        krate: "vaco-format-misc-audio",
+        feature: Some("demux-g726"),
+        media: None,
+        codec: None,
+        extensions: &["g726"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-g726le")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "g726le",
+        long_name: Some("raw little-endian G.726 (\"right-justified\")"),
+        krate: "vaco-format-misc-audio",
+        feature: Some("demux-g726le"),
+        media: None,
+        codec: None,
+        extensions: &["g726le"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-g728")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "g728",
+        long_name: Some("raw G.728"),
+        krate: "vaco-format-misc-audio",
+        feature: Some("demux-g728"),
+        media: None,
+        codec: None,
+        extensions: &["g728"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-g729")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "g729",
+        long_name: Some("G.729 raw format"),
+        krate: "vaco-format-misc-audio",
+        feature: Some("demux-g729"),
+        media: None,
+        codec: None,
+        extensions: &["g729"],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-image2")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -457,6 +613,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["gif"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-gsm")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "gsm",
+        long_name: Some("raw GSM"),
+        krate: "vaco-format-misc-audio",
+        feature: Some("demux-gsm"),
+        media: None,
+        codec: None,
+        extensions: &["gsm"],
         mime_types: &[],
     },
     #[cfg(feature = "demux-raw")]
@@ -855,6 +1023,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["mxf"],
         mime_types: &["application/mxf"],
     },
+    #[cfg(feature = "demux-nistsphere")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "nistsphere",
+        long_name: Some("NIST SPeech HEader REsources"),
+        krate: "vaco-format-misc-audio",
+        feature: Some("demux-nistsphere"),
+        media: None,
+        codec: None,
+        extensions: &["sph", "nist"],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-nut")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -1065,6 +1245,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["psd"],
         mime_types: &[],
     },
+    #[cfg(feature = "demux-pvf")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "pvf",
+        long_name: Some("PVF (Portable Voice Format)"),
+        krate: "vaco-format-misc-audio",
+        feature: Some("demux-pvf"),
+        media: None,
+        codec: None,
+        extensions: &["pvf"],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-image2")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -1257,6 +1449,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["smi", "sami"],
         mime_types: &["application/x-sami"],
     },
+    #[cfg(feature = "demux-sbc")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "sbc",
+        long_name: Some("raw SBC (low-complexity subband codec)"),
+        krate: "vaco-format-misc-audio",
+        feature: Some("demux-sbc"),
+        media: None,
+        codec: None,
+        extensions: &["sbc"],
+        mime_types: &["audio/sbc"],
+    },
     #[cfg(feature = "subtitle-text")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -1291,6 +1495,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["sgi"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-sln")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "sln",
+        long_name: Some("Asterisk raw pcm"),
+        krate: "vaco-format-misc-audio",
+        feature: Some("demux-sln"),
+        media: None,
+        codec: None,
+        extensions: &["sln"],
         mime_types: &[],
     },
     #[cfg(feature = "demux-sox")]
@@ -1424,6 +1640,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         codec: None,
         extensions: &["tiff", "tif"],
         mime_types: &[],
+    },
+    #[cfg(feature = "demux-tta")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "tta",
+        long_name: Some("TTA (True Audio)"),
+        krate: "vaco-format-misc-audio",
+        feature: Some("demux-tta"),
+        media: None,
+        codec: None,
+        extensions: &["tta"],
+        mime_types: &["audio/x-tta"],
     },
     #[cfg(feature = "subtitle-text")]
     crate::Component {
@@ -1676,6 +1904,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         codec: None,
         extensions: &["vtt"],
         mime_types: &["text/vtt"],
+    },
+    #[cfg(feature = "demux-wv")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "wv",
+        long_name: Some("WavPack"),
+        krate: "vaco-format-misc-audio",
+        feature: Some("demux-wv"),
+        media: None,
+        codec: None,
+        extensions: &["wv"],
+        mime_types: &["audio/x-wavpack"],
     },
     #[cfg(feature = "demux-image2")]
     crate::Component {
@@ -2225,7 +2465,7 @@ pub static COMPONENTS: &[crate::Component] = &[
             "j2k", "xwd", "sun", "ras", "rs", "im1", "im8", "im24", "sunras", "vbn", "xbm",
             "xface", "pix", "y", "avif", "qoi", "hdr", "wbmp",
         ],
-mime_types: &[],
+        mime_types: &[],
     },
     #[cfg(feature = "mux-mp4")]
     crate::Component {
@@ -3072,6 +3312,30 @@ mime_types: &[],
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "codec-subtitle-bitmap")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "dvbsub",
+        long_name: Some("DVB subtitles"),
+        krate: "vaco-codec-subtitle-bitmap",
+        feature: Some("codec-subtitle-bitmap"),
+        media: Some("subtitle"),
+        codec: Some("dvb_subtitle"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-subtitle-bitmap")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "dvdsub",
+        long_name: Some("DVD subtitles"),
+        krate: "vaco-codec-subtitle-bitmap",
+        feature: Some("codec-subtitle-bitmap"),
+        media: Some("subtitle"),
+        codec: Some("dvd_subtitle"),
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "codec-jpeg")]
     crate::Component {
         kind: crate::Kind::Decoder,
@@ -3179,6 +3443,18 @@ mime_types: &[],
         feature: Some("codec-pnm"),
         media: Some("video"),
         codec: Some("pgm"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-subtitle-bitmap")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "pgssub",
+        long_name: Some("HDMV Presentation Graphic Stream subtitles"),
+        krate: "vaco-codec-subtitle-bitmap",
+        feature: Some("codec-subtitle-bitmap"),
+        media: Some("subtitle"),
+        codec: Some("hdmv_pgs_subtitle"),
         extensions: &[],
         mime_types: &[],
     },
@@ -4962,6 +5238,17 @@ mime_types: &[],
     },
     crate::Component {
         kind: crate::Kind::Filter,
+        name: "exposure",
+        long_name: Some("Adjust exposure of the video stream"),
+        krate: "vaco-filter-color",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
         name: "extractplanes",
         long_name: Some("Extract planes as grayscale frames"),
         krate: "vaco-filter-geometry",
@@ -6157,6 +6444,17 @@ mime_types: &[],
         name: "settb",
         long_name: Some("Set timebase for the video output link"),
         krate: "vaco-filter-mm",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "showinfo",
+        long_name: Some("Show textual information for each video frame."),
+        krate: "vaco-filter-analysis",
         feature: None,
         media: Some("video"),
         codec: None,
@@ -7378,10 +7676,22 @@ pub static ENCUMBERED_ALL: &[&str] = &[];
 pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::ac3::DEMUXER_AC3,
+    #[cfg(feature = "demux-adx")]
+    &::vaco_format_misc_audio::adx::DEMUXER,
     #[cfg(feature = "demux-aiff")]
     &::vaco_format_audio_simple::aiff::DEMUXER,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::pcm::DEMUXER_ALAW,
+    #[cfg(feature = "demux-amr")]
+    &::vaco_format_misc_audio::amr::DEMUXER_AMR,
+    #[cfg(feature = "demux-amrnb")]
+    &::vaco_format_misc_audio::amr::DEMUXER_AMRNB,
+    #[cfg(feature = "demux-amrwb")]
+    &::vaco_format_misc_audio::amr::DEMUXER_AMRWB,
+    #[cfg(feature = "demux-aptx")]
+    &::vaco_format_misc_audio::rawcodec::DEMUXER_APTX,
+    #[cfg(feature = "demux-aptx-hd")]
+    &::vaco_format_misc_audio::rawcodec::DEMUXER_APTX_HD,
     #[cfg(feature = "demux-asf")]
     &::vaco_demux_asf::DEMUXER,
     #[cfg(feature = "demux-asf-o")]
@@ -7417,6 +7727,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_raw::bitstream::DEMUXER_DATA,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_DDS,
+    #[cfg(feature = "demux-dfpwm")]
+    &::vaco_format_misc_audio::rawcodec::DEMUXER_DFPWM,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::bitstream::DEMUXER_DIRAC,
     #[cfg(feature = "demux-raw")]
@@ -7445,10 +7757,24 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_raw::pcm::DEMUXER_F64LE,
     #[cfg(feature = "demux-flv")]
     &::vaco_demux_flv::DEMUXER,
+    #[cfg(feature = "demux-g722")]
+    &::vaco_format_misc_audio::rawcodec::DEMUXER_G722,
+    #[cfg(feature = "demux-g723-1")]
+    &::vaco_format_misc_audio::g723::DEMUXER,
+    #[cfg(feature = "demux-g726")]
+    &::vaco_format_misc_audio::rawcodec::DEMUXER_G726,
+    #[cfg(feature = "demux-g726le")]
+    &::vaco_format_misc_audio::rawcodec::DEMUXER_G726LE,
+    #[cfg(feature = "demux-g728")]
+    &::vaco_format_misc_audio::rawcodec::DEMUXER_G728,
+    #[cfg(feature = "demux-g729")]
+    &::vaco_format_misc_audio::rawcodec::DEMUXER_G729,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_GEM,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_GIF,
+    #[cfg(feature = "demux-gsm")]
+    &::vaco_format_misc_audio::rawcodec::DEMUXER_GSM,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::bitstream::DEMUXER_H261,
     #[cfg(feature = "demux-raw")]
@@ -7513,6 +7839,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_raw::pcm::DEMUXER_MULAW,
     #[cfg(feature = "demux-mxf")]
     &::vaco_demux_mxf::DEMUXER,
+    #[cfg(feature = "demux-nistsphere")]
+    &::vaco_format_misc_audio::nistsphere::DEMUXER,
     #[cfg(feature = "demux-nut")]
     &::vaco_format_nut::DEMUXER,
     #[cfg(feature = "demux-raw")]
@@ -7547,6 +7875,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_image2::pipe::DEMUXER_PPM,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_PSD,
+    #[cfg(feature = "demux-pvf")]
+    &::vaco_format_misc_audio::pvf::DEMUXER,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_QDRAW,
     #[cfg(feature = "demux-image2")]
@@ -7579,12 +7909,16 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_raw::pcm::DEMUXER_S8,
     #[cfg(feature = "subtitle-text")]
     &::vaco_subtitle_text::sami::DEMUXER,
+    #[cfg(feature = "demux-sbc")]
+    &::vaco_format_misc_audio::sbc::DEMUXER,
     #[cfg(feature = "subtitle-text")]
     &::vaco_subtitle_text::scc::DEMUXER,
     #[cfg(feature = "demux-sdp")]
     &::vaco_demux_rtsp::SDP_DEMUXER,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_SGI,
+    #[cfg(feature = "demux-sln")]
+    &::vaco_format_misc_audio::rawcodec::DEMUXER_SLN,
     #[cfg(feature = "demux-sox")]
     &::vaco_format_audio_simple::sox::DEMUXER,
     #[cfg(feature = "demux-spdif")]
@@ -7607,6 +7941,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_format_swf::DEMUXER,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_TIFF,
+    #[cfg(feature = "demux-tta")]
+    &::vaco_format_misc_audio::tta::DEMUXER,
     #[cfg(feature = "subtitle-text")]
     &::vaco_subtitle_text::ttml::DEMUXER,
     #[cfg(feature = "demux-raw")]
@@ -7649,6 +7985,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_image2::pipe::DEMUXER_WEBP,
     #[cfg(feature = "subtitle-text")]
     &::vaco_subtitle_text::webvtt::DEMUXER,
+    #[cfg(feature = "demux-wv")]
+    &::vaco_format_misc_audio::wavpack::DEMUXER,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_XBM,
     #[cfg(feature = "demux-image2")]
@@ -7877,6 +8215,10 @@ pub static DECODERS: &[&::vaco_codec_core::DecoderDesc] = &[
     &::vaco_codec_ac3::DECODER_AC3,
     #[cfg(feature = "codec-image-simple")]
     &::vaco_codec_image_simple::BMP_DECODER,
+    #[cfg(feature = "codec-subtitle-bitmap")]
+    &::vaco_codec_subtitle_bitmap::decoder::DVBSUB_DECODER,
+    #[cfg(feature = "codec-subtitle-bitmap")]
+    &::vaco_codec_subtitle_bitmap::decoder::DVDSUB_DECODER,
     #[cfg(feature = "codec-jpeg")]
     &::vaco_codec_jpeg::JPEG_DECODER,
     #[cfg(feature = "codec-mpegaudio")]
@@ -7895,6 +8237,8 @@ pub static DECODERS: &[&::vaco_codec_core::DecoderDesc] = &[
     &::vaco_codec_pnm::PFM_DECODER,
     #[cfg(feature = "codec-pnm")]
     &::vaco_codec_pnm::PGM_DECODER,
+    #[cfg(feature = "codec-subtitle-bitmap")]
+    &::vaco_codec_subtitle_bitmap::decoder::PGSSUB_DECODER,
     #[cfg(feature = "codec-pnm")]
     &::vaco_codec_pnm::PHM_DECODER,
     #[cfg(feature = "codec-pnm")]
@@ -8103,6 +8447,7 @@ pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[
     &::vaco_filter_aeq::equalizer::DESC,
     &::vaco_filter_convolve::erosion::DESC,
     &::vaco_filter_deinterlace::estdif::DESC,
+    &::vaco_filter_color::exposure::DESC,
     &::vaco_filter_geometry::extractplanes::DESC,
     &::vaco_filter_aeffects::extrastereo::DESC,
     &::vaco_filter_denoise::fftdnoiz::DESC,
@@ -8212,6 +8557,7 @@ pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[
     &::vaco_filter_video_format::setrange::DESC,
     &::vaco_filter_video_format::setsar::DESC,
     &::vaco_filter_mm::settb::video::DESC,
+    &::vaco_filter_analysis::showinfo::DESC,
     &::vaco_filter_geometry::shuffleframes::DESC,
     &::vaco_filter_geometry::shuffleplanes::DESC,
     &::vaco_filter_adynamics::sidechaincompress::DESC,
