@@ -96,6 +96,20 @@ impl MonoState {
     fn codebook(&self) -> &'static NlsfCodebook {
         if self.lpc_order == 16 { &tables::NLSF_CB_WB } else { &tables::NLSF_CB_NB_MB }
     }
+
+    /// Update the subframe count for a new packet's regular-SILK-frame
+    /// duration (10 ms -> 2, 20/40/60 ms's own 20 ms units -> 4). This is
+    /// *not* a reset: `out_buf`/`lpc_history`/`prev_gain`/`prev_nlsf_q15`/
+    /// `last_gain_index` all stay valid across a frame-duration change --
+    /// `subfr_length` (`5 * fs_khz`) and `ltp_mem_length` depend only on
+    /// the sample rate, never on `nb_subfr`. Called every
+    /// [`crate::silk::SilkDecoder::decode`] rather than cached from
+    /// construction, since the SILK internal rate (the only thing
+    /// `ensure_silk` watches for) can stay fixed while the frame duration
+    /// changes mid-stream.
+    pub fn set_nb_subfr(&mut self, nb_subfr: usize) {
+        self.nb_subfr = nb_subfr;
+    }
 }
 
 /// The decoded side-info for one regular frame.
@@ -234,7 +248,8 @@ fn gains_dequant(gains_raw: &[i32], prev_ind: &mut i32, conditional: bool) -> Ve
         // `silk_log2lin`'s result is `Gains_Q16` (real gain * 65536); this
         // module works in real units throughout (see the module doc), so
         // divide the Q16 scale straight back out.
-        out.push(2f32.powf(log_db_q7 / 128.0) / 65536.0);
+        let g = 2f32.powf(log_db_q7 / 128.0) / 65536.0;
+        out.push(g);
     }
     out
 }
@@ -311,15 +326,19 @@ fn decode_excitation(dec: &mut RangeDecoder<'_>, signal_type: SignalType, quant_
         }
     }
 
-    // Signs.
-    let sign_base = 7 * ((2 * quant_offset_type + signal_type as usize).min(5));
+    // Signs. `code_signs.c`'s `silk_decode_signs`: the row selector is
+    // `quantOffsetType + 2*signalType` (not the other way around), and the
+    // per-block index into that 7-entry row is `min(p & 0x1F, 6)` -- pulse
+    // counts above 6 (up to `SILK_MAX_PULSES` before the escape path) would
+    // otherwise read past the row into the next one.
+    let sign_base = 7 * ((quant_offset_type + 2 * signal_type as usize).min(5));
     let table = tables::SIGN_ICDF.get(sign_base..sign_base + 7).unwrap_or(&tables::SIGN_ICDF[0..7]);
     for i in 0..iter {
         let p = sum_pulses[i] | (n_lshifts[i] << 5);
         if p <= 0 {
             continue;
         }
-        let row = table.get((p & 0x1f) as usize).copied().unwrap_or(0);
+        let row = table.get((p & 0x1f).min(6) as usize).copied().unwrap_or(0);
         let icdf = [row, 0u8];
         for k in 0..16 {
             let idx = i * 16 + k;
@@ -339,20 +358,35 @@ fn decode_excitation(dec: &mut RangeDecoder<'_>, signal_type: SignalType, quant_
 }
 
 fn shell_decode(dec: &mut RangeDecoder<'_>, out: &mut [i32; 16], total: i32) {
+    // `shell_coder.c`'s `silk_shell_decoder`: a depth-first traversal of the
+    // 16-pulse binary tree, not a breadth-first one -- each `decode_split`
+    // reads from the range coder in exactly this order, so the sequence
+    // below must match the reference's call order verbatim rather than
+    // grouping by tree level.
     let mut p3 = [0i32; 2];
     decode_split(&mut p3, dec, total, &tables::SHELL_CODE_TABLE3);
+
     let mut p2 = [0i32; 4];
     decode_split(&mut p2[0..2], dec, p3[0], &tables::SHELL_CODE_TABLE2);
-    decode_split(&mut p2[2..4], dec, p3[1], &tables::SHELL_CODE_TABLE2);
+
     let mut p1 = [0i32; 8];
     decode_split(&mut p1[0..2], dec, p2[0], &tables::SHELL_CODE_TABLE1);
+    decode_split(&mut out[0..2], dec, p1[0], &tables::SHELL_CODE_TABLE0);
+    decode_split(&mut out[2..4], dec, p1[1], &tables::SHELL_CODE_TABLE0);
+
     decode_split(&mut p1[2..4], dec, p2[1], &tables::SHELL_CODE_TABLE1);
+    decode_split(&mut out[4..6], dec, p1[2], &tables::SHELL_CODE_TABLE0);
+    decode_split(&mut out[6..8], dec, p1[3], &tables::SHELL_CODE_TABLE0);
+
+    decode_split(&mut p2[2..4], dec, p3[1], &tables::SHELL_CODE_TABLE2);
+
     decode_split(&mut p1[4..6], dec, p2[2], &tables::SHELL_CODE_TABLE1);
+    decode_split(&mut out[8..10], dec, p1[4], &tables::SHELL_CODE_TABLE0);
+    decode_split(&mut out[10..12], dec, p1[5], &tables::SHELL_CODE_TABLE0);
+
     decode_split(&mut p1[6..8], dec, p2[3], &tables::SHELL_CODE_TABLE1);
-    for i in 0..8 {
-        let dst = out.get_mut(2 * i..2 * i + 2).unwrap_or(&mut []);
-        decode_split(dst, dec, p1.get(i).copied().unwrap_or(0), &tables::SHELL_CODE_TABLE0);
-    }
+    decode_split(&mut out[12..14], dec, p1[6], &tables::SHELL_CODE_TABLE0);
+    decode_split(&mut out[14..16], dec, p1[7], &tables::SHELL_CODE_TABLE0);
 }
 
 fn decode_split(out: &mut [i32], dec: &mut RangeDecoder<'_>, p: i32, table: &[u8]) {
@@ -400,6 +434,12 @@ pub fn decode_frame(dec: &mut RangeDecoder<'_>, st: &mut MonoState, cond: CondCo
     let a1 = nlsf::nlsf_to_lpc(&nlsf_curr, st.lpc_order);
     let a0 = if interp < 4 { nlsf::nlsf_to_lpc(&nlsf0, st.lpc_order) } else { a1.clone() };
     st.prev_nlsf_q15 = nlsf_curr;
+    // This was the first frame after construction/reset (which forces
+    // `interp=4`, matching `decode_parameters.c`'s own
+    // `first_frame_after_reset` guard against interpolating from an
+    // undefined previous NLSF) -- every later frame decodes its own
+    // `nlsf_interp_q2` for real.
+    st.first_frame_after_reset = false;
 
     let pitch_lags = if ind.signal_type == SignalType::Voiced {
         decode_pitch(ind.lag_index, ind.contour_index, st.fs_khz, st.nb_subfr)
@@ -439,10 +479,10 @@ pub fn decode_frame(dec: &mut RangeDecoder<'_>, st: &mut MonoState, cond: CondCo
         ind.seed,
         &gains,
         &[a0, a1],
+        interp < 4,
         &pitch_lags,
         &ltp_taps,
         ltp_scale,
-        cond == CondCoding::Independent,
     );
 
     FrameOutput { pcm, signal_type: ind.signal_type }
@@ -459,6 +499,15 @@ pub fn decode_frame(dec: &mut RangeDecoder<'_>, st: &mut MonoState, cond: CondCo
 /// elsewhere), and `sLPC[order + i]` is this subframe's `i`-th pre-gain
 /// synthesis value, indexed directly for the feedback recursion rather
 /// than reconstructed from the post-gain `xq` output.
+///
+/// The LTP delay line (`ltp_old`/`ltp_new` below) mirrors the reference's
+/// `sLTP_Q15`: a buffer re-whitened from the persistent `out_buf` history
+/// only at subframe 0, or at subframe 2 when NLSF interpolation is active
+/// (`nlsf_interpolating` -- the point where the LPC coefficients actually
+/// change), and merely rescaled by the gain ratio on every other subframe
+/// whose gain changed. Re-deriving it from `out_buf` on *every* subframe
+/// (an earlier version of this function did) reads the wrong history for
+/// subframes that share the previous subframe's LPC coefficients.
 #[expect(clippy::too_many_arguments, reason = "mirrors silk_decode_core's parameter set")]
 fn synthesize(
     st: &mut MonoState,
@@ -468,11 +517,15 @@ fn synthesize(
     seed0: u32,
     gains: &[f32],
     ab: &[Vec<f32>; 2],
+    nlsf_interpolating: bool,
     pitch_lags: &[i32],
     ltp_taps: &[[f32; 5]],
     ltp_scale: f32,
-    is_independent: bool,
 ) -> Vec<f32> {
+    // `LTP_ORDER / 2` = 2 (integer division of the reference's 5-tap
+    // filter order): the reference's re-whitening depth around the lag.
+    const LTP_ORDER_HALF: usize = 2;
+
     let frame_length = st.nb_subfr * st.subfr_length;
     let order = st.lpc_order;
 
@@ -501,11 +554,29 @@ fn synthesize(
     let mut lpc_hist = st.lpc_history;
     let mut prev_gain = st.prev_gain;
 
+    let max_lag = pitch_lags.iter().copied().max().unwrap_or(0).max(0) as usize;
+    let old_len = max_lag + LTP_ORDER_HALF;
+    // `ltp_old`/`ltp_new` together mirror `sLTP_Q15`: `ltp_old` is the
+    // "old" region re-whitened from `out_buf` at the appropriate subframe
+    // boundaries (see the function doc), `ltp_new` is the growing region
+    // of this call's own LTP-predicted residual, indexed contiguously
+    // after `ltp_old` (`ltp_new[0]` is `sLTP_Q15[old_len]`).
+    let mut ltp_old = vec![0.0f32; old_len];
+    let mut ltp_new: Vec<f32> = Vec::new();
+    let read_ltp = |pos: i64, old: &[f32], new: &[f32]| -> f32 {
+        if pos < 0 {
+            return 0.0;
+        }
+        let pos = pos as usize;
+        if pos < old.len() { old.get(pos).copied().unwrap_or(0.0) } else { new.get(pos - old.len()).copied().unwrap_or(0.0) }
+    };
+
     for k in 0..st.nb_subfr {
         let a = ab.get(usize::from(k >= st.nb_subfr / 2)).unwrap_or(&ab[1]);
         let gain = gains.get(k).copied().unwrap_or(1.0).max(1e-6);
-        if (gain - prev_gain).abs() > f32::EPSILON {
-            let gain_adj = prev_gain / gain;
+        let gain_changed = (gain - prev_gain).abs() > f32::EPSILON;
+        let gain_adj = prev_gain / gain;
+        if gain_changed {
             for v in &mut lpc_hist {
                 *v *= gain_adj;
             }
@@ -515,30 +586,44 @@ fn synthesize(
         let lag = pitch_lags.get(k).copied().unwrap_or(0).max(0) as usize;
         let taps = ltp_taps.get(k).copied().unwrap_or([0.0; 5]);
 
-        // Re-whiten the pitch history for this subframe by LPC-analysing
-        // the already-decoded PCM (`out_buf` plus whatever of this frame
-        // is done so far), then dividing by the *current* gain to bring it
-        // into the same pre-gain domain the LTP taps operate in.
-        // `LTP_ORDER / 2` = 2 (integer division of the reference's 5-tap
-        // filter order), the reference's own re-whitening depth.
-        let sltp_len = lag + 2;
-        let mut sltp = vec![0.0f32; sltp_len + st.subfr_length];
         if signal_type == SignalType::Voiced && lag > 0 {
-            let inv_gain = if k == 0 && is_independent { ltp_scale / gain } else { 1.0 / gain };
-            let mut hist = Vec::new();
-            hist.extend_from_slice(&st.out_buf);
-            hist.extend_from_slice(&xq[..sub_start]);
-            let hist_len = hist.len();
-            let take = sltp_len.min(hist_len.saturating_sub(order));
-            for i in 0..take {
-                let pos = hist_len - take + i;
-                let mut pred = 0.0f32;
-                for (j, &aj) in a.iter().enumerate() {
-                    pred += aj * hist.get(pos.wrapping_sub(1 + j)).copied().unwrap_or(0.0) / 4096.0;
+            let need = (lag + LTP_ORDER_HALF).min(old_len);
+            // Re-whiten only where the LPC coefficients actually change:
+            // subframe 0 always, and subframe 2 only when this frame
+            // interpolates NLSFs (`decode_core.c`'s
+            // `k == 0 || (k == 2 && NLSF_interpolation_flag)`). Every other
+            // subframe reuses the last re-whitened tail, rescaled for any
+            // gain change since then -- it is never re-derived from
+            // `out_buf`, which would use the wrong (already-superseded)
+            // history for a subframe whose LPC coefficients didn't change.
+            if k == 0 || (k == 2 && nlsf_interpolating) {
+                let inv_gain = if k == 0 { ltp_scale / gain } else { 1.0 / gain };
+                let mut hist = Vec::new();
+                hist.extend_from_slice(&st.out_buf);
+                hist.extend_from_slice(&xq[..sub_start]);
+                let hist_len = hist.len();
+                for i in 0..need {
+                    let pos = hist_len - need + i;
+                    let mut pred = 0.0f32;
+                    for (j, &aj) in a.iter().enumerate() {
+                        // `a` (from `nlsf::nlsf_to_lpc`) is already a
+                        // real-valued coefficient in this module's
+                        // PCM-adjacent scale, not a raw Q12 integer --
+                        // unlike the reference's `A_Q12`, it must not be
+                        // descaled by 4096 again here.
+                        pred += aj * hist.get(pos.wrapping_sub(1 + j)).copied().unwrap_or(0.0);
+                    }
+                    let residual = hist.get(pos).copied().unwrap_or(0.0) - pred;
+                    if let Some(slot) = ltp_old.get_mut(old_len - need + i) {
+                        *slot = residual * inv_gain;
+                    }
                 }
-                let residual = hist.get(pos).copied().unwrap_or(0.0) - pred;
-                if let Some(slot) = sltp.get_mut(i + sltp_len - take) {
-                    *slot = residual * inv_gain;
+            } else if gain_changed {
+                let start = old_len.saturating_sub(need);
+                if let Some(slice) = ltp_old.get_mut(start..) {
+                    for v in slice {
+                        *v *= gain_adj;
+                    }
                 }
             }
         }
@@ -553,19 +638,17 @@ fn synthesize(
         for i in 0..st.subfr_length {
             let e = exc.get(sub_start + i).copied().unwrap_or(0.0);
             let res = if signal_type == SignalType::Voiced && lag > 0 {
-                // 5-tap predictor: `sltp[sltp_len + i]` is the position
-                // `lag` samples before the sample about to be produced,
-                // with taps at offsets `{+2,+1,0,-1,-2}` around it.
-                let center = sltp_len + i;
+                // `base` is `sLTP_buf_idx` at this sample, before this
+                // sample's own residual is appended; taps read offsets
+                // `{+2,+1,0,-1,-2}` around `base - lag`.
+                let base = (old_len + ltp_new.len()) as i64;
                 let mut ltp_pred = 0.0f32;
                 for (t, &b) in taps.iter().enumerate() {
-                    let idx = (center + 2).wrapping_sub(lag).wrapping_sub(t);
-                    ltp_pred += b * sltp.get(idx).copied().unwrap_or(0.0);
+                    let pos = base - lag as i64 + LTP_ORDER_HALF as i64 - t as i64;
+                    ltp_pred += b * read_ltp(pos, &ltp_old, &ltp_new);
                 }
                 let r = e + ltp_pred;
-                if let Some(slot) = sltp.get_mut(center) {
-                    *slot = r;
-                }
+                ltp_new.push(r);
                 r
             } else {
                 e
@@ -573,7 +656,8 @@ fn synthesize(
 
             let mut pred = 0.0f32;
             for (j, &aj) in a.iter().enumerate() {
-                pred += aj * s_lpc.get(order + i - 1 - j).copied().unwrap_or(0.0) / 4096.0;
+                // Same real-scale `a` as above -- no `/4096.0` here either.
+                pred += aj * s_lpc.get(order + i - 1 - j).copied().unwrap_or(0.0);
             }
             let sample = res + pred;
             if let Some(slot) = s_lpc.get_mut(order + i) {

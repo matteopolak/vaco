@@ -41,7 +41,7 @@ fn nlsf_unpack(cb: &NlsfCodebook, cb1_index: usize) -> (Vec<usize>, Vec<i32>) {
 /// Decode the first-stage vector index and every residual index.
 /// `celt/decode_indices.c`'s NLSF section, `psDec->psNLSF_CB` half.
 pub fn decode_nlsf_indices(dec: &mut RangeDecoder<'_>, cb: &NlsfCodebook, signal_type_voiced_half: bool) -> (usize, Vec<i32>) {
-    let row = usize::from(signal_type_voiced_half) * cb.order;
+    let row = usize::from(signal_type_voiced_half) * cb.n_vectors;
     let row_icdf = cb.cb1_icdf.get(row..row + cb.n_vectors).unwrap_or(cb.cb1_icdf);
     let cb1_index = dec.icdf(row_icdf, 8).unwrap_or(0).max(0) as usize;
     let (ec_ix, _pred) = nlsf_unpack(cb, cb1_index.min(cb.n_vectors.saturating_sub(1)));
@@ -255,15 +255,21 @@ pub fn nlsf_to_lpc(nlsf_q15: &[i32], order: usize) -> Vec<f32> {
     let p = find_poly(&p_in, dd);
     let q = find_poly(&q_in, dd);
 
+    // `silk_NLSF2A`'s combination step produces `a32_QA1` one bit wider
+    // (`QA+1`) than `P`/`Q`'s own `QA` scale -- the P(z) +/- Q(z) recombination
+    // that recovers `A(z)` from its symmetric/antisymmetric factors doubles
+    // the scale by construction, not a rounding artifact. Halving here keeps
+    // `p`/`q`/`a` all in the same "real" convention this module uses
+    // throughout, matching the reference's final `QA+1 -> Q12` shift.
     let mut a = vec![0.0f32; order];
     for k in 0..dd {
         let ptmp = p.get(k + 1).copied().unwrap_or(0.0) + p.get(k).copied().unwrap_or(0.0);
         let qtmp = q.get(k + 1).copied().unwrap_or(0.0) - q.get(k).copied().unwrap_or(0.0);
         if let Some(slot) = a.get_mut(k) {
-            *slot = -(qtmp + ptmp);
+            *slot = -(qtmp + ptmp) * 0.5;
         }
         if let Some(slot) = a.get_mut(order - k - 1) {
-            *slot = qtmp - ptmp;
+            *slot = (qtmp - ptmp) * 0.5;
         }
     }
     stabilize_lpc(&mut a);
@@ -283,7 +289,14 @@ fn find_poly(c_lsf: &[f32], dd: usize) -> Vec<f32> {
         *slot = -c_lsf.first().copied().unwrap_or(0.0);
     }
     for k in 1..dd {
-        let ftmp = c_lsf.get(2 * k).copied().unwrap_or(0.0);
+        // `NLSF2A_find_poly` indexes its *unstrided* `cLSF` pointer (a view
+        // into the interleaved cos-table starting at 0 or 1) as `cLSF[2*k]`
+        // to pick out every other entry. `c_lsf` here is already the
+        // pre-extracted (P- or Q-side) `dd`-length array the caller built by
+        // doing that striding once, so the equivalent read is `c_lsf[k]` --
+        // re-striding it with `2*k` walked off the end for `k >= dd/2` and
+        // silently substituted zero, corrupting most of the polynomial.
+        let ftmp = c_lsf.get(k).copied().unwrap_or(0.0);
         let prev = out.get(k - 1).copied().unwrap_or(0.0);
         let cur = out.get(k).copied().unwrap_or(0.0);
         let next = 2.0 * prev - ftmp * cur;

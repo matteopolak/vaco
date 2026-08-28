@@ -99,6 +99,21 @@ impl SilkDecoder {
         };
         let channels = self.channels;
 
+        // Each regular SILK frame this packet decodes is 10 ms (nb_subfr=2)
+        // only when the whole packet is itself a single native 10 ms
+        // frame; every other case (20 ms standalone, or each 20 ms unit of
+        // a 40/60 ms packet) is nb_subfr=4. `ensure_silk` only reconfigures
+        // on an internal-rate change, so a mid-stream frame-duration change
+        // at a fixed rate would otherwise leave every `MonoState` decoding
+        // with a stale subframe count.
+        let nb_subfr = if frame_ms <= 10 { 2 } else { 4 };
+        if nb_subfr != self.nb_subfr {
+            self.nb_subfr = nb_subfr;
+            for st in &mut self.mono {
+                st.set_nb_subfr(nb_subfr);
+            }
+        }
+
         // VAD flags + LBRR flag, per channel.
         let mut vad_flags = vec![vec![false; n_frames_per_packet]; channels];
         let mut lbrr_flag = vec![false; channels];

@@ -251,8 +251,22 @@ impl<'a> RangeDecoder<'a> {
 
     /// Bits consumed so far, rounded up to the next whole bit.
     #[must_use]
-    pub fn tell(&self) -> u32 {
-        (self.tell_frac() >> BITRES) as u32
+    pub fn tell(&self) -> i32 {
+        // `entcode.c`'s `ec_tell`: `nbits_total - EC_ILOG(rng)`, its own
+        // whole-bit estimate -- *not* `tell_frac() >> BITRES`. The two are
+        // close but not identical (`tell_frac`'s fractional-bit refinement
+        // loop only ever grows its `l`, so the truncated quotient can come
+        // out a bit or two lower than this), and CELT's frame syntax uses
+        // `tell() + N <= budget` to decide whether an optional field is
+        // present. A decoder whose `tell()` disagrees with the reference's
+        // at exactly the wrong boundary makes a different presence
+        // decision than the bitstream was encoded with. Like the
+        // reference's `int`-returning `ec_tell`, this can be small or
+        // (briefly, right after construction) even non-positive; callers
+        // compare it directly rather than treating it as a bit count that
+        // must be `>= 0`.
+        let ilog = if self.rng == 0 { 0 } else { 32 - self.rng.leading_zeros() };
+        self.nbits_total - ilog as i32
     }
 
     /// Bits consumed so far in `1/8`-bit units.

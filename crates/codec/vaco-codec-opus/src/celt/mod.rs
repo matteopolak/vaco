@@ -140,7 +140,7 @@ impl CeltDecoder {
         let n = m * 120;
 
         let total_bits_bytes = len_bytes as i32 * 8;
-        let mut tell = dec.tell() as i32;
+        let mut tell = dec.tell();
 
         let silence = if tell >= total_bits_bytes {
             true
@@ -159,16 +159,16 @@ impl CeltDecoder {
                 let octave = dec.dec_uint(6).unwrap_or(0);
                 let _period = (16u32 << octave) + dec.dec_bits(4 + octave) - 1;
                 let _qg = dec.dec_bits(3);
-                if dec.tell() as i32 + 2 <= total_bits_bytes {
+                if dec.tell() + 2 <= total_bits_bytes {
                     let _tapset = dec.icdf(&tables::TAPSET_ICDF, 2).unwrap_or(0);
                 }
             }
-            tell = dec.tell() as i32;
+            tell = dec.tell();
         }
 
         let is_transient = if lm > 0 && tell + 3 <= total_bits_bytes {
             let v = dec.bit_logp(3);
-            tell = dec.tell() as i32;
+            tell = dec.tell();
             v
         } else {
             false
@@ -181,7 +181,7 @@ impl CeltDecoder {
         let mut tf_res = vec![0i32; NB_EBANDS];
         tf_decode(dec, start_band, end_band, is_transient, &mut tf_res, lm, total_bits_bytes);
 
-        tell = dec.tell() as i32;
+        tell = dec.tell();
         let spread = if tell + 4 <= total_bits_bytes { dec.icdf(&tables::SPREAD_ICDF, 5).unwrap_or(2) } else { 2 };
 
         let cap = rate::init_caps(&EBANDS, lm, channels as i32);
@@ -248,7 +248,7 @@ impl CeltDecoder {
 
         let anti_collapse_on = if anti_collapse_rsv > 0 { dec.dec_bits(1) != 0 } else { false };
 
-        let bits_left = len_bytes as i32 * 8 - dec.tell() as i32;
+        let bits_left = len_bytes as i32 * 8 - dec.tell();
         energy::unquant_energy_finalise(
             dec,
             &mut self.old_band_e,
@@ -390,7 +390,7 @@ impl CeltDecoder {
 
 /// `celt.c`'s `tf_decode`.
 fn tf_decode(dec: &mut RangeDecoder<'_>, start: usize, end: usize, is_transient: bool, tf_res: &mut [i32], lm: i32, total_bits: i32) {
-    let mut tell = dec.tell() as i32;
+    let mut tell = dec.tell();
     let mut logp = if is_transient { 2 } else { 4 };
     let tf_select_rsv = i32::from(lm > 0 && tell + logp < total_bits);
     let budget = total_bits - tf_select_rsv;
@@ -400,7 +400,7 @@ fn tf_decode(dec: &mut RangeDecoder<'_>, start: usize, end: usize, is_transient:
         if tell + logp <= budget {
             let bit = dec.bit_logp(logp as u32);
             curr ^= bit;
-            tell = dec.tell() as i32;
+            tell = dec.tell();
             tf_changed |= curr;
         }
         *slot = i32::from(curr);

@@ -33,7 +33,7 @@ pub fn unquant_coarse_energy(
 
     for i in start..end {
         for c in 0..channels {
-            let tell = dec.tell() as i32;
+            let tell = dec.tell();
             let qi = if budget - tell >= 15 {
                 let pi = 2 * i.min(20);
                 let fs0 = u32::from(prob_model.get(pi).copied().unwrap_or(0)) << 7;
@@ -51,7 +51,16 @@ pub fn unquant_coarse_energy(
             let idx = i + c * nb_ebands;
             let Some(prev_e) = prev.get_mut(c) else { continue };
             let old = old_band_e.get(idx).copied().unwrap_or(-9.0).max(-9.0);
-            let tmp = coef * old + *prev_e + q;
+            // `quant_bands.c` only clamps this to `+-GCONST(28.f)` inside
+            // `#ifdef FIXED_POINT`, where it exists to stop the Q-format
+            // accumulator overflowing -- a no-op on the reference's own
+            // float build, since ordinary content never drives it that far.
+            // `laplace_decode`'s escape mechanism can still return an
+            // arbitrarily large `qi` given enough (adversarial) input bits,
+            // which `exp2` downstream would turn into `inf`/`NaN`; clamping
+            // unconditionally keeps that reachable-but-pathological case
+            // finite without changing anything for real content.
+            let tmp = (coef * old + *prev_e + q).clamp(-28.0, 28.0);
             if let Some(slot) = old_band_e.get_mut(idx) {
                 *slot = tmp;
             }
@@ -75,6 +84,14 @@ pub fn unquant_fine_energy(
     for i in start..end {
         let bits = fine_energy.get(i).copied().unwrap_or(0);
         if bits <= 0 {
+            continue;
+        }
+        // `quant_bands.c`'s `unquant_fine_energy`: skip a band whose raw
+        // bits would run past the frame's own byte budget rather than
+        // reading them anyway -- `dec_bits` pulls from the same
+        // shared raw-bit region every other read in the frame does, so an
+        // extra read here shifts every later one.
+        if dec.tell() + (channels as i32) * bits > (dec.storage() as i32) * 8 {
             continue;
         }
         for c in 0..channels {
