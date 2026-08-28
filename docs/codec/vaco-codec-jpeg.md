@@ -118,20 +118,6 @@ only — the entropy bitstream has its own reader), `vaco-frame`/`vaco-pixfmt`
 - **Progressive encode** is not implemented; only baseline output.
 - **Optimized (per-image) Huffman tables** are not built; the encoder always
   uses the Annex K defaults, which costs compression ratio, not correctness.
-- **Progressive successive-approximation AC refinement has a measured,
-  unresolved numeric discrepancy** against `ffmpeg`'s decode on some
-  multi-block images: a scan pattern that splits the AC band across two
-  first-scans (e.g. `Ss=1-5` then `Ss=6-63`) followed by a later
-  full-band (`Ss=1-63`) refinement scan decodes correctly for a single
-  isolated block, but diverges from the reference by up to max-abs-deviation
-  ~45 / RMS 3-8 starting around the 4th-8th block of some (not all) test
-  images — the trigger is content-dependent, not a clean size threshold
-  (32/40/56px-wide test images decoded correctly; 48/64px-wide did not). The
-  simpler `ac_first` engine was independently verified bit-exact against a
-  from-scratch reference re-implementation; the bug is isolated to
-  `ac_refine`'s multi-block, multi-scan interaction and was not root-caused
-  in the time available. See `planning/TECH-DEBT.md` for the full
-  investigation notes.
 - **QuickTime `mjqt`/`mjht` sample-description atoms** (container-supplied
   quantization/Huffman tables some MJPEG-A/B encoders use *instead of* the
   Annex K defaults) are not read by this crate — only the implicit
@@ -167,16 +153,23 @@ generated JPEGs into this crate's decoder:
   effectively bit-exact against `ffmpeg` — measured max-abs-deviation of 1,
   consistent with floating-point IDCT rounding noise rather than a decode
   error.
-- **Progressive**: no longer crashes (see the `apply_correction` fix below),
-  and matches `ffmpeg` exactly on single-block images and on the first few
-  blocks of larger ones, but has the residual multi-block `ac_refine`
-  discrepancy described in "Known gaps" above.
-- A real crash bug was found and fixed during this testing: `apply_correction`
-  was reading a successive-approximation correction bit from the entropy
-  stream unconditionally, before checking whether the target coefficient was
-  actually nonzero — the spec requires a still-zero coefficient to cost no
-  bit at all, so this desynchronized the bitstream and crashed on nearly
-  every real-world progressive JPEG with a non-trivial correction sweep.
+- **Progressive, the same matrix plus restart intervals and optimized
+  Huffman tables (1296 combinations swept)**: also effectively bit-exact
+  against `ffmpeg`, at both the pixel level (the full sweep) and the raw
+  quantized-coefficient level, cross-checked against libjpeg-turbo's
+  `jpeg_read_coefficients` API for the specific case that first exposed the
+  bug below.
+- Two real bugs were found and fixed in `ac_refine` during this testing.
+  First, `apply_correction` was reading a successive-approximation
+  correction bit from the entropy stream unconditionally, before checking
+  whether the target coefficient was actually nonzero — the spec requires a
+  still-zero coefficient to cost no bit at all, so this desynchronized the
+  bitstream and crashed on nearly every real-world progressive JPEG with a
+  non-trivial correction sweep. Second, once that crash was fixed, the
+  "does `run` running out land on a nonzero coefficient" case was handled
+  identically for both `RS` symbol kinds, when a ZRL and a sized symbol need
+  different endings there — see `ac_refine`'s doc comment for the exact
+  rule and its two regression tests for worked examples of each kind.
 
 A `jpeg_decode` fuzz target decodes arbitrary bytes; a 60-second local
 `cargo fuzz run` pass found no crashes.
