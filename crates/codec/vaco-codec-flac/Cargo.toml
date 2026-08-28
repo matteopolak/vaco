@@ -17,6 +17,7 @@ vaco-frame = { path = "../../model/vaco-frame" }
 vaco-packet = { path = "../../model/vaco-packet" }
 vaco-sampfmt = { path = "../../model/vaco-sampfmt" }
 vaco-chlayout = { path = "../../model/vaco-chlayout" }
+vaco-codec-dsp-lpc = { path = "../../signal/vaco-codec-dsp-lpc" }
 claxon = "0.4"
 
 [dev-dependencies]

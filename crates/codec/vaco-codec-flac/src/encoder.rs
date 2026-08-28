@@ -37,6 +37,7 @@ use vaco_sampfmt::SampleFmt;
 
 use crate::crc::{crc8, crc16};
 use crate::fixed;
+use crate::lpc;
 use crate::rice;
 use crate::streaminfo::{to_block_bytes, wrap_as_last_metadata_block};
 
@@ -288,6 +289,7 @@ enum SubframePlan {
     Constant(i32),
     Verbatim,
     Fixed { order: usize, residual: Vec<i32> },
+    Lpc { order: usize, precision: u32, shift: u32, qcoeffs: Vec<i32>, residual: Vec<i32> },
 }
 
 /// Pick the cheapest valid encoding for one channel's `samples`, all
@@ -323,6 +325,37 @@ fn choose_subframe(samples: &[i32], bps: u32) -> SubframePlan {
         }
     }
 
+    // LPC subframes (D-07, over `vaco_codec_dsp_lpc`): measured by the
+    // same actual-bit-cost rule as every other candidate here, so trying
+    // this family can only ever win outright, never lose to a worse
+    // choice being picked instead.
+    for &order in &lpc::ORDERS {
+        let Some(c) = lpc::candidate(samples, order) else {
+            continue;
+        };
+        if c.residual.contains(&i32::MIN) {
+            continue;
+        }
+        // Header bits: warm-up samples + 4-bit (precision-1) + 5-bit shift
+        // + `precision` bits per coefficient (RFC 9639 §9.2.6, Table 22).
+        let bits = SUBFRAME_HEADER_BITS
+            + u64::from(bps) * order as u64
+            + 4
+            + 5
+            + u64::from(c.precision) * order as u64
+            + rice::encoded_len_bits(&c.residual);
+        if bits < best_bits {
+            best_bits = bits;
+            best_plan = SubframePlan::Lpc {
+                order: c.order,
+                precision: c.precision,
+                shift: c.shift,
+                qcoeffs: c.qcoeffs,
+                residual: c.residual,
+            };
+        }
+    }
+
     best_plan
 }
 
@@ -331,6 +364,9 @@ fn write_subframe(bw: &mut BitWriter, plan: &SubframePlan, samples: &[i32], bps:
         SubframePlan::Constant(_) => 0b00_0000u32,
         SubframePlan::Verbatim => 0b00_0001u32,
         SubframePlan::Fixed { order, .. } => 0b00_1000u32 | *order as u32,
+        // RFC 9639 Table 19: `0b100000..=0b111111` for LPC order `v - 31`,
+        // i.e. `v = order + 31`.
+        SubframePlan::Lpc { order, .. } => 31u32 + *order as u32,
     };
     bw.put(1, 0); // Subframe header padding bit: MUST be 0.
     bw.put(6, type_code);
@@ -345,6 +381,22 @@ fn write_subframe(bw: &mut BitWriter, plan: &SubframePlan, samples: &[i32], bps:
         SubframePlan::Fixed { order, residual } => {
             for &s in samples.iter().take(*order) {
                 bw.put(bps, s as u32);
+            }
+            rice::write(bw, residual);
+        }
+        SubframePlan::Lpc { order, precision, shift, qcoeffs, residual } => {
+            for &s in samples.iter().take(*order) {
+                bw.put(bps, s as u32);
+            }
+            bw.put(4, precision.saturating_sub(1));
+            // RFC 9639 Appendix B.4: the shift field is signed but this
+            // encoder (like the reference) never emits a negative one, so
+            // a plain unsigned `put` of `crate::lpc::quantize`'s
+            // already-non-negative shift is exactly the 5-bit field the
+            // spec wants.
+            bw.put(5, *shift);
+            for &c in qcoeffs {
+                bw.put_signed(*precision, c);
             }
             rice::write(bw, residual);
         }
