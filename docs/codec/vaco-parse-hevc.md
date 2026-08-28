@@ -320,6 +320,35 @@ RFC 6381 §3.3 alone — including the reversed compatibility-flag field, which 
 the part everyone gets wrong. If a future reference version starts printing one,
 this is the first thing to re-derive.
 
+## Closed captions: `a53`
+
+`a53::cc_data_from_sei` turns an already-parsed
+`SeiPayload::UserDataRegistered` into the raw CEA-608/708 `cc_data` triplet
+bytes, closing interface gap 18 for HEVC. The ATSC identification prefix is
+identical to H.264's — `itu_t_t35_country_code` `0xB5`,
+`itu_t_t35_provider_code` `0x0031`, `user_identifier` `GA94`,
+`user_data_type_code` `0x03` — and so is SEI payload type 4, which was
+checked rather than assumed. What differs is upstream of this module and
+already handled by `sei::parse`: HEVC's NAL header is two bytes rather than
+one, and prefix (39) and suffix (40) SEI are separate NAL types.
+
+Verification is weaker here than for H.264 and worth stating plainly. The
+H.264 path was checked against a genuine broadcast capture; no natively
+authored HEVC caption sample was obtainable, so this path was verified
+against an `ffmpeg -c:v libx265 -a53cc 1` transcode of that same capture —
+120 frames, byte-for-byte identical to the reference's own `A53_CC` side
+data as a multiset. That is a real differential against an independent
+implementation, but the bytes originate from an H.264 source, so it does
+not exercise anything an HEVC-native encoder might do differently.
+
+Note that `libx265` defaults `-a53cc` to **false** (unlike `mpeg2video`,
+which defaults it to true), so a transcode that does not pass the flag
+explicitly silently drops captions.
+
+**The one caller contract** is the same as H.264's: consume captions in
+*presentation* order. Decode-order payloads produce scrambled text with zero
+parity errors — nothing signals the mistake. See the module doc.
+
 ## Configuration
 
 None. No features, no options, no environment. `Budget`/`Limits` come from the

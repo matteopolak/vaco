@@ -358,6 +358,36 @@ surface.
 - **The access-unit buffer is capped** at `DEFAULT_MAX_ACCESS_UNIT` (8 MiB), so
   a stream that never produces a boundary is refused rather than buffered.
 
+## Closed captions: `a53`
+
+`a53::cc_data_from_sei` turns an already-parsed
+`SeiPayload::UserDataRegistered` into the raw CEA-608/708 `cc_data` triplet
+bytes, closing interface gap 18 for H.264. It recognises the four-deep ATSC
+identification prefix — `itu_t_t35_country_code` `0xB5`,
+`itu_t_t35_provider_code` `0x0031`, `user_identifier` `GA94`,
+`user_data_type_code` `0x03` — then unpacks `cc_data()` and returns the
+`cc_count * 3` payload bytes, dropping the two-byte header and the trailing
+marker so the result is exactly what `vaco-codec-subtitle-cc` decodes and
+what `FrameSideData::ClosedCaptions` carries.
+
+Every constant was verified against a real broadcast capture rather than
+recalled, and the extraction was checked byte-for-byte against the
+reference's own `A53_CC` side data across all 361 frames of that capture:
+same payloads, differing only in decode-versus-presentation order.
+
+**The one caller contract:** captions must be consumed in *presentation*
+order. Feeding decode-order payloads to a caption decoder silently produces
+scrambled text with zero parity errors — measured, `" its cities now."`
+becomes `"    s  itesciti. now"`. Attach the bytes to their own picture and
+let the normal reorder carry them; do not accumulate them as they are
+parsed. The module doc has the full note.
+
+Anything that is not this message — a different payload type, country,
+provider, a `DTG1` identifier, bar data rather than captions — returns
+`None` rather than an error, because a stream is expected to be full of
+those. No allocation: the return is a borrowed subslice, and `cc_count` is
+five bits so it can never select more than 93 bytes.
+
 ## Configuration
 
 No features and no environment variables. Two knobs:

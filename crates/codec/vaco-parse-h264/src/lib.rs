@@ -111,6 +111,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod a53;
 pub mod avcc;
 pub mod nal;
 pub mod params;
@@ -123,6 +124,7 @@ pub mod slice;
 pub mod sps;
 mod util;
 
+pub use a53::cc_data_from_sei;
 pub use avcc::AvcDecoderConfigurationRecord;
 pub use nal::{H264NalHeader, NalUnitType};
 pub use params::{MAX_PPS, MAX_SPS, ParameterSets, codec_parameters, pixel_format};

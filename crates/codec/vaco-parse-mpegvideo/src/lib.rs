@@ -34,9 +34,11 @@
 
 #![forbid(unsafe_code)]
 
+pub mod a53;
 pub mod mpeg12;
 pub mod mpeg4;
 
+pub use a53::{find_cc_data, iter_cc_data};
 pub use mpeg4::Mpeg4Parser;
 pub use mpeg12::{Mpeg12Parser, aspect_ratio, frame_rate, pixel_format, profile_name};
 
