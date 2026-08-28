@@ -490,6 +490,45 @@ usage correlates with the defect (dense blocks need escape coding) without
 causing it. Per instruction, `m1_i`'s own separate max-9 thread was not
 chased this round, since the first hypothesis did not fall.
 
+**A follow-up round used the one controlled pair this investigation has
+never exploited: `mb=(3,1)` decoded at frame 0 (working) and frame 15
+(broken) — same macroblock position, same code path, one correct output
+and one wrong one.** Converting both frames' already-dumped, inverse-
+scanned coefficients back to decode order shows the two blocks are
+token-for-token structurally identical for every ordinary (non-escape)
+coefficient: same zero/non-zero pattern, and each matching pair's
+magnitude scales in a tight 1.33x-2.0x band (clustering almost exactly on
+1.5x) between the two frames — exactly the frame 0:frame 15 quantiser-
+scale ratio (6:4), consistent with the two pictures showing very similar
+underlying content encoded at different precision. Checked across all
+four defective sub-blocks (`mb=(3,1)` `i=1`/`i=3`, `mb=(0,1)` `i=0`/`i=2`,
+16 ordinary-coefficient pairs total), every one of them lands in that
+band. **Exactly one coefficient per block breaks it, every time: the
+first AC coefficient, always the one decoded through the escape+sentinel
+sub-case, whose frame15:frame0 ratio is 0.47-0.66 in all four blocks —
+smaller than frame 0's value, the opposite direction the other 16 pairs
+point.** This is where the two decodes first (and only) diverge from
+their shared structure. The DC-predictor chain was checked at frame 15
+specifically, not just assumed to carry over from frame 0's own
+(previously validated) behaviour: all six of `mb=(3,1)`'s and all six of
+`mb=(0,1)`'s reconstructed DC values are byte-identical between frame 0
+and frame 15, ruling out predictor-state corruption at the picture that
+actually shows the defect.
+
+This sharpens, without simply repeating, the previous elimination:
+`mb=(0,2)`/`mb=(2,2)`'s sentinel firings in the very same picture still
+show no comparable anomaly against their own ground truth (exact match to
+reference), so "the sentinel decode is unconditionally wrong" remains
+false. What the paired comparison adds is a specific, four-times-
+reproduced *symptom* — the escape+sentinel-decoded coefficient specifically
+breaks a scaling relationship every other coefficient in the same blocks
+obeys, always in the same direction — without a verified root cause: this
+project has no legitimate access to ISO/IEC 11172-2's own text for the
+sentinel sub-case's exact semantics, and guessing a replacement formula
+without that access would repeat a pattern this investigation has already
+paid for more than once. Recorded as the handoff point rather than acted
+on. Not chased further this round, including `m1_i`'s own max-9 thread.
+
 **This means T2-01a's own "framemd5-identical to reference" acceptance bar
 is not met for either format**, so no issue claiming it is closed by this
 work — but MPEG-2 decode is now correct in every way this session's
