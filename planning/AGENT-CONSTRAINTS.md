@@ -299,6 +299,34 @@ four `--check` generators) at the wave boundary. **Do not run them all
 yourself** unless your brief says to — they are cheap individually and the
 round-trips are not.
 
+## Check a recorded blocker before you accept it
+
+A doc comment or a `TECH-DEBT.md` row saying something is not tractable is
+evidence, not a verdict. It records what one agent measured on one pass, and
+it is wrong often enough to be worth ten minutes.
+
+Three times in one day, a blocker turned out not to be one. A crate's own doc
+said MXF D-10 could not be exercised because "every quantiser refused"; the
+working `ffmpeg` recipe simply needed options the original attempt had not
+tried, and once found it produced a real reference fixture where hand-building
+had been assumed necessary. An `xwma` duration anomaly recorded as
+decoder-dependent and needing real bitstream data fell to a wider parameter
+sweep with no bitstream data at all. And a filter family recorded as blocked on
+this tree's missing text renderer needed no text renderer, only a fixed
+bitmap glyph table.
+
+Every one was overturned by **widening the sweep**, not by new information.
+
+So when a recorded blocker sits between you and your package: spend a bounded
+amount of time trying to reproduce it before routing around it. If it holds,
+say so and move on — a confirmed blocker is worth more than an inherited one.
+If it does not, correct the record where you found it, and say plainly that
+your own or a predecessor's earlier judgement was wrong. That correction is
+what keeps "I checked and it is not tractable" believable the next time
+anybody writes it.
+
+The same applies to a blocker you recorded yourself an hour ago.
+
 ## A VLC table test must assert exact code lengths
 
 Prefix-freedom and full-value coverage are the obvious properties to check on a
