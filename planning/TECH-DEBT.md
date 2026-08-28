@@ -3557,3 +3557,95 @@ macroblock tests unchanged this round), `h264_entropy` fuzz target clean
 2", `provenance-check` shows the same 8 pre-existing failures, none mine.
 `vaco-codec-cabac` and its fuzz target re-confirmed untouched immediately
 before committing. #418 stays open; #419 not reopened.
+
+## H.264 CABAC: bit_pos() bisect confirms the corruption predates address 5, not address 5's own decode (#418)
+
+One bounded round, answering the coordinator's specific instruction:
+bisect with the CABAC engine's own `bit_pos()` before reasoning toward a
+cause. Worked `cabac_ip_simple.264` (2 of 16 macroblocks misclassified,
+first divergence at address 5) rather than `cabac_ip_multiref.264`, per
+the instruction that the corpus with more correct macroblocks to
+contrast against is the better instrument.
+
+**The bisect.** `CabacDecoder::reader().bit_pos()` (already public) was
+recorded at the entry to every macroblock's decode in slice 0. On its
+own this only gives *this* decoder's own trajectory, not a ground truth
+to compare against — so the actual test was a forced-branch experiment:
+`decode_mb_type_i_table` was temporarily patched (uncommitted;
+reverted) to take the `Intra_16x16` branch unconditionally at exactly
+address 5, while still consuming bin0's own bit via a genuine
+`decode_decision` call — only the control-flow interpretation of its
+result was overridden. Every later bin (the `I_PCM` `decode_terminate`
+check, then `b2..b6`) was left to read normally from whatever engine
+state was actually present at that point.
+
+**Reasoning**: if addresses 0-4 had consumed exactly the right number of
+bits, forcing the branch at address 5 should recover the *true* encoded
+`Intra_16x16` variant there (since all the bins that determine which
+variant are read genuinely, only the branch decision itself is
+overridden), and address 6 — which `ffmpeg -debug mb_type` shows as
+plain `Intra4x4`, not `Intra_16x16` — should then decode correctly on
+its own.
+
+**Result**: it did not. Address 5, forced, decoded to a structurally
+plausible `Intra16x16` (`cbp_luma=15, cbp_chroma=2`, a valid Table 7-11
+combination) — but address 6, decoded genuinely (not forced), *also*
+came out `Intra16x16`, contradicting the reference. Correcting address
+5's classification did not restore correctness one macroblock later.
+That means the engine's range/offset state entering address 5 was
+already wrong: **the corruption is in addresses 0-4's own decode, not in
+address 5's `mb_type` read itself.** This is the split the coordinator's
+chosen instrument was built to make, and it resolves cleanly in one
+direction.
+
+**What this narrows the search to.** Addresses 0-4's own `mb_type`
+classification (`Intra4x4`, matching the reference) and
+`coded_block_pattern` values (`0b1111`/`0b1111`/`0b1111`/`0b1111`,
+already recorded in earlier rounds' traces) are unaffected by whatever
+is wrong — those already look right. Whatever consumes the wrong number
+of bits for one or more of addresses 0-4 must therefore be in a syntax
+element whose *value* doesn't feed back into anything checked so far:
+residual decode (`residual_block_cabac`, called extensively for these
+four all-quadrant-coded macroblocks) or the per-4x4-block intra
+prediction mode flags (`prev_intra4x4_pred_mode_flag`/
+`rem_intra4x4_pred_mode`, read 16 times per `Intra4x4` macroblock, whose
+specific predicted-mode values were never cross-checked against a
+reference — only their table/formula/loop structure was verified in
+isolation).
+
+**Nothing from prior rounds is reopened.** The CBP neighbour-derivation
+fix, the bypass-path clearance, and `decode_decision`'s own round-trip
+clearance all stand independently — this bisect narrows the search
+further within what those rounds left open, it does not contradict any
+of them.
+
+**Handoff, in order of cost:**
+
+1. Cross-check `prev_intra4x4_pred_mode_flag`/`rem_intra4x4_pred_mode`'s
+   actual decoded *values* for addresses 0-4 against a real reference.
+   `ffmpeg -debug mb_type` doesn't expose per-4x4-block prediction
+   modes; check whether a different `-debug` flag does (confirm what it
+   emits before trusting it, the same discipline already applied to
+   `dct_coeff` and `mb_type`), or whether extracting predicted intra
+   modes from a JM reference build is more direct.
+2. Alternatively, apply the same forced-branch bisection technique one
+   level deeper: temporarily force each of `prev_intra4x4_pred_mode_flag`'s
+   16 reads (per macroblock, for addresses 0-4) to a fixed value in turn
+   and see which one, when overridden, moves the divergence — the same
+   "correct one variable, watch whether downstream repairs itself"
+   method that just localized the fault to addresses 0-4 can localize it
+   further within them.
+3. Residual decode for these specific macroblocks (`cbp_luma=0b1111`,
+   heavy load, all four 8x8 quadrants coded) has had its context tables
+   and `ctxIdxInc` formulas checked in isolation but never against this
+   exact real coefficient sequence — the standing "build a real
+   per-coefficient reference" item from several rounds ago still applies
+   here specifically.
+
+Gates: `cargo clippy -p vaco-codec-h264 --all-targets` clean, `cargo test
+-p vaco-codec-h264` unchanged (no functional code was committed this
+round — the bisection experiment was temporary, uncommitted
+instrumentation; only `mb.rs`'s module doc changed), `patent-gate` still
+"0 of 2", `provenance-check` shows the same 8 pre-existing failures,
+none mine. `vaco-codec-cabac` and its fuzz target re-confirmed untouched.
+#418 stays open; #419 not reopened.
