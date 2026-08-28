@@ -189,3 +189,17 @@ name = "areverse"
 long_name = "Reverse an audio clip"
 ctor = "vaco_filter_mm::reverse::audio::DESC"
 media = "audio"
+
+[[component]]
+kind = "filter"
+name = "segment"
+long_name = "Split single input stream into multiple video streams"
+ctor = "vaco_filter_mm::segment::video::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "asegment"
+long_name = "Split single input stream into multiple audio streams"
+ctor = "vaco_filter_mm::segment::audio::DESC"
+media = "audio"

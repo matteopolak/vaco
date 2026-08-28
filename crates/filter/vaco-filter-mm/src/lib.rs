@@ -65,6 +65,7 @@ pub mod nullsink;
 pub mod nullsrc;
 pub mod passthrough;
 pub mod reverse;
+pub mod segment;
 pub mod select;
 pub mod setpts;
 pub mod settb;
