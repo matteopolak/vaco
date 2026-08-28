@@ -1023,7 +1023,7 @@ there are external contributors, because relicensing later requires every copyri
 | ✅ It DOES | ❌ It does NOT |
 |---|---|
 | Bind **our contributors**: if a contributor's employer holds a patent reading on their contribution, they cannot later assert it against our users | Grant anything from **third parties**. Dolby, Via LA, Access Advance, Sisvel are not contributors and are wholly unaffected. |
-| Give downstream users an **express** patent licence rather than relying on an implied one. MIT grants copyright rights and says **nothing** about patents; whether it carries an implied patent licence is unsettled. | Do anything about **codec-essential patents**, which is 100% of our actual patent exposure (§2) |
+| Give downstream users an **express** patent licence rather than relying on an implied one. MIT grants copyright rights and says **nothing** about patents; whether it carries an implied patent licence is unsettled. | Do anything about **codec-essential patents**, which was 100% of our actual patent exposure when this was written — **no longer true, see the note below** (§2) |
 | Provide **defensive termination** — a patent aggressor who sues over our work loses their own licence to it. A modest but real deterrent. | Protect us from a contributor who *isn't* the patent holder (e.g. an employee contributing without authority) |
 | Include an explicit **NOTICE** and trademark-disclaimer regime (§4, §6) | Substitute for a CLA if we ever need broader assurances |
 
@@ -1482,3 +1482,32 @@ Debian–Mozilla dispute <https://en.wikipedia.org/wiki/Debian%E2%80%93Mozilla_t
 Rust API Guidelines on licensing <https://rust-lang.github.io/api-guidelines/necessities.html>
 
 **Crate licences:** queried from the crates.io API, 2026-08-21.
+
+
+## Amendment, 2026-08-28: codec-essential patents are no longer our only exposure
+
+The claim above — that codec-essential patents are 100% of our patent
+exposure — was accurate when written and is not accurate now.
+
+The VSF RIST specifications carry explicit IPR notices covering essentially
+all of their substantive sections: **TR-06-1:2020** (Simple Profile) over §4
+and §5.x, and **TR-06-2:2022** (Main Profile) over its tunnelling and
+encryption sections. The holder, Video-Flow Ltd, has assured VSF it will
+license any implementer, member or non-member, who asks.
+
+**A RAND commitment is not the absence of encumbrance.** "Will license to
+anyone who asks" is a precondition, and D4 exists to keep preconditions out of
+a build we distribute by default. A *transport protocol* is therefore now in
+the same category the register reserved for codecs.
+
+The mechanism already supports this: `xtask/src/registry.rs` reads
+`encumbered` as a plain boolean off any component fragment, with no
+codec-specific restriction. Every existing entry is a codec only because
+nothing else had needed the flag yet.
+
+Practical consequence: `vaco-protocol-rist` is not in the published build
+today — it has no component fragment and nothing links it — so nothing is
+shipped either way. **The moment it is registered it must carry
+`encumbered = true` behind `patent-encumbered-rist`, `default = false`.**
+The risk is asymmetric: wrongly gating costs an opt-in flag, wrongly not
+gating ships encumbered code.
