@@ -54,12 +54,14 @@ vaco-codec-golomb = { path = "../crates/signal/vaco-codec-golomb", optional = tr
 vaco-codec-image-simple = { path = "../crates/codec/vaco-codec-image-simple", optional = true }
 vaco-codec-jpeg = { path = "../crates/codec/vaco-codec-jpeg", optional = true }
 vaco-codec-mpegaudio = { path = "../crates/codec/vaco-codec-mpegaudio", optional = true }
+vaco-codec-msac = { path = "../crates/signal/vaco-codec-msac", optional = true }
 vaco-codec-pnm = { path = "../crates/codec/vaco-codec-pnm", optional = true }
 vaco-codec-qoi = { path = "../crates/codec/vaco-codec-qoi", optional = true }
 vaco-codec-subtitle-bitmap = { path = "../crates/codec/vaco-codec-subtitle-bitmap", optional = true }
 vaco-codec-subtitle-cc = { path = "../crates/codec/vaco-codec-subtitle-cc", optional = true }
 vaco-codec-subtitle-teletext = { path = "../crates/codec/vaco-codec-subtitle-teletext", optional = true }
 vaco-codec-subtitle-text = { path = "../crates/codec/vaco-codec-subtitle-text", optional = true }
+vaco-codec-vp8 = { path = "../crates/codec/vaco-codec-vp8", optional = true }
 vaco-color = { path = "../crates/model/vaco-color", optional = true }
 vaco-conformance = { path = "../crates/tool/vaco-conformance", optional = true }
 vaco-core = { path = "../crates/core/vaco-core", optional = true }
@@ -192,12 +194,14 @@ default = [
     "codec-image-simple",
     "codec-jpeg",
     "codec-mpegaudio",
+    "codec-msac",
     "codec-pnm",
     "codec-qoi",
     "codec-subtitle-bitmap",
     "codec-subtitle-cc",
     "codec-subtitle-teletext",
     "codec-subtitle-text",
+    "codec-vp8",
     "color",
     "conformance",
     "core",
@@ -322,12 +326,14 @@ codec-golomb = ["dep:vaco-bitstream", "dep:vaco-codec-golomb", "dep:vaco-limits"
 codec-image-simple = ["dep:vaco-codec-image-simple", "dep:vaco-limits"]
 codec-jpeg = ["dep:vaco-codec-jpeg", "dep:vaco-limits"]
 codec-mpegaudio = ["dep:vaco-codec-core", "dep:vaco-codec-mpegaudio", "dep:vaco-frame", "dep:vaco-limits", "dep:vaco-packet"]
+codec-msac = ["dep:vaco-codec-msac"]
 codec-pnm = ["dep:vaco-codec-pnm", "dep:vaco-limits"]
 codec-qoi = ["dep:vaco-codec-qoi", "dep:vaco-limits"]
 codec-subtitle-bitmap = ["dep:vaco-codec-subtitle-bitmap", "dep:vaco-format-subtitle-bitmap", "dep:vaco-limits", "dep:vaco-subtitle-bitmap"]
 codec-subtitle-cc = ["dep:vaco-codec-subtitle-cc"]
 codec-subtitle-teletext = ["dep:vaco-codec-subtitle-teletext"]
 codec-subtitle-text = ["dep:vaco-codec-subtitle-text"]
+codec-vp8 = ["dep:vaco-codec-core", "dep:vaco-codec-vp8", "dep:vaco-limits", "dep:vaco-packet"]
 color = ["dep:vaco-color"]
 conformance = ["dep:vaco-conformance"]
 core = ["dep:vaco-core"]
@@ -1322,6 +1328,14 @@ bench = false
 required-features = ["format-mpjpeg"]
 
 [[bin]]
+name = "msac_bool_decoders"
+path = "fuzz_targets/msac_bool_decoders.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-msac"]
+
+[[bin]]
 name = "mux_stream_concat_script"
 path = "fuzz_targets/mux_stream_concat_script.rs"
 test = false
@@ -1840,3 +1854,11 @@ test = false
 doc = false
 bench = false
 required-features = ["protocol-tls"]
+
+[[bin]]
+name = "vp8_decode"
+path = "fuzz_targets/vp8_decode.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-vp8"]
