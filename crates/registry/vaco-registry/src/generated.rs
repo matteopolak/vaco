@@ -3468,6 +3468,42 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "codec-h263")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "h261",
+        long_name: Some("H.261"),
+        krate: "vaco-codec-h263",
+        feature: Some("codec-h263"),
+        media: Some("video"),
+        codec: Some("h261"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-h263")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "h263",
+        long_name: Some("H.263 / H.263-1996, H.263+ / H.263-1998 / H.263 version 2"),
+        krate: "vaco-codec-h263",
+        feature: Some("codec-h263"),
+        media: Some("video"),
+        codec: Some("h263"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "patent-encumbered-h264-decode")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "h264",
+        long_name: Some("H.264 / AVC / MPEG-4 Part 10"),
+        krate: "vaco-codec-h264",
+        feature: Some("patent-encumbered-h264-decode"),
+        media: Some("video"),
+        codec: Some("h264"),
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "codec-jpeg")]
     crate::Component {
         kind: crate::Kind::Decoder,
@@ -7936,6 +7972,8 @@ pub static COMPONENTS: &[crate::Component] = &[
 pub static ENCUMBERED_ENABLED: &[&str] = &[
     #[cfg(feature = "patent-encumbered-aac-decode")]
     "aac",
+    #[cfg(feature = "patent-encumbered-h264-decode")]
+    "h264",
 ];
 
 /// Every patent-encumbered component this tree knows about, enabled or not.
@@ -7943,7 +7981,7 @@ pub static ENCUMBERED_ENABLED: &[&str] = &[
 /// The denominator to [`ENCUMBERED_ENABLED`]'s numerator: a gate that only saw
 /// the enabled list could not tell "nothing is encumbered" from "the table is
 /// broken and reports nothing".
-pub static ENCUMBERED_ALL: &[&str] = &["aac"];
+pub static ENCUMBERED_ALL: &[&str] = &["aac", "h264"];
 
 /// Descriptors of every enabled demuxer implementation.
 pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
@@ -8514,6 +8552,12 @@ pub static DECODERS: &[&::vaco_codec_core::DecoderDesc] = &[
     &::vaco_codec_subtitle_bitmap::decoder::DVBSUB_DECODER,
     #[cfg(feature = "codec-subtitle-bitmap")]
     &::vaco_codec_subtitle_bitmap::decoder::DVDSUB_DECODER,
+    #[cfg(feature = "codec-h263")]
+    &::vaco_codec_h263::DECODER_H261,
+    #[cfg(feature = "codec-h263")]
+    &::vaco_codec_h263::DECODER_H263,
+    #[cfg(feature = "patent-encumbered-h264-decode")]
+    &::vaco_codec_h264::DECODER_H264,
     #[cfg(feature = "codec-jpeg")]
     &::vaco_codec_jpeg::JPEG_DECODER,
     #[cfg(feature = "codec-mpegaudio")]

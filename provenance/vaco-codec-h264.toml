@@ -1,0 +1,42 @@
+[[table]]
+name   = "COEFF_TOKEN_NC0"
+file   = "crates/codec/vaco-codec-h264/src/cavlc_tables.rs"
+source = "itu-t-h264-202108"
+clause = "Table 9-5, coeff_token, column 0 <= nC < 2"
+method = "transcribed"
+
+[[table]]
+name   = "COEFF_TOKEN_NC2"
+file   = "crates/codec/vaco-codec-h264/src/cavlc_tables.rs"
+source = "itu-t-h264-202108"
+clause = "Table 9-5, coeff_token, column 2 <= nC < 4"
+method = "transcribed"
+
+[[table]]
+name   = "COEFF_TOKEN_NC4"
+file   = "crates/codec/vaco-codec-h264/src/cavlc_tables.rs"
+source = "itu-t-h264-202108"
+clause = "Table 9-5, coeff_token, column 4 <= nC < 8"
+method = "transcribed"
+
+# COEFF_TOKEN_CHROMA_DC_420/422 (14 and 30 elements), TOTAL_ZEROS_4X4's 15
+# sub-arrays (16 elements at most each), TOTAL_ZEROS_CHROMA_DC_420/422 and
+# RUN_BEFORE are all below this project's 32-element provenance threshold
+# individually, so they carry no row of their own here — same convention
+# vaco-codec-jpeg.toml documents for HUFFVAL's twelve-entry arrays.
+#
+# All of Table 9-5/9-7/9-8/9-9/9-10's transcriptions in this crate carry the
+# same honest caveat `cavlc_tables.rs`'s own module doc states at length:
+# an exhaustive pairwise prefix-conflict self-consistency check (this
+# crate's own `tests::every_coeff_token_table_is_prefix_free_...` and
+# `tests::run_before_tables_are_prefix_free`) found and excluded several
+# TotalCoeff rows that were not mutually prefix-free — see
+# `crates/codec/vaco-codec-h264/src/cavlc.rs`'s `decode_coeff_token`/
+# `decode_total_zeros` for exactly which TotalCoeff values are excluded from
+# each table and why. The self-consistency check that catches a pairwise
+# conflict cannot catch every possible transcription error (an individual
+# entry's wrong length with no colliding neighbour survives it, as today's
+# MPEG-2 CODED_BLOCK_PATTERN finding demonstrated), so treat every table in
+# this file as provisional pending an independent second-source check,
+# exactly as this project already treats Teletext's Table 36 national
+# subsets.

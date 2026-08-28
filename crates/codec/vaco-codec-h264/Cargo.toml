@@ -1,0 +1,29 @@
+[package]
+name = "vaco-codec-h264"
+description = "H.264/AVC entropy decoding (patent-encumbered-h264-decode)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+vaco-core = { path = "../../core/vaco-core" }
+vaco-bitstream = { path = "../../core/vaco-bitstream" }
+vaco-limits = { path = "../../core/vaco-limits" }
+vaco-codec-core = { path = "../../signal/vaco-codec-core" }
+vaco-codec-cabac = { path = "../../signal/vaco-codec-cabac" }
+vaco-codec-golomb = { path = "../../signal/vaco-codec-golomb" }
+vaco-frame = { path = "../../model/vaco-frame" }
+vaco-packet = { path = "../../model/vaco-packet" }
+vaco-parse-h264 = { path = "../vaco-parse-h264" }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.vaco]
+layer = 5

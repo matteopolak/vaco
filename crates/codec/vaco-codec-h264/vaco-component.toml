@@ -1,0 +1,29 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# The second `encumbered = true` component in the tree (D4/D4.1), following
+# `vaco-codec-aac`'s precedent exactly: H.264 decode is legally RED (the
+# MPEG LA / Access Advance AVC pool), the pool charges per decoder/encoder
+# unit, and remuxing/parsing (`vaco-parse-h264`) stays default and is
+# unaffected. D4.1 requires `default = false` on any `encumbered = true`
+# row — `gen-registry` refuses the opposite combination outright — so both
+# are set here together, and the feature name matches epic #51's own title:
+# `patent-encumbered-h264-decode`.
+#
+# Registered even though `vaco-codec-h264` does not yet reconstruct a
+# single sample: T3-01d/#417 (CAVLC) and T3-01e/#418 (CABAC) land the
+# residual-block entropy decode only. `H264Decoder::send_packet` resolves a
+# slice's entropy mode and then returns `Error::Unsupported` for the
+# macroblock layer (#419 onward) that is not implemented yet — never
+# fabricated pixels, mirroring how this workspace already treats
+# `vaco-codec-aac` and `vaco-codec-mpegaudio`'s MPEG-2.5 gate.
+
+[[component]]
+kind      = "decoder"
+name      = "h264"
+long_name = "H.264 / AVC / MPEG-4 Part 10"
+feature   = "patent-encumbered-h264-decode"
+default   = false
+encumbered = true
+ctor      = "vaco_codec_h264::DECODER_H264"
+media     = "video"
+codec     = "h264"
