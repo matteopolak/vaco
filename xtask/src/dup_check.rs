@@ -80,7 +80,11 @@ const DISTINCT: &[(&str, &str)] = &[
          decode-time record with persistent state fields (`segmentation`, \
          `lf_deltas`) threaded across frames. vaco-parse-av1: AV1's \
          uncompressed_header() syntax record, a plain parse result with no \
-         cross-frame state of its own. Different bitstream, different shape.",
+         cross-frame state of its own. vaco-codec-vp9: the VP9 Bitstream & \
+         Decoding Process Specification's own uncompressed_header() plus \
+         the compressed header's forward-updated entropy tables — a third, \
+         again independently-shaped, bitstream's own header record. Three \
+         different bitstreams, three different shapes.",
     ),
     (
         "ImageDecoder",
@@ -255,6 +259,36 @@ const DISTINCT: &[(&str, &str)] = &[
         "Color",
         "vaco-codec-subtitle-teletext: one of Teletext's eight fixed CLUT-0 \
          colours. vaco-codec-subtitle-cc: a closed-caption colour.",
+    ),
+    (
+        "ColorConfig",
+        "vaco-codec-vp9: VP9's §6.2.2 color_config() — bit depth, color \
+         space, range, and chroma subsampling only. vaco-parse-av1: AV1's \
+         sequence_header_obu() color_config(), a superset shape adding \
+         H.273 color primaries/transfer/matrix and chroma sample position \
+         that VP9's syntax has no room for. Different bitstream, different \
+         shape.",
+    ),
+    (
+        "EntropyContext",
+        "vaco-codec-vp8: RFC 6386 §13's coefficient/motion-vector/mode \
+         probability tables (`coeff_probs`, `mv_probs`, `ymode_prob`, \
+         `uv_mode_prob`), reset and forward-updated per VP8's own syntax. \
+         vaco-codec-vp9: the VP9 spec's independently-shaped probability \
+         tables (`coef_probs`, `skip_prob`, `tx_probs`) reset by \
+         setup_past_independence() and forward-updated by VP9's own \
+         compressed header — a different bitstream's own probability model, \
+         not a shared concept.",
+    ),
+    (
+        "Segmentation",
+        "vaco-codec-vp8: RFC 6386 §9.3/§10's per-macroblock segmentation \
+         (`quant_idx`/`lf_level` deltas or absolutes, keyed by the polarity \
+         documented on `absolute`). vaco-codec-vp9: the VP9 spec's \
+         independently-shaped §6.2.11 segmentation_params() (its own \
+         feature-bit/feature-data layout, `SEG_LVL_*` constants, and \
+         persistence-across-frames rules) — a different bitstream's own \
+         segmentation syntax, not a shared concept.",
     ),
     (
         "Packet",

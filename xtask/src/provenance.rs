@@ -317,7 +317,8 @@ fn large_tables(src: &Path, root: &Path) -> Vec<(String, String, usize)> {
             .unwrap_or(&f)
             .to_string_lossy()
             .into_owned();
-        for (name, count) in scan(&text) {
+        let dir = f.parent().unwrap_or(src);
+        for (name, count) in scan(&text, dir) {
             if count >= TABLE_THRESHOLD {
                 out.push((rel.clone(), name, count));
             }
@@ -340,7 +341,7 @@ fn large_tables(src: &Path, root: &Path) -> Vec<(String, String, usize)> {
 /// the largest table in the repository, `vaco-pixfmt`'s 267 descriptors, which
 /// the gate reported as absent while cheerfully passing on the rest. Everything
 /// this scanner matches on is ASCII, so bytes are the right unit throughout.
-fn scan(text: &str) -> Vec<(String, usize)> {
+fn scan(text: &str, dir: &Path) -> Vec<(String, usize)> {
     let b = text.as_bytes();
     let mut out = Vec::new();
     let mut i = 0usize;
@@ -378,7 +379,7 @@ fn scan(text: &str) -> Vec<(String, usize)> {
             && (i == 0
                 || b.get(i - 1)
                     .is_some_and(|p| !p.is_ascii_alphanumeric() && *p != b'_'))
-            && let Some((name, count)) = item(rest)
+            && let Some((name, count)) = item(rest, dir)
         {
             out.push((name, count));
         }
@@ -388,7 +389,7 @@ fn scan(text: &str) -> Vec<(String, usize)> {
 }
 
 /// Parse one `static NAME: [T; N] = [ … ];` header, returning (name, elements).
-fn item(rest: &str) -> Option<(String, usize)> {
+fn item(rest: &str, dir: &Path) -> Option<(String, usize)> {
     let after_kw = rest.split_once(' ')?.1;
     let after_kw = after_kw.trim_start_matches("mut ").trim_start();
     let (name, tail) = after_kw.split_once(':')?;
@@ -406,7 +407,26 @@ fn item(rest: &str) -> Option<(String, usize)> {
     }
     let eq = tail.find('=')?;
     let init = tail.get(eq + 1..)?;
-    Some((name.to_owned(), elements(init)?))
+    Some((name.to_owned(), elements(init, dir)?))
+}
+
+/// `init` trimmed of leading whitespace is `include!("relative/path")`:
+/// return the quoted path, unresolved.
+///
+/// A table split into its own `tables/foo.in` file (done, in this
+/// workspace, so a large table's data can be independently extracted and
+/// shape-validated from a spec PDF before being trusted) is textually
+/// invisible to [`elements`]'s own bracket-counting scan — the `.rs` file
+/// only ever contains the `include!(...)` macro call, never the array
+/// literal itself. Resolving the include and counting the *included*
+/// file's elements instead is what keeps this gate meaningful for a table
+/// declared that way, rather than silently reporting 1 (one string
+/// literal argument) for every such table forever.
+fn include_path(init: &str) -> Option<&str> {
+    let rest = init.trim_start().strip_prefix("include!(")?;
+    let rest = rest.trim_start().strip_prefix('"')?;
+    let (path, _) = rest.split_once('"')?;
+    Some(path)
 }
 
 /// Count commas at depth 1 of the first bracketed group in `init`.
@@ -417,7 +437,11 @@ fn item(rest: &str) -> Option<(String, usize)> {
 /// the array early, returns a number below the threshold, and drops the largest
 /// table in the repository **silently**. A gate whose failure mode is a quiet
 /// false negative is worse than no gate, so this one is written to lex.
-fn elements(init: &str) -> Option<usize> {
+fn elements(init: &str, dir: &Path) -> Option<usize> {
+    if let Some(path) = include_path(init) {
+        let text = std::fs::read_to_string(dir.join(path)).ok()?;
+        return elements(text.trim(), dir);
+    }
     let mut depth = 0i32;
     let mut n = 0usize;
     // Content seen since the last separator. Rust arrays almost always carry a
@@ -765,38 +789,53 @@ fn all_source_ids(root: &Path) -> Result<Set<String>, String> {
 mod tests {
     use super::*;
 
+    fn here() -> &'static Path {
+        Path::new(".")
+    }
+
     #[test]
     fn counts_a_slice_literal() {
-        let v = scan("pub static T: &[u8] = &[1, 2, 3];");
+        let v = scan("pub static T: &[u8] = &[1, 2, 3];", here());
         assert_eq!(v, [("T".to_owned(), 3)]);
     }
 
     #[test]
     fn ignores_items_inside_a_test_module() {
         let src = "#[cfg(test)]\nmod tests {\n    const BIG: [u8; 3] = [1, 2, 3];\n}\n";
-        assert!(scan(src).is_empty(), "{:?}", scan(src));
+        assert!(scan(src, here()).is_empty(), "{:?}", scan(src, here()));
     }
 
     #[test]
     fn ignores_a_const_generic_parameter() {
-        assert!(scan("fn f<const N: usize>() {}").is_empty());
+        assert!(scan("fn f<const N: usize>() {}", here()).is_empty());
     }
 
     #[test]
     fn a_bracket_inside_a_comment_does_not_close_the_array() {
         let src = "const T: [u8; 3] = [\n 1, // see [1]\n 2,\n 3,\n];";
-        assert_eq!(scan(src), [("T".to_owned(), 3)]);
+        assert_eq!(scan(src, here()), [("T".to_owned(), 3)]);
     }
 
     #[test]
     fn a_bracket_inside_a_string_does_not_close_the_array() {
         let src = "const T: [&str; 2] = [\"a]b\", \"c\"];";
-        assert_eq!(scan(src), [("T".to_owned(), 2)]);
+        assert_eq!(scan(src, here()), [("T".to_owned(), 2)]);
     }
 
     #[test]
     fn a_nested_array_counts_rows_not_cells() {
-        let v = scan("const M: [[u8; 2]; 3] = [[1, 2], [3, 4], [5, 6]];");
+        let v = scan("const M: [[u8; 2]; 3] = [[1, 2], [3, 4], [5, 6]];", here());
         assert_eq!(v, [("M".to_owned(), 3)]);
+    }
+
+    #[test]
+    fn resolves_an_include_relative_to_the_including_file() {
+        let dir = std::env::temp_dir().join(format!("provenance-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("data.in"), "[1, 2, 3, 4]").unwrap();
+        let src = "pub const T: [u8; 4] = include!(\"data.in\");";
+        let v = scan(src, &dir);
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(v, [("T".to_owned(), 4)]);
     }
 }
