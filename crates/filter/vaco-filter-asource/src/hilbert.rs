@@ -24,9 +24,15 @@
 //! the shared window implementation and its own test against these same
 //! numbers.
 //!
-//! **Exact** for the default `win_func=blackman`; the other 20 `win_func`
-//! values fall back to Blackman here rather than being separately measured
-//! — see `window.rs`'s doc for which.
+//! **Exact** for the default `win_func=blackman`. `window.rs` implements
+//! six of the reference's 21 `win_func` values with their own real
+//! formula (`rect`, `bartlett`, `hann`, `hamming`, `blackman`, `sine`);
+//! the other fifteen used to be silently computed as one of those six
+//! (`welch` as `bartlett`, `bhann` as `hann`, the remaining thirteen as
+//! `blackman`) with no error at all — an accepted-but-wrong value with no
+//! signal to the caller, worse than refusing it. [`create`] now rejects
+//! those fifteen explicitly, by name, rather than substituting: see
+//! `window.rs`'s own doc for the exact list.
 
 use vaco_core::{MediaType, Rational, Result, Timestamp};
 use vaco_filter_core::adapt::{SourceFilter, Sourced};
@@ -159,6 +165,7 @@ impl SourceFilter for Source {
 
 pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, String> {
     let opts = Opts::parse(req.args)?;
+    window::ensure_implemented("hilbert", opts.win_func)?;
     let sample_rate = u32::try_from(opts.sample_rate.max(1)).unwrap_or(44100);
     let source = Source {
         n_taps: usize::try_from(opts.taps.max(11)).unwrap_or(22051),
@@ -184,7 +191,7 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
     clippy::float_cmp,
     reason = "the `ideal == 0.0` branch for an even offset is exact integer-multiplication-by-zero, not an accumulated float result"
 )]
-#[allow(clippy::unwrap_used, reason = "test code")]
+#[allow(clippy::unwrap_used, clippy::panic, reason = "test code")]
 mod tests {
     use super::*;
 
@@ -242,5 +249,48 @@ mod tests {
         assert_eq!(opts.win_func, WinFunc::Hann);
         let opts = Opts::parse(Some("w=hanning")).unwrap();
         assert_eq!(opts.win_func, WinFunc::Hann);
+    }
+
+    /// `win_func` values this crate has no real formula for used to parse
+    /// fine and then silently run as if `blackman` (`welch` as `bartlett`,
+    /// `bhann` as `hann`, the rest as `blackman`) — accepted, wrong, and
+    /// undetectable short of a differential comparison. `create` now
+    /// rejects them explicitly instead.
+    #[test]
+    fn unimplemented_win_func_values_are_a_named_error_not_a_silent_substitution() {
+        for name in [
+            "welch", "bhann", "flattop", "bharris", "bnuttall", "nuttall", "lanczos", "gauss",
+            "tukey", "dolph", "cauchy", "parzen", "poisson", "bohman", "kaiser",
+        ] {
+            let req = Instantiate {
+                name: "hilbert",
+                instance: "hilbert",
+                args: Some(&format!("win_func={name}")),
+                arguments: &[],
+            };
+            match create(&req) {
+                Ok(_) => panic!("win_func={name} should be rejected, not silently accepted"),
+                Err(err) => assert!(
+                    err.contains("hilbert") && err.contains("not implemented"),
+                    "win_func={name}: unexpected error text: {err}"
+                ),
+            }
+        }
+    }
+
+    /// The six formulas this module actually implements still create fine
+    /// — the fix rejects the unimplemented values, not every non-default
+    /// one.
+    #[test]
+    fn implemented_win_func_values_still_create() {
+        for name in ["rect", "bartlett", "hann", "hamming", "blackman", "sine"] {
+            let req = Instantiate {
+                name: "hilbert",
+                instance: "hilbert",
+                args: Some(&format!("win_func={name}")),
+                arguments: &[],
+            };
+            assert!(create(&req).is_ok(), "win_func={name} should still create");
+        }
     }
 }

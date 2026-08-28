@@ -35,11 +35,17 @@ have their own), all for the identical reason: none of them reproduce the
 reference's own RNG bit stream, so reproducibility rather than
 bit-identity is the contract.
 
-`window.rs` holds a shared `WinFunc` enum and five closed-form window
-implementations (`rect`, `bartlett`, `hann`, `hamming`, `blackman`) used by
-`hilbert`. The other sixteen documented `win_func` values fall back to
-`blackman`. `sinc` and `afdelaysrc` do **not** use this module — see their
-own entries below for why.
+`window.rs` holds a shared `WinFunc` enum and six closed-form window
+implementations (`rect`, `bartlett`, `hann`, `hamming`, `blackman`, `sine`)
+used by `hilbert`. `sinc` and `afdelaysrc` do **not** use this module —
+measured directly, neither exposes a `win_func` option at all today,
+despite the module's own header once implying otherwise. The other
+fifteen documented `win_func` values (`welch`, `bhann`, `flattop`,
+`bharris`, `bnuttall`, `nuttall`, `lanczos`, `gauss`, `tukey`, `dolph`,
+`cauchy`, `parzen`, `poisson`, `bohman`, `kaiser`) used to be silently
+computed as one of the six real formulas (accepted, wrong, no error);
+`hilbert::create` now rejects each by name instead — see
+`window.rs::ensure_implemented`'s own doc.
 
 `aevalsrc` reuses `vaco_expr` directly (the same expression engine every
 other filter's expression options go through), binding `t` (time in
@@ -54,7 +60,7 @@ seconds) and `n` (absolute sample index) — no second expression parser.
 | `aevalsrc` | **Exact.** `t`/`n` variable bindings measured directly against the reference; evaluation goes through the same `vaco_expr` engine every other filter's expressions use, so its fidelity is inherited. One simplification: `ld`/`st` register state resets every sample rather than persisting across the stream. |
 | `afdelaysrc` | **Exact near the peak** (matched an unwindowed `sinc(n-delay)` to within 0.2% at the two peak taps of a measured `delay=2.5` kernel), **increasingly approximate away from it** (ratio drops to ~0.76 by the 6th tap, meaning the reference does apply *some* taper this crate does not reproduce). A first attempt used a Blackman window centred on the whole array and was wrong by more than an order of magnitude at the peak — falsified by the same data before being shipped. This crate's `taps=0` auto-length heuristic is its own choice, not the reference's (measured: `delay=0` gives 1 tap, `delay=2.5` gives 21 — no simple formula from two points was attempted). |
 | `sinc` | The Kaiser beta-from-attenuation formula is Kaiser's own published 1974 equations, exact. The windowed-sinc construction is textbook FIR design. **Not calibrated**: the reference's auto-taps formula (this crate uses its own fixed default) and its exact `phase` (linear/minimum-phase blend) handling — this crate always produces a linear-phase kernel. |
-| `hilbert` | **Exact** for the default `win_func=blackman`: the ideal-Hilbert-times-Blackman formula matches a measured `taps=11` reference kernel's zero/antisymmetric structure exactly, and its two non-trivial tap ratios to within manual-verification precision. The other 20 `win_func` values fall back to Blackman. |
+| `hilbert` | **Exact** for the default `win_func=blackman`: the ideal-Hilbert-times-Blackman formula matches a measured `taps=11` reference kernel's zero/antisymmetric structure exactly, and its two non-trivial tap ratios to within manual-verification precision. `rect`/`bartlett`/`hann`/`hamming`/`sine` also run their own real formula. The other 15 documented `win_func` values are a named "not implemented" error (previously a silent substitution — see `window.rs`). |
 
 ## What is not implemented
 

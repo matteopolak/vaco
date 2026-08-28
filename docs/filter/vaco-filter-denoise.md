@@ -85,7 +85,10 @@ second transcription of the same formula:
   `[sorted[mode-1], sorted[8-mode]]` of the 8 neighbours — inspired by, but
   not a transcription of, AviSynth's `RemoveGrain` per-mode formulas (several
   of which weight by distance to the centre, which this does not model).
-  Modes `8..=24` are not distinguished and fall back to mode `7`'s clip.
+  Modes `8..=24` are real `RemoveGrain` mode numbers this crate has not
+  transcribed; `create` rejects them with a named error rather than
+  silently running mode `7`'s clip (a real accepted-value substitution
+  until this pass — see `removegrain.rs`'s own doc).
 * **`dctdnoiz`**/**`fftdnoiz`**: non-overlapping block tiling, no
   overlap-add (`overlap` is parsed, has no effect — visible as mild
   blockiness at high `sigma`, harmless to the stated oracles).

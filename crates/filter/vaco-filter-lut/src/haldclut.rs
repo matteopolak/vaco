@@ -20,11 +20,23 @@
 //!
 //! # `interp`, `clut`
 //!
-//! Same as [`crate::lut3d`]: nearest and trilinear only (`tetrahedral`,
-//! the reference's default, falls back to trilinear — documented gap,
-//! same reasoning). `clut=first` (process the CLUT only once) is parsed
-//! but not implemented: this filter re-decodes the second input's current
-//! frame on every event, i.e. always behaves like `clut=all`.
+//! Same as [`crate::lut3d`] — nearest and trilinear only — and the same
+//! fix applies: `interp=tetrahedral` (this crate's own declared default,
+//! matching the reference's), `pyramid` and `prism` used to silently run
+//! trilinear on every unconfigured call; `create` now rejects them by
+//! name instead (see `lut3d.rs`'s doc for the measured evidence this is a
+//! real, large divergence, not a rounding difference). Concretely: a bare
+//! `haldclut` now errors where it used to silently run trilinear — pass
+//! `interp=trilinear` (or `nearest`) explicitly to get a working filter
+//! today. `clut=first` (process the CLUT only once) has the same shape:
+//! parsed fine, but this filter always re-decodes the second input's
+//! current frame every event with no caching and no error, i.e. silently
+//! always behaves like `clut=all`. `create` now rejects `clut=first` too,
+//! rather than accepting a request it cannot honour — implementing the
+//! actual caching (state that survives across `on_event` calls,
+//! invalidated on... what, exactly, is itself an open question the
+//! reference's own docs don't answer) is real work this pass does not
+//! attempt.
 
 use vaco_core::{MediaType, Result};
 use vaco_filter_core::adapt::FrameOut;
@@ -230,9 +242,37 @@ impl FrameSyncFilter for HaldClut {
     }
 }
 
+/// # Errors
+/// A named error for `tetrahedral`/`pyramid`/`prism` (`2..=4`) — see the
+/// module doc for why these are rejected rather than silently run as
+/// `trilinear`.
+fn interp_from_opt(v: i32) -> std::result::Result<Interp, String> {
+    match v {
+        0 => Ok(Interp::Nearest),
+        1 => Ok(Interp::Trilinear),
+        2 => Err(
+            "haldclut: interp=tetrahedral is not implemented (this is the reference's own \
+             default; pass interp=trilinear or interp=nearest explicitly — see this module's \
+             doc)"
+                .to_owned(),
+        ),
+        3 => Err("haldclut: interp=pyramid is not implemented — see this module's doc".to_owned()),
+        4 => Err("haldclut: interp=prism is not implemented — see this module's doc".to_owned()),
+        other => Err(format!("haldclut: interp={other} is out of range (0..=4)")),
+    }
+}
+
 pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, String> {
     let opts = Opts::parse(req.args)?;
-    let interp = if opts.interp == 0 { Interp::Nearest } else { Interp::Trilinear };
+    let interp = interp_from_opt(opts.interp)?;
+    if opts.clut == 0 {
+        return Err(
+            "haldclut: clut=first is not implemented (this filter always re-decodes the CLUT \
+             input every event, i.e. always behaves like clut=all; pass clut=all explicitly \
+             — see this module's doc)"
+                .to_owned(),
+        );
+    }
     let eof_action = vaco_filter_framesync::EofAction::from_name(&opts.eof_action)
         .ok_or_else(|| format!("haldclut: bad `eof_action` `{}`", opts.eof_action))?;
     let ts_sync = vaco_filter_framesync::TsSyncMode::from_name(&opts.ts_sync_mode)
@@ -350,5 +390,58 @@ mod tests {
             let opts = Opts::parse(Some(&format!("interp={name}"))).unwrap();
             assert_eq!(opts.interp, expected, "interp={name}");
         }
+    }
+
+    /// Same shape as `lut3d`'s equivalent test: `tetrahedral` (the
+    /// reference's own default), `pyramid` and `prism` used to silently
+    /// run `trilinear`. `interp_from_opt` now rejects each by name.
+    #[test]
+    fn unimplemented_interp_values_are_a_named_error_not_a_silent_substitution() {
+        for v in [2, 3, 4] {
+            let err = interp_from_opt(v).unwrap_err();
+            assert!(
+                err.contains("haldclut") && err.contains("not implemented"),
+                "interp={v}: unexpected error text: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn implemented_interp_values_still_create() {
+        assert_eq!(interp_from_opt(0), Ok(Interp::Nearest));
+        assert_eq!(interp_from_opt(1), Ok(Interp::Trilinear));
+    }
+
+    /// `clut=first` used to parse fine and silently behave like `clut=all`
+    /// (no caching implemented). `create` now rejects it explicitly.
+    /// `Opts::parse` reads `req.args` (the raw string) directly, so a
+    /// bare `args: Some(...)` -- no `arguments` slice needed -- exercises
+    /// the real `create` path.
+    #[test]
+    fn clut_first_is_a_named_error_not_a_silent_substitution() {
+        let req = Instantiate {
+            name: "haldclut",
+            instance: "haldclut",
+            args: Some("clut=first:interp=trilinear"),
+            arguments: &[],
+        };
+        let err = create(&req).unwrap_err();
+        assert!(
+            err.contains("haldclut")
+                && err.contains("clut=first")
+                && err.contains("not implemented"),
+            "unexpected error text: {err}"
+        );
+    }
+
+    #[test]
+    fn clut_all_still_creates() {
+        let req = Instantiate {
+            name: "haldclut",
+            instance: "haldclut",
+            args: Some("clut=all:interp=trilinear"),
+            arguments: &[],
+        };
+        assert!(create(&req).is_ok());
     }
 }

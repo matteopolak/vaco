@@ -8,9 +8,16 @@
 //! default, `destination`=1) and `eval` (`init`=0 default, `frame`=1). All
 //! four corner pairs are `vaco-expr` expressions, evaluated once at
 //! `configure` (this crate's `eval=init`-only precedent — see `swaprect`).
-//! `interpolation=cubic` falls back to bilinear (documented simplification:
-//! this crate has no bicubic kernel yet). `sense` is fully implemented (see
-//! below); this is the one option in this filter actually load-bearing for
+//! `interpolation=cubic` used to silently run bilinear (documented as a
+//! simplification: this crate has no bicubic kernel yet) — accepted,
+//! wrong, no error. Verified concretely: real `ffmpeg 8.1` produces
+//! genuinely different output for `interpolation=linear` vs. `cubic` on
+//! the same input (a byte-level `cmp` disagrees), so the reference does
+//! not itself collapse the two — this is a real, unimplemented value, not
+//! a reference-matching approximation. [`Filter::new`] now rejects
+//! `interpolation=cubic` with a named error instead of silently
+//! substituting bilinear. `sense` is fully implemented (see below); this
+//! is the one option in this filter actually load-bearing for
 //! correctness, not a simplification.
 //!
 //! # Measured: identity and `sense`'s two directions
@@ -163,6 +170,15 @@ pub(crate) struct Filter {
 
 impl Filter {
     pub(crate) fn new(opts: &Opts) -> std::result::Result<Self, String> {
+        // The reference offers `linear`(0)/`cubic`(1), no nearest-neighbour
+        // choice; this crate has no bicubic kernel, so `cubic` is rejected
+        // by name rather than silently run as `linear` -- see module doc.
+        if opts.interpolation == 1 {
+            return Err(
+                "perspective: interpolation=cubic is not implemented — see this module's doc"
+                    .to_owned(),
+            );
+        }
         let b = Bindings::new(VARS);
         let parse = |s: &str, name: &str| {
             Expr::parse(s, &b).map_err(|e| format!("perspective: bad `{name}` `{e}`"))
@@ -178,9 +194,6 @@ impl Filter {
                 parse(&opts.x3, "x3")?,
                 parse(&opts.y3, "y3")?,
             ],
-            // The reference offers `linear`/`cubic`, no nearest-neighbour
-            // choice; this crate has no bicubic kernel yet, so both map to
-            // bilinear (documented in the module doc).
             bilinear: true,
             destination_sense: opts.sense == 1,
             inverse: None,
@@ -359,5 +372,24 @@ mod tests {
         assert_eq!(opts.sense, 1);
         let opts = Opts::parse(Some("eval=frame")).unwrap();
         assert_eq!(opts.eval, 1);
+    }
+
+    /// `interpolation=cubic` used to silently run bilinear -- a real,
+    /// verified-against-the-reference divergence, not a rounding
+    /// difference. `Filter::new` now rejects it by name.
+    #[test]
+    fn cubic_interpolation_is_a_named_error_not_a_silent_substitution() {
+        let opts = Opts::parse(Some("interpolation=cubic")).unwrap();
+        let err = Filter::new(&opts).unwrap_err();
+        assert!(
+            err.contains("perspective") && err.contains("not implemented"),
+            "unexpected error text: {err}"
+        );
+    }
+
+    #[test]
+    fn linear_interpolation_still_creates() {
+        let opts = Opts::parse(Some("interpolation=linear")).unwrap();
+        assert!(Filter::new(&opts).is_ok());
     }
 }

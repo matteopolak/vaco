@@ -1,15 +1,29 @@
-//! Shared window functions for [`crate::hilbert`], [`crate::sinc`] and
-//! [`crate::afdelaysrc`]'s FIR taper.
+//! Shared window functions for [`crate::hilbert`]'s FIR taper.
 //!
-//! `ffmpeg -h filter=hilbert`/`sinc`/`afirsrc` all document the same
-//! 21-entry `win_func` enum. This module implements the five with a plain,
-//! textbook closed form (`rect`, `bartlett`, `hann`, `hamming`,
-//! `blackman` — `blackman` is the shared default) and falls back to
-//! `blackman` for the other sixteen (`welch`, `flattop`, `kaiser`, …)
-//! rather than leaving them as a parse error, since accepting an option the
-//! reference documents and silently under-serving it is a smaller failure
-//! than refusing it outright — see `docs/filter/vaco-filter-asource.md` for
-//! the full list of which `win_func` values fall back.
+//! `ffmpeg -h filter=hilbert` documents a 21-entry `win_func` enum shared
+//! with several reference filters this crate does not currently expose
+//! `win_func` on at all — measured directly: neither `sinc` nor
+//! `afdelaysrc`'s own `-h filter=…` output lists a `win_func` option
+//! today, despite this module's name suggesting otherwise; only
+//! `hilbert.rs` reads [`WinFunc`].
+//!
+//! This module implements six of the 21 with their own real, distinct
+//! closed form (`rect`, `bartlett`, `hann`, `hamming`, `blackman` — the
+//! shared default — and `sine`). The other fifteen (`welch`, `bhann`,
+//! `flattop`, `bharris`, `bnuttall`, `nuttall`, `lanczos`, `gauss`,
+//! `tukey`, `dolph`, `cauchy`, `parzen`, `poisson`, `bohman`, `kaiser`)
+//! used to be computed as one of those six regardless — `welch` ran
+//! `bartlett`'s triangular formula, `bhann` ran `hann`'s, and the
+//! remaining thirteen ran `blackman`'s — with no error at all: a value
+//! the reference documents, accepted, and silently under-served. That
+//! was reasoned as "a smaller failure than refusing it outright" when
+//! written, but a silent substitution is the worse failure in practice —
+//! it produces a plausible, wrong frame with no signal anything happened,
+//! discoverable only by a differential comparison nobody is running by
+//! hand. [`ensure_implemented`] is what [`crate::hilbert::create`] now
+//! calls instead: the six real formulas still run exactly as before, and
+//! every other named value is rejected explicitly, by name, before a
+//! `Source` is ever built.
 //!
 //! `hilbert.rs`'s doc comment independently confirms the `blackman`
 //! formula's constants against a measured reference impulse response, which
@@ -83,6 +97,29 @@ pub(crate) const WIN_FUNC_ALIASES: &[vaco_opts::ConstDesc] = &[vaco_opts::ConstD
     value: vaco_opts::ConstValue::Int(1),
     flags: vaco_opts::OptFlags::NONE,
 }];
+
+/// Rejects the fifteen `win_func` values this module does not have a real
+/// formula for, by name, instead of silently running one of the six it
+/// does — see the module doc.
+///
+/// # Errors
+/// A message naming the caller-facing filter, the option, and the exact
+/// value that was rejected — never a panic, and never the value that
+/// actually ran.
+pub(crate) fn ensure_implemented(filter: &str, func: WinFunc) -> Result<(), String> {
+    match func {
+        WinFunc::Rect
+        | WinFunc::Bartlett
+        | WinFunc::Hann
+        | WinFunc::Hamming
+        | WinFunc::Blackman
+        | WinFunc::Sine => Ok(()),
+        other => Err(format!(
+            "{filter}: win_func={other:?} is not implemented (only rect/bartlett/hann/hamming/\
+             blackman/sine have their own formula here; see window.rs's own doc for why)"
+        )),
+    }
+}
 
 /// The window value at tap `n` of `n_taps`, `n in 0..n_taps`.
 ///

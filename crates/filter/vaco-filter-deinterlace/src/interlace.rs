@@ -24,12 +24,14 @@
 //!   `(1*0+2*100+1*0)/4=50` at the centre), and an impulse at row 0 produces
 //!   `75` there alone (`(1*100 + 2*100 + 1*0)/4` with the edge clamped to a
 //!   repeat of row 0), not `50` (which a naive unclamped filter would give).
-//! - `lowpass=complex` is **not** byte-exact here: the same impulse-response
-//!   probe gave a centre weight that was not constant near the top of the
-//!   frame (`0.88` at row 2, `0.75` from row 4 onward, on the same 16-row
-//!   test), meaning it is not a simple space-invariant 3-tap kernel, and the
-//!   exact tap structure was not resolved in this pass. `complex` reuses
-//!   the `linear` kernel as a documented approximation — see the crate docs.
+//! - `lowpass=complex`'s own impulse-response probe gave a centre weight
+//!   that was not constant near the top of the frame (`0.88` at row 2,
+//!   `0.75` from row 4 onward, on the same 16-row test), meaning it is not
+//!   a simple space-invariant 3-tap kernel, and the exact tap structure
+//!   was not resolved in this pass — so the reference genuinely does not
+//!   collapse `complex` into `linear`, this is a real unimplemented value.
+//!   `complex` used to silently reuse the `linear` kernel with no error;
+//!   `create` now rejects it by name instead — see the crate docs.
 
 use vaco_core::{MediaType, Result};
 use vaco_filter_core::adapt::{FrameFilter, FrameOut, Simple};
@@ -54,8 +56,6 @@ pub const DESC: FilterDesc = FilterDesc {
 pub(crate) enum Lowpass {
     Off,
     Linear,
-    /// See the module doc: not byte-exact, falls back to [`Lowpass::Linear`].
-    ComplexApprox,
 }
 
 /// `ffmpeg -h filter=interlace`'s own named constants for
@@ -259,8 +259,17 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
     let opts = Opts::parse(req.args)?;
     let lowpass = match opts.lowpass {
         0 => Lowpass::Off,
-        2 => Lowpass::ComplexApprox,
-        _ => Lowpass::Linear,
+        1 => Lowpass::Linear,
+        2 => {
+            return Err(
+                "interlace: lowpass=complex is not implemented — see this module's doc".to_owned(),
+            );
+        }
+        other => {
+            return Err(format!(
+                "interlace: lowpass={other} is out of range (0..=2)"
+            ));
+        }
     };
     Ok(Instance {
         desc: DESC,
@@ -343,6 +352,39 @@ mod tests {
         for (name, expected) in [("off", 0), ("linear", 1), ("complex", 2)] {
             let opts = Opts::parse(Some(&format!("lowpass={name}"))).unwrap();
             assert_eq!(opts.lowpass, expected, "lowpass={name}");
+        }
+    }
+
+    /// `lowpass=complex` used to silently reuse the `linear` kernel --
+    /// this module's own impulse-response measurement shows the reference
+    /// does not do that (a non-constant centre weight, not a 3-tap
+    /// kernel), so it was a real, unimplemented value, not a reference-
+    /// matching approximation. `create` now rejects it by name.
+    #[test]
+    fn lowpass_complex_is_a_named_error_not_a_silent_substitution() {
+        let req = Instantiate {
+            name: "interlace",
+            instance: "interlace",
+            args: Some("lowpass=complex"),
+            arguments: &[],
+        };
+        let err = create(&req).unwrap_err();
+        assert!(
+            err.contains("interlace") && err.contains("not implemented"),
+            "unexpected error text: {err}"
+        );
+    }
+
+    #[test]
+    fn lowpass_off_and_linear_still_create() {
+        for name in ["off", "linear"] {
+            let req = Instantiate {
+                name: "interlace",
+                instance: "interlace",
+                args: Some(&format!("lowpass={name}")),
+                arguments: &[],
+            };
+            assert!(create(&req).is_ok(), "lowpass={name} should still create");
         }
     }
 }

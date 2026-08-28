@@ -29,17 +29,19 @@ impl FilterRegistry for DenoiseRegistry {
     }
 
     fn create(&self, req: &Instantiate<'_>) -> Result<Instance, String> {
-        Ok(match req.name {
-            "atadenoise" => crate::atadenoise::create(req),
-            "dctdnoiz" => crate::dctdnoiz::create(req),
-            "fftdnoiz" => crate::fftdnoiz::create(req),
-            "hqdn3d" => crate::hqdn3d::create(req),
-            "nlmeans" => crate::nlmeans::create(req),
-            "owdenoise" => crate::owdenoise::create(req),
+        match req.name {
+            "atadenoise" => Ok(crate::atadenoise::create(req)),
+            "dctdnoiz" => Ok(crate::dctdnoiz::create(req)),
+            "fftdnoiz" => Ok(crate::fftdnoiz::create(req)),
+            "hqdn3d" => Ok(crate::hqdn3d::create(req)),
+            "nlmeans" => Ok(crate::nlmeans::create(req)),
+            "owdenoise" => Ok(crate::owdenoise::create(req)),
+            // Fallible: `m0`..`m3` in `8..=24` are named-rejected rather
+            // than silently running mode 7's clip -- see removegrain.rs.
             "removegrain" => crate::removegrain::create(req),
-            "vaguedenoiser" => crate::vaguedenoiser::create(req),
-            other => return Err(format!("vaco-filter-denoise: no filter named `{other}`")),
-        })
+            "vaguedenoiser" => Ok(crate::vaguedenoiser::create(req)),
+            other => Err(format!("vaco-filter-denoise: no filter named `{other}`")),
+        }
     }
 }
 

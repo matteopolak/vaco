@@ -181,10 +181,11 @@ impl Lut1d {
 
 /// `ffmpeg -h filter=lut1d`'s own named constants for `interp`, confirmed
 /// directly -- note the non-sequential numbering (`cubic`=2, `cosine`=3).
-/// Only `nearest`/`linear` are actually distinguished by [`Interp::from_opt`]
-/// (a pre-existing, documented fallback, not touched here); this fixes
-/// parsing the other three names, which used to fail outright rather than
-/// silently falling back.
+/// Only `nearest`/`linear` are implemented; unlike `lut3d`/`haldclut` this
+/// crate's default (`linear`) is one of them, so only a caller who
+/// explicitly asks for `cubic`/`cosine`/`spline` is affected.
+/// [`Interp::from_opt`] rejects those three by name instead of silently
+/// running `linear`.
 const LUT1D_INTERP_CONSTS: &[vaco_opts::ConstDesc] = &[
     vaco_opts::ConstDesc {
         name: "nearest",
@@ -230,8 +231,19 @@ pub(crate) enum Interp {
 }
 
 impl Interp {
-    fn from_opt(v: i32) -> Self {
-        if v == 0 { Self::Nearest } else { Self::Linear }
+    /// # Errors
+    /// A named error for `cubic`/`cosine`/`spline` (`2..=4`) — see the
+    /// module doc for why these are rejected rather than silently run as
+    /// `linear`.
+    fn from_opt(v: i32) -> std::result::Result<Self, String> {
+        match v {
+            0 => Ok(Self::Nearest),
+            1 => Ok(Self::Linear),
+            2 => Err("lut1d: interp=cubic is not implemented — see this module's doc".to_owned()),
+            3 => Err("lut1d: interp=cosine is not implemented — see this module's doc".to_owned()),
+            4 => Err("lut1d: interp=spline is not implemented — see this module's doc".to_owned()),
+            other => Err(format!("lut1d: interp={other} is out of range (0..=4)")),
+        }
     }
 }
 
@@ -294,7 +306,7 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
     let text = std::fs::read_to_string(Path::new(&opts.file))
         .map_err(|e| format!("lut1d: could not read `{}`: {e}", opts.file))?;
     let table = Lut1d::parse(&text)?;
-    let interp = Interp::from_opt(opts.interp);
+    let interp = Interp::from_opt(opts.interp)?;
     let set = FormatSet::video_list(common::formats_where(|f| f.is_rgb() && sample::is_addressable(f)));
     Ok(Instance {
         desc: DESC,
@@ -397,5 +409,26 @@ mod tests {
             let opts = Opts::parse(Some(&format!("file=x.cube:interp={name}"))).unwrap();
             assert_eq!(opts.interp, expected, "interp={name}");
         }
+    }
+
+    /// `cubic`/`cosine`/`spline` used to silently run `linear` (the
+    /// crate's default, unlike `lut3d`, is already one of the two
+    /// implemented modes, so only an explicit non-default request is
+    /// affected). `Interp::from_opt` now rejects each by name.
+    #[test]
+    fn unimplemented_interp_values_are_a_named_error_not_a_silent_substitution() {
+        for v in [2, 3, 4] {
+            let err = Interp::from_opt(v).unwrap_err();
+            assert!(
+                err.contains("lut1d") && err.contains("not implemented"),
+                "interp={v}: unexpected error text: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn implemented_interp_values_still_create() {
+        assert_eq!(Interp::from_opt(0), Ok(Interp::Nearest));
+        assert_eq!(Interp::from_opt(1), Ok(Interp::Linear));
     }
 }

@@ -23,14 +23,26 @@
 //! non-default domain is not applied (documented gap — every `.cube` this
 //! crate has tested uses the default `0..1` domain).
 //!
-//! # Interpolation: trilinear and nearest only
+//! # Interpolation: trilinear and nearest only, and `tetrahedral` — the
+//! reference's own default — is now a hard error
 //!
-//! `tetrahedral` (the reference's default), `pyramid` and `prism` need a
-//! different geometric decomposition of the enclosing cube than trilinear
-//! and were out of this crate's time budget; requesting one of them falls
-//! back to trilinear rather than erroring, since the visual difference is
-//! usually small and a LUT this crate cannot open is a worse failure than
-//! one it approximates.
+//! `tetrahedral`, `pyramid` and `prism` need a different geometric
+//! decomposition of the enclosing cube than trilinear and are out of this
+//! crate's time budget to implement. This used to fall back to trilinear
+//! rather than erroring, reasoned as "the visual difference is usually
+//! small and a LUT this crate cannot open is a worse failure than one it
+//! approximates" — which means **every unconfigured `lut3d` call silently
+//! ran the wrong interpolation**, since `tetrahedral` is the reference's
+//! own default. Verified concretely: the same 2-level `.cube` and the
+//! same `0x808080` input pixel give `0x69` under `trilinear` and `0x26`
+//! under `tetrahedral` on real `ffmpeg 8.1` — a large, real divergence,
+//! not a rounding difference. A silent substitution that lands on every
+//! default invocation is the worse failure, not the smaller one: `create`
+//! now rejects `tetrahedral`/`pyramid`/`prism` by name instead. This is a
+//! real, deliberate behaviour change — a bare `lut3d=file=…` now errors
+//! where it used to silently run trilinear — not a refinement that
+//! preserves the old default's usability; pass `interp=trilinear` (or
+//! `nearest`) explicitly to get a working filter today.
 //!
 //! # Format restriction: RGB only
 //!
@@ -232,8 +244,24 @@ enum Interp {
 }
 
 impl Interp {
-    fn from_opt(v: i32) -> Self {
-        if v == 0 { Self::Nearest } else { Self::Trilinear }
+    /// # Errors
+    /// A named error for `tetrahedral`/`pyramid`/`prism` (`2..=4`) — see
+    /// the module doc for why these are rejected rather than silently
+    /// run as `trilinear`.
+    fn from_opt(v: i32) -> std::result::Result<Self, String> {
+        match v {
+            0 => Ok(Self::Nearest),
+            1 => Ok(Self::Trilinear),
+            2 => Err(
+                "lut3d: interp=tetrahedral is not implemented (this is the reference's own \
+                 default; pass interp=trilinear or interp=nearest explicitly — see this \
+                 module's doc)"
+                    .to_owned(),
+            ),
+            3 => Err("lut3d: interp=pyramid is not implemented — see this module's doc".to_owned()),
+            4 => Err("lut3d: interp=prism is not implemented — see this module's doc".to_owned()),
+            other => Err(format!("lut3d: interp={other} is out of range (0..=4)")),
+        }
     }
 }
 
@@ -341,7 +369,7 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
     let text = std::fs::read_to_string(Path::new(&opts.file))
         .map_err(|e| format!("lut3d: could not read `{}`: {e}", opts.file))?;
     let cube = Cube3d::parse(&text)?;
-    let interp = Interp::from_opt(opts.interp);
+    let interp = Interp::from_opt(opts.interp)?;
     let set = FormatSet::video_list(common::formats_where(|f| f.is_rgb() && sample::is_addressable(f)));
     Ok(Instance {
         desc: DESC,
@@ -457,5 +485,26 @@ mod tests {
             let opts = Opts::parse(Some(&format!("file=x.cube:interp={name}"))).unwrap();
             assert_eq!(opts.interp, expected, "interp={name}");
         }
+    }
+
+    /// `tetrahedral` (the reference's own default), `pyramid` and `prism`
+    /// used to silently run `trilinear` -- accepted, wrong, no error, on
+    /// every unconfigured call since `tetrahedral` is the default.
+    /// `Interp::from_opt` now rejects each by name instead.
+    #[test]
+    fn unimplemented_interp_values_are_a_named_error_not_a_silent_substitution() {
+        for v in [2, 3, 4] {
+            let err = Interp::from_opt(v).unwrap_err();
+            assert!(
+                err.contains("lut3d") && err.contains("not implemented"),
+                "interp={v}: unexpected error text: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn implemented_interp_values_still_create() {
+        assert_eq!(Interp::from_opt(0), Ok(Interp::Nearest));
+        assert_eq!(Interp::from_opt(1), Ok(Interp::Trilinear));
     }
 }

@@ -92,8 +92,11 @@ inverse), textbook numerical linear algebra, not reference-specific.
   `fillborders.rs`'s doc for the two measurements that disagreed.
 - **`perspective`** — a 4-corner projective transform; `sense=source`
   (confirmed identity-mapping default) and `sense=destination` (inverts the
-  fitted homography) are both implemented. `interpolation=cubic` falls back
-  to bilinear (no bicubic kernel in this crate yet).
+  fitted homography) are both implemented. `interpolation=cubic` (no
+  bicubic kernel in this crate yet) is a named "not implemented" error —
+  it used to silently run bilinear, and a real `ffmpeg 8.1` `cmp` confirms
+  the reference's `cubic` output genuinely differs from `linear`, so this
+  was a real divergence, not a rounding difference.
 
 ### Multi-input filters, picked up
 

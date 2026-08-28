@@ -22,10 +22,22 @@
 //! genuine, monotonically-ordered rank-clipping family and it is *inspired*
 //! by `RemoveGrain`'s documented mode numbering, but it is not a transcription
 //! of `AviSynth`'s specific per-mode formulas (several of which mix in
-//! distance-to-centre weighting this implementation does not model) — modes
-//! `8..=24` are not distinguished at all and fall back to mode `7`'s clip.
-//! Both simplifications are structural and documented rather than silent;
-//! see `docs/filter/vaco-filter-denoise.md`.
+//! distance-to-centre weighting this implementation does not model).
+//!
+//! # Modes `8..=24`: rejected, not substituted
+//!
+//! `clip_pixel`'s internal `rank = mode.clamp(1, 7)` still runs mode `7`'s
+//! clip for any mode above `7` — that was, until this pass, reachable from
+//! `create` too: `m0=12` parsed fine and quietly ran mode `7`'s formula
+//! with no error, a real `RemoveGrain` mode number, silently substituted.
+//! `create` now rejects `m0`/`m1`/`m2`/`m3=8..=24` explicitly instead
+//! (`ensure_mode_implemented`), before an `Instance` is ever built. The
+//! internal fallback-to-7 clamp stays exactly as it was: transcribing the
+//! seventeen real per-mode `AviSynth` formulas (several mix in distance-
+//! to-centre weighting this rank-clip family does not model at all) is a
+//! genuine implementation project, not something this pass attempts —
+//! only the silent-vs-explicit question is what changed here. See
+//! `docs/filter/vaco-filter-denoise.md`.
 //!
 //! # Independent oracle
 //!
@@ -87,6 +99,28 @@ impl Options {
 
     fn mode_for(self, plane: usize) -> u8 {
         self.modes.get(plane).copied().unwrap_or(0)
+    }
+
+    /// Rejects any declared `m0..=m3` in `8..=24` by name, instead of
+    /// letting it through to silently run mode `7`'s clip. `0..=7` are
+    /// this implementation's real (if simplified — see module doc) rank-
+    /// clip family; `8..=24` are real reference mode numbers this crate
+    /// has not transcribed.
+    ///
+    /// # Errors
+    /// Names the option (`m0`..`m3`) and the exact mode number rejected.
+    fn ensure_implemented(self) -> std::result::Result<(), String> {
+        const NAMES: [&str; 4] = ["m0", "m1", "m2", "m3"];
+        for (name, mode) in NAMES.iter().zip(self.modes) {
+            if mode > 7 {
+                return Err(format!(
+                    "removegrain: {name}={mode} is not implemented (modes 8..=24 are real \
+                     AviSynth RemoveGrain modes this crate has not transcribed — see this \
+                     module's own doc)"
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -171,17 +205,18 @@ impl FrameFilter for RemoveGrain {
     }
 }
 
-pub(crate) fn create(req: &Instantiate<'_>) -> Instance {
+pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, String> {
     let opts = Options::parse(req);
-    Instance {
+    opts.ensure_implemented()?;
+    Ok(Instance {
         desc: DESC,
         formats: NodeFormats::passthrough(1, 1, MediaType::Video, req.instance),
         filter: Box::new(Simple::new(RemoveGrain { opts }).with_timeline(Timeline::always())),
-    }
+    })
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic, reason = "test code")]
 mod tests {
     use super::*;
 
@@ -230,6 +265,49 @@ mod tests {
             let out = process_plane(&buf, mode);
             let v = out.get(2, 2).unwrap();
             assert!((v - 100.0).abs() < 1e-3, "mode {mode}: got {v}");
+        }
+    }
+
+    /// `m0`..`m3=8..=24` used to parse fine and silently run mode `7`'s
+    /// clip -- a real `RemoveGrain` mode number, accepted, wrong, no
+    /// error. `create` now rejects each by name instead.
+    #[test]
+    fn modes_eight_through_twenty_four_are_a_named_error_not_a_silent_substitution() {
+        for (key, mode) in [("m0", 8), ("m1", 12), ("m2", 24), ("m3", 9)] {
+            let arg = vaco_filter_graph::ast::Arg {
+                key: Some((*key).to_owned()),
+                raw_value: mode.to_string(),
+                span: vaco_filter_graph::span::Span::default(),
+            };
+            let arguments = [arg];
+            let req = Instantiate {
+                name: "removegrain",
+                instance: "removegrain",
+                args: Some(&format!("{key}={mode}")),
+                arguments: &arguments,
+            };
+            match create(&req) {
+                Ok(_) => panic!("{key}={mode} should be rejected, not silently substituted"),
+                Err(err) => assert!(
+                    err.contains("removegrain") && err.contains("not implemented"),
+                    "{key}={mode}: unexpected error text: {err}"
+                ),
+            }
+        }
+    }
+
+    /// Modes `0..=7` -- the family this crate actually implements -- still
+    /// create fine; the fix rejects only the unimplemented range.
+    #[test]
+    fn modes_zero_through_seven_still_create() {
+        for mode in 0..=7 {
+            let req = Instantiate {
+                name: "removegrain",
+                instance: "removegrain",
+                args: Some(&format!("m0={mode}")),
+                arguments: &[],
+            };
+            assert!(create(&req).is_ok(), "m0={mode} should still create");
         }
     }
 }

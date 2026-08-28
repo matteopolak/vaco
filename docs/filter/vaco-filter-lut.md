@@ -18,11 +18,11 @@ both produced `Unexpected EOF` against the reference, see `lut3d.rs`'s
 risked exactly the "matches one probe, wrong elsewhere" failure mode
 `planning/AGENT-CONSTRAINTS.md` warns about, so it was not shipped);
 `cubic`/`cosine`/`spline` interpolation for `lut1d` and
-`tetrahedral`/`pyramid`/`prism` for `lut3d`/`haldclut` (fall back to
-linear/trilinear — `lut1d`'s default, `linear`, is implemented exactly,
-unlike `lut3d`'s default `tetrahedral`, which is an approximation);
-non-default `DOMAIN_MIN`/`DOMAIN_MAX`; `haldclut`'s `clut=first` (always
-behaves like `clut=all`).
+`tetrahedral`/`pyramid`/`prism` for `lut3d`/`haldclut` (each is now a
+named "not implemented" error rather than a silent fall back to linear/
+trilinear — see "Interpolation" below); non-default
+`DOMAIN_MIN`/`DOMAIN_MAX`; `haldclut`'s `clut=first` (now also a named
+error rather than silently behaving like `clut=all`).
 
 ## What it is
 
@@ -92,11 +92,19 @@ fails before restoring the fix).
 `lut1d`'s `cubic`/`cosine`/`spline` and `lut3d`/`haldclut`'s
 `tetrahedral`/`pyramid`/`prism` need more surrounding points than a
 two-point (1D) or eight-corner (3D) neighbourhood and were out of this
-crate's time budget; requesting one of them falls back to linear/
-trilinear rather than erroring. `lut1d`'s default is `linear`, so its
-common case is exact; `lut3d`/`haldclut`'s default is `tetrahedral`, so
-theirs is an approximation even in the default case — stated here rather
-than left implicit.
+crate's time budget. These used to silently fall back to linear/
+trilinear with no error — accepted, wrong, undetectable short of a
+differential comparison. Verified concretely (real `ffmpeg 8.1`): the
+same 2-level `.cube` and the same `0x808080` pixel give `0x69` under
+`trilinear` and `0x26` under `tetrahedral` — a large, real divergence,
+not a rounding difference. Each unimplemented value is now a named
+"not implemented" error instead. `lut1d`'s default is `linear`
+(implemented), so only an explicit non-default request is affected;
+`lut3d`/`haldclut`'s default is `tetrahedral`, so **a bare
+`lut3d=file=…`/`haldclut` now errors by default** — pass
+`interp=trilinear` (or `nearest`) explicitly to get a working filter,
+which is a real, deliberate behaviour change from "wrong but ran" to
+"correct but requires an explicit option," not a refinement.
 
 ### Format restriction
 
