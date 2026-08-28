@@ -53,7 +53,9 @@
 
 pub mod generated;
 
-use vaco_codec_core::{BitstreamFilter, CodecId, CodecParameters, DecoderDesc, Parser, ParserDesc};
+use vaco_codec_core::{
+    BitstreamFilter, CodecId, CodecParameters, DecoderDesc, EncoderDesc, Parser, ParserDesc,
+};
 use vaco_core::{Error, MediaType, Result};
 use vaco_filter_core::FilterDesc;
 use vaco_format_core::mux::BsfProvider;
@@ -62,8 +64,8 @@ use vaco_limits::Limits;
 use vaco_protocol_core::{ProtocolDesc, ProtocolRegistry};
 
 pub use generated::{
-    COMPONENTS, DECODERS, DEMUXERS, ENCUMBERED_ALL, ENCUMBERED_ENABLED, FILTERS, MUXERS, PARSERS,
-    PROTOCOLS,
+    COMPONENTS, DECODERS, DEMUXERS, ENCODERS, ENCUMBERED_ALL, ENCUMBERED_ENABLED, FILTERS, MUXERS,
+    PARSERS, PROTOCOLS,
 };
 
 /// What a component is. The vocabulary is frozen in plan 19 §3.4.
@@ -111,15 +113,19 @@ impl Kind {
 
     /// Whether this build has a typed descriptor table for the kind.
     ///
-    /// False for `Encoder` and `BitstreamFilter`, because `vaco-codec-core`
-    /// defines no `EncoderDesc` or `BitstreamFilterDesc` yet. Components of
-    /// those kinds are listed and their `ctor` paths are checked at compile
-    /// time, but there is nothing typed to hand back. This is a reported gap in
-    /// the trait layer, not a design choice — see the crate's doc file.
+    /// False for `BitstreamFilter`, because `vaco-codec-core` defines no
+    /// `BitstreamFilterDesc` yet. Components of that kind are listed and their
+    /// `ctor` paths are checked at compile time, but there is nothing typed to
+    /// hand back. This is a reported gap in the trait layer, not a design
+    /// choice — see the crate's doc file.
     ///
-    /// `Parser` was on that list until `vaco-codec-core` grew
-    /// [`ParserDesc`](vaco_codec_core::ParserDesc); it is now a real table and
-    /// [`Parsers`] is a real provider.
+    /// `Parser` and `Encoder` were both on this list once, until
+    /// `vaco-codec-core` grew [`ParserDesc`](vaco_codec_core::ParserDesc) and
+    /// [`EncoderDesc`](vaco_codec_core::EncoderDesc) respectively; both are
+    /// now real tables, [`Parsers`] is a real provider, and `vaco-cli`
+    /// resolves `-c:v`/`-c:a` through
+    /// [`encoder_by_name`]/[`decoder_by_name`] instead of special-casing
+    /// `"copy"`.
     #[must_use]
     pub const fn has_table(self) -> bool {
         matches!(
@@ -127,6 +133,7 @@ impl Kind {
             Self::Demuxer
                 | Self::Muxer
                 | Self::Decoder
+                | Self::Encoder
                 | Self::Parser
                 | Self::Filter
                 | Self::Protocol
@@ -320,6 +327,39 @@ pub fn decoders_for(codec: CodecId) -> impl Iterator<Item = &'static DecoderDesc
 #[must_use]
 pub fn can_decode(codec: CodecId) -> bool {
     decoder_for(codec).is_some()
+}
+
+/// Every enabled encoder descriptor. Mirrors [`decoders`] exactly, now that
+/// `EncoderDesc` has a typed table of its own.
+#[must_use]
+pub fn encoders() -> &'static [&'static EncoderDesc] {
+    ENCODERS
+}
+
+/// An encoder by its implementation name, e.g. `"qoi"`. This is the lookup
+/// `vaco-cli`'s `-c:v`/`-c:a` resolves a name through.
+#[must_use]
+pub fn encoder_by_name(name: &str) -> Option<&'static EncoderDesc> {
+    ENCODERS.iter().copied().find(|e| e.name == name)
+}
+
+/// The default encoder for a codec: the first enabled implementation in
+/// registry order. Same caveat as [`decoder_for`] — no priority field exists
+/// yet to rank two implementations of the same codec.
+#[must_use]
+pub fn encoder_for(codec: CodecId) -> Option<&'static EncoderDesc> {
+    ENCODERS.iter().copied().find(|e| e.id == codec)
+}
+
+/// Every enabled encoder for a codec, in registry order.
+pub fn encoders_for(codec: CodecId) -> impl Iterator<Item = &'static EncoderDesc> {
+    ENCODERS.iter().copied().filter(move |e| e.id == codec)
+}
+
+/// Whether this build can encode `codec`.
+#[must_use]
+pub fn can_encode(codec: CodecId) -> bool {
+    encoder_for(codec).is_some()
 }
 
 /// Every codec this build has *some* implementation of, in [`CodecId`] order.
@@ -619,10 +659,23 @@ mod tests {
 
     #[test]
     fn a_kind_without_a_table_is_still_listable() {
+        // `Encoder` used to belong on this list too, before `EncoderDesc`
+        // existed. Asserting it stayed empty would have pinned an absence
+        // this build is actively closing rather than a real invariant, so
+        // this asserts the mapping instead: `BitstreamFilter` has no table,
+        // `Encoder` does.
+        assert!(!Kind::BitstreamFilter.has_table());
+        assert!(Kind::Encoder.has_table());
+        // Listing must not panic or claim a table exists, whichever it is.
         for kind in [Kind::Encoder, Kind::BitstreamFilter] {
-            assert!(!kind.has_table());
-            // Listing must not panic or claim a table exists.
             let _ = components_of_kind(kind).count();
+        }
+    }
+
+    #[test]
+    fn every_registered_encoder_is_a_component_too() {
+        for e in encoders() {
+            assert!(component(Kind::Encoder, e.name).is_some(), "encoder {}", e.name);
         }
     }
 

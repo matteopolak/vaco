@@ -113,8 +113,9 @@ pub fn run(_check: bool) -> Task {
     );
     if all == 0 {
         println!(
-            "  (the tree has no encumbered components yet — no encoders exist. \
-             The gate is in place for when they do; `encumbered_rows_are_gated` \
+            "  (no component in the tree is marked `encumbered = true` yet — \
+             unencumbered encoders exist since C-13, but none patent-encumbered. \
+             The gate is in place for when one lands; `encumbered_rows_are_gated` \
              plants one and proves the mechanism fires.)"
         );
     }

@@ -63,15 +63,16 @@ because the edge has to satisfy the strictest component in it.
   with the same feature set list components identically (D6 compares the listing
   output byte for byte).
 * One typed table per kind that has a descriptor type: `DEMUXERS`, `MUXERS`,
-  `DECODERS`, `PARSERS`, `FILTERS`, `PROTOCOLS`.
-* For `encoder` and `bitstream_filter` — kinds with no descriptor type yet — a
+  `DECODERS`, `ENCODERS`, `PARSERS`, `FILTERS`, `PROTOCOLS`.
+* For `bitstream_filter` — the one remaining kind with no descriptor type — a
   `const _: () = { let _ = &<ctor>; };` block. Taking a reference needs no trait
   bound, so the path is checked at compile time even though the type is unknown.
   A typo in a fragment is a compile error rather than a component that silently
   is not there.
 
-`parser` was in that second group until `vaco-codec-core` grew
-[`ParserDesc`](../signal/vaco-codec-core.md). Promoting it was one row in
+`parser` and `encoder` were both in that second group once — `parser` until
+`vaco-codec-core` grew [`ParserDesc`](../signal/vaco-codec-core.md), `encoder`
+until it grew `EncoderDesc` (C-13). Promoting either was one row in
 `KINDS` in `xtask/src/registry.rs` plus a `desc_ty`/`table` arm — which is what
 the "to add a kind" note below describes, executed.
 
@@ -207,10 +208,16 @@ prove the output is a fixed point.
 
 Each is a missing piece elsewhere, reported rather than worked around.
 
-* **No `EncoderDesc` or `BitstreamFilterDesc`.** `vaco-codec-core` defines
-  `DecoderDesc` and `ParserDesc`, so two of the eight kinds get a metadata row
-  and a compile-time path check but no typed table. `Kind::has_table` reports
-  which.
+* **No `BitstreamFilterDesc`.** `vaco-codec-core` defines `DecoderDesc`,
+  `EncoderDesc` and `ParserDesc`, so `bitstream_filter` is the one remaining
+  kind that gets a metadata row and a compile-time path check but no typed
+  table. `Kind::has_table` reports which.
+* ~~**No `EncoderDesc`.**~~ Closed (C-13). `EncoderDesc` mirrors `DecoderDesc`
+  field for field, including a `make: fn(Limits) -> Box<dyn Encoder>`
+  constructor; `DecoderDesc` gained the same field in the same change, since
+  it had none either — a registered decoder made `can_decode` true and
+  nothing more. `encoders()`/`encoder_by_name`/`encoder_for`/`encoders_for`/
+  `can_encode` mirror the decoder-side functions below.
 * ~~**`ParserProvider` returns `None` for every codec.**~~ Closed. The gap was
   exactly one descriptor type, as the comment on `Parsers` predicted — but the
   prediction was half the work. A `ParserDesc` alone gets a parser built and

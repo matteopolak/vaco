@@ -61,7 +61,7 @@ const KINDS: &[(&str, Option<Kind>)] = &[
     ("demuxer", Some(Kind::Demuxer)),
     ("muxer", Some(Kind::Muxer)),
     ("decoder", Some(Kind::Decoder)),
-    ("encoder", None),
+    ("encoder", Some(Kind::Encoder)),
     ("parser", Some(Kind::Parser)),
     ("filter", Some(Kind::Filter)),
     ("protocol", Some(Kind::Protocol)),
@@ -74,6 +74,7 @@ enum Kind {
     Demuxer,
     Muxer,
     Decoder,
+    Encoder,
     Parser,
     Filter,
     Protocol,
@@ -86,6 +87,7 @@ impl Kind {
             Self::Demuxer => "::vaco_format_core::DemuxerDesc",
             Self::Muxer => "::vaco_format_core::MuxerDesc",
             Self::Decoder => "::vaco_codec_core::DecoderDesc",
+            Self::Encoder => "::vaco_codec_core::EncoderDesc",
             Self::Parser => "::vaco_codec_core::ParserDesc",
             Self::Filter => "::vaco_filter_core::FilterDesc",
             Self::Protocol => "::vaco_protocol_core::ProtocolDesc",
@@ -98,6 +100,7 @@ impl Kind {
             Self::Demuxer => "DEMUXERS",
             Self::Muxer => "MUXERS",
             Self::Decoder => "DECODERS",
+            Self::Encoder => "ENCODERS",
             Self::Parser => "PARSERS",
             Self::Filter => "FILTERS",
             Self::Protocol => "PROTOCOLS",
@@ -501,10 +504,10 @@ fn emit_source(components: &[Component]) -> String {
          //! Every row is gated on the cargo feature its fragment names, so a disabled\n\
          //! component contributes no table entry, no dependency edge and no code.\n\
          //!\n\
-         //! Kinds with no descriptor type in the trait layer yet — `encoder` and\n\
-         //! `bitstream_filter` — get a metadata row and a path-resolution check, but no\n\
-         //! typed table. When `EncoderDesc` and friends land, add them to `KINDS` in\n\
-         //! `xtask/src/registry.rs` and the tables appear.\n\n",
+         //! `bitstream_filter` has no descriptor type in the trait layer yet, so it\n\
+         //! gets a metadata row and a path-resolution check, but no typed table. When\n\
+         //! one lands, add it to `KINDS` in `xtask/src/registry.rs` and the table\n\
+         //! appears — `encoder` (`EncoderDesc`) took this same path.\n\n",
     );
 
     // -- metadata table -----------------------------------------------------
@@ -1016,16 +1019,40 @@ mod tests {
 
     #[test]
     fn an_unkinded_ctor_is_still_resolution_checked() {
+        // `bitstream_filter` is the one remaining kind with no descriptor type
+        // (`encoder` moved to the typed table alongside `decoder`).
         let text = r#"[[component]]
-            kind = "encoder"
+            kind = "bitstream_filter"
             name = "e"
-            ctor = "vaco_demux_mp4::ENC""#;
+            ctor = "vaco_demux_mp4::BSF""#;
         let tables = toml::components(text).expect("parse");
         let t = tables.first().expect("one table");
         let c = build(t, "vaco-demux-mp4", "format").expect("build");
         let src = emit_source(&[c]);
-        assert!(src.contains("let _ = &::vaco_demux_mp4::ENC;"));
-        assert!(!src.contains("ENC,\n"), "no typed table for `encoder` yet");
+        assert!(src.contains("let _ = &::vaco_demux_mp4::BSF;"));
+        assert!(
+            !src.contains("BSF,\n"),
+            "no typed table for `bitstream_filter` yet"
+        );
+    }
+
+    #[test]
+    fn an_encoder_fragment_lands_in_the_typed_table() {
+        let text = r#"[[component]]
+            kind = "encoder"
+            name = "qoi"
+            feature = "codec-qoi"
+            media = "video"
+            codec = "qoi"
+            ctor = "vaco_codec_qoi::QOI_ENCODER""#;
+        let tables = toml::components(text).expect("parse");
+        let t = tables.first().expect("one table");
+        let c = build(t, "vaco-codec-qoi", "codec").expect("build");
+        let src = emit_source(&[c]);
+        assert!(src.contains("pub static ENCODERS: &[&::vaco_codec_core::EncoderDesc]"));
+        assert!(src.contains("&::vaco_codec_qoi::QOI_ENCODER,"));
+        assert!(src.contains("kind: crate::Kind::Encoder,"));
+        assert!(!src.contains("let _ = &::vaco_codec_qoi::QOI_ENCODER;"));
     }
 
     /// A component in `krate` under `crates/<area>`, with `feature`.
@@ -1047,9 +1074,10 @@ mod tests {
         }
     }
 
-    /// A gate with nothing to catch is unfalsifiable, and this tree has no
-    /// encumbered components yet — no encoders exist. So plant one and check
-    /// that the emitted table gates it on its own feature.
+    /// A gate with nothing to catch is unfalsifiable, and no component in the
+    /// tree is marked `encumbered = true` yet (encoders exist now, but
+    /// none patent-encumbered). So plant one and check that the emitted table
+    /// gates it on its own feature.
     #[test]
     fn encumbered_rows_are_gated_on_their_own_feature() {
         let mut c = comp(
