@@ -1,0 +1,17 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# `default = false`, same reasoning and same measurement as
+# `vaco-protocol-http`'s fragment: this crate depends on
+# `vaco-protocol-socket` (`socket2`), which is `NATIVE_ONLY` in
+# `cargo xtask wasm-check`. Without `default = false` here, `protocol-ftp`
+# becomes a *default* optional dependency of `vaco-registry`, and anything
+# depending on `vaco-registry` with default features (`vaco-cli` included)
+# drags `socket2` into its own wasm build and fails on the same wall.
+
+[[component]]
+kind      = "protocol"
+name      = "ftp"
+long_name = "File Transfer Protocol"
+feature   = "protocol-ftp"
+default   = false
+ctor      = "vaco_protocol_ftp::FTP_PROTOCOL"

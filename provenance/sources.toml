@@ -465,3 +465,17 @@ kind     = "spec"
 title    = "Adobe, \"SWF File Format Specification\", Version 19 (2013) — the fixed header/RECT/tag-header (10-bit code + 6-bit length, escaping to a u32) layout, and the DefineVideoStream/VideoFrame/SoundStreamHead(2)/SoundStreamBlock tag payloads `vaco-format-swf` reads and writes. Field layouts were verified against real `ffmpeg -f swf` output (see that crate's docs for exactly what was measured) rather than read once and trusted"
 acquired = "2026-08-27"
 where    = "https://www.adobe.com/content/dam/acom/en/devnet/pdf/swf-file-format-spec.pdf"
+
+[[source]]
+id       = "rfc-959"
+kind     = "rfc"
+title    = "RFC 959, File Transfer Protocol (FTP) — the command/reply model (USER/PASS/TYPE/PASV/REST/RETR/STOR, three-digit reply codes with RFC 959 §4.2's multi-line continuation form) `vaco-protocol-ftp` implements. The exact command sequence and option this crate sends was measured against a fake FTP server (D6/D17), since the RFC specifies what a compliant server must accept, not what any particular client sends"
+acquired = "2026-08-27"
+where    = "https://www.rfc-editor.org/rfc/rfc959"
+
+[[source]]
+id       = "rfc-2428"
+kind     = "rfc"
+title    = "RFC 2428, FTP Extensions for IPv6 and NATs — the EPSV command and its (|||port|) reply format `vaco-protocol-ftp::control::parse_epsv` parses"
+acquired = "2026-08-27"
+where    = "https://www.rfc-editor.org/rfc/rfc2428"

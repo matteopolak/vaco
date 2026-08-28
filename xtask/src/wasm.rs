@@ -83,6 +83,16 @@ const NATIVE_ONLY: &[(&str, &str)] = &[
          transport behind the same seam, not a wasm build of this crate.",
     ),
     (
+        "vaco-protocol-ftp",
+        "depends on vaco-protocol-socket for HostPort/addr::connect (both the \
+         control connection and each passive data connection dial their own \
+         duplex TcpStream directly, exactly like vaco-protocol-tls, rather \
+         than through the registry's one-directional Protocol::open/create — \
+         see the crate docs), so it inherits the same socket2 wall \
+         vaco-protocol-socket's own NATIVE_ONLY entry documents. A wasm build \
+         has no FTP story at all in this workspace today.",
+    ),
+    (
         "vaco-protocol-httpproxy",
         "depends on vaco-protocol-socket for HostPort/addr::connect (the CONNECT \
          handshake dials its own duplex TcpStream directly, exactly like \
