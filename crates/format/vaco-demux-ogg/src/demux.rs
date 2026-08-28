@@ -87,6 +87,14 @@ pub const MAX_PACKET_BYTES: usize = 32 << 20;
 /// headers never complete.
 pub const MAX_HEADER_SCAN_BYTES: u64 = 8 << 20;
 
+/// Bytes read from near the end of a seekable source when scanning for each
+/// logical stream's final granule position (`duration_ts`). Comfortably
+/// larger than [`page::MAX_PAGE_LEN`], so a normally-paced file's last page
+/// is found even if the window's own start lands mid-page; a pathological
+/// tail run of oversized pages simply reports no duration, same as a source
+/// this scan cannot seek at all.
+pub const TAIL_SCAN_WINDOW: u64 = 256 << 10;
+
 /// Counters a caller can read for triage. None of them changes behaviour.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct OggDemuxStats {
@@ -224,7 +232,80 @@ impl OggDemuxer {
         // shows) — they stay queued rather than being discarded, since
         // `read_packet` must not skip real content just because it arrived
         // during discovery.
+        me.scan_tail_for_durations();
         Ok(me)
+    }
+
+    /// Best-effort: state each logical stream's `duration_ts` from the last
+    /// granule position it ever pages out.
+    ///
+    /// Ogg carries no length field anywhere — measured, the reference's own
+    /// `duration_ts` for a Vorbis stream is exactly the final page's raw
+    /// granule position, un-adjusted by [`GranuleMapping::timestamp`]'s
+    /// pre-roll subtraction (that adjustment is for a *packet's* pts, not a
+    /// summary duration): a 1 000-sample-per-page-boundary file whose last
+    /// page's granule reads `44160` reports `duration_ts=44160`, matching
+    /// `44160 / 44100 Hz = 1.001361 s` exactly.
+    ///
+    /// Reads a single bounded window from near the end of the source and
+    /// scans it for page headers — no reliance on the forward scan's own
+    /// state, so a malformed page earlier in the window does not stop the
+    /// scan. Does nothing, silently, when the source cannot report a size or
+    /// cannot seek (a pipe): every stream simply keeps `duration_ts = None`,
+    /// exactly as before this pass.
+    fn scan_tail_for_durations(&mut self) {
+        if self.io.seekability() == Seekability::None {
+            return;
+        }
+        let Some(size) = self.io.size() else { return };
+        let saved = self.io.pos();
+        let window = TAIL_SCAN_WINDOW.min(size);
+        let Ok(()) = self.io.seek(size.saturating_sub(window)).map(|_| ()) else {
+            return;
+        };
+        let read = self.budget.alloc::<u8>(usize::try_from(window).unwrap_or(0));
+        let buf = match read {
+            Ok(mut buf) => {
+                let n = self.io.read_partial(&mut buf).unwrap_or(0);
+                buf.truncate(n);
+                buf
+            }
+            Err(_) => Vec::new(),
+        };
+        // Restore the forward-scan position before anything else can observe
+        // it, even if the window above came back empty.
+        let _ = self.io.seek(saved);
+
+        let mut last_granule: Vec<(u32, i64)> = Vec::new();
+        let mut at = 0usize;
+        while let Some(rel) = buf
+            .get(at..)
+            .and_then(|s| s.windows(4).position(|w| w == page::CAPTURE_PATTERN))
+        {
+            let start = at + rel;
+            if let Ok((header, _)) = page::parse_header(buf.get(start..).unwrap_or(&[]))
+                && let Some(g) = header.granule()
+            {
+                match last_granule.iter_mut().find(|(s, _)| *s == header.serial) {
+                    Some((_, slot)) => *slot = g,
+                    None => last_granule.push((header.serial, g)),
+                }
+            }
+            at = start + 4;
+        }
+
+        for (serial, granule) in last_granule {
+            if let Some(index) = self.logical_index(serial)
+                && let Some(stream_index) = self
+                    .logical
+                    .get(index)
+                    .map(|l| usize::try_from(l.stream_index).unwrap_or(usize::MAX))
+                && let Some(stream) = self.streams.get_mut(stream_index)
+                && stream.duration_ts.is_none()
+            {
+                stream.set_duration_ts(granule);
+            }
+        }
     }
 
     /// Counters for triage.

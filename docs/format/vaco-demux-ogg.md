@@ -201,9 +201,31 @@ arbitrary bytes with `Limits::strict`, then exercises a byte-position seek.
 See that file's own doc comment for the invariants it checks beyond "does
 not panic".
 
+## Duration: a tail scan, not `Demuxer::duration()`
+
+`OggDemuxer::open_with_limits` ends with
+`OggDemuxer::scan_tail_for_durations`: a best-effort backward scan, bounded
+by `TAIL_SCAN_WINDOW` (256 KiB), for each logical stream's own final page.
+Ogg has no length field anywhere, and the reference's `duration_ts` for a
+Vorbis (or any granule-mapped) stream is exactly that page's **raw** granule
+position — measured: a file whose last page's granule reads `44160` at
+`44100 Hz` reports `duration_ts=44160`, `duration=1.001361`, not the
+pre-roll-adjusted value `GranuleMapping::timestamp` would give a *packet's*
+pts. `Stream::duration_ts` is set directly, per stream (by serial), rather
+than through `Demuxer::duration()` — a container-level single value would
+lose a multiplexed file's per-stream answer.
+
+Does nothing when the source cannot report a size or cannot seek (a pipe):
+every stream keeps `duration_ts = None`, same as before this existed.
+
 ## Known gaps (say plainly what is not done)
 
-1. No duration estimation (`Demuxer::duration()` always `None`).
+1. `Demuxer::duration()` itself is always `None` — see the tail-scan section
+   above for the per-stream `duration_ts` this crate states instead, and note
+   that the scan looks only at the last `TAIL_SCAN_WINDOW` bytes, so a stream
+   whose final page for a *given serial* lies further back than that (an
+   unusually large closing page, or one interleaved far from the true end)
+   is not found and simply keeps no duration.
 2. Seeking is byte-only; no timestamp seek.
 3. Vorbis and FLAC per-packet timing inside a page are documented
    approximations (see above); only the page boundary itself is exact.
