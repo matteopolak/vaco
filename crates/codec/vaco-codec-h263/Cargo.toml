@@ -20,6 +20,7 @@ vaco-frame = { path = "../../model/vaco-frame" }
 
 [dev-dependencies]
 proptest.workspace = true
+vaco-hash = { path = "../../core/vaco-hash" }
 
 [[example]]
 name = "decode_dump"
