@@ -675,6 +675,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["gsm"],
         mime_types: &[],
     },
+    #[cfg(feature = "demux-gxf")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "gxf",
+        long_name: Some("GXF (General eXchange Format)"),
+        krate: "vaco-format-gxf",
+        feature: Some("demux-gxf"),
+        media: None,
+        codec: None,
+        extensions: &["gxf"],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-raw")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -754,6 +766,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         long_name: Some("image2 sequence"),
         krate: "vaco-demux-image2",
         feature: Some("demux-image2"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-imf")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "imf",
+        long_name: Some("IMF (SMPTE ST 2067) Composition Playlist"),
+        krate: "vaco-format-imf",
+        feature: Some("demux-imf"),
         media: None,
         codec: None,
         extensions: &[],
@@ -1485,13 +1509,13 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
-    #[cfg(feature = "demux-raw")]
+    #[cfg(feature = "demux-spdif")]
     crate::Component {
         kind: crate::Kind::Demuxer,
         name: "s337m",
         long_name: Some("SMPTE 337M"),
-        krate: "vaco-demux-raw",
-        feature: Some("demux-raw"),
+        krate: "vaco-format-spdif",
+        feature: Some("demux-spdif"),
         media: None,
         codec: None,
         extensions: &[],
@@ -2487,6 +2511,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "mux-gxf")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "gxf",
+        long_name: Some("GXF (General eXchange Format)"),
+        krate: "vaco-format-gxf",
+        feature: Some("mux-gxf"),
+        media: None,
+        codec: None,
+        extensions: &["gxf"],
+        mime_types: &[],
+    },
     #[cfg(feature = "mux-raw")]
     crate::Component {
         kind: crate::Kind::Muxer,
@@ -2532,6 +2568,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "mux-hds")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "hds",
+        long_name: Some("HDS Muxer"),
+        krate: "vaco-mux-hds",
+        feature: Some("mux-hds"),
+        media: None,
+        codec: None,
+        extensions: &["f4m"],
         mime_types: &[],
     },
     #[cfg(feature = "mux-raw")]
@@ -3063,6 +3111,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "mux-smoothstreaming")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "smoothstreaming",
+        long_name: Some("Smooth Streaming Muxer"),
+        krate: "vaco-mux-smoothstreaming",
+        feature: Some("mux-smoothstreaming"),
+        media: None,
+        codec: None,
+        extensions: &["ism", "ismv", "isma"],
+        mime_types: &[],
+    },
     #[cfg(feature = "mux-sox")]
     crate::Component {
         kind: crate::Kind::Muxer,
@@ -3444,6 +3504,90 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "codec-adpcm")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "adpcm_ima_qt",
+        long_name: Some("ADPCM IMA QuickTime"),
+        krate: "vaco-codec-adpcm",
+        feature: Some("codec-adpcm"),
+        media: Some("audio"),
+        codec: Some("adpcm_ima_qt"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-adpcm")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "adpcm_ima_wav",
+        long_name: Some("ADPCM IMA WAV"),
+        krate: "vaco-codec-adpcm",
+        feature: Some("codec-adpcm"),
+        media: Some("audio"),
+        codec: Some("adpcm_ima_wav"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-adpcm")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "adpcm_ms",
+        long_name: Some("ADPCM Microsoft"),
+        krate: "vaco-codec-adpcm",
+        feature: Some("codec-adpcm"),
+        media: Some("audio"),
+        codec: Some("adpcm_ms"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-adpcm")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "adpcm_swf",
+        long_name: Some("ADPCM Shockwave Flash"),
+        krate: "vaco-codec-adpcm",
+        feature: Some("codec-adpcm"),
+        media: Some("audio"),
+        codec: Some("adpcm_swf"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-alac")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "alac",
+        long_name: Some("ALAC (Apple Lossless Audio Codec)"),
+        krate: "vaco-codec-alac",
+        feature: Some("codec-alac"),
+        media: Some("audio"),
+        codec: Some("alac"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-rawvideo")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "avui",
+        long_name: Some("Avid Meridien Uncompressed"),
+        krate: "vaco-codec-rawvideo",
+        feature: Some("codec-rawvideo"),
+        media: Some("video"),
+        codec: Some("avui"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-rawvideo")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "bitpacked",
+        long_name: Some("Bitpacked"),
+        krate: "vaco-codec-rawvideo",
+        feature: Some("codec-rawvideo"),
+        media: Some("video"),
+        codec: Some("bitpacked"),
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "codec-image-simple")]
     crate::Component {
         kind: crate::Kind::Decoder,
@@ -3477,6 +3621,56 @@ pub static COMPONENTS: &[crate::Component] = &[
         feature: Some("codec-subtitle-bitmap"),
         media: Some("subtitle"),
         codec: Some("dvd_subtitle"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-exr")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "exr",
+        long_name: Some("OpenEXR image, wrapping the `exr` crate (D11)"),
+        krate: "vaco-codec-exr",
+        feature: Some("codec-exr"),
+        media: Some("video"),
+        codec: Some("exr"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-ffv1")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "ffv1",
+        long_name: Some("FFmpeg video codec #1"),
+        krate: "vaco-codec-ffv1",
+        feature: Some("codec-ffv1"),
+        media: Some("video"),
+        codec: Some("ffv1"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-flac")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "flac",
+        long_name: Some("FLAC (Free Lossless Audio Codec), decode via claxon"),
+        krate: "vaco-codec-flac",
+        feature: Some("codec-flac"),
+        media: Some("audio"),
+        codec: Some("flac"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-gif")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "gif",
+        long_name: Some(
+            "CompuServe GIF (Graphics Interchange Format), wrapping the `gif` crate (D11)",
+        ),
+        krate: "vaco-codec-gif",
+        feature: Some("codec-gif"),
+        media: Some("video"),
+        codec: Some("gif"),
         extensions: &[],
         mime_types: &[],
     },
@@ -3527,6 +3721,30 @@ pub static COMPONENTS: &[crate::Component] = &[
         feature: Some("codec-jpeg"),
         media: Some("video"),
         codec: Some("jpeg"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-jpegls")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "jpegls",
+        long_name: Some("JPEG-LS (ITU-T T.87 / ISO/IEC 14495-1)"),
+        krate: "vaco-codec-jpegls",
+        feature: Some("codec-jpegls"),
+        media: Some("video"),
+        codec: Some("jpegls"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-jpegxl")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "jpegxl",
+        long_name: Some("JPEG XL, wrapping the `jxl-oxide` crate (D11)"),
+        krate: "vaco-codec-jpegxl",
+        feature: Some("codec-jpegxl"),
+        media: Some("video"),
+        codec: Some("jpegxl"),
         extensions: &[],
         mime_types: &[],
     },
@@ -3614,6 +3832,258 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "pcm_alaw",
+        long_name: Some("PCM A-law / G.711 A-law"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_alaw"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "pcm_f32be",
+        long_name: Some("PCM 32-bit floating point big-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_f32be"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "pcm_f32le",
+        long_name: Some("PCM 32-bit floating point little-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_f32le"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "pcm_f64be",
+        long_name: Some("PCM 64-bit floating point big-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_f64be"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "pcm_f64le",
+        long_name: Some("PCM 64-bit floating point little-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_f64le"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "pcm_mulaw",
+        long_name: Some("PCM mu-law / G.711 mu-law"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_mulaw"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "pcm_s16be",
+        long_name: Some("PCM signed 16-bit big-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_s16be"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "pcm_s16le",
+        long_name: Some("PCM signed 16-bit little-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_s16le"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "pcm_s24be",
+        long_name: Some("PCM signed 24-bit big-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_s24be"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "pcm_s24le",
+        long_name: Some("PCM signed 24-bit little-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_s24le"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "pcm_s32be",
+        long_name: Some("PCM signed 32-bit big-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_s32be"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "pcm_s32le",
+        long_name: Some("PCM signed 32-bit little-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_s32le"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "pcm_s8",
+        long_name: Some("PCM signed 8-bit"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_s8"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "pcm_u16be",
+        long_name: Some("PCM unsigned 16-bit big-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_u16be"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "pcm_u16le",
+        long_name: Some("PCM unsigned 16-bit little-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_u16le"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "pcm_u24be",
+        long_name: Some("PCM unsigned 24-bit big-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_u24be"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "pcm_u24le",
+        long_name: Some("PCM unsigned 24-bit little-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_u24le"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "pcm_u32be",
+        long_name: Some("PCM unsigned 32-bit big-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_u32be"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "pcm_u32le",
+        long_name: Some("PCM unsigned 32-bit little-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_u32le"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "pcm_u8",
+        long_name: Some("PCM unsigned 8-bit"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_u8"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "pcm_vidc",
+        long_name: Some("PCM Archimedes VIDC"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_vidc"),
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "codec-image-simple")]
     crate::Component {
         kind: crate::Kind::Decoder,
@@ -3674,6 +4144,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "codec-png")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "png",
+        long_name: Some("PNG (Portable Network Graphics) image, wrapping the `png` crate (D11)"),
+        krate: "vaco-codec-png",
+        feature: Some("codec-png"),
+        media: Some("video"),
+        codec: Some("png"),
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "codec-pnm")]
     crate::Component {
         kind: crate::Kind::Decoder,
@@ -3698,6 +4180,42 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "codec-rawvideo")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "r10k",
+        long_name: Some("AJA Kona 10-bit RGB Codec"),
+        krate: "vaco-codec-rawvideo",
+        feature: Some("codec-rawvideo"),
+        media: Some("video"),
+        codec: Some("r10k"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-rawvideo")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "r210",
+        long_name: Some("Uncompressed RGB 10-bit"),
+        krate: "vaco-codec-rawvideo",
+        feature: Some("codec-rawvideo"),
+        media: Some("video"),
+        codec: Some("r210"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-rawvideo")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "rawvideo",
+        long_name: Some("raw video"),
+        krate: "vaco-codec-rawvideo",
+        feature: Some("codec-rawvideo"),
+        media: Some("video"),
+        codec: Some("rawvideo"),
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "codec-image-simple")]
     crate::Component {
         kind: crate::Kind::Decoder,
@@ -3719,6 +4237,54 @@ pub static COMPONENTS: &[crate::Component] = &[
         feature: Some("codec-image-simple"),
         media: Some("video"),
         codec: Some("targa"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-tiff")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "tiff",
+        long_name: Some("TIFF image, wrapping the `tiff` crate (D11)"),
+        krate: "vaco-codec-tiff",
+        feature: Some("codec-tiff"),
+        media: Some("video"),
+        codec: Some("tiff"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-rawvideo")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "v210",
+        long_name: Some("Uncompressed 4:2:2 10-bit"),
+        krate: "vaco-codec-rawvideo",
+        feature: Some("codec-rawvideo"),
+        media: Some("video"),
+        codec: Some("v210"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-rawvideo")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "v210x",
+        long_name: Some("Uncompressed 4:2:2 10-bit"),
+        krate: "vaco-codec-rawvideo",
+        feature: Some("codec-rawvideo"),
+        media: Some("video"),
+        codec: Some("v210x"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-vorbis")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "vorbis",
+        long_name: Some("Vorbis"),
+        krate: "vaco-codec-vorbis",
+        feature: Some("codec-vorbis"),
+        media: Some("audio"),
+        codec: Some("vorbis"),
         extensions: &[],
         mime_types: &[],
     },
@@ -3748,6 +4314,30 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "codec-webp")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "webp",
+        long_name: Some("WebP, wrapping the `image-webp` crate (D11)"),
+        krate: "vaco-codec-webp",
+        feature: Some("codec-webp"),
+        media: Some("video"),
+        codec: Some("webp"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-rawvideo")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "wrapped_avframe",
+        long_name: Some("AVFrame to AVPacket passthrough"),
+        krate: "vaco-codec-rawvideo",
+        feature: Some("codec-rawvideo"),
+        media: Some("video"),
+        codec: Some("wrapped_avframe"),
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "codec-image-simple")]
     crate::Component {
         kind: crate::Kind::Decoder,
@@ -3772,6 +4362,114 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "codec-rawvideo")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "y41p",
+        long_name: Some("Uncompressed YUV 4:1:1 12-bit"),
+        krate: "vaco-codec-rawvideo",
+        feature: Some("codec-rawvideo"),
+        media: Some("video"),
+        codec: Some("y41p"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-adpcm")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "adpcm_ima_qt",
+        long_name: Some("ADPCM IMA QuickTime"),
+        krate: "vaco-codec-adpcm",
+        feature: Some("codec-adpcm"),
+        media: Some("audio"),
+        codec: Some("adpcm_ima_qt"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-adpcm")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "adpcm_ima_wav",
+        long_name: Some("ADPCM IMA WAV"),
+        krate: "vaco-codec-adpcm",
+        feature: Some("codec-adpcm"),
+        media: Some("audio"),
+        codec: Some("adpcm_ima_wav"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-adpcm")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "adpcm_ms",
+        long_name: Some("ADPCM Microsoft"),
+        krate: "vaco-codec-adpcm",
+        feature: Some("codec-adpcm"),
+        media: Some("audio"),
+        codec: Some("adpcm_ms"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-adpcm")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "adpcm_swf",
+        long_name: Some("ADPCM Shockwave Flash"),
+        krate: "vaco-codec-adpcm",
+        feature: Some("codec-adpcm"),
+        media: Some("audio"),
+        codec: Some("adpcm_swf"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-alac")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "alac",
+        long_name: Some("ALAC (Apple Lossless Audio Codec)"),
+        krate: "vaco-codec-alac",
+        feature: Some("codec-alac"),
+        media: Some("audio"),
+        codec: Some("alac"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-null")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "anull",
+        long_name: Some("Null audio codec"),
+        krate: "vaco-codec-null",
+        feature: Some("codec-null"),
+        media: Some("audio"),
+        codec: Some("anull"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-rawvideo")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "avui",
+        long_name: Some("Avid Meridien Uncompressed"),
+        krate: "vaco-codec-rawvideo",
+        feature: Some("codec-rawvideo"),
+        media: Some("video"),
+        codec: Some("avui"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-rawvideo")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "bitpacked",
+        long_name: Some("Bitpacked"),
+        krate: "vaco-codec-rawvideo",
+        feature: Some("codec-rawvideo"),
+        media: Some("video"),
+        codec: Some("bitpacked"),
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "codec-image-simple")]
     crate::Component {
         kind: crate::Kind::Encoder,
@@ -3784,6 +4482,56 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "codec-exr")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "exr",
+        long_name: Some("OpenEXR image, wrapping the `exr` crate (D11)"),
+        krate: "vaco-codec-exr",
+        feature: Some("codec-exr"),
+        media: Some("video"),
+        codec: Some("exr"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-ffv1")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "ffv1",
+        long_name: Some("FFmpeg video codec #1"),
+        krate: "vaco-codec-ffv1",
+        feature: Some("codec-ffv1"),
+        media: Some("video"),
+        codec: Some("ffv1"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-flac")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "flac",
+        long_name: Some("FLAC (Free Lossless Audio Codec), native encode"),
+        krate: "vaco-codec-flac",
+        feature: Some("codec-flac"),
+        media: Some("audio"),
+        codec: Some("flac"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-gif")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "gif",
+        long_name: Some(
+            "CompuServe GIF (Graphics Interchange Format), wrapping the `gif` crate (D11)",
+        ),
+        krate: "vaco-codec-gif",
+        feature: Some("codec-gif"),
+        media: Some("video"),
+        codec: Some("gif"),
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "codec-jpeg")]
     crate::Component {
         kind: crate::Kind::Encoder,
@@ -3793,6 +4541,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         feature: Some("codec-jpeg"),
         media: Some("video"),
         codec: Some("jpeg"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-jpegls")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "jpegls",
+        long_name: Some("JPEG-LS (ITU-T T.87 / ISO/IEC 14495-1)"),
+        krate: "vaco-codec-jpegls",
+        feature: Some("codec-jpegls"),
+        media: Some("video"),
+        codec: Some("jpegls"),
         extensions: &[],
         mime_types: &[],
     },
@@ -3817,6 +4577,246 @@ pub static COMPONENTS: &[crate::Component] = &[
         feature: Some("codec-pnm"),
         media: Some("video"),
         codec: Some("pbm"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "pcm_alaw",
+        long_name: Some("PCM A-law / G.711 A-law"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_alaw"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "pcm_f32be",
+        long_name: Some("PCM 32-bit floating point big-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_f32be"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "pcm_f32le",
+        long_name: Some("PCM 32-bit floating point little-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_f32le"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "pcm_f64be",
+        long_name: Some("PCM 64-bit floating point big-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_f64be"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "pcm_f64le",
+        long_name: Some("PCM 64-bit floating point little-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_f64le"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "pcm_mulaw",
+        long_name: Some("PCM mu-law / G.711 mu-law"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_mulaw"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "pcm_s16be",
+        long_name: Some("PCM signed 16-bit big-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_s16be"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "pcm_s16le",
+        long_name: Some("PCM signed 16-bit little-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_s16le"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "pcm_s24be",
+        long_name: Some("PCM signed 24-bit big-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_s24be"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "pcm_s24le",
+        long_name: Some("PCM signed 24-bit little-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_s24le"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "pcm_s32be",
+        long_name: Some("PCM signed 32-bit big-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_s32be"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "pcm_s32le",
+        long_name: Some("PCM signed 32-bit little-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_s32le"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "pcm_s8",
+        long_name: Some("PCM signed 8-bit"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_s8"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "pcm_u16be",
+        long_name: Some("PCM unsigned 16-bit big-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_u16be"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "pcm_u16le",
+        long_name: Some("PCM unsigned 16-bit little-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_u16le"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "pcm_u24be",
+        long_name: Some("PCM unsigned 24-bit big-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_u24be"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "pcm_u24le",
+        long_name: Some("PCM unsigned 24-bit little-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_u24le"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "pcm_u32be",
+        long_name: Some("PCM unsigned 32-bit big-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_u32be"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "pcm_u32le",
+        long_name: Some("PCM unsigned 32-bit little-endian"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_u32le"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-pcm")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "pcm_u8",
+        long_name: Some("PCM unsigned 8-bit"),
+        krate: "vaco-codec-pcm",
+        feature: Some("codec-pcm"),
+        media: Some("audio"),
+        codec: Some("pcm_u8"),
         extensions: &[],
         mime_types: &[],
     },
@@ -3868,6 +4868,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "codec-png")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "png",
+        long_name: Some("PNG (Portable Network Graphics) image, wrapping the `png` crate (D11)"),
+        krate: "vaco-codec-png",
+        feature: Some("codec-png"),
+        media: Some("video"),
+        codec: Some("png"),
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "codec-pnm")]
     crate::Component {
         kind: crate::Kind::Encoder,
@@ -3889,6 +4901,42 @@ pub static COMPONENTS: &[crate::Component] = &[
         feature: Some("codec-qoi"),
         media: Some("video"),
         codec: Some("qoi"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-rawvideo")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "r10k",
+        long_name: Some("AJA Kona 10-bit RGB Codec"),
+        krate: "vaco-codec-rawvideo",
+        feature: Some("codec-rawvideo"),
+        media: Some("video"),
+        codec: Some("r10k"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-rawvideo")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "r210",
+        long_name: Some("Uncompressed RGB 10-bit"),
+        krate: "vaco-codec-rawvideo",
+        feature: Some("codec-rawvideo"),
+        media: Some("video"),
+        codec: Some("r210"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-rawvideo")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "rawvideo",
+        long_name: Some("raw video"),
+        krate: "vaco-codec-rawvideo",
+        feature: Some("codec-rawvideo"),
+        media: Some("video"),
+        codec: Some("rawvideo"),
         extensions: &[],
         mime_types: &[],
     },
@@ -3916,6 +4964,106 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "codec-tiff")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "tiff",
+        long_name: Some("TIFF image, wrapping the `tiff` crate (D11)"),
+        krate: "vaco-codec-tiff",
+        feature: Some("codec-tiff"),
+        media: Some("video"),
+        codec: Some("tiff"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-rawvideo")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "v210",
+        long_name: Some("Uncompressed 4:2:2 10-bit"),
+        krate: "vaco-codec-rawvideo",
+        feature: Some("codec-rawvideo"),
+        media: Some("video"),
+        codec: Some("v210"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-rawvideo")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "v210x",
+        long_name: Some("Uncompressed 4:2:2 10-bit"),
+        krate: "vaco-codec-rawvideo",
+        feature: Some("codec-rawvideo"),
+        media: Some("video"),
+        codec: Some("v210x"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-null")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "vnull",
+        long_name: Some("Null video codec"),
+        krate: "vaco-codec-null",
+        feature: Some("codec-null"),
+        media: Some("video"),
+        codec: Some("vnull"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-vp8")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "vp8",
+        long_name: Some(
+            "On2 VP8 (all-intra skeleton: fixed DC_PRED/skip, no residual — see crate::encode)",
+        ),
+        krate: "vaco-codec-vp8",
+        feature: Some("codec-vp8"),
+        media: Some("video"),
+        codec: Some("vp8"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-vp9")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "vp9",
+        long_name: Some(
+            "VP9 (all-intra skeleton: fixed partition/mode, no residual — see crate::encode)",
+        ),
+        krate: "vaco-codec-vp9",
+        feature: Some("codec-vp9"),
+        media: Some("video"),
+        codec: Some("vp9"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-webp")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "webp",
+        long_name: Some("WebP (lossless only), wrapping the `image-webp` crate (D11)"),
+        krate: "vaco-codec-webp",
+        feature: Some("codec-webp"),
+        media: Some("video"),
+        codec: Some("webp"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-rawvideo")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "wrapped_avframe",
+        long_name: Some("AVFrame to AVPacket passthrough"),
+        krate: "vaco-codec-rawvideo",
+        feature: Some("codec-rawvideo"),
+        media: Some("video"),
+        codec: Some("wrapped_avframe"),
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "codec-image-simple")]
     crate::Component {
         kind: crate::Kind::Encoder,
@@ -3937,6 +5085,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         feature: Some("codec-image-simple"),
         media: Some("video"),
         codec: Some("xwd"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-rawvideo")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "y41p",
+        long_name: Some("Uncompressed YUV 4:1:1 12-bit"),
+        krate: "vaco-codec-rawvideo",
+        feature: Some("codec-rawvideo"),
+        media: Some("video"),
+        codec: Some("y41p"),
         extensions: &[],
         mime_types: &[],
     },
@@ -3964,6 +5124,30 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "parse-mpegaudio")]
+    crate::Component {
+        kind: crate::Kind::Parser,
+        name: "ac3",
+        long_name: Some("ATSC A/52A (AC-3)"),
+        krate: "vaco-parse-mpegaudio",
+        feature: Some("parse-mpegaudio"),
+        media: Some("audio"),
+        codec: Some("ac3"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "parse-audio-misc")]
+    crate::Component {
+        kind: crate::Kind::Parser,
+        name: "alac",
+        long_name: Some("ALAC (Apple Lossless Audio Codec)"),
+        krate: "vaco-parse-audio-misc",
+        feature: Some("parse-audio-misc"),
+        media: Some("audio"),
+        codec: Some("alac"),
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "parse-av1")]
     crate::Component {
         kind: crate::Kind::Parser,
@@ -3985,6 +5169,30 @@ pub static COMPONENTS: &[crate::Component] = &[
         feature: Some("parse-image"),
         media: Some("video"),
         codec: Some("bmp"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "parse-mpegaudio")]
+    crate::Component {
+        kind: crate::Kind::Parser,
+        name: "eac3",
+        long_name: Some("ATSC A/52B (E-AC-3)"),
+        krate: "vaco-parse-mpegaudio",
+        feature: Some("parse-mpegaudio"),
+        media: Some("audio"),
+        codec: Some("eac3"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "parse-audio-misc")]
+    crate::Component {
+        kind: crate::Kind::Parser,
+        name: "flac",
+        long_name: Some("FLAC (Free Lossless Audio Codec)"),
+        krate: "vaco-parse-audio-misc",
+        feature: Some("parse-audio-misc"),
+        media: Some("audio"),
+        codec: Some("flac"),
         extensions: &[],
         mime_types: &[],
     },
@@ -4033,6 +5241,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         feature: Some("parse-image"),
         media: Some("video"),
         codec: Some("mjpeg"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "parse-mpegaudio")]
+    crate::Component {
+        kind: crate::Kind::Parser,
+        name: "mp3",
+        long_name: Some("MP1/2/3 (MPEG audio layer 1/2/3)"),
+        krate: "vaco-parse-mpegaudio",
+        feature: Some("parse-mpegaudio"),
+        media: Some("audio"),
+        codec: Some("mp3"),
         extensions: &[],
         mime_types: &[],
     },
@@ -4105,6 +5325,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         feature: Some("parse-image"),
         media: Some("video"),
         codec: Some("tiff"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "parse-audio-misc")]
+    crate::Component {
+        kind: crate::Kind::Parser,
+        name: "vorbis",
+        long_name: Some("Vorbis"),
+        krate: "vaco-parse-audio-misc",
+        feature: Some("parse-audio-misc"),
+        media: Some("audio"),
+        codec: Some("vorbis"),
         extensions: &[],
         mime_types: &[],
     },
@@ -5171,6 +6403,17 @@ pub static COMPONENTS: &[crate::Component] = &[
     },
     crate::Component {
         kind: crate::Kind::Filter,
+        name: "colormatrix",
+        long_name: Some("Convert color matrix"),
+        krate: "vaco-filter-color",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
         name: "colorspectrum",
         long_name: Some("Generate colors spectrum"),
         krate: "vaco-filter-source",
@@ -6097,6 +7340,17 @@ pub static COMPONENTS: &[crate::Component] = &[
     },
     crate::Component {
         kind: crate::Kind::Filter,
+        name: "limitdiff",
+        long_name: Some("Apply filtering with limiting difference"),
+        krate: "vaco-filter-color",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
         name: "loop",
         long_name: Some("Loop video frames"),
         krate: "vaco-filter-mm",
@@ -6751,6 +8005,17 @@ pub static COMPONENTS: &[crate::Component] = &[
         name: "scale",
         long_name: Some("Scale the input video size and/or convert the image format"),
         krate: "vaco-filter-video-geometry",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "scdet",
+        long_name: Some("Detect video scene change"),
+        krate: "vaco-filter-analysis",
         feature: None,
         media: Some("video"),
         codec: None,
@@ -8326,6 +9591,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_image2::pipe::DEMUXER_GIF,
     #[cfg(feature = "demux-gsm")]
     &::vaco_format_misc_audio::rawcodec::DEMUXER_GSM,
+    #[cfg(feature = "demux-gxf")]
+    &::vaco_format_gxf::DEMUXER,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::bitstream::DEMUXER_H261,
     #[cfg(feature = "demux-raw")]
@@ -8340,6 +9607,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_hls::DEMUXER,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::DEMUXER_IMAGE2,
+    #[cfg(feature = "demux-imf")]
+    &::vaco_format_imf::DEMUXER,
     #[cfg(feature = "demux-ircam")]
     &::vaco_format_audio_simple::ircam::DEMUXER,
     #[cfg(feature = "demux-ivf")]
@@ -8458,8 +9727,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_raw::pcm::DEMUXER_S32BE,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::pcm::DEMUXER_S32LE,
-    #[cfg(feature = "demux-raw")]
-    &::vaco_demux_raw::bitstream::DEMUXER_S337M,
+    #[cfg(feature = "demux-spdif")]
+    &::vaco_format_spdif::S337M_DEMUXER,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::pcm::DEMUXER_S8,
     #[cfg(feature = "subtitle-text")]
@@ -8624,6 +9893,8 @@ pub static MUXERS: &[&::vaco_format_core::MuxerDesc] = &[
     &::vaco_mux_hash::MUXER_FRAMECRC,
     &::vaco_mux_hash::MUXER_FRAMEHASH,
     &::vaco_mux_hash::MUXER_FRAMEMD5,
+    #[cfg(feature = "mux-gxf")]
+    &::vaco_format_gxf::MUXER,
     #[cfg(feature = "mux-raw")]
     &::vaco_mux_raw::raw::MUXER_H261,
     #[cfg(feature = "mux-raw")]
@@ -8631,6 +9902,8 @@ pub static MUXERS: &[&::vaco_format_core::MuxerDesc] = &[
     #[cfg(feature = "mux-raw")]
     &::vaco_mux_raw::raw::MUXER_H264,
     &::vaco_mux_hash::MUXER_HASH,
+    #[cfg(feature = "mux-hds")]
+    &::vaco_mux_hds::MUXER,
     #[cfg(feature = "mux-raw")]
     &::vaco_mux_raw::raw::MUXER_HEVC,
     #[cfg(feature = "mux-hls")]
@@ -8715,6 +9988,8 @@ pub static MUXERS: &[&::vaco_format_core::MuxerDesc] = &[
     #[cfg(feature = "subtitle-text")]
     &::vaco_subtitle_text::scc::MUXER,
     &::vaco_mux_stream::MUXER_SEGMENT,
+    #[cfg(feature = "mux-smoothstreaming")]
+    &::vaco_mux_smoothstreaming::MUXER,
     #[cfg(feature = "mux-sox")]
     &::vaco_format_audio_simple::sox::MUXER,
     #[cfg(feature = "mux-spdif")]
@@ -8780,12 +10055,34 @@ pub static DECODERS: &[&::vaco_codec_core::DecoderDesc] = &[
     &::vaco_codec_aac::DECODER_AAC,
     #[cfg(feature = "codec-ac3")]
     &::vaco_codec_ac3::DECODER_AC3,
+    #[cfg(feature = "codec-adpcm")]
+    &::vaco_codec_adpcm::ADPCM_IMA_QT_DECODER,
+    #[cfg(feature = "codec-adpcm")]
+    &::vaco_codec_adpcm::ADPCM_IMA_WAV_DECODER,
+    #[cfg(feature = "codec-adpcm")]
+    &::vaco_codec_adpcm::ADPCM_MS_DECODER,
+    #[cfg(feature = "codec-adpcm")]
+    &::vaco_codec_adpcm::ADPCM_SWF_DECODER,
+    #[cfg(feature = "codec-alac")]
+    &::vaco_codec_alac::DECODER_ALAC,
+    #[cfg(feature = "codec-rawvideo")]
+    &::vaco_codec_rawvideo::AVUI_DECODER,
+    #[cfg(feature = "codec-rawvideo")]
+    &::vaco_codec_rawvideo::BITPACKED_DECODER,
     #[cfg(feature = "codec-image-simple")]
     &::vaco_codec_image_simple::BMP_DECODER,
     #[cfg(feature = "codec-subtitle-bitmap")]
     &::vaco_codec_subtitle_bitmap::decoder::DVBSUB_DECODER,
     #[cfg(feature = "codec-subtitle-bitmap")]
     &::vaco_codec_subtitle_bitmap::decoder::DVDSUB_DECODER,
+    #[cfg(feature = "codec-exr")]
+    &::vaco_codec_exr::EXR_DECODER,
+    #[cfg(feature = "codec-ffv1")]
+    &::vaco_codec_ffv1::FFV1_DECODER,
+    #[cfg(feature = "codec-flac")]
+    &::vaco_codec_flac::DECODER_FLAC,
+    #[cfg(feature = "codec-gif")]
+    &::vaco_codec_gif::GIF_DECODER,
     #[cfg(feature = "codec-h263")]
     &::vaco_codec_h263::DECODER_H261,
     #[cfg(feature = "codec-h263")]
@@ -8794,6 +10091,10 @@ pub static DECODERS: &[&::vaco_codec_core::DecoderDesc] = &[
     &::vaco_codec_h264::DECODER_H264,
     #[cfg(feature = "codec-jpeg")]
     &::vaco_codec_jpeg::JPEG_DECODER,
+    #[cfg(feature = "codec-jpegls")]
+    &::vaco_codec_jpegls::JPEGLS_DECODER,
+    #[cfg(feature = "codec-jpegxl")]
+    &::vaco_codec_jpegxl::JPEGXL_DECODER,
     #[cfg(feature = "codec-mpegaudio")]
     &::vaco_codec_mpegaudio::DECODER_MP1,
     #[cfg(feature = "codec-mpegaudio")]
@@ -8808,6 +10109,48 @@ pub static DECODERS: &[&::vaco_codec_core::DecoderDesc] = &[
     &::vaco_codec_pnm::PAM_DECODER,
     #[cfg(feature = "codec-pnm")]
     &::vaco_codec_pnm::PBM_DECODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_ALAW_DECODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_F32BE_DECODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_F32LE_DECODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_F64BE_DECODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_F64LE_DECODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_MULAW_DECODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_S16BE_DECODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_S16LE_DECODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_S24BE_DECODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_S24LE_DECODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_S32BE_DECODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_S32LE_DECODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_S8_DECODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_U16BE_DECODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_U16LE_DECODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_U24BE_DECODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_U24LE_DECODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_U32BE_DECODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_U32LE_DECODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_U8_DECODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_VIDC_DECODER,
     #[cfg(feature = "codec-image-simple")]
     &::vaco_codec_image_simple::PCX_DECODER,
     #[cfg(feature = "codec-pnm")]
@@ -8818,34 +10161,122 @@ pub static DECODERS: &[&::vaco_codec_core::DecoderDesc] = &[
     &::vaco_codec_subtitle_bitmap::decoder::PGSSUB_DECODER,
     #[cfg(feature = "codec-pnm")]
     &::vaco_codec_pnm::PHM_DECODER,
+    #[cfg(feature = "codec-png")]
+    &::vaco_codec_png::PNG_DECODER,
     #[cfg(feature = "codec-pnm")]
     &::vaco_codec_pnm::PPM_DECODER,
     #[cfg(feature = "codec-qoi")]
     &::vaco_codec_qoi::QOI_DECODER,
+    #[cfg(feature = "codec-rawvideo")]
+    &::vaco_codec_rawvideo::R10K_DECODER,
+    #[cfg(feature = "codec-rawvideo")]
+    &::vaco_codec_rawvideo::R210_DECODER,
+    #[cfg(feature = "codec-rawvideo")]
+    &::vaco_codec_rawvideo::RAWVIDEO_DECODER,
     #[cfg(feature = "codec-image-simple")]
     &::vaco_codec_image_simple::SGI_DECODER,
     #[cfg(feature = "codec-image-simple")]
     &::vaco_codec_image_simple::TGA_DECODER,
+    #[cfg(feature = "codec-tiff")]
+    &::vaco_codec_tiff::TIFF_DECODER,
+    #[cfg(feature = "codec-rawvideo")]
+    &::vaco_codec_rawvideo::V210_DECODER,
+    #[cfg(feature = "codec-rawvideo")]
+    &::vaco_codec_rawvideo::V210X_DECODER,
+    #[cfg(feature = "codec-vorbis")]
+    &::vaco_codec_vorbis::DECODER_VORBIS,
     #[cfg(feature = "codec-vp8")]
     &::vaco_codec_vp8::VP8_DECODER,
     #[cfg(feature = "codec-vp9")]
     &::vaco_codec_vp9::VP9_DECODER,
+    #[cfg(feature = "codec-webp")]
+    &::vaco_codec_webp::WEBP_DECODER,
+    #[cfg(feature = "codec-rawvideo")]
+    &::vaco_codec_rawvideo::WRAPPED_AVFRAME_DECODER,
     #[cfg(feature = "codec-image-simple")]
     &::vaco_codec_image_simple::XBM_DECODER,
     #[cfg(feature = "codec-image-simple")]
     &::vaco_codec_image_simple::XWD_DECODER,
+    #[cfg(feature = "codec-rawvideo")]
+    &::vaco_codec_rawvideo::Y41P_DECODER,
 ];
 
 /// Descriptors of every enabled encoder implementation.
 pub static ENCODERS: &[&::vaco_codec_core::EncoderDesc] = &[
+    #[cfg(feature = "codec-adpcm")]
+    &::vaco_codec_adpcm::ADPCM_IMA_QT_ENCODER,
+    #[cfg(feature = "codec-adpcm")]
+    &::vaco_codec_adpcm::ADPCM_IMA_WAV_ENCODER,
+    #[cfg(feature = "codec-adpcm")]
+    &::vaco_codec_adpcm::ADPCM_MS_ENCODER,
+    #[cfg(feature = "codec-adpcm")]
+    &::vaco_codec_adpcm::ADPCM_SWF_ENCODER,
+    #[cfg(feature = "codec-alac")]
+    &::vaco_codec_alac::ENCODER_ALAC,
+    #[cfg(feature = "codec-null")]
+    &::vaco_codec_null::ANULL_ENCODER,
+    #[cfg(feature = "codec-rawvideo")]
+    &::vaco_codec_rawvideo::AVUI_ENCODER,
+    #[cfg(feature = "codec-rawvideo")]
+    &::vaco_codec_rawvideo::BITPACKED_ENCODER,
     #[cfg(feature = "codec-image-simple")]
     &::vaco_codec_image_simple::BMP_ENCODER,
+    #[cfg(feature = "codec-exr")]
+    &::vaco_codec_exr::EXR_ENCODER,
+    #[cfg(feature = "codec-ffv1")]
+    &::vaco_codec_ffv1::FFV1_ENCODER,
+    #[cfg(feature = "codec-flac")]
+    &::vaco_codec_flac::ENCODER_FLAC,
+    #[cfg(feature = "codec-gif")]
+    &::vaco_codec_gif::GIF_ENCODER,
     #[cfg(feature = "codec-jpeg")]
     &::vaco_codec_jpeg::JPEG_ENCODER,
+    #[cfg(feature = "codec-jpegls")]
+    &::vaco_codec_jpegls::JPEGLS_ENCODER,
     #[cfg(feature = "codec-pnm")]
     &::vaco_codec_pnm::PAM_ENCODER,
     #[cfg(feature = "codec-pnm")]
     &::vaco_codec_pnm::PBM_ENCODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_ALAW_ENCODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_F32BE_ENCODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_F32LE_ENCODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_F64BE_ENCODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_F64LE_ENCODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_MULAW_ENCODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_S16BE_ENCODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_S16LE_ENCODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_S24BE_ENCODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_S24LE_ENCODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_S32BE_ENCODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_S32LE_ENCODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_S8_ENCODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_U16BE_ENCODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_U16LE_ENCODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_U24BE_ENCODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_U24LE_ENCODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_U32BE_ENCODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_U32LE_ENCODER,
+    #[cfg(feature = "codec-pcm")]
+    &::vaco_codec_pcm::PCM_U8_ENCODER,
     #[cfg(feature = "codec-image-simple")]
     &::vaco_codec_image_simple::PCX_ENCODER,
     #[cfg(feature = "codec-pnm")]
@@ -8854,18 +10285,44 @@ pub static ENCODERS: &[&::vaco_codec_core::EncoderDesc] = &[
     &::vaco_codec_pnm::PGM_ENCODER,
     #[cfg(feature = "codec-pnm")]
     &::vaco_codec_pnm::PHM_ENCODER,
+    #[cfg(feature = "codec-png")]
+    &::vaco_codec_png::PNG_ENCODER,
     #[cfg(feature = "codec-pnm")]
     &::vaco_codec_pnm::PPM_ENCODER,
     #[cfg(feature = "codec-qoi")]
     &::vaco_codec_qoi::QOI_ENCODER,
+    #[cfg(feature = "codec-rawvideo")]
+    &::vaco_codec_rawvideo::R10K_ENCODER,
+    #[cfg(feature = "codec-rawvideo")]
+    &::vaco_codec_rawvideo::R210_ENCODER,
+    #[cfg(feature = "codec-rawvideo")]
+    &::vaco_codec_rawvideo::RAWVIDEO_ENCODER,
     #[cfg(feature = "codec-image-simple")]
     &::vaco_codec_image_simple::SGI_ENCODER,
     #[cfg(feature = "codec-image-simple")]
     &::vaco_codec_image_simple::TGA_ENCODER,
+    #[cfg(feature = "codec-tiff")]
+    &::vaco_codec_tiff::TIFF_ENCODER,
+    #[cfg(feature = "codec-rawvideo")]
+    &::vaco_codec_rawvideo::V210_ENCODER,
+    #[cfg(feature = "codec-rawvideo")]
+    &::vaco_codec_rawvideo::V210X_ENCODER,
+    #[cfg(feature = "codec-null")]
+    &::vaco_codec_null::VNULL_ENCODER,
+    #[cfg(feature = "codec-vp8")]
+    &::vaco_codec_vp8::VP8_ENCODER,
+    #[cfg(feature = "codec-vp9")]
+    &::vaco_codec_vp9::VP9_ENCODER,
+    #[cfg(feature = "codec-webp")]
+    &::vaco_codec_webp::WEBP_ENCODER,
+    #[cfg(feature = "codec-rawvideo")]
+    &::vaco_codec_rawvideo::WRAPPED_AVFRAME_ENCODER,
     #[cfg(feature = "codec-image-simple")]
     &::vaco_codec_image_simple::XBM_ENCODER,
     #[cfg(feature = "codec-image-simple")]
     &::vaco_codec_image_simple::XWD_ENCODER,
+    #[cfg(feature = "codec-rawvideo")]
+    &::vaco_codec_rawvideo::Y41P_ENCODER,
 ];
 
 /// Descriptors of every enabled parser implementation.
@@ -8874,10 +10331,18 @@ pub static PARSERS: &[&::vaco_codec_core::ParserDesc] = &[
     &::vaco_parse_aac::PARSER,
     #[cfg(feature = "parse-aac")]
     &::vaco_parse_aac::PARSER_LATM,
+    #[cfg(feature = "parse-mpegaudio")]
+    &::vaco_parse_mpegaudio::PARSER_AC3,
+    #[cfg(feature = "parse-audio-misc")]
+    &::vaco_parse_audio_misc::PARSER_ALAC,
     #[cfg(feature = "parse-av1")]
     &::vaco_parse_av1::PARSER,
     #[cfg(feature = "parse-image")]
     &::vaco_parse_image::PARSER_BMP,
+    #[cfg(feature = "parse-mpegaudio")]
+    &::vaco_parse_mpegaudio::PARSER_EAC3,
+    #[cfg(feature = "parse-audio-misc")]
+    &::vaco_parse_audio_misc::PARSER_FLAC,
     #[cfg(feature = "parse-image")]
     &::vaco_parse_image::PARSER_GIF,
     #[cfg(feature = "parse-h264")]
@@ -8886,6 +10351,8 @@ pub static PARSERS: &[&::vaco_codec_core::ParserDesc] = &[
     &::vaco_parse_hevc::PARSER,
     #[cfg(feature = "parse-image")]
     &::vaco_parse_image::PARSER_JPEG,
+    #[cfg(feature = "parse-mpegaudio")]
+    &::vaco_parse_mpegaudio::PARSER_MPEGAUDIO,
     #[cfg(feature = "parse-mpegvideo")]
     &::vaco_parse_mpegvideo::PARSER_MPEG1,
     #[cfg(feature = "parse-mpegvideo")]
@@ -8898,6 +10365,8 @@ pub static PARSERS: &[&::vaco_codec_core::ParserDesc] = &[
     &::vaco_parse_image::PARSER_PNG,
     #[cfg(feature = "parse-image")]
     &::vaco_parse_image::PARSER_TIFF,
+    #[cfg(feature = "parse-audio-misc")]
+    &::vaco_parse_audio_misc::PARSER_VORBIS,
     #[cfg(feature = "parse-vpx")]
     &::vaco_parse_vpx::PARSER,
     #[cfg(feature = "parse-vpx")]
@@ -9001,6 +10470,7 @@ pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[
     &::vaco_filter_key::colorhold::DESC,
     &::vaco_filter_key::colorkey::DESC,
     &::vaco_filter_color::colorlevels::DESC,
+    &::vaco_filter_color::colormatrix::DESC,
     &::vaco_filter_source::colorspectrum::DESC,
     &::vaco_filter_adynamics::compand::DESC,
     &::vaco_filter_aeffects::compensationdelay::DESC,
@@ -9085,6 +10555,7 @@ pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[
     &::vaco_filter_temporal::lagfun::DESC,
     &::vaco_filter_mm::misc::latency::video::DESC,
     &::vaco_filter_source::life::DESC,
+    &::vaco_filter_color::limitdiff::DESC,
     &::vaco_filter_mm::looping::video::DESC,
     &::vaco_filter_adynamics::loudnorm::DESC,
     &::vaco_filter_aeq::lowpass::DESC,
@@ -9145,6 +10616,7 @@ pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[
     &::vaco_filter_convolve::roberts::DESC,
     &::vaco_filter_video_composite::rotate::DESC,
     &::vaco_filter_video_geometry::scale::DESC,
+    &::vaco_filter_analysis::scdet::DESC,
     &::vaco_filter_convolve::scharr::DESC,
     &::vaco_filter_geometry::scroll::DESC,
     &::vaco_filter_mm::segment::video::DESC,
