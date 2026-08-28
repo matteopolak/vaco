@@ -1,11 +1,22 @@
-//! H.261 and baseline H.263 video decode against arbitrary bytes: the
-//! bit-level (H.261) and byte-level (H.263) start-code scanners,
-//! picture/GOB/macroblock-layer VLC decode (`MBA`/`MTYPE`/`MVD`/`CBP` for
-//! H.261; `MCBPC`/`CBPY`/`MVD` for H.263), `TCOEFF`/`TCOEF` coefficient
-//! decode including both formats' escape paths, motion compensation, and
-//! the loop filter — the whole `send_packet`/`receive_frame` pipeline for
+//! H.261 and (baseline plus H.263+ Annexes D/K/T) H.263 video decode
+//! against arbitrary bytes: the bit-level (H.261) and byte-level (H.263)
+//! start-code scanners, picture/GOB/macroblock-layer VLC decode
+//! (`MBA`/`MTYPE`/`MVD`/`CBP` for H.261; `MCBPC`/`CBPY`/`MVD` for H.263),
+//! `TCOEFF`/`TCOEF` coefficient decode including both formats' escape
+//! paths (and Annex T's `EXTENDED-ESCAPE`), motion compensation, and the
+//! loop filter — the whole `send_packet`/`receive_frame` pipeline for
 //! both `H261Decoder` and `H263Decoder`, run one packet at a time so the
 //! fuzzer never has to synthesise a container to reach any of it.
+//!
+//! No structural change was needed to reach the annex work's new code:
+//! `PLUSPTYPE` (bits 6-8 of `PTYPE` equal to `"111"`, a 1-in-8 byte
+//! pattern) and everything behind it — the extended header's own field
+//! cascade, Annex K's slice layer (including the stuffing-aware
+//! start-code check any misaligned `"00 00 1xxxxxxx"` exercises), Annex
+//! D's two `UMV` reconstruction paths, and Annex T's variable-length
+//! `DQUANT`/`EXTENDED-LEVEL` — are all just more of the same arbitrary
+//! bitstream this target already mutates; a coverage-guided run finds its
+//! own way in.
 //!
 //! Both decoders are exercised from the same arbitrary input, since
 //! neither one's start-code pattern can be confused with the other's

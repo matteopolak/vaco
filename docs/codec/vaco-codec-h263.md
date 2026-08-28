@@ -13,12 +13,17 @@ the crate.
 
 Scope: H.261's full mandatory syntax (both CIF and QCIF, the optional loop
 filter, integer-pel motion compensation). H.263's mandatory baseline
-syntax only — Unrestricted Motion Vector, Syntax-based Arithmetic Coding,
-Advanced Prediction and PB-frames (Annexes D/E/F/G, all optional per
-`PTYPE`'s own mode bits) are a later pass, not this crate; a picture using
-any of them is decoded as a flat mid-grey `CORRUPT` frame rather than
-silently producing wrong pixels. Encode is out of scope entirely for both
-formats.
+syntax, plus three H.263+ annexes: **D** (Unrestricted Motion Vector,
+both the original `PTYPE`-bit and the `PLUSPTYPE`/Table D.3 encodings),
+**K** (Slice Structured mode, replacing the GOB layer), and **T**
+(Modified Quantization). Annexes E (Syntax-based Arithmetic Coding), F
+(Advanced Prediction), G (PB-frames), I (Advanced INTRA Coding), J
+(Deblocking Filter) and P (Reference Picture Resampling) are not
+implemented — see "H.263+ annexes: what landed and what didn't" below for
+why each one was or wasn't worth the cost. A picture using any
+unimplemented mode is decoded as a flat mid-grey `CORRUPT` frame rather
+than silently producing wrong pixels. Encode is out of scope entirely for
+both formats.
 
 ## How it works
 
@@ -99,6 +104,125 @@ single reference — no `previous`/`recent`/`held` triple, no reordering
 delay. Neither has separate field pictures either, so there's no
 frame/field addressing to parameterize motion compensation over.
 
+## H.263+ annexes: what landed and what didn't
+
+`Vaco-Spec-Ref: itu-t-h263` (01/2005 edition — the free 03/96 text the
+baseline decoder above cites predates Annexes I through X entirely; the
+01/2005 edition is the same freely published ITU-T recommendation, its
+current in-force revision, cumulative over the amendments that added
+them). All annex work lives behind `PLUSPTYPE` (`plus.rs`), the extended
+picture header H.263+ substitutes for the fixed 13-bit `PTYPE` whenever
+its bits 6-8 read `"111"` — `h263::decode_plus_picture` is the entry
+point, parallel to the baseline `PTYPE` branch in
+`h263::decode_access_unit`.
+
+**Landed:**
+
+- **Annex D (Unrestricted Motion Vector), both encodings.** The original
+  H.263 version 1 form (`PTYPE` bit 10, no `PLUSPTYPE`) reinterprets Table
+  14's existing codes with a wider, sign-matched range
+  (`motion::h263_umv_vector_legacy`) — no new VLC table. The `PLUSPTYPE`
+  form uses Table D.3, a "regularly constructed reversible" code the spec
+  itself contrasts with Table 14's ambiguity ("every entry... has a
+  single value") — decoded algorithmically
+  (`block::decode_table_d3`) rather than transcribed, and verified
+  against the spec's own worked example (`-13` → `"0 11 01 11 10"`).
+  Reconstruction is a plain sum (`motion::h263_umv_vector_plus`): Tables
+  D.1/D.2's per-format ranges and the `UUI == "01"` unrestricted case are
+  both encoder-side sending restrictions, not a decoder-side wraparound
+  rule, so this crate does not special-case either — a design correction
+  made after an early, over-engineered version wrapped the result into an
+  absolute range that turned out not to exist on the decode side at all
+  (see the bugs section below).
+- **Annex K (Slice Structured mode).** Replaces the GOB layer with a
+  slice layer: `h263::decode_first_slice` for the one abbreviated slice
+  that follows the picture header directly (no `SSC`, no `SSBI`/`SQUANT`
+  — `Vaco-Spec-Ref: itu-t-h263` K.2's own text), `h263::decode_slice` for
+  every later one. Both the free-running (raster-order-to-end,
+  `h263::decode_gob` reused unchanged with an absolute starting index
+  instead of a row) and Rectangular Slice (`h263::decode_slice_rect`,
+  wrapping every `SWI`-wide row into the next picture row down) submodes
+  are implemented; Arbitrary Slice Ordering needed no code at all, since
+  this crate already trusts each slice's own `MBA` literally rather than
+  assuming bitstream order. `h263::mba_field_width`/`swi_field_width`
+  transcribe Tables K.2/K.3's "Default" columns only — the "RRU mode"
+  columns are unreachable, since a Reduced-Resolution-Update picture is
+  already turned away by `plus::parse` (see below).
+- **Annex T (Modified Quantization).** Variable-length `DQUANT`
+  (`block::decode_mq_dquant`, Table T.1's small-step deltas or a direct
+  6-bit new value), a separate chrominance quantiser `QUANT_C`
+  (`block::quant_c`, Table T.2), and the `EXTENDED-ESCAPE`/
+  `EXTENDED-LEVEL` coefficient path (`block::decode_extended_level`,
+  Figure T.1's bit-rotation, decoded bit-by-bit against the figure's own
+  diagram rather than as a derived rotate amount) with the wider
+  `|REC| < 4096` reconstruction clip Annex T's own restriction 1 requires
+  (`block::dequant_ac_mq`).
+
+**Skipped, for cost — the primary text (already the freely available
+01/2005 edition used above) was read for all six, this is a scope
+decision, not a provenance one:**
+
+- **Annex F (Advanced Prediction)** needs overlapped block motion
+  compensation touching every macroblock's reconstruction (not just
+  4-vector ones — OBMC applies whenever the mode is on at all), redefined
+  per-block motion vector predictors (Figure F.1's four distinct
+  patterns), and a chroma-vector rounding table (F.1) distinct from the
+  one this crate already has. This is the single biggest, riskiest
+  remaining piece — a genuine rewrite of the motion-compensation
+  pipeline, not an additive change — and was set aside rather than rushed
+  in the same pass as D/K/T.
+- **Annex E (Syntax-based Arithmetic Coding)** replaces every VLC in the
+  format with arithmetic coding — a different entropy layer entirely, not
+  an additive mode on top of the existing one.
+- **Annex G (PB-frames)** and **Annex I (Advanced INTRA Coding)** each
+  need their own new prediction/reconstruction machinery (a second,
+  bidirectionally-predicted picture interleaved with the primary one; a
+  spatial-neighbour DC/AC coefficient predictor) comparable in size to
+  Annex F's, with no `PLUSPTYPE` mode bit forcing them together with
+  anything already landed.
+- **Annex J (Deblocking Filter)** is a post-reconstruction filter over
+  the whole picture, structurally unlike anything else in this pass
+  (D/K/T all change what one macroblock decodes to, not what happens to
+  every macroblock afterward), and interacts with Annex K's own slice
+  boundaries in a way (filters across them unless Independent Segment
+  Decoding is also active) that would need re-testing once landed.
+- **Annex P (Reference Picture Resampling)** changes the reference
+  picture's own geometry between pictures (resampling to a new size) —
+  `plus::parse` already turns away any picture whose `MPPTYPE` sets the
+  `RPR` bit, since this crate's single-`RefPicture` design assumes the
+  reference is always the previous decoded frame at the same size.
+
+`plus::parse` bails to `unsupported` (same flat-mid-grey `CORRUPT`
+convention as the baseline decoder) for any picture using one of the six
+skipped annexes, Reference Picture Resampling/Reduced-Resolution Update,
+or an `MPPTYPE` picture-type code naming Improved PB/B/EI/EP (Annexes
+M/O) — rather than misreading the scalability/RPS-specific fields
+(`ELNUM`/`RLNUM`/`RPSMF`/`TRPI`/`TRP`/`BCI`/`BCM`/`RPRP`) that only ever
+follow one of those.
+
+### RV10/RV20 (RealVideo) and FLV1 (Sorenson Spark): no family hooks added
+
+Both were checked against this project's clean-room bar (D7) before
+writing anything, the same check applied to the MPEG-4 Part 2 decision on
+issue #360: is either variant's divergence from baseline H.263 documented
+somewhere that isn't someone else's decoder source? RealVideo's RV10/RV20
+bitstream layer has never been openly specified by RealNetworks; every
+public description of its H.263-derived quirks (a different picture
+header, a proprietary variable-block-size mode) traces back to black-box
+reverse-engineering of the reference codec, published as source
+(originally in other open-source decoders) rather than as an independent
+specification document. Sorenson Spark (FLV1) is nominally H.263-based
+but its own divergences (its own 3-bit source-format table with extra
+custom-size codes, no start codes, a different `MVD` table) are likewise
+undocumented outside decoder source — the already-registered
+`adobe-swf-19`/FLV container-level source covers the *container* format
+FLV1 streams travel in, not the video bitstream's own H.263 divergences.
+Neither variant clears the bar this project already applied to #360;
+neither was implemented, and no placeholder source was registered for
+either (the same lesson as the `iso-14496-2` placeholder fix: a citation
+that looks like evidence of access no one actually has is worse than no
+citation).
+
 ## D-22 seam findings (a second, different consumer)
 
 `vaco-codec-mpeg12`'s own `TECH-DEBT.md` entry lists four pieces as
@@ -135,6 +259,75 @@ consumer, from a genuinely different codec family, and found:
   (`ActivePicture::mv_grid`) neither `vaco-codec-mpeg12` nor H.261 needed.
   A future D-22 core built only from the MPEG-family list would have
   missed this entirely.
+
+## D-22 seam findings (a third consumer, same core, extended not replaced)
+
+The annex work re-exercises the same seams the baseline H.263 decoder
+already tested against `vaco-codec-mpeg12`'s D-22 list, from inside a
+single crate this time rather than across crates — a different angle on
+the same question. Mixed results again:
+
+- **Held: half-pel interpolation, unchanged.** Annex D's extended-range
+  vectors still resolve to the same `motion::sample_half_pel` call; only
+  the *value* the vector holds changed, not how it's used to sample.
+- **Held, in a new way: the three-stage block pipeline's shape.**
+  Annex T's `QUANT_C` substitution and widened clip
+  (`block::dequantise_ranged`) slot into the *existing* `dequantise`
+  shape as a parameter, not a new pipeline — the shape identified as
+  transferable from MPEG stayed transferable a second time, for a
+  same-family extension this time rather than a cross-family one.
+- **Did not apply, confirmed a second time: B-picture/reference-delay
+  machinery.** None of D/K/T touch picture ordering or reference count;
+  the "no B-pictures" seam finding from the baseline report needed no
+  revisiting.
+- **Did not hold, in a way the baseline report's own words already
+  flagged as a risk: the "GOB-header emptiness is not tracked" baseline
+  simplification does not carry over to Annex K.** The baseline decoder's
+  own "Known gaps" section states `predictors()` "always takes the
+  non-empty-header branch" for GOB row crossings — but `predictors()`
+  itself has no such branch at all; it only special-cases *absolute*
+  picture boundaries, never a GOB/row boundary specifically. That
+  discrepancy between the comment and the code was harmless for baseline
+  streams, because ffmpeg's own encoder was observed sending an empty
+  header for every row but the first — the row-crossing case the comment
+  describes essentially never fires. Annex K's slices always carry a
+  real, non-empty header (§K.1's own rule 1: "the prediction of motion
+  vector values are the same as if a GOB header were present"), so the
+  gap between the comment's claim and the code's actual behavior stopped
+  being harmless the moment slices were real: an early version of this
+  annex work reused `predictors()` completely unchanged and measured a
+  slowly *accumulating* per-frame error (avg MAD growing from 0.058 at
+  frame 1 to 9.07 by frame 49 against a real ffmpeg fixture, almost all
+  of it gone once fixed — see the bugs section below). Fixed by adding an
+  explicit per-macroblock slice id (`ActivePicture::mb_slice_id`,
+  parallel to `mv_grid`) that `predictors()` now consults, but *only*
+  when `slice_structured` — baseline decode is bit-for-bit unaffected
+  (confirmed by re-running the six baseline fixtures from "Measured
+  accuracy" after this fix landed: identical numbers).
+- **Newly discovered, and specific to this crate's own byte-alignment
+  design: a start-code scan that assumes it is already byte-aligned
+  misses one that is reachable through pure stuffing bits.**
+  `h263::at_start_code`'s original form only recognised a start code when
+  `r`'s bit position was *already* a multiple of 8. That is harmless for
+  the same reason the GOB-emptiness gap above was harmless: baseline GOB
+  rows mostly have no boundary to find there at all, so the "already
+  aligned" check was rarely asked to notice a boundary mid-picture.
+  Annex K's slices always end in `SSTUF` (zero stuffing bits, fewer than
+  8, padding to the next `SSC`'s byte alignment) — a boundary that is
+  *almost never* already byte-aligned by chance, since macroblock
+  coefficient data is variable-length. Without recognising it, the
+  decode loop read those stuffing zero bits as one more macroblock's own
+  `COD`/`MCBPC` bits, corrupting the last few macroblocks of essentially
+  every row before the outer byte-level scan re-synchronised at the next
+  slice's real start code. This is the dominant seam this crate's own
+  byte-oriented design (as opposed to H.261's bit-oriented one) had not
+  needed to confront before Annex K made a boundary-after-almost-every-
+  row the normal case rather than the rare one. Fixed by extending
+  `at_start_code` to peek past a run of zero stuffing bits up to the next
+  byte boundary before giving up (see its own doc comment for the exact
+  peek arithmetic) — this also fixes the same latent risk for a baseline
+  stream that legitimately sends a non-empty mid-picture GOB header on a
+  non-byte-aligned boundary, not only for Annex K.
 
 ## Real bugs found and fixed while building the differential harness
 
@@ -208,6 +401,59 @@ source, per this project's clean-room constraint.
    step past a position `decode_gob` may have legitimately returned
    unchanged.
 
+### Bugs found while building the H.263+ annex differential harness
+
+Found the same way as the five baseline bugs above: comparing this
+crate's own decode against `ffmpeg`-decoded reference YUV for a real
+`ffmpeg -c:v h263p -bitexact -umv 1` fixture (QCIF, standard 30000/1001
+framerate — a non-standard rate was tried first and dropped once it
+became clear it forced `CPFMT`/custom-PCF parsing to be exercised too,
+which was not the point of this particular fixture). ffmpeg's own h263p
+encoder was observed, empirically, to always route `-umv` through
+`PLUSPTYPE` (never the legacy `PTYPE`-bit-10 form) and to always set the
+Slice Structured mode bit alongside it regardless of whether
+`-structured_slices` was requested — meaning Annex D's `PLUSPTYPE` path
+and Annex K could not be differentially tested independently of each
+other against this encoder; the legacy `PTYPE`-bit-10 UMV path and Annex
+T were verified only by hand-crafted-bitstream unit tests
+(`motion::tests`, `block::tests`), a weaker but still real tier, same
+caveat already noted for the annexes ffmpeg's encoder cannot produce at
+all.
+
+6. **The picture-layer `PEI`/`PSUPP` chain was never read on the
+   `PLUSPTYPE` path.** The baseline picture header calls
+   `skip_pei_chain` right after `CPM`/`PSBI`; `decode_plus_picture`
+   read `PQUANT` and went straight to slice/GOB decode without it.
+   Figure 8 does not list `PEI` among `PLUSPTYPE`'s own optional fields
+   because it isn't one — it keeps its ordinary position from Figure 7,
+   right before the picture data, in *both* headers. Even with no
+   supplemental data at all, `PEI` is one `"0"` bit that still has to be
+   read; omitting it left every `PLUSPTYPE` picture's first slice/GOB
+   exactly one bit short of alignment, corrupting `SEPB1` onward for
+   the very first slice of every picture that used the extended header.
+   Found by hand-verifying the abbreviated first slice's own bits
+   (`SEPB1` decoded as `0`, which the spec fixes at `1`) against a
+   brute-force search for the bit offset where `SEPB1 == 1` and
+   `MBA == 0` both held — off by exactly one bit, and `skip_pei_chain`
+   was the one-bit gap. Fixed by calling it in `decode_plus_picture`
+   too, right after `PQUANT`.
+7. **`at_start_code` needed a stuffing-aware branch — see the seam
+   finding above** for the fuller explanation; the same fix is listed
+   here because it was found the same way (a real ffmpeg fixture
+   decoding to 44-55% pixel-exact on an intra picture that should have
+   been ~99%, root-caused to garbage macroblocks appearing at every row
+   boundary once the `PEI` fix above got the picture header itself
+   aligned correctly).
+8. **`predictors()`'s picture-boundary-only substitution needed a
+   slice-boundary case for Annex K — see the seam finding above** for
+   the fuller explanation; found after fixes 6 and 7 already brought an
+   intra picture (frame 0 of the UMV/slice fixture) to 99.2% exact,
+   pixel-identical to this crate's own established baseline accuracy,
+   while every following P-picture still showed a small but steadily
+   *growing* per-frame error — the signature of a systematically wrong
+   (rather than occasionally wrong) motion-vector predictor, not a
+   remaining VLC or dequantisation bug.
+
 ## Measured accuracy
 
 Measured with `examples/decode_dump`, comparing every plane of every
@@ -225,6 +471,28 @@ for both formats:
 | QCIF, intra-only | H.263 | 5/5 | 0.006 – 0.008 | 1 | 99.2 – 99.4% |
 | QCIF, mixed I/P | H.263 | 5/5 | 0.008 – 0.011 | 1 | 98.9 – 99.2% |
 | CIF, mixed I/P | H.263 | 5/5 | 0.003 – 0.004 | 2 | 99.6 – 99.7% |
+| QCIF, UMV + Annex K, I-only | H.263+ | 1/1 | 0.008 | 1 | 99.2% |
+| QCIF, UMV + Annex K, mixed I/P (50 frames) | H.263+ | 50/50 | 0.008 – 0.78 (growing) | 1 – 17 | 99.2% – 85.9% |
+
+The last row is the one real-world differential fixture available for
+the annex work (`ffmpeg -c:v h263p -bitexact -umv 1`, which — per the
+finding above — always couples Annex D's `PLUSPTYPE` path with Annex K).
+Its own I-picture (frame 0, no motion vectors at all) matches this
+crate's established baseline accuracy exactly, confirming the picture-
+header and slice-layer work is sound; the P-pictures accumulate a small,
+slowly growing error not yet root-caused beyond ruling out the two bugs
+above (both fixed, and responsible for the bulk of a much larger error
+before the fix — avg MAD peaked at 9.07 by frame 49 pre-fix, 0.78
+post-fix). The remaining gap is sparse (roughly 1 in 40 pixels by frame
+49) and small in magnitude (1-2 of 255 code values per affected pixel) —
+consistent with one more small, not-yet-isolated rounding or edge-case
+difference in the UMV/Annex-K motion-vector path, not a structural
+misread. Annex T and the legacy (non-`PLUSPTYPE`) Annex D path have no
+equivalent real-fixture number at all — see the bugs section above for
+why — only the hand-crafted-bitstream unit tests in `block::tests` and
+`motion::tests`, verified against the spec's own worked examples (Table
+D.3's `-13` example; Table T.1/T.2's own examples) rather than against a
+second independent implementation.
 
 Not literally framemd5-identical to the reference in any of these —
 `vaco-codec-jpeg`'s own precedent applies here too: `vaco-codec-dsp-idct`
@@ -247,12 +515,21 @@ not this small a uniform gap.
   table, assert each row's *exact bit length*, not only prefix-freedom
   and value coverage — a code transcribed one bit short still passes both
   of those checks while silently shifting every later code.
-- **A new H.263 annex (Annex D/E/F/G, or the newer ones)**: start from
-  `h263::decode_access_unit`'s `unsupported` flag (currently set by any of
-  `UMV`/`SAC`/`AP`/`PB-frame` in `PTYPE`) and `h263.rs`'s own module docs
-  for what's already excluded. `mb_type == 2` (`INTER4V`) inside
-  `decode_gob` is the one per-macroblock case that also needs unlocking
-  for Advanced Prediction mode specifically.
+- **A new H.263+ annex (E/F/G/I/J/P, or a later one)**: start from
+  `plus::parse`'s own bail list (currently SAC/Advanced Prediction/
+  Advanced INTRA/Deblocking Filter/Reference Picture Selection/
+  Independent Segment Decoding/Alternative INTER VLC/RPR/RRU/Improved
+  PB/B/EI/EP) and this file's "what landed and what didn't" section above
+  for why each one already skipped was skipped. `mb_type == 2`
+  (`INTER4V`) inside `try_decode_one_mb` is the one per-macroblock case
+  that also needs unlocking for Advanced Prediction mode specifically —
+  it currently fails the whole picture the same as any other
+  unimplemented mode.
+- **The legacy (non-`PLUSPTYPE`) `UMV`/`SAC`/`AP`/`PB-frame` bits in the
+  fixed 13-bit `PTYPE`**: still gate `unsupported` in the non-`PLUSPTYPE`
+  branch of `h263::decode_access_unit` for every mode except `UMV`
+  (`umv_legacy`, unlocked by this pass — see
+  `motion::h263_umv_vector_legacy`).
 - **A GOB spanning more than one row (larger source formats)**: this
   crate hard-codes one macroblock row per GOB (`h263::decode_access_unit`
   treats `gn` directly as a row index), which is correct for every
@@ -289,19 +566,45 @@ the same way every other decoder in this workspace does.
   using more rows per GOB is decoded on the wrong row boundaries rather
   than rejected.
 - **H.263's "outside the GOB" motion-vector-prediction border rule is not
-  distinguished from "outside this row, inside the picture."** §6.1.1
-  rule 3 treats a neighbour as unavailable if it's outside the *picture*
-  **or** outside the *current GOB* when that GOB's own header was
-  non-empty. This crate always takes the "non-empty header" branch,
-  matching essentially every real encoder (which almost always does send
-  a header when it sends one at all) but not a stream that legitimately
-  relies on the empty-header exception for this specific rule.
+  distinguished from "outside this row, inside the picture" for the
+  *baseline GOB layer*.** §6.1.1 rule 3 treats a neighbour as unavailable
+  if it's outside the *picture* **or** outside the *current GOB* when
+  that GOB's own header was non-empty. `predictors()` has no GOB-boundary
+  branch at all (only the absolute-picture-boundary one) — this was
+  previously mis-described in this same section as "always takes the
+  non-empty-header branch," which is not what the code does; see the
+  third D-22 seam report above for how that discrepancy was found. It
+  remains true for the baseline GOB layer (harmless for essentially every
+  real encoder's output, which sends an empty header for every row but
+  the first) but no longer true for Annex K's slice layer, which now has
+  its own, correct per-slice version of this same rule
+  (`ActivePicture::mb_slice_id`).
 - **`mb_type == 2` (H.263 `INTER4V`)** stops decoding the rest of the
   picture rather than reading four vectors per macroblock — only
-  meaningful under Advanced Prediction mode, already out of scope.
+  meaningful under Advanced Prediction mode, out of scope (see "what
+  landed and what didn't" above).
+- **Annexes E, F, G, I, J, P** are not implemented at all — skipped for
+  cost, not provenance; see "what landed and what didn't" above for the
+  reasoning behind each.
+- **RV10/RV20 and FLV1** have no family hooks — their divergence from
+  baseline H.263 does not clear this project's clean-room provenance bar
+  (documented only in decoder source, not in an independently published
+  specification); see "RV10/RV20 and FLV1" above.
+- **Annex D/T's real-fixture differential testing is coupled to Annex K**
+  (ffmpeg's own h263p encoder was observed always enabling Slice
+  Structured mode alongside any other `PLUSPTYPE` mode), and Annex T has
+  no exposed ffmpeg encoder toggle at all — see "Measured accuracy" for
+  what tier of testing each annex actually got.
+- **A small, not-yet-isolated residual error accumulates across
+  P-pictures in the one real UMV+Annex-K fixture available** (avg MAD
+  0.78, ~86% pixel-exact by frame 49, down from an intra-picture 99.2%)
+  — see "Measured accuracy" for the numbers and the two bugs already
+  ruled out.
 - **Neither decoder reaches literal framemd5-identical output** — see
-  "Measured accuracy". Reference-quality (±1, no localized or growing
-  error) on every fixture checked, not bit-exact.
+  "Measured accuracy". Reference-quality (±1, no localized error) on
+  every *baseline* fixture checked and on the one annex fixture's
+  intra picture; not bit-exact anywhere, and not yet reference-quality on
+  the annex fixture's P-pictures specifically (see the point above).
 - **No B-frame, PB-frame, or field-picture support** — neither format's
   baseline syntax has any of these; not a gap relative to this crate's
   stated scope, listed here only so a future annex pass knows what

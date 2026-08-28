@@ -85,3 +85,16 @@ method = "transcribed"
 # Table 9's DQUANT (4 rows) and Table 10's CBPY (H263_CBPY_INTRA/INTER:
 # 16 rows each) are all below this project's 32-element provenance
 # threshold.
+
+# Annex D/K/T (H.263+): Table D.3 (motion vector differences when
+# PLUSPTYPE is present) is not a lookup table in this crate at all — it
+# is a "regularly constructed reversible" code (the spec's own words),
+# implemented algorithmically in block::decode_table_d3 and verified
+# against the spec's own worked example (-13 -> "0 11 01 11 10") rather
+# than transcribed row by row. Table T.1 (small-step DQUANT deltas, 7
+# rows) and Table T.2 (QUANT -> QUANT_C, 8 rows) are both below this
+# project's 32-element provenance threshold; Table K.2/K.3's field
+# widths (6 rows each) are likewise below it. All four are cited
+# directly in the doc comments of the functions that encode them
+# (block::decode_mq_dquant, block::quant_c, h263::mba_field_width,
+# h263::swi_field_width) rather than duplicated here.
