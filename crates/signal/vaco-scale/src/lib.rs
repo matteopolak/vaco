@@ -63,6 +63,7 @@ pub mod options;
 pub mod plan;
 pub mod rowio;
 mod scaler;
+mod special;
 pub mod spec;
 
 pub use exec::{DstPlane, SrcPlane};
