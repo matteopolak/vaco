@@ -473,7 +473,7 @@ pipe!(
     base = "jpegls",
     extensions = &["jls"],
     framing = JPEG_MARKER,
-    codec = None,
+    codec = Some(CodecId::JpegLs),
     raw_name = "jpegls",
     magics = &[&[(0, &[0xFF, 0xD8])]]
 );
