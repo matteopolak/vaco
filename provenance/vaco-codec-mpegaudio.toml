@@ -1,0 +1,97 @@
+[[table]]
+name   = "SYNTHESIS_WINDOW"
+file   = "crates/codec/vaco-codec-mpegaudio/src/tables.rs"
+source = "iso-11172-3"
+clause = "Annex B, Table 3-B.3 (window Di, 512 coefficients)"
+method = "transcribed"
+
+[[table]]
+name   = "LAYER12_SCALEFACTORS"
+file   = "crates/codec/vaco-codec-mpegaudio/src/tables.rs"
+source = "iso-11172-3"
+clause = "Annex B, Table 3-B.1 (63 scalefactors)"
+method = "transcribed"
+
+[[table]]
+name   = "LAYER2_TABLE_LSF"
+file   = "crates/codec/vaco-codec-mpegaudio/src/tables.rs"
+source = "iso-13818-3"
+clause = "Annex B, Table B.1 (low-sample-rate Layer II bit allocation)"
+method = "transcribed"
+
+[[table]]
+name   = "HUFFMAN_LINBITS"
+file   = "crates/codec/vaco-codec-mpegaudio/src/huffman_data.rs"
+source = "iso-11172-3"
+clause = "Annex B, Table 3-B.7 (per-table escape width)"
+method = "transcribed"
+
+[[table]]
+name   = "HUFF_TABLE_7"
+file   = "crates/codec/vaco-codec-mpegaudio/src/huffman_data.rs"
+source = "iso-11172-3"
+clause = "Annex B, Table 3-B.7, Huffman table 7"
+method = "transcribed"
+
+[[table]]
+name   = "HUFF_TABLE_8"
+file   = "crates/codec/vaco-codec-mpegaudio/src/huffman_data.rs"
+source = "iso-11172-3"
+clause = "Annex B, Table 3-B.7, Huffman table 8"
+method = "transcribed"
+
+[[table]]
+name   = "HUFF_TABLE_9"
+file   = "crates/codec/vaco-codec-mpegaudio/src/huffman_data.rs"
+source = "iso-11172-3"
+clause = "Annex B, Table 3-B.7, Huffman table 9"
+method = "transcribed"
+
+[[table]]
+name   = "HUFF_TABLE_10"
+file   = "crates/codec/vaco-codec-mpegaudio/src/huffman_data.rs"
+source = "iso-11172-3"
+clause = "Annex B, Table 3-B.7, Huffman table 10"
+method = "transcribed"
+
+[[table]]
+name   = "HUFF_TABLE_11"
+file   = "crates/codec/vaco-codec-mpegaudio/src/huffman_data.rs"
+source = "iso-11172-3"
+clause = "Annex B, Table 3-B.7, Huffman table 11"
+method = "transcribed"
+
+[[table]]
+name   = "HUFF_TABLE_12"
+file   = "crates/codec/vaco-codec-mpegaudio/src/huffman_data.rs"
+source = "iso-11172-3"
+clause = "Annex B, Table 3-B.7, Huffman table 12"
+method = "transcribed"
+
+[[table]]
+name   = "HUFF_TABLE_13"
+file   = "crates/codec/vaco-codec-mpegaudio/src/huffman_data.rs"
+source = "iso-11172-3"
+clause = "Annex B, Table 3-B.7, Huffman table 13"
+method = "transcribed"
+
+[[table]]
+name   = "HUFF_TABLE_15"
+file   = "crates/codec/vaco-codec-mpegaudio/src/huffman_data.rs"
+source = "iso-11172-3"
+clause = "Annex B, Table 3-B.7, Huffman table 15"
+method = "transcribed"
+
+[[table]]
+name   = "HUFF_TABLE_16"
+file   = "crates/codec/vaco-codec-mpegaudio/src/huffman_data.rs"
+source = "iso-11172-3"
+clause = "Annex B, Table 3-B.7, Huffman table 16 (shared by 17-23 via wider linbits)"
+method = "transcribed"
+
+[[table]]
+name   = "HUFF_TABLE_24"
+file   = "crates/codec/vaco-codec-mpegaudio/src/huffman_data.rs"
+source = "iso-11172-3"
+clause = "Annex B, Table 3-B.7, Huffman table 24 (shared by 25-31 via wider linbits)"
+method = "transcribed"

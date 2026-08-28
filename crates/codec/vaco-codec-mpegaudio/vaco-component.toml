@@ -1,0 +1,41 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# MPEG-1/2/2.5 Layer I/II/III decode. All three layers and every sample-rate
+# family predate MP3's own 2017-04-23 patent-programme termination
+# (`planning/research/07-legal-patents-licensing.md`'s patent table marks
+# Layer II and Layer III both GREEN, decode and encode), so this ships
+# unconditionally like AC-3 and every other GREEN codec: no `encumbered`
+# feature, `default` left at its normal `true`.
+#
+# `Vaco-CLI-Reachable: false` (issue #652, tracked separately) — these three
+# constructors exist and are registered, but nothing in `vaco-cli` can select
+# a decoder by name yet, so a fragment here is ready for that path rather
+# than exercised by it today. Verified instead by calling `MpegAudioDecoder`
+# directly; see `docs/codec/vaco-codec-mpegaudio.md`.
+
+[[component]]
+kind      = "decoder"
+name      = "mp1"
+long_name = "MPEG-1 Audio Layer I"
+feature   = "codec-mpegaudio"
+ctor      = "vaco_codec_mpegaudio::DECODER_MP1"
+media     = "audio"
+codec     = "mp1"
+
+[[component]]
+kind      = "decoder"
+name      = "mp2"
+long_name = "MPEG-1 Audio Layer II"
+feature   = "codec-mpegaudio"
+ctor      = "vaco_codec_mpegaudio::DECODER_MP2"
+media     = "audio"
+codec     = "mp2"
+
+[[component]]
+kind      = "decoder"
+name      = "mp3"
+long_name = "MPEG-1/2/2.5 Audio Layer III (MP3)"
+feature   = "codec-mpegaudio"
+ctor      = "vaco_codec_mpegaudio::DECODER_MP3"
+media     = "audio"
+codec     = "mp3"
