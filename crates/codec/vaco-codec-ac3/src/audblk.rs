@@ -44,6 +44,14 @@ pub struct BlockState {
     /// coarse offset when `snroffste` is set; persist otherwise (§7.2.2.1.1).
     pub ch_snroffset: Vec<i32>,
     pub ch_fgaincod: Vec<u8>,
+    /// LFE's own combined SNR offset/fast gain — distinct from `alloc`'s
+    /// (which the coupling channel uses when `cplinu`), and previously not
+    /// tracked at all (`lfefsnroffst`/`lfefgaincod` were read and
+    /// discarded, leaving LFE's own allocation using whatever
+    /// `alloc.snroffset` happened to hold — 0 when no coupling channel had
+    /// ever set it). Persists across blocks exactly like `ch_snroffset`.
+    pub lfe_snroffset: i32,
+    pub lfe_fgaincod: u8,
     /// Coupling strategy, persisting across blocks where `cplstre == 0`.
     pub cplinu: bool,
     pub cplbegf: u32,
@@ -72,6 +80,8 @@ impl BlockState {
             fscod,
             ch_snroffset: vec![0; nfchans],
             ch_fgaincod: vec![4; nfchans],
+            lfe_snroffset: 0,
+            lfe_fgaincod: 4,
             cplinu: false,
             cplbegf: 0,
             cplendf: 0,
@@ -302,8 +312,10 @@ pub fn decode(r: &mut BitReader<'_>, state: &mut BlockState) -> DecodedBlock {
             }
         }
         if state.lfeon {
-            r.skip(4); // lfefsnroffst
-            r.skip(3); // lfefgaincod
+            let fsnr = r.get(4);
+            let fgain = r.get(3);
+            state.lfe_snroffset = combine_snroffset(csnroffst, fsnr);
+            state.lfe_fgaincod = u8::try_from(fgain).unwrap_or(0);
         }
     }
 
@@ -348,6 +360,15 @@ pub fn decode(r: &mut BitReader<'_>, state: &mut BlockState) -> DecodedBlock {
     // same block. One `PendingGroup` for the whole block, threaded through
     // every call below in the spec's own processing order (fbw channels,
     // then LFE), is what that requires.
+    //
+    // §7.2.2.1.1's special case: if every SNR offset source in the block
+    // is exactly zero, `bap[]` is all zero for the whole block and no
+    // further bit-allocation processing is required. See
+    // `all_snr_offsets_raw_zero`'s own docs for why comparing already-
+    // combined values against a sentinel is equivalent to checking the raw
+    // fields.
+    let all_snr_offsets_raw_zero = all_snr_offsets_raw_zero(state, cplinu);
+
     let mut pending_group = mantissa::PendingGroup::new();
     let mut channels = Vec::new();
     for ch in 0..nfchans {
@@ -357,12 +378,16 @@ pub fn decode(r: &mut BitReader<'_>, state: &mut BlockState) -> DecodedBlock {
         // exponent-decode loop above), but never index past it if a
         // truncated bitstream produced a shorter array.
         let end = end.min(exps.len());
-        let mut params = state.alloc;
-        params.start_bin = start;
-        params.end_bin = end;
-        params.snroffset = state.ch_snroffset.get(ch).copied().unwrap_or(0);
-        params.fgaincod = state.ch_fgaincod.get(ch).copied().unwrap_or(4);
-        let bap = bitalloc::compute_bap(&exps, &params);
+        let bap = if all_snr_offsets_raw_zero {
+            vec![0u8; end.saturating_sub(start)]
+        } else {
+            let mut params = state.alloc;
+            params.start_bin = start;
+            params.end_bin = end;
+            params.snroffset = state.ch_snroffset.get(ch).copied().unwrap_or(0);
+            params.fgaincod = state.ch_fgaincod.get(ch).copied().unwrap_or(4);
+            bitalloc::compute_bap(&exps, &params)
+        };
         let coeffs = mantissa::decode(
             r,
             &bap,
@@ -375,10 +400,16 @@ pub fn decode(r: &mut BitReader<'_>, state: &mut BlockState) -> DecodedBlock {
     }
     let lfe = state.lfeon.then(|| {
         let exps = state.lfeexps.clone();
-        let mut params = state.alloc;
-        params.start_bin = 0;
-        params.end_bin = LFE_COEFFS;
-        let bap = bitalloc::compute_bap(&exps, &params);
+        let bap = if all_snr_offsets_raw_zero {
+            vec![0u8; LFE_COEFFS]
+        } else {
+            let mut params = state.alloc;
+            params.start_bin = 0;
+            params.end_bin = LFE_COEFFS;
+            params.snroffset = state.lfe_snroffset;
+            params.fgaincod = state.lfe_fgaincod;
+            bitalloc::compute_bap(&exps, &params)
+        };
         mantissa::decode(r, &bap, &exps, true, simple_dither, &mut pending_group)
     });
 
@@ -434,6 +465,28 @@ fn combine_snroffset(coarse: u32, fine: u32) -> i32 {
     ((coarse.cast_signed() - 15) * 16 + fine.cast_signed()) * 4
 }
 
+/// §7.2.2.1.1: true when every SNR offset source this block carries —
+/// `csnroffst` combined with every `fsnroffst[ch]`, `cplfsnroffst` if
+/// `cplinu`, and `lfefsnroffst` if `lfeon` — is exactly zero, in which case
+/// `bap[]` must be all zero for the whole block and the
+/// excitation/masking/floor chain is skipped entirely, not merely likely
+/// to produce zero on its own.
+///
+/// Compares already-*combined* values against what a raw zero pair
+/// combines to, rather than the raw fields directly, because this crate
+/// does not keep the raw `csnroffst`/`fsnroffst` around once combined.
+/// That is still exactly equivalent to checking the raw fields:
+/// `combine_snroffset` is injective over their valid ranges (`csnroffst`
+/// 0..=63, `fsnroffst` 0..=15 — the `<< 4` shift on the coarse term leaves
+/// no room for two distinct raw pairs to collide), so two combined values
+/// agree if and only if their raw pairs did.
+fn all_snr_offsets_raw_zero(state: &BlockState, cplinu: bool) -> bool {
+    let raw_zero = combine_snroffset(0, 0);
+    state.ch_snroffset.iter().all(|&s| s == raw_zero)
+        && (!cplinu || state.alloc.snroffset == raw_zero)
+        && (!state.lfeon || state.lfe_snroffset == raw_zero)
+}
+
 fn skip_delta_bit_allocation(r: &mut BitReader<'_>, deltbae: Option<u32>) {
     // Codes: 0 reuse, 1 new (segments follow), 2 none, 3 reserved.
     if deltbae != Some(1) {
@@ -482,6 +535,11 @@ fn apply_rematrix(channels: &mut [Vec<f32>], acmod: u8, rematflg: [bool; 4]) {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
 
@@ -506,5 +564,43 @@ mod tests {
     fn ncodes_formula_matches_the_spec_for_full_bandwidth() {
         // endmant=253 (max bandwidth), D15: (253-1)/3 = 84.
         assert_eq!(ncodes_for(252, ExpStrategy::D15), 84);
+    }
+
+    #[test]
+    fn raw_zero_snr_offsets_are_detected_across_every_source() {
+        let mut state = BlockState::new(2, true, 2, 0);
+        let zero = combine_snroffset(0, 0);
+        state.ch_snroffset = vec![zero; 2];
+        state.lfe_snroffset = zero;
+        // cplinu=false: coupling contributes nothing, so this is already
+        // the all-zero case regardless of `alloc.snroffset`'s value.
+        assert!(all_snr_offsets_raw_zero(&state, false));
+
+        // A single non-zero fine offset on one channel breaks it.
+        state.ch_snroffset[1] = zero + 4;
+        assert!(!all_snr_offsets_raw_zero(&state, false));
+        state.ch_snroffset[1] = zero;
+
+        // LFE's own offset is checked only when `lfeon`; it does carry
+        // weight here since this state was built with `lfeon = true`.
+        state.lfe_snroffset = zero + 4;
+        assert!(!all_snr_offsets_raw_zero(&state, false));
+        state.lfe_snroffset = zero;
+
+        // Coupling's offset is checked only when `cplinu` is true.
+        state.alloc.snroffset = zero + 4;
+        assert!(!all_snr_offsets_raw_zero(&state, true));
+        assert!(all_snr_offsets_raw_zero(&state, false));
+    }
+
+    #[test]
+    fn a_freshly_initialized_block_is_not_mistaken_for_raw_zero() {
+        // Before any `snroffste` has ever been read, `ch_snroffset`
+        // defaults to a literal 0, not `combine_snroffset(0, 0)` (-960) —
+        // the special case must not spuriously fire before real data
+        // says it should.
+        let state = BlockState::new(1, false, 1, 0);
+        assert_ne!(state.ch_snroffset[0], combine_snroffset(0, 0));
+        assert!(!all_snr_offsets_raw_zero(&state, false));
     }
 }
