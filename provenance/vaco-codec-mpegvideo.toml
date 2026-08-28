@@ -1,0 +1,32 @@
+[[table]]
+name   = "ZIGZAG_SCAN"
+file   = "crates/signal/vaco-codec-mpegvideo/src/coeff.rs"
+source = "itu-t-h262"
+clause = "Figure 7-2, scan[0][v][u] (default zigzag inverse scan)"
+method = "derived"
+
+# Not a fresh transcription of Figure 7-2's own printed table in this pass,
+# and NOT byte-identical to vaco-codec-mpeg12::tables::ZIGZAG_SCAN either
+# (an earlier version of this file claimed it was -- wrong; caught by this
+# crate's own agrees_with_vaco_codec_mpeg12s_own_convention test). This
+# table uses the scan-index-to-natural-position convention (the classic
+# "zigzag[n]" form); H.262's own scan[0][v][u] naming, and
+# vaco-codec-mpeg12's copy of it, is indexed the other way round
+# (natural-position-to-scan-index). The two are exact inverse permutations
+# of the same Figure 7-2 clause, `method = "derived"` (computed as the
+# inverse permutation of an already-verified table) rather than
+# "transcribed" (read directly off the spec's own printed table) for that
+# reason. Cross-checked computationally (both by a scratch script during
+# development and by the permanent
+# `coeff::tests::agrees_with_vaco_codec_mpeg12s_own_convention` test) to
+# confirm both conventions, paired with their own respective inverse_scan
+# formula, produce identical output.
+
+[[table]]
+name   = "ALTERNATE_SCAN"
+file   = "crates/signal/vaco-codec-mpegvideo/src/coeff.rs"
+source = "itu-t-h262"
+clause = "Figure 7-3, scan[1][v][u] (alternate inverse scan)"
+method = "derived"
+
+# Same lineage and convention note as ZIGZAG_SCAN above, for Figure 7-3.
