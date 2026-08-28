@@ -1,7 +1,9 @@
-//! Writing one Index Table Segment (SMPTE ST 377-1 §10), VBE only (this
-//! crate's essence is MPEG-2 long-GOP, variable frame size — the same shape
-//! `vaco-demux-mxf`'s own corpus needed the `IndexEntryArray`/`StreamOffset`
-//! path for, not the CBE arithmetic path).
+//! Writing Index Table Segments (SMPTE ST 377-1 §10): [`build`] for VBE
+//! (OP1a/OP-Atom's MPEG-2 long-GOP essence has variable frame size — the
+//! same shape `vaco-demux-mxf`'s own corpus needed the
+//! `IndexEntryArray`/`StreamOffset` path for), [`build_cbe`] for D-10's
+//! constant-bitrate profile (`EditUnitByteCount` arithmetic, no
+//! `IndexEntryArray` needed).
 //!
 //! # Scope
 //!
@@ -62,6 +64,40 @@ pub(crate) fn build(
     }
     push_bytes(&mut v, 0x3f0a, &arr);
 
+    (INDEX_TABLE_SEGMENT, v)
+}
+
+/// Build one **CBE** Index Table Segment's `(key, value)` — D-10's own
+/// shape, measured against a real `ffmpeg -f mxf_d10` file's
+/// header-embedded Index Table Segment: `EditUnitByteCount` nonzero (every
+/// edit unit is exactly that many bytes), `IndexDuration = 0` (computed
+/// entirely upfront since D-10 is CBR, no footer deferral needed — the
+/// header itself carries this segment, see `mux.rs`'s `MxfVariant::D10`
+/// docs), and no `IndexEntryArray` at all: the real file measured did carry
+/// a short `DeltaEntryArray`-shaped batch under an unidentified local tag
+/// (`0x3f09` in that file's own primer) that this crate does not attempt to
+/// reproduce (not measured with confidence — see
+/// `docs/format/vaco-mux-mxf.md`), and no `IndexEntryArray` at all, which
+/// `vaco-demux-mxf::index::parse` already treats as optional (a CBE
+/// segment does not need one: `IndexTableSegment::cbe_offset` computes any
+/// edit unit's position from `EditUnitByteCount` alone).
+#[must_use]
+pub(crate) fn build_cbe(
+    instance_uid: [u8; 16],
+    edit_rate: (i32, i32),
+    edit_unit_byte_count: u32,
+    index_sid: u32,
+    body_sid: u32,
+) -> ([u8; 16], Vec<u8>) {
+    let mut v = Vec::new();
+    push_uid16(&mut v, 0x3c0a, instance_uid);
+    push_rational(&mut v, 0x3f0b, edit_rate.0, edit_rate.1);
+    push_i64(&mut v, 0x3f0c, 0);
+    push_i64(&mut v, 0x3f0d, 0); // IndexDuration = 0: computed from the container, not restated.
+    push_u32(&mut v, 0x3f05, edit_unit_byte_count);
+    push_u32(&mut v, 0x3f06, index_sid);
+    push_u32(&mut v, 0x3f07, body_sid);
+    push_u8(&mut v, 0x3f08, 0); // SliceCount.
     (INDEX_TABLE_SEGMENT, v)
 }
 

@@ -27,7 +27,7 @@ use crate::localset::{
     push_uid16, push_umid32,
 };
 use crate::uid::IdGenerator;
-use crate::ul::{self, Ul, class, structural_set_key};
+use crate::ul::{self, MxfVariant, Ul, class, structural_set_key};
 
 /// One essence track's `InstanceUID`s, generated once at `init()` and reused
 /// for both the header and footer copies of the graph.
@@ -377,6 +377,7 @@ pub(crate) fn primer_entries() -> Vec<(u16, Ul)> {
             0x06, 0x0e, 0x2b, 0x34, 0x01, 0x01, 0x01, 0x02, 0x07, 0x02, 0x01, 0x03, 0x01, 0x03,
             0x00, 0x00,
         ])),
+        (0x320e, ul::ASPECT_RATIO),
     ]
 }
 
@@ -399,6 +400,7 @@ pub(crate) fn build_sets(
     tracks: &[TrackPlan],
     edit_rate: Rational,
     duration: Option<i64>,
+    variant: MxfVariant,
 ) -> Vec<([u8; 16], Vec<u8>)> {
     let mut sets = Vec::new();
 
@@ -407,8 +409,8 @@ pub(crate) fn build_sets(
     push_uid16(&mut preface, 0x3c0a, ids.preface);
     push_uid16(&mut preface, 0x3b03, ids.content_storage);
     push_batch16(&mut preface, 0x3b06, &[ids.identification]);
-    push_item(&mut preface, 0x3b09, &ul::OPERATIONAL_PATTERN_OP1A.as_bytes());
-    push_batch16(&mut preface, 0x3b0a, &essence_containers_used(tracks));
+    push_item(&mut preface, 0x3b09, &ul::operational_pattern_for(variant).as_bytes());
+    push_batch16(&mut preface, 0x3b0a, &essence_containers_used(tracks, variant));
     sets.push(build_set(class::PREFACE, preface));
 
     // ------------------------------------------------------- Identification
@@ -559,7 +561,7 @@ pub(crate) fn build_sets(
         sets.push(build_set(class::SOURCE_CLIP, sclip));
 
         // Descriptor.
-        sets.push(build_descriptor(t, i, edit_rate));
+        sets.push(build_descriptor(t, i, edit_rate, variant));
     }
 
     if let Some(md_id) = ids.multiple_descriptor {
@@ -578,12 +580,15 @@ pub(crate) fn build_sets(
 /// The Generic Container essence-container label a track's own descriptor
 /// states — distinct per media type, measured this session (see
 /// `ul::ESSENCE_CONTAINER_SOUND_FRAME_WRAPPED`'s doc comment for what
-/// reusing the picture label for audio broke).
-fn essence_container_for(media_type: MediaType) -> Ul {
-    if media_type == MediaType::Audio {
-        ul::ESSENCE_CONTAINER_SOUND_FRAME_WRAPPED
-    } else {
-        ul::ESSENCE_CONTAINER_MPEG_FRAME_WRAPPED
+/// reusing the picture label for audio broke). D-10's video label is
+/// distinct again from `OP1a`'s/OP-Atom's (`ul::ESSENCE_CONTAINER_D10_VIDEO`'s
+/// own doc comment); OP-Atom's video label is byte-identical to `OP1a`'s
+/// (`ul::OPERATIONAL_PATTERN_OP_ATOM`'s neighbouring doc comment).
+fn essence_container_for(media_type: MediaType, variant: MxfVariant) -> Ul {
+    match (media_type, variant) {
+        (MediaType::Audio, _) => ul::ESSENCE_CONTAINER_SOUND_FRAME_WRAPPED,
+        (_, MxfVariant::D10) => ul::ESSENCE_CONTAINER_D10_VIDEO,
+        (_, MxfVariant::Op1a | MxfVariant::OpAtom) => ul::ESSENCE_CONTAINER_MPEG_FRAME_WRAPPED,
     }
 }
 
@@ -592,10 +597,10 @@ fn essence_container_for(media_type: MediaType) -> Ul {
 /// media type actually present, plus the "multiple wrappings" label when
 /// more than one essence track is written — measured off a real two-track
 /// file (three labels, in that order) rather than assumed.
-pub(crate) fn essence_containers_used(tracks: &[TrackPlan]) -> Vec<[u8; 16]> {
+pub(crate) fn essence_containers_used(tracks: &[TrackPlan], variant: MxfVariant) -> Vec<[u8; 16]> {
     let mut out = Vec::new();
     if tracks.iter().any(|t| t.media_type != MediaType::Audio) {
-        out.push(ul::ESSENCE_CONTAINER_MPEG_FRAME_WRAPPED.as_bytes());
+        out.push(essence_container_for(MediaType::Video, variant).as_bytes());
     }
     if tracks.iter().any(|t| t.media_type == MediaType::Audio) {
         out.push(ul::ESSENCE_CONTAINER_SOUND_FRAME_WRAPPED.as_bytes());
@@ -606,8 +611,31 @@ pub(crate) fn essence_containers_used(tracks: &[TrackPlan]) -> Vec<[u8; 16]> {
     out
 }
 
-fn build_descriptor(t: &TrackPlan, _index: usize, edit_rate: Rational) -> ([u8; 16], Vec<u8>) {
-    let essence_container = essence_container_for(t.media_type);
+/// Convert a display aspect ratio into a `(num, den)` pair, given the
+/// frame's own sample aspect ratio and pixel dimensions: `dar = sar *
+/// width / height` — the inverse of `vaco-demux-mxf::descriptor::
+/// display_to_sample_aspect`, which this crate's own read side already
+/// applies to the identical property on the way back in. Returns `None`
+/// when the caller supplied no usable sample aspect ratio (`Rational`'s own
+/// `UNDEFINED`/zero-denominator shapes), matching this crate's existing
+/// "omit a property this file has no real value for" convention elsewhere
+/// (e.g. `PictureEssenceCoding` for an unrecognised codec).
+fn display_aspect_ratio(sar: Rational, width: u32, height: u32) -> Option<(i32, i32)> {
+    if sar.den == 0 || sar.num == 0 || width == 0 || height == 0 {
+        return None;
+    }
+    let dar = sar.checked_mul(Rational::new(i32::try_from(width).ok()?, i32::try_from(height).ok()?))?;
+    let dar = dar.reduced();
+    if dar.den == 0 { None } else { Some((dar.num, dar.den)) }
+}
+
+fn build_descriptor(
+    t: &TrackPlan,
+    _index: usize,
+    edit_rate: Rational,
+    variant: MxfVariant,
+) -> ([u8; 16], Vec<u8>) {
+    let essence_container = essence_container_for(t.media_type, variant);
     let mut d = Vec::new();
     push_uid16(&mut d, 0x3c0a, t.ids.descriptor);
     push_u32(&mut d, 0x3006, t.track_id); // LinkedTrackId
@@ -616,19 +644,36 @@ fn build_descriptor(t: &TrackPlan, _index: usize, edit_rate: Rational) -> ([u8; 
 
     match (t.media_type, &t.params.video) {
         (MediaType::Video, Some(v)) => {
-            push_u32(&mut d, 0x3202, v.height);
+            // D-10's `FrameLayout = 1` ("Separate Fields") states every
+            // height property in terms of one field, half the frame height
+            // — measured against a real D-10 file (`vaco-demux-mxf::
+            // descriptor::picture_parameters`'s own doc comment records the
+            // same halving on the read side: `StoredHeight = 288` for a
+            // 576-line frame). OP1a and OP-Atom both measured as
+            // `FrameLayout = 0` (full progressive frame, no halving).
+            let (frame_layout, height) = if variant == MxfVariant::D10 {
+                (1u8, v.height >> 1)
+            } else {
+                (0u8, v.height)
+            };
+            push_u32(&mut d, 0x3202, height);
             push_u32(&mut d, 0x3203, v.width);
-            push_u32(&mut d, 0x3204, v.height);
+            push_u32(&mut d, 0x3204, height);
             push_u32(&mut d, 0x3205, v.width);
-            push_u32(&mut d, 0x3208, v.height);
+            push_u32(&mut d, 0x3208, height);
             push_u32(&mut d, 0x3209, v.width);
-            push_u8(&mut d, 0x320c, 0); // FrameLayout: FullFrame (progressive).
-            // Only MPEG-2 long-GOP is measured against a real file (see
-            // `ul::PICTURE_ESSENCE_CODING_MPEG2_LONG_GOP`'s own doc comment)
-            // — this is the only `CodecId` this crate's `add_stream` accepts
-            // for video today, so there is no second arm to guess at yet.
-            push_item(&mut d, 0x3201, &ul::PICTURE_ESSENCE_CODING_MPEG2_LONG_GOP.as_bytes());
-            build_set(class::MPEG_VIDEO_DESCRIPTOR, d)
+            push_u8(&mut d, 0x320c, frame_layout);
+            if let Some((num, den)) = display_aspect_ratio(v.sample_aspect_ratio, v.width, v.height)
+            {
+                push_rational(&mut d, 0x320e, num, den);
+            }
+            let coding = picture_essence_coding_for(variant, t.params.bit_rate);
+            push_item(&mut d, 0x3201, &coding.as_bytes());
+            if variant == MxfVariant::D10 {
+                build_set(class::CDCI_ESSENCE_DESCRIPTOR, d)
+            } else {
+                build_set(class::MPEG_VIDEO_DESCRIPTOR, d)
+            }
         }
         (MediaType::Audio, _) => {
             if let Some(a) = &t.params.audio {
@@ -644,6 +689,36 @@ fn build_descriptor(t: &TrackPlan, _index: usize, edit_rate: Rational) -> ([u8; 
             build_set(class::AES3_PCM_DESCRIPTOR, d)
         }
         _ => build_set(class::MPEG_VIDEO_DESCRIPTOR, d),
+    }
+}
+
+/// Pick the `PictureEssenceCoding` label. OP1a/OP-Atom: MPEG-2 long-GOP,
+/// the only `CodecId` this crate's `add_stream` accepts for video today —
+/// there is no second arm to guess at yet (see
+/// `ul::PICTURE_ESSENCE_CODING_MPEG2_LONG_GOP`'s own doc comment). D-10:
+/// one of three fixed-bitrate labels (measured against real
+/// `ffmpeg -f mxf_d10 -b:v <rate>` files at 50/40/30 Mbit/s each), chosen
+/// from the caller-declared `bit_rate` — D-10 is a constrained CBR profile,
+/// so the encoder (not this crate, which does not encode) must already
+/// know which of the three rates it used; a `bit_rate` absent or not within
+/// a wide tolerance of one of the three falls back to 30 Mbit/s rather than
+/// failing outright, since `write_header` (see `mux.rs`) has already
+/// validated the stream is usable for D-10 before this runs.
+fn picture_essence_coding_for(variant: MxfVariant, bit_rate: Option<u64>) -> Ul {
+    if variant != MxfVariant::D10 {
+        return ul::PICTURE_ESSENCE_CODING_MPEG2_LONG_GOP;
+    }
+    #[allow(
+        clippy::integer_division,
+        reason = "classifying into one of three widely-spaced buckets (30/40/50 Mbit); truncation cannot change which bucket a real D-10 bit_rate lands in"
+    )]
+    let mbit = bit_rate.map_or(30, |b| b / 1_000_000);
+    if mbit >= 45 {
+        ul::PICTURE_ESSENCE_CODING_D10_50MBIT
+    } else if mbit >= 35 {
+        ul::PICTURE_ESSENCE_CODING_D10_40MBIT
+    } else {
+        ul::PICTURE_ESSENCE_CODING_D10_30MBIT
     }
 }
 

@@ -1,7 +1,13 @@
 # `vaco-mux-mxf`
 
-Layer 4. The MXF (Material eXchange Format) muxer: OP1a, one video track
-and at most one audio track, frame-wrapped. Registered as `mxf`.
+Layer 4. Three MXF (Material eXchange Format) muxers, matching three
+distinct registered `ffmpeg` muxer names (`ffmpeg -muxers | grep mxf`):
+
+| Registered as | Variant | Scope in this crate |
+|---|---|---|
+| `mxf` (`MUXER`) | OP1a | one video track, at most one audio track, frame-wrapped |
+| `mxf_d10` (`MUXER_D10`) | D-10 (SMPTE 386M) | video-only, one of three fixed CBR bitrates (30/40/50 Mbit/s) |
+| `mxf_opatom` (`MUXER_OPATOM`) | OP-Atom (SMPTE 390) | exactly one essence track per file, clip-wrapped |
 
 Written clean-room (D7/D15): this crate does not read `ffmpeg` source. It
 reuses its sibling `vaco-demux-mxf`'s own already-published, clean-room
@@ -33,15 +39,15 @@ own understanding of the format alone.
 | Module | Contents |
 |---|---|
 | `ber` | BER length encode: `0x83`+3 bytes up to 16 MiB, `0x88`+8 bytes beyond |
-| `klv` | Writing one Key-Length-Value triplet |
-| `ul` | The Universal Labels and key-building functions this crate writes |
+| `klv` | Writing one Key-Length-Value triplet, plus `pad_to_kag` (KLV Alignment Grid padding via a Fill Item) |
+| `ul` | The Universal Labels and key-building functions this crate writes, and `MxfVariant` (`Op1a`/`D10`/`OpAtom`) |
 | `uid` | `InstanceUID`/Package UMID generation (a counter mixed with `vaco_time::unix_nanos()`, no new RNG dependency) |
 | `localset` | The `Tag(u16) Length(u16) Value` item writer, batches, and the Primer Pack builder |
-| `metadata` | Building the structural-metadata graph: `Preface` -> `ContentStorage` -> `Package` (Material and Source) -> `Track` -> `Sequence` -> `SourceClip`/`TimecodeComponent` -> `Descriptor` |
-| `partition` | The Partition Pack's fixed-position layout |
-| `essence` | Generic Container track-number assignment and essence element keys |
-| `index` | VBE Index Table Segment construction |
-| `mux` | `MxfMuxer`: implements `Muxer`, ties every layer together |
+| `metadata` | Building the structural-metadata graph: `Preface` -> `ContentStorage` -> `Package` (Material and Source) -> `Track` -> `Sequence` -> `SourceClip`/`TimecodeComponent` -> `Descriptor`; variant-aware descriptor/essence-container/operational-pattern selection |
+| `partition` | The Partition Pack's fixed-position layout, including `KAGSize` |
+| `essence` | Generic Container track-number assignment and essence element keys, per variant (`track_number` for OP1a/OP-Atom, `track_number_d10` for D-10's distinct item-type byte) |
+| `index` | Index Table Segment construction: `build` (VBE, OP1a/OP-Atom) and `build_cbe` (D-10) |
+| `mux` | `MxfMuxer`: implements `Muxer` for all three variants; `MUXER`/`MUXER_D10`/`MUXER_OPATOM` are the registered muxer descriptors |
 
 ---
 
@@ -215,6 +221,188 @@ de-interleaved"). A second essence track is fully readable sequentially
 (neither demuxer consults the index for `read_packet`, only for `seek`)
 but not currently seekable-to.
 
+### KLV Alignment Grid (KAG)
+
+`KAGSize = 512` (`mux::KAG_SIZE`), matching every real `ffmpeg -f
+mxf`/`-f mxf_d10`/`-f mxf_opatom` file this session measured. `klv::
+pad_to_kag` writes one Fill Item KLV padding the current position out to
+the next 512-byte boundary; `partition::write` writes the real `512` into
+the Partition Pack's own `KAGSize` field (an earlier version hardcoded `1`,
+"no alignment", there). Confirmed byte-for-byte against a real bitexact
+OP1a fixture via a literal `cmp` (feeding this crate's muxer the same real
+MPEG-2 frames the reference encoded): the `KAGSize` field itself, and every
+byte up to the Primer Pack, now match exactly.
+
+**Where the padding lands differs by variant** — measured directly, not
+assumed to generalise from OP1a:
+
+- **OP1a**: after the header partition pack, after the Primer Pack, after
+  the structural metadata, after the Body Partition Pack, and once more
+  right before the very first essence element in the whole file. Never
+  between subsequent essence elements — confirmed directly (one frame's KLV
+  ends and the next begins with no gap).
+- **D-10**: the same header-region padding (no Body Partition Pack — see
+  below), *plus* every edit unit pads its System Item KLV to a boundary
+  and its essence element to a boundary independently — measured against a
+  real 30 Mbit/s fixture: `EditUnitByteCount = 151040 =
+  round_up_to_kag(20) [empty-value System Item] +
+  round_up_to_kag(20 + 150000) [essence element]`. `mux::round_up_to_kag`
+  reproduces this arithmetic to compute the value ahead of any packet
+  arriving (D-10's Index Table Segment is embedded in the header — see
+  below — so it must be known before `write_header` returns).
+- **OP-Atom**: the same header-region padding, plus once after the single
+  clip-wrapped essence element `write_trailer` writes.
+
+### D-10 (SMPTE 386M)
+
+Video-only in this crate (see "Deferred work" for audio). Structural
+differences from OP1a, each measured directly against a real `ffmpeg -f
+mxf_d10` file rather than assumed from OP1a's shape:
+
+- **No Body Partition Pack.** The header partition states `body_sid = 1`,
+  `body_offset = 0` directly, and essence follows right after the header's
+  own KAG padding.
+- **The header embeds a complete CBE Index Table Segment.** `IndexDuration
+  = 0` (D-10 is CBR, so this is computed entirely upfront — no footer
+  deferral needed the way OP1a's VBE index requires); `EditUnitByteCount`
+  nonzero (`mux::MxfMuxer::build_d10_index_table`'s doc comment has the
+  arithmetic); no `IndexEntryArray` at all — `vaco-demux-mxf::index::parse`
+  already treats it as optional, and a CBE segment does not need one
+  (`IndexTableSegment::cbe_offset` computes any edit unit's position from
+  `EditUnitByteCount` alone). The real file measured also carried a short
+  batch under an unidentified local tag (`0x3f09` in that file's own
+  primer, shaped like `DeltaEntryArray`) that this crate does not attempt
+  to reproduce — not measured with confidence.
+- **`CDCIEssenceDescriptor` (class `0x28`), not `MPEGVideoDescriptor`
+  (`0x51`)** — measured off a real file's structural-set class bytes in
+  sequence. `vaco-demux-mxf`'s own `StructuralClass::Descriptor` already
+  recognises `0x28` (it folds every descriptor subclass into one arm and
+  reads by property, not by class), so this needed no read-side change.
+- **`FrameLayout = 1` ("Separate Fields") halves `Stored`/`Sampled`/
+  `DisplayHeight`** — `288` for a 576-line frame, measured against a real
+  file; `vaco-demux-mxf::descriptor::picture_parameters` already doubles it
+  back on the way in (that crate's own doc comment records the same
+  measurement), so this crate's own round trip reports the real `576`.
+- **A D-10-specific `EssenceContainer` UL**
+  (`ul::ESSENCE_CONTAINER_D10_VIDEO`, `...0d.01.03.01.02.01.05.01`) and one
+  of three fixed-bitrate `PictureEssenceCoding` labels
+  (`PICTURE_ESSENCE_CODING_D10_{30,40,50}MBIT`), reused from
+  `vaco-demux-mxf::descriptor::PICTURE_ESSENCE_CODING`'s own already-measured
+  D-10 rows. Chosen from the caller's declared `CodecParameters::bit_rate`
+  — D-10 is a constrained CBR profile, so `add_stream`/`write_header`
+  require it (`build_d10_index_table` returns `Error::Unsupported` without
+  one); a value outside a wide tolerance of the three rates falls back to
+  30 Mbit/s rather than failing outright.
+- **The essence element's own item-type byte is `0x05`, not OP1a's
+  `0x15`** (`essence::track_number_d10`) — measured off a real file's
+  Generic Container key. `vaco-demux-mxf`'s own reader matches essence by
+  the full track number against `Track.EssenceTrackNumber`, not by
+  interpreting this byte, so no read-side change was needed; confirmed by
+  that same crate's own `essence.rs` module docs, which record finding a
+  real D-10 file frame-wrapped (one KLV per edit unit, twenty-five of them)
+  at a key byte ST 379-1's own table would call "clip-wrapped".
+- **The Operational Pattern label is the same as OP1a's**, not a distinct
+  D-10 label — measured against a real file, byte for byte.
+
+Verified: `a_d10_file_round_trips_through_the_sibling_demuxer` (own
+demuxer, dimensions correctly un-halved) and
+`a_real_ffprobe_reports_the_correct_stream_shape_for_a_d10_file` (real
+`ffprobe`). A real `ffmpeg -i`/`ffprobe -show_packets` on this crate's own
+D-10 output reports three packets of 150000 bytes each at the expected
+positions — the reference's own reader frames the container identically to
+this crate's own demuxer.
+
+### OP-Atom (SMPTE 390)
+
+Exactly one essence track per file (`add_stream` rejects a second stream
+outright) — the simplification the coordinating dispatch anticipated: no
+`MultipleDescriptor`, no multi-track System Item bookkeeping. What turned
+out to be the larger difference, found only by generating and hex-dumping a
+real `ffmpeg -f mxf_opatom` file (this crate's own installed `ffmpeg 8.1`
+has no clip-wrap option for `mxf`/`mxf_d10`, so this was the first
+producible sample):
+
+- **OP-Atom's essence is clip-wrapped: one Generic Container element for
+  the whole file, not one per frame.** Measured directly: a single essence
+  key appears exactly once, its own BER length stating the entire payload,
+  and no System Item key appears anywhere in the file (OP-Atom needs no
+  per-edit-unit sync marker — there is only ever one essence stream and
+  nothing to interleave). `write_packet` buffers every packet's payload
+  into `MxfMuxer::clip_buffer` instead of streaming it, recording each
+  frame's offset within the eventual element for the (still VBE) Index
+  Table Segment; `write_trailer` writes the one real element once the
+  final length is known, then proceeds with the same footer/RIP logic
+  OP1a uses.
+- A genuine Body Partition Pack precedes the essence, same relative
+  position as OP1a's (unlike D-10, which has none).
+- The Operational Pattern label (`ul::OPERATIONAL_PATTERN_OP_ATOM`) is
+  distinct from OP1a's/D-10's — reused from
+  `vaco-demux-mxf::ul::op::OP_ATOM`, which had already measured it against
+  that crate's own `opatom.mxf` corpus file, and re-confirmed this session
+  byte for byte against a freshly generated fixture. The `EssenceContainer`
+  label, by contrast, is byte-identical to OP1a's picture label — measured,
+  not assumed.
+- The descriptor stays `MPEGVideoDescriptor` (not CDCI) — OP-Atom is not
+  D-10's constrained profile.
+
+**Reading it back is where the surprise is.** This workspace's own
+`vaco-demux-mxf::demux::MxfDemuxer::read_packet` reads "one KLV, one
+packet" unconditionally (that crate's own `essence.rs` module docs explain
+why: `clip_wrapped_spans` exists but was never wired in, for lack of a real
+clip-wrapped sample to test it against before this crate started producing
+one). So this crate's own demuxer reads an OP-Atom file back as a *single*
+packet holding every frame concatenated. Checked directly against a real
+`ffmpeg -i`/`ffprobe -show_packets` on the identical file: the reference
+reports the exact same shape — one packet, the full concatenated size.
+Frame-level access into OP-Atom's clip-wrapped essence is apparently a
+decoder-level concern (parsing picture start codes within the one packet),
+not a container-framing one; this crate's write side and both demuxers'
+read sides already agree, so this is not treated as a gap.
+
+Verified: `an_op_atom_file_round_trips_through_the_sibling_demuxer` (stream
+shape, and the single-packet shape above, asserted rather than hidden) and
+`adding_a_second_stream_to_an_op_atom_muxer_is_rejected`.
+
+### `AspectRatio`: a real functional gap, not a byte-identity nicety
+
+Tag `0x320e` (8 bytes, two 4-byte ints, the display aspect ratio) is a
+property `vaco-demux-mxf::properties::PropertyId::AspectRatio` already
+reads on the way in (`descriptor::picture_parameters`, into
+`sample_aspect_ratio`) — this crate simply never wrote it. Confirmed
+against three real fixtures across two sessions (`(5,4)` and `(4,3)` on two
+different OP1a resolutions, `(5,4)` again on a D-10 file), so now written
+for every video descriptor (OP1a, D-10, OP-Atom alike) whenever the
+caller's `CodecParameters::video.sample_aspect_ratio` is a usable, nonzero
+value (`metadata::display_aspect_ratio` does the DAR-from-SAR conversion,
+the exact inverse of the read side's `display_to_sample_aspect`). Tag
+`0x320d` (`VideoLineMap`, tentatively identified, see "Deferred work") is
+still not written — a genuine measurement gap, not a decision to omit it.
+
+### The byte-identity matrix
+
+For each variant: whether it round-trips (via this crate's own demuxer and
+a real `ffprobe`/`ffmpeg -i`), and where the first byte-level divergence
+against a real `-fflags +bitexact` file sits (via the `cmp`
+same-real-MPEG-2-frames methodology described in "Deferred work" below).
+
+| Variant | Own demuxer | Real `ffprobe`/`ffmpeg -i` | First `cmp` divergence past `KAGSize` |
+|---|---|---|---|
+| OP1a | Round-trips exactly (stream shape, packet positions/sizes, `MultipleDescriptor` expansion) | Resolves correctly (single- and two-track) | Primer Pack length: this crate's fixed 4-byte BER form vs. the reference's minimal-width form (`82 07 10`, 3 bytes, for the same value) |
+| D-10 | Round-trips exactly (dimensions correctly un-halved) | Resolves correctly; packet count/positions match exactly | Same Primer Pack BER-width divergence, *plus* the real file's header region is larger by exactly `1536` bytes (three KAG blocks) — most likely an unidentified structural set (class `0x23`, seen in both D-10 and OP-Atom fixtures, never identified — see "Deferred work") this crate does not build |
+| OP-Atom | Round-trips as a single concatenated packet (matches the reference's own packet count — see above) | Stream shape resolves correctly | Not chased this session (the D-10/OP1a findings already generalise the leading-order gap; the same unidentified class `0x23` set was seen here too) |
+
+**`KAGSize` was the next divergence, not the whole gap, for every
+variant.** It is a genuine, confirmed fix — the field itself and every byte
+up to the Primer Pack now match a real file exactly — but full
+byte-identity remains open behind at least two further, real findings: the
+Primer Pack's BER-length-width convention, and (D-10/OP-Atom) an
+unidentified structural set. **No variant reached `cmp`-identity this
+session.** D-10's tighter constraints did narrow the gap to something far
+more precisely bounded than OP1a's (a named byte-width convention plus a
+named-but-unidentified missing set, rather than an open-ended
+"the layouts diverge"), which is real progress even though the headline
+claim did not land.
+
 ---
 
 ## How to change it
@@ -233,27 +421,41 @@ but not currently seekable-to.
   extending `metadata::build_sets`'s `MultipleDescriptor` path (already
   generic over `tracks: &[TrackPlan]`) — the real gap is the Index Table
   Segment, still single-track-only (see above).
-- **D-10 / OP-Atom / a real timecode value**: out of scope here — #610
-  (`FM-51c`), a distinct crate-scope decision, not a TODO left in this one.
-  This crate's timecode track always states `TimecodeStart = 0`; wiring a
-  real starting timecode through from the caller is unclaimed work for
-  whichever package takes on OP-Atom/D-10, not blocked by anything here.
-- **Chasing byte-identity further**: `partition::write`'s hardcoded
-  `KAGSize` (currently `1`, real files use `512` with Fill Item padding to
-  match) is the next concrete, well-understood divergence — see "Deferred
-  work".
+- **D-10 audio**: not implemented (`add_stream` rejects an audio stream
+  under `MUXER_D10` outright). The fixed 8-slot AES3 bundle
+  (`4 + 1920×8×4 = 61444` bytes per edit unit at 25fps) is already measured
+  on the read side (`provenance/sources.toml`'s `ffmpeg-mxf-sound-essence-probe`);
+  writing it needs a `GenericSoundEssenceDescriptor` (class `0x42`,
+  spec-derived and unexercised on the read side too — see
+  `docs/format/vaco-demux-mxf.md`) and interleaving the fixed-size bundle
+  into the same per-edit-unit KAG rhythm `write_packet`'s D-10 branch
+  already applies to video.
+- **A real timecode value**: this crate's timecode track always states
+  `TimecodeStart = 0`; wiring a real starting timecode through from the
+  caller is unclaimed work, not blocked by anything here.
+- **A third or more essence track for D-10/OP-Atom**: D-10 is video-only by
+  design in this crate (see above); OP-Atom is video-only by the format's
+  own definition (`add_stream` enforces it). Neither has the "more than one
+  essence track" question OP1a's `MultipleDescriptor` path answers.
+- **Chasing byte-identity further**: the byte-identity matrix above names
+  the next two concrete divergences (Primer Pack BER width, an unidentified
+  structural set) — see "Deferred work" for what each would need.
 
 ---
 
 ## Configuration
 
 No options exposed today; `MxfOptions` is an empty placeholder type kept so
-a future option (an explicit edit rate for an audio-only file, real KAG
-alignment) does not need a signature change. `KAGSize` is fixed at `1` (no
-alignment grid; nothing downstream needs it for correctness —
-`vaco-demux-mxf` reads forward by key, never trusts byte-count arithmetic —
-but it is a real, measured divergence from a real file's `512`; see
-"Deferred work").
+a future option (an explicit edit rate for an audio-only file) does not
+need a signature change. `KAGSize` is fixed at `512` (`mux::KAG_SIZE`),
+matching every real file measured — not configurable, since nothing in
+this crate's own scope needs a different grid. Which muxer variant runs is
+selected by which `MuxerDesc` opens the file (`MUXER`/`MUXER_D10`/
+`MUXER_OPATOM`), not by an `MxfOptions` field — matching `vaco-mux-asf`'s
+`MUXER`/`MUXER_STREAM` pair elsewhere in this workspace. D-10 additionally
+requires `CodecParameters::bit_rate` to be one of the three fixed rates
+(30/40/50 Mbit/s); `add_stream`/`write_header` return `Error::Unsupported`
+without one.
 
 ## Dependencies
 
@@ -266,45 +468,64 @@ UMID entropy), `vaco-packet`, `vaco-format-core` (`Muxer`, `MuxerDesc`),
 
 ## Deferred work
 
-- **Byte-identity against the reference: confirmed achievable, partially
-  chased, deliberately bounded.** `-fflags +bitexact -bitexact` makes two
-  independent `ffmpeg -f mxf` runs produce byte-identical output — verified
-  directly this session (the UMID's material-number field is zeroed under
-  bitexact, not random/time-based, which is what makes this possible; the
-  coordinating dispatch's assumption that UMIDs "cannot be byte-identical
-  without controlling them" undersold what `ffmpeg` itself already does).
-  A literal `cmp` against a real single-track bitexact file, feeding this
-  crate's muxer the *same* real MPEG-2 frames the reference encoded (so the
-  essence bytes are identical and only the container differs), found and
-  fixed two further structural divergences this session: the Partition
-  Pack's minor version (`3`, this crate had `2`) and the Body Partition
-  Pack being unconditional (see "Partition layout" above). After both
-  fixes, the first remaining byte-level divergence is `KAGSize` (`1` here,
-  `512` in a real file, which also pads structures with Fill Items to that
-  boundary) — a genuine, well-understood, and still-open structural gap.
-  Beyond `KAGSize`/Fill-Item alignment, the dominant remaining difference
-  is still the deliberately-dropped duplicate-footer-metadata layout (see
-  "Partition layout" above): the file-size gap this leaves (several KiB)
-  swamps a byte-level `cmp` past that point, which is why this was
-  bounded here rather than chased to zero — restating the footer would
-  reopen the `Multiple primer packs`/media-type-misreport bug this session
-  already spent real effort fixing, and the two goals (byte-identity,
-  correctness under a real reference reader) are in real tension at that
-  specific point, not just a matter of more time.
+- **Byte-identity against the reference: confirmed achievable, `KAGSize`
+  fixed, two further named divergences still open — see the byte-identity
+  matrix above.** `-fflags +bitexact -bitexact` makes independent `ffmpeg
+  -f mxf`/`-f mxf_d10` runs produce byte-identical output — verified
+  directly, both this session and the one before it (the UMID's
+  material-number field is zeroed under bitexact, not random/time-based).
+  A literal `cmp` against real bitexact files, feeding this crate's muxer
+  the *same* real MPEG-2 frames the reference encoded (so the essence bytes
+  are identical and only the container differs), found and fixed, across
+  two sessions: the Partition Pack's minor version (`3`, not `2`), the Body
+  Partition Pack being unconditional for OP1a, and — this session —
+  `KAGSize`/Fill-Item alignment (`512`, not `1`; confirmed byte-for-byte up
+  to the Primer Pack). The next two divergences, found this session and not
+  yet fixed:
+  - **The Primer Pack's own BER length uses this crate's fixed 4-byte form
+    (`ber::encode`); a real file uses the minimal-width form there**
+    (measured: `82 07 10`, a 3-byte long form, for a value this crate
+    writes as `83 00 07 10`). `ber.rs`'s own doc comment has the exact
+    bytes. The Partition Pack family genuinely does use the fixed 4-byte
+    form (confirmed identical against a real header, byte for byte) — this
+    divergence is specific to the Primer Pack (and, not individually
+    re-verified, the structural-metadata sets after it). Untangling it
+    means either two-pass length computation or a variable-width backpatch
+    scheme for every KLV this crate currently sizes by measuring a
+    fully-built buffer up front — a real design change, not a quick fix.
+  - **D-10's (and, unverified, OP-Atom's) header carries roughly `1536`
+    bytes (three KAG blocks) this crate does not write** — found by
+    comparing header-region sizes directly (this crate's D-10 header ends
+    at `4608`, a real file's at `6144`, for otherwise-identical input).
+    The most likely candidate is an unidentified structural set — a real
+    D-10 file's structural-set class-byte sequence includes a `0x23` this
+    session could not identify with confidence (RP210 register lookup
+    would need reading a spec table this crate has not measured against a
+    decoded example; D6/D17 says do not guess). Also present, same
+    unidentified class, in the OP-Atom fixture generated this session — so
+    this is likely a common set, not D-10-specific.
   Two real, identified-but-unwritten descriptor properties were found
-  along the way and are recorded here rather than guessed into the
-  descriptor: tag `0x320e` (8 bytes, two 4-byte ints) is `AspectRatio`
-  (confirmed against two real fixtures: `(5,4)` on a 720x576 file, `(4,3)`
-  on a 320x240 one — both correct display aspect ratios); tag `0x320d` (16
-  bytes: `Count=2, ItemLength=4`, then two 4-byte ints) is very likely
-  `VideoLineMap` (a batch of the first active line number per field —
-  `[46, 0]` on the interlaced 720x576 fixture, `[0, 0]` on the progressive
-  320x240 one, consistent with `FrameLayout`), but this was not
-  cross-checked against a third fixture and is reported as a strong
-  inference, not a confirmed measurement.
+  across the two sessions and are recorded here rather than guessed into
+  the descriptor: tag `0x320e` is `AspectRatio` — confirmed against three
+  real fixtures now (two OP1a resolutions plus one D-10 file) and **written
+  as of this session** (see "`AspectRatio`" above, so this bullet now
+  documents what changed, not an open gap). Tag `0x320d` (16 bytes:
+  `Count=2, ItemLength=4`, then two 4-byte ints) is very likely
+  `VideoLineMap` (the first active line number per field — `[46, 0]` on
+  interlaced 720x576 OP1a, `[23, 336]` on D-10 720x576 (`FrameLayout = 1`),
+  `[0, 0]` on progressive 320x240, consistent with `FrameLayout` across
+  three data points now), but still not cross-checked with enough
+  confidence to write it — `docs/format/vaco-demux-mxf.md` has no
+  `PropertyId` for it either, so there is nothing to round-trip against on
+  the read side yet.
 - **A two-essence-track file's descriptor resolution under a real
-  `ffmpeg -i`: resolved this session.** Fixed by the `SubDescriptorUIDs`
-  tag correction and the per-media-type `EssenceContainer` fix above (see
-  "The structural-metadata graph" and "Essence and the Index Table
-  Segment"). `a_real_ffprobe_resolves_both_tracks_of_a_multiple_descriptor_file`
-  is the regression test against a real `ffprobe`.
+  `ffmpeg -i`: resolved in an earlier session.** Fixed by the
+  `SubDescriptorUIDs` tag correction and the per-media-type
+  `EssenceContainer` fix above (see "The structural-metadata graph" and
+  "Essence and the Index Table Segment").
+  `a_real_ffprobe_resolves_both_tracks_of_a_multiple_descriptor_file` is
+  the regression test against a real `ffprobe`.
+- **D-10 audio, OP-Atom frame-level packet access**: see "How to change
+  it" and the OP-Atom section above, respectively — the latter is not
+  treated as a gap this crate should close, since the reference's own
+  reader exhibits the identical behaviour on this crate's own output.

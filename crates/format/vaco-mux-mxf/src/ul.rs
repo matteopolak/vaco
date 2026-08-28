@@ -14,6 +14,20 @@
 //! each one). Reusing a sibling crate's own prior measurement is not
 //! reading the reference's source; it is this project's own record.
 
+/// Which of the three real `ffmpeg` MXF muxers this crate is imitating —
+/// `-f mxf` (`OP1a`), `-f mxf_d10` (D-10 / SMPTE 386M), `-f mxf_opatom`
+/// (OP-Atom / SMPTE 390) — each a distinct registered muxer name in the
+/// reference (`ffmpeg -muxers | grep mxf`), not an option of one muxer.
+/// `mux.rs` threads this through `write_header`/`write_packet`/
+/// `write_trailer`; `metadata.rs` threads it through descriptor/essence-
+/// container/operational-pattern selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MxfVariant {
+    Op1a,
+    D10,
+    OpAtom,
+}
+
 /// A 16-byte SMPTE Universal Label, stored exactly as it will appear on disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct Ul(pub [u8; 16]);
@@ -64,6 +78,13 @@ pub(crate) mod class {
     /// `pcm_s16le` audio track uses (not `WaveAudioDescriptor`).
     pub(crate) const AES3_PCM_DESCRIPTOR: u8 = 0x47;
     pub(crate) const MULTIPLE_DESCRIPTOR: u8 = 0x44;
+    /// `CDCIEssenceDescriptor` — measured this session against a real
+    /// `ffmpeg -f mxf_d10` file's video descriptor (a real single-track D-10
+    /// file's structural-set class bytes, decoded in sequence, land on
+    /// `0x28` where an `OP1a` MPEG-2 track lands on `0x51` instead). D-10's
+    /// constrained 4:2:2 profile evidently gets the more general CDCI
+    /// descriptor, not `MPEGVideoDescriptor`.
+    pub(crate) const CDCI_ESSENCE_DESCRIPTOR: u8 = 0x28;
 }
 
 /// Partition Pack family: `06.0e.2b.34.02.05.01.01.0d.01.02.01.01` plus a
@@ -73,6 +94,18 @@ pub(crate) mod class {
 /// `vaco-demux-mxf::ul`.
 const PARTITION_FAMILY_PREFIX: [u8; 13] = [
     0x06, 0x0e, 0x2b, 0x34, 0x02, 0x05, 0x01, 0x01, 0x0d, 0x01, 0x02, 0x01, 0x01,
+];
+
+/// The KLV Fill Item key, used to pad structures out to a KAG (KLV
+/// Alignment Grid) boundary — measured this session: a real `ffmpeg -f mxf`
+/// file uses `KAGSize = 512` and pads the header region (partition packs,
+/// primer, structural metadata, the first System Item) out to 512-byte
+/// boundaries with Fill Items, but not between subsequent essence elements
+/// (measured directly: one frame's KLV ends and the next item begins with
+/// no gap at all).
+pub(crate) const FILL_ITEM: [u8; 16] = [
+    0x06, 0x0e, 0x2b, 0x34, 0x01, 0x01, 0x01, 0x02, 0x03, 0x01, 0x02, 0x10, 0x01, 0x00, 0x00,
+    0x00,
 ];
 
 #[must_use]
@@ -132,7 +165,7 @@ pub(crate) const INDEX_TABLE_SEGMENT: [u8; 16] = [
 
 /// The Generic Container System Item, measured in
 /// `vaco-demux-mxf::essence::GC_SYSTEM_ITEM_PREFIX` plus the trailing
-/// `04.01.01.00` a real single-partition OP1a/D-10 file carries.
+/// `04.01.01.00` a real single-partition `OP1a`/D-10 file carries.
 pub(crate) const GC_SYSTEM_ITEM: [u8; 16] = [
     0x06, 0x0e, 0x2b, 0x34, 0x02, 0x05, 0x01, 0x01, 0x0d, 0x01, 0x03, 0x01, 0x04, 0x01, 0x01,
     0x00,
@@ -192,6 +225,78 @@ pub(crate) const PICTURE_ESSENCE_CODING_MPEG2_LONG_GOP: Ul = Ul([
     0x06, 0x0e, 0x2b, 0x34, 0x04, 0x01, 0x01, 0x03, 0x04, 0x01, 0x02, 0x02, 0x01, 0x01, 0x11,
     0x00,
 ]);
+
+/// D-10 (SMPTE 386M)'s own video `EssenceContainer` label — distinct from
+/// `OP1a`'s (differs starting at byte 7: `01` vs `04`, and again from byte 12
+/// on), measured this session directly off a real `ffmpeg -f mxf_d10`
+/// file's header partition, `Preface` and `CDCIEssenceDescriptor` alike (all
+/// three states carry the identical bytes).
+pub(crate) const ESSENCE_CONTAINER_D10_VIDEO: Ul = Ul([
+    0x06, 0x0e, 0x2b, 0x34, 0x04, 0x01, 0x01, 0x01, 0x0d, 0x01, 0x03, 0x01, 0x02, 0x01, 0x05,
+    0x01,
+]);
+
+/// D-10 (SMPTE 386M)'s three fixed-bitrate `PictureEssenceCoding` labels,
+/// reused from `vaco-demux-mxf::descriptor::PICTURE_ESSENCE_CODING`'s
+/// already-measured D-10 rows (that crate measured all three against real
+/// `ffmpeg -f mxf_d10 -b:v <rate>` files at 50/40/30 Mbit/s; this crate adds
+/// no new measurement here, only reuses it for the write side).
+pub(crate) const PICTURE_ESSENCE_CODING_D10_50MBIT: Ul = Ul([
+    0x06, 0x0e, 0x2b, 0x34, 0x04, 0x01, 0x01, 0x01, 0x04, 0x01, 0x02, 0x02, 0x01, 0x02, 0x01,
+    0x01,
+]);
+pub(crate) const PICTURE_ESSENCE_CODING_D10_40MBIT: Ul = Ul([
+    0x06, 0x0e, 0x2b, 0x34, 0x04, 0x01, 0x01, 0x01, 0x04, 0x01, 0x02, 0x02, 0x01, 0x02, 0x01,
+    0x03,
+]);
+pub(crate) const PICTURE_ESSENCE_CODING_D10_30MBIT: Ul = Ul([
+    0x06, 0x0e, 0x2b, 0x34, 0x04, 0x01, 0x01, 0x01, 0x04, 0x01, 0x02, 0x02, 0x01, 0x02, 0x01,
+    0x05,
+]);
+
+/// OP-Atom: one essence track per file. Reused from
+/// `vaco-demux-mxf::ul::op::OP_ATOM`, which measured it against that
+/// crate's own `opatom.mxf` corpus file; re-confirmed this session against
+/// a freshly generated `ffmpeg -f mxf_opatom` file (`opatom_test.mxf`),
+/// byte for byte.
+pub(crate) const OPERATIONAL_PATTERN_OP_ATOM: Ul = Ul([
+    0x06, 0x0e, 0x2b, 0x34, 0x04, 0x01, 0x01, 0x02, 0x0d, 0x01, 0x02, 0x01, 0x10, 0x03, 0x00,
+    0x00,
+]);
+
+/// The Operational Pattern label every partition pack and the `Preface`
+/// itself state, by variant. D-10 uses the same `OP1a` label as the `OP1a`
+/// muxer (measured this session against a real `ffmpeg -f mxf_d10` file's
+/// own header partition — byte for byte identical to
+/// [`OPERATIONAL_PATTERN_OP1A`]); only OP-Atom's differs.
+#[must_use]
+pub(crate) const fn operational_pattern_for(variant: MxfVariant) -> Ul {
+    match variant {
+        MxfVariant::OpAtom => OPERATIONAL_PATTERN_OP_ATOM,
+        MxfVariant::Op1a | MxfVariant::D10 => OPERATIONAL_PATTERN_OP1A,
+    }
+}
+
+/// `AspectRatio` (the display aspect ratio, e.g. `5/4`) — a property
+/// `vaco-demux-mxf::properties::PropertyId::AspectRatio` already reads (via
+/// `descriptor::picture_parameters`, into `sample_aspect_ratio`) but this
+/// crate never wrote: a real functional gap, not a byte-identity nicety —
+/// confirmed against three real fixtures this session (two different
+/// resolutions of `OP1a`/`-f mxf` plus one D-10/`-f mxf_d10` file, all
+/// carrying this exact UL at local tag `0x320e`).
+pub(crate) const ASPECT_RATIO: Ul = Ul([
+    0x06, 0x0e, 0x2b, 0x34, 0x01, 0x01, 0x01, 0x01, 0x04, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00,
+    0x00,
+]);
+
+// OP-Atom's own video `EssenceContainer` label, measured this session
+// against `opatom_test.mxf`: byte-for-byte identical to
+// [`ESSENCE_CONTAINER_MPEG_FRAME_WRAPPED`] above (both are "MXF-GC Generic
+// MPEG-2 frame-wrapped picture" — the label's own name does not change for
+// OP-Atom even though OP-Atom's essence is actually clip-wrapped: one
+// Generic Container element for the whole file, not one per frame; see
+// `mux.rs`'s `MxfVariant::OpAtom` docs). Reusing the `OP1a` constant
+// directly rather than duplicating it under a second name.
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used, reason = "test code")]

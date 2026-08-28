@@ -25,13 +25,28 @@ impl EncodedLen {
 /// bytes) when it fits (up to 16 MiB minus one), and an 8-value-byte long
 /// form (`0x88` + 8 bytes) otherwise.
 ///
-/// A real `ffmpeg` partition/primer pack pads its length to 4 bytes even
-/// when the value would fit in fewer (`vaco-demux-mxf::ber`'s doc comment
-/// notes this, measured); every metadata KLV this crate writes follows the
-/// same convention. Essence elements can legitimately exceed 16 MiB (a
-/// large uncompressed frame), so those widen to the 8-byte form rather than
-/// silently truncating — [`vaco-demux-mxf::ber::decode`] accepts either
-/// width.
+/// A real `ffmpeg` **partition pack** pads its length to 4 bytes even when
+/// the value would fit in fewer (`vaco-demux-mxf::ber`'s doc comment notes
+/// this, measured; and re-confirmed this session against `bitexact1.mxf`'s
+/// header partition pack, `cmp`-identical byte for byte including this
+/// field). Every partition-family KLV this crate writes follows that
+/// convention here too.
+///
+/// That fixed-width convention is *not* universal, though — measured this
+/// session against the same fixture's Primer Pack, whose real length prefix
+/// is `82 07 10` (a 3-byte long form, value `0x0710`), not the 4-byte form
+/// this crate emits for it (`83 00 07 10`). So the Primer Pack (and, not
+/// yet individually re-verified, the structural-metadata sets that follow
+/// it) diverge from the reference here — this is the next known
+/// byte-identity gap after `KAGSize`, not chased further this session per
+/// the same “bound the chase” judgement documented on `partition::write`'s
+/// minor-version fix, since untangling it would mean either two-pass
+/// length computation or a variable-width backpatch scheme for every KLV
+/// this crate currently sizes by measuring the buffer up front.
+///
+/// Essence elements can legitimately exceed 16 MiB (a large uncompressed
+/// frame), so those widen to the 8-byte form rather than silently
+/// truncating — [`vaco-demux-mxf::ber::decode`] accepts either width.
 #[must_use]
 pub(crate) fn encode(value: u64) -> EncodedLen {
     if value < 0x0100_0000 {

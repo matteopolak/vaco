@@ -1,11 +1,15 @@
-//! MXF (Material eXchange Format) muxer: `OP1a`, frame-wrapped essence.
+//! MXF (Material eXchange Format) muxers: three variants matching three
+//! distinct registered `ffmpeg` muxer names (`ffmpeg -muxers | grep mxf`) —
+//! `mxf` (`OP1a`, frame-wrapped essence, [`MUXER`]), `mxf_d10` (SMPTE 386M,
+//! video-only in this crate today, [`MUXER_D10`]), and `mxf_opatom` (SMPTE
+//! 390, one clip-wrapped essence track per file, [`MUXER_OPATOM`]) — see
+//! `ul::MxfVariant`.
 //!
 //! Layer 4. Writes the four things `vaco-demux-mxf` reads: the KLV/BER
 //! wrapper, the Partition Pack, the structural-metadata graph (`Preface` ->
 //! `ContentStorage` -> `Package` -> `Track` -> `Sequence` ->
 //! `StructuralComponent` -> `Descriptor`, keyed by the Primer Pack), and the
 //! Generic Container essence element plus its Index Table Segment.
-//! Registered as `mxf`.
 //!
 //! Written clean-room (D7/D15): the byte layout below is this crate's own
 //! encoding of the same SMPTE ST 377-1/379-1/336/RP 210 structures
@@ -43,4 +47,4 @@ mod partition;
 mod uid;
 mod ul;
 
-pub use mux::{MUXER, MxfMuxer, MxfOptions};
+pub use mux::{MUXER, MUXER_D10, MUXER_OPATOM, MxfMuxer, MxfOptions};

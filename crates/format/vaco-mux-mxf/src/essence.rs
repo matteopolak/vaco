@@ -16,6 +16,17 @@ use crate::ul::GC_ESSENCE_PREFIX;
 const ITEM_TYPE_PICTURE_FRAME_WRAPPED: u8 = 0x15;
 const ITEM_TYPE_SOUND_FRAME_WRAPPED: u8 = 0x16;
 
+/// D-10's own picture item-type byte — measured this session against a real
+/// `ffmpeg -f mxf_d10` file's Generic Container essence key
+/// (`06 0e 2b 34 01 02 01 01 0d 01 03 01 05 01 01 00`): `0x05`, not `OP1a`'s
+/// `0x15`. `vaco-demux-mxf`'s own reader matches essence by the full track
+/// number against the Track's own `EssenceTrackNumber` property, not by
+/// interpreting this byte's meaning, so a distinct value here does not need
+/// a matching read-side change — only the write side (this crate) and the
+/// number it also writes onto the D-10 track's `EssenceTrackNumber` need to
+/// agree with each other.
+const ITEM_TYPE_D10_PICTURE: u8 = 0x05;
+
 /// Assign a Generic Container track number for the `n`th (0-based) essence
 /// track of `media_type` in this file. Only needs to be unique within the
 /// file and to equal the number this crate itself writes onto the matching
@@ -27,6 +38,15 @@ pub(crate) fn track_number(media_type: MediaType, n: u32) -> [u8; 4] {
         _ => ITEM_TYPE_PICTURE_FRAME_WRAPPED,
     };
     [item_type, 0x01, (n + 1) as u8, 0x00]
+}
+
+/// The D-10 variant's own track-number shape: same byte 13/15 convention as
+/// [`track_number`], but the D-10-specific item-type byte. D-10 as
+/// implemented here is video-only (see `mux.rs`'s `MxfVariant::D10` docs),
+/// so `n` is always `0`.
+#[must_use]
+pub(crate) fn track_number_d10(n: u32) -> [u8; 4] {
+    [ITEM_TYPE_D10_PICTURE, 0x01, (n + 1) as u8, 0x00]
 }
 
 /// Build one essence element's full 16-byte key from its track number.

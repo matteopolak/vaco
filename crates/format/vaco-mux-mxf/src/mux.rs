@@ -46,7 +46,36 @@ use crate::ul;
 #[derive(Debug, Clone, Default)]
 pub struct MxfOptions;
 
-/// The registry descriptor.
+/// The KLV Alignment Grid size every real `ffmpeg -f mxf`/`-f mxf_d10` file
+/// this session measured uses (`klv::pad_to_kag`'s own doc comment has the
+/// evidence: Fill Items padding the header region out to 512-byte
+/// boundaries, but never between subsequent essence elements).
+const KAG_SIZE: u64 = 512;
+
+/// D-10's own Index Table Segment/partition `IndexSID` — an arbitrary but
+/// fixed choice (only needs to be nonzero and match the value the header
+/// partition pack itself states), mirroring `write_trailer`'s own
+/// `FOOTER_INDEX_SID` for `OP1a`/OP-Atom.
+const D10_INDEX_SID: u32 = 2;
+
+/// Round `n` up to the next multiple of [`KAG_SIZE`] — the same arithmetic
+/// `klv::pad_to_kag` performs on a live `IoWriter` position, extracted here
+/// as a pure function so `build_d10_index_table` can predict D-10's
+/// `EditUnitByteCount` before any byte of the edit unit exists.
+#[allow(
+    clippy::integer_division,
+    clippy::cast_possible_wrap,
+    reason = "rounding up to a multiple; the truncation is the point, not a bug, and KAG_SIZE (512) never approaches i64::MAX"
+)]
+fn round_up_to_kag(n: i64) -> i64 {
+    let kag = KAG_SIZE as i64;
+    if n <= 0 {
+        return kag;
+    }
+    ((n + kag - 1) / kag) * kag
+}
+
+/// The registry descriptor: `OP1a`, `ffmpeg`'s default `-f mxf`.
 pub const MUXER: MuxerDesc = MuxerDesc {
     name: "mxf",
     long_name: "MXF (Material eXchange Format)",
@@ -56,8 +85,44 @@ pub const MUXER: MuxerDesc = MuxerDesc {
     open: open_muxer,
 };
 
+/// D-10 (SMPTE 386M), matching `ffmpeg`'s own distinct `-f mxf_d10` muxer
+/// name (`ffmpeg -muxers` lists `mxf`, `mxf_d10`, `mxf_opatom` as three
+/// separate registered muxers, not one muxer with a variant option — see
+/// `vaco-mux-asf`'s own `MUXER`/`MUXER_STREAM` pair for the same pattern
+/// elsewhere in this workspace). Video-only in this crate today: D-10's
+/// fixed 8-slot AES3 audio bundle (`4 + 1920×8×4 = 61444` bytes per edit
+/// unit at 25fps, measured on the read side) is not yet implemented on the
+/// write side — see `MxfVariant::D10`'s docs and
+/// `docs/format/vaco-mux-mxf.md`.
+pub const MUXER_D10: MuxerDesc = MuxerDesc {
+    name: "mxf_d10",
+    long_name: "MXF (Material eXchange Format) D-10 Mapping",
+    extensions: &[],
+    default_video: Some(vaco_codec_core::CodecId::Mpeg2video),
+    default_audio: None,
+    open: open_muxer_d10,
+};
+
+/// OP-Atom (SMPTE 390), matching `ffmpeg`'s own `-f mxf_opatom`.
+pub const MUXER_OPATOM: MuxerDesc = MuxerDesc {
+    name: "mxf_opatom",
+    long_name: "MXF (Material eXchange Format) Operational Pattern Atom",
+    extensions: &[],
+    default_video: Some(vaco_codec_core::CodecId::Mpeg2video),
+    default_audio: None,
+    open: open_muxer_opatom,
+};
+
 fn open_muxer(sink: Box<dyn MediaSink>) -> Result<Box<dyn Muxer>> {
     Ok(Box::new(MxfMuxer::new(sink, &FormatOptions::default())?))
+}
+
+fn open_muxer_d10(sink: Box<dyn MediaSink>) -> Result<Box<dyn Muxer>> {
+    Ok(Box::new(MxfMuxer::new_variant(sink, &FormatOptions::default(), ul::MxfVariant::D10)?))
+}
+
+fn open_muxer_opatom(sink: Box<dyn MediaSink>) -> Result<Box<dyn Muxer>> {
+    Ok(Box::new(MxfMuxer::new_variant(sink, &FormatOptions::default(), ul::MxfVariant::OpAtom)?))
 }
 
 #[derive(Debug)]
@@ -96,12 +161,37 @@ pub struct MxfMuxer {
     /// before that unit's first essence element, shared across every
     /// track). `None` until the first packet is written.
     last_system_item_pts: Option<i64>,
+    /// Which real `ffmpeg` MXF muxer this instance imitates — see
+    /// [`ul::MxfVariant`].
+    variant: ul::MxfVariant,
+    /// `Some` only for [`ul::MxfVariant::OpAtom`]: OP-Atom's essence is
+    /// clip-wrapped (one Generic Container element for the whole file, not
+    /// one per frame — measured this session against a real `ffmpeg -f
+    /// mxf_opatom` file, see `write_trailer`'s own docs), so every packet's
+    /// payload is appended here instead of going straight to `self.out`,
+    /// and the single element is written for real once `write_trailer`
+    /// knows its final length. `None` for `OP1a`/D-10, whose essence streams
+    /// straight to the sink per packet as it always has.
+    clip_buffer: Option<Vec<u8>>,
 }
 
 impl MxfMuxer {
     /// # Errors
     /// Propagates buffer allocation failure from [`IoWriter`].
-    pub fn new(sink: Box<dyn MediaSink>, _opts: &FormatOptions) -> Result<Self> {
+    pub fn new(sink: Box<dyn MediaSink>, opts: &FormatOptions) -> Result<Self> {
+        Self::new_variant(sink, opts, ul::MxfVariant::Op1a)
+    }
+
+    /// As [`Self::new`], but for a non-`OP1a` variant (`open_muxer_d10`/
+    /// `open_muxer_opatom`, the crate's two other registered muxer names).
+    ///
+    /// # Errors
+    /// Propagates buffer allocation failure from [`IoWriter`].
+    pub(crate) fn new_variant(
+        sink: Box<dyn MediaSink>,
+        _opts: &FormatOptions,
+        variant: ul::MxfVariant,
+    ) -> Result<Self> {
         Ok(Self {
             out: IoWriter::new(sink, &IoOptions::default())?,
             pending: Vec::new(),
@@ -116,7 +206,53 @@ impl MxfMuxer {
             video_entries: Vec::new(),
             packet_counts: Vec::new(),
             last_system_item_pts: None,
+            variant,
+            clip_buffer: None,
         })
+    }
+
+    /// D-10's `EditUnitByteCount`, computed analytically from the video
+    /// track's declared `bit_rate` and this file's shared edit rate — no
+    /// packet has arrived yet when `write_header` needs this (D-10's Index
+    /// Table Segment is embedded in the header, not deferred to the
+    /// footer), so it cannot be measured from an actual frame the way
+    /// `OP1a`'s/OP-Atom's VBE index is. Measured against a real 30 Mbit/s
+    /// `ffmpeg -f mxf_d10` fixture: `EditUnitByteCount = 151040 =
+    /// round_up_to_kag(20) [empty-value System Item KLV] +
+    /// round_up_to_kag(20 + 150000) [essence KLV]` — i.e. the System Item
+    /// and the essence element are each independently padded out to the
+    /// next 512-byte boundary, not the edit unit as a whole; `write_packet`
+    /// reproduces the same two-pad shape per edit unit.
+    fn build_d10_index_table(&self) -> Result<([u8; 16], Vec<u8>)> {
+        let track = self
+            .tracks
+            .first()
+            .ok_or(Error::InvalidData("mxf_d10: no essence track"))?;
+        let bit_rate = track
+            .params
+            .bit_rate
+            .ok_or(Error::Unsupported("mxf_d10: the video stream needs an explicit bit_rate"))?;
+        let fps_num = i64::from(self.edit_rate.num).max(1);
+        let fps_den = i64::from(self.edit_rate.den).max(1);
+        #[allow(
+            clippy::integer_division,
+            reason = "exact CBR frame-byte-count arithmetic (bit_rate * fps_den / (8 * fps_num)); a real D-10 bit_rate is always an exact multiple of 8 * fps_num for a standard frame rate, so this never truncates a real value"
+        )]
+        let frame_bytes =
+            i64::try_from(bit_rate).unwrap_or(i64::MAX).saturating_mul(fps_den) / (8 * fps_num);
+        let system_item_block = round_up_to_kag(20);
+        let essence_block = round_up_to_kag(20 + frame_bytes);
+        let edit_unit_byte_count =
+            u32::try_from(system_item_block + essence_block).unwrap_or(u32::MAX);
+
+        let mut g = IdGenerator::new();
+        Ok(index::build_cbe(
+            g.instance_uid(),
+            (self.edit_rate.num, self.edit_rate.den),
+            edit_unit_byte_count,
+            D10_INDEX_SID,
+            1,
+        ))
     }
 }
 
@@ -132,6 +268,16 @@ impl Muxer for MxfMuxer {
             .ok_or(Error::Unsupported("mxf: stream has no media type"))?;
         if !matches!(media, MediaType::Video | MediaType::Audio) {
             return Err(Error::Unsupported("mxf: only video and audio streams"));
+        }
+        if self.variant == ul::MxfVariant::OpAtom && !self.pending.is_empty() {
+            return Err(Error::Unsupported(
+                "mxf_opatom: exactly one essence track per file (OP-Atom's own defining constraint)",
+            ));
+        }
+        if self.variant == ul::MxfVariant::D10 && media == MediaType::Audio {
+            return Err(Error::Unsupported(
+                "mxf_d10: audio is not yet implemented by this muxer (see docs/format/vaco-mux-mxf.md)",
+            ));
         }
         if media == MediaType::Video && self.pending.iter().any(|p| p.media_type == Some(MediaType::Video)) {
             return Err(Error::Unsupported(
@@ -191,7 +337,11 @@ impl Muxer for MxfMuxer {
                 // crate's own demuxer (which does not share that
                 // assumption) read the same file correctly.
                 track_id: (i as u32) + 2,
-                gc_track_number: crate::essence::track_number(media, n),
+                gc_track_number: if self.variant == ul::MxfVariant::D10 {
+                    crate::essence::track_number_d10(n)
+                } else {
+                    crate::essence::track_number(media, n)
+                },
                 ids: TrackIds::new(&mut idgen),
             });
         }
@@ -216,32 +366,49 @@ impl Muxer for MxfMuxer {
             .ok_or(Error::InvalidData("mxf: init() was not called"))?;
 
         let primer_bytes = localset::build_primer_pack(&metadata::primer_entries());
-        let sets = metadata::build_sets(&ids, &self.tracks, self.edit_rate, None);
-        let essence_containers: Vec<ul::Ul> = metadata::essence_containers_used(&self.tracks)
-            .into_iter()
-            .map(ul::Ul::new)
-            .collect();
+        let sets = metadata::build_sets(&ids, &self.tracks, self.edit_rate, None, self.variant);
+        let essence_containers: Vec<ul::Ul> =
+            metadata::essence_containers_used(&self.tracks, self.variant)
+                .into_iter()
+                .map(ul::Ul::new)
+                .collect();
 
         self.header_this_partition = self.out.pos();
+
+        // D-10 carries essence directly in the header (`body_sid = 1`, no
+        // separate Body Partition Pack — measured: a real `ffmpeg -f
+        // mxf_d10` file has none, unlike `OP1a`/OP-Atom) and additionally
+        // embeds a complete CBE Index Table Segment right there too
+        // (measured: `IndexDuration = 0`, `EditUnitByteCount` nonzero,
+        // computed entirely upfront since D-10 is CBR — no footer deferral
+        // needed the way `OP1a`/OP-Atom's VBE index requires). Everything
+        // else keeps the header essence-free (`body_sid = 0`).
+        let d10_index = if self.variant == ul::MxfVariant::D10 {
+            Some(self.build_d10_index_table()?)
+        } else {
+            None
+        };
+        let (body_sid, index_sid) = match &d10_index {
+            Some(_) => (1u32, D10_INDEX_SID),
+            None => (0u32, 0u32),
+        };
+
         let header_byte_count = klv_len(&ul::primer_pack_key(), &primer_bytes)
-            + sets
-                .iter()
-                .map(|(k, v)| klv_len(k, v))
-                .sum::<u64>();
+            + sets.iter().map(|(k, v)| klv_len(k, v)).sum::<u64>()
+            + d10_index.as_ref().map_or(0, |(k, v)| klv_len(k, v));
+        let index_byte_count = d10_index.as_ref().map_or(0, |(k, v)| klv_len(k, v));
 
         let fields = PartitionPackFields {
+            kag_size: KAG_SIZE as u32,
             this_partition: self.header_this_partition,
             previous_partition: 0,
             footer_partition: 0,
             header_byte_count,
-            index_byte_count: 0,
-            index_sid: 0,
+            index_byte_count,
+            index_sid,
             body_offset: 0,
-            // The header partition itself carries no essence -- the body
-            // partition written below does (`body_sid: 1` there). Measured:
-            // a real file's header partition states `body_sid = 0`.
-            body_sid: 0,
-            operational_pattern: ul::OPERATIONAL_PATTERN_OP1A,
+            body_sid,
+            operational_pattern: ul::operational_pattern_for(self.variant),
             essence_containers,
         };
         partition::write(&mut self.out, &ul::header_partition_key(), &fields)?;
@@ -253,42 +420,64 @@ impl Muxer for MxfMuxer {
         // the buffer `partition::write` actually built.
         self.footer_field_positions
             .push(self.header_this_partition + 20 + partition::FOOTER_PARTITION_FIELD_OFFSET);
+        klv::pad_to_kag(&mut self.out, KAG_SIZE)?;
 
         klv::write(&mut self.out, &ul::primer_pack_key(), &primer_bytes)?;
+        klv::pad_to_kag(&mut self.out, KAG_SIZE)?;
         for (key, value) in &sets {
             klv::write(&mut self.out, key, value)?;
         }
+        klv::pad_to_kag(&mut self.out, KAG_SIZE)?;
+        if let Some((key, value)) = &d10_index {
+            klv::write(&mut self.out, key, value)?;
+            klv::pad_to_kag(&mut self.out, KAG_SIZE)?;
+        }
 
         // A genuine Body Partition Pack, distinct from the header, right
-        // before essence begins. Corrected this session: an earlier version
-        // wrote one only for more than one essence track, on the strength
-        // of this crate's own D-10 corpus (single-partition, essence
-        // directly in the header) — but a literal `cmp` against a real
-        // single-track `ffmpeg -f mxf -fflags +bitexact` file showed a
-        // body partition there too (`op1a_mpeg2_sample.mxf`, this crate's
-        // own single-track fixture, has one at the same relative position
-        // once checked properly). D-10's single-partition shape is real
-        // for `-f mxf_d10` specifically, not for OP1a's `-f mxf` — the two
-        // muxers are not the same shape, and this crate targets OP1a.
-        let body_this_partition = self.out.pos();
-        let body_fields = PartitionPackFields {
-            this_partition: body_this_partition,
-            previous_partition: self.header_this_partition,
-            footer_partition: 0,
-            header_byte_count: 0,
-            index_byte_count: 0,
-            index_sid: 0,
-            body_offset: 0,
-            body_sid: 1,
-            operational_pattern: ul::OPERATIONAL_PATTERN_OP1A,
-            essence_containers: metadata::essence_containers_used(&self.tracks)
-                .into_iter()
-                .map(ul::Ul::new)
-                .collect(),
-        };
-        partition::write(&mut self.out, &ul::body_partition_key(), &body_fields)?;
-        self.footer_field_positions
-            .push(body_this_partition + 20 + partition::FOOTER_PARTITION_FIELD_OFFSET);
+        // before essence begins — `OP1a` and OP-Atom alike (measured this
+        // session against a real `ffmpeg -f mxf_opatom` file too: same
+        // relative position as `OP1a`'s). D-10 never gets one (see above).
+        if self.variant != ul::MxfVariant::D10 {
+            // Corrected this session: an earlier version wrote one only for
+            // more than one essence track, on the strength of this crate's
+            // own D-10 corpus (single-partition, essence directly in the
+            // header) — but a literal `cmp` against a real single-track
+            // `ffmpeg -f mxf -fflags +bitexact` file showed a body
+            // partition there too (`op1a_mpeg2_sample.mxf`, this crate's
+            // own single-track fixture, has one at the same relative
+            // position once checked properly). D-10's single-partition
+            // shape is real for `-f mxf_d10` specifically, not for `OP1a`'s
+            // `-f mxf` — the muxers are not the same shape.
+            let body_this_partition = self.out.pos();
+            let body_fields = PartitionPackFields {
+                kag_size: KAG_SIZE as u32,
+                this_partition: body_this_partition,
+                previous_partition: self.header_this_partition,
+                footer_partition: 0,
+                header_byte_count: 0,
+                index_byte_count: 0,
+                index_sid: 0,
+                body_offset: 0,
+                body_sid: 1,
+                operational_pattern: ul::operational_pattern_for(self.variant),
+                essence_containers: metadata::essence_containers_used(&self.tracks, self.variant)
+                    .into_iter()
+                    .map(ul::Ul::new)
+                    .collect(),
+            };
+            partition::write(&mut self.out, &ul::body_partition_key(), &body_fields)?;
+            self.footer_field_positions
+                .push(body_this_partition + 20 + partition::FOOTER_PARTITION_FIELD_OFFSET);
+            klv::pad_to_kag(&mut self.out, KAG_SIZE)?;
+        }
+
+        if self.variant == ul::MxfVariant::OpAtom {
+            // OP-Atom's essence is clip-wrapped (see `write_trailer`'s own
+            // docs) — buffer it here instead of streaming it, so its final
+            // length is known before the one Generic Container element is
+            // actually written.
+            self.clip_buffer = Some(Vec::new());
+        }
 
         self.header_written = true;
         Ok(())
@@ -305,6 +494,27 @@ impl Muxer for MxfMuxer {
             .ok_or(Error::InvalidData("mxf: packet names an unknown stream"))?
             .clone();
 
+        // OP-Atom's essence is clip-wrapped: buffer the payload, record
+        // where it landed within the eventual single element, and stop —
+        // none of the frame-wrapped machinery below (System Items, a KAG
+        // pad per essence element, an essence key per packet) applies (see
+        // `write_trailer`'s own docs for why no System Item was found in a
+        // real `ffmpeg -f mxf_opatom` file either).
+        if let Some(buf) = self.clip_buffer.as_mut() {
+            let offset = buf.len() as u64;
+            buf.extend_from_slice(packet.payload());
+            if track.media_type == MediaType::Video {
+                self.video_entries.push(Entry {
+                    stream_offset: offset,
+                    is_key_frame: packet.flags.contains(PacketFlags::KEY),
+                });
+            }
+            if let Some(c) = self.packet_counts.get_mut(idx) {
+                *c += 1;
+            }
+            return Ok(());
+        }
+
         // One Generic Container System Item per edit unit, shared across
         // every track (measured against a real two-track file — see
         // `last_system_item_pts`'s doc comment): this crate's own reader
@@ -315,9 +525,30 @@ impl Muxer for MxfMuxer {
         // comparing raw ticks across tracks is correct only because every
         // track shares one edit rate (this crate's own documented scope).
         let edit_unit = packet.pts.ticks();
+        let first_ever_packet = self.essence_origin.is_none();
+        let is_d10 = self.variant == ul::MxfVariant::D10;
         if edit_unit.is_none() || edit_unit != self.last_system_item_pts {
             klv::write(&mut self.out, &ul::GC_SYSTEM_ITEM, &[])?;
             self.last_system_item_pts = edit_unit;
+            // D-10 pads the System Item's own KLV out to the KAG grid
+            // separately from the essence element that follows it (measured
+            // against a real `ffmpeg -f mxf_d10` file: a Fill Item sits
+            // between the two, not just after the essence element) — see
+            // `build_d10_index_table`'s own doc comment for the exact
+            // arithmetic this reproduces.
+            if is_d10 {
+                klv::pad_to_kag(&mut self.out, KAG_SIZE)?;
+            }
+        }
+        // `OP1a`/D-10 both KAG-align before the essence element: `OP1a` only
+        // once, right before the very first essence element in the whole
+        // file (measured: the header region is padded to 512-byte
+        // boundaries, subsequent essence elements are not); D-10 does it
+        // before every single one (measured: every edit unit's essence
+        // element starts on its own 512-byte boundary, not just the
+        // file's first).
+        if first_ever_packet || is_d10 {
+            klv::pad_to_kag(&mut self.out, KAG_SIZE)?;
         }
 
         let pos = self.out.pos();
@@ -337,7 +568,15 @@ impl Muxer for MxfMuxer {
         }
 
         let key = crate::essence::essence_key(track.gc_track_number);
-        klv::write(&mut self.out, &key, packet.payload())
+        klv::write(&mut self.out, &key, packet.payload())?;
+        // D-10's essence element is itself padded out to the KAG grid too
+        // (see the comment above `first_ever_packet || is_d10`): the next
+        // edit unit's System Item always starts on a fresh 512-byte
+        // boundary, not just packed immediately after this element ends.
+        if is_d10 {
+            klv::pad_to_kag(&mut self.out, KAG_SIZE)?;
+        }
+        Ok(())
     }
 
     fn write_trailer(&mut self) -> Result<()> {
@@ -351,6 +590,30 @@ impl Muxer for MxfMuxer {
         }
 
         let duration = self.packet_counts.iter().copied().max().unwrap_or(0).cast_signed();
+
+        // OP-Atom's essence is clip-wrapped: exactly one Generic Container
+        // element for the whole file (measured this session against a real
+        // `ffmpeg -f mxf_opatom` file: a single essence key appears once,
+        // its own BER length stating the entire buffered payload, and no
+        // System Item key appears anywhere — OP-Atom needs no per-edit-unit
+        // sync marker since there is only ever one essence stream and no
+        // interleaving to resynchronise). `write_packet` buffered every
+        // packet's payload into `self.clip_buffer` instead of streaming it;
+        // now that every packet has arrived and the final length is known,
+        // write the one real element. Every `Entry::stream_offset`
+        // `write_packet` already recorded is relative to `clip_buffer`'s
+        // own start, which is exactly this element's value-start position
+        // — the same "relative to the essence container's start" convention
+        // `vaco-demux-mxf::index::IndexTableEntry::stream_offset` documents.
+        if let Some(buf) = self.clip_buffer.take() {
+            let track = self
+                .tracks
+                .first()
+                .ok_or(Error::InvalidData("mxf_opatom: no essence track"))?;
+            let key = crate::essence::essence_key(track.gc_track_number);
+            klv::write(&mut self.out, &key, &buf)?;
+            klv::pad_to_kag(&mut self.out, KAG_SIZE)?;
+        }
 
         // The footer restates nothing from the header: reused across both
         // scans by `vaco-demux-mxf::demux::MxfDemuxer::open` (one `primer`/
@@ -370,41 +633,55 @@ impl Muxer for MxfMuxer {
         // scope uses that property for the real duration: both derive it
         // from the Index Table Segment's own `IndexDuration`/entry count,
         // which this footer does state correctly.
+        //
+        // D-10 already embedded its (CBE) Index Table Segment in the
+        // header (`build_d10_index_table`) — this footer carries no index
+        // at all for D-10, matching a real `ffmpeg -f mxf_d10` file's own
+        // minimal footer (just the partition pack and the Random Index
+        // Pack, measured this session).
         let footer_this_partition = self.out.pos();
-        let (index_key, index_value) = index::build(
-            {
-                // A fresh instance UID for the Index Table Segment itself —
-                // this crate does not need a stable generator handle here
-                // since nothing else references this id.
-                let mut g = IdGenerator::new();
-                g.instance_uid()
-            },
-            (self.edit_rate.num, self.edit_rate.den),
-            duration,
-            FOOTER_INDEX_SID,
-            1,
-            &self.video_entries,
-        );
+        let is_d10 = self.variant == ul::MxfVariant::D10;
+        let footer_index = (!is_d10).then(|| {
+            index::build(
+                {
+                    // A fresh instance UID for the Index Table Segment
+                    // itself — this crate does not need a stable generator
+                    // handle here since nothing else references this id.
+                    let mut g = IdGenerator::new();
+                    g.instance_uid()
+                },
+                (self.edit_rate.num, self.edit_rate.den),
+                duration,
+                FOOTER_INDEX_SID,
+                1,
+                &self.video_entries,
+            )
+        });
 
-        let index_byte_count = klv_len(&index_key, &index_value);
+        let index_byte_count = footer_index.as_ref().map_or(0, |(k, v)| klv_len(k, v));
 
         let fields = PartitionPackFields {
+            kag_size: KAG_SIZE as u32,
             this_partition: footer_this_partition,
             previous_partition: self.header_this_partition,
             footer_partition: footer_this_partition,
             header_byte_count: 0,
             index_byte_count,
-            index_sid: FOOTER_INDEX_SID,
+            index_sid: if is_d10 { 0 } else { FOOTER_INDEX_SID },
             body_offset: 0,
             body_sid: 0,
-            operational_pattern: ul::OPERATIONAL_PATTERN_OP1A,
-            essence_containers: metadata::essence_containers_used(&self.tracks)
+            operational_pattern: ul::operational_pattern_for(self.variant),
+            essence_containers: metadata::essence_containers_used(&self.tracks, self.variant)
                 .into_iter()
                 .map(ul::Ul::new)
                 .collect(),
         };
         partition::write(&mut self.out, &ul::footer_partition_key(), &fields)?;
-        klv::write(&mut self.out, &index_key, &index_value)?;
+        klv::pad_to_kag(&mut self.out, KAG_SIZE)?;
+        if let Some((index_key, index_value)) = &footer_index {
+            klv::write(&mut self.out, index_key, index_value)?;
+            klv::pad_to_kag(&mut self.out, KAG_SIZE)?;
+        }
 
         // Random Index Pack: `vaco-demux-mxf::partition::find_rip`'s
         // convention — `Count * (BodySID u32, ByteOffset u64)` entries then

@@ -14,3 +14,40 @@ pub(crate) fn write(io: &mut IoWriter, key: &[u8; 16], value: &[u8]) -> Result<(
     io.write(ber::encode(value.len() as u64).as_slice())?;
     io.write(value)
 }
+
+/// Pad the current position out to the next multiple of `kag_size` with one
+/// Fill Item KLV — the KLV Alignment Grid convention a real `ffmpeg -f mxf`
+/// file uses in its header region (`ul::FILL_ITEM`'s own doc comment has
+/// the measurement). `kag_size <= 1` means "no alignment", the same
+/// convention this crate's own `PartitionPackFields`/`partition::write`
+/// used before KAG support existed.
+///
+/// If the gap to the next boundary is smaller than the smallest KLV this
+/// crate can express (16-byte key + this crate's fixed 4-byte BER length
+/// prefix = 20 bytes), padding to *that* boundary is impossible with a
+/// single Fill Item; this falls through to the boundary after it instead,
+/// which is the same shape a real writer would need whenever alignment and
+/// minimum-KLV-size collide — not observed in practice against any real
+/// fixture this session, since every real gap measured was comfortably
+/// larger than 20 bytes.
+///
+/// # Errors
+/// Propagates I/O failure.
+pub(crate) fn pad_to_kag(io: &mut IoWriter, kag_size: u64) -> Result<()> {
+    if kag_size <= 1 {
+        return Ok(());
+    }
+    let pos = io.pos();
+    let rem = pos % kag_size;
+    if rem == 0 {
+        return Ok(());
+    }
+    let mut gap = kag_size - rem;
+    if gap < 20 {
+        gap += kag_size;
+    }
+    let value_len = gap - 20;
+    let mut value = Vec::new();
+    value.extend(std::iter::repeat_n(0u8, value_len as usize));
+    write(io, &crate::ul::FILL_ITEM, &value)
+}

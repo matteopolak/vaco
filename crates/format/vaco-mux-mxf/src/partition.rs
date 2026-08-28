@@ -10,6 +10,7 @@ use crate::ul::Ul;
 /// Everything one partition pack states about itself and the file around it.
 #[derive(Debug, Clone)]
 pub(crate) struct PartitionPackFields {
+    pub kag_size: u32,
     pub this_partition: u64,
     pub previous_partition: u64,
     pub footer_partition: u64,
@@ -24,10 +25,10 @@ pub(crate) struct PartitionPackFields {
 
 /// Write `key` followed by the partition pack's fixed-layout value.
 ///
-/// KAG size is fixed at `1` (no alignment grid — this crate does not pad
-/// with Fill Items, matching `vaco-demux-mxf`'s own "reads forward by key,
-/// never trusts byte-count arithmetic" stance: nothing downstream needs
-/// KAG alignment to parse this file correctly).
+/// `fields.kag_size` is written verbatim; it is the caller's job (via
+/// `klv::pad_to_kag`) to actually pad structures to that grid — this
+/// function only states the number a real file's own value states
+/// (measured: `512`, see `mux::KAG_SIZE`).
 ///
 /// # Errors
 /// Propagates I/O failure.
@@ -41,7 +42,7 @@ pub(crate) fn write(io: &mut IoWriter, key: &[u8; 16], fields: &PartitionPackFie
     // disagreed on, ahead of anything ID-related.
     value.extend_from_slice(&3u16.to_be_bytes()); // minor version
 
-    value.extend_from_slice(&1u32.to_be_bytes()); // KAGSize
+    value.extend_from_slice(&fields.kag_size.to_be_bytes());
     value.extend_from_slice(&fields.this_partition.to_be_bytes());
     value.extend_from_slice(&fields.previous_partition.to_be_bytes());
     value.extend_from_slice(&fields.footer_partition.to_be_bytes());
