@@ -232,8 +232,13 @@ pub static STREAM: &[Field] = &[
     // measured, video or audio. `Omit`: absent outright for every other
     // container, the same policy as `nal_length_size` just above — measured,
     // an MP4 stream shows neither field at all, no placeholder.
-    f("ts_id", Int, Omit),
-    f("ts_packetsize", Int, Omit),
+    //
+    // `Str`, not `Int`: both values are digits, but `-of flat`/`-of json`
+    // quote them (`ts_id="1"`, `"ts_id": "1"`) — cross-checked the same way
+    // as every other row in this table, two writers that spell the
+    // int/string distinction differently and agree it is a string here.
+    f("ts_id", Str, Omit),
+    f("ts_packetsize", Str, Omit),
     f("id", Str, Na),
     f("r_frame_rate", Str, Never),
     f("avg_frame_rate", Str, Never),
@@ -438,8 +443,6 @@ mod tests {
                 "channels",
                 "bits_per_sample",
                 "initial_padding",
-                "ts_id",
-                "ts_packetsize",
                 "start_pts",
                 "duration_ts",
                 "extradata_size",

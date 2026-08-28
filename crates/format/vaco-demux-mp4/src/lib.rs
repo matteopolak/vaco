@@ -639,7 +639,13 @@ impl Mp4Demuxer {
         if !trak.has_usable_timescale() {
             return None;
         }
-        let media_type = trak.media_type()?;
+        // An unrecognized `hdlr` handler used to drop the whole track. A
+        // corrupted `moov` that still carries a readable `stsd` sample entry
+        // (measured against the reference) gets classified from that instead
+        // — `codec_parameters` already falls back from `codec_id`'s own media
+        // type when the handler does not resolve one, which this used to
+        // foreclose by resolving `media_type` before that fallback could run.
+        let handler_media_type = trak.media_type();
         let table = &trak.sample_table;
 
         let entries = table
@@ -658,9 +664,16 @@ impl Mp4Demuxer {
         let timescale = trak.media.timescale;
 
         let mut params = entry.map_or_else(
-            || vaco_codec_core::CodecParameters::new(media_type),
-            |e| track::codec_parameters(e, Some(media_type), trak),
+            || vaco_codec_core::CodecParameters::new(handler_media_type.unwrap_or(MediaType::Data)),
+            |e| track::codec_parameters(e, handler_media_type, trak),
         );
+        // Neither the handler nor the sample entry's own codec said what this
+        // track is (both `handler_media_type` and `codec_parameters`'s own
+        // codec-id fallback came up empty): salvaged as `Data` rather than
+        // dropped, the same fallback the handler table already uses for a
+        // *recognized* non-AV handler (`meta`, `tmcd`).
+        let media_type = params.media_type.unwrap_or(MediaType::Data);
+        params.media_type = Some(media_type);
         params.bit_rate = track::bit_rate(totals.bytes, timescale, limit, self.fragmented);
         if params.validate(&self.budget).is_err() {
             return None;

@@ -171,6 +171,35 @@ mod tests {
         assert_eq!(demux.streams()[0].id, Some(1));
     }
 
+    /// An unrecognized `hdlr` handler used to drop the whole track outright.
+    /// Measured against the reference on a corrupted `moov` whose `stsd`
+    /// sample entry (`avc1`) was still intact: it recovers a real video
+    /// stream from the codec, not merely a `data` placeholder — matching
+    /// `codec_parameters`'s own codec-id fallback, which an eagerly-resolved
+    /// `media_type` used to shadow before this fix let it run.
+    #[test]
+    fn an_unrecognized_handler_falls_back_to_the_stsd_entrys_own_codec() {
+        let mut track = simple_track(1, 4, 4, 512);
+        track.handler = *b"zzzz";
+        let demux = open(fixture(1000, 0, &[track], &[0; 64]));
+        assert_eq!(demux.streams().len(), 1);
+        assert_eq!(demux.streams()[0].media_type(), Some(MediaType::Video));
+    }
+
+    /// When *neither* the handler nor the `stsd` sample entry says what a
+    /// track is (no sample description at all here), it is salvaged as
+    /// `Data` rather than dropped — the same fallback the handler table
+    /// already uses for a *recognized* non-AV handler (`meta`, `tmcd`).
+    #[test]
+    fn a_track_with_no_handler_and_no_stsd_entry_is_salvaged_as_data_not_dropped() {
+        let mut track = simple_track(1, 4, 4, 512);
+        track.handler = *b"zzzz";
+        track.stbl.stsd_box = None;
+        let demux = open(fixture(1000, 0, &[track], &[0; 64]));
+        assert_eq!(demux.streams().len(), 1);
+        assert_eq!(demux.streams()[0].media_type(), Some(MediaType::Data));
+    }
+
     #[test]
     fn a_uniform_stsz_claiming_four_billion_samples_terminates() {
         // The gap `vaco-format-isom` left to its caller: twelve bytes can

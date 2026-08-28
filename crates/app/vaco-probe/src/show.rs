@@ -403,10 +403,8 @@ fn stream_value(
         // the other half (they must not *also* print as `TAG:`). Absent on
         // every other container, since nothing else sets the key, which is
         // exactly `Absent::Omit`'s "no placeholder" behaviour.
-        "ts_id" => Val::opt_i(s.metadata_get("ts_id").and_then(|v| v.parse().ok())),
-        "ts_packetsize" => {
-            Val::opt_i(s.metadata_get("ts_packetsize").and_then(|v| v.parse().ok()))
-        }
+        "ts_id" => Val::opt_s(s.metadata_get("ts_id")),
+        "ts_packetsize" => Val::opt_s(s.metadata_get("ts_packetsize")),
         "id" => Val::opt_s(s.id.map(num::id)),
         // Two fields, two sources. They differ on a variable-rate file:
         // a 1/600-timescale MP4 whose `stts` holds mostly 60-tick deltas
@@ -1091,11 +1089,15 @@ mod tests {
         assert_eq!(field("nal_length_size").absent, crate::fields::Absent::Omit);
     }
 
-    /// Issue #635: `ts_id`/`ts_packetsize` read back through `Stream::metadata`
-    /// — the one channel `vaco-demux-mpegts` has to hand them to this crate —
-    /// and parse cleanly back to integers. Absent (not `0`) when the key is
-    /// missing, same `Omit` policy as `nal_length_size` above, so a non-TS
-    /// container prints neither field at all.
+    /// Issue #635 and its correction: `ts_id`/`ts_packetsize` read back
+    /// through `Stream::metadata` — the one channel `vaco-demux-mpegts` has
+    /// to hand them to this crate — as *strings*, not integers. Absent (not
+    /// `"0"`) when the key is missing, same `Omit` policy as
+    /// `nal_length_size` above, so a non-TS container prints neither field
+    /// at all. `Str`, not `Int`: `ffprobe -of flat`/`-of json` quote both
+    /// values (`ts_id="1"`) despite the digits, found by a differential run
+    /// against the reference (`planning/CONFORMANCE-FINDINGS.md` finding 55)
+    /// on a plain, unmutated MPEG-TS file.
     #[test]
     fn ts_id_and_ts_packetsize_come_from_stream_metadata() {
         let field = crate::fields::STREAM
@@ -1104,12 +1106,12 @@ mod tests {
             .copied()
             .expect("in the table");
         assert_eq!(field.absent, crate::fields::Absent::Omit);
-        assert!(field.ty.is_int());
+        assert!(!field.ty.is_int());
 
         let mut stream = Stream::new(0, MediaType::Video, vaco_core::Rational::new(1, 1000));
         let p = CodecParameters::video().with_codec(CodecId::H264);
-        let int = |v: Val| match v {
-            Val::I(i) => Some(i),
+        let string = |v: Val| match v {
+            Val::S(s) => Some(s),
             _ => None,
         };
 
@@ -1121,7 +1123,7 @@ mod tests {
         stream.metadata_set("ts_id", "1");
         stream.metadata_set("ts_packetsize", "188");
         assert_eq!(
-            int(stream_value(
+            string(stream_value(
                 &field,
                 &stream,
                 &p,
@@ -1129,7 +1131,7 @@ mod tests {
                 Counts::NONE,
                 false
             )),
-            Some(1)
+            Some("1".to_owned())
         );
         let packetsize_field = crate::fields::STREAM
             .iter()
@@ -1137,7 +1139,7 @@ mod tests {
             .copied()
             .expect("in the table");
         assert_eq!(
-            int(stream_value(
+            string(stream_value(
                 &packetsize_field,
                 &stream,
                 &p,
@@ -1145,7 +1147,7 @@ mod tests {
                 Counts::NONE,
                 false
             )),
-            Some(188)
+            Some("188".to_owned())
         );
     }
 

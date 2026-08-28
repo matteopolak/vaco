@@ -23,6 +23,8 @@
 //! | [`bitmapinfo`] | `BITMAPINFOHEADER` and `biCompression` |
 //! | [`wave_tags`] | `wFormatTag` → codec name / [`vaco_codec_core::CodecId`] |
 //! | [`video_tags`] | `biCompression` → codec name / [`vaco_codec_core::CodecId`] |
+//! | [`info`] | `LIST`/`INFO` chunk tags (`ISFT` → `encoder`) |
+//! | [`info`] | `LIST`/`INFO` chunk tags (`ISFT` → `encoder`) |
 //!
 //! # Example
 //!
@@ -73,6 +75,7 @@
 
 pub mod bitmapinfo;
 pub mod chunk;
+pub mod info;
 pub mod rf64;
 pub mod video_tags;
 pub mod wave;

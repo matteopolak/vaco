@@ -32,7 +32,7 @@
 //! block spelling, order and formatting exactly. No new renderer was needed;
 //! `Frame::metadata()`'s `&[(String, String)]` return type is deliberately
 //! the shape `tags` already takes. Wiring a real `[FRAME]` block (pts,
-//! pict_type, `pix_fmt`, …) is `-show_frames` v0.2 work, gated on a decoder,
+//! `pict_type`, `pix_fmt`, …) is `-show_frames` v0.2 work, gated on a decoder,
 //! and out of this gap's scope.
 //!
 //! `freezedetect`'s own module doc

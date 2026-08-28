@@ -16,11 +16,16 @@
 //! `fmt ` (via [`vaco_format_riff::wave::WaveFormatEx`]) and `data`. A
 //! `RIFF` container walks chunks with 32-bit sizes; an `RF64` container's
 //! outer size and `data` size are `0xFFFFFFFF` placeholders overridden by a
-//! mandatory leading `ds64` chunk. Any other chunk (`LIST/INFO`, `fact`,
-//! `bext`, `cue `, `JUNK`, an ID3 tag) is skipped, not decoded — the metadata
-//! and marker surfaces plan `18-formats.md` §3.4.6 lists for this format are
+//! mandatory leading `ds64` chunk. `LIST/INFO` is read as far as its `ISFT`
+//! sub-chunk ([`vaco_format_riff::info::list_info_tags`]), exposed through
+//! [`Demuxer::metadata`] as `encoder` — measured against the reference,
+//! which states it and this crate silently did not. Every other chunk
+//! (`fact`, `bext`, `cue `, `JUNK`, an ID3 tag, and every other `LIST/INFO`
+//! sub-chunk) is still skipped, not decoded — the rest of the metadata and
+//! marker surfaces plan `18-formats.md` §3.4.6 lists for this format are
 //! **deferred**, consistent with the brief's "structurally present but
-//! untested" allowance; only the audio itself is exposed today.
+//! untested" allowance; only the audio itself and this one tag are exposed
+//! today.
 //!
 //! # Deviation: the "unknown length" convention
 //!
@@ -45,6 +50,7 @@ use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
 
 use vaco_format_riff::chunk::ids;
+use vaco_format_riff::info::list_info_tags;
 use vaco_format_riff::rf64::Ds64;
 use vaco_format_riff::wave::WaveFormatEx;
 use vaco_format_riff::wave_tags;
@@ -140,6 +146,7 @@ fn open_muxer(sink: Box<dyn MediaSink>) -> Result<Box<dyn Muxer>> {
 pub struct WavDemuxer {
     inner: RawPcmDemuxer,
     budget: Budget,
+    tags: Vec<(String, String)>,
 }
 
 impl WavDemuxer {
@@ -160,6 +167,7 @@ impl WavDemuxer {
         }
 
         let mut budget = Budget::new(Limits::permissive());
+        let mut tags: Vec<(String, String)> = Vec::new();
         let mut fmt: Option<WaveFormatEx> = None;
         let mut ds64: Option<Ds64> = None;
         let mut data_declared: Option<u64> = None;
@@ -191,6 +199,17 @@ impl WavDemuxer {
                     u64::from(size)
                 });
                 break;
+            } else if id == ids::LIST.as_bytes() {
+                // `LIST/INFO/ISFT` is the one sub-chunk measured against the
+                // reference; `format.tags.encoder` was silently dropped
+                // before. Bounded the same way `fmt `/`ds64` are above.
+                let take = usize::try_from(size).unwrap_or(0).min(1 << 16);
+                let mut buf = budget.alloc::<u8>(take)?;
+                io.read_exact(&mut buf)?;
+                tags.extend(list_info_tags(&buf));
+                if size % 2 == 1 {
+                    io.skip(1)?;
+                }
             } else {
                 io.skip(u64::from(size).saturating_add(u64::from(size % 2)))?;
             }
@@ -247,6 +266,7 @@ impl WavDemuxer {
         Ok(Self {
             inner,
             budget: Budget::new(Limits::permissive()),
+            tags,
         })
     }
 }
@@ -254,6 +274,10 @@ impl WavDemuxer {
 impl Demuxer for WavDemuxer {
     fn streams(&self) -> &[Stream] {
         self.inner.streams()
+    }
+
+    fn metadata(&self) -> &[(String, String)] {
+        &self.tags
     }
 
     fn read_packet(&mut self) -> Result<Packet> {
@@ -417,5 +441,80 @@ impl Muxer for WavMuxer {
             .wl32(u32::try_from(self.data_bytes).unwrap_or(u32::MAX))?;
         self.out.seek(end)?;
         self.out.flush()
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test code")]
+mod tests {
+    use super::WavDemuxer;
+    use vaco_format_core::{Demuxer, FormatOptions};
+    use vaco_io::MemorySource;
+
+    /// Builds a minimal WAV file with a `fmt `, a `LIST/INFO/ISFT` and a
+    /// `data` chunk, in that order.
+    fn wav_with_isft(software: &[u8]) -> Vec<u8> {
+        let mut fmt_payload = vec![1, 0, 1, 0, 0x44, 0xac, 0, 0, 0x88, 0x58, 1, 0, 2, 0, 16, 0];
+        let mut info = b"INFO".to_vec();
+        info.extend_from_slice(b"ISFT");
+        info.extend_from_slice(&(software.len() as u32).to_le_bytes());
+        info.extend_from_slice(software);
+        if software.len() % 2 == 1 {
+            info.push(0);
+        }
+
+        let mut body = Vec::new();
+        body.extend_from_slice(b"fmt ");
+        body.extend_from_slice(&(fmt_payload.len() as u32).to_le_bytes());
+        body.append(&mut fmt_payload);
+        body.extend_from_slice(b"LIST");
+        body.extend_from_slice(&(info.len() as u32).to_le_bytes());
+        body.extend_from_slice(&info);
+        body.extend_from_slice(b"data");
+        body.extend_from_slice(&4u32.to_le_bytes());
+        body.extend_from_slice(&[0; 4]);
+
+        let mut file = b"RIFF".to_vec();
+        file.extend_from_slice(&(4 + body.len() as u32).to_le_bytes());
+        file.extend_from_slice(b"WAVE");
+        file.extend_from_slice(&body);
+        file
+    }
+
+    /// Finding 55's `format.tags.encoder` gap: the reference states it from
+    /// `LIST/INFO/ISFT`, and this demuxer used to skip the whole chunk.
+    #[test]
+    fn list_info_isft_surfaces_as_an_encoder_tag() {
+        let bytes = wav_with_isft(b"Lavf62.12.100\0");
+        let demux =
+            WavDemuxer::open(Box::new(MemorySource::new(bytes)), &FormatOptions::default())
+                .unwrap();
+        assert_eq!(
+            demux.metadata(),
+            &[("encoder".to_owned(), "Lavf62.12.100".to_owned())]
+        );
+    }
+
+    /// A `LIST` chunk whose form is not `INFO` (e.g. `adtl`, cue labels) must
+    /// not be misread as one — and must not desync the chunk walk that finds
+    /// `data` right after it.
+    #[test]
+    fn a_wav_with_no_list_chunk_has_no_tags() {
+        let mut fmt_payload = vec![1, 0, 1, 0, 0x44, 0xac, 0, 0, 0x88, 0x58, 1, 0, 2, 0, 16, 0];
+        let mut body = Vec::new();
+        body.extend_from_slice(b"fmt ");
+        body.extend_from_slice(&(fmt_payload.len() as u32).to_le_bytes());
+        body.append(&mut fmt_payload);
+        body.extend_from_slice(b"data");
+        body.extend_from_slice(&4u32.to_le_bytes());
+        body.extend_from_slice(&[0; 4]);
+        let mut file = b"RIFF".to_vec();
+        file.extend_from_slice(&(4 + body.len() as u32).to_le_bytes());
+        file.extend_from_slice(b"WAVE");
+        file.extend_from_slice(&body);
+
+        let demux =
+            WavDemuxer::open(Box::new(MemorySource::new(file)), &FormatOptions::default()).unwrap();
+        assert!(demux.metadata().is_empty());
     }
 }
