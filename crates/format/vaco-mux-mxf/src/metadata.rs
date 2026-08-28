@@ -86,6 +86,14 @@ pub(crate) struct GraphIds {
     /// `TrackID = 1` on both packages — see `mux.rs`'s own comment on why
     /// essence tracks start at `TrackID = 2` instead.
     pub timecode: TimecodeIds,
+    /// One `EssenceContainerData` set names this file's one essence-carrying
+    /// `BodySID` — identified this session by decoding a real file's own
+    /// class-`0x23` set directly and cross-validating it two ways (see
+    /// `ul::class::ESSENCE_CONTAINER_DATA`'s own doc comment). Always
+    /// present: every real fixture checked (`OP1a`, D-10, OP-Atom) carries
+    /// exactly one, and this crate always writes exactly one
+    /// essence-carrying `BodySID` too.
+    pub essence_container_data: [u8; 16],
 }
 
 impl GraphIds {
@@ -100,6 +108,7 @@ impl GraphIds {
             source_umid: idgen.package_umid(),
             multiple_descriptor: (track_count > 1).then(|| idgen.instance_uid()),
             timecode: TimecodeIds::new(idgen),
+            essence_container_data: idgen.instance_uid(),
         }
     }
 }
@@ -378,6 +387,12 @@ pub(crate) fn primer_entries() -> Vec<(u16, Ul)> {
             0x00, 0x00,
         ])),
         (0x320e, ul::ASPECT_RATIO),
+        // LinkedPackageUID (EssenceContainerData) -- identified this
+        // session, see `ul::class::ESSENCE_CONTAINER_DATA`'s doc comment.
+        (0x2701, Ul::new([
+            0x06, 0x0e, 0x2b, 0x34, 0x01, 0x01, 0x01, 0x02, 0x06, 0x01, 0x01, 0x06, 0x01, 0x00,
+            0x00, 0x00,
+        ])),
     ]
 }
 
@@ -401,6 +416,8 @@ pub(crate) fn build_sets(
     edit_rate: Rational,
     duration: Option<i64>,
     variant: MxfVariant,
+    essence_body_sid: u32,
+    essence_index_sid: u32,
 ) -> Vec<([u8; 16], Vec<u8>)> {
     let mut sets = Vec::new();
 
@@ -422,6 +439,7 @@ pub(crate) fn build_sets(
     let mut cs = Vec::new();
     push_uid16(&mut cs, 0x3c0a, ids.content_storage);
     push_batch16(&mut cs, 0x1901, &[ids.material_package, ids.source_package]);
+    push_batch16(&mut cs, 0x1902, &[ids.essence_container_data]);
     sets.push(build_set(class::CONTENT_STORAGE, cs));
 
     // ------------------------------------------------------ Material Package
@@ -573,6 +591,19 @@ pub(crate) fn build_sets(
         push_batch16(&mut md, 0x3f01, &sub_ids);
         sets.push(build_set(class::MULTIPLE_DESCRIPTOR, md));
     }
+
+    // -------------------------------------------------- EssenceContainerData
+    //
+    // Identified this session (`ul::class::ESSENCE_CONTAINER_DATA`'s own doc
+    // comment has the cross-validated evidence): one per file, naming the
+    // one essence-carrying `BodySID`/`IndexSID` pair and linking it back to
+    // the `SourcePackage` by UMID.
+    let mut ecd = Vec::new();
+    push_uid16(&mut ecd, 0x3c0a, ids.essence_container_data);
+    push_umid32(&mut ecd, 0x2701, ids.source_umid);
+    push_u32(&mut ecd, 0x3f07, essence_body_sid);
+    push_u32(&mut ecd, 0x3f06, essence_index_sid);
+    sets.push(build_set(class::ESSENCE_CONTAINER_DATA, ecd));
 
     sets
 }

@@ -85,6 +85,24 @@ pub(crate) mod class {
     /// constrained 4:2:2 profile evidently gets the more general CDCI
     /// descriptor, not `MPEGVideoDescriptor`.
     pub(crate) const CDCI_ESSENCE_DESCRIPTOR: u8 = 0x28;
+    /// `EssenceContainerData` — identified this session, not merely
+    /// inferred: decoded a real file's own class-`0x23` set directly (a
+    /// real `ffmpeg -f mxf`/`-f mxf_d10`/`-f mxf_opatom` file writes one
+    /// in every case checked) and cross-validated two ways rather than
+    /// pattern-matching a spec table. Its `InstanceUID` is exactly the one
+    /// `ContentStorage`'s own second batch property (tag `0x1902`,
+    /// unnamed before this session) references — the same
+    /// strong-reference shape `ContentStorage.Packages` (`0x1901`) already
+    /// uses for the two `Package`s. Its `LinkedPackageUID` property (tag
+    /// `0x2701`) is a 32-byte value starting `06 0a 2b 34...` (the SMPTE
+    /// UMID designator root, distinct from the `06 0e 2b 34` Universal
+    /// Label root every other property here uses) and is byte-for-byte
+    /// identical to the `SourcePackage`'s own UMID used elsewhere in the
+    /// same file. Alongside `BodySID`/`IndexSID` (tags `0x3f07`/`0x3f06`,
+    /// both already known from the Index Table Segment), this is exactly
+    /// ST 377-1's `EssenceContainerData` class: one per essence-carrying
+    /// `BodySID`, linking it back to the package and its index.
+    pub(crate) const ESSENCE_CONTAINER_DATA: u8 = 0x23;
 }
 
 /// Partition Pack family: `06.0e.2b.34.02.05.01.01.0d.01.02.01.01` plus a

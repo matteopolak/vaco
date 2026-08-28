@@ -23,7 +23,7 @@ use vaco_codec_core::{CodecId, CodecParameters};
 use vaco_core::{MediaType, Rational, Timestamp};
 use vaco_demux_mxf::MxfDemuxer;
 use vaco_format_core::{Demuxer, Muxer, discovery::NoParsers};
-use vaco_io::SharedDynBuf;
+use vaco_io::{IoOptions, MemorySource, SharedDynBuf};
 use vaco_limits::{Budget, Limits};
 use vaco_mux_mxf::{MUXER_D10, MUXER_OPATOM, MxfMuxer};
 use vaco_packet::{Packet, PacketFlags};
@@ -517,6 +517,42 @@ fn adding_an_audio_stream_to_a_d10_muxer_is_rejected() {
     let sink = SharedDynBuf::with_limits(Limits::permissive());
     let mut mux = (MUXER_D10.open)(Box::new(sink.clone())).unwrap();
     assert!(mux.add_stream(&audio_params(48_000, 2)).is_err());
+}
+
+#[test]
+fn the_random_index_pack_names_every_partition_with_its_own_body_sid() {
+    // A real Random Index Pack has one entry per partition pack actually in
+    // the file, each stating *that partition's own* `BodySID` — measured
+    // this session against three real fixtures (an earlier version of this
+    // crate hardcoded two entries, the header always `BodySID = 1` and no
+    // entry at all for the Body Partition Pack, wrong on both counts for a
+    // real OP1a/OP-Atom file). This file has one video track, so OP1a's
+    // shape applies: header (BodySID = 0, no essence), body (BodySID = 1),
+    // footer (BodySID = 0) -- three entries, in that order.
+    let sink = SharedDynBuf::with_limits(Limits::permissive());
+    let mut mux = MxfMuxer::new(Box::new(sink.clone()), &vaco_format_core::FormatOptions::default()).unwrap();
+    mux.add_stream(&video_params(720, 576)).unwrap();
+    mux.init().unwrap();
+    mux.write_header().unwrap();
+    mux.write_packet(&packet(0, 0, &[0xAAu8; 4096], true)).unwrap();
+    mux.write_trailer().unwrap();
+
+    let bytes = sink.snapshot();
+    let file_len = bytes.len() as u64;
+    let mut io = vaco_io::IoContext::new(Box::new(MemorySource::new(bytes)), &IoOptions::default()).unwrap();
+    let mut budget = Budget::new(Limits::permissive());
+    let rip = vaco_demux_mxf::partition::find_rip(&mut io, &mut budget, file_len)
+        .unwrap()
+        .expect("a seekable file's trailer names a real Random Index Pack");
+
+    assert_eq!(rip.entries.len(), 3, "header, body, footer -- one each");
+    assert_eq!((rip.entries[0].body_sid, rip.entries[0].byte_offset), (0, 0));
+    assert_eq!(rip.entries[1].body_sid, 1);
+    assert_eq!(rip.entries[2].body_sid, 0);
+    // Body and footer offsets are strictly increasing (each partition
+    // really is later in the file than the last).
+    assert!(rip.entries[1].byte_offset > rip.entries[0].byte_offset);
+    assert!(rip.entries[2].byte_offset > rip.entries[1].byte_offset);
 }
 
 mod proptests {

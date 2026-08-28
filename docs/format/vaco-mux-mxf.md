@@ -110,6 +110,27 @@ to mean "no footer" — an honest degradation, not a silent one
 (`a_non_seekable_sink_still_produces_a_sequentially_readable_file` is the
 regression test).
 
+**The Random Index Pack states one entry per partition pack, each with
+that partition's own real `BodySID`.** Measured against three real
+fixtures (an OP1a, a D-10, an OP-Atom file): the header's own entry states
+whatever `BodySID` the header partition pack itself states (`0` for
+OP1a/OP-Atom, `1` for D-10, which carries essence directly — see below),
+the Body Partition Pack (when written) gets its own entry stating `1`, and
+the footer's own entry always states `0`. An earlier version of this crate
+hardcoded exactly two entries — the header unconditionally as `BodySID =
+1`, no entry at all for the Body Partition Pack — which was wrong on both
+counts for OP1a/OP-Atom and only coincidentally close to right for D-10's
+own no-body-partition shape. `MxfMuxer::rip_entries` now records each
+partition's real `(BodySID, offset)` pair as it is written; the RIP's own
+trailing restated length also now accounts for its own (minimal-width, see
+below) length-prefix width rather than assuming a fixed `4` bytes. Found
+while re-measuring the RIP's own BER length width, not while looking for
+this specifically — see "The byte-identity matrix".
+`the_random_index_pack_names_every_partition_with_its_own_body_sid` is the
+regression test, and it checks this crate's own output via
+`vaco_demux_mxf::partition::find_rip` rather than re-deriving the same
+assertion the writer already made about itself.
+
 ### The structural-metadata graph
 
 One `MaterialPackage` and one `SourcePackage`, each carrying: a timecode
@@ -122,6 +143,21 @@ of the exact expansion `vaco-demux-mxf::metadata::resolve_track_descriptor`
 performs on read (this workspace's own prior session fixed that function
 after finding it was never called at all; this crate is the first thing to
 actually exercise it against a written-not-just-measured file).
+
+**One `EssenceContainerData` set per file, naming the essence-carrying
+`BodySID`.** `ContentStorage` carries a second batch property (tag
+`0x1902`, alongside `Packages` at `0x1901`) referencing it. Identified this
+session by decoding a real file's own class-`0x23` set directly and
+cross-validating two independent ways: its `InstanceUID` is exactly what
+`ContentStorage`'s `0x1902` batch references, and its `LinkedPackageUID`
+property (tag `0x2701`, a 32-byte value under the SMPTE UMID designator
+root `06 0a 2b 34...`, distinct from every other property's `06 0e 2b
+34...` Universal Label root) is byte-for-byte identical to the
+`SourcePackage`'s own UMID used elsewhere in the file. Alongside `BodySID`/
+`IndexSID` (tags `0x3f07`/`0x3f06`, already known from the Index Table
+Segment), this is exactly ST 377-1's `EssenceContainerData` class. Every
+variant writes exactly one, since every variant here uses exactly one
+essence-carrying `BodySID`.
 
 **`TrackID = 1` is reserved for a timecode track — measured to matter, not
 just conventional.** Every real `ffmpeg -f mxf` file this session generated
@@ -387,21 +423,95 @@ same-real-MPEG-2-frames methodology described in "Deferred work" below).
 
 | Variant | Own demuxer | Real `ffprobe`/`ffmpeg -i` | First `cmp` divergence past `KAGSize` |
 |---|---|---|---|
-| OP1a | Round-trips exactly (stream shape, packet positions/sizes, `MultipleDescriptor` expansion) | Resolves correctly (single- and two-track) | Primer Pack length: this crate's fixed 4-byte BER form vs. the reference's minimal-width form (`82 07 10`, 3 bytes, for the same value) |
-| D-10 | Round-trips exactly (dimensions correctly un-halved) | Resolves correctly; packet count/positions match exactly | Same Primer Pack BER-width divergence, *plus* the real file's header region is larger by exactly `1536` bytes (three KAG blocks) — most likely an unidentified structural set (class `0x23`, seen in both D-10 and OP-Atom fixtures, never identified — see "Deferred work") this crate does not build |
-| OP-Atom | Round-trips as a single concatenated packet (matches the reference's own packet count — see above) | Stream shape resolves correctly | Not chased this session (the D-10/OP1a findings already generalise the leading-order gap; the same unidentified class `0x23` set was seen here too) |
+| OP1a | Round-trips exactly (stream shape, packet positions/sizes, `MultipleDescriptor` expansion) | Resolves correctly (single- and two-track) | The real file's header region is larger by roughly `1.5`-`2` KiB, dominated by the Primer Pack registering ~100 tags regardless of which properties this file actually uses (this crate's own primer lists only what it writes) and a fully-populated `Identification` set (real product/version strings this crate does not write) — see "Deferred work" |
+| D-10 | Round-trips exactly (dimensions correctly un-halved) | Resolves correctly; packet count/positions match exactly | Same shape as OP1a's remaining gap |
+| OP-Atom | Round-trips as a single concatenated packet (matches the reference's own packet count — see above) | Stream shape resolves correctly | Not independently re-measured this session; the OP1a/D-10 findings are expected to generalise |
+
+**Two things this dispatch was specifically asked to chase, both resolved
+with a definite answer:**
+
+1. **The Primer Pack's BER width is not Primer-Pack-specific, and it is
+   not universal either — it is a per-KLV-family convention, now measured
+   precisely.** Walking every KLV in two real fixtures (a single-track
+   file and a freshly generated two-track file) by decoding each length
+   prefix directly found a consistent split: the Partition Pack family,
+   the Fill Item, the System Item, essence elements, the Index Table
+   Segment, and every essence *descriptor* class (`MPEGVideoDescriptor`,
+   `AES3PCMDescriptor`) keep this crate's fixed-width form; the Primer
+   Pack and every *other* structural set (`Preface`, `Identification`,
+   `ContentStorage`, both `Package`s, `Track`, `Sequence`, `SourceClip`,
+   `TimecodeComponent`, `MultipleDescriptor`) and the Random Index Pack use
+   minimal-width BER instead (short form under 128, else the smallest long
+   form). `ber.rs`'s own module docs have the full measurement;
+   `klv::write_structural_set` is the write-side switch, keyed on the same
+   class byte `ul::structural_set_key` already encodes. Fixed, with a new
+   `ber::encode_minimal` and a property test asserting every `u64`
+   round-trips through both encodings.
+2. **The ~1536 bytes were not one thing.** Part of it is real and has been
+   identified and fixed: a structural set at class byte `0x23`,
+   `EssenceContainerData` (ST 377-1), one per file, naming the
+   essence-carrying `BodySID`/`IndexSID` pair and linking it back to the
+   `SourcePackage` by UMID. Identified with the same rigor as
+   `SubDescriptorUIDs`'s real tag: decoded the set's actual bytes, then
+   cross-validated two independent ways rather than pattern-matching a
+   spec table — its own `InstanceUID` is exactly what `ContentStorage`'s
+   previously-unnamed second batch property (tag `0x1902`) references, and
+   its `LinkedPackageUID` value is byte-for-byte identical to the
+   `SourcePackage`'s own UMID used elsewhere in the same file. Now
+   written by every variant (see "The structural-metadata graph" above).
+   But this set is only ~90 bytes — it does not come close to accounting
+   for the full gap. The dominant remainder, found while re-measuring
+   after the fix, is **not a missing structural set at all**: a real
+   file's Primer Pack registers a fixed ~100-tag dictionary regardless of
+   which properties this specific file uses (measured: `100` entries, `1808`
+   bytes, even for a single-track file with a small fraction of those
+   properties actually referenced), and its `Identification` set carries
+   real product metadata (`CompanyName = "FFmpeg"`, `ProductName = "OP1a
+   Muxer"`, `VersionString`, `Platform = "Lavf"`, a `ProductUID`, a
+   `ModificationDate`, a `ToolkitVersion` — none of which this crate
+   writes today, since its own `Identification` set states only an
+   `InstanceUID`). Both are recorded in "Deferred work" rather than chased
+   further this session: the primer-table one is a deliberate economy
+   (registering only tags this crate actually uses is smaller and no less
+   correct — `vaco-demux-mxf` reads either shape identically), not a bug,
+   and matching it byte-for-byte would mean replicating an internal
+   `ffmpeg` table with no functional payoff; the `Identification` one is a
+   real, cheap enrichment worth doing, but even fully implemented it would
+   not reach byte-identity on its own, since this crate's own product name
+   is not literally `"FFmpeg"`.
+3. **A third, unasked-for finding surfaced while measuring the Random
+   Index Pack's own BER width: the RIP's entries were wrong.** A real RIP
+   has one entry per partition pack actually in the file, each stating
+   *that partition's own* `BodySID` — measured against three real
+   fixtures (an OP1a, a D-10, an OP-Atom file). This crate's RIP hardcoded
+   exactly two entries (the header unconditionally stated as `BodySID = 1`,
+   the footer as `0`) and never wrote one for the Body Partition Pack at
+   all — wrong on both counts for OP1a/OP-Atom (whose header actually
+   states `BodySID = 0`, and whose Body Partition Pack got no entry),
+   coincidentally close to correct only for D-10's own no-body-partition
+   shape. Fixed: `MxfMuxer::rip_entries` now tracks each partition's real
+   `(BodySID, offset)` pair as it is written, and the RIP's own restated
+   total length accounts for its own (now minimal-width) length prefix
+   rather than assuming a fixed 4 bytes. Regression test:
+   `the_random_index_pack_names_every_partition_with_its_own_body_sid`,
+   which parses this crate's own output with
+   `vaco_demux_mxf::partition::find_rip` — the reference's own reading of
+   this crate's RIP, not just this crate's own writer's self-report.
 
 **`KAGSize` was the next divergence, not the whole gap, for every
-variant.** It is a genuine, confirmed fix — the field itself and every byte
-up to the Primer Pack now match a real file exactly — but full
-byte-identity remains open behind at least two further, real findings: the
-Primer Pack's BER-length-width convention, and (D-10/OP-Atom) an
-unidentified structural set. **No variant reached `cmp`-identity this
-session.** D-10's tighter constraints did narrow the gap to something far
-more precisely bounded than OP1a's (a named byte-width convention plus a
-named-but-unidentified missing set, rather than an open-ended
-"the layouts diverge"), which is real progress even though the headline
-claim did not land.
+variant — and it still is, one layer deeper.** The field itself and every
+byte up to the Primer Pack match a real file exactly. Past it, the two
+things this dispatch was asked to chase are now both *resolved as
+findings* (a precise, general BER-width rule; a real, identified, and
+fixed missing structural set) even though neither, once fixed, was
+sufficient on its own to close the remaining gap — which turned out to be
+dominated by something neither hypothesis named: a Primer Pack sized to a
+static dictionary rather than actual usage, and an unpopulated
+`Identification` set. **No variant reached `cmp`-identity this session.**
+That is a real, honest outcome: two specifically-named divergences were
+chased to ground and both turned out smaller than the total gap, which is
+a more useful thing to know than either "found and fixed everything" or
+"the gap didn't move."
 
 ---
 
@@ -469,41 +579,38 @@ UMID entropy), `vaco-packet`, `vaco-format-core` (`Muxer`, `MuxerDesc`),
 ## Deferred work
 
 - **Byte-identity against the reference: confirmed achievable, `KAGSize`
-  fixed, two further named divergences still open — see the byte-identity
-  matrix above.** `-fflags +bitexact -bitexact` makes independent `ffmpeg
-  -f mxf`/`-f mxf_d10` runs produce byte-identical output — verified
-  directly, both this session and the one before it (the UMID's
-  material-number field is zeroed under bitexact, not random/time-based).
-  A literal `cmp` against real bitexact files, feeding this crate's muxer
-  the *same* real MPEG-2 frames the reference encoded (so the essence bytes
-  are identical and only the container differs), found and fixed, across
-  two sessions: the Partition Pack's minor version (`3`, not `2`), the Body
-  Partition Pack being unconditional for OP1a, and — this session —
-  `KAGSize`/Fill-Item alignment (`512`, not `1`; confirmed byte-for-byte up
-  to the Primer Pack). The next two divergences, found this session and not
-  yet fixed:
-  - **The Primer Pack's own BER length uses this crate's fixed 4-byte form
-    (`ber::encode`); a real file uses the minimal-width form there**
-    (measured: `82 07 10`, a 3-byte long form, for a value this crate
-    writes as `83 00 07 10`). `ber.rs`'s own doc comment has the exact
-    bytes. The Partition Pack family genuinely does use the fixed 4-byte
-    form (confirmed identical against a real header, byte for byte) — this
-    divergence is specific to the Primer Pack (and, not individually
-    re-verified, the structural-metadata sets after it). Untangling it
-    means either two-pass length computation or a variable-width backpatch
-    scheme for every KLV this crate currently sizes by measuring a
-    fully-built buffer up front — a real design change, not a quick fix.
-  - **D-10's (and, unverified, OP-Atom's) header carries roughly `1536`
-    bytes (three KAG blocks) this crate does not write** — found by
-    comparing header-region sizes directly (this crate's D-10 header ends
-    at `4608`, a real file's at `6144`, for otherwise-identical input).
-    The most likely candidate is an unidentified structural set — a real
-    D-10 file's structural-set class-byte sequence includes a `0x23` this
-    session could not identify with confidence (RP210 register lookup
-    would need reading a spec table this crate has not measured against a
-    decoded example; D6/D17 says do not guess). Also present, same
-    unidentified class, in the OP-Atom fixture generated this session — so
-    this is likely a common set, not D-10-specific.
+  fixed, the two divergences chased this session both resolved as
+  findings — see the byte-identity matrix above for the full account.**
+  `-fflags +bitexact -bitexact` makes independent `ffmpeg -f mxf`/`-f
+  mxf_d10` runs produce byte-identical output — verified directly, across
+  three sessions now (the UMID's material-number field is zeroed under
+  bitexact, not random/time-based). A literal `cmp` against real bitexact
+  files, feeding this crate's muxer the *same* real MPEG-2 frames the
+  reference encoded (so the essence bytes are identical and only the
+  container differs), found and fixed, across three sessions: the
+  Partition Pack's minor version (`3`, not `2`), the Body Partition Pack
+  being unconditional for OP1a, `KAGSize`/Fill-Item alignment (`512`, not
+  `1`), and this session: the BER-length-width convention (`ber::
+  encode_minimal`, used via `klv::write_structural_set`/`write_minimal`
+  for the Primer Pack, most structural sets, and the Random Index Pack —
+  see "The byte-identity matrix" for the exact split measured), a missing
+  `EssenceContainerData` set (now written by every variant), and a
+  previously-wrong Random Index Pack (now one entry per real partition
+  pack, each with its own real `BodySID`). None of these three fixes was,
+  on its own or together, sufficient to reach `cmp`-identity: the dominant
+  remaining gap, found while re-measuring after the fixes above, is a real
+  file's Primer Pack registering a fixed ~100-tag dictionary regardless of
+  actual usage, and a fully-populated `Identification` set carrying real
+  product/version strings this crate does not write. Neither is chased
+  further this session — the primer-table one is a deliberate economy
+  (registering only what is used is smaller and equally correct, with no
+  functional payoff to matching a static internal table byte-for-byte);
+  the `Identification` one is a real, cheap enrichment (`CompanyName`,
+  `ProductName`, `VersionString`, `Platform`, a `ProductUID`, a
+  `ModificationDate`, a `ToolkitVersion` — measured, not guessed: see "The
+  byte-identity matrix") that is worth doing but would not reach
+  byte-identity even fully implemented, since this crate's own product
+  name is not literally `"FFmpeg"`.
   Two real, identified-but-unwritten descriptor properties were found
   across the two sessions and are recorded here rather than guessed into
   the descriptor: tag `0x320e` is `AspectRatio` — confirmed against three

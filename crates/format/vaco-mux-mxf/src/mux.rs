@@ -31,6 +31,7 @@ use vaco_format_core::{FormatOptions, Muxer, MuxerDesc};
 use vaco_io::{IoOptions, IoWriter, MediaSink};
 use vaco_packet::{Packet, PacketFlags};
 
+use crate::ber;
 use crate::index::{self, Entry};
 use crate::klv;
 use crate::localset;
@@ -55,8 +56,18 @@ const KAG_SIZE: u64 = 512;
 /// D-10's own Index Table Segment/partition `IndexSID` — an arbitrary but
 /// fixed choice (only needs to be nonzero and match the value the header
 /// partition pack itself states), mirroring `write_trailer`'s own
-/// `FOOTER_INDEX_SID` for `OP1a`/OP-Atom.
-const D10_INDEX_SID: u32 = 2;
+/// `OP1a`/OP-Atom.
+///
+/// Also the value every variant's `EssenceContainerData` set states for its
+/// own `IndexSID` property (`metadata::build_sets`'s new argument) — this
+/// crate always uses exactly one Index Table Segment per file, so the two
+/// former separately-named constants collapsed into this one shared value.
+const ESSENCE_INDEX_SID: u32 = 2;
+/// Every variant's essence-carrying partition's own `BodySID` (D-10's
+/// header, or `OP1a`'s/OP-Atom's Body Partition Pack) — also what an
+/// `EssenceContainerData` set's own `BodySID` property states, since this
+/// crate never writes more than one essence-carrying `BodySID` per file.
+const ESSENCE_BODY_SID: u32 = 1;
 
 /// Round `n` up to the next multiple of [`KAG_SIZE`] — the same arithmetic
 /// `klv::pad_to_kag` performs on a live `IoWriter` position, extracted here
@@ -145,6 +156,22 @@ pub struct MxfMuxer {
     /// the header's (measured this session); `vaco-demux-mxf`'s own reader
     /// only ever checks the header's, so this is for other readers.
     footer_field_positions: Vec<u64>,
+    /// `(BodySID, this_partition offset)` for every partition pack written
+    /// so far except the footer (header, and the body partition pack when
+    /// one is written) — the Random Index Pack's own entries, in file
+    /// order. Measured against three real fixtures this session (an `OP1a`
+    /// file, a D-10 file, an OP-Atom file): a real RIP has one entry per
+    /// partition pack in the file, each stating *that partition's own*
+    /// `BodySID` field, not a value assumed from which partition kind it
+    /// is — the header's own entry is `BodySID = 0` for OP1a/OP-Atom
+    /// (their header carries no essence) but `BodySID = 1` for D-10
+    /// (whose header carries essence directly, no body partition at all).
+    /// An earlier version of this crate's RIP hardcoded two entries
+    /// (header stated as `BodySID = 1`, footer as `0`) and never entered
+    /// one for the Body Partition Pack at all — wrong on both counts for
+    /// OP1a/OP-Atom, coincidentally close to right only for D-10's
+    /// no-body-partition shape.
+    rip_entries: Vec<(u32, u64)>,
     /// Absolute offset of the first essence element's own key —
     /// `IndexEntryArray`'s `StreamOffset`s are relative to this, matching
     /// `vaco-demux-mxf`'s own measured convention.
@@ -202,6 +229,7 @@ impl MxfMuxer {
             trailer_written: false,
             header_this_partition: 0,
             footer_field_positions: Vec::new(),
+            rip_entries: Vec::new(),
             essence_origin: None,
             video_entries: Vec::new(),
             packet_counts: Vec::new(),
@@ -250,8 +278,8 @@ impl MxfMuxer {
             g.instance_uid(),
             (self.edit_rate.num, self.edit_rate.den),
             edit_unit_byte_count,
-            D10_INDEX_SID,
-            1,
+            ESSENCE_INDEX_SID,
+            ESSENCE_BODY_SID,
         ))
     }
 }
@@ -366,7 +394,15 @@ impl Muxer for MxfMuxer {
             .ok_or(Error::InvalidData("mxf: init() was not called"))?;
 
         let primer_bytes = localset::build_primer_pack(&metadata::primer_entries());
-        let sets = metadata::build_sets(&ids, &self.tracks, self.edit_rate, None, self.variant);
+        let sets = metadata::build_sets(
+            &ids,
+            &self.tracks,
+            self.edit_rate,
+            None,
+            self.variant,
+            ESSENCE_BODY_SID,
+            ESSENCE_INDEX_SID,
+        );
         let essence_containers: Vec<ul::Ul> =
             metadata::essence_containers_used(&self.tracks, self.variant)
                 .into_iter()
@@ -389,12 +425,12 @@ impl Muxer for MxfMuxer {
             None
         };
         let (body_sid, index_sid) = match &d10_index {
-            Some(_) => (1u32, D10_INDEX_SID),
+            Some(_) => (ESSENCE_BODY_SID, ESSENCE_INDEX_SID),
             None => (0u32, 0u32),
         };
 
-        let header_byte_count = klv_len(&ul::primer_pack_key(), &primer_bytes)
-            + sets.iter().map(|(k, v)| klv_len(k, v)).sum::<u64>()
+        let header_byte_count = klv_len_minimal(&ul::primer_pack_key(), &primer_bytes)
+            + sets.iter().map(|(k, v)| klv_len_structural(k, v)).sum::<u64>()
             + d10_index.as_ref().map_or(0, |(k, v)| klv_len(k, v));
         let index_byte_count = d10_index.as_ref().map_or(0, |(k, v)| klv_len(k, v));
 
@@ -420,12 +456,13 @@ impl Muxer for MxfMuxer {
         // the buffer `partition::write` actually built.
         self.footer_field_positions
             .push(self.header_this_partition + 20 + partition::FOOTER_PARTITION_FIELD_OFFSET);
+        self.rip_entries.push((body_sid, self.header_this_partition));
         klv::pad_to_kag(&mut self.out, KAG_SIZE)?;
 
-        klv::write(&mut self.out, &ul::primer_pack_key(), &primer_bytes)?;
+        klv::write_minimal(&mut self.out, &ul::primer_pack_key(), &primer_bytes)?;
         klv::pad_to_kag(&mut self.out, KAG_SIZE)?;
         for (key, value) in &sets {
-            klv::write(&mut self.out, key, value)?;
+            klv::write_structural_set(&mut self.out, key, value)?;
         }
         klv::pad_to_kag(&mut self.out, KAG_SIZE)?;
         if let Some((key, value)) = &d10_index {
@@ -458,7 +495,7 @@ impl Muxer for MxfMuxer {
                 index_byte_count: 0,
                 index_sid: 0,
                 body_offset: 0,
-                body_sid: 1,
+                body_sid: ESSENCE_BODY_SID,
                 operational_pattern: ul::operational_pattern_for(self.variant),
                 essence_containers: metadata::essence_containers_used(&self.tracks, self.variant)
                     .into_iter()
@@ -468,6 +505,7 @@ impl Muxer for MxfMuxer {
             partition::write(&mut self.out, &ul::body_partition_key(), &body_fields)?;
             self.footer_field_positions
                 .push(body_this_partition + 20 + partition::FOOTER_PARTITION_FIELD_OFFSET);
+            self.rip_entries.push((ESSENCE_BODY_SID, body_this_partition));
             klv::pad_to_kag(&mut self.out, KAG_SIZE)?;
         }
 
@@ -580,7 +618,6 @@ impl Muxer for MxfMuxer {
     }
 
     fn write_trailer(&mut self) -> Result<()> {
-        const FOOTER_INDEX_SID: u32 = 2;
 
         if self.trailer_written {
             return Ok(());
@@ -652,8 +689,8 @@ impl Muxer for MxfMuxer {
                 },
                 (self.edit_rate.num, self.edit_rate.den),
                 duration,
-                FOOTER_INDEX_SID,
-                1,
+                ESSENCE_INDEX_SID,
+                ESSENCE_BODY_SID,
                 &self.video_entries,
             )
         });
@@ -667,7 +704,7 @@ impl Muxer for MxfMuxer {
             footer_partition: footer_this_partition,
             header_byte_count: 0,
             index_byte_count,
-            index_sid: if is_d10 { 0 } else { FOOTER_INDEX_SID },
+            index_sid: if is_d10 { 0 } else { ESSENCE_INDEX_SID },
             body_offset: 0,
             body_sid: 0,
             operational_pattern: ul::operational_pattern_for(self.variant),
@@ -686,16 +723,26 @@ impl Muxer for MxfMuxer {
         // Random Index Pack: `vaco-demux-mxf::partition::find_rip`'s
         // convention — `Count * (BodySID u32, ByteOffset u64)` entries then
         // the RIP's own total KLV length restated as the file's last 4
-        // bytes.
+        // bytes. One entry per partition pack actually written, each
+        // stating *that partition's own* `BodySID`, in file order —
+        // measured against three real fixtures this session (an earlier
+        // version hardcoded two entries, header stated as `BodySID = 1`
+        // unconditionally and no entry for the Body Partition Pack at
+        // all; `rip_entries`'s own doc comment has the full account).
         let mut rip = Vec::new();
-        rip.extend_from_slice(&1u32.to_be_bytes()); // header partition's BodySID.
-        rip.extend_from_slice(&self.header_this_partition.to_be_bytes());
-        rip.extend_from_slice(&0u32.to_be_bytes()); // footer partition carries no essence.
+        for &(body_sid, offset) in &self.rip_entries {
+            rip.extend_from_slice(&body_sid.to_be_bytes());
+            rip.extend_from_slice(&offset.to_be_bytes());
+        }
+        rip.extend_from_slice(&0u32.to_be_bytes()); // the footer itself carries no essence.
         rip.extend_from_slice(&footer_this_partition.to_be_bytes());
         let rip_key = ul::random_index_pack_key();
-        let rip_total_len = 16u32 + 4 + (rip.len() as u32) + 4; // key + 4-byte length prefix + value + trailer.
+        // key(16) + this KLV's own minimal-width length prefix + value +
+        // the trailing 4-byte restated total itself.
+        let rip_prefix_width = ber::encode_minimal((rip.len() + 4) as u64).as_slice().len() as u32;
+        let rip_total_len = 16 + rip_prefix_width + (rip.len() as u32) + 4;
         rip.extend_from_slice(&rip_total_len.to_be_bytes());
-        klv::write(&mut self.out, &rip_key, &rip)?;
+        klv::write_minimal(&mut self.out, &rip_key, &rip)?;
 
         let real_end = self.out.pos();
         if self.out.is_seekable() {
@@ -719,8 +766,30 @@ impl Muxer for MxfMuxer {
 }
 
 /// The KLV byte length of one triplet: 16-byte key, this crate's own
-/// 4-byte fixed BER length prefix (`crate::ber::encode`'s doc comment),
-/// plus the value.
+/// fixed-width BER length prefix (`crate::ber::encode`'s doc comment),
+/// plus the value. For a KLV `klv::write` (not `write_minimal`/
+/// `write_structural_set`) actually writes.
 fn klv_len(_key: &[u8; 16], value: &[u8]) -> u64 {
-    16 + 4 + value.len() as u64
+    16 + ber::encode(value.len() as u64).as_slice().len() as u64 + value.len() as u64
+}
+
+/// As [`klv_len`], but for a KLV `klv::write_minimal` writes.
+fn klv_len_minimal(_key: &[u8; 16], value: &[u8]) -> u64 {
+    16 + ber::encode_minimal(value.len() as u64).as_slice().len() as u64 + value.len() as u64
+}
+
+/// As [`klv_len`], but for a structural-metadata set `klv::
+/// write_structural_set` writes — mirrors that function's own
+/// fixed-vs-minimal class-byte switch exactly, so `header_byte_count`
+/// states the same total the header region's own bytes actually add up to.
+fn klv_len_structural(key: &[u8; 16], value: &[u8]) -> u64 {
+    let class = key[14];
+    if matches!(
+        class,
+        ul::class::MPEG_VIDEO_DESCRIPTOR | ul::class::AES3_PCM_DESCRIPTOR | ul::class::CDCI_ESSENCE_DESCRIPTOR
+    ) {
+        klv_len(key, value)
+    } else {
+        klv_len_minimal(key, value)
+    }
 }
