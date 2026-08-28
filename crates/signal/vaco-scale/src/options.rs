@@ -315,12 +315,42 @@ impl ScaleOptions {
                     return d;
                 };
                 Kernel::Bicubic {
-                    b: if p0.is_finite() { p0 } else { b },
-                    c: if p1.is_finite() { p1 } else { c },
+                    b: if in_bicubic_range(p0) { p0 } else { b },
+                    c: if in_bicubic_range(p1) { p1 } else { c },
                 }
             }
         }
     }
+}
+
+/// Whether `v` is a sane Mitchell-Netravali `B`/`C`, not merely finite.
+///
+/// `filter::mitchell`'s polynomial terms scale linearly with `B` and `C`
+/// (the widest, at `ax` near 2, is roughly `(8B + 24C) / 6`), and every named
+/// member of the cubic family — Catmull-Rom, Mitchell, B-spline, this
+/// crate's own measured `(0, 0.6)` default — uses `B, C` in `0..=1`. `[-4, 4]`
+/// is a generous multiple of that with room for legitimate experimentation,
+/// while still keeping the largest possible kernel weight (on the order of
+/// 20, before the `COEFF_SHIFT` fixed-point scale) far inside the `i32`
+/// coefficient's designed headroom of "8-bit input at up to 16 taps"
+/// (`filter.rs`'s doc comment on `COEFF_SHIFT`).
+///
+/// A `param0`/`param1` outside this range used to reach `mitchell()` as-is:
+/// at `B = 1_000_000, C = 9_551_615` (reachable from an ordinary option
+/// string, `sws_flags=param0=1000000:param1=9551615`) the polynomial's raw
+/// output is itself on the order of `10^7`, which the fixed-point cast to
+/// `i32` silently saturates to `i32::MAX`/`i32::MIN` rather than erroring —
+/// and that saturated "coefficient", multiplied against a real pixel value
+/// and accumulated in `exec.rs`'s `filter_v`, is what overflowed the `i64`
+/// accumulator there. Silently falling back to the built-in default here
+/// (exactly what already happens for a non-finite `param0`/`param1`, just
+/// extended to cover "finite but nonsensical") is the fix, not widening
+/// that accumulator further: the coefficient itself was already numerically
+/// meaningless by the time it reached `filter_v`, and letting a wider
+/// integer type "absorb" a meaningless value would trade a panic for a
+/// silently wrong picture.
+fn in_bicubic_range(v: f64) -> bool {
+    v.is_finite() && (-4.0..=4.0).contains(&v)
 }
 
 /// `(luma, chroma)` selection implied by the legacy bitmask.
@@ -375,6 +405,39 @@ mod tests {
         assert_eq!(o.luma_kernel(), Kernel::Bicubic { b: 0.0, c: 0.6 });
         assert_eq!(o.chroma_kernel(), Kernel::Bicubic { b: 0.0, c: 0.6 });
         assert!(o.unimplemented().is_empty());
+    }
+
+    /// A `param0`/`param1` this far out of range used to reach `mitchell()`
+    /// unclamped: its raw output there is on the order of `10^7`, which the
+    /// fixed-point cast to `i32` silently saturates rather than errors on,
+    /// and that saturated coefficient overflowed `exec.rs`'s `filter_v`
+    /// accumulator on the very next multiply-accumulate. This is a
+    /// parameter-validation bug, not an accumulator-width one: the fix is
+    /// falling back to the built-in default exactly as an already-non-finite
+    /// `param0`/`param1` does, not widening the arithmetic to tolerate a
+    /// coefficient that was never numerically meaningful in the first place.
+    #[test]
+    fn a_wildly_out_of_range_bicubic_parameter_falls_back_to_the_default() {
+        let mut o = ScaleOptions::default();
+        o.param0 = 1_000_000.0;
+        o.param1 = 9_551_615.0;
+        assert_eq!(o.luma_kernel(), Kernel::Bicubic { b: 0.0, c: 0.6 });
+        assert_eq!(o.chroma_kernel(), Kernel::Bicubic { b: 0.0, c: 0.6 });
+
+        o.param0 = -1_000_000.0;
+        o.param1 = f64::INFINITY;
+        assert_eq!(o.luma_kernel(), Kernel::Bicubic { b: 0.0, c: 0.6 });
+    }
+
+    /// The fallback in the test above must not have swallowed legitimate,
+    /// in-range tuning: a caller experimenting within the documented `[-4,
+    /// 4]` headroom still gets exactly the value they asked for.
+    #[test]
+    fn an_in_range_bicubic_parameter_is_honoured() {
+        let mut o = ScaleOptions::default();
+        o.param0 = 1.0;
+        o.param1 = -2.5;
+        assert_eq!(o.luma_kernel(), Kernel::Bicubic { b: 1.0, c: -2.5 });
     }
 
     #[test]
