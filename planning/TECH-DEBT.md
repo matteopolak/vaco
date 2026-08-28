@@ -5842,3 +5842,106 @@ now in hand — not re-judged here.
 `Vaco-Spec-Ref: iso-iec-14496-10-2002-draft` clause 7.4.5 (Table 7-11's
 `Intra16x16PredMode` column), clause 8.3.2 (eq. 8-70..8-75, Table 8-3),
 clause 8.3.3 (eq. 8-82..8-97, Table 8-4).
+
+
+### #355's field-picture blocker: checked for a real fixture, none found reachable from this environment — the ruling stands, but on weaker evidence than Annex P's
+
+Challenged this round: the field-picture exclusion's second reason
+(`ffmpeg`'s `mpeg2video` encoder never emits `picture_structure != Frame`,
+even with `+ilme+ildct`) only shows ffmpeg's own encoder won't produce
+one — not that no fixture exists anywhere. Real MPEG-2 broadcast content
+routinely uses field pictures, and `ffmpeg`'s *decoder* handles them, so a
+stream obtained from elsewhere would still give a full differential
+reference. Worth checking before letting the ruling stand unchallenged.
+
+**Checked multiple concrete leads, primary-source-verified where a claim
+could be checked at all, none reachable from this environment's tooling:**
+
+- **y262** (`github.com/rwillenbacher/y262`), a real, buildable, BSD-2
+  MPEG-1/2 encoder — a WebSearch summary suggested it supports field
+  pictures. Checked against its own README directly
+  (`gh api repos/rwillenbacher/y262/readme -H "Accept: application/vnd.github.raw"`),
+  which lists "Field pictures" under its own "Sadly missing" section; its
+  `-interlaced` flag enables field-*prediction-mode* macroblocks within
+  frame pictures — the same capability this crate and `ffmpeg`'s encoder
+  already have — not separate field-picture coding. The search summary
+  was wrong; the primary source (its own README) says the opposite.
+- **libmpeg2's conformance-stream suite** (historically
+  `svn co svn://svn.videolan.org/libmpeg2/streams`, documented on the
+  project's own downloads page as gaining field-picture support at
+  `mpeg2dec-0.2.1`) — `svn.videolan.org` no longer resolves (DNS dead);
+  VideoLAN's current host, `code.videolan.org`, sits behind an
+  Anubis-style JS challenge this environment's browser tool could not
+  pass; Software Heritage's archive index was searched directly for this
+  path and returned zero results for the separate binary-stream SVN
+  module (343 hits, all git mirrors of the source code, not the stream
+  archive).
+- **`fate.ffmpeg.org/fate-suite/mpeg2/`** — real, and known to carry
+  interlaced/field-picture MPEG-2 test content, but returns a genuine
+  server-side HTTP 403 (`Apache/2.4.29 (Ubuntu) Server at
+  fate.ffmpeg.org Port 8081`) to both `WebFetch` and a real browser tab
+  from this environment — not a bot-challenge, a hard block.
+- **Tektronix's MPEG test-stream FTP archive**
+  (`ftp://ftp.tek.com/tv/test/streams/Element/MPEG-Video/625/`, the
+  `625` — PAL/interlaced — subdirectory plausibly field-coded) —
+  `ftp://` is unreachable (`WebFetch` doesn't support the scheme) and the
+  host has no HTTPS listener on port 443 (`connect ECONNREFUSED`).
+
+**Verdict: the ruling stands as recorded, but on the weaker form the
+dispatch anticipated.** No stream was confirmed obtainable, so field
+pictures stay unimplemented and untestable *from this project's own
+tooling today* — the same practical conclusion as before. But this is a
+tooling/access limitation on at least two leads that are plausibly still
+live (`fate.ffmpeg.org`, the Tektronix archive), not a proven
+architectural impossibility the way Annex P's RPR exclusion is (§6.3.10
+resampling has no encoder path to even request, from any tool this
+project has access to, full stop). If either of those two hosts becomes
+reachable from a different environment, or a specific known-field-picture
+sample turns up through some other channel, this reason collapses and
+field pictures become ordinary unimplemented work rather than a blocked
+item. Recorded as a decision, with its actual confidence level, not
+upgraded to match Annex P's.
+
+No code changed this round.
+
+
+### Annex F's Figure F.1 fully resolved (all four blocks), a documentation error in the earlier pass corrected — `vaco-codec-h263`, #359
+
+Followed up on the previously-reported partial result (three of four
+blocks pinned, block 1's `MV3` source not). Re-read Figure F.1 by
+measuring line *thickness* in pixels (`PIL`/`numpy`: group contiguous
+dark pixels per sampled row, record group width) on a freshly-cropped,
+2x-upscaled render of each sub-figure, rather than the visual read the
+earlier pass relied on. Full result and the corrected doc text are in
+`docs/codec/vaco-codec-h263.md`; summary:
+
+- Block 0: MV1/MV2/MV3 all external (left/above/above-right neighbour) —
+  unchanged, matches §6.1.1/Figure 12 and F.2's own bit-for-bit claim.
+- Block 1 (the previously-unresolved one): MV1 internal (block 0), MV2
+  and MV3 external (above and above-right neighbours' matching block).
+- Block 2: MV2 and MV3 internal (blocks 0 and 1), but **MV1 external**
+  (left neighbour's block 3) — **this corrects the earlier pass's own
+  claim that block 2 was "fully internal"; it wasn't**, and the wrong
+  claim would have mis-sourced one of three predictors for a quarter of
+  all luma blocks had Annex F been implemented against it uncorrected.
+- Block 3: fully internal (blocks 2, 0, 1) — unchanged, the one block
+  the earlier "fully internal" claim correctly described.
+
+All four are now pinned from the primary text alone, at the same
+confidence bar the rest of this crate's Annex work uses. **Not yet
+cross-checked against a real `-obmc` differential fixture** — `ffmpeg
+-flags +obmc` is confirmed (an earlier round) to exist and change output,
+so the fixture side is buildable, and doing that differential is still
+the right final check before shipping (it would exercise the predictor
+reading, F.3's remote-vector rules and the OBMC weighting matrices
+together against real decoder behaviour, which the primary-text read
+alone does not). That check, plus OBMC weighting, remote-vector
+substitution and 4-vector MCBPC wiring, is a real implementation in its
+own right and was not attempted in the same pass as this figure
+re-read. **`vaco-codec-h263` still does not implement Annex F.**
+
+No pixel output changes (docs only, this file and
+`docs/codec/vaco-codec-h263.md`).
+
+`Vaco-Spec-Ref: itu-t-h263-2005` §6.1.1 (Figure 12), Annex F §F.2
+(Figure F.1).
