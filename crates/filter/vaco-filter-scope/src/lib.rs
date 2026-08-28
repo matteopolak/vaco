@@ -1,7 +1,9 @@
 //! T3 measurement/visualisation video filters — `planning/16-filters.md`
-//! §4.2's `vaco-filter-scope` row, GitHub issue #480 ("FT-4.12g"). Seven
-//! implemented: `histogram`, `waveform`, `datascope`, `thistogram`,
-//! `graphmonitor`, `agraphmonitor`, `pixscope`.
+//! §4.2's `vaco-filter-scope` row, GitHub issue #480 ("FT-4.12g").
+//! Nine implemented: `histogram`, `waveform`, `datascope`, `thistogram`,
+//! `graphmonitor`, `agraphmonitor`, `pixscope`, `drawgraph`, `adrawgraph`
+//! (the last two via GitHub issue #473, FT-4.10 — see `vaco-filter-
+//! draw-vf`'s own doc for that issue's full scoping).
 //!
 //! # Scoped the way #478 was scoped, before writing code
 //!
@@ -29,7 +31,7 @@
 //! | `oscilloscope` | **Its `st` statistics text was located on a third, larger-canvas attempt** — reversing the "not located" finding of two earlier, smaller probes — and reads cleanly: a single white line, `"{ch} avg:{avg:.1f} min:{min} max:{max}"` per channel (no zero-padding, unlike `pixscope`'s), sitting inside the trace box's own bottom row. **Not shipped**: only the stats text and the trace/grid's bare existence are measured; the trace line's own per-pixel geometry (how `t` tilts it, how `tx`/`ty`/`tw`/`th`/`s` map to exact box pixels, per-component colour assignment) was not — a materially separate measurement task from finding the text, left for the next pass with the stats format already nailed down and ready to reuse. |
 //! | `oscilloscope` | Briefly probed this pass, not shipped. Confirmed to share the family's font mechanism in principle (no font option) and confirmed its trace/grid rendering (`g=1` grid; each enabled component traces a distinct-coloured connected line at partial opacity, with the source visibly bleeding through beneath it). `st=1`'s statistics text was **not located** in two probes (default and enlarged geometry) — unlike `pixscope`, widening past the `640x480` floor did not reveal it; a fresh attempt should try other `sc`/`st` combinations, a non-flat source, or accumulation across several frames. |
 //! | `ciescope` | Not attempted, and explicitly **not a D7 case**: every `system` value (`ntsc`/`ebu`/`smpte`/`240m`/`apple`/`widergb`/`cie1931`/`hdtv`/`uhdtv`/`dcip3`) names a published international standard's primaries (BT.709, BT.2020, DCI-P3, SMPTE-C, and so on), and the CIE 1931 standard observer data itself is public. The blocker is that reproducing the reference's exact chromaticity-diagram *rendering* (the spectral locus curve's rasterisation, anti-aliasing, gamut-triangle line drawing) is not itself something a published colorimetry standard specifies — it would need extensive black-box probing of the reference's own drawing choices, which this pass's time did not cover. |
-//! | `drawgraph`, `adrawgraph` | **Characterised, not shipped — and a hypothesis this pass tested turned out wrong in the useful direction.** Expected (going in) to need a glyph table like this crate's other four text-drawing filters, the same way `datascope`/`pixscope` do; a real render (`signalstats,drawgraph=m1=lavfi.signalstats.YAVG:slide=picture`) instead showed a plain coloured line trace with **no text anywhere** — no axis labels, no min/max readout, nothing `crate::font8x8` would be needed for. `ffmpeg -h filter=drawgraph` independently confirms no font option, consistent with that. This means `drawgraph`/`adrawgraph` are pure geometry like `waveform`, not text-bound like `datascope` — a real, better-than-expected finding, but landing it needs the value-to-pixel mapping, the background/foreground colour-expression semantics (a `0xAARRGGBB`-then-alpha-zero probe left an unexplained solid colour rather than the expected transparent background, not run to ground given time), and the four `slide` modes measured to the same standard as `thistogram`'s — not attempted this pass beyond the one structural probe above. Reads metadata `gap 11`'s `Frame::metadata_get` already provides; no new interface gap needed. |
+//! | [`drawgraph`] | **Shipped for `mode=line`/`slide=frame` (both defaults) — and the font hypothesis this pass started with was wrong in the useful direction.** Expected (going in) to need a glyph table like this crate's other four text-drawing filters; a real render (`signalstats,drawgraph=m1=lavfi.signalstats.YAVG:slide=picture`) instead showed a plain coloured line trace with **no text anywhere**, and `-h` independently confirms no font option — pure geometry like `waveform`, not text-bound like `datascope`. The value-to-pixel mapping is measured at nine points (`min`/`max`/midpoint at three graph heights, from flat-luma sources giving an exactly known metadata value): in-range values map through a margined, ceiling-rounded linear formula whose margin did not resolve to one clean constant (top and bottom margins measured *unequal* at one height) and is shipped as a fitted approximation with the exact residual stated in the module doc; out-of-range values **clamp to the absolute canvas edge**, a different rule from the in-range formula evaluated past its domain, confirmed by an independent probe. `fg1..4`'s colour is a hex literal with a real byte-order bug: written `0xAARRGGBB`, applied as opaque `(B, G, R)` — R and B swapped, alpha always ignored — while `bg`, a normal `<color>`, is unaffected; confirmed these are two different colour grammars on the same filter, not one binding set used twice. Not implemented: `mode=bar`/`dot`; `slide=replace`/`scroll`/`rscroll`/`picture`; `fg1..4` as genuine value-dependent expressions (only the constant-hex case is implemented). Reads metadata via gap 11's `Frame::metadata_get`, proven through a real `Graph` end-to-end test, not just unit tests of the pixel-mapping formula. |
 //!
 //! # The bitmap-font hypothesis (resolved: held)
 //!
@@ -66,6 +68,7 @@
 mod common;
 pub mod datascope;
 mod font8x8;
+pub mod drawgraph;
 pub mod graphmonitor;
 pub mod histogram;
 pub mod pixscope;

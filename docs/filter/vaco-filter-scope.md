@@ -1,9 +1,11 @@
 # vaco-filter-scope
 
 T3 measurement/visualisation video filters — `planning/16-filters.md` §4.2's
-`vaco-filter-scope` row, GitHub issue #480 ("FT-4.12g"). Seven implemented:
+`vaco-filter-scope` row, GitHub issue #480 ("FT-4.12g"). Nine implemented:
 `histogram`, `waveform`, `datascope`, `thistogram`, `graphmonitor`,
-`agraphmonitor`, `pixscope`.
+`agraphmonitor`, `pixscope`, `drawgraph`, `adrawgraph` (the last two via
+GitHub issue #473, FT-4.10 — see `vaco-filter-draw-vf`'s own doc for that
+issue's full scoping).
 
 ## Scope reconciliation
 
@@ -19,9 +21,10 @@ exist. Before writing any code, `planning/ASSIGNMENTS.md`, every sibling
 | `scale2ref`, `colorspace`, `colordetect`, `pixdesctest`, `zoompan` | The T1-tier remainder of `vaco-filter-scale`'s row, orphaned by #463 (FT-4.1a)'s narrower scope — a real gap, but not T3 and not ticketed under #480 |
 | `histogram`, `thistogram`, `waveform`, `vectorscope`, `oscilloscope`, `datascope`, `pixscope`, `ciescope`, `graphmonitor`, `agraphmonitor`, `drawgraph`, `adrawgraph` | `planning/16-filters.md`'s `vaco-filter-scope` row — the actual unclaimed T3 remainder, confirmed absent from every `vaco-component.toml` and the generated registry |
 
-This crate implements six of those twelve (`graphmonitor`/`agraphmonitor`
-count as one pair). The rest are excluded or deferred, each for a distinct,
-specific reason (see below) rather than a blanket "out of time".
+This crate implements eight of those twelve (`graphmonitor`/`agraphmonitor`
+and `drawgraph`/`adrawgraph` each count as one pair). The rest are excluded
+or deferred, each for a distinct, specific reason (see below) rather than a
+blanket "out of time".
 
 ## What it is
 
@@ -359,7 +362,47 @@ the `rustybuzz` question.
 | `vectorscope` | **Partially cracked, not shipped.** The coordinate mapping is fully measured: `x = component_x` directly, `y = 255 - component_y`. The intensity accumulation is confirmed nonlinear (independent of frame size — same hit count gives the same output at both `100` and `10000` total pixels) but does not fit any single-parameter model tried (linear, `ceil`/`round`/floor, power law, exponential-IIR); reported as characterised, not shipped, rather than guessed. |
 | `oscilloscope` | **Its `st` statistics text was located this pass**, reversing an earlier "not located" finding from two smaller probes — a third, larger-canvas, multi-frame attempt found it sitting in the trace box's own bottom row: a single white line, `"{ch} avg:{avg:.1f} min:{min} max:{max}"` per channel, no zero-padding (unlike `pixscope`'s). Confirmed to share the same font mechanism (no font option) and confirmed the trace/grid's bare existence (`g=1` draws a plain grid; each enabled component traces a distinct-coloured connected line at partial opacity). **Not shipped**: the trace line's own per-pixel geometry — how `t` tilts it, how `s`/`tx`/`ty`/`tw`/`th` map to exact box pixels, per-component colour assignment — is a materially separate measurement task from finding the stats text, and was not attempted this pass. |
 | `ciescope` | **Not a D7 case.** Every `system` value names a published international-standard primary set (BT.709, BT.2020, DCI-P3, SMPTE-C, …) and the CIE 1931 observer data is public. The blocker is reproducing the reference's exact chromaticity-diagram *rendering* (spectral-locus rasterisation, anti-aliasing, gamut-triangle lines) — not itself specified by any colorimetry standard, so verifying it would need extensive black-box probing this pass's time did not cover. |
-| `drawgraph`, `adrawgraph` | **Characterised, not shipped.** Expected to need a glyph table like this crate's other text-drawing filters; a real render instead showed a plain coloured line trace with no text anywhere (no axis labels, no min/max readout), and `-h` independently confirms no font option — pure geometry, like `waveform`, not text-bound. Landing it needs the value-to-pixel mapping and the `bg`/`fg1..4` colour-expression semantics measured properly (a quick probe left an unexplained result, not run to ground) and the four `slide` modes measured to `thistogram`'s own standard — none of that attempted this pass beyond the one structural probe. Reads metadata via `Frame::metadata_get` (gap 11); no new interface gap needed. |
+
+### `drawgraph`/`adrawgraph`
+
+Plot up to four frame-metadata values as a scrolling line graph. **Shipped
+for `mode=line`/`slide=frame` (both defaults).** Expected to need this
+crate's font mechanism the way `datascope`/`pixscope` do; a real render
+(`signalstats,drawgraph=m1=lavfi.signalstats.YAVG:slide=picture`) instead
+showed a plain coloured line trace with no text anywhere, and `-h`
+confirms no font option on either filter — pure geometry like `waveform`,
+not text-bound.
+
+Measured directly, with flat-luma sources giving an exactly known
+`lavfi.signalstats.YAVG`:
+
+- **Value-to-pixel mapping** (nine points: `min`/`max`/midpoint at three
+  graph heights): in-range values map through
+  `row = ceil(margin + (max-v)/(max-min) * (height-1-2*margin))`, but the
+  margin did not resolve to one clean constant — the top and bottom
+  margins measured *unequal* at `height=201` (`15` vs `13`), and
+  `margin = round(0.07*(height-1))` (a single, symmetric value) was the
+  closest single-formula fit found in the time available, exact at
+  `height=101` and within one pixel elsewhere. **Out-of-range values
+  clamp to the absolute canvas edge** (`row=0` or `row=height-1`), a
+  different rule from the in-range formula evaluated past its domain —
+  confirmed independently with `min=100:max=150` fed values `0` and
+  `255`.
+- **`fg1..4`'s hex colour has a real byte-order bug: written
+  `0xAARRGGBB`, applied as opaque `(B, G, R)`.** `fg1=0x11223344`
+  (intending `A=11,R=22,G=33,B=44`) painted `(R=0x44,G=0x33,B=0x22)` — R
+  and B swapped, G untouched, alpha always ignored (confirmed
+  pixel-identical output with the same RGB at `A=0x00` and `A=0xff`).
+- **`bg` is a normal `<color>`, unaffected by that bug.** `bg=0x112233`
+  painted `(R=0x11,G=0x22,B=0x33)` exactly as written — `fg1..4` and `bg`
+  are two different colour grammars on the same filter, not one binding
+  set applied twice.
+
+Not implemented: `mode=bar`/`dot`; `slide=replace`/`scroll`/`rscroll`/
+`picture`; `fg1..4` as genuine value-dependent expressions. Reads
+metadata via gap 11's `Frame::metadata_get`, proven through a real
+`Graph` end-to-end test (`tests/drawgraph.rs`), not just unit tests of
+the pixel-mapping formula.
 
 ## Framecrc comparison table
 
@@ -371,17 +414,23 @@ drive an actual `-f framecrc` invocation (`planning/14-cli.md` is still a
 plan document).
 
 **This row now has a permanent split, not just a temporary one.**
-`histogram`, `waveform` and `thistogram` draw no text, so nothing rules
-out framecrc-exactness for them — `thistogram` reaching it this pass
-closes that question for every non-text filter this crate is likely to
-implement. `datascope`, `graphmonitor`/`agraphmonitor`, and (once shipped)
-`pixscope`/`oscilloscope`, draw with an independently-sourced font (D7
-forbids transcribing the reference's own table — see "The bitmap-font
-hypothesis" above), so no frame containing their text can *ever* match
-the reference byte-for-byte. "Framecrc-identical across this crate's
-whole corpus" is therefore not a temporarily-unmet goal for the
-text-drawing filters — it is provably unreachable, the same way `hqx` is
-provably unimplementable in `vaco-filter-artistic`.
+`histogram`, `waveform`, `thistogram` and `drawgraph`/`adrawgraph` draw no
+text, so nothing rules out framecrc-exactness for them — `thistogram`
+reaching it first closed that question for every non-text filter this
+crate is likely to implement, and `drawgraph`/`adrawgraph` confirming the
+same "no font" property is why they are shipped at all. `datascope`,
+`graphmonitor`/`agraphmonitor` and `pixscope` draw with an
+independently-sourced font (D7 forbids transcribing the reference's own
+table — see "The bitmap-font hypothesis" above), so no frame containing
+their text can *ever* match the reference byte-for-byte. "Framecrc-
+identical across this crate's whole corpus" is therefore not a
+temporarily-unmet goal for the text-drawing filters — it is provably
+unreachable, the same way `hqx` is provably unimplementable in
+`vaco-filter-artistic`. `drawgraph`/`adrawgraph` are not there yet for a
+different reason: the value-to-pixel margin is a fitted approximation,
+not a derived exact formula — see that filter's own section above for
+the precise residual — so today's shipped behaviour is close but not
+proven byte-exact, unlike `thistogram`'s own fully-pinned intensity rule.
 
 | Filter | Args | Source | Result |
 |---|---|---|---|
@@ -399,6 +448,8 @@ provably unimplementable in `vaco-filter-artistic`.
 | `thistogram` | any, `12`:`4`-style count ratios (`round`, not `ceil`) | `gray` | **exact** — three ratios pinned, including an exact `0.5` tie, ruling out `ceil` and truncation |
 | `graphmonitor` | `s=96x32:rate=25`, a real 3-node `Graph` (source → monitor → sink) | any | **structural, not exact** — real `NodeView`/`LinkView` data confirmed reaching the render (`tests/graphmonitor.rs`, a genuine end-to-end `Graph` run, deliberately broken and restored to confirm the test has teeth); text pixels can never match byte-for-byte (independent font) |
 | `agraphmonitor` | `s=96x32:rate=25`, a real audio source → monitor → video sink | any | **runs end-to-end** — confirmed the one shape difference from `graphmonitor` (reading `pts`/`time_base` off an audio frame, not a video one) does not need separate logic |
+| `drawgraph` | `m1=lavfi.signalstats.YAVG:min=0:max=255:slide=picture`, flat-luma sources at three heights | any (via `signalstats`) | **structural, close but not proven exact** — nine value-to-pixel points matched by a fitted margin formula (exact at one height, within 1px elsewhere); out-of-range clamp-to-edge confirmed exactly |
+| `drawgraph` | `fg1=0x11223344`/`bg=0x112233` | any | **exact** — the `fg1..4` byte-swap-and-drop-alpha bug and `bg`'s normal, unaffected grammar both confirmed |
 | `pixscope` | `w=7:h=7`, flat `126`/`128` `yuv444p` field | `yuv444p` | **structural, not exact** — flat-field baseline: `AVG`/`MIN`/`MAX`/`RMS` all read the flat value, `STD=0` |
 | `pixscope` | same, single-column outlier (`250` vs `10`) in the `7x7` window | `yuv444p` | **structural, not exact** — `AVG=44.3`/`RMS=94.9`/`STD=83.98` confirmed against hand-computed values, ruling out median/AC-RMS/sample-STD |
 | `pixscope` | same, symmetric 7-value ramp (`54..114` step `10`) | `yuv444p` | **structural, not exact** — `AVG=84.0`/`RMS=86.3`/`STD=20.00` match exactly |

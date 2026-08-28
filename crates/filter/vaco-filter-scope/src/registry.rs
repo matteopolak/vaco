@@ -11,6 +11,8 @@ const NAMES: &[&str] = &[
     "graphmonitor",
     "agraphmonitor",
     "pixscope",
+    "drawgraph",
+    "adrawgraph",
 ];
 
 /// Implements [`FilterRegistry`] for every filter in this crate.
@@ -31,6 +33,8 @@ impl FilterRegistry for ScopeRegistry {
             "graphmonitor" => crate::graphmonitor::create(req),
             "agraphmonitor" => crate::graphmonitor::create_audio(req),
             "pixscope" => crate::pixscope::create(req),
+            "drawgraph" => crate::drawgraph::create(req),
+            "adrawgraph" => crate::drawgraph::create_audio(req),
             other => Err(format!("vaco-filter-scope: no filter named `{other}`")),
         }
     }
