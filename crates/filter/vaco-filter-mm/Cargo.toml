@@ -21,7 +21,9 @@ vaco-filter-core = { path = "../../filter/vaco-filter-core" }
 vaco-filter-graph = { path = "../../filter/vaco-filter-graph" }
 vaco-filter-vdsp = { path = "../../filter/vaco-filter-vdsp" }
 vaco-limits = { path = "../../core/vaco-limits" }
+vaco-time = { path = "../../core/vaco-time" }
 smallvec.workspace = true
+bitflags.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

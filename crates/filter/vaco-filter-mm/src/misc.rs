@@ -79,7 +79,7 @@
 //! no-op under `delete`, since this project never attaches side data of any
 //! other kind.
 
-use std::time::{Duration as StdDuration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::Duration as StdDuration;
 
 use vaco_core::{Duration as VDuration, MediaType, Result};
 use vaco_filter_core::adapt::{FrameFilter, FrameOut, Simple};
@@ -107,10 +107,21 @@ fn frame_bytes(frame: &Frame) -> u64 {
         .sum()
 }
 
+/// Wall-clock microseconds since the Unix epoch, or `i64::MAX` when this
+/// target has no wall clock (`vaco_time::unix_nanos` returns `None` there —
+/// see that crate's doc). `i64::MAX` is deliberate, not an arbitrary
+/// fallback: every caller here (`cue`'s cue-reached check, `bench`'s
+/// elapsed-time subtraction) treats "unknown, so assume it already
+/// happened" as the safe direction, matching the conservative-release
+/// choice `cue` documents above.
 fn wall_micros() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_micros()).unwrap_or(i64::MAX))
+    #[allow(
+        clippy::integer_division,
+        reason = "deliberate nanoseconds-to-microseconds truncation, not a precision bug"
+    )]
+    vaco_time::unix_nanos()
+        .and_then(|ns| i64::try_from(ns / 1_000).ok())
+        .unwrap_or(i64::MAX)
 }
 
 // ------------------------------------------------------------------- cue
@@ -219,7 +230,7 @@ impl RealtimeOpts {
 pub(crate) struct RealtimeFilter {
     limit_secs: f64,
     speed: f64,
-    anchor: Option<(Instant, f64)>,
+    anchor: Option<(vaco_time::Instant, f64)>,
     /// Skipped in tests via a zero-length sleep path: real sleeping is the
     /// filter's whole point in production, but a unit test wants the frame
     /// spacing, not the wall clock, exercised. Kept `false` outside tests.
@@ -230,22 +241,23 @@ pub(crate) struct RealtimeFilter {
 impl FrameFilter for RealtimeFilter {
     fn filter_frame(&mut self, _ctx: &mut FilterContext<'_>, frame: Frame) -> Result<FrameOut> {
         let t = frame.pts.to_seconds(frame.time_base).unwrap_or(0.0);
-        let now = Instant::now();
+        let now = vaco_time::Instant::now();
         match self.anchor {
             None => self.anchor = Some((now, t)),
             Some((anchor_wall, anchor_stream)) => {
-                let target = anchor_wall + StdDuration::from_secs_f64(((t - anchor_stream) / self.speed).max(0.0));
-                if target > now {
-                    let gap = target - now;
+                let target = anchor_wall
+                    .saturating_add(StdDuration::from_secs_f64(((t - anchor_stream) / self.speed).max(0.0)));
+                let gap = target.duration_since(now);
+                if !gap.is_zero() {
                     if gap.as_secs_f64() > self.limit_secs {
                         self.anchor = Some((now, t));
                     } else {
                         #[cfg(test)]
                         if !self.no_sleep {
-                            std::thread::sleep(gap);
+                            vaco_time::sleep(gap);
                         }
                         #[cfg(not(test))]
-                        std::thread::sleep(gap);
+                        vaco_time::sleep(gap);
                     }
                 }
             }
