@@ -1673,6 +1673,14 @@ bench = false
 required-features = ["protocol-local"]
 
 [[bin]]
+name = "protocol_rtmp_command"
+path = "fuzz_targets/protocol_rtmp_command.rs"
+test = false
+doc = false
+bench = false
+required-features = ["protocol-rtmp"]
+
+[[bin]]
 name = "protocol_rtmp_control"
 path = "fuzz_targets/protocol_rtmp_control.rs"
 test = false

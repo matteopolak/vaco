@@ -1,6 +1,6 @@
 [package]
 name = "vaco-protocol-rtmp"
-description = "RTMP: the chunk stream layer (handshake, chunking/dechunking, protocol control messages). AMF/NetConnection/NetStream and the rtmp: Protocol impl land in a later package."
+description = "RTMP: chunk stream (handshake, chunking/dechunking, control messages), AMF0, and NetConnection/NetStream command flow (connect/createStream/publish/play). rtmps needs no code here (transport-agnostic framing); rtmpt/ffrtmphttp not built (no citable wire-framing source). The rtmp: Protocol impl lands in a later package."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

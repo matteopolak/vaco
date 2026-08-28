@@ -2,13 +2,13 @@
 
 ## What it is
 
-The RTMP chunk stream layer: handshake (plain and digest/"complex"),
-chunking/dechunking, and the six protocol control messages. This is PR-09a
-of epic #61 — one of three packages sharing this crate. There is no
-`rtmp:`/`rtmps:` `Protocol` implementation and no registry entry yet: a
-session needs AMF0/AMF3 and the NetConnection/NetStream command flow
-(PR-09b) before it can do anything a caller wants, so wiring the registry
-now would register a scheme that cannot actually connect to anything.
+The RTMP chunk stream layer (handshake, chunking/dechunking, control
+messages, #552/PR-09a), AMF0 and the NetConnection/NetStream command flow
+(#553/PR-09b), and the `rtmps`/tunnelled-variant findings (#554/PR-09c) —
+all three PR-09 packages land in this one crate; epic #61's split is
+single-writer ownership across issues, not across crates. There is still
+no `rtmp:`/`rtmps:` `Protocol` implementation and no registry entry: that
+needs socket ownership this crate does not have.
 
 ## How it works
 
@@ -31,6 +31,18 @@ now would register a scheme that cannot actually connect to anything.
   Size, Set Peer Bandwidth) and the named `UserControlEvent` sub-types.
 - `crypto` — hand-rolled SHA-256/HMAC-SHA256; see that module's docs for why
   this is not the `sha2`/`hmac` crates.
+- `amf0` (#553) — AMF0 value encode/decode: Number, Boolean, String/Long
+  String, Object, Null, Undefined, ECMA Array, Strict Array, Date. Six
+  types are deliberately not built (Reference, MovieClip, RecordSet, XML
+  Document, Typed Object, the AMF3-switch marker) — see the module's own
+  docs for why none of them is needed by this crate's command flow.
+- `command` (#553) — `Command` (name, transaction ID, command object,
+  arguments) on top of `amf0`, plus builders/parsers for the named
+  NetConnection/NetStream commands: `connect`/`connect_result`,
+  `create_stream`/`create_stream_result`, `publish`/`on_status_publish_start`,
+  `play`/`on_status_play_start` — each response using §7.2's own named
+  status code (`NetConnection.Connect.Success`,
+  `NetStream.Publish.Start`, `NetStream.Play.Start`).
 
 ## How to change it
 
