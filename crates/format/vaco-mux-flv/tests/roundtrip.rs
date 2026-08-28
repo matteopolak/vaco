@@ -207,7 +207,10 @@ fn on_meta_data_carries_the_streams_own_video_and_audio_properties() {
     let body = &bytes[9 + 4 + 11..];
     let mut budget = Budget::new(vaco_limits::Limits::permissive());
     let (name, name_len) = decode(body, &mut budget).unwrap();
-    assert_eq!(name, vaco_demux_flv::AmfValue::String("onMetaData".to_owned()));
+    assert_eq!(
+        name,
+        vaco_demux_flv::AmfValue::String("onMetaData".to_owned())
+    );
     let (array, _) = decode(&body[name_len..], &mut budget).unwrap();
     let pairs = array.as_pairs().expect("onMetaData is an ECMA array");
 
@@ -223,10 +226,7 @@ fn on_meta_data_carries_the_streams_own_video_and_audio_properties() {
     assert_eq!(number("videocodecid"), 7.0); // AVC
     assert_eq!(number("audiosamplerate"), 44_100.0);
     assert_eq!(number("audiosamplesize"), 16.0); // AAC's measured convention
-    assert_eq!(
-        get("stereo"),
-        Some(vaco_demux_flv::AmfValue::Boolean(true))
-    );
+    assert_eq!(get("stereo"), Some(vaco_demux_flv::AmfValue::Boolean(true)));
     assert_eq!(number("audiocodecid"), 10.0); // AAC
     assert_eq!(number("filesize"), bytes.len() as f64);
     // A missing `bit_rate` must not fabricate a datarate — the field should

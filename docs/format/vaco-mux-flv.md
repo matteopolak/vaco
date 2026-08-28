@@ -89,11 +89,40 @@ rather than guessed at.
 - **Not exercised**: Enhanced RTMP video/audio muxing (`HEVC`/`AV1`/`VP9`/
   `Opus`/`FLAC` framing is implemented per the spec but has no integration
   test decoding it back), the seekable-sink `filesize`/`duration` patch path
-  end to end against a real reader, PCM/MP3 audio. No fuzz target exists yet
-  for this crate — `write_packet` takes an arbitrary payload but does no
-  byte-level parsing of it (unlike `vaco-mux-avi`/`vaco-mux-mpegts`'s
-  length-prefix-to-Annex-B conversion), so D6's "parses untrusted input"
-  trigger has not fired for it so far.
+  end to end against a real reader, PCM/MP3 audio, and the Enhanced RTMP
+  end-of-sequence tag (see below — only the legacy AVC case was measured).
+  No fuzz target exists yet for this crate — `write_packet` takes an
+  arbitrary payload but does no byte-level parsing of it (unlike
+  `vaco-mux-avi`/`vaco-mux-mpegts`'s length-prefix-to-Annex-B conversion),
+  so D6's "parses untrusted input" trigger has not fired for it so far.
+- Verified directly against `ffmpeg 8.1 -c copy -f flv`: the output is the
+  same size as the reference's, byte-identical in `onMetaData`'s forwarded
+  keys and the end-of-sequence tag, and the decoded video and audio both
+  match the reference's own FLV output exactly (audio does not match the
+  *source* — an inherent FLV/AAC limitation present in the reference too,
+  since FLV has no edit-list mechanism to trim encoder priming samples).
+
+### Container-level tags reach `onMetaData` too
+
+`major_brand`/`minor_version`/`compatible_brands` (typically MP4's `ftyp`
+fields) now appear in `onMetaData`, right before `filesize`, as AMF0
+*strings* — `minor_version` included, despite being numeric in the source.
+`Muxer::set_metadata` stores whatever `MuxMetadata::tags` it is given in
+`container_tags`; `write_metadata_tag` forwards the specific keys it knows
+`onMetaData` wants. This was a channel problem, not an FLV-specific gap:
+`-map_metadata`'s default already copies these into `MuxMetadata::tags`
+upstream of this crate (`vaco-demux-mp4::meta::file_type_tags`), but nothing
+here ever read them until `set_metadata` was implemented.
+
+### The stream ends with an AVC end-of-sequence tag
+
+`write_trailer` now appends a 5-byte video tag (`17 02 00 00 00`: keyframe,
+codec `7`/AVC, `AVCPacketType = 2` — end of sequence) at the same timestamp
+as the last real video tag, for a `Framing::LegacyVideoAvc` stream. Without
+it, a reader that trusts the terminator to know the sequence is complete
+sees a truncated file. Enhanced RTMP's analogous `PacketTypeSequenceEnd` for
+HEVC/AV1/VP9 video is not implemented — unverified against the reference,
+since no such fixture was available to measure.
 
 ### A packet with no PTS is refused
 
