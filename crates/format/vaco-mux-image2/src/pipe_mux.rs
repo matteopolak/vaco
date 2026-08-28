@@ -65,10 +65,9 @@ impl Muxer for Image2SinkMuxer {
 }
 
 /// The real per-file writer, reached through the registry once
-/// [`Muxer::bind_url`] supplies the pattern (gap 2, `planning/INTERFACE-GAPS.md`).
-/// Wraps [`Image2MuxWriter`], which already does the real, correct
-/// per-frame filesystem work — it was simply unreachable from the registry
-/// path before `bind_url` existed.
+/// [`Muxer::bind_url`] supplies the pattern. Wraps [`Image2MuxWriter`],
+/// which already does the real, correct per-frame filesystem work — it was
+/// simply unreachable from the registry path before `bind_url` existed.
 #[derive(Debug)]
 struct PatternWriterMuxer {
     writer: Image2MuxWriter,
@@ -108,9 +107,9 @@ impl Muxer for PatternWriterMuxer {
 /// Starts as [`Image2SinkMuxer`], because that is all [`MuxerDesc::open`]'s
 /// frozen signature can construct against one already-open sink, and
 /// becomes the real [`PatternWriterMuxer`] the moment a caller supplies the
-/// destination pattern through [`Muxer::bind_url`] — #649's write-side
-/// symptom (a file literally named `out_%03d.png`) was this seam having no
-/// way to reach [`Image2MuxWriter`] at all.
+/// destination pattern through [`Muxer::bind_url`] — a file literally named
+/// `out_%03d.png` was the symptom of this seam having no way to reach
+/// [`Image2MuxWriter`] at all.
 #[derive(Debug)]
 enum RegistryMuxer {
     Sink(Image2SinkMuxer),
@@ -246,11 +245,11 @@ mod tests {
         assert_eq!(m.flags(), FormatFlags::NEEDNUMBER);
     }
 
-    /// Gap 2/#649: the registry's frozen `open` can only ever produce the
-    /// degenerate one-sink shape, but `Muxer::bind_url` — called with the
-    /// real destination pattern right after `open`, exactly as
-    /// `vaco-cli`'s `open_output` now does for a `NEEDNUMBER` muxer —
-    /// rebinds to the real per-file writer.
+    /// The registry's frozen `open` can only ever produce the degenerate
+    /// one-sink shape, but `Muxer::bind_url` — called with the real
+    /// destination pattern right after `open`, exactly as `vaco-cli`'s
+    /// `open_output` now does for a `NEEDNUMBER` muxer — rebinds to the
+    /// real per-file writer.
     #[test]
     fn open_then_bind_url_writes_one_real_file_per_frame() {
         let dir =

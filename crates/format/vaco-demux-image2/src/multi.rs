@@ -382,11 +382,10 @@ impl Demuxer for SingleSourceDemuxer {
 /// Starts as [`SingleSourceDemuxer`], because that is all
 /// [`DemuxerDesc::open`]'s frozen signature can construct from one
 /// already-open source. Becomes the real [`Image2Demuxer`] the moment a
-/// caller supplies the pattern's URL through [`Demuxer::bind_url`] (gap 7,
-/// `planning/INTERFACE-GAPS.md`) — [`Image2Demuxer::open_pattern`] already
-/// resolves `img_%03d.png`-style patterns against the filesystem correctly;
-/// it was simply unreachable from the registry path before this method
-/// existed, which is exactly #649's read-side symptom.
+/// caller supplies the pattern's URL through [`Demuxer::bind_url`] —
+/// [`Image2Demuxer::open_pattern`] already resolves `img_%03d.png`-style
+/// patterns against the filesystem correctly; it was simply unreachable
+/// from the registry path before this method existed.
 #[derive(Debug)]
 enum RegistryDemuxer {
     Single(SingleSourceDemuxer),
@@ -511,9 +510,9 @@ pub const DEMUXER_IMAGE2: DemuxerDesc = DemuxerDesc {
     // See the note in `pipe/mod.rs`: derived timestamps, whole-image keyframes,
     // exact frame-number seeking only. Stating the three inapplicable search
     // strategies is a decision; `empty()` is an omission that reads like one.
-    // `NEEDNUMBER` is the CLI's signal (gap 7/#649) that this descriptor's
-    // `open` cannot be reached with a literally-opened source at all — the
-    // URL is a `%d` pattern — and must instead get a placeholder plus a
+    // `NEEDNUMBER` is the CLI's signal that this descriptor's `open` cannot
+    // be reached with a literally-opened source at all — the URL is a `%d`
+    // pattern — and must instead get a placeholder plus a
     // `Demuxer::bind_url` call. See `RegistryDemuxer::bind_url` above.
     flags: FormatFlags::NOBINSEARCH
         .union(FormatFlags::NOGENSEARCH)
@@ -674,8 +673,8 @@ mod tests {
         assert!(matches!(d.read_packet(), Err(Error::Eof)));
     }
 
-    /// Gap 7/#649: a pattern reached through the registry's frozen `open`
-    /// cannot open anything real (the pattern string is not a file), but
+    /// A pattern reached through the registry's frozen `open` cannot open
+    /// anything real (the pattern string is not a file), but
     /// `Demuxer::bind_url` — called with the same URL right after `open` —
     /// rebinds to the real, already-correct multi-file resolution.
     #[test]

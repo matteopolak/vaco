@@ -433,18 +433,18 @@ pub trait Demuxer: Send {
     /// [`Box<dyn MediaSource>`] `open` received — a filename *pattern* that
     /// expands to many files (`image2`'s `img_%03d.png`), or a sidecar file
     /// whose name is a convention relative to this one (`VobSub`'s `.sub` next
-    /// to its `.idx`) (gap 7, `planning/INTERFACE-GAPS.md`).
+    /// to its `.idx`).
     ///
     /// **Why this exists instead of a parameter on [`DemuxerDesc::open`], or
-    /// a second [`MediaSource`] the caller opens itself.** Same root cause as
-    /// gap 4: `open` is a bare `fn` pointer ~90 registered demuxers already
-    /// implement at a fixed `(Box<dyn MediaSource>, &dyn ParserProvider)`
-    /// signature, so widening it would touch every one of them. A
-    /// caller-opened second source does not fit either: there is no
-    /// `MediaSource::path()`, so nothing downstream of the protocol layer can
-    /// name a sidecar or a pattern's other members without the URL string
-    /// itself — which the caller already holds, since it is what resolved to
-    /// this demuxer in the first place.
+    /// a second [`MediaSource`] the caller opens itself.** `open` is a bare
+    /// `fn` pointer roughly 90 registered demuxers already implement at a
+    /// fixed `(Box<dyn MediaSource>, &dyn ParserProvider)` signature, so
+    /// widening it would touch every one of them. A caller-opened second
+    /// source does not fit either: there is no `MediaSource::path()`, so
+    /// nothing downstream of the protocol layer can name a sidecar or a
+    /// pattern's other members without the URL string itself — which the
+    /// caller already holds, since it is what resolved to this demuxer in
+    /// the first place.
     ///
     /// A caller may call this once, immediately after `open` returns and
     /// before reading anything, so a demuxer that needs more than the source
@@ -512,9 +512,9 @@ impl<D: Demuxer + ?Sized> Demuxer for Box<D> {
         (**self).reconfigure(limits, opts)
     }
     // Forwarded explicitly, not inherited from the default — same trap as
-    // `impl Muxer for Box<M>`'s `add_stream_with` (gap 9): the default would
-    // call nothing on the boxed value and always answer `Unsupported`,
-    // silently hiding whatever the concrete type underneath overrides.
+    // `impl Muxer for Box<M>`'s `add_stream_with`: the default would call
+    // nothing on the boxed value and always answer `Unsupported`, silently
+    // hiding whatever the concrete type underneath overrides.
     fn bind_url(&mut self, url: &str) -> Result<()> {
         (**self).bind_url(url)
     }
@@ -821,13 +821,12 @@ pub trait Muxer: Send {
     /// — one file per frame (`image2`), one file per segment
     /// (`segment`/`stream_segment`, the HLS/DASH family), the boundaries
     /// `webm_chunk`'s own `chunk_boundaries()` accessor currently works
-    /// around (gap 2, `planning/INTERFACE-GAPS.md`).
+    /// around.
     ///
     /// **Why this exists instead of a parameter on [`MuxerDesc::open`].**
-    /// Same root cause as gap 5: `open` is a bare `fn` pointer ~90
-    /// registered muxers already implement at a fixed `Box<dyn MediaSink>`
-    /// signature, so widening it would touch every one of them for the four
-    /// muxers that need this.
+    /// `open` is a bare `fn` pointer roughly 90 registered muxers already
+    /// implement at a fixed `Box<dyn MediaSink>` signature, so widening it
+    /// would touch every one of them for the handful that need this.
     ///
     /// A caller may call this once, immediately after `open` returns and
     /// before [`Muxer::add_stream`]/[`Muxer::write_header`], so a muxer
@@ -923,7 +922,7 @@ impl<M: Muxer + ?Sized> Muxer for Box<M> {
         (**self).set_option(name, value)
     }
     // Forwarded explicitly, not inherited from the default — same trap as
-    // `add_stream_with` above (gap 9): the default would always answer
+    // `add_stream_with` above: the default would always answer
     // `Unsupported` on the box, hiding whatever the concrete type
     // underneath overrides.
     fn bind_url(&mut self, url: &str) -> Result<()> {
@@ -1263,9 +1262,9 @@ mod tests {
 
     #[test]
     fn muxer_bind_url_override_is_reachable_through_a_box() {
-        // The `impl Muxer for Box<M>` trap gap 9 already found: forwarding
-        // must be explicit, or a boxed muxer silently takes the default and
-        // `bind_url` never reaches the concrete type underneath.
+        // Forwarding must be explicit on `impl Muxer for Box<M>`, or a
+        // boxed muxer silently takes the default and `bind_url` never
+        // reaches the concrete type underneath.
         let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
         let mut boxed: Box<dyn Muxer> = Box::new(RebindingMuxer(seen.clone()));
         boxed.bind_url("out_%03d.png").unwrap();
