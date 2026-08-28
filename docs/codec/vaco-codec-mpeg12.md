@@ -644,17 +644,43 @@ true; what follows is what changed.
   Post-fix: `m1_i`/`m1_ip`/`m1_ipb` all measure max MAD 2, the identical
   ceiling every MPEG-2 fixture already sits at.
 
-**Both formats now carry the same evidence #356 closed on.** This
-document does not close #355 on that basis — closing an issue is a
-judgement call for whoever is tracking it against the fuller epic
-picture (as #356's own closure was, a dedicated round on its own), not
-something to declare unilaterally in the same commit as the fix. What
-this section records is that the specific, named reason #355 stayed open
-through every prior round — an unexplained, uncharacterized MPEG-1-only
-defect an order of magnitude larger than the IDCT ceiling — no longer
-holds. Epic #36 does not close on this pair either way — #357 (MPEG-1/2
-encode) is a real, untouched gap, not a ceiling, and nothing about this
-fix touches it.
+**Both formats now carry the same evidence #356 closed on** — but a
+final round judged #355 directly against its own stated scope rather
+than accepting that this settles it, and **#355 stays open, for a
+different and narrower reason than any prior round gave.** The pixel-
+accuracy question this whole investigation chased is resolved: frame-
+picture decode, every chroma format, every extension #356 covers, all
+sit on the same measured, permanent IDCT ceiling. But #355's own title
+— "sequence/GOP/picture headers and extensions, MB layer over D-22,
+**field and frame pictures, pulldown flags**" — names two things this
+crate does not implement at all, checked directly in the source rather
+than assumed from the ceiling closing everything else:
+
+- **Field pictures** (`picture_structure != "Frame picture"`,
+  `pce.is_frame_picture()` false): `decoder.rs::begin_picture` marks
+  these `unsupported`, fills a flat mid-grey placeholder, and flags the
+  frame `CORRUPT` (`Mpeg12Decoder::unsupported_pictures` counts them) —
+  see "explicitly unimplemented decode paths" in `TECH-DEBT.md`. This is
+  a missing decode path, not a precision question the IDCT ceiling could
+  ever cover; no amount of rounding-schedule correctness touches a
+  picture type this crate never attempts to reconstruct.
+- **Pulldown flags**: `picture_coding_extension()` reads
+  `repeat_first_field` and discards it immediately
+  (`let _repeat_first_field = r.get(1);` — never stored on
+  `PictureCodingExtension` at all); `top_field_first` is stored but never
+  propagated to the output `Frame` (`FrameFlags::TOP_FIELD_FIRST` is
+  never set — see that struct's own doc comment). Parsed for correct
+  bitstream framing, not consumed for anything a caller could observe.
+
+Both are real, checkable, and unaddressed by anything this session's
+IDCT/escape-sentinel work touched — a close on "the numbers moved" would
+be weaker evidence than #356's own closure, which covered its named
+scope completely rather than partially. #355 stays open specifically and
+only for field-picture decode and pulldown-flag propagation; every other
+part of its stated scope (headers/extensions, the MB layer, frame-picture
+reconstruction accuracy) is settled. Epic #36 does not close on this pair
+either way — #357 (MPEG-1/2 encode) is a real, untouched gap, not a
+ceiling, and nothing about this fix or this judgement touches it.
 
 ## How to change it
 
