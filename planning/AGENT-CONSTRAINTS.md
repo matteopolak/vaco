@@ -827,3 +827,37 @@ What the gate cannot check, and matters more:
 Where a genuinely surprising fact has to be recorded — a specification clause
 the code would otherwise look wrong against, a measured reference behaviour that
 contradicts the obvious reading — keep it, and keep it to a sentence or two.
+
+## The primary specifications are reachable — fetch them
+
+An agent implementing AC-3 reported that the dominant source of decode error
+was a set of bit-allocation constants it "could not verify against the primary
+ATSC text (no network access)". The network is reachable from this tree, and
+that document is free:
+
+```sh
+curl -sSL -o /tmp/a52.pdf https://www.atsc.org/wp-content/uploads/2015/03/A52-201212-17.pdf
+# 200, application/pdf, 1.77 MB
+```
+
+ITU-T, AOMedia, IETF, W3C and ATSC all publish freely, and `provenance/sources.toml`
+already records a `where` URL for every source precisely because fetching them is
+the expected workflow. **Before recording "could not verify against the
+specification", try.**
+
+This matters more than one codec. D7's clean-room rule says the specification is
+the right input and the reference implementation's source is not; an agent that
+cannot reach the specification is left with black-box probing alone, which is
+enough for interfaces and framing and not enough for a masking curve or a
+quantisation table. A whole class of "measured but unverified" outcomes is
+avoidable.
+
+Two things that stay true when you do fetch one:
+
+- **Register it in `provenance/sources.toml`** with the `where` URL and the date,
+  in the same commit as the first code citing it, and cite it as
+  `Vaco-Spec-Ref: <id> <what you took from it>`.
+- **Do not paste specification text into the tree.** Constants and structure
+  implemented from a document are exactly what D7 asks for; transcribed prose is
+  not, and neither is a table copied wholesale where the specification's own
+  licence does not allow it. Cite the clause, write the code.
