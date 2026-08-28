@@ -310,7 +310,7 @@ pub struct AiffMuxer {
     out: IoWriter,
     stream: Option<MuxStream>,
     header_written: bool,
-    frames_written: u64,
+    data_bytes: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -318,8 +318,26 @@ struct MuxStream {
     sample_rate: u32,
     channels: u16,
     sample_size: u16,
+    /// The AIFF-C `compressionType`, or `None` for a plain `AIFF`.
+    ///
+    /// Measured across twelve `-c:a` values. Plain `AIFF` with an 18-byte
+    /// `COMM` is written **only** for big-endian signed integer PCM —
+    /// `pcm_s8`, `pcm_s16be`, `pcm_s24be`, `pcm_s32be`. Everything else gets
+    /// `AIFC`, an `FVER` chunk and a 24-byte `COMM`:
+    ///
+    /// ```text
+    /// pcm_u8 -> raw     pcm_s16le -> sowt   pcm_alaw -> alaw
+    /// pcm_mulaw -> ulaw pcm_f32be -> fl32   pcm_f64be -> fl64
+    /// ```
+    ///
+    /// `pcm_s24le` and `pcm_s32le` the reference refuses outright, and so do
+    /// we: `sowt` is defined for 16-bit only.
+    compression: Option<[u8; 4]>,
     bytes_per_frame: u32,
 }
+
+/// The `FVER` chunk's `timestamp`: AIFF-C version 1, 1991-05-23.
+const AIFC_VERSION_1: u32 = 0xA280_5140;
 
 impl AiffMuxer {
     /// # Errors
@@ -329,9 +347,17 @@ impl AiffMuxer {
             out: IoWriter::new(sink, &IoOptions::default())?,
             stream: None,
             header_written: false,
-            frames_written: 0,
+            data_bytes: 0,
         })
     }
+}
+
+/// `COMM`'s payload length: 18 for a plain `AIFF`, 24 for `AIFF-C` — the
+/// extra four bytes of `compressionType` and a two-byte empty
+/// `compressionName`. `COMM`'s length alone is what tells a reader which case
+/// it is looking at, which is why it is derived here rather than written twice.
+const fn comm_size(compression: Option<[u8; 4]>) -> u32 {
+    if compression.is_some() { 24 } else { 18 }
 }
 
 impl Muxer for AiffMuxer {
@@ -346,18 +372,45 @@ impl Muxer for AiffMuxer {
         let format = audio
             .format
             .ok_or(Error::Unsupported("aiff: sample format must be known"))?;
-        if format.is_float() || format.is_planar() {
+        if format.is_planar() {
             return Err(Error::Unsupported(
-                "aiff: only big-endian integer PCM is supported for writing",
+                "aiff: planar sample formats are not supported",
             ));
         }
+        // The compression type comes from the *codec*, not from the decoded
+        // sample format, and that is the bug this replaced. `pcm_s16le` is
+        // neither float nor planar, so it passed the old guard, and its
+        // little-endian bytes were written verbatim under a plain `AIFF`
+        // header — which is big-endian by definition. The reference read our
+        // own output back as `pcm_s16be`: every sample byte-swapped, silently
+        // (CONFORMANCE-FINDINGS 43).
+        let codec = params
+            .codec_id
+            .ok_or(Error::Unsupported("aiff: the codec must be known"))?;
+        let compression = match codec {
+            CodecId::PcmS8 | CodecId::PcmS16be | CodecId::PcmS24be | CodecId::PcmS32be => None,
+            CodecId::PcmU8 => Some(*b"raw "),
+            CodecId::PcmS16le => Some(*b"sowt"),
+            CodecId::PcmAlaw => Some(*b"alaw"),
+            CodecId::PcmMulaw => Some(*b"ulaw"),
+            CodecId::PcmF32be => Some(*b"fl32"),
+            CodecId::PcmF64be => Some(*b"fl64"),
+            _ => {
+                return Err(Error::Unsupported(
+                    "aiff: this codec has no AIFF or AIFF-C mapping",
+                ));
+            }
+        };
+        let coded_bits = pcm::coded_bits(codec)
+            .ok_or(Error::Unsupported("aiff: only PCM-shaped codecs are supported"))?;
         let channels = audio.layout.as_ref().map_or(1, |l| l.channels).max(1) as u16;
-        let sample_size = format.bits_per_sample() as u16;
         self.stream = Some(MuxStream {
             sample_rate: audio.sample_rate.max(1),
             channels,
-            sample_size,
-            bytes_per_frame: u32::from(channels).saturating_mul(format.bytes_per_sample() as u32),
+            sample_size: u16::from(coded_bits),
+            compression,
+            bytes_per_frame: u32::from(channels)
+                .saturating_mul(u32::from(coded_bits.div_ceil(8))),
         });
         Ok(0)
     }
@@ -368,15 +421,29 @@ impl Muxer for AiffMuxer {
             .ok_or(Error::InvalidData("aiff: no stream added"))?;
         self.out.write(&FORM)?;
         self.out.wb32(0)?; // patched in write_trailer
-        self.out.write(&AIFF)?;
+        self.out
+            .write(if s.compression.is_some() { &AIFC } else { &AIFF })?;
+
+        if s.compression.is_some() {
+            self.out.write(b"FVER")?;
+            self.out.wb32(4)?;
+            self.out.wb32(AIFC_VERSION_1)?;
+        }
 
         self.out.write(&COMM)?;
-        self.out.wb32(18)?;
+        self.out.wb32(comm_size(s.compression))?;
         self.out.wb16(s.channels)?;
         self.out.wb32(0)?; // numSampleFrames, patched in write_trailer
         self.out.wb16(s.sample_size)?;
         self.out
             .write(&extended80::from_f64(f64::from(s.sample_rate)))?;
+        if let Some(tag) = s.compression {
+            self.out.write(&tag)?;
+            // `compressionName`, a pstring: length 0, then one pad byte to an
+            // even total. Measured — the reference writes `00 00`, not a
+            // spelled-out name.
+            self.out.wb16(0)?;
+        }
 
         self.out.write(&SSND)?;
         self.out.wb32(0)?; // patched in write_trailer
@@ -391,12 +458,15 @@ impl Muxer for AiffMuxer {
             return Err(Error::InvalidData("aiff: packet written before the header"));
         }
         self.out.write(packet.payload())?;
-        if let Some(s) = self.stream {
-            self.frames_written = self.frames_written.saturating_add(pcm::frames_in(
-                packet.payload().len() as u64,
-                s.bytes_per_frame,
-            ));
-        }
+        // Bytes, then one division at the end — not a per-packet frame count.
+        // `frames_in` floors, so counting per packet loses up to
+        // `bytes_per_frame - 1` bytes *every packet* whenever a packet is not
+        // a whole number of frames. A 24-bit stream lost nine bytes across the
+        // file and declared an `SSND` three frames short of what it had
+        // actually written (CONFORMANCE-FINDINGS 43).
+        self.data_bytes = self
+            .data_bytes
+            .saturating_add(packet.payload().len() as u64);
         Ok(())
     }
 
@@ -420,27 +490,31 @@ impl Muxer for AiffMuxer {
         if !self.out.is_seekable() {
             return self.out.flush();
         }
-        let data_bytes = self
-            .frames_written
-            .saturating_mul(u64::from(s.bytes_per_frame.max(1)));
+        let data_bytes = self.data_bytes;
+        let frames = pcm::frames_in(data_bytes, s.bytes_per_frame.max(1));
         let end = self.out.pos();
 
-        // FORM size: everything after the FORM id+size fields.
-        let form_size = 4 + (8 + 18) + (8 + 8 + data_bytes);
+        // FORM size: everything after the FORM id+size fields. AIFF-C adds an
+        // `FVER` chunk (8 + 4) and six bytes of `COMM`.
+        let fver = if s.compression.is_some() { 8 + 4 } else { 0 };
+        let comm = u64::from(comm_size(s.compression));
+        let form_size = 4 + fver + (8 + comm) + (8 + 8 + data_bytes);
         self.out.seek(4)?;
         self.out
             .wb32(u32::try_from(form_size).unwrap_or(u32::MAX))?;
 
-        // COMM.numSampleFrames: FORM header(12) + COMM tag+size(8) +
-        // channels(2) lands right at it.
-        self.out.seek(4 + 4 + 4 + (4 + 4) + 2)?;
+        // COMM.numSampleFrames: FORM header(12) + FVER, when present +
+        // COMM tag+size(8) + channels(2) lands right at it.
+        self.out.seek(12 + fver + (4 + 4) + 2)?;
         self.out
-            .wb32(u32::try_from(self.frames_written).unwrap_or(u32::MAX))?;
+            .wb32(u32::try_from(frames).unwrap_or(u32::MAX))?;
 
-        // SSND size (8 header fields + data): FORM header(12) + COMM
-        // tag+size+payload(4+4+18) + SSND tag(4) lands right at SSND's own
-        // size field.
-        let ssnd_size_pos = 4 + 4 + 4 + (4 + 4 + 18) + 4;
+        // SSND size (8 header fields + data): FORM header(12) + FVER when
+        // present + COMM tag+size+payload + SSND tag(4) lands right at SSND's
+        // own size field. Both offsets move with the form type, which is the
+        // trap: inserting a chunk without updating them patches the *wrong*
+        // field with a plausible-looking length.
+        let ssnd_size_pos = 12 + fver + (4 + 4 + comm) + 4;
         self.out.seek(ssnd_size_pos)?;
         self.out
             .wb32(u32::try_from(8 + data_bytes).unwrap_or(u32::MAX))?;

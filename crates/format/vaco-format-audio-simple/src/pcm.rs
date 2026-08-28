@@ -197,6 +197,48 @@ pub const fn sample_fmt_of(codec_id: CodecId) -> Option<(SampleFmt, Option<u8>)>
     }
 }
 
+/// Bits actually **stored** per sample, which is not always the decoded
+/// format's width.
+///
+/// A-law and µ-law store eight and decode to `s16`; 24-bit PCM stores 24 and
+/// decodes to `s32`. A muxer writing a container header needs the stored
+/// width, and [`sample_fmt_of`] deliberately answers the other question.
+#[must_use]
+pub const fn coded_bits(codec_id: CodecId) -> Option<u8> {
+    match codec_id {
+        CodecId::PcmU8 | CodecId::PcmS8 | CodecId::PcmAlaw | CodecId::PcmMulaw => Some(8),
+        CodecId::PcmS16le | CodecId::PcmS16be => Some(16),
+        CodecId::PcmS24le | CodecId::PcmS24be => Some(24),
+        CodecId::PcmS32le | CodecId::PcmS32be | CodecId::PcmF32le | CodecId::PcmF32be => Some(32),
+        CodecId::PcmF64le | CodecId::PcmF64be => Some(64),
+        _ => None,
+    }
+}
+
+/// Whether a PCM-shaped codec stores its samples little-endian.
+///
+/// `Some(false)` is big-endian; `None` means endianness does not apply — one
+/// byte per sample, so there is no order to state. Containers that carry a
+/// byte-order flag need the distinction, and a container that assumes
+/// big-endian silently corrupts a little-endian copy.
+#[must_use]
+pub const fn is_little_endian(codec_id: CodecId) -> Option<bool> {
+    match codec_id {
+        CodecId::PcmS16le
+        | CodecId::PcmS24le
+        | CodecId::PcmS32le
+        | CodecId::PcmF32le
+        | CodecId::PcmF64le => Some(true),
+        CodecId::PcmS16be
+        | CodecId::PcmS24be
+        | CodecId::PcmS32be
+        | CodecId::PcmF32be
+        | CodecId::PcmF64be => Some(false),
+        CodecId::PcmU8 | CodecId::PcmS8 | CodecId::PcmAlaw | CodecId::PcmMulaw => None,
+        _ => None,
+    }
+}
+
 /// Build [`CodecParameters`] for one PCM (or PCM-shaped, e.g. A-law/µ-law)
 /// stream.
 ///

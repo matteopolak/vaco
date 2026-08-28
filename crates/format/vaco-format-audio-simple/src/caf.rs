@@ -278,7 +278,15 @@ struct MuxStream {
     sample_rate: u32,
     channels: u32,
     bits_per_channel: u32,
-    is_float: bool,
+    /// `mFormatID`: `lpcm` for linear PCM, `alaw`/`ulaw` for the companded
+    /// pair. Writing `lpcm` for A-law data mislabels one byte per sample as
+    /// two and corrupts the stream.
+    format_id: [u8; 4],
+    /// `mFormatFlags`, bit 0 `kCAFLinearPCMFormatFlagIsFloat` and bit 1
+    /// `kCAFLinearPCMFormatFlagIsLittleEndian`. Measured across nine codecs:
+    /// `pcm_s16be` 0, `pcm_s16le` 2, `pcm_f32be` 1, `pcm_f32le` 3,
+    /// `alaw`/`ulaw` 0.
+    format_flags: u32,
     bytes_per_frame: u32,
 }
 
@@ -312,13 +320,47 @@ impl Muxer for CafMuxer {
                 "caf: planar sample formats are not supported",
             ));
         }
+        // Everything below comes from the *codec*, not from the decoded sample
+        // format, and that distinction is the bug this replaced. `mFormatFlags`
+        // was written as `u32::from(format.is_float())`, so the little-endian
+        // bit was never set and `-c copy` of a `pcm_s16le` stream produced a
+        // file every reader takes as big-endian: byte-swapped audio, no error.
+        // The A-law path was worse — `lpcm` with two bytes per frame over
+        // one-byte-per-sample data (CONFORMANCE-FINDINGS 43).
+        let codec = params
+            .codec_id
+            .ok_or(Error::Unsupported("caf: the codec must be known"))?;
+        let coded_bits = pcm::coded_bits(codec)
+            .ok_or(Error::Unsupported("caf: only PCM-shaped codecs are supported"))?;
+        let (format_id, format_flags) = match codec {
+            vaco_codec_core::CodecId::PcmAlaw => (*b"alaw", 0),
+            vaco_codec_core::CodecId::PcmMulaw => (*b"ulaw", 0),
+            // CAF's `lpcm` flags say float-or-not and endian-or-not, and
+            // nothing about signedness — so there is no way to state unsigned
+            // 8-bit, and writing it as signed silently offsets every sample by
+            // 128. The reference refuses `pcm_u8` for CAF outright; so do we,
+            // rather than write a file whose audio is wrong.
+            vaco_codec_core::CodecId::PcmU8 => {
+                return Err(Error::Unsupported(
+                    "caf: unsigned 8-bit PCM has no representation in a CAF                      `lpcm` description",
+                ));
+            }
+            _ => {
+                let little_endian = pcm::is_little_endian(codec).unwrap_or(false);
+                (
+                    *b"lpcm",
+                    u32::from(format.is_float()) | (u32::from(little_endian) << 1),
+                )
+            }
+        };
         let channels = audio.layout.as_ref().map_or(1, |l| l.channels).max(1);
         self.stream = Some(MuxStream {
             sample_rate: audio.sample_rate.max(1),
             channels,
-            bits_per_channel: format.bits_per_sample(),
-            is_float: format.is_float(),
-            bytes_per_frame: channels.saturating_mul(format.bytes_per_sample() as u32),
+            bits_per_channel: u32::from(coded_bits),
+            format_id,
+            format_flags,
+            bytes_per_frame: channels.saturating_mul(u32::from(coded_bits.div_ceil(8))),
         });
         Ok(0)
     }
@@ -334,12 +376,28 @@ impl Muxer for CafMuxer {
         self.out.write(&DESC)?;
         self.out.wb64(32)?;
         self.out.write(&f64::from(s.sample_rate).to_be_bytes())?;
-        self.out.write(&LPCM)?;
-        self.out.wb32(u32::from(s.is_float))?;
+        self.out.write(&s.format_id)?;
+        self.out.wb32(s.format_flags)?;
         self.out.wb32(s.bytes_per_frame)?;
         self.out.wb32(1)?; // mFramesPerPacket
         self.out.wb32(s.channels)?;
         self.out.wb32(s.bits_per_channel)?;
+
+        // `chan`: the reference writes one for every stream it muxes, measured
+        // across all nine codecs above. `mChannelLayoutTag` 0x640001 is
+        // `kCAFChannelLayoutTag_Mono`; 0x650002 is stereo. Anything else is
+        // described by a bitmap rather than a tag, which this muxer does not
+        // build, so it falls back to `UseChannelDescriptions` with none —
+        // the layout the reference itself writes when it has nothing better.
+        self.out.write(b"chan")?;
+        self.out.wb64(12)?;
+        self.out.wb32(match s.channels {
+            1 => 0x0064_0001,
+            2 => 0x0065_0002,
+            _ => 0,
+        })?;
+        self.out.wb32(0)?; // mChannelBitmap
+        self.out.wb32(0)?; // mNumberChannelDescriptions
 
         self.out.write(&DATA)?;
         self.out.wb64((-1i64).cast_unsigned())?; // unknown length; patched if seekable
@@ -380,8 +438,15 @@ impl Muxer for CafMuxer {
         }
         let end = self.out.pos();
         // DATA chunk size field: CAFF header(8) + desc tag+size+payload
-        // (4+8+32) + DATA tag(4) lands right at it.
-        self.out.seek(8 + (4 + 8 + 32) + 4)?;
+        // (4+8+32) + chan tag+size+payload (4+8+12) + DATA tag(4) lands right
+        // at it.
+        //
+        // Recorded because it is the trap this arithmetic sets: inserting the
+        // `chan` chunk moved this offset, and the seek then patched *chan's*
+        // size field with the data length. The file was still exactly the
+        // right length and the header still looked plausible — only the
+        // chunk walk gave it away.
+        self.out.seek(8 + (4 + 8 + 32) + (4 + 8 + 12) + 4)?;
         self.out.wb64(self.data_bytes + 4)?;
         self.out.seek(end)?;
         self.out.flush()

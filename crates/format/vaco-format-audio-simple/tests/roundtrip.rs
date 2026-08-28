@@ -17,7 +17,7 @@
 //! format's real header writer against its own real header reader.
 
 use vaco_chlayout::ChannelLayout;
-use vaco_codec_core::CodecParameters;
+use vaco_codec_core::{CodecId, CodecParameters};
 use vaco_format_core::vacoraw::MemorySink;
 use vaco_format_core::{Demuxer, Muxer};
 use vaco_io::MemorySource;
@@ -29,6 +29,21 @@ const SAMPLE_RATE: u32 = 8000;
 
 fn audio_params(format: SampleFmt, channels: u32) -> CodecParameters {
     let mut p = CodecParameters::audio();
+    // The codec, not only the decoded sample format. These muxers need it:
+    // `pcm_s24le` decodes to `s32`, and A-law decodes to `s16` while storing
+    // one byte per sample, so a header written from the sample format alone
+    // mislabels the width and corrupts the stream. `add_stream` now says so
+    // rather than guessing, which is what these fixtures were exercising
+    // before — every one of them passed while the muxers were writing files
+    // the reference could not read back.
+    p.codec_id = Some(match format {
+        SampleFmt::U8 => CodecId::PcmU8,
+        SampleFmt::S16 => CodecId::PcmS16le,
+        SampleFmt::S32 => CodecId::PcmS32le,
+        SampleFmt::F32 => CodecId::PcmF32le,
+        SampleFmt::F64 => CodecId::PcmF64le,
+        _ => CodecId::PcmS16le,
+    });
     if let Some(a) = p.audio.as_mut() {
         a.sample_rate = SAMPLE_RATE;
         a.format = Some(format);

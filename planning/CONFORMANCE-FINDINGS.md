@@ -2318,3 +2318,72 @@ doubles as the family test the dead condition was reaching for.
 `aiff`, `au`, `caf` and `sox` were already right — they go through a different
 path. Only the two RIFF-shaped readers shared the bug, and they shared it
 because one was written from the other.
+
+## 43. Four simple-audio muxers wrote files whose audio was wrong
+
+Following finding 42, `-c copy` from a WAV source into `wav`/`w64`/`caf`/`aiff`
+worked — and produced files whose decoded audio did not match the input. Not a
+byte-identity gap: **corrupt output, no error, and every unit test green.**
+
+Decoded MD5 of our own output against the source, before:
+
+```text
+codec       wav      w64      caf      aiff
+pcm_u8      ok       ok       CORRUPT  ok
+pcm_s16le   ok       ok       CORRUPT  CORRUPT
+pcm_s24le   CORRUPT  CORRUPT  ok       —
+pcm_alaw    CORRUPT  CORRUPT  CORRUPT  —
+pcm_mulaw   CORRUPT  CORRUPT  CORRUPT  —
+```
+
+and after: every cell either `ok` or a refusal the reference also makes.
+
+### One mistake, four times
+
+Each muxer built its container header from the **decoded sample format**
+instead of from the codec. Those differ in exactly the ways `pcm.rs`'s own
+measured table has always said they do:
+
+- `pcm_s24le` decodes to `s32`, so `format.bits_per_sample()` answers 32. The
+  WAV and W64 headers claimed 32-bit, and the reference read our output back as
+  `pcm_s32le`.
+- A-law and µ-law decode to `s16` while storing one byte per sample. WAV tagged
+  them `WAVE_FORMAT_PCM` at two bytes per sample; CAF wrote `lpcm`.
+- Endianness is not in the sample format at all. AIFF is big-endian by
+  definition and we wrote little-endian bytes under a plain `AIFF` header —
+  the reference read our own file back as `pcm_s16be`, every sample
+  byte-swapped. CAF's `mFormatFlags` was `u32::from(is_float)`, so the
+  little-endian bit was never set.
+
+The AIFF guard read `if format.is_float() || format.is_planar() { reject }`
+under a comment saying "only big-endian integer PCM is supported for writing".
+`pcm_s16le` is neither float nor planar, so it sailed through the guard that
+existed to stop it.
+
+### Two more, found on the way
+
+**AIFF's frame count was short.** `write_packet` accumulated
+`frames_in(payload_len, bytes_per_frame)` per packet, and `frames_in` floors —
+so any packet that is not a whole number of frames loses up to
+`bytes_per_frame - 1` bytes, every packet. A 24-bit file declared an `SSND`
+three frames shorter than what it had written. Counting bytes and dividing once
+at the trailer fixes it; CAF already did that.
+
+**Inserting a chunk moved a patch offset.** CAF's trailer seeks to a computed
+position to patch the `data` size. Adding the `chan` chunk shifted it, and the
+seek then wrote the data length into *`chan`'s* size field. The file was still
+exactly the right length and the header still looked plausible; only walking the
+chunks showed it.
+
+### Byte-identity, as a side effect
+
+`caf` is now byte-identical to the reference for all seven codecs tested, and
+`aiff` for all six it accepts. `wav`/`w64` are identical for `pcm_s16le` and
+`pcm_u8` and differ for the rest, because the reference writes
+`WAVE_FORMAT_EXTENSIBLE` with a 40-byte `fmt ` chunk for 24-bit and above where
+we write plain PCM with 16 — valid either way, and a separate piece of work.
+
+For `pcm_s24le`/`pcm_s32le`/`pcm_f32le` into AIFF the reference emits an
+AIFF-C `compressionType` of `01 00 00 00`, which is not a FourCC and reads as
+uninitialised memory. We refuse those instead. Reproducing the reference's
+spelling (D9) does not extend to reproducing what looks like its bug.

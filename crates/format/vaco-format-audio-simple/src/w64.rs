@@ -247,7 +247,14 @@ struct MuxStream {
     sample_rate: u32,
     channels: u16,
     bits_per_sample: u16,
-    is_float: bool,
+    /// `wFormatTag`: 1 `WAVE_FORMAT_PCM`, 3 `WAVE_FORMAT_IEEE_FLOAT`,
+    /// 6 `WAVE_FORMAT_ALAW`, 7 `WAVE_FORMAT_MULAW`.
+    ///
+    /// Derived from the codec. It used to be `if is_float { 3 } else { 1 }`,
+    /// and A-law decodes to `s16` — so A-law data went out tagged as 16-bit
+    /// linear PCM, two bytes per sample over one-byte samples, and the
+    /// reference could not read back what we wrote.
+    format_tag: u16,
     bytes_per_frame: u32,
 }
 
@@ -281,13 +288,29 @@ impl Muxer for W64Muxer {
                 "w64: planar sample formats are not supported",
             ));
         }
+        // The *coded* width, not the decoded format's. `pcm_s24le` decodes to
+        // `s32`, so `format.bits_per_sample()` answers 32 and this muxer
+        // labelled 24-bit data as `pcm_s32le` — the reference read our own
+        // output back as `pcm_s32le,32` and its MD5 did not match the source.
+        // Corrupt, not merely non-identical (CONFORMANCE-FINDINGS 43).
+        let codec = params
+            .codec_id
+            .ok_or(Error::Unsupported("w64: the codec must be known"))?;
+        let coded_bits = pcm::coded_bits(codec)
+            .ok_or(Error::Unsupported("w64: only PCM-shaped codecs are supported"))?;
         let channels = audio.layout.as_ref().map_or(1, |l| l.channels).max(1) as u16;
         self.stream = Some(MuxStream {
             sample_rate: audio.sample_rate.max(1),
             channels,
-            bits_per_sample: format.bits_per_sample() as u16,
-            is_float: format.is_float(),
-            bytes_per_frame: u32::from(channels).saturating_mul(format.bytes_per_sample() as u32),
+            bits_per_sample: u16::from(coded_bits),
+            format_tag: match codec {
+                vaco_codec_core::CodecId::PcmAlaw => 6,
+                vaco_codec_core::CodecId::PcmMulaw => 7,
+                _ if format.is_float() => 3,
+                _ => 1,
+            },
+            bytes_per_frame: u32::from(channels)
+                .saturating_mul(u32::from(coded_bits.div_ceil(8))),
         });
         Ok(0)
     }
@@ -302,7 +325,7 @@ impl Muxer for W64Muxer {
 
         self.out.write(&FMT_GUID)?;
         self.out.wl64(CHUNK_HEADER_LEN + 16)?;
-        let tag: u16 = if s.is_float { 3 } else { 1 };
+        let tag: u16 = s.format_tag;
         self.out.wl16(tag)?;
         self.out.wl16(s.channels)?;
         self.out.wl32(s.sample_rate)?;
