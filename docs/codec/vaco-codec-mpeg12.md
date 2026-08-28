@@ -333,11 +333,16 @@ Three hypotheses were tested this pass and eliminated:
   registered but wasn't acquired" pattern as `iso-14496-2` for #360), so
   this one field's exact bit semantics were only ever knowable by
   differential testing, not by reading the standard.
-- **Full-pel motion vectors** (`full_pel_forward_vector`, D.9.7) — parsed
-  but not consumed by this crate, a documented gap. Checked directly
-  against these fixtures' own picture headers: `false` throughout, so
-  this is not why P-pictures diverge here (though it remains a real gap
-  for a stream that does set it).
+- **Full-pel motion vectors** (`full_pel_forward_vector`, D.9.7) — a
+  later round measured this directly (dumped the flag from every picture
+  header in `m1_ip`/`m1_ipb`, 50 pictures total, `false` on every one) to
+  test whether it explained the P-picture residual below before touching
+  any code; it doesn't, on this corpus. Implemented anyway, as a small,
+  separate correctness item (`macroblock::form_macroblock_prediction`
+  doubles the relevant direction's motion vector before it addresses the
+  reference picture) — genuinely missing before, confirmed a byte-exact
+  no-op on all 15 fixtures this crate has ever measured, and covered only
+  by a hand-crafted unit test since no fixture exercises it.
 - **`macroblock_stuffing`** (D.9.2): MPEG-1's `"0000 0001 111"` VLC code,
   insertable any number of times before a `macroblock_address_increment`
   and required to be discarded, that MPEG-2 reserves and never emits.
@@ -400,6 +405,25 @@ completely unexplained and was not investigated further this round
 (bounded round, per instruction) — seeing #355 close requires a new
 hypothesis for that outlier specifically, not more work on mismatch
 control. See `TECH-DEBT.md` for the fuller writeup.
+
+**A follow-up round tested and killed the leading candidate for that
+outlier cheaply**, exactly the way a one-measurement test is supposed to
+work: full-pel motion vectors (D.9.7) are MPEG-1-only, affect only
+motion-compensated pictures (matching the intra-clean/P-picture-broken
+shape), and a halved vector produces large localised error — max-MAD-97
+territory. Measured before touching any code: `false` on all 50 pictures
+across `m1_ip`/`m1_ipb`. Dead on this corpus, at effectively no cost, and
+implemented anyway as a genuine (if now-confirmed-irrelevant-here)
+correctness gap. Two open threads remain, deliberately not both chased
+in the same round: the P-picture max-97 outlier itself (candidates for
+the next round: MPEG-1's own `motion_code`/`motion_r` reconstruction,
+whose modular wraparound range differs from MPEG-2's `f_code`
+derivation, or MPEG-1's half-pel interpolation rounding — not anything
+already confirmed correct, which now includes dequantisation, both VLC
+tables, mismatch control, and full-pel vectors); and `m1_i`'s own
+residual max of 9, identical across all 25 frames of that fixture, which
+looks deterministic and content-independent rather than data-dependent
+and is a second, separate question from the P-picture one.
 
 **This means T2-01a's own "framemd5-identical to reference" acceptance bar
 is not met for either format**, so no issue claiming it is closed by this
