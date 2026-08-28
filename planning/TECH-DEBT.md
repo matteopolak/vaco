@@ -1627,3 +1627,25 @@ a deliberate, understood divergence rather than a bug: a real Bink encoder
 is not expected to produce an odd-length frame, so this only matters for a
 hand-corrupted or adversarial file, and this crate's reading is the more
 defensible one when the two disagree.
+
+### `vaco-codec-core::CodecId::AdpcmAdx` is missing `CodecProperties::INTRA_ONLY`
+
+Found while probing `ffmpeg -codecs`/`-decoders` for interface gap 21's nine
+new game-codec `CodecId` variants — not part of that batch and not fixed
+here, since it is an existing row this pass had no reason to touch.
+
+`ffmpeg -hide_banner -codecs` prints `adpcm_adx`'s flags as `DEAIL.`: decode,
+encode, audio, **intra-only**, lossy, not lossless. `vaco-codec-core`'s
+existing `entry(CodecId::AdpcmAdx, "adpcm_adx", "SEGA CRI ADX ADPCM", A,
+CodecProperties::LOSSY)` (`crates/signal/vaco-codec-core/src/lib.rs`) carries
+`LOSSY` alone, missing `INTRA_ONLY` — inconsistent with `Aptx`/`AptxHd` right
+next to it in the same table, which both correctly carry
+`.union(CodecProperties::INTRA_ONLY)` for the identical `I` flag. `CodecProperties::INTRA_ONLY`
+has exactly one reader in the tree today (`vaco-cli`/`vaco-probe`'s `-codecs`
+listing columns), so the only user-visible effect is a blank column where the
+reference prints `I` for `adpcm_adx` specifically — `vaco-codec-core`'s own
+`the_codec_table_agrees_with_the_reference` test does not catch this, because
+it only diffs `name`/`long_name`, not the flag columns. A one-line fix
+(`CodecProperties::LOSSY.union(CodecProperties::INTRA_ONLY)`) for whoever
+next touches that row or is auditing the table's properties column against
+the reference's flags.

@@ -1370,7 +1370,7 @@ built to fix a case this narrow would be solving a problem `vaco-codec-subtitle-
 does not currently have evidence needs it (D19) — recorded in
 `planning/TECH-DEBT.md` instead of speculatively adding the interface surface.
 
-## 21. `vaco-codec-core`'s `CodecId` has no variants for any game-video/game-audio codec
+## 21. `vaco-codec-core`'s `CodecId` has no variants for any game-video/game-audio codec — PARTIALLY CLOSED 2026-08-28 (variants landed, wiring into `vaco-format-misc` remains)
 
 Found implementing `vaco-format-misc` (FM-59, issues #623/#624/#625): `ivf`,
 `ffmetadata`, `roq`, `flic`, `cdg`, `bink` and `smk`. Of these, `roq` (video
@@ -1427,3 +1427,52 @@ variants when someone gets to them.
 registered for any of them (`vaco_registry::decoder_for` matches on
 `CodecId`, so a codec cannot be found by identity without one, same as gap
 17 noted for subtitle bitmap codecs).
+
+### Status, 2026-08-28 — variants landed, wiring does not
+
+Nine variants added to `vaco-codec-core::CodecId`, not eight: `Roq`,
+`RoqDpcm`, `Flic`, `Cdgraphics`, `Bink`, `BinkAudioDct`, `BinkAudioRdft`,
+`Smacker`, `SmackAudio`. The proposed shape above collapsed Bink's audio
+into one `BinkAudio` variant; measured against `ffmpeg -codecs` and
+`-decoders`, the reference has no such unified name — `binkaudio_dct` and
+`binkaudio_rdft` are two entirely distinct `codec_name`s with independent
+decoder rows, so one variant could not print the right name for whichever
+algorithm a track did not use. Split into two, the same reason `AacLatm`
+is not folded into `Aac`.
+
+Every name/long-name pair verified two ways: `vaco-codec-core`'s own
+`the_codec_table_agrees_with_the_reference` test (`tests/params.rs`), which
+diffs the whole `CodecId` table against a live `ffmpeg -hide_banner
+-codecs` run, passed with these nine included; and, for `roq`/`roq_dpcm`
+specifically, a real file round-tripped through the reference's own
+`roqvideo`/`roq_dpcm` encoders and `ffprobe` (the other seven have no
+reference encoder to round-trip through, so `-codecs`/`-decoders` is the
+only measurement available — the same situation the PCM/leaf-image/RTP
+batches were already in). Flags (`CodecProperties::LOSSY`/`LOSSLESS`/
+`INTRA_ONLY`) read directly off `-codecs`' own I/L/S columns rather than
+guessed — `flic` is lossless where the other three video codecs are lossy,
+and every audio row here is intra-only where none of the video rows are.
+
+| `CodecId` | `name()` | `long_name()` | properties | needed by |
+|---|---|---|---|---|
+| `Roq` | `roq` | `id RoQ video` | LOSSY | `vaco-format-misc`'s `roq` (issue #623) |
+| `RoqDpcm` | `roq_dpcm` | `DPCM id RoQ` | LOSSY, INTRA_ONLY | `vaco-format-misc`'s `roq` (issue #623) |
+| `Flic` | `flic` | `Autodesk Animator Flic video` | LOSSLESS | `vaco-format-misc`'s `flic` (issues #623, #624) |
+| `Cdgraphics` | `cdgraphics` | `CD Graphics video` | LOSSY | `vaco-format-misc`'s `cdg` (issue #625) |
+| `Bink` | `binkvideo` | `Bink video` | LOSSY | `vaco-format-misc`'s `bink` (issues #623, #624) |
+| `BinkAudioDct` | `binkaudio_dct` | `Bink Audio (DCT)` | LOSSY, INTRA_ONLY | `vaco-format-misc`'s `bink`, when the track's audio-algorithm flag (bit 12) selects DCT |
+| `BinkAudioRdft` | `binkaudio_rdft` | `Bink Audio (RDFT)` | LOSSY, INTRA_ONLY | `vaco-format-misc`'s `bink`, when that flag selects RDFT |
+| `Smacker` | `smackvideo` | `Smacker video` | LOSSY | `vaco-format-misc`'s `smk` (issues #623, #624) |
+| `SmackAudio` | `smackaudio` | `Smacker audio` | LOSSY, INTRA_ONLY | `vaco-format-misc`'s `smk` (issues #623, #624) |
+
+**What did not land, deliberately out of this pass's scope**: nothing in
+`vaco-format-misc` was touched — it has a live owner mid-package on `bink`/
+`smk` — so every stream in that crate still reports `codec_id: None` today.
+The variants exist to be wired, not wired. Gap 21 stays open until a real
+`vaco-format-misc` stream actually sets one of these nine and `-show_streams`
+prints the reference's `codec_name` for it.
+
+Also found while probing, unrelated to this gap and not fixed here (out of
+scope — see `planning/TECH-DEBT.md`): `AdpcmAdx`'s existing table row
+(added before this pass) is missing `CodecProperties::INTRA_ONLY`, which
+`ffmpeg -codecs`' own `adpcm_adx` row (`DEAIL.`) states it should have.
