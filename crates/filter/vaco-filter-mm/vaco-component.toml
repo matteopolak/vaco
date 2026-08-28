@@ -217,3 +217,17 @@ name = "ainterleave"
 long_name = "Temporally interleave audio inputs"
 ctor = "vaco_filter_mm::interleave::audio::DESC"
 media = "audio"
+
+[[component]]
+kind = "filter"
+name = "streamselect"
+long_name = "Select video streams"
+ctor = "vaco_filter_mm::streamselect::video::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "astreamselect"
+long_name = "Select audio streams"
+ctor = "vaco_filter_mm::streamselect::audio::DESC"
+media = "audio"

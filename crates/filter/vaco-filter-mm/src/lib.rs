@@ -71,6 +71,7 @@ pub mod select;
 pub mod setpts;
 pub mod settb;
 pub mod split;
+pub mod streamselect;
 pub mod trim;
 
 pub mod registry;
