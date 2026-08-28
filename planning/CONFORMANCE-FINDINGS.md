@@ -3048,3 +3048,195 @@ Three measurements worth recording independently of the table:
 Fuzz targets: `parse_qoi`, `parse_pnm`, `parse_image_simple` (30s each,
 `exit=0`, `find fuzz/artifacts -type f` empty — see the closing report for
 exact exec counts).
+
+## 52. #647/#648/#649/#650/#651/#643: the container sweep's six leftover issues, one comparison loop
+
+Six issues the format-sweep filed but could not fix in its own pass (MP4 was
+excluded from its scope; the rest ran out of budget). All six measured
+against `ffmpeg`/`ffprobe` 8.1 with the sweep's own loop — `-c copy` into the
+target format, decode-MD5 on the result, `-show_streams`/`-show_format` diff
+— five fixed, one partly fixed with the rest identified as belonging to a
+crate outside this pass.
+
+### #647 — MP4 `hvcC` never set `nal_length_size`
+
+```text
+                          before          after
+raw hevc decode md5       Invalid data    matches source
+mpegts decode md5         PPS id error    matches source
+```
+
+`vaco-format-isom`/`vaco-demux-mp4`'s `track::codec_parameters` never read
+`hvcC`'s `lengthSizeMinusOne` (14496-15 §8.3.3.1, byte 21 low two bits, same
+relative position `avcC`'s field occupies). `vaco-mux-raw` and
+`vaco-mux-mpegts` already keyed their Annex-B conversion on this field for
+both H.264 and HEVC — the fix is one field, `track::hvcc_length_size`, parsed
+directly from the box bytes.
+
+**New divergence found, not fixed here**: `vaco-parse-hevc` deliberately never
+sets `nal_length_size` itself, because `vaco-probe` reads the same field,
+unconditionally, to decide whether to print `is_avc`/`nal_length_size` — and
+the reference never prints those for HEVC (confirmed: `ffmpeg -h
+decoder=hevc` has no such private options). Populating the field in the
+demuxer for HEVC now makes `vaco-probe` show them for HEVC where the
+reference does not. Filed as #654 (a `vaco-probe` fix: gate on
+`codec_id == H264` explicitly) rather than fixed in this pass, since
+`vaco-probe` is outside the crates this package touched.
+
+### #648 — ASF + H.264 does not survive `-c copy`
+
+Two independent bugs, both in `vaco-mux-asf`:
+
+1. No Annex-B conversion at all for length-prefixed H.264/HEVC — same bug
+   class as the sweep's own raw-muxer fix, a third container. Fixed by
+   mirroring `vaco-mux-mpegts`'s `maybe_convert`/`check_bitstream` pair
+   exactly.
+2. Even after (1), decoded video MD5 did not match: the "Presentation Time"
+   field was written from `packet.pts`, which is not monotonic with a
+   B-frame source. A real ASF reader requires monotonic Presentation Time and
+   decoded a different picture into each slot when it was not — same
+   access-unit count, different bytes throughout. Swapping to `packet.dts`
+   (monotonic by construction) fixed it.
+
+```text
+                     before        after
+decode md5 (video)   corrupt       matches source
+decode md5 (full)    corrupt       matches source
+```
+
+### #649 — image2 pattern sequences: a documented, structural gap, not fixed
+
+`vaco-demux-image2`/`vaco-mux-image2` already implement pattern/sequence
+handling completely (`Image2Demuxer::open_pattern`, `Image2MuxWriter`) — this
+is not an unimplemented feature. The gap is the registry seam:
+`DemuxerDesc::open`/`MuxerDesc::open` receive one already-opened
+`MediaSource`/`MediaSink`, with no filename to pattern-match against, so the
+CLI has no path to `open_pattern` at all — both crates' own module docs
+already say so (`docs/format/vaco-demux-image2.md`'s "the registry seam does
+not fit this format", predating this issue). `planning/INTERFACE-GAPS.md`
+gap 2 ("`Muxer` is single-sink") already tracks the write half. Reproduced
+exactly as filed:
+
+```text
+$ vaco -f image2 -i "img_%03d.png" -c copy -f image2 "out_%03d.png"
+[in#0] Error opening input: No such file or directory
+```
+
+Left open — the fix needs `vaco-io`/`vaco-format-core` (a `MediaSource::path()`
+accessor, or a CLI-level special case for the `image2` format name), neither
+of which this package's crates are.
+
+### #650 — image2 (single file): several `-show_streams` fields wrong
+
+Fixed, in both entry points (`multi::Image2Demuxer`'s literal-file path and
+every `pipe::PipeDemuxer`):
+
+```text
+                    reference        before          after
+r_frame_rate        25/1             0/0             25/1
+avg_frame_rate      25/1             0/0             25/1
+time_base           1/25             1/1000000       1/25
+field_order         unknown          progressive     unknown
+start_time          N/A              0.000000        N/A
+duration            N/A              0.040000        N/A
+bit_rate            N/A              1137200         N/A
+```
+
+Reading it as one cluster, per the issue's own framing: a still image (or a
+`_pipe` splitter's whole concatenated run — measured on three PNGs through
+`png_pipe`, which the reference *also* reports no timeline for) has no
+timeline at all, and `VideoParameters::default()`'s `FieldOrder::Progressive`
+was being read as a real answer rather than "not yet stated". `multi::
+stream_video`/`time_base_for` state `frame_rate`/`field_order` explicitly and
+compute the stream's time base from `-framerate` instead of the generic
+`TIME_BASE_Q`; packets from a still-image path carry `Timestamp::NONE`/
+`Duration::ZERO` instead of a synthetic `0`/`1 tick`, and `PipeDemuxer` lost
+its `Demuxer::duration` override entirely (the default `None` was already
+correct — the override was itself the bug, feeding a container-level
+duration `adopt_container_timings` then handed to every stream).
+
+**Not fixed, and not this crate's**: `sample_aspect_ratio`/`display_aspect_ratio`
+(reference `1:1`) and `color_range`/`color_space` (reference `pc`/`gbr`, PNG
+being RGB) come from whichever crate parses the image codec's own header —
+`vaco-demux-image2` never touches pixel content. `probe_score` differs by one
+point (`99` vs `100`) for a single-file `png_pipe` match specifically, not
+run down.
+
+### #651 — RSO over-restricted its accepted codecs, and had an unrelated byte-order bug
+
+`RsoMuxer::add_stream` refused everything but `pcm_u8`, reading
+`ffmpeg -h muxer=rso`'s *default*-codec line as an exhaustive list. Measured
+via `-c copy` from WAV (little-endian formats) and AIFF (big-endian and
+`pcm_s8`, which WAV cannot hold):
+
+```text
+accepted:  pcm_u8 pcm_s16le pcm_s24le pcm_s32le pcm_f32le pcm_f64le pcm_alaw pcm_mulaw
+refused:   pcm_s8 pcm_s16be pcm_s24be pcm_s32be   (write_header fails on the real muxer too)
+```
+
+`rso::accepts` now matches. Same pass also disambiguated the offset-2 header
+field as a **byte count**, not a sample count (1000 `pcm_s16le` samples, 2000
+bytes, reads back `2000`) — the module doc's earlier claim was only ever
+tested against `pcm_u8`, where the two coincide.
+
+**Also found, unrelated to the codec check**: the offset-0 constant field was
+written byte-swapped — `0x0100` (bytes `01 00`) instead of the reference's
+`0x0001` (bytes `00 01`) — present since the crate's original implementation
+and invisible to the existing round-trip test because the demuxer never
+validates the field on read. Full-file byte comparison against the reference
+(this issue's own verification loop) is what caught it; fixed in the same
+commit.
+
+```text
+                     before   after
+first two bytes      01 00    00 01   (matches reference)
+```
+
+**Measurement caveat, not root-caused**: `pcm_s24le` fed through a WAV source
+succeeds against the real muxer; bit-identical `pcm_s24le` fed through the
+raw `-f s24le` demuxer fails ("incorrect codec parameters?"), despite
+`ffprobe` reporting identical `codec_name`/`sample_fmt`/`bits_per_sample`/
+`channels`/`sample_rate` for both (only `codec_tag` differs, `0x0001` vs
+`0x0000`). The accepted-set table above is built entirely from the
+WAV/AIFF-sourced measurements, which agree with each other and with the
+issue's own repro; see `TECH-DEBT.md` for the discrepancy, in case a future
+re-measurement through the raw demuxer disagrees.
+
+### #643 (remainder) — Ogg `duration`/`duration_ts` needed a real last-page granule scan
+
+Three of the four items #643 reported were already fixed (bitstream serial
+no longer published as `id`; `ogg_codec` no longer leaks as a `TAG`; the
+Vorbis comment header is read, `TAG:encoder` present) — confirmed still true
+in this pass. The fourth:
+
+```text
+                reference               before        after
+duration_ts     48312 (issue's file)    N/A           44160 (this pass's fixture)
+duration        1.006500                N/A           1.001361
+```
+
+Ogg has no length field anywhere. `OggDemuxer::scan_tail_for_durations` reads
+a bounded 256 KiB window from near the end of a seekable source, finds each
+logical stream's last page by its serial number, and states
+`Stream::duration_ts` from that page's **raw** granule position —
+un-adjusted by `GranuleMapping::timestamp`'s pre-roll subtraction, which is
+for a packet's pts, not a summary duration (measured: a file whose last page
+reads granule `44160` at 44100 Hz reports `duration_ts=44160`, matching
+`44160/44100 = 1.001361 s` exactly, not the pre-roll-subtracted value).
+Per-stream, not through `Demuxer::duration()`, so a multiplexed file's
+streams keep independent answers. Does nothing on an unseekable source.
+
+**New divergence found, not fixed**: a Vorbis stream's `start_pts`/
+`start_time` report the granule mapping's negative initial cursor (measured:
+`-1024`/`-0.023220s` on a 44.1 kHz fixture) where the reference reports `0`.
+`vaco-demux-ogg` never sets `AudioParameters::initial_padding` for Vorbis the
+way it already does for Opus's `pre_skip`, which is what
+`vaco-format-core::discovery`'s existing "first_pts + initial_padding, not
+first_pts" rule (found for Opus/Matroska) would need to normalise this the
+same way — plausible fix, not attempted here, since it needs its own
+measurement to confirm Vorbis's priming is the same shape as Opus's rather
+than assumed by analogy.
+
+Verification: `cargo test -p vaco-demux-mp4 -p vaco-mux-asf -p
+vaco-demux-image2 -p vaco-format-audio-simple -p vaco-demux-ogg --locked`,
+all green; `cargo clippy` on the same five, clean.
