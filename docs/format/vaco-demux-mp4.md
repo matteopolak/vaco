@@ -453,6 +453,20 @@ reference prints. The same bound applies per `traf`, capped at `1 << 20`.
   list handed out once and never renumbered, so a mid-list insertion would
   silently invalidate every later entry. Do not add a second way to grow
   `fragments` without preserving this.
+* **`hvcC`'s `lengthSizeMinusOne` is read directly in `track.rs`, not through a
+  codec parser.** `avcC`'s equivalent field reaches `nal_length_size` via
+  `vaco-parse-h264`'s own `set_extradata`, but `vaco-parse-hevc` deliberately
+  never reports `nal_length_size` on its own `CodecParameters` — the reference
+  genuinely never prints `is_avc`/`nal_length_size` for an HEVC stream, in any
+  container, so that crate's `None` is correct for *display*. `vaco-mux-raw`
+  and `vaco-mux-mpegts` read the same field to decide whether to Annex-B-convert
+  a copied stream, though, and need the true answer regardless of what
+  `vaco-probe` shows — so `track::hvcc_length_size` parses the 22-byte
+  `HEVCDecoderConfigurationRecord` header itself (byte 21, low two bits, exactly
+  where `avcC`'s field sits in its own shorter header) and sets
+  `VideoParameters::nal_length_size` before any codec parser ever runs.
+  `CodecParameters::fill_from` only fills a field that is still `None`, so this
+  container-stated value is never overwritten.
 
 ---
 

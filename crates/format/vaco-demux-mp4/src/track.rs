@@ -98,6 +98,7 @@ pub(crate) fn codec_parameters(
         .media_type
         .or_else(|| params.codec_id.map(vaco_codec_core::CodecId::media_type));
 
+    let mut hevc_length_size = None;
     if let Some(config) = entry.config() {
         match config.flavour {
             ConfigFlavour::Esds => {
@@ -110,6 +111,10 @@ pub(crate) fn codec_parameters(
                     params.extradata = es.decoder_specific.map(<[u8]>::to_vec);
                 }
             }
+            ConfigFlavour::Hvcc => {
+                hevc_length_size = hvcc_length_size(config.data);
+                params.extradata = Some(config.data.to_vec());
+            }
             _ => params.extradata = Some(config.data.to_vec()),
         }
     }
@@ -120,6 +125,7 @@ pub(crate) fn codec_parameters(
             height: u32::from(v.height),
             coded_width: u32::from(v.width),
             coded_height: u32::from(v.height),
+            nal_length_size: hevc_length_size,
             ..VideoParameters::default()
         };
         video.sample_aspect_ratio = sample_aspect_ratio(entry, track, &v).unwrap_or(Rational::ZERO);
@@ -136,6 +142,19 @@ pub(crate) fn codec_parameters(
         });
     }
     params
+}
+
+/// The length-prefix width an `hvcC` declares, in bytes.
+///
+/// `HEVCDecoderConfigurationRecord` (ISO/IEC 14496-15 §8.3.3.1) is not a full
+/// box, so `data[0]` is `configurationVersion` directly. `lengthSizeMinusOne`
+/// is the low two bits of the 22nd byte (index 21), the same relative
+/// position `avcC`'s field occupies in its own, shorter fixed header — one
+/// past the last of six reserved-bit groups (`min_spatial_segmentation_idc`,
+/// `parallelismType`, `chromaFormat`, `bitDepthLumaMinus8`,
+/// `bitDepthChromaMinus8`, `avgFrameRate`) that all precede it.
+fn hvcc_length_size(data: &[u8]) -> Option<u8> {
+    data.get(21).map(|b| (b & 0x03) + 1)
 }
 
 /// `sample_aspect_ratio`, or `None` to leave it for the bitstream parser.
