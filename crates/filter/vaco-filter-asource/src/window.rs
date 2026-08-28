@@ -67,6 +67,23 @@ pub(crate) enum WinFunc {
     Kaiser,
 }
 
+/// The reference's second spelling for [`WinFunc::Hann`] (value `1`).
+/// `ffmpeg -h filter=hilbert` documents both `hann` and `hanning` naming
+/// the same value; `#[derive(OptEnum)]` emits exactly one name per variant
+/// (see `WinFunc`'s own `#[opt_const]` list), so a second name for the
+/// same value needs a field-level `consts` override rather than a second
+/// variant. `OptValue::parse_into` for an `OptEnum`-derived type checks an
+/// explicit field-level `consts` list first, then falls back to the type's
+/// own derived table, so `hann` still resolves there — this list only
+/// needs to carry the name the derive cannot express.
+pub(crate) const WIN_FUNC_ALIASES: &[vaco_opts::ConstDesc] = &[vaco_opts::ConstDesc {
+    name: "hanning",
+    help: "Hanning",
+    unit: "win_func",
+    value: vaco_opts::ConstValue::Int(1),
+    flags: vaco_opts::OptFlags::NONE,
+}];
+
 /// The window value at tap `n` of `n_taps`, `n in 0..n_taps`.
 ///
 /// Every implemented window is symmetric (`w(n) == w(n_taps - 1 - n)`),

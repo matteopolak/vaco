@@ -65,6 +65,7 @@ pub mod filterexec;
 pub mod manifest;
 pub mod normalise;
 pub mod refbin;
+pub mod refhelp;
 pub mod report;
 pub mod run;
 pub mod runner;

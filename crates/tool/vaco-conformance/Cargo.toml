@@ -29,6 +29,27 @@ vaco-filter-blur = { path = "../../filter/vaco-filter-blur" }
 vaco-filter-geometry = { path = "../../filter/vaco-filter-geometry" }
 vaco-filter-convolve = { path = "../../filter/vaco-filter-convolve" }
 vaco-filter-key = { path = "../../filter/vaco-filter-key" }
+vaco-filter-deinterlace = { path = "../../filter/vaco-filter-deinterlace" }
+vaco-filter-lut = { path = "../../filter/vaco-filter-lut" }
+vaco-filter-audio = { path = "../../filter/vaco-filter-audio" }
+vaco-filter-adynamics = { path = "../../filter/vaco-filter-adynamics" }
+vaco-filter-aeq = { path = "../../filter/vaco-filter-aeq" }
+vaco-filter-aanalysis = { path = "../../filter/vaco-filter-aanalysis" }
+vaco-filter-aeffects = { path = "../../filter/vaco-filter-aeffects" }
+vaco-filter-artistic = { path = "../../filter/vaco-filter-artistic" }
+vaco-filter-asource = { path = "../../filter/vaco-filter-asource" }
+vaco-filter-analysis = { path = "../../filter/vaco-filter-analysis" }
+vaco-filter-color = { path = "../../filter/vaco-filter-color" }
+vaco-filter-overlay = { path = "../../filter/vaco-filter-overlay" }
+vaco-filter-denoise = { path = "../../filter/vaco-filter-denoise" }
+vaco-filter-temporal = { path = "../../filter/vaco-filter-temporal" }
+vaco-filter-source = { path = "../../filter/vaco-filter-source" }
+vaco-filter-mm = { path = "../../filter/vaco-filter-mm" }
+vaco-filter-video-source = { path = "../../filter/vaco-filter-video-source" }
+vaco-filter-video-format = { path = "../../filter/vaco-filter-video-format" }
+vaco-filter-video-composite = { path = "../../filter/vaco-filter-video-composite" }
+vaco-filter-stack = { path = "../../filter/vaco-filter-stack" }
+vaco-filter-video-geometry = { path = "../../filter/vaco-filter-video-geometry" }
 tempfile.workspace = true
 
 [lints]

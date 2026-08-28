@@ -48,7 +48,7 @@ pub(crate) struct Opts {
     pub taps: i32,
     #[opt(name = "nb_samples", alias = "n", help = "set the number of samples per requested frame", default = 1024, range = 1..=i32::MAX, flags(filtering))]
     pub nb_samples: i32,
-    #[opt(name = "win_func", alias = "w", help = "set window function", unit = "win_func", default = WinFunc::Blackman, default_repr = "blackman", flags(filtering))]
+    #[opt(name = "win_func", alias = "w", help = "set window function", unit = "win_func", consts = window::WIN_FUNC_ALIASES, default = WinFunc::Blackman, default_repr = "blackman", flags(filtering))]
     pub win_func: WinFunc,
 }
 
@@ -184,6 +184,7 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
     clippy::float_cmp,
     reason = "the `ideal == 0.0` branch for an even offset is exact integer-multiplication-by-zero, not an accumulated float result"
 )]
+#[allow(clippy::unwrap_used, reason = "test code")]
 mod tests {
     use super::*;
 
@@ -226,5 +227,20 @@ mod tests {
             arguments: &[],
         };
         assert!(create(&req).is_ok());
+    }
+
+    /// `ffmpeg -h filter=hilbert` documents both `hann` (the derived
+    /// enum's own name for the variant) and `hanning` (a second name for
+    /// the exact same value, only reachable via the field-level `consts`
+    /// override in `Opts::win_func`'s `#[opt(...)]` attribute) parsing to
+    /// the same `win_func` value.
+    #[test]
+    fn hann_and_hanning_are_the_same_value() {
+        let opts = Opts::parse(Some("win_func=hann")).unwrap();
+        assert_eq!(opts.win_func, WinFunc::Hann);
+        let opts = Opts::parse(Some("win_func=hanning")).unwrap();
+        assert_eq!(opts.win_func, WinFunc::Hann);
+        let opts = Opts::parse(Some("w=hanning")).unwrap();
+        assert_eq!(opts.win_func, WinFunc::Hann);
     }
 }

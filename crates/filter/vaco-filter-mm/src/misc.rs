@@ -65,19 +65,18 @@
 //! # `sidedata`/`asidedata` — restricted to the side data this project models
 //!
 //! `ffmpeg -h filter=sidedata` lists 28 reference `AVFrameSideDataType`
-//! values (two of them, `S12M_TIMECOD`/`S12M_TIMECODE`, sharing one integer
-//! — the reference's own alias, not a mistake here). This project's
-//! [`vaco_frame::FrameSideDataKind`] models six kinds total, four of which
-//! have a reference-side-data counterpart in that list:
+//! values as 30 named constants (two reference pairs — `S12M_TIMECOD`/
+//! `S12M_TIMECODE` and `DETECTION_BOUNDING_BOXES`/`DETECTION_BBOXES` —
+//! each sharing one integer, the reference's own alias, not a mistake
+//! here). `type` (`SIDEDATA_TYPE_CONSTS`) parses every one of those 30
+//! names, but this project's [`vaco_frame::FrameSideDataKind`] models six
+//! kinds total, only four of which have a reference-side-data counterpart:
 //! `DISPLAYMATRIX`/`A53_CC`/`MASTERING_DISPLAY_METADATA`/
-//! `CONTENT_LIGHT_LEVEL`. `type` is implemented as a plain integer
-//! (`0..=27`, the reference's own range) rather than named constants —
-//! unlike `metadata`'s `mode`/`function`, which get the reference's bareword
-//! spellings via `#[derive(OptEnum)]`, this is a divergence accepted for
-//! time rather than a structural limit, recorded rather than hidden. A
-//! `type` outside the four mapped values always fails to `select` and is a
-//! no-op under `delete`, since this project never attaches side data of any
-//! other kind.
+//! `CONTENT_LIGHT_LEVEL` (see `mapped_kind`). A `type` outside those four
+//! parses fine (matching the reference's own `-h` output) but always fails
+//! to `select` and is a no-op under `delete`, since this project never
+//! attaches side data of any other kind — the same "name every reference
+//! constant, not just the implemented ones" precedent `fillborders` set.
 
 use std::time::Duration as StdDuration;
 
@@ -470,6 +469,61 @@ pub(crate) enum SidedataMode {
     Delete,
 }
 
+/// `ffmpeg -h filter=sidedata`'s 28 `AVFrameSideDataType` names for `type`
+/// (30 entries: two reference pairs, `S12M_TIMECOD`/`S12M_TIMECODE` and
+/// `DETECTION_BOUNDING_BOXES`/`DETECTION_BBOXES`, name the same integer —
+/// the reference's own alias, not a mistake here). `type` stays a plain
+/// `i32` (not `#[derive(OptEnum)]`) because of exactly those two aliased
+/// pairs, the same one-name-per-variant limit `il`'s `luma_mode` and
+/// `hilbert`'s `win_func` hit. Naming all 28 here, not just the four this
+/// project's `mapped_kind` actually acts on, matches `fillborders`'
+/// precedent: a `type` this project does not model still parses (and is a
+/// clean no-op under `mode=select`/`mode=delete`, per `mapped_kind`
+/// returning `None`) rather than failing to parse at all.
+const SIDEDATA_TYPE_CONSTS: &[vaco_opts::ConstDesc] = {
+    const fn c(name: &'static str, value: i64) -> vaco_opts::ConstDesc {
+        vaco_opts::ConstDesc {
+            name,
+            help: "",
+            unit: "side_data_type",
+            value: vaco_opts::ConstValue::Int(value),
+            flags: vaco_opts::OptFlags::NONE,
+        }
+    }
+    &[
+        c("PANSCAN", 0),
+        c("A53_CC", 1),
+        c("STEREO3D", 2),
+        c("MATRIXENCODING", 3),
+        c("DOWNMIX_INFO", 4),
+        c("REPLAYGAIN", 5),
+        c("DISPLAYMATRIX", 6),
+        c("AFD", 7),
+        c("MOTION_VECTORS", 8),
+        c("SKIP_SAMPLES", 9),
+        c("AUDIO_SERVICE_TYPE", 10),
+        c("MASTERING_DISPLAY_METADATA", 11),
+        c("GOP_TIMECODE", 12),
+        c("SPHERICAL", 13),
+        c("CONTENT_LIGHT_LEVEL", 14),
+        c("ICC_PROFILE", 15),
+        c("S12M_TIMECOD", 16),
+        c("S12M_TIMECODE", 16),
+        c("DYNAMIC_HDR_PLUS", 17),
+        c("REGIONS_OF_INTEREST", 18),
+        c("VIDEO_ENC_PARAMS", 19),
+        c("SEI_UNREGISTERED", 20),
+        c("FILM_GRAIN_PARAMS", 21),
+        c("DETECTION_BOUNDING_BOXES", 22),
+        c("DETECTION_BBOXES", 22),
+        c("DOVI_RPU_BUFFER", 23),
+        c("DOVI_METADATA", 24),
+        c("DYNAMIC_HDR_VIVID", 25),
+        c("AMBIENT_VIEWING_ENVIRONMENT", 26),
+        c("VIDEO_HINT", 27),
+    ]
+};
+
 #[derive(Debug, Clone, vaco_opts::Options)]
 #[options(name = "sidedata", help = "delete frame side data, or select frames based on it")]
 pub(crate) struct SidedataOpts {
@@ -482,7 +536,15 @@ pub(crate) struct SidedataOpts {
         flags(filtering)
     )]
     pub mode: SidedataMode,
-    #[opt(name = "type", help = "side data type", default = -1, range = -1..=27, flags(filtering))]
+    #[opt(
+        name = "type",
+        help = "side data type",
+        unit = "side_data_type",
+        consts = SIDEDATA_TYPE_CONSTS,
+        default = -1,
+        range = -1..=27,
+        flags(filtering)
+    )]
     pub kind: i32,
 }
 
@@ -695,6 +757,23 @@ mod tests {
         assert!((stats.total - 1.5).abs() < 1e-9);
         assert!((stats.min - 0.1).abs() < 1e-9);
         assert!((stats.max - 0.9).abs() < 1e-9);
+    }
+
+    #[test]
+    fn named_type_values_parse() {
+        for (name, expected) in [
+            ("PANSCAN", 0),
+            ("A53_CC", 1),
+            ("DISPLAYMATRIX", 6),
+            ("S12M_TIMECOD", 16),
+            ("S12M_TIMECODE", 16),
+            ("DETECTION_BOUNDING_BOXES", 22),
+            ("DETECTION_BBOXES", 22),
+            ("VIDEO_HINT", 27),
+        ] {
+            let opts = SidedataOpts::parse(Some(&format!("type={name}"))).unwrap();
+            assert_eq!(opts.kind, expected, "type={name}");
+        }
     }
 
     #[test]
