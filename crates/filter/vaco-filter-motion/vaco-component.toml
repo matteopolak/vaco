@@ -1,0 +1,18 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Two of plan 16 §4.2's `vaco-filter-motion` row's four filters
+# (`mestimate`, `minterpolate` not attempted — see `src/lib.rs`'s doc).
+
+[[component]]
+kind = "filter"
+name = "framerate"
+long_name = "Upsamples or downsamples progressive source between specified frame rates."
+ctor = "vaco_filter_motion::framerate::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "deshake"
+long_name = "Stabilize shaky video."
+ctor = "vaco_filter_motion::deshake::DESC"
+media = "video"
