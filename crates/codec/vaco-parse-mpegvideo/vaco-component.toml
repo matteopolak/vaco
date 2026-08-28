@@ -1,0 +1,33 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Three components from one crate, same shape as `vaco-parse-aac`'s
+# `aac`/`aac_latm` split: MPEG-1 video, MPEG-2 video and MPEG-4 part 2 are
+# three different `CodecId`s even though the first two share this crate's
+# `mpeg12` module and its `Mpeg12Parser` type.
+
+[[component]]
+kind      = "parser"
+name      = "mpeg1video"
+long_name = "MPEG-1 video"
+feature   = "parse-mpegvideo"
+ctor      = "vaco_parse_mpegvideo::PARSER_MPEG1"
+media     = "video"
+codec     = "mpeg1video"
+
+[[component]]
+kind      = "parser"
+name      = "mpeg2video"
+long_name = "MPEG-2 video"
+feature   = "parse-mpegvideo"
+ctor      = "vaco_parse_mpegvideo::PARSER_MPEG2"
+media     = "video"
+codec     = "mpeg2video"
+
+[[component]]
+kind      = "parser"
+name      = "mpeg4"
+long_name = "MPEG-4 part 2"
+feature   = "parse-mpegvideo"
+ctor      = "vaco_parse_mpegvideo::PARSER_MPEG4"
+media     = "video"
+codec     = "mpeg4"
