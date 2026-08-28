@@ -245,12 +245,12 @@ pub fn parse_display_header(data: &[u8]) -> Option<Vp9Header> {
 #[must_use]
 pub const fn matrix_coefficients(color_space: u8) -> MatrixCoefficients {
     match color_space {
-        1 => MatrixCoefficients::Bt470bg,    // CS_BT_601
-        2 => MatrixCoefficients::Bt709,      // CS_BT_709
-        3 => MatrixCoefficients::Smpte170m,  // CS_SMPTE_170
-        4 => MatrixCoefficients::Smpte240m,  // CS_SMPTE_240
-        5 => MatrixCoefficients::Bt2020Ncl,  // CS_BT_2020
-        7 => MatrixCoefficients::Identity,   // CS_RGB
+        1 => MatrixCoefficients::Bt470bg,     // CS_BT_601
+        2 => MatrixCoefficients::Bt709,       // CS_BT_709
+        3 => MatrixCoefficients::Smpte170m,   // CS_SMPTE_170
+        4 => MatrixCoefficients::Smpte240m,   // CS_SMPTE_240
+        5 => MatrixCoefficients::Bt2020Ncl,   // CS_BT_2020
+        7 => MatrixCoefficients::Identity,    // CS_RGB
         _ => MatrixCoefficients::Unspecified, // CS_UNKNOWN, CS_RESERVED
     }
 }
@@ -507,9 +507,8 @@ mod tests {
     /// `height_minus_1=143` — i.e. exactly the 176x144 the source declared.
     #[test]
     fn a_real_libvpx_vp9_key_frame_decodes() {
-        const REAL_FRAME_PREFIX: [u8; 10] = [
-            0x82, 0x49, 0x83, 0x42, 0x00, 0x0a, 0xf0, 0x08, 0xf6, 0x08,
-        ];
+        const REAL_FRAME_PREFIX: [u8; 10] =
+            [0x82, 0x49, 0x83, 0x42, 0x00, 0x0a, 0xf0, 0x08, 0xf6, 0x08];
         let h = parse_uncompressed_header(&REAL_FRAME_PREFIX).unwrap();
         assert_eq!(h.profile, 0);
         assert!(h.is_key_frame);
@@ -538,7 +537,10 @@ mod tests {
             bit_depth: 10,
             ..c8_420
         };
-        assert_eq!(pixel_format(&c10_420), PixFmt::from_name("yuv420p10le").ok());
+        assert_eq!(
+            pixel_format(&c10_420),
+            PixFmt::from_name("yuv420p10le").ok()
+        );
         let c8_422 = Vp9ColorConfig {
             subsampling_y: false,
             ..c8_420

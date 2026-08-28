@@ -39,7 +39,9 @@
 
 use vaco_bitstream::ByteReader;
 use vaco_codec_core::{CodecId, CodecParameters, Level};
-use vaco_color::{ColorInfo, ColorPrimaries, ColorRange, MatrixCoefficients, TransferCharacteristic};
+use vaco_color::{
+    ColorInfo, ColorPrimaries, ColorRange, MatrixCoefficients, TransferCharacteristic,
+};
 
 use crate::profile;
 
@@ -167,7 +169,11 @@ mod tests {
         assert_eq!(rec.chroma_subsampling, 1);
         assert!(!rec.full_range);
         assert_eq!(
-            (rec.colour_primaries, rec.transfer_characteristics, rec.matrix_coefficients),
+            (
+                rec.colour_primaries,
+                rec.transfer_characteristics,
+                rec.matrix_coefficients
+            ),
             (2, 2, 2)
         );
     }

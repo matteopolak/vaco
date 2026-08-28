@@ -41,8 +41,7 @@ pub fn last_subframe(data: &[u8]) -> Option<&[u8]> {
     // The index is mirrored at the front and back of its own bytes: one
     // marker byte, `frame_count` sizes of `bytes_per_size` bytes each, and a
     // second copy of the marker byte, all trailing the coded frame data.
-    let index_size = 2usize
-        .checked_add(bytes_per_size.checked_mul(frame_count)?)?;
+    let index_size = 2usize.checked_add(bytes_per_size.checked_mul(frame_count)?)?;
     if index_size > data.len() {
         return None;
     }
