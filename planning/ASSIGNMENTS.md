@@ -87,7 +87,10 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-cli stderr reporting | 7 | #641 #208 | agent:cli-report | active | 2026-08-27 | — | the Input #0/Output #0 dump and -stats/-progress/-report; shares loglevel::prints_info |
 | vaco-protocol-dial (new) + vaco-protocol-rtmp (epic #61) | 2 | TECH-DEBT row 1, #552 | agent:rtmp | done | 2026-08-27 | — | pays down the five-copy dial duplication first, then RTMP is the test of whether the seam was right |
 | mp3 demux/mux + vaco-codec-mpegaudio (epic #38 decode half) | 3 | #644 #362 #363 #364 | agent:mpeg-audio | active | 2026-08-27 | — | `.mp3` cannot be opened at all today; demuxer first, then Layers I/II/III |
-| vaco-format-core interface gaps | 4 | gaps 2, 7, 16 + #649 | agent:iface-gaps | active | 2026-08-28 | — | a demuxer/muxer that must know about more than one file; unblocks image2 sequences and the segmenting muxers |
+| vaco-codec-subtitle (epic #44) | 4 | DVB, DVD, PGS, CEA-608/708, Teletext | agent:subtitles | active | 2026-08-28 | — | first leaf batch of the fan-out; CEA-608/708 depends on the FrameSideData gaps |
+| pixel-format conversion + image2 codec mapping | 4 | #655 | agent:transcode-core | active | 2026-08-28 | — | core: no codec pair whose formats differ can transcode |
+| INTERFACE-GAPS 12/13/14/15 | 4 | BSF options, FrameSideData log + motion vectors, float pixel formats | agent:filter-gaps | active | 2026-08-28 | — | core: unblocks the filter fan-out |
+| vaco-format-core interface gaps | 4 | gaps 2, 7, 16 + #649 | agent:iface-gaps | done | 2026-08-28 | — | a demuxer/muxer that must know about more than one file; unblocks image2 sequences and the segmenting muxers |
 | vaco-format-ac3 + vaco-codec-ac3 (epic #39) | 3 | #653 #367 #368 #369 #370 | agent:ac3 | active | 2026-08-27 | — | demuxer first; `.ac3` cannot be opened today |
 | vaco-codec-core + vaco-registry + xtask + vaco-cli (codec path) | 3 | #652 | agent:codec-path | active | 2026-08-27 | — | P0: no leaf decoder or encoder is reachable from the CLI; blocks three codec agents' output |
 | container sweep follow-ups | 4 | #647 #648 #650 #651 #643 | agent:sweep-followup | done | 2026-08-27 | — | six issues the sweep filed |
