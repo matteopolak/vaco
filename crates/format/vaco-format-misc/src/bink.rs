@@ -86,12 +86,11 @@
 //!   count directly, which is what the container actually states; flagged
 //!   as unverified beyond that one (inconclusive) measurement.
 //!
-//! # What is not implemented
+//! # `CodecId`
 //!
-//! Neither `Bink` (video) nor `BinkAudio` (audio) has a [`CodecId`] variant
-//! in `vaco-codec-core`; both this crate's streams carry `codec_id: None`.
-//! Recorded as an extension of interface gap 21, alongside Smacker's
-//! equivalent gap, rather than a new entry.
+//! The video stream is `Bink`; each audio track is `BinkAudioDct` or
+//! `BinkAudioRdft`, chosen per track from the flags word's bit 12 (see
+//! the layout table above).
 
 use std::collections::VecDeque;
 
@@ -209,7 +208,7 @@ impl BinkDemuxer {
         let time_base = Rational::new(fps_den.cast_signed(), fps_num.max(1).cast_signed());
         let mut video = Stream::new(0, MediaType::Video, time_base);
         video.r_frame_rate = Rational::new(fps_num.cast_signed(), fps_den.max(1).cast_signed());
-        let mut vparams = CodecParameters::video();
+        let mut vparams = CodecParameters::video().with_codec(vaco_codec_core::CodecId::Bink);
         if let Some(v) = vparams.video.as_mut() {
             v.width = width;
             v.height = height;
@@ -225,10 +224,22 @@ impl BinkDemuxer {
             let rate = u32::from(*sample_rates.get(i).unwrap_or(&0)).max(1);
             let flags = *audio_flags.get(i).unwrap_or(&0);
             let stereo = flags & (1 << 13) != 0;
+            // Bit 12: 1 selects Bink Audio DCT, 0 selects Bink Audio RDFT
+            // (the reference's own decoder name for the FFT-based mode) --
+            // `multimedia-wiki-bink-container`.
+            let audio_codec = if flags & (1 << 12) != 0 {
+                vaco_codec_core::CodecId::BinkAudioDct
+            } else {
+                vaco_codec_core::CodecId::BinkAudioRdft
+            };
             let channels = if stereo { 2 } else { 1 };
             let index = u32::try_from(streams.len()).unwrap_or(u32::MAX);
-            let mut stream = Stream::new(index, MediaType::Audio, Rational::new(1, rate.cast_signed()));
-            let mut aparams = CodecParameters::audio();
+            let mut stream = Stream::new(
+                index,
+                MediaType::Audio,
+                Rational::new(1, rate.cast_signed()),
+            );
+            let mut aparams = CodecParameters::audio().with_codec(audio_codec);
             if let Some(a) = aparams.audio.as_mut() {
                 a.sample_rate = rate;
                 a.format = Some(SampleFmt::S16);
@@ -263,7 +274,10 @@ impl BinkDemuxer {
             return Err(Error::Eof);
         }
         let i = usize::try_from(self.frame_index).unwrap_or(usize::MAX);
-        let raw_start = *self.table.get(i).ok_or(Error::InvalidData("bink: missing frame table entry"))?;
+        let raw_start = *self
+            .table
+            .get(i)
+            .ok_or(Error::InvalidData("bink: missing frame table entry"))?;
         let end = *self
             .table
             .get(i.saturating_add(1))
@@ -347,11 +361,7 @@ impl Demuxer for BinkDemuxer {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::indexing_slicing,
-    reason = "test code"
-)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
 mod tests {
     use super::*;
     use vaco_io::MemorySource;
@@ -452,5 +462,37 @@ mod tests {
         assert!(!v1.is_key());
 
         assert!(matches!(d.read_packet(), Err(Error::Eof)));
+    }
+
+    #[test]
+    fn video_stream_carries_the_bink_codec_id() {
+        let data = build_fixture();
+        let d = BinkDemuxer::open(Box::new(MemorySource::new(data))).unwrap();
+        assert_eq!(
+            d.streams()[0].params.codec_id,
+            Some(vaco_codec_core::CodecId::Bink)
+        );
+    }
+
+    #[test]
+    fn audio_track_flag_bit_12_selects_dct_or_rdft() {
+        // `build_fixture`'s track flags are 0 (mono, bit 12 clear) -> RDFT.
+        let data = build_fixture();
+        let d = BinkDemuxer::open(Box::new(MemorySource::new(data))).unwrap();
+        assert_eq!(
+            d.streams()[1].params.codec_id,
+            Some(vaco_codec_core::CodecId::BinkAudioRdft)
+        );
+
+        // Same fixture with the track flags word's bit 12 set -> DCT.
+        let mut data = build_fixture();
+        let flags_offset = 8 + 4 * 9 + 2 + 2 + 2; // fixed header up to this track's flags u16
+        let dct_flags = 1u16 << 12;
+        data[flags_offset..flags_offset + 2].copy_from_slice(&dct_flags.to_le_bytes());
+        let d = BinkDemuxer::open(Box::new(MemorySource::new(data))).unwrap();
+        assert_eq!(
+            d.streams()[1].params.codec_id,
+            Some(vaco_codec_core::CodecId::BinkAudioDct)
+        );
     }
 }

@@ -39,11 +39,6 @@
 //!   and (for its video stream) `roq` show, not a property of the packet's
 //!   command/instruction bytes.
 //!
-//! # What is not implemented
-//!
-//! `cdgraphics` has no [`CodecId`] variant in `vaco-codec-core`; `codec_id`
-//! is `None` here (see the crate-level report for the full list).
-
 use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
 use vaco_format_core::flags::FormatFlags;
 use vaco_format_core::probe::{ProbeData, ProbeScore};
@@ -118,7 +113,8 @@ impl CdgDemuxer {
         let mut stream = Stream::new(0, MediaType::Video, time_base);
         stream.r_frame_rate = Rational::new(SAMPLE_RATE.cast_signed(), 1);
         stream.avg_frame_rate = stream.r_frame_rate;
-        let mut params = vaco_codec_core::CodecParameters::video();
+        let mut params = vaco_codec_core::CodecParameters::video()
+            .with_codec(vaco_codec_core::CodecId::Cdgraphics);
         if let Some(v) = params.video.as_mut() {
             v.width = WIDTH;
             v.height = HEIGHT;
@@ -189,9 +185,7 @@ impl Demuxer for CdgDemuxer {
             return Err(Error::InvalidData("cdg: no such stream"));
         }
         let ticks = ts.ticks().unwrap_or(0).max(0);
-        let byte_pos = ticks
-            .cast_unsigned()
-            .saturating_mul(PACKET_LEN as u64);
+        let byte_pos = ticks.cast_unsigned().saturating_mul(PACKET_LEN as u64);
         self.io.seek(byte_pos)?;
         self.packet_index = ticks;
         self.eof = false;
@@ -252,6 +246,15 @@ mod tests {
         let d = CdgDemuxer::open(Box::new(MemorySource::new(packet(0x09)))).unwrap();
         let v = d.streams().first().unwrap().params.video.as_ref().unwrap();
         assert_eq!((v.width, v.height), (300, 216));
+    }
+
+    #[test]
+    fn stream_carries_the_cdgraphics_codec_id() {
+        let d = CdgDemuxer::open(Box::new(MemorySource::new(packet(0x09)))).unwrap();
+        assert_eq!(
+            d.streams().first().unwrap().params.codec_id,
+            Some(vaco_codec_core::CodecId::Cdgraphics)
+        );
     }
 
     #[test]

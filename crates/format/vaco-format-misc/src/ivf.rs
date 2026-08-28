@@ -66,11 +66,11 @@
 
 use vaco_codec_core::{CodecId, CodecParameters};
 use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
+use vaco_format_core::Stream;
 use vaco_format_core::flags::FormatFlags;
 use vaco_format_core::probe::{ProbeData, ProbeScore};
 use vaco_format_core::seek::{SeekFlags, SeekTarget};
 use vaco_format_core::{Demuxer, DemuxerDesc, Muxer, MuxerDesc, ParserProvider};
-use vaco_format_core::Stream;
 use vaco_io::{IoContext, IoOptions, IoWriter, MediaSink, MediaSource};
 use vaco_limits::Budget;
 use vaco_packet::{Packet, PacketFlags};
@@ -269,7 +269,9 @@ impl IvfDemuxer {
         let _version = io.rl16()?;
         let header_len = io.rl16()?;
         if header_len < HEADER_LEN_MIN {
-            return Err(Error::InvalidData("ivf: header shorter than the fixed part"));
+            return Err(Error::InvalidData(
+                "ivf: header shorter than the fixed part",
+            ));
         }
         let fourcc = io.tag()?;
         let width = u32::from(io.rl16()?);
@@ -333,7 +335,9 @@ impl IvfDemuxer {
         if let Some(total) = self.io.size()
             && u64::from(size) > total.saturating_sub(self.io.pos()).saturating_add(8)
         {
-            return Err(Error::InvalidData("ivf: frame claims more bytes than remain"));
+            return Err(Error::InvalidData(
+                "ivf: frame claims more bytes than remain",
+            ));
         }
         let ts = self.io.rl64()?.cast_signed();
         let n = usize::try_from(size).unwrap_or(usize::MAX);
@@ -441,7 +445,9 @@ impl IvfMuxer {
 impl Muxer for IvfMuxer {
     fn add_stream(&mut self, params: &CodecParameters) -> Result<u32> {
         if self.codec.is_some() {
-            return Err(Error::Unsupported("ivf: only one video stream is supported"));
+            return Err(Error::Unsupported(
+                "ivf: only one video stream is supported",
+            ));
         }
         let video = params
             .video
@@ -489,10 +495,11 @@ impl Muxer for IvfMuxer {
             return Err(Error::InvalidData("ivf: packet written before the header"));
         }
         let ts = packet.pts.ticks().or(packet.dts.ticks()).unwrap_or(0);
-        self.out
-            .wl32(u32::try_from(packet.payload().len()).map_err(|_| {
+        self.out.wl32(
+            u32::try_from(packet.payload().len()).map_err(|_| {
                 Error::InvalidData("ivf: frame too large for the 32-bit size field")
-            })?)?;
+            })?,
+        )?;
         self.out.wl64(ts.cast_unsigned())?;
         self.out.write(packet.payload())?;
         self.frame_count = self.frame_count.saturating_add(1);
@@ -564,7 +571,10 @@ mod tests {
         let data = header(*b"VP80", &[(true, &key), (false, &inter)]);
         let mut d = IvfDemuxer::open(Box::new(MemorySource::new(data))).unwrap();
         assert_eq!(d.streams().len(), 1);
-        assert_eq!(d.streams().first().unwrap().params.codec_id, Some(CodecId::Vp8));
+        assert_eq!(
+            d.streams().first().unwrap().params.codec_id,
+            Some(CodecId::Vp8)
+        );
         assert_eq!(d.streams().first().unwrap().frame_count, Some(2));
 
         let p0 = d.read_packet().unwrap();
@@ -653,7 +663,10 @@ mod tests {
         let bytes = written.snapshot();
         let mut demux = IvfDemuxer::open(Box::new(MemorySource::new(bytes))).unwrap();
         assert_eq!(demux.streams().first().unwrap().frame_count, Some(3));
-        assert_eq!(demux.streams().first().unwrap().params.codec_id, Some(CodecId::Vp9));
+        assert_eq!(
+            demux.streams().first().unwrap().params.codec_id,
+            Some(CodecId::Vp9)
+        );
         for i in 0..3u64 {
             let pkt = demux.read_packet().unwrap();
             assert_eq!(pkt.pts.ticks(), Some(i.cast_signed()));

@@ -60,9 +60,6 @@
 //!
 //! # What is not implemented
 //!
-//! * `FLIC` has no [`CodecId`] variant in `vaco-codec-core`; `codec_id` is
-//!   `None` here (see the crate-level report for the full list of missing
-//!   game-video codec ids).
 //! * The `PREFIX_TYPE` (`0xF100`) top-level chunk, used only by the
 //!   still-image "CEL" sibling format, is not handled — this module expects
 //!   every top-level chunk after the file header to be a `0xF1FA` frame, and
@@ -164,7 +161,8 @@ impl FlicDemuxer {
         .reduced();
         let mut stream = Stream::new(0, MediaType::Video, time_base);
         stream.r_frame_rate = time_base.inverse();
-        let mut params = vaco_codec_core::CodecParameters::video();
+        let mut params =
+            vaco_codec_core::CodecParameters::video().with_codec(vaco_codec_core::CodecId::Flic);
         if let Some(v) = params.video.as_mut() {
             v.width = width;
             v.height = height;
@@ -245,11 +243,7 @@ impl Demuxer for FlicDemuxer {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::indexing_slicing,
-    reason = "test code"
-)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
 mod tests {
     use super::*;
     use vaco_io::MemorySource;
@@ -324,7 +318,10 @@ mod tests {
         let mut fli = header(MAGIC_FLI, 64, 48, 7);
         fli.extend(frame(&[subchunk(13, &[])]));
         let d = FlicDemuxer::open(Box::new(MemorySource::new(fli))).unwrap();
-        assert_eq!(d.streams().first().unwrap().r_frame_rate, Rational::new(10, 1));
+        assert_eq!(
+            d.streams().first().unwrap().r_frame_rate,
+            Rational::new(10, 1)
+        );
 
         let mut flc = header(MAGIC_FLC, 64, 48, 66);
         flc.extend(frame(&[subchunk(13, &[])]));
@@ -341,12 +338,7 @@ mod tests {
         data.extend(frame(&[subchunk(13, &[])]));
         let d = FlicDemuxer::open(Box::new(MemorySource::new(data.clone()))).unwrap();
         assert_eq!(
-            d.streams()
-                .first()
-                .unwrap()
-                .params
-                .extradata
-                .as_deref(),
+            d.streams().first().unwrap().params.extradata.as_deref(),
             Some(&data[..128])
         );
     }
@@ -355,5 +347,16 @@ mod tests {
     fn rejects_unrecognised_magic() {
         let data = header(0x1234, 64, 48, 66);
         assert!(FlicDemuxer::open(Box::new(MemorySource::new(data))).is_err());
+    }
+
+    #[test]
+    fn stream_carries_the_flic_codec_id() {
+        let mut data = header(MAGIC_FLC, 64, 48, 66);
+        data.extend(frame(&[subchunk(13, &[])]));
+        let d = FlicDemuxer::open(Box::new(MemorySource::new(data))).unwrap();
+        assert_eq!(
+            d.streams().first().unwrap().params.codec_id,
+            Some(vaco_codec_core::CodecId::Flic)
+        );
     }
 }

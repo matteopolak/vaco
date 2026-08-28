@@ -303,17 +303,22 @@ dependencies.
 
 ## What was deferred
 
-**Missing `CodecId` variants — the interface gap that matters most here.**
-`vaco-codec-core` has no variants for any game-video or game-audio codec:
-`Roq`/`RoqDpcm`, `Bink`/`BinkAudio`, `Smacker`/`SmackAudio`, `Flic`,
-`Cdgraphics`, and the rest of the ~53 undone names would need the same.
-Every stream in `roq`, `flic`, `cdg`, `bink` and `smk` therefore carries
-`codec_id: None`, so `-show_streams` prints `codec_name=unknown` where the
-reference prints a real name — reported here rather than worked around,
-per this crate's scope (`vaco-codec-core` is not owned by this package).
-See `planning/INTERFACE-GAPS.md` gap 21 for the full entry (extended with
-the `Bink`/`BinkAudio`/`Smacker`/`SmackAudio` rows in the same later pass
-that added the two modules).
+**`CodecId` variants: landed and wired.** `vaco-codec-core` gained
+`Roq`, `RoqDpcm`, `Flic`, `Cdgraphics`, `Bink`, `BinkAudioDct`,
+`BinkAudioRdft`, `Smacker` and `SmackAudio` (interface gap 21), and every
+stream in `roq`, `flic`, `cdg`, `bink` and `smk` now sets one —
+`-show_streams` prints the reference's own `codec_name` for all five
+formats, verified with hand-built fixtures against both `vaco-probe` and a
+real `ffprobe` run on the identical bytes. `bink`'s two audio ids are chosen
+per track from the flags word's bit 12
+(`multimedia-wiki-bink-container`). `smk`'s audio id is not fixed either:
+an `AudioRate` entry's `compressed` bit decides whether a track is
+`SmackAudio` or raw PCM (`PcmS16le`/`PcmU8`, by the existing bit-depth
+flag) — found by running the uncompressed default fixture through
+`ffprobe` and seeing `pcm_s16le` where `smackaudio` had been assumed. The
+rest of the ~40 undone names in this package's original brief (`vmd`,
+`idcin`, `wsvqa`, and so on) would still need their own variants when
+someone gets to them.
 
 **`smk`'s video-packet payload omits whatever the reference packages
 alongside a palette-carrying frame** (measured ~769 bytes longer than the

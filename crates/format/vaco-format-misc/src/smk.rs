@@ -103,12 +103,15 @@
 //!   unresolved divergence from the reference's packet `size`/hash for
 //!   video specifically, not a guess presented as fact.
 //!
-//! # What is not implemented
+//! # `CodecId`
 //!
-//! `Smacker` (video) and `SmackAudio` (audio) have no [`CodecId`] variant in
-//! `vaco-codec-core`; both streams here carry `codec_id: None` — the same
-//! extension of interface gap 21 as Bink's.
-
+//! The video stream is always `Smacker`. Each audio track's `AudioRate`
+//! entry states whether its bytes are Smacker's own compressed audio
+//! (`SmackAudio`) or raw, uncompressed PCM in disguise — measured against
+//! the reference on both settings: an uncompressed track reports
+//! `pcm_s16le`/`pcm_u8` (by the same bit-depth flag this module already
+//! reads), never `smackaudio`.
+//!
 use std::collections::VecDeque;
 
 use vaco_chlayout::ChannelLayout;
@@ -243,7 +246,7 @@ impl SmkDemuxer {
         let mut video = Stream::new(0, MediaType::Video, time_base);
         let fps = time_base.inverse();
         video.r_frame_rate = fps;
-        let mut vparams = CodecParameters::video();
+        let mut vparams = CodecParameters::video().with_codec(vaco_codec_core::CodecId::Smacker);
         if let Some(v) = vparams.video.as_mut() {
             v.width = width;
             v.height = height;
@@ -268,12 +271,32 @@ impl SmkDemuxer {
             let channels = if stereo { 2 } else { 1 };
 
             let stream_index = u32::try_from(streams.len()).unwrap_or(u32::MAX);
-            let audio_tb = Rational::new(1, sample_rate.saturating_mul(bytes_per_sample).cast_signed());
+            let audio_tb = Rational::new(
+                1,
+                sample_rate.saturating_mul(bytes_per_sample).cast_signed(),
+            );
             let mut stream = Stream::new(stream_index, MediaType::Audio, audio_tb);
-            let mut aparams = CodecParameters::audio();
+            // The compressed bit does not just change framing (whether a
+            // chunk carries an extra unpacked-length prefix, read below) --
+            // an uncompressed track's bytes are raw PCM, not Smacker audio
+            // at all. Measured against the reference on both settings:
+            // compressed reports `smackaudio`, uncompressed reports
+            // `pcm_s16le`/`pcm_u8` depending on the bit-depth flag.
+            let audio_codec = if compressed {
+                vaco_codec_core::CodecId::SmackAudio
+            } else if sixteen_bit {
+                vaco_codec_core::CodecId::PcmS16le
+            } else {
+                vaco_codec_core::CodecId::PcmU8
+            };
+            let mut aparams = CodecParameters::audio().with_codec(audio_codec);
             if let Some(a) = aparams.audio.as_mut() {
                 a.sample_rate = sample_rate;
-                a.format = Some(if sixteen_bit { SampleFmt::S16 } else { SampleFmt::U8 });
+                a.format = Some(if sixteen_bit {
+                    SampleFmt::S16
+                } else {
+                    SampleFmt::U8
+                });
                 a.layout = ChannelLayout::default_for(channels);
             }
             stream.params = aparams;
@@ -415,17 +438,22 @@ impl Demuxer for SmkDemuxer {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::indexing_slicing,
-    reason = "test code"
-)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
 mod tests {
     use super::*;
     use vaco_io::MemorySource;
 
-    #[allow(clippy::fn_params_excessive_bools, reason = "test fixture builder, mirrors the AudioRate bit layout directly")]
-    fn audio_rate(present: bool, sixteen_bit: bool, stereo: bool, compressed: bool, rate: u32) -> u32 {
+    #[allow(
+        clippy::fn_params_excessive_bools,
+        reason = "test fixture builder, mirrors the AudioRate bit layout directly"
+    )]
+    fn audio_rate(
+        present: bool,
+        sixteen_bit: bool,
+        stereo: bool,
+        compressed: bool,
+        rate: u32,
+    ) -> u32 {
         let mut v = 0u32;
         if compressed {
             v |= 1 << 31;
@@ -508,7 +536,10 @@ mod tests {
     #[test]
     fn frame_rate_formula_matches_the_documented_three_cases() {
         assert_eq!(frame_rate_time_base(66), Rational::new(66, 1000).reduced());
-        assert_eq!(frame_rate_time_base(-500), Rational::new(500, 100_000).reduced());
+        assert_eq!(
+            frame_rate_time_base(-500),
+            Rational::new(500, 100_000).reduced()
+        );
         assert_eq!(frame_rate_time_base(0), Rational::new(1, 10));
     }
 
@@ -523,6 +554,53 @@ mod tests {
         assert_eq!(
             d.streams()[0].params.extradata.as_deref(),
             Some([0u8; 16].as_slice())
+        );
+        assert_eq!(
+            d.streams()[0].params.codec_id,
+            Some(vaco_codec_core::CodecId::Smacker)
+        );
+        // `build_fixture`'s audio track is uncompressed (16-bit), which
+        // decodes to raw PCM in the reference, not `smackaudio` --
+        // `compressed_audio_track_carries_the_smackaudio_codec_id` covers
+        // the compressed case.
+        assert_eq!(
+            d.streams()[1].params.codec_id,
+            Some(vaco_codec_core::CodecId::PcmS16le)
+        );
+    }
+
+    #[test]
+    fn compressed_audio_track_carries_the_smackaudio_codec_id() {
+        // Same shape as `build_fixture`, with the audio track's `compressed`
+        // bit set instead of clear.
+        let mut header = vec![0u8; 104];
+        header[0..4].copy_from_slice(b"SMK4");
+        header[4..8].copy_from_slice(&64u32.to_le_bytes());
+        header[8..12].copy_from_slice(&48u32.to_le_bytes());
+        header[12..16].copy_from_slice(&2u32.to_le_bytes());
+        header[16..20].copy_from_slice(&66i32.to_le_bytes());
+        header[72..76].copy_from_slice(&audio_rate(true, true, false, true, 22050).to_le_bytes());
+
+        let pal = palette_chunk(&[0x00, 0x00, 0x00]);
+        let aud0 = audio_chunk(&[1, 2, 3, 4]);
+        let frame0 = pad4([pal, aud0, vec![0xAA; 6]].concat());
+        let aud1 = audio_chunk(&[5, 6, 7, 8]);
+        let frame1 = pad4([aud1, vec![0xBB; 5]].concat());
+        let frame_sizes = [frame0.len() as u32 | 1, frame1.len() as u32];
+        let frame_types = [0b0000_0011u8, 0b0000_0010u8];
+
+        let mut data = header;
+        for s in frame_sizes {
+            data.extend_from_slice(&s.to_le_bytes());
+        }
+        data.extend_from_slice(&frame_types);
+        data.extend_from_slice(&frame0);
+        data.extend_from_slice(&frame1);
+
+        let d = SmkDemuxer::open(Box::new(MemorySource::new(data))).unwrap();
+        assert_eq!(
+            d.streams()[1].params.codec_id,
+            Some(vaco_codec_core::CodecId::SmackAudio)
         );
     }
 

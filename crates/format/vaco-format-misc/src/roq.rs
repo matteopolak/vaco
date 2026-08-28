@@ -68,11 +68,9 @@
 //!
 //! # What is not implemented
 //!
-//! Neither `roq` (video) nor `roq_dpcm` (audio) has a [`CodecId`] variant in
-//! `vaco-codec-core` today — this family has no game-video codec ids at all
-//! yet. Both streams therefore carry `codec_id: None`; `-show_streams` will
-//! print `codec_name=unknown` where the reference names a codec. Reported
-//! separately as an interface gap rather than worked around here.
+//! Nothing left in this file: both streams now carry a [`CodecId`]
+//! (`Roq` video, `RoqDpcm` audio), so `-show_streams` names them the same
+//! as the reference.
 
 use std::collections::VecDeque;
 
@@ -171,6 +169,7 @@ impl RoqDemuxer {
         let mut video = Stream::new(0, MediaType::Video, Rational::new(1, fps.cast_signed()));
         video.r_frame_rate = Rational::new(fps.cast_signed(), 1);
         video.avg_frame_rate = video.r_frame_rate;
+        video.params.codec_id = Some(vaco_codec_core::CodecId::Roq);
         video.params.video = Some(vaco_codec_core::VideoParameters {
             field_order: vaco_codec_core::FieldOrder::Unknown,
             ..Default::default()
@@ -244,9 +243,12 @@ impl RoqDemuxer {
         self.io.read_exact(&mut payload)?;
 
         if header.id == INFO_ID {
-            if let (Some(&w0), Some(&w1), Some(&h0), Some(&h1)) =
-                (payload.first(), payload.get(1), payload.get(2), payload.get(3))
-            {
+            if let (Some(&w0), Some(&w1), Some(&h0), Some(&h1)) = (
+                payload.first(),
+                payload.get(1),
+                payload.get(2),
+                payload.get(3),
+            ) {
                 let width = u32::from(u16::from_le_bytes([w0, w1]));
                 let height = u32::from(u16::from_le_bytes([h0, h1]));
                 if let Some(stream) = self.streams.first_mut()
@@ -263,11 +265,20 @@ impl RoqDemuxer {
 
         let is_sound = header.id == SOUND_MONO_ID || header.id == SOUND_STEREO_ID;
         if is_sound && self.video_accum.is_empty() {
-            let channels = if header.id == SOUND_STEREO_ID { 2u32 } else { 1 };
+            let channels = if header.id == SOUND_STEREO_ID {
+                2u32
+            } else {
+                1
+            };
             let index = self.ensure_audio_stream(channels);
             let byte_count = i64::try_from(payload.len()).unwrap_or(i64::MAX);
-            let samples = if channels == 2 { byte_count >> 1 } else { byte_count };
-            let mut pkt = Packet::from_slice(&mut self.budget, chunk_bytes(&header, &payload).as_slice())?;
+            let samples = if channels == 2 {
+                byte_count >> 1
+            } else {
+                byte_count
+            };
+            let mut pkt =
+                Packet::from_slice(&mut self.budget, chunk_bytes(&header, &payload).as_slice())?;
             pkt.stream_index = index;
             pkt.pts = Timestamp::new(self.audio_sample);
             pkt.dts = pkt.pts;
@@ -285,8 +296,10 @@ impl RoqDemuxer {
             self.video_accum_pos = Some(pos);
         }
         self.video_accum.extend_from_slice(&header.id.to_le_bytes());
-        self.video_accum.extend_from_slice(&header.size.to_le_bytes());
-        self.video_accum.extend_from_slice(&header.arg.to_le_bytes());
+        self.video_accum
+            .extend_from_slice(&header.size.to_le_bytes());
+        self.video_accum
+            .extend_from_slice(&header.arg.to_le_bytes());
         self.video_accum.extend_from_slice(&payload);
 
         if header.id == QUAD_VQ_ID {
@@ -296,12 +309,11 @@ impl RoqDemuxer {
             pkt.pts = Timestamp::new(self.video_frame);
             pkt.dts = pkt.pts;
             pkt.pos = self.video_accum_pos.take();
-            pkt.duration = self
-                .streams
-                .first()
-                .map_or(vaco_core::Duration::ZERO, |s| {
-                    Timestamp::new(1).to_duration(s.time_base).unwrap_or(vaco_core::Duration::ZERO)
-                });
+            pkt.duration = self.streams.first().map_or(vaco_core::Duration::ZERO, |s| {
+                Timestamp::new(1)
+                    .to_duration(s.time_base)
+                    .unwrap_or(vaco_core::Duration::ZERO)
+            });
             self.video_frame = self.video_frame.saturating_add(1);
             self.pending.push_back(pkt);
         }
@@ -318,7 +330,7 @@ impl RoqDemuxer {
             MediaType::Audio,
             Rational::new(1, AUDIO_SAMPLE_RATE.cast_signed()),
         );
-        let mut params = CodecParameters::audio();
+        let mut params = CodecParameters::audio().with_codec(vaco_codec_core::CodecId::RoqDpcm);
         if let Some(audio) = params.audio.as_mut() {
             audio.sample_rate = AUDIO_SAMPLE_RATE;
             audio.format = Some(SampleFmt::S16);
@@ -400,8 +412,14 @@ mod tests {
 
         let mut d = RoqDemuxer::open(Box::new(MemorySource::new(data))).unwrap();
         assert_eq!(d.streams().len(), 2);
-        assert_eq!(d.streams().first().unwrap().media_type(), Some(MediaType::Video));
-        assert_eq!(d.streams().get(1).unwrap().media_type(), Some(MediaType::Audio));
+        assert_eq!(
+            d.streams().first().unwrap().media_type(),
+            Some(MediaType::Video)
+        );
+        assert_eq!(
+            d.streams().get(1).unwrap().media_type(),
+            Some(MediaType::Audio)
+        );
 
         let audio = d.read_packet().unwrap();
         assert_eq!(audio.stream_index, 1);
@@ -452,5 +470,24 @@ mod tests {
     fn rejects_a_signature_with_a_real_payload() {
         let mut v = vec![0x84, 0x10, 0x01, 0x00, 0x00, 0x00, 0x1e, 0x00, 0x00];
         assert!(RoqDemuxer::open(Box::new(MemorySource::new(std::mem::take(&mut v)))).is_err());
+    }
+
+    #[test]
+    fn streams_carry_the_new_codec_ids() {
+        let mut data = signature(30);
+        data.extend_from_slice(&chunk(INFO_ID, 0, &[64, 0, 64, 0, 8, 0, 4, 0]));
+        data.extend_from_slice(&chunk(SOUND_MONO_ID, 0, &[1, 2, 3, 4]));
+        data.extend_from_slice(&chunk(0x1002, 0x0101, &[0; 10]));
+        data.extend_from_slice(&chunk(QUAD_VQ_ID, 0, &[0; 4]));
+
+        let d = RoqDemuxer::open(Box::new(MemorySource::new(data))).unwrap();
+        assert_eq!(
+            d.streams().first().unwrap().params.codec_id,
+            Some(vaco_codec_core::CodecId::Roq)
+        );
+        assert_eq!(
+            d.streams().get(1).unwrap().params.codec_id,
+            Some(vaco_codec_core::CodecId::RoqDpcm)
+        );
     }
 }
