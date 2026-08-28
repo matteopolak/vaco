@@ -3240,3 +3240,220 @@ than assumed by analogy.
 Verification: `cargo test -p vaco-demux-mp4 -p vaco-mux-asf -p
 vaco-demux-image2 -p vaco-format-audio-simple -p vaco-demux-ogg --locked`,
 all green; `cargo clippy` on the same five, clean.
+## 53. #642 and finding 50's four AVI/FLV leftovers: extradata reaches AVI stream info, H.264/HEVC framing mirrors the source, two grid gaps close, and byte-exact output on three of four fixtures
+
+Four items finding 50 and issue #642 left open, all in the AVI mux/demux
+pair, closed together because fixing #642's demux-side gap and finding 50's
+mux-side framing question touch the same `strf` bytes from opposite
+directions, and every fix after that surfaced through the same
+byte-for-byte comparison loop.
+
+### #642 (demux): `strf`'s `avcC` now reaches stream info
+
+`vaco-demux-avi::hdrl::parse_strf`'s video branch read `BitmapInfoHeader`'s
+fixed 40 bytes and stopped; the audio branch already treated trailing bytes
+as extradata. Gave the video branch the same treatment, gated on the
+`FourCC` being one that carries a configuration record
+(`video_tags::carries_config_record`: `avc1`/`AVC1`/`hvc1`/`hev1`, not
+`H264`/`X264`/`HEVC` and their Annex-B aliases, which have nothing after the
+header to capture). No codec-specific parsing was added here — the captured
+bytes flow through the same generic `vaco-format-core::discovery` pipeline
+that already turns MP4's `avcC` into `profile`/`level`/`pix_fmt`/`is_avc`/
+`nal_length_size`/`extradata_size`/`mime_codec_string`/`bits_per_raw_sample`.
+All eighteen fields #642 named now match on the `avc1` MP4 fixture; the two
+fields the issue named as *not* bugs (`r_frame_rate`, `nb_frames`) are
+unchanged, as instructed.
+
+### Mux: H.264/HEVC keeps whatever framing its source used
+
+Finding 50 recorded that the reference stores H.264 in AVI length-prefixed
+(`avc1`, `avcC`) where this crate's muxer wrote Annex-B (`H264`, no config
+record) unconditionally. Measured directly this session, on **both**
+directions at once (an `avc1`-tagged MP4 source and an Annex-B MPEG-TS
+source): the reference does not convert framing in either direction. A
+length-prefixed source stays length-prefixed (`avc1`/`hvc1`, its own
+`avcC`/`hvcC` copied into `strf` verbatim); an Annex-B source stays Annex-B
+(`H264`/`HEVC`, its own start-code-prefixed SPS/PPS extradata — when the
+demuxer synthesized one — copied into `strf` the same way). Neither the
+packet payload nor the extradata is ever reframed by this muxer.
+
+This reverses finding 16's length-prefixed-to-Annex-B conversion entirely —
+it never matched the reference, and existed because nobody had measured the
+Annex-B case against the reference at the same time as the length-prefixed
+one. The old conversion path (`maybe_convert`, `check_bitstream`'s M6
+`h264_mp4toannexb` request, and the `vaco-format-nalu` dependency it needed)
+is removed; `add_stream` now refuses a length-prefixed stream with no
+extradata at all (`avc1`/`hvc1` structurally promises a configuration record
+`strf` would otherwise not have), but the equivalent Annex-B case is not an
+error, since `H264`/`HEVC` makes no such promise.
+
+Two `tests/roundtrip.rs` cases replace the old
+`a_length_prefixed_h264_sample_is_rewritten_to_annex_b` and
+`check_bitstream_through_mux_writer_gets_the_splice_maybe_convert_alone_cannot`
+(both asserted the now-removed conversion): one pins length-prefixed framing
+staying length-prefixed with `avc1`/`avcC`, one pins Annex-B staying Annex-B
+with plain `H264` and no config record, and a third confirms
+`check_bitstream` never asks M6 for a filter (a `BsfProvider` that refuses
+every filter name still succeeds).
+
+### Mux: the video grid's tail, and a real audio decode bug found along the way
+
+**Grid tail.** Comparing whole-file byte counts against the reference
+surfaced a second bug, independent of framing: the video grid undercounted
+every fixture's `dwLength` by exactly one frame-duration's worth of ticks
+(`600/25 = 24` on both 25 fps fixtures tried) — real frames land on the
+right slots, but nothing accounts for the *last* frame's own duration
+extending past it, since nothing arrives afterward to trigger the ordinary
+inter-frame backfill. `AviMuxer::backfill_trailing_video_slots`, called once
+from `write_trailer`, extends the grid from the slot after the last real
+frame to that frame's own duration later, using the packet's own `duration`
+rescaled into grid ticks.
+
+**Audio decode bug, found while chasing the above.** With the grid tail and
+framing fixes landed, the one fixture with AAC audio still failed to decode
+on the reference's own decoder (`Input buffer exhausted before END element
+found`, `channel element 3.11 is not allocated`) even though the raw AAC
+payload bytes matched the reference byte for byte. Root cause:
+`write_strl`'s audio branch built `strf` from the fixed sixteen
+`WAVEFORMATEX` fields alone and never wrote the `cbSize`-prefixed extension
+— `add_stream` already *required* AAC to carry extradata (refusing
+ADTS-framed streams with none), but nothing ever wrote the extradata it
+demanded into the file. A decoder with no `AudioSpecificConfig` has no
+object type or channel configuration and desyncs on the first frame it
+decodes. Fixed by writing `StreamOut::audio_extradata` (already captured at
+`add_stream`, never reaching `write_strl`) as `strf`'s trailing `cbSize` +
+bytes. Verified: decoded video *and* audio both match the reference's own
+AVI output exactly, per stream, on the AAC fixture (previously: hard decode
+error).
+
+### Mux: a leading audio gap, tied to video's B-frame depth, not audio's own timing
+
+Finding 50 left "the reference writes a small number of zero-length audio
+placeholder chunks this crate does not" as an unconfirmed candidate
+mechanism. Measured properly this session with seven synthetic fixtures
+(`ffmpeg -f lavfi` sources, `libx264 -bf 0` through `-bf 7`, each with an AAC
+track whose own one-frame encoder priming never varies): the gap has
+**nothing to do with audio's own sample rate or duration**. Two audio-only
+fixtures (44.1 kHz stereo, 48 kHz mono, same priming) wrote zero placeholder
+chunks. Holding the audio fixture fixed and varying only the video's
+B-frame count reproduced the gap on demand: `has_b_frames` (`ffprobe`'s own
+field, which the H.264 parser already derives from the SPS) of 0, 1 and 2
+measured a leading gap of exactly 0, 1 and 3 chunks — `2^n - 1` at every
+point tried, and `has_b_frames` itself capped at 2 for every `-bf` value
+this build of `libx264` produced past that point, so the formula is
+unconfirmed above `n = 2`.
+
+The gap is also positioned precisely: it sits immediately in front of the
+audio stream's *second* chunk, not immediately after its first — confirmed
+by comparing each chunk's position against the surrounding video chunk
+count between the two candidate placements, since both produce the same
+total chunk count and only interleaving position tells them apart.
+`AviMuxer::maybe_backfill_leading_audio_gap`, keyed on `stream.count == 1`
+at the top of `write_packet` (i.e. right before that second chunk's own
+bytes go out), reproduces the reference's interleaving position exactly.
+
+### `hdrl`'s `JUNK` reservations: fixed sizes, and two of the three are inert index structures
+
+Finding 50 left the three `JUNK` reservations unresolved from one fixture,
+where the *within-strl* one measured the same size (4120 bytes) across two
+very different `strf` contents — enough to rule out "pad relative to strf
+size" but not enough to say what the rule was. Measured across all four
+fixtures available this session (`strf` sizes 16, 24, 78, 86 bytes; one or
+two streams; PCM, H.264 in both framings, AAC): all three reservations are
+**fixed constants** — 4120 bytes after every `strl`'s own content, 260
+bytes after the last `strl` (inside `hdrl`), 1016 bytes at the top RIFF
+level between `hdrl` and `movi`.
+
+Chasing full byte-exactness (not just sizes) further found that two of the
+three are not simply zero: the per-`strl` one is an inert `AVISUPERINDEX`
+header (`wLongsPerEntry = 4`, `nEntriesInUse = 0`, this stream's own
+`dwChunkId`) that the reference reserves room for but never activates,
+tagging it `JUNK` instead of `indx` — confirmed on four separate stream
+instances across the fixtures. The `hdrl`-level one is `LIST 'odml'`
+holding one `dmlh` (`AVIEXTHEADER`) chunk, `dwGrandFrames` and everything
+else left `0` regardless of the file's real frame count. The RIFF-level one
+measured genuinely all zero. Also found in the same pass: the per-`strl`
+`JUNK` sits between `strf` and `vprp`, not after `vprp` — this crate had
+the order backwards on the first attempt, caught immediately by the same
+byte comparison.
+
+### Several more `avih`/`strh`/`strf` fields, found while chasing byte-exact output
+
+- `avih.dwFlags` was missing `AVIF_TRUSTCKTYPE` (`0x800`).
+- `avih.dwSuggestedBufferSize` is a fixed `1_048_576` (1 MiB) on every
+  fixture.
+- `avih.dwMaxBytesPerSec` is the sum of every stream's own
+  `CodecParameters::bit_rate` (bits/sec, truncated to bytes/sec) — `0` when
+  nothing declared a rate.
+- `avih.dwTotalFrames` is the *video* stream's own count specifically —
+  measured on a PCM-only (no video) fixture, where it stays `0` rather than
+  falling back to the audio stream's own sample count.
+- `strh.dwSuggestedBufferSize` (the per-stream field, distinct from
+  `avih`'s) is the largest single chunk that stream actually wrote —
+  confirmed on both video and audio (five independent exact values across
+  the four fixtures: 1516, 1559, 8192, 1340, 265).
+- `strh.rcFrame` is `{0, 0, width, height}` for video, not all zero;
+  `{0, 0, 0, 0}` for audio.
+- An audio stream's `strh.fccHandler` is the raw `u32` value `1`
+  (`WAVE_FORMAT_PCM`'s own tag number) regardless of the stream's actual
+  `wFormatTag` — an AAC-tagged stream measured the same `1` a PCM stream
+  did.
+- `strf.biSizeImage` (video) is `width * height * 3` — the raw-RGB byte
+  count `biBitCount = 24` implies — even though the codec is compressed.
+  Confirmed identical on `avc1` and Annex-B `H264` alike.
+- A compressed (VBR) audio stream's `strh.dwScale/dwRate` is one *frame's*
+  duration, not one sample's: AAC at 44100 Hz reduces to `256/11025`
+  (`1024/44100`, AAC-LC's fixed frame size). This is deliberately a
+  *different* field from `Muxer::stream_time_base` — the first attempt set
+  both from the same value and broke real packet interleaving order between
+  audio and video, caught only by comparing muxed bytes against the
+  reference (this crate's own tests never touch audio timestamps, so they
+  did not catch it). `StreamOut::strh_time_base` now carries the `strh`
+  value separately; `StreamOut::sample_rate` carries `strf`'s own
+  `nSamplesPerSec`, which stays the true rate throughout.
+- A compressed stream's `strf.nAvgBytesPerSec` is the same `bit_rate / 8`
+  `avih.dwMaxBytesPerSec` uses, applied per stream.
+
+**Not resolved:** `strf.nBlockAlign` for a compressed stream. The one AAC
+fixture measured `3`, matching none of `bytes_per_sample × channels`
+(correct for CBR PCM), the sample rate, the bit rate, or the channel count
+in any combination tried. No second compressed-audio fixture was available
+to isolate the rule; see `write_strl`'s comment and `planning/TECH-DEBT.md`.
+
+### Verification
+
+`-c copy -fflags +bitexact`, `ffmpeg 8.1`, four fixtures (an `avc1` MP4 with
+H.264+AAC, a video-only `avc1` MP4, an Annex-B MPEG-TS with B-frames and a
+non-zero start time, and a PCM-only WAV):
+
+```text
+avi (H.264+AAC MP4)   39304 bytes, byte-identical except strf.nBlockAlign (2 of 39304 bytes)
+avi (video-only MP4)  98430 bytes, byte-identical
+avi (MPEG-TS)         99360 bytes, byte-identical
+avi (WAV)             94092 bytes, byte-identical
+```
+
+`cmp` confirms byte-identity on three of the four; on the fourth, exactly 2
+bytes differ across the whole file (the unresolved `nBlockAlign`). Decoded
+video and audio both match the reference's own AVI output exactly, per
+stream, on every fixture with audio, including that one — `ffmpeg -f null -`
+and `-f md5 -` on our own output report no decode errors on any fixture.
+
+Tests: `vaco-mux-avi/tests/roundtrip.rs` gained
+`a_length_prefixed_h264_sample_keeps_its_framing_and_gets_avc1_avcc`,
+`an_annex_b_h264_sample_keeps_h264_and_gets_no_config_record`,
+`check_bitstream_never_requests_a_filter_through_mux_writer`,
+`avih_flags_suggested_buffer_and_junk_reservations_match_the_measured_constants`,
+`strh_suggested_buffer_is_the_largest_chunk_and_avih_sums_bit_rates`,
+`audio_fcc_handler_is_the_fixed_value_one_not_the_format_tag`,
+`video_rcframe_and_bisizeimage_are_not_left_zero`,
+`compressed_audio_strh_time_base_is_one_frame_not_one_sample`, and
+`compressed_audio_avg_bytes_per_sec_comes_from_bit_rate` — replacing the two
+tests that pinned the removed Annex-B conversion.
+`vaco-demux-avi/src/hdrl.rs` gained three unit tests for the `avcC` capture.
+`fuzz/fuzz_targets/avi_mux_packet.rs`'s output-growth bound needed
+recomputing once the `JUNK` reservations existed (its old `header_budget`
+predated them and undercounted by more than 1 KiB); the fuzzer found this
+in under a second as a false-positive assertion failure on a 3-byte input,
+moved to `fuzz/seeds/avi_mux_packet/` as a regression seed. 30s run after
+the fix: `exit=0`, `execs≈N`, `find fuzz/artifacts -type f` empty.
