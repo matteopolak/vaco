@@ -275,6 +275,15 @@ bit-exact algorithm — the same choice and the same caveat as
 `vaco-codec-jpeg`'s own docs) cannot guarantee literal byte-identity
 against a specific reference decoder's own rounding without reimplementing
 that reference's exact integer IDCT, which is out of this session's scope.
+This used to be stated as an assumption; a later session tested it
+directly by black-box measurement (single-coefficient and multi-
+coefficient bitstream probes against `ffmpeg -idct simple`, dequant
+already tier-3 verified so any diff is IDCT-only) and confirmed it holds
+— see `planning/TECH-DEBT.md`'s "The MPEG-2 framemd5 ceiling: measured,
+not assumed" for the method and the decisive finding (two coefficients
+that each alone produce a lone ±1 difference cancel to zero when combined,
+proving the mismatch is a genuinely non-linear function of the whole
+coefficient set, not a fixed per-basis-function bias).
 
 **MPEG-1 remains genuinely wrong.** A later session re-examined this with
 two techniques that were not available the first time: reading the
