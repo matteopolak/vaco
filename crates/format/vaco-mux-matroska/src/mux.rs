@@ -285,6 +285,11 @@ struct TrackOut {
     channels: u64,
     bit_depth: Option<u64>,
     extradata: Option<Vec<u8>>,
+    /// Video only. `Video::FlagInterlaced`'s source (CONFORMANCE-FINDINGS 49).
+    field_order: vaco_codec_core::FieldOrder,
+    /// Video only. `Video::Colour`'s source, when it maps to one this crate
+    /// has actually measured a reference value for (CONFORMANCE-FINDINGS 49).
+    chroma_location: vaco_color::ChromaLocation,
 }
 
 /// `FileMimeType`. Not in `vaco-demux-matroska::ebml::schema` (that crate has
@@ -380,6 +385,24 @@ pub struct MatroskaMuxer {
     /// [`MatroskaMuxer::write_trailer`]'s later patch: with no reservation to
     /// begin with, there is no fixed span to seek back and overwrite.
     seekhead_reserved: bool,
+    /// `-fflags +bitexact` on this output. Already computed once in `new`
+    /// for [`MatroskaMuxer::date_utc_ns`]; kept here too because
+    /// [`MatroskaMuxer::tags_bytes`] needs the same fact to drop the
+    /// auto-populated `encoder` file tag the same way `DateUTC` is dropped
+    /// (CONFORMANCE-FINDINGS 49).
+    bitexact: bool,
+    /// Absolute byte offset of `Info`'s own element ID, once written — `None`
+    /// when the sink is not seekable, since `Duration` (and so `Info`'s
+    /// whole byte content) is fixed for good the moment it is written (see
+    /// [`MatroskaMuxer::info_bytes`]'s docs). [`MatroskaMuxer::write_trailer`]
+    /// rewrites the **whole** `Info` element in place once
+    /// [`MatroskaMuxer::max_end_ticks`] is known, rather than patching just
+    /// `Duration`'s own bytes: `Info`'s body carries a `CRC-32` over itself,
+    /// and [`MatroskaMuxer::info_bytes`] is built so that re-running it with
+    /// the real duration reproduces the exact same total length (every field
+    /// in it is fixed-width) with a correct checksum, which a narrower patch
+    /// would have needed a second, separate step to keep valid.
+    info_start: Option<u64>,
 }
 
 /// Matroska's epoch (2001-01-01T00:00:00 UTC) as Unix nanoseconds.
@@ -421,6 +444,8 @@ impl MatroskaMuxer {
             metadata: MuxMetadata::default(),
             seek_targets: Vec::new(),
             seekhead_reserved: false,
+            bitexact,
+            info_start: None,
         })
     }
 
@@ -482,7 +507,24 @@ impl MatroskaMuxer {
             .map(|(_, v)| v.as_str())
     }
 
-    fn info_bytes(&self) -> Vec<u8> {
+    /// `Info`. `duration_ticks` is `None` on a non-seekable sink — measured
+    /// directly on a pipe (CONFORMANCE-FINDINGS 49), the reference omits
+    /// `Duration` entirely there, the same asymmetry this crate already
+    /// reproduces for `Cues` (see the module docs) — and, on a seekable one,
+    /// `Some(0)` the first time this runs (`write_header`, before any packet
+    /// exists, so the real total is not known yet) and
+    /// `Some(self.max_end_ticks)` the second (`write_trailer`, once it is).
+    /// [`float`](vaco_format_ebml::float)'s element is a fixed 11 bytes
+    /// regardless of the value inside it (a constant 2-byte ID, a 1-byte
+    /// size — always `0x88`, since the body is always exactly 8 bytes — and
+    /// the 8-byte body itself), so the two calls produce byte-for-byte the
+    /// same length, which is what lets [`MatroskaMuxer::write_trailer`]
+    /// overwrite the whole element in place — see
+    /// [`MatroskaMuxer::info_start`]'s field docs for why a narrower patch
+    /// (just `Duration`'s own bytes) does not work here the way it does for
+    /// `Segment`'s size field: `Info`'s body carries a `CRC-32` over itself,
+    /// so patching only `Duration` would leave that checksum invalid.
+    fn info_bytes(&self, duration_ticks: Option<u64>) -> Vec<u8> {
         let mut body = write_uint(el::TIMESTAMPSCALE, 1_000_000);
         if let Some(title) = self.title().filter(|t| !t.is_empty()) {
             body.extend_from_slice(&write_string(el::TITLE, title));
@@ -492,10 +534,8 @@ impl MatroskaMuxer {
         if let Some(ns) = self.date_utc_ns {
             body.extend_from_slice(&write_int(el::DATEUTC, ns));
         }
-        if self.max_end_ticks > 0 {
-            // Duration is in `TimestampScale` units (milliseconds, at the
-            // 1_000_000 ns/tick scale fixed above).
-            body.extend_from_slice(&write_float(el::DURATION, self.max_end_ticks as f64));
+        if let Some(ticks) = duration_ticks {
+            body.extend_from_slice(&write_float(el::DURATION, ticks as f64));
         }
         write_element(el::INFO, &with_crc32(&body))
     }
@@ -507,10 +547,20 @@ impl MatroskaMuxer {
     /// [`Muxer::add_stream`] (a caller driving the muxer directly through
     /// `dyn Muxer`, as `vaco-cli`'s scheduler does, has no way to guarantee
     /// that order — see `docs/format/vaco-mux-matroska.md`).
+    /// Child order matches the reference exactly (measured on both a
+    /// reordered-video and a video+audio file, CONFORMANCE-FINDINGS 49):
+    /// `TrackNumber TrackUID FlagLacing Language CodecID TrackType
+    /// DefaultDuration Video MaxBlockAdditionID Void CodecPrivate` for a
+    /// video track, the same minus the four video-only fields for audio.
+    /// `Name`'s position is **not** measured — neither sample file used here
+    /// sets a per-track title — so it stays where it always has, right
+    /// after `FlagLacing`.
     fn track_entry_bytes(t: &TrackOut, name: Option<&str>, language: &str) -> Vec<u8> {
         let mut body = write_uint(el::TRACKNUMBER, t.number);
-        body.extend_from_slice(&write_uint(el::TRACKUID, t.number));
-        body.extend_from_slice(&write_uint(el::TRACKTYPE, if t.is_video { 1 } else { 2 }));
+        // Full 8-byte width, not the fewest octets `write_uint` would pick —
+        // measured, the reference always writes `TrackUID` this way even
+        // when the value (here, the 1-based track number) fits in one byte.
+        body.extend_from_slice(&write_element(el::TRACKUID, &t.number.to_be_bytes()));
         // Measured against `ffmpeg 8.1`: `FlagLacing` is written explicitly,
         // and is always 0 — this crate never emits a laced block by default
         // (see `crate::block`'s module docs).
@@ -520,16 +570,51 @@ impl MatroskaMuxer {
         }
         body.extend_from_slice(&write_string(el::LANGUAGE, language));
         body.extend_from_slice(&write_string(el::CODECID, t.codec_id));
+        body.extend_from_slice(&write_uint(el::TRACKTYPE, if t.is_video { 1 } else { 2 }));
         if let Some(dur) = t.default_duration_ns {
             body.extend_from_slice(&write_uint(el::DEFAULTDURATION, dur));
-        }
-        if let Some(bytes) = t.extradata.as_ref().filter(|d| !d.is_empty()) {
-            body.extend_from_slice(&vaco_format_ebml::binary(el::CODECPRIVATE, bytes));
         }
         if t.is_video {
             let mut video = write_uint(el::PIXELWIDTH, u64::from(t.width));
             video.extend_from_slice(&write_uint(el::PIXELHEIGHT, u64::from(t.height)));
+            // `FlagInterlaced` (§RFC 9559 field order): 0 undetermined, 1
+            // interlaced, 2 not interlaced. Measured: a progressive H.264
+            // source gets `2`; the interlaced field orders below are mapped
+            // by the field's own name rather than measured against the
+            // reference directly (no interlaced sample was available), so
+            // treat that half of this mapping as unverified.
+            let flag_interlaced: u64 = match t.field_order {
+                vaco_codec_core::FieldOrder::Progressive => 2,
+                vaco_codec_core::FieldOrder::TopFirst
+                | vaco_codec_core::FieldOrder::BottomFirst
+                | vaco_codec_core::FieldOrder::TopCodedFirst
+                | vaco_codec_core::FieldOrder::BottomCodedFirst => 1,
+                vaco_codec_core::FieldOrder::Unknown => 0,
+            };
+            video.extend_from_slice(&write_uint(el::FLAGINTERLACED, flag_interlaced));
+            // `Colour > ChromaSitingHorz/ChromaSitingVert`. Only
+            // `ChromaLocation::Left` is measured (a `chroma_location=left`
+            // H.264 source produces `(1, 2)`); every other siting is omitted
+            // rather than guessed, per the same "say so rather than invent a
+            // rationale" rule this crate's `BlockGroup` finding was named
+            // for.
+            if t.chroma_location == vaco_color::ChromaLocation::Left {
+                let mut colour = write_uint(el::CHROMASITINGHORZ, 1);
+                colour.extend_from_slice(&write_uint(el::CHROMASITINGVERT, 2));
+                video.extend_from_slice(&write_element(el::COLOUR, &colour));
+            }
             body.extend_from_slice(&write_element(el::VIDEO, &video));
+            // `MaxBlockAdditionID` then a 2-byte `Void` — measured
+            // unconditional on every video track sampled, always `0` and
+            // always exactly 2 bytes of padding, and absent from every audio
+            // track sampled alongside one (CONFORMANCE-FINDINGS 49). The
+            // `Void`'s size field is the full 8-octet VINT width, not the
+            // shortest one — measured, and the same convention this crate's
+            // own `SeekHead` padding already uses (see [`VOID_HEADER_BYTES`]).
+            body.extend_from_slice(&write_uint(el::MAXBLOCKADDITIONID, 0));
+            body.extend_from_slice(&id_bytes(el::VOID));
+            body.extend_from_slice(&vaco_format_ebml::vint(2, 8));
+            body.resize(body.len() + 2, 0);
         } else {
             let mut audio = write_float(el::SAMPLINGFREQUENCY, t.sample_rate);
             audio.extend_from_slice(&write_uint(el::CHANNELS, t.channels.max(1)));
@@ -538,7 +623,18 @@ impl MatroskaMuxer {
             }
             body.extend_from_slice(&write_element(el::AUDIO, &audio));
         }
-        write_element(el::TRACKENTRY, &body)
+        if let Some(bytes) = t.extradata.as_ref().filter(|d| !d.is_empty()) {
+            body.extend_from_slice(&vaco_format_ebml::binary(el::CODECPRIVATE, bytes));
+        }
+        // `TrackEntry`'s own size field is the full 8-octet VINT width, not
+        // the shortest one `write_element` would pick — measured; `Tracks`,
+        // `Tag` and `SimpleTag` all use the shortest width right alongside
+        // it, so this is specific to `TrackEntry`, not a general rule this
+        // crate's other master elements should copy.
+        let mut out = id_bytes(el::TRACKENTRY);
+        out.extend_from_slice(&vaco_format_ebml::vint(body.len() as u64, 8));
+        out.extend_from_slice(&body);
+        out
     }
 
     fn tracks_bytes(&self) -> Vec<u8> {
@@ -607,11 +703,25 @@ impl MatroskaMuxer {
     fn tags_bytes(&self) -> Option<Vec<u8>> {
         let mut body = Vec::new();
 
+        // `encoder` is dropped under `bitexact`, file-level tags only — the
+        // same suppression `vaco-mux-mp4` makes for its own `©too`, and
+        // measured the same way: an MP4-sourced `encoder=Lavf62.12.100`
+        // format tag (the tool that made the *input*, carried through on a
+        // stream copy, not this crate's own identity — `MuxingApp`/
+        // `WritingApp` already state that honestly) reaches a plain remux's
+        // file-level `Tag` but is absent from the reference's own bitexact
+        // output. A *per-track* `encoder` tag (e.g. `Lavc62.28.100
+        // libx264`, the codec that made that stream's data) is a different
+        // fact and is not suppressed — measured present in the reference's
+        // own bitexact output right alongside it (CONFORMANCE-FINDINGS 49).
         let file_tags: Vec<(String, String)> = self
             .metadata
             .tags
             .iter()
-            .filter(|(k, _)| !k.eq_ignore_ascii_case("title"))
+            .filter(|(k, _)| {
+                !(k.eq_ignore_ascii_case("title")
+                    || (self.bitexact && k.eq_ignore_ascii_case("encoder")))
+            })
             .cloned()
             .collect();
         if !file_tags.is_empty() {
@@ -799,6 +909,8 @@ impl Muxer for MatroskaMuxer {
             channels: 1,
             bit_depth: None,
             extradata: params.extradata.clone(),
+            field_order: vaco_codec_core::FieldOrder::default(),
+            chroma_location: vaco_color::ChromaLocation::default(),
         };
         if is_video {
             let v = params.video.as_ref().ok_or(Error::Unsupported(
@@ -806,6 +918,8 @@ impl Muxer for MatroskaMuxer {
             ))?;
             t.width = v.width;
             t.height = v.height;
+            t.field_order = v.field_order;
+            t.chroma_location = v.color.chroma_location;
             if v.frame_rate.is_defined() && !v.frame_rate.is_zero() && !v.frame_rate.is_infinite() {
                 let per_frame = v.frame_rate.inverse(); // seconds per frame, as num/den
                 let secs = f64::from(per_frame.num) / f64::from(per_frame.den);
@@ -851,7 +965,12 @@ impl Muxer for MatroskaMuxer {
         self.out.write(&vint_unknown(8))?;
         self.segment_data_start = self.out.pos();
 
-        let info = self.info_bytes();
+        let seekable = self.out.is_seekable();
+        let info = self.info_bytes(seekable.then_some(0));
+        // `Info` starts right after the fixed `SeekHead` reservation — see
+        // `info_start`'s field docs for why `write_trailer` needs this to
+        // rewrite the whole element rather than patching one field.
+        self.info_start = seekable.then_some(self.segment_data_start + SEEKHEAD_RESERVED_BYTES);
         let tracks = self.tracks_bytes();
         let chapters = self.chapters_bytes();
         let attachments = self.attachments_bytes();
@@ -916,7 +1035,9 @@ impl Muxer for MatroskaMuxer {
             ))?;
 
         let ts = packet.pts.ticks().unwrap_or(0);
-        let dts = packet.dts.ticks().unwrap_or(ts);
+        // Matroska has no decode timestamp of its own (CONFORMANCE-FINDINGS
+        // 37) — `dts` is read only to fall back to it when `pts` is absent.
+        let _dts = packet.dts.ticks().unwrap_or(ts);
         let is_key = packet.is_key();
 
         // Decide whether the current cluster can still hold this block:
@@ -1050,6 +1171,19 @@ impl Muxer for MatroskaMuxer {
                     self.out.seek(end)?;
                 }
             }
+        }
+
+        if let Some(at) = self.info_start {
+            // Rewrite the whole `Info` element with the now-known duration —
+            // not just `Duration`'s own bytes — so the `CRC-32` covering
+            // `Info`'s body stays valid. Guaranteed the same length as the
+            // placeholder written at `write_header` (see `info_bytes`'s
+            // docs), so nothing after it moves.
+            let end = self.out.pos();
+            let info = self.info_bytes(Some(self.max_end_ticks));
+            self.out.seek(at)?;
+            self.out.write(&info)?;
+            self.out.seek(end)?;
         }
 
         if seekable {
