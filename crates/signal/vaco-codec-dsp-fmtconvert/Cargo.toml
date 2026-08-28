@@ -1,0 +1,23 @@
+[package]
+name = "vaco-codec-dsp-fmtconvert"
+description = "Fused scale/widen/narrow sample conversions for codec-internal hot loops."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+divan.workspace = true
+
+[[bench]]
+name    = "fmtconvert"
+harness = false
+
+[lints]
+workspace = true
+
+[package.metadata.vaco]
+layer = 3
