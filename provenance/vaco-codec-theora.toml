@@ -1,0 +1,6 @@
+[[table]]
+name   = "NATURAL_TO_ZIGZAG"
+file   = "crates/codec/vaco-codec-theora/src/tokens.rs"
+source = "theora-spec-20170603"
+clause = "section 2.6, Figure 2.8 (zig-zag scan order): the zig-zag index of each natural row-major coefficient position"
+method = "transcribed"
