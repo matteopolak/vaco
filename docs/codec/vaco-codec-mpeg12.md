@@ -230,9 +230,9 @@ contract):
 | `m2_oddsize` | 48x64 | MPEG-2, I+P+B | 1.0 | 2 | 0.14 |
 | `m2_qcif_ipb` | 176x144 | MPEG-2, I+P+B | 1.8 | 2 | 0.11 |
 | `m2_cif_ipb` | 352x288 | MPEG-2, I+P+B | 1.4 | 2 | 0.08 |
-| `m1_i` | 64x48 | MPEG-1, I only | 12.9 | 21 | 2.25 |
-| `m1_ip` | 64x48 | MPEG-1, I+P | 44.8 | 97 | 6.85 |
-| `m1_ipb` | 64x48 | MPEG-1, I+P+B | 44.2 | 97 | 6.60 |
+| `m1_i` | 64x48 | MPEG-1, I only | 9.0 (was 12.9) | 9 (was 21) | 0.96 (was 2.25) |
+| `m1_ip` | 64x48 | MPEG-1, I+P | 44.2 (was 44.8) | 97 (unchanged) | 6.37 (was 6.85) |
+| `m1_ipb` | 64x48 | MPEG-1, I+P+B | 44.2 (unchanged) | 97 (unchanged) | 6.38 (was 6.60) |
 | `m2_422` | 176x144 | MPEG-2, 4:2:2, I+P (`-pix_fmt yuv422p`) | 1.9 | 2 | 0.11 |
 | `m2_422_ipb` | 176x144 | MPEG-2, 4:2:2, I+P+B | 1.6 | 2 | 0.10 |
 | `m2_altscan` | 176x144 | MPEG-2, 4:2:0, `alternate_scan=1`, I+P | 1.9 | 2 | 0.11 |
@@ -353,22 +353,53 @@ Still holding from before: the dequantisation formula (hand-verified
 coefficient-by-coefficient against §7.4.2.3 for a real macroblock —
 matches exactly), both DCT-coefficient VLC tables (mechanically
 re-extracted from the primary text independently of the existing
-transcription and diffed — zero mismatches), the linear `quantiser_scale`
-table (cross-checked against Table 7-6 directly), `intra_dc_precision`/
-predictor-reset defaults, and the IDCT mismatch control question (already
-eliminated in both directions in an earlier pass; not re-derived here).
+transcription and diffed — zero mismatches), and the linear
+`quantiser_scale` table (cross-checked against Table 7-6 directly).
 
-**The actual cause is still not found**, but the search space is
-narrower and better characterised than before: it is not the coefficient
-VLC tables, not the dequantisation arithmetic, not the escape-level sign
-convention, not full-pel vectors, and not macroblock stuffing. It is
-present (smaller) in a genuine I-picture and grows (faster than plain
-float-IDCT drift) across P-pictures, concentrated in specific blocks
-rather than spread uniformly — consistent with something that both (a)
-affects intra decode in a still-unidentified way and (b) compounds
-further once motion compensation is added on top, rather than two
-unrelated bugs. See `TECH-DEBT.md` for the fuller writeup and where to
-look next.
+**The IDCT mismatch control question was re-derived, and the earlier
+elimination was testing the wrong rule.** A later round found the two
+variants tried previously — toggling every nonzero-even coefficient's LSB
+by a uniform `+1`, and by a uniform `-1` — both misread Annex D.9.1's
+"adding (or removing) one to each non-zero coefficient that would have
+been even." Neither is what those six words describe as a single
+per-coefficient operation: the direction is sign-dependent, `rec -=
+sign(rec)` (move one step toward zero), so a uniform `+1` is only correct
+for negative coefficients and a uniform `-1` only for positive ones —
+each earlier attempt was right on roughly half of any block's
+coefficients and wrong on the other half, indistinguishable from noise,
+which is exactly why both measured worse than no MPEG-1 rule at all. The
+correct rule, plus two compounding bugs the same pass found (MPEG-2's
+`F[7][7]` sum-parity correction was being applied to MPEG-1 streams too,
+which have no such concept; the correction must exempt an intra block's
+own DC coefficient, reconstructed through `intra_dc_mult` rather than the
+matrix/quantiser-scale formula the rule is stated against), is now
+implemented (`block::dequantise`, gated on `ap.mpeg1`).
+
+**This closes most, but not all, of the intra-decode gap, and none of the
+P-picture gap.** `m1_i` (intra-only) improved substantially: mean abs diff
+1.172 → 0.175 over the whole file (-85%), max 21 → 9 (-57%); frame 0 alone
+dropped from 1166 to 189 differing pixels out of 4608 (-84%) — a real,
+large effect, consistent with the heatmap correlation (error scaling with
+coefficient count, absent on DC-only blocks) this fix was built to
+explain. But `m1_i`'s own max deviation is still 9, not 0 — every one of
+its 25 frames hits exactly that same value (see the table above), meaning
+one more, smaller, consistently-reproduced defect remains even in pure
+intra content. And `m1_ip`/`m1_ipb`'s P-picture max deviation (97) is
+**completely unchanged**, before and after this fix, byte for byte — the
+mismatch-control fix has no measurable effect once motion compensation is
+in the picture, which means the earlier framing ("compounds further once
+motion compensation is added on top" of the same underlying defect) does
+not hold either: whatever produces the P-picture max-97 outlier is a
+separate mechanism this fix does not touch at all, not a magnified version
+of the intra-decode defect it does fix.
+
+**So the actual cause is now partially found.** The intra-decode mismatch-
+control defect is identified, fixed, and measured; a smaller residual
+remains even there (unexplained); and the P-picture max-97 outlier is
+completely unexplained and was not investigated further this round
+(bounded round, per instruction) — seeing #355 close requires a new
+hypothesis for that outlier specifically, not more work on mismatch
+control. See `TECH-DEBT.md` for the fuller writeup.
 
 **This means T2-01a's own "framemd5-identical to reference" acceptance bar
 is not met for either format**, so no issue claiming it is closed by this
@@ -430,18 +461,23 @@ the same evidence:
   every MPEG-2 fixture — `m2_i`/`m2_ip`/`m2_ipb`/`m2_ilme`/`m2_oddsize`/
   `m2_qcif_ipb`/`m2_cif_ipb`). That part of #355's gap is fully explained
   by the same measured, permanent IDCT ceiling #356 closes on.
-- The **MPEG-1 portion is not.** `m1_i`/`m1_ip`/`m1_ipb` measure avg MAD
-  12.9-44.8, max MAD 21-97 — ten to fifty times larger than anything the
-  IDCT ceiling produces anywhere it has been measured, on MPEG-2 or
-  MPEG-1 content alike. A rounding-schedule mismatch bounded to a few
-  pixel-units per block, even compounded across a full P-chain, does not
-  reach a max deviation of 97 out of 255 — every long MPEG-2 P-chain
-  fixture in this corpus (`m2_qcif_ipb`, `m2_cif_ipb`, 25 frames each)
-  plateaus at max MAD 2 despite being longer than any MPEG-1 fixture
-  measured. This gap has had five investigation rounds (`TECH-DEBT.md`)
-  without a root cause, and the IDCT ceiling does not retroactively
-  explain it — it explains a different, much smaller gap that happens to
-  share the same two issues.
+- The **MPEG-1 portion is not.** A later round found and fixed a real,
+  separate MPEG-1-specific defect (the IDCT mismatch-control rule was
+  implemented as MPEG-2's, not MPEG-1's own — see "MPEG-1 remains
+  genuinely wrong" above), which closed most of the intra-only gap
+  (`m1_i`: max MAD 21 → 9) but left `m1_ip`/`m1_ipb`'s P-picture max MAD
+  at **97, completely unchanged**. That number is ten to fifty times
+  larger than anything the IDCT ceiling produces anywhere it has been
+  measured, on MPEG-2 or MPEG-1 content alike. A rounding-schedule
+  mismatch bounded to a few pixel-units per block, even compounded across
+  a full P-chain, does not reach a max deviation of 97 out of 255 — every
+  long MPEG-2 P-chain fixture in this corpus (`m2_qcif_ipb`, `m2_cif_ipb`,
+  25 frames each) plateaus at max MAD 2 despite being longer than any
+  MPEG-1 fixture measured. This gap has had six investigation rounds
+  (`TECH-DEBT.md`) without a root cause for the P-picture outlier
+  specifically, and the IDCT ceiling does not retroactively explain it —
+  it explains a different, much smaller gap that happens to share the
+  same two issues.
 
 **"The IDCT explains some of #355's gap" is not "the IDCT explains all of
 it,"** and closing #355 on the same replacement bar #356 uses would
