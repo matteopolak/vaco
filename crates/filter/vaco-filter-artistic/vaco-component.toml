@@ -1,10 +1,31 @@
 # Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
 #
-# Two of the eleven T3 artistic/stylisation video filters
+# Three of the eleven T3 artistic/stylisation video filters
 # `planning/16-filters.md` §4.2 assigns to `vaco-filter-artistic`. See
 # `docs/filter/vaco-filter-artistic.md` for the rest, left as a follow-up,
 # and for why this crate exists under this name rather than the
 # `vaco-filter-effect` a dispatch brief asked for.
+
+[[component]]
+kind = "filter"
+name = "amplify"
+long_name = "Amplify changes between successive video frames."
+ctor = "vaco_filter_artistic::amplify::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "delogo"
+long_name = "Remove logo from input video."
+ctor = "vaco_filter_artistic::delogo::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "epx"
+long_name = "Scale the input using EPX algorithm."
+ctor = "vaco_filter_artistic::epx::DESC"
+media = "video"
 
 [[component]]
 kind = "filter"

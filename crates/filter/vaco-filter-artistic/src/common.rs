@@ -56,6 +56,13 @@ pub(crate) fn copy_frame_meta(out: &mut Frame, input: &Frame) {
     out.sample_aspect_ratio = input.sample_aspect_ratio;
 }
 
+/// Decode the reference's `planes` bitmask (bit `p` = plane `p` is touched),
+/// matching `vaco-filter-convolve::common::plane_selected`.
+#[must_use]
+pub(crate) const fn plane_selected(mask: i64, plane: u8) -> bool {
+    (mask >> plane) & 1 != 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

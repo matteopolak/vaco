@@ -1,7 +1,8 @@
 # vaco-filter-artistic
 
 T3 artistic/stylisation video filters — `planning/16-filters.md` §4.2's
-`vaco-filter-artistic` row. Two implemented: `noise`, `vignette`.
+`vaco-filter-artistic` row. Five implemented: `amplify`, `delogo`, `epx`,
+`noise`, `vignette`.
 
 ## Scope reconciliation — this crate replaces a dispatch brief that named the wrong crate
 
@@ -22,146 +23,180 @@ built and committed (`planning/ASSIGNMENTS.md`, checked 2026-08-28):
 | `sobel`, `prewitt`, `roberts`, `kirsch`, `scharr`, `edgedetect`, `morpho`, `erosion`, `dilation`, `deflate`, `inflate`, `median`, `convolution` | `vaco-filter-convolve` | done (#468, `agent:blur2`) |
 | `swaprect`, `swapuv`, `shuffleframes`, `shuffleplanes`, `pixelize` | `vaco-filter-geometry` | done (#470, `agent:geom2`) |
 | `tmix`, `lagfun`, `random` | `vaco-filter-temporal` | done (#475, `agent:temporal`) |
-| `photosensitivity` | `vaco-filter-analysis` | in progress (#477, `agent:analysis2`) at the time this crate was written — not this crate's to touch |
+| `photosensitivity` | `vaco-filter-analysis` | in progress (#477, `agent:analysis2`) throughout this crate's time in the tree — not this crate's to touch |
 | `shufflepixels` | (declined in `vaco-filter-geometry`) | its `seed` option reads as a generator seed nobody has identified; that crate documented the same "not implemented, not guessed" call this crate makes for `noise` |
 
-What is left, unclaimed, in this crate's actual row: `noise`, `vignette`,
-`epx`, `xbr`, `hqx`, `super2xsai`, `amplify`, `delogo`, `removelogo`,
-`cover_rect`, `find_rect`. This pass implements `noise` and `vignette`; the
-rest are listed under "Left for a follow-up" below. This is a genuine,
-reported change of scope from the dispatch brief, not a silent substitution.
+What was actually left, unclaimed, in this crate's real row: `noise`,
+`vignette`, `amplify`, `delogo`, `removelogo`, `epx`, `xbr`, `hqx`,
+`super2xsai`, `cover_rect`, `find_rect`. This crate implements five of those
+eleven; the other six are listed under "Left as a follow-up" below, each
+with the specific reason it stopped.
 
 ## What it is
 
-One module per filter (`src/noise.rs`, `src/vignette.rs`), each exposing
-`pub const DESC: FilterDesc` and a crate-private `fn create`, aggregated by
+One module per filter (`src/{amplify,delogo,epx,noise,vignette}.rs`), each
+exposing `pub const DESC: FilterDesc` and a crate-private `fn create`,
+aggregated by
 [`registry::ArtisticRegistry`](../../crates/filter/vaco-filter-artistic/src/registry.rs)
 — the same shape `vaco-filter-convolve`/`vaco-filter-geometry` use.
-`src/common.rs` carries the same small 8-bit-plane helpers those crates each
-carry their own copy of (format validation, frame metadata copying) — D19
-governs shared *types*, not these tiny per-crate predicates, and each of
-those crates' own docs make the same call for the same reason.
+`src/common.rs` carries the small 8-bit-plane helpers every crate in this
+family carries its own copy of (format validation, frame metadata copying,
+the `planes` bitmask) — D19 governs shared *types*, not these tiny
+per-crate predicates.
+
+### `amplify`
+
+Amplifies (or leaves alone) each pixel's deviation from a temporal window
+average — the filter's own purpose is surfacing *subtle* frame-to-frame
+change while leaving large real motion untouched. Fully measured against
+the reference (`ffmpeg 8.1`, `-bitexact`, a 1x1 `gray` source carrying a
+hand-built per-frame sequence via `geq`), because none of the shape beyond
+the option names is in the reference's own documentation:
+
+- The averaging window is symmetric and *includes* the centre: `radius=r`
+  averages the `2r+1` frames `[center-r..center+r]`. Confirmed independently
+  at `r=1` and `r=2`.
+- Readiness needs **one frame more of history than the window strictly
+  requires** — the first output is for input index `radius+1`, not
+  `radius`, with no compensating emission at EOF (total output count is
+  exactly `input_count - 2*radius - 1`). This crate reproduces the measured
+  rule via a `2*radius+2`-slot ring buffer without knowing why the
+  reference wants the extra frame.
+- The gate is `tolerance < |dev| <= threshold`; outside that window the
+  centre pixel passes through completely unchanged. A `40`-unit sustained
+  step was left untouched at every `threshold` tried (`0`, `1`, `2`, the
+  default `10`) — consistent with the filter's stated purpose of ignoring
+  real motion by default.
+- `low`/`high` clamp the **delta's magnitude**, asymmetrically by sign
+  (`delta.max(-low)` if negative, `delta.min(high)` if positive) — not the
+  final pixel value directly. The default `low=high=65535` never binds for
+  8-bit content, which is why every probe that did not set them looked
+  unclamped.
+
+See `src/amplify.rs`'s module doc for the full derivation, including the
+alternate hypotheses tried and ruled out.
+
+### `epx`
+
+Scales by 2x (`n=2`, Scale2x) or 3x (`n=3`, Scale3x), implemented from
+`https://www.scale2x.it/algorithm` (`provenance/sources.toml`'s
+`scale2x-algorithm`) — the AdvanceMAME project's own published
+specification, not the reference's source. Both scale factors reduce to a
+handful of neighbour-equality comparisons with no lookup table at all.
+`n=2` was checked against the reference at several hand-picked pixels,
+including one exercising every branch of the four-way conditional, and
+matched exactly; `n=3` is implemented from the same specification but was
+not independently re-probed in the time available.
 
 ### `vignette`
 
 Darkens (or, `mode=backward`, brightens) radially from a centre point using
-the classic optical `cos^4` vignetting law. Measured against the reference
-(`ffmpeg 8.1`, `-bitexact`, tiny `gray`/`yuv420p` sources through `-f
-rawvideo`, 2026-08-28) rather than assumed:
+the classic `cos^4` optical vignetting law. Framecrc-exact for
+`dither=0`. Full derivation, including the probe that pinned the exact
+pixel-coordinate and truncation convention, is in `src/vignette.rs`'s
+module doc. Three documented gaps:
 
-```text
-dx = x - x0;  dy = (y - y0) * aspect
-dist = sqrt(dx*dx + dy*dy)
-theta = angle * dist / max_dist            // max_dist = sqrt(x0^2 + y0^2), UNSCALED by aspect
-factor = theta < PI/2 ? cos(theta)^4 : 0
-out = mode=forward  ? trunc(baseline + (in-baseline)*factor)
-    : mode=backward ? clamp(baseline + (in-baseline)/factor, 0, 255)   // factor==0 -> clip
-```
-
-`baseline` is `128` for a chroma plane of a non-RGB format, `0` otherwise
-(measured on a `yuv420p` source: chroma is pulled toward `128`, not
-multiplied directly, the way a darkening filter that must not tint the image
-grey has to work). Pixel coordinates are plain integers — no half-pixel
-offset — and the rounding is C-style truncation, not `round()`; a parameter
-sweep over both conventions found exactly one that reproduced an 8x8 and a
-16x8 reference grid with zero error (`src/vignette.rs`'s module doc has the
-full probe).
-
-Three documented, deliberate gaps, none guessed at:
-
-1. **`dither=1` (the default!) is not reproduced.** It perturbs the
-   truncated output by up to ±1 per pixel, reproducibly across repeated runs
-   despite `vignette` having no `seed` option at all — this crate did not
-   identify that generator in the time available. `dither=0` is unaffected
-   and is this filter's framecrc-verified path.
-2. **Chroma planes are scaled around `128` (structurally reasoned) but not
-   pixel-verified.** A `yuv420p` probe confirmed the *shape* of chroma
-   handling but left an approximately 1-count residual against the reference
-   that this pass did not chase down before its time budget ran out.
-3. **`aspect != 1` is exact away from the frame's extreme corners only.** The
-   interior formula (`dy` scaled by `aspect`, `max_dist` left unscaled)
-   reproduced every interior pixel of a 16x8/`aspect=2` probe exactly, but
-   not the reference's extra hard clipping right at the corners; a search
-   over plausible alternate scalings did not find one rule matching both the
-   interior and the corners.
+1. `dither=1` — the filter's own **default** — perturbs the truncated
+   output by up to ±1, reproducibly across runs despite no `seed` option. A
+   bounded sweep (comparing `dither=0` and `dither=1` over a 32x32 uniform
+   frame and looking for short-period tiling in the difference map) found
+   no evidence of a simple ordered-dither matrix, which at least converts
+   "not attempted" into "attempted and inconclusive within budget" for
+   whoever picks this up next.
+2. Chroma-plane handling is scaled around the neutral point `128`
+   (structurally reasoned, matches the *shape* measured on a `yuv420p`
+   probe) but left a small residual this pass did not chase down.
+3. `aspect != 1` reproduces every interior pixel exactly but not the
+   reference's extra hard clipping right at the frame's extreme corners.
 
 ### `noise`
 
-Adds per-component (`c0`..`c3`, one per plane) pseudo-random noise, with
-`all_seed`/`all_strength`/`all_flags` (aliases `alls`/`allf`) setting every
-component's suboption at once and a component's own `c{n}_*` option
-overriding it. Flags: `a` averaged (3-sample mean), `p` (semi)regular
-pattern (a fixed deterministic tile, not a fresh draw), `t` temporal (the
-noise table is drawn once and reused for the rest of the stream instead of
-being redrawn every frame), `u` uniform.
+Adds per-component (`c0`..`c3`) pseudo-random noise, `all_seed`/
+`all_strength`/`all_flags` setting every component's suboption at once. The
+one framecrc-exact case: with every component's `strength` at its default
+of `0` (plain `-vf noise`), the reference is a byte-identical no-op, and
+this module reproduces that exactly (checked directly: it never touches its
+RNG state at `strength=0`). Any `strength > 0` uses this crate's own
+`SplitMix64` PRNG and is not framecrc-verified — reproducing the reference's
+actual generator would need its source (D7), the same conclusion
+`vaco-filter-temporal::random` already reached.
 
-**Measured, and the one framecrc-exact case this filter has:** with every
-component's `strength` at its default of `0` (i.e. plain `-vf noise`), the
-reference's output is byte-identical to no filter at all —
-`ffmpeg -bitexact -f lavfi -i "color=gray:s=8x8:d=1:r=1" -vf
-"format=gray,noise" -f rawvideo -pix_fmt gray -` diffed against the same
-command without `noise`. This module reproduces that: at `strength=0` for
-every component it never touches its RNG state and passes the frame through
-unmodified — checked directly, not assumed.
+### `delogo`
 
-**Not attempted:** the actual pseudo-random sequence at `strength > 0`.
-`all_seed`/`c0_seed`/etc. only make sense as *reproducibility* knobs if this
-crate reproduces the reference's own generator, and doing that would mean
-reading the reference's source (D7) — the same conclusion
-`vaco-filter-temporal::random` already reached and documented. `strength >
-0` is implemented (a small dependency-free `SplitMix64` PRNG, the same
-generator already duplicated in `vaco-filter-temporal::rng` and
-`vaco-filter-source::rng` for the identical reason — see
-`planning/TECH-DEBT.md`) but is **not** framecrc-verified at any nonzero
-strength. `seed=-1`'s reference behaviour ("seed from local entropy", i.e.
-non-deterministic even in the reference) is replaced with a fixed constant
-seed, a deliberate divergence toward reproducible pipelines.
+Replaces a rectangular region with values interpolated from its border —
+confirmed content-independent (a `200`-valued box surrounded by flat `50`
+comes back entirely `50`). The measured formula (a bilinear blend of
+horizontal and vertical border interpolation, weighted by the product of
+orthogonal distances — see `src/delogo.rs`'s module doc for the exact
+derivation) matched three of a `4x4` test box's four columns exactly but
+diverged on the fourth at every row tried, and several alternate
+conventions (shifted distance origins, plain four-corner bilinear, an
+unweighted 50/50 blend, squared/min-based weights) did not fix the fourth
+column without breaking the other three. Shipped as **structural, not
+framecrc-verified** — the same bar `vaco-filter-blur::gblur` sets for the
+same reason.
+
+## Left as a follow-up
+
+| Filter | Why it stopped |
+|---|---|
+| `hqx` | **D7, not time.** hq2x/hq3x/hq4x classify each pixel into one of 256 neighbourhood patterns and look up a hand-tuned rule per pattern — an *authorial* table (designed by visual experimentation, not dictated by any format constraint), and the only source found for the exact table was the reference's own implementation. |
+| `xbr`, `super2xsai` | Independently published by their own authors (not an FFmpeg-source-only algorithm, so D7 is not the blocker), but genuinely not reached in the time this pass had after `epx` established the pattern. |
+| `removelogo` | Reads a second input — a bitmap mask file in a format specific to this filter — which is both a new file format to specify and a case of parsing a user-supplied file this project's own rules would then require a fuzz target for. |
+| `cover_rect`, `find_rect` | Template matching against a second bitmap input at multiple mipmap scales; `find_rect` reports a *position*, not a transformed frame, so it needs a `showinfo`-style metadata assertion rather than a framecrc pixel diff — a different verification shape this pass did not build. |
 
 ## Framecrc comparison table
 
-Built one comparison loop: `ffmpeg -bitexact -f lavfi -i <source> -vf
-"<filter>=<args>" -f rawvideo -pix_fmt <fmt> -` against the reference, hand
-zero-error-checked against this crate's pure functions (`factor_at`/
-`apply_forward`/`apply_backward` for `vignette`; the `strength=0` identity
-check for `noise`) — pinned into unit tests so a future change that breaks
-the match fails a test rather than needing a human to re-run `ffmpeg`. No
-`vaco` CLI/muxer exists yet in this tree to drive an actual `vaco ... -f
-framecrc -` invocation (`ffmpeg -h filter=noise`, `planning/14-cli.md` is
-still a plan document), so "framecrc comparison" here means the same
-rawvideo-diff methodology `vaco-filter-convolve`/`vaco-filter-blur` already
-established for exactly this reason.
+One comparison loop throughout: `ffmpeg -bitexact -f lavfi -i <deterministic
+source> -vf "<filter>=<args>" -f rawvideo -pix_fmt <fmt> -` against the
+reference, cross-checked against this crate's pure functions and pinned
+into unit tests. No `vaco` CLI/muxer exists yet in this tree to drive an
+actual `vaco ... -f framecrc -` invocation (`planning/14-cli.md` is still a
+plan document), so "framecrc comparison" here means the same rawvideo-diff
+methodology `vaco-filter-convolve`/`vaco-filter-blur` already established
+for exactly this reason.
 
 | Filter | Args | Source | Result |
 |---|---|---|---|
-| `vignette` | `dither=0` (default angle/x0/y0/aspect/mode) | `gray`, 8x8 | **exact** — zero error, forward mode |
-| `vignette` | `dither=0:mode=backward` | `gray`, 16x8 | **exact** — zero error |
-| `vignette` | `dither=0` (default) | `yuv420p`, 8x8 | **not verified** — chroma-plane residual, see above |
-| `vignette` | `dither=1` (the default) | any | **not verified** — dithering not reproduced |
+| `amplify` | `radius=1:factor=5:threshold=10:tolerance=0` | `gray`, 1x1, 10-frame step sequence | **exact** |
+| `amplify` | `radius=2` variant of the same sequence | `gray`, 1x1, 14 frames | **exact** |
+| `amplify` | `low=3:high=3` / `low=3:high=100` | same, `factor=5` | **exact** (delta-clamp verified) |
+| `epx` | `n=2` | `gray`, 4x4 checkerboard | **exact** |
+| `epx` | `n=3` | — | not independently re-probed |
+| `vignette` | `dither=0` (default angle/x0/y0/aspect/mode) | `gray`, 8x8 | **exact** — forward mode |
+| `vignette` | `dither=0:mode=backward` | `gray`, 16x8 | **exact** |
+| `vignette` | `dither=0` (default) | `yuv420p`, 8x8 | **not verified** — chroma residual |
+| `vignette` | `dither=1` (the default) | any | **not verified** — bounded sweep found no simple pattern |
 | `vignette` | `dither=0:aspect=2` | `gray`, 16x8 | **partial** — interior exact, extreme corners diverge |
-| `noise` | *(no args, `strength=0` everywhere)* | `gray`, 8x8 | **exact** — verified identity |
+| `noise` | *(no args, `strength=0`)* | `gray`, 8x8 | **exact** — verified identity |
 | `noise` | any `strength > 0` | any | **not verified** — PRNG not reproduced |
+| `delogo` | `x=3:y=3:w=4:h=4` | `gray`, 10x10 flat + `200` box | **exact** — content-independence confirmed |
+| `delogo` | `x=3:y=3:w=4:h=4` | `gray`, 10x10 step function | **partial** — 3 of 4 columns exact, 4th column diverges every row |
 
 ## How to change it
 
-- Both filters follow `vaco-filter-convolve`'s convention: a `pub const
+- All five filters follow `vaco-filter-convolve`'s convention: a `pub const
   DESC`, an `Opts` struct via `vaco_opts::Options` with a `parse` inherent
   method, a `Filter` struct implementing `vaco_filter_core::adapt::FrameFilter`,
   and a `create` function the registry dispatches to.
-- `vignette`'s expression options (`angle`/`x0`/`y0`) are `vaco-expr`
-  `Expr`s bound to `w`/`h`, evaluated once in `Filter::new`-adjacent state
-  (`eval=init`, the default) or every frame (`eval=frame`) — see
-  `params_for` in `src/vignette.rs`.
-- If you resolve the `dither=1` generator or the chroma-plane residual,
-  update the doc comment at the top of `src/vignette.rs` (it states exactly
-  what was and was not verified) and the table above in the same change —
-  both are written to be falsified by a future measurement, not treated as
-  permanent.
+- `amplify` is this crate's only filter that changes the *frame count*
+  (fewer outputs than inputs) rather than just per-pixel values — it
+  buffers via a `VecDeque<Frame>` sized to `2*radius+2`, not the
+  `Simple`/one-in-one-out shape the others use directly (it still wraps in
+  `Simple`, since `Simple` handles per-frame delivery; the buffering lives
+  inside `Filter::filter_frame`).
+- `epx` is this crate's only filter that changes *frame dimensions* — its
+  `configure` hook rewrites the output `LinkFormat`'s width/height, following
+  `vaco-filter-video-geometry::scale`'s pattern.
+- If you resolve `delogo`'s fourth-column discrepancy or `vignette`'s
+  `dither=1` generator, update both the relevant module's doc comment (each
+  states exactly what was and was not verified) and the table above in the
+  same change.
 - If a `rand`-family dependency is ever approved for the workspace, `noise`
-  and `vaco-filter-temporal::random` are the two filters whose correctness
-  bar changes from "algorithmically faithful" to "must match the reference
-  bit for bit" — reproducing FFmpeg's actual generator (not published,
-  reachable only by reading its source, which D7 rules out) would still be
-  needed even then.
+  is the filter whose correctness bar changes from "algorithmically
+  faithful" to "must match bit for bit" — though reproducing FFmpeg's
+  actual generator (unpublished, reachable only via its source) would still
+  be needed even then.
 
 ## Configuration
 
@@ -173,8 +208,8 @@ option surface).
 
 ## Dependencies
 
-`vaco-core`, `vaco-expr` (for `vignette`'s expression options),
-`vaco-opts`, `vaco-frame`, `vaco-pixfmt`, `vaco-filter-core`,
+`vaco-core`, `vaco-expr` (for `vignette`'s and `delogo`'s expression
+options), `vaco-opts`, `vaco-frame`, `vaco-pixfmt`, `vaco-filter-core`,
 `vaco-filter-graph`, `bitflags` (for `noise`'s flag-letter option). No
 external crate beyond what the workspace already declares; no new
 dependency was added to the workspace's `Cargo.toml`.
