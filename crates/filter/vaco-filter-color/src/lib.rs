@@ -13,13 +13,15 @@
 //! `pseudocolor`, `colormap`, `limitdiff`, `tonemap`, `eq`, `histeq`,
 //! `colormatrix`.
 //!
-//! Nine are implemented: [`colorchannelmixer`], [`lut`] (which registers
+//! Eleven are implemented: [`colorchannelmixer`], [`lut`] (which registers
 //! `lut`, `lutrgb` and `lutyuv`), [`lut2`] and [`pseudocolor`], from a
 //! prior (mis-scoped) brief for this crate; [`colorlevels`], added in a
 //! later pass; [`hue`], added in the 2026-08-23 continuation pass covered
-//! below; [`exposure`], added once interface gap 15 closed (see below).
-//! Each of the other 20 is a real GitHub-issue-sized unit of work in its
-//! own right and none is silently stubbed here.
+//! below; [`exposure`], added once interface gap 15 closed (see below);
+//! [`colormatrix`] and [`limitdiff`], added in the #117 pass (see each
+//! module's own doc for what was measured). Each of the remaining 18 is a
+//! real GitHub-issue-sized unit of work in its own right and none is
+//! silently stubbed here.
 //!
 //! ## Interface gap 15 closed: `exposure` ships, `grayworld` still does not
 //!
@@ -117,8 +119,10 @@ mod common;
 
 pub mod colorchannelmixer;
 pub mod colorlevels;
+pub mod colormatrix;
 pub mod exposure;
 pub mod hue;
+pub mod limitdiff;
 pub mod lut;
 pub mod lut2;
 pub mod pseudocolor;

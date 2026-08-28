@@ -1,6 +1,6 @@
 [package]
 name = "vaco-filter-color"
-description = "Colour and LUT-adjacent video filters (plan 16 4.2's vaco-filter-color row): colorchannelmixer, lut, lutrgb, lutyuv, lut2, pseudocolor, colorlevels implemented (7/29); the rest of the row (curves, colorbalance, colorcontrast, colorcorrect, colorize, colortemperature, huesaturation, hue, vibrance, exposure, selectivecolor, grayworld, greyedge, normalize, monochrome, midequalizer, geq, colormap, limitdiff, tonemap, eq, histeq, colormatrix) not yet implemented."
+description = "Colour and LUT-adjacent video filters (plan 16 4.2's vaco-filter-color row): colorchannelmixer, lut, lutrgb, lutyuv, lut2, pseudocolor, colorlevels, hue, exposure, colormatrix, limitdiff implemented (11/29); the rest of the row (curves, colorbalance, colorcontrast, colorcorrect, colorize, colortemperature, huesaturation, vibrance, selectivecolor, grayworld, greyedge, normalize, monochrome, midequalizer, geq, colormap, tonemap, eq, histeq) not yet implemented."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -17,6 +17,7 @@ vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
 vaco-filter-core = { path = "../../filter/vaco-filter-core" }
 vaco-filter-graph = { path = "../../filter/vaco-filter-graph" }
 vaco-filter-framesync = { path = "../../filter/vaco-filter-framesync" }
+smallvec.workspace = true
 
 [dev-dependencies]
 vaco-limits = { path = "../../core/vaco-limits" }

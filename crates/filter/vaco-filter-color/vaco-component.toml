@@ -75,3 +75,17 @@ name = "exposure"
 long_name = "Adjust exposure of the video stream"
 ctor = "vaco_filter_color::exposure::DESC"
 media = "video"
+
+[[component]]
+kind = "filter"
+name = "colormatrix"
+long_name = "Convert color matrix"
+ctor = "vaco_filter_color::colormatrix::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "limitdiff"
+long_name = "Apply filtering with limiting difference"
+ctor = "vaco_filter_color::limitdiff::DESC"
+media = "video"

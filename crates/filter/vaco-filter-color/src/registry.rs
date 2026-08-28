@@ -8,8 +8,10 @@ use vaco_filter_graph::registry::{FilterRegistry, Instance, Instantiate};
 const NAMES: &[&str] = &[
     "colorchannelmixer",
     "colorlevels",
+    "colormatrix",
     "exposure",
     "hue",
+    "limitdiff",
     "lut",
     "lut2",
     "lutrgb",
@@ -30,8 +32,10 @@ impl FilterRegistry for ColorRegistry {
         match req.name {
             "colorchannelmixer" => crate::colorchannelmixer::create(req),
             "colorlevels" => crate::colorlevels::create(req),
+            "colormatrix" => crate::colormatrix::create(req),
             "exposure" => crate::exposure::create(req),
             "hue" => crate::hue::create(req),
+            "limitdiff" => crate::limitdiff::create(req),
             "lut" => crate::lut::lut::create(req),
             "lutrgb" => crate::lut::lutrgb::create(req),
             "lutyuv" => crate::lut::lutyuv::create(req),
