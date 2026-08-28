@@ -32,8 +32,8 @@
 //!
 //! # Neighbour availability, not yet general
 //!
-//! [`Neighbours16`]/[`NeighboursChroma`] take already-resolved availability
-//! + sample values -- deriving those from a real multi-macroblock picture
+//! [`Neighbours16`]/[`NeighboursChroma`] take already-resolved availability +
+//! sample values -- deriving those from a real multi-macroblock picture
 //! (clause 6.4.8's neighbouring-location process, `constrained_intra_pred_flag`,
 //! slice boundaries) is not implemented here. What clause 8.3.2/8.3.3
 //! guarantee independent of that derivation -- the "all unavailable"
@@ -322,15 +322,22 @@ pub(crate) const fn infer_intra4x4_pred_mode(
 /// satisfy) -- out-of-range `mode` values fall back to DC (mode 2)
 /// rather than panicking, matching this crate's established "defensive
 /// default over an indexing panic" idiom.
+/// Widens a `[[u8; 4]; 4]` row/column index (always `0..4`, a fixed array
+/// size, never bitstream-derived) to the signed coordinate space `p4`'s
+/// eq. (8-45)..(8-69) arithmetic needs. The fallback can never actually run
+/// for a 4-element array, but it is honest rather than silent if that ever
+/// changes.
+fn block4_index_to_i32(v: usize) -> i32 {
+    i32::try_from(v).unwrap_or(i32::MAX)
+}
+
 #[must_use]
 pub(crate) fn predict_intra4x4(mode: u8, n: Neighbours4) -> [[u8; 4]; 4] {
     let mut out = [[0u8; 4]; 4];
     match mode {
         0 => {
             // eq. (8-45), Vertical.
-            for row in &mut out {
-                *row = n.top;
-            }
+            out.fill(n.top);
         }
         1 => {
             // eq. (8-46), Horizontal.
@@ -342,7 +349,7 @@ pub(crate) fn predict_intra4x4(mode: u8, n: Neighbours4) -> [[u8; 4]; 4] {
             // eq. (8-51)/(8-52), Diagonal_Down_Left.
             for (y, row) in out.iter_mut().enumerate() {
                 for (x, v) in row.iter_mut().enumerate() {
-                    let (x, y) = (x as i32, y as i32);
+                    let (x, y) = (block4_index_to_i32(x), block4_index_to_i32(y));
                     *v = if x == 3 && y == 3 {
                         (p4(&n, 6, -1) + 3 * p4(&n, 7, -1) + 2) >> 2
                     } else {
@@ -356,7 +363,7 @@ pub(crate) fn predict_intra4x4(mode: u8, n: Neighbours4) -> [[u8; 4]; 4] {
             // eq. (8-53)/(8-54)/(8-55), Diagonal_Down_Right.
             for (y, row) in out.iter_mut().enumerate() {
                 for (x, v) in row.iter_mut().enumerate() {
-                    let (x, y) = (x as i32, y as i32);
+                    let (x, y) = (block4_index_to_i32(x), block4_index_to_i32(y));
                     *v = match x.cmp(&y) {
                         core::cmp::Ordering::Greater => {
                             (p4(&n, x - y - 2, -1)
@@ -383,7 +390,7 @@ pub(crate) fn predict_intra4x4(mode: u8, n: Neighbours4) -> [[u8; 4]; 4] {
             // eq. (8-56)..(8-59), Vertical_Right.
             for (y, row) in out.iter_mut().enumerate() {
                 for (x, v) in row.iter_mut().enumerate() {
-                    let (x, y) = (x as i32, y as i32);
+                    let (x, y) = (block4_index_to_i32(x), block4_index_to_i32(y));
                     let z_vr = 2 * x - y;
                     *v = if z_vr >= 0 && z_vr % 2 == 0 {
                         (p4(&n, x - (y >> 1) - 1, -1) + p4(&n, x - (y >> 1), -1) + 1) >> 1
@@ -405,7 +412,7 @@ pub(crate) fn predict_intra4x4(mode: u8, n: Neighbours4) -> [[u8; 4]; 4] {
             // eq. (8-60)..(8-63), Horizontal_Down.
             for (y, row) in out.iter_mut().enumerate() {
                 for (x, v) in row.iter_mut().enumerate() {
-                    let (x, y) = (x as i32, y as i32);
+                    let (x, y) = (block4_index_to_i32(x), block4_index_to_i32(y));
                     let z_hd = 2 * y - x;
                     *v = if z_hd >= 0 && z_hd % 2 == 0 {
                         (p4(&n, -1, y - (x >> 1) - 1) + p4(&n, -1, y - (x >> 1)) + 1) >> 1
@@ -427,7 +434,7 @@ pub(crate) fn predict_intra4x4(mode: u8, n: Neighbours4) -> [[u8; 4]; 4] {
             // eq. (8-64)/(8-65), Vertical_Left.
             for (y, row) in out.iter_mut().enumerate() {
                 for (x, v) in row.iter_mut().enumerate() {
-                    let (x, y) = (x as i32, y as i32);
+                    let (x, y) = (block4_index_to_i32(x), block4_index_to_i32(y));
                     *v = if y == 0 || y == 2 {
                         (p4(&n, x + (y >> 1), -1) + p4(&n, x + (y >> 1) + 1, -1) + 1) >> 1
                     } else {
@@ -444,7 +451,7 @@ pub(crate) fn predict_intra4x4(mode: u8, n: Neighbours4) -> [[u8; 4]; 4] {
             // eq. (8-66)..(8-69), Horizontal_Up.
             for (y, row) in out.iter_mut().enumerate() {
                 for (x, v) in row.iter_mut().enumerate() {
-                    let (x, y) = (x as i32, y as i32);
+                    let (x, y) = (block4_index_to_i32(x), block4_index_to_i32(y));
                     let z_hu = x + 2 * y;
                     *v = if z_hu == 0 || z_hu == 2 || z_hu == 4 {
                         (p4(&n, -1, y + (x >> 1)) + p4(&n, -1, y + (x >> 1) + 1) + 1) >> 1
@@ -603,7 +610,7 @@ mod tests {
     /// 0) and `intra_chroma_pred_mode` = 0 (DC) -- all asserted below
     /// directly off `SliceStats`, not assumed. Zero luma/chroma CBP means
     /// clause 7.3.5's `residual()` is never invoked for this macroblock at
-    /// all (no luma AC, no chroma AC, and Intra_16x16's own luma DC block
+    /// all (no luma AC, no chroma AC, and `Intra_16x16`'s own luma DC block
     /// -- read unconditionally whenever `Intra16x16PredMode` applies --
     /// decodes `coded_block_flag == 0`, independently confirmed by this
     /// crate's own CBP-oracle work two rounds ago), so reconstruction is
