@@ -6,8 +6,10 @@
 
 #![forbid(unsafe_code)]
 
+pub mod bink;
 pub mod cdg;
 pub mod ffmetadata;
 pub mod flic;
 pub mod ivf;
 pub mod roq;
+pub mod smk;

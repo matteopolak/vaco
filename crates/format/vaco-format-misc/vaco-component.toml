@@ -48,3 +48,19 @@ long_name  = "CD Graphics"
 feature    = "demux-cdg"
 ctor       = "vaco_format_misc::cdg::DEMUXER"
 extensions = "cdg"
+
+[[component]]
+kind       = "demuxer"
+name       = "bink"
+long_name  = "Bink"
+feature    = "demux-bink"
+ctor       = "vaco_format_misc::bink::DEMUXER"
+extensions = "bik,bk2"
+
+[[component]]
+kind       = "demuxer"
+name       = "smk"
+long_name  = "Smacker"
+feature    = "demux-smk"
+ctor       = "vaco_format_misc::smk::DEMUXER"
+extensions = "smk"

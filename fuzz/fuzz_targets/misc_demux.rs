@@ -1,10 +1,11 @@
 //! Whole-file demux over arbitrary bytes, for every format in
-//! `vaco-format-misc` at once: `ivf`, `ffmetadata`, `roq`, `flic`, `cdg`.
+//! `vaco-format-misc` at once: `ivf`, `ffmetadata`, `roq`, `flic`, `cdg`,
+//! `bink`, `smk`.
 //!
 //! One target for the same reason `audio_simple_demux` covers nine formats
 //! at once: each header parser is independent, the signatures are long
 //! enough that one input essentially never satisfies two of them, and the
-//! fuzzer's corpus partitions across all five over time.
+//! fuzzer's corpus partitions across all seven over time.
 //!
 //! What is asserted beyond "does not panic":
 //!
@@ -12,16 +13,21 @@
 //!   again, never something a caller could mistake for real data.
 //! * **A packet's payload never exceeds its own buffer.**
 //! * **Reading terminates**, via a packet-count cap. `roq`'s chunk-by-chunk
-//!   accumulation loop and `ivf`'s frame walk are both driven purely by
-//!   attacker-controlled length fields, which is exactly the shape this
-//!   family's chunk-length prefixes are expected to stress.
+//!   accumulation loop, `ivf`'s frame walk, and `bink`/`smk`'s frame-table
+//!   and per-track chunk walks are all driven purely by attacker-controlled
+//!   length fields, which is exactly the shape this family's chunk-length
+//!   prefixes are expected to stress — `bink`'s frame index table and
+//!   `smk`'s `FrameSizes`/`FrameTypes`/`AudioRate` tables most of all, since
+//!   both are read as attacker-sized arrays up front.
 //! * **Every stream reports the media type its own module promises**: `ivf`,
 //!   `flic` and `cdg` always video and exactly one stream; `roq` one video
-//!   stream plus, sometimes, one audio stream; `ffmetadata` never any
-//!   stream at all (module docs — `[STREAM]` sections are tags, not
-//!   phantom streams here).
-//! * **`Probe::probe` never scores above 100** for any of the five, over the
-//!   same bytes `open` was tried on.
+//!   stream plus, sometimes, one audio stream; `bink` one video stream plus
+//!   0-256 audio streams (its own declared, bounded track count); `smk` one
+//!   video stream plus 0-7 audio streams (one slot per `AudioRate` entry);
+//!   `ffmetadata` never any stream at all (module docs — `[STREAM]`
+//!   sections are tags, not phantom streams here).
+//! * **`Probe::probe` never scores above 100** for any of the seven, over
+//!   the same bytes `open` was tried on.
 //!
 //! fuzz-crate: vaco-format-misc
 
@@ -104,6 +110,27 @@ fuzz_target!(|data: &[u8]| {
         drain(&mut d);
     }
 
+    if let Ok(mut d) = vaco_format_misc::bink::BinkDemuxer::open(src(data)) {
+        let types = media_types(d.streams());
+        assert!(!types.is_empty(), "bink: expected at least the video stream");
+        assert_eq!(types.first().copied().flatten(), Some(MediaType::Video));
+        for t in types.iter().skip(1) {
+            assert_eq!(*t, Some(MediaType::Audio));
+        }
+        drain(&mut d);
+    }
+
+    if let Ok(mut d) = vaco_format_misc::smk::SmkDemuxer::open(src(data)) {
+        let types = media_types(d.streams());
+        assert!(!types.is_empty(), "smk: expected at least the video stream");
+        assert_eq!(types.first().copied().flatten(), Some(MediaType::Video));
+        assert!(types.len() <= 8, "smk: at most 7 audio tracks plus video");
+        for t in types.iter().skip(1) {
+            assert_eq!(*t, Some(MediaType::Audio));
+        }
+        drain(&mut d);
+    }
+
     let probe_data = vaco_format_core::probe::ProbeData::new(data);
     for score in [
         vaco_format_misc::ivf::probe(&probe_data),
@@ -111,6 +138,8 @@ fuzz_target!(|data: &[u8]| {
         vaco_format_misc::roq::probe(&probe_data),
         vaco_format_misc::flic::probe(&probe_data),
         vaco_format_misc::cdg::probe(&probe_data),
+        vaco_format_misc::bink::probe(&probe_data),
+        vaco_format_misc::smk::probe(&probe_data),
     ] {
         assert!(score.value() <= 100, "probe score out of range");
     }
