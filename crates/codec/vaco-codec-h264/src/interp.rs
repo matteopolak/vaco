@@ -76,98 +76,79 @@ pub(crate) fn luma_qpel_sample<F: Fn(i32, i32) -> u8>(
     }
 
     // Horizontal half-pel at row `dy` (`b`-shaped, clause 8.4.2.2.1 eq.
-    // 8-238), rounded and clipped -- used directly for `frac_y == 0`.
+    // 8-238) -- rounded AND clipped to a real 8-bit sample here, not just
+    // rounded. Clause 8.4.2.2.1's own quarter-pel averaging positions
+    // (`a`, `c`, `e`, `g`, ...) average against the *clipped* half-pel
+    // sample, the same one that would be stored and displayed if `b`
+    // itself were the requested position -- not the unclipped 6-tap sum.
+    // Skipping the clip here and only applying it to the position's own
+    // final result (an easy mistake: every arm below already ends in its
+    // own `clip_u8`, so the bug is invisible unless you check what value
+    // went *into* that clip for a two-input average) silently overshoots
+    // whenever the raw 6-tap sum would have needed clipping -- exactly
+    // where a real edge and real fractional motion coincide, which read
+    // as small everywhere but is a structural amplitude error, not
+    // rounding.
     let half_h = |dy: i32| -> i32 {
-        round_half(tap6(
+        i32::from(clip_u8(round_half(tap6(
             f(-2, dy),
             f(-1, dy),
             f(0, dy),
             f(1, dy),
             f(2, dy),
             f(3, dy),
-        ))
+        ))))
     };
-    // Vertical half-pel at column `dx` (`h`-shaped), rounded and clipped.
+    // Vertical half-pel at column `dx`, clipped for the same reason.
     let half_v = |dx: i32| -> i32 {
-        round_half(tap6(
+        i32::from(clip_u8(round_half(tap6(
             f(dx, -2),
             f(dx, -1),
             f(dx, 0),
             f(dx, 1),
             f(dx, 2),
             f(dx, 3),
-        ))
+        ))))
     };
     // Raw (unrounded) horizontal 6-tap sum at row `dy`, for `j`'s own
-    // two-pass derivation.
+    // two-pass derivation -- deliberately NOT clipped or rounded here;
+    // `j` itself is rounded and clipped once, below, after the second
+    // pass.
     let raw_h =
         |dy: i32| -> i32 { tap6(f(-2, dy), f(-1, dy), f(0, dy), f(1, dy), f(2, dy), f(3, dy)) };
+    // `j`: both axes half-pel, clause 8.4.2.2.1's own two-pass
+    // derivation -- the horizontal 6-tap sum applied to six UNCLIPPED,
+    // unrounded raw_h rows, then a second 6-tap pass, then rounded and
+    // clipped exactly once at the end. Computed once and clipped
+    // immediately (unlike half_h/half_v above, there is only one `j` per
+    // sample position, not one per row/column), for the same "average
+    // against the real clipped sample" reason.
+    let j = i32::from(clip_u8(round_quarter_pass(tap6(
+        raw_h(-2),
+        raw_h(-1),
+        raw_h(0),
+        raw_h(1),
+        raw_h(2),
+        raw_h(3),
+    ))));
 
     match (frac_x, frac_y) {
         (0, 0) => unreachable!("handled above"),
-        (2, 0) => clip_u8(half_h(0)), // b
-        (0, 2) => clip_u8(half_v(0)), // h
-        (2, 2) => clip_u8(round_quarter_pass(tap6(
-            raw_h(-2),
-            raw_h(-1),
-            raw_h(0),
-            raw_h(1),
-            raw_h(2),
-            raw_h(3),
-        ))), // j
-        (1, 0) => clip_u8(avg(f(0, 0), half_h(0))), // a
-        (3, 0) => clip_u8(avg(half_h(0), f(1, 0))), // c
-        (0, 1) => clip_u8(avg(f(0, 0), half_v(0))), // d
-        (0, 3) => clip_u8(avg(half_v(0), f(0, 1))), // n
+        (2, 0) => clip_u8(half_h(0)),                 // b
+        (0, 2) => clip_u8(half_v(0)),                 // h
+        (2, 2) => clip_u8(j),                         // j
+        (1, 0) => clip_u8(avg(f(0, 0), half_h(0))),   // a
+        (3, 0) => clip_u8(avg(half_h(0), f(1, 0))),   // c
+        (0, 1) => clip_u8(avg(f(0, 0), half_v(0))),   // d
+        (0, 3) => clip_u8(avg(half_v(0), f(0, 1))),   // n
         (1, 1) => clip_u8(avg(half_h(0), half_v(0))), // e
         (3, 1) => clip_u8(avg(half_h(0), half_v(1))), // g
         (1, 3) => clip_u8(avg(half_v(0), half_h(1))), // p
         (3, 3) => clip_u8(avg(half_v(1), half_h(1))), // r
-        (2, 1) => {
-            // f: average of j (both-half) and b-at-row-0.
-            let j = round_quarter_pass(tap6(
-                raw_h(-2),
-                raw_h(-1),
-                raw_h(0),
-                raw_h(1),
-                raw_h(2),
-                raw_h(3),
-            ));
-            clip_u8(avg(half_h(0), j))
-        }
-        (2, 3) => {
-            let j = round_quarter_pass(tap6(
-                raw_h(-2),
-                raw_h(-1),
-                raw_h(0),
-                raw_h(1),
-                raw_h(2),
-                raw_h(3),
-            ));
-            clip_u8(avg(j, half_h(1)))
-        }
-        (1, 2) => {
-            let j = round_quarter_pass(tap6(
-                raw_h(-2),
-                raw_h(-1),
-                raw_h(0),
-                raw_h(1),
-                raw_h(2),
-                raw_h(3),
-            ));
-            clip_u8(avg(half_v(0), j))
-        }
-        (3, 2) => {
-            let j = round_quarter_pass(tap6(
-                raw_h(-2),
-                raw_h(-1),
-                raw_h(0),
-                raw_h(1),
-                raw_h(2),
-                raw_h(3),
-            ));
-            clip_u8(avg(j, half_v(1)))
-        }
+        (2, 1) => clip_u8(avg(half_h(0), j)),         // f
+        (2, 3) => clip_u8(avg(j, half_h(1))),         // q
+        (1, 2) => clip_u8(avg(half_v(0), j)),         // i
+        (3, 2) => clip_u8(avg(j, half_v(1))),         // k
         _ => clip_u8(f(0, 0)),
     }
 }
@@ -176,6 +157,62 @@ pub(crate) fn luma_qpel_sample<F: Fn(i32, i32) -> u8>(
 #[allow(clippy::unwrap_used, clippy::integer_division, reason = "test code")]
 mod tests {
     use super::*;
+
+    /// A regression guard for the bug the row-0-vs-other-rows comparison
+    /// on `cabac_ip_simple.264` led to (verified as real by checking
+    /// fractional-position instrumentation, not by reading the code):
+    /// quarter-pel positions that average against a half-pel sample must
+    /// average against that sample's own *clipped* value, the same one
+    /// that would be displayed if the half-pel position itself were the
+    /// one requested -- not the unclipped 6-tap sum. A sharp step edge
+    /// with a raw 6-tap sum that overshoots past 255 is exactly the case
+    /// that makes the two diverge; a flat or gentle input (this module's
+    /// other tests) cannot distinguish them, which is why this needed
+    /// its own case.
+    #[test]
+    fn quarter_pel_averages_the_clipped_half_pel_sample_not_the_raw_overshoot() {
+        // Constructed so the raw six-tap sum for `b` genuinely overshoots
+        // 255 before rounding, `average-then-clip` and `clip-then-average`
+        // give two DIFFERENT in-range answers (not just two paths that
+        // happen to both saturate to the same clip boundary, which a
+        // flat or gentle input can't distinguish -- ask how this test's
+        // own numbers were chosen, below).
+        //
+        // Row: x=8..=13 -> E=255, F=0, G=200, H=255, I=0, J=255 (G is
+        // also the position `a` itself averages against `b`, i.e.
+        // `f(0, 0)` at x=10).
+        let fetch = |x: i32, _y: i32| -> u8 {
+            match x {
+                8 => 255,
+                9 => 0,
+                10 => 200,
+                11 => 255,
+                12 => 0,
+                13 => 255,
+                _ => 200,
+            }
+        };
+        let a = luma_qpel_sample(fetch, 10, 0, 1, 0);
+        // Hand-computed: tap6 = E - 5F + 20G + 20H - 5I + J
+        //              = 255 - 0 + 20*200 + 20*255 - 0 + 255 = 9610.
+        // round_half = (9610 + 16) >> 5 = 9626 >> 5 = 300 -- past 255,
+        // a genuine overshoot. clip_u8(300) = 255 is `b`'s own real,
+        // displayable value.
+        //
+        // Correct (average against the CLIPPED b): avg(200, 255)
+        //   = (200 + 255 + 1) >> 1 = 228.
+        // Buggy (average against the raw, unclipped 300, clip only at
+        // the very end): avg(200, 300) = (200 + 300 + 1) >> 1 = 250,
+        // clip_u8(250) = 250 -- already in range, so the outer clip
+        // never catches it. 228 and 250 are both valid-looking 8-bit
+        // samples; only one of them is what clause 8.4.2.2.1 actually
+        // specifies, which is exactly why this bug survived every
+        // flat/ramp/integer-position test this module already had.
+        assert_eq!(
+            a, 228,
+            "quarter-pel position a must average against b's clipped value, not its raw overshoot"
+        );
+    }
 
     /// A perfectly flat plane must interpolate to the same flat value at
     /// every quarter-pel position -- the six-tap filter's own weights
