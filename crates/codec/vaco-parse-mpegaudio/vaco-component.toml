@@ -1,0 +1,34 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Three components from one crate: `mp3` answers for Mp3/Mp2/Mp1 (one frame
+# syntax, the layer field tells them apart at parse time — see
+# `PARSER_MPEGAUDIO`'s doc comment), and `ac3`/`eac3` are registered
+# separately because the reference reports them as distinct `codec_name`s
+# even though one `Ac3Parser` implementation answers for both.
+
+[[component]]
+kind      = "parser"
+name      = "mp3"
+long_name = "MP1/2/3 (MPEG audio layer 1/2/3)"
+feature   = "parse-mpegaudio"
+ctor      = "vaco_parse_mpegaudio::PARSER_MPEGAUDIO"
+media     = "audio"
+codec     = "mp3"
+
+[[component]]
+kind      = "parser"
+name      = "ac3"
+long_name = "ATSC A/52A (AC-3)"
+feature   = "parse-mpegaudio"
+ctor      = "vaco_parse_mpegaudio::PARSER_AC3"
+media     = "audio"
+codec     = "ac3"
+
+[[component]]
+kind      = "parser"
+name      = "eac3"
+long_name = "ATSC A/52B (E-AC-3)"
+feature   = "parse-mpegaudio"
+ctor      = "vaco_parse_mpegaudio::PARSER_EAC3"
+media     = "audio"
+codec     = "eac3"
