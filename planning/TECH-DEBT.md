@@ -118,6 +118,22 @@ dependents, which is real scope beyond landing issues #546/#550 — flagging
 for whoever picks up the next protocol crate that would otherwise become a
 sixth copy.
 
+**Resolved 2026-08-27.** `vaco-protocol-dial` now exports `dial_tcp`,
+`dial_tls`, and `read_header_block`; `httpproxy`, `ftp`, `gopher`/`gophers`,
+and `icecast` all call the shared versions and no longer carry their own.
+The four crates' `xtask/src/wasm.rs` `NATIVE_ONLY` paragraphs collapsed to
+one-liners pointing at a single new `vaco-protocol-dial` entry. Full gate
+suite (check/test/clippy per crate, `layer-check`, `dup-check`, `dead-code`,
+`wasm-check`, `unsafe-audit`, `owner-gate`, `time-gate`) re-run and green
+across all five dependents plus `vaco-protocol-tls` itself.
+
+`vaco-protocol-tls/src/connect.rs` was **not** moved onto the new crate:
+`dial_tls` depends on `vaco-protocol-tls` for the handshake, so the reverse
+dependency would be a cycle (`vaco-protocol-tls` -> `vaco-protocol-dial` ->
+`vaco-protocol-tls`), confirmed absent from `cargo xtask layer-check`'s
+acyclic result. `connect_tcp`/`handshake` stay where they are as the base
+`dial_tls` calls into.
+
 ### `s337m` is registered twice, under two different implementations
 
 FM-54 (#612) added `vaco_format_spdif::S337M_DEMUXER`, a real SMPTE 337M
@@ -159,9 +175,18 @@ git add planning/TECH-DEBT.md
 TREE=$(git write-tree)
 COMMIT=$(git commit-tree "$TREE" -p HEAD -m "docs(planning): append NUT/spdif findings to TECH-DEBT")
 git update-ref refs/heads/main "$COMMIT"
-git read-tree HEAD   # refresh the real index only; never touches the working tree
 unset GIT_INDEX_FILE
+git reset -q HEAD -- planning/TECH-DEBT.md   # reconcile the REAL index against the new HEAD
 ```
+
+The `git read-tree HEAD` that used to sit between `update-ref` and `unset`
+ran against `$GIT_INDEX_FILE`, not `.git/index` — it refreshed the private
+index it was already pointed at, not the real one, so `git status` kept
+showing this path as staged-modified against the new HEAD until something
+else touched it. `git reset -q HEAD -- <path>` after `unset` fixes the real
+index directly, scoped to only the path(s) just committed, so a concurrent
+agent's own staged changes elsewhere are untouched — `AGENT-CONSTRAINTS.md`'s
+"When you genuinely share a file" section is where this line came from.
 
 ### `vaco-demux-avi`'s `strf` parsing captures extradata for audio, never video
 
@@ -212,3 +237,60 @@ bound (the `Limits::strict()`/library-embedding case
 the same shape as `convert_budget`'s pre-existing choice, not a regression,
 and widening it is a `FormatOptions`/`Muxer` interface question bigger than
 one crate.
+
+### `cargo fmt -p <crate>` reflows lines you never touched, which makes it unsafe here too
+
+Ran `cargo fmt -p vaco-protocol-ftp` (and the same for `-httpproxy`,
+`-gopher`, `-icecast`) while finishing the `vaco-protocol-dial` extraction,
+expecting it to touch only the lines the extraction changed. It reformatted
+unrelated lines in every file in each crate instead — e.g.
+`vaco-protocol-ftp/src/sink.rs`'s `start_stor(...)` call, 96 columns and
+already on one line, got wrapped to one argument per line, and
+`vaco-protocol-gopher/src/selector.rs`'s test array literal wrapped the same
+way. Reproduced in isolation (a two-line throwaway file with the same call
+under `rustfmt.toml`'s `max_width = 100`): current `rustfmt` wraps calls
+well inside the column limit that the code already checked in under. Not a
+toolchain mismatch — `rustc`/`cargo`/`rustfmt` all report the
+`rust-toolchain.toml`-pinned `1.97.1`/`1.9.0` build.
+
+Caught only because the diff was reviewed before committing; reverted to
+`HEAD` and reapplied the intended edits by hand instead of trusting `-p`'s
+output wholesale.
+
+**This means the tree is not actually rustfmt-clean against the `rustfmt`
+this checkout runs**, and has been quietly relying on nobody running `cargo
+fmt -p` broadly enough to notice — the scoped `-p` form `AGENT-CONSTRAINTS.md`
+recommends in place of `--all` only bounds *which crate* gets reformatted,
+not *which lines in it*, so it carries the same "silently reformats a
+co-owner's file" risk the `--all` warning describes, one level down: inside
+a crate you own outright, it will still rewrite lines a reviewer has to
+untangle from your real diff by hand. **Not fixed here**: fixing it for real
+means either running `cargo fmt --check -p <crate>` after every edit and
+reformatting only the reported files/ranges, or reformatting the whole tree
+once (a single, disruptive, coordinated pass, not something one agent should
+do mid-session) and committing the result as its own change. Flagging so the
+next agent who reaches for `-p` diffs before committing, not after.
+
+### The private-index worked example's final `read-tree HEAD` never touches the real index
+
+Followed the worked example directly above almost verbatim for the
+`vaco-protocol-dial` extraction's commit, then found `git status` reporting
+every file just committed as staged-deleted/staged-modified immediately
+afterward. Cause: the example's last `git read-tree HEAD` runs *before*
+`unset GIT_INDEX_FILE`, so it refreshes the private index at
+`$GIT_INDEX_FILE`, not `.git/index` — the comment beside it ("refresh the
+real index only") describes what the step needs to do, not what the command
+as placed actually does. The real index is left holding whatever it had
+before the commit, which is stale the moment `refs/heads/main` moves.
+
+Harmless for a subsequent pathspec-limited `git commit -- <path>` (it reads
+the working tree, not the index, per this file's own recipe above), but not
+harmless for anyone who trusts `git status`, and not what "never touches the
+working tree" promised. Fixed by borrowing the *other* private-index
+recipe's own closing line (`AGENT-CONSTRAINTS.md`, "When you genuinely share
+a file"): after `unset GIT_INDEX_FILE`, run
+`git reset -q HEAD -- <every path just committed>` against the real index —
+scoped to those paths, so it cannot discard anything another agent has
+staged elsewhere. **Proposed seam:** add that line to this section's worked
+example so the next agent doesn't have to rediscover it via a confusing
+`git status`.
