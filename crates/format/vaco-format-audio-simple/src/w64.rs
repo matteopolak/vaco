@@ -190,9 +190,20 @@ impl W64Demuxer {
             bits_coded,
             bits_raw,
         );
+        // `fmt.format_tag` alone is `WAVE_FORMAT_EXTENSIBLE` (0xFFFE) for
+        // anything past plain 16-bit PCM/float — measured on `-c:a
+        // pcm_s24le`, which `ffmpeg`'s own `w64` muxer writes as
+        // `WAVEFORMATEXTENSIBLE` the same way it does for WAV. The reference
+        // reports the real, unwrapped tag (`0x0001` `WAVE_FORMAT_PCM`), not
+        // the extensible sentinel — `wave_tags::codec_id` already resolves
+        // this same `SubFormat` for the *codec*, just not for this field.
+        let effective_tag = fmt
+            .extensible()
+            .and_then(|e| e.sub_format_tag())
+            .unwrap_or(fmt.format_tag);
         params.codec_tag = Some([
-            (fmt.format_tag & 0xff) as u8,
-            (fmt.format_tag >> 8) as u8,
+            (effective_tag & 0xff) as u8,
+            (effective_tag >> 8) as u8,
             0,
             0,
         ]);
@@ -376,5 +387,73 @@ impl Muxer for W64Muxer {
 
         self.out.seek(end)?;
         self.out.flush()
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    reason = "test code"
+)]
+mod tests {
+    use super::*;
+    use vaco_io::MemorySource;
+
+    /// A minimal, hand-built `.w64` file whose `fmt ` chunk is
+    /// `WAVEFORMATEXTENSIBLE` (`format_tag = 0xFFFE`) wrapping plain PCM —
+    /// measured shape: `ffmpeg -f w64 -c:a pcm_s24le` writes exactly this,
+    /// the same way it writes 24-bit WAV as extensible (`vaco-format-riff`'s
+    /// own `wave_tags` tests build the identical `SubFormat` GUID for WAV).
+    fn extensible_pcm24_mono_w64() -> Vec<u8> {
+        let mut fmt_payload = Vec::new();
+        fmt_payload.extend_from_slice(&0xFFFEu16.to_le_bytes()); // format_tag
+        fmt_payload.extend_from_slice(&1u16.to_le_bytes()); // channels
+        fmt_payload.extend_from_slice(&44_100u32.to_le_bytes()); // samples_per_sec
+        fmt_payload.extend_from_slice(&(44_100u32 * 3).to_le_bytes()); // avg_bytes_per_sec
+        fmt_payload.extend_from_slice(&3u16.to_le_bytes()); // block_align
+        fmt_payload.extend_from_slice(&24u16.to_le_bytes()); // bits_per_sample
+        fmt_payload.extend_from_slice(&22u16.to_le_bytes()); // cbSize
+        fmt_payload.extend_from_slice(&24u16.to_le_bytes()); // valid_bits_per_sample
+        fmt_payload.extend_from_slice(&4u32.to_le_bytes()); // channel_mask
+        fmt_payload.extend_from_slice(&[
+            // KSDATAFORMAT_SUBTYPE_PCM
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38,
+            0x9b, 0x71,
+        ]);
+        assert_eq!(fmt_payload.len(), 40);
+
+        let data_payload = [0u8; 12];
+
+        let mut out = Vec::new();
+        out.extend_from_slice(&RIFF_GUID);
+        out.extend_from_slice(&0u64.to_le_bytes()); // riff_size, unchecked by `open`
+        out.extend_from_slice(&WAVE_GUID);
+
+        out.extend_from_slice(&FMT_GUID);
+        out.extend_from_slice(&(CHUNK_HEADER_LEN + fmt_payload.len() as u64).to_le_bytes());
+        out.extend_from_slice(&fmt_payload);
+
+        out.extend_from_slice(&DATA_GUID);
+        out.extend_from_slice(&(CHUNK_HEADER_LEN + data_payload.len() as u64).to_le_bytes());
+        out.extend_from_slice(&data_payload);
+        out
+    }
+
+    /// Regression: `codec_tag` used to be `fmt.format_tag` verbatim, so an
+    /// extensible-PCM file stated `WAVE_FORMAT_EXTENSIBLE` (`0xfffe`) as its
+    /// `codec_tag` where the reference resolves the wrapped `SubFormat` and
+    /// states plain PCM (`0x0001`) — `wave_tags::codec_id` already did this
+    /// resolution for the *codec*, just not for this field.
+    #[test]
+    fn codec_tag_resolves_the_extensible_sub_format_not_the_wrapper_tag() {
+        let src = Box::new(MemorySource::new(extensible_pcm24_mono_w64()));
+        let demux = W64Demuxer::open(src, &FormatOptions::default()).expect("open");
+        assert_eq!(
+            demux.streams()[0].params.codec_tag,
+            Some([0x01, 0x00, 0x00, 0x00]),
+            "codec_tag should be the unwrapped WAVE_FORMAT_PCM, not 0xfffe"
+        );
     }
 }
