@@ -788,3 +788,31 @@ kind     = "spec"
 title    = "ATSC A/52:2012, Digital Audio Compression (AC-3, E-AC-3) Standard, revision published 17 December 2012 — used directly for §7.1.3 (exponent decoding), §7.2.2.1-7.2.2.7 (parametric bit allocation) and their Tables 7.4-7.23, and for §5.3/§5.4.3 (syncframe/audblk syntax), transcribed from clause text and pseudocode rather than from the earlier atsc-a52-2018 listing (whose `where` is a document-catalog page, not a fetched PDF)"
 acquired = "2026-08-28"
 where    = "https://www.atsc.org/wp-content/uploads/2015/03/A52-201212-17.pdf"
+
+[[source]]
+id       = "etsi-en-300-743"
+kind     = "spec"
+title    = "ETSI EN 300 743 V1.5.1 (2014-01), Digital Video Broadcasting (DVB); Subtitling systems — used directly for clause 7.2 (segment/page/region/CLUT/object syntax), clause 7.2.5.2 (2-/4-/8-bit pixel-code run-length grammars) and clause 10 (default CLUT/map-table contents)"
+acquired = "2026-08-28"
+where    = "https://www.etsi.org/deliver/etsi_en/300700_300799/300743/01.05.01_60/en_300743v010501p.pdf"
+
+[[source]]
+id       = "pgs-scorpius-writeup"
+kind     = "paper"
+title    = "Scorpius, \"Presentation Graphic Stream (SUP files) BluRay Subtitle Format\", blog.thescorpius.com, 2017-07-15 — a public community write-up of the PCS/WDS/PDS/ODS segment field layouts and the object run-length grammar, used since no free official PGS specification exists"
+acquired = "2026-08-28"
+where    = "https://blog.thescorpius.com/index.php/2017/07/15/presentation-graphic-stream-sup-files-bluray-subtitle-format/"
+
+[[source]]
+id       = "pgs-bdsup2sub-forced-flag"
+kind     = "paper"
+title    = "BDSup2Sub (mjuhasz/BDSup2Sub), SupBDParser.java — an independent open-source PGS reader unrelated to this project's own ffmpeg reference binary, consulted only to cross-check which bit of the presentation composition segment's per-object flag byte (0x40) is the forced_on_flag, since pgs-scorpius-writeup names only the 0x40 cropped-flag value and several public write-ups do not distinguish the two"
+acquired = "2026-08-28"
+where    = "https://raw.githubusercontent.com/mjuhasz/BDSup2Sub/master/src/main/java/bdsup2sub/supstream/bd/SupBDParser.java"
+
+[[source]]
+id       = "vobsub-mpucoder-spu"
+kind     = "paper"
+title    = "MPUCoder, \"Sub-Pictures\" (mpucoder.com/DVD/spu.html) — the DVD subpicture (SPU) unit header, SP_DCSQT control-sequence structure, all eight SP_DCSQ commands (FSTA_DSP/STA_DSP/STP_DSP/SET_COLOR/SET_CONTR/SET_DAREA/SET_DSPXA/CHG_COLCON) and the 4/8/12/16-bit nibble-escalation run-length grammar, used since no formal DVD subpicture specification is public; the live site is gone, fetched via the Wayback Machine"
+acquired = "2026-08-28"
+where    = "https://web.archive.org/web/20260807015919/http://mpucoder.com/DVD/spu.html"
