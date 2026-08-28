@@ -773,8 +773,31 @@ pub fn run_pipeline(
                     let frames = spec
                         .add_decoder(tap, decoder_desc.build(limits.clone()))
                         .map_err(|e| internal_from("could not attach a decoder", &e))?;
+                    let encoder = encoder_desc.build(limits.clone());
+                    // Gap 655/1: a decoder's output format and an encoder's
+                    // accepted formats routinely disagree (`bgr24` out of a
+                    // BMP into an encoder that wants `rgb24`), and until now
+                    // nothing sat between them. `accepted_pix_fmts` is empty
+                    // for every encoder that does not care, so this is a
+                    // no-op for the common case; where it is not, the source
+                    // format is tried first — most decoders already agree
+                    // with at least one accepted format, so this often
+                    // avoids a conversion the reference would also skip.
+                    let accepted = encoder.accepted_pix_fmts();
+                    let source_format = p.video.as_ref().and_then(|v| v.format);
+                    let frames = match accepted.first() {
+                        Some(&preferred)
+                            if !source_format.is_some_and(|f| accepted.contains(&f)) =>
+                        {
+                            spec.add_converter(frames, preferred, time_base, limits.clone())
+                                .map_err(|e| {
+                                    internal_from("could not attach a format converter", &e)
+                                })?
+                        }
+                        _ => frames,
+                    };
                     let packets = spec
-                        .add_encoder(frames, encoder_desc.build(limits), time_base)
+                        .add_encoder(frames, encoder, time_base)
                         .map_err(|e| internal_from("could not attach an encoder", &e))?;
                     (packets, p.with_codec(encoder_desc.id), name.to_owned())
                 }
