@@ -339,6 +339,76 @@ decision, not a provenance one:**
   it (built, and confirmed correct against the same fixture, but its
   only caller — the OBMC reconstruction path — is the piece still
   gated on the restructuring above).
+
+  **A regression guard now exists, built before any loop change, per
+  instruction.** `tests/regression_guard.rs` pins the current byte-exact
+  decoded output (a `SHA-256` over the raw `yuv420p` bytes, via
+  `vaco-hash` rather than adding `sha2` directly — D11's one-owner rule)
+  of four real `ffmpeg`-encoded fixtures covering every mode that
+  decodes today: H.261 mixed I/P, baseline H.263 mixed I/P, H.263+
+  Annex D (UMV) combined with Annex K (Slice Structured — `ffmpeg`'s own
+  `h263p` encoder always couples `-umv` with it, see the Annex D/K
+  finding above), and Annex J (Deblocking Filter, exercising
+  `finish_picture`'s whole-picture post-pass). This crate had no
+  committed bitstream fixtures and no output-correctness test at all
+  before this — only narrow unit tests and two panic-only fuzz tests
+  (confirmed by inspection: `cargo test` reported 46 tests, all of them
+  either isolated-function unit tests or `proptest`-driven "never
+  panics" checks with no assertion on decoded bytes). It is a
+  regression guard, not a correctness check — this crate's own measured
+  accuracy against real `ffmpeg` is ~99.2%, not 100% (see "Measured
+  accuracy" below), so comparing against `ffmpeg` at test time would be
+  the wrong tool for catching a self-inflicted regression; the guard's
+  only job is to fail loudly if the decode-loop restructuring below
+  changes this crate's *own* output for a mode nothing was supposed to
+  touch.
+
+  **Loop shape chosen: a one-macroblock lookahead confined to
+  `decode_gob`, not a full two-pass parse-then-reconstruct split.**
+  Weighed both, since a full split is arguably better architecture on
+  its own merits (this project has already been bitten by
+  neighbour-availability bugs in three other crates this cycle, and a
+  two-pass split would remove that whole bug category here for good,
+  not just for Annex F) — but chosen against, because the feature does
+  not need it: tracing exactly which OBMC remote directions can be
+  unavailable in raster order shows only one ever is. "Above" and
+  "left" are always already-decoded (earlier row, earlier column).
+  "Below" is either internal (top-row blocks 0/1, referencing the same
+  macroblock's own blocks 2/3, already decided earlier in the same
+  four-block decode sequence) or unconditionally replaced by the
+  current block's own vector by §F.3's own rule 5 (bottom-row blocks 2/3
+  — never a real lookahead). Only "right" (blocks 1/3's external case)
+  needs a macroblock not yet decoded, and it never needs more than the
+  very next one — and, checked directly rather than assumed, that
+  next macroblock is always in the *same row*: this crate's own
+  documented simplification ("one macroblock row per GOB") means a GOB
+  boundary only ever falls at a row's end, where the rightward
+  lookahead would find no neighbour anyway (a genuine picture/GOB
+  border, already handled by the existing border substitution rule) —
+  so the lookahead never needs to reach across a GOB header into a
+  *separate* `decode_gob` invocation. One macroblock of buffered
+  state (its parsed motion vector(s) and its residual, reconstructed
+  one iteration late) is enough, entirely inside `decode_gob`'s own
+  loop.
+
+  This also bounds the blast radius to exactly the modes that need it:
+  `decode_slice_rect`/`decode_first_slice`/`decode_slice` (Annex K's
+  rectangular-slice paths) are untouched, since Advanced Prediction
+  combined with Slice Structured mode is already excluded at the
+  picture header (see above) — they never reach a lookahead-aware loop
+  at all. Gating the lookahead behind `ap.advanced_prediction` (already
+  `false` for every one of the regression guard's four fixtures) means
+  `decode_gob`'s control flow for every currently-working mode is
+  provably unchanged when the flag is off, not merely "tested and
+  found unchanged" — a stronger guarantee than the fixture suite alone
+  gives, for the one thing a fixture suite cannot fully cover (an
+  untested combination the four fixtures do not happen to exercise).
+
+  **Not yet done**: the lookahead's own implementation, and re-landing
+  the fine-grid one-vector-predictor fix, the 4-vector `MCBPC`
+  dispatch, and the OBMC reconstruction path on top of it — each to be
+  re-validated against the same real-`ffmpeg` differential that caught
+  two bugs the round this was built, before being reported as landed.
 - **Annex E (Syntax-based Arithmetic Coding)** replaces every VLC in the
   format with arithmetic coding — a different entropy layer entirely, not
   an additive mode on top of the existing one.
