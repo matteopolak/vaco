@@ -1183,6 +1183,7 @@ fn decode_residual(
 // exactly as unlocalised as it was. This round's result is negative but
 // decisive: one specific, plausible engine-level explanation is now
 // closed off, and the search stays inside `vaco-codec-h264`'s own
+// macroblock layer rather than moving to the shared engine.
 //
 // FOLLOW-UP round: hand-derived, from clauses 7.3.5 and 9.3, the complete
 // bin sequence macroblock_layer() actually calls for this exact
@@ -1249,8 +1250,77 @@ fn decode_residual(
 // instrumenting `ffmpeg`'s own H.264 decoder to print its internal bit
 // count at end_of_slice_flag) rather than continuing to infer the correct
 // termination point from tail-byte pattern-matching, which has now been
+//
+// FOLLOW-UP round: the coordinator's proposed decisive test -- decode
+// the three real corpora and compare reconstructed pixels against
+// `ffmpeg`'s output, independent of every bit-position question -- **is
+// not executable with this codebase today.** Not broken, not buggy:
+// never built. `decoder.rs`'s own module doc and `docs/codec/
+// vaco-codec-h264.md`'s "What is not implemented" section both say so
+// explicitly -- "Prediction, motion compensation, transform and
+// reconstruction, deblocking, DPB/reference management, ... -- #420
+// onward" -- and the code matches the doc:
+// `H264Decoder::receive_frame` unconditionally returns
+// `Error::NeedMoreInput`, and `send_packet` returns `Error::Unsupported`
+// for any slice beyond parameter-set/entropy-mode resolution, naming
+// precisely that gap in its own error message. `decode_slice_cabac`
+// decodes *syntax* -- `mb_type`, `coded_block_pattern`, residual
+// *coefficients* -- never a predicted sample, an inverse-transformed
+// residual, or a reconstructed pixel. `vaco-codec-dsp-idct::h264` has the
+// low-level integer transform primitives (`idct4x4`/`idct8x8`/
+// `luma_dc_hadamard4x4`/etc.), but nothing in `vaco-codec-h264` calls
+// them, and there is no intra-prediction, motion-compensation, or
+// deblocking code anywhere in this crate. #420 is a separate,
+// not-yet-started dispatch, not a bug in #418/#419's own scope.
+//
+// The half of the comparison that *is* available stayed available: `ffmpeg`
+// run purely as a black box (decode to raw YUV, read the output file) is
+// exactly what D6 permits and carries no clean-room concern at all --
+// getting a reference frame for these three corpora would be one command
+// each. The blocker is entirely on this side: there is no "this
+// decoder's own frame" to put next to it. Building one -- even a
+// minimal, intra-only, I-slice-only reconstruction sufficient for these
+// specific corpora -- means implementing real prediction and transform
+// application from the primary text, which is #420's own scope, a
+// multi-round undertaking in its own right, not something to start
+// unilaterally mid-round on the strength of one dispatch's instruction.
+// Flagged and stopped, per the same standard the coordinator set for
+// ffmpeg-source instrumentation: this is a scope decision for whoever
+// owns #420's sequencing, not one to make by starting the work and
+// presenting it as already decided.
+//
+// Verified clauses 7.3.2.10 and 9.3.4.6 directly, as asked, rather than
+// accepting either side's reading. `rbsp_slice_trailing_bits()` is
+// `rbsp_trailing_bits()` (the stop bit plus zero-padding to byte
+// alignment) followed by `while (more_rbsp_trailing_data())
+// cabac_zero_word` -- and 9.3.4.6 (informative) gives the encoder-side
+// formula for exactly how many `cabac_zero_word`s to append, driven by a
+// bitrate/HRD buffering computation, not by any position ambiguity.
+// `cabac_zero_word` is defined as exactly `0x0000`, always. So the spec
+// text does not support "a stray nonzero bit past correct termination is
+// allowed" in any form -- every trailing structure clause 7.3.2.10 names
+// is either the single stop bit (already accounted for, per 9.3.3.2.4's
+// own note, at whatever bit position the arithmetic engine's last real
+// renormalisation landed on) or all-zero content. The narrower version of
+// the objection -- that the stop bit is consumed *inside* the arithmetic
+// decoding and is not a structure the reader can independently locate by
+// scanning forward -- is correct, and is the same point a "look one bit
+// behind the current position, not one bit ahead" reframing already made
+// two rounds ago. But that reframing does not, on its own, explain this
+// fixture's specific numeric gap either: the position one bit behind this
+// decoder's own termination point (bit 68) does hold a `1`, consistent
+// with being *a* valid stop-bit position, yet the file's true final bit
+// (bit 71, three bits later) is *also* `1` -- and a second `1` bit
+// anywhere past the first is not zero-padding or a `cabac_zero_word` under
+// any reading of clause 7.3.2.10. So this round's clause review narrows,
+// rather than dissolves, the objection: the assertion's exact bit-position
+// framing has a real subtlety (already partly addressed two rounds ago),
+// but "the assertion demands an invariant CABAC does not have" is not
+// borne out by the primary text for the specific anomaly observed here --
+// something remains genuinely unexplained, and only an independent ground
+// truth (pixel output, or an instrumented reference decoder) can settle
+// which side of the disagreement is right.
 // tried on this fixture from several angles without closing the gap.
-// macroblock layer rather than moving to the shared engine.
 use crate::cabac_mb_tables::{inits_by_col, inits_by_idc, inits_fixed};
 
 /// `CabacDecoder::decode_decision` over a context array, indexed safely —
