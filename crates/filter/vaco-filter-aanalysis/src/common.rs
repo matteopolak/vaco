@@ -1,11 +1,16 @@
 //! Shared option parsing and pad descriptors.
 //!
-//! Mirrors `vaco-filter-adynamics::common` exactly: options are read
-//! straight off [`Instantiate::named`] rather than through a strict
-//! `vaco_opts::Options`-derived parser, so a filtergraph string setting an
-//! option this crate does not implement is silently accepted rather than
-//! rejected — the same documented convention every sibling audio crate
-//! uses.
+//! Mirrors `vaco-filter-adynamics::common`: options are read straight off
+//! [`Instantiate::named`] rather than through a strict
+//! `vaco_opts::Options`-derived parser. That loose parsing exists so a
+//! real reference command line setting an option this crate has not wired
+//! up internally still runs, rather than hard-failing the way a strict
+//! `set_from_string` would on any undeclared field. But `Instantiate::named`
+//! alone cannot tell "a real option this crate has not implemented" from
+//! "not a real option at all" — a typo silently ran with defaults and said
+//! nothing. [`ensure_known_options`] closes that: it accepts every name the
+//! reference actually documents for a filter (implemented or not,
+//! preserving the original intent) and rejects anything else by name.
 
 use vaco_core::MediaType;
 use vaco_filter_core::Pad;
@@ -146,5 +151,155 @@ impl PairStats {
             return None;
         }
         Some(10.0 * (target_energy / noise_energy).log10())
+    }
+}
+
+/// Rejects any `key=value` argument whose key is not one of the
+/// reference's own documented option names for `req.name` (see
+/// [`KNOWN_OPTIONS`] and this module's own doc for what this deliberately
+/// still tolerates). A filter name absent from the table is not this
+/// function's business — the registry's own dispatch already rejects an
+/// unregistered filter name before this ever runs.
+///
+/// # Errors
+/// Names the filter and the exact unrecognised key.
+pub(crate) fn ensure_known_options(req: &Instantiate<'_>) -> Result<(), String> {
+    let Some((_, known)) = KNOWN_OPTIONS.iter().find(|(name, _)| *name == req.name) else {
+        return Ok(());
+    };
+    for arg in req.arguments {
+        if let Some(key) = arg.key.as_deref()
+            && !known.contains(&key)
+        {
+            return Err(format!(
+                "{}: unrecognized option `{key}` (not one of the reference's own documented \
+                 options for this filter)",
+                req.name
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Every option name (canonical and every alias) the reference documents
+/// for this crate's filters -- probed directly against real `ffmpeg 8.1
+/// -h filter=<name>`, 2026-08-28. Keyed by the registered filter name.
+///
+/// [`ensure_known_options`] is the only thing that reads this: an option
+/// name the reference does not document at all (a typo, or something that
+/// was never a real option) is rejected; a real reference option this
+/// crate has not wired up internally is still accepted and silently has no
+/// effect, preserving this crate's established `Instantiate::named` policy
+/// for options it has not implemented -- see the module doc.
+const KNOWN_OPTIONS: &[(&str, &[&str])] = &[
+    ("aderivative", &[]),
+    ("aintegral", &[]),
+    (
+        "aphasemeter",
+        &[
+            "rate",
+            "r",
+            "size",
+            "s",
+            "rc",
+            "gc",
+            "bc",
+            "mpc",
+            "video",
+            "phasing",
+            "tolerance",
+            "t",
+            "angle",
+            "a",
+            "duration",
+            "d",
+        ],
+    ),
+    ("apsnr", &[]),
+    ("asdr", &[]),
+    ("ashowinfo", &[]),
+    ("asisdr", &[]),
+    (
+        "aspectralstats",
+        &["win_size", "win_func", "overlap", "measure"],
+    ),
+    ("drmeter", &["length"]),
+    (
+        "ebur128",
+        &[
+            "video",
+            "size",
+            "meter",
+            "framelog",
+            "metadata",
+            "peak",
+            "dualmono",
+            "panlaw",
+            "target",
+            "gauge",
+            "scale",
+            "integrated",
+            "range",
+            "lra_low",
+            "lra_high",
+            "sample_peak",
+            "true_peak",
+        ],
+    ),
+    ("replaygain", &["track_gain", "track_peak"]),
+];
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test code")]
+mod tests {
+    use super::*;
+
+    fn req<'a>(
+        name: &'a str,
+        args: Option<&'a str>,
+        arguments: &'a [vaco_filter_graph::ast::Arg],
+    ) -> Instantiate<'a> {
+        Instantiate {
+            name,
+            instance: name,
+            args,
+            arguments,
+        }
+    }
+
+    fn arg(key: &str, value: &str) -> vaco_filter_graph::ast::Arg {
+        vaco_filter_graph::ast::Arg {
+            key: Some(key.to_owned()),
+            raw_value: value.to_owned(),
+            span: vaco_filter_graph::span::Span::default(),
+        }
+    }
+
+    /// A name the reference does not document at all for `drmeter` --
+    /// exactly the case `Instantiate::named` alone could not distinguish
+    /// from a real-but-unimplemented option before this fix.
+    #[test]
+    fn an_unrecognised_option_name_is_a_named_error() {
+        let arguments = [arg("not_a_real_option", "1")];
+        let err = ensure_known_options(&req("drmeter", Some("not_a_real_option=1"), &arguments))
+            .unwrap_err();
+        assert!(
+            err.contains("drmeter") && err.contains("not_a_real_option"),
+            "unexpected error text: {err}"
+        );
+    }
+
+    /// A real, implemented option -- unaffected.
+    #[test]
+    fn an_implemented_option_is_accepted() {
+        let arguments = [arg("length", "1")];
+        assert!(ensure_known_options(&req("drmeter", Some("length=1"), &arguments)).is_ok());
+    }
+
+    /// A filter name not in `KNOWN_OPTIONS` at all is not this function's
+    /// business -- the registry's own dispatch handles that.
+    #[test]
+    fn an_unregistered_filter_name_is_not_this_functions_business() {
+        assert!(ensure_known_options(&req("not-a-real-filter", None, &[])).is_ok());
     }
 }

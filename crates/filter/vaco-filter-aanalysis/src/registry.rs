@@ -4,6 +4,8 @@
 
 use vaco_filter_graph::registry::{FilterRegistry, Instance, Instantiate};
 
+use crate::common;
+
 /// Every name this crate answers to, alphabetical as `ffmpeg -filters`
 /// lists them. Plan 16 §4.3's `vaco-filter-aanalysis` row names fourteen
 /// (`astats`, `aspectralstats`, `ebur128`, `drmeter`, `silencedetect`,
@@ -42,6 +44,12 @@ impl FilterRegistry for AmeasureRegistry {
     }
 
     fn create(&self, req: &Instantiate<'_>) -> Result<Instance, String> {
+        // Rejects an option name the reference does not document at
+        // all for this filter, before dispatching -- see
+        // `common::ensure_known_options`'s own doc for what it
+        // deliberately still tolerates (a real, if unimplemented,
+        // reference option).
+        common::ensure_known_options(req)?;
         Ok(match req.name {
             "aderivative" => crate::aderivative::create(req),
             "aintegral" => crate::aintegral::create(req),

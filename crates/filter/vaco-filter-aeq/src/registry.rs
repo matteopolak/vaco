@@ -4,6 +4,8 @@
 
 use vaco_filter_graph::registry::{FilterRegistry, Instance, Instantiate};
 
+use crate::common;
+
 /// Every name this crate answers to, alphabetical as `ffmpeg -filters` lists
 /// them. Fifteen: the twelve biquad-family filters from `af_biquads.c`
 /// (`equalizer`, `bass`, `lowshelf`, `treble`, `highshelf`, `tiltshelf`,
@@ -42,6 +44,12 @@ impl FilterRegistry for EqRegistry {
     }
 
     fn create(&self, req: &Instantiate<'_>) -> Result<Instance, String> {
+        // Rejects an option name the reference does not document at
+        // all for this filter, before dispatching -- see
+        // `common::ensure_known_options`'s own doc for what it
+        // deliberately still tolerates (a real, if unimplemented,
+        // reference option).
+        common::ensure_known_options(req)?;
         Ok(match req.name {
             "aemphasis" => crate::aemphasis::create(req),
             "allpass" => crate::allpass::create(req),

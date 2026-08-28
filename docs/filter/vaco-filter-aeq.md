@@ -260,6 +260,11 @@ full measurement.
   `set_from_string`: several reference options (`transform`, `precision`,
   `blocksize`) are accepted but not applied, and a strict `set_from_string`
   would reject a valid filtergraph string that sets one.
+  `common::ensure_known_options` (probed against `ffmpeg -h
+  filter=<name>`, 2026-08-28) still accepts every one of those, but
+  rejects an option name the reference does not document at all — a typo
+  used to run silently with the implemented options' defaults and no
+  error.
 
 ## Configuration
 

@@ -177,10 +177,13 @@ spread of what survives.
 No crate-level feature flags or environment variables. Per-filter options
 are read directly off the filtergraph argument string
 (`Instantiate::named`), the same non-strict convention every sibling audio
-crate uses — an option this crate does not implement is silently accepted
-rather than rejected. See each filter module's doc comment for its
-specific option table, defaults and gaps (measured against `ffmpeg -h
-filter=<name>`, ffmpeg 8.1, 2026-08-23).
+crate uses — a real reference option this crate does not implement is
+silently accepted rather than rejected. `common::ensure_known_options`
+(probed against `ffmpeg -h filter=<name>`, 2026-08-28) still accepts
+every name the reference documents but rejects any other name by it — a
+typo used to run silently with defaults and no error. See each filter
+module's doc comment for its specific option table, defaults and gaps
+(measured against `ffmpeg -h filter=<name>`, ffmpeg 8.1, 2026-08-23).
 
 ## Dependencies
 

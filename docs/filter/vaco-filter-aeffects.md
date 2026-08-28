@@ -231,11 +231,15 @@ after this one needs it):
 
 No environment variables or feature flags. Behaviour is entirely the
 per-filter options above, read at filtergraph-parse time via
-`Instantiate::named`, following `vaco-filter-aeq::common`'s precedent:
-an option this crate does not implement is accepted and silently ignored
-rather than rejecting a filtergraph string that sets it (e.g.
-`dialoguenhance`'s `voice`, accepted and stored but not applied — see that
-module's doc for why).
+`Instantiate::named`, following `vaco-filter-aeq::common`'s precedent: a
+real reference option this crate has not implemented is accepted and
+silently ignored rather than rejecting a filtergraph string that sets it
+(e.g. `dialoguenhance`'s `voice`, accepted and stored but not applied —
+see that module's doc for why). `common::ensure_known_options` (probed
+against `ffmpeg -h filter=<name>`, 2026-08-28) is the boundary: it still
+accepts every name the reference documents, but an option name the
+reference does not recognise at all — previously indistinguishable from
+the case above — is now rejected by name.
 
 ## Dependencies
 

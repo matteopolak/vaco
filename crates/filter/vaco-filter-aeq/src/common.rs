@@ -7,11 +7,12 @@
 //! Rather than declare them on a [`vaco_opts::Options`] struct and reject a
 //! filtergraph string that sets one — which is what a strict
 //! `set_from_string` would do — every filter here reads only the options it
-//! implements straight off [`Instantiate::named`], exactly as
-//! `vaco-filter-audio::aformat` does for the reference options it does not
-//! implement either. An option this crate does not recognise is silently
-//! accepted and ignored, matching that established precedent rather than
-//! inventing a new one.
+//! implements straight off [`Instantiate::named`]. But that alone cannot
+//! tell "a real biquad option this crate has not implemented" from "not a
+//! real option at all" — a typo silently ran with defaults and said
+//! nothing. [`ensure_known_options`] closes that: it accepts every name the
+//! reference actually documents for a filter (implemented or not,
+//! preserving the original intent) and rejects anything else by name.
 
 use vaco_core::{MediaType, Result};
 use vaco_filter_core::adapt::{FrameFilter, FrameOut};
@@ -346,4 +347,457 @@ pub(crate) fn mix_opt(req: &Instantiate<'_>) -> f64 {
 
 pub(crate) fn poles_opt(req: &Instantiate<'_>) -> u8 {
     u8_opt(req, &["poles", "p"], 2)
+}
+
+/// Rejects any `key=value` argument whose key is not one of the
+/// reference's own documented option names for `req.name` (see
+/// [`KNOWN_OPTIONS`] and this module's own doc for what this deliberately
+/// still tolerates). A filter name absent from the table is not this
+/// function's business — the registry's own dispatch already rejects an
+/// unregistered filter name before this ever runs.
+///
+/// # Errors
+/// Names the filter and the exact unrecognised key.
+pub(crate) fn ensure_known_options(req: &Instantiate<'_>) -> Result<(), String> {
+    let Some((_, known)) = KNOWN_OPTIONS.iter().find(|(name, _)| *name == req.name) else {
+        return Ok(());
+    };
+    for arg in req.arguments {
+        if let Some(key) = arg.key.as_deref()
+            && !known.contains(&key)
+        {
+            return Err(format!(
+                "{}: unrecognized option `{key}` (not one of the reference's own documented \
+                 options for this filter)",
+                req.name
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Every option name (canonical and every alias) the reference documents
+/// for this crate's filters -- probed directly against real `ffmpeg 8.1
+/// -h filter=<name>`, 2026-08-28. Keyed by the registered filter name.
+///
+/// [`ensure_known_options`] is the only thing that reads this: an option
+/// name the reference does not document at all (a typo, or something that
+/// was never a real option) is rejected; a real reference option this
+/// crate has not wired up internally is still accepted and silently has no
+/// effect, preserving this crate's established `Instantiate::named` policy
+/// for options it has not implemented -- see the module doc.
+const KNOWN_OPTIONS: &[(&str, &[&str])] = &[
+    ("aemphasis", &["level_in", "level_out", "mode", "type"]),
+    (
+        "allpass",
+        &[
+            "frequency",
+            "f",
+            "width_type",
+            "t",
+            "width",
+            "w",
+            "mix",
+            "m",
+            "channels",
+            "c",
+            "normalize",
+            "n",
+            "order",
+            "o",
+            "transform",
+            "a",
+            "precision",
+            "r",
+        ],
+    ),
+    (
+        "anequalizer",
+        &["params", "curves", "size", "mgain", "fscale", "colors"],
+    ),
+    ("atilt", &["freq", "slope", "width", "order", "level"]),
+    (
+        "bandpass",
+        &[
+            "frequency",
+            "f",
+            "width_type",
+            "t",
+            "width",
+            "w",
+            "csg",
+            "mix",
+            "m",
+            "channels",
+            "c",
+            "normalize",
+            "n",
+            "transform",
+            "a",
+            "precision",
+            "r",
+            "blocksize",
+            "b",
+        ],
+    ),
+    (
+        "bandreject",
+        &[
+            "frequency",
+            "f",
+            "width_type",
+            "t",
+            "width",
+            "w",
+            "mix",
+            "m",
+            "channels",
+            "c",
+            "normalize",
+            "n",
+            "transform",
+            "a",
+            "precision",
+            "r",
+            "blocksize",
+            "b",
+        ],
+    ),
+    (
+        "bass",
+        &[
+            "frequency",
+            "f",
+            "width_type",
+            "t",
+            "width",
+            "w",
+            "gain",
+            "g",
+            "poles",
+            "p",
+            "mix",
+            "m",
+            "channels",
+            "c",
+            "normalize",
+            "n",
+            "transform",
+            "a",
+            "precision",
+            "r",
+            "blocksize",
+            "b",
+        ],
+    ),
+    (
+        "biquad",
+        &[
+            "a0",
+            "a1",
+            "a2",
+            "b0",
+            "b1",
+            "b2",
+            "mix",
+            "m",
+            "channels",
+            "c",
+            "normalize",
+            "n",
+            "transform",
+            "a",
+            "precision",
+            "r",
+            "blocksize",
+            "b",
+        ],
+    ),
+    (
+        "equalizer",
+        &[
+            "frequency",
+            "f",
+            "width_type",
+            "t",
+            "width",
+            "w",
+            "gain",
+            "g",
+            "mix",
+            "m",
+            "channels",
+            "c",
+            "normalize",
+            "n",
+            "transform",
+            "a",
+            "precision",
+            "r",
+            "blocksize",
+            "b",
+        ],
+    ),
+    (
+        "firequalizer",
+        &[
+            "gain",
+            "gain_entry",
+            "delay",
+            "accuracy",
+            "wfunc",
+            "fixed",
+            "multi",
+            "zero_phase",
+            "scale",
+            "dumpfile",
+            "dumpscale",
+            "fft2",
+            "min_phase",
+        ],
+    ),
+    (
+        "highpass",
+        &[
+            "frequency",
+            "f",
+            "width_type",
+            "t",
+            "width",
+            "w",
+            "poles",
+            "p",
+            "mix",
+            "m",
+            "channels",
+            "c",
+            "normalize",
+            "n",
+            "transform",
+            "a",
+            "precision",
+            "r",
+            "blocksize",
+            "b",
+        ],
+    ),
+    (
+        "highshelf",
+        &[
+            "frequency",
+            "f",
+            "width_type",
+            "t",
+            "width",
+            "w",
+            "gain",
+            "g",
+            "poles",
+            "p",
+            "mix",
+            "m",
+            "channels",
+            "c",
+            "normalize",
+            "n",
+            "transform",
+            "a",
+            "precision",
+            "r",
+            "blocksize",
+            "b",
+        ],
+    ),
+    (
+        "lowpass",
+        &[
+            "frequency",
+            "f",
+            "width_type",
+            "t",
+            "width",
+            "w",
+            "poles",
+            "p",
+            "mix",
+            "m",
+            "channels",
+            "c",
+            "normalize",
+            "n",
+            "transform",
+            "a",
+            "precision",
+            "r",
+            "blocksize",
+            "b",
+        ],
+    ),
+    (
+        "lowshelf",
+        &[
+            "frequency",
+            "f",
+            "width_type",
+            "t",
+            "width",
+            "w",
+            "gain",
+            "g",
+            "poles",
+            "p",
+            "mix",
+            "m",
+            "channels",
+            "c",
+            "normalize",
+            "n",
+            "transform",
+            "a",
+            "precision",
+            "r",
+            "blocksize",
+            "b",
+        ],
+    ),
+    (
+        "superequalizer",
+        &[
+            "1b", "2b", "3b", "4b", "5b", "6b", "7b", "8b", "9b", "10b", "11b", "12b", "13b",
+            "14b", "15b", "16b", "17b", "18b",
+        ],
+    ),
+    (
+        "tiltshelf",
+        &[
+            "frequency",
+            "f",
+            "width_type",
+            "t",
+            "width",
+            "w",
+            "gain",
+            "g",
+            "poles",
+            "p",
+            "mix",
+            "m",
+            "channels",
+            "c",
+            "normalize",
+            "n",
+            "transform",
+            "a",
+            "precision",
+            "r",
+            "blocksize",
+            "b",
+        ],
+    ),
+    (
+        "treble",
+        &[
+            "frequency",
+            "f",
+            "width_type",
+            "t",
+            "width",
+            "w",
+            "gain",
+            "g",
+            "poles",
+            "p",
+            "mix",
+            "m",
+            "channels",
+            "c",
+            "normalize",
+            "n",
+            "transform",
+            "a",
+            "precision",
+            "r",
+            "blocksize",
+            "b",
+        ],
+    ),
+];
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test code")]
+mod tests {
+    use super::*;
+
+    fn req<'a>(
+        name: &'a str,
+        args: Option<&'a str>,
+        arguments: &'a [vaco_filter_graph::ast::Arg],
+    ) -> Instantiate<'a> {
+        Instantiate {
+            name,
+            instance: name,
+            args,
+            arguments,
+        }
+    }
+
+    fn arg(key: &str, value: &str) -> vaco_filter_graph::ast::Arg {
+        vaco_filter_graph::ast::Arg {
+            key: Some(key.to_owned()),
+            raw_value: value.to_owned(),
+            span: vaco_filter_graph::span::Span::default(),
+        }
+    }
+
+    /// A name the reference does not document at all for `highpass` --
+    /// not a typo of a real option, a value this crate has not
+    /// implemented, or an alias; just not a real option. This is exactly
+    /// the case the crate's `Instantiate::named` policy could not
+    /// distinguish from a real-but-unimplemented option before this fix.
+    #[test]
+    fn an_unrecognised_option_name_is_a_named_error() {
+        let arguments = [arg("not_a_real_option", "1")];
+        let err = ensure_known_options(&req("highpass", Some("not_a_real_option=1"), &arguments))
+            .unwrap_err();
+        assert!(
+            err.contains("highpass") && err.contains("not_a_real_option"),
+            "unexpected error text: {err}"
+        );
+    }
+
+    /// `transform`/`precision`/`blocksize` are real reference options for
+    /// `highpass` this crate has not wired up internally -- the exact
+    /// case loose parsing exists to keep working. `ensure_known_options`
+    /// must still accept them, preserving the original intent.
+    #[test]
+    fn a_real_but_unimplemented_option_is_still_accepted() {
+        let arguments = [
+            arg("transform", "di"),
+            arg("precision", "auto"),
+            arg("blocksize", "0"),
+        ];
+        assert!(
+            ensure_known_options(&req(
+                "highpass",
+                Some("transform=di:precision=auto:blocksize=0"),
+                &arguments
+            ))
+            .is_ok()
+        );
+    }
+
+    /// A real, implemented option -- unaffected.
+    #[test]
+    fn an_implemented_option_is_accepted() {
+        let arguments = [arg("frequency", "200")];
+        assert!(ensure_known_options(&req("highpass", Some("frequency=200"), &arguments)).is_ok());
+    }
+
+    /// A filter name not in `KNOWN_OPTIONS` at all (an unregistered name)
+    /// is not this function's business -- the registry's own dispatch
+    /// handles that.
+    #[test]
+    fn an_unregistered_filter_name_is_not_this_functions_business() {
+        assert!(ensure_known_options(&req("not-a-real-filter", None, &[])).is_ok());
+    }
 }

@@ -191,6 +191,10 @@ etc.) but has not been probed byte-for-byte against `ffmpeg`'s output.
 * `common.rs`'s doc explains the same `Instantiate::named`-over-strict-
   `Options` choice `vaco-filter-aeq::common` makes, for the same
   reason (several reference options are accepted but not applied).
+  `common::ensure_known_options` (probed against `ffmpeg -h
+  filter=<name>`, 2026-08-28) still accepts every name the reference
+  documents but rejects any other name by it, closing the gap where a
+  typo used to run silently with defaults, same as its sibling crates.
 
 ## Configuration
 

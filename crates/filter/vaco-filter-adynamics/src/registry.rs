@@ -3,6 +3,8 @@
 
 use vaco_filter_graph::registry::{FilterRegistry, Instance, Instantiate};
 
+use crate::common;
+
 const NAMES: &[&str] = &[
     "acompressor",
     "acrusher",
@@ -36,6 +38,12 @@ impl FilterRegistry for DynamicsRegistry {
     }
 
     fn create(&self, req: &Instantiate<'_>) -> Result<Instance, String> {
+        // Rejects an option name the reference does not document at
+        // all for this filter, before dispatching -- see
+        // `common::ensure_known_options`'s own doc for what it
+        // deliberately still tolerates (a real, if unimplemented,
+        // reference option).
+        common::ensure_known_options(req)?;
         Ok(match req.name {
             "acompressor" => crate::acompressor::create(req),
             "acrusher" => crate::acrusher::create(req),
