@@ -3628,3 +3628,85 @@ The `wav/` family's mutants overwhelmingly reproduce #44's `channel_layout`
 adjacent field not mentioned in #44: `format.tags.encoder` is stated by the
 reference (`"Lavf62.12.100"`, the muxer's own signature) and absent from
 `vaco-probe`'s output entirely, for both WAV files in this pass's corpus.
+
+### Correction: finding 55's divergences, fixed, accepted or diagnosed
+
+Fixed, each verified by `diff_probe replay` no longer reporting the field,
+then a fresh ~1500-iteration-per-family campaign (mp4, matroska, mpegts, wav;
+no crash or hang in any of the four, a larger run than the one that found
+these):
+
+- **`ts_id`/`ts_packetsize` typed `Str`, not `Int`**
+  (`crates/app/vaco-probe/src/fields.rs`) — both are digits but the reference
+  quotes them in `-of flat`/`-of json` regardless. Also filed as a follow-up
+  comment on issue #635, which added the two fields with the wrong type.
+- **`vaco-format-riff` gained a `LIST`/`INFO` reader**
+  (`crates/format/vaco-format-riff/src/info.rs`), and `vaco-format-audio-simple`'s
+  `WavDemuxer` now reads its `ISFT` sub-chunk into an `encoder` tag it used to
+  skip entirely, closing `format.tags.encoder`.
+- **`vaco-demux-mp4` no longer drops a track whose `hdlr` handler is
+  unrecognized.** `codec_parameters`'s own codec-id fallback (already there,
+  previously shadowed by resolving `media_type` before it could run) now
+  classifies the track from its `stsd` sample entry when the handler cannot;
+  only a track with *neither* signal is salvaged as `Data` rather than
+  dropped. On the file that found this, the stream now appears and is
+  correctly typed `video` — a residual gap remains (width/height/extradata
+  still absent), traced to the same corruption also touching the `avcC`
+  extradata itself; that is a `vaco-format-isom` parsing-robustness question,
+  not this fix's mechanism, and is left for whoever next touches that parser.
+
+Diagnosed precisely but **not fixed here**, each because the actual fix
+reaches outside this pass's five cleared crates (`vaco-probe`,
+`vaco-demux-mp4`, `vaco-demux-matroska`, `vaco-demux-mpegts`,
+`vaco-format-riff`) into a shared module with a much wider blast radius than
+one finding justifies changing on the strength of a single fuzzed input:
+
+- **MP4 `r_frame_rate` computing a real number where the reference falls back
+  to its `1/0` sentinel.** Traced to `vaco-format-core::discovery`'s generic,
+  cross-format packet-based frame-rate refinement, which runs when a
+  container's own declared rate is undefined and estimates one from observed
+  packet deltas — here, from only four samples with a corrupted `stts` delta.
+  The reference's own analogous refinement (`avformat_find_stream_info`)
+  apparently declines to guess under the same corruption; matching that
+  exactly would mean changing a heuristic every format in the tree shares,
+  not an MP4-specific fix.
+- **Matroska: `is_avc`/`mime_codec_string`/`nal_length_size` disappear
+  under a truncated `CodecPrivate`.** Traced to `vaco-parse-h264`'s
+  `refresh_parameters` (`crates/codec/vaco-parse-h264/src/parser.rs`), which
+  gates populating `nal_length_size` behind having an *active SPS* — but
+  `nal_length_size` comes from the AVC configuration record's own header
+  byte, not the SPS, so a truncation that only reaches the SPS still loses a
+  value that did not need it. Shared by every container that carries H.264
+  through this parser, not Matroska-specific. Adjacent to open issue #654,
+  which touches the same `is_avc`/`nal_length_size` display logic from the
+  HEVC side (that one is about the fields showing when they should not;
+  this one is about them being absent when they should not be) — worth
+  reading together before either is changed, since both reach the same seam.
+- **MPEG-TS: audio `duration_ts`/`duration` short by one AAC frame
+  (`bit_rate` unstated), reproducing on a well-formed file, no mutation
+  needed.** Already documented in `crates/format/vaco-demux-mpegts/src/demux.rs`'s
+  `end_pts` and in `docs/format/vaco-demux-mpegts.md` (measured there as
+  23.211 ms on every AAC fixture) as a deliberate gap: video's smallest
+  inter-packet delta reproduces the reference's "last packet's own duration"
+  exactly because one PES is one access unit, but audio has no equivalent
+  signal available to a demuxer with no parser, and the docs already name
+  the prerequisite (`vaco-codec-core::AudioParameters` needs a `frame_size`
+  field, then `ParserProvider` can supply it). This is the largest single
+  divergence class in the campaign — 913/1500 mpegts mismatches carried
+  exactly this signature — but it was already known before this pass, not
+  newly found by it.
+
+Left as an accepted divergence, deliberately: **a mutation that duplicates a
+byte range landing on a `TrackEntry`-shaped span gives the reference two
+streams and us one.** A duplicated track is malformed input; creating a
+second, phantom stream from it is not obviously the safer behaviour for
+attacker-controlled media, and reproducing it would mean teaching
+`vaco-demux-matroska` to trust a duplicate element rather than the one
+already-clean pass at parsing it took. Not implemented; recorded here as the
+classification for this class rather than left to be rediscovered.
+
+Surfaced by the verification campaign, not investigated (out of this pass's
+scope — fixing what was already found, not finding more): MP4's
+`side_data_list`/`displaymatrix` rotation fields disappearing under some
+mutations, and `format.tags.creation_time` divergences in both mp4 and
+matroska.
