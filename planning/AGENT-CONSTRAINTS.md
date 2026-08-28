@@ -1512,3 +1512,37 @@ decoder at 0.03 correlation, and a self-interoperable-only ALAC, all in one day.
 
 A second implementation is not neutral. It is a place for a fixed bug to come
 back.
+
+## A benchmark where both paths tie exactly is measuring the optimiser
+
+An agent benchmarking `dc_predict` measured its dispatched path at ~3.2x the
+scalar one, and noticed the fastest times of the two paths were **exactly**
+tied. Equal-to-the-nanosecond is not a plausible result for two different
+implementations. The inputs were compile-time constants, so LLVM had folded
+both loops away and the benchmark was timing an empty function.
+
+Wrapping the inputs in `divan::black_box` gave the honest number: **1.28x**.
+Still a win, and a quarter of the claimed one.
+
+The tell is worth memorising, because a fabricated speedup is more dangerous
+than a missing one — it gets quoted, and it justifies keeping code that earns
+nothing:
+
+- Two paths whose fastest times match exactly, or to an implausible number of
+  digits.
+- A speedup far larger than the arithmetic could explain.
+- Timings that do not move when the input size changes.
+
+`black_box` every input a kernel reads and every value it returns. Then report
+the ratio, not a verdict.
+
+The same round produced the reason this matters. Of five kernels measured
+honestly, **two lost to plain autovectorisation** (~0.65x and ~0.84x), one was
+a wash, and two won (2.8x on a 4096-element reduction, 1.28x on `dc_predict`).
+LLVM already vectorises a trivial widen-convert-store loop as well as a
+hand-composed version does. Hand-written SIMD is not free speed — it is a
+hypothesis, and it needs measuring before and after, per D17.
+
+If a dispatched path loses, say so plainly and do not route callers through it.
+A pessimisation behind a dispatch layer is worse than no dispatch layer: it
+costs performance and reads as an optimisation to everyone who follows.
