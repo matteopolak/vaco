@@ -30,8 +30,8 @@
 //! [`mb`] is the macroblock layer that now sits above both, far enough
 //! along to drive [`cavlc::residual_block_cavlc`] across a whole real CAVLC
 //! slice bit-exactly, and to drive [`cabac_residual::residual_block_cabac`]
-//! across a whole real CABAC I/P slice structurally (mb_type, mb_skip_flag,
-//! coded_block_pattern, mb_qp_delta, ref_idx, mvd, coded_block_flag) though
+//! across a whole real CABAC I/P slice structurally (`mb_type`, `mb_skip_flag`,
+//! `coded_block_pattern`, `mb_qp_delta`, `ref_idx`, `mvd`, `coded_block_flag`) though
 //! not yet bit-exactly; see [`mb`]'s own module doc for exactly what it
 //! covers and what it explicitly refuses (MBAFF, the 8x8 transform,
 //! `constrained_intra_pred_flag`'s substitution rule, CABAC B slices).
