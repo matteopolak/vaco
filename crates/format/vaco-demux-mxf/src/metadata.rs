@@ -184,6 +184,21 @@ pub fn scan_region(
             io.seek(start)?;
             return Ok(());
         }
+        if header.key.is_essence_element() || header.key.is_generic_container_system_item() {
+            // Measured against a single-partition D-10 file (`ffmpeg -f
+            // mxf_d10`): a header partition can carry its own Index Table
+            // Segment and then run straight into the essence body with no
+            // intervening body partition pack at all. Before this check,
+            // nothing here stopped the scan at the essence boundary, so it
+            // walked forward treating every System Item and essence element
+            // as an unrecognised, skippable KLV all the way to the footer
+            // partition near EOF — the demuxer then started reading packets
+            // from a position near the end of the file and found none. See
+            // `planning/TECH-DEBT.md`/this crate's closing report for the
+            // measurement.
+            io.seek(start)?;
+            return Ok(());
+        }
         if header.key == crate::ul::KLV_FILL_ITEM {
             klv::skip_value(io, &header)?;
             continue;

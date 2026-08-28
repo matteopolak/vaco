@@ -29,14 +29,49 @@ use crate::properties::PropertyId;
 use crate::ul::Ul;
 
 /// `(PictureEssenceCoding UL, CodecId)`. See the module docs: only the first
-/// row is measured.
-const PICTURE_ESSENCE_CODING: &[(Ul, CodecId)] = &[(
-    Ul::new([
-        0x06, 0x0e, 0x2b, 0x34, 0x04, 0x01, 0x01, 0x03, 0x04, 0x01, 0x02, 0x02, 0x01, 0x01, 0x11,
-        0x00,
-    ]),
-    CodecId::Mpeg2video,
-)];
+/// two rows are measured, both against real files, both `ffprobe`-confirmed
+/// `codec_name=mpeg2video`.
+const PICTURE_ESSENCE_CODING: &[(Ul, CodecId)] = &[
+    (
+        Ul::new([
+            0x06, 0x0e, 0x2b, 0x34, 0x04, 0x01, 0x01, 0x03, 0x04, 0x01, 0x02, 0x02, 0x01, 0x01,
+            0x11, 0x00,
+        ]),
+        CodecId::Mpeg2video,
+    ),
+    (
+        // MPEG-2 4:2:2 (the D-10/SMPTE 386M constrained profile) at 50
+        // Mbit/s. Measured against a real `ffmpeg -f mxf_d10` file:
+        // `ffprobe` reports `codec_name=mpeg2video` for it, the same
+        // `CodecId` as the Long GOP UL above — a distinct label from
+        // RP210 for a distinct profile, not a distinct codec.
+        Ul::new([
+            0x06, 0x0e, 0x2b, 0x34, 0x04, 0x01, 0x01, 0x01, 0x04, 0x01, 0x02, 0x02, 0x01, 0x02,
+            0x01, 0x01,
+        ]),
+        CodecId::Mpeg2video,
+    ),
+    (
+        // The same D-10 profile at 40 Mbit/s — a distinct RP210 label from
+        // the 50 Mbit/s one above (differs only in the last byte), measured
+        // the same way against a second real `ffmpeg -f mxf_d10` file at
+        // `-b:v 40000000`.
+        Ul::new([
+            0x06, 0x0e, 0x2b, 0x34, 0x04, 0x01, 0x01, 0x01, 0x04, 0x01, 0x02, 0x02, 0x01, 0x02,
+            0x01, 0x03,
+        ]),
+        CodecId::Mpeg2video,
+    ),
+    (
+        // The same D-10 profile at 30 Mbit/s, measured the same way at
+        // `-b:v 30000000`.
+        Ul::new([
+            0x06, 0x0e, 0x2b, 0x34, 0x04, 0x01, 0x01, 0x01, 0x04, 0x01, 0x02, 0x02, 0x01, 0x02,
+            0x01, 0x05,
+        ]),
+        CodecId::Mpeg2video,
+    ),
+];
 
 /// `FrameLayout` values 1..=3 (`SeparateFields`, `SingleField`, `MixedFields`) are
 /// interlaced, but the dominant-field property this crate would need to say
@@ -89,13 +124,27 @@ pub fn picture_parameters(descriptor: &MetadataSet) -> CodecParameters {
     {
         video.height = h;
     }
+    let frame_layout = descriptor.get_u8(PropertyId::FrameLayout);
+    // `FrameLayout == 1` ("Separate Fields") states every height property in
+    // terms of one field, not the frame — measured against a real D-10 file
+    // (`ffmpeg -f mxf_d10`): `Stored`/`Sampled`/`DisplayHeight` all read
+    // `288`, while `ffprobe` reports the frame itself as `576`, exactly
+    // double. Applied only to the one value actually measured — layouts `2`
+    // ("Single Field") and `3` ("Mixed Fields") are also interlaced (see
+    // `frame_layout_to_field_order` below) but this crate has not measured
+    // a real file in either shape, so their height is reported as-is rather
+    // than doubled on a guess.
+    if frame_layout == Some(1) {
+        video.coded_height = video.coded_height.saturating_mul(2);
+        video.height = video.height.saturating_mul(2);
+    }
     if let Some(r) = descriptor.get_rational(PropertyId::AspectRatio) {
         video.sample_aspect_ratio = display_to_sample_aspect(r, video.width, video.height);
     }
     if let Some(r) = descriptor.get_rational(PropertyId::SampleRate) {
         video.frame_rate = r;
     }
-    if let Some(layout) = descriptor.get_u8(PropertyId::FrameLayout) {
+    if let Some(layout) = frame_layout {
         video.field_order = frame_layout_to_field_order(layout);
     }
     if let Some(depth) = descriptor.get_u32(PropertyId::ComponentDepth) {

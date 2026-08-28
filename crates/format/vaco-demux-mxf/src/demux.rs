@@ -38,6 +38,16 @@ use crate::ul::PartitionFamilyKind;
 /// declared-length attack before it is read.
 const MAX_PACKET_BYTES: u64 = 256 * 1024 * 1024;
 
+/// The most CBE index entries `build_indices` will synthesise for one
+/// track. Same order of magnitude as `index::MAX_INDEX_ENTRIES` (the VBE
+/// array-length cap): a CBE segment's entry count is computed, not read
+/// from a declared array length, but the computation now (see
+/// `effective_index_duration`) can be driven by a real file's own size
+/// divided by a small `EditUnitByteCount` — capped here rather than left as
+/// an unbounded `for n in 0..count` loop over an attacker-influenceable
+/// count.
+const MAX_CBE_INDEX_ENTRIES: u64 = 16 * 1024 * 1024;
+
 /// One recognised essence track: which stream it feeds and its Generic
 /// Container track number.
 struct TrackBinding {
@@ -156,8 +166,39 @@ impl MxfDemuxer {
 
         let (streams, bindings, format_metadata) = build_streams(&graph, &mut budget)?;
 
+        // A CBE Index Table Segment's own `IndexDuration` is not trusted
+        // blindly: measured against a real single-partition D-10 file
+        // (`ffmpeg -f mxf_d10`), it states `IndexDuration = 0` even though
+        // the file has a definite, 25-frame essence container — the real
+        // count is only recoverable from the essence container's own
+        // measured size divided by `EditUnitByteCount`, the same computation
+        // `essence::clip_wrapped_spans`'s CBE branch already does. `0` here
+        // most likely means "unknown/growing" in a live-capture writer, not
+        // "empty" — trusting it literally would silently report a
+        // zero-duration, zero-entry index for a file that plainly has
+        // twenty-five real frames.
+        let total_essence_len = essence_origin.and_then(|origin| {
+            io.size().map(|size| size.saturating_sub(origin))
+        });
+        let effective_index_duration = |seg: &IndexTableSegment| -> i64 {
+            if seg.index_duration > 0 {
+                return seg.index_duration;
+            }
+            if seg.is_cbe()
+                && let Some(total) = total_essence_len
+            {
+                #[allow(
+                    clippy::integer_division,
+                    reason = "edit_unit_byte_count is checked non-zero via is_cbe() above"
+                )]
+                let count = total / u64::from(seg.edit_unit_byte_count);
+                return i64::try_from(count).unwrap_or(0);
+            }
+            0
+        };
+
         let indices = essence_origin
-            .map(|origin| build_indices(&bindings, &index_segments, origin))
+            .map(|origin| build_indices(&bindings, &index_segments, origin, &effective_index_duration))
             .unwrap_or_default();
 
         let duration = bindings
@@ -167,7 +208,7 @@ impl MxfDemuxer {
                 let seg = index_segments
                     .iter()
                     .find(|seg| seg.index_edit_rate == Some(b.edit_rate))?;
-                Timestamp::new(seg.index_duration).to_duration(s.time_base)
+                Timestamp::new(effective_index_duration(seg)).to_duration(s.time_base)
             })
             .max_by_key(|d: &Duration| d.as_micros());
 
@@ -345,6 +386,7 @@ fn build_indices(
     bindings: &[TrackBinding],
     segments: &[IndexTableSegment],
     essence_origin: u64,
+    effective_index_duration: &dyn Fn(&IndexTableSegment) -> i64,
 ) -> HashMap<u32, PacketIndex> {
     let mut out = HashMap::new();
     // Single-track-per-BodySID (see module docs): pair each binding with the
@@ -364,7 +406,9 @@ fn build_indices(
             if unit == 0 {
                 continue;
             }
-            let count = u64::try_from(seg.index_duration).unwrap_or(0);
+            let count = u64::try_from(effective_index_duration(seg))
+                .unwrap_or(0)
+                .min(MAX_CBE_INDEX_ENTRIES);
             for n in 0..count {
                 let Some(rel) = seg.cbe_offset(n) else { break };
                 let Ok(ticks) = i64::try_from(n) else { break };
@@ -623,6 +667,101 @@ mod tests {
     }
 
     #[test]
+    fn d10_fixture_reports_the_measured_stream_shape() {
+        let demux = open_fixture(include_bytes!("../tests/fixtures/d10_mpeg2_sample.mxf"));
+        assert_eq!(demux.streams().len(), 1);
+        let s = &demux.streams()[0];
+        assert_eq!(s.media_type(), Some(MediaType::Video));
+        // Measured: `StoredHeight`/`SampledHeight`/`DisplayHeight` all read
+        // 288 in this file's descriptor (`FrameLayout` 1, "Separate
+        // Fields"), and `ffprobe` reports the frame itself as 720x576 —
+        // double the stated height. See `descriptor::picture_parameters`.
+        let v = s.params.video.as_ref().unwrap();
+        assert_eq!((v.width, v.height), (720, 576));
+        assert_eq!(
+            s.params.codec_id,
+            Some(vaco_codec_core::CodecId::Mpeg2video)
+        );
+    }
+
+    #[test]
+    fn d10_fixture_demuxes_three_packets_matching_measured_positions_and_sizes() {
+        let mut demux = open_fixture(include_bytes!("../tests/fixtures/d10_mpeg2_sample.mxf"));
+        // Measured with `ffprobe -show_packets`: this is a single-partition
+        // file (header partition pack states a nonzero `body_sid`, essence
+        // follows its own metadata directly with no separate body
+        // partition pack in between) -- the case that exposed
+        // `metadata::scan_region` walking straight through the essence
+        // body to the footer instead of stopping at it.
+        let expected = [(6144u64, 150_000usize), (157_184, 150_000), (308_224, 150_000)];
+        for (pos, size) in expected {
+            let pkt = demux.read_packet().unwrap();
+            assert_eq!(pkt.pos, Some(pos));
+            assert_eq!(pkt.len, size);
+        }
+        assert!(matches!(demux.read_packet(), Err(Error::Eof)));
+    }
+
+    #[test]
+    fn d10_fixture_reports_the_measured_duration_despite_a_zero_index_duration() {
+        let demux = open_fixture(include_bytes!("../tests/fixtures/d10_mpeg2_sample.mxf"));
+        // Measured: this file's Index Table Segment states `IndexDuration =
+        // 0` even though it plainly has three real frames -- the real count
+        // has to come from the essence container's own measured size
+        // divided by `EditUnitByteCount` (see `MxfDemuxer::open`'s
+        // `effective_index_duration`). `ffprobe -show_entries
+        // format=duration` reports `0.12` for this file (3 frames at 25
+        // fps).
+        assert_eq!(demux.duration().map(Duration::as_micros), Some(120_000));
+    }
+
+    #[test]
+    fn seeking_the_d10_fixture_lands_on_its_measured_cbe_position() {
+        let mut demux = open_fixture(include_bytes!("../tests/fixtures/d10_mpeg2_sample.mxf"));
+        demux
+            .seek(
+                SeekTarget::Timestamp {
+                    stream_index: 0,
+                    ts: Timestamp::new(2),
+                },
+                SeekFlags::empty(),
+            )
+            .unwrap();
+        let pkt = demux.read_packet().unwrap();
+        assert_eq!(pkt.pos, Some(308_224));
+    }
+
+    #[test]
+    fn a_huge_cbe_entry_count_is_capped_not_looped_over_unbounded() {
+        // A hostile or merely huge file could drive `effective_index_duration`
+        // to a very large value (a real file's size divided by a small
+        // `EditUnitByteCount`) -- `build_indices`'s `for n in 0..count` loop
+        // must not run `i64::MAX` times before `PacketIndex::add`'s own
+        // decimation ever gets a chance to bound memory. `MAX_CBE_INDEX_ENTRIES`
+        // bounds the loop itself; `PacketIndex`'s own `max_entries` then
+        // decimates that down further, which is why the final stored count
+        // is well under the loop cap, not equal to it -- this test's job is
+        // only to confirm the whole call returns promptly and does not try
+        // to iterate `i64::MAX` times.
+        let bindings = vec![TrackBinding {
+            stream_index: 0,
+            track_number: 1,
+            edit_rate: Rational { num: 25, den: 1 },
+            next_edit_unit: 0,
+        }];
+        let segments = vec![IndexTableSegment {
+            index_edit_rate: Some(Rational { num: 25, den: 1 }),
+            edit_unit_byte_count: 1,
+            ..Default::default()
+        }];
+        let huge = |_seg: &IndexTableSegment| i64::MAX;
+        let indices = build_indices(&bindings, &segments, 0, &huge);
+        let idx = indices.get(&0).unwrap();
+        assert!(!idx.entries().is_empty());
+        assert!((idx.entries().len() as u64) < MAX_CBE_INDEX_ENTRIES);
+    }
+
+    #[test]
     fn a_non_mxf_source_is_rejected_not_panicked_on() {
         let src = Box::new(MemorySource::new(
             b"not an mxf file at all, just prose".to_vec(),
@@ -630,3 +769,4 @@ mod tests {
         assert!(MxfDemuxer::open(src, &NoParsers).is_err());
     }
 }
+
