@@ -315,3 +315,17 @@ name = "asidedata"
 long_name = "Delete frame side data, or select frames based on it"
 ctor = "vaco_filter_mm::misc::sidedata::audio::DESC"
 media = "audio"
+
+[[component]]
+kind = "filter"
+name = "sendcmd"
+long_name = "Send commands to filters"
+ctor = "vaco_filter_mm::sendcmd::video::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "asendcmd"
+long_name = "Send commands to filters"
+ctor = "vaco_filter_mm::sendcmd::audio::DESC"
+media = "audio"

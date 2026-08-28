@@ -69,6 +69,7 @@ pub mod passthrough;
 pub mod reverse;
 pub mod segment;
 pub mod select;
+pub mod sendcmd;
 pub mod setpts;
 pub mod settb;
 pub mod split;
