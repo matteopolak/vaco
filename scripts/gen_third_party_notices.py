@@ -240,8 +240,17 @@ def main() -> int:
         return 0
 
     deps = run_cargo_about()
+    args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(render_html(deps, notices), encoding="utf-8")
-    print(f"wrote {args.output.relative_to(ROOT)} "
+    # `-o` may be a path outside ROOT entirely (e.g. scripts/package-release.sh
+    # writes into dist/<version>/<triple>/), so resolve before displaying
+    # rather than assuming it is ROOT-relative.
+    shown = args.output.resolve()
+    try:
+        shown = shown.relative_to(ROOT)
+    except ValueError:
+        pass
+    print(f"wrote {shown} "
           f"({len(deps['licenses'])} dependency licence group(s), "
           f"{len(notices)} Tier-A notice(s))")
     return 0

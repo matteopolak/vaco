@@ -11,11 +11,31 @@
 # mismatch it runs a short diagnostic pass (embedded paths, Mach-O/ELF
 # load-command differences, `strings` diff) rather than just failing.
 #
-# Usage: scripts/verify-reproducible-build.sh [package ...]
-#   Defaults to vaco-cli and vaco-probe (the two shipped binaries).
+# Usage: scripts/verify-reproducible-build.sh [--profile release|dist] [package ...]
+#   Defaults to --profile release and vaco-cli/vaco-probe.
+#
+# --profile dist matters: it is what scripts/package-release.sh actually
+# ships (profile.dist = release + `debug = "line-tables-only"`, so a crash
+# report is symbolisable), and it is NOT the same question as `release`.
+# Measured 2026-08-28 on this machine: `release` reproduces bit-for-bit;
+# `dist` does not -- the two builds' __TEXT segments differ in SIZE, not
+# just in a UUID/metadata field, meaning actual generated code differs, not
+# only incidental metadata. Root cause not isolated (candidates: LLVM/rustc
+# codegen-unit or symbol-ordering nondeterminism made visible by retaining
+# debug info that `release`'s `strip = "symbols"` would otherwise discard).
+# See docs/release-engineering.md for the full writeup. This is exactly the
+# kind of thing AGENT-CONSTRAINTS.md means by "a check that has never
+# caught a difference is not known to work" -- this one has, now, and the
+# difference is unresolved, not swept under a passing `release`-profile run.
 set -uo pipefail
 
 cd "$(git rev-parse --show-toplevel)" || exit 1
+
+PROFILE="release"
+if [ "${1:-}" = "--profile" ]; then
+    PROFILE="$2"
+    shift 2
+fi
 
 PACKAGES=("$@")
 if [ ${#PACKAGES[@]} -eq 0 ]; then
@@ -39,7 +59,7 @@ build() {
     # --target-dir, never CARGO_TARGET_DIR (see Justfile's own header):
     # sccache hashes CARGO_* env vars into its cache key, which would make
     # the two builds below share a cache entry and prove nothing.
-    cargo build --release --locked --target-dir "$target_dir" \
+    cargo build --profile "$PROFILE" --locked --target-dir "$target_dir" \
         $(printf -- '-p %s ' "${PACKAGES[@]}")
 }
 
@@ -55,8 +75,8 @@ for pkg in "${PACKAGES[@]}"; do
     # Binary name may differ from package name (vaco-cli -> vaco).
     bin="$pkg"
     [ "$pkg" = "vaco-cli" ] && bin="vaco"
-    pa="$A/release/$bin"
-    pb="$B/release/$bin"
+    pa="$A/$PROFILE/$bin"
+    pb="$B/$PROFILE/$bin"
     if [ ! -f "$pa" ] || [ ! -f "$pb" ]; then
         echo "$pkg: binary not found at $pa or $pb (checked target triple: $HOST_TRIPLE)"
         fail=1

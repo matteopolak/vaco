@@ -95,25 +95,53 @@ schema.
 
 ### Reproducible builds
 
-`just verify-reproducible [packages...]` (default: `vaco-cli vaco-probe`)
-builds the release binaries twice, from two separate `--target-dir`s so
-neither build can reuse the other's objects, and compares them
-byte-for-byte. Measured on this machine (macOS/aarch64, 2026-08-28,
-`profile.release`'s `lto = "fat"`, `codegen-units = 1`): **both binaries
-reproduced bit-for-bit identical**, including the Mach-O `LC_UUID` load
-command, which is the most common source of a spurious mismatch on macOS
-(most linkers regenerate it per link; this toolchain evidently derives it
-deterministically from content). This has not yet been run on Linux
-(ELF build-id) or Windows — the script's diagnostic pass covers both, but
-neither has been measured.
+`just verify-reproducible [--profile release|dist] [packages...]`
+(default: `--profile release`, `vaco-cli vaco-probe`) builds twice, from
+two separate `--target-dir`s so neither build can reuse the other's
+objects, and compares the results byte-for-byte. **This found a real,
+currently-unresolved difference** — the check has teeth, this is not a
+"ran once, looked clean" report:
 
-**This check has not yet caught a real difference**, which per
-AGENT-CONSTRAINTS.md's own reasoning about `vaco-checkasm` means it is not
-yet *known* to work, only observed to pass once. If it is ever run against
-two different machines, two different absolute checkout paths, or two
-different Rust patch versions, expect it to find something — the source
-paths embedded via `panic`/`#[track_caller]`/`file!()` call sites are
-identical here only because both builds share one checkout at one path.
+- **`--profile release`** (`lto = "fat"`, `codegen-units = 1`,
+  `strip = "symbols"`): **reproduces bit-for-bit**, measured on this
+  machine (macOS/aarch64, 2026-08-28), including the Mach-O `LC_UUID` load
+  command, which is the most common source of a spurious mismatch on this
+  platform (most linkers regenerate it per link; this toolchain evidently
+  derives it deterministically from content).
+- **`--profile dist`** — what `scripts/package-release.sh` actually
+  ships, because it keeps `debug = "line-tables-only"` so a crash report
+  is symbolisable — **does NOT reproduce**. Two independent builds of
+  `vaco` differed by ~19,888 bytes, and the difference is not confined to
+  a trailing metadata section: `otool -l`'s `__TEXT` segment `vmsize` and
+  `filesize` themselves differ between the two builds (0x848000 vs
+  0x84c000), meaning actual generated code differs, not just an embedded
+  UUID or timestamp. Every embedded absolute path was checked and is
+  identical between the two builds (both built from the same checkout),
+  which rules out the usual "different `--target-dir` leaked into a
+  string" explanation. Root cause **not isolated** — the leading
+  hypothesis is LLVM/rustc codegen-unit or symbol-ordering
+  nondeterminism that debug-info emission makes visible and that full
+  stripping (as `release` does) happens to discard, but this is a
+  hypothesis, not a measurement, and is exactly the kind of claim D17
+  would want probed further before being written down as fact.
+
+**This is the actual release-blocking finding of this issue.** Shipping
+`--profile dist` today means the owner cannot yet make a two-independent-
+builders reproducibility claim for what actually gets published, only for
+a build config that is not published. Fixing it is out of this pass's
+remaining scope; flagged as a follow-up. Options worth trying first: bisect
+which crate's codegen changes when debug info is added (a `cargo build
+-Z build-std` style unit-by-unit diff, or simply re-running with
+`debug = false` to confirm `release`'s reproducibility is really about
+stripping and not something else profile.dist changes); or accept
+`strip = "symbols"` for the shipped profile too and ship a separate
+`.dSYM`/split-debuginfo artifact for crash symbolication instead of
+inline line tables.
+
+Neither profile has been measured on Linux (ELF build-id) or Windows yet —
+the script's diagnostic pass covers both, but only macOS/aarch64 has
+actually been run.
+
 `SOURCE_DATE_EPOCH` is set and passed through but nothing in this tree
 currently reads it (no `build.rs` exists at all, checked directly); it is
 there for the day a dependency does.
@@ -123,6 +151,35 @@ there for the day a dependency does.
 **This agent does not have, and must never request, the credentials this
 needs.** What follows is the pipeline and runbook the owner runs; nothing
 here executes a signing or notarization step.
+
+#### Sigstore/cosign keyless signing — the one step that needs no credential at all
+
+`planning/13-correctness.md` §7.2 names this the *default* path, and it is
+worth calling out separately from the platform-specific steps below: it
+needs **no certificate, no key custody, and no CI secret whatsoever**. It
+works by minting a short-lived certificate off the CI job's own OIDC token
+(GitHub Actions issues one automatically) and recording the signature in
+the public Sigstore transparency log (Rekor), so "who signed this" is "the
+GitHub Actions workflow run at this URL", not a name.
+
+```sh
+# In GitHub Actions, with `permissions: id-token: write` on the job --
+# no secrets. block needed.
+cosign sign-blob --yes --output-signature vaco.sig --output-certificate vaco.pem dist/<version>/<triple>/vaco
+cosign verify-blob --certificate vaco.pem --signature vaco.sig \
+    --certificate-identity-regexp 'https://github.com/<owner>/vaco/.*' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    dist/<version>/<triple>/vaco
+```
+
+This is the one part of this section that could run in CI today, entirely
+unattended, with no owner action beyond adding the `id-token: write`
+permission to the release workflow. It does not replace the platform
+notarization below (Gatekeeper and SmartScreen do not consult Rekor), but
+it is the cheapest possible "prove this artifact came from our CI and
+was not tampered with after" guarantee and should ship first.
+
+#### Platform-specific signing
 
 #### macOS: Developer ID signing + notarization
 

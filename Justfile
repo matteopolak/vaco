@@ -430,11 +430,12 @@ sbom:
         done
     done
 
-# Builds vaco-cli and vaco-probe release binaries twice, from separate
-# target directories, and diffs them byte-for-byte -- see
-# scripts/verify-reproducible-build.sh's own header for what a mismatch
-# triggers. Point at a smaller package list for a faster check while
-# iterating, e.g. `just verify-reproducible vaco-probe`.
+# Builds vaco-cli and vaco-probe twice, from separate target directories,
+# and diffs them byte-for-byte -- see scripts/verify-reproducible-build.sh's
+# own header for what a mismatch triggers, and for why `--profile release`
+# (the default here) and `--profile dist` (what actually ships -- run as
+# `just verify-reproducible --profile dist`) are NOT the same question:
+# measured 2026-08-28, only the former currently reproduces.
 verify-reproducible *packages:
     ./scripts/verify-reproducible-build.sh {{packages}}
 
