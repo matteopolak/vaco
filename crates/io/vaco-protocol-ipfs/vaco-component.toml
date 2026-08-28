@@ -1,0 +1,20 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# `ipfs:` and `ipns:`. No external dependency beyond the workspace's own
+# crates (the actual fetch is delegated to a nested `http:`/`https:` open at
+# runtime, not linked in directly), so neither needs the `default = false`
+# opt-out `vaco-protocol-http`'s own fragment uses for its wasm/getrandom
+# conflict — confirmed with `cargo check -p vaco-protocol-ipfs --target
+# wasm32-unknown-unknown`, which builds clean.
+
+[[component]]
+kind      = "protocol"
+name      = "ipfs"
+long_name = "IPFS Gateway"
+ctor      = "vaco_protocol_ipfs::IPFS_PROTOCOL"
+
+[[component]]
+kind      = "protocol"
+name      = "ipns"
+long_name = "IPNS Gateway"
+ctor      = "vaco_protocol_ipfs::IPNS_PROTOCOL"
