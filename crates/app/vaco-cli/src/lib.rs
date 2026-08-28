@@ -201,9 +201,42 @@ where
 
     let files: Vec<select::InputStreams> = inputs.iter().map(exec::describe).collect();
 
+    // CL-25: parse every `-filter_complex`/`-lavfi` occurrence far enough to
+    // list its labelled output pads, before any real decode happens — see
+    // `complexgraph::catalog`'s own docs for why that is safe and why the
+    // same texts are parsed again for real inside `exec::run_pipeline`.
+    let complex_catalog = complexgraph::catalog(&cli.complex_filters).map_err(|e| {
+        Diagnostic::new(
+            AvError::EINVAL,
+            vec![format!("Error configuring filter graph: {e}")],
+        )
+    })?;
+    let mut used_complex = std::collections::HashSet::new();
+
     let mut outputs = Vec::new();
     for spec in &cli.outputs {
-        outputs.push(exec::resolve_output(&cli, spec, &files)?);
+        outputs.push(exec::resolve_output(
+            &cli,
+            spec,
+            &files,
+            &complex_catalog,
+            &mut used_complex,
+        )?);
+    }
+
+    // Rule 4: every labelled complex-graph output must be consumed by
+    // exactly one `-map [label]`. `select::resolve` already refuses a second
+    // use of the same label; this is the other half — zero uses.
+    for (i, pad) in complex_catalog.iter().enumerate() {
+        if !used_complex.contains(&i) {
+            return Err(Diagnostic::new(
+                AvError::EINVAL,
+                vec![format!(
+                    "Filter graph output '{}' is not connected to any output stream",
+                    pad.label
+                )],
+            ));
+        }
     }
 
     // CL-17/#208: `Output #0, …` and `Press [q] to stop, [?] for help`. The
@@ -229,7 +262,17 @@ where
     }
 
     let started = vaco_time::Instant::now();
-    let report = exec::run_pipeline(inputs, &outputs, &files)?;
+    let auto_conversion_filters = !cli
+        .line
+        .last_global("auto_conversion_filters")
+        .is_some_and(|o| o.negated);
+    let report = exec::run_pipeline(
+        inputs,
+        &outputs,
+        &files,
+        &cli.complex_filters,
+        auto_conversion_filters,
+    )?;
 
     // `Stream mapping:` is the reference's own wording and layout, and it is
     // the most useful single line of evidence that selection agreed.

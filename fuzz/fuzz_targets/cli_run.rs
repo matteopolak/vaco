@@ -28,6 +28,8 @@
 
 #![no_main]
 
+use std::collections::HashSet;
+
 use arbitrary::{Arbitrary, Unstructured};
 use libfuzzer_sys::fuzz_target;
 use vaco_cli::select::{self, Suppressed, InputStreams, MapEntry};
@@ -62,6 +64,12 @@ const TOKENS: &[&str] = &[
     // the "consumed as the device name" and "ran out of argv" paths.
     "-pix_fmts", "-sample_fmts", "-layouts", "-colors", "-hwaccels", "-devices",
     "-sources", "-sinks", "lavfi", "avfoundation",
+    // CL-25: `-filter_complex`/`-lavfi` reach `complexgraph::catalog` before
+    // any file is opened (invalid graph text, an unknown filter name, a
+    // `dec:` loopback label, and the label-consumption bookkeeping in
+    // `select::resolve` are all real failure paths from argv alone).
+    "-filter_complex", "-lavfi", "[0:v]scale=2:2[out]", "[out]", "anull", "[dec:0]",
+    "[0:v]nosuchfilter[out]",
 ];
 
 fn argv_from(u: &mut Unstructured<'_>) -> Vec<String> {
@@ -156,8 +164,12 @@ fuzz_target!(|data: &[u8]| {
         data: u.ratio(1, 4).unwrap_or(false),
     };
     let all = |_| true;
-    let first = select::resolve(&files, &maps, blocked, &all);
-    let again = select::resolve(&files, &maps, blocked, &all);
+    // No complex-graph catalog here: this half fuzzes `-map file:spec`
+    // resolution over synthetic stream sets, not `-map [label]`, which the
+    // argv half above already reaches through a real `-filter_complex`
+    // occurrence when `TOKENS` produces one.
+    let first = select::resolve(&files, &maps, blocked, &all, &[], &mut HashSet::new());
+    let again = select::resolve(&files, &maps, blocked, &all, &[], &mut HashSet::new());
 
     match (first, again) {
         (Ok(a), Ok(b)) => {
@@ -167,13 +179,15 @@ fuzz_target!(|data: &[u8]| {
                 assert!(a.picks.is_empty(), "a dropped output selected streams");
             }
             for p in &a.picks {
+                let (file_index, stream_index) = p
+                    .as_demuxed()
+                    .unwrap_or_else(|| panic!("a synthetic stream set produced a complex pick"));
                 let file = files
-                    .get(p.file as usize)
-                    .unwrap_or_else(|| panic!("pick names file {}", p.file));
+                    .get(file_index as usize)
+                    .unwrap_or_else(|| panic!("pick names file {file_index}"));
                 assert!(
-                    file.streams.iter().any(|s| s.index == p.stream),
-                    "pick names stream {} that does not exist",
-                    p.stream
+                    file.streams.iter().any(|s| s.index == stream_index),
+                    "pick names stream {stream_index} that does not exist"
                 );
             }
         }

@@ -89,6 +89,7 @@
 //! [`crate::input::OpenRequest::format_opts`] instead, since discovery runs
 //! long before any `PipelineSpec` exists.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -101,6 +102,7 @@ use vaco_pixfmt::PixFmt;
 use vaco_sched::{Driver, Finish, PipelineSpec, SourceBind};
 
 use crate::cli::{Cli, OutputSpec, value_str};
+use crate::complexgraph::{self, ComplexPad};
 use crate::exit::{AvError, Diagnostic};
 use crate::input::InputFile;
 use crate::nullmux::{OutputTally, Sink, TallyingMuxer};
@@ -241,27 +243,39 @@ fn stream_info(s: &Stream) -> StreamInfo {
 
 /// Resolve one output file: its muxer, its streams and its codecs.
 ///
+/// `complex`/`used_complex` are the whole invocation's flat catalog of
+/// labelled `-filter_complex`/`-lavfi` output pads (CL-25) and which of them
+/// earlier output files already consumed — see [`select::resolve`]'s docs.
+///
 /// # Errors
 ///
 /// A [`Diagnostic`] for an absent muxer, an empty stream list, an unknown
-/// encoder, or a stream that needs an encoder this build does not have.
+/// encoder, a stream that needs an encoder this build does not have, a
+/// `-map [label]` naming no open (or already-used) complex-graph output, or
+/// `-c copy` on a stream fed by one (streamcopy and a complex filtergraph
+/// cannot be combined — measured, `ffmpeg 8.1`).
 pub fn resolve_output(
     cli: &Cli,
     out: &OutputSpec,
     files: &[InputStreams],
+    complex: &[ComplexPad],
+    used_complex: &mut HashSet<usize>,
 ) -> Result<ResolvedOutput, Diagnostic> {
     let format = muxer_for(out)?;
-    let selection = select::resolve(files, &out.maps, out.blocked, &|_| true)?;
+    let selection = select::resolve(files, &out.maps, out.blocked, &|_| true, complex, used_complex)?;
 
     let mut streams: Vec<OutStream> = selection
         .picks
         .iter()
         .map(|p| OutStream {
             source: *p,
-            media: files
-                .get(p.file as usize)
-                .and_then(|f| f.streams.iter().find(|s| s.index == p.stream))
-                .and_then(|s| s.media_type),
+            media: match p {
+                StreamPick::Demuxed { file, stream } => files
+                    .get(*file as usize)
+                    .and_then(|f| f.streams.iter().find(|s| s.index == *stream))
+                    .and_then(|s| s.media_type),
+                StreamPick::Complex(index) => complex.get(*index).map(|c| c.media),
+            },
             // Placeholder until `check_codecs` below decides it; every branch
             // that returns `streams` to a caller has run that check first.
             codec: StreamCodec::Copy,
@@ -305,11 +319,32 @@ pub fn resolve_output(
         s.codec = c;
     }
 
+    for (i, s) in streams.iter().enumerate() {
+        if matches!(s.source, StreamPick::Complex(_)) && matches!(s.codec, StreamCodec::Copy) {
+            return Err(complex_streamcopy_conflict(out, s, i));
+        }
+    }
+
     // CL-20: resolved after `codec`, because the streamcopy/filtergraph
     // conflict check needs to know which streams are actually being
     // transcoded.
     let graph_opts = graph_options_of(cli, out, &streams)?;
-    for (s, g) in streams.iter_mut().zip(graph_opts) {
+    for (i, (s, g)) in streams.iter_mut().zip(graph_opts).enumerate() {
+        // CL-25: a further `-vf`/`-af` layered on top of a `-map [label]`
+        // stream is not supported — see `crate::complexgraph`'s module docs
+        // for why building that graph would need a `CodecParameters` a
+        // complex-graph tap does not carry the same way a demuxed stream
+        // does.
+        if matches!(s.source, StreamPick::Complex(_)) && g.wants_graph() {
+            return Err(Diagnostic::new(
+                AvError::EINVAL,
+                vec![format!(
+                    "[{}#{}:{i}] a further filtergraph on a complex filtergraph output is not supported yet",
+                    stream_tag(s.media),
+                    out.index
+                )],
+            ));
+        }
         s.graph_opts = g;
     }
 
@@ -719,6 +754,27 @@ fn graph_options_of(
     Ok(out_opts)
 }
 
+/// Measured (`ffmpeg 8.1`, `-map '[out]' -c copy`): streamcopy requested for
+/// an output stream fed by a complex filtergraph is a hard error, exit 234:
+///
+/// ```text
+/// [vost#0:0] Streamcopy requested for output stream fed from a complex filtergraph. Filtering and streamcopy cannot be used together.
+/// Error opening output file out.mp4.
+/// Error opening output files: Invalid argument
+/// ```
+fn complex_streamcopy_conflict(out: &OutputSpec, s: &OutStream, i: usize) -> Diagnostic {
+    let prefix = format!("[{}#{}:{i}]", stream_tag(s.media), out.index);
+    Diagnostic::opening(
+        AvError::EINVAL,
+        vec![format!(
+            "{prefix} Streamcopy requested for output stream fed from a complex filtergraph. \
+             Filtering and streamcopy cannot be used together."
+        )],
+        "output",
+        &out.url,
+    )
+}
+
 /// Measured (`ffmpeg 8.1`, `-c copy -vf hflip`): a filtergraph named on a
 /// stream resolved to streamcopy is a hard error, exit 234, sans pointer:
 ///
@@ -744,6 +800,16 @@ fn filter_streamcopy_conflict(out: &OutputSpec, s: &OutStream, i: usize, text: &
 ///
 /// Consumes the inputs, because `vaco-sched` takes each demuxer by value.
 ///
+/// `complex_filters` is `cli.complex_filters` (CL-25) — every
+/// `-filter_complex`/`-lavfi` occurrence's text, rebuilt here for real (a
+/// second parse of the same text [`crate::complexgraph::catalog`] already
+/// parsed once, structurally, to resolve `-map [label]` before any input was
+/// opened — see that module's docs for why building it twice is safe rather
+/// than a duplicated risk). `auto_conversion_filters` is
+/// `-auto_conversion_filters`'s global default, applied to every complex
+/// graph the same way [`graph_options_of`] already applies it per output
+/// stream to a simple one.
+///
 /// # Errors
 ///
 /// A [`Diagnostic`] for a wiring failure the builder rejects, or for a pipeline
@@ -752,6 +818,8 @@ pub fn run_pipeline(
     inputs: Vec<InputFile>,
     outputs: &[ResolvedOutput],
     files: &[InputStreams],
+    complex_filters: &[String],
+    auto_conversion_filters: bool,
 ) -> Result<RunSpec, Diagnostic> {
     if outputs.iter().all(|o| o.dropped) {
         // Nothing to write anywhere, so there is nothing to read either. The
@@ -805,6 +873,42 @@ pub fn run_pipeline(
     let mut refs = Vec::new();
     for f in inputs {
         refs.push(spec.add_input(f.demuxer));
+    }
+
+    // CL-25: build every `-filter_complex`/`-lavfi` graph for real, once,
+    // before any output stream is wired. `complex_taps[i]` corresponds to
+    // `crate::complexgraph::catalog`'s `i`-th labelled pad — both walk
+    // `complex_filters` in the same order and keep only `label.is_some()`
+    // outputs, so the index spaces agree without either side inspecting the
+    // other (see that module's docs).
+    let mut complex_used_inputs: HashSet<(u32, u32)> = HashSet::new();
+    let mut complex_taps: Vec<(
+        vaco_sched::FrameTap,
+        vaco_core::Rational,
+        vaco_codec_core::CodecParameters,
+    )> = Vec::new();
+    for text in complex_filters {
+        let built = complexgraph::build_and_attach(
+            &mut spec,
+            text,
+            files,
+            &refs,
+            &params,
+            &mut complex_used_inputs,
+            auto_conversion_filters,
+        )
+        .map_err(|e| {
+            Diagnostic::new(
+                AvError::EINVAL,
+                vec![format!("Error configuring filter graph: {e}")],
+            )
+        })?;
+        complex_taps.extend(
+            built
+                .into_iter()
+                .filter(|o| o.label.is_some())
+                .map(|o| (o.tap, o.time_base, o.params)),
+        );
     }
 
     let mut report = RunSpec::default();
@@ -861,112 +965,151 @@ pub fn run_pipeline(
             .map_err(|e| internal_from("the muxer refused a bitstream filter", &e))?;
         sinks.push((out.sink.clone(), high_water));
         for (i, s) in out.streams.iter().enumerate() {
-            let Some(input) = refs.get(s.source.file as usize).copied() else {
-                return Err(internal("a map names an input that was not opened"));
-            };
-            let tap = spec
-                .input_stream(input, s.source.stream)
-                .map_err(|_| internal("a map names a stream the demuxer does not have"))?;
-            let (p, time_base) = params
-                .get(s.source.file as usize)
-                .and_then(|v| v.iter().find(|(idx, _, _)| *idx == s.source.stream))
-                .map_or_else(
-                    || {
-                        (
-                            vaco_codec_core::CodecParameters::new(MediaType::Data),
-                            vaco_core::Rational::new(1, 1),
-                        )
-                    },
-                    |(_, p, tb)| (p.clone(), *tb),
-                );
+            let (packet_tap, out_params, label, mapping_source) = match &s.source {
+                StreamPick::Demuxed { file, stream } => {
+                    let Some(input) = refs.get(*file as usize).copied() else {
+                        return Err(internal("a map names an input that was not opened"));
+                    };
+                    let tap = spec
+                        .input_stream(input, *stream)
+                        .map_err(|_| internal("a map names a stream the demuxer does not have"))?;
+                    let (p, time_base) = params
+                        .get(*file as usize)
+                        .and_then(|v| v.iter().find(|(idx, _, _)| *idx == *stream))
+                        .map_or_else(
+                            || {
+                                (
+                                    vaco_codec_core::CodecParameters::new(MediaType::Data),
+                                    vaco_core::Rational::new(1, 1),
+                                )
+                            },
+                            |(_, p, tb)| (p.clone(), *tb),
+                        );
 
-            // A stream this crate copies has no decoder or encoder
-            // in the graph at all — `spec.map` on the demuxer's own tap is
-            // what makes it a copy. A stream with a resolved encoder gets a
-            // decode leg and an encode leg in between, per `vaco-sched`'s own
-            // `add_decoder`/`add_encoder` (already exercised by its mocks;
-            // nothing there needed to change for this).
-            let (packet_tap, out_params, label) = match s.codec {
-                StreamCodec::Copy => (tap, p, "copy".to_owned()),
-                StreamCodec::Encode(name) => {
-                    let codec_id = p.codec_id.ok_or_else(|| {
-                        internal("a stream being transcoded has no known input codec")
-                    })?;
-                    let decoder_desc = vaco_registry::decoder_for(codec_id).ok_or_else(|| {
-                        internal("this build has no decoder for the input codec")
-                    })?;
+                    // A stream this crate copies has no decoder or encoder
+                    // in the graph at all — `spec.map` on the demuxer's own tap is
+                    // what makes it a copy. A stream with a resolved encoder gets a
+                    // decode leg and an encode leg in between, per `vaco-sched`'s own
+                    // `add_decoder`/`add_encoder` (already exercised by its mocks;
+                    // nothing there needed to change for this).
+                    let (packet_tap, out_params, label) = match s.codec {
+                        StreamCodec::Copy => (tap, p, "copy".to_owned()),
+                        StreamCodec::Encode(name) => {
+                            let codec_id = p.codec_id.ok_or_else(|| {
+                                internal("a stream being transcoded has no known input codec")
+                            })?;
+                            let decoder_desc =
+                                vaco_registry::decoder_for(codec_id).ok_or_else(|| {
+                                    internal("this build has no decoder for the input codec")
+                                })?;
+                            let encoder_desc =
+                                vaco_registry::encoder_by_name(name).ok_or_else(|| {
+                                    internal("the resolved encoder is no longer in the registry")
+                                })?;
+                            let limits = vaco_limits::Limits::default();
+                            let mut decoder = decoder_desc.build(limits.clone());
+                            if let Some(extradata) = p.extradata.as_deref() {
+                                // Offering, not requiring: `Decoder::set_extradata`'s
+                                // own contract says a caller offering a container's
+                                // configuration record should treat a refusal as
+                                // "this decoder had nothing to learn from it", the
+                                // same convention `Parser::set_extradata` already
+                                // uses, so a decoder with no use for the record (or
+                                // no override at all) just keeps decoding.
+                                let _ = decoder.set_extradata(extradata);
+                            }
+                            let frames = spec
+                                .add_decoder(tap, decoder)
+                                .map_err(|e| internal_from("could not attach a decoder", &e))?;
+                            let encoder = encoder_desc.build(limits.clone());
+                            // An encoder that does not care lists nothing, so this is
+                            // a no-op for the common case.
+                            let accepted = encoder.accepted_pix_fmts();
+                            let frames = if s.graph_opts.wants_graph() {
+                                // CL-20: a real `-vf`/`-af`/`-filter`/`-s`/`-aspect`/
+                                // `-pix_fmt` graph replaces the ad-hoc
+                                // `converter_target`/`add_converter` path below —
+                                // `SimpleGraph::build`'s own `configure` already runs
+                                // the same auto-conversion policy for whatever the
+                                // user's chain leaves unresolved against `accepted`.
+                                let built = crate::filtergraph::build(
+                                    &s.graph_opts,
+                                    s.media.unwrap_or(MediaType::Data),
+                                    p.video.as_ref(),
+                                    p.audio.as_ref(),
+                                    time_base,
+                                    accepted,
+                                )
+                                .map_err(|e| {
+                                    Diagnostic::new(AvError::EINVAL, vec![format!("Error: {e}")])
+                                })?;
+                                spec.add_filter(
+                                    built.graph,
+                                    &[SourceBind::new(frames, built.source, time_base)],
+                                    &[built.sink],
+                                )
+                                .map_err(|e| internal_from("could not attach a filtergraph", &e))?
+                                .into_iter()
+                                .next()
+                                .ok_or_else(|| {
+                                    internal("a configured filtergraph produced no sink tap")
+                                })?
+                            } else {
+                                let source_format = p.video.as_ref().and_then(|v| v.format);
+                                let target = converter_target(source_format, accepted);
+                                match target {
+                                    Some(t) if Some(t) != source_format => spec
+                                        .add_converter(frames, t, time_base, limits.clone())
+                                        .map_err(|e| {
+                                            internal_from(
+                                                "could not attach a format converter",
+                                                &e,
+                                            )
+                                        })?,
+                                    _ => frames,
+                                }
+                            };
+                            let packets = spec
+                                .add_encoder(frames, encoder, time_base)
+                                .map_err(|e| internal_from("could not attach an encoder", &e))?;
+                            (packets, p.with_codec(encoder_desc.id), name.to_owned())
+                        }
+                    };
+                    (packet_tap, out_params, label, format!("{file}:{stream}"))
+                }
+                StreamPick::Complex(index) => {
+                    // Validated in `resolve_output`: a complex-graph-sourced
+                    // stream is never `StreamCodec::Copy`.
+                    let StreamCodec::Encode(name) = s.codec else {
+                        return Err(internal(
+                            "a complex filtergraph output must be encoded, not copied",
+                        ));
+                    };
+                    let (frames, time_base, p) = complex_taps
+                        .get(*index)
+                        .cloned()
+                        .ok_or_else(|| internal("a complex filtergraph output was not built"))?;
                     let encoder_desc = vaco_registry::encoder_by_name(name).ok_or_else(|| {
                         internal("the resolved encoder is no longer in the registry")
                     })?;
                     let limits = vaco_limits::Limits::default();
-                    let mut decoder = decoder_desc.build(limits.clone());
-                    if let Some(extradata) = p.extradata.as_deref() {
-                        // Offering, not requiring: `Decoder::set_extradata`'s
-                        // own contract says a caller offering a container's
-                        // configuration record should treat a refusal as
-                        // "this decoder had nothing to learn from it", the
-                        // same convention `Parser::set_extradata` already
-                        // uses, so a decoder with no use for the record (or
-                        // no override at all) just keeps decoding.
-                        let _ = decoder.set_extradata(extradata);
-                    }
-                    let frames = spec
-                        .add_decoder(tap, decoder)
-                        .map_err(|e| internal_from("could not attach a decoder", &e))?;
-                    let encoder = encoder_desc.build(limits.clone());
-                    // An encoder that does not care lists nothing, so this is
-                    // a no-op for the common case.
-                    let accepted = encoder.accepted_pix_fmts();
-                    let frames = if s.graph_opts.wants_graph() {
-                        // CL-20: a real `-vf`/`-af`/`-filter`/`-s`/`-aspect`/
-                        // `-pix_fmt` graph replaces the ad-hoc
-                        // `converter_target`/`add_converter` path below —
-                        // `SimpleGraph::build`'s own `configure` already runs
-                        // the same auto-conversion policy for whatever the
-                        // user's chain leaves unresolved against `accepted`.
-                        let built = crate::filtergraph::build(
-                            &s.graph_opts,
-                            s.media.unwrap_or(MediaType::Data),
-                            p.video.as_ref(),
-                            p.audio.as_ref(),
-                            time_base,
-                            accepted,
-                        )
-                        .map_err(|e| {
-                            Diagnostic::new(AvError::EINVAL, vec![format!("Error: {e}")])
-                        })?;
-                        spec.add_filter(
-                            built.graph,
-                            &[SourceBind::new(frames, built.source, time_base)],
-                            &[built.sink],
-                        )
-                        .map_err(|e| internal_from("could not attach a filtergraph", &e))?
-                        .into_iter()
-                        .next()
-                        .ok_or_else(|| internal("a configured filtergraph produced no sink tap"))?
-                    } else {
-                        let source_format = p.video.as_ref().and_then(|v| v.format);
-                        let target = converter_target(source_format, accepted);
-                        match target {
-                            Some(t) if Some(t) != source_format => spec
-                                .add_converter(frames, t, time_base, limits.clone())
-                                .map_err(|e| {
-                                    internal_from("could not attach a format converter", &e)
-                                })?,
-                            _ => frames,
-                        }
-                    };
+                    let encoder = encoder_desc.build(limits);
                     let packets = spec
                         .add_encoder(frames, encoder, time_base)
                         .map_err(|e| internal_from("could not attach an encoder", &e))?;
-                    (packets, p.with_codec(encoder_desc.id), name.to_owned())
+                    (
+                        packets,
+                        p.with_codec(encoder_desc.id),
+                        name.to_owned(),
+                        format!("complex:{index}"),
+                    )
                 }
             };
             spec.map(packet_tap, oref, &out_params)
                 .map_err(|e| internal_from("the muxer refused a stream", &e))?;
             report.mapping.push(format!(
-                "  Stream #{}:{} -> #{}:{} ({label})",
-                s.source.file, s.source.stream, out.index, i
+                "  Stream #{mapping_source} -> #{}:{i} ({label})",
+                out.index
             ));
         }
     }
@@ -1008,7 +1151,6 @@ pub fn run_pipeline(
         report.total_bytes.push(total_bytes);
     }
     report.input_duration_secs = input_duration_secs;
-    let _ = files;
     Ok(report)
 }
 
@@ -1398,7 +1540,7 @@ mod tests {
         let (c, mut o) = out_of(&["-i", "a.mkv", "-f", "null", "-"]);
         o.format = Some("null".to_owned());
         let s = OutStream {
-            source: StreamPick { file: 0, stream: 0 },
+            source: StreamPick::demuxed(0, 0),
             media: Some(MediaType::Video),
             codec: StreamCodec::Copy,
             graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
@@ -1418,7 +1560,7 @@ mod tests {
     fn copy_is_accepted_and_a_named_encoder_is_not() {
         let (c, o) = out_of(&["-i", "a.mkv", "-c", "copy", "-f", "null", "-"]);
         let s = OutStream {
-            source: StreamPick { file: 0, stream: 0 },
+            source: StreamPick::demuxed(0, 0),
             media: Some(MediaType::Video),
             codec: StreamCodec::Copy,
             graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
@@ -1467,7 +1609,7 @@ mod tests {
     fn a_registered_encoder_name_resolves_through_the_registry() {
         let (c, o) = out_of(&["-i", "a.mkv", "-c:v", "qoi", "-f", "null", "-"]);
         let s = OutStream {
-            source: StreamPick { file: 0, stream: 0 },
+            source: StreamPick::demuxed(0, 0),
             media: Some(MediaType::Video),
             codec: StreamCodec::Copy,
             graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
@@ -1484,13 +1626,13 @@ mod tests {
         ]);
         let streams = vec![
             OutStream {
-                source: StreamPick { file: 0, stream: 0 },
+                source: StreamPick::demuxed(0, 0),
                 media: Some(MediaType::Audio),
                 codec: StreamCodec::Copy,
                 graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
             },
             OutStream {
-                source: StreamPick { file: 0, stream: 1 },
+                source: StreamPick::demuxed(0, 1),
                 media: Some(MediaType::Audio),
                 codec: StreamCodec::Copy,
                 graph_opts: crate::filtergraph::SimpleGraphOptions::default(),

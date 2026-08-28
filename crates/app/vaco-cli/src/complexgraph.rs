@@ -39,26 +39,36 @@
 //!   the ordinary case falls through to the `File` arm and fails as an
 //!   unresolvable specifier, which is the honest outcome given the ambiguity
 //!   above rather than a working rule 3.
-//! - **Wiring a resolved output label to an actual muxed output stream.**
-//!   [`select::MapSpec::Label`] is where `-map [label]` already lives, and it
-//!   still refuses every label unconditionally — `crate::select::StreamPick`
-//!   is a `(file, stream)` pair into real demuxer streams, with no variant
-//!   for "frame N of complex-graph output M", and giving it one ripples
-//!   through `OutStream`, `Selection` and every call site in `exec.rs` and
-//!   `select.rs` that reads `.source.file`/`.source.stream` directly. That is
-//!   real, scoped follow-on work, not attempted in this session — see this
-//!   crate's CL-25 closing report. Concretely: `vaco -i in.mp4 -filter_complex
-//!   "[0:v]scale=320:240[out]" -map "[out]" out.mp4` still reports "Output
-//!   with label 'out' does not exist" today, even though the graph itself
-//!   parses, resolves and runs correctly when driven directly through this
-//!   module (see the tests below).
+//! - **`-map [label]` is wired end to end.** [`crate::select::StreamPick`]
+//!   grew a `Complex(usize)` variant indexing into [`catalog`]'s flat,
+//!   labels-only pad list; [`crate::exec::run_pipeline`] rebuilds the same
+//!   graphs for real (this module is called from there now) and lines its own
+//!   labelled outputs up against the same catalog by construction — both
+//!   walk `cli.complex_filters` in order and filter to `label.is_some()`, so
+//!   the index spaces agree without either side needing to know the other's
+//!   internals. `vaco -i in.mp4 -filter_complex "[0:v]scale=320:240[out]"
+//!   -map "[out]" -c:v <encoder> out.mp4` produces a real, correctly-sized
+//!   output file — see `crate::exec`'s own tests for an end-to-end run
+//!   through a real encoder.
+//! - Rule 2 (auto-attaching an *unlabelled* complex output to the first
+//!   output file) is still not implemented: [`catalog`] only lists labelled
+//!   pads, so an unlabelled complex-graph output remains unreachable exactly
+//!   as before this session. Named rather than silently dropped: a graph with
+//!   an unlabelled output and no consumer for it is inert, not an error.
+//! - Rule 3 (chaining one complex graph's output into another's input) is
+//!   still not implemented, for the reason [`resolve_labelled`] already
+//!   documents.
+//! - Loopback decoders (`[dec:N]`, CL-26) are still refused with a named
+//!   error — a separate, acyclic-DAG design change.
 //!
-//! Because the output side is not wired into a real run yet, **this module is
-//! not called from [`crate::exec::run_pipeline`]** — attaching a filter node
-//! whose sink nobody ever reads would leave a dangling wire in the scheduler
-//! DAG, which is worse than not building the graph at all. `-filter_complex`
-//! is parsed (`crate::cli`) so it does not raise "unrecognized option", but
-//! has no effect on the run until the output side above lands.
+//! An output stream fed by a complex-graph label must be encoded, never
+//! copied (`crate::exec::resolve_output` rejects `-c copy` for one with the
+//! reference's own measured wording: "Streamcopy requested for output stream
+//! fed from a complex filtergraph."), and a *further* `-vf`/`-af` layered on
+//! top of a `-map [label]` stream is rejected rather than silently ignored or
+//! mis-negotiated — the simple-graph builder needs the upstream
+//! `CodecParameters` a complex-graph tap does not carry the same way a
+//! demuxed stream does.
 
 use std::collections::HashSet;
 
@@ -67,11 +77,101 @@ use vaco_cli_core::{MatchCtx, StreamInfo};
 use vaco_codec_core::CodecParameters;
 use vaco_core::{MediaType, Rational};
 use vaco_filter_core::negotiate::{FormatSet, NodeFormats};
+use vaco_filter_core::LinkFormat;
 use vaco_sched::spec::{PipelineSpec, SourceBind};
 use vaco_sched::{FrameTap, InputRef};
 
 use crate::filterreg::CliFilterRegistry;
 use crate::select::InputStreams;
+
+/// One `-filter_complex`/`-lavfi` **labelled** output pad, as `-map [label]`
+/// can see it before any real decode happens: label and media type only,
+/// known from parsing the graph text alone.
+///
+/// [`catalog`] builds the flat list every output file's `select::resolve`
+/// call shares, so `-map [label]` resolves against one consistent index space
+/// for the whole invocation; [`crate::exec::run_pipeline`] rebuilds the same
+/// graphs for real and lines its own labelled taps up against this same list
+/// (both iterate the same `cli.complex_filters` in order, filtered to
+/// `label.is_some()` — see this module's docs on why that is safe without
+/// either side reading the other's internals).
+#[derive(Debug, Clone)]
+pub struct ComplexPad {
+    pub label: String,
+    pub media: MediaType,
+}
+
+/// List every labelled output pad across `texts`, in argv/graph-declaration
+/// order, without decoding anything.
+///
+/// [`vaco_filter_graph::parse_and_build`] resolves filter names and wires
+/// internal links purely from the description text and the filter registry —
+/// it needs no real frame source — so this is safe to call once, early,
+/// before any input is opened for real. Unlabelled outputs are omitted: see
+/// this module's docs on why rule 2 is not implemented.
+///
+/// # Errors
+/// A message naming the graph text and what failed to parse.
+pub fn catalog(texts: &[String]) -> Result<Vec<ComplexPad>, String> {
+    let registry = CliFilterRegistry;
+    let mut pads = Vec::new();
+    for text in texts {
+        let built = vaco_filter_graph::parse_and_build(text, &registry)
+            .map_err(|e| format!("filtergraph: {}", e.render(text)))?;
+        for open in &built.open_outputs {
+            if let Some(label) = &open.label {
+                pads.push(ComplexPad {
+                    label: label.clone(),
+                    media: open.media,
+                });
+            }
+        }
+    }
+    Ok(pads)
+}
+
+/// The [`CodecParameters`] an encoder/muxer should see for a filtered output
+/// pad, read back from the graph's own negotiated [`LinkFormat`] rather than
+/// guessed from the pad's original source — a `scale` output must report its
+/// *scaled* dimensions, not its input's.
+fn params_of(fmt: &LinkFormat) -> CodecParameters {
+    match fmt {
+        LinkFormat::Video {
+            format,
+            width,
+            height,
+            frame_rate,
+            sample_aspect_ratio,
+            color,
+            ..
+        } => {
+            let mut p = CodecParameters::video();
+            if let Some(v) = p.video.as_mut() {
+                v.width = *width;
+                v.height = *height;
+                v.format = Some(*format);
+                v.frame_rate = *frame_rate;
+                v.sample_aspect_ratio = *sample_aspect_ratio;
+                v.color = color.clone();
+            }
+            p
+        }
+        LinkFormat::Audio {
+            format,
+            sample_rate,
+            layout,
+            ..
+        } => {
+            let mut p = CodecParameters::audio();
+            if let Some(a) = p.audio.as_mut() {
+                a.sample_rate = *sample_rate;
+                a.format = Some(*format);
+                a.layout = Some(layout.clone());
+            }
+            p
+        }
+    }
+}
 
 /// One resolved real input stream: which file, which stream within it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -90,6 +190,18 @@ pub struct ComplexOutput {
     pub label: Option<String>,
     pub media: MediaType,
     pub tap: FrameTap,
+    /// The time base an encoder reading `tap` should use. Approximated as the
+    /// first resolved input pad's time base for this graph occurrence — exact
+    /// for the overwhelmingly common one-source-in case, and a documented
+    /// approximation for a graph mixing sources of different time bases,
+    /// since nothing downstream of a filter graph currently reports a
+    /// per-output time base of its own.
+    pub time_base: Rational,
+    /// The negotiated output format, read back from the graph itself
+    /// ([`Graph::sink_format`](vaco_filter_core::Graph::sink_format)) so a
+    /// `scale`/`aformat`/… output reports what it actually produces rather
+    /// than what its source happened to be.
+    pub params: CodecParameters,
 }
 
 /// Resolve one open input pad's label against `-map`'s own `file:stream_spec`
@@ -316,6 +428,14 @@ pub fn build_and_attach(
         outputs_meta.push((open.label, open.media, sink));
     }
 
+    // The overwhelmingly common case is one source per graph occurrence; see
+    // `ComplexOutput::time_base`'s own doc for what this approximates when
+    // there is more than one.
+    let default_time_base = pending_sources
+        .first()
+        .map(|(_, _, tb)| *tb)
+        .unwrap_or_else(|| Rational::new(1, 1_000_000));
+
     let mode = if auto_conversion {
         vaco_filter_core::negotiate::AutoConvert::All
     } else {
@@ -324,6 +444,20 @@ pub fn build_and_attach(
     built
         .configure(&registry, mode)
         .map_err(|e| format!("configuring the filtergraph: {e}"))?;
+
+    // Read every sink's negotiated format back before `built.graph` moves
+    // into `spec.add_filter` below — this is what makes a `scale`/`aformat`/…
+    // output report the format it actually produces rather than a guess.
+    let out_params: Vec<CodecParameters> = outputs_meta
+        .iter()
+        .map(|(_, _, node)| {
+            built
+                .graph
+                .sink_format(*node)
+                .map(params_of)
+                .unwrap_or_default()
+        })
+        .collect();
 
     let sources: Vec<SourceBind> = pending_sources
         .into_iter()
@@ -337,7 +471,14 @@ pub fn build_and_attach(
     Ok(outputs_meta
         .into_iter()
         .zip(taps)
-        .map(|((label, media, _), tap)| ComplexOutput { label, media, tap })
+        .zip(out_params)
+        .map(|(((label, media, _), tap), params)| ComplexOutput {
+            label,
+            media,
+            tap,
+            time_base: default_time_base,
+            params,
+        })
         .collect())
 }
 

@@ -88,10 +88,13 @@
 //! emptiness or something that coincides with it on these inputs is not
 //! settled; the six probes are in the tests.
 
+use std::collections::HashSet;
+
 use vaco_cli_core::map::MapSpec;
 use vaco_cli_core::{Disposition, MatchCtx, ProgramInfo, StreamInfo};
 use vaco_core::MediaType;
 
+use crate::complexgraph::ComplexPad;
 use crate::exit::{AvError, Diagnostic};
 
 /// What a `default` disposition is worth, in pixels for video and in channels
@@ -158,11 +161,36 @@ impl InputStreams {
     }
 }
 
-/// One selected stream: which input file, which stream in it.
+/// One selected stream: a real demuxed stream, or a `-filter_complex`/
+/// `-lavfi` output pad resolved through `-map [label]`.
+///
+/// CL-25: this used to be a bare `(file, stream)` pair into real demuxer
+/// streams, with no way to name anything else. `Complex` indexes into the
+/// flat, labels-only catalog [`crate::complexgraph::catalog`] builds once for
+/// the whole invocation — see that module's docs for how the same index
+/// space is shared between `-map` resolution here and the real taps
+/// `crate::exec::run_pipeline` attaches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StreamPick {
-    pub file: u32,
-    pub stream: u32,
+pub enum StreamPick {
+    Demuxed { file: u32, stream: u32 },
+    Complex(usize),
+}
+
+impl StreamPick {
+    #[must_use]
+    pub const fn demuxed(file: u32, stream: u32) -> Self {
+        Self::Demuxed { file, stream }
+    }
+
+    /// The `(file, stream)` pair, for a real demuxed pick. `None` for a
+    /// complex-graph pick, which has no such pair.
+    #[must_use]
+    pub const fn as_demuxed(&self) -> Option<(u32, u32)> {
+        match self {
+            Self::Demuxed { file, stream } => Some((*file, *stream)),
+            Self::Complex(_) => None,
+        }
+    }
 }
 
 /// A `-map` occurrence, with the text the reference echoes back on failure.
@@ -266,16 +294,10 @@ pub fn auto_pick(files: &[InputStreams], media: MediaType) -> Option<StreamPick>
             // Subtitles are picked by position, not by any property, so they
             // never enter the scoring comparison; the first one wins.
             if media == MediaType::Subtitle {
-                return Some(StreamPick {
-                    file: fi as u32,
-                    stream: s.index,
-                });
+                return Some(StreamPick::demuxed(fi as u32, s.index));
             }
             let sc = score(s, file.channels_of(si));
-            let pick = StreamPick {
-                file: fi as u32,
-                stream: s.index,
-            };
+            let pick = StreamPick::demuxed(fi as u32, s.index);
             if best.is_none_or(|(b, _)| sc > b) {
                 best = Some((sc, pick));
             }
@@ -298,18 +320,25 @@ pub struct Selection {
 ///
 /// `maps` empty runs automatic selection; any entry at all turns it off for
 /// every type. `supports` is the output container's opinion, asked once per
-/// media type.
+/// media type. `complex` is the whole invocation's flat catalog of labelled
+/// `-filter_complex`/`-lavfi` output pads (CL-25); `used_complex` accumulates
+/// which of them have already been consumed by an earlier `-map [label]` —
+/// threaded by the caller across every output file, since plan 14 §6.2 rule 4
+/// says a labelled pad may be consumed **once**, not once per output.
 ///
 /// # Errors
 ///
 /// [`Diagnostic`] carrying the reference's wording and exit status: an
-/// out-of-range input file index, or a map that matched nothing and did not
-/// carry `?`.
+/// out-of-range input file index, a map that matched nothing and did not
+/// carry `?`, or a `[label]` that names no open complex-graph output (or one
+/// already used elsewhere).
 pub fn resolve(
     files: &[InputStreams],
     maps: &[MapEntry],
     blocked: Suppressed,
     supports: &dyn Fn(MediaType) -> bool,
+    complex: &[ComplexPad],
+    used_complex: &mut HashSet<usize>,
 ) -> Result<Selection, Diagnostic> {
     if maps.is_empty() {
         return Ok(Selection {
@@ -320,7 +349,7 @@ pub fn resolve(
     let mut out: Vec<StreamPick> = Vec::new();
     let mut matched = false;
     for m in maps {
-        matched |= apply_map(files, m, blocked, &mut out)?;
+        matched |= apply_map(files, m, blocked, &mut out, complex, used_complex)?;
     }
     Ok(Selection {
         picks: out,
@@ -354,17 +383,12 @@ fn apply_map(
     m: &MapEntry,
     blocked: Suppressed,
     out: &mut Vec<StreamPick>,
+    complex: &[ComplexPad],
+    used_complex: &mut HashSet<usize>,
 ) -> Result<bool, Diagnostic> {
     let file_map = match &m.spec {
         MapSpec::Label(label) => {
-            // No filtergraph exists in this build, so a labelled pad can never
-            // resolve. The reference's wording for an unknown label, verbatim.
-            return Err(Diagnostic::new(
-                AvError::EINVAL,
-                vec![format!(
-                    "[out#0] Output with label '{label}' does not exist in any defined filter graph, or was already used elsewhere."
-                )],
-            ));
+            return apply_label_map(label, complex, used_complex, blocked, out);
         }
         MapSpec::File(f) => f,
     };
@@ -398,7 +422,12 @@ fn apply_map(
                 ],
             ));
         }
-        out.retain(|p| !(p.file == file_index && hits.contains(&p.stream)));
+        // A complex-graph pick never matches a demuxed negative spec, so it
+        // is always kept.
+        out.retain(|p| {
+            p.as_demuxed()
+                .is_none_or(|(f, s)| !(f == file_index && hits.contains(&s)))
+        });
         return Ok(false);
     }
 
@@ -428,12 +457,47 @@ fn apply_map(
         if blocked.blocks(media) {
             continue;
         }
-        out.push(StreamPick {
-            file: file_index,
-            stream,
-        });
+        out.push(StreamPick::demuxed(file_index, stream));
     }
     Ok(matched)
+}
+
+/// `-map [label]`: resolve against the flat, invocation-wide catalog of
+/// labelled complex-graph output pads.
+///
+/// Both "the label does not exist" and "the label was already consumed by an
+/// earlier `-map`" share one message — measured (`ffmpeg 8.1`,
+/// `-map '[out]' -map '[out]'`): "Output with label 'out' does not exist in
+/// any defined filter graph, or was already used elsewhere." — so a single
+/// lookup that treats an already-used pad as not found reproduces both cases
+/// without distinguishing them, exactly as the reference does not.
+fn apply_label_map(
+    label: &str,
+    complex: &[ComplexPad],
+    used_complex: &mut HashSet<usize>,
+    blocked: Suppressed,
+    out: &mut Vec<StreamPick>,
+) -> Result<bool, Diagnostic> {
+    let found = complex
+        .iter()
+        .enumerate()
+        .find(|(i, p)| p.label == label && !used_complex.contains(i));
+    let Some((index, pad)) = found else {
+        return Err(Diagnostic::new(
+            AvError::EINVAL,
+            vec![format!(
+                "[out#0] Output with label '{label}' does not exist in any defined filter graph, or was already used elsewhere."
+            )],
+        ));
+    };
+    used_complex.insert(index);
+    // Consistent with a `-map file:spec` positive match (see `apply_map`
+    // above): a type this output blocks still counts as matched, so `-vn`
+    // does not turn a real match into a dropped-file exit.
+    if !blocked.blocks(Some(pad.media)) {
+        out.push(StreamPick::Complex(index));
+    }
+    Ok(true)
 }
 
 fn map_failure(m: &MapEntry, mut lines: Vec<String>) -> Diagnostic {
@@ -449,6 +513,17 @@ fn map_failure(m: &MapEntry, mut lines: Vec<String>) -> Diagnostic {
 #[allow(clippy::unwrap_used, reason = "test code")]
 mod tests {
     use super::*;
+
+    /// [`resolve`] with an empty complex-graph catalog — the shape every
+    /// test predating CL-25 already assumed.
+    fn resolve_simple(
+        files: &[InputStreams],
+        maps: &[MapEntry],
+        blocked: Suppressed,
+        supports: &dyn Fn(MediaType) -> bool,
+    ) -> Result<Selection, Diagnostic> {
+        resolve(files, maps, blocked, supports, &[], &mut HashSet::new())
+    }
 
     fn video(index: u32, w: u32, h: u32, disp: Disposition) -> StreamInfo {
         StreamInfo {
@@ -506,13 +581,13 @@ mod tests {
     #[test]
     fn default_disposition_beats_a_larger_video() {
         // OBSERVED: ffmpeg 8.1 selects #0:0 and #0:2 from this file.
-        let sel = resolve(&multi(), &[], Suppressed::default(), ALL).unwrap();
+        let sel = resolve_simple(&multi(), &[], Suppressed::default(), ALL).unwrap();
         assert!(!sel.dropped);
         assert_eq!(
             sel.picks,
             vec![
-                StreamPick { file: 0, stream: 0 },
-                StreamPick { file: 0, stream: 2 },
+                StreamPick::demuxed(0, 0),
+                StreamPick::demuxed(0, 2),
             ]
         );
     }
@@ -529,8 +604,8 @@ mod tests {
                 ],
                 vec![0, 0],
             )];
-            let sel = resolve(&f, &[], Suppressed::default(), ALL).unwrap();
-            assert_eq!(sel.picks.first().map(|p| p.stream), Some(want), "{w}x{h}");
+            let sel = resolve_simple(&f, &[], Suppressed::default(), ALL).unwrap();
+            assert_eq!(sel.picks.first().map(|p| p.as_demuxed().unwrap().1), Some(want), "{w}x{h}");
         }
     }
 
@@ -541,14 +616,14 @@ mod tests {
         let both = vec![file(vec![real.clone(), pic.clone()], vec![0, 0])];
         assert_eq!(
             auto_pick(&both, MediaType::Video),
-            Some(StreamPick { file: 0, stream: 0 })
+            Some(StreamPick::demuxed(0, 0))
         );
 
         // An mp3 with cover art: the picture is the only video, and is chosen.
         let alone = vec![file(vec![audio(0, Disposition::NONE), pic], vec![2, 0])];
         assert_eq!(
             auto_pick(&alone, MediaType::Video),
-            Some(StreamPick { file: 0, stream: 1 })
+            Some(StreamPick::demuxed(0, 1))
         );
     }
 
@@ -561,7 +636,7 @@ mod tests {
         )];
         assert_eq!(
             auto_pick(&f, MediaType::Audio),
-            Some(StreamPick { file: 0, stream: 1 })
+            Some(StreamPick::demuxed(0, 1))
         );
         // 6ch first -> still the 6ch one, now by position as well.
         let f = vec![file(
@@ -570,7 +645,7 @@ mod tests {
         )];
         assert_eq!(
             auto_pick(&f, MediaType::Audio),
-            Some(StreamPick { file: 0, stream: 0 })
+            Some(StreamPick::demuxed(0, 0))
         );
     }
 
@@ -580,7 +655,7 @@ mod tests {
         let files = vec![one(), one()];
         assert_eq!(
             auto_pick(&files, MediaType::Video),
-            Some(StreamPick { file: 0, stream: 0 })
+            Some(StreamPick::demuxed(0, 0))
         );
     }
 
@@ -594,7 +669,7 @@ mod tests {
         };
         let files = vec![file(vec![s], vec![0])];
         assert!(
-            resolve(&files, &[], Suppressed::default(), ALL)
+            resolve_simple(&files, &[], Suppressed::default(), ALL)
                 .unwrap()
                 .picks
                 .is_empty()
@@ -604,14 +679,14 @@ mod tests {
     #[test]
     fn an_unsupported_type_is_skipped() {
         let only_audio = &|m: MediaType| m == MediaType::Audio;
-        let sel = resolve(&multi(), &[], Suppressed::default(), only_audio).unwrap();
-        assert_eq!(sel.picks, vec![StreamPick { file: 0, stream: 2 }]);
+        let sel = resolve_simple(&multi(), &[], Suppressed::default(), only_audio).unwrap();
+        assert_eq!(sel.picks, vec![StreamPick::demuxed(0, 2)]);
     }
 
     #[test]
     fn map_order_is_output_order() {
         // OBSERVED: `-map 0:a -map 0:v` emits 2,3,0,1 in that order.
-        let sel = resolve(
+        let sel = resolve_simple(
             &multi(),
             &[map("0:a"), map("0:v")],
             Suppressed::default(),
@@ -619,7 +694,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            sel.picks.iter().map(|p| p.stream).collect::<Vec<_>>(),
+            sel.picks.iter().map(|p| p.as_demuxed().unwrap().1).collect::<Vec<_>>(),
             vec![2, 3, 0, 1]
         );
     }
@@ -627,7 +702,7 @@ mod tests {
     #[test]
     fn a_negative_map_removes_and_a_later_positive_re_adds() {
         // OBSERVED: `-map 0 -map -0:a:1 -map 0:a:1` restores stream 3 last.
-        let sel = resolve(
+        let sel = resolve_simple(
             &multi(),
             &[map("0"), map("-0:a:1"), map("0:a:1")],
             Suppressed::default(),
@@ -635,11 +710,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            sel.picks.iter().map(|p| p.stream).collect::<Vec<_>>(),
+            sel.picks.iter().map(|p| p.as_demuxed().unwrap().1).collect::<Vec<_>>(),
             vec![0, 1, 2, 3]
         );
         // And on its own it just removes.
-        let sel = resolve(
+        let sel = resolve_simple(
             &multi(),
             &[map("0"), map("-0:a:0")],
             Suppressed::default(),
@@ -647,14 +722,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            sel.picks.iter().map(|p| p.stream).collect::<Vec<_>>(),
+            sel.picks.iter().map(|p| p.as_demuxed().unwrap().1).collect::<Vec<_>>(),
             vec![0, 1, 3]
         );
     }
 
     #[test]
     fn the_same_stream_twice_is_a_fan_out() {
-        let sel = resolve(
+        let sel = resolve_simple(
             &multi(),
             &[map("0:v:0"), map("0:v:0")],
             Suppressed::default(),
@@ -671,17 +746,17 @@ mod tests {
             video: true,
             ..Suppressed::default()
         };
-        let sel = resolve(&multi(), &[map("0")], blocked, ALL).unwrap();
+        let sel = resolve_simple(&multi(), &[map("0")], blocked, ALL).unwrap();
         assert!(!sel.dropped, "a match that -vn then filters still counts");
         assert_eq!(
-            sel.picks.iter().map(|p| p.stream).collect::<Vec<_>>(),
+            sel.picks.iter().map(|p| p.as_demuxed().unwrap().1).collect::<Vec<_>>(),
             vec![2, 3]
         );
     }
 
     #[test]
     fn a_map_matching_nothing_is_an_error_unless_optional() {
-        let e = resolve(&multi(), &[map("0:v:9")], Suppressed::default(), ALL).unwrap_err();
+        let e = resolve_simple(&multi(), &[map("0:v:9")], Suppressed::default(), ALL).unwrap_err();
         assert_eq!(
             e.render(),
             "Stream map '' matches no streams.\n\
@@ -689,7 +764,7 @@ mod tests {
              Failed to set value '0:v:9' for option 'map': Invalid argument\n"
         );
         assert_eq!(e.exit.code(), 234);
-        let sel = resolve(&multi(), &[map("0:v:9?")], Suppressed::default(), ALL).unwrap();
+        let sel = resolve_simple(&multi(), &[map("0:v:9?")], Suppressed::default(), ALL).unwrap();
         assert!(sel.picks.is_empty());
         assert!(
             sel.dropped,
@@ -703,7 +778,7 @@ mod tests {
         let err_cases: &[&[&str]] = &[&["-0:v"], &["-0:v", "0:a"], &["-0:v:0", "0:v"]];
         for case in err_cases {
             let maps: Vec<MapEntry> = case.iter().map(|t| map(t)).collect();
-            let e = resolve(&multi(), &maps, Suppressed::default(), ALL).unwrap_err();
+            let e = resolve_simple(&multi(), &maps, Suppressed::default(), ALL).unwrap_err();
             assert!(
                 e.render()
                     .starts_with("Stream map '' matches no streams.\n"),
@@ -722,7 +797,7 @@ mod tests {
         for case in ok_cases {
             let maps: Vec<MapEntry> = case.iter().map(|t| map(t)).collect();
             assert!(
-                resolve(&multi(), &maps, Suppressed::default(), ALL).is_ok(),
+                resolve_simple(&multi(), &maps, Suppressed::default(), ALL).is_ok(),
                 "{case:?}"
             );
         }
@@ -742,7 +817,7 @@ mod tests {
         ];
         for (case, want_dropped) in cases {
             let maps: Vec<MapEntry> = case.iter().map(|t| map(t)).collect();
-            let sel = resolve(&multi(), &maps, Suppressed::default(), ALL).unwrap();
+            let sel = resolve_simple(&multi(), &maps, Suppressed::default(), ALL).unwrap();
             assert_eq!(sel.dropped, *want_dropped, "{case:?}");
         }
         // No maps at all is never "dropped": auto-selection producing nothing
@@ -754,13 +829,13 @@ mod tests {
             subtitle: true,
             data: true,
         };
-        let sel = resolve(&multi(), &none, blocked, ALL).unwrap();
+        let sel = resolve_simple(&multi(), &none, blocked, ALL).unwrap();
         assert!(sel.picks.is_empty() && !sel.dropped);
     }
 
     #[test]
     fn an_out_of_range_file_index_names_the_index() {
-        let e = resolve(&multi(), &[map("9")], Suppressed::default(), ALL).unwrap_err();
+        let e = resolve_simple(&multi(), &[map("9")], Suppressed::default(), ALL).unwrap_err();
         assert!(
             e.render().starts_with("Invalid input file index: 9.\n"),
             "{}",
@@ -768,7 +843,7 @@ mod tests {
         );
         assert_eq!(e.exit.code(), 234);
         // OBSERVED: `-map -1:0` reports index 1, not -1.
-        let e = resolve(&multi(), &[map("-1:0")], Suppressed::default(), ALL).unwrap_err();
+        let e = resolve_simple(&multi(), &[map("-1:0")], Suppressed::default(), ALL).unwrap_err();
         assert!(
             e.render().starts_with("Invalid input file index: 1.\n"),
             "{}",
@@ -785,6 +860,8 @@ mod tests {
     reason = "test code"
 )]
 mod properties {
+    use std::collections::HashSet;
+
     use proptest::prelude::*;
 
     use super::{
@@ -855,12 +932,13 @@ mod properties {
                 prop_assert!(!raw.iter().any(|f| f.iter().any(|s| s.0 == 0)));
                 return Ok(());
             };
+            let (pf, ps) = pick.as_demuxed().unwrap();
             let winner = expected_score(
-                raw[pick.file as usize][pick.stream as usize].0,
-                raw[pick.file as usize][pick.stream as usize].1,
-                raw[pick.file as usize][pick.stream as usize].2,
-                raw[pick.file as usize][pick.stream as usize].3,
-                raw[pick.file as usize][pick.stream as usize].4,
+                raw[pf as usize][ps as usize].0,
+                raw[pf as usize][ps as usize].1,
+                raw[pf as usize][ps as usize].2,
+                raw[pf as usize][ps as usize].3,
+                raw[pf as usize][ps as usize].4,
             );
             let mut seen_winner = false;
             for (fi, file) in raw.iter().enumerate() {
@@ -868,7 +946,7 @@ mod properties {
                     if s.0 != 0 {
                         continue;
                     }
-                    let here = StreamPick { file: fi as u32, stream: si as u32 };
+                    let here = StreamPick::demuxed(fi as u32, si as u32);
                     let score = expected_score(s.0, s.1, s.2, s.3, s.4);
                     if here == pick {
                         seen_winner = true;
@@ -890,7 +968,7 @@ mod properties {
             let files = build(&raw);
             for (fi, file) in raw.iter().enumerate() {
                 let m = MapEntry::parse(&fi.to_string()).unwrap();
-                let sel = resolve(&files, std::slice::from_ref(&m), Suppressed::default(), &|_| true);
+                let sel = resolve(&files, std::slice::from_ref(&m), Suppressed::default(), &|_| true, &[], &mut HashSet::new());
                 if file.is_empty() {
                     // Nothing to match and no `?`, so it is the "matches no
                     // streams" error rather than a silent drop.
@@ -900,9 +978,9 @@ mod properties {
                 let sel = sel.unwrap();
                 prop_assert!(!sel.dropped);
                 let want: Vec<u32> = (0..file.len() as u32).collect();
-                let got: Vec<u32> = sel.picks.iter().map(|p| p.stream).collect();
+                let got: Vec<u32> = sel.picks.iter().map(|p| p.as_demuxed().unwrap().1).collect();
                 prop_assert_eq!(got, want);
-                prop_assert!(sel.picks.iter().all(|p| p.file == fi as u32));
+                prop_assert!(sel.picks.iter().all(|p| p.as_demuxed().unwrap().0 == fi as u32));
             }
         }
 
@@ -919,7 +997,7 @@ mod properties {
                     MapEntry::parse(&fi.to_string()).unwrap(),
                     MapEntry::parse(&format!("-{fi}")).unwrap(),
                 ];
-                let sel = resolve(&files, &maps, Suppressed::default(), &|_| true).unwrap();
+                let sel = resolve(&files, &maps, Suppressed::default(), &|_| true, &[], &mut HashSet::new()).unwrap();
                 prop_assert!(sel.picks.is_empty());
                 // A positive map *did* match, so this is an empty output rather
                 // than a dropped one — the distinction the reference draws.
@@ -932,12 +1010,15 @@ mod properties {
         #[test]
         fn auto_selection_picks_at_most_one_of_each_type(raw in streams()) {
             let files = build(&raw);
-            let sel = resolve(&files, &[], Suppressed::default(), &|_| true).unwrap();
+            let sel = resolve(&files, &[], Suppressed::default(), &|_| true, &[], &mut HashSet::new()).unwrap();
             prop_assert!(sel.picks.len() <= 3);
             let kinds: Vec<u8> = sel
                 .picks
                 .iter()
-                .map(|p| raw[p.file as usize][p.stream as usize].0)
+                .map(|p| {
+                    let (f, s) = p.as_demuxed().unwrap();
+                    raw[f as usize][s as usize].0
+                })
                 .collect();
             let mut sorted = kinds.clone();
             sorted.sort_unstable();

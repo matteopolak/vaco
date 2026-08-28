@@ -168,12 +168,15 @@ pub fn render_output(out: &ResolvedOutput, inputs: &[InputFile]) -> Vec<String> 
 }
 
 fn source_stream(inputs: &[InputFile], pick: StreamPick) -> Option<&Stream> {
+    // A complex-graph-sourced output stream has no real demuxed `Stream` to
+    // describe here; the caller already skips it (see `render_output`).
+    let (file, stream) = pick.as_demuxed()?;
     inputs
-        .get(pick.file as usize)?
+        .get(file as usize)?
         .demuxer
         .streams()
         .iter()
-        .find(|s| s.index == pick.stream)
+        .find(|s| s.index == stream)
 }
 
 fn output_stream_line(file_index: u32, stream_index: u32, s: &Stream) -> String {
