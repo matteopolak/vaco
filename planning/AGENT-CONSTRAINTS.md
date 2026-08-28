@@ -393,6 +393,28 @@ forward. The gap-19 agent wrote two, and they fail differently — one does not
 compile without the blanket impl, the other passes compilation and fails at
 runtime without the explicit override. Both were needed.
 
+## Run `git diff HEAD~1 HEAD` after every commit
+
+It is the only check that reliably catches a commit carrying somebody else's
+work, and it costs one command. Three commits did it today. One swept in nine
+unrelated files and went unnoticed for hours — because nobody ran this. Another
+silently reverted a VP9 fix that had landed minutes earlier, and **was caught
+immediately**, because its author did.
+
+Read the file list, not just the summary. If a path you did not touch appears,
+stop and repair it forward — never with `checkout`, and never by trusting the
+working tree, which is where the stale content came from. Restore from the
+blobs of the commit that introduced it:
+
+```sh
+git show <their-commit>:<path> > <path>
+```
+
+Then verify: `git diff <their-commit> HEAD -- <their-paths>` must be empty.
+
+Repair forward rather than rewriting; a second commit that says what it is
+restoring and why is a better record than a rewritten first one.
+
 ## Isolate with a worktree, never `git stash`
 
 `stash` acts on the whole shared tree, not on your files, so it removes every
