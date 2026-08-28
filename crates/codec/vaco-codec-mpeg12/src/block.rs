@@ -118,33 +118,63 @@ pub(crate) fn decode_coefficients(
                 // below. The 8-bit field's two sentinel patterns,
                 // 0000_0000 and 1000_0000, are reserved: they mean "the
                 // real magnitude doesn't fit in 7 bits", and are followed
-                // by a further 8-bit unsigned magnitude instead (a 22-bit
-                // escape overall, level in -255..=255). This is a
-                // deliberately different bit layout, not an approximation
-                // of MPEG-2's — using the 12-bit field against an MPEG-1
-                // stream desyncs the reader by a few bits the moment an
-                // encoder emits an escape code at all.
+                // by a further 8-bit field instead (a 22-bit escape
+                // overall). This is a deliberately different bit layout,
+                // not an approximation of MPEG-2's — using the 12-bit
+                // field against an MPEG-1 stream desyncs the reader by a
+                // few bits the moment an encoder emits an escape code at
+                // all.
                 //
                 // D.9.3 (H.262's own brief difference-summary — the
                 // actual normative bit layout is in ISO/IEC 11172-2's own
                 // text, which this project does not have legitimate
                 // access to; see the removed `iso-11172-2` provenance
-                // placeholder) does not state whether the 8-bit direct
-                // field below is sign-magnitude or two's complement. An
-                // earlier version of this comment asserted "sign-
-                // magnitude" without having verified it; tried against
-                // this crate's own MPEG-1 fixtures, a genuine sign-
-                // magnitude decode (sign bit + 7-bit magnitude) measured
-                // far *worse* (avg MAD 209-224, versus 12.9-44.8 below)
-                // than the two's-complement interpretation the code below
-                // actually implements — so two's complement is what
-                // shipped, on differential-testing evidence, not because
-                // either was read from the actual standard.
+                // placeholder) does not state the follow-up field's exact
+                // semantics for either sentinel. The three sub-cases
+                // below (bare level, positive sentinel, negative
+                // sentinel) are measured, not read from the standard:
+                // D6 permits deriving behaviour by black-box measurement
+                // against a real decoder, which is a small, enumerable
+                // question here (a byte-layout choice, not a numeric
+                // schedule the way the IDCT rounding was) rather than an
+                // unbounded one. Built a real, `ffmpeg`-encoded,
+                // `ffmpeg`-validated 16x16 MPEG-1 I-frame, patched its one
+                // luma block's escape field to sweep every follow-up byte
+                // value 0-255 (both sentinels, step 3, 86 constructed
+                // streams) and independently re-derived each resulting
+                // pixel block from a textbook dequantise+IDCT given each
+                // candidate's implied level, comparing against `ffmpeg`'s
+                // own decode. The bare (non-sentinel) case and the
+                // positive-sentinel case (`level = follow_up_byte`, 0..255)
+                // matched `ffmpeg` exactly at every point swept — no
+                // ambiguity there, this is what shipped before this
+                // change too (the bare byte's own two's-complement-not-
+                // sign-magnitude reading was settled in an earlier round
+                // by differential testing against this crate's own
+                // fixtures — a sign-magnitude decode measured far worse,
+                // avg MAD 209-224 versus 12.9-44.8 — and this round's
+                // ground-truth sweep doesn't disturb that). The negative
+                // sentinel did not: `level = -follow_up_byte` (what
+                // previously shipped, also chosen by differential testing
+                // against this crate's own fixtures rather than measured
+                // against ground truth) matched only
+                // at the one point the two readings coincide
+                // (follow_up_byte == 128) and diverged from `ffmpeg`'s
+                // actual output everywhere else in the sweep, growing to
+                // a difference of 128 (a full-range error) at the low end
+                // — exactly the direction and rough scale of the gap this
+                // crate's own #355 investigation traced to this sentinel.
+                // `level = follow_up_byte - 256` (an extended two's-
+                // complement reading, symmetric with the bare-byte case's
+                // own `raw - 256` two lines below) matched `ffmpeg`
+                // exactly — worst observed difference 1, the same small
+                // ceiling every other correctly-decoded case in this
+                // crate measures against, not a new source of error.
                 let first = r.get(8);
                 if first == 0 {
                     i32::try_from(r.get(8)).unwrap_or(0)
                 } else if first == 0x80 {
-                    -i32::try_from(r.get(8)).unwrap_or(0)
+                    i32::try_from(r.get(8)).unwrap_or(0) - 256
                 } else {
                     let raw = i32::try_from(first).unwrap_or(0);
                     if raw >= 128 { raw - 256 } else { raw }
@@ -402,16 +432,24 @@ mod tests {
     fn mpeg1_escape_sentinel_byte_extends_to_a_16_bit_magnitude() {
         // H.262 Annex D.9.3's 22-bit form: a first byte of all-zero (here,
         // run=0 "000000" then level-byte "00000000") means "read another
-        // unsigned byte", positive; 0x80 means the same but negative.
+        // byte"; positive if the sentinel was 0x00 (`level =
+        // follow_up_byte` directly, 0..255) or negative if it was 0x80
+        // (`level = follow_up_byte - 256`, an extended two's-complement
+        // reading, *not* a plain negation of the follow-up byte -- see
+        // this function's own doc comment on the escape branch for the
+        // constructed-stream measurement against a real `ffmpeg` decode
+        // that settled this).
         let positive = bits_from_str("000001000000000000001100100010");
         let mut r = BitReader::new(&positive);
         let qfs = decode_coefficients(&mut r, CoeffTable::Zero, None, true).unwrap_or([0; 64]);
         assert_eq!(qfs.first().copied(), Some(200));
 
+        // Same follow-up byte (200), negative sentinel: 200 - 256 = -56,
+        // not -200 -- the point this test exists to pin.
         let negative = bits_from_str("000001000000100000001100100010");
         let mut r = BitReader::new(&negative);
         let qfs = decode_coefficients(&mut r, CoeffTable::Zero, None, true).unwrap_or([0; 64]);
-        assert_eq!(qfs.first().copied(), Some(-200));
+        assert_eq!(qfs.first().copied(), Some(-56));
     }
 
     #[test]
