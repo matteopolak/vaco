@@ -48,7 +48,63 @@
 //! an original metric — not a transcription of the reference's own
 //! (GPL, unread) interlace-detection formula — and `vaco-filter-deinterlace`
 //! documents it as such.
+//!
+//! # 2026-08-28 addition: [`affine`], [`integral`], [`motion`] (GitHub #459/#460)
+//!
+//! Plan SS4.1's row also lists `edge_common`, the box-blur core, morphology's
+//! neighbourhood reduction and 1D/3D LUT sampling. **All four already have a
+//! real, measured, tested implementation elsewhere in this tree**, written
+//! before this crate existed to hold a shared copy:
+//!
+//! - `edge_common` (the Sobel/Prewitt/Scharr two-gradient engine): `vaco-filter-convolve::edge`,
+//!   including a differential-tested border rule (`reflect-101`, corrected
+//!   2026-08-28 from an earlier, insufficiently-tested "replicate" guess —
+//!   see that module's own doc for the two-axis probe that told them apart).
+//! - The box-blur core: `vaco-filter-blur::common::box_pass`, with a measured
+//!   replicate border and — a real subtlety a naive shared version would
+//!   miss — `boxblur` rounds to nearest while `avgblur` truncates the same
+//!   division.
+//! - Morphology's neighbourhood reduction: `vaco-filter-convolve::morph`
+//!   (`dilation`/`erosion`'s shared engine, with a measured `coordinates`
+//!   bitmask and a `threshold` cap) and `::morpho` (the two-input
+//!   structuring-element generalisation).
+//! - 1D/3D LUT sampling: `vaco-filter-lut::lut1d`/`lut3d::Cube3d` (trilinear;
+//!   `tetrahedral` is a documented, not-yet-implemented gap there).
+//!
+//! Adding a second copy of any of these here — before a caller *outside*
+//! those crates actually needs one — is exactly what this crate's own
+//! opening paragraph and `cargo xtask dup-check` (D19) warn against: a
+//! kernel with no second caller is untested by construction, and the first
+//! draft of this addition did exactly that for `edge_common` and the
+//! box-blur core before the collision was caught by inspection rather than
+//! by tooling (dup-check only catches type-name collisions, not two
+//! functions with different names computing the same thing). The real
+//! remaining work item is a **consolidation migration** — moving those four
+//! into this crate and updating their three owning crates to depend on it —
+//! which is out of scope for whoever does not own those crates; see this
+//! batch's own report for the details.
+//!
+//! [`affine`] (geometric warp) and [`integral`] (summed-area tables) have no
+//! such prior implementation anywhere in the tree, so they are added here
+//! directly.
+//!
+//! `motion_estimation` and "SAD/hadamard (pixelutils)" are **not**
+//! reimplemented here either, for the D19 reason stated above rather than
+//! the "already exists elsewhere" one: `vaco-codec-dsp-mecmp` (#144, D-12)
+//! already owns SAD/SSD/variance/SATD as vectorised kernels for the
+//! codec-encoder motion search. [`motion`] is a thin filter-side block
+//! search built by *calling* that crate's `sad`, for callers (`deshake`'s
+//! feature tracking, `minterpolate`'s motion field) that need "find the
+//! best match nearby", not the encoder's rate-distortion search —
+//! `vaco-codec-dsp-me` (#260, D-13) is that search and did not exist yet
+//! when this was written; when it lands, a filter that wants RDO-aware
+//! search should call it instead of [`motion`], which stays for the
+//! simpler "cheapest good match" case.
 #![forbid(unsafe_code)]
+
+pub mod affine;
+pub mod integral;
+pub mod motion;
 
 use vaco_frame::PlaneRef;
 

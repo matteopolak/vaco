@@ -1,6 +1,6 @@
 [package]
 name = "vaco-filter-vdsp"
-description = "Shared video kernels used by more than one filter crate: currently scene_sad (per-plane sum-of-absolute-differences), the kernel behind scene-change and freeze/duplicate detection. Plan 16 SS4.1."
+description = "Shared video kernels used by more than one filter crate: scene_sad, edge_common, box-blur core, integral images, affine transform, LUT sampling, morphology core, and a filter-side motion search built on vaco-codec-dsp-mecmp. Plan 16 SS4.1 (GitHub #459/#460, FT-3.2/FT-3.3)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,10 +10,11 @@ authors.workspace = true
 
 [dependencies]
 vaco-frame = { path = "../../model/vaco-frame" }
+vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
+vaco-codec-dsp-mecmp = { path = "../../signal/vaco-codec-dsp-mecmp" }
 
 [dev-dependencies]
 proptest.workspace = true
-vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
 
 [lints]
 workspace = true
