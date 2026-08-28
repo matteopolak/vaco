@@ -55,6 +55,7 @@ vaco-codec-dsp-intrapred = { path = "../crates/signal/vaco-codec-dsp-intrapred",
 vaco-codec-dsp-lpc = { path = "../crates/signal/vaco-codec-dsp-lpc", optional = true }
 vaco-codec-dsp-me = { path = "../crates/signal/vaco-codec-dsp-me", optional = true }
 vaco-codec-dsp-mecmp = { path = "../crates/signal/vaco-codec-dsp-mecmp", optional = true }
+vaco-codec-dsp-ratecontrol = { path = "../crates/signal/vaco-codec-dsp-ratecontrol", optional = true }
 vaco-codec-exr = { path = "../crates/codec/vaco-codec-exr", optional = true }
 vaco-codec-gif = { path = "../crates/codec/vaco-codec-gif", optional = true }
 vaco-codec-golomb = { path = "../crates/signal/vaco-codec-golomb", optional = true }
@@ -223,6 +224,7 @@ default = [
     "codec-dsp-intrapred",
     "codec-dsp-lpc",
     "codec-dsp-me",
+    "codec-dsp-ratecontrol",
     "codec-exr",
     "codec-gif",
     "codec-golomb",
@@ -381,6 +383,7 @@ codec-dsp-idct = ["dep:vaco-codec-dsp-idct"]
 codec-dsp-intrapred = ["dep:vaco-codec-dsp-intrapred"]
 codec-dsp-lpc = ["dep:vaco-codec-dsp-lpc"]
 codec-dsp-me = ["dep:vaco-codec-dsp-me", "dep:vaco-codec-dsp-mecmp", "dep:vaco-simd"]
+codec-dsp-ratecontrol = ["dep:vaco-codec-dsp-ratecontrol", "dep:vaco-core"]
 codec-exr = ["dep:vaco-codec-exr", "dep:vaco-frame", "dep:vaco-limits"]
 codec-gif = ["dep:vaco-codec-gif", "dep:vaco-frame", "dep:vaco-limits"]
 codec-golomb = ["dep:vaco-bitstream", "dep:vaco-codec-golomb", "dep:vaco-limits"]
@@ -911,6 +914,14 @@ test = false
 doc = false
 bench = false
 required-features = ["codec-dsp-me"]
+
+[[bin]]
+name = "dsp_ratecontrol"
+path = "fuzz_targets/dsp_ratecontrol.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-dsp-ratecontrol"]
 
 [[bin]]
 name = "dv_demux"
