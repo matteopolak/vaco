@@ -1,0 +1,24 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# ITU-T H.261 and baseline ITU-T H.263 decode-only, both long past any
+# patent concern (H.261 predates the modern patent-pool era entirely; the
+# base H.263 patents that once mattered for it have lapsed) — ships
+# unconditionally like MPEG-1/2, no `encumbered` feature.
+
+[[component]]
+kind      = "decoder"
+name      = "h261"
+long_name = "H.261"
+feature   = "codec-h263"
+ctor      = "vaco_codec_h263::DECODER_H261"
+media     = "video"
+codec     = "h261"
+
+[[component]]
+kind      = "decoder"
+name      = "h263"
+long_name = "H.263 / H.263-1996, H.263+ / H.263-1998 / H.263 version 2"
+feature   = "codec-h263"
+ctor      = "vaco_codec_h263::DECODER_H263"
+media     = "video"
+codec     = "h263"

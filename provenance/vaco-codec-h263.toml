@@ -1,0 +1,87 @@
+[[table]]
+name   = "ZIGZAG_SCAN"
+file   = "crates/codec/vaco-codec-h263/src/tables.rs"
+source = "itu-t-h261"
+clause = "Figure 12, zig-zag scanning of transform coefficients (mechanically identical to H.263's own Figure 13 and to H.262's default zigzag)"
+method = "transcribed"
+
+[[table]]
+name   = "H261_MBA"
+file   = "crates/codec/vaco-codec-h263/src/tables.rs"
+source = "itu-t-h261"
+clause = "Table 1, VLC table for MBA"
+method = "transcribed"
+
+# Table 2's MTYPE (H261_MTYPE) has 10 rows, below this project's
+# 32-element provenance threshold.
+
+[[table]]
+name   = "H261_MVD"
+file   = "crates/codec/vaco-codec-h263/src/tables.rs"
+source = "itu-t-h261"
+clause = "Table 3, VLC table for MVD"
+method = "transcribed"
+
+# The raw PDF text extraction of Table 3 was ambiguous/garbled (repeated
+# placeholder-looking digits, glyph substitutions); this table was instead
+# transcribed by rendering the page to a high-resolution PNG
+# (`pdftoppm -r 250`) and reading it visually. A first draft had two values
+# transposed and two codes the wrong length; both were caught and fixed
+# before this file's own commit by an independent Python prefix-freedom
+# and value-coverage check.
+
+[[table]]
+name   = "H261_CBP"
+file   = "crates/codec/vaco-codec-h263/src/tables.rs"
+source = "itu-t-h261"
+clause = "Table 4, VLC table for CBP"
+method = "transcribed"
+
+[[table]]
+name   = "H261_TCOEFF"
+file   = "crates/codec/vaco-codec-h263/src/tables.rs"
+source = "itu-t-h261"
+clause = "Table 5, VLC table for TCOEFF"
+method = "transcribed"
+
+# Same rendered-page-image transcription as H261_MVD, for the same reason.
+# A first draft fabricated several duplicate/impossible bit patterns from
+# memory rather than the image; caught by the same prefix-freedom check
+# and rewritten from the image directly. A second, independent bug in this
+# table's row values (not its transcription: the loop that decoded it
+# stopped one VLC read short of an always-present trailing EOB code
+# whenever a block's coefficients filled every position) was found by this
+# crate's own differential-test harness and is documented in this crate's
+# own docs page rather than here, since it was a decode-loop bug, not a
+# table error.
+
+[[table]]
+name   = "H263_MVD"
+file   = "crates/codec/vaco-codec-h263/src/tables.rs"
+source = "itu-t-h263"
+clause = "Table 11, VLC table for MVD"
+method = "transcribed"
+
+# Mechanically extracted via `pdftotext -layout` plus a regex-based Python
+# parser, cross-checked against the same clean text a second time while
+# investigating an unrelated decode-loop bug (see vaco-codec-h263.md);
+# zero mismatches found either time.
+
+[[table]]
+name   = "H263_TCOEF"
+file   = "crates/codec/vaco-codec-h263/src/tables.rs"
+source = "itu-t-h263"
+clause = "Table 13, VLC table for TCOEF"
+method = "transcribed"
+
+# Same mechanical extraction as H263_MVD. Independently re-verified
+# row-by-row (all 102 rows plus the escape code) against the spec text a
+# second time by this crate's own differential-test harness while
+# diagnosing a real bug (see vaco-codec-h263.md) — the re-check found the
+# table itself correct; the bug was in how the caller gated an intra
+# block's TCOEF presence on CBP, not in this table.
+
+# Table 4/5's MCBPC (H263_MCBPC_INTRA: 9 rows, H263_MCBPC_INTER: 21 rows),
+# Table 9's DQUANT (4 rows) and Table 10's CBPY (H263_CBPY_INTRA/INTER:
+# 16 rows each) are all below this project's 32-element provenance
+# threshold.
