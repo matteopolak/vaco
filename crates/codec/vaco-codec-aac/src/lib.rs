@@ -53,6 +53,16 @@
 pub mod config;
 pub mod decoder;
 pub mod pce;
+mod spectral_tables;
+mod ics;
+mod ics_stream;
+mod scalefactor;
+mod pulse;
+mod raw_data_block;
+mod section;
+mod spectral;
+mod swb_tables;
+mod tns;
 
 pub use config::{ChannelResolution, DecoderConfig};
 pub use decoder::AacDecoder;

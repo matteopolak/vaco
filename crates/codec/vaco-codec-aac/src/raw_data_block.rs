@@ -1,0 +1,265 @@
+//! `raw_data_block()` — ISO/IEC 14496-3 subpart 4 Table 4.3: the top-level
+//! per-frame element loop (`SCE`/`CPE`/`CCE`/`LFE`/`DSE`/`PCE`/`FIL`/`END`,
+//! ids 0..=7 per Table 4.68).
+//!
+//! # What is fully decoded, what is skipped, and what is refused
+//!
+//! - `SCE`, `LFE`: one [`crate::ics_stream`] each (`common_window = false`).
+//! - `CPE`: `common_window`, and — when set — a shared `ics_info()` plus
+//!   `ms_mask_present`/`ms_used` (read, not applied: M/S stereo application
+//!   is #445's "joint stereo"), then two `individual_channel_stream()`s.
+//! - `DSE`, `FIL`: **skipped wholesale**. Both are self-delimiting by their
+//!   own leading byte count (`data_stream_element()`'s `cnt`,
+//!   `fill_element()`'s `cnt`) — everything inside either one (ancillary
+//!   data, or an SBR/other extension payload nested in a `FIL`) sums to
+//!   exactly that many bytes by construction, so skipping the count is
+//!   bit-exact without decoding what is inside it.
+//! - `PCE`: parsed in full ([`crate::pce::ProgramConfigElement`]) but not
+//!   yet threaded back into a pending [`crate::config::DecoderConfig`] — see
+//!   "Known gaps" in `docs/codec/vaco-codec-aac.md`.
+//! - `CCE` (`coupling_channel_element()`): **not implemented** —
+//!   `Error::Unsupported`. It carries its own `individual_channel_stream()`
+//!   plus a per-coupled-element gain list this crate has not transcribed,
+//!   and is rare in real 1/2/6-channel content (this crate's own resolved
+//!   configurations); gated rather than guessed at.
+
+use vaco_bitstream::BitReader;
+use vaco_core::{Error, Result};
+
+use crate::ics::IcsInfo;
+use crate::ics_stream::{self, IcsStream};
+use crate::pce::ProgramConfigElement;
+
+const ID_SCE: u32 = 0;
+const ID_CPE: u32 = 1;
+const ID_CCE: u32 = 2;
+const ID_LFE: u32 = 3;
+const ID_DSE: u32 = 4;
+const ID_PCE: u32 = 5;
+const ID_FIL: u32 = 6;
+const ID_END: u32 = 7;
+
+/// One decoded syntactic element of a `raw_data_block()`.
+#[derive(Debug)]
+#[allow(
+    dead_code,
+    reason = "the decoded elements are the point of this parse (bit-exact \
+              consumption) even though nothing reads their fields back yet; \
+              #445 will read window/scalefactor/spectral data from them, and \
+              a future PCE-mid-stream config update will read ProgramConfig"
+)]
+pub(crate) enum Element {
+    Single(IcsStream),
+    Pair(bool, IcsStream, IcsStream), // (common_window, ch0, ch1)
+    Lfe(IcsStream),
+    ProgramConfig(ProgramConfigElement),
+}
+
+/// Skip a `data_stream_element()`: `element_instance_tag`(4),
+/// `data_byte_align_flag`(1), `count`(8, `+= esc_count`(8) if 255), then
+/// `byte_alignment()` if the flag was set, then exactly `cnt` raw bytes.
+fn skip_data_stream_element(r: &mut BitReader<'_>) -> Result<()> {
+    let _tag = r.get(4);
+    let align = r.get_bit() != 0;
+    let mut cnt = r.get(8);
+    if cnt == 255 {
+        cnt += r.get(8);
+    }
+    if align {
+        r.align();
+    }
+    r.skip_bytes(cnt as usize);
+    Ok(r.check()?)
+}
+
+/// Skip a `fill_element()`: `count`(4, `+= esc_count - 1`(8) if 15), then
+/// exactly `cnt` raw bytes — `extension_payload()`'s own internal structure
+/// (SBR data or otherwise) always sums to exactly the outer `cnt`, so there
+/// is nothing to lose by not dispatching into it.
+fn skip_fill_element(r: &mut BitReader<'_>) -> Result<()> {
+    let mut cnt = r.get(4);
+    if cnt == 15 {
+        cnt = cnt.saturating_add(r.get(8)).saturating_sub(1);
+    }
+    r.skip_bytes(cnt as usize);
+    Ok(r.check()?)
+}
+
+/// Read `ms_mask_present`/`ms_used` for a `common_window` `CPE` — recorded
+/// nowhere yet (M/S application is #445's), consumed only so the reader
+/// lands in the right place for the two `individual_channel_stream()`s that
+/// follow.
+fn skip_ms_mask(r: &mut BitReader<'_>, ics: &IcsInfo) -> Result<()> {
+    let ms_mask_present = r.get(2);
+    if ms_mask_present == 1 {
+        let num_groups = ics.num_window_groups();
+        for _ in 0..num_groups {
+            for _ in 0..ics.max_sfb {
+                r.get_bit();
+            }
+        }
+    }
+    Ok(r.check()?)
+}
+
+/// Read `raw_data_block()`: every element up to and including `ID_END`,
+/// then `byte_alignment()`.
+///
+/// # Errors
+///
+/// [`Error::Unsupported`] for a `CCE` (see module doc). Otherwise whatever
+/// the underlying element readers return.
+pub(crate) fn read(r: &mut BitReader<'_>, sfi: u8) -> Result<Vec<Element>> {
+    let mut elements = Vec::new();
+    loop {
+        // `try_get`, not `get`: `BitReader::get` pads exhausted input with
+        // zero bits rather than erroring, so a stream truncated (or simply
+        // malformed) before it ever presents `ID_END` would otherwise read
+        // `id == 0` (`ID_SCE`) forever — an unbounded loop that pushes a
+        // real `Element` onto `elements` every iteration. Found by fuzzing
+        // (`aac_config`, an out-of-memory artifact), not by inspection.
+        let id = r.try_get(3)?;
+        match id {
+            ID_SCE => {
+                let _tag = r.get(4);
+                let stream = ics_stream::read(r, false, None, sfi)?;
+                elements.push(Element::Single(stream));
+            }
+            ID_LFE => {
+                let _tag = r.get(4);
+                let stream = ics_stream::read(r, false, None, sfi)?;
+                elements.push(Element::Lfe(stream));
+            }
+            ID_CPE => {
+                let _tag = r.get(4);
+                let common_window = r.get_bit() != 0;
+                let shared_ics = if common_window {
+                    let ics = IcsInfo::read(r)?;
+                    skip_ms_mask(r, &ics)?;
+                    Some(ics)
+                } else {
+                    None
+                };
+                let ch0 = ics_stream::read(r, common_window, shared_ics.as_ref(), sfi)?;
+                let ch1 = ics_stream::read(r, common_window, shared_ics.as_ref(), sfi)?;
+                elements.push(Element::Pair(common_window, ch0, ch1));
+            }
+            ID_CCE => {
+                return Err(Error::Unsupported(
+                    "vaco-codec-aac: coupling_channel_element() is not implemented",
+                ));
+            }
+            ID_DSE => skip_data_stream_element(r)?,
+            ID_PCE => {
+                let pce = ProgramConfigElement::read(r)?;
+                elements.push(Element::ProgramConfig(pce));
+            }
+            ID_FIL => skip_fill_element(r)?,
+            ID_END => break,
+            _ => unreachable!("id_syn_ele is a 3-bit field, id={id}"),
+        }
+    }
+    r.align();
+    r.check()?;
+    Ok(elements)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic, reason = "test code")]
+    use super::{Element, read};
+    use vaco_bitstream::{BitReader, BitWriter};
+
+    fn minimal_sce_bits(w: &mut BitWriter) {
+        w.put(3, super::ID_SCE);
+        w.put(4, 0); // tag
+        w.put(8, 100); // global_gain
+        w.put(1, 0);
+        w.put(2, 0); // ONLY_LONG
+        w.put(1, 0);
+        w.put(6, 1); // max_sfb=1
+        w.put(1, 0);
+        w.put(4, 0); // ZERO_HCB section
+        w.put(5, 1);
+        w.put(1, 0); // pulse
+        w.put(1, 0); // tns
+        w.put(1, 0); // gain_control
+    }
+
+    #[test]
+    fn an_sce_followed_by_end_decodes_one_element() {
+        let mut w = BitWriter::new();
+        minimal_sce_bits(&mut w);
+        w.put(3, super::ID_END);
+        let bytes = w.finish();
+        let mut r = BitReader::new(&bytes);
+        let elements = read(&mut r, 4).unwrap();
+        assert_eq!(elements.len(), 1);
+        assert!(matches!(elements[0], Element::Single(_)));
+    }
+
+    #[test]
+    fn a_fill_element_is_skipped_by_its_own_declared_length() {
+        let mut w = BitWriter::new();
+        w.put(3, super::ID_FIL);
+        w.put(4, 3); // cnt = 3 bytes
+        w.put(8, 0xaa);
+        w.put(8, 0xbb);
+        w.put(8, 0xcc);
+        w.put(3, super::ID_END);
+        let bytes = w.finish();
+        let mut r = BitReader::new(&bytes);
+        let elements = read(&mut r, 4).unwrap();
+        assert!(elements.is_empty());
+    }
+
+    #[test]
+    fn a_data_stream_element_is_skipped_by_its_own_declared_length() {
+        let mut w = BitWriter::new();
+        w.put(3, super::ID_DSE);
+        w.put(4, 0); // tag
+        w.put(1, 0); // align flag
+        w.put(8, 2); // cnt = 2 bytes
+        w.put(8, 0x11);
+        w.put(8, 0x22);
+        w.put(3, super::ID_END);
+        let bytes = w.finish();
+        let mut r = BitReader::new(&bytes);
+        let elements = read(&mut r, 4).unwrap();
+        assert!(elements.is_empty());
+    }
+
+    #[test]
+    fn a_cce_is_refused_rather_than_misread() {
+        let mut w = BitWriter::new();
+        w.put(3, super::ID_CCE);
+        let bytes = w.finish();
+        let mut r = BitReader::new(&bytes);
+        assert!(read(&mut r, 4).is_err());
+    }
+
+    #[test]
+    fn a_stream_that_never_presents_id_end_errors_instead_of_looping_forever() {
+        // Regression for a real fuzz-found OOM: `BitReader::get` pads
+        // exhausted input with zero bits rather than erroring, so reading
+        // `id_syn_ele` with plain `get(3)` saw an endless run of `ID_SCE`
+        // (0) once real data ran out, decoding one all-zero SCE after
+        // another forever. `try_get` must turn that into a clean error.
+        let bytes: Vec<u8> = vec![0u8; 3]; // far too short for even one SCE
+        let mut r = BitReader::new(&bytes);
+        assert!(read(&mut r, 4).is_err());
+    }
+
+    #[test]
+    fn byte_alignment_after_end_leaves_the_reader_byte_aligned() {
+        let mut w = BitWriter::new();
+        minimal_sce_bits(&mut w);
+        w.put(3, super::ID_END);
+        let bytes = w.finish();
+        let mut r = BitReader::new(&bytes);
+        read(&mut r, 4).unwrap();
+        assert!(r.is_aligned());
+    }
+}
+
+

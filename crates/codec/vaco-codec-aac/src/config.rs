@@ -255,7 +255,7 @@ impl DecoderConfig {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, reason = "test code")]
+    #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic, reason = "test code")]
     use super::{ChannelResolution, DecoderConfig};
     use vaco_bitstream::BitWriter;
     use vaco_parse_aac::AdtsHeader;

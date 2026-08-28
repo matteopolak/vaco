@@ -234,7 +234,7 @@ pub fn find_leading_program_config_element(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
+    #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic, reason = "test code")]
     use super::{ChannelElementRef, ProgramConfigElement, find_leading_program_config_element};
     use vaco_bitstream::{BitReader, BitWriter};
 

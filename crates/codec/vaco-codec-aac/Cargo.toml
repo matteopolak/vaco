@@ -16,12 +16,12 @@ vaco-codec-core = { path = "../../signal/vaco-codec-core" }
 vaco-frame = { path = "../../model/vaco-frame" }
 vaco-packet = { path = "../../model/vaco-packet" }
 vaco-parse-aac = { path = "../vaco-parse-aac" }
+vaco-codec-vlc = { path = "../../signal/vaco-codec-vlc" }
 
-# T3-03b/T3-03c (#444/#445, not yet implemented — see `docs/codec/vaco-codec-aac.md`)
-# will add `vaco-codec-vlc` (spectral Huffman decode), `vaco-codec-dsp-sinewin`
-# (window generation) and `vaco-tx` (the IMDCT, already built for SP-C6) here.
-# Not added now because an unused dependency is exactly the kind of thing that
-# looks like progress and is not; add each when the code that needs it lands.
+# T3-03c (#445, not yet implemented — see `docs/codec/vaco-codec-aac.md`) will add
+# `vaco-codec-dsp-sinewin` (window generation) and `vaco-tx` (the IMDCT, already
+# built for SP-C6) here, once there is code that actually calls them. `vaco-codec-vlc`
+# (#152) is used above, by this crate's own spectral Huffman decode (#444).
 
 [lints]
 workspace = true

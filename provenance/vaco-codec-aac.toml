@@ -1,0 +1,147 @@
+# Registry of constant tables >= 32 elements (D7/D9). Consumed by
+# `cargo xtask provenance-check`.
+#
+# Every table here is ISO/IEC 14496-3 subpart 4's own data — the format,
+# not an authorial choice — transcribed directly from two independently
+# hosted copies of the primary text (the 2001 and 2009 editions; table
+# numbers differ by a constant +56 offset between them, content identical).
+# Two of the thirteen `swb_offset` tables (44.1/48 kHz and 11.025/12/16 kHz)
+# were cross-checked byte-for-byte between both editions before the rest
+# were transcribed the same way; all thirteen additionally pass a
+# structural test (`swb_tables::tests::every_table_starts_at_zero_and_ends_at_the_transform_size`).
+# All twelve Huffman tables pass an even stronger check: exact size against
+# each codebook's own (unsigned, dim, lav) formula, prefix-freedom, and
+# Kraft completeness (`spectral_tables::tests`).
+
+[[table]]
+name   = "SCALEFACTOR_HUFFMAN"
+file   = "crates/codec/vaco-codec-aac/src/spectral_tables.rs"
+source = "iso-14496-3"
+clause = "subpart 4 Table 4.A.1 (differential scalefactor Huffman codebook)"
+method = "transcribed"
+
+[[table]]
+name   = "SPECTRUM_HCB_1"
+file   = "crates/codec/vaco-codec-aac/src/spectral_tables.rs"
+source = "iso-14496-3"
+clause = "subpart 4 Table 4.A.2 (spectrum Huffman codebook 1)"
+method = "transcribed"
+
+[[table]]
+name   = "SPECTRUM_HCB_2"
+file   = "crates/codec/vaco-codec-aac/src/spectral_tables.rs"
+source = "iso-14496-3"
+clause = "subpart 4 Table 4.A.3 (spectrum Huffman codebook 2)"
+method = "transcribed"
+
+[[table]]
+name   = "SPECTRUM_HCB_3"
+file   = "crates/codec/vaco-codec-aac/src/spectral_tables.rs"
+source = "iso-14496-3"
+clause = "subpart 4 Table 4.A.4 (spectrum Huffman codebook 3)"
+method = "transcribed"
+
+[[table]]
+name   = "SPECTRUM_HCB_4"
+file   = "crates/codec/vaco-codec-aac/src/spectral_tables.rs"
+source = "iso-14496-3"
+clause = "subpart 4 Table 4.A.5 (spectrum Huffman codebook 4)"
+method = "transcribed"
+
+[[table]]
+name   = "SPECTRUM_HCB_5"
+file   = "crates/codec/vaco-codec-aac/src/spectral_tables.rs"
+source = "iso-14496-3"
+clause = "subpart 4 Table 4.A.6 (spectrum Huffman codebook 5)"
+method = "transcribed"
+
+[[table]]
+name   = "SPECTRUM_HCB_6"
+file   = "crates/codec/vaco-codec-aac/src/spectral_tables.rs"
+source = "iso-14496-3"
+clause = "subpart 4 Table 4.A.7 (spectrum Huffman codebook 6)"
+method = "transcribed"
+
+[[table]]
+name   = "SPECTRUM_HCB_7"
+file   = "crates/codec/vaco-codec-aac/src/spectral_tables.rs"
+source = "iso-14496-3"
+clause = "subpart 4 Table 4.A.8 (spectrum Huffman codebook 7)"
+method = "transcribed"
+
+[[table]]
+name   = "SPECTRUM_HCB_8"
+file   = "crates/codec/vaco-codec-aac/src/spectral_tables.rs"
+source = "iso-14496-3"
+clause = "subpart 4 Table 4.A.9 (spectrum Huffman codebook 8)"
+method = "transcribed"
+
+[[table]]
+name   = "SPECTRUM_HCB_9"
+file   = "crates/codec/vaco-codec-aac/src/spectral_tables.rs"
+source = "iso-14496-3"
+clause = "subpart 4 Table 4.A.10 (spectrum Huffman codebook 9)"
+method = "transcribed"
+
+[[table]]
+name   = "SPECTRUM_HCB_10"
+file   = "crates/codec/vaco-codec-aac/src/spectral_tables.rs"
+source = "iso-14496-3"
+clause = "subpart 4 Table 4.A.11 (spectrum Huffman codebook 10)"
+method = "transcribed"
+
+[[table]]
+name   = "SPECTRUM_HCB_11"
+file   = "crates/codec/vaco-codec-aac/src/spectral_tables.rs"
+source = "iso-14496-3"
+clause = "subpart 4 Table 4.A.12 (spectrum Huffman codebook 11, the ESC codebook)"
+method = "transcribed"
+
+[[table]]
+name   = "LONG_44_48"
+file   = "crates/codec/vaco-codec-aac/src/swb_tables.rs"
+source = "iso-14496-3"
+clause = "subpart 4 Table 4.73 (2001 ed.) / Table 4.129 (2009 ed.): swb_offset_long_window, 44.1/48 kHz"
+method = "transcribed"
+
+[[table]]
+name   = "LONG_32"
+file   = "crates/codec/vaco-codec-aac/src/swb_tables.rs"
+source = "iso-14496-3"
+clause = "subpart 4 Table 4.75 (2001 ed.) / Table 4.131 (2009 ed.): swb_offset_long_window, 32 kHz"
+method = "transcribed"
+
+[[table]]
+name   = "LONG_8"
+file   = "crates/codec/vaco-codec-aac/src/swb_tables.rs"
+source = "iso-14496-3"
+clause = "subpart 4 Table 4.76 (2001 ed.) / Table 4.132 (2009 ed.): swb_offset_long_window, 8 kHz"
+method = "transcribed"
+
+[[table]]
+name   = "LONG_11_12_16"
+file   = "crates/codec/vaco-codec-aac/src/swb_tables.rs"
+source = "iso-14496-3"
+clause = "subpart 4 Table 4.78 (2001 ed.) / Table 4.134 (2009 ed.): swb_offset_long_window, 11.025/12/16 kHz — cross-checked byte-for-byte between both editions"
+method = "transcribed"
+
+[[table]]
+name   = "LONG_22_24"
+file   = "crates/codec/vaco-codec-aac/src/swb_tables.rs"
+source = "iso-14496-3"
+clause = "subpart 4 Table 4.80 (2001 ed.) / Table 4.136 (2009 ed.): swb_offset_long_window, 22.05/24 kHz"
+method = "transcribed"
+
+[[table]]
+name   = "LONG_64"
+file   = "crates/codec/vaco-codec-aac/src/swb_tables.rs"
+source = "iso-14496-3"
+clause = "subpart 4 Table 4.82 (2001 ed.) / Table 4.138 (2009 ed.): swb_offset_long_window, 64 kHz"
+method = "transcribed"
+
+[[table]]
+name   = "LONG_88_96"
+file   = "crates/codec/vaco-codec-aac/src/swb_tables.rs"
+source = "iso-14496-3"
+clause = "subpart 4 Table 4.84 (2001 ed.) / Table 4.140 (2009 ed.): swb_offset_long_window, 88.2/96 kHz"
+method = "transcribed"

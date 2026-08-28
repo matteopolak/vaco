@@ -2,21 +2,20 @@
 //!
 //! # What this decoder can and cannot do today
 //!
-//! It resolves configuration completely: `set_extradata` for an
-//! out-of-band `AudioSpecificConfig` (MP4/LATM), or a leading ADTS header
-//! read straight off the payload for a raw AAC stream, object-type gating,
-//! and channel-configuration resolution including reading a leading program
-//! config element when needed (T3-03a / #443, this crate's actual scope).
-//!
-//! **It does not decode spectral data.** Window sequences and shapes,
-//! scalefactor bands, section data and the Huffman codebooks (T3-03b /
-//! #444), inverse quantisation, TNS, joint stereo and the IMDCT (T3-03c /
-//! #445) are unimplemented. [`AacDecoder::send_packet`] accepts a packet,
-//! fully resolves its configuration, and then returns
-//! [`Error::Unsupported`] rather than either refusing to accept the packet
-//! at all or fabricating output it cannot yet produce correctly — the same
-//! choice this workspace made for MPEG-2.5 Layer III, for the same reason.
+//! It resolves configuration completely (T3-03a / #443) and fully parses
+//! `raw_data_block()`'s syntax (T3-03b / #444): window sequences and
+//! shapes, section data, scalefactor/intensity/noise DPCM decode, pulse
+//! data, TNS syntax (read, not applied), and the spectral Huffman codebooks
+//! — every bit the frame declares is consumed, and the reader lands exactly
+//! where the next frame begins. What it does not do is turn that parsed
+//! syntax into PCM: inverse quantisation, TNS application, joint stereo
+//! (M/S and intensity) and the IMDCT/overlap-add (T3-03c / #445) are
+//! unimplemented. [`AacDecoder::send_packet`] accepts a packet, fully
+//! resolves and parses it, and only then returns [`Error::Unsupported`] —
+//! never fabricating PCM it cannot yet produce correctly, the same choice
+//! this workspace made for MPEG-2.5 Layer III.
 
+use vaco_bitstream::BitReader;
 use vaco_codec_core::Decoder;
 use vaco_core::{Error, Result};
 use vaco_frame::Frame;
@@ -25,6 +24,7 @@ use vaco_packet::Packet;
 use vaco_parse_aac::{AdtsHeader, AudioSpecificConfig};
 
 use crate::config::DecoderConfig;
+use crate::raw_data_block;
 
 /// The AAC-LC decoder. See the module doc for exactly what is and is not
 /// implemented yet.
@@ -57,34 +57,27 @@ impl AacDecoder {
         }
     }
 
-    /// Resolve this packet's configuration: reuse `extradata_config` if one
-    /// was set, otherwise parse a leading ADTS header off the payload
-    /// itself. If the resolved configuration is still waiting on a program
+    /// Resolve this packet's configuration and locate its `raw_data_block()`
+    /// body: reuse `extradata_config` if one was set (the whole payload is
+    /// then the `raw_data_block` — MP4/LATM carry no per-frame ADTS header),
+    /// otherwise parse a leading `AdtsHeader` and take the body from just
+    /// past it. If the resolved configuration is still waiting on a program
     /// config element (`channelConfiguration == 0`), try to clear that from
-    /// the payload's own leading bits too.
-    fn resolve_packet_config(&mut self, payload: &[u8]) -> Result<DecoderConfig> {
-        let mut cfg = if let Some(cfg) = &self.extradata_config {
-            cfg.clone()
+    /// the body's own leading bits too.
+    fn resolve_packet<'a>(&mut self, payload: &'a [u8]) -> Result<(DecoderConfig, &'a [u8])> {
+        let (mut cfg, body) = if let Some(cfg) = &self.extradata_config {
+            (cfg.clone(), payload)
         } else {
             let header = AdtsHeader::parse(payload)?;
-            DecoderConfig::from_adts_header(&header)?
+            let cfg = DecoderConfig::from_adts_header(&header)?;
+            let body = payload.get(header.header_len()..).unwrap_or(&[]);
+            (cfg, body)
         };
         if cfg.is_pending() {
-            // The raw_data_block starts right after the ADTS header for the
-            // no-extradata path; for the extradata path the whole payload
-            // already *is* the raw_data_block (MP4/LATM carry no per-frame
-            // ADTS header at all).
-            let body = if self.extradata_config.is_some() {
-                payload
-            } else {
-                let header = AdtsHeader::parse(payload)?;
-                let start = header.header_len();
-                payload.get(start..).unwrap_or(&[])
-            };
-            let mut r = vaco_bitstream::BitReader::new(body);
+            let mut r = BitReader::new(body);
             let _ = cfg.try_resolve_pending(&mut r)?;
         }
-        Ok(cfg)
+        Ok((cfg, body))
     }
 }
 
@@ -96,12 +89,26 @@ impl Decoder for AacDecoder {
             // there is nothing to flush out here.
             return Err(Error::Eof);
         };
-        let cfg = self.resolve_packet_config(packet.payload())?;
+        let (cfg, body) = self.resolve_packet(packet.payload())?;
+        if cfg.is_pending() {
+            return Err(Error::Unsupported(
+                "vaco-codec-aac: channelConfiguration == 0 and no leading program \
+                 config element was found; cannot determine channel layout",
+            ));
+        }
+        let sfi = vaco_parse_aac::tables::index_for_frequency(cfg.sample_rate);
+        let mut r = BitReader::new(body);
+        let elements = raw_data_block::read(&mut r, sfi)?;
         self.config = Some(cfg);
         Err(Error::Unsupported(
-            "vaco-codec-aac: configuration resolved, but spectral decode (window \
-             sequences, scalefactor bands, Huffman decode, TNS, joint stereo, \
-             IMDCT) is not implemented — see docs/codec/vaco-codec-aac.md",
+            match elements.len() {
+                0 => "vaco-codec-aac: raw_data_block parsed with no audio elements",
+                _ => "vaco-codec-aac: raw_data_block fully parsed (window sequences, \
+                      section data, scalefactor decode, pulse data, TNS syntax, \
+                      spectral Huffman decode), but reconstruction — inverse \
+                      quantisation, TNS application, joint stereo, IMDCT/overlap-add \
+                      — is not implemented — see docs/codec/vaco-codec-aac.md",
+            },
         ))
     }
 
@@ -122,14 +129,34 @@ impl Decoder for AacDecoder {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, reason = "test code")]
+    #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic, reason = "test code")]
     use super::AacDecoder;
     use vaco_codec_core::Decoder;
     use vaco_limits::{Budget, Limits};
     use vaco_packet::Packet;
 
-    fn adts_stereo_frame() -> Vec<u8> {
+    /// A real ADTS header (mono, so a single `SCE` is the whole
+    /// `raw_data_block`) wrapping a minimal-but-complete `SCE` (`max_sfb=1`,
+    /// one `ZERO_HCB` band) followed by `ID_END` and `byte_alignment()`.
+    fn adts_frame_with_minimal_raw_data_block() -> Vec<u8> {
         use vaco_bitstream::BitWriter;
+        let mut body = BitWriter::new();
+        body.put(3, 0); // ID_SCE
+        body.put(4, 0); // element_instance_tag
+        body.put(8, 100); // global_gain
+        body.put(1, 0); // ics_reserved_bit
+        body.put(2, 0); // ONLY_LONG
+        body.put(1, 0); // sine window
+        body.put(6, 1); // max_sfb = 1
+        body.put(1, 0); // predictor_data_present
+        body.put(4, 0); // sect_cb = ZERO_HCB
+        body.put(5, 1); // sect_len = 1
+        body.put(1, 0); // pulse_data_present
+        body.put(1, 0); // tns_data_present
+        body.put(1, 0); // gain_control_data_present
+        body.put(3, 7); // ID_END
+        let body_bytes = body.finish();
+
         let mut w = BitWriter::new();
         w.put(12, 0xfff);
         w.put(1, 0);
@@ -138,29 +165,33 @@ mod tests {
         w.put(2, 1); // profile: LC
         w.put(4, 3); // 48000
         w.put(1, 0);
-        w.put(3, 2); // stereo
+        w.put(3, 1); // mono
         w.put(1, 0);
         w.put(1, 0);
         w.put(1, 0);
         w.put(1, 0);
-        w.put(13, 7); // header-only frame
+        w.put(13, 7 + body_bytes.len() as u32); // aac_frame_length
         w.put(11, 0x7ff);
         w.put(2, 0);
-        w.finish()
+        let mut bytes = w.finish();
+        bytes.extend_from_slice(&body_bytes);
+        bytes
     }
 
     #[test]
-    fn a_resolvable_packet_is_rejected_only_at_the_not_implemented_boundary() {
+    fn a_fully_parsed_frame_is_rejected_only_at_the_reconstruction_boundary() {
         let mut dec = AacDecoder::new(Limits::permissive());
-        let bytes = adts_stereo_frame();
+        let bytes = adts_frame_with_minimal_raw_data_block();
         let mut budget = Budget::new(Limits::permissive());
         let packet = Packet::from_slice(&mut budget, &bytes).unwrap();
         let err = dec.send_packet(Some(&packet)).unwrap_err();
-        // The point is *which* error: configuration must have resolved
-        // successfully (a config-layer bug would surface as InvalidData or
-        // Unsupported for the wrong reason, not this one), and decode itself
-        // is the only thing missing.
-        assert!(format!("{err}").contains("spectral decode"));
+        // The point is *which* error: configuration and the full
+        // raw_data_block syntax (ics_info, section_data, scale_factor_data,
+        // pulse/TNS presence, spectral_data) must all have parsed
+        // successfully — a bug anywhere in that chain would surface as a
+        // different error — and only reconstruction (PCM synthesis) is
+        // missing.
+        assert!(format!("{err}").contains("reconstruction"), "{err}");
     }
 
     #[test]
