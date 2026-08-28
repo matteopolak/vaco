@@ -132,6 +132,7 @@ pub mod cabac_residual;
 mod cabac_mb_tables;
 pub mod cavlc;
 mod cavlc_tables;
+mod deblock;
 mod dequant;
 mod intra;
 mod reconstruct;

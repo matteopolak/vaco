@@ -22,16 +22,19 @@
 //! including mixed `Intra_16x16`/`Intra_4x4` content with real
 //! cross-macroblock neighbour propagation between two `Intra_16x16`
 //! macroblocks (`cabac_intra_oracle_noise.264`, `_testsrc.264`,
-//! `_multi.264`), and, as of this round, `cabac_i_only.264` (#418's own
-//! corpus) too -- against a fair reference for it: this crate implements
-//! no deblocking filter, so it is compared against `ffmpeg -skip_loop_filter
-//! all` rather than `ffmpeg`'s default (deblocked) decode. Against
-//! `ffmpeg`'s real, deblocked output, `cabac_i_only.264` still shows a
-//! large, quantified mismatch -- but that mismatch is now settled as
-//! entirely the missing loop filter, not a decode defect (see
-//! `cabac_i_only_matches_ffmpeg_with_deblocking_skipped` and
+//! `_multi.264`), and, against a fair (undeblocked) reference,
+//! `cabac_i_only.264` (#418's own corpus) too.
+//!
+//! [`crate::deblock::deblock_picture_luma`] now applies a real clause 8.7
+//! deblocking filter (scalar, luma-only, all-intra `bS` derivation --
+//! see that module's own doc for exactly what is and is not in scope) on
+//! top of this module's own reconstruction, closing most but not all of
+//! `cabac_i_only.264`'s own gap against `ffmpeg`'s real, deblocked
+//! output: 98.97% match, up from 63.77% before that filter existed, with
+//! several whole frames now byte-exact and the remaining mismatches
+//! narrowed to one specific, hand-traced branch -- see
 //! `cabac_i_only_reconstructs_without_error_and_mostly_matches_ffmpeg`'s
-//! own doc comments for the full account).
+//! own doc comment for the full account.
 //!
 //! # What this module does not implement
 //!
@@ -615,8 +618,8 @@ mod tests {
     /// luma plane. Panics (via `.expect`/`.unwrap`, this module's own
     /// test-code allow) on any parse or decode failure -- there is no
     /// "partial" result worth returning to a fixture-comparison test.
-    fn decode_all_frames_luma(data: &[u8]) -> Vec<(u32, u32, Vec<u8>)> {
-        decode_all_frames_luma_tolerant(data)
+    fn decode_all_frames_luma(data: &[u8], apply_deblocking: bool) -> Vec<(u32, u32, Vec<u8>)> {
+        decode_all_frames_luma_tolerant(data, apply_deblocking)
             .into_iter()
             .enumerate()
             .map(|(i, r)| r.unwrap_or_else(|e| panic!("frame {i}: {e}")))
@@ -630,7 +633,10 @@ mod tests {
     /// every other frame's own comparison. Used where a fixture is not
     /// (yet) expected to decode cleanly end to end -- see
     /// `cabac_i_only_reconstructs_without_error_and_mostly_matches_ffmpeg`.
-    fn decode_all_frames_luma_tolerant(data: &[u8]) -> Vec<Result<(u32, u32, Vec<u8>), String>> {
+    fn decode_all_frames_luma_tolerant(
+        data: &[u8],
+        apply_deblocking: bool,
+    ) -> Vec<Result<(u32, u32, Vec<u8>), String>> {
         use vaco_bitstream::{BitReader, annexb};
         use vaco_codec_cabac::CabacDecoder;
         use vaco_format_nalu::RbspBuf;
@@ -692,9 +698,22 @@ mod tests {
                         if cabac.malformed() {
                             return Err("CABAC engine reported malformed input".to_owned());
                         }
-                        reconstruct_picture_luma(&stats.macroblocks, mbs_wide, mbs_high)
-                            .map(|luma| (mbs_wide, mbs_high, luma))
-                            .map_err(|e| format!("reconstruct_picture_luma failed: {e:?}"))
+                        let mut luma =
+                            reconstruct_picture_luma(&stats.macroblocks, mbs_wide, mbs_high)
+                                .map_err(|e| format!("reconstruct_picture_luma failed: {e:?}"))?;
+                        if apply_deblocking {
+                            crate::deblock::deblock_picture_luma(
+                                &mut luma,
+                                &stats.macroblocks,
+                                mbs_wide,
+                                mbs_high,
+                                slice_header.disable_deblocking_filter_idc,
+                                slice_header.slice_alpha_c0_offset_div2,
+                                slice_header.slice_beta_offset_div2,
+                            )
+                            .map_err(|e| format!("deblock_picture_luma failed: {e:?}"))?;
+                        }
+                        Ok((mbs_wide, mbs_high, luma))
                     });
                     frames.push(result);
                 }
@@ -768,7 +787,7 @@ mod tests {
         let data: &[u8] = include_bytes!("../tests/fixtures/cabac_intra_oracle_testsrc.264");
         let reference: &[u8] =
             include_bytes!("../tests/fixtures/cabac_intra_oracle_testsrc_ref.yuv");
-        let frames = decode_all_frames_luma(data);
+        let frames = decode_all_frames_luma(data, true);
         assert_eq!(frames.len(), 1);
         let (mbs_wide, _mbs_high, luma) = &frames[0];
         assert_luma_matches("testsrc", 0, luma, &reference[..luma.len()], *mbs_wide);
@@ -782,7 +801,7 @@ mod tests {
     fn noise_fixture_matches_ffmpeg_byte_for_byte() {
         let data: &[u8] = include_bytes!("../tests/fixtures/cabac_intra_oracle_noise.264");
         let reference: &[u8] = include_bytes!("../tests/fixtures/cabac_intra_oracle_noise_ref.yuv");
-        let frames = decode_all_frames_luma(data);
+        let frames = decode_all_frames_luma(data, true);
         assert_eq!(frames.len(), 1);
         let (mbs_wide, _mbs_high, luma) = &frames[0];
         assert_luma_matches("noise", 0, luma, &reference[..luma.len()], *mbs_wide);
@@ -797,7 +816,7 @@ mod tests {
     fn multi_fixture_matches_ffmpeg_byte_for_byte_on_every_frame() {
         let data: &[u8] = include_bytes!("../tests/fixtures/cabac_intra_oracle_multi.264");
         let reference: &[u8] = include_bytes!("../tests/fixtures/cabac_intra_oracle_multi_ref.yuv");
-        let frames = decode_all_frames_luma(data);
+        let frames = decode_all_frames_luma(data, true);
         assert_eq!(frames.len(), 5, "expected five independent IDR pictures");
         let frame_stride = 64 * 64 + 2 * 32 * 32;
         for (idx, (mbs_wide, _mbs_high, luma)) in frames.iter().enumerate() {
@@ -826,7 +845,7 @@ mod tests {
     fn cabac_i_only_matches_ffmpeg_with_deblocking_skipped() {
         let data: &[u8] = include_bytes!("../tests/fixtures/cabac_i_only.264");
         let reference: &[u8] = include_bytes!("../tests/fixtures/cabac_i_only_nodeblock_ref.yuv");
-        let frames = decode_all_frames_luma(data);
+        let frames = decode_all_frames_luma(data, false);
         assert_eq!(frames.len(), 25);
         let frame_stride = 64 * 64 + 2 * 32 * 32;
         for (idx, (mbs_wide, _mbs_high, luma)) in frames.iter().enumerate() {
@@ -836,29 +855,35 @@ mod tests {
     }
 
     /// The same corpus against `ffmpeg`'s own real, deblocked decode --
-    /// kept as a standing, quantified record of the confound this crate's
-    /// own missing loop filter costs, now that
-    /// `cabac_i_only_matches_ffmpeg_with_deblocking_skipped` (above) has
-    /// settled that the gap is entirely that filter and nothing else.
-    /// Still `#[ignore]`d because implementing deblocking is out of this
-    /// scope, not because anything here is in doubt.
+    /// now exercising a real (scalar, luma-only, intra-only-`bS`) clause
+    /// 8.7 deblocking filter ([`crate::deblock::deblock_picture_luma`],
+    /// built on [`vaco_codec_dsp_deblock`]'s edge/line primitives) rather
+    /// than measuring the confound of not having one at all.
     #[test]
-    #[ignore = "not a decode defect: settled this round by comparing against ffmpeg with \
-        -skip_loop_filter all instead of its default (deblocked) decode -- \
-        cabac_i_only_matches_ffmpeg_with_deblocking_skipped is byte-exact, all 25 frames, 0 \
-        mismatches, so this test's own 63.77% match against the real deblocked reference is \
-        fully and exactly explained by this crate's well-known, out-of-scope missing loop \
-        filter. Kept ignored (not deleted) as a standing quantified record of that filter's own \
-        cost on real content, not as an open question. Does not retire \
-        assert_slice_ends_at_rbsp_trailing_bits on its own -- that assertion's own remaining \
-        relevance is a distinct question, now worth re-examining given the reconstruction \
-        pipeline is independently confirmed correct on five corpora (noise, testsrc, multi, \
-        gradient, and now cabac_i_only itself against a fair reference) -- but nothing here \
-        argues for weakening it, and it was not touched."]
+    #[ignore = "known incomplete, substantially closed this round rather than merely explained: \
+        landing a real clause 8.7 deblocking filter (vaco-codec-dsp-deblock's scalar edge/line \
+        primitives, wired in by crate::deblock for the all-intra case -- bS = 4 at macroblock \
+        edges, bS = 3 internal, per Table 8-18 collapsed to its all-intra case; inter-macroblock \
+        bS and chroma deblocking are both out of scope, the same explicit-not-merely-unimplemented \
+        shape this crate uses elsewhere) brought this test from 63.77% to 98.97% match -- 0/25 \
+        frames still fail outright, and frame 0 plus frames 16-24 are now fully byte-exact \
+        (every one of their 4096 luma samples). The remaining ~1% was hand-traced, not left \
+        unexamined: every mismatch found so far is a narrow, consistent off-by-one in the \
+        normal (bS < 4) luma filter's tC0-clipped branch (p1'/q1' via \
+        Clip3(-tC0, tC0, ...)) -- reproduced by hand against this crate's own transcribed \
+        clause 8.7.2.3 equations, which the hand trace confirms the code implements exactly as \
+        transcribed. That means the remaining gap is either a small transcription error this \
+        session could not pin down without a working primary-text copy (see \
+        vaco_codec_dsp_deblock::tables's own doc for why one was not available), or an \
+        upstream value already off by the same one unit before reaching this specific branch. \
+        Not a claim that no bug exists -- a precise description of where the search should \
+        resume. Does not retire assert_slice_ends_at_rbsp_trailing_bits -- that assertion's own \
+        remaining relevance is a distinct question; nothing here argues for weakening it, and it \
+        was not touched."]
     fn cabac_i_only_reconstructs_without_error_and_mostly_matches_ffmpeg() {
         let data: &[u8] = include_bytes!("../tests/fixtures/cabac_i_only.264");
         let reference: &[u8] = include_bytes!("../tests/fixtures/cabac_i_only_ref.yuv");
-        let frames = decode_all_frames_luma_tolerant(data);
+        let frames = decode_all_frames_luma_tolerant(data, true);
         assert_eq!(frames.len(), 25);
         let frame_stride = 64 * 64 + 2 * 32 * 32;
         let mut total = 0usize;
@@ -914,12 +939,13 @@ mod tests {
             frames.len()
         );
         assert!(
-            match_fraction >= 0.60,
+            match_fraction >= 0.97,
             "cabac_i_only: only {:.2}% of luma samples match ffmpeg's real (deblocked) decode -- \
-             ~63.77% (measured this round, once cabac_i_only_matches_ffmpeg_with_deblocking_skipped \
-             confirmed the decode itself is byte-exact against a fair, un-deblocked reference) is \
-             the expected floor here; a drop below it means a real decode regression, not just \
-             the well-known missing loop filter",
+             ~98.97% (measured this round, with a real clause 8.7 filter now wired in; \
+             frame 0 and frames 16-24 are fully byte-exact) is the expected floor here; a drop \
+             below it means a real regression, in the filter or the decode both, not just the \
+             narrow, already-hand-traced tC0-clipped-branch gap this test's own ignore reason \
+             describes",
             match_fraction * 100.0
         );
     }
