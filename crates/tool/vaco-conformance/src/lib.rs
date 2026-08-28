@@ -59,6 +59,7 @@
 
 pub mod case;
 pub mod compare;
+pub mod deviation;
 pub mod divergence;
 pub mod extract;
 pub mod filterexec;
