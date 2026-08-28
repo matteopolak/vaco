@@ -1,6 +1,6 @@
 [package]
 name = "vaco-codec-dsp-sinewin"
-description = "Sine window generation for MDCT-based codecs."
+description = "Sine and KBD window generation for MDCT-based codecs."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

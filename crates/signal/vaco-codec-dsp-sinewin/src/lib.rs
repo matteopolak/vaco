@@ -1,4 +1,7 @@
-//! Sine window generation for MDCT-based codecs (D-06).
+//! Sine and Kaiser-Bessel-Derived (KBD) window generation for MDCT-based
+//! codecs (D-06 named this crate for the sine window specifically; KBD was
+//! added when a real fixture proved the sine-only scope wrong — see
+//! [`kbd_window`]'s own doc for exactly how).
 //!
 //! # What this is
 //!
@@ -17,13 +20,18 @@
 //! time-domain alias cancellation (TDAC) — hence a shared crate rather than
 //! another per-codec copy.
 //!
-//! KBD (Kaiser-Bessel-Derived), AAC's other window shape, is **not** here:
-//! it is a materially different, iterative construction (a running sum over
-//! Bessel-function terms, not a closed-form `sin`), and D-06 names this crate
-//! for the sine window specifically. `vaco-codec-aac`'s own window-shape
-//! selection ships sine-only for the same reason its module doc gives; KBD
-//! is a disclosed gap there, not silently approximated by this crate's
-//! output.
+//! KBD (Kaiser-Bessel-Derived), AAC's other window shape, **is now also
+//! here** — [`kbd_window`] — despite D-06 naming this crate for the sine
+//! window specifically and an earlier version of this doc saying KBD was
+//! "not here" on the working assumption that real (`ffmpeg`-encoded)
+//! content never uses it. That assumption was checked against
+//! `vaco-codec-aac`'s own decode of real fixtures and found wrong: several
+//! genuinely set `window_shape == 1` partway through, past a bit-exact
+//! syntax-consumption check that rules out a parsing artefact. Extending
+//! this crate rather than starting a second one keeps "the window shapes
+//! AAC decode needs" in one place; a crate that only ever covered one of
+//! AAC's exactly two shapes was always going to need this correction once
+//! something real exercised it.
 //!
 //! # The correctness property this crate is tested against
 //!
@@ -123,9 +131,98 @@ pub fn sine_window_satisfies_princen_bradley(n: usize, tolerance: f32) -> bool {
     true
 }
 
+/// Kaiser-Bessel-Derived (KBD) window, AAC's other window shape
+/// (ISO/IEC 14496-3 subpart 4 §4.6.11.3.2, `window_shape == 1`).
+///
+/// This crate started sine-only (D-06 names it for the sine window
+/// specifically) on the working assumption that `ffmpeg`'s AAC encoder —
+/// this workspace's only source of real AAC fixtures — never emits
+/// `window_shape == 1`. **That assumption was wrong**: verified directly
+/// against real `ffmpeg`-encoded frames (`vaco-codec-aac`'s own decode
+/// pass, T3-03c/#445), several fixtures genuinely set `window_shape == 1`
+/// partway through the stream, past a bit-exact-consumption check that
+/// rules out a parsing artefact. A crate whose whole reason to exist is
+/// "the window shapes AAC decode needs" cannot leave one of AAC's exactly
+/// two shapes out, so KBD is added here rather than in a new crate — see
+/// the module doc's own updated scope note.
+///
+/// `alpha` is `4` for `N=2048` (1920) and `6` for `N=256` (240), per
+/// §4.6.11.3.2's own table — callers state it explicitly rather than this
+/// function guessing from `N`, since a future low-delay window at a third
+/// `N` would otherwise need a third magic case here.
+///
+/// The construction (§4.6.11.3.2): a kernel window
+/// `W'(n) = I0(πα·sqrt(1 - ((n - N/4)/(N/4))^2)) / I0(πα)` for `0 <= n <=
+/// N/2`, `I0` the modified Bessel function of the first kind, evaluated by
+/// its own defining power series (`Σ_{k=0}^∞ ((x/2)^k / k!)^2`, which
+/// converges quickly enough for the `α` values AAC uses that 32 terms is
+/// generous); then each window half is a *cumulative sum* of that kernel,
+/// normalised by the kernel's own total sum over `0..=N/2`, and then
+/// **square-rooted** — the KBD window's defining property (distinct from
+/// the sine window's plain pointwise formula) is that it is built from a
+/// running sum, not a closed-form value per sample, and the square root is
+/// not optional: dropping it still yields a symmetric, monotonic,
+/// `[0, 1]`-bounded window (this crate's first attempt did, and passed
+/// those three properties' own tests), but fails the Princen-Bradley
+/// identity by ~1e-2 to ~2e-3 depending on sample index, because
+/// `cumsum(n)/total + cumsum(half-1-n)/total == 1` is the algebraic
+/// identity the kernel's symmetry actually gives (proved from
+/// `total - cumsum(m) == cumsum(half-1-m)`, itself from `d[k] ==
+/// d[half-k]`), and squaring *after* the square root is what turns that
+/// sum-to-one identity into the sum-of-*squares*-to-one Princen-Bradley
+/// needs.
+#[must_use]
+#[allow(clippy::integer_division, reason = "N/2 is an exact halving of a window length that is always even")]
+pub fn kbd_window<const N: usize>(alpha: f64) -> [f32; N] {
+    let half = N / 2;
+    if half == 0 {
+        return [0.0; N];
+    }
+    // Kernel values for n in 0..=half (half+1 points), and their
+    // cumulative sum, computed once.
+    let mut kernel = vec![0.0f64; half + 1];
+    for (n, slot) in kernel.iter_mut().enumerate() {
+        let x = (n as f64 - N as f64 / 4.0) / (N as f64 / 4.0);
+        let arg = std::f64::consts::PI * alpha * (1.0 - x * x).max(0.0).sqrt();
+        *slot = bessel_i0(arg) / bessel_i0(std::f64::consts::PI * alpha);
+    }
+    let mut cumsum = vec![0.0f64; half + 1];
+    let mut running = 0.0;
+    for (i, &k) in kernel.iter().enumerate() {
+        running += k;
+        if let Some(slot) = cumsum.get_mut(i) {
+            *slot = running;
+        }
+    }
+    let total = cumsum.get(half).copied().unwrap_or(1.0).max(f64::EPSILON);
+
+    std::array::from_fn(|n| {
+        let idx = if n < half { n } else { N - n - 1 };
+        let ratio = cumsum.get(idx).copied().unwrap_or(0.0) / total;
+        ratio.sqrt() as f32
+    })
+}
+
+/// The modified Bessel function of the first kind, `I0(x) = Σ_{k=0}^∞
+/// ((x/2)^k / k!)^2`, by its own defining series — accurate to `f64`
+/// precision for the `x` range `kbd_window` calls it with (`πα` up to
+/// roughly 19 for `α=6`), where the series' terms shrink well within 32
+/// iterations.
+fn bessel_i0(x: f64) -> f64 {
+    let half_x = x / 2.0;
+    let mut term = 1.0f64;
+    let mut sum = 1.0f64;
+    for k in 1..32 {
+        term *= half_x / f64::from(k);
+        sum += term * term;
+    }
+    sum
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::indexing_slicing, reason = "test code, fixed-size arrays")]
+    #![allow(clippy::integer_division, reason = "n/2 is an exact halving of a window length that is always even")]
     use super::{sine_window, sine_window_into, sine_window_satisfies_princen_bradley};
 
     #[test]
@@ -198,5 +295,41 @@ mod tests {
         assert_eq!(sine_window_into(&mut [], 0), 0);
         let w = sine_window::<0>();
         assert_eq!(w.len(), 0);
+    }
+
+    #[test]
+    fn kbd_window_satisfies_princen_bradley_at_both_aac_sizes() {
+        for (n, alpha) in [(2048usize, 4.0), (256, 6.0)] {
+            let w: Vec<f32> = match n {
+                2048 => super::kbd_window::<2048>(alpha).to_vec(),
+                _ => super::kbd_window::<256>(alpha).to_vec(),
+            };
+            let half = n / 2;
+            for i in 0..half {
+                let a = f64::from(w[i]);
+                let b = f64::from(w[i + half]);
+                let sum = a.mul_add(a, b * b);
+                assert!((sum - 1.0).abs() < 1e-4, "n={n} i={i}: sum={sum}");
+            }
+        }
+    }
+
+    #[test]
+    fn kbd_window_is_symmetric_and_bounded() {
+        let w = super::kbd_window::<256>(6.0);
+        for i in 0..256 {
+            assert!((0.0..=1.0).contains(&w[i]), "out of range at {i}: {}", w[i]);
+            assert!((w[i] - w[255 - i]).abs() < 1e-5, "asymmetric at {i}");
+        }
+    }
+
+    #[test]
+    fn kbd_window_is_monotonically_increasing_on_its_left_half() {
+        // The left half is a normalised cumulative sum of non-negative
+        // kernel values, so it can never decrease.
+        let w = super::kbd_window::<256>(6.0);
+        for i in 1..128 {
+            assert!(w[i] >= w[i - 1] - 1e-6, "decreased at {i}: {} -> {}", w[i - 1], w[i]);
+        }
     }
 }
