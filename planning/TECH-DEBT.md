@@ -5230,3 +5230,105 @@ Gates green: `cargo test/clippy -p vaco-codec-mpeg12` (36 tests, clean),
 `provenance-check` does not flag this round's two commits.
 
 `Vaco-Spec-Ref: itu-t-h262` Annex D.9.3. `Vaco-Provenance: blackbox`.
+
+## H.264: the pixel-oracle is reachable via `disable_deblocking_filter_idc`, but #420/#424 are a 9-person-week gap with no ASSIGNMENTS.md row (#418, #420, #424)
+
+Answering the coordinator's redirection: **stopped working #418 directly**
+this round, per instruction. `assert_slice_ends_at_rbsp_trailing_bits`
+was not touched, weakened, or deleted; it stays exactly as it is.
+
+**The oracle-reachability check, done first as asked.** A deblocking-free
+comparison against `ffmpeg` is reachable: encoding with `libx264`'s
+`no-deblock` (`-x264opts no-deblock`) sets `disable_deblocking_filter_idc
+= 1` in the slice header — confirmed by parsing the resulting bitstream
+with `vaco_parse_h264::SliceHeader` (already-tested parser, read-only use)
+— and clause 8.7 makes deblocking conditional on that flag for *every*
+conformant decoder, `ffmpeg` included. Verified this is not merely a
+theoretical reading: encoded the same 32x32 noise source twice, once with
+`no-deblock` and once without, decoded both with real `ffmpeg` to raw
+YUV, and diffed. At QP 20 the two decodes were byte-identical (deblocking
+had no visible effect on this specific content at that quantiser — not
+informative on its own). At QP 38 they differed in exactly 2 of 1536
+bytes (max delta 4) — small, but real and non-zero, confirming `ffmpeg`
+genuinely branches on `disable_deblocking_filter_idc` rather than always
+filtering. **A from-scratch intra-only reconstruction, built with no
+deblocking implementation at all, is therefore directly and exactly
+comparable against plain black-box `ffmpeg` output, provided the test
+corpus was encoded with `disable_deblocking_filter_idc = 1`.**
+
+**The existing `cabac_i_only.264` fixture cannot be used for this as-is.**
+Checked its own `disable_deblocking_filter_idc` value with the same
+parser: `0` (deblocking enabled) on every slice. `ffmpeg` would apply the
+loop filter when decoding it, and an intra-reconstruction-only decoder
+(by design, per this dispatch's own scope) would not — the two outputs
+would never match regardless of how correct the reconstruction is. A new
+corpus, encoded the same way but with `no-deblock` added, is needed
+before any pixel comparison against it means anything. Not built this
+round — noted here so whoever picks this up next does not lose the round
+re-deriving it: `ffmpeg -y -f rawvideo -pix_fmt yuv420p -s WxH -i in.yuv
+-c:v libx264 -profile:v main -coder cabac -bf 0 -refs 1 -g <N>
+-x264opts "no-8x8dct:no-deblock" -f h264 out.264`, same shape as every
+existing fixture's own documented generator command, one flag added.
+
+**#420 and #424, checked against `ASSIGNMENTS.md` as instructed.** Both
+issues' own `Crate(s)` field correctly names `vaco-codec-h264` — no
+mis-scope in the issues themselves, unlike the seven prior catches this
+check has made. But `vaco-codec-h264` **has no row in `ASSIGNMENTS.md`
+at all** — not as a standalone crate, not inside any of the epic-grouped
+"active" rows (`vaco-codec-mpeg12 (epic #36)`, `vaco-codec-vpx (epics #28,
+#32)`, etc., which do exist for other crates' cross-issue umbrellas). Ten
+rounds of real work have landed in this crate under #418/#419 without a
+visible claim in the one file this repository's own README says the
+orchestrator alone writes and every agent is meant to check before
+touching a crate ("Two agents are never assigned the same crate
+concurrently"). Nothing has collided yet, by luck rather than by the
+mechanism working — flagging rather than adding the row myself, since
+that file is explicitly not mine to write.
+
+**Survey of `vaco-codec-dsp-idct::h264`, done before writing any transform
+code, as instructed.** It has exactly the pure inverse-transform math and
+nothing else: `idct4x4`/`idct8x8` (§8.5.12.2/§8.5.13.2), and
+`luma_dc_hadamard4x4`/`chroma_dc_hadamard2x2`/`chroma_dc_hadamard2x4`
+(§8.5.10/§8.5.11.1) — each already tested against a direct matrix-sandwich
+evaluation per their own doc comments (`tests/golden.rs`). Every one of
+them says explicitly, in its own doc, that QP-dependent scaling
+(`LevelScale4x4`, eq. 8-321/8-322) is "a codec-level concern... not
+implemented here." #424's own scope — dequantisation, scaling-list
+application, qp derivation, lossless transform-bypass, and wiring
+residual coefficients through all of that before calling these functions
+— is **entirely unimplemented**, in this crate or any other. #420's
+scope (all intra prediction: 4×4/8×8/16×16 luma modes, chroma modes, mode
+inference, constrained intra, I_PCM reconstruction) has **zero existing
+code anywhere** — confirmed by grep across the workspace for
+`intra_predict`/`reconstruct_block`/similar, and by `vaco-codec-h264`'s
+own docs page, which names #420 onward as exactly where this starts.
+
+**Why this round stops here rather than starting #420/#424's
+implementation.** Two things converge: the combined estimate on the
+issues themselves is 9.0 person-weeks (5.0 + 4.0) of genuinely new,
+primary-text-verified code — real prediction-mode geometry, real
+dequantisation math, real macroblock-reconstruction wiring — not
+something to responsibly rush inside one bounded round the way a targeted
+bug fix or a table check can be; and the `ASSIGNMENTS.md` gap just found
+means starting substantial new work in this crate right now would be
+happening without the one coordination signal that is supposed to prevent
+two agents landing in the same crate. Per the same standard the
+coordinator set for ffmpeg-source instrumentation two rounds ago: flagged
+and stopped, rather than decided unilaterally by starting the work.
+
+Nothing committed to `vaco-codec-h264`, `vaco-codec-cabac`, or
+`vaco-codec-dsp-idct` this round — investigation and one confirmed-viable
+generator recipe, not yet materialised as a fixture. No live writer on
+any of the three crates checked before or after (`git status --porcelain`
+clean on each; `vaco-codec-dsp-idct`'s own history shows no commits since
+its last real feature addition, consistent with `done`). Temporary
+worktree used for the `disable_deblocking_filter_idc` check removed
+before this entry was written; nothing from it landed.
+
+`#418` stays open; `assert_slice_ends_at_rbsp_trailing_bits` untouched.
+`#419` not reopened.
+
+`Vaco-Spec-Ref: iso-iec-14496-10-2002-draft` clause 8.7 (deblocking filter
+process, conditioned on `disable_deblocking_filter_idc`), §8.5.10/
+§8.5.11.1/§8.5.12.2/§8.5.13.2 (the transform equations `vaco-codec-dsp-idct::h264`
+already implements).
