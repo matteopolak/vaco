@@ -51,6 +51,7 @@ vaco-codec-cabac = { path = "../crates/signal/vaco-codec-cabac", optional = true
 vaco-codec-cbs = { path = "../crates/signal/vaco-codec-cbs", optional = true }
 vaco-codec-core = { path = "../crates/signal/vaco-codec-core", optional = true }
 vaco-codec-dsp-idct = { path = "../crates/signal/vaco-codec-dsp-idct", optional = true }
+vaco-codec-dsp-lpc = { path = "../crates/signal/vaco-codec-dsp-lpc", optional = true }
 vaco-codec-exr = { path = "../crates/codec/vaco-codec-exr", optional = true }
 vaco-codec-gif = { path = "../crates/codec/vaco-codec-gif", optional = true }
 vaco-codec-golomb = { path = "../crates/signal/vaco-codec-golomb", optional = true }
@@ -212,6 +213,7 @@ default = [
     "codec-cabac",
     "codec-core",
     "codec-dsp-idct",
+    "codec-dsp-lpc",
     "codec-exr",
     "codec-gif",
     "codec-golomb",
@@ -364,6 +366,7 @@ codec-ac3 = ["dep:vaco-codec-ac3"]
 codec-cabac = ["dep:vaco-codec-cabac"]
 codec-core = ["dep:vaco-codec-core", "dep:vaco-core", "dep:vaco-limits"]
 codec-dsp-idct = ["dep:vaco-codec-dsp-idct"]
+codec-dsp-lpc = ["dep:vaco-codec-dsp-lpc"]
 codec-exr = ["dep:vaco-codec-exr", "dep:vaco-frame", "dep:vaco-limits"]
 codec-gif = ["dep:vaco-codec-gif", "dep:vaco-frame", "dep:vaco-limits"]
 codec-golomb = ["dep:vaco-bitstream", "dep:vaco-codec-golomb", "dep:vaco-limits"]
@@ -867,6 +870,14 @@ test = false
 doc = false
 bench = false
 required-features = ["codec-dsp-idct"]
+
+[[bin]]
+name = "dsp_lpc"
+path = "fuzz_targets/dsp_lpc.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-dsp-lpc"]
 
 [[bin]]
 name = "dv_demux"
