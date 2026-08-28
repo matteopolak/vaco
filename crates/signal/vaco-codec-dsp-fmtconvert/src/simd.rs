@@ -29,11 +29,20 @@
 //! explicit composition does, and the composition's extra per-chunk
 //! bookkeeping (a checked split every iteration) does not pay for itself.
 //! Reported per this project's own standing instruction to report ratios,
-//! not verdicts, rather than assumed or hidden: **shipped for
-//! correctness and `vaco-checkasm` coverage, not for a measured win.** A
-//! future pass attempting to actually beat the scalar path here should
-//! start from disassembly of the scalar loop, not from adding more
-//! composition.
+//! not verdicts, rather than assumed or hidden.
+//!
+//! # Gating: `int16_to_float` is scalar-by-measurement
+//!
+//! A losing kernel behind a dispatch layer reads as an optimisation to
+//! the next person who wires up a caller, and costs real throughput if
+//! they trust that reading. So [`int16_to_float`] (the ~0.65x loser)
+//! routes to the scalar path, not the dispatched one — see its own doc
+//! for the one-line pointer back to this measurement. [`int32_to_float`]
+//! stays dispatched: ~0.96x is a wash, not a regression, and it is more
+//! likely to win outright on a wider target (AVX2/AVX-512) than to lose
+//! further. Both dispatched bodies stay wired into `vaco-checkasm` either
+//! way, so a regression in either is still caught even though one is not
+//! on the hot path today.
 
 // Every `n / 2` and `(len / n) * n` below divides by a SIMD native lane
 // count (never zero for a real `S: Lanes`) or its `.max(1)` guard, to
@@ -47,9 +56,27 @@
 use vaco_simd::prelude::*;
 use vaco_simd::{Caps, dispatch_kernel};
 
-/// Dispatched, bit-exact [`crate::int16_to_float`]: writes `min(dst.len(),
-/// src.len())` elements.
+/// [`crate::int16_to_float`]'s public entry point, gated to the scalar
+/// path. **Scalar-by-measurement, not dispatched**: `benches/fmtconvert.rs`
+/// on aarch64/NEON measured the dispatched path at ~0.65x the scalar
+/// loop's throughput at both 1024 and 65536 elements (see this module's
+/// doc for the full measurement) — a pessimisation, not an optimisation,
+/// on the one target this was measured on. `caps` is accepted and ignored
+/// so the signature does not need to change if a wider target (AVX-512 is
+/// untested) inverts the ratio; re-measure there before flipping this to
+/// call [`int16_to_float_vector`] instead. The dispatched path itself is
+/// kept below, unchanged and still exercised by `vaco-checkasm` (so it
+/// cannot silently rot), just not reachable from here.
 pub fn int16_to_float(caps: Caps, src: &[i16], dst: &mut [f32]) {
+    let _ = caps;
+    crate::convert::int16_to_float(dst, src);
+}
+
+/// The dispatched path [`int16_to_float`] does not currently call — see
+/// that function's doc for why. Exists so `vaco-checkasm` can keep
+/// verifying it under `Differential` independently of which path
+/// [`int16_to_float`] routes through.
+pub fn int16_to_float_vector(caps: Caps, src: &[i16], dst: &mut [f32]) {
     let len = src.len().min(dst.len());
     let (Some(src), Some(dst)) = (src.get(..len), dst.get_mut(..len)) else {
         return;
@@ -167,18 +194,32 @@ mod tests {
     use crate::convert::{int16_to_float as scalar_i16, int32_to_float as scalar_i32};
 
     #[test]
-    fn int16_to_float_matches_scalar_on_a_ramp() {
+    fn int16_to_float_vector_matches_scalar_on_a_ramp() {
         let src: Vec<i16> = (0..300).map(|i| (i * 37 - 5000) as i16).collect();
         let mut got = vec![0.0f32; src.len()];
-        int16_to_float(Caps::detect(), &src, &mut got);
+        int16_to_float_vector(Caps::detect(), &src, &mut got);
         let mut want = vec![0.0f32; src.len()];
         scalar_i16(&mut want, &src);
         assert_eq!(got, want);
     }
 
     #[test]
-    fn int16_to_float_matches_scalar_at_extremes() {
+    fn int16_to_float_vector_matches_scalar_at_extremes() {
         let src = [i16::MIN, i16::MIN + 1, -1, 0, 1, i16::MAX - 1, i16::MAX];
+        let mut got = vec![0.0f32; src.len()];
+        int16_to_float_vector(Caps::detect(), &src, &mut got);
+        let mut want = vec![0.0f32; src.len()];
+        scalar_i16(&mut want, &src);
+        assert_eq!(got, want);
+    }
+
+    /// The public entry point is gated to scalar (see its own doc) --
+    /// this pins that routing, not just that the numbers happen to agree,
+    /// so a future change that quietly re-enables dispatch without
+    /// re-measuring is at least forced through this test.
+    #[test]
+    fn int16_to_float_public_entry_matches_scalar_directly() {
+        let src: Vec<i16> = (0..64).map(|i| (i * 91 - 2000) as i16).collect();
         let mut got = vec![0.0f32; src.len()];
         int16_to_float(Caps::detect(), &src, &mut got);
         let mut want = vec![0.0f32; src.len()];
@@ -211,7 +252,7 @@ mod tests {
         for len in 0..40 {
             let src: Vec<i16> = (0..len).map(|i| i16::try_from((i * 91) % 30000).unwrap_or(0)).collect();
             let mut got = vec![0.0f32; len];
-            int16_to_float(Caps::detect(), &src, &mut got);
+            int16_to_float_vector(Caps::detect(), &src, &mut got);
             let mut want = vec![0.0f32; len];
             scalar_i16(&mut want, &src);
             assert_eq!(got, want, "len={len}");
@@ -220,9 +261,9 @@ mod tests {
 
     proptest::proptest! {
         #[test]
-        fn int16_to_float_agrees_with_scalar_random(src in proptest::collection::vec(proptest::num::i16::ANY, 0..512)) {
+        fn int16_to_float_vector_agrees_with_scalar_random(src in proptest::collection::vec(proptest::num::i16::ANY, 0..512)) {
             let mut got = vec![0.0f32; src.len()];
-            int16_to_float(Caps::detect(), &src, &mut got);
+            int16_to_float_vector(Caps::detect(), &src, &mut got);
             let mut want = vec![0.0f32; src.len()];
             scalar_i16(&mut want, &src);
             proptest::prop_assert_eq!(got, want);

@@ -44,12 +44,17 @@ fn int16_to_float_scalar_1024(bencher: divan::Bencher<'_, '_>) {
 
 #[divan::bench]
 fn int16_to_float_dispatched_1024(bencher: divan::Bencher<'_, '_>) {
+    // Benchmarks the dispatched body directly (`int16_to_float_vector`),
+    // not the crate's public `int16_to_float` entry -- that entry is
+    // gated to the scalar path below (measured slower; see
+    // `src/simd.rs`'s module doc), so calling it here would compare the
+    // scalar loop against itself.
     let src = ramp_i16();
     let mut dst = [0.0f32; N];
     let caps = Caps::detect();
     bencher
         .counter(divan::counter::ItemsCount::new(N))
-        .bench_local(|| simd::int16_to_float(caps, &src, &mut dst));
+        .bench_local(|| simd::int16_to_float_vector(caps, &src, &mut dst));
 }
 
 #[divan::bench]

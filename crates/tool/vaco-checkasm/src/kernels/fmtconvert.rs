@@ -21,7 +21,13 @@ pub struct Int16Case {
     src: Vec<i16>,
 }
 
-/// [`Kernel`] adapter for [`vaco_codec_dsp_fmtconvert::simd::int16_to_float`].
+/// [`Kernel`] adapter for
+/// [`vaco_codec_dsp_fmtconvert::simd::int16_to_float_vector`] -- the
+/// dispatched body itself, not the crate's public `int16_to_float` entry
+/// point, which is gated to the scalar path (measured slower; see that
+/// crate's `simd` module doc). Verifying the dispatched body directly
+/// here is what keeps it from silently rotting while it is not on the
+/// hot path.
 #[derive(Debug, Clone, Copy)]
 pub struct Int16ToFloatKernel;
 
@@ -64,7 +70,7 @@ impl Kernel for Int16ToFloatKernel {
 
     fn vector(case: &Self::Case) -> Vec<Self::Lane> {
         let mut out = vec![0.0f32; case.src.len()];
-        simd::int16_to_float(Caps::detect(), &case.src, &mut out);
+        simd::int16_to_float_vector(Caps::detect(), &case.src, &mut out);
         out
     }
 }
