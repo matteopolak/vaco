@@ -28,7 +28,7 @@ spec text says so in its own doc comment, and this document does the same.
 | `localset` | metadata | The `Tag(u16) Length(u16) Value` item form shared by header metadata sets and the Index Table Segment |
 | `properties` | metadata | The RP210 property dictionary this crate reads, resolved by UL through the primer |
 | `metadata` | metadata | The instance-UID-keyed graph: `Preface` → `ContentStorage` → `Package` → `Track` → `Sequence` → `StructuralComponent`; `resolve_essence`'s cycle-guarded source-package chase |
-| `descriptor` | metadata | Turning a picture essence descriptor into `CodecParameters` |
+| `descriptor` | metadata | Turning a picture or sound essence descriptor into `CodecParameters` |
 | `essence` | essence container | Generic Container essence element keys, frame-wrapped vs clip-wrapped, the track-number match |
 | `index` | index tables | The Index Table Segment, CBE and VBE |
 | `demux` | — | `MxfDemuxer`: drives all four layers, implements `Demuxer` |
@@ -179,6 +179,67 @@ on a parser crate directly (`ParserProvider` is wired into
 `MxfDemuxer::open` but not yet called, for exactly this reason: there is
 nothing to hand it today).
 
+### Sound essence
+
+`descriptor::sound_parameters` handles two distinct measured descriptor
+classes, both folding into the same `StructuralClass::Descriptor` arm as
+every picture descriptor kind (see `ul.rs`; `sound_parameters` tells them
+apart by which properties are present, not by class byte):
+
+- **`AES3PCMDescriptor` (`0x47`)** — OP1a's audio class in every real fixture
+  this crate has seen (`ffmpeg -f mxf` with a `pcm_s16le` track). Its essence
+  bytes are raw, tightly-interleaved PCM, verbatim — verified byte-exact
+  against `ffprobe -show_packets`' `pos`/`size` on `op1a_mpeg2_pcm_sample.mxf`.
+  This is the only class `sound_parameters` reports a `CodecId` for.
+- **`GenericSoundEssenceDescriptor` (`0x42`)** — D-10's audio class in every
+  real `ffmpeg -f mxf_d10` fixture with audio. `SampleRate`, `AudioChannelCount`
+  and `AudioQuantizationBits` read correctly from it (see below), but **the
+  essence bytes are not raw PCM**: measured directly (comparing this crate's
+  raw KLV length against `ffprobe`'s reported packet size, then dumping the
+  essence element's raw bytes word-by-word against `ffmpeg -c copy -f data`'s
+  own extracted PCM) to be a fixed AES3-style bundle — a 4-byte element
+  header of undetermined meaning, then, per sample instant (`1920` at 48
+  kHz/25 fps), **8 fixed channel slots regardless of the descriptor's own
+  `AudioChannelCount`** (both a 2-logical-channel and an 8-logical-channel
+  fixture physically occupy all 8 slots), each slot a 4-byte word: 1 tag
+  byte (the slot's own index, constant per slot) plus a little-endian 24-bit
+  field holding the 16-bit PCM sample left-shifted 4 bits (`raw / 16 ==
+  pcm16` confirmed on every sample checked). `4 + 1920 * 8 * 4 == 61444`,
+  matching the raw KLV length exactly in both fixtures; `ffprobe`'s reported
+  size is the unpacked logical-channel PCM only (`1920 * channels * 2`).
+  Turning this into playable `pcm_s16le` needs the descriptor's channel
+  count fed back into per-sample unpacking — bitstream/essence-format work,
+  not container framing, the same D14.1 line this crate already draws for
+  MPEG-2 timestamp reordering. So `read_packet` reports the real,
+  unmodified KLV length (never a fabricated smaller size) and
+  `sound_parameters` reports `codec_id: None` for this class specifically —
+  `sample_rate`/channel layout/`format` stay accurate, the packet bytes are
+  not claimed to be something they are not. `d10_mpeg2_aes3_sample.mxf`
+  (muxed with `-d10_channelcount 8`, the SMPTE-386M-compliant value) is the
+  regression fixture.
+
+**`AudioSampleRate` is a distinct property from the generic `SampleRate`.**
+On a sound descriptor, `SampleRate` states the *edit rate* (`25/1` on the
+D-10 fixture — it only looked interchangeable with the true sample rate on
+the first fixture tried, where both happened to read `48000/1`). The real
+audio sample rate is tag `0x3d03`, registered as `PropertyId::AudioSampleRate`.
+
+**A `MultipleDescriptor` (`0x44`) is expanded per track, not skipped.** A
+package with more than one essence track (the common OP1a/D-10
+video-plus-audio shape) points every track at the *same* `MultipleDescriptor`
+id — which carries none of the real per-essence properties itself. Before
+this was handled, every track in such a package resolved to that one
+descriptor, and `build_streams` skipped it outright: a source package with
+more than one essence track produced **zero** streams, video included, not
+just audio. `metadata::resolve_track_descriptor` reads the
+`MultipleDescriptor`'s `SubDescriptorUIDs` batch and matches each
+sub-descriptor's own `LinkedTrackId` back to the track being resolved
+(measured against a real two-track `ffmpeg -f mxf` file); it falls back to
+the unchanged package-level descriptor id whenever it cannot resolve
+further (not a `MultipleDescriptor`, an unknown id, no track id, or no
+matching sub-descriptor) rather than dropping the track's descriptor
+entirely.
+
 ### Index tables
 
 `EditUnitByteCount` is the whole branch: nonzero means CBE (every edit unit
@@ -232,10 +293,21 @@ corpus is single-track); an index table that interleaves several tracks via
   that carries the property you want) is safer than transcribing from a
   dictionary by hand — see `properties.rs`'s module docs for why UL matching
   beats raw-tag matching.
-- **Add a descriptor mapping** (a new `PictureEssenceCoding` UL, or a sound
-  descriptor path): `descriptor.rs`'s `PICTURE_ESSENCE_CODING` table and
-  `picture_parameters` are the place; a sound path does not exist yet (see
-  Deferred work).
+- **Add a descriptor mapping** (a new `PictureEssenceCoding` UL, a new sound
+  quantization/channel shape): `descriptor.rs`'s `PICTURE_ESSENCE_CODING`
+  table and `picture_parameters` are the picture-side place;
+  `sound_parameters` is the sound-side place — see "Sound essence" above for
+  why it only claims a `CodecId` for `AES3PCMDescriptor`, not
+  `GenericSoundEssenceDescriptor`.
+- **Unpack D-10's AES3 bundle into playable `pcm_s16le`**: the byte layout
+  is fully measured (see "Sound essence" above) but not implemented — doing
+  so needs the descriptor's channel count threaded into `read_packet` (or a
+  post-processing step keyed off `GenericSoundEssenceDescriptor`), which
+  today just returns each essence element's raw bytes uniformly regardless
+  of media type. This is bitstream/essence-format work, not container
+  framing (see the D14.1 note above); if it lands, `sound_parameters` should
+  gain a `CodecId::PcmS16le` claim for this class once the packet bytes
+  really are that.
 - **Multi-track `BodySID` support**: `demux::build_indices` and
   `MxfDemuxer::read_packet`'s track-number match are where a `DeltaEntryArray`-aware
   de-interleave would go; today every track binding just matches essence
@@ -285,7 +357,10 @@ crate leans on throughout), `vaco-packet` (`Packet`), `vaco-format-core`
 (`Demuxer`, `Stream`, `PacketIndex`, `DemuxerDesc`), `vaco-codec-core`
 (`CodecId`, `CodecParameters` — **not** a `vaco-parse-*` crate: D14.1 keeps
 this crate off the parser layer entirely, which is also why bitstream-level
-facts like true display-order timestamps are out of scope, see above).
+facts like true display-order timestamps, and D-10's AES3 sample unpacking,
+are out of scope, see above), `vaco-sampfmt` (`SampleFmt`, for
+`sound_parameters`), `vaco-chlayout` (`ChannelLayout::default_for`, for
+`sound_parameters`).
 
 ## Deferred work (see the closing report for the full, per-issue account)
 
@@ -307,13 +382,18 @@ facts like true display-order timestamps are out of scope, see above).
   own byte-range wrapping heuristic — wiring them in now also needs a
   different way to decide *when* a KLV is clip-wrapped in the first place
   (see "How to change it").
-- **Sound (audio) essence.** No `GenericSoundEssenceDescriptor`/
-  `WaveAudioDescriptor` mapping exists; a source package whose only track is
-  audio produces zero streams today.
-- **`MultipleDescriptor`.** Recognised by class byte (`0x44`) and skipped
-  rather than expanded into per-track sub-descriptors — a real, documented
-  shape for multi-essence-track OP1a files, just not one in this crate's
-  corpus.
+- **Sound (audio) essence: landed for metadata, partial for D-10 packet
+  bytes.** `AES3PCMDescriptor` (OP1a) is fully verified end to end —
+  metadata and packet bytes both. `GenericSoundEssenceDescriptor` (D-10)'s
+  metadata is fully verified; its packet bytes are a measured, fixed AES3
+  bundle this crate reports honestly but does not unpack (`codec_id: None`)
+  — see "Sound essence" above. `WaveAudioDescriptor` (`0x48`) remains
+  spec-derived and unexercised, no real fixture has produced it.
+- **`MultipleDescriptor`.** Landed: expanded per track via `SubDescriptorUIDs`/
+  `LinkedTrackId` (see "Sound essence" above), not skipped. A sub-descriptor
+  that is itself a further nested `MultipleDescriptor`, or a
+  `SubDescriptorUIDs` array pointing at more than two essence tracks, has
+  not been seen in a real fixture and is unexercised.
 - **True OP-Atom.** Supported as "one essence track per file"; discovering
   the sibling files a real multi-file OP-Atom edit is split across is not
   implemented.
