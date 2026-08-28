@@ -161,3 +161,17 @@ name = "ametadata"
 long_name = "Manipulate audio frame metadata"
 ctor = "vaco_filter_mm::metadata::audio::DESC"
 media = "audio"
+
+[[component]]
+kind = "filter"
+name = "loop"
+long_name = "Loop video frames"
+ctor = "vaco_filter_mm::looping::video::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "aloop"
+long_name = "Loop audio samples"
+ctor = "vaco_filter_mm::looping::audio::DESC"
+media = "audio"

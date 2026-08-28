@@ -7,6 +7,7 @@ use vaco_filter_graph::registry::{FilterRegistry, Instance, Instantiate};
 
 const NAMES: &[&str] = &[
     "acopy",
+    "aloop",
     "ametadata",
     "anull",
     "anullsink",
@@ -19,6 +20,7 @@ const NAMES: &[&str] = &[
     "color",
     "concat",
     "copy",
+    "loop",
     "metadata",
     "null",
     "nullsink",
@@ -42,6 +44,7 @@ impl FilterRegistry for MmRegistry {
     fn create(&self, req: &Instantiate<'_>) -> Result<Instance, String> {
         match req.name {
             "acopy" => crate::passthrough::acopy::create(req),
+            "aloop" => crate::looping::audio::create(req),
             "ametadata" => crate::metadata::audio::create(req),
             "anull" => crate::passthrough::anull::create(req),
             "anullsink" => crate::nullsink::audio::create(req),
@@ -54,6 +57,7 @@ impl FilterRegistry for MmRegistry {
             "color" => crate::color::create(req),
             "concat" => crate::concat::create(req),
             "copy" => crate::passthrough::copy::create(req),
+            "loop" => crate::looping::video::create(req),
             "metadata" => crate::metadata::video::create(req),
             "null" => crate::passthrough::null::create(req),
             "nullsink" => crate::nullsink::video::create(req),
