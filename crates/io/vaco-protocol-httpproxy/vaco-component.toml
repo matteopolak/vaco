@@ -1,0 +1,7 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+
+[[component]]
+kind      = "protocol"
+name      = "httpproxy"
+long_name = "HTTP CONNECT proxy tunnel"
+ctor      = "vaco_protocol_httpproxy::HTTPPROXY_PROTOCOL"

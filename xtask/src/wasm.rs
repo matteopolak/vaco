@@ -82,6 +82,18 @@ const NATIVE_ONLY: &[(&str, &str)] = &[
          through the host runtime's own duplex socket API, a different \
          transport behind the same seam, not a wasm build of this crate.",
     ),
+    (
+        "vaco-protocol-httpproxy",
+        "depends on vaco-protocol-socket for HostPort/addr::connect (the CONNECT \
+         handshake dials its own duplex TcpStream directly, exactly like \
+         vaco-protocol-tls, rather than through the registry's one-directional \
+         Protocol::open/create — see the crate docs), so it inherits the same \
+         socket2 wall vaco-protocol-socket's own NATIVE_ONLY entry documents \
+         (measured: cargo build --target wasm32-unknown-unknown on this crate \
+         fails inside socket2 itself with E0583 'file not found for module \
+         `sys`'). A wasm build reaches an HTTP proxy tunnel through the host \
+         runtime's own fetch/WebSocket machinery, not this crate.",
+    ),
 ];
 
 const TARGET: &str = "wasm32-unknown-unknown";
