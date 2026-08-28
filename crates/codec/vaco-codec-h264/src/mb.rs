@@ -1183,6 +1183,73 @@ fn decode_residual(
 // exactly as unlocalised as it was. This round's result is negative but
 // decisive: one specific, plausible engine-level explanation is now
 // closed off, and the search stays inside `vaco-codec-h264`'s own
+//
+// FOLLOW-UP round: hand-derived, from clauses 7.3.5 and 9.3, the complete
+// bin sequence macroblock_layer() actually calls for this exact
+// macroblock (mb_type = I_16x16_2_0_0: `Intra16x16PredMode` = 2 (DC),
+// `CodedBlockPatternLuma` = 0, `CodedBlockPatternChroma` = 0), and
+// compared it index by index against the instrumented trace:
+//
+//   #  | element                          | hand-derived | traced
+//   ---|----------------------------------|--------------|----------
+//   1  | mb_type bin0 (decode_decision)   | 1            | 1
+//   2  | mb_type bin1 (decode_terminate)  | 0            | 0
+//   3  | mb_type bin2 (ctxIdx 6)          | 0            | 0
+//   4  | mb_type bin3 (ctxIdx 7)          | 0            | 0
+//   5  | mb_type bin4 (ctxIdx 9)          | 1            | 1
+//   6  | mb_type bin5 (ctxIdx 10)         | 0            | 0
+//   7  | intra_chroma_pred_mode bin0      | 0            | 0
+//   8  | mb_qp_delta bin0                 | 0            | 0
+//   9  | Intra16x16 luma DC cbf (ctxIdx88)| 0            | 0
+//   10 | end_of_slice_flag (terminate)    | 1            | 1
+//
+// **They do not differ, at any index.** `CodedBlockPatternChroma` for this
+// macroblock is confirmed `0` (three independent ways: `mb_type`'s own
+// value decodes it directly, `first_slice_mb_cbp` reports it, and
+// libx264's log shows 0% chroma coded) -- clause 7.3.5.3.3 gates chroma
+// `coded_block_flag` on `CodedBlockPatternChroma != 0`, so no chroma flags
+// are due here, exactly the cheap dead end flagged as a possibility. This
+// rules out BOTH shapes of the "either a shorter bin sequence or a
+// skipped syntax element" hypothesis for THIS macroblock: nothing is
+// skipped that should run, and nothing extra runs, down to the individual
+// bin.
+//
+// Went one level deeper than comparing *which* bins ran: wrote a
+// from-scratch, independent Python simulation of the arithmetic engine
+// itself (not derived from or calling this crate's Rust in any way),
+// using only the three primary-text-verified tables
+// (`RANGE_TAB_LPS`/`TRANS_IDX_LPS`/`TRANS_IDX_MPS`), the clause 9.3.1.1
+// init formula, and the (m, n) values transcribed directly from Tables
+// 9-12/9-17/9-18 for exactly these ten operations' contexts (also
+// independently re-verified there: `INTRA_CHROMA_PRED_MODE`'s and
+// `QP_DELTA`'s table values, not previously checked against primary text
+// by number, both match Table 9-17 exactly). Run against this fixture's
+// own raw bytes, it reproduces this crate's trace bit-for-bit and
+// bin-for-bin: same values, same bit positions throughout, landing at the
+// same bitpos 69. Two independent implementations of the algorithm agree
+// completely.
+//
+// New data point, not yet explained: the "trailing non-zero bit past
+// where our decoder stops" signature is not specific to this trivial
+// fixture. The same qualitative pattern (all-zero remaining bits except a
+// lone `1` at a position past this decoder's own termination point)
+// appears on `cabac_cbp_oracle_noise.264` (rich, non-trivial content, a
+// completely different bit position and file length) and reproduces
+// identically when the same source frame is encoded directly with the
+// standalone `x264` CLI binary rather than through `ffmpeg`'s wrapped
+// `libx264` -- ruling out one encoder wrapper's own muxing quirks as the
+// explanation, without yet identifying what the real one is.
+//
+// Given two independently-implemented, primary-text-verified decoders
+// agree with each other and disagree with the raw-byte-based "everything
+// after termination must be zero" assumption, on both trivial and
+// non-trivial content, from two different encoder invocations -- the
+// next concrete step this investigation has not yet taken is building
+// ground truth from an actual trusted reference *decoder* (e.g.
+// instrumenting `ffmpeg`'s own H.264 decoder to print its internal bit
+// count at end_of_slice_flag) rather than continuing to infer the correct
+// termination point from tail-byte pattern-matching, which has now been
+// tried on this fixture from several angles without closing the gap.
 // macroblock layer rather than moving to the shared engine.
 use crate::cabac_mb_tables::{inits_by_col, inits_by_idc, inits_fixed};
 
