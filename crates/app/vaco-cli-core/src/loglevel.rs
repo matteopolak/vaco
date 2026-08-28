@@ -71,23 +71,20 @@ pub fn parse(spec: &str) -> Option<i32> {
     level
 }
 
-/// Whether argv asks for the banner to be printed.
+/// The effective log level argv asks for, defaulting to [`INFO`].
 ///
-/// `-hide_banner` suppresses it outright; so does any `-v`/`-loglevel` below
-/// [`INFO`]. Later occurrences win, matching the reference's last-wins
-/// handling of global options.
+/// Later occurrences win, matching the reference's last-wins handling of
+/// global options. An unparseable value leaves the level alone rather than
+/// failing here — the reference prints its informational output *before*
+/// rejecting the value, so behaving as though it were absent reproduces that
+/// without a rule of its own.
 #[must_use]
-pub fn wants_banner<S: AsRef<OsStr>>(argv: &[S]) -> bool {
+pub fn level<S: AsRef<OsStr>>(argv: &[S]) -> i32 {
     let mut level = INFO;
     let mut args = argv.iter();
     while let Some(arg) = args.next() {
         let arg = arg.as_ref();
-        if arg == OsStr::new("-hide_banner") {
-            return false;
-        }
         if arg == OsStr::new("-v") || arg == OsStr::new("-loglevel") {
-            // An unparseable value leaves the level alone, so the banner still
-            // prints — which is what the reference does before rejecting it.
             if let Some(spec) = args.next().and_then(|v| v.as_ref().to_str())
                 && let Some(parsed) = parse(spec)
             {
@@ -95,7 +92,35 @@ pub fn wants_banner<S: AsRef<OsStr>>(argv: &[S]) -> bool {
             }
         }
     }
-    level >= INFO
+    level
+}
+
+/// Whether argv asks for informational output — the banner, the `Stream
+/// mapping:` block, the per-output `muxing overhead` line.
+#[must_use]
+pub fn prints_info<S: AsRef<OsStr>>(argv: &[S]) -> bool {
+    level(argv) >= INFO
+}
+
+/// Whether argv asks for the banner to be printed.
+///
+/// Two independent conditions, and it is worth keeping them apart:
+/// `-hide_banner` suppresses the banner **only**, while a level below [`INFO`]
+/// suppresses every informational line. Measured, counting each in
+/// `ffmpeg … -c copy -f mpegts`'s stderr:
+///
+/// ```text
+///                banner   Stream mapping:   muxing overhead
+/// -hide_banner      no          yes               yes
+/// -v warning        no           no                no
+/// -v info          yes          yes               yes
+/// ```
+#[must_use]
+pub fn wants_banner<S: AsRef<OsStr>>(argv: &[S]) -> bool {
+    !argv
+        .iter()
+        .any(|a| a.as_ref() == OsStr::new("-hide_banner"))
+        && prints_info(argv)
 }
 
 #[cfg(test)]
@@ -152,6 +177,17 @@ mod tests {
         assert!(!wants_banner(&["-loglevel", "warning"]));
         assert!(wants_banner(&["-v", "error", "-v", "info"]));
         assert!(!wants_banner(&["-v", "info", "-v", "error"]));
+    }
+
+    #[test]
+    fn hide_banner_suppresses_the_banner_but_not_the_informational_output() {
+        // Measured: `ffmpeg -hide_banner … -f mpegts` still prints
+        // `Stream mapping:` and the `muxing overhead` line; `-v warning`
+        // suppresses all three.
+        assert!(!wants_banner(&["-hide_banner"]));
+        assert!(prints_info(&["-hide_banner"]));
+        assert!(!prints_info(&["-v", "warning"]));
+        assert!(prints_info(&["-v", "info"]));
     }
 
     #[test]

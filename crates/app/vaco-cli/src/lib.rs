@@ -179,14 +179,22 @@ where
 
     // `Stream mapping:` is the reference's own wording and layout, and it is
     // the most useful single line of evidence that selection agreed.
-    if !report.mapping.is_empty() {
-        let _ = writeln!(err, "Stream mapping:");
-        for line in &report.mapping {
+    //
+    // Both blocks are informational, so both follow the log level — and note
+    // that is a *different* condition from the banner's. Measured:
+    // `-hide_banner` drops the banner and keeps these; `-v warning` drops all
+    // three. We printed them at every level, so `vaco -v error … -f mpegts`
+    // wrote three lines to stderr where the reference writes none.
+    if vaco_cli_core::loglevel::prints_info(argv) {
+        if !report.mapping.is_empty() {
+            let _ = writeln!(err, "Stream mapping:");
+            for line in &report.mapping {
+                let _ = writeln!(err, "{line}");
+            }
+        }
+        for line in &report.summary {
             let _ = writeln!(err, "{line}");
         }
-    }
-    for line in &report.summary {
-        let _ = writeln!(err, "{line}");
     }
     Ok(ExitCode::OK)
 }

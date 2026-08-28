@@ -638,6 +638,22 @@ pub fn run_pipeline(
         let meta = resolve_mapped_metadata(out, &input_chapters, &input_metadata);
         spec.set_output_metadata(oref, meta)
             .map_err(|e| internal_from("the muxer refused metadata", &e))?;
+
+        // M6: the bitstream filters a muxer's `check_bitstream` asks for by
+        // name. Without this the stage runs against `NoBsfs` and errs on the
+        // first request, which is not a corner case — it is `-c copy` from an
+        // MP4 to anything Annex-B:
+        //
+        //     $ vaco -i in.mp4 -c copy -f mpegts out.ts
+        //     Error while filtering: unsupported: this muxer needs a bitstream
+        //     filter and no BsfProvider was supplied
+        //
+        // `vaco_registry::Bsfs` has existed since gap 8 closed and had no
+        // caller; `PipelineSpec::set_output_bsfs` had none either. Both halves
+        // were built and neither was connected, so MP4 -> TS and MP4 -> AVI
+        // remux failed outright while every unit test passed.
+        spec.set_output_bsfs(oref, Arc::new(vaco_registry::Bsfs))
+            .map_err(|e| internal_from("the muxer refused a bitstream filter", &e))?;
         sinks.push((out.sink.clone(), high_water));
         for (i, s) in out.streams.iter().enumerate() {
             let Some(input) = refs.get(s.source.file as usize).copied() else {
