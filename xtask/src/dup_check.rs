@@ -329,11 +329,11 @@ const DISTINCT: &[(&str, &str)] = &[
     (
         "TomlError",
         "vaco-conformance: its own from-scratch TOML reader's parse error \
-         (`src/toml.rs`, plan 13 \u00a71.5.1's manifest format). vaco-corpus: an \
+         (`src/toml.rs`, plan 13 §1.5.1's manifest format). vaco-corpus: an \
          independently written from-scratch TOML reader's parse error \
          (`src/toml_min.rs`) for `vaco-media.lock` and its own suite catalogue. \
-         Same *kind* of thing by construction \u2014 both are \"line + message\" \
-         errors for a bespoke TOML subset \u2014 but two separate crates, each \
+         Same *kind* of thing by construction — both are \"line + message\" \
+         errors for a bespoke TOML subset — but two separate crates, each \
          choosing not to depend on the other's parser rather than pull an \
          unrelated dependency graph (a filter/codec-heavy conformance harness \
          into a corpus-fetching tool, or vice versa). See either module's own \
@@ -343,10 +343,10 @@ const DISTINCT: &[(&str, &str)] = &[
     (
         "Value",
         "vaco-protocol-rtmp (`amf0::Value`): one decoded AMF0 value from RTMP's \
-         wire format (Number/Boolean/String/Object/\u2026), per the AMF0 spec. \
+         wire format (Number/Boolean/String/Object/…), per the AMF0 spec. \
          vaco-conformance (`toml::Value`): one parsed TOML scalar/array/table \
          from that crate's own bespoke reader. Pre-existing, previously \
-         unrecorded collision \u2014 recorded here rather than left to keep \
+         unrecorded collision — recorded here rather than left to keep \
          failing every agent's `dup-check` run.",
     ),
 ];
