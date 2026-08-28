@@ -132,95 +132,130 @@ impl<'a> BoolDecoder<'a> {
     }
 }
 
+/// The VP9-shaped boolean *encoder* — RFC 6386 §7.3's byte-buffered
+/// `bool_encoder`, reused directly rather than re-derived: that section
+/// states its algorithm is logically identical to the bit-at-a-time
+/// decoder VP9's own §9.2 specifies (both reduce to the same `value <
+/// split` comparison — see the doc on [`crate::vp9::BoolDecoder`] and this
+/// module's own tests for the cross-check that established that). Writing
+/// the mandatory leading marker bool (`write_bool(128, false)`) before any
+/// real payload is the caller's job — [`BoolDecoder::new`] consumes exactly
+/// one such bool as its own first read, per §9.2.1.
+///
+/// Carry propagation (`add_one_to_output`) is the standard technique for a
+/// binary range/arithmetic coder that buffers output bytes before they are
+/// certain: a later `write_bool` can still increment a byte already pushed
+/// to `output`, which is why every push walks backward through any trailing
+/// run of `0xFF` bytes (which would themselves overflow) until it finds one
+/// it can increment in place.
+#[derive(Debug, Clone)]
+pub struct BoolEncoder {
+    output: Vec<u8>,
+    range: u32,
+    bottom: u32,
+    bit_count: i32,
+}
+
+impl Default for BoolEncoder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BoolEncoder {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self { output: Vec::new(), range: 255, bottom: 0, bit_count: 24 }
+    }
+
+    fn add_one_to_output(&mut self) {
+        for byte in self.output.iter_mut().rev() {
+            if *byte == 255 {
+                *byte = 0;
+            } else {
+                *byte += 1;
+                return;
+            }
+        }
+    }
+
+    /// `write_bool(p, bit)`: the inverse of [`BoolDecoder::read_bool`] at
+    /// the same probability `p` (of the bit being `false`, matching that
+    /// method's own `prob` convention).
+    pub fn write_bool(&mut self, prob: u8, bit: bool) {
+        let split = 1 + (((self.range - 1) * u32::from(prob)) >> 8);
+        if bit {
+            self.bottom += split;
+            self.range -= split;
+        } else {
+            self.range = split;
+        }
+        while self.range < 128 {
+            self.range <<= 1;
+            if self.bottom & (1 << 31) != 0 {
+                self.add_one_to_output();
+            }
+            self.bottom <<= 1;
+            self.bit_count -= 1;
+            if self.bit_count == 0 {
+                self.output.push((self.bottom >> 24) as u8);
+                self.bottom &= (1 << 24) - 1;
+                self.bit_count = 8;
+            }
+        }
+    }
+
+    /// `write_literal(n, value)`, the inverse of [`BoolDecoder::read_literal`]:
+    /// `n` bools each at probability 128, MSB first.
+    pub fn write_literal(&mut self, num_bits: u32, value: u32) {
+        for i in (0..num_bits).rev() {
+            self.write_bool(128, (value >> i) & 1 != 0);
+        }
+    }
+
+    /// Walk `tree` to reach the leaf whose value is `value`, writing one
+    /// bool per interior node at `probs[node]` — the inverse of
+    /// [`BoolDecoder::read_tree`]. A `value` the tree cannot reach writes
+    /// nothing further once the search runs out of tree (mirrors
+    /// `read_tree`'s tolerance of a malformed table rather than panicking on
+    /// an encoder bug).
+    pub fn write_tree(&mut self, tree: &Tree, probs: &[u8], value: i32) {
+        crate::tree::write_tree(tree, value, |node, bit| {
+            let p = probs.get(node).copied().unwrap_or(128);
+            self.write_bool(p, bit);
+        });
+    }
+
+    /// `exit_bool()`, §9.2.3: flush every bit still buffered in `bottom`,
+    /// including any pending carry, and return the finished byte stream.
+    #[must_use]
+    pub fn finish(mut self) -> Vec<u8> {
+        let mut c = self.bit_count;
+        let mut v = self.bottom;
+        if v & (1 << (32 - c)) != 0 {
+            self.add_one_to_output();
+        }
+        v <<= c & 7;
+        c >>= 3;
+        for _ in 0..c {
+            v <<= 8;
+        }
+        for _ in 0..4 {
+            self.output.push((v >> 24) as u8);
+            v <<= 8;
+        }
+        self.output
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// RFC 6386 §7.3's byte-buffered `bool_encoder`, reused verbatim as this
-    /// module's test oracle too (not just `vp8`'s). That is sound, not
-    /// coincidental: §7.3 states the byte-buffered coder is logically
-    /// identical to the bit-at-a-time algorithm VP9's §9.2 states directly,
-    /// and the two decoders' comparisons reduce to the same test —
-    /// `value_16 >= split << 8` (VP8) is exactly `byte0 >= split` once the
-    /// second buffered byte is expanded algebraically (it only ever supplies
-    /// a non-negative tiebreaker below `split`'s own precision, which never
-    /// flips the comparison), which is exactly VP9's `value_8 < split ? 0 :
-    /// 1`. So encoding `write_bool(128, false)` (the required marker) ahead
-    /// of a real payload with this encoder, then handing the resulting bytes
-    /// to [`BoolDecoder::new`] (which consumes that same marker bool as its
-    /// first read), must decode the payload identically to how a VP8
-    /// decoder would have decoded calls 2.. of the same stream. This is
-    /// exactly the cross-check the crate doc promises: two engines that
-    /// would be wrong differently are being run against the same bytes.
-    struct BoolEncoder {
-        output: Vec<u8>,
-        range: u32,
-        bottom: u32,
-        bit_count: i32,
-    }
-
-    impl BoolEncoder {
-        fn new() -> Self {
-            Self {
-                output: Vec::new(),
-                range: 255,
-                bottom: 0,
-                bit_count: 24,
-            }
-        }
-
-        fn add_one_to_output(&mut self) {
-            for byte in self.output.iter_mut().rev() {
-                if *byte == 255 {
-                    *byte = 0;
-                } else {
-                    *byte += 1;
-                    return;
-                }
-            }
-        }
-
-        fn write_bool(&mut self, prob: u8, value: bool) {
-            let split = 1 + (((self.range - 1) * u32::from(prob)) >> 8);
-            if value {
-                self.bottom += split;
-                self.range -= split;
-            } else {
-                self.range = split;
-            }
-            while self.range < 128 {
-                self.range <<= 1;
-                if self.bottom & (1 << 31) != 0 {
-                    self.add_one_to_output();
-                }
-                self.bottom <<= 1;
-                self.bit_count -= 1;
-                if self.bit_count == 0 {
-                    self.output.push((self.bottom >> 24) as u8);
-                    self.bottom &= (1 << 24) - 1;
-                    self.bit_count = 8;
-                }
-            }
-        }
-
-        fn finish(mut self) -> Vec<u8> {
-            let mut c = self.bit_count;
-            let mut v = self.bottom;
-            if v & (1 << (32 - c)) != 0 {
-                self.add_one_to_output();
-            }
-            v <<= c & 7;
-            c >>= 3;
-            for _ in 0..c {
-                v <<= 8;
-            }
-            for _ in 0..4 {
-                self.output.push((v >> 24) as u8);
-                v <<= 8;
-            }
-            self.output
-        }
-    }
+    // `BoolEncoder` used below is now `super::BoolEncoder` (promoted out of
+    // this test module — it is no longer only a decoder cross-check,
+    // `vaco-codec-vp9`'s real encoder uses it too), brought in by the glob
+    // import above.
 
     #[test]
     fn init_reads_one_byte_and_a_zero_marker() {

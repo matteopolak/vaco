@@ -57,6 +57,6 @@ pub mod tree;
 pub mod vp8;
 pub mod vp9;
 
-pub use tree::{Tree, read_tree, read_tree_at};
+pub use tree::{Tree, read_tree, read_tree_at, write_tree, write_tree_at};
 pub use vp8::BoolDecoder as Vp8BoolDecoder;
-pub use vp9::BoolDecoder as Vp9BoolDecoder;
+pub use vp9::{BoolDecoder as Vp9BoolDecoder, BoolEncoder as Vp9BoolEncoder};
