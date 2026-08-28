@@ -230,9 +230,9 @@ contract):
 | `m2_oddsize` | 48x64 | MPEG-2, I+P+B | 1.0 | 2 | 0.14 |
 | `m2_qcif_ipb` | 176x144 | MPEG-2, I+P+B | 1.8 | 2 | 0.11 |
 | `m2_cif_ipb` | 352x288 | MPEG-2, I+P+B | 1.4 | 2 | 0.08 |
-| `m1_i` | 64x48 | MPEG-1, I only | 9.0 (was 12.9) | 9 (was 21) | 0.96 (was 2.25) |
-| `m1_ip` | 64x48 | MPEG-1, I+P | 44.2 (was 44.8) | 97 (unchanged) | 6.37 (was 6.85) |
-| `m1_ipb` | 64x48 | MPEG-1, I+P+B | 44.2 (unchanged) | 97 (unchanged) | 6.38 (was 6.60) |
+| `m1_i` | 64x48 | MPEG-1, I only | 1.96 (was 9.0) | 2 (was 9) | 0.19 (was 0.96) |
+| `m1_ip` | 64x48 | MPEG-1, I+P | 1.88 (was 44.2) | 2 (was 97) | 0.15 (was 6.37) |
+| `m1_ipb` | 64x48 | MPEG-1, I+P+B | 1.84 (was 44.2) | 2 (was 97) | 0.13 (was 6.38) |
 | `m2_422` | 176x144 | MPEG-2, 4:2:2, I+P (`-pix_fmt yuv422p`) | 1.9 | 2 | 0.11 |
 | `m2_422_ipb` | 176x144 | MPEG-2, 4:2:2, I+P+B | 1.6 | 2 | 0.10 |
 | `m2_altscan` | 176x144 | MPEG-2, 4:2:0, `alternate_scan=1`, I+P | 1.9 | 2 | 0.11 |
@@ -529,12 +529,46 @@ without that access would repeat a pattern this investigation has already
 paid for more than once. Recorded as the handoff point rather than acted
 on. Not chased further this round, including `m1_i`'s own max-9 thread.
 
+**A further round found the layout is not, in fact, unrecoverable without
+the text: D6 permits deriving behaviour by black-box measurement, and a
+byte-layout choice among a handful of concrete readings is a far better
+target for it than the IDCT's unbounded rounding schedule was.** Built a
+real, `ffmpeg`-encoded, `ffmpeg`-validated 16x16 MPEG-1 I-frame, patched
+its one luma block's escape field to sweep the negative sentinel's
+follow-up byte across the full 0-255 range (86 constructed streams, step
+3), decoded each with real `ffmpeg`, and independently re-derived each
+resulting pixel block from a textbook dequantise+IDCT given two candidate
+levels. The shipped formula (`level = -follow_up_byte`) matched `ffmpeg`
+only at the one point the two readings coincide (`follow_up_byte == 128`)
+and diverged everywhere else, growing to a full-range (128) difference at
+the low end — the same direction and rough scale as the gap this
+investigation traced to this exact sentinel. `level = follow_up_byte -
+256` (an extended two's-complement reading) matched `ffmpeg` at all 86
+points, worst observed difference 1 — the same small ceiling every other
+correctly-decoded case in this crate measures against. The positive
+sentinel and the bare (non-sentinel) escape byte were swept too and
+needed no change. Fixed (`5877247`), cited `blackbox` rather than
+`iso-11172-2`, which this project does not hold and will not cite.
+
+**Effect, measured directly:** `m1_i` max abs diff 9 → 2, `m1_ip` 97 → 2,
+`m1_ipb` 97 → 2 — landing MPEG-1 on the exact same small ceiling every
+MPEG-2 fixture already sits at (the measured, permanent IDCT-mismatch
+ceiling this crate's own `TECH-DEBT.md` documents, not a new source of
+error). This also answers the "are `m1_i`'s max-9 and the P-picture
+outlier one mechanism or two" question raised alongside the pairing
+technique: they were one mechanism the whole time, both intra defects,
+both this same sentinel. Confirmed byte-identical, unaffected output on
+every MPEG-2 fixture on hand (the `mpeg1`-gated branch this touches is
+provably unreachable for `mpeg1 == false`; verified directly via a
+pre-fix/post-fix binary comparison, not assumed from the gating alone).
+
 **This means T2-01a's own "framemd5-identical to reference" acceptance bar
 is not met for either format**, so no issue claiming it is closed by this
 work — but MPEG-2 decode is now correct in every way this session's
-differential testing can measure short of that literal bit-exactness bar.
+differential testing can measure short of that literal bit-exactness bar,
+and the round documented just above brings MPEG-1 to the identical state.
 
-### #356 closed on a replacement bar; #355 stays open — the split, and why
+### #356 closed on a replacement bar; #355's own reason for staying open — and its later resolution
 
 A later round proved (`planning/TECH-DEBT.md`'s two IDCT entries) that the
 "framemd5-identical" bar above is not just unmet but **permanently
@@ -580,41 +614,47 @@ used for their own unreachable byte-identity criterion:
 
 Every part of that bar is met, so #356 is closed on it.
 
-**#355 (T2-01a) stays open, because the ceiling only accounts for part of
-its own gap.** #355's scope covers both formats, and the two do not carry
-the same evidence:
+**#355 (T2-01a) was kept open, through many rounds, specifically because
+the IDCT ceiling only accounted for part of its own gap** — this section
+is left in place, unedited, as the record of that reasoning while it was
+true; what follows is what changed.
 
 - The **MPEG-2 portion** of #355's own corpus sits in the exact same
   reference-quality band as #356's (avg MAD 1.0-1.8, max MAD 2 across
   every MPEG-2 fixture — `m2_i`/`m2_ip`/`m2_ipb`/`m2_ilme`/`m2_oddsize`/
-  `m2_qcif_ipb`/`m2_cif_ipb`). That part of #355's gap is fully explained
-  by the same measured, permanent IDCT ceiling #356 closes on.
-- The **MPEG-1 portion is not.** A later round found and fixed a real,
-  separate MPEG-1-specific defect (the IDCT mismatch-control rule was
-  implemented as MPEG-2's, not MPEG-1's own — see "MPEG-1 remains
-  genuinely wrong" above), which closed most of the intra-only gap
-  (`m1_i`: max MAD 21 → 9) but left `m1_ip`/`m1_ipb`'s P-picture max MAD
-  at **97, completely unchanged**. That number is ten to fifty times
-  larger than anything the IDCT ceiling produces anywhere it has been
-  measured, on MPEG-2 or MPEG-1 content alike. A rounding-schedule
-  mismatch bounded to a few pixel-units per block, even compounded across
-  a full P-chain, does not reach a max deviation of 97 out of 255 — every
-  long MPEG-2 P-chain fixture in this corpus (`m2_qcif_ipb`, `m2_cif_ipb`,
-  25 frames each) plateaus at max MAD 2 despite being longer than any
-  MPEG-1 fixture measured. This gap has had six investigation rounds
-  (`TECH-DEBT.md`) without a root cause for the P-picture outlier
-  specifically, and the IDCT ceiling does not retroactively explain it —
-  it explains a different, much smaller gap that happens to share the
-  same two issues.
+  `m2_qcif_ipb`/`m2_cif_ipb`). That part of #355's gap has been fully
+  explained by the same measured, permanent IDCT ceiling #356 closes on
+  since early in this investigation.
+- The **MPEG-1 portion was not, for a long stretch of this investigation
+  — but now is.** A middle round found and fixed the IDCT
+  mismatch-control rule (implemented as MPEG-2's, not MPEG-1's own — see
+  "MPEG-1 remains genuinely wrong" above), closing most of the
+  intra-only gap (`m1_i`: max MAD 21 → 9) but leaving `m1_ip`/`m1_ipb`'s
+  P-picture max MAD at 97, unchanged. A long correlation-and-elimination
+  chase (motion vector magnitude and parity, a controlled same-macroblock
+  pair decoded on both sides of a defect, four independently-reproduced
+  sub-blocks) traced that 97 to a single cause: MPEG-1's escape-level
+  22-bit sentinel sub-case's negative-magnitude formula, measured against
+  a real decoder to be `level = -follow_up_byte` where it needed to be
+  `level = follow_up_byte - 256` (the black-box measurement and fix are
+  recorded above, in the paragraph following the controlled-pair
+  localisation). Fixed. `m1_i`'s own separate max-9 residual turned out
+  to be the identical mechanism, not a second one — both were this same
+  sentinel, landing differently on intra-only versus P-chain content.
+  Post-fix: `m1_i`/`m1_ip`/`m1_ipb` all measure max MAD 2, the identical
+  ceiling every MPEG-2 fixture already sits at.
 
-**"The IDCT explains some of #355's gap" is not "the IDCT explains all of
-it,"** and closing #355 on the same replacement bar #356 uses would
-misrepresent the second, larger, still-unexplained MPEG-1 defect as
-covered when it isn't. #355 stays open specifically and only for that
-MPEG-1 gap; the MPEG-2 half of its own scope is settled. Epic #36 does
-not close on this pair either way — #357 (MPEG-1/2 encode) is a real,
-untouched gap, not a ceiling, and nothing about closing #356 or partially
-resolving #355's attribution touches it.
+**Both formats now carry the same evidence #356 closed on.** This
+document does not close #355 on that basis — closing an issue is a
+judgement call for whoever is tracking it against the fuller epic
+picture (as #356's own closure was, a dedicated round on its own), not
+something to declare unilaterally in the same commit as the fix. What
+this section records is that the specific, named reason #355 stayed open
+through every prior round — an unexplained, uncharacterized MPEG-1-only
+defect an order of magnitude larger than the IDCT ceiling — no longer
+holds. Epic #36 does not close on this pair either way — #357 (MPEG-1/2
+encode) is a real, untouched gap, not a ceiling, and nothing about this
+fix touches it.
 
 ## How to change it
 
