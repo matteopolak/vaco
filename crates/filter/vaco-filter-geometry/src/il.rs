@@ -75,14 +75,59 @@ impl Mode {
     }
 }
 
+/// `ffmpeg -h filter=il`'s own named constants for `luma_mode`/
+/// `chroma_mode`/`alpha_mode` -- two names per non-zero value
+/// (`interleave`/`i`, `deinterleave`/`d`), which is why this is a
+/// hand-written `consts` list on a plain `i32` field rather than
+/// `#[derive(OptEnum)]` (that derive emits exactly one name per variant).
+/// A real command line using either spelling used to fail to parse
+/// against this crate outright.
+const IL_MODE_CONSTS: &[vaco_opts::ConstDesc] = &[
+    vaco_opts::ConstDesc {
+        name: "none",
+        help: "",
+        unit: "il_mode",
+        value: vaco_opts::ConstValue::Int(0),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "interleave",
+        help: "",
+        unit: "il_mode",
+        value: vaco_opts::ConstValue::Int(1),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "i",
+        help: "",
+        unit: "il_mode",
+        value: vaco_opts::ConstValue::Int(1),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "deinterleave",
+        help: "",
+        unit: "il_mode",
+        value: vaco_opts::ConstValue::Int(2),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "d",
+        help: "",
+        unit: "il_mode",
+        value: vaco_opts::ConstValue::Int(2),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+];
+
 #[derive(Debug, Clone, vaco_opts::Options)]
 #[options(name = "il", help = "Deinterleave or interleave fields")]
 pub(crate) struct Opts {
-    #[opt(name = "luma_mode", alias = "l", help = "select luma mode", default = 0, range = 0..=2, flags(video, filtering))]
+    #[opt(name = "luma_mode", alias = "l", help = "select luma mode", unit = "il_mode", consts = IL_MODE_CONSTS, default = 0, range = 0..=2, flags(video, filtering))]
     pub luma_mode: i32,
-    #[opt(name = "chroma_mode", alias = "c", help = "select chroma mode", default = 0, range = 0..=2, flags(video, filtering))]
+    #[opt(name = "chroma_mode", alias = "c", help = "select chroma mode", unit = "il_mode", consts = IL_MODE_CONSTS, default = 0, range = 0..=2, flags(video, filtering))]
     pub chroma_mode: i32,
-    #[opt(name = "alpha_mode", alias = "a", help = "select alpha mode", default = 0, range = 0..=2, flags(video, filtering))]
+    #[opt(name = "alpha_mode", alias = "a", help = "select alpha mode", unit = "il_mode", consts = IL_MODE_CONSTS, default = 0, range = 0..=2, flags(video, filtering))]
     pub alpha_mode: i32,
     #[opt(
         name = "luma_swap",
@@ -262,6 +307,24 @@ mod tests {
     fn none_mode_is_the_identity() {
         for y in 0..6 {
             assert_eq!(perm(Mode::None, false, 6, y), y);
+        }
+    }
+
+    /// Pinned against the reference's own named spelling
+    /// (`ffmpeg -h filter=il`): both names for the non-zero values
+    /// (`interleave`/`i`, `deinterleave`/`d`) must parse, not just the
+    /// bare integers.
+    #[test]
+    fn named_mode_values_parse() {
+        for (name, expected) in [
+            ("none", 0),
+            ("interleave", 1),
+            ("i", 1),
+            ("deinterleave", 2),
+            ("d", 2),
+        ] {
+            let opts = Opts::parse(Some(&format!("luma_mode={name}"))).unwrap();
+            assert_eq!(opts.luma_mode, expected, "luma_mode={name}");
         }
     }
 }

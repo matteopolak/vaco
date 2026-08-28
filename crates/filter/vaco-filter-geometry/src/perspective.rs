@@ -78,13 +78,69 @@ pub(crate) struct Opts {
     pub x3: String,
     #[opt(name = "y3", help = "set bottom right y coordinate", default = "H".to_owned(), flags(video, filtering))]
     pub y3: String,
-    #[opt(name = "interpolation", help = "set interpolation", default = 0, range = 0..=1, flags(video, filtering))]
+    #[opt(name = "interpolation", help = "set interpolation", unit = "interp", consts = PERSPECTIVE_INTERP_CONSTS, default = 0, range = 0..=1, flags(video, filtering))]
     pub interpolation: i32,
-    #[opt(name = "sense", help = "specify the sense of the coordinates", default = 0, range = 0..=1, flags(video, filtering))]
+    #[opt(name = "sense", help = "specify the sense of the coordinates", unit = "sense", consts = PERSPECTIVE_SENSE_CONSTS, default = 0, range = 0..=1, flags(video, filtering))]
     pub sense: i32,
-    #[opt(name = "eval", help = "specify when to evaluate expressions", default = 0, range = 0..=1, flags(video, filtering))]
+    #[opt(name = "eval", help = "specify when to evaluate expressions", unit = "eval_mode", consts = PERSPECTIVE_EVAL_CONSTS, default = 0, range = 0..=1, flags(video, filtering))]
     pub eval: i32,
 }
+
+/// `ffmpeg -h filter=perspective`'s own named constants, confirmed
+/// directly. Plain hand-written `ConstDesc` lists on the existing `i32`
+/// fields (not `#[derive(OptEnum)]`) so `opts.sense == 1`-style
+/// comparisons at the call sites below need no change -- only parsing
+/// gains the reference's named spelling, which used to fail outright.
+const PERSPECTIVE_INTERP_CONSTS: &[vaco_opts::ConstDesc] = &[
+    vaco_opts::ConstDesc {
+        name: "linear",
+        help: "",
+        unit: "interp",
+        value: vaco_opts::ConstValue::Int(0),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "cubic",
+        help: "",
+        unit: "interp",
+        value: vaco_opts::ConstValue::Int(1),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+];
+
+const PERSPECTIVE_SENSE_CONSTS: &[vaco_opts::ConstDesc] = &[
+    vaco_opts::ConstDesc {
+        name: "source",
+        help: "",
+        unit: "sense",
+        value: vaco_opts::ConstValue::Int(0),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "destination",
+        help: "",
+        unit: "sense",
+        value: vaco_opts::ConstValue::Int(1),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+];
+
+const PERSPECTIVE_EVAL_CONSTS: &[vaco_opts::ConstDesc] = &[
+    vaco_opts::ConstDesc {
+        name: "init",
+        help: "",
+        unit: "eval_mode",
+        value: vaco_opts::ConstValue::Int(0),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "frame",
+        help: "",
+        unit: "eval_mode",
+        value: vaco_opts::ConstValue::Int(1),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+];
 
 impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
@@ -290,5 +346,18 @@ mod tests {
         let (x, y) = hom.apply(1.0, 1.0);
         assert!((x - 1.0).abs() < 1e-9);
         assert!((y - 1.0).abs() < 1e-9);
+    }
+
+    /// Pinned against the reference's own named spelling
+    /// (`ffmpeg -h filter=perspective`): the named form of each of the
+    /// three enumerated options must parse, not just the bare integer.
+    #[test]
+    fn named_option_values_parse() {
+        let opts = Opts::parse(Some("interpolation=cubic")).unwrap();
+        assert_eq!(opts.interpolation, 1);
+        let opts = Opts::parse(Some("sense=destination")).unwrap();
+        assert_eq!(opts.sense, 1);
+        let opts = Opts::parse(Some("eval=frame")).unwrap();
+        assert_eq!(opts.eval, 1);
     }
 }
