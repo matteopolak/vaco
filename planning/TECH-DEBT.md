@@ -468,3 +468,80 @@ internally and match the one directly-reported repro in #651. If a future
 agent re-measures this table and gets a different answer through the raw PCM
 demuxer specifically, this discrepancy is why — check which input path
 produced the disagreement before trusting either result over the other.
+
+### Progressive JPEG AC successive-approximation refinement disagrees with the reference on some multi-block images
+
+Found implementing `vaco-codec-jpeg` (epic #27 / plan 15 §4A.4, issue #296).
+`decode.rs`'s `ac_refine` implements Annex G.1.2.3's correction-bit sweep
+(skip zero-history coefficients while counting toward a run, apply a free
+correction to any nonzero coefficient encountered along the way, place the
+new coefficient with its sign bit once the run is exhausted). Verified
+correct by hand-trace against a from-scratch reference for a single 8x8
+block, including the specific split-band scan pattern this bug needs
+(`Ss=1-5` then `Ss=6-63` as separate first scans, refined later by one
+`Ss=1-63` scan) — and against a from-scratch, independently-written Python
+port of `ac_first` alone, which matched this crate's `ac_first` bit-for-bit
+across every real block tested.
+
+Across a multi-block image (a synthetic 64x16 or 64x48 grayscale JPEG built
+with the same scan pattern), the same code diverges from `ffmpeg`'s decode
+starting around the 4th-8th block, by up to max-abs-deviation ~45 / RMS 3-8.
+The trigger is content-dependent, not a clean width threshold: 32/40/56px
+wide test images decoded correctly end to end; 48/64px wide did not. A
+second, full-pipeline Python reference port (including `ac_refine`, not just
+`ac_first`) was built to try to triangulate the bug, but it disagreed with
+this crate's Rust even on blocks the Rust output verified correct against
+`ffmpeg` — so that port has its own bug and was not useful evidence either
+way, and is not included in the crate.
+
+This was not root-caused in the time available. Ruled out: `ac_first`
+(independently verified correct), the Huffman table construction for the
+specific non-standard DHT used in the failing test image (verified by hand),
+and the mechanical execution of `ac_refine`'s skip/correct/place logic
+relative to Annex G.1.2.3 as understood from a single-block trace (the
+specific failing block in the 64x16 test was hand-traced bit-by-bit and
+executes exactly as designed, yet the aggregate multi-scan image result still
+disagrees with the reference). Not ruled out: a subtlety in how `eobrun`
+carries from one scan to the next across many blocks that a single-block or
+short 8-block-no-refinement test never exercises, or a genuine gap in this
+implementation's understanding of Annex G.1.2.3 for some multi-block edge
+case.
+
+**Not gated** — `tests/roundtrip.rs` only exercises this crate's own encoder
+against its own decoder, and the encoder does not emit progressive streams,
+so this class of bug has no regression test in the crate today (the encoder
+gap is itself listed as a separate row below). The fix needs either a
+verified-correct third-party progressive decoder to differentially trace
+against (only `ffmpeg`'s compiled binary was available here, which is enough
+to detect the divergence but not to single-step alongside it), or a fresh,
+careful re-derivation of Annex G.1.2.3 by someone not anchored to this
+session's mental model of it. Baseline decode (`SOF0`/`SOF1`, any scan with
+`Ah=Al=0` and a single `Ss=0,Se=63` scan) does not use `ac_refine` at all and
+is unaffected — measured essentially bit-exact against `ffmpeg` (max-abs-
+deviation 1, i.e. IDCT floating-point rounding) across the full
+subsampling/restart-interval/optimized-Huffman matrix tested.
+
+### `vaco-codec-jpeg` has no `vaco-codec-vlc` to build its Huffman/entropy layer on
+
+D-01 names a shared VLC/entropy-coding crate as the intended home for this
+kind of canonical-Huffman-table-plus-bitstream logic, but no such crate
+exists yet in this tree. `bits.rs` (the byte-stuffing-aware entropy
+reader/writer) and `huffman.rs` (Annex F.2.2.3 canonical table construction)
+were built directly inside `vaco-codec-jpeg` instead. Both are written
+generically enough (no JPEG-specific assumptions beyond the byte-stuffing
+convention itself, which is genuinely JPEG's own) that they would lift
+cleanly into a shared crate if one appears — MJPEG/JFIF-family formats are
+the most likely other consumer.
+
+### `vaco-codec-jpeg`'s encoder has no progressive mode and does not build optimized Huffman tables
+
+`encode.rs` always emits a single baseline (`SOF0`) scan and the Annex
+K.3-K.6 default Huffman tables, never per-image-optimized ones. Both are
+correctness-neutral (the output is a valid, conformant JPEG either way) but
+cost compression ratio against a reference encoder at the same quality
+setting. Neither was implemented because issue #297's acceptance bar was
+"encoder output re-decodes within a quality bound", which the current
+encoder meets; extending it to progressive output would also need the
+`ac_refine`-side bug above resolved first, since a progressive encoder is
+only useful if this crate's own progressive decoder can be trusted to check
+it against.
