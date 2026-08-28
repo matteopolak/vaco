@@ -123,6 +123,15 @@ syn        = { version = "2", features = ["full", "extra-traits"] }
 quote      = "1"
 proc-macro2 = "1"
 
+# --- image codec backends (D11): each reachable from exactly one
+#     vaco-codec-* crate, enforced by `cargo xtask owner-gate`.
+png         = "0.18"
+gif         = "0.14"
+tiff        = "0.11"
+exr         = "1.74"
+jxl-oxide   = "0.12"
+image-webp  = "0.2"
+
 # --- dev-dependencies
 #
 # rustfft is a DEV-dependency only: a float FFT oracle for vaco-tx above n~1024,

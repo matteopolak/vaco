@@ -353,6 +353,19 @@ pub enum CodecId {
     Vnull,
     /// `anull`, `vnull`'s audio counterpart.
     Anull,
+
+    // ------------------------------------------- C-11/C-12 (#289/#290)
+    //
+    // OpenEXR and JPEG XL each need a `CodecId` of their own: neither had a
+    // variant, unlike PNG/GIF/TIFF/WebP which already did. Names and long
+    // names measured from `ffmpeg -codecs`, 8.1: `exr`/"OpenEXR image" and
+    // `jpegxl`/"JPEG XL". `jpegxl_anim` (the reference's separate animated
+    // variant) is not modelled as its own `CodecId` — same rationale as
+    // `Png` covering APNG — because `vaco-codec-jpegxl` is decode-only via
+    // `jxl-oxide` and animation is a frame-count property of one decode, not
+    // a distinct bitstream identity the way `AacLatm` is.
+    Exr,
+    JpegXl,
 }
 
 /// One row of the codec identity table.
@@ -1433,6 +1446,28 @@ const CODECS: &[CodecEntry] = &[
         "Null audio codec",
         A,
         CodecProperties::empty(),
+    ),
+    // Measured `ffmpeg -codecs`, 8.1 (`LC_ALL=C`): `DEVILS exr` and
+    // `..VILS jpegxl` — the props column (intra/lossy/lossless) is a codec
+    // property independent of which decoders/encoders a given build links,
+    // unlike the D/E letters this local build shows for `jpegxl`.
+    entry(
+        CodecId::Exr,
+        "exr",
+        "OpenEXR image",
+        V,
+        CodecProperties::LOSSY
+            .union(CodecProperties::LOSSLESS)
+            .union(CodecProperties::INTRA_ONLY),
+    ),
+    entry(
+        CodecId::JpegXl,
+        "jpegxl",
+        "JPEG XL",
+        V,
+        CodecProperties::LOSSY
+            .union(CodecProperties::LOSSLESS)
+            .union(CodecProperties::INTRA_ONLY),
     ),
 ];
 
