@@ -30,6 +30,7 @@
 
 use vaco_core::{MediaType, Rational, Result};
 use vaco_frame::Frame;
+use vaco_limits::Limits;
 use vaco_packet::Packet;
 
 pub mod caps;
@@ -1462,7 +1463,16 @@ pub trait BitstreamFilter: Send {
 /// Static description of a codec implementation.
 ///
 /// The registry stores descriptors and constructs implementations on demand, so
-/// `-h decoder=h264` can print capabilities without instantiating anything.
+/// `-h decoder=h264` can print capabilities without instantiating anything —
+/// `make` is a `fn` pointer rather than a boxed factory for exactly the reason
+/// [`ParserDesc::make`] is (see that field's docs): a `const` descriptor
+/// holding a function pointer is inspectable without allocating, and `Box::new`
+/// is not a `const` operation.
+///
+/// This carried no `make` field for a while, which meant a registered
+/// `DecoderDesc` proved `vaco_registry::can_decode` true and nothing more —
+/// there was no path from a registry lookup to a live [`Decoder`]. `vaco-cli`
+/// is the caller this field exists for.
 #[derive(Debug, Clone, Copy)]
 pub struct DecoderDesc {
     pub name: &'static str,
@@ -1473,6 +1483,11 @@ pub struct DecoderDesc {
     /// Frame rates, sample rates or pixel formats the implementation accepts;
     /// empty means unconstrained.
     pub supported_rates: &'static [Rational],
+    /// Build one, bounded by `limits` — the decode-side dimensions/sample
+    /// counts a demuxer's own bitstream states are attacker-controlled the
+    /// same way a parser's are, so there is no `Default`-limits constructor
+    /// here either; every caller states the budget.
+    pub make: fn(Limits) -> Box<dyn Decoder>,
 }
 
 impl DecoderDesc {
@@ -1492,5 +1507,51 @@ impl DecoderDesc {
     #[must_use]
     pub fn supports_rate(&self, rate: Rational) -> bool {
         self.supported_rates.is_empty() || self.supported_rates.contains(&rate)
+    }
+
+    /// Build an instance bounded by `limits`.
+    #[must_use]
+    pub fn build(&self, limits: Limits) -> Box<dyn Decoder> {
+        (self.make)(limits)
+    }
+}
+
+/// Static description of an encoder implementation. Mirrors [`DecoderDesc`]
+/// exactly, field for field — see that type's docs for why `make` is a `fn`
+/// pointer and why it takes [`Limits`].
+///
+/// This type did not exist at all before it did. `vaco-registry`'s `encoder`
+/// fragment kind had a name and a metadata row, and nothing else — no way to
+/// *mean* anything by registering one, only a resolution check that the
+/// named `ctor` compiled. This is the type that check was waiting for.
+#[derive(Debug, Clone, Copy)]
+pub struct EncoderDesc {
+    pub name: &'static str,
+    pub long_name: &'static str,
+    pub id: CodecId,
+    pub media_type: MediaType,
+    pub caps: Caps,
+    pub supported_rates: &'static [Rational],
+    pub make: fn(Limits) -> Box<dyn Encoder>,
+}
+
+impl EncoderDesc {
+    /// Whether this implementation may appear in a default build.
+    #[must_use]
+    pub const fn is_default_build_safe(&self) -> bool {
+        !self.caps.contains(Caps::PATENT_ENCUMBERED)
+    }
+
+    /// Whether the implementation supports a given rate, treating an empty
+    /// table as "unconstrained".
+    #[must_use]
+    pub fn supports_rate(&self, rate: Rational) -> bool {
+        self.supported_rates.is_empty() || self.supported_rates.contains(&rate)
+    }
+
+    /// Build an instance bounded by `limits`.
+    #[must_use]
+    pub fn build(&self, limits: Limits) -> Box<dyn Encoder> {
+        (self.make)(limits)
     }
 }

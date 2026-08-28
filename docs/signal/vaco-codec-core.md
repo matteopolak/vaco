@@ -451,6 +451,25 @@ it on the compiled artefact rather than on intent:
 `DecoderDesc::is_default_build_safe()` is the predicate CI evaluates over every
 descriptor the registry exposes.
 
+### `DecoderDesc`/`EncoderDesc::make`, and why `EncoderDesc` exists at all
+
+C-13: `DecoderDesc` used to carry no constructor, so a registered decoder made
+`vaco_registry::can_decode` true and nothing more — there was no path from a
+name to a live `Decoder`. `make: fn(Limits) -> Box<dyn Decoder>` is that path,
+mirroring `ParserDesc::make` exactly (a `fn` pointer, not a boxed factory, so
+`-h decoder=<name>` stays inspectable without allocating; `Limits` bounds the
+decode side the way it bounds parsing, since a codec's own dimensions/sample
+counts are attacker-controlled). `EncoderDesc` is the same shape and did not
+exist before C-13 at all — `vaco-registry`'s `encoder` fragment kind had a
+name and a metadata row and nothing else, because there was no descriptor
+type for a `ctor` to name.
+
+A payload-carrying `CodecId::Ext(&'static ExtCodec)` was drafted as the
+policy for registering a new codec without a `vaco-codec-core` edit per one,
+and rejected: at least one call site (`vaco-bsf-generic`'s noise generator)
+casts `CodecId as u64`, which Rust only allows when every variant is
+fieldless. See `planning/TECH-DEBT.md`'s C-13 entry for what replaced it.
+
 ### `CodecId::ticks_per_frame` — measured, not one per property table
 
 `params.video.frame_rate` (set by a codec's own parser, e.g.

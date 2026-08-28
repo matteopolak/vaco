@@ -11,11 +11,17 @@ use vaco_codec_core::params::{
     AudioParameters, LevelConstraints, LevelEntry, LevelQuery, ProfileEntry, VideoParameters,
 };
 use vaco_codec_core::{
-    Caps, CodecId, CodecParameters, CodecProperties, DecoderDesc, Level, LevelTable, Profile,
-    ProfileTable, Threading,
+    Caps, CodecId, CodecParameters, CodecProperties, Decoder, DecoderDesc, Level, LevelTable,
+    Profile, ProfileTable, Threading,
 };
 use vaco_core::{MediaType, Rational};
 use vaco_limits::{Budget, Limits};
+
+/// Never called: [`DecoderDesc::make`] just needs a valid function pointer for
+/// these descriptors to exist, not a working decoder.
+fn unbuilt_decoder(_: Limits) -> Box<dyn Decoder> {
+    panic!("test descriptor; not meant to be built")
+}
 
 #[test]
 fn codec_identity_round_trips_through_its_name() {
@@ -167,6 +173,7 @@ fn the_patent_flag_is_what_ci_asserts_on() {
         media_type: MediaType::Video,
         caps: Caps::DELAY,
         supported_rates: &[],
+        make: unbuilt_decoder,
     };
     const ENCUMBERED: DecoderDesc = DecoderDesc {
         name: "aac",
@@ -175,6 +182,7 @@ fn the_patent_flag_is_what_ci_asserts_on() {
         media_type: MediaType::Audio,
         caps: Caps::PATENT_ENCUMBERED,
         supported_rates: &[],
+        make: unbuilt_decoder,
     };
     assert!(SAFE.is_default_build_safe());
     assert!(!ENCUMBERED.is_default_build_safe());
