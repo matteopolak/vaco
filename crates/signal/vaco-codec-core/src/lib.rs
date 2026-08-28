@@ -62,6 +62,13 @@ pub use threading::{
 };
 
 /// Identifies a codec independently of who implements it.
+///
+/// Every variant is a unit variant, deliberately: at least one call site
+/// (`vaco-bsf-generic`'s noise generator) casts a `CodecId` `as u64` for a
+/// hash seed, and Rust only allows that cast when *every* variant of the enum
+/// is fieldless. A payload-carrying escape hatch (`CodecId::Ext(&'static
+/// ExtCodec)`, so a leaf crate could mint its own identity without a variant
+/// here) was drafted and rejected for exactly this reason.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[non_exhaustive]
 pub enum CodecId {
@@ -250,6 +257,32 @@ pub enum CodecId {
     Dvvideo,
     Cljr,
     G728,
+
+    // ------------------------------------------------- leaf image codecs
+    //
+    // QOI, the PNM family, and the simple-image repertoire (PCX/TGA/SGI/
+    // XWD/XBM — BMP already had a variant). Landed the same day as their
+    // decode/encode implementations, which had nowhere to register without
+    // these: `vaco_registry::decoder_for`/`encoder_for` match on `CodecId`,
+    // so a codec cannot be found by codec identity without one. Names and
+    // long names probed from `ffmpeg -codecs`, 8.1. A `CodecId::Ext(&'static
+    // ExtCodec)` escape hatch was drafted instead of hand-adding these, so
+    // that a future codec crate would not need this file touched at all —
+    // rejected because at least one existing call site
+    // (`vaco-bsf-generic`'s noise generator) casts `CodecId as u64`, which
+    // Rust only permits when every variant is fieldless.
+    Qoi,
+    Pbm,
+    Pgm,
+    Ppm,
+    Pam,
+    Pfm,
+    Phm,
+    Pcx,
+    Targa,
+    Sgi,
+    Xwd,
+    Xbm,
 }
 
 /// One row of the codec identity table.
@@ -287,6 +320,9 @@ const V: MediaType = MediaType::Video;
 const A: MediaType = MediaType::Audio;
 const S: MediaType = MediaType::Subtitle;
 const D: MediaType = MediaType::Data;
+/// Every leaf image codec added alongside `EncoderDesc`: a whole-image
+/// format, lossless, every frame a seek point.
+const IMG: CodecProperties = CodecProperties::INTRA_ONLY.union(CodecProperties::LOSSLESS);
 
 const CODECS: &[CodecEntry] = &[
     entry(
@@ -1088,6 +1124,29 @@ const CODECS: &[CodecEntry] = &[
         S,
         CodecProperties::empty(),
     ),
+    // The leaf image codecs: QOI, the PNM family and the simple-image
+    // repertoire (PCX/TGA/SGI/XWD/XBM — BMP already had a row). All
+    // lossless, intra-only whole-image formats. Names and long names
+    // probed from `ffmpeg -codecs`, 8.1; TGA's reference name is `targa`,
+    // not `tga`.
+    entry(CodecId::Qoi, "qoi", "QOI (Quite OK Image)", V, IMG),
+    entry(CodecId::Pbm, "pbm", "PBM (Portable BitMap) image", V, IMG),
+    entry(CodecId::Pgm, "pgm", "PGM (Portable GrayMap) image", V, IMG),
+    entry(CodecId::Ppm, "ppm", "PPM (Portable PixelMap) image", V, IMG),
+    entry(CodecId::Pam, "pam", "PAM (Portable AnyMap) image", V, IMG),
+    entry(CodecId::Pfm, "pfm", "PFM (Portable FloatMap) image", V, IMG),
+    entry(
+        CodecId::Phm,
+        "phm",
+        "PHM (Portable HalfFloatMap) image",
+        V,
+        IMG,
+    ),
+    entry(CodecId::Pcx, "pcx", "PC Paintbrush PCX image", V, IMG),
+    entry(CodecId::Targa, "targa", "Truevision Targa image", V, IMG),
+    entry(CodecId::Sgi, "sgi", "SGI image", V, IMG),
+    entry(CodecId::Xwd, "xwd", "XWD (X Window Dump) image", V, IMG),
+    entry(CodecId::Xbm, "xbm", "XBM (X BitMap) image", V, IMG),
 ];
 
 impl CodecId {
