@@ -199,6 +199,14 @@ H.264 is the exception rather than the rule. `vaco-parse-hevc` and
   mis-parsed.** Annex G/H put a three-byte extension header in front of the
   slice header and change how the rest is read. `Error::Unsupported` beats a
   plausible wrong answer.
+- **A subset SPS's own SVC/MVC extension tail is silently unread, the same
+  boundary in the other direction.** `Sps::parse` accepts `NalUnitType::SubsetSps`
+  because `seq_parameter_set_data()` — the part this crate reports — is
+  identical either way; the `seq_parameter_set_svc_extension()`/MVC extension
+  and `additional_extension2_flag` that follow it in a real subset SPS are
+  simply never reached (`BitReader::check` only confirms no overrun, not that
+  every byte was consumed). Safe — nothing here misreads it — but a
+  base-profile field derived *from* that tail would be wrong, and none is.
 - **Every `ue(v)` must keep its bound.** The bound is the specification's own
   range constraint wherever it states one, and the comment says which clause.
   A bound removed is a fuzz finding waiting to happen.
