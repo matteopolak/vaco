@@ -271,6 +271,33 @@ impl Muxer for OggMuxer {
                 let first = headers::flac_first_packet(&streaminfo)?;
                 (sample_rate_base, vec![first, headers::flac_comment_block()])
             }
+            // Vorbis's three header packets (identification, comment,
+            // setup) arrive as one `extradata` blob, Xiph-packed the way
+            // `vaco-demux-ogg::codec::pack_xiph_headers` measured against a
+            // real `ffmpeg -c:a vorbis` file -- see that function's doc
+            // comment for the exact byte layout. Unpacking with its own
+            // inverse, rather than re-deriving the format here, is the same
+            // "one definition of what a page is" reasoning this crate's own
+            // Cargo.toml already gives for depending on vaco-demux-ogg at
+            // all (D19). The setup header carries encoder-chosen codebooks
+            // this crate has no way to synthesise, so a caller not
+            // supplying all three (still the case before vaco-demux-ogg's
+            // own fix landed, and for anyone building CodecParameters by
+            // hand) is refused rather than handed a stream a decoder cannot
+            // use -- silently writing the identification packet's bytes as
+            // if they meant something else, or the whole packed blob as a
+            // single mis-shapen packet, is worse than an error.
+            Some(CodecId::Vorbis) => {
+                let extradata = params.extradata.clone().ok_or(Error::InvalidData(
+                    "Vorbis needs identification/comment/setup extradata",
+                ))?;
+                let headers = vaco_demux_ogg::codec::split_xiph_headers(&extradata)
+                    .filter(|h| h.len() == 3)
+                    .ok_or(Error::InvalidData(
+                        "Vorbis extradata must be 3 Xiph-packed header packets",
+                    ))?;
+                (sample_rate_base, headers)
+            }
             _ => {
                 let headers = params.extradata.clone().map_or_else(Vec::new, |e| vec![e]);
                 (sample_rate_base, headers)

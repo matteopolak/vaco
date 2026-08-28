@@ -112,6 +112,124 @@ fn opus_round_trips_through_the_sibling_demuxer() {
     assert_eq!(last_pts, Some(Some(-312 + 29 * 960)));
 }
 
+/// A minimal, valid-enough Vorbis identification packet: type `0x01` +
+/// `"vorbis"` + a 4-byte zero version + 1-byte channel count + a 4-byte LE
+/// sample rate + three 4-byte-each zero bitrate fields + a blocksize byte
+/// (`blocksize_0` exponent in the low nibble, `blocksize_1` in the high
+/// one) + a framing bit — 30 bytes, the same length `codec::parse_vorbis_ident`
+/// expects at minimum and a real `ffmpeg -c:a vorbis` encode also produces.
+fn vorbis_ident(channels: u8, sample_rate: u32, blocksize_0_exp: u8) -> Vec<u8> {
+    let mut h = vec![0x01];
+    h.extend_from_slice(b"vorbis");
+    h.extend_from_slice(&0u32.to_le_bytes()); // vorbis_version
+    h.push(channels);
+    h.extend_from_slice(&sample_rate.to_le_bytes());
+    h.extend_from_slice(&0u32.to_le_bytes()); // bitrate_maximum
+    h.extend_from_slice(&0u32.to_le_bytes()); // bitrate_nominal
+    h.extend_from_slice(&0u32.to_le_bytes()); // bitrate_minimum
+    h.push(blocksize_0_exp | (blocksize_0_exp << 4)); // blocksize_0 == blocksize_1
+    h.push(0x01); // framing bit
+    h
+}
+
+/// A minimal, valid Vorbis comment header: type `0x03` + `"vorbis"` + a
+/// zero-length vendor string + zero user comments + the framing bit.
+fn vorbis_comment() -> Vec<u8> {
+    let mut h = vec![0x03];
+    h.extend_from_slice(b"vorbis");
+    h.extend_from_slice(&0u32.to_le_bytes()); // vendor length
+    h.extend_from_slice(&0u32.to_le_bytes()); // user comment count
+    h.push(0x01); // framing bit
+    h
+}
+
+#[test]
+fn vorbis_round_trips_through_the_sibling_demuxer() {
+    let sink = Box::new(MemorySink::new());
+    let bytes_handle = sink.shared();
+    let mut mux = OggMuxer::new(sink).unwrap();
+
+    let ident = vorbis_ident(1, 44_100, 10); // blocksize 2^10 = 1024
+    let comment = vorbis_comment();
+    // The setup header is opaque codebooks to both crates -- any bytes
+    // round-trip identically, which is the property this test checks.
+    let setup = vec![0x05u8, b'v', b'o', b'r', b'b', b'i', b's', 0xAB, 0xCD, 0xEF];
+    let extradata = vaco_demux_ogg::codec::pack_xiph_headers(&[
+        ident.clone(),
+        comment.clone(),
+        setup.clone(),
+    ]);
+
+    let mut params = CodecParameters::new(vaco_core::MediaType::Audio).with_codec(CodecId::Vorbis);
+    params.extradata = Some(extradata);
+    params.audio = Some(AudioParameters {
+        sample_rate: 44_100,
+        ..AudioParameters::default()
+    });
+    let idx = mux.add_stream(&params).unwrap();
+    mux.write_header().unwrap();
+
+    let mut budget = Budget::new(vaco_limits::Limits::permissive());
+    let payload = [0x11u8, 0x22, 0x33];
+    for i in 0..5u32 {
+        let mut pkt = Packet::from_slice(&mut budget, &payload).unwrap();
+        pkt.stream_index = idx;
+        pkt.pts = Timestamp::new(i64::from(i) * 1024);
+        pkt.dts = pkt.pts;
+        pkt.duration = Duration::from_micros(1024 * 1_000_000 / 44_100);
+        pkt.flags = PacketFlags::KEY;
+        mux.write_packet(&pkt).unwrap();
+    }
+    mux.write_trailer().unwrap();
+
+    let written = bytes_handle.snapshot();
+    let mut demux = OggDemuxer::open(
+        Box::new(MemorySource::new(written)),
+        &NoParsers,
+        &FormatOptions::default(),
+    )
+    .expect("the sibling demuxer must accept what this crate wrote");
+
+    assert_eq!(demux.streams().len(), 1);
+    let stream = &demux.streams()[0];
+    assert_eq!(stream.params.codec_id, Some(CodecId::Vorbis));
+    assert_eq!(
+        stream.params.audio.as_ref().map(|a| a.sample_rate),
+        Some(44_100)
+    );
+    // The three original header packets must come back exactly, not just
+    // the identification one -- the whole point of packing all three.
+    let unpacked = vaco_demux_ogg::codec::split_xiph_headers(
+        stream.params.extradata.as_ref().expect("extradata"),
+    )
+    .expect("packed extradata");
+    assert_eq!(unpacked, vec![ident, comment, setup]);
+
+    let mut count = 0u32;
+    while let Ok(p) = demux.read_packet() {
+        assert_eq!(p.payload(), payload);
+        count += 1;
+    }
+    assert_eq!(count, 5, "every packet written must be read back");
+}
+
+#[test]
+fn vorbis_is_refused_without_three_packed_headers() {
+    let sink = Box::new(MemorySink::new());
+    let mut mux = OggMuxer::new(sink).unwrap();
+    let mut params = CodecParameters::new(vaco_core::MediaType::Audio).with_codec(CodecId::Vorbis);
+    // The pre-fix shape: just the identification packet, not Xiph-packed.
+    params.extradata = Some(vorbis_ident(1, 44_100, 10));
+    params.audio = Some(AudioParameters {
+        sample_rate: 44_100,
+        ..AudioParameters::default()
+    });
+    assert!(
+        mux.add_stream(&params).is_err(),
+        "a lone identification packet must not be silently treated as three packed headers"
+    );
+}
+
 #[test]
 fn flac_round_trips_through_the_sibling_demuxer() {
     let sink = Box::new(MemorySink::new());

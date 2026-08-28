@@ -12,11 +12,15 @@
 //!
 //! Vorbis and Theora both additionally need a *setup* header carrying
 //! encoder-chosen codebooks or quantisation tables that cannot be
-//! synthesised generically — there is no crate in this workspace yet that
-//! produces one, and no established convention here for packing three
-//! packets into one `extradata` blob to unpack. A caller muxing Vorbis or
-//! Theora through this crate today gets only its identification packet
-//! written; see `docs/format/vaco-mux-ogg.md` for the gap.
+//! synthesised generically — there is no crate in this workspace that
+//! produces one. **Vorbis is closed**: `vaco-demux-ogg::codec` now defines
+//! the convention for packing all three packets into one `extradata` blob
+//! (measured against a real `ffmpeg -c:a vorbis` file), and
+//! [`writer::OggMuxer::add_stream`]'s `CodecId::Vorbis` arm unpacks it with
+//! that same module's inverse — one definition shared by both crates, not
+//! two. **Theora is not**: a caller muxing Theora through this crate today
+//! still gets only its identification packet written; see
+//! `docs/format/vaco-mux-ogg.md` for that half of the gap.
 
 use vaco_core::{Error, Result};
 
