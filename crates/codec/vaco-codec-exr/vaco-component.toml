@@ -1,0 +1,19 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+
+[[component]]
+kind      = "decoder"
+name      = "exr"
+long_name = "OpenEXR image, wrapping the `exr` crate (D11)"
+feature   = "codec-exr"
+ctor      = "vaco_codec_exr::EXR_DECODER"
+media     = "video"
+codec     = "exr"
+
+[[component]]
+kind      = "encoder"
+name      = "exr"
+long_name = "OpenEXR image, wrapping the `exr` crate (D11)"
+feature   = "codec-exr"
+ctor      = "vaco_codec_exr::EXR_ENCODER"
+media     = "video"
+codec     = "exr"
