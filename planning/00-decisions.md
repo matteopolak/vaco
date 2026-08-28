@@ -221,6 +221,43 @@ stops at the boundary, the licence of the linked library is not what the wrapper
 `x264` and `x265` crates declare MIT while statically linking GPL — see D9), cross-compilation breaks,
 and the build stops being reproducible. One rule at the boundary removes all of it at once.
 
+### Gate 1 amendment (2026-08-28, owner) — the gate is scoped to the media core
+
+The owner has relaxed Gate 1 for code that is **not part of the media core**:
+
+> "for tls you can use non-pure-rust, thats fine. same for other things as long
+> as it isnt a core part of the repo (tls is pretty unrelated to the ffmpeg
+> pieces so we can use whatever)"
+
+**Where Gate 1 still binds, unchanged and absolutely:** codecs, containers,
+demuxers/muxers, bitstream filters, signal processing, the filter graph, and the
+CLI. These are the ffmpeg pieces — the reason the project exists — and the
+rationale above holds for them in full. Bindings to dav1d, libaom, SVT-AV1,
+libvpx, x264, x265, openh264, libopus, libvorbis, libFLAC remain **banned**. Do
+not read this amendment as reopening them.
+
+**Where FFI is now permitted:** peripheral subsystems that carry no media
+semantics — transport security (TLS/DTLS), and comparable platform or protocol
+glue. The test is the owner's own: is it *part of the ffmpeg pieces*? A crate
+that decodes, encodes, filters, muxes or times media is core. A crate that moves
+bytes over a socket, or talks to the window server, is not.
+
+**What this supersedes.** D14.2 chose `rustls-rustcrypto` because `ring` and
+`aws-lc-rs` vendor C, and it said explicitly: *"if it proves inadequate,
+escalate rather than quietly relaxing the gate."* It did prove inadequate, and
+the escalation was made rather than the gate quietly bent. QA-10 found
+`rustls-rustcrypto` pinned at `0.0.2-alpha` (published 2024-04-24, no release
+since), hard-requiring `rustls-webpki ^0.102` and `rsa 0.9`, with seven RUSTSEC
+advisories that cannot be cleared because no newer release exists. That fails
+Gate 3's "alive" and "sound" criteria outright.
+
+Gates 2 (licence) and 3 (trusted and maintained) still apply everywhere. This
+amendment relaxes purity, not diligence: an FFI dependency in a peripheral
+subsystem still needs a permitted licence, an active upstream, and a recorded
+assessment in `docs/dependencies.md`. Note too that a linked C library brings a
+licence the wrapper crate may not declare — the `x264`/`x265` case in D9 — so
+check what is actually being linked, not what the crate's metadata claims.
+
 ### Gate 2 — Licence, per D3.
 MIT / MIT-0 / Apache-2.0 / BSD-2 / BSD-3 / BSD-3-Clear / ISC / Zlib / 0BSD / CC0 / Unicode-3.0.
 MPL-2.0 is denied, which still excludes Symphonia and `mp4parse` — on licence grounds, not purity.
