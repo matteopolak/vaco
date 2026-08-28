@@ -682,3 +682,48 @@ decoder-side half exists.
 **Blocks:** `codecview` (plan 16 §4.2, `vaco-filter-analysis`'s row); nothing
 else in this workspace currently reads motion vectors either, so this gap has
 exactly one known blocker today.
+
+## 15. `vaco-filter-color`'s `sample` module cannot address float pixel formats
+
+Reported by the `vaco-filter-color` agent, 2026-08-23 continuation pass,
+asked specifically to establish (not assume) whether this is a real
+infrastructure gap before routing any more work around it.
+
+`exposure` and `grayworld` (plan 16 §4.2, `vaco-filter-color`'s row) both
+force `gbrpf32le` output — confirmed to be a real, correctly-modelled pixel
+format (`crates/model/vaco-pixfmt/src/table.rs`'s `PixFmt::Gbrpf32le`:
+three 32-bit-per-component planes, `PLANAR | RGB | FLOAT`, matching the
+reference's own `-pix_fmts` row). What is missing is not the format but a
+way to *read* it: `vaco_filter_color::sample::read`/`write` are
+`u16`-in/`u16`-out by signature, masking a value to `Component::depth` bits
+and shifting it into a byte-aligned integer container. For an IEEE-754
+`f32` component this is not a lossy downscale of the value — reinterpreting
+the raw bits as an integer and truncating to fit `u16` produces an
+unrelated number, not an approximation — so there is no way to route a
+float sample through this accessor pair and get a meaningful answer,
+regardless of which filter calls it. `sample::is_addressable` independently
+rejects it twice over: it checks `PixFmtFlags::FLOAT` explicitly, and
+separately requires every component's `depth <= 16`, which `gbrpf32le`'s
+`depth=32` fails on its own.
+
+This is a genuine infrastructure gap in `vaco-filter-color::sample`, not
+friction specific to `exposure`/`grayworld` — a one-off float path built
+inside either filter would not be a general capability, and the next
+filter in this crate's own row needing float planes would hit the same
+wall again.
+
+### Shape
+
+Additive, mirroring `sample`'s existing shape: an `f32`-in/`f32`-out
+`read_float`/`write_float` pair (or a small enum-dispatched accessor that
+picks integer vs. float encoding from `PixFmtFlags::FLOAT`), gated the same
+way `is_addressable` already gates bit depth and packing. Not attempted
+here — this crate's `sample` module is shared by every filter it has, so
+changing its accessor shape is a design decision affecting all of them, not
+a two-filter fix, and picking that shape is left for whoever is dispatched
+`exposure`/`grayworld` (or the first float-format filter in any
+`vaco-filter-*` crate) next.
+
+**Blocks:** `exposure`, `grayworld` (`vaco-filter-color`'s row); any other
+filter in this workspace that needs to read or write a `PixFmtFlags::FLOAT`
+format through a `u16`-shaped sample engine would hit the identical wall.

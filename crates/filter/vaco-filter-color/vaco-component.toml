@@ -61,3 +61,10 @@ name = "colorlevels"
 long_name = "Adjust the color levels"
 ctor = "vaco_filter_color::colorlevels::DESC"
 media = "video"
+
+[[component]]
+kind = "filter"
+name = "hue"
+long_name = "Adjust the hue and saturation of the input video."
+ctor = "vaco_filter_color::hue::DESC"
+media = "video"

@@ -6,14 +6,22 @@
 //! (`c0..c3`, aliased `y`/`u`/`v`/`r`/`g`/`b`/`a`); `lut2` parses four more
 //! plus an integer `d`; `pseudocolor` parses four expressions, an index
 //! and a preset; `colorlevels` parses sixteen `f64` range endpoints plus
-//! `preserve`. Every one of those goes through `vaco-expr`'s own parser
-//! or `vaco-opts`'s typed option parser, neither of which this crate
-//! trusts blindly — matching the pattern in
+//! `preserve`; `hue` (2026-08-23 continuation pass) parses two `f64`
+//! options (`h`, `s`). Every one of those goes through `vaco-expr`'s own
+//! parser or `vaco-opts`'s typed option parser, neither of which this
+//! crate trusts blindly — matching the pattern in
 //! `vaco-filter-video-format`'s `filter_video_format_options.rs`.
 //!
-//! Property: for any byte string, for any of the seven registered names,
+//! Property: for any byte string, for any of the eight registered names,
 //! either a clean `Err` comes back or a working `Instance`, never a panic
-//! and never an unbounded allocation.
+//! and never an unbounded allocation. `hue::create` allocates nothing
+//! itself (the per-pixel work happens in `filter_frame`, not here), so
+//! this target only exercises its option parse path — the allocation
+//! this crate's own `disallowed-methods` rule guards against is in
+//! `hue::rotate_planar`'s frame-sized buffers, which need a real `Frame`
+//! to reach and are outside a `create`-only fuzz target's ability to
+//! exercise (matching every other filter-crate options fuzzer in this
+//! workspace, per D5's "no decoder to hand it real pixel data").
 //! fuzz-crate: vaco-filter-color
 
 #![no_main]
@@ -23,7 +31,7 @@ use vaco_filter_color::registry::ColorRegistry;
 use vaco_filter_graph::registry::{FilterRegistry, Instantiate};
 
 const NAMES: &[&str] =
-    &["colorchannelmixer", "colorlevels", "lut", "lut2", "lutrgb", "lutyuv", "pseudocolor"];
+    &["colorchannelmixer", "colorlevels", "hue", "lut", "lut2", "lutrgb", "lutyuv", "pseudocolor"];
 
 fuzz_target!(|args: &str| {
     if args.len() > 8192 {
