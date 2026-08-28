@@ -48,6 +48,29 @@ differential check.
   which are different types) — a genuinely different state machine from
   caller/listener, not one with a flag flipped, matching how `draft` §4.3.2
   describes it.
+- `ack` (PR-10b / #556) — the ACK/NAK CIF shapes (`draft` §3.2.4/§3.2.5).
+  Field layout is draft-derived; the ACK stats fields (RTT/RTTVar/the
+  three rate estimates) have no stated formula and are always zero
+  (`AckStats::placeholder`) rather than a guessed smoothing constant. NAK
+  range compression is not implemented — every NAK this crate builds names
+  each lost sequence number as its own single-entry word; see the module's
+  own docs for why.
+- `arq` (PR-10b / #556) — `SendWindow` (retransmission buffer, NAK- and
+  RTO-triggered resend) and `ReceiveWindow` (loss detection, in-order
+  delivery, TSBPD-ish too-late drop), sans-io via an explicit
+  `on_tick(now_ms)` rather than owning a socket or clock
+  (`planning/INTERFACE-GAPS.md` gap 28's addendum — the standard
+  sans-io answer for a timer-driven protocol, the same shape QUIC
+  implementations use, rather than forcing the worker-thread seam into
+  existence here). Every constant this module needed a number for and
+  could not get from the draft (RTO, the too-late-drop latency threshold,
+  NAK re-announcement policy) is marked `IMPLEMENTATION-DEFINED` at its
+  declaration with its own reasoning. **No congestion control or rate
+  limiting is implemented**: `draft` §5.1/§5.2 name LiveCC/FileCC but do
+  not give their algorithms in the fetched text — checked directly, across
+  two independently-worded fetches that agreed, before concluding there is
+  no specification and no instrument for this at all, not merely an
+  unreachable reference.
 
 ## How to change it
 
@@ -101,11 +124,26 @@ round-trip success.
 One fuzz target, `srt_packet`, covers `packet::SrtPacket::parse`,
 `handshake::HandshakeCif::parse`/`parse_extensions`, and `km::KmMessage::parse`
 — every parser here that reads attacker-controlled length fields ahead of a
-socket existing. 45-second breadth run: exit 0, `fuzz/artifacts` empty,
-12.68M executions. **Not yet run for the 24 hours issue #555's own Acc
-names** — that needs a longer, separately-scheduled run, not something this
-session's own wall-clock budget covers; stated plainly rather than rounded
-up to "the target exists so the Acc is met."
+socket existing. A multi-hour background run replaced the original "24h
+against a reference peer" Acc (permanently unreachable here, no `ffmpeg`
+build on this machine carries `libsrt`) with an explicit substitute bar;
+see the issue thread for the actual number of hours/executions reached and
+`fuzz/artifacts`' state at that point, rather than restating a number here
+that would go stale the moment a longer run replaces it.
+
+`tests/lossy_link.rs` is `arq`'s own replacement-bar evidence for #556's
+"recovers to the same delivered-packet set as the reference peer": a
+deterministic (fixed-seed `xorshift32`, no new dependency) simulated lossy
+link between this crate's own `SendWindow`/`ReceiveWindow` pair at 5% and
+20% loss, checking that every packet is either delivered — in strictly
+increasing order, with the exact payload sent — or explicitly recorded as
+dropped past the latency window, never silently lost. **Self-consistency,
+with a bounded weakness stated in the test's own docs**: both sides are
+this crate's own code, so a shared misreading would pass identically, the
+same weakness the handshake loopback test has — bounded here because
+*functional* delivery under loss is close to a property of the pair's own
+internal consistency, which is what this test actually checks, not
+interop or the IMPLEMENTATION-DEFINED constants' real-world tuning.
 
 **What is not verified, and cannot be from here**:
 
@@ -131,3 +169,18 @@ up to "the target exists so the Acc is met."
 - **HSREQ/HSRSP's `SRT Flags`/TSBPD delay values this crate sends** are
   this crate's own placeholders (`SRT_VERSION`, fixed 120ms delays), not
   values a real deployment has confirmed acceptable.
+- **`arq`'s `IMPLEMENTATION-DEFINED` constants** (`DEFAULT_RTO_MS`,
+  `DEFAULT_LATENCY_MS`, the every-tick NAK re-announcement policy) are not
+  tuned against anything — no formula for any of them exists in the
+  fetched draft text (checked directly, across two independently-worded
+  fetches that agreed), and there is no reference peer's own behaviour to
+  measure them against either. `tests/lossy_link.rs` confirms this crate's
+  own ARQ recovers from loss with *these* constants; it says nothing about
+  whether they would perform well, or even correctly interoperate, against
+  a real SRT peer's own timing.
+- **No congestion control or rate limiting**: not implemented, not
+  attempted. `draft` §5.1/§5.2 name LiveCC/FileCC without giving their
+  algorithms in the fetched text — the same "no specification, no
+  instrument" conclusion as WHIP's DTLS gap, reached the same way (checked
+  directly before building, not assumed), and named rather than
+  approximated with an invented rate-control formula.

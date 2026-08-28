@@ -47,6 +47,22 @@
 //!   input and returns "send this packet" / "connected" / "rejected" as
 //!   output, driven by a caller that owns the actual socket (a later
 //!   package).
+//! - [`ack`] — the ACK/NAK control packets' CIF shapes (`draft` §3.2.4,
+//!   §3.2.5). The field *layout* is draft-derived; the ACK stats fields
+//!   (RTT and the three rate estimates) have no stated formula and are
+//!   always zero, documented as such rather than guessed.
+//! - [`arq`] (PR-10b / #556) — the retransmission engine: [`arq::SendWindow`]
+//!   (buffer, NAK-triggered and RTO-triggered resend) and
+//!   [`arq::ReceiveWindow`] (loss detection, in-order delivery, TSBPD-ish
+//!   too-late drop). Sans-io via an explicit `on_tick(now_ms)`
+//!   (`planning/INTERFACE-GAPS.md` gap 28's addendum) rather than owning a
+//!   socket or a clock. **No congestion control / rate limiting is
+//!   implemented** — `draft` §5.1/§5.2 name LiveCC/FileCC but do not give
+//!   their algorithms in the fetched text, and `arq`'s own module docs
+//!   name every other constant this module needed a number for and could
+//!   not get from the draft (RTO, the too-late-drop threshold, NAK
+//!   re-announcement policy) as `IMPLEMENTATION-DEFINED`, with reasoning,
+//!   rather than presenting a guess as measured.
 //!
 //! # Configuration
 //!
@@ -63,6 +79,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod ack;
+pub mod arq;
 pub mod cookie;
 pub mod handshake;
 pub mod km;
