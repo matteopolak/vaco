@@ -1,0 +1,19 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+
+[[component]]
+kind      = "decoder"
+name      = "tiff"
+long_name = "TIFF image, wrapping the `tiff` crate (D11)"
+feature   = "codec-tiff"
+ctor      = "vaco_codec_tiff::TIFF_DECODER"
+media     = "video"
+codec     = "tiff"
+
+[[component]]
+kind      = "encoder"
+name      = "tiff"
+long_name = "TIFF image, wrapping the `tiff` crate (D11)"
+feature   = "codec-tiff"
+ctor      = "vaco_codec_tiff::TIFF_ENCODER"
+media     = "video"
+codec     = "tiff"
