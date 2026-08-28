@@ -22,7 +22,7 @@
 //! itself, which stays a unit variant on purpose (C4 is "are the bytes
 //! equal", not "how is this shaped").
 
-use crate::case::{Case, Verdict};
+use crate::case::{Case, Tolerance, Verdict};
 use crate::compare::{DiffReport, Pair};
 
 /// Compare `ours.stdout` against `theirs.stdout`, byte for byte.
@@ -48,6 +48,114 @@ pub fn compare(case: &Case, pair: &Pair<'_>) -> Verdict {
         excerpt: excerpt(ours, theirs, at),
         ..DiffReport::default()
     })
+}
+
+/// C5 — [`compare`], but every byte pair may differ by up to
+/// `tolerance.max_abs` (raw pixel bytes have no sign, so "absolute
+/// difference" is just `(a as i32 - b as i32).abs()`) and/or the stream's
+/// overall root-mean-square difference may not exceed `tolerance.max_rms`.
+/// Both are checked when both are non-zero; either alone is enough to
+/// admit a byte-for-byte pass through `is_zero`'s "no tolerance named"
+/// case, which behaves exactly like [`compare`].
+///
+/// `max_ulp` has no meaning here — the `filter` tool's raw stream is plane
+/// bytes (`u8` pixel samples via [`crate::filterexec`]), not an IEEE float
+/// stream, so a case naming a non-zero `max_ulp` is a case that meant a
+/// different comparator and gets a named error rather than a silently
+/// ignored field.
+///
+/// # Errors
+/// Never returns `Err` today — reserved because a future caller may want
+/// to reject a `max_ulp`-only tolerance before running the case at all
+/// rather than after, the same way [`crate::case::Compare::from_manifest`]
+/// rejects a missing `justification` at load time.
+#[must_use]
+pub fn compare_tolerant(case: &Case, pair: &Pair<'_>, tolerance: &Tolerance) -> Verdict {
+    if tolerance.max_ulp != 0 {
+        return Verdict::Divergence(DiffReport {
+            mode: case.compare.mode_name(),
+            summary: format!(
+                "max_ulp={} is not meaningful for the filter tool's raw u8 pixel-byte stream (no \
+                 IEEE float representation to count ULPs in) -- use max_abs/max_rms instead \
+                 (justification: {})",
+                tolerance.max_ulp,
+                justification(case)
+            ),
+            ..DiffReport::default()
+        });
+    }
+    let ours = &pair.ours.stdout;
+    let theirs = &pair.theirs.stdout;
+    if tolerance.is_zero() {
+        return compare(case, pair);
+    }
+    if ours.len() != theirs.len() {
+        return Verdict::Divergence(DiffReport {
+            mode: case.compare.mode_name(),
+            summary: format!(
+                "raw output length differs: ours {} bytes, reference {} bytes",
+                ours.len(),
+                theirs.len()
+            ),
+            ..DiffReport::default()
+        });
+    }
+    let mut worst: Option<(usize, f64)> = None;
+    let mut sq_sum = 0.0f64;
+    for (i, (&a, &b)) in ours.iter().zip(theirs.iter()).enumerate() {
+        let diff = (f64::from(a) - f64::from(b)).abs();
+        sq_sum += diff * diff;
+        if worst.is_none_or(|(_, w)| diff > w) {
+            worst = Some((i, diff));
+        }
+    }
+    let Some((worst_at, worst_diff)) = worst else {
+        return Verdict::Agree;
+    };
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "byte-stream lengths never approach f64's exact-integer ceiling"
+    )]
+    let rms = (sq_sum / ours.len() as f64).sqrt();
+    if tolerance.max_abs > 0.0 && worst_diff > tolerance.max_abs {
+        return Verdict::Divergence(DiffReport {
+            mode: case.compare.mode_name(),
+            summary: format!(
+                "raw output exceeds max_abs={} at byte {worst_at}: |{worst_diff}| (justification: \
+                 {})",
+                tolerance.max_abs,
+                justification(case)
+            ),
+            excerpt: excerpt(ours, theirs, worst_at),
+            ..DiffReport::default()
+        });
+    }
+    if tolerance.max_rms > 0.0 && rms > tolerance.max_rms {
+        return Verdict::Divergence(DiffReport {
+            mode: case.compare.mode_name(),
+            summary: format!(
+                "raw output exceeds max_rms={}: measured {rms} (justification: {})",
+                tolerance.max_rms,
+                justification(case)
+            ),
+            ..DiffReport::default()
+        });
+    }
+    Verdict::Agree
+}
+
+/// The `justification` string, for a `RawTolerant` case — panics on any
+/// other `Compare` variant, since only [`compare_tolerant`]'s own caller in
+/// [`crate::compare::evaluate`] ever reaches this, always with a
+/// `RawTolerant` case.
+fn justification(case: &Case) -> &str {
+    match &case.compare {
+        crate::case::Compare::RawTolerant { justification, .. } => justification,
+        other => unreachable!(
+            "compare_tolerant called on non-tolerant mode `{}`",
+            other.mode_name()
+        ),
+    }
 }
 
 /// A short window of both streams around the first difference, hex-rendered

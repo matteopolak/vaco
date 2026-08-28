@@ -167,6 +167,29 @@ fn convolve_agrees_with_the_reference() {
     }
 }
 
+/// `scharr`'s own suite, `raw-tolerant` rather than this file's
+/// `raw-exact` -- see `vaco-filter-convolve-scharr.toml`'s own comment
+/// for the measurement (a proven, position-uncorrelated max-1-count
+/// scatter, not a discoverable rule) and the 2026-08-28
+/// `AGENT-CONSTRAINTS.md` owner ruling it ships under.
+#[test]
+fn scharr_agrees_with_the_reference_within_the_measured_scatter() {
+    let Some(outcomes) = run_suite("vaco-filter-convolve-scharr.toml") else {
+        return;
+    };
+    for o in &outcomes {
+        println!("{}: {:?}", o.case.id, o.verdict.label());
+        assert!(
+            matches!(o.verdict, Verdict::Agree),
+            "case `{}` did not agree: {:?}\n  ours:   {}\n  theirs: {}",
+            o.case.id,
+            o.verdict,
+            o.ours_command,
+            o.theirs_command
+        );
+    }
+}
+
 /// `colorkey` on `argb` -- the first case to exercise a *packed* pixel
 /// format (`filterexec.rs`'s `plane_size_sum`/`fill_planes`/
 /// `extract_output` used to assume every plane was `width * height`

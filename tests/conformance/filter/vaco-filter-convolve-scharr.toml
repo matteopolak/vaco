@@ -1,0 +1,68 @@
+# `scharr`'s own suite, separate from `vaco-filter-convolve.toml`'s
+# `raw-exact` one.
+#
+# `src/edge.rs`'s own doc records the original measurement in full
+# ("scharr's interior divergence: truncation-order hypothesis tested and
+# refuted"): on a two-axis discriminating source, `scharr` was off by
+# exactly one count at 18 of 400 interior (non-border) pixels, and proved
+# -- not merely failed to find -- that no function of the documented
+# inputs `(Gx, Gy)` can explain it: two provably identical `Gx=192,
+# Gy=704` gradient vectors, sampled directly from the reference's own raw
+# output, give two different reference outputs (46 at one pixel, 44 at
+# another).
+#
+# Re-measured directly against *this* suite's own `gray8-ramp-20` media
+# (2026-08-28, adding this suite): 27 of 400 bytes differ, not 18, and the
+# largest differences are `2`, not `1` -- a materially different count
+# and bound than the earlier doc's source gave, which is exactly why this
+# suite's own tolerance is set from a fresh measurement on its own media
+# rather than copied from a different one. Checked whether the size-2
+# differences (clustered in part on the bottom row, columns 6-9) are a
+# geometric/border rule rather than noise: re-ran on a second, smooth,
+# non-wrapping gradient (`X*8+Y*3`, no `mod`) with the same dimensions --
+# **zero byte differences**. The size-2 cluster only appears next to this
+# media's own `mod(X*7+Y*11,256)` wraparound discontinuities (steep local
+# jumps this specific synthetic ramp creates, not a border or geometry
+# effect), which is the position-uncorrelated-noise signature, not the
+# structured one -- a genuine border or geometry bug would still show up
+# on a smooth gradient that has no discontinuities to hide behind.
+#
+# Under the 2026-08-28 owner ruling recorded in `AGENT-CONSTRAINTS.md`
+# ("Byte-exactness is a check, not the bar"), a max-2-count scatter that
+# vanishes entirely on a discontinuity-free source is exactly the "small
+# and unstructured" case the ruling ships: `raw-tolerant` with
+# `max_abs = 2.0` accepts it, the bound this suite's own media actually
+# measured, not a rounder or more convenient number.
+# `sobel`/`prewitt` stay in the sibling `raw-exact` suite unchanged --
+# both are proven exact, not merely close.
+
+schema = 1
+suite  = "filter-vaco-filter-convolve-scharr"
+tool   = "filter"
+tier   = "core"
+owner  = "@filter-convolve-owner"
+
+[[media]]
+id       = "gray8-ramp-20"
+source   = "generated://gray8-ramp-20.raw"
+tags     = ["video"]
+generate = ["-f", "lavfi", "-i", "color=c=black:s=20x20:d=1:r=25",
+            "-vf", "geq=lum='mod(X*7+Y*11,256)':cb=128:cr=128",
+            "-frames:v", "1", "-pix_fmt", "gray8", "-f", "rawvideo"]
+
+[[axis]]
+name   = "filter"
+values = [
+  { id = "scharr-default", argv = ["{media}", "scharr", "", "gray8", "20", "20", "gray8", "20", "20"] },
+]
+
+[compare]
+mode          = "raw-tolerant"
+justification = "AGENT-CONSTRAINTS.md 2026-08-28 owner ruling: byte-exactness is a check, not the bar; a max-2-count scatter (27/400 bytes on this suite's own media, measured 2026-08-28) that vanishes entirely on a discontinuity-free source is the 'small and unstructured' case the ruling ships rather than the 'structured' case it still blocks -- see this file's own header comment for the smooth-gradient control that rules out a border/geometry rule."
+timeout       = "10s"
+
+[compare.tolerance]
+max_abs = 2.0
+
+[normalise]
+invocation = ["bitexact", "hide-banner"]

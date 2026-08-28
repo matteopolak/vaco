@@ -11,11 +11,12 @@
 //! | Mode | State |
 //! |---|---|
 //! | C0 `exact-bytes`, C1 `exact-bytes-normalised` | implemented ([`exact`]) |
-//! | C4 `raw-exact` | implemented ([`raw`]) — the `filter`-tool's own byte-equality mode, fed by [`crate::filterexec`] rather than a subprocess |
+//! | C4 `raw-exact` | implemented ([`raw::compare`]) — the `filter`-tool's own byte-equality mode, fed by [`crate::filterexec`] rather than a subprocess |
+//! | C5 `raw-tolerant` | implemented ([`raw::compare_tolerant`]) — `max_abs`/`max_rms` over the same raw byte stream; `max_ulp` has no meaning for `u8` pixel bytes and is a named error, not a silent no-op |
 //! | C6 `structured-diff` | implemented ([`structured`]) |
 //! | C7 `behavioural` | implemented (outcome class only) |
 //! | C10 `quality-band` | **seam only** ([`quality`]) — the metrics are not written |
-//! | C2, C3, C5, C8, C9 | seams; they need machinery from crates that do not exist yet |
+//! | C2, C3, C8, C9 | seams; they need machinery from crates that do not exist yet |
 //!
 //! An unimplemented mode returns [`Verdict::Skipped`] with
 //! [`SkipReason::ModeUnimplemented`], never a false pass. That distinction is
@@ -178,9 +179,9 @@ pub fn evaluate(case: &Case, pair: &Pair<'_>, allow: &Allowlist) -> Verdict {
         Compare::Behavioural => behavioural(case, pair),
         Compare::QualityBand { band } => quality::compare(case, pair, band),
         Compare::RawExact => raw::compare(case, pair),
+        Compare::RawTolerant { tolerance, .. } => raw::compare_tolerant(case, pair, tolerance),
         Compare::ContainerStructure { .. }
         | Compare::FrameHash { .. }
-        | Compare::RawTolerant { .. }
         | Compare::CrossDecode { .. }
         | Compare::ThreeWay { .. } => {
             Verdict::Skipped(SkipReason::ModeUnimplemented(case.compare.mode_name()))

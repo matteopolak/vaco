@@ -21,16 +21,17 @@
 # border row/column and all four corners) for both `sobel` and `prewitt`.
 # Cases re-added below.
 #
-# `scharr` is deliberately still NOT in this suite: the same exhaustive
-# check found a *different*, unrelated divergence in `scharr` specifically
-# — 18/400 interior (non-border) pixels mismatch by exactly one count
-# (predicted magnitude ~42.8 truncates/rounds to 42 or 43; reference gives
-# 41), which is not explained by the border rule at all (these pixels'
-# whole 3x3 window is in-bounds). This looks like a `scharr`-specific
-# rounding or normalisation question, not yet measured further. Left open
-# rather than guessed at, for the same reason `sobel`'s border rule was
-# left open until it could be pinned: a fix that matches most points but
-# not all is worse than an honest gap.
+# `scharr` is not in this suite: the same exhaustive check found a
+# *different*, unrelated divergence in `scharr` specifically -- 18/400
+# interior (non-border) pixels mismatch by exactly one count, which is
+# not explained by the border rule at all (these pixels' whole 3x3 window
+# is in-bounds), and `src/edge.rs`'s own doc goes on to prove no function
+# of the documented inputs can explain it at all (two identical gradient
+# vectors, two different reference outputs). Under the 2026-08-28 owner
+# ruling in `AGENT-CONSTRAINTS.md`, a proven, position-uncorrelated
+# max-1-count scatter like this ships under a tolerance rather than
+# staying excluded -- see the sibling `vaco-filter-convolve-scharr.toml`,
+# `raw-tolerant`, not this file's `raw-exact`.
 
 schema = 1
 suite  = "filter-vaco-filter-convolve"
