@@ -893,20 +893,42 @@ fn decode_residual(
 // one-one/ten-zeros sequence and 200 pseudorandom sequences both
 // round-trip exactly through `CabacEncoder`/`CabacDecoder`'s public API.
 //
-// KNOWN GAP, not yet closed: the misclassification is real, confirmed
-// against primary-source-verified reference letter meanings, and not
-// explained by the engine, the `MB_TYPE_I` table (Table 9-12, verified),
-// or `mb_type_i_cond_term`'s formula (verified) -- all of which have
-// been independently checked and hold. That leaves either a genuine bit
-// consumption error earlier in the same slice (upstream of the first
-// misclassified macroblock, in a way that does not itself change any
-// earlier macroblock's own classification or CBP) or a still-unfound gap
-// in one of the areas already checked in isolation but not against this
-// exact real-corpus sequence. Not root-caused within this round's time
-// budget. Every fix and clearance from prior passes (CBP's neighbour
-// derivation, the bypass path, this round's engine round-trip) stays;
-// none of them is reopened by this finding. Reported honestly rather
-// than claimed; see `planning/TECH-DEBT.md` for the full handoff.
+// A seventh pass bisected the misclassification directly rather than
+// reasoning about it: temporarily forced `decode_mb_type_i_table` to
+// take the `Intra_16x16` branch at exactly `cabac_ip_simple.264`
+// address 5 (still consuming bin0's own bit via a genuine
+// `decode_decision` call; only the control-flow interpretation of its
+// result was overridden), leaving every later bin -- the I_PCM
+// `decode_terminate` check, then `b2`..`b6` -- to read normally from
+// whatever engine state was actually there. If addresses 0-4 had
+// consumed exactly the right number of bits, this should have recovered
+// a clean decode from address 5 onward (the true encoded value read
+// correctly once the branch was taken), and address 6 -- which the
+// reference (`ffmpeg -debug mb_type`) shows as plain `Intra4x4`, not
+// `Intra_16x16` -- should have decoded correctly too.
+//
+// It did not: with address 5 forced, its own decode looked plausible
+// (`Intra16x16` with a valid `cbp_luma`/`cbp_chroma` combination), but
+// address 6 -- genuinely, not forced -- *also* decoded as `Intra16x16`,
+// contradicting the reference. Forcing the correction at address 5 did
+// not restore correctness one macroblock later, which means the engine
+// state entering address 5 was already wrong: the corruption is in
+// addresses 0-4's own decode, not in address 5's `mb_type` read itself.
+// This directly answers the split the coordinator's own instrument
+// (`CabacDecoder::reader().bit_pos()`, already public) was chosen for.
+//
+// KNOWN GAP, not yet closed: which of addresses 0-4's own syntax
+// elements (residual, `coded_block_pattern`, `intra_chroma_pred_mode`,
+// `prev_intra4x4_pred_mode_flag`/`rem_intra4x4_pred_mode`) consumes the
+// wrong number of bits is not yet isolated -- all four addresses'
+// *classification* (`Intra4x4`) and `coded_block_pattern` values already
+// match the reference, so whatever is wrong there does not change either
+// of those, narrowing the remaining search to residual decode and the
+// per-4x4-block intra prediction mode flags specifically. Every fix and
+// clearance from prior passes (CBP's neighbour derivation, the bypass
+// path, `decode_decision`'s own round-trip) stays; none is reopened by
+// this finding. Reported honestly rather than claimed; see
+// `planning/TECH-DEBT.md` for the full handoff.
 use crate::cabac_mb_tables::{inits_by_col, inits_by_idc, inits_fixed};
 
 /// `CabacDecoder::decode_decision` over a context array, indexed safely —
