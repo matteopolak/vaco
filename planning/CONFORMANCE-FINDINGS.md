@@ -4510,3 +4510,108 @@ reopened one.
 `BoxIter` and `BoxHeader::parse_clamped` carry the full reasoning above in
 place, for the next person who hits a corrupt MP4 and wonders whether the
 recovery is deliberate.
+
+### Dispatch 10: oversized-declared-length policy surveyed across every container crate that has one
+
+Prompted by the `BoxIter` fix: is `vaco-format-isom`'s new clamp-vs-reject
+split a one-crate decision, or does this codebase already have a house
+answer that `BoxIter` was simply behind on? Surveyed every container crate
+that reads a declared length, for what happens when that length exceeds
+what the container can hold, classified as **spec-mandated**,
+**deliberately chosen** (with the stated reason), or **unexamined**.
+Confirmed no live writer on each crate before reading it, and again
+immediately before each commit.
+
+| Crate | Context | Policy | Classification |
+|---|---|---|---|
+| `vaco-format-isom` | `BoxIter` (flat, in-memory, e.g. `ilst`) | **Clamp** to what `data` holds, mark `to_end` | Deliberately chosen (this dispatch's own prior work) |
+| `vaco-format-isom` | `BoxHeader::parse` / `TopLevelScanner` (seek-based, multi-GB) | **Reject** | Deliberately chosen — clamping a seeked-over box could swallow a real `mdat` into a mis-sized sibling |
+| `vaco-format-ebml` | `Slice`/`Children` (flat, in-memory master) | **Clamp** via `.min(body.len())` | Was unexamined as a *stated* policy (the clamp itself predates this dispatch and is correct); now documented explicitly, no behaviour change |
+| `vaco-format-ebml` | `reader::read_header` (streaming, e.g. a `Cluster`) | Makes **no size-vs-available check at all** — leaves it to the caller | Deliberately shaped this way; the corresponding check lives one layer up, in the caller below |
+| `vaco-demux-matroska` | `read_body` (the caller above, stream/seek-based) | **Reject** (`"element claims more bytes than remain"`) | Spec/plan-mandated — cites "plan 13 section 2.2.2 rule 3" directly in the comment |
+| `vaco-format-riff` | `ChunkIter` (flat, in-memory) | **Clamp**, `Chunk::truncated` flag | Deliberately chosen, extensively documented — real streaming WAV writers depend on this (`0xFFFFFFFF` sentinel) |
+| `vaco-format-asf` | `ObjectIter` (flat, in-memory) | **Clamp** | Deliberately chosen, doc explicitly mirrors `ChunkIter`'s reasoning |
+| `vaco-demux-asf` | Data Object end / packet region (stream-level) | **Clamp** to file size | Deliberately chosen, consistent with the crate's in-memory policy — no reject/clamp asymmetry here, unlike isom/ebml |
+| `vaco-format-nut` | `forward_ptr` (stream-level; no in-memory nested-child walk exists in this grammar) | **Reject** past a fixed plausibility cap | Deliberately chosen; not the same question as the others since NUT has no declared-size child list to clamp |
+| `vaco-demux-mxf` | `klv::read_value`/`skip_value` (stream-level) | **Reject** (`LimitExceeded`/`UnexpectedEof`) | Deliberately chosen, consistent with every other crate's stream-level path |
+| `vaco-demux-mxf` | `localset::for_each_item` (flat, **in-memory**, structural metadata) | **Reject** (`InvalidData`), not clamped | Deliberately chosen, for a *different* stated reason — see below |
+| `vaco-format-swf` | tag stream (stream-level) | **Reject** past a fixed plausibility cap (`MAX_REASONABLE_TAG`) | Deliberately chosen, consistent with the stream-level pattern |
+| `vaco-format-id3` | tag header (in-memory) | **Clamp** | Deliberately chosen, matches the in-memory pattern |
+| `vaco-format-mpegts-tables` | `AdaptationField::parse` (fixed 188-byte packet) | Malformed field's *payload* reported empty; next packet unaffected (fixed offset) | Deliberately chosen; not really the same question — MPEG-TS's fixed packet size means there is no "where does the next unit start" ambiguity to clamp or reject in the first place |
+
+#### The pattern, once stated plainly
+
+**Every in-memory, already-bounded flat child walk in this codebase clamps
+an oversized declared length rather than rejecting it** —
+`vaco-format-isom::boxes::BoxIter` (this dispatch's prior fix),
+`vaco-format-ebml::reader::Slice::Children`, `vaco-format-riff::chunk::ChunkIter`,
+`vaco-format-asf::object::ObjectIter`, and `vaco-format-id3`'s tag header —
+five crates, reached independently, all for the identical reason: clamping
+never reads a byte the buffer does not already hold, so it cannot escape
+into unrelated data the way resynchronising by scanning content for a new
+header could. **Every stream/seek-based read of a length that could be
+gigabytes rejects instead** — `vaco-format-isom::boxes::scan::TopLevelScanner`,
+`vaco-demux-matroska::demux::read_body`, `vaco-demux-mxf::klv::read_value`,
+`vaco-format-nut`'s `forward_ptr`, `vaco-format-swf`'s tag length — because a
+corrupted length there is seeked over rather than held in memory, and
+clamping it could silently swallow real, unrelated data (an `mdat`, a
+sibling top-level object) into a mis-sized neighbour. This is not a
+coincidence worth re-litigating crate by crate; it is this codebase's
+answer to the question, and it was already the answer everywhere except the
+one place (`vaco-format-isom::boxes::BoxIter`) that hadn't caught up to it
+yet.
+
+**One genuine, principled exception**: `vaco-demux-mxf::localset::for_each_item`
+rejects even though it is an in-memory, flat walk — the shape that
+clamps everywhere else. Its own doc states why: a Local Set's items encode
+*structural metadata* (a `Preface`, a descriptor), not container framing,
+and "a truncated set genuinely cannot be interpreted, so every property
+after the truncation point would otherwise be silently fabricated from
+garbage" — citing this project's own detection-vs-demuxing distinction
+(`AGENT-CONSTRAINTS.md`). Checked whether this is strictly necessary: a
+clamp-then-stop policy (clamp the one corrupted item to what remains, then
+end the walk, the same shape every other crate uses) would give the
+identical non-fabrication guarantee, since nothing follows a walk that
+stops. So the *literal* risk named is not what forces rejection here — what
+actually distinguishes MXF's Local Set is what the walk is *for*: a wrong
+`SampleRate` or `Width` reported as if genuine because a corrupted length
+happened to clamp cleanly is a worse, silently-misleading failure for
+structural metadata a caller trusts outright, than for essence/media
+framing a caller already treats as "recover what you can, the file may be
+imperfect." Recorded as principled rather than fixed to match the majority
+— the majority's reasoning does not actually apply to what this data is.
+
+#### What changed
+
+Two documentation-only commits, no behaviour changed anywhere (the survey's
+answer was "already correct, in four of five places, and the fifth is
+correctly different" — not "several crates need fixing"):
+
+- `vaco-format-ebml`: `reader::Slice::children`'s doc, the `Children::next`
+  clamp line itself, and the crate's own "Bounds" section now state the
+  clamp policy explicitly, name the three sibling crates that reached it
+  independently, and name `read_header`/`read_body`'s different, stream-level
+  answer as a distinct question rather than an inconsistency.
+- `vaco-format-riff`: `ChunkIter`'s doc compared itself against `BoxIter`'s
+  *old* (reject) behaviour, which the `BoxIter` fix made stale. Corrected to
+  say both now clamp, for the same reason, and named as one of four crates
+  that reached this shape independently.
+
+Verified: both crates' existing test suites unchanged and passing (no
+tests needed changing or adding, since no behaviour changed). Fuzzed
+anyway, since the dispatch named the targets directly and a documentation
+change is still a change to review against: `ebml_grammar` (10.5M
+execs/91s), `riff_chunk` (47.4M/91s), `matroska_ebml` (16.8M/91s),
+`asf_demux` (15.8M/91s), `nut_demux` (17.4M/91s) — each
+`--no-default-features --features <its own feature>`, zero crashes, `find
+fuzz/artifacts -type f` and separately for `slow-unit-`/`oom-` empty after
+every run.
+
+Not exhaustively covered: `vaco-format-dv`, `vaco-format-mpjpeg`,
+`vaco-format-apetag`, `vaco-format-spdif`, `vaco-format-subtitle(-bitmap)`,
+`vaco-format-adaptive`, `vaco-format-misc(-audio)`, `vaco-format-rtp`,
+`vaco-format-avlanguage`, `vaco-format-mpegaudio` were grepped for the
+pattern but not read in the same depth as the crates above — none showed
+a declared-length-vs-container question shaped differently from what is
+already tabulated, but that is a lighter check than the rest of this
+survey and is disclosed as such rather than implied to be as thorough.
