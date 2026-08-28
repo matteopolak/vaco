@@ -634,3 +634,10 @@ kind     = "blackbox"
 title    = "Observed ffprobe r_frame_rate/avg_frame_rate on a raw .h264 Annex B file muxed by -c copy from an avcC (length-prefixed) MP4 source: r_frame_rate carries the undivided VUI tick rate (50/1 for a 25 fps stream) and avg_frame_rate carries the halved picture rate (25/1) — the two fields disagree by exactly the H.264 field/frame-doubling factor. Also: ffmpeg -c copy -f <fmt> refusal messages for a codec/muxer mismatch (\"<fmt> muxer supports only codec <fmt> for type video\" on vc1/vvc; \"Codec not supported\" on yuv4mpegpipe fed an encoded stream), ffmpeg 8.1"
 acquired = "2026-08-27"
 where    = "the reference binary installed on the development machine"
+
+[[source]]
+id       = "ffmpeg-avi-flv-mux-probe"
+kind     = "blackbox"
+title    = "Observed byte layout of ffmpeg -c copy -fflags +bitexact -f avi/-f flv output across MP4 and MPEG-TS sources: AVI's fixed 600 Hz video slot grid with zero-length placeholder chunks, avih.dwMicroSecPerFrame tracking the source track time base, the vprp video-properties chunk fields, and FLV's onMetaData forwarding of the input's ftyp-derived major_brand/minor_version/compatible_brands plus the AVC end-of-sequence tag, ffmpeg 8.1"
+acquired = "2026-08-27"
+where    = "the reference binary installed on the development machine"

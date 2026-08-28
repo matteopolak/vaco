@@ -133,11 +133,9 @@ fn muxed_packets_demux_in_order_with_the_measured_clock() {
 fn the_trailer_patches_total_frame_and_length_counts() {
     let (bytes, _v, _a) = mux_sample();
     let demux = open(bytes);
-    // Three video chunks, three samples' worth accounted for on the audio
-    // side (2000 + 1000): `duration` comes from `avih`'s patched
-    // `dwMicroSecPerFrame * dwTotalFrames`, which is 0 here since this
-    // muxer does not thread `dwMicroSecPerFrame` through (see
-    // `docs/format/vaco-mux-avi.md`) — what this test actually pins is that
+    // `mux_sample` drives `add_stream` directly rather than
+    // `add_stream_with`, so no source time base is ever supplied and
+    // `dwMicroSecPerFrame` stays `0` — what this test actually pins is that
     // `write_trailer`'s seek-back path ran at all, which the stream shape
     // assertions above already exercise indirectly. Kept separate so a
     // regression in the patch path (e.g. patching the wrong offset) shows up
@@ -145,12 +143,9 @@ fn the_trailer_patches_total_frame_and_length_counts() {
     assert_eq!(demux.streams().len(), 2);
 }
 
-/// Finding 16 (`planning/CONFORMANCE-FINDINGS.md`): an H.264 stream sourced
-/// from a length-prefixed container (MP4's `avcC`, typically via `-c copy`)
-/// must be reframed to Annex B before it is a legal AVI `movi` chunk — this
-/// crate used to write `packet.payload()` verbatim regardless, which is the
-/// finding's measured 3.4x size gap against the reference (a structural
-/// difference, not a byte-count one).
+/// An H.264 stream sourced from a length-prefixed container (MP4's `avcC`,
+/// typically via `-c copy`) must be reframed to Annex B before it is a
+/// legal AVI `movi` chunk.
 #[test]
 fn a_length_prefixed_h264_sample_is_rewritten_to_annex_b() {
     let sink = MemorySink::new();
@@ -201,12 +196,9 @@ fn a_length_prefixed_h264_sample_is_rewritten_to_annex_b() {
     assert_eq!(p.len, expected_annexb.len());
 }
 
-/// Finding 19 (`planning/CONFORMANCE-FINDINGS.md`): measured directly
-/// against the reference (`ffmpeg -i <mpegts-with-adts-aac> -c copy -f
-/// avi`, which refuses at `write_header` with "ADTS is only supported with
-/// codec tag 0x1610" and a nonzero exit) — AAC with no extradata (the shape
-/// MPEG-TS's own ADTS framing produces, since ADTS carries its config
-/// per-frame rather than out of band) has no legal AVI representation.
+/// AAC with no extradata (the shape MPEG-TS's own ADTS framing produces,
+/// since ADTS carries its config per-frame rather than out of band) has no
+/// legal AVI representation and must be refused.
 #[test]
 fn adts_framed_aac_with_no_extradata_is_rejected() {
     let sink = MemorySink::new();
@@ -233,6 +225,103 @@ fn raw_aac_with_extradata_is_accepted() {
         a.sample_rate = 44_100;
     }
     assert!(mux.add_stream(&p).is_ok());
+}
+
+/// A video packet's `pts` places it on the 600 Hz grid, and every slot the
+/// stream skips gets a zero-length placeholder chunk on the way there.
+#[test]
+fn video_packets_land_on_the_grid_with_empty_slots_between() {
+    let sink = MemorySink::new();
+    let shared: SharedBytes = sink.shared();
+    let mut mux = vaco_mux_avi::AviMuxer::new(Box::new(sink), &FormatOptions::default()).unwrap();
+    let v = mux.add_stream(&video_params(64, 48, (25, 1))).unwrap();
+    mux.write_header().unwrap();
+
+    // Called directly (not through `MuxBuilder`), so `pts`/`dts` are already
+    // in this stream's own time base — 600 Hz ticks, i.e. slot numbers.
+    let mut first = packet(v, &[0xAA], true);
+    first.pts = vaco_core::Timestamp::new(0);
+    first.dts = first.pts;
+    mux.write_packet(&first).unwrap();
+
+    let mut second = packet(v, &[0xBB], false);
+    second.pts = vaco_core::Timestamp::new(5);
+    second.dts = second.pts;
+    mux.write_packet(&second).unwrap();
+    mux.write_trailer().unwrap();
+
+    let mut demux = open(shared.snapshot());
+    // Slot 0 (real), slots 1-4 (empty), slot 5 (real): six packets total,
+    // the middle four carrying no payload.
+    let mut got = Vec::new();
+    loop {
+        match demux.read_packet() {
+            Ok(p) => got.push((p.pts.ticks(), p.len)),
+            Err(vaco_core::Error::Eof) => break,
+            Err(e) => panic!("unexpected error: {e:?}"),
+        }
+    }
+    assert_eq!(
+        got,
+        vec![
+            (Some(0), 1),
+            (Some(1), 0),
+            (Some(2), 0),
+            (Some(3), 0),
+            (Some(4), 0),
+            (Some(5), 1),
+        ]
+    );
+    assert_eq!(demux.streams()[0].duration_ts, Some(6));
+}
+
+/// AVI has no absolute-time field, so a source clock that does not start at
+/// zero (routine for MPEG-TS) must be rebased against its own first frame —
+/// otherwise every slot number would carry however far that clock had
+/// already run, inflating the grid by that much for no reason.
+#[test]
+fn the_grid_rebases_to_the_streams_own_first_frame() {
+    let sink = MemorySink::new();
+    let shared: SharedBytes = sink.shared();
+    let mut mux = vaco_mux_avi::AviMuxer::new(Box::new(sink), &FormatOptions::default()).unwrap();
+    let v = mux.add_stream(&video_params(64, 48, (25, 1))).unwrap();
+    mux.write_header().unwrap();
+
+    let mut first = packet(v, &[0xAA], true);
+    first.pts = vaco_core::Timestamp::new(90_000); // an arbitrary non-zero start
+    first.dts = first.pts;
+    mux.write_packet(&first).unwrap();
+
+    let mut second = packet(v, &[0xBB], false);
+    second.pts = vaco_core::Timestamp::new(90_002);
+    second.dts = second.pts;
+    mux.write_packet(&second).unwrap();
+    mux.write_trailer().unwrap();
+
+    let demux = open(shared.snapshot());
+    // Two slots apart, not 90 002 apart.
+    assert_eq!(demux.streams()[0].duration_ts, Some(3));
+}
+
+/// The gap between two video timestamps is attacker-controlled input, not a
+/// size this crate chose — an implausible jump must fail cleanly rather than
+/// try to write and index however many placeholder chunks it implies.
+#[test]
+fn an_implausible_grid_gap_is_rejected_not_looped_forever() {
+    let sink = MemorySink::new();
+    let mut mux = vaco_mux_avi::AviMuxer::new(Box::new(sink), &FormatOptions::default()).unwrap();
+    let v = mux.add_stream(&video_params(64, 48, (25, 1))).unwrap();
+    mux.write_header().unwrap();
+
+    let mut first = packet(v, &[0xAA], true);
+    first.pts = vaco_core::Timestamp::new(0);
+    first.dts = first.pts;
+    mux.write_packet(&first).unwrap();
+
+    let mut second = packet(v, &[0xBB], false);
+    second.pts = vaco_core::Timestamp::new(i64::MAX);
+    second.dts = second.pts;
+    assert!(mux.write_packet(&second).is_err());
 }
 
 #[test]
@@ -342,4 +431,38 @@ fn check_bitstream_through_mux_writer_gets_the_splice_maybe_convert_alone_cannot
         .any(|w| w == framing_only.as_slice())
         && !found;
     assert!(!framing_only_appears_alone);
+}
+
+/// `avih.dwMicroSecPerFrame` tracks the *source* time base a caller supplies
+/// through `MuxBuilder`/`add_stream_with`, not the fixed 600 Hz grid — only
+/// reachable this way, since `Muxer::add_stream` alone has no source time
+/// base to give.
+#[test]
+fn avih_dwmicrosecperframe_tracks_the_source_time_base() {
+    let sink = MemorySink::new();
+    let shared: SharedBytes = sink.shared();
+    let mux = vaco_mux_avi::AviMuxer::new(Box::new(sink), &FormatOptions::default()).unwrap();
+
+    let mut builder = MuxBuilder::new(Box::new(mux), &FormatOptions::default());
+    // A 1/12800 track time base, the shape one measured MP4 fixture uses —
+    // 1_000_000 / 12800 = 78.125, truncating to 78.
+    let v = builder
+        .add_stream(&video_params(64, 48, (25, 1)), Rational::new(1, 12_800))
+        .unwrap();
+    let mut writer = builder.open().unwrap();
+
+    let mut pkt = packet(v, &[0xAA], true);
+    pkt.pts = vaco_core::Timestamp::new(0);
+    pkt.dts = pkt.pts;
+    writer.write_packet(pkt).unwrap();
+    writer.finish().unwrap();
+
+    let bytes = shared.snapshot();
+    let avih_at = bytes
+        .windows(4)
+        .position(|w| w == b"avih")
+        .expect("avih chunk present");
+    let body = &bytes[avih_at + 8..];
+    let us_per_frame = u32::from_le_bytes(body[0..4].try_into().unwrap());
+    assert_eq!(us_per_frame, 78);
 }

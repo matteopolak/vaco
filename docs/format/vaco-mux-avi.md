@@ -15,15 +15,32 @@ One file, `mux.rs`, implementing `vaco_format_core::Muxer` as `AviMuxer`.
 
 ## How it works
 
-### AVI chunks carry no timestamp, so packets don't need one either
+### Video sits on a fixed 600 Hz grid; audio does not
 
-The demuxer recovers a timestamp from a running per-stream count (see
-`vaco-demux-avi`'s docs). The consequence for the muxer: **`write_packet`
-does not need `packet.pts`/`packet.dts` to decide what bytes to write** — it
-only needs packets to arrive in the order the caller wants them replayed,
-which the generic interleave machinery upstream already guarantees once
-`stream_time_base` reports the right unit (`dwScale/dwRate`, i.e.
-`1/frame_rate` for video, `1/sample_rate` for audio).
+AVI has no per-packet timestamp field. A frame's presentation time is its
+ordinal position, so a video stream's `stream_time_base` is a fixed
+`GRID_RATE` of `1/600` regardless of the source's own frame rate — measured
+constant across every frame rate tried. `write_packet` places each real
+video packet at the slot its (rescaled) `dts`/`pts` rounds to, and
+`AviMuxer::backfill_grid_slots` fills every slot skipped since the last real
+one with a zero-length placeholder chunk. `strh.dwLength`/`avih.dwTotalFrames`
+fall out of this for free: a video `StreamOut::count` is the next unfilled
+slot throughout, which is already the right value once the file is done.
+
+Because AVI has no absolute-time field either, the very first video packet's
+own timestamp becomes slot zero (`StreamOut::grid_origin`) — a source clock
+that does not start there (routine for MPEG-TS) is rebased against it,
+rather than pushing every slot out by however far that clock had already
+run. The gap a video timestamp implies is attacker-controlled the ordinary
+way (it comes straight from the input container), so `backfill_grid_slots`
+checks it against a `Budget` before writing or indexing anything — see
+`grid_budget`'s doc comment for the numbers.
+
+Audio has no such grid: one chunk is one frame (VBR) or a fixed number of
+samples (CBR PCM), and `write_packet` still only needs packets to arrive in
+the order the caller wants them replayed. A source whose compressed-audio
+timeline itself has gaps (dropped frames, not just a nonzero start) is not
+covered by this — see *What was exercised, and what was not* below.
 
 ### What gets patched, and how
 
@@ -45,6 +62,22 @@ known until every packet has been written:
   appending it after `movi` depends on the sink's ability to go backwards.
   Its `dwOffset` is written movi-relative, the convention `vaco-demux-avi`
   measured `ffmpeg 8.1`'s own writer using.
+
+### `dwMicroSecPerFrame` and `vprp` come from the source, not the grid
+
+`avih.dwMicroSecPerFrame` tracks the *source* time base (`1e6 × num / den`,
+truncating) rather than `GRID_RATE` — internally inconsistent with `strh`'s
+own `dwRate`, but that is what a real writer states. The source time base is
+only available through `Muxer::add_stream_with`'s `StreamSpec`, so
+`AviMuxer` overrides that method to capture it into `StreamOut::source_time_base`;
+a caller that drives `add_stream` directly (every test in this crate) never
+supplies one, and the field stays `0`.
+
+Each video `strl` also gets a `vprp` (`OpenDML` video-properties) chunk,
+built from `CodecParameters` alone: dimensions, aspect ratio (`1:1` when the
+source declared none), and a single progressive `VIDEO_FIELD_DESC`.
+Interlaced sources get the same single-field shape, which is a known gap —
+this crate has no interlace-aware `vprp` layout yet.
 
 ### Length-prefixed H.264/HEVC is converted to Annex B
 
@@ -119,11 +152,28 @@ and is exactly what `tests/roundtrip.rs` pins.
 
 - **Exercised** (`tests/roundtrip.rs`, which demuxes with `vaco-demux-avi`):
   a two-stream (H.264 video + PCM audio) file, packet order and per-packet
-  keyframe/PTS derivation on the read side, the seekable trailer-patch path.
+  keyframe/PTS derivation on the read side, the seekable trailer-patch path,
+  the 600 Hz grid's placeholder backfill and origin rebasing, an implausible
+  grid gap being rejected, and `dwMicroSecPerFrame` when driven through
+  `MuxBuilder`. Verified directly against `ffmpeg 8.1 -c copy -f avi` on
+  three fixtures (an MP4 with B-frame-free H.264+AAC, a video-only MP4, and
+  an MPEG-TS with B-frames and a non-zero start time): the decoded video is
+  byte-identical to both the source and the reference's own output in every
+  case.
 - **Not exercised**: the non-seekable-sink path (placeholder `0`/
   `0xFFFF_FFFF` values never actually read back by anything in this crate's
   tests), MP3/AAC audio muxing, more than two streams, `strn` or `LIST INFO`
-  metadata output (this crate does not write either — see below).
+  metadata output (this crate does not write either — see below), and
+  interlaced `vprp`.
+- **Known gap, not fixed here**: on the one fixture measured with compressed
+  (AAC) audio, the reference also writes a handful of zero-length audio
+  placeholder chunks that this crate does not — the same "position is time"
+  principle the video grid applies, extended to audio's own per-frame
+  duration, but not yet measured across enough fixtures to implement with
+  confidence. The `JUNK` padding chunks `hdrl` reserves around each `strl`
+  and before `movi` are also not written; their exact sizing rule was not
+  determined from the one fixture available, and they carry no semantic
+  content a reader depends on.
 
 ## How to change it
 
@@ -166,6 +216,12 @@ trailer-patch tests.
 
 `fuzz/fuzz_targets/avi_mux_packet.rs` mirrors `vaco-mux-mpegts`'s own
 `mpegts_mux_packet` target: arbitrary bytes through `write_packet`, with
-`nal_length_size` toggled by an input bit, asserting output growth stays
-within a generous bound. 30-second run: `exit=0`, `execs≈1,753,000` (varies
-run to run), `find fuzz/artifacts -type f` empty.
+`nal_length_size` toggled by an input bit and a `pts`/`dts` gap (bounded to
+`MAX_GRID_GAP` slots, so one iteration cannot spend its time writing an
+unbounded run of placeholder chunks) derived from two more input bytes,
+asserting output growth stays within a bound that accounts for both the
+Annex-B conversion and the grid backfill. 30-second run: `exit=0`,
+`execs≈1,660,000` (varies run to run), `find fuzz/artifacts -type f` empty.
+The budget-rejection path for a genuinely implausible gap is covered by a
+unit test instead (`an_implausible_grid_gap_is_rejected_not_looped_forever`),
+where an exact input is worth more than a slow corpus entry.

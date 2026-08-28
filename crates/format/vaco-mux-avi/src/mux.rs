@@ -30,11 +30,19 @@
 use vaco_codec_core::{CodecId, CodecParameters};
 use vaco_core::{Error, MediaType, Rational, Result};
 use vaco_format_core::mux::BitstreamAction;
-use vaco_format_core::{FormatOptions, Muxer, MuxerDesc};
+use vaco_format_core::{FormatOptions, Muxer, MuxerDesc, StreamSpec};
 use vaco_format_nalu::{LengthSize, convert::length_prefixed_to_annexb};
 use vaco_io::{IoOptions, IoWriter, MediaSink};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
+
+/// The fixed grid every video stream is placed on. AVI carries no
+/// per-packet timestamp — a frame's presentation time is its ordinal — so
+/// time is expressed by *position*: every stream advances 600 slots per
+/// second, a real frame occupies the slot its timestamp rounds to, and
+/// every other slot gets a zero-length placeholder chunk. This is constant
+/// across source frame rates, not derived from the stream's own rate.
+const GRID_RATE: Rational = Rational::new(1, 600);
 
 /// `AVIF_HASINDEX | AVIF_ISINTERLEAVED`, per the field this crate's sibling
 /// demuxer already interprets.
@@ -73,12 +81,38 @@ struct StreamOut {
     /// `strh.dwLength` field — patched at `write_trailer` once the true
     /// count is known.
     length_field_at: usize,
-    /// Running frame (or, for CBR audio, sample) count.
+    /// Running frame (or, for CBR audio, sample) count — for a video stream
+    /// on the 600 Hz grid ([`AviMuxer::write_packet`]), this instead tracks
+    /// the next unfilled slot, which **is** the correct `dwLength`/
+    /// `dwTotalFrames` value once every packet has been written, so no
+    /// separate field is needed to carry both meanings.
     count: u64,
     /// Video's `biCompression` `FourCC`.
     video_fourcc: [u8; 4],
     width: u32,
     height: u32,
+    /// Dimensions before display cropping — `vprp`'s per-field
+    /// `CompressedBM{Width,Height}`. Equal to `width`/`height` when the
+    /// codec does not distinguish the two.
+    coded_width: u32,
+    coded_height: u32,
+    /// `vprp`'s `dwFrameAspectRatio`. `Rational::new(1, 1)` (square pixels)
+    /// when the source declared none.
+    sample_aspect_ratio: Rational,
+    /// The time base packets for this stream arrive in at
+    /// [`Muxer::add_stream_with`], when the caller supplied a better answer
+    /// than [`CodecParameters`] alone implies — typically the input's own
+    /// track time base for a stream-copy output. Used only for
+    /// `avih.dwMicroSecPerFrame`, which tracks the *source* time base, not
+    /// [`GRID_RATE`], and so is internally inconsistent with `strh`.
+    source_time_base: Option<Rational>,
+    /// The first video packet's own timestamp, in [`GRID_RATE`] ticks, once
+    /// one has been seen. AVI has no absolute-time field anywhere, so a
+    /// source whose clock does not start at zero (routine for MPEG-TS) must
+    /// be rebased against its own first frame, or every slot number carries
+    /// however far the source's clock had already run before this stream
+    /// started.
+    grid_origin: Option<i64>,
     /// Audio's `wFormatTag`.
     audio_format_tag: u16,
     channels: u16,
@@ -135,6 +169,14 @@ pub struct AviMuxer {
     /// demuxer's input is; it only bounds runaway output on a malformed
     /// length prefix.
     convert_budget: Budget,
+    /// Bounds the 600 Hz grid's empty-slot backfill in
+    /// [`AviMuxer::write_packet`]. Unlike `convert_budget`, the loop this
+    /// guards is attacker-controlled the ordinary way: the gap between two
+    /// video packets' timestamps comes straight from the input container,
+    /// and with no cap a single crafted timestamp jump would try to write
+    /// and index billions of empty chunks. `Limits::permissive`'s fuel and
+    /// byte cap reject that while allowing any real recording.
+    grid_budget: Budget,
 }
 
 impl AviMuxer {
@@ -154,6 +196,7 @@ impl AviMuxer {
             movi_fourcc_pos: 0,
             idx: Vec::new(),
             convert_budget: Budget::new(Limits::permissive()),
+            grid_budget: Budget::new(Limits::permissive()),
         })
     }
 
@@ -171,9 +214,8 @@ impl AviMuxer {
     /// container (typically MP4, via `-c copy`) must be reframed with start
     /// codes before it can go into a `movi` chunk — otherwise the "length"
     /// this crate would write is a byte count for a NAL unit stream no AVI
-    /// reader's convention matches, which is finding 16's measured 3.4×
-    /// size gap against the reference (the two aren't different lengths of
-    /// the same bytes; the bytes are structured differently). Mirrors
+    /// reader's convention matches (the two aren't different lengths of the
+    /// same bytes; the bytes are structured differently). Mirrors
     /// `vaco-mux-mpegts::MpegTsMuxer::maybe_convert`, which solves the exact
     /// same problem for the exact same codecs.
     ///
@@ -206,6 +248,72 @@ impl AviMuxer {
         let mut out = Vec::new();
         length_prefixed_to_annexb(payload, length_size, &mut out, &mut self.convert_budget)?;
         Ok(out)
+    }
+
+    /// Writes a zero-length `00dc`-style chunk for every slot on the video
+    /// grid strictly between `self.streams[index]`'s last-used slot and this
+    /// packet's own. Leaves `self.streams[index].count` at this packet's
+    /// target slot; the caller advances past it once the real chunk is
+    /// written.
+    ///
+    /// # Errors
+    /// [`vaco_limits::LimitError`] (surfaced as [`Error`]) if the gap between
+    /// slots is implausibly large — see `grid_budget`'s doc comment.
+    fn backfill_grid_slots(&mut self, index: usize, tag: [u8; 4], packet: &Packet) -> Result<()> {
+        let Some(stream) = self.streams.get(index) else {
+            return Ok(());
+        };
+        let next_slot = stream.count;
+        // `dts` is preferred over `pts` for the slot, since AVI has no field
+        // at all for reordering: writing chunks in anything but
+        // non-decreasing `dts` order would make some frame's slot precede
+        // one already on disk. Falling back to `pts`, then to "the next
+        // slot in line", keeps this total even on a packet with neither.
+        let raw_ticks = packet.dts.ticks().or_else(|| packet.pts.ticks());
+        // Rebase against the first frame's own timestamp (see
+        // `grid_origin`'s doc comment) so a source clock that does not
+        // start at zero does not push every slot number out by however far
+        // it had already run.
+        let origin = match (stream.grid_origin, raw_ticks) {
+            (Some(o), _) => o,
+            (None, Some(t)) => t,
+            (None, None) => 0,
+        };
+        if stream.grid_origin.is_none()
+            && let Some(t) = raw_ticks
+            && let Some(s) = self.streams.get_mut(index)
+        {
+            s.grid_origin = Some(t);
+        }
+        let slot = raw_ticks
+            .map(|t| t.saturating_sub(origin))
+            .and_then(|t| u64::try_from(t).ok())
+            .unwrap_or(next_slot)
+            .max(next_slot);
+        let gap = slot - next_slot;
+        if gap > 0 {
+            let entry_bytes = u64::try_from(core::mem::size_of::<IdxEntry>()).unwrap_or(u64::MAX);
+            self.grid_budget.consume_fuel(gap)?;
+            let idx_bytes = gap
+                .checked_mul(entry_bytes)
+                .ok_or(Error::Unsupported("avi: video timestamp gap too large"))?;
+            self.grid_budget.charge(idx_bytes)?;
+        }
+        for _ in 0..gap {
+            let pos = self.out.pos();
+            self.out.write_tag(&tag)?;
+            self.out.wl32(0)?;
+            self.idx.push(IdxEntry {
+                tag,
+                flags: 0,
+                abs_pos: pos,
+                size: 0,
+            });
+        }
+        if let Some(stream) = self.streams.get_mut(index) {
+            stream.count = slot;
+        }
+        Ok(())
     }
 }
 
@@ -357,6 +465,11 @@ impl Muxer for AviMuxer {
             video_fourcc: *b"    ",
             width: 0,
             height: 0,
+            coded_width: 0,
+            coded_height: 0,
+            sample_aspect_ratio: Rational::new(1, 1),
+            source_time_base: None,
+            grid_origin: None,
             audio_format_tag: 0,
             channels: 1,
             bits_per_sample: 16,
@@ -368,16 +481,34 @@ impl Muxer for AviMuxer {
             let v = params.video.as_ref().ok_or(Error::Unsupported(
                 "avi: video stream has no VideoParameters",
             ))?;
-            let fps = v.frame_rate;
-            if fps.is_defined() && !fps.is_zero() && !fps.is_infinite() {
-                out.time_base = fps.inverse();
-            }
+            // Every video stream sits on the fixed 600 Hz grid regardless of
+            // its own frame rate — not derived from `v.frame_rate`.
+            out.time_base = GRID_RATE;
             out.video_fourcc = video_fourcc(codec_id)
                 .ok_or(Error::Unsupported("avi: codec has no AVI video FourCC"))?;
             out.width = v.width;
             out.height = v.height;
+            out.coded_width = if v.coded_width > 0 {
+                v.coded_width
+            } else {
+                v.width
+            };
+            out.coded_height = if v.coded_height > 0 {
+                v.coded_height
+            } else {
+                v.height
+            };
+            if v.sample_aspect_ratio.is_defined()
+                && !v.sample_aspect_ratio.is_zero()
+                && !v.sample_aspect_ratio.is_infinite()
+            {
+                out.sample_aspect_ratio = v.sample_aspect_ratio;
+            }
             if is_h264_or_hevc(codec_id) {
-                out.length_size = v.nal_length_size.filter(|&n| n > 0).and_then(LengthSize::new);
+                out.length_size = v
+                    .nal_length_size
+                    .filter(|&n| n > 0)
+                    .and_then(LengthSize::new);
             }
         } else {
             let a = params.audio.as_ref().ok_or(Error::Unsupported(
@@ -386,19 +517,13 @@ impl Muxer for AviMuxer {
             if a.sample_rate == 0 {
                 return Err(Error::Unsupported("avi: audio stream has no sample rate"));
             }
-            // Finding 19 (`planning/CONFORMANCE-FINDINGS.md`): measured
-            // directly (`ffmpeg -i <mpegts-with-adts-aac> -c copy -f avi`,
-            // which refuses at `write_header` with "ADTS is only supported
-            // with codec tag 0x1610" and a nonzero exit) — AVI's
-            // `WAVE_FORMAT_AAC` entry expects raw, `AudioSpecificConfig`-
-            // framed AAC (the config carried once, out of band), not
-            // ADTS's self-contained per-frame header. MPEG-TS's own AAC
-            // convention is ADTS and carries no such config, so a stream
-            // with no extradata at all is the observable signal this crate
-            // has for "this is ADTS-framed, not raw" (MP4/`esds`-sourced
-            // AAC always has one). Refusing here, rather than writing a
-            // technically-malformed `WAVE_FORMAT_AAC` chunk stream, is the
-            // fix for the "silent success" shape finding 6 already named.
+            // AVI's `WAVE_FORMAT_AAC` entry expects raw, `AudioSpecificConfig`-
+            // framed AAC (the config carried once, out of band), not ADTS's
+            // self-contained per-frame header. A stream with no extradata at
+            // all is the observable signal this crate has for "this is
+            // ADTS-framed, not raw" (MP4/`esds`-sourced AAC always has one),
+            // so it is refused here rather than written as a
+            // technically-malformed `WAVE_FORMAT_AAC` chunk stream.
             if codec_id == CodecId::Aac && params.extradata.as_deref().is_none_or(<[u8]>::is_empty)
             {
                 return Err(Error::Unsupported(
@@ -430,6 +555,22 @@ impl Muxer for AviMuxer {
         let index = u32::try_from(self.streams.len())
             .map_err(|_| Error::Unsupported("avi: too many streams"))?;
         self.streams.push(out);
+        Ok(index)
+    }
+
+    /// [`Muxer::add_stream`], plus capturing `spec.time_base`.
+    /// `avih.dwMicroSecPerFrame` needs the *source* time base, which
+    /// [`GRID_RATE`] deliberately is not, so this is the only place that
+    /// value is still available — `write_packet` only ever sees packets
+    /// already rescaled into [`GRID_RATE`].
+    fn add_stream_with(&mut self, params: &CodecParameters, spec: &StreamSpec) -> Result<u32> {
+        let index = self.add_stream(params)?;
+        if let Some(tb) = spec.time_base
+            && let Ok(i) = usize::try_from(index)
+            && let Some(s) = self.streams.get_mut(i)
+        {
+            s.source_time_base = Some(tb);
+        }
         Ok(index)
     }
 
@@ -490,17 +631,26 @@ impl Muxer for AviMuxer {
             .is_video;
         let tag = chunk_tag(packet.stream_index, is_video)?;
 
-        // Finding 16: a length-prefixed H.264/HEVC sample (typically sourced
-        // from MP4, `-c copy`) must be reframed to Annex B before it is a
-        // legal AVI chunk payload — see `maybe_convert`'s doc comment.
-        // `payload`'s length, not `packet.len`, drives every size field below
-        // from here on, since the two can differ once conversion runs.
+        // A video stream sits on the fixed 600 Hz grid, so this packet may
+        // need empty placeholder chunks in front of it for every slot since
+        // the last real one. Leaves `self.streams[idx].count` at this
+        // packet's own target slot; audio's `count` keeps its own,
+        // unrelated meaning.
+        if is_video {
+            self.backfill_grid_slots(idx, tag, packet)?;
+        }
+
+        // A length-prefixed H.264/HEVC sample must be reframed to Annex B
+        // before it is a legal AVI chunk payload — see `maybe_convert`'s doc
+        // comment. `payload`'s length, not `packet.len`, drives every size
+        // field below from here on, since the two can differ once
+        // conversion runs.
         let payload = self.maybe_convert(idx, packet.payload())?;
 
         let pos = self.out.pos();
         self.out.write_tag(&tag)?;
-        let len =
-            u32::try_from(payload.len()).map_err(|_| Error::Unsupported("avi: packet too large"))?;
+        let len = u32::try_from(payload.len())
+            .map_err(|_| Error::Unsupported("avi: packet too large"))?;
         self.out.wl32(len)?;
         self.out.write(&payload)?;
         if payload.len() % 2 == 1 {
@@ -511,16 +661,23 @@ impl Muxer for AviMuxer {
             .streams
             .get_mut(idx)
             .ok_or(Error::InvalidData("avi: packet names an unknown stream"))?;
-        stream.count = if stream.sample_size == 0 {
-            stream.count.saturating_add(1)
+        if is_video {
+            // `count` already holds this packet's own slot (set by
+            // `backfill_grid_slots`); advance past it so the *next* call
+            // starts backfilling from here.
+            stream.count = stream.count.saturating_add(1);
         } else {
-            #[allow(
-                clippy::integer_division,
-                reason = "dwSampleSize divides a byte count into an exact sample count, not a ratio"
-            )]
-            let samples = u64::from(len) / u64::from(stream.sample_size.max(1));
-            stream.count.saturating_add(samples.max(1))
-        };
+            stream.count = if stream.sample_size == 0 {
+                stream.count.saturating_add(1)
+            } else {
+                #[allow(
+                    clippy::integer_division,
+                    reason = "dwSampleSize divides a byte count into an exact sample count, not a ratio"
+                )]
+                let samples = u64::from(len) / u64::from(stream.sample_size.max(1));
+                stream.count.saturating_add(samples.max(1))
+            };
+        }
 
         self.idx.push(IdxEntry {
             tag,
@@ -544,17 +701,22 @@ impl Muxer for AviMuxer {
     /// [`vaco_format_core::mux::MuxWriter`] with a real `BsfProvider` gets the
     /// splice-correct conversion instead of this crate's own framing-only
     /// fallback (see that method's docs).
-    fn check_bitstream(&mut self, params: &CodecParameters, pkt: &Packet) -> Result<BitstreamAction> {
+    fn check_bitstream(
+        &mut self,
+        params: &CodecParameters,
+        pkt: &Packet,
+    ) -> Result<BitstreamAction> {
         let idx = usize::try_from(pkt.stream_index).ok();
-        if idx.and_then(|i| self.streams.get(i)).is_some_and(|s| s.bsf_decided) {
+        if idx
+            .and_then(|i| self.streams.get(i))
+            .is_some_and(|s| s.bsf_decided)
+        {
             return Ok(BitstreamAction::Keep);
         }
         if let Some(s) = idx.and_then(|i| self.streams.get_mut(i)) {
             s.bsf_decided = true;
         }
-        let needs_annexb = params
-            .codec_id
-            .is_some_and(is_h264_or_hevc)
+        let needs_annexb = params.codec_id.is_some_and(is_h264_or_hevc)
             && params
                 .video
                 .as_ref()
@@ -633,13 +795,32 @@ impl Muxer for AviMuxer {
 /// Returns `dwTotalFrames`'s offset within `out`, patched once the true
 /// count is known.
 fn write_avih(out: &mut Vec<u8>, streams: &[StreamOut]) -> usize {
-    let (width, height) = streams
-        .iter()
-        .find(|s| s.is_video)
-        .map_or((0, 0), |s| (s.width, s.height));
+    let primary_video = streams.iter().find(|s| s.is_video);
+    let (width, height) = primary_video.map_or((0, 0), |s| (s.width, s.height));
+    // `dwMicroSecPerFrame` tracks the *source* time base
+    // (`1e6 * num / den`, truncating), not `GRID_RATE` — internally
+    // inconsistent with `strh`'s own `dwRate`, but that is what the
+    // reference writes. `0` is the fallback when no source time base was
+    // ever supplied (`add_stream` called directly, bypassing
+    // `add_stream_with`).
+    let us_per_frame = primary_video
+        .and_then(|s| s.source_time_base)
+        .filter(|tb| tb.den != 0)
+        .and_then(|tb| {
+            let num = u64::from(tb.num.unsigned_abs());
+            let den = u64::from(tb.den.unsigned_abs());
+            #[allow(
+                clippy::integer_division,
+                reason = "microseconds per source tick is an exact unit conversion, not a ratio"
+            )]
+            let us_per_frame = 1_000_000u64.checked_mul(num).map(|us| us / den.max(1));
+            us_per_frame
+        })
+        .and_then(|v| u32::try_from(v).ok())
+        .unwrap_or(0);
     out.extend_from_slice(b"avih");
     out.extend_from_slice(&56u32.to_le_bytes());
-    out.extend_from_slice(&0u32.to_le_bytes()); // dwMicroSecPerFrame
+    out.extend_from_slice(&us_per_frame.to_le_bytes()); // dwMicroSecPerFrame
     out.extend_from_slice(&0u32.to_le_bytes()); // dwMaxBytesPerSec
     out.extend_from_slice(&0u32.to_le_bytes()); // dwPaddingGranularity
     out.extend_from_slice(&AVIH_FLAGS.to_le_bytes());
@@ -709,6 +890,10 @@ fn write_strl(out: &mut Vec<u8>, s: StreamOut) -> usize {
         strl.extend_from_slice(b"strf");
         strl.extend_from_slice(&(strf.len() as u32).to_le_bytes());
         strl.extend_from_slice(&strf);
+        let vprp = build_vprp(s);
+        strl.extend_from_slice(b"vprp");
+        strl.extend_from_slice(&(vprp.len() as u32).to_le_bytes());
+        strl.extend_from_slice(&vprp);
     } else {
         let mut strf = Vec::new();
         strf.extend_from_slice(&s.audio_format_tag.to_le_bytes());
@@ -742,4 +927,41 @@ fn write_strl(out: &mut Vec<u8>, s: StreamOut) -> usize {
     out.extend_from_slice(&(strl.len() as u32).to_le_bytes());
     out.extend_from_slice(&strl);
     length_field_at
+}
+
+/// `vprp` (`AVIEXTHEADER`/`VPRP`, the `OpenDML` video-properties chunk) for a
+/// video stream. Field layout matches the public `OpenDML` AVI File Format
+/// Extensions document.
+///
+/// Only one `VIDEO_FIELD_DESC` is written (`nbFieldPerFrame = 1`): an
+/// interlaced source would need a second descriptor and a
+/// `dwVerticalRefreshRate`/`nbFieldPerFrame` convention this crate does not
+/// yet produce.
+fn build_vprp(s: StreamOut) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&0u32.to_le_bytes()); // VideoFormatToken: unknown/unspecified
+    out.extend_from_slice(&0u32.to_le_bytes()); // VideoStandard: unknown/unspecified
+    // `dwVerticalRefreshRate` is the grid rate, not the source frame rate —
+    // written from `GRID_RATE` directly so the two cannot drift apart.
+    let refresh_rate = u32::try_from(GRID_RATE.den).unwrap_or(0);
+    out.extend_from_slice(&refresh_rate.to_le_bytes()); // dwVerticalRefreshRate
+    out.extend_from_slice(&s.width.to_le_bytes()); // dwHTotalInT
+    out.extend_from_slice(&s.height.to_le_bytes()); // dwVTotalInLines
+    let sar_num = u16::try_from(s.sample_aspect_ratio.num.max(1)).unwrap_or(1);
+    let sar_den = u16::try_from(s.sample_aspect_ratio.den.max(1)).unwrap_or(1);
+    let aspect = (u32::from(sar_num) << 16) | u32::from(sar_den);
+    out.extend_from_slice(&aspect.to_le_bytes()); // dwFrameAspectRatio
+    out.extend_from_slice(&s.width.to_le_bytes()); // dwFrameWidthInPixels
+    out.extend_from_slice(&s.height.to_le_bytes()); // dwFrameHeightInLines
+    out.extend_from_slice(&1u32.to_le_bytes()); // nbFieldPerFrame
+    // VIDEO_FIELD_DESC[0]
+    out.extend_from_slice(&s.coded_height.to_le_bytes()); // CompressedBMHeight
+    out.extend_from_slice(&s.coded_width.to_le_bytes()); // CompressedBMWidth
+    out.extend_from_slice(&s.height.to_le_bytes()); // ValidBMHeight
+    out.extend_from_slice(&s.width.to_le_bytes()); // ValidBMWidth
+    out.extend_from_slice(&0u32.to_le_bytes()); // ValidBMXOffset
+    out.extend_from_slice(&0u32.to_le_bytes()); // ValidBMYOffset
+    out.extend_from_slice(&0u32.to_le_bytes()); // VideoXOffsetInT
+    out.extend_from_slice(&0u32.to_le_bytes()); // VideoYValidStartLine
+    out
 }
