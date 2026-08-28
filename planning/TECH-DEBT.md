@@ -4483,3 +4483,100 @@ from it landed except the permanent fixture and its `#[ignore]`d test.
 `Vaco-Spec-Ref: iso-iec-14496-10-2002-draft` clause 8.3.1.2.1, Table 9-12
 (ctxIdx 0-10), Table 9-33/9-34 (`rangeTabLPS`/state transitions, this
 draft's numbering for what later editions call Table 9-44/9-45).
+
+
+### The P-picture max-97 residual was never a P-picture defect (#355)
+
+The two candidates the previous round named for this residual —
+MPEG-1's own `motion_code`/`motion_r` wraparound, and half-pel
+interpolation rounding — were tested the way the previous round's own
+mismatch-control fix was validated: by correlating per-macroblock error
+against the property each hypothesis predicts, rather than by
+implementing either one and hoping.
+
+**The correlation.** `m1_ip.m1v`, every forward-coded P-picture
+macroblock, Y-plane per-macroblock max abs diff against reference,
+binned by motion vector magnitude and by parity. 275 of 276 sampled
+macroblocks have `fwd=(0,0)`; the one macroblock with a non-zero vector
+(`mag=1`) has `maxdiff=1`. The worst-error macroblocks — `maxdiff=97`
+and `77` — are exactly the zero-motion-vector ones. A wraparound bug
+needs a vector near the `f_code`-derived range limit; a half-pel
+rounding bug needs a fractional component. Zero has neither. Both
+candidates are wrong on their own predicted shape, which is a complete
+answer either way per the round's own bounding rule.
+
+**What the trace shows instead.** Following `m1_ip`'s two worst
+macroblocks (`mb=(3,1)`, `mb=(0,1)`) across all 25 frames: flat at the
+already-known, separately-tracked small intra ceiling for frames 0-14,
+a jump to 97/77 at frame index 15, flat at 97/77 through frame 24.
+Frame 15 is this fixture's *second I-picture* — `m1_ip.m1v` repeats
+`sequence_header()`/`group_start_code` exactly once, immediately before
+it. Every P-picture macroblock at that position afterward has zero
+motion vector and zero residual (`nz=0` — an uncoded or all-zero
+delta), so it copies the second I-picture's already-wrong
+reconstruction forward pixel-for-pixel rather than re-deriving
+anything. There is no P-picture-specific or motion-compensation
+mechanism to find: "P-picture max-97" has named the wrong picture type
+since the very first round to measure it. `m1_i` (the crate's
+intra-only fixture) never exercises a repeated `sequence_header()` at
+all — one GOP, 25 pictures, one header — which is why its own
+(separately-tracked, much smaller) max-9 residual never surfaced this.
+
+**Ruled out `dequantise()`/`inverse_transform()` directly.** Dumped the
+affected block's raw entropy-decoded coefficient levels, its
+dequantised values, and this crate's own IDCT residual, all mid-decode
+(temporary instrumentation, reverted, nothing committed). Independently
+re-derived the same 8x8 block by hand in Python from a textbook 2D
+8-point IDCT-III formula applied to the *dumped dequantised values* —
+not this crate's own transform implementation. It reproduces this
+crate's residual exactly, integer for integer, across the full 8x8
+block. The arithmetic from dequantisation through inverse transform is
+correct for the coefficients it is given. Whatever is wrong is upstream
+of that: in how those coefficient levels were entropy-decoded for these
+two macroblocks specifically (each is dense — ~58 of 64 AC coefficients
+non-zero, consistent with a genuine sharp edge in the source content —
+unlike the flat, DC-only macroblocks on either side of them in the same
+slice, which decode exactly).
+
+**One real hypothesis raised by the repeated-header timing, checked and
+killed rather than acted on.** `load_intra_quantiser_matrix`'s own
+semantics text reads, in isolation, like it could mean "if 0, keep
+whatever matrix was previously loaded" — which would make a repeated
+`sequence_header()` that doesn't repeat a custom matrix's payload a
+real, matching bug. Checked directly against the primary text before
+touching code: H.262 §6.3.11's opening sentence, in the same section,
+states "When a sequence_header_code is decoded all matrices shall be
+reset to their default values" — unconditionally, on every occurrence,
+before that occurrence's own load bit is read. "No change" means no
+change from that just-applied reset, not persistence across repeats.
+Also checked directly against this fixture's own bitstream: both
+`sequence_header()` occurrences read `load_intra_quantiser_matrix=0`
+and `load_non_intra_quantiser_matrix=0`, so even the wrong reading
+would have been a no-op on this specific corpus. This crate's existing
+reset-every-time implementation was already correct; recorded as a doc
+comment (`crates/codec/vaco-codec-mpeg12/src/headers.rs`) rather than
+changed, so a future round doesn't re-open this exact question from the
+same surface signal (a matrix-relevant-looking defect appearing right
+after a repeated header).
+
+**Not chased further this round, per instruction:** `m1_i`'s own
+constant max-9 residual stays a separate, second open thread.
+
+**Next candidate, if a further round is authorized:** the search space
+named by the previous round (`motion_code`/`motion_r` wraparound,
+half-pel interpolation rounding) is now fully eliminated for this
+residual — it never touches motion vectors at all. The actual mechanism
+is in entropy decoding of dense AC coefficient runs for specific intra
+macroblocks; a further round needs a VLC/escape-coding hypothesis, most
+directly tested by isolating and hand-decoding the exact slice bits for
+one of these two macroblocks bit-by-bit against `tables::CoeffTable`'s
+own rows.
+
+Gates green (`cargo test/clippy -p vaco-codec-mpeg12`, full
+`layer-check`/`dep-gate`/`unsafe-audit`/`dup-check`/`time-gate`/
+`owner-gate`/`vlc-scan`). `provenance-check`'s existing findings are
+unrelated (other commits, other crates). All debug instrumentation used
+for this round's measurements reverted before committing; nothing from
+it landed except the doc-comment fix.
+
+`Vaco-Spec-Ref: itu-t-h262` §6.3.11.
