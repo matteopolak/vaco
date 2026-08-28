@@ -303,6 +303,22 @@ round-trips are not.
 
 A crate that parses untrusted input and has no fuzz target is not done.
 
+**Run one target in isolation, always:**
+
+```sh
+cargo +nightly fuzz run <target> --no-default-features --features <feature> \
+  -- -max_total_time=30
+```
+
+`--no-default-features` is not decoration and `--features` alone is not enough.
+Every path dependency in `fuzz/Cargo.toml` is now `optional`, so this pair is
+what builds *only* the crates your target names. Without it you build every
+crate in the workspace, and any one of them failing takes your fuzz run with
+it — in a tree where eight agents are mid-write, that is the normal state, not
+an edge case. Two crates being transiently uncompilable blocked everybody's
+fuzzing this way before the dependencies were gated. `just fuzz <target>`
+reads the target's `required-features` and passes both flags for you.
+
 Report the **exit code and the exec count**, and check
 `find fuzz/artifacts -type f` is empty. Do **not** grep the log for `panicked`
 — that has produced two false "clean" reports. A `slow-unit-` and an `oom-`

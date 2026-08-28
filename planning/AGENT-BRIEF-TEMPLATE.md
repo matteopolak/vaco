@@ -206,11 +206,19 @@ removed the only mandatory reason for nightly), but `cargo fuzz` requires
 `-Zsanitizer=address`, which is nightly-only. So write:
 
 ```
-cargo +nightly fuzz run <target> --features <feature> -- -max_total_time=30
+cargo +nightly fuzz run <target> --no-default-features --features <feature> \
+  -- -max_total_time=30
 ```
 
 Without `+nightly` it fails with a sanitizer error that reads like a broken
-toolchain. `just fuzz <target>` already does this for you. Fuzzing is a test-time
+toolchain.
+
+**`--no-default-features` is load-bearing and `--features` alone is not
+enough.** Every path dependency in `fuzz/Cargo.toml` is `optional`, so that
+pair builds only the crates your target names; without it you build the whole
+workspace and any single crate failing to compile takes your run with it.
+With several agents mid-write that is the normal state. `just fuzz <target>`
+reads the target's `required-features` and passes both flags for you. Fuzzing is a test-time
 tool; it does not affect the stable release toolchain.
 
 **Commit your own work.** Conventional Commit subjects (plan 19 §15) and the
