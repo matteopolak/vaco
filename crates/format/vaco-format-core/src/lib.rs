@@ -427,6 +427,52 @@ pub trait Demuxer: Send {
         let _ = (limits, opts);
         Ok(())
     }
+
+    /// Rebind this demuxer to the URL it was opened from, for a format whose
+    /// real unit of demuxing needs more filesystem access than the one
+    /// [`Box<dyn MediaSource>`] `open` received — a filename *pattern* that
+    /// expands to many files (`image2`'s `img_%03d.png`), or a sidecar file
+    /// whose name is a convention relative to this one (`VobSub`'s `.sub` next
+    /// to its `.idx`) (gap 7, `planning/INTERFACE-GAPS.md`).
+    ///
+    /// **Why this exists instead of a parameter on [`DemuxerDesc::open`], or
+    /// a second [`MediaSource`] the caller opens itself.** Same root cause as
+    /// gap 4: `open` is a bare `fn` pointer ~90 registered demuxers already
+    /// implement at a fixed `(Box<dyn MediaSource>, &dyn ParserProvider)`
+    /// signature, so widening it would touch every one of them. A
+    /// caller-opened second source does not fit either: there is no
+    /// `MediaSource::path()`, so nothing downstream of the protocol layer can
+    /// name a sidecar or a pattern's other members without the URL string
+    /// itself — which the caller already holds, since it is what resolved to
+    /// this demuxer in the first place.
+    ///
+    /// A caller may call this once, immediately after `open` returns and
+    /// before reading anything, so a demuxer that needs more than the source
+    /// it was constructed with can re-derive its real state from the URL —
+    /// typically by replacing itself outright
+    /// (`*self = Self::open_pattern(url, ..)?`). That is exactly what a
+    /// demuxer whose primary `open` call could never have succeeded needs:
+    /// the caller passes a throwaway placeholder source to `open` (a pattern
+    /// like `img_%03d.png` is not itself an openable file) and this method
+    /// does the real work once the real URL is known.
+    ///
+    /// The default returns [`Error::Unsupported`], matching every demuxer's
+    /// actual behaviour before this method existed: none of them could ever
+    /// see their own URL, so refusing is not a behaviour change, only an
+    /// explicit answer instead of a capability with nowhere to express
+    /// itself.
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] when this demuxer needs nothing beyond the
+    /// source `open` already received (the default). Otherwise whatever
+    /// resolving `url` finds — no file matches a pattern, a sidecar file is
+    /// missing.
+    fn bind_url(&mut self, url: &str) -> Result<()> {
+        let _ = url;
+        Err(Error::Unsupported(
+            "this demuxer reads from the source it was opened with; it has no separate URL to bind",
+        ))
+    }
 }
 
 /// So a boxed demuxer is itself a [`Demuxer`].
@@ -464,6 +510,13 @@ impl<D: Demuxer + ?Sized> Demuxer for Box<D> {
     }
     fn reconfigure(&mut self, limits: &Limits, opts: &FormatOptions) -> Result<()> {
         (**self).reconfigure(limits, opts)
+    }
+    // Forwarded explicitly, not inherited from the default — same trap as
+    // `impl Muxer for Box<M>`'s `add_stream_with` (gap 9): the default would
+    // call nothing on the boxed value and always answer `Unsupported`,
+    // silently hiding whatever the concrete type underneath overrides.
+    fn bind_url(&mut self, url: &str) -> Result<()> {
+        (**self).bind_url(url)
     }
 }
 
@@ -762,6 +815,47 @@ pub trait Muxer: Send {
             detail: "this muxer has no such option".to_owned(),
         })
     }
+
+    /// Rebind this muxer to the URL it is writing to, for a container whose
+    /// real output is a sequence of files rather than one continuous stream
+    /// — one file per frame (`image2`), one file per segment
+    /// (`segment`/`stream_segment`, the HLS/DASH family), the boundaries
+    /// `webm_chunk`'s own `chunk_boundaries()` accessor currently works
+    /// around (gap 2, `planning/INTERFACE-GAPS.md`).
+    ///
+    /// **Why this exists instead of a parameter on [`MuxerDesc::open`].**
+    /// Same root cause as gap 5: `open` is a bare `fn` pointer ~90
+    /// registered muxers already implement at a fixed `Box<dyn MediaSink>`
+    /// signature, so widening it would touch every one of them for the four
+    /// muxers that need this.
+    ///
+    /// A caller may call this once, immediately after `open` returns and
+    /// before [`Muxer::add_stream`]/[`Muxer::write_header`], so a muxer
+    /// whose real unit of output is a sequence of files can re-derive its
+    /// own state from the URL — typically by replacing itself outright
+    /// (`*self = Self::for_pattern(url, ..)?`), the same shape
+    /// [`Demuxer::bind_url`] uses on the read side and for the same reason:
+    /// the caller passes a throwaway placeholder sink to `open` (a pattern
+    /// like `out_%03d.png` is not itself an openable destination) and this
+    /// method does the real work once the real URL is known.
+    ///
+    /// The default returns [`Error::Unsupported`], matching every muxer's
+    /// actual behaviour before this method existed: none of them could ever
+    /// see their own destination URL, so refusing is not a behaviour
+    /// change, only an explicit answer instead of a capability with nowhere
+    /// to express itself.
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] when this muxer writes to the sink it was
+    /// opened with and has no separate URL to bind (the default). Otherwise
+    /// whatever resolving `url` finds — a pattern with no `%d` placeholder
+    /// when one is required.
+    fn bind_url(&mut self, url: &str) -> Result<()> {
+        let _ = url;
+        Err(Error::Unsupported(
+            "this muxer writes to the sink it was opened with; it has no separate URL to bind",
+        ))
+    }
 }
 
 /// So a boxed muxer is itself a [`Muxer`].
@@ -827,6 +921,13 @@ impl<M: Muxer + ?Sized> Muxer for Box<M> {
     }
     fn set_option(&mut self, name: &str, value: &str) -> Result<()> {
         (**self).set_option(name, value)
+    }
+    // Forwarded explicitly, not inherited from the default — same trap as
+    // `add_stream_with` above (gap 9): the default would always answer
+    // `Unsupported` on the box, hiding whatever the concrete type
+    // underneath overrides.
+    fn bind_url(&mut self, url: &str) -> Result<()> {
+        (**self).bind_url(url)
     }
 }
 
@@ -1082,5 +1183,135 @@ mod tests {
             open: open_flagged,
         };
         assert_eq!(DESC.probe_flags(), FormatFlags::NOFILE);
+    }
+
+    // ------------------------------------------ gaps 2 and 7: bind_url
+
+    #[test]
+    fn muxer_bind_url_default_is_unsupported() {
+        // `FlaggedMuxer` (gap 6, above) overrides nothing else about `Muxer`,
+        // so this is the trait's own default.
+        let mut m = FlaggedMuxer;
+        assert!(matches!(
+            m.bind_url("out_%03d.png"),
+            Err(Error::Unsupported(_))
+        ));
+    }
+
+    /// A minimal [`Demuxer`] that overrides nothing, to exercise the trait's
+    /// own default for methods this test module needs a value for.
+    #[derive(Debug, Default)]
+    struct NoopDemuxer;
+
+    impl Demuxer for NoopDemuxer {
+        fn streams(&self) -> &[Stream] {
+            &[]
+        }
+        fn programs(&self) -> &[Program] {
+            &[]
+        }
+        fn chapters(&self) -> &[Chapter] {
+            &[]
+        }
+        fn metadata(&self) -> &[(String, String)] {
+            &[]
+        }
+        fn read_packet(&mut self) -> Result<Packet> {
+            Err(Error::Eof)
+        }
+        fn seek(&mut self, _target: SeekTarget, _flags: SeekFlags) -> Result<()> {
+            Err(Error::NotSeekable)
+        }
+    }
+
+    #[test]
+    fn demuxer_bind_url_default_is_unsupported() {
+        let mut d = NoopDemuxer;
+        assert!(matches!(
+            d.bind_url("img_%03d.png"),
+            Err(Error::Unsupported(_))
+        ));
+    }
+
+    /// A muxer that records its [`Muxer::bind_url`] call in shared state —
+    /// the shape a real `image2`/segment implementation uses (typically
+    /// replacing itself outright), minimised here to prove the mechanism
+    /// rather than a real pattern grammar. Shared state, not a field read
+    /// back off the value, because the point of this test is that the call
+    /// reaches the concrete type *through* a `Box<dyn Muxer>`.
+    #[derive(Debug)]
+    struct RebindingMuxer(std::sync::Arc<std::sync::Mutex<Option<String>>>);
+
+    impl Muxer for RebindingMuxer {
+        fn add_stream(&mut self, _params: &CodecParameters) -> Result<u32> {
+            Ok(0)
+        }
+        fn write_header(&mut self) -> Result<()> {
+            Ok(())
+        }
+        fn write_packet(&mut self, _packet: &Packet) -> Result<()> {
+            Ok(())
+        }
+        fn write_trailer(&mut self) -> Result<()> {
+            Ok(())
+        }
+        fn bind_url(&mut self, url: &str) -> Result<()> {
+            *self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(url.to_owned());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn muxer_bind_url_override_is_reachable_through_a_box() {
+        // The `impl Muxer for Box<M>` trap gap 9 already found: forwarding
+        // must be explicit, or a boxed muxer silently takes the default and
+        // `bind_url` never reaches the concrete type underneath.
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let mut boxed: Box<dyn Muxer> = Box::new(RebindingMuxer(seen.clone()));
+        boxed.bind_url("out_%03d.png").unwrap();
+        assert_eq!(
+            seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_deref(),
+            Some("out_%03d.png")
+        );
+    }
+
+    /// The [`Demuxer`] mirror of the box-forwarding test above.
+    #[derive(Debug)]
+    struct RebindingDemuxer(std::sync::Arc<std::sync::Mutex<Option<String>>>);
+
+    impl Demuxer for RebindingDemuxer {
+        fn streams(&self) -> &[Stream] {
+            &[]
+        }
+        fn programs(&self) -> &[Program] {
+            &[]
+        }
+        fn chapters(&self) -> &[Chapter] {
+            &[]
+        }
+        fn metadata(&self) -> &[(String, String)] {
+            &[]
+        }
+        fn read_packet(&mut self) -> Result<Packet> {
+            Err(Error::Eof)
+        }
+        fn seek(&mut self, _target: SeekTarget, _flags: SeekFlags) -> Result<()> {
+            Err(Error::NotSeekable)
+        }
+        fn bind_url(&mut self, url: &str) -> Result<()> {
+            *self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(url.to_owned());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn demuxer_bind_url_override_is_reachable_through_a_box() {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let mut boxed: Box<dyn Demuxer> = Box::new(RebindingDemuxer(seen.clone()));
+        boxed.bind_url("img_%03d.png").unwrap();
+        assert_eq!(
+            seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_deref(),
+            Some("img_%03d.png")
+        );
     }
 }
