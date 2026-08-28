@@ -244,8 +244,12 @@ impl WavDemuxer {
             pcm::new_stream(Rational::new(1, fmt.samples_per_sec.max(1).cast_signed()));
         stream.params = params;
 
-        let inner =
+        let mut inner =
             RawPcmDemuxer::new(io, stream, data_start, declared_len, bytes_per_frame.max(1));
+        // See `RawPcmDemuxer::forget_frame_count`: the reference states
+        // `duration_ts` and not `nb_frames` for WAV, and both for AIFF and CAF,
+        // from the same division.
+        inner.forget_frame_count();
         Ok(Self {
             inner,
             budget: Budget::new(Limits::permissive()),

@@ -2387,3 +2387,176 @@ For `pcm_s24le`/`pcm_s32le`/`pcm_f32le` into AIFF the reference emits an
 AIFF-C `compressionType` of `01 00 00 00`, which is not a FourCC and reads as
 uninitialised memory. We refuse those instead. Reproducing the reference's
 spelling (D9) does not extend to reproducing what looks like its bug.
+
+## 44. #636 (MPEG-TS `-c copy` timestamps) and #635 (`ts_id`/`ts_packetsize`/`ts_codec`) — both closed
+
+### #636: PCR, `data_alignment_indicator`, PTS/DTS, and a fourth cause the issue did not name
+
+Measured on `long.mp4` (one H.264 video stream, one keyframe, two-B-frame
+reorder delay), `ffmpeg -v error -y -bitexact -i in.mp4 -c copy -f mpegts` vs
+the same through `vaco`: **5642 bytes differing, down to 1491** after this
+pass, all four causes fixed in `vaco-mux-mpegts`.
+
+**1. PCR base was always zero.** Measured with `-muxdelay 0.3/0.7/1.0` and
+`-max_delay 700000` (all landing on the same on-wire value when the option is
+left at its default): the reference's on-wire PCR is `raw_dts +
+MUX_DELAY_TICKS`, where `MUX_DELAY_TICKS` is the reference's resolved
+`-max_delay`/`-muxdelay` default (0.7 s → 63 000 ticks @ 90 kHz). We wrote raw
+`clock` with no offset at all. `MpegTsMuxOptions` has no live path from the
+generic `max_delay` format option yet (nothing constructs this muxer with
+anything but its defaults today), so this bakes in the reference's *default*;
+wiring a real override through is separate follow-up work, noted in
+`vaco-mux-mpegts::mux::MUX_DELAY_TICKS`'s doc.
+
+**2. `data_alignment_indicator` was always set; the reference always clears
+it**, video and audio PES headers both, even though every packet this muxer
+writes does start on an access-unit boundary. `PesHeaderOut::data_alignment`
+stays a real field (a future caller might need `true`); `MpegTsMuxer` now
+always passes `false`.
+
+**3. PTS/DTS were unshifted.** Same `MUX_DELAY_TICKS` measurement: the on-wire
+PTS/DTS is `raw_pts_or_dts + 2 * MUX_DELAY_TICKS`, a pure additive shift
+constant across the whole file, independent of the B-frame reorder delay
+(which still shows up as the usual PTS-DTS gap on top of the shift, unaffected
+by this fix — that gap is finding 32/`#634`'s territory, upstream of this
+muxer). Once shifted, `start_pts`/`start_time` on an MPEG-TS stream now match
+`ffprobe` exactly (cross-checked independently via `-show_streams`, not just
+the byte-level harness).
+
+**4. Not named in the issue: the reference prepends a fixed Access Unit
+Delimiter (`00 00 00 01 09 f0`) to every H.264 access unit**, I-frame,
+P-frame and B-frame alike, `primary_pic_type` always `7`. Measured on a source
+whose samples carry no AUD at all — confirmed specific to the MPEG-TS muxer,
+not the `h264_mp4toannexb` conversion: the same BSF applied standalone
+(`-bsf:v h264_mp4toannexb -f h264`) produces no AUD. Round-tripping a source
+that already carries one AUD per access unit does not double it. This was the
+majority contributor to the remaining diff once 1–3 were fixed (5642 → 1491
+bytes, this fix alone accounting for most of that drop).
+
+**What is left, and is not a bug**: the residual 1491 bytes are entirely the
+already-disclosed `vaco-bsf-h2645::h264_mp4toannexb` divergence — the
+reference writes a 3-byte Annex B start code immediately after a
+splice-inserted SPS/PPS pair, where that filter always writes 4 (its own
+module doc and `matches_the_reference_on_a_real_mp4_sourced_packet` test
+already record and accept this as "not worth a knob"). Confirmed by
+reconstructing both sides' elementary streams from the muxed `.ts` files
+directly: they differ by exactly one `0x00` byte, at exactly that position,
+and nowhere else — 7171 vs 7172 bytes over the whole stream, one keyframe in
+150 packets. Not this crate's bug and not touched.
+
+### #635: `ts_id`/`ts_packetsize` added, `ts_codec` deleted, no `vaco-format-core` change
+
+`TAG:ts_codec` is gone: `vaco-demux-mpegts::demux::MpegTsDemuxer::add_stream`
+and `::raw::MpegTsRawDemuxer::open_with_limits` both used to call
+`stream.metadata_set("ts_codec", …)`. Nothing consumed it (checked: `probe`'s
+`codec_name` field never fell back to it), and the reference emits no such tag
+in either `-bitexact` mode, so it was pure invention. Deleted from both call
+sites; the two tests that pinned its presence
+(`vaco-demux-mpegts/tests/roundtrip.rs`) now pin its *absence* instead, and a
+new `raw::tests::no_invented_ts_codec_tag` covers the `mpegtsraw` path the
+issue also named. Left alone: `vaco-demux-ogg::codec`'s `OggCodec` comment
+cites `ts_codec` as precedent for its own `"ogg_codec"` metadata key — a stale
+citation now, and if `ogg_codec` turns out to have the identical invented-tag
+bug, that is `vaco-demux-ogg`'s crate to fix, not this pass's.
+
+`ts_id`/`ts_packetsize` added, as real `[STREAM]` fields (verified against
+`ffprobe -show_streams` on both a video and an audio stream of the same file:
+both print `ts_id=1 ts_packetsize=188` in the same position, right after each
+media type's own block and before `id`, in both `-bitexact` modes). The
+channel is deliberately **not** a new field on `vaco_format_core::Stream` —
+that crate is outside this pass's ownership, and per
+`planning/AGENT-CONSTRAINTS.md` a change needed in a crate not named by the
+brief is reported, not worked around. Instead, `add_stream` sets the two
+values through the same `Stream::metadata` channel `ts_codec` used to abuse,
+and `vaco-probe/src/show.rs` draws the distinction on the *read* side:
+`stream_value` answers the two field names by reading `metadata_get`, and
+`stream_visible_metadata` filters those two specific keys out of the generic
+`tags()` dump before it ever reaches a writer — so they print exactly once,
+as fields, never as `TAG:`. A real container tag (`language`, tested
+alongside them) is untouched. This keeps the fix inside the two crates that
+already agree on the two names, at the cost of `vaco-probe` needing to know
+two literal key strings that `vaco-demux-mpegts` also has to spell correctly —
+acceptable for two fields; a real `Stream` field would be the right call if a
+third demuxer ever needs the same shape.
+
+`ts_packetsize` is 188 for `PacketStride::Ts`/`Rs` and 192 for `M2ts`,
+matching the reference's own "188 or 192 depending on whether the file
+carries timestamped packets" — verified with a hand-built M2TS fixture in
+`vaco-demux-mpegts/tests/roundtrip.rs`, not merely asserted.
+
+### Falsification
+
+Every fix above was broken deliberately and confirmed to fail a test before
+being restored: the PCR offset, the PTS/DTS shift, the AUD insertion, and
+`data_alignment_indicator` in `vaco-mux-mpegts`; the `ts_id`/`ts_packetsize`
+metadata, the `ts_codec` removal (both call sites), and the `tags()` filter
+wiring (specifically the call-site wiring, not just the filtering helper in
+isolation — the first version of that test called the helper directly and
+would have missed the filter being wired to the wrong place) in
+`vaco-demux-mpegts`/`vaco-probe`.
+
+### Gate note
+
+`cargo clippy -p vaco-probe --all-targets -- -D warnings` could not be
+verified clean at the time of this pass: it failed transitively on two
+crates this pass does not own and did not touch — an unused-variable warning
+in `vaco-mux-matroska::mux` (`crates/format/vaco-mux-matroska/src/mux.rs:919`)
+and a `match_same_arms` lint in `vaco-format-audio-simple::pcm`
+(`crates/format/vaco-format-audio-simple/src/pcm.rs:237`) — both mid-edit by
+other agents in this tree during this session. `vaco-mux-mpegts` and
+`vaco-demux-mpegts` both passed `cargo clippy --all-targets -- -D warnings`
+clean on their own. Worth a re-run once the tree is quiet.
+
+## 44. Raw-PCM containers stated no duration, bit rate or frame count
+
+`ffprobe -show_streams` on a one-second WAV, AIFF or CAF file:
+
+```text
+reference   duration_ts=44100  duration=1.000000  bit_rate=705600
+ours        duration_ts=N/A    duration=N/A       bit_rate=N/A
+```
+
+All three are derivable from what `RawPcmDemuxer` already holds — the data
+length, the bytes per frame and the sample rate — and none was stated. The time
+base for these formats is `1/sample_rate`, so a tick *is* a frame and
+`duration_ts` is the frame count; `bit_rate` is `sample_rate x bytes_per_frame
+x 8`, which reproduces the reference exactly on every file measured.
+
+**CAF is now byte-identical to the reference across `-show_streams` and
+`-show_format` in full**, and AIFF differs in one field.
+
+### `nb_frames` is stated for AIFF and CAF and not for WAV
+
+```text
+        duration_ts   nb_frames
+wav           44100         N/A
+aiff          44100       44100
+caf           44100       44100
+```
+
+Both come from the same division. The reference states one and not the other,
+for WAV alone. Reproduced rather than tidied up, through an explicit
+`forget_frame_count` on the shared demuxer so the oddity is named where it
+happens instead of being smuggled into a shared constructor.
+
+### Two left open, both deliberately
+
+**`channel_layout`.** The reference prints `unknown` for WAV and AIFF; we print
+`mono`, because `pcm::params` calls `ChannelLayout::default_for(channels)`.
+Neither container states a layout — WAV carries a channel mask only in its
+`EXTENSIBLE` form and AIFF has no layout field at all — so ours is an
+invention, and CAF, which really does state one in its `chan` chunk, already
+agrees with the reference. Fixing it needs both halves: stop defaulting in the
+demuxer, *and* print `unknown` rather than `N/A` for an unstated layout in
+`vaco-probe`. That crate is being edited by another agent, so it is recorded
+rather than half-done.
+
+**WAV's `start_pts`/`start_time`.** The reference prints `N/A` for WAV and `0`
+for AIFF and CAF. Ours prints `0` everywhere, and setting
+`Stream::start_time = Timestamp::NONE` does not change it: `discovery.rs`
+overwrites the field from the first packet's pts. Reproducing `N/A` means the
+WAV demuxer must not stamp timestamps on its packets at all — which is what the
+reference does, and which has consequences the harness already documents
+(`remux-bitexact.toml` excludes AVI-sourced remuxes precisely because
+"Timestamps are unset in a packet for stream 0"). One cosmetic field is not
+worth destabilising the timestamps on a path that now remuxes byte-identically.

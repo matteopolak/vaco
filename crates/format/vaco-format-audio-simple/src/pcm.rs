@@ -285,6 +285,25 @@ pub struct RawPcmDemuxer {
 }
 
 impl RawPcmDemuxer {
+    /// Withhold the frame count this demuxer derived.
+    ///
+    /// The reference is not consistent about this and the inconsistency is
+    /// per-format, so it cannot live in the shared constructor. Measured on
+    /// one-second 44.1 kHz mono files:
+    ///
+    /// ```text
+    ///        duration_ts   nb_frames
+    /// wav          44100         N/A
+    /// aiff         44100       44100
+    /// caf          44100       44100
+    /// ```
+    ///
+    /// Both numbers come from the same division, and the reference states one
+    /// and not the other for WAV alone. Reproduced rather than tidied up.
+    pub fn forget_frame_count(&mut self) {
+        self.stream.frame_count = None;
+    }
+
     /// `declared_len` is the format's own statement of the data size in
     /// bytes, if it makes one; it is clamped against [`IoContext::size`] here
     /// so no format module has to repeat that policy.
@@ -300,12 +319,36 @@ impl RawPcmDemuxer {
             Some(size) => n.min(size.saturating_sub(data_start)),
             None => n,
         });
+        let bytes_per_frame = bytes_per_frame.max(1);
+
+        // Duration, frame count and bit rate, all derivable from the data
+        // length and none of which this demuxer used to state — `ffprobe`
+        // reported `duration=N/A bit_rate=N/A nb_frames=N/A` for every WAV,
+        // AIFF and CAF file while the reference printed all three
+        // (CONFORMANCE-FINDINGS 44).
+        //
+        // The time base is 1/sample_rate for these formats, so a tick *is* a
+        // frame and `duration_ts` is the frame count. Measured: 44100 for a
+        // one-second 44.1 kHz file, matching the reference exactly.
+        let mut stream = stream;
+        if let Some(len) = data_len {
+            let frames = frames_in(len, bytes_per_frame);
+            stream.duration_ts = i64::try_from(frames).ok();
+            stream.frame_count = Some(frames);
+            if let Some(audio) = stream.params.audio.as_ref() {
+                let rate = u64::from(audio.sample_rate);
+                stream.params.bit_rate = Some(
+                    rate.saturating_mul(u64::from(bytes_per_frame))
+                        .saturating_mul(8),
+                );
+            }
+        }
         Self {
             io,
             stream,
             data_start,
             data_len,
-            bytes_per_frame: bytes_per_frame.max(1),
+            bytes_per_frame,
             frames_emitted: 0,
             eof: false,
         }
