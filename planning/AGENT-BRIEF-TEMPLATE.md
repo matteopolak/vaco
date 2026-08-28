@@ -272,3 +272,34 @@ and never assume the field you read back is the field you set.
 ## Specification
 
 <the exact document, version and sections to implement from>
+
+## Batch the work: one agent, a whole family, one verification pass
+
+A brief scoped to one issue is the expensive shape. Every dispatch pays for a
+fresh context: `AGENT-CONSTRAINTS.md`, the crate's docs, the probing traps,
+working out how the reference is measured, and then the same gate-and-commit
+ritual at the end. On a single-issue brief that overhead can exceed the work.
+
+So **give one agent a family**, not a task. Four or five related formats, a
+dozen filters from the same plan row, every protocol in a wave — whatever
+shares a crate, a specification or a measurement technique. The agent learns
+the technique once and applies it N times, which is where the leverage is: the
+second format costs a fraction of the first.
+
+Then **verify the whole batch in one pass at the end**, rather than
+round-tripping per item. The pattern that has worked here:
+
+1. Implement everything in the family, reading the reference as you go.
+2. Build one comparison loop and run it over every item at once — the
+   codec × container matrix, the diff of `-show_streams` across every fixture,
+   the byte counts before and after. One loop, N rows.
+3. Falsify each formula against that loop, so a broken fix shows up as a row
+   changing rather than as a separate experiment.
+4. Gates, then one commit per coherent change.
+
+That comparison loop is also the deliverable a reviewer wants: a table of N
+rows says what N separate "verified this one" claims cannot.
+
+**What not to batch.** Work that shares a *file* with another agent, and work
+whose second half depends on a decision the first half surfaces. Those want
+sequencing, not parallelism — say so and hand the second half back.
