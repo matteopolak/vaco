@@ -31,6 +31,9 @@ vaco-core = { path = "../../core/vaco-core" }
 vaco-limits = { path = "../../core/vaco-limits" }
 vaco-opts = { path = "../../core/vaco-opts" }
 vaco-time = { path = "../../core/vaco-time" }
+# CL-22: `-force_key_frames expr:...` shares the reference's `AVExpr`
+# grammar, which this workspace implements once here rather than per option.
+vaco-expr = { path = "../../core/vaco-expr" }
 vaco-cli-core = { path = "../../app/vaco-cli-core" }
 vaco-sched = { path = "../../app/vaco-sched" }
 vaco-registry = { path = "../../registry/vaco-registry" }

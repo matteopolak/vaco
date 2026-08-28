@@ -103,16 +103,17 @@ fn civil_from_unix(unix_secs: i64) -> (i64, u32, u32, u32, u32, u32) {
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z.rem_euclid(146_097); // [0, 146096]
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
+    let yoe = (doe - doe.div_euclid(1460) + doe.div_euclid(36_524) - doe.div_euclid(146_096))
+        .div_euclid(365); // [0, 399]
     let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
-    let mp = (5 * doy + 2) / 153; // [0, 11]
-    let d = u32::try_from(doy - (153 * mp + 2) / 5 + 1).unwrap_or(1); // [1, 31]
+    let doy = doe - (365 * yoe + yoe.div_euclid(4) - yoe.div_euclid(100)); // [0, 365]
+    let mp = (5 * doy + 2).div_euclid(153); // [0, 11]
+    let d = u32::try_from(doy - (153 * mp + 2).div_euclid(5) + 1).unwrap_or(1); // [1, 31]
     let m = u32::try_from(if mp < 10 { mp + 3 } else { mp - 9 }).unwrap_or(1); // [1, 12]
     let y = if m <= 2 { y + 1 } else { y };
-    let h = u32::try_from(secs_of_day / 3600).unwrap_or(0);
-    let mi = u32::try_from((secs_of_day % 3600) / 60).unwrap_or(0);
-    let s = u32::try_from(secs_of_day % 60).unwrap_or(0);
+    let h = u32::try_from(secs_of_day.div_euclid(3600)).unwrap_or(0);
+    let mi = u32::try_from(secs_of_day.rem_euclid(3600).div_euclid(60)).unwrap_or(0);
+    let s = u32::try_from(secs_of_day.rem_euclid(60)).unwrap_or(0);
     (y, m, d, h, mi, s)
 }
 
@@ -128,7 +129,7 @@ pub fn open<S: AsRef<std::ffi::OsStr>>(
     req: &ReportRequest,
     argv: &[S],
 ) -> io::Result<(std::fs::File, String)> {
-    let now = unix_nanos().map_or(0, |n| (n / 1_000_000_000) as i64);
+    let now = unix_nanos().map_or(0, |n| n.div_euclid(1_000_000_000) as i64);
     let name = req.file.clone().unwrap_or_else(|| default_filename(now));
     let mut file = std::fs::File::create(&name)?;
     let (y, mo, d, h, mi, s) = civil_from_unix(now);
@@ -172,7 +173,9 @@ impl<'a, A: Write> Tee<'a, A> {
 impl<A: Write> Write for Tee<'_, A> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let n = self.primary.write(buf)?;
-        let _ = self.secondary.write_all(&buf[..n]);
+        if let Some(written) = buf.get(..n) {
+            let _ = self.secondary.write_all(written);
+        }
         Ok(n)
     }
 

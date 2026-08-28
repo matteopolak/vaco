@@ -122,6 +122,14 @@ pub struct OutStream {
     /// is actually being transcoded, per [`graph_options_of`]'s own
     /// streamcopy-conflict check.
     pub graph_opts: crate::filtergraph::SimpleGraphOptions,
+    /// CL-22: `-force_key_frames`, parsed and validated here so a malformed
+    /// value is a real, early error — the same treatment `-s`/`-pix_fmt`
+    /// already get — but not yet acted on. See
+    /// `crate::force_key_frames`'s module doc for the seam this needs that
+    /// does not exist in this build (a per-frame node in `vaco-sched`) and
+    /// for why nothing this build can encode would show a difference even
+    /// with one (every registered video encoder is intra-only).
+    pub force_key_frames: Option<crate::force_key_frames::ForceKeyFrames>,
 }
 
 /// What `-c` resolved to for one output stream: pass packets
@@ -286,6 +294,9 @@ pub fn resolve_output(
             // Placeholder until `graph_options_of` below decides it, same as
             // `codec` above.
             graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
+            // Placeholder until `force_key_frames_of` below decides it, same
+            // reason as `codec`/`graph_opts` above.
+            force_key_frames: None,
         })
         .collect();
 
@@ -350,6 +361,11 @@ pub fn resolve_output(
             ));
         }
         s.graph_opts = g;
+    }
+
+    let forced = force_key_frames_of(cli, out, &streams)?;
+    for (s, f) in streams.iter_mut().zip(forced) {
+        s.force_key_frames = f;
     }
 
     let metadata = metadata_of(cli, out, &streams)?;
@@ -671,6 +687,58 @@ fn encoder_error(out: &OutputSpec, s: &OutStream, i: usize, detail: &str) -> Dia
         "output",
         &out.url,
     )
+}
+
+/// CL-22: `-force_key_frames` for every video stream in `streams` — the same
+/// [`MatchCtx`] shape [`check_codecs`]/[`graph_options_of`] build, for the
+/// same reason (`-force_key_frames:v:0` counts within the output). Parsed and
+/// validated here so a malformed value is a real, early diagnostic; not yet
+/// acted on — see `crate::force_key_frames`'s module doc for why.
+///
+/// # Errors
+///
+/// A [`Diagnostic`] naming what [`force_key_frames::parse`] rejected.
+///
+/// [`force_key_frames::parse`]: crate::force_key_frames::parse
+fn force_key_frames_of(
+    cli: &Cli,
+    out: &OutputSpec,
+    streams: &[OutStream],
+) -> Result<Vec<Option<crate::force_key_frames::ForceKeyFrames>>, Diagnostic> {
+    let view: Vec<StreamInfo> = streams
+        .iter()
+        .enumerate()
+        .map(|(i, s)| StreamInfo {
+            index: i as u32,
+            media_type: s.media,
+            codec_known: true,
+            ..StreamInfo::default()
+        })
+        .collect();
+    let ctx = MatchCtx::streams(&view);
+    let Some(group) = cli.output_group(out.index) else {
+        return Ok(vec![None; streams.len()]);
+    };
+
+    let mut out_opts = Vec::with_capacity(streams.len());
+    for (i, s) in streams.iter().enumerate() {
+        if s.media != Some(MediaType::Video) {
+            out_opts.push(None);
+            continue;
+        }
+        let idx = i as u32;
+        let resolved = match group.stream_option("force_key_frames", &ctx, idx) {
+            Ok(Some(opt)) => {
+                let raw = value_str(opt)?;
+                Some(crate::force_key_frames::parse(&raw).map_err(|e| {
+                    Diagnostic::new(AvError::EINVAL, vec![format!("Error parsing option 'force_key_frames' with value '{raw}': {e}")])
+                })?)
+            }
+            _ => None,
+        };
+        out_opts.push(resolved);
+    }
+    Ok(out_opts)
 }
 
 /// CL-20: `-vf`/`-af`/`-filter`, `-s`, `-aspect`, `-pix_fmt` for every stream
@@ -1548,6 +1616,7 @@ mod tests {
             media: Some(MediaType::Video),
             codec: StreamCodec::Copy,
             graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
+            force_key_frames: None,
         };
         let e = check_codecs(&c, &o, &[s]).unwrap_err();
         assert_eq!(
@@ -1568,6 +1637,7 @@ mod tests {
             media: Some(MediaType::Video),
             codec: StreamCodec::Copy,
             graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
+            force_key_frames: None,
         };
         assert!(check_codecs(&c, &o, std::slice::from_ref(&s)).is_ok());
 
@@ -1617,6 +1687,7 @@ mod tests {
             media: Some(MediaType::Video),
             codec: StreamCodec::Copy,
             graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
+            force_key_frames: None,
         };
         let resolved = check_codecs(&c, &o, &[s]).unwrap();
         assert_eq!(resolved, vec![StreamCodec::Encode("qoi")]);
@@ -1634,12 +1705,14 @@ mod tests {
                 media: Some(MediaType::Audio),
                 codec: StreamCodec::Copy,
                 graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
+                force_key_frames: None,
             },
             OutStream {
                 source: StreamPick::demuxed(0, 1),
                 media: Some(MediaType::Audio),
                 codec: StreamCodec::Copy,
                 graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
+                force_key_frames: None,
             },
         ];
         assert!(check_codecs(&c, &o, &streams).is_ok());

@@ -73,6 +73,7 @@ pub mod exec;
 pub mod exit;
 pub mod filtergraph;
 pub mod filterreg;
+pub mod force_key_frames;
 pub mod help;
 pub mod input;
 pub mod listing;
@@ -317,12 +318,13 @@ where
     // `-loglevel` the way they are; the reference writes it regardless.
     // A URL this build cannot open silently gets no progress data, the same
     // "not fatal" policy `report::open`'s caller already applies.
-    if any_output && let Some(target) = progress::target(argv) {
-        if let Ok(mut sink) = output::create(&target) {
-            let block = progress::render(&report, started);
-            let _ = sink.write(block.as_bytes());
-            let _ = sink.flush();
-        }
+    if any_output
+        && let Some(target) = progress::target(argv)
+        && let Ok(mut sink) = output::create(&target)
+    {
+        let block = progress::render(&report, started);
+        let _ = sink.write(block.as_bytes());
+        let _ = sink.flush();
     }
     Ok(ExitCode::OK)
 }
