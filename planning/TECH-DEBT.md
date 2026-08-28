@@ -294,3 +294,160 @@ scoped to those paths, so it cannot discard anything another agent has
 staged elsewhere. **Proposed seam:** add that line to this section's worked
 example so the next agent doesn't have to rediscover it via a confusing
 `git status`.
+
+### C-13 (BMP/PCX/TGA/SGI/XWD/XBM/PNM/QOI): three codec crates exist with no way to reach them from the registry or the CLI
+
+Built `vaco-codec-qoi`, `vaco-codec-pnm` and `vaco-codec-image-simple` —
+fifteen codecs' worth of real, tested, differentially-verified decode/encode
+— and could not write a single `vaco-component.toml` fragment of kind
+`decoder`/`encoder` for any of them, for three separate, compounding
+reasons, none inside these three crates:
+
+1. `vaco_codec_core::CodecId` (hand-written enum + table in
+   `crates/signal/vaco-codec-core/src/lib.rs`) has no variant for fourteen of
+   the fifteen — only `Bmp` exists. `DecoderDesc.id: CodecId` cannot be
+   constructed for the other fourteen, so a decoder fragment for them will
+   not compile, let alone register.
+2. `EncoderDesc` does not exist as a type anywhere. `vaco_registry::Kind`'s
+   own doc comment and `xtask/src/registry.rs`'s `KINDS` table both say so
+   explicitly ("`EncoderDesc` and friends" have not landed). An `encoder`
+   fragment's `ctor` is accepted essentially unchecked as a result — there is
+   no way to register one *meaningfully*, only to have the generator not
+   refuse it.
+3. Even where `CodecId`/`DecoderDesc` exist (BMP), `DecoderDesc` carries no
+   constructor field (`make: fn(...) -> Box<dyn Decoder>`, the shape
+   `ParserDesc` already has) and `vaco-cli`'s `check_codecs` accepts only the
+   literal string `"copy"` for every output stream — there is no code path
+   anywhere that turns a `DecoderDesc`/registered decoder name into a live
+   `Decoder` instance, or an encoder name into a live `Encoder`.
+
+Net effect: the brief's own suggested verification loop (`cargo run -p
+vaco-cli -- -c:v <codec> ...`) does not exist for *any* codec in this tree
+yet, native or otherwise — this is not specific to these three crates, it is
+the first time anyone tried to register a leaf decoder/encoder at all.
+Verification for this batch was done by calling the pure `decode`/`encode`
+functions directly against ffmpeg-produced fixtures instead; that is a real
+substitute for correctness but not for reachability.
+
+**Proposed seam:** three separable pieces of framework work, each in a crate
+none of C-13's three own: (a) generate `CodecId` from a `codecs.toml` the
+way `vaco-pixfmt` generates its table (`vaco-codec-core`'s own
+`CodecEntry` doc comment already says this is the plan); (b) design and add
+`EncoderDesc` and a `Decoders`/`Encoders` registry provider parallel to
+`Parsers`/`ParserProvider` (`vaco-codec-core` + `vaco-registry`); (c) wire
+`vaco-cli`'s `check_codecs` and `exec.rs` to actually build a
+`Decoder`/`Encoder` from the registry instead of special-casing `"copy"`.
+Any one of the three blocks full registration; all three are needed before
+`-c:v bmp`/`-c:v qoi`/etc. can do anything.
+
+### `vaco-frame` has no palette side-data type, so a paletted image decoder cannot produce a paletted frame
+
+BMP (1/4/8bpp) and PCX's single-plane 8bpp variant are both genuinely
+palette-indexed on disk, and `vaco_pixfmt::PixFmt::Pal8` exists and is
+flagged `PixFmtFlags::PALETTE` — but there is no `FrameSideData::Palette`
+(or equivalent) variant to carry the 256-entry colour table beside the
+frame, the way `vaco_frame::sidedata`'s existing variants
+(`DisplayMatrix`, `Cropping`, `Metadata`, ...) carry everything else a
+decoder needs to attach. `vaco-codec-image-simple::bmp::decode` therefore
+expands paletted input straight to `rgb24` at decode time rather than
+producing a `Pal8` frame plus a palette, which is a real, permanent loss of
+information (a paletted BMP cannot round-trip back to a paletted BMP through
+this decoder) and was the only reasonable choice available without adding a
+type to a crate this brief does not own. PCX's palette-based single-plane
+form was left unimplemented entirely for the same reason plus time, not
+attempted-and-abandoned.
+
+**Proposed seam:** a `FrameSideData::Palette([u32; 256])` (or a boxed/sized
+variant, since not every palette uses all 256 entries) in
+`crates/model/vaco-frame/src/sidedata.rs`, read the same way
+`Frame::cropping()` reads `Cropping` today. Once it exists, BMP/PCX/SGI/XWD's
+paletted variants become straightforward additions to the three crates
+above, and this row can be deleted rather than carried forward.
+
+### The single-shot "whole packet in, whole frame out" codec shape has no home in `vaco-codec-core`, so three crates each wrote it by hand
+
+Every codec in `vaco-codec-qoi`, `vaco-codec-pnm` and
+`vaco-codec-image-simple` is the same shape: one packet decodes to exactly
+one frame, no reordering, no subframes, `Caps::empty()`. Each crate ended up
+with its own ~15-line `ImageDecoder`/`ImageEncoder` pair
+(`Machine::new(Caps::empty())`, `accept`/`emit`/`finish` on `send`,
+`machine.receive()` on `receive`) parameterised over a `fn(&[u8], &mut
+Budget) -> Result<Frame>` — deliberately duplicated three times rather than
+introducing a fourth crate dependency none of the three briefs offered, per
+`AGENT-CONSTRAINTS.md`'s "you own the crates your brief names" rule. It is
+exactly the kind of twenty-line preamble the batching note anticipated
+repeating a sixth time eventually: every future whole-image or
+whole-frame-at-a-time codec (there will be more — TIFF's non-tiled case,
+most of the remaining still-image formats the roadmap lists) will either
+copy this same pair again or need this factored out. **Proposed seam:** a
+generic `SingleShotDecoder<F>`/`SingleShotEncoder<F>` in `vaco-codec-core`
+itself (next to `mock.rs`), parameterised the same way, so the fourth crate
+that needs it depends on the framework instead of re-deriving it.
+
+### "Codec-shaped, not sample-format-shaped" is a bug class, not a bug — and this sweep found a fifth instance
+
+`vaco-format-audio-simple::au::AuMuxer::add_stream` derived its header's
+encoding tag from `AudioParameters::format` (a `SampleFmt`, which has no
+concept of byte order) instead of `params.codec_id`, so `-c copy` from any
+little-endian PCM source tagged the output as the format's own big-endian
+encoding over bytes that were never byte-swapped — silent corruption, fixed
+in 95e39ea. This is the same mistake as four muxers found and fixed earlier
+in the same sweep (24-bit written as 32-bit, A-law tagged as linear PCM,
+little-endian bytes under a big-endian header): a decoded `SampleFmt` throws
+away exactly the distinction (byte order, codec identity) that a container's
+header needs to be honest about what is actually in the file. **Nobody has
+grepped the remaining muxers for `.format` (or `.audio.format`/`.video.
+format`) driving a header field instead of `.codec_id`** — five hits in one
+project within what looks like a single week is not a coincidence, and the
+sixth one is still out there. A short, mechanical audit (grep every
+`fn add_stream`/`fn write_header` in every mux crate for a match on
+`SampleFmt`/`PixFmt` that decides a container tag) would find it faster than
+another differential sweep will.
+
+### `raw_codec_name` stream metadata: written in five places, read in none
+
+`vaco-demux-raw`'s `pcm.rs` (fixed in 283b546), `bitstream.rs`, `y4m.rs` and
+`rawvideo.rs`, plus `vaco-demux-image2`'s `pipe/mod.rs`, all call
+`stream.metadata_set("raw_codec_name", ...)` on every stream they construct.
+Grepping the whole tree for a reader of that key finds nothing, anywhere —
+the API has no caller, exactly the shape `AGENT-CONSTRAINTS.md`'s
+`Bsfs`/`BsfProvider` story warns about. For `pcm.rs` it was pure dead weight
+once `CodecId::from_name` could resolve the real subtype instead (fixed).
+For the other four, it is *not* pure dead weight: `bitstream.rs`'s
+parser-less codecs (`avs2`, `avs3`, `vc1`, `dirac`, `dnxhd`, `cavsvideo`,
+`evc`, `h261`, `h263`) still have no `CodecId` assignment at all in that
+code path, so this string is the only place their real name survives
+construction — and it still never reaches `-show_streams`'s `codec_name`,
+because nothing reads it. Two ways to close this, and both are one
+afternoon's work, not a redesign: give those nine codecs the same
+`CodecId::from_name`-style resolution `pcm.rs` just got (`CodecId::Vc1`,
+`CodecId::Dirac`, etc. already exist — confirmed by `vaco-mux-raw`'s own
+registrations, which use them; `vaco-mux-raw/src/lib.rs`'s module doc still
+claims `CodecId` has no `Vc1`/`H261`/`H263`/etc. variant, which stopped
+being true on 2026-08-23 and needs its own trim), or wire a genuine consumer
+in `vaco-probe` that falls back to `raw_codec_name` only when `codec_id` is
+absent. The first is strictly better (it also fixes the `-c copy` codec-match
+validation these codecs currently skip only because their `codec_id` is
+`None` — that gap is silent today because nothing has tried to feed a
+mismatched codec through one of them yet, but the H.264/rawvideo history two
+paragraphs up says that is a when, not an if).
+
+### The `au`/RSO/`.au`-adjacent pattern: a muxer's `default_video`/`default_audio` is not always a hard restriction
+
+`vaco-mux-raw::RawMuxer::add_stream` was given a codec-match check this
+sweep (83bda8d) on the strength of one measurement (`vc1` refusing an H.264
+source with "muxer supports only codec vc1 for type video"). Measuring the
+other eleven single-codec registrations confirmed the same refusal — except
+`rawvideo`, which the reference accepts an H.264 source into without
+complaint (e3c3212). One field (`RawSpec::default_video`/`default_audio`)
+is being asked to answer two different questions — "what does a bare
+`-f <fmt>` encode to by default" and "what does `-c copy` refuse" — and for
+every registration but one those two answers happen to agree. `rso`
+(`vaco-format-audio-simple::rso`, issue #651) looks like the same shape from
+the other side: it hard-refuses everything but `pcm_u8` even though the
+reference accepts `pcm_s16le` too, i.e. its *actual* accepted set is wider
+than its stated default, the opposite direction from `rawvideo`'s gap.
+Anywhere a "default codec" field is read as "the only accepted codec"
+(or vice versa) is worth a second look before trusting it either way —
+this sweep found the assumption wrong in both directions in the same
+family of formats within one afternoon.
