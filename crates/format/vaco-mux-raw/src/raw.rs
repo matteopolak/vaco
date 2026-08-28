@@ -21,10 +21,32 @@
 //! second call with [`vaco_core::Error::Unsupported`].
 
 use vaco_codec_core::{CodecId, CodecParameters};
-use vaco_core::{Error, Result};
+use vaco_core::{Error, MediaType, Result};
+use vaco_format_core::mux::BitstreamAction;
 use vaco_format_core::{Muxer, MuxerDesc};
+use vaco_format_nalu::{LengthSize, convert::length_prefixed_to_annexb};
 use vaco_io::{IoOptions, IoWriter, MediaSink};
+use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
+
+/// Whether `codec` is one of the NAL-unit-structured codecs this crate's raw
+/// registrations require Annex B framing for.
+///
+/// `h264`/`hevc`/`vvc` are the only registrations here whose reference muxer
+/// (`rawenc.c`'s `h264_write_packet`/`hevc_write_packet`) rewrites a
+/// length-prefixed sample rather than writing it verbatim — matches
+/// `vaco-mux-mpegts::is_h264_or_hevc`, which names the same three codecs for
+/// the same reason.
+const fn needs_annexb_framing(codec: CodecId) -> bool {
+    matches!(codec, CodecId::H264 | CodecId::Hevc | CodecId::Vvc)
+}
+
+/// Whether `payload` already opens with an Annex B start code (`00 00 01` or
+/// `00 00 00 01`) — see `vaco-mux-mpegts`'s identical helper for why this
+/// makes [`RawMuxer::maybe_convert`] safe to call unconditionally.
+fn starts_with_annexb_start_code(payload: &[u8]) -> bool {
+    payload.starts_with(&[0, 0, 1]) || payload.starts_with(&[0, 0, 0, 1])
+}
 
 /// One verbatim registration.
 #[derive(Debug, Clone, Copy)]
@@ -41,27 +63,109 @@ pub struct RawSpec {
 pub struct RawMuxer {
     out: IoWriter,
     has_stream: bool,
+    /// `Some(n)` once [`RawMuxer::add_stream`] has seen an H.264/HEVC/VVC
+    /// stream whose `CodecParameters` declared an `n`-byte NAL length
+    /// prefix (`avcC`/`hvcC` style). A raw `h264`/`hevc`/`vvc` file has no
+    /// out-of-band configuration record, so — same reasoning as
+    /// `vaco-mux-mpegts::MuxStream::length_size` — such a stream must be
+    /// rewritten to Annex B before it can go in the file at all.
+    length_size: Option<LengthSize>,
+    /// The codec that set `length_size`, so [`RawMuxer::check_bitstream`]
+    /// knows which splice filter (if any) to ask for.
+    codec_id: Option<CodecId>,
+    /// Set the first time [`RawMuxer::check_bitstream`] is asked, mirroring
+    /// `vaco-mux-mpegts::MuxStream::bsf_decided` — a raw muxer carries one
+    /// stream, so one flag suffices.
+    bsf_decided: bool,
+    /// Bounds [`length_prefixed_to_annexb`]'s output allocation.
+    convert_budget: Budget,
+    /// The one video codec this registration's `RawSpec` names, if any —
+    /// see [`RawMuxer::add_stream`]. `None` means the registration is
+    /// codec-agnostic (`data`, `rawvideo`'s own codec check lives in its
+    /// pixel-format instead), so any video codec is accepted.
+    expected_video: Option<CodecId>,
+    /// The one audio codec this registration's `RawSpec` names, if any —
+    /// same reasoning as `expected_video`.
+    expected_audio: Option<CodecId>,
 }
 
 impl RawMuxer {
     /// # Errors
     /// Propagates buffer allocation failure from [`IoWriter`].
-    pub fn new(sink: Box<dyn MediaSink>) -> Result<Self> {
+    pub fn new(
+        sink: Box<dyn MediaSink>,
+        expected_video: Option<CodecId>,
+        expected_audio: Option<CodecId>,
+    ) -> Result<Self> {
         Ok(Self {
             out: IoWriter::new(sink, &IoOptions::default())?,
             has_stream: false,
+            length_size: None,
+            codec_id: None,
+            bsf_decided: false,
+            convert_budget: Budget::new(Limits::strict()),
+            expected_video,
+            expected_audio,
         })
+    }
+
+    /// Rewrite `payload` to Annex B if this muxer's one stream declared a
+    /// length-prefixed framing at [`Muxer::add_stream`] time — the fallback
+    /// a caller with no `BsfProvider` (or a VVC stream, which this crate has
+    /// no splice filter for) still needs. Guarded by
+    /// [`starts_with_annexb_start_code`] so it is a no-op once a real BSF
+    /// (requested through [`RawMuxer::check_bitstream`]) has already run.
+    fn maybe_convert(&mut self, payload: &[u8]) -> Result<Vec<u8>> {
+        let Some(length_size) = self.length_size else {
+            return Ok(payload.to_vec());
+        };
+        if starts_with_annexb_start_code(payload) {
+            return Ok(payload.to_vec());
+        }
+        let mut out = Vec::new();
+        length_prefixed_to_annexb(payload, length_size, &mut out, &mut self.convert_budget)?;
+        Ok(out)
     }
 }
 
 impl Muxer for RawMuxer {
-    fn add_stream(&mut self, _params: &CodecParameters) -> Result<u32> {
+    fn add_stream(&mut self, params: &CodecParameters) -> Result<u32> {
         if self.has_stream {
             return Err(Error::Unsupported(
                 "a raw elementary-stream muxer carries exactly one stream",
             ));
         }
+        // Measured on `vc1`: `ffmpeg -c copy -f vc1` on an H.264 source fails
+        // with "vc1 muxer supports only codec vc1 for type video" rather than
+        // writing the mismatched bytes — every registration whose `RawSpec`
+        // names a specific codec refuses every other one of the same media
+        // type the same way, not only `vc1`. A registration with no
+        // declared codec for a media type (`data`'s `None`/`None`) accepts
+        // anything of that type, matching the reference's own generic dump.
+        let expected = match params.media_type {
+            Some(MediaType::Video) => self.expected_video,
+            Some(MediaType::Audio) => self.expected_audio,
+            _ => None,
+        };
+        if let (Some(expected), Some(actual)) = (expected, params.codec_id)
+            && expected != actual
+        {
+            return Err(Error::Unsupported(
+                "this raw muxer supports only its one declared codec",
+            ));
+        }
         self.has_stream = true;
+        if let Some(codec_id) = params.codec_id
+            && needs_annexb_framing(codec_id)
+        {
+            self.codec_id = Some(codec_id);
+            self.length_size = params
+                .video
+                .as_ref()
+                .and_then(|v| v.nal_length_size)
+                .filter(|&n| n > 0)
+                .and_then(LengthSize::new);
+        }
         Ok(0)
     }
 
@@ -70,11 +174,45 @@ impl Muxer for RawMuxer {
     }
 
     fn write_packet(&mut self, packet: &Packet) -> Result<()> {
-        self.out.write(packet.payload())
+        let converted = self.maybe_convert(packet.payload())?;
+        self.out.write(&converted)
     }
 
     fn write_trailer(&mut self) -> Result<()> {
         self.out.flush()
+    }
+
+    /// Ask M6 for `h264_mp4toannexb`/`hevc_mp4toannexb` when the one stream
+    /// declared length-prefixed framing — same condition
+    /// [`RawMuxer::maybe_convert`] uses, and the same shape as
+    /// `vaco-mux-mpegts::MpegTsMuxer::check_bitstream`. VVC is excluded, as
+    /// there: this crate has no `vvc_mp4toannexb` to ask for, so a VVC
+    /// stream keeps `maybe_convert`'s framing-only behaviour as its only
+    /// conversion.
+    fn check_bitstream(
+        &mut self,
+        params: &CodecParameters,
+        _pkt: &Packet,
+    ) -> Result<BitstreamAction> {
+        if self.bsf_decided {
+            return Ok(BitstreamAction::Keep);
+        }
+        self.bsf_decided = true;
+        let asks_for_splice = matches!(params.codec_id, Some(CodecId::H264 | CodecId::Hevc))
+            && params
+                .video
+                .as_ref()
+                .and_then(|v| v.nal_length_size)
+                .is_some_and(|n| n > 0);
+        if !asks_for_splice {
+            return Ok(BitstreamAction::Keep);
+        }
+        Ok(BitstreamAction::Insert {
+            name: match params.codec_id {
+                Some(CodecId::Hevc) => "hevc_mp4toannexb",
+                _ => "h264_mp4toannexb",
+            },
+        })
     }
 }
 
@@ -86,7 +224,9 @@ macro_rules! raw_reg {
             extensions: $exts,
             default_video: $dv,
             default_audio: $da,
-            open: |sink: Box<dyn MediaSink>| Ok(Box::new(RawMuxer::new(sink)?) as Box<dyn Muxer>),
+            open: |sink: Box<dyn MediaSink>| {
+                Ok(Box::new(RawMuxer::new(sink, $dv, $da)?) as Box<dyn Muxer>)
+            },
         };
     };
 }
@@ -462,16 +602,44 @@ mod tests {
     #[test]
     fn a_second_stream_is_rejected() {
         let sink = Box::new(MemorySink::new());
-        let mut m = RawMuxer::new(sink).unwrap();
+        let mut m = RawMuxer::new(sink, None, None).unwrap();
         assert!(m.add_stream(&CodecParameters::video()).is_ok());
         assert!(m.add_stream(&CodecParameters::video()).is_err());
+    }
+
+    #[test]
+    fn a_mismatched_codec_is_rejected() {
+        // Measured: `ffmpeg -c copy -f vc1` on an H.264 source fails with
+        // "vc1 muxer supports only codec vc1 for type video" — a registration
+        // that names a specific codec refuses every other one.
+        let sink = Box::new(MemorySink::new());
+        let mut m = RawMuxer::new(sink, Some(CodecId::Vc1), None).unwrap();
+        let mut wrong = CodecParameters::video();
+        wrong.codec_id = Some(CodecId::H264);
+        assert!(m.add_stream(&wrong).is_err());
+        assert!(!m.has_stream);
+        let mut right = CodecParameters::video();
+        right.codec_id = Some(CodecId::Vc1);
+        assert!(m.add_stream(&right).is_ok());
+    }
+
+    #[test]
+    fn a_codec_agnostic_registration_accepts_anything() {
+        // `data`'s `RawSpec` declares neither a video nor an audio codec, so
+        // it takes whatever `-c copy` hands it — matching the reference's
+        // own generic dump.
+        let sink = Box::new(MemorySink::new());
+        let mut m = RawMuxer::new(sink, None, None).unwrap();
+        let mut params = CodecParameters::video();
+        params.codec_id = Some(CodecId::H264);
+        assert!(m.add_stream(&params).is_ok());
     }
 
     #[test]
     fn packets_are_written_back_to_back_with_no_header_or_trailer() {
         let sink = MemorySink::new();
         let shared = sink.shared();
-        let mut m = RawMuxer::new(Box::new(sink)).unwrap();
+        let mut m = RawMuxer::new(Box::new(sink), None, None).unwrap();
         m.add_stream(&CodecParameters::video()).unwrap();
         m.write_header().unwrap();
         let mut budget = vaco_limits::Budget::new(vaco_limits::Limits::strict());

@@ -20,7 +20,7 @@
 //! which is why, unlike `crate::raw::RawMuxer`, this muxer must buffer the
 //! declared parameters from `add_stream` until then.
 
-use vaco_codec_core::CodecParameters;
+use vaco_codec_core::{CodecId, CodecParameters};
 use vaco_core::{Error, Result};
 use vaco_format_core::{Muxer, MuxerDesc};
 use vaco_io::{IoOptions, IoWriter, MediaSink};
@@ -63,6 +63,21 @@ impl Muxer for Yuv4MpegMuxer {
         if self.params.is_some() {
             return Err(Error::Unsupported(
                 "yuv4mpegpipe carries exactly one video stream",
+            ));
+        }
+        // Measured: `ffmpeg -c copy -f yuv4mpegpipe` on an H.264 source fails
+        // at `write_header` with "Codec not supported" — Y4M has no
+        // configuration record for an encoded bitstream, only a raw frame
+        // per `FRAME` marker. `Rawvideo` is this crate's own tag for that;
+        // `WrappedAvframe` is `MUXER_YUV4MPEGPIPE::default_video`, the
+        // reference's own pseudo-codec for "whatever the encoder decoded".
+        // A `None` codec id is let through rather than rejected, matching
+        // this crate's other muxers' tolerance for metadata nobody filled in.
+        if let Some(codec_id) = params.codec_id
+            && !matches!(codec_id, CodecId::Rawvideo | CodecId::WrappedAvframe)
+        {
+            return Err(Error::Unsupported(
+                "yuv4mpegpipe carries raw video only",
             ));
         }
         self.params = Some(params.clone());
@@ -137,6 +152,19 @@ mod tests {
     use vaco_core::MediaType;
     use vaco_format_core::vacoraw::MemorySink;
     use vaco_limits::{Budget, Limits};
+
+    #[test]
+    fn an_encoded_codec_is_rejected() {
+        // Measured: `ffmpeg -c copy -f yuv4mpegpipe` on an H.264 source
+        // fails with "Codec not supported" rather than dumping the
+        // bitstream bytes as if they were a raw frame.
+        let sink = Box::new(MemorySink::new());
+        let mut m = Yuv4MpegMuxer::new(sink).unwrap();
+        let mut params = CodecParameters::new(MediaType::Video);
+        params.codec_id = Some(CodecId::H264);
+        params.video = Some(VideoParameters::default());
+        assert!(m.add_stream(&params).is_err());
+    }
 
     #[test]
     fn header_and_frames_round_trip() {

@@ -627,3 +627,10 @@ kind     = "blackbox"
 title    = "Observed byte layout of a real ffmpeg -f nut file (main_header/stream_header field values, frame-code table contents, forward_ptr/checksum framing, CRC-32 variant, and the main_header's actual absence of a trailing main_flags field where the written specification places one), ffmpeg 8.1"
 acquired = "2026-08-27"
 where    = "the reference binary installed on the development machine"
+
+[[source]]
+id       = "ffprobe-rawstream-rate-probe"
+kind     = "blackbox"
+title    = "Observed ffprobe r_frame_rate/avg_frame_rate on a raw .h264 Annex B file muxed by -c copy from an avcC (length-prefixed) MP4 source: r_frame_rate carries the undivided VUI tick rate (50/1 for a 25 fps stream) and avg_frame_rate carries the halved picture rate (25/1) — the two fields disagree by exactly the H.264 field/frame-doubling factor. Also: ffmpeg -c copy -f <fmt> refusal messages for a codec/muxer mismatch (\"<fmt> muxer supports only codec <fmt> for type video\" on vc1/vvc; \"Codec not supported\" on yuv4mpegpipe fed an encoded stream), ffmpeg 8.1"
+acquired = "2026-08-27"
+where    = "the reference binary installed on the development machine"
