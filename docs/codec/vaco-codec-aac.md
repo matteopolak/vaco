@@ -30,6 +30,16 @@ decode is complete end to end** — see "Decode accuracy" for what that is
 measured against and "Known gaps" for what is still approximated or
 unsupported.
 
+**#446 (SBR/HE-AAC) is in progress, not landed.** This pass built and
+independently verified the QMF analysis/synthesis filterbanks (`qmf.rs`)
+and all ten SBR envelope/noise Huffman tables (`sbr_huffman_tables.rs`),
+but found — and could not root-cause — a broadband phase-coherence defect
+in the QMF round trip serious enough that nothing downstream (bitstream
+envelope/noise decode, HF generation, envelope adjustment) was built on
+top of it this pass. See "SBR (#446) — what landed and what did not"
+below for the full account, including what was verified, what was ruled
+out, and exactly where this stopped.
+
 ## Why this is gated (D4)
 
 AAC is legally **RED**, not merely off-by-default for a portability reason:
@@ -303,6 +313,129 @@ follow the standard, widely-implemented convention rather than a clean
 primary-text citation (the PDF extraction this crate's spec citations are
 otherwise drawn from garbled that one boundary's fraction).
 
+## SBR (#446) — what landed and what did not
+
+T3-03d: Spectral Band Replication, the tool that turns AAC-LC into HE-AAC
+by regenerating high-frequency content the encoder deliberately discarded.
+The largest single piece left in epic #53, and — per the dispatch that
+opened it — a genuinely different kind of work from #444/#445: a QMF
+filterbank pair, a large bitstream syntax surface (its own ten Huffman
+tables), and a frequency-domain reconstruction algorithm (patching,
+envelope adjustment) with no equivalent in AAC-LC's own decode.
+
+### What's implemented and verified
+
+- **The QMF analysis and downsampled-synthesis filterbanks** (`qmf.rs`,
+  §4.6.18.4.1/§4.6.18.4.3): `AnalysisBank` (32-band complex, 320-sample
+  shift register) and `DownsampledSynthesisBank` (32-band, same-rate
+  inverse, 640-sample shift register), transcribed directly from the
+  flowcharts in Figures 4.42/4.44. The 640-tap prototype filter (Table
+  4.A.89) is transcribed at half length (indices 0-320) and mirrored at
+  runtime, since the table is exactly symmetric by construction — a
+  decision that paid for itself immediately: cross-checking the *directly*
+  extracted 640-entry text against that mirror rule found two indices
+  (384, 512) whose printed sign disagreed with their mirror partners (256,
+  128), the same "PDF extraction drops or adds a minus sign" failure shape
+  as #445's `LongStart`/`LongStop` boundary fractions.
+- **The rate-doubling `SynthesisBank`** (§4.6.18.4.2, 64-band, 1280-sample
+  shift register) is also transcribed but not independently tested — see
+  below for why.
+- **All ten SBR envelope/noise-floor Huffman tables** (`sbr_huffman_tables.rs`,
+  Tables 4.A.79-4.A.88), transcribed the same way #444 transcribed AAC-LC's
+  own spectral codebooks: every table independently verified prefix-free
+  and Kraft-complete. All ten passed on the first transcription — unlike
+  the QMF window table, which needed the mirror cross-check to catch its
+  two flipped signs.
+
+### The verification result, and why nothing was built on top of it
+
+Round-tripping `AnalysisBank` through `DownsampledSynthesisBank` — the
+pair the specification itself defines as same-rate inverses, used here
+in place of the rate-doubling `SynthesisBank` because that one is not
+specified to invert a zero-padded analysis output — **reconstructs a
+single sinusoid at correlation > 0.99 for every frequency tested from 200
+Hz to 10 kHz (a 22050 Hz core rate's Nyquist is 11025 Hz), all at one
+consistent ~593-sample group delay independent of frequency.** That is
+strong evidence the modulation formulas and the coefficient table are
+transcribed correctly.
+
+**White noise round-trips at correlation under 0.1, at every delay
+searched, including the exact delay every single tone settles at.** For a
+linear time-invariant system — which this filterbank is, being pure fixed
+FIR/modulation arithmetic — correlating almost perfectly on every
+individual frequency while failing badly on their superposition is only
+possible if the *relative phase* between subbands is wrong even though
+each subband's own magnitude and delay are right. A single-tone
+correlation test is structurally blind to this (a wrong-but-constant
+phase for one frequency is absorbed into the fitted lag); a broadband
+signal is not.
+
+Substantial effort went into finding this defect before concluding it
+would not yield further this pass: re-deriving the modulation formulas
+from the primary text twice (independently re-checking the constant
+offset terms — `-0.5`, `-255`, `-127.5` — that would explain exactly this
+symptom if subtly wrong), re-verifying the coefficient table's own
+extraction, and empirically testing the input/output sample-ordering
+convention (the flowchart reads new samples into the shift register in
+reverse chronological order, a real and necessary fix made during this
+pass — but not the remaining defect). None of it found the fault. It is
+disclosed in `qmf.rs`'s own module doc, with one test
+(`analysis_then_downsampled_synthesis_reconstructs_white_noise`) marked
+`#[ignore]` rather than deleted, kept as the concrete regression target
+for whoever finds it.
+
+**Nothing downstream was built on this pass as a result.** `sbr_data()`'s
+bitstream syntax (`sbr_header`, `sbr_grid`, the delta-coded envelope/noise
+values the Huffman tables above decode), HF generation (patching QMF
+subbands from the low band to the high band), and envelope adjustment
+were all explicitly not attempted — building any of them on an
+unverified QMF foundation would risk the same failure shape this
+workspace keeps finding and fixing: plausible-looking code that is
+silently wrong, except here the wrongness would be compounded by three
+more unverified layers before ever reaching a fixture comparison. The
+dispatch that opened this issue named exactly this fallback in advance:
+"the QMF banks alone are a real, reusable deliverable — say so and stop
+there rather than shipping a half-wired high-frequency path."
+
+### Fixture access for #446
+
+Neither `ffmpeg`'s native `aac` encoder nor `libfdk_aac` (not compiled
+into this environment's `ffmpeg` build) can produce HE-AAC. macOS's own
+`afconvert` (AudioToolbox) can, via `-d aach` (SBR only) and `-d aacp`
+(SBR+PS) — the ADTS files it produces were used to confirm real,
+implicit-signalling HE-AAC content exists and to decode a real
+`AudioSpecificConfig`'s explicit SBR/PS extension fields by hand (see
+"Implicit and explicit SBR signalling" below), but no fixture-based
+correlation table exists yet since no full decode path was built to
+produce one against.
+
+### Implicit and explicit SBR signalling — confirmed against real content
+
+`vaco-parse-aac::asc::AudioSpecificConfig` already parses explicit SBR
+signalling in full (`has_sbr()`, `output_sample_rate()`, the hierarchical
+and backward-compatible sync-extension forms) — this predates #446 and
+needed no changes. Decoded by hand from a real `afconvert`-produced HE-AAC
+`.m4a`'s `esds` box: `audioObjectType=2` (AAC-LC core),
+`samplingFrequencyIndex=7` (22050 Hz core), `syncExtensionType=0x2b7`,
+`extensionAudioObjectType=5` (SBR), `sbrPresentFlag=1`,
+`extensionSamplingFrequencyIndex=4` (44100 Hz — the doubled output rate).
+`DecoderConfig::from_audio_specific_config` still rejects `cfg.has_sbr()`
+with `Error::Unsupported` as of this pass — accepting it usefully needs
+the QMF/HF pipeline this pass could not verify, so the gate stays in
+place rather than accepting a configuration this crate cannot yet act on.
+
+A real `afconvert`-produced ADTS HE-AAC file confirmed the **implicit**
+case directly: its raw ADTS header declares plain `profile=1` (AAC-LC),
+`sampling_frequency_index=7` (22050 Hz) — nothing in the ADTS header
+itself signals SBR at all, since ADTS carries no `AudioSpecificConfig`
+extension fields. `ffmpeg`'s own decoder recognises this file as HE-AAC
+and reports 44100 Hz output purely by finding an `EXT_SBR_DATA`/
+`EXT_SBR_DATA_CRC` extension payload inside the frame — confirming
+`raw_data_block`'s `FIL` element (already parsed structurally by #444,
+currently skipped wholesale by its own declared byte count) is exactly
+where implicit detection has to happen, and that this cannot be resolved
+at the configuration layer alone for a raw-ADTS stream.
+
 ## Decode accuracy — measured, not claimed
 
 AAC, like every lossy codec this workspace has decoded, defines a
@@ -417,6 +550,17 @@ plausible-looking implementation that a real bitstream falsifies.
 
 ## Known gaps
 
+- **HE-AAC/SBR (#446) is not decoded — `Error::Unsupported` for any
+  configuration signalling it.** The QMF filterbanks and Huffman tables
+  are transcribed and partially verified (see "SBR (#446)" above), but a
+  broadband phase-coherence defect in the QMF round trip was found and not
+  root-caused, so `sbr_data()` parsing, HF generation and envelope
+  adjustment were not attempted. `DecoderConfig::from_audio_specific_config`
+  still rejects `cfg.has_sbr()`; implicit signalling (SBR data inside a
+  `FIL` element with no `AudioSpecificConfig` hint at all) is not detected
+  either, since detecting it usefully requires the same downstream
+  pipeline. See `qmf.rs`'s own module doc for what was and was not ruled
+  out chasing the defect.
 - **Intensity stereo always assumes the in-phase codebook
   (`INTENSITY_HCB`).** Both intensity codebooks (in-phase `INTENSITY_HCB`
   and out-of-phase `INTENSITY_HCB2`) decode to the same
@@ -495,6 +639,34 @@ plausible-looking implementation that a real bitstream falsifies.
   list, an SBR hook ahead of the filterbank) can insert itself at the right
   point in the pipeline without restructuring the whole thing. Keep that
   shape rather than collapsing it back down.
+- **Finding SBR's broadband phase-coherence defect:** read `qmf.rs`'s own
+  module doc first for what this pass already ruled out (the modulation
+  formulas' constant terms, the coefficient table's extraction, the
+  input/output sample-ordering convention). `analysis_then_downsampled_synthesis_reconstructs_white_noise`
+  (marked `#[ignore]`, not deleted) is the regression target — get it
+  passing at `> 0.95` correlation without regressing
+  `analysis_then_downsampled_synthesis_reconstructs_tones_across_the_audible_band`
+  (currently `> 0.99` for every tested frequency). A profitable next step
+  neither this pass's time nor its remaining budget reached: construct a
+  two-tone (not single-tone, not full-spectrum-noise) test signal and
+  check whether the *relative* phase between the two reconstructed tones
+  matches their relative phase in the original — narrower than white
+  noise, broader than one tone, and might localise whether the defect is
+  frequency-pair-dependent or global.
+- **Continuing SBR once the QMF defect is found:** `sbr_huffman_tables.rs`
+  is ready to consume; `sbr_data()`'s syntax (`sbr_header`, `sbr_grid`'s
+  four frame classes, `sbr_dtdf`, `sbr_envelope`/`sbr_noise`'s delta-coded
+  Huffman decode) was read from the primary text during this pass but not
+  transcribed into code, so that reading is not yet captured anywhere
+  except this doc and should be redone against the primary text directly
+  rather than trusted from memory. `raw_data_block.rs`'s `FIL` element
+  (`skip_fill_element`) is where `extension_payload()`'s `extension_type`
+  needs to be inspected for `EXT_SBR_DATA`/`EXT_SBR_DATA_CRC` (values
+  `0b1101`/`0b1110`, Table 4.121) instead of being skipped wholesale — note
+  the sibling `SCE`/`CPE` a `FIL`'s SBR data belongs to needs tracking
+  across the element loop, since `sbr_extension_data(id_aac, crc_flag)`'s
+  `id_aac` selects `sbr_single_channel_element()` vs
+  `sbr_channel_pair_element()`.
 
 ## Configuration
 
@@ -540,3 +712,14 @@ in `vaco-codec-dsp-sinewin`), Table 4.156/4.157 (`TNS_MAX_ORDER`/
 `TNS_MAX_BANDS`), and Table 42 (channel-configuration element ordering,
 `13818-7` — backing `decoder.rs`'s `reorder_to_output_channel_order` for
 configurations 1, 2 and 6).
+
+Added by #446 (SBR, in progress — see "SBR (#446)" above): §4.6.18.4.1-3
+(QMF analysis/synthesis/downsampled-synthesis filterbanks, `qmf.rs`),
+Table 4.A.89 (QMF window coefficients), Annex §4.A.6.1 and Tables
+4.A.78-4.A.88 (SBR Huffman tables and their `(df_env_flag, df_noise_flag,
+amp_res, LAV)` parameters, `sbr_huffman_tables.rs`), §1.6.5.2 (implicit
+and explicit SBR signalling, confirmed against real content — see "SBR
+(#446)" above), Table 4.121 (`extension_type` values, needed for the
+not-yet-implemented `FIL`-element SBR detection), and Tables 4.57/4.62-4.74
+(the `sbr_data()` syntax read during this pass but not yet transcribed
+into code).
