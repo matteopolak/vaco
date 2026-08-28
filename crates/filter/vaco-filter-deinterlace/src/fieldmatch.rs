@@ -60,24 +60,132 @@ pub const DESC: FilterDesc = FilterDesc {
     flags: FilterFlags::DYNAMIC_INPUTS,
 };
 
+/// `ffmpeg -h filter=fieldmatch`'s own named constants for
+/// `order`/`mode`/`field`.
+const FM_ORDER_CONSTS: &[vaco_opts::ConstDesc] = &[
+    vaco_opts::ConstDesc {
+        name: "auto",
+        help: "",
+        unit: "fm_order",
+        value: vaco_opts::ConstValue::Int(-1),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "bff",
+        help: "",
+        unit: "fm_order",
+        value: vaco_opts::ConstValue::Int(0),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "tff",
+        help: "",
+        unit: "fm_order",
+        value: vaco_opts::ConstValue::Int(1),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+];
+const FM_MODE_CONSTS: &[vaco_opts::ConstDesc] = &[
+    vaco_opts::ConstDesc {
+        name: "pc",
+        help: "",
+        unit: "fm_mode",
+        value: vaco_opts::ConstValue::Int(0),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "pc_n",
+        help: "",
+        unit: "fm_mode",
+        value: vaco_opts::ConstValue::Int(1),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "pc_u",
+        help: "",
+        unit: "fm_mode",
+        value: vaco_opts::ConstValue::Int(2),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "pc_n_ub",
+        help: "",
+        unit: "fm_mode",
+        value: vaco_opts::ConstValue::Int(3),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "pcn",
+        help: "",
+        unit: "fm_mode",
+        value: vaco_opts::ConstValue::Int(4),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "pcn_ub",
+        help: "",
+        unit: "fm_mode",
+        value: vaco_opts::ConstValue::Int(5),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+];
+const FM_FIELD_CONSTS: &[vaco_opts::ConstDesc] = &[
+    vaco_opts::ConstDesc {
+        name: "auto",
+        help: "",
+        unit: "fm_field",
+        value: vaco_opts::ConstValue::Int(-1),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "bottom",
+        help: "",
+        unit: "fm_field",
+        value: vaco_opts::ConstValue::Int(0),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "top",
+        help: "",
+        unit: "fm_field",
+        value: vaco_opts::ConstValue::Int(1),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+];
+
 #[derive(Debug, Clone, vaco_opts::Options)]
 #[options(name = "fieldmatch", help = "Field matching for inverse telecine")]
 pub(crate) struct Opts {
-    #[opt(name = "order", help = "assumed field order", default = -1, range = -1..=1, flags(video, filtering))]
+    #[opt(name = "order", help = "assumed field order", unit = "fm_order", consts = FM_ORDER_CONSTS, default = -1, range = -1..=1, flags(video, filtering))]
     pub order: i32,
-    #[opt(name = "mode", help = "matching mode", default = 1, range = 0..=5, flags(video, filtering))]
+    #[opt(name = "mode", help = "matching mode", unit = "fm_mode", consts = FM_MODE_CONSTS, default = 1, range = 0..=5, flags(video, filtering))]
     pub mode: i32,
-    #[opt(name = "ppsrc", help = "mark main input as pre-processed", default = false, flags(video, filtering))]
+    #[opt(
+        name = "ppsrc",
+        help = "mark main input as pre-processed",
+        default = false,
+        flags(video, filtering)
+    )]
     pub ppsrc: bool,
-    #[opt(name = "field", help = "field to match from", default = -1, range = -1..=1, flags(video, filtering))]
+    #[opt(name = "field", help = "field to match from", unit = "fm_field", consts = FM_FIELD_CONSTS, default = -1, range = -1..=1, flags(video, filtering))]
     pub field: i32,
-    #[opt(name = "mchroma", help = "include chroma in match", default = true, flags(video, filtering))]
+    #[opt(
+        name = "mchroma",
+        help = "include chroma in match",
+        default = true,
+        flags(video, filtering)
+    )]
     pub mchroma: bool,
     #[opt(name = "scthresh", help = "scene change threshold", default = 12.0, range = 0.0..=100.0, flags(video, filtering))]
     pub scthresh: f64,
     #[opt(name = "cthresh", help = "combed-frame area threshold", default = 9, range = -1..=255, flags(video, filtering))]
     pub cthresh: i32,
-    #[opt(name = "chroma", help = "include chroma in combed decision", default = false, flags(video, filtering))]
+    #[opt(
+        name = "chroma",
+        help = "include chroma in combed decision",
+        default = false,
+        flags(video, filtering)
+    )]
     pub chroma: bool,
 }
 
@@ -85,7 +193,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }
@@ -111,14 +220,22 @@ impl Filter {
     /// Pick the least-combed of {as-is, top-of-current+bottom-of-held,
     /// bottom-of-current+top-of-held}. `pub(crate)` so this crate's tests
     /// exercise the real decision logic without a `FilterContext`.
-    pub(crate) fn best_match(pool: &vaco_frame::FramePool, held: Option<&Frame>, current: &Frame) -> Result<Frame> {
+    pub(crate) fn best_match(
+        pool: &vaco_frame::FramePool,
+        held: Option<&Frame>,
+        current: &Frame,
+    ) -> Result<Frame> {
         let mut best = current.clone();
         let best_score = comb_score_normalised(current);
         if let Some(held) = held {
             let cur_top = is_tff(current);
             let cur_field = extract_field(pool, current, cur_top)?;
             let held_field = extract_field(pool, held, !cur_top)?;
-            let (top, bottom) = if cur_top { (&cur_field, &held_field) } else { (&held_field, &cur_field) };
+            let (top, bottom) = if cur_top {
+                (&cur_field, &held_field)
+            } else {
+                (&held_field, &cur_field)
+            };
             let candidate = weave_fields(pool, current, top, bottom)?;
             if comb_score_normalised(&candidate) < best_score {
                 best = candidate;
@@ -143,7 +260,9 @@ impl FrameFilter for Filter {
 pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, String> {
     let opts = Opts::parse(req.args)?;
     if opts.ppsrc {
-        return Err("fieldmatch: ppsrc=true (2-input clean-source mode) is not implemented".to_owned());
+        return Err(
+            "fieldmatch: ppsrc=true (2-input clean-source mode) is not implemented".to_owned(),
+        );
     }
     Ok(Instance {
         desc: DESC,
@@ -178,5 +297,31 @@ mod tests {
         let cur = ramp_frame(4, 8);
         let out = Filter::best_match(&pool, Some(&held), &cur).unwrap();
         assert!(comb_score_normalised(&out) <= comb_score_normalised(&cur) + 1e-9);
+    }
+
+    /// Pinned against the reference's own named spelling
+    /// (`ffmpeg -h filter=fieldmatch`): `order`/`mode`/`field`'s named
+    /// constants must parse, not just the bare integer.
+    #[test]
+    fn named_option_values_parse() {
+        for (name, expected) in [("auto", -1), ("bff", 0), ("tff", 1)] {
+            let opts = Opts::parse(Some(&format!("order={name}"))).unwrap();
+            assert_eq!(opts.order, expected, "order={name}");
+        }
+        for (name, expected) in [
+            ("pc", 0),
+            ("pc_n", 1),
+            ("pc_u", 2),
+            ("pc_n_ub", 3),
+            ("pcn", 4),
+            ("pcn_ub", 5),
+        ] {
+            let opts = Opts::parse(Some(&format!("mode={name}"))).unwrap();
+            assert_eq!(opts.mode, expected, "mode={name}");
+        }
+        for (name, expected) in [("auto", -1), ("bottom", 0), ("top", 1)] {
+            let opts = Opts::parse(Some(&format!("field={name}"))).unwrap();
+            assert_eq!(opts.field, expected, "field={name}");
+        }
     }
 }

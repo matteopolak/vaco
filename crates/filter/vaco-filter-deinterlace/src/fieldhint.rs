@@ -54,12 +54,37 @@ pub const DESC: FilterDesc = FilterDesc {
     flags: FilterFlags::empty(),
 };
 
+/// `ffmpeg -h filter=fieldhint`'s own named constants for `mode`.
+const FIELDHINT_MODE_CONSTS: &[vaco_opts::ConstDesc] = &[
+    vaco_opts::ConstDesc {
+        name: "absolute",
+        help: "",
+        unit: "fieldhint_mode",
+        value: vaco_opts::ConstValue::Int(0),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "relative",
+        help: "",
+        unit: "fieldhint_mode",
+        value: vaco_opts::ConstValue::Int(1),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "pattern",
+        help: "",
+        unit: "fieldhint_mode",
+        value: vaco_opts::ConstValue::Int(2),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+];
+
 #[derive(Debug, Clone, vaco_opts::Options)]
 #[options(name = "fieldhint", help = "Field matching using hints")]
 pub(crate) struct Opts {
     #[opt(name = "hint", help = "set hint file", default = "".to_string(), flags(video, filtering))]
     pub hint: String,
-    #[opt(name = "mode", help = "set hint mode", default = 0, range = 0..=2, flags(video, filtering))]
+    #[opt(name = "mode", help = "set hint mode", unit = "fieldhint_mode", consts = FIELDHINT_MODE_CONSTS, default = 0, range = 0..=2, flags(video, filtering))]
     pub mode: i32,
 }
 
@@ -67,7 +92,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }
@@ -111,7 +137,8 @@ impl Filter {
     fn drain_ready(&mut self, ctx: &mut FilterContext<'_>) -> Result<FrameOut> {
         let mut outs = smallvec::SmallVec::new();
         while let Some(&(top_idx, bottom_idx)) = self.hints.get(self.next_hint) {
-            let (Some(top), Some(bottom)) = (self.field_at(top_idx), self.field_at(bottom_idx)) else {
+            let (Some(top), Some(bottom)) = (self.field_at(top_idx), self.field_at(bottom_idx))
+            else {
                 break;
             };
             outs.push(weave_fields(ctx.pool(), top, top, bottom)?);
@@ -203,6 +230,16 @@ mod tests {
         let out = weave_fields(&pool, &top, &top, &bottom).unwrap();
         for y in 0..8 {
             assert_eq!(row_value(&out, y), row_value(&f0, y), "row {y}");
+        }
+    }
+
+    /// Pinned against the reference's own named spelling
+    /// (`ffmpeg -h filter=fieldhint`).
+    #[test]
+    fn named_mode_values_parse() {
+        for (name, expected) in [("absolute", 0), ("relative", 1), ("pattern", 2)] {
+            let opts = Opts::parse(Some(&format!("mode={name}:hint=/dev/null"))).unwrap();
+            assert_eq!(opts.mode, expected, "mode={name}");
         }
     }
 }

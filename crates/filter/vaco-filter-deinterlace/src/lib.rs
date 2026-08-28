@@ -86,6 +86,7 @@ pub mod idet;
 pub mod interlace;
 pub mod kerndeint;
 mod mad;
+mod opt_consts;
 pub mod phase;
 pub mod pullup;
 pub mod registry;

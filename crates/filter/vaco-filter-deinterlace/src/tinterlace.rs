@@ -93,10 +93,70 @@ fn mode_from_opt(v: i32) -> Mode {
     }
 }
 
+/// `ffmpeg -h filter=tinterlace`'s own named constants for `mode`.
+const TINTERLACE_MODE_CONSTS: &[vaco_opts::ConstDesc] = &[
+    vaco_opts::ConstDesc {
+        name: "merge",
+        help: "",
+        unit: "tinterlace_mode",
+        value: vaco_opts::ConstValue::Int(0),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "drop_even",
+        help: "",
+        unit: "tinterlace_mode",
+        value: vaco_opts::ConstValue::Int(1),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "drop_odd",
+        help: "",
+        unit: "tinterlace_mode",
+        value: vaco_opts::ConstValue::Int(2),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "pad",
+        help: "",
+        unit: "tinterlace_mode",
+        value: vaco_opts::ConstValue::Int(3),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "interleave_top",
+        help: "",
+        unit: "tinterlace_mode",
+        value: vaco_opts::ConstValue::Int(4),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "interleave_bottom",
+        help: "",
+        unit: "tinterlace_mode",
+        value: vaco_opts::ConstValue::Int(5),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "interlacex2",
+        help: "",
+        unit: "tinterlace_mode",
+        value: vaco_opts::ConstValue::Int(6),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "mergex2",
+        help: "",
+        unit: "tinterlace_mode",
+        value: vaco_opts::ConstValue::Int(7),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+];
+
 #[derive(Debug, Clone, vaco_opts::Options)]
 #[options(name = "tinterlace", help = "Perform temporal field interlacing")]
 pub(crate) struct Opts {
-    #[opt(name = "mode", help = "select interlace mode", default = 0, range = 0..=7, flags(video, filtering))]
+    #[opt(name = "mode", help = "select interlace mode", unit = "tinterlace_mode", consts = TINTERLACE_MODE_CONSTS, default = 0, range = 0..=7, flags(video, filtering))]
     pub mode: i32,
 }
 
@@ -104,7 +164,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }
@@ -114,7 +175,9 @@ impl Opts {
 /// unchanged height: even output rows from `a`, odd from `b`.
 pub(crate) fn interleave_same_height(pool: &FramePool, a: &Frame, b: &Frame) -> Result<Frame> {
     let Some((format, width, height)) = dims(a) else {
-        return Err(vaco_core::Error::Unsupported("tinterlace needs video frames"));
+        return Err(vaco_core::Error::Unsupported(
+            "tinterlace needs video frames",
+        ));
     };
     ensure_addressable(format)?;
     let mut out = alloc_like(pool, a, format, width, height)?;
@@ -141,14 +204,18 @@ pub(crate) fn interleave_same_height(pool: &FramePool, a: &Frame, b: &Frame) -> 
 /// what this does and does not verify.
 fn pad_single(pool: &FramePool, src: &Frame, top: bool) -> Result<Frame> {
     let Some((format, width, height)) = dims(src) else {
-        return Err(vaco_core::Error::Unsupported("tinterlace needs video frames"));
+        return Err(vaco_core::Error::Unsupported(
+            "tinterlace needs video frames",
+        ));
     };
     ensure_addressable(format)?;
     let out_h = height.saturating_mul(2);
     let mut out = alloc_like(pool, src, format, width, out_h)?;
     for p in 0..format.plane_count() {
         let src_rows = format.plane_height(height, p as u8) as usize;
-        let Some(src_plane) = src.plane(p) else { continue };
+        let Some(src_plane) = src.plane(p) else {
+            continue;
+        };
         let Some(mut dst_plane) = out.plane_mut(p) else {
             continue;
         };
@@ -299,7 +366,11 @@ mod tests {
                         None => filt.held = Some(current),
                         Some(held) => {
                             out.push(weave_fields(pool, &held.0, &held.0, &current.0).unwrap());
-                            filt.held = if filt.mode == Mode::MergeX2 { Some(current) } else { None };
+                            filt.held = if filt.mode == Mode::MergeX2 {
+                                Some(current)
+                            } else {
+                                None
+                            };
                         }
                     }
                 }
@@ -363,5 +434,24 @@ mod tests {
         let out = interleave_same_height(&pool, &a, &b).unwrap();
         assert_eq!(row_value(&out, 0), row_value(&a, 0));
         assert_eq!(row_value(&out, 1), row_value(&b, 1));
+    }
+
+    /// Pinned against the reference's own named spelling
+    /// (`ffmpeg -h filter=tinterlace`).
+    #[test]
+    fn named_mode_values_parse() {
+        for (name, expected) in [
+            ("merge", 0),
+            ("drop_even", 1),
+            ("drop_odd", 2),
+            ("pad", 3),
+            ("interleave_top", 4),
+            ("interleave_bottom", 5),
+            ("interlacex2", 6),
+            ("mergex2", 7),
+        ] {
+            let opts = Opts::parse(Some(&format!("mode={name}"))).unwrap();
+            assert_eq!(opts.mode, expected, "mode={name}");
+        }
     }
 }

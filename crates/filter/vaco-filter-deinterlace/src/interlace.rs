@@ -58,12 +58,54 @@ pub(crate) enum Lowpass {
     ComplexApprox,
 }
 
+/// `ffmpeg -h filter=interlace`'s own named constants for
+/// `scan`/`lowpass`.
+const INTERLACE_SCAN_CONSTS: &[vaco_opts::ConstDesc] = &[
+    vaco_opts::ConstDesc {
+        name: "tff",
+        help: "",
+        unit: "interlace_scan",
+        value: vaco_opts::ConstValue::Int(0),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "bff",
+        help: "",
+        unit: "interlace_scan",
+        value: vaco_opts::ConstValue::Int(1),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+];
+const INTERLACE_LOWPASS_CONSTS: &[vaco_opts::ConstDesc] = &[
+    vaco_opts::ConstDesc {
+        name: "off",
+        help: "",
+        unit: "interlace_lowpass",
+        value: vaco_opts::ConstValue::Int(0),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "linear",
+        help: "",
+        unit: "interlace_lowpass",
+        value: vaco_opts::ConstValue::Int(1),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "complex",
+        help: "",
+        unit: "interlace_lowpass",
+        value: vaco_opts::ConstValue::Int(2),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+];
+
 #[derive(Debug, Clone, vaco_opts::Options)]
 #[options(name = "interlace", help = "Convert progressive video into interlaced")]
 pub(crate) struct Opts {
-    #[opt(name = "scan", help = "scanning mode", default = 0, range = 0..=1, flags(video, filtering))]
+    #[opt(name = "scan", help = "scanning mode", unit = "interlace_scan", consts = INTERLACE_SCAN_CONSTS, default = 0, range = 0..=1, flags(video, filtering))]
     pub scan: i32,
-    #[opt(name = "lowpass", help = "vertical low-pass filter", default = 1, range = 0..=2, flags(video, filtering))]
+    #[opt(name = "lowpass", help = "vertical low-pass filter", unit = "interlace_lowpass", consts = INTERLACE_LOWPASS_CONSTS, default = 1, range = 0..=2, flags(video, filtering))]
     pub lowpass: i32,
 }
 
@@ -71,7 +113,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }
@@ -88,15 +131,31 @@ fn filtered_sample(plane: PlaneRef<'_>, x: usize, y: usize, rows: usize, unit: u
             .map_or(0, u32::from)
     };
     let above = if y == 0 { get(0) } else { get(y - 1) };
-    let below = if y.saturating_add(1) >= rows { get(rows.saturating_sub(1)) } else { get(y + 1) };
+    let below = if y.saturating_add(1) >= rows {
+        get(rows.saturating_sub(1))
+    } else {
+        get(y + 1)
+    };
     let center = get(y);
-    let sum = above.saturating_add(center.saturating_mul(2)).saturating_add(below);
-    #[allow(clippy::integer_division, reason = "fixed 4-tap normalisation, not a lossy size split")]
+    let sum = above
+        .saturating_add(center.saturating_mul(2))
+        .saturating_add(below);
+    #[allow(
+        clippy::integer_division,
+        reason = "fixed 4-tap normalisation, not a lossy size split"
+    )]
     let v = (sum.saturating_add(2)) / 4;
     u8::try_from(v.min(255)).unwrap_or(255)
 }
 
-fn copy_row_filtered(dst: &mut vaco_frame::PlaneMut<'_>, dy: usize, src: PlaneRef<'_>, sy: usize, rows: usize, unit: usize) {
+fn copy_row_filtered(
+    dst: &mut vaco_frame::PlaneMut<'_>,
+    dy: usize,
+    src: PlaneRef<'_>,
+    sy: usize,
+    rows: usize,
+    unit: usize,
+) {
     let Some(src_row) = src.row(sy) else { return };
     #[allow(
         clippy::integer_division,
@@ -115,7 +174,9 @@ fn copy_row_filtered(dst: &mut vaco_frame::PlaneMut<'_>, dy: usize, src: PlaneRe
 
 fn combine(pool: &FramePool, a: &Frame, b: &Frame, tff: bool, lowpass: Lowpass) -> Result<Frame> {
     let Some((format, width, height)) = dims(a) else {
-        return Err(vaco_core::Error::Unsupported("interlace needs video frames"));
+        return Err(vaco_core::Error::Unsupported(
+            "interlace needs video frames",
+        ));
     };
     ensure_addressable(format)?;
     let mut out = alloc_like(pool, a, format, width, height)?;
@@ -138,7 +199,9 @@ fn combine(pool: &FramePool, a: &Frame, b: &Frame, tff: bool, lowpass: Lowpass) 
         }).max(1);
         let Some(a_plane) = a.plane(p) else { continue };
         let Some(b_plane) = b.plane(p) else { continue };
-        let Some(mut dst_plane) = out.plane_mut(p) else { continue };
+        let Some(mut dst_plane) = out.plane_mut(p) else {
+            continue;
+        };
         for y in 0..rows {
             let from_a = (y % 2 == 0) == tff;
             if from_a {
@@ -267,5 +330,19 @@ mod tests {
         assert_eq!(row_value(&out, 3), 25);
         assert_eq!(row_value(&out, 4), 50);
         assert_eq!(row_value(&out, 5), 25);
+    }
+
+    /// Pinned against the reference's own named spelling
+    /// (`ffmpeg -h filter=interlace`).
+    #[test]
+    fn named_option_values_parse() {
+        for (name, expected) in [("tff", 0), ("bff", 1)] {
+            let opts = Opts::parse(Some(&format!("scan={name}"))).unwrap();
+            assert_eq!(opts.scan, expected, "scan={name}");
+        }
+        for (name, expected) in [("off", 0), ("linear", 1), ("complex", 2)] {
+            let opts = Opts::parse(Some(&format!("lowpass={name}"))).unwrap();
+            assert_eq!(opts.lowpass, expected, "lowpass={name}");
+        }
     }
 }

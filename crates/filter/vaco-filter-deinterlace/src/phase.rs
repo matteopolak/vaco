@@ -68,10 +68,79 @@ fn mode_from_opt(v: i32) -> Mode {
     }
 }
 
+/// `ffmpeg -h filter=phase`'s own named constants for `mode` -- nine
+/// single-character, case-sensitive names (lower and upper case are
+/// distinct values).
+const PHASE_MODE_CONSTS: &[vaco_opts::ConstDesc] = &[
+    vaco_opts::ConstDesc {
+        name: "p",
+        help: "",
+        unit: "phase_mode",
+        value: vaco_opts::ConstValue::Int(0),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "t",
+        help: "",
+        unit: "phase_mode",
+        value: vaco_opts::ConstValue::Int(1),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "b",
+        help: "",
+        unit: "phase_mode",
+        value: vaco_opts::ConstValue::Int(2),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "T",
+        help: "",
+        unit: "phase_mode",
+        value: vaco_opts::ConstValue::Int(3),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "B",
+        help: "",
+        unit: "phase_mode",
+        value: vaco_opts::ConstValue::Int(4),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "u",
+        help: "",
+        unit: "phase_mode",
+        value: vaco_opts::ConstValue::Int(5),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "U",
+        help: "",
+        unit: "phase_mode",
+        value: vaco_opts::ConstValue::Int(6),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "a",
+        help: "",
+        unit: "phase_mode",
+        value: vaco_opts::ConstValue::Int(7),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "A",
+        help: "",
+        unit: "phase_mode",
+        value: vaco_opts::ConstValue::Int(8),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+];
+
 #[derive(Debug, Clone, vaco_opts::Options)]
 #[options(name = "phase", help = "Phase shift fields")]
 pub(crate) struct Opts {
-    #[opt(name = "mode", help = "set phase mode", default = 8, range = 0..=8, flags(video, filtering))]
+    #[opt(name = "mode", help = "set phase mode", unit = "phase_mode", consts = PHASE_MODE_CONSTS, default = 8, range = 0..=8, flags(video, filtering))]
     pub mode: i32,
 }
 
@@ -79,7 +148,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }
@@ -91,10 +161,16 @@ fn shift(pool: &FramePool, held: &Frame, current: &Frame, top_from_current: bool
     };
     ensure_addressable(format)?;
     let mut out = alloc_like(pool, current, format, width, height)?;
-    let (top_src, bottom_src) = if top_from_current { (current, held) } else { (held, current) };
+    let (top_src, bottom_src) = if top_from_current {
+        (current, held)
+    } else {
+        (held, current)
+    };
     for p in 0..format.plane_count() {
         let rows = format.plane_height(height, p as u8) as usize;
-        let Some(top_plane) = top_src.plane(p) else { continue };
+        let Some(top_plane) = top_src.plane(p) else {
+            continue;
+        };
         let Some(bottom_plane) = bottom_src.plane(p) else {
             continue;
         };
@@ -178,10 +254,18 @@ mod tests {
         }
         let out = shift(&pool, &f0, &f1, true).unwrap();
         for y in (0..8).step_by(2) {
-            assert_eq!(row_value(&out, y), row_value(&f1, y), "even row {y} from current");
+            assert_eq!(
+                row_value(&out, y),
+                row_value(&f1, y),
+                "even row {y} from current"
+            );
         }
         for y in (1..8).step_by(2) {
-            assert_eq!(row_value(&out, y), row_value(&f0, y), "odd row {y} from held");
+            assert_eq!(
+                row_value(&out, y),
+                row_value(&f0, y),
+                "odd row {y} from held"
+            );
         }
     }
 
@@ -193,5 +277,26 @@ mod tests {
         };
         assert_eq!(filt.mode, Mode::Progressive);
         filt.held = Some(ramp_frame(2, 4));
+    }
+
+    /// Pinned against the reference's own named spelling
+    /// (`ffmpeg -h filter=phase`): all nine single-character,
+    /// case-sensitive names must parse to distinct values.
+    #[test]
+    fn named_mode_values_parse() {
+        for (name, expected) in [
+            ("p", 0),
+            ("t", 1),
+            ("b", 2),
+            ("T", 3),
+            ("B", 4),
+            ("u", 5),
+            ("U", 6),
+            ("a", 7),
+            ("A", 8),
+        ] {
+            let opts = Opts::parse(Some(&format!("mode={name}"))).unwrap();
+            assert_eq!(opts.mode, expected, "mode={name}");
+        }
     }
 }

@@ -52,10 +52,28 @@ pub const DESC: FilterDesc = FilterDesc {
     flags: FilterFlags::empty(),
 };
 
+/// `ffmpeg -h filter=fieldorder`'s own named constants for `order`.
+const FO_ORDER_CONSTS: &[vaco_opts::ConstDesc] = &[
+    vaco_opts::ConstDesc {
+        name: "bff",
+        help: "",
+        unit: "fo_order",
+        value: vaco_opts::ConstValue::Int(0),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "tff",
+        help: "",
+        unit: "fo_order",
+        value: vaco_opts::ConstValue::Int(1),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+];
+
 #[derive(Debug, Clone, vaco_opts::Options)]
 #[options(name = "fieldorder", help = "Set the field order")]
 pub(crate) struct Opts {
-    #[opt(name = "order", help = "output field order", default = 1, range = 0..=1, flags(video, filtering))]
+    #[opt(name = "order", help = "output field order", unit = "fo_order", consts = FO_ORDER_CONSTS, default = 1, range = 0..=1, flags(video, filtering))]
     pub order: i32,
 }
 
@@ -63,7 +81,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }
@@ -84,13 +103,16 @@ pub(crate) fn reorder(pool: &FramePool, src: &Frame, target_tff: bool) -> Result
     };
     ensure_addressable(format)?;
     let mut out = alloc_like(pool, src, format, width, height)?;
-    out.flags.set(vaco_frame::FrameFlags::TOP_FIELD_FIRST, target_tff);
+    out.flags
+        .set(vaco_frame::FrameFlags::TOP_FIELD_FIRST, target_tff);
     for p in 0..format.plane_count() {
         let rows = format.plane_height(height, p as u8) as usize;
         if rows == 0 {
             continue;
         }
-        let Some(src_plane) = src.plane(p) else { continue };
+        let Some(src_plane) = src.plane(p) else {
+            continue;
+        };
         let Some(mut dst_plane) = out.plane_mut(p) else {
             continue;
         };
@@ -113,7 +135,12 @@ pub(crate) fn reorder(pool: &FramePool, src: &Frame, target_tff: bool) -> Result
             } else {
                 shifted as usize
             };
-            copy_row(&mut dst_plane, y, src_plane, src_y.min(rows.saturating_sub(1)));
+            copy_row(
+                &mut dst_plane,
+                y,
+                src_plane,
+                src_y.min(rows.saturating_sub(1)),
+            );
         }
     }
     Ok(Some(out))
@@ -189,5 +216,15 @@ mod tests {
             assert_eq!(row_value(&out, y), row_value(&f, y - 1), "row {y}");
         }
         assert_eq!(row_value(&out, 0), 1, "reflect-101: orig[-1] -> orig[1]");
+    }
+
+    /// Pinned against the reference's own named spelling
+    /// (`ffmpeg -h filter=fieldorder`).
+    #[test]
+    fn named_order_values_parse() {
+        for (name, expected) in [("bff", 0), ("tff", 1)] {
+            let opts = Opts::parse(Some(&format!("order={name}"))).unwrap();
+            assert_eq!(opts.order, expected, "order={name}");
+        }
     }
 }

@@ -62,20 +62,70 @@ pub const DESC: FilterDesc = FilterDesc {
 /// (this crate's own worst case, see `idet`'s tests) always fails.
 const COMB_THRESHOLD: f64 = 2.0;
 
+/// `ffmpeg -h filter=pullup`'s own named constants for `mp`.
+const PULLUP_MP_CONSTS: &[vaco_opts::ConstDesc] = &[
+    vaco_opts::ConstDesc {
+        name: "y",
+        help: "",
+        unit: "pullup_mp",
+        value: vaco_opts::ConstValue::Int(0),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "u",
+        help: "",
+        unit: "pullup_mp",
+        value: vaco_opts::ConstValue::Int(1),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "v",
+        help: "",
+        unit: "pullup_mp",
+        value: vaco_opts::ConstValue::Int(2),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+];
+
 #[derive(Debug, Clone, vaco_opts::Options)]
 #[options(name = "pullup", help = "Pullup from field sequence to frames")]
 pub(crate) struct Opts {
-    #[opt(name = "jl", help = "set left junk size", default = 1, flags(video, filtering))]
+    #[opt(
+        name = "jl",
+        help = "set left junk size",
+        default = 1,
+        flags(video, filtering)
+    )]
     pub jl: i32,
-    #[opt(name = "jr", help = "set right junk size", default = 1, flags(video, filtering))]
+    #[opt(
+        name = "jr",
+        help = "set right junk size",
+        default = 1,
+        flags(video, filtering)
+    )]
     pub jr: i32,
-    #[opt(name = "jt", help = "set top junk size", default = 4, flags(video, filtering))]
+    #[opt(
+        name = "jt",
+        help = "set top junk size",
+        default = 4,
+        flags(video, filtering)
+    )]
     pub jt: i32,
-    #[opt(name = "jb", help = "set bottom junk size", default = 4, flags(video, filtering))]
+    #[opt(
+        name = "jb",
+        help = "set bottom junk size",
+        default = 4,
+        flags(video, filtering)
+    )]
     pub jb: i32,
-    #[opt(name = "sb", help = "set strict breaks", default = false, flags(video, filtering))]
+    #[opt(
+        name = "sb",
+        help = "set strict breaks",
+        default = false,
+        flags(video, filtering)
+    )]
     pub sb: bool,
-    #[opt(name = "mp", help = "set metric plane", default = 0, range = 0..=2, flags(video, filtering))]
+    #[opt(name = "mp", help = "set metric plane", unit = "pullup_mp", consts = PULLUP_MP_CONSTS, default = 0, range = 0..=2, flags(video, filtering))]
     pub mp: i32,
 }
 
@@ -83,14 +133,17 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }
 }
 
 fn comb_score_normalised(frame: &Frame, plane: usize) -> f64 {
-    let Some(p) = frame.plane(plane) else { return 0.0 };
+    let Some(p) = frame.plane(plane) else {
+        return 0.0;
+    };
     let rows = p.rows();
     let cols = p.row(0).map_or(0, <[u8]>::len);
     let samples = rows.saturating_sub(2).saturating_mul(cols).max(1);
@@ -204,7 +257,9 @@ mod tests {
         // pair) followed by a clean one.
         let combed = {
             let pool = FramePool::default();
-            let mut f = pool.acquire_video(vaco_pixfmt::PixFmt::Gray8, 4, 4).unwrap();
+            let mut f = pool
+                .acquire_video(vaco_pixfmt::PixFmt::Gray8, 4, 4)
+                .unwrap();
             if let Some(mut p) = f.plane_mut(0) {
                 for y in 0..4usize {
                     if let Some(row) = p.row_mut(y) {
@@ -222,5 +277,15 @@ mod tests {
         // Whatever comes out, this must not panic and must not loop forever
         // (the real property under test: `drain` always terminates).
         assert!(out.len() <= 1);
+    }
+
+    /// Pinned against the reference's own named spelling
+    /// (`ffmpeg -h filter=pullup`).
+    #[test]
+    fn named_mp_values_parse() {
+        for (name, expected) in [("y", 0), ("u", 1), ("v", 2)] {
+            let opts = Opts::parse(Some(&format!("mp={name}"))).unwrap();
+            assert_eq!(opts.mp, expected, "mp={name}");
+        }
     }
 }

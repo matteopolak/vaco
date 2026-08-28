@@ -32,14 +32,55 @@ pub const DESC: FilterDesc = FilterDesc {
     flags: FilterFlags::empty(),
 };
 
+/// `ffmpeg -h filter=estdif`'s own named constants for `mode`/`interp`.
+const ESTDIF_MODE_CONSTS: &[vaco_opts::ConstDesc] = &[
+    vaco_opts::ConstDesc {
+        name: "frame",
+        help: "",
+        unit: "estdif_mode",
+        value: vaco_opts::ConstValue::Int(0),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "field",
+        help: "",
+        unit: "estdif_mode",
+        value: vaco_opts::ConstValue::Int(1),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+];
+const ESTDIF_INTERP_CONSTS: &[vaco_opts::ConstDesc] = &[
+    vaco_opts::ConstDesc {
+        name: "2p",
+        help: "",
+        unit: "estdif_interp",
+        value: vaco_opts::ConstValue::Int(0),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "4p",
+        help: "",
+        unit: "estdif_interp",
+        value: vaco_opts::ConstValue::Int(1),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "6p",
+        help: "",
+        unit: "estdif_interp",
+        value: vaco_opts::ConstValue::Int(2),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+];
+
 #[derive(Debug, Clone, vaco_opts::Options)]
 #[options(name = "estdif", help = "Apply Edge Slope Tracing deinterlace")]
 pub(crate) struct Opts {
-    #[opt(name = "mode", help = "interlacing mode", default = 1, range = 0..=1, flags(video, filtering))]
+    #[opt(name = "mode", help = "interlacing mode", unit = "estdif_mode", consts = ESTDIF_MODE_CONSTS, default = 1, range = 0..=1, flags(video, filtering))]
     pub mode: i32,
-    #[opt(name = "parity", help = "assumed picture field parity", default = -1, range = -1..=1, flags(video, filtering))]
+    #[opt(name = "parity", help = "assumed picture field parity", unit = "parity", consts = crate::opt_consts::PARITY_CONSTS, default = -1, range = -1..=1, flags(video, filtering))]
     pub parity: i32,
-    #[opt(name = "deint", help = "which frames to deinterlace", default = 0, range = 0..=1, flags(video, filtering))]
+    #[opt(name = "deint", help = "which frames to deinterlace", unit = "deint", consts = crate::opt_consts::DEINT_CONSTS, default = 0, range = 0..=1, flags(video, filtering))]
     pub deint: i32,
     #[opt(name = "rslope", help = "search radius for edge slope tracing", default = 1, range = 1..=15, flags(video, filtering))]
     pub rslope: i32,
@@ -51,7 +92,7 @@ pub(crate) struct Opts {
     pub mcost: i32,
     #[opt(name = "dcost", help = "distance cost for edge matching", default = 1, range = 0..=50, flags(video, filtering))]
     pub dcost: i32,
-    #[opt(name = "interp", help = "type of interpolation", default = 1, range = 0..=2, flags(video, filtering))]
+    #[opt(name = "interp", help = "type of interpolation", unit = "estdif_interp", consts = ESTDIF_INTERP_CONSTS, default = 1, range = 0..=2, flags(video, filtering))]
     pub interp: i32,
 }
 
@@ -59,7 +100,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }
@@ -72,4 +114,32 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
         formats: NodeFormats::passthrough(1, 1, MediaType::Video, req.instance),
         filter: Box::new(Simple::new(Lookahead::new(parity_from_opt(opts.parity)))),
     })
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test code")]
+mod tests {
+    use super::*;
+
+    /// Pinned against the reference's own named spelling
+    /// (`ffmpeg -h filter=estdif`).
+    #[test]
+    fn named_option_values_parse() {
+        for (name, expected) in [("frame", 0), ("field", 1)] {
+            let opts = Opts::parse(Some(&format!("mode={name}"))).unwrap();
+            assert_eq!(opts.mode, expected, "mode={name}");
+        }
+        for (name, expected) in [("tff", 0), ("bff", 1), ("auto", -1)] {
+            let opts = Opts::parse(Some(&format!("parity={name}"))).unwrap();
+            assert_eq!(opts.parity, expected, "parity={name}");
+        }
+        for (name, expected) in [("all", 0), ("interlaced", 1)] {
+            let opts = Opts::parse(Some(&format!("deint={name}"))).unwrap();
+            assert_eq!(opts.deint, expected, "deint={name}");
+        }
+        for (name, expected) in [("2p", 0), ("4p", 1), ("6p", 2)] {
+            let opts = Opts::parse(Some(&format!("interp={name}"))).unwrap();
+            assert_eq!(opts.interp, expected, "interp={name}");
+        }
+    }
 }

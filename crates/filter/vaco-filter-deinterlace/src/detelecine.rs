@@ -60,6 +60,8 @@ pub(crate) struct Opts {
     #[opt(
         name = "first_field",
         help = "select first field",
+        unit = "first_field",
+        consts = crate::opt_consts::FIRST_FIELD_CONSTS,
         default = 0,
         range = 0..=1,
         flags(video, filtering)
@@ -247,4 +249,16 @@ mod tests {
             }
         }
     }
+
+    /// Pinned against the reference's own named spelling
+    /// (`ffmpeg -h filter=detelecine`): both names for each value
+    /// (`top`/`t`, `bottom`/`b`) must parse.
+    #[test]
+    fn named_first_field_values_parse() {
+        for (name, expected) in [("top", 0), ("t", 0), ("bottom", 1), ("b", 1)] {
+            let opts = Opts::parse(Some(&format!("first_field={name}"))).unwrap();
+            assert_eq!(opts.first_field, expected, "first_field={name}");
+        }
+    }
+
 }
