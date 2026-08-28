@@ -284,6 +284,19 @@ pub enum CodecId {
     Sgi,
     Xwd,
     Xbm,
+
+    // The legacy-lossless and simple-lossy repertoire `vaco-format-misc-audio`
+    // needs to name a stream's codec at all: WavPack and TTA are whole-file
+    // lossless containers with their own codec identity, and DFPWM/aptX/aptX
+    // HD/CRI's ADX ADPCM have no existing variant either. Names and long
+    // names probed from `ffmpeg -codecs`, 8.1.
+    WavPack,
+    Tta,
+    Dfpwm,
+    Aptx,
+    AptxHd,
+    Sbc,
+    AdpcmAdx,
 }
 
 /// One row of the codec identity table.
@@ -1148,6 +1161,57 @@ const CODECS: &[CodecEntry] = &[
     entry(CodecId::Sgi, "sgi", "SGI image", V, IMG),
     entry(CodecId::Xwd, "xwd", "XWD (X Window Dump) image", V, IMG),
     entry(CodecId::Xbm, "xbm", "XBM (X BitMap) image", V, IMG),
+    entry(
+        CodecId::WavPack,
+        "wavpack",
+        "WavPack",
+        A,
+        CodecProperties::LOSSY
+            .union(CodecProperties::LOSSLESS)
+            .union(CodecProperties::INTRA_ONLY),
+    ),
+    entry(
+        CodecId::Tta,
+        "tta",
+        "TTA (True Audio)",
+        A,
+        CodecProperties::LOSSLESS.union(CodecProperties::INTRA_ONLY),
+    ),
+    entry(
+        CodecId::Dfpwm,
+        "dfpwm",
+        "DFPWM (Dynamic Filter Pulse Width Modulation)",
+        A,
+        CodecProperties::LOSSY,
+    ),
+    entry(
+        CodecId::Aptx,
+        "aptx",
+        "aptX (Audio Processing Technology for Bluetooth)",
+        A,
+        CodecProperties::LOSSY.union(CodecProperties::INTRA_ONLY),
+    ),
+    entry(
+        CodecId::AptxHd,
+        "aptx_hd",
+        "aptX HD (Audio Processing Technology for Bluetooth)",
+        A,
+        CodecProperties::LOSSY.union(CodecProperties::INTRA_ONLY),
+    ),
+    entry(
+        CodecId::Sbc,
+        "sbc",
+        "SBC (low-complexity subband codec)",
+        A,
+        CodecProperties::LOSSY.union(CodecProperties::INTRA_ONLY),
+    ),
+    entry(
+        CodecId::AdpcmAdx,
+        "adpcm_adx",
+        "SEGA CRI ADX ADPCM",
+        A,
+        CodecProperties::LOSSY,
+    ),
 ];
 
 impl CodecId {
