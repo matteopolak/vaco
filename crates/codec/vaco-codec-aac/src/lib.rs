@@ -65,6 +65,8 @@ mod swb_tables;
 mod tns;
 mod tns_apply;
 mod reconstruct;
+mod sbr_huffman_tables;
+mod qmf;
 
 pub use config::{ChannelResolution, DecoderConfig};
 pub use decoder::AacDecoder;

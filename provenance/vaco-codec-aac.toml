@@ -145,3 +145,59 @@ file   = "crates/codec/vaco-codec-aac/src/swb_tables.rs"
 source = "iso-14496-3"
 clause = "subpart 4 Table 4.84 (2001 ed.) / Table 4.140 (2009 ed.): swb_offset_long_window, 88.2/96 kHz"
 method = "transcribed"
+
+[[table]]
+name   = "C_HALF"
+file   = "crates/codec/vaco-codec-aac/src/qmf.rs"
+source = "iso-14496-3"
+clause  = "subpart 4 Table 4.A.89 (SBR QMF bank window coefficients c[i]); only indices 0..=320 are transcribed, the rest mirrored at runtime (c[i] == c[640-i], the table's own exact symmetry) — see qmf.rs's own doc for the two sign corrections that mirror rule made against the raw extracted text"
+method = "transcribed"
+
+[[table]]
+name   = "T_HUFFMAN_ENV_1_5DB"
+file   = "crates/codec/vaco-codec-aac/src/sbr_huffman_tables.rs"
+source = "iso-14496-3"
+clause = "subpart 4 Table 4.A.79 (t_huffman_env_1_5dB, SBR envelope Huffman codebook)"
+method = "transcribed"
+
+[[table]]
+name   = "F_HUFFMAN_ENV_1_5DB"
+file   = "crates/codec/vaco-codec-aac/src/sbr_huffman_tables.rs"
+source = "iso-14496-3"
+clause = "subpart 4 Table 4.A.80 (f_huffman_env_1_5dB, SBR envelope Huffman codebook)"
+method = "transcribed"
+
+[[table]]
+name   = "T_HUFFMAN_ENV_BAL_1_5DB"
+file   = "crates/codec/vaco-codec-aac/src/sbr_huffman_tables.rs"
+source = "iso-14496-3"
+clause = "subpart 4 Table 4.A.81 (t_huffman_env_bal_1_5dB, SBR envelope-balance Huffman codebook)"
+method = "transcribed"
+
+[[table]]
+name   = "F_HUFFMAN_ENV_BAL_1_5DB"
+file   = "crates/codec/vaco-codec-aac/src/sbr_huffman_tables.rs"
+source = "iso-14496-3"
+clause = "subpart 4 Table 4.A.82 (f_huffman_env_bal_1_5dB, SBR envelope-balance Huffman codebook)"
+method = "transcribed"
+
+[[table]]
+name   = "T_HUFFMAN_ENV_3_0DB"
+file   = "crates/codec/vaco-codec-aac/src/sbr_huffman_tables.rs"
+source = "iso-14496-3"
+clause = "subpart 4 Table 4.A.83 (t_huffman_env_3_0dB, SBR envelope Huffman codebook)"
+method = "transcribed"
+
+[[table]]
+name   = "F_HUFFMAN_ENV_3_0DB"
+file   = "crates/codec/vaco-codec-aac/src/sbr_huffman_tables.rs"
+source = "iso-14496-3"
+clause = "subpart 4 Table 4.A.84 (f_huffman_env_3_0dB, SBR envelope Huffman codebook — also reused directly as f_huffman_noise_3_0dB per Table 4.A.78's own Note 2)"
+method = "transcribed"
+
+[[table]]
+name   = "T_HUFFMAN_NOISE_3_0DB"
+file   = "crates/codec/vaco-codec-aac/src/sbr_huffman_tables.rs"
+source = "iso-14496-3"
+clause = "subpart 4 Table 4.A.87 (t_huffman_noise_3_0dB, SBR noise-floor Huffman codebook)"
+method = "transcribed"
