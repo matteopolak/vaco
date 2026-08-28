@@ -2518,6 +2518,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-codec-theora"
+version = "0.1.0"
+dependencies = [
+ "vaco-bitstream",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-frame",
+ "vaco-limits",
+ "vaco-packet",
+ "vaco-pixfmt",
+]
+
+[[package]]
 name = "vaco-codec-tiff"
 version = "0.1.0"
 dependencies = [
@@ -3228,6 +3241,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-filter-motion"
+version = "0.1.0"
+dependencies = [
+ "smallvec",
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-filter-graph",
+ "vaco-filter-vdsp",
+ "vaco-frame",
+ "vaco-opts",
+ "vaco-pixfmt",
+]
+
+[[package]]
 name = "vaco-filter-overlay"
 version = "0.1.0"
 dependencies = [
@@ -3737,6 +3764,7 @@ dependencies = [
  "vaco-codec-subtitle-cc",
  "vaco-codec-subtitle-teletext",
  "vaco-codec-subtitle-text",
+ "vaco-codec-theora",
  "vaco-codec-tiff",
  "vaco-codec-vp8",
  "vaco-codec-vp9",
@@ -3864,6 +3892,7 @@ dependencies = [
  "vaco-subtitle-bitmap",
  "vaco-subtitle-text",
  "vaco-textformat",
+ "vaco-tx",
 ]
 
 [[package]]
@@ -4627,7 +4656,6 @@ dependencies = [
  "vaco-codec-ac3",
  "vaco-codec-adpcm",
  "vaco-codec-alac",
- "vaco-codec-av1",
  "vaco-codec-core",
  "vaco-codec-exr",
  "vaco-codec-ffv1",
@@ -4686,6 +4714,7 @@ dependencies = [
  "vaco-filter-key",
  "vaco-filter-lut",
  "vaco-filter-mm",
+ "vaco-filter-motion",
  "vaco-filter-overlay",
  "vaco-filter-scope",
  "vaco-filter-source",

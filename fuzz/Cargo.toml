@@ -77,6 +77,7 @@ vaco-codec-subtitle-bitmap = { path = "../crates/codec/vaco-codec-subtitle-bitma
 vaco-codec-subtitle-cc = { path = "../crates/codec/vaco-codec-subtitle-cc", optional = true }
 vaco-codec-subtitle-teletext = { path = "../crates/codec/vaco-codec-subtitle-teletext", optional = true }
 vaco-codec-subtitle-text = { path = "../crates/codec/vaco-codec-subtitle-text", optional = true }
+vaco-codec-theora = { path = "../crates/codec/vaco-codec-theora", optional = true }
 vaco-codec-tiff = { path = "../crates/codec/vaco-codec-tiff", optional = true }
 vaco-codec-vp8 = { path = "../crates/codec/vaco-codec-vp8", optional = true }
 vaco-codec-vp9 = { path = "../crates/codec/vaco-codec-vp9", optional = true }
@@ -249,6 +250,7 @@ default = [
     "codec-subtitle-cc",
     "codec-subtitle-teletext",
     "codec-subtitle-text",
+    "codec-theora",
     "codec-tiff",
     "codec-vp8",
     "codec-vp9",
@@ -411,6 +413,7 @@ codec-subtitle-bitmap = ["dep:vaco-codec-subtitle-bitmap", "dep:vaco-format-subt
 codec-subtitle-cc = ["dep:vaco-codec-subtitle-cc"]
 codec-subtitle-teletext = ["dep:vaco-codec-subtitle-teletext"]
 codec-subtitle-text = ["dep:vaco-codec-subtitle-text"]
+codec-theora = ["dep:vaco-codec-core", "dep:vaco-codec-theora", "dep:vaco-frame", "dep:vaco-limits", "dep:vaco-packet", "dep:vaco-pixfmt"]
 codec-tiff = ["dep:vaco-codec-tiff", "dep:vaco-frame", "dep:vaco-limits", "dep:vaco-pixfmt"]
 codec-vp8 = ["dep:vaco-codec-core", "dep:vaco-codec-vp8", "dep:vaco-limits", "dep:vaco-packet"]
 codec-vp9 = ["dep:vaco-codec-core", "dep:vaco-codec-vp9", "dep:vaco-limits", "dep:vaco-packet"]
@@ -2163,6 +2166,14 @@ test = false
 doc = false
 bench = false
 required-features = ["textformat"]
+
+[[bin]]
+name = "theora_decode"
+path = "fuzz_targets/theora_decode.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-theora"]
 
 [[bin]]
 name = "tiff_decode"
