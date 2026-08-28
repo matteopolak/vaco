@@ -3649,3 +3649,138 @@ instrumentation; only `mb.rs`'s module doc changed), `patent-gate` still
 "0 of 2", `provenance-check` shows the same 8 pre-existing failures,
 none mine. `vaco-codec-cabac` and its fuzz target re-confirmed untouched.
 #418 stays open; #419 not reopened.
+
+
+### The MPEG-2 framemd5 ceiling: measured, not assumed — a permanent limit for #355/#356 and any issue in this family
+
+Every accuracy report `vaco-codec-mpeg12` has produced carries the same
+line: "reference-quality (max-abs-deviation 1-2) is not literally
+framemd5-identical, and closing that gap needs this crate's IDCT to
+reproduce a specific reference decoder's own integer transform, which is
+out of scope." That line has been repeated across #355's own history and
+carried into #356's judgement without ever being tested directly — it was
+inherited, not established. This entry tests it, using only black-box
+measurement (D6): no line of `ffmpeg` source was read, consistent with D7
+and the same boundary #360 is blocked on.
+
+**Setup.** `vaco-codec-mpeg12`'s dequantisation is tier-3 verified (line
+by line against the primary text, multiple tables, multiple rounds); this
+crate's own `Idct8x8<f32>` (`vaco-codec-dsp-idct::mpeg2`) is a
+floating-point transform, chosen because H.262 Annex A specifies an
+IEEE 1180 accuracy bound, not a mandated integer algorithm. `ffmpeg`
+exposes `-idct simple` as a specific, selectable integer IDCT
+implementation; confirmed by measurement (not assumed) that `-flags
++bitexact`/`-idct auto` actually select it: decoding the same fixture
+with `-idct auto`, `-idct simple`, `-idct simplemmx`, and `-idct int`
+shows `auto == simple == simplemmx`, all three byte-identical, and
+`int` byte-*different* from all three. So "the reference's particular
+integer transform" is a real, nameable, selectable thing on the other
+side of every comparison this crate has ever run — not an unspecified
+target.
+
+**Method.** Hand-built minimal single-macroblock MPEG-2 I-frame streams
+to feed `ffmpeg -idct simple` and this crate's own decoder the exact same
+chosen DCT coefficients, isolating the IDCT the same way a single-impulse
+probe isolates a filter's basis functions. Two complications, both
+resolved and worth recording:
+
+1. A from-scratch bitstream (own sequence_header/sequence_extension/
+   picture_header/picture_coding_extension, hand-built bit for bit
+   against the free H.262 text, cross-checked field by field against a
+   real `ffmpeg`-encoded 16x16 stream and matching it exactly everywhere
+   checked) was rejected by `ffmpeg` with `ac-tex damaged`/`concealing...
+   errors` — reproducibly, regardless of whether the coefficient content
+   used a plain VLC entry, the ESCAPE code, a custom quantiser matrix, or
+   a GOP header. Root cause not found (further bisection deprioritised
+   once the workaround below was in hand — it's a puzzle about this
+   crate's own bitstream construction, not about the IDCT question this
+   round is actually asking). **Workaround, and the technique actually
+   used for every measurement below**: instead of building a header from
+   scratch, patch block 0 of a *real* `ffmpeg`-encoded, `ffmpeg`-validated
+   16x16 I-frame's own bytes (bit-traced by hand against the same primary
+   text first, confirming every field's value independently) — legitimate
+   D6 black-box use of a real encoder's own output as a template, not
+   source reading. Every patched stream decoded cleanly in both decoders.
+2. `ffmpeg` logs "intra matrix specifies invalid DC quantizer 16,
+   ignoring" for a loaded intra matrix whose position-0 entry is 16
+   (this crate's own default matrix has 8 there) — a real, if minor,
+   `ffmpeg`-side quirk worth knowing about for anyone building synthetic
+   MPEG-2 fixtures in the future, unrelated to the actual bug above (it
+   fires and is merely logged; the bitstream still gets "ac-tex damaged"
+   even with the default matrix, which doesn't trip this warning at all).
+
+**Measurement 1 — single coefficient, every scan position.** Swept all
+64 zigzag scan positions (DC once, then each of the 63 AC positions) with
+a single nonzero coefficient (level 8, plus -8/1/32/100 at a few
+positions to check sign and magnitude extremes), decoded with this
+crate's own decoder and with `ffmpeg -idct simple`, diffed the resulting
+8x8 luma block directly (MPEG-1/2 intra has no spatial prediction, so the
+decoded block *is* the IDCT output, clipped). Result: DC-only is
+pixel-exact in both directions. Every AC-only case differs by at most
+**one** pixel unit, at roughly half of the 63 positions tested (no
+correlation found with the dequantised coefficient's own parity or
+value mod 2/4/8/16 — checked directly, not eyeballed). This is a smaller
+number than the crate's own long-standing "max MAD 2" ceiling on real,
+multi-coefficient content, and directly explains it: real blocks carry
+many simultaneous nonzero coefficients, and per-coefficient ±1 rounding
+differences compound mildly, matching the shape (not just the rough size)
+of every accuracy table this crate has ever reported.
+
+**Measurement 2 — the decisive one: two coefficients together do not
+sum.** Two scan positions that *each*, alone, produce a lone -1
+pixel-level difference at their own respective pixel were placed in the
+*same* block together. The combined result is **pixel-exact — zero
+difference anywhere** — not the sum of the two individual differences,
+not even a difference at either individual pixel. This rules out the
+simplest possible characterisation (a fixed per-basis-function rounding
+bias that could be captured in a lookup table and superposed) and proves
+the mismatch is a genuinely non-linear function of the *whole* coefficient
+set, consistent with a real multi-stage separable IDCT (row pass, then
+column pass) whose intermediate rounding depends on the full row/column
+sum at each stage, not on any one input term in isolation.
+
+**Conclusion: outcome 1 (reachable by measurement; scoped, not
+implemented) — not outcome 3.** Black-box bitstream construction gives
+complete, exact control over IDCT input (dequantisation is already
+verified correct, so any diff is IDCT-only), and measurement genuinely
+characterises the mismatch: it is small (never observed above ±1 per
+pixel across ~65 probes spanning every basis function and several
+magnitudes/signs), it explains this crate's entire historical accuracy
+ceiling, and it is provably non-linear rather than a simple correctable
+bias. What implementing full bit-exactness would take is now nameable
+rather than hand-waved: reproducing `ffmpeg -idct simple`'s specific
+multi-stage fixed-point rounding schedule (which stage rounds, by how
+much, in what order) — determinable in principle by continued black-box
+measurement (many more multi-coefficient combinations, methodically,
+the same technique that found the non-linearity above), never by reading
+`ffmpeg`'s source, but representing a substantial dedicated
+reverse-engineering project in its own right, comparable in scope to
+building an IDCT implementation from nothing — not a quick correction
+table, and **not attempted this round**, per instruction.
+
+**What this does and doesn't settle.** It does not mean #355/#356 should
+close — they still don't meet a literal framemd5 bar, and that has not
+changed. It means the *reason* they don't is now a measured fact rather
+than an inherited assumption, and that fact is the same one gating any
+future MPEG-family (or other f32-IDCT-using: `vaco-codec-jpeg` shares the
+identical Annex-A-accuracy-bound reasoning) issue with the same literal
+acceptance wording — this entry exists so the next such issue can cite
+it instead of re-deriving it.
+
+**Blast radius, checked not assumed.** `vaco-codec-dsp-idct`'s `h264.rs`
+and `hevc.rs` modules use their own independent, already-normative
+integer transforms (H.264: a fixed add/subtract/shift butterfly, no
+coefficient table; HEVC: `TRANS_MATRIX_32`, an integer matrix) and share
+no code with `mpeg2.rs` — confirmed by grep, not assumed: neither module
+imports anything from it, and `util.rs` (the one piece of code shared
+between two of this crate's modules) is shared between `h264`/`hevc`
+only, per its own doc comment, not `mpeg2`. A future MPEG-2-specific IDCT
+change, whenever undertaken, cannot regress either.
+
+`vaco-codec-dsp-idct` is `agent:idct`'s crate (`ASSIGNMENTS.md`, status
+`done`); confirmed no live writer (`git log`/`git status` clean on that
+path) before this investigation touched it read-only, and nothing in it
+was changed this round.
+
+`Vaco-Spec-Ref: itu-t-h262` Annex A (the accuracy-bound requirement this
+whole question turns on).
