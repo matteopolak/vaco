@@ -334,6 +334,28 @@ fn psi_produces_one_program_and_two_streams() {
     );
 }
 
+/// Issue #635: `ts_id` (the PAT's `transport_stream_id`) and `ts_packetsize`
+/// (188 or 192, from the detected packet stride) reach every stream, video
+/// and audio alike — measured against `ffprobe -show_streams`, which prints
+/// both as `[STREAM]` fields, never as a `TAG:`, on every stream of an
+/// MPEG-TS file. `ts_codec` — the thing this used to invent a `TAG:` for —
+/// must not reappear.
+#[test]
+fn ts_id_and_ts_packetsize_reach_every_stream_and_ts_codec_is_gone() {
+    let d = open(simple_file(1));
+    assert_eq!(d.streams().len(), 2);
+    for s in d.streams() {
+        assert_eq!(s.metadata_get("ts_id"), Some("1"), "stream {}", s.index);
+        assert_eq!(
+            s.metadata_get("ts_packetsize"),
+            Some("188"),
+            "stream {}",
+            s.index
+        );
+        assert_eq!(s.metadata_get("ts_codec"), None, "stream {}", s.index);
+    }
+}
+
 #[test]
 fn every_pes_packet_comes_back_once_with_its_timestamps() {
     let mut d = open(simple_file(10));
@@ -502,7 +524,12 @@ fn a_stream_whose_codec_has_no_codec_id_is_still_reported() {
     let s = &d.streams()[0];
     assert_eq!(s.media_type(), Some(vaco_core::MediaType::Data));
     assert_eq!(s.params.codec_id, None);
-    assert_eq!(s.metadata_get("ts_codec"), Some("bin_data"));
+    // Used to also assert `s.metadata_get("ts_codec") == Some("bin_data")`:
+    // issue #635 found that field was never printed by the reference in any
+    // form, and `Stream::metadata` is exactly what `vaco-probe` prints as a
+    // user-visible `TAG:` line, so `add_stream` no longer sets it — see
+    // `vaco-demux-mpegts/src/demux.rs`'s `add_stream` for the removal.
+    assert_eq!(s.metadata_get("ts_codec"), None);
 }
 
 /// A hand-built two-frame ADTS header, `protection_absent = 1` (7-byte
@@ -872,6 +899,9 @@ fn a_192_byte_m2ts_stride_is_detected() {
     let mut d = open(m2ts);
     assert_eq!(d.stride(), vaco_format_mpegts_tables::PacketStride::M2ts);
     assert_eq!(d.streams().len(), 2);
+    // Issue #635: `ts_packetsize` follows the *stride*, not a fixed constant
+    // — 192 here where the plain-TS fixture above reports 188.
+    assert_eq!(d.streams()[0].metadata_get("ts_packetsize"), Some("192"));
     assert_eq!(drain(&mut d).len(), 16);
 }
 

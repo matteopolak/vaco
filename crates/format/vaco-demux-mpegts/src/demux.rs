@@ -573,9 +573,39 @@ impl MpegTsDemuxer {
         let mut stream = Stream::new(index, media, TIME_BASE);
         stream.id = Some(i64::from(pid));
         stream.params = params;
-        // `TsCodec` carries codecs `CodecId` has no variant for; record the
-        // name so nothing is lost when `codec_id` is `None`.
-        stream.metadata_set("ts_codec", resolved.codec.name());
+        // Issue #635: this used to be `stream.metadata_set("ts_codec",
+        // resolved.codec.name())`, carried so a `TsCodec` `CodecId` has no
+        // variant for was not silently lost. The reference emits no such tag
+        // in either `-bitexact` mode — measured, `ffprobe -show_streams`
+        // never prints `TAG:ts_codec` — so surfacing it as `Stream::metadata`
+        // was inventing a user-visible field for an internal fact. `metadata`
+        // is exactly what `vaco-probe` prints as `TAG:`, so anything placed
+        // there is user-visible by construction; there is no channel on
+        // `vaco_format_core::Stream` today for a fact that is *not* meant to
+        // be user-visible (that would need a new field there, a crate this
+        // one does not own — see the docs file's gap list). Dropped rather
+        // than worked around.
+        //
+        // `ts_id`/`ts_packetsize` ride the same `metadata` channel, but for
+        // the opposite reason: the reference *does* show them, as dedicated
+        // `[STREAM]` fields between `nal_length_size` and `id` in both
+        // `-bitexact` modes (measured: `ts_id=1 ts_packetsize=188` on every
+        // stream of an MPEG-TS file, video and audio alike, never as a
+        // `TAG:`). `vaco-probe` reads these two specific keys back through
+        // `Stream::metadata_get` and prints them as fields, filtering them
+        // out of the generic `TAG:` dump by name — see
+        // `vaco-probe/src/show.rs`'s `stream_value`/`tags` for the other
+        // half. `transport_stream_id` is the PAT's, already parsed before any
+        // stream is ever added; packet size is 188 for plain TS/RS-FEC framing
+        // and 192 for M2TS's four-byte-timestamped packets.
+        if let Some(tsid) = self.transport_stream_id {
+            stream.metadata_set("ts_id", tsid.to_string());
+        }
+        let packetsize = match self.stride {
+            PacketStride::M2ts => 192,
+            PacketStride::Ts | PacketStride::Rs => 188,
+        };
+        stream.metadata_set("ts_packetsize", packetsize.to_string());
         apply_descriptors(&mut stream, descriptors);
         self.streams.push(stream);
         self.scan.push(ScanState::default());

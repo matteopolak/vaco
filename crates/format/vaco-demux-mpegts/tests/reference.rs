@@ -61,11 +61,12 @@ fn report_what_we_say_about_a_real_file() {
     }
     for s in d.streams() {
         println!(
-            "stream {} pid={:?} codec={:?} ts_codec={:?} tag={:?} start_pts={:?} duration={:?}",
+            "stream {} pid={:?} codec={:?} ts_id={:?} ts_packetsize={:?} tag={:?} start_pts={:?} duration={:?}",
             s.index,
             s.id,
             s.params.codec_id,
-            s.metadata_get("ts_codec"),
+            s.metadata_get("ts_id"),
+            s.metadata_get("ts_packetsize"),
             s.params.codec_tag,
             s.start_time.ticks(),
             s.duration().map(|d| d.as_micros()),

@@ -143,7 +143,15 @@ impl MpegTsRawDemuxer {
         // lookup, where the reference prints `mpegts`. Reported, not worked
         // around — see the docs file's gap list, the same shape as
         // `TsCodec`'s existing `codec_id() -> None` cases.
-        stream.metadata_set("ts_codec", "mpegtsraw");
+        //
+        // This used to also do `stream.metadata_set("ts_codec",
+        // "mpegtsraw")`, on the same reasoning as `demux::MpegTsDemuxer::
+        // add_stream`'s identical field. Issue #635 found the reference
+        // prints no such tag in either `-bitexact` mode for the PSI-based
+        // demuxer, and this raw one shares its `Stream::metadata` channel —
+        // `vaco-probe` prints every entry there as a user-visible `TAG:`
+        // line — so it is dropped here for the same reason, not worked
+        // around.
 
         Ok(Self {
             io,
@@ -322,6 +330,16 @@ mod tests {
         assert_eq!(d.streams()[0].media_type(), Some(MediaType::Data));
         assert_eq!(d.streams()[0].time_base, raw_time_base());
         assert_eq!(d.streams()[0].params.codec_id, None);
+    }
+
+    /// Issue #635: the reference emits no `ts_codec` tag for `mpegtsraw`
+    /// either — this used to set one (`"mpegtsraw"`), inventing the same
+    /// user-visible `TAG:` line `demux::MpegTsDemuxer::add_stream` did.
+    #[test]
+    fn no_invented_ts_codec_tag() {
+        let src = Box::new(MemorySource::new(plain_file(4)));
+        let d = MpegTsRawDemuxer::open(src, &FormatOptions::default()).unwrap();
+        assert_eq!(d.streams()[0].metadata_get("ts_codec"), None);
     }
 
     #[test]
