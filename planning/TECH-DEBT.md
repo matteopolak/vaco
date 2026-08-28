@@ -5531,3 +5531,119 @@ since it would rewrite hunks that are not mine; my own additions are
 hand-formatted consistently with the surrounding code instead.
 
 `Vaco-Spec-Ref: itu-t-h262` §6.2.3.1, §6.3.17.1.
+
+## H.264: the intra-only pixel-oracle corpus landed, and #424's dequantisation scope (minus the transforms it already had) is implemented (#418, #420, #424)
+
+**The corpus, the deliverable even if nothing else had landed.** Four
+`libx264 -coder cabac`, all-intra streams, all encoded with
+`disable_deblocking_filter_idc = 1`, so a from-scratch reconstruction that
+never implements deblocking is nonetheless exactly comparable against
+plain black-box `ffmpeg` output (clause 8.7 makes every conformant decoder
+skip the loop filter for such a stream). Confirmed rather than assumed,
+two ways: `disable_deblocking_filter_idc == 1` on every slice of every
+fixture, parsed with the already-tested `SliceHeader` parser; and, since a
+byte-identical deblocked/non-deblocked decode would be equally consistent
+with "the flag works" and "`ffmpeg` ignores it," confirmed the
+discriminating case instead — each non-flat fixture shows a real,
+substantial, nonzero difference between its deblocked and non-deblocked
+decode at the chosen QP (testsrc: 2327/6144 bytes differ, max |Δ| 12;
+noise: 2/6144, max 2; multi: 11450/30720, max 14). `cabac_i_only.264`
+(used throughout #418's own investigation) has `disable_deblocking_filter_idc
+== 0` and cannot be used for this; these four fixtures exist so that gap
+doesn't cost #420 a round. Landed as `tests/cabac_intra_oracle_corpus.rs`
+plus fixtures, with a real consuming test (asserting the confirmed flag on
+every slice) even though there is no reconstruction yet to compare pixels
+against.
+
+**#424's own scope, checked against what already existed rather than
+re-implemented.** `vaco-codec-dsp-idct::h264` already has `idct4x4`,
+`idct8x8`, and the luma-16x16/chroma DC Hadamard variants (confirmed last
+round) — each already takes *already-scaled* coefficients and produces
+final residual samples, `idct4x4`/`idct8x8` even folding in eq. (8-282)'s
+final rounding themselves. What #424 actually needed, once the transforms
+are subtracted out, is everything upstream: turning a raw decoded
+coefficient level into the scaled value those functions expect. New
+module `dequant.rs`, four pieces, each a direct transcription of one
+clause's equations against this crate's own `iso-iec-14496-10-2002-draft`
+source (whose own clause numbering for this section differs from later
+editions — 8.5.5/8.5.6/8.5.7/8.5.8 here, not 8.5.9/8.5.10/8.5.11/8.5.12 —
+checked directly rather than assumed from memory of a later edition):
+
+- `LevelScale(m, i, j)` (clause 8.5.5, eq. (8-252)/(8-253)) — the fixed
+  6×3 matrix and its position-category selection. No scaling-list support
+  needed: this draft predates `seq_scaling_matrix_present_flag`/custom
+  scaling lists entirely, confirmed by reading the clause (`LevelScale` is
+  a single fixed matrix with no per-SPS/PPS parameter feeding it at all),
+  not assumed from the "Main profile only" scope line elsewhere in this
+  crate.
+- `chroma_qp` (eq. (8-251) + Table 8-13) — `QPC` from `QPY` and
+  `chroma_qp_index_offset`, transcribed value by value (the table is
+  deliberately irregular: e.g. `qPI` 33 and 34 share `QPC == 32`).
+- `next_qpy` (clause 7.4.5, eq. (7-23)) — the running per-macroblock luma
+  QP this crate never tracked before (`PrevMbQp` only ever recorded
+  "was the previous `mb_qp_delta` zero," for CABAC context derivation,
+  never the QP value itself).
+- `dequant_4x4`/`dequant_luma_dc_4x4`/`dequant_chroma_dc_2x2` (clauses
+  8.5.6/8.5.7/8.5.8) — the scaling step, including eq. (8-264)'s
+  "already-scaled DC passes through untouched" exception for `Intra_16x16`
+  luma and all chroma blocks, and the DC transforms' reversed order
+  (Hadamard *then* scale, not scale-then-transform like the regular case).
+
+Extended `cabac_mb_tables.rs`'s own duplicate-table invariant to this new
+table module, as instructed: `LEVEL_SCALE_V`'s six rows are checked
+pairwise for byte-identity the same way that module's own tables are,
+plus an independent row-by-row re-check against the primary text as a
+second test. 10 new unit tests total, covering the DC-exception boundary,
+the qP-over-6 shift behaviour, the QPC table's irregular boundaries, and
+eq. (7-23)'s wraparound.
+
+**Not wired into `mb.rs`'s macroblock loop, deliberately.** Wiring this in
+needs three things this dispatch was told explicitly not to build yet:
+the inverse zig-zag scanning process (clause 8.5.4), the
+`dcY`-to-`luma4x4BlkIdx` assignment for `Intra_16x16` macroblocks (clause
+8.5.2's Figure 8-6), and intra prediction itself (`predL`/`predC`, clause
+8.5.1's own `Clip1(pred + r)` reconstruction) — all `#420`'s scope. This
+module is the seam: pure functions from a decoded coefficient array and a
+QP to a scaled array ready for the existing transform primitives, each
+independently testable without any of the three missing pieces. Did not
+start intra prediction this round, per instruction.
+
+**The `Cargo.lock` hazard, hit and handled rather than avoided.** Adding
+`vaco-codec-dsp-idct` as a dependency needs a `Cargo.lock` update, but a
+plain `cargo build`/`cargo test` regenerated it with ~80 unrelated lines
+from other agents' concurrently-uncommitted `Cargo.toml` changes
+(`vaco-format-gxf`, `vaco-format-imf`, `vaco-mux-hds`,
+`vaco-conformance`'s expanded deps) mixed in every time. Extracted the one
+real line by hand from the committed base via the private-index recipe
+instead of committing the regenerated file, and reset the working tree's
+`Cargo.lock`/`fuzz/Cargo.lock` back to the committed state after every
+subsequent local build/test/fuzz run that dirtied them again. `git diff
+<commit>~1 <commit> --name-only` checked on every commit this round, per
+the coordinator's own live example — each commit touched exactly its
+intended file set, nothing swept in and nothing silently reverted.
+
+Gates: full clean sweep (`layer-check`, `dep-gate`, `unsafe-audit`,
+`dup-check`, `owner-gate`, `patent-gate`), `clippy -p vaco-codec-h264
+--all-targets` clean (four `#[allow(..., reason = "...")]` scoped
+exceptions for provably-bounded loop-variable indexing and the spec's own
+`qP/6` terms, matching `mb.rs`'s own established idiom rather than
+rewriting to `.get()` chains that would obscure the equations), `rustfmt`
+run directly only on the two brand-new files (`dequant.rs`,
+`cabac_intra_oracle_corpus.rs`) — never `cargo fmt -p`, and never on
+`lib.rs` after discovering `rustfmt <path>` on a file with `mod`
+declarations recurses into the whole reachable module tree the same way
+`cargo fmt -p` does, which would have rewritten unrelated hunks in
+`cabac_mb_tables.rs`/`cabac_residual.rs`. Full test suite: 32 `--lib`
+tests (up from 22), 4 new integration tests, all passing; the four
+already-`#[ignore]`d CABAC macroblock tests unaffected. `h264_entropy`
+fuzz target ran ~26s / ~3.0M execs, no new crashes. No live writer on
+`vaco-codec-cabac`, `vaco-codec-dsp-idct`, or `vaco-codec-h264` confirmed
+before starting and before every commit.
+
+`#418` stays open and untouched; `assert_slice_ends_at_rbsp_trailing_bits`
+was not weakened. `#419` not reopened.
+
+`Vaco-Spec-Ref: iso-iec-14496-10-2002-draft` clause 7.4.5 (eq. 7-23),
+clause 8.5.5 (eq. 8-251/8-252/8-253, Table 8-13), clause 8.5.6 (eq.
+8-254/8-255/8-256), clause 8.5.7 (eq. 8-257/8-258/8-259), clause 8.5.8
+(eq. 8-260..8-265), clause 8.7 (deblocking filter process).
