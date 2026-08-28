@@ -552,6 +552,8 @@ fn decode_coded_macroblock(
             fwd_field_select,
             bwd_field_select,
             ap.chroma_format,
+            ap.header.full_pel_forward_vector,
+            ap.header.full_pel_backward_vector,
         );
     }
 
@@ -591,6 +593,8 @@ fn decode_skipped_macroblock(idct: &mut Mpeg2Idct, ap: &mut ActivePicture, seq: 
                 [0, 0],
                 [0, 0],
                 ap.chroma_format,
+                ap.header.full_pel_forward_vector,
+                ap.header.full_pel_backward_vector,
             );
         }
         PictureType::B => {
@@ -625,6 +629,8 @@ fn decode_skipped_macroblock(idct: &mut Mpeg2Idct, ap: &mut ActivePicture, seq: 
                 [0, 0],
                 [0, 0],
                 ap.chroma_format,
+                ap.header.full_pel_forward_vector,
+                ap.header.full_pel_backward_vector,
             );
         }
         PictureType::I | PictureType::D => {
@@ -636,6 +642,20 @@ fn decode_skipped_macroblock(idct: &mut Mpeg2Idct, ap: &mut ActivePicture, seq: 
 
     write_prediction_only(ap, mb_x, mb_y, &pred, ap.chroma_format);
     let _ = idct; // no residual for a skipped macroblock; kept for a uniform call shape.
+}
+
+/// Annex D.9.7: scale a direction's motion vectors from MPEG-1's optional
+/// full-pel coding into the half-pel units every use of a reconstructed
+/// vector downstream assumes. A no-op whenever `full_pel` is `false`,
+/// which is always, for MPEG-2 (`mpeg1_default` never sets either flag)
+/// and for every MPEG-1 stream that doesn't use this rare mode either.
+#[must_use]
+const fn full_pel_scale(vecs: [[i32; 2]; 2], full_pel: bool) -> [[i32; 2]; 2] {
+    if full_pel {
+        [[vecs[0][0] * 2, vecs[0][1] * 2], [vecs[1][0] * 2, vecs[1][1] * 2]]
+    } else {
+        vecs
+    }
 }
 
 #[allow(
@@ -659,7 +679,24 @@ fn form_macroblock_prediction(
     fwd_field_select: [i32; 2],
     bwd_field_select: [i32; 2],
     chroma_format: ChromaFormat,
+    full_pel_fwd: bool,
+    full_pel_bwd: bool,
 ) {
+    // Annex D.9.7 (MPEG-1 only; MPEG-2 requires both flags `0`, so this is
+    // a no-op there — `mpeg1_default` never sets either): "the motion
+    // vectors that are coded are in full-pel units instead of half-pel
+    // units. Motion vector coordinates must be multiplied by two before
+    // being used for the prediction." `motion::decode_vector`'s own PMV
+    // chain (`ap.fwd_pred`/`bwd_pred`) stays in whatever unit the encoder
+    // coded — native full-pel or half-pel — since a delta-coded vector's
+    // predictor must be in the same units as the value it predicts; only
+    // the *use* of the reconstructed vector to address the reference
+    // picture (here, and in `decode_skipped_macroblock`'s B-picture skip,
+    // which reads this same PMV chain back) is in half-pel units, so the
+    // doubling belongs at this single point both paths funnel through,
+    // not at `decode_vector` itself.
+    let fwd_vecs = full_pel_scale(fwd_vecs, full_pel_fwd);
+    let bwd_vecs = full_pel_scale(bwd_vecs, full_pel_bwd);
     let (cw, ch) = chroma_format.chroma_mb_pixels();
     let px = i32::try_from(mb_x).unwrap_or(0) * 16;
     let py = i32::try_from(mb_y).unwrap_or(0) * 16;
@@ -1134,5 +1171,27 @@ mod skipped_macroblock_tests {
         decode_skipped_macroblock(&mut idct, &mut ap, &seq, 0);
 
         assert_eq!(ap.dc_pred, [128, 128, 128]);
+    }
+}
+
+#[cfg(test)]
+mod full_pel_tests {
+    use super::full_pel_scale;
+
+    /// Annex D.9.7: "motion vector coordinates must be multiplied by two
+    /// before being used for the prediction" when the corresponding
+    /// direction's `full_pel_*_vector` flag is set. No fixture on hand
+    /// exercises this (`ffmpeg`'s own MPEG-1 encoder never sets either
+    /// flag on any stream this crate's corpus includes — checked
+    /// directly against `m1_ip`/`m1_ipb`'s own picture headers, both
+    /// `false` on all 25 pictures each), so this is covered only by this
+    /// hand-crafted test, the same pattern `macroblock_stuffing` and the
+    /// legacy UMV path use for other MPEG-1 modes real encoders on hand
+    /// never emit.
+    #[test]
+    fn doubles_both_components_only_when_full_pel_is_set() {
+        let vecs = [[3, -5], [7, 0]];
+        assert_eq!(full_pel_scale(vecs, false), vecs);
+        assert_eq!(full_pel_scale(vecs, true), [[6, -10], [14, 0]]);
     }
 }

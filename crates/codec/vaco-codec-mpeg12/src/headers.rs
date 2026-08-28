@@ -160,16 +160,18 @@ impl PictureType {
     }
 }
 
-/// `picture_header()` (§6.2.3). `temporal_reference` and the two
-/// `full_pel_*_vector` flags are parsed for correct framing (the fields
-/// after them are conditional on having read them) but not yet consumed:
-/// `temporal_reference` is not needed since this crate uses each packet's
-/// own PTS rather than reconstructing display order from it, and
-/// `full_pel_*_vector` (motion vectors in whole-pixel units rather than
-/// half-pixel) is an unimplemented rare MPEG-1 mode.
+/// `picture_header()` (§6.2.3). `temporal_reference` is parsed for
+/// correct framing (the fields after it are conditional on having read
+/// it) but not consumed: this crate uses each packet's own PTS rather
+/// than reconstructing display order from it. The two `full_pel_*_vector`
+/// flags (Annex D.9.7: MPEG-1-only, always `0` in MPEG-2) *are* consumed
+/// — `macroblock::form_macroblock_prediction` doubles the corresponding
+/// direction's reconstructed motion vector before it addresses the
+/// reference picture, per D.9.7's own "must be multiplied by two before
+/// being used for the prediction."
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code, reason = "parsed for correct framing, not yet consumed — see this struct's own doc comment")]
 pub(crate) struct PictureHeader {
+    #[allow(dead_code, reason = "parsed for correct framing, not consumed — see this struct's own doc comment")]
     pub temporal_reference: u16,
     pub coding_type: PictureType,
     pub full_pel_forward_vector: bool,
