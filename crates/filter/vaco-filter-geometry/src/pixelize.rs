@@ -85,11 +85,10 @@ pub(crate) struct Opts {
         name = "mode",
         alias = "m",
         help = "set the pixelize mode",
-        default = 0,
-        range = 0..=2,
+        default = "avg".to_owned(),
         flags(video, filtering)
     )]
-    pub mode: i32,
+    pub mode: String,
     #[opt(
         name = "planes",
         alias = "p",
@@ -121,10 +120,16 @@ pub(crate) struct Filter {
 
 impl Filter {
     pub(crate) fn new(opts: &Opts) -> std::result::Result<Self, String> {
-        let mode = match opts.mode {
-            0 => Mode::Avg,
-            1 => Mode::Min,
-            2 => Mode::Max,
+        // The reference accepts both the named constant and its numeric
+        // value for this option (confirmed: `mode=avg` and `mode=0` both
+        // run against `ffmpeg 8.1`) -- this was previously accepted only
+        // as a bare integer, a real argument-syntax gap `vaco-conformance`
+        // found the moment its own corpus used the reference's own named
+        // spelling instead of the number.
+        let mode = match opts.mode.as_str() {
+            "avg" | "0" => Mode::Avg,
+            "min" | "1" => Mode::Min,
+            "max" | "2" => Mode::Max,
             other => return Err(format!("pixelize: bad `mode` `{other}`")),
         };
         Ok(Self {

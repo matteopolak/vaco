@@ -26,6 +26,8 @@ vaco-filter-graph = { path = "../../filter/vaco-filter-graph" }
 vaco-filter-scope = { path = "../../filter/vaco-filter-scope" }
 vaco-filter-draw-vf = { path = "../../filter/vaco-filter-draw-vf" }
 vaco-filter-blur = { path = "../../filter/vaco-filter-blur" }
+vaco-filter-geometry = { path = "../../filter/vaco-filter-geometry" }
+vaco-filter-convolve = { path = "../../filter/vaco-filter-convolve" }
 tempfile.workspace = true
 
 [lints]

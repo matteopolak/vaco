@@ -82,6 +82,8 @@ const REGISTRIES: &[&dyn FilterRegistry] = &[
     &vaco_filter_scope::ScopeRegistry,
     &vaco_filter_draw_vf::DrawVfRegistry,
     &vaco_filter_blur::BlurRegistry,
+    &vaco_filter_geometry::T2GeometryRegistry,
+    &vaco_filter_convolve::ConvolveRegistry,
 ];
 
 fn find_registry(name: &str) -> Option<&'static dyn FilterRegistry> {
@@ -291,7 +293,19 @@ fn fill_planes(
     height: u32,
     raw: &[u8],
 ) -> Result<(), String> {
+    // `PlaneMut::rows_mut()` yields each row's *stride*, padding included
+    // (its own doc says so explicitly: splitting the padding off would
+    // need a second borrow of the same allocation) -- only meaningful for
+    // performance-sensitive per-pixel kernels that do not care about the
+    // trailing bytes. Copying real source bytes into that raw stride was
+    // a real bug here: it silently ran the source cursor past the actual
+    // pixel data (and out of the buffer entirely) the moment a plane's
+    // width did not line up with the allocator's row-padding boundary --
+    // invisible at `64` (already aligned), immediate at `20` (the first
+    // width this harness tried that was not). `row_mut(y)`, not
+    // `rows_mut()`, is what stays trimmed to the meaningful `row_bytes`.
     let plane_bytes = (width as usize) * (height as usize);
+    let h = height as usize;
     for p in 0..plane_count(fmt) {
         let Some(chunk) = raw.get(p * plane_bytes..(p + 1) * plane_bytes) else {
             return Err(format!("input buffer too short for plane {p}"));
@@ -299,14 +313,15 @@ fn fill_planes(
         let Some(mut plane) = frame.plane_mut(p) else {
             return Err(format!("frame has no plane {p}"));
         };
-        let mut offset = 0usize;
-        for row in plane.rows_mut() {
-            let end = offset + row.len();
-            let Some(src) = chunk.get(offset..end) else {
-                return Err(format!("plane {p} ran out of source bytes at row"));
+        for y in 0..h {
+            let Some(row) = plane.row_mut(y) else {
+                return Err(format!("plane {p} has no row {y}"));
+            };
+            let start = y * row.len();
+            let Some(src) = chunk.get(start..start + row.len()) else {
+                return Err(format!("plane {p} ran out of source bytes at row {y}"));
             };
             row.copy_from_slice(src);
-            offset = end;
         }
     }
     Ok(())

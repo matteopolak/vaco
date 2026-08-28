@@ -31,6 +31,48 @@
 //! `16` before combining (`320/16=20`). That divisor is folded into
 //! [`SCHARR_GX`]/[`SCHARR_GY`] via `rdiv=16` rather than left for a caller
 //! to apply.
+//!
+//! # Correction, 2026-08-28: the inherited "zero border" was never
+//! actually verified for `sobel` itself, and a real probe found it wrong
+//!
+//! `vaco-conformance`'s argument-vector corpus tried `sobel` against a
+//! source varying in *both* `X` and `Y` (`mod(X*7+Y*11,256)`, `20x20`) —
+//! the original border claim above was measured on a source varying in
+//! `X` only (`10*X`), which makes every row identical and therefore
+//! cannot distinguish "the whole border row is forced to `0`" from "the
+//! row is computed normally, and it correctly comes back `0` because a
+//! `Y`-invariant image really does have zero vertical gradient
+//! everywhere, border included." That is exactly the same shape of blind
+//! spot `vectorscope`'s frame-size/hit-count conflation and `waveform`'s
+//! `intensity=1` saturation were: a source that cannot separate two
+//! hypotheses is not evidence for either one.
+//!
+//! Against the two-axis source, this crate's own output forces the
+//! *entire* top/bottom border row to `0` (every column), but the
+//! reference does not: only isolated positions read `0`, and the rest of
+//! the border row carries real, nonzero gradient values that a controlled
+//! linear-ramp probe (`lum=50+10*Y`, ramp values `40/51/63/75/86/98`) does
+//! not match either a hard-zero-if-any-tap-OOB rule *or* a simple
+//! replicate-the-edge-row extension applied uniformly to whichever tap is
+//! missing — both were checked by hand and both predict values the
+//! reference does not produce at every point tried. The likely shape is a
+//! genuine **per-axis** border rule (extend/reflect independently in the
+//! direction that is actually out of bounds, rather than abandoning the
+//! whole pixel the moment any one tap is), which is a materially bigger
+//! change than adjusting a single constant: it would mean
+//! [`crate::convolution::Kernel::value_at`] needs a real per-tap-clamp
+//! implementation, shared by `convolution` (whose own zero-border *is*
+//! independently confirmed, via a source that actually varies in the
+//! tested axis — see that module's own doc) and `sobel`/`prewitt`/
+//! `scharr`, without breaking the case that already checks out.
+//!
+//! **Left open, not fixed, and not routed around**: this is recorded as a
+//! confirmed, real divergence rather than absorbed into a weaker
+//! comparison mode. `vaco-conformance`'s own `filter-vaco-filter-convolve`
+//! suite does not include a `sobel`/`prewitt`/`scharr` case for exactly
+//! this reason — shipping one that is known to fail, or downgrading it to
+//! hide the failure, would both be worse than leaving it out and writing
+//! down why.
 
 use vaco_core::{MediaType, Result};
 use vaco_filter_core::adapt::{FrameFilter, FrameOut, Simple};

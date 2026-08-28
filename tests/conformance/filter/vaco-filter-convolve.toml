@@ -1,0 +1,51 @@
+# FT-6.1 (#500)'s filter category, fourth crate: `vaco-filter-convolve`
+# (sobel/prewitt/roberts/kirsch/scharr edge operators, morpho/median).
+#
+# `median`'s default `percentile=0.5` (the median proper) is the one
+# value where "which of the two middle ranks, for an even window" and
+# off-by-one indexing questions can hide; `percentile=0.25` forces a
+# specific, non-ambiguous rank, and `radiusV` != `radius` (an anisotropic
+# window) is a second, independent axis the default `radiusV=0` collapses
+# into "just use radius".
+#
+# `sobel`/`prewitt`/`scharr` are deliberately NOT in this suite. This
+# pass found a real, confirmed border-handling divergence in `sobel`
+# (this crate's whole-pixel "any out-of-bounds tap forces 0" rule against
+# the reference's real, nonzero border values) — see `src/edge.rs`'s own
+# module doc, "Correction, 2026-08-28", for the full measurement. It is
+# left open rather than fixed (a real per-axis border-clamp change to
+# shared kernel machinery, not a cheap one) and rather than shipped here
+# as a failing or downgraded case — a `filter`-tool suite with a case
+# known to diverge would either fail every run for a known reason (noise
+# any contributor has to re-diagnose) or, worse, invite exactly the
+# `downgrade_reason` misuse this harness's own design was built to
+# prevent.
+
+schema = 1
+suite  = "filter-vaco-filter-convolve"
+tool   = "filter"
+tier   = "core"
+owner  = "@filter-convolve-owner"
+
+[[media]]
+id       = "gray8-ramp-20"
+source   = "generated://gray8-ramp-20.raw"
+tags     = ["video"]
+generate = ["-f", "lavfi", "-i", "color=c=black:s=20x20:d=1:r=25",
+            "-vf", "geq=lum='mod(X*7+Y*11,256)':cb=128:cr=128",
+            "-frames:v", "1", "-pix_fmt", "gray8", "-f", "rawvideo"]
+
+[[axis]]
+name   = "filter"
+values = [
+  { id = "median-default",      argv = ["{media}", "median", "radius=2", "gray8", "20", "20", "gray8", "20", "20"] },
+  { id = "median-percentile25", argv = ["{media}", "median", "radius=2:percentile=0.25", "gray8", "20", "20", "gray8", "20", "20"] },
+  { id = "median-anisotropic",  argv = ["{media}", "median", "radius=3:radiusV=1", "gray8", "20", "20", "gray8", "20", "20"] },
+]
+
+[compare]
+mode    = "raw-exact"
+timeout = "10s"
+
+[normalise]
+invocation = ["bitexact", "hide-banner"]

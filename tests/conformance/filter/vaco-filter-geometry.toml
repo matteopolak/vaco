@@ -1,0 +1,45 @@
+# FT-6.1 (#500)'s filter category, third crate: `vaco-filter-geometry`
+# (plan 16 §4.3's T2 geometry row — distinct from the T1
+# `vaco-filter-video-geometry`, which `ASSIGNMENTS.md` shows `assigned`
+# with no completion date and is deliberately not touched here).
+#
+# `pixelize`'s own module doc already names two things it measured only
+# partially: `mode=avg`/`min`/`max` are three genuinely different
+# per-block reductions (the kind of argument-vector spread this campaign
+# has learned to prefer — a source that separates candidate rules, not
+# one that merely exercises the option), and "a block that overruns the
+# frame edge... is not separately measured" is a self-flagged gap. This
+# suite's `pixelize-edge-overrun` case uses a `10x10` source with `3x3`
+# blocks specifically because `10` is not a multiple of `3`, exercising
+# exactly that unmeasured edge-clamp behaviour against the real
+# reference for the first time.
+
+schema = 1
+suite  = "filter-vaco-filter-geometry"
+tool   = "filter"
+tier   = "core"
+owner  = "@filter-geometry-owner"
+
+[[media]]
+id       = "gray8-ramp-10"
+source   = "generated://gray8-ramp-10.raw"
+tags     = ["video"]
+generate = ["-f", "lavfi", "-i", "color=c=black:s=10x10:d=1:r=25",
+            "-vf", "geq=lum='X*10+Y*15':cb=128:cr=128",
+            "-frames:v", "1", "-pix_fmt", "gray8", "-f", "rawvideo"]
+
+[[axis]]
+name   = "filter"
+values = [
+  { id = "pixelize-avg",         argv = ["{media}", "pixelize", "width=2:height=2:mode=avg", "gray8", "10", "10", "gray8", "10", "10"] },
+  { id = "pixelize-min",         argv = ["{media}", "pixelize", "width=2:height=2:mode=min", "gray8", "10", "10", "gray8", "10", "10"] },
+  { id = "pixelize-max",         argv = ["{media}", "pixelize", "width=2:height=2:mode=max", "gray8", "10", "10", "gray8", "10", "10"] },
+  { id = "pixelize-edge-overrun", argv = ["{media}", "pixelize", "width=3:height=3:mode=avg", "gray8", "10", "10", "gray8", "10", "10"] },
+]
+
+[compare]
+mode    = "raw-exact"
+timeout = "10s"
+
+[normalise]
+invocation = ["bitexact", "hide-banner"]
