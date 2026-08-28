@@ -1,0 +1,32 @@
+[package]
+name = "vaco-codec-vorbis"
+description = "Vorbis I decode, native: Floor 0 and Floor 1, residue types 0/1/2, all mapping/mode configurations the setup header can express."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+vaco-core = { path = "../../core/vaco-core" }
+vaco-bitstream = { path = "../../core/vaco-bitstream" }
+vaco-limits = { path = "../../core/vaco-limits" }
+vaco-codec-core = { path = "../../signal/vaco-codec-core" }
+vaco-tx = { path = "../../signal/vaco-tx" }
+vaco-frame = { path = "../../model/vaco-frame" }
+vaco-packet = { path = "../../model/vaco-packet" }
+vaco-sampfmt = { path = "../../model/vaco-sampfmt" }
+vaco-chlayout = { path = "../../model/vaco-chlayout" }
+
+[dev-dependencies]
+proptest.workspace = true
+vaco-demux-ogg = { path = "../../format/vaco-demux-ogg" }
+vaco-format-core = { path = "../../format/vaco-format-core" }
+vaco-io = { path = "../../io/vaco-io" }
+
+[lints]
+workspace = true
+
+[package.metadata.vaco]
+layer = 4
