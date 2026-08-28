@@ -1,0 +1,22 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Plan 16 §4.2's `vaco-filter-draw-vf` row: drawbox, drawgrid (qrcode/
+# qrcodesrc need an external `qrcode` crate dependency, a D10 decision
+# not made this pass — see `src/lib.rs`'s own scoping doc). Issue #473
+# (FT-4.10)'s `drawgraph`/`adrawgraph` live in `vaco-filter-scope` instead,
+# per the same plan's own, disagreeing crate-mapping table; `drawtext`
+# stays in `vaco-filter-text`, blocked on #462.
+
+[[component]]
+kind = "filter"
+name = "drawbox"
+long_name = "Draw a colored box on the input video."
+ctor = "vaco_filter_draw_vf::drawbox::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "drawgrid"
+long_name = "Draw a colored grid on the input video."
+ctor = "vaco_filter_draw_vf::drawgrid::DESC"
+media = "video"
