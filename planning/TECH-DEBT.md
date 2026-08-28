@@ -3999,3 +3999,79 @@ scoping answer, not a fix, and none of `vaco-codec-dsp-idct` was touched
 (still no live writer, confirmed again before this round started).
 
 `Vaco-Spec-Ref: itu-t-h262` Annex A.
+
+## `vaco-format-gxf` (new, #613): SMPTE 360-2009 demux + mux, with a real ffmpeg muxer/demuxer both available as a differential bar for the first time in two dispatches
+
+New crate. Unlike the immediately preceding IMF dispatch (#614/#615), this
+machine's `ffmpeg 8.1` has both a `gxf` demuxer and a `gxf` muxer
+(`ffmpeg -demuxers`/`-muxers`, confirmed) — a real reference for both
+directions, used throughout. `packet.rs`/`map.rs`/`media.rs` implement the
+packet header, MAP packet (material + per-track tag/length/value
+sections), and media packet preamble exactly as SMPTE 360-2009 states them
+(a document SMPTE distributes free of charge as a "Stable" engineering
+document — `provenance/sources.toml`'s `smpte-st360-2009-gxf` entry) —
+every numeric tag cross-checked against a real file `ffmpeg -f gxf` wrote
+on this machine (`tests/fixtures/ffmpeg_pal_mpeg2_pcm.gxf`) before being
+trusted, catching two real transcription mistakes during development: (1)
+Table 19's MPEG picture-coding bits are numbered "0 is LSB", so the first
+attempt at `media.rs::mpeg_frame_info` read the wrong end of the byte and
+called the real fixture's own I-frame a non-key frame; (2) a field left
+undocumented as "raw wire value" vs. "resolved rate" briefly had the two
+conflated, caught by a test asserting the audio track's own `-2` ("not
+available") code rather than the demuxer's later resolution of it.
+
+`demux.rs::GxfDemuxer` derives one shared field-number timeline for every
+track (video/audio/time-code all share one virtual clock, per clause
+4.6/7.4.2.1.3 — confirmed against the real fixture's own audio packet
+field numbers landing on 0/35/69 via Annex B's synchronization formula)
+and turns `MEDIA` packets into `Packet`s, skipping `FLT`/`UMF`/repeated
+`MAP` packets (clause 7.3's own "MAP packets shall have priority" is why
+this is not a shortcut). `mux.rs::GxfMuxer` buffers a whole clip (one
+`Mpeg2video` track, one `PcmS16le` track — narrower than what the demuxer
+reads, stated explicitly, not silently) and writes `MAP`+minimal
+`UMF`+`MEDIA`+`EOS` in `write_trailer`, the same buffer-then-finalize
+trade-off `vaco-mux-mxf::MUXER_OPATOM` makes for clip-wrapped essence.
+
+**A real interop finding, not just a round-trip pass**: `GxfMuxer`'s own
+output was fed back through real `ffmpeg`/`ffprobe` manually during
+development (not as an automated test, matching every other muxer's test
+suite in this workspace). The first attempt declared a genuinely-partial
+trailing audio packet's true valid-sample count in its `field_info`,
+exactly as clause 7.4.2.1.4 permits — and real `ffmpeg`'s own `gxf`
+demuxer then *truncated* the packet it reported down to that shorter
+length, a visibly different container-level shape from the reference
+file's own three (always-full-length) audio packets. Checking the real
+reference muxer's own field_info bytes for its own genuinely-partial last
+packet found `00 00 80 00` (32,768, i.e. "fully valid") stated regardless
+of the true sample count — `ffmpeg -f gxf` never emits a short-validity
+`field_info` at all. `GxfMuxer` now matches that measured convention
+instead of the Standard's more literal option, which is what real interop
+with `ffmpeg` needs. `provenance/sources.toml`'s
+`ffmpeg-gxf-demux-mux-probe` entry records both legs of this measurement.
+
+**Scope limits stated in the crate's own docs, not silently absent**:
+`GxfMuxer` writes only one video + one audio track (`Error::Unsupported`
+for anything else, including media types the demuxer already *reads* —
+Motion JPEG, DV, AC-3, 24-bit PCM, time code — and any MPEG frame rate
+outside Table 6's eight defined values); its `UMF` packet declares zero
+tracks/segments rather than a full restatement (legitimate per clause
+7.3's own priority rule, not a shortened lie); video width/height are not
+stated anywhere in GXF's own metadata (checked directly against the
+Standard) and are reported as the conventional SD default rather than
+guessed for HD; `seek` is not implemented (the `FLT` packet is this
+format's own named seek aid, not yet wired to it).
+
+**What remains**: a streaming (rather than buffer-then-write) muxer needs
+a placeholder `MAP`/`UMF` rewritten via `MediaSink::seek`, the pattern
+`vaco-mux-mxf`'s OP1a variant already uses for the analogous problem. Real
+video dimensions need the `ParserProvider` seam `open` already receives
+(threaded through like every other demuxer, not yet called) driven against
+a real MPEG sequence header — see `vaco-demux-raw::bitstream::drive_parser`
+for the pattern already established elsewhere in this workspace.
+
+Gates: `cargo build`/`cargo test`/`cargo clippy --all-targets -- -D
+warnings` clean; builds for `wasm32-unknown-unknown`; `layer-check`/
+`dep-gate`/`unsafe-audit`/`owner-gate`/`dup-check` all clean (no new
+`DISTINCT` entry needed this time); `fuzz/fuzz_targets/gxf_demux.rs` ran
+5.9M executions (empty corpus) plus 386K more (seeded with the real
+fixture) in under a minute total, no crash, no `fuzz/artifacts` files.
