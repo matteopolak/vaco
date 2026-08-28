@@ -69,6 +69,65 @@
 //! `erosion`/`dilation`/`deflate`/`inflate` also do not go through this
 //! engine — they share a different module, `crate::morph`, with its own
 //! separately-reasoned border claim; see that module's doc.
+//!
+//! # `scharr`'s interior divergence: truncation-order hypothesis tested and
+//! refuted; the real cause looks like reference-side numerical noise, not
+//! a discoverable rule
+//!
+//! Separately from the border fix above, an exhaustive per-pixel check
+//! (every pixel of a two-axis discriminating source, `sobel`/`prewitt`
+//! both at zero mismatches) found `scharr`'s magnitude off by a small
+//! amount (`1`-`3`) at a large fraction of *interior*, non-border pixels
+//! -- not explained by the border rule at all.
+//!
+//! **Hypothesis tested: per-component truncation before combining, the
+//! same shape as `waveform`'s `step = floor(intensity*255)` bug.** If the
+//! reference truncated `Gx`/`Gy` to integers before `sqrt(Gx^2+Gy^2)`
+//! rather than after, that would explain a systematic, direction-
+//! consistent loss of magnitude. It does not hold here: at every mismatch
+//! checked, `Gx/rdiv` and `Gy/rdiv` were already exact integers (the raw
+//! pre-division sums were exact multiples of `rdiv=16`), so there is no
+//! fractional part for truncation order to act on -- the hypothesis has
+//! nothing to bite on for the pixels that actually diverge. Refuted, not
+//! merely unconfirmed.
+//!
+//! **What actually falsifies "any formula of `(Gx, Gy)`" entirely**: two
+//! *different* real 3x3 windows, sampled directly from the reference's own
+//! raw output (not this crate's model of it), produce bit-identical
+//! `Gx=192, Gy=704` --
+//!
+//! ```text
+//! window A, centred (9,1):   window B, centred (25,1):
+//!   8 105 202                  24 121 218
+//! 169  23 133                 137 247 101
+//!  74 197  64                 250 117 240
+//! ```
+//!
+//! -- confirmed by hand (`Gx = -3*8+3*202-10*169+10*133-3*74+3*64 = 192`
+//! for window A, and the same arithmetic on window B's corners/edges also
+//! gives `192`; `Gy` likewise gives `704` for both). Yet real
+//! `ffmpeg 8.1 -vf scharr` gives `46` at `(9,1)` and `44` at `(25,1)` --
+//! **two provably identical gradient vectors, two different outputs**.
+//! No function of `(Gx, Gy)` alone -- truncated, rounded, rescaled, or
+//! otherwise -- can produce that. Reproduced deterministically (same
+//! result across repeated runs and `-filter_threads 1`), so it is not a
+//! threading race either.
+//!
+//! **Left open, on purpose, past the point most divergences in this
+//! campaign get pinned.** The position-dependence for identical inputs
+//! is the signature of floating-point/SIMD implementation noise (e.g. an
+//! accelerated `sqrt`/`hypot` path whose rounding depends on vector-lane
+//! alignment, not on the mathematical inputs) rather than a documented or
+//! discoverable behavioural rule. Chasing that further would mean
+//! reverse-engineering one specific reference binary's accelerated code
+//! path rather than measuring a rule a clean-room reimplementation should
+//! match -- the opposite of what pinning `reflect-101` above was. Per
+//! `AGENT-CONSTRAINTS.md`: fitting a formula that matches most points,
+//! when the evidence already shows no formula of the documented inputs
+//! can match all of them, is the mistake this note exists to avoid
+//! repeating. `scharr` stays out of the conformance corpus until this
+//! either turns out to have a real rule after all, or is reclassified as
+//! a permanent ceiling with a `downgrade_reason`.
 
 use vaco_core::{MediaType, Result};
 use vaco_filter_core::adapt::{FrameFilter, FrameOut, Simple};
@@ -234,6 +293,38 @@ pub(crate) const fn pad_desc(name: &'static str, description: &'static str) -> F
 )]
 mod tests {
     use super::*;
+
+    /// Documents this module's doc finding rather than pinning a value
+    /// against the reference: two real, distinct 3x3 windows measured
+    /// from real `ffmpeg 8.1 -vf scharr` output give bit-identical
+    /// `(Gx, Gy) = (192, 704)` yet different reference outputs (`46` and
+    /// `44`). Any function of `(Gx, Gy)` alone -- including this crate's
+    /// own -- necessarily gives the *same* answer for both, so it can
+    /// only ever match one of the two real outputs. This is why `scharr`
+    /// is left out of the conformance corpus rather than tuned further:
+    /// there is no formula of the documented inputs left to try.
+    #[test]
+    fn scharr_cannot_match_both_real_outputs_for_these_two_identical_gradient_windows() {
+        let opts = Opts::default();
+        let g = TwoGradient::new(SCHARR_GX, SCHARR_GY, SCHARR_RDIV, &opts).unwrap();
+
+        let window_a: Vec<Vec<u8>> = vec![vec![8, 105, 202], vec![169, 23, 133], vec![74, 197, 64]];
+        let window_b: Vec<Vec<u8>> =
+            vec![vec![24, 121, 218], vec![137, 247, 101], vec![250, 117, 240]];
+        let rows_a: Vec<&[u8]> = window_a.iter().map(Vec::as_slice).collect();
+        let rows_b: Vec<&[u8]> = window_b.iter().map(Vec::as_slice).collect();
+        let out_a = g.apply_plane(&rows_a, 3, 3);
+        let out_b = g.apply_plane(&rows_b, 3, 3);
+
+        // Our engine is a pure function of the window, so identical
+        // (Gx, Gy) necessarily produces identical output here: 45,
+        // computed from hypot(192/16, 704/16) = hypot(12, 44) = 45.6,
+        // truncated. The real reference splits 46/44 across these two
+        // windows (see this module's doc) -- neither of which is 45 --
+        // proving no single-valued function of (Gx, Gy) can match both.
+        assert_eq!(out_a[1][1], out_b[1][1]);
+        assert_eq!(out_a[1][1], 45);
+    }
 
     fn ramp(w: usize, h: usize) -> Vec<Vec<u8>> {
         (0..h)

@@ -297,18 +297,25 @@ discipline).
 
 ## Left for a follow-up
 
-`scharr`'s combined magnitude has a real, confirmed divergence unrelated
-to the border rule above: an exhaustive check (all 400 pixels of a
-two-axis discriminating 20x20 source) found `18` interior — not border —
-pixels where the reference disagrees with `sqrt(Gx^2+Gy^2)` by exactly
-one count (predicted `~42.8`, truncating or rounding to `42`/`43`;
-reference gives `41`). `Gx`/`Gy` themselves are exact integers at the
-probed pixel, ruling out a component-rounding explanation. Not yet
-root-caused (a `scharr`-specific magnitude formula or normalisation
-question, not a copy of `sobel`'s border bug), and deliberately left out
-of the conformance corpus for the same reason `sobel`'s border rule was
-left out until it could be pinned: a fix that matches most points but not
-all is worse than an honest gap.
+`scharr`'s combined magnitude has a real divergence unrelated to the
+border rule above, now investigated past the point of "not yet
+root-caused" to "provably not a function of `(Gx, Gy)` at all". The
+truncate-per-component-before-combining hypothesis (the same shape as
+`waveform`'s `step = floor(intensity*255)` bug) was tested and refuted:
+at every diverging pixel, `Gx/16` and `Gy/16` are already exact integers,
+so there is no fractional part for truncation order to act on. Stronger
+still: two different real 3x3 windows, read directly from the reference's
+own raw output, give bit-identical `Gx=192, Gy=704` (confirmed by hand)
+yet real `ffmpeg 8.1 -vf scharr` outputs `46` at one and `44` at the
+other — two identical gradient vectors, two different results, which no
+formula of `(Gx, Gy)` alone can produce. This is the signature of
+floating-point/SIMD implementation noise in the reference's accelerated
+path, not a discoverable behavioural rule; chasing it further would mean
+reverse-engineering one specific binary's numerics rather than measuring
+a rule to reimplement. See `src/edge.rs`'s doc for the full window data
+and a regression test that pins the mathematical impossibility. Left out
+of the conformance corpus on purpose — not because it wasn't chased hard
+enough, but because the evidence already rules out a fix of this shape.
 
 Six more filters `planning/16-filters.md` §4.2 counts in this crate:
 `edgedetect`, `blurdetect` (not reached — `edgedetect`'s own hysteresis/
