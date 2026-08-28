@@ -353,6 +353,14 @@ because it was too narrow to contain the failure.
   updates rarely fire, catastrophic on real content.
 - **MPEG-2's `CODED_BLOCK_PATTERN`**: small quiet fixtures at max deviation 2,
   busy ones at 234 of 255.
+- **An H.264 fuzz target's own input encoding**: a one-byte selector cannot
+  address 5 context categories crossed with 4 initialisation sets — `>> 6`
+  leaves two bits — so the category where the outstanding bug lived was
+  **unreachable**, while the target reported millions of clean executions. Found
+  by writing up its coverage, not by running it.
+- **`vlc-scan`'s target list**: hand-maintained, two known table shapes, so a
+  crate whose tables use a third shape is reported clean without being looked
+  at.
 
 The pattern is one thing: **a corpus or a metric that cannot reach the failing
 path reports success indistinguishable from real success.** So before trusting
@@ -363,6 +371,12 @@ Broadband where you tested tones. Whole-signal where you tested parts. Busy
 content where you tested flat. Two tones where one passed. And when a test
 cannot fail, say so: a test that buys confidence it has not earned is worse
 than no test, because it stops the next person looking.
+
+**Check that your harness can reach what it claims to cover.** A fuzz target's
+input decoding, a gate's target list, a corpus's parameter ranges — each is a
+door, and a door too narrow for the state space behind it produces the most
+convincing false clean there is, because the execution count is real. Count the
+cases you intend to cover, then prove the harness can address every one.
 
 **When two measurements of the same thing disagree, suspect the measurement
 before the code.** The QMF case above cost a dispatch because the disagreement
