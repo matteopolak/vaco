@@ -62,6 +62,7 @@ vaco-codec-jpegxl = { path = "../crates/codec/vaco-codec-jpegxl", optional = tru
 vaco-codec-mpeg12 = { path = "../crates/codec/vaco-codec-mpeg12", optional = true }
 vaco-codec-mpegaudio = { path = "../crates/codec/vaco-codec-mpegaudio", optional = true }
 vaco-codec-msac = { path = "../crates/signal/vaco-codec-msac", optional = true }
+vaco-codec-opus = { path = "../crates/codec/vaco-codec-opus", optional = true }
 vaco-codec-png = { path = "../crates/codec/vaco-codec-png", optional = true }
 vaco-codec-pnm = { path = "../crates/codec/vaco-codec-pnm", optional = true }
 vaco-codec-qoi = { path = "../crates/codec/vaco-codec-qoi", optional = true }
@@ -127,7 +128,9 @@ vaco-format-avlanguage = { path = "../crates/format/vaco-format-avlanguage", opt
 vaco-format-core = { path = "../crates/format/vaco-format-core", optional = true }
 vaco-format-dv = { path = "../crates/format/vaco-format-dv", optional = true }
 vaco-format-ebml = { path = "../crates/format/vaco-format-ebml", optional = true }
+vaco-format-gxf = { path = "../crates/format/vaco-format-gxf", optional = true }
 vaco-format-id3 = { path = "../crates/format/vaco-format-id3", optional = true }
+vaco-format-imf = { path = "../crates/format/vaco-format-imf", optional = true }
 vaco-format-isom = { path = "../crates/format/vaco-format-isom", optional = true }
 vaco-format-misc = { path = "../crates/format/vaco-format-misc", optional = true }
 vaco-format-misc-audio = { path = "../crates/format/vaco-format-misc-audio", optional = true }
@@ -175,8 +178,11 @@ vaco-protocol-ipfs = { path = "../crates/io/vaco-protocol-ipfs", optional = true
 vaco-protocol-local = { path = "../crates/io/vaco-protocol-local", optional = true }
 vaco-protocol-rist = { path = "../crates/io/vaco-protocol-rist", optional = true }
 vaco-protocol-rtmp = { path = "../crates/io/vaco-protocol-rtmp", optional = true }
+vaco-protocol-rtp = { path = "../crates/io/vaco-protocol-rtp", optional = true }
+vaco-protocol-sctp = { path = "../crates/io/vaco-protocol-sctp", optional = true }
 vaco-protocol-socket = { path = "../crates/io/vaco-protocol-socket", optional = true }
 vaco-protocol-srt = { path = "../crates/io/vaco-protocol-srt", optional = true }
+vaco-protocol-srtp = { path = "../crates/io/vaco-protocol-srtp", optional = true }
 vaco-protocol-tls = { path = "../crates/io/vaco-protocol-tls", optional = true }
 vaco-protocol-wrap = { path = "../crates/io/vaco-protocol-wrap", optional = true }
 vaco-registry = { path = "../crates/registry/vaco-registry", optional = true }
@@ -217,6 +223,7 @@ default = [
     "codec-mpeg12",
     "codec-mpegaudio",
     "codec-msac",
+    "codec-opus",
     "codec-png",
     "codec-pnm",
     "codec-qoi",
@@ -280,7 +287,9 @@ default = [
     "format-core",
     "format-dv",
     "format-ebml",
+    "format-gxf",
     "format-id3",
+    "format-imf",
     "format-isom",
     "format-misc",
     "format-misc-audio",
@@ -324,8 +333,11 @@ default = [
     "protocol-local",
     "protocol-rist",
     "protocol-rtmp",
+    "protocol-rtp",
+    "protocol-sctp",
     "protocol-socket",
     "protocol-srt",
+    "protocol-srtp",
     "protocol-tls",
     "protocol-wrap",
     "registry",
@@ -363,6 +375,7 @@ codec-jpegxl = ["dep:vaco-codec-jpegxl", "dep:vaco-limits"]
 codec-mpeg12 = ["dep:vaco-codec-core", "dep:vaco-codec-mpeg12", "dep:vaco-limits", "dep:vaco-packet"]
 codec-mpegaudio = ["dep:vaco-codec-core", "dep:vaco-codec-mpegaudio", "dep:vaco-frame", "dep:vaco-limits", "dep:vaco-packet"]
 codec-msac = ["dep:vaco-codec-msac"]
+codec-opus = ["dep:vaco-codec-core", "dep:vaco-codec-opus", "dep:vaco-frame", "dep:vaco-limits", "dep:vaco-packet"]
 codec-png = ["dep:vaco-codec-png", "dep:vaco-frame", "dep:vaco-limits"]
 codec-pnm = ["dep:vaco-codec-pnm", "dep:vaco-core", "dep:vaco-frame", "dep:vaco-limits"]
 codec-qoi = ["dep:vaco-codec-qoi", "dep:vaco-frame", "dep:vaco-limits", "dep:vaco-pixfmt"]
@@ -426,7 +439,9 @@ format-avlanguage = ["dep:vaco-format-avlanguage"]
 format-core = ["dep:vaco-codec-core", "dep:vaco-core", "dep:vaco-format-core", "dep:vaco-io", "dep:vaco-limits", "dep:vaco-packet"]
 format-dv = ["dep:vaco-core", "dep:vaco-format-core", "dep:vaco-format-dv", "dep:vaco-io", "dep:vaco-limits"]
 format-ebml = ["dep:vaco-format-ebml", "dep:vaco-io"]
+format-gxf = ["dep:vaco-core", "dep:vaco-format-core", "dep:vaco-format-gxf", "dep:vaco-io"]
 format-id3 = ["dep:vaco-format-id3", "dep:vaco-limits"]
+format-imf = ["dep:vaco-format-imf", "dep:vaco-limits"]
 format-isom = ["dep:vaco-format-isom", "dep:vaco-limits"]
 format-misc = ["dep:vaco-core", "dep:vaco-format-core", "dep:vaco-format-misc", "dep:vaco-io"]
 format-misc-audio = ["dep:vaco-core", "dep:vaco-format-core", "dep:vaco-format-misc-audio", "dep:vaco-io"]
@@ -470,8 +485,11 @@ protocol-ipfs = ["dep:vaco-protocol-ipfs"]
 protocol-local = ["dep:vaco-protocol-local"]
 protocol-rist = ["dep:vaco-protocol-rist", "dep:vaco-rtp"]
 protocol-rtmp = ["dep:vaco-limits", "dep:vaco-protocol-rtmp"]
+protocol-rtp = ["dep:vaco-protocol-rtp"]
+protocol-sctp = ["dep:vaco-protocol-sctp"]
 protocol-socket = ["dep:vaco-protocol-socket"]
 protocol-srt = ["dep:vaco-limits", "dep:vaco-protocol-srt"]
+protocol-srtp = ["dep:vaco-protocol-srtp"]
 protocol-tls = ["dep:vaco-protocol-tls"]
 protocol-wrap = ["dep:vaco-protocol-wrap"]
 registry = ["dep:vaco-core", "dep:vaco-format-core", "dep:vaco-io", "dep:vaco-limits", "dep:vaco-registry"]
@@ -1179,6 +1197,14 @@ bench = false
 required-features = ["filter-graph"]
 
 [[bin]]
+name = "gxf_demux"
+path = "fuzz_targets/gxf_demux.rs"
+test = false
+doc = false
+bench = false
+required-features = ["format-gxf"]
+
+[[bin]]
 name = "h263_decode"
 path = "fuzz_targets/h263_decode.rs"
 test = false
@@ -1217,6 +1243,14 @@ test = false
 doc = false
 bench = false
 required-features = ["demux-image2"]
+
+[[bin]]
+name = "imf_xml_parse"
+path = "fuzz_targets/imf_xml_parse.rs"
+test = false
+doc = false
+bench = false
+required-features = ["format-imf"]
 
 [[bin]]
 name = "io_buffered_reader"
@@ -1491,6 +1525,14 @@ bench = false
 required-features = ["demux-ogg"]
 
 [[bin]]
+name = "opus_decode"
+path = "fuzz_targets/opus_decode.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-opus"]
+
+[[bin]]
 name = "packet_from_slice"
 path = "fuzz_targets/packet_from_slice.rs"
 test = false
@@ -1755,6 +1797,14 @@ bench = false
 required-features = ["protocol-rtmp"]
 
 [[bin]]
+name = "protocol_sctp_parse"
+path = "fuzz_targets/protocol_sctp_parse.rs"
+test = false
+doc = false
+bench = false
+required-features = ["protocol-sctp"]
+
+[[bin]]
 name = "protocol_wrap_concat_list"
 path = "fuzz_targets/protocol_wrap_concat_list.rs"
 test = false
@@ -1835,6 +1885,14 @@ bench = false
 required-features = ["protocol-rist"]
 
 [[bin]]
+name = "rtp_demux"
+path = "fuzz_targets/rtp_demux.rs"
+test = false
+doc = false
+bench = false
+required-features = ["protocol-rtp"]
+
+[[bin]]
 name = "rtp_header_parse"
 path = "fuzz_targets/rtp_header_parse.rs"
 test = false
@@ -1905,6 +1963,14 @@ test = false
 doc = false
 bench = false
 required-features = ["protocol-srt"]
+
+[[bin]]
+name = "srtp_unprotect"
+path = "fuzz_targets/srtp_unprotect.rs"
+test = false
+doc = false
+bench = false
+required-features = ["protocol-srtp"]
 
 [[bin]]
 name = "subtitle_bitmap_demux"
