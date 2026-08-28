@@ -1,0 +1,45 @@
+# See docs/provenance.md for the schema.
+#
+# Transcription tier, stated plainly (planning/AGENT-CONSTRAINTS.md's
+# three-tier rule): these three tables are NOT tier 3 (checked line-by-line
+# against primary text). This session looked for a working local copy of
+# iso-iec-14496-10-2002-draft (the source cited below, already registered
+# in provenance/sources.toml) and found none reachable -- the only local
+# file matching that name is a 245-byte HTTP rejection page from a failed
+# fetch, not a spec document. Transcribed instead from well-established,
+# convergent knowledge of these exact 52-entry tables (identical across
+# numerous independent, mutually-uninvolved open-source H.264
+# implementations), backed by the structural tests in
+# crates/signal/vaco-codec-dsp-deblock/src/tables.rs (non-decreasing in
+# indexA/indexB and in bS, in-range, not byte-identical to each other) and,
+# doing the real work, an end-to-end black-box comparison against real
+# ffmpeg output on real content
+# (crates/codec/vaco-codec-h264/src/reconstruct.rs's own
+# cabac_i_only_matches_ffmpeg_with_deblocking_skipped and
+# cabac_i_only_reconstructs_without_error_and_mostly_matches_ffmpeg tests):
+# 98.97% byte-exact against ffmpeg's real deblocked output on #418's own
+# corpus, several whole frames fully byte-exact. A future agent who
+# obtains a working primary copy should re-check these three tables
+# against it line by line and upgrade this note, not just trust it because
+# the pixel comparison currently passes.
+
+[[table]]
+name   = "ALPHA_TABLE"
+file   = "crates/signal/vaco-codec-dsp-deblock/src/tables.rs"
+source = "iso-iec-14496-10-2002-draft"
+clause = "Table 8-16, alpha as a function of indexA"
+method = "transcribed"
+
+[[table]]
+name   = "BETA_TABLE"
+file   = "crates/signal/vaco-codec-dsp-deblock/src/tables.rs"
+source = "iso-iec-14496-10-2002-draft"
+clause = "Table 8-16, beta as a function of indexB"
+method = "transcribed"
+
+[[table]]
+name   = "TC0_TABLE"
+file   = "crates/signal/vaco-codec-dsp-deblock/src/tables.rs"
+source = "iso-iec-14496-10-2002-draft"
+clause = "Table 8-17, tC0 as a function of indexA and bS (columns 1..=3)"
+method = "transcribed"
