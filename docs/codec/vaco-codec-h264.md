@@ -49,39 +49,59 @@ only) use different, non-identity `significant_coeff_flag` context tables
 this crate does not transcribe — deferred alongside the macroblock layer
 that would need transform-size selection to reach them anyway.
 
-### CAVLC's own honest limit: measured-exclusion, not full Table 9-5 coverage
+### CAVLC's tables: re-verified against primary spec text, one gap remains
 
-An exhaustive pairwise prefix-conflict self-consistency check
-(`cavlc.rs`'s own test module) found several `TotalCoeff` rows in the
-hand-transcribed `COEFF_TOKEN_NC2`/`COEFF_TOKEN_NC4`/`COEFF_TOKEN_CHROMA_DC_420`
-columns, and several `tzVlcIndex` rows of `TOTAL_ZEROS_4X4`/
-`TOTAL_ZEROS_CHROMA_DC_422`, that were not mutually prefix-free — the same
-class of transcription bug the same day's MPEG-2 `CODED_BLOCK_PATTERN`
-finding named (a self-consistent-looking table can still have one entry's
-bit length wrong). Rather than guess at a fix with no way to verify it,
-`decode_coeff_token`/`decode_total_zeros` explicitly exclude exactly the
-implicated `TotalCoeff` values and return `Error::Unsupported` for them:
+The first pass's tables were transcribed from recollection. An exhaustive
+pairwise prefix-conflict self-consistency check (`cavlc.rs`'s own test
+module, kept permanently) found real conflicts in `COEFF_TOKEN_NC2`/`NC4`/
+`CHROMA_DC_420` and 7 of `TOTAL_ZEROS_4X4`'s 15 rows — the same class of
+transcription bug the same day's MPEG-2 `CODED_BLOCK_PATTERN` finding
+named. That check is necessary but was **not sufficient on its own**:
+cross-checking every table entry-by-entry against a fetched primary source
+(`provenance/vaco-codec-h264.toml`'s `iso-iec-14496-10-2002-draft`, the
+original ISO/IEC 14496-10 draft text) found *additional* wrong entries that
+had happened to still be prefix-free and so passed the self-consistency
+check cleanly — most strikingly, over half of `RUN_BEFORE`'s `zerosLeft >
+6` row, a table the first pass had reported as "fully clean."
 
-| Table | Excluded `TotalCoeff` |
-|---|---|
-| `COEFF_TOKEN_NC0` | none |
-| `COEFF_TOKEN_NC2` | 14, 15 |
-| `COEFF_TOKEN_NC4` | 13, 16 |
-| `COEFF_TOKEN_CHROMA_DC_420` | 3, 4 |
-| `COEFF_TOKEN_CHROMA_DC_422` | none |
-| `TOTAL_ZEROS_4X4` | 3, 8, 9, 10, 11, 12, 13 |
-| `TOTAL_ZEROS_CHROMA_DC_420` | none |
-| `TOTAL_ZEROS_CHROMA_DC_422` | 2, 3 |
-| `RUN_BEFORE` | none (fully clean) |
+**Corrected and now verified against that primary source, zero exclusions**:
+`COEFF_TOKEN_NC0`/`NC2`/`NC4`/`CHROMA_DC_420`, `TOTAL_ZEROS_4X4`/
+`CHROMA_DC_420`, `RUN_BEFORE`.
 
-Every table in this crate — including the ranges *not* excluded — is a D7
-clean-room transcription from the published ITU-T H.264 text with no second
-copy to diff against, so passing the self-consistency check raises
-confidence without being a verified-by-a-second-source transcription; see
-`provenance/vaco-codec-h264.toml` and `cavlc_tables.rs`'s own module doc for
-the full statement of that caveat, and `cabac_residual.rs`'s module doc for
-the analogous (and, for CABAC's `(m, n)` context-initialisation integers,
-stronger) caveat on that crate's tables.
+**Still not independently verified** (self-consistent, nothing more):
+`COEFF_TOKEN_CHROMA_DC_422` and `TOTAL_ZEROS_CHROMA_DC_422` — the 4:2:2
+chroma-DC columns (`nC == -2`). The fetched source is the *original* 2002
+baseline text, which predates 4:2:2 chroma-DC support (a later amendment's
+addition), so there is no corresponding table in it to check against.
+`TOTAL_ZEROS_CHROMA_DC_422`'s `TotalCoeff` 2 and 3 rows still fail even the
+self-consistency check and remain excluded (`Error::Unsupported`);
+`COEFF_TOKEN_CHROMA_DC_422` happens to pass that check, which — given how
+many of this file's now-corrected rows also once did — should not be read
+as more than "not yet known to be wrong."
+
+**A second, independent primary source was sought and not obtained**: the
+standing instruction asked for two independently-hosted editions
+cross-checked against each other. Only one was retrieved in this
+environment — `itu.int`'s own PDF gateway rejected direct downloads
+outright, and a second host's copy exceeded the fetch tool's size limit —
+so this correction rests on one fetched source, not two. Recorded as a
+real limitation rather than elided; a second copy would let a future pass
+close the 4:2:2 gap and add real cross-edition confidence to the tables
+already corrected once.
+
+**Also found and removed, not merely relocated**: the original
+implementation's `level_prefix >= 16` handling in `decode_level` (clause
+9.2.2.1) — a specific bit-shift formula for high-bit-depth content — does
+not appear anywhere in the fetched primary source, which has no case for
+`level_prefix` past 15 at all (that extension postdates this source's
+2002 baseline). Rather than keep an unconfirmed formula, `decode_level` now
+implements exactly what the verified text specifies (`levelSuffixSize` is a
+**fixed** 12 when `level_prefix == 15`, not `level_prefix - 3`; no `min(15)`
+clamp on `level_prefix` in the shift; the `+15` bump is conditioned on
+`== 15` exactly) and falls through to the base rule for `level_prefix > 15`
+rather than inventing a bump term for it. Whether a later, bit-depth-extended
+edition defines different behaviour there is an open question this crate
+does not answer.
 
 ### Real bugs the `h264_entropy` fuzz target found and fixed
 
@@ -123,6 +143,18 @@ against real `ffmpeg 8.1 -coder cavlc`/`-coder cabac` output,
 `tests/decoder.rs`) and then returns `Error::Unsupported` naming exactly
 that gap, the same choice `vaco-codec-aac` made for the boundary between
 "configuration/syntax resolved" and "samples produced".
+
+**Not attempted this pass, by choice**: enough of #419 to drive a real
+slice through both entropy paths and measure bit-exact consumption against
+real `libx264` output — the goal the coordinator's follow-up dispatch set
+once the tables were re-verified. Re-verifying the CAVLC tables against
+primary spec text (the section above) turned out to be the larger and more
+consequential half of that dispatch on its own — it found and corrected
+real errors a self-consistency check alone had missed — and attempting a
+necessarily narrow slice of the macroblock layer on top of it risked
+exactly the "wider scope over tables you cannot yet trust" outcome the
+dispatch explicitly said to avoid. Landing correct tables at a narrower
+scope, and reporting #419 as not reached, was the instructed fallback.
 
 ## Verification: what is and is not claimed
 

@@ -1,42 +1,53 @@
 [[table]]
 name   = "COEFF_TOKEN_NC0"
 file   = "crates/codec/vaco-codec-h264/src/cavlc_tables.rs"
-source = "itu-t-h264-202108"
+source = "iso-iec-14496-10-2002-draft"
 clause = "Table 9-5, coeff_token, column 0 <= nC < 2"
 method = "transcribed"
 
 [[table]]
 name   = "COEFF_TOKEN_NC2"
 file   = "crates/codec/vaco-codec-h264/src/cavlc_tables.rs"
-source = "itu-t-h264-202108"
+source = "iso-iec-14496-10-2002-draft"
 clause = "Table 9-5, coeff_token, column 2 <= nC < 4"
 method = "transcribed"
 
 [[table]]
 name   = "COEFF_TOKEN_NC4"
 file   = "crates/codec/vaco-codec-h264/src/cavlc_tables.rs"
-source = "itu-t-h264-202108"
+source = "iso-iec-14496-10-2002-draft"
 clause = "Table 9-5, coeff_token, column 4 <= nC < 8"
 method = "transcribed"
 
+# COEFF_TOKEN_NC0/NC2/NC4/CHROMA_DC_420 and TOTAL_ZEROS_4X4/CHROMA_DC_420
+# and RUN_BEFORE were re-transcribed directly against this source (fetched
+# 2026-08-28) after an exhaustive pairwise prefix-conflict self-consistency
+# check found the *original* transcription (against itu-t-h264-202108, by
+# recollection rather than a fetched copy) had real errors in several
+# TotalCoeff rows — not only the ones the self-consistency check itself
+# could find (a table can be internally consistent and still have one
+# entry's value wrong with no colliding neighbour, which is exactly what
+# turned up here: COEFF_TOKEN_NC2's TotalCoeff 3/4/16 rows and
+# TOTAL_ZEROS_4X4's tzVlcIndex 1 row were wrong despite passing that
+# check). Every row above and in the corresponding tables below was
+# checked entry-by-entry against this source's own Table 9-5/9-7/9-8/9-10
+# text, not merely re-run against itself.
+#
+# **What remains unverified, honestly**: `COEFF_TOKEN_CHROMA_DC_422` (the
+# 4:2:2 chroma-DC column, nC == -2) and `TOTAL_ZEROS_CHROMA_DC_422` — this
+# source is the original 2002 baseline text, which predates 4:2:2 chroma-DC
+# support (a later amendment's addition), so it has no Table 9-9b to check
+# either against. Both stay as the prior, self-consistency-only
+# transcription (with two `TOTAL_ZEROS_CHROMA_DC_422` rows still excluded
+# at runtime for exactly that reason — see `cavlc.rs`). Also unverified:
+# whether a later edition's `level_prefix >= 16` high-bit-depth extension
+# (clause 9.2.2.1) exists and what it specifies — this source's text has no
+# such case, so `cavlc.rs::decode_level`'s original `level_prefix >= 16`
+# handling (itself found to be unverifiable and not in this source at all)
+# was removed rather than left as an unconfirmed guess.
+#
 # COEFF_TOKEN_CHROMA_DC_420/422 (14 and 30 elements), TOTAL_ZEROS_4X4's 15
 # sub-arrays (16 elements at most each), TOTAL_ZEROS_CHROMA_DC_420/422 and
 # RUN_BEFORE are all below this project's 32-element provenance threshold
 # individually, so they carry no row of their own here — same convention
 # vaco-codec-jpeg.toml documents for HUFFVAL's twelve-entry arrays.
-#
-# All of Table 9-5/9-7/9-8/9-9/9-10's transcriptions in this crate carry the
-# same honest caveat `cavlc_tables.rs`'s own module doc states at length:
-# an exhaustive pairwise prefix-conflict self-consistency check (this
-# crate's own `tests::every_coeff_token_table_is_prefix_free_...` and
-# `tests::run_before_tables_are_prefix_free`) found and excluded several
-# TotalCoeff rows that were not mutually prefix-free — see
-# `crates/codec/vaco-codec-h264/src/cavlc.rs`'s `decode_coeff_token`/
-# `decode_total_zeros` for exactly which TotalCoeff values are excluded from
-# each table and why. The self-consistency check that catches a pairwise
-# conflict cannot catch every possible transcription error (an individual
-# entry's wrong length with no colliding neighbour survives it, as today's
-# MPEG-2 CODED_BLOCK_PATTERN finding demonstrated), so treat every table in
-# this file as provisional pending an independent second-source check,
-# exactly as this project already treats Teletext's Table 36 national
-# subsets.

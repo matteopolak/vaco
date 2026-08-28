@@ -38,13 +38,23 @@
 //! # Verification: what could be checked here, and what could not
 //!
 //! Both entropy functions are exercised against hand-built fixtures derived
-//! directly from this crate's own transcribed tables (a test-only VLC
-//! encoder for CAVLC, `vaco-codec-cabac`'s own encoder for CABAC — the same
+//! directly from this crate's own tables (a test-only VLC encoder for
+//! CAVLC, `vaco-codec-cabac`'s own encoder for CABAC — the same
 //! justification that crate gives for having one at all: an arithmetic
-//! coder cannot be tested against a hand-written bit pattern any other way),
-//! with exact-bit-length assertions written independently of the tables
-//! themselves as the direct mitigation for today's `CODED_BLOCK_PATTERN`
-//! lesson (a self-consistent table can still have one entry's length wrong).
+//! coder cannot be tested against a hand-written bit pattern any other
+//! way), plus an exhaustive pairwise prefix-conflict self-consistency
+//! check across every CAVLC table, kept permanently
+//! (`cavlc.rs::tests::every_coeff_token_table_is_prefix_free_and_matches_its_own_length`).
+//! That check, and a from-recollection first pass, are what the
+//! `CODED_BLOCK_PATTERN` lesson asked for as a floor — this crate went
+//! further, re-fetching a primary edition of the ITU-T H.264 text and
+//! checking every CAVLC table entry against it directly. That pass found
+//! the self-consistency check alone had missed real errors (several
+//! `COEFF_TOKEN_NC2` rows, and over half of `RUN_BEFORE`'s highest-risk
+//! row, were wrong despite being prefix-free) — see `cavlc_tables.rs`'s own
+//! module doc for the exhaustive list and for the two columns (the 4:2:2
+//! chroma-DC case) that source could not cover and remain
+//! self-consistency-only.
 //!
 //! **What this could not be checked against**: a real slice's exact bit
 //! consumption end-to-end. `SliceHeader::parse` correctly lands a

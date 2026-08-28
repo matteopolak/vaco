@@ -80,34 +80,31 @@ fn decode_coeff_token(r: &mut BitReader<'_>, nc: i32) -> Result<(u8, u8)> {
         }
         return Ok((trailing_ones, total_coeff));
     }
-    // Which `TotalCoeff` rows of each VLC column are excluded, and why: see
-    // the module doc's "Measured, not assumed" section. Each set below was
-    // derived by an exhaustive pairwise prefix-conflict check over the
-    // table it excludes from (`tests::every_coeff_token_table_...`), the
-    // same class of bug today's `CODED_BLOCK_PATTERN` lesson named — two
-    // entries in a hand-transcribed column turned out not to be mutually
-    // prefix-free, which self-consistency testing catches directly (unlike
-    // an individual entry's wrong *length* with no colliding neighbour,
-    // which it cannot). Excluding exactly the implicated rows, rather than
-    // guessing at a fix with no way to verify it, keeps every code this
-    // function does decode measured-consistent.
-    let (table, excluded): (&[(u8, u8, u8, u16)], &[u8]) = match nc {
-        -1 => (COEFF_TOKEN_CHROMA_DC_420, &[3, 4]),
-        -2 => (COEFF_TOKEN_CHROMA_DC_422, &[]),
-        0..=1 => (COEFF_TOKEN_NC0, &[]),
-        2..=3 => (COEFF_TOKEN_NC2, &[14, 15]),
-        4..=7 => (COEFF_TOKEN_NC4, &[13, 16]),
+    // `COEFF_TOKEN_NC0`/`NC2`/`NC4`/`CHROMA_DC_420` were re-transcribed
+    // directly from a primary edition of the ITU-T H.264 text (clause 9.2,
+    // Table 9-5) after an exhaustive pairwise prefix-conflict check found
+    // several `TotalCoeff` rows in the *original* hand transcription were
+    // not mutually prefix-free — the same class of bug the `CODED_BLOCK_PATTERN`
+    // finding named. All four now pass that same check with zero exclusions
+    // (`tests::every_coeff_token_table_is_prefix_free_and_matches_its_own_length`)
+    // and every entry was cross-checked against the fetched primary text
+    // directly, not merely re-run against itself. `COEFF_TOKEN_CHROMA_DC_422`
+    // (the 4:2:2 chroma-DC column, `nC == -2`) is the one column this pass
+    // could not re-verify — the primary edition fetched (the original 2002
+    // baseline text) predates 4:2:2 chroma-DC support, which a later
+    // amendment added — so it remains a same-source-as-before transcription,
+    // self-consistent but not independently checked; see the module doc.
+    let table: &[(u8, u8, u8, u16)] = match nc {
+        -1 => COEFF_TOKEN_CHROMA_DC_420,
+        -2 => COEFF_TOKEN_CHROMA_DC_422,
+        0..=1 => COEFF_TOKEN_NC0,
+        2..=3 => COEFF_TOKEN_NC2,
+        4..=7 => COEFF_TOKEN_NC4,
         _ => return Err(Error::InvalidData("coeff_token: nC out of range")),
     };
-    let filtered = table
-        .iter()
-        .filter(|&&(_, tc, _, _)| !excluded.contains(&tc))
-        .map(|&(t1, tc, len, code)| (len, code, (t1, tc)));
-    decode_prefix_free(r, filtered).ok_or(Error::Unsupported(
-        "vaco-codec-h264: coeff_token matched no measured-consistent table entry — either \
-         malformed input, or a TotalCoeff this crate's transcription of Table 9-5 has not \
-         confirmed self-consistent yet (see docs/codec/vaco-codec-h264.md)",
-    ))
+    let candidates = table.iter().map(|&(t1, tc, len, code)| (len, code, (t1, tc)));
+    decode_prefix_free(r, candidates)
+        .ok_or(Error::InvalidData("coeff_token: no matching code"))
 }
 
 /// Reads one bit at a time and returns the payload of the first table entry
@@ -142,12 +139,15 @@ fn decode_prefix_free<T: Copy>(
 /// `9-9a`/`9-9b` naming follows the row it plays, not a fixed edition's
 /// clause numbering, since editions have renumbered this table before).
 fn decode_total_zeros(r: &mut BitReader<'_>, kind: BlockKind, total_coeff: u8) -> Result<u8> {
-    // Same measured-exclusion approach as `decode_coeff_token`: these
-    // `tzVlcIndex` (== `TotalCoeff`) rows failed the exhaustive pairwise
-    // prefix-conflict check (`tests::` in this module) and are excluded
-    // rather than guessed at — see the module doc.
+    // `TOTAL_ZEROS_4X4`/`TOTAL_ZEROS_CHROMA_DC_420` were re-transcribed from
+    // the same primary edition as `decode_coeff_token`'s tables and now pass
+    // the exhaustive prefix-conflict check with zero exclusions.
+    // `TOTAL_ZEROS_CHROMA_DC_422` (the 4:2:2 chroma-DC 2x4 case) is the one
+    // table this pass could not re-verify — same reason as
+    // `COEFF_TOKEN_CHROMA_DC_422` — so its two rows that fail the
+    // self-consistency check are still excluded rather than guessed at.
     let (rows, excluded): (&[&[(u8, u8, u16)]], &[u8]) = match kind {
-        BlockKind::Block4x4 => (TOTAL_ZEROS_4X4, &[3, 8, 9, 10, 11, 12, 13]),
+        BlockKind::Block4x4 => (TOTAL_ZEROS_4X4, &[]),
         BlockKind::ChromaDc420 => (TOTAL_ZEROS_CHROMA_DC_420, &[]),
         BlockKind::ChromaDc422 => (TOTAL_ZEROS_CHROMA_DC_422, &[2, 3]),
     };
@@ -177,18 +177,32 @@ fn decode_run_before(r: &mut BitReader<'_>, zeros_left: u8) -> Result<u8> {
 /// One `level` value, clause 9.2.2.1, threading `suffix_length` across calls
 /// the way the specification's own state variable does.
 fn decode_level(r: &mut BitReader<'_>, suffix_length: &mut u32, is_first: bool, trailing_ones: u8) -> Result<i32> {
-    // Clause 9.2.2.1's `level_prefix` is a plain unary run with no bound of
-    // its own in the specification text, but every downstream computation
-    // here (`level_suffix_size = level_prefix - 3`, `1u32 << (level_prefix
-    // - 3)`) assumes a realistic magnitude. Found by fuzzing
-    // (`h264_entropy`): an adversarial run past roughly 35 shifts or adds
-    // its way into an overflow panic before any of it is validated. No
-    // real bit depth/QP combination this specification permits needs a
-    // `level_prefix` anywhere near this bound — capping well below where
-    // the arithmetic below could overflow (30 keeps `level_prefix - 3`
-    // under 32, so every shift amount used below stays in range) turns an
-    // adversarial run into a reported error instead of a bigger unary run
-    // finding a bigger overflow.
+    // Clause 9.2.2.1, re-verified against a primary edition's text after
+    // this crate's original transcription turned out wrong here (see the
+    // module doc's "Redone from primary spec text" section): `levelCode =
+    // (level_prefix << suffixLength) + level_suffix`, no `min(15)` clamp on
+    // `level_prefix`, and `levelSuffixSize` is `suffixLength` *except*
+    // `level_prefix == 14 && suffixLength == 0` (4) or `level_prefix == 15`
+    // (a fixed 12, not `level_prefix - 3` — that formula, and the
+    // `level_prefix >= 16` bump this crate invented on top of it, do not
+    // appear in the fetched primary text at all). The `level_prefix == 15`
+    // bump (`levelCode += 15`) is likewise conditioned on `== 15` exactly,
+    // not `>= 15`.
+    //
+    // What is *not* re-verified: whether a later edition (bit-depth
+    // extensions/FRExt, which postdate the fetched draft) defines different
+    // behaviour for `level_prefix > 15` specifically. This implementation
+    // uses the base/`otherwise` rule from the verified text for that range
+    // (`levelSuffixSize = suffixLength`) rather than the unverified
+    // `level_prefix >= 16` bump the original transcription invented — see
+    // `docs/codec/vaco-codec-h264.md`'s open question on this exact point.
+    //
+    // `level_prefix` is a plain unary run with no bound of its own in the
+    // specification text, so it is still capped (this crate's own choice,
+    // not the spec's) well below where the arithmetic below could
+    // overflow — found by fuzzing (`h264_entropy`) against the *previous*,
+    // wrongly-unbounded formula; the checked arithmetic kept below is
+    // defence in depth now that the formula itself is bounded.
     const LEVEL_PREFIX_MAX: u32 = 30;
     let mut level_prefix: u32 = 0;
     loop {
@@ -203,8 +217,8 @@ fn decode_level(r: &mut BitReader<'_>, suffix_length: &mut u32, is_first: bool, 
 
     let level_suffix_size = if level_prefix == 14 && *suffix_length == 0 {
         4
-    } else if level_prefix >= 15 {
-        level_prefix - 3
+    } else if level_prefix == 15 {
+        12
     } else {
         *suffix_length
     };
@@ -215,20 +229,12 @@ fn decode_level(r: &mut BitReader<'_>, suffix_length: &mut u32, is_first: bool, 
         0
     };
 
-    let mut level_code = (level_prefix.min(15) << *suffix_length)
+    let mut level_code = (level_prefix << *suffix_length)
         .checked_add(level_suffix)
         .ok_or(Error::InvalidData("level: level_code overflow"))?;
-    if level_prefix >= 15 && *suffix_length == 0 {
+    if level_prefix == 15 && *suffix_length == 0 {
         level_code = level_code
             .checked_add(15)
-            .ok_or(Error::InvalidData("level: level_code overflow"))?;
-    }
-    if level_prefix >= 16 {
-        let bump = (1u32 << (level_prefix - 3))
-            .checked_sub(4096)
-            .ok_or(Error::InvalidData("level: level_code underflow"))?;
-        level_code = level_code
-            .checked_add(bump)
             .ok_or(Error::InvalidData("level: level_code overflow"))?;
     }
     if is_first && trailing_ones < 3 {
@@ -403,9 +409,23 @@ mod tests {
 
     #[test]
     fn coeff_token_chroma_dc_420_literal_bitstrings() {
-        // TotalCoeff 3 and 4 are excluded (see `decode_coeff_token`'s
-        // measured-inconsistency note) — only 0..=2 are exercised here.
-        let cases: &[(&str, u8, u8)] = &[("01", 0, 0), ("1", 1, 1), ("001", 2, 2)];
+        // Full range, all now verified against the primary text (see the
+        // module doc's "Redone from primary spec text" section) — earlier
+        // versions of this test stopped at TotalCoeff 2 because 3 and 4
+        // failed self-consistency in the original transcription.
+        let cases: &[(&str, u8, u8)] = &[
+            ("01", 0, 0),
+            ("1", 1, 1),
+            ("001", 2, 2),
+            ("000011", 0, 3),
+            ("0000011", 1, 3),
+            ("0000010", 2, 3),
+            ("000101", 3, 3),
+            ("000010", 0, 4),
+            ("00000011", 1, 4),
+            ("00000010", 2, 4),
+            ("0000000", 3, 4),
+        ];
         for &(pattern, t1, tc) in cases {
             let data = bits(pattern);
             let mut r = BitReader::new(&data);
@@ -444,24 +464,15 @@ mod tests {
 
     #[test]
     fn every_coeff_token_table_is_prefix_free_and_matches_its_own_length() {
-        // This test checks the *full* transcribed tables, including the
-        // rows `decode_coeff_token` excludes at runtime — its job is to be
-        // the exhaustive pairwise check that *finds* self-inconsistent rows
-        // (which is how the exclusion lists in `decode_coeff_token`/
-        // `decode_total_zeros` were derived in the first place), so it
-        // reports every conflict rather than silently passing on a
-        // pre-filtered view. `KNOWN_INCONSISTENT` names exactly the pairs
-        // this check is expected to still find — anything beyond that list
-        // is a new, unexplained failure and must not be papered over here.
-        #[rustfmt::skip]
-        const KNOWN_INCONSISTENT: &[(u8, u8)] = &[
-            // (TrailingOnes, TotalCoeff) pairs inside COEFF_TOKEN_NC2/NC4/
-            // CHROMA_DC_420's excluded TotalCoeff sets — see
-            // `decode_coeff_token`'s module-doc-cited measurement.
-            (1, 14), (2, 15), (3, 15),
-            (3, 13), (2, 16), (3, 16),
-            (1, 3), (2, 3), (0, 4),
-        ];
+        // This is the exhaustive pairwise check that found the original
+        // transcription's conflicts in the first place (see the module
+        // doc's "Redone from primary spec text" section) — kept permanently
+        // per the coordinator's instruction, rather than run once and
+        // discarded. All five tables now pass with zero exceptions: every
+        // table here was re-verified against primary text, or (for
+        // `COEFF_TOKEN_CHROMA_DC_422`, the 4:2:2 case no fetched edition
+        // covered) happened to already be self-consistent, which is a
+        // weaker guarantee — see the module doc.
         for table in [
             COEFF_TOKEN_NC0,
             COEFF_TOKEN_NC2,
@@ -473,13 +484,8 @@ mod tests {
                 assert!(len > 0 && len <= 16, "implausible length {len}");
                 assert!(u32::from(code) < (1u32 << len), "code {code:#b} wider than len {len}");
             }
-            for (i, &(t1_a, tc_a, len_a, code_a)) in table.iter().enumerate() {
-                for &(t1_b, tc_b, len_b, code_b) in &table[i + 1..] {
-                    if KNOWN_INCONSISTENT.contains(&(t1_a, tc_a))
-                        || KNOWN_INCONSISTENT.contains(&(t1_b, tc_b))
-                    {
-                        continue;
-                    }
+            for (i, &(_t1_a, _tc_a, len_a, code_a)) in table.iter().enumerate() {
+                for &(_t1_b, _tc_b, len_b, code_b) in &table[i + 1..] {
                     let shorter = len_a.min(len_b);
                     let a = u32::from(code_a) >> (len_a - shorter);
                     let b = u32::from(code_b) >> (len_b - shorter);
@@ -562,23 +568,27 @@ mod tests {
     }
 
     #[test]
-    fn decode_coeff_token_refuses_an_excluded_total_coeff_rather_than_guess() {
-        // COEFF_TOKEN_NC2's TotalCoeff=14/15 rows failed the exhaustive
-        // prefix-conflict check (see the module doc) and are excluded.
-        // Feeding the (measured-inconsistent) bits this crate's own
-        // transcription assigned to (TrailingOnes=1, TotalCoeff=14) must
-        // not silently resolve to *some* answer.
+    fn decode_coeff_token_no_longer_excludes_totalcoeff_14_at_nc2() {
+        // Regression the other direction: COEFF_TOKEN_NC2's TotalCoeff=14
+        // row used to be excluded (see the module doc's "Redone from
+        // primary spec text" section) because the *original* transcription
+        // failed the prefix-conflict check there. The corrected table's
+        // real code for (TrailingOnes=1, TotalCoeff=14), per the primary
+        // text, is "00000000001011" — verify it decodes now rather than
+        // still refusing.
         let data = bits("00000000001011");
         let mut r = BitReader::new(&data);
-        let err = decode_coeff_token(&mut r, 2).unwrap_err();
-        assert!(matches!(err, Error::Unsupported(_)), "got {err:?}");
+        assert_eq!(decode_coeff_token(&mut r, 2).unwrap(), (1, 14));
     }
 
     #[test]
     fn decode_total_zeros_refuses_an_excluded_total_coeff_rather_than_guess() {
+        // `TOTAL_ZEROS_CHROMA_DC_422` is the one table this pass could not
+        // re-verify against primary text (see the module doc) — its
+        // TotalCoeff=2/3 rows remain excluded.
         let data = bits("000");
         let mut r = BitReader::new(&data);
-        let err = decode_total_zeros(&mut r, BlockKind::Block4x4, 3).unwrap_err();
+        let err = decode_total_zeros(&mut r, BlockKind::ChromaDc422, 2).unwrap_err();
         assert!(matches!(err, Error::Unsupported(_)), "got {err:?}");
     }
 
@@ -618,10 +628,27 @@ mod tests {
     /// `max_num_coeff=4`, decoded via `COEFF_TOKEN_NC2`.
     #[test]
     fn residual_block_cavlc_refuses_a_run_before_larger_than_zeros_left() {
-        let data = [113u8, 11, 126];
+        // Regression for a real bug the `h264_entropy` fuzz target found
+        // (originally against a since-corrected, differently-numbered table
+        // — see the module doc's "Redone from primary spec text" note —
+        // re-derived here against the verified tables so the scenario it
+        // guards stays exercised): a `run_before` decoded from the
+        // `zerosLeft > 6` row of Table 9-10 can be larger than the *actual*
+        // `zerosLeft` for a malformed stream (that row's codes cover values
+        // up to 14 regardless of which `zerosLeft` in `7..` selected it).
+        //
+        // coeff_token(T1=2, TC=2) at nC0: "001" (both coefficients are
+        // trailing ones, so no magnitude `level` is read at all).
+        // Two trailing-one signs: "00" (both positive).
+        // total_zeros(TotalCoeff=2), value=8: "0010" (Table 9-7's
+        // TotalCoeff=2 column).
+        // run_before(zerosLeft=8, using the `>6` row), value=14 (exceeds
+        // zerosLeft=8): "00000000001" (11 bits).
+        let pattern = "001".to_owned() + "00" + "0010" + "00000000001";
+        let data = bits(&pattern);
         let mut r = BitReader::new(&data);
         let mut b = budget();
-        let result = residual_block_cavlc(&mut r, 3, 4, &mut b);
+        let result = residual_block_cavlc(&mut r, 0, 16, &mut b);
         assert!(matches!(result, Err(Error::InvalidData(_))), "got {result:?}");
     }
 }

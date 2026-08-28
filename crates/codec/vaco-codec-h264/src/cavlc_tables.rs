@@ -2,23 +2,49 @@
 //! Table 9-5 (`coeff_token`), Tables 9-7/9-8/9-9 (`total_zeros`) and Table
 //! 9-10 (`run_before`), ITU-T H.264 (ISO/IEC 14496-10) clause 9.2.
 //!
-//! # Provenance and an honest confidence note
+//! # Redone from primary spec text (this crate's own second dispatch)
 //!
-//! Transcribed directly from the published ITU-T H.264 recommendation text
-//! (D7: public specifications, never an implementation) in a network-isolated
-//! clean-room environment, with no second copy available to diff against.
-//! `AGENT-CONSTRAINTS.md`'s general form of today's MPEG-2 `CODED_BLOCK_PATTERN`
-//! lesson applies directly here: a self-consistent (prefix-free, complete)
-//! table can still have an individual entry's bit *length* wrong, and that
-//! class of bug survives round-trip testing against an encoder built from the
-//! same table. The mitigation taken: `tests/cavlc.rs` asserts every single
-//! entry's bit length against a list written independently of this file (by
-//! hand, from the same spec tables, not derived from these constants), plus
-//! literal hard-coded bitstream fixtures for a sample spanning low and high
-//! `TotalCoeff`. That raises confidence; it does not make this table a
-//! verified-by-a-second-source transcription, and it should be treated as
-//! provisional in that specific sense until one exists — same standard this
-//! project already applied to Teletext's Table 36 national subsets.
+//! The first pass here was transcribed from recollection, and an exhaustive
+//! pairwise prefix-conflict self-consistency check
+//! (`cavlc.rs::tests::every_coeff_token_table_is_prefix_free_and_matches_its_own_length`,
+//! `tests::run_before_tables_are_prefix_free`) found real conflicts in 7 of
+//! `TOTAL_ZEROS_4X4`'s 15 rows plus several `COEFF_TOKEN_NC2`/`NC4`/
+//! `CHROMA_DC_420` rows — the general form of the same day's MPEG-2
+//! `CODED_BLOCK_PATTERN` finding. That check, kept permanently below, is
+//! necessary but was not sufficient on its own: cross-checking every table
+//! entry-by-entry against `provenance/vaco-codec-h264.toml`'s registered
+//! primary source (a fetched copy of the original ISO/IEC 14496-10 : 2002
+//! draft text, D7) found *additional* wrong entries that had happened to
+//! still be prefix-free — `COEFF_TOKEN_NC2`'s `TotalCoeff` 3/4/16 rows and
+//! `RUN_BEFORE`'s `zerosLeft > 6` row (over half its values) chief among
+//! them. All are corrected now, checked against that source line by line,
+//! not merely re-run against themselves.
+//!
+//! **What is verified against that primary source**: `COEFF_TOKEN_NC0`/
+//! `NC2`/`NC4`/`CHROMA_DC_420`, `TOTAL_ZEROS_4X4`/`CHROMA_DC_420`, and
+//! `RUN_BEFORE` — all pass the pairwise check with zero exclusions.
+//!
+//! **What is not**: `COEFF_TOKEN_CHROMA_DC_422` and
+//! `TOTAL_ZEROS_CHROMA_DC_422` (the 4:2:2 chroma-DC columns, `nC == -2`).
+//! The fetched primary source is the *original* 2002 baseline text, which
+//! predates 4:2:2 chroma-DC support — a later amendment's addition — so
+//! there is no Table 9-9b in it to check against. Both remain the original,
+//! self-consistency-only transcription; `TOTAL_ZEROS_CHROMA_DC_422`'s two
+//! rows that fail even that weaker check are still excluded at runtime
+//! (`cavlc.rs`), and `COEFF_TOKEN_CHROMA_DC_422` — which happens to pass
+//! self-consistency — should be read as no more trustworthy than that,
+//! given how many of this file's now-corrected rows also once did.
+//!
+//! Fetching a *second*, independent primary source (beyond the one
+//! self-consistency-driven correction pass above) to cross-check the
+//! now-corrected tables against, per the standing instruction, was
+//! attempted and only partly achieved: a full second full-text edition
+//! could not be retrieved in this environment (direct downloads from
+//! `itu.int`'s own PDF gateway were rejected outright by its edge/WAF, and
+//! a second host's copy exceeded the fetch tool's size limit), so the
+//! correction above rests on one fetched primary source rather than two
+//! independently cross-checked ones. Recorded as a real limitation, not
+//! elided.
 //!
 //! Each entry is `(bit_length, code)`, `code` being the bits as written in
 //! the standard, MSB-first, read as an unsigned integer of `bit_length` bits.
@@ -29,32 +55,32 @@ pub(crate) type CoeffTokenEntry = (u8, u8, u8, u16);
 /// Table 9-5, column `0 <= nC < 2`.
 #[rustfmt::skip]
 pub(crate) const COEFF_TOKEN_NC0: &[CoeffTokenEntry] = &[
-    (0, 0,  1, 0b1),
-    (0, 1,  6, 0b000101),
-    (1, 1,  2, 0b01),
-    (0, 2,  8, 0b00000111),
-    (1, 2,  6, 0b000100),
-    (2, 2,  3, 0b001),
-    (0, 3,  9, 0b000000111),
-    (1, 3,  8, 0b00000110),
-    (2, 3,  7, 0b0000101),
-    (3, 3,  5, 0b00011),
+    (0, 0, 1, 0b1),
+    (0, 1, 6, 0b000101),
+    (1, 1, 2, 0b01),
+    (0, 2, 8, 0b00000111),
+    (1, 2, 6, 0b000100),
+    (2, 2, 3, 0b001),
+    (0, 3, 9, 0b000000111),
+    (1, 3, 8, 0b00000110),
+    (2, 3, 7, 0b0000101),
+    (3, 3, 5, 0b00011),
     (0, 4, 10, 0b0000000111),
-    (1, 4,  9, 0b000000110),
-    (2, 4,  8, 0b00000101),
-    (3, 4,  6, 0b000011),
+    (1, 4, 9, 0b000000110),
+    (2, 4, 8, 0b00000101),
+    (3, 4, 6, 0b000011),
     (0, 5, 11, 0b00000000111),
     (1, 5, 10, 0b0000000110),
-    (2, 5,  9, 0b000000101),
-    (3, 5,  7, 0b0000100),
+    (2, 5, 9, 0b000000101),
+    (3, 5, 7, 0b0000100),
     (0, 6, 13, 0b0000000001111),
     (1, 6, 11, 0b00000000110),
     (2, 6, 10, 0b0000000101),
-    (3, 6,  8, 0b00000100),
+    (3, 6, 8, 0b00000100),
     (0, 7, 13, 0b0000000001011),
     (1, 7, 13, 0b0000000001110),
     (2, 7, 11, 0b00000000101),
-    (3, 7,  9, 0b000000100),
+    (3, 7, 9, 0b000000100),
     (0, 8, 13, 0b0000000001000),
     (1, 8, 13, 0b0000000001010),
     (2, 8, 13, 0b0000000001101),
@@ -91,45 +117,46 @@ pub(crate) const COEFF_TOKEN_NC0: &[CoeffTokenEntry] = &[
     (1, 16, 16, 0b0000000000000110),
     (2, 16, 16, 0b0000000000000101),
     (3, 16, 16, 0b0000000000001000),
+
 ];
 
 /// Table 9-5, column `2 <= nC < 4`.
 #[rustfmt::skip]
 pub(crate) const COEFF_TOKEN_NC2: &[CoeffTokenEntry] = &[
-    (0, 0,  2, 0b11),
-    (0, 1,  6, 0b001011),
-    (1, 1,  2, 0b10),
-    (0, 2,  6, 0b000111),
-    (1, 2,  5, 0b00111),
-    (2, 2,  3, 0b011),
-    (0, 3,  7, 0b0000111),
-    (1, 3,  6, 0b000110),
-    (2, 3,  6, 0b001010),
-    (3, 3,  4, 0b0101),
-    (0, 4,  8, 0b00000111),
-    (1, 4,  6, 0b000101),
-    (2, 4,  6, 0b001001),
-    (3, 4,  4, 0b0100),
-    (0, 5,  8, 0b00000100),
-    (1, 5,  7, 0b0000110),
-    (2, 5,  7, 0b0000101),
-    (3, 5,  5, 0b00110),
-    (0, 6,  9, 0b000000111),
-    (1, 6,  8, 0b00000110),
-    (2, 6,  8, 0b00000101),
-    (3, 6,  6, 0b001000),
-    (0, 7,  11, 0b00000001111),
-    (1, 7,  9, 0b000000110),
-    (2, 7,  9, 0b000000101),
-    (3, 7,  6, 0b000100),
-    (0, 8,  11, 0b00000001011),
-    (1, 8,  11, 0b00000001110),
-    (2, 8,  11, 0b00000001101),
-    (3, 8,  7, 0b0000100),
-    (0, 9,  12, 0b000000001111),
-    (1, 9,  11, 0b00000001010),
-    (2, 9,  11, 0b00000001001),
-    (3, 9,  9, 0b000000100),
+    (0, 0, 2, 0b11),
+    (0, 1, 6, 0b001011),
+    (1, 1, 2, 0b10),
+    (0, 2, 6, 0b000111),
+    (1, 2, 5, 0b00111),
+    (2, 2, 3, 0b011),
+    (0, 3, 7, 0b0000111),
+    (1, 3, 6, 0b001010),
+    (2, 3, 6, 0b001001),
+    (3, 3, 4, 0b0101),
+    (0, 4, 8, 0b00000111),
+    (1, 4, 6, 0b000110),
+    (2, 4, 6, 0b000101),
+    (3, 4, 4, 0b0100),
+    (0, 5, 8, 0b00000100),
+    (1, 5, 7, 0b0000110),
+    (2, 5, 7, 0b0000101),
+    (3, 5, 5, 0b00110),
+    (0, 6, 9, 0b000000111),
+    (1, 6, 8, 0b00000110),
+    (2, 6, 8, 0b00000101),
+    (3, 6, 6, 0b001000),
+    (0, 7, 11, 0b00000001111),
+    (1, 7, 9, 0b000000110),
+    (2, 7, 9, 0b000000101),
+    (3, 7, 6, 0b000100),
+    (0, 8, 11, 0b00000001011),
+    (1, 8, 11, 0b00000001110),
+    (2, 8, 11, 0b00000001101),
+    (3, 8, 7, 0b0000100),
+    (0, 9, 12, 0b000000001111),
+    (1, 9, 11, 0b00000001010),
+    (2, 9, 11, 0b00000001001),
+    (3, 9, 9, 0b000000100),
     (0, 10, 12, 0b000000001011),
     (1, 10, 12, 0b000000001110),
     (2, 10, 12, 0b000000001101),
@@ -152,51 +179,52 @@ pub(crate) const COEFF_TOKEN_NC2: &[CoeffTokenEntry] = &[
     (3, 14, 13, 0b0000000001000),
     (0, 15, 14, 0b00000000001001),
     (1, 15, 14, 0b00000000001000),
-    (2, 15, 13, 0b0000000000101),
-    (3, 15, 14, 0b00000000001010),
-    (0, 16, 14, 0b00000000000101),
-    (1, 16, 14, 0b00000000000100),
-    (2, 16, 14, 0b00000000000011),
-    (3, 16, 14, 0b00000000000110),
+    (2, 15, 14, 0b00000000001010),
+    (3, 15, 13, 0b0000000000001),
+    (0, 16, 14, 0b00000000000111),
+    (1, 16, 14, 0b00000000000110),
+    (2, 16, 14, 0b00000000000101),
+    (3, 16, 14, 0b00000000000100),
+
 ];
 
 /// Table 9-5, column `4 <= nC < 8`.
 #[rustfmt::skip]
 pub(crate) const COEFF_TOKEN_NC4: &[CoeffTokenEntry] = &[
-    (0, 0,  4, 0b1111),
-    (0, 1,  6, 0b001111),
-    (1, 1,  4, 0b1110),
-    (0, 2,  6, 0b001011),
-    (1, 2,  5, 0b01111),
-    (2, 2,  4, 0b1101),
-    (0, 3,  6, 0b001000),
-    (1, 3,  5, 0b01100),
-    (2, 3,  5, 0b01110),
-    (3, 3,  4, 0b1100),
-    (0, 4,  7, 0b0001111),
-    (1, 4,  5, 0b01010),
-    (2, 4,  5, 0b01011),
-    (3, 4,  4, 0b1011),
-    (0, 5,  7, 0b0001011),
-    (1, 5,  5, 0b01000),
-    (2, 5,  5, 0b01001),
-    (3, 5,  4, 0b1010),
-    (0, 6,  7, 0b0001001),
-    (1, 6,  6, 0b001110),
-    (2, 6,  6, 0b001101),
-    (3, 6,  4, 0b1001),
-    (0, 7,  7, 0b0001000),
-    (1, 7,  6, 0b001010),
-    (2, 7,  6, 0b001001),
-    (3, 7,  4, 0b1000),
-    (0, 8,  8, 0b00001111),
-    (1, 8,  7, 0b0001110),
-    (2, 8,  7, 0b0001101),
-    (3, 8,  5, 0b01101),
-    (0, 9,  8, 0b00001011),
-    (1, 9,  8, 0b00001110),
-    (2, 9,  7, 0b0001010),
-    (3, 9,  6, 0b001100),
+    (0, 0, 4, 0b1111),
+    (0, 1, 6, 0b001111),
+    (1, 1, 4, 0b1110),
+    (0, 2, 6, 0b001011),
+    (1, 2, 5, 0b01111),
+    (2, 2, 4, 0b1101),
+    (0, 3, 6, 0b001000),
+    (1, 3, 5, 0b01100),
+    (2, 3, 5, 0b01110),
+    (3, 3, 4, 0b1100),
+    (0, 4, 7, 0b0001111),
+    (1, 4, 5, 0b01010),
+    (2, 4, 5, 0b01011),
+    (3, 4, 4, 0b1011),
+    (0, 5, 7, 0b0001011),
+    (1, 5, 5, 0b01000),
+    (2, 5, 5, 0b01001),
+    (3, 5, 4, 0b1010),
+    (0, 6, 7, 0b0001001),
+    (1, 6, 6, 0b001110),
+    (2, 6, 6, 0b001101),
+    (3, 6, 4, 0b1001),
+    (0, 7, 7, 0b0001000),
+    (1, 7, 6, 0b001010),
+    (2, 7, 6, 0b001001),
+    (3, 7, 4, 0b1000),
+    (0, 8, 8, 0b00001111),
+    (1, 8, 7, 0b0001110),
+    (2, 8, 7, 0b0001101),
+    (3, 8, 5, 0b01101),
+    (0, 9, 8, 0b00001011),
+    (1, 9, 8, 0b00001110),
+    (2, 9, 7, 0b0001010),
+    (3, 9, 6, 0b001100),
     (0, 10, 9, 0b000001111),
     (1, 10, 8, 0b00001010),
     (2, 10, 8, 0b00001101),
@@ -210,9 +238,9 @@ pub(crate) const COEFF_TOKEN_NC4: &[CoeffTokenEntry] = &[
     (2, 12, 9, 0b000001101),
     (3, 12, 8, 0b00001000),
     (0, 13, 10, 0b0000001101),
-    (1, 13, 9, 0b000001100),
+    (1, 13, 9, 0b000000111),
     (2, 13, 9, 0b000001001),
-    (3, 13, 9, 0b000000001),
+    (3, 13, 9, 0b000001100),
     (0, 14, 10, 0b0000001001),
     (1, 14, 10, 0b0000001100),
     (2, 14, 10, 0b0000001011),
@@ -225,6 +253,7 @@ pub(crate) const COEFF_TOKEN_NC4: &[CoeffTokenEntry] = &[
     (1, 16, 10, 0b0000000100),
     (2, 16, 10, 0b0000000011),
     (3, 16, 10, 0b0000000010),
+
 ];
 
 /// Table 9-5, column `nC == -1` — chroma DC, 4:2:0 (2x2 block, `maxNumCoeff = 4`).
@@ -240,10 +269,11 @@ pub(crate) const COEFF_TOKEN_CHROMA_DC_420: &[CoeffTokenEntry] = &[
     (1, 3, 7, 0b0000011),
     (2, 3, 7, 0b0000010),
     (3, 3, 6, 0b000101),
-    (0, 4, 6, 0b000001),
+    (0, 4, 6, 0b000010),
     (1, 4, 8, 0b00000011),
     (2, 4, 8, 0b00000010),
     (3, 4, 7, 0b0000000),
+
 ];
 
 /// Table 9-5, column `nC == -2` — chroma DC, 4:2:2 (2x4 block, `maxNumCoeff = 8`).
@@ -302,51 +332,22 @@ pub(crate) type TotalZerosEntry = (u8, u8, u16);
 /// (`= TotalCoeff`, 1..=15). Row `i` (0-based) is `tzVlcIndex = i + 1`.
 #[rustfmt::skip]
 pub(crate) const TOTAL_ZEROS_4X4: &[&[TotalZerosEntry]] = &[
-    // tzVlcIndex = 1
-    &[(0,1,0b1),(1,3,0b011),(2,3,0b010),(3,4,0b0011),(4,4,0b0010),(5,5,0b00011),
-      (6,5,0b00010),(7,6,0b000011),(8,6,0b000010),(9,7,0b0000011),(10,7,0b0000010),
-      (11,8,0b00000011),(12,8,0b00000010),(13,9,0b000000011),(14,9,0b000000010),
-      (15,9,0b000000001)],
-    // tzVlcIndex = 2
-    &[(0,3,0b111),(1,3,0b110),(2,3,0b101),(3,3,0b100),(4,3,0b011),(5,4,0b0101),
-      (6,4,0b0100),(7,4,0b0011),(8,4,0b0010),(9,5,0b00011),(10,5,0b00010),
-      (11,6,0b000011),(12,6,0b000010),(13,6,0b000001),(14,6,0b000000)],
-    // tzVlcIndex = 3
-    &[(0,4,0b0101),(1,3,0b111),(2,3,0b110),(3,3,0b101),(4,4,0b0100),(5,4,0b0011),
-      (6,3,0b100),(7,3,0b011),(8,4,0b0010),(9,5,0b00001),(10,5,0b00000),
-      (11,6,0b000001),(12,5,0b00001),(13,6,0b000000)],
-    // tzVlcIndex = 4
-    &[(0,5,0b00011),(1,3,0b111),(2,4,0b0101),(3,4,0b0100),(4,3,0b110),(5,3,0b101),
-      (6,3,0b100),(7,4,0b0011),(8,3,0b011),(9,4,0b0010),(10,5,0b00010),
-      (11,5,0b00001),(12,5,0b00000)],
-    // tzVlcIndex = 5
-    &[(0,4,0b0101),(1,4,0b0100),(2,4,0b0011),(3,3,0b111),(4,3,0b110),(5,3,0b101),
-      (6,3,0b100),(7,3,0b011),(8,4,0b0010),(9,5,0b00001),(10,4,0b0001),(11,5,0b00000)],
-    // tzVlcIndex = 6
-    &[(0,6,0b000001),(1,5,0b00001),(2,3,0b111),(3,3,0b110),(4,3,0b101),(5,3,0b100),
-      (6,3,0b011),(7,3,0b010),(8,4,0b0001),(9,3,0b001),(10,6,0b000000)],
-    // tzVlcIndex = 7
-    &[(0,6,0b000001),(1,5,0b00001),(2,3,0b101),(3,3,0b100),(4,3,0b011),(5,2,0b11),
-      (6,3,0b010),(7,4,0b0001),(8,3,0b001),(9,6,0b000000)],
-    // tzVlcIndex = 8
-    &[(0,6,0b000001),(1,3,0b000),(2,3,0b001),(3,4,0b0001),(4,3,0b011),(5,3,0b010),
-      (6,2,0b10),(7,2,0b11),(8,6,0b000000)],
-    // tzVlcIndex = 9
-    &[(0,6,0b000001),(1,1,0b1),(2,3,0b001),(3,3,0b010),(4,2,0b01),(5,2,0b11),
-      (6,3,0b000),(7,6,0b000000)],
-    // tzVlcIndex = 10
-    &[(0,5,0b00001),(1,1,0b1),(2,2,0b01),(3,3,0b001),(4,2,0b10),(5,3,0b000),
-      (6,5,0b00000)],
-    // tzVlcIndex = 11
-    &[(0,4,0b0001),(1,1,0b1),(2,2,0b01),(3,2,0b00),(4,2,0b10),(5,4,0b0000)],
-    // tzVlcIndex = 12
-    &[(0,4,0b0001),(1,1,0b1),(2,1,0b0),(3,2,0b01),(4,4,0b0000)],
-    // tzVlcIndex = 13
-    &[(0,3,0b001),(1,1,0b1),(2,1,0b0),(3,3,0b000)],
-    // tzVlcIndex = 14
-    &[(0,2,0b01),(1,1,0b1),(2,2,0b00)],
-    // tzVlcIndex = 15
-    &[(0,1,0b0),(1,1,0b1)],
+    &[(0,1,0b1), (1,3,0b011), (2,3,0b010), (3,4,0b0011), (4,4,0b0010), (5,5,0b00011), (6,5,0b00010), (7,6,0b000011), (8,6,0b000010), (9,7,0b0000011), (10,7,0b0000010), (11,8,0b00000011), (12,8,0b00000010), (13,9,0b000000011), (14,9,0b000000010), (15,9,0b000000001)],
+    &[(0,3,0b111), (1,3,0b110), (2,3,0b101), (3,3,0b100), (4,3,0b011), (5,4,0b0101), (6,4,0b0100), (7,4,0b0011), (8,4,0b0010), (9,5,0b00011), (10,5,0b00010), (11,6,0b000011), (12,6,0b000010), (13,6,0b000001), (14,6,0b000000)],
+    &[(0,4,0b0101), (1,3,0b111), (2,3,0b110), (3,3,0b101), (4,4,0b0100), (5,4,0b0011), (6,3,0b100), (7,3,0b011), (8,4,0b0010), (9,5,0b00011), (10,5,0b00010), (11,6,0b000001), (12,5,0b00001), (13,6,0b000000)],
+    &[(0,5,0b00011), (1,3,0b111), (2,4,0b0101), (3,4,0b0100), (4,3,0b110), (5,3,0b101), (6,3,0b100), (7,4,0b0011), (8,3,0b011), (9,4,0b0010), (10,5,0b00010), (11,5,0b00001), (12,5,0b00000)],
+    &[(0,4,0b0101), (1,4,0b0100), (2,4,0b0011), (3,3,0b111), (4,3,0b110), (5,3,0b101), (6,3,0b100), (7,3,0b011), (8,4,0b0010), (9,5,0b00001), (10,4,0b0001), (11,5,0b00000)],
+    &[(0,6,0b000001), (1,5,0b00001), (2,3,0b111), (3,3,0b110), (4,3,0b101), (5,3,0b100), (6,3,0b011), (7,3,0b010), (8,4,0b0001), (9,3,0b001), (10,6,0b000000)],
+    &[(0,6,0b000001), (1,5,0b00001), (2,3,0b101), (3,3,0b100), (4,3,0b011), (5,2,0b11), (6,3,0b010), (7,4,0b0001), (8,3,0b001), (9,6,0b000000)],
+    &[(0,6,0b000001), (1,4,0b0001), (2,5,0b00001), (3,3,0b011), (4,2,0b11), (5,2,0b10), (6,3,0b010), (7,3,0b001), (8,6,0b000000)],
+    &[(0,6,0b000001), (1,6,0b000000), (2,4,0b0001), (3,2,0b11), (4,2,0b10), (5,3,0b001), (6,2,0b01), (7,5,0b00001)],
+    &[(0,5,0b00001), (1,5,0b00000), (2,3,0b001), (3,2,0b11), (4,2,0b10), (5,2,0b01), (6,4,0b0001)],
+    &[(0,4,0b0000), (1,4,0b0001), (2,3,0b001), (3,3,0b010), (4,1,0b1), (5,3,0b011)],
+    &[(0,4,0b0000), (1,4,0b0001), (2,2,0b01), (3,1,0b1), (4,3,0b001)],
+    &[(0,3,0b000), (1,3,0b001), (2,1,0b1), (3,2,0b01)],
+    &[(0,2,0b00), (1,2,0b01), (2,1,0b1)],
+    &[(0,1,0b0), (1,1,0b1)],
+
 ];
 
 /// Table 9-9a — `total_zeros` for a chroma DC 2x2 block (4:2:0), indexed by
@@ -381,22 +382,12 @@ pub(crate) type RunBeforeEntry = (u8, u8, u16);
 /// `zerosLeft > 6`.
 #[rustfmt::skip]
 pub(crate) const RUN_BEFORE: &[&[RunBeforeEntry]] = &[
-    // zerosLeft == 1
-    &[(0,1,0b1),(1,1,0b0)],
-    // zerosLeft == 2
-    &[(0,1,0b1),(1,2,0b01),(2,2,0b00)],
-    // zerosLeft == 3
-    &[(0,2,0b11),(1,2,0b10),(2,2,0b01),(3,2,0b00)],
-    // zerosLeft == 4
-    &[(0,2,0b11),(1,2,0b10),(2,2,0b01),(3,3,0b001),(4,3,0b000)],
-    // zerosLeft == 5
-    &[(0,2,0b11),(1,2,0b10),(2,3,0b011),(3,3,0b010),(4,3,0b001),(5,3,0b000)],
-    // zerosLeft == 6
-    &[(0,2,0b11),(1,3,0b000),(2,3,0b001),(3,3,0b011),(4,3,0b010),(5,3,0b101),(6,3,0b100)],
-    // zerosLeft > 6: 11-bit prefix (up to 3 ones), then 0, otherwise the
-    // exp-golomb-like tail per clause 9.2.3's note (encoded in code below).
-    &[(0,3,0b111),(1,3,0b110),(2,3,0b101),(3,3,0b100),(4,3,0b011),(5,4,0b0101),
-      (6,4,0b0100),(7,4,0b0011),(8,4,0b0010),(9,5,0b00011),(10,5,0b00010),
-      (11,6,0b000011),(12,6,0b000010),(13,6,0b000001),(14,7,0b0000001),
-      (15,7,0b0000000)],
+    &[(0,1,0b1), (1,1,0b0)],
+    &[(0,1,0b1), (1,2,0b01), (2,2,0b00)],
+    &[(0,2,0b11), (1,2,0b10), (2,2,0b01), (3,2,0b00)],
+    &[(0,2,0b11), (1,2,0b10), (2,2,0b01), (3,3,0b001), (4,3,0b000)],
+    &[(0,2,0b11), (1,2,0b10), (2,3,0b011), (3,3,0b010), (4,3,0b001), (5,3,0b000)],
+    &[(0,2,0b11), (1,3,0b000), (2,3,0b001), (3,3,0b011), (4,3,0b010), (5,3,0b101), (6,3,0b100)],
+    &[(0,3,0b111), (1,3,0b110), (2,3,0b101), (3,3,0b100), (4,3,0b011), (5,3,0b010), (6,3,0b001), (7,4,0b0001), (8,5,0b00001), (9,6,0b000001), (10,7,0b0000001), (11,8,0b00000001), (12,9,0b000000001), (13,10,0b0000000001), (14,11,0b00000000001)],
+
 ];
