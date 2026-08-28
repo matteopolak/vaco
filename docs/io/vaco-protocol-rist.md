@@ -2,29 +2,45 @@
 
 ## What it is
 
-RIST (Reliable Internet Stream Transport) Simple Profile: RTP/RTCP framing
-(reused from `vaco-rtp`, layer 1), the RIST-specific RTCP messages Simple
-Profile adds (bitmask/range retransmission requests, the optional RTT-echo
-message), retransmitted-packet matching, and the receiver's two-section
-reorder/retransmission-reassembly buffer. This is PR-11a of epic PR-11/#63
-— one of three packages (#558/#559/#560). Like `vaco-protocol-srt`'s
-PR-10a, there is no `rist:` `Protocol` implementation and no registry
-entry here: no socket, no clock. GRE tunnelling, DTLS/PSK encryption and
-authentication (Main Profile, TR-06-2) are #559; bonding, the statistics
-surface, and the interop matrix are #560.
+RIST (Reliable Internet Stream Transport) Simple and Main Profile:
+RTP/RTCP framing (reused from `vaco-rtp`, layer 1), the RIST-specific
+RTCP messages Simple Profile adds (bitmask/range retransmission requests,
+the optional RTT-echo message), retransmitted-packet matching, the
+receiver's two-section reorder/retransmission-reassembly buffer (#558,
+`TR-06-1`), GRE tunnelling, and Pre-Shared Key encryption (#559,
+`TR-06-2`). This is PR-11a/PR-11b of epic PR-11/#63 — two of three
+packages (#560 remains). Like `vaco-protocol-srt`'s PR-10a, there is no
+`rist:` `Protocol` implementation and no registry entry here: no socket,
+no clock. §6's DTLS is named blocked/deferred to PR-12 (the same T4-tiered
+gap already blocking WHIP/#619); §7.5's Annex D (EAP-SHA256-SRP6a
+authentication) is filed separately as #657, not built here — see that
+issue and this crate's own `lib.rs` docs for why the split is legitimate
+rather than a shortcut. Bonding, the statistics surface, and the interop
+matrix are #560.
 
 ## No reference implementation on this machine
 
 No `ffmpeg` build available here carries `librist` (`ffmpeg -protocols` /
 `ffmpeg -buildconf` list no `rist` entry). Every fact in this crate comes
-from `VSF TR-06-1:2020` (a freely published Technical Recommendation, CC
-BY-ND 4.0 — D7/D15-clean the same way SRT's IETF draft was) rather than a
-differential check. Tests are labelled the same way `vaco-protocol-srt`'s
-are: **draft-derived** (checked against the spec's own worked field
-layouts, tables, and Appendix A's numeric retransmission-request example)
-or **self-consistency** (this crate's own two sides — a fake sender that
-resends on request, a real `ReceiveBuffer` that requests — agreeing with
-each other).
+from `VSF TR-06-1:2020`/`TR-06-2:2022` (freely published Technical
+Recommendations, CC BY-ND 4.0 — D7/D15-clean the same way SRT's IETF
+draft was) rather than a differential check. Tests carry three
+evidence-class labels:
+
+- **RFC-vector-derived** — checked against a published RFC's own numeric
+  test vectors, genuinely independent of this crate's own code. Lives in
+  `vaco-crypto` (RFC 3686's AES-CTR vectors, RFC 7914's PBKDF2-HMAC-SHA256
+  vectors); this crate's `gre`/`keepalive`/`psk` modules build on those
+  without re-deriving them.
+- **draft-derived** — checked against the spec's own worked field
+  layouts, tables, and numeric examples: Appendix A's retransmission-
+  request scenario (#558), Appendix B's PBKDF2 key-derivation example
+  (#559, independently re-derived via Python's stdlib
+  `hashlib.pbkdf2_hmac` before being trusted, not merely read off the
+  page — see `vaco-crypto`'s own docs).
+- **self-consistency** — this crate's own two sides agreeing (a fake
+  sender/receiver pair completing a session, in both directions for
+  #559's PSK work).
 
 ## Patent posture (D4)
 
@@ -80,6 +96,27 @@ behind `patent-encumbered-rist`, `default = false`.**
   `a_permanently_lost_packet_is_eventually_given_up_on_while_the_rest_recover`,
   which relies on the deadline timeout rather than gap detection for that
   one packet.
+- `gre` (#559) — the GRE-over-UDP tunnel header (`TR-06-2` §5.1
+  `Fig. 1/2`: RFC 8086/2890's `C`/`K`/`S` flags plus the RIST-specific `H`
+  (PSK key length) and `RV` (RIST version) bits carved out of
+  `Reserved0`), the VSF Packet Header (§5.2 `Fig. 3`) and Reduced Overhead
+  Mode's own 4-byte header (§5.3.2 `Fig. 5`). Full Datagram Mode's
+  payload (a full layer-3 IP packet) and the Keep-Alive message's JSON
+  payload are both carried as opaque bytes on purpose — parsing either
+  would need a dependency (an IP-packet parser or a JSON crate) this
+  module has no reason to adopt for framing alone.
+- `keepalive` (#559) — the Keep-Alive message (§5.6.3/§5.6.4 `Fig. 8`):
+  48-bit MAC address plus the thirteen named capability flags (`X` through
+  `F`), including `D`/`T` which double as Disconnect/Reconnect signals on
+  the same message type (§5.6.5/§5.6.6). The JSON payload is opaque bytes
+  — see `gre`'s docs for why.
+- `psk` (#559) — §7.1-7.4's Pre-Shared Key encryption. Key derivation
+  (§7.3: PBKDF2-HMAC-SHA256, 1024 iterations, the GRE Key/Nonce field's 4
+  bytes as salt) and the IV construction (§7.2: the sequence number as
+  the counter block's top 4 bytes, 12 zero bytes following) both build
+  directly on `vaco-crypto`. §7.4's on-the-fly passphrase rotation and
+  §7.6's Future Nonce Announcement message are not built — the rotation
+  *policy* is a session concern above this crate's framing layer.
 
 ## What is not verified
 
@@ -91,7 +128,9 @@ control, SSRC filtering) are explicitly informative in the spec itself
 built as a result. Appendix B's suggested buffer sizes (1000 ms total,
 70 ms reorder section) are informative defaults this crate carries
 forward as its own defaults (`buffer::DEFAULT_TOTAL_MS`/
-`DEFAULT_REORDER_MS`), not values the spec requires.
+`DEFAULT_REORDER_MS`), not values the spec requires. §6 (DTLS) and Annex D
+(EAP-SHA256-SRP6a) are named blocked/deferred, not attempted — see #619
+and #657.
 
 ## How to change it
 
@@ -116,7 +155,8 @@ None yet — no `Protocol`, no `-h protocol=rist` options.
 
 ## Dependencies
 
-`vaco-core`, `vaco-limits` (bounded parsing), `vaco-protocol-core`
+`vaco-core`, `vaco-crypto` (layer 0 — AES-CTR and PBKDF2-HMAC-SHA256, not
+duplicated), `vaco-limits` (bounded parsing), `vaco-protocol-core`
 (`ProtocolError`/`Result`, reused ahead of any `Protocol` impl exactly as
 `vaco-protocol-srt` does), `vaco-rtp` (layer 1 — RFC 3550 RTP/RTCP
 framing, not duplicated), `vaco-time`.

@@ -1761,6 +1761,14 @@ bench = false
 required-features = ["format-riff"]
 
 [[bin]]
+name = "rist_gre"
+path = "fuzz_targets/rist_gre.rs"
+test = false
+doc = false
+bench = false
+required-features = ["protocol-rist"]
+
+[[bin]]
 name = "rist_rtcp"
 path = "fuzz_targets/rist_rtcp.rs"
 test = false

@@ -1,6 +1,6 @@
 [package]
 name = "vaco-protocol-rist"
-description = "RIST Simple Profile: RTP/RTCP framing reuse, RIST-specific RTCP messages (RTT echo, bitmask/range NACK), retransmission matching, and the reorder/retransmission-reassembly buffer. Native, from VSF TR-06-1. GRE/DTLS/PSK (Main Profile) and bonding land in later packages."
+description = "RIST Simple and Main Profile framing: RTP/RTCP reuse, RIST-specific RTCP messages, retransmission and reassembly (TR-06-1); GRE tunnelling and PSK encryption (TR-06-2). DTLS and EAP-SRP6a authentication and bonding land in later packages."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,6 +10,7 @@ authors.workspace = true
 
 [dependencies]
 vaco-core = { path = "../../core/vaco-core" }
+vaco-crypto = { path = "../../core/vaco-crypto" }
 vaco-limits = { path = "../../core/vaco-limits" }
 vaco-protocol-core = { path = "../../io/vaco-protocol-core" }
 vaco-rtp = { path = "../../model/vaco-rtp" }
