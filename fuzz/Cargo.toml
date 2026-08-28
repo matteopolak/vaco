@@ -51,22 +51,28 @@ vaco-codec-cabac = { path = "../crates/signal/vaco-codec-cabac", optional = true
 vaco-codec-cbs = { path = "../crates/signal/vaco-codec-cbs", optional = true }
 vaco-codec-core = { path = "../crates/signal/vaco-codec-core", optional = true }
 vaco-codec-dsp-idct = { path = "../crates/signal/vaco-codec-dsp-idct", optional = true }
+vaco-codec-exr = { path = "../crates/codec/vaco-codec-exr", optional = true }
+vaco-codec-gif = { path = "../crates/codec/vaco-codec-gif", optional = true }
 vaco-codec-golomb = { path = "../crates/signal/vaco-codec-golomb", optional = true }
 vaco-codec-h263 = { path = "../crates/codec/vaco-codec-h263", optional = true }
 vaco-codec-h264 = { path = "../crates/codec/vaco-codec-h264", optional = true }
 vaco-codec-image-simple = { path = "../crates/codec/vaco-codec-image-simple", optional = true }
 vaco-codec-jpeg = { path = "../crates/codec/vaco-codec-jpeg", optional = true }
+vaco-codec-jpegxl = { path = "../crates/codec/vaco-codec-jpegxl", optional = true }
 vaco-codec-mpeg12 = { path = "../crates/codec/vaco-codec-mpeg12", optional = true }
 vaco-codec-mpegaudio = { path = "../crates/codec/vaco-codec-mpegaudio", optional = true }
 vaco-codec-msac = { path = "../crates/signal/vaco-codec-msac", optional = true }
+vaco-codec-png = { path = "../crates/codec/vaco-codec-png", optional = true }
 vaco-codec-pnm = { path = "../crates/codec/vaco-codec-pnm", optional = true }
 vaco-codec-qoi = { path = "../crates/codec/vaco-codec-qoi", optional = true }
 vaco-codec-subtitle-bitmap = { path = "../crates/codec/vaco-codec-subtitle-bitmap", optional = true }
 vaco-codec-subtitle-cc = { path = "../crates/codec/vaco-codec-subtitle-cc", optional = true }
 vaco-codec-subtitle-teletext = { path = "../crates/codec/vaco-codec-subtitle-teletext", optional = true }
 vaco-codec-subtitle-text = { path = "../crates/codec/vaco-codec-subtitle-text", optional = true }
+vaco-codec-tiff = { path = "../crates/codec/vaco-codec-tiff", optional = true }
 vaco-codec-vp8 = { path = "../crates/codec/vaco-codec-vp8", optional = true }
 vaco-codec-vp9 = { path = "../crates/codec/vaco-codec-vp9", optional = true }
+vaco-codec-webp = { path = "../crates/codec/vaco-codec-webp", optional = true }
 vaco-color = { path = "../crates/model/vaco-color", optional = true }
 vaco-conformance = { path = "../crates/tool/vaco-conformance", optional = true }
 vaco-core = { path = "../crates/core/vaco-core", optional = true }
@@ -169,11 +175,8 @@ vaco-protocol-ipfs = { path = "../crates/io/vaco-protocol-ipfs", optional = true
 vaco-protocol-local = { path = "../crates/io/vaco-protocol-local", optional = true }
 vaco-protocol-rist = { path = "../crates/io/vaco-protocol-rist", optional = true }
 vaco-protocol-rtmp = { path = "../crates/io/vaco-protocol-rtmp", optional = true }
-vaco-protocol-rtp = { path = "../crates/io/vaco-protocol-rtp", optional = true }
-vaco-protocol-sctp = { path = "../crates/io/vaco-protocol-sctp", optional = true }
 vaco-protocol-socket = { path = "../crates/io/vaco-protocol-socket", optional = true }
 vaco-protocol-srt = { path = "../crates/io/vaco-protocol-srt", optional = true }
-vaco-protocol-srtp = { path = "../crates/io/vaco-protocol-srtp", optional = true }
 vaco-protocol-tls = { path = "../crates/io/vaco-protocol-tls", optional = true }
 vaco-protocol-wrap = { path = "../crates/io/vaco-protocol-wrap", optional = true }
 vaco-registry = { path = "../crates/registry/vaco-registry", optional = true }
@@ -203,22 +206,28 @@ default = [
     "codec-cabac",
     "codec-core",
     "codec-dsp-idct",
+    "codec-exr",
+    "codec-gif",
     "codec-golomb",
     "codec-h263",
     "codec-h264",
     "codec-image-simple",
     "codec-jpeg",
+    "codec-jpegxl",
     "codec-mpeg12",
     "codec-mpegaudio",
     "codec-msac",
+    "codec-png",
     "codec-pnm",
     "codec-qoi",
     "codec-subtitle-bitmap",
     "codec-subtitle-cc",
     "codec-subtitle-teletext",
     "codec-subtitle-text",
+    "codec-tiff",
     "codec-vp8",
     "codec-vp9",
+    "codec-webp",
     "color",
     "conformance",
     "core",
@@ -315,11 +324,8 @@ default = [
     "protocol-local",
     "protocol-rist",
     "protocol-rtmp",
-    "protocol-rtp",
-    "protocol-sctp",
     "protocol-socket",
     "protocol-srt",
-    "protocol-srtp",
     "protocol-tls",
     "protocol-wrap",
     "registry",
@@ -346,22 +352,28 @@ codec-ac3 = ["dep:vaco-codec-ac3"]
 codec-cabac = ["dep:vaco-codec-cabac"]
 codec-core = ["dep:vaco-codec-core", "dep:vaco-core", "dep:vaco-limits"]
 codec-dsp-idct = ["dep:vaco-codec-dsp-idct"]
+codec-exr = ["dep:vaco-codec-exr", "dep:vaco-frame", "dep:vaco-limits"]
+codec-gif = ["dep:vaco-codec-gif", "dep:vaco-frame", "dep:vaco-limits"]
 codec-golomb = ["dep:vaco-bitstream", "dep:vaco-codec-golomb", "dep:vaco-limits"]
 codec-h263 = ["dep:vaco-codec-core", "dep:vaco-codec-h263", "dep:vaco-limits", "dep:vaco-packet"]
 codec-h264 = ["dep:vaco-bitstream", "dep:vaco-codec-cabac", "dep:vaco-codec-h264", "dep:vaco-limits"]
 codec-image-simple = ["dep:vaco-codec-image-simple", "dep:vaco-core", "dep:vaco-frame", "dep:vaco-limits"]
 codec-jpeg = ["dep:vaco-codec-jpeg", "dep:vaco-frame", "dep:vaco-limits", "dep:vaco-pixfmt"]
+codec-jpegxl = ["dep:vaco-codec-jpegxl", "dep:vaco-limits"]
 codec-mpeg12 = ["dep:vaco-codec-core", "dep:vaco-codec-mpeg12", "dep:vaco-limits", "dep:vaco-packet"]
 codec-mpegaudio = ["dep:vaco-codec-core", "dep:vaco-codec-mpegaudio", "dep:vaco-frame", "dep:vaco-limits", "dep:vaco-packet"]
 codec-msac = ["dep:vaco-codec-msac"]
+codec-png = ["dep:vaco-codec-png", "dep:vaco-frame", "dep:vaco-limits"]
 codec-pnm = ["dep:vaco-codec-pnm", "dep:vaco-core", "dep:vaco-frame", "dep:vaco-limits"]
 codec-qoi = ["dep:vaco-codec-qoi", "dep:vaco-frame", "dep:vaco-limits", "dep:vaco-pixfmt"]
 codec-subtitle-bitmap = ["dep:vaco-codec-subtitle-bitmap", "dep:vaco-format-subtitle-bitmap", "dep:vaco-limits", "dep:vaco-subtitle-bitmap"]
 codec-subtitle-cc = ["dep:vaco-codec-subtitle-cc"]
 codec-subtitle-teletext = ["dep:vaco-codec-subtitle-teletext"]
 codec-subtitle-text = ["dep:vaco-codec-subtitle-text"]
+codec-tiff = ["dep:vaco-codec-tiff", "dep:vaco-frame", "dep:vaco-limits", "dep:vaco-pixfmt"]
 codec-vp8 = ["dep:vaco-codec-core", "dep:vaco-codec-vp8", "dep:vaco-limits", "dep:vaco-packet"]
 codec-vp9 = ["dep:vaco-codec-core", "dep:vaco-codec-vp9", "dep:vaco-limits", "dep:vaco-packet"]
+codec-webp = ["dep:vaco-codec-webp", "dep:vaco-frame", "dep:vaco-limits"]
 color = ["dep:vaco-color"]
 conformance = ["dep:vaco-conformance"]
 core = ["dep:vaco-core"]
@@ -458,11 +470,8 @@ protocol-ipfs = ["dep:vaco-protocol-ipfs"]
 protocol-local = ["dep:vaco-protocol-local"]
 protocol-rist = ["dep:vaco-protocol-rist", "dep:vaco-rtp"]
 protocol-rtmp = ["dep:vaco-limits", "dep:vaco-protocol-rtmp"]
-protocol-rtp = ["dep:vaco-protocol-rtp"]
-protocol-sctp = ["dep:vaco-protocol-sctp"]
 protocol-socket = ["dep:vaco-protocol-socket"]
 protocol-srt = ["dep:vaco-limits", "dep:vaco-protocol-srt"]
-protocol-srtp = ["dep:vaco-protocol-srtp"]
 protocol-tls = ["dep:vaco-protocol-tls"]
 protocol-wrap = ["dep:vaco-protocol-wrap"]
 registry = ["dep:vaco-core", "dep:vaco-format-core", "dep:vaco-io", "dep:vaco-limits", "dep:vaco-registry"]
@@ -874,6 +883,14 @@ bench = false
 required-features = ["expr"]
 
 [[bin]]
+name = "exr_decode"
+path = "fuzz_targets/exr_decode.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-exr"]
+
+[[bin]]
 name = "filter_aanalysis_options"
 path = "fuzz_targets/filter_aanalysis_options.rs"
 test = false
@@ -1122,6 +1139,14 @@ bench = false
 required-features = ["filter-framesync"]
 
 [[bin]]
+name = "gif_decode"
+path = "fuzz_targets/gif_decode.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-gif"]
+
+[[bin]]
 name = "golomb_arbitrary"
 path = "fuzz_targets/golomb_arbitrary.rs"
 test = false
@@ -1240,6 +1265,14 @@ test = false
 doc = false
 bench = false
 required-features = ["codec-jpeg"]
+
+[[bin]]
+name = "jpegxl_decode"
+path = "fuzz_targets/jpegxl_decode.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-jpegxl"]
 
 [[bin]]
 name = "limit_budget"
@@ -1586,6 +1619,14 @@ bench = false
 required-features = ["parse-vpx"]
 
 [[bin]]
+name = "png_decode"
+path = "fuzz_targets/png_decode.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-png"]
+
+[[bin]]
 name = "pool_acquire"
 path = "fuzz_targets/pool_acquire.rs"
 test = false
@@ -1714,14 +1755,6 @@ bench = false
 required-features = ["protocol-rtmp"]
 
 [[bin]]
-name = "protocol_sctp_parse"
-path = "fuzz_targets/protocol_sctp_parse.rs"
-test = false
-doc = false
-bench = false
-required-features = ["protocol-sctp"]
-
-[[bin]]
 name = "protocol_wrap_concat_list"
 path = "fuzz_targets/protocol_wrap_concat_list.rs"
 test = false
@@ -1802,14 +1835,6 @@ bench = false
 required-features = ["protocol-rist"]
 
 [[bin]]
-name = "rtp_demux"
-path = "fuzz_targets/rtp_demux.rs"
-test = false
-doc = false
-bench = false
-required-features = ["protocol-rtp"]
-
-[[bin]]
 name = "rtp_header_parse"
 path = "fuzz_targets/rtp_header_parse.rs"
 test = false
@@ -1880,14 +1905,6 @@ test = false
 doc = false
 bench = false
 required-features = ["protocol-srt"]
-
-[[bin]]
-name = "srtp_unprotect"
-path = "fuzz_targets/srtp_unprotect.rs"
-test = false
-doc = false
-bench = false
-required-features = ["protocol-srtp"]
 
 [[bin]]
 name = "subtitle_bitmap_demux"
@@ -1978,6 +1995,14 @@ bench = false
 required-features = ["textformat"]
 
 [[bin]]
+name = "tiff_decode"
+path = "fuzz_targets/tiff_decode.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-tiff"]
+
+[[bin]]
 name = "tls_pem_parse"
 path = "fuzz_targets/tls_pem_parse.rs"
 test = false
@@ -2000,3 +2025,11 @@ test = false
 doc = false
 bench = false
 required-features = ["codec-vp9"]
+
+[[bin]]
+name = "webp_decode"
+path = "fuzz_targets/webp_decode.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-webp"]
