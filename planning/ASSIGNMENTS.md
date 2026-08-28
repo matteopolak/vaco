@@ -118,10 +118,10 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-demux-mp4 | 4 | #565,#566,#567 | agent:demux-finish | done | 2026-08-23 | 2026-08-23 | fragmented, metadata, CENC reporting, HEIF items |
 | vaco-format-subtitle | 4 | #591 | agent:subs | done | 2026-08-23 | 2026-08-23 | new: shared cue model |
 | vaco-subtitle-text | 4 | #591 | agent:subs | done | 2026-08-23 | 2026-08-23 | 15 demux / 6 mux, count to be verified |
-| vaco-demux-hls | 4 | #600 | agent:adaptive | assigned | 2026-08-23 |  |  |
-| vaco-mux-hls | 4 | #601 | agent:adaptive | assigned | 2026-08-23 |  |  |
-| vaco-demux-dash | 4 | #602 | agent:adaptive | assigned | 2026-08-23 |  | quick-xml |
-| vaco-mux-dash | 4 | #603 | agent:adaptive | assigned | 2026-08-23 |  |  |
+| vaco-demux-hls | 4 | #600 | agent:adaptive | free | 2026-08-23 |  | RECLAIMED 2026-08-28: assigned 08-23, never finished, owner gone. Free to claim. |
+| vaco-mux-hls | 4 | #601 | agent:adaptive | free | 2026-08-23 |  | RECLAIMED 2026-08-28: assigned 08-23, never finished, owner gone. Free to claim. |
+| vaco-demux-dash | 4 | #602 | agent:adaptive | free | 2026-08-23 |  | quick-xml — RECLAIMED 2026-08-28: assigned 08-23, never finished, owner gone. Free to claim. |
+| vaco-mux-dash | 4 | #603 | agent:adaptive | free | 2026-08-23 |  | RECLAIMED 2026-08-28: assigned 08-23, never finished, owner gone. Free to claim. |
 | vaco-protocol-local | 3 | #544 | agent:protocols | done | 2026-08-23 | 2026-08-23 | data:, md5:. fd: ruled out by D16 — needs unsafe FromRawFd |
 | vaco-protocol-wrap | 3 | #545 | agent:protocols | done | 2026-08-23 | 2026-08-23 | subfile concat concatf cache tee async |
 | vaco-protocol-file | 3 | #544 | agent:protocols | done | 2026-08-23 | 2026-08-23 | had NO vaco-component.toml — file:/pipe: were never registered |
@@ -136,14 +136,14 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-format-isom | 4 | — | agent:isom-codec | done | 2026-08-23 | 2026-08-23 | PCM resolution needs fourcc + bits + enda; 53-row ESDS table |
 | vaco-format-subtitle-bitmap | 4 | #611 | agent:subbmp | done | 2026-08-23 | 2026-08-23 |  |
 | vaco-subtitle-bitmap | 4 | #611 | agent:subbmp | done | 2026-08-23 | 2026-08-23 | dvbsub dvbtxt sup vobsub |
-| vaco-mux-avi | 4 | — | agent:muxfix | assigned | 2026-08-23 |  | CONFORMANCE-FINDINGS 14,16-22 |
-| vaco-mux-flv | 4 | — | agent:muxfix | assigned | 2026-08-23 |  |  |
-| vaco-format-rtp | 4 | #597-599 | agent:rtp | assigned | 2026-08-23 |  | RTP/RTCP model + SDP |
-| vaco-demux-rtsp | 4 | #597 | agent:rtp | assigned | 2026-08-23 |  |  |
-| vaco-mux-rtp | 4 | #599 | agent:rtp | assigned | 2026-08-23 |  |  |
-| vaco-filter-video-geometry | 5 | #54 | agent:vfilt | assigned | 2026-08-23 |  | scale crop pad transpose flips |
-| vaco-filter-video-format | 5 | #54 | agent:vfilt | assigned | 2026-08-23 |  | format setsar setdar fps |
-| vaco-filter-video-source | 5 | #54 | agent:vfilt | assigned | 2026-08-23 |  | color testsrc smptebars sinks |
+| vaco-mux-avi | 4 | — | agent:muxfix | free | 2026-08-23 |  | CONFORMANCE-FINDINGS 14,16-22 — RECLAIMED 2026-08-28: assigned 08-23, never finished, owner gone. Free to claim. |
+| vaco-mux-flv | 4 | — | agent:muxfix | free | 2026-08-23 |  | RECLAIMED 2026-08-28: assigned 08-23, never finished, owner gone. Free to claim. |
+| vaco-format-rtp | 4 | #597-599 | agent:rtp | free | 2026-08-23 |  | RTP/RTCP model + SDP — RECLAIMED 2026-08-28: assigned 08-23, never finished, owner gone. Free to claim. |
+| vaco-demux-rtsp | 4 | #597 | agent:rtp | free | 2026-08-23 |  | RECLAIMED 2026-08-28: assigned 08-23, never finished, owner gone. Free to claim. |
+| vaco-mux-rtp | 4 | #599 | agent:rtp | free | 2026-08-23 |  | RECLAIMED 2026-08-28: assigned 08-23, never finished, owner gone. Free to claim. |
+| vaco-filter-video-geometry | 5 | #54 | agent:vfilt | free | 2026-08-23 |  | scale crop pad transpose flips — RECLAIMED 2026-08-28: assigned 08-23, never finished, owner gone. Free to claim. |
+| vaco-filter-video-format | 5 | #54 | agent:vfilt | free | 2026-08-23 |  | format setsar setdar fps — RECLAIMED 2026-08-28: assigned 08-23, never finished, owner gone. Free to claim. |
+| vaco-filter-video-source | 5 | #54 | agent:vfilt | free | 2026-08-23 |  | color testsrc smptebars sinks — RECLAIMED 2026-08-28: assigned 08-23, never finished, owner gone. Free to claim. |
 | vaco-filter-core | 5 | — | agent:filter-core | done | 2026-08-22 | 2026-08-22 | frozen only |
 | vaco-filter-framesync | 5 | — | agent:filter-graph | done | 2026-08-22 | 2026-08-22 |  |
 | vaco-filter-graph | 5 | — | agent:filter-graph | done | 2026-08-22 | 2026-08-22 |  |
@@ -158,9 +158,9 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-filter-blur | 5 | #468 | agent:blur2 | done | 2026-08-23 | 2026-08-23 | gblur boxblur unsharp smartblur convolution sobel and the rest of FT-4.6a |
 | vaco-filter-denoise | 5 | #469 | agent:denoise | done | 2026-08-23 | 2026-08-23 | hqdn3d atadenoise removegrain nlmeans owdenoise |
 | vaco-filter-geometry | 5 | #470 | agent:geom2 | done | 2026-08-23 | 2026-08-23 | T2 geometry (~28) — distinct from vaco-filter-video-geometry's T1 set |
-| vaco-filter-color | 5 | #476 | agent:component | assigned | 2026-08-23 |  | redirected from the invented vaco-filter-component to plan 16 §4.3 rows |
-| vaco-filter-key | 5 | #476 | agent:component | assigned | 2026-08-23 |  | |
-| vaco-filter-lut | 5 | #476 | agent:component | assigned | 2026-08-23 |  | |
+| vaco-filter-color | 5 | #476 | agent:component | free | 2026-08-23 |  | redirected from the invented vaco-filter-component to plan 16 §4.3 rows — RECLAIMED 2026-08-28: assigned 08-23, never finished, owner gone. Free to claim. |
+| vaco-filter-key | 5 | #476 | agent:component | free | 2026-08-23 |  | RECLAIMED 2026-08-28: assigned 08-23, never finished, owner gone. Free to claim. |
+| vaco-filter-lut | 5 | #476 | agent:component | free | 2026-08-23 |  | RECLAIMED 2026-08-28: assigned 08-23, never finished, owner gone. Free to claim. |
 | vaco-filter-achannel | 5 | #482 | agent:achannel | done | 2026-08-23 | 2026-08-23 | T3 channel, layout and mixing filters (~14) |
 | vaco-filter-ameasure | 5 | #483 | agent:ameasure | done | 2026-08-23 | 2026-08-23 | NAME DIVERGES: plan 16 §4.3 calls this vaco-filter-aanalysis |
 | vaco-demux-mpegts | 4 | #632 | agent:tspkt | done | 2026-08-23 | 2026-08-23 | part 2 residual: PES_packet_length==0 release timing, characterised not root-caused |
@@ -171,14 +171,14 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-filter-convolve | 5 | #468 | agent:blur2 | done | 2026-08-23 | 2026-08-23 | remainder of the plan row: morpho inflate deflate edgedetect blurdetect convolve deconvolve corr xcorrelate |
 | vaco-filter-core | 5 | — | agent:adapt | done | 2026-08-23 | 2026-08-23 | INTERFACE-GAPS 10: Paired + Fanout adapters, then the multi-input filters three agents declined |
 | vaco-mux-matroska | 4 | — | agent:mkv | done | 2026-08-23 | 2026-08-23 | CONFORMANCE-FINDINGS 15: CRC-32 on every level-1 element, then SeekHead |
-| vaco-filter-vdsp | 5 | — | agent:analysis2 | assigned | 2026-08-23 |  | created by agent:temporal for scene_sad; extend, do not duplicate |
+| vaco-filter-vdsp | 5 | — | agent:analysis2 | free | 2026-08-23 |  | created by agent:temporal for scene_sad; extend, do not duplicate — RECLAIMED 2026-08-28: assigned 08-23, never finished, owner gone. Free to claim. |
 | vaco-filter-source | 5 | #474 | agent:src | done | 2026-08-23 | 2026-08-23 | plan 16 §4.3 row; nullsrc/color already taken by vaco-filter-video-source |
 | vaco-filter-asource | 5 | #481 | agent:src | done | 2026-08-23 | 2026-08-23 | anullsrc already taken |
 | vaco-filter-deinterlace | 5 | #106 | agent:deint | done | 2026-08-23 | 2026-08-23 | plan 16 §4.3 row; idet/vfrdet were blocked on INTERFACE-GAPS 11, since closed |
 | vaco-frame | 2 | — | agent:framemeta | done | 2026-08-23 | 2026-08-23 | INTERFACE-GAPS 11: per-frame metadata dictionary |
 | vaco-probe | 7 | — | agent:framemeta | done | 2026-08-23 | 2026-08-23 | -show_frames FRAME_TAGS consumer side |
 | vaco-filter-aeffects | 5 | #484 | agent:audiotidy | done | 2026-08-23 | 2026-08-23 | renamed from vaco-filter-achannel per plan 16 §4.3 |
-| vaco-filter-color | 5 | #476 | agent:analysis2 | assigned | 2026-08-23 |  | remainder of the 29-filter row |
+| vaco-filter-color | 5 | #476 | agent:analysis2 | free | 2026-08-23 |  | remainder of the 29-filter row — RECLAIMED 2026-08-28: assigned 08-23, never finished, owner gone. Free to claim. |
 | vaco-filter-key | 5 | #476 | agent:color2 | done | 2026-08-23 | 2026-08-23 | remainder of the 20-filter row |
 | vaco-filter-lut | 5 | #476 | agent:color2 | done | 2026-08-23 | 2026-08-23 | lut1d, haldclutsrc, the .3dl/.dat/.m3d parsers |
 | vaco-filter-analysis | 5 | #477 | agent:analysis2 | done | 2026-08-23 | 2026-08-28 | #477 closed; may extend vaco-filter-vdsp |
@@ -190,13 +190,13 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-bsf-vpx | 3 | #351 | agent:extradata | done | 2026-08-23 | 2026-08-23 | VP9 only — no VP8 bsf exists in the reference |
 | vaco-bsf-audio | 3 | #352 | agent:extradata | done | 2026-08-23 | 2026-08-23 | aac_adtstoasc, opus_metadata, pcm_rechunk |
 | vaco-format-nalu | 4 | — | agent:extradata | done | 2026-08-23 | 2026-08-23 | now owns the one extradata-assembly rule (D19) |
-| vaco-bsf-* (all six) | 3 | #353,#354 | agent:bsf3 | assigned | 2026-08-23 |  | *_metadata needs a CBS write path; INTERFACE-GAPS 12 blocks options |
-| vaco-format-mpjpeg | 4 | #596 | agent:smallfmt | assigned | 2026-08-23 |  | |
-| vaco-format-spdif | 4 | #612 | agent:smallfmt | assigned | 2026-08-23 |  | S/PDIF + s337m |
-| vaco-format-swf | 4 | #616 | agent:smallfmt | assigned | 2026-08-23 |  | |
-| vaco-format-nut | 4 | #594 | agent:smallfmt | assigned | 2026-08-23 |  | fully specified, so byte-identity is reachable |
-| vaco-protocol-crypto | 2 | #546 | agent:proto | assigned | 2026-08-23 |  | AES-CTR over a nested URL; D10 dependency decision |
-| crates/io (all) | 2 | #550 | agent:proto | assigned | 2026-08-23 |  | httpproxy ftp gopher gophers icecast ipfs/ipns gateways |
+| vaco-bsf-* (all six) | 3 | #353,#354 | agent:bsf3 | free | 2026-08-23 |  | *_metadata needs a CBS write path; INTERFACE-GAPS 12 blocks options — RECLAIMED 2026-08-28: assigned 08-23, never finished, owner gone. Free to claim. |
+| vaco-format-mpjpeg | 4 | #596 | agent:smallfmt | free | 2026-08-23 |  | RECLAIMED 2026-08-28: assigned 08-23, never finished, owner gone. Free to claim. |
+| vaco-format-spdif | 4 | #612 | agent:smallfmt | free | 2026-08-23 |  | S/PDIF + s337m — RECLAIMED 2026-08-28: assigned 08-23, never finished, owner gone. Free to claim. |
+| vaco-format-swf | 4 | #616 | agent:smallfmt | free | 2026-08-23 |  | RECLAIMED 2026-08-28: assigned 08-23, never finished, owner gone. Free to claim. |
+| vaco-format-nut | 4 | #594 | agent:smallfmt | free | 2026-08-23 |  | fully specified, so byte-identity is reachable — RECLAIMED 2026-08-28: assigned 08-23, never finished, owner gone. Free to claim. |
+| vaco-protocol-crypto | 2 | #546 | agent:proto | free | 2026-08-23 |  | AES-CTR over a nested URL; D10 dependency decision — RECLAIMED 2026-08-28: assigned 08-23, never finished, owner gone. Free to claim. |
+| crates/io (all) | 2 | #550 | agent:proto | free | 2026-08-23 |  | httpproxy ftp gopher gophers icecast ipfs/ipns gateways — RECLAIMED 2026-08-28: assigned 08-23, never finished, owner gone. Free to claim. |
 # Fan-out plan: core first, then leaves in batches
 
 ## Why this order
