@@ -1,0 +1,21 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Two of the eleven T3 artistic/stylisation video filters
+# `planning/16-filters.md` §4.2 assigns to `vaco-filter-artistic`. See
+# `docs/filter/vaco-filter-artistic.md` for the rest, left as a follow-up,
+# and for why this crate exists under this name rather than the
+# `vaco-filter-effect` a dispatch brief asked for.
+
+[[component]]
+kind = "filter"
+name = "noise"
+long_name = "Add noise"
+ctor = "vaco_filter_artistic::noise::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "vignette"
+long_name = "Make or reverse a vignette effect"
+ctor = "vaco_filter_artistic::vignette::DESC"
+media = "video"

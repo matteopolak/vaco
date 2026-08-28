@@ -1,0 +1,28 @@
+[package]
+name = "vaco-filter-artistic"
+description = "T3 artistic/stylisation video filters: noise, vignette (see the crate docs for the rest of the plan row, left as a follow-up)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+bitflags = { workspace = true }
+vaco-core = { path = "../../core/vaco-core" }
+vaco-expr = { path = "../../core/vaco-expr" }
+vaco-opts = { path = "../../core/vaco-opts" }
+vaco-frame = { path = "../../model/vaco-frame" }
+vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
+vaco-filter-core = { path = "../../filter/vaco-filter-core" }
+vaco-filter-graph = { path = "../../filter/vaco-filter-graph" }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.vaco]
+layer = 5
