@@ -302,7 +302,7 @@ impl Muxer for W64Muxer {
             format_tag: match codec {
                 vaco_codec_core::CodecId::PcmAlaw => 6,
                 vaco_codec_core::CodecId::PcmMulaw => 7,
-                _ if format.is_float() => 3,
+                _ if pcm::is_float(codec) => 3,
                 _ => 1,
             },
             bytes_per_frame: u32::from(channels)

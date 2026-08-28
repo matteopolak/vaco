@@ -216,6 +216,15 @@ pub const fn coded_bits(codec_id: CodecId) -> Option<u8> {
     }
 }
 
+/// Whether a PCM-shaped codec stores IEEE floats.
+#[must_use]
+pub const fn is_float(codec_id: CodecId) -> bool {
+    matches!(
+        codec_id,
+        CodecId::PcmF32le | CodecId::PcmF32be | CodecId::PcmF64le | CodecId::PcmF64be
+    )
+}
+
 /// Whether a PCM-shaped codec stores its samples little-endian. `None` where
 /// endianness does not apply — one byte per sample states no order.
 #[must_use]

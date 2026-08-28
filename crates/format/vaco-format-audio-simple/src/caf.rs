@@ -341,7 +341,7 @@ impl Muxer for CafMuxer {
                 let little_endian = pcm::is_little_endian(codec).unwrap_or(false);
                 (
                     *b"lpcm",
-                    u32::from(format.is_float()) | (u32::from(little_endian) << 1),
+                    u32::from(pcm::is_float(codec)) | (u32::from(little_endian) << 1),
                 )
             }
         };
