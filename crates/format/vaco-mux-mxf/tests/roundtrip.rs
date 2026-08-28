@@ -252,6 +252,86 @@ fn a_real_ffprobe_reports_the_correct_stream_shape_for_a_video_only_file() {
     assert!(text.contains("height=576"), "missing height in: {text}");
 }
 
+#[test]
+fn a_real_ffprobe_resolves_both_tracks_of_a_multiple_descriptor_file() {
+    // The multi-track counterpart of the test above, and the more
+    // significant claim: a real `ffmpeg -i` on an early version of this
+    // crate's two-essence-track output logged `source track N: stream M,
+    // no descriptor found` for *both* tracks and reported `codec_name=unknown`,
+    // `width=0`, `height=0`, `sample_rate=0` — even though
+    // `vaco-demux-mxf`'s own `MultipleDescriptor` expansion already
+    // resolved the identical file correctly (see
+    // `a_video_and_audio_file_reports_both_streams_via_the_multiple_descriptor_expansion`
+    // above). Root cause: this crate had invented tag `0x0603` for
+    // `SubDescriptorUIDs` instead of measuring it — the real, conventional
+    // tag is `0x3f01`, and `ffmpeg`'s own resolution of that specific
+    // property evidently does not go through general per-file primer/UL
+    // matching the way every other property here does. Fixed alongside a
+    // second real bug the same investigation surfaced: this crate had been
+    // writing the *video* essence-container UL onto the *audio* track's own
+    // descriptor too, which made a real `ffmpeg -i` guess `mp2` instead of
+    // `pcm_s16le` for the audio stream even once its dimensions/rate
+    // resolved.
+    let sink = SharedDynBuf::with_limits(Limits::permissive());
+    let mut mux = MxfMuxer::new(Box::new(sink.clone()), &vaco_format_core::FormatOptions::default())
+        .unwrap();
+    mux.add_stream(&video_params(720, 576)).unwrap();
+    mux.add_stream(&audio_params(48_000, 2)).unwrap();
+    mux.init().unwrap();
+    mux.write_header().unwrap();
+    for i in 0..3i64 {
+        mux.write_packet(&packet(0, i, &[0x11u8; 512], i == 0))
+            .unwrap();
+        mux.write_packet(&packet(1, i, &[0x22u8; 128], true))
+            .unwrap();
+    }
+    mux.write_trailer().unwrap();
+
+    let bytes = sink.snapshot();
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("vaco-mxf-mux-test-multi-{}.mxf", std::process::id()));
+    std::fs::write(&path, &bytes).expect("write temp file");
+
+    let Ok(out) = std::process::Command::new("ffprobe")
+        .args([
+            "-hide_banner",
+            "-v",
+            "error",
+            "-of",
+            "default=nw=1",
+            "-show_entries",
+            "stream=codec_type,codec_name,width,height,sample_rate,channels",
+        ])
+        .arg(&path)
+        .output()
+    else {
+        eprintln!("skipping: ffprobe not on PATH");
+        let _ = std::fs::remove_file(&path);
+        return;
+    };
+    let _ = std::fs::remove_file(&path);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "ffprobe failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(text.contains("codec_type=video"), "missing video in: {text}");
+    assert!(
+        text.contains("codec_name=mpeg2video"),
+        "missing mpeg2video in: {text}"
+    );
+    assert!(text.contains("width=720"), "missing width in: {text}");
+    assert!(text.contains("height=576"), "missing height in: {text}");
+    assert!(text.contains("codec_type=audio"), "missing audio in: {text}");
+    assert!(
+        text.contains("codec_name=pcm_s16le"),
+        "missing pcm_s16le in: {text}"
+    );
+    assert!(text.contains("sample_rate=48000"), "missing sample_rate in: {text}");
+    assert!(text.contains("channels=2"), "missing channels in: {text}");
+}
+
 mod proptests {
     use super::*;
     use proptest::prelude::*;

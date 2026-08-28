@@ -85,6 +85,17 @@ pub(crate) const fn footer_partition_key() -> [u8; 16] {
     partition_family_key(0x04)
 }
 
+/// Measured to matter for a real `ffmpeg -i` cross-check (not this crate's
+/// own reader, which does not care): a real two-essence-track `ffmpeg -f
+/// mxf` file inserts a genuine Body Partition Pack (`kind = 0x03`) right
+/// before its essence begins, distinct from the single-essence-track shape
+/// (`vaco-demux-mxf`'s own D-10 corpus) where the header partition carries
+/// essence directly with no separate body pack at all.
+#[must_use]
+pub(crate) const fn body_partition_key() -> [u8; 16] {
+    partition_family_key(0x03)
+}
+
 #[must_use]
 pub(crate) const fn primer_pack_key() -> [u8; 16] {
     let p = PARTITION_FAMILY_PREFIX;
@@ -147,6 +158,31 @@ pub(crate) const OPERATIONAL_PATTERN_OP1A: Ul = Ul([
 pub(crate) const ESSENCE_CONTAINER_MPEG_FRAME_WRAPPED: Ul = Ul([
     0x06, 0x0e, 0x2b, 0x34, 0x04, 0x01, 0x01, 0x02, 0x0d, 0x01, 0x03, 0x01, 0x02, 0x04, 0x60,
     0x01,
+]);
+
+/// "MXF-GC Generic Sound essence" (AES3, frame-wrapped) — measured this
+/// session off a real `ffmpeg -f mxf` file's `AES3PCMDescriptor`. Distinct
+/// from the picture label above: getting this wrong (an earlier version of
+/// this crate reused the picture label for the audio track's own
+/// `EssenceContainer` property) did not stop `vaco-demux-mxf` from reading
+/// the file — that crate does not interpret this property's value at all —
+/// but caused a real `ffmpeg -i` to guess `mp2` instead of `pcm_s16le` for
+/// the audio stream, since `ffmpeg`'s own codec-from-container-label table
+/// evidently does key off it.
+pub(crate) const ESSENCE_CONTAINER_SOUND_FRAME_WRAPPED: Ul = Ul([
+    0x06, 0x0e, 0x2b, 0x34, 0x04, 0x01, 0x01, 0x01, 0x0d, 0x01, 0x03, 0x01, 0x02, 0x06, 0x03,
+    0x00,
+]);
+
+/// "Multiple wrappings" — the generic container label a `MultipleDescriptor`
+/// and the Preface/Partition Pack's own `EssenceContainer`(s) carry when a
+/// package has more than one essence kind, measured the same way. Each
+/// individual essence descriptor still states its own specific container
+/// (the two constants above); this one is the package-level placeholder for
+/// "more than one, see the sub-descriptors."
+pub(crate) const ESSENCE_CONTAINER_MULTIPLE_WRAPPINGS: Ul = Ul([
+    0x06, 0x0e, 0x2b, 0x34, 0x04, 0x01, 0x01, 0x03, 0x0d, 0x01, 0x03, 0x01, 0x02, 0x7f, 0x01,
+    0x00,
 ]);
 
 /// MPEG-2 4:2:2 Long GOP `PictureEssenceCoding`, measured in

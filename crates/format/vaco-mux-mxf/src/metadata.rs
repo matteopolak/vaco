@@ -309,7 +309,7 @@ pub(crate) fn primer_entries() -> Vec<(u16, Ul)> {
             0x06, 0x0e, 0x2b, 0x34, 0x01, 0x01, 0x01, 0x02, 0x04, 0x01, 0x06, 0x01, 0x00, 0x00,
             0x00, 0x00,
         ])),
-        (0x0603, Ul::new([
+        (0x3f01, Ul::new([
             0x06, 0x0e, 0x2b, 0x34, 0x01, 0x01, 0x01, 0x04, 0x06, 0x01, 0x01, 0x04, 0x06, 0x0b,
             0x00, 0x00,
         ])),
@@ -398,7 +398,6 @@ pub(crate) fn build_sets(
     ids: &GraphIds,
     tracks: &[TrackPlan],
     edit_rate: Rational,
-    essence_container: Ul,
     duration: Option<i64>,
 ) -> Vec<([u8; 16], Vec<u8>)> {
     let mut sets = Vec::new();
@@ -409,7 +408,7 @@ pub(crate) fn build_sets(
     push_uid16(&mut preface, 0x3b03, ids.content_storage);
     push_batch16(&mut preface, 0x3b06, &[ids.identification]);
     push_item(&mut preface, 0x3b09, &ul::OPERATIONAL_PATTERN_OP1A.as_bytes());
-    push_batch16(&mut preface, 0x3b0a, &[essence_container.as_bytes()]);
+    push_batch16(&mut preface, 0x3b0a, &essence_containers_used(tracks));
     sets.push(build_set(class::PREFACE, preface));
 
     // ------------------------------------------------------- Identification
@@ -560,26 +559,55 @@ pub(crate) fn build_sets(
         sets.push(build_set(class::SOURCE_CLIP, sclip));
 
         // Descriptor.
-        sets.push(build_descriptor(t, i, edit_rate, essence_container));
+        sets.push(build_descriptor(t, i, edit_rate));
     }
 
     if let Some(md_id) = ids.multiple_descriptor {
         let sub_ids: Vec<[u8; 16]> = tracks.iter().map(|t| t.ids.descriptor).collect();
         let mut md = Vec::new();
         push_uid16(&mut md, 0x3c0a, md_id);
-        push_batch16(&mut md, 0x0603, &sub_ids);
+        push_rational(&mut md, 0x3001, edit_rate.num, edit_rate.den);
+        push_item(&mut md, 0x3004, &ul::ESSENCE_CONTAINER_MULTIPLE_WRAPPINGS.as_bytes());
+        push_batch16(&mut md, 0x3f01, &sub_ids);
         sets.push(build_set(class::MULTIPLE_DESCRIPTOR, md));
     }
 
     sets
 }
 
-fn build_descriptor(
-    t: &TrackPlan,
-    _index: usize,
-    edit_rate: Rational,
-    essence_container: Ul,
-) -> ([u8; 16], Vec<u8>) {
+/// The Generic Container essence-container label a track's own descriptor
+/// states — distinct per media type, measured this session (see
+/// `ul::ESSENCE_CONTAINER_SOUND_FRAME_WRAPPED`'s doc comment for what
+/// reusing the picture label for audio broke).
+fn essence_container_for(media_type: MediaType) -> Ul {
+    if media_type == MediaType::Audio {
+        ul::ESSENCE_CONTAINER_SOUND_FRAME_WRAPPED
+    } else {
+        ul::ESSENCE_CONTAINER_MPEG_FRAME_WRAPPED
+    }
+}
+
+/// The distinct essence-container labels `Preface.EssenceContainers` and
+/// both partition packs' own `EssenceContainers` batch must list: one per
+/// media type actually present, plus the "multiple wrappings" label when
+/// more than one essence track is written — measured off a real two-track
+/// file (three labels, in that order) rather than assumed.
+pub(crate) fn essence_containers_used(tracks: &[TrackPlan]) -> Vec<[u8; 16]> {
+    let mut out = Vec::new();
+    if tracks.iter().any(|t| t.media_type != MediaType::Audio) {
+        out.push(ul::ESSENCE_CONTAINER_MPEG_FRAME_WRAPPED.as_bytes());
+    }
+    if tracks.iter().any(|t| t.media_type == MediaType::Audio) {
+        out.push(ul::ESSENCE_CONTAINER_SOUND_FRAME_WRAPPED.as_bytes());
+    }
+    if tracks.len() > 1 {
+        out.push(ul::ESSENCE_CONTAINER_MULTIPLE_WRAPPINGS.as_bytes());
+    }
+    out
+}
+
+fn build_descriptor(t: &TrackPlan, _index: usize, edit_rate: Rational) -> ([u8; 16], Vec<u8>) {
+    let essence_container = essence_container_for(t.media_type);
     let mut d = Vec::new();
     push_uid16(&mut d, 0x3c0a, t.ids.descriptor);
     push_u32(&mut d, 0x3006, t.track_id); // LinkedTrackId

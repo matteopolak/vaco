@@ -8,12 +8,23 @@ reuses its sibling `vaco-demux-mxf`'s own already-published, clean-room
 measurement of the KLV/BER wrapper, the Partition Pack, the
 structural-metadata graph, and Universal Labels and property tags
 (`provenance/sources.toml`'s `ffmpeg-mxf-probe` family), plus a handful of
-local-tag *numbers* this crate measured fresh against a real header this
-session (`ffmpeg-mxf-mux-header-probe`) — the demux crate only ever needed
-the resolved UL, never which conventional tag carries it. Every claim below
-is cross-checked against both `vaco-demux-mxf` (a dev-dependency, used the
-same way `vaco-mux-mp4` depends on `vaco-demux-mp4`) and a real `ffprobe`/
-`ffmpeg` on the development machine.
+local-tag *numbers* and structural details this crate measured fresh
+against real headers this session (`ffmpeg-mxf-mux-header-probe`) — the
+demux crate only ever needed the resolved UL, never which conventional tag
+carries it, or details (partition count, System Item placement) it never
+had to reproduce on write. Every claim below is cross-checked against both
+`vaco-demux-mxf` (a dev-dependency, used the same way `vaco-mux-mp4`
+depends on `vaco-demux-mp4`) and a real `ffprobe`/`ffmpeg` on the
+development machine.
+
+**The two demuxer says nothing, only the reference does.** Three separate
+real bugs in this crate were invisible to `vaco-demux-mxf` round-trip
+testing and caught only by a real `ffmpeg -i`: `TrackID` reservation,
+`DataDefinition`'s three values, and `SubDescriptorUIDs`'s real local tag
+(see "The structural-metadata graph" below). `vaco-demux-mxf` does not read
+any of the three properties involved. This is the concrete argument for
+round-tripping through the reference rather than through this workspace's
+own understanding of the format alone.
 
 ---
 
@@ -36,14 +47,24 @@ same way `vaco-mux-mp4` depends on `vaco-demux-mp4`) and a real `ffprobe`/
 
 ## How it works
 
-### Partition layout — one decision that removes the need for a two-pass write
+### Partition layout
 
 A "closed, complete" header partition (full structural metadata, generated
-once at `init()`), directly followed by essence with **no separate body
-partition pack** — the same single-partition-carries-essence shape
-`vaco-demux-mxf` had to learn to read for real D-10 files, reused here
-deliberately — then a "closed, complete" footer partition, then a Random
-Index Pack.
+once at `init()`, `body_sid = 0` — it carries no essence itself), then a
+genuine Body Partition Pack (`body_sid = 1`, essence follows directly after
+it), then a "closed, complete" footer partition, then a Random Index Pack.
+
+**The Body Partition Pack is not optional, for any track count.** An
+earlier version of this crate omitted it for a single essence track,
+reasoning from `vaco-demux-mxf`'s own D-10 corpus (a real `ffmpeg -f
+mxf_d10` file's header partition carries essence directly, no separate
+body pack). A literal byte-for-byte `cmp` against a real single-track
+`ffmpeg -f mxf -fflags +bitexact` file found a Body Partition Pack there
+too, at the same relative position as a two-track file's — D-10's
+single-partition shape is real for `-f mxf_d10` specifically, not for
+OP1a's `-f mxf`, and this crate targets OP1a. Checking a claim about "what
+a real file does" against a *second* real file, not just re-reading the
+first one's own conclusion, is what caught this.
 
 The footer restates **nothing** from the header: only a fresh Index Table
 Segment (the video track's real `IndexEntryArray`, and the real edit-unit
@@ -66,18 +87,22 @@ the real duration — both derive it from the Index Table Segment's own
 `IndexDuration`/entry count, which the footer does state correctly. Why the
 duplicate-metadata design specifically triggered `ffmpeg`'s warnings was
 not root-caused further (see "Deferred work"); dropping the duplication
-outright was cheaper and is not a loss, since nothing needs it.
+outright was cheaper and is not a loss, since nothing needs it. This is
+also the reason full byte-identity with the reference is not attempted —
+see "Deferred work".
 
-**The one field that does need a small backpatch**: the header partition
-pack's own `FooterPartition`, which cannot be known until the footer is
-about to be written. `vaco-demux-mxf::demux::MxfDemuxer::open` uses this
-field, not the Random Index Pack, to find the footer. `MxfMuxer::write_trailer`
-seeks back and overwrites just that 8-byte field on a seekable sink, then
-returns to the real end of file; on a non-seekable sink the field stays
-`0` and the footer is present but not reachable by a reader that trusts
-`FooterPartition == 0` to mean "no footer" — an honest degradation, not a
-silent one (`a_non_seekable_sink_still_produces_a_sequentially_readable_file`
-is the regression test).
+**The `FooterPartition` backpatch covers every partition pack, not just the
+header's.** `vaco-demux-mxf::demux::MxfDemuxer::open` only ever checks the
+header's `FooterPartition` to find the footer, so backpatching only that
+one field would have been sufficient for this crate's own reader — but a
+real `ffmpeg -f mxf` file backpatches the Body Partition Pack's copy too,
+so `MxfMuxer` tracks every partition pack's `FooterPartition` field
+position (`footer_field_positions`) and overwrites all of them on a
+seekable sink. On a non-seekable sink every field stays `0` and the footer
+is present but not reachable by a reader that trusts `FooterPartition == 0`
+to mean "no footer" — an honest degradation, not a silent one
+(`a_non_seekable_sink_still_produces_a_sequentially_readable_file` is the
+regression test).
 
 ### The structural-metadata graph
 
@@ -125,6 +150,27 @@ decoding a real three-`DataDefinition` fixture byte-for-byte
 has the full account). `vaco-demux-mxf` never reads this property's value
 at all, which is again why only the reference caught it.
 
+**`SubDescriptorUIDs`'s real local tag is `0x3f01`, not an invented
+`0x0603` — the multi-track descriptor-resolution bug, and the most
+user-visible one found this session.** A two-essence-track file
+round-tripped cleanly through `vaco-demux-mxf` (which resolves properties
+by UL through the primer, so the tag number this crate chose for a
+property genuinely should not matter) but a real `ffmpeg -i` logged
+`source track N: stream M, no descriptor found` for **both** tracks and
+reported `codec_name=unknown`, zeroed dimensions/rate for both — `ffmpeg`'s
+own resolution of this one property evidently does not go through the
+general per-file primer/UL matching every other property here does.
+Decoding a real two-track file's actual primer confirmed the UL this crate
+already had registered for `SubDescriptorUIDs` was correct — only the
+*tag number* (measured this session directly, not previously) differed.
+Changing it to `0x3f01` made a real `ffmpeg -i` resolve both tracks
+completely. Two smaller bugs surfaced by the same investigation: this crate
+had been writing the *video* essence-container UL onto the audio
+descriptor too (see "Essence and the Index Table Segment" below), and the
+`MultipleDescriptor`/`Preface`/Partition-Pack `EssenceContainers` lists did
+not distinguish "one media type", "the other", and "more than one" the way
+a real file's three-entry list does.
+
 ### Essence and the Index Table Segment
 
 `essence::track_number` assigns each essence track a Generic Container
@@ -135,14 +181,31 @@ consistency between the essence element's own key and the matching Track's
 `EssenceTrackNumber` property, which both `vaco-demux-mxf` and `ffmpeg`
 confirmed reading back correctly.
 
-One Generic Container System Item (empty value — neither reader interprets
-its content) precedes every essence element, for every track, in
-whatever order `write_packet` receives them. This is a **documented
-simplification**, not the real multi-track interleaving convention (a real
-file groups one System Item per edit unit across all tracks, not one per
-essence element per track) — spec-valid and correctly read by both
-`vaco-demux-mxf` and `ffmpeg`'s sequential packet reads, but not
-byte-identical to a real multi-track file's layout.
+**Each essence kind states its own `EssenceContainer` label** —
+`ul::ESSENCE_CONTAINER_MPEG_FRAME_WRAPPED` for picture,
+`ESSENCE_CONTAINER_SOUND_FRAME_WRAPPED` for sound (measured off a real
+`AES3PCMDescriptor` this session), and `ESSENCE_CONTAINER_MULTIPLE_WRAPPINGS`
+on a `MultipleDescriptor` itself and in `Preface`/both partition packs'
+`EssenceContainers` batch whenever more than one essence kind is present
+(`metadata::essence_containers_used` builds the exact three-entry list a
+real two-track file states, in the same order). Getting this wrong —an
+earlier version reused the picture label for the audio track's own
+property — did not stop `vaco-demux-mxf` from reading the file (that crate
+never interprets this property's value) but made a real `ffmpeg -i` guess
+`mp2` instead of `pcm_s16le` for the audio stream, even after the
+dimensions/rate had already resolved correctly.
+
+**One Generic Container System Item per edit unit, shared across every
+track** — corrected this session from an earlier "one per essence element,
+per track" simplification, after decoding a real two-track file's exact
+KLV sequence (`SystemItem, Video, Audio, SystemItem, Video, Audio, ...`,
+never `SystemItem, Video, SystemItem, Audio`). `MxfMuxer` tracks the edit
+unit (`Packet::pts`) the last-written System Item covers
+(`last_system_item_pts`) and only writes a new one when a packet's own
+edit unit differs — correct only because every track shares one edit rate
+(this crate's own documented scope, see below). The System Item's value is
+still empty; neither reader interprets its content, only recognises the
+key.
 
 Only the **video** track is indexed (`index::build`'s `SliceCount = 0`,
 one essence track per `BodySID`) — matching `vaco-demux-mxf`'s own
@@ -161,8 +224,9 @@ but not currently seekable-to.
   `AES3PCMDescriptor`): `ul::PICTURE_ESSENCE_CODING_MPEG2_LONG_GOP` and
   `metadata::build_descriptor` are the places. Measure the real UL against
   a fixture first (D6/D17) — do not transcribe from a spec table by hand;
-  see the `DataDefinition` account above for what happens when a byte gets
-  swapped and nothing but the reference notices.
+  see the `DataDefinition` and `SubDescriptorUIDs` accounts above for what
+  happens when a byte or a tag number gets guessed and nothing but the
+  reference notices.
 - **A third or more essence track**: `add_stream` currently refuses a
   second video or second audio stream outright. Lifting that needs
   `essence::track_number`'s per-media-type counter (already handles it) and
@@ -174,16 +238,22 @@ but not currently seekable-to.
   This crate's timecode track always states `TimecodeStart = 0`; wiring a
   real starting timecode through from the caller is unclaimed work for
   whichever package takes on OP-Atom/D-10, not blocked by anything here.
+- **Chasing byte-identity further**: `partition::write`'s hardcoded
+  `KAGSize` (currently `1`, real files use `512` with Fill Item padding to
+  match) is the next concrete, well-understood divergence — see "Deferred
+  work".
 
 ---
 
 ## Configuration
 
 No options exposed today; `MxfOptions` is an empty placeholder type kept so
-a future option (an explicit edit rate for an audio-only file, KAG
+a future option (an explicit edit rate for an audio-only file, real KAG
 alignment) does not need a signature change. `KAGSize` is fixed at `1` (no
-alignment grid; nothing downstream needs it — `vaco-demux-mxf` reads
-forward by key, never trusts byte-count arithmetic).
+alignment grid; nothing downstream needs it for correctness —
+`vaco-demux-mxf` reads forward by key, never trusts byte-count arithmetic —
+but it is a real, measured divergence from a real file's `512`; see
+"Deferred work").
 
 ## Dependencies
 
@@ -196,34 +266,45 @@ UMID entropy), `vaco-packet`, `vaco-format-core` (`Muxer`, `MuxerDesc`),
 
 ## Deferred work
 
-- **Byte-identity against the reference: confirmed achievable, not
-  attempted.** `-fflags +bitexact -bitexact` makes two independent
-  `ffmpeg -f mxf` runs produce byte-identical output — verified directly
-  this session (the UMID's material-number field is zeroed under bitexact,
-  not random/time-based, which is what makes this possible; the
+- **Byte-identity against the reference: confirmed achievable, partially
+  chased, deliberately bounded.** `-fflags +bitexact -bitexact` makes two
+  independent `ffmpeg -f mxf` runs produce byte-identical output — verified
+  directly this session (the UMID's material-number field is zeroed under
+  bitexact, not random/time-based, which is what makes this possible; the
   coordinating dispatch's assumption that UMIDs "cannot be byte-identical
   without controlling them" undersold what `ffmpeg` itself already does).
-  Matching that exactly would mean replicating `ffmpeg`'s literal partition
-  count, its duplicate-metadata-in-the-footer layout, System Item placement
-  per edit unit rather than per essence element, and several descriptor
-  properties this crate does not yet write (`AspectRatio`, a 16-byte
-  property at tag `0x320d` whose meaning was not identified) — a
-  substantially larger undertaking than this package's scope, and not
-  pursued. The round trip (this crate's own demuxer, and a real `ffprobe`/
-  `ffmpeg`) is the bar this crate is verified against instead.
-- **A two-essence-track file's descriptor parameters do not resolve under a
-  real `ffmpeg -i`.** `vaco-demux-mxf`'s own `MultipleDescriptor`
-  expansion (`SubDescriptorUIDs` matched by `LinkedTrackId`) correctly
-  resolves both tracks' real parameters from this crate's output — the
-  `a_video_and_audio_file_reports_both_streams_via_the_multiple_descriptor_expansion`
-  test is byte-for-byte proof. A real `ffmpeg -i` on the same file
-  correctly identifies both streams' *media type* (the `TrackID`/
-  `DataDefinition` fixes above apply equally here) but logs `source track
-  N: stream M, no descriptor found` and reports `codec_name=unknown`,
-  `width=0`, `height=0` for both. Not root-caused: `ffmpeg`'s own
-  `LinkedTrackId` matching evidently differs from the mechanism
-  `vaco-demux-mxf` measured and this crate replicates, in some way not yet
-  identified (a plausible candidate, untested: positional matching against
-  `PackageTracks` index rather than `LinkedTrackId` value, which the
-  timecode track's presence at index 0 would throw off — see
-  `planning/TECH-DEBT.md`).
+  A literal `cmp` against a real single-track bitexact file, feeding this
+  crate's muxer the *same* real MPEG-2 frames the reference encoded (so the
+  essence bytes are identical and only the container differs), found and
+  fixed two further structural divergences this session: the Partition
+  Pack's minor version (`3`, this crate had `2`) and the Body Partition
+  Pack being unconditional (see "Partition layout" above). After both
+  fixes, the first remaining byte-level divergence is `KAGSize` (`1` here,
+  `512` in a real file, which also pads structures with Fill Items to that
+  boundary) — a genuine, well-understood, and still-open structural gap.
+  Beyond `KAGSize`/Fill-Item alignment, the dominant remaining difference
+  is still the deliberately-dropped duplicate-footer-metadata layout (see
+  "Partition layout" above): the file-size gap this leaves (several KiB)
+  swamps a byte-level `cmp` past that point, which is why this was
+  bounded here rather than chased to zero — restating the footer would
+  reopen the `Multiple primer packs`/media-type-misreport bug this session
+  already spent real effort fixing, and the two goals (byte-identity,
+  correctness under a real reference reader) are in real tension at that
+  specific point, not just a matter of more time.
+  Two real, identified-but-unwritten descriptor properties were found
+  along the way and are recorded here rather than guessed into the
+  descriptor: tag `0x320e` (8 bytes, two 4-byte ints) is `AspectRatio`
+  (confirmed against two real fixtures: `(5,4)` on a 720x576 file, `(4,3)`
+  on a 320x240 one — both correct display aspect ratios); tag `0x320d` (16
+  bytes: `Count=2, ItemLength=4`, then two 4-byte ints) is very likely
+  `VideoLineMap` (a batch of the first active line number per field —
+  `[46, 0]` on the interlaced 720x576 fixture, `[0, 0]` on the progressive
+  320x240 one, consistent with `FrameLayout`), but this was not
+  cross-checked against a third fixture and is reported as a strong
+  inference, not a confirmed measurement.
+- **A two-essence-track file's descriptor resolution under a real
+  `ffmpeg -i`: resolved this session.** Fixed by the `SubDescriptorUIDs`
+  tag correction and the per-media-type `EssenceContainer` fix above (see
+  "The structural-metadata graph" and "Essence and the Index Table
+  Segment"). `a_real_ffprobe_resolves_both_tracks_of_a_multiple_descriptor_file`
+  is the regression test against a real `ffprobe`.

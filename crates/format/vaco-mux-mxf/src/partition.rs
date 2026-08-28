@@ -34,7 +34,13 @@ pub(crate) struct PartitionPackFields {
 pub(crate) fn write(io: &mut IoWriter, key: &[u8; 16], fields: &PartitionPackFields) -> Result<()> {
     let mut value = Vec::new();
     value.extend_from_slice(&1u16.to_be_bytes()); // major version
-    value.extend_from_slice(&2u16.to_be_bytes()); // minor version
+    // Minor version 3, not 2: measured this session against every real
+    // ffmpeg -f mxf/-f mxf_d10 fixture in this workspace's corpus
+    // (op1a_mpeg2_sample.mxf, a real two-track file) — the first byte a
+    // literal `cmp` against a real `-fflags +bitexact` file actually
+    // disagreed on, ahead of anything ID-related.
+    value.extend_from_slice(&3u16.to_be_bytes()); // minor version
+
     value.extend_from_slice(&1u32.to_be_bytes()); // KAGSize
     value.extend_from_slice(&fields.this_partition.to_be_bytes());
     value.extend_from_slice(&fields.previous_partition.to_be_bytes());

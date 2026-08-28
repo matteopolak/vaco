@@ -67,15 +67,19 @@ pub struct MxfMuxer {
     tracks: Vec<TrackPlan>,
     graph_ids: Option<GraphIds>,
     edit_rate: Rational,
-    essence_container: ul::Ul,
     header_written: bool,
     trailer_written: bool,
     /// Absolute file offset of the header partition pack's own key (always
     /// `0`: this crate never writes anything before it).
     header_this_partition: u64,
-    /// Absolute file offset of the `FooterPartition` field inside the
-    /// header partition pack, for the seekable-sink backpatch.
-    footer_field_pos: u64,
+    /// Absolute file offset of the `FooterPartition` field inside every
+    /// partition pack written before the footer (the header, and a body
+    /// partition pack when more than one essence track is written) —
+    /// each gets the same seekable-sink backpatch. A real `ffmpeg -f mxf`
+    /// file backpatches every partition's own `FooterPartition`, not just
+    /// the header's (measured this session); `vaco-demux-mxf`'s own reader
+    /// only ever checks the header's, so this is for other readers.
+    footer_field_positions: Vec<u64>,
     /// Absolute offset of the first essence element's own key —
     /// `IndexEntryArray`'s `StreamOffset`s are relative to this, matching
     /// `vaco-demux-mxf`'s own measured convention.
@@ -84,6 +88,14 @@ pub struct MxfMuxer {
     /// Packets written per stream, by stream index — this file's real
     /// per-track duration once `write_trailer` runs.
     packet_counts: Vec<u64>,
+    /// The edit-unit tick (`Packet::pts`) the last-written Generic Container
+    /// System Item covers, so a second track's packet for the *same* edit
+    /// unit does not get a redundant one — matching a real file's own
+    /// convention (measured this session against a real two-track `ffmpeg
+    /// -f mxf` file: exactly one System Item per edit unit, immediately
+    /// before that unit's first essence element, shared across every
+    /// track). `None` until the first packet is written.
+    last_system_item_pts: Option<i64>,
 }
 
 impl MxfMuxer {
@@ -96,14 +108,14 @@ impl MxfMuxer {
             tracks: Vec::new(),
             graph_ids: None,
             edit_rate: Rational { num: 25, den: 1 },
-            essence_container: ul::ESSENCE_CONTAINER_MPEG_FRAME_WRAPPED,
             header_written: false,
             trailer_written: false,
             header_this_partition: 0,
-            footer_field_pos: 0,
+            footer_field_positions: Vec::new(),
             essence_origin: None,
             video_entries: Vec::new(),
             packet_counts: Vec::new(),
+            last_system_item_pts: None,
         })
     }
 }
@@ -204,7 +216,11 @@ impl Muxer for MxfMuxer {
             .ok_or(Error::InvalidData("mxf: init() was not called"))?;
 
         let primer_bytes = localset::build_primer_pack(&metadata::primer_entries());
-        let sets = metadata::build_sets(&ids, &self.tracks, self.edit_rate, self.essence_container, None);
+        let sets = metadata::build_sets(&ids, &self.tracks, self.edit_rate, None);
+        let essence_containers: Vec<ul::Ul> = metadata::essence_containers_used(&self.tracks)
+            .into_iter()
+            .map(ul::Ul::new)
+            .collect();
 
         self.header_this_partition = self.out.pos();
         let header_byte_count = klv_len(&ul::primer_pack_key(), &primer_bytes)
@@ -221,44 +237,58 @@ impl Muxer for MxfMuxer {
             index_byte_count: 0,
             index_sid: 0,
             body_offset: 0,
-            body_sid: 1,
+            // The header partition itself carries no essence -- the body
+            // partition written below does (`body_sid: 1` there). Measured:
+            // a real file's header partition states `body_sid = 0`.
+            body_sid: 0,
             operational_pattern: ul::OPERATIONAL_PATTERN_OP1A,
-            essence_containers: vec![self.essence_container],
+            essence_containers,
         };
-        let key = ul::header_partition_key();
-        klv::write(&mut self.out, &key, &{
-            // Build once to know the exact value bytes, so
-            // `footer_field_pos` below is computed from the same buffer
-            // that is actually written (see `partition::write`'s own
-            // layout, mirrored here only for the offset arithmetic).
-            let mut v = Vec::new();
-            v.extend_from_slice(&1u16.to_be_bytes());
-            v.extend_from_slice(&2u16.to_be_bytes());
-            v.extend_from_slice(&1u32.to_be_bytes());
-            v.extend_from_slice(&fields.this_partition.to_be_bytes());
-            v.extend_from_slice(&fields.previous_partition.to_be_bytes());
-            v.extend_from_slice(&fields.footer_partition.to_be_bytes());
-            v.extend_from_slice(&fields.header_byte_count.to_be_bytes());
-            v.extend_from_slice(&fields.index_byte_count.to_be_bytes());
-            v.extend_from_slice(&fields.index_sid.to_be_bytes());
-            v.extend_from_slice(&fields.body_offset.to_be_bytes());
-            v.extend_from_slice(&fields.body_sid.to_be_bytes());
-            v.extend_from_slice(&fields.operational_pattern.as_bytes());
-            v.extend_from_slice(&1u32.to_be_bytes());
-            v.extend_from_slice(&16u32.to_be_bytes());
-            v.extend_from_slice(&self.essence_container.as_bytes());
-            v
-        })?;
+        partition::write(&mut self.out, &ul::header_partition_key(), &fields)?;
         // key(16) + BER length prefix(4, this crate's fixed form) precedes
         // the value; `FOOTER_PARTITION_FIELD_OFFSET` is the field's offset
-        // within that value.
-        self.footer_field_pos =
-            self.header_this_partition + 20 + partition::FOOTER_PARTITION_FIELD_OFFSET;
+        // within that value, and does not depend on how many essence
+        // containers the batch above lists (that batch comes after the
+        // field in the fixed layout) — safe to compute independently of
+        // the buffer `partition::write` actually built.
+        self.footer_field_positions
+            .push(self.header_this_partition + 20 + partition::FOOTER_PARTITION_FIELD_OFFSET);
 
         klv::write(&mut self.out, &ul::primer_pack_key(), &primer_bytes)?;
         for (key, value) in &sets {
             klv::write(&mut self.out, key, value)?;
         }
+
+        // A genuine Body Partition Pack, distinct from the header, right
+        // before essence begins. Corrected this session: an earlier version
+        // wrote one only for more than one essence track, on the strength
+        // of this crate's own D-10 corpus (single-partition, essence
+        // directly in the header) — but a literal `cmp` against a real
+        // single-track `ffmpeg -f mxf -fflags +bitexact` file showed a
+        // body partition there too (`op1a_mpeg2_sample.mxf`, this crate's
+        // own single-track fixture, has one at the same relative position
+        // once checked properly). D-10's single-partition shape is real
+        // for `-f mxf_d10` specifically, not for OP1a's `-f mxf` — the two
+        // muxers are not the same shape, and this crate targets OP1a.
+        let body_this_partition = self.out.pos();
+        let body_fields = PartitionPackFields {
+            this_partition: body_this_partition,
+            previous_partition: self.header_this_partition,
+            footer_partition: 0,
+            header_byte_count: 0,
+            index_byte_count: 0,
+            index_sid: 0,
+            body_offset: 0,
+            body_sid: 1,
+            operational_pattern: ul::OPERATIONAL_PATTERN_OP1A,
+            essence_containers: metadata::essence_containers_used(&self.tracks)
+                .into_iter()
+                .map(ul::Ul::new)
+                .collect(),
+        };
+        partition::write(&mut self.out, &ul::body_partition_key(), &body_fields)?;
+        self.footer_field_positions
+            .push(body_this_partition + 20 + partition::FOOTER_PARTITION_FIELD_OFFSET);
 
         self.header_written = true;
         Ok(())
@@ -275,14 +305,20 @@ impl Muxer for MxfMuxer {
             .ok_or(Error::InvalidData("mxf: packet names an unknown stream"))?
             .clone();
 
-        // One Generic Container System Item per essence element (see this
-        // crate's `docs/format/vaco-mux-mxf.md` for why this is a
-        // documented simplification rather than the real one-per-edit-unit
-        // convention for a multi-track file): this crate's own reader
+        // One Generic Container System Item per edit unit, shared across
+        // every track (measured against a real two-track file — see
+        // `last_system_item_pts`'s doc comment): this crate's own reader
         // never interprets the System Item's content, only its key, so an
         // empty value is a real, valid KLV and costs nothing to parse
-        // around.
-        klv::write(&mut self.out, &ul::GC_SYSTEM_ITEM, &[])?;
+        // around. `Packet::pts` is the edit-unit tick in this crate's own
+        // time base (`stream_time_base` returns the shared edit rate), so
+        // comparing raw ticks across tracks is correct only because every
+        // track shares one edit rate (this crate's own documented scope).
+        let edit_unit = packet.pts.ticks();
+        if edit_unit.is_none() || edit_unit != self.last_system_item_pts {
+            klv::write(&mut self.out, &ul::GC_SYSTEM_ITEM, &[])?;
+            self.last_system_item_pts = edit_unit;
+        }
 
         let pos = self.out.pos();
         if self.essence_origin.is_none() {
@@ -362,7 +398,10 @@ impl Muxer for MxfMuxer {
             body_offset: 0,
             body_sid: 0,
             operational_pattern: ul::OPERATIONAL_PATTERN_OP1A,
-            essence_containers: vec![self.essence_container],
+            essence_containers: metadata::essence_containers_used(&self.tracks)
+                .into_iter()
+                .map(ul::Ul::new)
+                .collect(),
         };
         partition::write(&mut self.out, &ul::footer_partition_key(), &fields)?;
         klv::write(&mut self.out, &index_key, &index_value)?;
@@ -383,15 +422,17 @@ impl Muxer for MxfMuxer {
 
         let real_end = self.out.pos();
         if self.out.is_seekable() {
-            // The one backpatch this crate performs (see this module's
-            // docs): `FooterPartition` was `0` when the header was written,
-            // since the footer's position was not known yet. Seek back,
-            // overwrite just that 8-byte field, then return to the real
-            // end of the file — leaving the cursor mid-file after this
-            // would silently truncate anything written later even though
-            // nothing does today.
-            self.out.seek(self.footer_field_pos)?;
-            self.out.write(&footer_this_partition.to_be_bytes())?;
+            // The backpatch this crate performs (see this module's docs):
+            // every partition pack's own `FooterPartition` was `0` when it
+            // was written, since the footer's position was not known yet.
+            // Seek back, overwrite just that 8-byte field in each one, then
+            // return to the real end of the file — leaving the cursor
+            // mid-file after this would silently truncate anything written
+            // later even though nothing does today.
+            for &pos in &self.footer_field_positions {
+                self.out.seek(pos)?;
+                self.out.write(&footer_this_partition.to_be_bytes())?;
+            }
             self.out.seek(real_end)?;
         }
         self.out.flush()?;
