@@ -2190,3 +2190,39 @@ Fix it in the same history rewrite as the five orchestrator commits missing
 `Signed-off-by:` recorded above — all six are metadata-only, all six are safe
 the moment the tree is quiet, and doing them together costs one rewrite rather
 than two. The rule that prevents recurrence is now on the constraints page.
+
+## `vaco-demux-mxf` does not unpack D-10's AES3 audio bundle into playable PCM
+
+`descriptor::sound_parameters` correctly reads `sample_rate`/channel count/
+`format` for a `GenericSoundEssenceDescriptor` (D-10's audio class), but
+`codec_id` is `None` for it: the essence bytes are not raw `pcm_s16le`, they
+are a fixed AES3-style bundle (4-byte element header, then per sample
+instant — 1920 of them at 48 kHz/25 fps — 8 fixed channel slots regardless
+of the descriptor's own logical channel count, each slot a 4-byte word: 1
+tag byte plus a little-endian 24-bit field holding the 16-bit sample
+left-shifted 4 bits). Measured by diffing this crate's raw KLV length
+against `ffprobe`'s reported packet size (`61444` vs `30720`/`7680`
+depending on channel count) and then against `ffmpeg -c copy -f data`'s own
+extracted PCM byte-for-byte on `tests/fixtures/d10_mpeg2_aes3_sample.mxf`.
+
+`read_packet` reports the real, unmodified 61444-byte length rather than
+substituting the smaller unpacked size — the container-framing fact is
+correct and honest. What is missing is turning that bundle into linear
+`pcm_s16le`, which needs the descriptor's channel count threaded into
+per-sample extraction. This was treated as bitstream/essence-format work
+out of this crate's scope (the same D14.1 line already drawn for MPEG-2
+timestamp reordering) rather than implemented as a guess, and is plausibly
+better placed in a decoder crate than this container demuxer — see
+`descriptor::sound_parameters`'s module docs and `docs/format/vaco-demux-mxf.md`
+("Sound essence") for the full measurement. `provenance/sources.toml`'s
+`ffmpeg-mxf-sound-essence-probe` entry has the acquisition record.
+
+If a future agent picks this up: the formula above is fully general and
+already verified against two real fixtures (2-channel-requested and
+8-channel-requested, both physically 8 slots) — the only open question is
+whether the 8-slot count is actually always 8 regardless of requested
+channel count, or whether it can be 4 (SMPTE 386M permits both 4 and 8); a
+4-channel `-d10_channelcount 4` fixture failed to encode in this session
+with an apparently unrelated `ffmpeg 8.1` `mxf_d10` muxer error ("frame
+size does not match index unit size") that did not reproduce with 2 or 8
+channels and was not investigated further.
