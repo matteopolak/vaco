@@ -84,18 +84,24 @@
 //! **What is not**: full bit-exactness for CABAC's macroblock layer.
 //! [`mb::decode_slice_cabac`] now exists and drives I/P slices through
 //! real `libx264 -coder cabac` corpora (`tests/macroblock_layer_cabac.rs`),
-//! and building it caught two real bugs the same way the CAVLC pass did —
+//! and building it caught four real bugs across two passes — first,
 //! `cabac_residual.rs`'s context tables were a single shared table
 //! ignoring `cabac_init_idc` entirely (not merely imprecise, structurally
-//! wrong), and chroma DC's `coded_block_flag` was never actually read, both
-//! now fixed against primary text. But bit consumption still diverges
-//! partway through all three corpora, including an all-intra one built
-//! specifically to rule out P-slice causes, in a way not root-caused within
-//! this dispatch — see [`mb`]'s own module doc and
-//! `docs/codec/vaco-codec-h264.md` for the exact minimal repro. Reporting
-//! that honestly, rather than claiming the same bit-exact bar CAVLC holds,
-//! is the same choice a previous dispatch on this project was asked to
-//! make for the specification-only-dressed-as-verified gap.
+//! wrong), and chroma DC's `coded_block_flag` was never actually read; a
+//! second pass found `intra_chroma_pred_mode` was decoded but never
+//! stored (so a neighbour-dependent `ctxIdxInc` derivation could never see
+//! its real value — this one alone ate the entire first-pass repro, since
+//! it corrupts the arithmetic engine's state from the very first
+//! context-coded read in every intra macroblock), and `ref_idx_cond_term`
+//! had a clause 9.3.3.1.1.6 comparison inverted. All four fixed against
+//! primary text. But bit consumption still diverges, later and on
+//! different corpora each time this has been measured, in a way not
+//! root-caused within either dispatch — see [`mb`]'s own module doc and
+//! `docs/codec/vaco-codec-h264.md` for the current exact minimal repro per
+//! corpus. Reporting that honestly, rather than claiming the same
+//! bit-exact bar CAVLC holds, is the same choice a previous dispatch on
+//! this project was asked to make for the specification-only-dressed-as-
+//! verified gap.
 
 #![forbid(unsafe_code)]
 

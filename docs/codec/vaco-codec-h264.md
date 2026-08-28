@@ -268,26 +268,72 @@ layer did catch, before the remaining divergence:
    macroblock with `cbp_chroma=1` hit a premature `end_of_slice_flag`.
    Fixed, but fixing it did not by itself reach bit-exactness — see below.
 
-The unresolved divergence: with the chroma-DC fix in place, all three
-corpora — including the all-intra one, which rules out anything
-P-slice-specific (`ref_idx`/`mvd`/`mb_skip_flag`/`sub_mb_pred`) — still
-diverge shortly after certain `coded_block_flag` combinations for chroma
-DC. Minimal repro: `cabac_i_only.264`, slice 1, macroblock address 9
-(`cbp_luma=0b1111`, `cbp_chroma=2`), where both chroma components' DC
-`coded_block_flag` decode `false`. Manual re-review of the
-`CBF_CHROMA_DC` table transcription, the `ctxIdxInc = cond_a + 2*cond_b`
-derivation, `cbf_cond_term`/`cbp_chroma_cond_term`, and the `blk_xy`
-chroma coordinate mapping found no error in any of them; the true cause
-was not found within the time available. Exact reasons are in
-`tests/macroblock_layer_cabac.rs`'s `#[ignore]` strings so whoever picks
-this back up starts from the same minimal case rather than re-deriving it.
+**A second pass found two more real bugs, and ate the chroma-DC repro
+above entirely.** Before hand-debugging, the fixed `h264_entropy` fuzz
+harness (widened from a one-byte to a two-byte selector — see below) was
+run against the newly-reachable `ChromaDc` category on its own: 10.5M+
+executions, no crash, so whatever remained was a silent semantic
+divergence rather than anything the residual decoder panics or hangs on.
+Hand-review then found:
+
+4. **`intra_chroma_pred_mode` was decoded but never stored.**
+   `decode_macroblock_cabac` read the value correctly, but
+   `set_mb_info` hardcoded `intra_chroma_pred_mode: 0` into
+   `CabacMbInfo` regardless — so clause 9.3.3.1.1.8's own
+   `condTermFlagN` (`... intra_chroma_pred_mode for mbAddrN == 0 ...`)
+   could never see a neighbour's real, nonzero value. This is the very
+   first context-coded element read inside every intra macroblock, ahead
+   of `coded_block_pattern` and all residual reads, so a wrong context
+   here shifts the arithmetic engine's range/offset for everything
+   decoded afterward in that slice — a plausible explanation for a
+   downstream symptom as far away as chroma DC's flags looking wrong.
+   This single fix ate the previous exact repro entirely: it no longer
+   reproduces on any of the three corpora.
+5. **`ref_idx_cond_term`'s comparison was inverted.** Clause 9.3.3.1.1.6
+   derives `refIdxZeroFlagN = (ref_idx_lX[mbPartIdxN] > 0) ? 0 : 1` and
+   folds it into `condTermFlagN` such that `condTermFlagN = 1` exactly
+   when the neighbour's own `ref_idx` is greater than 0; the code had
+   `r <= 0` where it needed `r > 0`. Found by re-checking the primary
+   text bin-by-bin against the function rather than from recollection —
+   recollection had the polarity backwards.
+
+The unresolved divergence, narrower now: `cabac_ip_simple.264` gets
+through 10 full slices before diverging at slice 10, macroblock address
+3, decoded as `Intra4x4` where `ffmpeg -debug mb_type`'s own per-macroblock
+type dump shows it should be `mb_skip_flag = 1`. The `ctxIdxInc` feeding
+that specific read checks out by hand against clause 9.3.3.1.1.1 (left
+neighbour address 2, available and not skipped → 1; above neighbour off
+the top of the picture → 0), and `SKIP_P`/`MB_TYPE_P`/`CBP_LUMA`/
+`CBP_CHROMA` were each re-verified whole against Table 9-13/9-18 and
+matched exactly — so the true divergence is upstream of this address,
+most likely within address 2's own decode, not found within this round's
+time budget. `cabac_ip_multiref.264` now gets further too: every one of
+its 36 macroblocks is visited and classified before
+`CabacDecoder::malformed()` trips at the slice's own end-of-slice
+bookkeeping. `cabac_i_only.264` no longer diverges at all in the sense
+that matters: it decodes correctly through slice 5 and then hits `I_PCM`
+at slice 6, which `decode_slice_cabac` refuses on purpose (out of scope)
+rather than attempting unverified — a scope boundary, not a bug. Exact,
+per-corpus repros are in `tests/macroblock_layer_cabac.rs`'s `#[ignore]`
+strings so whoever picks this back up starts from the current minimal
+cases rather than re-deriving them.
 
 What full self-consistency does still cover: hand-built fixtures cited to
 the exact table row/spec clause they exercise, round-trips through
 `vaco-codec-cabac`'s own test-only encoder mirroring this crate's exact
-bin sequence, and the `h264_entropy` fuzz target (now covering all five
-`ContextCategory` values and all four `cabac_init_idc` selections, 5.75M+
-executions with no crash).
+bin sequence, and the `h264_entropy` fuzz target. That target's own
+selector was widened from one byte to two specifically because
+`ContextCategory` now has 5 values and `CabacInit` has 4, which no longer
+fit in the bits left over after entropy-mode/`nC`/`max_num_coeff` in a
+single byte — the one-byte version silently made the newly-added
+`ChromaDc` category unreachable by fuzzing, exactly the "a harness too
+narrow for its own state space reports false clean" failure shape now
+recorded on `AGENT-CONSTRAINTS.md`. Fixed, and re-run (multiple passes,
+5M-10M+ executions each, no crash) both generally and specifically
+targeted at the newly-reachable `ChromaDc` cross product before any
+hand-debugging in this round — clean, meaning whatever divergence
+remained was a silent semantic one, not something this residual-layer
+fuzz target could ever catch on its own.
 
 ## How to change it
 

@@ -28,13 +28,20 @@ use vaco_limits::{Budget, Limits};
 use vaco_parse_h264::{H264NalHeader, NalUnitType, ParameterSets, SliceHeader};
 
 #[test]
-#[ignore = "known incomplete: bit consumption diverges shortly after certain \
-coded_block_flag combinations for chroma DC (ctxBlockCat 3) — reproduces on \
-I slices alone, so it is not a P-slice/ref_idx/mvd-specific bug. Root cause \
-not found within this dispatch's time budget; see the coordinator report \
-for the exact minimal repro (cabac_i_only.264, slice 1, macroblock address \
-9 — cbp_luma=0b1111, cbp_chroma=2, both chroma-DC coded_block_flag reads \
-false). Kept here, not deleted, for whoever picks this back up."]
+#[ignore = "known incomplete, but narrower than before: two real bugs found \
+this round (intra_chroma_pred_mode was decoded but never stored in \
+CabacMbInfo, so clause 9.3.3.1.1.8's own condTermFlagN could never see a \
+neighbour's real value; ref_idx_cond_term's clause 9.3.3.1.1.6 comparison \
+was inverted, r <= 0 instead of r > 0) ate the previous exact repro \
+entirely (it no longer reproduces on any of this dispatch's three \
+corpora). This corpus now diverges later: slice 10, macroblock address 3 \
+decodes as Intra4x4 where ffmpeg's own `-debug mb_type` dump shows it \
+should be mb_skip_flag=1. The ctxIdxInc feeding that read checks out by \
+hand against clause 9.3.3.1.1.1 (left=addr2, available, not skipped -> 1; \
+above unavailable -> 0), and SKIP_P/MB_TYPE_P/CBP_LUMA/CBP_CHROMA were \
+all re-verified whole against Tables 9-13/9-18 and matched exactly, so \
+the true divergence is upstream of this read, most likely within address \
+2's own decode. Not narrowed further within this round's time budget."]
 fn every_slice_in_a_real_ip_cabac_stream_consumes_exactly_its_own_bits() {
     let data: &[u8] = include_bytes!("fixtures/cabac_ip_simple.264");
     let mut params = ParameterSets::new();
@@ -104,13 +111,15 @@ fn every_slice_in_a_real_ip_cabac_stream_consumes_exactly_its_own_bits() {
 }
 
 #[test]
-#[ignore = "known incomplete: bit consumption diverges shortly after certain \
-coded_block_flag combinations for chroma DC (ctxBlockCat 3) — reproduces on \
-I slices alone, so it is not a P-slice/ref_idx/mvd-specific bug. Root cause \
-not found within this dispatch's time budget; see the coordinator report \
-for the exact minimal repro (cabac_i_only.264, slice 1, macroblock address \
-9 — cbp_luma=0b1111, cbp_chroma=2, both chroma-DC coded_block_flag reads \
-false). Kept here, not deleted, for whoever picks this back up."]
+#[ignore = "known incomplete, but narrower than before: with this \
+round's two fixes (see the ip_simple test's ignore reason for both), this \
+corpus's own divergence moved from mid-slice-5 to slice 5's very end — \
+every one of the picture's 36 macroblocks (6x6) is now visited and \
+classified, but CabacDecoder::malformed() is set by the time the slice's \
+own end-of-slice bookkeeping runs, meaning the arithmetic engine read \
+past its available bytes somewhere during decode despite the macroblock \
+loop nominally completing. Not narrowed further within this round's time \
+budget."]
 fn every_slice_in_a_real_multiref_cabac_stream_consumes_exactly_its_own_bits() {
     let data: &[u8] = include_bytes!("fixtures/cabac_ip_multiref.264");
     let mut params = ParameterSets::new();
@@ -182,13 +191,14 @@ fn every_slice_in_a_real_multiref_cabac_stream_consumes_exactly_its_own_bits() {
 }
 
 #[test]
-#[ignore = "known incomplete: bit consumption diverges shortly after certain \
-coded_block_flag combinations for chroma DC (ctxBlockCat 3) — reproduces on \
-I slices alone, so it is not a P-slice/ref_idx/mvd-specific bug. Root cause \
-not found within this dispatch's time budget; see the coordinator report \
-for the exact minimal repro (cabac_i_only.264, slice 1, macroblock address \
-9 — cbp_luma=0b1111, cbp_chroma=2, both chroma-DC coded_block_flag reads \
-false). Kept here, not deleted, for whoever picks this back up."]
+#[ignore = "the exact minimal repro this test used to hit (slice 1, \
+macroblock address 9's chroma DC coded_block_flag) is gone after this \
+round's two fixes (see the ip_simple test's ignore reason) — genuine \
+progress, not a stall. This corpus now decodes correctly through slice 5 \
+and reaches slice 6, where it hits I_PCM, which decode_slice_cabac \
+refuses on purpose (out of scope; see mb.rs's own module doc) rather than \
+attempting it unverified. Still #[ignore]d only because I_PCM support \
+does not exist yet, not because of a bit-consumption divergence."]
 fn every_slice_in_a_real_i_only_cabac_stream_consumes_exactly_its_own_bits() {
     let data: &[u8] = include_bytes!("fixtures/cabac_i_only.264");
     let mut params = ParameterSets::new();

@@ -799,11 +799,30 @@ fn decode_residual(
 // `docs/codec/vaco-codec-h264.md` for what that measurement does and does
 // not yet confirm.
 //
-// KNOWN GAP, not yet closed: even with that fix, the measurement below does
-// not yet reach full bit-exact consumption on every corpus tried —
-// `tests/macroblock_layer_cabac.rs`'s three tests are `#[ignore]`d with the
-// exact minimal reproduction. Reported honestly rather than claimed; see
-// the coordinator report for this dispatch.
+// A second pass found two more real bugs, both upstream of that fix and
+// both far more consequential: `set_mb_info` hardcoded
+// `intra_chroma_pred_mode: 0` regardless of what was actually decoded, so
+// clause 9.3.3.1.1.8's own condTermFlagN — the very first context-coded
+// read inside every intra macroblock — could never see a neighbour's real
+// value; and `ref_idx_cond_term` had clause 9.3.3.1.1.6's comparison
+// inverted (`r <= 0` where the primary text needs `r > 0`). Fixing the
+// first alone ate the chroma-DC repro above entirely — it no longer
+// reproduces on any corpus this crate has — which fits: a wrong context
+// this early in an intra macroblock's decode shifts the arithmetic
+// engine's range/offset for everything read afterward, so "chroma DC
+// looks wrong" was a downstream symptom, not the defect's location.
+//
+// KNOWN GAP, not yet closed: bit consumption still diverges, later and on
+// different corpora than before — `tests/macroblock_layer_cabac.rs`'s
+// three tests are `#[ignore]`d with the current exact minimal
+// reproduction for each. Every table and ctxIdxInc formula reachable
+// before each new divergence point has been re-verified against primary
+// text and matches; the fixed `h264_entropy` fuzz harness was run against
+// the newly-reachable `ChromaDc` cross product before any hand-debugging
+// and found nothing (clean — meaning whatever remains is a silent
+// semantic divergence, not a panic/hang this fuzz target could catch).
+// Reported honestly rather than claimed; see the coordinator report for
+// this dispatch.
 use crate::cabac_mb_tables::{inits_by_col, inits_by_idc, inits_fixed};
 
 /// `CabacDecoder::decode_decision` over a context array, indexed safely —
@@ -1067,14 +1086,21 @@ fn intra_chroma_cond_term(neighbour: Option<CabacMbInfo>) -> u32 {
     u32::from(info.is_intra && !info.is_ipcm && info.intra_chroma_pred_mode != 0)
 }
 
-/// clause 9.3.3.1.1.6's `condTermFlagN` for `ref_idx_lX`.
+/// clause 9.3.3.1.1.6's `condTermFlagN` for `ref_idx_lX`. `refIdxZeroFlagN
+/// = (ref_idx_lX[mbPartIdxN] > 0) ? 0 : 1`, and `condTermFlagN = 0` when
+/// `refIdxZeroFlagN == 1` (among the other zero-conditions `pred`/`reads`
+/// already cover), `condTermFlagN = 1` otherwise — i.e. 1 exactly when the
+/// neighbour's own `ref_idx` is greater than 0. An earlier version of this
+/// function had the comparison inverted (`r <= 0` instead of `r > 0`),
+/// found by re-checking the primary text bin-by-bin rather than from
+/// recollection — recollection had the polarity backwards.
 fn ref_idx_cond_term(n: MvInfo, list: usize) -> u32 {
     let Some(pred) = n.pred else { return 0 };
     let reads = if list == 0 { pred.reads_l0() } else { pred.reads_l1() };
     if !reads {
         return 0;
     }
-    u32::from(n.ref_idx.get(list).is_some_and(|&r| r <= 0))
+    u32::from(n.ref_idx.get(list).is_some_and(|&r| r > 0))
 }
 
 /// clause 9.3.3.1.1.7's `absMvdCompN` for `mvd_lX`.
@@ -1462,6 +1488,12 @@ fn decode_macroblock_cabac(
     }
 
     let is_intra = kind.is_intra();
+    // clause 9.3.3.1.1.8's own condTermFlagN needs a neighbour's *decoded*
+    // intra_chroma_pred_mode (specifically, whether it was nonzero) — kept
+    // here so it can be threaded into this macroblock's own `CabacMbInfo`
+    // below, the same "actually store what a later ctxIdxInc derivation
+    // needs" fix chroma DC's coded_block_flag got.
+    let mut intra_chroma_pred_mode = 0u8;
     if is_intra {
         if matches!(kind, MbKind::Intra4x4) {
             for _ in 0..16 {
@@ -1482,6 +1514,7 @@ fn decode_macroblock_cabac(
             }
             n += 1;
         }
+        intra_chroma_pred_mode = u8::try_from(n).unwrap_or(3);
     } else {
         // Non-intra: `raw_code` (0..=4, `classify_mb_type`'s own input,
         // still in scope) carries the exact partition geometry
@@ -1593,7 +1626,7 @@ fn decode_macroblock_cabac(
             is_ipcm: false,
             cbp_luma,
             cbp_chroma,
-            intra_chroma_pred_mode: 0,
+            intra_chroma_pred_mode,
         },
     );
     Ok(())
