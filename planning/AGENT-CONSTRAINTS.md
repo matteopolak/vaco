@@ -1546,3 +1546,35 @@ hypothesis, and it needs measuring before and after, per D17.
 If a dispatched path loses, say so plainly and do not route callers through it.
 A pessimisation behind a dispatch layer is worse than no dispatch layer: it
 costs performance and reads as an optimisation to everyone who follows.
+
+## Measuring one plane is not measuring the output
+
+A VP8 encoder used luma-scale macroblock coordinates for intra **chroma**
+prediction — a 16px grid where chroma needs 8px — silently corrupting every
+chroma macroblock after the first.
+
+Two tests passed cleanly over that bug:
+
+- the crate's **own decoder round-trip**, because both sides made the same
+  mistake and agreed with each other;
+- a **luma-only MSE** check, because luma was genuinely fine.
+
+It was found by measuring **chroma** PSNR against `ffmpeg`-decoded output:
+7 dB before the fix, 29 dB after. Nothing internal could have found it.
+
+Two rules follow, and the second is the one that gets skipped:
+
+1. **Verify against a decoder you did not write.** Self-round-trip proves the
+   encoder and decoder share a convention; it says nothing about whether that
+   convention is the format's. This is the same failure as the VP8 encoder that
+   omitted an entire token partition, the Opus decoder at 0.03 correlation, and
+   the first ALAC — all pulled back in one day.
+2. **Measure every plane, every channel, every field — not the one that is
+   easiest to eyeball.** A metric averaged over the whole frame, or taken over
+   luma alone, will hide a defect confined to a subsampled plane. Report Y, U
+   and V separately. The same applies to audio channels, to alpha, and to
+   interlaced fields.
+
+A single aggregate number is a summary, and summaries are where structured
+error goes to hide. Per `705779d`, structured deviation is a bug however small
+its average.
