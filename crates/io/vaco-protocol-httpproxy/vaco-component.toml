@@ -1,7 +1,19 @@
 # Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# `default = false`, same reasoning and same measurement as
+# `vaco-protocol-http`'s fragment (see its comment for the full argument):
+# this crate depends on `vaco-protocol-socket` (`socket2`), which is
+# `NATIVE_ONLY` in `cargo xtask wasm-check`. Without `default = false` here,
+# `protocol-httpproxy` becomes a *default* optional dependency of
+# `vaco-registry`, and anything depending on `vaco-registry` with default
+# features (`vaco-cli` included) drags `socket2` into its own wasm build and
+# fails on the same wall — measured directly: registering this crate without
+# `default = false` regressed `vaco-cli`'s wasm32-unknown-unknown build.
 
 [[component]]
 kind      = "protocol"
 name      = "httpproxy"
 long_name = "HTTP CONNECT proxy tunnel"
+feature   = "protocol-httpproxy"
+default   = false
 ctor      = "vaco_protocol_httpproxy::HTTPPROXY_PROTOCOL"
