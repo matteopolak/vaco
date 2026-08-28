@@ -1058,6 +1058,56 @@ fn decode_residual(
 // and the per-4x4-block intra prediction mode flags
 // (`prev_intra4x4_pred_mode_flag`/`rem_intra4x4_pred_mode`), as named two
 // rounds ago and not yet narrowed further.
+//
+// FOLLOW-UP round, and this one overturns the paragraph above rather than
+// extending it: those "remaining candidates" are wrong, or at least not
+// the *only* cause. Built the smallest possible repro --
+// `tests/fixtures/cabac_minimal_flat_1mb.264`, one macroblock (a 16x16
+// frame), every Y/Cb/Cr sample exactly 128, encoded by real libx264 CABAC
+// -- containing neither residual coefficients nor Intra4x4 nor
+// inter prediction nor any neighbour at all. `coded_block_pattern` for
+// its one macroblock is confirmed `(0, 0)` by the same instrument as
+// above. It still fails `assert_slice_ends_at_rbsp_trailing_bits`
+// (`tests/macroblock_layer_cabac.rs`,
+// `a_single_flat_macroblock_with_no_residual_at_all_still_fails_bit_exactness`,
+// `#[ignore]`d with the full trace in its reason string). Since this
+// stream cannot exercise either previously-named candidate, they are
+// ruled out as the *sole* cause -- the search reopens to the
+// macroblock-layer's own basic sequence: `mb_type`, `intra_chroma_pred_mode`,
+// `mb_qp_delta`, the Intra16x16 luma DC `coded_block_flag`, and
+// `end_of_slice_flag`.
+//
+// Bin-by-bin tracing (temporary, not committed) checked every one of
+// those individually against primary text and found no fault:
+// `decode_mb_type_i_table`'s binarization tree and `MB_TYPE_I`'s table
+// (ctxIdx 0-10 -- Table 9-12 itself has ctxIdx 0-2 numerically identical
+// to ctxIdx 3-5, a genuine spec coincidence this code's reuse already
+// depends on correctly, not a bug); `cbf_cond_term`'s unavailable-neighbour
+// special case (`condTermFlag = current_is_intra`, matching the
+// coordinator's own earlier-round inspection); `ContextModel::init_h264`'s
+// clause 9.3.1.1 formula; and, exhaustively, `vaco-codec-cabac`'s three
+// foundational tables (`RANGE_TAB_LPS`/`TRANS_IDX_LPS`/`TRANS_IDX_MPS`,
+// all 64 rows against this draft's Table 9-33/9-34, zero mismatches --
+// read-only, that crate is `agent:codec-bits`'s). Slice-header parsing and
+// CABAC engine initialisation are confirmed bit-exact by direct
+// inspection of the fixture's own raw bytes: the 9-bit `codIOffset` this
+// decoder reads (509) is the literal bit pattern present at the exact
+// byte position the header parse computes, byte for byte, checked against
+// the file's own hex dump, not inferred.
+//
+// What the trace shows instead: `end_of_slice_flag` fires at bit 69 of
+// the file's 72, leaving a 3-bit tail of `0b001` -- not a valid
+// `rbsp_trailing_bits()` pattern. The file's real final bit (bit 71) is
+// `1`, consistent with the true stream needing roughly two more consumed
+// bits before terminating than this decoder currently spends -- meaning
+// the arithmetic trajectory has already drifted by the time
+// `end_of_slice_flag` is checked, despite every individual decoded
+// *value* along the way (`mb_type=3`, `chroma_pred=0`, `cbp=(0,0)`,
+// `qp_delta=0`, luma DC `coded_block_flag=0`) matching what the real
+// encoder's own log says it should be. Right answers, wrong bit cost:
+// not resolved this round. Needs either an independent from-scratch CABAC
+// arithmetic oracle (planned twice now, never built) or further hand
+// simulation to localise past "somewhere in this nine-decision sequence".
 use crate::cabac_mb_tables::{inits_by_col, inits_by_idc, inits_fixed};
 
 /// `CabacDecoder::decode_decision` over a context array, indexed safely —

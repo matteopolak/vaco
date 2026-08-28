@@ -295,3 +295,105 @@ fn every_slice_in_a_real_i_only_cabac_stream_consumes_exactly_its_own_bits() {
     println!("I-only slices={slice_count}");
     assert!(slice_count >= 20);
 }
+
+#[test]
+#[ignore = "known incomplete, and decisive rather than merely another data \
+point: this is the smallest possible repro -- one macroblock (16x16 \
+frame), every Y/Cb/Cr sample exactly 128 (clause 8.3.1.2.1's \
+unavailable-neighbour substitution value, so residual is zero by pure \
+construction, see cabac_cbp_oracle.rs's module doc), I_16x16 DC mode, \
+coded_block_pattern (0, 0) -- confirmed correct by tests/cabac_cbp_oracle.rs. \
+No residual coefficients, no Intra4x4, no neighbours, no inter prediction: \
+the two remaining candidates two rounds of this investigation narrowed to \
+(residual coefficient decode, prev_intra4x4_pred_mode_flag/ \
+rem_intra4x4_pred_mode) are BOTH absent from this stream entirely, and it \
+still fails assert_slice_ends_at_rbsp_trailing_bits. That rules them out \
+as the sole cause and reopens the search to the macroblock layer's own \
+mb_type/intra_chroma_pred_mode/mb_qp_delta/coded_block_flag(luma DC)/ \
+end_of_slice_flag sequence -- a basic-rule error, not a subtle one, per \
+the coordinator's own framing of this exact question. \
+\
+Bin-by-bin tracing (temporary instrumentation, not committed) found every \
+individually-checked component correct against primary text: \
+decode_mb_type_i_table's binarization tree and MB_TYPE_I's table values \
+(ctxIdx 0-10, including the documented coincidence that ctxIdx 0-2 and \
+3-5 hold identical (m,n) pairs in Table 9-12 itself, not a bug); \
+cbf_cond_term's unavailable-neighbour special case (condTermFlag = \
+current_is_intra, clause 9.3.3.1.1.9, matching the coordinator's own \
+inspection from an earlier round); ContextModel::init_h264's clause \
+9.3.1.1 formula; and, exhaustively, vaco-codec-cabac's three foundational \
+tables (RANGE_TAB_LPS/TRANS_IDX_LPS/TRANS_IDX_MPS, all 64 rows checked \
+against this draft's Table 9-33/9-34, zero mismatches -- read-only, that \
+crate is agent:codec-bits's). Slice-header parsing and CABAC engine \
+initialisation were confirmed bit-exact by direct inspection of this \
+fixture's own raw bytes: the 9-bit codIOffset our decoder reads (509) is \
+the literal bit pattern present at the exact byte-aligned position our \
+header parse computes, byte for byte. \
+\
+What the trace shows instead: our decoder fires end_of_slice_flag at \
+bitpos 69 of 72, leaving a 3-bit tail of `0b001` in the real file -- not \
+a valid rbsp_trailing_bits() pattern (needs `1` then zeros). The file's \
+actual final bit (bit 71) is `1`, consistent with the *true* stream \
+needing about 2 more consumed bits before terminating than this decoder \
+currently consumes -- meaning the arithmetic trajectory has already \
+drifted by the time end_of_slice_flag is checked, despite every \
+individual decoded *value* along the way (mb_type=3, chroma_pred=0, \
+cbp=(0,0), qp_delta=0, luma DC coded_block_flag=0) matching what the real \
+encoder's own log says it should be. That combination -- right answers, \
+wrong bit cost -- was not resolved this round; it needs either an \
+independent from-scratch CABAC arithmetic oracle (planned twice, never \
+built) or further hand simulation to localise past 'somewhere in this \
+nine-decision sequence'."]
+fn a_single_flat_macroblock_with_no_residual_at_all_still_fails_bit_exactness() {
+    let data: &[u8] = include_bytes!("fixtures/cabac_minimal_flat_1mb.264");
+    let mut params = ParameterSets::new();
+    let mut budget = Budget::new(Limits::default());
+    let mut rbsp = RbspBuf::new();
+    let mut slice_count = 0u32;
+    for nal in annexb::nal_units(data) {
+        let Some(header) = H264NalHeader::parse(nal) else { continue };
+        match header.nal_unit_type {
+            NalUnitType::Sps => {
+                rbsp.fill(nal, &mut budget).unwrap();
+                let _ = params.add_sps(rbsp.as_slice(), &mut budget);
+            }
+            NalUnitType::Pps => {
+                rbsp.fill(nal, &mut budget).unwrap();
+                let _ = params.add_pps(rbsp.as_slice(), &mut budget);
+            }
+            NalUnitType::IdrSlice | NalUnitType::NonIdrSlice => {
+                rbsp.fill(nal, &mut budget).unwrap();
+                let payload = rbsp.as_slice();
+                let mut reader = BitReader::new(payload);
+                reader.skip(8);
+                let pps_id = {
+                    let mut r2 = BitReader::new(payload);
+                    r2.skip(8);
+                    let mut g = vaco_codec_golomb::BoundedGolomb::new(&mut r2, &mut budget);
+                    let _ = g.ue_v(u32::MAX).unwrap();
+                    let _ = g.ue_v(9).unwrap();
+                    g.ue_v(255).unwrap() as u8
+                };
+                let (pps, sps) = params.sps_for_pps(pps_id).unwrap();
+                let slice_header =
+                    SliceHeader::parse_data(&mut reader, header, sps, pps, &mut budget).unwrap();
+                let mut cabac = CabacDecoder::from_reader(reader);
+                let stats =
+                    vaco_codec_h264::mb::decode_slice_cabac(&mut cabac, &mut budget, sps, pps, &slice_header)
+                        .unwrap_or_else(|e| panic!("slice {slice_count}: {e:?}"));
+                assert!(!cabac.malformed(), "slice {slice_count}: CABAC engine reported malformed input");
+                assert_eq!(stats.macroblock_count, 1, "slice {slice_count}: expected exactly one macroblock");
+                assert_eq!(
+                    stats.first_slice_mb_cbp,
+                    Some((0, 0)),
+                    "slice {slice_count}: this fixture's own construction argument (all-128 samples) requires zero residual"
+                );
+                let mut trailer_reader = cabac.into_reader();
+                assert_slice_ends_at_rbsp_trailing_bits(&mut trailer_reader, slice_count);
+                slice_count += 1;
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(slice_count, 1);
+}
