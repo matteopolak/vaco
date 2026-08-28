@@ -195,10 +195,6 @@ point, parallel to the baseline `PTYPE` branch in
   filter is doing essentially the same thing `ffmpeg`'s own Annex J
   implementation does, not a same-shaped-but-different one.
 
-**Skipped, for cost — the primary text (already the freely available
-01/2005 edition used above) was read for all six, this is a scope
-decision, not a provenance one:**
-
 - **Annex F (Advanced Prediction)** needs overlapped block motion
   compensation touching every macroblock's reconstruction (not just
   4-vector ones — OBMC applies whenever the mode is on at all), redefined
@@ -404,11 +400,34 @@ decision, not a provenance one:**
   gives, for the one thing a fixture suite cannot fully cover (an
   untested combination the four fixtures do not happen to exercise).
 
-  **Not yet done**: the lookahead's own implementation, and re-landing
-  the fine-grid one-vector-predictor fix, the 4-vector `MCBPC`
-  dispatch, and the OBMC reconstruction path on top of it — each to be
-  re-validated against the same real-`ffmpeg` differential that caught
-  two bugs the round this was built, before being reported as landed.
+  **Implemented.** A further round re-landed all three pieces on top of
+  the lookahead above (`ActivePicture::pending`,
+  `decode_block_residuals`/`apply_reconstruction`,
+  `try_decode_one_mb`'s `reconstruct_or_defer`) and re-validated against
+  the same two real `ffmpeg -flags +mv4 -obmc 1` differential fixtures
+  used to build the predictor table in the first place. P-frame luma
+  mismatches dropped from 5789/6472 out of 25344 (the pre-restructuring
+  wrong-right-neighbour numbers above) to 616/574, max diff 2 — and,
+  checked directly rather than assumed close enough, that residual
+  matches this crate's own pre-existing accuracy ceiling exactly: the
+  *same* two fixtures' I-frames (pure intra, untouched by any of this
+  annex's own code) mismatch at exactly 400/25344 both before and after
+  this change, the figure this crate's "Measured accuracy" section
+  below already reports for ordinary content. Per-macroblock error is
+  now uniform (max diff 1-2 on every one of the 99 macroblocks checked)
+  where it was previously concentrated on specific ones (up to 40-116)
+  before the lookahead fix — the signature of a remaining generic
+  rounding difference, not a localised logic bug. The regression guard
+  (`tests/regression_guard.rs`) stayed green throughout, confirming the
+  `ap.advanced_prediction` gate left every other mode's own output
+  untouched.
+
+  `vaco-codec-h263` implements Annex F.
+
+**Skipped, for cost — the primary text (already the freely available
+01/2005 edition used above) was read for all five, this is a scope
+decision, not a provenance one:**
+
 - **Annex E (Syntax-based Arithmetic Coding)** replaces every VLC in the
   format with arithmetic coding — a different entropy layer entirely, not
   an additive mode on top of the existing one.
@@ -442,7 +461,7 @@ decision, not a provenance one:**
   behaviour left to add for a non-interactive, whole-file decoder.
 
 `plus::parse` bails to `unsupported` (same flat-mid-grey `CORRUPT`
-convention as the baseline decoder) for any picture using one of the six
+convention as the baseline decoder) for any picture using one of the five
 skipped annexes, Reference Picture Resampling/Reduced-Resolution Update,
 or an `MPPTYPE` picture-type code naming Improved PB/B/EI/EP (Annexes
 M/O) — rather than misreading the scalability/RPS-specific fields
@@ -764,6 +783,8 @@ for both formats:
 | QCIF, baseline (no UMV/Annex K), mixed I/P (50 frames), control | H.263 | 50/50 | 0.008 – 0.028 | 1 – 3 | 99.2% – 97.3% |
 | QCIF, Annex J (`-flags +loop`) | H.263+ | 10/10 | 0.0065 | 4 | 99.4% |
 | QCIF, Annex J + Annex K (`structured_slices`, `-qscale 5`) | H.263+ | 10/10 | 0.0099 | 5 | 99.1% |
+| QCIF, Annex F (`-flags +mv4 -obmc 1`), interior motion | H.263+ | 1/1 | 0.0243 | 2 | 97.6% |
+| QCIF, Annex F (`-flags +mv4 -obmc 1`), static border ring | H.263+ | 1/1 | 0.0227 | 2 | 97.7% |
 
 The first annex row is the one real-world differential fixture available
 for the annex work (`ffmpeg -c:v h263p -bitexact -umv 1`, which — per the
