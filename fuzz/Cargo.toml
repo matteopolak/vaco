@@ -170,6 +170,7 @@ vaco-protocol-local = { path = "../crates/io/vaco-protocol-local", optional = tr
 vaco-protocol-rist = { path = "../crates/io/vaco-protocol-rist", optional = true }
 vaco-protocol-rtmp = { path = "../crates/io/vaco-protocol-rtmp", optional = true }
 vaco-protocol-socket = { path = "../crates/io/vaco-protocol-socket", optional = true }
+vaco-protocol-srt = { path = "../crates/io/vaco-protocol-srt", optional = true }
 vaco-protocol-tls = { path = "../crates/io/vaco-protocol-tls", optional = true }
 vaco-protocol-wrap = { path = "../crates/io/vaco-protocol-wrap", optional = true }
 vaco-registry = { path = "../crates/registry/vaco-registry", optional = true }
@@ -312,6 +313,7 @@ default = [
     "protocol-rist",
     "protocol-rtmp",
     "protocol-socket",
+    "protocol-srt",
     "protocol-tls",
     "protocol-wrap",
     "registry",
@@ -451,6 +453,7 @@ protocol-local = ["dep:vaco-protocol-local"]
 protocol-rist = ["dep:vaco-protocol-rist", "dep:vaco-rtp"]
 protocol-rtmp = ["dep:vaco-limits", "dep:vaco-protocol-rtmp"]
 protocol-socket = ["dep:vaco-protocol-socket"]
+protocol-srt = ["dep:vaco-limits", "dep:vaco-protocol-srt"]
 protocol-tls = ["dep:vaco-protocol-tls"]
 protocol-wrap = ["dep:vaco-protocol-wrap"]
 registry = ["dep:vaco-core", "dep:vaco-format-core", "dep:vaco-io", "dep:vaco-limits", "dep:vaco-registry"]
@@ -1828,6 +1831,14 @@ test = false
 doc = false
 bench = false
 required-features = ["format-spdif"]
+
+[[bin]]
+name = "srt_packet"
+path = "fuzz_targets/srt_packet.rs"
+test = false
+doc = false
+bench = false
+required-features = ["protocol-srt"]
 
 [[bin]]
 name = "subtitle_bitmap_demux"
