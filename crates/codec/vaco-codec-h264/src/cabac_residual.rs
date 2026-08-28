@@ -356,6 +356,10 @@ const ABS_BINN_CHROMA_DC: [[(i16, i16); 4]; 4] = [
     [(-11,97),(-3,81),(0,73),(-4,81)], [(-19,117),(-11,97),(-8,89),(-13,99)],
 ];
 
+/// One context category's `(m, n)` init pair (Tables 9-19/9-20/9-21) for
+/// each of the four `cabac_init_idc`-selected columns, per context index.
+type CabacInitRow = [(i16, i16); 4];
+
 impl ContextSet {
     /// Build and initialise for one [`ContextCategory`] from `slice_qp` and
     /// `init`, clause 9.3.1.1. `(m, n)` literals below: transcribed from
@@ -371,8 +375,12 @@ impl ContextSet {
         };
 
 
-        let (sig, last, bin0, binn): (&[[(i16, i16); 4]], &[[(i16, i16); 4]], &[[(i16, i16); 4]], &[[(i16, i16); 4]]) =
-            match category {
+        let (sig, last, bin0, binn): (
+            &[CabacInitRow],
+            &[CabacInitRow],
+            &[CabacInitRow],
+            &[CabacInitRow],
+        ) = match category {
                 ContextCategory::LumaDc => (&SIG_LUMA_DC, &LAST_LUMA_DC, &ABS_BIN0_LUMA_DC, &ABS_BINN_LUMA_DC),
                 ContextCategory::LumaAc => (&SIG_LUMA_AC, &LAST_LUMA_AC, &ABS_BIN0_LUMA_AC, &ABS_BINN_LUMA_AC),
                 ContextCategory::Luma4x4 => (&SIG_LUMA4X4, &LAST_LUMA4X4, &ABS_BIN0_LUMA4X4, &ABS_BINN_LUMA4X4),
