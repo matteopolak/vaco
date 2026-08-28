@@ -2153,7 +2153,7 @@ type 9 (video), 5 bytes: 17 02 00 00 00
 an ordinary NALU tag. A reader that trusts the terminator to know the sequence
 is complete sees a truncated file.
 
-## 41. FT-4.13e's remaining audio filters (#485): three cases where black-box probing hits a real wall
+## 45. FT-4.13e's remaining audio filters (#485): three cases where black-box probing hits a real wall
 
 Ten filters split across `vaco-filter-audio`, `vaco-filter-adynamics` and
 `vaco-filter-aeq` (closing epic #58). Two landed bit-exact; the rest hit one
@@ -2388,7 +2388,7 @@ AIFF-C `compressionType` of `01 00 00 00`, which is not a FourCC and reads as
 uninitialised memory. We refuse those instead. Reproducing the reference's
 spelling (D9) does not extend to reproducing what looks like its bug.
 
-## 44. #636 (MPEG-TS `-c copy` timestamps) and #635 (`ts_id`/`ts_packetsize`/`ts_codec`) — both closed
+## 46. #636 (MPEG-TS `-c copy` timestamps) and #635 (`ts_id`/`ts_packetsize`/`ts_codec`) — both closed
 
 ### #636: PCR, `data_alignment_indicator`, PTS/DTS, and a fourth cause the issue did not name
 

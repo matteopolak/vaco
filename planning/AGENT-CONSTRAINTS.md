@@ -698,3 +698,27 @@ Add a row to `provenance/corrections.toml` naming the commit, the citation it
 carries and the id you meant. Rewriting history in a tree this many agents share
 moves HEAD under all of them mid-edit, and moving `provenance/baseline` forward
 would exempt every commit in between.
+
+## `CONFORMANCE-FINDINGS.md` is a multi-writer hotspot — commit it with a private index
+
+Three collisions in one day, all in this one file, all the same shape: two
+agents append a finding, one commits with a plain `-- planning/CONFORMANCE-FINDINGS.md`
+pathspec, and the other's working-tree edit goes in under the first one's
+provenance trailers. Nothing is lost and nothing is silently wrong, but the
+record says the wrong person measured it.
+
+Appending "at the very end" does not help, because everyone appends at the very
+end. **Commit this file with the private `GIT_INDEX_FILE` recipe**, not with a
+pathspec: read the file, stage only your own version of it through a private
+index, commit, then `git reset -q HEAD -- planning/CONFORMANCE-FINDINGS.md`. The
+recipe is above.
+
+Two consequences worth knowing:
+
+- **Numbers collide.** Two findings were numbered 41 and two 44 on the same
+  afternoon, because each author read the file before the other appended. Check
+  the highest number *at the moment you commit*, not when you started, and
+  expect to renumber.
+- **Cite findings by title, not only by number**, wherever the citation has to
+  survive — issue bodies especially. A number can be renumbered out from under
+  you; a title cannot.
