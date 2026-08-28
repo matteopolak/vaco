@@ -797,3 +797,32 @@ reconstruction is a worse outcome than a clear refusal. The module is also
 entirely behind the non-default `patent-unverified-eac3-decode` feature
 regardless (E-AC-3 decode's patent status is unresolved per D9), so nothing
 here reaches a build anyone ships until that is settled separately.
+
+### `Muxer::bind_url`/`Demuxer::bind_url` have no options channel through the registry
+
+Closing gaps 2/7 for `image2` (`vaco-mux-image2`/`vaco-demux-image2`) means
+`RegistryMuxer::bind_url`/`RegistryDemuxer::bind_url` construct
+`Image2MuxOptions::default()`/`Image2Options::default()` — there is no way
+for `-pattern_type`, `-start_number`, `-update`, `-strftime`, `-frame_pts`
+or `-atomic_writing` to reach the registry path at all, only
+`Image2Demuxer::open_pattern`/`Image2MuxWriter::create` called directly.
+This is the same shape gap 5's `Muxer::set_option` closed for muxer-private
+options generally; a `Demuxer::set_option` mirror (there is none yet) would
+be the natural place to thread these through before `bind_url` constructs
+the real demuxer/muxer, rather than inventing a second, `bind_url`-specific
+options channel.
+
+### `Discovery<D>`'s `Demuxer` impl does not forward `bind_url`
+
+Consistent with `Demuxer::reconfigure` (gap 4), which `Discovery::run` calls
+directly on the owned inner value it still has by concrete type, not
+through `Discovery`'s own `impl Demuxer for Discovery<D>` — so neither
+method is reachable by calling `.bind_url()`/`.reconfigure()` on a
+`Discovery`-wrapped demuxer through the trait object. `vaco-cli::input::open`
+calls `bind_url` on the raw registry-constructed demuxer *before* wrapping
+it in `Discovery::new`, so this does not affect #649, but it is a real trap
+for a future caller who wraps first and expects the trait method to reach
+through: unlike `Box<dyn Muxer>`/`Box<dyn Demuxer>` and `vaco-cli`'s
+`TallyingMuxer` (which do forward both `add_stream_with`-shaped methods and
+`bind_url` explicitly, per those types' own doc comments), `Discovery` was
+never meant to be driven that way and its docs do not yet say so.
