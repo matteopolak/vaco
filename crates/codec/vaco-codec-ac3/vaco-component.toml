@@ -1,0 +1,21 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# AC-3 decode is GREEN and unconditional per D9 ("GREEN and shippable: …
+# AC-3 …") and D4's default build already covers decode-only support for
+# codecs whose essential patents have lapsed — so this ships in the default
+# build like any other GREEN codec. `default` is therefore left at its
+# default value of `true`; there is no `encumbered = true` here.
+#
+# E-AC-3 decode has no row: D9 records its patent status as unresolved, not
+# cleared ("do not ship E-AC-3 until confirmed by counsel"), and this crate's
+# `eac3` module is feature-gated, unregistered, and does not reconstruct
+# audio yet regardless — there is no working decoder to register.
+
+[[component]]
+kind      = "decoder"
+name      = "ac3"
+long_name = "ATSC A/52A (AC-3)"
+feature   = "codec-ac3"
+ctor      = "vaco_codec_ac3::DECODER_AC3"
+media     = "audio"
+codec     = "ac3"

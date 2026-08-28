@@ -1,0 +1,6 @@
+[[table]]
+name   = "BNDSZ"
+file   = "crates/codec/vaco-codec-ac3/src/tables_bitalloc.rs"
+source = "atsc-a52-2018"
+clause = "Annex A, bit-allocation band structure"
+method = "derived"
