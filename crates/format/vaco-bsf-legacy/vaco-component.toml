@@ -1,0 +1,13 @@
+[[component]]
+kind      = "bitstream_filter"
+name      = "mpeg2_metadata"
+long_name = "Modify metadata embedded in an MPEG-2 stream"
+codec     = "mpeg2video"
+ctor      = "vaco_bsf_legacy::mpeg2_metadata::DESC"
+
+[[component]]
+kind      = "bitstream_filter"
+name      = "prores_metadata"
+long_name = "Modify color property metadata embedded in a ProRes stream"
+codec     = "prores"
+ctor      = "vaco_bsf_legacy::prores_metadata::DESC"
