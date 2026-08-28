@@ -1503,7 +1503,7 @@ bounds. Building an option schema with min/max per filter closes both, and
 gives the fuzzer a much smaller space to search. Doing them separately means
 transcribing every range from the reference twice.
 
-## 32. `framecrc`'s `#tb` follows the input in the reference and the frame rate in ours — which breaks the harness's own comparison mode
+## 32. `framecrc`'s `#tb` follows the input in the reference and the frame rate in ours — which breaks the harness's own comparison mode — CLOSED 2026-08-27
 
 The utility muxers are in better shape than FM-20 (#572) suggests. `crc`,
 `md5`, `hash` and `streamhash` are **byte-identical to the reference**,
@@ -1582,6 +1582,48 @@ ours with -bitexact:     #software: vaco
   print it. This became reproducible only today: finding 26's read half now
   synthesises extradata for exactly these copied streams, so the 45 bytes are
   there to measure and CRC.
+
+### Status: closed 2026-08-27 (issue #634)
+
+`INTERFACE-GAPS.md` gap 9 gained `Muxer::add_stream_with(&mut self, params,
+spec: &StreamSpec)` — a defaulted method forwarding to `add_stream`, so none
+of the ~57 existing implementors changed — plus a second, smaller
+`Muxer::set_bitexact(&mut self, bool)` for the `#software` half. Both are
+wired through `MuxBuilder::add_stream`/`MuxBuilder::open`; see
+`docs/format/vaco-format-core.md`'s "The 2026-08-27 addition" for the full
+wiring and the `Box<dyn Muxer>`/`TallyingMuxer` forwarding trap it names.
+
+Re-measured against the same `ffmpeg 8.1`, same fixture shapes:
+
+```text
+             ref       ours (before)   ours (after)
+long.mp4 #tb 1/12800   1/25            1/12800
+long.ts  #tb 1/90000   1/50            1/90000
+```
+
+`#extradata`'s hash turned out **not** to be `vaco_hash::crc32` despite the
+`0x`-prefixed hex above looking exactly like one — measured by hashing the
+real 45-byte `avcC` four ways: `framecrc` uses the same zero-seeded Adler-32
+as its packet lines (`0x27ba0f4a`), where real CRC-32 of the identical bytes
+is `0x6b488af1`. Using the wrong one would have matched this finding's own
+example and silently diverged everywhere else — see
+`docs/format/vaco-mux-hash.md`'s `#extradata` section for the full
+four-algorithm comparison.
+
+Header lines (`#extradata`/`#software`/`#tb`/`#media_type`/…) now match the
+reference byte-for-byte in both `-bitexact` and plain modes, on both an MP4
+and an MPEG-TS fixture; a B-frame-free MP4 remux matches on **every** line,
+header and packets. `crc`/`md5`/`hash`/`streamhash` were re-diffed and remain
+byte-identical (no regression from this change).
+
+**Not closed by this fix**, found while verifying it: a B-frame stream's
+absolute `dts`/`pts` differ from the reference by a constant reorder-delay
+offset (the *base* now agrees; the values riding on it do not), and MPEG-TS
+additionally has an absolute-vs-relative timestamp-origin difference and is
+missing a per-packet `S=1, MPEGTS Stream ID, …` side-data field. Neither is
+a `#tb`/header fact — both are upstream of this crate (timestamp-origin
+resolution and demuxer side-data plumbing, respectively) and are left open
+for whichever agent owns those crates.
 
 ## 33. `-formats` prints 130 formats twice, and `-demuxers`/`-muxers` do not mask the flag column
 
@@ -1750,6 +1792,65 @@ than a metadata entry that is user-visible by construction. Note the tests in
 `metadata_get`, and `vaco-demux-ogg`'s `codec.rs` cites it as precedent, so the
 change is not a one-line deletion.
 
+## 36. `-c copy` remux, now that M6 works: what each container still gets wrong
+
+Wiring `vaco_registry::Bsfs` into the CLI (72f555a) made `-c copy` to Annex-B
+containers work at all for the first time, which finally made the outputs
+comparable. Sizes against the reference, remuxing one H.264 MP4:
+
+```text
+              ref      ours     note
+mpegts       50760    50760     PSI header byte-identical after f6118c5
+mp4           8908     8844
+mov           8855     8832
+flv           9610     9486
+matroska      7907     9412
+avi          98464    10126     was a 224-byte stub before M6 worked
+```
+
+### MP4: four structural differences, all small and all specific
+
+**1. We always write the 64-bit `mdat`.** The reference writes a 32-bit size
+for a 6242-byte payload and we write `size == 1` plus an 8-byte `largesize`.
+
+The 8-byte `free` box we already emit before `mdat` (`wide` for `-f mov` — we
+have that right) is not decoration: it is the reference's **reservation** for
+exactly this case. It writes a 32-bit placeholder, and if the payload turns out
+to exceed 4 GiB it backs up into that box to form a 16-byte 64-bit header in
+place. So the two boxes are one mechanism, and we implemented half of it.
+
+**2. `edts`/`elst` is missing** (36 bytes). The reference writes one entry:
+
+```text
+elst  segment_duration = 0x1770 (6000)   media_time = 0x400 (1024)   rate = 1.0
+```
+
+`1024` is the initial DTS offset — the same `-1024` that shows up as the first
+`framecrc` pts. The edit list is how the reference compensates the reorder
+delay, so a file without it starts at a different presentation time.
+
+**3. The `avc1` sample entry is missing `pasp` and `btrt`** — 16 + 20 = 36
+bytes, exactly the `stsd` size difference (191 vs 155).
+
+```text
+pasp   hSpacing = 1        vSpacing = 1
+btrt   bufferSizeDB = 0    maxBitrate = 0x2078   avgBitrate = 0x2078
+```
+
+**4. `stbl`'s children are in a different order.** The reference writes
+`stsd stts stss ctts stsc stsz stco`; we write `stsd stts ctts stss …`. `stss`
+and `ctts` are swapped. Order is unconstrained by the specification and load-
+bearing for byte-identity.
+
+### The remaining MPEG-TS differences
+
+The PSI header is byte-identical now; 5642 bytes still differ from the first
+PES packet on, and the differing offsets cluster at packet offset 4 (the
+adaptation field) and 156–168. Three causes, recorded in #636: the PCR base low
+bytes are zero in ours, `data_alignment_indicator` is set in our PES flags where
+the reference clears it, and the PTS/DTS values differ — the last being the same
+family as finding 32.
+
 ## Harness changes, summarised
 
 Everything below is a change to `crates/tool/vaco-conformance/`,
@@ -1805,3 +1906,69 @@ a flag the CLI recognised.
 The media is synthesised by the reference at run time and discarded (D6) —
 nothing FFmpeg-derived is committed, and a file described by a command in the
 manifest defends its own provenance in a way a checked-in fixture does not.
+
+## 36. Finding 34's `-bitexact profile=` half — fixed, and three more codecs measured
+
+Finding 34 above left this open for P-05 (#275): `-bitexact` prints the raw
+numeric `profile` where a plain run prints the library name, and the fix
+needed `Emit` to be able to *change* a field's value under `-bitexact`, not
+merely drop it — `Emit::dropped_by_bitexact` only ever answered "omit this
+field entirely" (`*_long_name`), which cannot express "print `100` instead of
+`High`". Added `Emit::is_bitexact()` and threaded a `bitexact: bool` through
+`stream_value`; the `"profile"` arm in `vaco-probe/src/show.rs` now picks
+`Profile::value` under `-bitexact` and `Profile::name` otherwise.
+
+Measured on four codecs, not just the H.264 case finding 34 recorded:
+
+```text
+                 plain        -bitexact
+H.264 (High)     profile=High profile=100
+AAC (LC)         profile=LC   profile=1
+VP9 (Profile 0)  profile=Profile 0   profile=0
+AV1 (Main)       profile=Main profile=0
+```
+
+One more thing fell out while fixing this: **a profile with no name at all
+prints the number in *both* modes**, not just under `-bitexact`. VP8's
+`profile` is a bare `version` number the reference never gives a name (`ffprobe
+-show_entries stream=profile` prints `profile=0` whatever `-bitexact` says),
+and the same is true for any H.264 `profile_idc` Annex A never assigned —
+`vaco_codec_core::Profile::name` is `""` for those by convention, and the old
+`Val::opt_s(p.profile.map(|x| x.name))` would have printed an *empty* string
+for them rather than falling back to the number. Not previously observable
+because no codec crate emitted an empty-named `Profile` before `vaco-parse-vpx`
+landed with VP8. Both cases (`bitexact`, empty name) now take the same
+numeric-fallback branch in `stream_value`.
+
+`Profile` already carries both `value: i32` and `name: &'static str` — the
+type did not need to change, only the printing path did.
+
+## 37. VP9's uncompressed header has no level syntax element — measured
+
+Closing P-06 (#276)/P-05 (#275): `vaco-parse-vpx` is the first parser for VP9,
+and its profile/level table (`vaco_parse_vpx::profile`) is the piece P-05 was
+waiting on.
+
+Measured directly, since this is exactly the kind of "obviously true" claim
+AGENT-CONSTRAINTS warns about: `libvpx-vp9 -level 4.0`, remuxed through both
+WebM and MP4 (the latter carrying a `vpcC` box whose second byte *is* a level,
+byte-verified against a hex dump), still reports `level=-99` from `ffprobe
+-show_entries stream=level` in both containers — `ffprobe`'s own VP9 reader
+never looks at `vpcC`'s level byte, and the bitstream's `uncompressed_header()`
+has no level field to read at all (unlike AV1's in-band `seq_level_idx`). So
+`vaco-parse-vpx::vp9::Vp9Parser` never sets `CodecParameters.level`, matching
+the reference's behaviour exactly rather than fabricating a value from `vpcC`
+that the reference itself ignores. The Annex A level table
+(`vaco_parse_vpx::profile::LEVELS`) exists for the framework requirement and
+for a future MIME-string builder, cross-checked against a public secondary
+transcription rather than any decoder's source (the same caveat
+`vaco-parse-av1::profile` records for its own table) — flagged as
+unverified-by-measurement in the P-06 issue-closing comment, since `level`
+never surfaces through `ffprobe` to check a row against.
+
+Also measured while building the `vpcC` reader: the box's payload (as
+`vaco-format-isom` hands it to `Parser::set_extradata`) includes the `FullBox`
+version/flags bytes, not just the record fields — confirmed by hex-dumping a
+real `vpcC` box (`01 00 00 00 02 0a a2 02 02 02 00 00`: version, flags,
+profile=2, level=10, bitDepth=10/chromaSubsampling=1/fullRange=0 packed into
+one byte, three colour code points, then a zero `codecIntializationDataSize`).
