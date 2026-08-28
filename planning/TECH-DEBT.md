@@ -2057,3 +2057,27 @@ next place to look is the per-coefficient dequantised values themselves
 (compare against a hand-computed reference for one intra macroblock in
 `m1_i.m1v`, since the bug is present at frame 0 of purely-intra content),
 not bit positions.
+
+### Update: `vaco-format-misc-audio`'s `xwma` `dpds`-duration anomaly is pinned down and fixed (2026-08-28)
+
+The earlier entry recording `xwma`'s stream-level `duration_ts` collapsing
+to a fixed value whenever any `dpds` chunk exists, "for a mechanism this
+crate could not confirm without genuinely valid WMA bitstream data," did
+not need one after all. Sweeping `channels`, `bits_per_sample` and
+`data_len` independently (still with entirely synthetic, non-decodable
+`data` bytes) found the exact rule: `duration_ts = data_len / (channels *
+bytes_per_sample)`, confirmed across mono/stereo, 8-bit/16-bit, and both
+`wmav1`/`wmav2`. The reference is not decoding anything — it is computing
+`duration_ts` as if the raw compressed `data` chunk were already decoded
+PCM at the container's own declared channel count and bit depth, the same
+frame-size arithmetic a raw-PCM container would use, applied by mistake
+(or by a generic fallback that does not distinguish) to a compressed
+codec. `xwma.rs` now reproduces this exactly (commit `4822508`), switching
+formulas based on whether a `dpds` chunk was seen while scanning.
+
+Worth noting for calibration: the original "this needs real WMA
+bitstream data to confirm" judgement was wrong, not just incomplete — the
+actual mechanism needed no bitstream at all, only a wider sweep of the
+same synthetic-fixture technique already in use. Recorded here so a
+similar "this looks decoder-dependent" call elsewhere gets one more
+targeted sweep before being written off.
