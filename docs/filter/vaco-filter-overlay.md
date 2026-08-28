@@ -3,8 +3,9 @@
 Multi-input video combiners — plan 16 §4.2's `vaco-filter-overlay` row,
 the real unclaimed remainder GitHub issue #111 (FT-4.11)'s title meant by
 "overlay family" (not the literal `overlay` filter, already shipped in
-`vaco-filter-video-composite`, #465). Five implemented: `blend`,
-`multiply`, `mix`, `xmedian`, `xfade` (one transition).
+`vaco-filter-video-composite`, #465). Seven implemented: `blend`,
+`multiply`, `mix`, `xmedian`, `xfade` (one transition), `displace`,
+`remap` (`format=gray` only).
 
 ## Scope reconciliation
 
@@ -30,7 +31,7 @@ Each filter here was checked against its own measured option surface:
 | `mix` | N (`2..=32767`, capped at `pads::MAX`) | None (its own `duration=longest/shortest/first`) | `Synced`/`FrameSyncFilter`, hand-built roles |
 | `xmedian` | N (`3..=255`, same cap) | Full | `Synced`/`FrameSyncFilter`, `FsInput::uniform` |
 | `xfade` | 2 (fixed) | None (its own `duration`/`offset` timing) | `Synced`/`FrameSyncFilter`, `FsInput::dual` |
-| `displace`, `remap` | 3 (fixed, `VVV->V`) | None | `Paired` fits architecturally; not implemented (see below) |
+| `displace`, `remap` | 3 (fixed, `VVV->V`) | None | `Paired` — no framework gap |
 | `feedback` | 2 in, **2 out** | — | **No existing adapter fits — interface gap 24.** |
 
 `feedback` is `VV->VV`. Every adapter in `vaco-filter-core::adapt` was
@@ -85,11 +86,22 @@ directly against `multiply` at `opacity=0.5`.
 `harmonic`, `bleach`, `stain`, `interpolate`, `hardoverlay`,
 `multiply128`. Raw output curves for all of these were captured (below)
 but none was confirmed against a formula this pass could verify at more
-than one point — several are almost certainly piecewise (a threshold on
-one operand), and getting both the threshold and both branches right
-needs more than a one-fixed-operand sweep. `create` rejects them with a
-clean error. `c0_expr`/`all_expr` (arbitrary expressions) are not
-implemented.
+than one point. `create` rejects them with a clean error. `c0_expr`/
+`all_expr` (arbitrary expressions) are not implemented.
+
+**A second, bounded pass was made at `hardlight`/`vividlight`/
+`linearlight`** once `burn`/`dodge` (above) turned up round-half-up —
+these three are the natural candidates a published formula would build
+from `multiply`/`screen` (threshold at `127`/`128`) or from `burn`/
+`dodge` themselves, so the new rounding rule was the most promising lead
+available. It did not unlock them. `hardlight` swept at two fixed second
+operands (`b=60`, `b=200`) against the standard `a<=127 ->
+multiply(b,2a)` / `a>127 -> screen(b,2a-255)` shape shows the *large-a*
+end matching a plain `floor(a*2b/255)` exactly (`a=150,200,255` against
+`b=60`), while the *small-a* end is consistently one below that
+prediction (`a=50,100`) — neither `floor` nor `round`, nor dividing by
+`256` instead of `255`, reconciles both ends with one rule. Recorded so
+a future attempt does not re-derive and re-reject the same candidates.
 
 #### Raw curves recorded for the unimplemented modes
 
@@ -186,19 +198,93 @@ the non-tie fractional frames. The other 57 transitions are each their
 own per-pixel geometry formula and were not attempted; `create` rejects
 any transition other than `fade`.
 
-### `displace`, `remap` (not implemented)
+### `displace`
 
 `ffmpeg -h filter=displace`: `edge` (`blank`/`smear`/`wrap`/`mirror`,
-default `smear`). `ffmpeg -h filter=remap`: `format` (`color`/`gray`),
-`fill` (default `"black"`). Both are `VVV->V` — a fixed 3-input shape
-with no framesync surface, architecturally a `Paired` fit (already
-proven to generalise past 2 inputs by `vaco-filter-geometry::mergeplanes`
-with `input_count()` overridden). What blocks a real implementation is
-not the framework but the *map encoding*: neither this pass measured the
-exact zero-point/scale `displace`'s two displacement-map planes use, nor
-`remap`'s `x`/`y` map-to-source-coordinate convention and out-of-range
-`fill` behaviour. Implementing either without that would be a guess, not
-a measurement.
+default `smear`). Three fixed inputs (`source`, `xmap`, `ymap`), no
+framesync surface — `Paired` (already proven to generalise past 2 inputs
+by `vaco-filter-geometry::mergeplanes` with `input_count()` overridden).
+
+Measured directly: the maps are plain **8-bit `gray`** (no auto-inserted
+format conversion — contrast with `remap`, below), `128` is the zero
+point, and:
+
+```text
+output(x, y) = source(x + (xmap(x,y)-128), y + (ymap(x,y)-128))
+```
+
+confirmed with an all-`128` identity probe and `+2`-offset probes on both
+axes against a per-pixel-distinct gradient source. `edge` modes, probed
+with a deeply out-of-range offset (`-128`):
+
+```text
+blank  -> 16 (not 0 -- see remap's BT.709 finding below; the two filters
+          share this constant)
+smear  -> clamp to the nearest valid coordinate (the default)
+wrap   -> coordinate modulo the frame dimension
+mirror -> see below -- the two edges do not share one axis
+```
+
+`mirror` has a real surprise: probed with small (`+-1`, `+-2`, `+3`)
+offsets to keep each case a single bounce off one edge, the *left* edge
+reflects around index `0` itself (`resolve(-1)=1`, `resolve(-2)=2`),
+while the *right* edge reflects around the half-pixel point `len-0.5`
+(`resolve(len)=len-1`, `resolve(len+1)=len-2`, …) — two different axes,
+not one symmetric rule. A separately-probed deep offset (`-128`) does
+not match either axis extended periodically, so this crate's `Mirror`
+clamps beyond one bounce rather than guessing at further periodicity —
+confirmed exact only within one frame dimension of the edge.
+
+Not implemented: non-luma planes (copied from the source unchanged;
+`blank`'s neutral chroma value was not independently confirmed). RGB
+pixel formats. Bit depths above 8.
+
+### `remap`
+
+`ffmpeg -h filter=remap`: `format` (`color`/`gray`, default `color`),
+`fill` (default `"black"`). Three fixed inputs, no framesync surface —
+`Paired`, the same shape as `displace`. **Only `format=gray` is
+implemented** — `format=color` (the reference's own default) is a
+materially different, unmeasured code path (does an RGB source need the
+same limited-range treatment as the fill colour? does `yuv420p` pass
+through unconverted? neither was probed), and `create` rejects it with a
+clean error rather than guessing at ffmpeg users' most common case.
+
+Measured directly: the map planes are **16-bit `gray16le`**, discovered
+via `ffmpeg -v verbose` auto-inserting a `gray -> gray16le` conversion
+ahead of `remap` when fed plain 8-bit maps (its native format — contrast
+with `displace`'s plain 8-bit maps), then re-measured with genuine
+16-bit map files to avoid the auto-conversion's own scaling. Each map
+holds an **absolute source pixel coordinate**, not an offset:
+
+```text
+output(x,y) = (xmap in [0,width) and ymap in [0,height))
+            ? source(xmap(x,y), ymap(x,y))
+            : fill
+```
+
+Confirmed with an identity map (`xmap(x,y)=x`, `ymap(x,y)=y`) reproducing
+a per-pixel-distinct source exactly, and confirmed that *either* axis
+alone out of range triggers `fill` for the whole pixel (a valid `x` with
+an invalid `y` still fills), not just both together.
+
+`fill`'s colour, for `format=gray`, is not a plain component average — it
+goes through ITU-R BT.709's own published full-range-RGB-to-limited-range
+luma formula:
+
+```text
+fill_gray = round(16 + 219*(0.2126*r + 0.7152*g + 0.0722*b) / 255)
+```
+
+Pinned at four colours: `black` -> `16` and `white` -> `235` exactly (no
+fractional part to round — these are BT.709's own limited-range black/
+white points, not a coincidence), `red` -> `63`, mid-grey (`128,128,128`)
+-> `126`. `16`/`219`/`235` and the luma weights are the published
+standard's own numbers (D7 merger doctrine), not this crate's invention.
+
+Not implemented: `format=color`. Map dimensions differing from the
+source's own (assumed to match, not enforced). Bit depths above 8 for
+the source.
 
 ## Framecrc comparison table
 
@@ -212,7 +298,12 @@ a measurement.
 | `mix` | `weights=3 1` | same | **exact** — round-half-to-even confirmed at 3 ties |
 | `xmedian` | `inputs=3` (default `percentile=0.5`) | one gradient, two flat inputs | **exact** — sorted-middle confirmed |
 | `xfade` | `transition=fade:duration=1:offset=0` | `black`→`white`, `10fps` | **exact** — all 10 transition frames |
-| `displace`, `remap` | — | — | **not attempted** — see above |
+| `displace` | `edge=smear` (default), `wrap`, `blank` | per-pixel-distinct gradient, offset probes | **exact** |
+| `displace` | `edge=mirror`, small offsets (`+-1`,`+-2`,`+3`) | same | **exact** — within one frame dimension of the boundary |
+| `displace` | `edge=mirror`, deep offset (`-128`) | same | **not exact** — clamped, not periodic; recorded, not guessed |
+| `remap` | `format=gray`, identity map | per-pixel-distinct gradient | **exact** |
+| `remap` | `format=gray:fill=<colour>`, out-of-range map | same, 4 colours | **exact** — BT.709 limited-range luma confirmed |
+| `remap` | `format=color` (default) | — | **not attempted** |
 | `feedback` | — | — | **not implemented — interface gap 24** |
 
 No `vaco` CLI/muxer exists yet to drive an actual `-f framecrc`
@@ -229,14 +320,17 @@ this crate's own tests.
   assuming which one a new filter needs — `vaco-filter-stack`'s and this
   crate's own scoping both turned up filters that looked alike but
   needed different adapters.
-- If you add more `blend` modes, vary the *second* operand, not just the
-  first — this crate's own sweep only varied `a` against `b=150`
-  throughout, which is why the "light" family's threshold formulas
-  weren't cracked. The raw curves above are a starting point, not
-  evidence of a specific formula.
-- `displace`/`remap` need their map encoding measured before
-  implementation, not a `Paired` wrapper — the framework part is already
-  solved.
+- If you add more `blend` modes, this crate has now tried varying the
+  second operand for `hardlight`/`vividlight`/`linearlight` specifically
+  and still not matched a formula — see that section's "second, bounded
+  pass" for the exact candidates already falsified, so as not to repeat
+  them. The raw curves for the other 17 are a starting point, not
+  evidence of a specific formula, and were only ever swept against one
+  fixed second operand.
+- `displace`/`remap` are done for their measured cases. If extending
+  `remap` to `format=color`, expect a genuinely different code path, not
+  a small addition to `format=gray`'s — probe whether the source itself
+  needs limited-range treatment before assuming it doesn't.
 - `feedback` needs a real `vaco-filter-core` capability (a 2-in/2-out
   adapter, and possibly graph-cycle support in `vaco-filter-graph`)
   before it is attempted again — see `planning/INTERFACE-GAPS.md` gap 24.

@@ -3,7 +3,7 @@
 
 use vaco_filter_graph::registry::{FilterRegistry, Instance, Instantiate};
 
-const NAMES: &[&str] = &["blend", "multiply", "mix", "xmedian", "xfade"];
+const NAMES: &[&str] = &["blend", "multiply", "mix", "xmedian", "xfade", "displace", "remap"];
 
 /// Implements [`FilterRegistry`] for every filter in this crate.
 #[derive(Debug, Clone, Copy, Default)]
@@ -21,6 +21,8 @@ impl FilterRegistry for OverlayRegistry {
             "mix" => crate::mix::create(req),
             "xmedian" => crate::xmedian::create(req),
             "xfade" => crate::xfade::create(req),
+            "displace" => crate::displace::create(req),
+            "remap" => crate::remap::create(req),
             other => Err(format!("vaco-filter-overlay: no filter named `{other}`")),
         }
     }

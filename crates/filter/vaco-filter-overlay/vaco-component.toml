@@ -1,8 +1,8 @@
 # Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
 #
-# Five of plan 16 §4.2's `vaco-filter-overlay` row's eight filters
-# (`displace`, `remap` scoped but not implemented; `feedback` blocked on
-# interface gap 24 — see `docs/filter/vaco-filter-overlay.md`).
+# Seven of plan 16 §4.2's `vaco-filter-overlay` row's eight filters
+# (`feedback` blocked on interface gap 24 — see
+# `docs/filter/vaco-filter-overlay.md`).
 
 [[component]]
 kind = "filter"
@@ -37,4 +37,18 @@ kind = "filter"
 name = "xfade"
 long_name = "Cross fade one video with another video."
 ctor = "vaco_filter_overlay::xfade::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "displace"
+long_name = "Displace pixels."
+ctor = "vaco_filter_overlay::displace::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "remap"
+long_name = "Remap pixels."
+ctor = "vaco_filter_overlay::remap::DESC"
 media = "video"

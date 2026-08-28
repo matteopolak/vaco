@@ -1,6 +1,6 @@
 [package]
 name = "vaco-filter-overlay"
-description = "Multi-input video combiners: blend, multiply, mix, xmedian, xfade (fade transition only)."
+description = "Multi-input video combiners: blend, multiply, mix, xmedian, xfade, displace, remap (see crate docs for exact coverage)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -61,13 +61,25 @@
 //! `glow`, `heat`, `softdifference`, `geometric`, `harmonic`, `bleach`,
 //! `stain`, `interpolate`, `hardoverlay`, `multiply128`: raw output
 //! curves were captured (see `docs/filter/vaco-filter-overlay.md`) but no
-//! single-point-then-confirm formula was found with confidence in the
-//! time available — several are almost certainly piecewise (a threshold
-//! on one operand, most likely `<=127` vs `>127`), and getting the
-//! threshold and both branches right needs more than a one-fixed-operand
-//! sweep. `create` rejects these with a clean error rather than a guess.
-//! `c0_expr`/`all_expr` (arbitrary expressions) are not implemented.
-//! Bit depths above 8.
+//! single-point-then-confirm formula was found with confidence.
+//!
+//! A second, bounded attempt was made at `hardlight`/`vividlight`/
+//! `linearlight` specifically, after `burn`/`dodge` turned up
+//! round-half-up: these three are the ones a published W3C-style formula
+//! would build from `multiply`/`screen` (a threshold at `127`/`128`) or
+//! from `burn`/`dodge` themselves, so the new rounding rule was the most
+//! promising lead available. It did not unlock them. Sweeping `hardlight`
+//! at two fixed second operands (`b=60`, `b=200`) against the standard
+//! `a<=127 -> multiply(b, 2a)` / `a>127 -> screen(b, 2a-255)` shape shows
+//! the *large*-`a` end matching a plain `floor(a*2b/255)` exactly
+//! (`a=150,200,255` all exact against `b=60`), while the small-`a` end is
+//! consistently one below that prediction (`a=50,100`) — neither `floor`
+//! nor `round`, nor dividing by `256` instead of `255`, reconciles both
+//! ends with one rule. That specific, falsified shape is recorded here
+//! so a future attempt does not re-derive and re-reject the same three
+//! candidates. `create` rejects all twenty modes with a clean error
+//! rather than a guess. `c0_expr`/`all_expr` (arbitrary expressions) are
+//! not implemented. Bit depths above 8.
 
 use vaco_core::{MediaType, Result};
 use vaco_filter_core::adapt::FrameOut;
