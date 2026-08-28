@@ -593,8 +593,30 @@ git reset -q HEAD -- planning/TECH-DEBT.md
 
 The working-tree file keeps everyone's appends, including yours and theirs;
 `HEAD` gains only yours. The next agent to commit repeats this and gains only
-its own. Nothing is lost either way — an absorbed append is misattributed, not
-deleted — but the record is the point.
+its own.
+
+**Read `HEAD` late, and check after you commit.** Rebuilding from `HEAD` stops
+you absorbing other people's work, and introduces the opposite failure: if
+`HEAD` moved between your `git show` and your `git commit`, your blob no longer
+contains whatever landed in that window, and committing it **silently reverts
+them**. That has happened — one agent's `TECH-DEBT.md` row was undone by
+another's commit built from a snapshot taken minutes earlier, and it was caught
+only because the second agent grepped the resulting `HEAD` for its own content
+instead of assuming the commit worked.
+
+So: do the `git show HEAD:<path>` immediately before the commit, not at the
+start of your work, and afterwards run
+
+```sh
+git show HEAD:planning/TECH-DEBT.md | grep -q "a distinctive phrase from your row"   || echo "your content is not in HEAD — rebuild from the new HEAD and commit again"
+```
+
+If it is missing, someone landed between your read and your write. Rebuild from
+the *new* `HEAD` and commit again; do not rewrite their commit.
+
+Neither failure loses work permanently — an absorbed append is misattributed and
+a reverted one is still in your working tree — but both make the record lie, and
+the record is the point.
 
 Your half lands, the other agent's half stays in the working tree untouched,
 and the shared index is never written. The `git reset -q HEAD -- <path>` at the
