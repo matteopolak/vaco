@@ -872,13 +872,12 @@ fn open_output(
     if probe.flags().contains(FormatFlags::NOFILE) {
         return Ok((probe, None));
     }
-    // Gap 2/#649: the destination is a filename *pattern* (`out_%03d.png`),
-    // not a real file — `crate::output::create` below would happily create a
-    // literal, wrongly-named file for it, exactly the bug reported against
-    // `-f image2` output. Keep this throwaway-sink-backed instance, the same
-    // way the `NOFILE` branch above does, and let `Muxer::bind_url` replace
-    // its state with the real per-file writer `vaco-mux-image2` already
-    // implements correctly.
+    // The destination is a filename *pattern* (`out_%03d.png`), not a real
+    // file — `crate::output::create` below would happily create a literal,
+    // wrongly-named file for it. Keep this throwaway-sink-backed instance,
+    // the same way the `NOFILE` branch above does, and let `Muxer::bind_url`
+    // replace its state with the real per-file writer `vaco-mux-image2`
+    // already implements correctly.
     if probe.flags().contains(FormatFlags::NEEDNUMBER) {
         probe
             .bind_url(&out.url)
@@ -1061,10 +1060,10 @@ mod tests {
         assert_eq!(muxer_for(&o).unwrap(), "null");
     }
 
-    /// Gap 2/#649: `-f image2 'out_%03d.png'` used to have `open_output`
-    /// create a real, literal file named `out_%03d.png` (`crate::output::
-    /// create`, unconditionally, before this) instead of ever reaching the
-    /// per-frame writer. The `NEEDNUMBER` branch added above keeps the
+    /// `-f image2 'out_%03d.png'` used to have `open_output` create a real,
+    /// literal file named `out_%03d.png` (`crate::output::create`,
+    /// unconditionally, before this) instead of ever reaching the per-frame
+    /// writer. The `NEEDNUMBER` branch added above keeps the
     /// throwaway-sink-backed probe instance and rebinds it, so no file at the
     /// literal pattern name is ever created and the real per-frame writer
     /// (`vaco-mux-image2`) is what `run_pipeline` ends up writing through.

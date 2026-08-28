@@ -119,13 +119,12 @@ pub fn open(index: u32, url: &str, req: &OpenRequest<'_>) -> Result<InputFile> {
     };
 
     let inner = if desc.flags.contains(vaco_format_core::FormatFlags::NEEDNUMBER) {
-        // Gap 7/#649: `img_%03d.png` is a pattern, not an openable file, so
-        // `opener(url)` would fail before the demuxer ever got a say — the
-        // exact bug reported against `-f image2` input. `DemuxerDesc::open`'s
-        // frozen signature still needs *some* source, so hand it an empty
-        // placeholder and let `Demuxer::bind_url` do the real filesystem
-        // resolution `Image2Demuxer::open_pattern` already implements
-        // correctly once it has the real URL.
+        // `img_%03d.png` is a pattern, not an openable file, so
+        // `opener(url)` would fail before the demuxer ever got a say.
+        // `DemuxerDesc::open`'s frozen signature still needs *some* source,
+        // so hand it an empty placeholder and let `Demuxer::bind_url` do the
+        // real filesystem resolution `Image2Demuxer::open_pattern` already
+        // implements correctly once it has the real URL.
         let placeholder: Box<dyn MediaSource> = Box::new(vaco_io::MemorySource::new(Vec::new()));
         let mut inner = (desc.open)(placeholder, &vaco_registry::Parsers)?;
         inner.bind_url(url)?;
@@ -133,8 +132,8 @@ pub fn open(index: u32, url: &str, req: &OpenRequest<'_>) -> Result<InputFile> {
     } else {
         let mut inner = (desc.open)(opener(url)?, &vaco_registry::Parsers)?;
         // Best-effort for a format whose primary source opened fine but that
-        // still wants its own URL for something extra (VobSub's `.sub`
-        // sidecar, gap 7's other named case): `Unsupported` just means this
+        // still wants its own URL for something extra (a `.sub` sidecar next
+        // to a normally-opened `.idx`, say): `Unsupported` just means this
         // demuxer has nothing to bind, which is every demuxer today.
         match inner.bind_url(url) {
             Ok(()) | Err(Error::Unsupported(_)) => {}
@@ -238,9 +237,9 @@ mod tests {
         }
     }
 
-    /// Gap 7/#649: `-f image2` on a `%03d` pattern used to fail before the
-    /// demuxer ever saw the URL, because `opener(url)` tried to open the
-    /// literal, non-existent pattern string. `DEMUXER_IMAGE2.flags` carries
+    /// `-f image2` on a `%03d` pattern used to fail before the demuxer ever
+    /// saw the URL, because `opener(url)` tried to open the literal,
+    /// non-existent pattern string. `DEMUXER_IMAGE2.flags` carries
     /// `NEEDNUMBER`, which routes this open through the placeholder-source +
     /// `bind_url` path instead.
     #[test]
