@@ -49,6 +49,14 @@ pub trait SendReceive {
 
     /// Discard buffered state; return to [`Stage::Feeding`].
     fn flush(&mut self);
+
+    /// Forwarded to [`Encoder::accepted_pix_fmts`] by [`AsEncoder`]; meaningless
+    /// for a decoder or bitstream filter's `SendReceive`, so the empty default
+    /// costs those implementors nothing.
+    #[must_use]
+    fn accepted_pix_fmts(&self) -> &'static [vaco_pixfmt::PixFmt] {
+        &[]
+    }
 }
 
 // ---------------------------------------------------------------- adapters
@@ -92,6 +100,10 @@ where
 
     fn flush(&mut self) {
         self.0.flush();
+    }
+
+    fn accepted_pix_fmts(&self) -> &'static [vaco_pixfmt::PixFmt] {
+        self.0.accepted_pix_fmts()
     }
 }
 
@@ -350,6 +362,10 @@ impl<T: SendReceive> SendReceive for Validated<T> {
 
     fn caps(&self) -> Caps {
         self.inner.caps()
+    }
+
+    fn accepted_pix_fmts(&self) -> &'static [vaco_pixfmt::PixFmt] {
+        self.inner.accepted_pix_fmts()
     }
 
     fn send(&mut self, input: Option<&Self::Input>) -> Result<()> {
