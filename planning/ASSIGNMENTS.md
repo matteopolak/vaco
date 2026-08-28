@@ -86,7 +86,8 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-filter-* T3 audio long tail | 4 | #485 (closes epic #58) | agent:audio-tail | active | 2026-08-27 | — | last open child of FT-4.13 |
 | vaco-cli stderr reporting | 7 | #641 #208 | agent:cli-report | active | 2026-08-27 | — | the Input #0/Output #0 dump and -stats/-progress/-report; shares loglevel::prints_info |
 | vaco-protocol-dial (new) + vaco-protocol-rtmp (epic #61) | 2 | TECH-DEBT row 1, #552 | agent:rtmp | done | 2026-08-27 | — | pays down the five-copy dial duplication first, then RTMP is the test of whether the seam was right |
-| mp3 demux/mux + vaco-codec-mpegaudio (epic #38 decode half) | 3 | #644 #362 #363 #364 | agent:mpeg-audio | active | 2026-08-27 | — | `.mp3` cannot be opened at all today; demuxer first, then Layers I/II/III |
+| mp3 demux/mux + vaco-codec-mpegaudio (epic #38 decode half) | 3 | #644 #362 (#363/#364 open) | agent:mpeg-audio | done | 2026-08-27 | — | `.mp3` cannot be opened at all today; demuxer first, then Layers I/II/III |
+| vaco-codec-mpeg2video (epic #36) | 3 | MPEG-1/2 video decode | agent:mpeg2 | active | 2026-08-28 | — | third leaf batch; parser and IDCT already exist, and it is D-22's first real consumer |
 | vaco-codec-vpx (epics #28, #32) | 3 | VP8 + VP9 decode | agent:vpx | active | 2026-08-28 | — | second leaf batch; `vaco-parse-vpx` already carries the headers |
 | vaco-codec-subtitle (epic #44) | 4 | DVB, DVD, PGS, CEA-608/708, Teletext | agent:subtitles | active | 2026-08-28 | — | first leaf batch of the fan-out; CEA-608/708 depends on the FrameSideData gaps |
 | pixel-format conversion + image2 codec mapping | 4 | #655 | agent:transcode-core | active | 2026-08-28 | — | core: no codec pair whose formats differ can transcode |
