@@ -330,6 +330,24 @@ fuzz-all secs="120":
     fi
     exit $fail
 
+# The differential prober (XF-04): mutate a family's seed media and check
+# vaco-probe against ffprobe on every mutant. Needs `ffprobe` on PATH.
+# `family` names a directory under fuzz/seeds/diff/ (mp4, matroska, mpegts,
+# wav). Findings land in fuzz/seeds/diff/findings/<family>/ as a `.bin` +
+# `.toml` pair; a clean run touches nothing there. `diff_probe` itself has no
+# vaco-* dependency, so `--no-default-features` keeps its build independent
+# of every other crate in the tree, same as any fuzz target.
+diff-fuzz family iterations="500":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build -p vaco-probe --release {{TD}}
+    cargo build --bin diff_probe --no-default-features --manifest-path fuzz/Cargo.toml
+    ./fuzz/target/debug/diff_probe campaign \
+        --seed-dir fuzz/seeds/diff/{{family}} \
+        --vaco-probe {{VACO_TARGET_DIR}}/release/vaco-probe \
+        --iterations {{iterations}} \
+        --out fuzz/seeds/diff/findings/{{family}}
+
 corpus-fetch:
     cargo xtask corpus-fetch
 

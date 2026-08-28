@@ -35,3 +35,20 @@ to skip, which is the same reasoning that keeps `owner-gate` to a named list and
 
 An artifact directory means "something is wrong now". This directory means
 "something was wrong once, and here is the proof it is not any more".
+
+## `diff/` is a second, differently-shaped namespace
+
+`diff/<family>/` (`mp4`, `matroska`, `mpegts`, `wav`, ...) holds small,
+real media generated locally with `ffmpeg` — the base corpus `diff_probe`
+(`fuzz/src/bin/diff_probe.rs`) mutates and checks against `ffprobe`. These are
+not crash regressions; they exist so `just diff-fuzz <family>` has something
+to mutate. Keep each file well under the sizes above.
+
+`diff/findings/<family>/<id>.bin` + `<id>.toml` are differential findings a
+campaign produced and a human judged worth keeping as an example — most
+mutants a campaign tries are not saved. Replay one with:
+
+```bash
+diff_probe replay fuzz/seeds/diff/findings/mp4/dropped-track-15e23e3e.bin \
+    --vaco-probe target/release/vaco-probe
+```

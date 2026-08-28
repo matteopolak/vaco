@@ -1,0 +1,9 @@
+id = "173e4e65232cfe90"
+family = "mp4"
+seed = "h264-video-only.mp4"
+verdict = "Mismatch"
+our_status = "Exited(0)"
+reference_status = "Exited(0)"
+
+# field-by-field disagreement
+# streams.stream.0.r_frame_rate: ours="16/1" reference="1/0"

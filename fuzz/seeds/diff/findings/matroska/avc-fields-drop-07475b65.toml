@@ -1,0 +1,11 @@
+id = "07475b65ad2c6652"
+family = "matroska"
+seed = "h264-video-only.mkv"
+verdict = "Mismatch"
+our_status = "Exited(0)"
+reference_status = "Exited(0)"
+
+# field-by-field disagreement
+# streams.stream.0.is_avc: ours=<absent> reference="true"
+# streams.stream.0.mime_codec_string: ours=<absent> reference="avc1.64000a"
+# streams.stream.0.nal_length_size: ours=<absent> reference="4"

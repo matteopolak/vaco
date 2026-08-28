@@ -1,0 +1,83 @@
+id = "01174c214fc03a3e"
+family = "matroska"
+seed = "h264-video-only.mkv"
+verdict = "Mismatch"
+our_status = "Exited(0)"
+reference_status = "Exited(0)"
+
+# field-by-field disagreement
+# format.nb_streams: ours=1 reference=2
+# format.start_time: ours="N/A" reference="0.000000"
+# streams.stream.0.bits_per_raw_sample: ours="N/A" reference="8"
+# streams.stream.0.chroma_location: ours="unspecified" reference="left"
+# streams.stream.0.duration: ours="0.500000" reference="N/A"
+# streams.stream.0.duration_ts: ours=500 reference="N/A"
+# streams.stream.0.has_b_frames: ours=0 reference=2
+# streams.stream.0.is_avc: ours=<absent> reference="true"
+# streams.stream.0.level: ours=-99 reference=10
+# streams.stream.0.mime_codec_string: ours=<absent> reference="avc1.64000a"
+# streams.stream.0.nal_length_size: ours=<absent> reference="4"
+# streams.stream.0.pix_fmt: ours="unknown" reference="yuv420p"
+# streams.stream.0.profile: ours="unknown" reference="High"
+# streams.stream.0.start_pts: ours="N/A" reference=0
+# streams.stream.0.start_time: ours="N/A" reference="0.000000"
+# streams.stream.1.avg_frame_rate: ours=<absent> reference="8/1"
+# streams.stream.1.bit_rate: ours=<absent> reference="N/A"
+# streams.stream.1.bits_per_raw_sample: ours=<absent> reference="N/A"
+# streams.stream.1.chroma_location: ours=<absent> reference="unspecified"
+# streams.stream.1.codec_long_name: ours=<absent> reference="H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10"
+# streams.stream.1.codec_name: ours=<absent> reference="h264"
+# streams.stream.1.codec_tag: ours=<absent> reference="0x0000"
+# streams.stream.1.codec_tag_string: ours=<absent> reference="[0][0][0][0]"
+# streams.stream.1.codec_type: ours=<absent> reference="video"
+# streams.stream.1.coded_height: ours=<absent> reference=32
+# streams.stream.1.coded_width: ours=<absent> reference=48
+# streams.stream.1.color_primaries: ours=<absent> reference="unknown"
+# streams.stream.1.color_range: ours=<absent> reference="tv"
+# streams.stream.1.color_space: ours=<absent> reference="unknown"
+# streams.stream.1.color_transfer: ours=<absent> reference="unknown"
+# streams.stream.1.display_aspect_ratio: ours=<absent> reference="3:2"
+# streams.stream.1.disposition.attached_pic: ours=<absent> reference=0
+# streams.stream.1.disposition.captions: ours=<absent> reference=0
+# streams.stream.1.disposition.clean_effects: ours=<absent> reference=0
+# streams.stream.1.disposition.comment: ours=<absent> reference=0
+# streams.stream.1.disposition.default: ours=<absent> reference=0
+# streams.stream.1.disposition.dependent: ours=<absent> reference=0
+# streams.stream.1.disposition.descriptions: ours=<absent> reference=0
+# streams.stream.1.disposition.dub: ours=<absent> reference=0
+# streams.stream.1.disposition.forced: ours=<absent> reference=0
+# streams.stream.1.disposition.hearing_impaired: ours=<absent> reference=0
+# streams.stream.1.disposition.karaoke: ours=<absent> reference=0
+# streams.stream.1.disposition.lyrics: ours=<absent> reference=0
+# streams.stream.1.disposition.metadata: ours=<absent> reference=0
+# streams.stream.1.disposition.multilayer: ours=<absent> reference=0
+# streams.stream.1.disposition.non_diegetic: ours=<absent> reference=0
+# streams.stream.1.disposition.original: ours=<absent> reference=0
+# streams.stream.1.disposition.still_image: ours=<absent> reference=0
+# streams.stream.1.disposition.timed_thumbnails: ours=<absent> reference=0
+# streams.stream.1.disposition.visual_impaired: ours=<absent> reference=0
+# streams.stream.1.duration: ours=<absent> reference="0.500000"
+# streams.stream.1.duration_ts: ours=<absent> reference=500
+# streams.stream.1.extradata_size: ours=<absent> reference=44
+# streams.stream.1.field_order: ours=<absent> reference="progressive"
+# streams.stream.1.has_b_frames: ours=<absent> reference=0
+# streams.stream.1.height: ours=<absent> reference=32
+# streams.stream.1.id: ours=<absent> reference="N/A"
+# streams.stream.1.index: ours=<absent> reference=1
+# streams.stream.1.is_avc: ours=<absent> reference="true"
+# streams.stream.1.level: ours=<absent> reference=-99
+# streams.stream.1.max_bit_rate: ours=<absent> reference="N/A"
+# streams.stream.1.mime_codec_string: ours=<absent> reference="avc1.64000a"
+# streams.stream.1.nal_length_size: ours=<absent> reference="4"
+# streams.stream.1.nb_frames: ours=<absent> reference="N/A"
+# streams.stream.1.nb_read_frames: ours=<absent> reference="N/A"
+# streams.stream.1.nb_read_packets: ours=<absent> reference="N/A"
+# streams.stream.1.pix_fmt: ours=<absent> reference="unknown"
+# streams.stream.1.profile: ours=<absent> reference="unknown"
+# streams.stream.1.r_frame_rate: ours=<absent> reference="8/1"
+# streams.stream.1.sample_aspect_ratio: ours=<absent> reference="1:1"
+# streams.stream.1.start_pts: ours=<absent> reference=0
+# streams.stream.1.start_time: ours=<absent> reference="0.000000"
+# streams.stream.1.tags.ENCODER: ours=<absent> reference="deadzone=21,11 fast_p"
+# streams.stream.1.time_base: ours=<absent> reference="1/1000"
+# streams.stream.1.width: ours=<absent> reference=48

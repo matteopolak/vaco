@@ -2085,6 +2085,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-filter-artistic"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "vaco-core",
+ "vaco-expr",
+ "vaco-filter-core",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-opts",
+ "vaco-pixfmt",
+]
+
+[[package]]
 name = "vaco-filter-asource"
 version = "0.1.0"
 dependencies = [
@@ -2684,12 +2698,14 @@ dependencies = [
  "vaco-codec-image-simple",
  "vaco-codec-jpeg",
  "vaco-codec-mpegaudio",
+ "vaco-codec-msac",
  "vaco-codec-pnm",
  "vaco-codec-qoi",
  "vaco-codec-subtitle-bitmap",
  "vaco-codec-subtitle-cc",
  "vaco-codec-subtitle-teletext",
  "vaco-codec-subtitle-text",
+ "vaco-codec-vp8",
  "vaco-color",
  "vaco-conformance",
  "vaco-core",
@@ -3462,6 +3478,7 @@ dependencies = [
  "vaco-filter-aeffects",
  "vaco-filter-aeq",
  "vaco-filter-analysis",
+ "vaco-filter-artistic",
  "vaco-filter-asource",
  "vaco-filter-audio",
  "vaco-filter-blur",
