@@ -1581,6 +1581,26 @@ already exposes each partition's byte range, so `decode_macroblock` needs a
 `row -> partition index` mapping (`row % num_partitions` per RFC 6386
 §9.5) and one `BoolDecoder` per partition instead of one shared `token_bd`.
 
+**Resolved 2026-08-28.** `decode_frame` now parses RFC 6386 §9.5's
+partition-size table (`decode::split_token_partitions`) and builds one
+`BoolDecoder` per token partition; each macroblock row reads its
+coefficient tokens from partition `row % num_partitions` instead of always
+partition 0. Verified against real multi-partition streams: built
+`vpxenc`/`vpxdec` from `libvpx` v1.16.0 source (`--enable-examples`, since
+neither ships in the Homebrew bottle `ffmpeg` links against), encoded the
+same `testsrc2` content at 176x144 and 352x288 with
+`--token-parts={0,1,2,3}` (1/2/4/8 partitions), decoded with this crate and
+separately with `ffmpeg -c:v libvpx`, and `cmp`-compared the raw YUV 4:2:0
+output byte-for-byte: identical in all four cases, including the
+352x288/8-partition case where `mb_rows` (18) exceeds `num_partitions`,
+exercising the wraparound. The original single-partition result was
+re-verified unchanged at the same time.
+
+Still open: actual multi-threaded (OS-thread) decode. This resolves the
+*correctness* half of C-16d's threading requirement -- a multi-partition
+stream now decodes right regardless of whether anything runs concurrently
+-- not the performance half; see `vaco-codec-vp8`'s own module doc.
+
 ### `vaco-codec-vp8`: two details assumed rather than confirmed against RFC 6386's primary prose
 
 Both are implemented with a documented, reasonable choice and have not
