@@ -574,13 +574,6 @@ acquired = "2026-08-27"
 where    = "https://www.itu.int/rec/T-REC-H.262"
 
 [[source]]
-id       = "iso-14496-2"
-kind     = "spec"
-title    = "ISO/IEC 14496-2, Coding of audio-visual objects — Part 2: Visual"
-acquired = "2026-08-27"
-where    = "ISO"
-
-[[source]]
 id       = "ffprobe-mpegvideo-probe"
 kind     = "blackbox"
 title    = "Observed ffprobe -f mpegvideo/-f m4v packet boundaries (pos/size/flags), profile/level, and sequence_extension/VideoObjectLayer header fields for MPEG-1, MPEG-2 (profile_and_level_indication byte at six -profile:v values and four -level:v values) and MPEG-4 part 2, ffmpeg 8.1"
