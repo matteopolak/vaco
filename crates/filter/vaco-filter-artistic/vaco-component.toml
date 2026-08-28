@@ -29,6 +29,13 @@ media = "video"
 
 [[component]]
 kind = "filter"
+name = "removelogo"
+long_name = "Remove a TV logo based on a mask image."
+ctor = "vaco_filter_artistic::removelogo::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
 name = "noise"
 long_name = "Add noise"
 ctor = "vaco_filter_artistic::noise::DESC"

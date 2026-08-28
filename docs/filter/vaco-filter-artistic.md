@@ -1,8 +1,8 @@
 # vaco-filter-artistic
 
 T3 artistic/stylisation video filters — `planning/16-filters.md` §4.2's
-`vaco-filter-artistic` row. Five implemented: `amplify`, `delogo`, `epx`,
-`noise`, `vignette`.
+`vaco-filter-artistic` row. Six implemented: `amplify`, `delogo`, `epx`,
+`noise`, `removelogo`, `vignette`.
 
 ## Scope reconciliation — this crate replaces a dispatch brief that named the wrong crate
 
@@ -28,14 +28,14 @@ built and committed (`planning/ASSIGNMENTS.md`, checked 2026-08-28):
 
 What was actually left, unclaimed, in this crate's real row: `noise`,
 `vignette`, `amplify`, `delogo`, `removelogo`, `epx`, `xbr`, `hqx`,
-`super2xsai`, `cover_rect`, `find_rect`. This crate implements five of those
-eleven; the other six are listed under "Left as a follow-up" below, each
+`super2xsai`, `cover_rect`, `find_rect`. This crate implements six of those
+eleven; the other five are listed under "Left as a follow-up" below, each
 with the specific reason it stopped.
 
 ## What it is
 
-One module per filter (`src/{amplify,delogo,epx,noise,vignette}.rs`), each
-exposing `pub const DESC: FilterDesc` and a crate-private `fn create`,
+One module per filter (`src/{amplify,delogo,epx,noise,removelogo,vignette}.rs`),
+each exposing `pub const DESC: FilterDesc` and a crate-private `fn create`,
 aggregated by
 [`registry::ArtisticRegistry`](../../crates/filter/vaco-filter-artistic/src/registry.rs)
 — the same shape `vaco-filter-convolve`/`vaco-filter-geometry` use.
@@ -82,11 +82,12 @@ Scales by 2x (`n=2`, Scale2x) or 3x (`n=3`, Scale3x), implemented from
 `https://www.scale2x.it/algorithm` (`provenance/sources.toml`'s
 `scale2x-algorithm`) — the AdvanceMAME project's own published
 specification, not the reference's source. Both scale factors reduce to a
-handful of neighbour-equality comparisons with no lookup table at all.
-`n=2` was checked against the reference at several hand-picked pixels,
-including one exercising every branch of the four-way conditional, and
-matched exactly; `n=3` is implemented from the same specification but was
-not independently re-probed in the time available.
+handful of neighbour-equality comparisons with no lookup table at all, and
+**both are framecrc-exact**: `n=2` matched several hand-picked pixels
+including one exercising every branch of the four-way conditional, and the
+same corner pixel re-probed at `n=3` matched the full nine-value block,
+including the more elaborate edge-midpoint branches (`E1`/`E3`/`E5`/`E7`)
+that `n=2` doesn't have.
 
 ### `vignette`
 
@@ -100,9 +101,8 @@ module doc. Three documented gaps:
    output by up to ±1, reproducibly across runs despite no `seed` option. A
    bounded sweep (comparing `dither=0` and `dither=1` over a 32x32 uniform
    frame and looking for short-period tiling in the difference map) found
-   no evidence of a simple ordered-dither matrix, which at least converts
-   "not attempted" into "attempted and inconclusive within budget" for
-   whoever picks this up next.
+   no evidence of a simple ordered-dither matrix — a real negative result,
+   not an unattempted one.
 2. Chroma-plane handling is scaled around the neutral point `128`
    (structurally reasoned, matches the *shape* measured on a `yuv420p`
    probe) but left a small residual this pass did not chase down.
@@ -136,14 +136,44 @@ column without breaking the other three. Shipped as **structural, not
 framecrc-verified** — the same bar `vaco-filter-blur::gblur` sets for the
 same reason.
 
+### `removelogo`
+
+Like `delogo`, but the region comes from a bitmap mask file rather than a
+fixed rectangle. `ffmpeg -h filter=removelogo` documents only `filename`/`f`
+— the mask *format* itself was probed directly against the reference:
+
+- It is a plain PGM (`P5`): a hand-built mask was accepted with no error and
+  drove the same border-replacement behaviour `delogo` documents.
+- A masked pixel is thresholded, not blended: bisecting the mask byte value
+  found `10` leaves a pixel untouched and `32` replaces it; the exact cutoff
+  was not narrowed further, so this module uses a conservative `> 16`
+  threshold sitting inside that measured bracket rather than a guessed
+  exact value.
+- The pixel fill reuses `delogo::fill_box` over the mask's bounding
+  rectangle, then restores any *inactive* pixel inside that rectangle to
+  its original value — so a non-rectangular mask only touches what it
+  marks. This means it inherits `delogo`'s own unresolved fourth-column
+  discrepancy rather than duplicating a second guess at the same formula.
+- The mask file is genuinely untrusted input (its own header declares its
+  width/height), so the pixel buffer is sized through
+  `vaco_limits::Budget::alloc` rather than a raw `Vec::with_capacity`, and
+  `fuzz/fuzz_targets/removelogo_pgm_parse.rs` fuzzes the parser directly —
+  the one target in this crate, since every other filter here only ever
+  sees decoded frames from a trusted pipeline stage. Ran clean:
+  `cargo +nightly fuzz run removelogo_pgm_parse --no-default-features
+  --features filter-artistic -- -max_total_time=30` — exit 0, 9,778,796
+  executions, `fuzz/artifacts` empty.
+
+Structural, **not** framecrc-verified, for the same reason `delogo` is not.
+
 ## Left as a follow-up
 
 | Filter | Why it stopped |
 |---|---|
 | `hqx` | **D7, not time.** hq2x/hq3x/hq4x classify each pixel into one of 256 neighbourhood patterns and look up a hand-tuned rule per pattern — an *authorial* table (designed by visual experimentation, not dictated by any format constraint), and the only source found for the exact table was the reference's own implementation. |
-| `xbr`, `super2xsai` | Independently published by their own authors (not an FFmpeg-source-only algorithm, so D7 is not the blocker), but genuinely not reached in the time this pass had after `epx` established the pattern. |
-| `removelogo` | Reads a second input — a bitmap mask file in a format specific to this filter — which is both a new file format to specify and a case of parsing a user-supplied file this project's own rules would then require a fuzz target for. |
-| `cover_rect`, `find_rect` | Template matching against a second bitmap input at multiple mipmap scales; `find_rect` reports a *position*, not a transformed frame, so it needs a `showinfo`-style metadata assertion rather than a framecrc pixel diff — a different verification shape this pass did not build. |
+| `xbr` | Independently published (Hyllian's own description), so D7 is not the blocker — but genuinely **larger than `epx`, not "a fraction of the cost"**: a shader-level reference implementation samples a 5x5 neighbourhood (`epx`'s is 3x3) with roughly 8-12 weighted-distance comparisons per corner via coefficient matrices, versus `epx`'s single boolean check. Deferred for time, with that corrected complexity estimate on record. |
+| `super2xsai` | Also independently published (predates and is separate from FFmpeg), so not a D7 case either. Three independent attempts sourced the `INTERPOLATE`/`Q_INTERPOLATE` arithmetic helpers but not a complete, precise statement of the diagonal pixel-selection logic that picks which computed value becomes which output sub-pixel. Left unattempted rather than reconstructed from partial information — guessing the selection structure risks exactly the "confidently wrong" failure mode this project's conventions warn against. |
+| `cover_rect`, `find_rect` | Template matching against a second bitmap input at multiple mipmap scales. `find_rect` reports a *position*, not a transformed frame (`ffmpeg -h filter=find_rect` has no pixel-modifying options at all) — decided the right verification shape is a `showinfo`-style metadata assertion, not a framecrc pixel diff, before attempting any implementation. `cover_rect` itself takes no coordinate options, which reads as depending on `find_rect`'s detection via frame metadata when the two are chained. Neither filter's underlying correlation search was implemented in the time available. |
 
 ## Framecrc comparison table
 
@@ -162,7 +192,7 @@ for exactly this reason.
 | `amplify` | `radius=2` variant of the same sequence | `gray`, 1x1, 14 frames | **exact** |
 | `amplify` | `low=3:high=3` / `low=3:high=100` | same, `factor=5` | **exact** (delta-clamp verified) |
 | `epx` | `n=2` | `gray`, 4x4 checkerboard | **exact** |
-| `epx` | `n=3` | — | not independently re-probed |
+| `epx` | `n=3` | same source | **exact** |
 | `vignette` | `dither=0` (default angle/x0/y0/aspect/mode) | `gray`, 8x8 | **exact** — forward mode |
 | `vignette` | `dither=0:mode=backward` | `gray`, 16x8 | **exact** |
 | `vignette` | `dither=0` (default) | `yuv420p`, 8x8 | **not verified** — chroma residual |
@@ -172,10 +202,12 @@ for exactly this reason.
 | `noise` | any `strength > 0` | any | **not verified** — PRNG not reproduced |
 | `delogo` | `x=3:y=3:w=4:h=4` | `gray`, 10x10 flat + `200` box | **exact** — content-independence confirmed |
 | `delogo` | `x=3:y=3:w=4:h=4` | `gray`, 10x10 step function | **partial** — 3 of 4 columns exact, 4th column diverges every row |
+| `removelogo` | mask covering `x=2:y=2:w=4:h=4` | `gray`, 8x8 flat + `200` box | **exact** — content-independence confirmed (mask format + threshold measured) |
+| `removelogo` | same mask | `gray`, 8x8 step function | **partial** — inherits `delogo`'s fourth-column discrepancy |
 
 ## How to change it
 
-- All five filters follow `vaco-filter-convolve`'s convention: a `pub const
+- All six filters follow `vaco-filter-convolve`'s convention: a `pub const
   DESC`, an `Opts` struct via `vaco_opts::Options` with a `parse` inherent
   method, a `Filter` struct implementing `vaco_filter_core::adapt::FrameFilter`,
   and a `create` function the registry dispatches to.
@@ -188,6 +220,9 @@ for exactly this reason.
 - `epx` is this crate's only filter that changes *frame dimensions* — its
   `configure` hook rewrites the output `LinkFormat`'s width/height, following
   `vaco-filter-video-geometry::scale`'s pattern.
+- `removelogo` reuses `delogo`'s `Rect`/`fill_box` (both `pub(crate)`)
+  rather than a second interpolation engine — fixing `delogo`'s fourth-column
+  discrepancy fixes it for both filters in one place.
 - If you resolve `delogo`'s fourth-column discrepancy or `vignette`'s
   `dither=1` generator, update both the relevant module's doc comment (each
   states exactly what was and was not verified) and the table above in the
@@ -204,12 +239,14 @@ No crate-level configuration, environment variables, or feature flags.
 Runtime configuration is entirely per-filter-instance, via each filter's
 `Opts` (parsed from the filtergraph argument string — see each module's
 `ffmpeg -h filter=<name>` transcription in its doc comment for the exact
-option surface).
+option surface). `removelogo`'s `filename` option additionally names a
+mask file on disk, read and parsed at filter-creation time.
 
 ## Dependencies
 
 `vaco-core`, `vaco-expr` (for `vignette`'s and `delogo`'s expression
 options), `vaco-opts`, `vaco-frame`, `vaco-pixfmt`, `vaco-filter-core`,
-`vaco-filter-graph`, `bitflags` (for `noise`'s flag-letter option). No
-external crate beyond what the workspace already declares; no new
-dependency was added to the workspace's `Cargo.toml`.
+`vaco-filter-graph`, `vaco-limits` (for `removelogo`'s bounded mask
+allocation), `bitflags` (for `noise`'s flag-letter option). No external
+crate beyond what the workspace already declares; no new dependency was
+added to the workspace's `Cargo.toml`.

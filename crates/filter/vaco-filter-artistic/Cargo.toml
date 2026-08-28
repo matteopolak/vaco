@@ -10,6 +10,7 @@ authors.workspace = true
 
 [dependencies]
 bitflags = { workspace = true }
+vaco-limits = { path = "../../core/vaco-limits" }
 vaco-core = { path = "../../core/vaco-core" }
 vaco-expr = { path = "../../core/vaco-expr" }
 vaco-opts = { path = "../../core/vaco-opts" }

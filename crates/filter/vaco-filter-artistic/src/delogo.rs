@@ -125,11 +125,11 @@ pub(crate) struct Filter {
 
 /// The box, resolved to pixel coordinates and clamped to the frame.
 #[derive(Debug, Clone, Copy)]
-struct Rect {
-    x0: i32,
-    y0: i32,
-    w: i32,
-    h: i32,
+pub(crate) struct Rect {
+    pub(crate) x0: i32,
+    pub(crate) y0: i32,
+    pub(crate) w: i32,
+    pub(crate) h: i32,
 }
 
 impl Filter {
@@ -174,7 +174,7 @@ impl Filter {
 }
 
 /// One plane's box replaced in place, `rows` addressed `[y][x]`.
-fn fill_box(rows: &mut [Vec<u8>], b: Rect) {
+pub(crate) fn fill_box(rows: &mut [Vec<u8>], b: Rect) {
     for y in b.y0..b.y0 + b.h {
         let Ok(uy) = usize::try_from(y) else { continue };
         let Some(l) = rows.get(uy).and_then(|r| {

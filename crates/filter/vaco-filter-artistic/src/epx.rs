@@ -60,9 +60,10 @@
 //! hand-checked pixels, including one genuinely exercising every branch (a
 //! corner pixel with `B!=H` and `D!=F` both true, verifying the individual
 //! `E0..E3` sub-rules, not just the "all-copy" fallback every other tested
-//! pixel happened to take). `n=3` is implemented from the same public
-//! specification but was not independently re-probed against the reference
-//! in the time available — a smaller, but real, gap versus `n=2`.
+//! pixel happened to take). The same corner pixel re-probed at `epx=n=3`
+//! matched the full nine-value block exactly too, including `E1`/`E3`/`E5`/
+//! `E7`'s more elaborate branches — both scale factors are now
+//! framecrc-exact, not just `n=2`.
 //!
 //! # Not implemented: bit depths above 8
 
@@ -344,6 +345,20 @@ mod tests {
         let rows: [&[u8]; 3] = [r0, r1, r2];
         assert_eq!(expand2(&rows, 1, 1, 3, 3), [7; 4]);
         assert_eq!(expand3(&rows, 1, 1, 3, 3), [7; 9]);
+    }
+
+    /// Pinned against the reference probe in this module's doc: an `n=3`
+    /// corner pixel exercising `e1`/`e3`/`e5`/`e7`'s more complex branches,
+    /// not just the `e0`/`e2`/`e6`/`e8` simple-copy ones `matches_the_measured_n2_corner_case`
+    /// already covers for `n=2`.
+    #[test]
+    fn matches_the_measured_n3_corner_case() {
+        let r0: &[u8] = &[200, 50, 200, 50];
+        let r1: &[u8] = &[50, 200, 50, 200];
+        let r2: &[u8] = &[200, 50, 200, 50];
+        let rows: [&[u8]; 3] = [r0, r1, r2];
+        let out = expand3(&rows, 0, 0, 4, 3);
+        assert_eq!(out, [200, 200, 200, 200, 200, 50, 200, 50, 50]);
     }
 
     #[test]

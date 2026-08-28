@@ -3,7 +3,7 @@
 
 use vaco_filter_graph::registry::{FilterRegistry, Instance, Instantiate};
 
-const NAMES: &[&str] = &["amplify", "delogo", "epx", "noise", "vignette"];
+const NAMES: &[&str] = &["amplify", "delogo", "epx", "noise", "removelogo", "vignette"];
 
 /// Implements [`FilterRegistry`] for every filter in this crate.
 #[derive(Debug, Clone, Copy, Default)]
@@ -20,6 +20,7 @@ impl FilterRegistry for ArtisticRegistry {
             "delogo" => crate::delogo::create(req),
             "epx" => crate::epx::create(req),
             "noise" => crate::noise::create(req),
+            "removelogo" => crate::removelogo::create(req),
             "vignette" => crate::vignette::create(req),
             other => Err(format!("vaco-filter-artistic: no filter named `{other}`")),
         }
