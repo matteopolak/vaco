@@ -333,11 +333,15 @@ fuzz-all secs="120":
 # The differential prober (XF-04): mutate a family's seed media and check
 # vaco-probe against ffprobe on every mutant. Needs `ffprobe` on PATH.
 # `family` names a directory under fuzz/seeds/diff/ (mp4, matroska, mpegts,
-# wav). Findings land in fuzz/seeds/diff/findings/<family>/ as a `.bin` +
-# `.toml` pair; a clean run touches nothing there. `diff_probe` itself has no
-# vaco-* dependency, so `--no-default-features` keeps its build independent
-# of every other crate in the tree, same as any fuzz target.
-diff-fuzz family iterations="500":
+# wav, ogg, flv, avi, mpegps, image2, aiff, caf, w64, nut). `mutator` is
+# `generic` (structure-blind) or `aware` (biases toward chunk/box length
+# fields and Ogg/FLV header fields it can recognise by shape — see
+# `fuzz/src/bin/diff_probe.rs`'s module doc). Findings land in
+# fuzz/seeds/diff/findings/<family>/ as a `.bin` + `.toml` pair; a clean run
+# touches nothing there. `diff_probe` itself has no vaco-* dependency, so
+# `--no-default-features` keeps its build independent of every other crate in
+# the tree, same as any fuzz target.
+diff-fuzz family iterations="500" mutator="generic":
     #!/usr/bin/env bash
     set -euo pipefail
     cargo build -p vaco-probe --release {{TD}}
@@ -346,7 +350,32 @@ diff-fuzz family iterations="500":
         --seed-dir fuzz/seeds/diff/{{family}} \
         --vaco-probe {{VACO_TARGET_DIR}}/release/vaco-probe \
         --iterations {{iterations}} \
+        --mutator {{mutator}} \
         --out fuzz/seeds/diff/findings/{{family}}
+
+# The cadence half of XF-04: re-run every family at the committed baseline's
+# own iteration count and `--rng-seed` (both fixed, so a clean tree reproduces
+# the stored tally exactly) and report drift against
+# fuzz/seeds/diff/baseline.txt — a changed count instead of a human having to
+# notice one. Exits non-zero (per family, and if any family drifted) so this
+# is CI-shaped. Pass `update="--update-baseline"` after intentionally
+# accepting a new tally (a fix that closes real mismatches, a new seed) to
+# re-record it; anything else leaves the baseline untouched.
+diff-fuzz-baseline update="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build -p vaco-probe --release {{TD}}
+    cargo build --release --bin diff_probe --no-default-features --manifest-path fuzz/Cargo.toml
+    fail=0
+    for family in mp4 matroska mpegts wav ogg flv avi mpegps image2 aiff caf w64 nut; do
+        ./fuzz/target/release/diff_probe campaign \
+            --seed-dir fuzz/seeds/diff/$family \
+            --vaco-probe {{VACO_TARGET_DIR}}/release/vaco-probe \
+            --iterations 500 --rng-seed 42 \
+            --baseline fuzz/seeds/diff/baseline.txt {{update}} \
+            --out fuzz/seeds/diff/findings/$family || fail=1
+    done
+    exit $fail
 
 corpus-fetch:
     cargo xtask corpus-fetch
