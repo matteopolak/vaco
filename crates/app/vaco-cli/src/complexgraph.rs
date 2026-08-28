@@ -152,7 +152,7 @@ fn params_of(fmt: &LinkFormat) -> CodecParameters {
                 v.format = Some(*format);
                 v.frame_rate = *frame_rate;
                 v.sample_aspect_ratio = *sample_aspect_ratio;
-                v.color = color.clone();
+                v.color = *color;
             }
             p
         }
@@ -433,8 +433,7 @@ pub fn build_and_attach(
     // there is more than one.
     let default_time_base = pending_sources
         .first()
-        .map(|(_, _, tb)| *tb)
-        .unwrap_or_else(|| Rational::new(1, 1_000_000));
+        .map_or_else(|| Rational::new(1, 1_000_000), |(_, _, tb)| *tb);
 
     let mode = if auto_conversion {
         vaco_filter_core::negotiate::AutoConvert::All

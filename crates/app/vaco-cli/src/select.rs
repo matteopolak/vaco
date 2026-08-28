@@ -332,6 +332,10 @@ pub struct Selection {
 /// out-of-range input file index, a map that matched nothing and did not
 /// carry `?`, or a `[label]` that names no open complex-graph output (or one
 /// already used elsewhere).
+#[allow(
+    clippy::implicit_hasher,
+    reason = "internal wiring type, not a public hashing surface"
+)]
 pub fn resolve(
     files: &[InputStreams],
     maps: &[MapEntry],

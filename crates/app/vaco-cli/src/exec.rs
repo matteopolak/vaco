@@ -254,6 +254,10 @@ fn stream_info(s: &Stream) -> StreamInfo {
 /// `-map [label]` naming no open (or already-used) complex-graph output, or
 /// `-c copy` on a stream fed by one (streamcopy and a complex filtergraph
 /// cannot be combined — measured, `ffmpeg 8.1`).
+#[allow(
+    clippy::implicit_hasher,
+    reason = "internal wiring type, not a public hashing surface"
+)]
 pub fn resolve_output(
     cli: &Cli,
     out: &OutputSpec,
