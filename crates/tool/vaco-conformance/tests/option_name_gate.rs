@@ -34,22 +34,26 @@
 //!
 //! # `KNOWN_GAPS`
 //!
-//! Sixty-one filters across seven crates currently accept an invented
-//! option name — a real, confirmed divergence in every case (verified
-//! against the reference above), not a class this gate's own design
-//! doubts. `vaco-filter-aeffects`/`-adynamics`/`-aeq`/`-aanalysis` already
-//! had this same bug across their entire `Instantiate::named`-based
-//! option surface, fixed by `common::ensure_known_options` in each crate;
-//! these sixty-one are the same bug reached by building this gate rather
-//! than a targeted sweep, in crates that were not part of that fix. Left
-//! for a follow-up pass rather than folded into this dispatch, which is
-//! already the gate this file exists to report, not to silently absorb
-//! into a bigger scope.
+//! Started at sixty-one filters across seven crates when this gate first
+//! ran. `vaco-filter-aeffects`/`-adynamics`/`-aeq`/`-aanalysis` already had
+//! this same bug across their entire `Instantiate::named`-based option
+//! surface, fixed in a separate dispatch by `common::ensure_known_options`
+//! in each crate; running this gate found the identical bug reached seven
+//! more crates it did not touch. Fifty-eight of those sixty-one are now
+//! closed by the same `ensure_known_options`-per-registry pattern, wired
+//! into `vaco-filter-analysis`/`-audio`/`-deinterlace`/`-denoise`/
+//! `-geometry`/`-mm`/`-temporal`'s own `registry.rs` (no shared
+//! `common.rs` in these crates, so each carries its own small
+//! `KNOWN_OPTIONS` table and `ensure_known_options` copy, same shape,
+//! same precedent as the four `common.rs`-based crates before them).
 //!
-//! `vaco-filter-video-geometry`'s three (`hflip`, `scale`, `vflip`) are
-//! additionally not this crate's to fix at all — `assigned`, no
+//! The three still here are `vaco-filter-video-geometry`'s `hflip`,
+//! `scale`, `vflip` — not this crate's to fix at all: `assigned`, no
 //! completion date, per `planning/ASSIGNMENTS.md`, same standing rule as
-//! `vaco-filter-color` in the sibling gate.
+//! `vaco-filter-color` in the sibling gate. This allowlist is meant to
+//! shrink toward exactly that residue, not sit as a permanent monument —
+//! delete an entry the moment its filter's crate closes the gap, per this
+//! const's own doc below.
 
 #![expect(
     clippy::expect_used,
@@ -70,64 +74,6 @@ use vaco_filter_graph::registry::Instantiate;
 /// quietly ignored rather than flagged as stale — the same known
 /// limitation `option_consts_gate.rs`'s own `KNOWN_GAPS` carries).
 const KNOWN_GAPS: &[(&str, &str)] = &[
-    ("vaco-filter-analysis", "bbox"),
-    ("vaco-filter-analysis", "blackdetect"),
-    ("vaco-filter-analysis", "blackframe"),
-    ("vaco-filter-analysis", "cropdetect"),
-    ("vaco-filter-analysis", "entropy"),
-    ("vaco-filter-analysis", "identity"),
-    ("vaco-filter-analysis", "msad"),
-    ("vaco-filter-analysis", "psnr"),
-    ("vaco-filter-analysis", "showinfo"),
-    ("vaco-filter-analysis", "signalstats"),
-    ("vaco-filter-analysis", "ssim"),
-    ("vaco-filter-audio", "adecorrelate"),
-    ("vaco-filter-audio", "aformat"),
-    ("vaco-filter-audio", "amultiply"),
-    ("vaco-filter-audio", "asetnsamples"),
-    ("vaco-filter-audio", "asetrate"),
-    ("vaco-filter-audio", "channelmap"),
-    ("vaco-filter-audio", "channelsplit"),
-    ("vaco-filter-audio", "join"),
-    ("vaco-filter-deinterlace", "repeatfields"),
-    ("vaco-filter-deinterlace", "separatefields"),
-    ("vaco-filter-deinterlace", "vfrdet"),
-    ("vaco-filter-denoise", "atadenoise"),
-    ("vaco-filter-denoise", "dctdnoiz"),
-    ("vaco-filter-denoise", "fftdnoiz"),
-    ("vaco-filter-denoise", "hqdn3d"),
-    ("vaco-filter-denoise", "nlmeans"),
-    ("vaco-filter-denoise", "owdenoise"),
-    ("vaco-filter-denoise", "removegrain"),
-    ("vaco-filter-denoise", "vaguedenoiser"),
-    ("vaco-filter-geometry", "alphaextract"),
-    ("vaco-filter-geometry", "alphamerge"),
-    ("vaco-filter-geometry", "swapuv"),
-    ("vaco-filter-mm", "acopy"),
-    ("vaco-filter-mm", "anull"),
-    ("vaco-filter-mm", "anullsink"),
-    ("vaco-filter-mm", "areverse"),
-    ("vaco-filter-mm", "alatency"),
-    ("vaco-filter-mm", "copy"),
-    ("vaco-filter-mm", "null"),
-    ("vaco-filter-mm", "nullsink"),
-    ("vaco-filter-mm", "reverse"),
-    ("vaco-filter-mm", "latency"),
-    ("vaco-filter-temporal", "decimate"),
-    ("vaco-filter-temporal", "deflicker"),
-    ("vaco-filter-temporal", "dejudder"),
-    ("vaco-filter-temporal", "framestep"),
-    ("vaco-filter-temporal", "freezedetect"),
-    ("vaco-filter-temporal", "freezeframes"),
-    ("vaco-filter-temporal", "lagfun"),
-    ("vaco-filter-temporal", "mpdecimate"),
-    ("vaco-filter-temporal", "random"),
-    ("vaco-filter-temporal", "tblend"),
-    ("vaco-filter-temporal", "tlut2"),
-    ("vaco-filter-temporal", "tmedian"),
-    ("vaco-filter-temporal", "tmidequalizer"),
-    ("vaco-filter-temporal", "tmix"),
-    ("vaco-filter-temporal", "tpad"),
     ("vaco-filter-video-geometry", "hflip"),
     ("vaco-filter-video-geometry", "scale"),
     ("vaco-filter-video-geometry", "vflip"),
