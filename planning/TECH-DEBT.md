@@ -1854,3 +1854,64 @@ estimation fallback reacting to a `dpds`-signalled "real WMA container" by
 attempting a codec-probe against this crate's non-decodable synthetic
 payload) was not confirmed, since confirming it needs genuinely valid WMA
 bitstream data, out of scope for framing work.
+
+### `vaco-codec-core::CodecId`: seven ids where the widened reference audit disagrees and neither answer was forced
+
+Closing interface gap 21's audit (`the_codec_table_agrees_with_the_reference`,
+`crates/signal/vaco-codec-core/tests/params.rs`) found 51 property
+disagreements against `ffmpeg -codecs`' I/L/S flag columns. 44 were the
+unambiguous "an existing row never had its flags checked against the
+reference at all" class (27 fixed in the same pass: `dvvideo`, `cljr`,
+`g728`, `pcm_vidc`, `avs2`, `avs3`, `jpeg2000`, `flv1`, `flashsv`,
+`flashsv2`, `vp6`/`vp6a`/`vp6f`, `nellymoser`, `adpcm_swf`, `gsm`/`gsm_ms`,
+`adpcm_g722`/`adpcm_g726`, `g723_1`, `g729`, `qcelp`, `ilbc`, `opus`, `flac`,
+`vorbis`, `mp3` — plus `adpcm_adx`, fixed in the commit immediately before
+the audit landed since it was the one that motivated writing the audit at
+all). Seven were left alone and recorded in the test's own
+`KNOWN_PROPERTY_DIVERGENCES` list, because fixing them would mean picking an
+answer to a real modelling question this pass had no standing to settle
+unilaterally:
+
+* `subrip`, `mov_text`: the reference does not apply the lossy/lossless/
+  intra vocabulary to text subtitle codecs at all — those two rows print no
+  `I`/`L`/`S` flags whatsoever in `-codecs`, not a specific combination to
+  match. This project already made the opposite, defensible choice
+  (trivially intra-only and lossless, since a text cue has no compression
+  mode at all), and "the reference states nothing" is not evidence that
+  choice is wrong.
+* `wrapped_avframe`: an internal passthrough pseudo-codec. `-codecs` does
+  not flag it intra-only; whether "independently decodable" is even a
+  coherent question for a passthrough was not something this pass could
+  answer with a `-codecs` diff alone.
+* `png`: `-codecs` does not mark it intra-only, unlike every other
+  `vaco-format-*-simple`-family image codec sharing the `IMG` constant
+  (`pbm`/`pgm`/`ppm`/`pam`/`pfm`/`phm`/`pcx`/`targa`/`sgi`/`xwd`/`xbm`, all
+  of which *do* get `I` from the reference). The likely reason — PNG's
+  animated form (APNG) can inter-frame-delta the way GIF does, and this
+  table already correctly does not call `gif` intra-only either — is a
+  plausible hypothesis, not a verified fact; whoever owns `vaco-codec-qoi`/
+  image handling should decide whether `Png` needs its own row split from
+  the `IMG` constant rather than have this pass strip the flag on a guess.
+* `h264`, `hevc`, `av1`: `-codecs` flags all three both lossy **and**
+  lossless-capable (each has a real, specified lossless coding mode); this
+  table only ever gives them `LOSSY`. Whether a coarse two-state
+  lossy-xor-lossless-per-codec-family model should grow a "both" case for
+  the handful of codecs that are actually dual-mode is a real design
+  question — [`CodecProperties`] is a bitflag set, so "both" is
+  representable today, the table just never asserts it for these three.
+
+None of the seven are silently accepted: the test itself would fail loudly
+if one's properties ever changed to agree with the reference and the name
+were left in `KNOWN_PROPERTY_DIVERGENCES` (the test also asserts the
+divergence list stays exactly as wide as it needs to be, not wider).
+
+Also found in the same pass and left alone as out of scope for a `-codecs`
+diff: `smk`'s uncompressed audio tracks report `pcm_s16le`/`pcm_u8` in the
+reference, not `smackaudio` — this *was* fixed (`vaco-format-misc/src/smk.rs`),
+since it directly affects gap 21's own acceptance criterion, but the
+underlying fact (Smacker's `AudioRate` `compressed` bit gates whether a
+track is coded audio at all, versus raw PCM in the container's clothing)
+was found by testing real fixtures through `ffprobe`, not from `-codecs`,
+and is recorded here so the next person auditing per-codec properties knows
+`-codecs`' flat name-to-flags table cannot see container-conditional codec
+identity like this at all.

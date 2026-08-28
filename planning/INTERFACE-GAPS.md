@@ -1370,7 +1370,7 @@ built to fix a case this narrow would be solving a problem `vaco-codec-subtitle-
 does not currently have evidence needs it (D19) — recorded in
 `planning/TECH-DEBT.md` instead of speculatively adding the interface surface.
 
-## 21. `vaco-codec-core`'s `CodecId` has no variants for any game-video/game-audio codec — PARTIALLY CLOSED 2026-08-28 (variants landed, wiring into `vaco-format-misc` remains)
+## 21. `vaco-codec-core`'s `CodecId` has no variants for any game-video/game-audio codec — CLOSED 2026-08-28 for `roq`/`flic`/`cdg`/`bink`/`smk`; a tenth id for a different consumer is still open (see below)
 
 Found implementing `vaco-format-misc` (FM-59, issues #623/#624/#625): `ivf`,
 `ffmetadata`, `roq`, `flic`, `cdg`, `bink` and `smk`. Of these, `roq` (video
@@ -1495,3 +1495,35 @@ gap has ever named.
 
 `xwma` needed no new variant: its `wFormatTag` maps onto the existing
 `Wmav1`/`Wmav2`/`Wmapro`.
+
+### Status, 2026-08-28 — the original five demuxers wired and measured
+
+`vaco-format-misc` (`roq.rs`, `flic.rs`, `cdg.rs`, `bink.rs`, `smk.rs`) now
+sets `CodecParameters::codec_id` on every stream it constructs. Verified
+three ways: the crate's own unit tests assert `codec_id` per stream; a
+hand-built fixture per format run through the real `vaco-probe` binary
+(`-show_streams`) prints the reference's exact `codec_name`/
+`codec_long_name`; the identical fixture bytes run through a real `ffprobe`
+print the same, byte for byte, for every format except `smk` (the
+reference's real `smackvid` decoder refuses to open a framing-only
+synthetic fixture with no valid Huffman tree data — the same limitation
+`vaco-format-misc`'s own bink/smk landing comment already recorded, worked
+around there with `-c copy -f framemd5`; here, `ffprobe`'s own `Input #0`
+summary line printed before that failure already showed `smackvideo`
+matching).
+
+One correction found only by testing real fixtures rather than trusting the
+unit tests: `smk`'s audio `codec_id` is not fixed to `SmackAudio`. An
+`AudioRate` entry's `compressed` bit — already read by this crate for
+framing — decides whether a track's bytes are Smacker's own compressed
+audio or raw PCM; running the crate's own (uncompressed) default fixture
+through `ffprobe` printed `pcm_s16le`, not `smackaudio`. Fixed to branch on
+`compressed`, selecting `PcmS16le`/`PcmU8` (by the existing bit-depth flag)
+when clear.
+
+This closes the gap for the nine ids this pass's own table covers. It does
+not close the tenth (`AdpcmPsx`, immediately above) — a different consumer,
+found by a different agent, after this pass had already measured and
+committed its own nine. Whoever wires `AdpcmPsx` into `vaco-format-misc-audio`'s
+`vag.rs` should re-open this kind of entry rather than assume "gap 21 is
+CLOSED" covers it too.
