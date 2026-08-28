@@ -28,6 +28,7 @@ use vaco_core::Result;
 use vaco_frame::Frame;
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
+use vaco_pixfmt::PixFmt;
 
 type DecodeFn = fn(&[u8], &mut Budget) -> Result<Frame>;
 type EncodeFn = fn(&Frame) -> Result<Vec<u8>>;
@@ -137,54 +138,90 @@ pub struct ImageEncoder {
     machine: Machine<Packet>,
     limits: Limits,
     encode: EncodeFn,
+    /// What `encode` accepts, most-preferred first — a caller property, not
+    /// derivable from the function pointer, so each constructor states it.
+    accepted: &'static [PixFmt],
 }
 
 impl ImageEncoder {
     /// An encoder that calls `encode` and bounds the packet it allocates by
     /// `limits`.
     #[must_use]
-    pub fn new(limits: Limits, encode: EncodeFn) -> Self {
+    pub fn new(limits: Limits, encode: EncodeFn, accepted: &'static [PixFmt]) -> Self {
         Self {
             machine: Machine::new(Caps::empty()),
             limits,
             encode,
+            accepted,
         }
     }
 
     /// An encoder for pbm (`P4`).
     #[must_use]
     pub fn pbm(limits: Limits) -> Self {
-        Self::new(limits, encode_pbm)
+        Self::new(limits, encode_pbm, &[PixFmt::MonoWhite])
     }
 
     /// An encoder for pgm (`P5`).
     #[must_use]
     pub fn pgm(limits: Limits) -> Self {
-        Self::new(limits, encode_pgm)
+        Self::new(limits, encode_pgm, &[PixFmt::Gray8, PixFmt::Gray16be])
     }
 
     /// An encoder for ppm (`P6`).
     #[must_use]
     pub fn ppm(limits: Limits) -> Self {
-        Self::new(limits, encode_ppm)
+        Self::new(limits, encode_ppm, &[PixFmt::Rgb24, PixFmt::Rgb48be])
     }
 
     /// An encoder for pam (`P7`).
     #[must_use]
     pub fn pam(limits: Limits) -> Self {
-        Self::new(limits, encode_pam)
+        Self::new(
+            limits,
+            encode_pam,
+            &[
+                PixFmt::MonoBlack,
+                PixFmt::Gray8,
+                PixFmt::Gray16be,
+                PixFmt::Ya8,
+                PixFmt::Ya16be,
+                PixFmt::Rgb24,
+                PixFmt::Rgb48be,
+                PixFmt::Rgba,
+                PixFmt::Rgba64be,
+            ],
+        )
     }
 
     /// An encoder for pfm.
     #[must_use]
     pub fn pfm(limits: Limits) -> Self {
-        Self::new(limits, encode_pfm)
+        Self::new(
+            limits,
+            encode_pfm,
+            &[
+                PixFmt::Grayf32le,
+                PixFmt::Grayf32be,
+                PixFmt::Rgbf32le,
+                PixFmt::Rgbf32be,
+            ],
+        )
     }
 
     /// An encoder for phm.
     #[must_use]
     pub fn phm(limits: Limits) -> Self {
-        Self::new(limits, encode_phm)
+        Self::new(
+            limits,
+            encode_phm,
+            &[
+                PixFmt::Grayf16le,
+                PixFmt::Grayf16be,
+                PixFmt::Rgbf16le,
+                PixFmt::Rgbf16be,
+            ],
+        )
     }
 }
 
@@ -194,6 +231,10 @@ impl SendReceive for ImageEncoder {
 
     fn caps(&self) -> Caps {
         self.machine.caps()
+    }
+
+    fn accepted_pix_fmts(&self) -> &'static [PixFmt] {
+        self.accepted
     }
 
     fn send(&mut self, input: Option<&Frame>) -> Result<()> {
