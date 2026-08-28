@@ -24,6 +24,7 @@ mod registry;
 mod time_gate;
 mod toml;
 mod unsafe_audit;
+mod vlc_scan;
 mod wasm;
 
 fn main() {
@@ -42,6 +43,7 @@ fn main() {
         "time-gate" => time_gate::run(check),
         "patent-gate" => patent_gate::run(check),
         "provenance-check" => provenance::run(check),
+        "vlc-scan" => vlc_scan::run(check),
         "check-message" => check_message(args.get(1).map(String::as_str)),
         "owner-gate" => owner_gate::run(check),
         "gen-registry" => registry::run(check),
@@ -62,6 +64,7 @@ fn main() {
             eprintln!("  dup-check       one definition per concept (D19)");
             eprintln!("  comment-check   comments stay short and self-contained");
             eprintln!("  provenance-check  every large constant table names its source (D15)");
+            eprintln!("  vlc-scan        hand-transcribed VLC tables are pairwise prefix-free (tier 1 of 3)");
             eprintln!("  dead-code       public API that only tests use (report, not a gate)");
             eprintln!("  gen-registry    assemble the registry from crate fragments");
             eprintln!("  gen-docs-index  generate docs/README.md");
