@@ -1,0 +1,25 @@
+[package]
+name = "vaco-protocol-srt"
+description = "SRT: packet framing, the handshake state machine (caller/listener/rendezvous), and the KM (key material) message shape. Native, from draft-sharabayko-srt. Socket ownership and cipher wiring land in a later package."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+vaco-core = { path = "../../core/vaco-core" }
+vaco-hash = { path = "../../core/vaco-hash" }
+vaco-limits = { path = "../../core/vaco-limits" }
+vaco-protocol-core = { path = "../../io/vaco-protocol-core" }
+vaco-time = { path = "../../core/vaco-time" }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.vaco]
+layer = 2
