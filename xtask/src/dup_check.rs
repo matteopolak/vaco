@@ -74,6 +74,15 @@ const DISTINCT: &[(&str, &str)] = &[
         "vaco-frame: the frame model. vaco-demux-matroska: a laced block frame.",
     ),
     (
+        "FrameHeader",
+        "vaco-codec-vp8: RFC 6386 §9's compressed frame header (segmentation, \
+         loop filter, quantiser indices, entropy-probability updates) — a \
+         decode-time record with persistent state fields (`segmentation`, \
+         `lf_deltas`) threaded across frames. vaco-parse-av1: AV1's \
+         uncompressed_header() syntax record, a plain parse result with no \
+         cross-frame state of its own. Different bitstream, different shape.",
+    ),
+    (
         "ImageDecoder",
         "vaco-codec-pnm: pbm/pgm/ppm/pam/pfm/phm. vaco-codec-image-simple: \
          bmp/pcx/tga/sgi/xwd/xbm. Same small SendReceive-over-Machine \
@@ -96,8 +105,26 @@ const DISTINCT: &[(&str, &str)] = &[
     ),
     ("Mode", "distinct modes in vaco-core and vaco-parse-opus."),
     (
+        "Picture",
+        "vaco-codec-vp8: a decoded frame's three reconstruction planes \
+         (Y/U/V), held in a reference-frame slot for later inter prediction. \
+         vaco-format-id3: an APIC/PIC attached-picture frame's decoded \
+         metadata (mime type, picture type, description). No shared concept.",
+    ),
+    (
         "Plan",
         "vaco-tx: a transform plan. vaco-scale: a conversion plan.",
+    ),
+    (
+        "Plane",
+        "vaco-frame: the pool-backed, budget-allocated plane view every \
+         other crate reads/writes video pixels through. vaco-codec-vp8: a \
+         private, plain `Vec<u8>` reconstruction buffer used only inside \
+         this crate's own decode loop, where intra prediction and the loop \
+         filter need to read already-written pixels of the same buffer \
+         being written -- see the crate's `framebuf` module doc for why \
+         `vaco_frame::Plane`'s borrow shape does not fit that access \
+         pattern. Copied into a real `vaco_frame::Frame` once, at emission.",
     ),
     (
         "Scope",
