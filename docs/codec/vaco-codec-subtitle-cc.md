@@ -13,21 +13,25 @@ distinguished triplet-by-triplet by the `cc_type` field, which is why one
 crate covers both issues rather than two.
 
 It takes raw `cc_data` bytes, not a `Frame`, and produces its own event type
-rather than a `vaco_frame::Frame`. Both are consequences of two gaps
-elsewhere in the workspace, not a design choice made in isolation — see
-`src/lib.rs`'s top doc comment for the full explanation:
+rather than a `vaco_frame::Frame`. See `src/lib.rs`'s top doc comment for
+the full explanation, but in short:
 
 1. No H.264/HEVC/MPEG-2 parser in this workspace extracts caption bytes
    from a compressed stream and attaches them as
    `vaco_frame::FrameSideData::ClosedCaptions` yet, so there is no real
    compressed file that reaches this crate through the pipeline today.
-2. `vaco_frame::Frame` has no subtitle payload variant, so there is nowhere
-   honest to register this as a `kind = "decoder"` component — hence no
-   `vaco-component.toml` here.
-
-Taking raw bytes rather than a `Frame` means neither gap can make this
-crate wrong; it will start working end-to-end the moment a producer exists,
-with no change needed here.
+   Taking raw bytes rather than reaching into a `Frame` means this gap
+   cannot make the crate wrong; it will start working end-to-end the
+   moment a producer exists, with no change needed here.
+2. `vaco_frame::FrameData::Subtitle` (interface gap 17) landed during this
+   crate's own development and names this crate as one of the three
+   decoders it expects to be wired to eventually. That wiring — a
+   `Decoder` impl, a `vaco-component.toml` fragment, and a decision about
+   what a "packet" means for a format whose input is side data rather
+   than a bitstream — is real design work not attempted here; this crate
+   stays a standalone library with its own output type ([`Event`]) for
+   now. `Event::Cea608`/`Event::Cea708`'s screens already produce the
+   plain text `SubtitleContent::Text` wants.
 
 ## How it works
 

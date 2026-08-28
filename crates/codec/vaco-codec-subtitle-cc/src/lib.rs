@@ -11,7 +11,7 @@
 //! `cc_data()` is defined by CEA-708 Table 2). [`CcDecoder`] is the entry
 //! point that demultiplexes a `cc_data` byte slice into both.
 //!
-//! # Two gaps this crate does not close
+//! # One gap this crate does not close, and one that closed mid-session
 //!
 //! 1. Nothing in this workspace yet extracts `cc_data` from a compressed
 //!    stream (H.264 `user_data_registered_itu_t_t35` SEI, HEVC's equivalent,
@@ -19,19 +19,26 @@
 //!    `vaco_frame::FrameSideData::ClosedCaptions`. That population work
 //!    belongs to the H.264/HEVC/MPEG-2 parsers, not here. Until it lands,
 //!    this crate is reachable only by constructing `cc_data` bytes directly
-//!    (as the fixtures in `tests/` do), not from a real compressed file
-//!    through this workspace's pipeline.
-//! 2. `vaco_frame::Frame` has no subtitle payload variant and
-//!    `Decoder::receive_frame` is fixed to return `Frame`, so there is
-//!    nowhere honest to plug this crate in as a `kind = "decoder"` registry
-//!    component. This crate is therefore a standalone library with its own
-//!    output type ([`Event`]), not a registered decoder, until that gap
-//!    closes too.
+//!    (as `tests/fixtures.rs` does), not from a real compressed file through
+//!    this workspace's pipeline.
+//! 2. `vaco_frame::FrameData::Subtitle` (interface gap 17) landed during
+//!    this crate's own development and names this crate directly as one of
+//!    the three decoders it expects to be wired to. This crate is *not*
+//!    wired to it: doing so means implementing `Decoder`'s send/receive
+//!    state machine, registering a `vaco-component.toml` fragment, and
+//!    deciding what a "packet" means for a format whose real input is a
+//!    per-frame side-data buffer rather than a bitstream to demux — real
+//!    design work, not a rename, and riskier to do hastily in a shared tree
+//!    than to leave for a follow-up (`gen-registry` breaks every other
+//!    agent's build on a bad fragment). [`Event::Cea608`]/[`Event::Cea708`]
+//!    already carry exactly what `SubtitleContent::Text` wants
+//!    (`Screen::text()`), so the wiring itself should be small once
+//!    undertaken.
 //!
-//! Because of both gaps, the public API takes raw `cc_data` bytes — exactly
-//! what `FrameSideData::ClosedCaptions`'s buffer holds today, and what
-//! ffmpeg's own `A53_CC` side data holds — rather than reaching into a
-//! `Frame` itself. That keeps this crate correct the moment a producer exists
+//! Gap 1 is why the public API takes raw `cc_data` bytes — exactly what
+//! `FrameSideData::ClosedCaptions`'s buffer holds today, and what ffmpeg's
+//! own `A53_CC` side data holds — rather than reaching into a `Frame`
+//! itself. That keeps this crate correct the moment a producer exists
 //! without needing to change.
 //!
 //! # Allocation
