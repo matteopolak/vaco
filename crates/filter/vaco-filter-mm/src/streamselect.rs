@@ -156,10 +156,16 @@ fn build(
 ) -> std::result::Result<Instance, String> {
     let opts = Opts::parse(req.args)?;
     let inputs = usize::try_from(opts.inputs.max(1)).unwrap_or(1);
-    let map = parse_map(&opts.map, inputs)?;
-    let outputs = map.len();
+    // `inputs` is attacker-controlled option text (`range` only bounds the
+    // parsed integer, not what gets allocated from it) and `parse_map`'s
+    // empty-`map` fallback builds a `0..inputs`-sized `Vec` — so the pad-count
+    // ceiling must be checked *before* that allocation exists, not after.
+    // Found by fuzzing: `streamselect=inputs=999999999` with `map` unset
+    // requested an 8 GB `Vec<usize>` before this reordering.
     let input_pads =
         pads::of(media, inputs).ok_or_else(|| "streamselect: too many inputs".to_owned())?;
+    let map = parse_map(&opts.map, inputs)?;
+    let outputs = map.len();
     let output_pads =
         pads::of(media, outputs).ok_or_else(|| "streamselect: too many outputs".to_owned())?;
     Ok(Instance {
@@ -282,6 +288,21 @@ mod tests {
     #[test]
     fn empty_map_defaults_to_identity() {
         assert_eq!(parse_map("", 3).unwrap(), vec![0, 1, 2]);
+    }
+
+    /// Fuzz-found: `streamselect=inputs=999999999` with `map` unset used to
+    /// request an 8 GB `Vec<usize>` from `parse_map`'s identity fallback
+    /// before the pad-count ceiling was ever checked. `build` must reject
+    /// this at construction, not allocate its way into an OOM.
+    #[test]
+    fn a_huge_input_count_is_rejected_before_any_allocation_sized_by_it() {
+        let req = Instantiate {
+            name: "streamselect",
+            instance: "streamselect",
+            args: Some("inputs=999999999"),
+            arguments: &[],
+        };
+        assert!(video::create(&req).is_err());
     }
 
     #[test]
