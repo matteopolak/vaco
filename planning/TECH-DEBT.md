@@ -2563,3 +2563,126 @@ not a self-report).
 No variant reached `cmp`-identity this session. Full details, including
 the exact measured shapes, are in `docs/format/vaco-mux-mxf.md`'s
 byte-identity matrix section.
+
+### Update: `vaco-codec-mpeg12`'s MPEG-1 accuracy gap — re-examined, not closed, search space narrowed (#355)
+
+The entry above ("MPEG-1 remains genuinely wrong, with different
+symptoms") was written from a five-frame differential run and a single
+correction hypothesis (IDCT mismatch control, eliminated). A later pass
+re-examined it with two techniques that were not used the first time:
+reading the *shape* of the per-frame error curve rather than only its
+average, and building a matched MPEG-2 control fixture (same content,
+same GOP structure, same dimensions) to isolate what is actually
+MPEG-1-specific from what every fixture in this crate already shows.
+
+**The "intra-only" premise in the earlier entry was wrong.** `ffprobe
+-show_entries frame=pict_type` on `m1_i.m1v` shows frame 0 as `I` and
+every one of the other 24 frames as `P` — the `_i` fixture name reflects
+GOP structure (minimal, one `I` per sequence), not "every frame intra."
+This matters because the earlier framing ("present from frame 0 of
+intra-only content... ruling out inter-prediction") is not a valid
+inference from a stream that is 96% inter-predicted. The corrected
+picture, from a full 25-frame per-frame curve on `m1_i` versus a matched
+`m2_i` control:
+
+| Frame | `m1_i` mean abs diff | `m1_i` max | `m2_i` (control) mean | `m2_i` max |
+|---|---|---|---|---|
+| 0 (I) | 0.38 | 9 | 0.01 | 1 |
+| 12 | 1.19 | 12 | 0.04 | 2 |
+| 24 | 1.78 | 21 | 0.06 | 2 |
+
+Two things are true at once, and the earlier entry only had room to see
+one of them: frame 0 (a genuine intra picture, no motion compensation at
+all) is already wrong by far more than the control's own float-IDCT
+rounding noise — so there is a real intra-decode-path difference — *and*
+the error grows across the P-picture sequence faster than the control's
+own reference-chain creep would predict from a slightly-imperfect frame 0
+alone — so whatever is wrong is not confined to intra blocks either.
+Spatially (an 8x8-block max-diff heatmap on `m1_i` frame 0), the error is
+not uniform: most interior blocks are pixel-perfect, and the elevated
+ones cluster in a way consistent with escape-coded coefficients (this
+crate's own smallest, simplest test content should rarely need a level
+outside Table B.14/B.15's directly-encodable range, so escape usage is
+itself a proxy for "busier" blocks) — matching the "grows with content
+complexity" observation from the original entry, but now with a concrete
+candidate mechanism instead of just a correlation.
+
+Three further hypotheses were tested this pass, all against the real
+`m1_i`/`m1_ip`/`m1_ipb` fixtures, and eliminated:
+
+1. **Escape-level sign representation.** `block.rs`'s MPEG-1 escape-level
+   comment claimed "sign-magnitude" while the code next to it implemented
+   two's complement — a real discrepancy between documentation and
+   behaviour, caught by re-reading the comment against its own code
+   rather than by a symptom. Implementing genuine sign-magnitude (to
+   match the comment) measured *far* worse — avg MAD 209.6-224.0 across
+   the three fixtures, versus 12.9-44.8 for the existing two's-complement
+   code — so two's complement is confirmed, empirically, as the correct
+   (or at least far better) interpretation. The comment is fixed to say
+   this plainly: H.262's own Annex D.9.3 (the only source this project
+   has legitimate access to) does not specify which representation MPEG-1
+   uses for this field; ISO/IEC 11172-2's actual normative text does, and
+   this project does not have legitimate access to it (see next item).
+   Neither interpretation was ever "read from the standard" — the shipped
+   one is simply the empirically better of two guesses, which is now
+   stated honestly rather than asserted as if verified.
+2. **The `iso-11172-2` provenance entry was a second, undiscovered
+   instance of the `iso-14496-2` pattern from #360**: registered with
+   `where = "ISO"` (the same vague, unverifiable pattern) and cited
+   nowhere in `provenance/`, this crate's own source, or its docs page.
+   Removed for the same reason `iso-14496-2` was: a citation that looks
+   like evidence of access this project doesn't have is worse than none.
+   This also explains, retroactively, why item 1's escape-format
+   uncertainty existed at all — the crate's MPEG-1-specific behaviour was
+   necessarily built from H.262's own brief difference-summary plus
+   differential testing, not from the actual MPEG-1 standard, and the
+   placeholder had been quietly implying otherwise.
+3. **`macroblock_stuffing` (H.262 Annex D.9.2)** — MPEG-1's `"0000 0001
+   111"` VLC code, insertable any number of times before a
+   `macroblock_address_increment` and required to be silently discarded;
+   reserved and never emitted by MPEG-2. This crate had no handling for
+   it at all, a genuine and total gap, found by re-reading D.9's own
+   difference list rather than by symptom. Fixed (`macroblock.rs`, gated
+   on `ap.mpeg1`, peeks and skips the exact 11-bit pattern before every
+   address-increment decode attempt). Measured to make no numeric
+   difference on any fixture on hand — ffmpeg's own MPEG-1 encoder
+   apparently never emits this code for this content — so it does not
+   explain the accuracy gap, but it is kept as a real, cost-free,
+   spec-required fix regardless (it cannot regress MPEG-2, which never
+   matches the pattern, or any MPEG-1 stream that also never emits it).
+
+Still eliminated from the earlier pass and not re-derived here: the IDCT
+mismatch-control hypothesis (tested in both directions, measured worse
+than MPEG-2's rule applied unconditionally).
+
+Additionally re-verified this pass, mechanically rather than by
+inspection: both DCT-coefficient VLC tables (`TABLE_ZERO`/`TABLE_ONE`)
+were independently re-extracted from the cached primary text
+(`table14_15_parsed.txt`/`table15_parsed.txt` in the working scratch
+directory) and diffed against the shipped tables — zero mismatches, bits
+and run/level values both. The dequantisation formula was hand-verified
+coefficient-by-coefficient for a real macroblock's real bits against
+§7.4.2.3 directly (`(2×QF+k)×W×quantiser_scale/32`, `k=0` for intra) —
+exact match for four separate AC positions. `QUANTISER_SCALE`'s linear
+row was cross-checked against Table 7-6 directly, exact match.
+
+**Not yet found**: the actual cause. The search space is narrower than
+the original entry left it (not the tables, not the dequant formula, not
+escape-level sign, not full-pel vectors — already excluded and now
+confirmed unused by these fixtures — and not macroblock stuffing), and
+better characterised (present but smaller in a real I-picture; grows
+faster than reference-chain drift alone would explain through P-pictures;
+concentrated in specific, plausibly escape-coefficient-heavy blocks
+rather than spread uniformly). The next concrete step is unchanged in
+spirit from the original entry but sharper in target: compare
+per-coefficient dequantised values against a hand-computed reference for
+one of `m1_i`'s own *worst* blocks (per-block heatmap, not a block picked
+at random), since the interior/low-detail blocks in the same picture
+already decode pixel-perfect and so cannot be where the difference lives.
+
+Gates green: `cargo check/test/clippy -p vaco-codec-mpeg12`, `cargo xtask
+vlc-scan`/`layer-check`/`dep-gate`/`unsafe-audit`/`dup-check`/`time-gate`/
+`wasm-check`/`owner-gate`. No regression on any MPEG-2 fixture (identical
+numbers to the previous entry) or on `m1_i`/`m1_ip`/`m1_ipb` (the
+`macroblock_stuffing` fix is a genuine no-op on these specific streams,
+confirmed by re-running the full comparison before and after).
