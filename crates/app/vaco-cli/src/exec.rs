@@ -130,6 +130,15 @@ pub struct OutStream {
     /// for why nothing this build can encode would show a difference even
     /// with one (every registered video encoder is intra-only).
     pub force_key_frames: Option<crate::force_key_frames::ForceKeyFrames>,
+    /// The generic encoder options this stream's `-b`/`-qscale` (any of their
+    /// aliases: `-b:v`, `-vb`, `-ab`, `-q`, `-qscale`, `-aq`) resolved to,
+    /// as `(key, value)` pairs already evaluated to a plain number —
+    /// [`codec_options_of`] is where this is decided; [`run_pipeline`] is
+    /// where it is fed to [`vaco_codec_core::Encoder::set_option`], the
+    /// channel that closes the "VP8's rate control is unreachable from the
+    /// command line" gap. Empty for a stream that names neither option, and
+    /// for one resolved to [`StreamCodec::Copy`] (nothing to configure).
+    pub codec_options: Vec<(String, String)>,
 }
 
 /// What `-c` resolved to for one output stream: pass packets
@@ -297,6 +306,9 @@ pub fn resolve_output(
             // Placeholder until `force_key_frames_of` below decides it, same
             // reason as `codec`/`graph_opts` above.
             force_key_frames: None,
+            // Placeholder until `codec_options_of` below decides it, same
+            // reason as `force_key_frames` above.
+            codec_options: Vec::new(),
         })
         .collect();
 
@@ -366,6 +378,11 @@ pub fn resolve_output(
     let forced = force_key_frames_of(cli, out, &streams)?;
     for (s, f) in streams.iter_mut().zip(forced) {
         s.force_key_frames = f;
+    }
+
+    let codec_opts = codec_options_of(cli, out, &streams)?;
+    for (s, o) in streams.iter_mut().zip(codec_opts) {
+        s.codec_options = o;
     }
 
     let metadata = metadata_of(cli, out, &streams)?;
@@ -798,6 +815,77 @@ fn force_key_frames_of(
     Ok(out_opts)
 }
 
+/// The generic `-b`/`-qscale` encoder options (and their aliases: `-b:v`,
+/// `-vb`, `-ab`, `-q`, `-qscale`, `-aq`) for every stream in `streams` —
+/// resolved the same way [`force_key_frames_of`] resolves its own option,
+/// since the underlying grammar is identical (a per-stream value, last match
+/// wins). [`run_pipeline`] feeds the result to
+/// [`vaco_codec_core::Encoder::set_option`] once the stream's encoder is
+/// built, which is the CLI-to-encoder-option path `vaco_codec_core::Encoder`
+/// did not use to have — see that method's own doc.
+///
+/// Both options alias down to two stored names regardless of spelling:
+/// `"b"` (`-b`/`-b:v`/`-vb`/`-ab`) and `"q"` (`-q`/`-qscale`/`-aq`). `"b"` is
+/// an [`vaco_cli_core::value::ValueKind::Expr`] (`-b:v 2*1000` is valid) and
+/// evaluated with [`vaco_cli_core::value::eval_once`]; `"q"` is a plain
+/// [`vaco_cli_core::value::ValueKind::Float`] and read with
+/// [`vaco_cli_core::value::parse_number`]. The stored option key sent to
+/// [`vaco_codec_core::Encoder::set_option`] is `"b"` or `"qscale"` — the
+/// latter renamed from `"q"` because that is the name the reference's own
+/// `AVOption` table uses for the same field, and the one an `Encoder`
+/// implementation should recognise.
+///
+/// # Errors
+/// A [`Diagnostic`] naming what `eval_once`/`parse_number` rejected.
+fn codec_options_of(
+    cli: &Cli,
+    out: &OutputSpec,
+    streams: &[OutStream],
+) -> Result<Vec<Vec<(String, String)>>, Diagnostic> {
+    let view: Vec<StreamInfo> = streams
+        .iter()
+        .enumerate()
+        .map(|(i, s)| StreamInfo {
+            index: i as u32,
+            media_type: s.media,
+            codec_known: true,
+            ..StreamInfo::default()
+        })
+        .collect();
+    let ctx = MatchCtx::streams(&view);
+    let Some(group) = cli.output_group(out.index) else {
+        return Ok(vec![Vec::new(); streams.len()]);
+    };
+
+    let mut out_opts = Vec::new();
+    for i in 0..streams.len() {
+        let idx = i as u32;
+        let mut opts = Vec::new();
+        if let Ok(Some(opt)) = group.stream_option("b", &ctx, idx) {
+            let raw = value_str(opt)?;
+            let bps = vaco_cli_core::value::eval_once("b", &raw).map_err(|e| {
+                Diagnostic::new(
+                    AvError::EINVAL,
+                    vec![format!("Error parsing option 'b' with value '{raw}': {e}")],
+                )
+            })?;
+            opts.push(("b".to_owned(), format!("{}", bps as i64)));
+        }
+        if let Ok(Some(opt)) = group.stream_option("q", &ctx, idx) {
+            let raw = value_str(opt)?;
+            let q = vaco_cli_core::value::parse_number("q", &raw, vaco_cli_core::value::NumberLimits::float()).map_err(|e| {
+                Diagnostic::new(
+                    AvError::EINVAL,
+                    vec![format!("Error parsing option 'q' with value '{raw}': {e}")],
+                )
+            })?;
+            opts.push(("qscale".to_owned(), q.to_string()));
+        }
+        out_opts.push(opts);
+    }
+    Ok(out_opts)
+}
+
 /// CL-20: `-vf`/`-af`/`-filter`, `-s`, `-aspect`, `-pix_fmt` for every stream
 /// in `streams` — resolved against the output's own stream list, the same
 /// [`MatchCtx`] shape [`check_codecs`] and [`metadata_of`] already build for
@@ -1150,7 +1238,17 @@ pub fn run_pipeline(
                             let frames = spec
                                 .add_decoder(tap, decoder)
                                 .map_err(|e| internal_from("could not attach a decoder", &e))?;
-                            let encoder = encoder_desc.build(limits.clone());
+                            let mut encoder = encoder_desc.build(limits.clone());
+                            // CL-33/central gap: `-b`/`-qscale` (any spelling),
+                            // resolved by `codec_options_of`. A codec with no
+                            // use for a given key ignores it per
+                            // `Encoder::set_option`'s own default; a value it
+                            // does recognise but cannot parse is a real error.
+                            for (key, value) in &s.codec_options {
+                                encoder.set_option(key, value).map_err(|e| {
+                                    internal_from("the encoder refused an option", &e)
+                                })?;
+                            }
                             // An encoder that does not care lists nothing, so this is
                             // a no-op for the common case.
                             let accepted = encoder.accepted_pix_fmts();
@@ -1222,7 +1320,12 @@ pub fn run_pipeline(
                         internal("the resolved encoder is no longer in the registry")
                     })?;
                     let limits = vaco_limits::Limits::default();
-                    let encoder = encoder_desc.build(limits);
+                    let mut encoder = encoder_desc.build(limits);
+                    for (key, value) in &s.codec_options {
+                        encoder
+                            .set_option(key, value)
+                            .map_err(|e| internal_from("the encoder refused an option", &e))?;
+                    }
                     let packets = spec
                         .add_encoder(frames, encoder, time_base)
                         .map_err(|e| internal_from("could not attach an encoder", &e))?;
@@ -1674,6 +1777,7 @@ mod tests {
             codec: StreamCodec::Copy,
             graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
             force_key_frames: None,
+            codec_options: Vec::new(),
         };
         let e = check_codecs(&c, &o, &[s]).unwrap_err();
         assert_eq!(
@@ -1695,6 +1799,7 @@ mod tests {
             codec: StreamCodec::Copy,
             graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
             force_key_frames: None,
+            codec_options: Vec::new(),
         };
         assert!(check_codecs(&c, &o, std::slice::from_ref(&s)).is_ok());
 
@@ -1745,6 +1850,7 @@ mod tests {
             codec: StreamCodec::Copy,
             graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
             force_key_frames: None,
+            codec_options: Vec::new(),
         };
         let resolved = check_codecs(&c, &o, &[s]).unwrap();
         assert_eq!(resolved, vec![StreamCodec::Encode("qoi")]);
@@ -1763,6 +1869,7 @@ mod tests {
                 codec: StreamCodec::Copy,
                 graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
                 force_key_frames: None,
+                codec_options: Vec::new(),
             },
             OutStream {
                 source: StreamPick::demuxed(0, 1),
@@ -1770,6 +1877,7 @@ mod tests {
                 codec: StreamCodec::Copy,
                 graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
                 force_key_frames: None,
+                codec_options: Vec::new(),
             },
         ];
         assert!(check_codecs(&c, &o, &streams).is_ok());

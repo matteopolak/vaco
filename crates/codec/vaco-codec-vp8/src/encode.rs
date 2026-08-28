@@ -1453,6 +1453,41 @@ impl Encoder for Vp8Encoder {
     fn accepted_pix_fmts(&self) -> &'static [PixFmt] {
         &[PixFmt::Yuv420p]
     }
+
+    /// The channel the module doc above was written waiting for: `"b"` (the
+    /// CLI's generic bitrate option, `-b:v`) switches to CBR at that target;
+    /// `"qscale"`/`"global_quality"` (`-qscale`/`-q`) switches to a fixed
+    /// quality scale. Both replace the rate controller outright rather than
+    /// mutating `rc_cfg` in place, since [`RateController::new`] is what
+    /// seeds its internal state from the config's mode.
+    fn set_option(&mut self, key: &str, value: &str) -> Result<()> {
+        match key {
+            "b" => {
+                let bps: f64 = value.parse().map_err(|_| Error::Option {
+                    name: "b".to_owned(),
+                    detail: format!("expected a bitrate in bits/second, got '{value}'"),
+                })?;
+                if bps > 0.0 {
+                    self.rc_cfg = RateControlConfig::cbr(bps as u64, self.rc_cfg.fps);
+                    self.rc = RateController::new(self.rc_cfg);
+                }
+                Ok(())
+            }
+            "qscale" | "global_quality" => {
+                let q: f64 = value.parse().map_err(|_| Error::Option {
+                    name: key.to_owned(),
+                    detail: format!("expected a quality scale, got '{value}'"),
+                })?;
+                self.rc_cfg = RateControlConfig::constant_quality(q);
+                self.rc = RateController::new(self.rc_cfg);
+                Ok(())
+            }
+            // A generic AVOption this codec has no use for is accepted
+            // silently, matching the reference's own behaviour for e.g.
+            // `-b:v` on a codec that ignores bitrate entirely.
+            _ => Ok(()),
+        }
+    }
 }
 
 /// `vaco-component.toml`'s encoder registration point.
@@ -1479,6 +1514,7 @@ mod tests {
     use super::*;
     use crate::decode::Vp8Decoder;
     use vaco_codec_core::Decoder;
+    use vaco_codec_dsp_ratecontrol::RcMode;
 
     fn decode_all(bytes_per_frame: &[Vec<u8>]) -> Vec<Frame> {
         let mut budget = Budget::new(Limits::permissive());
@@ -1590,6 +1626,49 @@ mod tests {
             let cmse = plane_mse(&src, &decoded[0], plane);
             assert!(cmse < 900.0, "chroma plane {plane} MSE too high for a working intra encoder: {cmse}");
         }
+    }
+
+    #[test]
+    fn set_option_qscale_moves_output_size_the_expected_direction() {
+        // The CLI-to-encoder-option channel `vaco_codec_core::Encoder::set_option`
+        // exists for: `-qscale`/`-q` should make the encoder strictly less
+        // faithful (and so, on real content, smaller) as the value rises.
+        let src = textured_frame(64, 48, 0);
+        let mut low_q = Vp8Encoder::new(Limits::permissive());
+        low_q.set_option("qscale", "2").expect("a valid qscale is accepted");
+        low_q.send_frame(Some(&src)).expect("send");
+        let low_q_len = low_q.receive_packet().expect("receive").payload().len();
+
+        let mut high_q = Vp8Encoder::new(Limits::permissive());
+        high_q.set_option("qscale", "60").expect("a valid qscale is accepted");
+        high_q.send_frame(Some(&src)).expect("send");
+        let high_q_len = high_q.receive_packet().expect("receive").payload().len();
+
+        assert!(
+            low_q_len > high_q_len,
+            "a lower qscale should encode to more bytes: {low_q_len} vs {high_q_len}"
+        );
+    }
+
+    #[test]
+    fn set_option_b_switches_to_cbr_and_rejects_a_malformed_value() {
+        let mut enc = Vp8Encoder::new(Limits::permissive());
+        assert_eq!(enc.rc_cfg.mode, RcMode::ConstantQuality);
+        enc.set_option("b", "200000").expect("a valid bitrate is accepted");
+        assert_eq!(enc.rc_cfg.mode, RcMode::Cbr);
+        assert_eq!(enc.rc_cfg.target_bitrate_bps, 200_000);
+
+        let err = enc.set_option("b", "not-a-number").expect_err("garbage should not parse");
+        assert!(matches!(err, vaco_core::Error::Option { name, .. } if name == "b"));
+    }
+
+    #[test]
+    fn set_option_ignores_a_key_this_encoder_has_no_use_for() {
+        // Mirrors the reference's own behaviour: a generic `AVOption` a codec
+        // does not consume (e.g. `-g` on an intra-only encoder) is accepted
+        // silently rather than rejected.
+        let mut enc = Vp8Encoder::new(Limits::permissive());
+        enc.set_option("g", "50").expect("an unknown generic option is a no-op, not an error");
     }
 
     #[test]
