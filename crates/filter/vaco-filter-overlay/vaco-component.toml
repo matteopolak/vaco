@@ -1,0 +1,40 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Five of plan 16 §4.2's `vaco-filter-overlay` row's eight filters
+# (`displace`, `remap` scoped but not implemented; `feedback` blocked on
+# interface gap 24 — see `docs/filter/vaco-filter-overlay.md`).
+
+[[component]]
+kind = "filter"
+name = "blend"
+long_name = "Blend two video frames into each other."
+ctor = "vaco_filter_overlay::blend::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "multiply"
+long_name = "Multiply first video stream with second video stream."
+ctor = "vaco_filter_overlay::multiply::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "mix"
+long_name = "Mix video inputs."
+ctor = "vaco_filter_overlay::mix::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "xmedian"
+long_name = "Pick median pixels from several video inputs."
+ctor = "vaco_filter_overlay::xmedian::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "xfade"
+long_name = "Cross fade one video with another video."
+ctor = "vaco_filter_overlay::xfade::DESC"
+media = "video"
