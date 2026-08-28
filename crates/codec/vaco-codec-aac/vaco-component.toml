@@ -1,0 +1,27 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# The first `encumbered = true` component in this tree (D4/D4.1). AAC is
+# legally RED: the Via LA AAC pool is active and charges per decoder/encoder
+# unit (not per bitstream — remuxing stays default and is unaffected). D4.1
+# requires `default = false` on any `encumbered = true` row — `gen-registry`
+# refuses the opposite combination outright — so both are set here together,
+# and the feature name matches epic #53's own title: `patent-encumbered-aac-decode`.
+#
+# Registered even though `vaco-codec-aac` does not yet decode a single
+# spectral coefficient (T3-03a/#443 only: configuration resolution). This
+# mirrors how this workspace already treats a partially-working decoder
+# elsewhere (`vaco-codec-mpegaudio`'s MPEG-2.5 gate): discoverable by name,
+# honest about what it returns. `AacDecoder::send_packet` fully resolves a
+# packet's configuration and then returns `Error::Unsupported` for the
+# spectral decode that #444/#445 have not landed yet — never fabricated PCM.
+
+[[component]]
+kind      = "decoder"
+name      = "aac"
+long_name = "AAC-LC (Advanced Audio Coding, Low Complexity)"
+feature   = "patent-encumbered-aac-decode"
+default   = false
+encumbered = true
+ctor      = "vaco_codec_aac::DECODER_AAC"
+media     = "audio"
+codec     = "aac"
