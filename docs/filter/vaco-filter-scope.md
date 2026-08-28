@@ -1,8 +1,8 @@
 # vaco-filter-scope
 
 T3 measurement/visualisation video filters — `planning/16-filters.md` §4.2's
-`vaco-filter-scope` row, GitHub issue #480 ("FT-4.12g"). Three implemented:
-`histogram`, `waveform`, `datascope`.
+`vaco-filter-scope` row, GitHub issue #480 ("FT-4.12g"). Four implemented:
+`histogram`, `waveform`, `datascope`, `thistogram`.
 
 ## Scope reconciliation
 
@@ -94,6 +94,44 @@ tested, and this crate did not chase the distinction further.
 Not implemented: `mode=row`; `mirror=false`; `display=overlay`/`parade`;
 bit depths above 8; non-luma planes.
 
+### `thistogram`
+
+A per-value histogram plotted as one new column per frame — a scrolling
+history of the frame's own value distribution. Output is `width x 256`
+(`width=0`, the default, means "use the input's own width", the same
+sentinel-by-observed-behaviour shape as `nullsrc`'s `duration`). Unlike
+`histogram`/`waveform`, this filter is **stateful**: it keeps a persistent
+canvas and draws exactly one new column per frame, confirmed with a
+4-frame, `w=2` sequence where earlier frames' columns are still present,
+unchanged, in later frames' output.
+
+```text
+column = frame_count % width
+intensity[v] = round(count[v] / max(count) * 255)   // round, not histogram's ceil
+row v = 255 - v
+```
+
+Two `slide` modes are measured and implemented:
+
+- `replace` (the default): overwrites only `column`, leaving every other
+  column exactly as it was — a plain ring buffer.
+- `frame`: same `column` indexing, but the *entire canvas* is cleared
+  immediately before drawing whenever `column == 0` (a wraparound) — a
+  4-frame probe at `w=2` shows column `1`'s frame-1 data vanish entirely
+  from the output once frame `2` wraps back to column `0`.
+
+Pinned three ways that the intensity rule is `round`, not `ceil`
+(`histogram`'s own rule) or plain truncation: a `56`-of-`200` ratio gives
+`71` (`ceil` would give `72`); a `3`-of-`8` ratio (`0.625`) gives `96`
+(truncation would give `95`); an exact `1`-of-`2` tie gives `128`
+(truncation would give `127`).
+
+Not implemented: `slide=scroll`/`rscroll`/`picture` (`create` rejects
+them with a clean error rather than silently behaving like `replace`);
+`display_mode=overlay`/`parade`; `levels_mode=logarithmic`; `envelope`;
+`components` beyond plane `0` (forces `Gray8` output, like
+`histogram`/`waveform`); bit depths above 8.
+
 ### `datascope`
 
 Draws each sample's raw value as text on a fixed grid. Measured directly
@@ -176,9 +214,8 @@ the `rustybuzz` question.
 
 | Filter | Why |
 |---|---|
-| `thistogram` | Attempted, not shipped. The output shape (`width x 256`, `width` a temporal window) was measured, but the temporal-buffering semantics (which column a given frame lands in as the window scrolls) were not pinned down with enough confidence to ship rather than guess. |
-| `vectorscope` | Attempted, not shipped. Output shape (`256x256`) confirmed, but `vectorscope` has no `intensity` option the way `waveform` does — a different, unmeasured accumulation rule, not assumed to match `waveform`'s. |
-| `pixscope` | Attempted, not shipped — not for the font reason (confirmed shared with `datascope`, see above). Newly measured: its "zoom" box does not magnify. A `7x7` window (`o=1`) over a hand-built period-2 checkerboard shows the checkerboard's own period unchanged inside a `1`px-bordered outline — a location marker, not a magnifier. The real numeric content is an auto-placed (`wx`/`wy` `-1` sentinel) statistics text panel — position, per-component values, evidently min/max/average — whose exact label set and layout were not reverse-engineered this pass. Shipping the marker box alone would not be this filter's useful part. |
+| `vectorscope` | **Partially cracked, not shipped.** The coordinate mapping is fully measured: `x = component_x` directly, `y = 255 - component_y`. The intensity accumulation is confirmed nonlinear (independent of frame size — same hit count gives the same output at both `100` and `10000` total pixels) but does not fit any single-parameter model tried (linear, `ceil`/`round`/floor, power law, exponential-IIR); reported as characterised, not shipped, rather than guessed. |
+| `pixscope` | Attempted, not shipped — not for the font reason (confirmed shared with `datascope`, see above). Its "zoom" box does not magnify: a `7x7` window (`o=1`) over a hand-built period-2 checkerboard shows the checkerboard's own period unchanged inside a `1`px-bordered outline — a location marker, not a magnifier. This pass further measured the panel's *shape*: one marker box (`10x10`px) plus eight text lines in two groups (a `3`-line, wide header block and a `4`-line, `9`px-pitched, narrower block — plausibly per-statistic rows). Exact positions are in the crate doc. The label text and value formatting themselves were not extracted. |
 | `oscilloscope` | Not attempted this pass. Confirmed to share the same font mechanism (no font option; same glyph-grid signature), but its trace/grid layout and `st`-gated statistics text were not separately measured. |
 | `graphmonitor`, `agraphmonitor` | **Not expressible against the current `vaco-filter-core` surface**, checked directly: `FilterContext` exposes only the current node's own pads — there is no API to enumerate other nodes, their links, or queue depths, which is exactly what these filters draw. Recorded as `planning/INTERFACE-GAPS.md` gap 22. |
 | `ciescope` | **Not a D7 case.** Every `system` value names a published international-standard primary set (BT.709, BT.2020, DCI-P3, SMPTE-C, …) and the CIE 1931 observer data is public. The blocker is reproducing the reference's exact chromaticity-diagram *rendering* (spectral-locus rasterisation, anti-aliasing, gamut-triangle lines) — not itself specified by any colorimetry standard, so verifying it would need extensive black-box probing this pass's time did not cover. |
@@ -193,6 +230,19 @@ functions and pinned into unit tests. No `vaco` CLI/muxer exists yet to
 drive an actual `-f framecrc` invocation (`planning/14-cli.md` is still a
 plan document).
 
+**This row now has a permanent split, not just a temporary one.**
+`histogram`, `waveform` and `thistogram` draw no text, so nothing rules
+out framecrc-exactness for them — `thistogram` reaching it this pass
+closes that question for every non-text filter this crate is likely to
+implement. `datascope`, and (once shipped) `pixscope`/`oscilloscope`,
+draw with an independently-sourced font (D7 forbids transcribing the
+reference's own table — see "The bitmap-font hypothesis" above), so no
+frame containing their text can *ever* match the reference byte-for-byte.
+"Framecrc-identical across this crate's whole corpus" is therefore not a
+temporarily-unmet goal for the text-drawing third of this row — it is
+provably unreachable, the same way `hqx` is provably unimplementable in
+`vaco-filter-artistic`.
+
 | Filter | Args | Source | Result |
 |---|---|---|---|
 | `histogram` | `level_height=50:scale_height=0:components=1` | `gray`, 16x16 flat @128 | **exact** — single bin, full height |
@@ -204,30 +254,47 @@ plan document).
 | `datascope` | `s=64x32:mode=mono:format=hex:components=1` | `gray`, all-`0`/all-`0xFF` `32x32` | **structural, not exact** — digit values (`00`/`FF`), canvas-is-always-black, and grid pitch all confirmed; text pixels can never match byte-for-byte (independent font, see above) |
 | `datascope` | `s=180x40:mode=mono:format=dec:components=1` | `gray`, 10x-per-column gradient | **structural, not exact** — decimal formatting and left-to-right column sequence confirmed; same permanent text-pixel ceiling |
 | `datascope` | `x=2:y=0`, same gradient | `gray` | **structural, not exact** — `x` offset shifts the sampled source column, confirmed |
+| `thistogram` | `w=2:components=1:slide=frame`, 4-frame flat-value sequence | `gray` | **exact** — persistent-canvas mechanics confirmed: column advances one per frame, whole canvas clears on wraparound |
+| `thistogram` | `w=2:components=1:slide=replace` (default), same 4 frames | `gray` | **exact** — ring-buffer overwrite confirmed: the non-target column survives each new frame unchanged |
+| `thistogram` | any, `12`:`4`-style count ratios (`round`, not `ceil`) | `gray` | **exact** — three ratios pinned, including an exact `0.5` tie, ruling out `ceil` and truncation |
 
 ## How to change it
 
-- `histogram`/`waveform` follow the same shape: an `Opts` struct via
-  `vaco_opts::Options`, a `configure` hook fixing output geometry, a
-  `filter_frame` doing the actual per-pixel accumulation, and a `create`
-  function using `NodeFormats::converter` (they do not preserve the
-  input's format or dimensions). `datascope` uses `NodeFormats::passthrough`
-  instead (it preserves the input's pixel format, only its dimensions are
-  independent) — see `crop.rs` in `vaco-filter-video-geometry` for the
-  same shape used elsewhere.
+- `histogram`/`waveform`/`thistogram` follow the same shape: an `Opts`
+  struct via `vaco_opts::Options`, a `configure` hook fixing output
+  geometry, a `filter_frame` doing the actual per-pixel accumulation, and
+  a `create` function using `NodeFormats::converter` (they do not
+  preserve the input's format or dimensions). `thistogram` additionally
+  carries state (`canvas`, `frame_count`) in its `Filter` struct across
+  calls — the same pattern `vaco-filter-artistic::amplify` uses for its
+  windowed buffer, just a persistent canvas instead of a bounded ring.
+  `datascope` uses `NodeFormats::passthrough` instead (it preserves the
+  input's pixel format, only its dimensions are independent) — see
+  `crop.rs` in `vaco-filter-video-geometry` for the same shape used
+  elsewhere.
 - If you add `pixscope` or `oscilloscope`, start from `src/font8x8.rs` —
   it is already sourced, registered and tested; do not re-derive or
   re-source a font. Re-measure each filter's own layout (cell/margin
   positions, what text it draws) independently; do not assume
   `datascope`'s pitch constants apply verbatim. For `pixscope` in
-  particular, do not assume the "zoom" box magnifies pixels — measured
-  this pass to be a plain unmagnified marker outline; the filter's real
-  value is in a statistics text panel whose label set and layout still
-  need reverse-engineering from scratch.
-- If you add `thistogram` or `vectorscope`, re-read this doc's "left out"
-  table first — both have real measurement started, recorded in `git`
-  history and in this file, that a fresh attempt should build on rather
-  than repeat.
+  particular, do not assume the "zoom" box magnifies pixels — measured to
+  be a plain unmagnified marker outline. This pass measured the panel's
+  band structure (one `10x10` marker box, a `3`-line header block, a
+  `4`-line `9`px-pitched stats block — see the `pixscope` section above
+  for exact row/column spans); the label text and value formatting
+  themselves are the next thing to measure, not the band positions.
+- If you add `vectorscope`, its coordinate mapping (`x` direct, `y`
+  inverted) is done — reuse it rather than re-measuring. Its intensity
+  curve is the open problem: confirmed nonlinear and confirmed
+  independent of frame size, but no single-parameter model tried this
+  pass (linear, `ceil`/`round`/floor, power law, exponential-IIR) fit the
+  measured curve. A fresh attempt should either try a genuinely different
+  model shape (e.g. a two-parameter fit, or checking whether the
+  reference clips/quantizes the accumulator at some intermediate
+  fixed-point width before the final byte conversion) or measure a much
+  denser intensity/count grid before proposing one — guessing a formula
+  that merely interpolates the points on record here would be worse than
+  leaving it open.
 - `graphmonitor`/`agraphmonitor` need a real `vaco-filter-core` capability
   (cross-node link/queue introspection) before they are attempted again —
   see `planning/INTERFACE-GAPS.md` gap 22 for what specifically is missing.
