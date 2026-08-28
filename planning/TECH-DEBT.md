@@ -420,3 +420,51 @@ the next person would copy.
 question the codec should answer" from legitimate uses of `SampleFmt`. The
 defence is the helper being the obvious thing to reach for, plus the decode-MD5
 check in the conformance loop.
+
+### `CodecParameters.video.nal_length_size` means two different things and only one crate can fix it alone
+
+Found closing #647 (MP4's `hvcC` never populated it). `vaco-mux-raw` and
+`vaco-mux-mpegts` both key their `-c copy` Annex-B-conversion decision off this
+one field for `H264 | Hevc` — reasonable, since it is genuinely "the true
+length-prefix width, if any." But `vaco-parse-hevc`'s own `codec_parameters()`
+deliberately leaves it `None` for HEVC, because `vaco-probe`'s display code
+reads the *same* field, unconditionally, to decide whether to print
+`is_avc`/`nal_length_size` — and the reference never prints those for HEVC, in
+any container (measured: `ffmpeg -h decoder=hevc` has no such private options
+at all).
+
+Populating the field for MP4/HEVC in `vaco-demux-mp4` (this session's fix —
+`track::hvcc_length_size` reads `hvcC`'s `lengthSizeMinusOne` directly, the
+same relative position `avcC`'s field occupies) closes the actual corruption
+bug, confirmed by decode-MD5 on both the raw `hevc` and `mpegts` muxers. It
+also makes `vaco-probe` start printing `is_avc`/`nal_length_size` for HEVC,
+which is a new, real divergence from the reference — filed as #654 rather than
+fixed here, since the fix is in `vaco-probe`, outside this session's crates.
+
+**The seam that's missing:** one field cannot mean "the container's true
+length-prefix width" (every codec that has one) and "what a probe should
+print for H.264 specifically" (one codec, by design) at the same time. The
+clean fix is `vaco-probe` gating those two display fields on
+`codec_id == CodecId::H264` explicitly instead of on the field's presence —
+then the field itself can mean exactly one thing everywhere it is read.
+
+### RSO's accepted-codec set measured two different answers depending on how the source PCM was produced
+
+Found while widening `vaco-format-audio-simple::rso`'s `add_stream` check for
+#651. Feeding the reference muxer `pcm_s24le` via a WAV source (`-i x.wav -c
+copy -f rso`) succeeds; feeding it bit-identical `pcm_s24le` samples via the
+raw `-f s24le -i x.raw -c copy -f rso` demuxer fails outright ("Could not
+write header (incorrect codec parameters?)"), even though `ffprobe` reports
+the same `codec_name`/`sample_fmt`/`bits_per_sample`/`channels`/`sample_rate`
+for both. Only the `codec_tag` differed (`0x0001` vs `0x0000`), which should
+not matter to a raw PCM muxer.
+
+Not root-caused — reading the reference's own source to explain an
+AVOption/internal-validation difference is out of bounds here (D7). The table
+this session shipped (`rso::accepts`) is built entirely from **container**-
+sourced measurements (WAV for little-endian formats, AIFF for the big-endian
+ones and `pcm_s8`, matching how the issue itself was reproduced), which agree
+internally and match the one directly-reported repro in #651. If a future
+agent re-measures this table and gets a different answer through the raw PCM
+demuxer specifically, this discrepancy is why — check which input path
+produced the disagreement before trusting either result over the other.
