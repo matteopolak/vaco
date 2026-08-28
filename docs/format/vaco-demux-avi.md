@@ -106,6 +106,25 @@ keyframe map, or the generic index if neither was available) or falls back to
 `resync`, a forward byte scan for the next chunk whose tag parses as
 `NN` + a two-character kind.
 
+### `strf`'s trailing bytes are extradata for both audio and video
+
+`hdrl::parse_strf`'s audio branch has always treated any bytes past
+`WAVEFORMATEX`'s fixed fields as `CodecParameters::extradata` (MS-ADPCM
+coefficients, AAC's `AudioSpecificConfig`). The video branch used to stop at
+`BitmapInfoHeader`'s fixed 40 bytes and never look further — but a real
+`avc1`/`hvc1`-tagged `strf` carries a configuration record there too
+(measured: `ffmpeg -c copy -f avi` on an MP4 source writes a 45-byte
+`AVCDecoderConfigurationRecord` immediately after the base header), and this
+crate simply had no code path for it. `video_tags::carries_config_record`
+gates the capture to the `FourCC`s that follow the ISO-BMFF convention
+(`avc1`, `AVC1`, `hvc1`, `hev1`); `H264`/`X264`/`HEVC` and their aliases
+carry Annex B in-band and have nothing after the header to capture. The
+captured bytes reach `-show_streams`' `profile`/`level`/`pix_fmt`/`is_avc`/
+`nal_length_size`/etc. entirely through the generic
+`vaco-format-core::discovery` pipeline this crate already fed via
+`extradata` for audio — no codec-specific parsing lives here; this module
+only decides *that* the bytes are extradata, not what they mean.
+
 ### Measured field layouts worth recording
 
 - `AVISTREAMHEADER.rcFrame` is four `i16`s (8 bytes), not the four `i32`s a
@@ -127,7 +146,12 @@ keyframe map, or the generic index if neither was available) or falls back to
   non-zero) file built by hand in `tests/roundtrip.rs`, covering stream
   discovery, packet order/timestamps/keyframe flags, the `idx1` offset
   detection against the measured movi-relative convention, index-based
-  seeking, and byte-seek resync.
+  seeking, byte-seek resync, and (in `hdrl::tests`) `parse_strf` capturing
+  an `avc1`-tagged `strf`'s trailing `avcC` bytes as extradata while leaving
+  a plain `H264`-tagged one (Annex-B, no config record) alone. Verified end
+  to end via `vaco-cli`'s own `-c copy -f avi` round trip against `ffmpeg
+  8.1`'s output on an `avc1` MP4 source: every one of the eighteen
+  previously-divergent `-show_streams` fields this gap caused now matches.
 - **Structurally present, not exercised end-to-end**: OpenDML `indx`/`ix##`
   (unit-tested on synthetic bytes only — see above), multi-`RIFF` `AVIX`
   continuation chunks (not implemented at all: a second top-level `RIFF`

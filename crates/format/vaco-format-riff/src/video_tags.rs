@@ -99,6 +99,23 @@ pub fn codec_id(compression: Compression) -> Option<CodecId> {
     }
 }
 
+/// Whether a video `FourCC` follows the ISO-BMFF `avc1`/`hvc1` sample-entry
+/// convention, where the bytes after the fixed header are an
+/// `avcC`/`hvcC`-style configuration record — as opposed to `H264`/`HEVC`
+/// and their aliases, which carry Annex B in-band and nothing to extract.
+///
+/// Measured on `avc1`: `ffmpeg -c copy -f avi` writes a 45-byte
+/// `AVCDecoderConfigurationRecord` immediately after `BITMAPINFOHEADER`.
+/// `hvc1`/`hev1` are included by the same ISO-BMFF convention, unconfirmed
+/// against a fixture for lack of one.
+#[must_use]
+pub fn carries_config_record(compression: Compression) -> bool {
+    let Compression::FourCc(id) = compression else {
+        return false;
+    };
+    matches!(&id.as_bytes(), b"avc1" | b"AVC1" | b"hvc1" | b"hev1")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,6 +154,18 @@ mod tests {
         assert_eq!(codec_name(fourcc(*b"MSVC")), Some("msvideo1"));
         assert_eq!(codec_name(fourcc(*b"WMV1")), Some("wmv1"));
         assert_eq!(codec_name(fourcc(*b"WMV2")), Some("wmv2"));
+    }
+
+    #[test]
+    fn only_the_isobmff_style_fourccs_carry_a_config_record() {
+        assert!(carries_config_record(fourcc(*b"avc1")));
+        assert!(carries_config_record(fourcc(*b"AVC1")));
+        assert!(carries_config_record(fourcc(*b"hvc1")));
+        assert!(carries_config_record(fourcc(*b"hev1")));
+        assert!(!carries_config_record(fourcc(*b"H264")));
+        assert!(!carries_config_record(fourcc(*b"X264")));
+        assert!(!carries_config_record(fourcc(*b"HEVC")));
+        assert!(!carries_config_record(Compression::Rgb));
     }
 
     #[test]

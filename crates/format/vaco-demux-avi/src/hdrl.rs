@@ -291,6 +291,21 @@ fn parse_strf(
             if let vaco_format_riff::bitmapinfo::Compression::FourCc(id) = compression {
                 params.codec_tag = Some(id.as_bytes());
             }
+            // Mirrors the audio branch below and `vaco-demux-mp4`'s own
+            // `avcC`/`hvcC` handling: an `avc1`/`hvc1`-tagged `strf` carries a
+            // configuration record after `BITMAPINFOHEADER`, and handing it to
+            // `stream.params.extradata` is what lets the codec parser (reached
+            // through `ParserProvider`, once a packet arrives) fill in
+            // profile/level/pix_fmt/nal_length_size — this crate never parses
+            // the record itself.
+            if video_tags::carries_config_record(compression) {
+                let extra = payload.get(BitmapInfoHeader::LEN..).unwrap_or(&[]);
+                if !extra.is_empty() {
+                    let mut buf = budget.alloc::<u8>(extra.len())?;
+                    buf.copy_from_slice(extra);
+                    params.extradata = Some(buf);
+                }
+            }
             Ok((Some(params), None))
         }
         b"auds" => {
@@ -441,6 +456,48 @@ mod tests {
     fn cstr_reads_up_to_the_first_nul() {
         assert_eq!(read_cstr(b"hi\x00\x00"), "hi");
         assert_eq!(read_cstr(b"nonul"), "nonul");
+    }
+
+    fn bih_bytes(fourcc: [u8; 4], trailing: &[u8]) -> Vec<u8> {
+        let mut bih = Vec::new();
+        bih.extend_from_slice(&(40 + trailing.len() as u32).to_le_bytes());
+        bih.extend_from_slice(&64i32.to_le_bytes());
+        bih.extend_from_slice(&48i32.to_le_bytes());
+        bih.extend_from_slice(&1u16.to_le_bytes());
+        bih.extend_from_slice(&24u16.to_le_bytes());
+        bih.extend_from_slice(&fourcc);
+        bih.extend_from_slice(&[0; 20]);
+        bih.extend_from_slice(trailing);
+        bih
+    }
+
+    #[test]
+    fn avc1_strf_captures_the_trailing_avcc_as_extradata() {
+        let avcc = [0x01, 0x64, 0x00, 0x0A, 0xFF];
+        let bih = bih_bytes(*b"avc1", &avcc);
+        let mut budget = Budget::new(vaco_limits::Limits::permissive());
+        let (params, tb) = parse_strf(*b"vids", &bih, &mut budget).unwrap();
+        assert!(tb.is_none());
+        let params = params.unwrap();
+        assert_eq!(params.extradata.as_deref(), Some(&avcc[..]));
+    }
+
+    #[test]
+    fn h264_strf_has_no_config_record_to_capture() {
+        // `H264`-tagged `strf` carries Annex B in-band; any trailing bytes
+        // are not a configuration record and must not be read as one.
+        let bih = bih_bytes(*b"H264", &[0xAA, 0xBB]);
+        let mut budget = Budget::new(vaco_limits::Limits::permissive());
+        let (params, _tb) = parse_strf(*b"vids", &bih, &mut budget).unwrap();
+        assert_eq!(params.unwrap().extradata, None);
+    }
+
+    #[test]
+    fn avc1_strf_with_no_trailing_bytes_leaves_extradata_unset() {
+        let bih = bih_bytes(*b"avc1", &[]);
+        let mut budget = Budget::new(vaco_limits::Limits::permissive());
+        let (params, _tb) = parse_strf(*b"vids", &bih, &mut budget).unwrap();
+        assert_eq!(params.unwrap().extradata, None);
     }
 
     #[test]
