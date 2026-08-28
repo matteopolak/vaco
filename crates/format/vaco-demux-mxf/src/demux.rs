@@ -156,13 +156,14 @@ impl MxfDemuxer {
         // `essence` module docs) before any packet is read. Only attempted
         // on a seekable source: the lookahead consumes bytes a forward-only
         // transport could never give back.
-        let essence_origin = if seekable {
-            let origin = find_first_essence_offset(&mut io, &mut budget)?;
+        let first_essence = if seekable {
+            let found = find_first_essence_offset(&mut io, &mut budget)?;
             io.seek(body_start)?;
-            origin
+            found
         } else {
             None
         };
+        let essence_origin = first_essence.as_ref().map(|e| e.key_pos);
 
         let (streams, bindings, format_metadata) = build_streams(&graph, &mut budget)?;
 
@@ -197,8 +198,9 @@ impl MxfDemuxer {
             0
         };
 
-        let indices = essence_origin
-            .map(|origin| build_indices(&bindings, &index_segments, origin, &effective_index_duration))
+        let indices = first_essence
+            .as_ref()
+            .map(|e| build_indices(&bindings, &index_segments, e, &effective_index_duration))
             .unwrap_or_default();
 
         let duration = bindings
@@ -223,6 +225,59 @@ impl MxfDemuxer {
             indices,
             eof: false,
         })
+    }
+
+    /// Read edit unit `n` of `stream_index`'s essence directly through its
+    /// parsed index, rather than `read_packet`'s own "read the next KLV
+    /// header" walk.
+    ///
+    /// Added for `vaco-format-imf`'s essence integration: an IMF virtual
+    /// track's `Resource` names an exact edit-unit range
+    /// (`EntryPoint..EntryPoint+SourceDuration`) out of one track file, not
+    /// "the next packet in storage order" — for a frame-wrapped file this
+    /// is equivalent to calling `read_packet` after seeking to the right
+    /// edit unit, but for a **clip-wrapped** file (every OP-Atom essence
+    /// element this crate has measured) it is the *only* way to reach one:
+    /// after the first edit unit there is no second KLV header for
+    /// `read_packet`'s walk to find at all, since the whole track lives in
+    /// one Generic Container element. Each call is independent (seeks,
+    /// reads, and does not disturb `read_packet`'s own sequential state) —
+    /// calling this and `read_packet` on the same [`MxfDemuxer`] in any
+    /// interleaved order is not a supported combination, since both leave
+    /// `self.io`'s cursor wherever their own last read ended.
+    ///
+    /// # Errors
+    /// [`Error::NotSeekable`] if `stream_index` has no parsed index (the
+    /// source was not seekable at `open` time, or `stream_index` is
+    /// unknown). [`Error::InvalidData`] if `n` is past the index's own
+    /// entry count.
+    pub fn read_edit_unit(&mut self, stream_index: u32, n: u64) -> Result<Packet> {
+        let Some(index) = self.indices.get(&stream_index) else {
+            return Err(Error::NotSeekable);
+        };
+        let entry = usize::try_from(n)
+            .ok()
+            .and_then(|i| index.entries().get(i))
+            .copied()
+            .ok_or(Error::InvalidData(
+                "mxf: edit unit index past this stream's own index entry count",
+            ))?;
+        self.io.seek(entry.pos)?;
+        let len = usize::try_from(entry.size).unwrap_or(0);
+        let mut pkt = Packet::alloc(&mut self.packet_budget, len)?;
+        self.packet_budget.release(len as u64);
+        self.io.read_exact(pkt.payload_mut())?;
+        pkt.stream_index = stream_index;
+        let ticks = i64::try_from(n).unwrap_or(i64::MAX);
+        pkt.pts = Timestamp::new(ticks);
+        pkt.dts = Timestamp::new(ticks);
+        pkt.pos = Some(entry.pos);
+        pkt.flags = if entry.flags.contains(IndexFlags::KEYFRAME) {
+            PacketFlags::KEY
+        } else {
+            PacketFlags::empty()
+        };
+        Ok(pkt)
     }
 }
 
@@ -261,17 +316,38 @@ fn seek_and_read_header(io: &mut IoContext, offset: u64) -> Result<KlvHeader> {
 /// Walk forward from the current position, skipping partition packs, filler
 /// and unrecognised KLVs, until an essence element is found. Does not
 /// consume it — the caller seeks back.
-fn find_first_essence_offset(io: &mut IoContext, budget: &mut Budget) -> Result<Option<u64>> {
+/// The first essence element's own three positions: its key (`essence_origin`
+/// proper — where a frame-wrapped file's `IndexEntryArray::StreamOffset`s
+/// are anchored, since spec-conformant `StreamOffset`s for *that* shape are
+/// measured from one essence element's key to the next), its value (where a
+/// **clip-wrapped** file's `StreamOffset`s are anchored instead — see
+/// [`ClipShape::detect`]'s own doc comment for how this crate tells the two
+/// apart empirically rather than trusting the item-type byte, which
+/// `essence.rs`'s own module docs already found unreliable), and that
+/// value's own declared length.
+struct FirstEssenceElement {
+    key_pos: u64,
+    value_offset: u64,
+    value_len: u64,
+}
+
+fn find_first_essence_offset(
+    io: &mut IoContext,
+    budget: &mut Budget,
+) -> Result<Option<FirstEssenceElement>> {
     for _ in 0..1_000_000u32 {
         budget.consume_fuel(1)?;
-        let start = io.pos();
         let header = match klv::read_header(io) {
             Ok(h) => h,
             Err(Error::UnexpectedEof) => return Ok(None),
             Err(e) => return Err(e),
         };
         if header.key.is_essence_element() {
-            return Ok(Some(start));
+            return Ok(Some(FirstEssenceElement {
+                key_pos: header.offset,
+                value_offset: header.value_offset,
+                value_len: header.length,
+            }));
         }
         if header.key.partition_family_kind() == Some(PartitionFamilyKind::RandomIndexPack) {
             return Ok(None);
@@ -400,10 +476,62 @@ fn format_timecode(tc: metadata::Timecode) -> String {
     format!("{hours:02}:{minutes:02}:{seconds:02}{sep}{frames:02}")
 }
 
+/// Whether the first (in this crate's single-essence-track-per-`BodySID`
+/// scope, only) essence element holds one edit unit or the whole track.
+///
+/// The item-type byte cannot tell the two apart reliably —
+/// `essence::Wrapping`'s own doc comment records a real D-10 file using a
+/// byte ST 379-1's own table calls "clip-wrapped" for essence that is, in
+/// every operational sense, frame-wrapped (twenty-five separate KLVs, one
+/// per edit unit). What *does* tell them apart: whether the one element
+/// found already reaches as far as the index's own last entry claims a
+/// later edit unit starts. A frame-wrapped element's own declared length is
+/// one edit unit's worth of bytes — never more than the second entry's own
+/// `StreamOffset`, since that is where the *next* element's key begins. A
+/// clip-wrapped element's declared length is the whole track — at least as
+/// large as the last entry's `StreamOffset`, since every edit unit lives
+/// inside this one element's value.
+///
+/// Measured directly against a real `ffmpeg`-produced OP-Atom fixture this
+/// session (`vaco-format-imf`'s own essence-integration work): the single
+/// essence element's key sits 25 bytes before its first edit unit's own
+/// `00 00 01` MPEG start code (16-byte key + a 9-byte wide-form BER length
+/// prefix, `88 ...` — OP-Atom's own clip-wrapped element always uses that
+/// wide form regardless of size, per `vaco-mux-mxf::ber`'s own doc comment
+/// on the write side), which the pre-existing `essence_origin`-relative
+/// computation below did not account for: `IndexEntryArray::StreamOffset`
+/// for a clip-wrapped file is relative to the element's **value**, not its
+/// key, so `pos = essence_origin + stream_offset` landed inside the
+/// *previous* edit unit's own tail bytes for every entry past the first,
+/// not on a real edit-unit boundary. Not previously exercised by any test:
+/// every prior seek/index test used a frame-wrapped fixture, where
+/// `essence_origin` (the first element's key) and its own value-relative
+/// zero point coincide for entry 0 and are supposed to advance by whole
+/// elements thereafter, hiding the bug completely.
+fn is_clip_wrapped(first: &FirstEssenceElement, seg: &IndexTableSegment) -> bool {
+    if seg.is_cbe() {
+        // The same reasoning as the VBE branch below, in CBE terms:
+        // `EditUnitByteCount` is one whole edit unit's size (D-10's own
+        // measured value bundles a System Item and KAG padding around the
+        // essence itself -- `vaco-mux-mxf`'s own D-10 write-side doc
+        // comments have the exact arithmetic -- so it is always at least as
+        // large as the essence element's own declared length there). The
+        // one element already found reaching that far means it holds more
+        // than one edit unit, i.e. is clip-wrapped; every real D-10 fixture
+        // measured has `value_len` strictly less than `EditUnitByteCount`
+        // (the essence alone is smaller than essence-plus-overhead) and so
+        // correctly evaluates to frame-wrapped here.
+        return first.value_len >= u64::from(seg.edit_unit_byte_count);
+    }
+    seg.entries
+        .get(1)
+        .is_some_and(|second| first.value_len >= second.stream_offset)
+}
+
 fn build_indices(
     bindings: &[TrackBinding],
     segments: &[IndexTableSegment],
-    essence_origin: u64,
+    first_essence: &FirstEssenceElement,
     effective_index_duration: &dyn Fn(&IndexTableSegment) -> i64,
 ) -> HashMap<u32, PacketIndex> {
     let mut out = HashMap::new();
@@ -418,6 +546,15 @@ fn build_indices(
         else {
             continue;
         };
+        // The zero point `StreamOffset` is measured from: a clip-wrapped
+        // element's own value start, a frame-wrapped one's own key
+        // (`essence_origin` proper) -- see `is_clip_wrapped`'s own doc
+        // comment for the real bug this distinction fixes.
+        let origin = if is_clip_wrapped(first_essence, seg) {
+            first_essence.value_offset
+        } else {
+            first_essence.key_pos
+        };
         let mut idx = PacketIndex::new();
         if seg.is_cbe() {
             let unit = u64::from(seg.edit_unit_byte_count);
@@ -431,7 +568,7 @@ fn build_indices(
                 let Some(rel) = seg.cbe_offset(n) else { break };
                 let Ok(ticks) = i64::try_from(n) else { break };
                 idx.add(FcIndexEntry {
-                    pos: essence_origin.saturating_add(rel),
+                    pos: origin.saturating_add(rel),
                     timestamp: Timestamp::new(ticks),
                     flags: IndexFlags::KEYFRAME,
                     size: unit.try_into().unwrap_or(u32::MAX),
@@ -439,13 +576,39 @@ fn build_indices(
                 });
             }
         } else {
+            let clip_wrapped = is_clip_wrapped(first_essence, seg);
             for (i, entry) in seg.entries.iter().enumerate() {
                 let Ok(ticks) = i64::try_from(i) else { break };
-                let size = seg.entries.get(i + 1).map_or(0, |next| {
-                    next.stream_offset.saturating_sub(entry.stream_offset)
-                });
+                // The last entry has no "next" to diff against for its own
+                // size. `read_packet` never needed one -- it always reads a
+                // fresh KLV header at the current position, discovering the
+                // real length itself -- so this stayed `0` and harmless
+                // until `read_edit_unit` (below) needed a real byte count to
+                // read without a header to read it from. Fixable exactly,
+                // not just approximately, for the clip-wrapped case: the one
+                // element's own declared `value_len` *is* the end of the
+                // last edit unit, by construction (there is nothing else in
+                // that element). Left at the pre-existing `0` for a
+                // frame-wrapped file's last entry -- this crate has no
+                // general "where does the essence region end" figure that
+                // would not risk over-reading into a footer partition or
+                // RIP past the real last frame, and `read_packet` (which
+                // does not have this problem) remains every frame-wrapped
+                // caller's own correct path regardless.
+                let size = seg.entries.get(i + 1).map_or_else(
+                    || {
+                        if clip_wrapped {
+                            first_essence
+                                .value_len
+                                .saturating_sub(entry.stream_offset)
+                        } else {
+                            0
+                        }
+                    },
+                    |next| next.stream_offset.saturating_sub(entry.stream_offset),
+                );
                 idx.add(FcIndexEntry {
-                    pos: essence_origin.saturating_add(entry.stream_offset),
+                    pos: origin.saturating_add(entry.stream_offset),
                     timestamp: Timestamp::new(ticks),
                     flags: if entry.is_key_frame() {
                         IndexFlags::KEYFRAME
@@ -645,6 +808,36 @@ mod tests {
         assert_eq!(demux.streams().len(), 1);
         let pkt = demux.read_packet().unwrap();
         assert!(pkt.len > 0);
+    }
+
+    #[test]
+    fn opatom_read_edit_unit_lands_on_a_real_mpeg_start_code_for_every_entry() {
+        // The bug this session found and fixed: a clip-wrapped (OP-Atom)
+        // file's `IndexEntryArray::StreamOffset` is relative to the one
+        // essence element's own *value*, not its key -- `is_clip_wrapped`'s
+        // own doc comment has the full account, including the exact 25-byte
+        // (16-byte key + 9-byte wide-form BER length) offset measured
+        // directly against this real fixture. Before the fix, `read_edit_unit`
+        // (or a `seek` to any edit unit past the first) landed inside the
+        // *previous* edit unit's own tail bytes -- this test would have
+        // failed the very first `assert_eq!` below with a garbage prefix
+        // instead of `00 00 01`.
+        let mut demux = open_fixture(include_bytes!("../tests/fixtures/opatom_mpeg2_sample.mxf"));
+        let stream_index = demux.streams()[0].index;
+        for n in 0..3u64 {
+            let pkt = demux.read_edit_unit(stream_index, n).unwrap();
+            assert_eq!(
+                &pkt.payload()[..3],
+                &[0x00, 0x00, 0x01],
+                "edit unit {n} does not start on a real MPEG-2 start code"
+            );
+        }
+        // Past the last real entry: a clean, typed error, not a panic or a
+        // silently-wrong read.
+        assert!(matches!(
+            demux.read_edit_unit(stream_index, 3),
+            Err(Error::InvalidData(_))
+        ));
     }
 
     #[test]
@@ -868,7 +1061,12 @@ mod tests {
             ..Default::default()
         }];
         let huge = |_seg: &IndexTableSegment| i64::MAX;
-        let indices = build_indices(&bindings, &segments, 0, &huge);
+        let first = FirstEssenceElement {
+            key_pos: 0,
+            value_offset: 0,
+            value_len: 0,
+        };
+        let indices = build_indices(&bindings, &segments, &first, &huge);
         let idx = indices.get(&0).unwrap();
         assert!(!idx.entries().is_empty());
         assert!((idx.entries().len() as u64) < MAX_CBE_INDEX_ENTRIES);
