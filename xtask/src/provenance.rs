@@ -175,11 +175,15 @@ fn resolve(root: &Path) -> Result<Vec<String>, String> {
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|x| x == "toml"))
-        // `corrections.toml` is this directory's one file that is not a source
-        // record: it carries `[[correction]]`, not `[[source]]`/`[[table]]`,
-        // and reading it with that schema is a parse error rather than an
-        // empty result.
-        .filter(|p| p.file_name().is_some_and(|n| n != "corrections.toml"))
+        // `corrections.toml` carries `[[correction]]`, not
+        // `[[source]]`/`[[table]]`, and `third-party-notices.toml` carries
+        // `[[notice]]` for `scripts/gen_third_party_notices.py` — neither is
+        // a source record, and reading either with this schema is a parse
+        // error rather than an empty result.
+        .filter(|p| {
+            p.file_name()
+                .is_some_and(|n| n != "corrections.toml" && n != "third-party-notices.toml")
+        })
         .collect();
     files.sort();
 
@@ -788,11 +792,15 @@ fn all_source_ids(root: &Path) -> Result<Set<String>, String> {
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|x| x == "toml"))
-        // `corrections.toml` is this directory's one file that is not a source
-        // record: it carries `[[correction]]`, not `[[source]]`/`[[table]]`,
-        // and reading it with that schema is a parse error rather than an
-        // empty result.
-        .filter(|p| p.file_name().is_some_and(|n| n != "corrections.toml"))
+        // `corrections.toml` carries `[[correction]]`, not
+        // `[[source]]`/`[[table]]`, and `third-party-notices.toml` carries
+        // `[[notice]]` for `scripts/gen_third_party_notices.py` — neither is
+        // a source record, and reading either with this schema is a parse
+        // error rather than an empty result.
+        .filter(|p| {
+            p.file_name()
+                .is_some_and(|n| n != "corrections.toml" && n != "third-party-notices.toml")
+        })
         .collect();
     files.sort();
     for f in files {
