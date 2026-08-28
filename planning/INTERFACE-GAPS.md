@@ -622,6 +622,30 @@ option string through the CLI, which is a separate, larger piece of work
 containers already wired (M16's `extract_extradata` and the two
 `*_mp4toannexb` filters need no options to do their real job).
 
+### Still open, 2026-08-27 (#353/#354)
+
+Confirms the shape above rather than changing it: `h264_metadata`,
+`hevc_metadata` (`vaco-bsf-h2645`), `mpeg2_metadata`, `prores_metadata`
+(`vaco-bsf-legacy`) all hit this same wall — every option each exposes
+defaults to "leave the bitstream alone" (`ffmpeg -h bsf=<name>`), and this
+gap means none of those defaults can ever be overridden. Measured directly
+against `ffmpeg 8.1` (five adversarial inputs per H.264/HEVC filter; one
+`cmp` and one `framemd5` comparison for the MPEG-2/ProRes pair) that the
+bare-name behaviour these four are stuck with is also the byte-identical
+one, so they were registered anyway rather than left out — same call as
+`av1_metadata`/`vp9_metadata`/`opus_metadata` before them.
+
+Not closed by #353/#354's owner: the fix is a change to
+`vaco_codec_core::BitstreamFilter` (a defaulted `set_option(&mut self, name:
+&str, value: &str) -> Result<()>`, mirroring gap 5's `Muxer::set_option`
+substitution the same day this gap was first opened), and `vaco-codec-core`
+is outside that owner's single-writer scope. Recorded here again, with the
+concrete shape, for whoever next owns that crate — it is now blocking four
+more filters than it was when first reported, and `vvc_metadata`'s single
+`aud`-only option (which would otherwise be the easiest case yet) could not
+even be checked, for want of a VVC sample in that pass's environment rather
+than for want of this gap.
+
 ## 13. `vaco_frame::FrameSideData` has no console-log-only output channel
 
 Reported by (confirmed, not newly found) the `vaco-filter-analysis` agent
