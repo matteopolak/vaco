@@ -147,6 +147,20 @@ pub struct RunSpec {
     pub mapping: Vec<String>,
     /// The per-output summary line the reference prints at the end.
     pub summary: Vec<String>,
+    /// Parallel to [`RunSpec::tallies`]: the real muxed byte count
+    /// [`summary_line`] used for `muxing overhead`, kept alongside it for
+    /// `-stats`'s `Lsize=` (CL-17, `crate::stats`) so that field does not
+    /// need its own pass over the outputs to recompute what this one already
+    /// knows. `None` for a `NOFILE` container, same meaning as `unknown`
+    /// there.
+    pub total_bytes: Vec<Option<u64>>,
+    /// The longest input's stated duration in seconds, if any input states
+    /// one. `-stats`'s `time=` field approximates the muxed presentation-time
+    /// range with this, because [`crate::nullmux::StreamTally`] carries
+    /// packet and byte counts and not timestamps — see `crate::stats`'s
+    /// module docs for why that is a documented approximation rather than a
+    /// measured field.
+    pub input_duration_secs: Option<f64>,
 }
 
 /// Build the selection view of one opened input.
@@ -595,6 +609,17 @@ pub fn run_pipeline(
         .iter()
         .map(|f| f.demuxer.metadata().to_vec())
         .collect();
+    // `-stats`'s `time=` approximation (`crate::stats`): the longest stated
+    // input duration, read here for the same reason as the two collections
+    // above — after this function's own consuming loop, no `Demuxer` is
+    // reachable at all.
+    let input_duration_secs = inputs
+        .iter()
+        .filter_map(|f| f.demuxer.duration())
+        .map(|d| d.as_micros() as f64 / 1_000_000.0)
+        .fold(None, |acc: Option<f64>, d| {
+            Some(acc.map_or(d, |a| a.max(d)))
+        });
 
     let mut spec = PipelineSpec::new();
     let mut refs = Vec::new();
@@ -712,7 +737,9 @@ pub fn run_pipeline(
         let total_bytes = high_water.map(|h| h.load(Ordering::Relaxed));
         report.summary.push(summary_line(out, &t, total_bytes));
         report.tallies.push(t);
+        report.total_bytes.push(total_bytes);
     }
+    report.input_duration_secs = input_duration_secs;
     let _ = files;
     Ok(report)
 }

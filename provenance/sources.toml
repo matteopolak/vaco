@@ -236,6 +236,21 @@ title    = "Observed output of `ffmpeg -f hash/-f crc/-f framecrc/-f framehash`,
 acquired = "2026-08-23"
 where    = "the reference binary installed on the development machine"
 
+# #641/#208 (CL-17): the `Input #0`/`Output #0` container dump, `-stats`, and
+# the metadata-block/stream-line formatting rules it shares with them —
+# `%-16s` key padding, the `av_dump_format`-style fourcc (uppercase, distinct
+# from `ffprobe`'s own lowercase `codec_tag`), `fps`/`tbr`/`tbn`, the
+# `[SAR … DAR …]` bracket, and disposition parenthetical joining. Measured on
+# `long.mp4`, `media/long_av.mp4` and `long.ts`, plus several throwaway
+# `ffmpeg -f lavfi` fixtures for cases those three do not cover (VFR,
+# non-square SAR, multiple disposition flags).
+[[source]]
+id       = "ffmpeg-cli-dump-probe"
+kind     = "blackbox"
+title    = "Observed output of `ffmpeg -hide_banner -i <file>` (with and without an output) and `-stats`, ffmpeg 8.1"
+acquired = "2026-08-27"
+where    = "the reference binary installed on the development machine"
+
 [[source]]
 id       = "id3v1-genre-list"
 kind     = "blackbox"

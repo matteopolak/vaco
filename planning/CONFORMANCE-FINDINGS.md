@@ -2638,3 +2638,71 @@ else in it is missing.
 Covered by finding 40 ("FLV: the input's container metadata is dropped"): the
 read side is missing `bit_rate` and the same three container tags the write side
 fails to forward, which suggests one cause rather than two.
+
+## 48. #641/#208 (CL-17): the `Input #0`/`Output #0` dump and `-stats` are now implemented; `-progress`/`-report` are not
+
+Finding 41 measured that we printed none of `ffmpeg`'s `Input #0, …`/
+`Output #0, …` dump. `crates/app/vaco-cli/src/dump.rs` now renders it —
+container `Metadata:`, `Duration:`/`start:`/`bitrate:`, `Program N ` blocks,
+per-stream lines with codec/profile/tag/pix_fmt/SAR-DAR/bitrate/fps/tbr/tbn,
+per-stream `Metadata:`, and disposition parentheticals — and
+`crates/app/vaco-cli/src/lib.rs` prints it right after each input opens,
+*before* the "no output" check, matching the reference's own order (the whole
+reason finding 41 exists: `ffmpeg -i in.mp4` with no output prints the dump
+and then that error).
+
+```
+$ diff <(ffmpeg -hide_banner -i F 2>&1) <(vaco -hide_banner -i F 2>&1)
+```
+
+is empty for all three graded fixtures: `long.mp4` (one video stream),
+`media/long_av.mp4` (video+AAC), `long.ts` (MPEG-TS with a `Program` block),
+plus `-v warning` (suppresses the whole dump) and `-bitexact` (keeps
+`encoder : Lavf…` — finding 41's own point that this is file metadata, not our
+identity string). `Vaco-Spec-Ref: ffmpeg-cli-dump-probe` in the landing commit
+has the measurements the formatting rules below were built from — 16-char
+metadata key padding (`%-16s`, not block-relative), the `av_dump_format`-style
+fourcc (uppercase, distinct from `ffprobe`'s own lowercase `codec_tag` field),
+`fps`/`tbr` (two decimals when non-integral, none when whole — checked against
+four frame rates including a synthesised VFR file to separate `fps`
+(`avg_frame_rate`) from `tbr` (`r_frame_rate`), which the three fixtures alone
+cannot do since both are equal on all three), `tbn`'s `k`-suffix rule (exact
+multiples of 1000 only), and multi-flag disposition parentheticals
+(`-disposition:v default+forced` prints `(default) (forced)`, space-joined,
+not comma-joined into one).
+
+**What this does not cover, by design:**
+
+- Color-description parentheticals (`(tv, bt709, progressive)`) — only field
+  order is reproduced; none of the three fixtures carry non-default color
+  info.
+- The `Output #0` side's `tbr`/`tbn` are the *source* stream's values, not the
+  muxer's own (measured: `long.mp4 -> mpegts` changes `12800 tbn` to
+  `90k tbn` on the output line, because the muxer picks its own time base
+  before `write_header`, and nothing before this pass hands the CLI a handle
+  on the opened muxer at print time). The `Output` block also never carries
+  `-map_metadata`'s copied-from-input tags (only this output's own explicit
+  `-metadata`) and never a `q=…` segment (there is no encoder in this build
+  for that number to describe). None of this is exercised by the graded
+  `-i F` (no output) diff loop.
+- `Output #0`/`Press [q] to stop, [?] for help` print before
+  `exec::run_pipeline` is called, but `Stream mapping:`/the muxing-overhead
+  summary still print *after* it returns (unchanged from before this pass) —
+  `run_pipeline` computes and writes the mapping and the bytes in one
+  blocking call with no earlier hook, so the two blocks are not perfectly
+  interleaved with the reference's own order.
+- `-stats` (`crates/app/vaco-cli/src/stats.rs`) prints one *final* line, not
+  the reference's periodic ones — `vaco_sched::Driver::run` has no progress
+  callback to hang a periodic print on. `speed=`/`elapsed=`/`fps=` are real
+  `vaco_time::Instant`-derived numbers (routed through `vaco-time`, per
+  `cargo xtask time-gate`), not faked; `time=` is approximated from the
+  input's stated duration rather than a muxed presentation-time range, because
+  `nullmux::StreamTally` carries packet/byte counts and not timestamps.
+- `-progress` (the same data as `key=value` pairs to a file or pipe target)
+  and `-report` (a full debug log file) are not implemented at all — both are
+  separate output sinks, not formatting variants of `-stats`'s line, and are
+  a larger job than this pass. Left for a follow-up; #208 stays open for them
+  with this note.
+
+Landed: #641 (closed) and the dump/`-stats` half of #208 (left open, scoped to
+`-progress`/`-report`).

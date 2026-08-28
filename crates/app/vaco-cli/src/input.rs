@@ -41,6 +41,13 @@ pub struct InputFile {
     pub url: String,
     pub demuxer: Box<dyn Demuxer>,
     pub desc: DemuxerDesc,
+    /// The transport's own byte length, when it can report one — a pipe
+    /// cannot. #641's `Input #0` dump computes `bitrate:` from this and the
+    /// container's duration, the same way `vaco-probe`'s `-show_format` does
+    /// for the same field. Only known on the probed-open path: `-f <name>`
+    /// skips the peek this is read from, so a forced format reports `None`
+    /// here even for a perfectly ordinary seekable file.
+    pub size: Option<u64>,
 }
 
 impl core::fmt::Debug for InputFile {
@@ -50,6 +57,7 @@ impl core::fmt::Debug for InputFile {
             .field("url", &self.url)
             .field("format", &self.desc.name)
             .field("streams", &self.demuxer.streams().len())
+            .field("size", &self.size)
             .finish()
     }
 }
@@ -101,10 +109,12 @@ pub fn open(index: u32, url: &str, req: &OpenRequest<'_>) -> Result<InputFile> {
     };
     let probe = Probe::new(vaco_registry::demuxers(), format_opts);
 
+    let mut size = None;
     let desc: DemuxerDesc = if let Some(name) = req.force_format {
         *probe.force(name)?.desc
     } else {
         let mut io = IoContext::new(opener(url)?, &IoOptions::default())?;
+        size = io.size();
         *probe.detect(&mut io, Some(url), None)?.desc
     };
 
@@ -120,6 +130,7 @@ pub fn open(index: u32, url: &str, req: &OpenRequest<'_>) -> Result<InputFile> {
         url: url.to_owned(),
         demuxer: Box::new(discovery),
         desc,
+        size,
     })
 }
 

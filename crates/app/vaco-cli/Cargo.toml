@@ -30,6 +30,7 @@ path = "src/main.rs"
 vaco-core = { path = "../../core/vaco-core" }
 vaco-limits = { path = "../../core/vaco-limits" }
 vaco-opts = { path = "../../core/vaco-opts" }
+vaco-time = { path = "../../core/vaco-time" }
 vaco-cli-core = { path = "../../app/vaco-cli-core" }
 vaco-sched = { path = "../../app/vaco-sched" }
 vaco-registry = { path = "../../registry/vaco-registry" }

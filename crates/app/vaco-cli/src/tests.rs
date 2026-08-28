@@ -163,10 +163,26 @@ fn no_arguments_exits_one() {
 
 #[test]
 fn an_input_with_no_output_exits_one() {
-    // OBSERVED: `ffmpeg -i multi.mkv` exits 1 with exactly this line.
-    let r = go(&["-i", "whatever.mkv"]);
-    assert_eq!(r.code.code(), 1);
-    assert_eq!(r.message(), "At least one output file must be specified\n");
+    // OBSERVED: `ffmpeg -i multi.mkv` prints the `Input #0` dump (#641), then
+    // this exact line, and exits 1. A nonexistent file used to stand in here
+    // — harmless only because the "no output" check ran *before* any input
+    // was opened, which was itself the gap #641 reports: the reference opens
+    // and dumps the input first. Now that the order matches, this needs an
+    // input that actually opens.
+    let f = fixture(&four_track_file());
+    let r = go(&["-i", &f.path]);
+    assert_eq!(r.code.code(), 1, "{}", r.message());
+    assert!(
+        r.message().starts_with("Input #0, matroska"),
+        "{}",
+        r.message()
+    );
+    assert!(
+        r.message()
+            .ends_with("At least one output file must be specified\n"),
+        "{}",
+        r.message()
+    );
 }
 
 #[test]
@@ -324,14 +340,16 @@ fn an_output_this_build_can_read_but_not_write_says_so() {
 
 #[test]
 fn an_output_format_nothing_claims_keeps_the_reference_wording() {
-    // OBSERVED: exit 234, and this exact first line modulo the log pointer.
+    // OBSERVED: exit 234, and this exact line modulo the log pointer. It is
+    // no longer the *first* line of output — #641's `Input #0` dump now
+    // precedes it here too, since the input opens fine before output
+    // resolution fails.
     let f = fixture(&four_track_file());
     let r = go(&["-i", &f.path, "-c", "copy", "-f", "nosuchformat", "-"]);
     assert_eq!(r.code.code(), 234);
     assert!(
-        r.message().starts_with(
-            "[AVFormatContext] Requested output format 'nosuchformat' is not known.\n"
-        ),
+        r.message()
+            .contains("[AVFormatContext] Requested output format 'nosuchformat' is not known.\n"),
         "{}",
         r.message()
     );
@@ -576,8 +594,7 @@ fn a_map_that_matches_nothing_exits_two_hundred_and_thirty_four() {
     ]);
     assert_eq!(r.code.code(), 234);
     assert!(
-        r.message()
-            .starts_with("Stream map '' matches no streams.\n"),
+        r.message().contains("Stream map '' matches no streams.\n"),
         "{}",
         r.message()
     );
@@ -607,7 +624,7 @@ fn an_output_emptied_by_a_negative_map_is_an_error_not_a_drop() {
     assert_eq!(r.code.code(), 234, "{}", r.message());
     assert!(
         r.message()
-            .starts_with("[out#0/null] Output file does not contain any stream\n"),
+            .contains("[out#0/null] Output file does not contain any stream\n"),
         "{}",
         r.message()
     );
@@ -623,7 +640,7 @@ fn dropping_every_type_leaves_an_output_with_no_streams() {
     assert_eq!(r.code.code(), 234);
     assert!(
         r.message()
-            .starts_with("[out#0/null] Output file does not contain any stream\n"),
+            .contains("[out#0/null] Output file does not contain any stream\n"),
         "{}",
         r.message()
     );

@@ -67,6 +67,7 @@
 #![forbid(unsafe_code)]
 
 pub mod cli;
+pub mod dump;
 pub mod exec;
 pub mod exit;
 pub mod help;
@@ -75,6 +76,7 @@ pub mod listing;
 pub mod nullmux;
 pub mod output;
 pub mod select;
+pub mod stats;
 
 use std::ffi::OsStr;
 use std::io::Write;
@@ -130,12 +132,14 @@ where
         return Ok(ExitCode::OK);
     }
 
-    if cli.outputs.is_empty() {
-        // OBSERVED: `ffmpeg -i in.mkv` exits 1 with exactly this line.
-        return Err(Diagnostic::usage(vec![
-            "At least one output file must be specified".to_owned(),
-        ]));
-    }
+    // Both this dump and the informational blocks below follow the log
+    // level — and note that is a *different* condition from the banner's.
+    // Measured: `-hide_banner` drops the banner and keeps these; `-v warning`
+    // drops all of them. `prints_info` is the one predicate both the banner
+    // check above and every block below need, and it is already used for
+    // `Stream mapping:`/the muxing-overhead line, so this reuses rather than
+    // re-derives it.
+    let show_info = vaco_cli_core::loglevel::prints_info(argv);
 
     let mut inputs = Vec::new();
     for spec in &cli.inputs {
@@ -165,7 +169,31 @@ where
                 &spec.url,
             )
         })?;
+        // #641: `Input #0, …` printed as soon as the input opens, exactly
+        // like the reference — which is *before* the "no output" check
+        // below, not after it. `ffmpeg -i in.mp4` with no output prints the
+        // whole dump and then that error; this used to check for a missing
+        // output before opening anything, so the dump had no path that could
+        // ever reach it in that case. See `dump::render_input`.
+        if show_info {
+            for line in dump::render_input(
+                spec.index,
+                &spec.url,
+                &opened.desc,
+                opened.demuxer.as_ref(),
+                opened.size,
+            ) {
+                let _ = writeln!(err, "{line}");
+            }
+        }
         inputs.push(opened);
+    }
+
+    if cli.outputs.is_empty() {
+        // OBSERVED: `ffmpeg -i in.mkv` exits 1 with exactly this line.
+        return Err(Diagnostic::usage(vec![
+            "At least one output file must be specified".to_owned(),
+        ]));
     }
 
     let files: Vec<select::InputStreams> = inputs.iter().map(exec::describe).collect();
@@ -175,17 +203,34 @@ where
         outputs.push(exec::resolve_output(&cli, spec, &files)?);
     }
 
+    // CL-17/#208: `Output #0, …` and `Press [q] to stop, [?] for help`. The
+    // reference prints both of these, and `Stream mapping:`, before it starts
+    // writing any packet; `exec::run_pipeline` below does the mapping and the
+    // writing in one blocking call with no earlier hook to print from, so
+    // `Stream mapping:`/the summary line stay where they already were (after
+    // the call, unchanged) while this block prints *before* it — an ordering
+    // this crate's own `-i F` (no output) diff loop does not exercise. See
+    // `dump`'s module docs for what the `Output` block does not attempt to
+    // reproduce (the muxer's own `tbr`/`tbn`, `-map_metadata`'s copied tags,
+    // `q=…`).
+    let any_output = outputs.iter().any(|o| !o.dropped);
+    if show_info {
+        for out in outputs.iter().filter(|o| !o.dropped) {
+            for line in dump::render_output(out, &inputs) {
+                let _ = writeln!(err, "{line}");
+            }
+        }
+        if any_output {
+            let _ = writeln!(err, "Press [q] to stop, [?] for help");
+        }
+    }
+
+    let started = vaco_time::Instant::now();
     let report = exec::run_pipeline(inputs, &outputs, &files)?;
 
     // `Stream mapping:` is the reference's own wording and layout, and it is
     // the most useful single line of evidence that selection agreed.
-    //
-    // Both blocks are informational, so both follow the log level — and note
-    // that is a *different* condition from the banner's. Measured:
-    // `-hide_banner` drops the banner and keeps these; `-v warning` drops all
-    // three. We printed them at every level, so `vaco -v error … -f mpegts`
-    // wrote three lines to stderr where the reference writes none.
-    if vaco_cli_core::loglevel::prints_info(argv) {
+    if show_info {
         if !report.mapping.is_empty() {
             let _ = writeln!(err, "Stream mapping:");
             for line in &report.mapping {
@@ -194,6 +239,9 @@ where
         }
         for line in &report.summary {
             let _ = writeln!(err, "{line}");
+        }
+        if any_output && stats::wants_stats(argv) {
+            let _ = writeln!(err, "{}", stats::render(&report, started));
         }
     }
     Ok(ExitCode::OK)
