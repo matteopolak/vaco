@@ -7,7 +7,7 @@ use vaco_pixfmt::PixFmt;
 
 use crate::pps::Pps;
 use crate::profile::{self, LEVELS};
-use crate::sps::{ChromaFormat, Sps, VuiParameters};
+use crate::sps::{ChromaFormat, Sps, SpsExtension, VuiParameters};
 
 /// `seq_parameter_set_id` runs 0..=31 (§7.4.2.1.1), so the store is a fixed
 /// array rather than a map: 32 slots is smaller than a hash map's header, and a
@@ -32,6 +32,10 @@ pub const MAX_PPS: usize = 256;
 pub struct ParameterSets {
     sps: Box<[Option<Sps>]>,
     pps: Box<[Option<Pps>]>,
+    /// Keyed the same way as `sps`: `seq_parameter_set_id`. Most streams
+    /// have none — the auxiliary-picture extension (§7.3.2.1.2) is Annex G
+    /// syntax that only a handful of alpha/depth-coded streams ever carry.
+    sps_ext: Box<[Option<SpsExtension>]>,
     /// The id of the most recently activated SPS, which is what a stream
     /// description is derived from.
     active_sps: Option<u8>,
@@ -44,6 +48,7 @@ impl ParameterSets {
         Self {
             sps: (0..MAX_SPS).map(|_| None).collect(),
             pps: (0..MAX_PPS).map(|_| None).collect(),
+            sps_ext: (0..MAX_SPS).map(|_| None).collect(),
             active_sps: None,
         }
     }
@@ -101,10 +106,40 @@ impl ParameterSets {
         Ok(id)
     }
 
+    /// Parse and store a sequence parameter set extension (§7.3.2.1.2).
+    ///
+    /// Returns the `seq_parameter_set_id` it was stored under. Unlike
+    /// [`Self::add_sps`], nothing here requires the base SPS to already be
+    /// present — the extension is validated on its own syntax, and pairing
+    /// it with a base SPS is a caller concern (§7.4.1.2.1 does not require
+    /// the extension to immediately follow its SPS, only to follow it
+    /// somewhere in the same access unit or earlier).
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`SpsExtension::parse`] returns.
+    pub fn add_sps_extension(&mut self, rbsp: &[u8], budget: &mut Budget) -> Result<u8> {
+        let ext = SpsExtension::parse(rbsp, budget)?;
+        let id = ext.seq_parameter_set_id;
+        let slot = self
+            .sps_ext
+            .get_mut(id as usize)
+            .ok_or(Error::InvalidData("seq_parameter_set_id out of range"))?;
+        *slot = Some(ext);
+        Ok(id)
+    }
+
     /// The sequence parameter set with this id.
     #[must_use]
     pub fn get_sps(&self, id: u8) -> Option<&Sps> {
         self.sps.get(id as usize)?.as_ref()
+    }
+
+    /// The auxiliary-picture extension for the sequence parameter set with
+    /// this id, if the stream carried one.
+    #[must_use]
+    pub fn get_sps_extension(&self, id: u8) -> Option<&SpsExtension> {
+        self.sps_ext.get(id as usize)?.as_ref()
     }
 
     /// The picture parameter set with this id.
@@ -385,6 +420,24 @@ mod tests {
         assert!(sets.has_sps());
         assert!(sets.get_sps(0).is_some());
         assert!(sets.get_sps(31).is_none());
+    }
+
+    #[test]
+    fn add_sps_extension_stores_it_under_its_own_id() {
+        let mut sets = ParameterSets::new();
+        let mut w = vaco_bitstream::BitWriter::new();
+        w.ue(0); // seq_parameter_set_id
+        w.ue(0); // aux_format_idc == 0
+        w.put(1, 0); // additional_extension_flag
+        w.rbsp_trailing();
+        let mut rbsp = vec![0x0Du8]; // nal_unit_type 13
+        rbsp.extend_from_slice(&w.finish());
+
+        let mut budget = Budget::new(Limits::permissive());
+        assert_eq!(sets.add_sps_extension(&rbsp, &mut budget).unwrap(), 0);
+        let ext = sets.get_sps_extension(0).expect("stored");
+        assert!(ext.aux_format.is_none());
+        assert!(sets.get_sps_extension(1).is_none());
     }
 
     #[test]

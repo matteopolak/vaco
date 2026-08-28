@@ -137,8 +137,8 @@ pub use slice::{
     MmcoCommand, PredWeightTable, RefPicListModification, RefPicMarking, SliceHeader, SliceKind,
 };
 pub use sps::{
-    BitstreamRestriction, ChromaFormat, Crop, HrdParameters, PocType1, ScalingLists, Sps, Timing,
-    VuiParameters,
+    AuxFormat, BitstreamRestriction, ChromaFormat, Crop, HrdParameters, PocType1, ScalingLists,
+    Sps, SpsExtension, Timing, VuiParameters,
 };
 
 // Re-exported so a caller can describe a stream without also depending on

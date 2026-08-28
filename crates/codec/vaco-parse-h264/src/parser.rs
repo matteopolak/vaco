@@ -265,6 +265,9 @@ impl H264Parser {
             self.rbsp.fill(nal, &mut self.budget)?;
             let _ = if kind == NAL_PPS {
                 self.sets.add_pps(self.rbsp.as_slice(), &mut self.budget)
+            } else if kind == NAL_SPS_EXT {
+                self.sets
+                    .add_sps_extension(self.rbsp.as_slice(), &mut self.budget)
             } else {
                 self.sets.add_sps(self.rbsp.as_slice(), &mut self.budget)
             };
@@ -336,6 +339,11 @@ impl H264Parser {
                 }
                 NalUnitType::Pps => {
                     let _ = self.sets.add_pps(self.rbsp.as_slice(), &mut self.budget);
+                }
+                NalUnitType::SpsExtension => {
+                    let _ = self
+                        .sets
+                        .add_sps_extension(self.rbsp.as_slice(), &mut self.budget);
                 }
                 NalUnitType::Sei => {
                     if let Some(hint) = self.read_sei_hint() {
@@ -629,6 +637,11 @@ impl H264Parser {
             }
             NalUnitType::Pps => {
                 let _ = self.sets.add_pps(self.rbsp.as_slice(), &mut self.budget);
+            }
+            NalUnitType::SpsExtension => {
+                let _ = self
+                    .sets
+                    .add_sps_extension(self.rbsp.as_slice(), &mut self.budget);
             }
             NalUnitType::Sei => {
                 if let Some(hint) = self.read_sei_hint() {
@@ -1101,6 +1114,51 @@ mod tests {
         assert!(info.is_idr);
         assert_eq!(info.picture_type, Some('I'));
         assert!(p.parameters().is_some());
+    }
+
+    /// A stream carrying an SPS-extension NAL (type 13) reaches
+    /// `ParameterSets::get_sps_extension`, through both entry points: the
+    /// container path (`push_access_unit`) here, and the Annex B streaming
+    /// path (`parse`) in the sibling assertion below.
+    #[test]
+    fn an_sps_extension_nal_is_stored_under_its_sps_id() {
+        let mut w = vaco_bitstream::BitWriter::new();
+        w.ue(0); // seq_parameter_set_id, matching `stream()`'s SPS
+        w.ue(0); // aux_format_idc == 0
+        w.put(1, 0); // additional_extension_flag
+        w.rbsp_trailing();
+        let mut sps_ext_nal = vec![0x0Du8];
+        sps_ext_nal.extend_from_slice(&w.finish());
+
+        let mut data = stream();
+        // Insert right after the SPS+PPS, before the IDR slice's start code,
+        // matching §7.4.1.2.3's ordering (parameter sets and non-VCL units
+        // precede the picture they apply to).
+        let idr_start = data
+            .windows(5)
+            .position(|w| w == [0, 0, 0, 1, 0x65])
+            .expect("stream() has an IDR slice");
+        data.splice(
+            idr_start..idr_start,
+            [0, 0, 0, 1].into_iter().chain(sps_ext_nal),
+        );
+
+        let mut p = H264Parser::new(Limits::strict());
+        p.push_access_unit(&data, Framing::AnnexB)
+            .expect("a sample parses");
+        let ext = p
+            .parameter_sets()
+            .get_sps_extension(0)
+            .expect("the SPS extension was stored");
+        assert!(ext.aux_format.is_none());
+
+        // Same bytes, through the Annex B streaming entry point instead.
+        let mut streaming = H264Parser::new(Limits::strict());
+        streaming.parse(&data).expect("parse");
+        assert!(
+            streaming.parameter_sets().get_sps_extension(0).is_some(),
+            "the streaming path must reach the same store"
+        );
     }
 
     #[test]

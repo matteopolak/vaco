@@ -475,6 +475,26 @@ const TABLE: &[Row] = &[
         field_order: "progressive",
         coded_height: 240,
     },
+    Row {
+        name: "main352 -- plain Main profile, not Constrained Baseline or High",
+        sps: &[
+            0x67, 0x4D, 0x40, 0x1E, 0xEC, 0xA0, 0xB0, 0x4B, 0x60, 0x22, 0x00, 0x00, 0x03, 0x00,
+            0x02, 0x00, 0x00, 0x03, 0x00, 0x64, 0x1E, 0x2C, 0x5B, 0x2C,
+        ],
+        profile: "Main",
+        level: 30,
+        size: (352, 288),
+        pix_fmt: "yuv420p",
+        sar: Some((1, 1)),
+        r_frame_rate: (50, 1),
+        has_b_frames: 2,
+        bit_depth: 8,
+        color_range: "unknown",
+        color_space: "unknown",
+        chroma_location: "left",
+        field_order: "progressive",
+        coded_height: 288,
+    },
 ];
 
 fn parse(sps_ebsp: &[u8]) -> Sps {

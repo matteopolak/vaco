@@ -29,7 +29,7 @@ use vaco_format_nalu::{Framing, LengthSize, units};
 use vaco_limits::{Budget, Limits};
 use vaco_parse_h264::{
     AvcDecoderConfigurationRecord, H264NalHeader, H264Parser, NalUnitType, ParameterSets, Pps,
-    SliceHeader, Sps, codec_parameters, params, sei,
+    SliceHeader, Sps, SpsExtension, codec_parameters, params, sei,
 };
 
 /// Feed `data` through the streaming parser, returning the access units.
@@ -135,6 +135,10 @@ fuzz_target!(|data: &[u8]| {
                 let active = sets.active().cloned();
                 let _ = Pps::parse(rbsp, active.as_ref(), &mut budget);
                 let _ = sets.add_pps(rbsp, &mut budget);
+            }
+            NalUnitType::SpsExtension => {
+                let _ = SpsExtension::parse(rbsp, &mut budget);
+                let _ = sets.add_sps_extension(rbsp, &mut budget);
             }
             NalUnitType::Sei => {
                 let active = sets.active().cloned();

@@ -984,3 +984,156 @@ fn parse_hrd(g: &mut BoundedGolomb<'_, '_, '_>) -> Result<HrdParameters> {
         time_offset_length: g.u(5)? as u8,
     })
 }
+
+/// `seq_parameter_set_extension_rbsp()`, ITU-T H.264 §7.3.2.1.2.
+///
+/// Carries the *auxiliary coded picture* format (Annex G's monochrome alpha
+/// or depth planes coded alongside the primary picture, NAL unit type 19) —
+/// a fact about a stream this crate would otherwise have no representation
+/// for, since [`Sps`] itself has no `aux_format_idc` field: the extension is
+/// a separate NAL unit type (13) with its own, much smaller RBSP, and
+/// [`Sps::parse`] already rejects that `nal_unit_type` outright.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpsExtension {
+    /// `seq_parameter_set_id`, matching the base SPS this extension applies
+    /// to. Not validated against a stored SPS here — that is a caller
+    /// concern, the same as any other id-keyed parameter set.
+    pub seq_parameter_set_id: u8,
+    /// `aux_format_idc`. `None` for 0 ("no auxiliary picture"), in which case
+    /// none of the alpha fields below were coded at all — not merely zero.
+    pub aux_format: Option<AuxFormat>,
+}
+
+/// The auxiliary-picture fields, present only when `aux_format_idc != 0`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AuxFormat {
+    /// `aux_format_idc`: 1 alpha-only, 2 luma-plus-alpha (unused by any
+    /// profile this workspace's `profile.rs` names), 3 depth.
+    pub idc: u8,
+    /// `bit_depth_aux_minus8 + 8`, 8..=14 — the sample depth of the
+    /// auxiliary plane, independent of the primary picture's own
+    /// `bit_depth_luma`/`bit_depth_chroma`.
+    pub bit_depth: u8,
+    /// `alpha_incr_flag`. `true` means sample value increases with opacity;
+    /// `false` means it decreases.
+    pub alpha_incr: bool,
+    /// `alpha_opaque_value`, `bit_depth_aux + 1` bits wide.
+    pub alpha_opaque_value: u32,
+    /// `alpha_transparent_value`, `bit_depth_aux + 1` bits wide.
+    pub alpha_transparent_value: u32,
+}
+
+impl SpsExtension {
+    /// Parse a `seq_parameter_set_extension_rbsp()` NAL unit, header byte
+    /// included.
+    ///
+    /// # Errors
+    /// [`Error::InvalidData`] if `nal_unit_type` is not 13, or for a
+    /// structurally impossible codeword; [`Error::UnexpectedEof`] for a
+    /// truncated unit.
+    pub fn parse(rbsp: &[u8], budget: &mut Budget) -> Result<Self> {
+        let header = H264NalHeader::parse(rbsp).ok_or(Error::UnexpectedEof)?;
+        if header.nal_unit_type != NalUnitType::SpsExtension {
+            return Err(Error::InvalidData("not a sequence parameter set extension"));
+        }
+        let mut reader = BitReader::new(rbsp);
+        reader.skip(8); // the NAL header byte
+        let mut g = BoundedGolomb::new(&mut reader, budget);
+        let seq_parameter_set_id = g.ue_v(31)? as u8;
+        let aux_format_idc = g.ue_v(3)?;
+        let aux_format = if aux_format_idc == 0 {
+            None
+        } else {
+            let bit_depth_aux = g.ue_v(6)? as u8 + 8;
+            let alpha_incr = g.u(1)? != 0;
+            // `u(v)` with v = bit_depth_aux_minus8 + 9, i.e. bit_depth_aux + 1.
+            let value_bits = u32::from(bit_depth_aux) + 1;
+            let alpha_opaque_value = g.u(value_bits)?;
+            let alpha_transparent_value = g.u(value_bits)?;
+            Some(AuxFormat {
+                idc: aux_format_idc as u8,
+                bit_depth: bit_depth_aux,
+                alpha_incr,
+                alpha_opaque_value,
+                alpha_transparent_value,
+            })
+        };
+        // `additional_extension_flag` and `rbsp_trailing_bits()` follow;
+        // nothing this crate reports depends on either, so nothing here reads
+        // them beyond what `check()` needs to confirm the RBSP was
+        // well-formed.
+        reader.check()?;
+        Ok(Self {
+            seq_parameter_set_id,
+            aux_format,
+        })
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
+mod sps_extension_tests {
+    use super::*;
+    use vaco_limits::Limits;
+
+    /// Hand-built per §7.3.2.1.2, not measured against the reference:
+    /// `ffprobe` reports nothing from an SPS extension at all (it carries no
+    /// field `-show_streams` prints), so this is checked against the
+    /// specification and self-consistency only. `seq_parameter_set_id = 0`,
+    /// `aux_format_idc = 1` (alpha), `bit_depth_aux_minus8 = 0` (8-bit, so
+    /// the two alpha values are 9 bits wide), `alpha_incr_flag = 1`,
+    /// `alpha_opaque_value = 0x1FF` (all nine bits set),
+    /// `alpha_transparent_value = 0`, `additional_extension_flag = 0`.
+    fn sample() -> Vec<u8> {
+        let mut w = vaco_bitstream::BitWriter::new();
+        w.ue(0); // seq_parameter_set_id
+        w.ue(1); // aux_format_idc
+        w.ue(0); // bit_depth_aux_minus8
+        w.put(1, 1); // alpha_incr_flag
+        w.put(9, 0x1FF); // alpha_opaque_value
+        w.put(9, 0); // alpha_transparent_value
+        w.put(1, 0); // additional_extension_flag
+        w.rbsp_trailing();
+        let mut rbsp = vec![0x0Du8]; // nal_unit_type 13
+        rbsp.extend_from_slice(&w.finish());
+        rbsp
+    }
+
+    #[test]
+    fn round_trips_a_hand_built_extension() {
+        let rbsp = sample();
+        let mut budget = Budget::new(Limits::permissive());
+        let ext = SpsExtension::parse(&rbsp, &mut budget).unwrap();
+        assert_eq!(ext.seq_parameter_set_id, 0);
+        let aux = ext.aux_format.unwrap();
+        assert_eq!(aux.idc, 1);
+        assert_eq!(aux.bit_depth, 8);
+        assert!(aux.alpha_incr);
+        assert_eq!(aux.alpha_opaque_value, 0x1FF);
+        assert_eq!(aux.alpha_transparent_value, 0);
+    }
+
+    #[test]
+    fn aux_format_idc_zero_means_no_alpha_fields() {
+        let mut w = vaco_bitstream::BitWriter::new();
+        w.ue(3); // seq_parameter_set_id
+        w.ue(0); // aux_format_idc == 0: no auxiliary picture
+        w.put(1, 0); // additional_extension_flag
+        w.rbsp_trailing();
+        let mut rbsp = vec![0x0Du8];
+        rbsp.extend_from_slice(&w.finish());
+
+        let mut budget = Budget::new(Limits::permissive());
+        let ext = SpsExtension::parse(&rbsp, &mut budget).unwrap();
+        assert_eq!(ext.seq_parameter_set_id, 3);
+        assert!(ext.aux_format.is_none());
+    }
+
+    #[test]
+    fn wrong_nal_unit_type_is_rejected() {
+        let mut rbsp = sample();
+        rbsp[0] = 0x07; // nal_unit_type 7: an ordinary SPS, not an extension
+        let mut budget = Budget::new(Limits::permissive());
+        assert!(SpsExtension::parse(&rbsp, &mut budget).is_err());
+    }
+}

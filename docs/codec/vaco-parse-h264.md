@@ -35,7 +35,7 @@ elementary stream that has none. That is comfortably on the near side.
 | Module | Syntax |
 |---|---|
 | `nal` | NAL unit types, Table 7-1 |
-| `sps` | §7.3.2.1.1, §E.1.1 `vui_parameters()`, §E.1.2 `hrd_parameters()` |
+| `sps` | §7.3.2.1.1, §E.1.1 `vui_parameters()`, §E.1.2 `hrd_parameters()`, §7.3.2.1.2 `seq_parameter_set_extension_rbsp()` |
 | `pps` | §7.3.2.2, including the `more_rbsp_data()` tail |
 | `slice` | §7.3.3 and its three sub-structures (§7.3.3.1-3) |
 | `sei` | §7.3.2.3 framing, and the Annex D payloads worth decoding |
@@ -62,6 +62,30 @@ produces plausible nonsense rather than an error:
 - A **`pic_timing` SEI** needs the active SPS: whether it begins with
   `cpb_removal_delay`, and how many *bits* that field is, are HRD facts. Without
   one it is returned as raw bytes rather than guessed at.
+
+### The SPS extension (NAL type 13), and why it is its own struct
+
+`seq_parameter_set_extension_rbsp()` (§7.3.2.1.2) is a *different* NAL unit
+type from an SPS, with a much smaller, unrelated syntax: it states whether the
+stream carries an Annex G auxiliary coded picture (an alpha or depth plane
+alongside the primary one) and, if so, that plane's bit depth and alpha
+mapping. `Sps::parse` rejects it outright — it is not a `seq_parameter_set_id`
+followed by profile/level/dimensions, it is `seq_parameter_set_id` followed by
+`aux_format_idc` and, conditionally, four more fields entirely — so it gets its
+own type, `SpsExtension`, and its own slot in `ParameterSets` keyed the same
+way (`seq_parameter_set_id`). Before this existed, an SPS extension NAL routed
+into `add_sps` through `set_annexb_extradata`'s extradata loop, which always
+failed the type check and discarded the error: parseable syntax, permanently
+misrouted to the wrong parser. Both streaming entry points
+(`H264Parser::parse` and `push_access_unit`) and the extradata path now call
+`add_sps_extension` instead.
+
+**Not measured against `ffprobe`, and said so in the test**: `-show_streams`
+prints nothing derived from an SPS extension — no field for `aux_format_idc`,
+alpha values or auxiliary bit depth exists in its output. `SpsExtension` is
+verified against the specification and self-consistency (hand-built RBSPs
+with known field values, round-tripped) rather than against the reference,
+the same honesty `slice.rs`'s own verification already requires.
 
 ### Where an access unit ends
 
@@ -411,9 +435,11 @@ No external runtime dependencies. `#![forbid(unsafe_code)]`. Builds for
 
 ## Testing
 
-- `tests/reference.rs` — 19 real SPS units against every number `ffprobe 8.1`
-  prints for them, plus the crop-unit matrix, the factor-of-two frame-rate
-  relationship, the SAR rejection boundary and the SEI-derived field order.
+- `tests/reference.rs` — 20 real SPS units (added a plain Main-profile row
+  alongside the existing Baseline/High/High-4:2:2/High-4:4:4/High-10 spread)
+  against every number `ffprobe 8.1` prints for them, plus the crop-unit
+  matrix, the factor-of-two frame-rate relationship, the SAR rejection
+  boundary and the SEI-derived field order.
 - Unit tests per module, over fixtures taken byte-for-byte from real streams.
 - `fuzz/fuzz_targets/parse_h264.rs` — the whole crate against arbitrary bytes,
   asserting chunk-invariance, that access units are a subsequence of the input,
