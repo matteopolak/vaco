@@ -19,6 +19,7 @@
     clippy::expect_used,
     clippy::print_stdout,
     clippy::disallowed_methods,
+    clippy::panic,
     reason = "throwaway CLI tool, not part of the crate's own budget-guarded decode path"
 )]
 
