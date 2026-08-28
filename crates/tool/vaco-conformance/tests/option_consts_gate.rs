@@ -57,7 +57,8 @@
 //! alone never builds a `Graph` or touches a frame, so there is no
 //! single-input / pixel-format / pad-count constraint to inherit — which is
 //! why this list already covers the full registered-filter surface rather
-//! than the six `filterexec.rs` wires today.
+//! than the handful `filterexec.rs` wires today (a number that keeps
+//! growing as that module reaches more crates — see its own doc).
 
 #![expect(
     clippy::expect_used,

@@ -165,6 +165,7 @@ const REGISTRIES: &[&dyn FilterRegistry] = &[
     &vaco_filter_geometry::T2GeometryRegistry,
     &vaco_filter_convolve::ConvolveRegistry,
     &vaco_filter_key::KeyRegistry,
+    &vaco_filter_stack::StackRegistry,
 ];
 
 fn find_registry(name: &str) -> Option<&'static dyn FilterRegistry> {

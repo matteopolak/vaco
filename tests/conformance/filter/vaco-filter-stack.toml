@@ -1,0 +1,87 @@
+# `vaco-filter-stack` (`hstack`/`vstack`/`xstack`) had no `filter`-tool
+# conformance coverage before this: `StackRegistry` was only just added to
+# `filterexec.rs`'s `REGISTRIES`. `hstack.rs`'s own module doc already
+# carries an extensive hand-run measurement log against real ffmpeg 8.1
+# (mismatched-width/matching-height concatenation, the hard configure
+# error on a height mismatch, `shortest=true`/`false` frame-count
+# behaviour) -- this suite exists to turn the width-sum/byte-layout half
+# of that into a permanent, automated byte-exact check, not to
+# re-discover it.
+#
+# `hstack`: two mismatched widths (8 and 12), same height (10). `vstack`:
+# two mismatched heights (6 and 9), same width (10) -- its own axis of
+# variation, not `hstack`'s reused. Both cases use non-flat, independent
+# ramps on each side (not the same formula mirrored) so a stride or
+# plane-offset mistake on either input, or in the output's own
+# `width0 + width1` / `height0 + height1` row layout, shows up as a byte
+# mismatch rather than being masked by both sides reading the same
+# pattern. `xstack` is not covered here -- its `layout` option needs its
+# own case design and is left for a later pass.
+
+schema = 1
+suite  = "filter-vaco-filter-stack"
+tool   = "filter"
+tier   = "core"
+owner  = "@filter-key-owner"
+
+[[media]]
+id       = "hs-base-8x10"
+source   = "generated://hs-base-8x10.raw"
+tags     = ["video"]
+fixed    = true
+generate = ["-f", "lavfi", "-i", "color=c=black:s=8x10:d=1:r=25",
+            "-vf", "geq=lum='X*10+Y*3':cb=128:cr=128",
+            "-frames:v", "1", "-pix_fmt", "gray8", "-f", "rawvideo"]
+
+[[media]]
+id       = "hs-overlay-12x10"
+source   = "generated://hs-overlay-12x10.raw"
+tags     = ["video"]
+fixed    = true
+generate = ["-f", "lavfi", "-i", "color=c=black:s=12x10:d=1:r=25",
+            "-vf", "geq=lum='200-X*5+Y':cb=128:cr=128",
+            "-frames:v", "1", "-pix_fmt", "gray8", "-f", "rawvideo"]
+
+[[media]]
+id       = "vs-base-10x6"
+source   = "generated://vs-base-10x6.raw"
+tags     = ["video"]
+fixed    = true
+generate = ["-f", "lavfi", "-i", "color=c=black:s=10x6:d=1:r=25",
+            "-vf", "geq=lum='X*8+Y*2':cb=128:cr=128",
+            "-frames:v", "1", "-pix_fmt", "gray8", "-f", "rawvideo"]
+
+[[media]]
+id       = "vs-overlay-10x9"
+source   = "generated://vs-overlay-10x9.raw"
+tags     = ["video"]
+fixed    = true
+generate = ["-f", "lavfi", "-i", "color=c=black:s=10x9:d=1:r=25",
+            "-vf", "geq=lum='150-X*3+Y*4':cb=128:cr=128",
+            "-frames:v", "1", "-pix_fmt", "gray8", "-f", "rawvideo"]
+
+[[axis]]
+name   = "filter"
+values = [
+  { id = "hstack-mismatched-width-same-height",
+    extra_media = ["hs-base-8x10", "hs-overlay-12x10"],
+    argv = ["{media:hs-base-8x10}", "hstack", "inputs=2", "gray8", "8", "10",
+            "gray8", "20", "10",
+            "{media:hs-overlay-12x10}", "gray8", "12", "10"] },
+  # `vstack` -- the vertical dual of `hstack`, same "mismatched non-flat
+  # inputs, matching cross-dimension" discipline, mismatched *height* this
+  # time (6 and 9 rows, same width) since that is `vstack`'s own axis of
+  # variation.
+  { id = "vstack-mismatched-height-same-width",
+    extra_media = ["vs-base-10x6", "vs-overlay-10x9"],
+    argv = ["{media:vs-base-10x6}", "vstack", "inputs=2", "gray8", "10", "6",
+            "gray8", "10", "15",
+            "{media:vs-overlay-10x9}", "gray8", "10", "9"] },
+]
+
+[compare]
+mode    = "raw-exact"
+timeout = "10s"
+
+[normalise]
+invocation = ["bitexact", "hide-banner"]
