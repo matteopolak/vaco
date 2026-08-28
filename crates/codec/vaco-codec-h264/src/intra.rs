@@ -88,27 +88,18 @@ pub(crate) fn predict_intra16x16(mode: u8, n: Neighbours16) -> [[u8; 16]; 16] {
             out
         }
         _ => {
-            // eq. (8-72)..(8-75): the four DC sub-cases, by availability.
-            let dc = match (n.top_available, n.left_available) {
-                (true, true) => {
-                    let sum: u32 = n
-                        .top
-                        .iter()
-                        .chain(n.left.iter())
-                        .map(|&v| u32::from(v))
-                        .sum();
-                    ((sum + 16) >> 5) as u8
-                }
-                (false, true) => {
-                    let sum: u32 = n.left.iter().map(|&v| u32::from(v)).sum();
-                    ((sum + 8) >> 4) as u8
-                }
-                (true, false) => {
-                    let sum: u32 = n.top.iter().map(|&v| u32::from(v)).sum();
-                    ((sum + 8) >> 4) as u8
-                }
-                (false, false) => 128,
-            };
+            // eq. (8-72)..(8-75): the four DC sub-cases, by availability --
+            // delegated to `vaco_codec_dsp_intrapred::dc_predict` (D-09):
+            // this is exactly that function's own average/fallback formula
+            // at size 16 (count 16 or 32, both powers of two), verified
+            // bit-exact against this module's own pre-existing tests below
+            // (which pin real expected bytes) before landing.
+            let top_u16: [u16; 16] = core::array::from_fn(|i| u16::from(n.top.get(i).copied().unwrap_or(0)));
+            let left_u16: [u16; 16] = core::array::from_fn(|i| u16::from(n.left.get(i).copied().unwrap_or(0)));
+            let top: &[u16] = if n.top_available { &top_u16 } else { &[] };
+            let left: &[u16] = if n.left_available { &left_u16 } else { &[] };
+            let dc = vaco_codec_dsp_intrapred::dc_predict(top, left, 16, 8);
+            let dc = u8::try_from(dc).unwrap_or(u8::MAX);
             [[dc; 16]; 16]
         }
     }
