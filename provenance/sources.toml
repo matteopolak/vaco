@@ -1199,3 +1199,10 @@ kind     = "rfc"
 title    = "RFC 2202, Test Cases for HMAC-MD5 and HMAC-SHA-1. The three HMAC-SHA-1 key/data/digest triples (20-byte 0x0b key with \"Hi There\"; \"Jefe\" key with \"what do ya want for nothing?\"; 20-byte 0xaa key with fifty 0xdd bytes) used as RFC-vector-derived evidence for vaco-crypto::hmac_sha1, cross-checked against Python's stdlib hmac+hashlib before being trusted as test expected values, not merely recalled."
 acquired = "2026-08-28"
 where    = "https://www.rfc-editor.org/rfc/rfc2202"
+
+[[source]]
+id       = "rfc-9639"
+kind     = "rfc"
+title    = "RFC 9639, Free Lossless Audio Codec (FLAC). Section 9.2.6's linear-predictor subframe arithmetic (coefficient/history multiply-sum, shared shift, coefficient ordering) backs vaco-codec-dsp-lpc's predict/synthesize."
+acquired = "2026-08-28"
+where    = "https://www.rfc-editor.org/rfc/rfc9639"
