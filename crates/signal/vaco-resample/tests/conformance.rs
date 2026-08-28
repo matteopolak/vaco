@@ -244,6 +244,36 @@ fn mix_matrices_match_the_reference() {
     );
 }
 
+/// `DpliiX`/`DpliiZ`/`DolbyEx`/`DolbyHeadphone` are accepted `matrix_encoding`
+/// values the reference itself never builds a distinct matrix for: probed with
+/// impulses through every channel of 7.1 into both a stereo and a 5.1 output,
+/// all four produce output byte-identical to `none`. See `mix::build_matrix`'s
+/// doc comment for the full probe.
+#[test]
+fn unencoded_matrix_variants_match_none() {
+    use vaco_resample::MatrixEncoding;
+
+    let levels = MixLevels::default();
+    let seven_one = ChannelLayout::from_name("7.1").unwrap();
+    for out_name in ["stereo", "5.1"] {
+        let out = ChannelLayout::from_name(out_name).unwrap();
+        let base = build_matrix(&seven_one, &out, &levels, MatrixEncoding::None, false).unwrap();
+        for enc in [
+            MatrixEncoding::DpliiX,
+            MatrixEncoding::DpliiZ,
+            MatrixEncoding::DolbyEx,
+            MatrixEncoding::DolbyHeadphone,
+        ] {
+            let got = build_matrix(&seven_one, &out, &levels, enc, false).unwrap();
+            assert_eq!(
+                got.as_slice(),
+                base.as_slice(),
+                "7.1 -> {out_name}: {enc:?} should match the reference's own None fallback"
+            );
+        }
+    }
+}
+
 /// Rematrixing a layout to itself must be the identity, for every standard
 /// layout the vocabulary knows.
 #[test]

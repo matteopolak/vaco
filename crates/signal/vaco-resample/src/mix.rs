@@ -263,9 +263,20 @@ impl MatrixShape {
 /// formats, none for float. That split is measured, not chosen — see the module
 /// docs.
 ///
+/// # `DpliiX`/`DpliiZ`/`DolbyEx`/`DolbyHeadphone` are not a second code path
+///
+/// Measured directly (impulses through every input channel of 7.1, both a
+/// stereo and a 5.1 output, `ffmpeg` 8.1): `matrix_encoding` values 3–6 produce
+/// output **byte-identical to `none`** — the reference's own `libswresample`
+/// accepts these enum values but never builds a matrix-encoded fold for them,
+/// falling through to the ordinary downmix instead. So this is not a case of
+/// three encodings we have chosen not to implement; the reference has not
+/// implemented them either, and reproducing that (rather than erroring) is
+/// what D17 asks for.
+///
 /// # Errors
-/// [`Error::Unsupported`] for a matrix encoding we do not implement;
-/// [`Error::InvalidData`] for a structurally invalid layout.
+/// [`Error::InvalidData`] for a structurally invalid layout, or a non-stereo
+/// output requested with `dolby`/`dplii`.
 pub fn build_matrix(
     inp: &ChannelLayout,
     out: &ChannelLayout,
@@ -273,29 +284,19 @@ pub fn build_matrix(
     encoding: MatrixEncoding,
     int_output: bool,
 ) -> Result<MixMatrix, Error> {
-    match encoding {
-        MatrixEncoding::None => {}
-        MatrixEncoding::Dolby | MatrixEncoding::Dplii => {
-            if out.channels != 2 {
-                return Err(Error::InvalidData(
-                    "matrix_encoding requires a stereo output layout",
-                ));
-            }
-        }
-        MatrixEncoding::DpliiX
-        | MatrixEncoding::DpliiZ
-        | MatrixEncoding::DolbyEx
-        | MatrixEncoding::DolbyHeadphone => {
-            return Err(Error::Unsupported(
-                "matrix_encoding: only none, dolby and dplii are implemented",
-            ));
-        }
+    let is_encoded = matches!(encoding, MatrixEncoding::Dolby | MatrixEncoding::Dplii);
+    if is_encoded && out.channels != 2 {
+        return Err(Error::InvalidData(
+            "matrix_encoding requires a stereo output layout",
+        ));
     }
 
-    let mut m = if encoding == MatrixEncoding::None {
-        raw_matrix(inp, out, levels)?
-    } else {
+    let mut m = if is_encoded {
         encoded_matrix(inp, levels, encoding)?
+    } else {
+        // None, and the four values the reference itself does not encode
+        // (DpliiX/DpliiZ/DolbyEx/DolbyHeadphone) — see the doc comment above.
+        raw_matrix(inp, out, levels)?
     };
 
     // Phase 4 — normalisation.

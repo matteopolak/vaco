@@ -44,9 +44,12 @@
 //!
 //! Deliberately scoped out for this pass, each with a stated reason in
 //! `docs/signal/vaco-resample.md`: noise-shaping dither curves (the option names
-//! are accepted and aliased to triangular-highpass with a warning), the Dolby
-//! Pro Logic IIx/IIz/EX/Headphone matrix encodings, and timestamp compensation
-//! beyond [`Resampler::delay`] / [`Resampler::next_pts`].
+//! are accepted and aliased to triangular-highpass with a warning), and
+//! timestamp compensation beyond [`Resampler::delay`] / [`Resampler::next_pts`].
+//! The Dolby Pro Logic IIx/IIz/EX/Headphone `matrix_encoding` values are
+//! implemented, in the sense that matters: the reference itself falls back to
+//! an unencoded downmix for all four, and [`mix::build_matrix`] reproduces
+//! that fallback rather than rejecting the option.
 
 #![forbid(unsafe_code)]
 
