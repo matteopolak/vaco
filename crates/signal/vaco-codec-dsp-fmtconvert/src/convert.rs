@@ -51,11 +51,15 @@ pub fn int16_to_float(dst: &mut [f32], src: &[i16]) {
 /// precision loss every float-based audio decoder already accepts for its
 /// working format.
 pub fn int32_to_float(dst: &mut [f32], src: &[i32]) {
-    const SCALE: f32 = 1.0 / 2_147_483_648.0; // 1 / 2^31
     for (d, s) in dst.iter_mut().zip(src) {
-        *d = (*s as f32) * SCALE;
+        *d = (*s as f32) * INT32_TO_FLOAT_SCALE;
     }
 }
+
+/// `1 / 2^31`, shared with [`crate::simd::int32_to_float`] so the two paths
+/// multiply by the identically-rounded `f32` constant rather than two
+/// separately-written literals that could drift.
+pub(crate) const INT32_TO_FLOAT_SCALE: f32 = 1.0 / 2_147_483_648.0;
 
 /// `dst[i] = src[i] as f32 * mul`, fused so the caller never materialises an
 /// unscaled intermediate array. This is the shape a transform's own output

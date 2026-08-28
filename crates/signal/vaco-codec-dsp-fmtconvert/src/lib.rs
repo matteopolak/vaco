@@ -45,9 +45,19 @@
 //!
 //! Every function writes into a caller-provided output slice.
 #![forbid(unsafe_code)]
+// `#[inline(always)]` on a SIMD kernel body is not a tuning knob in this
+// crate: it is how the dispatched level's target-feature context reaches
+// the body (see `vaco-simd`'s own crate doc for the full reasoning). A
+// kernel that fails to inline is compiled at the ambient baseline --
+// still correct, silently slow, and invisible to every correctness test.
+#![allow(
+    clippy::inline_always,
+    reason = "mandatory for target-feature propagation in vaco_simd kernel bodies"
+)]
 
 mod convert;
 mod interleave;
+pub mod simd;
 
 pub use convert::{
     clip_i16, clip_i32, clip_u8, float_to_int16, float_to_int32, int16_to_float, int32_to_float,

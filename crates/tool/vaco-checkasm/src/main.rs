@@ -16,6 +16,7 @@
 //! `vaco-checkasm`'s own `kernels::scale_affine` module is itself tested.
 
 use vaco_checkasm::kernels::fir_mc::FirMcKernel;
+use vaco_checkasm::kernels::fmtconvert::{Int16ToFloatKernel, Int32ToFloatKernel};
 use vaco_checkasm::kernels::masked_select::MaskedSelectKernel;
 use vaco_checkasm::kernels::mecmp::{SadKernel, SsdKernel, VarianceKernel};
 use vaco_checkasm::kernels::scale_affine::AffineRowKernel;
@@ -88,6 +89,14 @@ const ENTRIES: &[Entry] = &[
     Entry {
         name: VarianceKernel::NAME,
         verify: verify_report::<VarianceKernel>,
+    },
+    Entry {
+        name: Int16ToFloatKernel::NAME,
+        verify: verify_report::<Int16ToFloatKernel>,
+    },
+    Entry {
+        name: Int32ToFloatKernel::NAME,
+        verify: verify_report::<Int32ToFloatKernel>,
     },
 ];
 

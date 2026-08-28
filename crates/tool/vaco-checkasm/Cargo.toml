@@ -32,6 +32,13 @@ vaco-codec-dsp-mc = { path = "../../signal/vaco-codec-dsp-mc" }
 # Motion-estimation comparison kernels (D-12, #144): same reasoning as
 # vaco-codec-dsp-mc above.
 vaco-codec-dsp-mecmp = { path = "../../signal/vaco-codec-dsp-mecmp" }
+# Format-conversion, LPC, blockdsp/pixblockdsp and intra-prediction SIMD
+# kernels (D-05/D-07/D-11/D-09): same layer-10-may-depend-downward reasoning
+# as vaco-codec-dsp-mc above.
+vaco-codec-dsp-fmtconvert = { path = "../../signal/vaco-codec-dsp-fmtconvert" }
+vaco-codec-dsp-lpc = { path = "../../signal/vaco-codec-dsp-lpc" }
+vaco-codec-dsp-idct = { path = "../../signal/vaco-codec-dsp-idct" }
+vaco-codec-dsp-intrapred = { path = "../../signal/vaco-codec-dsp-intrapred" }
 
 [lints]
 workspace = true

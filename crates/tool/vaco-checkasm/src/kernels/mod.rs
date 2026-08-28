@@ -5,6 +5,7 @@
 //! doc for why that particular kernel was picked.
 
 pub mod fir_mc;
+pub mod fmtconvert;
 pub mod masked_select;
 pub mod mecmp;
 pub mod scale_affine;
