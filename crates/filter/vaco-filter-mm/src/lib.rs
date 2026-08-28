@@ -62,6 +62,7 @@ pub mod concat;
 pub mod interleave;
 pub mod looping;
 pub mod metadata;
+pub mod misc;
 pub mod nullsink;
 pub mod nullsrc;
 pub mod passthrough;

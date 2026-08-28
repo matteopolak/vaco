@@ -231,3 +231,87 @@ name = "astreamselect"
 long_name = "Select audio streams"
 ctor = "vaco_filter_mm::streamselect::audio::DESC"
 media = "audio"
+
+[[component]]
+kind = "filter"
+name = "cue"
+long_name = "Delay filtering until a wallclock timestamp"
+ctor = "vaco_filter_mm::misc::cue::video::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "acue"
+long_name = "Delay filtering until a wallclock timestamp"
+ctor = "vaco_filter_mm::misc::cue::audio::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "realtime"
+long_name = "Slow down filtering to match real time"
+ctor = "vaco_filter_mm::misc::realtime::video::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "arealtime"
+long_name = "Slow down filtering to match real time"
+ctor = "vaco_filter_mm::misc::realtime::audio::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "latency"
+long_name = "Report previous filter latency"
+ctor = "vaco_filter_mm::misc::latency::video::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "alatency"
+long_name = "Report previous filter latency"
+ctor = "vaco_filter_mm::misc::latency::audio::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "bench"
+long_name = "Benchmark part of a filtergraph"
+ctor = "vaco_filter_mm::misc::bench::video::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "abench"
+long_name = "Benchmark part of a filtergraph"
+ctor = "vaco_filter_mm::misc::bench::audio::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "perms"
+long_name = "Set permissions for the output frames"
+ctor = "vaco_filter_mm::misc::perms::video::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "aperms"
+long_name = "Set permissions for the output frames"
+ctor = "vaco_filter_mm::misc::perms::audio::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "sidedata"
+long_name = "Delete frame side data, or select frames based on it"
+ctor = "vaco_filter_mm::misc::sidedata::video::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "asidedata"
+long_name = "Delete frame side data, or select frames based on it"
+ctor = "vaco_filter_mm::misc::sidedata::audio::DESC"
+media = "audio"
