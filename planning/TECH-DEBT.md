@@ -3048,3 +3048,132 @@ contains. That distinction is worth making explicitly, because "MPEG-4 part 2
 code already landed" is otherwise an easy and wrong thing to conclude from the
 gate output.
 
+
+## H.264 CABAC `residual_block_cabac`: exhaustive primary-text verification, no bug found (#418)
+
+One bounded round on the leading suspect identified in the previous
+handoff: `crates/codec/vaco-codec-h264/src/cabac_residual.rs`'s
+`residual_block_cabac` and `decode_coeff_abs_level_minus1`, never before
+driven by real encoder output. No code changed — this is the negative
+result the bounded-rounds rule asks for when the round doesn't fall.
+
+**What was checked and confirmed correct, line by line against the
+primary source (`iso-iec-14496-10-2002-draft`, this crate's own cited
+edition):**
+
+- Every `(m, n)` context-initialisation value in `cabac_residual.rs`'s
+  `SIG_*`/`LAST_*`/`ABS_BIN0_*`/`ABS_BINN_*` tables — Tables 9-19
+  (`significant_coeff_flag`, ctxIdx 105-165), 9-20
+  (`last_significant_coeff_flag`, ctxIdx 166-226), and 9-21
+  (`coeff_abs_level_minus1`, ctxIdx 227-275) — cross-checked cell by cell
+  across all 5 `ContextCategory` values and all 4 columns (I/SI,
+  `cabac_init_idc` 0/1/2). Roughly 200 individual `(m, n)` pairs, every
+  one matched. This is the class of transcription error the coordinator
+  specifically flagged (the MPEG-2 sibling agent's single-bit-width slip
+  that prefix-freedom testing couldn't catch) — none found here.
+- The `ctxIdxInc` formulas in clause 9.3.3.1.3: `significant_coeff_flag`/
+  `last_significant_coeff_flag` (`ctxIdxInc = scanningPos`, matches the
+  loop index directly) and `coeff_abs_level_minus1` (bin0: `(numDecodAbsLevelGt1
+  != 0) ? 0 : Min(4, 1+numDecodAbsLevelEq1)`; binIdx>=1: `5 + Min(4,
+  numDecodAbsLevelGt1)`) — `decode_coeff_abs_level_minus1`'s
+  `idx = if *num_gt1 != 0 { 0 } else { (1 + *num_eq1).min(4) }` (bin0) and
+  `idx = (*num_gt1).min(4)` (binIdx>=1, into a separate context array
+  rather than a `+5` offset) match exactly.
+- **A genuine internal inconsistency in the primary source itself**,
+  found and resolved by cross-referencing two of its own parts: Table
+  9-30's `ctxIdxBlockCatOffset` values for `coeff_abs_level_minus1`
+  (0, 10, 20, 30, 39) require chroma DC (`ctxBlockCat` 3) to have only 9
+  contexts total (5 for bin0 + 4 for binIdx>=1), but the plain-text
+  formula for binIdx>=1 printed in this same draft edition
+  (`ctxIdxInc = 5 + Min(4, numDecodAbsLevelGt1)`) states no `ctxBlockCat`-
+  specific exception at all. The code's existing `ABS_BINN_CHROMA_DC`
+  (4 contexts, not 5) matches the *table's* implied count, and the
+  individual `(m, n)` values for ctxIdx 262-265 (chroma DC's own binIdx>=1
+  contexts) confirm this is the right reading — worked out from the table
+  offsets originally, now additionally confirmed by direct value
+  transcription this round. Recorded here so the next reader does not
+  re-discover this and second-guess already-correct code: the printed
+  formula in this specific draft is incomplete, the table's offsets are
+  the tie-breaker, and the code follows the table.
+- The running-count scope the coordinator flagged as an easy place to get
+  wrong: `num_eq1`/`num_gt1` are declared fresh inside
+  `residual_block_cabac`, called once per residual block, so they reset
+  per-block as clause 9.3.3.1.3 requires ("Both numbers are related to
+  the same transform coefficient block") — not per-macroblock, not
+  per-slice. Confirmed correctly scoped.
+- Field-coded context tables (Table 9-22/9-23, ctxIdx 277-337/338-398) are
+  a different, unused path: this crate's `check_scope` refuses
+  `mb_adaptive_frame_field`/field pictures outright (`Error::Unsupported`,
+  shared between CAVLC and CABAC), so only the frame tables (9-19/9-20,
+  already verified above) are ever reachable. Confirmed by reading
+  `check_scope` directly rather than assuming from the MBAFF-out-of-scope
+  framing already documented.
+- `pps.transform_8x8_mode` (the High-profile `transform_size_8x8_flag`
+  path, which would otherwise require an extra context-coded bit per
+  applicable macroblock this crate's decode does not read) is also
+  refused outright by `check_scope` before any macroblock is decoded — if
+  a corpus's PPS had it set, `decode_slice_cabac` would return
+  `Error::Unsupported` immediately rather than reach the "malformed at
+  the end" symptom. Since the failing tests reach that symptom rather
+  than an early refusal, this PPS flag is confirmed off in all three
+  corpora and this is not the missing bit.
+- `coeff_sign_flag`'s binarisation (`decode_bypass()`, one bypass bin,
+  clause 9.3.2.3's `FL(cMax=1)`) matches the code exactly.
+- The luma 4x4 block iteration order (`blk = i8x8 * 4 + i4x4`, fed to the
+  same `blk_xy` the CAVLC side already uses and which CAVLC's own
+  bit-exactness measurement already depends on) was re-examined and is
+  unchanged from the already-verified CAVLC path — not a new candidate.
+
+**What was attempted and not completed**: per-block instrumentation of
+every `residual_block_cabac` call site in `mb.rs`
+(`decode_residual_cabac`'s luma DC/4x4/AC and chroma DC/AC call sites,
+gated behind `VACO_H264_RTRACE`) was built and run against
+`cabac_i_only.264`'s slice 0 (the shortest, most isolated repro — 16
+macroblocks, all `Intra4x4`). The decoded positions/levels for every
+block in that slice were inspected by eye for implausible values (out-of-
+range positions, anomalous magnitude runs) and none stood out — but this
+is a weak check without an independent per-coefficient reference to
+diff against, and `ffmpeg -debug dct_coeff` does not appear to emit
+comparable output in this ffmpeg build (checked: produces no per-
+coefficient lines, only the standard NAL/frame log lines already used for
+the `-debug mb_type` cross-check in the previous round). The debug
+instrumentation was not committed — it lives only in this round's now-
+removed worktree; `git diff HEAD~1 HEAD` for this dispatch is empty.
+
+**Handoff, in order of cost:**
+
+1. Build a real per-coefficient reference. Options not yet tried: a JM
+   reference-software build (if available in this environment) with its
+   own trace-dump mode; or a purpose-built, narrowly-scoped Python
+   re-implementation of just the CABAC arithmetic engine plus
+   `residual_block_cabac` (reusing the now-fully-verified `(m, n)` tables
+   above, so the only remaining risk is the engine and binarisation
+   logic, not the tables) — smaller and more tractable than the
+   full-macroblock-layer Python oracle that did not get built for CAVLC's
+   sibling effort, since the search is now confined to one function.
+2. With a real reference, diff `cabac_i_only.264` slice 0 block by block
+   using the `VACO_H264_RTRACE` instrumentation's positions/levels
+   output (easy to re-add; not committed, described above) — first
+   mismatched block is the locate.
+3. Not yet checked directly: `decode_bypass_egk`'s exact suffix bit count
+   for the rare large-level case (`U_COFF = 14`, `k = 0`) against clause
+   9.3.2.3's `UEGk` definition side by side with
+   `CabacDecoder::decode_bypass_egk`'s own implementation — this
+   function's own doc already explains why it isn't used for the prefix,
+   but the *suffix* delegates to it and that delegation's exact
+   boundary (does `decode_coeff_abs_level_minus1` correctly treat
+   `prefix >= U_COFF` as "prefix saturated, read Exp-Golomb suffix
+   starting at k=0" per spec, with no off-by-one in what count of ones
+   constitutes "reached U_COFF") was not independently re-verified this
+   round and is worth a fresh look given how much else has been ruled
+   out.
+4. If (1)-(3) still do not locate it, consider whether `positions`/
+   `levels`' final assembly order (`levels.reverse()` after a
+   decode loop that does not itself consult `positions` for ordering) is
+   as safe as the manual trace in a previous round's context concluded —
+   re-derive it fresh rather than trusting that trace, since it was done
+   under similar time pressure.
+
+Gates: no code changed, so no new gate results to report; `cargo clippy`/
+`cargo test -p vaco-codec-h264`/`h264_entropy` fuzz target all remain in
+the state the previous entry left them. #418 stays open.
