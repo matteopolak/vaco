@@ -897,3 +897,70 @@ and the decoded frame's sample count — today that is neither this crate
 (which only sees one packet/frame at a time, with no stream-level state for
 "how many total samples has this stream produced so far") nor `vaco-cli`
 (issue #652 — no decoder is reachable from the CLI at all yet).
+
+### `vaco-scale` cannot produce the sub-byte-packed formats two image encoders require
+
+Closing #655's pixel-format-conversion gap (`Encoder::accepted_pix_fmts` plus
+a `vaco-sched` converter node between decode and encode, wired through
+`vaco-scale::Scaler`) covers every byte-addressable format in `vaco-scale`'s
+table, which is most of the fifteen image codecs — but `vaco-codec-pnm`'s pbm
+encoder and `vaco-codec-image-simple`'s xbm encoder both declare
+`&[PixFmt::MonoWhite]` as their only accepted format, and `MonoWhite` is
+1-bit-per-pixel, sub-byte-packed. `vaco-scale`'s own docs list sub-byte-packed
+formats as "refused rather than approximated", and the converter node
+observes exactly that: `vaco -i in.pgm -c:v xbm -f image2 out.xbm` reaches the
+converter and fails with `unsupported: sub-byte packed pixel format` where
+the reference succeeds (it dithers to 1-bit). Reaching bit-exactness for
+these two encoders needs a real 1-bit dither in the conversion path, which
+`vaco-scale`'s own scope statement rules out — either that crate grows this
+one format, or the two encoders need a purpose-built pre-pass instead of
+relying on the generic converter.
+
+### `vaco-scale` RGB-to-Gray8 has a one-off rounding deviation, ~1% of pixels
+
+Measured converting a 32x32 `testsrc` through the new decode-to-encode
+converter to two different Gray8-only encoders (`vaco-codec-pnm`'s pgm from
+both an `rgb24` and a `bgr24` source): 10 of 1024 pixels differ from the
+reference by exactly 1 (out of 255), the rest are bit-exact. Max absolute
+deviation 1, RMS 0.099. Looks like a luma-coefficient rounding-direction
+difference (round-half-up vs round-half-to-even, or an off-by-one in
+`vaco-scale::colour`'s fixed-point scale) rather than a wrong matrix — every
+other measured conversion through the same converter (`bgr24`/`gray8` to
+`rgb24`/`rgba` for the qoi encoder, four source/target combinations) was
+byte-identical. Not chased further here since it is `vaco-scale`'s own
+colour path, not the wiring this session added.
+
+### Three image encoders have pre-existing header/output bugs, found while verifying the new converter
+
+Unrelated to the decode-to-encode conversion stage (each pair's pixel data
+converts correctly; the divergence is in the encoder's own output), found
+while building the `bmp`/`ppm`/`pgm`-to-various-encoders verification table
+against `ffmpeg` 8.1:
+
+- `vaco-codec-image-simple`'s pcx encoder: exactly one byte differs from the
+  reference (offset 13 in a 1327-byte file), 0x01 vs 0x00 — a header field,
+  not pixel data.
+- `vaco-codec-image-simple`'s targa encoder: output diverges from byte 3
+  (the image-type field) onward.
+- `vaco-codec-image-simple`'s xwd encoder and `vaco-codec-pnm`'s (n/a) —
+  correction, this one is xwd only: our output is 10 bytes shorter than the
+  reference's (3173 vs 3183) and `cmp` hits EOF on ours first.
+- `vaco-codec-image-simple`'s sgi encoder: our output is roughly 40% the
+  reference's size (1536 vs 2513 bytes) and `cmp` hits EOF on ours first —
+  looks like a missing RLE fallback-to-raw case or a truncated scanline
+  table, not investigated further.
+
+None of these touch pixel-format conversion; they are encoder-internal and
+belong with whoever owns `vaco-codec-image-simple` next.
+
+### `vaco-demux-image2` has no pipe-splitter entry for TGA at all
+
+Separate from the "registered but mapped to no `CodecId`" gap #655 reported
+(fixed this session for the eleven formats that already had a `pipe!` row):
+TGA has no row in `crates/format/vaco-demux-image2/src/pipe/mod.rs` in the
+first place, so `.tga`/`.targa` cannot be opened as an `image2` input at all,
+by extension or by content — there is no demuxer to reach. The reference
+registers a `tga_pipe` demuxer (`ffmpeg -demuxers` lists it); TGA has no
+fixed magic number, so its `pipe!` entry would need `magics = &[]` and rely
+on the extension, the same shape already used for `photocd`/`pictor`/`gem`/
+`svg`/`vbn`/`qdraw`/`pgmyuv` in that file.
