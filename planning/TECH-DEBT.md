@@ -73,3 +73,47 @@ a 1700-line `mux.rs` is where the `add_stream` interface gap hid.
 
 **Not scheduled.** Listed so that the next agent working in one of these has
 the number in front of it and can say whether the seam is real.
+
+### `vaco-protocol-*`'s repeated duplex-dial preamble and per-crate `NATIVE_ONLY` paragraph
+
+Landed six protocol crates this session (`crypto`, `httpproxy`, `ftp`,
+`gopher`/`gophers`, `icecast`, `ipfs`/`ipns`) under `crates/io/`. Five of them
+(`httpproxy`, `ftp`, `gopher`, `gophers`, `icecast`) need to write-then-read
+(or otherwise treat a connection as duplex) before they have anything to hand
+back through `vaco_protocol_core::Protocol`'s one-direction-only
+`open`/`create`, so each independently reproduces the same three things
+`vaco-protocol-tls/src/connect.rs` established first:
+
+- a `dial_tcp(hp, env) -> Result<TcpStream>` that is just
+  `env.check_scheme("tcp")?; vaco_protocol_socket::addr::connect(hp, None)`,
+  byte-for-byte identical across `httpproxy`, `ftp`, `gopher`, and `icecast`;
+- a `dial_tls(hp, env) -> Result<TlsStream>` that is just
+  `env.check_scheme("tls")?` then `vaco_protocol_tls::connect::{connect_tcp,
+  handshake}` with a default `TlsOptions`, identical between `gophers` and
+  `icecast`;
+- a byte-at-a-time `read_header_block`/response-status reader (to avoid a
+  `BufReader` stranding tunnel/body bytes past the header block on the same
+  socket that gets handed back) — `vaco-protocol-httpproxy::connect` and
+  `vaco-protocol-icecast::protocol` each carry their own copy, differing only
+  in the error type's scheme name.
+
+None of this shows up in `cargo xtask dup-check`, because dup-check tracks
+type names, not function bodies, and every copy uses a locally appropriate
+name. It also means every one of these five crates carries its own paragraph
+in `xtask/src/wasm.rs`'s `NATIVE_ONLY` list, each explaining the same
+underlying wall (this dial pattern pulls in `vaco-protocol-socket`, and for
+`gophers`/`icecast` also `vaco-protocol-tls`) in slightly different words —
+five paragraphs that will all need editing together if the measured reason
+ever changes.
+
+**Proposed seam:** a small `vaco-protocol-dial` crate (layer 2, depending on
+`vaco-protocol-socket`/`-tls`) exporting `dial_tcp`, `dial_tls`, and
+`read_header_block` once. Each of the five crates above would shrink by
+20-40 lines and lose its own copy of the wasm wall; `xtask/src/wasm.rs`
+would carry one `NATIVE_ONLY` entry for `vaco-protocol-dial` instead of five
+that have to be kept in sync by hand. **Not fixed here**: it touches
+`vaco-protocol-tls` (predates this session, established the pattern first)
+and would require re-running the full gate suite against all five
+dependents, which is real scope beyond landing issues #546/#550 — flagging
+for whoever picks up the next protocol crate that would otherwise become a
+sixth copy.
