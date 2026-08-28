@@ -88,6 +88,22 @@ pub enum PropertyId {
     ComponentDepth,
     HorizontalSubsampling,
     VerticalSubsampling,
+    // MultipleDescriptor (SMPTE ST 377-1 §8.3): the array of sub-descriptor
+    // InstanceUIDs this crate now expands per-track (see
+    // `metadata::resolve_essence`), and the sound-essence-specific
+    // properties `descriptor::sound_parameters` reads (AES3PCMDescriptor /
+    // GenericSoundEssenceDescriptor share these).
+    SubDescriptorUIDs,
+    AudioChannelCount,
+    AudioQuantizationBits,
+    AudioBlockAlign,
+    /// The essence's own sample rate — **not** the generic `SampleRate`
+    /// property, which on a sound descriptor states the *edit rate*
+    /// (measured: `25/1` on a real D-10 file, `48000/1` on a real `OP1a`
+    /// file — the two happened to read the same on the first fixture
+    /// tried, which is what made this property look unnecessary until a
+    /// second fixture disagreed). See `descriptor::sound_parameters`.
+    AudioSampleRate,
     // Index Table Segment (SMPTE ST 377-1 §10)
     IndexEditRate,
     IndexStartPosition,
@@ -417,6 +433,56 @@ pub(crate) const TABLE: &[(PropertyId, Ul)] = &[
         PropertyId::VerticalSubsampling,
         Ul::new([
             0x06, 0x0e, 0x2b, 0x34, 0x01, 0x01, 0x01, 0x02, 0x04, 0x01, 0x05, 0x01, 0x10, 0x00,
+            0x00, 0x00,
+        ]),
+    ),
+    (
+        // MultipleDescriptor's array of sub-descriptor InstanceUIDs.
+        // Measured off a real `ffmpeg -f mxf` file with one video and one
+        // audio track: `Count(4)=2, ItemLength(4)=16` then two 16-byte
+        // UIDs, one per essence track's own descriptor.
+        PropertyId::SubDescriptorUIDs,
+        Ul::new([
+            0x06, 0x0e, 0x2b, 0x34, 0x01, 0x01, 0x01, 0x04, 0x06, 0x01, 0x01, 0x04, 0x06, 0x0b,
+            0x00, 0x00,
+        ]),
+    ),
+    (
+        // AES3PCMDescriptor / GenericSoundEssenceDescriptor's channel
+        // count. Measured: `2` on a real stereo PCM track.
+        PropertyId::AudioChannelCount,
+        Ul::new([
+            0x06, 0x0e, 0x2b, 0x34, 0x01, 0x01, 0x01, 0x05, 0x04, 0x02, 0x01, 0x01, 0x04, 0x00,
+            0x00, 0x00,
+        ]),
+    ),
+    (
+        // Bits per audio sample. Measured: `16` on a real `pcm_s16le`
+        // track.
+        PropertyId::AudioQuantizationBits,
+        Ul::new([
+            0x06, 0x0e, 0x2b, 0x34, 0x01, 0x01, 0x01, 0x04, 0x04, 0x02, 0x03, 0x03, 0x04, 0x00,
+            0x00, 0x00,
+        ]),
+    ),
+    (
+        // Bytes per audio frame (all channels). Measured: `4` on a real
+        // stereo 16-bit track (2 channels x 2 bytes), a `u16` field unlike
+        // every other property this crate reads as `u32`.
+        PropertyId::AudioBlockAlign,
+        Ul::new([
+            0x06, 0x0e, 0x2b, 0x34, 0x01, 0x01, 0x01, 0x05, 0x04, 0x02, 0x03, 0x02, 0x01, 0x00,
+            0x00, 0x00,
+        ]),
+    ),
+    (
+        // The essence's own sample rate. Measured `48000/1` on both a real
+        // OP1a and a real D-10 audio descriptor, present alongside the
+        // generic `SampleRate` property, which on the D-10 file instead
+        // read `25/1` (the edit rate) — see the `PropertyId` doc comment.
+        PropertyId::AudioSampleRate,
+        Ul::new([
+            0x06, 0x0e, 0x2b, 0x34, 0x01, 0x01, 0x01, 0x05, 0x04, 0x02, 0x03, 0x01, 0x01, 0x01,
             0x00, 0x00,
         ]),
     ),

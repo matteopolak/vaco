@@ -320,29 +320,45 @@ fn build_streams(
         let Some(desc) = graph.get(descriptor_id) else {
             continue;
         };
-        // MultipleDescriptor (several essence tracks behind one package): a
-        // real, documented MXF shape this crate does not expand into
-        // per-track descriptors yet (see this crate's closing report). The
-        // stream is skipped rather than built with the wrong parameters.
+        // A MultipleDescriptor that `metadata::resolve_essence`'s
+        // per-track expansion could not resolve (no `SubDescriptorUIDs`
+        // match for this track, or a hostile file's array pointing nowhere
+        // useful): still a `Descriptor(0x44)` here, still carrying none of
+        // a real essence descriptor's properties. Skipped rather than
+        // built with no parameters at all.
         if matches!(desc.class, crate::ul::StructuralClass::Descriptor(0x44)) {
             continue;
         }
-        // Only a picture descriptor is mapped to `CodecParameters` today
-        // (see this crate's closing report): a sound or data descriptor is
-        // recognised by class but has none of a picture descriptor's
-        // properties, and is skipped rather than reported with guessed
-        // parameters.
-        if desc
+        let is_picture = desc
             .get_u32(crate::properties::PropertyId::StoredWidth)
-            .is_none()
-            && desc
+            .is_some()
+            || desc
                 .get_ul(crate::properties::PropertyId::PictureEssenceCoding)
-                .is_none()
-        {
+                .is_some();
+        // A sound descriptor is recognised by carrying the properties only
+        // sound descriptors have (`descriptor::sound_parameters`'s module
+        // docs) — checked instead of by class byte, since both
+        // `AES3PCMDescriptor` and `GenericSoundEssenceDescriptor` fold into
+        // the same `StructuralClass::Descriptor` arm as every picture
+        // descriptor kind (see `ul.rs`).
+        let is_sound = !is_picture
+            && (desc
+                .get_u32(crate::properties::PropertyId::AudioChannelCount)
+                .is_some()
+                || desc
+                    .get_u32(crate::properties::PropertyId::AudioQuantizationBits)
+                    .is_some());
+        let (params, media_type) = if is_picture {
+            (descriptor::picture_parameters(desc), MediaType::Video)
+        } else if is_sound {
+            (descriptor::sound_parameters(desc), MediaType::Audio)
+        } else {
+            // A data descriptor, or a picture/sound descriptor kind this
+            // crate has not measured and so cannot tell apart from
+            // "nothing recognised" — skipped rather than reported with
+            // guessed parameters (D6/D17).
             continue;
-        }
-        let params = descriptor::picture_parameters(desc);
-        let media_type = MediaType::Video;
+        };
         let edit_rate = track.edit_rate.unwrap_or(Rational { num: 25, den: 1 });
         let time_base = Rational {
             num: edit_rate.den,
@@ -351,8 +367,10 @@ fn build_streams(
         let index = streams.len() as u32;
         let mut stream = Stream::new(index, media_type, time_base);
         stream.params = params;
-        stream.r_frame_rate = edit_rate;
-        stream.avg_frame_rate = edit_rate;
+        if media_type == MediaType::Video {
+            stream.r_frame_rate = edit_rate;
+            stream.avg_frame_rate = edit_rate;
+        }
         if let Some(id) = track.track_id {
             stream.id = Some(i64::from(id));
         }
@@ -732,6 +750,101 @@ mod tests {
     }
 
     #[test]
+    fn op1a_video_audio_fixture_reports_both_streams_with_measured_sound_parameters() {
+        let demux = open_fixture(include_bytes!("../tests/fixtures/op1a_mpeg2_pcm_sample.mxf"));
+        // A two-essence-track package: before `metadata::resolve_track_descriptor`
+        // expanded the package's `MultipleDescriptor` via `SubDescriptorUIDs`,
+        // every track resolved to the same descriptor id (one with none of
+        // the properties either stream needs), and this file produced zero
+        // streams at all.
+        assert_eq!(demux.streams().len(), 2);
+        let video = &demux.streams()[0];
+        assert_eq!(video.media_type(), Some(MediaType::Video));
+        assert_eq!(
+            video.params.codec_id,
+            Some(vaco_codec_core::CodecId::Mpeg2video)
+        );
+        let audio = &demux.streams()[1];
+        assert_eq!(audio.media_type(), Some(MediaType::Audio));
+        // Measured against `ffprobe`: `AES3PCMDescriptor` (class `0x47`)
+        // carries raw, tightly-interleaved `pcm_s16le` verbatim, so this
+        // class is the one this crate claims a `CodecId` for.
+        assert_eq!(
+            audio.params.codec_id,
+            Some(vaco_codec_core::CodecId::PcmS16le)
+        );
+        let a = audio.params.audio.as_ref().unwrap();
+        assert_eq!(a.sample_rate, 48_000);
+        assert_eq!(a.layout.as_ref().unwrap().channels, 2);
+        assert_eq!(a.format, Some(vaco_sampfmt::SampleFmt::S16));
+    }
+
+    #[test]
+    fn op1a_video_audio_fixture_demuxes_interleaved_packets_matching_measured_positions_and_sizes() {
+        let mut demux = open_fixture(include_bytes!("../tests/fixtures/op1a_mpeg2_pcm_sample.mxf"));
+        // Measured with `ffprobe -show_packets`: video and audio essence
+        // elements alternate, and the audio packet's own `len` (`7680`)
+        // matches `ffprobe`'s reported size exactly -- unlike the D-10 AES3
+        // case below, this descriptor class's bytes are already the real
+        // interleaved PCM `ffprobe` reports, with nothing to unpack.
+        let expected = [
+            (0u32, 7168u64, 8063usize),
+            (1, 15360, 7680),
+            (0, 24064, 4598),
+            (1, 29184, 7680),
+            (0, 37888, 1106),
+            (1, 39424, 7680),
+        ];
+        for (stream_index, pos, size) in expected {
+            let pkt = demux.read_packet().unwrap();
+            assert_eq!(pkt.stream_index, stream_index);
+            assert_eq!(pkt.pos, Some(pos));
+            assert_eq!(pkt.len, size);
+        }
+        assert!(matches!(demux.read_packet(), Err(Error::Eof)));
+    }
+
+    #[test]
+    fn d10_audio_fixture_reports_measured_channels_and_sample_rate_but_no_codec_id() {
+        let demux = open_fixture(include_bytes!("../tests/fixtures/d10_mpeg2_aes3_sample.mxf"));
+        assert_eq!(demux.streams().len(), 2);
+        let audio = &demux.streams()[1];
+        assert_eq!(audio.media_type(), Some(MediaType::Audio));
+        let a = audio.params.audio.as_ref().unwrap();
+        // Descriptor-stated facts are accurate and match `ffprobe` exactly
+        // (this fixture was muxed with `-d10_channelcount 8`, the
+        // SMPTE-386M-compliant channel count).
+        assert_eq!(a.sample_rate, 48_000);
+        assert_eq!(a.layout.as_ref().unwrap().channels, 8);
+        assert_eq!(a.format, Some(vaco_sampfmt::SampleFmt::S16));
+        // But the packet bytes are not literal `pcm_s16le` (see
+        // `descriptor::sound_parameters`'s module docs for the measured
+        // AES3-bundle layout this crate does not unpack) -- claiming a
+        // `CodecId` here would be actively wrong, not just incomplete.
+        assert_eq!(audio.params.codec_id, None);
+    }
+
+    #[test]
+    fn d10_audio_fixture_packet_length_is_the_real_aes3_bundle_not_ffprobes_unpacked_size() {
+        let mut demux = open_fixture(include_bytes!("../tests/fixtures/d10_mpeg2_aes3_sample.mxf"));
+        demux.read_packet().unwrap(); // video, stream 0
+        let audio_pkt = demux.read_packet().unwrap();
+        assert_eq!(audio_pkt.stream_index, 1);
+        assert_eq!(audio_pkt.pos, Some(157_696));
+        // The raw KLV genuinely declares 61444 bytes (confirmed with `xxd`
+        // against the file directly) -- `ffprobe` reports `30720`
+        // (`1920 samples * 8 channels * 2 bytes`) for the same packet, which
+        // is `ffmpeg`'s own AES3-to-PCM unpacking, not the container's
+        // declared essence length. `4 + 1920 * 8 * 4 == 61444`: a 4-byte
+        // element header of undetermined meaning, then 1920 sample instants
+        // of 8 fixed channel slots, each a 4-byte word (1 tag byte + a
+        // 24-bit sample left-shifted 4 bits). This crate reports the real,
+        // unmodified length rather than silently substituting the smaller
+        // unpacked size.
+        assert_eq!(audio_pkt.len, 61_444);
+    }
+
+    #[test]
     fn a_huge_cbe_entry_count_is_capped_not_looped_over_unbounded() {
         // A hostile or merely huge file could drive `effective_index_duration`
         // to a very large value (a real file's size divided by a small
@@ -769,4 +882,3 @@ mod tests {
         assert!(MxfDemuxer::open(src, &NoParsers).is_err());
     }
 }
-

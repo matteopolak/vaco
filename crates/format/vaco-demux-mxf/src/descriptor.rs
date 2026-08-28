@@ -21,12 +21,14 @@
 //! descriptor this table does not recognise (D6/D17: measure, do not
 //! recall). See this crate's closing report for the exact gap.
 
+use vaco_chlayout::ChannelLayout;
 use vaco_codec_core::{CodecId, CodecParameters, FieldOrder};
 use vaco_core::Rational;
+use vaco_sampfmt::SampleFmt;
 
 use crate::metadata::MetadataSet;
 use crate::properties::PropertyId;
-use crate::ul::Ul;
+use crate::ul::{StructuralClass, Ul};
 
 /// `(PictureEssenceCoding UL, CodecId)`. See the module docs: only the first
 /// two rows are measured, both against real files, both `ffprobe`-confirmed
@@ -84,6 +86,121 @@ fn frame_layout_to_field_order(layout: u8) -> FieldOrder {
         0 | 4 => FieldOrder::Progressive,
         _ => FieldOrder::Unknown,
     }
+}
+
+/// Build [`CodecParameters`] for a sound (audio) essence descriptor
+/// (`AES3PCMDescriptor` or `GenericSoundEssenceDescriptor`).
+///
+/// # What is measured
+///
+/// `SampleRate`, `AudioChannelCount` and `AudioQuantizationBits` were
+/// decoded from a real `AES3PCMDescriptor` in an `ffmpeg -f mxf` file
+/// carrying one `pcm_s16le` track alongside video, and confirmed against
+/// what `ffprobe` reports for the same file exactly: `48000 Hz`, `2`
+/// channels, `16` bits, with packet `pos`/`len` matching `ffprobe` exactly
+/// too — this shape's essence bytes are genuinely tightly-interleaved
+/// `pcm_s16le`, verbatim.
+///
+/// The same descriptor properties were confirmed again on a real
+/// `ffmpeg -f mxf_d10` file with audio (class `GenericSoundEssenceDescriptor`,
+/// not `AES3PCMDescriptor` — a second, distinct measured class, see
+/// `ul.rs`), which answered the open question of whether D-10 audio needed
+/// a different path for *metadata*: it does not, the same properties apply.
+/// But the essence *bytes* are a different story — see below.
+///
+/// # The D-10 essence-element layout is not raw PCM
+///
+/// Measured by comparing this crate's raw KLV length against `ffprobe`'s
+/// reported packet size on real `ffmpeg -f mxf_d10` files with audio: they
+/// disagree (`61444` raw vs `30720`/`7680` reported), and the disagreement
+/// is not a bug in either reader. Byte-level inspection (dumping the raw
+/// essence-element value and comparing it word-by-word against `ffmpeg`'s
+/// own extracted PCM, via `ffmpeg -c copy -f data`) found a fixed structure,
+/// identical in a 2-logical-channel and an 8-logical-channel fixture:
+///
+/// - A 4-byte element header of undetermined meaning (not a sample count in
+///   any encoding tried; skipped rather than guessed at).
+/// - Then, per sample instant (`1920` of them at 48 kHz/25 fps), **8** fixed
+///   channel slots regardless of the descriptor's own `AudioChannelCount`
+///   (measured `2` and `8` both physically occupy all 8 slots) — each slot a
+///   4-byte word: 1 tag byte (the slot's 0-based index, constant per slot)
+///   followed by a little-endian 24-bit field holding the 16-bit PCM sample
+///   left-shifted by 4 bits (confirmed exactly, `raw / 16 == pcm16` on every
+///   sample checked). Slots beyond the descriptor's logical channel count
+///   carry a zero sample value but keep their real index tag.
+/// - `4 + 1920 * 8 * 4 == 61444`, matching the raw KLV length exactly in
+///   both fixtures; `ffprobe`'s reported size is the logical channels'
+///   worth of unpacked, tightly-interleaved 16-bit samples only
+///   (`1920 * channels * 2`).
+///
+/// This is a real SMPTE-331-style AES3 physical bundle, not a container
+/// framing fact this crate's `read_packet` can correct by itself: turning
+/// it into playable `pcm_s16le` needs the descriptor's channel count fed
+/// back into per-sample unpacking, which is bitstream-level essence-format
+/// work, not container demuxing (the same D14.1 line this crate already
+/// draws for MPEG-2 timestamp reordering elsewhere). So `read_packet`
+/// reports the real, unmodified essence bytes and length (never a fabricated
+/// smaller size), and `sound_parameters` reports `codec_id: None` for a
+/// `GenericSoundEssenceDescriptor` specifically — `sample_rate`/channel
+/// layout/`format` are still accurate descriptor facts, but the packet
+/// bytes are not literal `pcm_s16le` and claiming otherwise would be
+/// actively wrong, not just incomplete.
+///
+/// # What is not
+///
+/// Only 16-bit quantization maps to a `CodecId`
+/// (`CodecId::PcmS16le`), and only for `AES3PCMDescriptor` (the class
+/// measured to carry raw interleaved PCM) — the only bit depth and shape
+/// this crate has measured against a real file. 8/24/32-bit are plausible
+/// real shapes (and have existing `CodecId` variants for at least 8 and 32)
+/// but guessing the byte order or padding convention MXF's
+/// `AES3PCMDescriptor` uses for them would be exactly the kind of
+/// unverified guess D6/D17 asks this crate to avoid — they report
+/// `codec_id: None` instead, same as an unrecognised `PictureEssenceCoding`.
+#[must_use]
+pub fn sound_parameters(descriptor: &MetadataSet) -> CodecParameters {
+    let mut params = CodecParameters::audio();
+    let Some(audio) = params.audio.as_mut() else {
+        return params;
+    };
+    if let Some(r) = descriptor.get_rational(PropertyId::AudioSampleRate) {
+        // A rational sample rate is always an integer in every real file
+        // this crate has seen (48000/1); `num` alone is what `ffprobe`
+        // reports. `AudioSampleRate`, not the generic `SampleRate` — see
+        // the `PropertyId::AudioSampleRate` doc comment for why the two
+        // are not interchangeable.
+        audio.sample_rate = u32::try_from(r.num.max(0)).unwrap_or(0);
+    }
+    let channels = descriptor.get_u32(PropertyId::AudioChannelCount);
+    if let Some(ch) = channels {
+        audio.layout = ChannelLayout::default_for(ch);
+    }
+    // `AudioQuantizationBits` is the primary source; `AudioBlockAlign`
+    // (bytes per frame, all channels) is a cross-check this crate can
+    // derive the same number from when quantization bits is absent but
+    // block align and channel count are both present — measured to agree
+    // exactly on a real file (`block_align=4, channels=2` implies 16 bits,
+    // matching `AudioQuantizationBits=16` on that same descriptor).
+    #[allow(clippy::integer_division, reason = "channels is checked non-zero immediately above")]
+    let bits = descriptor.get_u32(PropertyId::AudioQuantizationBits).or_else(|| {
+        let block_align = u32::from(descriptor.get_u16(PropertyId::AudioBlockAlign)?);
+        let ch = channels?;
+        (ch > 0).then(|| (block_align / ch) * 8)
+    });
+    if bits == Some(16) {
+        audio.format = Some(SampleFmt::S16);
+        // `AES3PCMDescriptor` (0x47) is the class measured to carry raw,
+        // tightly-interleaved `pcm_s16le` verbatim (see above). A
+        // `GenericSoundEssenceDescriptor` (0x42) — D-10's audio class in
+        // every real fixture this crate has seen — carries the fixed
+        // 8-slot AES3 bundle described above instead: the packet bytes are
+        // not literal `pcm_s16le`, so `codec_id` stays `None` rather than
+        // claiming a shape the bytes do not have.
+        if descriptor.class == StructuralClass::Descriptor(0x47) {
+            params.codec_id = Some(CodecId::PcmS16le);
+        }
+    }
+    params
 }
 
 /// Build [`CodecParameters`] for a picture (video) essence descriptor.
@@ -181,6 +298,9 @@ impl MetadataSet {
     pub(crate) fn get_u32(&self, p: PropertyId) -> Option<u32> {
         crate::localset::u32_be(self.props.get(&p)?)
     }
+    pub(crate) fn get_u16(&self, p: PropertyId) -> Option<u16> {
+        crate::localset::u16_be(self.props.get(&p)?)
+    }
     pub(crate) fn get_u8(&self, p: PropertyId) -> Option<u8> {
         crate::localset::u8_(self.props.get(&p)?)
     }
@@ -196,7 +316,6 @@ impl MetadataSet {
 #[allow(clippy::unwrap_used, reason = "test code")]
 mod tests {
     use super::*;
-    use crate::ul::StructuralClass;
     use std::collections::HashMap;
 
     fn descriptor_with(props: Vec<(PropertyId, Vec<u8>)>) -> MetadataSet {

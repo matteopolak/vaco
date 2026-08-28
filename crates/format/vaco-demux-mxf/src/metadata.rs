@@ -371,11 +371,14 @@ pub fn resolve_essence(
             if let Some(src) = source_package_ref {
                 next_source_umid = Some(src);
             }
+            let track_id = track.u32(PropertyId::TrackId);
+            let package_descriptor = package.uid(PropertyId::PackageDescriptor);
+            let descriptor = resolve_track_descriptor(graph, package_descriptor, track_id, budget);
             resolved.push(ResolvedTrack {
-                track_id: track.u32(PropertyId::TrackId),
+                track_id,
                 track_number: track.u32(PropertyId::TrackNumber),
                 edit_rate: track.rational(PropertyId::TrackEditRate),
-                descriptor: package.uid(PropertyId::PackageDescriptor),
+                descriptor,
                 is_timecode: this_timecode.is_some(),
                 timecode: this_timecode,
             });
@@ -401,6 +404,62 @@ pub fn resolve_essence(
     Err(Error::InvalidData(
         "mxf: source-package chain exceeded the maximum depth",
     ))
+}
+
+/// A Package's own `Descriptor` property names one set — for a
+/// single-essence-track package, that set already has every property this
+/// crate reads. For a multi-essence-track package (real, common shape:
+/// `ffmpeg -f mxf`/`mxf_d10` writing one video and one audio track both
+/// land here), the reference instead points at a `MultipleDescriptor`,
+/// whose own properties are nearly empty — the real per-essence properties
+/// live on its `SubDescriptorUIDs` array, matched back to a track by that
+/// sub-descriptor's own `LinkedTrackId`.
+///
+/// Measured against a real two-track `ffmpeg -f mxf` file: the
+/// `MultipleDescriptor` carries `SubDescriptorUIDs = [video_descriptor_uid,
+/// audio_descriptor_uid]`, and the video sub-descriptor's `LinkedTrackId`
+/// reads the video Track's own `TrackId` exactly — before this expansion,
+/// every track in the package resolved to the *same* `MultipleDescriptor`
+/// id, which carries none of the properties `descriptor::picture_parameters`/
+/// `sound_parameters` need, so a source package with more than one essence
+/// track produced streams with no codec parameters at all.
+///
+/// Returns the package-level descriptor id unchanged when it is not a
+/// `MultipleDescriptor`, when `track_id` is unknown, or when no
+/// sub-descriptor's `LinkedTrackId` matches — the caller ends up with
+/// exactly the pre-expansion behaviour in every case this cannot resolve,
+/// rather than a track silently losing its descriptor entirely.
+fn resolve_track_descriptor(
+    graph: &MetadataGraph,
+    package_descriptor: Option<InstanceUid>,
+    track_id: Option<u32>,
+    budget: &Budget,
+) -> Option<InstanceUid> {
+    let descriptor_id = package_descriptor?;
+    // An id that does not resolve in the graph at all (a hostile file's
+    // dangling reference, or — as this crate's own tests show — simply a
+    // descriptor this crate never needed to look up further) is not this
+    // function's problem to diagnose: fall back to the unchanged id, same
+    // as the "not a MultipleDescriptor" case just below.
+    let Some(descriptor) = graph.get(descriptor_id) else {
+        return Some(descriptor_id);
+    };
+    if descriptor.class != StructuralClass::Descriptor(0x44) {
+        return Some(descriptor_id);
+    }
+    let Some(track_id) = track_id else {
+        return Some(descriptor_id);
+    };
+    let sub_ids = descriptor.instance_array(PropertyId::SubDescriptorUIDs, budget);
+    sub_ids
+        .into_iter()
+        .find(|id| {
+            graph
+                .get(*id)
+                .and_then(|sub| sub.u32(PropertyId::LinkedTrackId))
+                == Some(track_id)
+        })
+        .or(Some(descriptor_id))
 }
 
 fn find_package_by_umid(graph: &MetadataGraph, umid: [u8; 32]) -> Option<InstanceUid> {

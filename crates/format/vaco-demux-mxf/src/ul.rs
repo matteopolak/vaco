@@ -248,11 +248,14 @@ impl Ul {
             // Descriptor subclasses measured in the corpus: 0x24 FileDescriptor,
             // 0x27 GenericPictureEssenceDescriptor, 0x28 CDCIEssenceDescriptor,
             // 0x51 MPEGVideoDescriptor, 0x42 GenericSoundEssenceDescriptor,
-            // 0x48 WaveAudioDescriptor, 0x44 MultipleDescriptor. Only 0x51 was
-            // actually produced by the reference in this crate's corpus; the
-            // rest are spec-derived (ST377-1 Annex, RP210) and unexercised —
-            // see docs/format/vaco-demux-mxf.md.
-            b @ (0x24 | 0x27 | 0x28 | 0x51 | 0x42 | 0x48 | 0x44) => StructuralClass::Descriptor(b),
+            // 0x48 WaveAudioDescriptor, 0x44 MultipleDescriptor, 0x47
+            // AES3PCMDescriptor. 0x51, 0x44 and 0x47 were actually produced
+            // by the reference in this crate's corpus (0x47 is what a real
+            // `ffmpeg -f mxf`/`mxf_d10` PCM audio track's descriptor class
+            // turned out to be, not 0x48 `WaveAudioDescriptor` — measured,
+            // not assumed); 0x42/0x48 remain spec-derived (ST377-1 Annex,
+            // RP210) and unexercised — see docs/format/vaco-demux-mxf.md.
+            b @ (0x24 | 0x27 | 0x28 | 0x51 | 0x42 | 0x47 | 0x48 | 0x44) => StructuralClass::Descriptor(b),
             other => StructuralClass::Unknown(other),
         })
     }
