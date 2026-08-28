@@ -1,0 +1,256 @@
+# Release engineering
+
+## What it is
+
+Everything needed to cut a `vaco`/`vaco-probe` binary release: reproducible
+builds, the SBOM, the third-party attribution file, checksums, and the
+signing/notarization runbook. Closes QA-10 (#182), the last child of epic
+#9.
+
+## How it works
+
+### Attribution (the actual legal obligation)
+
+MIT, BSD, ISC, Apache and FTL all require attribution in a redistributed
+binary. That duty has two independent sources, and missing either one is a
+real compliance gap, not a polish item:
+
+1. **Linked Cargo dependencies** — every crate compiled into `vaco`/
+   `vaco-probe`. Covered by [`cargo-about`](https://github.com/EmbarkStudios/cargo-about),
+   config in `about.toml` (kept in sync with `deny.toml`'s `[licenses]`
+   allow list — see that file's own comments for why `CDLA-Permissive-2.0`
+   is on both).
+2. **Permissively-licensed reference implementations a crate was
+   translated from, but never linked as a dependency.** `libopus` (via RFC
+   6716 Appendix A, BSD-3-Clause) and Apple's ALAC reference (Apache-2.0)
+   are the two live cases today, in `vaco-codec-opus` and `vaco-codec-alac`
+   respectively — see AGENT-CONSTRAINTS.md's "clean-room rule is about
+   FFmpeg, not about every reference implementation" for why reading them
+   was allowed, and `provenance/third-party-notices.toml` for the
+   attribution record itself. `cargo-about` cannot see these; nothing about
+   a `Cargo.lock` scan would ever surface them.
+
+`scripts/gen_third_party_notices.py` builds `THIRD_PARTY_LICENSES.html`
+from both sources and also runs a coverage scan: it greps every
+`provenance/*.toml` for a permissive-licence keyword (`Apache License`,
+`BSD`, `MIT License`, `ISC License`, `zlib license`) and fails
+(`--check`) if the nearest `[[source]]` id isn't cross-referenced from
+`third-party-notices.toml`. This is what catches the next one — dav1d
+(BSD) is the likely next case once AV1 decode reads it as a Tier-A
+reference, and libvpx/HM/JM/libjxl are named as pre-cleared Tier-A sources
+in `planning/research/07-legal-patents-licensing.md` §1.6.1 if any of them
+are ever read the same way.
+
+Run `just licence-report` to regenerate `THIRD_PARTY_LICENSES.html`, or
+`just licence-report-check` (wired into `just ci`) to just run the
+coverage/resolution check without needing the file on disk to be current.
+
+**What this does NOT cover yet**: a `reuse lint`-style per-file SPDX-header
+audit (`planning/research/07-legal-patents-licensing.md` §4.3 names this as
+a fourth, independent CI job). Not built here — flag as a separate task if
+wanted; it is orthogonal to the attribution *file* this issue is about.
+
+### Licence and advisory gates (D3 / D10 Gates 2–3)
+
+`just licence` runs `cargo deny check` (licenses, bans, sources,
+advisories — all four, as of this issue; `advisories` used to be left out
+of both this recipe and the separate, still-unwired `audit` recipe, so
+RUSTSEC vulnerabilities were never actually gated). Running it for the
+first time found real, previously-unnoticed gaps in every category — see
+`deny.toml`'s own comments for what was found, what was fixed, and what is
+recorded as an assessed, intentional `ignore` versus what is genuinely
+blocked pending a cross-crate fix that is out of this issue's scope (two
+spawned follow-up tasks: a `publish = false` sweep across every crate
+manifest, and a `quick-xml` 0.41 bump blocked on three renamed call sites).
+
+The headline finding: `rustls-rustcrypto` (our only D10/D14.2-compliant TLS
+crypto provider — `ring`/`aws-lc-rs` are banned for compiling C/assembly)
+has had no release since 2024-04-24 and now carries five unpatched RUSTSEC
+advisories in its own pinned dependencies. Each was individually checked
+for reachability against `vaco-protocol-tls`'s actual code before being
+recorded as accepted residual risk; none is a rubber-stamped ignore. This
+is a real "trusted and maintained" gap under D10 and worth the owner's
+attention independent of this issue — a crypto-provider swap or a vendored
+fork are the two ways out, and neither is this agent's call to make.
+
+### SBOM
+
+`just sbom` writes SPDX 2.3 and CycloneDX 1.5 JSON for both `vaco-cli` and
+`vaco-probe` to `dist/sbom/`, via
+[`cargo-sbom`](https://github.com/psastras/rsdoctor-cargo-sbom) (`cargo
+install cargo-sbom --locked`). Chosen over `cargo-cyclonedx` — measured,
+not assumed: `cargo-cyclonedx` writes a `<crate>.cdx.json` file directly
+into *every* crate directory it touches (tested against this workspace: it
+scattered six files across `xtask/`, `crates/app/vaco-cli/`,
+`crates/app/vaco-probe/` and three `crates/tool/` crates in one run), which
+is unusable in a shared tree where those directories belong to other
+agents. `cargo-sbom` reads `cargo metadata` and writes to stdout only.
+Trade-off worth knowing: `cargo-sbom`'s last release was 2025-06-17, over a
+year stale against `cargo-about`/`cargo-deny`/`cargo-cyclonedx`'s more
+recent releases — acceptable for a tool this narrow in scope (it does not
+compile anything, does not touch `Cargo.lock`, and both output formats were
+verified against the real dependency graph while building this), but worth
+re-checking if it ever stops working against a newer `cargo metadata`
+schema.
+
+### Reproducible builds
+
+`just verify-reproducible [packages...]` (default: `vaco-cli vaco-probe`)
+builds the release binaries twice, from two separate `--target-dir`s so
+neither build can reuse the other's objects, and compares them
+byte-for-byte. Measured on this machine (macOS/aarch64, 2026-08-28,
+`profile.release`'s `lto = "fat"`, `codegen-units = 1`): **both binaries
+reproduced bit-for-bit identical**, including the Mach-O `LC_UUID` load
+command, which is the most common source of a spurious mismatch on macOS
+(most linkers regenerate it per link; this toolchain evidently derives it
+deterministically from content). This has not yet been run on Linux
+(ELF build-id) or Windows — the script's diagnostic pass covers both, but
+neither has been measured.
+
+**This check has not yet caught a real difference**, which per
+AGENT-CONSTRAINTS.md's own reasoning about `vaco-checkasm` means it is not
+yet *known* to work, only observed to pass once. If it is ever run against
+two different machines, two different absolute checkout paths, or two
+different Rust patch versions, expect it to find something — the source
+paths embedded via `panic`/`#[track_caller]`/`file!()` call sites are
+identical here only because both builds share one checkout at one path.
+`SOURCE_DATE_EPOCH` is set and passed through but nothing in this tree
+currently reads it (no `build.rs` exists at all, checked directly); it is
+there for the day a dependency does.
+
+### Signing and notarization — infrastructure only
+
+**This agent does not have, and must never request, the credentials this
+needs.** What follows is the pipeline and runbook the owner runs; nothing
+here executes a signing or notarization step.
+
+#### macOS: Developer ID signing + notarization
+
+What the owner supplies, and where:
+
+| Secret | How it reaches the build | Notes |
+|---|---|---|
+| Developer ID Application certificate (`.p12`) | CI secret, base64-encoded, imported into a temporary keychain at build time | From an active Apple Developer Program membership |
+| Certificate import password | CI secret | Only needed transiently to unlock the `.p12` |
+| Apple ID or App Store Connect API key (`.p8`) + Key ID + Issuer ID | CI secrets | For `notarytool`; an API key is preferred over an Apple ID + app-specific password (no 2FA prompt in CI) |
+| Developer Team ID | CI secret or plain config (not sensitive) | Needed to select the right identity out of the keychain |
+
+Pipeline (run manually or wire into CI once the secrets above are
+configured as repository/environment secrets — nothing here assumes a
+specific CI provider):
+
+```sh
+# 1. Import the certificate into a throwaway keychain (never the login keychain).
+security create-keychain -p "$TEMP_KEYCHAIN_PASSWORD" build.keychain
+security import "$CERT_P12_PATH" -k build.keychain -P "$CERT_P12_PASSWORD" -T /usr/bin/codesign
+security set-key-partition-list -S apple-tool:,apple: -s -k "$TEMP_KEYCHAIN_PASSWORD" build.keychain
+security list-keychains -d user -s build.keychain
+
+# 2. Sign the binary. --options runtime enables the Hardened Runtime,
+#    required for notarization.
+codesign --force --options runtime --timestamp \
+    --sign "Developer ID Application: <Owner Name> ($TEAM_ID)" \
+    dist/<version>/<triple>/vaco
+codesign --verify --verbose dist/<version>/<triple>/vaco
+
+# 3. Notarize. Requires the binary inside a zip/dmg for submission.
+ditto -c -k --keepParent dist/<version>/<triple>/vaco vaco.zip
+xcrun notarytool submit vaco.zip \
+    --key "$APP_STORE_CONNECT_API_KEY_PATH" \
+    --key-id "$APP_STORE_CONNECT_KEY_ID" \
+    --issuer "$APP_STORE_CONNECT_ISSUER_ID" \
+    --wait
+
+# 4. Staple (lets Gatekeeper verify offline). Only applies to bundles/dmgs,
+#    not a bare executable -- if shipping a raw binary rather than a .app
+#    or .dmg, notarization still applies via `notarytool`'s ticket, but
+#    `stapler` has nothing to attach it to; distribute the notarization
+#    receipt alongside instead, or wrap the binary in a signed .dmg first.
+xcrun stapler staple vaco.dmg   # only if distributing a .dmg
+```
+
+Cleanup: `security delete-keychain build.keychain` at the end of the job
+regardless of success or failure.
+
+#### Windows: Authenticode signing
+
+| Secret | How it reaches the build | Notes |
+|---|---|---|
+| Code-signing certificate (`.pfx`) | CI secret, base64-encoded | EV certificate strongly preferred — avoids SmartScreen reputation delay for a new publisher |
+| Certificate password | CI secret | |
+| Timestamp server URL | Plain config, not sensitive | e.g. `http://timestamp.digicert.com`; a timestamp keeps the signature valid after the cert expires |
+
+```sh
+signtool sign /f cert.pfx /p "$CERT_PASSWORD" /fd sha256 /tr "$TIMESTAMP_URL" /td sha256 dist\<version>\<triple>\vaco.exe
+signtool verify /pa dist\<version>\<triple>\vaco.exe
+```
+
+#### Linux: detached signature
+
+No OS-level gatekeeper equivalent; the norm is a detached GPG signature
+plus the checksum file `scripts/package-release.sh` already writes.
+
+| Secret | How it reaches the build | Notes |
+|---|---|---|
+| GPG private signing key | CI secret (armored, base64-encoded) | A release-signing subkey, not the owner's primary key |
+| Key passphrase | CI secret | |
+
+```sh
+gpg --batch --import release-signing-key.asc
+gpg --batch --yes --local-user "$SIGNING_KEY_ID" --detach-sign --armor \
+    -o dist/<version>/<triple>/SHA256SUMS.asc \
+    dist/<version>/<triple>/SHA256SUMS
+```
+
+#### What to verify before publishing
+
+- `codesign --verify` / `signtool verify` / `gpg --verify` all pass on a
+  clean machine that never had the signing keys.
+- `xcrun notarytool submit ... --wait` reports `Accepted`, not
+  `Invalid`.
+- The reproducible-build check (`just verify-reproducible`) passed on the
+  exact commit being released, and the SBOM/attribution file were
+  generated from that same commit.
+
+## How to change it
+
+- New attribution source (a new Tier-A reference implementation gets
+  read): add a `[[notice]]` to `provenance/third-party-notices.toml`
+  cross-referencing the `provenance/` source id, fetch the actual licence
+  text from upstream (don't recall it from memory — D17), then re-run
+  `just licence-report-check`.
+- New dependency: `deny.toml` and `about.toml` need the same licence on
+  both allow lists if it introduces a licence not already accepted — keep
+  them in sync, the script assumes they are.
+- Changing what gets packaged: `scripts/package-release.sh` is the one
+  place that lists the shipped binaries (`vaco`, `vaco-probe`) and the
+  `dist` build profile.
+- Adding a platform to the signing runbook above: follow the existing
+  table-plus-script-block shape per OS; do not add a step that could
+  execute with a real secret from this repository — this file is a runbook
+  for a human/CI job with its own secret store, not something this agent
+  or any automated agent should run end-to-end itself.
+
+## Configuration
+
+- `about.toml` — cargo-about's accepted-licence list (dependency half).
+- `deny.toml` — `cargo-deny`'s licence allow-list, dependency bans, and
+  advisory ignores (with justification comments for every entry).
+- `provenance/third-party-notices.toml` — Tier-A reference-implementation
+  attribution records (non-dependency half).
+- `.gitignore`'s `/dist` entry — release artifacts are never committed.
+
+## Dependencies
+
+- [`cargo-about`](https://crates.io/crates/cargo-about) (`cargo install cargo-about --locked --features cli`) — build-time only, dependency-licence scan and report generation.
+- [`cargo-deny`](https://crates.io/crates/cargo-deny) (`cargo install cargo-deny --locked`) — build-time only, licence/bans/sources/advisories gate.
+- [`cargo-sbom`](https://crates.io/crates/cargo-sbom) (`cargo install cargo-sbom --locked`) — build-time only, SPDX/CycloneDX SBOM generation.
+- Python 3 (system Python is enough — `scripts/gen_third_party_notices.py`
+  deliberately avoids needing `pip install` anything, matching
+  `scripts/unblock-manifests.py`'s precedent).
+
+None of the above are Cargo workspace dependencies — they never appear in
+`Cargo.lock` or a shipped binary, so D10's "pure Rust, zero FFI" bar applies
+to them only as "a build-time tool is judged less harshly than a linked
+dependency" (AGENT-CONSTRAINTS.md), which is the standard this section
+holds them to.

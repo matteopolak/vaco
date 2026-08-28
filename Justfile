@@ -56,14 +56,21 @@ clippy:
     cargo clippy --workspace --all-targets --locked {{TD}} -- -D warnings
 
 # Every gate CI runs, in the order CI runs them.
-ci: fmt-check clippy check-all test-all licence layer-check dep-gate unsafe-audit \
+ci: fmt-check clippy check-all test-all licence licence-report-check layer-check dep-gate unsafe-audit \
     wasm-check time-gate patent-gate owner-gate dup-check provenance-check docs-check
 
 # ------------------------------------------------------- policy gates (D3/D10)
 
 # D3: licence allowlist + the [bans] that enforce D10 Gate 1 structurally.
+#
+# Includes `advisories` (D10 Gate 3) as of QA-10 (#182): it used to be left
+# out here, and neither this recipe nor the separate `audit` recipe below
+# was wired into `ci`, so RUSTSEC vulnerabilities were never actually gated.
+# Running `cargo deny check` for the first time (2026-08-28) found real,
+# reachable advisories that had been shipping unnoticed; see deny.toml's
+# `[advisories]` comments for what was found and how each was assessed.
 licence:
-    cargo deny check licenses bans sources
+    cargo deny check
 
 # RUSTSEC advisories (D10 Gate 3).
 audit:
@@ -385,6 +392,55 @@ corpus-fetch:
 docs:
     cargo doc --workspace --no-deps {{TD}}
 
-# THIRD_PARTY.md for release artifacts.
+# THIRD_PARTY_LICENSES.html for release artifacts (QA-10, #182): every
+# linked Cargo dependency (cargo-about over about.toml) PLUS every
+# permissively-licensed reference implementation a crate was translated
+# from but never linked as a dependency (provenance/third-party-notices.toml)
+# -- see scripts/gen_third_party_notices.py's own docstring for why both
+# halves are a real legal requirement, not just the first one. Needs
+# `cargo install cargo-about --locked --features cli` once per machine.
 licence-report:
-    cargo about generate about.hbs -o THIRD_PARTY.md
+    python3 scripts/gen_third_party_notices.py
+
+# CI-shaped: fails if a provenance/*.toml source looks like a permissively
+# licensed reference implementation with no corresponding entry in
+# third-party-notices.toml, or if cargo-about itself can't resolve a
+# dependency's licence. Does not require `cargo about` to already be
+# installed to catch the coverage half of that.
+licence-report-check:
+    python3 scripts/gen_third_party_notices.py --check
+
+# ---------------------------------------------------------- release engineering (QA-10, #182)
+
+# SPDX + CycloneDX SBOMs for both shipped binaries, written to dist/sbom/
+# (release artifacts, not committed -- see .gitignore). `cargo-sbom` reads
+# `cargo metadata` directly (no per-crate file scatter, unlike
+# `cargo-cyclonedx`, which writes a *.cdx.json into every crate directory
+# it touches -- unusable in a shared tree where those directories belong to
+# other agents). Needs `cargo install cargo-sbom --locked` once per machine.
+sbom:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p dist/sbom
+    for pkg in vaco-cli vaco-probe; do
+        for fmt in spdx_json_2_3 cyclone_dx_json_1_5; do
+            out="dist/sbom/${pkg}.${fmt}.json"
+            cargo sbom --cargo-package "$pkg" --output-format "$fmt" > "$out"
+            echo "wrote $out"
+        done
+    done
+
+# Builds vaco-cli and vaco-probe release binaries twice, from separate
+# target directories, and diffs them byte-for-byte -- see
+# scripts/verify-reproducible-build.sh's own header for what a mismatch
+# triggers. Point at a smaller package list for a faster check while
+# iterating, e.g. `just verify-reproducible vaco-probe`.
+verify-reproducible *packages:
+    ./scripts/verify-reproducible-build.sh {{packages}}
+
+# One release: binaries, checksums, SBOM, attribution file, all under
+# dist/. Does NOT sign or notarize -- see docs/release-engineering.md for
+# why that is a separate, credential-gated step the owner runs, not this
+# recipe.
+release-package:
+    ./scripts/package-release.sh

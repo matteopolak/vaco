@@ -1,3 +1,7 @@
+# Release artifacts (QA-10, #182): binaries, checksums, SBOM -- rebuilt
+# fresh per release by scripts/package-release.sh, never committed.
+/dist
+
 /target
 /fuzz/target
 /fuzz/corpus

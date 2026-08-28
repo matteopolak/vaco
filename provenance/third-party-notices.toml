@@ -1,0 +1,69 @@
+# Attribution records for permissively-licensed reference implementations
+# that back a Vaco crate under D7's Tier-A rule (see AGENT-CONSTRAINTS.md,
+# "The clean-room rule is about FFmpeg, not about every reference
+# implementation") but are NOT a Cargo dependency, so `cargo-about`'s
+# dependency-graph scan cannot see them. MIT, BSD, ISC, Apache and FTL all
+# require attribution in a redistributed binary; this file is that
+# attribution's source of truth, consumed by
+# `scripts/gen_third_party_notices.py` to build the shipped
+# THIRD_PARTY_LICENSES.html alongside cargo-about's dependency section.
+#
+# `sources` cross-references the `id` of a `[[source]]` entry in
+# provenance/sources.toml or a per-crate provenance/<crate>.toml -- this is
+# what lets the generator's `--check` gap scan tell "already attributed"
+# apart from "a new Tier-A source landed and nobody added a notice for it
+# yet": it greps every provenance/*.toml for a permissive-licence keyword
+# (BSD, Apache License, MIT License, ISC License, zlib license) and flags
+# any hit whose containing file's `[[source]] id` is not listed under some
+# `sources` entry below.
+#
+# Adding a new entry: find the `id` in provenance/sources.toml or the
+# crate's own provenance/<crate>.toml (per the "Tier A" comment near it),
+# fetch the ACTUAL licence text from the actual upstream project (D17:
+# measure, don't recall a licence's wording from memory) and either embed
+# it in `license_text` or add a file under LICENSES/ and point
+# `license_text_file` at it, then re-run
+# `python3 scripts/gen_third_party_notices.py --check`.
+
+[[notice]]
+id        = "opus-rfc6716-reference"
+sources   = ["rfc-6716", "rfc-8251"]
+crates    = ["vaco-codec-opus"]
+name      = "Opus reference implementation (RFC 6716 Appendix A / opus-codec.org)"
+copyright = "Copyright 2001-2023 Xiph.Org, Skype Limited, Octasic, Jean-Marc Valin, Timothy B. Terriberry, CSIRO, Gregory Maxwell, Mark Borgerding, Erik de Castro Lopo, Mozilla, Amazon"
+license   = "BSD-3-Clause"
+# Fetched 2026-08-28 directly from https://raw.githubusercontent.com/xiph/opus/main/COPYING
+# (the canonical, currently-maintained copy of the same licence RFC 6716's
+# Appendix A embeds -- see provenance/sources.toml's rfc-6716 entry).
+license_text_file = "LICENSES/opus-bsd-3-clause.txt"
+note = """
+vaco-codec-opus's CELT/SILK static tables and range-coder/entropy-coding
+algorithms are transcribed or translated from RFC 6716 Appendix A's embedded
+reference implementation, which the RFC's own copyright notice (RFC 6716
+p.2, "Code Components extracted from this document must include Simplified
+BSD License text") requires be redistributed under this licence. This is a
+Tier-A source per D7/D15 (RFC 6716's Appendix A code is separately
+BSD-licensed from the RFC's own IETF-Trust prose licence), not a
+clean-room violation."""
+
+[[notice]]
+id        = "alac-apple-reference"
+sources   = ["alac-agc-source"]
+crates    = ["vaco-codec-alac"]
+name      = "Apple Lossless Audio Codec (ALAC) reference implementation"
+copyright = "Copyright (c) Apple Inc."
+license   = "Apache-2.0"
+# Apache-2.0's text is invariant across projects; reuse our own
+# already-vendored copy rather than duplicating ~200 lines here or in
+# LICENSES/. Confirmed identical against
+# https://raw.githubusercontent.com/macosforge/alac/master/LICENSE
+# (2026-08-28) before any of the referenced source was read.
+license_text_file = "LICENSE-APACHE"
+note = """
+vaco-codec-alac's adaptive Golomb-Rice coder, dynamic predictor and stereo
+mixing (rice.rs, predictor.rs, frame_codec.rs) are a from-scratch Rust
+translation of the algorithms in Apple's reference codec/ag_dec.c,
+ag_enc.c, aglib.h, dp_dec.c, matrix_dec.c, ALACDecoder.cpp and
+ALACAudioTypes.h (https://github.com/macosforge/alac). Apache-2.0 is Tier A
+per D7/D15, not the FFmpeg/libav GPL family the clean-room rule exists to
+keep out."""
