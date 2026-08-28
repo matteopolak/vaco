@@ -122,20 +122,52 @@ is the regression test.
 
 A Generic Container essence element's key shares a 12-byte prefix
 (`essence::GC_ESSENCE_PREFIX`); byte 12 says frame-wrapped (`0x15..=0x18`,
-measured: Picture is `0x15`) or clip-wrapped (`0x05..=0x08`, spec-derived,
-**not exercised** — see below); the last 4 bytes are the "track number",
-matched **verbatim** against a Track's `EssenceTrackNumber` property
-(`0x4804`) to bind an essence element to the stream it belongs to. Verified:
-`out.mxf`'s only Track states `15 01 05 00` and its essence elements'
-key ends in exactly those four bytes, at exactly the file offsets
-`ffprobe -show_packets` reports as `pos`.
+measured: Picture is `0x15`) or, per ST 379-1 Table 1, clip-wrapped
+(`0x05..=0x08`) — the last 4 bytes are the "track number", matched
+**verbatim** against a Track's `EssenceTrackNumber` property (`0x4804`) to
+bind an essence element to the stream it belongs to. Verified: `out.mxf`'s
+only Track states `15 01 05 00` and its essence elements' key ends in
+exactly those four bytes, at exactly the file offsets `ffprobe
+-show_packets` reports as `pos`.
+
+**The `0x05..=0x08` range is not reliable evidence of clip-wrapping —
+corrected against a real D-10 file.** A previous pass could not produce a
+real clip-wrapped or D-10 sample and shipped the ST 379-1 byte-range
+reading unverified. A real `ffmpeg -f mxf_d10` file (obtained this session
+— see "Deferred work" for the encoder recipe that finally worked)
+contradicts it directly: its Picture essence key ends `05 01 01 00`,
+squarely in the "clip-wrapped" range, yet the file carries **three (or
+twenty-five, at the 1-second fixture size first measured) separate KLVs
+sharing that exact key, one per frame** — confirmed both by hex-dumping the
+file and by `ffprobe -show_packets` reporting one packet per KLV at those
+same offsets. That is frame-wrapped by any operational definition. `essence::Wrapping`
+now documents the byte-range classification as real but unreliable for
+deciding framing; nothing in this crate uses it to decide how a real file's
+packets are read.
 
 `MxfDemuxer::read_packet` is a plain forward KLV walk: Filler, the Generic
 Container System Item (`060e2b34.02050101.0d010301.04010100` — present once
 per edit unit in a real file, spec-registered under the partition-pack
 branch rather than the local-set branch, and not interpreted since nothing
 in this crate needs its content) and any other unrecognised key are
-skipped; a recognised essence element becomes a `Packet`.
+skipped; a recognised essence element becomes a `Packet`. This is what
+every file in the corpus — OP1a, OP-Atom and D-10 alike — has actually
+turned out to need: "one KLV, one packet," regardless of item-type byte.
+
+**Single-partition files need `metadata::scan_region` to know essence has
+started.** The D-10 fixture exposed a real bug here, not a D-10 quirk: a
+header partition can state a nonzero `body_sid` and carry essence directly
+after its own metadata, with no separate body partition pack in between at
+all. `scan_region` previously only stopped at a partition-pack-family key
+or the Random Index Pack, so on a file shaped this way it walked straight
+through the System Item and every essence element as "unrecognised,
+skippable" KLVs, all the way to the footer partition near EOF —
+`MxfDemuxer::open` then started reading packets from a position near the
+end of the file and found none. Fixed by also stopping at an essence
+element or the System Item key (`essence::GC_SYSTEM_ITEM_PREFIX`/
+`is_generic_container_system_item`, measured off the same file). OP1a and
+OP-Atom files with a genuinely separate body partition were and remain
+unaffected — this is the shape they never took.
 
 **Timestamps are edit-unit-indexed, not bitstream-reordered.** `pts == dts
 == the edit unit's position` for both. A long-GOP codec's true display order
@@ -152,10 +184,21 @@ nothing to hand it today).
 `EditUnitByteCount` is the whole branch: nonzero means CBE (every edit unit
 is exactly that many bytes, computed arithmetically — the D-10 shape);
 zero means VBE, and `IndexEntryArray`'s per-entry `StreamOffset` is used.
-This crate's corpus is VBE (long-GOP MPEG-2 has no fixed frame size), so VBE
-is the measured path; CBE is implemented from the same verified tag table
-but not exercised against a real CBE file (D-10 sample generation issue,
-below).
+Both are now measured: the original corpus (VBE, long-GOP MPEG-2 has no
+fixed frame size) plus three real D-10 fixtures at 30/40/50 Mbit/s (CBE) —
+see "Essence containers, corrected" below for how that sample was finally
+produced.
+
+**A real CBE file's `IndexDuration` cannot be trusted.** Measured directly
+off a D-10 fixture's raw bytes: the Index Table Segment's `IndexDuration`
+item is present and reads `0`, even though the file has a definite,
+non-zero frame count recoverable from the essence container's own size.
+Trusting it literally reported a zero-duration, zero-entry index for a file
+that plainly had three real frames. `MxfDemuxer::open`'s
+`effective_index_duration` closure now falls back to `essence_length /
+EditUnitByteCount` (the same arithmetic `essence::clip_wrapped_spans`'s CBE
+branch already used) whenever the stated value is not positive, used by
+both `demux::build_indices` and the crate's own overall `duration()`.
 
 `StreamOffset` is relative to a per-file "essence origin" this crate
 determines empirically at `open` time (`demux::find_first_essence_offset`):
@@ -198,11 +241,20 @@ corpus is single-track); an index table that interleaves several tracks via
   de-interleave would go; today every track binding just matches essence
   elements by GC track number regardless of which `BodySID` produced them,
   which is correct only because the corpus has one track per file.
-- **Clip-wrapped / D-10**: `essence::clip_wrapped_spans` is written and
-  tested against synthetic CBE and VBE segments, but `demux.rs` does not yet
-  call it — `read_packet` only handles frame-wrapped elements. Wiring it in
-  needs a real clip-wrapped or D-10 sample to verify against (see Deferred
-  work for why one could not be produced with the installed reference).
+- **D-10**: landed — see "Essence containers" above. `demux::MxfDemuxer`
+  handles it through the same "one KLV, one packet" path as everything
+  else; no D-10-specific fast path exists or is needed.
+- **Genuinely clip-wrapped essence (one KLV for a whole track)**:
+  `essence::clip_wrapped_spans` is written, tested against synthetic CBE
+  and VBE segments, and now has a count cap (`essence::MAX_CBE_SPANS`) —
+  but `demux.rs` still does not call it, and, unlike D-10, this remains
+  genuinely unreachable to verify: `ffmpeg 8.1`'s `mxf`/`mxf_d10` muxers
+  have no clip-wrap option at all (checked this session). Wiring it in
+  needs both a real sample from some other source and a non-byte-range way
+  to decide when to call it, since the item-type byte no longer can be
+  trusted for that (see "Essence containers" above) — comparing a KLV's
+  declared length against the index table's own known edit-unit size is
+  the leading candidate.
 
 ---
 
@@ -222,6 +274,8 @@ Internal caps, all in source, all named for what they bound:
 | `MAX_CHAIN_DEPTH` | `metadata.rs` | Source-package generations `resolve_essence` will chase |
 | `MAX_INDEX_ENTRIES` | `index.rs` | `IndexEntryArray` entries |
 | `MAX_PACKET_BYTES` | `demux.rs` | One essence element's value |
+| `MAX_CBE_INDEX_ENTRIES` | `demux.rs` | `build_indices`'s CBE `for n in 0..count` loop, where `count` can now be driven by a real file's own size (see "Index tables") |
+| `essence::MAX_CBE_SPANS` | `essence.rs` | `clip_wrapped_spans`'s own, still-unwired CBE loop — same shape, same cap, hardened alongside the one above |
 
 ## Dependencies
 
@@ -235,13 +289,24 @@ facts like true display-order timestamps are out of scope, see above).
 
 ## Deferred work (see the closing report for the full, per-issue account)
 
-- **D-10 / clip-wrapped verification.** `ffmpeg -f mxf_d10` on the installed
-  8.1 build refused every quantiser this crate tried with "frame size does
-  not match index unit size" — a CBR constraint at the *encoder* side that
-  could not be satisfied with synthetic test content. `essence.rs`'s
-  clip-wrapped span logic and `index.rs`'s CBE arithmetic are implemented
-  from the same verified tag table as the VBE path but are unexercised
-  against a real file.
+- **D-10 verification: resolved.** The original "every quantiser refused
+  with 'frame size does not match index unit size'" blocker was an
+  incomplete encoder invocation, not a real limit — the working recipe
+  needed `-intra_vlc 1 -qmax 12 -qmin 1 -non_linear_quant 1 -flags +ildct
+  -g 1 -bf 0` alongside matched `-b:v`/`-minrate`/`-maxrate`/`-bufsize`/
+  `-rc_init_occupancy` values at one of the three standard D-10 bitrates
+  (30/40/50 Mbit/s). `tests/fixtures/d10_mpeg2_sample.mxf` is a real,
+  `ffprobe`-verified 30 Mbit/s sample built this way.
+- **Genuinely clip-wrapped essence (one KLV for a whole track): still not
+  verifiable.** Distinct from D-10 — checked directly this session:
+  `ffmpeg 8.1`'s `mxf` and `mxf_d10` muxers have no clip-wrap option at
+  all, so unlike D-10 there is no encoder invocation left to try.
+  `essence.rs`'s clip-wrapped span logic and `index.rs`'s CBE arithmetic
+  remain implemented from the same verified tag table as the VBE path but
+  unexercised against a real file, and — since D-10 disproved this crate's
+  own byte-range wrapping heuristic — wiring them in now also needs a
+  different way to decide *when* a KLV is clip-wrapped in the first place
+  (see "How to change it").
 - **Sound (audio) essence.** No `GenericSoundEssenceDescriptor`/
   `WaveAudioDescriptor` mapping exists; a source package whose only track is
   audio produces zero streams today.

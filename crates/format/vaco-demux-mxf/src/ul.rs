@@ -9,10 +9,15 @@
 //!
 //! Every constant below was cross-checked against real files written by the
 //! installed `ffmpeg 8.1` (`ffmpeg -f lavfi -i testsrc=... -f mxf out.mxf`,
-//! `-f mxf_opatom`), byte-for-byte, per D6/D17 — this is recording the
-//! observed bytes of a shipped binary's *output*, not reading its source,
-//! which is what keeps it clean-room. Where a value could not be confirmed
-//! against a real file it says so in its own doc comment.
+//! `-f mxf_opatom`, and, for D-10/SMPTE 386M specifically, `-f mxf_d10`
+//! with `-c:v mpeg2video -pix_fmt yuv422p -intra_vlc 1 -qmax 12 -qmin 1
+//! -non_linear_quant 1 -flags +ildct -g 1 -bf 0` plus matched
+//! `-b:v`/`-minrate`/`-maxrate`/`-bufsize`/`-rc_init_occupancy` at one of
+//! the three standard bitrates), byte-for-byte, per D6/D17 — this is
+//! recording the observed bytes of a shipped binary's *output*, not
+//! reading its source, which is what keeps it clean-room. Where a value
+//! could not be confirmed against a real file it says so in its own doc
+//! comment.
 //!
 //! # Layout
 //!
