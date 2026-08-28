@@ -6378,3 +6378,92 @@ concurrent activity today.
 
 `Vaco-Spec-Ref: itu-t-h263` Annex F §F.2 (Figure F.1), §F.3 (Figures
 F.2-F.4, Table F.1).
+
+## H.264: the divergence boundary was a real bug — same-macroblock `coded_block_flag` neighbours were silently treated as unavailable, invisible to `noise.264` by construction (#418, #420)
+
+**The divergence boundary characterisation asked for turned out to be a
+locatable, fixable bug, not a downstream symptom of something else.**
+`decode_residual_cabac`'s luma and chroma AC `coded_block_flag`
+`ctxIdxInc` derivation used `grids.mb_info_at(mb_x, mb_y)` whenever the
+left/above 4x4 neighbour was an *earlier-decoded block of the same
+macroblock currently being decoded*. `mb_info_at` correctly returns
+`None` until `set_mb_info` runs at the very end of
+`decode_macroblock_cabac` — after `decode_residual_cabac` already
+returns — so every same-macroblock `coded_block_flag` context silently
+took `cbf_cond_term`'s "mbAddrN not available" branch
+(`condTermFlagN = current_is_intra`) instead of the real earlier
+block's own flag. `current_is_intra` is always `true` for this crate's
+all-intra corpora, so the effect was constant and silent: substitute
+`1` for whatever the true same-macroblock neighbour flag actually was.
+
+**Confirmed invisible for exactly the reason asked about — "what does
+`noise.264` not contain."** `cabac_intra_oracle_noise.264` has 0 of its
+256 `Intra_4x4` luma AC blocks with `coded_block_flag == 0` (dense
+random-noise content, every block has real residual), so the buggy
+"assume 1" fallback always coincided with the true value there — the
+bug had no way to become visible on that corpus by construction.
+`cabac_intra_oracle_testsrc.264` has 141 of 256 — the bug needed a
+same-macroblock `coded_block_flag == 0` neighbour to ever produce a
+wrong `ctxIdxInc`, which `noise.264` structurally cannot supply. This
+is the second time this investigation has used "which corpus lacks the
+triggering condition" as a real, load-bearing constraint on the
+answer, not just a sanity check after the fact.
+
+**Fix**: a synthetic `Some(CabacMbInfo { available: true, is_ipcm:
+false, ..default() })` for the same-macroblock case instead of the
+not-yet-populated grid lookup. `decode_residual_cabac` is never reached
+for `I_PCM` (its own early return in `decode_macroblock_cabac` happens
+first), so `is_ipcm` is always `false` for the macroblock this function
+is decoding, and the macroblock is trivially available to itself.
+Applied at all three call sites sharing the identical
+`bx==0`/`by==0`-gated pattern (luma AC's left/above, chroma AC's
+left/above) — checked for other instances of the same pattern
+elsewhere in the file (`Intra_4x4` mode inference's own same-macroblock
+handling was already correct, comparing macroblock coordinates
+directly rather than going through `mb_info_at` at all; `cbp_luma`'s
+own same-macroblock handling was already correct too, fixed in an
+earlier round for a related but distinct bug).
+
+**Measured effect, same corpora as the previous round:**
+
+- `cabac_intra_oracle_testsrc.264`/`multi.264`: the previous divergence
+  at macroblock (1, 0) is gone — macroblock-row 0 in full and the first
+  two macroblocks of row 1 now reconstruct byte-exact. Divergence now
+  starts at macroblock (2, 1), whose own real left (macroblock (1,1))
+  and above (macroblock (2,0)) neighbours are independently confirmed
+  byte-exact and reached through the already-correct
+  `grids.mb_left`/`mb_above` path (both genuinely cross-macroblock, not
+  same-macroblock) — a second, distinct, still-unlocalised issue, not
+  the one fixed here. Not resolved this round.
+- `cabac_i_only.264` (#418's own corpus): **all 25 frames now decode
+  without ever hitting `CabacDecoder::malformed()`** (was 1 of 25).
+  Overall luma match improved from **1.53% to 60.90%**; frame 0 alone
+  went from a total decode failure to 81% of its own samples matching.
+  Divergence is still real and far below what a missing deblocking
+  filter could explain — not resolved this round, and presumably the
+  same remaining family of bug as `testsrc.264`'s own macroblock (2, 1)
+  divergence.
+
+**#418 stays open and untouched**; `assert_slice_ends_at_rbsp_trailing_bits`
+not weakened, not touched, not reopened as `#419`. A smaller but still
+substantial remaining mismatch (39% on `testsrc`, ~39% on
+`cabac_i_only`) is still real evidence the assertion is catching
+something, not grounds to retire it — the coordinator's own framing
+going in (assertion vindicated, not retired) continues to hold, now
+with a large chunk of the mismatch explained and fixed rather than
+merely characterised.
+
+Gates: full clean sweep (`layer-check`, `dep-gate`, `unsafe-audit`,
+`dup-check`, `owner-gate`, `patent-gate`). `clippy -p vaco-codec-h264
+--all-targets` clean. `rustfmt` run directly only on `reconstruct.rs`
+(self-contained, no `mod` declarations pulling in others); `mb.rs`'s
+own pre-existing drift left alone. Same 55 `--lib` tests as last round
+(a same-file fix, not new surface); the three already-`#[ignore]`d
+tests' own reasons updated to record the new, smaller, re-localised
+divergence rather than left stale and misleading. No live writer on
+`vaco-codec-h264` confirmed via `ASSIGNMENTS.md` and an *unscoped*
+`git status --porcelain` against the whole repo (not just the staged
+set), both before starting and immediately before this commit.
+
+`Vaco-Spec-Ref: iso-iec-14496-10-2002-draft` clause 9.3.3.1.1.9
+(`condTermFlagN` for `coded_block_flag`).
