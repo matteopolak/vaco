@@ -172,14 +172,14 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-filter-vdsp | 5 | — | agent:analysis2 | assigned | 2026-08-23 |  | created by agent:temporal for scene_sad; extend, do not duplicate |
 | vaco-filter-source | 5 | #474 | agent:src | done | 2026-08-23 | 2026-08-23 | plan 16 §4.3 row; nullsrc/color already taken by vaco-filter-video-source |
 | vaco-filter-asource | 5 | #481 | agent:src | done | 2026-08-23 | 2026-08-23 | anullsrc already taken |
-| vaco-filter-deinterlace | 5 | #480 | agent:deint | done | 2026-08-23 | 2026-08-23 | plan 16 §4.3 row; idet/vfrdet blocked on INTERFACE-GAPS 11 |
+| vaco-filter-deinterlace | 5 | #106 | agent:deint | done | 2026-08-23 | 2026-08-23 | plan 16 §4.3 row; idet/vfrdet were blocked on INTERFACE-GAPS 11, since closed |
 | vaco-frame | 2 | — | agent:framemeta | done | 2026-08-23 | 2026-08-23 | INTERFACE-GAPS 11: per-frame metadata dictionary |
 | vaco-probe | 7 | — | agent:framemeta | done | 2026-08-23 | 2026-08-23 | -show_frames FRAME_TAGS consumer side |
 | vaco-filter-aeffects | 5 | #484 | agent:audiotidy | done | 2026-08-23 | 2026-08-23 | renamed from vaco-filter-achannel per plan 16 §4.3 |
 | vaco-filter-color | 5 | #476 | agent:analysis2 | assigned | 2026-08-23 |  | remainder of the 29-filter row |
 | vaco-filter-key | 5 | #476 | agent:color2 | done | 2026-08-23 | 2026-08-23 | remainder of the 20-filter row |
 | vaco-filter-lut | 5 | #476 | agent:color2 | done | 2026-08-23 | 2026-08-23 | lut1d, haldclutsrc, the .3dl/.dat/.m3d parsers |
-| vaco-filter-analysis | 5 | #477 | agent:analysis2 | assigned | 2026-08-23 |  | unblocked by INTERFACE-GAPS 11 closing; may extend vaco-filter-vdsp |
+| vaco-filter-analysis | 5 | #477 | agent:analysis2 | done | 2026-08-23 | 2026-08-28 | #477 closed; may extend vaco-filter-vdsp |
 | vaco-filter-adsp | 5 | — | agent:audiotidy | done | 2026-08-23 | 2026-08-23 | D19: one biquad design, not five; plan 16 §4.2 says it lives here |
 | vaco-filter-aeq | 5 | — | agent:audiotidy | done | 2026-08-23 | 2026-08-23 | renamed from vaco-filter-audio-eq |
 | vaco-filter-audio-dynamics | 5 | — | agent:audiotidy | done | 2026-08-23 | 2026-08-23  | renamed |
