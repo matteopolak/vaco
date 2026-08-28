@@ -11,7 +11,7 @@
 //! (ffmpeg 8.1, 2026-08-23) with that exact spelling and arity — the row
 //! matches the reference in both directions, nothing to add or drop.
 //!
-//! **Eleven landed in this crate**: `psnr`, `ssim`, `identity`, `msad`,
+//! **Twelve landed in this crate**: `psnr`, `ssim`, `identity`, `msad`,
 //! `signalstats`, `blackdetect`, `blackframe`, `bbox` — the six the brief
 //! calls out to land first, plus `msad` (a near-free extension of the
 //! `identity`/`psnr` machinery and of `vaco-filter-vdsp`) and `blackframe`
@@ -25,9 +25,17 @@
 //! bit-noise metric whose numerator stayed constant while its denominator
 //! tracked frame width in a way no simple per-pixel formula reproduced in
 //! the time available. Neither was shipped as a guess. [`showinfo`] landed
-//! once interface gap 13 closed — see below.
+//! once interface gap 13 closed — see below. [`scdet`] landed in the #113
+//! pass: the earlier note below called it an unmeasured "scene-cut
+//! heuristic combining a mean-absolute-frame-difference with its own
+//! frame-to-frame delta" — two independent constructed probes (one on a
+//! literal step function, one on `testsrc`'s continuous content) pinned
+//! both `mafd`'s exact `/256` scale factor and `score`'s actual rule
+//! (suppressed only on an *exact* repeat of the previous `mafd`, not on any
+//! decrease), so see [`scdet`]'s own doc rather than this paragraph's
+//! now-superseded description of it as unmeasured.
 //!
-//! **Twelve did not land**, for four different reasons:
+//! **Eleven did not land**, for four different reasons:
 //!
 //! * `vmafmotion`, `ssim360`, `vif`, `signature` — explicitly named in the
 //!   brief as likely-to-leave. `vif` needs a wavelet-domain natural-scene
@@ -81,15 +89,15 @@
 //!     against, hard to verify independently of the implementation itself —
 //!     exactly the "oracle that shares your misreading" trap
 //!     `planning/AGENT-CONSTRAINTS.md` warns about.
-//!   - `blockdetect`, `scdet`, `photosensitivity` are all
-//!     multi-frame or full-academic-paper algorithms (block-grid period
-//!     search; a scene-cut heuristic combining a mean-absolute-frame-
-//!     difference with its own frame-to-frame delta; a temporal luminance-
-//!     flash detector needing a rolling multi-frame window) that this pass
-//!     did not have time to measure precisely enough to trust, given how
-//!     badly `bitplanenoise` and `siti` (below) punished an optimistic
-//!     "looks closed-form" read. Left for a follow-up rather than shipped
-//!     under-measured.
+//!   - `blockdetect`, `photosensitivity` are both multi-frame or
+//!     full-academic-paper algorithms (block-grid period search; a temporal
+//!     luminance-flash detector needing a rolling multi-frame window) that
+//!     this pass did not have time to measure precisely enough to trust,
+//!     given how badly `bitplanenoise` and `siti` (below) punished an
+//!     optimistic "looks closed-form" read. Left for a follow-up rather
+//!     than shipped under-measured. `scdet`, the third filter this
+//!     paragraph used to name, is no longer in this list — see the #113
+//!     pass note above.
 //!   - `bitplanenoise` and `siti` were investigated at length and are the
 //!     two real findings of this pass, not scope-cut for time: `bitplanenoise`'s
 //!     noise ratio for a maximally-noisy fixture holds its **numerator**
@@ -167,6 +175,7 @@ pub mod identity;
 pub mod msad;
 pub mod psnr;
 pub mod registry;
+pub mod scdet;
 pub mod showinfo;
 pub mod signalstats;
 pub mod ssim;

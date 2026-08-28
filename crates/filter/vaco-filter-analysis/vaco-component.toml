@@ -72,6 +72,13 @@ media = "video"
 
 [[component]]
 kind = "filter"
+name = "scdet"
+long_name = "Detect video scene change"
+ctor = "vaco_filter_analysis::scdet::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
 name = "showinfo"
 long_name = "Show textual information for each video frame."
 ctor = "vaco_filter_analysis::showinfo::DESC"
