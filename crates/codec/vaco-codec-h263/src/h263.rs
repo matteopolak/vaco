@@ -139,6 +139,68 @@ struct ActivePicture {
     /// since Annex J §J.3's `STRENGTH` lookup only ever reads the quant
     /// of a *coded* block on either side of an edge.
     mb_quant: Vec<u8>,
+    /// Annex F (`Vaco-Spec-Ref: itu-t-h263` F.2): the Advanced
+    /// Prediction mode is active for this picture. Always `false`
+    /// outside `PLUSPTYPE`. Gates every field below, and the one-
+    /// macroblock reconstruction lookahead `try_decode_one_mb` uses
+    /// instead of reconstructing each macroblock's pixels immediately —
+    /// see `pending`'s own docs for why.
+    advanced_prediction: bool,
+    /// One entry per macroblock, row-major: `true` for an INTRA-coded
+    /// macroblock in an otherwise INTER picture. Distinct from
+    /// `mv_grid`'s own "store zero for INTRA" convention — Annex F's
+    /// OBMC remote-vector rule (`§F.3`) treats an INTRA neighbour
+    /// differently from a not-coded one (replaced by the *current*
+    /// block's own vector, not zero), so the zero-baked-in trick
+    /// `mv_grid`/[`predictors`] rely on is not enough here; only read
+    /// when `advanced_prediction` is set.
+    mb_intra: Vec<bool>,
+    /// One motion vector per 8x8 luma block, row-major over a grid twice
+    /// `mb_width` by twice `mb_height` (Figure 5's four-blocks-per-
+    /// macroblock numbering: block 0 top-left, 1 top-right, 2
+    /// bottom-left, 3 bottom-right, at fine-grid position `(2*mb_x +
+    /// col, 2*mb_y + row)`). Only allocated and read when
+    /// `advanced_prediction` is set. A macroblock using one vector for
+    /// all four blocks (§F.2: "this is defined as four vectors with the
+    /// same value") replicates it into all four of its own slots here.
+    block_mv: Vec<[i32; 2]>,
+    /// Annex F's one-macroblock reconstruction lookahead. `None`
+    /// outside Advanced Prediction mode. Within it: a macroblock's own
+    /// syntax and residual are fully decoded (in bitstream order, as
+    /// every other mode already does) and held here — its *pixels* are
+    /// not written until the *next* macroblock's own vector is known,
+    /// because OBMC's rightward remote vector (`§F.3`) can need a
+    /// macroblock this crate's raster-order decode has not reached yet.
+    /// Above/left/below never have this problem (see
+    /// `docs/codec/vaco-codec-h263.md`'s own account of why only one
+    /// macroblock of lookahead, confined to this one loop, is enough).
+    /// Flushed whenever a new macroblock's own vector becomes known
+    /// (`try_decode_one_mb`) and once more, unconditionally, at the end
+    /// of the picture (`H263Decoder::finish_picture`) for whichever
+    /// macroblock decoded last.
+    pending: Option<PendingMb>,
+}
+
+/// One already-parsed macroblock's syntax and residual, held by
+/// `ActivePicture::pending` until its neighbour to the right (if any) is
+/// known. `four_vector` selects which chrominance rule
+/// `apply_reconstruction` uses (`motion::annex_f_chroma_mv`'s
+/// four-vector combination vs. the default `motion::h263_chroma_mv`,
+/// applied to `mv`); `mv` is the representative vector either way (the
+/// single decoded/replicated one, or block 0's own — F.2's own
+/// equivalence).
+#[derive(Debug)]
+struct PendingMb {
+    mb_x: u32,
+    mb_y: u32,
+    intra: bool,
+    mv: [i32; 2],
+    four_vector: bool,
+    /// One decoded (dequantised, inverse-transformed) residual per
+    /// block, in `block_geometry`'s own six-block order — the part of
+    /// reconstruction that must happen immediately, in bitstream order;
+    /// only the prediction + write is deferred.
+    residuals: [[i32; 64]; 6],
 }
 
 /// ITU-T H.263 (baseline) video decoder. See the module docs.
@@ -176,6 +238,14 @@ impl H263Decoder {
         let Some(mut ap) = self.current.take() else {
             return;
         };
+        // Annex F: whatever macroblock decoded last has no "next"
+        // macroblock to learn its own rightward OBMC neighbour from —
+        // exactly the picture-border case `annex_f_remote` already
+        // handles, so finalizing it with no more information than that
+        // is correct, not a compromise.
+        if let Some(prev) = ap.pending.take() {
+            apply_reconstruction(&mut ap, self.reference.as_ref(), &prev);
+        }
         // Annex J: run once, after every macroblock in the picture has
         // already been reconstructed and clipped, and before the frame
         // becomes either the next picture's reference or this one's own
@@ -281,6 +351,10 @@ impl H263Decoder {
                         deblocking_filter: false,
                         mb_coded: vec![true; (mb_width * mb_height) as usize],
                         mb_quant: vec![pquant.clamp(1, 31); (mb_width * mb_height) as usize],
+                        advanced_prediction: false,
+                        mb_intra: Vec::new(),
+                        block_mv: Vec::new(),
+                        pending: None,
                     });
                     // §5.2: "For the first GOB in each picture (with
                     // number 0), no GOB header shall be transmitted" —
@@ -371,6 +445,10 @@ impl H263Decoder {
             deblocking_filter: modes.deblocking_filter,
             mb_coded: vec![true; (mb_width * mb_height) as usize],
             mb_quant: vec![1; (mb_width * mb_height) as usize],
+            advanced_prediction: modes.advanced_prediction,
+            mb_intra: vec![false; (mb_width * mb_height) as usize],
+            block_mv: vec![[0, 0]; (4 * mb_width * mb_height) as usize],
+            pending: None,
         });
 
         if unsupported {
@@ -516,6 +594,159 @@ fn predictors(
     (mv1, mv2, mv3)
 }
 
+/// Figure 5's block-within-macroblock column (`block % 2`: 0 for blocks
+/// 0/2, 1 for blocks 1/3) and row (`block / 2`: 0 for blocks 0/1, 1 for
+/// blocks 2/3) — Annex F's four-vector numbering, matching
+/// [`block_geometry`]'s own `col_off`/`row_off` pairing for `i in 0..4`.
+#[allow(
+    clippy::integer_division,
+    reason = "`block` is always 0..4 by construction; `block / 2` recovers its row within the macroblock exactly (0 or 1), not a lossy average"
+)]
+fn block_row_col(block: u8) -> (u32, u32) {
+    (u32::from(block % 2), u32::from(block / 2))
+}
+
+/// A fine-grid (8x8-block) coordinate's owning macroblock index along
+/// the same axis — two fine cells per macroblock.
+#[allow(
+    clippy::integer_division,
+    reason = "the fine grid is exactly twice the macroblock grid in each dimension by construction (`set_block_mv`'s own `grid_w = mb_width * 2`); `/ 2` recovers the owning macroblock index exactly, not a lossy average"
+)]
+fn fine_to_mb(coord: u32) -> u32 {
+    coord / 2
+}
+
+/// Write all four of one macroblock's 8x8 luma blocks' vectors into
+/// `ap.block_mv`'s fine grid at once — Figure 5's numbering (0 top-left,
+/// 1 top-right, 2 bottom-left, 3 bottom-right).
+fn set_block_mv(ap: &mut ActivePicture, mb_x: u32, mb_y: u32, mvs: [[i32; 2]; 4]) {
+    let grid_w = ap.mb_width * 2;
+    for (b, mv) in mvs.into_iter().enumerate() {
+        let b = u8::try_from(b).unwrap_or(0);
+        let (bx, by) = block_row_col(b);
+        let gx = mb_x * 2 + bx;
+        let gy = mb_y * 2 + by;
+        let idx = (gy * grid_w + gx) as usize;
+        if let Some(slot) = ap.block_mv.get_mut(idx) {
+            *slot = mv;
+        }
+    }
+}
+
+/// Write exactly one of a macroblock's four 8x8 luma blocks' vectors —
+/// the `INTER4V` counterpart to [`set_block_mv`]'s "same value in all
+/// four" case, since each of the four blocks is decoded (and its own
+/// vector determined) one at a time.
+fn set_one_block_mv(ap: &mut ActivePicture, mb_x: u32, mb_y: u32, block: u8, mv: [i32; 2]) {
+    let grid_w = ap.mb_width * 2;
+    let (bx, by) = block_row_col(block);
+    let gx = mb_x * 2 + bx;
+    let gy = mb_y * 2 + by;
+    let idx = (gy * grid_w + gx) as usize;
+    if let Some(slot) = ap.block_mv.get_mut(idx) {
+        *slot = mv;
+    }
+}
+
+/// Annex F §F.2 (`Vaco-Spec-Ref: itu-t-h263` Figure F.1): the three
+/// candidate predictors for one 8x8 luma block of macroblock `(mb_x,
+/// mb_y)`, `block` in `0..4` (Figure 5's numbering). F.2's own text says
+/// to reuse "the decision rules given in 6.1.1" for these redefined
+/// candidates — this is [`predictors`]'s exact same rule 2/3/4 shape
+/// (MV1 zero if off the left edge, MV2/MV3 fall back to MV1 if off the
+/// top, MV3 forced to zero if off the right), just resolved against
+/// `ap.block_mv`'s finer, twice-as-wide/tall grid via
+/// [`motion::annex_f_predictor_sources`]'s offsets instead of
+/// [`predictors`]'s fixed `(-1, 0)`/`(0, -1)`/`(1, -1)` macroblock ones.
+///
+/// Used unconditionally under Advanced Prediction mode, for a
+/// one-vector macroblock too (block 0's own rule) — not only a
+/// four-vector one's own blocks — because a *neighbouring* macroblock
+/// may itself be four-vector, and then "the corresponding macroblock's
+/// vector" [`predictors`] would read from `ap.mv_grid` is no longer
+/// well-defined; only this fine-grid version can name the one specific
+/// 8x8 block Figure F.1 actually wants.
+///
+/// Slice Structured mode combined with Advanced Prediction is rejected
+/// at the picture header (`plus::parse`) before this is ever called, so
+/// unlike [`predictors`] this has no slice-boundary case to check.
+fn annex_f_predictors(ap: &ActivePicture, mb_x: u32, mb_y: u32, block: u8) -> ([i32; 2], [i32; 2], [i32; 2]) {
+    let grid_w = ap.mb_width * 2;
+    let grid_h = ap.mb_height * 2;
+    let (bx, by) = block_row_col(block);
+    let own_gx = i32::try_from(mb_x * 2 + bx).unwrap_or(0);
+    let own_gy = i32::try_from(mb_y * 2 + by).unwrap_or(0);
+    let offsets = motion::annex_f_predictor_sources(block);
+    let get = |dx: i32, dy: i32| -> Option<[i32; 2]> {
+        let gx = own_gx + dx;
+        let gy = own_gy + dy;
+        if gx < 0 || gy < 0 || gx >= i32::try_from(grid_w).unwrap_or(0) || gy >= i32::try_from(grid_h).unwrap_or(0) {
+            return None;
+        }
+        let idx = usize::try_from(gy).unwrap_or(0) * grid_w as usize + usize::try_from(gx).unwrap_or(0);
+        ap.block_mv.get(idx).copied()
+    };
+    let mv1 = get(offsets[0].0, offsets[0].1).unwrap_or([0, 0]);
+    let mv2 = get(offsets[1].0, offsets[1].1).unwrap_or(mv1);
+    let mut mv3 = get(offsets[2].0, offsets[2].1).unwrap_or(mv1);
+    if own_gx + offsets[2].0 >= i32::try_from(grid_w).unwrap_or(0) {
+        mv3 = [0, 0];
+    }
+    (mv1, mv2, mv3)
+}
+
+/// Annex F §F.3 (`Vaco-Spec-Ref: itu-t-h263` F.3): one "remote" motion
+/// vector for OBMC, resolved through every substitution rule the
+/// primary text states, in the order it states them:
+///
+/// 1. (checked first, "in all cases") if this is the vertically-below
+///    direction and `block` is in the bottom row of its macroblock
+///    (Figure 5's block 2 or 3), the macroblock below has not been
+///    decoded yet regardless of picture geometry — replaced by the
+///    current block's own vector.
+/// 2. If the neighbour position is outside the picture (border) —
+///    replaced by the current block's own vector (no neighbour
+///    present). This is also what makes the "right" direction safe to
+///    look up one macroblock ahead of reconstruction (see
+///    `ActivePicture::pending`): a macroblock at the last column's
+///    right lookup lands here, regardless of whether a macroblock in
+///    the next row has been decoded yet.
+/// 3. If the neighbouring macroblock was not coded (`COD == 1`,
+///    skipped) — zero.
+/// 4. If the neighbouring macroblock was INTRA — the current block's
+///    own vector (except PB-frames mode, out of this crate's scope).
+/// 5. Otherwise, the neighbour's own real vector from `ap.block_mv`.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one remote lookup genuinely needs the macroblock position, which block within it, its own already-decoded vector, the direction offset, and whether that direction is the special-cased 'below' one — collapsing these into a struct would not make any call site clearer, there being exactly four call sites, one per direction"
+)]
+fn annex_f_remote(ap: &ActivePicture, mb_x: u32, mb_y: u32, block: u8, own_mv: [i32; 2], dgx: i32, dgy: i32, is_below: bool) -> [i32; 2] {
+    if is_below && matches!(block, 2 | 3) {
+        return own_mv;
+    }
+    let grid_w = ap.mb_width * 2;
+    let grid_h = ap.mb_height * 2;
+    let (bx, by) = block_row_col(block);
+    let own_gx = i32::try_from(mb_x * 2 + bx).unwrap_or(0);
+    let own_gy = i32::try_from(mb_y * 2 + by).unwrap_or(0);
+    let gx = own_gx + dgx;
+    let gy = own_gy + dgy;
+    if gx < 0 || gy < 0 || gx >= i32::try_from(grid_w).unwrap_or(0) || gy >= i32::try_from(grid_h).unwrap_or(0) {
+        return own_mv;
+    }
+    let nb_mb_x = fine_to_mb(u32::try_from(gx).unwrap_or(0));
+    let nb_mb_y = fine_to_mb(u32::try_from(gy).unwrap_or(0));
+    let nb_idx = (nb_mb_y * ap.mb_width + nb_mb_x) as usize;
+    if !ap.mb_coded.get(nb_idx).copied().unwrap_or(true) {
+        return [0, 0];
+    }
+    if ap.mb_intra.get(nb_idx).copied().unwrap_or(false) {
+        return own_mv;
+    }
+    let idx = usize::try_from(gy).unwrap_or(0) * grid_w as usize + usize::try_from(gx).unwrap_or(0);
+    ap.block_mv.get(idx).copied().unwrap_or(own_mv)
+}
+
 /// Whether `r` sits on a `00 00 1xxxxxxx` — the `PSC`/`GBSC`/Annex K
 /// `SSC` prefix every start code shares (see [`find_prefix`]) — either
 /// exactly byte-aligned already, or reachable by skipping nothing but
@@ -601,8 +832,17 @@ fn try_decode_one_mb(r: &mut BitReader<'_>, ap: &mut ActivePicture, idct: &mut H
         if let Some(slot) = ap.mb_coded.get_mut(idx) {
             *slot = false;
         }
-        reconstruct_macroblock(r, idct, ap, reference, col, row, false, [0, 0], 0, false);
-        return MbOutcome::Decoded;
+        if ap.advanced_prediction {
+            if let Some(slot) = ap.mb_intra.get_mut(idx) {
+                *slot = false;
+            }
+            set_block_mv(ap, col, row, [[0, 0]; 4]);
+        }
+        return if reconstruct_or_defer(r, idct, ap, reference, col, row, false, [0, 0], 0, false, false) {
+            MbOutcome::Decoded
+        } else {
+            MbOutcome::Fail
+        };
     }
 
     let mcbpc_table: &[(&str, u8, u8)] = if ap.intra {
@@ -619,9 +859,6 @@ fn try_decode_one_mb(r: &mut BitReader<'_>, ap: &mut ActivePicture, idct: &mut H
             return MbOutcome::Fail;
         }
         return MbOutcome::Retry; // §5.3.2: not a real macroblock; retry this index.
-    }
-    if mb_type == 2 {
-        return MbOutcome::Fail; // INTER4V: out of scope (see module docs).
     }
 
     let intra_mb = matches!(mb_type, 3 | 4);
@@ -648,43 +885,80 @@ fn try_decode_one_mb(r: &mut BitReader<'_>, ap: &mut ActivePicture, idct: &mut H
     };
     let cbp = (cbpy << 2) | cbpc;
 
+    if mb_type == 2 {
+        // Annex F §F.2: `INTER4V` is only meaningful under Advanced
+        // Prediction mode. A conforming encoder never sends it
+        // otherwise; bounded fuzz input still can, so this stays the
+        // same defensive bail every other out-of-scope mode gets.
+        if !ap.advanced_prediction {
+            return MbOutcome::Fail;
+        }
+        let mut block_final = [[0i32; 2]; 4];
+        for (b, slot) in block_final.iter_mut().enumerate() {
+            let block = u8::try_from(b).unwrap_or(0);
+            let (mv1, mv2, mv3) = annex_f_predictors(ap, col, row, block);
+            let pred_x = motion::median3(mv1[0], mv2[0], mv3[0]);
+            let pred_y = motion::median3(mv1[1], mv2[1], mv3[1]);
+            let Some(mv) = decode_one_mv(r, ap, pred_x, pred_y) else {
+                return MbOutcome::Fail;
+            };
+            *slot = mv;
+            // Written immediately (not after the loop): blocks 1, 2 and
+            // 3's own predictors can reach an earlier block of this same
+            // macroblock (`annex_f_predictor_sources`'s internal cases),
+            // which must already be in `ap.block_mv` by the time it is
+            // looked up, exactly as real decode order guarantees.
+            set_one_block_mv(ap, col, row, block, mv);
+        }
+        let idx = mb_index as usize;
+        if let Some(slot) = ap.mv_grid.get_mut(idx) {
+            // F.2's own equivalence: block 0 is defined exactly as the
+            // base single-vector rule, so it is the right representative
+            // for any old single-vector-style neighbour lookup.
+            *slot = block_final[0];
+        }
+        if let Some(slot) = ap.mb_intra.get_mut(idx) {
+            *slot = false;
+        }
+        if let Some(slot) = ap.mb_coded.get_mut(idx) {
+            *slot = true;
+        }
+        if let Some(slot) = ap.mb_quant.get_mut(idx) {
+            *slot = ap.quant;
+        }
+        return if reconstruct_or_defer(r, idct, ap, reference, col, row, false, block_final[0], cbp, true, true) {
+            MbOutcome::Decoded
+        } else {
+            MbOutcome::Fail
+        };
+    }
+
     let mv = if has_mv {
-        let slice_ctx = ap.slice_structured.then_some((ap.mb_slice_id.as_slice(), slice_id));
-        let (mv1, mv2, mv3) = predictors(&ap.mv_grid, ap.mb_width, ap.mb_height, col, row, slice_ctx);
+        // Annex F §F.2: "If only one vector per macroblock is present,
+        // MV1, MV2 and MV3 are defined as for the 8*8 block numbered 1"
+        // — unconditionally under Advanced Prediction mode, not only
+        // when the *current* macroblock happens to be four-vector. This
+        // matters whenever a *neighbour* is four-vector: the old
+        // macroblock-granularity `predictors()` has no way to name one
+        // specific 8x8 block of a four-vector neighbour (it only ever
+        // reads that neighbour's single `mv_grid` "representative"
+        // slot), where block 0's own Figure F.1 definition needs the
+        // *left* neighbour's block 1, the *above* neighbour's block 2,
+        // and the *above-right* neighbour's block 2 — three different,
+        // specific blocks, not "whichever representative value
+        // `mv_grid` happens to hold".
+        let (mv1, mv2, mv3) = if ap.advanced_prediction {
+            annex_f_predictors(ap, col, row, 0)
+        } else {
+            let slice_ctx = ap.slice_structured.then_some((ap.mb_slice_id.as_slice(), slice_id));
+            predictors(&ap.mv_grid, ap.mb_width, ap.mb_height, col, row, slice_ctx)
+        };
         let pred_x = motion::median3(mv1[0], mv2[0], mv3[0]);
         let pred_y = motion::median3(mv1[1], mv2[1], mv3[1]);
-        if ap.umv_plus {
-            // Annex D §D.2, `PLUSPTYPE` present: Table D.3 (see
-            // `motion::h263_umv_vector_plus`'s own docs for why no range
-            // correction is needed here).
-            let dh = block::decode_table_d3(r);
-            let dv = block::decode_table_d3(r);
-            let mv = [motion::h263_umv_vector_plus(pred_x, dh), motion::h263_umv_vector_plus(pred_y, dv)];
-            // §D.2: a (+0.5, +0.5) difference pair needs one stuffing bit
-            // consumed afterward, to prevent start-code emulation.
-            if dh == 1 && dv == 1 {
-                r.skip(1);
-            }
-            mv
-        } else {
-            let Some(&(_, dh)) = vlc::decode(r, tables::H263_MVD, |c| c.0, 13) else {
-                return MbOutcome::Fail;
-            };
-            let Some(&(_, dv)) = vlc::decode(r, tables::H263_MVD, |c| c.0, 13) else {
-                return MbOutcome::Fail;
-            };
-            if ap.umv_legacy {
-                [
-                    motion::h263_umv_vector_legacy(pred_x, i32::from(dh)),
-                    motion::h263_umv_vector_legacy(pred_y, i32::from(dv)),
-                ]
-            } else {
-                [
-                    motion::h263_vector(pred_x, i32::from(dh)),
-                    motion::h263_vector(pred_y, i32::from(dv)),
-                ]
-            }
-        }
+        let Some(mv) = decode_one_mv(r, ap, pred_x, pred_y) else {
+            return MbOutcome::Fail;
+        };
+        mv
     } else {
         [0, 0]
     };
@@ -699,11 +973,227 @@ fn try_decode_one_mb(r: &mut BitReader<'_>, ap: &mut ActivePicture, idct: &mut H
     if let Some(slot) = ap.mb_quant.get_mut(idx) {
         *slot = ap.quant;
     }
+    if ap.advanced_prediction {
+        // §F.2: "If only one vector per macroblock is present, this is
+        // defined as four vectors with the same value" — an INTRA
+        // macroblock has no motion vector at all, so its four slots stay
+        // the zeroed `mv_grid` convention already used above.
+        if let Some(slot) = ap.mb_intra.get_mut(idx) {
+            *slot = intra_mb;
+        }
+        set_block_mv(ap, col, row, [if intra_mb { [0, 0] } else { mv }; 4]);
+    }
 
-    if reconstruct_macroblock(r, idct, ap, reference, col, row, intra_mb, mv, cbp, true) {
+    if reconstruct_or_defer(r, idct, ap, reference, col, row, intra_mb, mv, cbp, true, false) {
         MbOutcome::Decoded
     } else {
         MbOutcome::Fail
+    }
+}
+
+/// One `MVD`/`MVD2-4` motion vector component pair, decoded against
+/// predictor `(pred_x, pred_y)` — factored out of the single-vector path
+/// above so Annex F's four-vectors-per-macroblock case (`mb_type == 2`)
+/// can call it four times without re-deriving the `UMV`
+/// legacy/`PLUSPTYPE` branching.
+fn decode_one_mv(r: &mut BitReader<'_>, ap: &ActivePicture, pred_x: i32, pred_y: i32) -> Option<[i32; 2]> {
+    if ap.umv_plus {
+        // Annex D §D.2, `PLUSPTYPE` present: Table D.3 (see
+        // `motion::h263_umv_vector_plus`'s own docs for why no range
+        // correction is needed here).
+        let dh = block::decode_table_d3(r);
+        let dv = block::decode_table_d3(r);
+        let mv = [motion::h263_umv_vector_plus(pred_x, dh), motion::h263_umv_vector_plus(pred_y, dv)];
+        // §D.2: a (+0.5, +0.5) difference pair needs one stuffing bit
+        // consumed afterward, to prevent start-code emulation.
+        if dh == 1 && dv == 1 {
+            r.skip(1);
+        }
+        Some(mv)
+    } else {
+        let &(_, dh) = vlc::decode(r, tables::H263_MVD, |c| c.0, 13)?;
+        let &(_, dv) = vlc::decode(r, tables::H263_MVD, |c| c.0, 13)?;
+        Some(if ap.umv_legacy {
+            [
+                motion::h263_umv_vector_legacy(pred_x, i32::from(dh)),
+                motion::h263_umv_vector_legacy(pred_y, i32::from(dv)),
+            ]
+        } else {
+            [
+                motion::h263_vector(pred_x, i32::from(dh)),
+                motion::h263_vector(pred_y, i32::from(dv)),
+            ]
+        })
+    }
+}
+
+/// Outside Advanced Prediction mode: reconstruct immediately, exactly as
+/// every mode already did before this annex existed (a direct call to
+/// [`reconstruct_macroblock`], byte-for-byte unchanged). Under it:
+/// decode this macroblock's own residual now, in bitstream order (the
+/// part that cannot be deferred), then finalize whichever macroblock was
+/// previously pending — its own right-hand OBMC neighbour, this one, is
+/// now known — before this one takes its place as the new pending item.
+/// See `ActivePicture::pending`'s own docs for why one macroblock of
+/// lookahead is enough.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "relays reconstruct_macroblock's own argument list (bitstream, transform, picture state, reference, position, mode flags, motion vector, CBP) plus four_vector; splitting further would just thread the same values through an intermediate struct"
+)]
+fn reconstruct_or_defer(
+    r: &mut BitReader<'_>,
+    idct: &mut H26xIdct,
+    ap: &mut ActivePicture,
+    reference: Option<&RefPicture>,
+    mb_x: u32,
+    mb_y: u32,
+    intra: bool,
+    mv: [i32; 2],
+    cbp: u8,
+    coded_mb: bool,
+    four_vector: bool,
+) -> bool {
+    if !ap.advanced_prediction {
+        return reconstruct_macroblock(r, idct, ap, reference, mb_x, mb_y, intra, mv, cbp, coded_mb);
+    }
+    let Some(residuals) = decode_block_residuals(r, idct, ap, intra, cbp, coded_mb) else {
+        return false;
+    };
+    if let Some(prev) = ap.pending.take() {
+        apply_reconstruction(ap, reference, &prev);
+    }
+    ap.pending = Some(PendingMb { mb_x, mb_y, intra, mv, four_vector, residuals });
+    true
+}
+
+/// Phase 1 of Advanced Prediction reconstruction: decode (or, for an
+/// uncoded block, skip) each of the six blocks' residual coefficients —
+/// exactly [`reconstruct_macroblock`]'s own per-block coefficient decode,
+/// factored out so it can run immediately (bitstream order) while the
+/// prediction it will be added to waits for [`apply_reconstruction`].
+fn decode_block_residuals(r: &mut BitReader<'_>, idct: &mut H26xIdct, ap: &ActivePicture, intra: bool, cbp: u8, coded_mb: bool) -> Option<[[i32; 64]; 6]> {
+    let mut out = [[0i32; 64]; 6];
+    for (i, slot) in out.iter_mut().enumerate() {
+        let (plane, _, _) = block_geometry(i);
+        let block_quant = if plane == 0 || !ap.mq { ap.quant } else { block::quant_c(ap.quant) };
+        let cbp_bit = (cbp >> (5 - i)) & 1 == 1;
+        let residual: [i32; 64] = if intra {
+            let qfs = block::decode_h263_coefficients_mq(r, true, cbp_bit, ap.mq).ok()?;
+            let qf = block::inverse_scan(&qfs);
+            let dequant = block::dequantise_ranged(&qf, block_quant, true, ap.mq);
+            block::inverse_transform(idct, &dequant)
+        } else if coded_mb && cbp_bit {
+            let qfs = block::decode_h263_coefficients_mq(r, false, true, ap.mq).ok()?;
+            let qf = block::inverse_scan(&qfs);
+            let dequant = block::dequantise_ranged(&qf, block_quant, false, ap.mq);
+            block::inverse_transform(idct, &dequant)
+        } else {
+            [0i32; 64]
+        };
+        *slot = residual;
+    }
+    Some(out)
+}
+
+/// Phase 2 of Advanced Prediction reconstruction: form each of a pending
+/// macroblock's six blocks' predictions — OBMC (`motion::annex_f_obmc_luma_block`)
+/// for luma, using `ap.block_mv`/`ap.mb_coded`/`ap.mb_intra` state that is
+/// now more complete than it was when this macroblock was first parsed
+/// (specifically: its own right-hand neighbour's vector, if any, is now
+/// known); plain single-vector motion compensation for chroma, using
+/// either the four-vector `motion::annex_f_chroma_mv` combination or the
+/// default `motion::h263_chroma_mv` rule, per `pending.four_vector` —
+/// add the already-decoded residual, clip, and write.
+fn apply_reconstruction(ap: &mut ActivePicture, reference: Option<&RefPicture>, pending: &PendingMb) {
+    let mb_x = pending.mb_x;
+    let mb_y = pending.mb_y;
+    let intra = pending.intra;
+    let mv = pending.mv;
+
+    let chroma_mv = if pending.four_vector {
+        let grid_w = (ap.mb_width * 2) as usize;
+        let at = |b: u8| -> [i32; 2] {
+            let (bx, by) = block_row_col(b);
+            let gx = (mb_x * 2 + bx) as usize;
+            let gy = (mb_y * 2 + by) as usize;
+            ap.block_mv.get(gy * grid_w + gx).copied().unwrap_or([0, 0])
+        };
+        let (b0, b1, b2, b3) = (at(0), at(1), at(2), at(3));
+        [
+            motion::annex_f_chroma_mv([b0[0], b1[0], b2[0], b3[0]]),
+            motion::annex_f_chroma_mv([b0[1], b1[1], b2[1], b3[1]]),
+        ]
+    } else {
+        [motion::h263_chroma_mv(mv[0]), motion::h263_chroma_mv(mv[1])]
+    };
+
+    for i in 0..6usize {
+        let (plane, col_off, row_off) = block_geometry(i);
+        let (bw, bh): (u32, u32) = (8, 8);
+        let (px_ox, px_oy) = if plane == 0 {
+            (mb_x * 16 + col_off, mb_y * 16 + row_off)
+        } else {
+            (mb_x * 8 + col_off, mb_y * 8 + row_off)
+        };
+
+        let mut pred = [0u8; 64];
+        if !intra {
+            match reference {
+                Some(refp) if plane == 0 => {
+                    let block = u8::try_from(i).unwrap_or(0);
+                    let grid_w = (ap.mb_width * 2) as usize;
+                    let (bx, by) = block_row_col(block);
+                    let gx = (mb_x * 2 + bx) as usize;
+                    let gy = (mb_y * 2 + by) as usize;
+                    let own = ap.block_mv.get(gy * grid_w + gx).copied().unwrap_or(mv);
+                    let above = annex_f_remote(ap, mb_x, mb_y, block, own, 0, -1, false);
+                    let below = annex_f_remote(ap, mb_x, mb_y, block, own, 0, 1, true);
+                    let left = annex_f_remote(ap, mb_x, mb_y, block, own, -1, 0, false);
+                    let right = annex_f_remote(ap, mb_x, mb_y, block, own, 1, 0, false);
+                    pred = motion::annex_f_obmc_luma_block(
+                        refp,
+                        i32::try_from(px_ox).unwrap_or(0),
+                        i32::try_from(px_oy).unwrap_or(0),
+                        own,
+                        above,
+                        below,
+                        left,
+                        right,
+                        ap.rcontrol,
+                    );
+                }
+                Some(refp) => {
+                    let (mv_x, mv_y) = (chroma_mv[0], chroma_mv[1]);
+                    for y in 0..bh {
+                        for x in 0..bw {
+                            let sx = i32::try_from(px_ox + x).unwrap_or(0);
+                            let sy = i32::try_from(px_oy + y).unwrap_or(0);
+                            if let Some(slot) = pred.get_mut((y * bw + x) as usize) {
+                                *slot = motion::sample_half_pel(refp, plane, sx, sy, mv_x, mv_y, ap.rcontrol);
+                            }
+                        }
+                    }
+                }
+                None => pred = [128u8; 64],
+            }
+        }
+
+        let Some(mut plane_buf) = ap.frame.plane_mut(plane) else {
+            continue;
+        };
+        for y in 0..bh {
+            let Some(dst_row) = plane_buf.row_mut(usize::try_from(px_oy + y).unwrap_or(0)) else {
+                continue;
+            };
+            for x in 0..bw {
+                let Some(dst) = dst_row.get_mut(usize::try_from(px_ox + x).unwrap_or(0)) else {
+                    continue;
+                };
+                let r_val = pending.residuals.get(i).and_then(|res| res.get((y * bw + x) as usize)).copied().unwrap_or(0);
+                let p_val = i32::from(pred.get((y * bw + x) as usize).copied().unwrap_or(0));
+                *dst = (r_val + p_val).clamp(0, 255) as u8;
+            }
+        }
     }
 }
 

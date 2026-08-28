@@ -203,13 +203,25 @@ pub(crate) fn parse(r: &mut BitReader<'_>, modes: &mut PlusModes, fallback_dims:
     // supported picture actually needs) is enough to avoid misreading
     // them.
     if modes.sac
-        || modes.advanced_prediction
         || modes.advanced_intra
         || modes.reference_picture_selection
         || modes.independent_segment_decoding
         || modes.alternative_inter_vlc
         || rpr
         || rru
+        // Annex F §F.3's remote-vector rules have their own, different
+        // cross-segment substitution when Slice Structured or
+        // Independent Segment Decoding is also active ("remote motion
+        // vectors... are set to the motion vector of the current block,
+        // regardless of the other conditions") — not implemented, and
+        // ISD is already out of scope above, so only the Annex F +
+        // Annex K combination needs an explicit bail here rather than
+        // silently mispredicting at slice boundaries. This is also what
+        // keeps the one-macroblock reconstruction lookahead confined to
+        // decode_gob's plain raster order: decode_slice_rect/
+        // decode_first_slice/decode_slice never run with
+        // advanced_prediction set.
+        || (modes.advanced_prediction && modes.slice_structured)
     {
         return None;
     }

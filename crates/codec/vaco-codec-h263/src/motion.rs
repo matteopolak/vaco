@@ -125,10 +125,6 @@ pub(crate) fn h263_chroma_mv(m: i32) -> i32 {
 /// `h263_chroma_mv` gives that same vector — not an equivalent
 /// reformulation, a different, wrong answer).
 #[must_use]
-#[allow(
-    dead_code,
-    reason = "landed ahead of its consumer, same as annex_f_obmc_luma_block and the OBMC_H0/H1/H2 tables - see their own allow reasons"
-)]
 pub(crate) fn annex_f_chroma_mv(mvs: [i32; 4]) -> i32 {
     // Table F.1: sixteenths 0-2 snap down (bucket 0), 3-13 snap to the
     // half-pixel bucket (1), 14-15 snap up to the next full pixel (2) —
@@ -208,10 +204,6 @@ pub(crate) fn median3(a: i32, b: i32, c: i32) -> i32 {
 /// alternate reading (e.g. the pre-correction "block 2 fully internal"
 /// claim) matches only by coincidence on a small fraction of blocks.
 #[must_use]
-#[allow(
-    dead_code,
-    reason = "landed ahead of its consumer: the OBMC weighting (Figure F.2-F.4/§F.3), remote-vector substitution and 4-vector MCBPC bitstream wiring this predictor rule needs are not implemented yet (see docs/codec/vaco-codec-h263.md's Annex F account) — this function is the verified piece, confirmed bit-exact against a real `ffmpeg -flags +mv4 -obmc 1` fixture, ready for that follow-up round to call"
-)]
 pub(crate) const fn annex_f_predictor_sources(block: u8) -> [(i32, i32); 3] {
     match block {
         0 => [(-1, 0), (0, -1), (2, -1)],
@@ -265,10 +257,6 @@ pub(crate) fn sample_half_pel(
 /// `i`, matching the primary text's own "`(i, j)` denotes the column and
 /// row, respectively" and this crate's existing `pred[y * 8 + x]`
 /// row-major convention for an 8x8 block).
-#[allow(
-    dead_code,
-    reason = "landed ahead of its consumer: reconstruction is not wired yet, because it surfaced a genuine architectural gap this round (see docs/codec/vaco-codec-h263.md Annex F account) -- OBMC needs a same-row macroblock this crate has not decoded yet in raster order for the rightward remote vector, which every other mode never needs; wiring this in needs a one-macroblock lookahead (or two-pass) restructuring of the GOB decode loop, not attempted this round. Verified correct in isolation: bit-exact against a real ffmpeg fixture for every neighbour direction except the one this note names"
-)]
 const OBMC_H0: [i32; 64] = [
     4, 5, 5, 5, 5, 5, 5, 4,
     5, 5, 5, 5, 5, 5, 5, 5,
@@ -288,7 +276,6 @@ const OBMC_H0: [i32; 64] = [
 /// Mirror-symmetric top/bottom by construction, since the same
 /// distance-from-the-relevant-border weighting applies whichever half a
 /// row falls in.
-#[allow(dead_code, reason = "see OBMC_H0 own doc comment and allow reason")]
 const OBMC_H1: [i32; 64] = [
     2, 2, 2, 2, 2, 2, 2, 2,
     1, 1, 2, 2, 2, 2, 1, 1,
@@ -310,7 +297,6 @@ const OBMC_H1: [i32; 64] = [
 /// against the rendered figures — only `OBMC_H0 + OBMC_H1 + OBMC_H2 ==
 /// 8` at every one of the 64 cells is a shape invariant, checked by this
 /// module's own tests).
-#[allow(dead_code, reason = "see OBMC_H0 own doc comment and allow reason")]
 const OBMC_H2: [i32; 64] = [
     2, 1, 1, 1, 1, 1, 1, 2,
     2, 2, 1, 1, 1, 1, 2, 2,
@@ -328,7 +314,6 @@ const OBMC_H2: [i32; 64] = [
 /// out-of-range index, which never happens for the `0..8` loop bounds
 /// every caller uses, but keeps this crate's blanket
 /// `indexing_slicing = "deny"` satisfied without a panic path.
-#[allow(dead_code, reason = "see OBMC_H0 own doc comment and allow reason")]
 fn obmc_weight(table: &[i32; 64], j: usize, i: usize) -> i32 {
     table.get(j * 8 + i).copied().unwrap_or(0)
 }
@@ -353,10 +338,6 @@ fn obmc_weight(table: &[i32; 64], j: usize, i: usize) -> i32 {
 #[allow(
     clippy::many_single_char_names,
     reason = "q/r/s and x/y are Annex F's own primary-text variable names (`Vaco-Spec-Ref: itu-t-h263` F.3's own P(x,y) = (q*H0 + r*H1 + s*H2 + 4)/8 equation) - renaming them would make this harder to check against the spec, not easier"
-)]
-#[allow(
-    dead_code,
-    reason = "landed ahead of its consumer: reconstruction is not wired yet, because it surfaced a genuine architectural gap this round (see docs/codec/vaco-codec-h263.md Annex F account) -- OBMC needs a same-row macroblock this crate has not decoded yet in raster order for the rightward remote vector, which every other mode never needs; wiring this in needs a one-macroblock lookahead (or two-pass) restructuring of the GOB decode loop, not attempted this round. Verified correct in isolation: bit-exact against a real ffmpeg fixture for every neighbour direction except the one this note names"
 )]
 pub(crate) fn annex_f_obmc_luma_block(
     refp: &RefPicture,
@@ -396,7 +377,6 @@ pub(crate) fn annex_f_obmc_luma_block(
     clippy::integer_division,
     reason = "Annex F's own literal formula (`Vaco-Spec-Ref: itu-t-h263` F.3) — add-then-truncate for a divisor of 8, the same rounding convention `avg2`/`avg4` already use"
 )]
-#[allow(dead_code, reason = "see OBMC_H0 own doc comment and allow reason")]
 fn obmc_combine(q: u8, r: u8, s: u8, h0: i32, h1: i32, h2: i32) -> u8 {
     let p = (i32::from(q) * h0 + i32::from(r) * h1 + i32::from(s) * h2 + 4) / 8;
     p.clamp(0, 255) as u8
