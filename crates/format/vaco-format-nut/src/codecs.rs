@@ -1,11 +1,11 @@
-//! `fourcc` <-> [`CodecId`], for the two codec pairs this crate has actually
+//! `fourcc` <-> [`CodecId`], for the codec pairs this crate has actually
 //! measured against real `ffmpeg -f nut` output (video: MPEG-4 -> `"FMP4"`;
 //! audio: MP3 -> the 4-byte little-endian encoding of WAV format tag
-//! `0x0055`). NUT's own text says video `FourCC`s reuse AVI's; measured here
-//! is that ffmpeg's NUT muxer encodes an audio codec the same way AVI's
-//! `WAVEFORMATEX.wFormatTag` would, zero-extended to 4 bytes rather than
-//! kept at 2 — so a 2-byte value that data alone would not disambiguate
-//! from a genuine 2-byte video-style `FourCC`.
+//! `0x0055`, AAC -> tag `0x00FF`). NUT's own text says video `FourCC`s reuse
+//! AVI's; measured here is that ffmpeg's NUT muxer encodes an audio codec
+//! the same way AVI's `WAVEFORMATEX.wFormatTag` would, zero-extended to 4
+//! bytes rather than kept at 2 — so a 2-byte value that data alone would
+//! not disambiguate from a genuine 2-byte video-style `FourCC`.
 //!
 //! Other codecs are deliberately not guessed at: H.264 (`"H264"`) and PCM
 //! (WAV tag `0x0001`) are included because they are unambiguous, standard,
@@ -44,6 +44,9 @@ pub fn video_fourcc_for_codec(codec: CodecId) -> Option<&'static [u8]> {
 /// (tag `0x0055`).
 const WAVE_FORMAT_PCM: u16 = 0x0001;
 const WAVE_FORMAT_MP3: u16 = 0x0055;
+/// Microsoft's registered "Advanced Audio Coding (AAC)" tag — measured on
+/// `ffmpeg -f nut -c:a aac`, `codec_tag=0x00ff` on the reference.
+const WAVE_FORMAT_AAC: u16 = 0x00FF;
 
 /// `fourcc` -> [`CodecId`] for audio streams (`stream_class == audio`).
 #[must_use]
@@ -55,6 +58,7 @@ pub fn audio_codec_from_fourcc(fourcc: &[u8]) -> Option<CodecId> {
     match tag {
         WAVE_FORMAT_PCM => Some(CodecId::PcmS16le),
         WAVE_FORMAT_MP3 => Some(CodecId::Mp3),
+        WAVE_FORMAT_AAC => Some(CodecId::Aac),
         _ => None,
     }
 }
@@ -67,6 +71,7 @@ pub fn audio_fourcc_for_codec(codec: CodecId) -> Option<[u8; 4]> {
     let tag = match codec {
         CodecId::PcmS16le => WAVE_FORMAT_PCM,
         CodecId::Mp3 => WAVE_FORMAT_MP3,
+        CodecId::Aac => WAVE_FORMAT_AAC,
         _ => return None,
     };
     let [lo, hi] = tag.to_le_bytes();
@@ -92,6 +97,18 @@ mod tests {
         assert_eq!(
             audio_fourcc_for_codec(CodecId::Mp3),
             Some([0x55, 0x00, 0x00, 0x00])
+        );
+    }
+
+    #[test]
+    fn the_measured_aac_fourcc_maps_both_ways() {
+        assert_eq!(
+            audio_codec_from_fourcc(&[0xFF, 0x00, 0x00, 0x00]),
+            Some(CodecId::Aac)
+        );
+        assert_eq!(
+            audio_fourcc_for_codec(CodecId::Aac),
+            Some([0xFF, 0x00, 0x00, 0x00])
         );
     }
 
