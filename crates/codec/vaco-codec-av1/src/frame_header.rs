@@ -28,9 +28,9 @@
 
 use vaco_bitstream::BitReader;
 use vaco_core::{Error, Result};
-use vaco_parse_av1::SequenceHeader;
 use vaco_parse_av1::leb::{ns, su};
 use vaco_parse_av1::seq::{NUM_REF_FRAMES, SELECT_VALUE};
+pub use vaco_parse_av1::{FrameSize, FrameType, SequenceHeader};
 
 /// `PRIMARY_REF_NONE`, §3.
 pub const PRIMARY_REF_NONE: u32 = 7;
@@ -51,38 +51,17 @@ const MAX_TILE_AREA: u32 = 4096 * 2304;
 const MAX_TILE_COLS: u32 = 64;
 const MAX_TILE_ROWS: u32 = 64;
 
-/// `frame_type`, §6.8.2.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FrameType {
-    Key,
-    Inter,
-    IntraOnly,
-    Switch,
-}
-
-impl FrameType {
-    const fn from_bits(v: u32) -> Self {
-        match v {
-            0 => Self::Key,
-            2 => Self::IntraOnly,
-            3 => Self::Switch,
-            _ => Self::Inter,
-        }
+/// `frame_type`, §6.8.2 — `vaco_parse_av1::FrameType`'s bit mapping,
+/// re-derived here since it is not exported publicly from that crate (this
+/// crate parses the frame header's bits itself rather than reusing its
+/// partial parse; see the module doc).
+const fn frame_type_from_bits(v: u32) -> FrameType {
+    match v {
+        0 => FrameType::Key,
+        2 => FrameType::IntraOnly,
+        3 => FrameType::Switch,
+        _ => FrameType::Inter,
     }
-
-    const fn is_intra(self) -> bool {
-        matches!(self, Self::Key | Self::IntraOnly)
-    }
-}
-
-/// `frame_size()`/`render_size()`/`superres_params()`, §5.9.5–§5.9.8.
-#[derive(Debug, Clone, Copy)]
-pub struct FrameSize {
-    pub coded_width: u32,
-    pub coded_height: u32,
-    pub upscaled_width: u32,
-    pub render_width: u32,
-    pub render_height: u32,
 }
 
 /// `Segmentation_Feature_Bits`/`Signed`/`Max`, §5.9.14.
@@ -125,7 +104,7 @@ impl Segmentation {
 
 /// `tile_info()`, §5.9.15.
 #[derive(Debug, Clone)]
-pub struct TileInfo {
+pub struct Av1TileInfo {
     pub cols: usize,
     pub rows: usize,
     pub cols_log2: u32,
@@ -184,7 +163,7 @@ pub struct FrameHeader {
     pub allow_screen_content_tools: bool,
     pub allow_intrabc: bool,
     pub size: FrameSize,
-    pub tile_info: TileInfo,
+    pub tile_info: Av1TileInfo,
     pub quant: QuantizationParams,
     pub segmentation: Segmentation,
     pub delta: DeltaParams,
@@ -243,7 +222,7 @@ fn parse_inner(r: &mut BitReader<'_>, seq: &SequenceHeader, temporal_id: u8, spa
         if show_existing_frame {
             return Err(Error::Unsupported("vaco-codec-av1: show_existing_frame is not decoded"));
         }
-        frame_type = FrameType::from_bits(r.get(2));
+        frame_type = frame_type_from_bits(r.get(2));
         show_frame = r.get_bit() != 0;
         if show_frame && seq.decoder_model_info_present_flag && !seq.timing_info.is_some_and(|t| t.equal_picture_interval) {
             return Err(Error::Unsupported("vaco-codec-av1: temporal_point_info() is not decoded"));
@@ -410,7 +389,7 @@ fn parse_frame_size(r: &mut BitReader<'_>, seq: &SequenceHeader, frame_size_over
     let render_and_frame_size_different = r.get_bit() != 0;
     let (render_width, render_height) =
         if render_and_frame_size_different { (r.get(16) + 1, r.get(16) + 1) } else { (upscaled_width, frame_height) };
-    Ok(FrameSize { coded_width: frame_width, coded_height: frame_height, upscaled_width, render_width, render_height })
+    Ok(FrameSize { coded_width: frame_width, coded_height: frame_height, upscaled_width, render_width, render_height, use_superres })
 }
 
 fn tile_log2(blk_size: u32, target: u32) -> u32 {
@@ -424,7 +403,7 @@ fn tile_log2(blk_size: u32, target: u32) -> u32 {
     k
 }
 
-fn parse_tile_info(r: &mut BitReader<'_>, seq: &SequenceHeader, mi_cols: u32, mi_rows: u32) -> TileInfo {
+fn parse_tile_info(r: &mut BitReader<'_>, seq: &SequenceHeader, mi_cols: u32, mi_rows: u32) -> Av1TileInfo {
     let (sb_cols, sb_rows, sb_shift) = if seq.use_128x128_superblock {
         ((mi_cols + 31) >> 5, (mi_rows + 31) >> 5, 5u32)
     } else {
@@ -522,7 +501,7 @@ fn parse_tile_info(r: &mut BitReader<'_>, seq: &SequenceHeader, mi_cols: u32, mi
         (0, 1)
     };
 
-    TileInfo { cols, rows, cols_log2, rows_log2, mi_col_starts, mi_row_starts, context_update_tile_id, tile_size_bytes }
+    Av1TileInfo { cols, rows, cols_log2, rows_log2, mi_col_starts, mi_row_starts, context_update_tile_id, tile_size_bytes }
 }
 
 fn read_delta_q(r: &mut BitReader<'_>) -> i32 {
