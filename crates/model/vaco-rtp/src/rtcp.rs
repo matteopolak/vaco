@@ -76,8 +76,17 @@ pub enum RtcpPacket {
     /// RFC 3550 §6.7 `APP`, or any payload type this module does not
     /// interpret. `payload_type` is the raw wire value so a caller can tell
     /// an `APP` (204) from something genuinely unrecognised.
+    ///
+    /// `count_or_fmt` is the header's 5-bit field at the same bit position
+    /// SR/RR's reception-report count and BYE's source count occupy —
+    /// RFC 3550 §6.7 calls it `subtype` for `APP`, RFC 4585 §6.1 calls it
+    /// `FMT` for the RTCP feedback payload types (205/206). This module
+    /// does not interpret either, but keeps the raw bits so a caller that
+    /// does (RIST's RTT-echo `APP` subtype, generic NACK `FMT`) does not
+    /// have to re-parse the 4-byte common header a second time.
     Other {
         payload_type: u8,
+        count_or_fmt: u8,
         data: Vec<u8>,
     },
 }
@@ -232,6 +241,7 @@ pub fn parse_one(buf: &[u8]) -> Result<(RtcpPacket, usize)> {
         }
         other => RtcpPacket::Other {
             payload_type: other,
+            count_or_fmt: count,
             data: body.to_vec(),
         },
     };

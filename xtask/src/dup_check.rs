@@ -109,6 +109,13 @@ const DISTINCT: &[(&str, &str)] = &[
     ),
     ("Mode", "distinct modes in vaco-core and vaco-parse-opus."),
     (
+        "Origin",
+        "vaco-format-rtp: an SDP `o=` line's session-originator metadata \
+         (username/session-id/network-type/address). vaco-protocol-rist: \
+         RIST TR-06-1 \u{a7}5.3.3's SSRC-LSB tag distinguishing an original \
+         packet from its retransmission. No shared concept.",
+    ),
+    (
         "Picture",
         "vaco-codec-vp8: a decoded frame's three reconstruction planes \
          (Y/U/V), held in a reference-frame slot for later inter prediction. \

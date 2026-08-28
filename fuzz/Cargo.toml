@@ -167,12 +167,14 @@ vaco-protocol-httpproxy = { path = "../crates/io/vaco-protocol-httpproxy", optio
 vaco-protocol-icecast = { path = "../crates/io/vaco-protocol-icecast", optional = true }
 vaco-protocol-ipfs = { path = "../crates/io/vaco-protocol-ipfs", optional = true }
 vaco-protocol-local = { path = "../crates/io/vaco-protocol-local", optional = true }
+vaco-protocol-rist = { path = "../crates/io/vaco-protocol-rist", optional = true }
 vaco-protocol-rtmp = { path = "../crates/io/vaco-protocol-rtmp", optional = true }
 vaco-protocol-socket = { path = "../crates/io/vaco-protocol-socket", optional = true }
 vaco-protocol-tls = { path = "../crates/io/vaco-protocol-tls", optional = true }
 vaco-protocol-wrap = { path = "../crates/io/vaco-protocol-wrap", optional = true }
 vaco-registry = { path = "../crates/registry/vaco-registry", optional = true }
 vaco-resample = { path = "../crates/signal/vaco-resample", optional = true }
+vaco-rtp = { path = "../crates/model/vaco-rtp", optional = true }
 vaco-sampfmt = { path = "../crates/model/vaco-sampfmt", optional = true }
 vaco-scale = { path = "../crates/signal/vaco-scale", optional = true }
 vaco-subtitle-bitmap = { path = "../crates/format/vaco-subtitle-bitmap", optional = true }
@@ -307,6 +309,7 @@ default = [
     "protocol-icecast",
     "protocol-ipfs",
     "protocol-local",
+    "protocol-rist",
     "protocol-rtmp",
     "protocol-socket",
     "protocol-tls",
@@ -445,6 +448,7 @@ protocol-httpproxy = ["dep:vaco-protocol-httpproxy"]
 protocol-icecast = ["dep:vaco-protocol-icecast"]
 protocol-ipfs = ["dep:vaco-protocol-ipfs"]
 protocol-local = ["dep:vaco-protocol-local"]
+protocol-rist = ["dep:vaco-protocol-rist", "dep:vaco-rtp"]
 protocol-rtmp = ["dep:vaco-limits", "dep:vaco-protocol-rtmp"]
 protocol-socket = ["dep:vaco-protocol-socket"]
 protocol-tls = ["dep:vaco-protocol-tls"]
@@ -1752,6 +1756,14 @@ test = false
 doc = false
 bench = false
 required-features = ["format-riff"]
+
+[[bin]]
+name = "rist_rtcp"
+path = "fuzz_targets/rist_rtcp.rs"
+test = false
+doc = false
+bench = false
+required-features = ["protocol-rist"]
 
 [[bin]]
 name = "rtp_header_parse"
