@@ -52,11 +52,24 @@ validated by `vaco_frame::Frame::alloc_video` before a pixel is touched.
 `vaco-codec-core`, `vaco-frame`/`vaco-pixfmt`/`vaco-pool`, `vaco-packet`,
 `vaco-limits`.
 
-## Registration gap
+## Registration
 
-Same as `vaco-codec-qoi`: no `CodecId` variants exist for any PNM-family
-member, so no `vaco-component.toml` fragment can be written yet. See
-`planning/TECH-DEBT.md`.
+`vaco-component.toml` registers all twelve descriptors (`PBM_DECODER`/
+`PBM_ENCODER` … `PHM_DECODER`/`PHM_ENCODER`, via the `pnm_codec!` macro in
+`src/lib.rs`) under the six `CodecId` variants C-13 added
+(`Pbm`/`Pgm`/`Ppm`/`Pam`/`Pfm`/`Phm`), feature `codec-pnm` (on by default).
+Reachable as `-c:v pbm`/`pgm`/`ppm`/`pam`/`pfm`/`phm` through
+`vaco_registry::encoder_by_name`; each `ImageDecoder`/`ImageEncoder::send`
+stamps `pts` from its input, since the per-format `decode`/`encode`
+functions are pure over bytes/pixels alone and have none of their own.
+
+`vaco -i in.ppm -c:v qoi -f null -` (a cross-crate leg: this crate decodes,
+`vaco-codec-qoi` encodes) was verified end to end, including a byte-identical
+QOI output against `ffmpeg`'s own encoder — see `vaco-codec-qoi`'s doc file.
+`vaco-demux-image2` does not yet map most of these formats' extensions to
+their new `CodecId`, so `-i in.pgm` alone currently reports "no known input
+codec" until that demuxer is updated — a gap in that crate, not this one; see
+`planning/TECH-DEBT.md`'s C-13 entry.
 
 ## Testing
 

@@ -1,0 +1,109 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+
+[[component]]
+kind      = "decoder"
+name      = "pbm"
+long_name = "PBM (Portable BitMap) image"
+feature   = "codec-pnm"
+ctor      = "vaco_codec_pnm::PBM_DECODER"
+media     = "video"
+codec     = "pbm"
+
+[[component]]
+kind      = "encoder"
+name      = "pbm"
+long_name = "PBM (Portable BitMap) image"
+feature   = "codec-pnm"
+ctor      = "vaco_codec_pnm::PBM_ENCODER"
+media     = "video"
+codec     = "pbm"
+
+[[component]]
+kind      = "decoder"
+name      = "pgm"
+long_name = "PGM (Portable GrayMap) image"
+feature   = "codec-pnm"
+ctor      = "vaco_codec_pnm::PGM_DECODER"
+media     = "video"
+codec     = "pgm"
+
+[[component]]
+kind      = "encoder"
+name      = "pgm"
+long_name = "PGM (Portable GrayMap) image"
+feature   = "codec-pnm"
+ctor      = "vaco_codec_pnm::PGM_ENCODER"
+media     = "video"
+codec     = "pgm"
+
+[[component]]
+kind      = "decoder"
+name      = "ppm"
+long_name = "PPM (Portable PixelMap) image"
+feature   = "codec-pnm"
+ctor      = "vaco_codec_pnm::PPM_DECODER"
+media     = "video"
+codec     = "ppm"
+
+[[component]]
+kind      = "encoder"
+name      = "ppm"
+long_name = "PPM (Portable PixelMap) image"
+feature   = "codec-pnm"
+ctor      = "vaco_codec_pnm::PPM_ENCODER"
+media     = "video"
+codec     = "ppm"
+
+[[component]]
+kind      = "decoder"
+name      = "pam"
+long_name = "PAM (Portable AnyMap) image"
+feature   = "codec-pnm"
+ctor      = "vaco_codec_pnm::PAM_DECODER"
+media     = "video"
+codec     = "pam"
+
+[[component]]
+kind      = "encoder"
+name      = "pam"
+long_name = "PAM (Portable AnyMap) image"
+feature   = "codec-pnm"
+ctor      = "vaco_codec_pnm::PAM_ENCODER"
+media     = "video"
+codec     = "pam"
+
+[[component]]
+kind      = "decoder"
+name      = "pfm"
+long_name = "PFM (Portable FloatMap) image"
+feature   = "codec-pnm"
+ctor      = "vaco_codec_pnm::PFM_DECODER"
+media     = "video"
+codec     = "pfm"
+
+[[component]]
+kind      = "encoder"
+name      = "pfm"
+long_name = "PFM (Portable FloatMap) image"
+feature   = "codec-pnm"
+ctor      = "vaco_codec_pnm::PFM_ENCODER"
+media     = "video"
+codec     = "pfm"
+
+[[component]]
+kind      = "decoder"
+name      = "phm"
+long_name = "PHM (Portable HalfFloatMap) image"
+feature   = "codec-pnm"
+ctor      = "vaco_codec_pnm::PHM_DECODER"
+media     = "video"
+codec     = "phm"
+
+[[component]]
+kind      = "encoder"
+name      = "phm"
+long_name = "PHM (Portable HalfFloatMap) image"
+feature   = "codec-pnm"
+ctor      = "vaco_codec_pnm::PHM_ENCODER"
+media     = "video"
+codec     = "phm"

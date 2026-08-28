@@ -108,7 +108,13 @@ impl SendReceive for ImageDecoder {
                     return Ok(());
                 };
                 let mut budget = Budget::new(self.limits.clone());
-                let frame = (self.decode)(pkt.payload(), &mut budget)?;
+                let mut frame = (self.decode)(pkt.payload(), &mut budget)?;
+                // The per-format `decode` functions are pure over bytes
+                // alone and have no packet to read a timestamp off;
+                // stamping the frame with the packet's own `pts` here is
+                // what lets a muxer downstream of a decode-then-encode leg
+                // place this image in time at all.
+                frame.pts = pkt.pts;
                 self.machine.emit(frame);
                 Ok(())
             }
@@ -202,7 +208,12 @@ impl SendReceive for ImageEncoder {
                 };
                 let bytes = (self.encode)(frame)?;
                 let mut budget = Budget::new(self.limits.clone());
-                let packet = Packet::from_slice(&mut budget, &bytes)?;
+                let mut packet = Packet::from_slice(&mut budget, &bytes)?;
+                // Mirrors the decoder's own `pts` stamp: the per-format
+                // `encode` functions are pure over the frame's pixels alone,
+                // so the packet they hand back has no timing of its own
+                // until this copies the source frame's `pts` onto it.
+                packet.pts = frame.pts;
                 self.machine.emit(packet);
                 Ok(())
             }
@@ -217,6 +228,94 @@ impl SendReceive for ImageEncoder {
         self.machine.flush();
     }
 }
+
+/// One PNM-family member's registration: the `DecoderDesc`/`EncoderDesc` pair
+/// that makes it reachable as `-c:v <name>`, against the
+/// a `vaco_codec_core::CodecId` variant of its own. Six members, one
+/// shape, hence the macro rather than six hand-written copies drifting from
+/// each other.
+macro_rules! pnm_codec {
+    ($dec:ident, $enc:ident, $id:ident, $ctor:ident, $name:literal, $long_name:literal) => {
+        #[doc = concat!("Registered as this crate's `", $name, "` `decoder` fragment.")]
+        pub static $dec: vaco_codec_core::DecoderDesc = vaco_codec_core::DecoderDesc {
+            name: $name,
+            long_name: $long_name,
+            id: vaco_codec_core::CodecId::$id,
+            media_type: vaco_core::MediaType::Video,
+            caps: Caps::empty(),
+            supported_rates: &[],
+            make: |limits| {
+                Box::new(vaco_codec_core::AsDecoder(vaco_codec_core::Validated::new(
+                    ImageDecoder::$ctor(limits),
+                )))
+            },
+        };
+
+        #[doc = concat!("Registered as this crate's `", $name, "` `encoder` fragment.")]
+        pub static $enc: vaco_codec_core::EncoderDesc = vaco_codec_core::EncoderDesc {
+            name: $name,
+            long_name: $long_name,
+            id: vaco_codec_core::CodecId::$id,
+            media_type: vaco_core::MediaType::Video,
+            caps: Caps::empty(),
+            supported_rates: &[],
+            make: |limits| {
+                Box::new(vaco_codec_core::AsEncoder(vaco_codec_core::Validated::new(
+                    ImageEncoder::$ctor(limits),
+                )))
+            },
+        };
+    };
+}
+
+pnm_codec!(
+    PBM_DECODER,
+    PBM_ENCODER,
+    Pbm,
+    pbm,
+    "pbm",
+    "PBM (Portable BitMap) image"
+);
+pnm_codec!(
+    PGM_DECODER,
+    PGM_ENCODER,
+    Pgm,
+    pgm,
+    "pgm",
+    "PGM (Portable GrayMap) image"
+);
+pnm_codec!(
+    PPM_DECODER,
+    PPM_ENCODER,
+    Ppm,
+    ppm,
+    "ppm",
+    "PPM (Portable PixelMap) image"
+);
+pnm_codec!(
+    PAM_DECODER,
+    PAM_ENCODER,
+    Pam,
+    pam,
+    "pam",
+    "PAM (Portable AnyMap) image"
+);
+pnm_codec!(
+    PFM_DECODER,
+    PFM_ENCODER,
+    Pfm,
+    pfm,
+    "pfm",
+    "PFM (Portable FloatMap) image"
+);
+pnm_codec!(
+    PHM_DECODER,
+    PHM_ENCODER,
+    Phm,
+    phm,
+    "phm",
+    "PHM (Portable HalfFloatMap) image"
+);
 
 #[cfg(test)]
 #[allow(
