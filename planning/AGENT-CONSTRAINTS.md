@@ -370,6 +370,38 @@ was read as a diagnosis rather than as a question. A signal with no period —
 an impulse — or a second parameter varied independently will usually tell you
 which of the two is lying, faster than reasoning about either will.
 
+## A wrapper swallows what it does not forward — five instances so far
+
+Every one was found reactively, because something downstream was silently
+wrong days later. Two shapes:
+
+**A delegating wrapper over a trait** silently returns a defaulted method's
+default instead of forwarding it. `Box<dyn Muxer>` swallowed
+`add_stream_with`; `MappedFilter` swallowed a `BitstreamFilter` option one
+layer down; `AsDecoder` swallowed `set_extradata`; `Box<dyn Decoder>` needed
+its own blanket impl. Four of five.
+
+**A snapshotting wrapper that holds derived state** copies something once and
+never sees a later change. `Discovery<D>` snapshots streams at construction, so
+a `start_time` set inside the wrapped demuxer is invisible to it. Harder to
+spot, because there is no missing `fn` — the tell is a field initialised from
+the inner value in a constructor.
+
+So when you add a method to a trait, or set state on something that may be
+wrapped: **find every wrapper first** and write a test that fails without the
+forward. The gap-19 agent wrote two, and they fail differently — one does not
+compile without the blanket impl, the other passes compilation and fails at
+runtime without the explicit override. Both were needed.
+
+## Isolate with a worktree, never `git stash`
+
+`stash` acts on the whole shared tree, not on your files, so it removes every
+other agent's uncommitted work for as long as it is stashed and restores it in
+one lump — a window in which anyone else's commit captures the wrong state.
+`git worktree add --detach <scratch-path> HEAD` gives you a clean checkout to
+build, bisect or compare in, at no risk to anyone, and ordinary git commands
+are safe *inside* it. Remove it when you are done.
+
 ## Check a recorded blocker before you accept it
 
 A doc comment or a `TECH-DEBT.md` row saying something is not tractable is
