@@ -451,6 +451,26 @@ Then verify: `git diff <their-commit> HEAD -- <their-paths>` must be empty.
 Repair forward rather than rewriting; a second commit that says what it is
 restoring and why is a better record than a rewritten first one.
 
+## `cargo fmt -p <pkg> -- <file>` reformats the whole package
+
+The trailing path looks like it narrows the command to one file. It does not.
+An agent ran it mid-round and pulled several other agents' concurrent
+uncommitted edits into its own working copy — caught only because it ran
+`git diff --stat` before staging, and recovered by reconstructing each
+intended file as `git show HEAD:<path>` plus its own edit, verified hunk by
+hunk. Nothing of anyone else's was committed or discarded, but that was the
+check, not the tool.
+
+In a shared tree every whole-package command is a whole-package command:
+`cargo fmt -p`, `cargo fix`, `cargo clippy --fix`, and anything else that
+rewrites files rather than reading them. **Formatting is not exempt from the
+rule that you write only your own paths.** To format one file, run
+`rustfmt <path>` directly, or format inside a worktree.
+
+The general form: before staging, `git diff --stat` and confirm the file list
+is *exactly* what you meant to touch. A tool that edited more than you asked
+is indistinguishable from your own mistake once it is committed.
+
 ## Isolate with a worktree, never `git stash`
 
 `stash` acts on the whole shared tree, not on your files, so it removes every
