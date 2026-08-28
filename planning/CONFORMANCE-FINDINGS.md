@@ -4060,3 +4060,146 @@ be "cheap" enough to be worth it — resolved to yes, but for a smaller gain
 than a naive "run two things at once" intuition suggests: `ffprobe`'s own
 ~6x-slower spawn cost bounds the win to what that side alone costs, not half
 the combined cost. Recorded as measured rather than assumed.
+
+### Dispatch 7: three unmutated-file bugs fixed (mpegps, NUT, W64 codec_tag); W64 start_time is finding 44's shape, not gap 23's
+
+Per the instruction to fix what reproduces on clean, unmutated media rather
+than widen further. All three verified clean (`git status --porcelain`) with
+no live writer before editing, per crate.
+
+#### 1. `vaco-demux-mpegps`: `codec_name=unknown` for both streams — fixed
+
+`register()` never set `params.codec_id` at all; the comment claiming no
+`CodecId` existed yet for MPEG-1/2 video or MPEG audio was stale —
+`Mpeg1video`/`Mpeg2video`/`Mp1`/`Mp2`/`Mp3` all exist and are already wired
+to `vaco-parse-mpegvideo`'s parsers in the registry. `stream_id` alone
+cannot say MPEG-1 vs. MPEG-2 or which audio layer, so this states a static
+default — `Mpeg2video` (matching `vaco-demux-raw`'s own `MPEGVIDEO`
+bitstream spec, which already accepts the identical ambiguity for the
+identical reason) and `Mp2` (matching `vaco-mux-mpegps`'s own
+`default_audio`) — rather than sniffing. Switching
+`CodecParameters::new(media)` to `::video()`/`::audio()` gave the
+already-existing, already-wired `ParserProvider` pipeline somewhere to
+write into; this crate's own docs already said reframing "will start...
+automatically the day those codec ids... land, with no change needed in
+this crate," and that turned out to be exactly true.
+
+**Replay** (`fuzz/seeds/diff/mpegps/mpeg1-mp2.mpg`, real diff, not the
+truncated campaign log): audio `codec_name` now matches the reference
+exactly (`mp2`, was `unknown`). Video states the accepted, narrower
+`mpeg2video` against the file's genuine `mpeg1video` — same limitation
+`vaco-demux-raw`'s spec already lives with — and gained `width`/`height`/
+`pix_fmt`/`has_b_frames`/`chroma_location`, all previously missing.
+
+**Baseline** (500 iterations, `--rng-seed 42`): aggregate tally unchanged
+(`agree=4`/`mismatch=457`/`stricter=31`/`laxer=8`, before and after,
+verified against a pristine `git worktree add --detach HEAD` build) — every
+mutated case that used to show a `codec_name` mismatch also carries other
+unrelated divergences (probe misdetection into an unrelated format under
+heavy corruption is the dominant one), so no file's overall verdict moved,
+the same "fixing a field rarely flips a verdict" pattern already established
+in dispatch 4/5. Confirmed at the field level instead, via the saved
+`.toml` findings rather than the tally: cases where our probe still
+correctly identifies the file as `mpeg` (not misdetected into something
+else) and used to show a `codec_name` mismatch, checked directly — the fix
+holds.
+
+**One narrow, disclosed side effect**: on 1 of 500 mutants, a corruption
+severe enough that the reference *itself* gives up and states
+`codec_name=unknown` now gets `mpeg2video` asserted on our side (previously
+both sides agreed on `unknown` for that specific field, though the file was
+already a `Mismatch` for unrelated reasons both before and after — the
+overall verdict did not change). This is the same "assert a default where a
+per-file signal to decline does not exist" trade-off `vaco-demux-raw`'s own
+spec already accepts for the identical reason, observed here for the first
+time on this crate. Not treated as a regression (no `Agree` case flipped),
+but disclosed rather than left for someone else to notice, matching the
+`r_frame_rate` lesson's own standard even where the outcome is benign.
+
+#### 2. `vaco-format-nut`: H.264 extradata/fourcc never reached `params` — fixed
+
+`on_stream_header` parsed `codec_specific_data` and the container's own
+fourcc off the wire and used neither. Measured directly (hexdump) that
+`ffmpeg -f nut`'s H.264 `codec_specific_data` is Annex-B SPS/PPS verbatim —
+copying it into `params.extradata` is the same move `vaco-demux-matroska`'s
+`private_is_extradata` and MP4's `avcC` path already make for their own
+codec-private blobs, per the brief's own pointer. The container fourcc is
+separately copied into `params.codec_tag`, matching `vaco-demux-avi`'s
+`hdrl.rs`.
+
+**Replay** (`fuzz/seeds/diff/nut/h264-video-only.nut`): `profile`,
+`codec_tag`/`codec_tag_string`, `has_b_frames`, `sample_aspect_ratio`,
+`pix_fmt` and `level` — every field the brief named plus the two extra the
+same extradata unlocked — now all match the reference exactly.
+
+**Baseline**: aggregate unchanged (`agree=50`/`mismatch=349`/`stricter=76`/
+`laxer=25`), same reason as mpegps. Field-level, from the saved `.toml`s:
+`codec_tag` mismatches across the 500-mutant corpus went from 348 to **0**.
+
+**Left alone, surfaced by this fix, not part of it**: `field_order`
+(`progressive` ours vs. `unknown` reference — a `vaco-parse-h264` question,
+outside this crate and outside this dispatch's cleared scope),
+`r_frame_rate` (50/1 vs. 25/1, a 2x tick-rate issue with the same shape as
+the H.264 doubling already documented elsewhere in this project),
+`format.duration`/`format.bit_rate` (`N/A` on both fixtures — NUT states no
+container-level duration at all today, a separate feature gap), and
+`tags.encoder` (already an explicitly out-of-scope shared-shape item). Also
+newly noticed: the AAC stream in `h264-aac.nut` reports `codec_name=unknown`
+— `audio_codec_from_fourcc` maps only PCM (`0x0001`) and MP3 (`0x0055`),
+not `WAVE_FORMAT_AAC` (`0x00FF`, measured on this fixture) — a real,
+different, one-line-shaped gap, filed here rather than folded into this fix
+since it is a fourcc-table-completeness question, not an extradata one.
+
+#### 3. W64: `codec_tag` fixed; `start_time` is finding 44's shape, not gap 23's
+
+`codec_tag` was `fmt.format_tag` verbatim — `WAVE_FORMAT_EXTENSIBLE`
+(`0xfffe`) for anything past plain 16-bit PCM/float, measured on
+`pcm_s24le`. `vaco-format-riff::wave_tags::codec_id` already resolves the
+identical `SubFormat` GUID for the *codec*; `codec_tag` just never reused
+that resolution. Fixed with the same `fmt.extensible().and_then(|e|
+e.sub_format_tag())` idiom `codec_name`/`codec_id` already use.
+
+**Replay** (`fuzz/seeds/diff/w64/pcm24-mono-8k.w64`): `codec_tag` now
+matches the reference exactly (`0x0001`, was `0xfffe`).
+
+**Baseline**: aggregate unchanged (`agree=26`/`mismatch=471`/`stricter=1`/
+`laxer=2`). Field-level: `codec_tag` mismatches across the 500-mutant corpus
+went from 254 to **1**.
+
+**`start_time`/`start_pts` — checked against gap 23, and it is not the same
+shape.** Both W64 fixtures state `start_pts=0`/`start_time=0.000000` where
+the reference states `N/A`/`N/A`. Gap 23's shape is a value with a genuine
+per-file "container mechanism ran and declined" state that a display layer
+conflates with "no mechanism ever existed" — there is no such state here to
+conflate: `discovery.rs` unconditionally stamps every stream's `start_time`
+from its first packet's own pts, with no decline branch at all. This is
+instead an exact repeat of finding 44 (above, in this same document),
+already diagnosed for WAV: reproducing the reference's `N/A` needs the
+demuxer to stamp *no* pts on any packet, which finding 44 already declined
+to do for WAV specifically ("one cosmetic field is not worth destabilising
+the timestamps on a path that now remuxes byte-identically"). W64 shares
+`RawPcmDemuxer`/`pcm.rs` with WAV and inherits the identical trade-off
+unmodified. Not fixed, for the same already-recorded reason — this is a new
+instance of an old, deliberately-closed decision, not a new problem.
+
+#### Baseline: no update needed
+
+Re-ran all 13 families (500 iterations, `--rng-seed 42`) against the
+committed `fuzz/seeds/diff/baseline.txt` after all three fixes: every field
+printed `(unchanged)`, for every family, including the three touched ones —
+the aggregate tally genuinely did not move, for the reasons detailed per-fix
+above (each fixed field's mutants still carry other, unrelated divergences).
+No `--update-baseline` commit follows this one: running it would write a
+byte-identical file, which is not drift, deliberate or otherwise, to record.
+
+#### Issue #646 (Ogg/Vorbis)
+
+Not fixed this dispatch (out of scope — the three items above are the
+assignment). Added an independent-reproduction comment
+(github.com/matteopolak/vaco/issues/646#issuecomment-5451398489) per the
+standing authorisation, including one addition: the reference's per-stream
+`bit_rate` for Ogg/Vorbis is real on at least some inputs (stated in the
+issue's own measurement), matching the missing-per-stream-estimate shape
+dispatch 5's addendum already catalogued for MPEG-TS AAC — widening that
+gap's known footprint to a second demuxer, not a new root cause. Left open,
+not closed.
