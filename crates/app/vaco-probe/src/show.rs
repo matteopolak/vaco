@@ -681,6 +681,7 @@ fn mime_codec_string(p: &CodecParameters) -> Option<String> {
             profile.unwrap_or(1).saturating_add(1)
         )),
         CodecId::Opus => Some("opus".to_owned()),
+        CodecId::Vorbis => Some("vorbis".to_owned()),
         CodecId::Flac => Some("flac".to_owned()),
         CodecId::Vp8 => Some("vp8".to_owned()),
         // `vp09.<profile>.<level>.<depth>` — probed as `vp09.00.10.08`. Left
@@ -1032,6 +1033,13 @@ mod tests {
             v.format = vaco_pixfmt::PixFmt::from_name("yuv420p10le").ok();
         }
         assert_eq!(mime_codec_string(&av1).as_deref(), Some("av01.0.00M.10"));
+    }
+
+    #[test]
+    fn mime_codec_string_is_bare_vorbis() {
+        // ffprobe -show_entries stream=mime_codec_string v.ogg  ->  vorbis
+        let vorbis = CodecParameters::audio().with_codec(CodecId::Vorbis);
+        assert_eq!(mime_codec_string(&vorbis).as_deref(), Some("vorbis"));
     }
 
     /// `is_avc` and `nal_length_size` are H.264 decoder *private* options, and
