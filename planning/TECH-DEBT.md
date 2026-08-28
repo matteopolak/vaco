@@ -117,3 +117,48 @@ and would require re-running the full gate suite against all five
 dependents, which is real scope beyond landing issues #546/#550 — flagging
 for whoever picks up the next protocol crate that would otherwise become a
 sixth copy.
+
+### `s337m` is registered twice, under two different implementations
+
+FM-54 (#612) added `vaco_format_spdif::S337M_DEMUXER`, a real SMPTE 337M
+demuxer alongside this crate's spdif/IEC 61937 work. Discovered while
+writing the crate's (previously missing — see the registry fix below)
+`vaco-component.toml`: `vaco-demux-raw` already registers a demuxer named
+`s337m` (`vaco_demux_raw::bitstream::DEMUXER_S337M`, part of its
+`BitstreamSpec`-driven sweep of ffmpeg's raw/bitstream demuxer names).
+`cargo xtask gen-registry`'s `check_unique` rejects the same name twice
+across crates in one kind, so only one can ever be reachable through the
+registry.
+
+Left `vaco-format-spdif::S337M_DEMUXER` unregistered rather than picking a
+winner — I don't know which of the two implementations is more complete or
+correct, and swapping the registry entry to point at a different crate's
+symbol is exactly the kind of cross-crate decision that shouldn't be made
+by whichever agent happens to notice the collision first. **Proposed
+seam:** compare the two (`vaco-demux-raw`'s generic `BitstreamSpec` framing
+vs. `vaco-format-spdif`'s dedicated SMPTE 337M parser) against a real
+S/PDIF-wrapped bitstream and either register the better one under `s337m`
+and delete the other, or split the name space (e.g. `vaco-demux-raw` keeps
+`s337m` for the bare bitstream form, `vaco-format-spdif` registers under a
+distinct name for the S/PDIF-framed form) if they actually serve different
+inputs. Not something `dup-check` catches at all — it checks Rust type
+names, not registry component names, so this collision was silent until
+`gen-registry` itself refused it.
+
+### Private-index commits, worked example from this session
+
+`GIT_INDEX_FILE` + `write-tree` + `commit-tree` (plan 19 §5/§6) is the
+prescribed way to append to a shared, append-only file like this one
+without touching the real `.git/index` a concurrent agent may have staged
+work in. Worked example, used to write this very entry:
+
+```bash
+export GIT_INDEX_FILE=/tmp/vaco-nut-techdebt-$RANDOM.index
+git read-tree HEAD
+git add planning/TECH-DEBT.md
+TREE=$(git write-tree)
+COMMIT=$(git commit-tree "$TREE" -p HEAD -m "docs(planning): append NUT/spdif findings to TECH-DEBT")
+git update-ref refs/heads/main "$COMMIT"
+git read-tree HEAD   # refresh the real index only; never touches the working tree
+unset GIT_INDEX_FILE
+```
