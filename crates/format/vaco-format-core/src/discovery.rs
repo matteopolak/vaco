@@ -377,6 +377,25 @@ impl<D: Demuxer> Discovery<D> {
             // and the codec id, see [`synthesize_extradata`].
             synthesize_extradata(stream, pkt.payload());
         }
+        // `avg_frame_rate` for a stream whose only rate ever comes from the
+        // codec's own in-band parameters (a raw elementary stream has no
+        // `stts`/DTS spacing to estimate from below, since R21b never gives
+        // it a timestamp). Reuses [`picture_rate`] rather than
+        // `stream.params.video.frame_rate` directly, so H.264/MPEG-1's tick
+        // rate is halved here exactly as it is for R21's packet-duration
+        // fill just below — otherwise this falls back, at display time, to
+        // the same undivided tick rate `r_frame_rate` correctly carries,
+        // and doubles every `avg_frame_rate` a raw `.h264`/`.hevc` file
+        // reports. Guarded so a rate this stream already has (from MP4's
+        // `stts` or the DTS-delta estimate in `finish`) is never overwritten.
+        if stream.media_type() == Some(MediaType::Video)
+            && (!stream.avg_frame_rate.is_defined() || stream.avg_frame_rate.is_zero())
+        {
+            let picture = picture_rate(stream);
+            if !picture.is_zero() {
+                stream.avg_frame_rate = picture;
+            }
+        }
         fill_codec_duration(slot, pkt, time_base);
 
         self.fixer.fix(pkt, time_base, rate);
@@ -829,7 +848,10 @@ fn synthesize_extradata(stream: &mut Stream, payload: &[u8]) {
         .as_ref()
         .and_then(|v| v.nal_length_size)
         .and_then(vaco_format_nalu::LengthSize::new)
-        .map_or(vaco_format_nalu::Framing::AnnexB, vaco_format_nalu::Framing::LengthPrefixed);
+        .map_or(
+            vaco_format_nalu::Framing::AnnexB,
+            vaco_format_nalu::Framing::LengthPrefixed,
+        );
     let sets = vaco_format_nalu::parameter_sets(payload, framing, header_kind);
     if sets.is_empty() {
         return;
@@ -1675,5 +1697,4 @@ mod tests {
         d.run(&NoParsers).unwrap();
         assert!(d.streams()[0].params.extradata.is_none());
     }
-
 }
