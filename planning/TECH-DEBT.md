@@ -6261,3 +6261,120 @@ availability), clause 6.4.7.3 (neighbouring 4x4 luma blocks), clause
 6.4.8 (neighbouring locations, Table 6-3), clause 8.3.1 (eq. 8-41..8-42,
 Table 8-2), clause 8.3.1.2 (eq. 8-45..8-69, clauses
 8.3.1.2.1..8.3.1.2.9).
+
+
+### Annex F: predictor table re-confirmed, OBMC weighting landed, a real architectural gap found and disclosed rather than papered over (#359)
+
+Per instruction: cross-check the predictor table against a real `-obmc`
+fixture *before* building the weighting on top of it, then implement
+OBMC weighting (F.2-F.4), remote-vector substitution (§F.3), and
+4-vector `MCBPC` bitstream dispatch. Two of three landed as verified,
+unwired groundwork; the third surfaced a genuine architectural blocker
+this round did not expect and correctly did not paper over.
+
+**Predictor table: bit-exact, not close, against real `ffmpeg`.** Built
+a QCIF fixture with a distinct, non-periodic motion vector per 8x8
+sub-block *and* per macroblock (uniform motion validates nothing - the
+same trap `intensity=1`'s one-axis source fell into), confirmed via
+`ffmpeg`'s own motion-vector side data (`PyAV`, `flags2=+export_mvs`)
+that every macroblock genuinely carried four distinct vectors, extracted
+the real `MVD` codewords with this crate's own already-tested
+`H263_MVD` VLC table (a temporary, fully-reverted scratch decode
+branch), and compared `predictor(candidate) + real_MVD` against
+`ffmpeg`'s own decoded final vectors. **63/63 exact** for every one of
+the four blocks across 63 interior macroblocks; a plausible wrong
+alternate matched only 12-19/63, by coincidence. Landed as
+`motion::annex_f_predictor_sources` (commit `a347580`, previous round).
+
+**OBMC weighting and chroma combination: transcribed, tested, landed.**
+Figures F.2-F.4's three 8x8 weighting matrices (`H0`/`H1`/`H2`)
+transcribed line-by-line from the primary text, per the three-tier
+transcription rule (shape/plausibility is not enough - this project's
+own MPEG-2 sibling had a single-bit width error survive exactly that
+weaker check, and this same round already found one error in this
+crate's own prior Annex F documentation). Self-consistency confirmed
+directly: all 64 cells across the three tables sum to exactly 8, the
+rounding formula's own divisor - a transcription slip would very
+likely break this, not just look slightly off. Table F.1's own
+four-vector chroma combination rule (sum of four luma vectors, divided
+by 8, snapped via a three-bucket sixteenth-pixel table distinct from
+this crate's existing single-vector chroma rule) landed alongside it.
+Both unit-tested against hand-worked values from the primary text.
+Landed as `motion::annex_f_obmc_luma_block` / `motion::annex_f_chroma_mv`
+(commit `45557e8`), both `#[allow(dead_code)]` with a reason - not yet
+wired to a consumer.
+
+**Wiring reconstruction surfaced a genuine architectural gap, found by
+building it, not by inspection.** Built the full path this round -
+4-vector `MCBPC` dispatch, per-block fine-grid predictor computation,
+`§F.3`'s remote-vector substitution rules (not-coded -> zero, INTRA ->
+current block's own vector, border -> current block's own vector, and
+the fifth rule with no equivalent in the older single-vector predictor
+rules: a bottom-row block's "below" remote is *always* replaced by its
+own vector, since the macroblock below has not been decoded yet
+regardless of picture geometry), and OBMC reconstruction - then
+validated it against a real decoded fixture end to end, exactly per
+instruction ("validate against the reference continuously... a single
+macroblock's OBMC-weighted prediction matching byte-for-byte is worth
+more than a complete implementation compared only against itself").
+
+That validation found two real bugs, one fixed, one not fixable without
+a larger change:
+
+1. **Fixed this round, not yet landed as code** (its only caller is the
+   reconstruction path reverted below): a one-vector macroblock's own
+   predictor must *also* use the fine-grid, per-block rule
+   (`annex_f_predictor_sources` applied to block 0) under Advanced
+   Prediction mode, not the older macroblock-granularity `predictors()`
+   - because "the corresponding macroblock's vector" stops being
+   well-defined once a *neighbouring* macroblock can carry four
+   different vectors instead of one. Confirmed directly: a fixture
+   region built to decode as a one-vector macroblock, with a
+   four-vector neighbour, reconstructed motion vectors matching real
+   `ffmpeg` output exactly once this fix was applied (previously wrong
+   by the neighbour's whole-macroblock "representative" value instead
+   of its specific needed 8x8 block).
+
+2. **Not fixable in this round's scope**: OBMC's rightward remote
+   vector needs the *next* macroblock in the same row's own
+   already-decoded vector (§F.3: "the block... to the right of the
+   current luminance block") - but in raster decode order, that
+   neighbour has not been decoded yet at the point this crate's
+   existing one-pass decode-then-reconstruct-immediately loop
+   reconstructs pixels, the same shape every other mode in this crate
+   uses successfully. Confirmed directly, not assumed: after fix (1)
+   above, every other neighbour direction and every previously-tricky
+   case (block 1, block 2, picture borders) matched real `ffmpeg`
+   output exactly; only the rightward-neighbour lookups read a
+   genuinely-not-yet-written default. Fixing this needs a
+   one-macroblock lookahead (or a full two-pass parse-then-reconstruct
+   split) in the GOB decode loop - real, scoped follow-up work, not a
+   small patch, and not attempted in the same pass as finding it.
+
+**The picture-header bail for Advanced Prediction was kept in place,
+not removed.** A picture using this mode is still cleanly reported as
+unsupported, exactly as before this round - a half-wired OBMC path
+producing silently-wrong pixels would be strictly worse than the
+honest "not implemented" this crate already gives. The 4-vector
+`MCBPC` dispatch and reconstruction wiring built this round were
+reverted in full (`git status --porcelain` confirmed clean both before
+building and after reverting); only the two pieces verified correct in
+isolation (`annex_f_predictor_sources`, `annex_f_obmc_luma_block`/
+`annex_f_chroma_mv`) remain landed.
+
+**`vaco-codec-h263` still does not implement Annex F.** What remains,
+by this round's own accounting: the raster-order restructuring, the
+one-vector-predictor fix from finding (1) above (understood and
+verified, not yet re-landed as code since its only caller is the
+reverted path), the 4-vector `MCBPC` bitstream dispatch (built and
+confirmed correct against the same fixture, reverted alongside the
+reconstruction wiring it exists to feed).
+
+Gates: `cargo test/clippy -p vaco-codec-h263` clean (46 tests, +7 this
+round over last round's 39). `cargo check --workspace` clean.
+`git status --porcelain` (unscoped) checked before every commit; the
+private-index recipe used throughout given the shared tree's other
+concurrent activity today.
+
+`Vaco-Spec-Ref: itu-t-h263` Annex F §F.2 (Figure F.1), §F.3 (Figures
+F.2-F.4, Table F.1).
