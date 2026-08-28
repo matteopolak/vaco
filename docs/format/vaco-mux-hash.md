@@ -203,16 +203,75 @@ family with a different default, which is why this crate models `md5` /
 `framemd5` as constructors on the same [`WholeHashMuxer`] / [`FrameHashMuxer`]
 types rather than separate ones.
 
-### `#extradata` header line
+### `#extradata` header line (issue #634, closed)
 
-`framecrc`/`framemd5`/`framehash` print `#extradata <i>: <len>, 0x<hash>` when
-a stream has extradata (measured on an H.264 stream: `#extradata 0: 36,
-0xa9970a1a`). **This crate does not currently emit that line at all** — probing
-its exact hash convention needs the raw extradata bytes, and this build's
-`ffprobe` did not expose them through any field tried (`-show_entries
-stream=extradata` came back empty for the container tested). Left out rather
-than guessed; a future pass with a way to read `ffprobe`'s raw extradata bytes
-can add it.
+`framecrc`/`framemd5`/`framehash` print `#extradata <i>` once per stream with
+non-empty extradata, in two measured shapes:
+
+```
+framecrc:            #extradata 0:       45, 0x27ba0f4a
+framemd5/framehash:  #extradata 0,                              45, 8a107aac933ae9470ec1efe74fc780fe
+```
+
+Colon vs comma after the index, and field widths **9** vs **32** for the
+length, are both exactly as measured (`od -c`-checked) — no rationale found
+for why they differ, only that they do. A stream with no extradata gets no
+line at all (measured: `mp3` audio copied alongside `h264` video prints
+`#extradata` for the video stream only, never a zero-length line for the
+audio one).
+
+**The hash is not a fixed CRC-32**, despite `framecrc`'s `0x`-prefixed output
+looking exactly like one — it is *this muxer's own* checksum for the active
+run, extracted by hashing the real 45-byte `avcC` payload of a copied H.264
+stream four ways and comparing against each mode's reported value:
+
+| Mode | Reported | Algorithm that produces it |
+|---|---|---|
+| `framecrc` | `0x27ba0f4a` | The same zero-seeded Adler-32 as its packet lines (`crate::algo::adler32_seeded`, seed `(0,0)`) |
+| `framehash -hash crc32` | `6b488af1` | Real CRC-32 (`zlib.crc32`) — proves `framecrc`'s value above is *not* this |
+| `framehash -hash adler32` | `27e70f4b` | Standard-seeded Adler-32 (seed `(1,0)`) — also not `framecrc`'s value |
+| `framemd5` | `8a107aac933ae9470ec1efe74fc780fe` | MD5 |
+| `framehash -hash sha256` | `5d8eaeab1ddc4cf6…` | SHA-256 |
+
+So `crate::frame::FrameHashMuxer::extradata_lines` reuses whichever hash
+scheme `FrameMode` is already active for packets, rather than reaching for
+`vaco_hash::crc32` unconditionally — doing that would have matched the one
+example this doc used to cite (which happened to *look* like real CRC-32 in
+hex) and silently diverged for every other case, the same "a name in the
+reference is not a specification" trap `AGENT-CONSTRAINTS.md` records for
+`crc`/`framecrc` themselves.
+
+### What issue #634's fix does and does not close
+
+With the three header divergences above closed, `framecrc` is
+**byte-for-byte identical** to the reference on a B-frame-free MP4 remux
+(`-c copy -bitexact -f framecrc -`, whole file, every line) and the header
+block (`#extradata`/`#software`/`#tb`/…) matches exactly on every input
+measured, MP4 and MPEG-TS, `-bitexact` and not.
+
+Two **separate, pre-existing** divergences remain on content this fix does
+not touch, found while verifying it and worth recording so the next agent
+does not re-discover them from scratch:
+
+* **B-frame streams' absolute `dts`/`pts` differ by a constant reorder-delay
+  offset** (measured: the reference's first `dts` is `-1024` on a two-B-frame
+  MP4, this build's is `0` — every later value differs by exactly the same
+  amount). The *base* is right (both sides now agree on `#tb`); something
+  upstream of this crate resolves the negative-initial-DTS/`avoid_negative_ts`
+  question differently for stream copy. Not this crate's packets or headers —
+  the checksums for the same packets are identical on both sides.
+* **MPEG-TS has that same offset, an absolute-vs-relative PCR/PTS origin
+  difference on top of it, and is missing a per-packet side-data field the
+  reference prints** (`S=1, MPEGTS Stream ID, 1, 0x00e000e0`, on every
+  packet, even with zero B-frames). Neither is a header/time-base fact this
+  crate owns — the origin question is upstream of the mux session, and the
+  side-data field is `vaco-demux-mpegts`/`vaco-format-core` plumbing this
+  crate never sees.
+
+Both were isolated by comparing a B-frame-free, `-bf 0` MP4/TS pair (which
+*does* match byte-for-byte on the video-only, no-side-data case) against the
+original B-frame fixture, to separate "wrong base" (this crate, now fixed)
+from "wrong absolute value"/"missing field" (elsewhere, still open).
 
 ## How to change it
 
@@ -225,11 +284,29 @@ can add it.
   `RunningHash` arm, and a `digest_hex` arm together; the
   `digest_hex_and_running_agree` test in that module will catch a mismatch
   between the one-shot and incremental paths for any algorithm you add.
-* **Per-stream time base** (`crate::header::resolve_time_base`) is this
-  crate's own opinion, not the reference's literal `st->time_base`, because
-  [`vaco_format_core::Muxer::add_stream`] never receives one — see that
-  function's doc comment for why, and why every registration's
-  `stream_time_base` override always agrees with what it prints.
+* **Per-stream time base** (`crate::header::resolve_time_base`) is now only
+  the *fallback* opinion, used when nobody hands this crate a better one.
+  [`vaco_format_core::Muxer::add_stream_with`] (gap 9, closed for this crate
+  by issue #634) supplies the real one — for stream copy,
+  `vaco_format_core::mux::MuxBuilder::add_stream` passes the *input*
+  stream's own base, which is what the reference actually prints (measured:
+  `1/12800` for one MP4, `1/90000` for one MPEG-TS, neither derivable from
+  `CodecParameters` alone). `crate::header::StreamHeader::new` is where the
+  two are reconciled; `resolve_time_base`'s `1/fps`/`1/sample_rate` guess is
+  now exercised only by a bare `add_stream` (freshly encoded raw/PCM media,
+  where it is exactly right) or an `add_stream_with` whose `spec.time_base`
+  is `None` or unusable.
+* **`#software`'s `-bitexact` gating** (`Muxer::set_bitexact`, also gap-9
+  shaped) is a second small channel `MuxBuilder::open` now feeds from
+  `FormatOptions::fflags`, at the same point it calls `set_metadata`. Before
+  this existed, the line was printed unconditionally (`SOFTWARE_LINE =
+  "vaco"`) — backwards from the reference, which prints its build string
+  *only without* `-bitexact` and suppresses it under `-bitexact` because the
+  value carries a library version (the same family as the `*_long_name`
+  suppression `AGENT-CONSTRAINTS.md` records for `ffprobe`). `SOFTWARE_LINE`
+  is now `concat!("vaco", env!("CARGO_PKG_VERSION"))` — a version, not a
+  bare name, matching the reference's *shape* without claiming to be a build
+  of it.
 
 ### Regenerating the fixtures
 

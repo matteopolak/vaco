@@ -312,7 +312,11 @@ is the same one gap 2 needs: `MuxWork` driving `MuxWriter` instead of a bare
 changed and why the lazy resolution in both crates turned out not to need
 touching.
 
-## 9. `Muxer::add_stream` takes only `CodecParameters`
+## 9. `Muxer::add_stream` takes only `CodecParameters` — PARTIALLY CLOSED 2026-08-27
+
+**The `framecrc`-corrupting half (below) is closed; `-disposition`/`-program`
+are not** — see *Status* at the end of this entry. Original report kept in
+full, since the *why* still explains the shape `StreamSpec` grew into.
 
 Reported by: the same pass. `-disposition` and `-program` parse correctly and
 have nowhere to go — a stream's disposition flags and its program membership are
@@ -337,6 +341,36 @@ forwards to `add_stream`, so none of the ~57 implementors change — but `spec`
 now needs to carry the stream's **time base** as well as its disposition and
 program membership. Remember that `impl<M: Muxer + ?Sized> Muxer for Box<M>`
 must forward the new method too, or a boxed muxer silently takes the default.
+
+### Status
+
+**Time base: closed (issue #634).** `StreamSpec { time_base: Option<Rational> }`
+landed exactly as sketched above, with `Muxer::add_stream_with` defaulting to
+`add_stream`. `vaco-mux-hash`'s `FrameHashMuxer` is the first (and, as of this
+close, only) override — `#tb` now matches the reference byte-for-byte on both
+an MP4 and an MPEG-TS fixture, `-bitexact` and not; see
+`CONFORMANCE-FINDINGS.md` 32's own *Status* note and
+`docs/format/vaco-format-core.md`'s "The 2026-08-27 addition" for the wiring,
+including the `Box<dyn Muxer>` **and** `vaco-cli`'s `TallyingMuxer` forwarding
+— the trap named above turned out to have a second instance nobody had
+written down: any wrapper holding a `Box<dyn Muxer>`, not just the blanket
+impl itself, has to forward a new method explicitly or it silently reverts
+to the default.
+
+**`-disposition`/`-program`: still open**, deliberately not touched by this
+close. `StreamSpec` stays at one field — adding the other two now would be
+guessing at a shape nobody has measured a caller for yet (D19), the same
+restraint gap 9's own text already argued for. The next agent that wires
+`-disposition` or `-program` through a real muxer should extend `StreamSpec`
+rather than invent a second channel.
+
+**A `Muxer::set_bitexact` sibling landed alongside this**, same file, same
+shape, for an unrelated fact (`vaco-mux-hash`'s `#software` line needed to
+know `-bitexact`, and had no channel either) — not itself part of gap 9, but
+recorded here because it used the identical "default no-op, wired through
+`MuxBuilder::open`, forwarded by `Box<dyn Muxer>` and `TallyingMuxer`" shape,
+and a future gap of the same kind should reach for that shape first rather
+than re-deriving it.
 
 ## 10. `vaco-filter-core` has no adapter for a multi-input or multi-output filter — CLOSED 2026-08-23
 

@@ -880,6 +880,77 @@ next to each gap's original entry, per this wave's brief ("leaving the entries
 and their reasoning, since the record of *why* an interface changed is worth
 more than the entry").
 
+## The 2026-08-27 addition: gap 9's `add_stream_with`, and `set_bitexact`
+
+Issue #634 / `CONFORMANCE-FINDINGS.md` 32 raised gap 9's priority: `#tb` in
+`vaco-mux-hash`'s `framecrc`/`framemd5`/`framehash` was silently wrong for
+every stream-copy output, because [`Muxer::add_stream`] genuinely has no
+channel for anything beyond [`CodecParameters`] — the muxer's own doc
+comment already said so honestly; the fix supplies the channel gap 9
+proposed rather than working around the absence again.
+
+### `StreamSpec` and `Muxer::add_stream_with`
+
+[`StreamSpec`] is a new, deliberately minimal struct — today, only
+`time_base: Option<Rational>`. [`Muxer::add_stream_with(&mut self, params,
+spec)`][Muxer::add_stream_with] is a new defaulted trait method that
+forwards straight to `add_stream`, so **none of the ~57 existing
+implementors changed** — the same additive shape gap 1's `set_metadata` used.
+Only `vaco-mux-hash`'s `FrameHashMuxer` overrides it so far, to prefer the
+supplied time base over its own `CodecParameters`-only guess.
+
+**The `Box<dyn Muxer>` trap, from `AGENT-CONSTRAINTS.md`, applies here by
+construction and was checked, not assumed:** `impl<M: Muxer + ?Sized> Muxer
+for Box<M>` forwards `add_stream_with` explicitly rather than inheriting the
+default — the default would call `add_stream` on the box itself, discarding
+`spec` for *every* boxed muxer regardless of what the concrete type
+underneath overrides, silently and without a compile error. `vaco-cli`'s
+`TallyingMuxer` (which wraps every real muxer the CLI opens) has the same
+obligation for the same reason, and was checked and fixed the same way — a
+wrapper is exactly as much a "boxed muxer" as `Box` itself is.
+
+**`MuxBuilder::add_stream` is the one caller, and already had the value.**
+It has taken an `input_time_base: TimeBase` parameter since before this
+change (M1's rescale needs it regardless of `Muxer::add_stream_with`'s
+existence) — the missing piece was purely that it never reached the
+`Muxer` the builder wraps. It now builds a `StreamSpec` from that same
+parameter and calls `add_stream_with` instead of `add_stream`; every
+existing caller's behavior is unchanged because the default forwards
+identically.
+
+### `Muxer::set_bitexact`
+
+A second, smaller gap surfaced while closing the first: `vaco-mux-hash`'s
+`#software` line needed to know whether `-bitexact` was requested, and
+nothing reached a `Muxer` to say so — `FormatOptions` was already known to
+`MuxBuilder` (it is `self.opts`) but never handed to the muxer itself, same
+shape as gap 1 before `set_metadata` existed. [`Muxer::set_bitexact(&mut
+self, bitexact: bool)`][Muxer::set_bitexact] is a third new defaulted
+method (default: no-op), called by `MuxBuilder::open` from
+`self.opts.fflags.contains(FFlags::BITEXACT)` at the same point as
+`set_metadata`. `vaco-cli`'s top-level `-bitexact` is folded into
+`FormatOptions::fflags` by `vaco-cli::cli::format_options_of` (previously a
+parsed-but-silently-dropped flag — `-fflags +bitexact` given directly
+already worked, since `fflags` is a literal `FormatOptions` schema field);
+`TallyingMuxer` forwards this one too, for the same reason as
+`add_stream_with`.
+
+### Verification
+
+`long.mp4`/`long.ts`-shaped fixtures (H.264 via libx264, muxed to MP4 and
+MPEG-TS) were compared against the installed `ffmpeg 8.1` with `-c copy
+-f framecrc`, in both `-bitexact` and plain modes. Every header line
+(`#extradata`/`#software`/`#tb`/`#media_type`/…) now matches byte-for-byte
+on both containers in both modes; a B-frame-free remux matches **every**
+line of the output, header and packets both. `crc`/`md5`/`hash`/
+`streamhash` were re-diffed against the same fixtures and remain
+byte-identical (no regression). See `docs/format/vaco-mux-hash.md`'s "What
+issue #634's fix does and does not close" for the two separate,
+pre-existing divergences (a B-frame reorder-delay DTS/PTS offset, and an
+MPEG-TS timestamp-origin/side-data gap) found during this verification and
+deliberately left open — neither is a fact this crate's header or this
+trait's signature carries.
+
 ## Signature gaps
 
 Interfaces are frozen (plan 19 §6), so these are **reported, not changed**. In
