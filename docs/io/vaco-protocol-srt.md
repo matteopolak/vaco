@@ -48,6 +48,19 @@ differential check.
   which are different types) — a genuinely different state machine from
   caller/listener, not one with a flag flipped, matching how `draft` §4.3.2
   describes it.
+- `message` (PR-10c / #557) — `TransmissionMode` (this crate's own reading
+  of the `STREAM` `SRT Flags` bit, stated as an inference rather than
+  re-labeled draft-derived — the fetched text names the bit without giving
+  its semantics) and `MessageReassembler` (message-mode only: groups
+  `on_tick`-delivered packets by `msg_no`/`PacketPosition` into whole
+  messages, all-or-nothing if any constituent packet is too-late-dropped —
+  inferred from message mode's own point, not a rule the fetched draft
+  text states outright).
+- `options` (PR-10c / #557) — `SrtOptions`, deliberately scoped to exactly
+  the knobs this crate's own code reads (transmission mode, `latency_ms`,
+  `rto_ms`) rather than reconstructing an `ffmpeg -h protocol=srt`-shaped
+  option table this crate has no `libsrt` build to measure against — see
+  that module's own docs for the clean-room reasoning.
 - `ack` (PR-10b / #556) — the ACK/NAK CIF shapes (`draft` §3.2.4/§3.2.5).
   Field layout is draft-derived; the ACK stats fields (RTT/RTTVar/the
   three rate estimates) have no stated formula and are always zero
@@ -144,6 +157,27 @@ same weakness the handshake loopback test has — bounded here because
 *functional* delivery under loss is close to a property of the pair's own
 internal consistency, which is what this test actually checks, not
 interop or the IMPLEMENTATION-DEFINED constants' real-world tuning.
+`tests/lossy_link.rs::assert_stats_are_sound` also checks `SendStats`/
+`ReceiveStats` (#557's statistics surface) two different ways, labeled:
+`packets_sent` against the test loop's own known packet count, and
+`packets_delivered + packets_dropped` against that same count, are
+**independently-computed** (the expectation comes from the test's own
+loop bound, not from anything the counters or returned event vectors
+reported); `packets_delivered`/`packets_dropped` against
+`delivered.len()`/`dropped.len()` are **merely reported** — both numbers
+come from the same `ReceiveWindow`, just via two different paths, so
+agreement checks the counter's own internal consistency, not an outside
+truth.
+
+`message.rs`'s own tests (single-packet, multi-packet, drop-discards-the-
+whole-message, interleaved-messages) are self-consistency: they check
+`MessageReassembler` against inputs the test itself constructs, not
+against a real peer's own message framing.
+
+**"Interop" is named as unreachable, not attempted, and not replaced with
+a self-hosted look-alike** (`lib.rs`'s own module docs) — unlike loss
+recovery and handshake completion, functional interop with a real SRT
+peer has no meaningful substitute this crate can run against itself.
 
 **What is not verified, and cannot be from here**:
 
@@ -178,6 +212,15 @@ interop or the IMPLEMENTATION-DEFINED constants' real-world tuning.
   own ARQ recovers from loss with *these* constants; it says nothing about
   whether they would perform well, or even correctly interoperate, against
   a real SRT peer's own timing.
+- **`TransmissionMode`'s mapping from the `STREAM` flag** is this crate's
+  own inference (message mode absent the flag, byte-stream mode present
+  it), not text the fetched draft states — the fetched `SRT Flags` table
+  names the bit without giving its semantics. Not independently
+  confirmable without a reference peer.
+- **The option surface names no `streamid`/`passphrase`/similar fields**
+  on purpose (`options.rs`'s own docs) — nothing in this crate consumes
+  them yet, and adding them as options with nothing behind them would be
+  surface, not capability.
 - **No congestion control or rate limiting**: not implemented, not
   attempted. `draft` §5.1/§5.2 name LiveCC/FileCC without giving their
   algorithms in the fetched text — the same "no specification, no

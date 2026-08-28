@@ -25,7 +25,7 @@
 
 #![allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
 
-use vaco_protocol_srt::arq::{ReceiveConfig, ReceiveWindow, SendConfig, SendWindow};
+use vaco_protocol_srt::arq::{ReceiveConfig, ReceiveStats, ReceiveWindow, SendConfig, SendStats, SendWindow};
 
 /// A tiny deterministic PRNG (xorshift32) — not `rand`, so this test adds
 /// no new dependency (D10) for what is just "a reproducible sequence of
@@ -58,7 +58,7 @@ impl Xorshift32 {
 /// the latency-window drop policy resolve everything still outstanding.
 ///
 /// Returns `(delivered_in_order, dropped)`.
-fn simulate(packet_count: u32, loss_percent: u32, seed: u32) -> (Vec<(u32, Vec<u8>)>, Vec<u32>) {
+fn simulate(packet_count: u32, loss_percent: u32, seed: u32) -> (Vec<(u32, Vec<u8>)>, Vec<u32>, SendStats, ReceiveStats) {
     const ROUND_MS: u64 = 10; // matches ack::FULL_ACK_INTERVAL_MS's own granularity
     const DRAIN_ROUNDS: u64 = 300; // 3s of extra time to resolve retries within the 1s latency window
 
@@ -136,7 +136,40 @@ fn simulate(packet_count: u32, loss_percent: u32, seed: u32) -> (Vec<(u32, Vec<u
         }
     }
 
-    (delivered, dropped)
+    (delivered, dropped, sender.stats(), receiver.stats())
+}
+
+/// Checks the stats counters two different ways, labeled by which kind of
+/// evidence each is (per the coordinator's own request): `packets_sent`
+/// against `packet_count` and `delivered+dropped` against `packet_count`
+/// are **independently-computed expectations** — `packet_count` comes from
+/// the test's own loop bound, not from anything the counters or the
+/// returned event vectors reported. `packets_delivered`/`packets_dropped`
+/// against `delivered.len()`/`dropped.len()` are **merely reported**: both
+/// numbers come from the same `ReceiveWindow`, just via two different
+/// paths (a running counter vs. the events it returned), so agreement
+/// there checks the counter's own internal consistency, not an outside
+/// truth.
+fn assert_stats_are_sound(
+    packet_count: u32,
+    delivered: &[(u32, Vec<u8>)],
+    dropped: &[u32],
+    send_stats: SendStats,
+    receive_stats: ReceiveStats,
+) {
+    // Independently-computed: the test loop sent exactly `packet_count`
+    // original packets (retransmissions do not call `on_send` again).
+    assert_eq!(send_stats.packets_sent, u64::from(packet_count));
+    // Independently-computed: a conservation invariant against the same
+    // `packet_count` the test loop used to drive the simulation, not
+    // against `delivered`/`dropped` themselves.
+    assert_eq!(receive_stats.packets_delivered + receive_stats.packets_dropped, u64::from(packet_count));
+
+    // Merely reported: the counter agrees with the events it itself
+    // returned. A real bug in `ReceiveWindow` shared between the counter
+    // and the event push would pass this check identically on both sides.
+    assert_eq!(receive_stats.packets_delivered, delivered.len() as u64);
+    assert_eq!(receive_stats.packets_dropped, dropped.len() as u64);
 }
 
 fn assert_sound_delivery(packet_count: u32, delivered: &[(u32, Vec<u8>)], dropped: &[u32]) {
@@ -160,8 +193,9 @@ fn assert_sound_delivery(packet_count: u32, delivered: &[(u32, Vec<u8>)], droppe
 #[test]
 fn five_percent_loss_recovers_almost_everything() {
     const PACKETS: u32 = 500;
-    let (delivered, dropped) = simulate(PACKETS, 5, 0xC0FF_EE01);
+    let (delivered, dropped, send_stats, receive_stats) = simulate(PACKETS, 5, 0xC0FF_EE01);
     assert_sound_delivery(PACKETS, &delivered, &dropped);
+    assert_stats_are_sound(PACKETS, &delivered, &dropped, send_stats, receive_stats);
     let delivered_ratio = delivered.len() as f64 / f64::from(PACKETS);
     assert!(
         delivered_ratio >= 0.99,
@@ -172,8 +206,9 @@ fn five_percent_loss_recovers_almost_everything() {
 #[test]
 fn twenty_percent_loss_still_recovers_the_large_majority() {
     const PACKETS: u32 = 500;
-    let (delivered, dropped) = simulate(PACKETS, 20, 0xC0FF_EE02);
+    let (delivered, dropped, send_stats, receive_stats) = simulate(PACKETS, 20, 0xC0FF_EE02);
     assert_sound_delivery(PACKETS, &delivered, &dropped);
+    assert_stats_are_sound(PACKETS, &delivered, &dropped, send_stats, receive_stats);
     let delivered_ratio = delivered.len() as f64 / f64::from(PACKETS);
     assert!(
         delivered_ratio >= 0.95,
@@ -184,8 +219,9 @@ fn twenty_percent_loss_still_recovers_the_large_majority() {
 #[test]
 fn zero_loss_delivers_everything_with_nothing_dropped() {
     const PACKETS: u32 = 200;
-    let (delivered, dropped) = simulate(PACKETS, 0, 1);
+    let (delivered, dropped, send_stats, receive_stats) = simulate(PACKETS, 0, 1);
     assert_sound_delivery(PACKETS, &delivered, &dropped);
+    assert_stats_are_sound(PACKETS, &delivered, &dropped, send_stats, receive_stats);
     assert_eq!(delivered.len(), PACKETS as usize);
     assert!(dropped.is_empty());
 }

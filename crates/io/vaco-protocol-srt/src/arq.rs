@@ -73,11 +73,21 @@ struct InFlight {
     last_sent_at_ms: u64,
 }
 
+/// Counters [`SendWindow`] reports, for the statistics surface (#557).
+/// Every field here is this crate's own bookkeeping, not a value read from
+/// or compared against a real peer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SendStats {
+    pub packets_sent: u64,
+    pub packets_retransmitted: u64,
+}
+
 /// The sender's retransmission buffer.
 #[derive(Debug)]
 pub struct SendWindow {
     config: SendConfig,
     buffer: BTreeMap<u32, InFlight>,
+    stats: SendStats,
 }
 
 impl SendWindow {
@@ -86,11 +96,18 @@ impl SendWindow {
         Self {
             config,
             buffer: BTreeMap::new(),
+            stats: SendStats::default(),
         }
+    }
+
+    #[must_use]
+    pub const fn stats(&self) -> SendStats {
+        self.stats
     }
 
     /// Record a freshly-sent data packet, so it can be retransmitted later.
     pub fn on_send(&mut self, seq_no: u32, timestamp: u32, payload: Vec<u8>, now_ms: u64) {
+        self.stats.packets_sent += 1;
         self.buffer.insert(
             seq_no,
             InFlight {
@@ -116,6 +133,7 @@ impl SendWindow {
             if let Some(entry) = self.buffer.get_mut(&seq) {
                 entry.last_sent_at_ms = now_ms;
                 out.push((seq, entry.timestamp, entry.payload.clone()));
+                self.stats.packets_retransmitted += 1;
             }
         }
         out
@@ -125,12 +143,15 @@ impl SendWindow {
     /// within `rto_ms` goes out again.
     pub fn on_tick(&mut self, now_ms: u64) -> Vec<(u32, u32, Vec<u8>)> {
         let mut out = Vec::new();
+        let mut resent = 0u64;
         for (&seq, entry) in &mut self.buffer {
             if now_ms.saturating_sub(entry.last_sent_at_ms) >= self.config.rto_ms {
                 entry.last_sent_at_ms = now_ms;
                 out.push((seq, entry.timestamp, entry.payload.clone()));
+                resent += 1;
             }
         }
+        self.stats.packets_retransmitted += resent;
         out
     }
 
@@ -169,6 +190,16 @@ pub struct ReceiveTick {
     pub renak: Vec<u32>,
 }
 
+/// Counters [`ReceiveWindow`] reports, for the statistics surface (#557).
+/// Every field here is this crate's own bookkeeping, not a value read from
+/// or compared against a real peer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReceiveStats {
+    pub packets_delivered: u64,
+    pub packets_dropped: u64,
+    pub bytes_delivered: u64,
+}
+
 /// The receiver's loss-detector, reorder buffer, and TSBPD-ish delivery
 /// gate.
 #[derive(Debug)]
@@ -179,6 +210,7 @@ pub struct ReceiveWindow {
     /// Missing sequence number -> when it was first noticed missing.
     loss_list: BTreeMap<u32, u64>,
     buffered: BTreeMap<u32, Vec<u8>>,
+    stats: ReceiveStats,
 }
 
 impl ReceiveWindow {
@@ -190,7 +222,13 @@ impl ReceiveWindow {
             highest_seen: None,
             loss_list: BTreeMap::new(),
             buffered: BTreeMap::new(),
+            stats: ReceiveStats::default(),
         }
+    }
+
+    #[must_use]
+    pub const fn stats(&self) -> ReceiveStats {
+        self.stats
     }
 
     /// Feed one arrived data packet. Returns newly-detected losses (a gap
@@ -229,12 +267,15 @@ impl ReceiveWindow {
         let mut tick = ReceiveTick::default();
         loop {
             if let Some(payload) = self.buffered.remove(&self.next_expected) {
+                self.stats.packets_delivered += 1;
+                self.stats.bytes_delivered += payload.len() as u64;
                 tick.delivered.push((self.next_expected, payload));
                 self.loss_list.remove(&self.next_expected);
                 self.next_expected = self.next_expected.saturating_add(1);
             } else if let Some(&detected_at) = self.loss_list.get(&self.next_expected) {
                 if now_ms.saturating_sub(detected_at) >= self.config.latency_ms {
                     self.loss_list.remove(&self.next_expected);
+                    self.stats.packets_dropped += 1;
                     tick.dropped.push(self.next_expected);
                     self.next_expected = self.next_expected.saturating_add(1);
                 } else {

@@ -25,6 +25,16 @@
 //! would pass both sides of a round trip identically). Every test module's
 //! doc comment says which it is.
 //!
+//! **An interop matrix — this or any package's own children running
+//! against a real SRT peer in both directions, at every mode — is named
+//! here as unreachable, not attempted, and not replaced with a
+//! self-hosted look-alike.** Loss recovery (#556) and handshake
+//! completion (#555) have meaningful self-hosted substitutes because both
+//! are close to properties of a pair's own internal consistency; interop
+//! is not — a matrix against this crate's own two implementations would
+//! prove only that they agree with each other, which every other test in
+//! this crate already establishes more directly.
+//!
 //! # How it works
 //!
 //! - [`packet`] — the common 16-byte header and the data/control packet
@@ -62,7 +72,25 @@
 //!   name every other constant this module needed a number for and could
 //!   not get from the draft (RTO, the too-late-drop threshold, NAK
 //!   re-announcement policy) as `IMPLEMENTATION-DEFINED`, with reasoning,
-//!   rather than presenting a guess as measured.
+//!   rather than presenting a guess as measured. **This is a real,
+//!   separately-tracked functional gap** (issue #656), not merely the
+//!   same specification gap stated twice: a real deployment over a real
+//!   network needs some throttling regardless of whether it matches
+//!   SRT's own named algorithms, which `arq`'s own tests (a simulated
+//!   lossy but otherwise-instant link) cannot exercise.
+//! - [`message`] (PR-10c / #557) — [`message::TransmissionMode`] (this
+//!   crate's own reading of the `STREAM` `SRT Flags` bit — stated as an
+//!   inference, not re-labeled draft-derived, since the fetched text names
+//!   the bit without giving its semantics) and [`message::MessageReassembler`]
+//!   (message-mode-only: groups `on_tick`-delivered packets by
+//!   `msg_no`/`PacketPosition` into whole messages, all-or-nothing if any
+//!   constituent packet is too-late-dropped).
+//! - [`options`] (PR-10c / #557) — [`options::SrtOptions`], deliberately
+//!   scoped to exactly the knobs this crate's own code reads
+//!   (transmission mode, `latency_ms`, `rto_ms`) rather than reconstructing
+//!   an `ffmpeg -h protocol=srt`-shaped table from general SRT knowledge
+//!   this crate has no `libsrt` build to measure against — see that
+//!   module's own docs.
 //!
 //! # Configuration
 //!
@@ -84,6 +112,8 @@ pub mod arq;
 pub mod cookie;
 pub mod handshake;
 pub mod km;
+pub mod message;
+pub mod options;
 pub mod packet;
 pub mod session;
 
