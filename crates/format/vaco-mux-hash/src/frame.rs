@@ -1,6 +1,26 @@
 //! `framecrc`, `framemd5` and `framehash`: one header block, then one line per
 //! packet.
 //!
+//! # Issue #634 / `CONFORMANCE-FINDINGS.md` 32: `#tb`, `#software`, `#extradata`
+//!
+//! Three header divergences closed together because they share one cause —
+//! this file had no channel to anything beyond [`CodecParameters`]:
+//!
+//! - `#tb` now follows [`Muxer::add_stream_with`]'s supplied
+//!   [`vaco_format_core::StreamSpec::time_base`] (gap 9) — the input
+//!   stream's own base for stream copy — falling back to
+//!   [`crate::header::resolve_time_base`]'s `1/fps` guess only when none was
+//!   supplied.
+//! - `#software` is now suppressed under `-bitexact`
+//!   ([`Muxer::set_bitexact`]), matching the reference (which suppresses it
+//!   for the same reason: the value is a library version), and prints a
+//!   version rather than a bare name when it does appear.
+//! - `#extradata <n>: <len>, 0x<hash>` (`framecrc`) / `#extradata <n>,
+//!   <len>, <hash>` (`framemd5`/`framehash`) is now printed, one line per
+//!   stream with any `extradata` — see [`FrameHashMuxer::extradata_lines`]
+//!   for the two measured formats and why the hash is *not* a fixed
+//!   CRC-32 despite `framecrc`'s looking like one.
+//!
 //! # The two header shapes, measured on ffmpeg 8.1
 //!
 //! `framecrc` (`-f framecrc`) prints only the plain `#software`/`#tb`/…
@@ -47,7 +67,7 @@ use core::fmt::Write as _;
 
 use vaco_codec_core::CodecParameters;
 use vaco_core::{Error, Result};
-use vaco_format_core::{FormatFlags, Muxer};
+use vaco_format_core::{FormatFlags, Muxer, StreamSpec};
 use vaco_io::{IoOptions, IoWriter, MediaSink};
 use vaco_packet::{Packet, PacketFlags};
 
@@ -76,6 +96,8 @@ pub struct FrameHashMuxer {
     out: IoWriter,
     mode: FrameMode,
     streams: Vec<StreamHeader>,
+    /// [`Muxer::set_bitexact`] — gates `#software` (fault 2, issue #634).
+    bitexact: bool,
 }
 
 impl FrameHashMuxer {
@@ -86,6 +108,7 @@ impl FrameHashMuxer {
             out: IoWriter::new(sink, &IoOptions::default())?,
             mode,
             streams: Vec::new(),
+            bitexact: false,
         })
     }
 
@@ -113,17 +136,78 @@ impl FrameHashMuxer {
     pub fn framehash(sink: Box<dyn MediaSink>, algo: HashAlgo) -> Result<Self> {
         Self::new(sink, FrameMode::Hash(algo))
     }
-}
 
-impl Muxer for FrameHashMuxer {
-    fn add_stream(&mut self, params: &CodecParameters) -> Result<u32> {
+    /// Shared body of [`Muxer::add_stream`]/[`Muxer::add_stream_with`]:
+    /// declare a stream, `time_base` overriding [`StreamHeader`]'s own
+    /// `CodecParameters`-only guess when supplied and usable (gap 9).
+    fn push_stream(
+        &mut self,
+        params: &CodecParameters,
+        time_base: Option<vaco_core::Rational>,
+    ) -> Result<u32> {
         let idx = u32::try_from(self.streams.len()).map_err(|_| Error::LimitExceeded {
             limit: "stream count",
             requested: u64::try_from(self.streams.len().saturating_add(1)).unwrap_or(u64::MAX),
             cap: u64::from(u32::MAX),
         })?;
-        self.streams.push(StreamHeader::new(params));
+        self.streams.push(StreamHeader::new(params, time_base));
         Ok(idx)
+    }
+
+    /// `#extradata <n>` lines, one per stream that has any, hashed with
+    /// *this muxer's own* checksum scheme rather than a fixed algorithm —
+    /// measured (`ffmpeg 8.1`) against the same input's avcC: `framecrc`
+    /// hashes it with the special seeded Adler-32 its packet lines use
+    /// (`0x27ba0f4a`, not `zlib.crc32`'s `0x6b488af1`), and `framemd5`/
+    /// `framehash -hash <algo>` hash it with that run's own `<algo>`
+    /// (verified for MD5, SHA-256, CRC-32 and adler32) — so this crate
+    /// deliberately does not reach for [`vaco_hash::crc32`] here despite the
+    /// `0x`-prefixed hex looking exactly like one.
+    ///
+    /// Column widths and separators are two different, both measured,
+    /// shapes: `framecrc` is `#extradata {n}: {len:>9}, 0x{hash:08x}`;
+    /// `framemd5`/`framehash` is `#extradata {n}, {len:>32}, {hash_hex}`.
+    ///
+    /// # Errors
+    /// [`Error::InvalidData`] if this build cannot compute the selected
+    /// [`FrameMode::Hash`] algorithm — the same failure [`Muxer::write_packet`]
+    /// reports for the same reason, just found one write earlier.
+    fn extradata_lines(&self) -> Result<Vec<String>> {
+        let mut lines = Vec::new();
+        for (i, st) in self.streams.iter().enumerate() {
+            let Some(data) = st.params.extradata.as_ref().filter(|d| !d.is_empty()) else {
+                continue;
+            };
+            let line = match self.mode {
+                FrameMode::Crc => {
+                    let (a0, b0) = ADLER32_FRAME_SEED;
+                    let crc = adler32_seeded(data, a0, b0);
+                    format!("#extradata {i}:{:>9}, 0x{crc:08x}", data.len())
+                }
+                FrameMode::Hash(algo) => {
+                    let hex = algo.digest_hex(data).ok_or(Error::InvalidData(
+                        "framehash: this build cannot compute the requested hash",
+                    ))?;
+                    format!("#extradata {i},{:>32}, {hex}", data.len())
+                }
+            };
+            lines.push(line);
+        }
+        Ok(lines)
+    }
+}
+
+impl Muxer for FrameHashMuxer {
+    fn add_stream(&mut self, params: &CodecParameters) -> Result<u32> {
+        self.push_stream(params, None)
+    }
+
+    fn add_stream_with(&mut self, params: &CodecParameters, spec: &StreamSpec) -> Result<u32> {
+        self.push_stream(params, spec.time_base)
+    }
+
+    fn set_bitexact(&mut self, bitexact: bool) {
+        self.bitexact = bitexact;
     }
 
     fn stream_time_base(&self, stream_index: u32) -> Option<vaco_core::Rational> {
@@ -142,7 +226,14 @@ impl Muxer for FrameHashMuxer {
                 format!("#hash: {}", algo.label()),
             ],
         };
-        write_common_header(&mut self.out, &self.streams, &extra)?;
+        let extradata = self.extradata_lines()?;
+        write_common_header(
+            &mut self.out,
+            &self.streams,
+            &extra,
+            &extradata,
+            self.bitexact,
+        )?;
         if matches!(self.mode, FrameMode::Hash(_)) {
             let mut line = COLUMN_HEADER.to_owned();
             line.push('\n');
@@ -373,5 +464,141 @@ mod tests {
             "0,          0,          0,        1,     6144, \
              c7eb1a16dc0cf68770cc974c5ce1ca0c384560d7f17e517b00c1d3d0c86fb923\n"
         ));
+    }
+
+    /// A real H.264 `avcC` payload (45 bytes, extracted from an
+    /// `ffmpeg`-muxed MP4's `stsd`), used to cross-check `#extradata`'s hash
+    /// against values measured directly from the reference rather than only
+    /// against this crate's own algorithms.
+    fn avcc_extradata() -> Vec<u8> {
+        const HEX: &str = "0164000affe100186764000aacd94426c044000003000400000300c83c\
+                            48965801000668ebe3cb22c0fdf8f800";
+        (0..HEX.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&HEX[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    /// Issue #634 / gap 9: [`Muxer::add_stream_with`] hands down a real time
+    /// base and this crate uses it — the `CodecParameters`-only guess
+    /// ([`crate::header::resolve_time_base`]'s `1/frame_rate`) is only the
+    /// fallback for `add_stream` now, not the only answer.
+    #[test]
+    fn add_stream_with_overrides_the_frame_rate_guess() {
+        let sink = MemorySink::new();
+        let shared = sink.shared();
+        let mut m = FrameHashMuxer::framecrc(Box::new(sink)).unwrap();
+        // `video_params()` carries `frame_rate = 5/1`, which would resolve to
+        // `1/5` — measured on real `long.mp4` (`CONFORMANCE-FINDINGS.md` 32),
+        // the reference instead keeps the input's own base, `1/12800` here.
+        let spec = StreamSpec {
+            time_base: Some(Rational::new(1, 12_800)),
+        };
+        let idx = m.add_stream_with(&video_params(), &spec).unwrap();
+        assert_eq!(m.stream_time_base(idx), Some(Rational::new(1, 12_800)));
+        m.write_header().unwrap();
+        m.write_trailer().unwrap();
+        let dumped = String::from_utf8(shared.snapshot()).unwrap();
+        assert!(dumped.contains("#tb 0: 1/12800\n"), "{dumped}");
+        assert!(!dumped.contains("#tb 0: 1/5\n"), "{dumped}");
+    }
+
+    /// [`Muxer::add_stream_with`] with an undefined/zero base falls back to
+    /// the same `CodecParameters` guess `add_stream` alone would give — the
+    /// case a freshly encoded raw/PCM stream hits (no better base to hand
+    /// down), which is what the fallback exists for.
+    #[test]
+    fn add_stream_with_falls_back_when_the_spec_has_no_usable_base() {
+        let sink = MemorySink::new();
+        let mut m = FrameHashMuxer::framecrc(Box::new(sink)).unwrap();
+        let idx = m
+            .add_stream_with(&video_params(), &StreamSpec::default())
+            .unwrap();
+        assert_eq!(m.stream_time_base(idx), Some(Rational::new(1, 5)));
+    }
+
+    /// `#extradata <n>: <len>, 0x<hash>` — `framecrc` hashes it with the same
+    /// seeded Adler-32 as its packet lines, *not* `zlib`/real CRC-32 (measured
+    /// against `ffmpeg 8.1`: `0x27ba0f4a`, where real CRC-32 of the same
+    /// bytes is `0x6b488af1` — see [`FrameHashMuxer::extradata_lines`]).
+    #[test]
+    fn framecrc_prints_extradata_with_its_own_seeded_adler32() {
+        let sink = MemorySink::new();
+        let shared = sink.shared();
+        let mut m = FrameHashMuxer::framecrc(Box::new(sink)).unwrap();
+        let mut params = video_params();
+        params.extradata = Some(avcc_extradata());
+        m.add_stream(&params).unwrap();
+        m.write_header().unwrap();
+        m.write_trailer().unwrap();
+        let dumped = String::from_utf8(shared.snapshot()).unwrap();
+        assert!(
+            dumped.contains("#extradata 0:       45, 0x27ba0f4a\n"),
+            "{dumped}"
+        );
+    }
+
+    /// `#extradata <n>, <len>, <hash>` — `framemd5` hashes it with that run's
+    /// own algorithm (MD5 here), plain hex, no `0x` — measured against
+    /// `ffmpeg 8.1`: `8a107aac933ae9470ec1efe74fc780fe`.
+    #[test]
+    fn framemd5_prints_extradata_with_the_selected_algorithm() {
+        let sink = MemorySink::new();
+        let shared = sink.shared();
+        let mut m = FrameHashMuxer::framemd5(Box::new(sink)).unwrap();
+        let mut params = video_params();
+        params.extradata = Some(avcc_extradata());
+        m.add_stream(&params).unwrap();
+        m.write_header().unwrap();
+        m.write_trailer().unwrap();
+        let dumped = String::from_utf8(shared.snapshot()).unwrap();
+        assert!(
+            dumped.contains(
+                "#extradata 0,                              45, \
+                 8a107aac933ae9470ec1efe74fc780fe\n"
+            ),
+            "{dumped}"
+        );
+    }
+
+    /// No extradata, no line at all — measured (`ffmpeg 8.1`): the reference
+    /// omits `#extradata` entirely rather than printing a zero length.
+    #[test]
+    fn no_extradata_means_no_extradata_line() {
+        let sink = MemorySink::new();
+        let shared = sink.shared();
+        let mut m = FrameHashMuxer::framecrc(Box::new(sink)).unwrap();
+        m.add_stream(&video_params()).unwrap();
+        m.write_header().unwrap();
+        m.write_trailer().unwrap();
+        let dumped = String::from_utf8(shared.snapshot()).unwrap();
+        assert!(!dumped.contains("#extradata"), "{dumped}");
+    }
+
+    /// Fault 2 (issue #634): `#software` is suppressed under `-bitexact`
+    /// ([`Muxer::set_bitexact`]) — the reference's own rule, inverted in this
+    /// crate before the fix — and otherwise prints a version, not a bare
+    /// name (`vaco0.1.0`-shaped, never the literal `vaco`).
+    #[test]
+    fn software_line_is_suppressed_only_under_bitexact() {
+        let sink = MemorySink::new();
+        let shared = sink.shared();
+        let mut m = FrameHashMuxer::framecrc(Box::new(sink)).unwrap();
+        m.add_stream(&video_params()).unwrap();
+        m.write_header().unwrap();
+        m.write_trailer().unwrap();
+        let dumped = String::from_utf8(shared.snapshot()).unwrap();
+        assert!(dumped.contains("#software: vaco"), "{dumped}");
+        assert!(!dumped.contains("#software: vaco\n"), "{dumped}");
+
+        let sink = MemorySink::new();
+        let shared = sink.shared();
+        let mut m = FrameHashMuxer::framecrc(Box::new(sink)).unwrap();
+        m.set_bitexact(true);
+        m.add_stream(&video_params()).unwrap();
+        m.write_header().unwrap();
+        m.write_trailer().unwrap();
+        let dumped = String::from_utf8(shared.snapshot()).unwrap();
+        assert!(!dumped.contains("#software"), "{dumped}");
     }
 }

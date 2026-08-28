@@ -45,18 +45,22 @@ use vaco_io::IoWriter;
 
 /// This crate's own `#software` identity.
 ///
-/// The reference prints its own `Lavf<version>` build string here, which this
-/// crate cannot and should not imitate — claiming to be a build of ffmpeg
-/// would make the line actively misleading to whatever reads it. A
-/// differential pass over these dumps has to skip this one line on both sides
-/// regardless of what it says, so the exact spelling is not load-bearing; see
-/// `docs/format/vaco-mux-hash.md`.
-pub const SOFTWARE_LINE: &str = "vaco";
+/// The reference prints `#software: Lavf<version>` — a *version*, not a bare
+/// name — and only **without** `-bitexact` (measured, `ffmpeg 8.1`: the line
+/// is absent entirely under `-bitexact`). That is the same family as the
+/// `*_long_name` suppression `AGENT-CONSTRAINTS.md` already records for
+/// `ffprobe`: a value that encodes a library build is exactly what
+/// `-bitexact` exists to strip from otherwise-reproducible output. This
+/// crate cannot and should not print `ffmpeg`'s own version string — claiming
+/// to be a build of the reference would make the line actively misleading —
+/// so it prints its own version instead, in the same `name<version>` shape,
+/// suppressed the same way. See `docs/format/vaco-mux-hash.md`.
+pub const SOFTWARE_LINE: &str = concat!("vaco", env!("CARGO_PKG_VERSION"));
 
-/// This crate's opinion of a stream's time base, from its [`CodecParameters`]
-/// alone.
+/// This crate's fallback opinion of a stream's time base, from its
+/// [`CodecParameters`] alone — used only when nobody hands it a better one.
 ///
-/// # Why this crate must have an opinion at all
+/// # Why this crate must have a fallback opinion at all
 ///
 /// [`vaco_format_core::Muxer::add_stream`] receives only `CodecParameters` —
 /// no time base — and [`vaco_format_core::Muxer::stream_time_base`] is a
@@ -68,17 +72,26 @@ pub const SOFTWARE_LINE: &str = "vaco";
 /// `Packet::duration` (stored in real microseconds, not stream ticks) back
 /// into ticks for display, so it needs a definite answer, not a shrug.
 ///
+/// [`vaco_format_core::Muxer::add_stream_with`] (gap 9,
+/// `planning/INTERFACE-GAPS.md`) closes that channel: [`StreamHeader::new`]
+/// prefers whatever [`vaco_format_core::StreamSpec::time_base`] supplies —
+/// for stream copy, `vaco_format_core::mux::MuxBuilder::add_stream` passes
+/// the *input* stream's own base, which is what the reference actually
+/// prints (measured: `1/12800` for one MP4, `1/90000` for one MPEG-TS —
+/// neither derivable from `CodecParameters`, see `CONFORMANCE-FINDINGS.md`
+/// 32) — and falls back to this function only when no spec was supplied at
+/// all (a bare `add_stream`, or one whose `spec.time_base` is `None`).
+///
 /// The reference's own rawvideo/PCM *encoders* set `time_base` to `1/fps` or
-/// `1/sample_rate` before any muxer sees the stream, which is what the header
-/// lines above show (`1/5` for a 5 fps `testsrc`, `1/44100` for 44.1 kHz
-/// audio). Recomputing that same formula from [`CodecParameters`] here
-/// reproduces it exactly for the case these muxers exist for — dumping raw or
-/// copied media — without this crate pretending to be an encoder.
+/// `1/sample_rate` before any muxer sees the stream, which is what that
+/// fallback recomputes: exactly the case these muxers exist for besides
+/// stream copy — dumping freshly encoded raw or PCM media — without this
+/// crate pretending to be an encoder.
 ///
 /// `None` when the codec parameters don't say (frame rate or sample rate is
-/// zero or absent, or the stream is neither audio nor video). Callers of this
-/// function that need a value regardless should use [`display_time_base`],
-/// whose fallback ([`vaco_core::Rational::MICROSECONDS`] — the same one
+/// zero or absent, or the stream is neither audio nor video). Callers that
+/// need a value regardless should use [`display_time_base`], whose fallback
+/// ([`vaco_core::Rational::MICROSECONDS`] — the same one
 /// `vaco_format_core::mux` itself falls back to) this crate's `Muxer` impls
 /// also return from `stream_time_base` verbatim: by construction, whatever
 /// this crate *prints* as a stream's `#tb` is also what M1 actually rescaled
@@ -104,7 +117,22 @@ pub fn display_time_base(params: &CodecParameters) -> TimeBase {
     resolve_time_base(params).unwrap_or(Rational::MICROSECONDS)
 }
 
+/// A defined, non-zero base, or `None` — the same acceptance test
+/// `vaco_format_core::mux::MuxBuilder::add_stream` applies to a muxer's own
+/// [`vaco_format_core::Muxer::stream_time_base`] answer, applied here to a
+/// supplied [`vaco_format_core::StreamSpec::time_base`] so the two can never
+/// disagree about what counts as "no real answer".
+fn usable(tb: Option<TimeBase>) -> Option<TimeBase> {
+    tb.filter(|tb| tb.is_defined() && !tb.is_zero())
+}
+
 /// Per-stream facts the header block needs, gathered once at `add_stream`.
+///
+/// `params.extradata` doubles as the source for the `#extradata` header
+/// line — [`crate::frame::FrameHashMuxer::extradata_lines`] reads it
+/// directly rather than this type summarising it, because that line's hash
+/// depends on which [`crate::frame::FrameMode`] is active, a fact this
+/// module has no reason to know.
 #[derive(Debug, Clone)]
 pub struct StreamHeader {
     pub params: CodecParameters,
@@ -112,10 +140,14 @@ pub struct StreamHeader {
 }
 
 impl StreamHeader {
+    /// `spec_time_base` is [`vaco_format_core::StreamSpec::time_base`],
+    /// already screened by the caller — pass it through unconditionally;
+    /// `usable` re-screens it anyway, so a caller that skips the check costs
+    /// nothing.
     #[must_use]
-    pub fn new(params: &CodecParameters) -> Self {
+    pub fn new(params: &CodecParameters, spec_time_base: Option<TimeBase>) -> Self {
         Self {
-            time_base: display_time_base(params),
+            time_base: usable(spec_time_base).unwrap_or_else(|| display_time_base(params)),
             params: params.clone(),
         }
     }
@@ -123,10 +155,15 @@ impl StreamHeader {
 
 /// Write the `#`-comment block shared by `framecrc`/`framemd5`/`framehash`.
 ///
-/// `extra` runs after `#software` and before the per-stream lines — the three
-/// `#format`/`#version`/`#hash` lines for `framemd5`/`framehash`, or nothing
-/// for `framecrc`. Measured: the extra lines come *before* `#software`, not
-/// after — see the module docs' `framemd5` transcript.
+/// Line order, measured (`ffmpeg 8.1`, both with and without `-bitexact`):
+/// `extra` first (the three `#format`/`#version`/`#hash` lines for
+/// `framemd5`/`framehash`, nothing for `framecrc`), then `extradata_lines`
+/// (one `#extradata <n>` per stream that has any, already formatted by the
+/// caller — [`crate::frame`] knows the active hash scheme and this function
+/// does not), then `#software` (present only when `bitexact` is `false`:
+/// the reference suppresses it under `-bitexact` because the value carries a
+/// library version — see [`SOFTWARE_LINE`]'s doc comment and
+/// `CONFORMANCE-FINDINGS.md` 32), then the per-stream `#tb`/… block.
 ///
 /// # Errors
 ///
@@ -135,12 +172,19 @@ pub fn write_common_header(
     out: &mut IoWriter,
     streams: &[StreamHeader],
     extra: &[String],
+    extradata_lines: &[String],
+    bitexact: bool,
 ) -> Result<()> {
     let mut buf = String::new();
     for line in extra {
         let _ = writeln!(buf, "{line}");
     }
-    let _ = writeln!(buf, "#software: {SOFTWARE_LINE}");
+    for line in extradata_lines {
+        let _ = writeln!(buf, "{line}");
+    }
+    if !bitexact {
+        let _ = writeln!(buf, "#software: {SOFTWARE_LINE}");
+    }
     for (i, st) in streams.iter().enumerate() {
         let _ = writeln!(buf, "#tb {i}: {}", st.time_base);
         let media = st.params.effective_media_type();

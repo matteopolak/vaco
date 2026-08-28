@@ -44,7 +44,7 @@ use std::sync::{Arc, Mutex};
 use vaco_codec_core::CodecParameters;
 use vaco_core::{MediaType, Rational, Result};
 use vaco_format_core::flags::FormatFlags;
-use vaco_format_core::{Muxer, MuxerDesc};
+use vaco_format_core::{Muxer, MuxerDesc, StreamSpec};
 use vaco_io::MediaSink;
 use vaco_packet::Packet;
 
@@ -273,6 +273,26 @@ impl Muxer for TallyingMuxer {
         Ok(index)
     }
 
+    // Forwarded explicitly, not inherited from the default — same trap as
+    // `impl Muxer for Box<M>` (`vaco-format-core`'s doc comment on
+    // `Muxer::add_stream_with`). Every real muxer this crate opens is wrapped
+    // in a `TallyingMuxer` before `vaco-sched` ever sees it (`run_pipeline` in
+    // `exec.rs`), so inheriting the default here would silently discard the
+    // input time base `MuxBuilder::add_stream` now passes down (gap 9) for
+    // every output this build writes, regardless of what the wrapped muxer
+    // overrides.
+    fn add_stream_with(&mut self, params: &CodecParameters, spec: &StreamSpec) -> Result<u32> {
+        let index = self.inner.add_stream_with(params, spec)?;
+        self.sink.with(|t| {
+            t.streams.push(StreamTally {
+                media: params.media_type,
+                packets: 0,
+                bytes: 0,
+            });
+        });
+        Ok(index)
+    }
+
     fn init(&mut self) -> Result<()> {
         self.inner.init()
     }
@@ -343,6 +363,13 @@ impl Muxer for TallyingMuxer {
 
     fn set_option(&mut self, name: &str, value: &str) -> Result<()> {
         self.inner.set_option(name, value)
+    }
+
+    fn set_bitexact(&mut self, bitexact: bool) {
+        // Same reasoning as `set_metadata` above: the default is a silent
+        // no-op, and `TallyingMuxer` sits between every real muxer this
+        // binary opens and `MuxBuilder::open`'s call to this method.
+        self.inner.set_bitexact(bitexact);
     }
 }
 
@@ -441,6 +468,63 @@ mod tests {
         assert!(t.header_written && t.trailer_written);
         assert_eq!(t.packets(), 1);
         assert_eq!(t.bytes_of(MediaType::Video), 321);
+    }
+
+    /// A double that records what it was actually handed, through shared
+    /// state readable after `m` (which owns the `Box<dyn Muxer>`) has moved
+    /// it away — to prove `TallyingMuxer` forwards the two gap-9-shaped
+    /// methods rather than falling through to their no-op defaults *on the
+    /// wrapper itself*. That is the same trap
+    /// `vaco_format_core::Muxer::add_stream_with`'s doc comment records for
+    /// `impl Muxer for Box<M>`, and `TallyingMuxer` sits in exactly the same
+    /// position in every real pipeline this crate builds.
+    #[derive(Clone, Default)]
+    struct Received(Arc<Mutex<(Option<vaco_core::Rational>, Option<bool>)>>);
+
+    struct RecordingMuxer(Received);
+
+    impl Muxer for RecordingMuxer {
+        fn add_stream(&mut self, _: &CodecParameters) -> Result<u32> {
+            Ok(0)
+        }
+        fn add_stream_with(
+            &mut self,
+            _params: &CodecParameters,
+            spec: &StreamSpec,
+        ) -> Result<u32> {
+            self.0.0.lock().unwrap_or_else(|e| e.into_inner()).0 = spec.time_base;
+            Ok(0)
+        }
+        fn set_bitexact(&mut self, bitexact: bool) {
+            self.0.0.lock().unwrap_or_else(|e| e.into_inner()).1 = Some(bitexact);
+        }
+        fn write_header(&mut self) -> Result<()> {
+            Ok(())
+        }
+        fn write_packet(&mut self, _: &Packet) -> Result<()> {
+            Ok(())
+        }
+        fn write_trailer(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn tallying_muxer_forwards_add_stream_with_and_set_bitexact() {
+        let received = Received::default();
+        let inner = Box::new(RecordingMuxer(received.clone()));
+        let mut m = TallyingMuxer::new(inner, Sink::new());
+
+        let spec = StreamSpec {
+            time_base: Some(vaco_core::Rational::new(1, 12_800)),
+        };
+        m.add_stream_with(&params(MediaType::Video), &spec)
+            .unwrap();
+        m.set_bitexact(true);
+
+        let got = received.0.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(got.0, Some(vaco_core::Rational::new(1, 12_800)));
+        assert_eq!(got.1, Some(true));
     }
 
     #[test]

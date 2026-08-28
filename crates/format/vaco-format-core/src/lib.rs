@@ -467,6 +467,24 @@ impl<D: Demuxer + ?Sized> Demuxer for Box<D> {
     }
 }
 
+/// What [`Muxer::add_stream_with`] knows about a stream beyond
+/// [`CodecParameters`] (gap 9, `planning/INTERFACE-GAPS.md`).
+///
+/// Deliberately minimal: only `time_base` is populated today, because only
+/// `time_base` has a caller and a measured need (`framecrc`'s `#tb`, see
+/// [`Muxer::add_stream_with`]'s docs). Disposition flags and program
+/// membership are the other two facts `-disposition`/`-program` parse but
+/// have nowhere to land — the same gap, not yet closed — and are named here
+/// rather than invented speculatively (D19): a field with no reader is a
+/// guess about a shape nobody has measured yet.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StreamSpec {
+    /// The time base packets for this stream arrive in, when the caller
+    /// knows a better answer than [`CodecParameters`] alone implies —
+    /// typically the input stream's own base, for a stream-copy output.
+    pub time_base: Option<Rational>,
+}
+
 /// Write packets into a container.
 pub trait Muxer: Send {
     /// This container's own flags.
@@ -492,6 +510,49 @@ pub trait Muxer: Send {
     /// # Errors
     /// [`vaco_core::Error::Unsupported`] when this container cannot carry the codec.
     fn add_stream(&mut self, params: &CodecParameters) -> Result<u32>;
+
+    /// [`Muxer::add_stream`], plus whatever [`StreamSpec`] carries beyond
+    /// [`CodecParameters`] (gap 9, `planning/INTERFACE-GAPS.md`).
+    ///
+    /// # Why this exists
+    ///
+    /// `CodecParameters` states codec facts — dimensions, sample rate, a
+    /// frame rate — never the time base packets for this stream will actually
+    /// arrive in. That is invisible for a muxer that fixes its own scale
+    /// (MPEG-TS's 1/90000, MP4's media timescale) or that never has to print
+    /// one, but `vaco-mux-hash`'s `framecrc`/`framemd5`/`framehash` print a
+    /// `#tb` line and rescale every packet's duration back into it for
+    /// display — for those, "derive `1/frame_rate` from `CodecParameters`"
+    /// (the only thing `add_stream` alone allows) is a guess that happens to
+    /// match the reference only for freshly encoded raw/PCM media, and is
+    /// simply wrong for stream copy, where the reference keeps the *input's*
+    /// base (measured: `1/12800` for one MP4, `1/90000` for one MPEG-TS,
+    /// against a naive `1/frame_rate` of `1/25` and `1/50`; see
+    /// `CONFORMANCE-FINDINGS.md` 32).
+    ///
+    /// # Why a new method rather than widening `add_stream`
+    ///
+    /// `add_stream` is implemented by roughly 60 containers today. Changing
+    /// its signature would touch every one of them for a fact only a handful
+    /// need. The default below forwards to `add_stream`, so an implementor
+    /// that has no opinion needs no change at all; only a muxer that actually
+    /// wants `spec` overrides this method instead.
+    ///
+    /// # The `Box<dyn Muxer>` trap
+    ///
+    /// [`impl Muxer for Box<M>`](#impl-Muxer-for-Box<M>) must forward this
+    /// method explicitly rather than inherit the default — the default would
+    /// call `add_stream` on the box, silently discarding `spec` for every
+    /// boxed muxer regardless of what the concrete type underneath actually
+    /// overrides. A wrapping `Muxer` (a tee, a tally, a segmenter) has the
+    /// same obligation for the same reason.
+    ///
+    /// # Errors
+    /// As [`Muxer::add_stream`].
+    fn add_stream_with(&mut self, params: &CodecParameters, spec: &StreamSpec) -> Result<u32> {
+        let _ = spec;
+        self.add_stream(params)
+    }
 
     /// Called once after every stream is declared and before the header.
     ///
@@ -637,6 +698,33 @@ pub trait Muxer: Send {
         Ok(())
     }
 
+    /// Whether the top-level `-bitexact` was requested for this output.
+    ///
+    /// # Why this exists
+    ///
+    /// The reference suppresses anything that encodes a library build or a
+    /// wall clock under `-bitexact` — `vaco-mux-hash`'s `#software` line is
+    /// one of them (measured, `ffmpeg 8.1`: `#software: Lavf62.12.100`
+    /// appears only *without* `-bitexact`; see `CONFORMANCE-FINDINGS.md` 32).
+    /// Nothing reached a `Muxer` to say so before this: [`FormatOptions`] is
+    /// known to [`mux::MuxBuilder`] but never handed to the muxer itself, the
+    /// same shape gap 1 closed for [`metadata::MuxMetadata`].
+    ///
+    /// Called once by [`mux::MuxBuilder::open`], at the same point as
+    /// [`Muxer::set_metadata`] — after stream time bases are read, before
+    /// [`Muxer::write_header`] — from
+    /// `FormatOptions::fflags.contains(FFlags::BITEXACT)`, which is already
+    /// true today for `-fflags +bitexact` given directly on the output (the
+    /// mechanism `vaco-mux-matroska` already reads for its own random-UID
+    /// suppression) and, since this method's introduction, for the top-level
+    /// `-bitexact` shorthand `vaco-cli` now folds onto it as well.
+    ///
+    /// The default does nothing: no existing muxer's write changes, because
+    /// no muxer could have been reading this fact before now.
+    fn set_bitexact(&mut self, bitexact: bool) {
+        let _ = bitexact;
+    }
+
     /// Set one muxer-private option by name (gap 5, `planning/INTERFACE-GAPS.md`)
     /// — the seam for a per-container knob like `-movflags` that has no home
     /// in the generic [`FormatOptions`] table.
@@ -688,6 +776,13 @@ impl<M: Muxer + ?Sized> Muxer for Box<M> {
     fn add_stream(&mut self, params: &CodecParameters) -> Result<u32> {
         (**self).add_stream(params)
     }
+    // Forwarded explicitly, not inherited from the default: the default
+    // would call `add_stream` on the box and silently drop `spec` for every
+    // boxed muxer, regardless of what the concrete type underneath overrides
+    // — see `Muxer::add_stream_with`'s doc comment.
+    fn add_stream_with(&mut self, params: &CodecParameters, spec: &StreamSpec) -> Result<u32> {
+        (**self).add_stream_with(params, spec)
+    }
     fn init(&mut self) -> Result<()> {
         (**self).init()
     }
@@ -702,6 +797,9 @@ impl<M: Muxer + ?Sized> Muxer for Box<M> {
     }
     fn stream_time_base(&self, stream_index: u32) -> Option<Rational> {
         (**self).stream_time_base(stream_index)
+    }
+    fn set_bitexact(&mut self, bitexact: bool) {
+        (**self).set_bitexact(bitexact);
     }
     fn interleave(
         &mut self,

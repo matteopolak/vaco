@@ -467,6 +467,52 @@ mod tests {
     }
 
     #[test]
+    fn top_level_bitexact_folds_onto_fflags() {
+        // `-bitexact` is not a `FormatOptions` schema field (it is not one of
+        // the reference's 39 `AVFormatContext` options), so the generic
+        // schema-match loop in `format_options_of` would otherwise silently
+        // drop it — the same silent drop this test would have caught before
+        // issue #634's fix, when nothing consumed `-bitexact` at all.
+        // `Muxer::set_bitexact` (`vaco-format-core`) is what a muxer actually
+        // reads this bit from, via `MuxBuilder::open`.
+        let cli = parse(&["-i", "a.mkv", "-c", "copy", "-bitexact", "-f", "null", "-"]).unwrap();
+        assert!(
+            cli.outputs
+                .first()
+                .unwrap()
+                .format_opts
+                .fflags
+                .contains(vaco_format_core::options::FFlags::BITEXACT)
+        );
+    }
+
+    #[test]
+    fn bitexact_via_fflags_still_works_directly() {
+        // The spelling that already worked before this fix (`fflags` is a
+        // literal schema field) must keep working identically.
+        let cli = parse(&[
+            "-i",
+            "a.mkv",
+            "-c",
+            "copy",
+            "-fflags",
+            "+bitexact",
+            "-f",
+            "null",
+            "-",
+        ])
+        .unwrap();
+        assert!(
+            cli.outputs
+                .first()
+                .unwrap()
+                .format_opts
+                .fflags
+                .contains(vaco_format_core::options::FFlags::BITEXACT)
+        );
+    }
+
+    #[test]
     fn an_option_this_build_does_not_model_is_left_alone() {
         // `-map`/`-f`/`-c` are never `FormatOptions` fields; `format_options_of`
         // must not choke on them or silently absorb their values.

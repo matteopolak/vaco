@@ -110,7 +110,7 @@ use crate::interleave::{InterleaveQueue, MuxTimestamps};
 use crate::metadata::MuxMetadata;
 use crate::options::{AvoidNegativeTs, FFlags, FormatOptions};
 use crate::time::TIME_BASE_Q;
-use crate::{Muxer, StreamType};
+use crate::{Muxer, StreamSpec, StreamType};
 
 /// Whether a container will carry a codec, at a given compliance level (M15).
 ///
@@ -482,7 +482,18 @@ impl MuxBuilder {
                 });
             }
         }
-        let index = self.muxer.add_stream(params)?;
+        // Gap 9: hand the input time base down through `add_stream_with`,
+        // not just the plain `add_stream`. Every existing `Muxer` still gets
+        // exactly the call it always did — the default `add_stream_with`
+        // forwards straight to `add_stream`, ignoring `spec` — so this is
+        // additive; only a muxer that overrides `add_stream_with` (today:
+        // `vaco-mux-hash`'s `framecrc`/`framemd5`/`framehash`, which print a
+        // `#tb` line and cannot answer it correctly from `CodecParameters`
+        // alone — see `CONFORMANCE-FINDINGS.md` 32) sees a different value.
+        let spec = StreamSpec {
+            time_base: Some(input_time_base),
+        };
+        let index = self.muxer.add_stream_with(params, &spec)?;
         // A muxer that renumbers is telling us something we cannot honour:
         // every table in the session is indexed by position.
         if usize::try_from(index).ok() != Some(self.streams.len()) {
@@ -558,6 +569,13 @@ impl MuxBuilder {
                 .filter(|tb| tb.is_defined() && !tb.is_zero())
                 .unwrap_or(TIME_BASE_Q);
         }
+
+        // Same point as M30 below: `FormatOptions` was always known here, but
+        // never handed to the muxer itself before `Muxer::set_bitexact`
+        // existed (see its doc comment) — `vaco-mux-hash`'s `#software` line
+        // is the first caller.
+        self.muxer
+            .set_bitexact(self.opts.fflags.contains(FFlags::BITEXACT));
 
         // M30 — metadata reaches the muxer after time bases are settled but
         // before the header, the same point M12 settles anything else that
