@@ -83,15 +83,18 @@ impl BoxHeader {
         self.size.saturating_sub(self.header_len)
     }
 
-    /// Parse a header out of `data`, where `available` is the number of bytes
-    /// remaining in the enclosing container from the box's own start.
+    /// Parse a header's fields, resolving `largesize`/`usertype` and the
+    /// `size == 0` "to end of container" convention against `available`, but
+    /// **not** checking that the resolved `size` actually fits within it —
+    /// see [`BoxHeader::parse`] and [`BoxIter`]'s own recovery for the two
+    /// different answers callers want to that question.
     ///
     /// # Errors
     ///
     /// [`Error::UnexpectedEof`] when fewer than eight bytes are present, and
-    /// [`Error::InvalidData`] when the declared size cannot hold the header it
-    /// claims or overruns the container.
-    pub fn parse(data: &[u8], available: u64) -> Result<Self> {
+    /// [`Error::InvalidData`] when the declared size cannot hold the header
+    /// it claims.
+    fn parse_raw(data: &[u8], available: u64) -> Result<Self> {
         let mut r = ByteReader::new(data);
         let size32 = u64::from(r.be32());
         let kind = FourCc(<[u8; 4]>::try_from(r.bytes(4)).unwrap_or([0; 4]));
@@ -124,9 +127,6 @@ impl BoxHeader {
         if size < header_len {
             return Err(Error::InvalidData("isom: box smaller than its header"));
         }
-        if size > available {
-            return Err(Error::InvalidData("isom: box extends past its container"));
-        }
         Ok(Self {
             kind,
             size,
@@ -134,6 +134,52 @@ impl BoxHeader {
             usertype,
             to_end,
         })
+    }
+
+    /// Parse a header out of `data`, where `available` is the number of bytes
+    /// remaining in the enclosing container from the box's own start.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnexpectedEof`] when fewer than eight bytes are present, and
+    /// [`Error::InvalidData`] when the declared size cannot hold the header it
+    /// claims or overruns the container.
+    pub fn parse(data: &[u8], available: u64) -> Result<Self> {
+        let h = Self::parse_raw(data, available)?;
+        if h.size > available {
+            return Err(Error::InvalidData("isom: box extends past its container"));
+        }
+        Ok(h)
+    }
+
+    /// [`BoxHeader::parse_raw`], then — instead of erroring — clamp an
+    /// oversized `size` down to `available` and mark the header `to_end`,
+    /// exactly the value a legitimately `size == 0` box already carries.
+    ///
+    /// **Only [`BoxIter`] calls this**, and only because of what `BoxIter`
+    /// is: a flat walk over one already-in-memory, already-budgeted
+    /// container (`ilst`, `udta`, `trak`, ...), never a multi-gigabyte file.
+    /// Clamping there can only ever consume bytes that are already this
+    /// container's own — it cannot read past `data`'s end, cannot cross into
+    /// a sibling container, and does not scan content looking for a
+    /// plausible resync point the way the module doc's original caution
+    /// warns against. [`crate::scan::TopLevelScanner`] deliberately does
+    /// **not** get this treatment: a corrupted top-level box's size, seeked
+    /// over rather than held in memory, could otherwise swallow a real,
+    /// unrelated `mdat` into a mis-sized sibling — see the module doc's
+    /// "Recovering from an oversized child length" section for the full
+    /// reasoning and its one disclosed residual risk.
+    ///
+    /// # Errors
+    /// As [`BoxHeader::parse_raw`] — a header too short to parse at all, or
+    /// smaller than its own claimed header length, is still unrecoverable.
+    fn parse_clamped(data: &[u8], available: u64) -> Result<Self> {
+        let mut h = Self::parse_raw(data, available)?;
+        if h.size > available {
+            h.size = available;
+            h.to_end = true;
+        }
+        Ok(h)
     }
 }
 
@@ -236,9 +282,42 @@ impl<'a> FullBox<'a> {
 
 /// Flat iteration over one container's direct children.
 ///
-/// Yields `Err` once and then stops: a container whose child chain is broken
-/// has no reliable continuation, and skipping ahead to guess where the next box
-/// starts is how a parser ends up reading a payload as structure.
+/// Yields `Err` once and then stops on a child that cannot be recovered —
+/// a header too short to read at all, or one claiming to be smaller than
+/// its own fixed fields — because a container whose child chain is broken
+/// that way has no reliable continuation: skipping ahead to *guess* where
+/// the next box starts, by scanning content for something that looks like
+/// a plausible header, is how a parser ends up reading a payload as
+/// structure.
+///
+/// # Recovering from an oversized child length
+///
+/// A child whose declared size *overruns* this container — the shape a
+/// single corrupted length field produces, measured directly on
+/// `fuzz/seeds/diff/mp4` (an `aware`-mutator campaign corrupting an
+/// `ilst ▸ ©too` size to `0x8000_0000`/`0xFFFF_FFFF` loses the *entire*
+/// `ilst` walk, including the one real, physically-present `©too ▸ data`
+/// entry beneath it, though the reference recovers it) — is different from
+/// the case above, and is recovered rather than failed: the declared size
+/// is clamped to what is actually left in `data` (marked `to_end`, the
+/// same value a legitimately `size == 0` box already carries) instead of
+/// erroring. See [`BoxHeader::parse_clamped`] for the exact mechanism and
+/// why it does not reopen the "reading a payload as structure" risk this
+/// doc's first paragraph warns against: clamping never scans content for a
+/// resync point and never reads a byte that is not already part of this
+/// same container's own, already-in-memory data.
+///
+/// **The one residual risk, disclosed rather than hidden**: if the
+/// corrupted child was not actually the last legitimate child of this
+/// container, clamping folds a real sibling's bytes into the corrupted
+/// child's own body, and if that sibling *happens* to look enough like one
+/// of the corrupted child's own recognised sub-boxes, it could be
+/// misread — bounded to one level of nesting, bounded to bytes physically
+/// present in this one container, and never a new scan or a new
+/// allocation, so it cannot amplify into a denial of service or escape
+/// into a sibling *container's* data the way an unbounded resync could.
+/// Weighed and accepted for the class of corruption measured; see
+/// `planning/INTERFACE-GAPS.md` for the full decision record.
 #[derive(Debug, Clone)]
 pub struct BoxIter<'a> {
     data: &'a [u8],
@@ -267,7 +346,10 @@ impl<'a> BoxIter<'a> {
 
     /// The first direct child of type `kind`, or `None`.
     ///
-    /// Stops at the first malformed child rather than searching past it.
+    /// Stops at the first *unrecoverable* child (too short to parse, or
+    /// smaller than its own header) rather than searching past it — an
+    /// oversized child recovers instead, per [`BoxIter`]'s own doc, so this
+    /// can still find `kind` on the far side of one of those.
     #[must_use]
     pub fn find(self, kind: FourCc) -> Option<IsoBox<'a>> {
         self.flatten().find(|b| b.kind() == kind)
@@ -288,7 +370,12 @@ impl<'a> Iterator for BoxIter<'a> {
             // padding; that is not a corruption worth failing the parse over.
             return None;
         }
-        let header = match BoxHeader::parse(rest, rest.len() as u64) {
+        // `parse_clamped`, not `parse`: an oversized declared size is
+        // recovered here rather than failed — see this type's own doc for
+        // why that is safe specifically for a flat, in-memory container
+        // walk. A header too short to read, or smaller than its own fixed
+        // fields, is still unrecoverable and still stops the walk.
+        let header = match BoxHeader::parse_clamped(rest, rest.len() as u64) {
             Ok(h) => h,
             Err(e) => {
                 self.done = true;
@@ -302,7 +389,9 @@ impl<'a> Iterator for BoxIter<'a> {
             return Some(Err(Error::InvalidData("isom: box payload truncated")));
         };
         let offset = self.base.saturating_add(self.pos as u64);
-        // `size >= header_len >= 8` is guaranteed by `BoxHeader::parse`, so the
+        // `size >= header_len >= 8` is guaranteed by `BoxHeader::parse_clamped`
+        // (clamping only ever shrinks `size` down to `available`, never below
+        // `header_len`, since `parse_raw` already rejected that), so the
         // position strictly advances and iteration terminates.
         self.pos = self.pos.saturating_add(size);
         Some(Ok(IsoBox {
@@ -464,13 +553,91 @@ mod tests {
         assert!(got[0].is_ok());
     }
 
+    /// The behaviour this used to assert (an oversized size fails the whole
+    /// walk) is exactly what `parse_clamped` now recovers from instead — see
+    /// `BoxIter`'s own doc's "Recovering from an oversized child length"
+    /// section. `size=0xFFFFFFFF` is clamped to the 8 bytes actually left,
+    /// which is also `junk`'s own `header_len`, so it comes back as a
+    /// legitimate-looking empty, `to_end` box rather than an error.
     #[test]
-    fn iteration_reports_a_broken_chain_once_then_stops() {
+    fn an_oversized_trailing_box_recovers_instead_of_erroring() {
         let mut file = bx(b"free", &[]);
         file.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF, b'j', b'u', b'n', b'k']);
         let got: Vec<_> = BoxIter::new(&file, 0).collect();
         assert_eq!(got.len(), 2);
+        let junk = got[1].as_ref().unwrap();
+        assert_eq!(junk.kind(), FourCc(*b"junk"));
+        assert!(junk.header.to_end);
+        assert_eq!(junk.payload, &[] as &[u8]);
+    }
+
+    /// A header too short to read at all is still unrecoverable — clamping
+    /// only ever answers "how much of this box's *payload* is really
+    /// there", never "is there even a complete header".
+    #[test]
+    fn a_header_too_short_to_read_still_stops_the_walk() {
+        let mut file = bx(b"free", &[]);
+        file.extend_from_slice(&[0, 0, 0]); // 3 bytes: not even one full header
+        let got: Vec<_> = BoxIter::new(&file, 0).collect();
+        assert_eq!(got.len(), 1);
+        assert!(got[0].is_ok());
+    }
+
+    /// A size smaller than its own header is still unrecoverable — there is
+    /// no "how much is really there" question to answer when the box does
+    /// not even claim enough room for the fields it just stated.
+    #[test]
+    fn a_size_smaller_than_the_header_still_stops_the_walk() {
+        let mut file = bx(b"free", &[]);
+        file.extend_from_slice(&[0, 0, 0, 4]); // size=4 < header_len=8
+        file.extend_from_slice(b"junk");
+        let got: Vec<_> = BoxIter::new(&file, 0).collect();
+        assert_eq!(got.len(), 2);
         assert!(got[1].is_err());
+    }
+
+    /// The actual motivating case (`fuzz/seeds/diff/mp4`, an `aware`-mutator
+    /// finding): a real, physically-present `data` sub-box survives its
+    /// parent's corrupted length. Before `parse_clamped`, this entire walk
+    /// — including the recoverable `data` box — was lost to one bad length
+    /// nobody needed to trust in the first place.
+    #[test]
+    fn a_corrupted_parent_size_still_recovers_its_real_nested_child() {
+        let inner_data = bx(b"data", b"Lavf62.12.100");
+        let mut too = bx(b"\xa9too", &inner_data);
+        // Corrupt `©too`'s own declared size to something wildly oversized,
+        // in place, exactly as the `aware` mutator does.
+        too[0] = 0x80;
+        too[1] = 0;
+        too[2] = 0;
+        too[3] = 0;
+        let children: Vec<_> = BoxIter::new(&too, 0).flatten().collect();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].kind(), FourCc(*b"\xa9too"));
+        let grandchildren: Vec<_> = children[0].children().flatten().collect();
+        assert_eq!(grandchildren.len(), 1);
+        assert_eq!(grandchildren[0].kind(), boxes::DATA);
+        assert_eq!(grandchildren[0].payload, &inner_data[8..]);
+    }
+
+    /// The disclosed residual risk, made concrete: when the corrupted child
+    /// is *not* actually last, clamping folds a real sibling's bytes into
+    /// its own body. Confirms this stays bounded to that one container —
+    /// the sibling's bytes are consumed, not skipped over and rediscovered
+    /// — rather than silently doing the right thing by accident.
+    #[test]
+    fn a_corrupted_non_last_child_consumes_its_sibling_rather_than_skipping_to_it() {
+        let mut first = bx(b"free", &[1, 2, 3, 4]);
+        first[0] = 0x7F; // oversized: swallows everything after it
+        let second = bx(b"free", &[9, 9]);
+        let mut file = first;
+        file.extend_from_slice(&second);
+        let got: Vec<_> = BoxIter::new(&file, 0).flatten().collect();
+        // One box, not two: `second` was consumed as part of the first
+        // (clamped) box's payload rather than rediscovered as its own
+        // sibling.
+        assert_eq!(got.len(), 1);
+        assert!(got[0].header.to_end);
     }
 
     #[test]
