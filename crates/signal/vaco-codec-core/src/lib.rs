@@ -370,31 +370,19 @@ pub enum CodecId {
     /// gap as C-11/C-12 above. Name/long name measured from `ffmpeg
     /// -codecs`, 8.1: `jpegls`/"JPEG-LS".
     JpegLs,
-    /// Ben Russell's DFPWM1a, a 1-bit-per-sample adaptive delta/PWM codec
-    /// (`Ri`/`Rd`-controlled charge/strength predictor). No inter-frame
-    /// state crosses a packet boundary the way MPEG-style prediction does,
-    /// but the predictor does carry across samples within one continuous
-    /// stream, so unlike `Qoa`/`Sbc` this is not `INTRA_ONLY`. Name/long
-    /// name measured from `ffmpeg -codecs`, 8.1: `dfpwm`/"DFPWM (Dynamic
-    /// Filter Pulse Width Modulation)".
-    Dfpwm,
     /// Dominic Szablewski's Quite OK Audio, a sign-sign LMS predictor coded
     /// in fixed 20-sample/8-byte slices with the LMS state re-transmitted at
-    /// every frame header, so any frame is an independent seek point. Name/
-    /// long name measured from `ffmpeg -codecs`, 8.1: `qoa`/"QOA (Quite OK
-    /// Audio)".
+    /// every frame header, so any frame is an independent seek point.
+    /// `Dfpwm`/`Sbc` already exist above (added for
+    /// `vaco-format-misc-audio`'s stream identification) and are reused
+    /// as-is here, not redefined. Name/long name measured from `ffmpeg
+    /// -codecs`, 8.1: `qoa`/"QOA (Quite OK Audio)".
     Qoa,
     /// RFC 3389 RTP comfort noise: a Silence Insertion Descriptor (noise
     /// level plus optional LPC reflection coefficients) driving an
     /// unspecified-by-the-RFC noise synthesiser. Name/long name measured
     /// from `ffmpeg -codecs`, 8.1: `comfortnoise`/"RFC 3389 Comfort Noise".
     ComfortNoise,
-    /// Bluetooth SIG A2DP's low-complexity SBC subband codec: a fixed
-    /// cosine-modulated polyphase filterbank plus per-block adaptive bit
-    /// allocation, every block independently decodable. Name/long name
-    /// measured from `ffmpeg -codecs`, 8.1: `sbc`/"SBC (low-complexity
-    /// subband codec)".
-    Sbc,
 }
 
 /// One row of the codec identity table.
@@ -1511,10 +1499,10 @@ const CODECS: &[CodecEntry] = &[
             .union(CodecProperties::LOSSLESS)
             .union(CodecProperties::INTRA_ONLY),
     ),
-    // Trivial/open-spec audio codecs plus Bluetooth SBC. Measured
-    // `ffmpeg -codecs`, 8.1: `DEA.L. dfpwm`, `D.AIL. qoa`, `DEAIL.
-    // comfortnoise`, `DEAIL. sbc`.
-    entry(CodecId::Dfpwm, "dfpwm", "DFPWM (Dynamic Filter Pulse Width Modulation)", A, CodecProperties::LOSSY),
+    // Open-spec audio codecs this batch adds: `Dfpwm`/`Sbc` already have
+    // table rows above (from `vaco-format-misc-audio`'s stream
+    // identification), reused as-is. Measured `ffmpeg -codecs`, 8.1:
+    // `D.AIL. qoa`, `DEAIL. comfortnoise`.
     entry(
         CodecId::Qoa,
         "qoa",
@@ -1526,13 +1514,6 @@ const CODECS: &[CodecEntry] = &[
         CodecId::ComfortNoise,
         "comfortnoise",
         "RFC 3389 Comfort Noise",
-        A,
-        CodecProperties::LOSSY.union(CodecProperties::INTRA_ONLY),
-    ),
-    entry(
-        CodecId::Sbc,
-        "sbc",
-        "SBC (low-complexity subband codec)",
         A,
         CodecProperties::LOSSY.union(CodecProperties::INTRA_ONLY),
     ),
