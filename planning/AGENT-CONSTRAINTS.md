@@ -636,3 +636,36 @@ Note what the rule does **not** cover: `vec![x; n]`, `resize`, and collecting an
 iterator whose length an option decides are all still yours to check by hand.
 The lint catches the spelling, not the class.
 
+
+## An API with no caller is invisible to every test you will write
+
+`cargo xtask dead-code`'s "orphans" category found 143 public items across 24
+crates that nothing outside their own crate uses. Most are harmless. One of them
+was this:
+
+```text
+$ vaco -i in.mp4 -c copy -f mpegts out.ts
+Error while filtering: unsupported: this muxer needs a bitstream filter and no
+BsfProvider was supplied
+```
+
+`vaco_registry::Bsfs` was written when gap 8 closed, and had no caller.
+`PipelineSpec::set_output_bsfs` was written to receive it, and had no caller
+either. Both halves of the M6 stage existed, were unit-tested, and were never
+connected — so `-c copy` from an MP4 to **anything Annex-B** failed outright,
+and MP4 → AVI wrote a 224-byte stub, while the whole test suite stayed green.
+
+The shape is worth recognising because it recurs. A test written for a new API
+exercises the API. It cannot notice that the *only* thing missing is somebody
+calling it, because you write the caller and the test in the same head, and if
+you had thought of the caller you would have written it. The gap only becomes
+visible when you run the binary against a real file and compare it to the
+reference.
+
+So: **after landing an interface, run the command a user would run.** Not the
+unit test — the command. Both bugs above cost one `vaco -i x.mp4 -c copy -f
+mpegts out.ts` to find, and neither was findable any other way.
+
+And when you add a public item, either call it in the same change or say in the
+commit message who is going to. `dead-code`'s orphan list is a list of promises
+nobody has kept yet.
