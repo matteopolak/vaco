@@ -240,18 +240,6 @@ impl Dechunker {
                 }
             };
 
-        if !matches!(header, MessageHeader::Type3) {
-            state.last_timestamp_delta = match header {
-                MessageHeader::Type0 { .. } => 0,
-                _ => extended.unwrap_or(raw_ts.unwrap_or(0)),
-            };
-        }
-        state.last_timestamp = timestamp;
-        state.last_message_type_id = message_type_id;
-        state.last_message_stream_id = message_stream_id;
-        state.last_message_length = message_length;
-        state.extended_timestamp_in_effect = reads_extended;
-
         let total_len = usize::try_from(message_length).unwrap_or(usize::MAX);
         let remaining_before = if is_continuation {
             state
@@ -270,6 +258,27 @@ impl Dechunker {
         // mutable borrow.
         let payload_owned = payload_chunk.to_vec();
         let after_extended_len = after_extended.len();
+
+        // Only now that the whole chunk (header *and* payload) is confirmed
+        // present do we commit this header's effect on the chunk stream's
+        // carried-over state. Committing any earlier corrupts that state on
+        // a retry: when the payload has not fully arrived yet, `feed`
+        // returns `NeedMoreData` above without consuming `self.buf`, so the
+        // next `feed` call re-parses this exact same header from scratch.
+        // A premature commit here would then be applied a second time —
+        // visible as a doubled delta on Type1/Type2's `wrapping_add`, or on
+        // the bare-Type3 shorthand that repeats the previous delta.
+        if !matches!(header, MessageHeader::Type3) {
+            state.last_timestamp_delta = match header {
+                MessageHeader::Type0 { .. } => 0,
+                _ => extended.unwrap_or(raw_ts.unwrap_or(0)),
+            };
+        }
+        state.last_timestamp = timestamp;
+        state.last_message_type_id = message_type_id;
+        state.last_message_stream_id = message_stream_id;
+        state.last_message_length = message_length;
+        state.extended_timestamp_in_effect = reads_extended;
 
         // Only now, once the whole chunk is confirmed present, remove it
         // from the front of the buffer.
@@ -456,6 +465,64 @@ mod tests {
         let mut d = Dechunker::new(limits());
         let out = d.feed(&wire).unwrap();
         assert_eq!(out, vec![a, b]);
+    }
+
+    /// Regression test for a bug the `protocol_rtmp_dechunk` fuzz target's
+    /// whole-vs-split-feed oracle found: `try_take_one` used to commit a
+    /// header's effect on `ChunkStreamState` (`last_timestamp`,
+    /// `last_timestamp_delta`, ...) before confirming the chunk's payload
+    /// bytes had actually arrived. When a `Type1` header's delta-carrying
+    /// bytes were fully present but its payload was not, `feed` returned
+    /// `NeedMoreData` having already applied the delta once; the next
+    /// `feed` call re-parsed the same header from scratch and applied it a
+    /// second time, doubling the resolved timestamp. A single `feed` call
+    /// containing the whole chunk never hit the retry, so this was invisible
+    /// to every test that fed a message all at once (or byte-at-a-time from
+    /// a `Type0` header, whose timestamp is assigned rather than
+    /// accumulated).
+    #[test]
+    fn a_header_split_from_its_payload_across_feed_calls_does_not_double_the_delta() {
+        const CSID: u32 = 6;
+        let first = RtmpMessage {
+            timestamp: 1000,
+            message_type_id: 9,
+            message_stream_id: 1,
+            payload: vec![0xaa; 4],
+        };
+        let mut wire = chunk_message(&first, CSID, 128).unwrap();
+
+        // Hand-build a `Type1` header for a second message on the same
+        // chunk stream: `chunk_message` only ever emits `Type0`, but the
+        // doubling bug is specific to a header whose timestamp is resolved
+        // via `state.last_timestamp.wrapping_add(delta)` rather than
+        // assigned outright.
+        let delta = 500;
+        let payload = vec![0xbbu8; 4];
+        chunk::encode_basic_header(1, CSID, &mut wire).unwrap();
+        MessageHeader::Type1 {
+            timestamp_delta: delta,
+            message_length: u32::try_from(payload.len()).unwrap(),
+            message_type_id: 9,
+        }
+        .encode(&mut wire);
+        let header_end = wire.len();
+        wire.extend_from_slice(&payload);
+
+        let mut d = Dechunker::new(limits());
+        // Feed the first message and the second message's header, but none
+        // of the second message's payload: the header is fully parseable,
+        // but `try_take_one` cannot yet take the payload and must return
+        // `NeedMoreData` without having consumed those header bytes.
+        let mut out = d.feed(&wire[..header_end]).unwrap();
+        // Now the payload arrives: this re-parses the buffered header.
+        out.extend(d.feed(&wire[header_end..]).unwrap());
+
+        assert_eq!(out.len(), 2, "expected both messages to reassemble");
+        assert_eq!(
+            out[1].timestamp,
+            first.timestamp + delta,
+            "a Type1 header re-parsed after NeedMoreData applied its delta more than once"
+        );
     }
 
     #[test]
