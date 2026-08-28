@@ -3444,3 +3444,116 @@ isom`'s resolved `elst` edit-list segment — different concepts, same
 spec-vocabulary name); `fuzz/fuzz_targets/imf_xml_parse.rs` (CPL/PKL/
 ASSETMAP over arbitrary bytes) ran 1.44M executions in 30s, no crash, no
 `fuzz/artifacts` files.
+
+## H.264 CABAC: the mb_type cross-check's premise was never actually established for the P corpora (#418)
+
+One bounded round, with the answer determining the round: whether
+`ffmpeg -debug mb_type` had ever actually been cross-checked against
+`cabac_ip_simple.264`/`cabac_ip_multiref.264` (as opposed to
+`cabac_i_only.264` only).
+
+**It had not, and the premise fails there.** "Every macroblock
+classification matches the reference exactly" was established only
+against `cabac_i_only.264`'s slice 0 — an all-`Intra4x4` slice with zero
+`Intra_16x16` macroblocks in it, so it could never have tested
+`Intra_16x16` classification specifically. That claim has been
+load-bearing across several rounds: it ruled out
+`mb_type`/`mb_skip_flag`/`coded_block_pattern` context derivation as
+the cause and pointed the search at `residual_block_cabac`, then at
+`decode_cbp_cabac`'s neighbour bug.
+
+Running the identical cross-check against the two P corpora's own slice 0
+(both real I frames, both genuinely containing `Intra_16x16`
+macroblocks per the reference) finds every one of them misclassified as
+`Intra4x4`:
+
+- `cabac_ip_simple.264`: 2 of 16 macroblocks, at addresses `(1,1)` and
+  `(0,3)`.
+- `cabac_ip_multiref.264`: 35 of 36 macroblocks — the *one* correctly
+  classified `Intra_16x16` (out of many the reference shows) is the
+  exception, not the rule.
+
+This is consistent with a cascade: `Intra4x4` unconditionally reads 16
+rounds of `prev_intra4x4_pred_mode_flag`/`rem_intra4x4_pred_mode` that
+`Intra_16x16` never reads at all, so misclassifying one macroblock shifts
+every bit read afterward, which is exactly why `cabac_ip_multiref.264`'s
+error rate (35/36) is so much higher than `cabac_ip_simple.264`'s (2/16)
+— more macroblocks after the first wrong one to be dragged along.
+
+**This also explains the previous round's puzzle.** Fixing
+`decode_cbp_cabac`'s neighbour bug left `cabac_ip_simple.264`'s own
+`assert_slice_ends_at_rbsp_trailing_bits` failure byte-for-byte identical
+before and after. If `mb_type` itself already diverges early in that
+corpus's slice 0, everything measured afterward — CBP included — is
+already operating on a wrong picture, not a clean test of that specific
+fix's own effect.
+
+**Tested and cleared: the engine's `decode_decision` itself.** Given the
+misclassification pattern (correct runs of `Intra4x4`, then a wrong
+decode exactly where the reference says `Intra_16x16`), one hypothesis
+was that a context driven to an extreme, confident state by many
+consecutive identical decisions (exactly what `mb_type`'s bin0 context
+experiences across many real `Intra4x4` macroblocks) might decode a
+genuine "surprising" bin incorrectly.
+`crates/codec/vaco-codec-h264/tests/cabac_decision_oracle.rs` (added
+against `vaco-codec-cabac`'s public API only — that crate is
+`agent:codec-bits`'s, status `done`, not edited) round-trips a
+deliberately-adapted 30-zeros/one-one/ten-zeros sequence and 200
+pseudorandom sequences through `CabacEncoder`/`CabacDecoder`'s
+context-coded path. Both clean. The engine itself is not where this
+comes from.
+
+**What remains ruled out, cumulatively across all rounds on this issue**:
+`MB_TYPE_I`'s table (Table 9-12), `mb_type_i_cond_term`'s formula, the
+whole bypass path (`decode_bypass_egk`/`decode_uegk`/`decode_bypass`/
+`decode_bypass_bits`, both by round-trip oracle and by 243 real-call-site
+measurements), `decode_cbp_cabac`'s neighbour derivation (fixed this
+dispatch's prior round), and now `decode_decision` itself. None of these
+clearances is reopened by this finding — they stand independently.
+
+**What is not yet found**: the actual mechanism producing the wrong
+`Intra_16x16`-vs-`Intra4x4` decode. Given the engine, the specific
+table, and the specific formula are all clean, the remaining candidates
+are either a genuine bit-consumption error somewhere earlier in the same
+slice (in a way that does not itself change any *earlier* macroblock's
+own classification or CBP — since those already matched the reference)
+or a gap in something checked in isolation but not against this exact
+real sequence of decode calls. Not root-caused within this round's time
+budget.
+
+**Handoff, in order of cost:**
+
+1. Bisect within `cabac_ip_simple.264`'s slice 0 specifically — it is
+   the smallest failing case now available with genuine `Intra_16x16`
+   content (16 macroblocks, first divergence at address 5). Instrument
+   `decode_macroblock_cabac`'s per-macroblock entry with the CABAC
+   engine's own `bit_pos()` (already public on the underlying
+   `BitReader`, exposed via `CabacDecoder::reader()`) to find whether the
+   engine's position at address 5's `mb_type` read is already
+   inconsistent with what a correct decoder would have consumed for
+   addresses 0-4 — this would prove or rule out "upstream bit drift"
+   directly rather than by elimination.
+2. If addresses 0-4's own bit consumption is confirmed exactly right (a
+   real per-coefficient/per-syntax-element reference would help here,
+   the standing item from two rounds ago), the wrong decode is
+   genuinely at address 5's own `mb_type` bin0 read with a provably
+   correct engine, provably correct table, and provably correct
+   `ctxIdxInc` formula — which would mean the bug is in something not yet
+   considered: the `mb_type_i_cond_term` *call site*'s neighbour lookup
+   itself (`grids.mb_left`/`mb_above` at exactly this macroblock
+   position), not the formula it feeds.
+3. Not yet checked this round: whether `CabacMbCtx::new`'s per-slice
+   context array construction for `mb_type_i` could somehow be
+   re-initialised or corrupted partway through a slice (it should be
+   built once at slice start and never touched again except through
+   `decode_decision`'s own adaptation) — a fresh read of that
+   construction path, not assumed correct from prior rounds' review of
+   the *table values* it uses.
+
+Gates: `cargo clippy -p vaco-codec-h264 --all-targets` clean, `cargo test
+-p vaco-codec-h264` all passing (the three known-`#[ignore]`d CABAC
+macroblock tests unchanged this round), `h264_entropy` fuzz target clean
+(4.2M execs), no new `fuzz/artifacts` files, `patent-gate` still "0 of
+2", `provenance-check` shows the same 8 pre-existing failures, none mine.
+`vaco-codec-cabac` and its fuzz target re-confirmed untouched immediately
+before committing. #418 stays open; #419 not reopened.
