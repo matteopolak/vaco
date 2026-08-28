@@ -920,14 +920,66 @@ fn decode_residual(
 // KNOWN GAP, not yet closed: which of addresses 0-4's own syntax
 // elements (residual, `coded_block_pattern`, `intra_chroma_pred_mode`,
 // `prev_intra4x4_pred_mode_flag`/`rem_intra4x4_pred_mode`) consumes the
-// wrong number of bits is not yet isolated -- all four addresses'
-// *classification* (`Intra4x4`) and `coded_block_pattern` values already
-// match the reference, so whatever is wrong there does not change either
-// of those, narrowing the remaining search to residual decode and the
-// per-4x4-block intra prediction mode flags specifically. Every fix and
-// clearance from prior passes (CBP's neighbour derivation, the bypass
-// path, `decode_decision`'s own round-trip) stays; none is reopened by
-// this finding. Reported honestly rather than claimed; see
+// wrong number of bits is not yet isolated.
+//
+// CORRECTION to the paragraph above (previously claimed as fact, now
+// downgraded to what it actually was): "`coded_block_pattern` values
+// already match the reference" was never independently verified.
+// `ffmpeg -debug mb_type` confirms `mb_type`/classification only --
+// checked every `-debug` sub-flag ffmpeg 8.1 exposes (`pict`, `rc`,
+// `bitstream`, `mb_type`, `qp`, `dct_coeff`, `green_metadata`, `skip`,
+// `startcode`, `er`, `mmco`, and the rest of `-h full`'s list) and none
+// of them prints per-macroblock `coded_block_pattern`. The CBP values
+// reported as "matching" came from this decoder's own self-reported
+// trace, i.e. self-consistency, not an independent observation -- the
+// same shape of premise as the `!malformed()` assertion (measured shape,
+// not values) and the `mb_type`-only cross-check (ran against an
+// all-`Intra4x4` corpus) that both collapsed in earlier rounds. Treat
+// `coded_block_pattern` for addresses 0-4 as back in scope; only
+// `mb_type`'s classification is actually confirmed against a reference.
+//
+// This round's finding, while gathering tables to build an independent
+// oracle for the bin-by-bin trace this gap calls for: `CBF_CHROMA_AC`
+// (`cabac_mb_tables.rs`, ctxIdx 101..=104, `coded_block_flag`'s
+// `ctxBlockCat == 4` table) was an exact byte-for-byte duplicate of
+// `CBF_CHROMA_AC`'s sibling `CBF_CHROMA_DC` (ctxIdx 97..=100) instead of
+// its own row of Table 9-18 -- a copy-paste transcription bug, not
+// caught by the residual-layer table audit two rounds ago (which checked
+// `significant_coeff_flag`/`last_significant_coeff_flag`/
+// `coeff_abs_level_minus1`'s tables in `cabac_residual.rs` row by row but
+// not `coded_block_flag`'s five separate tables here). Found by noticing
+// the suspicious duplication, then confirmed wrong against primary text
+// and fixed; `CBF_LUMA_DC`/`CBF_LUMA_AC`/`CBF_LUMA4X4`/`CBF_CHROMA_DC`
+// (ctxIdx 85..=100) were re-checked at the same time and are correct.
+//
+// Measured effect of the fix (all three corpora still fail, but not
+// identically to before -- see `macroblock_layer_cabac.rs`'s own
+// `#[ignore]` reasons for the exact per-corpus detail):
+//   - `cabac_ip_simple.264`: was failing the stop-bit-and-padding half of
+//     `assert_slice_ends_at_rbsp_trailing_bits`; now clears that check and
+//     fails the later all-zero `cabac_zero_word` padding check instead --
+//     the divergence moved later in the stream.
+//   - `cabac_ip_multiref.264`: still fails the same stop-bit comparison,
+//     but at a different bit pattern than before the fix -- a real,
+//     confirmed behavioural change, not a no-op.
+//   - `cabac_i_only.264`: the failure mode itself changed, not just its
+//     position -- previously reached (and failed) the trailing-bits
+//     check; now trips `CabacDecoder::malformed()` before that check ever
+//     runs.
+// None of this reaches bit-exactness on any corpus. The bug is real and
+// the fix stays regardless of whether it alone resolves anything --
+// consistent with this project's standing precedent (the CBP
+// neighbour-derivation fix two rounds ago was kept even though it was a
+// byte-for-byte no-op on `cabac_ip_simple.264` specifically).
+//
+// Every fix and clearance from prior passes (CBP's neighbour derivation,
+// the bypass path, `decode_decision`'s own round-trip, `qp_delta_ctx_inc`
+// against 9.3.3.1.1.5, `cbf_cond_term`'s unavailable-neighbour case)
+// stays; none is reopened by this finding. The originally-planned
+// independent bin-by-bin oracle for address 0's residual decode was not
+// completed this round -- the CBF_CHROMA_AC bug was found first, by
+// inspection, while merely transcribing the table constants the oracle
+// would have needed. Reported honestly rather than claimed; see
 // `planning/TECH-DEBT.md` for the full handoff.
 use crate::cabac_mb_tables::{inits_by_col, inits_by_idc, inits_fixed};
 

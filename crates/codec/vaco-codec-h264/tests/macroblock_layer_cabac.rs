@@ -58,21 +58,24 @@ fn assert_slice_ends_at_rbsp_trailing_bits(reader: &mut BitReader<'_>, slice_cou
 
 
 #[test]
-#[ignore = "known incomplete: a real, primary-text-verified bug was found \
-and fixed this round in decode_cbp_cabac's luma coded_block_pattern \
-neighbour derivation (clause 6.4.7.2 + Table 6-2) — a single same_mb_bit, \
-computed with the *left* neighbour's rule, was fed to both the left and \
-above ctxIdxInc terms, which happened to be right for q=0 but wrong for \
-q=1 (used same-mb block 0 instead of the above macroblock's block 3), \
-silently zero for q=2 (neither source populated), and wrong for q=3 \
-(reused the left value, block 2, instead of block 1, above). Fixing it \
-measurably changed this corpus's own decode — but byte-for-byte \
-*identically* before and after the fix (same expected/found trailing-bit \
-pattern down to the bit), meaning this corpus's own slice-0 divergence \
-happens at a point the fix never touches. The bug is real and stays \
-fixed regardless; this corpus's own root cause is elsewhere, still \
-unisolated. See the multiref/i_only tests' ignore reasons, which the fix \
-did measurably move (not yet to a clean end)."]
+#[ignore = "known incomplete, but measurably moved by a second fix: the \
+coded_block_pattern neighbour-derivation fix from an earlier round (clause \
+6.4.7.2 + Table 6-2, still verified correct) was a byte-for-byte no-op on \
+this corpus. A later fix to CBF_CHROMA_AC (cabac_mb_tables.rs, ctxIdx \
+101..=104) — found to be an exact copy-paste duplicate of CBF_CHROMA_DC's \
+own values (ctxIdx 97..=100) instead of its own row of Table 9-18, and \
+corrected against primary text — is NOT a no-op here: decode now clears \
+the first check inside assert_slice_ends_at_rbsp_trailing_bits (the \
+stop-bit-and-padding comparison), and instead fails the second check in \
+the same helper: the bytes after the (now-correctly-located) \
+rbsp_trailing_bits() padding are not all-zero cabac_zero_word. That means \
+decode lands on a \
+byte-aligned position matching the stop-bit convention, but reaches it \
+too early relative to the slice's real content — the divergence has moved \
+later in the stream, not been resolved. Root cause still unisolated; see \
+the multiref/i_only tests' reasons for how the same CBF_CHROMA_AC fix \
+affected them differently (one shifted, one changed failure mode \
+entirely)."]
 fn every_slice_in_a_real_ip_cabac_stream_consumes_exactly_its_own_bits() {
     let data: &[u8] = include_bytes!("fixtures/cabac_ip_simple.264");
     let mut params = ParameterSets::new();
@@ -144,13 +147,16 @@ fn every_slice_in_a_real_ip_cabac_stream_consumes_exactly_its_own_bits() {
 }
 
 #[test]
-#[ignore = "known incomplete, but measurably moved: fixing \
-decode_cbp_cabac's same-macroblock neighbour conflation (see the \
-ip_simple test's ignore reason for the exact bug) changed the bit \
-position at which this corpus's slice 0 ends short of \
-rbsp_trailing_bits() -- a real, confirmed behavioural change, not a \
-no-op the way it was for ip_simple -- but does not reach a clean end. \
-Still diverges at slice 0."]
+#[ignore = "known incomplete: the CBF_CHROMA_AC fix (cabac_mb_tables.rs, \
+ctxIdx 101..=104 -- see the ip_simple test's ignore reason for the exact \
+bug and its Table 9-18 citation) changed this corpus's own slice-0 \
+divergence again -- the exact expected/found stop-bit pattern at the \
+assert_slice_ends_at_rbsp_trailing_bits comparison is different from any \
+earlier round -- another real, confirmed behavioural change, not a \
+no-op. But it still fails the *same* check (the stop-bit-and-padding \
+comparison itself), unlike ip_simple, which now clears that check and \
+fails the later all-zero-padding one instead. Still diverges at slice 0, \
+root cause unisolated."]
 fn every_slice_in_a_real_multiref_cabac_stream_consumes_exactly_its_own_bits() {
     let data: &[u8] = include_bytes!("fixtures/cabac_ip_multiref.264");
     let mut params = ParameterSets::new();
@@ -224,16 +230,18 @@ fn every_slice_in_a_real_multiref_cabac_stream_consumes_exactly_its_own_bits() {
 }
 
 #[test]
-#[ignore = "known incomplete, but the fewest open questions of the \
-three: this corpus's own I_PCM blocker is gone (decode_slice_cabac \
-handles it now, cheaply, as expected), and this round's real fix to \
-decode_cbp_cabac's luma coded_block_pattern neighbour derivation (a \
-same-macroblock bit computed once with the left-neighbour rule and \
-wrongly reused for the above term too -- see the ip_simple test's ignore \
-reason for the exact bug, verified against clause 6.4.7.2 and Table 6-2) \
-measurably changed this corpus's own slice-0 trailing-bit mismatch \
-rather than leaving it untouched. Still diverges at slice 0, not yet a \
-clean end."]
+#[ignore = "known incomplete, and this round's CBF_CHROMA_AC fix (see the \
+ip_simple test's ignore reason for the exact bug and its Table 9-18 \
+citation) changed the *failure mode itself*, not just its position: \
+before the fix this corpus reached (and failed) the \
+assert_slice_ends_at_rbsp_trailing_bits comparison; after the fix it now \
+fails earlier and differently, with CabacDecoder::malformed() reporting \
+true before the trailing-bits check ever runs. The underlying table fix \
+is independently verified correct against primary text regardless -- \
+this corpus's own decode is being pushed further off the rails earlier \
+in the slice by a context table that is now correct, exposing a \
+still-unlocated separate bug sooner rather than later. Still diverges at \
+slice 0."]
 fn every_slice_in_a_real_i_only_cabac_stream_consumes_exactly_its_own_bits() {
     let data: &[u8] = include_bytes!("fixtures/cabac_i_only.264");
     let mut params = ParameterSets::new();

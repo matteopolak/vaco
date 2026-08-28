@@ -234,12 +234,25 @@ pub(crate) const CBF_LUMA4X4: [[Init; 4]; 4] = [
     [(-10, 90), (-8, 87), (-9, 91), (-11, 91)],
     [(-30, 127), (-23, 126), (-31, 127), (-30, 127)],
 ];
+// `CBF_CHROMA_AC` (ctxIdx 101..=104) was previously an exact duplicate
+// of `CBF_CHROMA_DC`'s own values (ctxIdx 97..=100) -- a copy-paste
+// transcription error, not caught by the residual-layer table audit
+// two rounds ago (which checked `significant_coeff_flag`/
+// `last_significant_coeff_flag`/`coeff_abs_level_minus1`'s tables row by
+// row but not `coded_block_flag`'s own five `cabac_mb_tables.rs` arrays).
+// Found by transcribing these specific four rows fresh from Table 9-18
+// while independently bin-tracing a real macroblock's residual decode,
+// not by re-auditing on suspicion alone -- the duplicate was noticed
+// because it was suspiciously identical, then confirmed wrong against
+// primary text. `CBF_LUMA_DC`/`CBF_LUMA_AC`/`CBF_LUMA4X4`/
+// `CBF_CHROMA_DC` (ctxIdx 85..=100) were re-checked against the same
+// table at the same time and all match.
 #[rustfmt::skip]
 pub(crate) const CBF_CHROMA_AC: [[Init; 4]; 4] = [
-    [(-1, 74), (5, 54), (3, 55), (0, 65)],
-    [(-6, 97), (6, 60), (7, 56), (-2, 79)],
-    [(-7, 91), (6, 59), (7, 55), (0, 72)],
-    [(-20, 127), (6, 69), (8, 61), (-4, 92)],
+    [(-4, 56), (-1, 48), (-3, 53), (-6, 56)],
+    [(-5, 82), (0, 68), (0, 68), (3, 68)],
+    [(-7, 76), (-4, 69), (-7, 74), (-8, 71)],
+    [(-22, 125), (-8, 88), (-9, 88), (-13, 98)],
 ];
 
 /// Build a [`ContextInit`] array from a fixed row set (no `cabac_init_idc`
