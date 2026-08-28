@@ -88,6 +88,10 @@ pub struct OutputSpec {
     /// implemented (CL-16 breadth phase; global-to-global is the overwhelming
     /// common case). `None` defaults to input `0`; `Some(-1)` disables.
     pub map_metadata: Option<i64>,
+    /// `-attach <filename>`, in argv order — repeatable, one entry per
+    /// attachment. `exec::metadata_of` reads the file and matches
+    /// `-metadata:s:t:N mimetype=…` against its position in this list.
+    pub attach: Vec<String>,
 }
 
 /// A whole invocation, bound.
@@ -211,6 +215,7 @@ pub fn parse<S: AsRef<OsStr>>(argv: &[S]) -> Result<Cli, Diagnostic> {
             format_opts: format_options_of(g)?,
             map_chapters: last_value(g, "map_chapters")?.as_deref().map(leading_int),
             map_metadata: last_value(g, "map_metadata")?.as_deref().map(leading_int),
+            attach: attach_of(g)?,
         });
     }
 
@@ -336,6 +341,18 @@ fn maps_of(g: &OptionGroup) -> Result<Vec<MapEntry>, Diagnostic> {
         // The reference prints the specifier grammar's own complaint first, then
         // the generic "Failed to set value" line; `MapEntry::parse` owns both.
         out.push(MapEntry::parse(&value_str(opt)?)?);
+    }
+    Ok(out)
+}
+
+/// CL-16: every `-attach <filename>` on this output group, in argv order.
+fn attach_of(g: &OptionGroup) -> Result<Vec<String>, Diagnostic> {
+    let mut out = Vec::new();
+    for opt in &g.opts {
+        if opt.resolved().0 != "attach" {
+            continue;
+        }
+        out.push(value_str(opt)?);
     }
     Ok(out)
 }

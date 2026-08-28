@@ -98,8 +98,7 @@ fn parse_time_item(tok: &str) -> Result<TimeSpecItem, String> {
     }
     let duration = vaco_core::parse::duration(tok)
         .ok_or_else(|| format!("invalid time '{tok}' for -force_key_frames"))?;
-    let micros = i64::try_from(duration.as_micros()).unwrap_or(i64::MAX);
-    Ok(TimeSpecItem::At(micros))
+    Ok(TimeSpecItem::At(duration.as_micros()))
 }
 
 /// The signals [`Evaluator::wants_force`] needs about one frame, in

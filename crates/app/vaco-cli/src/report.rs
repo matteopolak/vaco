@@ -63,7 +63,7 @@ pub fn wants_report<S: AsRef<std::ffi::OsStr>>(
     if argv.iter().any(|a| a.as_ref() == std::ffi::OsStr::new("-report")) {
         return Some(ReportRequest::default());
     }
-    ffreport_env.map(|spec| parse_ffreport(spec))
+    ffreport_env.map(parse_ffreport)
 }
 
 fn parse_ffreport(spec: &str) -> ReportRequest {

@@ -997,3 +997,72 @@ fn a_dropped_output_writes_no_progress_file() {
         "a dropped output must write no progress file"
     );
 }
+
+// ---------------------------------------------------------------- CL-16 -attach
+
+#[test]
+fn attach_writes_a_real_attachment_a_muxer_can_write_and_a_prober_reads_back() {
+    let input = fixture(&four_track_file());
+    let payload_dir = tempfile::tempdir().expect("tempdir");
+    let payload_path = payload_dir.path().join("cover.txt");
+    std::fs::write(&payload_path, b"hello attachment").expect("write payload");
+    let payload_str = payload_path.to_str().expect("utf8 tempdir path").to_owned();
+
+    let out_dir = tempfile::tempdir().expect("tempdir");
+    let out_path = out_dir.path().join("out.mkv");
+    let out_str = out_path.to_str().expect("utf8 tempdir path").to_owned();
+
+    let r = go(&[
+        "-i",
+        &input.path,
+        "-attach",
+        &payload_str,
+        "-metadata:s:t:0",
+        "mimetype=text/plain",
+        "-c",
+        "copy",
+        "-f",
+        "matroska",
+        &out_str,
+    ]);
+    assert_eq!(r.code, ExitCode::OK, "{}", r.message());
+
+    // Read it back through this crate's own demux path — the same contract
+    // `an_actual_muxer_writes_bytes_a_prober_can_read_back` already checks
+    // for streams, applied here to a real Matroska `AttachedFile`.
+    let opened =
+        crate::input::open(0, &out_str, &crate::input::OpenRequest::default()).unwrap();
+    let attachment = opened
+        .demuxer
+        .streams()
+        .iter()
+        .find(|s| s.params.media_type == Some(vaco_core::MediaType::Attachment));
+    assert!(
+        attachment.is_some(),
+        "the remuxed file must carry a real attachment stream"
+    );
+}
+
+#[test]
+fn a_missing_attach_file_is_the_measured_error() {
+    let input = fixture(&four_track_file());
+    let r = go(&[
+        "-i",
+        &input.path,
+        "-attach",
+        "/nonexistent/vaco-cli-attach-test.txt",
+        "-c",
+        "copy",
+        "-f",
+        "null",
+        "-",
+    ]);
+    assert_eq!(r.code.code(), 254, "{}", r.message());
+    assert!(
+        r.message().contains(
+            "Could not open attachment file /nonexistent/vaco-cli-attach-test.txt."
+        ),
+        "{}",
+        r.message()
+    );
+}

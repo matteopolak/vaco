@@ -454,6 +454,63 @@ fn metadata_of(
             MetadataSpecifier::Chapter(_) | MetadataSpecifier::Program(_) => {}
         }
     }
+
+    // CL-16: `-attach <filename>`, one real `MuxAttachment` per occurrence, in
+    // argv order — `vaco-mux-matroska` writes these onto a real `Attachments`/
+    // `AttachedFile` element (confirmed by reading `mux.rs`'s own
+    // `attachments_bytes`), so this is a real, working sink and not a value
+    // with nowhere to land.
+    for path in &out.attach {
+        let data = std::fs::read(path).map_err(|e| {
+            Diagnostic::opening(
+                AvError::of(&Error::Io(e)),
+                vec![format!(
+                    "[out#{}/{format}] Could not open attachment file {path}.",
+                    out.index,
+                    format = out.format.as_deref().unwrap_or("?")
+                )],
+                "output",
+                &out.url,
+            )
+        })?;
+        let filename = std::path::Path::new(path)
+            .file_name()
+            .map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned());
+        meta.attachments.push(vaco_format_core::metadata::MuxAttachment {
+            filename,
+            data,
+            ..vaco_format_core::metadata::MuxAttachment::default()
+        });
+    }
+
+    // `-metadata:s:t:N mimetype=…` — the reference's own way of naming an
+    // attachment's media type (measured: `ffmpeg -attach f -metadata:s:t
+    // mimetype=text/plain`). Attachments are not real output streams in this
+    // build's model (unlike the reference's own CLI, which synthesises one),
+    // so this reads `StreamSpecifier`'s `media`/`index` fields directly
+    // rather than going through `MatchCtx`'s per-real-stream matching above.
+    for opt in &group.opts {
+        if opt.resolved().0 != "metadata" {
+            continue;
+        }
+        let Ok(Some(MetadataSpecifier::Stream(spec))) = opt.metadata_spec() else {
+            continue;
+        };
+        if spec.media != Some(vaco_cli_core::SpecMediaKind::Attachment) {
+            continue;
+        }
+        let Some(index) = spec.index.and_then(|i| usize::try_from(i).ok()) else {
+            continue;
+        };
+        let raw = value_str(opt)?;
+        let (key, value) = raw.split_once('=').unwrap_or((raw.as_str(), ""));
+        if key.eq_ignore_ascii_case("mimetype")
+            && let Some(att) = meta.attachments.get_mut(index)
+        {
+            value.clone_into(&mut att.mime_type);
+        }
+    }
+
     Ok(meta)
 }
 
@@ -720,7 +777,7 @@ fn force_key_frames_of(
         return Ok(vec![None; streams.len()]);
     };
 
-    let mut out_opts = Vec::with_capacity(streams.len());
+    let mut out_opts = Vec::new();
     for (i, s) in streams.iter().enumerate() {
         if s.media != Some(MediaType::Video) {
             out_opts.push(None);

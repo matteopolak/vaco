@@ -113,12 +113,12 @@ pub fn render(report: &RunSpec, started: Instant) -> String {
 /// centisecond `clock_for_stats`.
 fn clock(secs: f64) -> String {
     let total_us = (secs * 1_000_000.0).round().max(0.0) as u64;
-    let us = total_us % 1_000_000;
-    let total_s = total_us / 1_000_000;
-    let s = total_s % 60;
-    let total_m = total_s / 60;
-    let m = total_m % 60;
-    let h = total_m / 60;
+    let us = total_us.rem_euclid(1_000_000);
+    let total_s = total_us.div_euclid(1_000_000);
+    let s = total_s.rem_euclid(60);
+    let total_m = total_s.div_euclid(60);
+    let m = total_m.rem_euclid(60);
+    let h = total_m.div_euclid(60);
     format!("{h:02}:{m:02}:{s:02}.{us:06}")
 }
 
