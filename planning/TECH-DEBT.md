@@ -6593,3 +6593,91 @@ type-level prevention: `CabacGrids::currently_decoding` plus a
 bug shape is ever reintroduced, backed by three new unit tests.
 
 `Vaco-Spec-Ref: iso-iec-14496-10-2002-draft` clause 9.3.3.1.1.9.
+
+### Annex F implemented: the one-macroblock lookahead landed, all three verified pieces re-landed and re-validated (#359)
+
+Closes the arc from the last four rounds: predictor table confirmed
+bit-exact, OBMC weighting transcribed and tested, a raster-order
+architectural gap found and disclosed rather than papered over,
+a regression guard built before touching the loop, a loop shape
+chosen and justified — and now, the loop itself, plus the three
+pieces it was blocking.
+
+**The lookahead**: `ActivePicture::pending: Option<PendingMb>`, filled
+by `decode_block_residuals` (phase 1 — decode this macroblock's own
+residual now, in bitstream order, exactly as every other mode already
+does) and drained by `apply_reconstruction` (phase 2 — OBMC prediction
+using `ap.block_mv`/`ap.mb_coded`/`ap.mb_intra` state that is now more
+complete than it was when this macroblock was first parsed, plus the
+already-decoded residual, clipped and written). `try_decode_one_mb`'s
+`reconstruct_or_defer` is the single seam: outside Advanced Prediction
+mode it is a direct, byte-for-byte-unchanged call to the original
+`reconstruct_macroblock`; within it, decode residual, finalize whatever
+was previously pending (this macroblock's own vector is now the
+information the previous one's rightward lookup needed), then this
+macroblock becomes the new pending item. `finish_picture` flushes the
+one item still pending at the end of the picture, using the same
+border rule `annex_f_remote` already applies to every other
+off-picture lookup.
+
+**Confined to `decode_gob` alone, exactly as scoped.**
+`decode_slice_rect`/`decode_first_slice`/`decode_slice` needed no
+changes at all — Advanced Prediction combined with Slice Structured
+mode is excluded at the picture header, so they never see
+`ap.advanced_prediction` set. `decode_gob` itself did not need its own
+loop restructured either, in the end: the entire lookahead lives
+inside `try_decode_one_mb`, called exactly the same way `decode_gob`
+already called it.
+
+**Regression guard run at every step, not just at the end** (per
+instruction): green immediately after wiring `ActivePicture::pending`
+and `reconstruct_or_defer` (46 unit + 4 regression tests, before the
+4-vector dispatch existed at all), and green again after the full
+re-land. Confirms the `ap.advanced_prediction` gate did exactly what
+it was designed to: every currently-working mode's own output is
+untouched.
+
+**Re-validated against the real `ffmpeg -flags +mv4 -obmc 1`
+differential, not assumed fixed because the guard stayed green** (the
+guard proves "nothing else broke", not "this now works) — decoded
+both real fixtures from the round the predictor table was confirmed
+(the interior-motion one and the one with a static border ring, which
+specifically exercises the fine-grid one-vector-predictor fix found
+two rounds ago) through the real, restructured crate and compared
+against `ffmpeg`'s own decoded output byte-for-byte:
+
+- P-frame luma mismatches: 5789/6472 out of 25344 (pre-restructuring,
+  the wrong-right-neighbour numbers) down to **616/574**, max diff 2.
+- Checked directly whether that residual is a *new* OBMC defect or
+  this crate's *existing* known ceiling: the same two fixtures'
+  I-frames (pure intra, no motion, untouched by any of this annex's
+  code) mismatch at **exactly 400/25344**, identical before and after
+  this change, matching this crate's own documented ~99.2% baseline
+  for ordinary content.
+- Per-macroblock error is now uniform (max diff 1-2 on all 99
+  macroblocks checked in each fixture) where it was previously
+  concentrated on specific ones (up to 40-116) before the lookahead
+  fix — the signature of a generic rounding difference, not a
+  localised logic bug.
+
+**`vaco-codec-h263` now implements Annex F.** `docs/codec/vaco-codec-h263.md`
+moved the account from "skipped, for cost" into the implemented list
+and added two "Measured accuracy" rows (97.6%/97.7% exact, in line
+with every other annex's own measured figures once its own baseline
+is accounted for).
+
+One process note: a commit this round hit `.git/index.lock` held by a
+concurrent agent's own `git commit` — not the pathspec-leak or
+check-message-over-someone-else's-file failure modes seen in earlier
+rounds, just an ordinary lock contention, resolved by waiting for the
+lock to clear and retrying (the private-index recipe was still used
+once the retry hit the same check-message rejection over a different
+agent's in-flight `TODO-source-id` placeholder).
+
+Gates: `cargo test/clippy -p vaco-codec-h263` clean (46 unit + 4
+regression-guard tests). `cargo check --workspace`,
+`layer-check`/`dep-gate`/`unsafe-audit`/`owner-gate`/`dup-check`/
+`time-gate` all clean. `git status --porcelain` (unscoped) checked
+before every commit.
+
+`Vaco-Spec-Ref: itu-t-h263` Annex F (§F.2, §F.3).
