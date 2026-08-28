@@ -5945,3 +5945,116 @@ No pixel output changes (docs only, this file and
 
 `Vaco-Spec-Ref: itu-t-h263-2005` §6.1.1 (Figure 12), Annex F §F.2
 (Figure F.1).
+
+
+## H.264: residual decode wired to reconstruction — the first non-flat pixel comparison, byte-exact against `ffmpeg` (#418, #420)
+
+**The result asked for first, delivered first.** A new single-macroblock
+fixture (`cabac_intra_oracle_gradient.264`: a 16×16 gradient, forced to
+`Intra_16x16` DC with real, nonzero luma residual — `partitions=none`
+alone still let `libx264` choose `Intra_4x4` on smooth content;
+`-preset ultrafast`'s own restricted intra analysis was what actually
+forced `Intra_16x16`) decodes end to end through the *live* CABAC path
+into a new `reconstruct_intra16x16_luma`, and matches a real `ffmpeg
+8.1` decode of the same file **byte-for-byte**, all 256 luma samples.
+This deliberately isolates residual correctness from prediction
+correctness: the mode exercised (DC) is the same one the flat fixture
+already covers with zero residual, so the only new thing under test is
+dequantisation and the inverse transform on real coefficients decoded
+off the actual bitstream — precisely the axis eleven rounds of #418's
+own bit-position hunting never had a way to check directly.
+
+**Three pieces, each a direct clause transcription:**
+
+- New module `scan.rs`: clause 8.5.4's inverse zig-zag scan (Table
+  8-12, spot-checked plus a bijection test — a transcription slip here
+  would silently corrupt coefficient *positions* rather than fail
+  loudly, the same failure shape the coordinator has repeatedly flagged
+  for neighbour-availability logic), and eq. (8-244)'s "+1 shift" for
+  how an AC block's own scan position maps into the shared 16-entry
+  `lumaList` once `dcY`'s value already occupies position 0. Also
+  clause 8.5.3 eq. (8-246)'s chroma DC scan — **raster, not zig-zag**,
+  confirmed directly from primary text rather than assumed identical to
+  luma's own DC handling; transcribed and tested now, not wired into
+  reconstruction yet (nothing on hand exercises nonzero chroma
+  residual).
+- New module `reconstruct.rs`: composes `intra::predict_intra16x16`,
+  `dequant`'s scaling, `scan`'s inverse scan, and
+  `vaco-codec-dsp-idct::h264::idct4x4` into clause 8.5.1/8.5.2's own
+  ordered steps — predict, add each 4x4 block's own
+  dequantised-and-transformed residual (`dcY` shared across all 16
+  blocks per Figure 8-6's `luma4x4BlkIdx` assignment, addressed via this
+  crate's existing `blk_xy` z-order helper — the one part of this
+  wiring with no independent check beyond the fact that getting it
+  wrong would have failed the byte-for-byte comparison outright), then
+  `Clip1`. Chroma residual, `Intra_4x4`, and multi-macroblock neighbour
+  propagation are explicitly out of scope for this module (its own doc
+  says why); both fixtures used are macroblock 0 of their own slice,
+  where clause 6.4.8 has nowhere to look for a neighbour, so
+  "unavailable" is correct by construction rather than a shortcut.
+- `mb.rs`: `residual_block_cabac`'s return value was being decoded
+  purely for its bit cost and thrown away (`let _ = ...`) at all four
+  call sites — luma DC, luma AC per block, chroma DC per component,
+  chroma AC per block. Now captured into a new `MbResidual` struct.
+  Added real running-`QPY` tracking (clause 7.4.5, eq. (7-23)) via
+  `dequant::next_qpy`, threaded through `decode_macroblock_cabac` —
+  `PrevMbQp` previously tracked only booleans for `ctxIdxInc`
+  derivation, never the QP value dequantisation actually needs. Both
+  exposed via new `SliceStats` fields (`first_slice_mb_residual`,
+  `first_slice_mb_qpy`), following the exact precedent
+  `first_slice_mb_cbp` set two rounds ago. I_PCM's own `qpy` handling
+  is a deliberate no-op, checked against clause 7.4.5's own *generic*
+  mb_qp_delta inference-to-0 rule (not merely assumed from the
+  P_Skip/B_Skip cases it names as examples — this 2002 draft's own text
+  does not list I_PCM alongside them, which was worth checking rather
+  than copying a later edition's more explicit wording from memory).
+
+**Two stale doc references from the previous round, fixed in passing.**
+`mb.rs`'s own module doc still claimed "nothing here computes a pixel"
+(no longer accurate even before this round's own residual-capture
+wiring). `SliceStats::first_slice_mb_intra16x16_pred_mode`'s doc pointed
+at `tests/cabac_intra_oracle_reconstruction.rs`, a file the previous
+round's own doc comment forward-referenced but never actually created —
+the real test landed inside `intra.rs`'s own test module instead, under
+a different name. Neither was caught before commit last round; caught
+and fixed while this round's related code was already open.
+
+**A concurrent-commit race, handled rather than forced.** The first
+`git commit` attempt failed outright (`fatal: cannot lock ref 'HEAD'`)
+because another agent's commit landed on `main` between this round's
+working-tree base and the commit call — git's own atomic ref-update
+refused rather than silently reordering anything. Working tree and
+staged index were untouched by the failure; a plain retry (not
+`--amend`, not `-f`) picked up the new `HEAD` as parent on its own,
+since nothing about the intervening commit touched this crate.
+
+Gates: full clean sweep (`layer-check`, `dep-gate`, `unsafe-audit`,
+`dup-check`, `owner-gate`, `patent-gate`). `clippy -p vaco-codec-h264
+--all-targets` clean. `rustfmt` run directly only on the two brand-new
+files (`scan.rs`, `reconstruct.rs`) — confirmed safe (self-contained, no
+`mod` declarations pulling in others); `mb.rs`'s own pre-existing
+`rustfmt` drift (unrelated to this round's own lines) left alone. Full
+`vaco-codec-h264` test suite: 48 `--lib` tests (up from 39; 9 new
+across `scan.rs`/`reconstruct.rs`, including the gradient byte-for-byte
+comparison), no regressions elsewhere, the four already-`#[ignore]`d
+CABAC macroblock tests untouched. `h264_entropy` fuzz target: last
+round's blocker (an unrelated, concurrently-uncommitted
+`vaco-filter-lut/src/lut1d.rs` edit breaking the whole-workspace fuzz
+build graph) cleared on its own, as the coordinator predicted; re-run
+this round. No live writer on `vaco-codec-h264` confirmed via
+`ASSIGNMENTS.md` both before starting and before the commit.
+
+`#418` stays open and untouched; `assert_slice_ends_at_rbsp_trailing_bits`
+not weakened, not touched at all this round, not reopened as `#419`.
+
+**Not done this round, reported rather than attempted, per the
+dispatch's own explicit ordering:** chroma residual reconstruction
+(the scan half is written and tested; nothing composes it into a
+`predC + r` sum yet), `Intra_4x4` with mode inference, and
+multi-macroblock neighbour propagation — all deferred specifically so
+residual correctness could be checked in isolation first, ahead of
+introducing any new prediction-mode surface area to blur the result.
+
+`Vaco-Spec-Ref: iso-iec-14496-10-2002-draft` clause 7.4.5 (eq. 7-23),
+clause 8.5.1 (eq. 8-245), clause 8.5.2 (eq. 8-244, Figure 8-6), clause
+8.5.3 (eq. 8-246), clause 8.5.4 (Table 8-12).
