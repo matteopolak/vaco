@@ -401,6 +401,48 @@ pub fn crc32(data: &[u8]) -> u32 {
     CRC32_TABLE.checksum(data)
 }
 
+/// NUT's own CRC-32, for `vaco-format-nut`'s `packet_footer`/
+/// `header_checksum` fields.
+///
+/// The NUT specification says only "Generator polynomial is 0x104C11DB7.
+/// Starting value is zero" — enough to name the polynomial but not the bit
+/// order, reflection or final XOR, none of which [`crc32`] (CRC-32/ISO-HDLC:
+/// reflected, seeded all-ones, xored all-ones) shares. **Measured**, not
+/// inferred from the spec text: computing this exact configuration (same
+/// generator polynomial as the well-known `CRC-32/MPEG-2`, but seeded with
+/// zero instead of `CRC-32/MPEG-2`'s all-ones) over a real `ffmpeg -f nut`
+/// main header's payload reproduces that file's own stored
+/// `packet_footer` checksum exactly; every other seed/reflection/xorout
+/// combination tried did not. `check`/`residue` below were derived from
+/// that same measurement (`residue` follows from `crc(message ++
+/// crc(message)) == 0`, the standard self-consistency identity for a
+/// zero-seeded, non-reflected, non-xored CRC).
+///
+/// D11: this is still exactly one *crate* owning `crc` (this one) — the
+/// `crc` crate this file already depends on generates the table for any
+/// [`crc::Algorithm`] parameterisation, so a second named variant here is
+/// not a second implementation, only a second (measured, documented)
+/// configuration of the one already-approved dependency.
+const CRC32_NUT: crc::Algorithm<u32> = crc::Algorithm {
+    width: 32,
+    poly: 0x04C1_1DB7,
+    init: 0,
+    refin: false,
+    refout: false,
+    xorout: 0,
+    check: 0x89a1_897f,
+    residue: 0,
+};
+
+static CRC32_NUT_TABLE: crc::Crc<u32> = crc::Crc::<u32>::new(&CRC32_NUT);
+
+/// One-shot NUT CRC-32. See [`CRC32_NUT`] for what makes this different
+/// from [`crc32`].
+#[must_use]
+pub fn crc32_nut(data: &[u8]) -> u32 {
+    CRC32_NUT_TABLE.checksum(data)
+}
+
 /// One-shot Adler-32 (RFC 1950 §9) from an explicit seed.
 ///
 /// Written out rather than pulled in from a crate: it is nine lines, and a
@@ -461,6 +503,61 @@ mod tests {
     #[test]
     fn crc32_matches_the_ieee_check_value() {
         assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
+    }
+
+    /// The check value for the same `"123456789"` string under
+    /// [`CRC32_NUT`]'s parameters, computed independently (not copied from
+    /// [`CRC32_NUT`]'s own `check` field — that would only prove the field
+    /// and the table agree with each other, not that either is right).
+    #[test]
+    fn crc32_nut_matches_its_own_documented_check_value() {
+        assert_eq!(crc32_nut(b"123456789"), 0x89A1_897F);
+    }
+
+    /// A zero-seeded, non-reflected, non-xored CRC has the property that
+    /// appending a message's own (big-endian) checksum to itself and
+    /// recomputing gives zero — the identity [`CRC32_NUT`]'s `residue` was
+    /// derived from. Checked here independently of that derivation.
+    #[test]
+    fn crc32_nut_message_plus_its_own_checksum_reduces_to_zero() {
+        let msg = b"123456789";
+        let sum = crc32_nut(msg);
+        let mut extended = msg.to_vec();
+        extended.extend_from_slice(&sum.to_be_bytes());
+        assert_eq!(crc32_nut(&extended), 0);
+    }
+
+    /// The measured value this crate exists to reproduce: 170 real bytes —
+    /// `ffmpeg -f nut`'s (8.1) main header packet's payload, from the first
+    /// byte after `packet_header` (startcode + `forward_ptr`) to the last
+    /// byte before `packet_footer`'s checksum, out of a real two-stream
+    /// (mpeg4 video + mp3 audio) capture — against that same file's own
+    /// stored `packet_footer` checksum, read directly off the file's bytes.
+    /// This is what ruled out every other CRC-32 configuration tried
+    /// (reflected, all-ones seed, xor-all-ones, ...): none of them
+    /// reproduced this value, only [`CRC32_NUT`]'s parameters did.
+    #[test]
+    fn crc32_nut_matches_a_real_nut_main_header_checksum() {
+        // clippy: this is data, not a magic-number computation.
+        #[allow(clippy::unreadable_literal, reason = "raw measured bytes")]
+        const MAIN_HEADER_PAYLOAD: [u8; 170] = [
+            0x03, 0x02, 0x81, 0xff, 0x7f, 0x02, 0x01, 0x83, 0x90, 0x00, 0x01, 0x82,
+            0xf7, 0x00, 0xc0, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0xa0,
+            0x00, 0x02, 0x01, 0x01, 0x28, 0x01, 0x00, 0x29, 0x00, 0x21, 0x01, 0x9f,
+            0x7f, 0x20, 0x02, 0x9f, 0x7f, 0x7b, 0x28, 0x08, 0x00, 0x01, 0x01, 0x00,
+            0x00, 0x01, 0x81, 0xc0, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01,
+            0x04, 0x29, 0x00, 0x01, 0x06, 0x00, 0x02, 0x01, 0x00, 0x00, 0x01, 0x01,
+            0x08, 0x00, 0x02, 0x01, 0x01, 0x00, 0x01, 0x81, 0xc0, 0x80, 0x80, 0x80,
+            0x80, 0x80, 0x80, 0x80, 0x01, 0x00, 0x01, 0x06, 0x91, 0x7f, 0x02, 0x01,
+            0x00, 0x00, 0x01, 0x01, 0x08, 0x91, 0x7f, 0x02, 0x01, 0x01, 0x00, 0x01,
+            0x81, 0xc0, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01, 0x00, 0x21,
+            0x08, 0x91, 0x7f, 0x78, 0x01, 0x00, 0x00, 0x78, 0x81, 0xc0, 0x80, 0x80,
+            0x80, 0x80, 0x80, 0x80, 0x80, 0x01, 0x04, 0xc0, 0x00, 0x06, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x01, 0x06, 0x03, 0x00, 0x00, 0x01, 0x04, 0x00, 0x00,
+            0x01, 0xb6, 0x02, 0xff, 0xfa, 0x02, 0xff, 0xfb, 0x02, 0xff, 0xfc, 0x02,
+            0xff, 0xfd,
+        ];
+        assert_eq!(crc32_nut(&MAIN_HEADER_PAYLOAD), 0xAD46_C507);
     }
 
     #[test]

@@ -613,3 +613,17 @@ kind     = "blackbox"
 title    = "Observed ffprobe profile/pix_fmt/bits_per_raw_sample for PNG (six color_type/bit_depth combinations via Pillow), JPEG (SOF0/SOF2, 4:2:0/4:2:2/4:4:4 sampling), GIF (Logical Screen Descriptor, pix_fmt is always bgra), BMP (1/8/16/24/32 bpp via Pillow and ffmpeg), and TIFF (grayscale/RGB at 8 and 16 bits via Pillow), ffmpeg 8.1"
 acquired = "2026-08-27"
 where    = "the reference binary installed on the development machine"
+
+[[source]]
+id       = "nut-spec-2008-02-02"
+kind     = "spec"
+title    = "NUT open container format specification, r2008-02-02 (the version-3 revision referenced by ffmpeg/mplayer's own implementation)"
+acquired = "2026-08-27"
+where    = "https://ffmpeg.org/~michael/nut.txt"
+
+[[source]]
+id       = "ffprobe-nut-probe"
+kind     = "blackbox"
+title    = "Observed byte layout of a real ffmpeg -f nut file (main_header/stream_header field values, frame-code table contents, forward_ptr/checksum framing, CRC-32 variant, and the main_header's actual absence of a trailing main_flags field where the written specification places one), ffmpeg 8.1"
+acquired = "2026-08-27"
+where    = "the reference binary installed on the development machine"

@@ -1,0 +1,18 @@
+# Registry fragment, per the frozen schema in planning/19-parallel-execution.md
+# §3.4.
+
+[[component]]
+kind       = "demuxer"
+name       = "nut"
+long_name  = "NUT"
+feature    = "demux-nut"
+ctor       = "vaco_format_nut::DEMUXER"
+extensions = "nut"
+
+[[component]]
+kind       = "muxer"
+name       = "nut"
+long_name  = "NUT"
+feature    = "mux-nut"
+ctor       = "vaco_format_nut::MUXER"
+extensions = "nut"

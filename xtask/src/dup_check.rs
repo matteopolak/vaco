@@ -182,6 +182,28 @@ const DISTINCT: &[(&str, &str)] = &[
         "Crop",
         "vaco-frame: a crop rectangle. vaco-parse-h264: the SPS frame-crop offsets.",
     ),
+    (
+        "Cursor",
+        "vaco-probe: an interval's progress through a packet stream (end bound, \
+         packets seen, deadline). vaco-format-nut: a byte-slice reader for NUT's \
+         `v`/`s`/`vb` varint decoding. No shared concept, coincidental name.",
+    ),
+    (
+        "StreamHeader",
+        "vaco-mux-hash: a print-time pair of (CodecParameters, TimeBase) for the \
+         `#stream`/`#tb` lines framehash/framemd5/framecrc write — nothing to do \
+         with any wire format, generic across every codec. vaco-format-nut: a \
+         literal transcription of NUT's own spec section titled `stream_header` \
+         (stream_id, stream_class, fourcc, time_base_id, msb_pts_shift, \
+         max_pts_distance, decode_delay, stream_flags, codec_specific_data, plus \
+         video/audio-specific fields) — NUT-bitstream-shaped, not a general \
+         per-stream record. Checked before writing this row, per the \
+         orchestrator's prompt: the two do not overlap even after mux-hash's \
+         StreamHeader grew `spec_time_base` for #634 — that field has no NUT-side \
+         analogue and NUT's fourcc/decode_delay/stream_flags have no mux-hash-side \
+         analogue. Merging would mean grafting an unrelated field onto whichever \
+         one people notice least.",
+    ),
 ];
 
 /// Known duplicates that are *not* yet resolved, with the plan.
