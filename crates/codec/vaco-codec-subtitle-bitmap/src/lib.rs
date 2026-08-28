@@ -34,6 +34,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod decoder;
 pub mod dvb;
 pub mod pgs;
 pub mod rgba;

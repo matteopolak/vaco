@@ -20,16 +20,18 @@ time, a forced flag, and zero or more
 absolute canvas position. [`rgba::to_rgba`] expands one to packed RGBA8 for
 pixel-level comparison against a reference decoder.
 
-## Why no registry entry
+## How the registered decoders relate to the library
 
-`vaco_codec_core::Decoder::receive_frame` returns a `vaco_frame::Frame`, and
-`vaco_frame::FrameData` is a closed `Video`/`Audio` enum — there is nowhere
-to put a decoded subtitle. This is recorded centrally as interface gaps
-17/18 in `planning/INTERFACE-GAPS.md` (commit `e54161c`, landed ahead of
-this crate specifically so it would not be built as an idle `Decoder` impl
-with no route for its output). If a `Subtitle` `FrameData` variant lands
-later, wrapping these functions in `Decoder` impls is straightforward; until
-then this crate's only consumers are direct callers and its own tests.
+This crate was written before `FrameData::Subtitle` existed — `FrameData`
+was a closed `Video`/`Audio` enum, so a `Decoder` impl had nowhere to put
+its output (interface gap 17). That variant landed in commit `7648268`, and
+`decoder.rs` is the wiring it made possible: three `SendReceive`
+implementations, three `DecoderDesc`s, and one `frame_of_event` that states
+the `SubtitleEvent` -> `FrameData::Subtitle` mapping in a single place.
+
+The library functions remain the richer interface, and the split is not
+vestigial — `vobsub::decode_spu` takes the `.idx` palette as a parameter and
+the registered `dvdsub` decoder has no way to receive one (gaps 19/20).
 
 ## How it works
 
@@ -149,6 +151,25 @@ each format's own demuxer already has: `dvbsub::segments`, `sup`'s
   `CodecPrivate`** (the literal `.idx`-file text) into a `Palette` yet, so
   `vobsub::decode_spu`'s palette parameter has no producer for that
   container path today — tracked in `planning/TECH-DEBT.md`.
+- **The registered `dvdsub` decoder paints with a fallback palette.** A DVD
+  subpicture's four pseudo-colours are indices into a 16-entry table that is
+  not in the SPU bytes, and `Decoder` has no extradata channel to receive one
+  through (interface gap 19). Geometry and pixel indices are correct; colours
+  are a documented grey ramp. A caller holding the real palette should call
+  `vobsub::decode_spu` directly instead.
+- **A codec-stated display window does not reach the `Frame`.** DVB's
+  `page_time_out` (seconds) and VobSub's SPU start/stop delays are absolute
+  durations, and converting either into `Frame::duration` needs the stream's
+  time base, which `Decoder` never receives (interface gap 20).
+  `Frame::pts`/`Frame::duration` are copied from the packet instead — correct
+  and self-consistent, but the codec's own timing is dropped.
+  `SubtitleEvent::start`/`end` still carry it for a direct caller.
+- **`-c:s dvbsub` does not reach these decoders**, and the blocker is not in
+  this crate. `vaco-cli`'s `check_codecs` resolves `-c:s <name>` through
+  `encoder_by_name` before any decoder is looked up, and this build has no
+  subtitle *encoder*. Measured, not assumed: `ffmpeg -encoders` does list
+  `dvbsub` and `dvdsub` encoders, so that ordering matches the reference and
+  the gap is the absent encoder rather than the dispatch.
 
 ## Testing
 
@@ -167,6 +188,16 @@ observed output, never its source). This is not the same claim as
 bitmap-identical on arbitrary real-world content — the fixtures are
 minimal, hand-built display sets exercising one region/object each, not a
 corpus of real broadcast/Blu-ray/DVD streams.
+
+`decoder.rs`'s own tests establish the wiring claim narrowly: a packet
+entering the registered decoder comes out as a `Frame` whose
+`FrameData::Subtitle` carries the *same* rects the library already produces
+(asserted against `dvb::decode_display_set`'s output on the same bytes, not
+re-derived), with `stride` equal to the width, the library's own pixel
+indices, and `pts`/`duration` copied from the packet. A second test drives
+PGS segment-by-segment and confirms exactly one frame emerges, on the `END`
+segment. A third confirms each descriptor claims the `CodecId` that
+`vaco_registry::decoder_for` looks it up by.
 
 Three `cargo +nightly fuzz run` targets
 (`subtitle_bitmap_dvb`/`_pgs`/`_vobsub`) cover the untrusted-input surface:

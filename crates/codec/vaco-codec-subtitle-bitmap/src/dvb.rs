@@ -100,6 +100,7 @@ impl DecodedObject {
 pub struct DvbSubDecoder {
     limits: Limits,
     pending: Vec<u8>,
+    resync_discarded: u64,
 }
 
 impl DvbSubDecoder {
@@ -108,7 +109,19 @@ impl DvbSubDecoder {
         Self {
             limits,
             pending: Vec::new(),
+            resync_discarded: 0,
         }
+    }
+
+    /// Bytes thrown away by resynchronisation since construction.
+    ///
+    /// Resync is a silent recovery — the stream keeps working and the caller
+    /// gets frames — so without a counter "every packet is being discarded"
+    /// and "the stream is clean" look identical from outside. A caller that
+    /// wants to report degraded input reads this; nothing is required to.
+    #[must_use]
+    pub const fn resync_discarded(&self) -> u64 {
+        self.resync_discarded
     }
 
     /// Feed more bytes (a whole PES payload, or an arbitrary raw chunk).
@@ -129,7 +142,33 @@ impl DvbSubDecoder {
         self.pending.extend_from_slice(bytes);
 
         let mut events = Vec::new();
-        while let Some(end) = find_display_set_end(&self.pending) {
+        loop {
+            // Resynchronise before parsing. A display set can only begin at a
+            // `sync_byte`, so anything ahead of the first one is not framing
+            // this decoder can recover — and leaving it in front would make
+            // every *later* display set unparseable too, since the walk always
+            // starts at offset zero. Without this a single corrupt byte (or a
+            // stream joined mid-segment, which the registered `dvbsub`
+            // demuxer's blind fixed-size chunking makes ordinary) silently
+            // poisons the buffer until it hits its cap. Found by this crate's
+            // own decoder test feeding a packet of prose.
+            if !self.pending.is_empty()
+                && self.pending.first() != Some(&segments::SYNC_BYTE)
+            {
+                if let Some(at) = self.pending.iter().position(|&b| b == segments::SYNC_BYTE) {
+                    self.resync_discarded = self.resync_discarded.saturating_add(at as u64);
+                    self.pending.drain(..at);
+                } else {
+                    self.resync_discarded = self
+                        .resync_discarded
+                        .saturating_add(self.pending.len() as u64);
+                    self.pending.clear();
+                    break;
+                }
+            }
+            let Some(end) = find_display_set_end(&self.pending) else {
+                break;
+            };
             let Some(chunk) = self.pending.get(..end) else {
                 break;
             };

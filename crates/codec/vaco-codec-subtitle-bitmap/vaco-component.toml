@@ -1,0 +1,42 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Decoders only. There is no bitmap-subtitle *encoder* row here because this
+# crate implements no encoder — issues #392/#393 are decode work, and nothing
+# in this crate produces DVB/PGS/SPU bytes. That absence is what stops
+# `-c:s dvbsub` reaching these decoders through `vaco-cli` today, since
+# `check_codecs` resolves `-c:s <name>` through `encoder_by_name` before any
+# decoder is looked up. Measured, not assumed: `ffmpeg -encoders` does list
+# `dvbsub` and `dvdsub` encoders, so the CLI's ordering matches the reference
+# and the gap is the missing encoder rather than the dispatch.
+#
+# Names follow the reference's own decoder names (`ffmpeg -decoders`), which
+# are not the container names: `pgssub` decodes `hdmv_pgs_subtitle` (the
+# container is `sup`), and `dvdsub` decodes `dvd_subtitle` (the container is
+# `vobsub`).
+
+[[component]]
+kind      = "decoder"
+name      = "dvbsub"
+long_name = "DVB subtitles"
+feature   = "codec-subtitle-bitmap"
+ctor      = "vaco_codec_subtitle_bitmap::decoder::DVBSUB_DECODER"
+media     = "subtitle"
+codec     = "dvb_subtitle"
+
+[[component]]
+kind      = "decoder"
+name      = "pgssub"
+long_name = "HDMV Presentation Graphic Stream subtitles"
+feature   = "codec-subtitle-bitmap"
+ctor      = "vaco_codec_subtitle_bitmap::decoder::PGSSUB_DECODER"
+media     = "subtitle"
+codec     = "hdmv_pgs_subtitle"
+
+[[component]]
+kind      = "decoder"
+name      = "dvdsub"
+long_name = "DVD subtitles"
+feature   = "codec-subtitle-bitmap"
+ctor      = "vaco_codec_subtitle_bitmap::decoder::DVDSUB_DECODER"
+media     = "subtitle"
+codec     = "dvd_subtitle"
