@@ -1,0 +1,11 @@
+[[component]]
+kind      = "bitstream_filter"
+name      = "mov2textsub"
+long_name = "Convert MOV text to text subtitles"
+ctor      = "vaco_bsf_subtitle::mov2textsub::DESC"
+
+[[component]]
+kind      = "bitstream_filter"
+name      = "text2movsub"
+long_name = "Convert text subtitles to MOV text"
+ctor      = "vaco_bsf_subtitle::text2movsub::DESC"
