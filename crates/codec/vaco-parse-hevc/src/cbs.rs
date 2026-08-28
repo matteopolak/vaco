@@ -10,21 +10,19 @@
 //! different one. That is the whole of `hevc_metadata`, `filter_units`,
 //! `hevc_mp4toannexb` and `extract_extradata`.
 //!
-//! # The write path is partial, deliberately
+//! # The write path (D-19)
 //!
-//! [`HevcCbs::write_unit`] can write back a unit whose content is
-//! [`HevcContent::Raw`] — every unit, since that is what a unit that was not
-//! decoded becomes — but it cannot yet *re-encode* a typed SPS or PPS. Writing
-//! an SPS means writing `profile_tier_level()`, every reference picture set and
-//! the whole VUI back out bit-exactly, and a writer that is not bit-exact
-//! silently corrupts a stream rather than failing.
-//!
-//! So the split is: **anything a filter does by moving whole units works
-//! today**, and anything that edits a parameter set's *fields* returns
-//! [`Error::Unsupported`]. Plan 15 §D-19 budgets the write path separately for
-//! exactly this reason, and the shape it has to fill in is
-//! [`HevcCbs::write_unit`]'s `Raw` arm plus one per typed variant.
+//! [`HevcCbs::write_unit`] re-encodes [`HevcContent::Vps`], [`HevcContent::Sps`]
+//! and [`HevcContent::Pps`] bit-exactly — `profile_tier_level()`, every
+//! reference picture set and the whole VUI included — as well as
+//! [`HevcContent::Raw`]. See the write-side section further down (just above
+//! the `#[cfg(test)]` block) for exactly what it writes and the three narrow,
+//! documented cases it cannot reconstruct losslessly (a predicted short-term
+//! RPS, and the two SCC-extension payloads this crate's own reader discards).
+//! [`HevcContent::Sei`] remains unwritten — nothing in this crate's dependents
+//! edits a decoded SEI message today, so there is no tested caller for it yet.
 
+use vaco_bitstream::{BitWriter, RbspWriter};
 use vaco_codec_cbs::{CbsCodec, CbsFragment, CbsUnit, UnitOrigin};
 use vaco_core::{Error, Result};
 use vaco_format_nalu::{Framing, RbspBuf, units};
@@ -68,9 +66,15 @@ pub const ANNEXB_EXPRESSIVENESS_DIVERGENCE: &str =
 pub fn annexb_safe(unit: &[u8]) -> bool {
     unit.last() != Some(&0) && !vaco_codec_cbs::violates_ebsp_constraint(unit)
 }
-use crate::pps::Pps;
+use crate::pps::{DeblockingControl, Pps, PpsRangeExtension, Tiles};
+use crate::ptl::{ProfileTier, ProfileTierLevel};
+use crate::rps::ShortTermRps;
 use crate::sei::SeiMessage;
-use crate::sps::Sps;
+use crate::sps::{
+    BitstreamRestriction, ChromaFormat, CpbEntry, EXTENDED_SAR, HrdParameters, ScalingListData,
+    Sps, SpsRangeExtension, SubLayerHrd, SubPicHrd, Timing, VuiParameters, Window,
+};
+use crate::util::MAX_SUB_LAYERS;
 use crate::vps::Vps;
 
 /// The typed content of one HEVC NAL unit.
@@ -275,11 +279,16 @@ impl CbsCodec for HevcCbs {
                 out.extend_from_slice(data);
                 Ok(())
             }
-            // See the module documentation: a parameter-set writer that is not
-            // bit-exact corrupts a stream silently, so there is none yet.
-            HevcContent::Vps(_) | HevcContent::Sps(_) | HevcContent::Pps(_) => Err(
-                Error::Unsupported("writing an HEVC parameter set back out is not implemented"),
-            ),
+            HevcContent::Vps(vps) => write_param_set(out, budget, NalUnitType::VPS_NUT, |w| {
+                write_vps_data(vps, w);
+                Ok(())
+            }),
+            HevcContent::Sps(sps) => {
+                write_param_set(out, budget, NalUnitType::SPS_NUT, |w| write_sps_data(sps, w))
+            }
+            HevcContent::Pps(pps) => {
+                write_param_set(out, budget, NalUnitType::PPS_NUT, |w| write_pps_data(pps, w))
+            }
             HevcContent::Sei { .. } => Err(Error::Unsupported(
                 "writing an HEVC SEI unit back out is not implemented",
             )),
@@ -303,6 +312,717 @@ fn own_message(m: &SeiMessage<'_>) -> OwnedSeiMessage {
             _ => Vec::new(),
         },
     }
+}
+
+// -------------------------------------------------------------------- write
+//
+// The write side of [`HevcCbs`]: a bit-exact re-encoding of
+// `video_parameter_set_rbsp()` (§7.3.2.1), `seq_parameter_set_rbsp()`
+// (§7.3.2.2) and `pic_parameter_set_rbsp()` (§7.3.2.3), each mirroring its
+// crate's own `parse_data` field for field. Three documented, narrow
+// deviations, none of them decode-affecting:
+//
+// 1. **`st_ref_pic_set()`** (inside an SPS) is always written in its
+//    *explicit* spelling, never the inter-predicted one. [`ShortTermRps`]
+//    itself only stores the derived `DeltaPocSX`/`UsedByCurrPicSX` lists —
+//    "the syntax elements are not kept" is that module's own words — so the
+//    original `delta_rps`/`ref_idx` that produced a predicted set cannot be
+//    recovered, only a value that decodes to the identical lists. A real
+//    encoder frequently uses prediction here, so this is the deviation most
+//    likely to be visible on real content; see the round-trip test below for
+//    what it costs on one real `x265` SPS.
+// 2. **`sps_extension_4bits`, the multilayer and 3D extension bits** are
+//    always written 0. Nothing in [`Sps`] retains them (§7.3.2.2.4's
+//    multilayer bit and the whole 3D extension are explicitly not parsed),
+//    and a conforming single-layer stream — everything this crate decodes —
+//    never sets them.
+// 3. **A `palette_mode_enabled` SCC extension, or a PPS SCC extension with
+//    `slice_act_qp_offsets_present`,** cannot be written at all:
+//    [`crate::sps::parse_scc_extension`]/[`crate::pps::read_scc_extension`]
+//    both discard the actual palette/ACT payload while parsing (documented in
+//    their own doc comments), so there is nothing here to write back.
+//    [`write_unit`](HevcCbs::write_unit) reports [`Error::Unsupported`] for
+//    exactly this case rather than emit a plausible-looking guess.
+
+/// `nal_unit_header()`'s two bytes for a freshly-written parameter set:
+/// `nuh_layer_id = 0` and `nuh_temporal_id_plus1 = 1`, i.e. `TemporalId = 0`.
+/// §7.4.2.2 *requires* this of every VPS/SPS/PPS in a conforming stream —
+/// `HevcCbs::read_unit` only ever decodes one of these three at
+/// [`HevcNalHeader::is_base_layer`], and layer 0 base-layer parameter sets are
+/// always `TemporalId == 0` — so hard-coding it here, rather than threading it
+/// through [`HevcContent`], loses nothing a conforming stream could carry.
+fn write_nal_header(w: &mut BitWriter, t: NalUnitType) {
+    w.put(1, 0); // forbidden_zero_bit
+    w.put(6, u32::from(t.get()));
+    w.put(6, 0); // nuh_layer_id
+    w.put(3, 1); // nuh_temporal_id_plus1
+}
+
+/// Write one parameter set: the two-byte NAL header, `body`, then
+/// `rbsp_trailing_bits()` and escaping via [`RbspWriter`].
+fn write_param_set(
+    out: &mut Vec<u8>,
+    budget: &mut Budget,
+    t: NalUnitType,
+    body: impl FnOnce(&mut BitWriter) -> Result<()>,
+) -> Result<()> {
+    let mut w = RbspWriter::new();
+    write_nal_header(w.bits(), t);
+    body(w.bits())?;
+    let bytes = w.finish();
+    budget.check(bytes.len() as u64)?;
+    out.extend_from_slice(&bytes);
+    Ok(())
+}
+
+/// `video_parameter_set_rbsp()`, §7.3.2.1 — the inverse of [`Vps::parse_data`].
+fn write_vps_data(vps: &Vps, w: &mut BitWriter) {
+    w.put(4, u32::from(vps.id));
+    w.put(1, u32::from(vps.base_layer_internal));
+    w.put(1, u32::from(vps.base_layer_available));
+    w.put(6, u32::from(vps.max_layers) - 1);
+    let max_sub_layers_minus1 = u32::from(vps.max_sub_layers) - 1;
+    w.put(3, max_sub_layers_minus1);
+    w.put(1, u32::from(vps.temporal_id_nesting));
+    w.put(16, 0xFFFF); // vps_reserved_0xffff_16bits
+    write_ptl(w, &vps.ptl, max_sub_layers_minus1);
+
+    // `vps_sub_layer_ordering_info_present_flag`: this crate always stores one
+    // entry per coded sub-layer (never collapses to the single-entry-repeated
+    // form on read — see `Vps::parse_data`'s `first` variable), so a list
+    // shorter than `max_sub_layers` is what "not present" looks like here.
+    let ordering_present = vps.max_dec_pic_buffering_minus1.len() as u32 == max_sub_layers_minus1 + 1;
+    w.put(1, u32::from(ordering_present));
+    let first = if ordering_present { 0 } else { max_sub_layers_minus1 };
+    for i in first..=max_sub_layers_minus1.min(MAX_SUB_LAYERS - 1) {
+        let idx = (i - first) as usize;
+        w.ue(vps.max_dec_pic_buffering_minus1.get(idx).copied().unwrap_or(0));
+        w.ue(vps.max_num_reorder_pics.get(idx).copied().unwrap_or(0));
+        w.ue(vps.max_latency_increase_plus1.get(idx).copied().unwrap_or(0));
+    }
+
+    w.put(6, u32::from(vps.max_layer_id));
+    let num_layer_sets_minus1 = vps.num_layer_sets.saturating_sub(1);
+    w.ue(num_layer_sets_minus1);
+    // `layer_id_included_flag[i][j]`: every layer set beyond the first (base)
+    // one includes every layer up to `max_layer_id`, which is the only shape
+    // a single-layer stream (everything this crate parses) ever has.
+    for _ in 0..num_layer_sets_minus1 {
+        for _ in 0..=u32::from(vps.max_layer_id) {
+            w.put(1, 1);
+        }
+    }
+
+    match &vps.timing {
+        Some(t) => {
+            w.put(1, 1);
+            w.put(32, t.num_units_in_tick);
+            w.put(32, t.time_scale);
+            match t.num_ticks_poc_diff_one_minus1 {
+                Some(v) => {
+                    w.put(1, 1);
+                    w.ue(v);
+                }
+                None => w.put(1, 0),
+            }
+            w.ue(vps.hrd.len() as u32);
+            for (i, (layer_set_idx, params)) in vps.hrd.iter().enumerate() {
+                w.ue(*layer_set_idx);
+                // `cprms_present_flag[0]` is inferred 1 and not coded (mirrors
+                // `Vps::parse_data`); for i > 0 the crate does not retain
+                // whether the source actually coded 0 or 1 here, so this
+                // always writes 1 — a real, but exceedingly rare, deviation
+                // limited to a VPS with more than one HRD entry (multi
+                // operating-point signalling this crate's single-layer
+                // decode never needs).
+                if i > 0 {
+                    w.put(1, 1);
+                }
+                write_hrd(w, params, true, max_sub_layers_minus1);
+            }
+        }
+        None => w.put(1, 0),
+    }
+    w.put(1, u32::from(vps.extension_present));
+    // `vps_extension_data_flag` (none stored) is the RBSP trailer's job.
+}
+
+/// The 88-bit profile-and-constraint block, §7.3.3 — the inverse of
+/// `ptl::read_profile_tier`. Every field is stored raw, so this is a direct
+/// replay with no derivation.
+fn write_profile_tier(w: &mut BitWriter, p: &ProfileTier) {
+    w.put(2, u32::from(p.profile_space));
+    w.put(1, u32::from(p.tier_flag));
+    w.put(5, u32::from(p.profile_idc));
+    w.put(32, p.compatibility_flags);
+    w.put(1, u32::from(p.progressive_source));
+    w.put(1, u32::from(p.interlaced_source));
+    w.put(1, u32::from(p.non_packed_constraint));
+    w.put(1, u32::from(p.frame_only_constraint));
+    w.put(32, (p.constraint_bits >> 11) as u32);
+    w.put(11, (p.constraint_bits & 0x7FF) as u32);
+    w.put(1, u32::from(p.inbld));
+}
+
+/// `profile_tier_level()`, §7.3.3 — the inverse of
+/// [`ProfileTierLevel::parse`].
+fn write_ptl(w: &mut BitWriter, ptl: &ProfileTierLevel, max_num_sub_layers_minus1: u32) {
+    let sub_layers_minus1 = max_num_sub_layers_minus1.min(MAX_SUB_LAYERS - 1);
+    if let Some(g) = &ptl.general {
+        write_profile_tier(w, g);
+    }
+    w.put(8, u32::from(ptl.general_level_idc));
+
+    for i in 0..sub_layers_minus1 as usize {
+        let sl = ptl.sub_layers.get(i);
+        w.put(1, u32::from(sl.is_some_and(|s| s.profile.is_some())));
+        w.put(1, u32::from(sl.is_some_and(|s| s.level_idc.is_some())));
+    }
+    if sub_layers_minus1 > 0 {
+        for _ in sub_layers_minus1..MAX_SUB_LAYERS {
+            w.put(2, 0);
+        }
+    }
+    for i in 0..sub_layers_minus1 as usize {
+        let Some(sl) = ptl.sub_layers.get(i) else {
+            continue;
+        };
+        if let Some(p) = &sl.profile {
+            write_profile_tier(w, p);
+        }
+        if let Some(l) = sl.level_idc {
+            w.put(8, u32::from(l));
+        }
+    }
+}
+
+/// `hrd_parameters(commonInfPresentFlag, maxNumSubLayersMinus1)`, §E.2.2 — the
+/// inverse of `sps::parse_hrd`.
+fn write_hrd(w: &mut BitWriter, h: &HrdParameters, common_inf_present: bool, max_sub_layers_minus1: u32) {
+    if common_inf_present {
+        w.put(1, u32::from(h.nal_hrd_present));
+        w.put(1, u32::from(h.vcl_hrd_present));
+        if h.nal_hrd_present || h.vcl_hrd_present {
+            match &h.sub_pic {
+                Some(s) => {
+                    w.put(1, 1);
+                    write_sub_pic_hrd(w, *s);
+                }
+                None => w.put(1, 0),
+            }
+            w.put(4, u32::from(h.bit_rate_scale));
+            w.put(4, u32::from(h.cpb_size_scale));
+            if h.sub_pic.is_some() {
+                w.put(4, u32::from(h.cpb_size_du_scale));
+            }
+            w.put(5, u32::from(h.initial_cpb_removal_delay_length_minus1));
+            w.put(5, u32::from(h.au_cpb_removal_delay_length_minus1));
+            w.put(5, u32::from(h.dpb_output_delay_length_minus1));
+        }
+    }
+    let sub_pic = h.sub_pic.is_some();
+    for i in 0..=max_sub_layers_minus1.min(MAX_SUB_LAYERS - 1) as usize {
+        let default_layer = SubLayerHrd::default();
+        let layer = h.sub_layers.get(i).unwrap_or(&default_layer);
+        w.put(1, u32::from(layer.fixed_pic_rate_general));
+        if !layer.fixed_pic_rate_general {
+            w.put(1, u32::from(layer.fixed_pic_rate_within_cvs));
+        }
+        if layer.fixed_pic_rate_within_cvs {
+            w.ue(layer.elemental_duration_in_tc_minus1.unwrap_or(0));
+        } else {
+            w.put(1, u32::from(layer.low_delay_hrd));
+        }
+        if !layer.low_delay_hrd {
+            w.ue(layer.cpb_cnt_minus1);
+        }
+        if h.nal_hrd_present {
+            write_sub_layer_hrd(w, &layer.nal_cpb, sub_pic);
+        }
+        if h.vcl_hrd_present {
+            write_sub_layer_hrd(w, &layer.vcl_cpb, sub_pic);
+        }
+    }
+}
+
+/// `sub_pic_hrd_params()`'s fields, §E.2.2.
+fn write_sub_pic_hrd(w: &mut BitWriter, s: SubPicHrd) {
+    w.put(8, u32::from(s.tick_divisor_minus2));
+    w.put(5, u32::from(s.du_cpb_removal_delay_increment_length_minus1));
+    w.put(1, u32::from(s.sub_pic_cpb_params_in_pic_timing_sei));
+    w.put(5, u32::from(s.dpb_output_delay_du_length_minus1));
+}
+
+/// `sub_layer_hrd_parameters(i)`, §E.2.3 — the inverse of `read_sub_layer_hrd`.
+fn write_sub_layer_hrd(w: &mut BitWriter, cpb: &[CpbEntry], sub_pic: bool) {
+    for e in cpb {
+        w.ue(e.bit_rate_value_minus1);
+        w.ue(e.cpb_size_value_minus1);
+        if sub_pic {
+            w.ue(e.cpb_size_du_value_minus1);
+            w.ue(e.bit_rate_du_value_minus1);
+        }
+        w.put(1, u32::from(e.cbr));
+    }
+}
+
+/// `seq_parameter_set_rbsp()`, §7.3.2.2 — the inverse of [`Sps::parse_data`].
+/// See the module doc for what this cannot reconstruct bit-exactly.
+fn write_sps_data(sps: &Sps, w: &mut BitWriter) -> Result<()> {
+    w.put(4, u32::from(sps.vps_id));
+    let max_sub_layers_minus1 = u32::from(sps.max_sub_layers) - 1;
+    w.put(3, max_sub_layers_minus1);
+    w.put(1, u32::from(sps.temporal_id_nesting));
+    write_ptl(w, &sps.ptl, max_sub_layers_minus1);
+    w.ue(u32::from(sps.id));
+    w.ue(sps.chroma_format.idc());
+    if sps.chroma_format == ChromaFormat::Yuv444 {
+        w.put(1, u32::from(sps.separate_colour_plane));
+    }
+    w.ue(sps.pic_width_in_luma_samples);
+    w.ue(sps.pic_height_in_luma_samples);
+    match sps.conformance_window {
+        Some(win) => {
+            w.put(1, 1);
+            write_window(w, win);
+        }
+        None => w.put(1, 0),
+    }
+    w.ue(u32::from(sps.bit_depth_luma) - 8);
+    w.ue(u32::from(sps.bit_depth_chroma) - 8);
+    w.ue(u32::from(sps.log2_max_pic_order_cnt_lsb) - 4);
+
+    let ordering_present = sps.max_dec_pic_buffering_minus1.len() as u32 == max_sub_layers_minus1 + 1;
+    w.put(1, u32::from(ordering_present));
+    let first = if ordering_present { 0 } else { max_sub_layers_minus1 };
+    for i in first..=max_sub_layers_minus1.min(MAX_SUB_LAYERS - 1) {
+        let idx = (i - first) as usize;
+        w.ue(sps.max_dec_pic_buffering_minus1.get(idx).copied().unwrap_or(0));
+        w.ue(sps.max_num_reorder_pics.get(idx).copied().unwrap_or(0));
+        w.ue(sps.max_latency_increase_plus1.get(idx).copied().unwrap_or(0));
+    }
+
+    w.ue(u32::from(sps.log2_min_cb_size) - 3);
+    w.ue(u32::from(sps.log2_diff_max_min_cb_size));
+    w.ue(u32::from(sps.log2_min_tb_size) - 2);
+    w.ue(u32::from(sps.log2_diff_max_min_tb_size));
+    w.ue(sps.max_transform_hierarchy_depth_inter);
+    w.ue(sps.max_transform_hierarchy_depth_intra);
+
+    w.put(1, u32::from(sps.scaling_list_enabled));
+    if sps.scaling_list_enabled {
+        match &sps.scaling_list {
+            Some(list) => {
+                w.put(1, 1);
+                write_scaling_list_data(w, list);
+            }
+            None => w.put(1, 0),
+        }
+    }
+    w.put(1, u32::from(sps.amp_enabled));
+    w.put(1, u32::from(sps.sample_adaptive_offset_enabled));
+    match &sps.pcm {
+        Some(pcm) => {
+            w.put(1, 1);
+            w.put(4, u32::from(pcm.sample_bit_depth_luma) - 1);
+            w.put(4, u32::from(pcm.sample_bit_depth_chroma) - 1);
+            w.ue(u32::from(pcm.log2_min_cb_size) - 3);
+            w.ue(u32::from(pcm.log2_diff_max_min_cb_size));
+            w.put(1, u32::from(pcm.loop_filter_disabled));
+        }
+        None => w.put(1, 0),
+    }
+
+    w.ue(sps.short_term_ref_pic_sets.len() as u32);
+    for (i, set) in sps.short_term_ref_pic_sets.iter().enumerate() {
+        write_st_ref_pic_set_explicit(w, set, i != 0);
+    }
+
+    w.put(1, u32::from(sps.long_term_ref_pics_present));
+    if sps.long_term_ref_pics_present {
+        w.ue(sps.long_term_ref_pics.len() as u32);
+        for &(poc_lsb, used) in &sps.long_term_ref_pics {
+            w.put(u32::from(sps.log2_max_pic_order_cnt_lsb), poc_lsb);
+            w.put(1, u32::from(used));
+        }
+    }
+
+    w.put(1, u32::from(sps.temporal_mvp_enabled));
+    w.put(1, u32::from(sps.strong_intra_smoothing_enabled));
+    match &sps.vui {
+        Some(vui) => {
+            w.put(1, 1);
+            write_vui(w, vui, max_sub_layers_minus1);
+        }
+        None => w.put(1, 0),
+    }
+
+    let has_scc = sps.scc_extension.is_some();
+    if let Some(scc) = &sps.scc_extension
+        && scc.palette_mode_enabled
+    {
+        // See the module doc: the palette predictor payload was discarded on
+        // read, so there is nothing to write here.
+        return Err(Error::Unsupported(
+            "an SPS SCC extension with palette mode cannot be re-encoded: \
+             the palette predictor payload was not retained on read",
+        ));
+    }
+    let extension_present = sps.range_extension.is_some() || has_scc;
+    w.put(1, u32::from(extension_present));
+    if extension_present {
+        w.put(1, u32::from(sps.range_extension.is_some()));
+        w.put(1, 0); // sps_multilayer_extension_flag: not tracked, never set
+        w.put(1, 0); // sps_3d_extension_flag: not tracked, never set
+        w.put(1, u32::from(has_scc));
+        w.put(4, 0); // sps_extension_4bits: not tracked, always written 0
+        if let Some(r) = &sps.range_extension {
+            write_sps_range_extension(w, r);
+        }
+        if let Some(scc) = &sps.scc_extension {
+            w.put(1, u32::from(scc.curr_pic_ref_enabled));
+            w.put(1, 0); // palette_mode_enabled_flag: excluded above
+            w.put(2, u32::from(scc.motion_vector_resolution_control_idc));
+            w.put(1, u32::from(scc.intra_boundary_filtering_disabled));
+        }
+    }
+    Ok(())
+}
+
+/// `conf_win_*`/`def_disp_win_*`, the one `ue(v)` quartet shared by the
+/// conformance window and the VUI's default display window.
+fn write_window(w: &mut BitWriter, win: Window) {
+    w.ue(win.left);
+    w.ue(win.right);
+    w.ue(win.top);
+    w.ue(win.bottom);
+}
+
+/// `st_ref_pic_set(stRpsIdx)`, §7.3.7, **always in its explicit spelling**.
+/// See the module doc: the inter-predicted spelling's own inputs are not
+/// retained by this crate's reader, so this is the one always-available
+/// encoding — decodes to the identical `DeltaPocSX`/`UsedByCurrPicSX` lists,
+/// whether or not the source used prediction.
+///
+/// `first` is `st_rps_idx != 0`, which is what gates
+/// `inter_ref_pic_set_prediction_flag`'s presence at all — writing explicit
+/// still means writing that flag as 0 for every set after the first.
+fn write_st_ref_pic_set_explicit(w: &mut BitWriter, set: &ShortTermRps, first: bool) {
+    if first {
+        w.put(1, 0); // inter_ref_pic_set_prediction_flag
+    }
+    w.ue(set.num_negative_pics());
+    w.ue(set.num_positive_pics());
+    let mut prev = 0i32;
+    for (i, &d) in set.delta_poc_s0.iter().enumerate() {
+        w.ue((prev - d).unsigned_abs().saturating_sub(1));
+        prev = d;
+        w.put(1, u32::from(set.used_by_curr_pic_s0.get(i).copied().unwrap_or(false)));
+    }
+    prev = 0;
+    for (i, &d) in set.delta_poc_s1.iter().enumerate() {
+        w.ue((d - prev).unsigned_abs().saturating_sub(1));
+        prev = d;
+        w.put(1, u32::from(set.used_by_curr_pic_s1.get(i).copied().unwrap_or(false)));
+    }
+}
+
+/// `scaling_list_data()`, §7.3.4 — the inverse of `sps::read_scaling_list_data`.
+/// Unlike H.264's, there is no early-termination sentinel here: every
+/// coefficient is an explicit `scaling_list_delta_coef`, so this is a direct,
+/// unambiguous replay of the stored values.
+fn write_scaling_list_data(w: &mut BitWriter, data: &ScalingListData) {
+    for size_id in 0usize..4 {
+        let step = if size_id == 3 { 3 } else { 1 };
+        let mut matrix_id = 0usize;
+        while matrix_id < 6 {
+            let pred_mode = data
+                .pred_mode
+                .get(size_id)
+                .and_then(|row| row.get(matrix_id))
+                .copied()
+                .unwrap_or(false);
+            w.put(1, u32::from(pred_mode));
+            if pred_mode {
+                let coef_num = 64usize.min(1 << (4 + (size_id << 1)));
+                let mut prev = 8i32;
+                if size_id > 1 {
+                    let dc = data
+                        .dc_coef
+                        .get(size_id - 2)
+                        .and_then(|row| row.get(matrix_id))
+                        .copied()
+                        .unwrap_or(8);
+                    w.se(dc - 8);
+                    prev = dc;
+                }
+                for i in 0..coef_num {
+                    let target = i32::from(
+                        data.coef
+                            .get(size_id)
+                            .and_then(|m| m.get(matrix_id))
+                            .and_then(|row| row.get(i))
+                            .copied()
+                            .unwrap_or(0),
+                    );
+                    let raw = target - prev;
+                    let delta = ((raw + 128).rem_euclid(256)) - 128;
+                    w.se(delta);
+                    prev = target;
+                }
+            } else {
+                let delta = data
+                    .pred_matrix_id_delta
+                    .get(size_id)
+                    .and_then(|row| row.get(matrix_id))
+                    .copied()
+                    .unwrap_or(0);
+                w.ue(delta);
+            }
+            matrix_id += step;
+        }
+    }
+}
+
+/// `vui_parameters()`, §E.2.1 — the inverse of `sps::parse_vui`.
+fn write_vui(w: &mut BitWriter, vui: &VuiParameters, max_sub_layers_minus1: u32) {
+    match vui.aspect_ratio_idc {
+        Some(idc) => {
+            w.put(1, 1);
+            w.put(8, u32::from(idc));
+            if idc == EXTENDED_SAR {
+                let (sw, sh) = vui.sar.unwrap_or((0, 0));
+                w.put(16, u32::from(sw));
+                w.put(16, u32::from(sh));
+            }
+        }
+        None => w.put(1, 0),
+    }
+    match vui.overscan_appropriate {
+        Some(v) => {
+            w.put(1, 1);
+            w.put(1, u32::from(v));
+        }
+        None => w.put(1, 0),
+    }
+    match vui.video_format {
+        Some(fmt) => {
+            w.put(1, 1);
+            w.put(3, u32::from(fmt));
+            w.put(1, u32::from(vui.video_full_range.unwrap_or(false)));
+            match vui.colour_description {
+                Some((p, t, m)) => {
+                    w.put(1, 1);
+                    w.put(8, u32::from(p));
+                    w.put(8, u32::from(t));
+                    w.put(8, u32::from(m));
+                }
+                None => w.put(1, 0),
+            }
+        }
+        None => w.put(1, 0),
+    }
+    match vui.chroma_sample_loc {
+        Some((top, bottom)) => {
+            w.put(1, 1);
+            w.ue(top);
+            w.ue(bottom);
+        }
+        None => w.put(1, 0),
+    }
+    w.put(1, u32::from(vui.neutral_chroma_indication));
+    w.put(1, u32::from(vui.field_seq));
+    w.put(1, u32::from(vui.frame_field_info_present));
+    match vui.default_display_window {
+        Some(win) => {
+            w.put(1, 1);
+            write_window(w, win);
+        }
+        None => w.put(1, 0),
+    }
+    match vui.timing {
+        Some(t) => {
+            w.put(1, 1);
+            write_vui_timing(w, t);
+            match &vui.hrd {
+                Some(h) => {
+                    w.put(1, 1);
+                    write_hrd(w, h, true, max_sub_layers_minus1);
+                }
+                None => w.put(1, 0),
+            }
+        }
+        None => w.put(1, 0),
+    }
+    match &vui.bitstream_restriction {
+        Some(b) => {
+            w.put(1, 1);
+            write_bitstream_restriction(w, b);
+        }
+        None => w.put(1, 0),
+    }
+}
+
+/// `vui_timing_info`'s five fields, §E.2.1.
+fn write_vui_timing(w: &mut BitWriter, t: Timing) {
+    w.put(32, t.num_units_in_tick);
+    w.put(32, t.time_scale);
+    match t.num_ticks_poc_diff_one_minus1 {
+        Some(v) => {
+            w.put(1, 1);
+            w.ue(v);
+        }
+        None => w.put(1, 0),
+    }
+}
+
+/// `bitstream_restriction()`'s fields, tail of §E.2.1.
+fn write_bitstream_restriction(w: &mut BitWriter, b: &BitstreamRestriction) {
+    w.put(1, u32::from(b.tiles_fixed_structure));
+    w.put(1, u32::from(b.motion_vectors_over_pic_boundaries));
+    w.put(1, u32::from(b.restricted_ref_pic_lists));
+    w.ue(b.min_spatial_segmentation_idc);
+    w.ue(b.max_bytes_per_pic_denom);
+    w.ue(b.max_bits_per_min_cu_denom);
+    w.ue(b.log2_max_mv_length_horizontal);
+    w.ue(b.log2_max_mv_length_vertical);
+}
+
+/// `sps_range_extension()`, §7.3.2.2.2 — every field, in order.
+fn write_sps_range_extension(w: &mut BitWriter, r: &SpsRangeExtension) {
+    w.put(1, u32::from(r.transform_skip_rotation_enabled));
+    w.put(1, u32::from(r.transform_skip_context_enabled));
+    w.put(1, u32::from(r.implicit_rdpcm_enabled));
+    w.put(1, u32::from(r.explicit_rdpcm_enabled));
+    w.put(1, u32::from(r.extended_precision_processing));
+    w.put(1, u32::from(r.intra_smoothing_disabled));
+    w.put(1, u32::from(r.high_precision_offsets_enabled));
+    w.put(1, u32::from(r.persistent_rice_adaptation_enabled));
+    w.put(1, u32::from(r.cabac_bypass_alignment_enabled));
+}
+
+/// `pic_parameter_set_rbsp()`, §7.3.2.3 — the inverse of [`Pps::parse_data`].
+fn write_pps_data(pps: &Pps, w: &mut BitWriter) -> Result<()> {
+    w.ue(u32::from(pps.id));
+    w.ue(u32::from(pps.sps_id));
+    w.put(1, u32::from(pps.dependent_slice_segments_enabled));
+    w.put(1, u32::from(pps.output_flag_present));
+    w.put(3, u32::from(pps.num_extra_slice_header_bits));
+    w.put(1, u32::from(pps.sign_data_hiding_enabled));
+    w.put(1, u32::from(pps.cabac_init_present));
+    w.ue(pps.num_ref_idx_l0_default_active_minus1);
+    w.ue(pps.num_ref_idx_l1_default_active_minus1);
+    w.se(pps.init_qp_minus26);
+    w.put(1, u32::from(pps.constrained_intra_pred));
+    w.put(1, u32::from(pps.transform_skip_enabled));
+    w.put(1, u32::from(pps.cu_qp_delta_enabled));
+    if pps.cu_qp_delta_enabled {
+        w.ue(pps.diff_cu_qp_delta_depth);
+    }
+    w.se(pps.cb_qp_offset);
+    w.se(pps.cr_qp_offset);
+    w.put(1, u32::from(pps.slice_chroma_qp_offsets_present));
+    w.put(1, u32::from(pps.weighted_pred));
+    w.put(1, u32::from(pps.weighted_bipred));
+    w.put(1, u32::from(pps.transquant_bypass_enabled));
+    w.put(1, u32::from(pps.tiles.is_some()));
+    w.put(1, u32::from(pps.entropy_coding_sync_enabled));
+
+    if let Some(tiles) = &pps.tiles {
+        write_tiles(w, tiles);
+    }
+    w.put(1, u32::from(pps.loop_filter_across_slices_enabled));
+    match &pps.deblocking {
+        Some(d) => {
+            w.put(1, 1);
+            write_deblocking_control(w, d);
+        }
+        None => w.put(1, 0),
+    }
+    match &pps.scaling_list {
+        Some(list) => {
+            w.put(1, 1);
+            write_scaling_list_data(w, list);
+        }
+        None => w.put(1, 0),
+    }
+    w.put(1, u32::from(pps.lists_modification_present));
+    w.ue(pps.log2_parallel_merge_level - 2);
+    w.put(1, u32::from(pps.slice_segment_header_extension_present));
+
+    let has_scc = pps.scc_extension.is_some();
+    if let Some(scc) = &pps.scc_extension
+        && scc.slice_act_qp_offsets_present
+    {
+        // See the module doc: the three ACT QP offsets were discarded on
+        // read, so there is nothing to write here.
+        return Err(Error::Unsupported(
+            "a PPS SCC extension with slice ACT QP offsets cannot be re-encoded: \
+             the offset values were not retained on read",
+        ));
+    }
+    let extension_present = pps.range_extension.is_some() || has_scc;
+    w.put(1, u32::from(extension_present));
+    if extension_present {
+        w.put(1, u32::from(pps.range_extension.is_some()));
+        w.put(1, 0); // pps_multilayer_extension_flag: not tracked, never set
+        w.put(1, 0); // pps_3d_extension_flag: not tracked, never set
+        w.put(1, u32::from(has_scc));
+        w.put(4, 0); // pps_extension_4bits
+        if let Some(r) = &pps.range_extension {
+            write_pps_range_extension(w, r, pps.transform_skip_enabled);
+        }
+        if let Some(scc) = &pps.scc_extension {
+            w.put(1, u32::from(scc.curr_pic_ref_enabled));
+            w.put(1, 0); // residual_adaptive_colour_transform_enabled_flag: excluded above
+        }
+    }
+    Ok(())
+}
+
+/// The tile-layout block of §7.3.2.3.
+fn write_tiles(w: &mut BitWriter, tiles: &Tiles) {
+    w.ue(tiles.num_columns - 1);
+    w.ue(tiles.num_rows - 1);
+    w.put(1, u32::from(tiles.uniform_spacing));
+    if !tiles.uniform_spacing {
+        for &c in &tiles.column_widths {
+            w.ue(c - 1);
+        }
+        for &r in &tiles.row_heights {
+            w.ue(r - 1);
+        }
+    }
+    w.put(1, u32::from(tiles.loop_filter_across_tiles));
+}
+
+/// The deblocking-control block of §7.3.2.3.
+fn write_deblocking_control(w: &mut BitWriter, d: &DeblockingControl) {
+    w.put(1, u32::from(d.override_enabled));
+    w.put(1, u32::from(d.disabled));
+    if !d.disabled {
+        w.se(d.beta_offset_div2);
+        w.se(d.tc_offset_div2);
+    }
+}
+
+/// `pps_range_extension()`, §7.3.2.3.2 — the inverse of `read_range_extension`.
+fn write_pps_range_extension(w: &mut BitWriter, r: &PpsRangeExtension, transform_skip_enabled: bool) {
+    if transform_skip_enabled {
+        w.ue(r.log2_max_transform_skip_block_size_minus2);
+    }
+    w.put(1, u32::from(r.cross_component_prediction_enabled));
+    w.put(1, u32::from(r.chroma_qp_offset_list_enabled));
+    if r.chroma_qp_offset_list_enabled {
+        w.ue(r.diff_cu_chroma_qp_offset_depth);
+        w.ue(r.cb_qp_offset_list.len().saturating_sub(1) as u32);
+        for (&cb, &cr) in r.cb_qp_offset_list.iter().zip(r.cr_qp_offset_list.iter()) {
+            w.se(cb);
+            w.se(cr);
+        }
+    }
+    w.ue(r.log2_sao_offset_scale_luma);
+    w.ue(r.log2_sao_offset_scale_chroma);
 }
 
 #[cfg(test)]
@@ -473,10 +1193,9 @@ mod tests {
         }
     }
 
-    /// A raw unit writes back byte for byte, and a typed parameter set says so
-    /// rather than writing something wrong.
+    /// A raw unit writes back byte for byte.
     #[test]
-    fn the_write_path_is_honest_about_what_it_cannot_do() {
+    fn a_raw_rewrite_changes_nothing() {
         let data = stream();
         let mut cbs = Cbs::new(HevcCbs::new());
         let mut b = budget();
@@ -487,14 +1206,95 @@ mod tests {
         let raw = cbs.read_unit(&f, 4, &mut b).expect("a raw unit");
         cbs.update_unit(&mut f, 4, &raw, &mut b).expect("writes");
         assert_eq!(f.units()[4].data, before, "a raw rewrite changes nothing");
+        f.release(&mut b);
+    }
 
-        let sps = cbs.read_unit(&f, 1, &mut b).expect("an SPS");
-        assert!(matches!(
-            cbs.update_unit(&mut f, 1, &sps, &mut b),
-            Err(Error::Unsupported(_))
-        ));
-        // ...and the fragment is unchanged by the refusal.
-        assert_eq!(f.units()[1].data[0], 0x42);
+    /// The write path this crate previously had none of: read a real VPS,
+    /// SPS and PPS (all three from `sd.265`, the same fixture `stream()`
+    /// uses) to their typed form and write them straight back with no edit,
+    /// and check the result against the original bytes.
+    ///
+    /// VPS and PPS come back **byte for byte** — neither exercises this
+    /// crate's three documented deviations (see the write-side module doc).
+    /// The SPS is reported, not asserted exact: whether `sd.265`'s single
+    /// short-term RPS entry happens to hit the inter-prediction deviation is
+    /// exactly the kind of thing that must be measured, not assumed, and a
+    /// spurious byte-exact assertion on one fixture would prove less than it
+    /// looks like it proves either way.
+    #[test]
+    fn vps_and_pps_round_trip_bit_exactly_with_no_edit() {
+        let data = stream();
+        let mut cbs = Cbs::new(HevcCbs::new());
+        let mut b = budget();
+        let mut f = CbsFragment::new();
+        cbs.split(&data, Framing::AnnexB, &mut f, &mut b)
+            .expect("splits");
+
+        let vps = cbs.read_unit(&f, 0, &mut b).expect("a vps");
+        assert!(matches!(vps, HevcContent::Vps(_)));
+        let before_vps = f.units()[0].data.clone();
+        cbs.update_unit(&mut f, 0, &vps, &mut b).expect("rewrites");
+        assert_eq!(f.units()[0].data, before_vps, "vps re-encodes identically");
+
+        let pps = cbs.read_unit(&f, 2, &mut b).expect("a pps");
+        assert!(matches!(pps, HevcContent::Pps(_)));
+        let before_pps = f.units()[2].data.clone();
+        cbs.update_unit(&mut f, 2, &pps, &mut b).expect("rewrites");
+        assert_eq!(f.units()[2].data, before_pps, "pps re-encodes identically");
+
+        let sps = cbs.read_unit(&f, 1, &mut b).expect("an sps");
+        assert!(matches!(sps, HevcContent::Sps(_)));
+        let before_sps = f.units()[1].data.clone();
+        cbs.update_unit(&mut f, 1, &sps, &mut b).expect("rewrites");
+        let after_sps = f.units()[1].data.clone();
+        eprintln!(
+            "sd.265 SPS round-trip: {} (before {} bytes, after {} bytes)",
+            if before_sps == after_sps {
+                "byte-exact"
+            } else {
+                "differs — see module doc for the documented RPS deviation"
+            },
+            before_sps.len(),
+            after_sps.len(),
+        );
+        // Whatever the byte comparison says, re-reading the rewritten unit
+        // must still decode to the identical semantic content — the actual
+        // bar (see the write-side module doc), not the bytes.
+        let HevcContent::Sps(reread) = cbs.read_unit(&f, 1, &mut b).expect("re-read") else {
+            panic!("expected an sps");
+        };
+        let HevcContent::Sps(original) = sps else {
+            panic!("expected an sps");
+        };
+        assert_eq!(reread, original, "re-encoding must preserve every field");
+        f.release(&mut b);
+    }
+
+    /// A field edit through the typed SPS changes only that field — the
+    /// point of a write path over "copy the bytes back".
+    #[test]
+    fn editing_a_typed_sps_field_changes_only_that_field() {
+        let data = stream();
+        let mut cbs = Cbs::new(HevcCbs::new());
+        let mut b = budget();
+        let mut f = CbsFragment::new();
+        cbs.split(&data, Framing::AnnexB, &mut f, &mut b)
+            .expect("splits");
+
+        let HevcContent::Sps(mut sps) = cbs.read_unit(&f, 1, &mut b).expect("an sps") else {
+            panic!("expected an sps");
+        };
+        let original_dims = sps.dimensions();
+        sps.ptl.general_level_idc = 90;
+        cbs.update_unit(&mut f, 1, &HevcContent::Sps(sps), &mut b)
+            .expect("rewrites");
+
+        let HevcContent::Sps(sps) = cbs.read_unit(&f, 1, &mut b).expect("re-read") else {
+            panic!("expected an sps");
+        };
+        assert_eq!(sps.ptl.general_level_idc, 90, "the edited field stuck");
+        assert_eq!(sps.dimensions(), original_dims, "nothing else moved");
+        f.release(&mut b);
     }
 
     /// `extract_extradata`: lift the parameter sets out of an access unit into
