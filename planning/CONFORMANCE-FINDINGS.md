@@ -3710,3 +3710,94 @@ scope — fixing what was already found, not finding more): MP4's
 `side_data_list`/`displaymatrix` rotation fields disappearing under some
 mutations, and `format.tags.creation_time` divergences in both mp4 and
 matroska.
+
+### Dispatch 4: `AudioParameters::frame_size` closed via `CodecId::fixed_frame_size`; `r_frame_rate` sentinel root cause relocated, not fixed
+
+Two items carried forward from the "Diagnosed precisely but not fixed here"
+section above.
+
+**1. MPEG-TS audio `duration_ts`/`duration` short by one AAC frame — fixed.**
+Closed in `crates/format/vaco-demux-mpegts/src/demux.rs` and
+`crates/signal/vaco-codec-core/src/lib.rs`; full detail (including the
+two-step truncating rescale needed to match the reference's own 2089-tick
+answer, not the 2090 a single-step rescale gives) is in
+`docs/format/vaco-demux-mpegts.md`'s "Audio tail, closed" section, updated
+alongside this fix. In short: this section's own literal proposal — a
+`frame_size` field on `AudioParameters`, reached through `ParserProvider` —
+does not survive contact with the tree. Every `AudioParameters` construction
+is a full struct literal with no `..Default::default()`, so the field breaks
+compilation in thirteen unrelated crates (measured by trying it, then
+reverted). The fix used instead is `CodecId::fixed_frame_size() -> Option<u32>`,
+a new `const fn` beside the existing `ticks_per_frame` — zero blast radius,
+since nothing that already builds a `CodecParameters` literal needed to
+change. States 1024/1152/1536 for AAC/MP3/AC-3-E-AC-3 respectively; `None`
+for everything else including `AacLatm`, never guessed.
+
+Campaign effect, `fuzz/seeds/diff/mpegts`, 1500 iterations, `--rng-seed 42`,
+identical corpus before and after (a pristine `git worktree add --detach HEAD`
+build vs. the fix): field-level `duration_ts` mismatches 1162 → 216,
+`duration` mismatches 1631 → 675. The file-level tally did **not** move
+(`agree=40`/`mismatch=1435` both runs) — most mutated cases in this corpus
+carry more than one divergent field simultaneously, so closing one class
+rarely flips a whole file's verdict. `bit_rate` mismatches were unchanged
+(1531 both times): this section's own framing bundled `duration_ts`/`bit_rate`
+as one divergence, but they are empirically independent — `bit_rate` remains
+open and is not investigated further here. Searched GitHub issues for an
+existing tracker (`ts_id`/`duration`/`bit_rate`/`AudioParameters` searches);
+found none specific to this gap, so nothing to close.
+
+**2. MP4 `r_frame_rate` computing `16/1` where the reference states its `1/0`
+sentinel — investigated further, root cause relocated, no fix landed.**
+This section named `vaco-format-core::discovery`'s packet-mean frame-rate
+estimate as the mechanism. That is not what produces this fixture's mismatch:
+confirmed by gating that estimate's `r_frame_rate` fill behind "the container
+already stated `avg_frame_rate`" (which is true here — the estimate's own
+existing doc comment already asserts this container-fills-both invariant, and
+the old code violated it for `r_frame_rate` alone) and rebuilding — the
+corrupted-`stts` fixture still printed `r_frame_rate=16/1`, unchanged.
+
+The actual source is `crates/app/vaco-probe/src/show.rs`'s `frame_rate()`
+display function: it falls back to the *codec-parsed* (VUI-derived, undivided)
+rate whenever `Stream::r_frame_rate` is undefined, with no way to tell "this
+format never had a mechanism to state one" (a raw H.264 elementary stream,
+where the fallback is measured-correct: a fresh `ffmpeg`-encoded raw `.h264`
+gives `r_frame_rate=32/1` on both sides) apart from "this format's own
+mechanism ran and explicitly declined" (the corrupted-MP4 case: MP4's own
+`frame_rate_estimate` in `vaco-demux-mp4` already leaves `r_frame_rate`
+undefined here deliberately, while stating `avg_frame_rate=8/1` from the
+container's total duration — matching the reference on both fields — and the
+VUI's own valid, parseable 16/1 picture rate is what `frame_rate()` then
+wrongly surfaces). Both cases produce the identical internal state
+(`r_frame_rate` undefined, a defined `video.frame_rate`), so the display
+function cannot distinguish them from the field values alone.
+
+The discovery.rs gate change was kept only long enough to disprove the
+brief's hypothesis, then reverted in full (`git diff --stat` against HEAD is
+empty for `vaco-format-core`) — it does not fix the cited mismatch, and it
+regresses ordinary MPEG-TS video: on `fuzz/seeds/diff/mpegts/h264-aac.ts`,
+which the reference and both discovery.rs states agree on today
+(`r_frame_rate=8/1`), the gated version prints `16/1` instead, because MPEG-TS
+video's `avg_frame_rate` also arrives already-stated (from the same
+picture-rate refine pass, ahead of the mean-delta estimate in packet order)
+and the change silently handed the same show.rs display bug a second format
+to misfire on. Caught only by rebuilding a pristine `HEAD` binary
+(`git worktree add --detach`) and diffing the same fixture against the
+changed one before running the campaign — the campaign's own aggregate
+mismatch count for mpegts did not move either way (`agree=40`/`mismatch=1435`
+throughout, per the same "compounding divergences" effect as item 1), so the
+regression was invisible to the file-level tally and would have shipped
+undetected without the direct fixture check.
+
+No safe fix for item 2 was found within this dispatch's cleared crates. A
+correct fix needs the display layer (or `Stream` itself) to distinguish
+"never had a native rate mechanism" from "had one and it declined" — a new
+per-stream signal that is itself the kind of wrapper-forwarding question this
+dispatch's own brief warned about (`Box<dyn Muxer>`, `MappedFilter`,
+`AsDecoder`), and plumbing it through every demuxer that currently relies on
+`show.rs`'s blanket fallback (at least the raw-elementary-stream formats) is
+wider than this finding's blast radius justifies on the strength of one
+fixture. Left exactly where the "Diagnosed precisely but not fixed here"
+section leaves its other items: measured precisely, not fixed, for whoever
+next has room to touch `vaco-probe::show` and every format that depends on
+its current fallback behaviour. No GitHub issue found tracking this specific
+sentinel gap either.
