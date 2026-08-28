@@ -679,7 +679,7 @@ same class — an interface that cannot express what a caller needs:
   before any packet is seen, so `extract_extradata`'s result arrives too late
   to help it the way it now helps progressive mode's deferred write.
 
-## 12. `BsfProvider::open` carries no per-instance option string
+## 12. `BsfProvider::open` carries no per-instance option string — PARTIALLY CLOSED 2026-08-28
 
 Reported by #349/#350 while implementing `vaco-bsf-generic`/`vaco-bsf-h2645`.
 
@@ -739,7 +739,47 @@ more filters than it was when first reported, and `vvc_metadata`'s single
 even be checked, for want of a VVC sample in that pass's environment rather
 than for want of this gap.
 
-## 13. `vaco_frame::FrameSideData` has no console-log-only output channel
+
+### Status, 2026-08-28
+
+**`BitstreamFilter::set_option` landed in `vaco-codec-core`**, exactly the
+shape recorded above: `fn set_option(&mut self, name: &str, value: &str)
+-> Result<()>`, defaulted to `Err(Error::Option(..))`, mirroring gap 5's
+`Muxer::set_option`. `PacketMap::set_option` (`vaco-bsf-core`) forwards to
+it with the same default, and `MappedFilter<T>`'s `BitstreamFilter::set_option`
+forwards explicitly to `T::set_option` rather than inheriting the trait
+default — the wrapper trap this entry's own history already names one
+layer up (gap 9's `Box<dyn Muxer>`), caught here before shipping by a test
+that drives a real option only through the `BitstreamFilter` face and
+checks a deliberately-wrong value never reaches the output.
+
+**One real option is wired**: `h264_metadata`'s `aud` (`pass`/`insert`/
+`remove`). Measured against `ffmpeg 8.1`: `insert` unconditionally prepends
+a 4-byte-start-coded AUD to every access unit (no "already present" check —
+inserting on an already-AUD'd stream produces two), `remove` strips every
+AUD unit byte-for-byte, and the inserted `primary_pic_type` is the
+per-access-unit ITU-T H.264 Table 7-5 union of the slice kinds actually
+coded (`0`/`1`/`2` for I-only/I+P/I+P+B), probed with three GOP structures
+and confirmed never a constant across a file. `aud` is a structural
+byte-level edit rather than a field inside an existing SPS/VUI, which is
+what let it ship without the CBS write path the rest of this gap's option
+surface still needs.
+
+**Still open**: the other nineteen `h264_metadata` options, `hevc_metadata`'s
+whole surface (its own `aud` was not ported in this pass — HEVC's AUD NAL
+header is two bytes, not H.264's one, and porting without checking that
+layout would be guessing), and `mpeg2_metadata`/`prores_metadata`/
+`vvc_metadata`. Every one of them rewrites a field *inside* an existing
+parameter set, which needs a bit-exact CBS write path this workspace still
+does not have (see `vaco-bsf-h2645`'s and `vaco-bsf-legacy`'s own docs).
+No CLI-side `-bsf:v name=opts` parser exists either — reaching `set_option`
+from a graph-syntax string is still a separate, larger piece of work this
+pass did not touch, so `aud` is reachable from Rust callers (and this
+crate's own fuzz target, extended to drive `insert`/`remove` over
+attacker-controlled bytes: 2.1M execs/31s, zero crashes) but not yet from
+`vaco-cli`.
+
+## 13. `vaco_frame::FrameSideData` has no console-log-only output channel — CLOSED 2026-08-28
 
 Reported by (confirmed, not newly found) the `vaco-filter-analysis` agent
 finishing plan 16 §4.2's row on 2026-08-23, re-checking a claim its own
@@ -770,7 +810,31 @@ scratch.
 other reference filter whose only documented effect is a log line rather
 than a metadata write or a pixel change.
 
-## 14. `vaco_frame::FrameSideData` has no motion-vector variant
+
+### Status, 2026-08-28
+
+`FrameSideData::Log(Vec<String>)` landed, exactly the shape sketched above:
+no keys, no structure, a filter pushes lines through the new
+`Frame::push_log_line`, a caller reads them back through `Frame::log_lines`.
+`showinfo` (`vaco-filter-analysis`) is the real consumer, reproducing the
+reference's own two-line-per-frame format byte for byte against a real
+synthetic frame — field widths, the `(a=0, b=0)`-seeded Adler-32 checksums
+(confirmed independently here, the same seed already recorded for
+`framecrc`/`framehash`), population-not-sample standard deviation, and the
+`cl` field being chroma location rather than colour range (measured:
+`-vf setrange=` does not move it, `-vf setparams=chroma_location=` does).
+See that module's own doc for every field's measurement and the two things
+still not reproduced: the once-per-link `config in`/`config out` lines
+(a different kind of information than a per-`Frame` write can carry), and
+anything above 8 bits per component (no fixture available to measure).
+
+`Frame::log_lines` — the *reader* half — has no production caller yet:
+`vaco-probe` still has zero decoders and no live `Frame` pipeline (D5),
+the identical wall gap 11's own closing note recorded for `-show_frames`
+itself. Wiring a real `-loglevel info` console renderer waits on that,
+not on this gap.
+
+## 14. `vaco_frame::FrameSideData` has no motion-vector variant — PARTIALLY CLOSED 2026-08-28 (shape only)
 
 Reported by (confirmed, not newly found) the `vaco-filter-analysis` agent
 finishing plan 16 §4.2's row on 2026-08-23.
@@ -800,7 +864,27 @@ decoder-side half exists.
 else in this workspace currently reads motion vectors either, so this gap has
 exactly one known blocker today.
 
-## 15. `vaco-filter-color`'s `sample` module cannot address float pixel formats
+
+### Status, 2026-08-28
+
+`FrameSideData::MotionVectors(Vec<MotionVector>)` landed, additive, no
+existing match arm changes. `MotionVector`'s fields (`source`, `w`/`h`,
+`dst_x`/`dst_y`, `src_x`/`src_y`) are a representative shape matching the
+concepts `ffmpeg -h filter=codecview` names for `mv`/`block`, **not** a
+transcription of the reference's internal struct — `ffprobe
+-export_side_data +mvs` surfaces only a `"side_data_type": "Motion
+vectors"` label on a real decode, no field breakdown, so there was nothing
+to black-box-measure the exact layout against, and D7 rules out reading
+the reference's source to fill the gap.
+
+**Deliberately left without a producer.** No decoder in this workspace
+attaches a motion vector to a `Frame` (D5), so `codecview` itself is still
+not reachable, and this pass does not add a decoder to make it so — that
+is a separate, substantial piece of work, not a filter-crate fix. Recorded
+here so the next agent handed `codecview` starts from "the side-data shape
+exists, the producer does not" rather than re-measuring the same wall.
+
+## 15. `vaco-filter-color`'s `sample` module cannot address float pixel formats — CLOSED 2026-08-28
 
 Reported by the `vaco-filter-color` agent, 2026-08-23 continuation pass,
 asked specifically to establish (not assume) whether this is a real
@@ -844,6 +928,29 @@ a two-filter fix, and picking that shape is left for whoever is dispatched
 **Blocks:** `exposure`, `grayworld` (`vaco-filter-color`'s row); any other
 filter in this workspace that needs to read or write a `PixFmtFlags::FLOAT`
 format through a `u16`-shaped sample engine would hit the identical wall.
+
+
+### Status, 2026-08-28
+
+`sample::is_float_addressable`/`read_float`/`write_float` landed, exactly
+the shape sketched above: an `f32`-in/`f32`-out pair gated on
+`PixFmtFlags::FLOAT` and `depth == 32` (16-bit float — `grayf16le` and
+friends — is out of scope: reinterpreting two bytes as an `f32` needs
+four, a different layout, not a narrower case of this one). `exposure` is
+the real consumer, not just an interface: `out = (v*2^exposure -
+black*2^exposure) / abs(1 - black*2^exposure)`, bit-exact against `ffmpeg
+8.1` for every integer-`exposure` case tried on real `gbrpf32le` round
+trips, including a `black` value that makes the naive `1 - black*scale`
+denominator negative — the `abs` and the precomputed-reciprocal evaluation
+order are both measured, not decorative (see that module's doc for the
+reordering that mattered: a straight division reproduces the reference
+only when the denominator is positive).
+
+`grayworld` is **not** shipped by this close: this gap was specifically
+the accessor wall, and closing it does not supply `grayworld`'s own
+unmeasured LAB-space global-average algorithm, which stays exactly where
+it was found — a separate piece of work, now blocked on algorithm
+measurement rather than on infrastructure.
 
 ## 16. `vaco-demux-raw`'s `BitstreamSpec.parser_codec` cannot distinguish MPEG-1 from MPEG-2 — CLOSED 2026-08-28 (narrowed)
 
