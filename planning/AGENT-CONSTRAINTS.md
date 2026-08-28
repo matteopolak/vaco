@@ -803,6 +803,17 @@ Two caveats: pass the paths for files you are *deleting* too, and note that
 this form takes the working tree rather than what you staged — which is what
 you wanted anyway.
 
+**Staging one file first does not protect you.** `git add <one-file>` followed
+by a plain `git commit` still sweeps in everything another agent had staged
+before you. Two agents hit exactly this on 2026-08-28, an hour apart, each
+reverting a different concurrent edit — one of them a 20-line addendum written
+minutes earlier. Both caught it via `git diff HEAD~1 HEAD --name-only` and
+restored it, which is the only reason it cost nothing.
+
+So: **`git status --porcelain` before any commit, and the staged set must be
+empty or yours.** A dirty index that is not yours means someone else is
+mid-commit — use the pathspec form and do not touch the index at all.
+
 If you find your work has already been absorbed into someone else's commit,
 **report it and do not fix it**. Rewriting shared history while five agents
 hold uncommitted work in the same tree is far worse than a wrong commit
