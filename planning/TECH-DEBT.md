@@ -4939,3 +4939,98 @@ against data already dumped by the previous round's (reverted)
 instrumentation.
 
 `Vaco-Spec-Ref: itu-t-h262` Annex D.9.3.
+
+## H.264 CABAC: the hand-derived and traced bin sequences are identical — the gap is not "which bins run" (#418)
+
+Answering the coordinator's request directly: the two lists (bin sequence
+hand-derived from clauses 7.3.5/9.3 for the minimal repro's one
+macroblock, vs. the instrumented trace of this crate's own decode) **do
+not differ at any index.**
+
+| # | element | hand-derived | traced |
+|---|---|---|---|
+| 1 | mb_type bin0 | 1 | 1 |
+| 2 | mb_type bin1 (terminate) | 0 | 0 |
+| 3 | mb_type bin2 (ctxIdx 6) | 0 | 0 |
+| 4 | mb_type bin3 (ctxIdx 7) | 0 | 0 |
+| 5 | mb_type bin4 (ctxIdx 9) | 1 | 1 |
+| 6 | mb_type bin5 (ctxIdx 10) | 0 | 0 |
+| 7 | intra_chroma_pred_mode bin0 | 0 | 0 |
+| 8 | mb_qp_delta bin0 | 0 | 0 |
+| 9 | Intra16x16 luma DC coded_block_flag | 0 | 0 |
+| 10 | end_of_slice_flag | 1 | 1 |
+
+`mb_type` decodes to `I_16x16_2_0_0` — `Intra16x16PredMode = 2` (DC),
+`CodedBlockPatternLuma = 0`, `CodedBlockPatternChroma = 0`. The
+coordinator flagged `CodedBlockPatternChroma` as a specific thing to
+check before reading anything into the "no chroma coded_block_flags in
+the trace" observation — confirmed `0` three independent ways (`mb_type`'s
+own decoded value, `SliceStats::first_slice_mb_cbp`, and `libx264`'s own
+log). Clause 7.3.5.3.3 gates chroma `coded_block_flag` on
+`CodedBlockPatternChroma != 0`, so none are due here — the cheap dead end
+the coordinator predicted might be there, confirmed to be exactly that.
+
+**Both shapes of the "shorter bin sequence or skipped syntax element"
+hypothesis are ruled out for this macroblock**: nothing that should run
+is skipped, and nothing extra runs, down to the individual bin.
+
+**Went one level deeper.** Wrote a from-scratch, independent Python
+simulation of the CABAC arithmetic engine — not derived from, or calling,
+this crate's Rust in any way — using only the primary-text-verified
+`RANGE_TAB_LPS`/`TRANS_IDX_LPS`/`TRANS_IDX_MPS` tables, the clause 9.3.1.1
+context-init formula, and `(m, n)` values transcribed fresh from Tables
+9-12/9-17/9-18 for exactly these ten operations' contexts. This also
+newly verified `INTRA_CHROMA_PRED_MODE`'s and `QP_DELTA`'s table values
+against primary text *by number* for the first time in this
+investigation (previously only their binarization/`ctxIdxInc` logic had
+been checked) — both match Table 9-17 exactly. Run against the fixture's
+own raw bytes, this independent simulation reproduces this crate's own
+trace bit-for-bit and bin-for-bin, landing at the identical bitpos 69.
+**Two independently-written implementations of the algorithm, using
+independently-verified tables, agree completely with each other.**
+
+**A new, unexplained data point.** The "trailing non-zero bit past this
+decoder's own termination point" signature is not specific to the
+trivial, all-128 fixture. The same qualitative pattern — all-zero
+remaining bits except a lone `1` sitting past where this decoder
+terminates — appears on `cabac_cbp_oracle_noise.264` (rich, high-entropy
+content, an entirely different bit position and file length: bit_pos
+60482 of 60488, vs. 69 of 72), and it reproduces identically when the
+same all-128 source frame is encoded directly with the standalone `x264`
+CLI binary rather than through `ffmpeg`'s wrapped `libx264` — the tail
+bytes (`...f6 92 f9`) match byte-for-byte between the two encoder
+invocations despite different SEI/version strings shifting everything
+else in the file. This rules out one specific encoder wrapper's own
+muxing behaviour as the explanation, without yet identifying what the
+real one is.
+
+**Where this leaves the search.** Given two independently-implemented,
+primary-text-verified CABAC decoders agree with each other and disagree
+with the raw-byte "everything after termination must be zero"
+assumption — on both trivial and non-trivial content, from two different
+encoder invocations — continuing to infer the correct termination point
+from tail-byte pattern-matching has been tried from several angles on
+this fixture (the direct byte scan, the "look one bit back for the stop
+bit" reframing, the pad_bits-formula edge case at exact byte alignment)
+without closing the gap. The concrete next step this investigation has
+not yet taken is building ground truth from an actual trusted reference
+**decoder** — e.g. instrumenting `ffmpeg`'s own H.264 decoder to print its
+internal bit count at the moment it decodes `end_of_slice_flag` — rather
+than continuing to reason about what the tail bytes "should" mean.
+
+No source change to `vaco-codec-cabac` or `vaco-codec-h264`'s actual
+decode logic this round — analysis and documentation only, all temporary
+instrumentation (the fine-grained bin trace, the 2-frame and
+noise-fixture diagnostic tests, the Python oracle) built and run in
+scratch worktrees, none of it committed. Gates: full clean sweep
+(`layer-check`, `dep-gate`, `unsafe-audit`, `dup-check`, `owner-gate`,
+`patent-gate`), `clippy -p vaco-codec-h264 --all-targets` clean, full test
+suite unaffected outside the four already-`#[ignore]`d CABAC macroblock
+tests. `provenance-check`'s failures are pre-existing, none from this
+round's commit.
+
+#419 not reopened; no standing fix revisited.
+
+`Vaco-Spec-Ref: iso-iec-14496-10-2002-draft` clause 7.3.5.3.3 (chroma
+residual gating), Table 9-17 (`mb_qp_delta`/`intra_chroma_pred_mode`
+context initialisation).
