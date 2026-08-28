@@ -41,11 +41,18 @@ tags     = ["video"]
 generate = ["-f", "lavfi", "-i", "color=c=0x646464:s=640x480:d=1:r=25",
             "-frames:v", "1", "-pix_fmt", "yuv444p", "-f", "rawvideo"]
 
+# `components=15` (all components, the reference's own default) is
+# explicit rather than omitted only to keep this suite exercising a real
+# `-vf` argument string with the option present; any other value is now a
+# named error rather than a silent no-op (see `datascope.rs`'s own doc),
+# so this suite's job -- "did both sides still produce a frame" -- would
+# otherwise fail on our side for a reason that has nothing to do with the
+# font-table ceiling this suite exists to declare.
 [[axis]]
 name   = "filter"
 values = [
-  { id = "datascope",     argv = ["{media}", "datascope", "s=64x32:mode=mono:components=1", "gray8", "64", "64", "gray8", "64", "32"] },
-  { id = "datascope-dec", argv = ["{media}", "datascope", "s=180x40:mode=mono:format=dec:components=1", "gray8", "64", "64", "gray8", "180", "40"] },
+  { id = "datascope",     argv = ["{media}", "datascope", "s=64x32:mode=mono:components=15", "gray8", "64", "64", "gray8", "64", "32"] },
+  { id = "datascope-dec", argv = ["{media}", "datascope", "s=180x40:mode=mono:format=dec:components=15", "gray8", "64", "64", "gray8", "180", "40"] },
   # `pixscope` refuses anything smaller than `640x480` — an undocumented
   # reference floor this crate measured directly (see `vaco-filter-scope`'s
   # own doc). Below it, the reference rejects the input outright, which
