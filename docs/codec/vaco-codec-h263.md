@@ -157,6 +157,43 @@ point, parallel to the baseline `PTYPE` branch in
   diagram rather than as a derived rotate amount) with the wider
   `|REC| < 4096` reconstruction clip Annex T's own restriction 1 requires
   (`block::dequant_ac_mq`).
+- **Annex J (Deblocking Filter).** A post-reconstruction edge filter
+  (`deblock::filter_picture`), run once per picture from
+  `h263::H263Decoder::finish_picture` — after every macroblock has been
+  reconstructed and clipped, before the frame becomes either the next
+  picture's reference or this decoder's own output, matching §J.3's "the
+  filtering... alters the picture that is to be stored in the picture
+  store for future prediction." Structurally unlike D/K/T (which each
+  change what one macroblock decodes to): this one runs over the whole
+  picture afterward, needs a per-macroblock "was this one coded, and at
+  what `QUANT`" record two new `h263::ActivePicture` fields
+  (`mb_coded`/`mb_quant`) carry, and has its own two-pass ordering
+  requirement (every horizontal block edge first, using only
+  pre-filter samples; then every vertical edge, using the horizontal
+  pass's results — §J.3's own sequencing rule, since filtering both
+  directions from the same unfiltered picture would double-count a
+  corner pixel). `STRENGTH` (Table J.2) is a plain 31-entry lookup by
+  `QUANT`; `UpDownRamp`/`clipd1`/the four-sample replacement formula are
+  transcribed directly from §J.3's own symbols (`A`/`B`/`C`/`D`) rather
+  than renamed, so each line reads against the spec text unchanged.
+  Independent Segment Decoding and Reduced-Resolution Update — the two
+  modes that would add extra no-filter exclusions (across slice edges,
+  or `STRENGTH = infinity`) — are both still turned away by `plus::parse`
+  before a picture reaches the filter at all, so neither exclusion is
+  implemented; the ordinary picture-edge exclusion is. Measured against
+  `ffmpeg`'s own `h263p -flags +loop` encoder output (`testsrc`, QCIF,
+  10 frames, both a plain GOB-layer and a `structured_slices` fixture):
+  this crate's filtered decode differs from `ffmpeg`'s own reference
+  decode by mean 0.0065-0.0099, max 4-5 per sample — close to, but a
+  touch above, this crate's existing float-IDCT baseline (max 1 with the
+  filter off on the same content), which the spec itself flags as
+  expected ("the amount of rounding error mismatch may even be amplified
+  by the Annex J filtering process"). The filter's own *effect* size
+  (loop-on vs. loop-off, decoded by this crate) matches `ffmpeg`'s own
+  loop-on-vs-off effect size almost exactly: 162764 differing samples,
+  mean 1.898, max 120 here against 162735/1.898/120 for `ffmpeg` — the
+  filter is doing essentially the same thing `ffmpeg`'s own Annex J
+  implementation does, not a same-shaped-but-different one.
 
 **Skipped, for cost — the primary text (already the freely available
 01/2005 edition used above) was read for all six, this is a scope
@@ -199,12 +236,6 @@ decision, not a provenance one:**
   spatial-neighbour DC/AC coefficient predictor) comparable in size to
   Annex F's, with no `PLUSPTYPE` mode bit forcing them together with
   anything already landed.
-- **Annex J (Deblocking Filter)** is a post-reconstruction filter over
-  the whole picture, structurally unlike anything else in this pass
-  (D/K/T all change what one macroblock decodes to, not what happens to
-  every macroblock afterward), and interacts with Annex K's own slice
-  boundaries in a way (filters across them unless Independent Segment
-  Decoding is also active) that would need re-testing once landed.
 - **Annex P (Reference Picture Resampling)** changes the reference
   picture's own geometry between pictures (resampling to a new size) —
   `plus::parse` already turns away any picture whose `MPPTYPE` sets the
@@ -532,6 +563,8 @@ for both formats:
 | QCIF, UMV + Annex K, I-only | H.263+ | 1/1 | 0.008 | 1 | 99.2% |
 | QCIF, UMV + Annex K, mixed I/P (50 frames) | H.263+ | 50/50 | 0.008 – 0.031 | 1 – 3 | 99.2% – 97.0% |
 | QCIF, baseline (no UMV/Annex K), mixed I/P (50 frames), control | H.263 | 50/50 | 0.008 – 0.028 | 1 – 3 | 99.2% – 97.3% |
+| QCIF, Annex J (`-flags +loop`) | H.263+ | 10/10 | 0.0065 | 4 | 99.4% |
+| QCIF, Annex J + Annex K (`structured_slices`, `-qscale 5`) | H.263+ | 10/10 | 0.0099 | 5 | 99.1% |
 
 The first annex row is the one real-world differential fixture available
 for the annex work (`ffmpeg -c:v h263p -bitexact -umv 1`, which — per the

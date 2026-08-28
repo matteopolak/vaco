@@ -38,6 +38,7 @@ use vaco_packet::Packet;
 use vaco_pixfmt::PixFmt;
 
 use crate::block::{self, H26xIdct};
+use crate::deblock;
 use crate::motion;
 use crate::picture::RefPicture;
 use crate::plus;
@@ -122,6 +123,22 @@ struct ActivePicture {
     /// Annex K §K.1: the Rectangular Slice submode is active (only
     /// meaningful together with `slice_structured`).
     rectangular_slices: bool,
+    /// Annex J: the Deblocking Filter mode is active for this picture —
+    /// see [`crate::deblock`]. Always `false` outside `PLUSPTYPE`, same
+    /// as every other Annex-J-through-T mode bit.
+    deblocking_filter: bool,
+    /// One entry per macroblock, row-major: `true` unless that
+    /// macroblock was a `COD == 1` fully-skipped one (§5.3.1). An intra
+    /// macroblock is never skipped, so this is exactly Annex J §J.3's
+    /// "`COD==0 || MB-type == INTRA`" condition for one side of a block
+    /// edge — consulted only when `deblocking_filter` is set.
+    mb_coded: Vec<bool>,
+    /// One entry per macroblock, row-major: the `QUANT` value actually
+    /// used to decode that macroblock's own coefficients (after any
+    /// `DQUANT`). Meaningless for a skipped (`mb_coded == false`) slot,
+    /// since Annex J §J.3's `STRENGTH` lookup only ever reads the quant
+    /// of a *coded* block on either side of an edge.
+    mb_quant: Vec<u8>,
 }
 
 /// ITU-T H.263 (baseline) video decoder. See the module docs.
@@ -156,9 +173,24 @@ impl H263Decoder {
     }
 
     fn finish_picture(&mut self) {
-        let Some(ap) = self.current.take() else {
+        let Some(mut ap) = self.current.take() else {
             return;
         };
+        // Annex J: run once, after every macroblock in the picture has
+        // already been reconstructed and clipped, and before the frame
+        // becomes either the next picture's reference or this one's own
+        // output — both readers must see the filtered result (§J.3: "the
+        // filtering... alters the picture that is to be stored in the
+        // picture store for future prediction", and the filtered picture
+        // is what a real encoder/decoder pair both display and predict
+        // from). Skipped for an `unsupported` (mid-grey placeholder)
+        // picture: `deblocking_filter` reflects §5.1.4.5's persisted
+        // mode state, which survives a later picture that itself failed
+        // to parse for an unrelated reason, and filtering a flat
+        // placeholder would be pure waste even though it is a no-op.
+        if ap.deblocking_filter && !ap.unsupported {
+            deblock::filter_picture(&mut ap.frame, ap.mb_width, ap.mb_height, &ap.mb_coded, &ap.mb_quant);
+        }
         self.reference = Some(RefPicture::new(ap.frame.clone()));
         self.machine.emit(ap.frame);
     }
@@ -246,6 +278,9 @@ impl H263Decoder {
                         slice_structured: false,
                         rectangular_slices: false,
                         rcontrol: false,
+                        deblocking_filter: false,
+                        mb_coded: vec![true; (mb_width * mb_height) as usize],
+                        mb_quant: vec![pquant.clamp(1, 31); (mb_width * mb_height) as usize],
                     });
                     // §5.2: "For the first GOB in each picture (with
                     // number 0), no GOB header shall be transmitted" —
@@ -333,6 +368,9 @@ impl H263Decoder {
             slice_structured: modes.slice_structured,
             rectangular_slices: modes.rectangular_slices,
             rcontrol: header.as_ref().is_some_and(|hdr| hdr.rtype),
+            deblocking_filter: modes.deblocking_filter,
+            mb_coded: vec![true; (mb_width * mb_height) as usize],
+            mb_quant: vec![1; (mb_width * mb_height) as usize],
         });
 
         if unsupported {
@@ -560,6 +598,9 @@ fn try_decode_one_mb(r: &mut BitReader<'_>, ap: &mut ActivePicture, idct: &mut H
         if let Some(slot) = ap.mv_grid.get_mut(idx) {
             *slot = [0, 0];
         }
+        if let Some(slot) = ap.mb_coded.get_mut(idx) {
+            *slot = false;
+        }
         reconstruct_macroblock(r, idct, ap, reference, col, row, false, [0, 0], 0, false);
         return MbOutcome::Decoded;
     }
@@ -651,6 +692,12 @@ fn try_decode_one_mb(r: &mut BitReader<'_>, ap: &mut ActivePicture, idct: &mut H
     let idx = mb_index as usize;
     if let Some(slot) = ap.mv_grid.get_mut(idx) {
         *slot = if intra_mb { [0, 0] } else { mv };
+    }
+    if let Some(slot) = ap.mb_coded.get_mut(idx) {
+        *slot = true;
+    }
+    if let Some(slot) = ap.mb_quant.get_mut(idx) {
+        *slot = ap.quant;
     }
 
     if reconstruct_macroblock(r, idct, ap, reference, col, row, intra_mb, mv, cbp, true) {

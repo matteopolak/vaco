@@ -26,6 +26,7 @@
 #![forbid(unsafe_code)]
 
 mod block;
+mod deblock;
 mod h261;
 mod h263;
 mod motion;

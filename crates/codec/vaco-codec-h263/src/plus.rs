@@ -205,7 +205,6 @@ pub(crate) fn parse(r: &mut BitReader<'_>, modes: &mut PlusModes, fallback_dims:
     if modes.sac
         || modes.advanced_prediction
         || modes.advanced_intra
-        || modes.deblocking_filter
         || modes.reference_picture_selection
         || modes.independent_segment_decoding
         || modes.alternative_inter_vlc
