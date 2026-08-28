@@ -3879,3 +3879,184 @@ blocked for part of this session by an unrelated, transient concurrent
 change (a new crate directory, `crates/filter/vaco-filter-stack`, mid-created
 without its `Cargo.toml` by another agent); not investigated further as it
 is not this dispatch's crate.
+
+### Dispatch 6: harness widened to 13 families, format-aware mutation, a committed baseline; six new unfiled divergences
+
+Per dispatch 5's own closing note ("widening... is now worth more than any
+single fix"). Classify-and-file only, as instructed — nothing below was
+fixed.
+
+#### What changed in `fuzz/src/bin/diff_probe.rs` / `Justfile`
+
+- **Nine new seed families**: `ogg`, `flv`, `avi`, `mpegps`, `image2`,
+  `aiff`, `caf`, `w64`, `nut`, two small `ffmpeg`-generated fixtures each,
+  alongside the existing `mp4`/`matroska`/`mpegts`/`wav`. 13 families total.
+- **`--mutator aware`**: three pattern scanners — chunk/box tag-then-length
+  fields (tries both LE/BE and both `tag,len`/`len,tag` orderings, so it
+  covers RIFF, IFF/AIFF, ISOBMFF and CAF's 8-byte-length chunks with one
+  scanner), Ogg page header fields (checksum, `page_segments`), and FLV tag
+  `DataSize` fields (found by walking the tag stream, since a tag has no
+  magic of its own) — biases mutation toward these offsets instead of a
+  uniform-random byte. `generic` (the original, structure-blind mutator)
+  stays the default; `aware` falls back to it verbatim when nothing
+  structural is found, confirmed by running both on `matroska` and `mpegts`
+  (EBML and fixed-188-byte-packet formats respectively, neither shaped like
+  a tagged chunk) at the same `--rng-seed`: byte-for-byte identical tallies
+  in both cases (`matroska`: 209/129/38/24 both modes; `mpegts`: 9/384/2/5
+  both modes).
+- **Concurrent probe spawning**: both sides of one comparison now spawn
+  before either is waited on, instead of running to completion in sequence.
+  Real effect, not a change to what gets computed — verified determinism is
+  unaffected (identical tallies before/after on `mp4`/generic: 335/21/39/5
+  at n=400 both times).
+- **`--baseline <path>` / `--update-baseline`**: stores a campaign's tally
+  and reports drift on a later run at the same `--iterations`/`--rng-seed`,
+  exit-coded (1 on drift, 0 otherwise — a plain, already-known nonzero
+  mismatch count is not drift, only a *change* in it is). `just
+  diff-fuzz-baseline` runs all 13 families against the committed
+  `fuzz/seeds/diff/baseline.txt` (500 iterations, `--rng-seed 42`,
+  `generic`); a clean run against an unchanged tree reproduces it exactly
+  (verified: `just diff-fuzz-baseline` exits 0, every family printing
+  `(unchanged)` for all six tallied fields).
+
+#### Format-aware vs. generic: reached deeper, in two different ways
+
+400 iterations, `--rng-seed 42`, same seed corpus, `generic` vs `aware`, on
+every family with recognisable structure:
+
+| family | generic mismatch | aware mismatch | generic agree | aware agree |
+|---|---|---|---|---|
+| mp4 | 21 | 118 | 335 | 221 |
+| avi | 218 | 240 | 84 | 51 |
+| flv | 354 | 359 | 12 | 14 |
+| ogg | 0 | 2 | 7 | 48 |
+| wav | 389 | 226 | 10 | 174 |
+| aiff | 380 | 159 | 14 | 154 |
+| caf | 383 | 198 | 14 | 158 |
+
+Two distinct effects, not one, and reporting only "more mismatches" would
+have hidden the second: for `mp4` the aware mutator found **5.6x more
+content-level mismatches** (21 → 118) by landing on real box-length fields
+instead of random bytes. For `ogg`/`wav`/`aiff`/`caf`, generic mutation
+mostly produces `laxer`/pure-reject noise (a byte flip anywhere in a small
+audio file is likely to corrupt it past recovery under a blind mutator);
+`aware` instead keeps far more mutants *parseable by both sides* — `wav`
+agreement went from 10/400 to 174/400 — turning wasted accept/reject
+iterations into real field-level comparisons. `w64` was a mixed/negative
+result: agreement went from 21/400 to 3/400, slightly *worse* — its 16-byte
+GUID chunk headers are not what `chunk_length_fields` looks for (4-byte
+ASCII tags), so the scanner is matching incidental ASCII-range bytes inside
+those GUIDs and mutating them without the structural justification it has
+elsewhere; recorded honestly rather than only reporting the wins.
+`matroska`/`mpegts` (EBML, fixed-size-packet) are the clean negative
+control: byte-identical to `generic`, confirming the scanner does not
+fabricate structure where none of its three recognised shapes exist.
+
+#### Throughput
+
+Spawning both sides concurrently measured ~55 → ~61 pairs/s averaged across
+all 13 families (200 iterations each), up to 64.3 pairs/s on `mp4` (vs. 54.4
+before, +18%). Root cause measured directly, not assumed: `vaco-probe`
+averages ~2.5 ms/invocation, `ffprobe` ~14.9 ms/invocation (50 runs each on
+an identical file) — six times slower, almost certainly its own dynamic
+library loading. Concurrent spawning bounds wall time by the *slower* side,
+so the theoretical ceiling here is `ffprobe`'s own cost, not half the
+combined cost; the observed ~11-18% gain matches that ceiling closely. No
+crashes in any of the ~11,000 probe-pairs run across this dispatch's
+measurements, in either mutator mode, across all 13 families — a negative
+result, not a guarantee, per finding 55's own earlier framing of the same
+caveat.
+
+#### Six new divergences, one already tracked, none fixed
+
+**`vaco-demux-mpegps` cannot classify its own elementary streams —
+`codec_name=unknown` for both mpeg1video and mp2, unmutated.** Reproduces on
+a clean `ffmpeg -f mpeg` file with no mutation at all:
+`fuzz/seeds/diff/mpegps/mpeg1-mp2.mpg` reports `codec_name=unknown` for
+*both* streams on our side, `mpeg1video`/`mp2` on the reference's. Also
+loses `width`/`height`/`sample_aspect_ratio`/`pix_fmt` for video, which
+follow from having no codec id. Not investigated beyond confirming it is
+real and unmutated (`crates/format/vaco-demux-mpegps` had no `git status`
+activity and no recent commit at measurement time, so this is filed rather
+than reached across, per the brief's own rule). No GitHub issue found
+searching "mpegps unknown codec", "mpeg1video demux", "vaco-demux-mpegps";
+this is the biggest single new finding this pass produced and has no
+tracker yet.
+
+**Ogg/Vorbis: already tracked, reproduced exactly.** Widening to `ogg`
+independently rediscovered issue #646 (`sample_fmt=unknown`,
+`extradata_size` 30 vs. 3309, `start_pts`/`start_time` −1024/−0.023220 vs.
+0/0.000000, `duration`/`duration_ts` unstated) on this dispatch's own
+locally-generated fixture, down to the exact same numbers #646 already
+recorded on its own. Also newly noted there: `bit_rate=N/A` (ours) vs.
+`59247` (#646's reference measurement) — the same missing-per-stream-estimate
+shape finding 55's dispatch-5 addendum catalogued for MPEG-TS AAC, now seen
+on Ogg/Vorbis too, widening that gap's known footprint without changing its
+diagnosis. Opus-in-Ogg has none of these problems — full agreement on
+`fuzz/seeds/diff/ogg/opus-audio.ogg`, unmutated. Nothing filed as new here;
+#646 already covers it.
+
+**`format.tags.encoder` (the muxer's own `Lavf...` signature) is absent on
+our side across several new-to-this-dispatch formats where the reference
+states it: FLV, CAF, and MP4 specifically *under mutation* (absent on every
+`h264-video-only.flv`/`h264-aac.flv` mismatch sampled, both `caf` fixtures,
+and roughly a third of `mp4`/aware's mismatches — present and matching on
+the unmutated `mp4` seeds).** Each format carries this signature in a
+different structure (FLV: `onMetaData` AMF; CAF: its own `info` chunk; MP4:
+`udta`/`meta`/`ilst`, which the mutated cases show as fragile rather than
+absent by design), so this is recorded as one *symptom* recurring across
+formats, not asserted to share one cause — that would be the same mistake
+the `duration_ts`/`bit_rate` bundling in finding 55's original write-up
+made. No issue found for FLV or CAF specifically; not investigated further
+per this dispatch's classify-only scope.
+
+**AVI/MJPEG and image2/MJPEG share a gap: `sample_aspect_ratio`,
+`color_range`, `color_space`, `chroma_location` and `field_order` are all
+absent or `unknown`/`unspecified` on our side where the reference states
+real values (`1:1`, `pc`, `bt470bg`, `center`, `unknown` respectively),
+identically on `avi/mjpeg-pcm.avi` and `image2/frame.jpg`.** The same
+values, on two different containers carrying the same codec, points at the
+MJPEG parameter/JFIF-reading path rather than either container — recorded
+as one finding, not two. `image2/frame.png` shows the same `color_range`/
+`color_space` absence for PNG specifically (unrelated codec, same symptom
+shape), so this may be a broader "image codecs don't state colour metadata"
+gap rather than MJPEG-specific; not narrowed further here.
+
+**`vaco-demux-nut` does not hand extradata to the H.264 parser.** `profile`
+(`unknown` vs. `"High 4:4:4 Predictive"`), `codec_tag_string`/`codec_tag`
+(`[0][0][0][0]`/`0x0000` vs. `H264`/`0x34363248`), `has_b_frames` (`0` vs.
+`2`), `sample_aspect_ratio`/`pix_fmt`/`level` (absent vs. stated) are all
+missing on both `nut` fixtures, unmutated — the same shape as a stream whose
+SPS was never parsed at all, which the `codec_tag_string` gap (a container
+fourcc, not something a parser produces) suggests is really two adjacent
+gaps: NUT not stating its own stream fourcc, and separately not reaching
+`ParserProvider`. Not separated further; filed together since both were
+found on the same two fixtures without isolating which caused which.
+
+**W64: wrong codec tag on a non-default sample format, and start time
+stated where the reference declines.** `pcm24-mono-8k.w64` reports
+`codec_tag_string`/`codec_tag` as `[254][255][0][0]`/`0xfffe`
+(`WAVE_FORMAT_EXTENSIBLE`'s sentinel) where the reference states
+`[1][0][0][0]`/`0x0001` (plain PCM) — looks like the wrong field of W64's
+GUID-based format descriptor is being read for a 24-bit sample. Separately,
+`pcm16-mono-8k.w64` states `start_pts=0`/`start_time=0.000000` where the
+reference gives `N/A`/`N/A` — the inverse of most divergences in this
+project's history, where *we* are the side declining to guess and the
+reference is more assertive; here it is the other way around, worth noting
+since it is a different failure direction than this project's fixed
+findings have mostly been.
+
+#### Not touched
+
+Issue #571's corpus-minimisation half (the coverage-guided libFuzzer
+targets' corpus, not this differential harness's small fixed seed set) —
+this dispatch's widening is entirely inside `fuzz/seeds/diff/`, a different
+namespace from what #571 tracks, and nothing here touches it.
+
+#### What in the brief turned out to be wrong
+
+Nothing substantial. The one open question — whether spawn/batching would
+be "cheap" enough to be worth it — resolved to yes, but for a smaller gain
+than a naive "run two things at once" intuition suggests: `ffprobe`'s own
+~6x-slower spawn cost bounds the win to what that side alone costs, not half
+the combined cost. Recorded as measured rather than assumed.
