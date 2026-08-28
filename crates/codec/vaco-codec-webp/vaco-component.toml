@@ -1,0 +1,19 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+
+[[component]]
+kind      = "decoder"
+name      = "webp"
+long_name = "WebP, wrapping the `image-webp` crate (D11)"
+feature   = "codec-webp"
+ctor      = "vaco_codec_webp::WEBP_DECODER"
+media     = "video"
+codec     = "webp"
+
+[[component]]
+kind      = "encoder"
+name      = "webp"
+long_name = "WebP (lossless only), wrapping the `image-webp` crate (D11)"
+feature   = "codec-webp"
+ctor      = "vaco_codec_webp::WEBP_ENCODER"
+media     = "video"
+codec     = "webp"
