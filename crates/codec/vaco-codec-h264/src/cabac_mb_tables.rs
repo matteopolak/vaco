@@ -289,3 +289,124 @@ pub(crate) fn inits_by_col<const N: usize>(rows: &[[Init; 4]; N], col: usize) ->
     }
     out
 }
+
+#[cfg(test)]
+mod table_distinctness {
+    //! **Structural invariant, not a value check**: no two of this file's
+    //! context-initialisation tables may be byte-identical to each other.
+    //! Every table here is transcribed from a distinct row range of Table
+    //! 9-11 (`ctxIdxOffset` is unique per syntax element/category — checked
+    //! against the primary text while writing this test, and no two rows of
+    //! that table share an offset), so no legitimate reason exists for any
+    //! two of these arrays to hold the same values. `CBF_CHROMA_AC` being an
+    //! exact duplicate of `CBF_CHROMA_DC` is exactly the failure mode this
+    //! guards: per-table verification ("does this table match what I believe
+    //! its own row is") can pass against the *wrong* row entirely, since it
+    //! never compares a table to its neighbours. This does.
+    //!
+    //! If a future table legitimately *is* identical to another (nothing in
+    //! Table 9-11's current scope calls for that, but nothing rules it out
+    //! forever either), add a named pair to `ALLOWED_DUPLICATES` with a
+    //! comment saying why — that entry becomes a checkable claim instead of
+    //! silence.
+    use super::*;
+
+    /// Every table in this file, flattened to a plain `Vec<Init>` so
+    /// differently-shaped tables (which can never collide) and
+    /// identically-shaped ones (where a copy-paste bug is actually possible)
+    /// are compared the same way.
+    fn named_tables() -> Vec<(&'static str, Vec<Init>)> {
+        vec![
+            ("MB_TYPE_I", MB_TYPE_I.to_vec()),
+            ("SKIP_P", SKIP_P.iter().flatten().copied().collect()),
+            ("MB_TYPE_P", MB_TYPE_P.iter().flatten().copied().collect()),
+            (
+                "SUB_MB_TYPE_P",
+                SUB_MB_TYPE_P.iter().flatten().copied().collect(),
+            ),
+            ("SKIP_B", SKIP_B.iter().flatten().copied().collect()),
+            ("MB_TYPE_B", MB_TYPE_B.iter().flatten().copied().collect()),
+            (
+                "SUB_MB_TYPE_B",
+                SUB_MB_TYPE_B.iter().flatten().copied().collect(),
+            ),
+            ("MVD_COMP0", MVD_COMP0.iter().flatten().copied().collect()),
+            ("MVD_COMP1", MVD_COMP1.iter().flatten().copied().collect()),
+            ("REF_IDX", REF_IDX.iter().flatten().copied().collect()),
+            ("QP_DELTA", QP_DELTA.to_vec()),
+            ("INTRA_CHROMA_PRED_MODE", INTRA_CHROMA_PRED_MODE.to_vec()),
+            ("PREV_INTRA4X4", vec![PREV_INTRA4X4]),
+            ("REM_INTRA4X4", vec![REM_INTRA4X4]),
+            ("CBP_LUMA", CBP_LUMA.iter().flatten().copied().collect()),
+            ("CBP_CHROMA", CBP_CHROMA.iter().flatten().copied().collect()),
+            (
+                "CBF_LUMA_DC",
+                CBF_LUMA_DC.iter().flatten().copied().collect(),
+            ),
+            (
+                "CBF_CHROMA_DC",
+                CBF_CHROMA_DC.iter().flatten().copied().collect(),
+            ),
+            (
+                "CBF_LUMA_AC",
+                CBF_LUMA_AC.iter().flatten().copied().collect(),
+            ),
+            (
+                "CBF_LUMA4X4",
+                CBF_LUMA4X4.iter().flatten().copied().collect(),
+            ),
+            (
+                "CBF_CHROMA_AC",
+                CBF_CHROMA_AC.iter().flatten().copied().collect(),
+            ),
+        ]
+    }
+
+    /// Pairs that are allowed to be byte-identical, with the reason why —
+    /// empty today. Any real hit that isn't listed here fails the test.
+    const ALLOWED_DUPLICATES: &[(&str, &str)] = &[];
+
+    #[test]
+    fn no_two_tables_are_byte_identical() {
+        let tables = named_tables();
+        let mut hits = Vec::new();
+        for (i, (name_a, vals_a)) in tables.iter().enumerate() {
+            for (name_b, vals_b) in tables.iter().skip(i + 1) {
+                if vals_a == vals_b {
+                    let allowed = ALLOWED_DUPLICATES.iter().any(|&(a, b)| {
+                        (a == *name_a && b == *name_b) || (a == *name_b && b == *name_a)
+                    });
+                    if !allowed {
+                        hits.push(format!("{name_a} == {name_b} ({} entries)", vals_a.len()));
+                    }
+                }
+            }
+        }
+        assert!(
+            hits.is_empty(),
+            "found tables that are byte-for-byte identical to each other, which Table \
+             9-11's per-syntax-element ctxIdxOffset assignment gives no legitimate reason \
+             for -- this is exactly the shape of the CBF_CHROMA_AC/CBF_CHROMA_DC bug: \
+             {hits:?}"
+        );
+    }
+
+    /// Sanity check on the test itself: every table must appear at least
+    /// once, and the two single-`Init` entries (`PREV_INTRA4X4`/
+    /// `REM_INTRA4X4`) are deliberately different values (13,41) vs (3,62),
+    /// so a trivially-passing empty-list bug in `named_tables` would still
+    /// be caught by `no_two_tables_are_byte_identical` finding *nothing* --
+    /// this confirms the harness actually inspects real data.
+    #[test]
+    fn named_tables_is_not_accidentally_empty() {
+        let tables = named_tables();
+        assert_eq!(
+            tables.len(),
+            21,
+            "expected exactly 21 named tables in this file"
+        );
+        for (name, vals) in &tables {
+            assert!(!vals.is_empty(), "table {name} flattened to zero entries");
+        }
+    }
+}

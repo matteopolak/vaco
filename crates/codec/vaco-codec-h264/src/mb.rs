@@ -981,6 +981,44 @@ fn decode_residual(
 // inspection, while merely transcribing the table constants the oracle
 // would have needed. Reported honestly rather than claimed; see
 // `planning/TECH-DEBT.md` for the full handoff.
+//
+// FOLLOW-UP round: closed the structural gap that let CBF_CHROMA_AC's
+// duplication slip through in the first place. Per-table verification
+// ("does this table match what I believe its own row is") can pass
+// against the *wrong* row entirely -- it never compares a table to its
+// neighbours. `cabac_mb_tables.rs::table_distinctness` and
+// `cabac_residual.rs::table_distinctness` now assert no two of that
+// file's context-initialisation tables are byte-identical (21 tables in
+// the former, 20 in the latter -- the residual file's were function-local
+// consts inside `ContextSet::new`, moved to module scope so the test
+// could see them, no behavioural change). Both pass clean: no further
+// duplicate found beyond the one already fixed. Also checked the inverse
+// -- any two tables that *should* be identical per the specification but
+// have drifted apart -- by finding every place this codebase's own
+// comments claim two syntax elements share context values and confirming
+// each is implemented as single-source reuse rather than a second,
+// separately-transcribed table: `MB_TYPE_I` (I-slice `mb_type`) has
+// exactly one call site and is the same array P/SP/B's `mb_type` Intra
+// suffix reads, not a duplicate; `REM_INTRA4X4`/`PREV_INTRA4X4` are each a
+// single one-element table, matching the "one context reused for all 3
+// bins" ctxIdx-69 comment. Nothing found wrong; nothing found to fix --
+// the design already prevents this failure class everywhere it applies.
+//
+// Also investigated, as asked, rather than fixed: whether
+// `cabac_i_only.264`'s new `CabacDecoder::malformed()` panic is reachable
+// outside the `#[ignore]`d tests. It is not. `.malformed()` has no
+// non-test call site anywhere in this crate -- nothing in the real decode
+// path (`decode_slice_cabac` and its callers) ever reads the flag, so
+// nothing there can panic on it. The panic itself is the *test's own*
+// `assert!(!cabac.malformed(), ...)`, a deliberately strict correctness
+// check, not an engine-internal panic: `vaco-codec-cabac::decode`'s own
+// module doc states plainly that avoiding exactly this panic class (an
+// arithmetic-engine invariant violation under `overflow-checks`) is the
+// reason the `malformed` flag exists at all -- `CabacDecoder::new` clamps
+// a non-conforming state and records it rather than letting anything
+// overflow, and that invariant is itself fuzzed
+// (`vaco-codec-cabac/tests/spec.rs` and its own fuzz target). Not a
+// robustness bug; a stricter test catching an accuracy issue.
 use crate::cabac_mb_tables::{inits_by_col, inits_by_idc, inits_fixed};
 
 /// `CabacDecoder::decode_decision` over a context array, indexed safely —
