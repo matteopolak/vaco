@@ -371,6 +371,33 @@ hand-debugging in this round — clean, meaning whatever divergence
 remained was a silent semantic one, not something this residual-layer
 fuzz target could ever catch on its own.
 
+**Two more passes since**, both against `vaco-codec-cabac`'s public API
+only (that crate is `agent:codec-bits`'s, status `done` — not edited).
+`tests/cabac_bypass_egk_oracle.rs` added the round-trip correctness
+assertion `fuzz/fuzz_targets/cabac_engine.rs` never had (that target only
+checks `decode_bypass_egk`/`decode_uegk` don't panic, not what they
+return) and cleared a specific hypothesis: coefficient signs and
+`coeff_abs_level_minus1`'s `EGk` suffix are the only *bypass*-coded
+elements this crate reads, and a fault confined to bypass would explain
+every `mb_type` matching a reference decoder exactly while the slice
+still came up short. Every realistic value round-trips cleanly, and
+instrumenting the real call site against all three corpora found the
+32-bin prefix ceiling engages zero times across 243 real calls (largest
+observed value 418, six orders of magnitude below where the ceiling
+matters). Then a sixth real bug was found and fixed:
+`decode_cbp_cabac`'s luma `coded_block_pattern` neighbour derivation
+computed one same-macroblock bit with the *left* neighbour's rule and
+fed it to both the left and above `ctxIdxInc` terms — right for `q=0`,
+wrong or entirely unsourced for `q=1`/`q=2`/`q=3` (re-derived by hand
+from clause 6.4.7.2 and Table 6-2; see `mb.rs`'s own module doc for the
+exact case-by-case account). Fixing it measurably changed two of the
+three corpora's own slice-0 divergence point, confirmed by comparing
+exact before/after trailing-bit patterns, but none reach a clean end yet
+— the third corpus's mismatch is byte-for-byte unchanged, meaning its own
+divergence sits elsewhere. `residual_block_cabac`'s scan-loop timing
+against real per-coefficient state is the only surface in this function
+left unexplored.
+
 ## How to change it
 
 `cavlc_tables.rs` holds every CAVLC constant; `cavlc.rs` is the only module

@@ -110,6 +110,21 @@
 //! the same bit-exact bar CAVLC holds, is the same choice a previous
 //! dispatch on this project was asked to make for the
 //! specification-only-dressed-as-verified gap.
+//!
+//! Two more passes since: a round-trip oracle
+//! (`tests/cabac_bypass_egk_oracle.rs`) cleared a specific hypothesis
+//! about the bypass path (`decode_bypass_egk`'s prefix ceiling,
+//! `decode_uegk`'s `saturating_add`) — both round-trip cleanly across
+//! every realistic value, and neither ever engages on real corpus input
+//! (243 real calls, zero ceiling hits). Then a sixth real bug was found
+//! and fixed: `decode_cbp_cabac`'s luma `coded_block_pattern` neighbour
+//! derivation computed one same-macroblock bit using the *left*
+//! neighbour's rule and wrongly reused it for the *above* term too,
+//! silently wrong or entirely unsourced for three of the four 8x8 blocks
+//! (see [`mb`]'s own module doc for the exact derivation). Fixing it
+//! measurably changed two of the three corpora's own divergence point —
+//! real progress, confirmed by comparing exact before/after byte
+//! patterns — but reached bit-exactness on none of them yet.
 
 #![forbid(unsafe_code)]
 

@@ -835,20 +835,52 @@ fn decode_residual(
 // toward bit-exactness was not strong enough to have noticed that no
 // slice had ever actually been bit-exact.
 //
-// KNOWN GAP, not yet closed: address-by-address cross-checking against
-// `ffmpeg -debug mb_type` (letter meanings read from FFmpeg's own
-// `libavcodec/mpegutils.c`, not assumed) shows every macroblock
-// classification in `cabac_i_only.264`'s slice 0 — an all-`Intra4x4`
-// slice — matches the reference exactly, yet the engine ends short of
-// `rbsp_trailing_bits()` by a bit or two. Every `ctxIdxInc`/context table
-// reachable before residual decode in an all-intra slice has been
-// re-verified against primary text this round (`MB_TYPE_I` Table 9-12,
-// `SKIP_P`/`MB_TYPE_P` Table 9-13, `PREV_INTRA4X4`/`REM_INTRA4X4`/
-// `INTRA_CHROMA_PRED_MODE`/`QP_DELTA` Table 9-17, `CBP_LUMA`/`CBP_CHROMA`
-// Table 9-18) and matches, which leaves `residual_block_cabac` — never
-// before driven by real encoder output — the leading suspect. Not
-// isolated further within this round's time budget. Reported honestly
-// rather than claimed; see `planning/TECH-DEBT.md` for the handoff.
+// A fourth pass tested and cleared a specific hypothesis about
+// `residual_block_cabac`'s bypass path (`decode_bypass_egk`'s 32-bin
+// prefix ceiling, `decode_uegk`'s `saturating_add`): a round-trip oracle
+// (`tests/cabac_bypass_egk_oracle.rs`) round-trips every realistic H.264
+// coefficient value cleanly, and instrumenting the real call site against
+// all three corpora found the ceiling engages zero times in 243 real
+// calls (largest observed value: 418, against a ceiling that needs
+// `u32::MAX`-scale values). Not the bug.
+//
+// A fifth pass found and fixed a real one: `decode_cbp_cabac`'s luma
+// `coded_block_pattern` neighbour derivation (clause 9.3.3.1.1.4 +
+// 6.4.7.2 + Table 6-2) computed a single `same_mb_bit` — the *left*
+// neighbour's rule (block `q-1`, for `q` in the right column) — and fed
+// it to *both* the left and the above `ctxIdxInc` term. `q`'s 8x8 blocks
+// are raster-scan (`0 1 / 2 3`), so the above neighbour's own
+// same-macroblock rule is a *different* condition and a different block
+// (`q-2`, for `q` in the bottom row): right by coincidence for `q=0`,
+// wrong for `q=1` (used same-mb block 0 instead of the above
+// macroblock's block 3), silently zero for `q=2` (neither source was
+// ever populated), and wrong for `q=3` (reused block 2, the left value,
+// instead of block 1). Found by re-deriving each `q`'s actual left/above
+// `(xN, yN)` by hand from Table 6-2 rather than by inspecting the
+// existing code's shape, the same discipline that has caught every real
+// bug this project has found. The analogous 4x4-block-granular
+// `coded_block_flag` neighbour derivation just below was checked for the
+// same trap and does not have it — it looks up `left_bit`/`above_bit`
+// from two independently-computed absolute grid positions rather than
+// sharing one boolean.
+//
+// KNOWN GAP, not yet closed: fixing the CBP bug measurably changed two of
+// the three corpora's own slice-0 trailing-bit mismatch (a real
+// behavioural change, confirmed by comparing exact before/after byte
+// patterns) but reached a clean end on none of them; the third corpus's
+// mismatch is byte-for-byte identical before and after the fix, meaning
+// its own divergence sits at a point this bug never reaches. The bug is
+// real and stays fixed regardless of whether it was *the* cause. Every
+// `ctxIdxInc`/context table reachable before residual decode in an
+// all-intra slice has now been re-verified against primary text
+// (`MB_TYPE_I` Table 9-12, `SKIP_P`/`MB_TYPE_P` Table 9-13,
+// `PREV_INTRA4X4`/`REM_INTRA4X4`/`INTRA_CHROMA_PRED_MODE`/`QP_DELTA`
+// Table 9-17, `CBP_LUMA`/`CBP_CHROMA` Table 9-18's *values*, and now this
+// derivation's own *logic*) and the whole bypass path is cleared, which
+// leaves `residual_block_cabac`'s scan-loop timing against real
+// per-coefficient state as the only unexplored surface left in this
+// function. Reported honestly rather than claimed; see
+// `planning/TECH-DEBT.md` for the full handoff.
 use crate::cabac_mb_tables::{inits_by_col, inits_by_idc, inits_fixed};
 
 /// `CabacDecoder::decode_decision` over a context array, indexed safely —
@@ -1920,8 +1952,30 @@ fn decode_cbp_cabac(
     let _ = current_is_intra;
     let mut cbp_luma = 0u8;
     for q in 0..4u32 {
-        let same_mb_bit = match q {
+        // clause 6.4.7.2 + Table 6-2: luma8x8BlkIdx is raster-scan (0 1 /
+        // 2 3). The left neighbour of q falls in the *same* macroblock,
+        // at block q-1, exactly when q is in the right column (1, 3); the
+        // above neighbour falls in the *same* macroblock, at block q-2,
+        // exactly when q is in the bottom row (2, 3). These are two
+        // independent conditions on two independent same-macroblock
+        // sources — q=3's left (block 2) and above (block 1) are
+        // different same-mb blocks, not the same one. An earlier version
+        // of this function computed a single `same_mb_bit` (the left
+        // rule only) and fed it to *both* `cond_a` and `cond_b`, which
+        // happened to be right for every q's left term and q=0's above
+        // term, but was wrong for q=1 (used same-mb block 0 instead of
+        // the above macroblock's block 3), silently zero for q=2 (used
+        // neither source at all, since neither `same_mb_bit` nor
+        // `cross_mb_above` was populated for it), and wrong for q=3
+        // (reused block 2, the left value, instead of block 1). Found by
+        // re-deriving q's actual left/above (xN, yN) by hand from Table
+        // 6-2 and clause 6.4.7.2's formulas, not by inspection.
+        let same_mb_left_bit = match q {
             1 | 3 => Some(cbp_luma & (1 << (q - 1)) != 0),
+            _ => None,
+        };
+        let same_mb_above_bit = match q {
+            2 | 3 => Some(cbp_luma & (1 << (q - 2)) != 0),
             _ => None,
         };
         let cross_mb_left = if q == 1 || q == 3 {
@@ -1934,8 +1988,8 @@ fn decode_cbp_cabac(
         } else {
             grids.mb_above(mb_x, mb_y).map(|info| (info, info.cbp_luma & (1 << (q + 2)) != 0))
         };
-        let cond_a = cbp_luma_cond_term(same_mb_bit, cross_mb_left);
-        let cond_b = cbp_luma_cond_term(same_mb_bit, cross_mb_above);
+        let cond_a = cbp_luma_cond_term(same_mb_left_bit, cross_mb_left);
+        let cond_b = cbp_luma_cond_term(same_mb_above_bit, cross_mb_above);
         let inc = cond_a + 2 * cond_b;
         if decide(cabac, &mut ctx.cbp_luma, inc as usize) == 1 {
             cbp_luma |= 1 << q;

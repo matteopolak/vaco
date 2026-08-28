@@ -58,34 +58,21 @@ fn assert_slice_ends_at_rbsp_trailing_bits(reader: &mut BitReader<'_>, slice_cou
 
 
 #[test]
-#[ignore = "known incomplete, and this round found the earlier repros were \
-measured with too weak a check: macroblock_count==total_mbs and \
-!malformed() (this test's original assertions) can both hold even when \
-CABAC decodes wrong values throughout, since end_of_slice_flag's fixed, \
-non-adapting context can plausibly fire at a macroblock-count-correct \
-point regardless of what was actually decoded before it. Adding \
-assert_slice_ends_at_rbsp_trailing_bits (this round, matching the rigor \
-tests/macroblock_layer.rs already applies to CAVLC via more_rbsp_data) \
-found the real divergence starts at slice 0, not slice 10 as previously \
-reported — slice 10 was simply the first point the old, weaker check \
-happened to notice. Cross-checked address-by-address against `ffmpeg \
--debug mb_type` (letter meanings confirmed by reading \
-get_type_mv_char/get_segmentation_char in FFmpeg's own \
-libavcodec/mpegutils.c, not assumed): even macroblocks whose mb_type \
-classification (I_4x4 vs I_16x16 vs skip vs partition shape) matches the \
-reference exactly still leave the arithmetic engine a bit or two short of \
-rbsp_trailing_bits() by the slice's end, which is not explained by any \
-ctxIdxInc/context-table bug — every mb_type/mb_skip_flag/cbp/qp_delta/ \
-intra-pred-mode table and formula reachable in an all-Intra4x4 slice has \
-now been re-verified against primary text (Table 9-12's MB_TYPE_I, Table \
-9-13's SKIP_P/MB_TYPE_P, Table 9-17's PREV_INTRA4X4/REM_INTRA4X4/ \
-INTRA_CHROMA_PRED_MODE/QP_DELTA, Table 9-18's CBP_LUMA/CBP_CHROMA, plus \
-cbf_cond_term/cbp_luma_cond_term/cbp_chroma_cond_term/mvd_abs_term) and \
-all matched. That leaves residual_block_cabac itself — exercised here \
-against real encoder output for the first time ever, since no prior \
-measurement drove it through a real macroblock loop — as the most likely \
-remaining location, not yet isolated further within this round's time \
-budget. I_PCM is no longer the blocker on any corpus (see below)."]
+#[ignore = "known incomplete: a real, primary-text-verified bug was found \
+and fixed this round in decode_cbp_cabac's luma coded_block_pattern \
+neighbour derivation (clause 6.4.7.2 + Table 6-2) — a single same_mb_bit, \
+computed with the *left* neighbour's rule, was fed to both the left and \
+above ctxIdxInc terms, which happened to be right for q=0 but wrong for \
+q=1 (used same-mb block 0 instead of the above macroblock's block 3), \
+silently zero for q=2 (neither source populated), and wrong for q=3 \
+(reused the left value, block 2, instead of block 1, above). Fixing it \
+measurably changed this corpus's own decode — but byte-for-byte \
+*identically* before and after the fix (same expected/found trailing-bit \
+pattern down to the bit), meaning this corpus's own slice-0 divergence \
+happens at a point the fix never touches. The bug is real and stays \
+fixed regardless; this corpus's own root cause is elsewhere, still \
+unisolated. See the multiref/i_only tests' ignore reasons, which the fix \
+did measurably move (not yet to a clean end)."]
 fn every_slice_in_a_real_ip_cabac_stream_consumes_exactly_its_own_bits() {
     let data: &[u8] = include_bytes!("fixtures/cabac_ip_simple.264");
     let mut params = ParameterSets::new();
@@ -157,16 +144,13 @@ fn every_slice_in_a_real_ip_cabac_stream_consumes_exactly_its_own_bits() {
 }
 
 #[test]
-#[ignore = "same finding as the ip_simple test's ignore reason: the \
-earlier \"all 36 macroblocks visited, malformed() trips at the end\" \
-report was measured against a too-weak assertion. With \
-assert_slice_ends_at_rbsp_trailing_bits added this round, this corpus \
-also fails at slice 0 — the divergence was never actually isolated to \
-end-of-slice bookkeeping, that was just where the old, weaker check first \
-noticed something wrong. See the ip_simple test's ignore reason for what \
-this round ruled out (every mb_type/mb_skip_flag/cbp/qp_delta/intra-pred \
-context table and ctxIdxInc formula reachable before residual decode) and \
-what remains the leading suspect (residual_block_cabac itself)."]
+#[ignore = "known incomplete, but measurably moved: fixing \
+decode_cbp_cabac's same-macroblock neighbour conflation (see the \
+ip_simple test's ignore reason for the exact bug) changed the bit \
+position at which this corpus's slice 0 ends short of \
+rbsp_trailing_bits() -- a real, confirmed behavioural change, not a \
+no-op the way it was for ip_simple -- but does not reach a clean end. \
+Still diverges at slice 0."]
 fn every_slice_in_a_real_multiref_cabac_stream_consumes_exactly_its_own_bits() {
     let data: &[u8] = include_bytes!("fixtures/cabac_ip_multiref.264");
     let mut params = ParameterSets::new();
@@ -240,29 +224,16 @@ fn every_slice_in_a_real_multiref_cabac_stream_consumes_exactly_its_own_bits() {
 }
 
 #[test]
-#[ignore = "I_PCM is no longer this corpus's blocker: decode_slice_cabac \
-now handles it (byte-align, skip 256*ChromaFormatFactor=384 raw \
-pcm_byte[i] u(8) reads per the 2002 draft's clause 7.3.5 — no bit-depth \
-dependency, that extension postdates this edition — then re-initialise \
-just the arithmetic engine per clause 9.3.1.2, leaving context models \
-untouched per 9.3.1.1 not being re-invoked). That was genuinely cheap, as \
-expected: `CabacDecoder`'s own renorm() consumes exactly one bit at a \
-time with no read-ahead, so into_reader() already hands back a BitReader \
-positioned exactly where the raw bytes start. But this round's \
-assert_slice_ends_at_rbsp_trailing_bits addition (see the ip_simple \
-test's ignore reason for why the old assertions could not have caught \
-this) found this corpus, like the other two, actually diverges at slice \
-0 — the earlier \"decodes through slice 5\" report was real progress on a \
-different, now-fixed bug (intra_chroma_pred_mode storage) but was never \
-actually bit-exact even for slice 0, the weaker check just could not see \
-it. Cross-checked address-by-address against `ffmpeg -debug mb_type` \
-(confirmed against FFmpeg's own libavcodec/mpegutils.c source, not \
-assumed): mb_type classification matches the reference throughout slice \
-0 (an all-Intra4x4 slice), yet the arithmetic engine ends a bit or two \
-short of rbsp_trailing_bits(). See the ip_simple test's ignore reason for \
-the full list of tables and formulas this round ruled out and the \
-remaining leading suspect (residual_block_cabac, never before exercised \
-against real encoder output)."]
+#[ignore = "known incomplete, but the fewest open questions of the \
+three: this corpus's own I_PCM blocker is gone (decode_slice_cabac \
+handles it now, cheaply, as expected), and this round's real fix to \
+decode_cbp_cabac's luma coded_block_pattern neighbour derivation (a \
+same-macroblock bit computed once with the left-neighbour rule and \
+wrongly reused for the above term too -- see the ip_simple test's ignore \
+reason for the exact bug, verified against clause 6.4.7.2 and Table 6-2) \
+measurably changed this corpus's own slice-0 trailing-bit mismatch \
+rather than leaving it untouched. Still diverges at slice 0, not yet a \
+clean end."]
 fn every_slice_in_a_real_i_only_cabac_stream_consumes_exactly_its_own_bits() {
     let data: &[u8] = include_bytes!("fixtures/cabac_i_only.264");
     let mut params = ParameterSets::new();
