@@ -29,7 +29,7 @@ use vaco_cli_core::split::AvOptionOracle;
 use vaco_cli_core::{
     CliError, CommandLine, GroupKind, OptionGroup, ParsedOption, table::ArgFlags, table::ffmpeg,
 };
-use vaco_format_core::FormatOptions;
+use vaco_format_core::{FFlags, FormatOptions};
 use vaco_opts::{Options as _, OptionsExt as _};
 
 use crate::exit::{AvError, Diagnostic};
@@ -123,17 +123,17 @@ impl Cli {
     }
 }
 
-/// Whether argv asks for the banner to be suppressed.
+/// Whether argv asks for the banner to be printed.
 ///
 /// A textual pre-scan, because the reference decides this *before* it parses:
 /// `ffmpeg -qwerty 3` prints the banner and then the error, so the banner
 /// cannot wait for a successful parse.
-#[must_use]
-pub fn wants_banner<S: AsRef<OsStr>>(argv: &[S]) -> bool {
-    !argv
-        .iter()
-        .any(|a| a.as_ref() == OsStr::new("-hide_banner"))
-}
+///
+/// Re-exported rather than reimplemented: `ffprobe` answers the same question
+/// the same way, and the answer turned out to depend on `-v`/`-loglevel` as
+/// well as on `-hide_banner` (CONFORMANCE-FINDINGS 34). One definition, per
+/// D19 — see [`vaco_cli_core::loglevel`] for the measurements behind it.
+pub use vaco_cli_core::loglevel::wants_banner;
 
 /// Split and bind `argv`.
 ///
@@ -251,6 +251,22 @@ fn format_options_of(g: &OptionGroup) -> Result<FormatOptions, Diagnostic> {
     let schema = opts.schema();
     for opt in &g.opts {
         let (name, _spec) = opt.resolved();
+        // The top-level `-bitexact` is not itself a `FormatOptions` field —
+        // it is not one of the reference's 39 `AVFormatContext` options, so
+        // `Oracle::knows` and the `schema.find` below both say no — but the
+        // reference treats it as sugar that also sets `AVFMT_FLAG_BITEXACT`
+        // (`fflags`'s own `bitexact` bit) on every context in this file
+        // group. Folding it in here, rather than teaching `FormatOptions`
+        // a field that duplicates one already in `fflags`, means
+        // `vaco-mux-hash`'s `Muxer::set_bitexact` (reached through
+        // `MuxBuilder::open` from `opts.fflags.contains(FFlags::BITEXACT)`)
+        // sees the same bit regardless of which spelling asked for it —
+        // measured (`ffmpeg 8.1`) to suppress `framecrc`'s `#software` line
+        // identically for `-bitexact` and `-fflags +bitexact` on the output.
+        if name == "bitexact" {
+            opts.fflags.insert(FFlags::BITEXACT);
+            continue;
+        }
         if schema.find(name).is_none() {
             continue;
         }

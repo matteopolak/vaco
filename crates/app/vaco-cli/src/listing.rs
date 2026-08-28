@@ -31,6 +31,7 @@
 //! each function's doc comment for the measurement and, where this build's
 //! data disagrees with the reference's, the exact divergence and its cause.
 
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::io::Write;
 
@@ -206,23 +207,44 @@ pub fn render<W: Write>(w: &mut W, name: &str, value: Option<&OsStr>) -> Result<
 /// space, then the name field at `max(15, len) + 1`. We have no notion of "is
 /// a device" at all, so that slot is always blank — a real, reportable gap
 /// rather than a guess.
+///
+/// Three rules here were measured rather than assumed, and the obvious
+/// implementation gets all three wrong (it did — see CONFORMANCE-FINDINGS 33):
+///
+/// 1. **`-formats` is the sorted *union*, not the two lists concatenated.**
+///    130 of the reference's 413 format names support both directions, and
+///    emitting a demuxer pass followed by a muxer pass prints every one of
+///    them twice.
+/// 2. **`-demuxers` and `-muxers` mask the flag column to the direction
+///    asked for.** `ffmpeg -demuxers` prints ` D  ` against `avi`, not
+///    ` DE `, even though `avi` muxes too.
+/// 3. **When a name exists in both directions, `-formats` prints the
+///    *muxer's* long name.** They differ for 20 of the 130 — `mp3` is
+///    `MP2/3 (MPEG audio layer 2/3)` demuxing and `MP3 (MPEG audio layer 3)`
+///    muxing, and `-formats` shows the latter.
 fn write_formats<W: Write>(w: &mut W, which: &str) -> std::io::Result<()> {
     writeln!(w, "Formats:")?;
     writeln!(w, " D.. = Demuxing supported")?;
     writeln!(w, " .E. = Muxing supported")?;
     writeln!(w, " ..d = Is a device")?;
     writeln!(w, " ---")?;
+
+    // Name -> (demuxes, muxes, long name). The muxer pass runs second and
+    // overwrites the long name, which is rule 3 above.
+    let mut rows: BTreeMap<&str, (bool, bool, &str)> = BTreeMap::new();
     if which != "muxers" {
         for d in vaco_registry::demuxers() {
-            let is_muxer = vaco_registry::muxer_by_name(d.name).is_some();
-            write_format_row(w, true, is_muxer, d.name, d.long_name)?;
+            rows.insert(d.name, (true, false, d.long_name));
         }
     }
     if which != "demuxers" {
         for m in vaco_registry::muxers() {
-            let is_demuxer = vaco_registry::demuxer_by_name(m.name).is_some();
-            write_format_row(w, is_demuxer, true, m.name, m.long_name)?;
+            let demuxes = rows.get(m.name).is_some_and(|r| r.0);
+            rows.insert(m.name, (demuxes, true, m.long_name));
         }
+    }
+    for (name, (demux, mux, long_name)) in rows {
+        write_format_row(w, demux, mux, name, long_name)?;
     }
     Ok(())
 }
@@ -1558,6 +1580,97 @@ mod tests {
             header + vaco_registry::muxers().len(),
             "{m}"
         );
+    }
+
+    #[test]
+    fn formats_is_the_sorted_union_not_the_two_lists_concatenated() {
+        let s = text("formats");
+        let names: Vec<&str> = s
+            .lines()
+            .skip(5)
+            .filter_map(|l| l.get(5..).and_then(|r| r.split_whitespace().next()))
+            .collect();
+
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        assert_eq!(names, sorted, "-formats is not sorted by name:\n{s}");
+
+        let mut seen = std::collections::BTreeSet::new();
+        for n in &names {
+            assert!(
+                seen.insert(*n),
+                "`{n}` appears twice — the demuxer and muxer passes are being \
+                 concatenated rather than merged:\n{s}"
+            );
+        }
+
+        // The union, not the sum: every format that goes both ways would be
+        // double-counted by the bug this pins.
+        //
+        // The intersection is over *registered names*, not over
+        // `demuxer_by_name`, which also resolves aliases — it answers `Some`
+        // for "matroska" via the `matroska,webm` demuxer, and would report six
+        // more shared formats than the listing has rows. That is right for
+        // opening a file by format name and wrong here: the reference prints
+        // `matroska,webm` in `-demuxers` and `matroska` in `-muxers` as two
+        // separate rows, so the listing merges on the exact name only.
+        let demux_names: std::collections::BTreeSet<&str> =
+            vaco_registry::demuxers().iter().map(|d| d.name).collect();
+        let both = vaco_registry::muxers()
+            .iter()
+            .filter(|m| demux_names.contains(m.name))
+            .count();
+        assert_eq!(
+            names.len(),
+            vaco_registry::demuxers().len() + vaco_registry::muxers().len() - both
+        );
+    }
+
+    #[test]
+    fn demuxers_and_muxers_mask_the_flag_column_to_the_direction_asked_for() {
+        // Measured: `ffmpeg -demuxers` prints " D   avi" even though `avi`
+        // muxes too, and `ffmpeg -muxers` prints "  E  avi". Only `-formats`
+        // shows both letters at once.
+        for line in text("demuxers").lines().skip(5) {
+            assert_eq!(
+                line.as_bytes().get(2),
+                Some(&b' '),
+                "-demuxers leaked an E into the flag column: {line}"
+            );
+        }
+        for line in text("muxers").lines().skip(5) {
+            assert_eq!(
+                line.as_bytes().get(1),
+                Some(&b' '),
+                "-muxers leaked a D into the flag column: {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_both_ways_format_takes_its_muxer_long_name_in_formats() {
+        // Measured: the reference's `mp3` is "MP2/3 (MPEG audio layer 2/3)"
+        // demuxing and "MP3 (MPEG audio layer 3)" muxing, and `-formats` shows
+        // the muxer's. The two spellings differ for 20 of its 130 both-way
+        // formats, so picking the wrong one is not a rounding error.
+        let s = text("formats");
+        for m in vaco_registry::muxers() {
+            if vaco_registry::demuxer_by_name(m.name).is_none() {
+                continue;
+            }
+            let found = s.lines().find(|l| {
+                l.get(5..)
+                    .and_then(|r| r.split_whitespace().next())
+                    .is_some_and(|n| n == m.name)
+            });
+            assert!(found.is_some(), "no -formats row for `{}`", m.name);
+            let row = found.unwrap_or_default();
+            assert!(
+                row.ends_with(m.long_name),
+                "`{}` should carry the muxer's long name: {row}",
+                m.name
+            );
+        }
     }
 
     #[test]

@@ -85,6 +85,7 @@
 pub mod error;
 pub mod help;
 pub mod lex;
+pub mod loglevel;
 pub mod map;
 pub mod metaspec;
 pub mod num;
