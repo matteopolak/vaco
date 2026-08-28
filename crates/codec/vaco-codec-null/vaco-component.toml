@@ -1,0 +1,22 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+# vnull/anull are encode-only per the roadmap's "0 dec / 2 enc" accounting
+# (plan 20 §1.9, C-47 merged into issue #281) — there is nothing to decode,
+# so no `decoder` fragment is registered for either identity.
+
+[[component]]
+kind      = "encoder"
+name      = "vnull"
+long_name = "Null video codec"
+feature   = "codec-null"
+ctor      = "vaco_codec_null::VNULL_ENCODER"
+media     = "video"
+codec     = "vnull"
+
+[[component]]
+kind      = "encoder"
+name      = "anull"
+long_name = "Null audio codec"
+feature   = "codec-null"
+ctor      = "vaco_codec_null::ANULL_ENCODER"
+media     = "audio"
+codec     = "anull"
