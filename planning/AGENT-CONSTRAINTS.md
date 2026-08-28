@@ -814,6 +814,23 @@ So: **`git status --porcelain` before any commit, and the staged set must be
 empty or yours.** A dirty index that is not yours means someone else is
 mid-commit — use the pathspec form and do not touch the index at all.
 
+**The pathspec form itself is sound — verified, not assumed.** In a scratch
+repo: stage `b.txt`, then `git commit -m ... -- a.txt`. The commit contains
+`a.txt` alone and `b.txt` remains staged and uncommitted. A concurrent stage
+cannot ride along.
+
+**But the pre-commit hook can still reject you for someone else's files.**
+The hook inspects the *index*, which still holds whatever another agent
+staged — so it may refuse your correctly-scoped commit over a provenance
+problem in a file you never touched. That is a spurious rejection, not
+evidence that your pathspec leaked.
+
+**When that happens, do not `git reset`.** It unstages the other agent's
+work mid-commit, which is a different way of damaging them. Use the private
+index recipe instead: it builds a tree from `HEAD` plus your own blobs and
+never touches the shared index at all, so a dirty index cannot reject you
+and you cannot disturb it.
+
 If you find your work has already been absorbed into someone else's commit,
 **report it and do not fix it**. Rewriting shared history while five agents
 hold uncommitted work in the same tree is far worse than a wrong commit
