@@ -512,6 +512,291 @@ pub(crate) fn decode_h263_coefficients_mq(r: &mut BitReader<'_>, intra: bool, ha
     Ok(qfs)
 }
 
+// ------------------------------------------------------------ Annex I
+
+/// Annex I §I.3 (`Vaco-Spec-Ref: itu-t-h263` I.3): dequantise one
+/// Advanced INTRA Coding coefficient — "RecC(u,v) = 2 * QUANT *
+/// LEVEL(u,v)" for *every* coefficient, DC included, with no
+/// "dead-zone". Distinct from the baseline INTRA path
+/// [`dequantise_ranged`] uses (a fixed step of 8 for DC via Table 15,
+/// the ordinary dead-zone formula for AC) — Annex I replaces both with
+/// this one formula.
+#[must_use]
+#[allow(
+    dead_code,
+    reason = "landed ahead of its consumer: Annex I's macroblock-layer wiring (INTRA_MODE dispatch, neighbour-availability tracking) is not written yet -- see H263_INTRA_TCOEF's own note"
+)]
+pub(crate) fn annex_i_dequant(level: i32, quant: u8) -> i32 {
+    2 * i32::from(quant) * level
+}
+
+/// [`annex_i_dequant`] applied to a whole block's 64 coefficients (after
+/// [`inverse_scan`] has already put them in raster order).
+#[must_use]
+#[allow(dead_code, reason = "landed ahead of its consumer -- see annex_i_dequant")]
+pub(crate) fn annex_i_dequantise(qf: &[i32; 64], quant: u8) -> [i32; 64] {
+    let mut out = [0i32; 64];
+    for (o, &level) in out.iter_mut().zip(qf.iter()) {
+        *o = annex_i_dequant(level, quant);
+    }
+    out
+}
+
+/// Annex I §I.3: `clipAC()` — "clipping to the range -2048 to 2047".
+#[must_use]
+#[allow(dead_code, reason = "landed ahead of its consumer -- see annex_i_dequant")]
+pub(crate) fn clip_ac(x: i32) -> i32 {
+    x.clamp(-2048, 2047)
+}
+
+/// Annex I §I.3: `oddifyclipDC(x)` — "If (x is even) { result =
+/// clipDC(x+1) } else { result = clipDC(x) }", where `clipDC()` clips to
+/// `0..=2047`. Forces the reconstructed DC coefficient odd, to reduce
+/// the chance of an IDCT-mismatch-prone exact-half sample value (the
+/// primary text's own example: a DC of `8k + 4` inverse-transforms to a
+/// constant `k + 0.5`, which different IDCT implementations can round
+/// either way).
+#[must_use]
+#[allow(
+    clippy::integer_division,
+    reason = "the evenness test `x % 2` is not an approximated division; there is no truncating division anywhere in this formula"
+)]
+#[allow(dead_code, reason = "landed ahead of its consumer -- see annex_i_dequant")]
+pub(crate) fn oddify_clip_dc(x: i32) -> i32 {
+    let x = if x % 2 == 0 { x + 1 } else { x };
+    x.clamp(0, 2047)
+}
+
+/// Annex I §I.3: reconstruct one INTRA block's final coefficient values
+/// `RecC'(u,v)` (returned row-major, index `v * 8 + u` — `u` is the
+/// primary text's own column/horizontal index, `v` its row/vertical
+/// one) from `rec_c` (`RecC(u,v)`, already dequantised via
+/// [`annex_i_dequantise`]), the macroblock's `INTRA_MODE` (`0` = DC
+/// only, `1` = vertical/from-above, `2` = horizontal/from-left,
+/// [`tables::H263_INTRA_MODE`]), and its two spatial neighbours' own
+/// already-fully-reconstructed values (`RecA'`/`RecB'`) — `None` when
+/// that neighbour is not an INTRA block in the same video picture
+/// segment (§I.3's own three-part test: within the picture; within the
+/// same GOB, or no GOB header sent for it, outside Slice Structured
+/// mode; within the same slice, inside it — resolved by the caller, not
+/// this function).
+///
+/// Transcribed directly from the primary text's own pseudocode for all
+/// three modes, including the constant-1024/zero fallback when the
+/// referenced neighbour is unavailable, and the DC "oddification"
+/// ([`oddify_clip_dc`]) every mode applies at the end.
+#[must_use]
+#[allow(dead_code, reason = "landed ahead of its consumer -- see annex_i_dequant")]
+pub(crate) fn annex_i_reconstruct(rec_c: &[i32; 64], mode: u8, block_a: Option<&[i32; 64]>, block_b: Option<&[i32; 64]>) -> [i32; 64] {
+    let at = |block: &[i32; 64], u: usize, v: usize| -> i32 { block.get(v * 8 + u).copied().unwrap_or(0) };
+    let c = |u: usize, v: usize| -> i32 { rec_c.get(v * 8 + u).copied().unwrap_or(0) };
+
+    // Kept as one arm per Annex I §I.3 mode rather than merged by clippy's
+    // `match_same_arms` suggestion: modes 0/1/2 have textually identical
+    // single-neighbour formulas by coincidence, not by any shared rule in
+    // the primary text, and each arm here maps to that mode's own
+    // pseudocode paragraph -- merging them would trade that traceability
+    // for a few fewer lines.
+    #[allow(clippy::match_same_arms, reason = "each arm mirrors a distinct paragraph of Annex I's own per-mode pseudocode; a textual coincidence between modes is not a reason to fold them together")]
+    // The two-neighbour Mode 0 average must truncate towards zero, per
+    // §I.3's own "operator '/' ... division by truncation" -- `i32::midpoint`
+    // instead rounds towards negative infinity, which disagrees with the
+    // spec whenever the sum is odd and negative.
+    #[allow(clippy::manual_midpoint, reason = "i32::midpoint rounds towards negative infinity; Annex I's own '/' is truncating division, so the manual form is the correct one, not a missed simplification")]
+    #[allow(clippy::integer_division, reason = "Annex I §I.3's own Mode 0 formula for two valid neighbours is literally '(RecA'(0,0) + RecB'(0,0)) / 2', operator '/' explicitly defined in that section as division by truncation -- not an approximation of anything else")]
+    let temp_dc = match (mode, block_a, block_b) {
+        (0, Some(a), Some(b)) => c(0, 0) + (at(a, 0, 0) + at(b, 0, 0)) / 2,
+        (0, Some(a), None) => c(0, 0) + at(a, 0, 0),
+        (0, None, Some(b)) => c(0, 0) + at(b, 0, 0),
+        (1, Some(a), _) => c(0, 0) + at(a, 0, 0),
+        (2, _, Some(b)) => c(0, 0) + at(b, 0, 0),
+        _ => c(0, 0) + 1024,
+    };
+
+    let mut out = [0i32; 64];
+    for v in 0..8usize {
+        for u in 0..8usize {
+            if u == 0 && v == 0 {
+                continue; // DC handled separately below (oddification).
+            }
+            let mut val = c(u, v);
+            match mode {
+                1 if v == 0 => {
+                    if let Some(a) = block_a {
+                        val += at(a, u, 0);
+                    }
+                }
+                2 if u == 0 => {
+                    if let Some(b) = block_b {
+                        val += at(b, 0, v);
+                    }
+                }
+                _ => {}
+            }
+            if let Some(slot) = out.get_mut(v * 8 + u) {
+                *slot = clip_ac(val);
+            }
+        }
+    }
+    if let Some(slot) = out.get_mut(0) {
+        *slot = oddify_clip_dc(temp_dc);
+    }
+    out
+}
+
+#[cfg(test)]
+mod annex_i_reconstruct_tests {
+    use super::*;
+
+    fn block(values: &[(usize, usize, i32)]) -> [i32; 64] {
+        let mut b = [0i32; 64];
+        for &(u, v, val) in values {
+            if let Some(slot) = b.get_mut(v * 8 + u) {
+                *slot = val;
+            }
+        }
+        b
+    }
+
+    #[test]
+    fn dequant_matches_the_no_dead_zone_doubling_formula() {
+        // Annex I §I.3: RecC = 2 * QUANT * LEVEL, for every coefficient,
+        // unlike the baseline path's separate dead-zone/Table-15 rules.
+        assert_eq!(annex_i_dequant(5, 4), 40);
+        assert_eq!(annex_i_dequant(-3, 10), -60);
+        assert_eq!(annex_i_dequant(0, 31), 0);
+    }
+
+    #[test]
+    fn dequantise_applies_dequant_to_every_coefficient_independently() {
+        let mut qf = [0i32; 64];
+        if let Some(s) = qf.get_mut(0) {
+            *s = 2;
+        }
+        if let Some(s) = qf.get_mut(63) {
+            *s = -1;
+        }
+        let out = annex_i_dequantise(&qf, 5);
+        assert_eq!(out.first().copied(), Some(20));
+        assert_eq!(out.get(63).copied(), Some(-10));
+        assert_eq!(out.get(1).copied(), Some(0));
+    }
+
+    #[test]
+    fn clip_ac_clamps_to_minus_2048_2047() {
+        assert_eq!(clip_ac(-3000), -2048);
+        assert_eq!(clip_ac(3000), 2047);
+        assert_eq!(clip_ac(0), 0);
+        assert_eq!(clip_ac(-2048), -2048);
+        assert_eq!(clip_ac(2047), 2047);
+    }
+
+    #[test]
+    fn oddify_clip_dc_forces_the_result_odd_before_clipping() {
+        assert_eq!(oddify_clip_dc(4), 5); // even -> +1
+        assert_eq!(oddify_clip_dc(5), 5); // already odd -> unchanged
+        assert_eq!(oddify_clip_dc(0), 1);
+        assert_eq!(oddify_clip_dc(-2), 0); // even negative -> +1 = -1, then clipDC clamps to 0
+    }
+
+    #[test]
+    fn oddify_clip_dc_clips_after_oddifying() {
+        // clipDC is 0..=2047: an even value one below the ceiling still
+        // oddifies past it and must be clamped back down.
+        assert_eq!(oddify_clip_dc(2046), 2047);
+        assert_eq!(oddify_clip_dc(2047), 2047);
+        assert_eq!(oddify_clip_dc(-1), 0); // odd, unchanged by oddify, then clamped to 0
+        assert_eq!(oddify_clip_dc(-4), 0); // even -> -3, clamped to 0
+    }
+
+    #[test]
+    fn mode0_dc_only_averages_both_neighbours_and_leaves_ac_untouched() {
+        let c = block(&[(0, 0, 100), (3, 2, 7)]);
+        let a = block(&[(0, 0, 10)]);
+        let b = block(&[(0, 0, 21)]);
+        let out = annex_i_reconstruct(&c, 0, Some(&a), Some(&b));
+        // tempDC = 100 + (10 + 21) / 2 = 100 + 15 (truncated) = 115, odd already.
+        assert_eq!(out.first().copied(), Some(115));
+        // Mode 0 never predicts AC coefficients, only clips them.
+        assert_eq!(out.get(2 * 8 + 3).copied(), Some(7));
+    }
+
+    #[test]
+    fn mode0_dc_average_truncates_towards_zero_on_a_negative_sum() {
+        let c = block(&[(0, 0, 0)]);
+        let a = block(&[(0, 0, -3)]);
+        let b = block(&[(0, 0, -2)]);
+        // (-3 + -2) / 2 = -5 / 2 = -2 in Rust's truncating division, matching
+        // Annex I §I.3's own "division by truncation" -- not -3 (floor).
+        let out = annex_i_reconstruct(&c, 0, Some(&a), Some(&b));
+        // tempDC = 0 + -2 = -2 (even) -> oddify -> -1 -> clipDC -> 0.
+        assert_eq!(out.first().copied(), Some(0));
+    }
+
+    #[test]
+    fn mode0_falls_back_to_single_neighbour_when_only_one_is_available() {
+        let c = block(&[(0, 0, 50)]);
+        let a = block(&[(0, 0, 8)]);
+        let only_a = annex_i_reconstruct(&c, 0, Some(&a), None);
+        assert_eq!(only_a.first().copied(), Some(59)); // 50+8=58 even -> 59
+
+        let b = block(&[(0, 0, 8)]);
+        let only_b = annex_i_reconstruct(&c, 0, None, Some(&b));
+        assert_eq!(only_b.first().copied(), Some(59));
+    }
+
+    #[test]
+    fn mode0_falls_back_to_the_constant_when_neither_neighbour_is_available() {
+        let c = block(&[(0, 0, 3)]);
+        let out = annex_i_reconstruct(&c, 0, None, None);
+        // tempDC = 3 + 1024 = 1027, already odd.
+        assert_eq!(out.first().copied(), Some(1027));
+    }
+
+    #[test]
+    fn mode1_vertical_predicts_only_row_zero_from_block_above() {
+        let c = block(&[(0, 0, 40), (1, 0, 5), (4, 0, -5), (1, 3, 9)]);
+        let a = block(&[(0, 0, 20), (1, 0, 100), (4, 0, -3000)]);
+        let out = annex_i_reconstruct(&c, 1, Some(&a), None);
+        // DC: tempDC = 40 + 20 = 60 (even) -> 61.
+        assert_eq!(out.first().copied(), Some(61));
+        // Row 0, u=1: 5 + 100 = 105, within clipAC range.
+        assert_eq!(out.get(1).copied(), Some(105));
+        // Row 0, u=4: -5 + -3000 = -3005, clipped to -2048.
+        assert_eq!(out.get(4).copied(), Some(-2048));
+        // Row v=3 is untouched by Mode 1's prediction (only row 0 is).
+        assert_eq!(out.get(3 * 8 + 1).copied(), Some(9));
+    }
+
+    #[test]
+    fn mode1_without_block_above_adds_nothing_to_any_ac_coefficient() {
+        let c = block(&[(0, 0, 12), (2, 0, 7)]);
+        let out = annex_i_reconstruct(&c, 1, None, None);
+        assert_eq!(out.first().copied(), Some(1037)); // 12 + 1024 = 1036 -> 1037
+        assert_eq!(out.get(2).copied(), Some(7)); // untouched, just clipped
+    }
+
+    #[test]
+    fn mode2_horizontal_predicts_only_column_zero_from_block_to_the_left() {
+        let c = block(&[(0, 0, 40), (0, 1, 5), (0, 4, -5), (3, 1, 9)]);
+        let b = block(&[(0, 0, 20), (0, 1, 100), (0, 4, -3000)]);
+        let out = annex_i_reconstruct(&c, 2, None, Some(&b));
+        assert_eq!(out.first().copied(), Some(61)); // 40+20=60 -> 61
+        assert_eq!(out.get(8).copied(), Some(105)); // column 0, v=1: 5+100
+        assert_eq!(out.get(4 * 8).copied(), Some(-2048)); // -5 + -3000, clipped
+        // Column u=3 is untouched by Mode 2's prediction (only column 0 is).
+        assert_eq!(out.get(8 + 3).copied(), Some(9));
+    }
+
+    #[test]
+    fn mode2_without_block_left_adds_nothing_to_any_ac_coefficient() {
+        let c = block(&[(0, 0, 12), (0, 2, 7)]);
+        let out = annex_i_reconstruct(&c, 2, None, None);
+        assert_eq!(out.first().copied(), Some(1037));
+        assert_eq!(out.get(2 * 8).copied(), Some(7));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

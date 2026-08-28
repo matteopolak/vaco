@@ -119,3 +119,13 @@ file   = "crates/codec/vaco-codec-h263/src/motion.rs"
 source = "itu-t-h263"
 clause = "Annex F §F.3, Figure F.4 -- weighting values H2, prediction with the horizontally remote (left/right) motion vector"
 method = "transcribed"
+
+# Table I.1 (H263_INTRA_MODE, 3 rows) is below this project's 32-element
+# provenance threshold; cited directly in its own doc comment instead.
+
+[[table]]
+name   = "H263_INTRA_TCOEF"
+file   = "crates/codec/vaco-codec-h263/src/tables.rs"
+source = "itu-t-h263"
+clause = "Annex I §I.3, Table I.2 -- INTRA TCOEF VLC used under Advanced INTRA Coding"
+method = "transcribed"
