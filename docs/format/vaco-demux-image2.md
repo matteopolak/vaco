@@ -227,6 +227,37 @@ or `vaco-codec-<name>` crate, per D14.1). `std::fs` for the filesystem half
 call at runtime there, by design — see the crate's top-level docs for why
 that split sits at a module boundary rather than a `#[cfg]`.
 
+## Stream metadata: frame rate, time base, field order, timeline
+
+Both entry points now state `frame_rate`/`field_order` explicitly rather than
+leaving `VideoParameters::default()` in place (`multi::stream_video`), and use
+`1/framerate` as the stream's own time base (`multi::time_base_for`) instead
+of the generic `TIME_BASE_Q` — measured against the reference on a bare PNG
+through `image2`: `r_frame_rate=25/1`, `avg_frame_rate=25/1`,
+`time_base=1/25`, `field_order=unknown` (never `progressive` — a still image
+has no interlacing concept, and `FieldOrder::Progressive` is
+`VideoParameters::default`'s value, which `fill_from` reads as "no opinion"
+and inherits from whatever codec parser runs next unless this crate states
+otherwise first).
+
+**No timeline at all**, for a single literal file (`Plan::Disabled` with no
+`-ts_from_file`, and the registry's `SingleSourceDemuxer` — which is always
+effectively this case, since it never sees a pattern) and for every
+`pipe::PipeDemuxer`, single image or many concatenated — measured, the
+reference reports `start_time`/`duration` as unset in every one of those
+shapes, whether `png_pipe` sees one PNG or three concatenated. Packets carry
+`Timestamp::NONE`/`Duration::ZERO`, and `PipeDemuxer` has no `Demuxer::duration`
+override (the default `None` is correct). A real `-pattern_type sequence`/
+`glob` match through `Image2Demuxer::open_pattern`, by contrast, is a genuine
+video a caller named on purpose and keeps its per-frame stride.
+
+**Left for the codec side.** `sample_aspect_ratio`/`display_aspect_ratio`
+(reference: `1:1` for a plain PNG) and `color_range`/`color_space` (reference:
+`pc`/`gbr`, since PNG is RGB) are not set by this crate at all — they come from
+whatever parses the image codec's own header, which is a different crate.
+`probe_score` also differs by exactly one point for a single-file `png_pipe`
+match (`99` here vs `100` some other way) for a reason not yet run down.
+
 ## Gotchas
 
 * The pattern/glob engine (`pattern.rs`, `glob.rs`) is pure and portable;

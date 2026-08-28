@@ -25,6 +25,7 @@
 
 use std::path::PathBuf;
 
+use vaco_codec_core::{FieldOrder, VideoParameters};
 use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
 use vaco_format_core::probe::{ProbeData, ProbeScore};
 use vaco_format_core::time::{TIME_BASE_Q, duration_from_rate};
@@ -37,6 +38,32 @@ use vaco_packet::{Packet, PacketFlags};
 
 use crate::fsutil;
 use crate::pattern::SequencePattern;
+
+/// A still image has no interlacing concept at all — measured, the reference
+/// prints `field_order=unknown` for a bare PNG through `image2`, never
+/// `progressive` — so this crate states [`FieldOrder::Unknown`] itself rather
+/// than leaving [`VideoParameters::default`]'s `Progressive` in place, which
+/// `fill_from` would otherwise read as "no opinion" and happily inherit.
+///
+/// `1/framerate`, for a stream time base: `-framerate`'s default of `25/1`
+/// gives `1/25`, matching the reference's own `image2` time base. A `0`
+/// numerator (an explicit `-framerate 0`, or an unset option this crate never
+/// produces) falls back to [`TIME_BASE_Q`] rather than dividing by zero.
+pub(crate) fn stream_video(framerate: Rational) -> VideoParameters {
+    VideoParameters {
+        frame_rate: framerate,
+        field_order: FieldOrder::Unknown,
+        ..VideoParameters::default()
+    }
+}
+
+pub(crate) fn time_base_for(framerate: Rational) -> Rational {
+    if framerate.num > 0 {
+        Rational::new(framerate.den, framerate.num)
+    } else {
+        TIME_BASE_Q
+    }
+}
 
 /// `-pattern_type`. Measured via `ffmpeg -h demuxer=image2` against ffmpeg
 /// 8.1: the reference prints named constants `glob` (1), `sequence` (2) and
@@ -179,8 +206,9 @@ impl Image2Demuxer {
             PatternType::Auto => unreachable!("resolved above"),
         };
 
-        let mut stream = Stream::new(0, MediaType::Video, TIME_BASE_Q);
+        let mut stream = Stream::new(0, MediaType::Video, time_base_for(options.framerate));
         stream.params.media_type = Some(MediaType::Video);
+        stream.params.video = Some(stream_video(options.framerate));
 
         Ok(Self {
             dir,
@@ -283,9 +311,19 @@ impl Demuxer for Image2Demuxer {
             None => return Err(Error::Eof),
         };
         let bytes = fsutil::read_file(&path)?;
-        let pts = self.pts_ticks(&path);
+        // A literal filename (no pattern at all) states no timeline: measured,
+        // the reference reports `start_time`/`duration` as unset for a single
+        // still image, not `0`/`1/framerate`. A `Sequence`/`Glob` plan, or an
+        // explicit `-ts_from_file`, means the caller asked for a real
+        // timeline, so those still get one.
+        let no_timeline =
+            matches!(self.plan, Plan::Disabled { .. }) && self.options.ts_from_file == TsFromFile::None;
         let mut packet = Packet::from_slice(&mut self.budget, &bytes)?;
-        packet.pts = Timestamp::new(pts);
+        packet.pts = if no_timeline {
+            Timestamp::NONE
+        } else {
+            Timestamp::new(self.pts_ticks(&path))
+        };
         packet.dts = packet.pts;
         packet.flags = PacketFlags::KEY;
         self.advance();
@@ -325,8 +363,11 @@ impl Demuxer for SingleSourceDemuxer {
             return Err(Error::Eof);
         };
         let mut packet = Packet::from_slice(&mut self.budget, &bytes)?;
-        packet.pts = Timestamp::ZERO;
-        packet.dts = Timestamp::ZERO;
+        // No pattern was ever given here — see the module docs — so, like
+        // `Image2Demuxer`'s own `Plan::Disabled` case, this states no
+        // timeline at all rather than a synthetic `0`.
+        packet.pts = Timestamp::NONE;
+        packet.dts = Timestamp::NONE;
         packet.flags = PacketFlags::KEY;
         Ok(packet)
     }
@@ -370,8 +411,10 @@ fn read_source_to_end(mut src: Box<dyn MediaSource>) -> Result<Vec<u8>> {
 fn open_boxed(src: Box<dyn MediaSource>, parsers: &dyn ParserProvider) -> Result<Box<dyn Demuxer>> {
     let _ = parsers;
     let bytes = read_source_to_end(src)?;
-    let mut stream = Stream::new(0, MediaType::Video, TIME_BASE_Q);
+    let framerate = Image2Options::default().framerate;
+    let mut stream = Stream::new(0, MediaType::Video, time_base_for(framerate));
     stream.params.media_type = Some(MediaType::Video);
+    stream.params.video = Some(stream_video(framerate));
     let remaining = (!bytes.is_empty()).then_some(bytes);
     Ok(Box::new(SingleSourceDemuxer {
         stream,

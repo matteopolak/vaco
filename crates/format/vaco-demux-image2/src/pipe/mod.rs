@@ -35,7 +35,6 @@ use framing::{ImageFraming, Span};
 use vaco_codec_core::CodecId;
 use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
 use vaco_format_core::probe::{ProbeData, ProbeScore};
-use vaco_format_core::time::duration_from_rate;
 use vaco_format_core::{
     Demuxer, DemuxerDesc, FormatFlags, ParserProvider, SeekFlags, SeekTarget, Stream,
 };
@@ -147,16 +146,21 @@ impl PipeDemuxer {
         let data = read_all(&mut io, &mut budget)?;
         let spans = framing::compute_spans(spec.framing, &data);
 
-        let mut stream = Stream::new(0, MediaType::Video, vaco_format_core::time::TIME_BASE_Q);
+        let mut stream = Stream::new(0, MediaType::Video, crate::multi::time_base_for(options.framerate));
         stream.params.media_type = Some(MediaType::Video);
         stream.params.codec_id = spec.codec_id;
+        stream.params.video = Some(crate::multi::stream_video(options.framerate));
         if spec.codec_id.is_none() {
             stream.metadata_set("raw_codec_name", spec.raw_codec_name);
         }
 
-        let stride_ticks = duration_from_rate(options.framerate)
-            .unwrap_or(Duration::ZERO)
-            .0;
+        // Exactly one tick of `stream.time_base` (`1/framerate`, by
+        // construction) — i.e. one frame period — rather than a
+        // `duration_from_rate` value in a different, fixed base. Used only
+        // for `seek`'s timestamp-to-frame-index arithmetic below:
+        // `read_packet` states no real timeline (see its own docs), so this
+        // never reaches a displayed duration.
+        let stride_ticks: i64 = 1;
 
         Ok(Self {
             data,
@@ -189,16 +193,15 @@ impl Demuxer for PipeDemuxer {
         let (start, end) = self.spans.get(index).copied().ok_or(Error::Eof)?;
         let slice = self.data.get(start..end).ok_or(Error::Eof)?;
         let mut packet = Packet::from_slice(&mut self.budget, slice)?;
-        let frame_number = self
-            .loops_done
-            .saturating_mul(self.spans.len() as u64)
-            .saturating_add(index as u64);
-        let pts = self
-            .stride_ticks
-            .saturating_mul(i64::try_from(frame_number).unwrap_or(i64::MAX));
-        packet.pts = Timestamp::new(pts);
-        packet.dts = packet.pts;
-        packet.duration = Duration(self.stride_ticks);
+        // No timeline at all, single image or concatenated many — measured
+        // directly, `ffprobe -f png_pipe` on three concatenated PNGs reports
+        // `start_time`/`duration` as unset exactly as it does for one, unlike
+        // `image2`'s own file-pattern path (`crate::multi`), which is a real
+        // sequence a caller named on purpose. A byte stream this crate merely
+        // *split* states no playback rate of its own.
+        packet.pts = Timestamp::NONE;
+        packet.dts = Timestamp::NONE;
+        packet.duration = Duration::ZERO;
         packet.pos = Some(start as u64);
         packet.flags = PacketFlags::KEY;
         self.next += 1;
@@ -242,13 +245,12 @@ impl Demuxer for PipeDemuxer {
         }
     }
 
-    fn duration(&self) -> Option<vaco_core::Duration> {
-        if self.options.loop_input || self.spans.is_empty() {
-            return None;
-        }
-        let span_count = i64::try_from(self.spans.len()).unwrap_or(i64::MAX);
-        Some(Duration(self.stride_ticks.saturating_mul(span_count)))
-    }
+    // No override: the default `None` is correct here, matching
+    // `read_packet`'s "no timeline" packets — see that method's docs. This
+    // used to derive a duration from `stride_ticks * span_count`, which is
+    // exactly the container-level input `estimate_duration` prefers, and fed
+    // a `duration`/`bit_rate` the reference never states for a `_pipe`
+    // format.
 }
 
 /// Charge-and-collect the whole remaining input, bounded by `budget`. Mirrors
