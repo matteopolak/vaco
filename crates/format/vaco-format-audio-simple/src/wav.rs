@@ -250,6 +250,7 @@ impl WavDemuxer {
         // `duration_ts` and not `nb_frames` for WAV, and both for AIFF and CAF,
         // from the same division.
         inner.forget_frame_count();
+        inner.size_packets_in_frames();
         Ok(Self {
             inner,
             budget: Budget::new(Limits::permissive()),

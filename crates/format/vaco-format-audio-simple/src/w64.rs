@@ -203,13 +203,18 @@ impl W64Demuxer {
             pcm::new_stream(Rational::new(1, fmt.samples_per_sec.max(1).cast_signed()));
         stream.params = params;
 
-        let inner = RawPcmDemuxer::new(
+        let mut inner = RawPcmDemuxer::new(
             io,
             stream,
             data_start,
             Some(declared_len),
             bytes_per_frame.max(1),
         );
+        // Same two per-format quirks as `wav.rs`, measured the same way: the
+        // reference states `duration_ts` and not `nb_frames`, and it sizes
+        // packets in frames rather than bytes for the RIFF-shaped readers.
+        inner.forget_frame_count();
+        inner.size_packets_in_frames();
         Ok(Self {
             inner,
             budget: Budget::new(Limits::permissive()),

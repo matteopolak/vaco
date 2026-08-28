@@ -39,11 +39,37 @@ pub fn frames_in(bytes: u64, bytes_per_frame: u32) -> u64 {
     bytes / u64::from(bpf)
 }
 
-/// Target bytes per packet, before rounding down to a whole number of
-/// frames. In the same ballpark as the reference's own raw-PCM demuxers
-/// (a few milliseconds of audio per packet — not the whole file in one
-/// packet, and not one frame per packet).
-pub const TARGET_PACKET_BYTES: usize = 4096;
+/// The packet size a raw-PCM reader aims for: 4096 of something.
+///
+/// **Which "something" is per-format, and it was measured, not chosen.** The
+/// RIFF-shaped readers count frames; everything else counts bytes.
+///
+/// ```text
+///                block_align   packet size   packet duration
+/// wav  s16 mono            2          8192              4096
+/// wav  s16 stereo          4         16384              4096
+/// wav  s24 mono            3         12288              4096
+/// wav  f32 stereo          8         32768              4096
+/// w64  s16 mono            2          8192              4096
+/// aiff s16 mono            2          4096              2048
+/// aiff f64 mono            8          4096               512
+/// caf  s16 mono            2          4096              2048
+/// ```
+///
+/// So `wav`/`w64` hold the frame count constant and let the byte count vary,
+/// and `aiff`/`caf` do the opposite. The final packet is whatever is left —
+/// 3140 frames on a 44100-frame file — and carries that as its duration.
+pub const TARGET_PACKET: usize = 4096;
+
+/// Whether [`TARGET_PACKET`] counts frames or bytes for a given format. See
+/// its table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PacketSizing {
+    /// 4096 bytes, rounded down to a whole frame. `aiff`, `caf`, and the rest.
+    Bytes,
+    /// 4096 frames, however many bytes that is. `wav` and `w64`.
+    Frames,
+}
 
 /// What a format module knows about its own samples once the header is
 /// parsed: enough to build [`vaco_codec_core::AudioParameters`] and to frame
@@ -280,11 +306,18 @@ pub struct RawPcmDemuxer {
     /// or a format that states no length at all).
     data_len: Option<u64>,
     bytes_per_frame: u32,
+    sizing: PacketSizing,
     frames_emitted: u64,
     eof: bool,
 }
 
 impl RawPcmDemuxer {
+    /// Count [`TARGET_PACKET`] in frames rather than bytes. See
+    /// [`PacketSizing`]'s table for which formats do which.
+    pub fn size_packets_in_frames(&mut self) {
+        self.sizing = PacketSizing::Frames;
+    }
+
     /// Withhold the frame count this demuxer derived.
     ///
     /// The reference is not consistent about this and the inconsistency is
@@ -349,6 +382,7 @@ impl RawPcmDemuxer {
             data_start,
             data_len,
             bytes_per_frame,
+            sizing: PacketSizing::Bytes,
             frames_emitted: 0,
             eof: false,
         }
@@ -397,8 +431,13 @@ impl RawPcmDemuxer {
             return Err(Error::Eof);
         }
 
-        let mut want = TARGET_PACKET_BYTES;
-        want -= want % self.bytes_per_frame as usize;
+        let mut want = match self.sizing {
+            PacketSizing::Frames => TARGET_PACKET.saturating_mul(self.bytes_per_frame as usize),
+            PacketSizing::Bytes => {
+                let n = TARGET_PACKET - TARGET_PACKET % self.bytes_per_frame as usize;
+                n
+            }
+        };
         if want == 0 {
             want = self.bytes_per_frame as usize;
         }
@@ -408,7 +447,25 @@ impl RawPcmDemuxer {
         }
 
         let mut pkt = Packet::alloc(budget, want)?;
-        let n = self.io.read_partial(pkt.payload_mut())?;
+        // Fill the packet, rather than taking whatever one read returns. A
+        // short read is normal on a buffered source and used to end up as the
+        // packet size, so `-show_packets` reported 8114 bytes where the
+        // reference reported 8192 — the packetisation followed the transport's
+        // buffer boundaries instead of the format's own framing.
+        let mut n = 0usize;
+        loop {
+            let Some(rest) = pkt.payload_mut().get_mut(n..) else {
+                break;
+            };
+            if rest.is_empty() {
+                break;
+            }
+            let got = self.io.read_partial(rest)?;
+            if got == 0 {
+                break;
+            }
+            n = n.saturating_add(got);
+        }
         if n == 0 {
             self.eof = true;
             return Err(Error::Eof);
@@ -429,6 +486,20 @@ impl RawPcmDemuxer {
         let whole_frames = frames_in(u64::try_from(n).unwrap_or(0), self.bytes_per_frame);
         if whole_frames == 0 {
             self.eof = true;
+        }
+        // The reference states a duration on every raw-PCM packet and we
+        // stated none, so `ffprobe -show_packets` printed `duration=N/A` for
+        // every one. It is the packet's own frame count, which is also the
+        // tick count here: the time base is `1/sample_rate`.
+        if let Some(audio) = self.stream.params.audio.as_ref() {
+            let rate = u64::from(audio.sample_rate.max(1));
+            let micros = whole_frames
+                .saturating_mul(1_000_000)
+                .checked_div(rate)
+                .unwrap_or(0);
+            pkt.duration = vaco_core::Duration::from_micros(
+                i64::try_from(micros).unwrap_or(i64::MAX),
+            );
         }
         self.frames_emitted = self.frames_emitted.saturating_add(whole_frames.max(1));
         Ok(pkt)
@@ -504,7 +575,7 @@ mod tests {
 
     #[test]
     fn packets_cover_the_whole_stream_with_increasing_pts() {
-        let data = vec![0xABu8; TARGET_PACKET_BYTES * 2 + 40];
+        let data = vec![0xABu8; TARGET_PACKET * 2 + 40];
         let mut d = demux_of(data.clone(), 4, Some(data.len() as u64));
         let mut budget = Budget::new(Limits::permissive());
         let mut total = 0usize;
