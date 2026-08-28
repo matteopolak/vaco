@@ -1795,3 +1795,53 @@ and closed on its own terms.
 
 Not fixed here: `feedback` remains unimplemented in `vaco-filter-overlay`
 for this reason, on top of gap 24's now-resolved adapter question.
+
+## Gap 26 — `initial_padding` conflates "publicly declared decoder priming" with "internal pts-accounting offset"
+
+Found closing most of GitHub issue #646 (Ogg/Vorbis `sample_fmt`/
+`extradata_size`/`duration`, all fixed in `vaco-demux-ogg`). `start_pts`
+would not close the same way.
+
+Vorbis's first packet is genuinely negative in this crate's own pts
+accounting — `GranuleMapping::initial_cursor`'s doc comment already names
+it "the first packet's own priming" and treats it exactly like Opus's
+`pre_skip` for that purpose. The reference agrees the offset is real
+(`start_pts=0`, not the raw negative first pts) but, measured directly,
+reports `initial_padding=0` for Vorbis — unlike Opus, where `pre_skip` is
+both the pts-accounting fix *and* the publicly reported decoder-priming
+sample count from the same header field.
+
+`vaco-format-core::discovery`'s `finish()` has exactly one lever for this
+correction: `stream.start_time = first_pts.offset(pad_ticks)`, where
+`pad_ticks` comes from `stream.params.audio.initial_padding` — the same
+field `vaco-probe` prints as `initial_padding`. Two fix attempts were tried
+and both rejected by measurement:
+
+- Setting `AudioParameters::initial_padding` to Vorbis's nominal block size
+  reaches `discovery.rs`'s existing compensation and gets `start_pts`/
+  `start_time`/`format.start_time` all correct — but also makes
+  `initial_padding` itself wrong (`1024` where the reference states `0`),
+  swapping one mismatch for another rather than closing one.
+- Setting `Stream::start_time` directly from within `vaco-demux-ogg`,
+  before `Discovery` ever sees the stream, does nothing:
+  `Discovery::new` snapshots `inner.streams()` once at construction and
+  never re-reads the wrapped demuxer's own state afterward
+  (`Demuxer for Discovery<D>::streams()` returns `&self.streams`, Discovery's
+  own copy) — a value set on the *inner* `OggDemuxer`'s stream, however
+  correct, is invisible to the pipeline `vaco-probe` actually runs. This is
+  the same "wrapper does not forward a new addition" shape finding 55
+  already names for `Box<dyn Muxer>`, `MappedFilter` and `AsDecoder`,
+  encountered here for the first time on `Discovery<D>` itself.
+
+Closing this properly needs `discovery.rs`'s compensation to read a value
+distinct from the publicly-reported `initial_padding` — an internal-only
+pts offset a demuxer can state without also claiming a decoder must discard
+that many samples. That is a new field or a new convention on a type
+several formats already depend on (at minimum every consumer of
+`AudioParameters`/`Stream::start_time`), which is wider than one format
+crate's fix and exactly the caution finding 55 already gives for touching
+`vaco-format-core::discovery` on the strength of one format's mismatch.
+
+Not fixed here: `vaco-demux-ogg` still reports `start_pts`/`start_time` as
+the raw, uncompensated negative value for Vorbis, unchanged from before
+this investigation.
