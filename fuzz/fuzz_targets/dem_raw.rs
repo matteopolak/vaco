@@ -1,5 +1,6 @@
 //! Whole-file demux over arbitrary bytes, across every family in
-//! `vaco-demux-raw`: PCM, raw video, `yuv4mpegpipe` and the bitstream family.
+//! `vaco-demux-raw`: PCM, raw video, `yuv4mpegpipe`, the bitstream family and
+//! `ac3`/`eac3`.
 //!
 //! A raw format has no structure at all beyond what its options declare —
 //! the byte stream itself is entirely attacker-controlled with no magic, no
@@ -41,6 +42,7 @@ use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 use vaco_chlayout::ChannelLayout;
 use vaco_core::{Error, Rational};
+use vaco_demux_raw::ac3::Ac3Demuxer;
 use vaco_demux_raw::bitstream::{self, BitstreamDemuxer, BitstreamOptions};
 use vaco_demux_raw::pcm::{self, PcmDemuxer, PcmOptions};
 use vaco_demux_raw::rawvideo::{self, RawVideoDemuxer, RawVideoOptions};
@@ -60,6 +62,7 @@ enum Family {
     RawVideo { name: u8, width: u16, height: u16, pixel_format: u8 },
     Yuv4Mpeg,
     Bitstream { name: u8, framerate_num: u16, framerate_den: u16 },
+    Ac3 { eac3: bool },
 }
 
 #[derive(Debug, Arbitrary)]
@@ -164,6 +167,13 @@ fn run_bitstream(name_idx: u8, num: u16, den: u16, bytes: Vec<u8>) {
     }
 }
 
+fn run_ac3(eac3: bool, bytes: Vec<u8>) {
+    let src = Box::new(MemorySource::new(bytes));
+    if let Ok(mut d) = Ac3Demuxer::open(src, eac3) {
+        drain(&mut d);
+    }
+}
+
 fuzz_target!(|input: Input| {
     // A large declared geometry is a legitimate way to probe the allocation
     // ceiling, but an enormous *input* buffer just spends fuzzer time; cap it
@@ -189,5 +199,6 @@ fuzz_target!(|input: Input| {
             framerate_num,
             framerate_den,
         } => run_bitstream(name, framerate_num, framerate_den, input.bytes),
+        Family::Ac3 { eac3 } => run_ac3(eac3, input.bytes),
     }
 });

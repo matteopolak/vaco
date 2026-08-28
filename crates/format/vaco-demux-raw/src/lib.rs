@@ -1,5 +1,5 @@
-//! Raw / headerless elementary-stream demuxers: 48 registrations across
-//! three families.
+//! Raw / headerless elementary-stream demuxers: 50 registrations across
+//! four families.
 //!
 //! A raw format has no container: the file *is* the elementary stream.
 //! `-f h264 in.h264`, `-f s16le in.pcm`, `-f rawvideo -s 1920x1080
@@ -15,10 +15,12 @@
 //! | [`rawvideo`] | `rawvideo`, `bitpacked`, `v210`, `v210x` | 4 |
 //! | [`y4m`] | `yuv4mpegpipe` (self-describing) | 1 |
 //! | [`bitstream`] | Bitstream-with-sync-pattern: `h264`, `hevc`, `av1`/`obu`, and 18 more | 22 |
+//! | [`ac3`] | `ac3`, `eac3`: syncframe-driven, own streaming demuxer (not the whole-buffer `bitstream` shape — frame length and sample count come from the header, so per-packet timestamps are exact) | 2 |
 //!
-//! 21 + 4 + 1 + 22 = 48, matching FM-26a and `ffmpeg -demuxers`' own count
-//! for this family (captured under `LC_ALL=C` against ffmpeg 8.1 — see
-//! `docs/format/vaco-demux-raw.md` for the exact commands).
+//! 21 + 4 + 1 + 22 + 2 = 50. The first 48 matched FM-26a and
+//! `ffmpeg -demuxers`' own count for this family (captured under `LC_ALL=C`
+//! against ffmpeg 8.1 — see `docs/format/vaco-demux-raw.md` for the exact
+//! commands); `ac3`/`eac3` are FM-26a's one deferred pair (#653).
 //!
 //! # The layering seam (D14.1)
 //!
@@ -66,6 +68,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod ac3;
 pub mod bitstream;
 pub mod obu;
 pub mod pcm;
@@ -90,6 +93,8 @@ pub fn all_demuxers() -> Vec<&'static DemuxerDesc> {
     out.push(&rawvideo::DEMUXER_V210X);
     out.push(&y4m::DEMUXER_YUV4MPEGPIPE);
     out.extend(bitstream::BITSTREAM_DEMUXERS.iter().copied());
+    out.push(&ac3::DEMUXER_AC3);
+    out.push(&ac3::DEMUXER_EAC3);
     out
 }
 
@@ -98,8 +103,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn there_are_exactly_forty_eight_registrations() {
-        assert_eq!(all_demuxers().len(), 48);
+    fn there_are_exactly_fifty_registrations() {
+        assert_eq!(all_demuxers().len(), 50);
     }
 
     #[test]

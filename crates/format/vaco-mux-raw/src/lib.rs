@@ -1,7 +1,7 @@
-//! Raw / headerless elementary-stream muxers: 40 registrations.
+//! Raw / headerless elementary-stream muxers: 42 registrations.
 //!
 //! The counterpart of `vaco-demux-raw` (FM-26a): the same three families,
-//! reversed. Muxing a raw format is close to trivial — 39 of the 40
+//! reversed. Muxing a raw format is close to trivial — 41 of the 42
 //! registrations write nothing but the packet payload, back to back, with no
 //! header and no trailer (see [`raw`]) — which is why FM-26b's effort budget
 //! (2.5 pw) is a fraction of FM-26a's (3.5 pw).
@@ -10,14 +10,15 @@
 //!
 //! | Module | Registrations |
 //! |---|---|
-//! | [`raw`] | 21 PCM formats, `rawvideo`, and 17 bitstream formats: 39 verbatim writers |
+//! | [`raw`] | 21 PCM formats, `rawvideo`, `ac3`/`eac3`, and 17 bitstream formats: 41 verbatim writers |
 //! | [`y4m`] | `yuv4mpegpipe`: the one format with a real header and per-frame marker |
 //!
-//! 39 + 1 = 40, matching FM-26b and the muxer half of `ffmpeg -muxers`'
-//! raw/elementary-stream family (captured under `LC_ALL=C` against ffmpeg
-//! 8.1 — see `docs/format/vaco-mux-raw.md`). This is a **different set** from
-//! `vaco-demux-raw`'s 48: `mpegvideo`/`mjpeg_2000`/`bitpacked`/`v210`/
-//! `v210x`/`s337m`/`loas` have no muxer at all in the reference, and
+//! 41 + 1 = 42. The first 40 matched FM-26b and the muxer half of
+//! `ffmpeg -muxers`' raw/elementary-stream family (captured under
+//! `LC_ALL=C` against ffmpeg 8.1 — see `docs/format/vaco-mux-raw.md`);
+//! `ac3`/`eac3` are FM-26b's deferred pair (#653). This is a **different
+//! set** from `vaco-demux-raw`'s 50: `mpegvideo`/`mjpeg_2000`/`bitpacked`/
+//! `v210`/`v210x`/`s337m`/`loas` have no muxer at all in the reference, and
 //! `mpeg1video`/`mpeg2video` (which *do* exist as muxers) are registered by a
 //! different crate — the reference files them under its legacy/misc muxer
 //! set, not its raw-elementary-stream one, and this crate's scope follows
@@ -53,8 +54,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn there_are_exactly_forty_registrations() {
-        assert_eq!(all_muxers().len(), 40);
+    fn there_are_exactly_forty_two_registrations() {
+        assert_eq!(all_muxers().len(), 42);
     }
 
     #[test]

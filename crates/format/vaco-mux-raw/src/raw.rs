@@ -1,4 +1,4 @@
-//! The generic verbatim muxer: 39 of this crate's 40 registrations write
+//! The generic verbatim muxer: 41 of this crate's 42 registrations write
 //! nothing but the packet payloads, back to back, with no header and no
 //! trailer at all.
 //!
@@ -473,6 +473,22 @@ raw_reg!(
     None
 );
 raw_reg!(
+    MUXER_AC3,
+    "ac3",
+    "raw AC-3",
+    &["ac3"],
+    None,
+    Some(CodecId::Ac3)
+);
+raw_reg!(
+    MUXER_EAC3,
+    "eac3",
+    "raw E-AC-3",
+    &["eac3", "ec3"],
+    None,
+    Some(CodecId::Eac3)
+);
+raw_reg!(
     MUXER_BIT,
     "bit",
     "G.729 BIT file format",
@@ -506,9 +522,30 @@ raw_reg!(
     Some(CodecId::Dnxhd),
     None
 );
-raw_reg!(MUXER_EVC, "evc", "raw EVC video", &["evc"], Some(CodecId::Evc), None);
-raw_reg!(MUXER_H261, "h261", "raw H.261", &["h261"], Some(CodecId::H261), None);
-raw_reg!(MUXER_H263, "h263", "raw H.263", &["h263"], Some(CodecId::H263), None);
+raw_reg!(
+    MUXER_EVC,
+    "evc",
+    "raw EVC video",
+    &["evc"],
+    Some(CodecId::Evc),
+    None
+);
+raw_reg!(
+    MUXER_H261,
+    "h261",
+    "raw H.261",
+    &["h261"],
+    Some(CodecId::H261),
+    None
+);
+raw_reg!(
+    MUXER_H263,
+    "h263",
+    "raw H.263",
+    &["h263"],
+    Some(CodecId::H263),
+    None
+);
 raw_reg!(
     MUXER_H264,
     "h264",
@@ -525,7 +562,14 @@ raw_reg!(
     Some(CodecId::Hevc),
     None
 );
-raw_reg!(MUXER_M4V, "m4v", "raw MPEG-4 video", &["m4v"], Some(CodecId::Mpeg4), None);
+raw_reg!(
+    MUXER_M4V,
+    "m4v",
+    "raw MPEG-4 video",
+    &["m4v"],
+    Some(CodecId::Mpeg4),
+    None
+);
 raw_reg!(
     MUXER_MJPEG,
     "mjpeg",
@@ -542,7 +586,14 @@ raw_reg!(
     Some(CodecId::Av1),
     None
 );
-raw_reg!(MUXER_VC1, "vc1", "raw VC-1 video", &["vc1"], Some(CodecId::Vc1), None);
+raw_reg!(
+    MUXER_VC1,
+    "vc1",
+    "raw VC-1 video",
+    &["vc1"],
+    Some(CodecId::Vc1),
+    None
+);
 raw_reg!(
     MUXER_VVC,
     "vvc",
@@ -553,7 +604,7 @@ raw_reg!(
     None
 );
 
-/// The 39 verbatim registrations (everything but `yuv4mpegpipe`), in
+/// The 41 verbatim registrations (everything but `yuv4mpegpipe`), in
 /// `ffmpeg -muxers` family order.
 pub const RAW_MUXERS: &[&MuxerDesc] = &[
     &MUXER_ALAW,
@@ -578,6 +629,8 @@ pub const RAW_MUXERS: &[&MuxerDesc] = &[
     &MUXER_U8,
     &MUXER_VIDC,
     &MUXER_RAWVIDEO,
+    &MUXER_AC3,
+    &MUXER_EAC3,
     &MUXER_AVS2,
     &MUXER_AVS3,
     &MUXER_BIT,
@@ -604,8 +657,8 @@ mod tests {
     use vaco_format_core::vacoraw::MemorySink;
 
     #[test]
-    fn there_are_thirty_nine_verbatim_registrations() {
-        assert_eq!(RAW_MUXERS.len(), 39);
+    fn there_are_forty_one_verbatim_registrations() {
+        assert_eq!(RAW_MUXERS.len(), 41);
     }
 
     #[test]

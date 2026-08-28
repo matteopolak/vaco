@@ -10,6 +10,7 @@ authors.workspace = true
 
 [dependencies]
 vaco-core = { path = "../../core/vaco-core" }
+vaco-bitstream = { path = "../../core/vaco-bitstream" }
 vaco-io = { path = "../../io/vaco-io" }
 vaco-limits = { path = "../../core/vaco-limits" }
 vaco-packet = { path = "../../model/vaco-packet" }

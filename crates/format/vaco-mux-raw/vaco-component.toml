@@ -320,3 +320,19 @@ long_name = "raw H.266/VVC video"
 feature   = "mux-raw"
 ctor      = "vaco_mux_raw::raw::MUXER_VVC"
 extensions = "vvc,h266,266"
+
+[[component]]
+kind      = "muxer"
+name      = "ac3"
+long_name = "raw AC-3"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_AC3"
+extensions = "ac3"
+
+[[component]]
+kind      = "muxer"
+name      = "eac3"
+long_name = "raw E-AC-3"
+feature   = "mux-raw"
+ctor      = "vaco_mux_raw::raw::MUXER_EAC3"
+extensions = "eac3,ec3"
