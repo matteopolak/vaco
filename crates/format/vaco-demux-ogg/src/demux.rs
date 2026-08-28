@@ -749,7 +749,7 @@ fn describe(codec: OggCodec, bos: &[u8]) -> (MediaType, Rational, CodecParameter
         }
         OggCodec::Theora => {
             let ident = codec::parse_theora_ident(bos);
-            let mut params = CodecParameters::new(MediaType::Video);
+            let mut params = CodecParameters::new(MediaType::Video).with_codec(CodecId::Theora);
             params.extradata = Some(bos.to_vec());
             let (num, den) = ident.map_or((0, 1), |t| (t.fps_numerator, t.fps_denominator));
             let frame_rate = safe_rational(num, den);
