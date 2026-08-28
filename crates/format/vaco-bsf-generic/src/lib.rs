@@ -4,7 +4,11 @@
 //!
 //! Every filter `ffmpeg -bsfs` lists that does not need per-codec NAL
 //! vocabulary: `null`, `extract_extradata`, `noise`, `remove_extra`, `setts`,
-//! `chomp`, `dump_extra`, and `filter_units`. The H.264/HEVC-specific family
+//! `chomp`, `dump_extra`, `filter_units`, and — added for issue #354 (B-06),
+//! measured rather than assumed from that issue's "legacy" framing —
+//! `showinfo`, which `ffmpeg -h bsf=showinfo` restricts to no codec at all
+//! and whose only effect is a `stderr` diagnostic (see its own module docs).
+//! The H.264/HEVC-specific family
 //! (`h264_mp4toannexb`, `hevc_mp4toannexb`, `h264_redundant_pps`, ...) is
 //! `vaco-bsf-h2645`, one layer up from this one for exactly the reason
 //! `extract_extradata` is *here* rather than there: it dispatches on codec but
@@ -57,6 +61,7 @@ pub mod noise;
 pub mod null;
 pub mod remove_extra;
 pub mod setts;
+pub mod showinfo;
 pub mod trace_headers;
 
 /// Every filter this crate registers, for anything that wants the whole list
@@ -74,6 +79,7 @@ pub fn filters() -> &'static [vaco_bsf_core::BsfDesc] {
         dump_extra::DESC,
         filter_units::DESC,
         trace_headers::DESC,
+        showinfo::DESC,
     ]
 }
 

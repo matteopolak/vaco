@@ -8,9 +8,10 @@ Layer 4. Codec-agnostic bitstream filters. Issue #349.
 
 Every filter `ffmpeg -bsfs` lists that does not need per-codec NAL vocabulary:
 `null`, `extract_extradata`, `noise`, `remove_extra`, `setts`, `chomp`,
-`dump_extra`, `filter_units`, `trace_headers`. `h264_mp4toannexb`/
-`hevc_mp4toannexb`/`h264_redundant_pps` are `vaco-bsf-h2645`, one layer up —
-see that crate's docs for the split.
+`dump_extra`, `filter_units`, `trace_headers`, and — added for issue #354
+(B-06) — `showinfo`. `h264_mp4toannexb`/`hevc_mp4toannexb`/`h264_metadata`/
+`hevc_metadata`/`h264_redundant_pps`/`dts2pts` are `vaco-bsf-h2645`, one layer
+up — see that crate's docs for the split.
 
 The original brief's list of nine names was close but not exact against the
 reference (`ffmpeg -bsfs`/`ffmpeg -h bsf=<name>`, measured 2026-08-23):
@@ -29,6 +30,7 @@ is included.
 | `remove_extra` | Strip a leading byte-for-byte copy of `extradata` from **every** keyframe | Generic byte-prefix match; a no-op for H.264/HEVC, which don't repeat `extradata` verbatim |
 | `chomp` | Trim every trailing `0x00` byte | Unambiguous from the reference's own one-line description |
 | `setts`, `filter_units`, `noise`, `trace_headers` | Identity by default | Real behaviour needs options this crate's registry seam cannot pass yet (see below) |
+| `showinfo` | Identity, byte-exact | No `Supported codecs:` restriction in the reference either; its only effect is a `stderr` diagnostic this crate does not reproduce (see `crate::trace_headers`'s identical call) |
 
 ## How it works
 

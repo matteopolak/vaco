@@ -1,6 +1,6 @@
 [package]
 name = "vaco-bsf-generic"
-description = "Codec-agnostic bitstream filters: null, noise, remove_extra, setts, chomp, dump_extra, extract_extradata, filter_units."
+description = "Codec-agnostic bitstream filters: null, noise, remove_extra, setts, chomp, dump_extra, extract_extradata, filter_units, showinfo."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

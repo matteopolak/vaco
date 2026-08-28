@@ -51,3 +51,9 @@ kind      = "bitstream_filter"
 name      = "trace_headers"
 long_name = "Trace headers of NAL units"
 ctor      = "vaco_bsf_generic::trace_headers::DESC"
+
+[[component]]
+kind      = "bitstream_filter"
+name      = "showinfo"
+long_name = "Show textual information for each packet"
+ctor      = "vaco_bsf_generic::showinfo::DESC"
