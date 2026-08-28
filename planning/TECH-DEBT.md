@@ -5124,3 +5124,109 @@ round's commit.
 
 `Vaco-Spec-Ref: iso-iec-14496-10-2002-draft` clause 7.3.2.10 (RBSP slice
 trailing bits), clause 9.3.4.6 (byte stuffing process).
+
+
+### #355's escape-sentinel defect fixed via black-box measurement, not the primary text (#355)
+
+The controlled-pair round localised #355's remaining residual to a single
+coefficient per defective sub-block: the escape+sentinel-decoded one,
+breaking an otherwise-exact scaling relationship every other coefficient
+in the same blocks obeyed, in a consistent direction, four times over.
+That round explicitly declined to guess a replacement formula, since this
+project has no legitimate access to ISO/IEC 11172-2's own text for the
+sentinel sub-case's byte semantics and three of this investigation's four
+prior wrong hypotheses had already come from guessing at a plausible
+reading rather than measuring one.
+
+**D6 permits deriving behaviour by black-box measurement, and this
+question fits that permission far better than the earlier IDCT
+investigation did.** The IDCT's rounding schedule is a non-linear
+function of 64 coefficients with an effectively unbounded hypothesis
+space (that investigation's own conclusion: diverges, no nameable shape).
+The escape sentinel is the opposite: a byte-layout question with a small,
+enumerable set of readings -- how the follow-up byte composes into a
+magnitude for each sentinel sign. Distinguishing between a handful of
+concrete layouts is exactly what a constructed-stream sweep against a
+real decoder is good at, unlike reverse-engineering a numeric schedule.
+
+**Method.** Built a real, `ffmpeg`-encoded, `ffmpeg`-validated 16x16
+MPEG-1 I-frame (flat grey, `qscale 2`) -- the same "patch a real,
+validated template" technique this crate's own IDCT investigation used,
+reused here for a far smaller, better-posed target. Bit-traced the
+template by hand (quantiser_scale_code, macroblock_address_increment,
+macroblock_type, `dct_dc_size_luminance`, EOB -- all against this crate's
+own already-verified tables) to find the exact bit offset of its one
+coded luma block, then patched that block to replace its (originally
+DC-only) content with `dc_size=0` (unchanged) + an ESCAPE-coded
+`run=0` coefficient + EOB, sweeping the coefficient's encoded bytes.
+
+Two sweeps: an initial 29-case sweep spanning the bare (non-sentinel)
+escape byte, the positive sentinel, and the negative sentinel at values
+including the four real magnitudes measured in the defective fixture
+(58, 60, 73, 78); then an exhaustive 86-case sweep of the negative
+sentinel's follow-up byte across the full 0-255 range at step 3. Each
+case decoded with real `ffmpeg` (`-flags +bitexact -idct simple`,
+already established this session as what `-idct auto`/bitexact mode
+actually selects); each candidate level (computed from the same raw
+bytes under each candidate formula) independently re-derived into a
+predicted pixel block via a textbook dequantise+IDCT (not this crate's
+own implementation), compared against `ffmpeg`'s actual output.
+
+**Result.** The bare escape byte and the positive sentinel needed no
+change: `level = follow_up_byte` (0..255) matched `ffmpeg` exactly at
+every point in both sweeps, confirming what already shipped. The
+negative sentinel did not: the shipped formula, `level =
+-follow_up_byte`, matched `ffmpeg` only at the single point where it
+coincides with the correct formula (`follow_up_byte == 128`, where
+`-128 == 128 - 256`) and diverged everywhere else in the 86-case sweep,
+growing to a full-range (128) difference at the low end -- the same
+direction (smaller magnitude than expected) and rough scale as the gap
+the controlled-pair round traced to this exact sentinel. `level =
+follow_up_byte - 256` (an extended two's-complement reading, symmetric
+with the bare escape byte's own already-shipped `raw - 256` for its
+upper half) matched `ffmpeg` at all 86 points in the exhaustive sweep,
+worst observed difference 1 -- the same small ceiling every other
+correctly-decoded case in this crate measures against, not a new source
+of error. Full convergence, not a partial fit reported as one: the
+explicit bar this round was held to ("measured across N constructed
+cases, all agree" versus "measured 8 of 10 and the rest nearly fit") was
+met by the stronger claim.
+
+**Fixed** (`5877247`): `block::decode_coefficients`'s negative-sentinel
+branch now computes `follow_up_byte - 256`. Cited `Vaco-Provenance:
+blackbox`, not `iso-11172-2` -- that source is not registered in
+`provenance/sources.toml` and this project does not hold it; citing it
+anyway is exactly what has put two other agents permanently in this
+project's provenance-gate failure list.
+
+**Effect, measured directly against this crate's own fixtures**: `m1_i`
+max abs diff 9 -> 2; `m1_ip` 97 -> 2; `m1_ipb` 97 -> 2. All three now sit
+at the identical small ceiling every MPEG-2 fixture in this corpus
+already occupies -- the measured, permanent IDCT-mismatch ceiling this
+same file documents above, not a new or different source of error.
+`m1_i`'s own max-9 residual (explicitly not chased in the controlled-pair
+round, kept as a separate thread across several rounds) turns out to be
+the identical mechanism as the P-picture outlier, not a second one --
+both this same sentinel, landing differently on intra-only versus
+P-chain content, closing that open thread for free rather than by
+investigation.
+
+**No regression verified directly, not assumed from the `mpeg1` gate
+alone**: pre-fix and post-fix binaries produce byte-identical output on
+every MPEG-2 fixture on hand (`m2_i`, `m2_ip`, `m2_ipb`, `m2_ilme`,
+`m2_oddsize`, `m2_qcif_ipb`, `m2_cif_ipb`) via direct binary comparison,
+confirming the `mpeg1`-gated branch this change touches is provably
+unreachable for `mpeg1 == false`.
+
+**Does not close #355.** Both formats now carry the evidence #356 closed
+on, but declaring #355 closed on that basis is a judgement call this
+entry deliberately leaves to whoever is tracking the issue against the
+fuller epic picture, matching how #356's own closure was a dedicated
+round rather than a side effect of a fix commit.
+
+Gates green: `cargo test/clippy -p vaco-codec-mpeg12` (36 tests, clean),
+`rustfmt --check` on the touched file, full `layer-check`/`dep-gate`/
+`unsafe-audit`/`dup-check`/`time-gate`/`owner-gate`/`vlc-scan`.
+`provenance-check` does not flag this round's two commits.
+
+`Vaco-Spec-Ref: itu-t-h262` Annex D.9.3. `Vaco-Provenance: blackbox`.
