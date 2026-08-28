@@ -643,6 +643,111 @@ acquired = "2026-08-27"
 where    = "the reference binary installed on the development machine"
 
 [[source]]
+id       = "itu-t-t81-199209"
+kind     = "spec"
+title    = "ITU-T Rec. T.81 (09/1992) | ISO/IEC 10918-1, Information technology — Digital compression and coding of continuous-tone still images — Requirements and guidelines"
+acquired = "2026-08-27"
+where    = "https://www.itu.int/rec/T-REC-T.81"
+
+[[source]]
+id       = "adobe-tn5116"
+kind     = "spec"
+title    = "Adobe Technical Note #5116, Supporting the DCT Filters in PostScript Level 2 (the APP14 Adobe colour-transform marker)"
+acquired = "2026-08-27"
+where    = "https://www.adobe.com/content/dam/acom/en/devnet/postscript/pdfs/5116.DCT_Filter.pdf"
+
+[[source]]
+id       = "adobe-rtmp-spec-1.0"
+kind     = "spec"
+title    = "Adobe, \"Real-Time Messaging Protocol (RTMP) specification\", version 1.0 (2009) — the plain (non-digest) handshake, the chunk basic/message header formats, extended timestamps, and the six protocol control messages (Set Chunk Size, Abort, Acknowledgement, User Control, Window Acknowledgement Size, Set Peer Bandwidth)"
+acquired = "2026-08-27"
+where    = "https://rtmp.veriskope.com/pdf/rtmp_specification_1.0.pdf"
+
+[[source]]
+id       = "rtmpe-cleanroom-spec"
+kind     = "spec"
+title    = "\"RTMPE\", a clean-room specification of the RTMP digest/complex-handshake scheme Adobe's own specification omits (the offset formulas, the GenuineFPConst/GenuineFMSConst/RandomCrud key material, and the C2/S2 response-signature derivation) — not an Adobe document; cross-checked against a second independent write-up (melpon/rfc) for the digest-offset moduli and the RandomCrud constant, which agreed byte-for-byte"
+acquired = "2026-08-27"
+where    = "https://www.cs.cmu.edu/~dst/Adobe/Gallery/RTMPE.txt"
+
+[[source]]
+id       = "fips-180-4"
+kind     = "spec"
+title    = "NIST FIPS 180-4, Secure Hash Standard (SHS) — SHA-256's constants and compression function, and its own worked digest examples used as this crate's test vectors"
+acquired = "2026-08-27"
+where    = "https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.180-4.pdf"
+
+[[source]]
+id       = "rfc-4231"
+kind     = "rfc"
+title    = "RFC 4231, Identifiers and Test Vectors for HMAC-SHA-224/256/384/512"
+acquired = "2026-08-27"
+where    = "https://www.rfc-editor.org/rfc/rfc4231"
+
+[[source]]
+id       = "qoi-format-spec"
+kind     = "spec"
+title    = "Dominic Szablewski, QOI — The \"Quite OK Image\" format specification"
+acquired = "2026-08-27"
+where    = "https://qoiformat.org/qoi-specification.pdf"
+
+[[source]]
+id       = "netpbm-pnm-spec"
+kind     = "spec"
+title    = "Netpbm, PBM/PGM/PPM Format Specifications"
+acquired = "2026-08-27"
+where    = "https://netpbm.sourceforge.net/doc/pbm.html"
+
+[[source]]
+id       = "netpbm-pam-spec"
+kind     = "spec"
+title    = "Netpbm, PAM Format Specification"
+acquired = "2026-08-27"
+where    = "https://netpbm.sourceforge.net/doc/pam.html"
+
+[[source]]
+id       = "netpbm-pfm-spec"
+kind     = "spec"
+title    = "Netpbm, PFM Format Specification"
+acquired = "2026-08-27"
+where    = "https://netpbm.sourceforge.net/doc/pfm.html"
+
+[[source]]
+id       = "zsoft-pcx-spec"
+kind     = "spec"
+title    = "ZSoft Corporation, PCX Technical Reference Manual"
+acquired = "2026-08-27"
+where    = "https://www.fileformat.info/format/pcx/egff.htm"
+
+[[source]]
+id       = "truevision-tga-spec"
+kind     = "spec"
+title    = "Truevision, Inc., Truevision TGA File Format Specification, Version 2.0"
+acquired = "2026-08-27"
+where    = "https://www.dca.fee.unicamp.br/~martino/disciplinas/ea978/tgaffs.pdf"
+
+[[source]]
+id       = "sgi-image-spec"
+kind     = "spec"
+title    = "Silicon Graphics, Inc., The SGI Image File Format, Version 1.0"
+acquired = "2026-08-27"
+where    = "https://paulbourke.net/dataformats/sgirgb/sgiversion.html"
+
+[[source]]
+id       = "x11-xwd-header"
+kind     = "spec"
+title    = "X.Org / X Consortium, X11 XWDFile.h — the XWD file header structure"
+acquired = "2026-08-27"
+where    = "https://www.x.org/releases/X11R7.7/doc/libX11/specs/libX11/libX11.html"
+
+[[source]]
+id       = "x11-xbm-format"
+kind     = "spec"
+title    = "X.Org / X Consortium, X Bitmap (XBM) file format, as read by XReadBitmapFile"
+acquired = "2026-08-27"
+where    = "https://www.x.org/releases/X11R7.7/doc/libX11/specs/libX11/libX11.html"
+
+[[source]]
 id       = "iso-11172-3"
 kind     = "spec"
 title    = "ISO/IEC 11172-3, Information technology — Coding of moving pictures and associated audio for digital storage media at up to about 1.5 Mbit/s — Part 3: Audio"
