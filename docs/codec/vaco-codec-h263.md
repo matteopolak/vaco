@@ -424,47 +424,71 @@ point, parallel to the baseline `PTYPE` branch in
 
   `vaco-codec-h263` implements Annex F.
 
-**Skipped, for cost — the primary text (already the freely available
-01/2005 edition used above) was read for all five, this is a scope
-decision, not a provenance one:**
+**Ruled out, on a two-independent-reasons bar — the primary text
+(already the freely available 01/2005 edition used above) was read for
+all three, this is a scope decision, not a provenance one:**
 
 - **Annex E (Syntax-based Arithmetic Coding)** replaces every VLC in the
   format with arithmetic coding — a different entropy layer entirely, not
-  an additive mode on top of the existing one.
-- **Annex G (PB-frames)** and **Annex I (Advanced INTRA Coding)** each
-  need their own new prediction/reconstruction machinery (a second,
-  bidirectionally-predicted picture interleaved with the primary one; a
-  spatial-neighbour DC/AC coefficient predictor) comparable in size to
-  Annex F's, with no `PLUSPTYPE` mode bit forcing them together with
-  anything already landed.
+  an additive mode on top of the existing one. On top of that
+  architectural mismatch: `ffmpeg -h encoder=h263p` and the generic
+  `-flags`/`-flags2` lists expose no SAC-shaped option anywhere, checked
+  directly rather than assumed — there is no way to build a real
+  differential fixture for this annex from this project's own tooling
+  even if the architecture supported it (the same check already on
+  record for Annex P below).
+- **Annex G (PB-frames)** needs its own new prediction/reconstruction
+  machinery (a second, bidirectionally-predicted picture interleaved with
+  the primary one) comparable in size to Annex F's, with no `PLUSPTYPE`
+  mode bit forcing it together with anything already landed. On top of
+  that: `ffmpeg -h encoder=h263p` exposes no PB-frames option either,
+  checked the same way as Annex E and P.
 - **Annex P (Reference Picture Resampling)** changes the reference
   picture's own geometry between pictures (resampling to a new size) —
   `plus::parse` already turns away any picture whose `MPPTYPE` sets the
   `RPR` bit, since this crate's single-`RefPicture` design assumes the
-  reference is always the previous decoded frame at the same size. Two
-  independent reasons to leave it out, not one: on top of that
-  architectural mismatch, `ffmpeg -h encoder=h263p` exposes no RPR option
-  at all (checked directly, the same way `yuv444p` support was checked
-  for `vaco-codec-mpeg12`'s #356) — there is no way to build a real
-  differential fixture for this annex from this project's own tooling
-  even if the architecture supported it.
+  reference is always the previous decoded frame at the same size. On
+  top of that architectural mismatch: `ffmpeg -h encoder=h263p` exposes
+  no RPR option at all (checked directly, the same way `yuv444p` support
+  was checked for `vaco-codec-mpeg12`'s #356) — there is no way to build
+  a real differential fixture for this annex from this project's own
+  tooling even if the architecture supported it.
+
+**Nothing pixel-affecting to land — a different conclusion from "ruled
+out", since nothing is being turned away for lack of a fixture or an
+architectural fit:**
+
 - **Annex L (Supplemental Enhancement Information)** is read in full but
-  has nothing pixel-affecting to land, which is a different conclusion
-  from "skipped for cost": it defines how `PSUPP` octets carry optional
-  signalling (full-picture-freeze requests, chroma-keying hints, GOB/
-  segment tagging) for a real-time interactive decoder to *act* on —
-  freezing a display, compositing a chroma-keyed region — not anything
-  that changes reconstructed pixels. `skip_pei_chain` already consumes
-  `PSUPP` octets bit-correctly regardless of their internal structure
-  (see the false-alarm investigation in "Bugs found while building the
-  H.263+ annex differential harness" below), so there is no reconstruction
+  defines how `PSUPP` octets carry optional signalling (full-picture-
+  freeze requests, chroma-keying hints, GOB/segment tagging) for a
+  real-time interactive decoder to *act* on — freezing a display,
+  compositing a chroma-keyed region — not anything that changes
+  reconstructed pixels. `skip_pei_chain` already consumes `PSUPP` octets
+  bit-correctly regardless of their internal structure (see the
+  false-alarm investigation in "Bugs found while building the H.263+
+  annex differential harness" below), so there is no reconstruction
   behaviour left to add for a non-interactive, whole-file decoder.
 
+**Still open — genuinely buildable and testable, not a candidate for
+the replacement bar above:**
+
+- **Annex I (Advanced INTRA Coding)** needs a spatial-neighbour DC/AC
+  coefficient predictor — its own new prediction machinery, comparable
+  in size to Annex F's. Unlike E/G/P, this does not qualify for a
+  two-independent-reasons closure: `ffmpeg -h full` confirms `-flags
+  +aic` exists on this build (checked directly against `-h full` rather
+  than the per-encoder option dump, which does not list it separately,
+  correcting an earlier working assumption that it might not exist) —
+  a real differential fixture is available, so the annex is both
+  architecturally additive (an `MCBPC`-adjacent per-block prediction
+  step, not a different reconstruction pipeline) and checkable. Not yet
+  implemented.
+
 `plus::parse` bails to `unsupported` (same flat-mid-grey `CORRUPT`
-convention as the baseline decoder) for any picture using one of the five
-skipped annexes, Reference Picture Resampling/Reduced-Resolution Update,
-or an `MPPTYPE` picture-type code naming Improved PB/B/EI/EP (Annexes
-M/O) — rather than misreading the scalability/RPS-specific fields
+convention as the baseline decoder) for any picture using Annex E, G, I,
+or P, Reference Picture Resampling/Reduced-Resolution Update, or an
+`MPPTYPE` picture-type code naming Improved PB/B/EI/EP (Annexes M/O) —
+rather than misreading the scalability/RPS-specific fields
 (`ELNUM`/`RLNUM`/`RPSMF`/`TRPI`/`TRP`/`BCI`/`BCM`/`RPRP`) that only ever
 follow one of those.
 
