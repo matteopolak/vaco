@@ -4165,3 +4165,98 @@ count changed on any corpus this round; #419 not reopened.
 
 `Vaco-Spec-Ref: iso-iec-14496-10-2002-draft` Table 9-11, per-syntax-element
 `ctxIdxOffset` uniqueness.
+
+
+### MPEG-1's own IDCT mismatch-control rule, correctly implemented: closes most of the intra gap, none of the P-picture one (#355)
+
+An earlier round's own comment on `block::dequantise` recorded testing
+Annex D.9.1's MPEG-1 mismatch-control rule "in both directions" (a
+uniform `+1` and a uniform `-1` toggle on every non-zero-even
+coefficient) and finding both measured *worse* than applying no MPEG-1
+rule at all — treated at the time as evidence the rule itself wasn't the
+cause. It wasn't evidence of that; both variants tested were the wrong
+rule.
+
+D.9.1's own text: "adding (or removing) one to each non-zero coefficient
+that would have been even after inverse quantisation." Read as a single
+per-coefficient operation rather than "sometimes add, sometimes remove,
+pick a global direction," the natural reading is sign-dependent: `rec -=
+sign(rec)` — move one step toward zero, matching mismatch control's own
+stated purpose (preventing errors from "build[ing] up excessively," per
+the same page's own general framing). A uniform `+1` is correct only for
+negative coefficients; a uniform `-1` only for positive ones. Each earlier
+attempt was therefore right on roughly half of any block's own
+coefficients and wrong on the other half — indistinguishable from noise
+applied to the reconstruction, which is exactly consistent with "measured
+worse than nothing" rather than being evidence against the rule's
+relevance.
+
+Two further bugs found in the same pass, both compounding in the same
+direction (adding wrong correction, missing the right one):
+
+1. MPEG-2's own mismatch control (`F[7][7]`, toggled if the sum of all 64
+   coefficients is even) was being applied **unconditionally**, including
+   to MPEG-1 streams — which have no such concept at all (D.9.1 states it
+   as the *MPEG-2* rule specifically, contrasted with MPEG-1's own
+   different paragraph immediately above it).
+2. The correction must exempt an intra block's own DC coefficient: DC is
+   reconstructed through `intra_dc_mult`, a completely different
+   mechanism from the matrix/quantiser-scale AC formula D.9.1's rule is
+   stated against, not a "non-zero coefficient" in the sense that text
+   means.
+
+All three are now fixed together (`block::dequantise` takes an `mpeg1:
+bool` and branches on it: MPEG-1 gets the sign-dependent per-coefficient
+rule, DC-exempt; MPEG-2 keeps its existing `F[7][7]` rule, now gated to
+`!mpeg1` so the two are mutually exclusive as D.9.1 itself describes
+them).
+
+**Measured effect, whole-file mean/max, `ffmpeg`-decoded reference vs this
+crate's own decode:**
+
+| Fixture | Before: mean / max | After: mean / max |
+|---|---|---|
+| `m1_i` (intra-only) | 1.172 / 21 | 0.175 / 9 |
+| `m1_ip` | 2.052 / 97 | 1.381 / 97 |
+| `m1_ipb` | 1.828 / 97 | 1.381 / 97 |
+
+Frame 0 of `m1_i` alone (pure intra, the fixture the original five-round
+heatmap investigation used): 1166 → 189 differing pixels out of 4608
+(-84%). This is a real, substantial improvement, and it lands exactly
+where the heatmap correlation predicted it would (error scaling with
+`nz`, vanishing on DC-only blocks) — the first hypothesis in five rounds
+to predict that shape rather than merely being compatible with it.
+
+**It does not close #355.** Two residuals remain, both unexplained:
+
+1. `m1_i`'s own max deviation is still 9, not 0 — and every one of its 25
+   frames hits *exactly* that value (not a range shrinking toward zero),
+   meaning one more, smaller, consistently-reproduced defect remains even
+   in pure intra content that this fix does not touch.
+2. `m1_ip`/`m1_ipb`'s P-picture max deviation (97) is **byte-for-byte
+   identical before and after this fix** — not reduced at all. This
+   falsifies the framing carried since the very first investigation round
+   ("present [smaller] in a genuine I-picture and grows... across
+   P-pictures... consistent with something that... compounds further once
+   motion compensation is added on top, rather than two unrelated bugs").
+   That framing assumed one defect scaling up; the data now shows a fully
+   intra-specific defect (fixed) sitting alongside a completely separate,
+   P-picture-specific one (untouched by anything that affects the first).
+
+**Handoff for the next round**, since this round is bounded and the
+P-picture outlier was not investigated further per instruction: the
+search should start from the *P-picture* path specifically — motion
+vector reconstruction, the `full_pel_forward_vector`-adjacent forms, or
+prediction reference handling — not from anything shared with intra
+block decode (dequantisation, VLC tables, and now mismatch control are
+all confirmed correct and unable to explain a fixed 97-level outlier that
+a real fix to intra decode left completely untouched).
+
+No regression: all 7 pre-existing MPEG-2 fixtures and all 5 fixtures from
+#356's own corpus decode byte-identical to before this change. Gates
+green (`cargo test/clippy -p vaco-codec-mpeg12`, full `layer-check`/
+`dep-gate`/`unsafe-audit`/`dup-check`/`time-gate`/`owner-gate`/
+`vlc-scan`). `provenance-check`'s pre-existing failures unrelated,
+unchanged by this commit.
+
+`Vaco-Spec-Ref: itu-t-h262` Annex D.9.1.
