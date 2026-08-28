@@ -55,6 +55,7 @@ jobs:
       - run: cargo xtask gen-docs-index --check
       - run: cargo xtask gen-pixfmt --check
       - run: cargo xtask gen-fuzz --check
+      - run: cargo xtask gen-coverage --check
 
   licence:
     name: licence and advisories

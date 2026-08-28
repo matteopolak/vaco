@@ -117,7 +117,13 @@ gen-pixfmt:
 gen-fuzz:
     cargo xtask gen-fuzz
 
-gen:  gen-registry gen-docs-index gen-pixfmt gen-fuzz
+# The format-coverage table backs a claim in
+# docs/why-some-formats-are-not-included.md that a hand-written list would
+# falsify within a week.
+gen-coverage:
+    cargo xtask gen-coverage
+
+gen:  gen-registry gen-docs-index gen-pixfmt gen-fuzz gen-coverage
 
 # CI re-runs the generators and fails if the committed output differs.
 docs-check:
@@ -125,6 +131,7 @@ docs-check:
     cargo xtask gen-docs-index --check
     cargo xtask gen-pixfmt --check
     cargo xtask gen-fuzz --check
+    cargo xtask gen-coverage --check
 
 # ------------------------------------------------------------- conformance
 

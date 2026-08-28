@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod coverage;
 mod dead_code;
 mod deps;
 mod docs;
@@ -43,6 +44,7 @@ fn main() {
         "owner-gate" => owner_gate::run(check),
         "gen-registry" => registry::run(check),
         "gen-docs-index" => docs::run(check),
+        "gen-coverage" => coverage::run(check),
         "gen-pixfmt" => gen_pixfmt::run(check),
         "gen-fuzz" => gen_fuzz::run(check),
         other => {
@@ -64,6 +66,7 @@ fn main() {
                 "  gen-pixfmt      expand the pixel-format families into the committed table"
             );
             eprintln!("  gen-fuzz        assemble fuzz/Cargo.toml from target front-matter");
+            eprintln!("  gen-coverage    generate docs/format-coverage.md");
             std::process::exit(2);
         }
     };
