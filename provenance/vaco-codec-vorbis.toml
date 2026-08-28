@@ -1,0 +1,51 @@
+# Sources for vaco-codec-vorbis (issue #308). Kept in its own file per
+# AGENT-CONSTRAINTS.md rather than appended to the shared provenance/sources.toml,
+# which is a multi-writer hotspot.
+#
+# Vorbis's codebooks, floor curves, residue partitions and mode/mapping tables
+# are all derived from the bitstream itself at decode time rather than fixed
+# constant arrays, so this crate has no `[[table]]` rows — `floor1_inverse_dB_table`
+# (256 f32 entries, spec section 10.1) is the one exception, transcribed
+# directly in `crates/codec/vaco-codec-vorbis/src/floor1_table.rs` with its own
+# `Vaco-Spec-Ref` citation rather than a row here, since it is a single flat
+# array rather than a family of tables worth cross-referencing from a shared file.
+
+[[source]]
+id       = "vorbis-i"
+kind     = "spec"
+title    = "Vorbis I Specification (includes errata through 20150227)"
+acquired = "2026-08-27"
+where    = "https://www.xiph.org/vorbis/doc/Vorbis_I_spec.html"
+
+# The IMDCT normalisation the spec itself does not state numerically —
+# section 4.3.7 only points at an external reference for "a detailed
+# description of the MDCT" rather than giving Vorbis's own scale factor —
+# so this was measured rather than read. `vaco-tx`'s `TxKind::Mdct` inverse
+# was first tried with an explicit `2/n` decoder-side scale (the common
+# convention in other lapped-transform codecs), which decoded real
+# ffmpeg-produced Vorbis to audibly-shaped but uniformly-too-quiet PCM: the
+# ratio of this crate's output to ffmpeg's own `-f f32le` decode was a
+# clean, sample-independent 1/1024 on a 2048-sample long block. 1024 is
+# exactly `n/2` for that block size, which is the scale an unnormalised
+# DCT-IV's self-composition (`C∘C = (n/2)·I` for the unnormalised DCT-IV
+# matrix `vaco-tx` documents its MDCT as being built from) introduces on a
+# forward-then-inverse round trip — so applying `vaco-tx`'s IMDCT with no
+# extra decoder-side scale at all (`vaco_tx::Plan`'s identity scale) was
+# tried next and matches ffmpeg's own decode to float32 rounding noise
+# (mean absolute error ~5e-9, max ~3e-8, on the `[-1,1]` sample scale)
+# across every quality level and block-size configuration this crate's
+# `tests/ffmpeg_differential.rs` exercises.
+#
+# The same differential harness also established, by instrumenting the
+# setup-header parse while running against real `ffmpeg -c:a vorbis`
+# output, that ffmpeg's native encoder always chooses residue type 2 with
+# one channel-coupling step for stereo — never residue types 0 or 1, and
+# never an uncoupled stereo mapping — regardless of quality setting
+# (`-q:a 0` through `-q:a 9`) tried. Residue types 0 and 1 are exercised
+# only by this crate's own unit tests as a result, not by real content.
+[[source]]
+id       = "ffmpeg-vorbis-differential-probe"
+kind     = "blackbox"
+title    = "ffmpeg 8.1's native Vorbis encoder/decoder, used to calibrate this crate's IMDCT scale and to determine which setup-header configurations (residue type, channel coupling) it actually emits"
+acquired = "2026-08-28"
+where    = "the reference binary (ffmpeg 8.1) installed on the development machine, driven via crates/codec/vaco-codec-vorbis/tests/ffmpeg_differential.rs"
