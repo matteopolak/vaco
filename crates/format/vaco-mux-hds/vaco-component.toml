@@ -1,0 +1,13 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Name and extensions measured against `ffmpeg -h muxer=hds` (ffmpeg 8.1).
+# No demuxer exists for this format, in this project or in `ffmpeg` itself —
+# mux-only is a real constraint, not a gap.
+
+[[component]]
+kind       = "muxer"
+name       = "hds"
+long_name  = "HDS Muxer"
+feature    = "mux-hds"
+ctor       = "vaco_mux_hds::MUXER"
+extensions = "f4m"

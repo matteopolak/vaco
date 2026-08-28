@@ -1921,3 +1921,11 @@ natural complete fix is a `Protocol::create_dir` default-`Unsupported`
 method, implemented for `file:` (and left unsupported for e.g. `http:`,
 where a PUT target's directory structure is the server's concern, not the
 client's).
+
+**Checked, not assumed, for `vaco-mux-hds` (issue #618)**: this gap does
+not apply there. Measured directly with a two-quality-level `ffmpeg -f hds`
+reference tree — every file HDS writes (`index.f4m`, each `stream<N>.abst`,
+each `stream<N>Seg1-Frag<M>`) sits flat in the manifest's own directory,
+the same flat convention `vaco-mux-dash`/`vaco-mux-hls` already use. Smooth
+Streaming's `QualityLevels(<bitrate>)/` layout remains, so far, the only
+format in this workspace that actually needs `Protocol::create_dir`.
