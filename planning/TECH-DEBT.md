@@ -1574,3 +1574,56 @@ widely-documented decoder convention:
 
 Neither is blocking; recorded so a future reader chasing a rare chroma or
 loop-filter mismatch on unusual content knows where to look first.
+
+### `vaco-format-misc`'s `smk` video packets omit whatever palette-state packaging the reference adds
+
+Measured while building the `smk` (Smacker) demuxer: an otherwise-empty
+frame (a 4-byte palette chunk, nothing else) produces a **769-byte** video
+`AVPacket` from the reference (`ffmpeg -c copy -f framemd5 -`, since
+`ffprobe -show_streams` needs `smackvid` to open and it refuses to over a
+fixture with anything less than a fully valid packed Huffman tree). Adding
+8 real video-chunk bytes made it 777 — consistently `769 + n`, and
+`769 = 1 + 256×3` strongly suggests a one-byte flag plus a synthesised
+256-entry RGB palette table the demuxer prepends ahead of the real video
+bytes, using state it tracks itself by decoding every palette chunk's
+change instructions as it goes.
+
+Three independent guesses at the exact byte layout (flag value 0 vs. 1,
+prefix vs. suffix, an all-zero vs. a partially-set palette) were checked
+against the measured MD5 hash and all failed to reproduce it — pinning the
+real construction would mean reverse-engineering an undocumented internal
+packet convention rather than reading a public specification, which is
+past what black-box measurement of *container framing* is for. This
+demuxer's video packets are the raw video-chunk bytes only: correct
+per the public file-format spec, and a real, measured, unresolved
+divergence in packet `size`/hash from the reference for video packets
+specifically. Everything else about `smk` — stream count, dimensions,
+frame rate, audio packet content/timing, extradata composition, frame
+count — matches. Whoever wants byte-identical `smk` video packets needs to
+implement the palette-chunk decode (the block-copy/range-copy/new-RGB-entry
+instructions the public spec documents in full) and track running palette
+state across frames; the spec support for doing so already exists, it is
+just not wired to packet construction here.
+
+
+### `vaco-format-misc`'s `bink` deliberately does not reproduce the reference's odd-length-frame drift
+
+Measured against hand-built fixtures (`ffmpeg -c copy -f framemd5 -`): the
+reference bink demuxer reads an odd-length frame's video chunk one byte
+short, and — because it reads sequentially rather than re-seeking to the
+next frame's absolute offset from the frame index table — every later frame
+inherits that one-byte drift, eventually producing "audio size in header
+(…) > size of packet left" and a hard demux error. Confirmed with two
+fixtures differing only in whether one frame's total length was even or
+odd: the all-even one round-trips exactly via `table[i+1] - (table[i] &
+!1) - audio_bytes_consumed`, and the drift starts at exactly the odd frame
+in the other.
+
+`crates/format/vaco-format-misc/src/bink.rs` seeks to each frame's own
+table offset before reading it (the table exists to make exactly that
+possible) rather than reading sequentially, so it neither drifts nor
+cascades into the reference's demux error on this input shape. Recorded as
+a deliberate, understood divergence rather than a bug: a real Bink encoder
+is not expected to produce an odd-length frame, so this only matters for a
+hand-corrupted or adversarial file, and this crate's reading is the more
+defensible one when the two disagree.
