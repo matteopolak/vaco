@@ -5,7 +5,9 @@
 //! eighth-pel before motion compensation, per §18.1.
 
 use vaco_codec_msac::Vp8BoolDecoder as Bd;
+use vaco_codec_msac::tree::write_tree;
 
+use crate::encode::BoolWriter;
 use crate::tables::{MVPARTITION_PROB, MVPARTITION_TREE, MVP_BITS, MVP_IS_SHORT, MVP_SHORT, MVP_SIGN, MV_PARTITIONS, MV_PARTITION_COUNTS, SMALL_MVTREE, SUB_MV_REF_PROB, SUB_MV_REF_TREE, VP8_MODE_CONTEXTS};
 
 /// A motion vector in quarter-pel units, `(row, col)`.
@@ -43,6 +45,49 @@ pub fn read_mv(bd: &mut Bd<'_>, probs: &[[u8; 19]; 2]) -> Mv {
     let row = read_component(bd, &probs[0]);
     let col = read_component(bd, &probs[1]);
     (row, col)
+}
+
+/// The encode-side inverse of [`read_component`]: write `a`'s magnitude
+/// (short tree or long form, matching whichever [`read_component`] would
+/// have chosen for the same value) then its sign, if non-zero.
+fn write_component(bw: &mut BoolWriter, p: &[u8; 19], a: i32) {
+    let mag = a.abs();
+    let is_short = mag < 8;
+    // `read_component`'s `if bd.read_bool(p[MVP_IS_SHORT]) { <long form> }
+    // else { <short tree> }` -- despite the field's name, a `true` bit
+    // selects the *long* branch, so the short-form bit is written inverted.
+    bw.write_bool(p[MVP_IS_SHORT], !is_short);
+    if is_short {
+        write_tree(&SMALL_MVTREE, mag, |node, bit| {
+            let prob = p.get(MVP_SHORT + node).copied().unwrap_or(128);
+            bw.write_bool(prob, bit);
+        });
+    } else {
+        for i in 0..3 {
+            let prob = p.get(MVP_BITS + i).copied().unwrap_or(128);
+            bw.write_bool(prob, (mag >> i) & 1 != 0);
+        }
+        for i in (4..=9).rev() {
+            let prob = p.get(MVP_BITS + i).copied().unwrap_or(128);
+            bw.write_bool(prob, (mag >> i) & 1 != 0);
+        }
+        // Bit 3 is only written when it is not already implied by bits
+        // 4..9 all being zero -- the mirror of `read_component`'s
+        // `(a & 0xfff0) == 0 || bd.read_bool(...)` short-circuit.
+        if mag & 0xfff0 != 0 {
+            let prob = p.get(MVP_BITS + 3).copied().unwrap_or(128);
+            bw.write_bool(prob, (mag >> 3) & 1 != 0);
+        }
+    }
+    if mag != 0 {
+        bw.write_bool(p[MVP_SIGN], a < 0);
+    }
+}
+
+/// Encode one `(row, col)` motion vector delta, the inverse of [`read_mv`].
+pub fn write_mv(bw: &mut BoolWriter, probs: &[[u8; 19]; 2], mv: Mv) {
+    write_component(bw, &probs[0], mv.0);
+    write_component(bw, &probs[1], mv.1);
 }
 
 /// Clamp a motion vector (quarter-pel here; the caller passes eighth-pel
@@ -337,6 +382,32 @@ mod tests {
             let mut bd = Bd::new(&data);
             let probs = crate::tables::DEFAULT_MV_CONTEXT;
             let _ = decode_split(&mut bd, &probs, (0, 0), |_| (0, 0), |_| (0, 0));
+        }
+    }
+
+    #[test]
+    fn write_mv_then_read_mv_round_trips_short_and_long_values() {
+        let probs = crate::tables::DEFAULT_MV_CONTEXT;
+        for mv in [(0, 0), (3, -5), (7, 7), (8, -8), (100, -400), (1023, -1023)] {
+            let mut bw = BoolWriter::new();
+            write_mv(&mut bw, &probs, mv);
+            let bytes = bw.finish();
+            let mut bd = Bd::new(&bytes);
+            assert_eq!(read_mv(&mut bd, &probs), mv, "round trip of {mv:?}");
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn write_mv_then_read_mv_round_trips_arbitrary_components(
+            row in -1023i32..=1023, col in -1023i32..=1023,
+        ) {
+            let probs = crate::tables::DEFAULT_MV_CONTEXT;
+            let mut bw = BoolWriter::new();
+            write_mv(&mut bw, &probs, (row, col));
+            let bytes = bw.finish();
+            let mut bd = Bd::new(&bytes);
+            assert_eq!(read_mv(&mut bd, &probs), (row, col));
         }
     }
 }

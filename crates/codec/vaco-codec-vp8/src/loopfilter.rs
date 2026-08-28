@@ -1,11 +1,17 @@
 //! The in-loop deblocking filter, RFC 6386 §15.
 //!
-//! Every function takes and returns plain pixel values rather than a plane
-//! reference, mirroring [`crate::predict`]'s split: [`crate::decode`] is
-//! responsible for locating the eight (or four, or two) pixels straddling a
-//! given edge and writing the results back, in the exact order §15.1
-//! prescribes (left macroblock edge, then internal vertical edges, then top
-//! macroblock edge, then internal horizontal edges).
+//! Every low-level function takes and returns plain pixel values rather than
+//! a plane reference, mirroring [`crate::predict`]'s split. [`apply_frame`]
+//! is the per-frame orchestration both [`crate::decode`] and [`crate::encode`]
+//! share: it locates the eight (or four, or two) pixels straddling a given
+//! edge and writes the results back, in the exact order §15.1 prescribes
+//! (left macroblock edge, then internal vertical edges, then top macroblock
+//! edge, then internal horizontal edges) — kept as one implementation per
+//! D19 rather than one per caller, since a decoder and an encoder that
+//! reconstruct a reference frame must apply *exactly* the same filter or
+//! drift apart on the very next inter frame.
+
+use crate::framebuf::Plane;
 
 fn c(v: i32) -> i32 {
     v.clamp(-128, 127)
@@ -184,6 +190,143 @@ pub fn edge_limits(filter_level: i32, interior_limit: i32) -> (i32, i32) {
         (filter_level + 2) * 2 + interior_limit, // mb edge
         filter_level * 2 + interior_limit,       // subblock edge
     )
+}
+
+fn ix(v: usize) -> i32 {
+    i32::try_from(v).unwrap_or(i32::MAX)
+}
+
+fn ux(v: i32) -> usize {
+    usize::try_from(v).unwrap_or(0)
+}
+
+/// One macroblock's loop-filter parameters, already resolved by the caller
+/// (segmentation/`lf_deltas`/mode-delta lookup is [`crate::decode`]'s and
+/// [`crate::encode`]'s own job — see each's `macroblock_filter_level`-shaped
+/// logic).
+#[derive(Debug, Clone, Copy)]
+pub struct MbFilterInfo {
+    /// 0..63, RFC 6386 §9.4/§15.1. A level of 0 skips this macroblock
+    /// entirely (matches the per-frame `filter_level == 0` skip one level
+    /// up, but per-macroblock since segmentation/deltas can drive an
+    /// individual macroblock to zero even when the frame level is not).
+    pub filter_level: i32,
+    /// Whether the four internal subblock edges are skipped: RFC 6386
+    /// §15.1's rule that a macroblock with `mb_skip_coeff` set *and* a Y2
+    /// block (i.e. not `B_PRED`/`SPLITMV`) has no subblock-boundary
+    /// residual discontinuity to smooth.
+    pub skip_inner: bool,
+}
+
+/// Apply the loop filter to a whole frame in place. `mb_info` is indexed
+/// `row * mb_cols + col`; a short or empty slice degrades to "skip this
+/// macroblock" rather than panicking, matching every other untrusted-shape
+/// tolerance in this crate.
+pub fn apply_frame(
+    y: &mut Plane,
+    u: &mut Plane,
+    v: &mut Plane,
+    mb_cols: usize,
+    mb_rows: usize,
+    sharpness_level: i32,
+    key_frame: bool,
+    filter_simple: bool,
+    mb_info: &[MbFilterInfo],
+) {
+    for row in 0..mb_rows {
+        for col in 0..mb_cols {
+            let Some(mb) = mb_info.get(row * mb_cols + col).copied() else { continue };
+            if mb.filter_level == 0 {
+                continue;
+            }
+            let il = interior_limit(mb.filter_level, sharpness_level);
+            let (mbe, sbe) = edge_limits(mb.filter_level, il);
+            let hev = hev_threshold(mb.filter_level, key_frame);
+
+            if col > 0 {
+                filter_vertical_edge(y, ix(col * 16), ix(row * 16), 16, hev, il, mbe, true, filter_simple);
+                if !filter_simple {
+                    filter_vertical_edge(u, ix(col * 8), ix(row * 8), 8, hev, il, mbe, true, false);
+                    filter_vertical_edge(v, ix(col * 8), ix(row * 8), 8, hev, il, mbe, true, false);
+                }
+            }
+            if !mb.skip_inner {
+                for k in [4, 8, 12] {
+                    filter_vertical_edge(y, ix(col * 16 + k), ix(row * 16), 16, hev, il, sbe, false, filter_simple);
+                }
+                if !filter_simple {
+                    filter_vertical_edge(u, ix(col * 8 + 4), ix(row * 8), 8, hev, il, sbe, false, false);
+                    filter_vertical_edge(v, ix(col * 8 + 4), ix(row * 8), 8, hev, il, sbe, false, false);
+                }
+            }
+            if row > 0 {
+                filter_horizontal_edge(y, ix(col * 16), ix(row * 16), 16, hev, il, mbe, true, filter_simple);
+                if !filter_simple {
+                    filter_horizontal_edge(u, ix(col * 8), ix(row * 8), 8, hev, il, mbe, true, false);
+                    filter_horizontal_edge(v, ix(col * 8), ix(row * 8), 8, hev, il, mbe, true, false);
+                }
+            }
+            if !mb.skip_inner {
+                for k in [4, 8, 12] {
+                    filter_horizontal_edge(y, ix(col * 16), ix(row * 16 + k), 16, hev, il, sbe, false, filter_simple);
+                }
+                if !filter_simple {
+                    filter_horizontal_edge(u, ix(col * 8), ix(row * 8 + 4), 8, hev, il, sbe, false, false);
+                    filter_horizontal_edge(v, ix(col * 8), ix(row * 8 + 4), 8, hev, il, sbe, false, false);
+                }
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn filter_vertical_edge(plane: &mut Plane, x: i32, y: i32, len: i32, hev: i32, il: i32, limit: i32, mb_edge: bool, simple: bool) {
+    for i in 0..len {
+        let row = y + i;
+        let get = |o: i32| plane.get(x + o, row);
+        if simple {
+            let (np0, nq0) = simple_filter(limit, get(-2), get(-1), get(0), get(1));
+            plane.set(ux(x - 1), ux(row), np0);
+            plane.set(ux(x), ux(row), nq0);
+            continue;
+        }
+        let p = [get(-1), get(-2), get(-3), get(-4)];
+        let q = [get(0), get(1), get(2), get(3)];
+        let (np, nq) = if mb_edge { mb_filter(hev, il, limit, p, q) } else { subblock_filter(hev, il, limit, p, q) };
+        for k in 0..4 {
+            if let Some(&v) = np.get(k) {
+                plane.set(ux(x - 1 - ix(k)), ux(row), v);
+            }
+            if let Some(&v) = nq.get(k) {
+                plane.set(ux(x + ix(k)), ux(row), v);
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn filter_horizontal_edge(plane: &mut Plane, x: i32, y: i32, len: i32, hev: i32, il: i32, limit: i32, mb_edge: bool, simple: bool) {
+    for i in 0..len {
+        let col = x + i;
+        let get = |o: i32| plane.get(col, y + o);
+        if simple {
+            let (np0, nq0) = simple_filter(limit, get(-2), get(-1), get(0), get(1));
+            plane.set(ux(col), ux(y - 1), np0);
+            plane.set(ux(col), ux(y), nq0);
+            continue;
+        }
+        let p = [get(-1), get(-2), get(-3), get(-4)];
+        let q = [get(0), get(1), get(2), get(3)];
+        let (np, nq) = if mb_edge { mb_filter(hev, il, limit, p, q) } else { subblock_filter(hev, il, limit, p, q) };
+        for k in 0..4 {
+            if let Some(&v) = np.get(k) {
+                plane.set(ux(col), ux(y - 1 - ix(k)), v);
+            }
+            if let Some(&v) = nq.get(k) {
+                plane.set(ux(col), ux(y + ix(k)), v);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

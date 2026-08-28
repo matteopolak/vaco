@@ -167,6 +167,109 @@ pub fn add_residue(predictor: u8, residue: i32) -> u8 {
     u8::try_from((i32::from(predictor) + residue).clamp(0, 255)).unwrap_or(0)
 }
 
+/// The forward DCT, `libvpx`'s `vp8_short_fdct4x4_c` (`vp8/encoder/dct.c`,
+/// BSD-licensed, Tier A per `planning/AGENT-CONSTRAINTS.md`'s clean-room
+/// section) — the mathematical partner [`inverse_dct`] needs, since RFC 6386
+/// specifies only the decoder side (see `crate::encode`'s module doc). Raster
+/// order in and out, spatial residue in, unquantised frequency coefficients
+/// out.
+#[must_use]
+pub fn forward_dct(residue: &[i32; 16]) -> [i32; 16] {
+    let mut rows = [[0i32; 4]; 4];
+    for (out_row, in_row) in rows.iter_mut().zip(to_mat(residue)) {
+        let [c0, c1, c2, c3] = in_row;
+        let a1 = (c0 + c3) * 8;
+        let b1 = (c1 + c2) * 8;
+        let c1v = (c1 - c2) * 8;
+        let d1 = (c0 - c3) * 8;
+        let op1 = (c1v * 2217 + d1 * 5352 + 14500) >> 12;
+        let op3 = (d1 * 2217 - c1v * 5352 + 7500) >> 12;
+        *out_row = [a1 + b1, op1, a1 - b1, op3];
+    }
+    let mut cols = [[0i32; 4]; 4];
+    for (out_row, in_row) in cols.iter_mut().zip(transpose(rows)) {
+        let [c0, c1, c2, c3] = in_row;
+        let a1 = c0 + c3;
+        let b1 = c1 + c2;
+        let c1v = c1 - c2;
+        let d1 = c0 - c3;
+        let out0 = (a1 + b1 + 7) >> 4;
+        let out2 = (a1 - b1 + 7) >> 4;
+        let out1 = ((c1v * 2217 + d1 * 5352 + 12000) >> 16) + i32::from(d1 != 0);
+        let out3 = (d1 * 2217 - c1v * 5352 + 51000) >> 16;
+        *out_row = [out0, out1, out2, out3];
+    }
+    to_flat(transpose(cols))
+}
+
+/// The forward Walsh-Hadamard transform, `libvpx`'s `vp8_short_walsh4x4_c`
+/// (`vp8/encoder/dct.c`, same provenance as [`forward_dct`]) — the partner
+/// [`inverse_wht`] needs. `dcs` is the 16 luma-subblock DC values (raster
+/// order, one per Y subblock); output is the Y2 block's raster-order
+/// coefficients.
+#[must_use]
+pub fn forward_wht(dcs: &[i32; 16]) -> [i32; 16] {
+    let mut rows = [[0i32; 4]; 4];
+    for (out_row, in_row) in rows.iter_mut().zip(to_mat(dcs)) {
+        let [c0, c1, c2, c3] = in_row;
+        let a1 = (c0 + c2) * 4;
+        let d1 = (c1 + c3) * 4;
+        let c1v = (c1 - c3) * 4;
+        let b1 = (c0 - c2) * 4;
+        let out0 = a1 + d1 + i32::from(a1 != 0);
+        *out_row = [out0, b1 + c1v, b1 - c1v, a1 - d1];
+    }
+    let mut cols = [[0i32; 4]; 4];
+    for (out_row, in_row) in cols.iter_mut().zip(transpose(rows)) {
+        let [c0, c1, c2, c3] = in_row;
+        let a1 = c0 + c2;
+        let d1 = c1 + c3;
+        let c1v = c1 - c3;
+        let b1 = c0 - c2;
+        let mut a2 = a1 + d1;
+        let mut b2 = b1 + c1v;
+        let mut c2v = b1 - c1v;
+        let mut d2 = a1 - d1;
+        a2 += i32::from(a2 < 0);
+        b2 += i32::from(b2 < 0);
+        c2v += i32::from(c2v < 0);
+        d2 += i32::from(d2 < 0);
+        *out_row = [(a2 + 3) >> 3, (b2 + 3) >> 3, (c2v + 3) >> 3, (d2 + 3) >> 3];
+    }
+    to_flat(transpose(cols))
+}
+
+/// Round `coeff` to the nearest multiple of `step` (its quantised level
+/// times `step`), returning the level. `step <= 0` (never legitimate, but
+/// callers pass a per-macroblock table looked up by index) quantises to
+/// zero rather than dividing by zero. A plain nearest-integer quantiser —
+/// simpler than `libvpx`'s zero-bin/zbin-boost run-length scheme, and not
+/// meant to match it: `AGENT-CONSTRAINTS.md`'s owner ruling is explicit that
+/// byte-exactness against the reference encoder is not the bar, and this
+/// crate's dequantiser (this module, above) only ever multiplies a level
+/// back out, so any rounding rule that inverts it is a valid encoder.
+#[must_use]
+#[allow(clippy::integer_division, reason = "nearest-integer quantisation, not a size split")]
+fn quantize_one(coeff: i32, step: i32) -> i32 {
+    if step <= 0 {
+        return 0;
+    }
+    let sign = if coeff < 0 { -1 } else { 1 };
+    let level = (coeff.abs() + step / 2) / step;
+    sign * level
+}
+
+/// Quantise one 4x4 block's forward-transformed coefficients: position 0
+/// (raster DC) by `dc`, every other position by `ac`.
+#[must_use]
+pub fn quantize_block(coeffs: &[i32; 16], dc: i32, ac: i32) -> [i32; 16] {
+    let mut out = [0i32; 16];
+    for (i, (o, &c)) in out.iter_mut().zip(coeffs.iter()).enumerate() {
+        *o = quantize_one(c, if i == 0 { dc } else { ac });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,6 +310,155 @@ mod tests {
         assert_eq!(add_residue(250, 100), 255);
         assert_eq!(add_residue(10, -100), 0);
         assert_eq!(add_residue(100, 10), 110);
+    }
+
+    #[test]
+    fn forward_dct_of_all_zero_has_a_single_rounding_bias_artifact() {
+        // Not the all-zero output a linear transform would suggest:
+        // `libvpx`'s real fixed-point `vp8_short_fdct4x4_c` adds an
+        // unconditional rounding-bias constant (14500/7500/12000/51000)
+        // before shifting, so an exactly-zero residue still produces one
+        // nonzero coefficient at position 1. Confirmed against the literal
+        // flat-index port below, not merely asserted.
+        let out = forward_dct(&[0; 16]);
+        let mut expected = [0; 16];
+        if let Some(c) = expected.get_mut(1) {
+            *c = 1;
+        }
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn forward_wht_of_all_zero_is_all_zero() {
+        assert_eq!(forward_wht(&[0; 16]), [0; 16]);
+    }
+
+    #[test]
+    fn quantize_then_dequantize_then_inverse_recovers_a_flat_residue_within_one_quant_step() {
+        // A residue block that is a constant offset should round-trip
+        // through forward DCT -> quantize -> dequantize -> inverse DCT
+        // close to the original constant (DCT preserves a flat signal
+        // almost entirely in the DC coefficient).
+        let residue = [10i32; 16];
+        let freq = forward_dct(&residue);
+        let q = quantize_block(&freq, 8, 8);
+        let mut dequant = [0i32; 16];
+        for (d, &c) in dequant.iter_mut().zip(q.iter()) {
+            *d = c * 8;
+        }
+        let back = inverse_dct(&dequant);
+        for &v in &back {
+            assert!((v - 10).abs() <= 4, "expected ~10, got {v}");
+        }
+    }
+
+    #[test]
+    fn quantize_one_rounds_to_nearest_and_keeps_sign() {
+        assert_eq!(quantize_one(0, 8), 0);
+        assert_eq!(quantize_one(4, 8), 1); // (4+4)/8 = 1
+        assert_eq!(quantize_one(3, 8), 0); // (3+4)/8 = 0
+        assert_eq!(quantize_one(-4, 8), -1);
+        assert_eq!(quantize_one(100, 0), 0);
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn forward_transforms_never_panic(coeffs in proptest::collection::vec(-255i32..=255, 16)) {
+            let mut arr = [0i32; 16];
+            arr.copy_from_slice(&coeffs);
+            let _ = forward_dct(&arr);
+            let _ = forward_wht(&arr);
+        }
+    }
+
+    /// A literal, flat-indexed transcription of `libvpx`'s
+    /// `vp8_short_fdct4x4_c`/`vp8_short_walsh4x4_c`, kept only as a
+    /// differential oracle for [`forward_dct`]/[`forward_wht`]'s
+    /// transpose-based restructuring: two implementations shaped
+    /// differently enough (raw index arithmetic vs. matrix
+    /// transpose-around-a-shared-pass) that a transcription slip in either
+    /// one is very unlikely to agree with the other by accident, unlike two
+    /// verbatim copies of the same code (`AGENT-CONSTRAINTS.md`'s "an oracle
+    /// you wrote shares your misreading").
+    #[allow(clippy::indexing_slicing, reason = "test-only literal port, mirroring the C source's own indexing")]
+    mod literal_reference {
+        pub(super) fn fdct(input: &[i32; 16]) -> [i32; 16] {
+            let mut tmp = [0i32; 16];
+            for i in 0..4 {
+                let ip = [input[i * 4], input[i * 4 + 1], input[i * 4 + 2], input[i * 4 + 3]];
+                let a1 = (ip[0] + ip[3]) * 8;
+                let b1 = (ip[1] + ip[2]) * 8;
+                let c1 = (ip[1] - ip[2]) * 8;
+                let d1 = (ip[0] - ip[3]) * 8;
+                tmp[i * 4] = a1 + b1;
+                tmp[i * 4 + 2] = a1 - b1;
+                tmp[i * 4 + 1] = (c1 * 2217 + d1 * 5352 + 14500) >> 12;
+                tmp[i * 4 + 3] = (d1 * 2217 - c1 * 5352 + 7500) >> 12;
+            }
+            let mut out = [0i32; 16];
+            for i in 0..4 {
+                let a1 = tmp[i] + tmp[i + 12];
+                let b1 = tmp[i + 4] + tmp[i + 8];
+                let c1 = tmp[i + 4] - tmp[i + 8];
+                let d1 = tmp[i] - tmp[i + 12];
+                out[i] = (a1 + b1 + 7) >> 4;
+                out[i + 8] = (a1 - b1 + 7) >> 4;
+                out[i + 4] = ((c1 * 2217 + d1 * 5352 + 12000) >> 16) + i32::from(d1 != 0);
+                out[i + 12] = (d1 * 2217 - c1 * 5352 + 51000) >> 16;
+            }
+            out
+        }
+
+        pub(super) fn fwht(input: &[i32; 16]) -> [i32; 16] {
+            let mut tmp = [0i32; 16];
+            for i in 0..4 {
+                let ip = [input[i * 4], input[i * 4 + 1], input[i * 4 + 2], input[i * 4 + 3]];
+                let a1 = (ip[0] + ip[2]) * 4;
+                let d1 = (ip[1] + ip[3]) * 4;
+                let c1 = (ip[1] - ip[3]) * 4;
+                let b1 = (ip[0] - ip[2]) * 4;
+                tmp[i * 4] = a1 + d1 + i32::from(a1 != 0);
+                tmp[i * 4 + 1] = b1 + c1;
+                tmp[i * 4 + 2] = b1 - c1;
+                tmp[i * 4 + 3] = a1 - d1;
+            }
+            let mut out = [0i32; 16];
+            for i in 0..4 {
+                let a1 = tmp[i] + tmp[i + 8];
+                let d1 = tmp[i + 4] + tmp[i + 12];
+                let c1 = tmp[i + 4] - tmp[i + 12];
+                let b1 = tmp[i] - tmp[i + 8];
+                let mut a2 = a1 + d1;
+                let mut b2 = b1 + c1;
+                let mut c2 = b1 - c1;
+                let mut d2 = a1 - d1;
+                a2 += i32::from(a2 < 0);
+                b2 += i32::from(b2 < 0);
+                c2 += i32::from(c2 < 0);
+                d2 += i32::from(d2 < 0);
+                out[i] = (a2 + 3) >> 3;
+                out[i + 4] = (b2 + 3) >> 3;
+                out[i + 8] = (c2 + 3) >> 3;
+                out[i + 12] = (d2 + 3) >> 3;
+            }
+            out
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn forward_dct_matches_the_literal_flat_index_port(coeffs in proptest::collection::vec(-255i32..=255, 16)) {
+            let mut arr = [0i32; 16];
+            arr.copy_from_slice(&coeffs);
+            assert_eq!(forward_dct(&arr), literal_reference::fdct(&arr));
+        }
+
+        #[test]
+        fn forward_wht_matches_the_literal_flat_index_port(coeffs in proptest::collection::vec(-2048i32..=2047, 16)) {
+            let mut arr = [0i32; 16];
+            arr.copy_from_slice(&coeffs);
+            assert_eq!(forward_wht(&arr), literal_reference::fwht(&arr));
+        }
     }
 
     proptest::proptest! {

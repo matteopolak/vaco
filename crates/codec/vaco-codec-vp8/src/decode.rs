@@ -389,7 +389,7 @@ fn decode_macroblock(
     store_mb(ctx, col, row, segment_id, skip_coeff, ref_frame, mode, whole_mv, stored_sub_mvs, is_splitmv);
 }
 
-fn mv_bounds(col: usize, row: usize, mb_cols: usize, mb_rows: usize) -> (i32, i32, i32, i32) {
+pub(crate) fn mv_bounds(col: usize, row: usize, mb_cols: usize, mb_rows: usize) -> (i32, i32, i32, i32) {
     let col = ix(col);
     let row = ix(row);
     let to_left = -((col + 1) << 7);
@@ -950,7 +950,7 @@ fn reconstruction_filter(version: u8) -> (bool, bool) {
     }
 }
 
-fn mc_block<const W: usize, const H: usize>(refp: &Plane, x: i32, y: i32, mv: Mv, version: u8) -> [[u8; W]; H] {
+pub(crate) fn mc_block<const W: usize, const H: usize>(refp: &Plane, x: i32, y: i32, mv: Mv, version: u8) -> [[u8; W]; H] {
     let (bilinear, full_pel) = reconstruction_filter(version);
     let mv = if full_pel { (mv.0 & !7, mv.1 & !7) } else { mv };
     let int_r = mv.0 >> 3;
@@ -967,118 +967,39 @@ fn mc_block<const W: usize, const H: usize>(refp: &Plane, x: i32, y: i32, mv: Mv
     )
 }
 
+/// Build [`loopfilter::MbFilterInfo`] for every macroblock and hand the
+/// whole frame to [`loopfilter::apply_frame`] — the shared implementation
+/// [`crate::encode`] also drives, so a decoded reference frame and an
+/// encoded one that reconstructs the same macroblocks are filtered
+/// identically.
 fn apply_loop_filter(ctx: &mut FrameCtx<'_>) {
     if ctx.header.filter_level == 0 {
         return;
     }
-    for row in 0..ctx.mb_rows {
-        for col in 0..ctx.mb_cols {
-            let Some(mb) = ctx.mb_at(ix(col), ix(row)) else { continue };
-            if mb.filter_level == 0 {
-                continue;
-            }
-            let il = loopfilter::interior_limit(mb.filter_level, ctx.header.sharpness_level);
-            let (mbe, sbe) = loopfilter::edge_limits(mb.filter_level, il);
-            let hev = loopfilter::hev_threshold(mb.filter_level, ctx.header.key_frame);
-            let skip_inner = mb.skip_coeff && mb.has_y2;
-
-            if col > 0 {
-                filter_vertical_edge(&mut ctx.y, ix(col * 16), ix(row * 16), 16, hev, il, mbe, true, ctx.header.filter_simple);
-                if !ctx.header.filter_simple {
-                    filter_vertical_edge(&mut ctx.u, ix(col * 8), ix(row * 8), 8, hev, il, mbe, true, false);
-                    filter_vertical_edge(&mut ctx.v, ix(col * 8), ix(row * 8), 8, hev, il, mbe, true, false);
-                }
-            }
-            if !skip_inner {
-                for k in [4, 8, 12] {
-                    filter_vertical_edge(&mut ctx.y, ix(col * 16 + k), ix(row * 16), 16, hev, il, sbe, false, ctx.header.filter_simple);
-                }
-                if !ctx.header.filter_simple {
-                    filter_vertical_edge(&mut ctx.u, ix(col * 8 + 4), ix(row * 8), 8, hev, il, sbe, false, false);
-                    filter_vertical_edge(&mut ctx.v, ix(col * 8 + 4), ix(row * 8), 8, hev, il, sbe, false, false);
-                }
-            }
-            if row > 0 {
-                filter_horizontal_edge(&mut ctx.y, ix(col * 16), ix(row * 16), 16, hev, il, mbe, true, ctx.header.filter_simple);
-                if !ctx.header.filter_simple {
-                    filter_horizontal_edge(&mut ctx.u, ix(col * 8), ix(row * 8), 8, hev, il, mbe, true, false);
-                    filter_horizontal_edge(&mut ctx.v, ix(col * 8), ix(row * 8), 8, hev, il, mbe, true, false);
-                }
-            }
-            if !skip_inner {
-                for k in [4, 8, 12] {
-                    filter_horizontal_edge(&mut ctx.y, ix(col * 16), ix(row * 16 + k), 16, hev, il, sbe, false, ctx.header.filter_simple);
-                }
-                if !ctx.header.filter_simple {
-                    filter_horizontal_edge(&mut ctx.u, ix(col * 8), ix(row * 8 + 4), 8, hev, il, sbe, false, false);
-                    filter_horizontal_edge(&mut ctx.v, ix(col * 8), ix(row * 8 + 4), 8, hev, il, sbe, false, false);
-                }
-            }
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn filter_vertical_edge(plane: &mut Plane, x: i32, y: i32, len: i32, hev: i32, il: i32, limit: i32, mb_edge: bool, simple: bool) {
-    for i in 0..len {
-        let row = y + i;
-        let get = |o: i32| plane.get(x + o, row);
-        if simple {
-            let (np0, nq0) = loopfilter::simple_filter(limit, get(-2), get(-1), get(0), get(1));
-            plane.set(ux(x - 1), ux(row), np0);
-            plane.set(ux(x), ux(row), nq0);
-            continue;
-        }
-        // Inner-to-outer (nearest edge pixel first), matching loopfilter.rs's
-        // convention: p[0]/q[0] are the two pixels immediately straddling
-        // the edge.
-        let p = [get(-1), get(-2), get(-3), get(-4)];
-        let q = [get(0), get(1), get(2), get(3)];
-        let (np, nq) = if mb_edge {
-            loopfilter::mb_filter(hev, il, limit, p, q)
-        } else {
-            loopfilter::subblock_filter(hev, il, limit, p, q)
-        };
-        for k in 0..4 {
-            if let Some(&v) = np.get(k) {
-                plane.set(ux(x - 1 - ix(k)), ux(row), v);
-            }
-            if let Some(&v) = nq.get(k) {
-                plane.set(ux(x + ix(k)), ux(row), v);
-            }
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn filter_horizontal_edge(plane: &mut Plane, x: i32, y: i32, len: i32, hev: i32, il: i32, limit: i32, mb_edge: bool, simple: bool) {
-    for i in 0..len {
-        let col = x + i;
-        let get = |o: i32| plane.get(col, y + o);
-        if simple {
-            let (np0, nq0) = loopfilter::simple_filter(limit, get(-2), get(-1), get(0), get(1));
-            plane.set(ux(col), ux(y - 1), np0);
-            plane.set(ux(col), ux(y), nq0);
-            continue;
-        }
-        // Inner-to-outer (nearest edge pixel first); see the comment in
-        // `filter_vertical_edge`.
-        let p = [get(-1), get(-2), get(-3), get(-4)];
-        let q = [get(0), get(1), get(2), get(3)];
-        let (np, nq) = if mb_edge {
-            loopfilter::mb_filter(hev, il, limit, p, q)
-        } else {
-            loopfilter::subblock_filter(hev, il, limit, p, q)
-        };
-        for k in 0..4 {
-            if let Some(&v) = np.get(k) {
-                plane.set(ux(col), ux(y - 1 - ix(k)), v);
-            }
-            if let Some(&v) = nq.get(k) {
-                plane.set(ux(col), ux(y + ix(k)), v);
-            }
-        }
-    }
+    let mb_info: Vec<loopfilter::MbFilterInfo> = (0..ctx.mb_rows * ctx.mb_cols)
+        .map(|idx| {
+            #[allow(clippy::integer_division, reason = "splitting a flat macroblock index into its (col, row) grid position")]
+            let (col, row) = (idx % ctx.mb_cols.max(1), idx / ctx.mb_cols.max(1));
+            ctx.mb_at(ix(col), ix(row)).map_or(
+                loopfilter::MbFilterInfo { filter_level: 0, skip_inner: false },
+                |mb| loopfilter::MbFilterInfo {
+                    filter_level: mb.filter_level,
+                    skip_inner: mb.skip_coeff && mb.has_y2,
+                },
+            )
+        })
+        .collect();
+    loopfilter::apply_frame(
+        &mut ctx.y,
+        &mut ctx.u,
+        &mut ctx.v,
+        ctx.mb_cols,
+        ctx.mb_rows,
+        ctx.header.sharpness_level,
+        ctx.header.key_frame,
+        ctx.header.filter_simple,
+        &mb_info,
+    );
 }
 
 /// Decoder state that persists across packets: the reference frame slots
