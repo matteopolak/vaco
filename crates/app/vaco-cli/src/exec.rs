@@ -867,9 +867,22 @@ fn open_output(
     // is the real muxer and there is no second construction to pay for.
     // `probe_flags` would discard it and we would build twice on the path where
     // building twice is avoidable.
-    let probe = (desc.open)(Box::new(vaco_format_core::vacoraw::MemorySink::new()))
+    let mut probe = (desc.open)(Box::new(vaco_format_core::vacoraw::MemorySink::new()))
         .map_err(|e| muxer_open_error(out, &e))?;
     if probe.flags().contains(FormatFlags::NOFILE) {
+        return Ok((probe, None));
+    }
+    // Gap 2/#649: the destination is a filename *pattern* (`out_%03d.png`),
+    // not a real file — `crate::output::create` below would happily create a
+    // literal, wrongly-named file for it, exactly the bug reported against
+    // `-f image2` output. Keep this throwaway-sink-backed instance, the same
+    // way the `NOFILE` branch above does, and let `Muxer::bind_url` replace
+    // its state with the real per-file writer `vaco-mux-image2` already
+    // implements correctly.
+    if probe.flags().contains(FormatFlags::NEEDNUMBER) {
+        probe
+            .bind_url(&out.url)
+            .map_err(|e| muxer_open_error(out, &e))?;
         return Ok((probe, None));
     }
     drop(probe);
@@ -1046,6 +1059,54 @@ mod tests {
     fn f_null_resolves_to_the_null_muxer() {
         let (_, o) = out_of(&["-i", "a.mkv", "-f", "null", "-"]);
         assert_eq!(muxer_for(&o).unwrap(), "null");
+    }
+
+    /// Gap 2/#649: `-f image2 'out_%03d.png'` used to have `open_output`
+    /// create a real, literal file named `out_%03d.png` (`crate::output::
+    /// create`, unconditionally, before this) instead of ever reaching the
+    /// per-frame writer. The `NEEDNUMBER` branch added above keeps the
+    /// throwaway-sink-backed probe instance and rebinds it, so no file at the
+    /// literal pattern name is ever created and the real per-frame writer
+    /// (`vaco-mux-image2`) is what `run_pipeline` ends up writing through.
+    #[test]
+    fn f_image2_pattern_output_binds_instead_of_creating_a_literal_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "vaco-cli-exec-test-image2-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let pattern = dir.join("out%03d.png");
+        let pattern = pattern.to_str().unwrap();
+
+        let out = ResolvedOutput {
+            index: 0,
+            url: pattern.to_owned(),
+            format: "image2",
+            streams: Vec::new(),
+            sink: Sink::new(),
+            dropped: false,
+            metadata: MuxMetadata::default(),
+            map_chapters: None,
+            map_metadata: None,
+            format_opts: vaco_format_core::FormatOptions::default(),
+        };
+        let (mut muxer, high_water) = open_output(&out).unwrap();
+        assert!(high_water.is_none());
+        // Never created under the literal, unexpanded name.
+        assert!(!dir.join("out%03d.png").exists());
+
+        muxer
+            .add_stream(&vaco_codec_core::CodecParameters::new(MediaType::Video))
+            .unwrap();
+        muxer.write_header().unwrap();
+        let mut budget = vaco_limits::Budget::new(vaco_limits::Limits::permissive());
+        let p = vaco_packet::Packet::from_slice(&mut budget, b"frame-one").unwrap();
+        muxer.write_packet(&p).unwrap();
+        muxer.write_trailer().unwrap();
+        assert_eq!(std::fs::read(dir.join("out001.png")).unwrap(), b"frame-one");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A format this build demuxes and does not mux, or `None` if every
