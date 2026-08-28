@@ -222,21 +222,69 @@ bytes are only interpreted as `avcC`/`hvcC` where that framing applies.
 the record's own length-size byte, mirroring the demuxer's own AAC/ADTS
 config handling on the audio side.
 
-### `AviMuxer`'s new slot-grid budgets hardcode `Limits::permissive()`
+**Resolved.** `parse_strf`'s video branch now captures trailing bytes as
+extradata, gated on `video_tags::carries_config_record` (`avc1`/`AVC1`/
+`hvc1`/`hev1`, not the Annex-B spellings). `nal_length_size` needed no
+separate demuxer-side handling: it already comes free from the generic
+`vaco-format-core::discovery` pipeline once a codec parser sees the
+extradata, the same path MP4's `avcC` already went through. On the mux side,
+`vaco-mux-avi` was measured writing the *opposite* of both this row's own
+assumption and finding 16's: the reference does not convert H.264/HEVC
+framing in either direction, and neither does this crate any more — see the
+same session's commit for the mux-side change and the `write_strl`
+comment beside `StreamOut::video_extradata`.
 
-`convert_budget` (pre-existing) and `grid_budget` (new, for the 600 Hz
-grid's empty-slot backfill) are both constructed with
-`Budget::new(Limits::permissive())` inside `AviMuxer::new`, ignoring the
-`FormatOptions` the caller passed in. Consistent with the crate's existing
-pattern, and permissive's 1 GiB/2^32-fuel caps are generous enough that no
-real recording should ever hit them — but an embedder who wants a stricter
-bound (the `Limits::strict()`/library-embedding case
-`vaco_limits::Limits`'s own docs describe) cannot get one without a
-`vaco-mux-avi` code change, since nothing threads a caller-supplied
-`Limits` through `Muxer::new`/`FormatOptions` today. Not fixed here: it is
-the same shape as `convert_budget`'s pre-existing choice, not a regression,
-and widening it is a `FormatOptions`/`Muxer` interface question bigger than
-one crate.
+### `AviMuxer`'s slot-grid budgets hardcode `Limits::permissive()`
+
+`grid_budget` (for the 600 Hz grid's empty-slot backfill, both the
+inter-frame case and the trailing-slot extension added this session) is
+constructed with `Budget::new(Limits::permissive())` inside `AviMuxer::new`,
+ignoring the `FormatOptions` the caller passed in. The same budget also now
+bounds the leading-audio-gap backfill (`maybe_backfill_leading_audio_gap`),
+added this session — same shape, same caller-supplied-`Limits` gap.
+Permissive's 1 GiB/2^32-fuel caps are generous enough that no real recording
+should ever hit them, but an embedder who wants a stricter bound (the
+`Limits::strict()`/library-embedding case `vaco_limits::Limits`'s own docs
+describe) cannot get one without a `vaco-mux-avi` code change, since nothing
+threads a caller-supplied `Limits` through `Muxer::new`/`FormatOptions`
+today. Not fixed here: not a regression, and widening it is a
+`FormatOptions`/`Muxer` interface question bigger than one crate.
+`convert_budget`, the other budget this row used to name, no longer exists —
+it belonged to the length-prefixed-to-Annex-B conversion this crate no
+longer performs (see the row above).
+
+### `vaco-mux-avi`: two fields measured but not resolved this session
+
+- **`strf.nBlockAlign` for a compressed (VBR) audio stream.** The one AAC
+  fixture available measured `3`, matching none of
+  `bytes_per_sample × channels` (this crate's own formula, correct for CBR
+  PCM), the sample rate, the declared bit rate, or the channel count in any
+  combination tried. A second compressed-audio fixture with a different
+  channel count or bit rate would very likely settle this quickly; none was
+  available this session. This is the one remaining byte-level difference
+  against the reference on the one two-stream fixture measured (2 bytes out
+  of 39304).
+- **The leading-audio-gap formula (`2^has_b_frames - 1`) above
+  `has_b_frames = 2`.** Confirmed at `n = 0, 1, 2` across seven synthetic
+  `libx264 -bf 0..7` fixtures, but `ffprobe`'s own `has_b_frames` field
+  capped at 2 for every `-bf` value this build of `libx264` produced past
+  that point, so `n = 3` and above were never observed. A source that
+  reports `has_b_frames >= 3` (a different encoder, or a hand-built SPS)
+  would settle whether the pattern really is `2^n - 1` or coincidentally
+  matches only for small `n`.
+
+### `just fuzz <target>` has no time limit
+
+`justfile`'s `fuzz` recipe (singular, as opposed to `fuzz-all`) runs
+`cargo +nightly fuzz run {{target}}` with no `-max_total_time`, unlike
+`fuzz-all`'s own `secs` parameter. Run as `just fuzz avi_mux_packet` this
+session, it sat at 100% CPU for several minutes past the intended 30-second
+breadth-phase budget before being noticed and killed manually. Not fixed
+here (a one-crate session is not the place to change a shared recipe used
+by every fuzz target); the workaround is to invoke `cargo +nightly fuzz run
+<target> -- -max_total_time=30` directly rather than `just fuzz`, or to add
+a default `secs` parameter to the `fuzz` recipe itself mirroring
+`fuzz-all`'s.
 
 ### `cargo fmt -p <crate>` reflows lines you never touched, which makes it unsafe here too
 
