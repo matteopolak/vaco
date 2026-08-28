@@ -54,10 +54,12 @@
 
 pub mod grammar;
 
-use vaco_codec_core::CodecParameters;
+use vaco_codec_core::{CodecId, CodecParameters};
 use vaco_core::{Error, MediaType, Rational, Result};
 use vaco_format_core::flags::FormatFlags;
-use vaco_format_core::{Muxer, MuxerDesc};
+use vaco_format_core::metadata::MuxMetadata;
+use vaco_format_core::mux::{BitstreamAction, CodecSupport};
+use vaco_format_core::{Muxer, MuxerDesc, StreamSpec};
 use vaco_io::MediaSink;
 use vaco_packet::Packet;
 
@@ -207,6 +209,20 @@ impl Muxer for TeeMuxer {
     }
 
     fn add_stream(&mut self, params: &CodecParameters) -> Result<u32> {
+        // `add_stream_with`'s default already forwards to a slot's own
+        // `add_stream` when it has not overridden the wider method, so this
+        // is behaviourally identical to what stood here before — it just
+        // stops being a second, divergent copy of the fan-out bookkeeping.
+        self.add_stream_with(params, &StreamSpec::default())
+    }
+
+    /// [`Muxer::add_stream`], plus [`StreamSpec`] — forwarded per slot rather
+    /// than dropped, which is the exact "tee... has the same obligation"
+    /// case `Muxer::add_stream_with`'s own doc comment names (gap 9,
+    /// `planning/INTERFACE-GAPS.md`). Before this override, every tee output
+    /// silently lost a stream-copy time base a slot's own muxer (a
+    /// `FrameHashMuxer`, say) would otherwise have used.
+    fn add_stream_with(&mut self, params: &CodecParameters, spec: &StreamSpec) -> Result<u32> {
         let global_index = self.stream_media.len() as u32;
         let media = params.media_type;
         let nth = self
@@ -223,13 +239,33 @@ impl Muxer for TeeMuxer {
         for slot in &mut self.slots {
             let selected = slot.selector.matches(media, nth);
             let local = if selected {
-                slot.muxer.add_stream(params).ok()
+                slot.muxer.add_stream_with(params, spec).ok()
             } else {
                 None
             };
             slot.local_index.push(local);
         }
         Ok(global_index)
+    }
+
+    /// Forwarded per slot, honouring each output's own `onfail=` policy
+    /// exactly as [`Muxer::write_header`] does below — a slot whose `init`
+    /// fails is exactly as dead as one whose header write fails, and treating
+    /// the two differently would let a slot survive `init` failure only to
+    /// be asked to write a header it was never actually settled for.
+    fn init(&mut self) -> Result<()> {
+        let mut any_hard_failure = None;
+        for slot in &mut self.slots {
+            if let Err(e) = slot.muxer.init() {
+                match slot.on_fail {
+                    OnFail::Ignore => slot.alive = false,
+                    OnFail::Abort => {
+                        any_hard_failure.get_or_insert(e);
+                    }
+                }
+            }
+        }
+        any_hard_failure.map_or(Ok(()), Err)
     }
 
     fn write_header(&mut self) -> Result<()> {
@@ -284,6 +320,128 @@ impl Muxer for TeeMuxer {
         // without knowing which slot the caller means.
         None
     }
+
+    // `interleave` deliberately keeps the trait's own default
+    // (`interleave_per_dts`) rather than delegating to any one slot: this
+    // layer owns a single shared queue upstream of the per-slot fan-out in
+    // `write_packet`, and slots can want incompatible policies (MPEG-TS
+    // wants none at all; MOV fragmented mode wants per-fragment). Per-DTS is
+    // the same "loosest common reading" `flags` already gives, and it is not
+    // overridden below only because there is nothing to forward it *to* —
+    // no single slot's answer would be correct for every other slot.
+
+    fn check_bitstream(
+        &mut self,
+        params: &CodecParameters,
+        packet: &Packet,
+    ) -> Result<BitstreamAction> {
+        // Deliberately not forwarded to a slot. This layer runs no BSF chain
+        // of its own across slots (the module doc's `bsfs=`/`bsfs/<type>=`
+        // note: parsed but "not applied"), so `write_packet` hands every
+        // slot the same, unconverted bytes. Answering a slot's real
+        // preference here would make the caller convert the packet *once*,
+        // upstream of the fan-out, for every slot regardless of whether that
+        // slot wanted it — which could feed a converted-away form to a slot
+        // that needed the original. `Keep`, the default, matches what
+        // `write_packet` already does today.
+        let _ = (params, packet);
+        Ok(BitstreamAction::Keep)
+    }
+
+    /// Best effort, matching `add_stream`'s own per-slot tolerance: a codec
+    /// this tee can carry on *any* output must not be blocked upfront just
+    /// because another output cannot take it — `add_stream` already lets a
+    /// slot that cannot take a stream silently drop it rather than failing
+    /// the whole tee, and refusing here would be stricter than that.
+    fn query_codec(&self, codec: CodecId, strict: i32) -> CodecSupport {
+        let mut best = CodecSupport::Unsupported;
+        for slot in &self.slots {
+            let support = slot.muxer.query_codec(codec, strict);
+            if support == CodecSupport::Supported {
+                return support;
+            }
+            if support == CodecSupport::Experimental && best == CodecSupport::Unsupported {
+                best = support;
+            }
+        }
+        best
+    }
+
+    fn write_flush(&mut self) -> Result<()> {
+        let mut first_err = None;
+        for slot in &mut self.slots {
+            if !slot.alive {
+                continue;
+            }
+            if let Err(e) = slot.muxer.write_flush() {
+                first_err.get_or_insert(e);
+            }
+        }
+        first_err.map_or(Ok(()), Err)
+    }
+
+    /// Forwarded to every alive slot. Before this override, `-metadata` and
+    /// chapters/attachments were silently dropped for every tee'd output —
+    /// the most consequential of this file's gaps, since it produces wrong
+    /// files quietly on ordinary use rather than failing loudly.
+    fn set_metadata(&mut self, metadata: &MuxMetadata) -> Result<()> {
+        let mut first_err = None;
+        for slot in &mut self.slots {
+            if !slot.alive {
+                continue;
+            }
+            if let Err(e) = slot.muxer.set_metadata(metadata) {
+                first_err.get_or_insert(e);
+            }
+        }
+        first_err.map_or(Ok(()), Err)
+    }
+
+    /// Forwarded to every alive slot, for the same reason as
+    /// [`Muxer::set_metadata`] above: before this override, `-bitexact`
+    /// silently had no effect on any tee'd output.
+    fn set_bitexact(&mut self, bitexact: bool) {
+        for slot in &mut self.slots {
+            if slot.alive {
+                slot.muxer.set_bitexact(bitexact);
+            }
+        }
+    }
+
+    /// Broadcast to every alive slot; an option name is inherently specific
+    /// to one container, so most slots are expected to reject it. Answering
+    /// `Ok` if *any* slot accepted mirrors `query_codec`'s best-effort
+    /// reading above — a `-movflags` meant for the one MOV output in a tee
+    /// must not fail the whole write because a sibling MPEG-TS output does
+    /// not recognise it.
+    fn set_option(&mut self, name: &str, value: &str) -> Result<()> {
+        let mut last_err = None;
+        let mut any_ok = false;
+        for slot in &mut self.slots {
+            if !slot.alive {
+                continue;
+            }
+            match slot.muxer.set_option(name, value) {
+                Ok(()) => any_ok = true,
+                Err(e) => last_err = Some(e),
+            }
+        }
+        if any_ok {
+            return Ok(());
+        }
+        Err(last_err.unwrap_or(Error::Option {
+            name: name.to_owned(),
+            detail: "tee: no live output slot accepted this option".to_owned(),
+        }))
+    }
+
+    // `bind_url` deliberately keeps the trait's default (`Unsupported`).
+    // Unlike a muxer reached through `MuxerDesc::open`'s placeholder-sink
+    // dance, a `TeeMuxer` is never constructed that way at all — the module
+    // doc's "the registry seam does not fit this format" note already
+    // explains why `open_tee` below always refuses. Every slot's own sink is
+    // already fully resolved by the time `TeeMuxer::new` runs, so there is
+    // no placeholder state left for a URL to rebind.
 }
 
 /// The registry `open` path: always [`vaco_core::Error::Unsupported`] — see
@@ -309,6 +467,8 @@ pub static MUXER_TEE: MuxerDesc = MuxerDesc {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use super::*;
     use vaco_format_core::options::FormatOptions;
     use vaco_format_core::vacoraw::{MemorySink, VacoRawMuxer};
@@ -411,5 +571,115 @@ mod tests {
         let sink = Box::new(MemorySink::new());
         assert!(open_tee(sink).is_err());
         assert!(MUXER_TEE.matches_name("tee"));
+    }
+
+    /// Records what it was told, rather than doing anything with it — the
+    /// only way to observe whether `TeeMuxer` actually forwards a call
+    /// through to a slot, since `VacoRawMuxer` does not expose its own
+    /// received metadata/bitexact state for a test to inspect.
+    #[derive(Default)]
+    struct RecordingMuxer {
+        metadata: Arc<Mutex<Option<MuxMetadata>>>,
+        bitexact: Arc<Mutex<Option<bool>>>,
+    }
+    impl Muxer for RecordingMuxer {
+        fn add_stream(&mut self, _p: &CodecParameters) -> Result<u32> {
+            Ok(0)
+        }
+        fn write_header(&mut self) -> Result<()> {
+            Ok(())
+        }
+        fn write_packet(&mut self, _p: &Packet) -> Result<()> {
+            Ok(())
+        }
+        fn write_trailer(&mut self) -> Result<()> {
+            Ok(())
+        }
+        fn set_metadata(&mut self, metadata: &MuxMetadata) -> Result<()> {
+            *self.metadata.lock().unwrap() = Some(metadata.clone());
+            Ok(())
+        }
+        fn set_bitexact(&mut self, bitexact: bool) {
+            *self.bitexact.lock().unwrap() = Some(bitexact);
+        }
+    }
+
+    /// The consequential case named in `planning/TECH-DEBT.md`'s wrapper
+    /// audit: without `TeeMuxer::set_metadata`/`set_bitexact` forwarding,
+    /// `-metadata` and `-bitexact` are silently dropped for every tee'd
+    /// output, which is wrong output produced quietly rather than a loud
+    /// failure. Reverting either override — replacing its body with `Ok(())`
+    /// / `()` — makes this test fail, confirmed by hand before this comment
+    /// was written.
+    #[test]
+    fn set_metadata_and_set_bitexact_reach_every_slot() {
+        let metadata_a = Arc::new(Mutex::new(None));
+        let bitexact_a = Arc::new(Mutex::new(None));
+        let metadata_b = Arc::new(Mutex::new(None));
+        let bitexact_b = Arc::new(Mutex::new(None));
+        let slot_a: Box<dyn Muxer> = Box::new(RecordingMuxer {
+            metadata: metadata_a.clone(),
+            bitexact: bitexact_a.clone(),
+        });
+        let slot_b: Box<dyn Muxer> = Box::new(RecordingMuxer {
+            metadata: metadata_b.clone(),
+            bitexact: bitexact_b.clone(),
+        });
+        let outputs = grammar::parse("a.out|b.out").unwrap();
+        let mut tee = TeeMuxer::new(&outputs, vec![slot_a, slot_b]).unwrap();
+
+        let mut meta = MuxMetadata::default();
+        meta.tags.push(("title".to_owned(), "a tee'd file".to_owned()));
+        tee.set_metadata(&meta).unwrap();
+        tee.set_bitexact(true);
+
+        for (m, b) in [(&metadata_a, &bitexact_a), (&metadata_b, &bitexact_b)] {
+            assert_eq!(
+                m.lock().unwrap().as_ref().map(|md| md.tags.clone()),
+                Some(vec![("title".to_owned(), "a tee'd file".to_owned())])
+            );
+            assert_eq!(*b.lock().unwrap(), Some(true));
+        }
+    }
+
+    #[test]
+    fn add_stream_with_forwards_the_stream_spec_to_every_selected_slot() {
+        struct SpecCapturingMuxer {
+            seen: Arc<Mutex<Option<StreamSpec>>>,
+        }
+        impl Muxer for SpecCapturingMuxer {
+            fn add_stream(&mut self, _p: &CodecParameters) -> Result<u32> {
+                Ok(0)
+            }
+            fn add_stream_with(&mut self, _p: &CodecParameters, spec: &StreamSpec) -> Result<u32> {
+                *self.seen.lock().unwrap() = Some(*spec);
+                Ok(0)
+            }
+            fn write_header(&mut self) -> Result<()> {
+                Ok(())
+            }
+            fn write_packet(&mut self, _p: &Packet) -> Result<()> {
+                Ok(())
+            }
+            fn write_trailer(&mut self) -> Result<()> {
+                Ok(())
+            }
+        }
+        let seen = Arc::new(Mutex::new(None));
+        let outputs = grammar::parse("a.out").unwrap();
+        let mut tee = TeeMuxer::new(
+            &outputs,
+            vec![Box::new(SpecCapturingMuxer { seen: seen.clone() })],
+        )
+        .unwrap();
+        let spec = StreamSpec {
+            time_base: Some(Rational::new(1, 90_000)),
+        };
+        tee.add_stream_with(&params(MediaType::Video), &spec)
+            .unwrap();
+        assert_eq!(
+            seen.lock().unwrap().and_then(|s| s.time_base),
+            spec.time_base
+        );
     }
 }

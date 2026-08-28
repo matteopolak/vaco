@@ -75,7 +75,9 @@ use std::collections::HashMap;
 use vaco_codec_core::CodecParameters;
 use vaco_core::{Duration, Error, MediaType, Result, Timestamp};
 use vaco_format_core::flags::FormatFlags;
-use vaco_format_core::{Muxer, MuxerDesc};
+use vaco_format_core::metadata::MuxMetadata;
+use vaco_format_core::mux::BitstreamAction;
+use vaco_format_core::{Muxer, MuxerDesc, StreamSpec};
 use vaco_io::MediaSink;
 use vaco_packet::Packet;
 
@@ -154,7 +156,12 @@ pub struct SegmentMuxer {
     pattern: String,
     options: SegmentOptions,
     factory: SegmentFactory,
-    stream_params: Vec<CodecParameters>,
+    /// Each declared stream's [`CodecParameters`] plus the [`StreamSpec`] it
+    /// was declared with (gap 9, `planning/INTERFACE-GAPS.md`) — replayed
+    /// into every new segment's inner muxer in [`Self::open_next_segment`],
+    /// since each segment is its own fresh [`Muxer`] that never itself saw
+    /// the original [`Muxer::add_stream_with`] call.
+    stream_params: Vec<(CodecParameters, StreamSpec)>,
     reference_stream: Option<u32>,
     planner: SegmentPlanner,
     current: Option<Box<dyn Muxer>>,
@@ -172,6 +179,21 @@ pub struct SegmentMuxer {
     records: Vec<SegmentRecord>,
     current_start_seconds: f64,
     list_sink: Option<Box<dyn MediaSink>>,
+    /// Captured from [`Muxer::set_metadata`] and replayed onto every new
+    /// segment's inner muxer. Before this field existed there was nowhere to
+    /// keep the call at all: each segment is a fresh [`Muxer`] created after
+    /// the one and only call `MuxBuilder::open` makes, so a plain forward to
+    /// `self.current` (as `TeeMuxer` does, where there is exactly one
+    /// muxer for the whole write) would have reached only the first segment.
+    metadata: MuxMetadata,
+    /// Captured from [`Muxer::set_bitexact`], for the same reason as
+    /// `metadata` above.
+    bitexact: bool,
+    /// Captured from [`Muxer::set_option`], for the same reason as
+    /// `metadata` above — a muxer-private option (`-movflags`, say, for an
+    /// mp4-per-segment factory) is meant for every segment, not just
+    /// whichever one happened to be open when it was set.
+    options_set: Vec<(String, String)>,
 }
 
 impl core::fmt::Debug for SegmentMuxer {
@@ -214,6 +236,9 @@ impl SegmentMuxer {
             records: Vec::new(),
             current_start_seconds: 0.0,
             list_sink: None,
+            metadata: MuxMetadata::default(),
+            bitexact: false,
+            options_set: Vec::new(),
         }
     }
 
@@ -234,7 +259,7 @@ impl SegmentMuxer {
     fn resolve_reference_stream(&self) -> Option<u32> {
         self.stream_params
             .iter()
-            .position(|p| p.media_type == Some(MediaType::Video))
+            .position(|(p, _)| p.media_type == Some(MediaType::Video))
             .or(if self.stream_params.is_empty() {
                 None
             } else {
@@ -263,9 +288,21 @@ impl SegmentMuxer {
     fn open_next_segment(&mut self) -> Result<()> {
         let name = self.next_filename();
         let mut inner = (self.factory)(&name)?;
-        for params in self.stream_params.clone() {
-            inner.add_stream(&params)?;
+        for (params, spec) in self.stream_params.clone() {
+            inner.add_stream_with(&params, &spec)?;
         }
+        inner.init()?;
+        for (name, value) in &self.options_set {
+            // Best effort: an option meant for one segment format that a
+            // later `-segment_format` change made irrelevant should not
+            // abort the whole write. `Muxer::set_option`'s own default
+            // already always errs for a name a muxer does not know, so a
+            // factory whose muxer never grew options behaves exactly as
+            // before this loop existed.
+            let _ = inner.set_option(name, value);
+        }
+        inner.set_metadata(&self.metadata)?;
+        inner.set_bitexact(self.bitexact);
         inner.write_header()?;
         self.current = Some(inner);
         self.segment_base.clear();
@@ -322,8 +359,22 @@ impl Muxer for SegmentMuxer {
     }
 
     fn add_stream(&mut self, params: &CodecParameters) -> Result<u32> {
+        // `add_stream_with`'s default already forwards to `add_stream` on a
+        // segment's own inner muxer when that muxer has no opinion on
+        // `StreamSpec`, so this is behaviourally identical to storing the
+        // params directly — it just goes through the one place that also
+        // captures `spec` for the segments not yet opened.
+        self.add_stream_with(params, &StreamSpec::default())
+    }
+
+    /// [`Muxer::add_stream`], plus [`StreamSpec`] — captured and replayed
+    /// into every future segment's own `add_stream_with` in
+    /// [`Self::open_next_segment`] (gap 9, `planning/INTERFACE-GAPS.md`).
+    /// Before this override, a stream-copy time base was dropped for every
+    /// segment this muxer ever opened, not just the first.
+    fn add_stream_with(&mut self, params: &CodecParameters, spec: &StreamSpec) -> Result<u32> {
         let idx = self.stream_params.len() as u32;
-        self.stream_params.push(params.clone());
+        self.stream_params.push((params.clone(), *spec));
         Ok(idx)
     }
 
@@ -378,6 +429,98 @@ impl Muxer for SegmentMuxer {
         }
         Ok(())
     }
+
+    // `init` deliberately keeps the trait's default (`Ok(())`): unlike
+    // `write_header` below, no inner muxer exists yet for this to forward
+    // to — `self.current` is only created lazily inside
+    // `open_next_segment`, which is not called until `write_header`. Each
+    // segment's own inner muxer still gets its own `init()` call, from
+    // `open_next_segment` itself, once there is something to call it on.
+
+    // `stream_time_base` deliberately keeps the trait's default (`None`),
+    // and this one is not optional: `write_packet` above is written against
+    // "every packet arrives already in `TIME_BASE_Q` microseconds", which is
+    // only true because `None` here tells the M1 rescale step upstream to
+    // leave packets in that base. Forwarding to `self.current`'s own answer
+    // (an inner MP4 or MPEG-TS muxer's real time base) would make the
+    // upstream rescale target *that* base instead, silently breaking the
+    // cut-decision arithmetic `planner`'s module docs describe. Not touched
+    // by this pass — flagged rather than guessed at.
+
+    // `interleave` deliberately keeps the trait's default
+    // (`interleave_per_dts`), for the same reason as `TeeMuxer`: this layer
+    // owns one shared queue upstream of `write_packet`'s per-segment
+    // routing, and `self.current` is swapped out mid-stream by every cut —
+    // an inner muxer's own interleave preference from *before* a cut is not
+    // even meaningfully "the same muxer" as the one after it.
+
+    fn check_bitstream(
+        &mut self,
+        params: &CodecParameters,
+        packet: &Packet,
+    ) -> Result<BitstreamAction> {
+        // Unlike `TeeMuxer`, there is exactly one live inner muxer at a
+        // time here, so its own answer is unambiguous and safe to forward.
+        self.current
+            .as_mut()
+            .map_or(Ok(BitstreamAction::Keep), |m| {
+                m.check_bitstream(params, packet)
+            })
+    }
+
+    // `query_codec` deliberately keeps the trait's default
+    // (`Supported`): unlike `check_bitstream` above, this is asked by
+    // `MuxBuilder::add_stream` *before* any segment exists to ask —
+    // `self.current` is `None` until `write_header`, and the only way to
+    // get a real answer would be invoking `factory` speculatively, which
+    // has the side effect of actually opening a file. Not forwarded rather
+    // than forwarded wrongly.
+
+    fn write_flush(&mut self) -> Result<()> {
+        self.current
+            .as_mut()
+            .map_or(Ok(()), vaco_format_core::Muxer::write_flush)
+    }
+
+    /// Captured, then forwarded to every future segment's own inner muxer
+    /// from [`Self::open_next_segment`] — see the `metadata` field's doc for
+    /// why capture rather than a plain forward is required here. Also
+    /// forwarded to `self.current` immediately, for a caller that calls this
+    /// after `write_header` (unusual, but not prohibited by the trait).
+    fn set_metadata(&mut self, metadata: &MuxMetadata) -> Result<()> {
+        self.metadata = metadata.clone();
+        self.current
+            .as_mut()
+            .map_or(Ok(()), |m| m.set_metadata(metadata))
+    }
+
+    /// Captured and forwarded, for the same reason as [`Muxer::set_metadata`]
+    /// above.
+    fn set_bitexact(&mut self, bitexact: bool) {
+        self.bitexact = bitexact;
+        if let Some(m) = self.current.as_mut() {
+            m.set_bitexact(bitexact);
+        }
+    }
+
+    /// Captured and forwarded, for the same reason as [`Muxer::set_metadata`]
+    /// above. Errors from the immediate forward to `self.current` are
+    /// reported (a caller setting an option it expects this exact segment's
+    /// muxer to understand should hear about a typo); errors from replaying
+    /// a captured option onto a *later* segment are not, since a later
+    /// `-segment_format` change can legitimately make an earlier option
+    /// meaningless for the new format.
+    fn set_option(&mut self, name: &str, value: &str) -> Result<()> {
+        self.options_set.push((name.to_owned(), value.to_owned()));
+        self.current
+            .as_mut()
+            .map_or(Ok(()), |m| m.set_option(name, value))
+    }
+
+    // `bind_url` deliberately keeps the trait's default (`Unsupported`), for
+    // the same reason as `TeeMuxer`: `SegmentMuxer` is never constructed
+    // through `MuxerDesc::open`'s placeholder-sink dance at all — see the
+    // module doc's "the registry seam does not fit this format" note above.
 }
 
 /// The registry `open` path: always [`vaco_core::Error::Unsupported`] — see
@@ -559,6 +702,159 @@ mod tests {
         assert!(open_segment(sink).is_err());
         assert!(MUXER_SEGMENT.matches_name("segment"));
         assert!(MUXER_STREAM_SEGMENT.matches_name("stream_segment"));
+    }
+
+    /// Records what it was told rather than doing anything with it, so a
+    /// test can see whether a given segment's own inner muxer actually
+    /// received a forwarded call.
+    struct RecordingMetaMuxer {
+        opened_index: usize,
+        metadata_seen: Arc<Mutex<Vec<(usize, MuxMetadata)>>>,
+        bitexact_seen: Arc<Mutex<Vec<(usize, bool)>>>,
+    }
+    impl Muxer for RecordingMetaMuxer {
+        fn add_stream(&mut self, _p: &CodecParameters) -> Result<u32> {
+            Ok(0)
+        }
+        fn write_header(&mut self) -> Result<()> {
+            Ok(())
+        }
+        fn write_packet(&mut self, _p: &Packet) -> Result<()> {
+            Ok(())
+        }
+        fn write_trailer(&mut self) -> Result<()> {
+            Ok(())
+        }
+        fn set_metadata(&mut self, metadata: &MuxMetadata) -> Result<()> {
+            self.metadata_seen
+                .lock()
+                .unwrap()
+                .push((self.opened_index, metadata.clone()));
+            Ok(())
+        }
+        fn set_bitexact(&mut self, bitexact: bool) {
+            self.bitexact_seen
+                .lock()
+                .unwrap()
+                .push((self.opened_index, bitexact));
+        }
+    }
+
+    /// The clearer-cut case named in `planning/TECH-DEBT.md`'s wrapper
+    /// audit: `SegmentMuxer` had no stored field for metadata or bitexact at
+    /// all, so a future fix could not even replay a call that was never
+    /// captured. This checks the capture actually reaches every segment
+    /// opened *after* the call, not only the one open at the time.
+    #[test]
+    fn set_metadata_and_set_bitexact_are_replayed_into_every_later_segment() {
+        let opened = Arc::new(Mutex::new(0usize));
+        let metadata_seen = Arc::new(Mutex::new(Vec::new()));
+        let bitexact_seen = Arc::new(Mutex::new(Vec::new()));
+        let (opened_c, metadata_c, bitexact_c) =
+            (opened.clone(), metadata_seen.clone(), bitexact_seen.clone());
+        let factory: SegmentFactory = Box::new(move |_name: &str| {
+            let mut idx = opened_c.lock().unwrap();
+            let this_index = *idx;
+            *idx += 1;
+            Ok(Box::new(RecordingMetaMuxer {
+                opened_index: this_index,
+                metadata_seen: metadata_c.clone(),
+                bitexact_seen: bitexact_c.clone(),
+            }) as Box<dyn Muxer>)
+        });
+        let mut seg = SegmentMuxer::new(
+            "out%d.raw",
+            SegmentOptions {
+                segment_time: Duration(1_000_000),
+                ..SegmentOptions::default()
+            },
+            factory,
+        );
+        seg.add_stream(&params(MediaType::Video)).unwrap();
+        seg.write_header().unwrap(); // opens segment 0
+        let mut meta = MuxMetadata::default();
+        meta.tags.push(("title".to_owned(), "segmented".to_owned()));
+        seg.set_metadata(&meta).unwrap();
+        seg.set_bitexact(true);
+        // Force a second segment to open after metadata/bitexact were set.
+        seg.write_packet(&packet(0, 0, true)).unwrap();
+        seg.write_packet(&packet(0, 1500, true)).unwrap(); // cuts to segment 1
+        seg.write_trailer().unwrap();
+
+        assert!(*opened.lock().unwrap() >= 2, "expected at least 2 segments to open");
+        let metadata_seen = metadata_seen.lock().unwrap();
+        let bitexact_seen = bitexact_seen.lock().unwrap();
+        assert!(
+            metadata_seen.iter().any(|(i, _)| *i == 1),
+            "segment 1 should also have received set_metadata: {metadata_seen:?}"
+        );
+        assert!(
+            bitexact_seen.contains(&(1, true)),
+            "segment 1 should also have received set_bitexact(true): {bitexact_seen:?}"
+        );
+    }
+
+    #[test]
+    fn add_stream_with_time_base_is_replayed_into_every_segment() {
+        struct SpecCapturingMuxer {
+            opened_index: usize,
+            seen: Arc<Mutex<Vec<(usize, Option<vaco_core::Rational>)>>>,
+        }
+        impl Muxer for SpecCapturingMuxer {
+            fn add_stream(&mut self, _p: &CodecParameters) -> Result<u32> {
+                Ok(0)
+            }
+            fn add_stream_with(&mut self, _p: &CodecParameters, spec: &StreamSpec) -> Result<u32> {
+                self.seen
+                    .lock()
+                    .unwrap()
+                    .push((self.opened_index, spec.time_base));
+                Ok(0)
+            }
+            fn write_header(&mut self) -> Result<()> {
+                Ok(())
+            }
+            fn write_packet(&mut self, _p: &Packet) -> Result<()> {
+                Ok(())
+            }
+            fn write_trailer(&mut self) -> Result<()> {
+                Ok(())
+            }
+        }
+        let opened = Arc::new(Mutex::new(0usize));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let (opened_c, seen_c) = (opened.clone(), seen.clone());
+        let factory: SegmentFactory = Box::new(move |_name: &str| {
+            let mut idx = opened_c.lock().unwrap();
+            let this_index = *idx;
+            *idx += 1;
+            Ok(Box::new(SpecCapturingMuxer {
+                opened_index: this_index,
+                seen: seen_c.clone(),
+            }) as Box<dyn Muxer>)
+        });
+        let mut seg = SegmentMuxer::new(
+            "out%d.raw",
+            SegmentOptions {
+                segment_time: Duration(1_000_000),
+                ..SegmentOptions::default()
+            },
+            factory,
+        );
+        let tb = vaco_core::Rational::new(1, 90_000);
+        seg.add_stream_with(&params(MediaType::Video), &StreamSpec { time_base: Some(tb) })
+            .unwrap();
+        seg.write_header().unwrap();
+        seg.write_packet(&packet(0, 0, true)).unwrap();
+        seg.write_packet(&packet(0, 1500, true)).unwrap(); // cuts to segment 1
+        seg.write_trailer().unwrap();
+
+        let seen = seen.lock().unwrap();
+        assert!(
+            seen.iter().all(|(_, got)| *got == Some(tb)),
+            "every segment's own add_stream_with should see the original time base: {seen:?}"
+        );
+        assert!(seen.len() >= 2, "expected at least 2 segments to open");
     }
 
     #[test]

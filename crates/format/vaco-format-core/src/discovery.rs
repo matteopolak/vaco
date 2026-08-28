@@ -913,6 +913,40 @@ impl<D: Demuxer> Demuxer for Discovery<D> {
     fn duration(&self) -> Option<Duration> {
         crate::time::estimate_duration(&self.report.duration_inputs, &self.opts).duration
     }
+
+    /// Forwarded to the wrapped demuxer. `Discovery::run` already calls
+    /// `self.inner.reconfigure` once itself, before reading anything — see
+    /// this method's own doc comment — but that only reaches a caller
+    /// driving the *inner* demuxer through `Discovery`. A caller holding a
+    /// `Discovery<D>` as a `Box<dyn Demuxer>` and calling `reconfigure` on it
+    /// a second time, after construction, would otherwise silently hit this
+    /// trait's no-op default instead of reaching `D` at all.
+    ///
+    /// Safe to forward as a plain pass-through: no demuxer in this workspace
+    /// overrides `reconfigure` today (checked directly), so there is nothing
+    /// yet that could change stream-derived state out from under
+    /// `Discovery`'s own `self.streams` snapshot the way `bind_url` below
+    /// can.
+    fn reconfigure(&mut self, limits: &Limits, opts: &FormatOptions) -> Result<()> {
+        self.inner.reconfigure(limits, opts)
+    }
+
+    // `bind_url` is deliberately NOT forwarded here, unlike `reconfigure`
+    // above — this one really does interact with the streams-snapshot
+    // problem gap 26 already names, rather than merely resembling it.
+    // `vaco-demux-image2`'s own `bind_url` override (the only real one in
+    // this workspace) replaces the whole inner demuxer outright
+    // (`*self = Self::open_pattern(url, ..)?`, per `Demuxer::bind_url`'s own
+    // doc comment), which can change what `streams()` returns completely. A
+    // plain forward here would call that successfully on `self.inner` while
+    // leaving `self.streams` — read by `Discovery`'s own `Demuxer::streams`
+    // above — holding whatever was true at `Discovery::new` construction
+    // time, before the real stream list existed. Today's only real caller
+    // (`vaco-cli`'s `input.rs`) calls `bind_url` on the inner demuxer
+    // *before* wrapping it in `Discovery`, so this is not a live bug, but
+    // forwarding it naively would create one for the first caller that
+    // binds after wrapping. Flagged rather than guessed at, per this
+    // dispatch's brief.
 }
 
 /// A [`ParserProvider`] that has no parsers.
@@ -1013,6 +1047,35 @@ mod tests {
         let got = seen.lock().unwrap().unwrap_or_default();
         assert_eq!(got.0, limits.max_alloc_total);
         assert_eq!(got.1, 12_345);
+    }
+
+    /// [`Discovery::run`]'s own internal call, checked above, reaches
+    /// `Demuxer::reconfigure` only on the demuxer `Discovery` wraps. This
+    /// checks the *other* seam: a caller holding a `Discovery<D>` itself as
+    /// a `Demuxer` — the shape `vaco-probe`'s hand-written newtype and any
+    /// future `Box<dyn Demuxer>`-driven caller would use — and calling
+    /// `reconfigure` a second time, after `run` has already happened.
+    /// Before `Discovery<D>`'s own `Demuxer::reconfigure` override existed,
+    /// this silently hit the trait's no-op default instead of reaching `D`
+    /// at all.
+    #[test]
+    fn reconfigure_called_on_discovery_itself_still_reaches_the_inner_demuxer() {
+        let seen = Arc::new(Mutex::new(None));
+        let inner = RecordingDemuxer {
+            inner: MockDemuxer::new(1, MediaType::Video).with_packets(5),
+            seen: Arc::clone(&seen),
+        };
+        let mut d = Discovery::new(inner, FormatFlags::empty(), &opts());
+        d.run(&NoParsers).unwrap();
+        // A second, later call, made on `d` itself through the `Demuxer`
+        // trait rather than through `Discovery::run`'s own internal one.
+        let mut o = opts();
+        o.probesize = 99_999;
+        let limits = Limits::tiny();
+        Demuxer::reconfigure(&mut d, &limits, &o).unwrap();
+        let got = seen.lock().unwrap().unwrap_or_default();
+        assert_eq!(got.0, limits.max_alloc_total);
+        assert_eq!(got.1, 99_999);
     }
 
     #[test]

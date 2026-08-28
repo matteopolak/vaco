@@ -35,9 +35,11 @@
 
 use vaco_codec_core::{CodecId, CodecParameters};
 use vaco_core::Result;
+use vaco_format_core::interleave::InterleaveQueue;
+use vaco_format_core::metadata::MuxMetadata;
 use vaco_format_core::mux::{BitstreamAction, CodecSupport};
 use vaco_format_core::options::FormatOptions;
-use vaco_format_core::{FormatFlags, Muxer, MuxerDesc};
+use vaco_format_core::{FormatFlags, Muxer, MuxerDesc, StreamSpec};
 use vaco_io::MediaSink;
 use vaco_packet::Packet;
 
@@ -121,6 +123,16 @@ impl Muxer for WebmChunkMuxer {
         self.inner.add_stream(params)
     }
 
+    /// Forwarded like every other method here — [`MatroskaMuxer`] does not
+    /// override this today (it inherits [`Muxer::add_stream_with`]'s own
+    /// default), but a wrapper that skipped it would silently keep doing so
+    /// forever even after `MatroskaMuxer` gained an opinion, which is
+    /// exactly gap 9's "tee... a segmenter" trap one layer down from where
+    /// it is usually found (`planning/INTERFACE-GAPS.md`).
+    fn add_stream_with(&mut self, params: &CodecParameters, spec: &StreamSpec) -> Result<u32> {
+        self.inner.add_stream_with(params, spec)
+    }
+
     fn init(&mut self) -> Result<()> {
         self.inner.init()
     }
@@ -141,6 +153,15 @@ impl Muxer for WebmChunkMuxer {
         self.inner.stream_time_base(stream_index)
     }
 
+    fn interleave(
+        &mut self,
+        queue: &mut InterleaveQueue,
+        packet: Option<Packet>,
+        flush: bool,
+    ) -> Result<Option<Packet>> {
+        self.inner.interleave(queue, packet, flush)
+    }
+
     fn query_codec(&self, codec: CodecId, strict: i32) -> CodecSupport {
         self.inner.query_codec(codec, strict)
     }
@@ -152,6 +173,37 @@ impl Muxer for WebmChunkMuxer {
     ) -> Result<BitstreamAction> {
         self.inner.check_bitstream(params, pkt)
     }
+
+    fn write_flush(&mut self) -> Result<()> {
+        self.inner.write_flush()
+    }
+
+    /// Forwarded — and, unlike every other forward added in this pass, not
+    /// merely prophylactic: [`MatroskaMuxer::set_metadata`] is a real
+    /// override, not the trait's no-op default, so before this method
+    /// existed here `-metadata`/chapters/attachments were silently dropped
+    /// for every `webm_chunk` output specifically (this crate's sibling
+    /// `webm`/`matroska` muxers, which use [`MatroskaMuxer`] directly rather
+    /// than through this wrapper, were never affected).
+    fn set_metadata(&mut self, metadata: &MuxMetadata) -> Result<()> {
+        self.inner.set_metadata(metadata)
+    }
+
+    fn set_bitexact(&mut self, bitexact: bool) {
+        self.inner.set_bitexact(bitexact);
+    }
+
+    fn set_option(&mut self, name: &str, value: &str) -> Result<()> {
+        self.inner.set_option(name, value)
+    }
+
+    // `bind_url` deliberately keeps the trait's default (`Unsupported`).
+    // The module docs already explain why: this muxer's real multi-file
+    // output is reported through its own `chunk_boundaries()` accessor
+    // instead of through the generic `MuxerDesc::open`-then-`bind_url`
+    // seam `Demuxer::bind_url`'s doc names as the read-side mirror of this
+    // method — `webm_chunk` writes one continuous stream and lets the
+    // caller cut it, so there is no second URL for this to resolve.
 }
 
 #[cfg(test)]
@@ -208,5 +260,36 @@ mod tests {
             assert!(w[1].0 > w[0].0);
             assert!(w[1].1 > w[0].1);
         }
+    }
+
+    /// `MatroskaMuxer::set_metadata` is a real override (it fills in the
+    /// `Segment`'s `Title` element at `write_header` time), not the trait's
+    /// no-op default — so this is an end-to-end check that the title
+    /// actually reaches the written bytes, not just that a method call does
+    /// not panic. Reverting `WebmChunkMuxer::set_metadata`'s body to `Ok(())`
+    /// (dropping the forward) makes this test fail, confirmed by hand before
+    /// this comment was written.
+    #[test]
+    fn set_metadata_reaches_the_written_bytes() {
+        let sink = MemorySink::new();
+        let bytes = sink.shared();
+        let mut mux =
+            WebmChunkMuxer::new(Box::new(sink), &FormatOptions::default(), 0, 100).unwrap();
+        let idx = mux.add_stream(&video_params()).unwrap();
+        let mut metadata = MuxMetadata::default();
+        metadata
+            .tags
+            .push(("title".to_owned(), "gap-9-one-layer-down".to_owned()));
+        mux.set_metadata(&metadata).unwrap();
+        mux.write_header().unwrap();
+        mux.write_packet(&pkt(idx, 0, true)).unwrap();
+        mux.write_trailer().unwrap();
+
+        let written = bytes.snapshot();
+        let needle = b"gap-9-one-layer-down";
+        assert!(
+            written.windows(needle.len()).any(|w| w == needle),
+            "expected the title to appear in the written EBML bytes"
+        );
     }
 }
