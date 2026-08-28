@@ -1331,6 +1331,65 @@ pub trait Decoder: Send {
 
     /// Discard buffered state after a seek. Does not change configuration.
     fn flush(&mut self);
+
+    /// Seed the decoder from the container's out-of-band configuration — the
+    /// same conceptual record [`Parser::set_extradata`] takes, for a decoder
+    /// reached through [`crate::DecoderDesc::build`] without ever passing
+    /// through a `Parser` at all.
+    ///
+    /// DVD/`VobSub` is the concrete case this exists for. An SPU's
+    /// `SET_COLOR` command carries four 4-bit *indices*, not colours — the
+    /// 16-entry palette they index into lives entirely outside the SPU
+    /// bytes, in the `.idx` sidecar or a Matroska `S_VOBSUB` track's
+    /// `CodecPrivate`. Before this method existed, a decoder built from the
+    /// registry had no way to be handed that palette and had to paint with a
+    /// fallback instead — correct geometry and pixel indices, wrong colours.
+    /// Not subtitle-only: any codec whose configuration is the container's to
+    /// state (an `avcC`, an `AudioSpecificConfig`) has the identical shape.
+    ///
+    /// The default implementation ignores the record, which is right for a
+    /// codec whose containers carry none — every implementor before this
+    /// method existed keeps compiling and keeps its current behaviour.
+    /// Calling it twice, or with an empty slice, must be harmless.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the codec's own record parser returns. A caller that is
+    /// merely *offering* extradata should treat an error the same way
+    /// [`Parser::set_extradata`]'s doc says to: "this record told me
+    /// nothing", not a reason to stop decoding.
+    fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
+        let _ = extradata;
+        Ok(())
+    }
+}
+
+/// So a boxed decoder is itself a [`Decoder`], mirroring
+/// `impl<P: Parser + ?Sized> Parser for Box<P>` below for the identical
+/// reason: generic code written against `D: Decoder` has to keep working when
+/// handed a `Box<dyn Decoder>`, which is all [`DecoderDesc::build`] ever
+/// returns.
+///
+/// This also has to forward every method by hand, including the defaulted
+/// [`Decoder::set_extradata`] — a `Box<D>` that inherited the trait's default
+/// instead would silently discard every call, exactly the shape gap 9 found
+/// in `Box<dyn Muxer>`.
+impl<D: Decoder + ?Sized> Decoder for Box<D> {
+    fn send_packet(&mut self, packet: Option<&Packet>) -> Result<()> {
+        (**self).send_packet(packet)
+    }
+
+    fn receive_frame(&mut self) -> Result<Frame> {
+        (**self).receive_frame()
+    }
+
+    fn flush(&mut self) {
+        (**self).flush();
+    }
+
+    fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
+        (**self).set_extradata(extradata)
+    }
 }
 
 /// Encode: frames in, compressed packets out. Mirrors [`Decoder`].

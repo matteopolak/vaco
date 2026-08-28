@@ -921,3 +921,10 @@ kind     = "blackbox"
 title    = "ffmpeg 8.1 subrip/webvtt/ass/mov_text/text subtitle decoders, measured via `ffmpeg -bitexact -i FIXTURE -f ass -` over purpose-written fixtures: that every text subtitle decoder emits ASS override markup rather than plain text; SubRip's tag table (i/b/u/s, font colour/size/face) and its BGR leading-zero-stripped colour spelling; that SubRip does not decode character references while WebVTT decodes exactly six (&amp; &lt; &gt; &lrm; &rlm; &nbsp;) and maps &nbsp; to ASS \\h; that `</font>` closes in attribute-opening order while b/i/u/s nest in reverse; the ASS demuxer's nine-field ReadOrder,Layer,Style,Name,MarginL,MarginR,MarginV,Effect,Text packet chunk; mov_text's tx3g sample bytes including that text_len counts bytes while styl offsets count Unicode scalars (not UTF-16 units) and that spans close with {\\r}; and that ffmpeg ships no ttml decoder and no ttml or text demuxer"
 acquired = "2026-08-28"
 where    = "ffmpeg/ffprobe 8.1 binaries, black-box"
+
+[[source]]
+id       = "matroska-subtitles-mapping"
+kind     = "spec"
+title    = "matroska.org, Subtitles (Codec Mappings) — used for the S_VOBSUB CodecPrivate content rule: it carries the .idx file's `size:`/`palette:` lines (and any other non-id/timestamp/comment line) verbatim, with `id:`/`langidx:`/`timestamp:`/comment lines removed"
+acquired = "2026-08-28"
+where    = "https://www.matroska.org/technical/subtitles.html"

@@ -771,8 +771,19 @@ pub fn run_pipeline(
                         internal("the resolved encoder is no longer in the registry")
                     })?;
                     let limits = vaco_limits::Limits::default();
+                    let mut decoder = decoder_desc.build(limits.clone());
+                    if let Some(extradata) = p.extradata.as_deref() {
+                        // Offering, not requiring: `Decoder::set_extradata`'s
+                        // own contract says a caller offering a container's
+                        // configuration record should treat a refusal as
+                        // "this decoder had nothing to learn from it", the
+                        // same convention `Parser::set_extradata` already
+                        // uses, so a decoder with no use for the record (or
+                        // no override at all) just keeps decoding.
+                        let _ = decoder.set_extradata(extradata);
+                    }
                     let frames = spec
-                        .add_decoder(tap, decoder_desc.build(limits.clone()))
+                        .add_decoder(tap, decoder)
                         .map_err(|e| internal_from("could not attach a decoder", &e))?;
                     let encoder = encoder_desc.build(limits.clone());
                     // An encoder that does not care lists nothing, so this is

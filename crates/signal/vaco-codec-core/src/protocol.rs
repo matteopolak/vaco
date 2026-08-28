@@ -57,6 +57,17 @@ pub trait SendReceive {
     fn accepted_pix_fmts(&self) -> &'static [vaco_pixfmt::PixFmt] {
         &[]
     }
+
+    /// Forwarded to [`Decoder::set_extradata`] by [`AsDecoder`]; meaningless
+    /// for an encoder or bitstream filter's `SendReceive`, so the empty
+    /// default costs those implementors nothing.
+    ///
+    /// # Errors
+    /// See [`Decoder::set_extradata`].
+    fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
+        let _ = extradata;
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------- adapters
@@ -79,6 +90,10 @@ where
 
     fn flush(&mut self) {
         self.0.flush();
+    }
+
+    fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
+        self.0.set_extradata(extradata)
     }
 }
 
@@ -166,6 +181,10 @@ impl<D: Decoder> SendReceive for DecoderProtocol<D> {
 
     fn flush(&mut self) {
         self.inner.flush();
+    }
+
+    fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
+        self.inner.set_extradata(extradata)
     }
 }
 
@@ -366,6 +385,10 @@ impl<T: SendReceive> SendReceive for Validated<T> {
 
     fn accepted_pix_fmts(&self) -> &'static [vaco_pixfmt::PixFmt] {
         self.inner.accepted_pix_fmts()
+    }
+
+    fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
+        self.inner.set_extradata(extradata)
     }
 
     fn send(&mut self, input: Option<&Self::Input>) -> Result<()> {

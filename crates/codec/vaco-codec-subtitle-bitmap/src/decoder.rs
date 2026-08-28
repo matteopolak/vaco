@@ -23,32 +23,57 @@
 //! decoder computes separately), and the palette converts with one `map`.
 //! Nothing in the three formats needed a rect field the variant lacks.
 //!
-//! # Timing: what these frames can and cannot carry
+//! # Timing: what these frames carry, and why no time base was needed
 //!
-//! `Frame::pts`/`Frame::duration` are copied from the **packet**, i.e. the
-//! container's own timing in the stream's time base, which is what the
-//! graph edge `PipelineSpec::add_decoder` creates is counted in.
+//! `Frame::pts` is copied from the packet unchanged: it is a tick count in
+//! the stream's own time base, and neither DVB nor `VobSub` states a display
+//! window relative to anything other than the packet's own arrival, so there
+//! is nothing to shift it by.
 //!
-//! The codec-internal display window is deliberately **not** merged into
-//! them. DVB's `page_time_out` (whole seconds) and `VobSub`'s SPU
-//! start/stop delays (90 kHz / 1024 ticks) are absolute durations, so
-//! expressing either as a `pts`/`duration` in the stream's time base needs
-//! that time base — and the `Decoder` trait has no channel that carries it
-//! (`send_packet`/`receive_frame`/`flush` is the whole surface). Writing
-//! them into the frame in some *other* unit would give one frame two
-//! disagreeing ideas of when it displays, which is exactly what
-//! `vaco_frame::subtitle`'s own docs say the variant was shaped to avoid.
-//! Recorded in `planning/INTERFACE-GAPS.md` rather than worked around.
+//! `Frame::duration` is a [`vaco_core::Duration`] — always real microseconds
+//! by construction (`Duration::from_micros`/`as_micros`), never ticks of a
+//! time base — which is also what [`SubtitleEvent::start`]/`end` already are.
+//! So DVB's `page_time_out` (whole seconds) and `VobSub`'s SPU start/stop
+//! delays (90 kHz / 1024 ticks, converted by [`crate::vobsub`]) both reach
+//! [`frame_of_event`] pre-converted to the same unit `Frame::duration` wants,
+//! and it uses `event.end - event.start` in place of the packet's own
+//! duration whenever the codec stated one. No stream time base is needed
+//! for this, and none is threaded through `Decoder` — worth stating plainly
+//! since the container's out-of-band configuration (`Decoder::set_extradata`)
+//! genuinely does need a channel `Decoder` never had, and it would be easy
+//! to assume the two problems share a fix.
+//!
+//! PGS never states an end (`SubtitleEvent::end` is always `None` there), so
+//! its frames keep the packet's own duration exactly as before.
+//!
+//! One piece is still open: `event.start` can be non-zero for `VobSub` (a
+//! `SP_STA_DSP` delayed past the packet's first control sequence), and
+//! shifting `Frame::pts` forward by that amount *would* need the stream's
+//! time base to convert a microsecond delay into ticks. Left as `Frame::pts
+//! = packet.pts` unconditionally; the display *length* this module now
+//! reports is correct regardless, only the display *start* can be off by
+//! that delay on the rare stream that sets one.
 
 use vaco_codec_core::{Accept, Caps, CodecId, Machine, SendReceive};
-use vaco_core::{MediaType, Result};
+use vaco_core::{Duration, MediaType, Result};
 use vaco_frame::{Frame, FrameData, SubtitleRect};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
 
 use crate::SubtitleEvent;
 
-/// Convert one decoded event into a `Frame`, copying `packet`'s timing.
+/// The display duration `event` states, in the same unit as
+/// `Frame::duration`, or `fallback` when the codec did not state one.
+fn display_duration(event: &SubtitleEvent, fallback: Duration) -> Duration {
+    match event.end {
+        Some(end) => Duration::from_micros(end.as_micros().saturating_sub(event.start.as_micros())),
+        None => fallback,
+    }
+}
+
+/// Convert one decoded event into a `Frame`. `pts` is copied from `packet`;
+/// `duration` prefers the codec's own display window over the packet's, see
+/// the module docs' "Timing" section.
 ///
 /// Every rect's pixel bytes go through `budget`, matching the rule this
 /// workspace applies to every other decoder output: the dimensions came
@@ -91,7 +116,7 @@ fn frame_of_event(event: &SubtitleEvent, packet: &Packet, budget: &mut Budget) -
         rects: rects.into_iter().collect(),
     });
     frame.pts = packet.pts;
-    frame.duration = packet.duration;
+    frame.duration = display_duration(event, packet.duration);
     Ok(frame)
 }
 
@@ -230,22 +255,23 @@ impl SendReceive for PgsSubtitleDecoder {
 
 // ------------------------------------------------------------------ vobsub
 
-/// The palette a registered `vobsub` decoder paints with when nothing has
-/// supplied the real one.
+/// The palette a registered `vobsub` decoder paints with until
+/// [`VobSubSubtitleDecoder::set_extradata`] supplies the real one.
 ///
 /// **This is a fallback, not the format's palette**, and it is visible here
 /// rather than buried because the difference is user-visible colour. A DVD
 /// subpicture's four pseudo-colours are indices into a 16-entry table that
 /// lives *outside* the SPU bytes — in the `.idx` sidecar, or in a Matroska
-/// `S_VOBSUB` track's `CodecPrivate`. The `Decoder` trait has no channel for
-/// it: `set_extradata` is on `Parser`, not `Decoder`, and `DecoderDesc::make`
-/// takes only `Limits`. So a decoder reached through the registry has no way
-/// to be told, and geometry and pixel indices come out right while colours
-/// come out of this table instead of the disc's.
+/// `S_VOBSUB` track's `CodecPrivate`. Before `Decoder::set_extradata`
+/// existed there was no way to hand a registry-built decoder that table at
+/// all, and geometry and pixel indices came out right while colours came out
+/// of this ramp instead of the disc's; a caller wiring the container's own
+/// record through now gets the disc's colours, and one that does not (or
+/// whose container states none) still gets this.
 ///
-/// A caller that *does* have the real palette should bypass this wrapper and
-/// call [`crate::vobsub::decode_spu`] directly, which takes it as a
-/// parameter. Recorded in `planning/INTERFACE-GAPS.md`.
+/// A caller that already has the real palette in hand, without a `Decoder`
+/// in between, should bypass this wrapper entirely and call
+/// [`crate::vobsub::decode_spu`] directly, which takes it as a parameter.
 ///
 /// The ramp itself is this project's own choice, not a measured default:
 /// index 0 transparent-black and the rest an even grey ramp, so a rendered
@@ -264,12 +290,13 @@ fn fallback_palette() -> vaco_format_subtitle_bitmap::Palette {
 /// `VobSub`/DVD subpicture decode as a `SendReceive`. One SPU per packet, so
 /// neither [`Caps::SUBFRAMES`] nor [`Caps::DELAY`] applies.
 ///
-/// See [`fallback_palette`] for the one thing this wrapper cannot do that
-/// [`crate::vobsub::decode_spu`] can.
+/// See [`fallback_palette`] for what this decoder paints with before
+/// [`Self::set_extradata`] is called, or when it is never called at all.
 #[derive(Debug)]
 pub struct VobSubSubtitleDecoder {
     machine: Machine<Frame>,
     limits: Limits,
+    palette: vaco_format_subtitle_bitmap::Palette,
 }
 
 impl VobSubSubtitleDecoder {
@@ -278,6 +305,7 @@ impl VobSubSubtitleDecoder {
         Self {
             machine: Machine::new(Caps::empty()),
             limits,
+            palette: fallback_palette(),
         }
     }
 }
@@ -300,8 +328,7 @@ impl SendReceive for VobSubSubtitleDecoder {
                 let Some(pkt) = input else {
                     return Ok(());
                 };
-                let event =
-                    crate::vobsub::decode_spu(pkt.payload(), &fallback_palette(), &self.limits)?;
+                let event = crate::vobsub::decode_spu(pkt.payload(), &self.palette, &self.limits)?;
                 let mut budget = Budget::new(self.limits.clone());
                 self.machine.emit(frame_of_event(&event, pkt, &mut budget)?);
                 Ok(())
@@ -311,6 +338,26 @@ impl SendReceive for VobSubSubtitleDecoder {
 
     fn receive(&mut self) -> Result<Frame> {
         self.machine.receive()
+    }
+
+    /// Take the disc's real 16-entry palette from a Matroska `S_VOBSUB`
+    /// track's `CodecPrivate`, which the format's own subtitle-mapping page
+    /// states is exactly the `.idx` file's `size:`/`palette:` lines
+    /// (`id:`/`timestamp:`/comment lines removed): `vaco_subtitle_bitmap`'s
+    /// `.idx` grammar already parses that text for the demuxer side, so this
+    /// reuses it rather than writing a second parser for the same syntax.
+    ///
+    /// Bytes that are not valid UTF-8, or that parse but state no
+    /// `palette:` line, leave [`fallback_palette`] in place — offering
+    /// extradata is not a promise it will be used, matching
+    /// [`vaco_codec_core::Parser::set_extradata`]'s own convention.
+    fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
+        if let Ok(text) = std::str::from_utf8(extradata)
+            && let Some(palette) = vaco_subtitle_bitmap::vobsub::idx::parse(text).palette
+        {
+            self.palette = palette;
+        }
+        Ok(())
     }
 
     fn flush(&mut self) {
@@ -431,15 +478,17 @@ mod tests {
         // The claim this test exists for: what the registered Decoder emits
         // is the same rect the library already produces, not a re-derivation.
         let bytes = dvb_display_set();
-        let expected =
-            crate::dvb::decode_display_set(&bytes, &Limits::permissive()).unwrap();
+        let expected = crate::dvb::decode_display_set(&bytes, &Limits::permissive()).unwrap();
 
         let mut dec = make_dvb(Limits::permissive());
         dec.send_packet(Some(&packet(&bytes, 4242))).unwrap();
         let frame = dec.receive_frame().unwrap();
 
         assert_eq!(frame.pts, Timestamp::new(4242));
-        assert_eq!(frame.duration, vaco_core::Duration::from_micros(2_000_000));
+        // `page_time_out` in `dvb_display_set`'s page composition is 5, and
+        // the codec's own stated display window now wins over the packet's
+        // fixed 2-second `duration` from the `packet` test helper.
+        assert_eq!(frame.duration, vaco_core::Duration::from_micros(5_000_000));
         let FrameData::Subtitle { rects } = &frame.data else {
             unreachable!("a subtitle decoder must produce FrameData::Subtitle");
         };
@@ -555,5 +604,99 @@ mod tests {
         // real display set still decodes afterwards.
         dec.send_packet(Some(&packet(&bytes, 7))).unwrap();
         assert!(dec.receive_frame().is_ok());
+    }
+
+    /// A 4x2 SPU whose pattern colour (index 1) reads palette slot 3 —
+    /// `vobsub.rs`'s own `sample_spu`/`sample_palette` fixture, reproduced
+    /// here because that module's `#[cfg(test)]` items are private to it.
+    fn vobsub_spu() -> Vec<u8> {
+        let mut body = vec![0, 0, 0, 0];
+        let top_offset = body.len();
+        body.push(0x55);
+        body.push(0x55);
+        let bottom_offset = body.len();
+        body.push(0x55);
+        body.push(0x55);
+        let dcsqta = body.len();
+        body.extend_from_slice(&0u16.to_be_bytes());
+        body.extend_from_slice(&(dcsqta as u16).to_be_bytes());
+        body.push(0x01); // STA_DSP
+        body.push(0x03); // SET_COLOR: pattern (colours[1]) -> palette slot 3
+        body.push(0x21);
+        body.push(0x30);
+        body.push(0x04); // SET_CONTR: every nibble at full alpha
+        body.push(0xFF);
+        body.push(0xFF);
+        body.push(0x05); // SET_DAREA: (0,0)-(3,1)
+        body.push(0x00);
+        body.push(0x00);
+        body.push(0x03);
+        body.push(0x00);
+        body.push(0x00);
+        body.push(0x01);
+        body.push(0x06); // SET_DSPXA
+        body.extend_from_slice(&(top_offset as u16).to_be_bytes());
+        body.extend_from_slice(&(bottom_offset as u16).to_be_bytes());
+        body.push(0xFF);
+        let size = body.len() as u16;
+        body[0] = (size >> 8) as u8;
+        body[1] = (size & 0xFF) as u8;
+        body[2] = (dcsqta >> 8) as u8;
+        body[3] = (dcsqta & 0xFF) as u8;
+        body
+    }
+
+    fn bitmap_palette(frame: &Frame) -> Vec<[u8; 4]> {
+        let FrameData::Subtitle { rects } = &frame.data else {
+            unreachable!("a subtitle decoder must produce FrameData::Subtitle");
+        };
+        let vaco_frame::SubtitleContent::Bitmap { palette, .. } = &rects[0].content else {
+            unreachable!("a bitmap subtitle decoder must produce Bitmap content");
+        };
+        palette.clone()
+    }
+
+    /// Gap 19's measured claim: before `set_extradata`, the registered
+    /// `dvdsub` decoder paints with [`fallback_palette`]'s grey ramp; after
+    /// it is offered the container's own record, it paints with the disc's
+    /// colours. Both runs decode the identical SPU bytes, so the only
+    /// variable is whether the palette record reached the decoder.
+    #[test]
+    fn dvd_subtitle_colours_come_from_extradata_not_the_grey_ramp() {
+        let spu = vobsub_spu();
+
+        let mut before = make_vobsub(Limits::permissive());
+        before.send_packet(Some(&packet(&spu, 0))).unwrap();
+        let before_frame = before.receive_frame().unwrap();
+        // Fallback ramp slot 3 is 3 * 17 = 51, per `fallback_palette`'s doc.
+        assert_eq!(bitmap_palette(&before_frame)[1], [51, 51, 51, 255]);
+
+        // The exact shape Matroska's own subtitle-mapping page says a
+        // `S_VOBSUB` track's `CodecPrivate` carries: the `.idx` file's own
+        // `size:`/`palette:` lines.
+        let idx_text = b"size: 720x480\npalette: 000000, 0a141e, ffffff, 010203\n";
+        let mut after = make_vobsub(Limits::permissive());
+        after.set_extradata(idx_text).unwrap();
+        after.send_packet(Some(&packet(&spu, 0))).unwrap();
+        let after_frame = after.receive_frame().unwrap();
+        // Palette slot 3 is `010203` in the record above.
+        assert_eq!(bitmap_palette(&after_frame)[1], [1, 2, 3, 255]);
+    }
+
+    /// The same measurement, driven through exactly the path a real caller
+    /// uses: `DecoderDesc::build` (`Box<dyn Decoder>`), not the private
+    /// `make_vobsub` constructor. If `AsDecoder`/`Validated`'s forwarding of
+    /// `set_extradata` ever regressed, this would still see the grey ramp
+    /// after offering a real palette — the same trap
+    /// `vaco-codec-core`'s own protocol tests catch one layer down.
+    #[test]
+    fn the_registered_dvdsub_decoder_forwards_set_extradata_through_the_box() {
+        let spu = vobsub_spu();
+        let mut dec = DVDSUB_DECODER.build(Limits::permissive());
+        dec.set_extradata(b"size: 720x480\npalette: 000000, 0a141e, ffffff, 010203\n")
+            .unwrap();
+        dec.send_packet(Some(&packet(&spu, 0))).unwrap();
+        let frame = dec.receive_frame().unwrap();
+        assert_eq!(bitmap_palette(&frame)[1], [1, 2, 3, 255]);
     }
 }

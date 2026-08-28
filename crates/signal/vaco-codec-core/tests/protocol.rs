@@ -10,7 +10,9 @@
 
 use std::collections::VecDeque;
 use vaco_codec_core::mock::{MockCodec, MockPacket, MockProgram, MockUnit, Step};
-use vaco_codec_core::{Caps, Machine, OnViolation, SendReceive, Stage, Validated, Violation};
+use vaco_codec_core::{
+    AsDecoder, Caps, Decoder, Machine, OnViolation, SendReceive, Stage, Validated, Violation,
+};
 
 use vaco_core::Error;
 
@@ -420,4 +422,121 @@ fn draining_without_finish_does_not_claim_eof() {
     assert!(matches!(m.receive(), Err(Error::NeedMoreInput)));
     m.finish();
     assert!(matches!(m.receive(), Err(Error::Eof)));
+}
+
+/// A `SendReceive` whose `set_extradata` is observable only by what it
+/// returns, since nothing outside this file can downcast a `Box<dyn Decoder>`
+/// back to its concrete type.
+#[derive(Debug, Default)]
+struct ExtradataProbe;
+
+impl SendReceive for ExtradataProbe {
+    type Input = vaco_packet::Packet;
+    type Output = vaco_frame::Frame;
+
+    fn caps(&self) -> Caps {
+        Caps::empty()
+    }
+
+    fn send(&mut self, _input: Option<&vaco_packet::Packet>) -> Result<(), Error> {
+        Err(Error::Eof)
+    }
+
+    fn receive(&mut self) -> Result<vaco_frame::Frame, Error> {
+        Err(Error::Eof)
+    }
+
+    fn flush(&mut self) {}
+
+    fn set_extradata(&mut self, extradata: &[u8]) -> Result<(), Error> {
+        Err(Error::Option {
+            name: "extradata-probe".to_owned(),
+            detail: format!(
+                "reached the inner SendReceive with {} bytes",
+                extradata.len()
+            ),
+        })
+    }
+}
+
+/// `set_extradata` has to survive every layer a registered decoder is built
+/// through — `vaco-codec-subtitle-bitmap`'s three decoders are exactly
+/// `Box::new(AsDecoder(Validated::new(inner)))`, which is what
+/// `DecoderDesc::make` hands back as a `Box<dyn Decoder>`. `AsDecoder` and
+/// `Validated` each carry their own explicit `impl Decoder`/`impl
+/// SendReceive`, so a new trait method with a default body is silently
+/// swallowed by any one of them that forgets to forward it instead of
+/// reaching `ExtradataProbe` — the same shape gap 9 found one layer down in
+/// `Box<dyn Muxer>`. `ExtradataProbe::set_extradata` always errs with a
+/// distinctive message, so the only way this test can pass is if that exact
+/// error surfaces through `AsDecoder`, `Validated` and the `Box<dyn Decoder>`
+/// all three.
+#[test]
+fn set_extradata_forwards_through_as_decoder_validated_and_the_box() {
+    let mut boxed: Box<dyn Decoder> = Box::new(AsDecoder(Validated::new(ExtradataProbe)));
+    let err = boxed
+        .set_extradata(&[1, 2, 3])
+        .expect_err("must reach ExtradataProbe::set_extradata, not the trait default");
+    match err {
+        Error::Option { name, detail } => {
+            assert_eq!(name, "extradata-probe");
+            assert!(detail.contains("3 bytes"), "unexpected detail: {detail}");
+        }
+        other => panic!("expected Error::Option from ExtradataProbe, got {other:?}"),
+    }
+}
+
+/// The default body alone must be harmless — empty, non-empty, and called
+/// twice — for every codec whose container carries no configuration record,
+/// mirroring `the_default_set_extradata_is_harmless` in `tests/parser.rs`.
+#[test]
+fn the_default_decoder_set_extradata_is_harmless() {
+    #[derive(Debug, Default)]
+    struct NoOpDecoder;
+    impl Decoder for NoOpDecoder {
+        fn send_packet(&mut self, _packet: Option<&vaco_packet::Packet>) -> Result<(), Error> {
+            Err(Error::Eof)
+        }
+        fn receive_frame(&mut self) -> Result<vaco_frame::Frame, Error> {
+            Err(Error::Eof)
+        }
+        fn flush(&mut self) {}
+    }
+    let mut d = NoOpDecoder;
+    d.set_extradata(&[]).expect("empty is harmless");
+    d.set_extradata(&[1, 2, 3]).expect("ignored is harmless");
+    d.set_extradata(&[1, 2, 3]).expect("twice is harmless");
+    let mut boxed: Box<dyn Decoder> = Box::new(NoOpDecoder);
+    boxed.set_extradata(&[9]).expect("forwards through the box");
+}
+
+/// A call through a *generic* `D: Decoder` bound, instantiated with
+/// `Box<dyn Decoder>` — the case the blanket `impl<D: Decoder + ?Sized>
+/// Decoder for Box<D>` exists for.
+///
+/// This is deliberately a different failure mode from the two tests above.
+/// Calling `.set_extradata()` directly on a `Box<dyn Decoder>` variable
+/// dispatches through the trait object's own vtable and would still work
+/// even with no `impl Decoder for Box<D>` at all — that path is already
+/// covered above and does not exercise the blanket impl. Generic code
+/// resolves the method through whatever `impl Decoder for Box<D>` the
+/// compiler can find instead, so a blanket impl that inherited the trait's
+/// default `set_extradata` (rather than forwarding it) would make exactly
+/// this function silently return `Ok(())` without reaching `d`.
+fn set_extradata_through_generic_decoder<D: Decoder>(
+    d: &mut D,
+    extradata: &[u8],
+) -> Result<(), Error> {
+    d.set_extradata(extradata)
+}
+
+#[test]
+fn the_box_blanket_impl_forwards_through_a_generic_decoder_bound() {
+    let mut boxed: Box<dyn Decoder> = Box::new(AsDecoder(Validated::new(ExtradataProbe)));
+    let err = set_extradata_through_generic_decoder(&mut boxed, &[7, 7])
+        .expect_err("must reach ExtradataProbe::set_extradata through the generic bound");
+    match err {
+        Error::Option { name, .. } => assert_eq!(name, "extradata-probe"),
+        other => panic!("expected Error::Option from ExtradataProbe, got {other:?}"),
+    }
 }
