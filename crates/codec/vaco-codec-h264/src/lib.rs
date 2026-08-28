@@ -134,6 +134,8 @@ pub mod cavlc;
 mod cavlc_tables;
 mod dequant;
 mod intra;
+mod reconstruct;
+mod scan;
 pub mod mb;
 pub mod decoder;
 

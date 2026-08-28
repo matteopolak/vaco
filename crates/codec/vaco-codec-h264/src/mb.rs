@@ -1,9 +1,19 @@
-//! Macroblock-layer syntax, CAVLC and CABAC, clause 7.3.5 / 7.4.5 — scoped
-//! to reaching a real bit-exact-consumption measurement (#419's stated
-//! goal for this dispatch), not reconstruction. Nothing here computes a
-//! pixel; every syntax element that would feed prediction or the transform
-//! is still fully *read* (so bit consumption is correct) but its value is
-//! only kept when a later element's presence depends on it.
+//! Macroblock-layer syntax, CAVLC and CABAC, clause 7.3.5 / 7.4.5 — started
+//! for a real bit-exact-consumption measurement (#419's original goal for
+//! this module), now extended just far enough for #420's reconstruction to
+//! draw on: `SliceStats::first_slice_mb_residual`/`first_slice_mb_qpy`
+//! expose the first decoded macroblock's own residual coefficients and
+//! running `QPY`, so `crate::reconstruct` can dequantise and inverse-
+//! transform them without duplicating this module's own CABAC decode. This
+//! module itself still computes no pixel — that composition lives in
+//! `crate::reconstruct`, not here. Every syntax element that would feed
+//! prediction or the transform is still fully *read* (so bit consumption
+//! is correct); most values are only kept when a later element's presence
+//! depends on them, but a few (`intra16x16_pred_mode`,
+//! `intra_chroma_pred_mode`, the residual coefficients themselves, `QPY`)
+//! are now kept all the way out to `SliceStats` for exactly the one
+//! macroblock a caller can address without a real multi-macroblock
+//! picture buffer.
 //!
 //! # What is in scope, and what is explicitly not
 //!
@@ -84,7 +94,7 @@ use vaco_limits::Budget;
 use vaco_parse_h264::{ChromaFormat, Pps, Sps, SliceHeader, SliceKind};
 
 use crate::cabac_mb_tables as t;
-use crate::cabac_residual::{CabacInit, ContextCategory, ContextSet, residual_block_cabac};
+use crate::cabac_residual::{CabacInit, CabacResidual, ContextCategory, ContextSet, residual_block_cabac};
 use crate::cavlc::residual_block_cavlc;
 
 /// One partition's prediction-list membership — all that bit consumption
@@ -261,7 +271,7 @@ struct NeighbourGrid {
 /// position within it, both in raster order — `blk_idx >> 2` is the
 /// quadrant (0=top-left, 1=top-right, 2=bottom-left, 3=bottom-right),
 /// `blk_idx & 3` is the raster position inside it.
-const fn blk_xy(blk_idx: u32) -> (u32, u32) {
+pub(crate) const fn blk_xy(blk_idx: u32) -> (u32, u32) {
     let quadrant = blk_idx >> 2;
     let within = blk_idx & 3;
     let qx = quadrant & 1;
@@ -353,6 +363,42 @@ const fn nc_from_neighbours(left: Option<u8>, above: Option<u8>) -> i32 {
     }
 }
 
+/// One macroblock's decoded residual coefficients, captured rather than
+/// discarded (clause 7.3.5.3.3's `residual_block_cabac` used to be called
+/// purely for its bit consumption, its return value thrown away with `let
+/// _ = ...` -- #420 needs the actual values, [`crate::reconstruct`] is
+/// where they get turned into samples). Every block is still in per-block
+/// forward scan order, exactly as [`residual_block_cabac`] produced it --
+/// clause 8.5.4's inverse zig-zag scan is deliberately not applied here,
+/// the same "keep this module's job to entropy decode, not reconstruct"
+/// split [`crate::dequant`] and [`crate::intra`] already draw.
+///
+/// `luma_ac`/`chroma_ac` are indexed by `luma4x4BlkIdx`/`chroma4x4BlkIdx`
+/// (clause 6.4.3 for luma, the simpler raster order clause 8.5.3 eq.
+/// (8-248)/(8-249) uses for chroma); `chroma_ac`'s outer index is
+/// `iCbCr` (`0` = Cb, `1` = Cr, matching [`residual_block_cabac`]'s own
+/// caller-side `comp` convention elsewhere in this file). A `None` entry
+/// means that block's own `coded_block_flag` was `0` -- implicitly all
+/// zero, not "not yet decoded".
+#[derive(Debug, Clone)]
+pub(crate) struct MbResidual {
+    pub(crate) luma_dc: Option<CabacResidual>,
+    pub(crate) luma_ac: [Option<CabacResidual>; 16],
+    pub(crate) chroma_dc: [Option<CabacResidual>; 2],
+    pub(crate) chroma_ac: [[Option<CabacResidual>; 4]; 2],
+}
+
+impl Default for MbResidual {
+    fn default() -> Self {
+        Self {
+            luma_dc: None,
+            luma_ac: core::array::from_fn(|_| None),
+            chroma_dc: [None, None],
+            chroma_ac: [core::array::from_fn(|_| None), core::array::from_fn(|_| None)],
+        }
+    }
+}
+
 /// Everything one call to [`decode_slice_cavlc`] measured.
 #[derive(Debug, Default)]
 pub struct SliceStats {
@@ -377,7 +423,7 @@ pub struct SliceStats {
     /// decoded stream's first macroblock can drive
     /// [`crate::intra::predict_intra16x16`] end to end without duplicating
     /// `mb_type`'s CABAC decode in a test — see
-    /// `tests/cabac_intra_oracle_reconstruction.rs`.
+    /// `crate::intra::tests::flat_fixture_reconstructs_to_uniform_128`.
     pub first_slice_mb_intra16x16_pred_mode: Option<u8>,
     /// Table 8-4's chroma intra mode (clause 8.3.3: 0=DC/1=Horizontal/
     /// 2=Vertical/3=Plane) for that same first decoded macroblock, `None`
@@ -385,6 +431,25 @@ pub struct SliceStats {
     /// read for intra macroblocks — clause 7.3.5's `mb_pred()`). CABAC
     /// slices only, same as the field above.
     pub first_slice_mb_intra_chroma_pred_mode: Option<u8>,
+    /// The running luma `QPY` (clause 7.4.5, eq. (7-23)) *as used by* the
+    /// first decoded macroblock -- i.e. after that macroblock's own
+    /// `mb_qp_delta` has already been applied, since eq. (7-23) computes
+    /// this macroblock's own `QPY` before anything of its is dequantised.
+    /// `None` only if the slice contained no macroblocks at all; unchanged
+    /// from `SliceQPY` (clause 7.4.3, eq. (7-24)) if that macroblock was
+    /// skipped (`mb_qp_delta` is not read for a skipped macroblock, and
+    /// `next_qpy(qpy, 0) == qpy`). Exists so [`crate::reconstruct`] can
+    /// dequantise a real decode's residual without a caller needing to
+    /// re-derive the running QP by hand.
+    pub first_slice_mb_qpy: Option<i32>,
+    /// The first decoded macroblock's own residual coefficients, still in
+    /// per-block forward scan order (clause 8.5.4's inverse zig-zag scan,
+    /// turning this into the raster arrays [`crate::dequant`]'s functions
+    /// expect, is [`crate::reconstruct`]'s job, not this module's) --
+    /// `Some(MbResidual::default())` (every field `None`) if that
+    /// macroblock had no residual at all (zero CBP, or skipped), `None`
+    /// only if the slice contained no macroblocks at all.
+    pub(crate) first_slice_mb_residual: Option<MbResidual>,
 }
 
 /// Refusal reasons this module names explicitly rather than trying and
@@ -1937,6 +2002,10 @@ pub fn decode_slice_cabac(
     let mut grids = CabacGrids::new(mbs_wide, mbs_high, budget)?;
     let mut ctx = CabacMbCtx::new(slice_qp, is_i_slice, cabac_init_idc);
     let mut prev_qp = PrevMbQp::default();
+    // Clause 7.4.5's own QPY,PREV initialisation: "For the first
+    // macroblock in the slice QPY,PREV is initially set equal to
+    // SliceQPY."
+    let mut qpy = i32::from(slice_qp);
     let mut stats = SliceStats::default();
 
     let mut curr_mb_addr = header.first_mb_in_slice;
@@ -1969,13 +2038,28 @@ pub fn decode_slice_cabac(
                 CabacMbInfo { available: true, skipped: true, ..CabacMbInfo::default() },
             );
             prev_qp = PrevMbQp { available: true, skipped: true, ..PrevMbQp::default() };
+            // A skipped macroblock never reads mb_qp_delta (clause 7.4.5's
+            // own inference-to-0 rule names P_Skip/B_Skip explicitly) --
+            // eq. (7-23) with mb_qp_delta = 0 leaves `qpy` unchanged.
             stats.skipped_count += 1;
             stats.macroblock_count += 1;
             if is_first_mb_in_slice {
                 stats.first_slice_mb_cbp = Some((0, 0));
+                stats.first_slice_mb_qpy = Some(qpy);
+                stats.first_slice_mb_residual = Some(MbResidual::default());
             }
         } else {
-            decode_macroblock_cabac(cabac, budget, header, &mut ctx, &mut grids, &mut prev_qp, mb_x, mb_y)?;
+            let residual = decode_macroblock_cabac(
+                cabac,
+                budget,
+                header,
+                &mut ctx,
+                &mut grids,
+                &mut prev_qp,
+                &mut qpy,
+                mb_x,
+                mb_y,
+            )?;
             stats.macroblock_count += 1;
             if is_first_mb_in_slice {
                 let info = grids.mb_info_at(mb_x, mb_y);
@@ -1984,6 +2068,8 @@ pub fn decode_slice_cabac(
                     info.filter(|i| i.is_intra16x16).map(|i| i.intra16x16_pred_mode);
                 stats.first_slice_mb_intra_chroma_pred_mode =
                     info.filter(|i| i.is_intra).map(|i| i.intra_chroma_pred_mode);
+                stats.first_slice_mb_qpy = Some(qpy);
+                stats.first_slice_mb_residual = Some(residual);
             }
         }
 
@@ -1999,7 +2085,10 @@ pub fn decode_slice_cabac(
 /// One real (non-skipped) CABAC macroblock: `mb_type`, prediction
 /// (intra pred-mode flags, or inter `ref_idx`/`mvd`), `coded_block_pattern`,
 /// `mb_qp_delta`, and residual — updating every grid the *next* macroblock's
-/// context derivations need.
+/// context derivations need. `qpy` is this slice's running `QPY` (clause
+/// 7.4.5, eq. (7-23)) — updated in place with this macroblock's own value
+/// once `mb_qp_delta` is known, since eq. (7-23) computes *this*
+/// macroblock's `QPY` from the previous one, not the next one's.
 #[allow(clippy::too_many_lines)]
 fn decode_macroblock_cabac(
     cabac: &mut CabacDecoder<'_>,
@@ -2008,9 +2097,10 @@ fn decode_macroblock_cabac(
     ctx: &mut CabacMbCtx,
     grids: &mut CabacGrids,
     prev_qp: &mut PrevMbQp,
+    qpy: &mut i32,
     mb_x: u32,
     mb_y: u32,
-) -> Result<()> {
+) -> Result<MbResidual> {
     let is_i_slice = matches!(header.kind, SliceKind::I);
     let raw_code = if is_i_slice {
         let inc0 = mb_type_i_cond_term(grids.mb_left(mb_x, mb_y)) + mb_type_i_cond_term(grids.mb_above(mb_x, mb_y));
@@ -2050,7 +2140,14 @@ fn decode_macroblock_cabac(
             mb_y,
             CabacMbInfo { available: true, skipped: false, is_ipcm: true, ..CabacMbInfo::default() },
         );
-        return Ok(());
+        // `*qpy` is deliberately left untouched: I_PCM's own
+        // macroblock_layer() branch never reads mb_qp_delta at all, and
+        // clause 7.4.5's own inference rule ("mb_qp_delta shall be
+        // inferred to be equal to 0 when it is not present for any
+        // macroblock") is written generically, not limited to the
+        // P_Skip/B_Skip cases it names as examples -- eq. (7-23) with
+        // mb_qp_delta = 0 reduces to QPY = QPY,PREV, i.e. unchanged.
+        return Ok(MbResidual::default());
     }
 
     let is_intra = kind.is_intra();
@@ -2166,9 +2263,13 @@ fn decode_macroblock_cabac(
         cbp_zero,
         qp_delta_zero: mb_qp_delta == 0,
     };
+    // Clause 7.4.5, eq. (7-23): this macroblock's own QPY, derived from the
+    // slice's running QPY,PREV and the delta just decoded above -- used by
+    // this same macroblock's own dequantisation, not the next one's.
+    *qpy = crate::dequant::next_qpy(*qpy, mb_qp_delta);
 
-    if cbp_luma > 0 || cbp_chroma > 0 || matches!(kind, MbKind::Intra16x16 { .. }) {
-        decode_residual_cabac(cabac, budget, ctx, grids, &kind, cbp_luma, cbp_chroma, mb_x, mb_y)?;
+    let residual = if cbp_luma > 0 || cbp_chroma > 0 || matches!(kind, MbKind::Intra16x16 { .. }) {
+        decode_residual_cabac(cabac, budget, ctx, grids, &kind, cbp_luma, cbp_chroma, mb_x, mb_y)?
     } else {
         for blk in 0..16u32 {
             let (bx, by) = blk_xy(blk);
@@ -2180,7 +2281,8 @@ fn decode_macroblock_cabac(
                 grids.set_cbf_chroma(comp, mb_x * 2 + bx % 2, mb_y * 2 + by % 2, false);
             }
         }
-    }
+        MbResidual::default()
+    };
 
     grids.set_mb_info(
         mb_x,
@@ -2198,7 +2300,7 @@ fn decode_macroblock_cabac(
             intra16x16_pred_mode,
         },
     );
-    Ok(())
+    Ok(residual)
 }
 
 /// `ref_idx_lX`/`mvd_lX` for one whole-macroblock partition covering 4x4
@@ -2491,7 +2593,8 @@ fn decode_cbp_cabac(
 
 /// Residual, clause 7.3.5.3.3: `coded_block_flag` (its own `ctxIdxInc` from
 /// clause 9.3.3.1.1.9, using [`CabacGrids`]'s per-block flag history) then,
-/// only if set, [`residual_block_cabac`].
+/// only if set, [`residual_block_cabac`] -- whose return value is now kept
+/// (in the returned [`MbResidual`]), not merely consumed for its bit cost.
 #[allow(clippy::too_many_arguments)]
 fn decode_residual_cabac(
     cabac: &mut CabacDecoder<'_>,
@@ -2503,7 +2606,8 @@ fn decode_residual_cabac(
     cbp_chroma: u8,
     mb_x: u32,
     mb_y: u32,
-) -> Result<()> {
+) -> Result<MbResidual> {
+    let mut out = MbResidual::default();
     let is_16x16 = matches!(kind, MbKind::Intra16x16 { .. });
     let current_is_intra = kind.is_intra();
 
@@ -2525,7 +2629,7 @@ fn decode_residual_cabac(
         let coded = decide(cabac, &mut ctx.cbf_luma_dc, inc as usize) == 1;
         grids.set_cbf_luma(x, y, coded);
         if coded {
-            let _ = residual_block_cabac(cabac, &mut ctx.residual_luma_dc, 16, budget)?;
+            out.luma_dc = Some(residual_block_cabac(cabac, &mut ctx.residual_luma_dc, 16, budget)?);
         }
     }
 
@@ -2558,7 +2662,10 @@ fn decode_residual_cabac(
                     } else {
                         (16, &mut ctx.residual_luma4x4)
                     };
-                    let _ = residual_block_cabac(cabac, category, max_num_coeff, budget)?;
+                    let res = residual_block_cabac(cabac, category, max_num_coeff, budget)?;
+                    if let Some(slot) = out.luma_ac.get_mut(blk as usize) {
+                        *slot = Some(res);
+                    }
                 }
             } else {
                 grids.set_cbf_luma(x, y, false);
@@ -2592,7 +2699,10 @@ fn decode_residual_cabac(
             let coded = decide(cabac, &mut ctx.cbf_chroma_dc, inc as usize) == 1;
             grids.set_cbf_chroma_dc(comp, mb_x, mb_y, coded);
             if coded {
-                let _out = residual_block_cabac(cabac, &mut ctx.residual_chroma_dc, 4, budget)?;
+                let res = residual_block_cabac(cabac, &mut ctx.residual_chroma_dc, 4, budget)?;
+                if let Some(slot) = out.chroma_dc.get_mut(comp) {
+                    *slot = Some(res);
+                }
             }
         } else {
             grids.set_cbf_chroma_dc(comp, mb_x, mb_y, false);
@@ -2616,12 +2726,15 @@ fn decode_residual_cabac(
                 let coded = decide(cabac, &mut ctx.cbf_chroma_ac, inc as usize) == 1;
                 grids.set_cbf_chroma(comp, x, y, coded);
                 if coded {
-                    let _ = residual_block_cabac(cabac, &mut ctx.residual_chroma_ac, 15, budget)?;
+                    let res = residual_block_cabac(cabac, &mut ctx.residual_chroma_ac, 15, budget)?;
+                    if let Some(slot) = out.chroma_ac.get_mut(comp).and_then(|arr| arr.get_mut(i4x4 as usize)) {
+                        *slot = Some(res);
+                    }
                 }
             } else {
                 grids.set_cbf_chroma(comp, x, y, false);
             }
         }
     }
-    Ok(())
+    Ok(out)
 }
