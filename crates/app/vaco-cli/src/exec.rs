@@ -774,22 +774,14 @@ pub fn run_pipeline(
                         .add_decoder(tap, decoder_desc.build(limits.clone()))
                         .map_err(|e| internal_from("could not attach a decoder", &e))?;
                     let encoder = encoder_desc.build(limits.clone());
-                    // Gap 655/1: a decoder's output format and an encoder's
-                    // accepted formats routinely disagree (`bgr24` out of a
-                    // BMP into an encoder that wants `rgb24`), and until now
-                    // nothing sat between them. `accepted_pix_fmts` is empty
-                    // for every encoder that does not care, so this is a
-                    // no-op for the common case; where it is not, the source
-                    // format is tried first — most decoders already agree
-                    // with at least one accepted format, so this often
-                    // avoids a conversion the reference would also skip.
+                    // An encoder that does not care lists nothing, so this is
+                    // a no-op for the common case.
                     let accepted = encoder.accepted_pix_fmts();
                     let source_format = p.video.as_ref().and_then(|v| v.format);
-                    let frames = match accepted.first() {
-                        Some(&preferred)
-                            if !source_format.is_some_and(|f| accepted.contains(&f)) =>
-                        {
-                            spec.add_converter(frames, preferred, time_base, limits.clone())
+                    let target = source_format.and_then(|f| f.best_of(accepted));
+                    let frames = match target {
+                        Some(t) if Some(t) != source_format => {
+                            spec.add_converter(frames, t, time_base, limits.clone())
                                 .map_err(|e| {
                                     internal_from("could not attach a format converter", &e)
                                 })?
@@ -1270,7 +1262,7 @@ mod tests {
             media: Some(MediaType::Video),
             codec: StreamCodec::Copy,
         };
-        let resolved = check_codecs(&c, &o, &[s]).expect("qoi is registered");
+        let resolved = check_codecs(&c, &o, &[s]).unwrap();
         assert_eq!(resolved, vec![StreamCodec::Encode("qoi")]);
     }
 
