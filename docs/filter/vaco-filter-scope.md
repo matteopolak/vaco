@@ -1,11 +1,11 @@
 # vaco-filter-scope
 
 T3 measurement/visualisation video filters — `planning/16-filters.md` §4.2's
-`vaco-filter-scope` row, GitHub issue #480 ("FT-4.12g"). Nine implemented:
+`vaco-filter-scope` row, GitHub issue #480 ("FT-4.12g"). Ten implemented:
 `histogram`, `waveform`, `datascope`, `thistogram`, `graphmonitor`,
 `agraphmonitor`, `pixscope`, `drawgraph`, `adrawgraph` (the last two via
 GitHub issue #473, FT-4.10 — see `vaco-filter-draw-vf`'s own doc for that
-issue's full scoping).
+issue's full scoping), `vectorscope`.
 
 ## Scope reconciliation
 
@@ -21,7 +21,7 @@ exist. Before writing any code, `planning/ASSIGNMENTS.md`, every sibling
 | `scale2ref`, `colorspace`, `colordetect`, `pixdesctest`, `zoompan` | The T1-tier remainder of `vaco-filter-scale`'s row, orphaned by #463 (FT-4.1a)'s narrower scope — a real gap, but not T3 and not ticketed under #480 |
 | `histogram`, `thistogram`, `waveform`, `vectorscope`, `oscilloscope`, `datascope`, `pixscope`, `ciescope`, `graphmonitor`, `agraphmonitor`, `drawgraph`, `adrawgraph` | `planning/16-filters.md`'s `vaco-filter-scope` row — the actual unclaimed T3 remainder, confirmed absent from every `vaco-component.toml` and the generated registry |
 
-This crate implements eight of those twelve (`graphmonitor`/`agraphmonitor`
+This crate implements nine of those twelve (`graphmonitor`/`agraphmonitor`
 and `drawgraph`/`adrawgraph` each count as one pair). The rest are excluded
 or deferred, each for a distinct, specific reason (see below) rather than a
 blanket "out of time".
@@ -359,9 +359,42 @@ the `rustybuzz` question.
 
 | Filter | Why |
 |---|---|
-| `vectorscope` | **Partially cracked, not shipped.** The coordinate mapping is fully measured: `x = component_x` directly, `y = 255 - component_y`. The intensity accumulation is confirmed nonlinear (independent of frame size — same hit count gives the same output at both `100` and `10000` total pixels) but does not fit any single-parameter model tried (linear, `ceil`/`round`/floor, power law, exponential-IIR); reported as characterised, not shipped, rather than guessed. |
-| `oscilloscope` | **Its `st` statistics text was located this pass**, reversing an earlier "not located" finding from two smaller probes — a third, larger-canvas, multi-frame attempt found it sitting in the trace box's own bottom row: a single white line, `"{ch} avg:{avg:.1f} min:{min} max:{max}"` per channel, no zero-padding (unlike `pixscope`'s). Confirmed to share the same font mechanism (no font option) and confirmed the trace/grid's bare existence (`g=1` draws a plain grid; each enabled component traces a distinct-coloured connected line at partial opacity). **Not shipped**: the trace line's own per-pixel geometry — how `t` tilts it, how `s`/`tx`/`ty`/`tw`/`th` map to exact box pixels, per-component colour assignment — is a materially separate measurement task from finding the stats text, and was not attempted this pass. |
+| `oscilloscope` | **Not shipped — `sc`'s scope outline is a rotated, dashed parallelogram, not a box.** `oscilloscope` overlays onto a copy of the source at the source's own size/format (`64x64` in, `64x64` out) — a different filter shape from every other filter in this crate, which draw a fixed or geometry-derived fresh canvas. Probing `sc=1` alone found a dashed outline whose tilt is driven by `t`: it degenerates to one flat dashed line at the default `t=0.5`, and opens toward the frame's full height at `t=0`/`t=1`. Reproducing this framecrc-exactly needs both the corner-point formula (as a function of `x`/`y`/`s`/`t`) and the reference's own dashed-line rasteriser — a bigger, separate measurement task from `vectorscope`'s per-cell histogram, not attempted to completion this pass. The trace geometry (`tx`/`ty`/`tw`/`th`, per-component colour, `c`'s bitmask) and `st`'s statistics text (previously located: `"{ch} avg:{avg:.1f} min:{min} max:{max}"`, no zero-padding) remain unmeasured for exact placement. |
 | `ciescope` | **Not a D7 case.** Every `system` value names a published international-standard primary set (BT.709, BT.2020, DCI-P3, SMPTE-C, …) and the CIE 1931 observer data is public. The blocker is reproducing the reference's exact chromaticity-diagram *rendering* (spectral-locus rasterisation, anti-aliasing, gamut-triangle lines) — not itself specified by any colorimetry standard, so verifying it would need extensive black-box probing this pass's time did not cover. |
+
+### `vectorscope`
+
+A `256x256` chroma scatter plot, redrawn fresh every frame — no
+persistence across frames (confirmed: a hit aimed at cell A on frame `0`
+then cell B on frames `1..4` shows A dark again the very next frame).
+**Shipped, framecrc-level, for `mode=gray`/`tint` (default),
+`envelope=none` (default), `graticule=none` (default).**
+
+A previous pass reported the intensity accumulation as nonlinear and
+unresolved — that finding came from varying *frame size* to vary hit
+count, which conflates two things, since the reference rebuilds its
+histogram from a single frame's own pixels only. Holding a single
+frame's hit count at one cell fixed independently of overall frame size
+(paint exactly `N` pixels of a much larger frame with the test chroma)
+gives an exact, unfitted rule, pinned at 35 independent points:
+
+```text
+per_hit = floor(255 * intensity)          // truncated once, not per-hit
+Y       = clamp(count * per_hit, 0, 255)
+U = V   = 127 if count > 0 else 128       // binary "touched", not a gradient
+```
+
+The coordinate mapping (already right in the previous pass): `col =
+value(component_x)` unflipped, `row = 255 - value(component_y)` flipped
+— confirmed the flip is a property of the *axis*, not of which component
+is assigned to it (`x=0:y=1` behaves the same way `x=1:y=2` does).
+Because the canvas is a fixed `256x256 yuv444p` matching the reference
+exactly (no `size` option exists), this is shipped against the
+reference's own pixel format, not this crate's usual `gbrp`/`gray8`
+substitute. Not implemented: `mode=color`/`color2..5` (hue-coded);
+`envelope=instant`/`peak`/`peak+instant` (cross-frame persistence);
+`graticule` overlays, `opacity`/`bgopacity`, `colorspace`, `tint0`/
+`tint1`.
 
 ### `drawgraph`/`adrawgraph`
 
@@ -376,23 +409,37 @@ not text-bound.
 Measured directly, with flat-luma sources giving an exactly known
 `lavfi.signalstats.YAVG`:
 
-- **Value-to-pixel mapping** (nine points: `min`/`max`/midpoint at three
-  graph heights): in-range values map through
-  `row = ceil(margin + (max-v)/(max-min) * (height-1-2*margin))`, but the
-  margin did not resolve to one clean constant — the top and bottom
-  margins measured *unequal* at `height=201` (`15` vs `13`), and
-  `margin = round(0.07*(height-1))` (a single, symmetric value) was the
-  closest single-formula fit found in the time available, exact at
-  `height=101` and within one pixel elsewhere. **Out-of-range values
-  clamp to the absolute canvas edge** (`row=0` or `row=height-1`), a
-  different rule from the in-range formula evaluated past its domain —
-  confirmed independently with `min=100:max=150` fed values `0` and
-  `255`.
+- **Value-to-pixel mapping, corrected 2026-08-28.** A coordinator-
+  requested re-probe found the originally-shipped "margined" formula was
+  a measurement artifact: re-measuring with `slide=picture`, a value held
+  constant across frames, and reading column `0` (immune to a confound
+  described next) found **no margin at all**, exact at all 77 points
+  checked (11 heights, 7 values each):
+  `row = clamp(floor((max-v)/(max-min)*(height-1)), 0, height-1)`. The
+  "out-of-range clamps to the absolute edge, a different rule" finding
+  dissolved along with it — it is the same formula's own `.clamp()`
+  doing the work; a value exactly at `min`/`max` already lands on that
+  same edge under the corrected formula, so there is nothing left to
+  distinguish.
+- **`slide=frame` (the default, already shipped) does not scroll — it
+  fills left-to-right and wipes on overflow, also corrected 2026-08-28.**
+  The same re-probe (a distinct, increasing value fed to one column per
+  frame) found each new sample draws into the next unfilled column
+  starting at `0`, and once every column is filled, the *next* sample
+  clears the canvas and restarts at `0` — not a persistent buffer that
+  scrolls left and always appends at the rightmost column (that is
+  `slide=scroll`'s own name and unimplemented behaviour). This was a
+  real bug in what had been reported as shipped; it surfaced only
+  because the margin re-probe forced a cleaner measurement method that
+  could no longer hide it.
 - **`fg1..4`'s hex colour has a real byte-order bug: written
   `0xAARRGGBB`, applied as opaque `(B, G, R)`.** `fg1=0x11223344`
   (intending `A=11,R=22,G=33,B=44`) painted `(R=0x44,G=0x33,B=0x22)` — R
   and B swapped, G untouched, alpha always ignored (confirmed
   pixel-identical output with the same RGB at `A=0x00` and `A=0xff`).
+  **This is reproduced bug-for-bug, deliberately, not corrected** — a
+  differential-tested reimplementation must match the reference's actual
+  paint, not what the option name implies.
 - **`bg` is a normal `<color>`, unaffected by that bug.** `bg=0x112233`
   painted `(R=0x11,G=0x22,B=0x33)` exactly as written — `fg1..4` and `bg`
   are two different colour grammars on the same filter, not one binding
@@ -414,23 +461,22 @@ drive an actual `-f framecrc` invocation (`planning/14-cli.md` is still a
 plan document).
 
 **This row now has a permanent split, not just a temporary one.**
-`histogram`, `waveform`, `thistogram` and `drawgraph`/`adrawgraph` draw no
-text, so nothing rules out framecrc-exactness for them — `thistogram`
-reaching it first closed that question for every non-text filter this
-crate is likely to implement, and `drawgraph`/`adrawgraph` confirming the
-same "no font" property is why they are shipped at all. `datascope`,
-`graphmonitor`/`agraphmonitor` and `pixscope` draw with an
-independently-sourced font (D7 forbids transcribing the reference's own
-table — see "The bitmap-font hypothesis" above), so no frame containing
-their text can *ever* match the reference byte-for-byte. "Framecrc-
-identical across this crate's whole corpus" is therefore not a
-temporarily-unmet goal for the text-drawing filters — it is provably
-unreachable, the same way `hqx` is provably unimplementable in
-`vaco-filter-artistic`. `drawgraph`/`adrawgraph` are not there yet for a
-different reason: the value-to-pixel margin is a fitted approximation,
-not a derived exact formula — see that filter's own section above for
-the precise residual — so today's shipped behaviour is close but not
-proven byte-exact, unlike `thistogram`'s own fully-pinned intensity rule.
+`histogram`, `waveform`, `thistogram`, `drawgraph`/`adrawgraph` and
+`vectorscope` draw no text, so nothing rules out framecrc-exactness for
+them — `thistogram` reaching it first closed that question for every
+non-text filter this crate is likely to implement, and `drawgraph`/
+`adrawgraph`/`vectorscope` confirming the same "no font" property is why
+they are shipped at all. `datascope`, `graphmonitor`/`agraphmonitor` and
+`pixscope` draw with an independently-sourced font (D7 forbids
+transcribing the reference's own table — see "The bitmap-font hypothesis"
+above), so no frame containing their text can *ever* match the reference
+byte-for-byte. "Framecrc-identical across this crate's whole corpus" is
+therefore not a temporarily-unmet goal for the text-drawing filters — it
+is provably unreachable, the same way `hqx` is provably unimplementable
+in `vaco-filter-artistic`. `drawgraph`/`adrawgraph`'s value-to-pixel
+mapping and `vectorscope`'s intensity rule were both corrected to exact,
+unfitted formulas on 2026-08-28 (see each filter's own section above) —
+neither carries a fitted-approximation residual any more.
 
 | Filter | Args | Source | Result |
 |---|---|---|---|
@@ -448,8 +494,12 @@ proven byte-exact, unlike `thistogram`'s own fully-pinned intensity rule.
 | `thistogram` | any, `12`:`4`-style count ratios (`round`, not `ceil`) | `gray` | **exact** — three ratios pinned, including an exact `0.5` tie, ruling out `ceil` and truncation |
 | `graphmonitor` | `s=96x32:rate=25`, a real 3-node `Graph` (source → monitor → sink) | any | **structural, not exact** — real `NodeView`/`LinkView` data confirmed reaching the render (`tests/graphmonitor.rs`, a genuine end-to-end `Graph` run, deliberately broken and restored to confirm the test has teeth); text pixels can never match byte-for-byte (independent font) |
 | `agraphmonitor` | `s=96x32:rate=25`, a real audio source → monitor → video sink | any | **runs end-to-end** — confirmed the one shape difference from `graphmonitor` (reading `pts`/`time_base` off an audio frame, not a video one) does not need separate logic |
-| `drawgraph` | `m1=lavfi.signalstats.YAVG:min=0:max=255:slide=picture`, flat-luma sources at three heights | any (via `signalstats`) | **structural, close but not proven exact** — nine value-to-pixel points matched by a fitted margin formula (exact at one height, within 1px elsewhere); out-of-range clamp-to-edge confirmed exactly |
-| `drawgraph` | `fg1=0x11223344`/`bg=0x112233` | any | **exact** — the `fg1..4` byte-swap-and-drop-alpha bug and `bg`'s normal, unaffected grammar both confirmed |
+| `drawgraph` | `m1=lavfi.signalstats.YAVG:min=0:max=255:slide=picture`, constant flat-luma value, 11 heights x 7 values | any (via `signalstats`) | **exact** — 77/77 points match `row=clamp(floor((max-v)/(max-min)*(height-1)),0,height-1)`, no margin, corrected 2026-08-28 |
+| `drawgraph` | monotonically increasing value, one per frame, `slide=frame`, `width=10` | any | **exact** — column-fill-then-wipe confirmed (10 filled columns, then a wipe back to 1), corrected 2026-08-28 |
+| `drawgraph` | `fg1=0x11223344`/`bg=0x112233` | any | **exact** — the `fg1..4` byte-swap-and-drop-alpha bug (reproduced deliberately, bug-for-bug) and `bg`'s normal, unaffected grammar both confirmed |
+| `vectorscope` | `mode=gray:i=0.004`, exactly `N` pixels of a `200x200` frame at one test chroma | `yuv444p` | **exact** — 35 `(count, intensity)` points match `Y=clamp(count*floor(255*intensity),0,255)`, including the two points a naive `round(255*count*intensity)` gets wrong by one |
+| `vectorscope` | same, chroma planes | `yuv444p` | **exact** — binary `127`(touched)/`128`(untouched) marker confirmed, not a gradient |
+| `vectorscope` | `x=0:y=1`, `lum=200:cb=90` | `yuv444p` | **exact** — coordinate flip confirmed as a property of the *axis*, not the component identity |
 | `pixscope` | `w=7:h=7`, flat `126`/`128` `yuv444p` field | `yuv444p` | **structural, not exact** — flat-field baseline: `AVG`/`MIN`/`MAX`/`RMS` all read the flat value, `STD=0` |
 | `pixscope` | same, single-column outlier (`250` vs `10`) in the `7x7` window | `yuv444p` | **structural, not exact** — `AVG=44.3`/`RMS=94.9`/`STD=83.98` confirmed against hand-computed values, ruling out median/AC-RMS/sample-STD |
 | `pixscope` | same, symmetric 7-value ramp (`54..114` step `10`) | `yuv444p` | **structural, not exact** — `AVG=84.0`/`RMS=86.3`/`STD=20.00` match exactly |
@@ -487,34 +537,43 @@ proven byte-exact, unlike `thistogram`'s own fully-pinned intensity rule.
   out, so treat them as polish, not correctness.
 - If you add `oscilloscope`, start from `src/font8x8.rs` — it is already
   sourced, registered and tested; do not re-derive or re-source a font.
-  Its `st` statistics text is now found and read (`"{ch} avg:{avg:.1f}
+  Its `st` statistics text is found and read (`"{ch} avg:{avg:.1f}
   min:{min} max:{max}"`, one line, no zero-padding), but a **larger
   canvas and several accumulated frames were needed to see it** — a
   single-frame, `800x600`-scale probe (the size that worked for
-  `pixscope`) showed nothing; `1600x1200` over `10` frames did. What
-  remains unmeasured is the trace/grid geometry itself: how `t` tilts the
-  trace, how `s`/`tx`/`ty`/`tw`/`th` map to exact box pixels, and
-  per-component colour assignment — start there, since the stats format
-  is already nailed down and ready to reuse once the trace itself is
-  measured.
+  `pixscope`) showed nothing; `1600x1200` over `10` frames did. The
+  bigger open item is the `sc` scope outline: it is a **dashed, rotated
+  parallelogram**, not a box — `t` rotates it between two extremes
+  through a flat, full-width, single-dashed-line midpoint at the default
+  `t=0.5` (probed by comparing `t=0`/`0.25`/`0.75`/`1` against a flat
+  source with `st=0:g=0`). Reproducing it needs the corner-point formula
+  as a function of `x`/`y`/`s`/`t` and the reference's own dashed-line
+  rasteriser — budget this as a bigger task than `vectorscope`'s per-cell
+  histogram was, not a quick follow-on. The trace geometry itself
+  (`tx`/`ty`/`tw`/`th`, per-component colour, `c`'s bitmask) is still
+  unmeasured on top of that.
 - `graphmonitor`/`agraphmonitor` are done; `src/graphmonitor.rs` is the
   template for any future filter that needs `FilterContext::
   graph_nodes`/`graph_links` — the `render()` function is a pure,
   independently unit-tested layout pass over `&[NodeView]`/`&[LinkView]`,
   kept separate from the `FrameFilter` glue specifically so its pixel
   positions can be asserted exactly without decoding rendered glyphs.
-- If you add `vectorscope`, its coordinate mapping (`x` direct, `y`
-  inverted) is done — reuse it rather than re-measuring. Its intensity
-  curve is the open problem: confirmed nonlinear and confirmed
-  independent of frame size, but no single-parameter model tried this
-  pass (linear, `ceil`/`round`/floor, power law, exponential-IIR) fit the
-  measured curve. A fresh attempt should either try a genuinely different
-  model shape (e.g. a two-parameter fit, or checking whether the
-  reference clips/quantizes the accumulator at some intermediate
-  fixed-point width before the final byte conversion) or measure a much
-  denser intensity/count grid before proposing one — guessing a formula
-  that merely interpolates the points on record here would be worse than
-  leaving it open.
+- `vectorscope` is done, for `mode=gray`/`tint`, `envelope=none`,
+  `graticule=none`. Its previously-reported "unresolved nonlinear
+  intensity" turned out to be a measurement-method problem, not a hard
+  one: varying frame size to vary hit count conflates two things, since
+  the reference rebuilds its `256x256` histogram from a single frame's
+  own pixels only (no persistence — verified directly). Hold one frame's
+  hit count fixed independently of frame size (paint exactly `N` pixels
+  of a larger frame with the test chroma) and the rule is exact, not
+  fitted: `Y = clamp(count * floor(255*intensity), 0, 255)`, chroma
+  `127`/`128` as a binary touched/untouched marker. If you extend it to
+  `mode=color..5`, reuse this histogram-building loop and the coordinate
+  mapping — only the final per-cell-to-pixel colour encoding changes.
+  `envelope=instant`/`peak`/`peak+instant` would need the histogram to
+  persist across frames, which this pass deliberately did not build
+  since the default (`none`) does not.
+
 ## Configuration
 
 No crate-level configuration, environment variables, or feature flags.

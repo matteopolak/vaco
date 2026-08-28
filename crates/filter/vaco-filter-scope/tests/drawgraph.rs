@@ -67,16 +67,15 @@ fn drawgraph_plots_a_real_metadata_value_from_a_real_frame() -> Result<()> {
 
     let out = graph.recv(sink)?;
     let plane = out.plane(0).expect("drawgraph always draws to plane 0 (G, in gbrp)");
-    // value=255 with min=0:max=255 lands at the top of the plot (a small
-    // row near 0, per this crate's own measured margin), lighting the
-    // last column: some pixel in that column must differ from the
-    // default white background.
-    let last_col_has_ink = plane
-        .rows_iter()
-        .any(|row| row.last().is_some_and(|&px| px < 250));
+    // `slide=frame` (the default) fills left-to-right from column 0, not
+    // a scroll that always appends at the right edge (see the module
+    // doc's 2026-08-28 correction) — so the single frame this test sends
+    // lands its ink in column 0. value=255 with min=0:max=255 maps to
+    // row 0 exactly (the unmargined formula's own top edge).
+    let first_col_has_ink = plane.rows_iter().any(|row| row.first().is_some_and(|&px| px < 250));
     assert!(
-        last_col_has_ink,
-        "expected drawgraph to have plotted the real metadata value onto its last column"
+        first_col_has_ink,
+        "expected drawgraph to have plotted the real metadata value onto its first column"
     );
 
     assert!(graph.violations().is_empty());

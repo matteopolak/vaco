@@ -28,45 +28,70 @@
 //! # Measured (`ffmpeg 8.1`, real filtergraphs built with `signalstats`
 //! and flat-colour sources for exact, known metadata values)
 //!
-//! **The value-to-pixel mapping is a margined linear map, ceiling-rounded,
-//! for in-range values — and a hard clamp to the absolute canvas edge for
-//! out-of-range ones, which is a *different* rule, not the same formula
-//! evaluated past its domain.** Pinned with flat-luma sources (giving an
-//! exactly known `lavfi.signalstats.YAVG`) at three graph heights
-//! (`51`, `101`, `201`) and three values each (`min`, `max`, the
-//! midpoint):
+//! # Correction, 2026-08-28: the previous pass's "margined" mapping was a
+//! measurement artifact, not a real feature
+//!
+//! A later dispatch asked for one more focused probe into an apparent
+//! margin asymmetry (`height-1=200` had measured a top margin of `15`
+//! against a bottom margin of `13`). Re-measuring with a cleaner method —
+//! `slide=picture`, a value held **constant** across several frames (so
+//! `mode=line`'s connecting segment is a flat run at the true row, not a
+//! diagonal between two different values), and reading column `0` (the
+//! very first plotted point, never touched by any scroll/reset logic) —
+//! found **no margin at all**, at every one of 77 points checked (11
+//! heights from `51` to `250`, 7 values from `0` to `255` each):
 //!
 //! ```text
-//! for min <= v <= max:
-//!     row = ceil(margin + (max - v) / (max - min) * (height - 1 - 2*margin))
-//!     margin ~= round(0.07 * (height - 1))    // fitted, not exact — see below
-//! for v < min: row = height - 1               // the absolute bottom edge
-//! for v > max: row = 0                        // the absolute top edge
+//! row = clamp(floor((max - v) / (max - min) * (height - 1)), 0, height - 1)
 //! ```
 //!
-//! The out-of-range rule was found by setting `min=100:max=150` and
-//! feeding values `0` and `255`: they landed at row `height-1` and row
-//! `0` exactly — the canvas edges, **not** `row(100)`/`row(150)` under
-//! the in-range formula (which would have been a few pixels in from the
-//! edge, per the margin above). Values are clamped to the plot, not
-//! dropped, and the clamp target is the edge, not the range boundary.
+//! This single formula, with no special case, also explains the
+//! previously-reported "out-of-range clamps to the absolute edge, a
+//! *different* rule" finding: feeding `v=0`/`v=255` against `min=100:
+//! max=150` makes the unclamped quotient `3.0`/`-2.1`, wildly outside
+//! `0..=height-1` regardless of margin, so *any* formula's natural
+//! `.clamp()` would land on the same edges that probe saw. That probe
+//! never actually distinguished a separate out-of-range rule from an
+//! in-range formula's own overflow — both this formula and the old
+//! margined one clamp to the same place for values that far outside
+//! range, so it could not have told them apart. The real error was
+//! upstream of that probe: the original margined formula was fitted to
+//! numbers gathered under `slide=frame`, and (see below) `slide=frame`
+//! turned out not to behave as this pass assumed, so the columns being
+//! read did not contain what they were assumed to contain. Once measured
+//! with a method that removes that confound, the margin disappears
+//! entirely and the fit was fitting noise. This crate's own `pixscope`
+//! and `graphmonitor` margins are still open — they were not re-measured
+//! by this correction — but this is a reminder that a "fitted, not
+//! exact" residual is itself a flag to re-probe with a cleaner method
+//! before shipping it, not a stable resting point.
 //!
-//! **The margin did not resolve to one clean constant, and this is
-//! recorded rather than papered over.** Nine points were measured —
-//! `min`, `max` and the midpoint at three graph heights, each from a
-//! flat-luma source giving an exactly known `signalstats.YAVG` — and the
-//! *top* and *bottom* margins turned out not even to be equal to each
-//! other at a given height (`height-1=200` measured a top margin of `15`
-//! against a bottom margin of `13`, not one shared value). The raw
-//! measurements: at `height-1` of `50`/`100`/`200`, `row(max)` was
-//! `3`/`7`/`15` and `row(min)` was `46`/`93`/`187`. `round(0.07*
-//! (height-1))` used as a single, symmetric margin for both edges
-//! reproduces `height-1=100` exactly (both edges land on the measured
-//! `7`/`93`) and is within one pixel of the other two heights in both
-//! directions — the closest single-formula fit found in the time this
-//! pass had, not a derivation. Implemented as that approximation, with
-//! the exact residual stated here rather than claimed away, the same
-//! honesty `datascope`/`graphmonitor`'s own unchased margins use.
+//! # Correction, 2026-08-28: `slide=frame` does not scroll — it fills
+//! left-to-right and wipes on overflow
+//!
+//! The same re-probe (a distinct, monotonically increasing value fed to
+//! one column per emitted frame, `width=10`) found `slide=frame` (mode
+//! `0`, the default — the very mode already shipped) draws each new
+//! sample into the **next unfilled column**, starting at column `0`,
+//! not a persistent buffer that shifts left and always appends at the
+//! rightmost column (which is what this pass had implemented, and what
+//! `slide=scroll`'s own name and description — "scroll from right to
+//! left" — actually names). Once every column has a value, the *next*
+//! sample clears the whole canvas back to `bg` and starts again at
+//! column `0` — confirmed watching the hit count drop from `10` filled
+//! columns to `1` the instant the buffer filled. The per-line "vertical
+//! bar from the previous row to the new row" drawing this pass already
+//! had (see `filter_frame`) turned out to be right and needed no change
+//! — only *which column* it draws into. `Line::last_row` state also
+//! carries across a wipe unchanged (the first bar drawn into column `0`
+//! after a wipe connects to the value last plotted before the wipe, at
+//! the old rightmost column) — confirmed by the connecting bar's span
+//! matching the pre-wipe value's row, not starting fresh. This was a
+//! real bug in what was reported as shipped, found only because the
+//! coordinator's own re-probe request for the margin question forced a
+//! cleaner measurement method that exposed it as a side effect — the
+//! margin fit and the slide confound were two symptoms of the same
+//! methodological gap, not two unrelated errors.
 //!
 //! **`fg1..fg4`'s colour is a hex literal with a byte-order quirk:
 //! written as `0xAARRGGBB`, applied as opaque `(B, G, R)` — R and B
@@ -79,6 +104,17 @@
 //! a `struct { u8 r,g,b,a; }` cast onto a little-endian `uint32_t`
 //! written as a big-endian literal produces, and it is a genuinely
 //! different convention from `bg`.
+//!
+//! **This is bug-for-bug compatibility, not a defect left unfixed: `vaco`
+//! reproduces the swap.** `parse_fg_hex` deliberately returns the same
+//! `(B, G, R)`-from-`AARRGGBB` mapping the reference applies. A
+//! differential test against the reference needs `fg1=0x11223344` to
+//! paint the same wrong-looking `(R=0x44, G=0x33, B=0x22)`, not the
+//! "corrected" `(R=0x22, G=0x33, B=0x44)` the option's own name implies —
+//! correcting it here would make every corpus entry that sets `fg1..4`
+//! diverge from the reference instead of matching it. Do not "fix" this
+//! swap; it is the reference's own behaviour, pinned by
+//! `fg_hex_swaps_r_and_b_and_drops_alpha` below.
 //!
 //! **`bg` is a normal `<color>` (the same grammar `vaco-filter-draw-vf`'s
 //! `drawbox`/`drawgrid` use), not the `fg1..4` quirk.** `bg=0x112233`
@@ -94,14 +130,9 @@
 //! `mode=bar`/`dot` (only `line`, the default, connects consecutive
 //! samples with a straight segment — measured and implemented).
 //! `slide=replace`/`scroll`/`rscroll`/`picture` (only `frame`, the
-//! default, is implemented, as a left-shifting scroll that always
-//! appends the newest sample at the rightmost column — this pass
-//! confirmed the *end state* of a `slide=picture` accumulation
-//! extensively, but did not independently re-verify a live multi-frame
-//! `slide=frame` sequence against the reference frame-by-frame before
-//! shipping, given time; recorded as a stated limitation rather than
-//! holding the filter, the same call this crate's own `thistogram`
-//! `slide` scope made). `fg1..4` as genuine per-value *expressions*
+//! default, is implemented — fill-left-to-right-then-wipe, re-measured
+//! and corrected above after the original scroll assumption was found
+//! wrong). `fg1..4` as genuine per-value *expressions*
 //! (evaluated with metadata-dependent variables) — only the constant-hex
 //! case this pass measured is implemented; a colour that changes with
 //! the plotted value would need the expression's own bound-variable set
@@ -233,17 +264,13 @@ struct Line {
     last_row: Option<u32>,
 }
 
-/// `row = ceil(margin + (max-v)/(max-min) * (height-1-2*margin))` for
-/// in-range `v`; the absolute edge for out-of-range `v` — see the module
-/// doc for both probes.
+/// `row = clamp(floor((max-v)/(max-min) * (height-1)), 0, height-1)` — no
+/// margin. Matched exactly at 77/77 measured points (11 heights, 7 values
+/// each, including out-of-range `v`) — see the module doc's 2026-08-28
+/// correction for how the previously-shipped margined formula was found
+/// to be a measurement artifact.
 fn value_to_row(v: f64, min: f64, max: f64, height: u32) -> u32 {
     if height == 0 {
-        return 0;
-    }
-    if v < min {
-        return height - 1;
-    }
-    if v > max {
         return 0;
     }
     if (max - min).abs() < f64::EPSILON {
@@ -254,13 +281,11 @@ fn value_to_row(v: f64, min: f64, max: f64, height: u32) -> u32 {
         reason = "graph heights are small (hundreds of pixels), well within f64's exact integer range"
     )]
     let h1 = f64::from(height - 1);
-    let margin = (0.07 * h1).round();
-    let usable = (h1 - 2.0 * margin).max(0.0);
-    let row = (margin + (max - v) / (max - min) * usable).ceil();
+    let row = ((max - v) / (max - min) * h1).floor();
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
-        reason = "row is clamped into 0..=height-1 immediately below"
+        reason = "row is clamped into 0..=height-1 immediately below; NaN/inf cannot occur since max != min was ruled out above"
     )]
     let row = row as i64;
     row.clamp(0, i64::from(height - 1)) as u32
@@ -278,9 +303,15 @@ pub(crate) struct Filter {
     max: f64,
     bg: (u8, u8, u8),
     lines: Vec<Line>,
-    /// Persistent canvas, one `(r,g,b)` triple per pixel, row-major —
-    /// `slide=frame`'s scrolling history.
+    /// Persistent canvas, one `(r,g,b)` triple per pixel, row-major.
+    /// `slide=frame` does **not** scroll (that is `slide=scroll`'s own,
+    /// unimplemented, behaviour) — it fills columns left-to-right from
+    /// `next_col` and wipes the whole canvas back to `bg` once full, see
+    /// the module doc's 2026-08-28 correction.
     canvas: Vec<(u8, u8, u8)>,
+    /// The next column `slide=frame` will draw into; wraps (with a full
+    /// canvas wipe) back to `0` on overflow.
+    next_col: usize,
 }
 
 impl Filter {
@@ -312,6 +343,7 @@ impl Filter {
             bg,
             lines,
             canvas: vec![bg; (width * height) as usize],
+            next_col: 0,
         }
     }
 
@@ -354,16 +386,12 @@ impl FrameFilter for Filter {
         self.next_due = slot.saturating_add(1);
 
         let w = self.width as usize;
-        let bg = self.bg;
-        for row in self.canvas.chunks_mut(w) {
-            if w > 0 {
-                row.copy_within(1..w, 0);
-                if let Some(last) = row.last_mut() {
-                    *last = bg;
-                }
-            }
+        if w == 0 || self.next_col >= w {
+            self.canvas.fill(self.bg);
+            self.next_col = 0;
         }
-        let last_col = w.saturating_sub(1);
+        let col = self.next_col;
+        self.next_col = self.next_col.saturating_add(1);
         let min = self.min;
         let max = self.max;
         let height = self.height;
@@ -383,7 +411,7 @@ impl FrameFilter for Filter {
                 None => (row, row),
             };
             for r in top..=bottom {
-                if let Some(px) = self.canvas.get_mut(r * w + last_col) {
+                if let Some(px) = self.canvas.get_mut(r * w + col) {
                     *px = line.color;
                 }
             }
@@ -422,6 +450,7 @@ impl FrameFilter for Filter {
     fn flush_state(&mut self) {
         self.next_due = 0;
         self.seen = false;
+        self.next_col = 0;
         for line in &mut self.lines {
             line.last_row = None;
         }
@@ -509,43 +538,48 @@ mod tests {
         assert_eq!(parse_bg_hex("0x112233"), (0x11, 0x22, 0x33));
     }
 
-    /// Pinned against three flat-field probes at height `101`:
-    /// `v=0 -> row 93`, `v=128 -> row 50`, `v=255 -> row 7`.
+    /// Re-measured 2026-08-28 with `slide=picture`, a value held constant
+    /// across frames, and column `0` (immune to the `slide=frame` column
+    /// confound the original margined fit was actually measuring). No
+    /// margin: `v=0 -> row 100` (the absolute bottom edge), `v=128 ->
+    /// row 49`, `v=255 -> row 0` (the absolute top edge), at height 101.
     #[test]
-    fn value_to_row_matches_the_measured_margined_map() {
-        assert_eq!(value_to_row(0.0, 0.0, 255.0, 101), 93);
-        assert_eq!(value_to_row(128.0, 0.0, 255.0, 101), 50);
-        assert_eq!(value_to_row(255.0, 0.0, 255.0, 101), 7);
+    fn value_to_row_matches_the_measured_unmargined_map() {
+        assert_eq!(value_to_row(0.0, 0.0, 255.0, 101), 100);
+        assert_eq!(value_to_row(128.0, 0.0, 255.0, 101), 49);
+        assert_eq!(value_to_row(255.0, 0.0, 255.0, 101), 0);
     }
 
-    /// `margin = round(0.07*(height-1))` is exact at `height=101` (the
-    /// case measured first) but fits `height=51`/`height=201` only
-    /// approximately (`+-1`px) — the raw reference measurements were
-    /// `46/25/3` and `187/101/15` respectively; this formula's own
-    /// consistent output is asserted here, not a claim that it matches
-    /// the reference pixel-for-pixel at every height. See the module
-    /// doc's own honest accounting of this residual.
+    /// The same unmargined formula, exact (not merely "internally
+    /// consistent") against 77 independently measured points spanning
+    /// heights `51` through `250` and values `0`/`64`/`100`/`128`/`150`/
+    /// `191`/`255` — a sample of that sweep at three heights, replacing
+    /// the old `+-1`px-residual test this correction retired.
     #[test]
-    fn value_to_row_formula_is_internally_consistent_at_other_heights() {
-        assert_eq!(value_to_row(0.0, 0.0, 255.0, 51), 46);
-        assert_eq!(value_to_row(128.0, 0.0, 255.0, 51), 25);
-        assert_eq!(value_to_row(255.0, 0.0, 255.0, 51), 4);
-        assert_eq!(value_to_row(0.0, 0.0, 255.0, 201), 186);
-        assert_eq!(value_to_row(128.0, 0.0, 255.0, 201), 100);
-        assert_eq!(value_to_row(255.0, 0.0, 255.0, 201), 14);
+    fn value_to_row_formula_is_exact_at_other_heights() {
+        assert_eq!(value_to_row(0.0, 0.0, 255.0, 51), 50);
+        assert_eq!(value_to_row(128.0, 0.0, 255.0, 51), 24);
+        assert_eq!(value_to_row(255.0, 0.0, 255.0, 51), 0);
+        assert_eq!(value_to_row(0.0, 0.0, 255.0, 201), 200);
+        assert_eq!(value_to_row(128.0, 0.0, 255.0, 201), 99);
+        assert_eq!(value_to_row(255.0, 0.0, 255.0, 201), 0);
+        assert_eq!(value_to_row(150.0, 0.0, 255.0, 250), 102);
     }
 
-    /// Pinned against the reference probe: with `min=100:max=150`, a
-    /// value of `0` (below `min`) lands at the absolute bottom edge
-    /// (`height-1`), and `255` (above `max`) at the absolute top edge
-    /// (`0`) — not at `row(min)`/`row(max)` under the in-range formula.
+    /// The 2026-08-28 correction found the "out-of-range clamps to the
+    /// absolute edge" finding is not a separate rule at all: the same
+    /// unmargined formula's own quotient is already outside `0..=height-1`
+    /// for a genuinely out-of-range value, so `.clamp()` alone produces
+    /// the edge — and, per the corrected formula, an *in-range* value
+    /// exactly at `min`/`max` already lands on that same edge, so there
+    /// is no observable difference to test for any more. This test now
+    /// pins the unified behaviour: values outside `[min, max]` clamp to
+    /// the same edge their nearest in-range boundary value would.
     #[test]
-    fn out_of_range_values_clamp_to_the_absolute_edge_not_the_margined_row() {
-        let row_min_inrange = value_to_row(100.0, 100.0, 150.0, 101);
-        let row_max_inrange = value_to_row(150.0, 100.0, 150.0, 101);
+    fn out_of_range_values_clamp_the_same_as_the_in_range_formula_would() {
+        assert_eq!(value_to_row(100.0, 100.0, 150.0, 101), 100);
+        assert_eq!(value_to_row(150.0, 100.0, 150.0, 101), 0);
         assert_eq!(value_to_row(0.0, 100.0, 150.0, 101), 100);
         assert_eq!(value_to_row(255.0, 100.0, 150.0, 101), 0);
-        assert_ne!(row_min_inrange, 100, "the in-range row for min should not itself be the absolute edge");
-        assert_ne!(row_max_inrange, 0, "the in-range row for max should not itself be the absolute edge");
     }
 }

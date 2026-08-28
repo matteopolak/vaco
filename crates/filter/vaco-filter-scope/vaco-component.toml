@@ -1,9 +1,20 @@
 # Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
 #
-# Two of the twelve T3 measurement/visualisation video filters
-# `planning/16-filters.md` §4.2 assigns to `vaco-filter-scope`. See
-# `docs/filter/vaco-filter-scope.md` for the rest, left as a follow-up or
-# excluded, each for its own recorded reason.
+# Nine of the twelve T3 measurement/visualisation video filters
+# `planning/16-filters.md` §4.2 assigns to `vaco-filter-scope` (counting
+# `graphmonitor`/`agraphmonitor` and `drawgraph`/`adrawgraph` as one pair
+# each). See `docs/filter/vaco-filter-scope.md` for the rest, left as a
+# follow-up or excluded, each for its own recorded reason.
+#
+# 2026-08-28: this fragment had fallen behind the crate — `datascope`,
+# `thistogram`, `graphmonitor`/`agraphmonitor`, `pixscope`, `drawgraph`/
+# `adrawgraph` and `vectorscope` were all implemented, tested and shipped
+# in earlier passes but never added here, so `cargo xtask gen-registry`
+# never made them reachable outside this crate's own `ScopeRegistry` —
+# found while checking whether `drawgraph` needed the same treatment.
+# `generated.rs` itself is left for the coordinator's own regeneration
+# sweep (a shared, generated file); this fragment is the source of truth
+# it reads from.
 
 [[component]]
 kind = "filter"
@@ -17,4 +28,60 @@ kind = "filter"
 name = "waveform"
 long_name = "Video waveform monitor."
 ctor = "vaco_filter_scope::waveform::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "datascope"
+long_name = "Video data analysis."
+ctor = "vaco_filter_scope::datascope::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "thistogram"
+long_name = "Compute and draw a temporal histogram."
+ctor = "vaco_filter_scope::thistogram::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "graphmonitor"
+long_name = "Show various filtergraph stats."
+ctor = "vaco_filter_scope::graphmonitor::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "agraphmonitor"
+long_name = "Show various filtergraph stats."
+ctor = "vaco_filter_scope::graphmonitor::ADESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "pixscope"
+long_name = "Pixel data analysis."
+ctor = "vaco_filter_scope::pixscope::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "drawgraph"
+long_name = "Draw a graph using input video metadata."
+ctor = "vaco_filter_scope::drawgraph::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "adrawgraph"
+long_name = "Draw a graph using input audio metadata."
+ctor = "vaco_filter_scope::drawgraph::ADESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "vectorscope"
+long_name = "Video vectorscope."
+ctor = "vaco_filter_scope::vectorscope::DESC"
 media = "video"

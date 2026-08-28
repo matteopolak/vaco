@@ -20,6 +20,7 @@ vaco-filter-graph = { path = "../../filter/vaco-filter-graph" }
 proptest.workspace = true
 vaco-sampfmt = { path = "../../model/vaco-sampfmt" }
 vaco-chlayout = { path = "../../model/vaco-chlayout" }
+vaco-color = { path = "../../model/vaco-color" }
 
 [lints]
 workspace = true
