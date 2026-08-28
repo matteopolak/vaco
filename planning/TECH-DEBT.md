@@ -5034,3 +5034,93 @@ round's commit.
 `Vaco-Spec-Ref: iso-iec-14496-10-2002-draft` clause 7.3.5.3.3 (chroma
 residual gating), Table 9-17 (`mb_qp_delta`/`intra_chroma_pred_mode`
 context initialisation).
+
+## H.264 CABAC: the decisive pixel-comparison test cannot be run yet — no reconstruction pipeline exists (#418)
+
+Answering the coordinator's request directly, first: the pixel comparison
+was not performed, because **it cannot be, with this codebase as it
+stands.** Not a broken or buggy reconstruction — no reconstruction at all.
+
+**The evidence, not an assumption.** `decoder.rs`'s own module doc and
+`docs/codec/vaco-codec-h264.md`'s "What is not implemented" section both
+state it explicitly: "Prediction, motion compensation, transform and
+reconstruction, deblocking, DPB/reference management, threading,
+conformance bring-up — #420 onward." The code matches the doc exactly:
+`H264Decoder::receive_frame` unconditionally returns
+`Error::NeedMoreInput`; `H264Decoder::send_packet` returns
+`Error::Unsupported` for any slice beyond parameter-set/entropy-mode
+resolution, naming precisely that gap in its own error string;
+`decode_slice_cabac` decodes *syntax* (`mb_type`, `coded_block_pattern`,
+residual *coefficients*) and never produces a predicted sample, an
+inverse-transformed residual, or a reconstructed pixel anywhere.
+`vaco-codec-dsp-idct::h264` has the low-level integer transform
+primitives (`idct4x4`/`idct8x8`/Hadamard variants), but nothing in
+`vaco-codec-h264` calls them, and there is no intra-prediction,
+motion-compensation, or deblocking code anywhere in this crate. This is
+#420's own, separate, not-yet-started scope — not a defect in #418/#419's
+work.
+
+**The half of the comparison that is available stayed available.**
+Running `ffmpeg` purely as a black box — decode to raw YUV, read the
+output file — is exactly what D6 permits and carries zero clean-room
+concern; getting a reference frame for any of the three corpora would be
+one command each. The blocker is entirely on this side: there is no "this
+decoder's own frame" to put next to it.
+
+**Not attempted: building even a minimal, intra-only reconstruction
+sufficient for these specific corpora.** That means implementing real
+prediction and transform application from the primary text — #420's own
+scope, a multi-round undertaking in its own right, not something to start
+unilaterally mid-round on the strength of one dispatch's instruction.
+Flagged and stopped here, per the exact standard the coordinator itself
+set for ffmpeg-source instrumentation two rounds ago: a scope decision for
+whoever owns #420's sequencing, not one to make by quietly starting the
+work and presenting it as already decided.
+
+**Verified clauses 7.3.2.10 and 9.3.4.6 directly, as asked**, on whether
+`assert_slice_ends_at_rbsp_trailing_bits` demands an invariant CABAC does
+not have. `rbsp_slice_trailing_bits()` is `rbsp_trailing_bits()` (the stop
+bit plus zero-padding to byte alignment) followed by `while
+(more_rbsp_trailing_data()) cabac_zero_word`; 9.3.4.6 (informative) gives
+the encoder-side formula for exactly how many `cabac_zero_word`s to
+append — driven by a bitrate/HRD buffering computation, not by any
+position ambiguity — and `cabac_zero_word` is defined as exactly `0x0000`,
+always. **The spec text does not support "a stray nonzero bit past
+correct termination is allowed" in any form.** The narrower version of the
+objection — that the stop bit is consumed *inside* the arithmetic
+decoding and is not a structure the reader can independently locate by
+scanning forward — is correct, and is the same point a "look one bit
+behind the current position, not one bit ahead" reframing already made
+two rounds ago. But that reframing does not, on its own, explain this
+fixture's specific numeric gap either: the position one bit behind this
+decoder's own termination point (bit 68) does hold a `1`, consistent with
+being *a* valid stop-bit position — yet the file's true final bit (bit
+71, three bits later) is *also* `1`, and a second `1` bit anywhere past
+the first is not zero-padding or a `cabac_zero_word` under any reading of
+clause 7.3.2.10. **This narrows, rather than dissolves, the objection to
+the assertion**: a real subtlety in its exact bit-position framing exists
+(already partly addressed two rounds ago), but "the assertion demands an
+invariant CABAC does not have" is not borne out by the primary text for
+the specific anomaly observed on this fixture. Something remains
+genuinely unexplained, and only an independent ground truth — pixel
+output, or an instrumented reference decoder — can settle which side of
+the disagreement is right.
+
+**Also fixed**, found while locating this round's insertion point: a
+prior round's automated edit had accidentally split one sentence in
+`mb.rs`'s own KNOWN GAP comment block across roughly 70 lines (new content
+inserted between a sentence's two halves rather than after it). Corrected;
+no content lost, purely a formatting artifact.
+
+No source change to `vaco-codec-cabac` or `vaco-codec-h264`'s decode
+logic this round — documentation only. Gates: full clean sweep
+(`layer-check`, `dep-gate`, `unsafe-audit`, `dup-check`, `owner-gate`,
+`patent-gate`), `clippy -p vaco-codec-h264 --all-targets` clean, full test
+suite unaffected outside the four already-`#[ignore]`d CABAC macroblock
+tests. `provenance-check`'s failures are pre-existing, none from this
+round's commit.
+
+#419 not reopened; no standing fix revisited.
+
+`Vaco-Spec-Ref: iso-iec-14496-10-2002-draft` clause 7.3.2.10 (RBSP slice
+trailing bits), clause 9.3.4.6 (byte stuffing process).
