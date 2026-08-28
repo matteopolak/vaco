@@ -87,6 +87,32 @@ A brief names the *specific* section to read when one genuinely matters — a
 codec's specification clause, plan 12's PF-0.x amendments before optimising,
 plan 16's rules F1–F9 before writing a filter. Read those. Skip the rest.
 
+## Check `ASSIGNMENTS.md` before you name a crate or a work list
+
+A brief that names a crate the plan does not have, or a list of things already
+built elsewhere, wastes the agent's first hour and is entirely the dispatcher's
+fault. This has now happened: a filter brief asked for a `vaco-filter-effect-*`
+crate covering ~25 stylisation filters, quoting the GitHub issue's `Crate(s):`
+line. There is no such row in `planning/16-filters.md` §4.2, and every filter
+named in it already had a home — `vaco-filter-convolve`, `vaco-filter-geometry`
+and `vaco-filter-temporal` between them held the whole list, all three
+packages closed, and one remaining filter sat in a crate with a live owner.
+The agent checked `ASSIGNMENTS.md` before writing code, found the plan's real
+unclaimed row, and built that instead. It was right and the brief was wrong.
+
+The issue text is generated from the roadmap and its `Crate(s):` field is a
+*plan-era guess*, not a fact about the tree. Before dispatching:
+
+- `grep` the work list against `planning/ASSIGNMENTS.md` — a `done` row means
+  somebody already shipped it.
+- `ls crates/<area>/` for the crate the issue names. If it does not exist,
+  find the plan row that does rather than telling the agent to create it.
+- Check whether the crate has a live owner in the assignment table or a dirty
+  working tree.
+
+None of that takes long, and the alternative is paying a fresh context to
+discover it.
+
 ## The plan index — check a citation before you write it
 
 Briefs are hand-written and plan numbers get mistyped. Three briefs in wave 6
