@@ -459,6 +459,33 @@ forward. The gap-19 agent wrote two, and they fail differently — one does not
 compile without the blanket impl, the other passes compilation and fails at
 runtime without the explicit override. Both were needed.
 
+## You cannot identify your own commits by author — only by hash
+
+Every agent in this tree commits under the same git identity. `git log
+--author=...` therefore selects *everyone's* work, and an agent auditing
+"which of these gate failures are mine?" by author will claim or disclaim
+commits it never made. One agent nearly attributed another's malformed
+trailer to itself this way, and caught it only by checking the hash directly.
+
+**Record the SHA of every commit you create, and audit against that list.**
+`git diff HEAD~1 HEAD --name-only` after each commit gives you the SHA and the
+file list in one step; keep both.
+
+The same applies in reverse: when a report says "these failures are not
+yours," that claim was also made by someone who cannot see author identity.
+Verify against your own SHAs before repeating it.
+
+### `commit-msg` enforces provenance trailers only under some directories
+
+`crates/codec`, `crates/format`, `crates/filter` and `crates/signal` are
+checked areas: a commit touching them is **rejected outright** without
+`Vaco-Provenance` / `Vaco-Clean-Room` / `Vaco-AI-Assisted`. `fuzz/` and
+`crates/io/` are not checked, which is why the same agent can commit happily
+for several rounds and then be blocked the first time it edits a scaler. The
+rejection is clean and loses nothing — add the trailers and retry. For an
+original (non-spec-derived) fix, `Vaco-Provenance: original` is the value the
+repository's own history uses.
+
 ## Run `git diff HEAD~1 HEAD` after every commit
 
 It is the only check that reliably catches a commit carrying somebody else's
