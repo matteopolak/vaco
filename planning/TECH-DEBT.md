@@ -5438,3 +5438,96 @@ integer `/`); builds for `wasm32-unknown-unknown`; `layer-check`/
 correctly (verified locally, not committed).
 
 Vaco-Spec-Ref: ffmpeg-hds-mux-probe
+
+
+### #355's remainder: pulldown landed (partially), field pictures scoped and correctly not started
+
+Took #355's actual remaining scope (field pictures, pulldown flags —
+the two things its own title names that the IDCT/escape-sentinel work
+never touched), cheapest first.
+
+**Pulldown, checked against `vaco_frame::FrameFlags` before writing
+anything.** `TOP_FIELD_FIRST` already existed, unused by this crate;
+`decoder.rs::begin_picture` now sets it directly from
+`picture_coding_extension()`'s own bit, unconditionally (§6.2.3.1 decodes
+it unconditionally too). Covered by a new unit test constructing a
+`PictureCodingExtension` directly and calling `begin_picture`, since no
+fixture on hand exercises interlaced content end-to-end.
+`repeat_first_field` has no home: together with `top_field_first` it
+selects 2, 3 or 4 field-display periods (`ffmpeg`'s own
+`AVFrame::repeat_pict` shape), not a plain boolean, and `vaco_frame::Frame`
+has only two booleans (`INTERLACED`, `TOP_FIELD_FIRST`) — no numeric
+field. This crate does not own `vaco-frame`; the single-writer rule
+forbids editing it from here, so the field is now documented as
+parsed-and-discarded rather than silently dropped with no explanation.
+
+**Independently corroborated, not just asserted.** `vaco-filter-
+deinterlace`'s own `repeatfields.rs` documents the identical gap from
+the consuming side — that filter's whole purpose is to act on this
+exact signal and has nothing to read, because no decoder in this
+workspace can produce it. Two agents, working from opposite ends of the
+same missing interface, reached the same conclusion independently. Both
+findings point at one open question for whoever owns `vaco-frame`: what
+shape should carry "repeat this picture for N extra field periods" —
+almost certainly a small integer somewhere on `Frame` or `FrameFlags`,
+not a boolean.
+
+**Field pictures: checked how much of the existing field-addressing
+machinery already applies, rather than assumed or planned blind.**
+`motion.rs`'s `row_scale`/`row_parity` and `macroblock.rs`'s
+`deinterleave_rows` were built for field-based *prediction within a
+frame picture* (`frame_pred_frame_dct == 0`, `picture_structure` still
+`Frame` — §7.6.2's common real-world interlaced case, already
+implemented and measured). An actual field picture
+(`picture_structure` = top/bottom field) is a different, larger thing
+this machinery does not reach:
+
+- **Picture pairing** — two field pictures compose one displayable
+  frame; this crate's pipeline is strictly 1 bitstream picture : 1
+  output `Frame`, with nothing to pair two half-height pictures into one
+  interleaved output.
+- **Field-granularity reference management** — a field picture can
+  reference the opposite field of the frame *currently being
+  assembled*, not just a previous frame; `previous`/`recent`/`held` are
+  frame-granularity only.
+- **A different `frame_motion_type` code space** — §6.3.17.1's 2-bit
+  field means `{Field, Frame, Dual-Prime}` for a frame picture (what
+  `macroblock.rs` implements today) but `{Field, 16x8, Dual-Prime}` for
+  a field picture: a parallel decode path, not a flag flip, and 16x8 MC
+  is separately unimplemented regardless.
+- **Chroma field-positioning** nuances specific to top vs. bottom field
+  content, on top of all of the above.
+
+**No real fixture would be available even once built — checked, not
+assumed, the same discipline already applied to Annex P and `yuv444p`.**
+A real interlaced source encoded with `ffmpeg -c:v mpeg2video -flags
++ilme+ildct` was bit-traced picture by picture: every one of 4 encoded
+pictures reads `picture_structure = 0b11` (frame). `ildct`/`ilme` select
+field-based prediction *within* frame pictures — what this crate already
+implements — not separate field pictures. `ffmpeg -h full`'s complete
+option list has nothing shaped like an explicit field-picture-output
+toggle either. Two independent reasons, the same bar Annex P was held
+to: materially larger than one round (four distinct new subsystems, not
+a wiring exercise), and unverifiable against this project's own
+real-encoder tooling even once built — any implementation would live on
+hand-crafted-bitstream unit tests against the primary text's own worked
+examples for its whole life, the position Annex T and the legacy UMV
+path are already in for `vaco-codec-h263`.
+
+**Per instruction: land pulldown, report the field-picture scope, and
+stop — not a half-implementation that reports `CORRUPT` less often but
+still wrongly.** No field-picture code was written. #355 is not
+re-judged this round (nothing new closed its stated scope); its
+existing reasoning stands, now with pulldown half-closed instead of
+fully open.
+
+Gates green (`cargo test/clippy -p vaco-codec-mpeg12`, full
+`layer-check`/`dep-gate`/`unsafe-audit`/`dup-check`/`time-gate`/
+`owner-gate`/`vlc-scan`). Output verified byte-identical on every
+fixture on hand (this change only touches `FrameFlags`, never pixel
+data). A blanket `rustfmt`/`cargo fmt --check` on the two touched files
+flags many pre-existing lines that are not this round's — not run,
+since it would rewrite hunks that are not mine; my own additions are
+hand-formatted consistently with the surrounding code instead.
+
+`Vaco-Spec-Ref: itu-t-h262` §6.2.3.1, §6.3.17.1.
