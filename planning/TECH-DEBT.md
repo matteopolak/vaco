@@ -1189,3 +1189,21 @@ Do **not** "fix" this by widening the gate or by moving `provenance/baseline`
 forward: the baseline exempts every commit in between, trading one bad record
 for a hundred unchecked ones, and `provenance/corrections.toml` maps a citation
 to a registered source id, which is a different axis entirely.
+
+### `SubtitleContent::Text` fits `vaco-codec-subtitle-cc`'s decode output too, same as the bitmap crate above
+
+Same shape of gap as the entry above, for the third T2-13 decoder:
+`vaco-codec-subtitle-cc`'s `Event::Cea608`/`Event::Cea708` carry a
+`Screen` (a sparse, row-sorted set of styled `Cell`s) whose `Screen::text()`
+method already produces exactly the plain string `SubtitleContent::Text`
+wants. Not wired up in this session, for the same reason: this crate was
+built and committed as a standalone library before gap 17 closed (its own
+top-level doc comment explains the correction), and this session's scope
+did not include the `Decoder`/registry/`vaco-component.toml` plumbing.
+
+Unlike the bitmap crate, this one has an extra design question the bitmap
+case does not: `CodecId::Eia608` covers both CEA-608 and CEA-708, and this
+crate's real input is a per-frame `cc_data` side-data buffer, not a
+bitstream a `Decoder::send_packet` would demux — so "what is a packet
+here" needs an answer before the `Decoder` impl can be written, not just a
+translation of already-working output through `SubtitleRect::text`.
