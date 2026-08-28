@@ -8,6 +8,10 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[lib]
+name = "vaco_checkasm"
+path = "src/lib.rs"
+
 [[bin]]
 name = "vaco-checkasm"
 path = "src/main.rs"
@@ -15,6 +19,11 @@ path = "src/main.rs"
 [dependencies]
 vaco-core = { path = "../../core/vaco-core" }
 vaco-simd = { path = "../../core/vaco-simd" }
+# The wired-in demonstration kernel (`src/kernels`): a real, shipped SIMD
+# family, not a toy. See that module's doc for why `vaco-scale` was picked.
+vaco-scale = { path = "../../signal/vaco-scale" }
+vaco-color = { path = "../../model/vaco-color" }
+vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
 
 [lints]
 workspace = true
