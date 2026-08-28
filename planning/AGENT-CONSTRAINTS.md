@@ -340,9 +340,15 @@ because it was too narrow to contain the failure.
   channel individually right; the frame collectively wrong, because the
   bitstream's channel order is not the output's. A per-channel metric calls
   that a pass.
-- **AAC's QMF banks**: single tones round-trip at >0.99 across 200 Hz–10 kHz,
-  white noise at ~0.04. Energy in one subband hides a per-subband phase error
-  that broadband energy exposes.
+- **AAC's QMF banks**: single tones round-trip at >0.99, white noise at ~0.04
+  — and **there was no defect**. The verification searched a lag window that
+  never contained the real delay of 289 samples; a sustained tone's
+  self-correlation is periodic in the lag, so every tone found a >0.99 alias
+  inside the wrong window while noise, having no period, could not. An impulse
+  round trip settled it in one measurement. The lesson survives its own
+  correction: the *disagreement* between tones and noise was the real signal,
+  and reading it as "noise exposes a defect tones hide" was as wrong as
+  ignoring it would have been.
 - **VP9's `inv_remap_prob`**: invisible on trivial content because probability
   updates rarely fire, catastrophic on real content.
 - **MPEG-2's `CODED_BLOCK_PATTERN`**: small quiet fixtures at max deviation 2,
@@ -357,6 +363,12 @@ Broadband where you tested tones. Whole-signal where you tested parts. Busy
 content where you tested flat. Two tones where one passed. And when a test
 cannot fail, say so: a test that buys confidence it has not earned is worse
 than no test, because it stops the next person looking.
+
+**When two measurements of the same thing disagree, suspect the measurement
+before the code.** The QMF case above cost a dispatch because the disagreement
+was read as a diagnosis rather than as a question. A signal with no period —
+an impulse — or a second parameter varied independently will usually tell you
+which of the two is lying, faster than reasoning about either will.
 
 ## Check a recorded blocker before you accept it
 

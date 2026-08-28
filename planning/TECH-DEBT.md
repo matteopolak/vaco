@@ -2280,3 +2280,28 @@ during this session's byte-level measurement). This is a substantially
 larger undertaking than landing the muxer itself was, and was not
 attempted — the round trip (this crate's own demuxer, and a real `ffprobe`/
 `ffmpeg`) is what this crate is verified against instead.
+
+
+## `vlc-scan`'s target list is hand-maintained, and silence is not coverage
+
+`xtask/src/vlc_scan.rs` walks a hardcoded `TARGETS` list of
+`(crate, file, table, shape)` and understands two table shapes. A table not in
+that list is not scanned, and the gate then reports the crate clean — which is
+the failure mode this project keeps hitting from other directions: a check that
+buys confidence it has not earned.
+
+Concretely, **`vaco-codec-aac` is not covered at all.** Its tables use
+`VlcEntry::new(code, len, symbol)`, which is not one of the two known shapes,
+so all twelve #444 spectral codebooks and the ten #446 SBR tables are
+unscanned. Found by the crate's own owner, not by the gate.
+
+Two things to fix, and the second matters more than the first:
+
+1. Teach it the `VlcEntry::new` shape and add the AAC tables.
+2. **Make the gate state its coverage** — how many tables it scanned, in which
+   crates — and, better, have it flag large constant arrays it can see but
+   cannot parse as `unscanned: unknown shape` rather than passing over them.
+   Silent omission is the defect; the missing shape is only today's instance.
+
+Not urgent, but it should be done before anyone cites a clean `vlc-scan` as
+evidence about a crate it never looked at.
