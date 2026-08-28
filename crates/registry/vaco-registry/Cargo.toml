@@ -39,8 +39,9 @@ layer = 6
 # `default = false` in its own fragment; nothing here is hand-maintained.
 
 [features]
-default = ["codec-ac3", "codec-image-simple", "codec-jpeg", "codec-mpeg12", "codec-mpegaudio", "codec-pnm", "codec-qoi", "codec-subtitle-bitmap", "codec-vp8", "codec-vp9", "demux-adx", "demux-aiff", "demux-amr", "demux-amrnb", "demux-amrwb", "demux-aptx", "demux-aptx-hd", "demux-asf", "demux-asf-o", "demux-au", "demux-avi", "demux-bink", "demux-caf", "demux-cdg", "demux-dash", "demux-dfpwm", "demux-dv", "demux-ffmetadata", "demux-flic", "demux-flv", "demux-g722", "demux-g723-1", "demux-g726", "demux-g726le", "demux-g728", "demux-g729", "demux-gsm", "demux-hls", "demux-image2", "demux-ircam", "demux-ivf", "demux-matroska", "demux-mp3", "demux-mp4", "demux-mpegps", "demux-mpegts", "demux-mpegtsraw", "demux-mpjpeg", "demux-mxf", "demux-nistsphere", "demux-nut", "demux-ogg", "demux-pvf", "demux-raw", "demux-roq", "demux-rso", "demux-sbc", "demux-sln", "demux-smk", "demux-sox", "demux-spdif", "demux-swf", "demux-tta", "demux-vag", "demux-voc", "demux-w64", "demux-wav", "demux-wv", "demux-xwma", "mux-aiff", "mux-asf", "mux-asf-stream", "mux-au", "mux-avi", "mux-caf", "mux-dash", "mux-dv", "mux-dvd", "mux-flv", "mux-hls", "mux-image2", "mux-ircam", "mux-ivf", "mux-matroska", "mux-mp3", "mux-mp4", "mux-mpeg", "mux-mpegts", "mux-mpjpeg", "mux-nut", "mux-ogg", "mux-raw", "mux-rso", "mux-rtp", "mux-rtp-mpegts", "mux-sox", "mux-spdif", "mux-svcd", "mux-swf", "mux-vcd", "mux-vob", "mux-voc", "mux-w64", "mux-wav", "parse-aac", "parse-av1", "parse-h264", "parse-hevc", "parse-image", "parse-mpegvideo", "parse-opus", "parse-vpx", "subtitle-bitmap", "subtitle-text"]
+default = ["codec-ac3", "codec-h263", "codec-image-simple", "codec-jpeg", "codec-mpeg12", "codec-mpegaudio", "codec-pnm", "codec-qoi", "codec-subtitle-bitmap", "codec-vp8", "codec-vp9", "demux-adx", "demux-aiff", "demux-amr", "demux-amrnb", "demux-amrwb", "demux-aptx", "demux-aptx-hd", "demux-asf", "demux-asf-o", "demux-au", "demux-avi", "demux-bink", "demux-caf", "demux-cdg", "demux-dash", "demux-dfpwm", "demux-dv", "demux-ffmetadata", "demux-flic", "demux-flv", "demux-g722", "demux-g723-1", "demux-g726", "demux-g726le", "demux-g728", "demux-g729", "demux-gsm", "demux-hls", "demux-image2", "demux-ircam", "demux-ivf", "demux-matroska", "demux-mp3", "demux-mp4", "demux-mpegps", "demux-mpegts", "demux-mpegtsraw", "demux-mpjpeg", "demux-mxf", "demux-nistsphere", "demux-nut", "demux-ogg", "demux-pvf", "demux-raw", "demux-roq", "demux-rso", "demux-sbc", "demux-sln", "demux-smk", "demux-sox", "demux-spdif", "demux-swf", "demux-tta", "demux-vag", "demux-voc", "demux-w64", "demux-wav", "demux-wv", "demux-xwma", "mux-aiff", "mux-asf", "mux-asf-stream", "mux-au", "mux-avi", "mux-caf", "mux-dash", "mux-dv", "mux-dvd", "mux-flv", "mux-hls", "mux-image2", "mux-ircam", "mux-ivf", "mux-matroska", "mux-mp3", "mux-mp4", "mux-mpeg", "mux-mpegts", "mux-mpjpeg", "mux-mxf", "mux-nut", "mux-ogg", "mux-raw", "mux-rso", "mux-rtp", "mux-rtp-mpegts", "mux-sox", "mux-spdif", "mux-svcd", "mux-swf", "mux-vcd", "mux-vob", "mux-voc", "mux-w64", "mux-wav", "parse-aac", "parse-av1", "parse-h264", "parse-hevc", "parse-image", "parse-mpegvideo", "parse-opus", "parse-vpx", "subtitle-bitmap", "subtitle-text"]
 "codec-ac3" = ["dep:vaco-codec-ac3"]
+"codec-h263" = ["dep:vaco-codec-h263"]
 "codec-image-simple" = ["dep:vaco-codec-image-simple"]
 "codec-jpeg" = ["dep:vaco-codec-jpeg"]
 "codec-mpeg12" = ["dep:vaco-codec-mpeg12"]
@@ -132,6 +133,7 @@ default = ["codec-ac3", "codec-image-simple", "codec-jpeg", "codec-mpeg12", "cod
 "mux-mpeg" = ["dep:vaco-mux-mpegps"]
 "mux-mpegts" = ["dep:vaco-mux-mpegts"]
 "mux-mpjpeg" = ["dep:vaco-format-mpjpeg"]
+"mux-mxf" = ["dep:vaco-mux-mxf"]
 "mux-nut" = ["dep:vaco-format-nut"]
 "mux-ogg" = ["dep:vaco-mux-ogg"]
 "mux-raw" = ["dep:vaco-mux-raw"]
@@ -194,6 +196,10 @@ optional = true
 
 [dependencies.vaco-codec-ac3]
 path = "../../codec/vaco-codec-ac3"
+optional = true
+
+[dependencies.vaco-codec-h263]
+path = "../../codec/vaco-codec-h263"
 optional = true
 
 [dependencies.vaco-codec-h264]
@@ -335,6 +341,9 @@ path = "../../filter/vaco-filter-deinterlace"
 [dependencies.vaco-filter-denoise]
 path = "../../filter/vaco-filter-denoise"
 
+[dependencies.vaco-filter-draw-vf]
+path = "../../filter/vaco-filter-draw-vf"
+
 [dependencies.vaco-filter-geometry]
 path = "../../filter/vaco-filter-geometry"
 
@@ -451,6 +460,10 @@ optional = true
 
 [dependencies.vaco-mux-mpegts]
 path = "../../format/vaco-mux-mpegts"
+optional = true
+
+[dependencies.vaco-mux-mxf]
+path = "../../format/vaco-mux-mxf"
 optional = true
 
 [dependencies.vaco-mux-ogg]
