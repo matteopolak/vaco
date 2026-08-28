@@ -2879,3 +2879,111 @@ before this entry was written; `git diff` against the commit before this
 one is empty for `block.rs` and `macroblock.rs`. Gates green: `cargo
 test -p vaco-codec-mpeg12` (29 passed, unchanged), no fixture regression
 (no fixture was re-decoded with different code, since none changed).
+
+## H.264 CABAC macroblock layer: `I_PCM` closed, the test's own assertions were too weak, real divergence starts at slice 0 (#418, #419)
+
+Third pass on top of two prior dispatches (commits landing #418/#419's
+CABAC macroblock-layer work). `I_PCM` support was added to
+`mb::decode_slice_cabac` — byte-align, skip `256 * ChromaFormatFactor =
+384` raw `pcm_byte[i]` reads (fixed `u(8)`, no bit-depth dependency in the
+2002 draft this crate's tables are checked against — that extension
+postdates this edition the same way the 8x8 transform does), then
+re-initialise only the arithmetic engine (clause 9.3.1.2) while leaving
+context models untouched (9.3.1.1 is not re-invoked). Cheap, as expected:
+`CabacDecoder` renormalises one bit at a time with no read-ahead, so
+`into_reader()` already hands back a `BitReader` positioned exactly where
+the raw bytes start.
+
+**The more important finding was that `tests/macroblock_layer_cabac.rs`'s
+own assertions were never strong enough to prove bit-exactness.** The
+test checked `!cabac.malformed()` and `stats.macroblock_count ==
+total_mbs` — both can hold even when every decoded value is wrong,
+because `end_of_slice_flag`'s fixed, non-adapting context can plausibly
+fire at a macroblock-count-correct point regardless of what was actually
+decoded before it. `tests/macroblock_layer.rs`'s CAVLC test already
+closes the equivalent gap with a `more_rbsp_data()`-style check; this
+test never had the CABAC counterpart. Adding
+`assert_slice_ends_at_rbsp_trailing_bits` (checks that what follows
+`end_of_slice_flag` really is clause 7.3.2.10's `rbsp_slice_trailing_bits()`
+— one stop bit, zero padding to the byte boundary, then zero or more
+all-zero `cabac_zero_word`s) found that **all three real corpora
+(`cabac_ip_simple.264`, `cabac_ip_multiref.264`, `cabac_i_only.264`)
+actually diverge at slice 0** — not slice 10, not "36 of 36 macroblocks
+visited then `malformed()` at the end", not "reaches `I_PCM` at slice 6",
+as the two prior dispatches reported. Every one of those reports was
+accurate about the specific bug it found and fixed; none of them was
+actually measuring bit-exactness, because the measurement itself could
+not tell the difference between "correct" and "wrong but still
+plausible". This is the same failure shape already tracked elsewhere on
+this page and in `AGENT-CONSTRAINTS.md`: a fuzz harness that could not
+reach its own state space, a metric too narrow, a gate with an
+incomplete target list — here it is a test's own assertions.
+
+**What the corrected measurement narrowed the search to.** Address-by-
+address cross-checking against `ffmpeg -debug mb_type` (letter meanings
+confirmed by reading `get_type_mv_char`/`get_segmentation_char` in
+FFmpeg's own `libavcodec/mpegutils.c` source directly — `'I'` really does
+mean `IS_INTRA16x16`, not assumed from familiarity) found that
+`cabac_i_only.264`'s slice 0, an all-`Intra4x4` slice, has every single
+macroblock's classification match the reference exactly, yet the
+arithmetic engine ends a bit or two short of `rbsp_trailing_bits()` by
+the slice's end. That rules out a `ctxIdxInc`/context-table bug in
+anything reachable before residual decode in an all-intra slice — all
+independently re-verified against primary text this round and matched:
+`MB_TYPE_I` (Table 9-12), `SKIP_P`/`MB_TYPE_P` (Table 9-13),
+`PREV_INTRA4X4`/`REM_INTRA4X4`/`INTRA_CHROMA_PRED_MODE`/`QP_DELTA`
+(Table 9-17), `CBP_LUMA`/`CBP_CHROMA` (Table 9-18, which also turned out
+to vary by `cabac_init_idc` — not just `mb_type`/`mb_skip`/`ref_idx`/
+`mvd` — checked and confirmed correct), and the `cbf_cond_term`/
+`cbp_luma_cond_term`/`cbp_chroma_cond_term`/`mvd_abs_term` formulas.
+Also confirmed correct this round, though not on the critical path for
+an all-intra slice: `ref_idx_cond_term` had a real, now-fixed clause
+9.3.3.1.1.6 comparison inversion (`r <= 0` where the primary text needs
+`r > 0`) — the third inverted-condition bug found in this project's video
+codecs, per the coordinator's count.
+
+**Handoff, in order of cost:**
+
+1. `residual_block_cabac` (`crates/codec/vaco-codec-h264/src/cabac_residual.rs`)
+   is the leading suspect: everything upstream of it in an all-intra
+   slice has now been individually re-verified against primary text, and
+   this macroblock-layer measurement is the *first time this function has
+   ever been driven by real encoder output* — its prior verification was
+   hand-built fixtures and its own round-trip test encoder, neither of
+   which can catch a bug that only manifests against genuine encoder
+   statistics (specific coefficient run lengths, specific `numDecodAbsLevelGt1`
+   sequences, etc.). Start with `cabac_i_only.264` slice 0, which is
+   short (16 macroblocks, all `Intra4x4`) and now has a hard failure
+   right where the divergence is instead of hundreds of macroblocks away.
+2. Bisect within slice 0 by instrumenting `decode_residual_cabac`'s call
+   sites in `mb.rs` to print the CABAC engine's bit position
+   (`cabac.reader().bit_pos()` -- both are already public) before
+   and after each `residual_block_cabac` call, macroblock by macroblock —
+   the previous dispatch did this at the macroblock-classification level
+   (`mb_type`/`cbp`/`qp_delta`) and it worked well for finding the
+   `intra_chroma_pred_mode` and `ref_idx_cond_term` bugs; the same
+   technique one level deeper, inside residual decode, is the natural
+   next step now that everything above it is ruled out.
+3. Candidates worth checking specifically inside `residual_block_cabac`,
+   none yet checked this round: the exact context selection for
+   `coeff_abs_level_minus1`'s `binIdx >= 1` group as `numDecodAbsLevelGt1`
+   crosses its own boundaries within one block; the `EGk` suffix's exact
+   bit count for large levels: `decode_coeff_abs_level_minus1`'s hand-
+   rolled prefix/suffix split against clause 9.3.2.3's `UEGk` definition
+   directly (this function deliberately does not use
+   `CabacDecoder::decode_uegk`, per its own doc comment, specifically
+   because the prefix needs two disjoint context groups — re-derive that
+   split against primary text rather than trusting the existing doc
+   comment's account of it).
+4. Once `residual_block_cabac` is either confirmed correct or fixed,
+   re-run all three corpora with `assert_slice_ends_at_rbsp_trailing_bits`
+   still in place — it is the load-bearing check now and must not be
+   weakened or removed even if it is inconvenient; removing it would
+   silently reopen exactly the gap this pass closed.
+
+No code regression: `cargo clippy -p vaco-codec-h264 --all-targets`
+clean, `cargo test -p vaco-codec-h264` unchanged pass/fail shape aside
+from the three CABAC macroblock tests' `#[ignore]` reasons (updated with
+the corrected repro, still `#[ignore]`d), `h264_entropy` fuzz target
+clean (5M+ execs, no crash), `patent-gate` still "0 of 2". #418 and #419
+stay open.
