@@ -6,4 +6,5 @@
 
 pub mod fir_mc;
 pub mod masked_select;
+pub mod mecmp;
 pub mod scale_affine;

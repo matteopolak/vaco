@@ -29,6 +29,9 @@ vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
 # on anything downward, which is what lets a real production kernel be
 # checked without that kernel's own crate depending on this one.
 vaco-codec-dsp-mc = { path = "../../signal/vaco-codec-dsp-mc" }
+# Motion-estimation comparison kernels (D-12, #144): same reasoning as
+# vaco-codec-dsp-mc above.
+vaco-codec-dsp-mecmp = { path = "../../signal/vaco-codec-dsp-mecmp" }
 
 [lints]
 workspace = true

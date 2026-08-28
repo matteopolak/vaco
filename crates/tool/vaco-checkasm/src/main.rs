@@ -17,6 +17,7 @@
 
 use vaco_checkasm::kernels::fir_mc::FirMcKernel;
 use vaco_checkasm::kernels::masked_select::MaskedSelectKernel;
+use vaco_checkasm::kernels::mecmp::{SadKernel, SsdKernel, VarianceKernel};
 use vaco_checkasm::kernels::scale_affine::AffineRowKernel;
 use vaco_checkasm::{Differential, Kernel, Report};
 
@@ -75,6 +76,18 @@ const ENTRIES: &[Entry] = &[
     Entry {
         name: FirMcKernel::NAME,
         verify: verify_report::<FirMcKernel>,
+    },
+    Entry {
+        name: SadKernel::NAME,
+        verify: verify_report::<SadKernel>,
+    },
+    Entry {
+        name: SsdKernel::NAME,
+        verify: verify_report::<SsdKernel>,
+    },
+    Entry {
+        name: VarianceKernel::NAME,
+        verify: verify_report::<VarianceKernel>,
     },
 ];
 
