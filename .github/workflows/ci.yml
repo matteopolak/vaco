@@ -101,3 +101,47 @@ jobs:
       # is a latent breakage; both extremes must build.
       - run: cargo check --workspace --no-default-features --locked
       - run: cargo check --workspace --all-features --locked
+
+  # QA-05/QA-07 (plan 13 §5.2's `fuzz-regressions` job): every seed under
+  # fuzz/seeds/ once crashed something and was fixed; replaying all of them
+  # on every PR is what keeps a fix a fix. `scripts/replay-fuzz-regressions.sh`
+  # is `cargo +nightly fuzz run <target> <seed>` looped over every seed —
+  # fuzz/seeds/README.md's own documented replay command, just run for you.
+  fuzz-regressions:
+    name: fuzz regression replay
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - run: rustup toolchain install nightly --profile minimal
+      - run: cargo install cargo-fuzz --locked
+      - run: ./scripts/replay-fuzz-regressions.sh
+
+  # QA-07 (plan 13 §5.2's `conformance-smoke`/`conformance-mapped`), scaled
+  # back to what this project can actually run today. Two honest gaps against
+  # the plan, both worth fixing in a follow-up rather than silently:
+  #   1. Plan 13 §1.6 pins an exact reference build via a container digest
+  #      (`ghcr.io/vaco/refbin@sha256:...`); no such image exists yet, so this
+  #      uses distro ffmpeg instead — a real but unpinned reference.
+  #   2. `--tier smoke` (the plan's ~400-case, 4-minute budget) currently
+  #      selects zero cases: nothing in tests/conformance/ is tagged `smoke`
+  #      yet, only `core`/`full`. Using `--tier core` here instead (706 cases,
+  #      several minutes) until that tagging pass happens.
+  # `continue-on-error: true` is deliberate and temporary: per
+  # planning/AGENT-CONSTRAINTS.md's "byte-exactness is a check, not the bar"
+  # ruling, a real divergence is not automatically a failure, and this
+  # project's divergence-allowlist/deviation-shape machinery (see
+  # vaco-conformance::deviation) is not yet wired through every comparator —
+  # today's `core` tier run reports several hundred divergences that are
+  # mostly known, unreviewed gaps rather than regressions. This job is
+  # advisory (visible in every PR, blocking none) until that backlog is
+  # triaged; flip `continue-on-error` off once it is.
+  conformance:
+    name: conformance (core tier, advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: cargo run -p vaco-conformance --locked -- run --tier core
