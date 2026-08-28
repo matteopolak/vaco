@@ -21,6 +21,7 @@ vaco-parse-h264 = { path = "../vaco-parse-h264" }
 
 [dev-dependencies]
 proptest.workspace = true
+vaco-format-nalu = { path = "../../format/vaco-format-nalu" }
 
 [lints]
 workspace = true

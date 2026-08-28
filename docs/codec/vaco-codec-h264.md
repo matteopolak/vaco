@@ -1,6 +1,7 @@
 # `vaco-codec-h264`
 
-Layer 5. H.264/AVC entropy decoding (T3-01d/#417 CAVLC, T3-01e/#418 CABAC),
+Layer 5. H.264/AVC entropy decoding (T3-01d/#417 CAVLC, T3-01e/#418 CABAC)
+plus enough of the macroblock layer (#419) to drive CAVLC end to end,
 `encumbered = true` / `patent-encumbered-h264-decode`.
 
 ## What it is
@@ -26,6 +27,17 @@ decoders, symmetric in shape and in scope:
 (via `vaco-parse-h264`'s already-tested parameter-set/slice-header parsing)
 and then returns `Error::Unsupported`, honestly — see "What is not
 implemented" below.
+
+[`mb::decode_slice_cavlc`] (#419) drives a whole CAVLC slice's macroblock
+loop — `mb_type`/`sub_mb_type` classification (Tables 7-8/7-10/7-11/
+7-14/7-15), `mb_skip_run`, `ref_idx`/`mvd` presence and count per partition,
+`coded_block_pattern`/`mb_qp_delta`, and the neighbour-derived `nC` clause
+9.2.1 needs — far enough to assert bit-exact consumption against real
+`libx264` output across I/P/B slices, multiple slices per picture, and both
+skipped and coded macroblocks. It does not decode CABAC's macroblock layer
+(no context tables for `mb_type`/`mb_skip_flag`/etc. — see "What is not
+implemented") and it does not reconstruct anything: no motion vector,
+reference index, or pixel is ever produced, only read for its bit length.
 
 ## How it works
 
@@ -135,26 +147,38 @@ empty.
 
 ## What is not implemented
 
-Everything from `mb_type` up: macroblock partitioning, intra/inter
-prediction, motion compensation, transform and reconstruction, deblocking,
-DPB/reference management, threading, conformance bring-up — #419 onward.
-`H264Decoder::send_packet` resolves a real slice's entropy mode (verified
-against real `ffmpeg 8.1 -coder cavlc`/`-coder cabac` output,
-`tests/decoder.rs`) and then returns `Error::Unsupported` naming exactly
-that gap, the same choice `vaco-codec-aac` made for the boundary between
-"configuration/syntax resolved" and "samples produced".
+Prediction, motion compensation, transform and reconstruction, deblocking,
+DPB/reference management, threading, conformance bring-up — #420 onward.
+`H264Decoder::send_packet` still resolves only a real slice's entropy mode
+(verified against real `ffmpeg 8.1 -coder cavlc`/`-coder cabac` output,
+`tests/decoder.rs`) and returns `Error::Unsupported` naming exactly that
+gap; [`mb::decode_slice_cavlc`] is not yet wired into it, since nothing it
+reads is kept beyond what bit consumption needs.
 
-**Not attempted this pass, by choice**: enough of #419 to drive a real
-slice through both entropy paths and measure bit-exact consumption against
-real `libx264` output — the goal the coordinator's follow-up dispatch set
-once the tables were re-verified. Re-verifying the CAVLC tables against
-primary spec text (the section above) turned out to be the larger and more
-consequential half of that dispatch on its own — it found and corrected
-real errors a self-consistency check alone had missed — and attempting a
-necessarily narrow slice of the macroblock layer on top of it risked
-exactly the "wider scope over tables you cannot yet trust" outcome the
-dispatch explicitly said to avoid. Landing correct tables at a narrower
-scope, and reporting #419 as not reached, was the instructed fallback.
+Within #419's own scope, explicitly out rather than merely unimplemented
+(see `mb.rs`'s own module doc for the full list and reasons):
+
+- **CABAC's macroblock layer** — `mb_type`, `mb_skip_flag`,
+  `coded_block_pattern`, `ref_idx`, `mvd`, intra pred mode flags,
+  `mb_qp_delta`, `coded_block_flag`, `transform_size_8x8_flag` binarisation
+  and `ctxIdxInc` derivation. This is the largest remaining piece of "both
+  entropy paths" — CAVLC's macroblock layer is plain `ue(v)`/`se(v)`/
+  `te(v)`/`me(v)` reads with no new hand-transcribed bit tables, but CABAC
+  needs its own per-element context-initialisation tables (Tables 9-11
+  through 9-33, 9-24, 9-26/9-27), fetched and verified the same way the
+  CAVLC tables were, not fabricated to reach a number.
+- **MBAFF** (`mb_adaptive_frame_field_flag`) and field pictures —
+  `decode_slice_cavlc` refuses outright rather than silently getting the
+  frame-only neighbour derivation wrong for it. Neighbour availability
+  changes shape entirely under MBAFF (macroblock pairs, parity-dependent
+  derivation); scoping it out was a deliberate choice, not an oversight.
+- **The 8x8 luma transform** (`transform_size_8x8_flag`, `Intra_8x8`,
+  High-profile only) — the primary source this crate's tables are verified
+  against predates it entirely, and the test corpus is encoded Main
+  profile specifically to avoid emitting it.
+- **`constrained_intra_pred_flag`'s neighbour substitution rule**, 4:2:2/
+  4:4:4 chroma, `SI` slices, `I_PCM` — each refused explicitly by
+  `check_scope` rather than attempted incorrectly.
 
 ## Verification: what is and is not claimed
 
@@ -163,19 +187,56 @@ scope, and reporting #419 as not reached, was the instructed fallback.
 CAVLC and CABAC elementary streams (`tests/decoder.rs`, fixtures under
 `tests/fixtures/`).
 
-**Specification-and-self-consistency, not reference-verified**: both
-residual-block entropy functions' bit-level decode. Real-corpus, bit-exact
-verification of an entropy decoder against a real encoder's output needs
-driving it across an entire slice's macroblock loop — knowing which syntax
-element precedes each residual block and with what `nC`/`ctxBlockCat`/
-`coded_block_flag` — which needs #419's macroblock layer to exist first.
-Claiming that measurement now, before it is possible, would be exactly the
-specification-only-dressed-as-verified gap a previous dispatch on this
-project was asked to stop making. What is verified instead: hand-built
-fixtures cited to the exact table row/spec clause they exercise, an
-independent-of-the-table exact-bit-length/prefix-free test harness (CAVLC),
-round-trips through `vaco-codec-cabac`'s own test-only encoder mirroring
-this crate's exact bin sequence (CABAC), and the fuzz corpus above.
+**Reference-verified, bit-exact**: [`mb::decode_slice_cavlc`] against two
+real `ffmpeg 8.1`/`libx264 -coder cavlc` elementary streams
+(`tests/macroblock_layer.rs`, `tests/macroblock_layer_simple.rs`):
+
+- `cavlc_ipb.264` — Main profile, I/P/B slices, **two slices per picture**,
+  B-pyramid (`-bf 2`), multiple reference frames (`num_ref_idx_l0/l1_active`
+  up to 3). 50 slices (6 I, 16 P, 28 B), every one asserted to end with
+  nothing but `rbsp_slice_trailing_bits()` unconsumed — not merely "no
+  error returned".
+- `cavlc_ip_simple.264` — Main profile, I+P only, single reference, single
+  slice per picture — the isolation case that caught the multi-slice bug
+  below before the fuller corpus's B-slice content did too.
+
+Two real bugs this measurement caught that no amount of hand-built-fixture
+or self-consistency testing could have, because both need a real multi-part
+picture to manifest:
+
+1. **A skipped macroblock never updated the neighbour grid.**
+   `mb_skip_run` advances `CurrMbAddr` without ever calling
+   [`decode_macroblock_cavlc`], so a skipped macroblock's 4x4 blocks stayed
+   `NBlock(None)` (unavailable) forever, instead of clause 9.2.1's "`TotalCoeff`
+   inferred to be 0" — silently steering the *next* real macroblock's `nC`
+   onto the wrong `coeff_token` table row. Exactly the "works on I-slices,
+   drifts on P" shape the dispatch warned about: an I-slice has no
+   `mb_skip_run` at all, so an I-only corpus could never have found this.
+2. **`more_rbsp_data()` was checked one branch too late.** Clause 7.3.4's
+   `slice_data()` checks `moreDataFlag = more_rbsp_data()` immediately after
+   a *nonzero* `mb_skip_run`, before ever deciding whether to call
+   `macroblock_layer()` for the macroblock the skip run landed on. A
+   two-slice picture's non-final slice can end with exactly this shape — a
+   skip run consuming the rest of *that slice's own* macroblocks, with only
+   `rbsp_slice_trailing_bits()` left — and `CurrMbAddr` is still less than
+   the *picture's* total macroblock count at that point, since a slice
+   boundary is not a picture boundary. Without the check, decoding read
+   straight into the next slice's own NAL as if it were more of this one. A
+   single-slice-per-picture corpus (`cavlc_ip_simple.264`) could never have
+   found this either — it takes a real multi-slice picture, which is why
+   the dispatch's "build the corpus for the branches" instruction named
+   multiple slices per picture explicitly.
+
+**Specification-and-self-consistency, not reference-verified**: CABAC's
+residual-block entropy function's bit-level decode, and the `blk_xy` 4x4
+scan-order mapping `mb.rs` uses (well-known and, so far, never observed to
+produce a wrong bit count against either real corpus above, but not
+independently checked against primary text). Verifying CABAC the same way
+CAVLC now is needs its macroblock layer first — see "What is not
+implemented". What is verified instead for CABAC: hand-built fixtures cited
+to the exact table row/spec clause they exercise, round-trips through
+`vaco-codec-cabac`'s own test-only encoder mirroring this crate's exact bin
+sequence, and the fuzz corpus above.
 
 ## How to change it
 
@@ -186,9 +247,17 @@ prefix-conflict self-check first). `cabac_residual.rs` holds `ContextSet`'s
 `(m, n)` tables and the two decode functions; adding a fifth
 `ContextCategory` (chroma DC or 8x8) means adding its own
 `significant_coeff_flag`/`last_significant_coeff_flag` table and switching
-on `category` where `residual_block_cabac` currently ignores it.
-`decoder.rs` is the only place that touches `vaco-parse-h264`; extending it
-toward #419 means adding macroblock-layer state there, not here.
+on `category` where `residual_block_cabac` currently ignores it. `mb.rs`
+holds the macroblock layer: `classify_mb_type`/`classify_sub_mb_type` are
+the only places Tables 7-8/7-10/7-11/7-14/7-15 are transcribed,
+`NeighbourGrid` is the only `nC` state, and `decode_slice_cavlc` is the one
+entry point that drives a whole slice — a CABAC macroblock layer would be
+`decode_slice_cabac` alongside it, sharing `classify_mb_type`/
+`NeighbourGrid` but reading through `vaco-codec-cabac` instead of
+`BoundedGolomb`. `decoder.rs` is the only place that touches
+`vaco-parse-h264`; wiring `mb::decode_slice_cavlc` into
+`H264Decoder::send_packet` for real output is #420's job, once prediction
+and reconstruction exist to do something with what it reads.
 
 ## Configuration
 
@@ -201,7 +270,10 @@ toward #419 means adding macroblock-layer state there, not here.
 `vaco-codec-cabac` (the arithmetic engine and general binarisation
 primitives — `decode_tu`, `decode_bypass_egk` — this crate builds
 `coeff_abs_level_minus1`'s bin-by-bin decode over), `vaco-codec-golomb`
-(the `pic_parameter_set_id` pre-scan in `decoder.rs`), `vaco-parse-h264`
+(the `pic_parameter_set_id` pre-scan in `decoder.rs`, and every
+`ue(v)`/`se(v)`/`te(v)`/`me(v)` `mb.rs`'s macroblock layer reads —
+`BoundedGolomb`, `ChromaArrayType`, `MbPartPredMode`, `cbp_from_code_num`'s
+Table 9-4 mapping — none of it re-transcribed here), `vaco-parse-h264`
 (slice-header location and parameter-set bookkeeping — not
 re-implemented here), `vaco-bitstream`, `vaco-limits`, `vaco-codec-core`,
 `vaco-frame`, `vaco-packet`.

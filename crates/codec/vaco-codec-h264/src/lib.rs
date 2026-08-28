@@ -1,5 +1,7 @@
-//! H.264/AVC entropy decoding (T3-01d/#417 CAVLC, T3-01e/#418 CABAC), and
-//! the far side of a line the previous dispatch drew rather than crossed.
+//! H.264/AVC entropy decoding (T3-01d/#417 CAVLC, T3-01e/#418 CABAC), the
+//! far side of a line the previous dispatch drew rather than crossed, plus
+//! enough of the macroblock layer (#419) to drive CAVLC across a whole real
+//! slice and measure it.
 //!
 //! # Where the parse/decode line falls, and why this crate is gated
 //!
@@ -24,16 +26,21 @@
 //! layer can supply (`nC` for CAVLC, a caller-derived `coded_block_flag` for
 //! CABAC, `max_num_coeff`/`ctxBlockCat` for both), and nothing a caller needs
 //! neighbouring-macroblock state to derive. That is the same separation
-//! `vaco-codec-msac` draws around VP8/VP9's bool decoders, applied to H.264:
-//! this crate does not know what a macroblock is, and #419 onward (the
-//! macroblock layer: `mb_type`, prediction, transform reconstruction) is
-//! explicitly not this dispatch's scope.
+//! `vaco-codec-msac` draws around VP8/VP9's bool decoders, applied to H.264.
+//! [`mb`] is the macroblock layer that now sits above both, far enough
+//! along to drive [`cavlc::residual_block_cavlc`] across a whole real CAVLC
+//! slice bit-exactly; see [`mb`]'s own module doc for exactly what it
+//! covers and what it explicitly refuses (MBAFF, the 8x8 transform,
+//! `constrained_intra_pred_flag`'s substitution rule, CABAC's own
+//! macroblock layer). Prediction, motion compensation, transform and
+//! reconstruction remain #420 onward.
 //!
 //! [`H264Decoder::send_packet`] locates a slice header far enough to resolve
 //! `entropy_coding_mode_flag` and then returns
 //! [`vaco_core::Error::Unsupported`], honestly, the same choice
 //! `vaco-codec-aac` made for the gap between "configuration resolved" and
-//! "PCM produced".
+//! "PCM produced" — [`mb::decode_slice_cavlc`] is not wired into it yet,
+//! since nothing it reads is kept beyond what bit consumption needs.
 //!
 //! # Verification: what could be checked here, and what could not
 //!
@@ -56,29 +63,36 @@
 //! chroma-DC case) that source could not cover and remain
 //! self-consistency-only.
 //!
-//! **What this could not be checked against**: a real slice's exact bit
-//! consumption end-to-end. `SliceHeader::parse` correctly lands a
-//! `BitReader` at the first bit of `slice_data()` on real `ffmpeg`-encoded
-//! streams (already reference-tested by `vaco-parse-h264`), but
-//! `residual_block_cavlc`/`residual_block_cabac` are only ever *one* of many
-//! syntax elements a real slice's macroblock loop reads in sequence —
-//! `mb_type` selects whether residual is even present, and CABAC in
-//! particular is one continuous arithmetic stream where every preceding
-//! bin's context update affects every later one. Driving either function
-//! against real encoder output for a real "consumed exactly the declared
-//! bits" measurement needs the macroblock loop that decides *when* to call
-//! them and with what `nC`/`ctxBlockCat` — which is #419's job, not this
-//! one's. Claiming that measurement now would be exactly the kind of
-//! specification-only-dressed-as-verified gap the previous dispatch was
-//! asked to stop making. What is true today is narrower and stated
-//! precisely: both functions are specification-and-self-consistency tested,
-//! plus bit-exact against their own hand-built fixtures.
+//! **What is now checked end-to-end**: [`mb::decode_slice_cavlc`] against
+//! two real `ffmpeg 8.1`/`libx264 -coder cavlc` elementary streams
+//! (`tests/macroblock_layer.rs`, `tests/macroblock_layer_simple.rs`) — I/P/B
+//! slices, multiple slices per picture, multiple reference frames, skipped
+//! and coded macroblocks alike — every slice asserted to end with nothing
+//! but `rbsp_slice_trailing_bits()` unconsumed. This measurement caught two
+//! real bugs no hand-built fixture or self-consistency check could have: a
+//! skipped macroblock never updating its neighbours' `nC` state (needs a
+//! P/B slice with `mb_skip_run` — an I-only corpus cannot reach it), and
+//! `more_rbsp_data()` being checked one branch too late after a nonzero
+//! skip run (needs a multi-slice picture whose non-final slice ends
+//! mid-skip-run — a single-slice corpus cannot reach it either). See
+//! `mb.rs`'s own module doc and `docs/codec/vaco-codec-h264.md` for both,
+//! in full.
+//!
+//! **What is not**: the same measurement for CABAC, which needs its own
+//! macroblock layer (`mb_type`/`mb_skip_flag`/etc. context tables) first —
+//! see [`mb`]'s module doc. What is true for CABAC today is narrower and
+//! stated precisely: `residual_block_cabac` is specification-and-
+//! self-consistency tested, plus bit-exact against its own hand-built
+//! fixtures — driving it end-to-end against real encoder output would be
+//! exactly the specification-only-dressed-as-verified gap a previous
+//! dispatch on this project was asked to stop making.
 
 #![forbid(unsafe_code)]
 
 pub mod cabac_residual;
 pub mod cavlc;
 mod cavlc_tables;
+pub mod mb;
 pub mod decoder;
 
 pub use cabac_residual::{CabacResidual, ContextCategory, ContextSet, residual_block_cabac};
