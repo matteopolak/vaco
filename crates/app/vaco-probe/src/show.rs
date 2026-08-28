@@ -347,7 +347,16 @@ fn stream_value(
         "color_transfer" => colour(video.map(|v| v.color.transfer.name())),
         "color_primaries" => colour(video.map(|v| v.color.primaries.name())),
         "chroma_location" => colour(video.map(|v| v.color.chroma_location.name())),
-        "field_order" => Val::s(field_order_name(video.map(|v| v.field_order))),
+        // Measured (`ffprobe 8.1`): a stream with no known field order omits
+        // `field_order` under the default `-show_optional_fields auto` in
+        // `json`/`xml` (it carries `WriterFlags::SUPPRESS_OPTIONAL`) and
+        // prints the placeholder `unknown` in the others — the same
+        // optional-with-a-word-placeholder shape as `color_range` and
+        // friends via `colour()`, not a field that is always present.
+        "field_order" => match field_order_name(video.map(|v| v.field_order)) {
+            "unknown" => Val::Absent,
+            n => Val::s(n),
+        },
         // The H.264 decoder's two private options, both strings, both derived
         // from one number. `nal_length_size` is the container's length prefix
         // width and `is_avc` is "that width is non-zero"; measured, the same
@@ -1399,5 +1408,54 @@ mod tests {
 
         assert_eq!(container_start_time(&[art, audio]), Some(5.0));
         assert_eq!(container_start_time(&[]), None);
+    }
+
+    /// Measured (`ffprobe 8.1`): a stream with no known field order omits
+    /// `field_order` under `json`'s default `-show_optional_fields auto`
+    /// (`WriterFlags::SUPPRESS_OPTIONAL`) rather than printing the literal
+    /// string `"unknown"` unconditionally. `stream_value` must answer
+    /// `Val::Absent` for that case, the same shape `colour()` already gives
+    /// `color_range`/`color_space`/`color_transfer`/`color_primaries` — not a
+    /// concrete `Val::S("unknown")`, which would bypass the optional-field
+    /// policy entirely (the bug this test pins, found diffing a real PNG
+    /// probe against the reference: ours printed the field, the reference
+    /// did not).
+    #[test]
+    fn field_order_is_absent_not_the_literal_string_unknown() {
+        let field = crate::fields::STREAM
+            .iter()
+            .find(|f| f.name == "field_order")
+            .copied()
+            .expect("in the table");
+        assert_eq!(field.absent, crate::fields::Absent::Word("unknown"));
+
+        let stream = Stream::new(0, MediaType::Video, Rational::new(1, 1000));
+        let mut p = CodecParameters::video().with_codec(CodecId::H264);
+        if let Some(v) = p.video.as_mut() {
+            v.field_order = vaco_codec_core::FieldOrder::Unknown;
+        }
+        assert!(matches!(
+            stream_value(&field, &stream, &p, Some(MediaType::Video), Counts::NONE, false),
+            Val::Absent
+        ));
+
+        if let Some(v) = p.video.as_mut() {
+            v.field_order = vaco_codec_core::FieldOrder::TopFirst;
+        }
+        let string = |v: Val| match v {
+            Val::S(s) => Some(s),
+            _ => None,
+        };
+        assert_eq!(
+            string(stream_value(
+                &field,
+                &stream,
+                &p,
+                Some(MediaType::Video),
+                Counts::NONE,
+                false
+            )),
+            Some("tt".to_owned())
+        );
     }
 }
