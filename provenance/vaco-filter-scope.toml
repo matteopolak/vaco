@@ -1,0 +1,5 @@
+[[table]]
+name   = "GLYPHS"
+file   = "crates/filter/vaco-filter-scope/src/font8x8.rs"
+source = "unscii-8-font"
+method = "transcribed"
