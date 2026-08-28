@@ -3457,3 +3457,91 @@ predated them and undercounted by more than 1 KiB); the fuzzer found this
 in under a second as a false-positive assertion failure on a 3-byte input,
 moved to `fuzz/seeds/avi_mux_packet/` as a regression seed. 30s run after
 the fix: `exit=0`, `execs≈N`, `find fuzz/artifacts -type f` empty.
+
+## 54. #362/#363/#364: MPEG-1/2/2.5 Layer I/II/III decode — Layer II verified against `ffmpeg`, Layer III measurably not there yet
+
+`vaco-codec-mpegaudio` implements all three layers behind one
+`MpegAudioDecoder` dispatching on the frame header's own `layer` field.
+No CLI path exists yet to select a decoder by name (issue #652, being
+fixed separately), so verification called the decoder directly against
+packets from `vaco-demux-mpegaudio` (issue #644, already landed) and
+compared the resulting PCM to `ffmpeg -f s16le -`.
+
+### Layer II: real bugs found and fixed, then verified to a close match
+
+Two bugs were found purely by this comparison, both in the per-subband
+sample-decoding loop's structure, not in any formula:
+
+1. The output index advanced by 1 per ungrouped sample read instead of 3,
+   so only 384 of each frame's 1152 samples per channel were ever decoded
+   (silently a third of the frame) and a third of the bits the frame
+   needed were never read.
+2. Once (1) was fixed, real-file correlation against `ffmpeg` was still
+   only ~0.25 (up from ~0.04, effectively noise). ISO/IEC 11172-3's own
+   pseudocode for this step is granule-major:
+   `for (gr=0; gr<12; gr++) for (sb...) for (ch...) { ... }` — one sample
+   or one grouped codeword per allocated subband for granule 0, then the
+   same for granule 1. This crate had it nested the other way (subband
+   outside granule), which reads the *right total number of bits* — so a
+   frame still ends in the right byte and the demuxer's own framing was
+   never in question — but from the *wrong positions* past the first
+   allocated subband. Fixing the nesting order took correlation to
+   **1.0000** at zero sample shift.
+
+Measured across 32000/44100/48000 Hz × mono/stereo (6 fixtures,
+`ffmpeg -f lavfi -i "sine=..." -c:a mp2 ...`): RMS error 1.2-10.7 of a
+32767 full-scale `i16`, cross-correlation 1.0000. Not bit-exact (`f32`
+decode, not the ISO reference's fixed-point contract), but the remaining
+error is plausibly rounding rather than a structural mistake.
+
+### Layer III: two real bugs fixed, but real-file decode is still wrong
+
+- The global-gain requantisation constant: ISO/IEC 11172-3's own text names
+  it ("The constant 64 in this formula...") but the actual formula is an
+  image this crate's PDF-to-text extraction lost, leaving only that one
+  sentence. Implementing literally with `64` produced samples ~10⁷ too
+  large. `210` — confirmed empirically against `ffmpeg`, not by citation —
+  produces sane magnitudes.
+- A silent granule (`big_values == 0`, `part2_3_length == 0`, e.g. the
+  "side" channel of an MS-stereo-encoded mono source) was still being fed
+  into the Huffman-decode loop, which read real bits belonging to whatever
+  came next in the bit reservoir and manufactured spectral energy that was
+  never transmitted. Fixed by bounding both Huffman loops with
+  `r.bit_pos() < granule_end_bit`, since `part2_3_length` is the only
+  authoritative bound — "576 lines decoded" alone is not enough.
+
+Despite both fixes, full end-to-end decode of a real encoded file is still
+measurably wrong: a 440 Hz test tone reaches only ~0.44 sample correlation
+against `ffmpeg`'s decode after finding the best time alignment, and a
+6000 Hz tone comes out at a measurably wrong output frequency (~4316 Hz
+instead of 6000 Hz — not noise, a clean wrong frequency). A dedicated unit
+test (`layer3::frequency_placement_tests`) rules out half the pipeline
+conclusively: it excites one known spectral line with no bitstream
+involved at all, runs it through the exact subband-split → IMDCT →
+windowing → overlap-add → synthesis-filterbank code `decode` itself calls,
+and confirms the output lands at that line's correct frequency. So the
+remaining bug is narrowed to the side-information/Huffman-decode half, but
+not found — reported as broken, not glossed over as "close."
+
+Layer I has no available encoder on this machine (`ffmpeg`'s build here
+has no MP1 encoder, and no other tool was found either) — covered only by
+unit tests and by the same, Layer-II-verified `Synthesis::synth_block`.
+
+### Verification
+
+`cargo run -p vaco-codec-mpegaudio --example decode_dump -- <file>` dumps
+interleaved `s16le` PCM by driving the demuxer and decoder directly;
+diffed against `ffmpeg -i <file> -f s16le -acodec pcm_s16le -` with a
+best-alignment search over sample shift (scratch Python, not committed) to
+report cross-correlation, max absolute sample difference and RMS. Fixtures
+generated via `ffmpeg -f lavfi -i "sine=..." -c:a libmp3lame/mp2 ...`.
+
+### Scope not attempted
+
+Short blocks (`block_type == 2`) decode to silence rather than their real
+audio; intensity stereo is unimplemented for all three layers; MPEG-2/2.5
+(low sample rate) Layer III returns `Unsupported`; the demuxer's
+`SkipSamples` gapless side data is not consulted by this decoder. See
+`planning/TECH-DEBT.md` and `docs/codec/vaco-codec-mpegaudio.md`'s "Known
+gaps" for each. Encoders (#365/#366) are explicitly out of scope; epic #38
+stays open.
