@@ -56,10 +56,14 @@ use crate::page::{self, OggHeaderFlags, OggPageHeader};
 
 /// What Ogg declares it can do.
 ///
-/// `SHOW_IDS` because the serial number is the container's own stream
-/// identifier; `GENERIC_INDEX` because nothing here carries a seek index of
-/// its own — an index is only ever what packets already read build up.
-pub const FLAGS: FormatFlags = FormatFlags::SHOW_IDS.union(FormatFlags::GENERIC_INDEX);
+/// No `SHOW_IDS`: the bitstream serial number is a real per-logical-stream
+/// identifier, but `ffprobe -bitexact -show_streams` prints `id=N/A` for
+/// every stream of a real Ogg/Vorbis file regardless — the same call it
+/// makes for Matroska's `TrackNumber`, an equally real identifier it also
+/// declines to print. `GENERIC_INDEX` because nothing here carries a seek
+/// index of its own — an index is only ever what packets already read
+/// build up.
+pub const FLAGS: FormatFlags = FormatFlags::GENERIC_INDEX;
 
 /// Bytes scanned looking for the next page's capture pattern before this
 /// crate calls the stream unrecoverable. Generous relative to
@@ -357,13 +361,38 @@ impl OggDemuxer {
     fn classify_and_emit(&mut self, idx: usize, page_granule: i64, completed: Vec<Vec<u8>>) {
         let mut data_bytes: Vec<Vec<u8>> = Vec::new();
         for bytes in completed {
-            let is_header = self
-                .logical
-                .get(idx)
-                .is_some_and(|l| l.header_seen < l.header_total);
-            if is_header {
+            let Some((header_index, header_total, codec, stream_index)) =
+                self.logical.get(idx).map(|l| {
+                    (l.header_seen, l.header_total, l.codec, l.stream_index)
+                })
+            else {
+                continue;
+            };
+            if header_index < header_total {
                 if let Some(l) = self.logical.get_mut(idx) {
                     l.header_seen = l.header_seen.saturating_add(1);
+                }
+                // Packet index 1 is the comment header for both Vorbis
+                // (spec §4.1) and Opus (RFC 7845 §5.2's `OpusTags`) — the
+                // one header packet this crate reads past its fixed-offset
+                // fields, since `ffprobe -bitexact -show_streams` prints
+                // its `TITLE`/`ENCODER`/etc. fields as `TAG:` entries and a
+                // demuxer that never opens the packet cannot say the same.
+                if header_index == 1 {
+                    let magic = match codec {
+                        OggCodec::Vorbis => Some(codec::VORBIS_COMMENT_MAGIC),
+                        OggCodec::Opus => Some(codec::OPUS_COMMENT_MAGIC),
+                        _ => None,
+                    };
+                    if let Some(magic) = magic {
+                        let tags = codec::parse_comment_header(&bytes, magic);
+                        let si = usize::try_from(stream_index).unwrap_or(usize::MAX);
+                        if let Some(stream) = self.streams.get_mut(si) {
+                            for (key, value) in tags {
+                                stream.metadata_set(&key, value);
+                            }
+                        }
+                    }
                 }
                 continue;
             }
@@ -482,9 +511,7 @@ impl OggDemuxer {
         let (media, time_base, params) = describe(codec, &bos_bytes);
         let stream_index = u32::try_from(self.streams.len()).unwrap_or(u32::MAX);
         let mut stream = Stream::new(stream_index, media, time_base);
-        stream.id = Some(i64::from(header.serial));
         stream.params = params;
-        stream.metadata_set("ogg_codec", codec.name());
         self.streams.push(stream);
 
         let parser = if codec == OggCodec::Opus {

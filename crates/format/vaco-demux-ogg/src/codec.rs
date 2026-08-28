@@ -23,10 +23,9 @@
 ///
 /// `CodecId` (`vaco-codec-core`) has no `Theora` or `Speex` variant today —
 /// confirmed by reading `crates/signal/vaco-codec-core/src/lib.rs` rather
-/// than assumed. Follows the precedent already in the tree
-/// (`vaco-demux-mpegts`'s `ts_codec` metadata field): the stream's
-/// `codec_id` is `None` for these two, and the name survives in
-/// `Stream::metadata` under `"ogg_codec"` instead of being silently dropped.
+/// than assumed. The stream's `codec_id` is simply `None` for these two:
+/// `ffprobe -bitexact -show_streams` on a real file carries no per-codec
+/// metadata tag to fall back on, so this crate does not invent one either.
 /// See the docs file's "gaps" section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OggCodec {
@@ -42,8 +41,8 @@ pub enum OggCodec {
 }
 
 impl OggCodec {
-    /// The CLI-stable name recorded under `"ogg_codec"`, and (for the three
-    /// codecs `CodecId` has) the name that must agree with
+    /// This crate's own stable name for the codec, used in logging and
+    /// diagnostics; for the three codecs `CodecId` has, it must agree with
     /// `CodecId::name()` — asserted in the docs file's cross-check test.
     #[must_use]
     pub const fn name(self) -> &'static str {
@@ -339,6 +338,80 @@ pub fn total_header_packets(codec: OggCodec, bos_packet: &[u8]) -> u32 {
     }
 }
 
+/// The magic a Vorbis comment header packet starts with — Vorbis I spec
+/// §4.2.1: packet type `3` plus the six-byte `"vorbis"` sync, identical to
+/// [`identify`]'s check on the identification packet but for type `3`.
+pub const VORBIS_COMMENT_MAGIC: &[u8] = b"\x03vorbis";
+
+/// The magic an `OpusTags` packet starts with (RFC 7845 §5.2).
+pub const OPUS_COMMENT_MAGIC: &[u8] = b"OpusTags";
+
+/// No comment header may contribute more than this many `KEY=value` pairs.
+/// Generous for any real file (a handful of tags is typical) and cheap to
+/// enforce, since a comment header with a fabricated count in the millions
+/// would otherwise cost one iteration per entry before the slice ran out.
+const MAX_COMMENTS: u32 = 4096;
+
+/// Read a four-byte little-endian length prefix, then that many bytes.
+///
+/// `None` on truncation — a comment header that runs out of bytes mid-field
+/// is a damaged file, not a different grammar.
+fn take_length_prefixed(data: &[u8]) -> Option<(&[u8], &[u8])> {
+    let len = u32::from_le_bytes(data.get(0..4)?.try_into().ok()?);
+    let len = usize::try_from(len).ok()?;
+    let value = data.get(4..4usize.checked_add(len)?)?;
+    let rest = data.get(4usize.checked_add(len)?..)?;
+    Some((value, rest))
+}
+
+/// Read every `KEY=value` pair out of a Vorbis-comment-formatted header:
+/// Vorbis I spec §5.2.1's `vendor_length`/`vendor_string`/`user_comment_list_length`
+/// grammar, which RFC 7845 §5.2's `OpusTags` reuses byte-for-byte after its
+/// own eight-byte magic. `magic` selects which packet this is — pass
+/// [`VORBIS_COMMENT_MAGIC`] or [`OPUS_COMMENT_MAGIC`].
+///
+/// Keys are lower-cased to match `ffprobe -show_streams`'s own `TAG:` keys
+/// (measured: a `TITLE` field in the file prints as `TAG:title`). A field
+/// that is not valid UTF-8, or does not contain `=`, is skipped rather than
+/// failing the whole header — one bad tag among several good ones is not
+/// grounds for reporting none of them.
+///
+/// Returns an empty list, rather than an error, for a packet that does not
+/// start with `magic` or is truncated anywhere in the grammar: the comment
+/// header is metadata, and a file that gets the metadata wrong still has
+/// packets worth demuxing.
+#[must_use]
+pub fn parse_comment_header(packet: &[u8], magic: &[u8]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let Some(rest) = packet.strip_prefix(magic) else {
+        return out;
+    };
+    let Some((_vendor, rest)) = take_length_prefixed(rest) else {
+        return out;
+    };
+    let Some(count_bytes) = rest.get(0..4) else {
+        return out;
+    };
+    let Ok(count_arr) = <[u8; 4]>::try_from(count_bytes) else {
+        return out;
+    };
+    let count = u32::from_le_bytes(count_arr).min(MAX_COMMENTS);
+    let mut rest = rest.get(4..).unwrap_or(&[]);
+    for _ in 0..count {
+        let Some((entry, next)) = take_length_prefixed(rest) else {
+            break;
+        };
+        rest = next;
+        let Ok(text) = core::str::from_utf8(entry) else {
+            continue;
+        };
+        if let Some((key, value)) = text.split_once('=') {
+            out.push((key.to_ascii_lowercase(), value.to_string()));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -488,5 +561,58 @@ mod tests {
             assert!(parse_theora_ident(bytes).is_none());
             assert!(parse_speex_ident(bytes).is_none());
         }
+    }
+
+    fn vorbis_comment_bytes(vendor: &str, comments: &[(&str, &str)]) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(VORBIS_COMMENT_MAGIC);
+        v.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
+        v.extend_from_slice(vendor.as_bytes());
+        v.extend_from_slice(&(comments.len() as u32).to_le_bytes());
+        for (k, val) in comments {
+            let field = format!("{k}={val}");
+            v.extend_from_slice(&(field.len() as u32).to_le_bytes());
+            v.extend_from_slice(field.as_bytes());
+        }
+        v
+    }
+
+    #[test]
+    fn reads_every_comment_and_lower_cases_the_key() {
+        let bytes = vorbis_comment_bytes(
+            "libvorbis",
+            &[("TITLE", "Test Title"), ("ENCODER", "Lavc62.28.100 vorbis")],
+        );
+        let tags = parse_comment_header(&bytes, VORBIS_COMMENT_MAGIC);
+        assert_eq!(
+            tags,
+            vec![
+                ("title".to_string(), "Test Title".to_string()),
+                ("encoder".to_string(), "Lavc62.28.100 vorbis".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn opus_tags_share_the_same_grammar_after_their_own_magic() {
+        let mut bytes = OPUS_COMMENT_MAGIC.to_vec();
+        bytes.extend_from_slice(&vorbis_comment_bytes("", &[("title", "x")])[VORBIS_COMMENT_MAGIC.len()..]);
+        let tags = parse_comment_header(&bytes, OPUS_COMMENT_MAGIC);
+        assert_eq!(tags, vec![("title".to_string(), "x".to_string())]);
+    }
+
+    #[test]
+    fn a_truncated_comment_header_yields_whatever_parsed_before_the_cut() {
+        let full = vorbis_comment_bytes("v", &[("a", "1"), ("b", "2")]);
+        // Cut off partway through the second comment's bytes.
+        let cut = &full[..full.len() - 1];
+        let tags = parse_comment_header(cut, VORBIS_COMMENT_MAGIC);
+        assert_eq!(tags, vec![("a".to_string(), "1".to_string())]);
+    }
+
+    #[test]
+    fn wrong_magic_or_empty_input_yields_no_comments() {
+        assert!(parse_comment_header(b"", VORBIS_COMMENT_MAGIC).is_empty());
+        assert!(parse_comment_header(b"not vorbis at all", VORBIS_COMMENT_MAGIC).is_empty());
     }
 }

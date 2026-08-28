@@ -125,7 +125,7 @@ mod tests {
     #[test]
     fn the_declared_flags_are_the_ones_the_models_depend_on() {
         use vaco_format_core::FormatFlags;
-        assert!(FLAGS.contains(FormatFlags::SHOW_IDS));
+        assert!(!FLAGS.contains(FormatFlags::SHOW_IDS));
         assert!(FLAGS.contains(FormatFlags::GENERIC_INDEX));
     }
 }
