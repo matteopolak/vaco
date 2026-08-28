@@ -167,6 +167,33 @@ fn convolve_agrees_with_the_reference() {
     }
 }
 
+/// `colorkey` on `argb` -- the first case to exercise a *packed* pixel
+/// format (`filterexec.rs`'s `plane_size_sum`/`fill_planes`/
+/// `extract_output` used to assume every plane was `width * height`
+/// bytes, wrong for one packed plane of four interleaved components).
+/// `colorkey` could not be conformance tested at all before this: it only
+/// accepts RGB-with-alpha formats, none of which the harness could
+/// previously supply. See `vaco-filter-key-packed.toml`'s own comment for
+/// why the source varies both colour (key/non-key) and pre-existing alpha
+/// in one case.
+#[test]
+fn colorkey_agrees_with_the_reference_on_a_packed_format() {
+    let Some(outcomes) = run_suite("vaco-filter-key-packed.toml") else {
+        return;
+    };
+    for o in &outcomes {
+        println!("{}: {:?}", o.case.id, o.verdict.label());
+        assert!(
+            matches!(o.verdict, Verdict::Agree),
+            "case `{}` did not agree: {:?}\n  ours:   {}\n  theirs: {}",
+            o.case.id,
+            o.verdict,
+            o.ours_command,
+            o.theirs_command
+        );
+    }
+}
+
 #[test]
 fn the_text_ceiling_filters_still_produce_a_frame() {
     let Some(outcomes) = run_suite("vaco-filter-scope-text-ceiling.toml") else {

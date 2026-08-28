@@ -1,0 +1,52 @@
+# The first `filter`-tool case to run a *packed* pixel format (`argb`:
+# alpha/red/green/blue interleaved in one plane, not one component per
+# plane) through `filterexec.rs`. Before this dispatch, `plane_size_sum`
+# assumed every plane was exactly `width * height` bytes -- true for the
+# four formats the harness could reach (`gray8`/`yuv444p`/`gbrp`/
+# `yuva444p`, all either one component per plane or fully planar 4:4:4),
+# but wrong for a packed format where one plane holds four `step = 4`
+# components. `colorkey` (`vaco-filter-key`) could not be conformance
+# tested at all until now: it only accepts RGB-with-alpha formats
+# (`FormatSet::video_list(formats_where(is_rgb_alpha))`), none of which
+# this harness could feed it.
+#
+# The source is not a flat colour: the left two columns are exact key-
+# colour black (`r=g=b=0`), the right two are green, and alpha ramps
+# per row (`30, 90, 150, 210`) so the case exercises colorkey's own
+# already-measured "alpha is overwritten, not composited" finding
+# (colorkey.rs's own module doc, "Measured, 2026-08-28") on real,
+# varying pre-existing alpha, not just the opaque sources every earlier
+# probe used -- a byte-exact comparison against the reference would
+# immediately catch either a colorkey regression or a harness plane/
+# stride mistake on the packed layout, and cannot tell the two apart by
+# construction, which is exactly why this is worth pinning as a real
+# case rather than leaving the fix unexercised.
+
+schema = 1
+suite  = "filter-vaco-filter-key-packed"
+tool   = "filter"
+tier   = "core"
+owner  = "@filter-key-owner"
+
+[[media]]
+id       = "argb-key-4x4"
+source   = "generated://argb-key-4x4.raw"
+tags     = ["video"]
+generate = ["-f", "lavfi", "-i", "color=c=black:s=4x4:d=1:r=25",
+            "-vf", "format=argb,geq=r='0':g='if(gt(X,1),255,0)':b='0':a='30+Y*60'",
+            "-frames:v", "1", "-pix_fmt", "argb", "-f", "rawvideo"]
+
+[[axis]]
+name   = "filter"
+values = [
+  { id = "colorkey-argb-alpha-overwrite",
+    argv = ["{media}", "colorkey", "color=black:similarity=0.01:blend=0",
+            "argb", "4", "4", "argb", "4", "4"] },
+]
+
+[compare]
+mode    = "raw-exact"
+timeout = "10s"
+
+[normalise]
+invocation = ["bitexact", "hide-banner"]

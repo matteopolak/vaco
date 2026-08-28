@@ -128,18 +128,23 @@
 //! send more than one frame per source, which is a genuine, separate
 //! extension, not attempted here.
 //!
-//! A filter crate whose input needs a *packed* pixel format (`rgba`,
-//! `argb` — multiple components interleaved in one plane, not one
-//! component per plane) is out of scope for [`fill_planes`]/
-//! [`extract_output`]/[`plane_size_sum`] as written — all three assume
-//! full-resolution planar 8-bit, one byte per component per plane, which
-//! covers every format this project's own T3 scope/draw filters and the
-//! multi-input filters reached so far use, `yuva444p` included (4:4:4 has
-//! no chroma subsampling, so its fourth, alpha, plane is still exactly
-//! `width * height` bytes, same as the other three). Reaching a packed or
-//! subsampled format needs `plane_size_sum`'s per-plane byte formula
-//! generalised, not just an arm added to [`parse_pixfmt`] the way
-//! `yuva444p` only needed.
+//! A *packed* pixel format (`rgba`, `argb` — multiple components
+//! interleaved in one plane, not one component per plane) is reachable:
+//! [`plane_size_sum`]/[`fill_planes`]/[`extract_output`] compute every
+//! plane's byte size and row stride through [`PixFmt::plane_layout`] and
+//! [`PixFmt::plane_height`] rather than assuming `width * height` bytes
+//! per plane. `PixFmt` already carries everything this needs —
+//! `Component::step`/`offset` per logical channel, `min_stride` deriving
+//! the real per-plane row byte count as `max(step * samples-in-plane)`
+//! over the components that live there — so `rgba`'s single plane with
+//! four `step = 4` components folds out of the same formula that already
+//! handled `yuv444p`'s three separate `step = 1` planes; no new plane
+//! math was written; this module only stopped hand-rolling a narrower
+//! version of what the format crate already computed. The remaining
+//! limitation is chroma subsampling (`yuv420p` and friends): reachable
+//! through the same primitives (`plane_height`/`plane_layout` already
+//! decimate chroma planes correctly), just not exercised by any case yet,
+//! so treat a subsampled-format case as untested rather than unsupported.
 
 use vaco_color::ColorInfo;
 use vaco_core::{Duration, MediaType, Rational, Timestamp};
@@ -169,7 +174,7 @@ fn find_registry(name: &str) -> Option<&'static dyn FilterRegistry> {
         .find(|r| r.names().contains(&name))
 }
 
-/// Parse this module's three supported pixel-format tokens.
+/// Parse this module's supported pixel-format tokens.
 ///
 /// # Errors
 /// A message naming the unsupported token, never a panic — an unknown
@@ -179,28 +184,23 @@ fn parse_pixfmt(token: &str) -> Result<PixFmt, String> {
         "gray8" => Ok(PixFmt::Gray8),
         "yuv444p" => Ok(PixFmt::Yuv444p),
         "gbrp" => Ok(PixFmt::Gbrp),
-        // Added for `premultiply`/`unpremultiply`'s conformance case: the
-        // only alpha-capable format this module can reach without also
-        // generalising to *packed* layouts (`rgba`/`argb`), because
-        // `yuva444p` is planar and 4:4:4 -- every plane is still exactly
-        // `width * height` bytes, same as the three formats above, so
-        // `plane_size_sum`'s formula needs no change, only `fmt.plane_count()`
-        // (below) to report the right number of them.
+        // `yuva444p` is planar and 4:4:4, so it needed no new plane math,
+        // only an arm here and `fmt.plane_count()` (below) reporting the
+        // right count. `rgba`/`argb` are the packed case the module doc
+        // describes: one plane, four interleaved components, correctly
+        // sized by `plane_size_sum`'s `PixFmt::plane_layout` call below.
         "yuva444p" => Ok(PixFmt::Yuva444p),
+        "rgba" => Ok(PixFmt::Rgba),
+        "argb" => Ok(PixFmt::Argb),
         other => Err(format!(
-            "filterexec: pixel format `{other}` is not one of gray8/yuv444p/gbrp/yuva444p \
-             (see filterexec's own doc for why this list is short)"
+            "filterexec: pixel format `{other}` is not one of gray8/yuv444p/gbrp/yuva444p/\
+             rgba/argb (see filterexec's own doc for why this list is short)"
         )),
     }
 }
 
 /// The real per-format plane count ([`PixFmt::plane_count`]), not a
-/// hand-rolled guess. [`plane_size_sum`] still assumes every plane is
-/// exactly `width * height` bytes (no chroma subsampling, no packed
-/// multi-component-per-plane layout) -- true for all four formats
-/// [`parse_pixfmt`] accepts today, but a future addition that is
-/// subsampled (`yuv420p`) or packed (`rgba`) would need that formula
-/// generalised too, not just this one.
+/// hand-rolled guess.
 fn plane_count(fmt: PixFmt) -> usize {
     fmt.plane_count()
 }
@@ -387,7 +387,7 @@ pub fn run(args: &FilterArgs<'_>) -> Result<Observation, String> {
             .map_err(|e| format!("input pad {pad} ({media_path}): {e}"))?;
         let raw = std::fs::read(media_path)
             .map_err(|e| format!("reading generated media `{media_path}` (pad {pad}): {e}"))?;
-        let expected_len = plane_size_sum(fmt, width, height);
+        let expected_len = plane_size_sum(fmt, width, height)?;
         if raw.len() != expected_len {
             return Err(format!(
                 "generated media `{media_path}` (pad {pad}) is {} bytes; {fmt:?} {width}x{height} \
@@ -484,8 +484,28 @@ pub fn run(args: &FilterArgs<'_>) -> Result<Observation, String> {
     })
 }
 
-fn plane_size_sum(fmt: PixFmt, width: u32, height: u32) -> usize {
-    plane_count(fmt) * (width as usize) * (height as usize)
+/// Total raw byte size of a whole frame, planes concatenated with no
+/// padding between or within them (`align = 1`) -- the layout a `-f
+/// rawvideo` reference file and this harness's own generated media both
+/// use.
+///
+/// Delegates entirely to [`PixFmt::plane_layout`], which already derives
+/// each plane's real row stride from the format's own component table
+/// (`step`/`offset` per logical channel) rather than assuming one byte per
+/// component per plane. That is what makes `rgba` (one plane, four
+/// interleaved `step = 4` components) and `yuv444p` (three separate
+/// `step = 1` planes) fall out of the same call: this function does not
+/// know or care which shape `fmt` is.
+///
+/// # Errors
+/// [`PixFmt::plane_layout`]'s own errors, which for `align = 1` (always a
+/// valid power of two) means only a `width`/`height` combination whose
+/// byte size does not fit a `usize` -- not reachable by any real
+/// conformance case, but not a panic either.
+fn plane_size_sum(fmt: PixFmt, width: u32, height: u32) -> Result<usize, String> {
+    fmt.plane_layout(width, height, 1)
+        .map(|layout| layout.total)
+        .map_err(|e| format!("computing plane layout for {fmt:?} {width}x{height}: {e}"))
 }
 
 fn fill_planes(
@@ -506,15 +526,30 @@ fn fill_planes(
     // invisible at `64` (already aligned), immediate at `20` (the first
     // width this harness tried that was not). `row_mut(y)`, not
     // `rows_mut()`, is what stays trimmed to the meaningful `row_bytes`.
-    let plane_bytes = (width as usize) * (height as usize);
-    let h = height as usize;
+    //
+    // Each plane's byte size in the *source* buffer comes from
+    // `PixFmt::plane_layout` (`align = 1`, matching the no-padding raw
+    // layout `fmt`'s generated media uses), not a uniform `width *
+    // height` -- the fix that makes a packed plane's real size (`width *
+    // 4` per row for `rgba`, not `width`) line up with where the next
+    // plane actually starts.
+    let layout = fmt
+        .plane_layout(width, height, 1)
+        .map_err(|e| format!("computing plane layout for {fmt:?} {width}x{height}: {e}"))?;
+    let mut offset = 0usize;
     for p in 0..plane_count(fmt) {
-        let Some(chunk) = raw.get(p * plane_bytes..(p + 1) * plane_bytes) else {
+        let Some(&plane_len) = layout.sizes.get(p) else {
+            return Err(format!("plane layout has no size for plane {p}"));
+        };
+        let Some(chunk) = raw.get(offset..offset + plane_len) else {
             return Err(format!("input buffer too short for plane {p}"));
         };
+        offset += plane_len;
         let Some(mut plane) = frame.plane_mut(p) else {
             return Err(format!("frame has no plane {p}"));
         };
+        let p_u8 = u8::try_from(p).map_err(|_| format!("plane index {p} does not fit in u8"))?;
+        let h = fmt.plane_height(height, p_u8) as usize;
         for y in 0..h {
             let Some(row) = plane.row_mut(y) else {
                 return Err(format!("plane {p} has no row {y}"));
@@ -544,7 +579,7 @@ fn extract_output(
             out.extend_from_slice(row);
         }
     }
-    let expected = plane_size_sum(fmt, width, height);
+    let expected = plane_size_sum(fmt, width, height)?;
     if out.len() != expected {
         return Err(format!(
             "output frame produced {} bytes; declared {fmt:?} {width}x{height} needs {expected} \
