@@ -1645,6 +1645,61 @@ reference sets it for exactly three entries in this build (`avfoundation`,
 `-formats`, `-demuxers` and `-muxers` as well as in `-devices`, so when devices
 arrive the slot is the only thing that needs filling, not the row set.
 
+## 34. The banner follows the log level, and `-bitexact` makes `profile=` numeric
+
+Both found by diffing `ffprobe -v error [-bitexact] -show_streams` against ours
+on a plain H.264 MP4. That command produced exactly two differences, and each
+turned out to be a rule rather than a one-off.
+
+### `-v`/`-loglevel` below `info` suppresses the banner
+
+We print the banner unless `-hide_banner` is given. The reference also drops it
+whenever the log level is below `info`, which is why `-v error` output is clean
+on their side and prefixed with a version line on ours.
+
+Measured, counting `ffprobe version` in the output of
+`ffprobe -v <level> long.mp4`:
+
+```text
+quiet panic fatal error warning   16 24 31    no banner
+info verbose debug trace          32 33 40    banner
+warn                                          invalid: exit 1, banner printed
+level+error   repeat+level+16   +error        no banner
+```
+
+Four separate facts fall out of that table:
+
+- The threshold is `>= 32` exactly — `31` is silent, `32` prints.
+- Numeric levels are accepted wherever a name is.
+- `repeat` and `level` are formatting flags stripped before the level is read,
+  in any combination and with or without a leading `+`.
+- **`warn` is not a level.** The reference rejects the abbreviation with
+  `Invalid loglevel "warn"`, so the accepted set is exactly the nine names.
+
+The invalid-level row is not a special case. The banner is printed *before*
+argv is validated — the same ordering already recorded for `ffmpeg -qwerty 3` —
+so a value that does not parse simply leaves the level alone and the banner on.
+A pre-scan that gives up on an unparseable value reproduces every row above
+without a rule of its own.
+
+### `-bitexact` prints the profile number instead of its name
+
+```text
+ffprobe -v error           …  profile=High   level=10
+ffprobe -v error -bitexact …  profile=100    level=10
+```
+
+`level` is unaffected; it is numeric in both. `profile` is the only one of the
+pair with a name form, and the name is a library string, so this is the same
+family as the `*_long_name` and version-string suppressions already recorded in
+`AGENT-CONSTRAINTS.md`. Note it is top-level `-bitexact`, not the positional,
+encoding-only `-fflags +bitexact`.
+
+We print `High` in both modes. This is P-05's (#275) to fix, and the constraint
+it puts on that work is worth stating: the profile table has to carry the number
+*and* the name per row, because a name-only lookup cannot answer the
+`-bitexact` question at all.
+
 ## Harness changes, summarised
 
 Everything below is a change to `crates/tool/vaco-conformance/`,
