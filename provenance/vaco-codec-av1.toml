@@ -1,0 +1,248 @@
+# All tables below were extracted by scripts/extract_cdf.py, not retyped by
+# hand: the script brace-matches each `Name[dims] = { ... }` block in the
+# specification text and transliterates C-style `{}` nesting to Rust `[]`
+# nesting, so the printed element order is preserved exactly. `method =
+# "transcribed"` per this directory's own three-way distinction ("transcribed
+# from the text" vs. "derived by evaluating an equation" vs. "probed from a
+# binary") -- a script doing the copying instead of a person is still copying,
+# not deriving.
+#
+# This gate only counts a multi-dimensional array's outermost dimension, so
+# most of this crate's tables (the CDF tables in tables/default_cdf.rs; the
+# quantizer tables in tables/quant.rs; Coeff_Base_Ctx_Offset and the smaller
+# Sm_Weights_Tx_* rows in tables/conversion.rs) never trip the 32-element
+# threshold despite being far larger in total -- every one of them still came
+# from the same script and the same specification sections, recorded in this
+# crate's own module docs (tables.rs, tables/*.rs, transform.rs) rather than
+# repeated here entry by entry for tables the gate does not require.
+
+[[table]]
+name   = "DEFAULT_SCAN_16X16"
+file   = "crates/codec/vaco-codec-av1/src/tables/scan.rs"
+source = "aom-av1-spec"
+clause = "§9.2, Default_Scan_16x16[256]"
+method = "transcribed"
+
+[[table]]
+name   = "DEFAULT_SCAN_16X32"
+file   = "crates/codec/vaco-codec-av1/src/tables/scan.rs"
+source = "aom-av1-spec"
+clause = "§9.2, Default_Scan_16x32[512]"
+method = "transcribed"
+
+[[table]]
+name   = "DEFAULT_SCAN_16X4"
+file   = "crates/codec/vaco-codec-av1/src/tables/scan.rs"
+source = "aom-av1-spec"
+clause = "§9.2, Default_Scan_16x4[64]"
+method = "transcribed"
+
+[[table]]
+name   = "DEFAULT_SCAN_16X8"
+file   = "crates/codec/vaco-codec-av1/src/tables/scan.rs"
+source = "aom-av1-spec"
+clause = "§9.2, Default_Scan_16x8[128]"
+method = "transcribed"
+
+[[table]]
+name   = "DEFAULT_SCAN_32X16"
+file   = "crates/codec/vaco-codec-av1/src/tables/scan.rs"
+source = "aom-av1-spec"
+clause = "§9.2, Default_Scan_32x16[512]"
+method = "transcribed"
+
+[[table]]
+name   = "DEFAULT_SCAN_32X32"
+file   = "crates/codec/vaco-codec-av1/src/tables/scan.rs"
+source = "aom-av1-spec"
+clause = "§9.2, Default_Scan_32x32[1024]"
+method = "transcribed"
+
+[[table]]
+name   = "DEFAULT_SCAN_32X8"
+file   = "crates/codec/vaco-codec-av1/src/tables/scan.rs"
+source = "aom-av1-spec"
+clause = "§9.2, Default_Scan_32x8[256]"
+method = "transcribed"
+
+[[table]]
+name   = "DEFAULT_SCAN_4X16"
+file   = "crates/codec/vaco-codec-av1/src/tables/scan.rs"
+source = "aom-av1-spec"
+clause = "§9.2, Default_Scan_4x16[64]"
+method = "transcribed"
+
+[[table]]
+name   = "DEFAULT_SCAN_4X8"
+file   = "crates/codec/vaco-codec-av1/src/tables/scan.rs"
+source = "aom-av1-spec"
+clause = "§9.2, Default_Scan_4x8[32]"
+method = "transcribed"
+
+[[table]]
+name   = "DEFAULT_SCAN_8X16"
+file   = "crates/codec/vaco-codec-av1/src/tables/scan.rs"
+source = "aom-av1-spec"
+clause = "§9.2, Default_Scan_8x16[128]"
+method = "transcribed"
+
+[[table]]
+name   = "DEFAULT_SCAN_8X32"
+file   = "crates/codec/vaco-codec-av1/src/tables/scan.rs"
+source = "aom-av1-spec"
+clause = "§9.2, Default_Scan_8x32[256]"
+method = "transcribed"
+
+[[table]]
+name   = "DEFAULT_SCAN_8X4"
+file   = "crates/codec/vaco-codec-av1/src/tables/scan.rs"
+source = "aom-av1-spec"
+clause = "§9.2, Default_Scan_8x4[32]"
+method = "transcribed"
+
+[[table]]
+name   = "DEFAULT_SCAN_8X8"
+file   = "crates/codec/vaco-codec-av1/src/tables/scan.rs"
+source = "aom-av1-spec"
+clause = "§9.2, Default_Scan_8x8[64]"
+method = "transcribed"
+
+[[table]]
+name   = "MCOL_SCAN_16X16"
+file   = "crates/codec/vaco-codec-av1/src/tables/scan.rs"
+source = "aom-av1-spec"
+clause = "§9.2, Mcol_Scan_16x16[256]"
+method = "transcribed"
+
+[[table]]
+name   = "MCOL_SCAN_16X4"
+file   = "crates/codec/vaco-codec-av1/src/tables/scan.rs"
+source = "aom-av1-spec"
+clause = "§9.2, Mcol_Scan_16x4[64]"
+method = "transcribed"
+
+[[table]]
+name   = "MCOL_SCAN_16X8"
+file   = "crates/codec/vaco-codec-av1/src/tables/scan.rs"
+source = "aom-av1-spec"
+clause = "§9.2, Mcol_Scan_16x8[128]"
+method = "transcribed"
+
+[[table]]
+name   = "MCOL_SCAN_4X16"
+file   = "crates/codec/vaco-codec-av1/src/tables/scan.rs"
+source = "aom-av1-spec"
+clause = "§9.2, Mcol_Scan_4x16[64]"
+method = "transcribed"
+
+[[table]]
+name   = "MCOL_SCAN_4X8"
+file   = "crates/codec/vaco-codec-av1/src/tables/scan.rs"
+source = "aom-av1-spec"
+clause = "§9.2, Mcol_Scan_4x8[32]"
+method = "transcribed"
+
+[[table]]
+name   = "MCOL_SCAN_8X16"
+file   = "crates/codec/vaco-codec-av1/src/tables/scan.rs"
+source = "aom-av1-spec"
+clause = "§9.2, Mcol_Scan_8x16[128]"
+method = "transcribed"
+
+[[table]]
+name   = "MCOL_SCAN_8X4"
+file   = "crates/codec/vaco-codec-av1/src/tables/scan.rs"
+source = "aom-av1-spec"
+clause = "§9.2, Mcol_Scan_8x4[32]"
+method = "transcribed"
+
+[[table]]
+name   = "MCOL_SCAN_8X8"
+file   = "crates/codec/vaco-codec-av1/src/tables/scan.rs"
+source = "aom-av1-spec"
+clause = "§9.2, Mcol_Scan_8x8[64]"
+method = "transcribed"
+
+[[table]]
+name   = "MROW_SCAN_16X16"
+file   = "crates/codec/vaco-codec-av1/src/tables/scan.rs"
+source = "aom-av1-spec"
+clause = "§9.2, Mrow_Scan_16x16[256]"
+method = "transcribed"
+
+[[table]]
+name   = "MROW_SCAN_16X4"
+file   = "crates/codec/vaco-codec-av1/src/tables/scan.rs"
+source = "aom-av1-spec"
+clause = "§9.2, Mrow_Scan_16x4[64]"
+method = "transcribed"
+
+[[table]]
+name   = "MROW_SCAN_16X8"
+file   = "crates/codec/vaco-codec-av1/src/tables/scan.rs"
+source = "aom-av1-spec"
+clause = "§9.2, Mrow_Scan_16x8[128]"
+method = "transcribed"
+
+[[table]]
+name   = "MROW_SCAN_4X16"
+file   = "crates/codec/vaco-codec-av1/src/tables/scan.rs"
+source = "aom-av1-spec"
+clause = "§9.2, Mrow_Scan_4x16[64]"
+method = "transcribed"
+
+[[table]]
+name   = "MROW_SCAN_4X8"
+file   = "crates/codec/vaco-codec-av1/src/tables/scan.rs"
+source = "aom-av1-spec"
+clause = "§9.2, Mrow_Scan_4x8[32]"
+method = "transcribed"
+
+[[table]]
+name   = "MROW_SCAN_8X16"
+file   = "crates/codec/vaco-codec-av1/src/tables/scan.rs"
+source = "aom-av1-spec"
+clause = "§9.2, Mrow_Scan_8x16[128]"
+method = "transcribed"
+
+[[table]]
+name   = "MROW_SCAN_8X4"
+file   = "crates/codec/vaco-codec-av1/src/tables/scan.rs"
+source = "aom-av1-spec"
+clause = "§9.2, Mrow_Scan_8x4[32]"
+method = "transcribed"
+
+[[table]]
+name   = "MROW_SCAN_8X8"
+file   = "crates/codec/vaco-codec-av1/src/tables/scan.rs"
+source = "aom-av1-spec"
+clause = "§9.2, Mrow_Scan_8x8[64]"
+method = "transcribed"
+
+[[table]]
+name   = "SM_WEIGHTS_TX_32X32"
+file   = "crates/codec/vaco-codec-av1/src/tables/conversion.rs"
+source = "aom-av1-spec"
+clause = "§9.3, Sm_Weights_Tx_32x32[32]"
+method = "transcribed"
+
+[[table]]
+name   = "SM_WEIGHTS_TX_64X64"
+file   = "crates/codec/vaco-codec-av1/src/tables/conversion.rs"
+source = "aom-av1-spec"
+clause = "§9.3, Sm_Weights_Tx_64x64[64]"
+method = "transcribed"
+
+[[table]]
+name   = "DR_INTRA_DERIVATIVE"
+file   = "crates/codec/vaco-codec-av1/src/tables/conversion.rs"
+source = "aom-av1-spec"
+clause = "§9.3, Dr_Intra_Derivative[90]"
+method = "transcribed"
+
+[[table]]
+name   = "COS128_LOOKUP"
+file   = "crates/codec/vaco-codec-av1/src/transform.rs"
+source = "aom-av1-spec"
+clause = "§7.13.2.1, Cos128_Lookup[65]"
+method = "transcribed"
