@@ -353,6 +353,17 @@ const fn nc_from_neighbours(left: Option<u8>, above: Option<u8>) -> i32 {
 pub struct SliceStats {
     pub macroblock_count: u32,
     pub skipped_count: u32,
+    /// `(cbp_luma, cbp_chroma)` of the first macroblock actually decoded in
+    /// this slice (`header.first_mb_in_slice`, not necessarily raster
+    /// address 0) -- `(0, 0)` if that macroblock was skipped (a skipped
+    /// macroblock has no coded_block_pattern by definition), `None` only if
+    /// the slice contained no macroblocks at all. Exists so a black-box
+    /// test can check this crate's own `coded_block_pattern` decode against
+    /// an independent oracle (a real encoder's own per-macroblock
+    /// statistics, not this decoder's self-report) without needing a
+    /// reference *decoder* debug flag that exposes it -- see
+    /// `tests/cabac_cbp_oracle.rs`.
+    pub first_slice_mb_cbp: Option<(u8, u8)>,
 }
 
 /// Refusal reasons this module names explicitly rather than trying and
@@ -1633,6 +1644,7 @@ pub fn decode_slice_cabac(
             decide(cabac, &mut ctx.skip_p, cond as usize) == 1
         };
 
+        let is_first_mb_in_slice = curr_mb_addr == header.first_mb_in_slice;
         if skipped {
             grids.set_mb_info(
                 mb_x,
@@ -1642,9 +1654,16 @@ pub fn decode_slice_cabac(
             prev_qp = PrevMbQp { available: true, skipped: true, ..PrevMbQp::default() };
             stats.skipped_count += 1;
             stats.macroblock_count += 1;
+            if is_first_mb_in_slice {
+                stats.first_slice_mb_cbp = Some((0, 0));
+            }
         } else {
             decode_macroblock_cabac(cabac, budget, header, &mut ctx, &mut grids, &mut prev_qp, mb_x, mb_y)?;
             stats.macroblock_count += 1;
+            if is_first_mb_in_slice {
+                stats.first_slice_mb_cbp =
+                    grids.mb_info_at(mb_x, mb_y).map(|info| (info.cbp_luma, info.cbp_chroma));
+            }
         }
 
         curr_mb_addr += 1;
