@@ -1,31 +1,36 @@
 //! Mantissa VLC read and dequantisation, driven by the `bap` array
-//! [`crate::bitalloc`] computed. ATSC A/52:2018 §7.4.
+//! [`crate::bitalloc`] computed. ATSC A/52:2012 §7.3.
 
 use vaco_bitstream::BitReader;
 
 use crate::tables::{Quant, quant_for_bap};
 
-/// Dequantise one uniform-quantizer code (bap 3, 5..=15) to a signed
-/// fraction in `(-1, 1)`. Two's-complement-shaped: values `0..levels/2` are
-/// negative, matching every independent description of AC-3's mantissa
-/// coding (the MSB is a sign bit).
-#[allow(
-    clippy::integer_division,
-    reason = "levels is always a power of two (1 << bits), so halving is exact"
-)]
-fn dequant_uniform(code: u32, bits: u8) -> f32 {
-    let levels = 1u32 << bits;
-    let half = levels / 2;
-    (i64::from(code) - i64::from(half)) as f32 / half as f32
+/// §7.3.2: true two's-complement fractional quantization. "The decimal
+/// point is considered to be to the left of the MSB" — a `bits`-wide signed
+/// integer divided by `2^(bits-1)`.
+fn dequant_asymmetric(r: &mut BitReader<'_>, bits: u8) -> f32 {
+    let signed = r.get_signed(u32::from(bits));
+    let half = f64::from(1u32 << (bits - 1));
+    (f64::from(signed) / half) as f32
 }
 
-/// Dequantise one grouped-quantizer level (bap 1/2/4) to a signed fraction,
-/// treating the `levels` values as evenly spaced across `(-1, 1)` — an
-/// engineering approximation of the standard's perceptually-optimised
-/// non-uniform step sizes for these three small quantizers (see the crate
-/// root docs: this is the one dequantisation detail known to diverge from
-/// the specification's exact values, even where the bitstream itself is
-/// read correctly).
+/// §7.3.5: base-`levels` decomposition of a grouped code into `count`
+/// digits, most significant first — the inverse of how the encoder packs
+/// `group_code = digit[0]*levels^(count-1) + ... + digit[count-1]`.
+fn decompose_group(mut code: u32, levels: u16, count: u8) -> Vec<u32> {
+    let levels = u32::from(levels);
+    let mut digits = Vec::new();
+    for _ in 0..count {
+        digits.push(code % levels);
+        code /= levels;
+    }
+    digits.reverse();
+    digits
+}
+
+/// §7.3.5 Tables 7.19/7.20/7.22: bap 1/2/4's grouped values are evenly
+/// spaced across `(-1, 1)` — verified directly against the specification's
+/// own tables, not merely a plausible-looking approximation.
 fn dequant_grouped(level: u32, levels: u16) -> f32 {
     let levels = f32::from(levels);
     (2.0 * level as f32 - (levels - 1.0)) / levels
@@ -34,7 +39,7 @@ fn dequant_grouped(level: u32, levels: u16) -> f32 {
 /// Read and dequantise `bap.len()` mantissas in order, applying each one's
 /// exponent to produce a coefficient. `dither` supplies a caller-chosen
 /// pseudo-random value in `(-1, 1)` for `bap == 0` positions when `dithflag`
-/// is set (§7.4.5); pass a function returning `0.0` to disable dither.
+/// is set (§7.3.4); pass a function returning `0.0` to disable dither.
 #[must_use]
 pub fn decode(
     r: &mut BitReader<'_>,
@@ -62,7 +67,11 @@ pub fn decode(
                     0.0
                 }
             }
-            Quant::Uniform { bits } => dequant_uniform(r.get(u32::from(bits)), bits),
+            Quant::Asymmetric { bits } => dequant_asymmetric(r, bits),
+            Quant::SymmetricTable { bits, values } => {
+                let code = r.get(u32::from(bits));
+                values.get(code as usize).copied().unwrap_or(0.0)
+            }
             Quant::Grouped {
                 levels,
                 per_group,
@@ -87,21 +96,13 @@ pub fn decode(
     out
 }
 
-/// Base-`levels` decomposition of a grouped code into `count` digits, most
-/// significant first — the inverse of how the encoder packs
-/// `sum(digit[i] * levels^i)`.
-fn decompose_group(mut code: u32, levels: u16, count: u8) -> Vec<u32> {
-    let levels = u32::from(levels);
-    let mut digits = Vec::new();
-    for _ in 0..count {
-        digits.push(code % levels);
-        code /= levels;
-    }
-    digits.reverse();
-    digits
-}
-
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::float_cmp,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
 
@@ -119,6 +120,36 @@ mod tests {
         let exps = [0u8; 6];
         let out = decode(&mut r, &bap, &exps, false, || 0.0);
         assert_eq!(out.len(), 6);
+    }
+
+    #[test]
+    fn asymmetric_dequant_is_two_s_complement_not_offset_binary() {
+        // bap=6 -> 5 bits. All-zero code is exactly zero (two's complement),
+        // not the most-negative value an offset-binary reading would give.
+        let mut r = BitReader::new(&[0u8; 4]);
+        let out = decode(&mut r, &[6], &[0], false, || 0.0);
+        assert_eq!(out[0], 0.0, "got {}", out[0]);
+
+        // The MSB set, rest zero ("10000") is two's complement's most
+        // negative value, -1.0 at this bit width — the case an
+        // offset-binary `(code-half)/half` reading would instead map to 0.
+        let mut buf = [0u8; 4];
+        buf[0] = 0b1000_0000;
+        let mut r2 = BitReader::new(&buf);
+        let out2 = decode(&mut r2, &[6], &[0], false, || 0.0);
+        assert!((out2[0] - (-1.0)).abs() < 1e-6, "got {}", out2[0]);
+    }
+
+    #[test]
+    fn bap3_table_values_are_not_evenly_spaced_like_a_uniform_quantizer() {
+        // code=3 (middle of 0..=6) must dequantise to exactly 0, per Table
+        // 7.21 — a two's-complement reading of a 3-bit field would instead
+        // treat code 3 as slightly positive (0.5 with a 4-level half).
+        let mut buf = [0u8; 4];
+        buf[0] = 0b011_00000; // code 3 in the first 3 bits
+        let mut r = BitReader::new(&buf);
+        let out = decode(&mut r, &[3], &[0], false, || 0.0);
+        assert_eq!(out[0], 0.0);
     }
 
     #[test]

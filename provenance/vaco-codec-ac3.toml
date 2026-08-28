@@ -1,6 +1,27 @@
 [[table]]
 name   = "BNDSZ"
 file   = "crates/codec/vaco-codec-ac3/src/tables_bitalloc.rs"
-source = "atsc-a52-2018"
-clause = "Annex A, bit-allocation band structure"
-method = "derived"
+source = "atsc-a52-2012-17dec"
+clause = "§7.2.3, Table 7.12 (bndtab/bndsz, the 50 masking-band widths)"
+method = "transcribed"
+
+[[table]]
+name   = "MASKTAB"
+file   = "crates/codec/vaco-codec-ac3/src/tables_bitalloc.rs"
+source = "atsc-a52-2012-17dec"
+clause = "§7.2.3, Table 7.13 (masktab, bin-to-band map, 253 entries)"
+method = "transcribed"
+
+[[table]]
+name   = "LATAB"
+file   = "crates/codec/vaco-codec-ac3/src/tables_bitalloc.rs"
+source = "atsc-a52-2012-17dec"
+clause = "§7.2.3, Table 7.14 (latab, log-addition correction, 256 entries)"
+method = "transcribed"
+
+[[table]]
+name   = "BAPTAB"
+file   = "crates/codec/vaco-codec-ac3/src/tables_bitalloc.rs"
+source = "atsc-a52-2012-17dec"
+clause = "§7.2.3, Table 7.16 (baptab, address-to-bap map, 64 entries)"
+method = "transcribed"

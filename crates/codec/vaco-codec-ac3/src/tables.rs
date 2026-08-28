@@ -1,48 +1,14 @@
-//! Constant tables for exponent grouping, the bit-allocation model and
-//! mantissa dequantisation. ATSC A/52:2018 Annex A ("Bit Allocation") gives
-//! the bit-allocation tables; §7.3/§7.4 give the exponent and mantissa ones.
+//! Small helper tables and lookups outside the bit-allocation model itself:
+//! channel counts and the mantissa quantizer shape per `bap`. ATSC A/52:2012
+//! §7.3/§7.4 and Tables 7.16 through 7.23.
 //!
-//! # Confidence, stated plainly
-//!
-//! The exponent-group differential coding (`DEXP`) and the mantissa
-//! quantizer bit-widths are widely reproduced in independent AC-3 writeups
-//! and this crate's own decode of real fixtures cross-checks them (a wrong
-//! entry desyncs every mantissa read after it, which the frame-length oracle
-//! in `crate::decode` catches). The bit-allocation model's masking-curve
-//! constants (`HTH`, `BNDSZ`, the decay/gain/floor tables) are the least
-//! independently verifiable part of this crate: they were not transcribed
-//! from the standard's own text (unavailable in this environment) but
-//! reconstructed from the algorithm's well-documented *structure*. Where the
-//! bit-exact values matter and could not be cross-checked, `docs/` and the
-//! final report say so rather than implying a confidence this crate cannot
-//! back up.
-
-/// `DEXP` grouped differential exponent table: one 7-bit code carries three
-/// consecutive delta values, each in `{-2,-1,0,1,2}`, packed as a base-5
-/// number (`5^3 = 125 <= 128`). §7.3.
-#[must_use]
-#[allow(
-    clippy::integer_division,
-    reason = "base-5 digit extraction from a packed 7-bit code, not a precision loss"
-)]
-pub const fn dexp(code: u8) -> [i8; 3] {
-    let code = code as u16;
-    let d0 = (code % 5) as i8 - 2;
-    let d1 = ((code / 5) % 5) as i8 - 2;
-    let d2 = ((code / 25) % 5) as i8 - 2;
-    [d0, d1, d2]
-}
-
-/// Coefficients per exponent group, by strategy code (`0` reuse handled by
-/// the caller, `1..=3` are D15/D25/D45). §7.3.
-#[must_use]
-pub const fn group_size(expstr: u8) -> u32 {
-    match expstr {
-        1 => 1,
-        2 => 2,
-        _ => 4,
-    }
-}
+//! Every value here is now checked against the specification text (see
+//! `crate::tables_bitalloc`'s module docs for how it was obtained) — this
+//! file previously carried a broader disclaimer covering values that turned
+//! out, on inspection, to already be right (the bap 1/2/4 grouped-quantizer
+//! spacing) and others that were not (bap 3/5's dequantisation, which is a
+//! table lookup, not the two's-complement shift this file used to apply to
+//! it uniformly across every non-grouped `bap`).
 
 /// Full-bandwidth channel count for an `acmod` (excludes LFE). §5.3.2.4.
 #[must_use]
@@ -54,20 +20,29 @@ pub fn acmod_channel_count(acmod: u8) -> usize {
         .into()
 }
 
-/// Mantissa quantizer shape for a given `bap` (0..=15). §7.4.4, Table 7.19.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Mantissa quantizer shape for a given `bap` (0..=15). §7.3.1, Table 7.18.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Quant {
-    /// No mantissa transmitted; value is zero (or dither).
+    /// `bap == 0`: no mantissa transmitted; value is zero (or dither).
     Zero,
-    /// `levels` values packed `per_group` to a `bits`-bit code (bap 1/2/4).
+    /// `levels` values packed `per_group` to a `bits`-bit code (`bap` 1/2/4,
+    /// Table 7.19/7.20/7.22 — verified evenly spaced, §7.3.5).
     Grouped {
         levels: u16,
         per_group: u8,
         bits: u8,
     },
-    /// One `bits`-bit two's-complement-ish symmetric code per value.
-    Uniform { bits: u8 },
+    /// One ungrouped code per value, looked up in a small table rather than
+    /// computed (`bap` 3/5, Table 7.21/7.23 — *not* evenly spaced the way
+    /// the grouped quantizers are).
+    SymmetricTable { bits: u8, values: &'static [f32] },
+    /// True two's-complement fractional quantization, `bits` wide (`bap`
+    /// 6..=15, §7.3.2: "the decimal point is considered to be to the left
+    /// of the MSB").
+    Asymmetric { bits: u8 },
 }
+
+use crate::tables_bitalloc::{BAP3_VALUES, BAP5_VALUES};
 
 /// # Panics
 /// Never for `bap <= 15`; out-of-range `bap` cannot occur from a 4-bit field.
@@ -85,22 +60,28 @@ pub const fn quant_for_bap(bap: u8) -> Quant {
             per_group: 3,
             bits: 7,
         },
-        3 => Quant::Uniform { bits: 3 },
+        3 => Quant::SymmetricTable {
+            bits: 3,
+            values: &BAP3_VALUES,
+        },
         4 => Quant::Grouped {
             levels: 11,
             per_group: 2,
             bits: 7,
         },
-        5 => Quant::Uniform { bits: 4 },
-        6 => Quant::Uniform { bits: 5 },
-        7 => Quant::Uniform { bits: 6 },
-        8 => Quant::Uniform { bits: 7 },
-        9 => Quant::Uniform { bits: 8 },
-        10 => Quant::Uniform { bits: 9 },
-        11 => Quant::Uniform { bits: 10 },
-        12 => Quant::Uniform { bits: 11 },
-        13 => Quant::Uniform { bits: 12 },
-        14 => Quant::Uniform { bits: 14 },
-        _ => Quant::Uniform { bits: 16 },
+        5 => Quant::SymmetricTable {
+            bits: 4,
+            values: &BAP5_VALUES,
+        },
+        6 => Quant::Asymmetric { bits: 5 },
+        7 => Quant::Asymmetric { bits: 6 },
+        8 => Quant::Asymmetric { bits: 7 },
+        9 => Quant::Asymmetric { bits: 8 },
+        10 => Quant::Asymmetric { bits: 9 },
+        11 => Quant::Asymmetric { bits: 10 },
+        12 => Quant::Asymmetric { bits: 11 },
+        13 => Quant::Asymmetric { bits: 12 },
+        14 => Quant::Asymmetric { bits: 14 },
+        _ => Quant::Asymmetric { bits: 16 },
     }
 }

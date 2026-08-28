@@ -137,6 +137,19 @@ pub fn decode_frame(
         }
     }
 
+    // §5.3: `auxdata()` and `errorcheck()` are once-per-frame, after all 6
+    // blocks — not read here for their content (this crate does not verify
+    // the CRC or expose auxiliary data), but consuming them keeps the
+    // reader's final position meaningful for anyone checking frame-length
+    // alignment as an oracle.
+    let auxdatae = r.get_bit() != 0;
+    if auxdatae {
+        let auxdatal = r.get(14);
+        r.skip(auxdatal);
+    }
+    r.skip(1); // crcrsv
+    r.skip(16); // crc2
+
     Ok(DecodedFrame {
         sample_rate: info.sample_rate,
         acmod: bsi.acmod,

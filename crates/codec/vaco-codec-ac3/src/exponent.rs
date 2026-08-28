@@ -1,9 +1,7 @@
 //! Exponent strategies and grouped differential exponent decode.
-//! ATSC A/52:2018 §7.3.
+//! ATSC A/52:2012 §7.1.3, transcribed from the pseudocode directly.
 
 use vaco_bitstream::BitReader;
-
-use crate::tables::{dexp, group_size};
 
 /// Per-block exponent strategy. `Reuse` means "same as the previous block
 /// carrying this channel" — the caller supplies the previous exponents.
@@ -25,58 +23,53 @@ impl ExpStrategy {
             _ => Self::Reuse,
         }
     }
+
+    /// `grpsize`: coefficients each decoded absolute exponent (`aexp`) is
+    /// copied to. §7.1.3.
+    const fn grpsize(self) -> usize {
+        match self {
+            Self::D25 => 2,
+            Self::D45 => 4,
+            _ => 1,
+        }
+    }
 }
 
-/// Decode one channel's exponents for a block, given how many coefficients
-/// it covers (`n`) and the strategy. `absexp_bits` is 4 for main/coupling
-/// channels; the LFE channel's own `nlfegrps` is fixed at 2 groups of 4
-/// coefficients (§7.3.3) and is handled by the caller passing `n = 7`
-/// (`LFE_COEFFS`), which this function treats no differently.
+/// Decode one channel's exponents for `1 + ncodes*3*grpsize` coefficients:
+/// `exp[0]` is the raw 4-bit `absexp` (already shifted, e.g. `cplabsexp<<1`,
+/// if the caller's channel needs that); each of the `ncodes` 7-bit `gexp`
+/// codes then unpacks to 3 differential values which accumulate into 3
+/// absolute exponents, each copied to `grpsize` coefficients.
 ///
-/// Returns one exponent (0..=24) per coefficient in `0..n`, and how many
-/// bits were consumed.
+/// This is deliberately not derived from a bin count internally — the three
+/// channel kinds (full-bandwidth, coupling, LFE) compute `ncodes` by three
+/// different spec formulas from their own bin range, so the caller passes it
+/// in explicitly rather than this function guessing it back out of `n`.
 #[must_use]
-pub fn decode(r: &mut BitReader<'_>, n: usize, strategy: ExpStrategy) -> (Vec<u8>, u32) {
-    let group = group_size(match strategy {
-        // Caller does not call `decode` for `Reuse`; `D15`'s code is what
-        // `group_size` treats as the "otherwise" default too.
-        ExpStrategy::Reuse | ExpStrategy::D15 => 1,
-        ExpStrategy::D25 => 2,
-        ExpStrategy::D45 => 3,
-    });
-    let ngrps = n.div_ceil(group as usize);
-    let start_pos = r.bit_pos();
-
-    let absexp = u8::try_from(r.get(4)).unwrap_or(0);
-    let mut group_exps = Vec::new();
-    group_exps.push(absexp);
-    let mut i = 0usize;
-    while i < ngrps {
-        let code = u8::try_from(r.get(7)).unwrap_or(0);
-        let [d0, d1, d2] = dexp(code);
-        for d in [d0, d1, d2] {
-            if i >= ngrps {
-                break;
-            }
-            let prev = *group_exps.last().unwrap_or(&0);
-            let next = (i64::from(prev) + i64::from(d)).clamp(0, 24);
-            group_exps.push(u8::try_from(next).unwrap_or(0));
-            i += 1;
-        }
-    }
-    group_exps.remove(0);
-
-    let mut out = vec![0u8; n];
-    for (g, &e) in group_exps.iter().enumerate() {
-        let base = g * group as usize;
-        for k in 0..group as usize {
-            if let Some(slot) = out.get_mut(base + k) {
-                *slot = e;
+pub fn decode(r: &mut BitReader<'_>, absexp: u8, ncodes: usize, strategy: ExpStrategy) -> Vec<u8> {
+    let grpsize = strategy.grpsize();
+    let mut out = vec![absexp];
+    let mut prev = absexp;
+    for _ in 0..ncodes {
+        let code = r.get(7);
+        for m in [decode_digit(code, 25), decode_digit(code % 25, 5), code % 25 % 5] {
+            let dexp = i32::from(u8::try_from(m).unwrap_or(0)) - 2;
+            let next = (i64::from(prev) + i64::from(dexp)).clamp(0, 24);
+            prev = u8::try_from(next).unwrap_or(prev);
+            for _ in 0..grpsize {
+                out.push(prev);
             }
         }
     }
-    let bits = u32::try_from(r.bit_pos().saturating_sub(start_pos)).unwrap_or(0);
-    (out, bits)
+    out
+}
+
+#[allow(
+    clippy::integer_division,
+    reason = "base-25/5 digit extraction from a packed 7-bit code, not a precision loss"
+)]
+const fn decode_digit(value: u32, base: u32) -> u32 {
+    value / base
 }
 
 #[cfg(test)]
@@ -91,18 +84,12 @@ mod tests {
 
     #[test]
     fn a_flat_exponent_run_decodes_to_a_constant_array() {
-        // absexp=0 (4 bits = 0b0000), then dexp code for delta {0,0,0} is
-        // (0+2)+(0+2)*5+(0+2)*25 = 2+10+50 = 62.
-        let mut bits = vec![false; 4];
+        // dexp code for delta {0,0,0} is (0+2)*25 + (0+2)*5 + (0+2) = 62.
         let code = 62u32;
-        for b in (0..7).rev() {
-            bits.push((code >> b) & 1 != 0);
-        }
-        // pad plenty more zero groups
-        for _ in 0..(7 * 10) {
-            let d2 = 2u32;
+        let mut bits = Vec::new();
+        for _ in 0..10 {
             for b in (0..7).rev() {
-                bits.push((d2 >> b) & 1 != 0);
+                bits.push((code >> b) & 1 != 0);
             }
         }
         let mut buf = vec![0u8; bits.len().div_ceil(8)];
@@ -112,13 +99,21 @@ mod tests {
             }
         }
         let mut r = BitReader::new(&buf);
-        let (out, _bits) = decode(&mut r, 8, ExpStrategy::D15);
+        let out = decode(&mut r, 0, 8, ExpStrategy::D15);
         assert!(out.iter().all(|&e| e == 0));
+        assert_eq!(out.len(), 1 + 8 * 3);
+    }
+
+    #[test]
+    fn grpsize_expands_each_decoded_value() {
+        let mut r = BitReader::new(&[0u8; 8]);
+        let out = decode(&mut r, 5, 2, ExpStrategy::D45);
+        assert_eq!(out.len(), 1 + 2 * 3 * 4);
     }
 
     #[test]
     fn never_panics_on_a_truncated_buffer() {
         let mut r = BitReader::new(&[0u8; 1]);
-        let _ = decode(&mut r, 40, ExpStrategy::D45);
+        let _ = decode(&mut r, 0, 20, ExpStrategy::D45);
     }
 }
