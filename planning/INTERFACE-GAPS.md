@@ -1528,7 +1528,7 @@ committed its own nine. Whoever wires `AdpcmPsx` into `vaco-format-misc-audio`'s
 `vag.rs` should re-open this kind of entry rather than assume "gap 21 is
 CLOSED" covers it too.
 
-## Gap 22 — no cross-node introspection reachable from a filter (`graphmonitor`/`agraphmonitor`, `vaco-filter-scope`) — CLOSED 2026-08-28 for the framework capability; `graphmonitor`/`agraphmonitor` themselves remain unwired
+## Gap 22 — no cross-node introspection reachable from a filter (`graphmonitor`/`agraphmonitor`, `vaco-filter-scope`) — CLOSED 2026-08-28
 
 `ffmpeg -h filter=graphmonitor`/`agraphmonitor` draw a picture of the
 *whole filtergraph's* live state — every link's queue depth, EOF status,
@@ -1604,6 +1604,42 @@ that are not itself: []"`) before restoring the real implementation.
 `vaco-filter-scope` — wiring them (parsing `mode`/`flags`, rendering the
 overlay) is separate work this pass did not do, left for whoever picks
 that crate back up.
+
+### Status, 2026-08-28 — wired into real `graphmonitor`/`agraphmonitor` filters, closing this as a solution, not just a capability
+
+The status above closed the framework capability; it did not yet prove a
+real consumer used it as built. `vaco-filter-scope` now implements both
+`graphmonitor` and `agraphmonitor` (`src/graphmonitor.rs`, one `Filter`
+shared by both — the only difference is the input pad's media type),
+using `ctx.graph_nodes()`/`ctx.graph_links()` to draw the live filtergraph
+as text: one block per node (the monitor's own node included), a header
+line then one line per pad naming the peer node and its live counters
+(queue depth/capacity, `at_eof`, frame/sample count, peak depth,
+backpressure-blocked count).
+
+Proven with a real `Graph`, not just the crate's own pure-function unit
+tests: `tests/graphmonitor.rs` builds an actual source → `graphmonitor` →
+sink graph (and, separately, an audio source → `agraphmonitor` → video
+sink graph), runs it through the real scheduler, and checks the rendered
+output actually reflects the other nodes it is wired to — deliberately
+broken (`graph_nodes`/`graph_links` stubbed to return nothing inside
+`graphmonitor`'s own `filter_frame`) and confirmed to fail before
+restoring the real call, the same discipline gap 24's `Dual` adapter
+tests used.
+
+One real limit found by building the actual consumer rather than assuming
+the accessors were enough: `NodeView`/`LinkView` cannot serve the
+reference's `format`/`size`/`rate`/`timebase`/`pts`/`time` fields at all
+(link geometry, timing, and timestamp values are outside gap 22's
+deliberately narrow snapshot — confirmed a design choice, not an
+oversight, matching the coordinator's own "narrowest thing that serves
+the two consumers" brief), and cannot cheaply serve the reference's
+paired `frame_count_in`/`out`/`delta` shape (`LinkStats` keeps one
+post-dequeue counter, not a push/pop pair). Neither blocks shipping
+`graphmonitor`/`agraphmonitor` themselves — both filters run and draw a
+genuinely useful (if incomplete, and permanently non-framecrc-comparable
+per the family's own font ceiling) picture of the graph — so this is
+recorded as a known limit of gap 22's scope, not reopened as a new gap.
 
 ## Gap 23 — `Stream::r_frame_rate`/`bit_rate` cannot distinguish "no mechanism" from "mechanism declined"
 
