@@ -50,13 +50,15 @@
 //! boundaries in [`Av1Content`] the way the module doc predicted, not a
 //! change to the trait.
 
+use vaco_bitstream::BitWriter;
 use vaco_codec_cbs::{CbsCodec, CbsFragment, CbsUnit, UnitOrigin};
 use vaco_core::{Error, Result};
 use vaco_limits::Budget;
 
-use crate::metadata::{self, Metadata};
+use crate::metadata::{self, HdrCll, HdrMdcv, ItuT35, Metadata};
 use crate::obu::{Av1Framing, ObuHeader, ObuType, units};
-use crate::seq::SequenceHeader;
+use crate::profile::Tier;
+use crate::seq::{SELECT_VALUE, SequenceHeader};
 
 /// What [`Av1Framing::LowOverheadBitstream`] cannot always carry through a
 /// split/assemble round trip.
@@ -213,16 +215,15 @@ impl CbsCodec for Av1Cbs {
                 out.extend_from_slice(data);
                 Ok(())
             }
-            // As `vaco-parse-hevc::cbs`: re-encoding a sequence header or a
-            // metadata payload bit-exactly is real work this wave did not
-            // budget, and a writer that is not bit-exact corrupts a stream
-            // silently rather than failing loudly.
-            Av1Content::SequenceHeader(_) => Err(Error::Unsupported(
-                "writing an AV1 sequence header back out is not implemented",
-            )),
-            Av1Content::Metadata(_) => Err(Error::Unsupported(
-                "writing an AV1 metadata OBU back out is not implemented",
-            )),
+            Av1Content::SequenceHeader(sh) => {
+                write_obu(out, budget, ObuType::SEQUENCE_HEADER, |p| {
+                    write_sequence_header(sh, p)
+                })
+            }
+            Av1Content::Metadata(m) => write_obu(out, budget, ObuType::METADATA, |p| {
+                write_metadata(m, p);
+                Ok(())
+            }),
         }
     }
 
@@ -255,6 +256,293 @@ fn write_leb128(out: &mut Vec<u8>, mut v: u64) {
             return;
         }
         out.push(byte | 0x80);
+    }
+}
+
+// -------------------------------------------------------------------- write
+//
+// The write side of [`Av1Cbs`]: [`SequenceHeader`] and [`Metadata`], each a
+// bit-exact re-encoding of its `parse` counterpart in `crate::seq` /
+// `crate::metadata`. One documented gap, both narrower than HEVC's or
+// H.264's: `sequence_header_obu()`'s `decoder_model_info()` and
+// `operating_parameters_info()` are parsed field-by-field but most of their
+// fields are discarded immediately (`crate::seq::SequenceHeader::parse`'s own
+// `_num_units_in_decoding_tick`-shaped names) — nothing here can reconstruct
+// them, so a sequence header with `decoder_model_info_present_flag` set
+// reports [`Error::Unsupported`] rather than a guess. `initial_display_delay`
+// is not even tracked as a flag (not just its payload), so it is always
+// written absent; every fixture this crate's own tests carry has it absent,
+// consistent with the crate doc's own measurement that consumer encoders
+// leave the adjacent `timing_info_present_flag` at 0 too.
+
+/// `obu_header()`'s one byte for a freshly-written OBU: `obu_forbidden_bit =
+/// 0`, `obu_extension_flag = 0` (no temporal/spatial layering — this crate's
+/// typed content never carries one), `obu_has_size_field = 1` (the framing
+/// every real encoder this crate was tested against uses, per the module
+/// doc), `obu_reserved_1bit = 0`.
+fn write_obu_header(t: ObuType) -> u8 {
+    (u32::from(t.get()) << 3 | 0b10) as u8
+}
+
+/// Write one OBU: header byte, `leb128()`-coded `obu_size`, then `body`'s
+/// bits padded to the byte boundary via `trailing_bits()`, §5.3.4 — **only**
+/// when `body` left a partial byte behind.
+///
+/// §5.3.4's general OBU wrapper computes `nbBits = obu_size * 8 -
+/// payloadBits` and pads with exactly that many bits; since this function
+/// picks `obu_size` to be `body`'s own byte length, `nbBits` is 0 whenever
+/// `body` already ended byte-aligned, and `trailing_bits(0)` writes nothing.
+/// `metadata_itut_t35()` is the case that matters: its payload runs to the
+/// end of the OBU (see `write_metadata`), so it is always already aligned,
+/// and calling `rbsp_trailing()` unconditionally here appended a spurious
+/// `0x80` byte to every metadata OBU — caught by
+/// `metadata_round_trips_every_shape` re-parsing its own output.
+fn write_obu(
+    out: &mut Vec<u8>,
+    budget: &mut Budget,
+    t: ObuType,
+    body: impl FnOnce(&mut BitWriter) -> Result<()>,
+) -> Result<()> {
+    let mut w = BitWriter::new();
+    body(&mut w)?;
+    if !w.bit_len().is_multiple_of(8) {
+        w.rbsp_trailing(); // trailing_bits(): a one bit, then zero-padding.
+    }
+    let payload = w.finish();
+
+    let mut unit = Vec::new();
+    unit.push(write_obu_header(t));
+    write_leb128(&mut unit, payload.len() as u64);
+    unit.extend_from_slice(&payload);
+
+    budget.check(unit.len() as u64)?;
+    out.extend_from_slice(&unit);
+    Ok(())
+}
+
+/// `uvlc()`, AV1 spec §4.10.3 — the inverse of `crate::leb::uvlc`. See that
+/// function's own doc for why the code is injective and what the 32-zero cap
+/// means.
+fn write_uvlc(w: &mut BitWriter, value: u64) {
+    if value >= (1u64 << 32) - 1 {
+        w.put_zeros(32);
+        return;
+    }
+    let v1 = value + 1;
+    let k = v1.ilog2();
+    w.put_zeros(k);
+    w.put(1, 1);
+    let suffix = (v1 - (1u64 << k)) as u32;
+    w.put(k, suffix);
+}
+
+/// `sequence_header_obu()`, §5.5.1 — the inverse of [`SequenceHeader::parse`].
+/// See the write-side module doc for the one case this reports
+/// [`Error::Unsupported`] rather than guess at.
+fn write_sequence_header(sh: &SequenceHeader, w: &mut BitWriter) -> Result<()> {
+    w.put(3, u32::from(sh.seq_profile));
+    w.put(1, u32::from(sh.still_picture));
+    w.put(1, u32::from(sh.reduced_still_picture_header));
+
+    if sh.reduced_still_picture_header {
+        let level = sh.operating_points.first().map_or(0, |op| op.seq_level_idx);
+        w.put(5, u32::from(level));
+    } else {
+        let timing_info_present = sh.timing_info.is_some();
+        w.put(1, u32::from(timing_info_present));
+        if let Some(t) = &sh.timing_info {
+            w.put(32, t.num_units_in_display_tick);
+            w.put(32, t.time_scale);
+            w.put(1, u32::from(t.equal_picture_interval));
+            if t.equal_picture_interval {
+                write_uvlc(w, t.num_ticks_per_picture_minus_1);
+            }
+            w.put(1, u32::from(sh.decoder_model_info_present_flag));
+            if sh.decoder_model_info_present_flag {
+                return Err(Error::Unsupported(
+                    "a sequence header with decoder_model_info_present_flag cannot be \
+                     re-encoded: decoder_model_info()'s fields were not retained on read",
+                ));
+            }
+        }
+        w.put(1, 0); // initial_display_delay_present_flag: see the module doc
+        let cnt_minus1 = sh.operating_points.len().saturating_sub(1) as u32;
+        w.put(5, cnt_minus1);
+        for op in &sh.operating_points {
+            w.put(12, u32::from(op.idc));
+            w.put(5, u32::from(op.seq_level_idx));
+            if op.seq_level_idx > 7 {
+                w.put(1, u32::from(op.seq_tier == Tier::High));
+            }
+            // decoder_model_present_for_this_op is present only when
+            // decoder_model_info_present_flag is set, which is refused above.
+            // initial_display_delay_present_for_this_op is present only when
+            // the flag this function always writes 0 is set.
+        }
+    }
+
+    let frame_width_bits_minus1 = u32::from(sh.frame_width_bits) - 1;
+    let frame_height_bits_minus1 = u32::from(sh.frame_height_bits) - 1;
+    w.put(4, frame_width_bits_minus1);
+    w.put(4, frame_height_bits_minus1);
+    w.put(sh.frame_width_bits.into(), sh.max_frame_width - 1);
+    w.put(sh.frame_height_bits.into(), sh.max_frame_height - 1);
+
+    if !sh.reduced_still_picture_header {
+        w.put(1, u32::from(sh.frame_id_numbers_present_flag));
+    }
+    if sh.frame_id_numbers_present_flag {
+        w.put(4, u32::from(sh.delta_frame_id_length) - 2);
+        w.put(3, u32::from(sh.additional_frame_id_length) - 1);
+    }
+
+    w.put(1, u32::from(sh.use_128x128_superblock));
+    w.put(1, u32::from(sh.enable_filter_intra));
+    w.put(1, u32::from(sh.enable_intra_edge_filter));
+
+    if !sh.reduced_still_picture_header {
+        w.put(1, u32::from(sh.enable_interintra_compound));
+        w.put(1, u32::from(sh.enable_masked_compound));
+        w.put(1, u32::from(sh.enable_warped_motion));
+        w.put(1, u32::from(sh.enable_dual_filter));
+        w.put(1, u32::from(sh.enable_order_hint));
+        if sh.enable_order_hint {
+            w.put(1, u32::from(sh.enable_jnt_comp));
+            w.put(1, u32::from(sh.enable_ref_frame_mvs));
+        }
+        let choose_screen_content_tools = sh.seq_force_screen_content_tools == SELECT_VALUE;
+        w.put(1, u32::from(choose_screen_content_tools));
+        if !choose_screen_content_tools {
+            w.put(1, u32::from(sh.seq_force_screen_content_tools));
+        }
+        if sh.seq_force_screen_content_tools > 0 {
+            let choose_integer_mv = sh.seq_force_integer_mv == SELECT_VALUE;
+            w.put(1, u32::from(choose_integer_mv));
+            if !choose_integer_mv {
+                w.put(1, u32::from(sh.seq_force_integer_mv));
+            }
+        }
+        if sh.enable_order_hint {
+            w.put(3, u32::from(sh.order_hint_bits) - 1);
+        }
+    }
+
+    w.put(1, u32::from(sh.enable_superres));
+    w.put(1, u32::from(sh.enable_cdef));
+    w.put(1, u32::from(sh.enable_restoration));
+
+    write_color_config(sh, w);
+
+    w.put(1, u32::from(sh.film_grain_params_present));
+    Ok(())
+}
+
+/// `color_config()`, §5.5.2 — the inverse of `crate::seq::parse_color_config`.
+fn write_color_config(sh: &SequenceHeader, w: &mut BitWriter) {
+    let c = &sh.color_config;
+    let high_bitdepth = c.bit_depth >= 10;
+    w.put(1, u32::from(high_bitdepth));
+    if sh.seq_profile == 2 && high_bitdepth {
+        w.put(1, u32::from(c.bit_depth == 12));
+    }
+    if sh.seq_profile != 1 {
+        w.put(1, u32::from(c.mono_chrome));
+    }
+    let color_description_present =
+        !(c.color_primaries == 2 && c.transfer_characteristics == 2 && c.matrix_coefficients == 2);
+    w.put(1, u32::from(color_description_present));
+    if color_description_present {
+        w.put(8, u32::from(c.color_primaries));
+        w.put(8, u32::from(c.transfer_characteristics));
+        w.put(8, u32::from(c.matrix_coefficients));
+    }
+    if c.mono_chrome {
+        w.put(1, u32::from(c.color_range));
+        return;
+    }
+    let srgb_identity =
+        c.color_primaries == 1 && c.transfer_characteristics == 13 && c.matrix_coefficients == 0;
+    if !srgb_identity {
+        w.put(1, u32::from(c.color_range));
+        if sh.seq_profile == 2 && c.bit_depth == 12 {
+            w.put(1, u32::from(c.subsampling_x));
+            if c.subsampling_x {
+                w.put(1, u32::from(c.subsampling_y));
+            }
+        }
+        // profile 0 forces 4:2:0, profile 1 forces 4:4:4, and non-12-bit
+        // profile 2 forces 4:2:2 — none of those three read a bit, matching
+        // `parse_color_config`'s three-way match.
+    }
+    if c.subsampling_x && c.subsampling_y {
+        w.put(2, u32::from(c.chroma_sample_position));
+    }
+    w.put(1, u32::from(c.separate_uv_delta_q));
+}
+
+/// `metadata_obu()`, §5.8.1 — the inverse of `crate::metadata::parse`. Every
+/// variant here is byte-aligned data with no encoding ambiguity, unlike the
+/// sequence header.
+fn write_metadata(m: &Metadata, w: &mut BitWriter) {
+    match m {
+        Metadata::HdrCll(HdrCll { max_cll, max_fall }) => {
+            write_metadata_leb(w, metadata::METADATA_TYPE_HDR_CLL);
+            w.put(16, u32::from(*max_cll));
+            w.put(16, u32::from(*max_fall));
+        }
+        Metadata::HdrMdcv(HdrMdcv {
+            primary_chromaticity,
+            white_point_chromaticity,
+            luminance_max,
+            luminance_min,
+        }) => {
+            write_metadata_leb(w, metadata::METADATA_TYPE_HDR_MDCV);
+            for &(x, y) in primary_chromaticity {
+                w.put(16, u32::from(x));
+                w.put(16, u32::from(y));
+            }
+            w.put(16, u32::from(white_point_chromaticity.0));
+            w.put(16, u32::from(white_point_chromaticity.1));
+            w.put(32, *luminance_max);
+            w.put(32, *luminance_min);
+        }
+        Metadata::ItuT35(ItuT35 {
+            country_code,
+            country_code_extension_byte,
+            payload,
+        }) => {
+            write_metadata_leb(w, metadata::METADATA_TYPE_ITUT_T35);
+            w.put(8, u32::from(*country_code));
+            if let Some(ext) = country_code_extension_byte {
+                w.put(8, u32::from(*ext));
+            }
+            for &b in payload {
+                w.put(8, u32::from(b));
+            }
+        }
+        Metadata::Other { metadata_type, data } => {
+            write_metadata_leb(w, *metadata_type);
+            for &b in data {
+                w.put(8, u32::from(b));
+            }
+        }
+    }
+}
+
+/// `leb128(metadata_type)`, written bit by bit since `w` is not yet
+/// byte-aligned at this point in general (it is, always, in practice — a
+/// `metadata_obu()` starts a fresh OBU — but writing it through the bit
+/// writer rather than assuming alignment keeps this correct even if that ever
+/// changes).
+fn write_metadata_leb(w: &mut BitWriter, mut v: u64) {
+    loop {
+        let byte = (v & 0x7f) as u32;
+        v >>= 7;
+        if v == 0 {
+            w.put(8, byte);
+            return;
+        }
+        w.put(8, byte | 0x80);
     }
 }
 
@@ -413,10 +701,11 @@ mod tests {
         }
     }
 
-    /// A raw rewrite changes nothing; a typed rewrite says so rather than
-    /// writing something wrong.
+    /// The write path: read the real `libsvtav1` sequence header to its typed
+    /// form and write it straight back with no edit — byte for byte, over
+    /// the same fixture `crate::seq`'s own tests already pin.
     #[test]
-    fn the_write_path_is_honest_about_what_it_cannot_do() {
+    fn a_real_sequence_header_round_trips_bit_exactly_with_no_edit() {
         let data = obu_stream();
         let mut cbs = Cbs::new(Av1Cbs::new());
         let mut b = budget();
@@ -424,8 +713,79 @@ mod tests {
         cbs.split(&data, Av1Framing::ObuStream, &mut f, &mut b)
             .expect("splits");
         let sh = cbs.read_unit(&f, 1, &mut b).expect("a sequence header");
+        assert!(matches!(sh, Av1Content::SequenceHeader(_)));
+        let before = f.units()[1].data.clone();
+        cbs.update_unit(&mut f, 1, &sh, &mut b).expect("rewrites");
+        assert_eq!(f.units()[1].data, before, "re-encodes identically");
+        f.release(&mut b);
+    }
+
+    /// A field edit through the typed sequence header changes only that
+    /// field — the point of a write path over "copy the bytes back".
+    #[test]
+    fn editing_a_typed_field_changes_only_that_field() {
+        let data = obu_stream();
+        let mut cbs = Cbs::new(Av1Cbs::new());
+        let mut b = budget();
+        let mut f = CbsFragment::new();
+        cbs.split(&data, Av1Framing::ObuStream, &mut f, &mut b)
+            .expect("splits");
+
+        let Av1Content::SequenceHeader(mut sh) =
+            cbs.read_unit(&f, 1, &mut b).expect("a sequence header")
+        else {
+            panic!("expected a sequence header");
+        };
+        let original = (sh.max_frame_width, sh.max_frame_height);
+        sh.color_config.color_range = !sh.color_config.color_range;
+        cbs.update_unit(&mut f, 1, &Av1Content::SequenceHeader(sh), &mut b)
+            .expect("rewrites");
+
+        let Av1Content::SequenceHeader(sh) = cbs.read_unit(&f, 1, &mut b).expect("re-read") else {
+            panic!("expected a sequence header");
+        };
+        assert_eq!(
+            (sh.max_frame_width, sh.max_frame_height),
+            original,
+            "nothing else moved"
+        );
+        f.release(&mut b);
+    }
+
+    /// The one documented, detectable case this write path refuses rather
+    /// than guesses at: `decoder_model_info_present_flag` set, whose fields
+    /// this crate's reader never retained.
+    #[test]
+    fn decoder_model_info_is_refused_rather_than_guessed() {
+        let mut sh = {
+            let data = obu_stream();
+            let mut cbs = Cbs::new(Av1Cbs::new());
+            let mut b = budget();
+            let mut f = CbsFragment::new();
+            cbs.split(&data, Av1Framing::ObuStream, &mut f, &mut b)
+                .expect("splits");
+            let Av1Content::SequenceHeader(sh) =
+                cbs.read_unit(&f, 1, &mut b).expect("a sequence header")
+            else {
+                panic!("expected a sequence header");
+            };
+            f.release(&mut b);
+            *sh
+        };
+        sh.timing_info = Some(crate::seq::TimingInfo {
+            num_units_in_display_tick: 1,
+            time_scale: 24,
+            equal_picture_interval: true,
+            num_ticks_per_picture_minus_1: 0,
+        });
+        sh.decoder_model_info_present_flag = true;
+
+        let mut cbs = Cbs::new(Av1Cbs::new());
+        let mut b = budget();
+        let mut out = Vec::new();
         assert!(matches!(
-            cbs.update_unit(&mut f, 1, &sh, &mut b),
+            cbs.codec_mut()
+                .write_unit(&Av1Content::SequenceHeader(Box::new(sh)), &mut out, &mut b),
             Err(Error::Unsupported(_))
         ));
     }
@@ -502,6 +862,46 @@ mod tests {
             for i in 0..f.len() {
                 let _ = cbs.read_unit(&f, i, &mut b);
             }
+            f.release(&mut b);
+        }
+    }
+
+    /// A metadata OBU round trips through `write_unit`: no encoding ambiguity
+    /// exists for any of its four shapes, unlike the sequence header.
+    #[test]
+    fn metadata_round_trips_every_shape() {
+        let mut cbs = Cbs::new(Av1Cbs::new());
+        let mut b = budget();
+        for content in [
+            Av1Content::Metadata(Metadata::HdrCll(HdrCll {
+                max_cll: 1000,
+                max_fall: 400,
+            })),
+            Av1Content::Metadata(Metadata::HdrMdcv(HdrMdcv {
+                primary_chromaticity: [(1, 2), (3, 4), (5, 6)],
+                white_point_chromaticity: (7, 8),
+                luminance_max: 9,
+                luminance_min: 10,
+            })),
+            Av1Content::Metadata(Metadata::ItuT35(ItuT35 {
+                country_code: 0xFF,
+                country_code_extension_byte: Some(0x26),
+                payload: vec![1, 2, 3, 4],
+            })),
+            Av1Content::Metadata(Metadata::Other {
+                metadata_type: 9,
+                data: vec![1, 2, 3],
+            }),
+        ] {
+            let mut out = Vec::new();
+            cbs.codec_mut()
+                .write_unit(&content, &mut out, &mut b)
+                .expect("writes");
+            let mut f = CbsFragment::new();
+            cbs.split(&out, Av1Framing::ObuStream, &mut f, &mut b)
+                .expect("splits");
+            let back = cbs.read_unit(&f, 0, &mut b).expect("reads");
+            assert_eq!(back, content);
             f.release(&mut b);
         }
     }
