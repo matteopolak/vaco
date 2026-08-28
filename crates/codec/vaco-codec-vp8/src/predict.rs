@@ -72,22 +72,36 @@ pub fn predict_tm<const N: usize>(above: &[u8; N], left: &[u8; N], corner: u8) -
 /// 6386 §12.3's explicit exception.
 #[must_use]
 pub fn predict_dc<const N: usize>(above: Option<&[u8; N]>, left: Option<&[u8; N]>) -> [[u8; N]; N] {
-    let (sum, count): (u32, u32) = match (above, left) {
-        (Some(a), Some(l)) => (
-            a.iter().map(|&v| u32::from(v)).sum::<u32>() + l.iter().map(|&v| u32::from(v)).sum::<u32>(),
-            2 * N as u32,
-        ),
-        (Some(a), None) => (a.iter().map(|&v| u32::from(v)).sum(), N as u32),
-        (None, Some(l)) => (l.iter().map(|&v| u32::from(v)).sum(), N as u32),
-        (None, None) => (0, 0),
+    // Delegates to `vaco_codec_dsp_intrapred::dc_predict` (D-09): both
+    // branches here reduce to that function's own average-with-rounding
+    // formula for a power-of-two count (`N`, `2*N` are always 4/8/16/32),
+    // where `(sum + count/2) / count` and a shift-based `(sum +
+    // (1<<(shift-1))) >> shift` are the identical computation -- verified
+    // bit-exact against this function's own pre-existing unit tests below
+    // before landing, not merely assumed equivalent.
+    let mut top_buf = [0u16; N];
+    let mut left_buf = [0u16; N];
+    let top: &[u16] = match above {
+        Some(a) => {
+            for (d, &s) in top_buf.iter_mut().zip(a.iter()) {
+                *d = u16::from(s);
+            }
+            &top_buf
+        }
+        None => &[],
     };
-    let dc = if count == 0 {
-        128
-    } else {
-        let shift = count.trailing_zeros();
-        ((sum + (1 << (shift - 1))) >> shift) as u8
+    let left_slice: &[u16] = match left {
+        Some(l) => {
+            for (d, &s) in left_buf.iter_mut().zip(l.iter()) {
+                *d = u16::from(s);
+            }
+            &left_buf
+        }
+        None => &[],
     };
-    [[dc; N]; N]
+    let dc = vaco_codec_dsp_intrapred::dc_predict(top, left_slice, N, 8);
+    let dc_u8 = u8::try_from(dc).unwrap_or(u8::MAX);
+    [[dc_u8; N]; N]
 }
 
 /// `B_DC_PRED`: the 4x4 luma subblock DC mode. Unlike [`predict_dc`], both
@@ -95,9 +109,15 @@ pub fn predict_dc<const N: usize>(above: Option<&[u8; N]>, left: Option<&[u8; N]
 /// values), fixed shift of 3.
 #[must_use]
 pub fn b_dc(above: &[u8; 4], left: &[u8; 4]) -> [[u8; 4]; 4] {
-    let sum: u32 = above.iter().chain(left.iter()).map(|&v| u32::from(v)).sum();
-    let v = ((sum + 4) >> 3) as u8;
-    [[v; 4]; 4]
+    // Both sides always present here (the caller has already substituted
+    // 127/129 for any off-frame edge), so this is exactly
+    // `dc_predict`'s both-available branch at size 4 -- `(sum + 4) >> 3`
+    // is that branch's own formula for count = 2*4 = 8.
+    let top: [u16; 4] = core::array::from_fn(|i| u16::from(above.get(i).copied().unwrap_or(0)));
+    let left_arr: [u16; 4] = core::array::from_fn(|i| u16::from(left.get(i).copied().unwrap_or(0)));
+    let dc = vaco_codec_dsp_intrapred::dc_predict(&top, &left_arr, 4, 8);
+    let dc_u8 = u8::try_from(dc).unwrap_or(u8::MAX);
+    [[dc_u8; 4]; 4]
 }
 
 /// `above` here is the 8-pixel row (4 direct + 4 above-right); `corner` is

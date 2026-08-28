@@ -15,6 +15,7 @@ vaco-limits = { path = "../../core/vaco-limits" }
 vaco-codec-core = { path = "../../signal/vaco-codec-core" }
 vaco-codec-msac = { path = "../../signal/vaco-codec-msac" }
 vaco-parse-vpx = { path = "../vaco-parse-vpx" }
+vaco-codec-dsp-intrapred = { path = "../../signal/vaco-codec-dsp-intrapred" }
 vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
 vaco-packet = { path = "../../model/vaco-packet" }
 vaco-frame = { path = "../../model/vaco-frame" }
