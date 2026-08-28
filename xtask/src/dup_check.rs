@@ -135,6 +135,15 @@ const DISTINCT: &[(&str, &str)] = &[
         "vaco-conformance: a test scope. vaco-probe: an option scope.",
     ),
     (
+        "Segment",
+        "vaco-format-imf: one `<Segment>` of a Composition Playlist (SMPTE \
+         ST 2067-3) — an ordered set of `Sequence`s forming part of the \
+         composition's edit-decision-list timeline. vaco-format-isom: a \
+         resolved edit-list entry (ISO/IEC 14496-12 `elst`), entirely in \
+         media-timescale ticks — a different container family's \
+         independently-named concept, not a shared one.",
+    ),
+    (
         "Section",
         "vaco-format-mpegts-tables: a PSI section. vaco-conformance: a report section.",
     ),

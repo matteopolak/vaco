@@ -1,0 +1,20 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# IMF (SMPTE ST 2067) has no reference `ffmpeg` build to measure a name or
+# extensions against on this machine (`ffmpeg 8.1` here has no `imf`
+# demuxer — confirmed via `ffmpeg -demuxers`; see this crate's own
+# top-level docs, "Verification"). `name = "imf"` matches this crate's own
+# `Crate(s)` field in the issue tracker (`vaco-format-imf`, cross-checked
+# against `planning/18-formats.md`'s FM-55 row) and the family's own
+# spec name (SMPTE ST 2067, "Interoperable Master Format"); no extension is
+# declared because a Composition Playlist's filename is a free-form
+# convention (`CPL_<uuid>.xml`), not a spec requirement, so this format is
+# found by content probe alone (`demux.rs::probe`'s own `<CompositionPlaylist`
+# sniff), the same posture `vaco-demux-dash` takes for `<MPD`.
+
+[[component]]
+kind      = "demuxer"
+name      = "imf"
+long_name = "IMF (SMPTE ST 2067) Composition Playlist"
+feature   = "demux-imf"
+ctor      = "vaco_format_imf::DEMUXER"

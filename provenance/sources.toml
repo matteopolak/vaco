@@ -1048,3 +1048,24 @@ kind     = "blackbox"
 title    = "A fourth probing session against real ffmpeg 8.1 MXF output, driven by the coordinating dispatch's specific ask (was the Primer Pack's BER-length-width divergence general or Primer-Pack-specific, and what were the ~1536 unidentified D-10/OP-Atom header bytes): walked every KLV's own BER length prefix directly in two real fixtures (a single-track -f mxf file and a freshly generated two-track one) and found a per-KLV-family split -- the Partition Pack family, the Fill Item, the System Item, essence elements, the Index Table Segment, and every essence descriptor class (MPEGVideoDescriptor, AES3PCMDescriptor) use this project's already-known fixed-width form, while the Primer Pack, every other structural set (Preface, Identification, ContentStorage, both Packages, Track, Sequence, SourceClip, TimecodeComponent, MultipleDescriptor), and the Random Index Pack use minimal-width BER instead; decoded a real file's own class-0x23 structural set directly and cross-validated it as ST377-1's EssenceContainerData two independent ways (its InstanceUID matches ContentStorage's own previously-unnamed second batch property at tag 0x1902, and its LinkedPackageUID property at tag 0x2701 -- a 32-byte value under the SMPTE UMID designator root 06 0a 2b 34, distinct from every other property's 06 0e 2b 34 Universal Label root -- is byte-identical to the SourcePackage's own UMID used elsewhere in the same file); decoded a real Random Index Pack's own entries directly and found this project's own RIP-writing code had both a wrong entry count (missing the Body Partition Pack) and a wrong BodySID for the header's own entry; and, while re-measuring after fixing both named divergences, found the actual dominant remaining gap is neither of them -- a real file's Primer Pack registers a fixed ~100-tag dictionary regardless of which properties the specific file uses (measured: 100 entries, 1808 bytes, on a single-track file), and its Identification set carries real product/version metadata (CompanyName='FFmpeg', ProductName='OP1a Muxer', VersionString, Platform='Lavf', a ProductUID, a ModificationDate, a ToolkitVersion) this project's own Identification set does not write"
 acquired = "2026-08-28"
 where    = "the reference binary installed on the development machine"
+
+[[source]]
+id       = "smpte-st2067-3-cpl"
+kind     = "spec"
+title    = "SMPTE ST 2067-3, Interoperable Master Format — Composition Playlist: the SegmentList/Segment/SequenceList/{MainImageSequence,MainAudioSequence}/ResourceList/Resource schema, TrackId-grouped virtual-track assembly, and EntryPoint/SourceDuration/RepeatCount/IntrinsicDuration edit-unit semantics underlying vaco-format-imf::cpl. No reference implementation was available to cross-check against (this machine's ffmpeg 8.1 has no imf demuxer at all, confirmed via `ffmpeg -demuxers`/`ffmpeg -h demuxer=imf`) — every element name and structure is read directly from the published schema (D7/D15 clean-room posture), with no second blackbox leg the way this project's other format work has had"
+acquired = "2026-08-28"
+where    = "SMPTE (ST 2067-3)"
+
+[[source]]
+id       = "smpte-st429-8-9-pkl-assetmap"
+kind     = "spec"
+title    = "SMPTE ST 429-8 (Packing List) and ST 429-9 (ASSETMAP): the PackingList/AssetList/Asset{Id,Hash,Size,Type} schema and the AssetMap/AssetList/Asset{Id,PackingList,ChunkList/Chunk/Path} schema underlying vaco-format-imf::pkl and vaco-format-imf::assetmap. Same no-reference-available posture as smpte-st2067-3-cpl: spec-derived only, PKL Hash/Size read but not verified, multi-Chunk assets (one asset split across several files) explicitly unsupported rather than guessed at"
+acquired = "2026-08-28"
+where    = "SMPTE (ST 429-8, ST 429-9)"
+
+[[source]]
+id       = "ffmpeg-mxf-opatom-stream-offset-probe"
+kind     = "blackbox"
+title    = "Byte-position measurement against the real fixture opatom_mpeg2_sample.mxf (an OP-Atom/clip-wrapped MXF file): located the file's single Generic Container essence element (key at offset 5632, item-type byte 0x15) and its BER length prefix (9-byte wide form, value length 41809, value starting at offset 5657); the existing VBE Index Table Segment's IndexEntryArray::StreamOffset values (0, 26049, 39902) land exactly on real MPEG-2 00 00 01 start codes only when read as offsets from the essence element's value start (5657), not its key start (5632) -- the two coincide for a frame-wrapped file but not a clip-wrapped one, which vaco-demux-mxf::demux.rs::build_indices had not previously distinguished"
+acquired = "2026-08-28"
+where    = "byte-level inspection of the fixture file already present in vaco-demux-mxf's own test suite"
