@@ -16,9 +16,15 @@
 //! tolerance — see `crate::loopfilter`'s module doc and
 //! `docs/codec/vaco-codec-vp9.md`'s Verification table. Profiles 1-3 and
 //! threading (the rest of epic #32) remain explicitly out of scope.
+//!
+//! `crate::encode` (issue #329, C-33a) adds this crate's first encoder: a
+//! real, spec-conformant all-intra key-frame bitstream writer with no
+//! partition/mode search yet (that is #330's separate scope) — see its own
+//! module doc for exactly what it does and does not do.
 #![forbid(unsafe_code)]
 
 pub mod decode;
+pub mod encode;
 pub mod framebuf;
 pub mod header;
 pub mod interpredict;
@@ -32,3 +38,4 @@ pub mod tokens;
 pub mod transform;
 
 pub use decode::{VP9_DECODER, Vp9Decoder};
+pub use encode::{VP9_ENCODER, Vp9Encoder};

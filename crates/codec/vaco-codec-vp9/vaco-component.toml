@@ -8,3 +8,12 @@ feature   = "codec-vp9"
 ctor      = "vaco_codec_vp9::VP9_DECODER"
 media     = "video"
 codec     = "vp9"
+
+[[component]]
+kind      = "encoder"
+name      = "vp9"
+long_name = "VP9 (all-intra skeleton: fixed partition/mode, no residual — see crate::encode)"
+feature   = "codec-vp9"
+ctor      = "vaco_codec_vp9::VP9_ENCODER"
+media     = "video"
+codec     = "vp9"
