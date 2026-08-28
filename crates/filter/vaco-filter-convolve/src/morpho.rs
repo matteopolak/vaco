@@ -124,11 +124,16 @@ enum Mode {
 
 impl Mode {
     /// Accepts both the reference's named spelling (`erode`, `dilate`, …)
-    /// and the bare numeric index — `vaco-opts` has no named-integer-option
-    /// support (see `vaco-filter-video-composite::overlay`'s `eval`/`format`/
-    /// `alpha` for the same String-field-plus-manual-parse pattern this
-    /// crate's `dilation`/`erosion` did not need because their own
-    /// `coordinates` option has no named values in the reference).
+    /// and the bare numeric index via a `String` field parsed by hand.
+    /// Correction, 2026-08-28: `vaco-opts` *does* support named-integer
+    /// options centrally (`#[derive(OptEnum)]`, confirmed against real
+    /// consumers in `vaco-filter-mm::misc` and this campaign's own fix in
+    /// `vaco-filter-geometry::fillborders`/`field`) — this crate's own
+    /// `dilation`/`erosion` did not need it because their `coordinates`
+    /// option has no named values in the reference, and `mode` here
+    /// predates the OptEnum-based idiom rather than being unable to use
+    /// it; not migrated in this pass since the String form is already
+    /// correct and tested.
     fn from_name(name: &str) -> Option<Self> {
         match name {
             "erode" | "0" => Some(Self::Erode),

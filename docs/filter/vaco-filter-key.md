@@ -104,8 +104,16 @@ measured, with the mismatch stated rather than rounded away to hide it.
   "not implemented" — the same sweep-not-sample technique that closed a
   nine-round MPEG-1 investigation and pinned `sobel`'s border rule.
   `mode` also needed the named-string fix (`mode=diff`/`mode=abs`, not
-  just the bare integer) `pixelize`/`convolution` already needed for the
-  same reason: `vaco-opts` has no named-integer-option support.
+  just the bare integer) `pixelize`/`convolution` already hit for the
+  same reason: a plain ranged `i32` option field never consults named
+  constants during parsing unless it declares `unit`/`consts` — the
+  fix used here is the same `String`-field-plus-hand-parse shape those
+  two already used. `vaco-opts` itself does support this centrally via
+  `#[derive(OptEnum)]` (confirmed against real consumers in
+  `vaco-filter-mm::misc`); see `docs/filter/vaco-filter-geometry.md` for
+  this campaign's own fix using it, and this crate's
+  own doc history for the tree-wide named-constant survey this
+  three-times-repeated bug prompted.
 - `threshold(source, threshold, min, max)` = `max` if `source > threshold`
   else `min` (strict `>`, confirmed at the equal-value case landing on
   `min`).

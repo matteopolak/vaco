@@ -247,10 +247,12 @@ the nine filters that did land.
   cast, and `common::sample_clamped`'s clamp-to-edge are used by every
   filter in this crate; a change to any of them is a change to all nine.
 - Gotcha: `cas`'s `create` and `guided`'s `create` both parse named string
-  options (`mode`, `guidance`) rather than plain integers, because
-  `vaco-opts` has no named-integer-option support — see
-  `vaco-filter-video-composite::overlay`'s `eval`/`format`/`alpha` fields
-  for the established pattern this follows.
+  options (`mode`, `guidance`) rather than plain integers, following
+  `vaco-filter-video-composite::overlay`'s `eval`/`format`/`alpha`
+  pattern. Correction, 2026-08-28: `vaco-opts` does support named-integer
+  options centrally via `#[derive(OptEnum)]` — this predates that idiom
+  rather than working around a real gap; not migrated here since the
+  String form already works and is tested.
 
 ## Configuration
 

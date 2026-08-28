@@ -261,10 +261,13 @@ containing its own origin must satisfy (anti-extensivity `open(x) <= x`,
 extensivity `close(x) >= x`), plus `dilate(x) >= erode(x)` pointwise for
 `gradient`'s non-negativity. `structure=first`/`all` and `mode`'s named
 values (`erode`, `dilate`, …) both parse the reference's string spelling,
-not just the numeric index — `vaco-opts` has no named-integer-option
-support, the same gap `vaco-filter-video-composite::overlay`'s
-`eval`/`format`/`alpha` fields already work around with a `String` field
-plus manual parsing. `morpho`'s own two-input wiring is exercised through
+not just the numeric index, via a `String` field parsed by hand — the
+same pattern `vaco-filter-video-composite::overlay`'s `eval`/`format`/
+`alpha` fields use. Correction, 2026-08-28: `vaco-opts` does support
+named-integer options centrally (`#[derive(OptEnum)]`); this predates
+that idiom rather than working around a real gap — see
+`vaco-filter-geometry`'s doc for a fix using it directly. `morpho`'s own
+two-input wiring is exercised through
 the real `Graph`/`Synced` scheduler in `src/tests_graph.rs`, not just
 through its pure helper functions.
 

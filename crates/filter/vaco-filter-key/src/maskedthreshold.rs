@@ -98,9 +98,12 @@ pub(crate) struct Opts {
     // maskedthreshold`, which lists `abs 0` / `diff 1` as named values of
     // an otherwise-integer option, the same shape `vaco-filter-geometry`'s
     // `pixelize::mode` and `vaco-filter-convolve`'s `convolution::Mode`
-    // already needed this idiom for. `vaco-opts` has no named-integer
-    // support, so this crate follows the same "String field, parse both
-    // forms by hand" workaround.
+    // already needed this idiom for. Correction, 2026-08-28: `vaco-opts`
+    // does support named-integer options centrally via
+    // `#[derive(OptEnum)]` (see `vaco-filter-mm::misc` for a real
+    // consumer, and `vaco-filter-geometry::fillborders`/`field` for a
+    // fresh one) -- the String-plus-hand-parse shape here works and is
+    // tested, just not the more type-safe route now known to exist.
     #[opt(name = "mode", help = "set mode", default = "abs".to_owned(), flags(video, filtering))]
     pub mode: String,
 }
