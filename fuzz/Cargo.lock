@@ -2094,6 +2094,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-codec-av1"
+version = "0.1.0"
+dependencies = [
+ "vaco-bitstream",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-frame",
+ "vaco-limits",
+ "vaco-packet",
+ "vaco-parse-av1",
+ "vaco-pixfmt",
+]
+
+[[package]]
 name = "vaco-codec-cabac"
 version = "0.1.0"
 dependencies = [
@@ -2140,16 +2154,23 @@ name = "vaco-codec-dsp-idct"
 version = "0.1.0"
 dependencies = [
  "vaco-core",
+ "vaco-simd",
  "vaco-tx",
 ]
 
 [[package]]
 name = "vaco-codec-dsp-intrapred"
 version = "0.1.0"
+dependencies = [
+ "vaco-simd",
+]
 
 [[package]]
 name = "vaco-codec-dsp-lpc"
 version = "0.1.0"
+dependencies = [
+ "vaco-simd",
+]
 
 [[package]]
 name = "vaco-codec-dsp-me"
@@ -2166,6 +2187,13 @@ version = "0.1.0"
 dependencies = [
  "vaco-core",
  "vaco-simd",
+]
+
+[[package]]
+name = "vaco-codec-dsp-ratecontrol"
+version = "0.1.0"
+dependencies = [
+ "vaco-core",
 ]
 
 [[package]]
@@ -2299,6 +2327,19 @@ dependencies = [
  "vaco-pixfmt",
  "vaco-pool",
  "vaco-tx",
+]
+
+[[package]]
+name = "vaco-codec-jpegls"
+version = "0.1.0"
+dependencies = [
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-frame",
+ "vaco-limits",
+ "vaco-packet",
+ "vaco-pixfmt",
+ "vaco-pool",
 ]
 
 [[package]]
@@ -2519,6 +2560,9 @@ dependencies = [
  "vaco-bitstream",
  "vaco-codec-core",
  "vaco-codec-dsp-intrapred",
+ "vaco-codec-dsp-me",
+ "vaco-codec-dsp-mecmp",
+ "vaco-codec-dsp-ratecontrol",
  "vaco-codec-msac",
  "vaco-core",
  "vaco-frame",
@@ -2890,6 +2934,9 @@ dependencies = [
 [[package]]
 name = "vaco-filter-adsp"
 version = "0.1.0"
+dependencies = [
+ "vaco-tx",
+]
 
 [[package]]
 name = "vaco-filter-adynamics"
@@ -3016,6 +3063,7 @@ dependencies = [
 name = "vaco-filter-color"
 version = "0.1.0"
 dependencies = [
+ "smallvec",
  "vaco-core",
  "vaco-expr",
  "vaco-filter-core",
@@ -3659,6 +3707,7 @@ dependencies = [
  "vaco-cli-core",
  "vaco-codec-aac",
  "vaco-codec-ac3",
+ "vaco-codec-av1",
  "vaco-codec-cabac",
  "vaco-codec-cbs",
  "vaco-codec-core",
@@ -3667,6 +3716,7 @@ dependencies = [
  "vaco-codec-dsp-lpc",
  "vaco-codec-dsp-me",
  "vaco-codec-dsp-mecmp",
+ "vaco-codec-dsp-ratecontrol",
  "vaco-codec-exr",
  "vaco-codec-gif",
  "vaco-codec-golomb",
@@ -3674,6 +3724,7 @@ dependencies = [
  "vaco-codec-h264",
  "vaco-codec-image-simple",
  "vaco-codec-jpeg",
+ "vaco-codec-jpegls",
  "vaco-codec-jpegxl",
  "vaco-codec-mpeg12",
  "vaco-codec-mpegaudio",
@@ -4198,6 +4249,7 @@ name = "vaco-parse-h264"
 version = "0.1.0"
 dependencies = [
  "vaco-bitstream",
+ "vaco-codec-cbs",
  "vaco-codec-core",
  "vaco-codec-golomb",
  "vaco-color",
@@ -4575,6 +4627,7 @@ dependencies = [
  "vaco-codec-ac3",
  "vaco-codec-adpcm",
  "vaco-codec-alac",
+ "vaco-codec-av1",
  "vaco-codec-core",
  "vaco-codec-exr",
  "vaco-codec-ffv1",
@@ -4583,6 +4636,7 @@ dependencies = [
  "vaco-codec-h263",
  "vaco-codec-image-simple",
  "vaco-codec-jpeg",
+ "vaco-codec-jpegls",
  "vaco-codec-jpegxl",
  "vaco-codec-mpeg12",
  "vaco-codec-mpegaudio",

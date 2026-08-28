@@ -47,6 +47,7 @@ vaco-cli = { path = "../crates/app/vaco-cli", optional = true }
 vaco-cli-core = { path = "../crates/app/vaco-cli-core", optional = true }
 vaco-codec-aac = { path = "../crates/codec/vaco-codec-aac", optional = true }
 vaco-codec-ac3 = { path = "../crates/codec/vaco-codec-ac3", optional = true }
+vaco-codec-av1 = { path = "../crates/codec/vaco-codec-av1", optional = true }
 vaco-codec-cabac = { path = "../crates/signal/vaco-codec-cabac", optional = true }
 vaco-codec-cbs = { path = "../crates/signal/vaco-codec-cbs", optional = true }
 vaco-codec-core = { path = "../crates/signal/vaco-codec-core", optional = true }
@@ -219,6 +220,7 @@ default = [
     "cli-core",
     "codec-aac",
     "codec-ac3",
+    "codec-av1",
     "codec-cabac",
     "codec-core",
     "codec-dsp-idct",
@@ -379,6 +381,7 @@ cli = ["dep:vaco-cli", "dep:vaco-cli-core"]
 cli-core = ["dep:vaco-cli-core", "dep:vaco-core"]
 codec-aac = ["dep:vaco-codec-aac", "dep:vaco-codec-core", "dep:vaco-limits", "dep:vaco-packet"]
 codec-ac3 = ["dep:vaco-codec-ac3"]
+codec-av1 = ["dep:vaco-codec-av1", "dep:vaco-codec-core", "dep:vaco-limits", "dep:vaco-packet"]
 codec-cabac = ["dep:vaco-codec-cabac"]
 codec-core = ["dep:vaco-codec-core", "dep:vaco-core", "dep:vaco-limits"]
 codec-dsp-idct = ["dep:vaco-codec-dsp-idct"]
@@ -589,6 +592,14 @@ test = false
 doc = false
 bench = false
 required-features = ["format-audio-simple"]
+
+[[bin]]
+name = "av1_decode"
+path = "fuzz_targets/av1_decode.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-av1"]
 
 [[bin]]
 name = "avi_demux"
