@@ -6467,3 +6467,96 @@ set), both before starting and immediately before this commit.
 
 `Vaco-Spec-Ref: iso-iec-14496-10-2002-draft` clause 9.3.3.1.1.9
 (`condTermFlagN` for `coded_block_flag`).
+
+
+### Annex F: regression guard built, loop-restructuring shape chosen and justified (#359)
+
+Per instruction: build the regression guard before touching the
+macroblock decode loop, then choose and justify one-macroblock
+lookahead versus a full two-pass parse-then-reconstruct split.
+
+**Regression guard: `crates/codec/vaco-codec-h263/tests/regression_guard.rs`,
+four real fixtures.** Surveyed this crate's own test suite first, not
+assumed: `cargo test -p vaco-codec-h263` runs 46 tests, all of them
+either narrow unit tests on isolated functions or `proptest`-driven
+"never panics" fuzz checks — **zero** assert anything about decoded
+pixel output, and no committed bitstream fixtures existed anywhere in
+the crate (the `examples/decode_dump.rs` tool used to produce this
+crate's own documented "99.2% exact against real ffmpeg" numbers is a
+manual, uncommitted-fixture, one-off CLI harness, not a standing test).
+Built four real `ffmpeg 8.1 -bitexact`-encoded QCIF fixtures (H.261
+mixed I/P, baseline H.263 mixed I/P, H.263+ Annex D+K, H.263+ Annex J)
+and pinned each one's current decoded output as a `SHA-256` (via
+`vaco-hash`, a dev-dependency — D11's one-owner-per-hash-crate rule
+means this crate does not get its own `sha2` dependency). Deliberately
+not a correctness check against `ffmpeg` — this crate's own measured
+accuracy is ~99.2%, not 100%, so `ffmpeg` is the wrong oracle for
+catching a self-inflicted regression; the guard's only job is making
+the coming loop change fail loudly if it changes this crate's *own*
+output for a mode nothing was supposed to touch.
+
+**Loop shape: one-macroblock lookahead confined to `decode_gob`, not a
+full two-pass split — chosen after tracing every OBMC remote direction
+directly, not by assumption.** A two-pass split is arguably better
+architecture on its own merits (this project has already been bitten
+by neighbour-availability-timing bugs in three other crates this
+cycle — CABAC's `ctxIdxInc`, H.264's chroma DC quadrant fallback, the
+CBP derivation — and a two-pass split would remove that whole bug
+category here permanently, not just for Annex F). Chosen against it
+anyway, because the feature does not need it:
+
+- "Above" and "left" are always already-decoded (earlier row, earlier
+  column) — never a lookahead case.
+- "Below" is either internal (top-row blocks 0/1, referencing the same
+  macroblock's own already-decided blocks 2/3) or unconditionally
+  replaced by the current block's own vector by §F.3's rule 5
+  (bottom-row blocks 2/3) — never a real lookahead either.
+- Only "right" (blocks 1/3's external case) ever needs a macroblock
+  not yet decoded, and never more than the very next one.
+- That next macroblock is always in the *same row* — checked directly
+  against this crate's own documented simplification ("one macroblock
+  row per GOB"), which means a GOB boundary only ever falls at a row's
+  end, exactly where the rightward lookahead would find no neighbour
+  anyway (a genuine border case, already handled by the existing
+  substitution rule). The lookahead never needs to reach across a GOB
+  header into a separate `decode_gob` invocation.
+
+One macroblock of buffered state (its vector(s) and residual,
+reconstructed one iteration late) is therefore sufficient, confined to
+`decode_gob`'s own loop. `decode_slice_rect`/`decode_first_slice`/
+`decode_slice` (Annex K's rectangular-slice paths) stay untouched
+entirely, since Advanced Prediction combined with Slice Structured
+mode is already excluded at the picture header (a prior round's
+finding) — they never reach a lookahead-aware loop. Gating the
+lookahead behind `ap.advanced_prediction` (`false` for all four
+regression-guard fixtures) makes `decode_gob`'s control flow for every
+currently-working mode **provably** unchanged when the flag is off,
+not merely tested-and-found-unchanged — the stronger guarantee for
+exactly the one thing a four-fixture suite cannot fully cover: an
+untested combination the fixtures do not happen to exercise.
+
+Also fixed in passing: `OBMC_H0`/`OBMC_H1`/`OBMC_H2` (three 64-element
+tables landed in `45557e8`) had no `[[table]]` provenance entry,
+flagged by `cargo xtask provenance-check` once this round's commits
+ran it directly rather than only reading its warnings. Added.
+
+**Not yet done**: the lookahead's own implementation, and re-landing
+the fine-grid one-vector-predictor fix, the 4-vector `MCBPC` dispatch,
+and the OBMC reconstruction path on top of it — each to be
+re-validated against the same real-`ffmpeg` differential that caught
+two bugs the round all three were first built and then reverted.
+
+Gates: `cargo test/clippy -p vaco-codec-h263` clean (46 unit + 4
+regression-guard tests). `cargo check --workspace`,
+`layer-check`/`dep-gate`/`unsafe-audit`/`owner-gate`/`dup-check`/
+`time-gate` all clean. `git status --porcelain` (unscoped) checked
+before every commit. One commit this round hit the pre-commit hook's
+`check-message` rejection over an unrelated file already staged by
+another agent (a `TODO-source-id` placeholder in an in-flight RIST
+crate) — confirmed, by testing, that this is the hook inspecting the
+whole index rather than the pathspec form leaking unrelated content
+into the commit itself (the pathspec form is sound; nothing was lost,
+the commit was simply never created) — recovered via the private-index
+recipe rather than by resetting anyone else's staged work.
+
+`Vaco-Spec-Ref: itu-t-h263` Annex F §F.3.
