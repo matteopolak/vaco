@@ -18,16 +18,20 @@
 //! always-unavailable case [`reconstruct_intra16x16_luma`] alone (still
 //! used internally, per macroblock) is limited to on its own.
 //!
-//! Confirmed byte-exact against real `ffmpeg` on every no-deblock corpus
-//! tried, including mixed `Intra_16x16`/`Intra_4x4` content with real
+//! Confirmed byte-exact against real `ffmpeg` on every corpus tried,
+//! including mixed `Intra_16x16`/`Intra_4x4` content with real
 //! cross-macroblock neighbour propagation between two `Intra_16x16`
 //! macroblocks (`cabac_intra_oracle_noise.264`, `_testsrc.264`,
-//! `_multi.264`) -- see this module's own tests. **Not** yet correct on
-//! `cabac_i_only.264` (#418's own corpus, real deblocking enabled): it
-//! diverges far more broadly than a missing loop filter alone would
-//! explain, likely the same pre-existing bit-consumption issue #418 has
-//! chased for many rounds now visible as wrong pixels -- see that test's
-//! own `#[ignore]` reason for the full, hand-verified account.
+//! `_multi.264`), and, as of this round, `cabac_i_only.264` (#418's own
+//! corpus) too -- against a fair reference for it: this crate implements
+//! no deblocking filter, so it is compared against `ffmpeg -skip_loop_filter
+//! all` rather than `ffmpeg`'s default (deblocked) decode. Against
+//! `ffmpeg`'s real, deblocked output, `cabac_i_only.264` still shows a
+//! large, quantified mismatch -- but that mismatch is now settled as
+//! entirely the missing loop filter, not a decode defect (see
+//! `cabac_i_only_matches_ffmpeg_with_deblocking_skipped` and
+//! `cabac_i_only_reconstructs_without_error_and_mostly_matches_ffmpeg`'s
+//! own doc comments for the full account).
 //!
 //! # What this module does not implement
 //!
@@ -808,34 +812,49 @@ mod tests {
     /// confirmed structurally, not assumed), and this crate implements no
     /// deblocking filter at all, so a byte-exact match against `ffmpeg`'s
     /// real (deblocked) decode is not the achievable bar here the way it
-    /// is for the four `no-deblock` fixtures above. What this test
-    /// reports instead: the exact mismatch count and the first differing
-    /// macroblock, per frame -- the same "first-differing-macroblock
-    /// locate" instrument, applied to the one corpus #418's own assertion
-    /// actually fails on, with the loop-filter confound named rather than
-    /// hidden. A `>= 90%` exact-match floor is a sanity guard against a
-    /// grossly wrong reconstruction (wrong residual, wrong prediction, a
-    /// dropped macroblock), not a claim that the remainder is
-    /// deblocking-explained -- see this round's own report for the actual
-    /// per-frame numbers and this test's role in producing them.
+    /// is for the four `no-deblock` fixtures above.
+    ///
+    /// The test below this one settles the question that used to hang
+    /// over this corpus: decoded instead against `ffmpeg -skip_loop_filter
+    /// all` (deblocking disabled at decode time, not re-encoded), this
+    /// crate's own output is **byte-exact**, all 25 frames -- the
+    /// previously-reported 63.77% mismatch against the real (deblocked)
+    /// reference below was entirely the missing loop filter, not a
+    /// decode defect. This crate's `Intra_4x4` reconstruction has no
+    /// remaining known defect on this corpus at all.
     #[test]
-    #[ignore = "known incomplete, improved again this round rather than merely re-measured: this \
-        is #418's own corpus, decoded end to end via a real reconstruction pipeline. History: \
-        frame 0 originally hit CabacDecoder::malformed() outright with overall match at 1.53%; \
-        fixing the same-macroblock coded_block_flag timing hazard (routing through \
-        grids.mb_info_at before set_mb_info had run) brought all 25 frames to decoding cleanly \
-        with overall match at 60.90%; fixing the luma-DC/AC-block-0 coded_block_flag aliasing in \
-        the per-4x4-block cbf_luma grid (see testsrc_fixture_matches_ffmpeg_byte_for_byte's own \
-        doc comment -- the fix that made testsrc.264 and multi.264 byte-exact) brings it to \
-        63.77%. Divergence is still real and not deblocking-explained (63.77% is far below what \
-        a missing loop filter alone could cost). This crate's own Intra_4x4 and Intra_16x16 \
-        reconstruction, including real cross-macroblock neighbour propagation between two \
-        Intra_16x16 macroblocks, are independently confirmed byte-exact against testsrc.264 and \
-        multi.264 (both now passing, unignored) and against noise.264 (all Intra_4x4, \
-        byte-exact) -- the remaining gap in this specific corpus is not yet localised to a \
-        specific cause. Does not retire assert_slice_ends_at_rbsp_trailing_bits -- if anything, \
-        this round's numbers are still evidence the assertion is catching a real defect, now \
-        smaller but not eliminated."]
+    fn cabac_i_only_matches_ffmpeg_with_deblocking_skipped() {
+        let data: &[u8] = include_bytes!("../tests/fixtures/cabac_i_only.264");
+        let reference: &[u8] = include_bytes!("../tests/fixtures/cabac_i_only_nodeblock_ref.yuv");
+        let frames = decode_all_frames_luma(data);
+        assert_eq!(frames.len(), 25);
+        let frame_stride = 64 * 64 + 2 * 32 * 32;
+        for (idx, (mbs_wide, _mbs_high, luma)) in frames.iter().enumerate() {
+            let ref_frame = &reference[idx * frame_stride..idx * frame_stride + luma.len()];
+            assert_luma_matches("cabac_i_only (no deblock)", idx, luma, ref_frame, *mbs_wide);
+        }
+    }
+
+    /// The same corpus against `ffmpeg`'s own real, deblocked decode --
+    /// kept as a standing, quantified record of the confound this crate's
+    /// own missing loop filter costs, now that
+    /// `cabac_i_only_matches_ffmpeg_with_deblocking_skipped` (above) has
+    /// settled that the gap is entirely that filter and nothing else.
+    /// Still `#[ignore]`d because implementing deblocking is out of this
+    /// scope, not because anything here is in doubt.
+    #[test]
+    #[ignore = "not a decode defect: settled this round by comparing against ffmpeg with \
+        -skip_loop_filter all instead of its default (deblocked) decode -- \
+        cabac_i_only_matches_ffmpeg_with_deblocking_skipped is byte-exact, all 25 frames, 0 \
+        mismatches, so this test's own 63.77% match against the real deblocked reference is \
+        fully and exactly explained by this crate's well-known, out-of-scope missing loop \
+        filter. Kept ignored (not deleted) as a standing quantified record of that filter's own \
+        cost on real content, not as an open question. Does not retire \
+        assert_slice_ends_at_rbsp_trailing_bits on its own -- that assertion's own remaining \
+        relevance is a distinct question, now worth re-examining given the reconstruction \
+        pipeline is independently confirmed correct on five corpora (noise, testsrc, multi, \
+        gradient, and now cabac_i_only itself against a fair reference) -- but nothing here \
+        argues for weakening it, and it was not touched."]
     fn cabac_i_only_reconstructs_without_error_and_mostly_matches_ffmpeg() {
         let data: &[u8] = include_bytes!("../tests/fixtures/cabac_i_only.264");
         let reference: &[u8] = include_bytes!("../tests/fixtures/cabac_i_only_ref.yuv");
@@ -895,9 +914,12 @@ mod tests {
             frames.len()
         );
         assert!(
-            match_fraction >= 0.90,
-            "cabac_i_only: only {:.2}% of luma samples match ffmpeg -- \
-             too low to be explained by deblocking alone, decode is likely wrong somewhere",
+            match_fraction >= 0.60,
+            "cabac_i_only: only {:.2}% of luma samples match ffmpeg's real (deblocked) decode -- \
+             ~63.77% (measured this round, once cabac_i_only_matches_ffmpeg_with_deblocking_skipped \
+             confirmed the decode itself is byte-exact against a fair, un-deblocked reference) is \
+             the expected floor here; a drop below it means a real decode regression, not just \
+             the well-known missing loop filter",
             match_fraction * 100.0
         );
     }
