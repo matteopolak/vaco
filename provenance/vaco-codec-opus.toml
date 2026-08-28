@@ -1,0 +1,159 @@
+# CELT and SILK static tables, transcribed from RFC 6716's Appendix A
+# reference implementation (BSD-licensed source embedded in the RFC itself,
+# not the RFC's own prose numbering — Appendix A files don't carry clause
+# numbers, so `clause` below names the source file and, where useful, the
+# specific array or struct within it).
+
+[[table]]
+name   = "CACHE_INDEX50"
+file   = "crates/codec/vaco-codec-opus/src/celt/tables.rs"
+source = "rfc-6716"
+clause = "Appendix A, celt/static_modes_float.h, `cache_index50`"
+method = "transcribed"
+
+[[table]]
+name   = "CACHE_BITS50"
+file   = "crates/codec/vaco-codec-opus/src/celt/tables.rs"
+source = "rfc-6716"
+clause = "Appendix A, celt/static_modes_float.h, `cache_bits50`"
+method = "transcribed"
+
+[[table]]
+name   = "CACHE_CAPS50"
+file   = "crates/codec/vaco-codec-opus/src/celt/tables.rs"
+source = "rfc-6716"
+clause = "Appendix A, celt/static_modes_float.h, `cache_caps50`"
+method = "transcribed"
+
+[[table]]
+name   = "WINDOW120"
+file   = "crates/codec/vaco-codec-opus/src/celt/tables.rs"
+source = "rfc-6716"
+clause = "Appendix A, celt/static_modes_float.h, `window120`; described in prose at RFC 6716 §4.3.7"
+method = "transcribed"
+
+[[table]]
+name   = "DELTA_GAIN_ICDF"
+file   = "crates/codec/vaco-codec-opus/src/silk/tables.rs"
+source = "rfc-6716"
+clause = "Appendix A, silk/tables_other.c, `silk_delta_gain_iCDF`"
+method = "transcribed"
+
+[[table]]
+name   = "LTP_GAIN_ICDF_2"
+file   = "crates/codec/vaco-codec-opus/src/silk/tables.rs"
+source = "rfc-6716"
+clause = "Appendix A, silk/tables_LTP.c, `silk_LTP_gain_iCDF_2`"
+method = "transcribed"
+
+[[table]]
+name   = "LTP_GAIN_VQ_2"
+file   = "crates/codec/vaco-codec-opus/src/silk/tables.rs"
+source = "rfc-6716"
+clause = "Appendix A, silk/tables_LTP.c, `silk_LTP_gain_vq_2` (Q7 5-tap codebook)"
+method = "transcribed"
+
+[[table]]
+name   = "PITCH_LAG_ICDF"
+file   = "crates/codec/vaco-codec-opus/src/silk/tables.rs"
+source = "rfc-6716"
+clause = "Appendix A, silk/tables_pitch_lag.c, `silk_pitch_lag_iCDF`"
+method = "transcribed"
+
+[[table]]
+name   = "PITCH_CONTOUR_ICDF"
+file   = "crates/codec/vaco-codec-opus/src/silk/tables.rs"
+source = "rfc-6716"
+clause = "Appendix A, silk/tables_pitch_lag.c, `silk_pitch_contour_iCDF` (NB) / `silk_pitch_contour_NB_iCDF`"
+method = "transcribed"
+
+[[table]]
+name   = "SHELL_CODE_TABLE0"
+file   = "crates/codec/vaco-codec-opus/src/silk/tables.rs"
+source = "rfc-6716"
+clause = "Appendix A, silk/shell_coder.c, `silk_shell_code_table0` (pulse-count split iCDFs)"
+method = "transcribed"
+
+[[table]]
+name   = "SHELL_CODE_TABLE1"
+file   = "crates/codec/vaco-codec-opus/src/silk/tables.rs"
+source = "rfc-6716"
+clause = "Appendix A, silk/shell_coder.c, `silk_shell_code_table1`"
+method = "transcribed"
+
+[[table]]
+name   = "SHELL_CODE_TABLE2"
+file   = "crates/codec/vaco-codec-opus/src/silk/tables.rs"
+source = "rfc-6716"
+clause = "Appendix A, silk/shell_coder.c, `silk_shell_code_table2`"
+method = "transcribed"
+
+[[table]]
+name   = "SHELL_CODE_TABLE3"
+file   = "crates/codec/vaco-codec-opus/src/silk/tables.rs"
+source = "rfc-6716"
+clause = "Appendix A, silk/shell_coder.c, `silk_shell_code_table3`"
+method = "transcribed"
+
+[[table]]
+name   = "SIGN_ICDF"
+file   = "crates/codec/vaco-codec-opus/src/silk/tables.rs"
+source = "rfc-6716"
+clause = "Appendix A, silk/tables_other.c, `silk_sign_iCDF`, indexed `[7*(2*quantOffsetType+signalType) .. +7]`"
+method = "transcribed"
+
+[[table]]
+name   = "NLSF_CB1_NB_MB"
+file   = "crates/codec/vaco-codec-opus/src/silk/tables.rs"
+source = "rfc-6716"
+clause = "Appendix A, silk/tables_NLSF_CB_NB_MB.c, `silk_NLSF_CB1_NB_MB` (stage-1 codebook vectors, `CB1_NLSF_struct`)"
+method = "transcribed"
+
+[[table]]
+name   = "NLSF_CB1_ICDF_NB_MB"
+file   = "crates/codec/vaco-codec-opus/src/silk/tables.rs"
+source = "rfc-6716"
+clause = "Appendix A, silk/tables_NLSF_CB_NB_MB.c, `silk_NLSF_CB1_iCDF_NB_MB`"
+method = "transcribed"
+
+[[table]]
+name   = "NLSF_CB2_SELECT_NB_MB"
+file   = "crates/codec/vaco-codec-opus/src/silk/tables.rs"
+source = "rfc-6716"
+clause = "Appendix A, silk/tables_NLSF_CB_NB_MB.c, `silk_NLSF_CB2_SELECT_NB_MB`"
+method = "transcribed"
+
+[[table]]
+name   = "NLSF_CB2_ICDF_NB_MB"
+file   = "crates/codec/vaco-codec-opus/src/silk/tables.rs"
+source = "rfc-6716"
+clause = "Appendix A, silk/tables_NLSF_CB_NB_MB.c, `silk_NLSF_CB2_iCDF_NB_MB`"
+method = "transcribed"
+
+[[table]]
+name   = "NLSF_CB1_WB"
+file   = "crates/codec/vaco-codec-opus/src/silk/tables.rs"
+source = "rfc-6716"
+clause = "Appendix A, silk/tables_NLSF_CB_WB.c, `silk_NLSF_CB1_WB` (stage-1 codebook vectors, `CB1_NLSF_struct`)"
+method = "transcribed"
+
+[[table]]
+name   = "NLSF_CB1_ICDF_WB"
+file   = "crates/codec/vaco-codec-opus/src/silk/tables.rs"
+source = "rfc-6716"
+clause = "Appendix A, silk/tables_NLSF_CB_WB.c, `silk_NLSF_CB1_iCDF_WB`"
+method = "transcribed"
+
+[[table]]
+name   = "NLSF_CB2_SELECT_WB"
+file   = "crates/codec/vaco-codec-opus/src/silk/tables.rs"
+source = "rfc-6716"
+clause = "Appendix A, silk/tables_NLSF_CB_WB.c, `silk_NLSF_CB2_SELECT_WB`"
+method = "transcribed"
+
+[[table]]
+name   = "NLSF_CB2_ICDF_WB"
+file   = "crates/codec/vaco-codec-opus/src/silk/tables.rs"
+source = "rfc-6716"
+clause = "Appendix A, silk/tables_NLSF_CB_WB.c, `silk_NLSF_CB2_iCDF_WB`"
+method = "transcribed"

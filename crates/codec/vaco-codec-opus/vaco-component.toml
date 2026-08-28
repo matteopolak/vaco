@@ -1,0 +1,15 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Opus decode is GREEN and unconditional per D9/D4: royalty-free by design,
+# with RF IPR disclosures from Xiph, Broadcom and Microsoft, no patent pool.
+# `default` is left at its default value of `true`; there is no
+# `encumbered = true` here, matching `vaco-codec-ac3`'s reasoning.
+
+[[component]]
+kind      = "decoder"
+name      = "opus"
+long_name = "Opus (Opus Interactive Audio Codec)"
+feature   = "codec-opus"
+ctor      = "vaco_codec_opus::DECODER_OPUS"
+media     = "audio"
+codec     = "opus"
