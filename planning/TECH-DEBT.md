@@ -2500,3 +2500,66 @@ D-10 audio (the fixed 8-slot AES3 bundle, already measured on the read
 side — `provenance/sources.toml`'s `ffmpeg-mxf-sound-essence-probe`) is
 not implemented: `MUXER_D10`'s `add_stream` rejects an audio stream
 outright rather than writing something unverified.
+
+## `vaco-mux-mxf`: the two named byte-identity divergences chased, neither was the whole story
+
+Follow-up to the entry above ("`KAGSize` fixed, D-10/OP-Atom variants
+added"): the coordinating dispatch asked specifically whether the Primer
+Pack's BER-length-width divergence was general or Primer-Pack-specific,
+and what the ~1536 bytes of unidentified D-10/OP-Atom header content
+turned out to be. Both got a definite answer, and both answers were
+smaller than the actual remaining gap.
+
+**BER width**: measured by decoding every KLV's own length prefix in two
+real fixtures directly. The split is per-KLV-family, not
+Primer-Pack-specific and not universal: the Partition Pack family, the
+Fill Item, the System Item, essence elements, the Index Table Segment, and
+every essence descriptor class keep this crate's fixed-width form; the
+Primer Pack, every other structural set, and the Random Index Pack use
+minimal-width BER (short form under 128, else the smallest long form).
+Fixed via a new `ber::encode_minimal` and `klv::write_minimal`/
+`write_structural_set`, with a property test over the width selection
+(`ber::tests::every_value_round_trips_through_both_encodings`) since this
+crate's BER encoder has already had one real bug this package.
+
+**The class-`0x23` set**: identified with the same confidence bar as
+`SubDescriptorUIDs`'s real tag — decoded a real file's own bytes, then
+cross-validated two independent ways (its `InstanceUID` matches
+`ContentStorage`'s previously-unnamed second batch property, and its
+`LinkedPackageUID` value is byte-identical to the `SourcePackage`'s own
+UMID used elsewhere in the file) rather than pattern-matching a spec
+table. It is ST 377-1's `EssenceContainerData` class, now written by every
+variant. But it is only ~90 bytes — nowhere near the full ~1536-2000 byte
+gap.
+
+**The dominant remainder, found only after fixing the two named things
+above and re-measuring, is neither a BER-width issue nor a missing
+structural set**: a real file's Primer Pack registers a fixed ~100-tag
+dictionary regardless of which properties this specific file actually
+uses (measured: 100 entries, 1808 bytes, on a single-track file using a
+small fraction of them), and its `Identification` set carries real
+product/version metadata (`CompanyName`, `ProductName`, `VersionString`,
+`Platform`, a `ProductUID`, `ModificationDate`, `ToolkitVersion`) this
+crate's own `Identification` set (an `InstanceUID` alone) does not write.
+Neither is chased this session: the primer-table one is a deliberate
+economy this crate should probably keep (registering only used tags is
+smaller, and `vaco-demux-mxf` reads either shape identically — there is no
+functional reason to match a static internal `ffmpeg` table
+byte-for-byte); the `Identification` enrichment is real, cheap, and worth
+doing by whoever next touches this crate, but would not reach
+byte-identity on its own since this crate's product name is not literally
+`"FFmpeg"`.
+
+A third, unasked-for bug surfaced while measuring the Random Index Pack's
+own BER width: its entries were wrong. A real RIP has one entry per
+partition pack actually in the file, each stating that partition's own
+real `BodySID` — this crate hardcoded two entries (header always `BodySID
+= 1`, no entry for the Body Partition Pack at all), correct only by
+coincidence for D-10's own no-body-partition shape. Fixed, with a
+regression test that parses this crate's own output via
+`vaco_demux_mxf::partition::find_rip` (the reference's own reading of it,
+not a self-report).
+
+No variant reached `cmp`-identity this session. Full details, including
+the exact measured shapes, are in `docs/format/vaco-mux-mxf.md`'s
+byte-identity matrix section.
