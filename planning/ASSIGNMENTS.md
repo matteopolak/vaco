@@ -83,6 +83,7 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-demux-asf | 4 | #586 | agent:asf | done | 2026-08-23 | 2026-08-23 |  |
 | vaco-mux-asf | 4 | #587 | agent:asf | done | 2026-08-23 | 2026-08-23 |  |
 | vaco-mux-hash | 4 | #572 | agent:mux-hash | done | 2026-08-23 | 2026-08-23 | crc framecrc framemd5 framehash hash md5 streamhash uncodedframecrc — the differential oracle |
+| vaco-filter-* T3 audio long tail | 4 | #485 (closes epic #58) | agent:audio-tail | active | 2026-08-27 | — | last open child of FT-4.13 |
 | vaco-parse-vpx / -mpeg12 / image + codec-core profile tables | 2 | #275 #276 #277 #278 | agent:parsers | active | 2026-08-27 | — | P-05..P-08. Footprint in vaco-codec-core is ONE new module file + its `mod` line |
 | vaco-mux-hash + Muxer::add_stream_with | 4 | #634 | agent:framecrc-tb | active | 2026-08-27 | — | finding 32: framecrc `#tb` follows the frame rate, not the input; also `#software:`/`#extradata`. Owns the `Muxer` trait + its `Box` impl, not other muxers |
 | vaco-demux-image2 | 4 | #592 | agent:image2 | done | 2026-08-23 | 2026-08-23 | glob/sequence patterns + 42 pipe splitters |
