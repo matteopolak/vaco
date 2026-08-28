@@ -6681,3 +6681,46 @@ regression-guard tests). `cargo check --workspace`,
 before every commit.
 
 `Vaco-Spec-Ref: itu-t-h263` Annex F (§F.2, §F.3).
+
+## vaco-codec-h264: `cabac_i_only.264`'s remaining gap was the missing deblocking filter, not a defect
+
+`cabac_i_only.264` (#418's own corpus) is the one fixture in this
+crate's oracle corpus with `disable_deblocking_filter_idc == 0`, so it
+was never eligible for the byte-exact `no-deblock` comparisons the
+other four fixtures achieved. Its own 63.77% match against `ffmpeg`'s
+real (deblocked) decode looked, on its face, like a real remaining
+decode defect on top of the two bugs already fixed this round.
+
+Settled directly: decoded the same corpus with `ffmpeg
+-skip_loop_filter all` (deblocking disabled at decode time) instead of
+`ffmpeg`'s default output, and compared against that instead. Result:
+byte-exact, all 25 frames, 0 of 102400 luma samples differ. The
+reconstruction pipeline has no known remaining defect on any of the
+five fixtures in this crate's own oracle corpus.
+
+New test `cabac_i_only_matches_ffmpeg_with_deblocking_skipped`
+(un-ignored) and new fixture `cabac_i_only_nodeblock_ref.yuv` land
+this permanently. The older deblocked-reference test is kept
+`#[ignore]`d (implementing deblocking is out of scope) but rewritten
+to state plainly that its own mismatch is fully explained, with its
+assertion floor adjusted from a "this might indicate a bug" threshold
+to a "this is the known-correct expected value, a regression guard"
+one.
+
+**Notable side finding, reported but not acted on**: re-running the
+three pre-existing `#[ignore]`d `assert_slice_ends_at_rbsp_trailing_bits`
+tests in `macroblock_layer_cabac.rs` (read-only, nothing there
+touched), `every_slice_in_a_real_i_only_cabac_stream_consumes_exactly_
+its_own_bits` -- which decodes this exact same now-proven-byte-exact
+`cabac_i_only.264` -- still fails that raw-bit-reader-position check
+at slice 1. A decoder now independently confirmed to produce
+bit-for-bit correct pixel output on this stream still fails a
+raw-bit-position assertion, which is at least consistent with that
+assertion measuring something other than semantic decode correctness
+(e.g. `CabacDecoder`'s own internal bit lookahead not lining up with
+the textbook `rbsp_trailing_bits()` boundary). Not a conclusion, and
+`assert_slice_ends_at_rbsp_trailing_bits` was not touched, weakened, or
+reopened as anything -- surfaced here for whoever next looks at #419.
+
+`Vaco-Spec-Ref: iso-iec-14496-10-2002-draft` clause 8.7 (deblocking
+filter process, not implemented).
