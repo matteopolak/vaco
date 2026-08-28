@@ -1528,7 +1528,7 @@ committed its own nine. Whoever wires `AdpcmPsx` into `vaco-format-misc-audio`'s
 `vag.rs` should re-open this kind of entry rather than assume "gap 21 is
 CLOSED" covers it too.
 
-## Gap 22 — no cross-node introspection reachable from a filter (`graphmonitor`/`agraphmonitor`, `vaco-filter-scope`)
+## Gap 22 — no cross-node introspection reachable from a filter (`graphmonitor`/`agraphmonitor`, `vaco-filter-scope`) — CLOSED 2026-08-28 for the framework capability; `graphmonitor`/`agraphmonitor` themselves remain unwired
 
 `ffmpeg -h filter=graphmonitor`/`agraphmonitor` draw a picture of the
 *whole filtergraph's* live state — every link's queue depth, EOF status,
@@ -1555,6 +1555,55 @@ work outside `vaco-filter-scope`'s own ownership.
 
 Not fixed here: `graphmonitor`/`agraphmonitor` are left unimplemented in
 `vaco-filter-scope`, recorded rather than worked around.
+
+### Status, 2026-08-28 — a read-only NodeInfo/LinkView snapshot, deliberately narrow
+
+Closed by adding two accessors to `FilterContext` in
+`crates/filter/vaco-filter-core/src/context.rs`:
+`graph_nodes(&self) -> &[NodeInfo]` (each node's `NodeId`, scheduler
+label, and `&'static str` filter name) and `graph_links(&self) ->
+Vec<LinkView>` (each link's id, `PadRef` src/dst, `MediaType`, queued
+frame count, capacity, EOF flag, and its existing `LinkStats`). Both are
+read-only snapshots taken at call time — no method lets a filter push to
+another node's link, close another node's pad, or reach another node's
+`Filter` implementation itself, which is the boundary plan 16 §1.1 draws
+("a filter can never reach another filter's private state, only link
+state").
+
+Most of the data already existed: `LinkStats`'s own doc comment already
+named `graphmonitor` as an intended consumer, and `FilterContext`'s
+`links: &mut LinkArena` field was already a reference to the *entire*
+graph's link arena, not just the current node's — the gap was in which
+methods exposed it, not in missing data. Node labels were the one
+genuinely new piece: `Graph` gained a `node_labels: Vec<NodeInfo>` field,
+populated incrementally in `push_node` (not rebuilt per `activate()` call,
+to avoid an allocation on the scheduler's hot path), and threaded through
+to both `FilterContext::new` call sites in `sched.rs`.
+
+Deliberately excluded: per-node scheduler-internal state (`parked_at`,
+`self_driven`, `last_run`) and link formats — `graphmonitor`'s `mode`
+flags need queue depth, EOF, and disabled-state, none of which require
+these. A general graph accessor (arbitrary node reach, mutation of other
+nodes' pads) was considered and rejected per D19/the coordinator's own
+framing: the narrowest surface that serves the two named consumers, not
+a general capability that would let a filter's output depend on
+scheduling order.
+
+Verified end-to-end, not just by type-checking: a real 3-node `Graph`
+(source → probe filter → sink) with a `FrameFilter` that calls
+`ctx.graph_nodes()`/`ctx.graph_links()` on its first frame
+(`a_filter_can_read_every_nodes_label_and_every_links_state` in
+`crates/filter/vaco-filter-core/tests/graph.rs`) asserts the probe can see
+the *other* two nodes' labels and the state of the link feeding it — then
+deliberately broken (`graph_nodes`/`graph_links` stubbed to return empty)
+to confirm the test fails loudly (`"a filter must be able to name nodes
+that are not itself: []"`) before restoring the real implementation.
+
+**Not fixed here**: this closes the framework capability only.
+`graphmonitor`/`agraphmonitor` are still not implemented as filters in
+`vaco-filter-scope` — wiring them (parsing `mode`/`flags`, rendering the
+overlay) is separate work this pass did not do, left for whoever picks
+that crate back up.
 
 ## Gap 23 — `Stream::r_frame_rate`/`bit_rate` cannot distinguish "no mechanism" from "mechanism declined"
 
@@ -1625,7 +1674,7 @@ Not fixed here: `vaco-probe` continues to print `"16/1"` for the corrupted-MP4
 `r_frame_rate` fixture where the reference prints `"1/0"`, recorded as an
 accepted, precisely diagnosed divergence rather than worked around.
 
-## Gap 24 — no adapter for a 2-in/2-out filter with a feedback loop (`feedback`, `vaco-filter-overlay`)
+## Gap 24 — no adapter for a 2-in/2-out filter with a feedback loop (`feedback`, `vaco-filter-overlay`) — PARTIALLY CLOSED 2026-08-28 (adapter shape added; `feedback` itself still blocked, see gap 25)
 
 `ffmpeg -filters` lists `feedback` as `VV->VV`: two inputs and **two
 outputs**. The reference's own use (`[0][fb]feedback[out][fb]`) loops one
@@ -1650,3 +1699,94 @@ question could even be tested.
 
 `crates/filter/vaco-filter-overlay`'s `feedback` is not implemented for
 this reason. Not worked around inside that crate, per the standing rule.
+
+
+### Status, 2026-08-28 — `Dual`/`DualFilter` adapter added; `feedback` itself still blocked on a cycle, filed as gap 25
+
+Closed for the adapter-shape question specifically: `crates/filter/vaco-filter-core/src/adapt.rs`
+gained `DualFilter` (a trait for a fixed 2-in/2-out filter body) and
+`Dual<F>` (the `Filter` adapter), built by combining `Paired`'s lockstep
+-input rule with `Fanout`'s all-outputs-have-room backpressure rule, plus
+one genuinely new piece neither existing adapter needed: a pending queue
+per output pad, since neither `Paired` (one output) nor `Fanout` (one
+input) had more than one of both. Built as a fixed 2-in/2-out shape, not
+generalised to N-in/M-out, per D19 — `feedback` is the only consumer.
+
+Verified with real `Graph`-based tests in `tests/graph.rs`
+(`dual_routes_each_output_to_its_own_pad`, using a filter that swaps its
+two inputs onto its two outputs specifically to catch cross-pad routing
+bugs, and `dual_stops_at_the_first_input_to_run_dry`, mirroring `Paired`'s
+own lockstep test), including a deliberate revert: the per-pad routing in
+`Dual::activate()` was temporarily hardcoded to always target output pad
+0, which made both tests fail with a clear value mismatch, before
+restoring the correct per-pad routing and reconfirming both pass. This is
+the adapter's forwarding-trap test, in the runtime-failure half; the
+compile-failure half does not apply here the way it did for gap 19's
+`Box<dyn Muxer>`/`AsDecoder`/`Box<dyn Decoder>` cases, because `DualFilter`
+is a wholly new trait implementing the pre-existing `Filter` trait
+directly — the same shape as `Paired`/`Fanout` (gap 10), which did not
+need such a test either, rather than a defaulted method silently
+unforwarded by an existing pervasively-boxed wrapper.
+
+**The adapter is necessary but not sufficient for `feedback`, exactly as
+hypothesized before this was checked.** `feedback`'s reference usage
+(`[0][fb]feedback[out][fb]`) loops its second output back to its own
+second input — a genuine cycle in the filtergraph. `Graph::configure()`
+requires `Graph::topological_order()`, which hard-rejects any cycle with
+`Error::InvalidData("filtergraph contains a cycle")` before a `Dual`
+-shaped node's two inputs and two outputs ever get negotiated. Proven
+directly by reading `topological_order()`'s cycle-detection and by a new
+end-to-end test, `a_link_back_into_the_same_node_is_rejected_as_a_cycle_at_configure`
+(connects a node's own output pad back to its own input pad, asserts
+`configure()` returns an `Err` whose message contains "cycle"),
+corroborated by a pre-existing, independent test already in the file,
+`a_cycle_is_detected`.
+
+This is a second, separate limitation from the one this gap was filed
+for — the adapter *shape* gap is closed; the *cyclic graph negotiation*
+gap is not, and is filed as gap 25 below rather than folded into this
+entry, since fixing gap 25 needs no more `Dual`.
+
+**Not fixed here**: `crates/filter/vaco-filter-overlay`'s `feedback` is
+still not implemented — the adapter it needs now exists, but its whole
+purpose requires the loop that `Graph::configure()` refuses, so wiring it
+up as a non-looping stub would not be `feedback`. Not worked around, per
+the standing rule. The overlay family remains 7 of 8, not 8 of 8: the
+condition floated for reopening #111's thread ("if `feedback` becomes
+implementable") was checked and did not hold.
+## Gap 25 — `vaco-filter-core`'s scheduler cannot negotiate or run a cyclic filtergraph
+
+`Graph::configure()` (`crates/filter/vaco-filter-core/src/sched.rs`) calls
+`Graph::topological_order()` as part of its negotiation pass, and that
+function hard-rejects any cycle with `Error::InvalidData("filtergraph
+contains a cycle")`. Found closing gap 24: adding a 2-in/2-out adapter
+(`Dual`) was necessary but not sufficient to wire `feedback`, because
+`feedback`'s reference usage is not merely 2-in/2-out but self-referential
+— one output pad's link terminates back at the same node's own input pad
+— and that is a cycle by construction, independent of any adapter shape.
+
+Two separate things would need to give for a cyclic graph to run, neither
+explored past this scoping pass:
+
+- **Negotiation.** Format negotiation (`vaco-filter-graph`'s constraint
+  propagation, ahead of `configure()`) reasons from sources toward sinks;
+  a cycle has no source side to reason from without either breaking the
+  cycle at some default/declared format or accepting an under-determined
+  first iteration and re-negotiating after frames start flowing. Nothing
+  in this tree does the latter today.
+- **Scheduling.** The `activate()` driver takes each `Node`'s `filter` out
+  of the arena with `.take()` while it runs it (so it can hand out a
+  `FilterContext` without aliasing `self`); a self-loop means the same
+  node's own output write would need to reach a link whose destination is
+  itself, while its own `filter` slot is already taken — not obviously
+  safe against the existing borrow structure, and not checked further
+  here.
+
+Closing this is substantially more than gap 24 was: it is a scheduling
+and negotiation change to the core cooperative scheduler, not a new
+adapter. Recorded as its own gap rather than reopening gap 24, since gap
+24's own question (is there an adapter shape for 2-in/2-out) is answered
+and closed on its own terms.
+
+Not fixed here: `feedback` remains unimplemented in `vaco-filter-overlay`
+for this reason, on top of gap 24's now-resolved adapter question.
