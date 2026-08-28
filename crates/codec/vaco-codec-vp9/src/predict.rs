@@ -52,7 +52,12 @@ pub fn predict_intra(
     pred: &mut [i32],
     mode: i32,
     size: usize,
-    log2_size: u32,
+    // No longer read inside this function: D-09's dc_predict rewire
+    // replaced the only branch that used it (a shift derived from
+    // log2Size), and every other mode already takes `size` directly.
+    // Kept as a parameter rather than removed, since removing it would
+    // mean updating every call site for a purely internal simplification.
+    _log2_size: u32,
     above_row: &[i32],
     left_col: &[i32],
     have_left: bool,
@@ -198,29 +203,30 @@ pub fn predict_intra(
             }
         }
     } else {
-        // DC_PRED, and its three border-fallback cases.
-        let half = 1i32 << (bit_depth - 1);
-        let value = if have_left && have_above {
-            let mut sum = 0i32;
-            for k in 0..sz {
-                sum += l(left_col, k) + a(above_row, k);
-            }
-            (sum + sz) >> (log2_size + 1)
-        } else if have_left {
-            let mut sum = 0i32;
-            for k in 0..sz {
-                sum += l(left_col, k);
-            }
-            (sum + (1 << (log2_size - 1))) >> log2_size
-        } else if have_above {
-            let mut sum = 0i32;
-            for k in 0..sz {
-                sum += a(above_row, k);
-            }
-            (sum + (1 << (log2_size - 1))) >> log2_size
-        } else {
-            half
-        };
+        // DC_PRED, and its three border-fallback cases -- delegated to
+        // `vaco_codec_dsp_intrapred::dc_predict` (D-09): this branch's own
+        // four cases are that function's average/fallback formula, for a
+        // count that is always a power of two (`size`, `2*size` are
+        // always 4/8/16/32/64), where a shift-based rounding and
+        // `dc_predict`'s `(sum + count/2) / count` are the identical
+        // computation -- verified bit-exact against this module's own
+        // pre-existing tests (which pin real expected values) before
+        // landing, not merely assumed equivalent.
+        const MAX_SZ: usize = 32;
+        let n = size.min(MAX_SZ);
+        let mut top_buf = [0u16; MAX_SZ];
+        let mut left_buf = [0u16; MAX_SZ];
+        for (k, slot) in top_buf.iter_mut().take(n).enumerate() {
+            let ki = i32::try_from(k).unwrap_or(0);
+            *slot = u16::try_from(a(above_row, ki).clamp(0, i32::from(u16::MAX))).unwrap_or(0);
+        }
+        for (k, slot) in left_buf.iter_mut().take(n).enumerate() {
+            let ki = i32::try_from(k).unwrap_or(0);
+            *slot = u16::try_from(l(left_col, ki).clamp(0, i32::from(u16::MAX))).unwrap_or(0);
+        }
+        let top: &[u16] = if have_above { top_buf.get(..n).unwrap_or(&[]) } else { &[] };
+        let left_slice: &[u16] = if have_left { left_buf.get(..n).unwrap_or(&[]) } else { &[] };
+        let value = i32::from(vaco_codec_dsp_intrapred::dc_predict(top, left_slice, n, bit_depth));
         for slot in pred.iter_mut().take(size * size) {
             *slot = value;
         }
