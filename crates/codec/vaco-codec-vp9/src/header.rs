@@ -1,28 +1,17 @@
-//! VP9 §6.1/§6.2 (uncompressed header) and §6.3 (compressed header —
-//! probability forward update) parsing.
+//! VP9 §6.1/§6.2 (uncompressed header, now including inter frames' own
+//! fields — `ref_frame_idx`/`ref_frame_sign_bias`/`allow_high_precision_mv`/
+//! `interpolation_filter`/`frame_size_with_refs`) and §6.3 (compressed
+//! header — the forward-updated probability model, key-frame and inter
+//! tables alike) parsing.
 //!
-//! # Scope: key frames
-//!
-//! `parse_uncompressed_header` reads the *entire* uncompressed header
-//! structurally for every frame type (so a non-key frame in the middle of a
-//! stream does not desync byte counting for whatever follows), but
-//! `vaco-codec-vp9`'s decode path (`crate::decode`) only reconstructs pixels
-//! when the result is a key frame. See the crate-level doc for exactly
-//! where support stops on an inter frame.
-//!
-//! Every key frame calls §6.2's `setup_past_independence()` (`FrameIsIntra`
-//! is always 1 for a real key frame, and the uncompressed header's own
-//! syntax makes that call unconditional in that case) — which resets the
-//! probability model to the specification's defaults before this frame's
-//! compressed header forward-updates it. `EntropyContext::default()` is
-//! that reset. One consequence, checked against the syntax table rather
-//! than assumed: a stream of consecutive key frames never carries adapted
-//! probabilities from one key frame to the next, because every key frame
-//! resets to defaults regardless of what a previous frame's backward
-//! adaptation (§8.4) would otherwise have produced. Backward adaptation
-//! therefore cannot affect — or be verified by — any bitstream this crate
-//! can fully decode (key frames only), so it is not implemented here; see
-//! `planning/TECH-DEBT.md`.
+//! Every key frame (and every error-resilient frame) calls
+//! §6.2's `setup_past_independence()` — which resets the probability model
+//! to the specification's defaults before that frame's own compressed
+//! header forward-updates it (`crate::decode::Vp9Decoder::decode_one_frame`
+//! implements the `save_probs`/`load_probs`/`frame_context_idx` machinery
+//! around this). Backward probability adaptation (§8.3/8.4) is *not*
+//! implemented — see `planning/TECH-DEBT.md` for what that means for a
+//! multi-frame GOP's later frames.
 
 use vaco_bitstream::BitReader;
 use vaco_codec_msac::Vp9BoolDecoder as Bd;
@@ -260,6 +249,27 @@ fn tile_info(r: &mut BitReader<'_>, sb64_cols: usize) -> TileInfo {
     TileInfo { cols_log2, rows_log2 }
 }
 
+/// One `RefFrameWidth`/`RefFrameHeight`/`RefFrameSignBias`-relevant entry
+/// from the reference-frame store, as `frame_size_with_refs`/motion vector
+/// scaling need it. `None` means the slot has never been written (a
+/// conforming bitstream never actually references such a slot, but this
+/// crate does not trust that).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RefFrameDims {
+    pub width: u32,
+    pub height: u32,
+}
+
+/// What `compute_image_size` needs to remember about the last frame it was
+/// invoked for (§7.2.6's `UsePrevFrameMvs` conditions (a)-(c); `None` means
+/// "never invoked", satisfying condition (a) directly).
+#[derive(Debug, Clone, Copy)]
+pub struct PrevFrameInfo {
+    pub width: u32,
+    pub height: u32,
+    pub show_frame: bool,
+}
+
 /// What `uncompressed_header()` states, restricted to the fields this crate
 /// needs to reach the compressed header and tile data.
 #[derive(Debug, Clone)]
@@ -286,6 +296,24 @@ pub struct FrameHeader {
     pub refresh_frame_flags: u8,
     pub refresh_frame_context: bool,
     pub frame_parallel_decoding_mode: bool,
+    pub reset_frame_context: u8,
+    pub frame_context_idx: u8,
+    /// §6.2's `ref_frame_idx[REFS_PER_FRAME]` — which of the `NUM_REF_FRAMES`
+    /// (8) reference-frame-store slots this frame's `LAST_FRAME`/
+    /// `GOLDEN_FRAME`/`ALTREF_FRAME` map to (index 0/1/2 respectively).
+    pub ref_frame_idx: [u8; 3],
+    /// §6.2's `ref_frame_sign_bias[MAX_REF_FRAMES]`, indexed by the
+    /// `ref_frame` value itself (`INTRA_FRAME`'s slot is always `false`,
+    /// unused).
+    pub ref_frame_sign_bias: [bool; 4],
+    pub allow_high_precision_mv: bool,
+    /// §6.2.7's `interpolation_filter`: `EIGHTTAP`/`EIGHTTAP_SMOOTH`/
+    /// `EIGHTTAP_SHARP`/`BILINEAR`/`SWITCHABLE`.
+    pub interpolation_filter: i32,
+    /// §7.2.6: whether this frame's motion-vector prediction may read the
+    /// previous frame's per-block motion vectors/reference frames as a
+    /// temporal candidate.
+    pub use_prev_frame_mvs: bool,
     pub loop_filter: LoopFilterParams,
     pub quant: QuantParams,
     pub segmentation: Segmentation,
@@ -296,6 +324,13 @@ pub struct FrameHeader {
     /// it for convenience since every block-decode helper needs both).
     pub entropy: EntropyContext,
     pub tx_mode: i32,
+    /// §6.3.12's `reference_mode`: `SINGLE_REFERENCE`/`COMPOUND_REFERENCE`/
+    /// `REFERENCE_MODE_SELECT`. Filled in alongside `entropy`/`tx_mode`.
+    pub reference_mode: i32,
+    /// §6.3.18's `CompFixedRef`/`CompVarRef`, meaningful only when
+    /// `reference_mode != SINGLE_REFERENCE`.
+    pub comp_fixed_ref: i32,
+    pub comp_var_ref: [i32; 2],
 }
 
 fn compute_image_size(width: u32, height: u32) -> (usize, usize, usize, usize) {
@@ -331,6 +366,8 @@ pub fn parse_uncompressed_header(
     data: &[u8],
     prev_loop_filter: LoopFilterParams,
     prev_seg: Segmentation,
+    ref_dims: &[Option<RefFrameDims>; tables::NUM_REF_FRAMES],
+    prev_frame: Option<PrevFrameInfo>,
 ) -> Option<(FrameHeader, usize)> {
     let mut r = BitReader::new(data);
     if r.get(2) != 2 {
@@ -367,6 +404,13 @@ pub fn parse_uncompressed_header(
                 refresh_frame_flags: 0,
                 refresh_frame_context: false,
                 frame_parallel_decoding_mode: true,
+                reset_frame_context: 0,
+                frame_context_idx: 0,
+                ref_frame_idx: [0; 3],
+                ref_frame_sign_bias: [false; 4],
+                allow_high_precision_mv: false,
+                interpolation_filter: tables::EIGHTTAP,
+                use_prev_frame_mvs: false,
                 loop_filter: prev_loop_filter,
                 quant: QuantParams::default(),
                 segmentation: prev_seg,
@@ -374,6 +418,9 @@ pub fn parse_uncompressed_header(
                 header_size_in_bytes: 0,
                 entropy: EntropyContext::default(),
                 tx_mode: tables::ONLY_4X4,
+                reference_mode: tables::SINGLE_REFERENCE,
+                comp_fixed_ref: 0,
+                comp_var_ref: [0; 2],
             },
             bits.div_ceil(8),
         ));
@@ -384,11 +431,16 @@ pub fn parse_uncompressed_header(
     let error_resilient_mode = r.get(1) != 0;
 
     let mut color = ColorConfig { bit_depth: 8, color_space: 1, full_range: false, subsampling_x: true, subsampling_y: true };
-    let mut width = 0u32;
-    let mut height = 0u32;
+    let width;
+    let height;
     let refresh_frame_flags;
     let mut intra_only = false;
     let frame_is_intra;
+    let mut reset_frame_context = 0u8;
+    let mut ref_frame_idx = [0u8; 3];
+    let mut ref_frame_sign_bias = [false; 4];
+    let mut allow_high_precision_mv = false;
+    let mut interpolation_filter = tables::EIGHTTAP;
 
     if is_key_frame {
         if !frame_sync_code_ok(&mut r) {
@@ -403,7 +455,7 @@ pub fn parse_uncompressed_header(
         intra_only = if show_frame { false } else { r.get(1) != 0 };
         frame_is_intra = intra_only;
         if !error_resilient_mode {
-            let _reset_frame_context = r.get(2);
+            reset_frame_context = u8::try_from(r.get(2)).unwrap_or(0);
         }
         if intra_only {
             if !frame_sync_code_ok(&mut r) {
@@ -419,23 +471,19 @@ pub fn parse_uncompressed_header(
             skip_render_size(&mut r);
         } else {
             refresh_frame_flags = u8::try_from(r.get(8)).unwrap_or(0);
-            for _ in 0..3 {
-                let _ref_frame_idx = r.get(3);
-                let _ref_frame_sign_bias = r.get(1);
-            }
-            // frame_size_with_refs(): this crate does not track reference
-            // frame dimensions (out of scope — inter decode is C-31), so an
-            // inter frame's width/height cannot be resolved here. The
-            // caller must not attempt pixel reconstruction in this case.
-            for _ in 0..3 {
-                if r.get(1) != 0 {
-                    break;
+            for (i, slot) in ref_frame_idx.iter_mut().enumerate() {
+                *slot = u8::try_from(r.get(3)).unwrap_or(0);
+                let bias = r.get(1) != 0;
+                // §7.2's ref_frame_sign_bias is indexed by ref_frame value
+                // (LAST_FRAME=1, GOLDEN_FRAME=2, ALTREF_FRAME=3); i is
+                // LAST_FRAME + i - LAST_FRAME = i, so the slot is i+1.
+                if let Some(dst) = ref_frame_sign_bias.get_mut(i + 1) {
+                    *dst = bias;
                 }
             }
-            let _allow_high_precision_mv = r.get(1);
-            if r.get(1) == 0 {
-                let _raw_interpolation_filter = r.get(2);
-            }
+            (width, height) = frame_size_with_refs(&mut r, ref_frame_idx, ref_dims)?;
+            allow_high_precision_mv = r.get(1) != 0;
+            interpolation_filter = read_interpolation_filter(&mut r);
         }
     }
 
@@ -444,7 +492,7 @@ pub fn parse_uncompressed_header(
     } else {
         (r.get(1) != 0, r.get(1) != 0)
     };
-    let _frame_context_idx = r.get(2);
+    let frame_context_idx = u8::try_from(r.get(2)).unwrap_or(0);
 
     let loop_filter = loop_filter_params(&mut r, prev_loop_filter);
     let quant = quantization_params(&mut r);
@@ -460,6 +508,13 @@ pub fn parse_uncompressed_header(
     let segmentation = segmentation_params(&mut r, seg_base);
 
     let (mi_cols, mi_rows, sb64_cols, sb64_rows) = compute_image_size(width, height);
+    // §7.2.6's `UsePrevFrameMvs`: conditions (a)-(c) (never invoked before /
+    // same dimensions / previous invocation's `show_frame`) are checked
+    // against `prev_frame`; (d)/(e) (this frame's own
+    // `error_resilient_mode`/`FrameIsIntra`) against the current frame.
+    let use_prev_frame_mvs = !frame_is_intra
+        && !error_resilient_mode
+        && prev_frame.is_some_and(|p| p.width == width && p.height == height && p.show_frame);
     let tile = tile_info(&mut r, sb64_cols);
 
     let header_size_in_bytes = u16::try_from(r.get(16)).unwrap_or(0);
@@ -486,6 +541,13 @@ pub fn parse_uncompressed_header(
             refresh_frame_flags,
             refresh_frame_context,
             frame_parallel_decoding_mode,
+            reset_frame_context,
+            frame_context_idx,
+            ref_frame_idx,
+            ref_frame_sign_bias,
+            allow_high_precision_mv,
+            interpolation_filter,
+            use_prev_frame_mvs,
             loop_filter,
             quant,
             segmentation,
@@ -493,9 +555,56 @@ pub fn parse_uncompressed_header(
             header_size_in_bytes,
             entropy: EntropyContext::default(),
             tx_mode: tables::ONLY_4X4,
+            reference_mode: tables::SINGLE_REFERENCE,
+            comp_fixed_ref: 0,
+            comp_var_ref: [0; 2],
         },
         bits.div_ceil(8),
     ))
+}
+
+/// §6.2.5's `frame_size_with_refs`. Uses the first found reference frame's
+/// dimensions if any `found_ref` bit is set, otherwise reads `frame_size()`
+/// directly. A `ref_frame_idx` slot with no recorded dimensions (an
+/// out-of-range index, or a slot never written by an earlier frame) is
+/// treated as "not found" rather than trusted — untrusted bitstream data
+/// must not desync the reader by skipping bits `found_ref == 1` would
+/// otherwise commit to reading.
+fn frame_size_with_refs(r: &mut BitReader<'_>, ref_frame_idx: [u8; 3], ref_dims: &[Option<RefFrameDims>; tables::NUM_REF_FRAMES]) -> Option<(u32, u32)> {
+    let mut found_at = None;
+    for (i, &idx) in ref_frame_idx.iter().enumerate() {
+        let found_ref = r.get(1) != 0;
+        if found_ref {
+            found_at = Some(idx);
+            break;
+        }
+        let _ = i;
+    }
+    let (width, height) = match found_at {
+        // `found_ref == 1`: the bitstream has already committed to *not*
+        // sending frame_size() here, so a slot with no recorded dimensions
+        // (out-of-range index, or a slot no earlier frame ever wrote) is
+        // not recoverable by falling back to frame_size() — that would
+        // read bits the bitstream never put there. Fail the whole header
+        // parse instead of desyncing everything after this point.
+        Some(idx) => {
+            let dims = ref_dims.get(usize::from(idx)).copied().flatten()?;
+            (dims.width, dims.height)
+        }
+        None => frame_size(r),
+    };
+    skip_render_size(r);
+    Some((width, height))
+}
+
+/// §6.2.7's `read_interpolation_filter`.
+fn read_interpolation_filter(r: &mut BitReader<'_>) -> i32 {
+    if r.get(1) != 0 {
+        tables::SWITCHABLE
+    } else {
+        let raw = usize::try_from(r.get(2)).unwrap_or(0);
+        tables::LITERAL_TO_TYPE.get(raw).copied().unwrap_or(tables::EIGHTTAP)
+    }
 }
 
 fn frame_sync_code_ok(r: &mut BitReader<'_>) -> bool {
@@ -512,6 +621,27 @@ pub struct EntropyContext {
     pub coef_probs: [[[[[[u8; 3]; 6]; 6]; 2]; 2]; 4],
     pub skip_prob: [u8; 3],
     pub tx_probs: [[[u8; 3]; 2]; 4],
+    // -- Inter-only adaptive tables (C-31): forward-updated by
+    // -- `parse_compressed_header` only when `!frame_is_intra` (§6.3's own
+    // -- syntax table gates every one of these behind that condition).
+    pub inter_mode_probs: [[u8; 3]; 7],
+    pub interp_filter_probs: [[u8; 2]; 4],
+    pub is_inter_prob: [u8; 4],
+    pub comp_mode_prob: [u8; 5],
+    pub single_ref_prob: [[u8; 2]; 5],
+    pub comp_ref_prob: [u8; 5],
+    pub y_mode_probs: [[u8; 9]; 4],
+    pub uv_mode_probs: [[u8; 9]; 10],
+    pub partition_probs: [[u8; 3]; 16],
+    pub mv_joint_probs: [u8; 3],
+    pub mv_sign_prob: [u8; 2],
+    pub mv_class_probs: [[u8; 10]; 2],
+    pub mv_class0_bit_prob: [u8; 2],
+    pub mv_bits_prob: [[u8; tables::MV_OFFSET_BITS]; 2],
+    pub mv_class0_fr_probs: [[[u8; 3]; tables::CLASS0_SIZE]; 2],
+    pub mv_fr_probs: [[u8; 3]; 2],
+    pub mv_class0_hp_prob: [u8; 2],
+    pub mv_hp_prob: [u8; 2],
 }
 
 impl Default for EntropyContext {
@@ -520,6 +650,24 @@ impl Default for EntropyContext {
             coef_probs: tables::DEFAULT_COEF_PROBS,
             skip_prob: tables::DEFAULT_SKIP_PROB,
             tx_probs: tables::DEFAULT_TX_PROBS,
+            inter_mode_probs: tables::DEFAULT_INTER_MODE_PROBS,
+            interp_filter_probs: tables::DEFAULT_INTERP_FILTER_PROBS,
+            is_inter_prob: tables::DEFAULT_IS_INTER_PROB,
+            comp_mode_prob: tables::DEFAULT_COMP_MODE_PROB,
+            single_ref_prob: tables::DEFAULT_SINGLE_REF_PROB,
+            comp_ref_prob: tables::DEFAULT_COMP_REF_PROB,
+            y_mode_probs: tables::DEFAULT_Y_MODE_PROBS,
+            uv_mode_probs: tables::DEFAULT_UV_MODE_PROBS,
+            partition_probs: tables::DEFAULT_PARTITION_PROBS,
+            mv_joint_probs: tables::DEFAULT_MV_JOINT_PROBS,
+            mv_sign_prob: tables::DEFAULT_MV_SIGN_PROB,
+            mv_class_probs: tables::DEFAULT_MV_CLASS_PROBS,
+            mv_class0_bit_prob: tables::DEFAULT_MV_CLASS0_BIT_PROB,
+            mv_bits_prob: tables::DEFAULT_MV_BITS_PROB,
+            mv_class0_fr_probs: tables::DEFAULT_MV_CLASS0_FR_PROBS,
+            mv_fr_probs: tables::DEFAULT_MV_FR_PROBS,
+            mv_class0_hp_prob: tables::DEFAULT_MV_CLASS0_HP_PROB,
+            mv_hp_prob: tables::DEFAULT_MV_HP_PROB,
         }
     }
 }
@@ -580,11 +728,31 @@ fn inv_remap_prob(delta_prob: i32, prob: u8) -> u8 {
     u8::try_from(m.clamp(0, 255)).unwrap_or(255)
 }
 
-/// §6.3's `compressed_header()`, restricted to what a key frame reads
-/// (`FrameIsIntra` gates every inter-only probability table behind a
-/// condition that is always false for a real key frame — see §6.3's own
-/// syntax table). Returns the decoded `tx_mode`.
-pub fn parse_compressed_header(bd: &mut Bd<'_>, lossless: bool, entropy: &mut EntropyContext) -> i32 {
+/// `parse_compressed_header`'s inter-only results (§6.3.12's
+/// `reference_mode`/§6.3.18's `CompFixedRef`/`CompVarRef`), alongside the
+/// `tx_mode` a key frame's compressed header also decodes.
+#[derive(Debug, Clone, Copy)]
+pub struct CompressedHeaderInfo {
+    pub tx_mode: i32,
+    pub reference_mode: i32,
+    pub comp_fixed_ref: i32,
+    pub comp_var_ref: [i32; 2],
+}
+
+/// §6.3's `compressed_header()`. `frame_is_intra` gates every inter-only
+/// probability table behind a condition that is always false for a real
+/// key frame (see §6.3's own syntax table) — those reads, and
+/// `reference_mode`/`CompFixedRef`/`CompVarRef`, only run when it is false.
+#[allow(clippy::too_many_arguments, reason = "one linear syntax table, §6.3")]
+pub fn parse_compressed_header(
+    bd: &mut Bd<'_>,
+    lossless: bool,
+    frame_is_intra: bool,
+    allow_high_precision_mv: bool,
+    ref_frame_sign_bias: [bool; 4],
+    interpolation_filter: i32,
+    entropy: &mut EntropyContext,
+) -> CompressedHeaderInfo {
     let tx_mode = if lossless {
         tables::ONLY_4X4
     } else {
@@ -613,7 +781,189 @@ pub fn parse_compressed_header(bd: &mut Bd<'_>, lossless: bool, entropy: &mut En
     for slot in &mut entropy.skip_prob {
         *slot = diff_update_prob(bd, *slot);
     }
-    tx_mode
+    let mut info = CompressedHeaderInfo { tx_mode, reference_mode: tables::SINGLE_REFERENCE, comp_fixed_ref: 0, comp_var_ref: [0; 2] };
+    if !frame_is_intra {
+        read_inter_mode_probs(bd, entropy);
+        // §6.3's `compressed_header()`: `read_interp_filter_probs()` is only
+        // called `if (interpolation_filter == SWITCHABLE)` — reading it
+        // unconditionally consumes bits the encoder never wrote whenever a
+        // frame fixes one filter for its whole duration, desyncing every
+        // read after this point in the SAME compressed header (is_inter,
+        // reference_mode, y_mode_probs, partition_probs, mv_probs all read
+        // garbage deltas from then on, even though each of their own
+        // formulas is correct in isolation).
+        if interpolation_filter == tables::SWITCHABLE {
+            read_interp_filter_probs(bd, entropy);
+        }
+        read_is_inter_probs(bd, entropy);
+        frame_reference_mode(bd, ref_frame_sign_bias, &mut info);
+        frame_reference_mode_probs(bd, &info, entropy);
+        read_y_mode_probs(bd, entropy);
+        read_partition_probs(bd, entropy);
+        mv_probs(bd, allow_high_precision_mv, entropy);
+    }
+    info
+}
+
+/// §6.3.14's `read_y_mode_probs`.
+fn read_y_mode_probs(bd: &mut Bd<'_>, entropy: &mut EntropyContext) {
+    for row in &mut entropy.y_mode_probs {
+        for slot in row.iter_mut() {
+            *slot = diff_update_prob(bd, *slot);
+        }
+    }
+}
+
+/// §6.3.15's `read_partition_probs`.
+fn read_partition_probs(bd: &mut Bd<'_>, entropy: &mut EntropyContext) {
+    for row in &mut entropy.partition_probs {
+        for slot in row.iter_mut() {
+            *slot = diff_update_prob(bd, *slot);
+        }
+    }
+}
+
+/// §6.3.9's `read_inter_mode_probs`.
+fn read_inter_mode_probs(bd: &mut Bd<'_>, entropy: &mut EntropyContext) {
+    for row in &mut entropy.inter_mode_probs {
+        for slot in row.iter_mut() {
+            *slot = diff_update_prob(bd, *slot);
+        }
+    }
+}
+
+/// §6.3.10's `read_interp_filter_probs`.
+fn read_interp_filter_probs(bd: &mut Bd<'_>, entropy: &mut EntropyContext) {
+    for row in &mut entropy.interp_filter_probs {
+        for slot in row.iter_mut() {
+            *slot = diff_update_prob(bd, *slot);
+        }
+    }
+}
+
+/// §6.3.11's `read_is_inter_probs`.
+fn read_is_inter_probs(bd: &mut Bd<'_>, entropy: &mut EntropyContext) {
+    for slot in &mut entropy.is_inter_prob {
+        *slot = diff_update_prob(bd, *slot);
+    }
+}
+
+/// §6.3.12's `frame_reference_mode`.
+fn frame_reference_mode(bd: &mut Bd<'_>, sign_bias: [bool; 4], info: &mut CompressedHeaderInfo) {
+    let last = sign_bias.get(usize::try_from(tables::LAST_FRAME).unwrap_or(0)).copied().unwrap_or(false);
+    let mut compound_reference_allowed = false;
+    for i in 1..tables::REFS_PER_FRAME {
+        let bias = sign_bias.get(i + 1).copied().unwrap_or(false);
+        if bias != last {
+            compound_reference_allowed = true;
+        }
+    }
+    info.reference_mode = if compound_reference_allowed {
+        if bd.read_bool(128) {
+            let mode = if bd.read_bool(128) { tables::REFERENCE_MODE_SELECT } else { tables::COMPOUND_REFERENCE };
+            setup_compound_reference_mode(sign_bias, info);
+            mode
+        } else {
+            tables::SINGLE_REFERENCE
+        }
+    } else {
+        tables::SINGLE_REFERENCE
+    };
+}
+
+/// §6.3.18's `setup_compound_reference_mode`.
+fn setup_compound_reference_mode(sign_bias: [bool; 4], info: &mut CompressedHeaderInfo) {
+    let bias = |rf: i32| sign_bias.get(usize::try_from(rf).unwrap_or(0)).copied().unwrap_or(false);
+    if bias(tables::LAST_FRAME) == bias(tables::GOLDEN_FRAME) {
+        info.comp_fixed_ref = tables::ALTREF_FRAME;
+        info.comp_var_ref = [tables::LAST_FRAME, tables::GOLDEN_FRAME];
+    } else if bias(tables::LAST_FRAME) == bias(tables::ALTREF_FRAME) {
+        info.comp_fixed_ref = tables::GOLDEN_FRAME;
+        info.comp_var_ref = [tables::LAST_FRAME, tables::ALTREF_FRAME];
+    } else {
+        info.comp_fixed_ref = tables::LAST_FRAME;
+        info.comp_var_ref = [tables::GOLDEN_FRAME, tables::ALTREF_FRAME];
+    }
+}
+
+/// §6.3.13's `frame_reference_mode_probs`.
+fn frame_reference_mode_probs(bd: &mut Bd<'_>, info: &CompressedHeaderInfo, entropy: &mut EntropyContext) {
+    if info.reference_mode == tables::REFERENCE_MODE_SELECT {
+        for slot in &mut entropy.comp_mode_prob {
+            *slot = diff_update_prob(bd, *slot);
+        }
+    }
+    if info.reference_mode != tables::COMPOUND_REFERENCE {
+        for row in &mut entropy.single_ref_prob {
+            for slot in row.iter_mut() {
+                *slot = diff_update_prob(bd, *slot);
+            }
+        }
+    }
+    if info.reference_mode != tables::SINGLE_REFERENCE {
+        for slot in &mut entropy.comp_ref_prob {
+            *slot = diff_update_prob(bd, *slot);
+        }
+    }
+}
+
+/// §6.3.17's `update_mv_prob`.
+fn update_mv_prob(bd: &mut Bd<'_>, prob: u8) -> u8 {
+    if bd.read_bool(252) {
+        let mv_prob = u8::try_from(bd.read_literal(7)).unwrap_or(0);
+        (mv_prob << 1) | 1
+    } else {
+        prob
+    }
+}
+
+/// §6.3.16's `mv_probs`.
+fn mv_probs(bd: &mut Bd<'_>, allow_high_precision_mv: bool, entropy: &mut EntropyContext) {
+    for slot in &mut entropy.mv_joint_probs {
+        *slot = update_mv_prob(bd, *slot);
+    }
+    for i in 0..2 {
+        if let Some(slot) = entropy.mv_sign_prob.get_mut(i) {
+            *slot = update_mv_prob(bd, *slot);
+        }
+        if let Some(row) = entropy.mv_class_probs.get_mut(i) {
+            for slot in row.iter_mut() {
+                *slot = update_mv_prob(bd, *slot);
+            }
+        }
+        if let Some(slot) = entropy.mv_class0_bit_prob.get_mut(i) {
+            *slot = update_mv_prob(bd, *slot);
+        }
+        if let Some(row) = entropy.mv_bits_prob.get_mut(i) {
+            for slot in row.iter_mut() {
+                *slot = update_mv_prob(bd, *slot);
+            }
+        }
+    }
+    for i in 0..2 {
+        if let Some(rows) = entropy.mv_class0_fr_probs.get_mut(i) {
+            for row in rows.iter_mut() {
+                for slot in row.iter_mut() {
+                    *slot = update_mv_prob(bd, *slot);
+                }
+            }
+        }
+        if let Some(row) = entropy.mv_fr_probs.get_mut(i) {
+            for slot in row.iter_mut() {
+                *slot = update_mv_prob(bd, *slot);
+            }
+        }
+    }
+    if allow_high_precision_mv {
+        for i in 0..2 {
+            if let Some(slot) = entropy.mv_class0_hp_prob.get_mut(i) {
+                *slot = update_mv_prob(bd, *slot);
+            }
+            if let Some(slot) = entropy.mv_hp_prob.get_mut(i) {
+                *slot = update_mv_prob(bd, *slot);
+            }
+        }
+    }
 }
 
 fn read_coef_probs(bd: &mut Bd<'_>, tx_mode: i32, entropy: &mut EntropyContext) {
