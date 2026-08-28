@@ -404,6 +404,140 @@ pub(crate) fn reconstruct_picture_luma(
     Ok(buf.luma)
 }
 
+/// Clause 8.4.2's inter prediction (six-tap qpel luma via `crate::interp`)
+/// plus the same residual-add path `reconstruct_picture_luma`'s own
+/// `Intra_4x4` branch already uses -- an inter macroblock's own luma
+/// residual is the same "no DC/AC split, one CabacResidual per 4x4
+/// block" shape `Intra_4x4` uses (clause 8.5.4), just added onto a
+/// motion-compensated prediction instead of a spatial one.
+///
+/// **Scope, explicit**: luma only (`PictureBuffer` has no chroma), list 0
+/// only (P slices; B's list 1/bi-prediction is out of scope, matching
+/// `crate::motion`'s own scope note), and `ref_list0[ref_idx]` is taken
+/// as-is from the caller -- reference picture list *construction*
+/// (clause 8.2.4, sliding window, MMCO, long-term marking) lives in the
+/// caller (`crate::dpb`), not here, the same split `crate::motion` draws
+/// between MV *prediction* and MV *derivation context*.
+pub(crate) fn reconstruct_picture_with_inter(
+    macroblocks: &[MbSummary],
+    mbs_wide: u32,
+    mbs_high: u32,
+    ref_list0: &[&[u8]],
+) -> vaco_core::Result<Vec<u8>> {
+    let mut buf = PictureBuffer::new(mbs_wide, mbs_high);
+    let ref_width = mbs_wide * 16;
+    let ref_height = mbs_high * 16;
+    for mb in macroblocks {
+        if mb.is_ipcm {
+            return Err(vaco_core::Error::Unsupported(
+                "vaco-codec-h264: I_PCM picture reconstruction is not implemented",
+            ));
+        }
+        if mb.is_intra16x16 {
+            let x = mb.mb_x * 16;
+            let y = mb.mb_y * 16;
+            let top_available = (0..16).all(|dx| buf.available(x as i32 + dx, y as i32 - 1));
+            let top = core::array::from_fn(|dx| buf.pixel(x as i32 + dx as i32, y as i32 - 1));
+            let left_available = (0..16).all(|dy| buf.available(x as i32 - 1, y as i32 + dy));
+            let left = core::array::from_fn(|dy| buf.pixel(x as i32 - 1, y as i32 + dy as i32));
+            let neighbours = Neighbours16 {
+                top_available,
+                top,
+                left_available,
+                left,
+            };
+            let block = reconstruct_intra16x16_luma(
+                mb.intra16x16_pred_mode,
+                neighbours,
+                mb.qpy,
+                &mb.residual,
+            );
+            for (i, row) in block.iter().enumerate() {
+                for (j, &v) in row.iter().enumerate() {
+                    buf.set_pixel(x + j as u32, y + i as u32, v);
+                }
+            }
+            for blk in 0..16u32 {
+                let (bx, by) = blk_xy(blk);
+                buf.mark_block_decoded(x + bx * 4, y + by * 4);
+            }
+        } else if mb.is_intra4x4 {
+            reconstruct_intra4x4_mb(&mut buf, mb.mb_x, mb.mb_y, mb.qpy, &mb.residual);
+        } else {
+            reconstruct_inter_mb(&mut buf, mb, ref_list0, ref_width, ref_height);
+        }
+    }
+    Ok(buf.luma)
+}
+
+#[allow(
+    clippy::indexing_slicing,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_truncation,
+    reason = "blk/i/j are fixed 0..4 or 0..16 loop bounds; mv/pixel arithmetic is checked at the fetch closure's own clamp"
+)]
+fn reconstruct_inter_mb(
+    buf: &mut PictureBuffer,
+    mb: &MbSummary,
+    ref_list0: &[&[u8]],
+    ref_width: u32,
+    ref_height: u32,
+) {
+    let empty: &[u8] = &[];
+    for blk in 0..16u32 {
+        let (bx, by) = blk_xy(blk);
+        let x = mb.mb_x * 16 + bx * 4;
+        let y = mb.mb_y * 16 + by * 4;
+        let info = mb.mv_blocks[(by * 4 + bx) as usize];
+        let ref_idx = info.ref_idx_l0().max(0) as usize;
+        let plane = ref_list0.get(ref_idx).copied().unwrap_or(empty);
+        let (mvx, mvy) = info.mv_l0();
+        let (mvx, mvy) = (i32::from(mvx), i32::from(mvy));
+        let (int_dx, frac_x) = (mvx >> 2, (mvx & 3) as u32);
+        let (int_dy, frac_y) = (mvy >> 2, (mvy & 3) as u32);
+
+        let fetch = |ax: i32, ay: i32| -> u8 {
+            if plane.is_empty() {
+                return 0;
+            }
+            let cx = ax.clamp(0, ref_width as i32 - 1) as u32;
+            let cy = ay.clamp(0, ref_height as i32 - 1) as u32;
+            plane
+                .get((cy * ref_width + cx) as usize)
+                .copied()
+                .unwrap_or(0)
+        };
+
+        let mut pred = [[0u8; 4]; 4];
+        for (i, row) in pred.iter_mut().enumerate() {
+            for (j, v) in row.iter_mut().enumerate() {
+                let full_x = x as i32 + j as i32 + int_dx;
+                let full_y = y as i32 + i as i32 + int_dy;
+                *v = crate::interp::luma_qpel_sample(fetch, full_x, full_y, frac_x, frac_y);
+            }
+        }
+
+        let ac = mb
+            .residual
+            .luma_ac
+            .get(blk as usize)
+            .and_then(Option::as_ref);
+        let c = inverse_scan_luma_dc(ac);
+        let d = dequant_4x4(&c, mb.qpy, false);
+        let r = idct4x4(&d);
+
+        let mut block = [[0u8; 4]; 4];
+        for (i, row) in block.iter_mut().enumerate() {
+            for (j, v) in row.iter_mut().enumerate() {
+                let sum = i32::from(pred[i][j]) + r.get(i * 4 + j).copied().unwrap_or(0);
+                *v = sum.clamp(0, 255) as u8;
+            }
+        }
+        buf.write_block4(x, y, block);
+    }
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -947,6 +1081,178 @@ mod tests {
              real regression, not just the narrow, already-time-boxed remaining gap this test's \
              own ignore reason describes",
             match_fraction * 100.0
+        );
+    }
+
+    /// Decodes a full I/P stream, maintaining a simple single-list DPB
+    /// (P slices only; every picture is one slice; no MMCO/long-term
+    /// refs -- RefPicList0 is just every previously-decoded picture,
+    /// most recent first, clause 8.2.4.2.1's own simplest case) across
+    /// pictures, exercising `crate::motion`/`crate::interp`/
+    /// `reconstruct_picture_with_inter` end to end for the first time.
+    pub(super) fn decode_ip_stream_luma(data: &[u8]) -> Vec<Result<Vec<u8>, String>> {
+        use vaco_bitstream::{BitReader, annexb};
+        use vaco_codec_cabac::CabacDecoder;
+        use vaco_format_nalu::RbspBuf;
+        use vaco_limits::{Budget, Limits};
+        use vaco_parse_h264::{H264NalHeader, NalUnitType, ParameterSets, SliceHeader, SliceKind};
+
+        let mut params = ParameterSets::new();
+        let mut budget = Budget::new(Limits::default());
+        let mut rbsp = RbspBuf::new();
+        let mut dpb: Vec<Vec<u8>> = Vec::new();
+        let mut frames = Vec::new();
+
+        for nal in annexb::nal_units(data) {
+            let Some(header) = H264NalHeader::parse(nal) else {
+                continue;
+            };
+            match header.nal_unit_type {
+                NalUnitType::Sps => {
+                    rbsp.fill(nal, &mut budget).unwrap();
+                    let _ = params.add_sps(rbsp.as_slice(), &mut budget);
+                }
+                NalUnitType::Pps => {
+                    rbsp.fill(nal, &mut budget).unwrap();
+                    let _ = params.add_pps(rbsp.as_slice(), &mut budget);
+                }
+                NalUnitType::IdrSlice | NalUnitType::NonIdrSlice => {
+                    rbsp.fill(nal, &mut budget).unwrap();
+                    let payload = rbsp.as_slice();
+                    let mut reader = BitReader::new(payload);
+                    reader.skip(8);
+                    let pps_id = {
+                        let mut r2 = BitReader::new(payload);
+                        r2.skip(8);
+                        let mut g = vaco_codec_golomb::BoundedGolomb::new(&mut r2, &mut budget);
+                        let _ = g.ue_v(u32::MAX).unwrap();
+                        let _ = g.ue_v(9).unwrap();
+                        g.ue_v(255).unwrap() as u8
+                    };
+                    let (pps, sps) = params.sps_for_pps(pps_id).unwrap();
+                    let slice_header =
+                        match SliceHeader::parse_data(&mut reader, header, sps, pps, &mut budget) {
+                            Ok(h) => h,
+                            Err(e) => {
+                                frames.push(Err(format!("slice header: {e:?}")));
+                                continue;
+                            }
+                        };
+                    let mbs_wide = sps.pic_width_in_mbs;
+                    let mbs_high =
+                        sps.pic_height_in_map_units * if sps.frame_mbs_only { 1 } else { 2 };
+                    let mut cabac = CabacDecoder::from_reader(reader);
+                    let result = crate::mb::decode_slice_cabac(
+                        &mut cabac,
+                        &mut budget,
+                        sps,
+                        pps,
+                        &slice_header,
+                    )
+                    .map_err(|e| format!("decode_slice_cabac failed: {e:?}"))
+                    .and_then(|stats| {
+                        if cabac.malformed() {
+                            return Err("CABAC engine reported malformed input".to_owned());
+                        }
+                        let luma = if slice_header.kind == SliceKind::I {
+                            reconstruct_picture_luma(&stats.macroblocks, mbs_wide, mbs_high)
+                                .map_err(|e| format!("reconstruct_picture_luma failed: {e:?}"))?
+                        } else {
+                            let ref_list0: Vec<&[u8]> =
+                                dpb.iter().rev().map(Vec::as_slice).collect();
+                            reconstruct_picture_with_inter(
+                                &stats.macroblocks,
+                                mbs_wide,
+                                mbs_high,
+                                &ref_list0,
+                            )
+                            .map_err(|e| format!("reconstruct_picture_with_inter failed: {e:?}"))?
+                        };
+                        Ok(luma)
+                    });
+                    match &result {
+                        Ok(luma) => dpb.push(luma.clone()),
+                        Err(_) => dpb.push(vec![128u8; (mbs_wide * 16 * mbs_high * 16) as usize]),
+                    }
+                    frames.push(result);
+                }
+                _ => {}
+            }
+        }
+        frames
+    }
+
+    /// `cabac_ip_simple.264`: the first real exercise of
+    /// `crate::motion`/`crate::interp`/`reconstruct_picture_with_inter`/
+    /// the DPB built for this round's own batch dispatch (#421/#422/#423).
+    ///
+    /// **Status, reported honestly rather than asserted**: every one of
+    /// the 25 frames decodes and reconstructs without a hard error --
+    /// the whole pipeline (CABAC ref_idx/mvd decode, this round's own
+    /// MV-prediction wiring, DPB list construction, six-tap qpel motion
+    /// compensation, residual add) runs end to end for the first time.
+    /// It is not yet correct: only 36.15% of luma samples match ffmpeg's
+    /// own (undeblocked) decode. Frame 0 (the I frame, using the
+    /// already-verified intra path) is byte-exact, confirming the
+    /// harness and reference are sound. Narrowed this far, under this
+    /// round's own time-box, before stopping: every macroblock in the
+    /// picture's own *first* row (`mb_y == 0`, which never exercises an
+    /// "above" or "above-right" neighbour lookup at all) reconstructs
+    /// perfectly in frame 1, including both a skipped, zero-motion
+    /// macroblock (a pure reference copy) and a non-skipped, zero-motion
+    /// macroblock (copy plus real residual) -- both checked by hand
+    /// against ffmpeg's own output and found byte-exact. Every
+    /// macroblock in every *other* row has real mismatches. That
+    /// contrast points at the cross-macroblock-row neighbour path
+    /// specifically (`crate::motion`'s own A/B/C derivation, or
+    /// `crate::mb`'s own `resolve_c`/grid wiring for it) as the most
+    /// likely location, but the exact defect was not found within this
+    /// round's own time-box, and this test does not claim otherwise. Not
+    /// closing #421/#422/#423 on this evidence -- their real acceptance
+    /// criteria (hand-derived-reference MV correctness, checkasm-verified
+    /// interpolation, POC types 1/2, MMCO, long-term references, B-slice
+    /// direct modes) are far from met by one 36%-matching fixture. No
+    /// assertion in this test beyond "did not panic": a specific
+    /// percentage threshold here would either be trivially true (useless
+    /// as a regression guard at 36%) or misrepresent a known-broken
+    /// pipeline as passing.
+    #[test]
+    fn cabac_ip_simple_decodes_and_reports_its_own_match_against_ffmpeg() {
+        let data: &[u8] = include_bytes!("../tests/fixtures/cabac_ip_simple.264");
+        let reference: &[u8] = include_bytes!("../tests/fixtures/cabac_ip_simple_ref.yuv");
+        let frames = decode_ip_stream_luma(data);
+        let frame_stride = 64 * 64 + 2 * 32 * 32;
+        let mut total = 0usize;
+        let mut mismatch = 0usize;
+        let mut failed = 0usize;
+        for (idx, frame) in frames.iter().enumerate() {
+            match frame {
+                Ok(luma) => {
+                    let ref_frame = &reference[idx * frame_stride..idx * frame_stride + luma.len()];
+                    let mut frame_mismatch = 0usize;
+                    for (&a, &b) in luma.iter().zip(ref_frame.iter()) {
+                        total += 1;
+                        if a != b {
+                            mismatch += 1;
+                            frame_mismatch += 1;
+                        }
+                    }
+                    eprintln!("  frame {idx}: {frame_mismatch} / {} differ", luma.len());
+                }
+                Err(e) => {
+                    failed += 1;
+                    eprintln!("cabac_ip_simple frame {idx}: {e}");
+                }
+            }
+        }
+        let pct = if total == 0 {
+            0.0
+        } else {
+            100.0 * (1.0 - mismatch as f64 / total as f64)
+        };
+        eprintln!(
+            "cabac_ip_simple: {failed} / {} frames failed outright; {mismatch} / {total} luma samples differ ({pct:.2}% match)",
+            frames.len()
         );
     }
 }

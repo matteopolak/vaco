@@ -489,6 +489,25 @@ pub(crate) struct MbSummary {
     pub(crate) intra_chroma_pred_mode: u8,
     pub(crate) qpy: i32,
     pub(crate) residual: MbResidual,
+    /// This macroblock's own 16 4x4 luma blocks' final derived motion
+    /// state (clause 8.4.1's own `mvLX`, already `mvpLX + mvdLX`), raster
+    /// order within the macroblock (`[y * 4 + x]`). All-default
+    /// (`pred: None`) for any intra macroblock -- `crate::reconstruct`'s
+    /// own inter path checks `is_intra4x4`/`is_intra16x16`/`is_ipcm`
+    /// first, the same way it already gates between the two intra
+    /// branches, rather than reading this field's own `is_inter()` to
+    /// decide.
+    pub(crate) mv_blocks: [MvInfo; 16],
+}
+
+/// Reads back one just-finished macroblock's own 16 4x4 luma blocks from
+/// the live mv grid, raster order, for [`MbSummary::mv_blocks`].
+#[allow(clippy::integer_division, reason = "i in 0..16, /4 is the raster row within a 4x4 grid, exact by construction")]
+fn collect_mv_blocks(grids: &CabacGrids, mb_x: u32, mb_y: u32) -> [MvInfo; 16] {
+    core::array::from_fn(|i| {
+        let (bx, by) = (i as u32 % 4, i as u32 / 4);
+        grids.mv_at(mb_x * 4 + bx, mb_y * 4 + by)
+    })
 }
 
 /// Refusal reasons this module names explicitly rather than trying and
@@ -1490,10 +1509,53 @@ struct CabacMbInfo {
 /// `B_Skip`, and `Intra` cases alike (all three zero out the same way), not
 /// three separate checks.
 #[derive(Debug, Clone, Copy, Default)]
-struct MvInfo {
+pub(crate) struct MvInfo {
     pred: Option<PartPred>,
     ref_idx: [i8; 2],
     mvd: [(i16, i16); 2],
+    /// The final derived motion vector (clause 8.4.1's own `mvLX`,
+    /// `mvpLX + mvdLX`), per list -- distinct from `mvd` (the raw
+    /// differential, still needed as-is by `mvd_abs_term`'s own clause
+    /// 9.3.3.1.1.7 context derivation). `(0, 0)` for any list `pred`
+    /// does not read, same convention as `mvd`.
+    mv: [(i16, i16); 2],
+}
+
+impl MvInfo {
+    /// `true` for a real inter partition (`pred.is_some()`) -- `false`
+    /// uniformly for intra, not-yet-decoded, and P_Skip/B_Skip *before*
+    /// this round's own fix (now also `true` for those, see the skip
+    /// branch's own comment).
+    pub(crate) const fn is_inter(&self) -> bool {
+        self.pred.is_some()
+    }
+
+    pub(crate) const fn ref_idx_l0(&self) -> i8 {
+        self.ref_idx[0]
+    }
+
+    pub(crate) const fn mv_l0(&self) -> (i16, i16) {
+        self.mv[0]
+    }
+
+    /// This neighbour's contribution to `crate::motion`'s median
+    /// predictor for `list`, clause 8.4.1.3's own "not available, intra,
+    /// or a different reference list" substitution: `pred: None` (never
+    /// decoded here at all -- unavailable, intra, or I_PCM) or `pred`
+    /// not reading `list` both collapse to
+    /// [`crate::motion::Neighbour::UNAVAILABLE`].
+    #[allow(clippy::indexing_slicing, reason = "list is always 0 or 1 here, matching this struct's own fixed 2-element ref_idx/mv arrays")]
+    const fn as_motion_neighbour(self, list: usize) -> crate::motion::Neighbour {
+        let reads = match (self.pred, list) {
+            (Some(PartPred::L0 | PartPred::Bi), 0) | (Some(PartPred::L1 | PartPred::Bi), 1) => true,
+            _ => false,
+        };
+        if reads {
+            crate::motion::Neighbour { available: true, ref_idx: self.ref_idx[list], mv: self.mv[list] }
+        } else {
+            crate::motion::Neighbour::UNAVAILABLE
+        }
+    }
 }
 
 /// Absolute-coordinate 2D index, bounds-checked — the same shape
@@ -2279,6 +2341,37 @@ pub fn decode_slice_cabac(
         let is_first_mb_in_slice = curr_mb_addr == header.first_mb_in_slice;
         grids.begin_macroblock(mb_x, mb_y);
         if skipped {
+            // P_Skip's own motion vector (clause 8.4.1.1) is derived and
+            // written into the live mv grid *before* set_mb_info runs,
+            // for the same reason CabacGrids::current_macroblock_info
+            // exists: a later macroblock's own A/B/C neighbour lookup
+            // must see this macroblock as a real, available, ref_idx == 0
+            // inter macroblock, not the zeroed MvInfo::default() a
+            // never-written grid position would otherwise read back as
+            // "unavailable" -- exactly the same class of timing hazard
+            // already fixed once in this file, applied here to a grid
+            // this decode path had not populated at all until now.
+            let ax = mb_x * 4;
+            let ay = mb_y * 4;
+            let left = ax.checked_sub(1).map_or_else(MvInfo::default, |lx| grids.mv_at(lx, ay));
+            let above = ay.checked_sub(1).map_or_else(MvInfo::default, |ay2| grids.mv_at(ax, ay2));
+            let c_neighbour = resolve_c(&grids, ax, mb_x * 4 + 3, ay);
+            let skip_mv = crate::motion::p_skip_mv(
+                left.as_motion_neighbour(0),
+                above.as_motion_neighbour(0),
+                c_neighbour.as_motion_neighbour(0),
+            );
+            let info = MvInfo {
+                pred: Some(PartPred::L0),
+                ref_idx: [0, -1],
+                mvd: [(0, 0), (0, 0)],
+                mv: [skip_mv, (0, 0)],
+            };
+            for y in 0..4u32 {
+                for x in 0..4u32 {
+                    grids.set_mv(mb_x * 4 + x, mb_y * 4 + y, info);
+                }
+            }
             grids.set_mb_info(
                 mb_x,
                 mb_y,
@@ -2301,6 +2394,7 @@ pub fn decode_slice_cabac(
                 intra_chroma_pred_mode: 0,
                 qpy,
                 residual: MbResidual::default(),
+                mv_blocks: collect_mv_blocks(&grids, mb_x, mb_y),
             });
             if is_first_mb_in_slice {
                 stats.first_slice_mb_cbp = Some((0, 0));
@@ -2332,6 +2426,7 @@ pub fn decode_slice_cabac(
                 intra_chroma_pred_mode: info.map(|i| i.intra_chroma_pred_mode).unwrap_or(0),
                 qpy,
                 residual: residual.clone(),
+                mv_blocks: collect_mv_blocks(&grids, mb_x, mb_y),
             });
             if is_first_mb_in_slice {
                 stats.first_slice_mb_cbp = info.map(|i| (i.cbp_luma, i.cbp_chroma));
@@ -2609,6 +2704,51 @@ fn decode_macroblock_cabac(
 /// conventionally derived from clause 6.4.7.5: the position immediately
 /// left of, or above, that corner).
 #[allow(clippy::too_many_arguments)]
+/// Clause 8.4.1.3.2's `C` (above-right of the partition's own top-right
+/// 4x4 block, at absolute grid position `(right_x + 1, top_y - 1)`) with
+/// its own `D` (above-left of the partition's own top-left 4x4 block, at
+/// `(left_x - 1, top_y - 1)`) fallback when `C` is unavailable -- one
+/// shared helper since every partition shape needs exactly this lookup,
+/// never a bare above-right alone. Grid positions that are genuinely
+/// unavailable (picture edge, not-yet-decoded in raster+z-order, or
+/// intra) all read back as `MvInfo::default()` (`pred: None`) uniformly
+/// -- see `MvInfo`'s own doc for why that convention already covers
+/// P_Skip/B_Skip/Intra alike, which is exactly clause 8.4.1.3.2's own
+/// "not available" condition too, so no separate boundary check is
+/// needed here beyond the grid's own bounds check.
+/// Maps a partition's own macroblock-relative 4x4-block rectangle to the
+/// shape `crate::motion::predict_mv` needs to know about -- only `16x8`
+/// (width 4, height 2) and `8x16` (width 2, height 4) have their own
+/// directional shortcut; every other shape (`16x16`, and every `P_8x8`
+/// sub-partition) uses the plain median unconditionally.
+const fn partition_shape(x0: u32, y0: u32, x1: u32, y1: u32) -> crate::motion::PartitionShape {
+    let (w, h) = (x1 - x0 + 1, y1 - y0 + 1);
+    if w == 4 && h == 2 {
+        if y0 == 0 {
+            crate::motion::PartitionShape::Top16x8
+        } else {
+            crate::motion::PartitionShape::Bottom16x8
+        }
+    } else if w == 2 && h == 4 {
+        if x0 == 0 {
+            crate::motion::PartitionShape::Left8x16
+        } else {
+            crate::motion::PartitionShape::Right8x16
+        }
+    } else {
+        crate::motion::PartitionShape::Whole
+    }
+}
+
+fn resolve_c(grids: &CabacGrids, left_x: u32, right_x: u32, top_y: u32) -> MvInfo {
+    let Some(above_y) = top_y.checked_sub(1) else { return MvInfo::default() };
+    let c = grids.mv_at(right_x + 1, above_y);
+    if c.pred.is_some() {
+        return c;
+    }
+    left_x.checked_sub(1).map_or_else(MvInfo::default, |lx| grids.mv_at(lx, above_y))
+}
+
 fn decode_one_partition_cabac(
     cabac: &mut CabacDecoder<'_>,
     header: &SliceHeader,
@@ -2651,7 +2791,31 @@ fn decode_one_partition_cabac(
         mvd[1] = (i16::try_from(x).unwrap_or(i16::MAX), i16::try_from(y).unwrap_or(i16::MAX));
     }
 
-    let info = MvInfo { pred: Some(pred), ref_idx, mvd };
+    let shape = partition_shape(x0, y0, x1, y1);
+    let c_neighbour = resolve_c(grids, mb_x * 4 + x0, mb_x * 4 + x1, ay);
+    let mut mv = [(0i16, 0i16); 2];
+    if pred.reads_l0() {
+        let pmv = crate::motion::predict_mv(
+            shape,
+            left.as_motion_neighbour(0),
+            above.as_motion_neighbour(0),
+            c_neighbour.as_motion_neighbour(0),
+            ref_idx[0],
+        );
+        mv[0] = (pmv.0.saturating_add(mvd[0].0), pmv.1.saturating_add(mvd[0].1));
+    }
+    if pred.reads_l1() {
+        let pmv = crate::motion::predict_mv(
+            shape,
+            left.as_motion_neighbour(1),
+            above.as_motion_neighbour(1),
+            c_neighbour.as_motion_neighbour(1),
+            ref_idx[1],
+        );
+        mv[1] = (pmv.0.saturating_add(mvd[1].0), pmv.1.saturating_add(mvd[1].1));
+    }
+
+    let info = MvInfo { pred: Some(pred), ref_idx, mvd, mv };
     for y in y0..=y1 {
         for x in x0..=x1 {
             grids.set_mv(mb_x * 4 + x, mb_y * 4 + y, info);
@@ -2709,6 +2873,7 @@ fn decode_two_partitions_cabac(
             }
         }
     }
+    let mut mv = [[(0i16, 0i16); 2]; 2];
     for list in 0..2usize {
         for p in 0..2usize {
             let reads = if list == 0 { preds[p].reads_l0() } else { preds[p].reads_l1() };
@@ -2719,13 +2884,24 @@ fn decode_two_partitions_cabac(
                 let sum_y = mvd_abs_term(left, list, 1) + mvd_abs_term(above, list, 1);
                 let y = decode_mvd_component(cabac, &mut ctx.mvd_comp1, sum_y);
                 mvd[p][list] = (i16::try_from(x).unwrap_or(i16::MAX), i16::try_from(y).unwrap_or(i16::MAX));
+                let (x0, y0, x1, y1) = rects[p];
+                let shape = partition_shape(x0, y0, x1, y1);
+                let c_neighbour = resolve_c(grids, mb_x * 4 + x0, mb_x * 4 + x1, mb_y * 4 + y0);
+                let pmv = crate::motion::predict_mv(
+                    shape,
+                    left.as_motion_neighbour(list),
+                    above.as_motion_neighbour(list),
+                    c_neighbour.as_motion_neighbour(list),
+                    ref_idx[p][list],
+                );
+                mv[p][list] =
+                    (pmv.0.saturating_add(mvd[p][list].0), pmv.1.saturating_add(mvd[p][list].1));
                 // Writing the grid immediately (rather than after every list
                 // is read) is required, not cosmetic: the *other* partition's
                 // own neighbour lookup two lines above must see this one's
                 // values once decoded, matching clause 6.4.7.5's ordinary
                 // same-macroblock case.
-                let info = MvInfo { pred: Some(preds[p]), ref_idx: ref_idx[p], mvd: mvd[p] };
-                let (x0, y0, x1, y1) = rects[p];
+                let info = MvInfo { pred: Some(preds[p]), ref_idx: ref_idx[p], mvd: mvd[p], mv: mv[p] };
                 for yy in y0..=y1 {
                     for xx in x0..=x1 {
                         grids.set_mv(mb_x * 4 + xx, mb_y * 4 + yy, info);
@@ -2793,16 +2969,34 @@ fn decode_sub_mb_pred_cabac(
             let sum_y = mvd_abs_term(sleft, 0, 1) + mvd_abs_term(sabove, 0, 1);
             let y = decode_mvd_component(cabac, &mut ctx.mvd_comp1, sum_y);
             let mvd = [(i16::try_from(x).unwrap_or(i16::MAX), i16::try_from(y).unwrap_or(i16::MAX)), (0, 0)];
-            let info = MvInfo { pred: Some(pred), ref_idx, mvd };
+            let c_neighbour = resolve_c(grids, sax, sax, say);
+            let pmv = crate::motion::predict_mv(
+                crate::motion::PartitionShape::Whole,
+                sleft.as_motion_neighbour(0),
+                sabove.as_motion_neighbour(0),
+                c_neighbour.as_motion_neighbour(0),
+                ref_idx[0],
+            );
+            let mv = [(pmv.0.saturating_add(mvd[0].0), pmv.1.saturating_add(mvd[0].1)), (0, 0)];
+            let info = MvInfo { pred: Some(pred), ref_idx, mvd, mv };
             grids.set_mv(sax, say, info);
         }
         for y in y0..=y1 {
             for x in x0..=x1 {
                 if grids.mv_at(mb_x * 4 + x, mb_y * 4 + y).pred.is_none() {
+                    // A sub-4x4/4x8/8x4 quadrant whose own num_sub loop
+                    // above did not cover every 4x4 position in this
+                    // quadrant (the "approximated as halves" case noted
+                    // above) -- filled with the quadrant's own last
+                    // decoded sub-partition's mv/mvd rather than left at
+                    // the default "unavailable" zero, so a later
+                    // partition's own neighbour lookup sees a real
+                    // (if approximate) value here instead of "not
+                    // available".
                     grids.set_mv(
                         mb_x * 4 + x,
                         mb_y * 4 + y,
-                        MvInfo { pred: Some(pred), ref_idx, mvd: [(0, 0), (0, 0)] },
+                        MvInfo { pred: Some(pred), ref_idx, mvd: [(0, 0), (0, 0)], mv: [(0, 0), (0, 0)] },
                     );
                 }
             }
