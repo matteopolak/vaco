@@ -85,6 +85,69 @@ fn ticks_per_frame_is_two_only_for_the_measured_codecs() {
 /// - DTS's codec is `dts` with the long name `"DCA (DTS Coherent Acoustics)"`,
 ///   while its decoder is `dca`. `-h decoder=dts` gives the wrong string.
 ///
+/// One row of `ffmpeg -codecs`, parsed once and compared against every
+/// dimension [`CodecId`] states: `name`/`long_name` are read here exactly as
+/// the reference prints them, deliberately **without** `-bitexact` — that
+/// flag suppresses `*_long_name` on `ffprobe`'s *per-stream* output
+/// (`-show_streams`), and has no effect on this static capability listing at
+/// all (measured: `ffmpeg -bitexact -hide_banner -codecs` and the same
+/// command without it produce byte-identical rows). A probe that instead
+/// compares a real decoded/muxed file's `-show_streams` output against the
+/// reference generally *should* pass `-bitexact` on both sides — this one
+/// does not need to, because nothing here opens a stream.
+struct RefCodec<'a> {
+    media: MediaType,
+    intra_only: bool,
+    lossy: bool,
+    lossless: bool,
+    long_name: &'a str,
+}
+
+/// Names in [`CodecId::all`] that `ffmpeg -codecs` does not list at all —
+/// excluded explicitly, not silently skipped, so a name that is *supposed*
+/// to be absent cannot quietly stop being checked if it later gains a real
+/// reference codec of the same spelling.
+///
+/// `"pcm"` is this crate's own generic bucket for a family the reference
+/// only ever names specifically (`pcm_s16le`, `pcm_alaw`, …); no
+/// `codec_name=pcm` exists to compare against.
+const NOT_IN_REFERENCE: &[&str] = &["pcm"];
+
+/// Ids whose flags this pass measured as disagreeing with the reference and
+/// deliberately left alone, with the reason — not silently accepted, and not
+/// blindly forced to match either. Each is a case where matching the
+/// reference's raw I/L/S columns would mean asserting something this
+/// project does not actually believe:
+///
+/// * `subrip`/`mov_text`: the reference does not apply the lossy/lossless/
+///   intra vocabulary to text subtitle codecs at all (both print `..S...`
+///   with no `I`/`L`/`S` — wait, no flags whatsoever in those three
+///   columns), so there is nothing to "agree" with; marking a text format
+///   trivially intra-only and lossless is this project's own considered
+///   modelling choice, not a measurement it could get wrong.
+/// * `wrapped_avframe`: an internal passthrough pseudo-codec, not a real
+///   coded format: `-codecs` does not flag it intra-only, but "is this
+///   frame independently decodable" is not a meaningful question for a
+///   pass-through, so keeping the flag was not treated as a bug worth
+///   reverting on a hunch.
+/// * `png`, `h264`, `hevc`, `av1`: `-codecs` marks these `L` **and** `S`
+///   (both lossy- and lossless-capable) or, for `png`, no `I` at all
+///   (PNG's own animated form, APNG, can inter-frame-delta like GIF, which
+///   this table already does not call intra-only). Whether a two-bit
+///   lossy/lossless/intra summary should grow a "both" state for the video
+///   codecs, and whether PNG's animation capability should cost it
+///   `INTRA_ONLY`, are real modelling questions this pass did not have the
+///   standing to answer unilaterally — recorded rather than guessed at.
+const KNOWN_PROPERTY_DIVERGENCES: &[&str] = &[
+    "subrip",
+    "mov_text",
+    "wrapped_avframe",
+    "png",
+    "h264",
+    "hevc",
+    "av1",
+];
+
 /// Skipped rather than failed when `ffmpeg` is absent: CI has it, a contributor
 /// may not, and a test that cannot run is not a test that failed.
 #[test]
@@ -99,14 +162,15 @@ fn the_codec_table_agrees_with_the_reference() {
     };
     let listing = String::from_utf8_lossy(&out.stdout);
 
-    let mut reference: std::collections::BTreeMap<&str, String> = std::collections::BTreeMap::new();
+    let mut reference: std::collections::BTreeMap<&str, RefCodec<'_>> =
+        std::collections::BTreeMap::new();
     for line in listing.lines() {
         // ` DEVILS name  Long name`, six flag columns then two fields.
         let Some(rest) = line.strip_prefix(' ') else {
             continue;
         };
         let (flags, rest) = rest.split_at(rest.char_indices().nth(6).map_or(0, |(i, _)| i));
-        if flags.len() != 6 || !flags.chars().all(|c| "DEVASIL.S-".contains(c)) {
+        if flags.len() != 6 || !flags.chars().all(|c| "DEVASDTIL.S-".contains(c)) {
             continue;
         }
         let mut it = rest.split_whitespace();
@@ -115,7 +179,26 @@ fn the_codec_table_agrees_with_the_reference() {
         // Strip the listing's own annotation; see the doc comment.
         let long = long.split(" (decoders:").next().unwrap_or(long);
         let long = long.split(" (encoders:").next().unwrap_or(long);
-        reference.insert(name, long.to_owned());
+        let Some(media) = (match flags.as_bytes()[2] {
+            b'V' => Some(MediaType::Video),
+            b'A' => Some(MediaType::Audio),
+            b'S' => Some(MediaType::Subtitle),
+            b'D' => Some(MediaType::Data),
+            b'T' => Some(MediaType::Attachment),
+            _ => None,
+        }) else {
+            continue;
+        };
+        reference.insert(
+            name,
+            RefCodec {
+                media,
+                intra_only: flags.as_bytes()[3] == b'I',
+                lossy: flags.as_bytes()[4] == b'L',
+                lossless: flags.as_bytes()[5] == b'S',
+                long_name: long,
+            },
+        );
     }
     assert!(
         reference.len() > 100,
@@ -125,24 +208,63 @@ fn the_codec_table_agrees_with_the_reference() {
 
     let mut wrong = Vec::new();
     for id in CodecId::all() {
-        let Some(long) = reference.get(id.name()) else {
-            // A name the reference does not have is a different question —
-            // `-pix_fmts` found one of those in vaco-pixfmt — but it is not
-            // what this test is for, and several of ours are deliberate.
-            continue;
-        };
-        if long != id.long_name() {
-            wrong.push(format!(
-                "  {}: ours {:?}, reference {:?}",
-                id.name(),
-                id.long_name(),
-                long
-            ));
+        let name = id.name();
+        let known_divergence = KNOWN_PROPERTY_DIVERGENCES.contains(&name);
+        match reference.get(name) {
+            None => {
+                if !NOT_IN_REFERENCE.contains(&name) {
+                    wrong.push(format!(
+                        "  {name}: not in `ffmpeg -codecs` and not in NOT_IN_REFERENCE"
+                    ));
+                }
+            }
+            Some(r) => {
+                if NOT_IN_REFERENCE.contains(&name) {
+                    wrong.push(format!(
+                        "  {name}: listed in NOT_IN_REFERENCE, but the reference does have it"
+                    ));
+                    continue;
+                }
+                if r.long_name != id.long_name() {
+                    wrong.push(format!(
+                        "  {name}: long_name ours {:?}, reference {:?}",
+                        id.long_name(),
+                        r.long_name
+                    ));
+                }
+                if r.media != id.media_type() {
+                    wrong.push(format!(
+                        "  {name}: media_type ours {:?}, reference {:?}",
+                        id.media_type(),
+                        r.media
+                    ));
+                }
+                let props = id.properties();
+                let flag_wrong = r.intra_only != props.contains(CodecProperties::INTRA_ONLY)
+                    || r.lossy != props.contains(CodecProperties::LOSSY)
+                    || r.lossless != props.contains(CodecProperties::LOSSLESS);
+                if flag_wrong && !known_divergence {
+                    wrong.push(format!(
+                        "  {name}: properties ours {:?} (I={} L={} S={}), reference I={} L={} S={}",
+                        props,
+                        props.contains(CodecProperties::INTRA_ONLY),
+                        props.contains(CodecProperties::LOSSY),
+                        props.contains(CodecProperties::LOSSLESS),
+                        r.intra_only,
+                        r.lossy,
+                        r.lossless,
+                    ));
+                } else if !flag_wrong && known_divergence {
+                    wrong.push(format!(
+                        "  {name}: listed in KNOWN_PROPERTY_DIVERGENCES, but properties now agree — remove it from the list"
+                    ));
+                }
+            }
         }
     }
     assert!(
         wrong.is_empty(),
-        "long names disagree:\n{}",
+        "codec table disagrees with the reference:\n{}",
         wrong.join("\n")
     );
 }
