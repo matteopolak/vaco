@@ -116,6 +116,26 @@ pub trait PacketMap: Send {
     /// [`Error::NeedMoreInput`]/[`Error::Eof`]/[`Error::OutputPending`]; those
     /// three are [`MappedFilter`]'s vocabulary, not [`PacketMap`]'s.
     fn push(&mut self, packet: Option<&Packet>, out: &mut VecDeque<Packet>) -> Result<()>;
+
+    /// Set one filter-private option by name (gap 12,
+    /// `planning/INTERFACE-GAPS.md`) — [`MappedFilter`]'s
+    /// [`BitstreamFilter::set_option`] forwards here, so a filter written
+    /// against this trait gets the same seam without implementing
+    /// [`BitstreamFilter`] by hand.
+    ///
+    /// The default matches [`BitstreamFilter::set_option`]'s own: "no such
+    /// option" for every name. A filter that has options overrides this, not
+    /// [`MappedFilter`].
+    ///
+    /// # Errors
+    /// [`Error::Option`] naming `name`. The default always errs.
+    fn set_option(&mut self, name: &str, value: &str) -> Result<()> {
+        let _ = value;
+        Err(Error::Option {
+            name: name.to_owned(),
+            detail: "this bitstream filter has no such option".to_owned(),
+        })
+    }
 }
 
 /// Turns a [`PacketMap`] into a full [`BitstreamFilter`].
@@ -178,6 +198,15 @@ impl<T: PacketMap> BitstreamFilter for MappedFilter<T> {
             None => Err(Error::NeedMoreInput),
         }
     }
+
+    // Forwarded explicitly, not inherited from the default: the default
+    // would answer "no such option" for every `MappedFilter`, silently
+    // hiding whatever `T`'s own `PacketMap::set_option` overrides — the
+    // same `Box<dyn Muxer>`/wrapper trap gap 9 and gap 12's own doc comment
+    // name, one layer down.
+    fn set_option(&mut self, name: &str, value: &str) -> Result<()> {
+        self.inner.set_option(name, value)
+    }
 }
 
 #[cfg(test)]
@@ -225,6 +254,55 @@ mod tests {
         let mut f = MappedFilter::new(Doubler);
         f.send_packet(None).unwrap();
         assert!(f.send_packet(Some(&pkt(1))).is_err());
+    }
+
+    #[test]
+    fn set_option_default_refuses_every_name() {
+        let mut f = MappedFilter::new(Doubler);
+        assert!(f.set_option("anything", "1").is_err());
+    }
+
+    /// A `PacketMap` with a real option, wrapped in `MappedFilter` — proving
+    /// `MappedFilter::set_option` reaches `T::set_option` rather than
+    /// silently taking the trait default (gap 12's own named trap, one
+    /// layer down from `Box<dyn Muxer>`). `known` starts `false`; a caller
+    /// setting `known=1` through the `BitstreamFilter` face and observing
+    /// `push` change its output is the deliberate-wrong-value check.
+    struct Configurable {
+        known: bool,
+    }
+    impl PacketMap for Configurable {
+        fn push(&mut self, packet: Option<&Packet>, out: &mut VecDeque<Packet>) -> Result<()> {
+            if let Some(p) = packet {
+                out.push_back(if self.known { pkt(9) } else { p.clone() });
+            }
+            Ok(())
+        }
+        fn set_option(&mut self, name: &str, value: &str) -> Result<()> {
+            if name == "known" {
+                self.known = value == "1";
+                Ok(())
+            } else {
+                Err(Error::Option { name: name.to_owned(), detail: "unknown".to_owned() })
+            }
+        }
+    }
+
+    #[test]
+    fn mapped_filter_forwards_set_option_to_the_inner_packet_map() {
+        let mut f: MappedFilter<Configurable> = MappedFilter::new(Configurable { known: false });
+        // Reached through `BitstreamFilter::set_option` — the face a
+        // `Box<dyn BitstreamFilter>` caller actually holds.
+        let bf: &mut dyn BitstreamFilter = &mut f;
+        bf.set_option("known", "1").unwrap();
+        bf.send_packet(Some(&pkt(1))).unwrap();
+        assert_eq!(bf.receive_packet().unwrap().payload(), &[9]);
+    }
+
+    #[test]
+    fn mapped_filter_still_rejects_an_unknown_option_name() {
+        let mut f = MappedFilter::new(Configurable { known: false });
+        assert!(f.set_option("nope", "1").is_err());
     }
 
     /// A filter that emits far more than it consumes trips the queue cap

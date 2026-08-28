@@ -10,12 +10,21 @@
 //! caller validated). A malformed record must degrade to "no parameter sets
 //! to splice", never panic.
 //!
-//! `h264_metadata`/`hevc_metadata` need no extradata (they are the measured
-//! identity transform — see their own module docs), so they are driven over
+//! `h264_metadata`/`hevc_metadata` need no extradata, so they are driven over
 //! the same packet payload as a second, independent check in this target
 //! rather than a separate `[[bin]]`: one more `PacketMap::push` call per run
 //! is cheap, and it means this crate's four filters are covered by two fuzz
 //! targets total instead of needing a third just for the two newest ones.
+//! At the bare-name default (`aud=pass`), both are still the measured
+//! identity transform and this target still asserts it byte for byte.
+//!
+//! `h264_metadata`'s `aud=insert` (gap 12) is new attacker-adjacent parsing:
+//! it scans the payload for NAL units and reads a slice header's first two
+//! `ue(v)` fields on every one it finds, which is exactly the class of
+//! untrusted-input parsing D6 exists to fuzz. `control`'s top bit selects it
+//! (H.264 only, since `hevc_metadata` does not implement the option); the
+//! byte-identity assertion does not apply once `aud` is no longer `pass`, so
+//! the only property checked there is "does not panic and does not loop".
 //!
 //! fuzz-crate: vaco-bsf-h2645
 
@@ -102,6 +111,15 @@ fuzz_target!(|data: &[u8]| {
         (h264_metadata::DESC.build)(&metadata_params)
     };
     if let Ok(mut mf) = metadata_built {
+        // Bit 3: exercise `aud` (gap 12), H.264 only — `hevc_metadata` does
+        // not implement it, so this is still the bare-name default there.
+        let aud_set = !hevc && control & 0x08 != 0;
+        let identity_expected = if aud_set {
+            let value = if control & 0x10 != 0 { "insert" } else { "remove" };
+            mf.set_option("aud", value).is_err()
+        } else {
+            true
+        };
         if let Ok(pkt) = Packet::from_slice(&mut budget, payload) {
             if mf.send_packet(Some(&pkt)).is_ok() {
                 let mut steps = 0u32;
@@ -109,7 +127,11 @@ fuzz_target!(|data: &[u8]| {
                     steps += 1;
                     assert!(steps < MAX_STEPS, "metadata receive loop did not terminate");
                     match mf.receive_packet() {
-                        Ok(out) => assert_eq!(out.payload(), payload, "*_metadata must be identity"),
+                        Ok(out) => {
+                            if identity_expected {
+                                assert_eq!(out.payload(), payload, "*_metadata must be identity");
+                            }
+                        }
                         Err(_) => break,
                     }
                 }

@@ -17,6 +17,8 @@ vaco-bsf-core = { path = "../vaco-bsf-core" }
 vaco-format-nalu = { path = "../vaco-format-nalu" }
 vaco-parse-h264 = { path = "../../codec/vaco-parse-h264" }
 vaco-parse-hevc = { path = "../../codec/vaco-parse-hevc" }
+vaco-bitstream = { path = "../../core/vaco-bitstream" }
+vaco-codec-golomb = { path = "../../signal/vaco-codec-golomb" }
 
 [dev-dependencies]
 

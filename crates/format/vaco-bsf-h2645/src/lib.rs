@@ -38,25 +38,28 @@
 //! `vaco-bsf-av1::metadata`'s docs already name. Left unbuilt, and the gap
 //! recorded rather than worked around silently.
 //!
-//! # Gap 12 (`BsfProvider::open` has no option string) — not closed here
+//! # Gap 12 (`BsfProvider::open` has no option string) — `aud` closed, the rest is not
 //!
-//! `planning/INTERFACE-GAPS.md` gap 12 is the reason every option on
-//! `h264_metadata`/`hevc_metadata` (and `dts2pts`, if it existed) is
-//! unreachable. It is a trait method, not a bare fn pointer, so — mirroring
-//! how gaps 4/5/6 were substituted the same day this crate was extended, by
-//! adding a defaulted `Muxer::set_option` — it could plausibly be closed by a
-//! defaulted `BitstreamFilter::set_option(&mut self, name: &str, value: &str)
-//! -> Result<()>` (default: `Err(Error::Unsupported(..))`), called after
-//! `open` and before the first packet. That trait lives in
-//! `vaco-codec-core`, which is not a crate this issue's owner has standing to
-//! edit (single-writer rule) — so the shape is recorded here, in
-//! `planning/INTERFACE-GAPS.md`, and in the issue-closing report, rather than
-//! applied silently. Until it lands (and a CLI-side `-bsf:v name=opts`
-//! parser is wired to call it — a separate, larger piece of work gap 12's
-//! own text already flags as out of scope), every `*_metadata` filter in
-//! this tree is the bare-name behaviour and nothing else. That is still
-//! worth registering exactly where the bare-name behaviour is *measured*
-//! identity, which is the case for both filters below.
+//! `BitstreamFilter::set_option(&mut self, name: &str, value: &str) ->
+//! Result<()>` landed in `vaco-codec-core`, defaulted to
+//! `Err(Error::Option(..))`, exactly the shape this crate's docs previously
+//! recorded as the plausible fix. `h264_metadata`'s `aud` is the first real
+//! caller — see that module's doc for the measurement (`insert`/`remove`
+//! are structural byte-level edits, not a field inside an existing SPS/VUI,
+//! which is what let this one option ship without the CBS write path below).
+//! `hevc_metadata`'s own `aud` is not yet wired to the same option — this
+//! pass measured and closed one filter, not the whole surface, per D19
+//! rather than guessing `hevc_metadata`'s AUD NAL header layout (two bytes,
+//! not H.264's one) matches without checking.
+//!
+//! What is still true: a CLI-side `-bsf:v name=opts` parser that calls
+//! `set_option` from a graph-syntax string does not exist yet — a separate,
+//! larger piece of work gap 12's own text already flagged as out of scope —
+//! so `aud` is reachable from Rust callers (and this crate's own tests) but
+//! not yet from `vaco-cli`. Every other option on both filters remains
+//! unreachable for the reason below: it would rewrite a field *inside* an
+//! existing SPS/VUI, which needs the CBS write path this crate still does
+//! not have.
 //!
 //! # How it works
 //!
