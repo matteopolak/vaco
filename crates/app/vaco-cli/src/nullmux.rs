@@ -371,6 +371,16 @@ impl Muxer for TallyingMuxer {
         // binary opens and `MuxBuilder::open`'s call to this method.
         self.inner.set_bitexact(bitexact);
     }
+
+    // Forwarded explicitly, not inherited from the default — same trap as
+    // `add_stream_with` above (gap 9) and documented on
+    // `vaco_format_core::Muxer::bind_url` (gap 2): the default always
+    // answers `Unsupported`, which would make every `NEEDNUMBER` muxer
+    // `open_output` opens (image2, and any future segmenting muxer) look
+    // unsupported regardless of what the wrapped muxer actually implements.
+    fn bind_url(&mut self, url: &str) -> Result<()> {
+        self.inner.bind_url(url)
+    }
 }
 
 #[cfg(test)]

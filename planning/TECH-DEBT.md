@@ -569,26 +569,6 @@ is unaffected — measured essentially bit-exact against `ffmpeg` (max-abs-
 deviation 1, i.e. IDCT floating-point rounding) across the full
 subsampling/restart-interval/optimized-Huffman matrix tested.
 
-**Now closed.** Root cause: `ac_refine`'s skip walk treated "the skip run
-has just reached zero" identically for a ZRL and a sized `RS` symbol. A
-ZRL has nothing to place, so it must stop the instant its 16-position count
-is spent, whatever it lands on; a sized symbol's landing position must be
-a coefficient that is genuinely zero (a valid stream never targets an
-already-established one), so if the count runs out on a nonzero
-coefficient the walk merely passed, that is not the landing spot and the
-walk must keep going. The two single-block Python cross-checks above had
-both been consistent with one one-sided rule or the other by coincidence;
-the actual repro needed a multi-symbol, mixed-kind sequence within one
-block, found via a targeted 66x50/4:2:2/restart-interval-4 case pulled out
-of a 1296-combination randomized sweep, then confirmed against
-libjpeg-turbo's own `jpeg_read_coefficients` ground truth (not just final
-pixels) by truncating the file after each scan. Fixed and covered by two
-new `ac_refine`-level regression tests, one per symbol kind. The
-1296-combination matrix (subsampling x quality x restart interval x
-optimized Huffman x image size) now shows zero discrepancies at the pixel
-level, and the specific repro matches libjpeg-turbo coefficient-for-
-coefficient across all ten of its scans.
-
 ### `vaco-codec-jpeg` has no `vaco-codec-vlc` to build its Huffman/entropy layer on
 
 D-01 names a shared VLC/entropy-coding crate as the intended home for this
