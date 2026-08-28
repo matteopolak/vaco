@@ -11,7 +11,7 @@
 //! (ffmpeg 8.1, 2026-08-23) with that exact spelling and arity — the row
 //! matches the reference in both directions, nothing to add or drop.
 //!
-//! **Ten landed in this crate**: `psnr`, `ssim`, `identity`, `msad`,
+//! **Eleven landed in this crate**: `psnr`, `ssim`, `identity`, `msad`,
 //! `signalstats`, `blackdetect`, `blackframe`, `bbox` — the six the brief
 //! calls out to land first, plus `msad` (a near-free extension of the
 //! `identity`/`psnr` machinery and of `vaco-filter-vdsp`) and `blackframe`
@@ -24,9 +24,10 @@
 //! formula that matches at one amplitude and not another, and a per-pixel
 //! bit-noise metric whose numerator stayed constant while its denominator
 //! tracked frame width in a way no simple per-pixel formula reproduced in
-//! the time available. Neither was shipped as a guess.
+//! the time available. Neither was shipped as a guess. [`showinfo`] landed
+//! once interface gap 13 closed — see below.
 //!
-//! **Thirteen did not land**, for four different reasons:
+//! **Twelve did not land**, for four different reasons:
 //!
 //! * `vmafmotion`, `ssim360`, `vif`, `signature` — explicitly named in the
 //!   brief as likely-to-leave. `vif` needs a wavelet-domain natural-scene
@@ -44,17 +45,36 @@
 //!   shipping an under-measured `xpsnr` in the crate other filters are
 //!   verified against was judged worse than leaving it out and saying so.
 //! * `blockdetect`, `bitplanenoise`, `entropy`, `siti`, `readeia608`,
-//!   `readvitc`, `showinfo`, `photosensitivity`, `scdet`, `codecview`,
+//!   `readvitc`, `photosensitivity`, `scdet`, `codecview`,
 //!   `cropdetect` — not explicitly named by the brief, left for pace
 //!   reasons and one real interface gap:
-//!   - `showinfo` and `codecview` do not fit this crate's whole model.
-//!     `showinfo` is measured (`ffprobe -show_frames` through it) to write
-//!     **no** frame metadata at all — its output is a console log line, a
-//!     channel this workspace's filter framework does not have — so
-//!     interface gap 11 does not help it; it needs a different gap.
-//!     `codecview` visualises motion vectors, which are not a
-//!     `vaco_frame::FrameSideData` variant this workspace has yet — a
-//!     decoder-side gap, not a measurement-formula gap.
+//!   - `codecview` still does not fit this crate's whole model: it
+//!     visualises motion vectors, and while `vaco_frame::FrameSideData`
+//!     grew a `MotionVectors` variant closing interface gap 14's *shape*,
+//!     no decoder in this workspace populates one (D5) — a decoder-side
+//!     gap, not a measurement-formula gap, and not reachable from a filter
+//!     crate regardless of the side-data variant existing. `showinfo`
+//!     *did* land — see the gap 13 section below — once its own channel
+//!     existed.
+//!
+//! ## Interface gap 13 closed: `showinfo`
+//!
+//! [`vaco_frame::FrameSideData::Log`] is the console-log-only channel
+//! `showinfo` needed: measured (`ffprobe -show_frames` through it, `ffmpeg
+//! 8.1`) to write no `AVFrame::metadata` at all, so interface gap 11's
+//! dictionary genuinely could not have carried its output, whatever key it
+//! was stuffed under. [`showinfo`] reproduces the reference's own two-line
+//! format byte for byte against a real synthetic frame — see that module's
+//! doc for every field's measurement, including the Adler-32 checksum seed
+//! (`(a=0, b=0)`, the same one `planning/AGENT-CONSTRAINTS.md` already
+//! recorded for `framecrc`/`framehash`, confirmed independently here) and
+//! the population-vs-sample standard deviation distinction.
+//!
+//! Not reproduced: the two `config in`/`config out` lines the reference
+//! prints once per graph link rather than per frame (out of scope for a
+//! per-`Frame` side-data channel), and anything for a pixel format deeper
+//! than 8 bits per component (not measured — every fixture available was
+//! `yuv420p`).
 //!   - `readeia608`/`readvitc` need bit-accurate waveform decoding
 //!     (EIA-608 line-21 encoding, SMPTE VITC bi-phase marks) that is
 //!     substantial to get right and, without a real captured line to decode
@@ -147,6 +167,7 @@ pub mod identity;
 pub mod msad;
 pub mod psnr;
 pub mod registry;
+pub mod showinfo;
 pub mod signalstats;
 pub mod ssim;
 mod video;

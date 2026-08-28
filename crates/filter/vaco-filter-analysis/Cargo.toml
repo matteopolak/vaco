@@ -1,6 +1,6 @@
 [package]
 name = "vaco-filter-analysis"
-description = "T2/T3 video measurement filters: psnr, ssim, identity, msad, signalstats, blackdetect, blackframe, bbox. Plan 16 SS4.3. Every filter here only measures; it writes its answer to Frame::metadata() (interface gap 11)."
+description = "T2/T3 video measurement filters: psnr, ssim, identity, msad, signalstats, blackdetect, blackframe, bbox, entropy, cropdetect, showinfo. Plan 16 SS4.3. Most filters here only measure and write their answer to Frame::metadata() (interface gap 11); showinfo writes to Frame's log-only channel instead (interface gap 13)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,6 +10,7 @@ authors.workspace = true
 
 [dependencies]
 vaco-core = { path = "../../core/vaco-core" }
+vaco-hash = { path = "../../core/vaco-hash" }
 vaco-frame = { path = "../../model/vaco-frame" }
 vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
 vaco-filter-core = { path = "../../filter/vaco-filter-core" }

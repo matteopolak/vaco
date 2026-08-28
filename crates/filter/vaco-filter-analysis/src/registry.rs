@@ -15,6 +15,7 @@ const NAMES: &[&str] = &[
     "identity",
     "msad",
     "psnr",
+    "showinfo",
     "signalstats",
     "ssim",
 ];
@@ -38,6 +39,7 @@ impl FilterRegistry for AnalysisRegistry {
             "identity" => crate::identity::create(req),
             "msad" => crate::msad::create(req),
             "psnr" => crate::psnr::create(req),
+            "showinfo" => crate::showinfo::create(req),
             "signalstats" => crate::signalstats::create(req),
             "ssim" => crate::ssim::create(req),
             other => return Err(format!("vaco-filter-analysis: no filter named `{other}`")),
