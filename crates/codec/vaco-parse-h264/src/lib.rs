@@ -113,6 +113,7 @@
 
 pub mod a53;
 pub mod avcc;
+pub mod cbs;
 pub mod nal;
 pub mod params;
 pub mod parser;
