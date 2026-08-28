@@ -337,13 +337,16 @@ impl PcmDemuxer {
             ..AudioParameters::default()
         };
         let mut params = CodecParameters::new(MediaType::Audio);
-        params.codec_id = Some(CodecId::Pcm);
+        // `CodecId::from_name` resolves the exact subtype (`pcm_alaw`,
+        // `pcm_s16le`, ...) — the generic `CodecId::Pcm` fallback below is
+        // dead in practice (every name in `PCM_FORMATS` has a real variant
+        // today; see `vaco-mux-raw`'s own registrations, which already use
+        // them) and is kept only because a resolution failure should still
+        // produce a demuxable stream rather than an error.
+        params.codec_id = Some(CodecId::from_name(spec.codec_name).unwrap_or(CodecId::Pcm));
         params.audio = Some(audio);
         let mut stream = Stream::new(0, MediaType::Audio, time_base);
         stream.params = params;
-        // `CodecId::Pcm` has no per-subtype variant (see crate docs), so the
-        // reference's specific `codec_name` (e.g. `pcm_s16le`) is recorded
-        // here rather than lost.
         stream.metadata_set("raw_codec_name", spec.codec_name);
         let bytes_per_frame = u64::from(spec.container_bytes) * u64::from(opts.layout.channels);
         Ok(Self {
