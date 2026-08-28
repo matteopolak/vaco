@@ -1,0 +1,19 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+
+[[component]]
+kind      = "decoder"
+name      = "png"
+long_name = "PNG (Portable Network Graphics) image, wrapping the `png` crate (D11)"
+feature   = "codec-png"
+ctor      = "vaco_codec_png::PNG_DECODER"
+media     = "video"
+codec     = "png"
+
+[[component]]
+kind      = "encoder"
+name      = "png"
+long_name = "PNG (Portable Network Graphics) image, wrapping the `png` crate (D11)"
+feature   = "codec-png"
+ctor      = "vaco_codec_png::PNG_ENCODER"
+media     = "video"
+codec     = "png"
