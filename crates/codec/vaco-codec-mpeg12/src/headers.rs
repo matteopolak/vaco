@@ -23,20 +23,24 @@ pub(crate) struct SequenceHeader {
     pub non_intra_matrix: [u8; 64],
 }
 
-/// `progressive_sequence` is parsed (correct bitstream framing requires
-/// reading every field `sequence_extension()` declares) but not read back
-/// by this crate: it has no effect on frame-picture decode, the only kind
-/// this crate handles — interlaced *or* progressive content can equally be
-/// carried as frame pictures. `chroma_format` **is** consumed: it drives
-/// `crate::macroblock`'s block count/geometry (§6.3.17.4, Table 6-20),
-/// `coded_block_pattern`'s extension bits (§6.2.5.3), chrominance motion
-/// vector scaling (§7.6.3.7), and the output `PixFmt`
-/// (`crate::decoder::begin_picture`). `crate::decoder::Sequence::ext` is
-/// what a caller reads to tell MPEG-1 from MPEG-2 (`Option::is_some`) —
-/// MPEG-1 has no `sequence_extension()` at all and is always 4:2:0.
+/// `progressive_sequence` has no effect on frame-picture *reconstruction*,
+/// the only kind this crate handles — interlaced or progressive content
+/// can equally be carried as frame pictures. It is consumed for a
+/// different reason: `crate::decoder::pulldown_extra_fields` needs it,
+/// combined with a picture's own `progressive_frame`/`repeat_first_field`,
+/// to compute pulldown timing (§6.3.10) — the one place this crate reads
+/// past frame-picture reconstruction into presentation metadata.
+/// `chroma_format` is also consumed: it drives `crate::macroblock`'s block
+/// count/geometry (§6.3.17.4, Table 6-20), `coded_block_pattern`'s
+/// extension bits (§6.2.5.3), chrominance motion vector scaling
+/// (§7.6.3.7), and the output `PixFmt` (`crate::decoder::begin_picture`).
+/// `crate::decoder::Sequence::ext` is what a caller reads to tell MPEG-1
+/// from MPEG-2 (`Option::is_some`) — MPEG-1 has no `sequence_extension()`
+/// at all and is always 4:2:0; D.9.14 states MPEG-1 behaves as if
+/// `progressive_sequence == '1'`, which is exactly what a `None` (no
+/// extension) defaults to wherever this crate reads the field.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct SequenceExtension {
-    #[allow(dead_code, reason = "parsed for correct framing; genuinely has no effect on frame-picture decode, see this struct's own doc comment")]
     pub progressive_sequence: bool,
     /// Raw `chroma_format` bits (Table 6-5): `1` = 4:2:0, `2` = 4:2:2, `3`
     /// = 4:4:4, `0` reserved/non-conforming. Callers should route through
@@ -231,9 +235,13 @@ pub(crate) fn picture_header(payload: &[u8]) -> Option<PictureHeader> {
 /// propagates it directly to `FrameFlags::TOP_FIELD_FIRST` (§6.2.3.1's own
 /// bit, unconditionally — a caller that only cares about interlaced
 /// content already has `FrameFlags::INTERLACED`, not set by this crate, to
-/// gate on first). `progressive_frame` is parsed but not yet consumed: it
-/// only matters for a decoder's own deinterlacing choices, out of this
-/// crate's scope.
+/// gate on first). `repeat_first_field` is consumed too, combined with
+/// `progressive_frame` and the sequence-level `progressive_sequence` by
+/// `pulldown_extra_fields` and attached as `vaco_frame::FrameSideData::
+/// Pulldown` — see that function's own doc comment for the exact H.262
+/// combination rule this implements. `progressive_frame` is otherwise
+/// parsed but not yet consumed on its own: it only matters for a
+/// decoder's own deinterlacing choices, out of this crate's scope.
 #[derive(Debug, Clone, Copy)]
 #[allow(
     clippy::struct_excessive_bools,
@@ -252,6 +260,7 @@ pub(crate) struct PictureCodingExtension {
     pub q_scale_type: bool,
     pub intra_vlc_format: bool,
     pub alternate_scan: bool,
+    pub repeat_first_field: bool,
     #[allow(dead_code, reason = "parsed for correct framing, not yet consumed — see this struct's own doc comment")]
     pub progressive_frame: bool,
 }
@@ -277,6 +286,10 @@ impl PictureCodingExtension {
             q_scale_type: false,
             intra_vlc_format: false,
             alternate_scan: false,
+            // MPEG-1's own picture_header() has no such syntax element at
+            // all (Annex D.9 names no MPEG-1 equivalent) — there is no
+            // pulldown signal to carry, ever, for an MPEG-1 stream.
+            repeat_first_field: false,
             progressive_frame: true,
         }
     }
@@ -302,21 +315,7 @@ pub(crate) fn picture_coding_extension(r: &mut BitReader<'_>) -> PictureCodingEx
     let q_scale_type = r.get(1) != 0;
     let intra_vlc_format = r.get(1) != 0;
     let alternate_scan = r.get(1) != 0;
-    // `repeat_first_field`, together with `top_field_first`, is how a
-    // real MPEG-2 decoder implements 3:2 pulldown: it selects 2, 3 or 4
-    // field-display-periods for this picture (D.9's own
-    // `AVFrame::repeat_pict`-shaped concept, not a plain boolean). Read
-    // for correct framing and discarded rather than stored: there is
-    // nowhere on `vaco_frame::Frame`/`FrameFlags` to put a "repeat by how
-    // many extra fields" value today — only `INTERLACED` and
-    // `TOP_FIELD_FIRST` exist, both booleans. This is the exact gap
-    // `vaco-filter-deinterlace`'s own `repeatfields.rs` independently
-    // documents from the consuming side (that filter's whole job is to
-    // act on this signal, and has nothing to read since no decoder can
-    // produce it) — a shared-crate interface question for whoever owns
-    // `vaco-frame`, not something this crate can work around on its own
-    // under the single-writer rule.
-    let _repeat_first_field = r.get(1);
+    let repeat_first_field = r.get(1) != 0;
     let _chroma_420_type = r.get(1);
     let progressive_frame = r.get(1) != 0;
     // composite_display_flag and its payload, if present, are not read:
@@ -332,6 +331,7 @@ pub(crate) fn picture_coding_extension(r: &mut BitReader<'_>) -> PictureCodingEx
         q_scale_type,
         intra_vlc_format,
         alternate_scan,
+        repeat_first_field,
         progressive_frame,
     }
 }

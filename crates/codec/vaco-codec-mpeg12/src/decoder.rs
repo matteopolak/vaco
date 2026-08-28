@@ -141,6 +141,15 @@ impl Mpeg12Decoder {
         if pce.top_field_first {
             frame.flags |= FrameFlags::TOP_FIELD_FIRST;
         }
+        // D.9.14: MPEG-1 (no `sequence_extension()`, `seq.ext` is `None`)
+        // behaves as if `progressive_sequence == '1'` — `map_or(true, ..)`,
+        // not `unwrap_or_default()` (`SequenceExtension::default()`'s
+        // `progressive_sequence` is `false`, the wrong value for a `None`
+        // extension specifically).
+        let progressive_sequence = seq.ext.is_none_or(|ext| ext.progressive_sequence);
+        let extra_fields =
+            pulldown_extra_fields(progressive_sequence, pce.progressive_frame, pce.repeat_first_field, pce.top_field_first);
+        frame.set_repeat_pict(extra_fields);
 
         let supported = pce.is_frame_picture() && hdr.coding_type != headers::PictureType::D;
         if !supported {
@@ -280,6 +289,54 @@ impl Mpeg12Decoder {
     }
 }
 
+/// H.262 §6.3.10's `top_field_first`/`repeat_first_field` semantics text:
+/// how many *extra* field periods (beyond the one this picture normally
+/// gets) its presentation should be held for, given the sequence-level
+/// `progressive_sequence` and the picture-level `progressive_frame`/
+/// `repeat_first_field`/`top_field_first`. Verified against the primary
+/// text directly (not recalled), which states three mutually exclusive
+/// cases:
+///
+/// - `progressive_sequence == 1`: `repeat_first_field == 0` outputs one
+///   frame (no repeat, `top_field_first` forced to `0`); `== 1` outputs
+///   two frames if `top_field_first == 0` or three if `== 1` — "two" and
+///   "three identical progressive frames" in the primary text's own
+///   words. In field-period units (a frame is two fields), that is `0`,
+///   `2` or `4` extra fields respectively.
+/// - `progressive_sequence == 0`, `progressive_frame == 1`:
+///   `repeat_first_field == 0` outputs two fields (no repeat); `== 1`
+///   outputs three fields (one extra).
+/// - `progressive_sequence == 0`, `progressive_frame == 0`:
+///   `repeat_first_field` is required to be `0` by the same text (an
+///   interlaced-fields frame is never pulled down), so this case is
+///   always zero extra fields regardless of what a non-conforming
+///   bitstream might set the bit to.
+#[must_use]
+#[allow(
+    clippy::fn_params_excessive_bools,
+    reason = "each parameter is an independent H.262 syntax element (one sequence-level, three picture-level) this function's own doc comment names individually; a two-variant-enum-per-flag refactor would not make any call site clearer, only rename `true`/`false` to bespoke variants"
+)]
+const fn pulldown_extra_fields(
+    progressive_sequence: bool,
+    progressive_frame: bool,
+    repeat_first_field: bool,
+    top_field_first: bool,
+) -> u8 {
+    if !repeat_first_field {
+        return 0;
+    }
+    if progressive_sequence {
+        if top_field_first { 4 } else { 2 }
+    } else if progressive_frame {
+        1
+    } else {
+        // Non-conforming input (the primary text requires
+        // `repeat_first_field == 0` here) — treat as no repeat rather
+        // than propagate a value the bitstream was not allowed to send.
+        0
+    }
+}
+
 fn new_idct() -> Mpeg2Idct {
     // A fixed, non-zero transform length (N=8); `Idct8x8::new` only fails
     // for a zero-length transform, so this is unreachable in practice —
@@ -352,6 +409,73 @@ mod tests {
     fn decoder_reports_need_more_input_before_any_packet() {
         let mut dec = Mpeg12Decoder::new(Limits::strict());
         assert!(matches!(dec.receive_frame(), Err(Error::NeedMoreInput)));
+    }
+
+    #[test]
+    fn pulldown_extra_fields_matches_h262_combination_table() {
+        // §6.3.10's three cases, verified against the primary text
+        // directly (see `pulldown_extra_fields`'s own doc comment).
+        // progressive_sequence, progressive_frame, repeat_first_field,
+        // top_field_first -> extra field periods.
+        assert_eq!(pulldown_extra_fields(true, true, false, false), 0);
+        assert_eq!(pulldown_extra_fields(true, true, true, false), 2);
+        assert_eq!(pulldown_extra_fields(true, true, true, true), 4);
+        assert_eq!(pulldown_extra_fields(false, true, false, false), 0);
+        assert_eq!(pulldown_extra_fields(false, true, true, false), 1);
+        assert_eq!(pulldown_extra_fields(false, true, true, true), 1);
+        // progressive_sequence == 0 && progressive_frame == 0: the
+        // primary text requires repeat_first_field == 0 here; a
+        // non-conforming stream setting it anyway still gets 0, not a
+        // value the text never allows this combination to produce.
+        assert_eq!(pulldown_extra_fields(false, false, false, false), 0);
+        assert_eq!(pulldown_extra_fields(false, false, true, false), 0);
+    }
+
+    #[test]
+    fn repeat_first_field_attaches_pulldown_side_data() {
+        let mut dec = Mpeg12Decoder::new(Limits::strict());
+        dec.seq = Some(Sequence {
+            header: SequenceHeader {
+                width: 16,
+                height: 16,
+                intra_matrix: tables::DEFAULT_INTRA_MATRIX,
+                non_intra_matrix: tables::DEFAULT_NON_INTRA_MATRIX,
+            },
+            // `Some` with the default `progressive_sequence == false`:
+            // an MPEG-2 sequence, exercising the
+            // `progressive_sequence == 0, progressive_frame == 1` case,
+            // distinct from `top_field_first_propagates_to_frame_flags`'s
+            // `ext: None` (MPEG-1, `progressive_sequence` forced `true`).
+            ext: Some(SequenceExtension {
+                progressive_sequence: false,
+                chroma_format: 1,
+            }),
+            mb_width: 1,
+            mb_height: 1,
+        });
+        let hdr = PictureHeader {
+            temporal_reference: 0,
+            coding_type: headers::PictureType::I,
+            full_pel_forward_vector: false,
+            forward_f_code: 0,
+            full_pel_backward_vector: false,
+            backward_f_code: 0,
+        };
+        let pce = PictureCodingExtension {
+            progressive_frame: true,
+            repeat_first_field: true,
+            top_field_first: false,
+            ..PictureCodingExtension::mpeg1_default(0, 0)
+        };
+        assert!(
+            dec.begin_picture(hdr, pce, vaco_core::Timestamp::default(), vaco_core::Duration::default())
+                .is_ok()
+        );
+        let ap = dec.current.as_ref();
+        assert!(ap.is_some(), "begin_picture did not populate current");
+        if let Some(ap) = ap {
+            assert_eq!(ap.frame.repeat_pict(), 1);
+        }
     }
 
     #[test]
