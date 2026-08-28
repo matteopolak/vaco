@@ -274,18 +274,46 @@ lock-gate:
         exit 1; }
     echo "lock-gate: edges only, consistent with all manifests"
 
+# The feature that gates one fuzz target's own crate, read out of the
+# generated manifest (`cargo xtask gen-fuzz`): every path dependency there is
+# `optional = true`, switched on by the feature named after the crate the
+# declaring target needs.
+[private]
+fuzz-feature target:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    feature=$(sed -n "/^name = \"{{target}}\"\$/,/^required-features/p" fuzz/Cargo.toml \
+        | sed -n 's/^required-features = \["\([^"]*\)".*/\1/p')
+    if [ -z "$feature" ]; then
+        echo "no [[bin]] named {{target}} in fuzz/Cargo.toml" >&2
+        exit 1
+    fi
+    echo "$feature"
+
 # One target, interactively. Ctrl-C to stop.
+# `--no-default-features --features <feature>` builds only this target's own
+# crate and whatever it references, so a syntax error in an unrelated crate
+# elsewhere in the tree cannot block it. `default` still lists every feature,
+# so a plain `cargo +nightly fuzz run <target>` (no flags) keeps working when
+# the whole tree is healthy.
 fuzz target:
-    cargo +nightly fuzz run {{target}}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    feature=$(just fuzz-feature {{target}})
+    cargo +nightly fuzz run {{target}} --no-default-features --features "$feature"
 
 # Every target, for `secs` each. The exit code is the oracle — see plan 19 §13.
 # Reports the exec count per target so a target that never ran cannot pass.
+# Each target is scoped to its own feature (see `fuzz-feature` above), so one
+# crate that does not compile fails only the targets that depend on it.
 fuzz-all secs="120":
     #!/usr/bin/env bash
     set -uo pipefail
     log=$(mktemp -d); fail=0
     for t in $(cargo +nightly fuzz list); do
-        cargo +nightly fuzz run "$t" -- -max_total_time={{secs}} -rss_limit_mb=4096 \
+        feature=$(just fuzz-feature "$t") || { fail=1; continue; }
+        cargo +nightly fuzz run "$t" --no-default-features --features "$feature" \
+            -- -max_total_time={{secs}} -rss_limit_mb=4096 \
             > "$log/$t.log" 2>&1
         rc=$?
         n=$(grep -oE '^#[0-9]+' "$log/$t.log" | tail -1)
