@@ -285,12 +285,6 @@ struct TrackOut {
     channels: u64,
     bit_depth: Option<u64>,
     extradata: Option<Vec<u8>>,
-    /// Whether the stream may reorder frames (RFC 9559's `Block` needs a
-    /// `ReferenceBlock` for such a frame; `SimpleBlock` cannot carry one).
-    reorders: bool,
-    /// The most recent block's timestamp on this track, in output ticks —
-    /// what a reordered frame's `ReferenceBlock` delta is computed against.
-    prev_ts: Option<i64>,
 }
 
 /// `FileMimeType`. Not in `vaco-demux-matroska::ebml::schema` (that crate has
@@ -805,8 +799,6 @@ impl Muxer for MatroskaMuxer {
             channels: 1,
             bit_depth: None,
             extradata: params.extradata.clone(),
-            reorders: false,
-            prev_ts: None,
         };
         if is_video {
             let v = params.video.as_ref().ok_or(Error::Unsupported(
@@ -814,7 +806,6 @@ impl Muxer for MatroskaMuxer {
             ))?;
             t.width = v.width;
             t.height = v.height;
-            t.reorders = v.has_b_frames > 0;
             if v.frame_rate.is_defined() && !v.frame_rate.is_zero() && !v.frame_rate.is_infinite() {
                 let per_frame = v.frame_rate.inverse(); // seconds per frame, as num/den
                 let secs = f64::from(per_frame.num) / f64::from(per_frame.den);
@@ -980,24 +971,33 @@ impl Muxer for MatroskaMuxer {
             .default_duration_ns
             .map(|ns| i64::try_from(ns / 1_000_000).unwrap_or(i64::MAX));
         let needs_duration = duration_ticks.is_some() && duration_ticks != default_duration_ticks;
-        let needs_reference = track.reorders && ts != dts;
 
-        let block_bytes = if needs_duration || needs_reference {
-            let reference_ticks = needs_reference.then(|| {
-                let prev = track.prev_ts.unwrap_or(dts);
-                prev - dts
-            });
+        // Reordering alone does **not** call for a `BlockGroup`. It reads like
+        // it should — `SimpleBlock` cannot carry a `ReferenceBlock`, and a
+        // B-frame plainly references other frames — but Matroska has no notion
+        // of a decode timestamp at all: a block's timestamp is its presentation
+        // time and decode order is file order, so there is nothing for a
+        // `ReferenceBlock` to state that the format does not already imply.
+        //
+        // Measured on `ffmpeg -c copy -f matroska`, remuxing reordered H.264
+        // (and again with AAC alongside it): **every** block is a
+        // `SimpleBlock` — 125 of them in the first cluster, zero
+        // `BlockGroup`s. We wrote 94 `BlockGroup`s and 31 `SimpleBlock`s for
+        // the same input, which cost 1697 bytes across two clusters and, worse,
+        // dropped the keyframe flag on every frame it wrapped, since a
+        // `BlockGroup` states keyframe-ness only by the *absence* of a
+        // `ReferenceBlock` (CONFORMANCE-FINDINGS 37).
+        let block_bytes = if needs_duration {
             block::block_group(
                 track.number,
                 rel_ts,
                 packet.payload(),
                 duration_ticks.map(|d| u64::try_from(d).unwrap_or(0)),
-                reference_ticks,
+                None,
             )?
         } else {
             block::simple_block(track.number, rel_ts, is_key, packet.payload())?
         };
-        track.prev_ts = Some(dts);
         cluster.body.extend_from_slice(&block_bytes);
 
         let end_ticks = ts.saturating_add(duration_ticks.unwrap_or(0)).max(0);

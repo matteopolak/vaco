@@ -1851,6 +1851,43 @@ bytes are zero in ours, `data_alignment_indicator` is set in our PES flags where
 the reference clears it, and the PTS/DTS values differ — the last being the same
 family as finding 32.
 
+## 37. Matroska: reordering does not call for a `BlockGroup`
+
+Our `-c copy -f matroska` output was **larger** than the reference's — 9412
+bytes against 7907 — which is the interesting direction, because it means we
+were writing something extra rather than omitting something.
+
+```text
+ref   cluster 6324   {Timestamp: 1, SimpleBlock: 125}
+ours  cluster 7736   {Timestamp: 1, BlockGroup: 94, SimpleBlock: 31}
+```
+
+The 94 `BlockGroup`s are the reordered frames. The muxer's rule was
+`needs_reference = track.reorders && ts != dts`, and its stated reasoning is
+the natural one: `SimpleBlock` cannot carry a `ReferenceBlock`, and a B-frame
+plainly references other frames, so a reordered frame needs the long form.
+
+**Matroska has no decode timestamp.** A block's timestamp is its presentation
+time and decode order is file order, so there is nothing a `ReferenceBlock`
+can state that the format does not already imply. Measured on `ffmpeg -c copy
+-f matroska`, remuxing reordered H.264, and again with AAC alongside it: every
+block is a `SimpleBlock`, zero `BlockGroup`s in either case.
+
+Two costs, and the second is worse than the size:
+
+- 1697 bytes across two clusters.
+- **Every wrapped frame lost its keyframe flag.** `block_group` is not passed
+  `is_key` at all, because a `BlockGroup` states keyframe-ness only by the
+  *absence* of a `ReferenceBlock` — so a keyframe that needed a `BlockGroup`
+  for any other reason would have been indistinguishable from a P-frame.
+
+`BlockGroup` is still right when a packet's duration differs from the track's
+`DefaultDuration`, which is the subtitle case, and that rule is unchanged.
+
+The remaining Matroska divergences are the other direction — our `Info` (53 vs
+75), `Tracks` (109 vs 152) and `Tags` (132 vs 255) are all smaller, so there
+are elements we do not write.
+
 ## Harness changes, summarised
 
 Everything below is a change to `crates/tool/vaco-conformance/`,
