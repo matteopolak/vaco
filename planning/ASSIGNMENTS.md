@@ -85,7 +85,8 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-mux-hash | 4 | #572 | agent:mux-hash | done | 2026-08-23 | 2026-08-23 | crc framecrc framemd5 framehash hash md5 streamhash uncodedframecrc — the differential oracle |
 | vaco-filter-* T3 audio long tail | 4 | #485 (closes epic #58) | agent:audio-tail | active | 2026-08-27 | — | last open child of FT-4.13 |
 | vaco-cli stderr reporting | 7 | #641 #208 | agent:cli-report | active | 2026-08-27 | — | the Input #0/Output #0 dump and -stats/-progress/-report; shares loglevel::prints_info |
-| vaco-mux-mpegts + vaco-demux-mpegts + probe dump | 4 | #636 #635 | agent:ts-conformance | active | 2026-08-27 | — | PCR low bytes, data_alignment, PTS/DTS; ts_id/ts_packetsize; the invented TAG:ts_codec |
+| vaco-mux-avi + vaco-mux-flv | 4 | #639 #640 | agent:avi-flv | active | 2026-08-27 | — | AVI's 600 Hz slot grid (correctness, not byte-identity); FLV metadata forwarding + end-of-sequence |
+| vaco-mux-mpegts + vaco-demux-mpegts + probe dump | 4 | #636 #635 | agent:ts-conformance | done | 2026-08-27 | 2026-08-27 | PCR low bytes, data_alignment, PTS/DTS; ts_id/ts_packetsize; the invented TAG:ts_codec |
 | vaco-mux-mp4 + vaco-mux-matroska | 4 | #637 #638 | agent:remux-detail | active | 2026-08-27 | — | btrt/elst/32-bit mdat; Duration, TrackUID width, Colour, TrackEntry order |
 | vaco-parse-vpx / -mpeg12 / image + codec-core profile tables | 2 | #275 #276 #277 #278 | agent:parsers | active | 2026-08-27 | — | P-05..P-08. Footprint in vaco-codec-core is ONE new module file + its `mod` line |
 | vaco-mux-hash + Muxer::add_stream_with | 4 | #634 | agent:framecrc-tb | active | 2026-08-27 | — | finding 32: framecrc `#tb` follows the frame rate, not the input; also `#software:`/`#extradata`. Owns the `Muxer` trait + its `Box` impl, not other muxers |
