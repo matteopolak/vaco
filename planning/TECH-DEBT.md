@@ -6827,3 +6827,70 @@ again to leave concurrent agents' unrelated staged files untouched.
 
 `Vaco-Spec-Ref: itu-t-h263` Annex I §I.2 (Table I.1), §I.3 (Table I.2,
 dequantisation, `clipAC`/`oddifyclipDC`, prediction modes 0/1/2).
+
+### `vaco-codec-mpegvideo` (D-22, epic #25): what landed, and what a future pass should still do
+
+The shared MPEG-family decoder core now exists as a real crate
+(`crates/signal/vaco-codec-mpegvideo`), generalised from
+`vaco-codec-mpeg12`'s working, `ffmpeg`-checked implementation rather than
+written fresh — see the extraction list two entries above this one, which
+this crate closes most of. Landed: `refpic::PictureReorderBuffer<T>`
+(B-picture reorder), `sequential_mv::SequentialMvPredictor` (MPEG-1/2's
+carry-forward MV predictor), `motioncomp` (half-pel MC, cross-checked
+against `vaco-codec-dsp-mc`'s independently-authored bilinear tap set),
+`mbtype` (a table-driven, not trait-driven, macroblock-type flags
+abstraction — see that module's own docs for why a trait was rejected),
+and `coeff` (inverse scan, MPEG-1/2 dequantisation + mismatch control, IDCT
+hand-off, plus a generic `flat_step_dequantise` shape for a family whose own
+formula has not been measured here yet). 35 tests, `cargo clippy -p
+vaco-codec-mpegvideo --all-targets --locked -- -D warnings` clean,
+`vaco-codec-mpeg12`'s own 39 tests re-run unchanged (not touched — it is a
+different agent's actively-owned crate this session).
+
+Left for whoever picks this up next:
+
+- **`vaco-codec-mpeg12` itself has not been switched onto this crate.** Its
+  own `motion.rs`/`decoder.rs`'s previous-recent-held logic/`block.rs`'s
+  MPEG dequantisation are now duplicated in spirit (not by `dup-check`,
+  which only compares public type names, but in the sense that the same
+  algorithm exists in two places) between that crate's private modules and
+  `vaco-codec-mpegvideo`'s public ones. Migrating is real work for
+  `vaco-codec-mpeg12`'s own owner: swap one module at a time and re-run its
+  differential fixtures after each swap, per that crate's own brief ("in
+  scope only if its existing tests keep passing unchanged").
+- **`vaco-codec-mpegvideo::coeff::ZIGZAG_SCAN`/`ALTERNATE_SCAN` and
+  `vaco-codec-mpeg12::tables`'s own (private) scan tables encode the same
+  H.262 Figure 7-2/7-3 clause under two different, mutually-inverse
+  conventions** (scan-index-to-natural-position here, natural-position-to-
+  scan-index there -- see `coeff.rs`'s own doc comment and
+  `provenance/vaco-codec-mpegvideo.toml` for the correction: an earlier
+  draft of this entry wrongly called the two tables byte-identical). Not a
+  `dup-check` hit either way. Worth collapsing onto one convention once
+  `vaco-codec-mpeg12` migrates onto this crate.
+- **H.263's own dequantisation formula (Recommendation H.263 §6.2 /
+  Annex I's `clipAC`/`oddifyclipDC`, per this file's own entry immediately
+  above) is not implemented in `vaco-codec-mpegvideo`.** `coeff::
+  flat_step_dequantise` is the generic shape it should slot into once
+  someone measures its exact rounding against a real decoder — deliberately
+  not guessed at from memory here, per this project's "how confident should
+  a transcribed table be" rule.
+- **No family's spatial (median-of-left/above/above-right-neighbour) motion
+  vector predictor exists yet** — H.263/MPEG-4 Part 2's own scheme, a
+  genuinely different mechanism from MPEG-1/2's `sequential_mv`, not a
+  generalisation of it. Add it as its own module (`median_mv`, alongside
+  `sequential_mv`) once a real consumer needs it and its exact
+  neighbour-substitution rule (what replaces an unavailable above-right
+  candidate) has been checked against primary text or a real decoder, not
+  recalled.
+- **D-22d's own acceptance criterion — "each of the ten families
+  instantiates the core and decodes a smoke stream" — is unattempted.**
+  Only `vaco-codec-mpeg12` (not migrated, see above) and `vaco-codec-h263`
+  (a separate agent's independent implementation, not built on this core)
+  exist among the ten today, so there is no second family from inside this
+  crate to run that check against yet.
+
+`Vaco-Spec-Ref: itu-t-h262-199502` §7.6.3.1 (sequential MV prediction),
+§7.6.4/§7.6.7.1 (half-pel forming/averaging), Table 7-2/7-3 (scan tables),
+§7.4/§7.4.4/Annex D.9.1 (dequantisation + mismatch control) — all measured
+via `vaco-codec-mpeg12`'s own already-checked implementation, not
+re-derived from the standard text directly in this pass.
