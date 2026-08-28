@@ -1,0 +1,13 @@
+[[table]]
+name   = "DC_QLOOKUP"
+file   = "crates/codec/vaco-codec-vp8/src/tables.rs"
+source = "rfc-6386"
+clause = "clause 14.1 / Section 20.3 dequant_data.h, dc_q_lookup[128]"
+method = "transcribed"
+
+[[table]]
+name   = "AC_QLOOKUP"
+file   = "crates/codec/vaco-codec-vp8/src/tables.rs"
+source = "rfc-6386"
+clause = "clause 14.1 / Section 20.3 dequant_data.h, ac_q_lookup[128]"
+method = "transcribed"
