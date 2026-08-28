@@ -604,3 +604,64 @@ option string through the CLI, which is a separate, larger piece of work
 `vaco-bsf-generic`/`vaco-bsf-h2645` register; not blocking for the three
 containers already wired (M16's `extract_extradata` and the two
 `*_mp4toannexb` filters need no options to do their real job).
+
+## 13. `vaco_frame::FrameSideData` has no console-log-only output channel
+
+Reported by (confirmed, not newly found) the `vaco-filter-analysis` agent
+finishing plan 16 §4.2's row on 2026-08-23, re-checking a claim its own
+crate-root doc already made.
+
+`showinfo` measures (`ffprobe -show_frames` through it, `ffmpeg 8.1`) to
+write **zero** frame metadata: its entire output is a console `info`-level
+log line per frame (`n:… pts:… fmt:… sar:… ...`). This workspace's filter
+model has exactly one output channel for a measurement filter — gap 11's
+`Frame::metadata()` dictionary — and that dictionary is specifically the
+`lavfi.<filter>.<key>` tag convention; there is nowhere to put an
+unstructured, human-readable log line, and stuffing one into the metadata
+dictionary under a made-up key would not reproduce anything the reference
+actually exports (nothing does, since it never touches `AVFrame::metadata`
+for this filter).
+
+### Shape
+
+Additive in principle — a `Vec<String>` (or similar) side channel a filter
+could push lines into, and something on the `vaco-probe`/CLI side to render
+it the way `-loglevel info` does — but this is a genuinely different feature
+from gap 11 (frame-scoped structured tags), not a variant of it. Nothing in
+this wave needed it enough to design it; recorded so the next agent handed
+`showinfo` does not re-measure the same "no metadata at all" finding from
+scratch.
+
+**Blocks:** `showinfo` (plan 16 §4.2, `vaco-filter-analysis`'s row) and any
+other reference filter whose only documented effect is a log line rather
+than a metadata write or a pixel change.
+
+## 14. `vaco_frame::FrameSideData` has no motion-vector variant
+
+Reported by (confirmed, not newly found) the `vaco-filter-analysis` agent
+finishing plan 16 §4.2's row on 2026-08-23.
+
+`codecview`'s `mv`/`mv_type`/`qp`/`block` options all visualise per-block
+motion vectors and quantiser values that a decoder would attach to a frame.
+`crates/model/vaco-frame/src/lib.rs`'s `FrameSideData` enum has
+`DisplayMatrix`, `ClosedCaptions`, `MasteringDisplay`, `ContentLightLevel`,
+`Cropping` and `Metadata` (gap 11) — no motion-vector variant, and (per D5)
+no decoder in this workspace produces one regardless, since motion vectors
+are decoder-internal state that no codec crate currently surfaces at all.
+This is a decoder-side gap, not a measurement-formula gap like the rest of
+this crate's undone filters: `codecview` cannot be partially implemented
+against synthetic `Frame`s the way `signalstats`/`entropy` can, because there
+is no representable input to hand it.
+
+### Shape
+
+Additive: one more `FrameSideData` variant (e.g. `MotionVectors(Vec<MotionVector>)`
+with a small `{source, w, h, dst_x, dst_y}`-shaped element, matching the
+reference's own `AVMotionVector` fields) plus, separately and later, at
+least one decoder that actually populates it. Both are out of scope for a
+filter crate; recorded so `codecview` is not silently reattempted before the
+decoder-side half exists.
+
+**Blocks:** `codecview` (plan 16 §4.2, `vaco-filter-analysis`'s row); nothing
+else in this workspace currently reads motion vectors either, so this gap has
+exactly one known blocker today.

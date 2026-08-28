@@ -11,13 +11,22 @@
 //! (ffmpeg 8.1, 2026-08-23) with that exact spelling and arity — the row
 //! matches the reference in both directions, nothing to add or drop.
 //!
-//! **Eight landed in this crate**: `psnr`, `ssim`, `identity`, `msad`,
+//! **Ten landed in this crate**: `psnr`, `ssim`, `identity`, `msad`,
 //! `signalstats`, `blackdetect`, `blackframe`, `bbox` — the six the brief
 //! calls out to land first, plus `msad` (a near-free extension of the
 //! `identity`/`psnr` machinery and of `vaco-filter-vdsp`) and `blackframe`
-//! (a near-free extension of `blackdetect`'s pixel-threshold logic).
+//! (a near-free extension of `blackdetect`'s pixel-threshold logic) — plus,
+//! in a 2026-08-23 continuation pass, [`entropy`] and [`cropdetect`], the two
+//! this wave's own brief called the best remaining value. See those two
+//! modules' own docs for their measurements, and this crate's docs file for
+//! two real walls found while investigating `bitplanenoise` and `siti`: both
+//! looked like clean closed forms and measured out to *not* be — a Sobel-SI
+//! formula that matches at one amplitude and not another, and a per-pixel
+//! bit-noise metric whose numerator stayed constant while its denominator
+//! tracked frame width in a way no simple per-pixel formula reproduced in
+//! the time available. Neither was shipped as a guess.
 //!
-//! **Fifteen did not land**, for three different reasons:
+//! **Thirteen did not land**, for four different reasons:
 //!
 //! * `vmafmotion`, `ssim360`, `vif`, `signature` — explicitly named in the
 //!   brief as likely-to-leave. `vif` needs a wavelet-domain natural-scene
@@ -52,12 +61,34 @@
 //!     against, hard to verify independently of the implementation itself —
 //!     exactly the "oracle that shares your misreading" trap
 //!     `planning/AGENT-CONSTRAINTS.md` warns about.
-//!   - `blockdetect`, `bitplanenoise`, `entropy`, `siti`, `photosensitivity`,
-//!     `scdet`, `cropdetect` are all individually tractable (each was
-//!     partially measured while scoping this crate — see this crate's
-//!     report) but did not fit this wave's time budget once the eight
-//!     landed filters were verified to the standard this crate's brief
-//!     demands. Left for a follow-up rather than shipped under-measured.
+//!   - `blockdetect`, `scdet`, `photosensitivity` are all
+//!     multi-frame or full-academic-paper algorithms (block-grid period
+//!     search; a scene-cut heuristic combining a mean-absolute-frame-
+//!     difference with its own frame-to-frame delta; a temporal luminance-
+//!     flash detector needing a rolling multi-frame window) that this pass
+//!     did not have time to measure precisely enough to trust, given how
+//!     badly `bitplanenoise` and `siti` (below) punished an optimistic
+//!     "looks closed-form" read. Left for a follow-up rather than shipped
+//!     under-measured.
+//!   - `bitplanenoise` and `siti` were investigated at length and are the
+//!     two real findings of this pass, not scope-cut for time: `bitplanenoise`'s
+//!     noise ratio for a maximally-noisy fixture holds its **numerator**
+//!     constant (`4`) while scaling its denominator with frame width in a
+//!     way no per-pixel bit-difference formula this pass tried reproduced
+//!     (tested horizontal, vertical, and vertical-with-wraparound
+//!     hypotheses; none fit `w=3` through `w=16` simultaneously). `siti`'s
+//!     `SI` (Sobel-gradient standard deviation) matched the textbook
+//!     ITU-T P.910 formula **exactly** on a maximum-contrast fixture
+//!     (`0`/`255` split, `356.93` predicted and measured) but the *same*
+//!     formula on the *same* spatial pattern at a smaller amplitude
+//!     (`100`/`120`) predicted `27.99` against a measured `33.59` — a ~20%
+//!     miss that a linear operator (which Sobel-then-variance is) cannot
+//!     produce from a pure amplitude change, ruling out "the constant is
+//!     slightly off" as an explanation. Both are recorded in this crate's
+//!     docs with the exact probes, per this crate's own falsification
+//!     discipline: an SSIM-style "measured, not byte-exact, and here is
+//!     the number that proves it" is honest; guessing a formula that
+//!     passes the one fixture it was fit to is not.
 //!
 //! # Shape
 //!
@@ -109,6 +140,8 @@
 pub mod bbox;
 pub mod blackdetect;
 pub mod blackframe;
+pub mod cropdetect;
+pub mod entropy;
 mod fmt;
 pub mod identity;
 pub mod msad;

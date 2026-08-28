@@ -37,6 +37,20 @@ media = "video"
 
 [[component]]
 kind = "filter"
+name = "cropdetect"
+long_name = "Auto-detect crop size."
+ctor = "vaco_filter_analysis::cropdetect::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "entropy"
+long_name = "Measure video frames entropy."
+ctor = "vaco_filter_analysis::entropy::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
 name = "identity"
 long_name = "Calculate the Identity between two video streams."
 ctor = "vaco_filter_analysis::identity::DESC"

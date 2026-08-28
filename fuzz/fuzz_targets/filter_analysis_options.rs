@@ -6,7 +6,7 @@
 //! own escaping ahead of each filter's `Instantiate::named` reads, not a
 //! hand-built `Instantiate`.
 //!
-//! Property: for any byte string, for any of this crate's eight registered
+//! Property: for any byte string, for any of this crate's ten registered
 //! names, `create` never panics and never allocates unboundedly. This
 //! crate's option parsers are all `.named(...).and_then(|v| v.parse().ok())
 //! .unwrap_or(default)` (`crate::video::{f64_opt, u8_opt}`), so a malformed
@@ -32,6 +32,8 @@ const NAMES: &[&str] = &[
     "bbox",
     "blackdetect",
     "blackframe",
+    "cropdetect",
+    "entropy",
     "identity",
     "msad",
     "psnr",

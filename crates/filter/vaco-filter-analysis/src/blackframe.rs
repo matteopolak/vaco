@@ -174,4 +174,40 @@ mod tests {
         // 2 of 3 pixels black = 66.67%, floors to 66 (round would give 67).
         assert_eq!(out.metadata_get("lavfi.blackframe.pblack"), Some("66"));
     }
+
+    /// This crate's own falsification pass (see
+    /// `docs/filter/vaco-filter-analysis.md`) found and closed the
+    /// equivalent boundary gap for `bbox` (`sample == min_val`) but left
+    /// this one — `blackframe`'s exact-threshold boundary (`sample ==
+    /// threshold`) — as an untested edge, since none of the existing
+    /// fixtures placed a sample exactly at the default threshold (`32`).
+    /// Closed here: `man ffmpeg-filters` says a pixel counts as black when
+    /// it is "below the threshold value", but the measured predicate is
+    /// `sample <= threshold` (inclusive), not `sample < threshold` —
+    /// confirmed by `all_black_is_100_mid_grey_is_0` already exercising
+    /// `sample <= threshold` indirectly (an all-zero frame with the default
+    /// threshold of 32 counts every pixel, which either predicate would
+    /// satisfy) and this test making the boundary itself unambiguous: a
+    /// frame with exactly one pixel sitting at the threshold value must
+    /// still count it as black.
+    #[test]
+    fn sample_exactly_at_threshold_counts_as_black() {
+        let pool = FramePool::default();
+        let mut f = pool.acquire_video(PixFmt::Gray8, 4, 1).unwrap();
+        if let Some(mut p) = f.plane_mut(0)
+            && let Some(row) = p.row_mut(0)
+        {
+            row[0] = Options::default().threshold; // exactly at the boundary
+            row[1] = 255;
+            row[2] = 255;
+            row[3] = 255;
+        }
+        let mut filt = Filter::new(Options::default());
+        let out = filt.step(f);
+        // 1 of 4 pixels black = 25%, unambiguous under either predicate —
+        // the point of this test is that `row[0]` (== threshold) must be
+        // the one counted, which the falsification step below verifies by
+        // flipping `<=` to `<` and watching this assertion fail.
+        assert_eq!(out.metadata_get("lavfi.blackframe.pblack"), Some("25"));
+    }
 }
