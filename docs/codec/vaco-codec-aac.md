@@ -21,10 +21,14 @@ tables (`swb_tables.rs`), and the `individual_channel_stream()`/
 
 [`AacDecoder`] (`decoder.rs`) fully parses every bit a real frame declares —
 verified bit-exact against 677 real `ffmpeg`-encoded frames, see
-"Decode accuracy" below — and only then returns `Error::Unsupported`, honestly,
-because turning that parsed syntax into PCM (inverse quantisation, TNS
-application, joint stereo, IMDCT/overlap-add) is **#445, not yet started**.
-See "Known gaps" for the precise boundary.
+"Decode accuracy" below — and, as of #445, reconstructs it into actual PCM:
+inverse quantisation (`reconstruct.rs`), TNS application (`tns_apply.rs`),
+joint stereo (M/S and intensity, `reconstruct.rs`), and the
+IMDCT/windowing/overlap-add filterbank (`reconstruct.rs`, `vaco-tx`'s IMDCT,
+`vaco-codec-dsp-sinewin`'s sine and KBD windows). **With #445 landed, AAC-LC
+decode is complete end to end** — see "Decode accuracy" for what that is
+measured against and "Known gaps" for what is still approximated or
+unsupported.
 
 ## Why this is gated (D4)
 
@@ -215,14 +219,100 @@ larger. The index-to-n-tuple formula and the ESC codebook's variable-length
 escape sequence are reproduced from §4.6.3.3's own pseudo-C, in the module
 doc.
 
+### Reconstruction (`reconstruct.rs`, `tns_apply.rs`) — #445
+
+Turns #444's fully-parsed syntax into actual `f32` PCM, in the order
+§4.5.2.2.5's own block diagram requires (joint stereo feeding TNS, not the
+reverse — the diagram is why `reconstruct.rs` exposes three separate
+functions, `deinterleave_channel`/`apply_joint_stereo`/`finalize_channel`,
+rather than one that processes a channel pair one channel at a time):
+
+1. **Inverse quantisation + scalefactor rescale** (§4.6.1.3/§4.6.2.3.3):
+   `x_rescal = sign(x_quant)*|x_quant|^(4/3) * 2^(0.25*(sf-100))`, folded
+   into one pass per raw coefficient (`inverse_quantize_and_rescale`).
+2. **Perceptual noise substitution** (§4.6.13.3): a 32-bit LCG (Numerical
+   Recipes' constants — the spec is explicit that PNS's RNG is
+   non-normative, "a suitable random number generator can be realized
+   using one multiplication/accumulation per random value") generates each
+   noise band's samples, normalised to the transmitted energy
+   (`dpcm_noise_nrg`, already decoded in #444's `scalefactor.rs`).
+3. **Joint stereo** (`apply_joint_stereo`): M/S (§4.6.8.1.3, sum/difference
+   on bands where `ms_used`/`ms_mask_present==2` is set, skipping
+   intensity/noise bands — the three are mutually exclusive per band) then
+   intensity (§4.6.8.2.3, deriving the right channel from the left at
+   every intensity-coded band — no data of its own was ever transmitted
+   there).
+4. **TNS application** (`tns_apply.rs`): `tns_decode_coef`'s sign-extend +
+   arcsine inverse-quantisation + Levinson-style LPC conversion, then
+   `tns_ar_filter`'s in-place all-pole IIR filter, per §4.6.9.3's
+   pseudocode — the syntax was already parsed and kept in #444; this pass
+   adds the second half, actually filtering the spectrum.
+5. **IMDCT** (`vaco_tx::reference::imdct`, SP-C6, reused as-is): confirmed
+   phase-compatible with §4.6.11.3.1's formula (`(n + 0.5 + N/4)(k+0.5)`)
+   without modification, needing only an explicit `2/N` scale factor the
+   caller applies (`vaco-tx`'s own `imdct` has no built-in normalisation).
+6. **Windowing + overlap-add** (§4.6.11.3.2): sine and — see below — KBD
+   window halves, assembled per `WindowSequence`
+   (`OnlyLong`/`LongStart`/`LongStop`/`EightShort`), then added to the
+   previous frame's stored second half (`OverlapState`, one per output
+   channel, reset by `flush`).
+7. **Final PCM-scale normalisation**: `inverse_quantize_and_rescale`'s
+   formula produces samples on the same scale as a 16-bit PCM decoder
+   (matching FAAD2 and other reference implementations' convention), not
+   the `[-1, 1]` range `SampleFmt::F32P` represents — `finalize_channel`
+   multiplies by `1/32768` as the very last step. Found empirically. before
+   this scale, correlation against `ffmpeg -bitexact` was already close
+   (~0.95–0.996 per fixture) but every fixture's RMS ratio against the
+   reference was a consistent ~32768 (2^15) regardless of content, sample
+   rate or channel count — the signature of a missing fixed normalisation,
+   not per-frame drift.
+
+**A second finding, not anticipated going in: `vaco-codec-dsp-sinewin` was
+sine-only, and that assumption was wrong.** The crate's own scope (D-06)
+covered only the sine window on the working assumption that `ffmpeg`'s AAC
+encoder — this workspace's only source of real AAC fixtures — never emits
+`window_shape == 1` (KBD). Several real fixtures genuinely set it partway
+through the stream (confirmed not a parsing artefact: re-running #444's own
+677/677 bit-consumption check after the M/S-mask-storage refactor still
+passed exactly). `kbd_window::<N>(alpha)` was added to that crate rather
+than gated as unsupported — see
+`docs/signal/vaco-codec-dsp-sinewin.md` for the construction, and its own
+"square root" pitfall (dropping it still produces a symmetric, monotonic,
+bounded window that *looks* plausible and fails Princen-Bradley by up to
+2%, exactly the "smooth and plausible, not a desync" failure shape this
+whole codec-decoding effort keeps finding).
+
+**A third finding: `raw_data_block`'s syntactic element order is not
+output channel order.** `channels_for_config(6)`'s bitstream order is
+`[C, L, R, Ls, Rs, LFE]` (one `SCE`, one front `CPE`, one back `CPE`, one
+`LFE`, per Table 42), but the conventional output order (and
+`ffmpeg -bitexact`'s own) is `[FL, FR, FC, LFE, BL, BR]`. Before
+`decoder.rs`'s `reorder_to_output_channel_order` permuted this, the 5.1
+fixture's *per-channel* correlation was already solid (~0.98 for the one
+channel carrying content) but the interleaved, whole-frame correlation was
+effectively zero, because the content sat on a different channel index in
+each stream. Only configurations 1, 2 and 6 — the ones this crate resolves
+without a program config element — are permuted; anything else is left in
+parsed order rather than guessed at.
+
+**Known, disclosed approximations in this step** (see "Known gaps" for the
+full list): intensity stereo always assumes the in-phase codebook
+(`IcsStream` does not retain which of the two intensity codebooks a band
+used); `LongStart`/`LongStop`'s exact transition-boundary sample counts
+follow the standard, widely-implemented convention rather than a clean
+primary-text citation (the PDF extraction this crate's spec citations are
+otherwise drawn from garbled that one boundary's fraction).
+
 ## Decode accuracy — measured, not claimed
 
-**No PCM is produced yet (#445), so there is nothing to compare against a
-reference decoder's samples.** What *is* verifiable now, and was verified:
-that the parse consumes exactly the bits a real frame declares and leaves
-the reader positioned where the next frame begins — a strong invariant that
-fails loudly the moment a codebook or band mapping is wrong, exactly as it
-did twice during this pass (see "Bugs found and fixed").
+AAC, like every lossy codec this workspace has decoded, defines a
+compliance tolerance rather than one correct output — reconstruction is
+compared by correlation/max_abs/rms against `ffmpeg -bitexact`'s own
+decode, not chased for bit-exactness. **The parse layer (#444) is still
+held to the stricter, exact invariant** — bits consumed — since that one
+*is* exact regardless of any lossy compliance tolerance.
+
+### Parse: bit-consumption, exact
 
 9 fixtures generated directly by `ffmpeg -c:a aac`, spanning every axis
 that matters for this package: sample rate (16000/22050/32000/44100/48000
@@ -250,6 +340,50 @@ repository) walked each file's real ADTS headers, decoded every frame's
 `raw_data_block()`, and asserted the bit reader landed within 7 bits of the
 frame's own declared length (the slack accounts for legitimate padding to
 the next frame's byte boundary). 677 of 677 real frames matched exactly.
+This invariant was re-checked (still 677/677) after #445's M/S-mask-storage
+refactor changed how `raw_data_block.rs` represents `Element::Pair`,
+confirming that change did not silently desync the parse.
+
+### Reconstruction: correlation/max_abs/rms against `ffmpeg -bitexact`
+
+Same 9 fixtures. `decode_dump` (`examples/decode_dump.rs`) decodes each one
+end to end and dumps interleaved `f32le` PCM; `ffmpeg -bitexact -i <fixture>
+-f f32le -acodec pcm_f32le` produces the reference. Both are the same
+length (no encoder-priming/decoder-latency trim needed for a raw-ADTS
+stream — there is no edit-list metadata to apply one from). All 9 decode
+past every frame with no `Unsupported` error, including the ones with
+mid-stream KBD windows and the 5.1 configuration:
+
+| Fixture | Correlation | max\_abs | RMS |
+|---|---|---|---|
+| mono, 16000 Hz, 48 kbit/s | 0.942 | 0.270 | 0.0293 |
+| mono, 22050 Hz, 64 kbit/s | 0.949 | 0.243 | 0.0276 |
+| mono, 44100 Hz, 128 kbit/s | 0.979 | 0.255 | 0.0178 |
+| stereo, 32000 Hz, 96 kbit/s | 0.970 | 0.208 | 0.0150 |
+| stereo, 44100 Hz, 128 kbit/s | 0.983 | 0.132 | 0.0113 |
+| stereo, 44100 Hz, 128 kbit/s, transient (440→6000 Hz cut, exercises `LONG_START`/`LONG_STOP`) | 0.969 | 0.199 | 0.0154 |
+| stereo, 44100 Hz, 192 kbit/s, white noise (`EIGHT_SHORT`) | 0.979 | 1.501 | 0.0768 |
+| stereo, 48000 Hz, 192 kbit/s | 0.997 | 0.089 | 0.0049 |
+| 5.1, 44100 Hz, 320 kbit/s (`channelConfiguration` 6, after channel reorder) | 0.981 | 0.223 | 0.0070 |
+
+Read alongside each other: correlation clusters at 0.94–0.997 regardless of
+channel count or window sequence, which is consistent with the disclosed
+approximations above (intensity phase, PNS's own non-normative RNG,
+`LongStart`/`LongStop`'s unverified boundary) being small, band-local
+effects rather than a structural desync — a structural bug (wrong band
+mapping, wrong window halves, a channel swap) reads as correlation near
+zero, the shape the pre-fix 5.1 row actually had. The white-noise fixture's
+larger `max_abs`/RMS is expected: PNS's own RNG is explicitly non-normative
+per §4.6.13.3, so a noise-heavy fixture is exactly where this decoder and
+`ffmpeg`'s are least likely to agree sample-for-sample, without either
+being wrong.
+
+**Not verified**: ISO/IEC 14496-26's conformance vector set — the
+acceptance criterion #443's own issue names — was not accessible in this
+session (as disclosed for #443/#444). This table is a real, reproducible
+measurement against a real decoder's output; it is not a substitute for
+that conformance suite, and this doc will keep saying so until that suite
+is run.
 
 ## Bugs found and fixed (for the record, not just interest)
 
@@ -283,19 +417,27 @@ plausible-looking implementation that a real bitstream falsifies.
 
 ## Known gaps
 
-- **No PCM synthesis of any kind (#445, unstarted).**
-  `AacDecoder::send_packet` fully parses `raw_data_block()` and then always
-  returns `Error::Unsupported`. This is a decoder that correctly declines
-  to produce audio it does not yet know how to produce, not a
-  partially-working one; see `vaco-codec-mpegaudio`'s MPEG-2.5 gate for the
-  identical shape and reasoning. #445 needs: inverse quantisation (the
-  `x_quant`→coefficient power-law, per-band scalefactor applied), TNS
-  application (`tns_decode_coef`/`tns_ar_filter`, §4.6.9.3 — the syntax is
-  already parsed and kept in `IcsStream::tns`), joint stereo (M/S — already
-  read as `ms_used` but not applied — and intensity stereo, whose position
-  values are already decoded in `IcsStream::band_values`), and the
-  IMDCT/windowing/overlap-add (`vaco-tx::reference::imdct` already exists
-  for this, from SP-C6; `vaco-codec-dsp-sinewin` for the window).
+- **Intensity stereo always assumes the in-phase codebook
+  (`INTENSITY_HCB`).** Both intensity codebooks (in-phase `INTENSITY_HCB`
+  and out-of-phase `INTENSITY_HCB2`) decode to the same
+  `BandValue::IntensityPosition` shape in #444's `scalefactor.rs`;
+  `IcsStream` does not retain which one a given band actually used, only
+  the consequence (`band_values`). `reconstruct::apply_intensity_stereo`
+  always takes the `+1` (in-phase) sign as a result. Fixing this means
+  threading `sfb_cb` (or a per-band phase bit derived from it) through
+  `IcsStream` from `section_data()`'s already-decoded codebook assignment
+  — the information exists earlier in the pipeline, it is just not carried
+  this far yet.
+- **`LongStart`/`LongStop`'s window-transition boundary arithmetic is the
+  standard, widely-implemented convention, not a clean primary-text
+  citation.** The 1024/448/128/448-sample split
+  (`reconstruct::build_window`) could not be reliably extracted from this
+  crate's own (partially garbled by PDF extraction) copy of §4.6.11.3.2
+  part b — one fraction in particular did not survive extraction cleanly.
+  The measured correlation table's transient fixture (440→6000 Hz cut,
+  which forces exactly this transition) is the empirical check in place of
+  that citation; it reads no worse than the other fixtures, but "no worse"
+  is not the same confidence as a verified formula.
 - **`coupling_channel_element()` (`CCE`) is not implemented** —
   `Error::Unsupported`. It carries its own `individual_channel_stream()`
   plus a per-coupled-element gain list this crate has not transcribed.
@@ -304,7 +446,8 @@ plausible-looking implementation that a real bitstream falsifies.
 - **`channelConfiguration` 3, 4, 5, 7, 11, 12, 14** are gated (see "Channel-
   configuration coverage" above), pending ISO/IEC 14496-3 Table 42's exact
   element ordering being checked against a primary copy rather than
-  recalled.
+  recalled. `reorder_to_output_channel_order` (`decoder.rs`) only knows the
+  output permutation for 1, 2 and 6 for the same reason.
 - **HE-AAC/HE-AACv2 (SBR, Parametric Stereo)** are explicitly rejected at
   the configuration layer — #446/#447, a different (and each individually
   substantial) package, per this issue's own dispatch.
@@ -315,30 +458,43 @@ plausible-looking implementation that a real bitstream falsifies.
   layout. Rare — a real stream's PCE almost always leads its very first
   frame — but a real gap, not yet exercised by any fixture in this pass's
   corpus.
+- **ISO/IEC 14496-26's conformance vector set was not accessible in this
+  session** (as already disclosed for #443/#444) — the "Decode accuracy"
+  table above is a real measurement against a real decoder's output, not a
+  substitute for that suite.
 
 ## How to change it
 
+- **Fixing intensity stereo's phase:** thread `sfb_cb`'s actual value (14
+  vs 15) from `section.rs`/`scalefactor.rs` through to `IcsStream`, then
+  have `reconstruct::apply_intensity_stereo` branch on it instead of always
+  taking `+1`. Add a fixture-independent unit test with a hand-built
+  out-of-phase band before trusting it against real content — none of this
+  pass's 9 fixtures were confirmed to exercise `INTENSITY_HCB2` specifically.
+- **Verifying `LongStart`/`LongStop`'s exact boundary arithmetic:** get a
+  clean (non-OCR-garbled) copy of §4.6.11.3.2 part b, or find an existing
+  from-primary-text transcription (e.g. a from-spec reference decoder's own
+  source, read for its citation rather than copied) to check the
+  1024/448/128/448 split in `reconstruct::build_window` against.
 - **Adding a `channelConfiguration` value (3/4/5/7/11/12/14):** get ISO/IEC
   14496-3 Table 42's element ordering for that value from a primary copy,
   add it to `config.rs`'s `known_channel_count` (renaming/restructuring it
   to carry an element order, not just a count, since that is what a real
-  decoder needs), and add a unit test alongside the existing 1/2/6 cases.
-  Do not extrapolate an ordering from the ones already here — 1/2/6 were
-  chosen specifically because they were confident, not because they
-  generalise.
-- **Landing #445:** every syntax element reconstruction needs is already
-  parsed and kept — `IcsStream::band_values` (scalefactors/intensity
-  positions/noise energies, still in log domain), `IcsStream::x_quant` (raw
-  quantized coefficients, pulse-adjusted), `IcsStream::tns` (filter
-  coefficients, not yet inverse-quantised into LPC form). The natural
-  starting point is the power-law scalefactor application
-  (`2^(0.25*scalefactor)` per §4.6.2), since M/S, intensity and TNS
-  application all consume its output. `vaco-tx::reference::imdct` (SP-C6)
-  is the transform to reuse; do not write a second one.
+  decoder needs), a unit test alongside the existing 1/2/6 cases, and a
+  matching entry in `decoder.rs`'s `reorder_to_output_channel_order`. Do not
+  extrapolate an ordering from the ones already here — 1/2/6 were chosen
+  specifically because they were confident, not because they generalise.
 - **Adding `coupling_channel_element()`:** transcribe Table 4.8's syntax
   (`ind_sw_cce_flag`, `num_coupled_elements`, the per-coupled-element gain
   list) alongside `pce.rs`'s pattern; it embeds one
   `individual_channel_stream()` per Table 4.8, reusable as-is.
+- **Extending the reconstruction pipeline generally:** `reconstruct.rs`
+  exposes three composable functions rather than one monolithic
+  per-channel routine — `deinterleave_channel`, `apply_joint_stereo`,
+  `finalize_channel` — specifically so a future change (CCE's own gain
+  list, an SBR hook ahead of the filterbank) can insert itself at the right
+  point in the pipeline without restructuring the whole thing. Keep that
+  shape rather than collapsing it back down.
 
 ## Configuration
 
@@ -353,9 +509,11 @@ is set in `vaco-component.toml` and consumed entirely by
 `Decoder` trait, `DecoderDesc`, `Caps`), `vaco-codec-vlc` (`VlcTable`,
 `VlcEntry` — every Huffman table in `spectral_tables.rs`), `vaco-frame`,
 `vaco-packet`, `vaco-parse-aac` (`AdtsHeader`, `AudioSpecificConfig`,
-`AudioObjectType`, `tables::is_reserved_config`). Not yet depended on,
-pending #445: `vaco-codec-dsp-sinewin`, `vaco-tx` — see `Cargo.toml`'s own
-comment for why they are not added before the code that needs them exists.
+`AudioObjectType`, `tables::is_reserved_config`, `tables::layout_for_config`
+— reconstruction's channel-layout tagging), `vaco-chlayout`, `vaco-sampfmt`.
+Added by #445: `vaco-codec-dsp-sinewin` (`sine_window`, `kbd_window` — see
+that crate's own doc for the KBD addition this pass made to it) and
+`vaco-tx` (`reference::imdct`, reused from SP-C6 unmodified).
 
 ## Specification
 
@@ -371,3 +529,14 @@ window sequences, codebook parameters, TNS field widths), Tables
 `swb_tables.rs`'s own doc), Tables 4.A.1-4.A.12 (Huffman codebooks — see
 `spectral_tables.rs`'s own doc). ISO/IEC 13818-7 (`iso-13818-7`) backs the
 ADTS transport syntax, also in `vaco-parse-aac`.
+
+Added by #445 (reconstruction): §4.6.1.3 (inverse quantisation),
+§4.6.2.3.3 (scalefactor gain), §4.5.2.3.5 (`quant_to_spec()`), §4.6.8.1.3
+(M/S stereo), §4.6.8.2.3 (intensity stereo), §4.6.9.3
+(`tns_decode_coef`/`tns_ar_filter`/`tns_decode_frame` pseudocode), §4.6.13.3
+(perceptual noise substitution), §4.6.11.1 and §4.6.11.3.1-2 (the IMDCT
+formula and windowing/block-switching, including the KBD construction now
+in `vaco-codec-dsp-sinewin`), Table 4.156/4.157 (`TNS_MAX_ORDER`/
+`TNS_MAX_BANDS`), and Table 42 (channel-configuration element ordering,
+`13818-7` — backing `decoder.rs`'s `reorder_to_output_channel_order` for
+configurations 1, 2 and 6).
