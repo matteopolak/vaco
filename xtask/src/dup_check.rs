@@ -349,13 +349,62 @@ const DISTINCT: &[(&str, &str)] = &[
          unrecorded collision — recorded here rather than left to keep \
          failing every agent's `dup-check` run.",
     ),
+    (
+        "Chunk",
+        "vaco-format-riff: an RIFF `id`+`ckSize`+payload record (WAV/AVI/…). \
+         vaco-protocol-sctp: RFC 4960's chunk enum (Data/Init/InitAck/Sack/…), \
+         a transport-protocol framing unit with no relation to a media \
+         container. Pre-existing, previously unrecorded collision.",
+    ),
+    (
+        "IdentificationHeader",
+        "vaco-parse-audio-misc: Xiph Vorbis I §4.2.2's identification header \
+         (channels, sample rate, bitrate triple, blocksize exponents). \
+         vaco-parse-opus: RFC 7845 §5.1's `OpusHead` (channel mapping family, \
+         stream/coupled counts, pre-skip, output gain). Two different codecs' \
+         own first setup packet, coincidentally sharing a name because both \
+         specifications call it that.",
+    ),
+    (
+        "StreamInfo",
+        "vaco-cli-core: a stream-specifier match record for `-map`/`-c:v:N` \
+         (index, container id, media type) — nothing to do with any codec's \
+         bitstream. vaco-parse-audio-misc: FLAC's `STREAMINFO` metadata block \
+         (sample rate, channels, bit depth, total samples, MD5). No shared \
+         concept.",
+    ),
 ];
 
 /// Known duplicates that are *not* yet resolved, with the plan.
 ///
 /// Distinct from [`DISTINCT`]: these are the same concept twice, tracked so they
 /// cannot be forgotten and cannot grow silently.
-const KNOWN_DUPLICATE: &[(&str, &str)] = &[];
+const KNOWN_DUPLICATE: &[(&str, &str)] = &[
+    (
+        "AlacSpecificConfig",
+        "vaco-codec-alac and vaco-parse-audio-misc both parse the same \
+         24-byte ALAC magic cookie into a struct with the same eleven \
+         fields, independently: the decoder crate for its own configuration, \
+         this work package's parser for `CodecParameters` reporting. \
+         Genuinely the same concept, not merged because the two crates were \
+         written concurrently by different agents and neither owns the \
+         other. The parse-only crate is the right place for the canonical \
+         definition — `vaco-codec-alac` depending on `vaco-parse-audio-misc` \
+         and dropping its own copy is the natural fix, the same direction \
+         `vaco-codec-h264` already takes on `vaco-parse-h264` — but making \
+         that edit belongs to whoever owns `vaco-codec-alac`.",
+    ),
+    (
+        "CommentIter",
+        "vaco-parse-opus (`OpusTags`, RFC 7845 §5.2) and \
+         vaco-format-vorbiscomment (the Vorbis/FLAC vendor-plus-tag-list \
+         shape, Xiph Vorbis I §5.2) both iterate a length-prefixed \
+         `TAG=value` string list — the same wire shape, read by two \
+         independent readers. Not merged: `vaco-parse-opus` predates this \
+         work package and editing it is out of scope here. Recorded rather \
+         than silently duplicated a third time.",
+    ),
+];
 
 // Both original entries are resolved. `CancelToken` and `Disposition` now live
 // in `vaco-core`, below every crate that wanted them, and the old spellings are
