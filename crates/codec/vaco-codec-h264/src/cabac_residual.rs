@@ -30,40 +30,64 @@
 //! `ctxIdxInc` needs the *above* and *left* block's own `coded_block_flag`,
 //! which is why it is a parameter here, not a derivation.
 //!
-//! # An honest confidence note on the context tables below
+//! # The context tables: now checked against primary text, one gap remains
 //!
-//! Transcribed from the published ITU-T H.264 text in a network-isolated
-//! clean-room environment (D7), with no second copy to diff against — the
-//! same caveat `cavlc_tables.rs` states at more length applies here, and if
-//! anything more strongly: these `(m, n)` pairs are a less redundant, less
-//! externally-checkable shape than a VLC code's bit length, and the
-//! generalist context-selection *formulas* below (position-indexed
-//! significance context, the `numDecodAbsLevelEq1`/`Gt1` counter rule for
-//! `coeff_abs_level_minus1`) are held with materially higher confidence than
-//! the specific `(m, n)` integers populating [`ContextSet::new`]. Treat the
-//! latter as provisional pending an independent check, exactly as this
-//! project already treats Teletext's Table 36 national subsets.
+//! First transcribed from recollection in a network-isolated clean-room
+//! environment (D7), with the same weaker-than-ideal confidence
+//! `cavlc_tables.rs` describes at more length. Re-verified while building
+//! the CABAC macroblock layer (#419), against the same primary source
+//! (`provenance/vaco-codec-h264.toml`'s `iso-iec-14496-10-2002-draft`) that
+//! source's CAVLC tables were checked against — and that check found the
+//! *first* pass here was not merely imprecise but structurally wrong: it
+//! used one 15-row `(m, n)` table shared across all four categories and
+//! ignoring `cabac_init_idc` entirely, when the primary text gives four
+//! categories their own `ctxIdxBlockCatOffset` (Table 9-30) into four
+//! different `(m, n)` tables selected by slice type / `cabac_init_idc`
+//! (Table 9-11). [`ContextSet::new`]'s current `(m, n)` literals are
+//! transcribed row-by-row from that source's Tables 9-19/9-20/9-21, not
+//! from recollection. The generalist context-selection *formulas*
+//! (position-indexed significance context, the `numDecodAbsLevelEq1`/`Gt1`
+//! counter rule for `coeff_abs_level_minus1`) were already correct and are
+//! unchanged.
+//!
+//! As with the CAVLC tables, only one primary source was available in this
+//! environment, not two independently cross-checked — recorded as a real
+//! limitation, not elided.
 //!
 //! # Scope within "4x4-shaped" categories
 //!
-//! `ctxBlockCat` 0 (luma DC), 1 (luma AC), 2 (luma 4x4), 4 (chroma AC) all
-//! use the identity mapping ITU-T Table 9-43's base rows describe:
-//! `ctxIdxInc(significant_coeff_flag) == levelListIdx`, and likewise for
-//! `last_significant_coeff_flag`, both capped by the category's own
-//! `maxNumCoeff - 1`. Chroma DC (`ctxBlockCat` 3, `maxNumCoeff` 4 or 8) and
-//! 8x8 transform blocks (`ctxBlockCat` 5, High-profile-only) use different,
-//! non-identity tables this module does not implement — [`ContextCategory`]
-//! only names the four base categories, and 8x8/chroma-DC residual decode is
-//! left for whoever lands transform-size selection in #419's High-profile
-//! path.
+//! `ctxBlockCat` 0 (luma DC), 1 (luma AC), 2 (luma 4x4), 3 (chroma DC), 4
+//! (chroma AC) all use the identity mapping ITU-T Table 9-43's base rows
+//! describe: `ctxIdxInc(significant_coeff_flag) == levelListIdx`, and
+//! likewise for `last_significant_coeff_flag`, both capped by the
+//! category's own `maxNumCoeff - 1`. 8x8 transform blocks (`ctxBlockCat` 5,
+//! High-profile only) use different tables this module does not implement,
+//! the same Main-profile-corpus reason `mb.rs` gives for not reaching them.
+//!
+//! Chroma DC (`ctxBlockCat` 3, `maxNumCoeff == 4` for 4:2:0) is *not*
+//! deferred the way 8x8 is: it appears in almost every real macroblock with
+//! any chroma residual at all, so skipping it would fail on real content
+//! immediately rather than on a deliberately-avoided corner. It needed one
+//! genuine puzzle solved first: Table 9-30 gives it a `ctxIdxBlockCatOffset`
+//! of 30 for `coeff_abs_level_minus1` against 39 for the next category —
+//! nine contexts spanning that gap, not the ten every other category gets,
+//! and nothing in the fetched primary text explains why. Worked out from
+//! first principles rather than guessed: `coeff_abs_level_minus1` decodes
+//! in *reverse* scan order, and a 4-coefficient block has at most 3 earlier
+//! coefficients to have counted toward `numDecodAbsLevelGt1` by the time any
+//! one of them is decoded, so `binIdx >= 1`'s `5 + Min(4, numDecodAbsLevelGt1)`
+//! can never actually reach `ctxIdxInc == 9` for this category — the tenth
+//! slot is unreachable by construction, not omitted by mistake. See
+//! [`ContextCategory::ChromaDc`] and [`ContextSet::new`] for where this
+//! lands in the array shapes.
 
 use vaco_codec_cabac::{CabacDecoder, ContextInit, ContextModel, init_contexts};
 use vaco_core::Result;
 use vaco_limits::Budget;
 
-/// The four residual categories this module covers — ITU-T's `ctxBlockCat`
-/// 0, 1, 2 and 4. See the module doc for why 3 (chroma DC) and 5 (8x8) are
-/// out of scope.
+/// The five residual categories this module covers — ITU-T's `ctxBlockCat`
+/// 0, 1, 2, 3 and 4. See the module doc for why 5 (8x8, High-profile only)
+/// is out of scope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContextCategory {
     /// `ctxBlockCat` 0: `Intra16x16DCLevel`, `maxNumCoeff == 16`.
@@ -72,6 +96,16 @@ pub enum ContextCategory {
     LumaAc,
     /// `ctxBlockCat` 2: `LumaLevel4x4`, `maxNumCoeff == 16`.
     Luma4x4,
+    /// `ctxBlockCat` 3: `ChromaDCLevel`, `maxNumCoeff == 4` (4:2:0 only —
+    /// this crate's whole scope is 4:2:0, see `mb.rs`'s `check_scope`).
+    /// Unlike the 8x8 category, this one is *not* deferred: chroma DC
+    /// appears in almost every real macroblock with any chroma residual, so
+    /// skipping it would fail on real content immediately rather than on a
+    /// deliberately-avoided corner. `coeff_abs_level_minus1`'s `binIdx >= 1`
+    /// context array is 4 wide here, not 5 — see [`ContextSet::new`]'s own
+    /// comment on why, worked out from first principles rather than copied,
+    /// since the primary text's Table 9-30 does not explain the gap.
+    ChromaDc,
     /// `ctxBlockCat` 4: `ChromaACLevel`, `maxNumCoeff == 15`.
     ChromaAc,
 }
@@ -84,9 +118,32 @@ pub enum ContextCategory {
 /// for `binIdx == 0`, 5 more selecting on `Min(4, numDecodAbsLevelGt1)` for
 /// `binIdx >= 1`).
 ///
-/// One [`ContextSet`] is shared across every block of a given category
+/// One [`ContextSet`] is shared across every block of a *given category*
 /// within a slice — CABAC contexts adapt across the whole slice, not per
-/// block, same as every other syntax element.
+/// block, same as every other syntax element. A slice needs one
+/// [`ContextSet`] per [`ContextCategory`] it exercises (five today), each
+/// built with that category's own `(m, n)` initialisation table — clause
+/// 9.3.1.1's Table 9-30 assigns each `ctxBlockCat` its own
+/// `ctxIdxBlockCatOffset` into the shared `significant_coeff_flag`/
+/// `last_significant_coeff_flag`/`coeff_abs_level_minus1` ctxIdx ranges,
+/// which is a different `(m, n)` row per category, not a shared one.
+///
+/// # A real bug this replaced
+///
+/// The first version of this struct used one 15-row `(m, n)` table shared
+/// across every category, and one fixed table regardless of slice type
+/// — neither matches the primary text (`provenance/vaco-codec-h264.toml`'s
+/// `iso-iec-14496-10-2002-draft`): Table 9-30 gives `significant_coeff_flag`
+/// five *different* `ctxIdxBlockCatOffset` values (0, 15, 29, 44, 47) for the
+/// five in-scope categories, and Table 9-11 says P/SP/B slices additionally
+/// select among three more `(m, n)` tables by `cabac_init_idc` (I/SI slices
+/// use a fourth, fixed table) — the "four context-table sets" a real
+/// `libx264 -coder cabac` stream actually exercises. The original values
+/// did not match *any* of these four tables at *any* offset checked against
+/// the primary text; found while building the CABAC macroblock layer (#419)
+/// needed to reach a real bit-exact measurement at all. Every `(m, n)` pair
+/// below is transcribed directly from that source's Tables 9-19/9-20/9-21,
+/// not from recollection.
 #[derive(Debug, Clone)]
 pub struct ContextSet {
     significant_coeff_flag: [ContextModel; 15],
@@ -102,34 +159,223 @@ pub struct ContextSet {
     scratch: ContextModel,
 }
 
+/// Which `(m, n)` table column clause 9.3.1.1 says to initialise from.
+/// `IorSi` is the one fixed table I/SI slices always use; P/SP/B slices
+/// select one of three tables by `cabac_init_idc` (clause 7.3.3's slice
+/// header field, `PPS`/slice-header already parse it — this module just
+/// takes the resolved value).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CabacInit {
+    IorSi,
+    PSpB(u8),
+}
+
 impl ContextSet {
-    /// Build and initialise from `slice_qp`, clause 9.3.1.1. `(m, n)`
-    /// literals below: see the module doc's confidence note.
+    /// Build and initialise for one [`ContextCategory`] from `slice_qp` and
+    /// `init`, clause 9.3.1.1. `(m, n)` literals below: transcribed from
+    /// `provenance/vaco-codec-h264.toml`'s primary source, Tables 9-19
+    /// (`significant_coeff_flag`), 9-20 (`last_significant_coeff_flag`), and
+    /// 9-21 (`coeff_abs_level_minus1`) — see this struct's own doc for why a
+    /// per-category, per-`cabac_init_idc` table replaced a single shared one.
     #[must_use]
-    pub fn new(slice_qp: i8) -> Self {
+    pub fn new(category: ContextCategory, slice_qp: i8, init: CabacInit) -> Self {
+        let col = match init {
+            CabacInit::IorSi => 0,
+            CabacInit::PSpB(idc) => 1 + usize::from(idc.min(2)),
+        };
+
+        // Each row is `[I_or_SI, cabac_init_idc=0, =1, =2]` for one ctxIdx,
+        // in category order (`LumaDc`, `LumaAc`, `Luma4x4`, `ChromaAc`).
         #[rustfmt::skip]
-        const SIG_INIT: [(i16, i16); 15] = [
-            (24, 0), (24, -11), (23, -8), (23, -6), (23, -3), (23, -1),
-            (0, 26), (18, -13), (23, -10), (24, -12), (26, -19), (30, -25),
-            (33, -30), (37, -37), (35, -32),
+        const SIG_LUMA_DC: [[(i16, i16); 4]; 15] = [
+            [(-7,93),(-2,85),(-13,103),(-4,86)], [(-11,87),(-6,78),(-13,91),(-12,88)],
+            [(-3,77),(-1,75),(-9,89),(-5,82)], [(-5,71),(-7,77),(-14,92),(-3,72)],
+            [(-4,63),(2,54),(-8,76),(-4,67)], [(-4,68),(5,50),(-12,87),(-8,72)],
+            [(-12,84),(-3,68),(-23,110),(-16,89)], [(-7,62),(1,50),(-24,105),(-9,69)],
+            [(-7,65),(6,42),(-10,78),(-1,59)], [(8,61),(-4,81),(-20,112),(5,66)],
+            [(5,56),(1,63),(-17,99),(4,57)], [(-2,66),(-4,70),(-78,127),(-4,71)],
+            [(1,64),(0,67),(-70,127),(-2,71)], [(0,61),(2,57),(-50,127),(2,58)],
+            [(-2,78),(-2,76),(-46,127),(-1,74)],
         ];
         #[rustfmt::skip]
-        const LAST_INIT: [(i16, i16); 15] = [
-            (14, 3), (13, 11), (10, 21), (12, 20), (12, 20), (12, 19),
-            (17, 8), (17, 11), (18, 8), (20, 6), (21, 5), (22, 3),
-            (23, 2), (24, 0), (24, -1),
+        const SIG_LUMA_AC: [[(i16, i16); 4]; 14] = [
+            [(1,50),(11,35),(-4,66),(-4,44)], [(7,52),(4,64),(-5,78),(-1,69)],
+            [(10,35),(1,61),(-4,71),(0,62)], [(0,44),(11,35),(-8,72),(-7,51)],
+            [(11,38),(18,25),(2,59),(-4,47)], [(1,45),(12,24),(-1,55),(-6,42)],
+            [(0,46),(13,29),(-7,70),(-3,41)], [(5,44),(13,36),(-6,75),(-6,53)],
+            [(31,17),(-10,93),(-8,89),(8,76)], [(1,51),(-7,73),(-34,119),(-9,78)],
+            [(7,50),(-2,73),(-3,75),(-11,83)], [(28,19),(13,46),(32,20),(9,52)],
+            [(16,33),(9,49),(30,22),(0,67)], [(14,62),(-7,100),(-44,127),(-5,90)],
         ];
         #[rustfmt::skip]
-        const ABS_BIN0_INIT: [(i16, i16); 5] = [
-            (14, 30), (16, 16), (14, 8), (10, 6), (7, 6),
+        const SIG_LUMA4X4: [[(i16, i16); 4]; 15] = [
+            [(-13,108),(9,53),(0,54),(1,67)], [(-15,100),(2,53),(-5,61),(-15,72)],
+            [(-13,101),(5,53),(0,58),(-5,75)], [(-13,91),(-2,61),(-1,60),(-8,80)],
+            [(-12,94),(0,56),(-3,61),(-21,83)], [(-10,88),(0,56),(-8,67),(-21,64)],
+            [(-16,84),(-13,63),(-25,84),(-13,31)], [(-10,86),(-5,60),(-14,74),(-25,64)],
+            [(-7,83),(-1,62),(-5,65),(-29,94)], [(-13,87),(4,57),(5,52),(9,75)],
+            [(-19,94),(-6,69),(2,57),(17,63)], [(1,70),(4,57),(0,61),(-8,74)],
+            [(0,72),(14,39),(-9,69),(-5,35)], [(-5,74),(4,51),(-11,70),(-2,27)],
+            [(18,59),(13,68),(18,55),(13,91)],
         ];
         #[rustfmt::skip]
-        const ABS_BINN_INIT: [(i16, i16); 5] = [
-            (14, 6), (9, 14), (7, 14), (5, 14), (3, 14),
+        const SIG_CHROMA_AC: [[(i16, i16); 4]; 14] = [
+            [(-4,75),(7,50),(9,41),(-10,66)], [(2,72),(16,39),(18,25),(3,62)],
+            [(-11,75),(5,44),(9,32),(-3,68)], [(-3,71),(4,52),(5,43),(-20,81)],
+            [(15,46),(11,48),(9,47),(0,30)], [(-13,69),(-5,60),(0,44),(1,7)],
+            [(0,62),(-1,59),(0,51),(-3,23)], [(0,65),(0,59),(2,46),(-21,74)],
+            [(21,37),(22,33),(19,38),(16,66)], [(-15,72),(5,44),(-4,66),(-23,124)],
+            [(9,57),(14,43),(15,38),(17,37)], [(16,54),(-1,78),(12,42),(44,-18)],
+            [(0,62),(0,60),(9,34),(50,-34)], [(12,72),(9,69),(0,89),(-22,127)],
         ];
 
-        let build = |pairs: &[(i16, i16)], dst: &mut [ContextModel]| {
-            let inits: Vec<ContextInit> = pairs.iter().map(|&(m, n)| ContextInit::new(m, n)).collect();
+        #[rustfmt::skip]
+        const LAST_LUMA_DC: [[(i16, i16); 4]; 15] = [
+            [(24,0),(11,28),(4,45),(4,39)], [(15,9),(2,40),(10,28),(0,42)],
+            [(8,25),(3,44),(10,31),(7,34)], [(13,18),(0,49),(33,-11),(11,29)],
+            [(15,9),(0,46),(52,-43),(8,31)], [(13,19),(2,44),(18,15),(6,37)],
+            [(10,37),(2,51),(28,0),(7,42)], [(12,18),(0,47),(35,-22),(3,40)],
+            [(6,29),(4,39),(38,-25),(8,33)], [(20,33),(2,62),(34,0),(13,43)],
+            [(15,30),(6,46),(39,-18),(13,36)], [(4,45),(0,54),(32,-12),(4,47)],
+            [(1,58),(3,54),(102,-94),(3,55)], [(0,62),(2,58),(0,0),(2,58)],
+            [(7,61),(4,63),(56,-15),(6,60)],
+        ];
+        #[rustfmt::skip]
+        const LAST_LUMA_AC: [[(i16, i16); 4]; 14] = [
+            [(12,38),(6,51),(33,-4),(8,44)], [(11,45),(6,57),(29,10),(11,44)],
+            [(15,39),(7,53),(37,-5),(14,42)], [(11,42),(6,52),(51,-29),(7,48)],
+            [(13,44),(6,55),(39,-9),(4,56)], [(16,45),(11,45),(52,-34),(4,52)],
+            [(12,41),(14,36),(69,-58),(13,37)], [(10,49),(8,53),(67,-63),(9,49)],
+            [(30,34),(-1,82),(44,-5),(19,58)], [(18,42),(7,55),(32,7),(10,48)],
+            [(10,55),(-3,78),(55,-29),(12,45)], [(17,51),(15,46),(32,1),(0,69)],
+            [(17,46),(22,31),(0,0),(20,33)], [(0,89),(-1,84),(27,36),(8,63)],
+        ];
+        #[rustfmt::skip]
+        const LAST_LUMA4X4: [[(i16, i16); 4]; 15] = [
+            [(26,-19),(25,7),(33,-25),(35,-18)], [(22,-17),(30,-7),(34,-30),(33,-25)],
+            [(26,-17),(28,3),(36,-28),(28,-3)], [(30,-25),(28,4),(38,-28),(24,10)],
+            [(28,-20),(32,0),(38,-27),(27,0)], [(33,-23),(34,-1),(34,-18),(34,-14)],
+            [(37,-27),(30,6),(35,-16),(52,-44)], [(33,-23),(30,6),(34,-14),(39,-24)],
+            [(40,-28),(32,9),(32,-8),(19,17)], [(38,-17),(31,19),(37,-6),(31,25)],
+            [(33,-11),(26,27),(35,0),(36,29)], [(40,-15),(26,30),(30,10),(24,33)],
+            [(41,-6),(37,20),(28,18),(34,15)], [(38,1),(28,34),(26,25),(30,20)],
+            [(41,17),(17,70),(29,41),(22,73)],
+        ];
+        #[rustfmt::skip]
+        const LAST_CHROMA_AC: [[(i16, i16); 4]; 14] = [
+            [(37,-16),(16,30),(14,35),(19,16)], [(35,-4),(18,32),(18,31),(15,36)],
+            [(38,-8),(18,35),(17,35),(15,36)], [(38,-3),(22,29),(21,30),(21,28)],
+            [(37,3),(24,31),(17,45),(25,21)], [(38,5),(23,38),(20,42),(30,20)],
+            [(42,0),(18,43),(18,45),(31,12)], [(35,16),(20,41),(27,26),(27,16)],
+            [(39,22),(11,63),(16,54),(24,42)], [(14,48),(9,59),(7,66),(0,93)],
+            [(27,37),(9,64),(16,56),(14,56)], [(21,60),(-1,94),(11,73),(15,57)],
+            [(12,68),(-2,89),(10,67),(26,38)], [(2,97),(-9,108),(-10,116),(-24,127)],
+        ];
+
+        #[rustfmt::skip]
+        const ABS_BIN0_LUMA_DC: [[(i16, i16); 4]; 5] = [
+            [(-3,71),(-6,76),(-23,112),(-24,115)], [(-6,42),(-2,44),(-15,71),(-22,82)],
+            [(-5,50),(0,45),(-7,61),(-9,62)], [(-3,54),(0,52),(0,53),(0,53)],
+            [(-2,62),(-3,64),(-5,66),(0,59)],
+        ];
+        #[rustfmt::skip]
+        const ABS_BINN_LUMA_DC: [[(i16, i16); 4]; 5] = [
+            [(0,58),(-2,59),(-11,77),(-14,85)], [(1,63),(-4,70),(-9,80),(-13,89)],
+            [(-2,72),(-4,75),(-9,84),(-13,94)], [(-1,74),(-8,82),(-10,87),(-11,92)],
+            [(-9,91),(-17,102),(-34,127),(-29,127)],
+        ];
+        #[rustfmt::skip]
+        const ABS_BIN0_LUMA_AC: [[(i16, i16); 4]; 5] = [
+            [(-5,67),(-9,77),(-21,101),(-21,100)], [(-5,27),(3,24),(-3,39),(-14,57)],
+            [(-3,39),(0,42),(-5,53),(-12,67)], [(-2,44),(0,48),(-7,61),(-11,71)],
+            [(0,46),(0,55),(-11,75),(-10,77)],
+        ];
+        #[rustfmt::skip]
+        const ABS_BINN_LUMA_AC: [[(i16, i16); 4]; 5] = [
+            [(-16,64),(-6,59),(-15,77),(-21,85)], [(-8,68),(-7,71),(-17,91),(-16,88)],
+            [(-10,78),(-12,83),(-25,107),(-23,104)], [(-6,77),(-11,87),(-25,111),(-15,98)],
+            [(-10,86),(-30,119),(-28,122),(-37,127)],
+        ];
+        #[rustfmt::skip]
+        const ABS_BIN0_LUMA4X4: [[(i16, i16); 4]; 5] = [
+            [(-12,92),(1,58),(-11,76),(-10,82)], [(-15,55),(-3,29),(-10,44),(-8,48)],
+            [(-10,60),(-1,36),(-10,52),(-8,61)], [(-6,62),(1,38),(-10,57),(-8,66)],
+            [(-4,65),(2,43),(-9,58),(-7,70)],
+        ];
+        #[rustfmt::skip]
+        const ABS_BINN_LUMA4X4: [[(i16, i16); 4]; 5] = [
+            [(-12,73),(-6,55),(-16,72),(-14,75)], [(-8,76),(0,58),(-7,69),(-10,79)],
+            [(-7,80),(0,64),(-4,69),(-9,83)], [(-9,88),(-3,74),(-5,74),(-12,92)],
+            [(-17,110),(-10,90),(-9,86),(-18,108)],
+        ];
+        #[rustfmt::skip]
+        const ABS_BIN0_CHROMA_AC: [[(i16, i16); 4]; 5] = [
+            [(-8,78),(0,58),(3,52),(-13,81)], [(-5,33),(8,5),(7,4),(-6,38)],
+            [(-4,48),(10,14),(10,8),(-13,62)], [(-2,53),(14,18),(17,8),(-6,58)],
+            [(-3,62),(13,27),(16,19),(-2,59)],
+        ];
+        #[rustfmt::skip]
+        const ABS_BINN_CHROMA_AC: [[(i16, i16); 4]; 5] = [
+            [(-13,71),(2,40),(3,37),(-16,73)], [(-10,79),(0,58),(-1,61),(-10,76)],
+            [(-12,86),(-3,70),(-5,73),(-13,86)], [(-13,90),(-6,79),(-1,70),(-9,83)],
+            [(-14,97),(-8,85),(-4,78),(-10,87)],
+        ];
+
+        // Chroma DC (`ctxBlockCat` 3), `maxNumCoeff == 4`: only 3
+        // significant/last positions (0..maxNumCoeff-2) and, per Table 9-30,
+        // only 9 `coeff_abs_level_minus1` contexts rather than the 10 every
+        // other category gets (offset 30 for this category, 39 for the
+        // next). Worked out from first principles, not copied from anywhere:
+        // `coeff_abs_level_minus1` is decoded in *reverse* scan order, so
+        // `numDecodAbsLevelGt1` when decoding any one of at most 4
+        // coefficients has at most 3 *earlier* coefficients to have counted
+        // — it can never reach 4, so binIdx>=1's `5 + Min(4, ...)` formula's
+        // cap is never the binding constraint here and never produces
+        // `ctxIdxInc == 9`. bin0 keeps the full 5 slots (`numDecodAbsLevelEq1`
+        // can reach 3, and the `numDecodAbsLevelGt1 != 0` branch reaches 0
+        // independently, so all of 0..4 are reachable); binn gets only 4
+        // (`ctxIdxInc` 5..8). The fifth `coeff_abs_level_minus1_binn` slot
+        // this category's 4-row table leaves uninitialised is accordingly
+        // unreachable for any conformant encoder's output; `abs_level_binn_mut`
+        // would still return it rather than panic if adversarial input ever
+        // asked, which is the same graceful-degradation trade every other
+        // `.get_mut().unwrap_or(scratch)` fallback in this module makes.
+        #[rustfmt::skip]
+        const SIG_CHROMA_DC: [[(i16, i16); 4]; 3] = [
+            [(-8,102),(3,64),(-4,71),(3,65)], [(-15,100),(1,61),(0,58),(-7,69)],
+            [(0,95),(9,63),(7,61),(8,77)],
+        ];
+        #[rustfmt::skip]
+        const LAST_CHROMA_DC: [[(i16, i16); 4]; 3] = [
+            [(30,-6),(1,67),(0,75),(20,34)], [(27,3),(5,59),(2,72),(19,31)],
+            [(26,22),(9,67),(8,77),(27,44)],
+        ];
+        #[rustfmt::skip]
+        const ABS_BIN0_CHROMA_DC: [[(i16, i16); 4]; 5] = [
+            [(-11,97),(0,70),(2,66),(-4,79)], [(-20,84),(-4,29),(-9,34),(-22,69)],
+            [(-11,79),(5,31),(1,32),(-16,75)], [(-6,73),(7,42),(11,31),(-2,58)],
+            [(-4,74),(1,59),(5,52),(1,58)],
+        ];
+        #[rustfmt::skip]
+        const ABS_BINN_CHROMA_DC: [[(i16, i16); 4]; 4] = [
+            [(-13,86),(-2,58),(-2,55),(-13,78)], [(-13,96),(-3,72),(-2,67),(-9,83)],
+            [(-11,97),(-3,81),(0,73),(-4,81)], [(-19,117),(-11,97),(-8,89),(-13,99)],
+        ];
+
+        let (sig, last, bin0, binn): (&[[(i16, i16); 4]], &[[(i16, i16); 4]], &[[(i16, i16); 4]], &[[(i16, i16); 4]]) =
+            match category {
+                ContextCategory::LumaDc => (&SIG_LUMA_DC, &LAST_LUMA_DC, &ABS_BIN0_LUMA_DC, &ABS_BINN_LUMA_DC),
+                ContextCategory::LumaAc => (&SIG_LUMA_AC, &LAST_LUMA_AC, &ABS_BIN0_LUMA_AC, &ABS_BINN_LUMA_AC),
+                ContextCategory::Luma4x4 => (&SIG_LUMA4X4, &LAST_LUMA4X4, &ABS_BIN0_LUMA4X4, &ABS_BINN_LUMA4X4),
+                ContextCategory::ChromaDc => (&SIG_CHROMA_DC, &LAST_CHROMA_DC, &ABS_BIN0_CHROMA_DC, &ABS_BINN_CHROMA_DC),
+                ContextCategory::ChromaAc => (&SIG_CHROMA_AC, &LAST_CHROMA_AC, &ABS_BIN0_CHROMA_AC, &ABS_BINN_CHROMA_AC),
+            };
+
+        let build = |rows: &[[(i16, i16); 4]], dst: &mut [ContextModel]| {
+            let inits: Vec<ContextInit> = rows.iter().map(|row| {
+                let (m, n) = row.get(col).copied().unwrap_or((0, 0));
+                ContextInit::new(m, n)
+            }).collect();
             init_contexts(dst, &inits, slice_qp);
         };
         let mut s = Self {
@@ -139,10 +385,21 @@ impl ContextSet {
             coeff_abs_level_minus1_binn: [ContextModel::UNINITIALISED; 5],
             scratch: ContextModel::UNINITIALISED,
         };
-        build(&SIG_INIT, &mut s.significant_coeff_flag);
-        build(&LAST_INIT, &mut s.last_significant_coeff_flag);
-        build(&ABS_BIN0_INIT, &mut s.coeff_abs_level_minus1_bin0);
-        build(&ABS_BINN_INIT, &mut s.coeff_abs_level_minus1_binn);
+        // Each category's own array is smaller than 15/5 for LumaAc/ChromaAc
+        // (14 significance contexts, `maxNumCoeff - 1`) — `init_contexts`
+        // writes only as many entries as it is given rows for, per its own
+        // contract, leaving this struct's fixed-size arrays' unused tail at
+        // `UNINITIALISED`, which `residual_block_cabac` never asks for
+        // (`last_scan_idx` bounds every index by the category's own
+        // `max_num_coeff`).
+        if let Some(dst) = s.significant_coeff_flag.get_mut(..sig.len()) {
+            build(sig, dst);
+        }
+        if let Some(dst) = s.last_significant_coeff_flag.get_mut(..last.len()) {
+            build(last, dst);
+        }
+        build(bin0, &mut s.coeff_abs_level_minus1_bin0);
+        build(binn, &mut s.coeff_abs_level_minus1_binn);
         s
     }
 }
@@ -204,15 +461,11 @@ pub struct CabacResidual {
 pub fn residual_block_cabac(
     cabac: &mut CabacDecoder<'_>,
     ctx: &mut ContextSet,
-    category: ContextCategory,
     max_num_coeff: u8,
     budget: &mut Budget,
 ) -> Result<CabacResidual> {
     let mut positions: Vec<u8> = budget.alloc(usize::from(max_num_coeff))?;
     positions.clear();
-    let _ = category; // Reserved: the four base categories share one table
-                       // shape today; a future category with its own table
-                       // (chroma DC, 8x8) would switch on it here.
 
     // clause 7.3.5.3.3: significant_coeff_flag/last_significant_coeff_flag
     // are read for scan positions 0..maxNumCoeff-2 inclusive; the final
@@ -385,15 +638,15 @@ mod tests {
         let positions = [2u8, 5, 9];
         let levels = [3i32, -1, 5];
         let mut enc = CabacEncoder::new();
-        let mut ctx = ContextSet::new(26);
+        let mut ctx = ContextSet::new(ContextCategory::Luma4x4, 26, CabacInit::IorSi);
         encode_fixture(&mut enc, &mut ctx, 16, &positions, &levels);
         enc.encode_terminate(1);
         let bytes = enc.finish();
 
         let mut dec = CabacDecoder::new(&bytes);
-        let mut ctx2 = ContextSet::new(26);
+        let mut ctx2 = ContextSet::new(ContextCategory::Luma4x4, 26, CabacInit::IorSi);
         let mut b = budget();
-        let out = residual_block_cabac(&mut dec, &mut ctx2, ContextCategory::Luma4x4, 16, &mut b)
+        let out = residual_block_cabac(&mut dec, &mut ctx2, 16, &mut b)
             .unwrap();
         assert_eq!(out.positions, positions);
         assert_eq!(out.levels, levels);
@@ -404,15 +657,15 @@ mod tests {
         let positions = [0u8];
         let levels = [1i32];
         let mut enc = CabacEncoder::new();
-        let mut ctx = ContextSet::new(26);
+        let mut ctx = ContextSet::new(ContextCategory::LumaDc, 26, CabacInit::IorSi);
         encode_fixture(&mut enc, &mut ctx, 16, &positions, &levels);
         enc.encode_terminate(1);
         let bytes = enc.finish();
 
         let mut dec = CabacDecoder::new(&bytes);
-        let mut ctx2 = ContextSet::new(26);
+        let mut ctx2 = ContextSet::new(ContextCategory::LumaDc, 26, CabacInit::IorSi);
         let mut b = budget();
-        let out = residual_block_cabac(&mut dec, &mut ctx2, ContextCategory::LumaDc, 16, &mut b)
+        let out = residual_block_cabac(&mut dec, &mut ctx2, 16, &mut b)
             .unwrap();
         assert_eq!(out.positions, positions);
         assert_eq!(out.levels, levels);
@@ -425,15 +678,15 @@ mod tests {
         let positions: Vec<u8> = (0u8..15).collect();
         let levels = vec![1i32; 15];
         let mut enc = CabacEncoder::new();
-        let mut ctx = ContextSet::new(26);
+        let mut ctx = ContextSet::new(ContextCategory::LumaAc, 26, CabacInit::IorSi);
         encode_fixture(&mut enc, &mut ctx, 15, &positions, &levels);
         enc.encode_terminate(1);
         let bytes = enc.finish();
 
         let mut dec = CabacDecoder::new(&bytes);
-        let mut ctx2 = ContextSet::new(26);
+        let mut ctx2 = ContextSet::new(ContextCategory::LumaAc, 26, CabacInit::IorSi);
         let mut b = budget();
-        let out = residual_block_cabac(&mut dec, &mut ctx2, ContextCategory::LumaAc, 15, &mut b)
+        let out = residual_block_cabac(&mut dec, &mut ctx2, 15, &mut b)
             .unwrap();
         assert_eq!(out.positions, positions);
         assert_eq!(out.levels, levels);
@@ -445,15 +698,15 @@ mod tests {
         let positions = [7u8];
         let levels = [21i32];
         let mut enc = CabacEncoder::new();
-        let mut ctx = ContextSet::new(26);
+        let mut ctx = ContextSet::new(ContextCategory::Luma4x4, 26, CabacInit::IorSi);
         encode_fixture(&mut enc, &mut ctx, 16, &positions, &levels);
         enc.encode_terminate(1);
         let bytes = enc.finish();
 
         let mut dec = CabacDecoder::new(&bytes);
-        let mut ctx2 = ContextSet::new(26);
+        let mut ctx2 = ContextSet::new(ContextCategory::Luma4x4, 26, CabacInit::IorSi);
         let mut b = budget();
-        let out = residual_block_cabac(&mut dec, &mut ctx2, ContextCategory::Luma4x4, 16, &mut b)
+        let out = residual_block_cabac(&mut dec, &mut ctx2, 16, &mut b)
             .unwrap();
         assert_eq!(out.positions, positions);
         assert_eq!(out.levels, levels);
@@ -461,16 +714,29 @@ mod tests {
 
     #[test]
     fn context_set_new_produces_valid_states_across_the_full_qp_range() {
+        const CATEGORIES: [ContextCategory; 5] = [
+            ContextCategory::LumaDc,
+            ContextCategory::LumaAc,
+            ContextCategory::Luma4x4,
+            ContextCategory::ChromaDc,
+            ContextCategory::ChromaAc,
+        ];
+        const INITS: [CabacInit; 4] =
+            [CabacInit::IorSi, CabacInit::PSpB(0), CabacInit::PSpB(1), CabacInit::PSpB(2)];
         for qp in 0..=51i8 {
-            let ctx = ContextSet::new(qp);
-            for c in ctx
-                .significant_coeff_flag
-                .iter()
-                .chain(&ctx.last_significant_coeff_flag)
-                .chain(&ctx.coeff_abs_level_minus1_bin0)
-                .chain(&ctx.coeff_abs_level_minus1_binn)
-            {
-                assert!(c.state_idx() <= 63);
+            for &category in &CATEGORIES {
+                for &init in &INITS {
+                    let ctx = ContextSet::new(category, qp, init);
+                    for c in ctx
+                        .significant_coeff_flag
+                        .iter()
+                        .chain(&ctx.last_significant_coeff_flag)
+                        .chain(&ctx.coeff_abs_level_minus1_bin0)
+                        .chain(&ctx.coeff_abs_level_minus1_binn)
+                    {
+                        assert!(c.state_idx() <= 63);
+                    }
+                }
             }
         }
     }
@@ -485,11 +751,11 @@ mod tests {
     fn residual_block_cabac_does_not_panic_on_an_all_ones_bypass_stream() {
         let data = [0xffu8; 10];
         let mut dec = CabacDecoder::new(&data);
-        let mut ctx = ContextSet::new(3);
+        let mut ctx = ContextSet::new(ContextCategory::LumaDc, 3, CabacInit::IorSi);
         let mut b = budget();
         // Must not panic; the decoded content of adversarial input carries
         // no correctness guarantee (`CabacDecoder` itself never fails a
         // read — see `residual_block_cabac`'s own doc on `malformed()`).
-        let _ = residual_block_cabac(&mut dec, &mut ctx, ContextCategory::LumaDc, 4, &mut b);
+        let _ = residual_block_cabac(&mut dec, &mut ctx, 4, &mut b);
     }
 }

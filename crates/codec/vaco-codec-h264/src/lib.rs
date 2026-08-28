@@ -29,11 +29,14 @@
 //! `vaco-codec-msac` draws around VP8/VP9's bool decoders, applied to H.264.
 //! [`mb`] is the macroblock layer that now sits above both, far enough
 //! along to drive [`cavlc::residual_block_cavlc`] across a whole real CAVLC
-//! slice bit-exactly; see [`mb`]'s own module doc for exactly what it
+//! slice bit-exactly, and to drive [`cabac_residual::residual_block_cabac`]
+//! across a whole real CABAC I/P slice structurally (mb_type, mb_skip_flag,
+//! coded_block_pattern, mb_qp_delta, ref_idx, mvd, coded_block_flag) though
+//! not yet bit-exactly; see [`mb`]'s own module doc for exactly what it
 //! covers and what it explicitly refuses (MBAFF, the 8x8 transform,
-//! `constrained_intra_pred_flag`'s substitution rule, CABAC's own
-//! macroblock layer). Prediction, motion compensation, transform and
-//! reconstruction remain #420 onward.
+//! `constrained_intra_pred_flag`'s substitution rule, CABAC B slices).
+//! Prediction, motion compensation, transform and reconstruction remain
+//! #420 onward.
 //!
 //! [`H264Decoder::send_packet`] locates a slice header far enough to resolve
 //! `entropy_coding_mode_flag` and then returns
@@ -78,18 +81,26 @@
 //! `mb.rs`'s own module doc and `docs/codec/vaco-codec-h264.md` for both,
 //! in full.
 //!
-//! **What is not**: the same measurement for CABAC, which needs its own
-//! macroblock layer (`mb_type`/`mb_skip_flag`/etc. context tables) first —
-//! see [`mb`]'s module doc. What is true for CABAC today is narrower and
-//! stated precisely: `residual_block_cabac` is specification-and-
-//! self-consistency tested, plus bit-exact against its own hand-built
-//! fixtures — driving it end-to-end against real encoder output would be
-//! exactly the specification-only-dressed-as-verified gap a previous
-//! dispatch on this project was asked to stop making.
+//! **What is not**: full bit-exactness for CABAC's macroblock layer.
+//! [`mb::decode_slice_cabac`] now exists and drives I/P slices through
+//! real `libx264 -coder cabac` corpora (`tests/macroblock_layer_cabac.rs`),
+//! and building it caught two real bugs the same way the CAVLC pass did —
+//! `cabac_residual.rs`'s context tables were a single shared table
+//! ignoring `cabac_init_idc` entirely (not merely imprecise, structurally
+//! wrong), and chroma DC's `coded_block_flag` was never actually read, both
+//! now fixed against primary text. But bit consumption still diverges
+//! partway through all three corpora, including an all-intra one built
+//! specifically to rule out P-slice causes, in a way not root-caused within
+//! this dispatch — see [`mb`]'s own module doc and
+//! `docs/codec/vaco-codec-h264.md` for the exact minimal repro. Reporting
+//! that honestly, rather than claiming the same bit-exact bar CAVLC holds,
+//! is the same choice a previous dispatch on this project was asked to
+//! make for the specification-only-dressed-as-verified gap.
 
 #![forbid(unsafe_code)]
 
 pub mod cabac_residual;
+mod cabac_mb_tables;
 pub mod cavlc;
 mod cavlc_tables;
 pub mod mb;

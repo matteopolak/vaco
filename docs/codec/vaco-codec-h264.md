@@ -158,15 +158,20 @@ reads is kept beyond what bit consumption needs.
 Within #419's own scope, explicitly out rather than merely unimplemented
 (see `mb.rs`'s own module doc for the full list and reasons):
 
-- **CABAC's macroblock layer** — `mb_type`, `mb_skip_flag`,
-  `coded_block_pattern`, `ref_idx`, `mvd`, intra pred mode flags,
-  `mb_qp_delta`, `coded_block_flag`, `transform_size_8x8_flag` binarisation
-  and `ctxIdxInc` derivation. This is the largest remaining piece of "both
-  entropy paths" — CAVLC's macroblock layer is plain `ue(v)`/`se(v)`/
-  `te(v)`/`me(v)` reads with no new hand-transcribed bit tables, but CABAC
-  needs its own per-element context-initialisation tables (Tables 9-11
-  through 9-33, 9-24, 9-26/9-27), fetched and verified the same way the
-  CAVLC tables were, not fabricated to reach a number.
+- **CABAC's B-slice `mb_type`/`sub_mb_type`** (Table 9-27/9-28's B column)
+  — I and P/SP slices are implemented (`decode_slice_cabac`); B is refused
+  outright. Table 9-27's bin string, unlike every other binarisation in
+  this crate, does not decompose into a clean arithmetic formula the way
+  Table 9-26 (I slices) and the P/SP table do, and hand-deriving it
+  bit-by-bit from the primary text without a second, independent way to
+  check the result risked exactly the class of silent, undetectable error
+  this whole line of work exists to avoid.
+- **CABAC's 8x8 residual category** (`ctxBlockCat` 5, `transform_size_8x8_flag`)
+  — same Main-profile-corpus reason as CAVLC's; chroma DC (`ctxBlockCat` 3)
+  *is* implemented on both the residual (`cabac_residual.rs`) and
+  macroblock-layer (`coded_block_flag`, `mb.rs`) sides, since it is not
+  avoidable the way 8x8 is (see "Verification" below for the one
+  unresolved wrinkle it left).
 - **MBAFF** (`mb_adaptive_frame_field_flag`) and field pictures —
   `decode_slice_cavlc` refuses outright rather than silently getting the
   frame-only neighbour derivation wrong for it. Neighbour availability
@@ -227,16 +232,62 @@ picture to manifest:
    the dispatch's "build the corpus for the branches" instruction named
    multiple slices per picture explicitly.
 
-**Specification-and-self-consistency, not reference-verified**: CABAC's
-residual-block entropy function's bit-level decode, and the `blk_xy` 4x4
-scan-order mapping `mb.rs` uses (well-known and, so far, never observed to
-produce a wrong bit count against either real corpus above, but not
-independently checked against primary text). Verifying CABAC the same way
-CAVLC now is needs its macroblock layer first — see "What is not
-implemented". What is verified instead for CABAC: hand-built fixtures cited
-to the exact table row/spec clause they exercise, round-trips through
-`vaco-codec-cabac`'s own test-only encoder mirroring this crate's exact bin
-sequence, and the fuzz corpus above.
+**Built, but not yet bit-exact**: [`mb::decode_slice_cabac`], covering I
+and P/SP slices (`mb_type`, `sub_mb_type`, `mb_skip_flag`,
+`coded_block_pattern`, `mb_qp_delta`, intra-4x4 pred-mode flags, `ref_idx`,
+`mvd`, and `coded_block_flag` including chroma DC). B slices are refused
+outright (see "What is not implemented"). Against three real
+`libx264 -coder cabac` corpora built for this
+(`tests/macroblock_layer_cabac.rs`, fixtures `cabac_ip_simple.264`,
+`cabac_ip_multiref.264`, `cabac_i_only.264` — the last one all-intra,
+generated specifically to isolate whether a bug was P-slice-specific), bit
+consumption still diverges from the real bitstream partway through, so all
+three tests are `#[ignore]`d with an exact reproduction case in the ignore
+reason rather than deleted or left silently passing. What building this
+layer did catch, before the remaining divergence:
+
+1. **The residual context tables were structurally wrong, not just
+   imprecise.** `cabac_residual.rs`'s original `ContextSet` used one shared
+   `(m, n)` table across all `ContextCategory` values and ignored
+   `cabac_init_idc` for P/B slices entirely, despite being marked
+   "provisional pending an independent check". Cross-checking against the
+   primary text found every value wrong; fixed by transcribing Tables
+   9-19/9-20/9-21 in full, per category and per `cabac_init_idc`.
+2. **The same skipped-neighbour bug CAVLC had, with a CABAC-shaped twist.**
+   `mb_skip_flag` is itself context-coded from neighbours' *own* skip
+   status (clause 9.3.3.1.1.1), not merely their availability — tighter
+   than CAVLC's `mb_skip_run`, where a skipped macroblock only needed to
+   stop being `NBlock(None)`. A skipped macroblock here must contribute a
+   *decoded* skip state to its neighbours' context derivation.
+3. **Chroma DC's `coded_block_flag` was never actually read.** The
+   original code inferred `ctxBlockCat=3`'s presence from
+   `coded_block_pattern` alone and called `residual_block_cabac`
+   unconditionally, skipping the per-block flag clause 7.3.5.3.3 actually
+   requires (its own context table, ctxIdx97-100, per Table 9-30). Found
+   against `cabac_ip_multiref.264`, where an `Intra16x16` P-slice
+   macroblock with `cbp_chroma=1` hit a premature `end_of_slice_flag`.
+   Fixed, but fixing it did not by itself reach bit-exactness — see below.
+
+The unresolved divergence: with the chroma-DC fix in place, all three
+corpora — including the all-intra one, which rules out anything
+P-slice-specific (`ref_idx`/`mvd`/`mb_skip_flag`/`sub_mb_pred`) — still
+diverge shortly after certain `coded_block_flag` combinations for chroma
+DC. Minimal repro: `cabac_i_only.264`, slice 1, macroblock address 9
+(`cbp_luma=0b1111`, `cbp_chroma=2`), where both chroma components' DC
+`coded_block_flag` decode `false`. Manual re-review of the
+`CBF_CHROMA_DC` table transcription, the `ctxIdxInc = cond_a + 2*cond_b`
+derivation, `cbf_cond_term`/`cbp_chroma_cond_term`, and the `blk_xy`
+chroma coordinate mapping found no error in any of them; the true cause
+was not found within the time available. Exact reasons are in
+`tests/macroblock_layer_cabac.rs`'s `#[ignore]` strings so whoever picks
+this back up starts from the same minimal case rather than re-deriving it.
+
+What full self-consistency does still cover: hand-built fixtures cited to
+the exact table row/spec clause they exercise, round-trips through
+`vaco-codec-cabac`'s own test-only encoder mirroring this crate's exact
+bin sequence, and the `h264_entropy` fuzz target (now covering all five
+`ContextCategory` values and all four `cabac_init_idc` selections, 5.75M+
+executions with no crash).
 
 ## How to change it
 
@@ -244,20 +295,36 @@ sequence, and the fuzz corpus above.
 that decodes against them (and the only place a `TotalCoeff` exclusion is
 added or lifted — lifting one requires re-running the exhaustive
 prefix-conflict self-check first). `cabac_residual.rs` holds `ContextSet`'s
-`(m, n)` tables and the two decode functions; adding a fifth
-`ContextCategory` (chroma DC or 8x8) means adding its own
-`significant_coeff_flag`/`last_significant_coeff_flag` table and switching
-on `category` where `residual_block_cabac` currently ignores it. `mb.rs`
-holds the macroblock layer: `classify_mb_type`/`classify_sub_mb_type` are
-the only places Tables 7-8/7-10/7-11/7-14/7-15 are transcribed,
-`NeighbourGrid` is the only `nC` state, and `decode_slice_cavlc` is the one
-entry point that drives a whole slice — a CABAC macroblock layer would be
-`decode_slice_cabac` alongside it, sharing `classify_mb_type`/
-`NeighbourGrid` but reading through `vaco-codec-cabac` instead of
-`BoundedGolomb`. `decoder.rs` is the only place that touches
-`vaco-parse-h264`; wiring `mb::decode_slice_cavlc` into
-`H264Decoder::send_packet` for real output is #420's job, once prediction
-and reconstruction exist to do something with what it reads.
+per-category, per-`cabac_init_idc` tables (Tables 9-19/9-20/9-21) and
+`residual_block_cabac`; `cabac_mb_tables.rs` holds every macroblock-layer
+context-initialisation table (`(m, n)` pairs from Tables 9-11 through
+9-33, including the B-slice `mb_type`/`sub_mb_type` rows kept
+`#[allow(dead_code)]` for whoever lands B support) — both are pure data
+modules with no decode logic of their own, so a new `ContextCategory` (8x8)
+or a new binarisation means adding its table there and wiring it into the
+matching function in `cabac_residual.rs` or `mb.rs`. `mb.rs` holds the
+whole macroblock layer for both entropy modes: `classify_mb_type`/
+`classify_sub_mb_type` are the only places Tables 7-8/7-10/7-11/7-14/7-15
+are transcribed and are shared by both `decode_slice_cavlc` and
+`decode_slice_cabac`; `NeighbourGrid` is CAVLC's `nC` state, `CabacGrids`
+is CABAC's equivalent (macroblock info, `coded_block_flag` per 4x4 block
+*and* per chroma-DC macroblock, and per-partition `MvInfo`) — the two
+are separate because CABAC's `ctxIdxInc` derivations need neighbours'
+*decoded* values (skip status, `coded_block_flag`, `ref_idx`/`mvd`), not
+merely their availability the way CAVLC's `nC` does. Picking up the
+open chroma-DC divergence (see "Verification") means starting from
+`tests/macroblock_layer_cabac.rs`'s exact repro and instrumenting
+`decode_residual_cabac`'s chroma-DC branch and the `cbf_cond_term`/
+`cbp_chroma_cond_term` helpers immediately above it in `mb.rs` — every
+other path (table transcription, the generic `ctxIdxInc` formula,
+`blk_xy`) was manually re-checked against primary text during this work
+without finding the error, so the bug is more likely in ordering or state
+carried between macroblocks than in a single formula. `decoder.rs` is the
+only place that touches `vaco-parse-h264`; wiring `mb::decode_slice_cavlc`/
+`decode_slice_cabac` into `H264Decoder::send_packet` for real output is
+#420's job, once prediction and reconstruction exist to do something with
+what it reads — and CABAC's wiring should wait for the divergence above to
+be resolved first.
 
 ## Configuration
 
