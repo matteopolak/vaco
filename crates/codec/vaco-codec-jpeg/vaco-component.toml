@@ -1,0 +1,19 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+
+[[component]]
+kind      = "decoder"
+name      = "jpeg"
+long_name = "JPEG (ITU-T T.81 / ISO/IEC 10918-1), native baseline and progressive decode"
+feature   = "codec-jpeg"
+ctor      = "vaco_codec_jpeg::JPEG_DECODER"
+media     = "video"
+codec     = "jpeg"
+
+[[component]]
+kind      = "encoder"
+name      = "jpeg"
+long_name = "JPEG (ITU-T T.81 / ISO/IEC 10918-1), native baseline encode"
+feature   = "codec-jpeg"
+ctor      = "vaco_codec_jpeg::JPEG_ENCODER"
+media     = "video"
+codec     = "jpeg"

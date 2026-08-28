@@ -1,0 +1,38 @@
+[[table]]
+name   = "ZIGZAG"
+file   = "crates/codec/vaco-codec-jpeg/src/tables.rs"
+source = "itu-t-t81-199209"
+clause = "Figure A.6, zig-zag sequence order"
+method = "transcribed"
+
+[[table]]
+name   = "STD_LUMA_QUANT"
+file   = "crates/codec/vaco-codec-jpeg/src/tables.rs"
+source = "itu-t-t81-199209"
+clause = "Table K.1, luminance quantization table"
+method = "transcribed"
+
+[[table]]
+name   = "STD_CHROMA_QUANT"
+file   = "crates/codec/vaco-codec-jpeg/src/tables.rs"
+source = "itu-t-t81-199209"
+clause = "Table K.2, chrominance quantization table"
+method = "transcribed"
+
+# Table K.3/K.4's HUFFVAL arrays (STD_DC_LUMA_VALUES/STD_DC_CHROMA_VALUES)
+# are twelve entries each, below this project's 32-element provenance
+# threshold, so they carry no row of their own here.
+
+[[table]]
+name   = "STD_AC_LUMA_VALUES"
+file   = "crates/codec/vaco-codec-jpeg/src/tables.rs"
+source = "itu-t-t81-199209"
+clause = "Table K.5, luminance AC Huffman table HUFFVAL"
+method = "transcribed"
+
+[[table]]
+name   = "STD_AC_CHROMA_VALUES"
+file   = "crates/codec/vaco-codec-jpeg/src/tables.rs"
+source = "itu-t-t81-199209"
+clause = "Table K.6, chrominance AC Huffman table HUFFVAL"
+method = "transcribed"
