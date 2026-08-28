@@ -1,0 +1,10 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+
+[[component]]
+kind      = "decoder"
+name      = "vp8"
+long_name = "On2 VP8 (RFC 6386)"
+feature   = "codec-vp8"
+ctor      = "vaco_codec_vp8::VP8_DECODER"
+media     = "video"
+codec     = "vp8"
