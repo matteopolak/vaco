@@ -2305,3 +2305,68 @@ Two things to fix, and the second matters more than the first:
 
 Not urgent, but it should be done before anyone cites a clean `vlc-scan` as
 evidence about a crate it never looked at.
+
+## `vaco-mux-mxf`'s multi-track descriptor resolution: resolved
+
+The entry above ("`vaco-mux-mxf`'s two-essence-track files do not resolve
+descriptors under a real `ffmpeg -i`") is fixed. Root cause was not the
+`PackageTracks`-ordering hypothesis that entry proposed (tested directly:
+swapping the timecode track to the end of `PackageTracks` made no
+difference) — it was `SubDescriptorUIDs`'s local tag. This crate had
+invented `0x0603` for it instead of measuring; the real tag, confirmed by
+decoding a real two-track `ffmpeg -f mxf` file's actual primer, is `0x3f01`.
+`vaco-demux-mxf` resolves properties by UL through the primer (so the tag
+number should not matter, and did not for that crate), but `ffmpeg`'s own
+resolution of this specific property evidently does not go through the
+same general per-file primer/UL matching every other property does —
+changing the tag to `0x3f01` made a real `ffmpeg -i` resolve both tracks'
+descriptors completely.
+
+A second bug found by the same investigation: `vaco-mux-mxf` was writing
+the *video* essence-container UL onto the *audio* track's own descriptor
+too, which left `ffmpeg` correctly finding the descriptor but guessing
+`mp2` instead of `pcm_s16le` for its codec. Fixed by giving each essence
+kind its own measured `EssenceContainer` label
+(`ul::ESSENCE_CONTAINER_SOUND_FRAME_WRAPPED` for sound, plus
+`ESSENCE_CONTAINER_MULTIPLE_WRAPPINGS` for the package-level lists) —
+`metadata::essence_containers_used` builds the exact three-entry list a
+real two-track file states.
+
+`crates/format/vaco-mux-mxf/tests/roundtrip.rs`'s
+`a_real_ffprobe_resolves_both_tracks_of_a_multiple_descriptor_file` is the
+regression test against a real `ffprobe`. Full account in
+`docs/format/vaco-mux-mxf.md`.
+
+## `vaco-mux-mxf`'s bitexact byte-identity chase: two more structural fixes, one remains
+
+Following up on the entry above ("confirmed `-fflags +bitexact`
+determinism, did not chase byte-identity"): a literal `cmp` was attempted
+this session, feeding this crate's muxer the *same* real MPEG-2 frames a
+real single-track `ffmpeg -f mxf -fflags +bitexact` file encoded (so only
+the container bytes differ, not the essence content). This found and fixed
+two real, cheap, structural divergences: the Partition Pack's minor
+version field (this crate wrote `2`; every real file measured states `3`),
+and the Body Partition Pack being written only for more than one essence
+track (a real *single*-track `ffmpeg -f mxf` file has one too — the
+D-10-derived "single-partition, no body pack" assumption an earlier
+session relied on is real for `-f mxf_d10` specifically, not for OP1a's
+`-f mxf`).
+
+After both fixes, the first remaining byte-level divergence is `KAGSize`
+(`partition::write` hardcodes `1`; real files use `512` and pad structures
+to that boundary with Fill Item KLVs) — real, understood, not attempted.
+Beyond that, the dominant remaining difference is the several-KiB gap from
+the deliberately-dropped duplicate-footer-metadata layout (see
+`docs/format/vaco-mux-mxf.md`'s "Partition layout"), which swamps any
+further byte-level comparison and was not chased further: restating the
+footer would reopen the `Multiple primer packs`/media-type-misreport bug
+already fixed this session, so the two goals are in real tension at that
+point, not simply a matter of more time.
+
+Two real descriptor properties were tentatively identified along the way
+and are recorded rather than guessed into the descriptor: tag `0x320e` is
+`AspectRatio` (confirmed against two real fixtures — `(5,4)` on 720x576,
+`(4,3)` on 320x240, both correct DARs); tag `0x320d` is very likely
+`VideoLineMap` (`[46, 0]` on an interlaced 720x576 fixture, `[0, 0]` on a
+progressive 320x240 one) but was only checked against two fixtures, not
+confirmed with certainty.
