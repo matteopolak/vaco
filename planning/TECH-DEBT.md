@@ -4075,3 +4075,93 @@ warnings` clean; builds for `wasm32-unknown-unknown`; `layer-check`/
 `DISTINCT` entry needed this time); `fuzz/fuzz_targets/gxf_demux.rs` ran
 5.9M executions (empty corpus) plus 386K more (seeded with the real
 fixture) in under a minute total, no crash, no `fuzz/artifacts` files.
+
+
+## H.264 CABAC: a permanent duplicate-table test, and two "should be identical" pairs checked clean (#418)
+
+Follow-up to the CBF_CHROMA_AC finding: the coordinator asked for the
+structural invariant that would have caught it in one line rather than by
+luck. Per-table verification ("does this table match what I believe its
+own row is") can pass against the *wrong* row entirely — it never compares
+a table to its neighbours. But every context-initialisation table in this
+crate is transcribed from a distinct row range of Table 9-11 (a unique
+`ctxIdxOffset` per syntax element/category), so no two of them should ever
+be byte-identical.
+
+**The test.** `cabac_mb_tables.rs::table_distinctness` and
+`cabac_residual.rs::table_distinctness` (new) flatten every named table in
+each file and assert pairwise that none are byte-identical, with a named
+`ALLOWED_DUPLICATES` allowlist for any future pair that legitimately
+should match (empty today — a real hit that isn't listed fails the test).
+21 tables checked in `cabac_mb_tables.rs`, 20 in `cabac_residual.rs`. Both
+pass clean: **no further duplicate found beyond the `CBF_CHROMA_AC` bug
+already fixed.**
+
+`cabac_residual.rs`'s 20 tables (`SIG_*`/`LAST_*`/`ABS_BIN0_*`/`ABS_BINN_*`
+across the five `ContextCategory` variants) were previously local `const`s
+inside `ContextSet::new`'s own function body — invisible to a
+module-level test. Moved to module scope with no behavioural change
+(`ContextSet::new` reads the same names, just from outside its own body)
+so the same test shape could cover them.
+
+**The cheaper inverse pass, also asked for**: are any two tables that
+*should* be identical accidentally different? Searched this codebase's own
+comments for every place it claims two syntax elements share context
+values, and found two: `MB_TYPE_I` (I-slice `mb_type`, "also used ... for
+the `Intra` suffix of `mb_type` in P/SP and B slices") and the single
+`rem_intra4x4_pred_mode` context ("one context reused for all 3 bins",
+ctxIdx 69). Both are already implemented as single-source reuse — one
+array, referenced from every call site that needs it (confirmed by grep:
+`MB_TYPE_I` has exactly one use in `mb.rs`) — not as separately
+transcribed tables that happen to need equal values. Nothing found wrong;
+the design already forecloses this failure class everywhere it currently
+applies. If a future syntax element needs the same identity relationship,
+reuse (not re-transcription) is the pattern to follow.
+
+**Flagged and investigated, not fixed, per instruction**: whether
+`cabac_i_only.264`'s new `CabacDecoder::malformed()` panic (surfaced by
+the CBF_CHROMA_AC fix) is reachable outside the `#[ignore]`d tests. It is
+not. `.malformed()` has no call site anywhere in `vaco-codec-h264`'s
+production decode path — only the test's own `assert!(!cabac.malformed(),
+...)` reads it. `vaco-codec-cabac`'s own module doc (a crate this agent
+does not own, `agent:codec-bits`'s, read-only) states plainly that the
+`malformed` flag exists specifically so `CabacDecoder::new` can clamp a
+non-conforming state and record it rather than let anything overflow —
+avoiding exactly the panic-on-malformed-input bug class the crate is
+built not to have — and that invariant is independently fuzzed
+(`vaco-codec-cabac/tests/spec.rs` and its own fuzz target). Not a
+robustness bug: a stricter test (this project's own
+`assert_slice_ends_at_rbsp_trailing_bits`, added two rounds ago) catching
+an accuracy issue sooner in the slice than before.
+
+**Gates.** Full clean sweep: `layer-check` (176 crates, acyclic),
+`dep-gate`, `unsafe-audit`, `dup-check`, `owner-gate`, `patent-gate`.
+`h264_entropy` fuzz target ran ~26s / ~4.2M execs after these changes, no
+new crashes, no new `fuzz/artifacts`. Full `vaco-codec-h264` test suite
+(27 tests across 6 files plus 22 `--lib` unit tests) passes outside the
+three known-`#[ignore]`d CABAC macroblock tests, unchanged this round.
+`vaco-codec-cabac`/`fuzz/fuzz_targets/cabac_engine.rs` confirmed untouched
+immediately before committing.
+
+**A process note for whoever reads this next**: a `cargo fmt -p
+vaco-codec-h264 -- <one file>` invocation mid-round reformatted the
+*entire* package, not just the named file, silently pulling unrelated
+in-progress changes from other concurrently active work in this shared
+tree into the working copy. Caught before committing by checking `git
+diff --stat` against the intended file list and finding far more files
+and far larger diffs than expected; recovered by reconstructing each of
+the three files actually meant to change as `git show HEAD:<path>` plus
+exactly the intended edit, verified hunk-by-hunk before staging, rather
+than committing the mutated working tree as-is. Scope discipline
+(`git status --porcelain -- <path>` before every commit, `git diff
+--stat` against expectation) is not optional in a shared working tree —
+`cargo fmt -p <pkg> -- <file>` does not reliably scope to one file the way
+its arguments suggest; prefer `rustfmt <file>` directly, or diff-check
+before staging either way.
+
+Round did not attempt to close #418 further this pass (its own stated
+scope was the invariant check, not the bit-exactness search) — no bit
+count changed on any corpus this round; #419 not reopened.
+
+`Vaco-Spec-Ref: iso-iec-14496-10-2002-draft` Table 9-11, per-syntax-element
+`ctxIdxOffset` uniqueness.
