@@ -1,9 +1,9 @@
 # vaco-filter-scope
 
 T3 measurement/visualisation video filters — `planning/16-filters.md` §4.2's
-`vaco-filter-scope` row, GitHub issue #480 ("FT-4.12g"). Six implemented:
+`vaco-filter-scope` row, GitHub issue #480 ("FT-4.12g"). Seven implemented:
 `histogram`, `waveform`, `datascope`, `thistogram`, `graphmonitor`,
-`agraphmonitor`.
+`agraphmonitor`, `pixscope`.
 
 ## Scope reconciliation
 
@@ -19,14 +19,15 @@ exist. Before writing any code, `planning/ASSIGNMENTS.md`, every sibling
 | `scale2ref`, `colorspace`, `colordetect`, `pixdesctest`, `zoompan` | The T1-tier remainder of `vaco-filter-scale`'s row, orphaned by #463 (FT-4.1a)'s narrower scope — a real gap, but not T3 and not ticketed under #480 |
 | `histogram`, `thistogram`, `waveform`, `vectorscope`, `oscilloscope`, `datascope`, `pixscope`, `ciescope`, `graphmonitor`, `agraphmonitor`, `drawgraph`, `adrawgraph` | `planning/16-filters.md`'s `vaco-filter-scope` row — the actual unclaimed T3 remainder, confirmed absent from every `vaco-component.toml` and the generated registry |
 
-This crate implements five of those twelve (`graphmonitor`/`agraphmonitor`
+This crate implements six of those twelve (`graphmonitor`/`agraphmonitor`
 count as one pair). The rest are excluded or deferred, each for a distinct,
 specific reason (see below) rather than a blanket "out of time".
 
 ## What it is
 
-One module per filter (`src/{histogram,waveform,datascope,graphmonitor}.rs`
-— `graphmonitor.rs` covers both `graphmonitor` and `agraphmonitor`, since
+One module per filter
+(`src/{histogram,waveform,datascope,graphmonitor,pixscope}.rs` —
+`graphmonitor.rs` covers both `graphmonitor` and `agraphmonitor`, since
 the only difference is the input pad's media type), each exposing
 `pub const DESC: FilterDesc` and a crate-private `fn create`, aggregated by
 [`registry::ScopeRegistry`](../../crates/filter/vaco-filter-scope/src/registry.rs)
@@ -34,12 +35,12 @@ the only difference is the input pad's media type), each exposing
 `src/common.rs` carries the small 8-bit-plane helpers this whole filter
 family carries its own copy of (D19 governs shared *types*, not these tiny
 per-crate predicates) — including, as of this pass, the font-blit helpers
-(`draw_glyph`/`draw_text`) `datascope` and `graphmonitor` both need,
-moved there from `datascope`'s own module when a second consumer showed
-up. `src/font8x8.rs` carries the embedded bitmap font `datascope` and
-`graphmonitor`/`agraphmonitor` draw text with (and, if shipped,
-`pixscope`/`oscilloscope` would too) — see its own doc comment and the
-"The bitmap-font hypothesis" section below.
+(`draw_glyph`/`draw_text`) `datascope`, `graphmonitor` and `pixscope` all
+need, moved there from `datascope`'s own module when a second consumer
+showed up. `src/font8x8.rs` carries the embedded bitmap font `datascope`,
+`graphmonitor`/`agraphmonitor` and `pixscope` draw text with (and, if
+shipped, `oscilloscope` would too) — see its own doc comment and "The
+bitmap-font hypothesis" section below.
 
 `histogram` and `waveform` are **converters**, not passthrough filters:
 they always synthesise a new picture (fixed dimensions, fixed `Gray8`
@@ -234,6 +235,77 @@ implemented, split by *why*:
 **Cannot be framecrc-identical to the reference**, for the same permanent
 reason as `datascope` — see "The bitmap-font hypothesis" below.
 
+### `pixscope`
+
+Draws a marker box on the source, a magnified view of the pixels under
+it, and a live per-channel statistics panel. **Shipped this pass, after
+correcting a prior pass's own finding in the open** (recorded in
+`planning/INTERFACE-GAPS.md`'s surrounding history, not silently
+overwritten): the reference refuses any source smaller than `640x480`
+(`"min supported resolution is 640x480"`, undocumented in `-h` and found
+only by trying), and the earlier "the zoom window does not magnify"
+conclusion was measured on an all-black source below that floor. Above
+it, the window **does magnify** — `7x7` (default `w`/`h`) source pixels
+blown up to a fixed on-screen `294x294`px block grid, `42`px per source
+pixel exactly at the default, confirmed to stay the same on-screen size
+at `w=5` too (a different, non-integer per-cell size).
+
+The sampled window's pixel bounds are `round(coord * dimension) - 1`,
+spanning `w`/`h` consecutive pixels — not the naive `centre - w/2` a
+symmetric box would suggest. Confirmed at three different anchors
+(`x=0.5`/`0.25`/`0.1` on an `800`-wide canvas) and two window sizes
+(`w=7`, `w=5`, both showing the same constant `-1` bias rather than one
+that scales with `w`). At a frame edge the window **clamps**, shifting to
+stay entirely on-screen, rather than shrinking to fewer columns or
+wrapping to the far edge — confirmed with `x=0` (would need columns
+`-1..5`) producing a full `0..6` window instead.
+
+The marker box is a `1`px-stroke, unfilled outline `w+3` by `h+3` pixels
+(`10x10` at the default), confirmed by an exact `36`-pixel perimeter
+count. The stats panel is fully read off a real render (reading UI text
+off rendered pixels is black-box measurement, not reading the reference's
+source or its font table): two 4-line groups, `"CH AVG MIN MAX RMS"` then
+one row per channel, and `"CH STD"` the same shape; channel labels and
+plane order confirmed against both a `yuv444p` source (`Y`/`U`/`V`) and a
+`gbrp` source (`R`/`G`/`B`, plane order `G,B,R` — this project's own
+established convention, see `vaco-filter-color::exposure`'s test doc).
+
+The five statistics, each pinned at **four** independent points (a flat
+field, a single-column-outlier `7x7` window, a symmetric seven-value
+ramp, and the edge-clamped ramp above):
+
+```text
+AVG = round(mean(v), 1)                          // arithmetic mean, not median
+MIN = min(v)
+MAX = max(v)
+RMS = round(sqrt(mean(v^2)), 1)                  // raw values, not deviations from the mean
+STD = round(sqrt(mean((v - mean)^2)), 2)          // population (÷N), not sample (÷N-1)
+```
+
+The outlier probe (seven pixels at `250`, forty-two at `10`) alone rules
+out three plausible alternatives: `AVG=44.3` (not the mostly-`10` median)
+confirms arithmetic mean; `RMS=94.9` matches `sqrt(mean(v^2))` and not
+`sqrt(mean((v-mean)^2))` (which would print a visibly different, smaller
+number — that formula is exactly what `STD` already is); `STD=83.98`
+matches a population divisor and not a sample one (which would print
+`84.85`). The ramp probe (`STD=20.00`, `RMS=86.3` against hand-computed
+`20.0`/`86.348`) and the edge-clamped probe (`STD=2.00`, `RMS=3.6`
+against `2.0`/`3.6056`) independently confirm the same two formulas.
+
+Implemented for `yuv444p`/`gray`-family and `gbrp`-family 8-bit sources
+only. Not implemented: `o` (opacity — drawn fully opaque, the same
+unexplored-effect choice `datascope`'s own `opacity` already made);
+colour-coding (one colour for every line — no field here needs a second
+colour to distinguish it, and it cannot buy back the framecrc-exactness
+the font ceiling already forecloses); packed RGB, subsampled chroma, and
+alpha formats; bit depths above 8; the panel's exact reference pixel
+columns (a readable approximation, for the same "cannot be exact anyway"
+reason `datascope`'s own margins were not chased further).
+
+**Cannot be framecrc-identical to the reference**, for the same permanent
+reason as `datascope`/`graphmonitor` — see "The bitmap-font hypothesis"
+below.
+
 ## The bitmap-font hypothesis (resolved: held)
 
 `oscilloscope`/`datascope`/`pixscope` were previously blocked on the same
@@ -285,8 +357,7 @@ the `rustybuzz` question.
 | Filter | Why |
 |---|---|
 | `vectorscope` | **Partially cracked, not shipped.** The coordinate mapping is fully measured: `x = component_x` directly, `y = 255 - component_y`. The intensity accumulation is confirmed nonlinear (independent of frame size — same hit count gives the same output at both `100` and `10000` total pixels) but does not fit any single-parameter model tried (linear, `ceil`/`round`/floor, power law, exponential-IIR); reported as characterised, not shipped, rather than guessed. |
-| `pixscope` | **Substantially re-characterised this pass; a prior finding corrected.** A previous pass reported the "zoom" window as a plain, unmagnified location marker. That was wrong, or measured under a condition (an all-black source) that could not have shown otherwise: against a real striped/checkerboard source at the reference's documented `640x480` minimum resolution (smaller inputs are refused — `"min supported resolution is 640x480"`, also newly found), the window **does magnify** — a `7x7` (default `w`/`h`) source region blown up to a crisp, non-antialiased `~294x294`px block grid (`294 / 7 = 42`px per source pixel exactly), sitting above the stats panel. The panel itself is now fully read (not guessed — a label is UI text on a rendered frame, not the reference's source or its font bitmap, so reading it off a pixel dump is the same black-box measurement this whole project is built on): two 4-line groups, `"CH   AVG   MIN   MAX   RMS"` then one row per active channel (`Y`/`U`/`V` for a YUV source, colour-coded — white/blue/red respectively, matching each channel's own colour), and a second `"CH   STD"` group with the same per-channel rows. Number formats read off directly: `AVG`/`RMS` are `%05.1f`-shaped (`"00016.0"`), `MIN`/`MAX` are `%05d` (`"00016"`, no decimal), `STD` is `%04.2f`-shaped (`"0000.00"`) — inferred from digit *count* and decimal-point position, not from decoding the reference's own glyph shapes. **Still not shipped**: the exact AVG/RMS/STD arithmetic (mean, root-mean-square, standard deviation are the plausible read of the labels, but the precise rounding rule was not pinned the way `histogram`'s `ceil` was), the marker-box styling, `wx`/`wy`'s exact placement formula, and RGB-mode channel labels are all unmeasured — a real implementation attempt should start from this panel structure rather than re-deriving it, but still has genuine measurement work ahead of it. |
-| `oscilloscope` | Briefly probed this pass, not shipped. Confirmed to share the same font mechanism in principle (no font option), and confirmed its trace/grid rendering (`g=1` draws a plain grid, each enabled component (`c`, default `7`) traces as a distinct-coloured connected line across the trace box, sitting at partial opacity — the source's own diagonal tilt-strip pattern is visibly bleeding through beneath it). `st=1`'s statistics text was **not located** in two probes (default and enlarged trace geometry) — unlike `pixscope`, where widening the canvas past the reference's `640x480` floor immediately revealed the whole panel, oscilloscope's stats did not appear at any tried size; it may need a specific `sc`/`sc`+`st` combination, a non-flat source, or several accumulated frames rather than one, none of which this brief pass tried. |
+| `oscilloscope` | **Its `st` statistics text was located this pass**, reversing an earlier "not located" finding from two smaller probes — a third, larger-canvas, multi-frame attempt found it sitting in the trace box's own bottom row: a single white line, `"{ch} avg:{avg:.1f} min:{min} max:{max}"` per channel, no zero-padding (unlike `pixscope`'s). Confirmed to share the same font mechanism (no font option) and confirmed the trace/grid's bare existence (`g=1` draws a plain grid; each enabled component traces a distinct-coloured connected line at partial opacity). **Not shipped**: the trace line's own per-pixel geometry — how `t` tilts it, how `s`/`tx`/`ty`/`tw`/`th` map to exact box pixels, per-component colour assignment — is a materially separate measurement task from finding the stats text, and was not attempted this pass. |
 | `ciescope` | **Not a D7 case.** Every `system` value names a published international-standard primary set (BT.709, BT.2020, DCI-P3, SMPTE-C, …) and the CIE 1931 observer data is public. The blocker is reproducing the reference's exact chromaticity-diagram *rendering* (spectral-locus rasterisation, anti-aliasing, gamut-triangle lines) — not itself specified by any colorimetry standard, so verifying it would need extensive black-box probing this pass's time did not cover. |
 | `drawgraph`, `adrawgraph` | Not attempted. These plot frame metadata rather than pixel data (the metadata mechanism itself exists in this tree — gap 11's dictionary, gap 13's console-log channel, both closed elsewhere), but connected-line/bar/dot rendering exactness is a real question `waveform` sidestepped by drawing independent per-pixel hits. Deferred for time, not blocked. |
 
@@ -328,6 +399,11 @@ provably unimplementable in `vaco-filter-artistic`.
 | `thistogram` | any, `12`:`4`-style count ratios (`round`, not `ceil`) | `gray` | **exact** — three ratios pinned, including an exact `0.5` tie, ruling out `ceil` and truncation |
 | `graphmonitor` | `s=96x32:rate=25`, a real 3-node `Graph` (source → monitor → sink) | any | **structural, not exact** — real `NodeView`/`LinkView` data confirmed reaching the render (`tests/graphmonitor.rs`, a genuine end-to-end `Graph` run, deliberately broken and restored to confirm the test has teeth); text pixels can never match byte-for-byte (independent font) |
 | `agraphmonitor` | `s=96x32:rate=25`, a real audio source → monitor → video sink | any | **runs end-to-end** — confirmed the one shape difference from `graphmonitor` (reading `pts`/`time_base` off an audio frame, not a video one) does not need separate logic |
+| `pixscope` | `w=7:h=7`, flat `126`/`128` `yuv444p` field | `yuv444p` | **structural, not exact** — flat-field baseline: `AVG`/`MIN`/`MAX`/`RMS` all read the flat value, `STD=0` |
+| `pixscope` | same, single-column outlier (`250` vs `10`) in the `7x7` window | `yuv444p` | **structural, not exact** — `AVG=44.3`/`RMS=94.9`/`STD=83.98` confirmed against hand-computed values, ruling out median/AC-RMS/sample-STD |
+| `pixscope` | same, symmetric 7-value ramp (`54..114` step `10`) | `yuv444p` | **structural, not exact** — `AVG=84.0`/`RMS=86.3`/`STD=20.00` match exactly |
+| `pixscope` | `x=0` (edge-clamped window) | `yuv444p` (`mod(X,256)` ramp) | **structural, not exact** — `MIN=0`/`MAX=6` confirms clamp-not-shrink-not-wrap, plus a fourth independent statistic match |
+| `pixscope` | default `w=h=7`, pure-red source | `gbrp` | **structural, not exact** — `R=255,G=0,B=0` confirms plane order (`G,B,R`) and channel labelling |
 
 ## How to change it
 
@@ -343,19 +419,33 @@ provably unimplementable in `vaco-filter-artistic`.
   input's pixel format, only its dimensions are independent) — see
   `crop.rs` in `vaco-filter-video-geometry` for the same shape used
   elsewhere.
-- If you add `pixscope` or `oscilloscope`, start from `src/font8x8.rs` —
-  it is already sourced, registered and tested; do not re-derive or
-  re-source a font. Re-measure each filter's own layout (cell/margin
-  positions, what text it draws) independently; do not assume
-  `datascope`'s pitch constants apply verbatim. **`pixscope` needs a
-  source at least `640x480`** (smaller inputs are refused outright) — a
-  prior pass's "the zoom box does not magnify" finding was measured
-  without knowing this and is superseded: see the `pixscope` section
-  above for the corrected panel structure (`CH`/`AVG`/`MIN`/`MAX`/`RMS`
-  then `CH`/`STD`, per-channel colour-coded rows, and the number formats
-  read directly off a real render) and what is still unmeasured before it
-  can ship (the exact statistic formulas, marker styling, `wx`/`wy`
-  placement, RGB-mode labels).
+- `pixscope` is done; `src/pixscope.rs`'s `render_plane` is a pure
+  function over a plain `&mut [&mut [u8]]`, kept separate from the
+  `FrameFilter` glue specifically so the box/window/panel drawing can be
+  exercised directly in tests (including a deliberate revert-and-confirm-
+  fails check) without a live `Frame`/`FilterContext`. If you extend it:
+  **remember the reference needs a source at least `640x480`** (smaller
+  inputs are refused outright, undocumented in `-h`) — a prior pass's "the
+  zoom box does not magnify" finding was measured without knowing this
+  and was superseded once a real render above that floor was tried.
+  `compute_stats`/`window_start` are unit-tested against four independent
+  hand-computed probes each; reuse them rather than re-deriving the
+  formulas. Still open if you pick this back up: the panel's exact
+  reference pixel columns, `o` (opacity), and colour-coding — none of
+  which can buy back framecrc-exactness the font ceiling already rules
+  out, so treat them as polish, not correctness.
+- If you add `oscilloscope`, start from `src/font8x8.rs` — it is already
+  sourced, registered and tested; do not re-derive or re-source a font.
+  Its `st` statistics text is now found and read (`"{ch} avg:{avg:.1f}
+  min:{min} max:{max}"`, one line, no zero-padding), but a **larger
+  canvas and several accumulated frames were needed to see it** — a
+  single-frame, `800x600`-scale probe (the size that worked for
+  `pixscope`) showed nothing; `1600x1200` over `10` frames did. What
+  remains unmeasured is the trace/grid geometry itself: how `t` tilts the
+  trace, how `s`/`tx`/`ty`/`tw`/`th` map to exact box pixels, and
+  per-component colour assignment — start there, since the stats format
+  is already nailed down and ready to reuse once the trace itself is
+  measured.
 - `graphmonitor`/`agraphmonitor` are done; `src/graphmonitor.rs` is the
   template for any future filter that needs `FilterContext::
   graph_nodes`/`graph_links` — the `render()` function is a pure,
