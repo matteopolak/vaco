@@ -1,7 +1,14 @@
 //! Wires `vaco-codec-dsp-idct`'s dispatched
-//! [`add_pixels_clamped`](vaco_codec_dsp_idct::simd::add_pixels_clamped)
+//! [`add_pixels_clamped_vector`](vaco_codec_dsp_idct::simd::add_pixels_clamped_vector)
 //! variant through the harness (D-11, #123): every block-based codec's
 //! `Clip1(pred + residual)` reconstruction step.
+//!
+//! This verifies `add_pixels_clamped_vector`, not the crate's public
+//! `simd::add_pixels_clamped` — that entry is gated to the scalar
+//! implementation (measured ~0.84–0.9x on aarch64/NEON, a pessimisation; see
+//! `vaco-codec-dsp-idct`'s `src/simd.rs` module doc), so it no longer
+//! reaches the dispatched body this kernel needs to keep exercising under
+//! `Differential`.
 //!
 //! The corpus deliberately includes `i16` residual values near
 //! `i16::MIN`/`i16::MAX` — a real bug lived exactly there (see that
@@ -32,7 +39,8 @@ pub struct AddPixelsCase {
     h: usize,
 }
 
-/// [`Kernel`] adapter for [`vaco_codec_dsp_idct::simd::add_pixels_clamped`].
+/// [`Kernel`] adapter for
+/// [`vaco_codec_dsp_idct::simd::add_pixels_clamped_vector`].
 #[derive(Debug, Clone, Copy)]
 pub struct AddPixelsClampedKernel;
 
@@ -94,7 +102,7 @@ impl Kernel for AddPixelsClampedKernel {
 
     fn vector(case: &Self::Case) -> Vec<Self::Lane> {
         let mut dst = case.dst_init.clone();
-        simd::add_pixels_clamped(Caps::detect(), &case.residual, &mut dst, case.stride, case.w, case.h);
+        simd::add_pixels_clamped_vector(Caps::detect(), &case.residual, &mut dst, case.stride, case.w, case.h);
         dst
     }
 }

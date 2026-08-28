@@ -30,12 +30,40 @@
 //! and checkasm coverage (it also fixed a real overflow bug the scalar
 //! path never had, which is worth having caught regardless of the speed
 //! result), not for a measured win.
+//!
+//! # Gating: the public entry point is scalar-by-measurement
+//!
+//! A losing kernel behind a dispatch layer reads as an optimisation to
+//! the next caller, and costs real throughput if they trust that
+//! reading — this crate's own DC-mode callers (VP8, VP9, H.264) are
+//! exactly the precedent for a caller arriving here next. So
+//! [`add_pixels_clamped`] routes to [`crate::blockdsp::add_pixels_clamped`]
+//! (the scalar reference) rather than [`add_pixels_clamped_vector`]. The
+//! dispatched body stays wired into `vaco-checkasm` regardless, so it
+//! cannot silently rot while it is not on the hot path.
 
 use vaco_simd::prelude::*;
 use vaco_simd::{Caps, dispatch_kernel, ops};
 
-/// Dispatched, bit-exact [`crate::blockdsp::add_pixels_clamped`].
+/// [`crate::blockdsp::add_pixels_clamped`]'s public SIMD-crate entry
+/// point, gated to the scalar path. **Scalar-by-measurement, not
+/// dispatched**: `benches/idct.rs` on aarch64/NEON measured the dispatched
+/// path at ~0.9x the scalar loop's throughput at 16x16 and ~0.84x at
+/// 64x64 (see this module's doc) — a pessimisation on the one target this
+/// was measured on. `caps` is accepted and ignored so the signature does
+/// not need to change if a wider target (AVX-512 is untested) inverts the
+/// ratio; re-measure there before flipping this to call
+/// [`add_pixels_clamped_vector`] instead.
 pub fn add_pixels_clamped(caps: Caps, residual: &[i16], dst: &mut [u8], stride: usize, w: usize, h: usize) {
+    let _ = caps;
+    crate::blockdsp::add_pixels_clamped(residual, dst, stride, w, h);
+}
+
+/// The dispatched path [`add_pixels_clamped`] does not currently call —
+/// see that function's doc for why. Exists so `vaco-checkasm` can keep
+/// verifying it under `Differential` independently of which path
+/// [`add_pixels_clamped`] routes through.
+pub fn add_pixels_clamped_vector(caps: Caps, residual: &[i16], dst: &mut [u8], stride: usize, w: usize, h: usize) {
     for row in 0..h {
         let Some(res_row) = residual.get(row.saturating_mul(w)..).and_then(|r| r.get(..w)) else {
             return;
@@ -130,7 +158,7 @@ mod tests {
         let mut got = vec![100u8, 100, 100, 100, 100, 100, 100, 100];
         let mut want = got.clone();
         let residual = [10i16, -10, 0, 5, -100, 100, 1, -1];
-        add_pixels_clamped(Caps::detect(), &residual, &mut got, 8, 8, 1);
+        add_pixels_clamped_vector(Caps::detect(), &residual, &mut got, 8, 8, 1);
         scalar(&residual, &mut want, 8, 8, 1);
         assert_eq!(got, want);
     }
@@ -140,7 +168,7 @@ mod tests {
         let mut got = vec![250u8, 5, 0, 255];
         let mut want = got.clone();
         let residual = [100i16, -100, -50, 50];
-        add_pixels_clamped(Caps::detect(), &residual, &mut got, 4, 4, 1);
+        add_pixels_clamped_vector(Caps::detect(), &residual, &mut got, 4, 4, 1);
         scalar(&residual, &mut want, 4, 4, 1);
         assert_eq!(got, want);
         assert_eq!(got, vec![255, 0, 0, 255]);
@@ -169,7 +197,7 @@ mod tests {
                         wv.copy_from_slice(b);
                     }
                 }
-                add_pixels_clamped(Caps::detect(), &residual, &mut got, stride, w, h);
+                add_pixels_clamped_vector(Caps::detect(), &residual, &mut got, stride, w, h);
                 scalar(&residual, &mut want, stride, w, h);
                 assert_eq!(got, want, "w={w} h={h}");
             }
@@ -187,9 +215,25 @@ mod tests {
         ) {
             let mut got = dst_init.clone();
             let mut want = dst_init;
-            add_pixels_clamped(Caps::detect(), &residual, &mut got, stride, w, h);
+            add_pixels_clamped_vector(Caps::detect(), &residual, &mut got, stride, w, h);
             scalar(&residual, &mut want, stride, w, h);
             proptest::prop_assert_eq!(got, want);
         }
+    }
+
+    /// Pins the gating itself: the public `add_pixels_clamped` entry point
+    /// must route to the scalar reference directly, not through
+    /// `add_pixels_clamped_vector`. Guards against a future edit silently
+    /// re-enabling dispatch here without re-measuring first (see this
+    /// module's doc's "Gating" section for why that would be a regression on
+    /// the one target this was measured on).
+    #[test]
+    fn public_entry_matches_scalar_directly() {
+        let residual = [10i16, -10, 0, 5, -100, 100, 1, -1];
+        let mut got = vec![100u8, 100, 100, 100, 100, 100, 100, 100];
+        let mut want = got.clone();
+        add_pixels_clamped(Caps::detect(), &residual, &mut got, 8, 8, 1);
+        scalar(&residual, &mut want, 8, 8, 1);
+        assert_eq!(got, want);
     }
 }

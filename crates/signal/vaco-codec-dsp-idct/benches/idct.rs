@@ -152,8 +152,13 @@ fn blockdsp_add_pixels_clamped_scalar_16x16(bencher: divan::Bencher<'_, '_>) {
 
 #[divan::bench]
 fn blockdsp_add_pixels_clamped_dispatched_16x16(bencher: divan::Bencher<'_, '_>) {
+    // Benchmarks the dispatched body directly (`add_pixels_clamped_vector`),
+    // not the crate's public `simd::add_pixels_clamped` entry -- that entry
+    // is gated to the scalar path above (measured slower; see
+    // `src/simd.rs`'s module doc), so calling it here would compare the
+    // scalar loop against itself.
     let residual = [3i16; 256];
     let mut dst = [100u8; 16 * 20];
     let caps = Caps::detect();
-    bencher.bench_local(|| simd::add_pixels_clamped(caps, &residual, &mut dst, 20, 16, 16));
+    bencher.bench_local(|| simd::add_pixels_clamped_vector(caps, &residual, &mut dst, 20, 16, 16));
 }
