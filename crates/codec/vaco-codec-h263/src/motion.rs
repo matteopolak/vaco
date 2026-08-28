@@ -42,6 +42,59 @@ pub(crate) fn h263_vector(prediction: i32, delta: i32) -> i32 {
     v
 }
 
+/// Annex D §D.2 (`Vaco-Spec-Ref: itu-t-h263` D.2): reconstruct one
+/// half-pel `MVD` component in the Unrestricted Motion Vector mode when
+/// `PLUSPTYPE` is *not* present in the picture header (the original
+/// H.263 version 1 `UMV` bit, `PTYPE` bit 10). `delta` is the same raw
+/// Table 14 value [`h263_vector`] uses; the difference is entirely in how
+/// it is combined with the predictor.
+///
+/// §D.2's own text: "If the predictor... is in the range `[-15.5, 16]`,
+/// only the first column of vector differences applies" — i.e. no
+/// wraparound at all, since Table 14's 64 codes already span exactly one
+/// window relative to any predictor in that band (`pred + delta` cannot
+/// leave `[pred-32, pred+31]`, which is entirely inside the representable
+/// `[-63, 63]` half-pel span whenever `pred` itself is so bounded).
+/// Outside that band (only reachable in this mode, since a bounded
+/// predictor is `[-32, 31]` in the baseline mode `h263_vector` produces),
+/// §D.2 requires "the vector difference from Table 14 that results in a
+/// vector component inside `[-31.5, 31.5]` with the same sign as the
+/// predictor (including zero)" — a ±64 correction against that wider,
+/// sign-matched (rather than absolute, as in [`h263_vector`]) window.
+#[must_use]
+pub(crate) fn h263_umv_vector_legacy(pred: i32, delta: i32) -> i32 {
+    if (-31..=32).contains(&pred) {
+        return pred + delta;
+    }
+    let mut v = pred + delta;
+    let mut guard = 0;
+    while (v > 63 || (pred < 0 && v > 0)) && guard < 8 {
+        v -= 64;
+        guard += 1;
+    }
+    while (v < -63 || (pred > 0 && v < 0)) && guard < 16 {
+        v += 64;
+        guard += 1;
+    }
+    v.clamp(-63, 63)
+}
+
+/// Annex D §D.2 (`Vaco-Spec-Ref: itu-t-h263` D.2): reconstruct one
+/// half-pel `MVD`/`MVD2-4` component decoded from Table D.3 (see
+/// [`crate::block::decode_table_d3`]) when `PLUSPTYPE` is present. Unlike
+/// the legacy path above, this needs no wraparound correction at all:
+/// "Every entry in Table D.3 has a single value (in contrast to Table
+/// 14)" — the difference it decodes is already unambiguous, so the
+/// reconstructed vector is simply the sum. Tables D.1/D.2's per-format
+/// ranges (`UUI == "1"`) and the unrestricted case (`UUI == "01"`) are
+/// both encoder-side sending restrictions, not a decoder-side
+/// reconstruction rule — a conforming encoder never sends a `pred+delta`
+/// outside them, so this crate does not need to special-case either.
+#[must_use]
+pub(crate) fn h263_umv_vector_plus(pred: i32, delta: i32) -> i32 {
+    pred + delta
+}
+
 /// H.263 §6.1.1/Table 15: derive one chrominance motion vector component
 /// (half-pel units, chroma grid) from the corresponding luma component
 /// `m` (half-pel units, luma grid). Halving `m` gives a *quarter*-pel
@@ -176,5 +229,35 @@ pub(crate) fn h261_loop_filter(block: &mut [u8], w: usize, h: usize) {
                 *slot = v.clamp(0, 255) as u8;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn umv_legacy_in_range_predictor_needs_no_wraparound() {
+        // Predictor 10 (half-pel) is within [-31, 32]: §D.2's "first
+        // column applies" case, identical to a plain sum.
+        assert_eq!(h263_umv_vector_legacy(10, 5), 15);
+        assert_eq!(h263_umv_vector_legacy(-20, -30), -50);
+    }
+
+    #[test]
+    fn umv_legacy_out_of_range_predictor_matches_its_sign() {
+        // Predictor 40 (half-pel) is outside [-31, 32] (positive side):
+        // the result must land in [0, 63].
+        let v = h263_umv_vector_legacy(40, -32);
+        assert!((0..=63).contains(&v), "expected sign-matched result, got {v}");
+        // Predictor -40: result must land in [-63, 0].
+        let v = h263_umv_vector_legacy(-40, 31);
+        assert!((-63..=0).contains(&v), "expected sign-matched result, got {v}");
+    }
+
+    #[test]
+    fn umv_vector_plus_is_a_plain_sum() {
+        assert_eq!(h263_umv_vector_plus(60, 10), 70);
+        assert_eq!(h263_umv_vector_plus(-60, -10), -70);
     }
 }

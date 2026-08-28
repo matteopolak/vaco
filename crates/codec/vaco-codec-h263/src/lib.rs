@@ -30,6 +30,7 @@ mod h261;
 mod h263;
 mod motion;
 mod picture;
+mod plus;
 pub mod tables;
 mod vlc;
 
