@@ -134,7 +134,7 @@ fn describe(opts: &SimpleGraphOptions, media: MediaType) -> Option<String> {
 /// reported [`VideoParameters`] — the same source of truth
 /// [`crate::exec::converter_target`] already treats as authoritative for the
 /// non-graph auto-conversion path.
-fn video_link(v: &VideoParameters, time_base: Rational) -> LinkFormat {
+pub(crate) fn video_link(v: &VideoParameters, time_base: Rational) -> LinkFormat {
     LinkFormat::Video {
         format: v.format.unwrap_or(PixFmt::Yuv420p),
         width: v.width.max(1),
@@ -154,7 +154,7 @@ fn video_link(v: &VideoParameters, time_base: Rational) -> LinkFormat {
     }
 }
 
-fn audio_link(a: &AudioParameters, time_base: Rational) -> LinkFormat {
+pub(crate) fn audio_link(a: &AudioParameters, time_base: Rational) -> LinkFormat {
     LinkFormat::Audio {
         format: a.format.unwrap_or(SampleFmt::S16),
         sample_rate: if a.sample_rate > 0 {
