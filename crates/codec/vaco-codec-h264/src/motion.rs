@@ -122,8 +122,13 @@ pub(crate) fn predict_mv(
 ) -> (i16, i16) {
     match shape {
         PartitionShape::Top16x8 if b.available && b.ref_idx == ref_idx => b.mv_or_zero(),
-        PartitionShape::Bottom16x8 if a.available && a.ref_idx == ref_idx => a.mv_or_zero(),
-        PartitionShape::Left8x16 if a.available && a.ref_idx == ref_idx => a.mv_or_zero(),
+        // Clause 8.4.1.3.1: the 16x8-bottom and 8x16-left partitions share
+        // the same `A`-only shortcut, not a coincidental duplicate.
+        PartitionShape::Bottom16x8 | PartitionShape::Left8x16
+            if a.available && a.ref_idx == ref_idx =>
+        {
+            a.mv_or_zero()
+        }
         PartitionShape::Right8x16 if c.available && c.ref_idx == ref_idx => c.mv_or_zero(),
         _ => median_predictor(a, b, c, ref_idx),
     }
