@@ -1043,23 +1043,45 @@ and the decoded frame's sample count — today that is neither this crate
 "how many total samples has this stream produced so far") nor `vaco-cli`
 (issue #652 — no decoder is reachable from the CLI at all yet).
 
-### `vaco-scale` cannot produce the sub-byte-packed formats two image encoders require
+### `vaco-scale` cannot produce sub-byte-packed or float output — RESOLVED
 
-Closing #655's pixel-format-conversion gap (`Encoder::accepted_pix_fmts` plus
-a `vaco-sched` converter node between decode and encode, wired through
-`vaco-scale::Scaler`) covers every byte-addressable format in `vaco-scale`'s
-table, which is most of the fifteen image codecs — but `vaco-codec-pnm`'s pbm
-encoder and `vaco-codec-image-simple`'s xbm encoder both declare
-`&[PixFmt::MonoWhite]` as their only accepted format, and `MonoWhite` is
-1-bit-per-pixel, sub-byte-packed. `vaco-scale`'s own docs list sub-byte-packed
-formats as "refused rather than approximated", and the converter node
-observes exactly that: `vaco -i in.pgm -c:v xbm -f image2 out.xbm` reaches the
-converter and fails with `unsupported: sub-byte packed pixel format` where
-the reference succeeds (it dithers to 1-bit). Reaching bit-exactness for
-these two encoders needs a real 1-bit dither in the conversion path, which
-`vaco-scale`'s own scope statement rules out — either that crate grows this
-one format, or the two encoders need a purpose-built pre-pass instead of
-relying on the generic converter.
+Both closed the same session, through an integer proxy rather than by
+teaching `geometry`/`rowio` a second sample shape:
+
+- **`monowhite`/`monoblack`** (pbm/xbm's only accepted format, 1-bit-per-pixel
+  packed): `vaco-scale::special` runs the ordinary pipeline into a `gray8`
+  proxy, then packs it 1-bit-per-pixel with an *ordered* dither. The
+  threshold table is measured, not invented: a synthetic ramp shaped so
+  every `(x mod 8, y mod 8)` position sees every 8-bit value showed exactly
+  one flip per position as the source value swept 0..255 (the signature of a
+  positional/Class A dither, not error diffusion), cross-checked against an
+  unrelated gradient image at 0 mismatches out of 1024 pixels. `monoblack` is
+  measured to be `monowhite`'s exact bitwise complement. End-to-end
+  (`gray8` -> `monowhite` through the real `Scaler`) matches the table
+  exactly. Through an RGB/BGR source the packed bits sometimes differ from
+  the reference by a bit here and there (23 of 137 bytes on a 32x32 `bgr24`
+  `testsrc`) — that traces to the RGB-to-Gray8 rounding row directly below,
+  which shifts a source pixel by 1 luma unit often enough to cross one of
+  the dither table's ~3-4-unit-wide thresholds. Not a new deviation; the old
+  one amplified by a threshold.
+- **The eight float formats** (`grayf32le/be`, `rgbf32le/be`, `grayf16le/be`,
+  `rgbf16le/be` — pfm/phm's only accepted formats): proxied through
+  `gray16le`/`rgb48le`, linearly rescaled at `f = v / 65535.0` (measured
+  against the reference exactly: `gray16le` 1/32768/65535 -> `grayf32le`
+  1.5259022e-5/0.5000076/1.0). Both directions work (float source and float
+  destination), not only the destination direction the symptom described.
+  `f16`'s bit conversion has no reference to measure against — this
+  machine's `ffmpeg` lists `grayf16le`/`rgbf16le` decode-only (`I` with no
+  `O` in `-pix_fmts`), so it cannot itself write one — and is instead
+  checked by its own round-trip property test over all 65536 `u16` inputs.
+
+Left open, found while verifying: `vaco-codec-pnm`'s `encode_pfm` writes the
+PFM header's byte-order scale field with the opposite sign from the
+reference (`-1.000000` vs `1.000000` for the same `rgbf32le` data) — the
+*pixel* bytes are correct (decoding both files back through `ffmpeg` and
+comparing agrees to within 1 of 255, the same rounding character as the
+row below), only the header's stated endianness disagrees. Not `vaco-scale`'s
+file to fix.
 
 ### `vaco-scale` RGB-to-Gray8 has a one-off rounding deviation, ~1% of pixels
 
