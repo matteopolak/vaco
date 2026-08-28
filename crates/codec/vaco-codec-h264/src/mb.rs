@@ -864,23 +864,49 @@ fn decode_residual(
 // from two independently-computed absolute grid positions rather than
 // sharing one boolean.
 //
-// KNOWN GAP, not yet closed: fixing the CBP bug measurably changed two of
-// the three corpora's own slice-0 trailing-bit mismatch (a real
-// behavioural change, confirmed by comparing exact before/after byte
-// patterns) but reached a clean end on none of them; the third corpus's
-// mismatch is byte-for-byte identical before and after the fix, meaning
-// its own divergence sits at a point this bug never reaches. The bug is
-// real and stays fixed regardless of whether it was *the* cause. Every
-// `ctxIdxInc`/context table reachable before residual decode in an
-// all-intra slice has now been re-verified against primary text
-// (`MB_TYPE_I` Table 9-12, `SKIP_P`/`MB_TYPE_P` Table 9-13,
-// `PREV_INTRA4X4`/`REM_INTRA4X4`/`INTRA_CHROMA_PRED_MODE`/`QP_DELTA`
-// Table 9-17, `CBP_LUMA`/`CBP_CHROMA` Table 9-18's *values*, and now this
-// derivation's own *logic*) and the whole bypass path is cleared, which
-// leaves `residual_block_cabac`'s scan-loop timing against real
-// per-coefficient state as the only unexplored surface left in this
-// function. Reported honestly rather than claimed; see
-// `planning/TECH-DEBT.md` for the full handoff.
+// A sixth pass found the mb_type cross-check's own premise was never
+// actually established for two of the three corpora. "Every macroblock
+// classification matches ffmpeg -debug mb_type exactly" was verified
+// against `cabac_i_only.264`'s slice 0 only -- an all-`Intra4x4` slice
+// with zero `Intra_16x16` macroblocks in it, so the cross-check could
+// never have caught an `Intra_16x16`-specific bug. Running the same
+// cross-check on `cabac_ip_simple.264` and `cabac_ip_multiref.264`'s
+// own slice 0 (both real I frames, both containing genuine `Intra_16x16`
+// macroblocks per the reference) found every single one of them
+// misclassified as `Intra4x4` instead -- 2 of 16 in `cabac_ip_simple`,
+// 35 of 36 in `cabac_ip_multiref` (the one correct `Intra_16x16` hit
+// being the exception, not the rule). This reopens the "everything
+// before residual decode is verified" premise for these two corpora
+// specifically, and explains the CBP fix's "byte-identical" result for
+// `cabac_ip_simple.264` from the previous pass: if mb_type itself
+// diverges this early, whatever happens downstream (CBP included) is
+// operating on an already-wrong picture, not a clean measurement of its
+// own correctness.
+//
+// A round-trip oracle (`tests/cabac_decision_oracle.rs`, same shape and
+// ownership caveat as the bypass one) tested whether the *engine's*
+// context-coded path (`decode_decision`) itself could be at fault --
+// specifically, whether a context driven to an extreme, confident state
+// by a long run of one outcome (exactly `mb_type`'s bin0 context across
+// many consecutive `Intra4x4` macroblocks) could then decode a genuine
+// "surprising" bin wrong. Cleared: a deliberately-adapted 30-zeros/
+// one-one/ten-zeros sequence and 200 pseudorandom sequences both
+// round-trip exactly through `CabacEncoder`/`CabacDecoder`'s public API.
+//
+// KNOWN GAP, not yet closed: the misclassification is real, confirmed
+// against primary-source-verified reference letter meanings, and not
+// explained by the engine, the `MB_TYPE_I` table (Table 9-12, verified),
+// or `mb_type_i_cond_term`'s formula (verified) -- all of which have
+// been independently checked and hold. That leaves either a genuine bit
+// consumption error earlier in the same slice (upstream of the first
+// misclassified macroblock, in a way that does not itself change any
+// earlier macroblock's own classification or CBP) or a still-unfound gap
+// in one of the areas already checked in isolation but not against this
+// exact real-corpus sequence. Not root-caused within this round's time
+// budget. Every fix and clearance from prior passes (CBP's neighbour
+// derivation, the bypass path, this round's engine round-trip) stays;
+// none of them is reopened by this finding. Reported honestly rather
+// than claimed; see `planning/TECH-DEBT.md` for the full handoff.
 use crate::cabac_mb_tables::{inits_by_col, inits_by_idc, inits_fixed};
 
 /// `CabacDecoder::decode_decision` over a context array, indexed safely —
