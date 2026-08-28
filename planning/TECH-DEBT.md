@@ -1308,3 +1308,12 @@ proptest-based stand-in (`tests/properties.rs`'s
 `no_demuxer_panics_or_loops_on_arbitrary_bytes`) covers the same
 no-panic/terminates property in the meantime. Re-run the real fuzz target
 once `vaco-scale` builds again.
+
+### Correction: the `misc_audio_demux` fuzz gap above closed within the same session
+
+`vaco-scale` was fixed by whichever agent owned it shortly after the entry
+above was written. `cargo +nightly fuzz run misc_audio_demux --
+-max_total_time=60` then ran cleanly: `exit=0 execs=#288767`, and
+`find fuzz/artifacts -type f` is empty. Left the original entry in place
+rather than deleting it, since the record of *why* it was missing at the
+time is still accurate; this note is the resolution.
