@@ -182,11 +182,59 @@ codec — the frame rate for video, `frame_size / sample_rate` for audio — whi
 `find_stream_info` establishes. For **video** the smallest observed
 inter-packet PTS delta reproduces it exactly, because one video PES packet is
 one access unit and the *smallest positive* delta survives B-frame reordering.
-For **audio** nothing here can: a PES packet holds a dozen frames, so the
-smallest PES-to-PES gap is a dozen frame durations. The last audio frame's own
-duration is therefore left out and the per-stream audio duration is short by
-exactly one audio frame. Measured: 23.211 ms on every AAC fixture, which is
-`1024/44100`.
+For **audio** nothing here could, until `CodecId::fixed_frame_size` (added to
+`vaco-codec-core`, not the `AudioParameters::frame_size` field this doc used to
+ask for below — see *Audio tail, closed* below): a PES packet holds a dozen
+frames, so the smallest PES-to-PES gap is a dozen frame durations, and the last
+audio frame's own duration used to be left out entirely. Measured: the gap was
+23.211 ms on every AAC fixture, exactly `1024/44100`.
+
+### Audio tail, closed — `CodecId::fixed_frame_size`, not `AudioParameters::frame_size`
+
+This doc used to ask (see *Wanted from other crates* below, now corrected) for
+a `frame_size` field on `AudioParameters`, reached through `ParserProvider`.
+That proposal does not survive contact with the rest of the tree: every
+`AudioParameters` in the codebase is built as a full struct literal with no
+`..Default::default()` tail, so adding a field to it breaks compilation in
+every crate that constructs one — thirteen of them, measured by trying it.
+
+The fix instead is `vaco-codec-core::CodecId::fixed_frame_size() -> Option<u32>`,
+a `const fn` alongside the existing `ticks_per_frame`, stating 1024
+(AAC-LC, ISO/IEC 13818-7), 1152 (MP3, ISO/IEC 11172-3) and 1536 (AC-3/E-AC-3,
+one independent frame, ATSC A/52). `None` for everything else, including
+`AacLatm` (LATM/LOAS framing can multiplex more than one access unit per
+logical frame) — never guessed. Zero blast radius: it is a new method, not a
+new field, so nothing that already builds a `CodecParameters`/`AudioParameters`
+literal needed to change.
+
+`flush_pes` now stamps the stream's `sample_rate` once, straight off the
+first PES's own ADTS header, *before* the `self.scanning` fast-path
+early-return — the scanning pass never reaches the ADTS-splitting code below
+that point, so stamping after it (the natural-looking place) never takes
+effect during the internal duration scan. `end_pts` then adds
+`audio_frame_ticks` — `frame_size` and `sample_rate` rescaled to 90 kHz ticks
+through the same two-step *truncating* rescale (frame count to microseconds,
+then microseconds to ticks, each step `Rounding::Zero`) the reference itself
+uses — to the tail whenever both the codec's frame size and the stream's
+sample rate are known, and leaves the tail exactly as short as before
+otherwise (never guessed for MP3/AC-3, which this pass does not stamp a
+sample rate for). A single-step rescale gives 2090 ticks (23.220 ms); the
+reference's two-step truncation gives 2089 (23.211 ms) — confirmed against
+`fuzz/seeds/diff/mpegts/h264-aac.ts`, where `duration_ts` now matches
+`ffprobe 8.1` exactly (29257, was 27168) and `r_frame_rate`/`avg_frame_rate`
+for the video stream are unaffected.
+
+Campaign effect (`fuzz/seeds/diff/mpegts`, 1500 iterations, `--rng-seed 42`,
+same corpus before and after): field-level `duration_ts` mismatches fell from
+1162 to 216, and `duration` mismatches from 1631 to 675. The file-level
+agree/mismatch tally did not move (`agree=40`, `mismatch=1435` both times):
+almost every mutated case in this corpus carries more than one divergent
+field at once, so closing this one rarely flips a whole file from mismatch to
+agree by itself. `bit_rate` mismatches were unchanged (1531 both times) —
+contrary to this doc's own earlier framing, `bit_rate` does not derive from
+the `duration_ts` this fix corrects and remains a separate, open gap; no
+MPEG-TS GitHub issue was found tracking it, and it is not investigated
+further here.
 
 ### `mpegtsraw` — the PID-level view
 
@@ -360,7 +408,7 @@ and one AAC audio stream each.
 | video packet count, keyframe count, `pos` | **exact** |
 | audio `start_pts` | **exact** |
 | program `program_num`, `pmt_pid`, `pcr_pid`, service tags | **exact**, and in the right section since the `Program` fields landed |
-| audio `duration_ts` | **short by one audio frame** (23.211 ms, every file) — unaffected by the re-framing fix below; see `end_pts`'s own note |
+| audio `duration_ts` | **exact**, closed by `CodecId::fixed_frame_size` — was short by one audio frame (23.211 ms, every file); see *Audio tail, closed* below |
 | audio packet count | **exact — 131 against 131, fixed 2026-08-23**; see below |
 
 `tests/reference.rs` is the harness that produced these; it is `#[ignore]`d and
@@ -516,11 +564,10 @@ in descending order of cost.
   SCTE-35, timed ID3. See `vaco-format-mpegts-tables`' doc file. Until then
   those streams are reported with the right media type, PID and language but
   `codec_id = None` and a `ts_codec` metadata tag.
-* **`vaco-codec-core`: `AudioParameters` has no `frame_size`.** With it, the
-  audio `duration_ts` short-by-one-frame divergence noted in the fidelity
-  table above (unaffected by the ADTS re-framing fix, which is a packet-count
-  and per-packet-timing fix, not a stream-duration one) could be closed
-  through `ParserProvider` without the container learning anything about AAC.
+* ~~**`vaco-codec-core`: `AudioParameters` has no `frame_size`.**~~ Closed —
+  see *Audio tail, closed* above. The field itself was never added (it breaks
+  every full-struct-literal `AudioParameters` construction in the tree); the
+  fix is the zero-blast-radius `CodecId::fixed_frame_size()` method instead.
 
 ---
 

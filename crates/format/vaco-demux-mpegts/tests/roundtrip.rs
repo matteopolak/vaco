@@ -594,6 +594,40 @@ fn one_pes_with_two_adts_frames_becomes_two_packets() {
     );
 }
 
+/// The audio tail-scan estimate used to leave out the last ADTS frame's own
+/// duration entirely (a demuxer with no parser has no `frame_size` to add,
+/// per the crate doc's own `end_pts` note) — `CodecId::fixed_frame_size`
+/// closes that for AAC specifically, since 1024 samples/frame is a format
+/// fact, not something that needs the bitstream parsed.
+///
+/// `note_scan` — what the tail scan's `first_pts`/`last_pts` come from —
+/// runs once per *PES*, at the PES's own declared timestamp, not once per
+/// split ADTS frame; a single PES holding two frames (as here) is one scan
+/// point, not two, so `duration_ts` is the PES's own pts window (zero, one
+/// PES) plus one frame, not a span across both frames' derived pts.
+#[test]
+fn audio_duration_ts_includes_the_last_frames_own_length() {
+    let mut w = TsWriter::new();
+    w.section(PAT_PID, &pat(&[(1, PMT_PID)]));
+    w.section(PMT_PID, &pmt(1, 0, 0x1FFF, &[(0x0F, AUDIO_PID, Vec::new())]));
+
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&adts_header(17));
+    payload.extend_from_slice(&[0xAA; 10]);
+    payload.extend_from_slice(&adts_header(15));
+    payload.extend_from_slice(&[0xBB; 8]);
+    w.pes(AUDIO_PID, 0xC0, Some(90_000), None, &payload, true, true);
+
+    let d = open(w.out);
+    let stream = &d.streams()[0];
+    assert_eq!(stream.start_time.ticks(), Some(90_000));
+    // One 1024-sample AAC-LC frame at 44100 Hz, through the same
+    // microsecond-truncating rescale `end_pts` uses: 2089 ticks, matching
+    // ffprobe 8.1 exactly on a real fixture (23.211 ms, not the 23.220 ms a
+    // single direct rescale computes).
+    assert_eq!(stream.duration_ts, Some(2089));
+}
+
 /// Issue #632 part 3: every packet MPEG-TS demuxes carries the PES
 /// `stream_id` byte as its own side-data block. Measured against `ffprobe
 /// 8.1`: `0xe0` (the first video stream) and `0xc0` (the first audio stream)

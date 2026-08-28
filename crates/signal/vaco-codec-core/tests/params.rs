@@ -66,6 +66,27 @@ fn ticks_per_frame_is_two_only_for_the_measured_codecs() {
     }
 }
 
+/// Samples per frame, for the handful of codecs whose frame size is fixed by
+/// the format rather than stated per file. Measured against the reference on
+/// an AAC-in-MPEG-TS fixture: the audio stream's true frame is 1024 samples
+/// at 44100 Hz, and the reference's `duration_ts` is exactly that much
+/// longer than the last observed packet's own PTS — the gap
+/// `vaco-demux-mpegts`'s `end_pts` closes with this value.
+#[test]
+fn fixed_frame_size_is_only_stated_for_the_measured_codecs() {
+    assert_eq!(CodecId::Aac.fixed_frame_size(), Some(1024));
+    assert_eq!(CodecId::Mp3.fixed_frame_size(), Some(1152));
+    assert_eq!(CodecId::Ac3.fixed_frame_size(), Some(1536));
+    assert_eq!(CodecId::Eac3.fixed_frame_size(), Some(1536));
+    // LATM/LOAS framing can multiplex more than one access unit per logical
+    // frame, so the plain-AAC answer does not transfer.
+    assert_eq!(CodecId::AacLatm.fixed_frame_size(), None);
+    assert_eq!(CodecId::Opus.fixed_frame_size(), None);
+    assert_eq!(CodecId::Vorbis.fixed_frame_size(), None);
+    assert_eq!(CodecId::Flac.fixed_frame_size(), None);
+    assert_eq!(CodecId::Pcm.fixed_frame_size(), None);
+}
+
 /// Every row of the table agrees with `ffmpeg -codecs`.
 ///
 /// The table was **generated** by probing that listing, so checking it against

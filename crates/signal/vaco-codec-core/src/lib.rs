@@ -1416,6 +1416,28 @@ impl CodecId {
             _ => 1,
         }
     }
+
+    /// Samples per encoded frame, for a codec whose frame size the format
+    /// fixes rather than states per file: AAC-LC 1024 (ISO/IEC 13818-7), MP3
+    /// 1152 (ISO/IEC 11172-3), AC-3/E-AC-3 1536 (ATSC A/52, one independent
+    /// frame — dependent E-AC-3 frames are not modelled here).
+    ///
+    /// `None` for a codec with no fixed size (Opus, Vorbis, FLAC, PCM), for
+    /// `AacLatm` (LATM/LOAS framing can multiplex more than one access unit
+    /// per logical frame, so the fixed-AAC answer does not transfer), and for
+    /// every codec this crate has not measured. A demuxer with no parser
+    /// uses this to reconstruct a stream's own last-frame duration — see
+    /// `vaco-demux-mpegts`'s `end_pts` — and a wrong value there is worse
+    /// than an absent one, so this is never guessed.
+    #[must_use]
+    pub const fn fixed_frame_size(self) -> Option<u32> {
+        match self {
+            Self::Aac => Some(1024),
+            Self::Mp3 => Some(1152),
+            Self::Ac3 | Self::Eac3 => Some(1536),
+            _ => None,
+        }
+    }
 }
 
 /// Decode: compressed packets in, frames out.

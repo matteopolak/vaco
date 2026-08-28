@@ -892,6 +892,22 @@ impl MpegTsDemuxer {
         };
 
         self.note_scan(stream_index, pts);
+        // Stamped once, straight off this PES's own ADTS header — cheap
+        // enough to survive the scanning fast path below, which is exactly
+        // where `end_pts` needs it: the container states no sample rate of
+        // its own, and without this the audio tail-scan estimate is short by
+        // one frame (see `end_pts`'s doc comment). AAC only, since that is
+        // the one payload shape this crate already knows how to frame
+        // without a bitstream parser; the same idea would need its own
+        // header reader for MP3/AC-3, not attempted here.
+        if let Some(stream) = self.streams.get_mut(stream_index as usize)
+            && stream.params.codec_id == Some(CodecId::Aac)
+            && let Some(audio) = stream.params.audio.as_mut()
+            && audio.sample_rate == 0
+            && let Some(frame) = parse_adts_header(payload)
+        {
+            audio.sample_rate = frame.sample_rate;
+        }
         if self.scanning {
             // A scan only needs the timeline, and a duration estimate reads up
             // to sixteen megabytes; allocating a packet per PES packet to
@@ -1037,23 +1053,25 @@ impl MpegTsDemuxer {
     /// `last_packet.pts + last_packet.duration`, and that duration comes from
     /// the codec — the frame rate for video, `frame_size / sample_rate` for
     /// audio — which `find_stream_info` establishes and a demuxer with no
-    /// parser cannot. For video the smallest inter-packet delta reproduces it
-    /// exactly, because one video PES packet is one access unit. For audio
-    /// nothing here can, so the last frame's own duration is left out and the
-    /// answer is short by exactly one audio frame. See the docs file.
+    /// parser mostly cannot. For video the smallest inter-packet delta
+    /// reproduces it exactly, because one video PES packet is one access
+    /// unit. For audio a PES packet holds a dozen frames, so the smallest
+    /// PES-to-PES gap means nothing — but for the handful of codecs whose
+    /// frame size the *format* fixes rather than the bitstream states
+    /// (`CodecId::fixed_frame_size`: AAC-LC, MP3, AC-3/E-AC-3), that answer
+    /// needs no parser either, and `audio_frame_ticks` supplies it. Every
+    /// other codec is still short by exactly one audio frame. See the docs
+    /// file.
     fn end_pts(&self, index: usize) -> Option<i64> {
         let st = self.scan.get(index)?;
         let last = st.last_pts.ticks()?;
-        let video = self
-            .streams
-            .get(index)
-            .and_then(Stream::media_type)
-            .is_some_and(|m| matches!(m, MediaType::Video));
-        Some(if video {
-            last.saturating_add(st.min_delta)
-        } else {
-            last
-        })
+        let stream = self.streams.get(index);
+        let tail = match stream.and_then(Stream::media_type) {
+            Some(MediaType::Video) => st.min_delta,
+            Some(MediaType::Audio) => stream.and_then(audio_frame_ticks).unwrap_or(0),
+            _ => 0,
+        };
+        Some(last.saturating_add(tail))
     }
 
     // ------------------------------------------------------------ header
@@ -1444,6 +1462,31 @@ fn check_continuity(
     Continuity::Gap
 }
 
+/// The last audio frame's own duration, in 90 kHz ticks, for a stream whose
+/// codec has a fixed frame size (see `CodecId::fixed_frame_size`) and a known
+/// sample rate. `None` when either is missing, which leaves `end_pts` exactly
+/// as short as it always was for that stream — never guessed.
+fn audio_frame_ticks(stream: &Stream) -> Option<i64> {
+    let sample_rate = stream.params.audio.as_ref()?.sample_rate;
+    if sample_rate == 0 {
+        return None;
+    }
+    let frame_size = stream.params.codec_id?.fixed_frame_size()?;
+    // Two truncating rescales through an intermediate microsecond value, not
+    // one direct `frame_size * 90000 / sample_rate` — measured on an AAC
+    // fixture (1024 samples at 44100 Hz): a single rescale computes 2090
+    // ticks (23.220 ms) where the reference states 2089 (23.211 ms). Going
+    // through microseconds first, truncating at each step, reproduces
+    // 2089 exactly.
+    let micros = rescale_rnd(
+        i64::from(frame_size),
+        1_000_000,
+        i64::from(sample_rate),
+        Rounding::Zero,
+    )?;
+    rescale_rnd(micros, i64::from(TIME_BASE.den), 1_000_000, Rounding::Zero)
+}
+
 /// Set `key`, replacing in place so insertion order — which is output order —
 /// survives.
 fn set_meta(list: &mut Vec<(String, String)>, key: &str, value: impl Into<String>) {
@@ -1590,5 +1633,54 @@ impl Demuxer for MpegTsDemuxer {
 
     fn duration(&self) -> Option<Duration> {
         self.duration
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test code")]
+mod frame_size_tests {
+    use super::audio_frame_ticks;
+    use vaco_codec_core::{AudioParameters, CodecId, CodecParameters};
+    use vaco_format_mpegts_tables::TIME_BASE;
+    use vaco_format_core::Stream;
+
+    fn audio_stream(codec: Option<CodecId>, sample_rate: u32) -> Stream {
+        let mut stream = Stream::new(0, vaco_core::MediaType::Audio, TIME_BASE);
+        let mut params = CodecParameters::audio();
+        if let Some(id) = codec {
+            params.codec_id = Some(id);
+        }
+        params.audio = Some(AudioParameters {
+            sample_rate,
+            ..AudioParameters::default()
+        });
+        stream.params = params;
+        stream
+    }
+
+    #[test]
+    fn aac_at_44100_matches_the_reference_exactly() {
+        // Measured against `ffprobe 8.1`: 2089 ticks (23.211 ms), not the
+        // 2090 a single direct `1024 * 90000 / 44100` rescale computes.
+        let stream = audio_stream(Some(CodecId::Aac), 44_100);
+        assert_eq!(audio_frame_ticks(&stream), Some(2089));
+    }
+
+    #[test]
+    fn no_sample_rate_yet_is_not_guessed() {
+        let stream = audio_stream(Some(CodecId::Aac), 0);
+        assert_eq!(audio_frame_ticks(&stream), None);
+    }
+
+    #[test]
+    fn a_codec_with_no_fixed_frame_size_is_not_guessed() {
+        let stream = audio_stream(Some(CodecId::Opus), 48_000);
+        assert_eq!(audio_frame_ticks(&stream), None);
+    }
+
+    #[test]
+    fn no_codec_id_is_not_guessed() {
+        let stream = audio_stream(None, 44_100);
+        assert_eq!(audio_frame_ticks(&stream), None);
     }
 }
