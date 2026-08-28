@@ -595,8 +595,17 @@ fn decode_skipped_macroblock(idct: &mut Mpeg2Idct, ap: &mut ActivePicture, seq: 
         }
         PictureType::B => {
             // §7.6.6.4: same direction as the previous macroblock,
-            // predictors and their stored vectors unaffected — read
-            // straight from `ap.fwd_pred`/`ap.bwd_pred` as they stand.
+            // motion vector predictors and their stored vectors
+            // unaffected — read straight from `ap.fwd_pred`/`ap.bwd_pred`
+            // as they stand. The *DC* predictor is a separate piece of
+            // state (§7.2.1/Table 7-2) that resets on every skipped
+            // macroblock regardless of picture type — the P-picture arm
+            // above already does this; this arm did not, which is a real
+            // gap (a B-picture skip run left `ap.dc_pred` holding the
+            // last real intra macroblock's value, corrupting the DC
+            // prediction chain for the next intra-coded block in the
+            // slice) rather than a deliberate asymmetry with P.
+            ap.dc_pred = [tables::intra_dc_reset(ap.pce.intra_dc_precision); 3];
             let use_fwd = ap.prev_mb_forward;
             let use_bwd = ap.prev_mb_backward;
             let fwd_ref = ap.previous.clone();
@@ -1047,5 +1056,83 @@ mod chroma_format_tests {
         assert_eq!(ChromaFormat::Yuv444.chroma_block_slot(5), (2, 8, 0)); // block 9: Cr top-right
         assert_eq!(ChromaFormat::Yuv444.chroma_block_slot(6), (1, 8, 8)); // block 10: Cb bottom-right
         assert_eq!(ChromaFormat::Yuv444.chroma_block_slot(7), (2, 8, 8)); // block 11: Cr bottom-right
+    }
+}
+
+#[cfg(test)]
+mod skipped_macroblock_tests {
+    use super::*;
+    use crate::headers::PictureType;
+    use vaco_limits::{Budget, Limits};
+    use vaco_pixfmt::PixFmt;
+
+    /// A skipped macroblock resets the *DC* predictor regardless of
+    /// picture type (§7.2.1/Table 7-2: "whenever a macroblock is
+    /// skipped", with no picture-type qualifier) — distinct from the
+    /// motion vector predictors, which §7.6.6.4 says a B-picture skip
+    /// leaves untouched. This crate's own P-picture skip arm always did
+    /// this; the B-picture arm did not until this test's own fix, a real
+    /// gap this test is here to keep fixed rather than one this test
+    /// merely happens to pass by construction.
+    ///
+    /// No fixture on hand exercises this observably: it requires a
+    /// B-picture with a skipped-macroblock run immediately followed, in
+    /// the same slice, by an intra-coded macroblock — real `ffmpeg`
+    /// encodes tried against this crate's own corpus either never put an
+    /// intra macroblock inside a B-picture at all, or never do so right
+    /// after a skip run, so the corrupted `dc_pred` value is never read
+    /// back before the next slice-start reset overwrites it anyway. This
+    /// test exercises the state transition directly instead.
+    #[test]
+    fn b_picture_skip_resets_dc_predictor_same_as_p_picture_skip() {
+        let mut budget = Budget::new(Limits::strict());
+        let Ok(frame) = Frame::alloc_video(&mut budget, PixFmt::Yuv420p, 16, 16) else {
+            return;
+        };
+        let seq = Sequence {
+            header: crate::headers::sequence_header(&[0u8; 16]),
+            ext: None,
+            mb_width: 1,
+            mb_height: 1,
+        };
+        let pce = PictureCodingExtension::mpeg1_default(2, 2);
+        let mut ap = ActivePicture {
+            frame,
+            header: PictureHeader {
+                temporal_reference: 0,
+                coding_type: PictureType::B,
+                full_pel_forward_vector: false,
+                forward_f_code: 0,
+                full_pel_backward_vector: false,
+                backward_f_code: 0,
+            },
+            pce,
+            intra_matrix: tables::DEFAULT_INTRA_MATRIX,
+            non_intra_matrix: tables::DEFAULT_NON_INTRA_MATRIX,
+            quantiser_scale: 8,
+            // A value `intra_dc_reset` never produces at any precision
+            // (128/256/512/1024), so a passing test can only mean the
+            // reset genuinely ran, not a coincidental match.
+            dc_pred: [999, 999, 999],
+            fwd_pred: MotionPredictor::default(),
+            bwd_pred: MotionPredictor::default(),
+            // Both false: `decode_skipped_macroblock`'s B arm then reads
+            // neither reference, so this test needs no real `RefPicture`.
+            prev_mb_forward: false,
+            prev_mb_backward: false,
+            supported: true,
+            slice_ok: true,
+            previous: None,
+            recent: None,
+            mpeg1: false,
+            chroma_format: ChromaFormat::Yuv420,
+        };
+        let Ok(mut idct) = vaco_codec_dsp_idct::mpeg2::idct8x8_f32() else {
+            return;
+        };
+
+        decode_skipped_macroblock(&mut idct, &mut ap, &seq, 0);
+
+        assert_eq!(ap.dc_pred, [128, 128, 128]);
     }
 }
