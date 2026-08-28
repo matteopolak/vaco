@@ -1532,3 +1532,45 @@ is a known, undetected gap rather than a verified-absent one. Not chased
 further here: a `Decoder::set_time_base` built to fix a case this narrow
 would be speculative interface surface (D19) for a fact no fixture currently
 demonstrates matters.
+
+### `vaco-codec-vp8` decodes only the first DCT token partition
+
+RFC 6386 §9.5 allows a frame's coefficient tokens to be split across
+`2^log2_nbr_of_dct_partitions` (1, 2, 4, or 8) independent partitions
+specifically so a decoder can decode macroblock rows in parallel.
+`vaco-codec-vp8::decode::decode_frame` (`crates/codec/vaco-codec-vp8/src/decode.rs`)
+parses the partition-size table in the header but always decodes every
+macroblock's residual from partition 0, regardless of
+`log2_nbr_of_dct_partitions`. A stream encoded with more than one token
+partition (typically produced by an encoder configured for multi-threaded
+encode, e.g. libvpx `--token-parts`) will decode incorrectly from roughly
+the second macroblock row onward, because the token bool-decoder never
+switches partitions and instead keeps reading past the intended boundary
+into whatever partition 0's own decode has not yet consumed. This is C-16d's
+threading requirement, not implemented here — every differential-tested
+fixture in `docs/codec/vaco-codec-vp8.md`'s Verification table used
+`log2_nbr_of_dct_partitions == 0` (single partition), which this decoder
+handles correctly and bit-exactly; multi-partition content is untested and
+known-wrong. The fix is mechanical once someone needs it: `header.rs`
+already exposes each partition's byte range, so `decode_macroblock` needs a
+`row -> partition index` mapping (`row % num_partitions` per RFC 6386
+§9.5) and one `BoolDecoder` per partition instead of one shared `token_bd`.
+
+### `vaco-codec-vp8`: two details assumed rather than confirmed against RFC 6386's primary prose
+
+Both are implemented with a documented, reasonable choice and have not
+produced a wrong pixel across 112 bit-exact-verified frames spanning all
+four version profiles, SPLITMV, golden/altref and segmentation (see
+`docs/codec/vaco-codec-vp8.md`), but neither was independently located in
+the RFC's own text during this crate's spec-extraction pass, only in the
+widely-documented decoder convention:
+
+1. The loop-filter *mode* delta's index mapping
+   (`decode::mode_delta_index`) — which of the four `mb_lf_adjustments()`
+   mode-delta slots applies to `B_PRED`/`ZEROMV`/other-inter/`SPLITMV`.
+2. Chroma motion-vector rounding (`decode::round_div8`) — the exact
+   rounding RFC 6386 specifies when deriving one chroma MV from the sum of
+   four covering luma (eighth-pel) components.
+
+Neither is blocking; recorded so a future reader chasing a rare chroma or
+loop-filter mismatch on unusual content knows where to look first.
