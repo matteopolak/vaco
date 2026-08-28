@@ -4397,3 +4397,89 @@ was committed.
 `Vaco-Spec-Ref: iso-iec-14496-10-2002-draft` clause 8.3.1.2.1
 (unavailable-neighbour substitution), Table 9-4 (`coded_block_pattern`
 chroma coding).
+
+## H.264 CABAC: a single flat macroblock with zero residual already fails bit-exactness — the search reopens (#418)
+
+Answering the coordinator's direct question first: **yes, bit consumption
+is already wrong on a stream with almost nothing to decode.** That single
+result settles which shape of bug this is — a basic macroblock-layer rule,
+not a subtle residual-decode or intra4x4-specific one.
+
+**The repro.** `tests/fixtures/cabac_minimal_flat_1mb.264` — one
+macroblock (a 16x16 frame), every Y/Cb/Cr sample exactly 128, real
+`libx264 -coder cabac` encode. `coded_block_pattern` for its one
+macroblock is `(0, 0)`, confirmed by last round's instrument. Contains no
+residual coefficients, no `Intra4x4`, no inter prediction, no neighbours
+at all. It still fails `assert_slice_ends_at_rbsp_trailing_bits`
+(`tests/macroblock_layer_cabac.rs`,
+`a_single_flat_macroblock_with_no_residual_at_all_still_fails_bit_exactness`,
+landed `#[ignore]`d with the full trace in its reason string).
+
+**This overturns, not extends, the prior handoff.** Two rounds ago the
+search was narrowed to residual coefficient decode and the per-4x4-block
+intra prediction mode flags. This stream contains neither. Since it still
+diverges, those are ruled out as the *sole* cause — the defect is
+somewhere in the macroblock layer's own basic sequence: `mb_type`,
+`intra_chroma_pred_mode`, `mb_qp_delta`, the `Intra16x16` luma DC
+`coded_block_flag`, or `end_of_slice_flag`.
+
+**What bin-by-bin tracing (temporary instrumentation, not committed)
+checked and cleared, against primary text, this round:**
+- `decode_mb_type_i_table`'s binarization tree and `MB_TYPE_I`'s table
+  values (ctxIdx 0-10) — including confirming, rather than assuming, that
+  Table 9-12 itself gives ctxIdx 0-2 the *same* `(m, n)` values as ctxIdx
+  3-5, a genuine spec coincidence this code's index reuse already depends
+  on being true, not a bug that happens to look harmless.
+- `cbf_cond_term`'s unavailable-neighbour special case (`condTermFlag =
+  current_is_intra` per clause 9.3.3.1.1.9) — matches the coordinator's
+  own earlier-round inspection.
+- `ContextModel::init_h264`'s clause 9.3.1.1 formula — matches the spec
+  text verbatim.
+- Exhaustively: `vaco-codec-cabac`'s three foundational tables
+  (`RANGE_TAB_LPS`/`TRANS_IDX_LPS`/`TRANS_IDX_MPS`), all 64 rows each,
+  checked against this draft's Table 9-33/9-34 — zero mismatches. Read-only
+  investigation; that crate is `agent:codec-bits`'s, not touched.
+- Slice-header parsing and CABAC engine initialisation, confirmed
+  bit-exact by direct inspection of the fixture's own raw bytes: the 9-bit
+  `codIOffset` this decoder reads (509) is the literal bit pattern present
+  at the exact byte-aligned position the header parse computes — checked
+  against the file's own hex dump, not inferred from self-consistency.
+
+**What the trace shows instead.** `end_of_slice_flag` fires at bit 69 of
+the file's 72 total bits, leaving a 3-bit tail of `0b001` — not a valid
+`rbsp_trailing_bits()` pattern (needs a lone `1` then zeros). The file's
+actual final bit (bit 71) is `1`, consistent with the true stream needing
+roughly two more consumed bits before terminating than this decoder
+currently spends. Yet every individual decoded *value* along the way
+(`mb_type=3`, `chroma_pred=0`, `cbp=(0,0)`, `qp_delta=0`, luma DC
+`coded_block_flag=0`) matches exactly what the real encoder's own log says
+it should be. Right answers, wrong bit cost — the arithmetic trajectory
+has already drifted by the time `end_of_slice_flag` is checked, in a way
+that happens not to change which side of the decision threshold any of
+these particular bins landed on.
+
+**Not resolved this round.** Localising further than "somewhere in this
+nine-decision sequence" needs either an independent from-scratch CABAC
+arithmetic oracle (planned twice now across this investigation, never
+built) or substantially more hand simulation than one round affords. The
+value of this round is the *localisation itself*: a 9-byte, one-macroblock
+repro with a fully characterized decoded-value trace is a much smaller
+target than any of the three real corpora, and every component checked
+against primary text this round can be crossed off the list for good
+rather than re-checked next time.
+
+Gates: full clean sweep (`layer-check`, `dep-gate`, `unsafe-audit`,
+`dup-check`, `owner-gate`, `patent-gate`), `clippy -p vaco-codec-h264
+--all-targets` clean, full test suite (30 integration tests across 7
+files including the 1 new, 22 `--lib` unit tests) passing outside the four
+now-known-`#[ignore]`d CABAC macroblock tests. `h264_entropy` fuzz target
+ran ~26s / ~4.2M execs, no new crashes. `vaco-codec-cabac`/
+`fuzz/fuzz_targets/cabac_engine.rs` confirmed untouched. Temporary
+worktree used for the bin-level trace removed before committing; nothing
+from it landed except the permanent fixture and its `#[ignore]`d test.
+
+#419 not reopened; no standing fix revisited.
+
+`Vaco-Spec-Ref: iso-iec-14496-10-2002-draft` clause 8.3.1.2.1, Table 9-12
+(ctxIdx 0-10), Table 9-33/9-34 (`rangeTabLPS`/state transitions, this
+draft's numbering for what later editions call Table 9-44/9-45).
