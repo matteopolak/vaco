@@ -107,6 +107,18 @@ const DISTINCT: &[(&str, &str)] = &[
         "Limits",
         "vaco-limits: the resource budget. vaco-expr: expression depth bounds.",
     ),
+    (
+        "LinkStats",
+        "vaco-filter-core: a filter-graph link's queue counters (frames, \
+         samples, peak queue depth, times a push was refused for room) — \
+         entirely local, in-process bookkeeping about one pad-to-pad \
+         connection. vaco-protocol-rist: RIST bonding's per-network-link \
+         receive counter (packets_received, keyed by link_id in a \
+         BondedReceiver) — RFC-adjacent (TR-06-1/-2 §5.4/§5.5) statistics \
+         about a physical/tunnel path's own traffic. No shared concept: one \
+         counts frames crossing an in-memory queue, the other counts \
+         packets arriving on a network link.",
+    ),
     ("Mode", "distinct modes in vaco-core and vaco-parse-opus."),
     (
         "Origin",
