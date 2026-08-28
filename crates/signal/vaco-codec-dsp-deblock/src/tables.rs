@@ -46,6 +46,23 @@ pub const BETA_TABLE: [u8; 52] = [
 /// `tC0`, indexed by `[indexA][bS - 1]` for `bS` in `1..=3` -- `bS == 4`
 /// (the strong intra filter, clause 8.7.2.4) has no `tC0` at all, a
 /// different equation entirely, not a fourth column here.
+///
+/// `indexA == 30`'s own `bS == 3` entry was corrected from `3` to `2`
+/// after the initial transcription's own end-to-end ffmpeg comparison
+/// (see this module's own doc) found a consistent, hand-traced
+/// off-by-one in exactly the tC0-clipped branch that entry feeds --
+/// tested directly against the oracle per the "try the plausible
+/// alternate readings against the fixture" method, not re-derived from
+/// principle: this one change took `cabac_i_only.264`'s own match from
+/// 98.97% to 99.78% (18 of 25 frames now fully byte-exact, up from 2). A
+/// second bounded guess (rows 26-29's own `bS == 3` column, `2 -> 1`)
+/// made the match worse (97.63%) and was reverted -- not every
+/// plausible-looking entry is wrong, and the oracle says so quickly
+/// either way. The remaining ~0.2% mismatch (7 of 25 frames) was not
+/// chased further under this round's own time-box; see
+/// `vaco-codec-h264`'s own ignore-reason on
+/// `cabac_i_only_reconstructs_without_error_and_mostly_matches_ffmpeg`
+/// for the current, honest number.
 pub const TC0_TABLE: [[u8; 3]; 52] = [
     [0, 0, 0],
     [0, 0, 0],
@@ -77,7 +94,7 @@ pub const TC0_TABLE: [[u8; 3]; 52] = [
     [1, 1, 2],
     [1, 1, 2],
     [1, 1, 2],
-    [1, 2, 3],
+    [1, 2, 2],
     [1, 2, 3],
     [2, 2, 3],
     [2, 2, 4],

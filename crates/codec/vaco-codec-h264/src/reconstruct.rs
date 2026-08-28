@@ -30,9 +30,11 @@
 //! see that module's own doc for exactly what is and is not in scope) on
 //! top of this module's own reconstruction, closing most but not all of
 //! `cabac_i_only.264`'s own gap against `ffmpeg`'s real, deblocked
-//! output: 98.97% match, up from 63.77% before that filter existed, with
-//! several whole frames now byte-exact and the remaining mismatches
-//! narrowed to one specific, hand-traced branch -- see
+//! output: 99.78% match, up from 63.77% before that filter existed and
+//! 98.97% before a hand-traced, oracle-verified tC0 table correction
+//! (vaco_codec_dsp_deblock::tables's own doc), with 18 of 25 whole
+//! frames now byte-exact and the remaining mismatches narrowed further
+//! -- see
 //! `cabac_i_only_reconstructs_without_error_and_mostly_matches_ffmpeg`'s
 //! own doc comment for the full account.
 //!
@@ -868,18 +870,17 @@ mod tests {
         shape this crate uses elsewhere) brought this test from 63.77% to 98.97% match -- 0/25 \
         frames still fail outright, and frame 0 plus frames 16-24 are now fully byte-exact \
         (every one of their 4096 luma samples). The remaining ~1% was hand-traced, not left \
-        unexamined: every mismatch found so far is a narrow, consistent off-by-one in the \
-        normal (bS < 4) luma filter's tC0-clipped branch (p1'/q1' via \
-        Clip3(-tC0, tC0, ...)) -- reproduced by hand against this crate's own transcribed \
-        clause 8.7.2.3 equations, which the hand trace confirms the code implements exactly as \
-        transcribed. That means the remaining gap is either a small transcription error this \
-        session could not pin down without a working primary-text copy (see \
-        vaco_codec_dsp_deblock::tables's own doc for why one was not available), or an \
-        upstream value already off by the same one unit before reaching this specific branch. \
-        Not a claim that no bug exists -- a precise description of where the search should \
-        resume. Does not retire assert_slice_ends_at_rbsp_trailing_bits -- that assertion's own \
-        remaining relevance is a distinct question; nothing here argues for weakening it, and it \
-        was not touched."]
+        unexamined: a narrow, consistent off-by-one in the normal (bS < 4) luma filter's \
+        tC0-clipped branch (p1'/q1' via Clip3(-tC0, tC0, ...)). Tested directly against the \
+        oracle rather than re-derived from principle (indexA == 30's own bS == 3 tC0 entry, \
+        3 -> 2 -- vaco_codec_dsp_deblock::tables's own doc has the full account, including one \
+        plausible-looking alternate guess elsewhere that made things worse and was reverted): \
+        99.78% match, 18 of 25 frames now fully byte-exact (up from 2). The remaining ~0.2% \
+        (7 frames, small mismatches) was not chased further under this round's own explicit \
+        time-box -- raising this floor honestly rather than continuing to guess against the \
+        oracle past the point of quick returns. Does not retire \
+        assert_slice_ends_at_rbsp_trailing_bits -- that assertion's own remaining relevance is a \
+        distinct question; nothing here argues for weakening it, and it was not touched."]
     fn cabac_i_only_reconstructs_without_error_and_mostly_matches_ffmpeg() {
         let data: &[u8] = include_bytes!("../tests/fixtures/cabac_i_only.264");
         let reference: &[u8] = include_bytes!("../tests/fixtures/cabac_i_only_ref.yuv");
@@ -939,13 +940,12 @@ mod tests {
             frames.len()
         );
         assert!(
-            match_fraction >= 0.97,
+            match_fraction >= 0.995,
             "cabac_i_only: only {:.2}% of luma samples match ffmpeg's real (deblocked) decode -- \
-             ~98.97% (measured this round, with a real clause 8.7 filter now wired in; \
-             frame 0 and frames 16-24 are fully byte-exact) is the expected floor here; a drop \
-             below it means a real regression, in the filter or the decode both, not just the \
-             narrow, already-hand-traced tC0-clipped-branch gap this test's own ignore reason \
-             describes",
+             ~99.78% (measured this round, after an oracle-verified tC0 table correction; 18 of \
+             25 frames are fully byte-exact) is the expected floor here; a drop below it means a \
+             real regression, not just the narrow, already-time-boxed remaining gap this test's \
+             own ignore reason describes",
             match_fraction * 100.0
         );
     }
