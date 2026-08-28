@@ -38,6 +38,14 @@ const CRC_LEN: usize = 4;
 /// `current_next_indicator` is always set — this crate never emits a table
 /// describing a *future* configuration.
 ///
+/// `reserved_future_use` is the bit immediately after
+/// `section_syntax_indicator`, and the two specifications disagree about it:
+/// it is `private_indicator` in ISO/IEC 13818-1's tables (PAT, PMT), which set
+/// it to 0, and `reserved_future_use` in ETSI EN 300 468's (SDT), which sets it
+/// to 1. Emitting the ISO value for an SDT is a one-bit divergence that shows
+/// up as `0xB0` where the reference writes `0xF0`, and it was ours until it was
+/// measured.
+///
 /// Returns `None` when the assembled section would not fit the 12-bit
 /// `section_length` field's own limit for `section_syntax_indicator == 1`
 /// tables (§2.4.4.10), which is smaller than the field's raw ceiling.
@@ -48,6 +56,7 @@ pub fn build_section(
     version: u8,
     section_number: u8,
     last_section_number: u8,
+    reserved_future_use: bool,
     body: &[u8],
 ) -> Option<Vec<u8>> {
     // Bytes after `section_length` itself: ext + version byte + two section
@@ -61,8 +70,9 @@ pub fn build_section(
     }
     let mut s = Vec::new();
     s.push(table_id);
-    // section_syntax_indicator=1, private=0, reserved='11'.
-    s.push(0xB0 | ((section_length >> 8) as u8 & 0x0F));
+    // section_syntax_indicator=1, then the disputed bit, then reserved='11'.
+    let flags = if reserved_future_use { 0xF0 } else { 0xB0 };
+    s.push(flags | ((section_length >> 8) as u8 & 0x0F));
     s.push((section_length & 0xFF) as u8);
     s.extend_from_slice(&table_id_extension.to_be_bytes());
     // reserved='11', version_number (5 bits), current_next_indicator=1.
@@ -122,7 +132,7 @@ pub fn write_pat(
         body.push(0xE0 | ((e.pid >> 8) as u8 & 0x1F));
         body.push((e.pid & 0xFF) as u8);
     }
-    build_section(TABLE_PAT, transport_stream_id, version, 0, 0, &body)
+    build_section(TABLE_PAT, transport_stream_id, version, 0, 0, false, &body)
 }
 
 /// One elementary stream declaration to write into a PMT.
@@ -170,7 +180,7 @@ pub fn write_pmt(
         body.push((es_len & 0xFF) as u8);
         body.extend_from_slice(&s.descriptors);
     }
-    build_section(TABLE_PMT, program_number, version, 0, 0, &body)
+    build_section(TABLE_PMT, program_number, version, 0, 0, false, &body)
 }
 
 /// One SDT service to write.
@@ -233,12 +243,46 @@ pub fn write_sdt(
         body.push((len & 0xFF) as u8);
         body.extend_from_slice(&s.descriptors);
     }
-    build_section(TABLE_SDT_ACTUAL, transport_stream_id, version, 0, 0, &body)
+    build_section(TABLE_SDT_ACTUAL, transport_stream_id, version, 0, 0, true, &body)
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
 mod tests {
+    /// The bit after `section_syntax_indicator` differs between the two
+    /// specifications, and using the ISO value everywhere is a one-bit
+    /// divergence that survives every structural check.
+    ///
+    /// Measured on `ffmpeg -c copy -f mpegts`: its SDT section header is
+    /// `42 f0 25` and its PAT's is `00 b0 0d`. Ours wrote `42 b0 25`.
+    #[test]
+    fn the_sdt_sets_reserved_future_use_and_the_pat_does_not() {
+        let sdt = super::write_sdt(
+            1,
+            0xff01,
+            0,
+            &[super::SdtServiceOut {
+                service_id: 1,
+                eit_schedule: false,
+                eit_present_following: false,
+                running_status: 4,
+                free_ca_mode: false,
+                descriptors: Vec::new(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(sdt[0], 0x42);
+        assert_eq!(sdt[1] & 0xF0, 0xF0, "SDT: {:02x?}", &sdt[..3]);
+
+        let pat = super::write_pat(1, 0, &[super::PatEntryOut {
+            program_number: 1,
+            pid: 0x1000,
+        }])
+        .unwrap();
+        assert_eq!(pat[0], 0x00);
+        assert_eq!(pat[1] & 0xF0, 0xB0, "PAT: {:02x?}", &pat[..3]);
+    }
+
     use super::*;
     use crate::psi::{Pat, Pmt, Sdt};
     use crate::section::Section;

@@ -379,8 +379,18 @@ impl Muxer for MpegTsMuxer {
     }
 
     fn write_header(&mut self) -> Result<()> {
-        self.write_pat_and_pmt()?;
+        // SDT first, then PAT, then PMT. Measured off `ffmpeg -c copy
+        // -f mpegts`: its first three packets are PID 0x0011, 0x0000, 0x1000,
+        // and we emitted them 0x0000, 0x1000, 0x0011. Everything after that
+        // already agreed — the periodic PAT/PMT pairs and the SDT resend land
+        // on exactly the same packet indices — so this ordering was the whole
+        // structural difference in the header.
+        //
+        // `tsw`'s `next_ats` already recorded the same observation from the
+        // other direction ("the SDT is the earlier packet in the file") while
+        // this function wrote the opposite.
         self.write_sdt_table()?;
+        self.write_pat_and_pmt()?;
         self.last_pat_clock = Some(self.clock_90k);
         self.last_sdt_clock = Some(self.clock_90k);
         self.header_written = true;
@@ -640,8 +650,14 @@ mod tests {
         let bytes = mirror.take();
         assert_eq!(bytes.len() % 188, 0);
         assert!(!bytes.is_empty());
-        // PAT is always the very first packet.
-        assert_eq!(&bytes[..4], &[0x47, 0x40, 0x00, 0x10]);
+        // Measured order: SDT (0x0011), then PAT (0x0000), then PMT (0x1000).
+        // This used to assert PAT came first, which is what we emitted and not
+        // what the reference does.
+        let pid = |n: usize| {
+            let h = &bytes[n * 188..];
+            (u16::from(h[1] & 0x1f) << 8) | u16::from(h[2])
+        };
+        assert_eq!((pid(0), pid(1), pid(2)), (0x0011, 0x0000, 0x1000));
     }
 
     #[test]
