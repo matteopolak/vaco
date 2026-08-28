@@ -79,6 +79,79 @@ pub(crate) const fn max_for_depth(depth: u8) -> u16 {
     }
 }
 
+/// Whether this crate's float accessors ([`read_float`]/[`write_float`]) can
+/// address `fmt` (interface gap 15, `planning/INTERFACE-GAPS.md`).
+///
+/// The complement of [`is_addressable`], not a superset of it: a format
+/// passes here only if every component is a 32-bit IEEE-754 float
+/// (`gbrpf32le` and its siblings), never both this and [`is_addressable`] at
+/// once. 16-bit float (`grayf16le` and friends, `depth == 16` with
+/// [`PixFmtFlags::FLOAT`] set) is deliberately excluded: reinterpreting two
+/// raw bytes as an `f32` needs four, so a half-precision component is a
+/// different bit layout entirely, not a narrower case of this function — and
+/// no filter in this crate reads one yet, so there is nothing to measure a
+/// conversion against.
+#[must_use]
+pub(crate) fn is_float_addressable(fmt: PixFmt) -> bool {
+    let d = fmt.descriptor();
+    if d.planes == 0 {
+        return false;
+    }
+    if !d.flags.contains(PixFmtFlags::FLOAT) {
+        return false;
+    }
+    if d.flags.intersects(
+        PixFmtFlags::BITSTREAM | PixFmtFlags::PALETTE | PixFmtFlags::HW_ACCEL | PixFmtFlags::BAYER,
+    ) {
+        return false;
+    }
+    d.components.iter().all(|c| c.depth == 32)
+}
+
+/// Read one 32-bit float component sample at plane-local column `x`.
+///
+/// Reinterprets the four raw bytes at the component's position as an
+/// IEEE-754 `f32`, respecting `big_endian` the same way [`read`] does for an
+/// integer component. Returns `0.0` past the end of the row, matching
+/// [`read`]'s out-of-bounds contract — the caller's loop bound is the
+/// plane's own geometry, so this only triggers on a genuinely malformed
+/// frame.
+///
+/// Only meaningful when [`is_float_addressable`] holds for the frame's
+/// format; `comp.depth` is not checked here, since every caller has already
+/// gated on that.
+#[must_use]
+pub(crate) fn read_float(row: &[u8], x: usize, comp: Component, big_endian: bool) -> f32 {
+    let off = x.saturating_mul(comp.step as usize);
+    let off = off.saturating_add(comp.offset as usize);
+    let bytes = [
+        row.get(off).copied().unwrap_or(0),
+        row.get(off.saturating_add(1)).copied().unwrap_or(0),
+        row.get(off.saturating_add(2)).copied().unwrap_or(0),
+        row.get(off.saturating_add(3)).copied().unwrap_or(0),
+    ];
+    if big_endian {
+        f32::from_be_bytes(bytes)
+    } else {
+        f32::from_le_bytes(bytes)
+    }
+}
+
+/// Write one 32-bit float component sample at plane-local column `x`.
+///
+/// Unlike [`write`], `value` is never masked — an IEEE-754 bit pattern has no
+/// "significant depth" to clamp to, the way an integer component's does.
+pub(crate) fn write_float(row: &mut [u8], x: usize, comp: Component, big_endian: bool, value: f32) {
+    let off = x.saturating_mul(comp.step as usize);
+    let off = off.saturating_add(comp.offset as usize);
+    let bytes = if big_endian { value.to_be_bytes() } else { value.to_le_bytes() };
+    for (i, b) in bytes.into_iter().enumerate() {
+        if let Some(slot) = row.get_mut(off.saturating_add(i)) {
+            *slot = b;
+        }
+    }
+}
+
 /// Read one component sample at plane-local column `x`, row `y`.
 ///
 /// Returns 0 past the end of the row rather than panicking — the caller's
@@ -133,6 +206,10 @@ pub(crate) fn write(row: &mut [u8], x: usize, comp: Component, big_endian: bool,
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "test code")]
+#[allow(
+    clippy::float_cmp,
+    reason = "round-trips and reference measurements are asserted bit-exact, not approximate"
+)]
 mod tests {
     use super::*;
 
@@ -175,5 +252,37 @@ mod tests {
     fn addressable_rejects_bitstream_and_palette() {
         assert!(is_addressable(PixFmt::Yuv420p));
         assert!(!is_addressable(PixFmt::Pal8));
+    }
+
+    #[test]
+    fn float_addressable_is_the_complement_of_addressable() {
+        assert!(is_float_addressable(PixFmt::Gbrpf32le));
+        assert!(!is_addressable(PixFmt::Gbrpf32le));
+        assert!(is_addressable(PixFmt::Yuv420p));
+        assert!(!is_float_addressable(PixFmt::Yuv420p));
+    }
+
+    #[test]
+    fn float_addressable_rejects_half_precision() {
+        // grayf16le is FLOAT-flagged too, but depth 16 — a different bit
+        // layout, not a narrower case of the 32-bit accessors.
+        assert!(!is_float_addressable(PixFmt::Grayf16le));
+    }
+
+    #[test]
+    fn float_round_trips_le_and_be() {
+        let comp = Component { plane: 0, step: 4, offset: 0, shift: 0, depth: 32 };
+        let mut row = [0u8; 8];
+        write_float(&mut row, 1, comp, false, -1.5);
+        assert_eq!(read_float(&row, 1, comp, false), -1.5);
+        write_float(&mut row, 0, comp, true, 3.25);
+        assert_eq!(read_float(&row, 0, comp, true), 3.25);
+    }
+
+    #[test]
+    fn float_read_past_the_row_is_zero_not_a_panic() {
+        let comp = Component { plane: 0, step: 4, offset: 0, shift: 0, depth: 32 };
+        let row = [0u8; 2];
+        assert_eq!(read_float(&row, 0, comp, false), 0.0);
     }
 }

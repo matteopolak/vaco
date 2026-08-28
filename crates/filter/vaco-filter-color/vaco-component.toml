@@ -2,12 +2,12 @@
 #
 # Colour/LUT video filters, plan 16 §4.2's `vaco-filter-color` row.
 # Implemented: colorchannelmixer, lut, lutrgb, lutyuv, lut2, pseudocolor,
-# colorlevels. The rest of the row (curves, colorbalance, colorcontrast,
-# colorcorrect, colorize, colortemperature, huesaturation, hue, vibrance,
-# exposure, selectivecolor, grayworld, greyedge, normalize, monochrome,
+# colorlevels, hue, exposure. The rest of the row (curves, colorbalance,
+# colorcontrast, colorcorrect, colorize, colortemperature, huesaturation,
+# vibrance, selectivecolor, grayworld, greyedge, normalize, monochrome,
 # midequalizer, geq, colormap, limitdiff, tonemap, eq, histeq, colormatrix)
 # is not registered here — see `vaco_filter_color`'s crate-level doc for
-# what stopped colorbalance/exposure/grayworld specifically.
+# what stopped colorbalance/grayworld specifically.
 #
 # Each `ctor` names the per-filter `pub const DESC: FilterDesc`; runtime
 # instantiation goes through `vaco_filter_color::registry::ColorRegistry`,
@@ -67,4 +67,11 @@ kind = "filter"
 name = "hue"
 long_name = "Adjust the hue and saturation of the input video."
 ctor = "vaco_filter_color::hue::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "exposure"
+long_name = "Adjust exposure of the video stream"
+ctor = "vaco_filter_color::exposure::DESC"
 media = "video"

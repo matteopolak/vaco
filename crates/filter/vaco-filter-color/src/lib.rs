@@ -13,12 +13,35 @@
 //! `pseudocolor`, `colormap`, `limitdiff`, `tonemap`, `eq`, `histeq`,
 //! `colormatrix`.
 //!
-//! Eight are implemented: [`colorchannelmixer`], [`lut`] (which registers
+//! Nine are implemented: [`colorchannelmixer`], [`lut`] (which registers
 //! `lut`, `lutrgb` and `lutyuv`), [`lut2`] and [`pseudocolor`], from a
 //! prior (mis-scoped) brief for this crate; [`colorlevels`], added in a
 //! later pass; [`hue`], added in the 2026-08-23 continuation pass covered
-//! below. Each of the other 21 is a real GitHub-issue-sized unit of work in
-//! its own right and none is silently stubbed here.
+//! below; [`exposure`], added once interface gap 15 closed (see below).
+//! Each of the other 20 is a real GitHub-issue-sized unit of work in its
+//! own right and none is silently stubbed here.
+//!
+//! ## Interface gap 15 closed: `exposure` ships, `grayworld` still does not
+//!
+//! [`sample`] grew [`sample::read_float`]/[`sample::write_float`] and
+//! [`sample::is_float_addressable`] — an `f32`-in/`f32`-out accessor pair
+//! alongside the existing integer one, gated on
+//! [`vaco_pixfmt::PixFmtFlags::FLOAT`] the same way the integer path gates
+//! on bit depth. [`exposure`] is the first (and, as of this close, only)
+//! caller: a real filter measured bit-exact against `ffmpeg 8.1` on
+//! `gbrpf32le`, not just an interface with nothing behind it — see that
+//! module's doc for the formula and the reordering trap that cost the most
+//! measurement time (the naive `(v - black) / (1 - black * scale)` is
+//! wrong twice: it needs a precomputed reciprocal rather than a division to
+//! match bit-for-bit, and it needs `abs` on the denominator, since
+//! `black * scale > 1` is reachable inside the documented option range and
+//! flips the naive answer's sign).
+//!
+//! `grayworld` is **not** shipped by this close: gap 15 was specifically
+//! the accessor wall, and closing it does not by itself supply
+//! `grayworld`'s own unmeasured LAB-space global-average algorithm. It
+//! remains exactly where the note below already put it, now blocked on
+//! algorithm measurement rather than on infrastructure.
 //!
 //! Three filters were investigated and specifically **not** shipped,
 //! because probing them surfaced real complexity rather than a formula a
@@ -33,9 +56,10 @@
 //!   curve, and reconstructing the real one needs more probing than this
 //!   pass had time for. The scale-with-`rs` relationship *is* confirmed
 //!   linear (`delta(v=0) ≈ 178 * rs`, checked at four values).
-//! - `exposure`, `grayworld`: both force `gbrpf32le` output — planar
-//!   32-bit float, not integer samples — which this crate's whole
-//!   [`sample`] engine deliberately excludes
+//! - `exposure`, `grayworld` (original finding; **`exposure` now ships**,
+//!   see the gap 15 section above — kept here for the *why*): both force
+//!   `gbrpf32le` output — planar 32-bit float, not integer samples — which
+//!   this crate's whole [`sample`] engine deliberately excluded at the time
 //!   ([`PixFmtFlags::FLOAT`](vaco_pixfmt::PixFmtFlags::FLOAT)). Needs a
 //!   float-sample accessor this crate does not have, not just a new
 //!   filter module. **Confirmed, not re-assumed, in the 2026-08-23
@@ -93,6 +117,7 @@ mod common;
 
 pub mod colorchannelmixer;
 pub mod colorlevels;
+pub mod exposure;
 pub mod hue;
 pub mod lut;
 pub mod lut2;
