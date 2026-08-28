@@ -601,18 +601,22 @@ convention itself, which is genuinely JPEG's own) that they would lift
 cleanly into a shared crate if one appears — MJPEG/JFIF-family formats are
 the most likely other consumer.
 
-### `vaco-codec-jpeg`'s encoder has no progressive mode and does not build optimized Huffman tables
+### `vaco-codec-jpeg`'s encoder does not build optimized Huffman tables
 
-`encode.rs` always emits a single baseline (`SOF0`) scan and the Annex
-K.3-K.6 default Huffman tables, never per-image-optimized ones. Both are
-correctness-neutral (the output is a valid, conformant JPEG either way) but
-cost compression ratio against a reference encoder at the same quality
-setting. Neither was implemented because issue #297's acceptance bar was
-"encoder output re-decodes within a quality bound", which the current
-encoder meets; extending it to progressive output would also need the
-`ac_refine`-side bug above resolved first, since a progressive encoder is
-only useful if this crate's own progressive decoder can be trusted to check
-it against.
+`encode.rs` always emits the Annex K.3-K.6 default Huffman tables, never
+per-image-optimized ones — correctness-neutral (the output is a valid,
+conformant JPEG either way) but costs compression ratio against a
+reference encoder at the same quality setting.
+
+**Partially closed:** progressive encode (`EncodeOptions::progressive`)
+landed once the `ac_refine` bug above was fixed — one interleaved DC scan
+plus one non-interleaved AC scan per component, spectral selection only,
+deliberately never successive approximation (see `encode.rs`'s module doc:
+that scope avoids writing a mirror of `ac_refine`'s own subtlety on the
+write side). Measured against `djpeg`/`ffmpeg`: both accept it, and
+`ffmpeg`'s decode of it matches `ffmpeg`'s decode of this crate's baseline
+output of the same source bit-for-bit. Optimized Huffman tables remain
+unimplemented.
 
 ### C-13 update: `EncoderDesc`, `DecoderDesc::make` and CLI dispatch landed; a payload-carrying `CodecId::Ext` did not
 
