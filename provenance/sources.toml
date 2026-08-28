@@ -1024,9 +1024,9 @@ where    = "https://www.itu.int/rec/T-REC-H.261"
 [[source]]
 id       = "itu-t-h263"
 kind     = "spec"
-title    = "ITU-T Rec. H.263, Video coding for low bit rate communication"
+title    = "ITU-T Rec. H.263, Video coding for low bit rate communication (03/96 base text for the baseline decoder; 01/2005 edition, the current in-force cumulative revision containing Annexes D/K/T among others, for the H.263+ annex work)"
 acquired = "2026-08-28"
-where    = "https://www.itu.int/rec/T-REC-H.263"
+where    = "https://www.itu.int/rec/T-REC-H.263 (03/96: https://www.itu.int/rec/dologin_pub.asp?lang=e&id=T-REC-H.263-199603-S!!PDF-E; 01/2005: https://www.itu.int/rec/dologin_pub.asp?lang=e&id=T-REC-H.263-200501-I!!PDF-E)"
 
 [[source]]
 id       = "ffmpeg-mxf-mux-header-probe"
