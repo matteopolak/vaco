@@ -2020,3 +2020,67 @@ blocks that package will call") and the plan's own note that
 "sans-io... no I/O ownership, since we drive the socket." The worker-
 thread seam above becomes load-bearing once a later child wires this
 engine to a live socket and registers `srt:`/`srts:` — not before.
+
+
+## Gap 29 — `Frame`/`FrameFlags` had no shape for MPEG pulldown's repeat count — CLOSED 2026-08-28
+
+Found independently from two directions, which is what made it actionable
+rather than one crate's convenience: `vaco-codec-mpeg12`, decoding
+`picture_coding_extension()`'s `repeat_first_field` bit, had nowhere to
+put the result; `vaco-filter-deinterlace`'s `repeatfields.rs` had already
+documented, from the consuming side, that it needs exactly this signal
+(`ffmpeg`'s own `AVFrame::repeat_pict`) and has nothing to read because no
+decoder in this workspace could produce it.
+
+**Not a `FrameFlags` bit.** `top_field_first`/`repeat_first_field`
+together select how many field periods a picture is held for (H.262
+§6.3.10: one, two or three progressive frames, or two or three fields,
+depending on `progressive_sequence`/`progressive_frame`) — a count, not a
+boolean, and the two existing flags (`INTERLACED`, `TOP_FIELD_FIRST`) do
+not extend to one.
+
+**Not a new field on `Frame` either.** Verified before choosing a shape,
+not assumed: `Frame`'s fields are deliberately public and unopinionated
+(`vaco-frame/src/alloc.rs`'s own module doc — "the fields stay public and
+a struct literal still works") and 88 files in this tree write `Frame {
+...}` literals directly; `Frame` has no `Default` impl, so none of them
+tolerate a new required field without every one being found and edited. A
+tree-wide breaking change to a layer-1 model crate while other agents are
+actively committing is not a small edit.
+
+**The existing side-data mechanism was already the right seam.**
+`FrameSideData` and `FrameSideDataKind` are both `#[non_exhaustive]`
+specifically so a new variant is additive — every match outside this
+crate already needs a wildcard arm, confirmed by building the whole
+workspace (`cargo check --workspace`) both before and after adding the
+variant, zero errors either time. Added `FrameSideData::Pulldown(u8)` (the
+extra field-period count, `0` meaning no repeat and normally represented
+by the entry's absence, not a stored `0`) plus `FrameSideDataKind::
+Pulldown`, following the exact `Cropping`/`Crop::set_crop` pattern already
+established: `Frame::repeat_pict()`/`Frame::set_repeat_pict()`.
+
+**The value is pre-combined, not a raw bit**, matching what the
+consuming side (`repeatfields.rs`, and the reference's own
+`AVFrame::repeat_pict`) actually wants: the decoder that has
+`progressive_sequence` (sequence-level), `progressive_frame` and
+`repeat_first_field`/`top_field_first` (picture-level) all in hand
+computes the final field-period count itself, so a filter reads one
+already-resolved number instead of re-deriving H.262's three-way
+combination rule. `vaco-codec-mpeg12`'s `pulldown_extra_fields` is the
+first (and so far only) producer, verified against the primary text
+directly, covered by a table-driven unit test for all three combination
+cases plus the full `begin_picture` wiring.
+
+### Status, 2026-08-28
+
+Closed for the interface question: `FrameSideData::Pulldown`/
+`FrameSideDataKind::Pulldown`/`Frame::repeat_pict`/`Frame::
+set_repeat_pict` landed in `vaco-frame` (`crates/model/vaco-frame/src/
+lib.rs`, `sidedata.rs`), `vaco-codec-mpeg12` is the first producer, and
+`cargo check --workspace` confirms zero breakage across every existing
+`Frame`-constructing site. `vaco-filter-deinterlace`'s `repeatfields.rs`
+is not wired to read it yet — that filter's own crate would need its own
+change to consume `Frame::repeat_pict`, which this entry does not make
+(different ownership, and `repeatfields.rs`'s "hard-duplicate a field"
+logic is a separate piece of work from the data now being available to
+read).
