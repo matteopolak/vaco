@@ -3177,3 +3177,68 @@ removed worktree; `git diff HEAD~1 HEAD` for this dispatch is empty.
 Gates: no code changed, so no new gate results to report; `cargo clippy`/
 `cargo test -p vaco-codec-h264`/`h264_entropy` fuzz target all remain in
 the state the previous entry left them. #418 stays open.
+
+## H.264 CABAC: the bypass hypothesis is cleared, `residual_block_cabac`'s scan/timing logic is the remaining surface (#418)
+
+One bounded round testing a specific hypothesis: that CABAC macroblock
+classification matching `ffmpeg -debug mb_type` exactly while the slice
+still ends short of `rbsp_trailing_bits()` is the signature of a correct
+regular-mode (`decode_decision`) path and a broken bypass path, since
+`coeff_abs_level_minus1`'s `EGk` suffix and `coeff_sign_flag` are the only
+bypass-coded elements `residual_block_cabac` reads. `vaco-codec-cabac` is
+`agent:codec-bits`'s crate (`planning/ASSIGNMENTS.md`, status `done`) —
+not edited; instead
+`crates/codec/vaco-codec-h264/tests/cabac_bypass_egk_oracle.rs` was added
+to `vaco-codec-h264` (this crate's own), exercising the dependency
+through its public API only.
+
+**Result: cleared.** `CabacEncoder::encode_bypass_egk` /
+`CabacDecoder::decode_bypass_egk` and `decode_uegk` round-trip correctly
+across every value H.264's `coeff_abs_level_minus1` suffix could
+plausibly ever carry (`k` 0..3, value 0 to 1,000,000). The two specific
+constructs named as suspicious — `decode_bypass_egk`'s 32-bin prefix
+ceiling and `decode_uegk`'s `saturating_add` — were confirmed to engage
+only six orders of magnitude past any realistic value (`u32::MAX`-scale),
+and never silently: `malformed()` is always set when the ceiling fires,
+so a caller can never mistake a clamped result for a real one.
+`decode_bypass`/`decode_bypass_bits` round-trip bit-for-bit too, closing
+out the whole bypass path, not just the two named constructs. The test
+suite includes a deliberately-broken mismatched-`k` case
+(`#[should_panic]`) proving the oracle can actually fail, per this
+dispatch's own gate.
+
+**Directly answering the dispatch's question**: separately instrumented
+(temporarily — not committed, reverted before landing) the real
+`decode_bypass_egk` call site in `decode_coeff_abs_level_minus1` against
+all three real corpora. 243 real calls across every slice of every
+corpus, including the failing ones. The ceiling engaged **zero times**.
+Largest observed `coeff_abs_level_minus1` value: 418. Neither the clamp
+nor the saturating add ever fires on anything these corpora produce, by
+several orders of magnitude of margin.
+
+`fuzz/fuzz_targets/cabac_engine.rs` (also `agent:codec-bits`'s, by the
+per-crate fuzz-target-naming convention) was run as a read-only check —
+1.36M executions, no crash, consistent with but weaker evidence than the
+round-trip oracle above (it still only checks for panics, not values;
+not modified, per the ownership rule).
+
+**What remains**: `residual_block_cabac`'s significant_coeff_flag/
+last_significant_coeff_flag scan loop and the exact timing of
+`ctxIdxInc`'s neighbour/running-count dependencies against real,
+per-coefficient decoder state (as opposed to the formulas in isolation,
+already verified against primary text in the previous round) is now the
+only unexplored surface in this function. The previous round's handoff
+item — a real per-coefficient reference (JM build, or a narrow Python
+CABAC-engine reimplementation) to diff against block by block — still
+stands as the highest-value next step; this round's oracle rules out the
+bypass arithmetic itself as a place such a reference would need to look,
+narrowing what it needs to check.
+
+Gates: `cargo clippy -p vaco-codec-h264 --all-targets` clean (two
+`integer_division` violations in the new test caught and fixed with bit
+shifts before committing), `cargo test -p vaco-codec-h264` all passing
+except the three known-`#[ignore]`d CABAC macroblock tests (unchanged),
+`h264_entropy` (4.5M execs) and `cabac_engine` (1.36M execs) fuzz targets
+both clean, no new `fuzz/artifacts` files, `patent-gate` still "0 of 2".
+`vaco-codec-cabac` and its fuzz target confirmed untouched by `git
+status`. #418 stays open; #419 not reopened.
