@@ -79,6 +79,16 @@ impl Plane {
         let start = y.saturating_mul(self.stride);
         self.data.get(start..start + self.width).unwrap_or(&[])
     }
+
+    /// The whole backing buffer, for building a borrowed
+    /// [`vaco_codec_dsp_mecmp::Plane`] over it — `crate::encode`'s motion
+    /// search and distortion measurement both need one, and duplicating
+    /// this plane type rather than adapting to the shared one is exactly
+    /// what D19 exists to prevent.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.data
+    }
 }
 
 /// One decoded picture's three planes, held by a reference slot.

@@ -47,22 +47,22 @@ use crate::transform;
 /// `u16` (RFC 6386 §9.1), so `mb_cols * 16 + 20` never approaches
 /// `i32::MAX`; the fallback exists only so this is a total function rather
 /// than a place a future change could make it panic.
-fn ix(v: usize) -> i32 {
+pub(crate) fn ix(v: usize) -> i32 {
     i32::try_from(v).unwrap_or(i32::MAX)
 }
 
 /// The inverse of [`ix`], clamping negative values to 0 -- every call site
 /// already established the value is non-negative before converting back to
 /// a plane index.
-fn ux(v: i32) -> usize {
+pub(crate) fn ux(v: i32) -> usize {
     usize::try_from(v).unwrap_or(0)
 }
 
-fn above_pixel(plane: &Plane, x: i32, y: i32) -> u8 {
+pub(crate) fn above_pixel(plane: &Plane, x: i32, y: i32) -> u8 {
     if y < 0 { predict::OFF_FRAME_ABOVE } else { plane.get(x, y) }
 }
 
-fn left_pixel(plane: &Plane, x: i32, y: i32) -> u8 {
+pub(crate) fn left_pixel(plane: &Plane, x: i32, y: i32) -> u8 {
     if x < 0 { predict::OFF_FRAME_LEFT } else { plane.get(x, y) }
 }
 
@@ -71,7 +71,7 @@ fn left_pixel(plane: &Plane, x: i32, y: i32) -> u8 {
 /// `(x-1, y-1)`, off-frame above whenever `y == 0` and off-frame left
 /// whenever `x == 0` (the "above" fill wins at the frame's top-left corner,
 /// matching [`predict::OFF_FRAME_ABOVE`]'s note in `predict`'s module doc).
-fn corner_pixel(plane: &Plane, x: i32, y: i32) -> u8 {
+pub(crate) fn corner_pixel(plane: &Plane, x: i32, y: i32) -> u8 {
     if y == 0 {
         predict::OFF_FRAME_ABOVE
     } else if x == 0 {
@@ -81,7 +81,7 @@ fn corner_pixel(plane: &Plane, x: i32, y: i32) -> u8 {
     }
 }
 
-fn gather_above<const N: usize>(plane: &Plane, x: i32, y: i32) -> [u8; N] {
+pub(crate) fn gather_above<const N: usize>(plane: &Plane, x: i32, y: i32) -> [u8; N] {
     let mut out = [0u8; N];
     for (i, v) in out.iter_mut().enumerate() {
         *v = above_pixel(plane, x + ix(i), y - 1);
@@ -89,7 +89,7 @@ fn gather_above<const N: usize>(plane: &Plane, x: i32, y: i32) -> [u8; N] {
     out
 }
 
-fn gather_left<const N: usize>(plane: &Plane, x: i32, y: i32) -> [u8; N] {
+pub(crate) fn gather_left<const N: usize>(plane: &Plane, x: i32, y: i32) -> [u8; N] {
     let mut out = [0u8; N];
     for (i, v) in out.iter_mut().enumerate() {
         *v = left_pixel(plane, x - 1, y + ix(i));
@@ -143,7 +143,7 @@ fn mode_delta_index(mode: i32) -> usize {
     clippy::integer_division,
     reason = "chroma MV = luma sum / 8, symmetric rounding; see the crate doc's known-unverified note"
 )]
-fn round_div8(x: i32) -> i32 {
+pub(crate) fn round_div8(x: i32) -> i32 {
     if x >= 0 { (x + 4) / 8 } else { -((-x + 4) / 8) }
 }
 
@@ -562,7 +562,7 @@ fn gather_above_right(plane: &Plane, col: usize, row: usize, sub_col: usize, sub
     out
 }
 
-fn predict_and_write_16(plane: &mut Plane, x: i32, y: i32, mode: i32, blocks: &[BlockCoeffs; 16], y2: Option<&BlockCoeffs>) {
+pub(crate) fn predict_and_write_16(plane: &mut Plane, x: i32, y: i32, mode: i32, blocks: &[BlockCoeffs; 16], y2: Option<&BlockCoeffs>) {
     let above: [u8; 16] = gather_above(plane, x, y);
     let left: [u8; 16] = gather_left(plane, x, y);
     let corner = corner_pixel(plane, x, y);
@@ -618,11 +618,11 @@ fn predict_and_write_16(plane: &mut Plane, x: i32, y: i32, mode: i32, blocks: &[
 /// out-of-range position — never actually reached here since every caller's
 /// indices are derived from a fixed, in-range loop bound, but this is
 /// cheaper to write than to prove to the linter.
-fn get2d<const N: usize>(m: &[[u8; N]; N], r: usize, c: usize) -> u8 {
+pub(crate) fn get2d<const N: usize>(m: &[[u8; N]; N], r: usize, c: usize) -> u8 {
     m.get(r).and_then(|row| row.get(c)).copied().unwrap_or(0)
 }
 
-fn predict_and_write_8(plane: &mut Plane, x: i32, y: i32, mode: i32, blocks: &[BlockCoeffs; 4]) {
+pub(crate) fn predict_and_write_8(plane: &mut Plane, x: i32, y: i32, mode: i32, blocks: &[BlockCoeffs; 4]) {
     let above: [u8; 8] = gather_above(plane, x, y);
     let left: [u8; 8] = gather_left(plane, x, y);
     let corner = corner_pixel(plane, x, y);
@@ -654,7 +654,7 @@ fn predict_and_write_8(plane: &mut Plane, x: i32, y: i32, mode: i32, blocks: &[B
     }
 }
 
-fn write_residual_block(plane: &mut Plane, x: i32, y: i32, pred: &[[u8; 4]; 4], block: &BlockCoeffs) {
+pub(crate) fn write_residual_block(plane: &mut Plane, x: i32, y: i32, pred: &[[u8; 4]; 4], block: &BlockCoeffs) {
     let residue = if block.has_coeffs {
         transform::inverse_dct(&block.coeffs)
     } else {
@@ -693,7 +693,7 @@ fn dequant_for(ctx: &FrameCtx<'_>, segment_id: u8) -> transform::DequantFactors 
     )
 }
 
-fn dequantize(coeffs: &BlockCoeffs, dc: i32, ac: i32) -> BlockCoeffs {
+pub(crate) fn dequantize(coeffs: &BlockCoeffs, dc: i32, ac: i32) -> BlockCoeffs {
     let mut out = *coeffs;
     for (i, c) in out.coeffs.iter_mut().enumerate() {
         let f = if i == 0 { dc } else { ac };

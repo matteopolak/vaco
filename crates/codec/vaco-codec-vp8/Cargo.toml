@@ -16,6 +16,9 @@ vaco-codec-core = { path = "../../signal/vaco-codec-core" }
 vaco-codec-msac = { path = "../../signal/vaco-codec-msac" }
 vaco-parse-vpx = { path = "../vaco-parse-vpx" }
 vaco-codec-dsp-intrapred = { path = "../../signal/vaco-codec-dsp-intrapred" }
+vaco-codec-dsp-me = { path = "../../signal/vaco-codec-dsp-me" }
+vaco-codec-dsp-mecmp = { path = "../../signal/vaco-codec-dsp-mecmp" }
+vaco-codec-dsp-ratecontrol = { path = "../../signal/vaco-codec-dsp-ratecontrol" }
 vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
 vaco-packet = { path = "../../model/vaco-packet" }
 vaco-frame = { path = "../../model/vaco-frame" }

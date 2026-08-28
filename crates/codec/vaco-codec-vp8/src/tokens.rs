@@ -17,7 +17,7 @@ use crate::tables::{
 
 /// One decoded 4x4 block: raster-order coefficients and whether any were
 /// non-zero (the flag the neighbour-context bookkeeping needs).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct BlockCoeffs {
     pub coeffs: [i32; 16],
     pub has_coeffs: bool,
