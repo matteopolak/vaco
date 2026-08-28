@@ -59,6 +59,17 @@ decoders  libdav1d libvpx libvpx-vp9 libopus
 
 and every entry like them.
 
+The same rule reaches an entire input family, not just individual codecs:
+the reference plays tracker/module formats — IT, XM, S3M, MOD, MTM, PTM,
+OKT, STM, ULT, FAR, DSM, DSYM, DIGI, AMF, AMS, MDL, IMF, J2B and the rest of
+the family `ffmpeg -formats` lists as `libopenmpt` — entirely through
+`libopenmpt`, a C++ library, with no native fallback of its own. There is no
+partial version of this to implement: the container framing and the tracker
+playback engine are the same code in `libopenmpt`, so "native container,
+FFI decoder" is not an option the way it is for, say, AV1. Out of scope for
+the same reason as the codecs above (FM-58's chiptune-adjacent survey,
+2026-08-27).
+
 **The important nuance: the binding is excluded, not the format.** AV1, VP8, VP9,
 Opus and MP3 are all in scope and are all being written natively — a codec does
 not become unavailable because we declined one particular way of reaching it. The
