@@ -21,8 +21,7 @@ the one thing that is worse than reading.
   anything. If you need a change in a crate you do not own, **stop and report**
   — do not work around it. That rule is what keeps six concurrent agents from
   corrupting one shared tree.
-- **Commit your own work**, with the recipe under "Committing in a shared
-  tree" below. Never `git add -A`, never a bare `git commit`, never a directory
+- **Commit your own work.** Never `git add -A`, never a bare `git commit`, never a directory
   pathspec, and never `stash`, `checkout`, `reset --hard` or `rebase` — those
   reach other agents' uncommitted work.
 
