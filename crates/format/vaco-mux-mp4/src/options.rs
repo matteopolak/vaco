@@ -93,6 +93,23 @@ pub enum Brand {
     Avif,
 }
 
+/// A Common Encryption scheme this crate can *write*. `cenc-aes-ctr` is the
+/// only one — full-sample AES-128-CTR, ISO/IEC 23001-7's `cenc` scheme —
+/// matching the reference's own `-encryption_scheme` vocabulary
+/// (`ffmpeg -h muxer=mov`: "allowed values are none, cenc-aes-ctr").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EncryptionScheme {
+    CencAesCtr,
+}
+
+/// The key and key id [`MuxOptions::encryption`] resolves to once both are
+/// present.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EncryptionOptions {
+    pub key: [u8; 16],
+    pub key_id: [u8; 16],
+}
+
 /// One chapter mark: presentation time and title.
 #[derive(Debug, Clone)]
 pub struct ChapterMark {
@@ -134,6 +151,14 @@ pub struct MuxOptions {
     pub tags: Vec<([u8; 4], String)>,
     pub cover_art: Option<CoverArt>,
     pub chapters: Vec<ChapterMark>,
+    /// `-encryption_scheme`. Applied uniformly to every track — there is no
+    /// per-track key/kid yet, and it takes effect only once
+    /// [`MuxOptions::encryption`] can resolve a key and a key id too.
+    pub encryption_scheme: Option<EncryptionScheme>,
+    /// `-encryption_key` (16 bytes, AES-128).
+    pub encryption_key: Option<[u8; 16]>,
+    /// `-encryption_kid`.
+    pub encryption_key_id: Option<[u8; 16]>,
 }
 
 impl MuxOptions {
@@ -155,7 +180,34 @@ impl MuxOptions {
                 "mp4: omit_tfhd_offset needs default_base_moof (or dash/cmaf, which imply it)",
             ));
         }
+        if self.encryption_scheme.is_some() {
+            if self.effective_flags().is_fragmented() {
+                return Err(vaco_core::Error::Unsupported(
+                    "mp4: Common Encryption write is not implemented for fragmented output",
+                ));
+            }
+            if self.encryption().is_none() {
+                return Err(vaco_core::Error::Unsupported(
+                    "mp4: encryption_scheme is set but encryption_key and/or encryption_kid is not",
+                ));
+            }
+        }
         Ok(())
+    }
+
+    /// The resolved key/key-id pair, once the scheme and both fields are
+    /// present — `None` while any of the three is still missing, which
+    /// [`set_option`](crate::mux::MovMuxer::set_option) callers may do one at
+    /// a time and in any order.
+    #[must_use]
+    pub fn encryption(&self) -> Option<EncryptionOptions> {
+        match self.encryption_scheme {
+            Some(EncryptionScheme::CencAesCtr) => Some(EncryptionOptions {
+                key: self.encryption_key?,
+                key_id: self.encryption_key_id?,
+            }),
+            None => None,
+        }
     }
 
     /// The effective `movflags`, with `dash`/`cmaf`'s implications folded in.

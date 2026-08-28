@@ -125,6 +125,16 @@ pub const MAX_SIDX_BOXES: usize = 4096;
 /// without trusting the declared box size any further than that.
 pub const MAX_SIDX_BYTES: u64 = 1 << 20;
 
+/// Largest number of top-level `pssh` boxes collected beside `moof`
+/// (ISO/IEC 23001-7 §8.1's fragmented-file location — `moov`-level `pssh` is
+/// collected separately, by the box layer's own whole-file scan).
+pub const MAX_TOP_LEVEL_PSSH: usize = 256;
+
+/// Largest top-level `pssh` payload read. `pssh`'s `Data` field carries a
+/// DRM system's opaque init data, which real files keep small; this is a
+/// generous bound, not a measured maximum.
+pub const MAX_PSSH_BYTES: u64 = 1 << 20;
+
 /// Fixed size of an `mfro` box: an 8-byte header, a 4-byte version/flags word
 /// and the 4-byte `size` field (ISO/IEC 14496-12 §8.8.11). Unlike almost every
 /// other box in the format, it never grows, which is what makes reading the
@@ -758,6 +768,29 @@ impl Mp4Demuxer {
                     .push(("encryption_key_id".to_owned(), hex16(&te.default_kid)));
             }
         }
+        // Decrypt, given a caller-supplied key and a real `senc` — see
+        // `Mp4Options::decryption_key`'s doc comment. Fragmented sources are
+        // excluded: this crate's own `senc`/`saiz`/`saio` placement (and
+        // this decoder's) is `stbl`-only, matching `vaco-mux-mp4`'s own
+        // write-side scope cut.
+        let decryptor = cenc.as_ref().filter(|_| !self.fragmented).and_then(|c| {
+            let key = self.mp4.decryption_key?;
+            let te = c.track_encryption?;
+            if te.per_sample_iv_size == 0 {
+                // `constant_iv` (every sample shares one IV): not
+                // implemented, named in the crate doc's *Deferred* section.
+                return None;
+            }
+            let senc = vaco_format_isom::cenc::SampleEncryption::parse(
+                table.sample_encryption.as_ref()?,
+            )?;
+            Some(read::Decryptor {
+                key,
+                iv_size: te.per_sample_iv_size,
+                has_subsamples: senc.has_subsamples,
+                records: senc.records.to_vec(),
+            })
+        });
 
         let (r_rate, avg_rate) = self.frame_rate_estimate(trak, table, &totals, limit);
         if media_type == MediaType::Video {
@@ -806,7 +839,8 @@ impl Mp4Demuxer {
             batch: read::BATCH_MIN,
             finished: external,
             blocked: external,
-            encrypted: cenc.is_some(),
+            encrypted: cenc.is_some() && decryptor.is_none(),
+            decrypt: decryptor,
         };
         if self.fragmented {
             reader.entries = self.fragment_entries(trak.header.track_id, size);
@@ -1158,6 +1192,39 @@ impl Mp4Demuxer {
                 }
                 continue;
             }
+            if span.kind == bt::PSSH {
+                // A fragmented file's `pssh` sits here, beside `moof` — not
+                // under `moov`, which is the box layer's own whole-file
+                // `IsoFile::top_level_pssh` covers instead. Best-effort, the
+                // same shape as `sidx` just above: a `pssh` that fails to
+                // parse or exceeds `MAX_PSSH_BYTES` is skipped, not treated
+                // as a reason to give up on the fragments after it.
+                let seen = self
+                    .metadata
+                    .iter()
+                    .filter(|(k, _)| k == "encryption_system_id")
+                    .count();
+                if seen < MAX_TOP_LEVEL_PSSH
+                    && span.payload_len() <= MAX_PSSH_BYTES
+                    && let Ok(data) = read_payload_incremental(
+                        &mut self.io,
+                        &mut self.budget,
+                        span,
+                        MAX_PSSH_BYTES,
+                    )
+                {
+                    self.budget.release(data.len() as u64);
+                    if let Ok(pssh) =
+                        vaco_format_isom::cenc::Pssh::parse(&reassemble(span, &data))
+                    {
+                        self.metadata.push((
+                            "encryption_system_id".to_owned(),
+                            hex16(&pssh.system_id),
+                        ));
+                    }
+                }
+                continue;
+            }
             if span.kind == bt::MOOF {
                 if span.payload_len() > MAX_MOOV_BYTES {
                     self.scan_done = true;
@@ -1366,6 +1433,7 @@ impl Mp4Demuxer {
                     key: true,
                     discard: false,
                     skip: 0,
+                    index: 0,
                 });
                 if let Source::AttachedPic { emitted, .. } = &mut reader.source {
                     *emitted = true;
@@ -1603,7 +1671,7 @@ impl Mp4Demuxer {
             self.eof = true;
             return Err(Error::Eof);
         };
-        let (sample, stream_index, time_base, audio) = {
+        let (sample, stream_index, time_base, audio, decrypt) = {
             let Some(reader) = self.readers.get_mut(slot) else {
                 self.eof = true;
                 return Err(Error::Eof);
@@ -1612,9 +1680,23 @@ impl Mp4Demuxer {
                 self.eof = true;
                 return Err(Error::Eof);
             };
-            (sample, reader.stream_index, reader.time_base, reader.audio)
+            (
+                sample,
+                reader.stream_index,
+                reader.time_base,
+                reader.audio,
+                reader.decrypt.clone(),
+            )
         };
         let mut pkt = self.payload(sample.offset, sample.size)?;
+        if let Some(dec) = &decrypt
+            && !dec.decrypt(sample.index, pkt.payload_mut())
+        {
+            return Err(Error::Unsupported(
+                "mp4: cenc: no per-sample IV available for this sample (senc lacks a record, \
+                 or carries a subsample table this crate does not decrypt)",
+            ));
+        }
         pkt.stream_index = stream_index;
         // `i64::MIN` is the "no timeline" marker a cover image carries.
         pkt.pts = if sample.pts == i64::MIN {
@@ -2200,6 +2282,7 @@ fn cover_stream(index: u32, cover: meta::CoverArt) -> (Stream, Reader) {
         finished: false,
         blocked: false,
         encrypted: false,
+        decrypt: None,
     };
     (stream, reader)
 }

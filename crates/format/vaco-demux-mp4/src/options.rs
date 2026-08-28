@@ -43,6 +43,14 @@ pub struct Mp4Options {
     pub seek_streams_individually: bool,
     /// `-max_stts_delta` — a `stts` delta above this is treated as invalid.
     pub max_stts_delta: u32,
+    /// `-decryption_key` — a single AES-128 key (16 bytes) applied to every
+    /// `cenc`-protected track, given a real per-sample IV to decrypt with
+    /// (`senc`, non-fragmented only — see `docs/format/vaco-demux-mp4.md`).
+    ///
+    /// The reference's `-decryption_keys` (per-`KID` dictionary) is not
+    /// implemented: one key for every protected track is what this option
+    /// alone already means, and is enough for the common single-key case.
+    pub decryption_key: Option<[u8; 16]>,
 }
 
 impl Default for Mp4Options {
@@ -55,6 +63,7 @@ impl Default for Mp4Options {
             interleaved_read: true,
             seek_streams_individually: true,
             max_stts_delta: 4_294_487_295,
+            decryption_key: None,
         }
     }
 }

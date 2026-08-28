@@ -296,13 +296,12 @@ impl SampleAuxOffsets {
 
 /// `senc` — per-sample IVs and, when `flags & 2`, subsample tables (§7.2).
 ///
-/// Only `sample_count` and the byte range the per-sample records occupy are
-/// reported. Resolving an individual sample's IV needs the track's
-/// `per_sample_iv_size` from `tenc`, which lives in a different box, and
-/// decoding it is a decryption step this crate does not take (see the module
-/// doc).
+/// `sample_count` and the byte range the per-sample records occupy are always
+/// reported; resolving an individual sample's IV additionally needs the
+/// track's `per_sample_iv_size` from `tenc`, which lives in a different box —
+/// see [`Self::iv`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SampleEncryption {
+pub struct SampleEncryption<'a> {
     /// Whether each sample also carries a subsample table (`flags & 2`).
     pub has_subsamples: bool,
     /// `sample_count`.
@@ -311,21 +310,45 @@ pub struct SampleEncryption {
     /// the per-sample records begin, and what `saio` should point at when
     /// both boxes are present in the same file.
     pub records_offset: u64,
+    /// The bytes starting at [`Self::records_offset`], borrowed from the
+    /// box's own payload.
+    pub records: &'a [u8],
 }
 
-impl SampleEncryption {
-    /// Parse a `senc` full box far enough to report its shape.
+impl<'a> SampleEncryption<'a> {
+    /// Parse a `senc` full box.
     #[must_use]
-    pub fn parse(senc: &IsoBox<'_>) -> Option<Self> {
+    pub fn parse(senc: &IsoBox<'a>) -> Option<Self> {
         let full = senc.full().ok()?;
         let mut r = full.reader();
         let sample_count = r.be32();
         r.check().ok()?;
+        let records = full.body.get(r.pos()..).unwrap_or(&[]);
         Some(Self {
             has_subsamples: full.flags & 2 != 0,
             sample_count,
             records_offset: full.offset.saturating_add(r.pos() as u64),
+            records,
         })
+    }
+
+    /// The `index`-th sample's IV (0-based), `iv_size` bytes, big-endian.
+    ///
+    /// `None` when [`Self::has_subsamples`] is set: a subsample table gives
+    /// each record a variable length (the IV plus a `subsample_count`-sized
+    /// table), so indexing sample `n` needs every earlier record's own
+    /// `subsample_count` already read — a sequential scan this crate's
+    /// decryption path does not implement (see the module doc's *What was
+    /// measured* section; full-sample encryption, `has_subsamples == false`,
+    /// is the case this crate writes and the case it decrypts).
+    #[must_use]
+    pub fn iv(&self, index: u32, iv_size: u8) -> Option<&'a [u8]> {
+        if self.has_subsamples || iv_size == 0 {
+            return None;
+        }
+        let stride = usize::from(iv_size);
+        let start = stride.checked_mul(usize::try_from(index).ok()?)?;
+        self.records.get(start..start.checked_add(stride)?)
     }
 }
 
@@ -443,6 +466,29 @@ mod tests {
         assert_eq!(p.system_id, [0x11; 16]);
         assert_eq!(p.kids, vec![[0xAA; 16], [0xBB; 16]]);
         assert_eq!(p.data, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn senc_iv_indexes_fixed_size_records() {
+        let mut body = vec![0, 0, 0, 0]; // version 0, no subsamples
+        body.extend_from_slice(&3u32.to_be_bytes()); // sample_count
+        body.extend_from_slice(&1u64.to_be_bytes()); // sample 0's IV
+        body.extend_from_slice(&2u64.to_be_bytes()); // sample 1's IV
+        body.extend_from_slice(&3u64.to_be_bytes()); // sample 2's IV
+        let s = SampleEncryption::parse(&bx(*b"senc", &body)).unwrap();
+        assert_eq!(s.iv(0, 8), Some(&1u64.to_be_bytes()[..]));
+        assert_eq!(s.iv(1, 8), Some(&2u64.to_be_bytes()[..]));
+        assert_eq!(s.iv(2, 8), Some(&3u64.to_be_bytes()[..]));
+        assert_eq!(s.iv(3, 8), None, "past the declared sample count");
+    }
+
+    #[test]
+    fn senc_iv_refuses_a_subsample_table() {
+        let mut body = vec![0, 0, 0, 2]; // flags = 0x2: has subsamples
+        body.extend_from_slice(&1u32.to_be_bytes());
+        body.extend_from_slice(&[0u8; 8]);
+        let s = SampleEncryption::parse(&bx(*b"senc", &body)).unwrap();
+        assert_eq!(s.iv(0, 8), None);
     }
 
     #[test]

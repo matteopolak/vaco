@@ -51,6 +51,38 @@ pub fn build(params: &CodecParameters) -> Result<BuiltEntry> {
     }
 }
 
+/// Wrap an already-built sample entry for Common Encryption: rename the
+/// entry's fourcc to `encv`/`enca` and append a `sinf` naming the original
+/// format and the key id (ISO/IEC 23001-7 §8.3, `cenc` scheme, version-0
+/// `tenc`, 8-byte per-sample IV — see
+/// [`vaco_format_isom::writer::sinf_cenc`]).
+#[must_use]
+pub fn wrap_encrypted(entry: BuiltEntry, key_id: [u8; 16]) -> BuiltEntry {
+    let mut bytes = entry.bytes;
+    let mut original = *b"    ";
+    if let Some(s) = bytes.get(4..8) {
+        original.copy_from_slice(s);
+    }
+    let new_type: [u8; 4] = if entry.media == MediaType::Audio {
+        *b"enca"
+    } else {
+        *b"encv"
+    };
+    if let Some(slot) = bytes.get_mut(4..8) {
+        slot.copy_from_slice(&new_type);
+    }
+    let sinf = vaco_format_isom::writer::sinf_cenc(FourCc::new(&original), key_id);
+    bytes.extend_from_slice(&sinf);
+    let new_len = u32::try_from(bytes.len()).unwrap_or(u32::MAX);
+    if let Some(size_field) = bytes.get_mut(0..4) {
+        size_field.copy_from_slice(&new_len.to_be_bytes());
+    }
+    BuiltEntry {
+        bytes,
+        media: entry.media,
+    }
+}
+
 /// Whether `codec` needs out-of-band extradata to be muxed at all — the set
 /// [`crate::mux::MovMuxer::check_bitstream`] asks `extract_extradata` for when
 /// it is missing.

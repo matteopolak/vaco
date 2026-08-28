@@ -277,7 +277,7 @@ fn finish_streaming(
         }
         out.seek(end)?;
     }
-    let moov = build_moov(tracks, opts, movie_timescale, 0);
+    let moov = build_moov(tracks, opts, movie_timescale, 0, end);
     out.write(&moov)?;
     out.flush()
 }
@@ -304,7 +304,7 @@ fn finish_faststart(
     let mut moov = Vec::new();
     for _ in 0..MAX_FASTSTART_PASSES {
         let shift = prefix_before_mdat(trial_moov_len);
-        moov = build_moov(tracks, opts, movie_timescale, shift);
+        moov = build_moov(tracks, opts, movie_timescale, shift, ftyp_len);
         let got = u64::try_from(moov.len()).unwrap_or(u64::MAX);
         if got == trial_moov_len {
             break;
@@ -329,6 +329,7 @@ fn build_moov(
     opts: &MuxOptions,
     movie_timescale: u32,
     offset_shift: u64,
+    moov_start: u64,
 ) -> Vec<u8> {
     let creation_time = if opts.bitexact {
         0
@@ -364,8 +365,25 @@ fn build_moov(
         next_track_id,
     });
 
+    // `moov`'s own 8-byte box header precedes `moov_body` in the file, so a
+    // `trak`'s absolute start is `moov_start + 8 + (bytes of moov_body
+    // already appended)` — computable up front, unlike a chunk offset into
+    // `mdat`, because `moov`'s own start position never depends on its own
+    // length the way `mdat`'s does under `faststart` (see the module docs'
+    // fixed-point argument, which this sidesteps entirely).
+    let encryption = opts.encryption();
     for t in tracks {
-        moov_body.extend_from_slice(&build_trak(t, movie_timescale, creation_time, offset_shift));
+        let trak_abs_start = moov_start
+            .saturating_add(8)
+            .saturating_add(moov_body.len() as u64);
+        moov_body.extend_from_slice(&build_trak(
+            t,
+            movie_timescale,
+            creation_time,
+            offset_shift,
+            encryption.as_ref(),
+            trak_abs_start,
+        ));
     }
 
     if let Some(udta) = build_udta(opts) {
@@ -380,31 +398,21 @@ fn build_trak(
     movie_timescale: u32,
     creation_time: u64,
     offset_shift: u64,
+    encryption: Option<&crate::options::EncryptionOptions>,
+    trak_abs_start: u64,
 ) -> Vec<u8> {
     // Post-edit duration (see `build_moov`'s comment on the same call) —
     // `mdhd`, below, uses the raw, un-adjusted `media_duration` instead.
     let track_duration = rescale(track.presented_duration(), track.timescale, movie_timescale);
 
-    let mut minf = Vec::new();
-    minf.extend_from_slice(&match track.media {
-        vaco_core::MediaType::Audio => writer::smhd(),
-        _ => writer::vmhd(),
-    });
-    minf.extend_from_slice(&writer::dinf_self_contained());
-    minf.extend_from_slice(&build_stbl(track, offset_shift));
-
-    let mut mdia = Vec::new();
-    mdia.extend_from_slice(&writer::mdhd(&writer::MdhdFields {
-        creation_time,
-        modification_time: creation_time,
-        timescale: track.timescale,
-        duration: track.media_duration(),
-        language: track.language,
-    }));
-    mdia.extend_from_slice(&writer::hdlr(track.handler, handler_name(track.handler)));
-    mdia.extend_from_slice(&vaco_format_isom::build::bx(b"minf", &minf));
-
-    let mut trak = writer::tkhd(&writer::TkhdFields {
+    // Built in this order — rather than the file's own `tkhd, edts, mdia`
+    // order — because `stbl`'s absolute file position (needed only when
+    // `encryption` asks for a `saio` inside it) depends on the byte lengths
+    // of everything that precedes it: `tkhd`+`edts` inside `trak`, then
+    // `mdhd`+`hdlr` inside `mdia`, then `vmhd`/`smhd`+`dinf` inside `minf`.
+    // Each of those is independent of `stbl` itself, so computing them first
+    // resolves the position without a second pass.
+    let tkhd = writer::tkhd(&writer::TkhdFields {
         flags: writer::tkhd_flags::ENABLED | writer::tkhd_flags::IN_MOVIE,
         creation_time,
         modification_time: creation_time,
@@ -417,7 +425,42 @@ fn build_trak(
         width: track.width,
         height: track.height,
     });
-    trak.extend_from_slice(&build_edts(track, movie_timescale));
+    let edts = build_edts(track, movie_timescale);
+    let mdia_abs_start = trak_abs_start
+        .saturating_add(8)
+        .saturating_add(tkhd.len() as u64)
+        .saturating_add(edts.len() as u64);
+
+    let mdhd = writer::mdhd(&writer::MdhdFields {
+        creation_time,
+        modification_time: creation_time,
+        timescale: track.timescale,
+        duration: track.media_duration(),
+        language: track.language,
+    });
+    let hdlr = writer::hdlr(track.handler, handler_name(track.handler));
+    let minf_abs_start = mdia_abs_start
+        .saturating_add(8)
+        .saturating_add(mdhd.len() as u64)
+        .saturating_add(hdlr.len() as u64);
+
+    let mut minf = Vec::new();
+    minf.extend_from_slice(&match track.media {
+        vaco_core::MediaType::Audio => writer::smhd(),
+        _ => writer::vmhd(),
+    });
+    minf.extend_from_slice(&writer::dinf_self_contained());
+    let stbl_abs_start = minf_abs_start
+        .saturating_add(8)
+        .saturating_add(minf.len() as u64);
+    minf.extend_from_slice(&build_stbl(track, offset_shift, encryption, stbl_abs_start));
+
+    let mut mdia = mdhd;
+    mdia.extend_from_slice(&hdlr);
+    mdia.extend_from_slice(&vaco_format_isom::build::bx(b"minf", &minf));
+
+    let mut trak = tkhd;
+    trak.extend_from_slice(&edts);
     trak.extend_from_slice(&vaco_format_isom::build::bx(b"mdia", &mdia));
     vaco_format_isom::build::bx(b"trak", &trak)
 }
@@ -441,7 +484,12 @@ fn build_edts(track: &TrackState, movie_timescale: u32) -> Vec<u8> {
     vaco_format_isom::build::bx(b"edts", &elst)
 }
 
-fn build_stbl(track: &TrackState, offset_shift: u64) -> Vec<u8> {
+fn build_stbl(
+    track: &TrackState,
+    offset_shift: u64,
+    encryption: Option<&crate::options::EncryptionOptions>,
+    stbl_abs_start: u64,
+) -> Vec<u8> {
     let mut body = Vec::new();
     let entry = with_btrt(track);
     body.extend_from_slice(&writer::stsd(std::slice::from_ref(&entry)));
@@ -466,6 +514,22 @@ fn build_stbl(track: &TrackState, offset_shift: u64) -> Vec<u8> {
         .map(|o| o.saturating_add(offset_shift))
         .collect();
     body.extend_from_slice(&writer::chunk_offsets(&offsets));
+    if encryption.is_some() {
+        // `senc`'s IV table starts right after its own 8-byte box header and
+        // 8-byte version/flags+sample_count fields — see
+        // `vaco_format_isom::cenc::SampleEncryption::records_offset`, which
+        // this mirrors on the write side so `saio`'s one offset points at
+        // exactly what a demuxer reading `senc` back would compute.
+        let sample_count = u32::try_from(track.samples.len()).unwrap_or(u32::MAX);
+        let ivs: Vec<[u8; 8]> = (1..=u64::from(sample_count)).map(u64::to_be_bytes).collect();
+        let senc_abs_start = stbl_abs_start
+            .saturating_add(8)
+            .saturating_add(body.len() as u64);
+        let iv_table_abs = senc_abs_start.saturating_add(16);
+        body.extend_from_slice(&writer::senc(&ivs));
+        body.extend_from_slice(&writer::saiz(sample_count));
+        body.extend_from_slice(&writer::saio(iv_table_abs));
+    }
     vaco_format_isom::build::bx(b"stbl", &body)
 }
 

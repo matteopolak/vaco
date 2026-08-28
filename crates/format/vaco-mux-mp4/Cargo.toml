@@ -16,6 +16,7 @@ vaco-packet = { path = "../../model/vaco-packet" }
 vaco-format-core = { path = "../../format/vaco-format-core" }
 vaco-format-isom = { path = "../../format/vaco-format-isom" }
 vaco-codec-core = { path = "../../signal/vaco-codec-core" }
+vaco-crypto = { path = "../../core/vaco-crypto" }
 bitflags.workspace = true
 
 [dev-dependencies]

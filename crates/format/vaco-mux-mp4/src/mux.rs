@@ -150,7 +150,10 @@ impl Muxer for MovMuxer {
                 "mp4: streams must be added before the header is written",
             ));
         }
-        let built = entry::build(params)?;
+        let mut built = entry::build(params)?;
+        if let Some(enc) = self.opts.encryption() {
+            built = entry::wrap_encrypted(built, enc.key_id);
+        }
         let track_id = u32::try_from(self.tracks.len())
             .unwrap_or(u32::MAX)
             .saturating_add(1);
@@ -164,6 +167,13 @@ impl Muxer for MovMuxer {
     }
 
     fn init(&mut self) -> Result<()> {
+        // Re-validated here, not only in `with_options`: `set_option` can
+        // reach every field `validate` inspects on an already-constructed
+        // muxer (M29's private-options path calls it before `init`, not
+        // before construction), so a bad combination assembled one option at
+        // a time must be caught at the same point a bad combination handed
+        // to `with_options` in one shot already is.
+        self.opts.validate()?;
         // `DEFAULT_MOVIE_TIMESCALE` (1000) whenever any track is video —
         // measured on `ffmpeg -c copy -f mp4` across a video-only reordered
         // stream, a video-only non-reordered one, a raw H.264 elementary
@@ -239,7 +249,21 @@ impl Muxer for MovMuxer {
             .unwrap_or(0)
             .max(0);
         let duration = u32::try_from(duration_ticks).unwrap_or(0);
-        let payload = packet.payload();
+        // Common Encryption never reaches the fragmented arm below —
+        // `MuxOptions::validate` (checked in `init`) refuses that combination
+        // outright — so encrypting unconditionally before the match is safe:
+        // the fragmented path's own `.to_vec()` just copies whichever slice
+        // this resolves to.
+        let mut encrypted;
+        let payload = match self.opts.encryption() {
+            Some(enc) => {
+                let sample_index = self.tracks.get(idx).map_or(0, |t| t.samples.len());
+                encrypted = packet.payload().to_vec();
+                encrypt_cenc_sample(&enc.key, sample_index, &mut encrypted);
+                encrypted.as_slice()
+            }
+            None => packet.payload(),
+        };
 
         match &mut self.mode {
             Mode::Progressive(state) => {
@@ -342,6 +366,138 @@ impl Muxer for MovMuxer {
         self.metadata = metadata.clone();
         Ok(())
     }
+
+    /// Parses this crate's own `-movflags` spelling and the `-encryption_*`/
+    /// `-frag_*` options, so a caller reaches them through
+    /// `MuxBuilder::with_private_options` rather than only through
+    /// [`MovMuxer::with_options`]. Every name matches `ffmpeg -h muxer=mov`'s
+    /// own vocabulary; an unrecognised name or `movflags` value is refused
+    /// (M8's "reported, not silently dropped" rule), not ignored.
+    fn set_option(&mut self, name: &str, value: &str) -> Result<()> {
+        match name {
+            "movflags" => {
+                self.opts.movflags |= parse_movflags(value)?;
+                Ok(())
+            }
+            "encryption_scheme" => {
+                self.opts.encryption_scheme = match value {
+                    "none" => None,
+                    "cenc-aes-ctr" => Some(crate::options::EncryptionScheme::CencAesCtr),
+                    other => {
+                        return Err(Error::Option {
+                            name: name.to_owned(),
+                            detail: format!(
+                                "unknown encryption_scheme {other:?}; this muxer writes cenc-aes-ctr only"
+                            ),
+                        });
+                    }
+                };
+                Ok(())
+            }
+            "encryption_key" => {
+                self.opts.encryption_key = Some(parse_hex16(name, value)?);
+                Ok(())
+            }
+            "encryption_kid" => {
+                self.opts.encryption_key_id = Some(parse_hex16(name, value)?);
+                Ok(())
+            }
+            "frag_duration" => {
+                let micros: i64 = value.parse().map_err(|_| Error::Option {
+                    name: name.to_owned(),
+                    detail: "expected an integer microsecond count".to_owned(),
+                })?;
+                self.opts.frag_duration = Some(vaco_core::Duration::from_micros(micros));
+                Ok(())
+            }
+            "frag_size" => {
+                let bytes: u64 = value.parse().map_err(|_| Error::Option {
+                    name: name.to_owned(),
+                    detail: "expected an integer byte count".to_owned(),
+                })?;
+                self.opts.frag_size = Some(bytes);
+                Ok(())
+            }
+            _ => Err(Error::Option {
+                name: name.to_owned(),
+                detail: "this muxer has no such option".to_owned(),
+            }),
+        }
+    }
+}
+
+/// Parse `-movflags`' `+flag+flag` (equivalently `flag+flag`, `-flag` to
+/// clear) spelling into the subset of `ffmpeg -h muxer=mov`'s flag list this
+/// crate implements. An unimplemented or unknown flag name is refused rather
+/// than silently dropped, so `+faststart+rtphint` fails loudly instead of
+/// quietly writing a file without hint tracks nobody asked to omit.
+fn parse_movflags(value: &str) -> Result<crate::options::MovFlags> {
+    use crate::options::MovFlags;
+    let mut out = MovFlags::empty();
+    for tok in value.split('+') {
+        if tok.is_empty() {
+            continue;
+        }
+        let (negate, name) = tok.strip_prefix('-').map_or((false, tok), |n| (true, n));
+        let flag = match name {
+            "faststart" => MovFlags::FASTSTART,
+            "empty_moov" => MovFlags::EMPTY_MOOV,
+            "frag_keyframe" => MovFlags::FRAG_KEYFRAME,
+            "frag_every_frame" => MovFlags::FRAG_EVERY_FRAME,
+            "default_base_moof" => MovFlags::DEFAULT_BASE_MOOF,
+            "omit_tfhd_offset" => MovFlags::OMIT_TFHD_OFFSET,
+            "separate_moof" => MovFlags::SEPARATE_MOOF,
+            "dash" => MovFlags::DASH,
+            "cmaf" => MovFlags::CMAF,
+            other => {
+                return Err(Error::Option {
+                    name: "movflags".to_owned(),
+                    detail: format!("unknown or unimplemented movflag {other:?}"),
+                });
+            }
+        };
+        if negate {
+            out.remove(flag);
+        } else {
+            out.insert(flag);
+        }
+    }
+    Ok(out)
+}
+
+/// Parse a 32-hex-character `-encryption_key`/`-encryption_kid` value.
+fn parse_hex16(name: &str, value: &str) -> Result<[u8; 16]> {
+    let bad = || Error::Option {
+        name: name.to_owned(),
+        detail: "expected 32 hex characters (16 bytes)".to_owned(),
+    };
+    if value.len() != 32 {
+        return Err(bad());
+    }
+    let mut out = [0u8; 16];
+    for (i, slot) in out.iter_mut().enumerate() {
+        let byte_str = value.get(i.saturating_mul(2)..i.saturating_mul(2).saturating_add(2));
+        *slot = byte_str
+            .and_then(|s| u8::from_str_radix(s, 16).ok())
+            .ok_or_else(bad)?;
+    }
+    Ok(out)
+}
+
+/// Apply the CENC 'cenc' scheme's full-sample AES-128-CTR in place:
+/// `counter_block = IV(8 bytes) ++ 0u64`, `IV = sample_index + 1` big-endian
+/// — the same numbering [`crate::progressive`]'s `senc` writer uses, so the
+/// two agree without either side storing the IV separately.
+fn encrypt_cenc_sample(key: &[u8; 16], sample_index: usize, payload: &mut [u8]) {
+    let iv = u64::try_from(sample_index)
+        .unwrap_or(u64::MAX)
+        .saturating_add(1)
+        .to_be_bytes();
+    let mut counter = [0u8; 16];
+    if let Some(slot) = counter.get_mut(..8) {
+        slot.copy_from_slice(&iv);
+    }
+    vaco_crypto::ctr_apply_aes128(key, &counter, payload);
 }
 
 impl MovMuxer {

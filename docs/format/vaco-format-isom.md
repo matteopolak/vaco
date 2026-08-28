@@ -675,15 +675,20 @@ Named so the demuxer's author knows what is not here:
   `Movie::udta` hands over the box unparsed. Plan 18 §2928 assigns the
   conversion table to this crate; it is a table with no dependency on anything
   else here and can be added without touching the parse path.
-* ~~**Common encryption.**~~ Done 2026-08-23: `cenc` (below) parses `pssh`,
-  `schm`, `tenc` (both versions), `saiz` and `saio` structurally, plus
-  `senc`'s shape (`sample_count` and where its per-sample records start,
-  without decoding an individual IV or subsample table — nothing downstream
-  needs one, since the whole track is refused rather than partially decoded;
-  see `vaco-demux-mp4`'s doc file). `Movie::pssh` and `IsoFile::top_level_pssh`
-  collect the two locations a `pssh` legally occupies. `SampleEntry::cenc()`
-  ties `schm`/`tenc` to one sample entry, alongside the pre-existing
-  `original_format`.
+* ~~**Common encryption.**~~ Done 2026-08-23, extended 2026-08-28: `cenc`
+  (below) parses `pssh`, `schm`, `tenc` (both versions), `saiz` and `saio`
+  structurally, plus `senc`'s shape (`sample_count`, where its per-sample
+  records start) **and now, `SampleEncryption::iv`, an individual sample's
+  real IV** (full-sample encryption only — `has_subsamples` refuses, since a
+  subsample table's variable record length needs a sequential scan this
+  method does not do). `Movie::pssh` and `IsoFile::top_level_pssh` collect
+  the two locations a `pssh` legally occupies. `SampleEntry::cenc()` ties
+  `schm`/`tenc` to one sample entry, alongside the pre-existing
+  `original_format`. The **write** side landed 2026-08-28 too:
+  `writer::sinf_cenc`/`senc`/`saiz`/`saio` are `vaco-mux-mp4`'s only intended
+  caller, same as every other `writer` function — see that crate's doc file
+  for the encrypt-and-mux path built on them, and `vaco-demux-mp4`'s for the
+  decrypt-given-a-key path built on `SampleEncryption::iv`.
 * ~~**`colr` and `tmcd`.**~~ Done 2026-08-28: `stsd::ColourInfo::parse` reads
   `colr`'s `nclx`/`nclc` CICP codes (an ICC profile type reports only its
   `colour_type`), and `SampleEntry::tmcd`/`TimecodeSampleEntry` expose a

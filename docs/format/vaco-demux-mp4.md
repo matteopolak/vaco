@@ -595,37 +595,46 @@ deltas are unsigned and monotonicity is guaranteed by construction.
 
 ---
 
-## Common Encryption — reported, not decrypted
+## Common Encryption — reported always, decrypted given a key
 
 **2026-08-23.** `sinf ▸ schm` and `sinf ▸ schi ▸ tenc` are read through
 [`vaco_format_isom::stsd::SampleEntry::cenc`], which returns
 [`vaco_format_isom::cenc::CencInfo`]. When a track is protected, its `Stream`
 gets `encryption_scheme` (e.g. `cenc`) and `encryption_key_id` (the
 `default_KID`, lower-case hex) tags — `codec_name` already reads as the
-*original* codec via `effective_format`, which was true before this pass — and
-`udta`-adjacent `pssh` boxes under `moov` become container-level
-`encryption_system_id` tags. This is a deliberate scope boundary, not a
-half-measured decryption path: **reading a packet from a protected track fails
-with `Error::Unsupported`**, naming the reason, rather than handing back the
-still-encrypted bytes or silently producing nothing. `cenc_is_reported_and_reading_it_is_refused`
-pins both halves against a fixture built byte-for-byte from a real `ffmpeg 8.1
--encryption_scheme cenc-aes-ctr` file — see `vaco-format-isom`'s `cenc` module
-doc comment for exactly which bytes were read back and which were transcribed
-from the spec instead (`pssh`, and `tenc` version 1's byte-block pattern,
-which that file did not exercise).
+*original* codec via `effective_format` — and `udta`-adjacent `pssh` boxes
+under `moov` become container-level `encryption_system_id` tags.
 
-Measured: `ffprobe 8.1` on the same file surfaces **no** encryption tag at all,
+Measured: `ffprobe 8.1` on such a file surfaces **no** encryption tag at all,
 and `ffmpeg -i` decodes the still-encrypted bytes into visibly corrupt frames
-without refusing the file. Reporting the scheme and refusing the read is
-therefore new behaviour relative to the reference, not a reproduction of it —
-exactly the boundary the brief for this work asked for.
+without refusing the file. Reporting the scheme is therefore new behaviour
+relative to the reference, not a reproduction of it.
 
-Not yet done, and worth naming precisely because the box layer is ready for
-it: `senc`/`saiz`/`saio` are parsed structurally in `vaco-format-isom::cenc`
-(shape and byte ranges) but never consulted here, because nothing downstream
-needs a per-sample IV once the whole track is refused; and a fragmented file's
-`pssh` — a top-level box beside `moof`, not under `moov` — is not collected,
-because `collect_fragments`' scan only recognises `moof` today.
+**2026-08-28: decryption, given a caller-supplied key.** `Mp4Options::decryption_key`
+(one AES-128 key, matching the reference's own `-decryption_key`) turns on
+real decryption for a protected, **non-fragmented** track: `SampleEntry::tenc`'s
+`per_sample_iv_size` plus the track's `senc` (now parsed for its per-sample
+IV records, not only its shape — `vaco_format_isom::cenc::SampleEncryption::iv`)
+give every sample's real IV, and `read::Decryptor::decrypt` applies
+full-sample AES-128-CTR (`vaco-crypto`) in place before the packet is handed
+back. Without a key — or for a fragmented track, or a `senc` with a
+subsample table, or `per_sample_iv_size == 0` (`constant_iv`, not
+implemented) — the old refusal still applies:
+`reader.encrypted` and `reader.decrypt` are mutually exclusive, and
+`ensure_head` refuses with `Error::Unsupported` exactly when the latter is
+`None`.
+
+This is not merely self-consistent with this crate's own muxer: a file
+`vaco-mux-mp4` wrote with `-encryption_scheme cenc-aes-ctr` was decrypted by
+both this crate (byte-identical to the plaintext muxed in) *and* a real
+`ffmpeg 8.1 -decryption_key <hex>` — see `vaco-mux-mp4`'s doc file's
+*Common Encryption* section for that cross-check.
+
+**Not implemented, named explicitly**: the reference's `-decryption_keys`
+(per-`KID` dictionary — one key for every protected track is what
+`decryption_key` alone already means), `cbcs`/pattern encryption, and a
+fragmented file's `senc`/`pssh` (both live beside `moof`, a location this
+crate's fragment scan does not currently collect).
 
 ## Deferred
 

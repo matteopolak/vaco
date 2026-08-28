@@ -984,6 +984,14 @@ pub struct SampleTable<'a> {
     pub chunk_offsets: ChunkOffsets<'a>,
     /// `sdtp` payload — one byte of dependency flags per sample.
     pub dependency_flags: Option<EntryTable<'a>>,
+    /// `senc` — Common Encryption's per-sample IVs (ISO/IEC 23001-7 §7.2),
+    /// raw: a demuxer that wants to decrypt reads it through
+    /// [`crate::cenc::SampleEncryption`] and [`crate::cenc::sample_iv`].
+    pub sample_encryption: Option<IsoBox<'a>>,
+    /// `saiz` — declared per-sample aux info size (§8.7.8).
+    pub sample_aux_sizes: Option<IsoBox<'a>>,
+    /// `saio` — where each sample's aux info starts (§8.7.9).
+    pub sample_aux_offsets: Option<IsoBox<'a>>,
 }
 
 impl<'a> SampleTable<'a> {
@@ -1000,6 +1008,9 @@ impl<'a> SampleTable<'a> {
             sample_sizes: SampleSizes::uniform(0, 0),
             chunk_offsets: ChunkOffsets::empty(),
             dependency_flags: None,
+            sample_encryption: None,
+            sample_aux_sizes: None,
+            sample_aux_offsets: None,
         }
     }
 
@@ -1025,6 +1036,9 @@ impl<'a> SampleTable<'a> {
             sample_sizes: SampleSizes::uniform(0, 0),
             chunk_offsets: ChunkOffsets::empty(),
             dependency_flags: None,
+            sample_encryption: None,
+            sample_aux_sizes: None,
+            sample_aux_offsets: None,
         };
         for child in stbl.children() {
             let child = child?;
@@ -1047,6 +1061,9 @@ impl<'a> SampleTable<'a> {
                     let full = child.full()?;
                     me.dependency_flags = Some(EntryTable::new(full.body, 1, u32::MAX));
                 }
+                boxes::SENC => me.sample_encryption = Some(child),
+                boxes::SAIZ => me.sample_aux_sizes = Some(child),
+                boxes::SAIO => me.sample_aux_offsets = Some(child),
                 _ => {}
             }
         }

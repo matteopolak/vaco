@@ -127,6 +127,31 @@ mod tests {
         assert_eq!(boxes[0].references[0].subsegment_duration, 3000);
     }
 
+    /// A top-level `pssh` beside `moof` — ISO/IEC 23001-7 §8.1's fragmented-
+    /// file location, distinct from a `moov`-level `pssh` — becomes an
+    /// `encryption_system_id` container tag, the same shape
+    /// `find_qt_chapter_track`'s sibling `pssh_tags` already gives a
+    /// progressive file's `moov`-level copy.
+    #[test]
+    fn a_top_level_pssh_beside_moof_becomes_a_container_tag() {
+        let moov = frag_moov(1000, &[(TRACK_ID, HANDLER)]);
+        let mut pssh_body = Vec::new();
+        pssh_body.extend_from_slice(&[0x42; 16]); // system_id
+        pssh_body.extend_from_slice(&0u32.to_be_bytes()); // data_size = 0
+        let pssh = vaco_format_isom::build::fullbx(b"pssh", 0, 0, &pssh_body);
+        let unit = frag_unit(1, TRACK_ID, 0, &[100, 100, 100]);
+        let data = frag_file(&moov, &[pssh, unit], None);
+        let demux = open(data);
+        assert_eq!(
+            demux
+                .metadata()
+                .iter()
+                .find(|(k, _)| k == "encryption_system_id")
+                .map(|(_, v)| v.as_str()),
+            Some("42424242424242424242424242424242")
+        );
+    }
+
     #[test]
     fn seeking_a_fragmented_file_lands_on_the_right_fragment_with_mfra_present() {
         // 5 fragments of 4 samples each, 1000 ticks/sample: fragment `i`

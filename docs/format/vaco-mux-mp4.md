@@ -325,6 +325,18 @@ MuxOptions)` is the entry point for anything beyond the registry's default
 | `creation_time_unix` | stamped into `mvhd`/`tkhd`/`mdhd`; `None` writes `0`, matching `ffmpeg 8.1` absent `-metadata creation_time` |
 | `bitexact` | suppresses `creation_time_unix` even when set |
 | `tags` / `cover_art` / `chapters` | `udta` contents |
+| `encryption_scheme` / `encryption_key` / `encryption_key_id` | Common Encryption — see below |
+
+`MovMuxer::set_option(name, value)` (the `Muxer` trait method, reachable
+through `MuxBuilder::with_private_options` without calling `with_options`
+directly) parses `movflags` (`+flag+flag`, `-flag` to clear; an unknown or
+unimplemented flag name is refused, not dropped), `encryption_scheme`
+(`none`/`cenc-aes-ctr`), `encryption_key`/`encryption_kid` (32 hex characters
+each) and `frag_duration`/`frag_size` (integers). `MuxOptions::validate` — run
+both from `with_options` and again from `Muxer::init`, since `set_option`
+reaches an already-constructed muxer — refuses `encryption_scheme` set without
+both a key and a kid, and refuses encryption combined with any fragmented
+`movflags`.
 
 ---
 
@@ -361,11 +373,41 @@ asserting neither side panics or loops. 30-second run: `exit=0`,
 
 ---
 
+## Common Encryption — write, progressive only
+
+**2026-08-28.** `-encryption_scheme cenc-aes-ctr` wraps every track's sample
+entry as `encv`/`enca` with a `sinf ▸ frma`/`schm`/`schi ▸ tenc` (version 0,
+8-byte per-sample IV — `vaco_format_isom::writer::sinf_cenc`), encrypts each
+sample's bytes with full-sample AES-128-CTR (`vaco-crypto`'s
+`ctr_apply_aes128`; counter block = 8-byte IV ‖ 8 zero bytes), and writes
+`senc`/`saiz`/`saio` inside `stbl` (`vaco_format_isom::writer::{senc,saiz,saio}`).
+The per-sample IV is simply the sample's 1-based index, big-endian — this
+crate's own choice, not a spec requirement, and `vaco-demux-mp4`'s decryption
+reads it back from `senc` rather than assuming the numbering, so any other
+CENC writer's IV scheme works too.
+
+**`saio`'s absolute file offset needs no two-pass fixed point**, unlike
+`faststart`'s chunk offsets: `senc`/`saiz`/`saio` live inside `moov`, and
+`moov`'s own start position in the file is fixed before its contents are
+built (right after `ftyp`, always) — see `build_moov`/`build_trak`/
+`build_stbl`'s `_abs_start` threading.
+
+**Cross-checked against the reference, not only self-consistent**: a file
+this crate wrote with `-encryption_scheme cenc-aes-ctr` was decrypted by a
+real `ffmpeg 8.1 -decryption_key <hex> -i ... -c copy -f mp4 out.mp4`, and the
+plaintext NAL markers this test wrote (`65 NN AA BB CC`) reappeared in
+`out.mp4` byte for byte at all 20 expected positions — the box layout is
+interoperable with the real reader, not just this crate's own demuxer.
+
+**Not implemented**: fragmented CENC (refused by `MuxOptions::validate`,
+named explicitly rather than silently producing an unencrypted or malformed
+file), `cbcs`/pattern encryption, per-track keys (one key/kid for every
+track), and `pssh` (a DRM system's opaque init data — out of scope by design:
+this crate encrypts and writes a decryptable file given a key the caller
+already holds, not anything that talks to a license server).
+
 ## Deferred
 
-* **Common Encryption** (`pssh`/`saiz`/`saio`/`senc`/`tenc`). Not implemented;
-  `query_codec`/`add_stream` do not gate on it because nothing here asks for
-  it yet — a caller cannot currently request CENC output at all.
 * **PCM and AC-3/E-AC-3** have no sample-entry mapping (`entry.rs`).
 * **`QuickTime` chapter tracks** (a real `text`/`tx3g` track plus `tref ▸
   chap`) — only Nero `chpl` chapters are synthesized automatically.

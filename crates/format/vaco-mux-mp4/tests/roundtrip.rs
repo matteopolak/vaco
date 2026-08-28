@@ -289,6 +289,122 @@ fn a_fragmented_file_round_trips() {
     assert_eq!(count, 17);
 }
 
+/// The whole point of Common Encryption write support: mux a file with
+/// `-encryption_scheme cenc-aes-ctr`, confirm the sample bytes on disk are
+/// not the plaintext, then read it back with `vaco-demux-mp4` given the same
+/// key and confirm the decrypted bytes are exactly what was muxed. This is
+/// the round-trip both #573 (mux) and #567 (demux decryption) exist to make
+/// possible together.
+#[test]
+fn cenc_write_round_trips_through_demux_decryption() {
+    use vaco_mux_mp4::options::EncryptionScheme;
+
+    let key = [0x11u8; 16];
+    let key_id = [0x22u8; 16];
+    let opts = MuxOptions {
+        encryption_scheme: Some(EncryptionScheme::CencAesCtr),
+        encryption_key: Some(key),
+        encryption_key_id: Some(key_id),
+        ..MuxOptions::default()
+    };
+    let sink = SharedDynBuf::with_limits(Limits::permissive());
+    let mut mux =
+        MovMuxer::with_options(Box::new(sink.clone()) as Box<dyn MediaSink>, opts).unwrap();
+    let idx = mux.add_stream(&h264_params()).unwrap();
+    mux.init().unwrap();
+    mux.write_header().unwrap();
+    let plaintexts: Vec<Vec<u8>> = (0..6)
+        .map(|i| nal_payload(&[0x65, i as u8, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE]))
+        .collect();
+    for (i, p) in plaintexts.iter().enumerate() {
+        mux.write_packet(&packet(idx, i as i64 * 100, i % 3 == 0, p))
+            .unwrap();
+    }
+    mux.write_trailer().unwrap();
+    let bytes = sink.snapshot();
+
+    // Structural: the plaintext must not appear verbatim anywhere in the
+    // encrypted file, checked before trusting the demuxer's own decrypt path
+    // to prove anything about it.
+    assert!(
+        !bytes
+            .windows(plaintexts[0].len())
+            .any(|w| w == plaintexts[0].as_slice()),
+        "plaintext sample bytes must not appear verbatim in an encrypted file"
+    );
+
+    // Reporting without a key: scheme/kid are visible, reading is refused.
+    let mut plain = open_demux(bytes.clone());
+    assert_eq!(
+        plain.streams()[0]
+            .metadata
+            .iter()
+            .find(|(k, _)| k == "encryption_scheme")
+            .map(|(_, v)| v.as_str()),
+        Some("cenc")
+    );
+    assert!(
+        plain.read_packet().is_err(),
+        "no decryption_key supplied: reading must still be refused"
+    );
+
+    // Decryption, given the same key: every packet's payload matches what
+    // was muxed, byte for byte.
+    let mp4_opts = vaco_demux_mp4::Mp4Options {
+        decryption_key: Some(key),
+        ..vaco_demux_mp4::Mp4Options::default()
+    };
+    let src: Box<dyn MediaSource> = Box::new(MemorySource::new(bytes));
+    let mut demux = vaco_demux_mp4::Mp4Demuxer::open(
+        src,
+        &NoParsers,
+        &FormatOptions::default(),
+        mp4_opts,
+    )
+    .unwrap();
+    let mut got = Vec::new();
+    while let Ok(pkt) = demux.read_packet() {
+        got.push(pkt.payload().to_vec());
+    }
+    assert_eq!(got, plaintexts, "decrypted bytes must match what was muxed");
+}
+
+/// `-encryption_scheme`/`-encryption_key`/`-encryption_kid`/`-movflags`
+/// through `Muxer::set_option`, the path `MuxBuilder::with_private_options`
+/// uses — reaches the same state `MuxOptions` construction does, refuses an
+/// incomplete or unimplemented combination, and accumulates `movflags`
+/// across calls.
+#[test]
+fn cenc_and_movflags_set_option_validate_like_with_options() {
+    let sink = SharedDynBuf::with_limits(Limits::permissive());
+    let mut mux = MovMuxer::new(Box::new(sink) as Box<dyn MediaSink>).unwrap();
+    mux.set_option("encryption_scheme", "cenc-aes-ctr").unwrap();
+    mux.set_option("encryption_key", &"11".repeat(16)).unwrap();
+    mux.set_option("encryption_kid", &"22".repeat(16)).unwrap();
+    mux.add_stream(&h264_params()).unwrap();
+    mux.init().unwrap();
+
+    // Encryption plus fragmentation is refused at `init`, the same as it
+    // would be from `with_options`.
+    let sink2 = SharedDynBuf::with_limits(Limits::permissive());
+    let mut mux2 = MovMuxer::new(Box::new(sink2) as Box<dyn MediaSink>).unwrap();
+    mux2.set_option("movflags", "+frag_keyframe").unwrap();
+    mux2.set_option("encryption_scheme", "cenc-aes-ctr").unwrap();
+    mux2.set_option("encryption_key", &"11".repeat(16)).unwrap();
+    mux2.set_option("encryption_kid", &"22".repeat(16)).unwrap();
+    mux2.add_stream(&h264_params()).unwrap();
+    assert!(mux2.init().is_err());
+
+    // `movflags` accumulates across calls, an unknown flag is refused rather
+    // than dropped, and an unknown option name is refused too.
+    let sink3 = SharedDynBuf::with_limits(Limits::permissive());
+    let mut mux3 = MovMuxer::new(Box::new(sink3) as Box<dyn MediaSink>).unwrap();
+    mux3.set_option("movflags", "+faststart").unwrap();
+    mux3.set_option("movflags", "+frag_keyframe").unwrap();
+    assert!(mux3.set_option("movflags", "+rtphint").is_err());
+    assert!(mux3.set_option("bogus_option", "1").is_err());
+}
+
 fn open_demux(bytes: Vec<u8>) -> vaco_demux_mp4::Mp4Demuxer {
     let src: Box<dyn MediaSource> = Box::new(MemorySource::new(bytes));
     vaco_demux_mp4::Mp4Demuxer::open(

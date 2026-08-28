@@ -80,6 +80,59 @@ pub(crate) struct Pending {
     /// Leading samples to trim, in time-base ticks — which for an MP4 audio
     /// track are samples, because its time base is `1 / sample_rate`.
     pub skip: u32,
+    /// This sample's 0-based index within its track's `stbl` — what
+    /// [`Decryptor::iv`] indexes `senc`'s per-sample IV records by. Not the
+    /// same number as a decode order under a `ctts`; it is a table position,
+    /// which is exactly what `senc`'s records are keyed by too.
+    pub index: u32,
+}
+
+/// Owned per-track state for decrypting a `cenc`-protected, non-fragmented
+/// track, built once a usable key and a real `senc` are both in hand — see
+/// `Mp4Options::decryption_key` and the crate doc's *Common Encryption*
+/// section.
+///
+/// Holds an **owned** copy of `senc`'s IV records rather than a borrow: a
+/// `Reader` outlives any one `Movie::parse` borrow of `self.moov` (the same
+/// reason `SampleTable` itself is re-parsed per refill instead of held
+/// across calls — see this module's own doc comment). The copy is bounded by
+/// `senc`'s own box size, which was already bounded when the whole `moov`
+/// payload was read.
+#[derive(Debug, Clone)]
+pub(crate) struct Decryptor {
+    pub key: [u8; 16],
+    pub iv_size: u8,
+    pub has_subsamples: bool,
+    pub records: Vec<u8>,
+}
+
+impl Decryptor {
+    /// Decrypt `payload` in place for sample `index`. `false` when no IV is
+    /// available for this sample (a subsample table, or `index` past what
+    /// `senc` declared) — the caller turns that into a reported error rather
+    /// than silently handing back ciphertext.
+    pub(crate) fn decrypt(&self, index: u32, payload: &mut [u8]) -> bool {
+        if self.has_subsamples || self.iv_size == 0 {
+            return false;
+        }
+        let stride = usize::from(self.iv_size);
+        let Ok(index) = usize::try_from(index) else {
+            return false;
+        };
+        let Some(start) = stride.checked_mul(index) else {
+            return false;
+        };
+        let Some(iv) = self.records.get(start..start.saturating_add(stride)) else {
+            return false;
+        };
+        let mut counter = [0u8; 16];
+        let n = iv.len().min(16);
+        if let (Some(dst), Some(src)) = (counter.get_mut(..n), iv.get(..n)) {
+            dst.copy_from_slice(src);
+        }
+        vaco_crypto::ctr_apply_aes128(&self.key, &counter, payload);
+        true
+    }
 }
 
 /// One track fragment belonging to one track, located but not yet resolved.
@@ -150,19 +203,25 @@ pub(crate) struct Reader {
     /// refusal with it. Found by the `dem_mp4` fuzz target, as "a seek produced
     /// a packet a straight read never did".
     pub blocked: bool,
-    /// `sinf ▸ schm`/`sinf ▸ schi ▸ tenc` named a Common Encryption scheme.
+    /// `sinf ▸ schm`/`sinf ▸ schi ▸ tenc` named a Common Encryption scheme
+    /// **and** [`Reader::decrypt`] could not be built for it — no usable key,
+    /// no `senc`, or a fragmented source (decryption is `Source::Table`
+    /// only; see the crate doc's *Common Encryption* section).
     ///
     /// Deliberately **not** folded into `blocked`: a blocked track silently
     /// produces no packets forever, which is right for an unreachable `dref`
-    /// but wrong here — decryption is out of scope by design (see the crate's
-    /// doc file), and a caller who asks for packets from an encrypted track
-    /// should be told why it cannot have any, not handed an empty stream that
+    /// but wrong here — a caller who asks for packets from a protected track
+    /// it cannot decrypt should be told why, not handed an empty stream that
     /// looks the same as a track with nothing in it. `ensure_head` turns this
     /// into an [`vaco_core::Error::Unsupported`] the first time any packet is
     /// requested, once — for every track, so a mixed encrypted/clear file
     /// fails predictably rather than only once the encrypted track's turn in
     /// the interleave happens to come up.
     pub encrypted: bool,
+    /// Set instead of [`Reader::encrypted`] when a usable key and a real
+    /// `senc` were both found at track-build time: every sample read from
+    /// this track is decrypted in place before being handed back.
+    pub decrypt: Option<Decryptor>,
 }
 
 impl Reader {
@@ -177,7 +236,16 @@ impl Reader {
     }
 
     /// Turn a media-timescale sample into a queue entry.
-    fn push(&mut self, offset: u64, size: u32, dts: i64, cts: i32, duration: u32, key: bool) {
+    fn push(
+        &mut self,
+        offset: u64,
+        size: u32,
+        dts: i64,
+        cts: i32,
+        duration: u32,
+        key: bool,
+        index: u32,
+    ) {
         let dts_out = dts
             .saturating_add(self.dts_shift)
             .saturating_add(self.edit_shift);
@@ -202,6 +270,7 @@ impl Reader {
             key,
             discard,
             skip,
+            index,
         });
     }
 }
@@ -248,7 +317,15 @@ pub(crate) fn refill_table(
         // count.
         let fits = source_size.is_none_or(|n| s.offset.saturating_add(u64::from(s.size)) <= n);
         if fits {
-            reader.push(s.offset, s.size, s.dts, s.cts_offset, s.duration, s.is_sync);
+            reader.push(
+                s.offset,
+                s.size,
+                s.dts,
+                s.cts_offset,
+                s.duration,
+                s.is_sync,
+                s.index,
+            );
         }
     }
     // A cursor that yielded less than a full batch has run out: the table
@@ -296,9 +373,13 @@ pub(crate) fn refill_fragment(
         .skip(next_in_entry as usize)
         .take(want as usize)
         .collect();
-    for s in resolved {
+    for (i, s) in resolved.into_iter().enumerate() {
         let fits = source_size.is_none_or(|n| s.offset.saturating_add(u64::from(s.size)) <= n);
         if fits {
+            // `index` is unused for a fragmented track — decryption is
+            // `Source::Table` only (see `Reader::decrypt`'s doc comment) — so
+            // the within-batch position is a harmless placeholder rather
+            // than a real `senc` index.
             reader.push(
                 s.offset,
                 s.size,
@@ -306,6 +387,7 @@ pub(crate) fn refill_fragment(
                 s.cts_offset,
                 s.duration,
                 s.is_sync(),
+                u32::try_from(i).unwrap_or(u32::MAX),
             );
         }
     }
@@ -377,13 +459,14 @@ mod tests {
             finished: false,
             blocked: false,
             encrypted: false,
+            decrypt: None,
         }
     }
 
     #[test]
     fn a_sample_entirely_before_the_edit_is_discarded_and_trimmed() {
         let mut r = reader();
-        r.push(0, 4, 0, 0, 1024, true);
+        r.push(0, 4, 0, 0, 1024, true, 0);
         let p = r.queue.front().copied().unwrap();
         assert_eq!(p.pts, -1024);
         assert_eq!(p.dts, -1024);
@@ -395,7 +478,7 @@ mod tests {
     fn a_sample_straddling_the_edit_is_trimmed_but_kept() {
         let mut r = reader();
         r.edit_shift = -512;
-        r.push(0, 4, 0, 0, 1024, true);
+        r.push(0, 4, 0, 0, 1024, true, 0);
         let p = r.queue.front().copied().unwrap();
         assert_eq!(p.pts, -512);
         assert!(!p.discard);
@@ -406,7 +489,7 @@ mod tests {
     fn a_video_sample_is_never_given_a_sample_trim() {
         let mut r = reader();
         r.audio = false;
-        r.push(0, 4, 0, 0, 1024, true);
+        r.push(0, 4, 0, 0, 1024, true, 0);
         let p = r.queue.front().copied().unwrap();
         assert!(p.discard);
         assert_eq!(p.skip, 0);
@@ -417,7 +500,7 @@ mod tests {
         let mut r = reader();
         r.edit_shift = 0;
         r.dts_shift = -512;
-        r.push(0, 4, 1024, 256, 512, false);
+        r.push(0, 4, 1024, 256, 512, false, 0);
         let p = r.queue.front().copied().unwrap();
         assert_eq!(p.dts, 512, "dts carries the ctts-derived shift");
         assert_eq!(p.pts, 1280, "pts carries the composition offset");

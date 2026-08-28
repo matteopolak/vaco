@@ -437,6 +437,64 @@ pub fn pasp(h_spacing: u32, v_spacing: u32) -> Vec<u8> {
     bx(b"pasp", &b)
 }
 
+// ---------------------------------------------------------- common encryption
+
+/// `sinf` for Common Encryption (ISO/IEC 23001-7 §8.3): `frma` naming the
+/// original format, `schm` fixed to the `cenc` scheme (full-sample AES-CTR,
+/// scheme version `0x00010000`), and `schi ▸ tenc` version 0 with an 8-byte
+/// per-sample IV — the one scheme/IV-size combination this crate writes.
+#[must_use]
+pub fn sinf_cenc(original_format: FourCc, key_id: [u8; 16]) -> Vec<u8> {
+    let frma = bx(b"frma", &original_format.as_bytes());
+    let mut schm_body = Vec::new();
+    schm_body.extend_from_slice(b"cenc");
+    schm_body.extend_from_slice(&0x0001_0000u32.to_be_bytes());
+    let schm = fullbx(b"schm", 0, 0, &schm_body);
+    // version 0: reserved(1) + reserved(1) + is_protected(1) +
+    // per_sample_iv_size(1) + default_KID(16).
+    let mut tenc_body = vec![0u8, 0u8, 1u8, 8u8];
+    tenc_body.extend_from_slice(&key_id);
+    let tenc = fullbx(b"tenc", 0, 0, &tenc_body);
+    let schi = bx(b"schi", &tenc);
+    let mut body = frma;
+    body.extend_from_slice(&schm);
+    body.extend_from_slice(&schi);
+    bx(b"sinf", &body)
+}
+
+/// `senc` (ISO/IEC 23001-7 §7.2): one 8-byte IV per sample, no subsample
+/// table — full-sample encryption only.
+#[must_use]
+pub fn senc(ivs: &[[u8; 8]]) -> Vec<u8> {
+    let mut body = u32::try_from(ivs.len())
+        .unwrap_or(u32::MAX)
+        .to_be_bytes()
+        .to_vec();
+    for iv in ivs {
+        body.extend_from_slice(iv);
+    }
+    fullbx(b"senc", 0, 0, &body)
+}
+
+/// `saiz` (§8.7.8): every sample's auxiliary info is the same size — an
+/// 8-byte IV, since this crate writes no subsample table.
+#[must_use]
+pub fn saiz(sample_count: u32) -> Vec<u8> {
+    let mut body = vec![8u8]; // default_sample_info_size
+    body.extend_from_slice(&sample_count.to_be_bytes());
+    fullbx(b"saiz", 0, 0, &body)
+}
+
+/// `saio` (§8.7.9): one absolute file offset, where `senc`'s IV table
+/// begins — every sample's aux info follows contiguously from there, sized
+/// by [`saiz`].
+#[must_use]
+pub fn saio(offset: u64) -> Vec<u8> {
+    let mut body = 1u32.to_be_bytes().to_vec();
+    body.extend_from_slice(&u32::try_from(offset).unwrap_or(u32::MAX).to_be_bytes());
+    fullbx(b"saio", 0, 0, &body)
+}
+
 // -------------------------------------------------------------- sample tables
 
 /// `stts` (§8.6.1.2): `(sample_count, sample_delta)` runs.
@@ -1254,5 +1312,48 @@ mod tests {
                 proptest::prop_assert_eq!(chunks.offset(i as u32 + 1), Some(*want));
             }
         }
+    }
+
+    #[test]
+    fn sinf_cenc_round_trips_through_sample_entry() {
+        let kid = [0xABu8; 16];
+        let sinf_bytes = sinf_cenc(FourCc::new(b"avc1"), kid);
+        let sinf = only_box(&sinf_bytes);
+        assert_eq!(sinf.kind(), boxes::SINF);
+        let info = crate::cenc::CencInfo::from_sinf(&sinf);
+        assert!(!info.is_empty());
+        assert_eq!(
+            info.scheme.map(|s| s.scheme_type),
+            Some(FourCc::new(b"cenc"))
+        );
+        let te = info.track_encryption.unwrap();
+        assert!(te.is_protected);
+        assert_eq!(te.per_sample_iv_size, 8);
+        assert_eq!(te.default_kid, kid);
+        let frma = sinf.children().find(boxes::FRMA).unwrap();
+        assert_eq!(&frma.payload[..4], b"avc1");
+    }
+
+    #[test]
+    fn senc_saiz_saio_round_trip() {
+        let ivs: Vec<[u8; 8]> = (1u64..=3).map(u64::to_be_bytes).collect();
+        let senc_bytes = senc(&ivs);
+        let s = only_box(&senc_bytes);
+        let parsed = crate::cenc::SampleEncryption::parse(&s).unwrap();
+        assert_eq!(parsed.sample_count, 3);
+        assert!(!parsed.has_subsamples);
+        // The IV table starts right after the 8-byte header plus the 4-byte
+        // version/flags and 4-byte sample_count fields.
+        assert_eq!(parsed.records_offset, 16);
+        assert_eq!(&senc_bytes[16..24], &ivs[0]);
+
+        let saiz_bytes = saiz(3);
+        let sz = crate::cenc::SampleAuxSizes::parse(&only_box(&saiz_bytes)).unwrap();
+        assert_eq!(sz.default_sample_info_size, 8);
+        assert_eq!(sz.sample_count, 3);
+
+        let saio_bytes = saio(1234);
+        let so = crate::cenc::SampleAuxOffsets::parse(&only_box(&saio_bytes)).unwrap();
+        assert_eq!(so.offsets, vec![1234]);
     }
 }
