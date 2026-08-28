@@ -4580,3 +4580,91 @@ for this round's measurements reverted before committing; nothing from
 it landed except the doc-comment fix.
 
 `Vaco-Spec-Ref: itu-t-h262` §6.3.11.
+
+## H.264 CABAC: the into_reader() lookahead candidate is ruled out, with a directional proof (#418)
+
+Answering the coordinator's instruction to report clause 9.3.3.2.4's
+actual content before any fix: **DecodeTerminate, when `binVal` resolves
+to 1, performs no renormalisation and reads no further bits.** The
+clause's note that "the last bit inserted in register codIOffset is
+rbsp_stop_one_bit" is informative — a property a conformant bitstream's
+own construction guarantees will hold, useful for validating an encoder —
+not an instruction for a decoder to retroactively adjust its position.
+Nothing in the clause describes giving bits back.
+
+**The candidate, checked rather than assumed.** The proposal:
+`CabacDecoder::into_reader()`/`reader()` (`vaco-codec-cabac`, read-only
+investigation — that crate is `agent:codec-bits`'s, confirmed no live
+writer immediately before and after) hand back the reader unadjusted, and
+the 9-bit initial `ivlOffset` read might leave a fixed lookahead debt
+needing to be backed out before comparing against `rbsp_trailing_bits()`.
+Three checks against primary text and the actual implementation:
+
+1. `renorm()` (`vaco-codec-cabac/src/decode.rs`) reads exactly one bit
+   per iteration via `self.reader.get_bit()` — matching clause 9.3.3.2.2's
+   literal per-bit `RenormD` exactly (the module's own doc names this the
+   measured-fastest of four benchmarked options, "per-bit (spec)", not a
+   batching optimisation that could introduce a reader/engine gap).
+2. `decode_terminate()` matches clause 9.3.3.2.4 verbatim: `range -= 2`,
+   no renormalisation when `binVal == 1`.
+3. Given (1) and (2), `reader.bit_pos()` is a precise, direct count of
+   bits physically consumed — there is no batching gap, and no lookahead
+   debt sitting in `ivlOffset` beyond what every renorm step already
+   folds into the reader's own position one bit at a time.
+
+**Directional proof, from the minimal repro's own raw bytes** (its slice
+NAL: `65 88 84 0a ff fe f6 92 f9`; bit 68 = `1`, bits 69-70 = `0, 0`, bit
+71 = `1`, and bit 71 is the file's last bit). The only position P in this
+file where bit P = 1 and every bit from P+1 to the next byte boundary is
+0 is P = 71. P = 68 — one less than this decoder's actual termination
+point of 69 — fails, since bit 71 three bits later is not zero. That
+means **the true stream needs three more bits consumed than this decoder
+currently spends before `end_of_slice_flag` should fire — the reader is
+behind the true position, not ahead of it.** A fix that hands back
+already-consumed lookahead moves in the wrong direction and cannot close
+this gap by construction, regardless of how any constant is chosen. This
+rules the candidate out rather than leaving it merely untested — exactly
+the "don't fit the adjustment to make one fixture pass" instruction,
+satisfied by finding the adjustment can't work in principle rather than
+by trying values.
+
+**The three follow-up checks, done either way:**
+- **I_PCM's own `into_reader()` call** (`mb.rs`) follows a *different*
+  `decode_terminate()` firing — the I_PCM indicator bin inside `mb_type`,
+  not `end_of_slice_flag` — and clause 9.3.1.2 already requires the
+  arithmetic engine to fully re-initialise afterward (fresh range, fresh
+  9-bit offset). Unrelated to this question, already correctly handled.
+- **CAVLC** never touches `CabacDecoder` at all — an entirely different,
+  non-arithmetic entropy coding — so its own passing status neither
+  confirms nor masks anything about this engine.
+- **HEVC**: no codec in this workspace depends on `vaco-codec-cabac`
+  today, checked by grepping every `CabacDecoder`/`vaco-codec-cabac`
+  reference across all crates, not assumed from the crate's own
+  forward-looking doc comment. `vaco-codec-cbs` (`agent:hevc`'s crate) is
+  a bitstream-editing layer with no such dependency; `vaco-parse-hevc`
+  likewise has none. `vaco-codec-h264` is this engine's only real
+  consumer today.
+
+**Where this leaves the search.** The true divergence — three bits
+missing somewhere in the `mb_type`/`intra_chroma_pred_mode`/
+`mb_qp_delta`/Intra16x16-luma-DC-`coded_block_flag`/`end_of_slice_flag`
+sequence, per the prior round's trace — remains exactly as unlocalised as
+it was. This round's result is negative but decisive: one specific,
+plausible engine-level explanation is closed off with a directional proof
+strong enough that no amount of constant-fitting could have made it work,
+and the search stays inside `vaco-codec-h264`'s own macroblock layer
+rather than moving to the shared engine crate.
+
+No source change to `vaco-codec-cabac` — nothing there needed fixing, and
+ownership was reconfirmed clean (no live writer) before and after this
+read-only investigation. Gates: full clean sweep (`layer-check`,
+`dep-gate`, `unsafe-audit`, `dup-check`, `owner-gate`, `patent-gate`),
+`clippy -p vaco-codec-h264 --all-targets` clean, full test suite (30
+integration tests, 22 `--lib` unit tests) unaffected outside the four
+already-`#[ignore]`d CABAC macroblock tests. `provenance-check`'s failures
+are pre-existing, none from this round's commit.
+
+#419 not reopened; no standing fix revisited.
+
+`Vaco-Spec-Ref: iso-iec-14496-10-2002-draft` clause 9.3.3.2.4
+(`DecodeTerminate`), clause 9.3.1.2 (I_PCM re-initialisation).
