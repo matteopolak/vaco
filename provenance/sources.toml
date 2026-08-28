@@ -998,3 +998,10 @@ kind     = "original"
 title    = "Unscii, an independent Public Domain bitmap font project by Viznut — `unscii-8.hex`, the plain 8x8 variant (not the GPL-Unifont-derived `-full` variant), covering ASCII 0x20-0x7E: the source of `vaco-filter-scope`'s embedded glyph table, used because the reference's own `datascope`/`pixscope`/`oscilloscope` filters draw text with a compiled-in fixed-width bitmap font that is itself authorial data under D7 and cannot be transcribed"
 acquired = "2026-08-28"
 where    = "https://github.com/viznut/unscii (fontfiles/unscii-8.hex); see also http://viznut.fi/unscii/"
+
+[[source]]
+id       = "ffmpeg-mxf-sound-essence-probe"
+kind     = "blackbox"
+title    = "Observed byte layout of sound essence in ffmpeg 8.1's `-f mxf` (OP1a) and `-f mxf_d10` (D-10) muxers: OP1a's audio descriptor class (`AES3PCMDescriptor`, 0x47) carries raw tightly-interleaved `pcm_s16le` verbatim, byte-exact against `ffprobe`'s reported packet pos/size; D-10's audio descriptor class (`GenericSoundEssenceDescriptor`, 0x42) instead carries a fixed 8-channel-slot AES3 bundle per edit unit regardless of the descriptor's own logical channel count (4-byte element header + 1920 sample instants x 8 slots x 4-byte word, each word a 1-byte slot-index tag plus a 24-bit little-endian sample left-shifted 4 bits) that `ffprobe` unpacks internally before reporting packet size, which this crate's own KLV length does not; also observed a `MultipleDescriptor`'s `SubDescriptorUIDs` batch matched back to a track by the sub-descriptor's own `LinkedTrackId`, needed for any package with more than one essence track (video+audio) to resolve each track to its own real descriptor"
+acquired = "2026-08-28"
+where    = "the reference binary installed on the development machine"
