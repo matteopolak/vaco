@@ -57,9 +57,9 @@ pub const DESC: FilterDesc = FilterDesc {
 #[derive(Debug, Clone, vaco_opts::Options)]
 #[options(name = "haldclut", help = "Adjust colors using a Hald CLUT")]
 pub(crate) struct Opts {
-    #[opt(name = "clut", help = "when to process CLUT (only `all` is implemented)", default = 1, range = 0..=1, flags(video, filtering))]
+    #[opt(name = "clut", help = "when to process CLUT (only `all` is implemented)", unit = "clut_mode", consts = crate::common::CLUT_CONSTS, default = 1, range = 0..=1, flags(video, filtering))]
     pub clut: i32,
-    #[opt(name = "interp", help = "select interpolation mode", default = 2, range = 0..=4, flags(video, filtering))]
+    #[opt(name = "interp", help = "select interpolation mode", unit = "lut3d_interp", consts = crate::common::LUT3D_INTERP_CONSTS, default = 2, range = 0..=4, flags(video, filtering))]
     pub interp: i32,
     #[opt(name = "eof_action", help = "action to take when encountering EOF from secondary input", default = "repeat".to_owned(), flags(video, filtering))]
     pub eof_action: String,
@@ -329,5 +329,26 @@ mod tests {
         let mut budget = Budget::new(Limits::strict());
         let frame = Frame::alloc_video(&mut budget, PixFmt::Rgb24, 100, 100).unwrap();
         assert!(decode_hald(&frame).is_err());
+    }
+
+    /// Pinned against the reference's own named spelling
+    /// (`ffmpeg -h filter=haldclut`): every named `clut`/`interp`
+    /// constant must parse, not just the bare integer.
+    #[test]
+    fn named_option_values_parse() {
+        for (name, expected) in [("first", 0), ("all", 1)] {
+            let opts = Opts::parse(Some(&format!("clut={name}"))).unwrap();
+            assert_eq!(opts.clut, expected, "clut={name}");
+        }
+        for (name, expected) in [
+            ("nearest", 0),
+            ("trilinear", 1),
+            ("tetrahedral", 2),
+            ("pyramid", 3),
+            ("prism", 4),
+        ] {
+            let opts = Opts::parse(Some(&format!("interp={name}"))).unwrap();
+            assert_eq!(opts.interp, expected, "interp={name}");
+        }
     }
 }

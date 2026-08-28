@@ -101,9 +101,9 @@ pub const DESC: FilterDesc = FilterDesc {
 pub(crate) struct Opts {
     #[opt(name = "file", help = "set 3D LUT file name", default = String::new(), flags(video, filtering))]
     pub file: String,
-    #[opt(name = "clut", help = "when to process CLUT (not applicable; parsed only)", default = 1, range = 0..=1, flags(video, filtering))]
+    #[opt(name = "clut", help = "when to process CLUT (not applicable; parsed only)", unit = "clut_mode", consts = crate::common::CLUT_CONSTS, default = 1, range = 0..=1, flags(video, filtering))]
     pub clut: i32,
-    #[opt(name = "interp", help = "select interpolation mode", default = 2, range = 0..=4, flags(video, filtering))]
+    #[opt(name = "interp", help = "select interpolation mode", unit = "lut3d_interp", consts = crate::common::LUT3D_INTERP_CONSTS, default = 2, range = 0..=4, flags(video, filtering))]
     pub interp: i32,
 }
 
@@ -436,5 +436,26 @@ mod tests {
         f.apply_frame(&mut frame);
         let row = frame.plane(0).unwrap().row(0).unwrap();
         assert_eq!(row, &[0x7f, 0x7f, 0x7f]);
+    }
+
+    /// Pinned against the reference's own named spelling
+    /// (`ffmpeg -h filter=lut3d`): every named `clut`/`interp` constant
+    /// must parse, not just the bare integer.
+    #[test]
+    fn named_option_values_parse() {
+        for (name, expected) in [("first", 0), ("all", 1)] {
+            let opts = Opts::parse(Some(&format!("file=x.cube:clut={name}"))).unwrap();
+            assert_eq!(opts.clut, expected, "clut={name}");
+        }
+        for (name, expected) in [
+            ("nearest", 0),
+            ("trilinear", 1),
+            ("tetrahedral", 2),
+            ("pyramid", 3),
+            ("prism", 4),
+        ] {
+            let opts = Opts::parse(Some(&format!("file=x.cube:interp={name}"))).unwrap();
+            assert_eq!(opts.interp, expected, "interp={name}");
+        }
     }
 }

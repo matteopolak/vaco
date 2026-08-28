@@ -92,7 +92,7 @@ pub const DESC: FilterDesc = FilterDesc {
 pub(crate) struct Opts {
     #[opt(name = "file", help = "set 1D LUT file name", default = String::new(), flags(video, filtering))]
     pub file: String,
-    #[opt(name = "interp", help = "select interpolation mode", default = 1, range = 0..=4, flags(video, filtering))]
+    #[opt(name = "interp", help = "select interpolation mode", unit = "lut1d_interp", consts = LUT1D_INTERP_CONSTS, default = 1, range = 0..=4, flags(video, filtering))]
     pub interp: i32,
 }
 
@@ -178,6 +178,50 @@ impl Lut1d {
         }
     }
 }
+
+/// `ffmpeg -h filter=lut1d`'s own named constants for `interp`, confirmed
+/// directly -- note the non-sequential numbering (`cubic`=2, `cosine`=3).
+/// Only `nearest`/`linear` are actually distinguished by [`Interp::from_opt`]
+/// (a pre-existing, documented fallback, not touched here); this fixes
+/// parsing the other three names, which used to fail outright rather than
+/// silently falling back.
+const LUT1D_INTERP_CONSTS: &[vaco_opts::ConstDesc] = &[
+    vaco_opts::ConstDesc {
+        name: "nearest",
+        help: "",
+        unit: "lut1d_interp",
+        value: vaco_opts::ConstValue::Int(0),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "linear",
+        help: "",
+        unit: "lut1d_interp",
+        value: vaco_opts::ConstValue::Int(1),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "cubic",
+        help: "",
+        unit: "lut1d_interp",
+        value: vaco_opts::ConstValue::Int(2),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "cosine",
+        help: "",
+        unit: "lut1d_interp",
+        value: vaco_opts::ConstValue::Int(3),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+    vaco_opts::ConstDesc {
+        name: "spline",
+        help: "",
+        unit: "lut1d_interp",
+        value: vaco_opts::ConstValue::Int(4),
+        flags: vaco_opts::OptFlags::NONE,
+    },
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Interp {
@@ -335,5 +379,23 @@ mod tests {
     fn creatable_requires_a_file() {
         let req = Instantiate { name: "lut1d", instance: "lut1d", args: None, arguments: &[] };
         assert!(create(&req).is_err());
+    }
+
+    /// Pinned against the reference's own named spelling
+    /// (`ffmpeg -h filter=lut1d`): every one of the five named `interp`
+    /// constants must parse, not just the bare integer -- including the
+    /// two whose numbering is not in name order (`cubic`=2, `cosine`=3).
+    #[test]
+    fn named_interp_values_parse() {
+        for (name, expected) in [
+            ("nearest", 0),
+            ("linear", 1),
+            ("cubic", 2),
+            ("cosine", 3),
+            ("spline", 4),
+        ] {
+            let opts = Opts::parse(Some(&format!("file=x.cube:interp={name}"))).unwrap();
+            assert_eq!(opts.interp, expected, "interp={name}");
+        }
     }
 }
