@@ -614,6 +614,40 @@ git show HEAD:planning/TECH-DEBT.md | grep -q "a distinctive phrase from your ro
 If it is missing, someone landed between your read and your write. Rebuild from
 the *new* `HEAD` and commit again; do not rewrite their commit.
 
+**If your change is an edit and not an append, write it back to the working
+tree as well.** The recipe above is safe for appends because the working-tree
+file ends up a superset: it keeps everyone's additions, `HEAD` gains only
+yours. An *edit* -- replacing a row, marking a package done, correcting a
+number -- breaks that. Change the scratch copy alone and the working-tree file
+is now **behind** `HEAD`, and the next agent that edits it and commits will
+silently revert you, having done nothing wrong.
+
+That has now happened. `ASSIGNMENTS.md` sat 24 lines behind `HEAD` for a full
+wave, and a separate agent independently reported finding five planning files
+reverted to stale content in its working tree -- committed work it would have
+destroyed had it staged them.
+
+So after the commit, either `cp "$SCRATCH/mine.md" <path>` or, equivalently,
+
+```sh
+git show HEAD:planning/ASSIGNMENTS.md > planning/ASSIGNMENTS.md
+```
+
+and then confirm the only thing left is other people's pending work:
+
+```sh
+git diff HEAD -- planning/ASSIGNMENTS.md
+```
+
+Lines your own commit added must not appear there as deletions. If they do, the
+working tree is stale and the next writer will undo you.
+
+**Do not skip the closing `git reset -q HEAD -- <path>`.** Without it the main
+index keeps the pre-commit blob, and `git status` reports the file as staged
+with changes -- `MM` -- for something that is already committed and identical
+to `HEAD`. It is cosmetic, but it is the kind of cosmetic that gets "fixed"
+with a `checkout` that destroys somebody's real work.
+
 **Use your own scratch directory, never `/tmp`.** `$SCRATCH` here means the
 session scratchpad path your environment gives you. This recipe used to say
 `/tmp/my-idx` and `/tmp/mine.md` literally, which meant every agent running it
