@@ -157,13 +157,16 @@ Without `+nightly` it fails with a sanitizer error that reads like a broken
 toolchain. `just fuzz <target>` already does this for you. Fuzzing is a test-time
 tool; it does not affect the stable release toolchain.
 
-**Run no git commands.** (The orchestrator commits, using Conventional Commit
-subjects — plan 19 §15. You never need to write one, but your report becomes the
-body, so make it precise: measured ratios, hypotheses you refuted, and why a
-divergence exists are exactly what belongs there.)
+**Commit your own work.** Conventional Commit subjects (plan 19 §15) and the
+trailer block; copy the shape from `git log -1`. Make the body precise —
+measured ratios, hypotheses you refuted, and why a divergence exists are exactly
+what belongs there.
 
-**Run no git commands.** Not `add`, not `commit`, not `checkout`, not `stash`,
-and never `add -A`. In a shared working tree those destroy other agents' work.
+**Name individual files as pathspecs.** Never `git add -A`, never a bare
+`git commit`, never a directory pathspec, and never `stash`, `checkout`,
+`reset --hard` or `rebase`. In a shared working tree those reach other agents'
+uncommitted work. `AGENT-CONSTRAINTS.md` carries the private `GIT_INDEX_FILE`
+recipe for untracked files and for files another agent is mid-edit on.
 
 ## Deliverables
 

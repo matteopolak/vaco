@@ -21,7 +21,23 @@ the one thing that is worse than reading.
   anything. If you need a change in a crate you do not own, **stop and report**
   — do not work around it. That rule is what keeps six concurrent agents from
   corrupting one shared tree.
-- Run **no git commands**. Not `add`, not `commit`, not `stash`, not `checkout`.
+- **Commit your own work**, with the recipe under "Committing in a shared
+  tree" below. Never `git add -A`, never a bare `git commit`, never a directory
+  pathspec, and never `stash`, `checkout`, `reset --hard` or `rebase` — those
+  reach other agents' uncommitted work.
+
+  The recipe lives under "`git add` then `git commit` will commit other agents'
+  staged files" below.
+
+  This rule used to read "run no git commands; the orchestrator commits". It
+  was true when one orchestrator served a handful of agents and it stopped
+  being true at six: the orchestrator became a bottleneck, and worse, committing
+  on an agent's behalf is what caused every one of the four work-absorption
+  incidents recorded below. You know which files are yours; a commit made for
+  you by someone reading `git status` does not.
+
+  If a brief you are given still says "run no git commands", the brief is
+  stale — this page wins, and say so in your report.
 - Do **not** run `cargo fmt --all` — it reformats other agents' uncommitted
   work. `cargo fmt -p <your-crate>`.
 
