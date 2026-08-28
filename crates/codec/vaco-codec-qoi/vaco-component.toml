@@ -1,0 +1,19 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+
+[[component]]
+kind      = "decoder"
+name      = "qoi"
+long_name = "QOI (Quite OK Image)"
+feature   = "codec-qoi"
+ctor      = "vaco_codec_qoi::QOI_DECODER"
+media     = "video"
+codec     = "qoi"
+
+[[component]]
+kind      = "encoder"
+name      = "qoi"
+long_name = "QOI (Quite OK Image)"
+feature   = "codec-qoi"
+ctor      = "vaco_codec_qoi::QOI_ENCODER"
+media     = "video"
+codec     = "qoi"

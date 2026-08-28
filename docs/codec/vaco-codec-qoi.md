@@ -26,6 +26,12 @@ itself, which looks redundant but is what the reference does.
 Encode is the mirror: track a run, flush it on a mismatch or at 62, else try
 index/diff/luma in that order before falling back to a full pixel.
 
+`QoiDecoder`/`QoiEncoder`'s `send` stamps the decoded frame's/encoded
+packet's `pts` from its input, since `codec::decode`/`codec::encode` are pure
+over bytes/pixels alone and have no timestamp to read on their own — found
+wiring a real decode-then-encode leg through `vaco-cli`, where a packet with
+no `pts` fails at the muxer.
+
 ## How to change it
 
 `src/codec.rs` is the only module that knows the byte format; a future QOI
@@ -45,13 +51,21 @@ validates them before a pixel is touched.
 `vaco-pixfmt`/`vaco-pool` (the decoded picture), `vaco-packet` (the encoded
 bytes), `vaco-limits` (allocation bounds).
 
-## Registration gap
+## Registration
 
-No `vaco-component.toml` fragment exists for this crate. `vaco_codec_core::CodecId`
-has no `Qoi` variant, and `EncoderDesc` does not exist as a type at all — see
-`planning/TECH-DEBT.md`'s C-13 entry. `QoiDecoder`/`QoiEncoder` are usable
-directly by any caller that constructs them, just not reachable through
-`vaco-registry` or `vaco-cli -c:v qoi` yet.
+`vaco-component.toml` registers `QOI_DECODER`/`QOI_ENCODER` (both wrapping
+`QoiDecoder`/`QoiEncoder` in `AsDecoder`/`AsEncoder(Validated::new(...))`)
+under `vaco_codec_core::CodecId::Qoi`, feature `codec-qoi` (on by default).
+`-c:v qoi`/`-c:a qoi`... resolves through `vaco_registry::encoder_by_name`
+(C-13); `vaco -decoders`/`-encoders` list the `qoi` row.
+
+Verified end to end: `vaco -i in.ppm -c:v qoi -f null -` runs a real
+decode-then-encode leg (not a stub); the produced bytes are byte-identical to
+`ffmpeg`'s own QOI encoder on the same input, checked directly via
+`vaco_codec_pnm::decode_ppm`/`vaco_codec_qoi::{encode,decode}`. A real *muxed*
+`.qoi` file could not be produced through `-f image2` in this pass — see
+`planning/TECH-DEBT.md`'s C-13 entry for why (a `vaco-format-core`/
+`vaco-mux-image2` gap, not this crate's).
 
 ## Testing
 

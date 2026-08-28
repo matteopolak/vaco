@@ -15,8 +15,9 @@
 //! reordering and no packet ever yields more than one frame — so both wrappers
 //! declare [`Caps::empty`] and lean on `vaco_codec_core::Machine` for the
 //! protocol bookkeeping, the same way `vaco_codec_core::mock::MockDecoder`
-//! does. See `docs/codec/vaco-codec-qoi.md` for the registration gap this
-//! crate currently sits behind (no `CodecId::Qoi`, no `EncoderDesc`).
+//! does. [`QOI_DECODER`]/[`QOI_ENCODER`] register these under
+//! `vaco_codec_core::CodecId::Qoi`, and `vaco-component.toml` is what makes
+//! `-c:v qoi` reach them.
 //!
 //! # How to change it
 //!
@@ -95,7 +96,15 @@ impl SendReceive for QoiDecoder {
                     return Ok(());
                 };
                 let mut budget = Budget::new(self.limits.clone());
-                let frame = codec::decode(pkt.payload(), &mut budget)?;
+                let mut frame = codec::decode(pkt.payload(), &mut budget)?;
+                // `codec::decode` is a pure function over bytes alone and has
+                // no packet to read a timestamp off; stamping the frame with
+                // the packet's own `pts` here is what lets a muxer downstream
+                // of a decode-then-encode leg place this image in time at
+                // all. Found round-tripping through a timestamped container:
+                // every muxed packet reached the sink with `pts` unset and
+                // the muxer refused it.
+                frame.pts = pkt.pts;
                 self.machine.emit(frame);
                 Ok(())
             }
@@ -156,7 +165,12 @@ impl SendReceive for QoiEncoder {
                 };
                 let bytes = codec::encode(frame)?;
                 let mut budget = Budget::new(self.limits.clone());
-                let packet = Packet::from_slice(&mut budget, &bytes)?;
+                let mut packet = Packet::from_slice(&mut budget, &bytes)?;
+                // Mirrors the decoder's own `pts` stamp: `codec::encode` is a
+                // pure function over the frame's pixels alone, so the packet
+                // it hands back has no timing of its own until this copies
+                // the source frame's `pts` onto it.
+                packet.pts = frame.pts;
                 self.machine.emit(packet);
                 Ok(())
             }
@@ -171,6 +185,40 @@ impl SendReceive for QoiEncoder {
         self.machine.flush();
     }
 }
+
+fn make_decoder(limits: Limits) -> Box<dyn vaco_codec_core::Decoder> {
+    Box::new(vaco_codec_core::AsDecoder(vaco_codec_core::Validated::new(
+        QoiDecoder::new(limits),
+    )))
+}
+
+fn make_encoder(limits: Limits) -> Box<dyn vaco_codec_core::Encoder> {
+    Box::new(vaco_codec_core::AsEncoder(vaco_codec_core::Validated::new(
+        QoiEncoder::new(limits),
+    )))
+}
+
+/// Registered as this crate's `decoder` fragment (plan 19 §3.4).
+pub static QOI_DECODER: vaco_codec_core::DecoderDesc = vaco_codec_core::DecoderDesc {
+    name: "qoi",
+    long_name: "QOI (Quite OK Image format) image",
+    id: vaco_codec_core::CodecId::Qoi,
+    media_type: vaco_core::MediaType::Video,
+    caps: Caps::empty(),
+    supported_rates: &[],
+    make: make_decoder,
+};
+
+/// Registered as this crate's `encoder` fragment (plan 19 §3.4).
+pub static QOI_ENCODER: vaco_codec_core::EncoderDesc = vaco_codec_core::EncoderDesc {
+    name: "qoi",
+    long_name: "QOI (Quite OK Image format) image",
+    id: vaco_codec_core::CodecId::Qoi,
+    media_type: vaco_core::MediaType::Video,
+    caps: Caps::empty(),
+    supported_rates: &[],
+    make: make_encoder,
+};
 
 #[cfg(test)]
 #[allow(
