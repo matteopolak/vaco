@@ -32,10 +32,10 @@ than recalled:
   same way `vaco-filter-audio-eq` found for the biquad family.
 - **`convolution` is a separate engine** from the sobel family (its own
   `convolution AVOptions:` header, a different option shape — per-plane
-  matrices rather than `planes`/`scale`/`delta`), but its measured
-  zero-border rule is identical to `sobel`/`prewitt`/`scharr`'s, which is
-  strong evidence the fast-path border handling is shared even though the
-  option class is not.
+  matrices rather than `planes`/`scale`/`delta`), but it shares
+  `Kernel::value_at` directly with `sobel`/`prewitt`/`scharr`, so its
+  `reflect-101` border rule (see "Two measured, distinct border
+  conventions" above) applies to all four.
 - **`erosion`/`dilation`** likewise share one option class
   (`erosion/dilation AVOptions:`), and **`deflate`/`inflate`** share
   another (`deflate/inflate AVOptions:`) — a fourth, related but distinct
@@ -88,10 +88,10 @@ Every filter here rejects any pixel format wider than 8 bits per component
 the same reason: generic sample-width math is a separate, larger effort
 than this brief's time budget.
 
-### Two measured, incompatible border conventions
+### Two measured, distinct border conventions (a third, once suspected, turned out not to exist)
 
-The single most important finding this crate made, because it applies to
-almost every filter in it: **there is no one border rule.**
+**There is no one border rule in this crate**, but there are exactly two,
+not three:
 
 - `dilation`/`erosion`/`median`/`inflate`/`deflate` extend the border by
   **replicating the nearest real sample** (clamp-to-edge). For
@@ -100,23 +100,47 @@ almost every filter in it: **there is no one border rule.**
   candidate value is duplicated, and self is always a candidate (confirmed:
   the centre pixel of an isolated impulse never disappears even though its
   own neighbours start at zero). `inflate`/`deflate` combine by *average*
-  rather than max/min, so this equivalence does not hold for them the same
-  way — their clamp-to-edge convention was measured independently (see
-  `src/inflate.rs`'s doc: a corner pixel's average over three
-  self-clamped, three real-zero and three real-`100` samples matches the
-  reference exactly).
-- `convolution` and, because they reuse its engine, `sobel`/`prewitt`/`scharr`
-  instead force a **hard zero** at any pixel whose kernel would read outside
-  the frame — not a computed value using replicated or zero-padded taps, an
-  outright `0`. Measured: a 3x3 Sobel-shaped kernel run through the generic
-  `convolution` filter gives `0` at the border where the clamp model
-  predicts `40`. See `src/convolution.rs`'s doc.
-- `roberts` and `kirsch` were measured to match **neither** rule at their
-  borders — a genuine open question, not a third convention this crate
-  chose to invent.
+  rather than max/min, so that equivalence does not hold for them the same
+  way — averaging **is** sensitive to which value gets duplicated at a
+  border. This was flagged as an open, unverified extension of the min/max
+  argument as of 2026-08-27 and pinned on 2026-08-28 by a corner probe
+  (all-distinct-value 5x5 source): the existing clamp-to-edge, fixed
+  divide-by-8 implementation matches the reference exactly (`5` at a
+  specific corner) and a competing "omit out-of-bounds neighbours, divide
+  by however many are left" hypothesis is ruled out (it predicts `8` at
+  the same pixel). See `src/morph.rs`'s doc.
+- `convolution` and, because they reuse its engine (`Kernel::value_at`),
+  `sobel`/`prewitt`/`scharr` extend the border by **`reflect-101`**:
+  mirror an out-of-bounds tap back across the border without duplicating
+  the edge pixel, independently per axis, including simultaneously at
+  corners. This crate originally shipped (and, worse, believed it had
+  *measured*) a "hard zero at any out-of-bounds tap" rule instead — the
+  measurement that produced that belief used a source varying in only one
+  axis against a derivative kernel, a shape where reflect-101 *also*
+  cancels to exactly zero at the border, so the source could not actually
+  tell the two rules apart. A corner/edge probe (5x5, all-distinct values)
+  against real `ffmpeg 8.1` settled it on 2026-08-28: reflect-101 matches
+  at the corner (`0`) and an adjacent edge cell (`8`) where both zero-pad
+  and plain clamp-to-edge predict different, wrong values. Verified with
+  zero mismatches across all 400 pixels of a two-axis discriminating
+  source for both `sobel` and `prewitt`. See `src/convolution.rs`'s doc
+  for the full derivation, and `src/common.rs`'s `sample_reflect101` for
+  the implementation.
+- `roberts` and `kirsch` were measured to match **neither** convention at
+  their borders — a genuine open question, not a third convention this
+  crate chose to invent.
 - `morpho`'s border was not separately measured (a documented gap, not a
   probed-and-confirmed one); it uses clamp-to-edge to match the rest of
   this crate's family.
+
+**Lesson learned the hard way**: a test source that cannot distinguish
+between two candidate border rules validates neither, even when the
+(wrong) implementation passes it. The one-axis-varying source that seemed
+to confirm "hard zero" for years of this crate's assumptions never
+actually ruled out reflect-101. See `planning/AGENT-CONSTRAINTS.md`'s
+"a source that cannot separate two rules validates neither" rule, of
+which this was one of the founding examples (alongside `vaco-filter-scope`'s
+`vectorscope`/`waveform` findings).
 
 ### The matrix engine (`convolution.rs`)
 
@@ -127,7 +151,10 @@ sum", never a literal zero divisor (measured: an all-ones 3x3 kernel with
 reuse this engine directly with fixed 3x3 kernels; `scharr` needs
 `rdiv=16` folded in (measured: the textbook unnormalised Scharr response
 of `320` on a test ramp comes back as the reference's `20`, exactly
-`320/16`).
+`320/16`). `Kernel::value_at`'s border rule is `reflect-101` (see above);
+`scharr`'s combined magnitude has a separate, unrelated, unresolved
+discrepancy on interior (non-border) pixels — see "Left for a follow-up"
+below.
 
 ### `roberts` and `kirsch`: interior confirmed, border genuinely open
 
@@ -154,7 +181,7 @@ confirmation either, and the fix was a mechanical invariant (masks sum to
 zero), not more probing.
 
 Neither operator's **border** matches clamp-to-edge, zero-padding, or
-`convolution`'s "force zero" rule under the confirmed interior formula —
+`convolution`'s `reflect-101` rule under the confirmed interior formula —
 every model tried was refuted by direct calculation against the measured
 border values, not merely untested. Both are implemented with
 clamp-to-edge (the least surprising choice, and correct for the interior)
@@ -270,6 +297,19 @@ discipline).
 
 ## Left for a follow-up
 
+`scharr`'s combined magnitude has a real, confirmed divergence unrelated
+to the border rule above: an exhaustive check (all 400 pixels of a
+two-axis discriminating 20x20 source) found `18` interior — not border —
+pixels where the reference disagrees with `sqrt(Gx^2+Gy^2)` by exactly
+one count (predicted `~42.8`, truncating or rounding to `42`/`43`;
+reference gives `41`). `Gx`/`Gy` themselves are exact integers at the
+probed pixel, ruling out a component-rounding explanation. Not yet
+root-caused (a `scharr`-specific magnitude formula or normalisation
+question, not a copy of `sobel`'s border bug), and deliberately left out
+of the conformance corpus for the same reason `sobel`'s border rule was
+left out until it could be pinned: a fix that matches most points but not
+all is worse than an honest gap.
+
 Six more filters `planning/16-filters.md` §4.2 counts in this crate:
 `edgedetect`, `blurdetect` (not reached — `edgedetect`'s own hysteresis/
 edge-tracing stage was measured, on a translation-invariant synthetic
@@ -298,9 +338,10 @@ twelve filters that landed.
   cast, and `common::sample_clamped`'s clamp-to-edge are used throughout
   this crate; a change to any of them is a change to every filter that
   uses clamp-to-edge (not `convolution`/`sobel`/`prewitt`/`scharr`, which
-  use `convolution::Kernel`'s separate zero-border logic instead, and not
-  `morpho`, which uses `morph::apply_structured`'s separate
-  no-implicit-self logic instead of `morph::apply_plane`'s).
+  use `convolution::Kernel::value_at`'s separate `reflect-101` border
+  logic via `common::sample_reflect101` instead, and not `morpho`, which
+  uses `morph::apply_structured`'s separate no-implicit-self logic instead
+  of `morph::apply_plane`'s).
 - Gotcha: `morph.rs` now has two distinct engines — `apply_plane` (fixed
   3x3, self always a candidate, used by `dilation`/`erosion`/`inflate`/
   `deflate`) and `apply_structured` (arbitrary offsets, self only a
