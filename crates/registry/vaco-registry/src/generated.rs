@@ -3081,6 +3081,42 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "codec-mpegaudio")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "mp1",
+        long_name: Some("MPEG-1 Audio Layer I"),
+        krate: "vaco-codec-mpegaudio",
+        feature: Some("codec-mpegaudio"),
+        media: Some("audio"),
+        codec: Some("mp1"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-mpegaudio")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "mp2",
+        long_name: Some("MPEG-1 Audio Layer II"),
+        krate: "vaco-codec-mpegaudio",
+        feature: Some("codec-mpegaudio"),
+        media: Some("audio"),
+        codec: Some("mp2"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-mpegaudio")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "mp3",
+        long_name: Some("MPEG-1/2/2.5 Audio Layer III (MP3)"),
+        krate: "vaco-codec-mpegaudio",
+        feature: Some("codec-mpegaudio"),
+        media: Some("audio"),
+        codec: Some("mp3"),
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "codec-pnm")]
     crate::Component {
         kind: crate::Kind::Decoder,
@@ -7838,6 +7874,12 @@ pub static DECODERS: &[&::vaco_codec_core::DecoderDesc] = &[
     &::vaco_codec_image_simple::BMP_DECODER,
     #[cfg(feature = "codec-jpeg")]
     &::vaco_codec_jpeg::JPEG_DECODER,
+    #[cfg(feature = "codec-mpegaudio")]
+    &::vaco_codec_mpegaudio::DECODER_MP1,
+    #[cfg(feature = "codec-mpegaudio")]
+    &::vaco_codec_mpegaudio::DECODER_MP2,
+    #[cfg(feature = "codec-mpegaudio")]
+    &::vaco_codec_mpegaudio::DECODER_MP3,
     #[cfg(feature = "codec-pnm")]
     &::vaco_codec_pnm::PAM_DECODER,
     #[cfg(feature = "codec-pnm")]

@@ -39,10 +39,11 @@ layer = 6
 # `default = false` in its own fragment; nothing here is hand-maintained.
 
 [features]
-default = ["codec-ac3", "codec-image-simple", "codec-jpeg", "codec-pnm", "codec-qoi", "demux-aiff", "demux-asf", "demux-asf-o", "demux-au", "demux-avi", "demux-caf", "demux-dash", "demux-dv", "demux-flv", "demux-hls", "demux-image2", "demux-ircam", "demux-matroska", "demux-mp3", "demux-mp4", "demux-mpegps", "demux-mpegts", "demux-mpegtsraw", "demux-mpjpeg", "demux-mxf", "demux-nut", "demux-ogg", "demux-raw", "demux-rso", "demux-sox", "demux-spdif", "demux-swf", "demux-voc", "demux-w64", "demux-wav", "mux-aiff", "mux-asf", "mux-asf-stream", "mux-au", "mux-avi", "mux-caf", "mux-dash", "mux-dv", "mux-dvd", "mux-flv", "mux-hls", "mux-image2", "mux-ircam", "mux-matroska", "mux-mp3", "mux-mp4", "mux-mpeg", "mux-mpegts", "mux-mpjpeg", "mux-nut", "mux-ogg", "mux-raw", "mux-rso", "mux-rtp", "mux-rtp-mpegts", "mux-sox", "mux-spdif", "mux-svcd", "mux-swf", "mux-vcd", "mux-vob", "mux-voc", "mux-w64", "mux-wav", "parse-aac", "parse-av1", "parse-h264", "parse-hevc", "parse-image", "parse-mpegvideo", "parse-opus", "parse-vpx", "subtitle-bitmap", "subtitle-text"]
+default = ["codec-ac3", "codec-image-simple", "codec-jpeg", "codec-mpegaudio", "codec-pnm", "codec-qoi", "demux-aiff", "demux-asf", "demux-asf-o", "demux-au", "demux-avi", "demux-caf", "demux-dash", "demux-dv", "demux-flv", "demux-hls", "demux-image2", "demux-ircam", "demux-matroska", "demux-mp3", "demux-mp4", "demux-mpegps", "demux-mpegts", "demux-mpegtsraw", "demux-mpjpeg", "demux-mxf", "demux-nut", "demux-ogg", "demux-raw", "demux-rso", "demux-sox", "demux-spdif", "demux-swf", "demux-voc", "demux-w64", "demux-wav", "mux-aiff", "mux-asf", "mux-asf-stream", "mux-au", "mux-avi", "mux-caf", "mux-dash", "mux-dv", "mux-dvd", "mux-flv", "mux-hls", "mux-image2", "mux-ircam", "mux-matroska", "mux-mp3", "mux-mp4", "mux-mpeg", "mux-mpegts", "mux-mpjpeg", "mux-nut", "mux-ogg", "mux-raw", "mux-rso", "mux-rtp", "mux-rtp-mpegts", "mux-sox", "mux-spdif", "mux-svcd", "mux-swf", "mux-vcd", "mux-vob", "mux-voc", "mux-w64", "mux-wav", "parse-aac", "parse-av1", "parse-h264", "parse-hevc", "parse-image", "parse-mpegvideo", "parse-opus", "parse-vpx", "subtitle-bitmap", "subtitle-text"]
 "codec-ac3" = ["dep:vaco-codec-ac3"]
 "codec-image-simple" = ["dep:vaco-codec-image-simple"]
 "codec-jpeg" = ["dep:vaco-codec-jpeg"]
+"codec-mpegaudio" = ["dep:vaco-codec-mpegaudio"]
 "codec-pnm" = ["dep:vaco-codec-pnm"]
 "codec-qoi" = ["dep:vaco-codec-qoi"]
 "demux-aiff" = ["dep:vaco-format-audio-simple"]
@@ -161,6 +162,10 @@ optional = true
 
 [dependencies.vaco-codec-jpeg]
 path = "../../codec/vaco-codec-jpeg"
+optional = true
+
+[dependencies.vaco-codec-mpegaudio]
+path = "../../codec/vaco-codec-mpegaudio"
 optional = true
 
 [dependencies.vaco-codec-pnm]

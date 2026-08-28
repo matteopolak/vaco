@@ -46,6 +46,7 @@ vaco-codec-dsp-idct = { path = "../crates/signal/vaco-codec-dsp-idct" }
 vaco-codec-golomb = { path = "../crates/signal/vaco-codec-golomb" }
 vaco-codec-image-simple = { path = "../crates/codec/vaco-codec-image-simple" }
 vaco-codec-jpeg = { path = "../crates/codec/vaco-codec-jpeg" }
+vaco-codec-mpegaudio = { path = "../crates/codec/vaco-codec-mpegaudio" }
 vaco-codec-pnm = { path = "../crates/codec/vaco-codec-pnm" }
 vaco-codec-qoi = { path = "../crates/codec/vaco-codec-qoi" }
 vaco-color = { path = "../crates/model/vaco-color" }
@@ -176,6 +177,7 @@ default = [
     "codec-golomb",
     "codec-image-simple",
     "codec-jpeg",
+    "codec-mpegaudio",
     "codec-pnm",
     "codec-qoi",
     "color",
@@ -299,6 +301,7 @@ codec-dsp-idct = []
 codec-golomb = []
 codec-image-simple = []
 codec-jpeg = []
+codec-mpegaudio = []
 codec-pnm = []
 codec-qoi = []
 color = []
@@ -1187,6 +1190,14 @@ test = false
 doc = false
 bench = false
 required-features = ["mux-mp4"]
+
+[[bin]]
+name = "mpegaudio_decode"
+path = "fuzz_targets/mpegaudio_decode.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-mpegaudio"]
 
 [[bin]]
 name = "mpegaudio_demux"
