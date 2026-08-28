@@ -6,6 +6,7 @@
 
 pub mod fir_mc;
 pub mod fmtconvert;
+pub mod lpc;
 pub mod masked_select;
 pub mod mecmp;
 pub mod scale_affine;

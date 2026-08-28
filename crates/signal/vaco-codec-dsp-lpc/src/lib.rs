@@ -64,9 +64,19 @@
 //! out-of-range order degrades to the largest order actually computed
 //! rather than panicking.
 #![forbid(unsafe_code)]
+// `#[inline(always)]` on a SIMD kernel body is not a tuning knob in this
+// crate: it is how the dispatched level's target-feature context reaches
+// the body. A kernel that fails to inline is compiled at the ambient
+// baseline -- still correct, silently slow, and invisible to every
+// correctness test.
+#![allow(
+    clippy::inline_always,
+    reason = "mandatory for target-feature propagation in vaco_simd kernel bodies"
+)]
 
 mod analysis;
 mod quantize;
+pub mod simd;
 mod synthesis;
 
 pub use analysis::{autocorrelate, levinson_durbin, LevinsonDurbin};

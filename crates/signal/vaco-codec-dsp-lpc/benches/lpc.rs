@@ -5,7 +5,8 @@
 //! cargo bench -p vaco-codec-dsp-lpc
 //! ```
 
-use vaco_codec_dsp_lpc::{autocorrelate, levinson_durbin, quantize, synthesize};
+use vaco_codec_dsp_lpc::{autocorrelate, levinson_durbin, quantize, simd, synthesize};
+use vaco_simd::Caps;
 
 fn main() {
     divan::main();
@@ -19,12 +20,22 @@ fn ramp() -> Vec<f64> {
 }
 
 #[divan::bench]
-fn autocorrelate_order32(bencher: divan::Bencher<'_, '_>) {
+fn autocorrelate_scalar_order32(bencher: divan::Bencher<'_, '_>) {
     let samples = ramp();
     let mut out = vec![0.0; ORDER + 1];
     bencher
         .counter(divan::counter::ItemsCount::new(BLOCK * ORDER))
         .bench_local(|| autocorrelate(&samples, &mut out));
+}
+
+#[divan::bench]
+fn autocorrelate_dispatched_order32(bencher: divan::Bencher<'_, '_>) {
+    let samples = ramp();
+    let mut out = vec![0.0; ORDER + 1];
+    let caps = Caps::detect();
+    bencher
+        .counter(divan::counter::ItemsCount::new(BLOCK * ORDER))
+        .bench_local(|| simd::autocorrelate(caps, &samples, &mut out));
 }
 
 #[divan::bench]
