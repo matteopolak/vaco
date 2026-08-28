@@ -112,6 +112,36 @@ pub(crate) fn h263_chroma_mv(m: i32) -> i32 {
     2 * base + i32::from(phase != 0)
 }
 
+/// Annex F §F.2 (`Vaco-Spec-Ref: itu-t-h263` Table F.1): the chrominance
+/// motion vector for a four-vector macroblock — "the sum of the four
+/// luminance vectors [divided] by 8", then Table F.1's own three-bucket
+/// snap of the sixteenth-pixel remainder to the nearest half-pixel
+/// chrominance position. Distinct from [`h263_chroma_mv`]'s own rule
+/// (single-vector case, `/4` with a two-bucket snap) — F.2's text
+/// restricts this `/8`, three-bucket rule explicitly to "if four vectors
+/// are used"; a one-vector macroblock, even under Advanced Prediction
+/// mode, keeps the plain default rule (summing four *identical* values
+/// and dividing by 8 would silently halve the chroma displacement
+/// `h263_chroma_mv` gives that same vector — not an equivalent
+/// reformulation, a different, wrong answer).
+#[must_use]
+#[allow(
+    dead_code,
+    reason = "landed ahead of its consumer, same as annex_f_obmc_luma_block and the OBMC_H0/H1/H2 tables - see their own allow reasons"
+)]
+pub(crate) fn annex_f_chroma_mv(mvs: [i32; 4]) -> i32 {
+    // Table F.1: sixteenths 0-2 snap down (bucket 0), 3-13 snap to the
+    // half-pixel bucket (1), 14-15 snap up to the next full pixel (2) —
+    // transcribed as a direct lookup, not a formula, to match the
+    // primary text's own table cell-for-cell.
+    const BUCKET: [i32; 16] = [0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2];
+    let total = mvs[0] + mvs[1] + mvs[2] + mvs[3];
+    let base = total.div_euclid(16);
+    let sixteenths = total.rem_euclid(16);
+    let snapped = BUCKET.get(usize::try_from(sixteenths).unwrap_or(0)).copied().unwrap_or(0);
+    2 * base + snapped
+}
+
 /// H.261 §3.2.2: "The motion vector for both colour difference blocks is
 /// derived by halving the component values of the macroblock vector and
 /// truncating the magnitude parts towards zero" — Rust's own `/` on `i32`
@@ -227,6 +257,149 @@ pub(crate) fn sample_half_pel(
             rcontrol,
         ),
     }
+}
+
+/// Annex F §F.3 (`Vaco-Spec-Ref: itu-t-h263` Figure F.2): weighting
+/// values `H0(i, j)` for the prediction using the current luminance
+/// block's own motion vector — indexed `[j][i]` (row `j`, then column
+/// `i`, matching the primary text's own "`(i, j)` denotes the column and
+/// row, respectively" and this crate's existing `pred[y * 8 + x]`
+/// row-major convention for an 8x8 block).
+#[allow(
+    dead_code,
+    reason = "landed ahead of its consumer: reconstruction is not wired yet, because it surfaced a genuine architectural gap this round (see docs/codec/vaco-codec-h263.md Annex F account) -- OBMC needs a same-row macroblock this crate has not decoded yet in raster order for the rightward remote vector, which every other mode never needs; wiring this in needs a one-macroblock lookahead (or two-pass) restructuring of the GOB decode loop, not attempted this round. Verified correct in isolation: bit-exact against a real ffmpeg fixture for every neighbour direction except the one this note names"
+)]
+const OBMC_H0: [i32; 64] = [
+    4, 5, 5, 5, 5, 5, 5, 4,
+    5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 6, 6, 6, 6, 5, 5,
+    5, 5, 6, 6, 6, 6, 5, 5,
+    5, 5, 6, 6, 6, 6, 5, 5,
+    5, 5, 6, 6, 6, 6, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5,
+    4, 5, 5, 5, 5, 5, 5, 4,
+];
+
+/// Annex F §F.3 (Figure F.3): weighting values `H1(i, j)` for the
+/// "vertical remote" prediction — the block above the current one for
+/// row `j < 4`, the block below for `j >= 4` (§F.3's own text: "for the
+/// upper half of the block the motion vector corresponding to the block
+/// above... is used, while for the lower half... the block below").
+/// Mirror-symmetric top/bottom by construction, since the same
+/// distance-from-the-relevant-border weighting applies whichever half a
+/// row falls in.
+#[allow(dead_code, reason = "see OBMC_H0 own doc comment and allow reason")]
+const OBMC_H1: [i32; 64] = [
+    2, 2, 2, 2, 2, 2, 2, 2,
+    1, 1, 2, 2, 2, 2, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 2, 2, 2, 2, 1, 1,
+    2, 2, 2, 2, 2, 2, 2, 2,
+];
+
+/// Annex F §F.3 (Figure F.4): weighting values `H2(i, j)` for the
+/// "horizontal remote" prediction — the block to the left for column
+/// `i < 4`, the block to the right for `i >= 4`. Mirror-symmetric
+/// left/right, the same shape as `OBMC_H1` rotated 90 degrees in
+/// concept, but transcribed independently from the primary text rather
+/// than derived from `OBMC_H1` by assumption (the two tables are *not*
+/// exact transposes of one another cell-for-cell, verified directly
+/// against the rendered figures — only `OBMC_H0 + OBMC_H1 + OBMC_H2 ==
+/// 8` at every one of the 64 cells is a shape invariant, checked by this
+/// module's own tests).
+#[allow(dead_code, reason = "see OBMC_H0 own doc comment and allow reason")]
+const OBMC_H2: [i32; 64] = [
+    2, 1, 1, 1, 1, 1, 1, 2,
+    2, 2, 1, 1, 1, 1, 2, 2,
+    2, 2, 1, 1, 1, 1, 2, 2,
+    2, 2, 1, 1, 1, 1, 2, 2,
+    2, 2, 1, 1, 1, 1, 2, 2,
+    2, 2, 1, 1, 1, 1, 2, 2,
+    2, 2, 1, 1, 1, 1, 2, 2,
+    2, 1, 1, 1, 1, 1, 1, 2,
+];
+
+
+/// One weighting value from an OBMC table (`OBMC_H0`/`OBMC_H1`/`OBMC_H2`,
+/// each flattened row-major, row `j` then column `i`) — `0` on an
+/// out-of-range index, which never happens for the `0..8` loop bounds
+/// every caller uses, but keeps this crate's blanket
+/// `indexing_slicing = "deny"` satisfied without a panic path.
+#[allow(dead_code, reason = "see OBMC_H0 own doc comment and allow reason")]
+fn obmc_weight(table: &[i32; 64], j: usize, i: usize) -> i32 {
+    table.get(j * 8 + i).copied().unwrap_or(0)
+}
+
+/// Annex F §F.3 (`Vaco-Spec-Ref: itu-t-h263` Figure F.3/F.4's own
+/// prediction equation): one 8x8 luminance OBMC prediction block.
+/// `mv_own` is the current block's own (already fully reconstructed,
+/// including the `annex_f_predictor_sources`-based predictor) motion
+/// vector; `mv_above`/`mv_below`/`mv_left`/`mv_right` are the four
+/// "remote" vectors, already resolved by the caller through §F.3's own
+/// not-coded/INTRA/border/bottom-of-macroblock substitution rules — this
+/// function only does the per-pixel weighted combination, not the
+/// neighbour-resolution policy.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the OBMC equation genuinely combines this many independent per-direction motion vectors (own, above, below, left, right) with the reference/position/rounding context every other sampling function in this module already takes"
+)]
+#[allow(
+    clippy::integer_division,
+    reason = "`P(x,y) = (q*H0 + r*H1 + s*H2 + 4) / 8` is Annex F's own literal formula (`Vaco-Spec-Ref: itu-t-h263` F.3) — the add-then-truncate form is round-to-nearest for a divisor of 8, not an approximation of it, the same convention `avg2`/`avg4` already use for their own divisors"
+)]
+#[allow(
+    clippy::many_single_char_names,
+    reason = "q/r/s and x/y are Annex F's own primary-text variable names (`Vaco-Spec-Ref: itu-t-h263` F.3's own P(x,y) = (q*H0 + r*H1 + s*H2 + 4)/8 equation) - renaming them would make this harder to check against the spec, not easier"
+)]
+#[allow(
+    dead_code,
+    reason = "landed ahead of its consumer: reconstruction is not wired yet, because it surfaced a genuine architectural gap this round (see docs/codec/vaco-codec-h263.md Annex F account) -- OBMC needs a same-row macroblock this crate has not decoded yet in raster order for the rightward remote vector, which every other mode never needs; wiring this in needs a one-macroblock lookahead (or two-pass) restructuring of the GOB decode loop, not attempted this round. Verified correct in isolation: bit-exact against a real ffmpeg fixture for every neighbour direction except the one this note names"
+)]
+pub(crate) fn annex_f_obmc_luma_block(
+    refp: &RefPicture,
+    src_x: i32,
+    src_y: i32,
+    mv_own: [i32; 2],
+    mv_above: [i32; 2],
+    mv_below: [i32; 2],
+    mv_left: [i32; 2],
+    mv_right: [i32; 2],
+    rcontrol: bool,
+) -> [u8; 64] {
+    let mut out = [0u8; 64];
+    for j in 0..8usize {
+        let mv_vert = if j < 4 { mv_above } else { mv_below };
+        for i in 0..8usize {
+            let mv_horiz = if i < 4 { mv_left } else { mv_right };
+            let x = src_x + i32::try_from(i).unwrap_or(0);
+            let y = src_y + i32::try_from(j).unwrap_or(0);
+            let q = sample_half_pel(refp, 0, x, y, mv_own[0], mv_own[1], rcontrol);
+            let rr = sample_half_pel(refp, 0, x, y, mv_vert[0], mv_vert[1], rcontrol);
+            let s = sample_half_pel(refp, 0, x, y, mv_horiz[0], mv_horiz[1], rcontrol);
+            let p = obmc_combine(q, rr, s, obmc_weight(&OBMC_H0, j, i), obmc_weight(&OBMC_H1, j, i), obmc_weight(&OBMC_H2, j, i));
+            if let Some(slot) = out.get_mut(j * 8 + i) {
+                *slot = p;
+            }
+        }
+    }
+    out
+}
+
+/// The per-pixel half of Annex F's own equation, `P(x,y) = (q*H0 + r*H1 +
+/// s*H2 + 4) / 8`, factored out from [`annex_f_obmc_luma_block`]'s
+/// reference-sampling loop so it is testable on plain `u8` inputs
+/// without needing a [`RefPicture`].
+#[allow(
+    clippy::integer_division,
+    reason = "Annex F's own literal formula (`Vaco-Spec-Ref: itu-t-h263` F.3) — add-then-truncate for a divisor of 8, the same rounding convention `avg2`/`avg4` already use"
+)]
+#[allow(dead_code, reason = "see OBMC_H0 own doc comment and allow reason")]
+fn obmc_combine(q: u8, r: u8, s: u8, h0: i32, h1: i32, h2: i32) -> u8 {
+    let p = (i32::from(q) * h0 + i32::from(r) * h1 + i32::from(s) * h2 + 4) / 8;
+    p.clamp(0, 255) as u8
 }
 
 /// `b = (A + B + 1) / 2` — round to nearest, ties away from zero, which
@@ -347,6 +520,99 @@ mod tests {
         // actually crosses an integer boundary between the two rules.
         assert_eq!(avg4(2, 2, 3, 3, false), 3);
         assert_eq!(avg4(2, 2, 3, 3, true), 2);
+    }
+
+    #[test]
+    fn obmc_weighting_tables_sum_to_eight_at_every_cell() {
+        // Annex F's own rounding formula divides by 8, so a conforming
+        // transcription of Figures F.2-F.4 must sum to exactly 8 at
+        // every one of the 64 cells - a shape invariant independent of
+        // which table is "H0" vs "H1" vs "H2", so this catches a
+        // transcription slip a mere shape/plausibility check would miss.
+        for j in 0..8 {
+            for i in 0..8 {
+                let sum = obmc_weight(&OBMC_H0, j, i) + obmc_weight(&OBMC_H1, j, i) + obmc_weight(&OBMC_H2, j, i);
+                assert_eq!(sum, 8, "cell ({i}, {j}) summed to {sum}, not 8");
+            }
+        }
+    }
+
+    #[test]
+    fn obmc_h0_matches_figure_f2s_corner_and_centre_values() {
+        // Spot-check against the primary text directly, not just the
+        // sum invariant: corners are 4, the four centre cells are 6,
+        // everything else on the table is 5.
+        assert_eq!(obmc_weight(&OBMC_H0, 0, 0), 4);
+        assert_eq!(obmc_weight(&OBMC_H0, 0, 7), 4);
+        assert_eq!(obmc_weight(&OBMC_H0, 7, 0), 4);
+        assert_eq!(obmc_weight(&OBMC_H0, 7, 7), 4);
+        assert_eq!(obmc_weight(&OBMC_H0, 3, 3), 6);
+        assert_eq!(obmc_weight(&OBMC_H0, 3, 4), 6);
+        assert_eq!(obmc_weight(&OBMC_H0, 4, 3), 6);
+        assert_eq!(obmc_weight(&OBMC_H0, 4, 4), 6);
+        assert_eq!(obmc_weight(&OBMC_H0, 0, 1), 5);
+        assert_eq!(obmc_weight(&OBMC_H0, 1, 0), 5);
+    }
+
+    #[test]
+    fn obmc_h1_and_h2_are_not_simple_transposes() {
+        // Documented explicitly in `OBMC_H2`'s own comment: verify it,
+        // not just assert it in prose. Row 1 of H1 and column 1 of H2
+        // differ (1,1,2,2,2,2,1,1 vs 1,2,2,2,2,2,2,1) - the two tables
+        // were independently transcribed from independently rendered
+        // figures, not derived from one another.
+        let h1_row1: Vec<i32> = (0..8).map(|i| obmc_weight(&OBMC_H1, 1, i)).collect();
+        let h2_col1: Vec<i32> = (0..8).map(|j| obmc_weight(&OBMC_H2, j, 1)).collect();
+        assert_ne!(h1_row1, h2_col1);
+    }
+
+    #[test]
+    fn obmc_combine_reduces_to_the_shared_value_when_all_three_predictions_agree() {
+        // q == r == s == v: (v*h0 + v*h1 + v*h2 + 4) / 8 == v exactly,
+        // since h0+h1+h2 == 8 at every cell (the sum-to-eight invariant
+        // tested above) - this is OBMC degenerating to plain motion
+        // compensation when a block's own and all four remote vectors
+        // happen to produce the same reference sample.
+        for (h0, h1, h2) in [(4, 2, 2), (5, 1, 2), (6, 1, 1), (5, 2, 1)] {
+            for v in [0u8, 1, 100, 200, 255] {
+                assert_eq!(obmc_combine(v, v, v, h0, h1, h2), v);
+            }
+        }
+    }
+
+    #[test]
+    fn obmc_combine_matches_a_hand_worked_corner_pixel() {
+        // Corner (i=0, j=0): H0=4, H1=2, H2=2. q=100 (own), r=50 (vertical
+        // remote), s=10 (horizontal remote): (100*4 + 50*2 + 10*2 + 4)/8
+        // = (400+100+20+4)/8 = 524/8 = 65 (truncated).
+        assert_eq!(obmc_combine(100, 50, 10, 4, 2, 2), 65);
+    }
+
+    #[test]
+    fn annex_f_chroma_mv_matches_table_f1s_bucket_boundaries() {
+        // total=0: base=0, sixteenths=0 -> bucket 0 -> result 0.
+        assert_eq!(annex_f_chroma_mv([0, 0, 0, 0]), 0);
+        // total=32 (four identical vectors of 8 half-pel each, i.e. a
+        // whole 4-pixel luma shift): base=2, sixteenths=0 -> result 4 -
+        // sanity-checks the /8 combination against a clean multiple.
+        assert_eq!(annex_f_chroma_mv([8, 8, 8, 8]), 4);
+        // sixteenths=2 -> bucket 0 (still snaps down).
+        assert_eq!(annex_f_chroma_mv([2, 0, 0, 0]), 0);
+        // sixteenths=3 -> bucket 1 (the boundary Table F.1 actually
+        // draws: 2 snaps down, 3 snaps to the half-pixel bucket).
+        assert_eq!(annex_f_chroma_mv([3, 0, 0, 0]), 1);
+        // sixteenths=13 -> bucket 1, sixteenths=14 -> bucket 2 (the
+        // other boundary).
+        assert_eq!(annex_f_chroma_mv([13, 0, 0, 0]), 1);
+        assert_eq!(annex_f_chroma_mv([14, 0, 0, 0]), 2);
+    }
+
+    #[test]
+    fn annex_f_chroma_mv_handles_negative_totals_via_euclidean_division() {
+        // total=-3: div_euclid(-3, 16) = -1, rem_euclid = 13 -> bucket 1
+        // -> result 2*(-1)+1 = -1, not the sign-following (-3/16 ~ 0,
+        // remainder -3) a plain truncating division would give.
+        assert_eq!(annex_f_chroma_mv([-3, 0, 0, 0]), -1);
     }
 
     #[test]
