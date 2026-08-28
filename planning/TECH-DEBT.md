@@ -1268,3 +1268,43 @@ crate's real input is a per-frame `cc_data` side-data buffer, not a
 bitstream a `Decoder::send_packet` would demux — so "what is a packet
 here" needs an answer before the `Decoder` impl can be written, not just a
 translation of already-working output through `SubtitleRect::text`.
+
+### `vaco-format-misc-audio`'s `adx`/`g726`/`g726le` state duration at a different tick rate than the reference
+
+`BlockDemuxer`'s `time_base` is always `1/sample_rate`, so a packet's `pts`
+counts samples. The reference's own `adx` demuxer instead ticks at `1/250`
+(one tick per 32-sample block) and its raw `g726`/`g726le` demuxers tick at
+a generic `1/90000`; both agree with this crate's wall-clock duration
+exactly (`0.304 s` and `0.3 s` on the measured fixtures) but disagree on
+`duration_ts`/`time_base` themselves. `crates/format/vaco-format-misc-audio/tests/differential.rs`
+checks duration in microseconds for exactly this reason. Reproducing the
+reference's tick rate per format would mean `BlockDemuxer` taking a
+caller-supplied `time_base` instead of deriving one from `sample_rate`, and
+`adx` additionally reporting `duration_ts` in blocks rather than samples.
+
+### `vaco-format-misc-audio`'s `aptx`/`aptx_hd` estimate a duration the reference declines to state
+
+Both codecs have a fixed 4:1/6:1 byte:frame ratio, so
+`crates/format/vaco-format-misc-audio/src/block.rs`'s `BlockDemuxer::duration`
+estimates one from the file size — the same policy
+`vaco-format-audio-simple::pcm::RawPcmDemuxer` uses for headerless PCM. The
+reference's own raw `aptx`/`aptx_hd` demuxers report `N/A` instead. Not
+changed, since matching `N/A` would mean discarding a number this crate can
+compute exactly; recorded because a future differential pass comparing
+`duration_ts` field-for-field will flag it as a divergence and should not
+re-litigate the question from scratch.
+
+### The `fuzz` workspace could not be built to actually run `misc_audio_demux`
+
+At the time `vaco-format-misc-audio` landed, `crates/signal/vaco-scale/src/scaler.rs`
+had an uncommitted, in-progress edit calling a `plan_spec` function that did
+not exist yet (`special.rs` was untracked), which fails
+`cargo check`/`cargo fuzz run` for the whole `fuzz` package — every fuzz
+target shares one `Cargo.toml`, so one crate's broken mid-edit state blocks
+all of them, not just its own. `fuzz/fuzz_targets/misc_audio_demux.rs` is
+written and registered (`cargo xtask gen-fuzz` ran cleanly), but was never
+actually executed with `cargo +nightly fuzz run` in this session; a
+proptest-based stand-in (`tests/properties.rs`'s
+`no_demuxer_panics_or_loops_on_arbitrary_bytes`) covers the same
+no-panic/terminates property in the meantime. Re-run the real fuzz target
+once `vaco-scale` builds again.
