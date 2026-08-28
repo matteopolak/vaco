@@ -87,9 +87,11 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-cli stderr reporting | 7 | #641 #208 | agent:cli-report | active | 2026-08-27 | — | the Input #0/Output #0 dump and -stats/-progress/-report; shares loglevel::prints_info |
 | vaco-protocol-dial (new) + vaco-protocol-rtmp (epic #61) | 2 | TECH-DEBT row 1, #552 #553 #554 | agent:rtmp | active | 2026-08-27 | — | pays down the five-copy dial duplication first, then RTMP is the test of whether the seam was right |
 | mp3 demux/mux + vaco-codec-mpegaudio (epic #38 decode half) | 3 | #644 #362 #363 #364 | agent:mpeg-audio | active | 2026-08-27 | — | `.mp3` cannot be opened at all today; demuxer first, then Layers I/II/III |
+| vaco-demux-avi + vaco-mux-avi (finish AVI) | 4 | #642 + finding 50's three open items | agent:avi-finish | active | 2026-08-27 | — | extradata to stream info, length-prefixed H.264, JUNK sizing, the audio grid gap |
+| vaco-codec-jpeg (C-15, epic #27) | 3 | #295 #296 #297 | agent:jpeg | active | 2026-08-27 | — | baseline, progressive, MJPEG framing + encoder |
 | vaco-codec-bmp/-pnm/-qoi (C-13, epic #26) | 3 | #291 #292 #293 | agent:image-codecs | active | 2026-08-27 | — | ~15 codecs, one dispatch: encode byte-identity + decode MD5 table |
 | container sweep (~60 formats, excl. the nine under active ownership) | 4 | #643 + whatever it files | agent:container-sweep | active | 2026-08-27 | — | one comparison loop over every both-direction format |
-| vaco-mux-avi + vaco-mux-flv | 4 | #639 #640 | agent:avi-flv | active | 2026-08-27 | — | AVI's 600 Hz slot grid (correctness, not byte-identity); FLV metadata forwarding + end-of-sequence |
+| vaco-mux-avi + vaco-mux-flv | 4 | #639 #640 | agent:avi-flv | done | 2026-08-27 | — | AVI's 600 Hz slot grid (correctness, not byte-identity); FLV metadata forwarding + end-of-sequence |
 | vaco-mux-mpegts + vaco-demux-mpegts + probe dump | 4 | #636 #635 | agent:ts-conformance | done | 2026-08-27 | 2026-08-27 | PCR low bytes, data_alignment, PTS/DTS; ts_id/ts_packetsize; the invented TAG:ts_codec |
 | vaco-mux-mp4 + vaco-mux-matroska | 4 | #637 #638 | agent:remux-detail | done | 2026-08-27 | 2026-08-27 | btrt/elst/32-bit mdat; Duration, TrackUID width, Colour, TrackEntry order |
 | vaco-parse-vpx / -mpeg12 / image + codec-core profile tables | 2 | #275 #276 #277 #278 | agent:parsers | active | 2026-08-27 | — | P-05..P-08. Footprint in vaco-codec-core is ONE new module file + its `mod` line |
