@@ -33,6 +33,7 @@ use vaco_core::Result;
 use vaco_frame::Frame;
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
+use vaco_pixfmt::PixFmt;
 
 type DecodeFn = fn(&[u8], &mut Budget) -> Result<Frame>;
 type EncodeFn = fn(&Frame) -> Result<Vec<u8>>;
@@ -142,54 +143,62 @@ pub struct ImageEncoder {
     machine: Machine<Packet>,
     limits: Limits,
     encode: EncodeFn,
+    /// What `encode` accepts, most-preferred first — a caller property, not
+    /// derivable from the function pointer, so each constructor states it.
+    accepted: &'static [PixFmt],
 }
 
 impl ImageEncoder {
     /// An encoder that calls `encode` and bounds the packet it allocates by
     /// `limits`.
     #[must_use]
-    pub fn new(limits: Limits, encode: EncodeFn) -> Self {
+    pub fn new(limits: Limits, encode: EncodeFn, accepted: &'static [PixFmt]) -> Self {
         Self {
             machine: Machine::new(Caps::empty()),
             limits,
             encode,
+            accepted,
         }
     }
 
     /// An encoder for BMP.
     #[must_use]
     pub fn bmp(limits: Limits) -> Self {
-        Self::new(limits, bmp::encode)
+        Self::new(limits, bmp::encode, &[PixFmt::Bgr24, PixFmt::Bgra])
     }
 
     /// An encoder for PCX.
     #[must_use]
     pub fn pcx(limits: Limits) -> Self {
-        Self::new(limits, pcx::encode)
+        Self::new(limits, pcx::encode, &[PixFmt::Rgb24])
     }
 
     /// An encoder for TGA.
     #[must_use]
     pub fn tga(limits: Limits) -> Self {
-        Self::new(limits, tga::encode)
+        Self::new(
+            limits,
+            tga::encode,
+            &[PixFmt::Bgr24, PixFmt::Bgra, PixFmt::Gray8],
+        )
     }
 
     /// An encoder for SGI.
     #[must_use]
     pub fn sgi(limits: Limits) -> Self {
-        Self::new(limits, sgi::encode)
+        Self::new(limits, sgi::encode, &[PixFmt::Gray8, PixFmt::Gbrp])
     }
 
     /// An encoder for XWD.
     #[must_use]
     pub fn xwd(limits: Limits) -> Self {
-        Self::new(limits, xwd::encode)
+        Self::new(limits, xwd::encode, &[PixFmt::Rgb24])
     }
 
     /// An encoder for XBM.
     #[must_use]
     pub fn xbm(limits: Limits) -> Self {
-        Self::new(limits, xbm::encode)
+        Self::new(limits, xbm::encode, &[PixFmt::MonoWhite])
     }
 }
 
@@ -199,6 +208,10 @@ impl SendReceive for ImageEncoder {
 
     fn caps(&self) -> Caps {
         self.machine.caps()
+    }
+
+    fn accepted_pix_fmts(&self) -> &'static [PixFmt] {
+        self.accepted
     }
 
     fn send(&mut self, input: Option<&Frame>) -> Result<()> {
