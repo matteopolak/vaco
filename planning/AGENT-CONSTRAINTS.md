@@ -793,13 +793,38 @@ The tool for this is a private index:
 
 ```sh
 export GIT_INDEX_FILE="$SCRATCH/my-idx"        # $SCRATCH, never /tmp — see below
-git read-tree HEAD                              # start from HEAD, not the shared index
-blob=$(git hash-object -w "$SCRATCH/my-half-of-the-file.rs")
-git update-index --cacheinfo 100644,$blob,path/to/shared.rs
-git commit -F msg.txt
+rm -f "$GIT_INDEX_FILE"
+BASE=$(git rev-parse HEAD)                     # ONE sha, used three times below
+git read-tree "$BASE"                          # start from BASE, not the shared index
+git show "$BASE:path/to/shared.rs" > "$SCRATCH/mine.rs"   # NOT the working-tree file
+#   ...make your edit to "$SCRATCH/mine.rs"...
+blob=$(git hash-object -w "$SCRATCH/mine.rs")
+git update-index --add --cacheinfo 100644,$blob,path/to/shared.rs
+tree=$(git write-tree)
+commit=$(git commit-tree "$tree" -p "$BASE" -F "$SCRATCH/msg.txt")
+git update-ref refs/heads/main "$commit" "$BASE"   # FAILS if HEAD moved — see below
 unset GIT_INDEX_FILE
-git reset -q HEAD -- path/to/shared.rs          # settle the shared index against the new HEAD
+cp "$SCRATCH/mine.rs" path/to/shared.rs        # write back, or the tree falls behind HEAD
+git reset -q HEAD -- path/to/shared.rs         # settle the shared index against the new HEAD
+git diff HEAD~1 HEAD --name-only               # must list only your own paths
 ```
+
+**`git commit` is not usable here, and that is the whole reason this recipe
+looks the way it does.** With `GIT_INDEX_FILE` set, `git commit` resolves the
+parent at commit time while your *tree* was built by `read-tree` earlier. If
+anything landed in between, the parent is new, the tree is old, and the commit
+**silently reverts every file changed in that window** — files you never
+touched and will not see in your own diff summary. The compare-and-swap in
+`update-ref` does not save you either, because the ref move itself is
+legitimate: the parent really is current. That is what corrupted a VP9 crate
+this session, twice, through commits that were individually valid.
+
+So: one `BASE`, used by `read-tree`, by `commit-tree -p`, and by `update-ref`'s
+old-value guard. **If `update-ref` fails, start again from `git rev-parse HEAD`
+— including the `read-tree`.** Re-running only the commit is the bug.
+
+`GIT_INDEX_FILE` does not survive between tool calls, so do the whole block in
+one invocation. An agent that split it landed an empty commit.
 
 **`/tmp/my-half-of-the-file.rs` is not decorative.** `git hash-object -w` takes
 a *path*, and if you give it the working-tree path you hash whatever is in the
@@ -818,11 +843,16 @@ of them, build your half from `HEAD`, never from the working tree:
 git show HEAD:planning/TECH-DEBT.md > "$SCRATCH/mine.md"   # NOT the working-tree file
 cat "$SCRATCH/my-append.md" >> "$SCRATCH/mine.md"
 export GIT_INDEX_FILE="$SCRATCH/my-idx"
-git read-tree HEAD
+rm -f "$GIT_INDEX_FILE"
+BASE=$(git rev-parse HEAD)
+git read-tree "$BASE"
 blob=$(git hash-object -w "$SCRATCH/mine.md")
-git update-index --cacheinfo 100644,$blob,planning/TECH-DEBT.md
-git commit -F msg.txt
+git update-index --add --cacheinfo 100644,$blob,planning/TECH-DEBT.md
+tree=$(git write-tree)
+commit=$(git commit-tree "$tree" -p "$BASE" -F "$SCRATCH/msg.txt")
+git update-ref refs/heads/main "$commit" "$BASE"
 unset GIT_INDEX_FILE
+cp "$SCRATCH/mine.md" planning/TECH-DEBT.md
 git reset -q HEAD -- planning/TECH-DEBT.md
 ```
 
