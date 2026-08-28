@@ -15,10 +15,10 @@ provenance. A blank note means we match the reference for that format.
 
 | | Demux | Mux |
 |---|---|---|
-| Vaco | 135 | 105 |
+| Vaco | 138 | 108 |
 | Reference | 359 | 183 |
 
-Of the 412 format names either side registers, **244** are still to be
+Of the 412 format names either side registers, **241** are still to be
 written and **1** is excluded by a decision record. The
 ratio between those two numbers is the point of the other document —
 nearly everything Vaco lacks, it lacks because nobody has written it yet.
@@ -276,7 +276,7 @@ playback devices are not in `-demuxers`/`-muxers` output, they are in
 | `nsp` | — |  | not yet |
 | `nsv` | — |  | not yet |
 | `null` |  | `vaco-mux-utility` |  |
-| `nut` | — | — | not yet |
+| `nut` | `vaco-format-nut` | `vaco-format-nut` |  |
 | `nuv` | — |  | not yet |
 | `obu` | `vaco-demux-raw` | `vaco-mux-raw` |  |
 | `oga` |  | `vaco-mux-ogg` |  |
@@ -359,7 +359,7 @@ playback devices are not in `-demuxers`/`-muxers` output, they are in
 | `smush` | — |  | not yet |
 | `sol` | — |  | not yet |
 | `sox` | `vaco-format-audio-simple` | `vaco-format-audio-simple` |  |
-| `spdif` | — | — | not yet |
+| `spdif` | `vaco-format-spdif` | `vaco-format-spdif` |  |
 | `spx` |  | `vaco-mux-ogg` |  |
 | `srt` | `vaco-subtitle-text` | `vaco-subtitle-text` |  |
 | `stl` | `vaco-subtitle-text` |  |  |
@@ -373,7 +373,7 @@ playback devices are not in `-demuxers`/`-muxers` output, they are in
 | `svcd` |  | `vaco-mux-mpegps` |  |
 | `svg_pipe` | `vaco-demux-image2` |  |  |
 | `svs` | — |  | not yet |
-| `swf` | — | — | not yet |
+| `swf` | `vaco-format-swf` | `vaco-format-swf` |  |
 | `tak` | — |  | not yet |
 | `tedcaptions` | — |  | not yet |
 | `tee` |  | `vaco-mux-stream` |  |
