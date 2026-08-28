@@ -1,23 +1,15 @@
 //! Generate `docs/format-coverage.md` from the component registry.
 //!
-//! `docs/why-some-formats-are-not-included.md` makes a claim a reader will want
-//! to check: that the large majority of the gap against the reference is "not
-//! yet" rather than "never". A hand-written list backing that claim would be
-//! wrong within a week — the tree gains formats faster than anyone updates
-//! prose — and a wrong list here reads as a claim about policy rather than as
-//! staleness.
-//!
-//! So the table is derived from the same `vaco-component.toml` fragments that
-//! build the registry, which means it cannot disagree with the binary. The only
-//! hand-held input is `xtask/data/reference-formats.txt`, a list of *names*
-//! measured off the reference's `-demuxers`/`-muxers` output.
+//! The table backs a claim in `docs/why-some-formats-are-not-included.md`
+//! that most of the gap against the reference is "not yet" rather than
+//! "never". It is derived from the same `vaco-component.toml` fragments that
+//! build the registry, so it cannot disagree with the binary.
 
 use crate::{Task, crates, repo_root, toml};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Formats a decision record says we will not implement, and the reason to
-/// print against them. Anything not named here that we lack is "not yet" —
-/// which is the default precisely because it is the common case.
+/// Formats a decision record says we will not implement. Anything else we
+/// lack is "not yet".
 const EXCLUDED: &[(&str, &str)] = &[
     ("dvdvideo", "disc structure; GPL C libraries (plan 18 §9.3)"),
     ("bluray", "disc structure; GPL C libraries (plan 18 §9.3)"),

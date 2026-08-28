@@ -38,13 +38,10 @@ const CRC_LEN: usize = 4;
 /// `current_next_indicator` is always set — this crate never emits a table
 /// describing a *future* configuration.
 ///
-/// `reserved_future_use` is the bit immediately after
-/// `section_syntax_indicator`, and the two specifications disagree about it:
-/// it is `private_indicator` in ISO/IEC 13818-1's tables (PAT, PMT), which set
-/// it to 0, and `reserved_future_use` in ETSI EN 300 468's (SDT), which sets it
-/// to 1. Emitting the ISO value for an SDT is a one-bit divergence that shows
-/// up as `0xB0` where the reference writes `0xF0`, and it was ours until it was
-/// measured.
+/// `reserved_future_use` is the bit after `section_syntax_indicator`. The
+/// two specifications disagree: it is `private_indicator` in ISO/IEC 13818-1's
+/// tables (PAT, PMT), which set it to 0, and `reserved_future_use` in ETSI EN
+/// 300 468's (SDT), which sets it to 1.
 ///
 /// Returns `None` when the assembled section would not fit the 12-bit
 /// `section_length` field's own limit for `section_syntax_indicator == 1`
@@ -249,12 +246,8 @@ pub fn write_sdt(
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
 mod tests {
-    /// The bit after `section_syntax_indicator` differs between the two
-    /// specifications, and using the ISO value everywhere is a one-bit
-    /// divergence that survives every structural check.
-    ///
-    /// Measured on `ffmpeg -c copy -f mpegts`: its SDT section header is
-    /// `42 f0 25` and its PAT's is `00 b0 0d`. Ours wrote `42 b0 25`.
+    /// The SDT and the PAT disagree about the bit after
+    /// `section_syntax_indicator`.
     #[test]
     fn the_sdt_sets_reserved_future_use_and_the_pat_does_not() {
         let sdt = super::write_sdt(

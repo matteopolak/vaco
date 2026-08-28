@@ -202,26 +202,16 @@ pub fn render<W: Write>(w: &mut W, name: &str, value: Option<&OsStr>) -> Result<
 ///  D   3dostr          3DO STR
 ///   E  3g2             3GP2 (3GPP2 file format)
 /// ```
-/// The row's leading space, then three capability slots each blank or its
-/// own letter (never the header's placeholder dot), then one more separator
-/// space, then the name field at `max(15, len) + 1`. We have no notion of "is
-/// a device" at all, so that slot is always blank — a real, reportable gap
-/// rather than a guess.
+/// The row is a leading space, three capability slots each blank or its own
+/// letter, a separator space, then the name field at `max(15, len) + 1`. The
+/// device slot is always blank: this build registers no devices.
 ///
-/// Three rules here were measured rather than assumed, and the obvious
-/// implementation gets all three wrong (it did — see CONFORMANCE-FINDINGS 33):
-///
-/// 1. **`-formats` is the sorted *union*, not the two lists concatenated.**
-///    130 of the reference's 413 format names support both directions, and
-///    emitting a demuxer pass followed by a muxer pass prints every one of
-///    them twice.
-/// 2. **`-demuxers` and `-muxers` mask the flag column to the direction
-///    asked for.** `ffmpeg -demuxers` prints ` D  ` against `avi`, not
-///    ` DE `, even though `avi` muxes too.
-/// 3. **When a name exists in both directions, `-formats` prints the
-///    *muxer's* long name.** They differ for 20 of the 130 — `mp3` is
-///    `MP2/3 (MPEG audio layer 2/3)` demuxing and `MP3 (MPEG audio layer 3)`
-///    muxing, and `-formats` shows the latter.
+/// Three rules the obvious implementation gets wrong. `-formats` is the
+/// sorted *union* of both directions, not the two lists concatenated.
+/// `-demuxers` and `-muxers` mask the flag column to the direction asked for,
+/// so `avi` shows ` D  ` under one and `  E ` under the other. And where a
+/// name exists in both, `-formats` takes the muxer's long name — they differ
+/// for 20 of the reference's 130 both-way formats.
 fn write_formats<W: Write>(w: &mut W, which: &str) -> std::io::Result<()> {
     writeln!(w, "Formats:")?;
     writeln!(w, " D.. = Demuxing supported")?;
@@ -229,8 +219,7 @@ fn write_formats<W: Write>(w: &mut W, which: &str) -> std::io::Result<()> {
     writeln!(w, " ..d = Is a device")?;
     writeln!(w, " ---")?;
 
-    // Name -> (demuxes, muxes, long name). The muxer pass runs second and
-    // overwrites the long name, which is rule 3 above.
+    // The muxer pass runs second and so wins the long name.
     let mut rows: BTreeMap<&str, (bool, bool, &str)> = BTreeMap::new();
     if which != "muxers" {
         for d in vaco_registry::demuxers() {
@@ -345,15 +334,17 @@ fn write_filters<W: Write>(w: &mut W) -> std::io::Result<()> {
     writeln!(w, "  | = Source or sink filter")?;
     writeln!(w, "  ------")?;
 
-    let mut rows: Vec<&'static vaco_filter_core::FilterDesc> =
-        vaco_registry::filters().to_vec();
+    let mut rows: Vec<&'static vaco_filter_core::FilterDesc> = vaco_registry::filters().to_vec();
     rows.sort_unstable_by_key(|f| f.name);
     for f in rows {
         let timeline = match f.flags.timeline() {
             vaco_filter_core::TimelineSupport::None => '.',
             _ => 'T',
         };
-        let slice = if f.flags.contains(vaco_filter_core::FilterFlags::SLICE_THREADS) {
+        let slice = if f
+            .flags
+            .contains(vaco_filter_core::FilterFlags::SLICE_THREADS)
+        {
             'S'
         } else {
             '.'

@@ -425,16 +425,7 @@ impl Muxer for MpegTsMuxer {
     }
 
     fn write_header(&mut self) -> Result<()> {
-        // SDT first, then PAT, then PMT. Measured off `ffmpeg -c copy
-        // -f mpegts`: its first three packets are PID 0x0011, 0x0000, 0x1000,
-        // and we emitted them 0x0000, 0x1000, 0x0011. Everything after that
-        // already agreed — the periodic PAT/PMT pairs and the SDT resend land
-        // on exactly the same packet indices — so this ordering was the whole
-        // structural difference in the header.
-        //
-        // `tsw`'s `next_ats` already recorded the same observation from the
-        // other direction ("the SDT is the earlier packet in the file") while
-        // this function wrote the opposite.
+        // SDT, PAT, PMT — the order the reference writes.
         self.write_sdt_table()?;
         self.write_pat_and_pmt()?;
         self.last_pat_clock = Some(self.clock_90k);
