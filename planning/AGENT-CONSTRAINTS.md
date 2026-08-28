@@ -557,9 +557,9 @@ in the working tree. Caution about the shared file produced a broken tree.
 The tool for this is a private index:
 
 ```sh
-export GIT_INDEX_FILE=/tmp/my-idx
+export GIT_INDEX_FILE="$SCRATCH/my-idx"        # $SCRATCH, never /tmp — see below
 git read-tree HEAD                              # start from HEAD, not the shared index
-blob=$(git hash-object -w /tmp/my-half-of-the-file.rs)
+blob=$(git hash-object -w "$SCRATCH/my-half-of-the-file.rs")
 git update-index --cacheinfo 100644,$blob,path/to/shared.rs
 git commit -F msg.txt
 unset GIT_INDEX_FILE
@@ -580,11 +580,11 @@ The append-only shared documents are `planning/CONFORMANCE-FINDINGS.md`,
 of them, build your half from `HEAD`, never from the working tree:
 
 ```sh
-git show HEAD:planning/TECH-DEBT.md > /tmp/mine.md   # NOT the working-tree file
-cat /tmp/my-append.md >> /tmp/mine.md
-export GIT_INDEX_FILE=/tmp/my-idx
+git show HEAD:planning/TECH-DEBT.md > "$SCRATCH/mine.md"   # NOT the working-tree file
+cat "$SCRATCH/my-append.md" >> "$SCRATCH/mine.md"
+export GIT_INDEX_FILE="$SCRATCH/my-idx"
 git read-tree HEAD
-blob=$(git hash-object -w /tmp/mine.md)
+blob=$(git hash-object -w "$SCRATCH/mine.md")
 git update-index --cacheinfo 100644,$blob,planning/TECH-DEBT.md
 git commit -F msg.txt
 unset GIT_INDEX_FILE
@@ -613,6 +613,15 @@ git show HEAD:planning/TECH-DEBT.md | grep -q "a distinctive phrase from your ro
 
 If it is missing, someone landed between your read and your write. Rebuild from
 the *new* `HEAD` and commit again; do not rewrite their commit.
+
+**Use your own scratch directory, never `/tmp`.** `$SCRATCH` here means the
+session scratchpad path your environment gives you. This recipe used to say
+`/tmp/my-idx` and `/tmp/mine.md` literally, which meant every agent running it
+used the *same two paths at the same time*. One commit landed carrying the
+right diff under another agent's commit message, because two agents' message
+files collided in `/tmp`. Nothing was lost and the diff was correct — it was
+simply labelled as somebody else's work, which is the same way the record
+stops being trustworthy.
 
 Neither failure loses work permanently — an absorbed append is misattributed and
 a reverted one is still in your working tree — but both make the record lie, and
