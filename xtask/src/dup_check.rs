@@ -74,6 +74,19 @@ const DISTINCT: &[(&str, &str)] = &[
         "vaco-frame: the frame model. vaco-demux-matroska: a laced block frame.",
     ),
     (
+        "ImageDecoder",
+        "vaco-codec-pnm: pbm/pgm/ppm/pam/pfm/phm. vaco-codec-image-simple: \
+         bmp/pcx/tga/sgi/xwd/xbm. Same small SendReceive-over-Machine \
+         wrapper shape, deliberately duplicated rather than shared, since \
+         each wraps a disjoint set of decode functions for a codec crate \
+         neither owns.",
+    ),
+    (
+        "ImageEncoder",
+        "vaco-codec-pnm and vaco-codec-image-simple, same reason as \
+         ImageDecoder above.",
+    ),
+    (
         "Label",
         "vaco-chlayout: a channel label. vaco-filter-graph: a link label.",
     ),
