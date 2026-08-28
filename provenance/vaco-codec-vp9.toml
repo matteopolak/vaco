@@ -1,0 +1,69 @@
+[[table]]
+name   = "PARETO_TABLE"
+file   = "crates/codec/vaco-codec-vp9/src/tables.rs"
+source = "vp9-bitstream-spec-v0.6"
+clause = "§10.3, pareto_table[128][8]"
+method = "transcribed"
+
+[[table]]
+name   = "INV_MAP_TABLE"
+file   = "crates/codec/vaco-codec-vp9/src/tables.rs"
+source = "vp9-bitstream-spec-v0.6"
+clause = "§6.3.5, inv_map_table[255]"
+method = "transcribed"
+
+[[table]]
+name   = "COEFBAND_8X8PLUS"
+file   = "crates/codec/vaco-codec-vp9/src/tables.rs"
+source = "vp9-bitstream-spec-v0.6"
+clause = "§6.4.24, coefband_8x8plus[1024]"
+method = "transcribed"
+
+[[table]]
+name   = "DEFAULT_SCAN_8X8"
+file   = "crates/codec/vaco-codec-vp9/src/tables.rs"
+source = "vp9-bitstream-spec-v0.6"
+clause = "§10.1, default_scan_8x8[64]"
+method = "transcribed"
+
+[[table]]
+name   = "COL_SCAN_8X8"
+file   = "crates/codec/vaco-codec-vp9/src/tables.rs"
+source = "vp9-bitstream-spec-v0.6"
+clause = "§10.1, col_scan_8x8[64]"
+method = "transcribed"
+
+[[table]]
+name   = "ROW_SCAN_8X8"
+file   = "crates/codec/vaco-codec-vp9/src/tables.rs"
+source = "vp9-bitstream-spec-v0.6"
+clause = "§10.1, row_scan_8x8[64]"
+method = "transcribed"
+
+[[table]]
+name   = "DEFAULT_SCAN_16X16"
+file   = "crates/codec/vaco-codec-vp9/src/tables.rs"
+source = "vp9-bitstream-spec-v0.6"
+clause = "§10.1, default_scan_16x16[256]"
+method = "transcribed"
+
+[[table]]
+name   = "COL_SCAN_16X16"
+file   = "crates/codec/vaco-codec-vp9/src/tables.rs"
+source = "vp9-bitstream-spec-v0.6"
+clause = "§10.1, col_scan_16x16[256]"
+method = "transcribed"
+
+[[table]]
+name   = "ROW_SCAN_16X16"
+file   = "crates/codec/vaco-codec-vp9/src/tables.rs"
+source = "vp9-bitstream-spec-v0.6"
+clause = "§10.1, row_scan_16x16[256]"
+method = "transcribed"
+
+[[table]]
+name   = "DEFAULT_SCAN_32X32"
+file   = "crates/codec/vaco-codec-vp9/src/tables.rs"
+source = "vp9-bitstream-spec-v0.6"
+clause = "§10.1, default_scan_32x32[1024]"
+method = "transcribed"

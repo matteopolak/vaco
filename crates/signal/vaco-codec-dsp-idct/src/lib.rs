@@ -24,6 +24,7 @@
 //! | [`h264`] | ITU-T H.264 §8.5.12.2, §8.5.13.2, §8.5.10, §8.5.11.1 | 4×4 and 8×8 residual transforms, the `Intra_16x16` luma DC Hadamard, the 2×2/2×4 chroma DC Hadamard |
 //! | [`hevc`] | ITU-T H.265 §8.6.4.2 | 4×4–32×32 DCT-II (one shared integer matrix, per eq. 8-317) and the 4×4 DST-VII used for intra luma |
 //! | [`mpeg2`] | ISO/IEC 13818-2 Annex A / IEEE 1180 | the classical real-valued 8×8 IDCT, built on [`vaco_tx`]'s existing DCT machinery, to the accuracy the standard requires rather than a normative bit pattern |
+//! | [`vp9`] | VP9 Bitstream & Decoding Process Specification v0.6 §8.7 | the 4/8/16/32-point inverse DCT, 4/8/16-point inverse ADST, and the lossless inverse Walsh-Hadamard transform, plus the row/column 2-D combination |
 //!
 //! # Why this is not built on `vaco-tx`'s transforms, except for MPEG-2
 //!
@@ -94,3 +95,4 @@ pub mod h264;
 pub mod hevc;
 pub mod mpeg2;
 mod util;
+pub mod vp9;

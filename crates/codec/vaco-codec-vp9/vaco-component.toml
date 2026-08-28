@@ -1,0 +1,10 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+
+[[component]]
+kind      = "decoder"
+name      = "vp9"
+long_name = "VP9 (key-frame intra decode; VP9 Bitstream & Decoding Process Specification v0.6)"
+feature   = "codec-vp9"
+ctor      = "vaco_codec_vp9::VP9_DECODER"
+media     = "video"
+codec     = "vp9"

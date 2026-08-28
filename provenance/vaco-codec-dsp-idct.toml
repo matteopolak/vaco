@@ -4,3 +4,10 @@ file   = "crates/signal/vaco-codec-dsp-idct/src/hevc_matrix.rs"
 source = "itu-t-h265-202108"
 clause = "clause 8.6.4.2, equations (8-318)-(8-321)"
 method = "derived"
+
+[[table]]
+name   = "COS64_LOOKUP"
+file   = "crates/signal/vaco-codec-dsp-idct/src/vp9.rs"
+source = "vp9-bitstream-spec-v0.6"
+clause = "§8.7.1.1, cos64_lookup[33]"
+method = "transcribed"
