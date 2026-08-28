@@ -143,57 +143,103 @@ fn the_trailer_patches_total_frame_and_length_counts() {
     assert_eq!(demux.streams().len(), 2);
 }
 
-/// An H.264 stream sourced from a length-prefixed container (MP4's `avcC`,
-/// typically via `-c copy`) must be reframed to Annex B before it is a
-/// legal AVI `movi` chunk.
+/// A minimal, well-formed `AvcDecoderConfigurationRecord`: one SPS, one PPS.
+fn avcc(sps: &[u8], pps: &[u8]) -> Vec<u8> {
+    let mut r = vec![1, sps[1], sps[2], sps[3], 0xFF, 0xE1];
+    r.extend_from_slice(&(u16::try_from(sps.len()).unwrap()).to_be_bytes());
+    r.extend_from_slice(sps);
+    r.push(1);
+    r.extend_from_slice(&(u16::try_from(pps.len()).unwrap()).to_be_bytes());
+    r.extend_from_slice(pps);
+    r
+}
+
+/// An H.264 stream sourced from a length-prefixed container (MP4's `avcC`)
+/// keeps that framing in AVI too: measured against `ffmpeg 8.1 -c copy -f
+/// avi` on an `avc1`-tagged MP4 source, which writes `strf`'s `FourCC` as
+/// `avc1` and copies the source `avcC` in verbatim, length prefixes and all
+/// — it does not reframe to Annex B the way MPEG-TS/`h264_mp4toannexb`
+/// muxers do.
 #[test]
-fn a_length_prefixed_h264_sample_is_rewritten_to_annex_b() {
+fn a_length_prefixed_h264_sample_keeps_its_framing_and_gets_avc1_avcc() {
     let sink = MemorySink::new();
     let shared: SharedBytes = sink.shared();
     let mut mux = vaco_mux_avi::AviMuxer::new(Box::new(sink), &FormatOptions::default()).unwrap();
 
+    let sps = [0x67, 0x64, 0x00, 0x0a, 0xAA];
+    let pps = [0x68, 0xEB];
     let mut params = video_params(64, 48, (25, 1));
     if let Some(v) = &mut params.video {
         v.nal_length_size = Some(4);
     }
+    let record = avcc(&sps, &pps);
+    params.extradata = Some(record.clone());
     let v = mux.add_stream(&params).unwrap();
     mux.write_header().unwrap();
 
-    // Two 4-byte-length-prefixed NAL units, back to back — exactly what an
-    // `avcC`-framed MP4 sample copies out as.
-    let nal_a = [0x67, 0xAA, 0xBB]; // fake SPS
-    let nal_b = [0x68, 0xCC]; // fake PPS
+    // A single 4-byte-length-prefixed NAL, exactly what an `avcC`-framed MP4
+    // sample copies out as.
+    let nal = [0x65, 0x88, 0x84];
     let mut sample = Vec::new();
-    sample.extend_from_slice(&(nal_a.len() as u32).to_be_bytes());
-    sample.extend_from_slice(&nal_a);
-    sample.extend_from_slice(&(nal_b.len() as u32).to_be_bytes());
-    sample.extend_from_slice(&nal_b);
+    sample.extend_from_slice(&(nal.len() as u32).to_be_bytes());
+    sample.extend_from_slice(&nal);
 
     mux.write_packet(&packet(v, &sample, true)).unwrap();
     mux.write_trailer().unwrap();
 
     let bytes = shared.snapshot();
-    // The length prefix (`00 00 00 03`/`00 00 00 02`) must not appear
-    // anywhere in the output; Annex B start codes must, once per NAL unit.
-    let mut expected_annexb = Vec::new();
-    expected_annexb.extend_from_slice(&[0, 0, 0, 1]);
-    expected_annexb.extend_from_slice(&nal_a);
-    expected_annexb.extend_from_slice(&[0, 0, 0, 1]);
-    expected_annexb.extend_from_slice(&nal_b);
-    let windows_match = bytes
-        .windows(expected_annexb.len())
-        .any(|w| w == expected_annexb.as_slice());
+    // `strf`'s FourCC is `avc1`, not `H264`, and the source's own `avcC`
+    // record appears verbatim somewhere in `strf`.
     assert!(
-        windows_match,
-        "expected the Annex-B-reframed sample to appear verbatim in the muxed bytes"
+        bytes.windows(b"avc1".len()).any(|w| w == b"avc1"),
+        "expected the strf FourCC to be avc1"
+    );
+    assert!(
+        bytes.windows(record.len()).any(|w| w == record.as_slice()),
+        "expected the source avcC record to appear verbatim in strf"
+    );
+    // The length prefix must survive unconverted — no Annex B start code
+    // for this NAL anywhere in the output.
+    let mut annexb = vec![0, 0, 0, 1];
+    annexb.extend_from_slice(&nal);
+    assert!(
+        !bytes.windows(annexb.len()).any(|w| w == annexb.as_slice()),
+        "expected the sample to stay length-prefixed, not be reframed to Annex B"
     );
 
-    // And the chunk's declared length must match the *converted* payload
-    // (12 bytes: two 4-byte start codes plus 3+2 bytes of NAL data), not the
-    // original 10-byte length-prefixed sample.
+    // And the chunk's declared length matches the original length-prefixed
+    // sample exactly, since nothing rewrote it.
     let mut demux = open(bytes);
     let p = demux.read_packet().unwrap();
-    assert_eq!(p.len, expected_annexb.len());
+    assert_eq!(p.len, sample.len());
+}
+
+/// The Annex-B counterpart: a source with no length-prefix framing at all
+/// (`nal_length_size` unset — MPEG-TS's own convention) is written with the
+/// plain `H264` `FourCC` and no configuration record, unconverted — measured
+/// against the reference on an MPEG-TS source, which writes `H264`/
+/// `is_avc=false`/`nal_length_size=0` in that case, not `avc1`.
+#[test]
+fn an_annex_b_h264_sample_keeps_h264_and_gets_no_config_record() {
+    let sink = MemorySink::new();
+    let shared: SharedBytes = sink.shared();
+    let mut mux = vaco_mux_avi::AviMuxer::new(Box::new(sink), &FormatOptions::default()).unwrap();
+
+    let v = mux.add_stream(&video_params(64, 48, (25, 1))).unwrap();
+    mux.write_header().unwrap();
+
+    let nal = [0, 0, 0, 1, 0x65, 0x88, 0x84];
+    mux.write_packet(&packet(v, &nal, true)).unwrap();
+    mux.write_trailer().unwrap();
+
+    let bytes = shared.snapshot();
+    assert!(bytes.windows(b"H264".len()).any(|w| w == b"H264"));
+    assert!(!bytes.windows(b"avc1".len()).any(|w| w == b"avc1"));
+
+    let mut demux = open(bytes);
+    let p = demux.read_packet().unwrap();
+    // Written verbatim: the Annex-B start code is still there, unconverted.
+    assert_eq!(p.payload(), &nal[..]);
 }
 
 /// AAC with no extradata (the shape MPEG-TS's own ADTS framing produces,
@@ -337,47 +383,28 @@ fn a_codec_with_no_avi_mapping_is_rejected_not_silently_wrong() {
     assert!(mux.add_stream(&p).is_err());
 }
 
-/// Wraps the two real `vaco-bsf-h2645` filters — not a hand test-double —
-/// so this proves the muxer's `check_bitstream` request lands on the actual
-/// filter a real pipeline would supply.
-struct OnlyH2645ToAnnexb;
+/// A `BsfProvider` that refuses to open any filter, so a test driven through
+/// it fails loudly if the muxer ever asks for one.
+struct NoBsfs;
 
-impl BsfProvider for OnlyH2645ToAnnexb {
+impl BsfProvider for NoBsfs {
     fn open(
         &self,
-        name: &str,
-        params: &CodecParameters,
+        _name: &str,
+        _params: &CodecParameters,
     ) -> vaco_core::Result<Box<dyn BitstreamFilter>> {
-        match name {
-            "h264_mp4toannexb" => (vaco_bsf_h2645::h264_mp4toannexb::DESC.build)(params),
-            "hevc_mp4toannexb" => (vaco_bsf_h2645::hevc_mp4toannexb::DESC.build)(params),
-            _ => Err(vaco_core::Error::Unsupported(
-                "test provider knows only the mp4toannexb pair",
-            )),
-        }
+        Err(vaco_core::Error::Unsupported("test provider grants no filters"))
     }
 }
 
-/// A minimal, well-formed `AvcDecoderConfigurationRecord`: one SPS, one PPS.
-fn avcc(sps: &[u8], pps: &[u8]) -> Vec<u8> {
-    let mut r = vec![1, sps[1], sps[2], sps[3], 0xFF, 0xE1];
-    r.extend_from_slice(&(u16::try_from(sps.len()).unwrap()).to_be_bytes());
-    r.extend_from_slice(sps);
-    r.push(1);
-    r.extend_from_slice(&(u16::try_from(pps.len()).unwrap()).to_be_bytes());
-    r.extend_from_slice(pps);
-    r
-}
-
-/// `check_bitstream` plus a real `BsfProvider`, driven through `MuxBuilder`/
-/// `MuxWriter` (M6), produces the SPS/PPS-spliced Annex B this crate's own
-/// `maybe_convert` cannot: that method has no configuration record to read
-/// parameter sets out of and only ever does the framing half. This is the
-/// comparison plan 19's brief for this work asked for before touching
-/// `maybe_convert` at all — proof that the wired-up path is *more* correct
-/// than the standalone one, not merely different from it.
+/// Driven through `MuxBuilder`/`MuxWriter` (M6) with a `BsfProvider` that
+/// refuses every filter, a length-prefixed H.264 stream still muxes
+/// successfully and keeps its framing — confirming `check_bitstream` never
+/// asks M6 for anything (the trait's default `Keep`), matching
+/// [`a_length_prefixed_h264_sample_keeps_its_framing_and_gets_avc1_avcc`]'s
+/// direct-`Muxer` result exactly.
 #[test]
-fn check_bitstream_through_mux_writer_gets_the_splice_maybe_convert_alone_cannot() {
+fn check_bitstream_never_requests_a_filter_through_mux_writer() {
     let sink = MemorySink::new();
     let shared: SharedBytes = sink.shared();
     let mux = vaco_mux_avi::AviMuxer::new(Box::new(sink), &FormatOptions::default()).unwrap();
@@ -388,17 +415,18 @@ fn check_bitstream_through_mux_writer_gets_the_splice_maybe_convert_alone_cannot
     if let Some(v) = &mut params.video {
         v.nal_length_size = Some(4);
     }
-    params.extradata = Some(avcc(&sps, &pps));
+    let record = avcc(&sps, &pps);
+    params.extradata = Some(record.clone());
 
-    let mut builder = MuxBuilder::new(Box::new(mux), &FormatOptions::default())
-        .with_bsfs(Arc::new(OnlyH2645ToAnnexb));
+    let mut builder =
+        MuxBuilder::new(Box::new(mux), &FormatOptions::default()).with_bsfs(Arc::new(NoBsfs));
     let v = builder.add_stream(&params, Rational::new(1, 25)).unwrap();
     let mut writer = builder.open().unwrap();
 
-    let idr = [0x65, 0x88, 0x84];
+    let nal = [0x65, 0x88, 0x84];
     let mut lp = Vec::new();
-    lp.extend_from_slice(&(u32::try_from(idr.len()).unwrap()).to_be_bytes());
-    lp.extend_from_slice(&idr);
+    lp.extend_from_slice(&(u32::try_from(nal.len()).unwrap()).to_be_bytes());
+    lp.extend_from_slice(&nal);
     let mut pkt = packet(v, &lp, true);
     pkt.pts = vaco_core::Timestamp::new(0);
     pkt.dts = pkt.pts;
@@ -406,31 +434,8 @@ fn check_bitstream_through_mux_writer_gets_the_splice_maybe_convert_alone_cannot
     writer.finish().unwrap();
 
     let bytes = shared.snapshot();
-    let mut expected = Vec::new();
-    for u in [&sps[..], &pps[..], &idr[..]] {
-        expected.extend_from_slice(&[0, 0, 0, 1]);
-        expected.extend_from_slice(u);
-    }
-    let found = bytes
-        .windows(expected.len())
-        .any(|w| w == expected.as_slice());
-    assert!(
-        found,
-        "expected the SPS/PPS-spliced sample verbatim in the muxed bytes; \
-         maybe_convert's own framing-only fallback could never produce this"
-    );
-
-    // And the *unspliced* framing-only shape — what the old, standalone path
-    // alone would have written — must NOT appear: this is a real functional
-    // difference, not just an additional correct answer alongside the old one.
-    let mut framing_only = Vec::new();
-    framing_only.extend_from_slice(&[0, 0, 0, 1]);
-    framing_only.extend_from_slice(&idr);
-    let framing_only_appears_alone = bytes
-        .windows(framing_only.len())
-        .any(|w| w == framing_only.as_slice())
-        && !found;
-    assert!(!framing_only_appears_alone);
+    assert!(bytes.windows(record.len()).any(|w| w == record.as_slice()));
+    assert!(bytes.windows(lp.len()).any(|w| w == lp.as_slice()));
 }
 
 /// `avih.dwMicroSecPerFrame` tracks the *source* time base a caller supplies
@@ -465,4 +470,201 @@ fn avih_dwmicrosecperframe_tracks_the_source_time_base() {
     let body = &bytes[avih_at + 8..];
     let us_per_frame = u32::from_le_bytes(body[0..4].try_into().unwrap());
     assert_eq!(us_per_frame, 78);
+}
+
+fn le32_at(bytes: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
+}
+
+fn find_all(bytes: &[u8], tag: [u8; 4]) -> Vec<usize> {
+    (0..bytes.len().saturating_sub(3))
+        .filter(|&i| bytes[i..i + 4] == tag)
+        .collect()
+}
+
+/// `avih`'s three fixed-content fields: `dwFlags`, `dwSuggestedBufferSize`,
+/// and the `JUNK` reservations flanking every `strl` and `hdrl` itself —
+/// measured constant across four fixtures regardless of stream count, codec
+/// or content, so this only has to check they are exactly those constants.
+#[test]
+fn avih_flags_suggested_buffer_and_junk_reservations_match_the_measured_constants() {
+    let (bytes, _v, _a) = mux_sample();
+
+    let avih_at = bytes.windows(4).position(|w| w == b"avih").unwrap();
+    let avih_body = &bytes[avih_at + 8..];
+    assert_eq!(le32_at(avih_body, 12), 0x0000_0910, "dwFlags");
+    assert_eq!(le32_at(avih_body, 28), 1_048_576, "dwSuggestedBufferSize");
+
+    // One `strl` JUNK per stream (two streams here), each exactly 4120
+    // bytes; one `hdrl`-level JUNK of 260; one RIFF-level JUNK of 1016.
+    let junk_positions = find_all(&bytes, *b"JUNK");
+    let junk_sizes: Vec<u32> = junk_positions
+        .iter()
+        .map(|&p| le32_at(&bytes, p + 4))
+        .collect();
+    assert_eq!(junk_sizes, vec![4120, 4120, 260, 1016]);
+
+    // The per-strl JUNK is an inert `AVISUPERINDEX` header: `wLongsPerEntry
+    // = 4` and this stream's own `dwChunkId` (`00dc` for video stream 0,
+    // `01wb` for audio stream 1 here), everything else zero.
+    let video_junk = junk_positions[0] + 8;
+    assert_eq!(le16_at(&bytes, video_junk), 4, "wLongsPerEntry (video)");
+    assert_eq!(&bytes[video_junk + 8..video_junk + 12], b"00dc");
+    let audio_junk = junk_positions[1] + 8;
+    assert_eq!(le16_at(&bytes, audio_junk), 4, "wLongsPerEntry (audio)");
+    assert_eq!(&bytes[audio_junk + 8..audio_junk + 12], b"01wb");
+
+    // The hdrl-level JUNK is a `LIST 'odml'` holding one `dmlh` chunk
+    // (`AVIEXTHEADER`), declared 248 bytes, tagged `JUNK` instead of `LIST`.
+    let hdrl_junk = junk_positions[2] + 8;
+    assert_eq!(&bytes[hdrl_junk..hdrl_junk + 8], b"odmldmlh");
+    assert_eq!(le32_at(&bytes, hdrl_junk + 8), 248);
+}
+
+/// `strh.dwSuggestedBufferSize` is the largest single chunk a stream wrote,
+/// not a fixed size — measured on both video and audio across four
+/// fixtures. `avih.dwMaxBytesPerSec` is the sum of every stream's own
+/// declared `bit_rate`, in bytes/sec, truncated.
+#[test]
+fn strh_suggested_buffer_is_the_largest_chunk_and_avih_sums_bit_rates() {
+    let sink = MemorySink::new();
+    let shared: SharedBytes = sink.shared();
+    let mut mux = vaco_mux_avi::AviMuxer::new(Box::new(sink), &FormatOptions::default()).unwrap();
+
+    let mut vp = video_params(64, 48, (25, 1));
+    vp.bit_rate = Some(8000); // 1000 bytes/sec
+    let mut ap = audio_params(8000);
+    ap.bit_rate = Some(16000); // 2000 bytes/sec
+
+    let v = mux.add_stream(&vp).unwrap();
+    let a = mux.add_stream(&ap).unwrap();
+    mux.write_header().unwrap();
+    mux.write_packet(&packet(v, &[0xAA; 5], true)).unwrap();
+    mux.write_packet(&packet(v, &[0xBB; 40], false)).unwrap();
+    mux.write_packet(&packet(a, &[0u8; 20], true)).unwrap();
+    mux.write_trailer().unwrap();
+
+    let bytes = shared.snapshot();
+
+    let avih_at = bytes.windows(4).position(|w| w == b"avih").unwrap();
+    let avih_body = &bytes[avih_at + 8..];
+    assert_eq!(le32_at(avih_body, 4), 1000 + 2000, "dwMaxBytesPerSec");
+
+    let strh_positions = find_all(&bytes, *b"strh");
+    let suggested_buffers: Vec<u32> = strh_positions
+        .iter()
+        .map(|&p| le32_at(&bytes, p + 8 + 36))
+        .collect();
+    // Video's largest chunk is 40 bytes; audio's only chunk is 20.
+    assert_eq!(suggested_buffers, vec![40, 20]);
+}
+
+/// Measured: an audio stream's `strh.fccHandler` is the raw `u32` value `1`
+/// regardless of its actual `wFormatTag` — an AAC-tagged stream (`wFormatTag
+/// = 0x00FF`, nothing like `1`) measures the exact same `fccHandler` a PCM
+/// stream does, so it is a fixed placeholder, not a mirror of `wFormatTag`.
+#[test]
+fn audio_fcc_handler_is_the_fixed_value_one_not_the_format_tag() {
+    let sink = MemorySink::new();
+    let shared: SharedBytes = sink.shared();
+    let mut mux = vaco_mux_avi::AviMuxer::new(Box::new(sink), &FormatOptions::default()).unwrap();
+    let mut p = CodecParameters::audio();
+    p.codec_id = Some(CodecId::Aac);
+    p.extradata = Some(vec![0x12, 0x10]);
+    if let Some(a) = &mut p.audio {
+        a.sample_rate = 44_100;
+    }
+    let a = mux.add_stream(&p).unwrap();
+    mux.write_header().unwrap();
+    mux.write_packet(&packet(a, &[0u8; 8], true)).unwrap();
+    mux.write_trailer().unwrap();
+
+    let bytes = shared.snapshot();
+    let strh_at = bytes.windows(4).position(|w| w == b"strh").unwrap();
+    assert_eq!(le32_at(&bytes, strh_at + 8 + 4), 1);
+}
+
+fn le16_at(bytes: &[u8], offset: usize) -> u16 {
+    u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap())
+}
+
+/// Measured: a video stream's `strh.rcFrame` is `{0, 0, width, height}`, not
+/// all zero, and `strf.biSizeImage` is `width * height * 3` — the raw-RGB
+/// byte count `biBitCount = 24` implies — even though the actual codec is
+/// compressed. Both were previously left `0`.
+#[test]
+fn video_rcframe_and_bisizeimage_are_not_left_zero() {
+    let (bytes, _v, _a) = mux_sample();
+
+    let strh_at = bytes.windows(4).position(|w| w == b"strh").unwrap();
+    let rcframe_at = strh_at + 8 + 48;
+    let rcframe: Vec<i16> = (0..4)
+        .map(|i| le16_at(&bytes, rcframe_at + i * 2).cast_signed())
+        .collect();
+    assert_eq!(rcframe, vec![0, 0, 64, 48], "strh.rcFrame");
+
+    let strf_at = bytes.windows(4).position(|w| w == b"strf").unwrap();
+    assert_eq!(
+        le32_at(&bytes, strf_at + 8 + 20),
+        64 * 48 * 3,
+        "strf.biSizeImage"
+    );
+}
+
+/// Measured: a compressed (VBR) audio stream's `strh.dwScale/dwRate` is one
+/// *frame's* duration, not one sample's — an AAC stream at 44100 Hz reduces
+/// to `256/11025` (`1024/44100`, AAC-LC's fixed frame size), not `1/44100`.
+/// `strf`'s own `nSamplesPerSec` stays the true sample rate regardless,
+/// since that field means something different from `strh`'s time base.
+#[test]
+fn compressed_audio_strh_time_base_is_one_frame_not_one_sample() {
+    let sink = MemorySink::new();
+    let shared: SharedBytes = sink.shared();
+    let mut mux = vaco_mux_avi::AviMuxer::new(Box::new(sink), &FormatOptions::default()).unwrap();
+    let mut p = CodecParameters::audio();
+    p.codec_id = Some(CodecId::Aac);
+    p.extradata = Some(vec![0x12, 0x10]);
+    if let Some(a) = &mut p.audio {
+        a.sample_rate = 44_100;
+    }
+    let a = mux.add_stream(&p).unwrap();
+    mux.write_header().unwrap();
+    mux.write_packet(&packet(a, &[0u8; 8], true)).unwrap();
+    mux.write_trailer().unwrap();
+
+    let bytes = shared.snapshot();
+    let strh_at = bytes.windows(4).position(|w| w == b"strh").unwrap();
+    let scale = le32_at(&bytes, strh_at + 8 + 20);
+    let rate = le32_at(&bytes, strh_at + 8 + 24);
+    assert_eq!((scale, rate), (256, 11025), "strh dwScale/dwRate");
+
+    let strf_at = bytes.windows(4).position(|w| w == b"strf").unwrap();
+    assert_eq!(le32_at(&bytes, strf_at + 8 + 4), 44_100, "strf nSamplesPerSec");
+}
+
+/// Measured: a compressed audio stream's `strf.nAvgBytesPerSec` is its own
+/// declared `bit_rate` divided by 8, not `sample_rate * nBlockAlign` — the
+/// same mechanism `avih.dwMaxBytesPerSec` sums across streams, applied here
+/// to one stream's own field. `nBlockAlign` itself is a separate,
+/// unresolved field — see the `write_strl` comment beside it.
+#[test]
+fn compressed_audio_avg_bytes_per_sec_comes_from_bit_rate() {
+    let sink = MemorySink::new();
+    let shared: SharedBytes = sink.shared();
+    let mut mux = vaco_mux_avi::AviMuxer::new(Box::new(sink), &FormatOptions::default()).unwrap();
+    let mut p = CodecParameters::audio();
+    p.codec_id = Some(CodecId::Aac);
+    p.extradata = Some(vec![0x12, 0x10]);
+    p.bit_rate = Some(70_303);
+    if let Some(a) = &mut p.audio {
+        a.sample_rate = 44_100;
+    }
+    let a = mux.add_stream(&p).unwrap();
+    mux.write_header().unwrap();
+    mux.write_packet(&packet(a, &[0u8; 8], true)).unwrap();
+    mux.write_trailer().unwrap();
+
+    let bytes = shared.snapshot();
+    let strf_at = bytes.windows(4).position(|w| w == b"strf").unwrap();
+    assert_eq!(le32_at(&bytes, strf_at + 8 + 8), 8787);
 }

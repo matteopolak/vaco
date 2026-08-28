@@ -15,7 +15,6 @@ vaco-limits = { path = "../../core/vaco-limits" }
 vaco-packet = { path = "../../model/vaco-packet" }
 vaco-format-core = { path = "../../format/vaco-format-core" }
 vaco-format-riff = { path = "../../format/vaco-format-riff" }
-vaco-format-nalu = { path = "../../format/vaco-format-nalu" }
 vaco-codec-core = { path = "../../signal/vaco-codec-core" }
 
 [dev-dependencies]
@@ -25,11 +24,6 @@ proptest.workspace = true
 # `vaco-demux-avi`'s own measured understanding of the format rather than
 # re-deriving a second, parallel one just for tests.
 vaco-demux-avi = { path = "../vaco-demux-avi" }
-# The comparison oracle for `check_bitstream`'s M6 request: a real
-# `h264_mp4toannexb`, not a hand-rolled test double, so the test proves this
-# muxer's *wired-up* behaviour agrees with the filter that actually splices
-# SPS/PPS — which `maybe_convert`'s own framing-only fallback never has.
-vaco-bsf-h2645 = { path = "../vaco-bsf-h2645" }
 
 [lints]
 workspace = true

@@ -1,18 +1,16 @@
 //! `AviMuxer::write_packet` over an arbitrary H.264 access unit.
 //!
-//! Finding 16 (`planning/CONFORMANCE-FINDINGS.md`) gave this crate its first
-//! real untrusted-input parsing surface: with `nal_length_size` set, every
-//! packet now runs through
-//! [`vaco_format_nalu::convert::length_prefixed_to_annexb`]'s NAL-unit walk
-//! before a single byte reaches the `movi` chunk — the same conversion
-//! `vaco-mux-mpegts`'s own `mpegts_mux_packet` fuzz target already exercises,
-//! mirrored here because the parsing code is a dependency both crates call
-//! into, not code either one owns.
+//! Every packet payload is written verbatim, whichever framing its stream
+//! declared (see `vaco-mux-avi::mux::StreamOut::config_record`'s doc
+//! comment for the measurement behind that) — so the untrusted-input surface
+//! this target actually exercises is the 600 Hz slot grid's empty-chunk
+//! backfill, which runs unconditionally, and the `strf` config-record write
+//! that a length-prefixed stream's `add_stream` call triggers once.
 //!
 //! Properties asserted beyond "does not panic":
 //!
-//! * **Output growth is bounded.** A pathological length prefix must not let
-//!   the conversion amplify the payload without limit.
+//! * **Output growth is bounded.** A packet is written byte for byte, so the
+//!   output cannot grow faster than the payload plus a small fixed overhead.
 //! * **A video timestamp does not blow past the bound its own gap implies.**
 //!   Every packet lands on the 600 Hz slot grid, backfilling every unused
 //!   slot since the last real one with a placeholder chunk — an
@@ -37,10 +35,14 @@ use vaco_packet::{Packet, PacketFlags};
 /// slow giant allocation.
 const MAX_PAYLOAD: usize = 16_384;
 
-/// Worst-case bytes the Annex-B conversion can add per byte of input — see
-/// `mpegts_mux_packet`'s identical constant for the arithmetic.
-const MAX_GROWTH_NUMERATOR: usize = 9;
-const MAX_GROWTH_DENOMINATOR: usize = 5;
+/// Stands in for a real `AVCDecoderConfigurationRecord`. This crate never
+/// looks inside `extradata` — it writes it into `strf` verbatim — so the
+/// bytes' own structure is not this target's concern (that is
+/// `vaco-parse-h264`'s and, for the container framing, `avi_demux`'s); this
+/// exists only so a length-prefixed stream has *something* non-empty to
+/// satisfy `add_stream`'s "needs its avcC/hvcC extradata" check, so the
+/// `strf`/`config_record` write path actually runs.
+const FAKE_EXTRADATA: [u8; 4] = [1, 0x64, 0, 0x0A];
 
 /// The largest grid gap one fuzz iteration is allowed to ask for. Wide
 /// enough to exercise the backfill loop and its index growth repeatedly;
@@ -79,6 +81,7 @@ fuzz_target!(|data: &[u8]| {
             frame_rate: vaco_core::Rational::new(25, 1),
             ..VideoParameters::default()
         }),
+        extradata: length_prefixed.then(|| FAKE_EXTRADATA.to_vec()),
         ..CodecParameters::new(MediaType::Video)
     };
     let Ok(video) = mux.add_stream(&params) else {
@@ -106,15 +109,18 @@ fuzz_target!(|data: &[u8]| {
     let bytes = mirror.take();
 
     if write_ok {
-        // The RIFF/hdrl header, `idx1`, a bounded multiple of the payload,
+        // The RIFF/hdrl header — dominated by the three fixed `JUNK`
+        // reservations (4120 + 260 + 1016 bytes, plus their own tag/size
+        // headers) `write_header`/`write_strl` always write regardless of
+        // payload — plus `strf`'s own `video_extradata` write, `idx1`, the
+        // payload written verbatim plus a small fixed per-chunk overhead,
         // and one 8-byte placeholder chunk plus one 16-byte index entry per
         // grid slot this packet's own `pts` skipped.
-        let header_budget = 4096;
+        let header_budget = 8192;
         let grid_budget = usize::from(pts_ticks).saturating_mul(8 + 16);
         let payload_budget = payload
             .len()
-            .saturating_mul(MAX_GROWTH_NUMERATOR)
-            .div_ceil(MAX_GROWTH_DENOMINATOR)
+            .saturating_add(16)
             .saturating_add(header_budget)
             .saturating_add(grid_budget);
         assert!(

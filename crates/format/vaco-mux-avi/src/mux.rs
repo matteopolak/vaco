@@ -29,9 +29,7 @@
 
 use vaco_codec_core::{CodecId, CodecParameters};
 use vaco_core::{Error, MediaType, Rational, Result};
-use vaco_format_core::mux::BitstreamAction;
 use vaco_format_core::{FormatOptions, Muxer, MuxerDesc, StreamSpec};
-use vaco_format_nalu::{LengthSize, convert::length_prefixed_to_annexb};
 use vaco_io::{IoOptions, IoWriter, MediaSink};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
@@ -44,9 +42,13 @@ use vaco_packet::Packet;
 /// across source frame rates, not derived from the stream's own rate.
 const GRID_RATE: Rational = Rational::new(1, 600);
 
-/// `AVIF_HASINDEX | AVIF_ISINTERLEAVED`, per the field this crate's sibling
-/// demuxer already interprets.
-const AVIH_FLAGS: u32 = 0x0000_0010 | 0x0000_0100;
+/// `AVIF_HASINDEX | AVIF_ISINTERLEAVED | AVIF_TRUSTCKTYPE`. The first two are
+/// the only ones this crate's sibling demuxer interprets; `AVIF_TRUSTCKTYPE`
+/// (0x800, "use `ckid`/`dwFlags` to decide key frames, do not guess") is
+/// measured on the reference's own output across four fixtures and was
+/// simply missing before — nothing here reads it back, but the flag word
+/// itself is part of `avih`'s fixed byte layout.
+const AVIH_FLAGS: u32 = 0x0000_0010 | 0x0000_0100 | 0x0000_0800;
 
 /// `AVIIF_KEYFRAME`.
 const AVIIF_KEYFRAME: u32 = 0x0000_0010;
@@ -55,6 +57,60 @@ const AVIIF_KEYFRAME: u32 = 0x0000_0010;
 /// the same "length unknown, read to EOF" convention
 /// [`vaco_format_riff::chunk`] documents readers already having to accept.
 const LENGTH_UNKNOWN: u32 = 0xFFFF_FFFF;
+
+/// `avih.dwSuggestedBufferSize`: 1 MiB, measured constant across every
+/// fixture tried regardless of stream count, codec or content.
+const SUGGESTED_BUFFER_SIZE: u32 = 1_048_576;
+
+/// `JUNK` reservations the reference writes at three fixed points in
+/// `hdrl`, all the same size regardless of any stream's own content:
+/// measured identical across four fixtures whose `strf` sizes ranged from
+/// 16 to 86 bytes and whose stream count and codecs varied (video-only
+/// H.264 in both `avc1` and Annex-B framing, H.264 with AAC, and PCM-only)
+/// — always exactly these three sizes, at these three points, never scaled
+/// by anything this crate has access to. No semantic content depends on
+/// the exact size; a reader ([`vaco_format_riff::chunk`]) skips any `JUNK`
+/// chunk of any length identically.
+///
+/// The bytes inside are not simply zero, though. Two of the three turned
+/// out to be an unfinished structure the reference reserves room for but
+/// never activates (tags it `JUNK` rather than the real chunk id): the
+/// per-`strl` one is an `AVISUPERINDEX` header with `wLongsPerEntry = 4`,
+/// `nEntriesInUse = 0` and this stream's own `dwChunkId` (`build_strl_junk`,
+/// which needs the stream's own chunk tag and so cannot be one shared
+/// constant); the `hdrl`-level one is a `LIST 'odml'` containing one
+/// `dmlh` (`AVIEXTHEADER`) chunk, `dwGrandFrames` and all, left `0` on
+/// every fixture regardless of the file's real frame count. The RIFF-level
+/// one measured genuinely all zero, no header of any kind.
+const STRL_JUNK_LEN: usize = 4120;
+
+/// One `strl`'s `JUNK` reservation: an inert `AVISUPERINDEX` header for
+/// `tag` (this stream's own chunk id) followed by zeroed, unused entry
+/// space. See [`STRL_JUNK_LEN`]'s doc comment for the measurement.
+fn build_strl_junk(tag: [u8; 4]) -> [u8; STRL_JUNK_LEN] {
+    let mut out = [0u8; STRL_JUNK_LEN];
+    out[0] = 4; // wLongsPerEntry, LE u16 = 4
+    out[8..12].copy_from_slice(&tag); // dwChunkId
+    out
+}
+
+/// Written once inside `hdrl`, after every `strl`: `LIST 'odml'` (`dmlh`
+/// filled with zeros), tagged `JUNK` instead of `LIST`.
+const HDRL_JUNK: [u8; 260] = {
+    let mut out = [0u8; 260];
+    out[0] = b'o';
+    out[1] = b'd';
+    out[2] = b'm';
+    out[3] = b'l';
+    out[4] = b'd';
+    out[5] = b'm';
+    out[6] = b'l';
+    out[7] = b'h';
+    out[8] = 248; // dmlh's own declared size, LE u32 = 248
+    out
+};
+/// Written once at the top RIFF level, between `hdrl`'s `LIST` and `movi`'s.
+const RIFF_JUNK: [u8; 1016] = [0; 1016];
 
 /// The registry descriptor.
 pub const MUXER: MuxerDesc = MuxerDesc {
@@ -71,16 +127,36 @@ fn open_muxer(sink: Box<dyn MediaSink>) -> Result<Box<dyn Muxer>> {
     Ok(Box::new(AviMuxer::new(sink, &FormatOptions::default())?))
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct StreamOut {
     is_video: bool,
+    /// Also this stream's answer to [`Muxer::stream_time_base`] — the unit
+    /// the generic interleave/rescale machinery upstream delivers packets
+    /// in, not just an internal bookkeeping value. See
+    /// [`StreamOut::strh_time_base`]'s doc comment for why the two are not
+    /// always the same number.
     time_base: Rational,
+    /// The value `strh.dwScale`/`dwRate` actually declares. Equal to
+    /// `time_base` for video and CBR audio; for a compressed (VBR) audio
+    /// stream it is one *frame's* duration instead of one sample's — see
+    /// `add_stream`'s doc comment on the assignment for the measurement and
+    /// why the two fields must stay separate.
+    strh_time_base: Rational,
     /// `dwSampleSize`: `0` for video and VBR audio, else the CBR block size.
     sample_size: u32,
     /// Byte offset, within the in-memory `hdrl` buffer, of this stream's
     /// `strh.dwLength` field — patched at `write_trailer` once the true
     /// count is known.
     length_field_at: usize,
+    /// Byte offset of this stream's `strh.dwSuggestedBufferSize` field,
+    /// patched the same way from [`StreamOut::max_chunk_size`].
+    suggested_buffer_at: usize,
+    /// The largest single chunk (`movi` payload, not counting the chunk
+    /// header) written for this stream so far. Measured: the reference's own
+    /// `strh.dwSuggestedBufferSize` is exactly this — the largest sample,
+    /// not a fixed size or a running average — confirmed on both video and
+    /// audio streams across four fixtures.
+    max_chunk_size: u32,
     /// Running frame (or, for CBR audio, sample) count — for a video stream
     /// on the 600 Hz grid ([`AviMuxer::write_packet`]), this instead tracks
     /// the next unfilled slot, which **is** the correct `dwLength`/
@@ -113,25 +189,51 @@ struct StreamOut {
     /// however far the source's clock had already run before this stream
     /// started.
     grid_origin: Option<i64>,
+    /// The most recent video packet's own `duration`, in [`GRID_RATE`]
+    /// ticks. Video-only; used by [`AviMuxer::backfill_trailing_video_slots`]
+    /// to extend the grid past the *last* real frame's own slot by that
+    /// frame's own duration, matching the reference — the last frame still
+    /// spans time even though nothing on the grid marks its far edge except
+    /// the file simply ending there.
+    last_video_duration_ticks: i64,
     /// Audio's `wFormatTag`.
     audio_format_tag: u16,
+    /// The stream's real sample rate — `strf`'s `nSamplesPerSec`, and the
+    /// basis for `nAvgBytesPerSec`. Kept separate from `time_base`: a
+    /// compressed stream's `time_base` is one *frame*'s duration
+    /// (`compressed_audio_frame_size`), not one sample's, so `time_base.den`
+    /// alone no longer says what the true sample rate is once that applies.
+    sample_rate: u32,
     channels: u16,
     bits_per_sample: u16,
-    /// `Some` when this video stream needs converting from length-prefixed
-    /// (MP4/`avcC`/`hvcC`-style) framing to Annex B before it goes into a
-    /// `movi` chunk — see [`AviMuxer::maybe_convert`]. `None` for anything
-    /// that either is not H.264/HEVC or already declared Annex-B framing
-    /// (`nal_length_size` unset or `0`, `vaco_codec_core::VideoParameters`'s
-    /// own convention for "already start-code framed").
-    length_size: Option<LengthSize>,
-    /// Set the first time [`AviMuxer::check_bitstream`] answers `Insert` for
-    /// this stream, so the second ask in the same chain-building loop
-    /// answers `Keep` instead of the same name again — a muxer that keeps
-    /// answering `Insert` is a loop, per
-    /// [`vaco_format_core::mux::MuxWriter`]'s own "the duplicate-name check
-    /// ... stops that from looping" doc, and this is the state that check
-    /// needs a muxer to carry.
-    bsf_decided: bool,
+    /// `WAVEFORMATEX`'s trailing `cbSize`-prefixed extension — AAC's raw
+    /// `AudioSpecificConfig`, or MS-ADPCM-style coefficients. `None` writes
+    /// the classic 16-byte `WAVEFORMATEX` with no `cbSize` field at all,
+    /// which `vaco_format_riff::wave::WaveFormatEx::parse` (and the
+    /// reference) both accept as "no extension".
+    audio_extradata: Option<Vec<u8>>,
+    /// The source's own H.264/HEVC extradata, written into `strf` after
+    /// `BITMAPINFOHEADER` verbatim, whichever framing it is already in —
+    /// `AVCDecoderConfigurationRecord`/`HEVCDecoderConfigurationRecord` for a
+    /// length-prefixed source, or start-code-prefixed SPS/PPS for an Annex-B
+    /// one. Measured on both: an H.264 sample sourced from a length-prefixed
+    /// MP4 stays length-prefixed and writes its `avcC` after `strf`, tagged
+    /// `avc1`; one sourced from Annex-B MPEG-TS stays Annex-B and writes its
+    /// in-band SPS/PPS (with start codes) after `strf` just the same, tagged
+    /// plain `H264` — this crate converts neither the payload framing nor
+    /// the extradata shape, only ever copying what the source already has.
+    video_extradata: Option<Vec<u8>>,
+    /// `VideoParameters::has_b_frames`. Video-only; drives
+    /// [`AviMuxer::maybe_backfill_leading_audio_gap`]'s leading-gap size for
+    /// a *different* stream, which is why it needs to be readable off this
+    /// one rather than recomputed there.
+    has_b_frames: u8,
+    /// `CodecParameters::bit_rate`, in bits per second. Feeds
+    /// `avih.dwMaxBytesPerSec`, which [`write_avih`] sums across every
+    /// stream and divides by 8 — measured on four fixtures (video-only,
+    /// audio-only, and one of each): the reference's own value matches that
+    /// sum exactly, truncated, including `0` when nothing declared a rate.
+    bit_rate: Option<u64>,
 }
 
 /// One `idx1` entry, with an absolute file position not yet converted to the
@@ -163,12 +265,6 @@ pub struct AviMuxer {
     /// to.
     movi_fourcc_pos: u64,
     idx: Vec<IdxEntry>,
-    /// Bookkeeping for [`maybe_convert`](Self::maybe_convert)'s
-    /// length-prefixed-to-Annex-B rewrite — permissive because a conversion
-    /// this crate itself drives is not attacker-controlled the way a
-    /// demuxer's input is; it only bounds runaway output on a malformed
-    /// length prefix.
-    convert_budget: Budget,
     /// Bounds the 600 Hz grid's empty-slot backfill in
     /// [`AviMuxer::write_packet`]. Unlike `convert_budget`, the loop this
     /// guards is attacker-controlled the ordinary way: the gap between two
@@ -195,7 +291,6 @@ impl AviMuxer {
             movi_size_at: 0,
             movi_fourcc_pos: 0,
             idx: Vec::new(),
-            convert_budget: Budget::new(Limits::permissive()),
             grid_budget: Budget::new(Limits::permissive()),
         })
     }
@@ -204,50 +299,6 @@ impl AviMuxer {
     #[must_use]
     pub const fn position(&self) -> u64 {
         self.out.pos()
-    }
-
-    /// Rewrite `payload` to Annex B if the stream at `index` declared
-    /// length-prefixed framing at [`Muxer::add_stream`] time.
-    ///
-    /// AVI has no out-of-band configuration record the way MP4's `avcC`/
-    /// `hvcC` do, so an H.264/HEVC stream sourced from a length-prefixed
-    /// container (typically MP4, via `-c copy`) must be reframed with start
-    /// codes before it can go into a `movi` chunk — otherwise the "length"
-    /// this crate would write is a byte count for a NAL unit stream no AVI
-    /// reader's convention matches (the two aren't different lengths of the
-    /// same bytes; the bytes are structured differently). Mirrors
-    /// `vaco-mux-mpegts::MpegTsMuxer::maybe_convert`, which solves the exact
-    /// same problem for the exact same codecs.
-    ///
-    /// # Why this is not the whole story any more
-    ///
-    /// This is pure framing — it does not splice SPS/PPS in front of a
-    /// keyframe the way `vaco-bsf-h2645::h264_mp4toannexb` does, because it
-    /// cannot: AVI's own `strf` carries no configuration record for this
-    /// crate to read parameter sets out of, and this method never sees more
-    /// than one packet at a time. A caller driving this muxer through
-    /// [`vaco_format_core::mux::MuxWriter`] with a real
-    /// [`vaco_format_core::mux::BsfProvider`] gets the correct, spliced
-    /// conversion from [`AviMuxer::check_bitstream`]'s M6 request instead,
-    /// and arrives here already in Annex B — the guard below is what stops
-    /// that already-converted payload from being reframed a second time as
-    /// if it were still length-prefixed. A caller driving [`Muxer`] directly
-    /// (every existing test, and any caller with no filter chain at all)
-    /// still gets exactly this method's old, unspliced behaviour, which is
-    /// wrong in the same way it always was but not a regression from it.
-    fn maybe_convert(&mut self, index: usize, payload: &[u8]) -> Result<Vec<u8>> {
-        let Some(stream) = self.streams.get(index) else {
-            return Ok(payload.to_vec());
-        };
-        let Some(length_size) = stream.length_size else {
-            return Ok(payload.to_vec());
-        };
-        if starts_with_annexb_start_code(payload) {
-            return Ok(payload.to_vec());
-        }
-        let mut out = Vec::new();
-        length_prefixed_to_annexb(payload, length_size, &mut out, &mut self.convert_budget)?;
-        Ok(out)
     }
 
     /// Writes a zero-length `00dc`-style chunk for every slot on the video
@@ -315,25 +366,154 @@ impl AviMuxer {
         }
         Ok(())
     }
+
+    /// Extends every video stream's grid past its own last real frame by
+    /// that frame's own duration, backfilling the gap with the same
+    /// zero-length placeholder chunks [`AviMuxer::backfill_grid_slots`]
+    /// writes between frames.
+    ///
+    /// Measured: on two fixtures (25 fps, 150 and 25 real frames, `600/25 =
+    /// 24` grid ticks per frame) the reference's `strh.dwLength` is exactly
+    /// `frame_count * 24`, which is `24` ticks — one whole frame duration —
+    /// past where placing each real frame on its own slot and stopping
+    /// leaves the count. Without this, the last frame is on the grid but the
+    /// span of time it occupies is not, so the track's own declared length
+    /// comes up one frame short.
+    ///
+    /// Called once, from [`AviMuxer::write_trailer`], since (unlike the
+    /// inter-frame gaps) there is no next packet to trigger this the way
+    /// [`AviMuxer::backfill_grid_slots`] is triggered.
+    ///
+    /// # Errors
+    /// [`vaco_limits::LimitError`] (surfaced as [`Error`]) if the implied gap
+    /// is implausibly large — same bound as `backfill_grid_slots`, since the
+    /// last packet's `duration` is as attacker-controlled as any other field
+    /// in the source.
+    fn backfill_trailing_video_slots(&mut self) -> Result<()> {
+        for index in 0..self.streams.len() {
+            let Some(stream) = self.streams.get(index) else {
+                continue;
+            };
+            if !stream.is_video || stream.last_video_duration_ticks <= 0 {
+                continue;
+            }
+            let tag = chunk_tag(u32::try_from(index).unwrap_or(u32::MAX), true)?;
+            let duration_ticks = u64::try_from(stream.last_video_duration_ticks).unwrap_or(0);
+            // `count` already sits one past the last real frame's own slot
+            // (see `write_packet`'s comment), so the target is that slot
+            // plus the frame's own duration, i.e. `count - 1 + duration`.
+            let target = stream
+                .count
+                .saturating_sub(1)
+                .saturating_add(duration_ticks);
+            let gap = target.saturating_sub(stream.count);
+            if gap > 0 {
+                let entry_bytes = u64::try_from(core::mem::size_of::<IdxEntry>()).unwrap_or(u64::MAX);
+                self.grid_budget.consume_fuel(gap)?;
+                let idx_bytes = gap
+                    .checked_mul(entry_bytes)
+                    .ok_or(Error::Unsupported("avi: trailing video gap too large"))?;
+                self.grid_budget.charge(idx_bytes)?;
+            }
+            for _ in 0..gap {
+                let pos = self.out.pos();
+                self.out.write_tag(&tag)?;
+                self.out.wl32(0)?;
+                self.idx.push(IdxEntry {
+                    tag,
+                    flags: 0,
+                    abs_pos: pos,
+                    size: 0,
+                });
+            }
+            if let Some(stream) = self.streams.get_mut(index) {
+                stream.count = target;
+            }
+        }
+        Ok(())
+    }
+
+    /// Before a compressed (VBR) audio stream's *second* chunk, backfill
+    /// `2^has_b_frames - 1` zero-length placeholder chunks — `has_b_frames`
+    /// read off the *video* stream(s) in this file, the maximum across all
+    /// of them if there is more than one.
+    ///
+    /// Fires before the second chunk, not after the first: measured
+    /// position matters here, and the reference interleaves this gap
+    /// immediately in front of the second real chunk's own natural position
+    /// (which, for a leading encoder-priming frame, lands well after the
+    /// first chunk once the surrounding video has advanced), not immediately
+    /// after the first chunk's.
+    ///
+    /// Measured across seven synthetic fixtures (`libx264` at `-bf 0` through
+    /// `-bf 7`, each paired with an AAC track whose own encoder priming is
+    /// identical in every case): `has_b_frames` of 0, 1 and 2 (`ffprobe`'s
+    /// own field, which caps there for every B-frame count this build of
+    /// `libx264` produced) measured a leading gap of exactly 0, 1 and 3
+    /// zero-length `01wb` chunks respectively, matching `2^n - 1` at every
+    /// point tried — the count a binary reference-reordering pyramid of
+    /// depth `n` needs primed before its first output. Absent a fixture with
+    /// `has_b_frames >= 3`, the formula beyond `n = 2` is inferred from that
+    /// shape, not independently confirmed.
+    ///
+    /// Without this, decoding the reference's own AVI output for a file
+    /// shaped this way fails outright (`ffmpeg -i ref.avi -f md5 -` reports
+    /// "Input buffer exhausted before END element found" on the *reference's
+    /// own* file when the gap is missing) — this is not a cosmetic byte-count
+    /// difference. Candidate mechanisms involving audio's own sample rate or
+    /// duration were ruled out first: two audio-only fixtures (44.1 kHz
+    /// stereo and 48 kHz mono, both AAC with the same one-frame encoder
+    /// priming as every video-bearing fixture here) wrote zero placeholder
+    /// chunks, and switching only the video's `-bf` while holding the audio
+    /// fixed changed the gap on its own.
+    ///
+    /// # Errors
+    /// [`vaco_limits::LimitError`] (surfaced as [`Error`]) if `has_b_frames`
+    /// implies an implausible gap — bounded through the same `grid_budget`
+    /// [`AviMuxer::backfill_grid_slots`] uses, since `has_b_frames` comes
+    /// from the source's own SPS and is exactly as attacker-controlled as a
+    /// video timestamp gap.
+    fn maybe_backfill_leading_audio_gap(&mut self, audio_index: usize, tag: [u8; 4]) -> Result<()> {
+        let has_b_frames = self
+            .streams
+            .iter()
+            .filter(|s| s.is_video)
+            .map(|s| s.has_b_frames)
+            .max()
+            .unwrap_or(0);
+        let gap = 1u64
+            .checked_shl(u32::from(has_b_frames))
+            .map_or(u64::MAX, |v| v.saturating_sub(1));
+        if gap > 0 {
+            let entry_bytes = u64::try_from(core::mem::size_of::<IdxEntry>()).unwrap_or(u64::MAX);
+            self.grid_budget.consume_fuel(gap)?;
+            let idx_bytes = gap
+                .checked_mul(entry_bytes)
+                .ok_or(Error::Unsupported("avi: leading audio gap too large"))?;
+            self.grid_budget.charge(idx_bytes)?;
+        }
+        for _ in 0..gap {
+            let pos = self.out.pos();
+            self.out.write_tag(&tag)?;
+            self.out.wl32(0)?;
+            self.idx.push(IdxEntry {
+                tag,
+                flags: 0,
+                abs_pos: pos,
+                size: 0,
+            });
+        }
+        if let Some(stream) = self.streams.get_mut(audio_index) {
+            stream.count = stream.count.saturating_add(gap);
+        }
+        Ok(())
+    }
 }
 
-/// Whether `payload` already opens with an Annex B start code (`00 00 01` or
-/// `00 00 00 01`).
-///
-/// A length-prefixed sample's first four bytes are a big-endian byte count,
-/// which coincides with this only for a NAL exactly one byte long (`00 00 00
-/// 01`) — a unit too short to carry a NAL header, so not a real ambiguity in
-/// practice. Used to make [`AviMuxer::maybe_convert`] a no-op on a payload
-/// [`AviMuxer::check_bitstream`]'s filter chain has already reframed.
-fn starts_with_annexb_start_code(payload: &[u8]) -> bool {
-    payload.starts_with(&[0, 0, 1]) || payload.starts_with(&[0, 0, 0, 1])
-}
-
-/// Whether `id` is a codec whose length-prefixed framing needs converting to
-/// Annex B for AVI — the same two codecs `vaco-mux-mpegts` converts, and for
-/// the same reason: neither has an AVI (or MPEG-TS) out-of-band
-/// configuration record, so in-band start-code-framed NAL units with inline
-/// parameter sets are the only layout either container's readers expect.
+/// Whether `id` is a codec whose framing depends on whether its source
+/// declared length-prefixed or Annex-B samples — the two AVI mirrors as
+/// `avc1`/`avcC` or `H264`/`HEVC` respectively, unconverted either way (see
+/// [`StreamOut::video_extradata`]'s doc comment for the measurement).
 fn is_h264_or_hevc(id: CodecId) -> bool {
     matches!(id, CodecId::H264 | CodecId::Hevc)
 }
@@ -357,9 +537,19 @@ fn chunk_tag(stream_index: u32, is_video: bool) -> Result<[u8; 4]> {
 /// mux. `None` for anything [`vaco_format_riff::video_tags`] would not read
 /// back to the same [`CodecId`] — writing a tag this crate cannot itself
 /// demux again is worse than refusing to.
-fn video_fourcc(id: CodecId) -> Option<[u8; 4]> {
+///
+/// `length_prefixed` picks between H.264/HEVC's two `FourCC` families —
+/// `avc1`/`hvc1` (ISO-BMFF style, config record follows) when the source
+/// declared length-prefixed framing, `H264`/`HEVC` (Annex B, no record)
+/// otherwise. Both spellings resolve back to the same [`CodecId`] on the
+/// read side (`vaco_format_riff::video_tags::codec_id`), so either is a
+/// legal round trip; which one is written now mirrors the source instead of
+/// always picking the Annex-B spelling.
+fn video_fourcc(id: CodecId, length_prefixed: bool) -> Option<[u8; 4]> {
     match id {
+        CodecId::H264 if length_prefixed => Some(*b"avc1"),
         CodecId::H264 => Some(*b"H264"),
+        CodecId::Hevc if length_prefixed => Some(*b"hvc1"),
         CodecId::Hevc => Some(*b"HEVC"),
         CodecId::Vp8 => Some(*b"VP80"),
         CodecId::Vp9 => Some(*b"VP90"),
@@ -419,6 +609,22 @@ fn is_uncompressed_pcm(id: CodecId) -> bool {
     )
 }
 
+/// Nominal samples per frame for a compressed audio codec — the unit
+/// `dwScale/dwRate` uses for a VBR ("one chunk is one frame") stream, as
+/// opposed to CBR PCM's per-sample time base. `None` for anything this
+/// crate cannot write as compressed audio in the first place.
+///
+/// AAC-LC's 1024 is measured (see `add_stream`'s doc comment on the call
+/// site); MP3's 1152 is the MPEG-1 Audio Layer III specification's own
+/// fixed frame size, not independently confirmed against a fixture here.
+fn compressed_audio_frame_size(id: CodecId) -> Option<u32> {
+    match id {
+        CodecId::Aac => Some(1024),
+        CodecId::Mp3 => Some(1152),
+        _ => None,
+    }
+}
+
 /// The `wBitsPerSample` a specific PCM flavour implies, overriding whatever
 /// the caller's `bits_per_coded_sample` says — `vaco-format-riff`'s
 /// `wave_tags::codec_id` derives the flavour from `wBitsPerSample` (and a
@@ -459,8 +665,11 @@ impl Muxer for AviMuxer {
         let mut out = StreamOut {
             is_video,
             time_base: Rational::new(1, 25),
+            strh_time_base: Rational::new(1, 25),
             sample_size: 0,
             length_field_at: 0,
+            suggested_buffer_at: 0,
+            max_chunk_size: 0,
             count: 0,
             video_fourcc: *b"    ",
             width: 0,
@@ -470,11 +679,15 @@ impl Muxer for AviMuxer {
             sample_aspect_ratio: Rational::new(1, 1),
             source_time_base: None,
             grid_origin: None,
+            last_video_duration_ticks: 0,
             audio_format_tag: 0,
+            sample_rate: 0,
             channels: 1,
             bits_per_sample: 16,
-            length_size: None,
-            bsf_decided: false,
+            audio_extradata: None,
+            video_extradata: None,
+            has_b_frames: 0,
+            bit_rate: params.bit_rate,
         };
 
         if is_video {
@@ -484,7 +697,28 @@ impl Muxer for AviMuxer {
             // Every video stream sits on the fixed 600 Hz grid regardless of
             // its own frame rate — not derived from `v.frame_rate`.
             out.time_base = GRID_RATE;
-            out.video_fourcc = video_fourcc(codec_id)
+            out.strh_time_base = GRID_RATE;
+            out.has_b_frames = v.has_b_frames;
+            let length_prefixed = is_h264_or_hevc(codec_id) && v.nal_length_size.is_some_and(|n| n > 0);
+            if is_h264_or_hevc(codec_id) {
+                let extra = params.extradata.clone().filter(|e| !e.is_empty());
+                if length_prefixed && extra.is_none() {
+                    // `strf`'s `avc1`/`hvc1` FourCC promises a configuration
+                    // record right after `BITMAPINFOHEADER` — measured on
+                    // the reference's own AVI output — so a length-prefixed
+                    // stream with nothing to put there is refused rather
+                    // than writing a tag with no record behind it. `H264`/
+                    // `HEVC` (Annex-B) makes no such promise, so the same
+                    // stream with no extradata at all is not an error there
+                    // — it just writes the classic 40-byte `strf` with
+                    // nothing after it, same as before extradata existed.
+                    return Err(Error::Unsupported(
+                        "avi: length-prefixed H.264/HEVC needs its avcC/hvcC extradata",
+                    ));
+                }
+                out.video_extradata = extra;
+            }
+            out.video_fourcc = video_fourcc(codec_id, length_prefixed)
                 .ok_or(Error::Unsupported("avi: codec has no AVI video FourCC"))?;
             out.width = v.width;
             out.height = v.height;
@@ -504,12 +738,6 @@ impl Muxer for AviMuxer {
             {
                 out.sample_aspect_ratio = v.sample_aspect_ratio;
             }
-            if is_h264_or_hevc(codec_id) {
-                out.length_size = v
-                    .nal_length_size
-                    .filter(|&n| n > 0)
-                    .and_then(LengthSize::new);
-            }
         } else {
             let a = params.audio.as_ref().ok_or(Error::Unsupported(
                 "avi: audio stream has no AudioParameters",
@@ -517,6 +745,7 @@ impl Muxer for AviMuxer {
             if a.sample_rate == 0 {
                 return Err(Error::Unsupported("avi: audio stream has no sample rate"));
             }
+            out.sample_rate = a.sample_rate;
             // AVI's `WAVE_FORMAT_AAC` entry expects raw, `AudioSpecificConfig`-
             // framed AAC (the config carried once, out of band), not ADTS's
             // self-contained per-frame header. A stream with no extradata at
@@ -530,9 +759,31 @@ impl Muxer for AviMuxer {
                     "avi: ADTS-framed AAC has no AVI representation; needs raw AudioSpecificConfig extradata",
                 ));
             }
-            out.time_base = Rational::new(1, i32::try_from(a.sample_rate).unwrap_or(i32::MAX));
+            let sample_rate = i32::try_from(a.sample_rate).unwrap_or(i32::MAX);
+            // A compressed (VBR) stream's `dwScale/dwRate` is one *frame*'s
+            // duration, not one sample's — measured on AAC (`strh` reduces
+            // to `1024/sample_rate`, i.e. `256/11025` at 44100 Hz, matching
+            // AAC-LC's fixed 1024-sample frame). Uncompressed PCM keeps the
+            // per-sample base, matching `dwSampleSize`'s own CBR unit.
+            //
+            // This is `strh_time_base`, not `time_base`: `time_base` is also
+            // `Muxer::stream_time_base`'s answer, which the generic
+            // interleave/rescale machinery upstream uses to decide *when* a
+            // packet is due, not just what `strh` should say. Widening it to
+            // one-frame ticks changed real interleaving order between audio
+            // and video (found by comparing muxed output against the
+            // reference, which caught a large block of reordered chunks
+            // this crate's own tests never would have) — this crate's own
+            // `write_packet` never reads audio timestamps at all, so nothing
+            // here needed the coarser unit; only the `strh` field did.
+            out.time_base = Rational::new(1, sample_rate);
+            out.strh_time_base = compressed_audio_frame_size(codec_id).map_or(
+                out.time_base,
+                |frame_size| Rational::new(frame_size.cast_signed(), sample_rate).reduced(),
+            );
             out.audio_format_tag = audio_format_tag(codec_id)
                 .ok_or(Error::Unsupported("avi: codec has no AVI wFormatTag"))?;
+            out.audio_extradata = params.extradata.clone().filter(|e| !e.is_empty());
             out.channels = u16::try_from(a.layout.as_ref().map_or(1, |l| l.channels)).unwrap_or(1);
             out.bits_per_sample = pcm_bits_per_sample(codec_id)
                 .unwrap_or_else(|| u16::from(a.bits_per_coded_sample.unwrap_or(16)).max(8));
@@ -593,11 +844,13 @@ impl Muxer for AviMuxer {
         let mut hdrl = Vec::new();
         hdrl.extend_from_slice(b"hdrl");
         let avih_total_frames_rel = write_avih(&mut hdrl, &self.streams);
-        let mut length_fields = Vec::new();
-        for s in &self.streams {
-            let rel = write_strl(&mut hdrl, *s);
-            length_fields.push(rel);
+        let mut strl_offsets = Vec::new();
+        for (index, s) in self.streams.iter().enumerate() {
+            strl_offsets.push(write_strl(&mut hdrl, u32::try_from(index).unwrap_or(u32::MAX), s));
         }
+        hdrl.extend_from_slice(b"JUNK");
+        hdrl.extend_from_slice(&(HDRL_JUNK.len() as u32).to_le_bytes());
+        hdrl.extend_from_slice(&HDRL_JUNK);
 
         self.out.write_tag(b"LIST")?;
         self.out
@@ -605,9 +858,15 @@ impl Muxer for AviMuxer {
         let hdrl_body_start = self.out.pos();
         self.out.write(&hdrl)?;
         self.avih_total_frames_at = hdrl_body_start + avih_total_frames_rel as u64;
-        for (s, rel) in self.streams.iter_mut().zip(length_fields) {
-            s.length_field_at = (hdrl_body_start + rel as u64) as usize;
+        for (s, offsets) in self.streams.iter_mut().zip(strl_offsets) {
+            s.length_field_at = (hdrl_body_start + offsets.length_field_at as u64) as usize;
+            s.suggested_buffer_at =
+                (hdrl_body_start + offsets.suggested_buffer_at as u64) as usize;
         }
+
+        self.out.write_tag(b"JUNK")?;
+        self.out.wl32(u32::try_from(RIFF_JUNK.len()).unwrap_or(u32::MAX))?;
+        self.out.write(&RIFF_JUNK)?;
 
         self.out.write_tag(b"LIST")?;
         self.movi_size_at = self.out.pos();
@@ -638,21 +897,30 @@ impl Muxer for AviMuxer {
         // unrelated meaning.
         if is_video {
             self.backfill_grid_slots(idx, tag, packet)?;
+        } else if self
+            .streams
+            .get(idx)
+            .is_some_and(|s| s.sample_size == 0 && s.count == 1)
+        {
+            // This stream's *second* chunk — the trigger for
+            // `maybe_backfill_leading_audio_gap`'s doc comment explains why
+            // it fires here and not on the first. Runs before this packet's
+            // own bytes so the placeholders land immediately in front of it,
+            // matching the reference's own interleaving position for them.
+            self.maybe_backfill_leading_audio_gap(idx, tag)?;
         }
 
-        // A length-prefixed H.264/HEVC sample must be reframed to Annex B
-        // before it is a legal AVI chunk payload — see `maybe_convert`'s doc
-        // comment. `payload`'s length, not `packet.len`, drives every size
-        // field below from here on, since the two can differ once
-        // conversion runs.
-        let payload = self.maybe_convert(idx, packet.payload())?;
+        // Written exactly as it arrived: an H.264/HEVC sample keeps whatever
+        // framing its source declared (see `StreamOut::video_extradata`'s doc
+        // comment) — this crate never reframes it.
+        let payload = packet.payload();
 
         let pos = self.out.pos();
         self.out.write_tag(&tag)?;
         let len = u32::try_from(payload.len())
             .map_err(|_| Error::Unsupported("avi: packet too large"))?;
         self.out.wl32(len)?;
-        self.out.write(&payload)?;
+        self.out.write(payload)?;
         if payload.len() % 2 == 1 {
             self.out.w8(0)?;
         }
@@ -661,11 +929,20 @@ impl Muxer for AviMuxer {
             .streams
             .get_mut(idx)
             .ok_or(Error::InvalidData("avi: packet names an unknown stream"))?;
+        stream.max_chunk_size = stream.max_chunk_size.max(len);
         if is_video {
             // `count` already holds this packet's own slot (set by
             // `backfill_grid_slots`); advance past it so the *next* call
             // starts backfilling from here.
             stream.count = stream.count.saturating_add(1);
+            // Remembered so `write_trailer` can extend the grid past the
+            // very last frame by its own duration — there is no next packet
+            // to trigger that backfill the ordinary way.
+            if let Some(ticks) = packet.duration.to_ticks(GRID_RATE)
+                && ticks > 0
+            {
+                stream.last_video_duration_ticks = ticks;
+            }
         } else {
             stream.count = if stream.sample_size == 0 {
                 stream.count.saturating_add(1)
@@ -695,43 +972,10 @@ impl Muxer for AviMuxer {
             .map(|s| s.time_base)
     }
 
-    /// Ask M6 for `h264_mp4toannexb`/`hevc_mp4toannexb` when the stream
-    /// declared length-prefixed framing at [`Muxer::add_stream`] — the same
-    /// condition [`AviMuxer::maybe_convert`] uses, so a caller driven through
-    /// [`vaco_format_core::mux::MuxWriter`] with a real `BsfProvider` gets the
-    /// splice-correct conversion instead of this crate's own framing-only
-    /// fallback (see that method's docs).
-    fn check_bitstream(
-        &mut self,
-        params: &CodecParameters,
-        pkt: &Packet,
-    ) -> Result<BitstreamAction> {
-        let idx = usize::try_from(pkt.stream_index).ok();
-        if idx
-            .and_then(|i| self.streams.get(i))
-            .is_some_and(|s| s.bsf_decided)
-        {
-            return Ok(BitstreamAction::Keep);
-        }
-        if let Some(s) = idx.and_then(|i| self.streams.get_mut(i)) {
-            s.bsf_decided = true;
-        }
-        let needs_annexb = params.codec_id.is_some_and(is_h264_or_hevc)
-            && params
-                .video
-                .as_ref()
-                .and_then(|v| v.nal_length_size)
-                .is_some_and(|n| n > 0);
-        if !needs_annexb {
-            return Ok(BitstreamAction::Keep);
-        }
-        Ok(BitstreamAction::Insert {
-            name: match params.codec_id {
-                Some(CodecId::Hevc) => "hevc_mp4toannexb",
-                _ => "h264_mp4toannexb",
-            },
-        })
-    }
+    // No `check_bitstream` override: a video sample keeps whatever framing
+    // its source declared (see `StreamOut::video_extradata`'s doc comment), so
+    // this muxer never asks M6 for a bitstream filter — the trait's default
+    // `Keep` is already the right answer.
 
     fn write_trailer(&mut self) -> Result<()> {
         if !self.header_written {
@@ -741,6 +985,7 @@ impl Muxer for AviMuxer {
             return Err(Error::InvalidData("avi: trailer written twice"));
         }
         self.trailer_written = true;
+        self.backfill_trailing_video_slots()?;
 
         let movi_end = self.out.pos();
 
@@ -766,17 +1011,22 @@ impl Muxer for AviMuxer {
                 .wl32(u32::try_from(movi_size).unwrap_or(u32::MAX))?;
 
             self.out.seek(self.avih_total_frames_at)?;
+            // The *video* stream's own count, specifically — measured on an
+            // audio-only fixture: `avih.dwTotalFrames` stays `0` rather than
+            // falling back to an audio stream's sample count when there is
+            // no video stream to report one for.
             let total = self
                 .streams
                 .iter()
                 .find(|s| s.is_video)
-                .or_else(|| self.streams.first())
                 .map_or(0, |s| s.count);
             self.out.wl32(u32::try_from(total).unwrap_or(u32::MAX))?;
 
             for s in &self.streams {
                 self.out.seek(s.length_field_at as u64)?;
                 self.out.wl32(u32::try_from(s.count).unwrap_or(u32::MAX))?;
+                self.out.seek(s.suggested_buffer_at as u64)?;
+                self.out.wl32(s.max_chunk_size)?;
             }
 
             self.out.seek(self.riff_size_at)?;
@@ -818,27 +1068,54 @@ fn write_avih(out: &mut Vec<u8>, streams: &[StreamOut]) -> usize {
         })
         .and_then(|v| u32::try_from(v).ok())
         .unwrap_or(0);
+    // The sum of every stream's own declared `bit_rate`, in bytes/sec —
+    // measured on four fixtures (video-only, audio-only, both together, and
+    // one with no declared rate on either stream) to match the reference's
+    // own `dwMaxBytesPerSec` exactly, division truncated.
+    #[allow(
+        clippy::integer_division,
+        reason = "bits to bytes is an exact unit conversion, not a ratio"
+    )]
+    let max_bytes_per_sec = (streams.iter().filter_map(|s| s.bit_rate).sum::<u64>() / 8)
+        .try_into()
+        .unwrap_or(u32::MAX);
     out.extend_from_slice(b"avih");
     out.extend_from_slice(&56u32.to_le_bytes());
     out.extend_from_slice(&us_per_frame.to_le_bytes()); // dwMicroSecPerFrame
-    out.extend_from_slice(&0u32.to_le_bytes()); // dwMaxBytesPerSec
+    out.extend_from_slice(&max_bytes_per_sec.to_le_bytes());
     out.extend_from_slice(&0u32.to_le_bytes()); // dwPaddingGranularity
     out.extend_from_slice(&AVIH_FLAGS.to_le_bytes());
     let total_frames_at = out.len();
     out.extend_from_slice(&0u32.to_le_bytes()); // dwTotalFrames (patched)
     out.extend_from_slice(&0u32.to_le_bytes()); // dwInitialFrames
     out.extend_from_slice(&(streams.len() as u32).to_le_bytes());
-    out.extend_from_slice(&0u32.to_le_bytes()); // dwSuggestedBufferSize
+    // Measured: constant across every fixture tried, regardless of stream
+    // count, codec or content — 1 MiB, not derived from anything here.
+    out.extend_from_slice(&SUGGESTED_BUFFER_SIZE.to_le_bytes());
     out.extend_from_slice(&width.to_le_bytes());
     out.extend_from_slice(&height.to_le_bytes());
     out.extend_from_slice(&[0u8; 16]); // dwReserved[4]
     total_frames_at
 }
 
-/// Write one `LIST strl` (`strh` + `strf`), returning the byte offset, within
-/// `out`, of the `dwLength` field written for this stream — patched once the
-/// true count is known.
-fn write_strl(out: &mut Vec<u8>, s: StreamOut) -> usize {
+/// Byte offsets, within the buffer [`write_strl`] appends to, of the two
+/// `strh` fields [`AviMuxer::write_trailer`] patches once their true values
+/// are known: `dwLength` (the final chunk/sample count) and
+/// `dwSuggestedBufferSize` (the largest single chunk this stream wrote).
+struct StrlOffsets {
+    length_field_at: usize,
+    suggested_buffer_at: usize,
+}
+
+/// Write one `LIST strl` (`strh` + `strf`), returning the offsets
+/// [`StrlOffsets`] documents.
+fn write_strl(out: &mut Vec<u8>, index: u32, s: &StreamOut) -> StrlOffsets {
+    // `chunk_tag` only fails past 100 streams. `write_packet` already
+    // returns that as a real error for such a file; here, inside an inert
+    // `JUNK` template only a debugger would ever look at, a placeholder tag
+    // is a reasonable fallback rather than making header-building fallible
+    // for a case nothing downstream can act on differently anyway.
+    let tag = chunk_tag(index, s.is_video).unwrap_or(*b"00xx");
     let mut strl = Vec::new();
     strl.extend_from_slice(b"strl");
 
@@ -846,26 +1123,40 @@ fn write_strl(out: &mut Vec<u8>, s: StreamOut) -> usize {
     strh.extend_from_slice(if s.is_video { b"vids" } else { b"auds" });
     // `fccHandler`: mirrors `biCompression` for video, matching what
     // `ffmpeg 8.1`'s own writer does (measured: both carry `FMP4` for an
-    // mpeg4 stream); left zero for audio, which this crate's own demuxer
-    // does not read from here regardless.
+    // mpeg4 stream). For audio, measured as the raw `u32` value `1`
+    // (`WAVE_FORMAT_PCM`'s own tag number) regardless of the stream's
+    // actual `wFormatTag` — an AAC stream measured the same `1` an actual
+    // PCM stream did, so it is a fixed placeholder here, not a mirror of
+    // `audio_format_tag`.
+    let audio_fcc_handler = 1u32.to_le_bytes();
     strh.extend_from_slice(if s.is_video {
         &s.video_fourcc
     } else {
-        &[0u8; 4]
+        &audio_fcc_handler
     });
     strh.extend_from_slice(&0u32.to_le_bytes()); // dwFlags
     strh.extend_from_slice(&0u16.to_le_bytes()); // wPriority
     strh.extend_from_slice(&0u16.to_le_bytes()); // wLanguage
     strh.extend_from_slice(&0u32.to_le_bytes()); // dwInitialFrames
-    strh.extend_from_slice(&s.time_base.num.to_le_bytes()); // dwScale
-    strh.extend_from_slice(&s.time_base.den.to_le_bytes()); // dwRate
+    strh.extend_from_slice(&s.strh_time_base.num.to_le_bytes()); // dwScale
+    strh.extend_from_slice(&s.strh_time_base.den.to_le_bytes()); // dwRate
     strh.extend_from_slice(&0u32.to_le_bytes()); // dwStart
     let length_rel_in_strh = strh.len();
     strh.extend_from_slice(&0u32.to_le_bytes()); // dwLength (patched)
-    strh.extend_from_slice(&0u32.to_le_bytes()); // dwSuggestedBufferSize
+    let suggested_buffer_rel_in_strh = strh.len();
+    strh.extend_from_slice(&0u32.to_le_bytes()); // dwSuggestedBufferSize (patched)
     strh.extend_from_slice(&(-1i32).to_le_bytes()); // dwQuality: -1 = unspecified
     strh.extend_from_slice(&s.sample_size.to_le_bytes());
-    strh.extend_from_slice(&[0u8; 8]); // rcFrame
+    // `rcFrame`: `{0, 0, width, height}` for video (measured — not all
+    // zero), `{0, 0, 0, 0}` for audio, which has no frame rectangle.
+    if s.is_video {
+        strh.extend_from_slice(&0i16.to_le_bytes());
+        strh.extend_from_slice(&0i16.to_le_bytes());
+        strh.extend_from_slice(&i16::try_from(s.width).unwrap_or(i16::MAX).to_le_bytes());
+        strh.extend_from_slice(&i16::try_from(s.height).unwrap_or(i16::MAX).to_le_bytes());
+    } else {
+        strh.extend_from_slice(&[0u8; 8]);
+    }
 
     strl.extend_from_slice(b"strh");
     strl.extend_from_slice(&(strh.len() as u32).to_le_bytes());
@@ -876,20 +1167,49 @@ fn write_strl(out: &mut Vec<u8>, s: StreamOut) -> usize {
     // `vaco-demux-avi`/`vaco-format-riff` read back on the other side.
     if s.is_video {
         let mut strf = Vec::new();
-        strf.extend_from_slice(&40u32.to_le_bytes()); // biSize
+        // `biSize`: the classic 40-byte prefix, plus the configuration
+        // record's own length when there is one — measured on the
+        // reference's own `avc1` output (`biSize=85` for a 45-byte `avcC`,
+        // i.e. `40 + 45`, not the classic `40`). Unlike ordinary RIFF chunk
+        // padding (external, uncounted — see `vaco_format_riff::chunk`'s
+        // module docs), an odd total here is padded with one zero byte
+        // that *is* folded into `strf`'s own declared `ckSize`, matching
+        // that same measurement (`ckSize=86`, one more than `biSize`).
+        let record_len = s.video_extradata.as_deref().map_or(0, <[u8]>::len);
+        let bi_size = 40u32.saturating_add(u32::try_from(record_len).unwrap_or(u32::MAX));
+        strf.extend_from_slice(&bi_size.to_le_bytes()); // biSize
         strf.extend_from_slice(&s.width.cast_signed().to_le_bytes()); // biWidth
         strf.extend_from_slice(&s.height.cast_signed().to_le_bytes()); // biHeight
         strf.extend_from_slice(&1u16.to_le_bytes()); // biPlanes
         strf.extend_from_slice(&24u16.to_le_bytes()); // biBitCount
         strf.extend_from_slice(&s.video_fourcc);
-        strf.extend_from_slice(&0u32.to_le_bytes()); // biSizeImage
+        // `biSizeImage`: `width * height * 3` (the raw-RGB byte count
+        // `biBitCount = 24` above implies) regardless of the codec actually
+        // being compressed — measured identical on `avc1` and Annex-B
+        // `H264` alike, so it tracks the header's own declared bit count,
+        // not the real (compressed) sample size.
+        let size_image = s.width.saturating_mul(s.height).saturating_mul(3);
+        strf.extend_from_slice(&size_image.to_le_bytes());
         strf.extend_from_slice(&0i32.to_le_bytes());
         strf.extend_from_slice(&0i32.to_le_bytes());
         strf.extend_from_slice(&0u32.to_le_bytes());
         strf.extend_from_slice(&0u32.to_le_bytes());
+        if let Some(record) = &s.video_extradata {
+            strf.extend_from_slice(record);
+            if strf.len() % 2 == 1 {
+                strf.push(0);
+            }
+        }
         strl.extend_from_slice(b"strf");
         strl.extend_from_slice(&(strf.len() as u32).to_le_bytes());
         strl.extend_from_slice(&strf);
+        // Measured order is `strf`, `JUNK`, `vprp` — not `strf`, `vprp`,
+        // `JUNK` — so the shared `JUNK` write below is skipped for video and
+        // done here instead, ahead of `vprp`.
+        let strl_junk = build_strl_junk(tag);
+        strl.extend_from_slice(b"JUNK");
+        strl.extend_from_slice(&(strl_junk.len() as u32).to_le_bytes());
+        strl.extend_from_slice(&strl_junk);
         let vprp = build_vprp(s);
         strl.extend_from_slice(b"vprp");
         strl.extend_from_slice(&(vprp.len() as u32).to_le_bytes());
@@ -898,7 +1218,7 @@ fn write_strl(out: &mut Vec<u8>, s: StreamOut) -> usize {
         let mut strf = Vec::new();
         strf.extend_from_slice(&s.audio_format_tag.to_le_bytes());
         strf.extend_from_slice(&s.channels.to_le_bytes());
-        let rate = s.time_base.den.max(1).unsigned_abs();
+        let rate = s.sample_rate.max(1);
         strf.extend_from_slice(&rate.to_le_bytes());
         let block_align = if s.sample_size > 0 {
             s.sample_size
@@ -908,25 +1228,67 @@ fn write_strl(out: &mut Vec<u8>, s: StreamOut) -> usize {
                 reason = "bytes-per-sample from bits-per-sample is an exact conversion, not a ratio"
             )]
             let bytes_per_sample = (u32::from(s.bits_per_sample) / 8).max(1);
+            // Measured wrong for compressed audio: the reference's own
+            // `nBlockAlign` for an AAC stream did not match this formula
+            // (nor the source's declared bit rate, sample rate or channel
+            // count in any combination tried), and no second fixture was
+            // available to isolate the real rule. Kept as the best
+            // available answer for CBR-shaped callers; not verified for
+            // VBR ones.
             bytes_per_sample * u32::from(s.channels)
         };
-        strf.extend_from_slice(&(rate * block_align).to_le_bytes()); // nAvgBytesPerSec
+        #[allow(
+            clippy::integer_division,
+            reason = "bits to bytes is an exact unit conversion, not a ratio"
+        )]
+        let avg_bytes_per_sec = s
+            .bit_rate
+            .filter(|_| s.sample_size == 0)
+            .and_then(|br| u32::try_from(br / 8).ok())
+            .unwrap_or_else(|| rate.saturating_mul(block_align));
+        strf.extend_from_slice(&avg_bytes_per_sec.to_le_bytes()); // nAvgBytesPerSec
         strf.extend_from_slice(&u16::try_from(block_align).unwrap_or(u16::MAX).to_le_bytes());
         strf.extend_from_slice(&s.bits_per_sample.to_le_bytes());
+        // `WAVEFORMATEX`'s trailing `cbSize`-prefixed extension: AAC's raw
+        // `AudioSpecificConfig`, carried once here rather than per frame —
+        // without it, a decoder has no object type or channel configuration
+        // and desyncs on the very first frame it tries to decode. Absent
+        // for a codec with nothing to carry (PCM, MP3), which keeps the
+        // classic 16-byte `WAVEFORMATEX` `vaco-demux-avi`'s own read side
+        // already treats as "no extension".
+        if let Some(extra) = &s.audio_extradata {
+            let cb_size = u16::try_from(extra.len()).unwrap_or(u16::MAX);
+            strf.extend_from_slice(&cb_size.to_le_bytes());
+            strf.extend_from_slice(extra);
+            if strf.len() % 2 == 1 {
+                strf.push(0);
+            }
+        }
         strl.extend_from_slice(b"strf");
         strl.extend_from_slice(&(strf.len() as u32).to_le_bytes());
         strl.extend_from_slice(&strf);
+        // No `vprp` on the audio side, so `strf` is immediately followed by
+        // `JUNK` here — the same relative position the video branch above
+        // wrote its own `JUNK` in, just with nothing after it.
+        let strl_junk = build_strl_junk(tag);
+        strl.extend_from_slice(b"JUNK");
+        strl.extend_from_slice(&(strl_junk.len() as u32).to_le_bytes());
+        strl.extend_from_slice(&strl_junk);
     }
 
     // `out.len()` is where this `strl`'s own `LIST` tag will land; 8 bytes
     // for that `LIST`'s tag+size, then `strh_body_start` (already the offset
     // of `strh`'s body *within* `strl`, i.e. past `strl`'s own `"strl"`
-    // marker and `strh`'s tag+size) plus the field's offset within `strh`.
-    let length_field_at = out.len() + 8 + strh_body_start + length_rel_in_strh;
+    // marker and `strh`'s tag+size) plus each field's offset within `strh`.
+    let base = out.len() + 8 + strh_body_start;
+    let offsets = StrlOffsets {
+        length_field_at: base + length_rel_in_strh,
+        suggested_buffer_at: base + suggested_buffer_rel_in_strh,
+    };
     out.extend_from_slice(b"LIST");
     out.extend_from_slice(&(strl.len() as u32).to_le_bytes());
     out.extend_from_slice(&strl);
-    length_field_at
+    offsets
 }
 
 /// `vprp` (`AVIEXTHEADER`/`VPRP`, the `OpenDML` video-properties chunk) for a
@@ -937,7 +1299,7 @@ fn write_strl(out: &mut Vec<u8>, s: StreamOut) -> usize {
 /// interlaced source would need a second descriptor and a
 /// `dwVerticalRefreshRate`/`nbFieldPerFrame` convention this crate does not
 /// yet produce.
-fn build_vprp(s: StreamOut) -> Vec<u8> {
+fn build_vprp(s: &StreamOut) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(&0u32.to_le_bytes()); // VideoFormatToken: unknown/unspecified
     out.extend_from_slice(&0u32.to_le_bytes()); // VideoStandard: unknown/unspecified
