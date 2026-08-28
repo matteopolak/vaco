@@ -1915,3 +1915,77 @@ was found by testing real fixtures through `ffprobe`, not from `-codecs`,
 and is recorded here so the next person auditing per-codec properties knows
 `-codecs`' flat name-to-flags table cannot see container-conditional codec
 identity like this at all.
+
+### Update: the `BlockDemuxer` batching entry above is fixed (2026-08-28)
+
+The entry "`vaco-format-misc-audio`'s `BlockDemuxer` batches packets the
+reference emits one-per-block" is resolved for ten of its twelve affected
+formats. Measured every `BlockDemuxer` consumer individually against
+`ffprobe -show_packets` rather than assuming `vag`'s one-packet-per-block
+answer generalised — it does not: `adx`, `gsm` and `g729` do get one
+packet per block (18/33/10 bytes), but `g722`, `aptx` and `sln` batch into
+1024-byte packets, `g726`/`g726le`/`g728` into 1020-byte packets, `dfpwm`
+into 512-byte packets, and `aptx_hd` into 1536-byte packets — each its own
+fixed constant with no shared formula (`g722` and `g726` share the same
+1:2 byte:frame ratio and fixed sample rate, yet batch differently).
+`BlockDemuxer::new` now takes `target_packet_bytes` as a required
+parameter instead of picking `4096` itself; `RawCodecSpec` carries the
+measured constant for each `rawcodec.rs` entry, and `adx.rs` passes its
+own block size directly.
+
+`tests/differential.rs` now asserts the exact per-packet size sequence
+for every fixture with a measured answer (previously it checked only
+stream-level fields and "at least one packet produced", the gap that let
+the original bug through). `adx.rs`'s own test that had encoded the
+batched-packet assumption (`assert_eq!(pkt.len, 18 * 76)`) is rewritten
+to assert 76 separate 18-byte packets, matching the reference.
+
+Allocation shape checked before shipping: `Packet::alloc` already routes
+every packet through `vaco_limits::Budget` regardless of packet count,
+and the per-`read_packet`-call iteration count is bounded by the
+caller's own `consume_fuel` budget (`vaco-probe/src/packets.rs` charges
+one fuel unit per call already) or the fuzz target's `MAX_PACKETS` cap —
+neither of which this change touches. A direct release-mode timing check
+(a synthetic 180 MB `adx` file, 7.4 million one-block packets) completed
+in 443 ms, and a 30-second `misc_audio_demux` fuzz run afterwards found
+no crash, no `slow-unit-`/`oom-` artifact, and an empty
+`fuzz/artifacts`.
+
+**Not fixed, for a different reason:** `nistsphere` and `pvf`'s raw-PCM
+tail still use the old, unmeasured `4096`-byte default
+(`block::DEFAULT_TARGET_PACKET_BYTES`, kept under that name specifically
+so it reads as "not measured" rather than "the right answer"). See the
+next entry.
+
+### `vaco-format-misc-audio`'s `nistsphere`/`pvf` raw-PCM packet batching depends on sample rate, formula not pinned down
+
+While fixing the `BlockDemuxer` entry above, `nistsphere`'s raw-PCM tail
+was measured across eighteen sample rates from 250 Hz to 96 kHz (mono,
+16-bit) to see whether its batching followed a clean rule the way the
+compressed/ADPCM formats did. It does not reduce to one formula found so
+far:
+
+- From 250 Hz through 16000 Hz, packet size in frames matches
+  `nearest_power_of_two(sample_rate * 0.064)` exactly (64 ms of audio,
+  rounded to a power of two) at every rate tried: 250→16, 500→32,
+  1000→64, 2000→128, 4000→256, 8000→512, 11025→1024, 16000→1024.
+- That formula breaks between 20.4 kHz and 20.6 kHz: it predicts 2048
+  frames for both, but the reference switches from 1024 frames (at
+  ≤20400 Hz) to 2048 frames (at ≥20600 Hz) — a transition roughly 4.3 kHz
+  earlier than the 64 ms rule predicts, for reasons not identified.
+- Higher rates (22050, 32000, 44100, 48000, 96000 Hz) then matched a
+  `nearest_power_of_two(rate * 0.064)`-shaped curve again, but by then
+  the low/mid-range mismatch had already disproved a single global
+  formula.
+
+Not fixed: reproducing this without the actual rule would mean guessing,
+which risks exactly the outcome the `BlockDemuxer` fix above was trying
+to avoid — trading a known, honest approximation for an unverified one
+that merely looks more precise. `nistsphere`/`pvf` keep using
+`block::DEFAULT_TARGET_PACKET_BYTES` (4096 bytes), explicitly not claimed
+to match the reference. Whoever picks this up: the measurement script
+(sweeping `sample_rate` over a hand-built NIST SPHERE header and reading
+`ffprobe -show_entries packet=size`) is straightforward to rebuild; the
+open question is what governs the 16–32 kHz transition specifically,
+since everything on either side of it fits the simple 64 ms/power-of-two
+rule.
