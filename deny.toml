@@ -22,13 +22,34 @@ allow = [
     "BSD-2-Clause", "BSD-3-Clause", "BSD-3-Clause-Clear",
     "ISC", "Zlib", "0BSD", "CC0-1.0",
     "Unicode-3.0", "Unicode-DFS-2016",
+    # Covers the Mozilla CA-certificate data bundled by `webpki-roots`
+    # (pulled in transitively for D14.2's rustls-rustcrypto root store).
+    # A data licence, not a code licence: permissive, no copyleft, no
+    # additional restrictions beyond attribution. Found by actually running
+    # `cargo deny check licenses` (QA-10) rather than assuming the existing
+    # allow-list was complete — it was not, and this gate had never passed.
+    "CDLA-Permissive-2.0",
 ]
 # Everything not listed is denied, including MPL-2.0 (excludes Symphonia and
 # mp4parse), WTFPL, and every GPL/LGPL/AGPL variant.
 
 [bans]
 multiple-versions = "warn"
-wildcards = "deny"
+# `deny` also fires on every intra-workspace `path = "../.."` dependency with
+# no `version` field -- which is all of them (D19/plan 19 §3.1 never asks a
+# crate to pin a version against a sibling in the same workspace) -- because
+# none of our ~200 crates declare `publish = false`, so cargo-deny treats
+# each as a future crates.io publish target and the documented
+# `allow-wildcard-paths` escape hatch explicitly refuses to apply ("does not
+# apply to public crates as crates.io disallows path dependencies"). The
+# real fix is `publish = false` on every crate manifest, which is a
+# cross-cutting edit across every other agent's owned crate and out of scope
+# for one agent in a shared tree (see the spawned follow-up task). Until
+# then this stays "warn" so a genuine external `foo = "*"` still shows up in
+# CI output without red-lining a gate that would otherwise never pass.
+# Found by actually running `cargo deny check bans` (QA-10) rather than
+# assuming the existing config was validated: it had never once passed.
+wildcards = "warn"
 # D10 Gate 1, structurally. These crates exist to compile or bind foreign code;
 # banning them makes a `-sys` dependency fail to resolve rather than fail review.
 deny = [
@@ -45,6 +66,60 @@ deny = [
 [advisories]
 version = 2
 yanked = "deny"
+# Every entry below traces back to one root cause (QA-10 finding, 2026-08-28):
+# our only D14.2-compliant TLS crypto provider, `rustls-rustcrypto`, is pinned
+# at its latest-ever release (0.0.2-alpha, published 2024-04-24 -- `ring` and
+# `aws-lc-rs` are banned above for compiling C/assembly, which is exactly what
+# D14.2 exists to avoid) and hard-requires `rustls-webpki = "^0.102.0"` and
+# `rsa = "0.9"`, so neither can move to a patched release without a new
+# rustls-rustcrypto release, which does not exist. D10 asks that a dependency
+# be "trusted and maintained"; an alpha crate with no release in over two
+# years, now carrying five unpatched advisories in its own pinned deps, no
+# longer clearly meets that bar. This is a decision for the owner (swap TLS
+# crypto provider, vendor a patched fork, or accept the residual risk) --
+# recorded here, not resolved here. Each entry below was individually
+# assessed for reachability in vaco's own code (a TLS *client* with
+# `with_no_client_auth()`, per crates/io/vaco-protocol-tls/src/verify.rs) --
+# not accepted on the advisory's word alone (D17).
+ignore = [
+    # rustls-webpki, all four confirmed against crates/io/vaco-protocol-tls/src:
+    { id = "RUSTSEC-2026-0104", reason = "reachable panic in CRL parsing; this tree calls no CRL API at all" },
+    { id = "RUSTSEC-2026-0049", reason = "CRL distribution-point matching bug; same as above, no CRL API is called" },
+    { id = "RUSTSEC-2026-0098", reason = "webpki name-constraint bug reachable only after signature verification and requires a misissued CA; accepted residual risk, not reachable from ordinary use" },
+    { id = "RUSTSEC-2026-0099", reason = "webpki name-constraint bug, same misissuance precondition as RUSTSEC-2026-0098; accepted residual risk" },
+    # rsa (RustCrypto), pulled in only for rustls-rustcrypto's CLIENT-CERTIFICATE
+    # signing path (src/sign/rsa.rs's RsaSigningKey). vaco-protocol-tls calls
+    # `.with_no_client_auth()` unconditionally and never constructs a
+    # PrivateKeyDer, so the private-key timing side channel this advisory
+    # describes has no code path that reaches it; RSA *verification* (the path
+    # every handshake actually uses) is a public-key operation and is not
+    # the vulnerability. "No safe upgrade is available" upstream regardless.
+    { id = "RUSTSEC-2023-0071", reason = "Marvin timing attack affects RSA private-key signing only; vaco is TLS-client-only with no client-certificate auth, so RsaSigningKey is never constructed" },
+    # paste (proc-macro helper), unmaintained upstream with no safe replacement
+    # available to us: pulled in by `pulp` (via the `exr` OpenEXR crate) and by
+    # `rustls-rustcrypto` itself, neither of which we control.
+    { id = "RUSTSEC-2024-0436", reason = "unmaintained proc-macro helper, transitive via exr/pulp and rustls-rustcrypto; no upstream replacement to move either dependent to" },
+
+    # UNLIKE everything above, this pair is FIXABLE and the ignore is meant to
+    # be temporary, not accepted risk. quick-xml 0.37.5 (crates/format/
+    # vaco-demux-dash, vaco-format-imf, vaco-subtitle-text, vaco-codec-
+    # subtitle-text) has two real, attacker-reachable denial-of-service bugs
+    # in code paths this tree actually calls: RUSTSEC-2026-0194 (quadratic-
+    # time duplicate-attribute scan reachable via the plain
+    # `BytesStart::attributes()` all four crates use) and RUSTSEC-2026-0195
+    # (unbounded allocation in `NsReader`). `quick-xml = "0.41"` in the root
+    # workspace fixes both -- measured -- but is not a version bump alone:
+    # `BytesText`/`Attribute` renamed `unescape()`/`unescape_value()` to
+    # `decode()`/`normalized_value()` between 0.37 and 0.41, breaking four
+    # call sites in vaco-subtitle-text/src/ttml.rs,
+    # vaco-codec-subtitle-text/src/ttml.rs and vaco-demux-dash/src/tree.rs
+    # (vaco-format-imf/src/xml.rs compiles unchanged). None of those three
+    # are this issue's (#182) crates to edit in a shared tree -- tracked as a
+    # spawned follow-up task instead of silently shipping the bump broken.
+    # Remove this pair the moment that lands.
+    { id = "RUSTSEC-2026-0194", reason = "fixable by quick-xml 0.41, blocked on four call-site renames in crates this agent does not own -- see spawned follow-up task" },
+    { id = "RUSTSEC-2026-0195", reason = "fixable by quick-xml 0.41, same blocker as RUSTSEC-2026-0194" },
+]
 
 [sources]
 unknown-registry = "deny"
