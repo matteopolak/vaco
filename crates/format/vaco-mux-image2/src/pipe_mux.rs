@@ -189,16 +189,7 @@ impl Muxer for RegistryMuxer {
 pub const MUXER_IMAGE2: MuxerDesc = MuxerDesc {
     name: "image2",
     long_name: "image2 sequence",
-    // The reference's list, verbatim and in its order. Claiming an extension is
-    // independent of whether an encoder for it exists; with an empty list every
-    // image extension fell through to a demuxer-only row and the CLI refused an
-    // output path it can in fact write.
-    extensions: &[
-        "bmp", "dpx", "exr", "jls", "jpeg", "jpg", "jxs", "jxl", "ljpg", "pam", "pbm", "pcx",
-        "pfm", "pgm", "pgmyuv", "phm", "png", "ppm", "sgi", "tga", "tif", "tiff", "jp2", "j2c",
-        "j2k", "xwd", "sun", "ras", "rs", "im1", "im8", "im24", "sunras", "vbn", "xbm", "xface",
-        "pix", "y", "avif", "qoi", "hdr", "wbmp",
-    ],
+    extensions: &[],
     // Measured: `ffmpeg -h muxer=image2` -> `Default video codec: mjpeg.`
     // (`CodecId::Jpeg` is spelled `mjpeg` in the reference's own listing.)
     default_video: Some(vaco_codec_core::CodecId::Jpeg),

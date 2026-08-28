@@ -288,45 +288,6 @@ impl PixFmt {
         self.has(PixFmtFlags::HW_ACCEL)
     }
 
-    /// What converting `self` into `dst` costs, lowest first.
-    ///
-    /// The four axes are ordered by how visible the damage is rather than by
-    /// how many bits it costs: dropping colour outranks subsampling it, which
-    /// outranks losing depth, which outranks losing alpha. Comparing the
-    /// tuples lexicographically is what makes that ordering the decision.
-    #[must_use]
-    pub const fn conversion_loss(self, dst: Self) -> (u8, u8, u8, u8) {
-        let colour = (self.component_count() >= 3) & (dst.component_count() < 3);
-        let (sx, sy) = self.log2_chroma();
-        let (dx, dy) = dst.log2_chroma();
-        let chroma = dx.saturating_sub(sx) + dy.saturating_sub(sy);
-        let depth = self.max_depth().saturating_sub(dst.max_depth());
-        let alpha = self.has_alpha() & !dst.has_alpha();
-        (colour as u8, chroma, depth, alpha as u8)
-    }
-
-    /// The candidate in `candidates` that `self` converts into most cheaply.
-    ///
-    /// `self` itself wins outright when it appears, so a pipeline that already
-    /// agrees with an encoder never pays for a conversion. Otherwise the least
-    /// lossy candidate wins and ties go to the earliest, which keeps an
-    /// encoder's own preference order meaningful among equals.
-    ///
-    /// Taking `candidates.first()` instead is what this replaces, and it is
-    /// wrong in a way that does not announce itself: an encoder listing
-    /// `monoblack` before `rgb24` would silently reduce a colour frame to one
-    /// bit.
-    #[must_use]
-    pub fn best_of(self, candidates: &[Self]) -> Option<Self> {
-        if candidates.contains(&self) {
-            return Some(self);
-        }
-        candidates
-            .iter()
-            .copied()
-            .min_by_key(|&c| self.conversion_loss(c))
-    }
-
     /// Multi-byte samples are stored most-significant byte first.
     #[inline]
     #[must_use]

@@ -340,6 +340,15 @@ pub fn decode(r: &mut BitReader<'_>, state: &mut BlockState) -> DecodedBlock {
     // -- bit allocation + mantissas -----------------------------------
     // Coupling channel mantissas are not read here (see module docs): a
     // frame using coupling desyncs from this point, a known, disclosed gap.
+    //
+    // §7.3.5: bap 1/2/4's group state is shared across the whole block's
+    // linear mantissa stream, not reset per channel — a channel whose
+    // bap-1/2/4 bin count does not land on a group boundary hands its last
+    // group's unused slots to whichever channel is decoded next in this
+    // same block. One `PendingGroup` for the whole block, threaded through
+    // every call below in the spec's own processing order (fbw channels,
+    // then LFE), is what that requires.
+    let mut pending_group = mantissa::PendingGroup::new();
     let mut channels = Vec::new();
     for ch in 0..nfchans {
         let exps = state.chexps.get(ch).cloned().unwrap_or_default();
@@ -360,6 +369,7 @@ pub fn decode(r: &mut BitReader<'_>, state: &mut BlockState) -> DecodedBlock {
             &exps,
             dithflag.get(ch).copied().unwrap_or(true),
             simple_dither,
+            &mut pending_group,
         );
         channels.push(coeffs);
     }
@@ -369,7 +379,7 @@ pub fn decode(r: &mut BitReader<'_>, state: &mut BlockState) -> DecodedBlock {
         params.start_bin = 0;
         params.end_bin = LFE_COEFFS;
         let bap = bitalloc::compute_bap(&exps, &params);
-        mantissa::decode(r, &bap, &exps, true, simple_dither)
+        mantissa::decode(r, &bap, &exps, true, simple_dither, &mut pending_group)
     });
 
     apply_rematrix(&mut channels, state.acmod, rematflg);

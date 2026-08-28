@@ -36,10 +36,49 @@ fn dequant_grouped(level: u32, levels: u16) -> f32 {
     (2.0 * level as f32 - (levels - 1.0)) / levels
 }
 
+/// Carries a straddling group's not-yet-consumed mantissas across calls to
+/// [`decode`]. §7.3.5: "If the number of mantissas in an exponent set does
+/// not fill an integral number of groups, the groups are shared across
+/// exponent sets. The next exponent set in the block continues filling the
+/// partial groups" — grouping for bap 1/2/4 is a property of the *block's*
+/// linear mantissa stream, not of any one channel's mantissa count, so a
+/// channel whose bap-1/2/4 bin count is not a multiple of 3 (or 2, for
+/// bap=4) hands its last group's unused slots to whichever channel is
+/// decoded next in the same block. One instance must be created per block
+/// and threaded through every [`decode`] call in that block's own
+/// processing order (fbw channels, then LFE — coupling-channel mantissas
+/// are not read at all yet, a separate, disclosed gap); dropping it between
+/// calls, or creating a fresh one per channel, desyncs every mantissa read
+/// after the first channel whose count does not land on a group boundary.
+///
+/// Holds dequantised-but-unscaled values (each bin still applies its own
+/// exponent's scale on consumption), in the order they will be assigned to
+/// bins, so callers ready to receive the very next value are always at the
+/// front — `next()` pops from there.
+#[derive(Debug, Default)]
+pub struct PendingGroup(std::collections::VecDeque<f32>);
+
+impl PendingGroup {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn next(&mut self) -> Option<f32> {
+        self.0.pop_front()
+    }
+
+    fn extend(&mut self, values: impl IntoIterator<Item = f32>) {
+        self.0.extend(values);
+    }
+}
+
 /// Read and dequantise `bap.len()` mantissas in order, applying each one's
 /// exponent to produce a coefficient. `dither` supplies a caller-chosen
 /// pseudo-random value in `(-1, 1)` for `bap == 0` positions when `dithflag`
 /// is set (§7.3.4); pass a function returning `0.0` to disable dither.
+/// `pending` is this block's shared straddling-group state — see
+/// [`PendingGroup`]'s docs for why it must outlive a single call.
 #[must_use]
 pub fn decode(
     r: &mut BitReader<'_>,
@@ -47,14 +86,14 @@ pub fn decode(
     exps: &[u8],
     dither: bool,
     mut rng: impl FnMut() -> f32,
+    pending: &mut PendingGroup,
 ) -> Vec<f32> {
     let mut out = Vec::new();
-    let mut pending_group: Vec<f32> = Vec::new();
     for (i, &b) in bap.iter().enumerate() {
         let exp = exps.get(i).copied().unwrap_or(24);
         let scale = 2f32.powi(-i32::from(exp));
 
-        if let Some(v) = pending_group.pop() {
+        if let Some(v) = pending.next() {
             out.push(v * scale);
             continue;
         }
@@ -78,16 +117,13 @@ pub fn decode(
                 bits,
             } => {
                 let code = r.get(u32::from(bits));
-                let mut levels_out = decompose_group(code, levels, per_group);
-                let first = levels_out.pop().unwrap_or(0);
-                // `decompose_group` returns least-significant value last;
-                // reverse so `pending_group.pop()` yields them in bitstream
-                // (most-significant-first) order on subsequent iterations.
-                levels_out.reverse();
-                pending_group = levels_out
-                    .into_iter()
-                    .map(|lvl| dequant_grouped(lvl, levels))
-                    .collect();
+                // §7.3.5's decoder equations give the *first* (earliest,
+                // most-significant) mantissa in the group — `a` for bap 1/2,
+                // `a` for bap 4 — as this bin's own value; `b` (and `c`)
+                // queue for whichever bins are decoded next, in that order.
+                let mut digits = decompose_group(code, levels, per_group).into_iter();
+                let first = digits.next().unwrap_or(0);
+                pending.extend(digits.map(|lvl| dequant_grouped(lvl, levels)));
                 dequant_grouped(first, levels)
             }
         };
@@ -109,7 +145,14 @@ mod tests {
     #[test]
     fn a_zero_bap_with_no_dither_decodes_to_silence() {
         let mut r = BitReader::new(&[0u8; 4]);
-        let out = decode(&mut r, &[0, 0, 0], &[10, 10, 10], false, || 1.0);
+        let out = decode(
+            &mut r,
+            &[0, 0, 0],
+            &[10, 10, 10],
+            false,
+            || 1.0,
+            &mut PendingGroup::new(),
+        );
         assert!(out.iter().all(|&v| v == 0.0));
     }
 
@@ -118,7 +161,7 @@ mod tests {
         let mut r = BitReader::new(&[0u8; 8]);
         let bap = [1u8, 1, 1, 2, 2, 2];
         let exps = [0u8; 6];
-        let out = decode(&mut r, &bap, &exps, false, || 0.0);
+        let out = decode(&mut r, &bap, &exps, false, || 0.0, &mut PendingGroup::new());
         assert_eq!(out.len(), 6);
     }
 
@@ -127,7 +170,7 @@ mod tests {
         // bap=6 -> 5 bits. All-zero code is exactly zero (two's complement),
         // not the most-negative value an offset-binary reading would give.
         let mut r = BitReader::new(&[0u8; 4]);
-        let out = decode(&mut r, &[6], &[0], false, || 0.0);
+        let out = decode(&mut r, &[6], &[0], false, || 0.0, &mut PendingGroup::new());
         assert_eq!(out[0], 0.0, "got {}", out[0]);
 
         // The MSB set, rest zero ("10000") is two's complement's most
@@ -136,7 +179,7 @@ mod tests {
         let mut buf = [0u8; 4];
         buf[0] = 0b1000_0000;
         let mut r2 = BitReader::new(&buf);
-        let out2 = decode(&mut r2, &[6], &[0], false, || 0.0);
+        let out2 = decode(&mut r2, &[6], &[0], false, || 0.0, &mut PendingGroup::new());
         assert!((out2[0] - (-1.0)).abs() < 1e-6, "got {}", out2[0]);
     }
 
@@ -148,7 +191,7 @@ mod tests {
         let mut buf = [0u8; 4];
         buf[0] = 0b011_00000; // code 3 in the first 3 bits
         let mut r = BitReader::new(&buf);
-        let out = decode(&mut r, &[3], &[0], false, || 0.0);
+        let out = decode(&mut r, &[3], &[0], false, || 0.0, &mut PendingGroup::new());
         assert_eq!(out[0], 0.0);
     }
 
@@ -157,7 +200,7 @@ mod tests {
         let mut r = BitReader::new(&[]);
         let bap = [15u8; 20];
         let exps = [0u8; 20];
-        let out = decode(&mut r, &bap, &exps, true, || 0.5);
+        let out = decode(&mut r, &bap, &exps, true, || 0.5, &mut PendingGroup::new());
         assert_eq!(out.len(), 20);
     }
 }
