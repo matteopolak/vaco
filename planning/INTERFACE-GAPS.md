@@ -1555,3 +1555,72 @@ work outside `vaco-filter-scope`'s own ownership.
 
 Not fixed here: `graphmonitor`/`agraphmonitor` are left unimplemented in
 `vaco-filter-scope`, recorded rather than worked around.
+
+## Gap 23 — `Stream::r_frame_rate`/`bit_rate` cannot distinguish "no mechanism" from "mechanism declined"
+
+Found investigating a fuzzer-surfaced MP4 mismatch (`planning/CONFORMANCE-FINDINGS.md`
+finding 55): a corrupted `stts` (every sample delta zero, `mdhd.duration` intact)
+gets `r_frame_rate="1/0"` from the reference — its sentinel for "could not
+determine" — while `vaco-probe` computes `"16/1"` from the stream's own valid,
+parsed H.264 VUI picture rate.
+
+The mechanism is `crates/app/vaco-probe/src/show.rs`'s `frame_rate()`: when
+`Stream::r_frame_rate` is undefined, it falls back to the codec-parsed
+(VUI-derived) rate. That fallback is *not* wrong in general — measured
+correct on a raw H.264 elementary stream, where the reference also states
+the parser's undivided tick rate (`"32/1"`, matching exactly on both sides)
+because a raw elementary-stream demuxer has no other source at all. It is
+wrong specifically when a container *has* a native per-frame timing
+mechanism, ran it, and got an answer of "undefined" on purpose — MP4's own
+`stts`-derived estimate in `vaco-demux-mp4` already leaves `r_frame_rate`
+undefined for this exact fixture, correctly, while stating `avg_frame_rate`
+from the container's total duration (matching the reference on both fields).
+`show.rs` cannot tell "no mechanism" from "mechanism ran and declined" apart
+from the field's own value — both look like `Rational::UNDEFINED`.
+
+**A same-shaped attempt was tried and reverted.** Gating
+`vaco-format-core::discovery`'s packet-mean frame-rate estimate behind "the
+container already stated `avg_frame_rate`" (on the theory that a container
+which states one field has already had its say about the other) left the
+cited MP4 fixture printing `"16/1"` unchanged — proving the estimate was
+never the mechanism producing that mismatch — and **regressed ordinary
+MPEG-TS video**: `fuzz/seeds/diff/mpegts/h264-aac.ts`'s video stream, which
+the reference and our own code already agree on (`r_frame_rate="8/1"`),
+started printing `"16/1"` instead, because MPEG-TS video's `avg_frame_rate`
+also arrives pre-stated (from the same picture-rate refine pass, ahead of
+the mean-delta estimate in packet order) and the change exposed the exact
+same `show.rs` fallback bug to a second format. The campaign's aggregate
+mismatch count for mpegts did not move either way (`agree=40`/`mismatch=1435`
+before and after, in a 1500-iteration `--rng-seed 42` run) — the regression
+was invisible to the file-level tally and would have shipped undetected
+without a direct fixture comparison against a pristine `HEAD` build. Reverted
+in full; `vaco-format-core` is byte-identical to `HEAD`.
+
+**`bit_rate` was checked for the same shape and does not have it** (dispatch
+5, same finding 55 investigation). `Stream`-level `bit_rate` for MPEG-TS AAC
+audio is missing entirely on our side (`ours="N/A"`) on every tested file,
+mutated or not, while the reference always states one — there is no
+"declines and states a sentinel" case observed for `bit_rate` the way there
+is for `r_frame_rate`'s `1/0`. MP4 is unaffected: its `esds` box states an
+explicit per-stream bit_rate, which both sides read directly rather than
+estimate, so this is specific to headerless-for-this-purpose formats like
+MPEG-TS. Not a fix candidate in this gap — recorded because it was checked
+and ruled out, per the same "say what you measured" standard as the rest of
+this entry.
+
+**Closing this gap needs a per-stream signal — likely a third state, "this
+value was actively determined to be undecidable" — that reaches from
+whichever demuxer or estimator has an opinion, through `Discovery<D>`,
+to `show.rs`'s display fallback**, distinguishing it from the plain "nothing
+has touched this field yet" starting state both currently share as
+`Rational::UNDEFINED`/`0/0`. This is wrapper-forwarding-scale work — the
+project has already been bitten three times by a new addition not reaching
+through a wrapper (`Box<dyn Muxer>`, `MappedFilter`, `AsDecoder`; see finding
+55) — and plumbing it through every demuxer that currently relies on
+`show.rs`'s blanket codec-parser fallback (at minimum every raw
+elementary-stream format, which needs the fallback to keep working) is wider
+than one fuzzer-found mismatch justifies fixing alone.
+
+Not fixed here: `vaco-probe` continues to print `"16/1"` for the corrupted-MP4
+`r_frame_rate` fixture where the reference prints `"1/0"`, recorded as an
+accepted, precisely diagnosed divergence rather than worked around.
