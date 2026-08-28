@@ -1932,6 +1932,7 @@ dependencies = [
  "vaco-bitstream",
  "vaco-codec-cabac",
  "vaco-codec-core",
+ "vaco-codec-dsp-idct",
  "vaco-codec-golomb",
  "vaco-core",
  "vaco-format-nalu",
