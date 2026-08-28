@@ -1107,3 +1107,61 @@ another agent and out of this session's scope by explicit instruction.
 Whoever next touches that crate's docs should update the claim (and check
 whether the rest of that module's reasoning about "nowhere to put decoded
 output" still holds now that there is somewhere).
+
+### `SubtitleContent::Bitmap`'s shape fits `vaco-codec-subtitle-bitmap`'s decode output well -- reporting back per the request above
+
+The entry above ("`FrameData::Subtitle` has no producer...") asked the
+first of the three T2-13 decoder crates to construct one to report whether
+`stride`/`data`/`palette` fits. It does, closely: DVB/PGS/VobSub decode in
+this crate all produce a `vaco_format_subtitle_bitmap::IndexedBitmap` --
+`rect` (`x`/`y`/`w`/`h`), a `Palette` of up to 256 `Rgba` entries, and a
+row-major `Vec<u8>` of indices with no padding between rows -- so
+`stride` is always exactly `w`, never something the decoder has to compute
+separately, and `palette.entries().iter().map(|c| [c.r,c.g,c.b,c.a])`
+converts directly to `Vec<[u8; 4]>`. Nothing about this session's three
+decoders needed a different rect field, a different palette entry count
+cap, or a stride wider than the logical width.
+
+Not wired up in this session: `vaco-codec-subtitle-bitmap` was built and
+committed as a standalone library before gap 17 closed (its own top-level
+doc comment explains why, referencing the gap as still-open), and this
+session's remaining scope did not include the `Decoder`/registry/
+`vaco-component.toml` plumbing that would actually construct
+`FrameData::Subtitle` values from its `SubtitleEvent`/`IndexedBitmap`
+output. That plumbing is a well-scoped follow-up now that both halves
+exist: a `Decoder` impl per `CodecId` (`DvbSubtitle`/`DvdSubtitle`/
+`HdmvPgsSubtitle`) translating this crate's already-working decode
+functions' output through `SubtitleRect::bitmap` into `FrameData::Subtitle`.
+
+### Nothing parses a Matroska `S_VOBSUB` track's `CodecPrivate` into a `Palette`
+
+`vaco-demux-matroska`'s codec table maps `S_VOBSUB` to `CodecId::DvdSubtitle`
+by name only (`crates/format/vaco-demux-matroska/src/codec.rs`); nothing
+reads the track's `CodecPrivate`, which for a real `S_VOBSUB` track is the
+literal `.idx`-file text (`size:`/`palette:` lines) per the Matroska
+specification's own convention for this codec. `vaco-codec-subtitle-bitmap`'s
+`vobsub::decode_spu` takes the 16-entry `Palette` as a plain parameter
+specifically to match `VobSubDemuxer::palette()`'s existing shape (see that
+function's own doc comment), which covers the `.idx`/`.sub` pair path --
+but there is currently no caller on the Matroska path that could produce
+that `Palette` at all, since nothing parses `CodecPrivate` into one.
+`vaco-subtitle-bitmap::vobsub::idx::parse_palette` already does exactly the
+parsing a `CodecPrivate`-reading caller would need; the gap is that nothing
+in `vaco-demux-matroska` calls it.
+
+### The registered `dvbsub` demuxer's fixed-chunk framing is not display-set aligned, so its decoder has to buffer
+
+`vaco-subtitle-bitmap::dvbsub::DEMUXER` deliberately matches the measured
+reference (`ffmpeg -h demuxer=dvbsub`'s raw chunk reader, see that crate's
+own docs) rather than doing any segment-aware framing -- correct against
+the measured reference, but it means a packet from that specific demuxer
+can split a `region_composition_segment` or an `object_data_segment` right
+down the middle. `vaco-codec-subtitle-bitmap::dvb::DvbSubDecoder` copes by
+buffering pushed bytes until it can walk a complete chain ending in
+`EndOfDisplaySet` before decoding (see its own doc comment) rather than
+assuming one push is one epoch. Real DVB delivery over MPEG-TS does not
+have this problem (`data_alignment_indicator` means one PES payload is
+normally one whole epoch), so this only matters for a caller driving the
+raw `dvbsub` format directly -- worth knowing if a future MPEG-TS wiring
+ever wants to hand this decoder individual segments instead of whole PES
+payloads, since the buffering assumes it may have to reassemble.
