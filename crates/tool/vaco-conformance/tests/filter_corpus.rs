@@ -115,13 +115,14 @@ fn pixelize_agrees_with_the_reference() {
 /// every multi-input adapter shape the crate uses: `maskedmerge` (3
 /// inputs, a hand-rolled `Filter`), `maskedmax`/`maskedmin` (3 inputs,
 /// `Paired`), `threshold` (4 inputs, `Paired` with an `input_count`
-/// override), `maskedclamp` (3 inputs, `Paired`), `maskedthreshold` (2
-/// inputs, `Paired`), and `premultiply` (2 inputs, `Synced` —
+/// override), `maskedclamp` (3 inputs, `Paired`), `maskedthreshold` in
+/// both `mode=abs` and the newly-recovered `mode=diff` (2 inputs,
+/// `Paired`), and `premultiply` (2 inputs, `Synced` —
 /// `vaco-filter-framesync`, the third and last shape) through
 /// `filterexec.rs`'s N-source-node support. Also pins the case *count*,
 /// not just that every case that ran agreed — every `[[media]]` entry is
-/// `fixed` (see the suite's own comment), so seven axis values must expand
-/// to exactly seven cases, never more (media multiplying a case) or fewer
+/// `fixed` (see the suite's own comment), so eight axis values must expand
+/// to exactly eight cases, never more (media multiplying a case) or fewer
 /// (a case silently dropped), which is exactly the shape of bug
 /// (`Tier::Smoke` silently excluding every case earlier in this campaign)
 /// a bare "for o in outcomes" loop cannot catch on its own.
@@ -132,8 +133,8 @@ fn multi_input_key_filters_agree_with_the_reference() {
     };
     assert_eq!(
         outcomes.len(),
-        7,
-        "expected exactly seven cases (all media `fixed`, seven axis values); got {outcomes:?}"
+        8,
+        "expected exactly eight cases (all media `fixed`, eight axis values); got {outcomes:?}"
     );
     for o in &outcomes {
         println!("{}: {:?}", o.case.id, o.verdict.label());

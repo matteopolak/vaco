@@ -182,6 +182,23 @@ fixed    = true
 generate = ["-f", "lavfi", "-i", "color=c=gray:s=10x10:d=1:r=25",
             "-vf", "geq=lum='60':cb=128:cr=128",
             "-frames:v", "1", "-pix_fmt", "gray8", "-f", "rawvideo"]
+[[media]]
+id       = "mtd-source-10"
+source   = "generated://mtd-source-10.raw"
+tags     = ["video"]
+fixed    = true
+generate = ["-f", "lavfi", "-i", "color=c=black:s=10x10:d=1:r=25",
+            "-vf", "geq=lum='X*25':cb=128:cr=128",
+            "-frames:v", "1", "-pix_fmt", "gray8", "-f", "rawvideo"]
+
+[[media]]
+id       = "mtd-reference-10"
+source   = "generated://mtd-reference-10.raw"
+tags     = ["video"]
+fixed    = true
+generate = ["-f", "lavfi", "-i", "color=c=gray:s=10x10:d=1:r=25",
+            "-vf", "geq=lum='100':cb=128:cr=128",
+            "-frames:v", "1", "-pix_fmt", "gray8", "-f", "rawvideo"]
 [[axis]]
 name   = "filter"
 values = [
@@ -240,6 +257,21 @@ values = [
     argv = ["{media:pm-main-10}", "premultiply", "", "gray8", "10", "10",
             "gray8", "10", "10",
             "{media:pm-alpha-10}", "gray8", "10", "10"] },
+  # `mode=diff` was a "not implemented, falls back to mode=abs, documented
+  # gap" case until this dispatch: the one probe on record (source=100,
+  # reference=102, threshold=5 -> 97) was underdetermined, and a full
+  # 256-value sweep at several (reference, threshold) pairs (see
+  # maskedthreshold.rs's own doc) recovered the exact formula
+  # (out = min(source, max(reference - threshold, 0))) and fixed it.
+  # threshold=30 here spans both the unchanged-interior region and the
+  # flat region past the floor in one 10-wide case, not just one or the
+  # other.
+  { id = "maskedthreshold-diff-mode",
+    extra_media = ["mtd-source-10", "mtd-reference-10"],
+    argv = ["{media:mtd-source-10}", "maskedthreshold", "threshold=30:mode=diff",
+            "gray8", "10", "10",
+            "gray8", "10", "10",
+            "{media:mtd-reference-10}", "gray8", "10", "10"] },
 ]
 
 [compare]
