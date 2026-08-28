@@ -6058,3 +6058,88 @@ introducing any new prediction-mode surface area to blur the result.
 `Vaco-Spec-Ref: iso-iec-14496-10-2002-draft` clause 7.4.5 (eq. 7-23),
 clause 8.5.1 (eq. 8-245), clause 8.5.2 (eq. 8-244, Figure 8-6), clause
 8.5.3 (eq. 8-246), clause 8.5.4 (Table 8-12).
+
+
+### Annex F's predictor table cross-checked bit-exact against a real `-obmc` fixture, before any weighting work (#359)
+
+Per instruction: confirm the resolved Figure F.1 predictor-source table
+against real `ffmpeg` decode *before* building OBMC weighting on top of
+it, the same way a table pinned from the primary text and never checked
+against the reference has bitten this project before (`sobel`'s
+never-tested border-rule claim).
+
+**Built the fixture the way the escape-sentinel and `maskedthreshold`
+work did: construct content where candidates visibly disagree, measure
+against real `ffmpeg`.** A uniform-motion fixture would validate
+nothing here — every predictor-source candidate (internal same-block,
+external neighbour) would carry the same value by coincidence, the
+identical trap as `intensity=1`'s one-axis source. Generated a QCIF
+sequence with a distinct, pseudo-random (not smoothly varying, not
+periodic) motion vector per 8x8 sub-block *and* per macroblock position,
+so an internal-vs-external misreading would diverge numerically for
+almost every sample; encoded with real `ffmpeg 8.1`
+(`-c:v h263p -flags +mv4 -obmc 1`), confirmed via decoded motion-vector
+side data (`PyAV`, `flags2=+export_mvs`) that every macroblock in the
+first P-frame actually used 4 distinct per-block vectors (396/396 8x8
+blocks, not 1-per-macroblock) - a real Annex F fixture, not a fallback
+to baseline single-vector coding.
+
+**Extracted the real, bitstream-exact `MVD` codewords with this crate's
+own already-tested VLC tables, not a hand-rolled parser.** Temporarily
+(reverted before this round's work was reported; `git status
+--porcelain` confirms clean) let a scratch picture-header path accept
+`advanced_prediction` and let INTER4V macroblocks fall through to a
+diagnostic branch reading the four raw `MVD` codewords via the same
+`tables::H263_MVD` VLC decode the one-vector path already uses, printed
+via `eprintln!`, then consumed the residual bits with the crate's real
+`reconstruct_macroblock` (fed a dummy `[0, 0]` vector — proven, from its
+own signature, to only affect pixel output, never bitstream position) so
+decoding continued correctly aligned across the whole picture rather
+than stopping at the first coded macroblock. All 99 macroblocks decoded
+without a single VLC desync.
+
+**Result: bit-exact, not merely close, for every block, on every
+interior macroblock checked (63/63).** Computed `predictor(candidate) +
+real_MVD` independently in Python and compared against `ffmpeg`'s own
+decoded final vector (from the same `PyAV` motion-vector side data) for
+each of the four luma blocks:
+
+- Block 0 (uncontested base-rule calibration): 63/63 exact. A plausible
+  wrong alternate (naive fine-grid extension instead of the true
+  above-*macroblock*-right source) matches only 19/63, by coincidence -
+  confirming the method actually discriminates right from wrong rather
+  than trivially agreeing with everything.
+- Block 1 (the previously two-round-unresolved one): 63/63 exact for the
+  resolved reading (`MV1` internal = block 0, `MV2`/`MV3` external). A
+  plausible wrong alternate matches 17/63.
+- Block 2 (where the prior pass's own "fully internal" documentation
+  claim was found wrong this round): 63/63 exact for the corrected
+  reading (`MV1` external = left neighbour's block 3, `MV2`/`MV3`
+  internal). The old, wrong "fully internal" claim matches only 12/63.
+- Block 3 (uncontested, fully internal): 63/63 exact.
+
+Landed the verified rule as real crate code -
+`motion::annex_f_predictor_sources` (`crates/codec/vaco-codec-h263/src/motion.rs`,
+commit `a347580`) - a pure, unit-tested lookup, marked
+`#[allow(dead_code)]` with a reason: it is landed ahead of its consumer.
+OBMC weighting (Figures F.2-F.4/§F.3, still just primary text plus this
+round's own transcription-accuracy caution — a line-by-line check, not
+shape/prefix-freedom, given this project's own MPEG-2 sibling bug was a
+single-bit width error that survived a weaker check), remote-vector
+substitution, and 4-vector `MCBPC` bitstream wiring are not implemented
+yet. **`vaco-codec-h263` still does not implement Annex F** - this
+round closes the predictor-table risk specifically, the one piece that
+could not be checked without a real differential fixture, before any of
+that remaining, larger implementation work starts.
+
+Gates: `cargo test/clippy -p vaco-codec-h263` clean (39 tests, +3 this
+round), `cargo check --workspace` clean. `git status --porcelain`
+checked before staging; the private-index recipe was needed once this
+round after a plain `git commit -- <path>` pulled in another agent's
+already-staged, mid-commit files (caught via `git diff HEAD~1 HEAD
+--name-only` before anything landed — the commit was rejected by
+`check-message` on an unrelated file first, `git reset -q` then
+recovered the shared index with no working-tree loss, and the
+private-index recipe carried the actual commit through cleanly).
+
+`Vaco-Spec-Ref: itu-t-h263` Annex F §F.2 (Figure F.1).
