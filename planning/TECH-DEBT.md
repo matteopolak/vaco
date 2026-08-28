@@ -3879,3 +3879,123 @@ rather than resting on an unverified inference.
 
 `Vaco-Spec-Ref: iso-iec-14496-10-2002-draft` Table 9-18, `coded_block_flag`
 context initialisation (`ctxBlockCat` 4, chroma AC).
+
+
+### The IDCT reverse-engineering-by-measurement project: diverges — the permanent ceiling stands
+
+Follow-up to "The MPEG-2 framemd5 ceiling: measured, not assumed" above,
+which scoped closing `ffmpeg -idct simple`'s mismatch as "determinable in
+principle by continued black-box measurement... a substantial dedicated
+reverse-engineering project." This entry spends one bounded round asking
+the sharper question that scoping left open: does that project
+*converge* (the space of things that need probing shrinks as evidence
+accumulates) or *diverge* (it doesn't)? Same rig, same rules — black-box
+only, no `ffmpeg` source read, patching block 0 of the same real,
+`ffmpeg`-validated 16x16 template stream used before.
+
+**Test 1: does the row pass separate from the column pass?** A 2D
+separable IDCT's own mathematics gives a clean prediction to check
+against, independent of any implementation detail: if every nonzero
+coefficient sits in frequency row `v=0` (i.e. `F[v][u]=0` for `v>0`),
+then `cos((2y+1)*0*pi/16) = 1` for every output row `y`, so the true
+mathematical output is *exactly* constant down every column — the
+column pass reduces to multiplying by 1, an identity operation with
+nothing left for the column stage to get wrong. Symmetrically, a
+coefficient set confined to frequency column `u=0` should reduce to a
+row-constant output. This is worth checking with real numbers before
+trusting it: if the reduction holds structurally, then a row-confined
+probe isolates row-pass mismatches only, and vice versa — two 1D
+problems instead of one 2D problem, and a real chance the space
+factors and shrinks.
+
+It does not hold. Single-coefficient probes confined to frequency row
+`v=0` (scan positions 1 and 2, both `raster (0, u)`) produced pixel-level
+mismatches that are **not row-constant**: scan position 1 differs by −1
+at exactly `(row 6, col 0)` and nowhere else; scan position 2 differs by
+−1 at exactly `(row 0, col 3)` and nowhere else. A mismatch confined to
+one output row, for an input that is mathematically row-invariant, means
+`ffmpeg`'s actual implementation is not cleanly executing "reduce the
+column pass to an identity and stop" the way the pure math would permit
+— its rounding behaviour is sensitive to *which* row the value ends up
+computed in, not just the value itself. The column-confined case (`u=0`,
+scan positions 12/17/27, `raster (v, 0)`) shows the mirror-image failure:
+scan position 27 differs at `(row 0, col 1)` *and* `(row 0, col 2)`
+simultaneously — two different columns in the same row, when a true
+column-constant reduction would give one column's worth of value
+replicated (or zero) everywhere. **The row and column passes do not
+separate under measurement.** Whatever structure `ffmpeg`'s specific
+fixed-point schedule has, it is not the clean two-stage factorisation the
+textbook separable formula would suggest reverse-engineering could
+exploit.
+
+**Test 2: does a magnitude sweep reveal a discoverable rounding
+constant?** Held scan position 1 fixed and swept the coefficient level
+through 1, 2, 3, 4, 5, 6, 7, 8, 16, 32, 64, 100, 127, −1, −8, −32, −100 —
+seventeen values spanning three orders of magnitude and both signs, each
+a pure linear rescaling of the same basis function's contribution. If a
+single shift/round constant governed the mismatch, the set of erroring
+pixels should move *predictably* as level scales (each pixel's own
+threshold is a fixed linear function of level; doubling a level should
+either leave a pixel's status unchanged or cross its own threshold in an
+explicable way). It does not: level 2 errors at `(6,3)`; level 4 (double)
+errors at `(0,3)` — an unrelated pixel; level 5 errors at *two* pixels,
+`(4,0)` and `(4,4)`; level 6 moves to `(0,1)`; level 8 (double 4) moves to
+`(6,0)`; level 16 (double 8) moves to `(2,6)`; levels 32, 64, 100, 127,
+−8, −32, −100 all match exactly (zero pixels differ); level 1, 3, 7 also
+match exactly; level −1 errors at two pixels, `(2,5)` and `(2,6)`. Scan
+position 2's own sweep shows the same shape: sparse, scattered hits
+(levels 1, 5, 6, 8) among mostly-exact results, at positions with no
+apparent relationship to each other or to the level that produced them.
+There is no monotonic trend, no periodicity, and no pixel that
+consistently owns "the" error as level grows — **more probing surfaced
+more distinct behaviours, not fewer.** This is the opposite of the
+signature a discoverable constant would leave.
+
+**Test 3: how many independent constraints does one measurement
+actually yield?** A block has 64 output pixels, which could in principle
+mean 64 equations per test. In practice, across every single/few-
+coefficient probe run this round and the previous one, the overwhelming
+majority of pixels match exactly — a typical probe's real information
+content is 0-2 differing pixels out of 64, and which 0-2 pixels differ
+is exactly the thing that changes unpredictably between adjacent
+magnitudes (Test 2) and doesn't respect the mathematical symmetry that
+should hold (Test 1). Each measurement yields little discriminating
+information, that information doesn't compose (the two-coefficient
+cancellation result from the previous entry already established this:
+two individually-erroring coefficients combined to zero error, not
+their sum), and adjacent points in the input space one might hope to
+interpolate between instead jump to unrelated output positions.
+
+**Verdict: diverges.** All three checks point the same way: the
+mismatch does not factor along the one structural axis (row/column
+separability) that the algorithm's own mathematics offers for free, does
+not reveal a stable constant under the cheapest possible parametric
+sweep (scaling one coefficient), and yields too little, too unstable
+information per probe to expect the combinatorial space of coefficient
+combinations to shrink as more of it is measured. Reproducing `ffmpeg
+-idct simple` bit-for-bit would require characterising a fixed-point
+schedule whose behaviour is sensitive to output position, coefficient
+magnitude, and (per the previous entry) the *joint* coefficient set, all
+three simultaneously and without the row/column shortcut a genuinely
+separable implementation would offer — which is no longer "a substantial
+project with a nameable shape," it is a search with no observed
+convergence after specifically looking for it along the three axes most
+likely to show it.
+
+**This is now the permanent ceiling, not a pending project.** MPEG-1/2
+decode accuracy in this crate (and `vaco-codec-jpeg`, which shares the
+identical Annex-A/IEEE-1180 accuracy-bound reasoning for its own IDCT)
+tops out at "reference-quality" (max-abs-deviation 1-2 against a real
+reference decoder) and cannot reach literal framemd5/byte identity
+against `ffmpeg`'s own output without adopting `ffmpeg`'s specific
+integer IDCT verbatim — which black-box measurement, pushed specifically
+at the question of whether it would ever stop being verbatim-or-nothing,
+does not show a path to. Any future issue in this family (#355, #356,
+and structurally any MPEG-1/2/JPEG accuracy issue with a literal
+framemd5/byte-identity acceptance criterion) should cite this entry and
+the one above it rather than re-opening the question or re-deriving the
+scoping. **Nothing implemented this round, per instruction** — this is a
+scoping answer, not a fix, and none of `vaco-codec-dsp-idct` was touched
+(still no live writer, confirmed again before this round started).
+
+`Vaco-Spec-Ref: itu-t-h262` Annex A.
