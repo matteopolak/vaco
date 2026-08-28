@@ -642,11 +642,27 @@ git diff HEAD -- planning/ASSIGNMENTS.md
 Lines your own commit added must not appear there as deletions. If they do, the
 working tree is stale and the next writer will undo you.
 
-**Do not skip the closing `git reset -q HEAD -- <path>`.** Without it the main
-index keeps the pre-commit blob, and `git status` reports the file as staged
-with changes -- `MM` -- for something that is already committed and identical
-to `HEAD`. It is cosmetic, but it is the kind of cosmetic that gets "fixed"
-with a `checkout` that destroys somebody's real work.
+**Never skip the closing `git reset -q HEAD -- <path>`. This is the step that
+has done the most damage of anything on this page.** A private-index commit
+does not touch the main index, so afterwards the main index still holds the
+**pre-commit** blob. `git status` shows that as `MM` — staged changes, for a
+file that is already committed and byte-identical to `HEAD`.
+
+That is not cosmetic. The next agent to stage broadly commits those stale
+blobs, and they land as **deletions of everybody else's work**. It has
+happened, at a scale nothing else here has reached: one commit carrying two
+genuine AC-3 fixes also reverted nine unrelated files — a `PixFmt` method and
+its tests, the CLI that called it, a lint fix, both halves of a muxer's
+extension list, its generated registry row, and two planning documents — four
+of them byte-identical to the blob that preceded the work, which is how a
+reversion is told apart from an edit. The agent that committed it did nothing
+wrong. The orchestrator had skipped this line on five commits in a row, seen
+the `MM`, checked that the working tree matched `HEAD`, and concluded it was
+cosmetic.
+
+Run it after every private-index commit, for every path in that commit. If you
+ever see `MM` on a file you did not just edit, the index is carrying somebody's
+stale blob and it is loaded — reset that path before you commit anything.
 
 **Use your own scratch directory, never `/tmp`.** `$SCRATCH` here means the
 session scratchpad path your environment gives you. This recipe used to say
