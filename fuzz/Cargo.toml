@@ -204,6 +204,7 @@ vaco-simd = { path = "../crates/core/vaco-simd", optional = true }
 vaco-subtitle-bitmap = { path = "../crates/format/vaco-subtitle-bitmap", optional = true }
 vaco-subtitle-text = { path = "../crates/format/vaco-subtitle-text", optional = true }
 vaco-textformat = { path = "../crates/app/vaco-textformat", optional = true }
+vaco-tx = { path = "../crates/signal/vaco-tx", optional = true }
 
 [features]
 default = [
@@ -367,6 +368,7 @@ default = [
     "subtitle-bitmap",
     "subtitle-text",
     "textformat",
+    "tx",
 ]
 bitstream = ["dep:vaco-bitstream", "dep:vaco-limits"]
 bsf-audio = ["dep:vaco-bsf-audio", "dep:vaco-chlayout", "dep:vaco-codec-core", "dep:vaco-limits", "dep:vaco-packet"]
@@ -528,6 +530,7 @@ scale = ["dep:vaco-color", "dep:vaco-limits", "dep:vaco-pixfmt", "dep:vaco-scale
 subtitle-bitmap = ["dep:vaco-core", "dep:vaco-format-core", "dep:vaco-io", "dep:vaco-limits", "dep:vaco-subtitle-bitmap"]
 subtitle-text = ["dep:vaco-core", "dep:vaco-format-core", "dep:vaco-format-subtitle", "dep:vaco-io", "dep:vaco-subtitle-text"]
 textformat = ["dep:vaco-textformat"]
+tx = ["dep:vaco-tx"]
 
 # Overflow checks ON in the profile the fuzzer actually runs, so arithmetic
 # overflow is a finding rather than a silent wrap (plan 13 §2.2.1). The shipped
@@ -2176,6 +2179,14 @@ test = false
 doc = false
 bench = false
 required-features = ["protocol-tls"]
+
+[[bin]]
+name = "tx_plan"
+path = "fuzz_targets/tx_plan.rs"
+test = false
+doc = false
+bench = false
+required-features = ["tx"]
 
 [[bin]]
 name = "vp8_decode"

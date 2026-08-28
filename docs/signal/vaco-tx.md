@@ -283,12 +283,21 @@ class C promises and is deliberately **not** part of the contract: it must not
 become something a codec depends on. If a codec turns out to need byte-exact
 float output, add the flag then, with that codec's conformance vectors in hand.
 
-**No fuzz target.** `fuzz/` is outside this crate's directory. The equivalent
-coverage — `Plan::new` over every length from 1 to 2048 plus large primes, prime
-powers and the cap boundary, asserting a valid plan or a clean error and never a
-panic — is in `tests/properties.rs::plan_new_is_total_over_every_length`. A real
-`cargo-fuzz` target over `(kind, dir, len, flags)` should be added when the fuzz
-crate is next touched.
+**`rustfft` as a differential oracle remains unadopted** — see §7.1. It would
+strengthen `tests/oracle.rs` above `n ≈ 1024`, where `reference.rs`'s direct
+`O(n²)` evaluation stops being trustworthy on its own arithmetic cost.
+
+**Fuzzing**: `fuzz/fuzz_targets/tx_plan.rs` drives `Plan::new` and `Tx::execute`
+over `(kind, dir, len, flags, scale)` plus arbitrary input samples, length
+capped at 8192 (see the target's own doc for why). It found one real slow
+input above that cap before the cap was added: `TxKind::DctI` at
+`len = 933439` took several seconds of CPU time, because `DctI`'s inner FFT
+runs at `2*(len-1)` and a badly-factoring length there can chain Rader and
+Bluestein recursively. `Plan::new`'s totality contract (§2.1) is not violated
+— it still returns a valid plan — but the cost at an unfriendly length well
+past the crate's own 8192/32768 benchmark range is unmeasured and undefended
+against. Worth a real look if a codec ever asks for a `DctI`/`DstI` length in
+that range from untrusted input; nothing currently does.
 
 ---
 
@@ -598,6 +607,7 @@ That gap is exactly where `rustfft` would earn its keep.
 | `tests/oracle.rs` | every kind, both directions, against `reference` — 70 lengths covering all six decomposition rules |
 | `tests/properties.rs` | round-trip, linearity, Parseval, DC/impulse/tone, shift theorem, **SIMD vs scalar bit-exact**, `Plan::new` totality, decomposition-rule selection |
 | `tests/golden_i32.rs` | the contract: digests, literal small vectors, determinism, saturation, SNR floors |
+| `fuzz/fuzz_targets/tx_plan.rs` | `Plan::new`/`Tx::execute` over arbitrary kind, direction, length (≤ 8192) and flags |
 
 The tone test earns its place: a flipped twiddle sign is the single most common
 FFT bug and it shows up there as energy in bin `n−k` instead of bin `k`.
