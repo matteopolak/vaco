@@ -2862,3 +2862,122 @@ crate's `MAX_CLUSTER_MS = 5000` cluster-splitting heuristic is a pre-existing,
 already-documented approximation (the module's own comment says as much) —
 a three-`Cluster` reference file came back five `Cluster`s here — unrelated
 to today's items and not touched.
+
+## 50. #639/#640: AVI's 600 Hz grid and FLV's metadata/terminator gaps closed; one new grid case found on the audio side
+
+`-c copy -fflags +bitexact`, measured against `ffmpeg 8.1` on three fixtures
+(an MP4 with H.264+AAC, a video-only MP4, and an MPEG-TS with B-frames and a
+non-zero start time):
+
+```text
+        before          after (this session)
+avi     15944 / 39304   29268 / 39304   (H.264+AAC MP4 fixture)
+avi     19070 / 24898   19070 / 24898   (video-only MP4 fixture, unchanged
+                                          input, both before/after already
+                                          shown post-fix here)
+avi     ~113510(*) / 99360   93350 / 99360   (MPEG-TS fixture; the 113510
+                                          figure is this fix's own first,
+                                          origin-unaware attempt — see below)
+flv     15360 / 15459   15459 / 15459   (byte-identical size; content
+                                          differs only in the two
+                                          pre-existing duration/bitrate
+                                          computations finding 44 covers)
+```
+
+### AVI (#639): the grid, `dwMicroSecPerFrame`, and `vprp` landed; two things did not
+
+`vaco-mux-avi` now places video packets on a fixed 600 Hz slot grid
+(`GRID_RATE = 1/600`, driven through `Muxer::stream_time_base` so the
+existing per-packet rescale machinery hands `write_packet` an already-quantised
+slot number) and backfills every empty slot with a zero-length placeholder
+chunk before writing the real one. `avih.dwMicroSecPerFrame` is threaded
+through `Muxer::add_stream_with`'s `StreamSpec::time_base` (the same channel
+`vaco-mux-hash`'s `framecrc` already uses for its `#tb` line), since the
+600 Hz grid rate and the value this field needs — the *source* track time
+base — are two different numbers by design. A `vprp` chunk is now written
+per video `strl`, decoded field-by-field from one measured fixture against
+the public OpenDML AVI File Format Extensions layout.
+
+Verified directly, not just by size: on all three fixtures, `ffmpeg -f null -`
+against our output exits 0 and the decoded **video** MD5 matches both the
+source and the reference's own AVI output exactly, byte for byte — including
+the MPEG-TS fixture, which has B-frames (`pts != dts`) and a 1.48-second
+start offset.
+
+**Found while measuring, fixed before landing: the grid must rebase to the
+stream's own first frame.** The first implementation used each packet's raw
+(rescaled) timestamp as its slot number directly. That is correct for a
+source whose clock starts at zero, but AVI has no absolute-time field
+anywhere — position *is* time, starting at the first byte of `movi` — so a
+source that does not start at zero (routine for MPEG-TS, whose clock had
+already run 1.4s by the first video frame) got ~840 slots' worth of empty
+padding at the very start of the file, inflating both the total slot count
+and the file size for no reason. Fixed by capturing the first video
+packet's own timestamp as the grid's origin and rebasing every later slot
+against it. This is the kind of thing a single-fixture measurement can miss
+entirely — the original MP4 fixture happens to start at pts 0, so the bug
+was invisible until a second fixture with a different clock shape was
+tried.
+
+**Left undone, not silently: `JUNK` padding, and one audio case.** `hdrl`'s
+three `JUNK` reservations (inside each `strl`, and before `movi`) are not
+written — their exact sizing rule was not determined from the one fixture
+measured (both `strl` reservations were the same size, 4120 bytes, despite
+very different `strf` content, which rules out "pad to N bytes past `strf`"
+but does not by itself say what the rule is), and they carry no semantic
+content any reader depends on, so this was left as a documented gap rather
+than a guess. Separately: on the one fixture with compressed (AAC) audio,
+the reference also writes a small number of zero-length *audio* placeholder
+chunks (`01wb`, not `00dc`) that this session's fix does not — same
+principle as the video grid ("position is time") extended to a VBR audio
+stream's own per-frame duration, but the fixture only showed a 3-chunk
+discrepancy and no second fixture was available to confirm the exact
+mechanism (candidate: AAC's own `1024/sample_rate` frame duration as a
+second, audio-specific grid — `avi` already writes `dwScale/dwRate` as
+sample-rate-only for VBR audio today, which this finding does not touch).
+Not fixed here; needs its own measurement pass before it should be.
+
+The H.264/HEVC Annex-B conversion this crate already had (finding 16) is
+unchanged. Finding 47 ("AVI and Ogg demuxers: extradata never reaches
+stream info") already recorded, from the demux side, that the reference
+actually stores H.264 in AVI length-prefixed (`avc1` FourCC, `avcC` in
+`strf`) rather than Annex-B — this session's own fresh measurement of
+`ffmpeg -c copy -f avi` output confirms that independently (`is_avc=true`,
+`nal_length_size=4`, `strf` FourCC `avc1`, and the first `movi` chunk's
+payload is 4-byte-length-prefixed, not start-code-delimited). That is a
+real, separate divergence from what this crate's muxer writes today
+(Annex-B, `H264` FourCC, no `avcC`), tracked under finding 47's title, not
+re-opened here — changing it touches the same `write_packet`/`strf`/
+`check_bitstream` machinery finding 16 already shaped, and deserves its own
+measurement pass across both directions (mux and demux) rather than a
+drive-by change.
+
+### FLV (#640): both causes closed exactly
+
+`onMetaData` now forwards `major_brand`/`minor_version`/`compatible_brands`
+(as AMF0 strings, `minor_version` included despite being numeric) when the
+caller supplied them via `Muxer::set_metadata` — previously unimplemented on
+this muxer entirely, so `-map_metadata`'s default (which already copies
+these from `vaco-demux-mp4::meta::file_type_tags` upstream) had nowhere to
+land. `write_trailer` now appends the reference's 5-byte AVC end-of-sequence
+tag (`17 02 00 00 00`) at the last real video tag's own timestamp for
+`Framing::LegacyVideoAvc` streams; Enhanced RTMP's analogous
+`PacketTypeSequenceEnd` for HEVC/AV1/VP9 is not implemented, unverified
+against the reference for lack of a fixture.
+
+Verified: output size matches the reference exactly (15459 bytes both);
+`onMetaData`'s key list and the terminator tag are byte-identical; decoded
+video MD5 matches the source; decoded audio MD5 matches the *reference's own
+FLV output* exactly, though not the source — an AAC-priming-sample
+limitation inherent to FLV (no edit-list mechanism), present in the
+reference's own round-trip too, not something this fix introduced.
+
+Tests: `vaco-mux-avi/tests/roundtrip.rs` gained four —
+`video_packets_land_on_the_grid_with_empty_slots_between`,
+`the_grid_rebases_to_the_streams_own_first_frame`,
+`an_implausible_grid_gap_is_rejected_not_looped_forever`, and
+`avih_dwmicrosecperframe_tracks_the_source_time_base`.
+`fuzz/fuzz_targets/avi_mux_packet.rs` now varies the `pts`/`dts` gap (bounded
+to keep one iteration fast) so the new backfill loop and its `Budget`
+accounting get exercised; 30s run, `exit=0`, `execs≈1,660,000`,
+`find fuzz/artifacts -type f` empty.
