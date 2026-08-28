@@ -133,6 +133,7 @@ mod cabac_mb_tables;
 pub mod cavlc;
 mod cavlc_tables;
 mod dequant;
+mod intra;
 pub mod mb;
 pub mod decoder;
 

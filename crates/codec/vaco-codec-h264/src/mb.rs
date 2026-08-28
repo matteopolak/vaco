@@ -112,7 +112,7 @@ impl PartPred {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum MbKind {
     Intra4x4,
-    Intra16x16 { cbp_luma: u8, cbp_chroma: u8 },
+    Intra16x16 { cbp_luma: u8, cbp_chroma: u8, pred_mode: u8 },
     IPcm,
     /// `P_L0_16x16`, `P_L0_L0_16x8`/`8x16`, and every non-direct, non-8x8 B
     /// shape (`B_L0_16x16` .. `B_Bi_Bi_8x16`) — one or two whole-macroblock
@@ -154,7 +154,12 @@ fn classify_mb_type(kind: SliceKind, code: u32) -> Result<MbKind> {
                 let idx = v - 1;
                 let cbp_luma = if idx >= 12 { 15 } else { 0 };
                 let cbp_chroma = ((idx / 4) % 3) as u8;
-                Ok(MbKind::Intra16x16 { cbp_luma, cbp_chroma })
+                // Table 7-11's own `Intra16x16PredMode` column: idx % 4,
+                // the same idx this arm already derives cbp_luma/cbp_chroma
+                // from — see clause 8.3.2's Table 8-3 for what modes 0..3
+                // mean (Vertical/Horizontal/DC/Plane).
+                let pred_mode = (idx % 4) as u8;
+                Ok(MbKind::Intra16x16 { cbp_luma, cbp_chroma, pred_mode })
             }
             25 => Ok(MbKind::IPcm),
             _ => Err(Error::InvalidData("mb_type: out of range for Table 7-8")),
@@ -364,6 +369,22 @@ pub struct SliceStats {
     /// reference *decoder* debug flag that exposes it -- see
     /// `tests/cabac_cbp_oracle.rs`.
     pub first_slice_mb_cbp: Option<(u8, u8)>,
+    /// Table 7-11's `Intra16x16PredMode` (clause 8.3.2's Table 8-3:
+    /// 0=Vertical/1=Horizontal/2=DC/3=Plane) for that same first decoded
+    /// macroblock, `None` if it wasn't `Intra_16x16` (including: skipped,
+    /// any other intra type, or no macroblock at all). CABAC slices only —
+    /// [`decode_slice_cavlc`] doesn't populate this. Exists so a real
+    /// decoded stream's first macroblock can drive
+    /// [`crate::intra::predict_intra16x16`] end to end without duplicating
+    /// `mb_type`'s CABAC decode in a test — see
+    /// `tests/cabac_intra_oracle_reconstruction.rs`.
+    pub first_slice_mb_intra16x16_pred_mode: Option<u8>,
+    /// Table 8-4's chroma intra mode (clause 8.3.3: 0=DC/1=Horizontal/
+    /// 2=Vertical/3=Plane) for that same first decoded macroblock, `None`
+    /// if it wasn't intra-coded at all (chroma intra pred mode is only
+    /// read for intra macroblocks — clause 7.3.5's `mb_pred()`). CABAC
+    /// slices only, same as the field above.
+    pub first_slice_mb_intra_chroma_pred_mode: Option<u8>,
 }
 
 /// Refusal reasons this module names explicitly rather than trying and
@@ -544,7 +565,7 @@ fn decode_macroblock_cavlc(
         decode_mb_pred_inter(r, budget, header, &kind, is_b)?;
     }
 
-    let (cbp_luma, cbp_chroma) = if let MbKind::Intra16x16 { cbp_luma, cbp_chroma } = &kind {
+    let (cbp_luma, cbp_chroma) = if let MbKind::Intra16x16 { cbp_luma, cbp_chroma, .. } = &kind {
         (*cbp_luma, *cbp_chroma)
     } else {
         let mut g = BoundedGolomb::new(r, budget);
@@ -1352,6 +1373,11 @@ struct CabacMbInfo {
     cbp_luma: u8,
     cbp_chroma: u8,
     intra_chroma_pred_mode: u8,
+    /// Table 7-11's `Intra16x16PredMode` (0=Vertical/1=Horizontal/2=DC/
+    /// 3=Plane, clause 8.3.2's Table 8-3) — only meaningful when
+    /// `is_intra16x16`; `0` otherwise (same "unused when the flag it's
+    /// gated on is false" convention as `cbp_luma`/`cbp_chroma` above).
+    intra16x16_pred_mode: u8,
 }
 
 /// One 4x4 luma block's motion-prediction neighbour state — [`None`]
@@ -1952,8 +1978,12 @@ pub fn decode_slice_cabac(
             decode_macroblock_cabac(cabac, budget, header, &mut ctx, &mut grids, &mut prev_qp, mb_x, mb_y)?;
             stats.macroblock_count += 1;
             if is_first_mb_in_slice {
-                stats.first_slice_mb_cbp =
-                    grids.mb_info_at(mb_x, mb_y).map(|info| (info.cbp_luma, info.cbp_chroma));
+                let info = grids.mb_info_at(mb_x, mb_y);
+                stats.first_slice_mb_cbp = info.map(|i| (i.cbp_luma, i.cbp_chroma));
+                stats.first_slice_mb_intra16x16_pred_mode =
+                    info.filter(|i| i.is_intra16x16).map(|i| i.intra16x16_pred_mode);
+                stats.first_slice_mb_intra_chroma_pred_mode =
+                    info.filter(|i| i.is_intra).map(|i| i.intra_chroma_pred_mode);
             }
         }
 
@@ -2095,11 +2125,13 @@ fn decode_macroblock_cabac(
         }
     }
 
-    let (cbp_luma, cbp_chroma) = if let MbKind::Intra16x16 { cbp_luma, cbp_chroma } = &kind {
+    let (cbp_luma, cbp_chroma) = if let MbKind::Intra16x16 { cbp_luma, cbp_chroma, .. } = &kind {
         (*cbp_luma, *cbp_chroma)
     } else {
         decode_cbp_cabac(cabac, ctx, grids, mb_x, mb_y, is_intra)
     };
+    let intra16x16_pred_mode =
+        if let MbKind::Intra16x16 { pred_mode, .. } = &kind { *pred_mode } else { 0 };
 
     let cbp_zero = cbp_luma == 0 && cbp_chroma == 0;
     let mb_qp_delta = if cbp_zero && !matches!(kind, MbKind::Intra16x16 { .. }) {
@@ -2163,6 +2195,7 @@ fn decode_macroblock_cabac(
             cbp_luma,
             cbp_chroma,
             intra_chroma_pred_mode,
+            intra16x16_pred_mode,
         },
     );
     Ok(())
