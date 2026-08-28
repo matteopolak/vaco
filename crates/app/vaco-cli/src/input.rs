@@ -118,7 +118,30 @@ pub fn open(index: u32, url: &str, req: &OpenRequest<'_>) -> Result<InputFile> {
         *probe.detect(&mut io, Some(url), None)?.desc
     };
 
-    let inner = (desc.open)(opener(url)?, &vaco_registry::Parsers)?;
+    let inner = if desc.flags.contains(vaco_format_core::FormatFlags::NEEDNUMBER) {
+        // Gap 7/#649: `img_%03d.png` is a pattern, not an openable file, so
+        // `opener(url)` would fail before the demuxer ever got a say — the
+        // exact bug reported against `-f image2` input. `DemuxerDesc::open`'s
+        // frozen signature still needs *some* source, so hand it an empty
+        // placeholder and let `Demuxer::bind_url` do the real filesystem
+        // resolution `Image2Demuxer::open_pattern` already implements
+        // correctly once it has the real URL.
+        let placeholder: Box<dyn MediaSource> = Box::new(vaco_io::MemorySource::new(Vec::new()));
+        let mut inner = (desc.open)(placeholder, &vaco_registry::Parsers)?;
+        inner.bind_url(url)?;
+        inner
+    } else {
+        let mut inner = (desc.open)(opener(url)?, &vaco_registry::Parsers)?;
+        // Best-effort for a format whose primary source opened fine but that
+        // still wants its own URL for something extra (VobSub's `.sub`
+        // sidecar, gap 7's other named case): `Unsupported` just means this
+        // demuxer has nothing to bind, which is every demuxer today.
+        match inner.bind_url(url) {
+            Ok(()) | Err(Error::Unsupported(_)) => {}
+            Err(e) => return Err(e),
+        }
+        inner
+    };
 
     let mut discovery = Discovery::new(inner, desc.flags, format_opts);
     // A failed discovery pass is not a failed open: it keeps whatever it
@@ -213,5 +236,35 @@ mod tests {
             // either way it must not be a success.
             other => assert!(matches!(other, Error::InvalidData(_)), "{other:?}"),
         }
+    }
+
+    /// Gap 7/#649: `-f image2` on a `%03d` pattern used to fail before the
+    /// demuxer ever saw the URL, because `opener(url)` tried to open the
+    /// literal, non-existent pattern string. `DEMUXER_IMAGE2.flags` carries
+    /// `NEEDNUMBER`, which routes this open through the placeholder-source +
+    /// `bind_url` path instead.
+    #[test]
+    fn an_image2_pattern_forced_by_format_opens_every_matching_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "vaco-cli-input-test-image2-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("img001.png"), b"one").unwrap();
+        std::fs::write(dir.join("img002.png"), b"two").unwrap();
+        let pattern = dir.join("img%03d.png");
+        let pattern = pattern.to_str().unwrap();
+
+        let req = OpenRequest {
+            force_format: Some("image2"),
+            ..OpenRequest::default()
+        };
+        let mut file = open(0, pattern, &req).unwrap();
+        assert_eq!(file.demuxer.streams().len(), 1);
+        assert_eq!(file.demuxer.read_packet().unwrap().payload(), b"one");
+        assert_eq!(file.demuxer.read_packet().unwrap().payload(), b"two");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
