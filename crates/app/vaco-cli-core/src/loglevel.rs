@@ -60,12 +60,11 @@ pub fn level<S: AsRef<OsStr>>(argv: &[S]) -> i32 {
     let mut args = argv.iter();
     while let Some(arg) = args.next() {
         let arg = arg.as_ref();
-        if arg == OsStr::new("-v") || arg == OsStr::new("-loglevel") {
-            if let Some(spec) = args.next().and_then(|v| v.as_ref().to_str())
-                && let Some(parsed) = parse(spec)
-            {
-                level = parsed;
-            }
+        if (arg == OsStr::new("-v") || arg == OsStr::new("-loglevel"))
+            && let Some(spec) = args.next().and_then(|v| v.as_ref().to_str())
+            && let Some(parsed) = parse(spec)
+        {
+            level = parsed;
         }
     }
     level

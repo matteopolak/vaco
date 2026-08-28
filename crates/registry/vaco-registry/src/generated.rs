@@ -2219,8 +2219,13 @@ pub static COMPONENTS: &[crate::Component] = &[
         feature: Some("mux-image2"),
         media: None,
         codec: None,
-        extensions: &[],
-        mime_types: &[],
+        extensions: &[
+            "bmp", "dpx", "exr", "jls", "jpeg", "jpg", "jxs", "jxl", "ljpg", "pam", "pbm", "pcx",
+            "pfm", "pgm", "pgmyuv", "phm", "png", "ppm", "sgi", "tga", "tif", "tiff", "jp2", "j2c",
+            "j2k", "xwd", "sun", "ras", "rs", "im1", "im8", "im24", "sunras", "vbn", "xbm",
+            "xface", "pix", "y", "avif", "qoi", "hdr", "wbmp",
+        ],
+mime_types: &[],
     },
     #[cfg(feature = "mux-mp4")]
     crate::Component {

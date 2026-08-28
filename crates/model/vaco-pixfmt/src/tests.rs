@@ -491,3 +491,33 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn best_of_prefers_the_source_format_over_any_conversion() {
+    let candidates = [PixFmt::MonoBlack, PixFmt::Gray8, PixFmt::Rgb24];
+    assert_eq!(PixFmt::Rgb24.best_of(&candidates), Some(PixFmt::Rgb24));
+}
+
+#[test]
+fn best_of_keeps_colour_rather_than_taking_the_first_entry() {
+    let candidates = [PixFmt::MonoBlack, PixFmt::Gray8, PixFmt::Rgb24];
+    assert_eq!(PixFmt::Bgr24.best_of(&candidates), Some(PixFmt::Rgb24));
+}
+
+#[test]
+fn best_of_breaks_ties_by_list_order() {
+    let candidates = [PixFmt::Rgb24, PixFmt::Bgr24];
+    assert_eq!(PixFmt::Gray8.best_of(&candidates), Some(PixFmt::Rgb24));
+}
+
+#[test]
+fn best_of_on_an_empty_list_is_none() {
+    assert_eq!(PixFmt::Rgb24.best_of(&[]), None);
+}
+
+#[test]
+fn losing_colour_outranks_losing_depth() {
+    let deep_gray = PixFmt::Rgb48be.conversion_loss(PixFmt::Gray16be);
+    let shallow_colour = PixFmt::Rgb48be.conversion_loss(PixFmt::Rgb24);
+    assert!(shallow_colour < deep_gray);
+}

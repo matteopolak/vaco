@@ -217,10 +217,24 @@ So: finish the core, then fan out wide.
 
 | Package | What it unblocks |
 |---|---|
-| #655 — pixel-format conversion, image2 extension mapping | every codec pair whose formats differ; today only pairs that happen to agree work |
+| #655 — pixel-format conversion, image2 extension mapping (done 2026-08-28) | every codec pair whose formats differ; before this, only pairs that happened to agree worked |
 | INTERFACE-GAPS 2, 7, 16 + #649 | image2 sequences, the segmenting muxers behind HLS and DASH, raw MPEG-1/2 input |
 | INTERFACE-GAPS 12, 13, 14, 15 | every BSF that takes an option, `showinfo`, `codecview`, every filter on float formats |
 | #652 (done) | `-c:v <name>` resolving at all |
+| INTERFACE-GAPS 17 — `FrameData` has no `Subtitle` variant | every subtitle decoder, bitmap and text alike: `-c:s <name>` cannot reach a live decoder for *any* codec today |
+
+Gap 17 is the orchestrator's, and it waits on the gap 12/13/14/15 package
+landing because both touch `crates/filter/`. Its blast radius is smaller than
+gap 17's own text implies: of 224 `FrameData::` references across 126 files,
+only **14 are match arms, in 10 files** — the rest are constructors, which a
+new variant does not disturb. The 10: `vaco-sched/src/wire.rs`,
+`vaco-frame/src/alloc.rs`, `vaco-filter-core/src/{adapt,timeline}.rs`,
+`vaco-filter-video-format/src/setdar.rs`,
+`vaco-filter-video-geometry/src/pad.rs`,
+`vaco-filter-mm/src/{setpts,segment,looping}.rs`,
+`vaco-filter-audio/src/amix.rs`. Note `FrameData` is not `#[non_exhaustive]`
+where `FrameSideData` is; that is why this one is not purely additive the way
+gap 11's `Metadata` variant was.
 
 ## Then: leaves, 3–5 per agent
 
@@ -235,7 +249,15 @@ Candidate batches, roughly in value order:
 - **MPEG-1/2 video decode** — epic #36, with `vaco-parse-mpegvideo` already landed.
 - **Subtitle decoders** — epic #44: DVB, DVD, PGS, CEA-608/708, Teletext. Five
   formats, one crate family, and the containers already carry them.
-- **T3 audio containers** — epics #58, #76.
+- **T3 audio containers** — epics #58, #76. *In flight from 2026-08-28 as
+  `agent:misc-audio` (#620/#621/#622, one crate `vaco-format-misc-audio`).*
+  All three issues name the same crate, so they are one dispatch, not three —
+  D11 allows one writer per crate.
+- **T3 video and metadata containers** — epic #77. *In flight from 2026-08-28
+  as `agent:misc-video` (#623/#624/#625, one crate `vaco-format-misc`).* Same
+  single-crate reasoning. `ivf` and `ffmetadata` are the two worth more than
+  their size: the first is what every AV1/VP9 test vector ships in, the second
+  is the first real consumer of gap 1's `Muxer::set_metadata`.
 - **The T3 video filter long tail** — epic #57, ~150 filters, explicitly the most
   parallelisable work in the project; several agents can run here at once.
 - **Remaining protocols** — SRT (#62), RIST (#63), SCTP/DTLS (#64), now that
