@@ -1184,38 +1184,45 @@ mod tests {
 
     /// `cabac_ip_simple.264`: the first real exercise of
     /// `crate::motion`/`crate::interp`/`reconstruct_picture_with_inter`/
-    /// the DPB built for this round's own batch dispatch (#421/#422/#423).
+    /// the DPB built this round for #421/#422/#423.
     ///
-    /// **Status, reported honestly rather than asserted**: every one of
-    /// the 25 frames decodes and reconstructs without a hard error --
-    /// the whole pipeline (CABAC ref_idx/mvd decode, this round's own
-    /// MV-prediction wiring, DPB list construction, six-tap qpel motion
-    /// compensation, residual add) runs end to end for the first time.
-    /// It is not yet correct: only 36.15% of luma samples match ffmpeg's
-    /// own (undeblocked) decode. Frame 0 (the I frame, using the
-    /// already-verified intra path) is byte-exact, confirming the
-    /// harness and reference are sound. Narrowed this far, under this
-    /// round's own time-box, before stopping: every macroblock in the
-    /// picture's own *first* row (`mb_y == 0`, which never exercises an
-    /// "above" or "above-right" neighbour lookup at all) reconstructs
-    /// perfectly in frame 1, including both a skipped, zero-motion
-    /// macroblock (a pure reference copy) and a non-skipped, zero-motion
-    /// macroblock (copy plus real residual) -- both checked by hand
-    /// against ffmpeg's own output and found byte-exact. Every
-    /// macroblock in every *other* row has real mismatches. That
-    /// contrast points at the cross-macroblock-row neighbour path
-    /// specifically (`crate::motion`'s own A/B/C derivation, or
-    /// `crate::mb`'s own `resolve_c`/grid wiring for it) as the most
-    /// likely location, but the exact defect was not found within this
-    /// round's own time-box, and this test does not claim otherwise. Not
-    /// closing #421/#422/#423 on this evidence -- their real acceptance
-    /// criteria (hand-derived-reference MV correctness, checkasm-verified
-    /// interpolation, POC types 1/2, MMCO, long-term references, B-slice
-    /// direct modes) are far from met by one 36%-matching fixture. No
-    /// assertion in this test beyond "did not panic": a specific
-    /// percentage threshold here would either be trivially true (useless
-    /// as a regression guard at 36%) or misrepresent a known-broken
-    /// pipeline as passing.
+    /// **Status, reported honestly rather than asserted** (per the owner's
+    /// own ruling, `planning/AGENT-CONSTRAINTS.md`'s "byte-exactness is a
+    /// check, not the bar": small unstructured deviation ships, a
+    /// structured one -- concentrated in certain blocks, or on every row
+    /// but the first -- does not, regardless of how small its average
+    /// is). All 25 frames decode and reconstruct without a hard error.
+    /// Two real defects were found and fixed this round by comparing
+    /// row 0 (byte-exact throughout) against row 1 (not): first, skipped
+    /// macroblocks never populated the mv grid at all (the same
+    /// same-macroblock-availability timing hazard already fixed once for
+    /// `coded_block_flag`); second, and far larger, `P_8x8`'s own
+    /// `num_sub == 1`/`2` sub-partitions wrote their real derived motion
+    /// vector to only *one* of their own 4x4 grid positions and zeroed
+    /// the other three, discarding real, often nonzero motion for most
+    /// of a macroblock's own area. Fixing both took the overall match
+    /// from 36.15% to 56.16%, and made several previously-wrong
+    /// macroblocks (e.g. macroblock (1, 1) of frame 1) fully byte-exact.
+    ///
+    /// **The structured pattern the owner's own ruling calls out by
+    /// name -- byte-exact on row 0, wrong elsewhere -- persists, smaller
+    /// but real**: frame 1's row-1 macroblocks now mismatch on roughly
+    /// 36-40 of their own 256 luma samples each (down from 66-177
+    /// before this round's fix), and every one of them is internally
+    /// *consistent* (every `P_8x8` quadrant's own four 4x4 blocks now
+    /// agree with each other, ruling the fill bug back out as the cause
+    /// of what remains) while a macroblock with a simpler two-quadrant
+    /// motion pattern reconstructs perfectly. That points at a specific
+    /// remaining error in motion vector *prediction* for some multi-way
+    /// `P_8x8` splits, not reconstruction or grid-filling, but the exact
+    /// mechanism was not isolated further within this round's own
+    /// time-box. Not closing #421/#422/#423 on this evidence: the
+    /// pattern is still structured, which the owner's own ruling treats
+    /// as a real defect independent of how small its average is, not
+    /// something the new, more permissive bar excuses. No assertion in
+    /// this test beyond "did not panic" -- a percentage threshold here
+    /// would either be trivially true or misrepresent a known-structured
+    /// defect as passing.
     #[test]
     fn cabac_ip_simple_decodes_and_reports_its_own_match_against_ffmpeg() {
         let data: &[u8] = include_bytes!("../tests/fixtures/cabac_ip_simple.264");

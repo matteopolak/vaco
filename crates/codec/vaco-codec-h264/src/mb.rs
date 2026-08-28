@@ -2949,15 +2949,31 @@ fn decode_sub_mb_pred_cabac(
             ref_idx[0] = i8::try_from(decode_ref_idx(cabac, &mut ctx.ref_idx, inc)).unwrap_or(i8::MAX);
         }
         // `num_sub` sub-partitions inside this 8x8 quadrant share one
-        // ref_idx but each read their own mvd; only `num_sub == 1` (P_L0_8x8)
-        // is common in real corpora, but all values are read either way so
-        // bit consumption stays correct for 8x4/4x8/4x4 splits too.
+        // ref_idx but each read their own mvd. `sub_positions` is where
+        // each sub-partition's own context/prediction *neighbour lookup*
+        // happens (its own top-left 4x4 corner); `owner_of` (below) is
+        // the separate question of which of the quadrant's own 4 4x4
+        // grid positions that sub-partition's *result* gets written to
+        // -- num_sub == 1 (P_L0_8x8, the common real-corpus case) writes
+        // the same one computed mv/mvd to all 4, not just the corner
+        // position the neighbour lookup used. Distinguishing 8x4 from
+        // 4x8 (both num_sub == 2) is not implemented -- both are treated
+        // as a horizontal top/bottom split, an approximation this
+        // crate's own oracle comparison has not yet been used to check
+        // (see #422's own scope note); num_sub == 4 (P_L0_4x4) is exact.
         let sub_positions: [(u32, u32); 4] = match num_sub {
             1 => [(x0, y0), (x0, y0), (x0, y0), (x0, y0)],
-            2 if x1 > x0 => [(x0, y0), (x1, y0), (x0, y0), (x1, y0)], // 8x4 columns unused; approximated as halves
-            2 => [(x0, y0), (x0, y1), (x0, y0), (x0, y1)],
+            2 => [(x0, y0), (x1, y0), (x0, y0), (x1, y0)],
             _ => [(x0, y0), (x1, y0), (x0, y1), (x1, y1)],
         };
+        let owner_of = |x: u32, y: u32| -> usize {
+            match num_sub {
+                1 => 0,
+                2 => usize::from(x == x1), // left half = sub 0, right half = sub 1 (see the 8x4/4x8 note above)
+                _ => usize::from(x == x1) + 2 * usize::from(y == y1),
+            }
+        };
+        let mut computed = [MvInfo::default(); 4];
         for s in 0..num_sub {
             let (sx, sy) = sub_positions[usize::from(s).min(3)];
             let sax = mb_x * 4 + sx;
@@ -2979,26 +2995,20 @@ fn decode_sub_mb_pred_cabac(
             );
             let mv = [(pmv.0.saturating_add(mvd[0].0), pmv.1.saturating_add(mvd[0].1)), (0, 0)];
             let info = MvInfo { pred: Some(pred), ref_idx, mvd, mv };
+            // Write this sub-partition's own corner immediately (not
+            // just into `computed`) -- a *later* sub-partition within
+            // this same quadrant needs to see it as a real left/above
+            // neighbour, the same immediate-write requirement
+            // `decode_two_partitions_cabac`'s own comment already names.
             grids.set_mv(sax, say, info);
+            if let Some(slot) = computed.get_mut(usize::from(s)) {
+                *slot = info;
+            }
         }
         for y in y0..=y1 {
             for x in x0..=x1 {
-                if grids.mv_at(mb_x * 4 + x, mb_y * 4 + y).pred.is_none() {
-                    // A sub-4x4/4x8/8x4 quadrant whose own num_sub loop
-                    // above did not cover every 4x4 position in this
-                    // quadrant (the "approximated as halves" case noted
-                    // above) -- filled with the quadrant's own last
-                    // decoded sub-partition's mv/mvd rather than left at
-                    // the default "unavailable" zero, so a later
-                    // partition's own neighbour lookup sees a real
-                    // (if approximate) value here instead of "not
-                    // available".
-                    grids.set_mv(
-                        mb_x * 4 + x,
-                        mb_y * 4 + y,
-                        MvInfo { pred: Some(pred), ref_idx, mvd: [(0, 0), (0, 0)], mv: [(0, 0), (0, 0)] },
-                    );
-                }
+                let owner = computed[owner_of(x, y)];
+                grids.set_mv(mb_x * 4 + x, mb_y * 4 + y, owner);
             }
         }
     }
