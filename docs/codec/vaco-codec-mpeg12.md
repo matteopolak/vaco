@@ -85,6 +85,29 @@ B-picture between them has already been decoded and emitted in the right
 order. `previous`/`recent` are the forward/backward references a
 B-picture reads; a P-picture reads `recent` alone.
 
+### Chroma formats: 4:2:0, 4:2:2, 4:4:4
+
+`macroblock::ChromaFormat` (from `sequence_extension()`'s `chroma_format`,
+Table 6-5 — always 4:2:0 for an MPEG-1 sequence, which has no
+`sequence_extension()` at all) is the one enum every chroma-format-shaped
+decision routes through: `block_count()` (Table 6-20: 6/8/12 blocks),
+`chroma_mb_pixels()` (§6.1.3's per-format subsampling: 8x8, 8x16, or
+16x16 pixels of chroma per macroblock), `chroma_block_slot()`
+(§6.3.17.4/Figures 6-10 through 6-12: which block index lands at which
+`(plane, col, row)` within the macroblock's chroma area), and
+`scale_vector()` (§7.6.3.7: how much a luma motion vector shrinks for the
+chroma sample grid — both components halved for 4:2:0, only the
+horizontal one for 4:2:2, neither for 4:4:4). `decoder.rs::begin_picture`
+picks the output `PixFmt` (`Yuv420p`/`Yuv422p`/`Yuv444p`) from the same
+value. `coded_block_pattern`'s base 6-bit VLC (Table B.9) is unchanged
+across all three formats; 4:2:2 appends a 2-bit `coded_block_pattern_1`
+and 4:4:4 a 6-bit `coded_block_pattern_2` (§6.2.5.3), both plain
+fixed-length reads, decoded in `decode_coded_macroblock` right after the
+base VLC. See "Known gaps" above for 4:4:4's one open honesty note (a
+likely defect in H.262's own `coded_block_pattern_2` pseudocode,
+implemented literally rather than "corrected" against a guess, and
+untestable against any real corpus either way).
+
 ## Real bugs found and fixed while building the differential harness
 
 All were found by hand-tracing a real `ffmpeg`-encoded fixture against
@@ -210,6 +233,11 @@ contract):
 | `m1_i` | 64x48 | MPEG-1, I only | 12.9 | 21 | 2.25 |
 | `m1_ip` | 64x48 | MPEG-1, I+P | 44.8 | 97 | 6.85 |
 | `m1_ipb` | 64x48 | MPEG-1, I+P+B | 44.2 | 97 | 6.60 |
+| `m2_422` | 176x144 | MPEG-2, 4:2:2, I+P (`-pix_fmt yuv422p`) | 1.9 | 2 | 0.11 |
+| `m2_422_ipb` | 176x144 | MPEG-2, 4:2:2, I+P+B | 1.6 | 2 | 0.10 |
+| `m2_altscan` | 176x144 | MPEG-2, 4:2:0, `alternate_scan=1`, I+P | 1.9 | 2 | 0.11 |
+| `m2_intravlc` | 176x144 | MPEG-2, 4:2:0, `intra_vlc=1`, I+P | 1.9 | 2 | 0.11 |
+| `m2_422_alt_ivlc` | 176x144 | MPEG-2, 4:2:2 + `alternate_scan=1` + `intra_vlc=1`, I+P | 4.3 | 5 | 0.12 |
 
 **Every MPEG-2 fixture is now reference-quality**: max-abs-deviation of 2
 across the board, consistent with `vaco-codec-dsp-idct`'s floating-point
@@ -223,6 +251,21 @@ of 200+, 234+ and 10.8 respectively, from a real, now-fixed bug (see
 slice no longer costs the rest of the picture and every later picture in
 the GOP that references it, and a genuine table transcription bug in
 `CODED_BLOCK_PATTERN` (three codes recorded one bit too long).
+
+**The `m2_422`/`m2_altscan`/`m2_intravlc`/`m2_422_alt_ivlc` rows are new
+corpus, not new numbers for an old corpus**: before T2-01b/#356, nothing
+this crate had ever decoded set `alternate_scan`, `intra_vlc_format`, or a
+`chroma_format` other than 4:2:0 — `ChromaFormat`/the alternate scan table
+/the intra-VLC table existed and were unit-tested, but no *fixture*
+actually exercised the bitstream path that selects any of them. All four
+reach the same reference-quality band the 4:2:0 corpus already established
+(avg MAD 1.6-4.3, max MAD 2-5 — the one row above 2 is the fixture
+combining all three features at once across a full I+P GOP, consistent
+with error compounding across more P-pictures rather than a new defect;
+see `docs/codec/vaco-codec-mpeg12.md`'s own git history for the exact
+`ffmpeg` invocations). `chroma_format == 3` (4:4:4) has no equivalent row
+at all — see "Known gaps" for why that is a structural limit of this
+project's tooling, not something left untried.
 
 That said, **"reference-quality" is not "framemd5-identical"**: max-abs-
 deviation of 2 means these are not byte-identical to the reference, and
@@ -382,12 +425,26 @@ rather than wrong pixels, and counted in
 field-coded pictures (only field prediction *within* a frame picture is
 implemented — the common real-world interlaced case), dual-prime
 prediction, 16x8 motion compensation, MPEG-1's full-pel motion vector
-modes, 4:2:2/4:4:4 chroma sampling (this crate only ever allocates
-`Yuv420p` frames — T2-01b/#356, not attempted this session), and
-spatial/SNR/temporal scalability extensions (not parsed at all). See
-`TECH-DEBT.md` for the open MPEG-1-specific accuracy gap (present, smaller,
-in a genuine I-picture and growing faster than plain float-IDCT drift
-across P-pictures — not a decode desync, not the fixtures' GOP structure
-being intra-only, which it isn't), which is this crate's remaining
-accuracy blocker now that MPEG-2 measures reference-quality across every
-fixture on hand.
+modes, and spatial/SNR/temporal scalability extensions (not parsed at
+all). See `TECH-DEBT.md` for the open MPEG-1-specific accuracy gap
+(present, smaller, in a genuine I-picture and growing faster than plain
+float-IDCT drift across P-pictures — not a decode desync, not the
+fixtures' GOP structure being intra-only, which it isn't), which is this
+crate's remaining accuracy blocker now that MPEG-2 measures
+reference-quality across every fixture on hand.
+
+4:2:2/4:4:4 chroma sampling (T2-01b/#356) landed this pass — see
+"Chroma formats: 4:2:0, 4:2:2, 4:4:4" below — but with one honest limit:
+`chroma_format == 3` (4:4:4)'s `coded_block_pattern_2` extension is
+implemented exactly as H.262's own §6.3.17.4 pseudocode publishes it, and
+that pseudocode has what looks like a real dimensional defect (a 6-bit
+fixed-length code that only ever drives 4 of the 12 `pattern_code[]`
+entries — see `macroblock.rs`'s `decode_coded_macroblock`, the
+`ChromaFormat::Yuv444` match arm, for the exact bit-shift accounting).
+This crate has no way to tell whether that is genuinely how a real
+encoder/decoder pair behaves, because `ffmpeg`'s own `mpeg2video` encoder
+does not support `yuv444p` output at all (`ffmpeg -h encoder=mpeg2video`
+lists only `yuv420p yuv422p`) — so 4:4:4 has zero differential-fixture
+coverage and, structurally, never can from this project's own tooling.
+4:2:0 and 4:2:2 both reach this crate's established reference-quality
+baseline on real `ffmpeg`-encoded fixtures; see "Measured accuracy".

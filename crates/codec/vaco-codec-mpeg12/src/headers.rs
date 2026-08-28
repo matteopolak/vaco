@@ -23,19 +23,25 @@ pub(crate) struct SequenceHeader {
     pub non_intra_matrix: [u8; 64],
 }
 
-/// `progressive_sequence` and `chroma_format` are parsed (correct bitstream
-/// framing requires reading every field `sequence_extension()` declares)
-/// but not yet read back by this crate: `progressive_sequence` has no
-/// effect on frame-picture decode (the only kind this crate handles —
-/// interlaced *or* progressive content can equally be carried as frame
-/// pictures), and `chroma_format` is always 4:2:0 in this crate's scope
-/// (4:2:2/4:4:4 chroma is a lower-priority extensions-pass concern, not
-/// this crate's core decode path). `crate::decoder::Sequence::ext` is what a
-/// caller reads to tell MPEG-1 from MPEG-2 (`Option::is_some`).
+/// `progressive_sequence` is parsed (correct bitstream framing requires
+/// reading every field `sequence_extension()` declares) but not read back
+/// by this crate: it has no effect on frame-picture decode, the only kind
+/// this crate handles — interlaced *or* progressive content can equally be
+/// carried as frame pictures. `chroma_format` **is** consumed: it drives
+/// `crate::macroblock`'s block count/geometry (§6.3.17.4, Table 6-20),
+/// `coded_block_pattern`'s extension bits (§6.2.5.3), chrominance motion
+/// vector scaling (§7.6.3.7), and the output `PixFmt`
+/// (`crate::decoder::begin_picture`). `crate::decoder::Sequence::ext` is
+/// what a caller reads to tell MPEG-1 from MPEG-2 (`Option::is_some`) —
+/// MPEG-1 has no `sequence_extension()` at all and is always 4:2:0.
 #[derive(Debug, Clone, Copy, Default)]
-#[allow(dead_code, reason = "parsed for correct framing, not yet consumed — see this struct's own doc comment")]
 pub(crate) struct SequenceExtension {
+    #[allow(dead_code, reason = "parsed for correct framing; genuinely has no effect on frame-picture decode, see this struct's own doc comment")]
     pub progressive_sequence: bool,
+    /// Raw `chroma_format` bits (Table 6-5): `1` = 4:2:0, `2` = 4:2:2, `3`
+    /// = 4:4:4, `0` reserved/non-conforming. Callers should route through
+    /// `crate::macroblock::ChromaFormat::from_raw`, which folds the
+    /// reserved code to 4:2:0 defensively rather than propagating it.
     pub chroma_format: u8,
 }
 

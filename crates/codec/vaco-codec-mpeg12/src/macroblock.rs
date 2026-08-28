@@ -27,6 +27,121 @@ const MAX_CBP_LEN: u8 = 13;
 const MAX_ADDR_LEN: u8 = 11;
 const MAX_DC_SIZE_LEN: u8 = 11;
 
+/// The largest `block_count` any chroma format reaches (Table 6-20, 4:4:4).
+pub(crate) const MAX_BLOCKS: usize = 12;
+
+/// Table 6-5's `chroma_format`, decoded into the three real values this
+/// crate ever needs to branch on — §6.3.17.4 (block count/geometry),
+/// §6.2.5.3 (`coded_block_pattern`'s extension bits), and §7.6.3.7
+/// (chrominance motion vector scaling) all key off exactly this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChromaFormat {
+    /// `chroma_format == 1`: chroma is half-resolution in both directions.
+    Yuv420,
+    /// `chroma_format == 2`: chroma is half-resolution horizontally only.
+    Yuv422,
+    /// `chroma_format == 3`: chroma matches luma resolution.
+    Yuv444,
+}
+
+impl ChromaFormat {
+    /// `0` (reserved, never legitimately sent) folds to 4:2:0 — the same
+    /// "malformed input degrades, never panics" convention this crate
+    /// already applies to every other out-of-range field it reads.
+    #[must_use]
+    pub(crate) const fn from_raw(raw: u8) -> Self {
+        match raw {
+            2 => Self::Yuv422,
+            3 => Self::Yuv444,
+            _ => Self::Yuv420,
+        }
+    }
+
+    /// Table 6-20: how many of a macroblock's blocks are luma+chroma
+    /// together.
+    #[must_use]
+    const fn block_count(self) -> usize {
+        match self {
+            Self::Yuv420 => 6,
+            Self::Yuv422 => 8,
+            Self::Yuv444 => 12,
+        }
+    }
+
+    /// One chroma plane's pixel dimensions covered by a single macroblock
+    /// (§6.1.3: "Cb and Cr matrices shall be one half the size of the
+    /// Y-matrix" in one or both dimensions, or the same size, depending on
+    /// format).
+    #[must_use]
+    const fn chroma_mb_pixels(self) -> (usize, usize) {
+        match self {
+            Self::Yuv420 => (8, 8),
+            Self::Yuv422 => (8, 16),
+            Self::Yuv444 => (16, 16),
+        }
+    }
+
+    /// §7.6.3.7: scale a luma motion vector (half-pel units) down to the
+    /// chrominance sample grid. 4:2:0 halves both components; 4:2:2 halves
+    /// only the horizontal one (chroma keeps luma's own vertical
+    /// resolution); 4:4:4 leaves both unmodified (chroma matches luma
+    /// resolution in both directions). `/2` here is exactly the spec's own
+    /// `vector[r][s][t] / 2`, §4.1 truncating division.
+    #[must_use]
+    #[allow(
+        clippy::integer_division,
+        reason = "§7.6.3.7's own formula, `vector[r][s][t] = vector'[r][s][t] / 2` — §4.1 defines '/' as this exact truncating division, not an approximation of it"
+    )]
+    const fn scale_vector(self, v: [i32; 2]) -> [i32; 2] {
+        match self {
+            Self::Yuv420 => [v[0] / 2, v[1] / 2],
+            Self::Yuv422 => [v[0] / 2, v[1]],
+            Self::Yuv444 => v,
+        }
+    }
+
+    /// §6.3.17.4/Figures 6-10, 6-11, 6-12: one block's `(plane, col, row)`
+    /// within its own plane's macroblock-sized area, for a chroma block
+    /// index (`i - 4`, i.e. `0` is the macroblock's first chroma block).
+    /// `plane` is `1` (Cb) or `2` (Cr); `col`/`row` are the *pixel* offset
+    /// of that block's own top-left corner within the macroblock's own
+    /// chroma area (always an 8x8 block, so both are `0` or `8`).
+    ///
+    /// 4:2:0 (2 chroma blocks, Figure 6-10 — "4, 5" left to right, Cb then
+    /// Cr, no stacking) and 4:2:2 (4 blocks, Figure 6-11 — "4 5 / 6 7", Cb
+    /// and Cr side by side, a second row stacked below at `row = 8`) both
+    /// interleave Cb/Cr at each position; 4:4:4 (8 blocks, Figure 6-12 —
+    /// "4 8 / 6 10" for Cb, "5 9 / 7 11" for Cr) is a 2x2 grid *per
+    /// component*, not an interleaved one, so the index-to-position
+    /// mapping does not extend from the smaller formats' pattern — each
+    /// is transcribed directly from its own figure.
+    #[must_use]
+    const fn chroma_block_slot(self, offset: usize) -> (usize, i32, i32) {
+        match self {
+            Self::Yuv420 => match offset {
+                0 => (1, 0, 0),
+                _ => (2, 0, 0),
+            },
+            Self::Yuv422 => match offset {
+                0 => (1, 0, 0),
+                1 => (2, 0, 0),
+                2 => (1, 0, 8),
+                _ => (2, 0, 8),
+            },
+            Self::Yuv444 => match offset {
+                0 => (1, 0, 0),
+                1 => (2, 0, 0),
+                2 => (1, 0, 8),
+                3 => (2, 0, 8),
+                4 => (1, 8, 0),
+                5 => (2, 8, 0),
+                6 => (1, 8, 8),
+                _ => (2, 8, 8),
+            },
+        }
+    }
+}
+
 /// Frame-based `frame_motion_type` code (Table 6-17).
 const FRAME_BASED: u32 = 0b10;
 /// Field-based `frame_motion_type` code (Table 6-17).
@@ -87,6 +202,9 @@ pub(crate) struct ActivePicture {
     /// bits the moment an encoder actually emits an escape code — see
     /// `block::decode_coefficients`.
     pub mpeg1: bool,
+    /// §6.2.2.3 `chroma_format` (Table 6-5), always 4:2:0 for an MPEG-1
+    /// sequence (no `sequence_extension()` to carry any other value).
+    pub chroma_format: ChromaFormat,
 }
 
 fn quantiser_scale(q_scale_type: bool, code: u8) -> u16 {
@@ -187,24 +305,33 @@ pub(crate) fn decode_slice(
     }
 }
 
-/// One decoded 16x16 luma + 8x8 Cb + 8x8 Cr prediction, before residual
-/// addition. All-zero for an intra macroblock (§7.6: "no prediction is
-/// formed").
+/// One decoded 16x16 luma + chroma prediction, before residual addition.
+/// All-zero for an intra macroblock (§7.6: "no prediction is formed").
+///
+/// `cb`/`cr` are always sized for the largest case (4:4:4's 16x16 chroma
+/// area) and addressed with a stride of 16 regardless of format; a 4:2:0
+/// or 4:2:2 macroblock simply never reads or writes the unused columns —
+/// simpler than three differently-shaped buffer types for what is, per
+/// macroblock, a handful of bytes either way.
 struct MbPrediction {
     luma: [u8; 256],
-    cb: [u8; 64],
-    cr: [u8; 64],
+    cb: [u8; 256],
+    cr: [u8; 256],
 }
 
 impl MbPrediction {
     const fn zero() -> Self {
         Self {
             luma: [0; 256],
-            cb: [0; 64],
-            cr: [0; 64],
+            cb: [0; 256],
+            cr: [0; 256],
         }
     }
 }
+
+/// The fixed stride [`MbPrediction::cb`]/[`MbPrediction::cr`] are always
+/// addressed with, regardless of chroma format (see that struct's docs).
+const CHROMA_PRED_STRIDE: usize = 16;
 
 #[allow(
     clippy::integer_division,
@@ -308,7 +435,16 @@ fn decode_coded_macroblock(
         let _marker_bit = r.get(1);
     }
 
-    let mut cbp = [false; 6];
+    // §6.2.5.3/§6.3.17.4: `pattern_code[i]` for `i` in `0..12`, though only
+    // the first `ap.chroma_format.block_count()` entries are ever read
+    // back by `reconstruct_macroblock`. Initialised to `macroblock_intra`
+    // for every `i` first (the spec's own pseudocode does this
+    // unconditionally, *then* lets `macroblock_pattern` override — so an
+    // intra macroblock with no `coded_block_pattern()` at all, or one
+    // whose extension bits don't cover a given index, keeps every block
+    // marked coded), then the base 6-bit VLC overrides `i in 0..6`, and a
+    // chroma-format-dependent fixed-length extension overrides more.
+    let mut cbp = [mbt.intra; MAX_BLOCKS];
     if mbt.pattern {
         let Some(&(_, code)) = vlc::decode(
             r,
@@ -319,11 +455,53 @@ fn decode_coded_macroblock(
             ap.slice_ok = false;
             return;
         };
-        for (i, slot) in cbp.iter_mut().enumerate() {
+        for (i, slot) in cbp.iter_mut().take(6).enumerate() {
             *slot = code & (1 << (5 - i)) != 0;
         }
-    } else if mbt.intra {
-        cbp = [true; 6];
+        match ap.chroma_format {
+            ChromaFormat::Yuv422 => {
+                // §6.2.5.3: `coded_block_pattern_1`, a 2-bit FLC, covers
+                // blocks 6-7 (the second Cb/Cr row Figure 6-11 adds).
+                let code1 = r.get(2);
+                for (i, slot) in cbp.iter_mut().enumerate().skip(6).take(2) {
+                    *slot = code1 & (1 << (7 - i)) != 0;
+                }
+            }
+            ChromaFormat::Yuv444 => {
+                // §6.2.5.3/§6.3.17.4: `coded_block_pattern_2`, a 6-bit
+                // FLC — but H.262's own pseudocode only ever derives
+                // `pattern_code[8..12]` from it (`for (i = 8; i < 12;
+                // i++) if (coded_block_pattern_2 & (1<<(11-i)))
+                // pattern_code[i] = 1`), using shifts 3..0 of the 6-bit
+                // field and leaving `pattern_code[6]`/`[7]` at whatever
+                // the unconditional `macroblock_intra` initialisation
+                // above set — never toggled by a bitstream bit at all,
+                // for either an intra or a non-intra 4:4:4 macroblock.
+                // This looks like a genuine dimensional mismatch in the
+                // 1995 base text (a 6-bit code that only ever drives 4 of
+                // the 12 indices, leaving 2 of `coded_block_pattern_2`'s
+                // own bits unread by this formula) rather than a
+                // transcription slip on this crate's part — checked
+                // against two independent extractions of the same PDF
+                // (`pdftotext` plain and `-layout`) and both agree
+                // character-for-character. Implemented exactly as
+                // published rather than "corrected" against a guess:
+                // `vaco-codec-mpeg12` has no legitimate way to tell which
+                // interpretation a real encoder/decoder pair settled on,
+                // since `ffmpeg`'s own `mpeg2video` encoder does not
+                // support `yuv444p` output at all (checked directly:
+                // `ffmpeg -h encoder=mpeg2video` lists only `yuv420p
+                // yuv422p`) — this path has zero differential-fixture
+                // coverage and never can, only the hand-crafted-bitstream
+                // unit tests below, verified against the primary text's
+                // own literal formula.
+                let code2 = r.get(6);
+                for (i, slot) in cbp.iter_mut().enumerate().skip(8).take(4) {
+                    *slot = code2 & (1 << (11 - i)) != 0;
+                }
+            }
+            ChromaFormat::Yuv420 => {}
+        }
     }
 
     if !mbt.intra {
@@ -373,6 +551,7 @@ fn decode_coded_macroblock(
             bwd_vecs,
             fwd_field_select,
             bwd_field_select,
+            ap.chroma_format,
         );
     }
 
@@ -411,6 +590,7 @@ fn decode_skipped_macroblock(idct: &mut Mpeg2Idct, ap: &mut ActivePicture, seq: 
                 [[0, 0], [0, 0]],
                 [0, 0],
                 [0, 0],
+                ap.chroma_format,
             );
         }
         PictureType::B => {
@@ -435,6 +615,7 @@ fn decode_skipped_macroblock(idct: &mut Mpeg2Idct, ap: &mut ActivePicture, seq: 
                 [bwd_vec, [0, 0]],
                 [0, 0],
                 [0, 0],
+                ap.chroma_format,
             );
         }
         PictureType::I | PictureType::D => {
@@ -444,7 +625,7 @@ fn decode_skipped_macroblock(idct: &mut Mpeg2Idct, ap: &mut ActivePicture, seq: 
         }
     }
 
-    write_prediction_only(ap, mb_x, mb_y, &pred);
+    write_prediction_only(ap, mb_x, mb_y, &pred, ap.chroma_format);
     let _ = idct; // no residual for a skipped macroblock; kept for a uniform call shape.
 }
 
@@ -468,22 +649,28 @@ fn form_macroblock_prediction(
     bwd_vecs: [[i32; 2]; 2],
     fwd_field_select: [i32; 2],
     bwd_field_select: [i32; 2],
+    chroma_format: ChromaFormat,
 ) {
+    let (cw, ch) = chroma_format.chroma_mb_pixels();
     let px = i32::try_from(mb_x).unwrap_or(0) * 16;
     let py = i32::try_from(mb_y).unwrap_or(0) * 16;
-    let cx = i32::try_from(mb_x).unwrap_or(0) * 8;
-    let cy = i32::try_from(mb_y).unwrap_or(0) * 8;
+    let cx = i32::try_from(mb_x).unwrap_or(0) * i32::try_from(cw).unwrap_or(8);
+    let cy = i32::try_from(mb_y).unwrap_or(0) * i32::try_from(ch).unwrap_or(8);
 
     if !field_based {
         form_component(
             fwd_ref, bwd_ref, fwd_vecs[0], bwd_vecs[0], 0, 0, 1, 0, 0, px, py, 16, 16,
             &mut pred.luma, 16,
         );
-        let fwd_c = [fwd_vecs[0][0] / 2, fwd_vecs[0][1] / 2];
-        let bwd_c = [bwd_vecs[0][0] / 2, bwd_vecs[0][1] / 2];
-        form_component(fwd_ref, bwd_ref, fwd_c, bwd_c, 1, 1, 1, 0, 0, cx, cy, 8, 8, &mut pred.cb, 8);
+        let fwd_c = chroma_format.scale_vector(fwd_vecs[0]);
+        let bwd_c = chroma_format.scale_vector(bwd_vecs[0]);
         form_component(
-            fwd_ref, bwd_ref, fwd_c, bwd_c, 2, 2, 1, 0, 0, cx, cy, 8, 8, &mut pred.cr, 8,
+            fwd_ref, bwd_ref, fwd_c, bwd_c, 1, 1, 1, 0, 0, cx, cy, cw, ch, &mut pred.cb,
+            CHROMA_PRED_STRIDE,
+        );
+        form_component(
+            fwd_ref, bwd_ref, fwd_c, bwd_c, 2, 2, 1, 0, 0, cx, cy, cw, ch, &mut pred.cr,
+            CHROMA_PRED_STRIDE,
         );
         return;
     }
@@ -493,6 +680,10 @@ fn form_macroblock_prediction(
     // `crate::motion::form_prediction`'s docs for the row-scale trick this
     // reuses on both the reference (already handled there) and the
     // destination buffer (handled here by writing every other row).
+    // `ch / 2` is exact for every chroma format this crate reaches (8/2 =
+    // 4 for 4:2:0, 16/2 = 8 for 4:2:2/4:4:4) — a macroblock always has an
+    // even number of chroma rows, so this is not an approximation.
+    let ch_field = ch / 2;
     for r_idx in 0..count {
         let fv = fwd_vecs.get(r_idx).copied().unwrap_or([0, 0]);
         let bv = bwd_vecs.get(r_idx).copied().unwrap_or([0, 0]);
@@ -507,20 +698,23 @@ fn form_macroblock_prediction(
         );
         deinterleave_rows(&luma_field, 16, 8, &mut pred.luma, 16, parity);
 
-        let fv_c = [fv[0] / 2, fv[1] / 2];
-        let bv_c = [bv[0] / 2, bv[1] / 2];
-        let mut cb_field = [0u8; 32]; // 8 wide x 4 tall
+        let fv_c = chroma_format.scale_vector(fv);
+        let bv_c = chroma_format.scale_vector(bv);
+        // 16 wide x 8 tall regardless of format — the largest case
+        // (4:4:4's `cw = 16`, `ch_field = 8`) needs the whole buffer;
+        // smaller formats just use the leading `cw` columns of it.
+        let mut cb_field = [0u8; 128];
         form_component(
-            fwd_ref, bwd_ref, fv_c, bv_c, 1, 1, 2, fwd_parity, bwd_parity, cx, cy / 2, 8, 4,
-            &mut cb_field, 8,
+            fwd_ref, bwd_ref, fv_c, bv_c, 1, 1, 2, fwd_parity, bwd_parity, cx, cy / 2, cw,
+            ch_field, &mut cb_field, cw,
         );
-        deinterleave_rows(&cb_field, 8, 4, &mut pred.cb, 8, parity);
-        let mut cr_field = [0u8; 32];
+        deinterleave_rows(&cb_field, cw, ch_field, &mut pred.cb, CHROMA_PRED_STRIDE, parity);
+        let mut cr_field = [0u8; 128];
         form_component(
-            fwd_ref, bwd_ref, fv_c, bv_c, 2, 2, 2, fwd_parity, bwd_parity, cx, cy / 2, 8, 4,
-            &mut cr_field, 8,
+            fwd_ref, bwd_ref, fv_c, bv_c, 2, 2, 2, fwd_parity, bwd_parity, cx, cy / 2, cw,
+            ch_field, &mut cr_field, cw,
         );
-        deinterleave_rows(&cr_field, 8, 4, &mut pred.cr, 8, parity);
+        deinterleave_rows(&cr_field, cw, ch_field, &mut pred.cr, CHROMA_PRED_STRIDE, parity);
     }
 }
 
@@ -594,10 +788,11 @@ fn form_component(
     }
 }
 
-fn write_prediction_only(ap: &mut ActivePicture, mb_x: u32, mb_y: u32, pred: &MbPrediction) {
+fn write_prediction_only(ap: &mut ActivePicture, mb_x: u32, mb_y: u32, pred: &MbPrediction, chroma_format: ChromaFormat) {
+    let (cw, ch) = chroma_format.chroma_mb_pixels();
     write_plane(&mut ap.frame, 0, mb_x * 16, mb_y * 16, &pred.luma, 16, 16, 16);
-    write_plane(&mut ap.frame, 1, mb_x * 8, mb_y * 8, &pred.cb, 8, 8, 8);
-    write_plane(&mut ap.frame, 2, mb_x * 8, mb_y * 8, &pred.cr, 8, 8, 8);
+    write_plane(&mut ap.frame, 1, mb_x * cw as u32, mb_y * ch as u32, &pred.cb, cw, ch, CHROMA_PRED_STRIDE);
+    write_plane(&mut ap.frame, 2, mb_x * cw as u32, mb_y * ch as u32, &pred.cr, cw, ch, CHROMA_PRED_STRIDE);
 }
 
 fn write_plane(frame: &mut Frame, plane_idx: usize, ox: u32, oy: u32, src: &[u8], w: usize, h: usize, src_stride: usize) {
@@ -619,16 +814,20 @@ fn write_plane(frame: &mut Frame, plane_idx: usize, ox: u32, oy: u32, src: &[u8]
     }
 }
 
-/// The six blocks' geometry within a macroblock (§6.3.1 Figure 6-8, 4:2:0
-/// only — this crate's whole scope): `(plane, col_offset, row_offset,
-/// row_scale, row_parity)`, where the last two encode `dct_type`'s
-/// field/frame reorganisation of the *luma* blocks (chroma always stays
-/// contiguous, a documented simplification for the 4:2:0-only scope this
-/// crate targets).
-fn block_geometry(i: usize, dct_type: u8) -> (usize, i32, i32, i32, i32) {
+/// One block's geometry within a macroblock (§6.3.17.4, Figures 6-10
+/// through 6-12 depending on `chroma_format`): `(plane, col_offset,
+/// row_offset, row_scale, row_parity)`, where the last two encode
+/// `dct_type`'s field/frame reorganisation of the *luma* blocks. Chroma
+/// blocks always stay contiguous (`row_scale = 1, row_parity = 0`)
+/// regardless of `chroma_format` — a documented simplification carried
+/// over unchanged from the 4:2:0-only version of this function; nothing
+/// about extending to 4:2:2/4:4:4 required revisiting it, since Table 6-20
+/// and its Figures never mention field/frame DCT reorganisation applying
+/// to chroma at all, only to luma (§6.3.17.1's own `dct_type` semantics).
+fn block_geometry(i: usize, dct_type: u8, chroma_format: ChromaFormat) -> (usize, i32, i32, i32, i32) {
     if i >= 4 {
-        let plane = if i == 4 { 1 } else { 2 };
-        return (plane, 0, 0, 1, 0);
+        let (plane, col, row) = chroma_format.chroma_block_slot(i - 4);
+        return (plane, col, row, 1, 0);
     }
     let col = if i % 2 == 1 { 8 } else { 0 };
     if dct_type == 1 {
@@ -656,22 +855,24 @@ fn reconstruct_macroblock(
     mb_y: u32,
     intra: bool,
     dct_type: u8,
-    cbp: [bool; 6],
+    cbp: [bool; MAX_BLOCKS],
     pred: &MbPrediction,
 ) {
     let intra_dc_mult = tables::intra_dc_mult(ap.pce.intra_dc_precision);
     let alternate_scan = ap.pce.alternate_scan;
     let intra_vlc_format = ap.pce.intra_vlc_format;
     let quantiser_scale = ap.quantiser_scale;
+    let chroma_format = ap.chroma_format;
+    let (chroma_mb_w, chroma_mb_h) = chroma_format.chroma_mb_pixels();
 
-    for i in 0..6usize {
+    for i in 0..chroma_format.block_count() {
         let coded = cbp.get(i).copied().unwrap_or(false);
         let cc = match i {
             0..4 => 0usize,
-            4 => 1,
+            _ if i % 2 == 0 => 1,
             _ => 2,
         };
-        let (plane_idx, col_off, row_off, row_scale, row_parity) = block_geometry(i, dct_type);
+        let (plane_idx, col_off, row_off, row_scale, row_parity) = block_geometry(i, dct_type, chroma_format);
 
         let f: [i32; 64] = if coded {
             let intra_dc = if intra {
@@ -739,12 +940,12 @@ fn reconstruct_macroblock(
         let (plane_ox, plane_oy) = if plane_idx == 0 {
             (mb_x * 16, mb_y * 16)
         } else {
-            (mb_x * 8, mb_y * 8)
+            (mb_x * chroma_mb_w as u32, mb_y * chroma_mb_h as u32)
         };
         let (pred_buf, pred_stride): (&[u8], usize) = match plane_idx {
             0 => (&pred.luma, 16),
-            1 => (&pred.cb, 8),
-            _ => (&pred.cr, 8),
+            1 => (&pred.cb, CHROMA_PRED_STRIDE),
+            _ => (&pred.cr, CHROMA_PRED_STRIDE),
         };
 
         let Some(mut plane) = ap.frame.plane_mut(plane_idx) else {
@@ -775,5 +976,76 @@ fn reconstruct_macroblock(
                 *dst = (residual + p).clamp(0, 255) as u8;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod chroma_format_tests {
+    use super::ChromaFormat;
+
+    #[test]
+    fn from_raw_maps_table_6_5_and_folds_the_reserved_code() {
+        assert_eq!(ChromaFormat::from_raw(1), ChromaFormat::Yuv420);
+        assert_eq!(ChromaFormat::from_raw(2), ChromaFormat::Yuv422);
+        assert_eq!(ChromaFormat::from_raw(3), ChromaFormat::Yuv444);
+        // 0 is "Reserved" (Table 6-5) — never legitimately sent; folds to
+        // 4:2:0 rather than propagating a value with no defined meaning.
+        assert_eq!(ChromaFormat::from_raw(0), ChromaFormat::Yuv420);
+    }
+
+    #[test]
+    fn block_count_matches_table_6_20() {
+        assert_eq!(ChromaFormat::Yuv420.block_count(), 6);
+        assert_eq!(ChromaFormat::Yuv422.block_count(), 8);
+        assert_eq!(ChromaFormat::Yuv444.block_count(), 12);
+    }
+
+    #[test]
+    fn chroma_mb_pixels_matches_the_six_one_three_subsampling_rules() {
+        // 4:2:0: half horizontal, half vertical. 4:2:2: half horizontal,
+        // full vertical. 4:4:4: full both (§6.1.3).
+        assert_eq!(ChromaFormat::Yuv420.chroma_mb_pixels(), (8, 8));
+        assert_eq!(ChromaFormat::Yuv422.chroma_mb_pixels(), (8, 16));
+        assert_eq!(ChromaFormat::Yuv444.chroma_mb_pixels(), (16, 16));
+    }
+
+    #[test]
+    fn scale_vector_matches_section_7_6_3_7_exactly() {
+        // A vector whose halves would round differently under truncation
+        // (5 and -5) exercises §4.1's "truncate toward zero" rule, not
+        // just an even case that every rounding convention would agree
+        // on.
+        let v = [5, -5];
+        assert_eq!(ChromaFormat::Yuv420.scale_vector(v), [2, -2]);
+        assert_eq!(ChromaFormat::Yuv422.scale_vector(v), [2, -5]);
+        assert_eq!(ChromaFormat::Yuv444.scale_vector(v), [5, -5]);
+    }
+
+    #[test]
+    fn chroma_block_slot_matches_figures_6_10_through_6_12() {
+        // 4:2:0 (Figure 6-10): blocks 4, 5 are Cb, Cr, both at (0, 0) —
+        // no stacking, since there is only one block per component.
+        assert_eq!(ChromaFormat::Yuv420.chroma_block_slot(0), (1, 0, 0));
+        assert_eq!(ChromaFormat::Yuv420.chroma_block_slot(1), (2, 0, 0));
+
+        // 4:2:2 (Figure 6-11): "4 5 / 6 7" — Cb/Cr side by side, a second
+        // row stacked below at row 8.
+        assert_eq!(ChromaFormat::Yuv422.chroma_block_slot(0), (1, 0, 0)); // block 4: Cb top
+        assert_eq!(ChromaFormat::Yuv422.chroma_block_slot(1), (2, 0, 0)); // block 5: Cr top
+        assert_eq!(ChromaFormat::Yuv422.chroma_block_slot(2), (1, 0, 8)); // block 6: Cb bottom
+        assert_eq!(ChromaFormat::Yuv422.chroma_block_slot(3), (2, 0, 8)); // block 7: Cr bottom
+
+        // 4:4:4 (Figure 6-12): "0 1 4 8 5 9 / 2 3 6 10 7 11" — Cb is a 2x2
+        // grid (4, 8, 6, 10: top-left, top-right, bottom-left,
+        // bottom-right), Cr is a separate 2x2 grid (5, 9, 7, 11) the same
+        // shape.
+        assert_eq!(ChromaFormat::Yuv444.chroma_block_slot(0), (1, 0, 0)); // block 4: Cb top-left
+        assert_eq!(ChromaFormat::Yuv444.chroma_block_slot(1), (2, 0, 0)); // block 5: Cr top-left
+        assert_eq!(ChromaFormat::Yuv444.chroma_block_slot(2), (1, 0, 8)); // block 6: Cb bottom-left
+        assert_eq!(ChromaFormat::Yuv444.chroma_block_slot(3), (2, 0, 8)); // block 7: Cr bottom-left
+        assert_eq!(ChromaFormat::Yuv444.chroma_block_slot(4), (1, 8, 0)); // block 8: Cb top-right
+        assert_eq!(ChromaFormat::Yuv444.chroma_block_slot(5), (2, 8, 0)); // block 9: Cr top-right
+        assert_eq!(ChromaFormat::Yuv444.chroma_block_slot(6), (1, 8, 8)); // block 10: Cb bottom-right
+        assert_eq!(ChromaFormat::Yuv444.chroma_block_slot(7), (2, 8, 8)); // block 11: Cr bottom-right
     }
 }

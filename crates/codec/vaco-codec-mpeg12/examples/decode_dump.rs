@@ -1,5 +1,8 @@
-//! Decode a raw MPEG-1/2 elementary stream to raw `yuv420p`, for comparison
-//! against `ffmpeg -f rawvideo -pix_fmt yuv420p -`.
+//! Decode a raw MPEG-1/2 elementary stream to raw planar samples (whatever
+//! `PixFmt` the stream's own `chroma_format` selects — `yuv420p` for every
+//! MPEG-1 stream and most MPEG-2 ones, `yuv422p`/`yuv444p` for a
+//! `chroma_format` 2/3 MPEG-2 stream), for comparison against
+//! `ffmpeg -f rawvideo -pix_fmt <same format> -`.
 //!
 //! No CLI path exists yet to select this decoder by name from a demuxed
 //! stream — this crate's own registration is new in the same change as
@@ -121,12 +124,14 @@ fn main() {
 
 fn drain(decoder: &mut Mpeg12Decoder, out: &mut fs::File, frame_count: &mut u64) {
     while let Ok(frame) = decoder.receive_frame() {
-        write_yuv420p(out, &frame);
+        write_planes(out, &frame);
         *frame_count += 1;
     }
 }
 
-fn write_yuv420p(out: &mut fs::File, frame: &vaco_frame::Frame) {
+/// Every plane's rows, back to back — whatever `PixFmt` `frame` actually
+/// is; not literally 4:2:0-only despite the function's original name.
+fn write_planes(out: &mut fs::File, frame: &vaco_frame::Frame) {
     for plane_idx in 0..3 {
         let Some(plane) = frame.plane(plane_idx) else {
             continue;

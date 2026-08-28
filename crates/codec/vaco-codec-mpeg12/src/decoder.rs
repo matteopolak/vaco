@@ -38,7 +38,7 @@ use vaco_pixfmt::PixFmt;
 
 use crate::block::Mpeg2Idct;
 use crate::headers::{self, PictureCodingExtension, PictureHeader, SequenceExtension, SequenceHeader};
-use crate::macroblock::{self, ActivePicture};
+use crate::macroblock::{self, ActivePicture, ChromaFormat};
 use crate::motion::MotionPredictor;
 use crate::picture::RefPicture;
 use crate::tables;
@@ -119,7 +119,13 @@ impl Mpeg12Decoder {
         };
         let width = seq.header.width.max(1);
         let height = seq.header.height.max(1);
-        let mut frame = Frame::alloc_video(&mut self.budget, PixFmt::Yuv420p, width, height)?;
+        let chroma_format = ChromaFormat::from_raw(seq.ext.map_or(1, |ext| ext.chroma_format));
+        let pixfmt = match chroma_format {
+            ChromaFormat::Yuv420 => PixFmt::Yuv420p,
+            ChromaFormat::Yuv422 => PixFmt::Yuv422p,
+            ChromaFormat::Yuv444 => PixFmt::Yuv444p,
+        };
+        let mut frame = Frame::alloc_video(&mut self.budget, pixfmt, width, height)?;
         frame.pts = pts;
         frame.duration = duration;
         if hdr.coding_type == headers::PictureType::I {
@@ -150,6 +156,7 @@ impl Mpeg12Decoder {
             previous: self.previous.clone(),
             recent: self.recent.clone(),
             mpeg1: seq.ext.is_none(),
+            chroma_format,
         });
         Ok(())
     }
