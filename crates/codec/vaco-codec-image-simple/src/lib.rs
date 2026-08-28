@@ -8,9 +8,8 @@
 //! `vaco_codec_core::SendReceive` protocol via a function pointer, since
 //! every one is a single packet in, single frame out.
 //!
-//! None of these six have a `vaco_codec_core::CodecId` yet, so they cannot be
-//! registered as `vaco-registry` decoders/encoders in this pass — see
-//! `docs/codec/vaco-codec-image-simple.md`.
+//! Each format registers under its own `vaco_codec_core::CodecId` variant;
+//! `vaco-component.toml` is what makes each reachable as `-c:v <name>`.
 
 #![forbid(unsafe_code)]
 
@@ -114,7 +113,13 @@ impl SendReceive for ImageDecoder {
                     return Ok(());
                 };
                 let mut budget = Budget::new(self.limits.clone());
-                let frame = (self.decode)(pkt.payload(), &mut budget)?;
+                let mut frame = (self.decode)(pkt.payload(), &mut budget)?;
+                // The per-format `decode` functions are pure over bytes
+                // alone and have no packet to read a timestamp off;
+                // stamping the frame with the packet's own `pts` here is
+                // what lets a muxer downstream of a decode-then-encode leg
+                // place this image in time at all.
+                frame.pts = pkt.pts;
                 self.machine.emit(frame);
                 Ok(())
             }
@@ -208,7 +213,12 @@ impl SendReceive for ImageEncoder {
                 };
                 let bytes = (self.encode)(frame)?;
                 let mut budget = Budget::new(self.limits.clone());
-                let packet = Packet::from_slice(&mut budget, &bytes)?;
+                let mut packet = Packet::from_slice(&mut budget, &bytes)?;
+                // Mirrors the decoder's own `pts` stamp: the per-format
+                // `encode` functions are pure over the frame's pixels alone,
+                // so the packet they hand back has no timing of its own
+                // until this copies the source frame's `pts` onto it.
+                packet.pts = frame.pts;
                 self.machine.emit(packet);
                 Ok(())
             }
@@ -223,6 +233,111 @@ impl SendReceive for ImageEncoder {
         self.machine.flush();
     }
 }
+
+pub static BMP_DECODER: vaco_codec_core::DecoderDesc = vaco_codec_core::DecoderDesc {
+    name: "bmp",
+    long_name: "BMP (Windows and OS/2 bitmap)",
+    id: vaco_codec_core::CodecId::Bmp,
+    media_type: vaco_core::MediaType::Video,
+    caps: Caps::empty(),
+    supported_rates: &[],
+    make: |limits| {
+        Box::new(vaco_codec_core::AsDecoder(vaco_codec_core::Validated::new(
+            ImageDecoder::bmp(limits),
+        )))
+    },
+};
+
+pub static BMP_ENCODER: vaco_codec_core::EncoderDesc = vaco_codec_core::EncoderDesc {
+    name: "bmp",
+    long_name: "BMP (Windows and OS/2 bitmap)",
+    id: vaco_codec_core::CodecId::Bmp,
+    media_type: vaco_core::MediaType::Video,
+    caps: Caps::empty(),
+    supported_rates: &[],
+    make: |limits| {
+        Box::new(vaco_codec_core::AsEncoder(vaco_codec_core::Validated::new(
+            ImageEncoder::bmp(limits),
+        )))
+    },
+};
+
+/// PCX/TGA/SGI/XWD/XBM's registration: the `DecoderDesc`/`EncoderDesc` pair
+/// that makes each reachable as `-c:v <name>`, against the
+/// a `vaco_codec_core::CodecId` variant of its own. `$ctor` is this
+/// crate's constructor suffix (`ImageDecoder::$ctor`); `$name` is the
+/// registered CLI name, which is not always the same spelling — TGA
+/// registers as `"targa"`, matching the reference's own codec name for it
+/// (`ffmpeg -codecs`: `targa`, "Truevision Targa image"), while this crate's
+/// own module and functions stay `tga` to match the format's usual
+/// abbreviation.
+macro_rules! image_simple_codec {
+    ($dec:ident, $enc:ident, $id:ident, $ctor:ident, $name:literal, $long_name:literal) => {
+        #[doc = concat!("Registered as this crate's `", $name, "` `decoder` fragment.")]
+        pub static $dec: vaco_codec_core::DecoderDesc = vaco_codec_core::DecoderDesc {
+            name: $name,
+            long_name: $long_name,
+            id: vaco_codec_core::CodecId::$id,
+            media_type: vaco_core::MediaType::Video,
+            caps: Caps::empty(),
+            supported_rates: &[],
+            make: |limits| {
+                Box::new(vaco_codec_core::AsDecoder(vaco_codec_core::Validated::new(
+                    ImageDecoder::$ctor(limits),
+                )))
+            },
+        };
+
+        #[doc = concat!("Registered as this crate's `", $name, "` `encoder` fragment.")]
+        pub static $enc: vaco_codec_core::EncoderDesc = vaco_codec_core::EncoderDesc {
+            name: $name,
+            long_name: $long_name,
+            id: vaco_codec_core::CodecId::$id,
+            media_type: vaco_core::MediaType::Video,
+            caps: Caps::empty(),
+            supported_rates: &[],
+            make: |limits| {
+                Box::new(vaco_codec_core::AsEncoder(vaco_codec_core::Validated::new(
+                    ImageEncoder::$ctor(limits),
+                )))
+            },
+        };
+    };
+}
+
+image_simple_codec!(
+    PCX_DECODER,
+    PCX_ENCODER,
+    Pcx,
+    pcx,
+    "pcx",
+    "PC Paintbrush PCX image"
+);
+image_simple_codec!(
+    TGA_DECODER,
+    TGA_ENCODER,
+    Targa,
+    tga,
+    "targa",
+    "Truevision Targa image"
+);
+image_simple_codec!(SGI_DECODER, SGI_ENCODER, Sgi, sgi, "sgi", "SGI image");
+image_simple_codec!(
+    XWD_DECODER,
+    XWD_ENCODER,
+    Xwd,
+    xwd,
+    "xwd",
+    "XWD (X Window Dump) image"
+);
+image_simple_codec!(
+    XBM_DECODER,
+    XBM_ENCODER,
+    Xbm,
+    xbm,
+    "xbm",
+    "XBM (X BitMap) image"
+);
 
 #[cfg(test)]
 #[allow(

@@ -62,12 +62,24 @@ the `ImageDecoder`/`ImageEncoder` wrappers in `src/lib.rs`.
 `vaco-codec-core`, `vaco-frame`/`vaco-pixfmt`/`vaco-pool`, `vaco-packet`,
 `vaco-limits`.
 
-## Registration gap
+## Registration
 
-Same as the other two C-13 crates: no `CodecId` exists for five of the six
-formats (only `Bmp` does), `EncoderDesc` does not exist, and there is no
-`vaco-cli` dispatch path from a codec name to a live `Decoder`/`Encoder`.
-See `planning/TECH-DEBT.md`.
+`vaco-component.toml` registers all six descriptors — `BMP_DECODER`/
+`BMP_ENCODER` by hand against the pre-existing `CodecId::Bmp`, the other five
+via the `image_simple_codec!` macro against the `CodecId` variants C-13
+added (`Pcx`, `Targa`, `Sgi`, `Xwd`, `Xbm` — TGA registers as `"targa"`,
+matching the reference's own encoder/decoder name for it) — feature
+`codec-image-simple` (on by default). Reachable as `-c:v bmp`/`pcx`/`targa`/
+`sgi`/`xwd`/`xbm` through `vaco_registry::encoder_by_name`; each
+`ImageDecoder`/`ImageEncoder::send` stamps `pts` from its input, since the
+per-format `decode`/`encode` functions are pure over bytes/pixels alone and
+have none of their own.
+
+`vaco -i in8.bmp -c:v qoi -f null -` (bmp decode here, `vaco-codec-qoi`
+encode) was verified end to end. A real *muxed* output file (`-f image2`)
+could not be produced in this pass for any format in this crate — see
+`planning/TECH-DEBT.md`'s C-13 entry for the `vaco-format-core`/muxer gap
+this ran into, which is unrelated to codec registration.
 
 ## Testing
 

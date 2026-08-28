@@ -1,0 +1,112 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# TGA registers as `targa`, matching the reference's own codec name for it,
+# even though this crate's own module/functions stay `tga`.
+
+[[component]]
+kind      = "decoder"
+name      = "bmp"
+long_name = "BMP (Windows and OS/2 bitmap)"
+feature   = "codec-image-simple"
+ctor      = "vaco_codec_image_simple::BMP_DECODER"
+media     = "video"
+codec     = "bmp"
+
+[[component]]
+kind      = "encoder"
+name      = "bmp"
+long_name = "BMP (Windows and OS/2 bitmap)"
+feature   = "codec-image-simple"
+ctor      = "vaco_codec_image_simple::BMP_ENCODER"
+media     = "video"
+codec     = "bmp"
+
+[[component]]
+kind      = "decoder"
+name      = "pcx"
+long_name = "PC Paintbrush PCX image"
+feature   = "codec-image-simple"
+ctor      = "vaco_codec_image_simple::PCX_DECODER"
+media     = "video"
+codec     = "pcx"
+
+[[component]]
+kind      = "encoder"
+name      = "pcx"
+long_name = "PC Paintbrush PCX image"
+feature   = "codec-image-simple"
+ctor      = "vaco_codec_image_simple::PCX_ENCODER"
+media     = "video"
+codec     = "pcx"
+
+[[component]]
+kind      = "decoder"
+name      = "targa"
+long_name = "Truevision Targa image"
+feature   = "codec-image-simple"
+ctor      = "vaco_codec_image_simple::TGA_DECODER"
+media     = "video"
+codec     = "targa"
+
+[[component]]
+kind      = "encoder"
+name      = "targa"
+long_name = "Truevision Targa image"
+feature   = "codec-image-simple"
+ctor      = "vaco_codec_image_simple::TGA_ENCODER"
+media     = "video"
+codec     = "targa"
+
+[[component]]
+kind      = "decoder"
+name      = "sgi"
+long_name = "SGI image"
+feature   = "codec-image-simple"
+ctor      = "vaco_codec_image_simple::SGI_DECODER"
+media     = "video"
+codec     = "sgi"
+
+[[component]]
+kind      = "encoder"
+name      = "sgi"
+long_name = "SGI image"
+feature   = "codec-image-simple"
+ctor      = "vaco_codec_image_simple::SGI_ENCODER"
+media     = "video"
+codec     = "sgi"
+
+[[component]]
+kind      = "decoder"
+name      = "xwd"
+long_name = "XWD (X Window Dump) image"
+feature   = "codec-image-simple"
+ctor      = "vaco_codec_image_simple::XWD_DECODER"
+media     = "video"
+codec     = "xwd"
+
+[[component]]
+kind      = "encoder"
+name      = "xwd"
+long_name = "XWD (X Window Dump) image"
+feature   = "codec-image-simple"
+ctor      = "vaco_codec_image_simple::XWD_ENCODER"
+media     = "video"
+codec     = "xwd"
+
+[[component]]
+kind      = "decoder"
+name      = "xbm"
+long_name = "XBM (X BitMap) image"
+feature   = "codec-image-simple"
+ctor      = "vaco_codec_image_simple::XBM_DECODER"
+media     = "video"
+codec     = "xbm"
+
+[[component]]
+kind      = "encoder"
+name      = "xbm"
+long_name = "XBM (X BitMap) image"
+feature   = "codec-image-simple"
+ctor      = "vaco_codec_image_simple::XBM_ENCODER"
+media     = "video"
+codec     = "xbm"
