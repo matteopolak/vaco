@@ -81,6 +81,12 @@ use vaco_core::{Error, Result};
 /// composes on top of the concrete type rather than re-declaring it.
 pub use sha2;
 
+/// Re-exported for the same reason as [`sha2`] above: `vaco-crypto` builds
+/// `Hmac<Sha1>` for SRTP's RFC 3711 §4.2 authentication tag (added
+/// alongside `vaco-protocol-srtp`, #551) without a second direct `sha1`
+/// dependency.
+pub use sha1;
+
 /// One of the fifteen `-hash` algorithm names the reference accepts.
 ///
 /// Ten are computable here; [`HashAlgo::implemented`] says which. The other

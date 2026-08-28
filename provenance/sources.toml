@@ -1139,3 +1139,40 @@ kind     = "rfc"
 title    = "RFC 7914, The scrypt Password-Based Key Derivation Function. Sec. 11's two PBKDF2-HMAC-SHA256 test vectors (P=\"passwd\"/S=\"salt\"/c=1 and P=\"Password\"/S=\"NaCl\"/c=80000, both dkLen=64), used as RFC-vector-derived (independent, not self-consistency) evidence for vaco-crypto::pbkdf2_hmac_sha256 -- RFC 8018 itself defines the algorithm but publishes no vectors of its own."
 acquired = "2026-08-28"
 where    = "https://www.rfc-editor.org/rfc/rfc7914"
+
+# ---------------------------------------------------- RTP protocol layer, SRTP, SCTP (PR-08/PR-09b/PR-12a, #551/#553/#561)
+
+[[source]]
+id       = "rfc-5761"
+kind     = "rfc"
+title    = "RFC 5761, Multiplexing RTP Data and Control Packets on a Single Port. Sec. 4's payload-type-range heuristic (RTCP packet types 192-223, so a value in that range on the first payload octet is RTCP, never RTP) used by vaco-protocol-rtp's RFC 3550/3551-agnostic mux/demux."
+acquired = "2026-08-28"
+where    = "https://www.rfc-editor.org/rfc/rfc5761"
+
+[[source]]
+id       = "rfc-3711"
+kind     = "rfc"
+title    = "RFC 3711, The Secure Real-time Transport Protocol (SRTP). Sec. 4.1.1's per-packet keystream IV construction (SSRC/ROC/sequence-number XORed into the session salt), Sec. 4.2's authentication tag (HMAC-SHA1 over the packet plus the ROC, truncated), and Sec. 4.3's key derivation function (AES-CTR keyed by the master key, over an index built from the master salt and a per-key-type label byte) underlying vaco-protocol-srtp. This RFC publishes no numeric test vectors of its own (checked directly, no appendix titled \"test vector\"), so evidence here is self-consistency plus draft-derived field layout, not RFC-vector-derived."
+acquired = "2026-08-28"
+where    = "https://www.rfc-editor.org/rfc/rfc3711"
+
+[[source]]
+id       = "rfc-4960"
+kind     = "rfc"
+title    = "RFC 4960, Stream Control Transmission Protocol (SCTP). Sec. 3.1's common packet header and CRC32c checksum (Appendix B, the Castagnoli polynomial, same as iSCSI), Sec. 3.3's chunk header and INIT/INIT-ACK/COOKIE-ECHO/COOKIE-ACK/DATA/SACK/HEARTBEAT/ABORT/SHUTDOWN chunk field layouts, and Sec. 5's four-way association-setup handshake, underlying vaco-protocol-sctp."
+acquired = "2026-08-28"
+where    = "https://www.rfc-editor.org/rfc/rfc4960"
+
+[[source]]
+id       = "adobe-amf0-spec"
+kind     = "spec"
+title    = "Adobe, \"Action Message Format -- AMF 0\", the marker-byte-tagged value encoding (number, boolean, string, object, null, undefined, reference, ECMA array, strict array, date, long string) that the Adobe RTMP specification's Sec. 7 command messages (NetConnection/NetStream connect/createStream/publish/play, _result/_error/onStatus) are serialised in -- used by vaco-protocol-rtmp's AMF0 codec and command-message layer (#553), distinct from adobe-rtmp-spec-1.0 which covers only the handshake/chunk-stream/control-message layer built in #552."
+acquired = "2026-08-28"
+where    = "https://rtmp.veriskope.com/pdf/amf0-file-format-specification.pdf"
+
+[[source]]
+id       = "rfc-2202"
+kind     = "rfc"
+title    = "RFC 2202, Test Cases for HMAC-MD5 and HMAC-SHA-1. The three HMAC-SHA-1 key/data/digest triples (20-byte 0x0b key with \"Hi There\"; \"Jefe\" key with \"what do ya want for nothing?\"; 20-byte 0xaa key with fifty 0xdd bytes) used as RFC-vector-derived evidence for vaco-crypto::hmac_sha1, cross-checked against Python's stdlib hmac+hashlib before being trusted as test expected values, not merely recalled."
+acquired = "2026-08-28"
+where    = "https://www.rfc-editor.org/rfc/rfc2202"

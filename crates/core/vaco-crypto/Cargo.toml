@@ -1,6 +1,6 @@
 [package]
 name = "vaco-crypto"
-description = "Symmetric ciphers and key derivation behind one door: the single owner of aes, ctr, hmac and pbkdf2 (D11)."
+description = "Symmetric ciphers, MACs, and key derivation behind one door: the single owner of aes, ctr, hmac and pbkdf2 (D11). Owns AES-CTR, PBKDF2-HMAC-SHA256, and HMAC-SHA1 (raw, untruncated)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

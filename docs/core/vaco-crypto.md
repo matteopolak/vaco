@@ -44,6 +44,11 @@ re-exports `sha2` (`pub use sha2;`) specifically so this crate can build
   RIST — the two schemes only diverge after 2^32 blocks, unreachable by
   either protocol's own packets).
 - `pbkdf2_hmac_sha256` — PBKDF2-HMAC-SHA256 (RFC 8018 §5.2's algorithm).
+- `hmac_sha1` (added 2026-08-28 for `vaco-protocol-srtp`, #551) — the raw
+  20-byte HMAC-SHA1 tag, over `vaco_hash::sha1::Sha1` (re-exported by
+  `vaco-hash` the same way `sha2` is). Truncation to SRTP's 80-bit default
+  tag length is the caller's own concern, the same "generic primitive,
+  protocol owns its own construction" split as `ctr_apply_aes128`.
 
 ## Evidence
 
@@ -62,6 +67,10 @@ PBKDF2-HMAC-SHA256 vectors instead (algorithm-level, not RIST-specific).
 independently re-derived via Python's stdlib `hashlib.pbkdf2_hmac` with the
 same inputs before being trusted as a test's expected value, not merely
 read off the spec's rendered page.
+
+`hmac_sha1`'s tests are RFC-vector-derived: RFC 2202's own three HMAC-SHA1
+test cases, cross-checked against Python's stdlib `hmac`/`hashlib` before
+being trusted rather than recalled and taken on faith.
 
 ## How to change it
 

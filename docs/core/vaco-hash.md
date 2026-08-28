@@ -77,3 +77,8 @@ fifth dependency.
 without declaring a second direct `sha2` dependency — this crate stays
 `sha2`'s one D11 owner; `vaco-crypto` composes on the concrete type rather
 than re-declaring it. See `docs/core/vaco-crypto.md`.
+
+`sha1` is re-exported the same way (`pub use sha1;`, added 2026-08-28
+alongside `vaco-protocol-srtp`, #551) so `vaco-crypto` can build
+`Hmac<Sha1>` for SRTP's RFC 3711 §4.2 authentication tag without a second
+direct `sha1` dependency.

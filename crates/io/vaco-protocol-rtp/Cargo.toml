@@ -1,0 +1,24 @@
+[package]
+name = "vaco-protocol-rtp"
+description = "The rtp:/rtcp: protocol scheme: RFC 5761 RTP/RTCP multiplexing/demultiplexing over one shared transport, plus a sans-io packetiser session. Framing itself is vaco-rtp; this crate is the protocol-layer session wrapped around it. No URL-option table (no reference build to measure it against)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+vaco-core = { path = "../../core/vaco-core" }
+vaco-limits = { path = "../../core/vaco-limits" }
+vaco-protocol-core = { path = "../../io/vaco-protocol-core" }
+vaco-rtp = { path = "../../model/vaco-rtp" }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.vaco]
+layer = 2

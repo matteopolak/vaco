@@ -42,6 +42,13 @@
 //! - [`pbkdf2_hmac_sha256`] — PBKDF2-HMAC-SHA256 key derivation (RFC 8018
 //!   §5.2's algorithm, RFC 2898's PRF choice), the mechanism
 //!   `VSF TR-06-2` §7.3 names for its PSK passphrase-to-key derivation.
+//! - [`hmac_sha1`] (added 2026-08-28 for `vaco-protocol-srtp`, #551) —
+//!   the raw 20-byte HMAC-SHA1 tag, over [`vaco_hash::sha1::Sha1`]
+//!   (re-exported by `vaco-hash` for the same reason as `sha2` above),
+//!   the primitive RFC 3711 §4.2 truncates for SRTP's default
+//!   authentication tag. Truncation itself is left to the caller, the
+//!   same "generic primitive, protocol owns its own construction" split
+//!   as [`ctr_apply_aes128`].
 //!
 //! # Evidence
 //!
@@ -56,7 +63,11 @@
 //! (independently re-derived via Python's stdlib `hashlib.pbkdf2_hmac`
 //! with the same inputs before being trusted as a test's expected value,
 //! not merely read off the spec's rendered page) confirms this crate
-//! reproduces the exact keys the spec itself publishes.
+//! reproduces the exact keys the spec itself publishes. [`hmac_sha1`]'s
+//! tests are RFC-vector-derived: RFC 2202's own three HMAC-SHA1 test
+//! cases, cross-checked against Python's stdlib `hmac`/`hashlib` before
+//! being trusted (the same discipline as the PBKDF2 vectors above) rather
+//! than recalled and taken on faith.
 
 #![forbid(unsafe_code)]
 
@@ -66,7 +77,9 @@ pub use hmac;
 pub use pbkdf2 as pbkdf2_crate;
 
 mod ctr_impl;
+mod hmac_sha1;
 mod kdf;
 
 pub use ctr_impl::{ctr_apply_aes128, ctr_apply_aes192, ctr_apply_aes256};
+pub use hmac_sha1::hmac_sha1;
 pub use kdf::pbkdf2_hmac_sha256;
