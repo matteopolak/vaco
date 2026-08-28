@@ -43,11 +43,33 @@ pub const DESC: FilterDesc = FilterDesc {
     flags: FilterFlags::empty(),
 };
 
+/// `ffmpeg`'s own two named constants for `type` -- confirmed via
+/// `ffmpeg -h filter=field`. A plain ranged `i32` (this field's shape
+/// before this fix) never accepts a named string, only the bare integer;
+/// `mode=top`/`mode=bottom` used to fail to parse against this crate
+/// outright even though it is the reference's own documented spelling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, vaco_opts::OptEnum)]
+#[opt_enum(unit = "field_type", base = "int")]
+pub(crate) enum FieldType {
+    #[opt_const(name = "top", help = "top field")]
+    #[default]
+    Top,
+    #[opt_const(name = "bottom", help = "bottom field")]
+    Bottom,
+}
+
 #[derive(Debug, Clone, vaco_opts::Options)]
 #[options(name = "field", help = "Extract a field from the input video")]
 pub(crate) struct Opts {
-    #[opt(name = "type", help = "set field type", default = 0, range = 0..=1, flags(video, filtering))]
-    pub field_type: i32,
+    #[opt(
+        name = "type",
+        help = "set field type",
+        unit = "field_type",
+        default = FieldType::Top,
+        default_repr = "top",
+        flags(video, filtering)
+    )]
+    pub field_type: FieldType,
 }
 
 impl Opts {
@@ -79,7 +101,7 @@ pub(crate) struct Filter {
 impl Filter {
     pub(crate) const fn new(opts: &Opts) -> Self {
         Self {
-            bottom: opts.field_type == 1,
+            bottom: matches!(opts.field_type, FieldType::Bottom),
         }
     }
 }
@@ -182,5 +204,16 @@ mod tests {
     fn odd_height_gives_the_extra_row_to_top() {
         assert_eq!(field_height(7, false), 4);
         assert_eq!(field_height(7, true), 3);
+    }
+
+    /// Pinned against the reference's own named spelling
+    /// (`ffmpeg -h filter=field`): `type=top`/`type=bottom` must parse,
+    /// not just the bare integers `type=0`/`type=1`.
+    #[test]
+    fn named_type_values_parse() {
+        let opts = Opts::parse(Some("type=top")).unwrap();
+        assert_eq!(opts.field_type, FieldType::Top);
+        let opts = Opts::parse(Some("type=bottom")).unwrap();
+        assert_eq!(opts.field_type, FieldType::Bottom);
     }
 }

@@ -75,6 +75,34 @@ pub(crate) enum Mode {
     Wrap,
 }
 
+/// The option-level `mode` -- all seven of the reference's own named
+/// constants (`ffmpeg -h filter=fillborders`), whether or not this crate
+/// implements the mode's actual pixel behaviour. Kept distinct from
+/// [`Mode`] (the four modes [`Filter`] can actually run) so that `mode=
+/// reflect` fails to *parse* only where it should never fail at all --
+/// as a real value the reference documents, rejected by [`Filter::new`]
+/// with the same specific, already-measured "not implemented" message,
+/// not as an unrecognised option value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, vaco_opts::OptEnum)]
+#[opt_enum(unit = "fillborders_mode", base = "int")]
+pub(crate) enum OptMode {
+    #[opt_const(name = "smear", help = "smear border pixels")]
+    #[default]
+    Smear,
+    #[opt_const(name = "mirror", help = "mirror border pixels")]
+    Mirror,
+    #[opt_const(name = "fixed", help = "fixed color border")]
+    Fixed,
+    #[opt_const(name = "reflect", help = "reflect border pixels")]
+    Reflect,
+    #[opt_const(name = "wrap", help = "wrap border pixels")]
+    Wrap,
+    #[opt_const(name = "fade", help = "fade border pixels")]
+    Fade,
+    #[opt_const(name = "margins", help = "fade margins")]
+    Margins,
+}
+
 #[derive(Debug, Clone, vaco_opts::Options)]
 #[options(name = "fillborders", help = "Fill borders of the input video")]
 pub(crate) struct Opts {
@@ -113,11 +141,12 @@ pub(crate) struct Opts {
     #[opt(
         name = "mode",
         help = "set the fill borders mode",
-        default = 0,
-        range = 0..=6,
+        unit = "fillborders_mode",
+        default = OptMode::Smear,
+        default_repr = "smear",
         flags(video, filtering)
     )]
-    pub mode: i32,
+    pub mode: OptMode,
     #[opt(
         name = "color",
         help = "set the color for the fixed/fade mode",
@@ -151,18 +180,16 @@ pub(crate) struct Filter {
 impl Filter {
     pub(crate) fn new(opts: &Opts) -> std::result::Result<Self, String> {
         let mode = match opts.mode {
-            0 => Mode::Smear,
-            1 => Mode::Mirror,
-            2 => Mode::Fixed,
-            4 => Mode::Wrap,
-            3 | 5 | 6 => {
-                return Err(
-                    "fillborders: `mode` 3 (reflect), 5 (fade) and 6 (margins) are not \
-                     implemented — see this module's doc"
-                        .to_owned(),
-                );
+            OptMode::Smear => Mode::Smear,
+            OptMode::Mirror => Mode::Mirror,
+            OptMode::Fixed => Mode::Fixed,
+            OptMode::Wrap => Mode::Wrap,
+            OptMode::Reflect | OptMode::Fade | OptMode::Margins => {
+                return Err(format!(
+                    "fillborders: `mode` {:?} is not implemented — see this module's doc",
+                    opts.mode
+                ));
             }
-            other => return Err(format!("fillborders: bad `mode` `{other}`")),
         };
         let rgba = vaco_core::parse::color(&opts.color)
             .ok_or_else(|| format!("fillborders: bad `color` `{}`", opts.color))?;
@@ -391,20 +418,34 @@ mod tests {
 
     #[test]
     fn reflect_fade_margins_are_rejected() {
-        let opts = Opts {
-            mode: 3,
-            ..Opts::default()
-        };
-        assert!(Filter::new(&opts).is_err());
-        let opts = Opts {
-            mode: 5,
-            ..Opts::default()
-        };
-        assert!(Filter::new(&opts).is_err());
-        let opts = Opts {
-            mode: 6,
-            ..Opts::default()
-        };
-        assert!(Filter::new(&opts).is_err());
+        for mode in [OptMode::Reflect, OptMode::Fade, OptMode::Margins] {
+            let opts = Opts {
+                mode,
+                ..Opts::default()
+            };
+            assert!(Filter::new(&opts).is_err());
+        }
+    }
+
+    /// Pinned against the reference's own named spelling
+    /// (`ffmpeg -h filter=fillborders`): `mode=smear` must parse, not just
+    /// the bare integer `mode=0` -- a real command line using the
+    /// reference's documented option syntax used to fail against this
+    /// crate outright (a plain, unranged-consts `i32` field never accepts
+    /// a named string), before `mode` became an `OptEnum`.
+    #[test]
+    fn named_mode_values_parse() {
+        for (name, expected) in [
+            ("smear", OptMode::Smear),
+            ("mirror", OptMode::Mirror),
+            ("fixed", OptMode::Fixed),
+            ("reflect", OptMode::Reflect),
+            ("wrap", OptMode::Wrap),
+            ("fade", OptMode::Fade),
+            ("margins", OptMode::Margins),
+        ] {
+            let opts = Opts::parse(Some(&format!("mode={name}"))).unwrap();
+            assert_eq!(opts.mode, expected, "mode={name}");
+        }
     }
 }
