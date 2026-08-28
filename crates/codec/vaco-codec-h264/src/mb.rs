@@ -416,7 +416,7 @@ pub struct SliceStats {
     /// `(cbp_luma, cbp_chroma)` of the first macroblock actually decoded in
     /// this slice (`header.first_mb_in_slice`, not necessarily raster
     /// address 0) -- `(0, 0)` if that macroblock was skipped (a skipped
-    /// macroblock has no coded_block_pattern by definition), `None` only if
+    /// macroblock has no `coded_block_pattern` by definition), `None` only if
     /// the slice contained no macroblocks at all. Exists so a black-box
     /// test can check this crate's own `coded_block_pattern` decode against
     /// an independent oracle (a real encoder's own per-macroblock
@@ -478,6 +478,10 @@ pub struct SliceStats {
 /// `residual.intra4x4_pred_mode`, the resolved per-block `Intra_4x4`
 /// modes when `is_intra4x4`).
 #[derive(Debug, Clone)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each bool is an independent macroblock-kind/coding flag mirroring the spec's own mb_type case split (skipped, I_PCM, Intra_4x4, Intra_16x16); collapsing them into an enum is a decoder-wide restructuring, not a lint-pass change"
+)]
 pub(crate) struct MbSummary {
     pub(crate) mb_x: u32,
     pub(crate) mb_y: u32,
@@ -486,6 +490,10 @@ pub(crate) struct MbSummary {
     pub(crate) is_intra4x4: bool,
     pub(crate) is_intra16x16: bool,
     pub(crate) intra16x16_pred_mode: u8,
+    #[allow(
+        dead_code,
+        reason = "carried for crate::reconstruct's chroma path, not yet wired up -- see reconstruct.rs's own module doc on chroma reconstruction being out of scope so far"
+    )]
     pub(crate) intra_chroma_pred_mode: u8,
     pub(crate) qpy: i32,
     pub(crate) residual: MbResidual,
@@ -1484,6 +1492,10 @@ fn decide(cabac: &mut CabacDecoder<'_>, ctx: &mut [ContextModel], idx: usize) ->
 /// parallel to [`NeighbourGrid`] but keyed by macroblock address (not 4x4
 /// block) and boolean/category-shaped rather than a `TotalCoeff` count.
 #[derive(Debug, Clone, Copy, Default)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each bool is an independent clause 9.3.3.1.1.x condTermFlag input (availability, intra-ness, I_PCM, DC-coded), not a state machine"
+)]
 struct CabacMbInfo {
     /// Written this slice — clause 6.4.8's "different slice" unavailability
     /// falls out of a fresh grid per slice, same as [`NeighbourGrid`].
@@ -1523,9 +1535,13 @@ pub(crate) struct MvInfo {
 
 impl MvInfo {
     /// `true` for a real inter partition (`pred.is_some()`) -- `false`
-    /// uniformly for intra, not-yet-decoded, and P_Skip/B_Skip *before*
+    /// uniformly for intra, not-yet-decoded, and `P_Skip/B_Skip` *before*
     /// this round's own fix (now also `true` for those, see the skip
     /// branch's own comment).
+    #[allow(
+        dead_code,
+        reason = "documented alternative to the is_intra4x4/is_intra16x16/is_ipcm checks crate::reconstruct's inter path actually uses -- see mv_blocks's own doc"
+    )]
     pub(crate) const fn is_inter(&self) -> bool {
         self.pred.is_some()
     }
@@ -1541,15 +1557,15 @@ impl MvInfo {
     /// This neighbour's contribution to `crate::motion`'s median
     /// predictor for `list`, clause 8.4.1.3's own "not available, intra,
     /// or a different reference list" substitution: `pred: None` (never
-    /// decoded here at all -- unavailable, intra, or I_PCM) or `pred`
+    /// decoded here at all -- unavailable, intra, or `I_PCM`) or `pred`
     /// not reading `list` both collapse to
     /// [`crate::motion::Neighbour::UNAVAILABLE`].
     #[allow(clippy::indexing_slicing, reason = "list is always 0 or 1 here, matching this struct's own fixed 2-element ref_idx/mv arrays")]
     const fn as_motion_neighbour(self, list: usize) -> crate::motion::Neighbour {
-        let reads = match (self.pred, list) {
-            (Some(PartPred::L0 | PartPred::Bi), 0) | (Some(PartPred::L1 | PartPred::Bi), 1) => true,
-            _ => false,
-        };
+        let reads = matches!(
+            (self.pred, list),
+            (Some(PartPred::L0 | PartPred::Bi), 0) | (Some(PartPred::L1 | PartPred::Bi), 1)
+        );
         if reads {
             crate::motion::Neighbour { available: true, ref_idx: self.ref_idx[list], mv: self.mv[list] }
         } else {
@@ -1600,11 +1616,11 @@ struct CabacGrids {
     /// that position is *also* where block 0's own AC `coded_block_flag`
     /// is written a few lines later in the same macroblock's own decode --
     /// the AC write silently overwrote the DC write, so any later
-    /// macroblock reading "my Intra_16x16 neighbour's DC flag" back out of
+    /// macroblock reading "my `Intra_16x16` neighbour's DC flag" back out of
     /// `cbf_luma` actually got that neighbour's AC-block-0 flag instead.
     /// Invisible until the first Intra_16x16-to-Intra_16x16 macroblock
     /// adjacency in a decode, since the read is gated on the neighbour
-    /// being Intra_16x16 in the first place.
+    /// being `Intra_16x16` in the first place.
     cbf_luma_dc: Vec<Option<bool>>,
     mv: Vec<MvInfo>,
     /// `Intra4x4PredMode[luma4x4BlkIdx]` (Table 8-2), one per global 4x4
@@ -1669,9 +1685,9 @@ impl CabacGrids {
     /// (clause 9.3.3.1.1.9 and friends' own "this is the same macroblock,
     /// an earlier-decoded block of it" case): trivially available, never
     /// `I_PCM` -- every caller in this module that can legitimately reach
-    /// this case has already passed I_PCM's own early return in
+    /// this case has already passed `I_PCM`'s own early return in
     /// `decode_macroblock_cabac`, so the macroblock being decoded is
-    /// never I_PCM by the time any of them run. Use this instead of
+    /// never `I_PCM` by the time any of them run. Use this instead of
     /// [`Self::mb_info_at`] for "the left/above 4x4 (or 8x8, or whole
     /// macroblock) reference resolves to the macroblock I am decoding
     /// right now" -- that is precisely the input `mb_info_at` cannot
@@ -1870,7 +1886,15 @@ impl CabacGrids {
 /// reads, not at this function.
 fn infer_intra4x4_neighbour_modes(grids: &CabacGrids, cur_mb_x: u32, cur_mb_y: u32, blk: u32) -> (u8, u8) {
     let (lbx, lby) = blk_xy(blk);
-    let (gbx, gby) = ((cur_mb_x * 4 + lbx) as i32, (cur_mb_y * 4 + lby) as i32);
+    // `vaco-limits`'s `Limits::max_dimension` bounds every real macroblock
+    // coordinate reaching this module to at most a few tens of thousands
+    // (enforced in `vaco-parse-h264`'s SPS parsing), far below `i32::MAX`;
+    // the saturating fallback exists so this can never wrap if that bound
+    // is ever raised, not because it is expected to run.
+    let (gbx, gby) = (
+        i32::try_from(cur_mb_x * 4 + lbx).unwrap_or(i32::MAX),
+        i32::try_from(cur_mb_y * 4 + lby).unwrap_or(i32::MAX),
+    );
     let (gxa, gya) = (gbx - 1, gby);
     let (gxb, gyb) = (gbx, gby - 1);
     let avail_a = grids.mb4x4_available(gxa, gya, cur_mb_x, cur_mb_y);
@@ -1941,7 +1965,7 @@ fn cbp_luma_cond_term(same_mb_bit: Option<bool>, cross_mb: Option<(CabacMbInfo, 
     if info.is_ipcm {
         return 0;
     }
-    u32::from(!(!info.skipped && bit))
+    u32::from(info.skipped || !bit)
 }
 
 /// clause 9.3.3.1.1.4's chroma `condTermFlagN` — always a cross-macroblock
@@ -2159,6 +2183,10 @@ fn decode_mvd_component(cabac: &mut CabacDecoder<'_>, ctx: &mut [ContextModel; 7
 /// spatial grid: this is the one macroblock-layer `ctxIdxInc` that does not
 /// need [`CabacGrids`] at all.
 #[derive(Debug, Clone, Copy, Default)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each bool is an independent clause 9.3.3.1.1.5 condTermFlag input (availability, skipped, I_PCM, zero delta), not a state machine"
+)]
 struct PrevMbQp {
     available: bool,
     skipped: bool,
@@ -2422,8 +2450,8 @@ pub fn decode_slice_cabac(
                 is_ipcm: info.is_some_and(|i| i.is_ipcm),
                 is_intra4x4: info.is_some_and(|i| i.is_intra4x4),
                 is_intra16x16: info.is_some_and(|i| i.is_intra16x16),
-                intra16x16_pred_mode: info.map(|i| i.intra16x16_pred_mode).unwrap_or(0),
-                intra_chroma_pred_mode: info.map(|i| i.intra_chroma_pred_mode).unwrap_or(0),
+                intra16x16_pred_mode: info.map_or(0, |i| i.intra16x16_pred_mode),
+                intra_chroma_pred_mode: info.map_or(0, |i| i.intra_chroma_pred_mode),
                 qpy,
                 residual: residual.clone(),
                 mv_blocks: collect_mv_blocks(&grids, mb_x, mb_y),
@@ -2574,7 +2602,7 @@ fn decode_macroblock_cabac(
         // *split direction* decides which 4x4 positions each partition's
         // decoded values land on for the next macroblock to read back.
         match raw_code {
-            0 => decode_one_partition_cabac(cabac, header, ctx, grids, mb_x, mb_y, PartPred::L0, (0, 0, 3, 3))?,
+            0 => decode_one_partition_cabac(cabac, header, ctx, grids, mb_x, mb_y, PartPred::L0, (0, 0, 3, 3)),
             1 => {
                 decode_two_partitions_cabac(
                     cabac,
@@ -2587,7 +2615,7 @@ fn decode_macroblock_cabac(
                     PartPred::L0,
                     (0, 0, 3, 1),
                     (0, 2, 3, 3),
-                )?;
+                );
             }
             2 => {
                 decode_two_partitions_cabac(
@@ -2601,7 +2629,7 @@ fn decode_macroblock_cabac(
                     PartPred::L0,
                     (0, 0, 1, 3),
                     (2, 0, 3, 3),
-                )?;
+                );
             }
             3 => decode_sub_mb_pred_cabac(cabac, header, ctx, grids, mb_x, mb_y, false)?,
             4 => decode_sub_mb_pred_cabac(cabac, header, ctx, grids, mb_x, mb_y, true)?,
@@ -2713,7 +2741,7 @@ fn decode_macroblock_cabac(
 /// unavailable (picture edge, not-yet-decoded in raster+z-order, or
 /// intra) all read back as `MvInfo::default()` (`pred: None`) uniformly
 /// -- see `MvInfo`'s own doc for why that convention already covers
-/// P_Skip/B_Skip/Intra alike, which is exactly clause 8.4.1.3.2's own
+/// `P_Skip/B_Skip/Intra` alike, which is exactly clause 8.4.1.3.2's own
 /// "not available" condition too, so no separate boundary check is
 /// needed here beyond the grid's own bounds check.
 /// Maps a partition's own macroblock-relative 4x4-block rectangle to the
@@ -2758,7 +2786,7 @@ fn decode_one_partition_cabac(
     mb_y: u32,
     pred: PartPred,
     (x0, y0, x1, y1): (u32, u32, u32, u32),
-) -> Result<()> {
+) {
     let ax = mb_x * 4 + x0;
     let ay = mb_y * 4 + y0;
     let left = ax.checked_sub(1).map_or_else(MvInfo::default, |lx| grids.mv_at(lx, ay));
@@ -2821,7 +2849,6 @@ fn decode_one_partition_cabac(
             grids.set_mv(mb_x * 4 + x, mb_y * 4 + y, info);
         }
     }
-    Ok(())
 }
 
 #[allow(
@@ -2840,7 +2867,7 @@ fn decode_two_partitions_cabac(
     pred1: PartPred,
     rect0: (u32, u32, u32, u32),
     rect1: (u32, u32, u32, u32),
-) -> Result<()> {
+) {
     // clause 7.3.5.1's read order: all of ref_idx_l0, then ref_idx_l1, then
     // mvd_l0, then mvd_l1, across *both* partitions — not one partition
     // fully read before the next starts. `decode_one_partition_cabac`
@@ -2862,6 +2889,10 @@ fn decode_two_partitions_cabac(
         (left, above)
     };
 
+    #[allow(
+        clippy::needless_range_loop,
+        reason = "list is a 0/1 list-select used as a branch condition (reads_l0/reads_l1, n0/n1) and an arg to ref_idx_cond_term, not just an index -- an iterator over ref_idx alone would not carry those"
+    )]
     for list in 0..2usize {
         for p in 0..2usize {
             let reads = if list == 0 { preds[p].reads_l0() } else { preds[p].reads_l1() };
@@ -2910,7 +2941,6 @@ fn decode_two_partitions_cabac(
             }
         }
     }
-    Ok(())
 }
 
 /// `P_8x8`/`P_8x8ref0`'s four sub-macroblock partitions.
