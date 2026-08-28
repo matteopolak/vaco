@@ -98,3 +98,24 @@ method = "transcribed"
 # directly in the doc comments of the functions that encode them
 # (block::decode_mq_dquant, block::quant_c, h263::mba_field_width,
 # h263::swi_field_width) rather than duplicated here.
+
+[[table]]
+name   = "OBMC_H0"
+file   = "crates/codec/vaco-codec-h263/src/motion.rs"
+source = "itu-t-h263"
+clause = "Annex F §F.3, Figure F.2 -- weighting values H0, prediction with the current luminance block's own motion vector"
+method = "transcribed"
+
+[[table]]
+name   = "OBMC_H1"
+file   = "crates/codec/vaco-codec-h263/src/motion.rs"
+source = "itu-t-h263"
+clause = "Annex F §F.3, Figure F.3 -- weighting values H1, prediction with the vertically remote (above/below) motion vector"
+method = "transcribed"
+
+[[table]]
+name   = "OBMC_H2"
+file   = "crates/codec/vaco-codec-h263/src/motion.rs"
+source = "itu-t-h263"
+clause = "Annex F §F.3, Figure F.4 -- weighting values H2, prediction with the horizontally remote (left/right) motion vector"
+method = "transcribed"
