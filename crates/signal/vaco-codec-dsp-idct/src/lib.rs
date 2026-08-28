@@ -100,11 +100,21 @@
 //! H.264/HEVC 4-point and 8-point cores. See `docs/signal/vaco-codec-dsp-idct.md`
 //! for the full derivation.
 #![forbid(unsafe_code)]
+// `#[inline(always)]` on a SIMD kernel body is not a tuning knob in this
+// crate: it is how the dispatched level's target-feature context reaches
+// the body. A kernel that fails to inline is compiled at the ambient
+// baseline -- still correct, silently slow, and invisible to every
+// correctness test.
+#![allow(
+    clippy::inline_always,
+    reason = "mandatory for target-feature propagation in vaco_simd kernel bodies"
+)]
 
 pub mod blockdsp;
 pub mod h264;
 pub mod hevc;
 pub mod mpeg2;
 pub mod pixblockdsp;
+pub mod simd;
 mod util;
 pub mod vp9;

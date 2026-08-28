@@ -11,6 +11,7 @@ authors.workspace = true
 [dependencies]
 vaco-core = { path = "../../core/vaco-core" }
 vaco-tx = { path = "../vaco-tx" }
+vaco-simd = { path = "../../core/vaco-simd" }
 
 [dev-dependencies]
 proptest.workspace = true

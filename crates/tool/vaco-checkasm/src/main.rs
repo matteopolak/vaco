@@ -15,6 +15,7 @@
 //! and call `Differential::<K>::run()` from its own tests — that is how
 //! `vaco-checkasm`'s own `kernels::scale_affine` module is itself tested.
 
+use vaco_checkasm::kernels::blockdsp::AddPixelsClampedKernel;
 use vaco_checkasm::kernels::fir_mc::FirMcKernel;
 use vaco_checkasm::kernels::fmtconvert::{Int16ToFloatKernel, Int32ToFloatKernel};
 use vaco_checkasm::kernels::lpc::AutocorrelateKernel;
@@ -102,6 +103,10 @@ const ENTRIES: &[Entry] = &[
     Entry {
         name: AutocorrelateKernel::NAME,
         verify: verify_report::<AutocorrelateKernel>,
+    },
+    Entry {
+        name: AddPixelsClampedKernel::NAME,
+        verify: verify_report::<AddPixelsClampedKernel>,
     },
 ];
 
