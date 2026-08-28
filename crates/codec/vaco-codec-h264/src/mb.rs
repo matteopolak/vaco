@@ -1108,6 +1108,82 @@ fn decode_residual(
 // not resolved this round. Needs either an independent from-scratch CABAC
 // arithmetic oracle (planned twice now, never built) or further hand
 // simulation to localise past "somewhere in this nine-decision sequence".
+//
+// FOLLOW-UP round: a specific, well-reasoned engine-level candidate was
+// checked and does NOT hold -- reported here rather than silently dropped,
+// since ruling it out is itself the useful result the coordinator asked
+// for ("report what clause 9.3.3.2.4 actually specifies... before
+// reporting any fix").
+//
+// The candidate: `CabacDecoder::into_reader`/`reader()` (vaco-codec-cabac,
+// read-only investigation -- that crate is `agent:codec-bits`'s, confirmed
+// no live writer before and after) hand back the reader unadjusted after
+// `end_of_slice_flag` terminates, and clause 9.3.3.2.4 notes that "the
+// last bit inserted in register codIOffset is rbsp_stop_one_bit" --
+// raising the question of whether some fixed lookahead (the 9-bit initial
+// `ivlOffset` read) needs backing out of the reader's position before it
+// can be compared against `rbsp_trailing_bits()`.
+//
+// What clause 9.3.3.2.4 actually specifies for the post-termination
+// position: DecodeTerminate, when `codIOffset >= codIRange - 2`, sets
+// `binVal = 1` and performs **no renormalisation at all** -- it reads no
+// further bits, full stop. The "last bit inserted..." sentence is purely
+// informative: a property a *conformant* bitstream's construction
+// guarantees will hold (useful for validating an encoder), not an
+// instruction for a decoder to retroactively adjust its position. Nothing
+// in the clause describes giving bits back.
+//
+// Checked whether this implementation's *own* renormalisation could still
+// create a reader/engine mismatch the abstract spec text doesn't have (a
+// batching optimisation reading ahead further than the spec's per-bit
+// model, say): `renorm()` (`vaco-codec-cabac/src/decode.rs`) reads exactly
+// one bit per iteration via `self.reader.get_bit()`, matching the spec's
+// literal per-bit `RenormD` exactly (its own module doc names this the
+// measured-fastest of four options, "per-bit (spec)"). `decode_terminate`
+// itself matches clause 9.3.3.2.4 verbatim: `range -= 2`, no renorm on
+// `binVal == 1`. `reader.bit_pos()` is therefore a precise, direct count
+// of bits physically consumed with no batching gap to reconcile -- there
+// is no lookahead debt sitting in `ivlOffset` beyond what every renorm
+// step already folds into the reader's own position, one bit at a time.
+//
+// Directional proof, from the minimal repro's own raw bytes (its slice
+// NAL: `65 88 84 0a ff fe f6 92 f9`, bit 68 = `1`, bits 69-70 = `0,0`, bit
+// 71 = `1`, and bit 71 is the file's last bit): the *only* position P
+// where bit P = 1 and every bit from P+1 to the next byte boundary is 0
+// is P = 71 (P = 68, this decoder's actual termination point minus one,
+// fails -- bit 71 sitting three bits later is not zero). That means the
+// true stream needs *three more bits consumed* than this decoder's
+// current 69 before `end_of_slice_flag` should fire -- the reader is
+// **behind** the true position, not ahead of it. A fix that hands back
+// already-consumed lookahead moves in the wrong direction and cannot
+// close this gap by construction, regardless of how the constant is
+// chosen. This rules the candidate out rather than merely leaving it
+// untested.
+//
+// Also checked, as asked, either way: I_PCM's own `into_reader()` call
+// (this file, above) follows a *different* `decode_terminate()` firing
+// (the I_PCM indicator bin inside `mb_type`, not `end_of_slice_flag`) and
+// clause 9.3.1.2 already requires the arithmetic engine to fully
+// re-initialise afterward (fresh range, fresh 9-bit offset) -- unrelated
+// to this question, already handled. CAVLC never touches `CabacDecoder`
+// at all (an entirely different, non-arithmetic entropy coding), so its
+// own success neither confirms nor masks anything about this engine.
+// HEVC: `vaco-codec-cbs` (`agent:hevc`'s crate, per `ASSIGNMENTS.md`) is a
+// bitstream-editing layer with no `vaco-codec-cabac` dependency at all,
+// and `vaco-parse-hevc` likewise has none -- checked by grepping every
+// `CabacDecoder`/`vaco-codec-cabac` reference in the workspace, not
+// assumed. `vaco-codec-h264` is this engine's only real consumer today,
+// despite its own doc describing itself as shared H.264/H.265
+// infrastructure -- that is forward-looking design, not a live HEVC user
+// this investigation needs to account for yet.
+//
+// The true divergence -- three bits missing somewhere in the
+// mb_type/intra_chroma_pred_mode/mb_qp_delta/luma-DC-coded_block_flag/
+// end_of_slice_flag sequence, per the previous round's trace -- remains
+// exactly as unlocalised as it was. This round's result is negative but
+// decisive: one specific, plausible engine-level explanation is now
+// closed off, and the search stays inside `vaco-codec-h264`'s own
+// macroblock layer rather than moving to the shared engine.
 use crate::cabac_mb_tables::{inits_by_col, inits_by_idc, inits_fixed};
 
 /// `CabacDecoder::decode_decision` over a context array, indexed safely —
