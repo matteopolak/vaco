@@ -2152,3 +2152,114 @@ type 9 (video), 5 bytes: 17 02 00 00 00
 — keyframe, codec 7 (AVC), `AVCPacketType = 2`, "end of sequence". Ours ends on
 an ordinary NALU tag. A reader that trusts the terminator to know the sequence
 is complete sees a truncated file.
+
+## 41. FT-4.13e's remaining audio filters (#485): three cases where black-box probing hits a real wall
+
+Ten filters split across `vaco-filter-audio`, `vaco-filter-adynamics` and
+`vaco-filter-aeq` (closing epic #58). Two landed bit-exact; the rest hit one
+of three distinct walls worth recording so the next agent does not re-spend
+the time finding them again.
+
+**`amultiply` is bit-exact — the easy case, recorded for contrast.** A 1 kHz
+and a 500 Hz tone through the reference match the elementwise product of the
+two unfiltered inputs at full `f64` precision. No gain stage, no clamp,
+nothing to get subtly wrong.
+
+**`acrusher`'s quantiser is exact; four of its options are not, and probing
+found *why* they resist a formula rather than just failing to find one.**
+`bits`/`mix`/`level_in`/`level_out` at `dc=1, aa=0, samples=1, mode=lin` are
+pinned exactly (`round(x * (2^bits-1)) / (2^bits-1)`, with `mix=1` measured
+to mean *dry* and `mix=0` *wet* — the reverse of the usual convention). But
+`dc != 1` produces an asymmetric quantisation grid — feeding a fine ramp at
+`bits=1, dc=2` gives a dead band from `-1` to `+0.24` mapping entirely to
+`0`, then evenly `0.5`-spaced steps above it — that does not fit any
+bias/scale/clamp combination tried against the `dc=1` formula. `aa != 0`
+(the reference's own *default* is `0.5`) replaces the hard staircase with a
+continuous curve, not a smoothed version of it. `samples > 1` did not show
+the expected "N identical consecutive samples" pattern at `bits=8`. All four
+are accepted as options (so a filtergraph string is not rejected) but have
+no effect, rather than shipping a guessed curve.
+
+**`aemphasis`/`atilt`: the option surface documents *that* a family of
+curves/cascades exists, not *which one*.** `aemphasis`'s `col`/`emi`/`bsi`
+(historical 78 rpm de-emphasis curves) have no confidently-available
+published time constants — unlike `50fm`/`75fm`/`cd` (standard, well-known
+50/75 us broadcast constants) or `riaa` (the standard 3180/318/75 us curve,
+here simplified to its single dominant corner). Shipping a made-up number
+for three specific curves as if it were their real time constant would be
+indistinguishable, to a later reader, from a measured one — so they use an
+explicitly-labelled placeholder instead. `atilt`'s `order` (2 to 30) proves
+it is a variable-order cascade, but nothing in `-h filter=atilt`'s output
+says what `order`/`slope`/`width` map onto structurally; built instead from
+a cascade of this crate's own verified `biquad::tilt` construction, which
+does something in the right direction (more `order`, steeper transition)
+without claiming the reference's exact shape.
+
+**`apsyclip`, `adynamicequalizer`, `adrc`'s non-default path: the option
+list names a real subsystem `-h` cannot describe.** A psychoacoustic
+clipper's masking model, a per-FFT-bin transfer expression's grammar, and a
+dynamic EQ's exact threshold unit are none of them recoverable from an
+options table — `-h` gives parameter names, not algorithms. Each ships a
+real, working, explicitly-labelled substitute in the right family (an
+iterative corrective clipper; a broadband time-domain compressor; a
+detector-driven biquad gain, respectively) rather than a guess dressed as
+the real thing. `adrc`'s default (`transfer=p`) *is* measured: diffed
+against the unfiltered input, it matches to `1e-9` after an ~15-sample
+settle, confirming "p" really is "pass".
+
+**One real published algorithm, not a substitute: `adynamicsmooth`.**
+Andrew Simper (Cytomic)'s self-modulating dynamic smoothing filter (2014) is
+a citable, independent construction that happens to fit this option surface
+(`sensitivity`, `basefreq`) exactly. Implemented from the algorithm's own
+description and checked against its own mathematical properties (unity DC
+gain; `sensitivity=0` degenerates to a plain two-pole low-pass, checked
+against an independent from-scratch computation of that case) — this one
+is algorithmically faithful by construction, not by black-box measurement,
+because there was a real specification to be faithful to.
+
+Not fixed further in this pass; `docs/filter/vaco-filter-{audio,adynamics,aeq}.md`
+carry the same breakdown per crate.
+
+## 41. We never print the `Input #0` / `Output #0` dump, and no work package covers it
+
+The single most visible thing `ffmpeg` prints, and we print none of it. `vaco -i
+file.mp4` with no output emits only the error:
+
+```text
+$ ffmpeg -hide_banner -i long.mp4                    $ vaco -hide_banner -i long.mp4
+Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'long.mp4':  At least one output file must be specified
+  Metadata:
+    major_brand     : isom
+    minor_version   : 512
+    compatible_brands: isomiso2avc1mp41
+    encoder         : Lavf62.12.100
+  Duration: 00:00:06.00, start: 0.000000, bitrate: 11 kb/s
+  Stream #0:0[0x1](und): Video: h264 (High) (avc1 / 0x31637661), yuv420p(progressive), 64x64 [SAR 1:1 DAR 1:1], 8 kb/s, 25 fps, 25 tbr, 12800 tbn (default)
+    Metadata:
+      handler_name    : VideoHandler
+      encoder         : Lavc62.28.100 libx264
+At least one output file must be specified
+```
+
+The exit code and the error line are both right; everything above them is
+missing. A transcode is missing the matching `Output #0` block as well, plus
+`Press [q] to stop, [?] for help`.
+
+Grepping `planning/14-cli.md` for this dump finds nothing. CL-17 (#208) covers
+`-progress`/`-stats`/`-report`, which is the `frame= fps= Lsize=` line, not
+this. **No work package covers the input/output dump at all** — a planning gap
+rather than an unstarted item, which is why it has stayed invisible while
+narrower CLI work was scheduled and finished.
+
+The data is not the hard part: `ffprobe -show_streams` already produces every
+field in that stream line, so this is a formatting job over plumbing we have.
+Three shapes to reproduce, all measured:
+
+- **Program blocks.** MPEG-TS input prints `Program 1 ` (note the trailing
+  space) with its own indented `Metadata:` before the stream lines, and its
+  stream line carries `start 1.480000` where MP4's does not.
+- **Per-stream metadata** is indented under each stream, not merged into the
+  container block.
+- **`-bitexact` does not suppress `encoder : Lavf62.12.100` here.** That looks
+  like the version-string rule and is not: this is metadata *read from the
+  file*, not our identity. The suppression rule applies to strings we author.
