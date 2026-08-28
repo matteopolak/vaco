@@ -1,16 +1,30 @@
 # vaco-filter-mm
 
-T1 graph plumbing, sources/sinks, cutting/joining (FT-4.3, GitHub issue #467):
-`split`/`asplit`, `null`/`anull`, `copy`/`acopy`, `setpts`/`asetpts`,
-`settb`/`asettb`, `select`/`aselect`, `trim`/`atrim`, `concat`,
-`nullsrc`/`anullsrc`, `nullsink`/`anullsink`, `color`.
+Plan 16 §4.4's multimedia/T1-plumbing row (GitHub #479, FT-4.12f), plus the
+graph-plumbing/source-sink filters this crate carried under its previous name
+`vaco-filter-plumbing` (FT-4.3, GitHub #467): `concat`, `select`/`aselect`,
+`trim`/`atrim`, `split`/`asplit`, `setpts`/`asetpts`, `null`/`anull`,
+`metadata`/`ametadata`, `copy`/`acopy`, `settb`/`asettb`,
+`nullsrc`/`anullsrc`, `nullsink`/`anullsink`, `color`. This document is being
+updated incrementally as the row's remaining filters land; see each filter's
+own module doc for the fullest detail in the meantime.
 
 ## What it is
 
-20 of the 24 filters `planning/16-filters.md` §5.3 groups as "Graph plumbing"
-(12), "Cutting and joining" (3) and "Sources and sinks" (9) for the T1 set.
-Each filter is a module exposing `pub const DESC: FilterDesc` plus a
-crate-private `create`; [`registry::MmRegistry`] dispatches by name.
+Filters from two plan rows sharing one crate through a rename
+(`planning/FILTER-CRATE-DIVERGENCE.md`). Each filter is a module exposing
+`pub const DESC: FilterDesc` plus a crate-private `create`;
+[`registry::MmRegistry`] dispatches by name.
+
+## `color`/`nullsrc`/`nullsink`/`anullsrc`: a recorded divergence, not an oversight
+
+Plan 16 §4.2/§4.3 place these four in `vaco-filter-source`/`vaco-filter-asource`,
+not here. Both crates exist but do not yet register these names. This crate
+does not own either under the single-writer rule, so rather than delete
+working filters with nothing to replace them (a CLI regression for no gain),
+they stay here until whoever owns `-source`/`-asource` pulls them across —
+`cargo xtask dup-check` is the safety net that catches the day both copies
+exist at once.
 
 ## What is missing, and why: `buffer`/`abuffer`/`buffersink`/`abuffersink`
 
@@ -74,12 +88,56 @@ Verified end-to-end by `concat::tests::rebases_the_second_segment_after_the_firs
 ### `select`/`aselect` (`select.rs`)
 
 `outputs=1` (the default, and by far the common case) passes a frame when
-`expr` is non-zero. `outputs>1` routes to `round(expr) - 1`, clamped — a
-structural reading, not measured against the reference's own multi-output
-semantics. Implemented variables: `n`, `selected_n`, `prev_selected_n`, `pts`,
-`t`, `tb`, `start_pts`, `start_t`; not implemented: `pict_type`,
-`interlace_type`, `key`, `scene` (no signal for any of these yet), `pos`
-(permanently `NaN`, matching the reference's own current behaviour).
+`expr` is non-zero. `outputs>1` routes by the reference's own documented
+rule — negative or `NaN` goes to the first output, otherwise `ceil(expr)-1`,
+clamped — **fixed** in this pass from a `round(expr)-1` reading that agreed
+with `ceil` on integers and disagreed everywhere else (measured against
+`ffmpeg 8.1`: `select=outputs=3:expr='1.2'` lands in the *second* output,
+which `round` would have put in the first). Also fixed: `NaN`/negative used
+to be dropped outright rather than routed to output 0. Implemented
+variables: `n`, `selected_n`, `prev_selected_n`, `pts`, `t`, `tb`,
+`start_pts`, `start_t`, `scene`; not implemented: `pict_type`,
+`interlace_type`, `key` (no signal for any of these yet), `pos` (permanently
+`NaN`, matching the reference's own current behaviour).
+
+`scene` uses `vaco_filter_vdsp::normalised_sad` between the current and
+previous frame's luma plane — the same 0..1 frame-difference fraction
+`vaco-filter-temporal::freezedetect` already treats as its scene signal, per
+this row's brief to extend `vdsp` rather than duplicate it. **Not verified
+bit-exact** against the reference's own (unread, D7) internal scene-score
+formula — only the shape (0 for identical frames, bounded by 1) is
+exercised. `NaN` on the first frame of a stream and for `aselect` (no luma
+to diff).
+
+### `metadata`/`ametadata` — the first consumer of the frame metadata dictionary (`metadata.rs`)
+
+Reads and writes `Frame::metadata()` (interface gap 11, closed by
+`freezedetect` and `vaco-filter-analysis`'s measurement filters, which are
+the producers this filter is the first to consume). Every mode measured
+against `ffmpeg 8.1` rather than inferred from `-h filter=metadata`'s option
+list, which under-specifies all of the following:
+
+- `select`/`add`/`modify` **reject construction** when `key` is unset
+  (`add`/`modify` also reject a missing `value`) — matches the reference's
+  own `Metadata key must be set` filtergraph-init failure, not a permissive
+  default.
+- `add` on an existing key and `modify` on an absent key are **both
+  no-ops** — confirmed in both directions.
+- `delete` with `key`+`value` only removes the entry when the value compares
+  true through `function` (default `same_str`); `delete` with no `key`
+  clears the whole dictionary.
+- `print` emits **nothing at all** — not even the header line — when there
+  is nothing to report. Its header is column-padded to fixed widths
+  (`frame:{n:<5}pts:{pts:<8}pts_time:{t}`), and `pts_time` uses the same
+  trimmed-six-decimal format as `freezedetect`'s `lavfi.*` tags.
+- With no `file` option, `print` still computes and records its lines (a
+  test-only accessor) but does not emit them anywhere — this project has no
+  log sink a filter can write to yet, unlike the reference's `AV_LOG_INFO`.
+  `file` set to a real path, or `"-"` for stdout, writes for real.
+
+`mode` and `function` are `#[derive(OptEnum)]` types (see
+`vaco-filter-asource::anoisesrc`'s `NoiseColor` for the pattern), so the
+reference's own spellings parse directly — `mode=add`, not just `mode=1`.
 
 ### `settb`/`asettb` (`settb.rs`)
 
@@ -141,15 +199,23 @@ exactly which of the reference's options are implemented.
 - `vaco-filter-core` — `Filter`, adapters, format negotiation.
 - `vaco-filter-graph` — `FilterRegistry`/`Instantiate`/`Instance`, `pads::of`
   for dynamic pad counts.
-- `vaco-expr` — `setpts`/`asetpts`, `settb`/`asettb`, `select`/`aselect`.
-- `vaco-opts` — option parsing.
+- `vaco-expr` — `setpts`/`asetpts`, `settb`/`asettb`, `select`/`aselect`,
+  `metadata`/`ametadata`'s `function=expr`.
+- `vaco-filter-vdsp` — `normalised_sad`, for `select`'s `scene`.
+- `vaco-limits` — `Budget`, for the row's size/count/duration-bounded
+  filters (`loop`, `aloop`, `reverse`, `areverse`, `segment`).
+- `vaco-opts` — option parsing, including `#[derive(OptEnum)]` for
+  `metadata`'s `mode`/`function`.
 - `vaco-core::parse` — `color` (`Rgba`), `nullsrc`/`color` (`image_size`,
   `video_rate`, `duration`'s exact reference grammar).
 
 ## Issues
 
-Closes GitHub #467 (FT-4.3) for the 20 filters this crate implements.
-`buffer`/`abuffer`/`buffersink`/`abuffersink` are named in the issue's 24 but
+Closes GitHub #467 (FT-4.3) for the 20 filters this crate originally
+implemented, and is landing GitHub #479 (FT-4.12f, plan 16 §4.4) on top —
+see this document's header for what has arrived so far and this crate's
+`lib.rs` doc for what is deliberately left and why.
+`buffer`/`abuffer`/`buffersink`/`abuffersink` are named in #467's 24 but
 are out of this crate's scope — see "What is missing, and why" above; left
 open, or to be handled by whichever of `vaco-filter-graph`/`vaco-cli-core`
 wires the DSL spellings onto `vaco-filter-core`'s existing Graph I/O API.

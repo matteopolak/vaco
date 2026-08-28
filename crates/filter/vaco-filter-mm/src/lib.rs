@@ -1,8 +1,32 @@
-//! T1 graph plumbing, cutting/joining and sources/sinks: `split`/`asplit`,
-//! `null`/`anull`, `copy`/`acopy`, `setpts`/`asetpts`, `settb`/`asettb`,
-//! `select`/`aselect`, `trim`/`atrim`, `concat`, `nullsrc`/`anullsrc`,
-//! `nullsink`/`anullsink`, `color` — 20 of the 24 filters FT-4.3 (GitHub
-//! #467) names.
+//! Plan 16 §4.4's multimedia/T1-plumbing row (`vaco-filter-mm`, GitHub
+//! #479, FT-4.12f): `concat`, `select`/`aselect`, `trim`/`atrim`,
+//! `split`/`asplit`, `setpts`/`asetpts`, `null`/`anull`,
+//! `metadata`/`ametadata`, plus the graph-plumbing/source-sink filters this
+//! crate carried under its previous name (`vaco-filter-plumbing`, FT-4.3,
+//! GitHub #467): `copy`/`acopy`, `settb`/`asettb`, `nullsrc`/`anullsrc`,
+//! `nullsink`/`anullsink`, `color`.
+//!
+//! `color`/`nullsrc`/`nullsink`/`anullsrc` are **not** in the §4.4 row — the
+//! plan places them in `vaco-filter-source`/`vaco-filter-asource` instead.
+//! Left here rather than moved: those two crates exist but do not yet
+//! register these four names, this crate does not own them under the
+//! single-writer rule, and deleting working filters with nothing to replace
+//! them would regress the CLI. See `planning/FILTER-CRATE-DIVERGENCE.md`.
+//!
+//! Not yet landed from the §4.4 row, with reasons: `avsynctest` (a synthetic
+//! A/V generator disproportionate to this row's plumbing character — the
+//! `vaco-filter-aeffects` precedent for `surround`/`headphone`);
+//! `cmdsocket`/`acmdsocket` (need a real listening socket, out of a filter's
+//! normal scope). `sendcmd`/`asendcmd` implement the command-script grammar
+//! and per-frame passthrough but cannot dispatch to another named filter
+//! instance — that needs a graph-level "send this filter a command" API
+//! `vaco-filter-core` does not expose yet; see `sendcmd`'s module doc.
+//!
+//! `select`'s `scene` variable and its `ceil`-not-`round` multi-output
+//! routing (a real bug, found by reading the reference's own documentation
+//! and confirmed against `ffmpeg 8.1`) landed alongside `metadata` in the
+//! same pass, since both were already this crate's before the row's other
+//! filters arrived.
 //!
 //! # The other four: `buffer`/`abuffer`/`buffersink`/`abuffersink`
 //!
@@ -35,6 +59,7 @@
 
 pub mod color;
 pub mod concat;
+pub mod metadata;
 pub mod nullsink;
 pub mod nullsrc;
 pub mod passthrough;

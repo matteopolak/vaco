@@ -1,4 +1,4 @@
-//! [`MmRegistry`] — the [`FilterRegistry`] this crate's twenty filters
+//! [`MmRegistry`] — the [`FilterRegistry`] this crate's filters
 //! answer through. See `vaco-filter-audio::registry` for why this pattern
 //! (one dispatching `FilterRegistry` per leaf crate) is what stands in for
 //! an aggregator that does not exist yet.
@@ -7,6 +7,7 @@ use vaco_filter_graph::registry::{FilterRegistry, Instance, Instantiate};
 
 const NAMES: &[&str] = &[
     "acopy",
+    "ametadata",
     "anull",
     "anullsink",
     "anullsrc",
@@ -18,6 +19,7 @@ const NAMES: &[&str] = &[
     "color",
     "concat",
     "copy",
+    "metadata",
     "null",
     "nullsink",
     "nullsrc",
@@ -40,6 +42,7 @@ impl FilterRegistry for MmRegistry {
     fn create(&self, req: &Instantiate<'_>) -> Result<Instance, String> {
         match req.name {
             "acopy" => crate::passthrough::acopy::create(req),
+            "ametadata" => crate::metadata::audio::create(req),
             "anull" => crate::passthrough::anull::create(req),
             "anullsink" => crate::nullsink::audio::create(req),
             "anullsrc" => crate::nullsrc::audio::create(req),
@@ -51,6 +54,7 @@ impl FilterRegistry for MmRegistry {
             "color" => crate::color::create(req),
             "concat" => crate::concat::create(req),
             "copy" => crate::passthrough::copy::create(req),
+            "metadata" => crate::metadata::video::create(req),
             "null" => crate::passthrough::null::create(req),
             "nullsink" => crate::nullsink::video::create(req),
             "nullsrc" => crate::nullsrc::video::create(req),

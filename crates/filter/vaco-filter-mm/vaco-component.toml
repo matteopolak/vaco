@@ -147,3 +147,17 @@ name = "trim"
 long_name = "Pick one continuous section from the input, drop the rest"
 ctor = "vaco_filter_mm::trim::video::DESC"
 media = "video"
+
+[[component]]
+kind = "filter"
+name = "metadata"
+long_name = "Manipulate video frame metadata"
+ctor = "vaco_filter_mm::metadata::video::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "ametadata"
+long_name = "Manipulate audio frame metadata"
+ctor = "vaco_filter_mm::metadata::audio::DESC"
+media = "audio"

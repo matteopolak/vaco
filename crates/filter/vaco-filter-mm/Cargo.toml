@@ -1,6 +1,6 @@
 [package]
 name = "vaco-filter-mm"
-description = "T1 graph plumbing, sources/sinks, trim/concat: split, null, copy, setpts, settb, select, trim, concat, nullsrc, nullsink, color."
+description = "Plan 16 SS4.4 multimedia/T1-plumbing row: concat, select, trim, split, setpts, null, metadata, plus graph plumbing/sources/sinks: copy, settb, nullsrc, nullsink, color."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -19,6 +19,8 @@ vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
 vaco-color = { path = "../../model/vaco-color" }
 vaco-filter-core = { path = "../../filter/vaco-filter-core" }
 vaco-filter-graph = { path = "../../filter/vaco-filter-graph" }
+vaco-filter-vdsp = { path = "../../filter/vaco-filter-vdsp" }
+vaco-limits = { path = "../../core/vaco-limits" }
 smallvec.workspace = true
 
 [dev-dependencies]
