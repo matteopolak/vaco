@@ -1,0 +1,8 @@
+[[component]]
+kind       = "demuxer"
+name       = "mp3"
+long_name  = "MP2/3 (MPEG audio layer 2/3)"
+feature    = "demux-mp3"
+ctor       = "vaco_demux_mpegaudio::DEMUXER"
+extensions = "mp3,mp2,m2a,mpa"
+mime_types = "audio/mpeg,audio/x-mpeg,audio/mp3"
