@@ -3564,20 +3564,6 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
-    #[cfg(feature = "codec-av1")]
-    crate::Component {
-        kind: crate::Kind::Decoder,
-        name: "av1",
-        long_name: Some(
-            "AV1 (intra-only; AV1 Bitstream & Decoding Process Specification v1.0.0 with Errata 1)",
-        ),
-        krate: "vaco-codec-av1",
-        feature: Some("codec-av1"),
-        media: Some("video"),
-        codec: Some("av1"),
-        extensions: &[],
-        mime_types: &[],
-    },
     #[cfg(feature = "codec-rawvideo")]
     crate::Component {
         kind: crate::Kind::Decoder,
@@ -10079,8 +10065,6 @@ pub static DECODERS: &[&::vaco_codec_core::DecoderDesc] = &[
     &::vaco_codec_adpcm::ADPCM_SWF_DECODER,
     #[cfg(feature = "codec-alac")]
     &::vaco_codec_alac::DECODER_ALAC,
-    #[cfg(feature = "codec-av1")]
-    &::vaco_codec_av1::AV1_DECODER,
     #[cfg(feature = "codec-rawvideo")]
     &::vaco_codec_rawvideo::AVUI_DECODER,
     #[cfg(feature = "codec-rawvideo")]
