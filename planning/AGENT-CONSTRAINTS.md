@@ -566,6 +566,34 @@ unset GIT_INDEX_FILE
 git reset -q HEAD -- path/to/shared.rs          # settle the shared index against the new HEAD
 ```
 
+**`/tmp/my-half-of-the-file.rs` is not decorative.** `git hash-object -w` takes
+a *path*, and if you give it the working-tree path you hash whatever is in the
+working tree — including the other agent's uncommitted edits. That defeats the
+entire recipe while looking exactly like using it. It has now happened twice in
+one day on `planning/TECH-DEBT.md`, once by the orchestrator, and both times the
+commit message described only the committer's own work while the diff carried
+somebody else's.
+
+For an append-only shared document — `CONFORMANCE-FINDINGS.md`, `TECH-DEBT.md`
+— build your half from `HEAD`, never from the working tree:
+
+```sh
+git show HEAD:planning/TECH-DEBT.md > /tmp/mine.md   # NOT the working-tree file
+cat /tmp/my-append.md >> /tmp/mine.md
+export GIT_INDEX_FILE=/tmp/my-idx
+git read-tree HEAD
+blob=$(git hash-object -w /tmp/mine.md)
+git update-index --cacheinfo 100644,$blob,planning/TECH-DEBT.md
+git commit -F msg.txt
+unset GIT_INDEX_FILE
+git reset -q HEAD -- planning/TECH-DEBT.md
+```
+
+The working-tree file keeps everyone's appends, including yours and theirs;
+`HEAD` gains only yours. The next agent to commit repeats this and gains only
+its own. Nothing is lost either way — an absorbed append is misattributed, not
+deleted — but the record is the point.
+
 Your half lands, the other agent's half stays in the working tree untouched,
 and the shared index is never written. The `git reset -q HEAD -- <path>` at the
 end is the one legitimate use of `git reset` in this tree: it unstages only,
