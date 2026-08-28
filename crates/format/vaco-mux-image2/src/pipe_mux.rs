@@ -121,8 +121,15 @@ impl Muxer for RegistryMuxer {
     // read side's `DemuxerDesc.flags` check) to skip creating a real
     // destination file for the literal pattern string and call `bind_url`
     // on this throwaway-sink-backed instance instead.
+    //
+    // `NOTIMESTAMPS`: a still has no inherent timestamp, and a decode leg
+    // that produces one genuinely has none to give (`Timestamp::NONE` all
+    // the way through, not a stand-in for zero). Without this,
+    // `vaco-format-core`'s generic mux-timestamp stage refused the packet
+    // outright ("this container needs timestamps and the packet has none"),
+    // which made even a single still fail to mux.
     fn flags(&self) -> FormatFlags {
-        FormatFlags::NEEDNUMBER
+        FormatFlags::NEEDNUMBER.union(FormatFlags::NOTIMESTAMPS)
     }
 
     fn add_stream(&mut self, params: &CodecParameters) -> Result<u32> {
@@ -161,8 +168,8 @@ impl Muxer for RegistryMuxer {
     ///
     /// # Errors
     /// [`Error::Unsupported`] if already bound. Otherwise whatever
-    /// [`Image2MuxWriter::create`] finds wrong with `url` (no `%d`
-    /// placeholder when numbering is required).
+    /// [`Image2MuxWriter::create`] finds wrong with `url` (more than one
+    /// `%d` placeholder; a bare filename is legal).
     fn bind_url(&mut self, url: &str) -> Result<()> {
         let has_stream = match self {
             Self::Sink(m) => m.has_stream,
@@ -239,10 +246,13 @@ mod tests {
     }
 
     #[test]
-    fn declares_neednumber() {
+    fn declares_neednumber_and_notimestamps() {
         let sink = SharedDynBuf::new();
         let m = (MUXER_IMAGE2.open)(Box::new(sink)).unwrap();
-        assert_eq!(m.flags(), FormatFlags::NEEDNUMBER);
+        assert_eq!(
+            m.flags(),
+            FormatFlags::NEEDNUMBER.union(FormatFlags::NOTIMESTAMPS)
+        );
     }
 
     /// The registry's frozen `open` can only ever produce the degenerate

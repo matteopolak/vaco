@@ -82,13 +82,21 @@ impl Image2MuxWriter {
     /// Prepare a writer for `pattern`. Does not touch the filesystem until
     /// [`Image2MuxWriter::write_frame`] is called.
     ///
+    /// A `pattern` with no `%d`/`%0Nd` placeholder is not an error here — the
+    /// reference accepts a bare filename for a single still (`-f image2
+    /// out.png` writes exactly `out.png`) and only fails the *second* write to
+    /// that name (`filename_for` reports it, mirroring `ffmpeg`'s "Cannot
+    /// write more than one file with the same name"). A pattern with more
+    /// than one placeholder is still rejected here, since numbering it would
+    /// be a guess about which one the caller meant.
+    ///
     /// # Errors
     /// [`Error::InvalidData`] if numbering is required (`update` and
-    /// `strftime` are both off) and `pattern` has no `%d`/`%0Nd` placeholder.
+    /// `strftime` are both off) and `pattern` names more than one placeholder.
     pub fn create(pattern: &str, options: Image2MuxOptions) -> Result<Self> {
         let (dir, name) = vaco_demux_image2::fsutil::split_dir_and_name(pattern);
         let needs_sequence = !options.update && !options.strftime;
-        let seq = if needs_sequence {
+        let seq = if needs_sequence && SequencePattern::has_placeholder(name) {
             Some(SequencePattern::parse(name)?)
         } else {
             None
@@ -114,9 +122,18 @@ impl Image2MuxWriter {
             return strftime::expand_now(&self.pattern);
         }
         let Some(seq) = &self.seq else {
-            return Err(Error::InvalidData(
-                "image2 mux: pattern has no %d placeholder and neither -update nor -strftime is set",
-            ));
+            // No placeholder and neither `-update` nor `-strftime`: the
+            // pattern is a literal filename, legal for exactly one frame.
+            // Measured (`ffmpeg -f image2 out.png` on a 3-frame source):
+            // the first frame writes `out.png`, the second fails with
+            // "Cannot write more than one file with the same name."
+            if self.frames_written > 0 {
+                return Err(Error::InvalidData(
+                    "image2 mux: cannot write more than one file with the same name; \
+                     use -update or a sequence pattern",
+                ));
+            }
+            return Ok(self.pattern.clone());
         };
         let index = if self.options.frame_pts {
             pts.unwrap_or(0)
@@ -252,8 +269,23 @@ mod tests {
     }
 
     #[test]
-    fn create_rejects_a_pattern_with_no_placeholder_when_numbering_is_needed() {
-        assert!(Image2MuxWriter::create("out.png", Image2MuxOptions::default()).is_err());
+    fn a_bare_filename_writes_once_then_refuses_a_second_write() {
+        // Measured (`ffmpeg -f image2 out.png` on a multi-frame source): the
+        // first frame writes `out.png` literally; the second fails with
+        // "Cannot write more than one file with the same name."
+        let dir = scratch_dir("bare_filename");
+        let path = dir.join("out.png");
+        let mut w =
+            Image2MuxWriter::create(path.to_str().unwrap(), Image2MuxOptions::default()).unwrap();
+        w.write_frame(b"one", None).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"one");
+        assert!(w.write_frame(b"two", None).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn create_still_rejects_more_than_one_placeholder() {
+        assert!(Image2MuxWriter::create("a%d_%d.png", Image2MuxOptions::default()).is_err());
     }
 
     #[test]
