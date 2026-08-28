@@ -1248,3 +1248,24 @@ kind     = "blackbox"
 title    = "Observed output of ffmpeg 8.1's jpegls encoder/decoder on synthetic raw images (solid fields, two-tone transitions at varying run lengths, gradients), used to reverse-engineer the run-mode Golomb-parameter adaptation table and the run-interruption sample's mapping-selection and sign formulas — none of which the LOCO-I paper (locoi-hpl98-193) states numerically. Never read: only the produced/consumed bytes and pixels, per D6/D17."
 acquired = "2026-08-28"
 where    = "the reference binary installed on the development machine"
+
+[[source]]
+id       = "qoa-specification-1.0"
+kind     = "spec"
+title    = "The Quite OK Audio Format, Specification Version 1.0, 2023.04.24, Dominic Szablewski, qoaformat.org"
+acquired = "2026-08-28"
+where    = "https://qoaformat.org/qoa-specification.pdf"
+
+[[source]]
+id       = "dfpwm1a-vexatos-wiki"
+kind     = "spec"
+title    = "DFPWM1a codec specification (state variables, predictor, charge/strength update formulas, antijerk/low-pass post-filters), written by the codec's own author Ben \"GreaseMonkey\" Russell. Licensed CC Attribution 4.0 International."
+acquired = "2026-08-28"
+where    = "https://wiki.vexatos.com/dfpwm"
+
+[[source]]
+id       = "rfc-3389"
+kind     = "rfc"
+title    = "RFC 3389, Real-time Transport Protocol (RTP) Payload for Comfort Noise (CN). Defines the SID payload wire format (noise level byte plus quantised LPC reflection coefficients) and states plainly that the comfort-noise analysis/synthesis algorithm itself is unspecified and implementation-defined."
+acquired = "2026-08-28"
+where    = "https://www.rfc-editor.org/rfc/rfc3389.txt"
