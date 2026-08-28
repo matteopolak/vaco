@@ -1473,6 +1473,34 @@ pub trait BitstreamFilter: Send {
     /// # Errors
     /// [`vaco_core::Error::NeedMoreInput`] or [`vaco_core::Error::Eof`].
     fn receive_packet(&mut self) -> Result<Packet>;
+
+    /// Set one filter-private option by name (gap 12, `planning/INTERFACE-GAPS.md`)
+    /// — the seam for `-bsf:v filtername=opt=value`'s right-hand side, which
+    /// [`vaco_format_core::mux::BsfProvider::open`]'s `(name, params)`
+    /// signature has nowhere to carry.
+    ///
+    /// Mirrors `vaco_format_core::Muxer::set_option`'s name/value-string
+    /// contract (gap 5) for the identical reason: a construction-time-only
+    /// entry point cannot grow a parameter without touching every one of its
+    /// ~90/~20 callers, so the door is a method opened after construction
+    /// instead. A caller applies every option before the first
+    /// [`BitstreamFilter::send_packet`].
+    ///
+    /// The default answers "no such option" for every name, which is
+    /// correct for every filter registered before this method existed:
+    /// nothing could call it, so refusing is not a behaviour change. A
+    /// filter that grows options overrides it to parse its own.
+    ///
+    /// # Errors
+    /// [`vaco_core::Error::Option`] naming `name`, when this filter has no
+    /// such option or `value` does not parse for it. The default always errs.
+    fn set_option(&mut self, name: &str, value: &str) -> Result<()> {
+        let _ = value;
+        Err(vaco_core::Error::Option {
+            name: name.to_owned(),
+            detail: "this bitstream filter has no such option".to_owned(),
+        })
+    }
 }
 
 /// Static description of a codec implementation.
