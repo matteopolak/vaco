@@ -4355,3 +4355,158 @@ immediately after, but it should not have been reached for at all in a
 multi-agent working tree; a `git worktree` (as used repeatedly in earlier
 dispatches for exactly this kind of isolated check) is the safe tool and
 was available. No harm resulted; disclosed because it could have.
+
+### Dispatch 9: `format.tags.encoder` and MJPEG/PNG colour metadata, each three causes; `BoxIter`'s oversized-length recovery designed and fuzzed
+
+Both classes were named in Dispatch 6's "unfiled divergences" list
+(finding 55) as recurring symptoms with an unknown number of causes. The
+deliverable for each was establishing that count before fixing anything;
+the fix followed once the count was in hand.
+
+#### `format.tags.encoder`: three causes, two fixed, one root-caused and left alone
+
+**CAF** (`vaco-format-audio-simple::caf`): `CafDemuxer` never read the
+`info` chunk at all — the module's own doc already said so ("not read"),
+a second stale comment justifying a missing feature in as many dispatches.
+Measured the real layout directly (`fuzz/seeds/diff/caf/pcm16-mono-8k.caf`,
+offset `0x49`): `mNumEntries:be32` then that many NUL-terminated C-string
+pairs — **not** actually Vorbis-comment-shaped despite Apple's own spec
+wording, which the module doc now says explicitly. New
+`parse_info_chunk`/`read_cstring` plus a `metadata` field close it.
+Baseline effect measured directly (500 iterations, `--rng-seed 42`):
+`caf.agree` 19 → 147, `caf.mismatch` 478 → 350; every other family's tally
+unchanged on a follow-up run. `fuzz/seeds/diff/baseline.txt` updated for
+`caf` only.
+
+**FLV** (`vaco-demux-flv::demux`): `handle_script_tag`'s `onMetaData`
+translation loop already had `title`/`artist`/`creationdate` and simply
+had no entry for `encoder`, despite it being a plain AMF0 string under
+that exact key (measured on `fuzz/seeds/diff/flv/h264-video-only.flv`,
+offset `0xa1`). One line added to the existing loop.
+
+**MP4 under mutation**: a different mechanism entirely, root-caused and
+deliberately not folded into the two fixes above — see "`BoxIter`'s
+oversized-length recovery" below, which is the same root cause and the
+rest of this dispatch's actual work.
+
+#### MJPEG/PNG colour metadata: three causes, all fixed
+
+**AVI/MJPEG and image2/MJPEG shared one cause**, confirmed by the
+question the brief asked first ("container failing to carry, or parser
+failing to produce"): both containers reach `CodecId::Jpeg` through the
+identical `vaco-parse-image::jpeg::Jpeg` parser, which stated none of
+`sample_aspect_ratio`/`color_range`/`color_space`/`chroma_location` even
+though every one of them is a fixed fact about JPEG's own `yuvj`
+convention, not something the bitstream needs to state. Now asserts
+`sample_aspect_ratio=1:1` and `field_order=Unknown` for every frame, and
+for a three-component frame specifically `color_range=Full`,
+`color_space=Bt470bg`, `chroma_location=Center` — all measured against
+`ffmpeg -c:v mjpeg -show_streams`. Verified byte-for-byte identical
+`vaco-probe`/`ffprobe` output afterward on both `avi/mjpeg-pcm.avi` and
+`image2/frame.jpg`.
+
+**AVI's separate `field_order=progressive` divergence, found along the
+way, closed by the same fix without touching AVI at all.**
+`vaco_codec_core::FieldOrder`'s type-level default is `Progressive`, and
+`vaco-demux-image2` already had a defensive override precisely because of
+it (`multi.rs::stream_video`'s own comment: "a still image has no
+interlacing concept at all ... `fill_from` would otherwise read as 'no
+opinion' and happily inherit"). AVI carried no equivalent override and so
+inherited the wrong default silently. Asserting `FieldOrder::Unknown`
+inside the JPEG parser itself — the same place, and the same reasoning,
+`vaco-parse-vpx`'s VP9 parser and `vaco-parse-av1`'s AV1 parser already
+use for the opposite conclusion — fixes every container that carries this
+codec, present and future, at the one layer that actually knows the
+answer.
+
+**PNG got its own, separate fix, exactly as the "narrower symptom"
+predicted a different cause** (image2/PNG was missing only
+`color_range`/`color_space`, not `sample_aspect_ratio` or
+`chroma_location`/`field_order`, which already matched). Two findings,
+not one: `color_range=pc`/`color_space=gbr` measured for `color_type=2`
+(truecolor) only, applied nowhere else, matching this crate's own
+existing restraint about the 16-bit rows; and — the more interesting one
+— `fuzz/seeds/diff/image2/frame.png` turned out to carry a real `pHYs`
+chunk stating a genuine (if square) `1:1` pixel-aspect ratio, which
+`vaco-parse-image::png` was stopping short of rather than a chunk that
+was simply absent. New bounded chunk scan (`MAX_CHUNKS_SCANNED`, stops at
+`IDAT`/`IEND` per the format's own ordering) reads it. Covered by a
+wrong-direction test — a denser-X `pHYs` value must divide the correct
+way, not invert — which is the check this kind of fix most often skips.
+
+#### `BoxIter`'s oversized-length recovery: designed, chosen, fuzzed
+
+The MP4 root cause: `vaco-format-isom::boxes::BoxIter` treats any child
+whose declared size does not fit its container as unrecoverable and stops
+the whole walk, per its own documented reasoning — "skipping ahead to
+guess where the next box starts is how a parser ends up reading a payload
+as structure." Four independent single-field reproducers from an
+800-iteration `aware`-mutator run on `mp4` all corrupt one `ilst ▸ ©too`
+or `ilst`'s own size field to `0x8000_0000`/`0xFFFF_FFFF`, and each one
+loses the entire `ilst` walk — including the one real,
+physically-present `©too ▸ data` entry beneath it — while the reference
+recovers the string underneath the bad length.
+
+Asked to design a middle ground rather than pick a side. The sketch
+offered — resync at a plausible box boundary, bounded window, bounded
+attempts, confined to the current container — was evaluated and rejected
+as insufficient on its own terms: bounding a *scan* bounds its cost, but
+scanning content for a plausible header is still, in kind, "reading a
+payload as structure"; it only shrinks the window in which that can
+happen, it does not remove it.
+
+**What was built instead is narrower and makes no content-based guess at
+all.** `BoxHeader::parse_raw` now separates "parse the header's fields"
+from "check the resolved size fits `available`"; `BoxHeader::parse`
+(used by `crate::scan::TopLevelScanner`'s multi-gigabyte, seek-based
+top-level walk) keeps the strict check unchanged, because a corrupted
+top-level box there is seeked over, not held in memory, and clamping it
+could silently swallow a real, unrelated `mdat` into a mis-sized sibling.
+`BoxHeader::parse_clamped` (new, `BoxIter` only) instead clamps an
+oversized `size` down to exactly what is left in `data` and marks the
+header `to_end` — the same value a legitimately `size == 0` box already
+carries. No scanning, no new allocation, no new bound to reason about:
+the position still only ever advances by a `size` that is provably
+`>= header_len` (proved in the code comment, not just asserted), so the
+existing termination argument `isom_box_walk`'s own fuzz target checks is
+untouched.
+
+**Whether this meets the original comment's guarantee: no, and that is
+disclosed rather than hidden.** Clamping is strictly narrower than "never
+guess" — if the corrupted child was not actually the last legitimate
+child of its container, its clamped body now includes a real sibling's
+bytes, and if that sibling's own bytes happen to look like one of the
+corrupted box's recognised nested sub-boxes, they could be misread. This
+is bounded on every axis that matters for cost and blast radius (one
+level of nesting, only bytes physically present in this one container,
+no scanning loop, no new allocation, cannot cross into a sibling
+*container*), which is why it is judged worth accepting for the class of
+corruption measured — but it is not the zero-guess guarantee the
+original doc comment stated, and the crate doc now says exactly that
+rather than implying the stronger claim still holds. A dedicated test
+(`a_corrupted_non_last_child_consumes_its_sibling_rather_than_skipping_to_it`)
+pins this residual behaviour down explicitly rather than leaving it to be
+rediscovered.
+
+**Fuzzed hard, per instruction, before calling this settled**: all six
+MP4/ISOBMFF-touching targets, each `--no-default-features --features
+<target's own feature>`, each to `-max_total_time` with no crash, hang,
+or leak —
+`isom_box_walk` (17.4M execs/121s, the target that asserts iteration
+termination and payload containment directly),
+`isom_file` (23.0M/91s), `isom_sample_table` (2.7M/91s),
+`dem_mp4` (12.0M/91s), `dem_mp4_chunked` (7.2M/91s),
+`mp4_mux` (0.24M/60s, mux-side, included since it links the same crate).
+`find fuzz/artifacts -type f`, and separately for `slow-unit-`/`oom-`,
+empty after every run.
+
+**Search before filing**: no GitHub issue or planning-doc entry named
+"BoxIter", "box extends past its container", or MP4 atom-corruption
+robustness existed before this dispatch (`gh issue list` and a grep of
+`planning/*.md` both came back empty) — this is a new finding, not a
+reopened one.
+
+`crates/format/vaco-format-isom/src/boxes.rs`'s own doc comments on
+`BoxIter` and `BoxHeader::parse_clamped` carry the full reasoning above in
+place, for the next person who hits a corrupt MP4 and wonders whether the
+recovery is deliberate.
