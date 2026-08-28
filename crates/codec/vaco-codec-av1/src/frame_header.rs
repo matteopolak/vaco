@@ -173,6 +173,13 @@ pub struct FrameHeader {
     pub lossless_array: [bool; MAX_SEGMENTS],
     pub tx_mode: TxMode,
     pub reduced_tx_set: bool,
+    /// `cdef_bits`, §5.9.19 — how many literal bits `read_cdef()`
+    /// (§5.11.56) draws per 64x64 unit in the tile data itself. `0` when
+    /// CDEF is off for this frame (`coded_lossless`, `allow_intrabc`, or
+    /// the sequence's own `enable_cdef == 0`), in which case `read_cdef()`
+    /// is a no-op — matching the specification's own early return, not a
+    /// missing value.
+    pub cdef_bits: u32,
 }
 
 impl FrameHeader {
@@ -189,9 +196,26 @@ impl FrameHeader {
     /// value is out of range.
     pub fn parse(payload: &[u8], seq: &SequenceHeader, temporal_id: u8, spatial_id: u8) -> Result<Self> {
         let mut r = BitReader::new(payload);
-        let result = parse_inner(&mut r, seq, temporal_id, spatial_id);
+        let result = Self::parse_from_reader(&mut r, seq, temporal_id, spatial_id);
         r.check().map_err(|_| Error::InvalidData("frame_header_obu ran past the end of its payload"))?;
         result
+    }
+
+    /// `frame_header_obu()` read from an already-positioned [`BitReader`],
+    /// left positioned exactly where the syntax structure ends rather than
+    /// requiring its own dedicated payload slice.
+    ///
+    /// This is the shape `frame_obu()` (§5.10) needs: `frame_header_obu()`
+    /// immediately followed, in the same OBU payload, by `byte_alignment()`
+    /// and `tile_group_obu()` — a combined `OBU_FRAME` cannot hand this
+    /// function its own trimmed byte slice up front the way a standalone
+    /// `OBU_FRAME_HEADER` can, since the frame header's own bit length is
+    /// exactly what is being determined by parsing it.
+    ///
+    /// # Errors
+    /// As [`FrameHeader::parse`].
+    pub fn parse_from_reader(r: &mut BitReader<'_>, seq: &SequenceHeader, temporal_id: u8, spatial_id: u8) -> Result<Self> {
+        parse_inner(r, seq, temporal_id, spatial_id)
     }
 
     /// `get_qindex(1, segmentId)`, §7.12.2 — the `ignoreDeltaQ = 1` form
@@ -334,7 +358,7 @@ fn parse_inner(r: &mut BitReader<'_>, seq: &SequenceHeader, temporal_id: u8, spa
     let all_lossless = coded_lossless && size.coded_width == size.upscaled_width;
 
     parse_loop_filter_params(r, seq, coded_lossless, allow_intrabc, num_planes);
-    parse_cdef_params(r, seq, coded_lossless, allow_intrabc, num_planes);
+    let cdef_bits = parse_cdef_params(r, seq, coded_lossless, allow_intrabc, num_planes);
     parse_lr_params(r, seq, all_lossless, allow_intrabc, num_planes);
 
     let tx_mode = if coded_lossless { TxMode::Only4x4 } else if r.get_bit() != 0 { TxMode::Select } else { TxMode::Largest };
@@ -364,6 +388,7 @@ fn parse_inner(r: &mut BitReader<'_>, seq: &SequenceHeader, temporal_id: u8, spa
         lossless_array,
         tx_mode,
         reduced_tx_set,
+        cdef_bits,
     })
 }
 
@@ -625,9 +650,9 @@ fn parse_loop_filter_params(r: &mut BitReader<'_>, seq: &SequenceHeader, coded_l
     let _ = seq;
 }
 
-fn parse_cdef_params(r: &mut BitReader<'_>, seq: &SequenceHeader, coded_lossless: bool, allow_intrabc: bool, num_planes: u32) {
+fn parse_cdef_params(r: &mut BitReader<'_>, seq: &SequenceHeader, coded_lossless: bool, allow_intrabc: bool, num_planes: u32) -> u32 {
     if coded_lossless || allow_intrabc || !seq.enable_cdef {
-        return;
+        return 0;
     }
     let _damping = r.get(2);
     let cdef_bits = r.get(2);
@@ -641,6 +666,7 @@ fn parse_cdef_params(r: &mut BitReader<'_>, seq: &SequenceHeader, coded_lossless
             let _uv_sec = if uv_sec == 3 { uv_sec + 1 } else { uv_sec };
         }
     }
+    cdef_bits
 }
 
 fn parse_lr_params(r: &mut BitReader<'_>, seq: &SequenceHeader, all_lossless: bool, allow_intrabc: bool, num_planes: u32) {

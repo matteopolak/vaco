@@ -73,6 +73,16 @@ pub struct TileCdf {
     pub intrabc: Cdf<3>,
     pub filter_intra_mode: Cdf<6>,
     pub filter_intra: Vec<Cdf<3>>,
+    /// `PaletteYModeCdf[bsizeCtx][ctx]`, §8.3.2 — this crate never applies
+    /// a palette prediction, but a real encoder can set
+    /// `allow_screen_content_tools` regardless of whether any given block
+    /// actually uses one, and `has_palette_y`/`has_palette_uv` are read
+    /// unconditionally whenever the syntax makes them present. `ctx` is
+    /// always `0` here (a block ever setting `has_palette_y` returns
+    /// `Error::Unsupported` before any `PaletteSizes` entry could become
+    /// nonzero, so no neighbour ever contributes a nonzero context).
+    pub palette_y_mode: [[Cdf<3>; 3]; 7],
+    pub palette_uv_mode: [Cdf<3>; 2],
     // Coefficient decoding, §9.4's `idx`-selected (base_q_idx bucketed)
     // tables — see `qctx`.
     pub txb_skip: Vec<[Cdf<3>; 13]>,
@@ -137,6 +147,8 @@ impl TileCdf {
             intrabc: d::DEFAULT_INTRABC_CDF,
             filter_intra_mode: d::DEFAULT_FILTER_INTRA_MODE_CDF,
             filter_intra: to_vec(&d::DEFAULT_FILTER_INTRA_CDF),
+            palette_y_mode: d::DEFAULT_PALETTE_Y_MODE_CDF,
+            palette_uv_mode: d::DEFAULT_PALETTE_UV_MODE_CDF,
             txb_skip: pick(d::DEFAULT_TXB_SKIP_CDF, q).to_vec(),
             eob_pt_16: pick(d::DEFAULT_EOB_PT_16_CDF, q),
             eob_pt_32: pick(d::DEFAULT_EOB_PT_32_CDF, q),

@@ -150,8 +150,8 @@ impl<'a> SymbolDecoder<'a> {
     /// over a hard failure on a coding-only conformance point.
     pub fn exit_symbol(&mut self) {
         if self.max_bits > 0 {
-            let skip = u32::try_from(self.max_bits).unwrap_or(0);
-            let _ = self.reader.get(skip);
+            let skip = u64::try_from(self.max_bits).unwrap_or(0);
+            self.reader.skip_long(skip);
         }
     }
 

@@ -119,4 +119,19 @@ impl Picture {
             _ => None,
         }
     }
+
+    /// A disjoint borrow of the luma plane (read-only) alongside one
+    /// chroma plane (mutable) — exactly what CFL prediction needs (read
+    /// already-reconstructed luma, write the chroma plane it predicts),
+    /// without the two borrows aliasing since `y` and `u`/`v` are always
+    /// different fields.
+    #[must_use]
+    pub const fn luma_and_chroma_mut(&mut self, plane_index: usize) -> (&Plane, Option<&mut Plane>) {
+        let chroma = match plane_index {
+            1 => self.u.as_mut(),
+            2 => self.v.as_mut(),
+            _ => None,
+        };
+        (&self.y, chroma)
+    }
 }
