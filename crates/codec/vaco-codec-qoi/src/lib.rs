@@ -153,6 +153,10 @@ impl SendReceive for QoiEncoder {
         self.machine.caps()
     }
 
+    fn accepted_pix_fmts(&self) -> &'static [vaco_pixfmt::PixFmt] {
+        &[vaco_pixfmt::PixFmt::Rgb24, vaco_pixfmt::PixFmt::Rgba]
+    }
+
     fn send(&mut self, input: Option<&Frame>) -> Result<()> {
         match self.machine.accept(input.is_none())? {
             Accept::Drain => {
