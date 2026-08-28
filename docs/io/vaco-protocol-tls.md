@@ -147,6 +147,14 @@ URL is simply never consulted for options at all.
 * **Gotcha**: do not add `rustls`/`rustls-rustcrypto` to any other crate's
   `Cargo.toml` — `cargo xtask owner-gate` will fail the build. Route through
   `crate::crypto::shared_provider` instead, the way `vaco-protocol-http` does.
+* **This crate does not depend on `vaco-protocol-dial`, and should not.**
+  `vaco-protocol-dial`'s `dial_tls` depends on this crate for `connect_tcp`/
+  `handshake`, so the reverse dependency would be
+  `vaco-protocol-tls -> vaco-protocol-dial -> vaco-protocol-tls`, a cycle
+  `cargo xtask layer-check` would refuse. `connect.rs` is the base the shared
+  dial helper calls into, not a caller of it — this crate predates
+  `vaco-protocol-dial` and is not a fifth copy of the pattern it factored
+  out.
 
 ## Configuration
 

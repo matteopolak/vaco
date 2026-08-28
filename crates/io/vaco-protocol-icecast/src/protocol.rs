@@ -2,7 +2,6 @@
 //! registry entry.
 
 use std::io::{Read, Write};
-use std::net::TcpStream;
 
 use vaco_io::{MediaSink, MediaSource, WriterSink};
 use vaco_opts::{Dict, OptionsExt, Schema, schema_of};
@@ -11,7 +10,6 @@ use vaco_protocol_core::{
 };
 use vaco_protocol_socket::url::HostPort;
 use vaco_protocol_tls::TlsOptions;
-use vaco_protocol_tls::connect::TlsStream;
 
 use crate::options::IcecastOptions;
 use crate::request::{self, Target};
@@ -103,42 +101,6 @@ fn options(opts: &Dict) -> Result<IcecastOptions> {
     Ok(parsed)
 }
 
-/// Bytes a response header block may reasonably use before this is treated
-/// as a malformed/hostile peer rather than a slow one.
-const MAX_RESPONSE_HEADER_BYTES: usize = 64 * 1024;
-
-/// Read one HTTP header block (status line plus headers, ending at the blank
-/// line) a byte at a time — the same reasoning as
-/// `vaco-protocol-httpproxy::connect::read_header_block`: `stream` is handed
-/// back as the sink on success, and a buffering reader would risk eating
-/// bytes this protocol never reads again (not applicable to the reply body
-/// here specifically, since this protocol is output-only and never reads
-/// after this point, but keeping the same discipline avoids a footgun if
-/// that ever changes).
-fn read_header_block<S: Read>(stream: &mut S) -> Result<Vec<u8>> {
-    let mut buf = Vec::new();
-    let mut byte = [0u8; 1];
-    loop {
-        if buf.len() >= MAX_RESPONSE_HEADER_BYTES {
-            return Err(ProtocolError::Malformed {
-                scheme: "icecast",
-                detail: "server response headers exceeded the size limit",
-            });
-        }
-        if stream.read(&mut byte)? == 0 {
-            return Err(ProtocolError::Malformed {
-                scheme: "icecast",
-                detail: "server closed the connection before answering 100-continue",
-            });
-        }
-        buf.push(byte[0]);
-        if buf.ends_with(b"\r\n\r\n") {
-            break;
-        }
-    }
-    Ok(buf)
-}
-
 /// Send the request headers and, for modern (non-legacy) mode, block for the
 /// server's `100 Continue` before returning — measured: a fake server that
 /// accepts the connection, reads the headers, and answers nothing never
@@ -159,7 +121,11 @@ fn handshake<S: Read + Write>(
     stream.write_all(headers.as_bytes())?;
     let (_, expect_continue) = request::method(opts);
     if expect_continue {
-        let block = read_header_block(stream)?;
+        let block = vaco_protocol_dial::read_header_block(
+            stream,
+            "icecast",
+            "server closed the connection before answering 100-continue",
+        )?;
         let text = String::from_utf8_lossy(&block);
         let status = request::parse_status_line(text.as_bytes()).ok_or(ProtocolError::Malformed {
             scheme: "icecast",
@@ -173,18 +139,6 @@ fn handshake<S: Read + Write>(
         }
     }
     Ok(())
-}
-
-fn dial_tcp(hp: &HostPort, env: &ProtocolEnv<'_>) -> Result<TcpStream> {
-    env.check_scheme("tcp")?;
-    vaco_protocol_socket::addr::connect(hp, None)
-}
-
-fn dial_tls(hp: &HostPort, env: &ProtocolEnv<'_>) -> Result<TlsStream> {
-    env.check_scheme("tls")?;
-    let tcp = vaco_protocol_tls::connect::connect_tcp(hp, None, env)?;
-    let tls_opts = TlsOptions::default();
-    vaco_protocol_tls::connect::handshake(hp, tcp, &tls_opts, None)
 }
 
 /// The `icecast:` protocol.
@@ -227,17 +181,15 @@ impl Protocol for IcecastProtocol {
         };
 
         // The SOURCE/PUT handshake is inherently duplex (write headers,
-        // then — for modern mode — read a 100-continue before the body),
-        // which `Protocol::create`'s one-direction return type cannot
-        // express, the same reasoning as `tls:`/`httpproxy:`/`ftp:`/
-        // `gopher:` in this workspace: dial directly and apply the
-        // whitelist check by hand rather than going through the registry.
+        // then — for modern mode — read a 100-continue before the body), so
+        // this dials directly rather than going through the registry.
         let sink: Box<dyn MediaSink> = if parsed.tls {
-            let mut stream = dial_tls(&ice_url.host, env)?;
+            let mut stream =
+                vaco_protocol_dial::dial_tls(&ice_url.host, None, env, &TlsOptions::default())?;
             handshake(&mut stream, &parsed, &target)?;
             Box::new(WriterSink::new(stream))
         } else {
-            let mut stream = dial_tcp(&ice_url.host, env)?;
+            let mut stream = vaco_protocol_dial::dial_tcp(&ice_url.host, None, env)?;
             handshake(&mut stream, &parsed, &target)?;
             Box::new(WriterSink::new(stream))
         };

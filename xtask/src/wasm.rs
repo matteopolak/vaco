@@ -83,51 +83,32 @@ const NATIVE_ONLY: &[(&str, &str)] = &[
          transport behind the same seam, not a wasm build of this crate.",
     ),
     (
-        "vaco-protocol-gopher",
-        "depends on vaco-protocol-socket (both directly and via \
-         vaco-protocol-tls, for gophers:) for HostPort/addr::connect — the \
-         selector round trip dials its own duplex stream directly, exactly \
-         like vaco-protocol-tls, rather than through the registry's \
-         one-directional Protocol::open/create — so it inherits the same \
-         socket2 wall vaco-protocol-socket's own NATIVE_ONLY entry \
-         documents.",
+        "vaco-protocol-dial",
+        "dial_tcp depends on vaco-protocol-socket (NATIVE_ONLY above, for \
+         socket2); dial_tls also depends on vaco-protocol-tls (NATIVE_ONLY \
+         above, for getrandom via rustls-rustcrypto). Measured: cargo check \
+         --target wasm32-unknown-unknown fails on getrandom's own \
+         compile_error!, the same wall one level removed.",
     ),
     (
         "vaco-protocol-ftp",
-        "depends on vaco-protocol-socket for HostPort/addr::connect (both the \
-         control connection and each passive data connection dial their own \
-         duplex TcpStream directly, exactly like vaco-protocol-tls, rather \
-         than through the registry's one-directional Protocol::open/create — \
-         see the crate docs), so it inherits the same socket2 wall \
-         vaco-protocol-socket's own NATIVE_ONLY entry documents. A wasm build \
-         has no FTP story at all in this workspace today.",
+        "dials its own TcpStream through vaco-protocol-dial rather than the \
+         registry, so it inherits that crate's wall.",
+    ),
+    (
+        "vaco-protocol-gopher",
+        "dials its own TcpStream/TlsStream through vaco-protocol-dial rather \
+         than the registry, so it inherits that crate's wall.",
     ),
     (
         "vaco-protocol-httpproxy",
-        "depends on vaco-protocol-socket for HostPort/addr::connect (the CONNECT \
-         handshake dials its own duplex TcpStream directly, exactly like \
-         vaco-protocol-tls, rather than through the registry's one-directional \
-         Protocol::open/create — see the crate docs), so it inherits the same \
-         socket2 wall vaco-protocol-socket's own NATIVE_ONLY entry documents \
-         (measured: cargo build --target wasm32-unknown-unknown on this crate \
-         fails inside socket2 itself with E0583 'file not found for module \
-         `sys`'). A wasm build reaches an HTTP proxy tunnel through the host \
-         runtime's own fetch/WebSocket machinery, not this crate.",
+        "dials its own TcpStream through vaco-protocol-dial rather than the \
+         registry, so it inherits that crate's wall.",
     ),
     (
         "vaco-protocol-icecast",
-        "depends on vaco-protocol-socket and vaco-protocol-tls (the SOURCE/PUT \
-         handshake dials its own duplex TcpStream or TlsStream directly, \
-         exactly like vaco-protocol-tls/-gopher/-ftp/-httpproxy, rather than \
-         through the registry's one-directional Protocol::open/create — see \
-         the crate docs). Measured: cargo check --target wasm32-unknown-unknown \
-         on this crate fails inside getrandom (pulled in transitively through \
-         vaco-protocol-tls's TLS stack) with 'the wasm*-unknown-unknown \
-         targets are not supported by default' — a different symptom than \
-         socket2's own E0583, but the same underlying wall: this dependency \
-         chain assumes a native OS. A wasm build reaches an Icecast source \
-         through the host runtime's own fetch/WebSocket machinery, not this \
-         crate.",
+        "dials its own TcpStream/TlsStream through vaco-protocol-dial rather \
+         than the registry, so it inherits that crate's wall.",
     ),
 ];
 

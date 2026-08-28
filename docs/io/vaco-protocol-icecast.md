@@ -104,12 +104,10 @@ an explicit `tcp`/`tls` grant on top of `icecast` itself.
 
 The `SOURCE`/`PUT` handshake is inherently duplex (write headers, then — for
 modern mode — read a `100 Continue` before the body), which
-`Protocol::create`'s one-direction return type cannot express — so, like
-`tls:`/`httpproxy:`/`ftp:`/`gopher:` in this workspace, the connection is
-dialled directly and `env.check_scheme` is called by hand (`"tcp"`, or
-`"tls"` then `"tcp"` under `-tls 1`, reusing
-`vaco_protocol_tls::connect::{connect_tcp, handshake}`) rather than going
-through the registry.
+`Protocol::create`'s one-direction return type cannot express — so the
+connection is dialled through `vaco_protocol_dial::{dial_tcp, dial_tls}`
+rather than the registry; both check the whitelist by hand before
+connecting.
 
 ## How to change it
 
@@ -119,9 +117,9 @@ through the registry.
   expect-continue flag), `build_headers`, `basic_auth`, `parse_status_line`.
   This is the module the fuzz target and most unit tests exercise directly.
 - `src/protocol.rs` — `IcecastProtocol`, URL parsing (`parse_url`),
-  credential resolution (`credentials`), the dial-and-handshake glue
-  (`dial_tcp`/`dial_tls`/`handshake`/`read_header_block`), and the registry
-  entry.
+  credential resolution (`credentials`), and the registry entry. Dialing and
+  the header-block read come from `vaco-protocol-dial`; `handshake` is the
+  local glue around them.
 
 **Gotcha:** `handshake`'s wait for `100 Continue` only recognizes exactly
 that status; what the reference does when the server answers something else

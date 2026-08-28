@@ -2,7 +2,6 @@
 //! schemes, and the registry entries.
 
 use std::io::{Read, Write};
-use std::net::TcpStream;
 
 use vaco_io::{MediaSink, MediaSource, PeekSource, ReaderSource, WriterSink};
 use vaco_opts::Dict;
@@ -11,7 +10,6 @@ use vaco_protocol_core::{
 };
 use vaco_protocol_socket::url::HostPort;
 use vaco_protocol_tls::TlsOptions;
-use vaco_protocol_tls::connect::TlsStream;
 
 use crate::selector;
 
@@ -62,27 +60,6 @@ fn create_generic<S: Write + Send + 'static>(mut stream: S, path: &str) -> Resul
     Ok(Box::new(WriterSink::new(stream)))
 }
 
-/// Dial the raw TCP transport `gopher:` uses, applying the whitelist check
-/// by hand — the selector round trip is inherently duplex (write, then
-/// treat the connection as one direction), which
-/// `vaco_protocol_core::Protocol::open`/`create`'s one-direction-each shape
-/// cannot express, the same reasoning as `vaco-protocol-tls`/
-/// `-httpproxy`/`-ftp` in this workspace.
-fn dial_tcp(hp: &HostPort, env: &ProtocolEnv<'_>) -> Result<TcpStream> {
-    env.check_scheme("tcp")?;
-    vaco_protocol_socket::addr::connect(hp, None)
-}
-
-/// Dial and TLS-handshake the transport `gophers:` uses, reusing
-/// `vaco-protocol-tls`'s own connect/handshake rather than duplicating TLS
-/// handling — see that crate's docs for the handshake itself.
-fn dial_tls(hp: &HostPort, env: &ProtocolEnv<'_>) -> Result<TlsStream> {
-    env.check_scheme("tls")?;
-    let tcp = vaco_protocol_tls::connect::connect_tcp(hp, None, env)?;
-    let opts = TlsOptions::default();
-    vaco_protocol_tls::connect::handshake(hp, tcp, &opts, None)
-}
-
 /// The `gopher:` protocol.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GopherProtocol;
@@ -97,7 +74,7 @@ impl Protocol for GopherProtocol {
     ) -> Result<Box<dyn MediaSource>> {
         let (authority, path) = selector::split_authority(&url.rest);
         let hp = parse_host_port(authority);
-        let stream = dial_tcp(&hp, env)?;
+        let stream = vaco_protocol_dial::dial_tcp(&hp, None, env)?;
         open_generic(stream, path)
     }
 
@@ -110,7 +87,7 @@ impl Protocol for GopherProtocol {
     ) -> Result<Box<dyn MediaSink>> {
         let (authority, path) = selector::split_authority(&url.rest);
         let hp = parse_host_port(authority);
-        let stream = dial_tcp(&hp, env)?;
+        let stream = vaco_protocol_dial::dial_tcp(&hp, None, env)?;
         create_generic(stream, path)
     }
 }
@@ -129,7 +106,7 @@ impl Protocol for GophersProtocol {
     ) -> Result<Box<dyn MediaSource>> {
         let (authority, path) = selector::split_authority(&url.rest);
         let hp = parse_host_port(authority);
-        let stream = dial_tls(&hp, env)?;
+        let stream = vaco_protocol_dial::dial_tls(&hp, None, env, &TlsOptions::default())?;
         open_generic(stream, path)
     }
 
@@ -142,7 +119,7 @@ impl Protocol for GophersProtocol {
     ) -> Result<Box<dyn MediaSink>> {
         let (authority, path) = selector::split_authority(&url.rest);
         let hp = parse_host_port(authority);
-        let stream = dial_tls(&hp, env)?;
+        let stream = vaco_protocol_dial::dial_tls(&hp, None, env, &TlsOptions::default())?;
         create_generic(stream, path)
     }
 }

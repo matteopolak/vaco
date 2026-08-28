@@ -3,15 +3,11 @@
 //!
 //! # Why a persistent `BufReader` here and not a byte-at-a-time reader
 //!
-//! `vaco-protocol-httpproxy`'s `read_header_block` reads one byte at a time
-//! because it must hand the *same socket* back as a raw tunnel afterward —
-//! any bytes a `BufReader` read ahead and buffered would be stranded there
-//! forever. The FTP control connection has no such handoff: it stays open
-//! and is reused for every subsequent command for the lifetime of the
-//! session, so a `BufReader` kept alive as a `Session` field (never
-//! recreated) never loses a byte — anything it reads ahead is still sitting
-//! in its buffer for the next call. Buffered line reading is used here for
-//! exactly that reason.
+//! `vaco_protocol_dial::read_header_block` reads one byte at a time because
+//! its callers hand the same socket back as a raw tunnel afterward, so any
+//! read-ahead would be stranded. The FTP control connection has no such
+//! handoff — it is reused for every command for the life of the session — so
+//! a `BufReader` kept alive as a `Session` field never loses a byte.
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
@@ -52,19 +48,13 @@ impl std::fmt::Debug for Session {
 }
 
 impl Session {
-    /// Connect the control channel, applying the whitelist check by hand —
-    /// see the crate docs for why (the same reasoning as
-    /// `vaco-protocol-tls`/`vaco-protocol-httpproxy`: a control session is
-    /// used for many duplex round trips, which
-    /// `vaco_protocol_core::Protocol::open`/`create`'s one-direction-each
-    /// shape cannot express).
+    /// Connect the control channel.
     ///
     /// # Errors
     /// [`ProtocolError::Denied`] if `"tcp"` is not permitted by `env`;
     /// otherwise whatever the connection attempt or greeting failed with.
     pub fn connect(hp: &HostPort, timeout: Option<Duration>, env: &ProtocolEnv<'_>) -> Result<Self> {
-        env.check_scheme("tcp")?;
-        let stream = vaco_protocol_socket::addr::connect(hp, timeout)?;
+        let stream = vaco_protocol_dial::dial_tcp(hp, timeout, env)?;
         let mut session = Self {
             reader: BufReader::new(stream),
             timeout,

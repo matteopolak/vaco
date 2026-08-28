@@ -45,11 +45,12 @@
 //!
 //! # Security
 //!
-//! Both the control connection and each data connection call
-//! [`vaco_protocol_core::ProtocolEnv::check_scheme`] with `"tcp"` by hand
-//! before connecting — measured empty `default_whitelist`
-//! (`-protocol_whitelist ftp` alone refuses the nested `tcp` open with
-//! `Protocol 'tcp' not on whitelist 'ftp'!`).
+//! The control connection checks `"tcp"` against the whitelist once, via
+//! `vaco_protocol_dial::dial_tcp`; each session's data connections reuse
+//! that decision rather than re-deriving it (see [`source`]'s docs for why).
+//! Measured empty `default_whitelist` (`-protocol_whitelist ftp` alone
+//! refuses the nested `tcp` open with `Protocol 'tcp' not on whitelist
+//! 'ftp'!`).
 
 pub mod control;
 pub mod options;

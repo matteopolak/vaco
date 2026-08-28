@@ -70,29 +70,24 @@ all (the same shape as `data:`/`md5:`), so `options: None`.
 
 ### Why the nested `tcp:` open bypasses the registry
 
-Same reasoning as `vaco-protocol-tls` (see that crate's docs for the fuller
-argument): the `CONNECT` handshake needs to write a request and read a
-response on the *same* connection before there is anything to hand back to a
-caller, and `vaco_protocol_core::Protocol::open`/`create` each return only
-one direction. `connect::dial` calls `env.check_scheme("tcp")` by hand,
-exactly where `ProtocolRegistry::resolve` would have, so the whitelist
-property still holds.
+The `CONNECT` handshake needs to write a request and read a response on the
+*same* connection before there is anything to hand back to a caller, and
+`vaco_protocol_core::Protocol::open`/`create` each return only one
+direction. `connect::dial` reaches the transport through
+`vaco_protocol_dial::dial_tcp`, which checks the whitelist by hand exactly
+where `ProtocolRegistry::resolve` would have.
 
-### Response parsing is deliberately not `BufReader`
+### Response parsing
 
-`read_header_block` reads one byte at a time rather than through a
-`BufReader`, because the same `TcpStream` this function reads from is handed
-back as the tunnel on success. A `BufReader` that read ahead past the header
-block would silently strand any tunnel bytes a fast peer pipelined right
-behind `200 ...\r\n\r\n` in the same TCP segment — a real correctness gap,
-not a hypothetical one, since nothing downstream would ever see those bytes.
+`connect::dial` reads the response header block through
+`vaco_protocol_dial::read_header_block` — see that crate's docs for why it
+reads one byte at a time rather than through a `BufReader`.
 
 ## How to change it
 
 - `src/connect.rs` — URL parsing (`parse`), the request line (`request_line`),
-  response parsing (`parse_response`, pure and fuzzed directly), the byte-at-
-  a-time header reader (`read_header_block`), and the connect-with-retry
-  state machine (`dial`).
+  response parsing (`parse_response`, pure and fuzzed directly), and the
+  connect-with-retry state machine (`dial`).
 - `src/protocol.rs` — the `Protocol` impl and `HTTPPROXY_PROTOCOL` descriptor.
 
 ## Configuration

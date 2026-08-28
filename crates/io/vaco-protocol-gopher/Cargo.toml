@@ -13,6 +13,7 @@ vaco-core = { path = "../../core/vaco-core" }
 vaco-io = { path = "../../io/vaco-io" }
 vaco-opts = { path = "../../core/vaco-opts" }
 vaco-protocol-core = { path = "../../io/vaco-protocol-core" }
+vaco-protocol-dial = { path = "../../io/vaco-protocol-dial" }
 vaco-protocol-socket = { path = "../../io/vaco-protocol-socket" }
 vaco-protocol-tls = { path = "../../io/vaco-protocol-tls" }
 

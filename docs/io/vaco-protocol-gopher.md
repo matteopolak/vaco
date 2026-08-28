@@ -74,14 +74,10 @@ private `AVOption`s (the same shape as `data:`/`md5:`).
 The selector round trip is inherently duplex (write, then treat the
 connection as one direction for the rest of its life) —
 `vaco_protocol_core::Protocol::open`/`create` each return only one
-direction, so, like `tls:`/`httpproxy:`/`ftp:` in this workspace, the
-connection is dialled directly rather than through the registry.
-`env.check_scheme` is called by hand for every scheme actually used: `"tcp"`
-for `gopher:`; `"tls"` then `"tcp"` for `gophers:`, reusing
-`vaco_protocol_tls::connect::{connect_tcp, handshake}` rather than
-duplicating TLS handling — `connect_tcp` does its own `"tcp"` check
-internally, so `gophers:`'s dial checks both schemes without this crate
-repeating either.
+direction, so the connection is dialled through
+`vaco_protocol_dial::{dial_tcp, dial_tls}` rather than the registry. Both
+check the whitelist by hand: `"tcp"` for `gopher:`; `"tls"` then `"tcp"` for
+`gophers:` (`dial_tls` checks `"tcp"` itself for the nested TCP leg).
 
 ## How to change it
 

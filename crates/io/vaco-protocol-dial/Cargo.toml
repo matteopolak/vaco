@@ -1,6 +1,6 @@
 [package]
-name = "vaco-protocol-ftp"
-description = "The ftp: protocol (RFC 959): control-connection login/PASV/EPSV negotiation and RETR/STOR data transfer."
+name = "vaco-protocol-dial"
+description = "Shared dial-and-whitelist-check helpers for protocols whose duplex round trip must run before Protocol::open/create has anything to return."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,15 +9,12 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-vaco-core = { path = "../../core/vaco-core" }
-vaco-io = { path = "../../io/vaco-io" }
-vaco-opts = { path = "../../core/vaco-opts" }
 vaco-protocol-core = { path = "../../io/vaco-protocol-core" }
-vaco-protocol-dial = { path = "../../io/vaco-protocol-dial" }
 vaco-protocol-socket = { path = "../../io/vaco-protocol-socket" }
+vaco-protocol-tls = { path = "../../io/vaco-protocol-tls" }
 
 [dev-dependencies]
-proptest.workspace = true
+vaco-io = { path = "../../io/vaco-io" }
 
 [lints]
 workspace = true

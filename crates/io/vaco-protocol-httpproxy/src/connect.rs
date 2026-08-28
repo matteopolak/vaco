@@ -1,6 +1,6 @@
 //! URL parsing, the `CONNECT` request/response, and the auth-retry dance.
 
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::TcpStream;
 use std::time::Duration;
 
@@ -148,63 +148,25 @@ pub fn parse_response(block: &str) -> Result<ProxyResponse> {
     })
 }
 
-/// Bytes a response header block may reasonably use — a fixed bound rather
-/// than growing without limit, since the source is a network peer.
-const MAX_RESPONSE_HEADER_BYTES: usize = 64 * 1024;
-
-/// Read exactly the response headers, one byte at a time, stopping the
-/// instant the blank line is seen.
-///
-/// **Deliberately not `BufReader`**: `stream` is the same connection this
-/// function's caller hands back as the tunnel on success, and a `BufReader`
-/// that read ahead past the header block would silently swallow the tunnel's
-/// first bytes into a buffer nothing downstream ever drains — a real
-/// correctness gap for a fast peer that pipelines tunnel data right behind
-/// `200 ...\r\n\r\n` in the same segment, not a hypothetical one. Reading
-/// one byte at a time is slower per call, but a response header block is at
-/// most a few hundred bytes, so that cost is not worth trading correctness
-/// for.
-fn read_header_block(stream: &mut TcpStream) -> Result<String> {
-    let mut buf = Vec::new();
-    let mut byte = [0u8; 1];
-    loop {
-        if buf.len() >= MAX_RESPONSE_HEADER_BYTES {
-            return Err(ProtocolError::Malformed {
-                scheme: "httpproxy",
-                detail: "proxy response headers exceeded the size limit",
-            });
-        }
-        if stream.read(&mut byte)? == 0 {
-            return Err(ProtocolError::Malformed {
-                scheme: "httpproxy",
-                detail: "proxy closed the connection before completing its response",
-            });
-        }
-        buf.push(byte[0]);
-        if buf.ends_with(b"\r\n\r\n") {
-            break;
-        }
-    }
-    Ok(String::from_utf8_lossy(&buf).into_owned())
-}
-
 /// Parse the proxy's response to one `CONNECT` attempt.
 ///
 /// # Errors
 /// [`ProtocolError::Malformed`] for a status line that is not `HTTP/x.y
 /// NNN ...`; propagates I/O failure otherwise.
 fn read_response(stream: &mut TcpStream) -> Result<ProxyResponse> {
-    let block = read_header_block(stream)?;
-    parse_response(&block)
+    let block = vaco_protocol_dial::read_header_block(
+        stream,
+        "httpproxy",
+        "proxy closed the connection before completing its response",
+    )?;
+    parse_response(&String::from_utf8_lossy(&block))
 }
 
-/// Connect to `proxy`, applying the whitelist check by hand (see the crate
-/// docs for why this cannot go through the registry), and complete the
-/// `CONNECT` handshake for `target`. Retries once, on a fresh connection,
-/// with `Proxy-Authorization: Basic` when the first attempt is refused with
-/// `407` and a `Basic` challenge and `auth` credentials are available —
-/// exactly the sequence measured against a local capture (see the crate
-/// docs).
+/// Connect to `proxy` and complete the `CONNECT` handshake for `target`.
+/// Retries once, on a fresh connection, with `Proxy-Authorization: Basic`
+/// when the first attempt is refused with `407` and a `Basic` challenge and
+/// `auth` credentials are available — the sequence measured against a local
+/// capture (see the crate docs).
 ///
 /// # Errors
 /// [`ProtocolError::Denied`] if `"tcp"` is not permitted by `env`;
@@ -212,9 +174,7 @@ fn read_response(stream: &mut TcpStream) -> Result<ProxyResponse> {
 /// HTTP or is a non-2xx status this function cannot recover from;
 /// propagates I/O failure otherwise.
 pub fn dial(url: &ProxyUrl, timeout: Option<Duration>, env: &ProtocolEnv<'_>) -> Result<TcpStream> {
-    env.check_scheme("tcp")?;
-
-    let mut stream = vaco_protocol_socket::addr::connect(&url.proxy, timeout)?;
+    let mut stream = vaco_protocol_dial::dial_tcp(&url.proxy, timeout, env)?;
     let first = request_line(&url.target, &url.proxy, None);
     stream.write_all(first.as_bytes())?;
     let resp = read_response(&mut stream)?;
