@@ -180,13 +180,30 @@ fn decode_granule(
     }
 
     // Huffman decode: three "big values" regions, then the count1 quads.
+    // `region_count[0]`/`[1]` each hold *one less than* the number of
+    // scalefactor bands in that region (`Vaco-Spec-Ref: iso-11172-3`'s own
+    // wording, corroborated independently: "region0_count and
+    // region1_count contains one less than the number of scalefactor bands
+    // in the regions 0 and 1 respectively"), so the line index where a
+    // region ends is `sfb[region_count[0] + 1]` for region0 and
+    // `sfb[region_count[0] + region_count[1] + 2]` for region0+region1
+    // combined — not `sfb[region_count[0]]`/`sfb[region_count[0] +
+    // region_count[1]]` directly. Reading the field's own value as the
+    // table index (the bug this replaces) put the region boundary one
+    // scalefactor band too early, so lines just past the true boundary
+    // were Huffman-decoded with the *next* region's table instead of the
+    // one the encoder actually used for them — silently plausible-looking
+    // garbage rather than a bitstream desync, worse the more of the
+    // spectrum a signal actually occupies past the first couple of bands
+    // (a single low tone barely reaches the misclassified band; a higher
+    // or broader-spectrum signal does).
     let bound = sfb.len().saturating_sub(1).min(21);
     let region0_end = sfb
-        .get(usize::from(g.region_count[0]).min(bound))
+        .get((usize::from(g.region_count[0]) + 1).min(bound))
         .copied()
         .unwrap_or(0) as usize;
     let region1_end = sfb
-        .get((usize::from(g.region_count[0]) + usize::from(g.region_count[1])).min(bound))
+        .get((usize::from(g.region_count[0]) + usize::from(g.region_count[1]) + 2).min(bound))
         .copied()
         .unwrap_or(0) as usize;
     let big_values_end = (usize::from(g.big_values) * 2).min(LINES);
@@ -232,15 +249,29 @@ fn decode_granule(
         i += 4;
     }
 
-    // Requantisation: xr[i] = sign(is)*|is|^(4/3) * 2^(0.25*(gain-210)) *
-    // 2^(-0.5*(1+scale)*(scalefac[sfb]+preflag*pretab[sfb])). The `210`
-    // constant is confirmed empirically, not by citation: ISO/IEC 11172-3's
-    // own text names this formula's scaling constant ("The constant 64 in
-    // this formula...") but the PDF-to-text extraction this crate's tables
-    // were built from lost the formula itself (it was embedded as an
-    // image), leaving only that one surrounding sentence. `210` is the
-    // value that reproduces `ffmpeg`-decoded PCM on the verification
-    // fixtures; see `docs/codec/vaco-codec-mpegaudio.md`.
+    // Requantisation: xr[i] = sign(is)*|is|^(4/3) * 2^(0.25*(gain-C)) *
+    // 2^(-0.5*(1+scale)*(scalefac[sfb]+preflag*pretab[sfb])). The formula
+    // itself, previously lost to this crate's PDF-to-text extraction (an
+    // embedded image; only the surrounding prose survived), is now
+    // confirmed against a second, independently obtained scan of the same
+    // ISO CD 11172-3 committee draft, `Vaco-Spec-Ref: iso-11172-3` §2.4.3.4
+    // "Formula for requantization and all scaling": "xr(i) =
+    // is(i)^(4/3) * 2^(.25*(global_gain-64-8*subblock_gain)) *
+    // 2^(.25*(-2*(1+scalefac_scale)*scalefac[cb]-2*preflag*(1+scalefac_scale)*pretab[cb]))".
+    // The scalefactor term above matches this exactly. The gain term's
+    // literal constant is `64`, not `210` — tried directly, `64` reproduces
+    // the formula but clips real `ffmpeg`-encoded fixtures to full scale
+    // and *drops* correlation on the fixtures this crate already decoded
+    // plausibly (measured: 0.94 with `210` down to 0.87 with `64` on a
+    // 440 Hz tone). This is not a contradiction: the spec's own text
+    // immediately after the formula says why — "The constant 64 ... is
+    // needed to scale the output appropriately ... If an implementation
+    // with a different power transfer characteristic is chosen (different
+    // global scaling) then the constant has to be changed accordingly."
+    // `64` is calibrated to the reference decoder's own synthesis-gain
+    // convention; `C = 210` is this crate's own empirically-found constant
+    // for the same role, unchanged from before. `subblock_gain` is omitted
+    // (only applies to `block_type == 2`, which returns early above).
     let gain_term = 2f64.powf(0.25 * (f64::from(g.global_gain) - 210.0));
     for (band, win) in sfb.windows(2).enumerate().take(21) {
         let &[lo, hi] = win else { continue };

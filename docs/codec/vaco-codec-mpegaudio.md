@@ -31,29 +31,45 @@ diffing the resulting `s16le` PCM against `ffmpeg -f s16le -`.
 ## Decode accuracy — measured, not claimed
 
 None of this is bit-exact: decode runs in `f32`, not the ISO reference
-decoder's fixed-point contract, so byte-identical output was never a goal.
-What follows is what direct comparison against `ffmpeg 8.1`-decoded PCM
-actually showed, per layer, generated via
-`ffmpeg -f lavfi -i "sine=..." -c:a libmp3lame/mp2 ...` fixtures (a 440 Hz
-tone unless noted) and diffed sample-for-sample after finding the
-best-aligning offset (`compare.py`/`compare2.py`, scratch scripts, not
-committed).
+decoder's fixed-point contract, and the specification itself defines a
+compliance tolerance rather than one correct output — byte-identical
+output was never the target here. Correlation approaching 1.0 with a
+small RMS (of a 32767 full-scale `i16`) is. What follows is direct
+comparison against `ffmpeg 8.1`-decoded PCM (`-acodec pcm_s16le -f s16le
+-fflags +bitexact`, the flag placed immediately before the output path),
+per layer, over 12 fixtures generated via `ffmpeg -f lavfi -i "sine=..."
+-c:a libmp3lame/mp2 ...` at varied bitrate/sample-rate/stereo-mode/
+frequency combinations, aligned per channel by FFT cross-correlation
+before scoring (`mp3_compare.py`, scratch script, not committed).
 
-| Layer | Rate × channels tested | Result |
+| Layer | Fixtures tested | Result |
 |---|---|---|
 | I | none (no MP1 encoder available: neither `ffmpeg`'s build here nor any other tool on this machine can produce one) | Not verified against real audio. Header parsing, bit allocation (4-bit index, direct `nb = bal+1` dequant) and the synthesis filterbank are exercised by unit tests only (`layer1.rs`, `synthesis.rs`), plus the shared filterbank's correctness is established transitively by Layer II's real-file results below (same `Synthesis::synth_block` code, unmodified). |
-| II | 32000/44100/48000 Hz × mono/stereo (6 fixtures) | **Matches closely.** RMS error 1.2–10.7 (of a 32767 full-scale `i16`), cross-correlation 1.0000 at zero sample shift once a real bug (below) was fixed. Not bit-exact (float vs. fixed-point, plus the four MPEG-1 bit-allocation tables are used but the low-sample-rate table and intensity stereo are not — see gaps below), but close enough that the remaining error is plausibly rounding, not a structural mistake. |
-| III | 44100 Hz mono/stereo, 440 Hz and 6000 Hz tones | **Not accurate.** A dedicated unit test (`layer3::frequency_placement_tests`) proves the subband-splitting → IMDCT → windowing → overlap-add → synthesis-filterbank half of the pipeline places a known spectral line at its correct output frequency in isolation. Full end-to-end decode of a real encoded file is still wrong: a 440 Hz tone reaches only ~0.44 sample correlation against `ffmpeg`'s decode after finding the best time alignment, and a 6000 Hz tone comes out at a measurably wrong frequency (~4316 Hz instead of 6000 Hz). Two real bugs were found and fixed this session (below); the remaining error is narrowed to the side-information/Huffman-decode half (verified independently correct in isolation from the transform half) but not yet found. **Report this as broken, not "close."** |
+| II | 32000/44100/48000 Hz × mono/stereo (6 fixtures) | **Matches closely.** RMS error 1.2–10.7, cross-correlation 1.0000 at zero sample shift once a real bug (below) was fixed. Not bit-exact (float vs. fixed-point, plus the four MPEG-1 bit-allocation tables are used but the low-sample-rate table and intensity stereo are not — see gaps below), but close enough that the remaining error is plausibly rounding, not a structural mistake. |
+| III | 12 fixtures: mono/stereo/independent-stereo/VBR, 32000/44100/48000 Hz, 64k–320k and VBR q2, 220 Hz–15000 Hz tones and a two-tone mix | **Matches closely, one real bug found and fixed this pass.** Correlation 0.975–0.997 across every fixture, RMS 113–441. Before this pass a 440 Hz tone reached only ~0.94–0.98 correlation depending on rate/bitrate and a 6000 Hz tone or a 64 kbit/s 32000 Hz fixture reached ~0.01–0.18 (near-zero — the two failed for genuinely different reasons, exactly as a "positive-but-poor" vs. "near-zero" correlation split predicts: block-type distribution across every fixture was checked first and ruled out short blocks as the cause, since it's ~1.3% short in every fixture regardless of content or bitrate). Root cause: `region0_end`/`region1_end` (the Huffman-table-selection boundaries within a granule's "big values") were computed as `sfb[region_count[0]]`/`sfb[region_count[0]+region_count[1]]` directly, when `region_count[0]`/`[1]` each hold *one less than* the actual scalefactor-band count for that region (`Vaco-Spec-Ref: iso-11172-3`, corroborated independently against a technical description of the format) — the correct index is `sfb[region_count[0]+1]`/`sfb[region_count[0]+region_count[1]+2]`. A signal concentrated in the first couple of bands (a low tone) barely reaches the misclassified boundary; content occupying more of the spectrum (a higher tone, or anything past the first two regions) gets Huffman-decoded there with the wrong table, which looks like plausible garbage rather than a bitstream desync. Still not bit-exact, and short blocks / intensity stereo remain unimplemented (see "Known gaps") — closed on correlation, not on completeness. |
 
-### Bugs found and fixed this session (for the record, not just interest)
+### Bugs found and fixed (for the record, not just interest)
 
-- **Layer III global-gain constant.** ISO/IEC 11172-3's own text names the
-  formula's scaling constant "64" (`2.4.3.4`), but that section's actual
-  formula is a lost image in this crate's PDF-to-text extraction — only the
-  surrounding prose survived. Implementing literally with `64` produced
-  samples ~10⁷ too large. `210` (confirmed empirically against `ffmpeg`,
-  not by citation — see `layer3.rs`'s `decode_granule`) produces sane
-  magnitudes.
+- **Layer III Huffman-region boundary off-by-one.** See the accuracy table
+  above — this is the fix that took real-file correlation from ~0.01–0.98
+  (content-dependent) to a consistent 0.975–0.997.
+- **Layer III global-gain constant, re-examined.** A second, independently
+  obtained scan of the same ISO CD 11172-3 committee draft made the
+  requantisation formula (previously lost to an embedded-image PDF
+  extraction) legible: `Vaco-Spec-Ref: iso-11172-3` §2.4.3.4 states the
+  gain term's constant as `64`, not `210`. Tried literally: `64` reproduces
+  the formula but clips real fixtures to full scale and *drops*
+  correlation relative to `210` on content this crate already decoded
+  plausibly. Not a contradiction — the spec's own text immediately after
+  the formula explains why: "The constant 64 ... is needed to scale the
+  output appropriately ... If an implementation with a different power
+  transfer characteristic is chosen (different global scaling) then the
+  constant has to be changed accordingly." `64` is calibrated to the
+  reference decoder's own synthesis-gain convention; `210` remains this
+  crate's own empirically-correct constant for the same role, now
+  understood rather than treated as an unexplained hack. The formula
+  structure and the scalefactor-exponent term were checked term-by-term
+  against the primary text and match exactly.
 - **Layer III silent-granule bit budget.** A granule with `big_values == 0`
   and `part2_3_length == 0` (a genuinely silent granule — e.g. the "side"
   channel of an MS-stereo-encoded mono source) was still being fed into the
@@ -123,10 +139,6 @@ committed).
 Reported plainly rather than glossed over, per the issue's own acceptance
 criteria:
 
-- **Layer III does not work correctly on real content yet** (see the table
-  above). Root cause not yet found; narrowed to the side-info/Huffman half
-  by `layer3::frequency_placement_tests` proving the transform half correct
-  in isolation.
 - **Short blocks (`block_type == 2`) decode to silence**, not their actual
   audio, for Layer III — this crate does not implement the short-block
   scalefactor layout (band-major, window-minor, 12 bands × 3 windows) or
@@ -168,10 +180,6 @@ criteria:
   zero padding at each end per `Vaco-Spec-Ref: iso-11172-3` §2.4.3.4's
   prose — see `layer3.rs`'s module doc for the exact reconstruction this
   crate already worked out but does not yet use).
-- The remaining Layer III real-file bug: start by comparing `is[]`
-  (post-Huffman, pre-requantisation) against a known-good reference for a
-  single, hand-constructed granule, since `layer3::frequency_placement_tests`
-  already rules out the transform half.
 - Intensity stereo: Layer I/II need the `bound`/`sblimit` split
   (`mode_extension` selects it via a fixed table); Layer III needs the
   `is_ratio = tan(is_pos·π/12)` reconstruction using the "side" channel's
