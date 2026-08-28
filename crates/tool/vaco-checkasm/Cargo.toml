@@ -24,6 +24,11 @@ vaco-simd = { path = "../../core/vaco-simd" }
 vaco-scale = { path = "../../signal/vaco-scale" }
 vaco-color = { path = "../../model/vaco-color" }
 vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
+# The separable-FIR motion-compensation kernel (D-08a, #23): wired here for
+# the same reason as `vaco-scale` above -- a tool crate (layer 10) may depend
+# on anything downward, which is what lets a real production kernel be
+# checked without that kernel's own crate depending on this one.
+vaco-codec-dsp-mc = { path = "../../signal/vaco-codec-dsp-mc" }
 
 [lints]
 workspace = true
