@@ -1241,3 +1241,10 @@ kind     = "spec"
 title    = "Theora Specification, Xiph.Org Foundation, June 3, 2017 edition"
 acquired = "2026-08-28"
 where    = "https://theora.org/doc/Theora.pdf"
+
+[[source]]
+id       = "jpegls-blackbox-runmode"
+kind     = "blackbox"
+title    = "Observed output of ffmpeg 8.1's jpegls encoder/decoder on synthetic raw images (solid fields, two-tone transitions at varying run lengths, gradients), used to reverse-engineer the run-mode Golomb-parameter adaptation table and the run-interruption sample's mapping-selection and sign formulas — none of which the LOCO-I paper (locoi-hpl98-193) states numerically. Never read: only the produced/consumed bytes and pixels, per D6/D17."
+acquired = "2026-08-28"
+where    = "the reference binary installed on the development machine"
