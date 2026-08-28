@@ -1030,6 +1030,34 @@ fn decode_residual(
 // overflow, and that invariant is itself fuzzed
 // (`vaco-codec-cabac/tests/spec.rs` and its own fuzz target). Not a
 // robustness bug; a stricter test catching an accuracy issue.
+//
+// FOLLOW-UP round: `coded_block_pattern` for address 0 (unavailable
+// neighbours -- the same structural position addresses 0-4 of the real
+// corpora occupy) is now independently confirmed, not inferred. Chosen
+// instrument: construct real encoder *input* (raw YUV through unmodified
+// libx264), not either alternative on the table -- direct byte-patching of
+// a real CABAC bitstream (which worked for a sibling agent's MPEG-2
+// problem this session) does not transfer, because CABAC's range/offset
+// state has no recoverable codeword boundary the way MPEG-2's VLC syntax
+// does, so a patch would desynchronise everything downstream rather than
+// substitute one value; pixel-output inference was the fallback but is
+// strictly weaker evidence. `tests/cabac_cbp_oracle.rs`'s two fixtures
+// give two independent ground truths instead: an all-128 frame, where
+// clause 8.3.1.2.1's unavailable-neighbour substitution makes every
+// prediction mode predict 128 again against an already-128 source (zero
+// residual by construction, no reference needed), and a full-noise frame,
+// where libx264's own per-macroblock accounting log -- the real encoder's
+// own count, independent of anything in this crate -- states outright
+// that every macroblock (100% `I_NxN`, so `decode_cbp_cabac`'s explicit
+// path is what runs, not `mb_type`'s embedded encoding) has luma, chroma
+// DC, and chroma AC residual, i.e. `cbp_chroma == 2` by Table 9-4 -- the
+// same value previously reported, unverified, for `cabac_ip_simple.264`'s
+// own address 0. Both match this decoder's own decode of address 0
+// exactly. `coded_block_pattern` is no longer an open question in this
+// search; the remaining candidates are residual coefficient decode itself
+// and the per-4x4-block intra prediction mode flags
+// (`prev_intra4x4_pred_mode_flag`/`rem_intra4x4_pred_mode`), as named two
+// rounds ago and not yet narrowed further.
 use crate::cabac_mb_tables::{inits_by_col, inits_by_idc, inits_fixed};
 
 /// `CabacDecoder::decode_decision` over a context array, indexed safely —
