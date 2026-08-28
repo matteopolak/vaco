@@ -1465,3 +1465,23 @@ Not done here, reported instead: `planning/AGENT-CONSTRAINTS.md` and
 `--no-default-features`, which is now the difference between an isolated
 build and a build that still depends on every other crate in the tree
 compiling. Whoever edits those next should add the flag.
+
+### `SplitMix64` is now duplicated in three filter crates (`vaco-filter-temporal`, `vaco-filter-source`, `vaco-filter-artistic`)
+
+Each of `vaco-filter-temporal::rng`, `vaco-filter-source::rng` and this
+crate's `vaco-filter-artistic::rng` carries its own byte-identical copy of
+the same small `SplitMix64` PRNG (Vigna, public domain/CC0), each with its
+own doc explaining why it exists (a filter with a `seed` option whose actual
+generator would need reading the reference's source, so only
+*reproducibility*, not bit-identical output, is asked of it: `random`,
+`cellauto`/`life`/`sierpinski`-style sources, and now `noise`). Not
+consolidated here: the obvious host per `planning/16-filters.md` §4.1 is
+`vaco-filter-vdsp` (shared video kernels crossing crate boundaries), and
+`planning/ASSIGNMENTS.md` lists it `assigned` to `agent:analysis2` as of
+2026-08-28 — this pass does not own it and did not touch it. `dup-check`
+will not catch this on its own: it compares type names across crates, and
+`SplitMix64` is spelled identically in all three, so it would only surface
+if two of them tried to `pub use` the same path, which none do. Whoever next
+owns `vaco-filter-vdsp` (or whoever does the filter-crate reconciliation
+sweep `planning/FILTER-CRATE-DIVERGENCE.md` already tracks) is the natural
+one to move it there and update three `use` statements.

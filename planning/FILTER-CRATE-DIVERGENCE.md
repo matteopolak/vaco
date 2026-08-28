@@ -154,3 +154,35 @@ Two of the three are worth consolidating and one may not be:
 Recorded rather than done: four of these five crates had a live owner when the
 audit ran.
 
+
+## A fourth instance, GitHub #478/"FT-4.12e": `vaco-filter-effect` was never a row
+
+A dispatch brief for issue #478 asked for a `vaco-filter-effect` crate
+covering roughly two dozen "stylisation" filters (`sobel`, `prewitt`,
+`roberts`, `kirsch`, `edgedetect`, `morpho`, `erosion`, `dilation`,
+`deflate`, `inflate`, `shuffleframes`, `shufflepixels`, `shuffleplanes`,
+`swaprect`, `swapuv`, `tmix`, `lagfun`, `random`, `photosensitivity`,
+`noise`, `vignette`, `pixelize`, among others). `planning/16-filters.md`
+§4.2 has no such row. Checking `planning/ASSIGNMENTS.md` before writing
+anything found that essentially the whole named list already has a home and
+is already built: `vaco-filter-convolve` (#468, done), `vaco-filter-geometry`
+(#470, done) and `vaco-filter-temporal` (#475, done) between them cover all
+but four of the names, and `photosensitivity` belongs to `vaco-filter-analysis`
+(#477), which had a live owner (`agent:analysis2`) mid-commit at the time —
+correctly left untouched under the single-writer rule.
+
+What was actually left, unclaimed: `noise`, `vignette`, plus the rest of
+§4.2's real `vaco-filter-artistic` row (`pixelize` — already a documented
+duplicate in `vaco-filter-geometry`, `epx`, `xbr`, `hqx`, `super2xsai`,
+`amplify`, `delogo`, `removelogo`, `cover_rect`, `find_rect`). Built
+`vaco-filter-artistic` — the row's real name — implementing `noise` and
+`vignette`; the rest of that row is still open. See
+`docs/filter/vaco-filter-artistic.md` for the full reconciliation and the
+framecrc-verification table.
+
+The concrete cost this time was smaller than `axcorrelate`'s: no code was
+implemented against the wrong crate name before the table was checked, so
+nothing was thrown away. The cost was entirely in verification time — five
+crates' worth of `ls`/`git log`/`ASSIGNMENTS.md` reading before writing a
+line of filter code — which is exactly what this document exists to save
+the next brief from repeating.
