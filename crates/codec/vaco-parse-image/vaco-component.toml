@@ -1,0 +1,60 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Six components from one crate, one per still-image format, following the
+# `vaco-parse-aac`/`vaco-parse-vpx` "two-or-more parsers, one crate" shape.
+# Every one of the six is the same `ImageParser<H>` wrapper (`src/parser.rs`)
+# parameterised by that format's `ImageHeader` reader.
+
+[[component]]
+kind      = "parser"
+name      = "png"
+long_name = "PNG (Portable Network Graphics) image"
+feature   = "parse-image"
+ctor      = "vaco_parse_image::PARSER_PNG"
+media     = "video"
+codec     = "png"
+
+[[component]]
+kind      = "parser"
+name      = "mjpeg"
+long_name = "Motion JPEG"
+feature   = "parse-image"
+ctor      = "vaco_parse_image::PARSER_JPEG"
+media     = "video"
+codec     = "mjpeg"
+
+[[component]]
+kind      = "parser"
+name      = "gif"
+long_name = "CompuServe GIF (Graphics Interchange Format)"
+feature   = "parse-image"
+ctor      = "vaco_parse_image::PARSER_GIF"
+media     = "video"
+codec     = "gif"
+
+[[component]]
+kind      = "parser"
+name      = "bmp"
+long_name = "BMP (Windows and OS/2 bitmap)"
+feature   = "parse-image"
+ctor      = "vaco_parse_image::PARSER_BMP"
+media     = "video"
+codec     = "bmp"
+
+[[component]]
+kind      = "parser"
+name      = "tiff"
+long_name = "TIFF image"
+feature   = "parse-image"
+ctor      = "vaco_parse_image::PARSER_TIFF"
+media     = "video"
+codec     = "tiff"
+
+[[component]]
+kind      = "parser"
+name      = "webp"
+long_name = "WebP"
+feature   = "parse-image"
+ctor      = "vaco_parse_image::PARSER_WEBP"
+media     = "video"
+codec     = "webp"
