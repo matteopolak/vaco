@@ -1,0 +1,41 @@
+# FT-6.1 (#500)'s filter category, second crate: `vaco-filter-blur`.
+#
+# Added to prove the harness generalises past its own author's crate
+# (`vaco-filter-scope`) — adding a crate is exactly the one-line
+# `filterexec::REGISTRIES` change plus a suite file the tool's own doc
+# describes, not a special case.
+#
+# `boxblur` on a flat field is a no-op (blurring a constant reproduces the
+# constant, which would pass even with a broken radius/power
+# implementation) — this uses the per-row-distinct-value source the sibling
+# `vaco-filter-scope-exact.toml` suite built for the same reason, so the
+# averaging kernel actually has non-uniform input to blur.
+
+schema = 1
+suite  = "filter-vaco-filter-blur"
+tool   = "filter"
+tier   = "core"
+owner  = "@filter-blur-owner"
+
+[[media]]
+id       = "gray8-vgrad-64"
+source   = "generated://gray8-vgrad-64.raw"
+tags     = ["video"]
+generate = ["-f", "lavfi", "-i", "color=c=black:s=64x64:d=1:r=25",
+            "-vf", "geq=lum='255*Y/63':cb=128:cr=128",
+            "-frames:v", "1", "-pix_fmt", "gray8", "-f", "rawvideo"]
+
+[[axis]]
+name   = "filter"
+values = [
+  { id = "boxblur",          argv = ["{media}", "boxblur", "luma_radius=2:luma_power=1", "gray8", "64", "64", "gray8", "64", "64"] },
+  { id = "boxblur-power2",   argv = ["{media}", "boxblur", "luma_radius=2:luma_power=2", "gray8", "64", "64", "gray8", "64", "64"] },
+  { id = "boxblur-radius1",  argv = ["{media}", "boxblur", "luma_radius=1:luma_power=1", "gray8", "64", "64", "gray8", "64", "64"] },
+]
+
+[compare]
+mode    = "raw-exact"
+timeout = "10s"
+
+[normalise]
+invocation = ["bitexact", "hide-banner"]

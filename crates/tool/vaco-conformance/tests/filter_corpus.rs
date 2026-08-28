@@ -76,6 +76,24 @@ fn the_exact_filters_agree_with_the_reference() {
 }
 
 #[test]
+fn boxblur_agrees_with_the_reference() {
+    let Some(outcomes) = run_suite("vaco-filter-blur.toml") else {
+        return;
+    };
+    for o in &outcomes {
+        println!("{}: {:?}", o.case.id, o.verdict.label());
+        assert!(
+            matches!(o.verdict, Verdict::Agree),
+            "case `{}` did not agree: {:?}\n  ours:   {}\n  theirs: {}",
+            o.case.id,
+            o.verdict,
+            o.ours_command,
+            o.theirs_command
+        );
+    }
+}
+
+#[test]
 fn the_text_ceiling_filters_still_produce_a_frame() {
     let Some(outcomes) = run_suite("vaco-filter-scope-text-ceiling.toml") else {
         return;

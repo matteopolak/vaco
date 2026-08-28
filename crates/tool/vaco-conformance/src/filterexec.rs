@@ -81,6 +81,7 @@ use crate::run::Observation;
 const REGISTRIES: &[&dyn FilterRegistry] = &[
     &vaco_filter_scope::ScopeRegistry,
     &vaco_filter_draw_vf::DrawVfRegistry,
+    &vaco_filter_blur::BlurRegistry,
 ];
 
 fn find_registry(name: &str) -> Option<&'static dyn FilterRegistry> {

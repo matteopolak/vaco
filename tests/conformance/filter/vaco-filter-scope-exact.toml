@@ -59,27 +59,60 @@ tags     = ["video"]
 generate = ["-f", "lavfi", "-i", "color=c=0x203040:s=64x64:d=1:r=25",
             "-frames:v", "1", "-pix_fmt", "gbrp", "-f", "rawvideo"]
 
+# A per-row-distinct-value source, not flat — a flat source makes every
+# accumulation-style formula (`waveform`'s `intensity`, in particular)
+# saturate to 255 regardless of the actual per-hit arithmetic, which is
+# exactly the kind of test that would pass even with a wrong formula (a
+# lesson this campaign has paid for once already: two-frame identical
+# "flat" probes look clean and still hide a `slide`/margin bug). Each row
+# `y` carries luma `255*y/63`, so a column has exactly one pixel per
+# distinct value — the accumulation this suite's `waveform` default-
+# intensity case below actually needs to exercise the arithmetic, not
+# just the clamp.
+[[media]]
+id       = "gray8-vgrad-64"
+source   = "generated://gray8-vgrad-64.raw"
+tags     = ["video"]
+generate = ["-f", "lavfi", "-i", "color=c=black:s=64x64:d=1:r=25",
+            "-vf", "geq=lum='255*Y/63':cb=128:cr=128",
+            "-frames:v", "1", "-pix_fmt", "gray8", "-f", "rawvideo"]
+
 [[axis]]
 name   = "filter"
 values = [
-  { id = "histogram",   argv = ["{media}", "histogram", "level_height=50:scale_height=0:components=1", "gray8", "64", "64", "gray8", "256", "50"] },
-  { id = "waveform",    argv = ["{media}", "waveform", "intensity=1", "gray8", "64", "64", "gray8", "64", "256"] },
-  { id = "thistogram",  argv = ["{media}", "thistogram", "", "gray8", "64", "64", "gray8", "64", "256"] },
-  { id = "vectorscope", argv = ["{media}", "vectorscope", "", "yuv444p", "64", "64", "yuv444p", "256", "256"] },
-  { id = "drawbox",     argv = ["{media}", "drawbox", "x=10:y=10:width=30:height=30:color=red:thickness=2", "gbrp", "64", "64", "gbrp", "64", "64"] },
-  { id = "drawgrid",    argv = ["{media}", "drawgrid", "x=0:y=0:width=8:height=8:color=white:thickness=1", "gbrp", "64", "64", "gbrp", "64", "64"] },
+  { id = "histogram",             argv = ["{media}", "histogram", "level_height=50:scale_height=0:components=1", "gray8", "64", "64", "gray8", "256", "50"] },
+  { id = "histogram-scale",       argv = ["{media}", "histogram", "level_height=50:scale_height=10:components=1", "gray8", "64", "64", "gray8", "256", "60"] },
+  { id = "waveform",              argv = ["{media}", "waveform", "intensity=1", "gray8", "64", "64", "gray8", "64", "256"] },
+  { id = "waveform-default",      argv = ["{media}", "waveform", "", "gray8", "64", "64", "gray8", "64", "256"] },
+  { id = "thistogram",            argv = ["{media}", "thistogram", "", "gray8", "64", "64", "gray8", "64", "256"] },
+  { id = "thistogram-slide-frame", argv = ["{media}", "thistogram", "slide=frame", "gray8", "64", "64", "gray8", "64", "256"] },
+  { id = "vectorscope",           argv = ["{media}", "vectorscope", "", "yuv444p", "64", "64", "yuv444p", "256", "256"] },
+  { id = "vectorscope-tint",      argv = ["{media}", "vectorscope", "mode=tint", "yuv444p", "64", "64", "yuv444p", "256", "256"] },
+  { id = "vectorscope-intensity", argv = ["{media}", "vectorscope", "intensity=0.02", "yuv444p", "64", "64", "yuv444p", "256", "256"] },
+  { id = "drawbox",               argv = ["{media}", "drawbox", "x=10:y=10:width=30:height=30:color=red:thickness=2", "gbrp", "64", "64", "gbrp", "64", "64"] },
+  { id = "drawbox-fill",          argv = ["{media}", "drawbox", "x=5:y=5:width=20:height=20:color=0x11223344:thickness=fill", "gbrp", "64", "64", "gbrp", "64", "64"] },
+  { id = "drawgrid",              argv = ["{media}", "drawgrid", "x=0:y=0:width=8:height=8:color=white:thickness=1", "gbrp", "64", "64", "gbrp", "64", "64"] },
+  { id = "drawgrid-offset",       argv = ["{media}", "drawgrid", "x=3:y=5:width=10:height=14:thickness=2:color=0x11223344", "gbrp", "64", "64", "gbrp", "64", "64"] },
 ]
 
 [[exclude]]
-when   = { media = ["yuv444p-64", "gbrp-64"], filter = ["histogram", "waveform", "thistogram"] }
-reason = "gray8-input filters; only paired with the gray8-64 media."
+when   = { media = ["yuv444p-64", "gbrp-64", "gray8-vgrad-64"], filter = ["histogram", "histogram-scale", "thistogram", "thistogram-slide-frame"] }
+reason = "flat-gray8-input filters; only paired with the gray8-64 media (a flat field is exactly what these two formulas need — every pixel in the one populated bin)."
 
 [[exclude]]
-when   = { media = ["gray8-64", "gbrp-64"], filter = ["vectorscope"] }
+when   = { media = ["gray8-64", "gbrp-64", "yuv444p-64"], filter = ["waveform-default"] }
+reason = "needs the per-row-distinct-value source to exercise intensity=0.04's actual arithmetic rather than saturate the clamp; only paired with gray8-vgrad-64."
+
+[[exclude]]
+when   = { media = ["yuv444p-64", "gbrp-64", "gray8-vgrad-64"], filter = ["waveform"] }
+reason = "the intensity=1 case is deliberately run against the flat field, where saturation is the point being confirmed; only paired with gray8-64."
+
+[[exclude]]
+when   = { media = ["gray8-64", "gbrp-64", "gray8-vgrad-64"], filter = ["vectorscope", "vectorscope-tint", "vectorscope-intensity"] }
 reason = "yuv444p-input (vectorscope's own coordinate mapping reads Cb/Cr); only paired with yuv444p-64."
 
 [[exclude]]
-when   = { media = ["gray8-64", "yuv444p-64"], filter = ["drawbox", "drawgrid"] }
+when   = { media = ["gray8-64", "yuv444p-64", "gray8-vgrad-64"], filter = ["drawbox", "drawbox-fill", "drawgrid", "drawgrid-offset"] }
 reason = "gbrp-only geometry filters (measured against RGB to avoid YUV colour-conversion ambiguity, see vaco-filter-draw-vf's own doc); only paired with gbrp-64."
 
 [compare]

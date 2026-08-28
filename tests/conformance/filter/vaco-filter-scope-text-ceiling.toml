@@ -44,7 +44,8 @@ generate = ["-f", "lavfi", "-i", "color=c=0x646464:s=640x480:d=1:r=25",
 [[axis]]
 name   = "filter"
 values = [
-  { id = "datascope", argv = ["{media}", "datascope", "s=64x32:mode=mono:components=1", "gray8", "64", "64", "gray8", "64", "32"] },
+  { id = "datascope",     argv = ["{media}", "datascope", "s=64x32:mode=mono:components=1", "gray8", "64", "64", "gray8", "64", "32"] },
+  { id = "datascope-dec", argv = ["{media}", "datascope", "s=180x40:mode=mono:format=dec:components=1", "gray8", "64", "64", "gray8", "180", "40"] },
   # `pixscope` refuses anything smaller than `640x480` — an undocumented
   # reference floor this crate measured directly (see `vaco-filter-scope`'s
   # own doc). Below it, the reference rejects the input outright, which
@@ -53,15 +54,16 @@ values = [
   # the `behavioural` level, a real, correct divergence report rather than
   # a false pass — exactly proof the harness reaches real output rather
   # than reporting green because it could not.
-  { id = "pixscope",  argv = ["{media}", "pixscope", "", "yuv444p", "640", "480", "yuv444p", "640", "480"] },
+  { id = "pixscope",        argv = ["{media}", "pixscope", "", "yuv444p", "640", "480", "yuv444p", "640", "480"] },
+  { id = "pixscope-window", argv = ["{media}", "pixscope", "w=15:h=9:wx=0.25:wy=0.75", "yuv444p", "640", "480", "yuv444p", "640", "480"] },
 ]
 
 [[exclude]]
-when   = { media = ["yuv444p-640x480"], filter = ["datascope"] }
+when   = { media = ["yuv444p-640x480"], filter = ["datascope", "datascope-dec"] }
 reason = "gray8-input; only paired with gray8-64."
 
 [[exclude]]
-when   = { media = ["gray8-64"], filter = ["pixscope"] }
+when   = { media = ["gray8-64"], filter = ["pixscope", "pixscope-window"] }
 reason = "yuv444p-input, and must clear the reference's undocumented 640x480 floor; only paired with yuv444p-640x480."
 
 [compare]
