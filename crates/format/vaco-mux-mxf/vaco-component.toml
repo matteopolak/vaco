@@ -1,0 +1,15 @@
+# Registry fragment. Consumed by `cargo xtask gen-registry`.
+#
+# OP1a only, one video track and at most one audio track — see
+# `docs/format/vaco-mux-mxf.md` for scope (D-10/OP-Atom/timecode-track
+# generalisation and the remux byte-identity matrix are #610, a distinct
+# crate scope this fragment does not claim).
+
+[[component]]
+kind       = "muxer"
+name       = "mxf"
+long_name  = "MXF (Material eXchange Format)"
+feature    = "mux-mxf"
+ctor       = "vaco_mux_mxf::MUXER"
+extensions = "mxf"
+mime_types = "application/mxf"
