@@ -50,6 +50,8 @@ vaco-filter-video-format = { path = "../../filter/vaco-filter-video-format" }
 vaco-filter-video-composite = { path = "../../filter/vaco-filter-video-composite" }
 vaco-filter-stack = { path = "../../filter/vaco-filter-stack" }
 vaco-filter-video-geometry = { path = "../../filter/vaco-filter-video-geometry" }
+vaco-tx = { path = "../../signal/vaco-tx" }
+vaco-corpus = { path = "../vaco-corpus" }
 tempfile.workspace = true
 
 [lints]

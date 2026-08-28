@@ -1,30 +1,12 @@
-//! C10 — the quality-band seam (plan 13 §1.11.2).
+//! C10 — quality-band comparison (plan 13 §1.11.2; work package X-04, `#253`).
 //!
 //! # What it is
 //!
-//! The place encoder conformance will live. **The metrics are deliberately not
-//! implemented here.** This module defines the shape they must fit and returns
-//! an honest skip until they exist.
-//!
-//! # Why a seam and not an implementation
-//!
-//! Plan 13 §1.11 draws the boundary: byte comparison applies to every operation
-//! whose output is fully determined by its input and its declared options;
-//! quality comparison applies to every operation that involves a lossy
-//! encoder's rate–distortion decisions. Our AV1 encoder will never match
-//! libaom's bitstream, and libaom's does not match its own across versions or
-//! thread counts. Asserting bytes there produces a permanent red that everyone
-//! learns to ignore, which is worse than no test.
-//!
-//! But the metrics themselves are real work with a legal constraint attached:
-//! `tests/tiny_ssim.c` and `tests/tiny_psnr.c` are GPL and are on the hard
-//! do-not-reuse list (§0.1). SSIM must be implemented from Wang, Bovik, Sheikh
-//! & Simoncelli, *IEEE TIP* 13(4), 2004, and PSNR from its standard
-//! definition — citing the paper, never the file. That belongs in the crate
-//! that owns image metrics, not in the harness, and it is not this agent's to
-//! write.
-//!
-//! # The seam
+//! Encoder conformance: instead of comparing bitstream bytes (meaningless
+//! for a lossy encoder's own rate–distortion search — see plan 13 §1.11),
+//! both sides' *reconstructed* output is scored against the common source
+//! with a [`Metric`], and the comparison is a band around the reference's
+//! own score plus bounds on bitstream size and encode time.
 //!
 //! ```text
 //! source ──┬─▶ reference encode ──▶ ref bitstream ──▶ decode ──▶ ref recon
@@ -33,26 +15,35 @@
 //! assert:  quality(our recon, source) ≥ quality(ref recon, source) − Δq
 //!          size(our bitstream)        ≤ size(ref bitstream)        × (1 + Δs)
 //!          time(our encode)           ≤ time(ref encode)           × Δt
-//!          reference decoder accepts our bitstream          (C8/X4)
-//!          our decoder accepts the reference bitstream      (C8/X3)
 //! ```
 //!
-//! [`Metric`] is the extension point. Register an implementation with
-//! [`Registry::insert`] and C10 cases naming that metric start running; until
-//! one is registered they skip, and the skip budget (§1.5.4) makes that
-//! visible rather than silently green.
+//! (`reference decoder accepts our bitstream` / `our decoder accepts the
+//! reference bitstream` are C8/X4 and C8/X3 respectively — a different mode,
+//! not this one.)
 //!
-//! # How to change it
+//! # What is implemented, and what is still a seam
 //!
-//! Implement [`Metric`] in the crate that owns the metric, register it from the
-//! runner's construction site, and fill in [`compare`]'s measurement half. Do
-//! not implement a metric here — the harness should not become the home of the
-//! project's image mathematics.
+//! [`Metric`] is the extension point; [`default_registry`] wires up the real
+//! implementations in `vaco_conformance::metrics` (PSNR, SSIM, a spectral
+//! distance for audio — see that module's own docs, including why VMAF is a
+//! named cut rather than a silent one). [`compare`] uses that registry and,
+//! when a [`Pair`] carries [`QualitySignals`] (via
+//! [`crate::compare::Pair::with_signals`]), measures for real: it computes
+//! both sides' score against the shared source, checks the bitstream-size
+//! and encode-time bounds from `pair`'s own [`crate::run::Observation::wall`]
+//! and output-file lengths, and returns [`Verdict::Agree`] or a
+//! [`Verdict::Divergence`] carrying the numbers that failed.
+//!
+//! **What is still a seam**: nothing in this crate decodes a bitstream back
+//! to raw samples yet, so a case whose [`Pair`] has no attached
+//! [`QualitySignals`] still skips honestly — see
+//! [`crate::compare::Pair::signals`]'s own docs for exactly what a caller
+//! needs to supply to turn that skip into a real measurement.
 
 use std::collections::BTreeMap;
 
 use crate::case::{Case, QualityBand, SkipReason, Verdict};
-use crate::compare::Pair;
+use crate::compare::{DiffReport, Pair};
 
 /// One reconstructed signal, ready for a metric.
 ///
@@ -70,6 +61,19 @@ pub struct Signal<'a> {
     pub height: u32,
     /// Bits per sample.
     pub depth: u8,
+}
+
+/// The three decoded signals a C10 measurement needs (the seam's own
+/// diagram: `source`, `our recon`, `ref recon`), attached to a
+/// [`crate::compare::Pair`] via `Pair::with_signals`.
+#[derive(Debug, Clone)]
+pub struct QualitySignals<'a> {
+    /// The original, undistorted media both encoders were given.
+    pub source: Signal<'a>,
+    /// Our encoder's bitstream, decoded back to raw samples.
+    pub ours: Signal<'a>,
+    /// The reference encoder's bitstream, decoded back to raw samples.
+    pub theirs: Signal<'a>,
 }
 
 /// A quality metric.
@@ -176,18 +180,84 @@ impl Measurement {
     }
 }
 
-/// Evaluate a C10 case.
-///
-/// Returns a skip until the metrics exist. It never returns [`Verdict::Agree`]
-/// on an unmeasured case: a quality gate that passes without measuring anything
-/// is worse than no gate, because it looks like coverage.
+/// The metrics `compare` measures with when a case names one and does not
+/// supply its own [`Registry`]. Built fresh per call — a `BTreeMap` of a
+/// handful of zero-sized [`Metric`] impls costs nothing measurable next to
+/// running an actual decode, and a `'static` registry would need interior
+/// mutability for no benefit, since nothing here ever needs to swap a
+/// metric out at runtime.
 #[must_use]
-pub fn compare(_case: &Case, _pair: &Pair<'_>, band: &QualityBand) -> Verdict {
-    let _ = band;
-    Verdict::Skipped(SkipReason::ModeUnimplemented(
-        "quality-band: no quality metric is implemented yet (plan 13 §1.11.2; \
-         SSIM from Wang et al. 2004, never from tiny_ssim.c)",
-    ))
+pub fn default_registry() -> Registry {
+    let mut registry = Registry::new();
+    registry.insert(Box::new(crate::metrics::Psnr::y()));
+    registry.insert(Box::new(crate::metrics::Psnr::average()));
+    registry.insert(Box::new(crate::metrics::Ssim));
+    registry.insert(Box::new(crate::metrics::SpectralDistance));
+    registry
+}
+
+/// Evaluate a C10 case against [`default_registry`].
+///
+/// Skips honestly (never [`Verdict::Agree`]) in the two cases that are not
+/// yet measurable: `band.metric` names something [`default_registry`] does
+/// not have (VMAF, most prominently — see `crate::metrics`' own docs for why
+/// it is cut), or `pair` carries no [`QualitySignals`] yet because nothing
+/// upstream has decoded a bitstream back to raw samples for this case. A
+/// quality gate that passes without measuring anything is worse than no
+/// gate, because it looks like coverage.
+#[must_use]
+pub fn compare(case: &Case, pair: &Pair<'_>, band: &QualityBand) -> Verdict {
+    compare_with(case, pair, band, &default_registry())
+}
+
+/// [`compare`], taking an explicit [`Registry`] — the seam a caller with its
+/// own metric set (or a test double) uses instead of [`default_registry`].
+#[must_use]
+pub fn compare_with(case: &Case, pair: &Pair<'_>, band: &QualityBand, registry: &Registry) -> Verdict {
+    let Some(metric) = registry.get(&band.metric) else {
+        return Verdict::Skipped(SkipReason::ModeUnimplemented(
+            "quality-band: band names a metric this build has not registered \
+             (see vaco_conformance::compare::quality::default_registry)",
+        ));
+    };
+    let Some(signals) = &pair.signals else {
+        return Verdict::Skipped(SkipReason::ModeUnimplemented(
+            "quality-band: no decoded signal attached to this Pair yet — \
+             see Pair::with_signals",
+        ));
+    };
+
+    let ours = match metric.score(&signals.source, &signals.ours) {
+        Ok(v) => v,
+        Err(e) => return divergence(case, format!("scoring our recon: {e}")),
+    };
+    let theirs = match metric.score(&signals.source, &signals.theirs) {
+        Ok(v) => v,
+        Err(e) => return divergence(case, format!("scoring reference recon: {e}")),
+    };
+
+    let measurement = Measurement {
+        metric: band.metric.clone(),
+        ours,
+        theirs,
+        our_bytes: pair.ours_output_file.map_or(0, |b| b.len() as u64),
+        their_bytes: pair.theirs_output_file.map_or(0, |b| b.len() as u64),
+        our_seconds: pair.ours.wall.as_secs_f64(),
+        their_seconds: pair.theirs.wall.as_secs_f64(),
+    };
+
+    match measurement.within(band) {
+        Ok(()) => Verdict::Agree,
+        Err(reason) => divergence(case, reason),
+    }
+}
+
+fn divergence(case: &Case, summary: String) -> Verdict {
+    Verdict::Divergence(DiffReport {
+        mode: case.compare.mode_name(),
+        summary,
+        ..DiffReport::default()
+    })
 }
 
 #[cfg(test)]

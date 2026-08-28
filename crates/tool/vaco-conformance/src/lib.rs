@@ -64,6 +64,7 @@ pub mod divergence;
 pub mod extract;
 pub mod filterexec;
 pub mod manifest;
+pub mod metrics;
 pub mod normalise;
 pub mod refbin;
 pub mod refhelp;
@@ -71,6 +72,7 @@ pub mod registries;
 pub mod report;
 pub mod run;
 pub mod runner;
+pub mod suites;
 pub mod toml;
 
 /// Where suite manifests are looked for, in order.

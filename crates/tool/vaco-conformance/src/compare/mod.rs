@@ -118,10 +118,21 @@ pub struct Pair<'a> {
     pub ours_output_file: Option<&'a [u8]>,
     /// The reference's equivalent of [`Pair::ours_output_file`].
     pub theirs_output_file: Option<&'a [u8]>,
+    /// Decoded raw signals for C10 `quality-band` (§1.11.2's
+    /// `source ─┬─▶ our encode ──▶ decode ──▶ our recon`
+    /// `        └─▶ ref encode ──▶ decode ──▶ ref recon` diagram). `None` —
+    /// the default from [`Pair::new`] — is exactly today's state for every
+    /// existing case: nothing in this crate decodes a bitstream back to raw
+    /// samples yet, so [`quality::compare`] skips honestly rather than
+    /// pretending to measure. A caller that *has* done that decoding calls
+    /// [`Pair::with_signals`] to attach it, and quality comparison starts
+    /// measuring for real with no other code path change.
+    pub signals: Option<quality::QualitySignals<'a>>,
 }
 
 impl<'a> Pair<'a> {
-    /// A pair with no output file captured — the common case for `probe`.
+    /// A pair with no output file and no decoded signal captured — the
+    /// common case for `probe` and for every mode except C10.
     #[must_use]
     pub const fn new(ours: &'a Observation, theirs: &'a Observation) -> Self {
         Self {
@@ -129,7 +140,21 @@ impl<'a> Pair<'a> {
             theirs,
             ours_output_file: None,
             theirs_output_file: None,
+            signals: None,
         }
+    }
+
+    /// Attach the decoded `(source, our recon, reference recon)` triple a
+    /// C10 case needs.
+    #[must_use]
+    pub fn with_signals(
+        mut self,
+        source: quality::Signal<'a>,
+        ours: quality::Signal<'a>,
+        theirs: quality::Signal<'a>,
+    ) -> Self {
+        self.signals = Some(quality::QualitySignals { source, ours, theirs });
+        self
     }
 }
 

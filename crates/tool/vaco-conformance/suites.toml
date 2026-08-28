@@ -1,0 +1,44 @@
+# Codec conformance-suite catalogue (work package QA-09, #181).
+#
+# Joined against `vaco-corpus`'s `vaco-media.lock` by matching `name` here to
+# that file's `[[entry]].suite` — see `vaco_conformance::suites::resolve`.
+# `mode` names a plan 13 §1.2 comparison mode as a hint for whoever authors
+# the case, not a fully constructed `Compare` value.
+
+schema = 1
+
+[[suite]]
+name = "pngsuite"
+codec = "png"
+mode = "raw-exact"
+note = "lossless: PNG decode must be byte-exact per plan 13 §1.11.1"
+
+[[suite]]
+name = "vp8-test-vectors"
+codec = "vp8"
+mode = "raw-exact"
+note = "VP8 decode is a lossy integer-defined codec: C4 raw-exact, zero tolerance, per plan 13 §1.11.1"
+
+[[suite]]
+name = "vp9-test-vectors"
+codec = "vp9"
+mode = "raw-exact"
+note = "same reasoning as vp8-test-vectors"
+
+[[suite]]
+name = "flac-test-files"
+codec = "flac"
+mode = "raw-exact"
+note = "lossless: FLAC decode must be byte-exact per plan 13 §1.11.1"
+
+[[suite]]
+name = "argon"
+codec = "av1"
+mode = "raw-exact"
+note = "documented gap: no fetchable entries yet, see vaco-corpus's vaco-media.lock header"
+
+[[suite]]
+name = "jctvc"
+codec = "hevc"
+mode = "raw-exact"
+note = "documented gap: no fetchable entries yet, see vaco-corpus's vaco-media.lock header (H.264 conformance streams share the same gap and the same JVT/JCT-VC origin)"
