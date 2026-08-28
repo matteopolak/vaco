@@ -20,8 +20,9 @@
 //! `Gx=80` on this ramp, `magnitude=sqrt(80^2+0^2)=80` — an exact match,
 //! confirming both the published kernel and `magnitude=sqrt(Gx^2+Gy^2)`
 //! (`scale=1`, `delta=0` are this run's defaults). The border comes back
-//! `0` (see [`crate::convolution`]'s doc — this crate's `sobel`/`prewitt`
-//! reuse [`crate::convolution::Kernel`] and its zero-border rule directly).
+//! `0` on this source, consistent with (but — see below — not sufficient
+//! to prove) [`crate::convolution`]'s border rule; this crate's `sobel`/
+//! `prewitt` reuse [`crate::convolution::Kernel`] directly.
 //!
 //! `prewitt` on the same input gives `60` (`Gx=[-1,0,1;-1,0,1;-1,0,1]`,
 //! `60 = |{-10+30}| * 3`... i.e. `20*3`).
@@ -32,8 +33,8 @@
 //! [`SCHARR_GX`]/[`SCHARR_GY`] via `rdiv=16` rather than left for a caller
 //! to apply.
 //!
-//! # Correction, 2026-08-28: the inherited "zero border" was never
-//! actually verified for `sobel` itself, and a real probe found it wrong
+//! # Correction and pin, 2026-08-28: the inherited "zero border" was never
+//! actually verified for `sobel` itself; the real rule is `reflect-101`
 //!
 //! `vaco-conformance`'s argument-vector corpus tried `sobel` against a
 //! source varying in *both* `X` and `Y` (`mod(X*7+Y*11,256)`, `20x20`) —
@@ -47,32 +48,27 @@
 //! `intensity=1` saturation were: a source that cannot separate two
 //! hypotheses is not evidence for either one.
 //!
-//! Against the two-axis source, this crate's own output forces the
-//! *entire* top/bottom border row to `0` (every column), but the
-//! reference does not: only isolated positions read `0`, and the rest of
-//! the border row carries real, nonzero gradient values that a controlled
-//! linear-ramp probe (`lum=50+10*Y`, ramp values `40/51/63/75/86/98`) does
-//! not match either a hard-zero-if-any-tap-OOB rule *or* a simple
-//! replicate-the-edge-row extension applied uniformly to whichever tap is
-//! missing — both were checked by hand and both predict values the
-//! reference does not produce at every point tried. The likely shape is a
-//! genuine **per-axis** border rule (extend/reflect independently in the
-//! direction that is actually out of bounds, rather than abandoning the
-//! whole pixel the moment any one tap is), which is a materially bigger
-//! change than adjusting a single constant: it would mean
-//! [`crate::convolution::Kernel::value_at`] needs a real per-tap-clamp
-//! implementation, shared by `convolution` (whose own zero-border *is*
-//! independently confirmed, via a source that actually varies in the
-//! tested axis — see that module's own doc) and `sobel`/`prewitt`/
-//! `scharr`, without breaking the case that already checks out.
+//! Against the two-axis source, this crate's own (pre-fix) output forced
+//! the *entire* top/bottom border row to `0`, but the reference did not:
+//! only isolated positions read `0`. A follow-up corner/edge probe (see
+//! [`crate::convolution`]'s doc for the full numbers — same `Kernel`
+//! engine, so the finding transfers directly) pinned the actual rule as
+//! **`reflect-101`**: mirror the out-of-bounds tap back across the border
+//! without duplicating the edge pixel, applied independently per axis
+//! (simultaneously on both axes at a corner). Both a hard-zero-if-any-tap-
+//! OOB rule and plain clamp-to-edge were checked against the same corner
+//! and edge cells and neither matches; reflect-101 matches exactly at
+//! every point tried, including the corner.
 //!
-//! **Left open, not fixed, and not routed around**: this is recorded as a
-//! confirmed, real divergence rather than absorbed into a weaker
-//! comparison mode. `vaco-conformance`'s own `filter-vaco-filter-convolve`
-//! suite does not include a `sobel`/`prewitt`/`scharr` case for exactly
-//! this reason — shipping one that is known to fail, or downgrading it to
-//! hide the failure, would both be worse than leaving it out and writing
-//! down why.
+//! **Fixed**: [`crate::convolution::Kernel::value_at`] now samples via
+//! [`crate::common::sample_reflect101`] instead of returning a hard zero,
+//! so `convolution`, `sobel`, `prewitt`, and `scharr` all share the pinned
+//! rule. `roberts` and `kirsch` are separate modules (different kernel
+//! shape, not routed through `Kernel::value_at`) with their own,
+//! independently measured border behaviour, unaffected by this change.
+//! `erosion`/`dilation`/`deflate`/`inflate` also do not go through this
+//! engine — they share a different module, `crate::morph`, with its own
+//! separately-reasoned border claim; see that module's doc.
 
 use vaco_core::{MediaType, Result};
 use vaco_filter_core::adapt::{FrameFilter, FrameOut, Simple};
@@ -152,15 +148,9 @@ impl TwoGradient {
         for y in 0..h {
             let mut row = Vec::new();
             for x in 0..w {
-                let value = match (
-                    self.gx.value_at(rows, x, y, w, h),
-                    self.gy.value_at(rows, x, y, w, h),
-                ) {
-                    (Some(gx), Some(gy)) => {
-                        convolution::clamp_u8(gx.hypot(gy).mul_add(self.scale, self.delta))
-                    }
-                    _ => 0,
-                };
+                let gx = self.gx.value_at(rows, x, y, w, h);
+                let gy = self.gy.value_at(rows, x, y, w, h);
+                let value = convolution::clamp_u8(gx.hypot(gy).mul_add(self.scale, self.delta));
                 row.push(value);
             }
             out.push(row);
@@ -287,6 +277,25 @@ mod tests {
         let rows: Vec<&[u8]> = img.iter().map(Vec::as_slice).collect();
         let out = g.apply_plane(&rows, 5, 5);
         assert_eq!(out[2][2], 20);
+    }
+
+    /// The discriminating probe from this module's doc: a two-axis,
+    /// all-distinct-values source run through `sobel`'s full magnitude.
+    /// Pinned against real `ffmpeg 8.1 -vf sobel` output at the corner
+    /// (`0`) and an adjacent edge cell (`8`) — the `ramp` source above
+    /// can't tell reflect-101 apart from a hard zero-border rule since it
+    /// varies in only one axis; this one can.
+    #[test]
+    fn sobel_border_uses_reflect_101_confirmed_at_a_corner() {
+        let opts = Opts::default();
+        let g = TwoGradient::new(SOBEL_GX, SOBEL_GY, 1.0, &opts).unwrap();
+        let img: Vec<Vec<u8>> = (0..5)
+            .map(|y| (0..5).map(|x| (1 + 10 * y + x) as u8).collect())
+            .collect();
+        let rows: Vec<&[u8]> = img.iter().map(Vec::as_slice).collect();
+        let out = g.apply_plane(&rows, 5, 5);
+        assert_eq!(out[0][0], 0, "corner: both axes reflect, Gx=Gy=0");
+        assert_eq!(out[0][1], 8, "edge: only the row axis reflects");
     }
 
     /// Independent oracle: a uniform (DC) field has zero gradient

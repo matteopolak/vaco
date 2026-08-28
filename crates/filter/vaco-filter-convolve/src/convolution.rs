@@ -24,21 +24,44 @@
 //! comes back `110` on a `50` field: `out = round(sum(kernel*window)/rdiv) +
 //! bias`, bias added *after* the division, both before the final clip.
 //!
-//! # Measured: a hard zero at any pixel whose kernel would read out of bounds
+//! # Border, pinned 2026-08-28: `reflect-101`, per axis, including at corners
+//!
+//! An earlier pass (see [`crate::edge`]'s doc for the full history) took
 //!
 //! ```text
 //! ffmpeg -f lavfi -i "color=gray:s=5x5,format=gray8,geq=lum='10*X'" \
 //!   -vf "convolution=0m='-1 0 1 -2 0 2 -1 0 1':0rdiv=1" -f rawvideo -pix_fmt gray8 -frames:v 1 -
 //! ```
 //!
-//! gives `0 80 80 80 0` per row: the outer column is not computed with a
-//! replicated or zero-padded border, it is forced to `0` outright. This is
-//! the opposite of [`crate::boxblur`]'s measured border rule
-//! (replicate-and-average) — two filters, two different rules, both
-//! measured rather than assumed to match. [`crate::edge`] reuses this
-//! module's engine for `sobel`/`prewitt`/`scharr` and inherits the same
-//! zero border (confirmed by the identical `80` interior values above); see
-//! that module's doc for where `roberts`/`kirsch` were measured to differ.
+//! (`0 80 80 80 0` per row) as evidence of a hard "force zero at any
+//! out-of-bounds tap" rule. It was never actually distinguishing: that
+//! source varies only in `X`, so every row is identical, and the specific
+//! matrix used is a discrete derivative. Reflecting a *linear* ramp
+//! (`reflect-101`: index `-1` mirrors to index `1`, not index `0`) exactly
+//! cancels a derivative kernel's border output too — `0` there is
+//! consistent with reflect-101, not proof of a literal force-zero.
+//!
+//! A real corner/edge probe (5x5 source, `value = 1 + 10*row + col`, every
+//! cell a distinct integer, run through `sobel` — same kernel engine,
+//! `crate::common::sample_reflect101`'s own unit test reproduces the exact
+//! numbers) settles it: at the true corner `(0,0)` the reference gives
+//! `0`, which matches reflecting *both* axes simultaneously to sample
+//! `(1,1)=12` (`Gx=Gy=0` there by direct calculation) and does **not**
+//! match zero-pad (predicts `18`) or plain clamp-to-edge (predicts `4`).
+//! At edge cell `(0,1)` the reference gives `8`, matching a single-axis
+//! reflect to row `1` (`Gx=8, Gy=0`) and not the other two hypotheses.
+//! `sample_reflect101` implements this: mirror without duplicating the
+//! edge pixel, applied independently per axis, so a corner tap reflects
+//! both coordinates at once. This is a different rule from
+//! [`crate::boxblur`]'s measured border (replicate-and-average) and from
+//! `erosion`/`dilation`/`deflate`/`inflate`'s `crate::morph` engine (a
+//! wholly separate module, not this one) — three different border rules
+//! in this crate, each pinned by its own discriminating probe rather than
+//! assumed to match. [`crate::edge`] reuses this module's engine
+//! (`Kernel::value_at`) for `sobel`/`prewitt`/`scharr`, so all four now
+//! share the pinned reflect-101 rule; see that module's doc for
+//! `roberts`/`kirsch`, which are separate modules with their own,
+//! independently measured border behaviour.
 //!
 //! # Not implemented
 //!
@@ -178,13 +201,10 @@ impl Mode {
     }
 }
 
-/// One plane's resolved kernel: taps as `(dx, dy, weight)`, plus the
-/// half-extent in each axis (for the zero-border test).
+/// One plane's resolved kernel: taps as `(dx, dy, weight)`.
 #[derive(Debug, Clone)]
 pub(crate) struct Kernel {
     taps: Vec<(i32, i32, f64)>,
-    rx: i32,
-    ry: i32,
     rdiv: f64,
     bias: f64,
 }
@@ -212,7 +232,7 @@ impl Kernel {
         if values.is_empty() {
             return Err("convolution: empty matrix".to_owned());
         }
-        let (taps, rx, ry) = match mode {
+        let taps = match mode {
             Mode::Square => {
                 let n = (values.len() as f64).sqrt().round() as usize;
                 if n * n != values.len() || n.is_multiple_of(2) {
@@ -228,7 +248,7 @@ impl Kernel {
                     let dx = common::to_i32(i % n) - r;
                     taps.push((dx, dy, w));
                 }
-                (taps, r, r)
+                taps
             }
             Mode::Row => {
                 let n = values.len();
@@ -236,12 +256,11 @@ impl Kernel {
                     return Err("convolution: row matrix must have odd length".to_owned());
                 }
                 let r = common::to_i32(n >> 1);
-                let taps = values
+                values
                     .iter()
                     .enumerate()
                     .map(|(i, &w)| (common::to_i32(i) - r, 0, w))
-                    .collect();
-                (taps, r, 0)
+                    .collect()
             }
             Mode::Column => {
                 let n = values.len();
@@ -249,12 +268,11 @@ impl Kernel {
                     return Err("convolution: column matrix must have odd length".to_owned());
                 }
                 let r = common::to_i32(n >> 1);
-                let taps = values
+                values
                     .iter()
                     .enumerate()
                     .map(|(i, &w)| (0, common::to_i32(i) - r, w))
-                    .collect();
-                (taps, 0, r)
+                    .collect()
             }
         };
         let sum: f64 = values.iter().sum();
@@ -265,38 +283,34 @@ impl Kernel {
         };
         Ok(Self {
             taps,
-            rx,
-            ry,
             rdiv: effective_rdiv,
             bias,
         })
     }
 
-    /// The raw `sum(kernel*window)/rdiv` at `(x, y)`, or `None` if any tap
-    /// would read outside `[0, w) x [0, h)` — the measured zero-border
-    /// rule shared by `convolution` and, per [`crate::edge`]'s doc, by
-    /// `sobel`/`prewitt`/`scharr`.
+    /// The raw `sum(kernel*window)/rdiv` at `(x, y)`. Any tap that would
+    /// read outside `[0, w) x [0, h)` is reflected back in via
+    /// [`common::sample_reflect101`] (mirror without duplicating the edge
+    /// pixel, independently per axis, including at corners) — the rule
+    /// pinned by this module's doc, shared by `convolution` and, per
+    /// [`crate::edge`]'s doc, by `sobel`/`prewitt`/`scharr`.
     ///
     /// Exposed (not just [`Self::apply`]) because [`crate::edge`] needs the
     /// un-rounded, un-biased value for two kernels (`Gx`, `Gy`) before
     /// combining them into one magnitude.
-    pub(crate) fn value_at(&self, rows: &[&[u8]], x: i32, y: i32, w: i32, h: i32) -> Option<f64> {
-        if x - self.rx < 0 || x + self.rx >= w || y - self.ry < 0 || y + self.ry >= h {
-            return None;
-        }
+    pub(crate) fn value_at(&self, rows: &[&[u8]], x: i32, y: i32, w: i32, h: i32) -> f64 {
         let mut acc = 0.0f64;
         for &(dx, dy, weight) in &self.taps {
-            let v = common::sample_clamped(rows, x + dx, y + dy, w, h);
+            let v = common::sample_reflect101(rows, x + dx, y + dy, w, h);
             acc += weight * f64::from(v);
         }
-        Some(acc / self.rdiv)
+        acc / self.rdiv
     }
 
-    /// Apply this kernel at `(x, y)`, or `None` if any tap would read
-    /// outside `[0, w) x [0, h)` — the measured zero-border rule.
-    fn apply(&self, rows: &[&[u8]], x: i32, y: i32, w: i32, h: i32) -> Option<u8> {
-        let result = self.value_at(rows, x, y, w, h)?.round() + self.bias;
-        Some(clamp_u8(result))
+    /// Apply this kernel at `(x, y)`.
+    fn apply(&self, rows: &[&[u8]], x: i32, y: i32, w: i32, h: i32) -> u8 {
+        let result = self.value_at(rows, x, y, w, h).round() + self.bias;
+        clamp_u8(result)
     }
 }
 
@@ -313,14 +327,14 @@ pub(crate) fn clamp_u8(value: f64) -> u8 {
     }
 }
 
-/// Apply `kernel` to a whole plane, writing `0` at any pixel its window
-/// would read out of bounds.
+/// Apply `kernel` to a whole plane, reflecting any out-of-bounds tap in
+/// via [`common::sample_reflect101`] (see [`Kernel::value_at`]'s doc).
 pub(crate) fn apply_plane(rows: &[&[u8]], w: i32, h: i32, kernel: &Kernel) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
     for y in 0..h {
         let mut row = Vec::new();
         for x in 0..w {
-            row.push(kernel.apply(rows, x, y, w, h).unwrap_or(0));
+            row.push(kernel.apply(rows, x, y, w, h));
         }
         out.push(row);
     }
@@ -421,10 +435,13 @@ mod tests {
         assert_eq!(out[1][1], 110);
     }
 
-    /// Pinned against the reference probe in this module's doc: any pixel
-    /// whose 3x3 window would read out of bounds comes back exactly `0`.
+    /// Pinned against the reference probe in this module's doc: on an
+    /// `X`-only ramp, the border happens to come back `0` too — but that
+    /// source can't tell a hard zero-border rule apart from reflect-101
+    /// (both cancel a linear derivative at the edge). Kept as a regression
+    /// pin on the *value*, not evidence for *why*.
     #[test]
-    fn border_pixels_are_forced_to_zero() {
+    fn border_on_a_linear_ramp_comes_back_zero() {
         let kernel = Kernel::parse("-1 0 1 -2 0 2 -1 0 1", Mode::Square, 1.0, 0.0).unwrap();
         let rows_owned: Vec<Vec<u8>> = (0..5).map(|_| vec![0u8, 10, 20, 30, 40]).collect();
         let rows: Vec<&[u8]> = rows_owned.iter().map(Vec::as_slice).collect();
@@ -434,6 +451,24 @@ mod tests {
         assert_eq!(out[2][1], 80);
         assert_eq!(out[2][2], 80);
         assert_eq!(out[2][3], 80);
+    }
+
+    /// The actual discriminating probe: a two-axis, all-distinct-values
+    /// source (`value = 1 + 10*row + col`) run through the real Sobel `Gx`
+    /// matrix. Pinned against real `ffmpeg 8.1 -vf sobel` output at the
+    /// corner (`0`) and an adjacent edge cell (`8`) — see this module's
+    /// doc for the full derivation and why the ramp test above can't tell
+    /// reflect-101 apart from a hard zero-border rule, while this one can.
+    #[test]
+    fn border_uses_reflect_101_confirmed_at_a_corner() {
+        let kernel = Kernel::parse("-1 0 1 -2 0 2 -1 0 1", Mode::Square, 1.0, 0.0).unwrap();
+        let rows_owned: Vec<Vec<u8>> = (0..5)
+            .map(|y| (0..5).map(|x| (1 + 10 * y + x) as u8).collect())
+            .collect();
+        let rows: Vec<&[u8]> = rows_owned.iter().map(Vec::as_slice).collect();
+        let out = apply_plane(&rows, 5, 5, &kernel);
+        assert_eq!(out[0][0], 0, "corner: both axes reflect, Gx cancels to 0");
+        assert_eq!(out[0][1], 8, "edge: only the row axis reflects");
     }
 
     /// Independent oracle: the identity matrix must be a true identity —

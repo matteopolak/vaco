@@ -35,12 +35,31 @@
 //!
 //! # Border
 //!
-//! Not separately modelled: clamp-to-edge and "omit the missing neighbour"
-//! give identical results for a `min`/`max` combine, since a value can
-//! never change a running max/min by being repeated — self is already a
-//! candidate (see above), so a corner's clamped neighbours duplicate values
-//! already in the candidate set. Confirmed against a corner-impulse probe
-//! matching this module's [`crate::dilation`] tests.
+//! For `Dilate`/`Erode`: not separately modelled. Clamp-to-edge and "omit
+//! the missing neighbour" give identical results for a `min`/`max`
+//! combine, since a value can never change a running max/min by being
+//! repeated — self is already a candidate (see above), so a corner's
+//! clamped neighbours duplicate values already in the candidate set.
+//! Confirmed against a corner-impulse probe matching this module's
+//! [`crate::dilation`] tests.
+//!
+//! For `InflateAvg`/`DeflateAvg`: that argument does **not** carry over —
+//! averaging is not immune to duplicated border values the way min/max is
+//! (clamping a neighbour in *does* change an average). This needed its
+//! own, separate measurement rather than inheriting the min/max reasoning.
+//! Correction/pin, 2026-08-28 (same campaign, and same discriminating-
+//! source discipline, as [`crate::edge`]'s `sobel` finding): a corner probe
+//! with all-distinct values (`value = 1 + 10*row + col`, `5x5`) against
+//! real `ffmpeg 8.1 -vf inflate` gives `5` at the corner. `apply_plane`'s
+//! actual rule — clamp-to-edge via [`common::sample_clamped`] for each of
+//! the fixed 8 offsets, **always** dividing by `8` (not by however many
+//! offsets were actually in-bounds) — predicts exactly `5`. A competing
+//! "omit the out-of-bounds offsets and divide by the count that's left"
+//! hypothesis predicts `8` at the same pixel and is ruled out. So the
+//! existing, already-shipped implementation is confirmed correct for
+//! `InflateAvg`/`DeflateAvg` too, on a source that can actually tell the
+//! two hypotheses apart — this was previously assumed by extension from
+//! the min/max case rather than independently measured.
 
 use crate::common;
 
@@ -312,5 +331,31 @@ mod tests {
                 assert_eq!(eroded[y][x], 255 - dilated_inverted[y][x], "({x},{y})");
             }
         }
+    }
+
+    /// Pinned against real `ffmpeg 8.1 -vf inflate`/`deflate`/`dilation`/
+    /// `erosion` on an all-distinct-values corner probe (see this module's
+    /// doc): confirms clamp-to-edge with a *fixed* divide-by-8 for the
+    /// averaging ops, ruling out an "omit the out-of-bounds offsets and
+    /// divide by however many are left" alternative, which predicts a
+    /// different value (`8`, not `5`) at this exact corner.
+    #[test]
+    fn corner_probe_matches_the_reference_for_all_four_ops() {
+        let img: Vec<Vec<u8>> = (0..5)
+            .map(|y| (0..5).map(|x| (1 + 10 * y + x) as u8).collect())
+            .collect();
+        let rows: Vec<&[u8]> = img.iter().map(Vec::as_slice).collect();
+        let default_params = MorphParams {
+            coordinates: 255,
+            threshold: 65535,
+        };
+        let dilated = apply_plane(&rows, 5, 5, Op::Dilate, default_params);
+        let eroded = apply_plane(&rows, 5, 5, Op::Erode, default_params);
+        let inflated = apply_plane(&rows, 5, 5, Op::InflateAvg, default_params);
+        let deflated = apply_plane(&rows, 5, 5, Op::DeflateAvg, default_params);
+        assert_eq!(dilated[0][0], 12);
+        assert_eq!(eroded[0][0], 1);
+        assert_eq!(inflated[0][0], 5);
+        assert_eq!(deflated[0][0], 1);
     }
 }

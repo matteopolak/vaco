@@ -103,6 +103,40 @@ pub(crate) fn sample_clamped(rows: &[&[u8]], x: i32, y: i32, w: i32, h: i32) -> 
     rows.get(uy).and_then(|r| r.get(ux)).copied().unwrap_or(0)
 }
 
+/// Reflect an out-of-range index into `[0, n)` without duplicating the
+/// edge sample (`reflect-101`/`gDL_BORDER_REFLECT_101`: index `-1` maps to
+/// `1`, not `0`; index `n` maps to `n-2`, not `n-1`). `n <= 1` collapses
+/// everything to `0` (there is nothing to mirror off of).
+///
+/// Pinned for [`crate::convolution::Kernel::value_at`] (see that module's
+/// doc for the corner/edge probe that ruled out zero-pad and plain
+/// clamp-to-edge in favour of this rule specifically).
+#[must_use]
+fn reflect_101(index: i32, n: i32) -> i32 {
+    if n <= 1 {
+        return 0;
+    }
+    let period = 2 * (n - 1);
+    let m = index.rem_euclid(period);
+    if m >= n { period - m } else { m }
+}
+
+/// Sample an 8-bit-unit plane at signed coordinates using the `reflect-101`
+/// border extension (mirror without duplicating the edge pixel), applied
+/// independently per axis — including simultaneously at a corner, where
+/// both axes are out of range at once. See [`reflect_101`] and
+/// [`crate::convolution::Kernel::value_at`]'s doc for the measurement that
+/// pinned this down.
+#[must_use]
+pub(crate) fn sample_reflect101(rows: &[&[u8]], x: i32, y: i32, w: i32, h: i32) -> u8 {
+    let ry = reflect_101(y, h);
+    let rx = reflect_101(x, w);
+    let (Ok(uy), Ok(ux)) = (usize::try_from(ry), usize::try_from(rx)) else {
+        return 0;
+    };
+    rows.get(uy).and_then(|r| r.get(ux)).copied().unwrap_or(0)
+}
+
 /// Collect `plane`'s rows as borrowed slices, for repeated clamp-indexed
 /// sampling by [`sample_clamped`]. Missing rows (never expected, but a frame
 /// pool bug would rather show up as an empty slice than a panic) read as
@@ -133,5 +167,40 @@ mod tests {
         assert_eq!(sample_clamped(&rows, -1, -1, 3, 2), 1);
         assert_eq!(sample_clamped(&rows, 3, 5, 3, 2), 6);
         assert_eq!(sample_clamped(&rows, 1, 0, 3, 2), 2);
+    }
+
+    #[test]
+    fn reflect_101_mirrors_without_duplicating_the_edge() {
+        // n=5: valid indices 0..=4. -1 mirrors to 1 (not 0), 5 mirrors to
+        // 3 (not 4) — the "101" distinction from plain clamp/replicate.
+        assert_eq!(reflect_101(-1, 5), 1);
+        assert_eq!(reflect_101(-2, 5), 2);
+        assert_eq!(reflect_101(5, 5), 3);
+        assert_eq!(reflect_101(6, 5), 2);
+        assert_eq!(reflect_101(2, 5), 2);
+        assert_eq!(reflect_101(0, 5), 0);
+        assert_eq!(reflect_101(4, 5), 4);
+    }
+
+    #[test]
+    fn sample_reflect101_matches_a_measured_corner_probe() {
+        // Real 5x5 source (value = 1 + 10*row + col), and the exact
+        // `sobel` output ffmpeg 8.1 produces at the corner and its
+        // neighbour — see `convolution`'s doc for the full derivation.
+        // This pins the per-axis reflect-101 rule independently of any
+        // particular filter's kernel math.
+        let rows: [&[u8]; 5] = [
+            &[1, 2, 3, 4, 5],
+            &[11, 12, 13, 14, 15],
+            &[21, 22, 23, 24, 25],
+            &[31, 32, 33, 34, 35],
+            &[41, 42, 43, 44, 45],
+        ];
+        // Corner tap (-1,-1) reflects to (1,1) = 12.
+        assert_eq!(sample_reflect101(&rows, -1, -1, 5, 5), 12);
+        // Edge tap (-1, 0) reflects x only, to (1, 0) = 2.
+        assert_eq!(sample_reflect101(&rows, -1, 0, 5, 5), 2);
+        // In-bounds sample is untouched.
+        assert_eq!(sample_reflect101(&rows, 2, 2, 5, 5), 23);
     }
 }

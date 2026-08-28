@@ -8,18 +8,29 @@
 # window) is a second, independent axis the default `radiusV=0` collapses
 # into "just use radius".
 #
-# `sobel`/`prewitt`/`scharr` are deliberately NOT in this suite. This
-# pass found a real, confirmed border-handling divergence in `sobel`
-# (this crate's whole-pixel "any out-of-bounds tap forces 0" rule against
-# the reference's real, nonzero border values) — see `src/edge.rs`'s own
-# module doc, "Correction, 2026-08-28", for the full measurement. It is
-# left open rather than fixed (a real per-axis border-clamp change to
-# shared kernel machinery, not a cheap one) and rather than shipped here
-# as a failing or downgraded case — a `filter`-tool suite with a case
-# known to diverge would either fail every run for a known reason (noise
-# any contributor has to re-diagnose) or, worse, invite exactly the
-# `downgrade_reason` misuse this harness's own design was built to
-# prevent.
+# `sobel`/`prewitt` border handling (2026-08-28): the previous pass found
+# a real divergence — this crate's `Kernel::value_at` forced a hard `0`
+# at any pixel whose kernel window went out of bounds, but the reference
+# does not. A corner/edge probe (all-distinct-value 5x5 source; see
+# `src/convolution.rs`'s doc, "Border, pinned 2026-08-28") pinned the
+# actual rule as `reflect-101` (mirror the out-of-bounds tap back across
+# the border without duplicating the edge pixel, independently per axis,
+# including simultaneously at corners) and ruled out both zero-pad and
+# plain clamp-to-edge. `Kernel::value_at` now implements this, verified
+# with zero mismatches across all 400 pixels of `gray8-ramp-20` (every
+# border row/column and all four corners) for both `sobel` and `prewitt`.
+# Cases re-added below.
+#
+# `scharr` is deliberately still NOT in this suite: the same exhaustive
+# check found a *different*, unrelated divergence in `scharr` specifically
+# — 18/400 interior (non-border) pixels mismatch by exactly one count
+# (predicted magnitude ~42.8 truncates/rounds to 42 or 43; reference gives
+# 41), which is not explained by the border rule at all (these pixels'
+# whole 3x3 window is in-bounds). This looks like a `scharr`-specific
+# rounding or normalisation question, not yet measured further. Left open
+# rather than guessed at, for the same reason `sobel`'s border rule was
+# left open until it could be pinned: a fix that matches most points but
+# not all is worse than an honest gap.
 
 schema = 1
 suite  = "filter-vaco-filter-convolve"
@@ -41,6 +52,9 @@ values = [
   { id = "median-default",      argv = ["{media}", "median", "radius=2", "gray8", "20", "20", "gray8", "20", "20"] },
   { id = "median-percentile25", argv = ["{media}", "median", "radius=2:percentile=0.25", "gray8", "20", "20", "gray8", "20", "20"] },
   { id = "median-anisotropic",  argv = ["{media}", "median", "radius=3:radiusV=1", "gray8", "20", "20", "gray8", "20", "20"] },
+  { id = "sobel-default",       argv = ["{media}", "sobel", "", "gray8", "20", "20", "gray8", "20", "20"] },
+  { id = "sobel-scale-delta",   argv = ["{media}", "sobel", "scale=2:delta=5", "gray8", "20", "20", "gray8", "20", "20"] },
+  { id = "prewitt-default",     argv = ["{media}", "prewitt", "", "gray8", "20", "20", "gray8", "20", "20"] },
 ]
 
 [compare]
