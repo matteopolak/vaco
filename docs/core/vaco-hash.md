@@ -51,6 +51,17 @@ would silently corrupt every downstream comparison:
   See `ADLER32_FRAME_SEED` and `ADLER32_STANDARD_SEED`.
 - **SHA-1's accepted spelling is `sha160`.** `-hash sha1` is refused.
 
+`crc32c` (added 2026-08-28 for `vaco-protocol-sctp`, #561) is a second,
+distinct CRC-32 configuration (`CRC_32_ISCSI`/Castagnoli — a different
+polynomial from `crc32`'s ISO-HDLC, the same one iSCSI/ext4 use), the
+checksum RFC 4960 Appendix B specifies for SCTP. Not a new dependency:
+the `crc` crate this file already owns generates the table for any
+`crc::Algorithm` parameterisation, the same D11 reasoning `CRC32_NUT`
+above already established. Its own check value (`0xE3069283` for the
+standard `"123456789"` CRC-catalog check string) is confirmed against an
+independent from-scratch bit-level Python implementation of the
+polynomial, not merely recalled.
+
 ## How to change it
 
 Adding an algorithm is a D10 dependency decision first and a variant here

@@ -448,6 +448,20 @@ const CRC32_NUT: crc::Algorithm<u32> = crc::Algorithm {
 
 static CRC32_NUT_TABLE: crc::Crc<u32> = crc::Crc::<u32>::new(&CRC32_NUT);
 
+/// CRC-32C (Castagnoli, `CRC_32_ISCSI`) — RFC 4960 (SCTP) Appendix B's
+/// checksum, the same configuration iSCSI/ext4 use. Added 2026-08-28 for
+/// `vaco-protocol-sctp` (#561); a distinct polynomial from [`crc32`]
+/// (ISO-HDLC), so a distinct named constant, per this file's own D11
+/// reasoning above: one dependency, any number of measured/cited
+/// configurations of it.
+static CRC32C_TABLE: crc::Crc<u32> = crc::Crc::<u32>::new(&crc::CRC_32_ISCSI);
+
+/// One-shot CRC-32C (Castagnoli).
+#[must_use]
+pub fn crc32c(data: &[u8]) -> u32 {
+    CRC32C_TABLE.checksum(data)
+}
+
 /// One-shot NUT CRC-32. See [`CRC32_NUT`] for what makes this different
 /// from [`crc32`].
 #[must_use]
@@ -515,6 +529,23 @@ mod tests {
     #[test]
     fn crc32_matches_the_ieee_check_value() {
         assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
+    }
+
+    /// `"123456789"` is the standard CRC-catalog check string for
+    /// `CRC-32C`/`CRC_32_ISCSI`'s own published check value (the same
+    /// convention `crc32_matches_the_ieee_check_value` above exercises
+    /// for plain CRC-32) -- independently reproduced here via a
+    /// from-scratch bit-level (not table-driven) Python implementation of
+    /// the reflected `0x1EDC6F41`/`0x82F63B78` polynomial before being
+    /// trusted, not merely recalled: both agreed on `0xE3069283`.
+    #[test]
+    fn crc32c_matches_the_iscsi_check_value() {
+        assert_eq!(crc32c(b"123456789"), 0xE306_9283);
+    }
+
+    #[test]
+    fn crc32c_of_empty_input_is_zero() {
+        assert_eq!(crc32c(b""), 0);
     }
 
     /// The check value for the same `"123456789"` string under
