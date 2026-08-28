@@ -546,86 +546,102 @@ encoder meets; extending it to progressive output would also need the
 only useful if this crate's own progressive decoder can be trusted to check
 it against.
 
-### C-13 update: `EncoderDesc`, `DecoderDesc::make` and CLI dispatch landed; a payload-carrying `CodecId::Ext` did not
+### AC-3 bit-allocation model's masking-curve constants are unverified against the primary spec
 
-The three parts C-13 asked for are done: `vaco-codec-core` has `EncoderDesc`
-(mirroring `DecoderDesc`, which now carries a `make: fn(Limits) -> Box<dyn
-Decoder>` it did not have either), `xtask/src/registry.rs`'s `KINDS` maps
-`"encoder"` to a real typed table, and `vaco-cli`'s `check_codecs`/
-`run_pipeline` resolve a named `-c:v`/`-c:a` through `vaco_registry::
-encoder_by_name` and build a real decode-then-encode leg instead of only
-accepting `"copy"`. QOI, the PNM family and the simple-image repertoire
-(PCX/TGA/SGI/XWD/XBM; BMP already had a `CodecId`) are registered as
-decoders and encoders. `vaco -i in8.bmp -c:v qoi -f null -` now runs an
-actual decode(bmp)-then-encode(qoi) pipeline and exits 0.
+`vaco-codec-ac3::tables_bitalloc` (Annex A of ATSC A/52:2018) could not be
+checked against the standard's own text in this environment (no network
+access to the document, and D7 rules out reading the reference decoder's
+source for the same numbers). `BNDSZ`, `HTH`, `LATAB`, `FASTDECAY`/
+`SLOWDECAY`/`FASTGAIN`/`SLOWGAIN`/`DBKNEE`/`FLOOR`, and `BAPTAB` are all
+reconstructed from the algorithm's well-documented *structure* (a log-power
+masking curve with fast/slow leaky-integrator decay, a hearing-threshold
+floor, and an SNR-to-`bap` lookup) rather than transcribed values.
 
-The "policy for adding a codec id without a core-crate edit" half did not
-survive contact with the rest of the tree. A `CodecId::Ext(&'static
-ExtCodec)` payload-carrying variant was built, tested and then reverted: at
-least one existing call site (`vaco-bsf-generic`'s noise generator) casts
-`CodecId as u64` for a hash seed, and Rust only permits that cast when
-*every* variant of the enum is fieldless — confirmed directly (`cargo check
--p vaco-bsf-generic` fails with E0605 the moment any variant carries data,
-regardless of which variant a given run actually constructs). Thirteen
-`CodecId` variants were hand-added instead (the same shape every prior
-codec-family addition to this table already took), which is a real,
-un-avoided core-crate edit per codec.
+This is the dominant measured source of decode error: `bap` is derived, never
+transmitted, so a wrong masking-curve constant desyncs mantissa bit reads
+rather than merely degrading quality. The crate's own `tests/conformance.rs`
+shows the real spread — plain stereo AC-3 at 192k/384k decodes with
+`rms_err` around 0.06 (bounded, plausible, still far from bit-exact), while
+mono, 5.1, a different dialnorm value, and 44.1 kHz all show `max_abs_err`
+well above 1.0 (impossible for valid PCM, meaning actual bitstream desync for
+part of the signal). The fix needs a primary or independently-transcribed
+copy of Annex A's tables, diffed against `tables_bitalloc.rs`, then
+re-measured against the same conformance fixtures to see which rows move.
 
-**Proposed seam, unbuilt:** the doc comment on `CodecEntry` already names
-plan 15 §1.1's intended fix — generate the enum and table from a
-`codecs.toml` the way `vaco-pixfmt` generates its own tables — and that
-would still keep every variant fieldless (a generator can emit plain unit
-variants same as a human can). It was not attempted here: transcribing the
-existing ~150-entry table into a generator's input without introducing a
-silent drift risk is a larger, separate piece of work, and the reachability
-fix did not depend on it. Whoever picks up plan 15 §1.1 should read this
-entry first — the fieldless constraint is the one design fact that rules out
-the runtime-registration shortcut that looks obvious otherwise.
+### AC-3 IMDCT window is a KBD(alpha=5) approximation, not the spec's own table
 
-### A single still image demuxed with no timeline cannot be muxed to almost any real container
+`vaco-codec-ac3::imdct::kbd_window` approximates AC-3's specific 256-tap
+window (ATSC A/52:2018 §7.5.3) with a Kaiser-Bessel-derived window, alpha=5 —
+a documented close approximation in the audio-codec literature, not the same
+table. The IMDCT itself is exact (general Princen-Bradley transform math,
+verified independently of any codec-specific table). Swapping in the real
+window needs the same primary-text access the bit-allocation tables need;
+until then this is a second, additive source of the measured error above.
 
-`vaco-demux-image2`'s `SingleSourceDemuxer` (the path a bare `-i in.bmp`
-takes, no glob pattern) sets `packet.pts = Timestamp::NONE` deliberately —
-measured against the reference, which reports no timeline at all for a lone
-still image rather than a synthetic `0`. `vaco-format-core::interleave`
-refuses any packet with neither `pts` nor `dts` unless the muxer declares
-`FormatFlags::NOTIMESTAMPS`, and only `null` and `ffmetadata` declare it
-today. The result: `vaco -i in.bmp -c copy -f image2 out.bmp` (no codec
-change at all) fails with "this container needs timestamps and the packet
-has none", and so does every other muxer tried (`md5`, `matroska` was not
-tried but shares the same `interleave` path). Found verifying #652's
-decode-then-encode leg — `-f null -` was the only output that accepted the
-same pipeline. `vaco-mux-image2` (and plausibly other single-shot-friendly
-muxers) is missing `FormatFlags::NOTIMESTAMPS`; that crate is not owned by
-this session.
+### AC-3 coupling and delta-bit-allocation are parsed but not reconstructed
 
-### `vaco-demux-image2` does not map most image codecs' extensions to a `CodecId`
+`vaco-codec-ac3::audblk::decode` reads every coupling-related field
+(`cplinu`, `chincpl`, `cplcoexp`/`cplcomant`, the coupling-band structure) and
+every delta-bit-allocation field (`chdeltbae`, `deltoffst`/`deltlen`/`deltba`)
+correctly enough to stay bit-aligned, but does not apply either to
+reconstruction: a coupled channel's shared high-frequency spectrum is left
+silent rather than rebuilt from the coupling channel, and delta bit
+allocation's fine-tuning adjustment to the SNR curve is ignored. Both are
+real gaps for content that uses them (coupling especially, for 5.1 content
+at lower bitrates than this session's fixtures used). Fixing coupling needs
+building the shared coupling-channel spectrum and redistributing it across
+`chincpl` channels per `cplcoexp`/`cplcomant`; fixing delta bit allocation
+needs applying the transmitted per-segment offset directly to
+`bitalloc::compute_bap`'s mask before the SNR lookup.
 
-With QOI/PNM-family/PCX/TGA/SGI/XWD/XBM now registered as decoders (see the
-C-13 update above), `vaco -i in.ppm -c:v qoi -f null -` still fails —
-"Internal error: a stream being transcoded has no known input codec" — because
-`vaco-demux-image2`'s extension table only knows a handful of codecs
-(BMP among them) and reports `codec_id: None` for the rest. The decoders
-exist and are reachable by name; they are simply never selected as the
-*input* side of a transcode until that demuxer's extension table is
-extended. Not attempted here: `vaco-demux-image2` is not owned by this
-session, and the finding was made verifying #652's CLI dispatch, not while
-working in that crate.
+### AC-3 dual mono (`acmod == 0`) is approximated as stereo, unmeasured
 
-### The simple-image codecs' pixel formats do not round-trip through each other without a filter stage
+`vaco_format_ac3::tables::acmod_layout` maps `acmod == 0` (two independent
+mono programme channels) to `ChannelLayout::STEREO`, on the strength of
+`vaco-demux-raw::ac3`'s measurement that the reference also reports it as
+`stereo` — but that measurement never actually produced a real `acmod == 0`
+encode to check the *samples* against (this `ffmpeg` build's `-c:a ac3`
+encoder was not observed emitting dual mono from any input tried this
+session). The channel-count and container-level report are probably right;
+whether the two decoded channels are independent programmes rather than a
+matrixed L/R pair has not been checked against real dual-mono audio.
 
-`vaco-cli`'s new decode-then-encode leg (#652) has no scale/pixel-format
-conversion between the decoder's output and the encoder's input — a decoded
-frame in a format the target encoder does not accept fails with that
-encoder's own `Unsupported` message rather than being converted. This is
-visible even within `vaco-codec-image-simple` alone: a paletted (1/4/8bpp)
-BMP decodes to `Rgb24`, which `vaco-codec-qoi`'s encoder accepts, but
-`vaco-codec-image-simple`'s own BMP *encoder* only accepts `bgr24`/`bgra` —
-so `bmp(paletted) -> qoi -> bmp` fails on the final step with "bmp: encoder
-needs bgr24 or bgra input", even though both codecs are correctly registered
-and reachable. Reproducible with a 24bpp source instead: BMP decodes that to
-`Bgr24`, which `vaco-codec-qoi`'s encoder then refuses ("qoi: encoder needs
-rgb24 or rgba input"). Neither codec is wrong on its own — the gap is the
-missing conversion stage between them, which is `vaco-cli`/`vaco-sched`'s to
-add (a scale/format filter node between the decoder and encoder legs), not
-either codec crate's.
+### `vaco-demux-raw::ac3` and `vaco-format-ac3` both parse the AC-3 syncframe
+
+`vaco-demux-raw::ac3` (landed first, for #653) keeps its own inline
+sync/frame-size parser rather than depending on the `vaco-format-ac3` crate
+added afterward for the decoder — mirroring `vaco-format-mpegaudio`'s role
+for the mp3 family would mean the demuxer used the shared crate too. Not
+unified in the same session: `vaco-demux-raw::ac3` was complete, tested and
+closing an issue before `vaco-format-ac3` existed, and re-pointing a working,
+already-verified demuxer at a brand-new crate risked destabilising closed
+work for a cosmetic win. The two parsers were checked against the same real
+fixture bytes independently and agree; a future change should make the
+demuxer depend on `vaco-format-ac3::syncinfo` and delete its own copy.
+
+### AC-3 IMDCT is a direct O(n²) sum, not a fast transform
+
+`vaco-codec-ac3::imdct::imdct` computes every output sample as a full sum
+over all input coefficients rather than a butterfly/FFT-based fast IMDCT.
+Deliberate for this session (correctness first, and a fast transform is a
+much larger place to introduce a subtle bug than a direct sum), but it is
+the reason this crate's own conformance test takes noticeably longer per
+fixture than its frame count would suggest. A real-time decoder needs the
+fast form; `vaco-tx` (this workspace's existing transform crate, used by
+`vaco-codec-mpegaudio`) is the obvious place to look for a reusable kernel
+before writing a new one.
+
+### E-AC-3 AHT and spectral extension are not implemented
+
+`vaco-codec-ac3::eac3` walks independent/dependent substream structure and
+refuses (`Eac3Error::NotImplemented`, currently unreachable — see the
+module's own doc comment) rather than attempts AHT (Adaptive Hybrid
+Transform) or spectral extension reconstruction. Both replace substantial
+parts of classic AC-3's exponent/bit-allocation/mantissa pipeline for the
+bins they cover, and implementing them from specification recall alone,
+against fixtures generated by an encoder that may not even exercise them,
+was judged higher risk than value for this session — a confidently wrong
+reconstruction is a worse outcome than a clear refusal. The module is also
+entirely behind the non-default `patent-unverified-eac3-decode` feature
+regardless (E-AC-3 decode's patent status is unresolved per D9), so nothing
+here reaches a build anyone ships until that is settled separately.
