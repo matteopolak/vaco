@@ -1038,3 +1038,31 @@ needs a real picture type — worth a `FrameFlags`-adjacent field (or a fourth
 `FrameSideData` variant, if it should stay optional) once a real decoder is
 in the tree to populate it, rather than each caller re-discovering the
 absence independently.
+
+### `FrameData::Subtitle` has no producer, and its `SubtitleContent::Bitmap` layout is unverified against any real decoder
+
+Landed to close interface gap 17, and honestly incomplete in one way worth
+tracking rather than discovering again: the shape (`x`/`y`/`w`/`h`/`forced`
+plus `Bitmap`/`Text`/`Ass` content) was designed from the reference's own
+documented option surface and `AVSubtitleRect`'s well-known field set, not
+fitted to any of the three in-flight T2-13 decoder crates' actual internal
+representations, because touching those crates was explicitly out of scope
+while they are mid-write. In particular `SubtitleContent::Bitmap`'s
+`stride`/`data`/`palette` split is a guess at what a DVB/VobSub/PGS decoder
+will find convenient to hand over — the first of those three crates to
+actually construct a `FrameData::Subtitle` should treat this shape as a
+draft, not a contract, and report back if it does not fit (a palette
+ordering mismatch, a stride convention that does not match what RLE
+decoding naturally produces, a rect that needs to carry more than these six
+fields). Cheap to change now, while nothing depends on it; expensive once a
+decoder and a consumer both exist.
+
+### `vaco-codec-subtitle-teletext`'s module doc is stale as of gap 17 closing
+
+That crate's own doc still says `vaco_frame::FrameData` has exactly two
+variants — true when it was written, false as of this session's
+`FrameData::Subtitle` addition. Not fixed here: the crate is mid-write by
+another agent and out of this session's scope by explicit instruction.
+Whoever next touches that crate's docs should update the claim (and check
+whether the rest of that module's reasoning about "nowhere to put decoded
+output" still holds now that there is somewhere).
