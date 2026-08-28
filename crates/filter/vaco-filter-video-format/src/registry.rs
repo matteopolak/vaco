@@ -8,7 +8,6 @@ use vaco_filter_graph::registry::{FilterRegistry, Instance, Instantiate};
 const NAMES: &[&str] = &[
     "format",
     "fps",
-    "framerate",
     "noformat",
     "setdar",
     "setfield",
@@ -30,7 +29,6 @@ impl FilterRegistry for FormatRegistry {
         match req.name {
             "format" => crate::format::create(req),
             "fps" => crate::fps::create(req),
-            "framerate" => crate::framerate::create(req),
             "noformat" => crate::noformat::create(req),
             "setdar" => crate::setdar::create(req),
             "setfield" => crate::setfield::create(req),

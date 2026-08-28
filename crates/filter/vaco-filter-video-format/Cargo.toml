@@ -1,6 +1,6 @@
 [package]
 name = "vaco-filter-video-format"
-description = "Video format/metadata filters: format, noformat, setsar, setdar, setparams, setfield, setrange, fps, framerate."
+description = "Video format/metadata filters: format, noformat, setsar, setdar, setparams, setfield, setrange, fps. `framerate` moved to vaco-filter-motion."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

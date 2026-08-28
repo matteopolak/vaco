@@ -1,7 +1,8 @@
 # Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
 #
 # Video format/metadata filters: format, setsar, setdar, setfield, setrange,
-# fps, framerate. FT-4.4 (GitHub epic #54), the format child issue.
+# fps. FT-4.4 (GitHub epic #54), the format child issue. `framerate` moved
+# to vaco-filter-motion 2026-08-28 — see src/lib.rs's doc.
 #
 # Each `ctor` names the per-filter `pub const DESC: FilterDesc`; runtime
 # instantiation goes through `vaco_filter_video_format::registry::FormatRegistry`,
@@ -19,13 +20,6 @@ kind = "filter"
 name = "fps"
 long_name = "Force constant framerate"
 ctor = "vaco_filter_video_format::fps::DESC"
-media = "video"
-
-[[component]]
-kind = "filter"
-name = "framerate"
-long_name = "Upsamples or downsamples progressive source between specified frame rates"
-ctor = "vaco_filter_video_format::framerate::DESC"
 media = "video"
 
 [[component]]
