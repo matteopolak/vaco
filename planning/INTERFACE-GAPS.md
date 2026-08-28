@@ -1014,7 +1014,7 @@ MPEG-1 elementary stream still states `codec_name=mpeg2video` instead of
 the narrower gap the original report anticipated.
 
 
-## 17. No decoder in this workspace can produce a subtitle: `FrameData` has no `Subtitle` variant, and `Decoder` is fixed to return `Frame`
+## 17. No decoder in this workspace can produce a subtitle: `FrameData` has no `Subtitle` variant, and `Decoder` is fixed to return `Frame` — CLOSED 2026-08-28
 
 Reported by the epic #44 agent (T2-13: DVB/VobSub/PGS/CEA-608/708/Teletext
 decode), before writing any of the three new codec crates that epic asks for.
@@ -1067,6 +1067,62 @@ their real parsing/RLE/Hamming/DTVCC work does not sit idle waiting on this —
 they are ready to be wired in the moment this gap closes, but none of them
 register a `vaco-component.toml` `kind = "decoder"` fragment today, so none
 are reachable from the CLI yet.
+
+
+### Status, 2026-08-28
+
+`FrameData::Subtitle { rects: SmallVec<[SubtitleRect; 2]> }` landed
+(`crates/model/vaco-frame/src/subtitle.rs`), the rectangle-list shape this
+entry argued for: `SubtitleRect { x, y, w, h, forced, content }` where
+`content` is `Bitmap { stride, data: Buffer, palette: Vec<[u8; 4]> }` (DVB/
+VobSub/PGS), `Text(String)` (CEA-608/708 and Teletext once decoded, plus
+SubRip/WebVTT/TTML natively) or `Ass(String)` (ASS/SSA markup lines) — the
+reference's own `AVSubtitleRect` discrimination. The display-time window
+is deliberately *not* a field on the variant: `Frame::pts`/`Frame::duration`
+already carry it for every variant, and duplicating it here would give a
+subtitle frame two independent, possibly-disagreeing clocks. Bitmap pixel
+data goes through `Buffer::from_slice`, the same budget-tracked allocation
+video planes use, since a decoder's bitmap dimensions come from attacker-
+controlled bytes; the palette is a plain `Vec` because its 256-entry cap
+falls out of the `u8` index space with nothing extra to enforce.
+
+**`FrameData` stays a closed enum — no `#[non_exhaustive]`.** Considered and
+rejected: `FrameSideData` is `#[non_exhaustive]` because its variant set is
+genuinely open-ended (one per filter family, generated incrementally).
+`FrameData` partitions *what kind of decoded output a `Frame` is*, which is
+closed by the model itself — the reference's own `AVMediaType` enumerates
+the identical small, stable set for anything that decodes to a frame at
+all. Marking it `#[non_exhaustive]` now would force a wildcard arm onto
+every match this close just gave an explicit arm instead, trading twelve
+honest call sites today for silent pass-through at all of them against a
+media type the reference's own evidence says is not coming.
+
+**Every call site re-measured, not taken on report.** The originating
+report's own re-check (a same-line `FrameData::Video.*=>` grep) found 10
+files; redoing it with a brace-balanced scan across every `match` block
+mentioning both `FrameData::Video` and `FrameData::Audio` found **12**:
+the same 10 plus `vaco-filter-analysis::video::video_shape` and
+`vaco-filter-deinterlace::video::dims`, both multi-line struct patterns
+the single-line regex could not see. All 12 got an explicit arm (an arm
+that says "not applicable here" beats a wildcard, per this pass's own
+brief); `vaco-filter-core::link::Link::accepts` also matches on
+`FrameData` but already carries a `_ => false` wildcard that is correct
+independent of variant count (no `LinkFormat::Subtitle` exists to need
+its own arm), so it was left alone rather than padded with a redundant
+one. `vaco-frame` itself needed seven of the twelve (`is_subtitle`,
+`pixel_format`, `dimensions`, `planes_slice`/`_mut`, `plane`/`_mut`,
+`planes_mut`) — a subtitle frame reports no pixel format, no dimensions
+and zero planes, consistently.
+
+**What this does not do**: register a decoder, touch
+`vaco-codec-subtitle-bitmap`/`-cc`/`-teletext`, or prove end-to-end
+decode — no decoder in this workspace constructs a `FrameData::Subtitle`
+yet, so this is a shape the three in-flight T2-13 crates can be wired to,
+unit-tested on its own terms (`cargo test -p vaco-frame`), not a claim of
+working `-c:s`. `vaco-codec-subtitle-teletext`'s own module doc still
+says "`FrameData` has exactly two variants" as of this close — stale now,
+left for that crate's own owner to update when it wires in, since this
+pass does not touch that crate.
 
 ## 18. Nothing in this workspace populates `FrameSideData::ClosedCaptions`
 
