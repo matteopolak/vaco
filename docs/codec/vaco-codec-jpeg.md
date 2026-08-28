@@ -1,7 +1,7 @@
 # `vaco-codec-jpeg`
 
 Layer 4. JPEG (ITU-T T.81 / ISO/IEC 10918-1) native baseline and progressive
-decode, plus a baseline encoder.
+decode, plus a baseline-and-progressive encoder.
 
 ## What it is
 
@@ -74,13 +74,27 @@ container-supplied) is a demuxer-side concern, not this codec's.
 
 ### Encode
 
-Baseline only (`encode.rs`): reads sampling factors and precision from the
-input `Frame`'s `PixFmt` (accepts grayscale and planar, non-RGB YCbCr —
-colour-space conversion is `vaco-scale`'s job, not this crate's), scales the
-Annex K quantization tables by an IJG-style quality formula, and always
-emits the Annex K.3–K.6 default Huffman tables rather than building
-optimized ones per image. Forward DCT via `Fdct8x8`; DC/AC Huffman coding
-mirrors the decoder's symbol conventions exactly.
+`encode.rs` reads sampling factors and precision from the input `Frame`'s
+`PixFmt` (accepts grayscale and planar, non-RGB YCbCr — colour-space
+conversion is `vaco-scale`'s job, not this crate's), scales the Annex K
+quantization tables by an IJG-style quality formula, and always emits the
+Annex K.3–K.6 default Huffman tables rather than building optimized ones
+per image. Forward DCT via `Fdct8x8`.
+
+`compute_coeffs` runs that pipeline once per component, over the full
+MCU-padded block grid, into a plain buffer (`CompCoeffs`, the write-side
+mirror of `decode.rs`'s `CompState`) — both `EncodeOptions::progressive`
+settings read from the *same* computed coefficients, so a baseline and a
+progressive encode of the same frame at the same quality decode
+pixel-identical (verified by a round-trip test that checks exactly that,
+rather than an absolute error bound, since a hand-picked bound would
+conflate legitimate content-dependent lossy-compression error with an
+actual encode bug). `write_baseline_scan` writes one `SOF0` scan covering
+every block's full coefficient band; `write_progressive_scans` writes
+`SOF2` instead — one interleaved DC scan for every component, then one
+non-interleaved AC scan per component — spectral selection only, never
+successive approximation. See the module doc on why that scope was chosen
+over matching a real encoder's fuller scan-splitting.
 
 ## How to change it
 
@@ -95,8 +109,8 @@ would be added, alongside `SpecExactIdct`.
 
 `vaco_limits::Limits` bounds every decode: component and block-grid sizes
 come straight from `SOF`, validated by `Budget::alloc` before a coefficient
-is stored. `EncodeOptions { quality, restart_interval }` controls the
-encoder.
+is stored. `EncodeOptions { quality, restart_interval, progressive }`
+controls the encoder.
 
 ## Dependencies
 
@@ -115,14 +129,24 @@ only — the entropy bitstream has its own reader), `vaco-frame`/`vaco-pixfmt`
   `vaco-pixfmt` has no CMYK/YCCK format — this crate cannot add one.
 - **Arbitrary (non-power-of-two) sampling factors** are rejected rather than
   resampled, for the same `PixFmt` reason.
-- **Progressive encode** is not implemented; only baseline output.
+- **Progressive encode is spectral-selection only**: `EncodeOptions::progressive`
+  writes one DC scan plus one AC scan per component, never successive
+  approximation's multi-bit-plane refinement scans a real encoder like
+  `cjpeg -progressive` also produces. This is a genuine, conformant `SOF2`
+  stream (measured: `djpeg`/`ffmpeg` both decode it, pixel-identical to this
+  crate's own baseline output of the same frame) but a narrower scope,
+  chosen specifically to avoid successive approximation's write-side
+  mirror of the subtlety that `decode.rs`'s `ac_refine` had to get right on
+  the read side.
 - **Optimized (per-image) Huffman tables** are not built; the encoder always
   uses the Annex K defaults, which costs compression ratio, not correctness.
 - **QuickTime `mjqt`/`mjht` sample-description atoms** (container-supplied
   quantization/Huffman tables some MJPEG-A/B encoders use *instead of* the
   Annex K defaults) are not read by this crate — only the implicit
-  default-table fallback is implemented. Reading those atoms is a
-  demuxer-side concern.
+  default-table fallback is implemented (measured against `ffmpeg -huffman
+  default`-encoded frames with their `DHT` segments stripped: both `djpeg`
+  and this crate's decoder fall back to the same Annex K tables and agree
+  pixel-for-pixel). Reading those atoms is a demuxer-side concern.
 - **`vaco-cli` has no path from `-c:v mjpeg`/`-c:v jpeg` to any leaf decoder
   or encoder** (`check_codecs` accepts only `copy`) — a workspace-wide gap
   affecting every codec crate, not specific to this one (tracked as #652).
@@ -140,7 +164,12 @@ exactly at quality 100 (quantization step 1, so the DCT/IDCT pair is the
 only source of error and stays within floating-point rounding), a gradient
 stays within 2 LSB / RMS 1.0 at quality 100, and every subsampling variant,
 restart intervals, and non-MCU-aligned dimensions all round-trip to the
-right pixel format and size.
+right pixel format and size. The same coverage exists for
+`EncodeOptions::progressive`, plus a check that its output actually opens
+on `SOF2` and that its decode agrees with baseline's byte-for-byte across
+every subsampling variant and restart interval (a stronger, content-
+independent property than an absolute error bound — see `compute_coeffs`'s
+doc comment for why the two must always agree).
 
 `ffmpeg`/`cjpeg` binaries were available in this environment and were used
 for black-box differential testing (D17: probing a reference binary's
@@ -170,6 +199,21 @@ generated JPEGs into this crate's decoder:
   identically for both `RS` symbol kinds, when a ZRL and a sized symbol need
   different endings there — see `ac_refine`'s doc comment for the exact
   rule and its two regression tests for worked examples of each kind.
+- **MJPEG framing**: individual frames extracted (`-c copy`) from real
+  `ffmpeg`-muxed MJPEG-in-AVI and MJPEG-in-MOV files decode pixel-identical
+  (max-abs-deviation 1) to `ffmpeg`'s own decode of the same files, and the
+  MJPEG-A/B implicit-default-table convention specifically (frames with
+  their `DHT` segments stripped after confirming `ffmpeg -huffman default`
+  writes exactly the Annex K standard tables) decodes identically between
+  this crate and `djpeg`, both falling back to the same defaults.
+- **Progressive encode** (`EncodeOptions::progressive`): swept across six
+  image sizes (including non-MCU-aligned ones) and three qualities: `djpeg`
+  opened every file without error, and `ffmpeg`'s decode of this crate's
+  progressive output matched this crate's own decode of it (max-abs-
+  deviation 1) and matched `ffmpeg`'s decode of this crate's *baseline*
+  output of the same source bit-for-bit (max-abs-deviation 0) — the
+  external confirmation that splitting the same coefficients across DC/AC
+  scans changes nothing a decoder sees.
 
 A `jpeg_decode` fuzz target decodes arbitrary bytes; a 60-second local
 `cargo fuzz run` pass found no crashes.

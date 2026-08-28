@@ -1,12 +1,21 @@
-//! Baseline JPEG encode (ITU-T T.81 Annex E).
+//! Baseline and progressive JPEG encode (ITU-T T.81 Annex E and Annex G).
 //!
 //! `Vaco-Spec-Ref: itu-t-t81-199209`.
 //!
-//! Progressive encode is not implemented here — see the crate docs for the
-//! scope this crate currently covers. The encoder always emits the Annex
-//! K.3–K.6 default Huffman tables rather than building optimized ones per
-//! image; that costs some compression ratio and nothing else, since Annex
-//! K's tables are exactly as legal a choice as any other.
+//! Progressive output (`EncodeOptions::progressive`) is spectral-selection
+//! only — one interleaved DC scan (`Ss=0,Se=0`) followed by one
+//! non-interleaved AC scan per component (`Ss=1,Se=63`) — never successive
+//! approximation. That is a deliberate, narrower scope than a real encoder
+//! like `cjpeg -progressive` (which also splits the AC band and refines it
+//! over several bit planes): it is still a genuine `SOF2` progressive
+//! stream any conformant decoder must accept, and reuses the exact same
+//! per-coefficient Huffman coding baseline already does, just split across
+//! scans instead of combined into one — with none of successive
+//! approximation's own decode-side subtlety (see `decode.rs`'s `ac_refine`)
+//! on the write side. The encoder always emits the Annex K.3–K.6 default
+//! Huffman tables rather than building optimized ones per image; that costs
+//! some compression ratio and nothing else, since Annex K's tables are
+//! exactly as legal a choice as any other.
 
 use vaco_core::{Error, Result};
 use vaco_frame::Frame;
@@ -27,6 +36,10 @@ pub struct EncodeOptions {
     /// MCUs (or, for a non-interleaved single-component encode, blocks)
     /// between restart markers. `0` disables restarts.
     pub restart_interval: u16,
+    /// Emit `SOF2` (spectral-selection-only progressive) instead of `SOF0`
+    /// baseline. See the module doc for exactly which scan structure this
+    /// produces.
+    pub progressive: bool,
 }
 
 impl Default for EncodeOptions {
@@ -34,6 +47,7 @@ impl Default for EncodeOptions {
         Self {
             quality: 90,
             restart_interval: 0,
+            progressive: false,
         }
     }
 }
@@ -128,6 +142,24 @@ fn div_ceil_usize(a: usize, b: usize) -> usize {
     if b == 0 { 0 } else { a.div_ceil(b) }
 }
 
+/// A component's own unpadded block extent — the same `ceil(ceil(width *
+/// h/h_max)/8)` formula `decode.rs`'s `real_block_extent` computes, so a
+/// non-interleaved progressive AC scan here transmits exactly the blocks
+/// the decoder expects one for (never the extra MCU-padding blocks at the
+/// right/bottom edge that only the interleaved DC scan touches).
+fn real_block_extent(
+    width: u32,
+    height: u32,
+    h: u8,
+    v: u8,
+    h_max: u32,
+    v_max: u32,
+) -> (usize, usize) {
+    let comp_w = div_ceil_usize(width as usize * usize::from(h), h_max as usize).max(1);
+    let comp_h = div_ceil_usize(height as usize * usize::from(v), v_max as usize).max(1);
+    (div_ceil_usize(comp_w, 8), div_ceil_usize(comp_h, 8))
+}
+
 fn read_sample(row: &[u8], x: usize, precision: u8) -> i32 {
     if precision <= 8 {
         i32::from(row.get(x).copied().unwrap_or(0))
@@ -157,45 +189,65 @@ fn write_huffman(w: &mut EntropyWriter, table: &EncodeTable, symbol: u8) -> Resu
     Ok(())
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "one call site; the parameters are exactly the per-block encode state"
-)]
-fn encode_block(
-    w: &mut EntropyWriter,
-    freq_natural: &[i32; 64],
-    quant: &[u16; 64],
-    dc_pred: &mut i32,
-    dc_table: &EncodeTable,
-    ac_table: &EncodeTable,
-) -> Result<()> {
-    let mut zz = [0i32; 64];
-    for (k, &nat) in ZIGZAG.iter().enumerate() {
+/// Dequantize one block's raw forward-DCT output (natural order, already
+/// rounded to `i32` once by the caller) into quantized coefficients, still
+/// in natural order — matching `decode.rs`'s own storage convention, so
+/// both scan writers below index into it with the same `ZIGZAG` lookup the
+/// decoder uses to go the other way.
+fn quantize_natural_block(freq_natural: &[i32; 64], quant: &[u16; 64]) -> [i32; 64] {
+    let mut out = [0i32; 64];
+    for (nat, slot) in out.iter_mut().enumerate() {
         let coeff = freq_natural.get(nat).copied().unwrap_or(0);
         let q = quant.get(nat).copied().unwrap_or(1).max(1);
         let quantized = f64::from(coeff) / f64::from(q);
-        if let Some(slot) = zz.get_mut(k) {
-            *slot = quantized.round() as i32;
-        }
+        *slot = quantized.round() as i32;
     }
+    out
+}
 
-    let dc_val = zz.first().copied().unwrap_or(0);
+/// Write one block's DC coefficient: the Huffman-coded size category of its
+/// prediction difference, followed by that many raw magnitude bits.
+fn write_dc(
+    w: &mut EntropyWriter,
+    block_natural: &[i32; 64],
+    dc_pred: &mut i32,
+    dc_table: &EncodeTable,
+) -> Result<()> {
+    let dc_val = block_natural.first().copied().unwrap_or(0);
     let diff = dc_val - *dc_pred;
     *dc_pred = dc_val;
     let (dc_size, dc_bits) = category_and_bits(diff);
     write_huffman(w, dc_table, dc_size)?;
     w.put_bits(u32::from(dc_size), dc_bits);
+    Ok(())
+}
 
-    let mut run = 0u32;
-    let mut last_nonzero = 0usize;
-    for (k, &v) in zz.iter().enumerate().skip(1) {
-        if v != 0 {
+/// Write one block's AC coefficients over zigzag positions `ss..=se`
+/// (`1..=63` for baseline and this crate's progressive AC-first scans;
+/// `ac_refine`'s successive-approximation counterpart has no writer here —
+/// see the module doc) as `(run, size)` symbols plus magnitude bits, ending
+/// in `EOB` unless the band's last position is itself nonzero.
+fn write_ac_band(
+    w: &mut EntropyWriter,
+    block_natural: &[i32; 64],
+    ac_table: &EncodeTable,
+    ss: u8,
+    se: u8,
+) -> Result<()> {
+    let ss = usize::from(ss);
+    let se = usize::from(se);
+    let mut last_nonzero = ss.saturating_sub(1);
+    for k in ss..=se {
+        let nat = ZIGZAG.get(k).copied().unwrap_or(0);
+        if block_natural.get(nat).copied().unwrap_or(0) != 0 {
             last_nonzero = k;
         }
     }
-    let mut k = 1usize;
+    let mut run = 0u32;
+    let mut k = ss;
     while k <= last_nonzero {
-        let v = zz.get(k).copied().unwrap_or(0);
+        let nat = ZIGZAG.get(k).copied().unwrap_or(0);
+        let v = block_natural.get(nat).copied().unwrap_or(0);
         if v == 0 {
             run += 1;
             if run == 16 {
@@ -212,10 +264,103 @@ fn encode_block(
         run = 0;
         k += 1;
     }
-    if last_nonzero < 63 {
+    if last_nonzero < se {
         write_huffman(w, ac_table, 0x00)?;
     }
     Ok(())
+}
+
+/// One component's quantized coefficients over the full MCU-padded block
+/// grid (`decode.rs`'s `CompState` is the read-side mirror of this: same
+/// `blocks_w`/`blocks_h`, same natural-order-per-block layout), computed
+/// once up front so both the single combined baseline scan and progressive's
+/// separate DC/AC scans read from identical numbers.
+struct CompCoeffs {
+    blocks_w: usize,
+    blocks_h: usize,
+    coeffs: Vec<i32>,
+}
+
+impl CompCoeffs {
+    fn block(&self, block_x: usize, block_y: usize) -> Option<&[i32; 64]> {
+        if block_x >= self.blocks_w || block_y >= self.blocks_h {
+            return None;
+        }
+        let base = (block_y * self.blocks_w + block_x) * 64;
+        self.coeffs
+            .get(base..base + 64)
+            .and_then(|s| s.try_into().ok())
+    }
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one call site; the parameters are exactly the frame's own encode geometry"
+)]
+fn compute_coeffs(
+    frame: &Frame,
+    layout: &Layout,
+    quant_tables: &[[u16; 64]; 2],
+    precision: u8,
+    mcus_per_line: usize,
+    mcu_rows: usize,
+    h_max: u32,
+    v_max: u32,
+    width: u32,
+    height: u32,
+) -> Result<arrayvec::ArrayVec<CompCoeffs, 4>> {
+    let mut fdct = Fdct8x8::new()?;
+    let level = f64::from(1i32 << (precision - 1));
+    let mut out = arrayvec::ArrayVec::new();
+    for (ci, c) in layout.components.iter().enumerate() {
+        let Some(plane) = frame.plane(ci) else {
+            continue;
+        };
+        let blocks_w = mcus_per_line * usize::from(c.h);
+        let blocks_h = mcu_rows * usize::from(c.v);
+        let comp_w = div_ceil_usize(width as usize * usize::from(c.h), h_max as usize).max(1);
+        let comp_h = div_ceil_usize(height as usize * usize::from(c.v), v_max as usize).max(1);
+        let quant = quant_tables.get(c.table_set).copied().unwrap_or([1; 64]);
+        let mut coeffs = vec![0i32; blocks_w.saturating_mul(blocks_h).saturating_mul(64)];
+        for block_y in 0..blocks_h {
+            for block_x in 0..blocks_w {
+                let mut samples = [0.0f64; 64];
+                for row_in_block in 0..8usize {
+                    let y = (block_y * 8 + row_in_block).min(comp_h.saturating_sub(1));
+                    let row = plane.row(y).unwrap_or(&[]);
+                    for col_in_block in 0..8usize {
+                        let x = (block_x * 8 + col_in_block).min(comp_w.saturating_sub(1));
+                        let sample = read_sample(row, x, precision);
+                        if let Some(slot) = samples.get_mut(row_in_block * 8 + col_in_block) {
+                            *slot = f64::from(sample) - level;
+                        }
+                    }
+                }
+                let mut freq = [0.0f64; 64];
+                fdct.apply(&samples, &mut freq);
+                let mut freq_i = [0i32; 64];
+                for (dst, &v) in freq_i.iter_mut().zip(freq.iter()) {
+                    *dst = v.round() as i32;
+                }
+                let block = quantize_natural_block(&freq_i, &quant);
+                let base = (block_y * blocks_w + block_x) * 64;
+                if let Some(slot) = coeffs.get_mut(base..base + 64) {
+                    slot.copy_from_slice(&block);
+                }
+            }
+        }
+        if out
+            .try_push(CompCoeffs {
+                blocks_w,
+                blocks_h,
+                coeffs,
+            })
+            .is_err()
+        {
+            return Err(Error::InvalidData("jpeg: too many components to encode"));
+        }
+    }
+    Ok(out)
 }
 
 fn write_segment(out: &mut Vec<u8>, marker_byte: u8, payload: &[u8]) {
@@ -307,7 +452,15 @@ pub fn encode(frame: &Frame, options: &EncodeOptions) -> Result<Vec<u8>> {
         sof.push((c.h << 4) | c.v);
         sof.push(c.table_set as u8);
     }
-    write_segment(&mut out, marker::SOF0, &sof);
+    write_segment(
+        &mut out,
+        if options.progressive {
+            marker::SOF2
+        } else {
+            marker::SOF0
+        },
+        &sof,
+    );
 
     let specs: &[(u8, &tables::HuffSpec)] = if layout.components.len() > 1 {
         &[
@@ -335,98 +488,241 @@ pub fn encode(frame: &Frame, options: &EncodeOptions) -> Result<Vec<u8>> {
         );
     }
 
+    let h_max = u32::from(layout.components.iter().map(|c| c.h).max().unwrap_or(1));
+    let v_max = u32::from(layout.components.iter().map(|c| c.v).max().unwrap_or(1));
+    let mcus_per_line = div_ceil_usize(width as usize, (8 * h_max) as usize).max(1);
+    let mcu_rows = div_ceil_usize(height as usize, (8 * v_max) as usize).max(1);
+
+    let coeffs = compute_coeffs(
+        frame,
+        &layout,
+        &quant_tables,
+        precision,
+        mcus_per_line,
+        mcu_rows,
+        h_max,
+        v_max,
+        width,
+        height,
+    )?;
+
+    if options.progressive {
+        write_progressive_scans(
+            &mut out,
+            &layout,
+            &coeffs,
+            &dc_tables,
+            &ac_tables,
+            options.restart_interval,
+            mcus_per_line,
+            mcu_rows,
+            h_max,
+            v_max,
+            width,
+            height,
+        )?;
+    } else {
+        write_baseline_scan(
+            &mut out,
+            &layout,
+            &coeffs,
+            &dc_tables,
+            &ac_tables,
+            options.restart_interval,
+            mcus_per_line,
+            mcu_rows,
+        )?;
+    }
+
+    out.extend_from_slice(&[0xFF, marker::EOI]);
+    Ok(out)
+}
+
+/// Emit a restart marker (flushing the current byte first) when `units_done`
+/// lands on a restart boundary. Returns whether it did, so a caller that
+/// tracks its own per-scan state (baseline/DC-scan `dc_pred`) knows to reset
+/// it too — an AC-only scan has no such state.
+fn maybe_write_restart(w: &mut EntropyWriter, units_done: usize, restart_interval: u16) -> bool {
+    if restart_interval > 0
+        && units_done != 0
+        && units_done.is_multiple_of(usize::from(restart_interval))
+    {
+        w.flush_to_byte();
+        let rst = marker::RST0
+            + ((units_done
+                .checked_div(usize::from(restart_interval))
+                .unwrap_or(1)
+                - 1)
+                % 8) as u8;
+        w.raw_marker(&[0xFF, rst]);
+        true
+    } else {
+        false
+    }
+}
+
+/// One `SOF0` scan covering every component's full coefficient band —
+/// `write_dc` then `write_ac_band(1, 63)` per block, interleaved in MCU
+/// order, matching how every baseline decoder (including this crate's own)
+/// expects a single-scan stream.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one call site; the parameters are exactly this scan's own geometry"
+)]
+fn write_baseline_scan(
+    out: &mut Vec<u8>,
+    layout: &Layout,
+    coeffs: &arrayvec::ArrayVec<CompCoeffs, 4>,
+    dc_tables: &[EncodeTable; 2],
+    ac_tables: &[EncodeTable; 2],
+    restart_interval: u16,
+    mcus_per_line: usize,
+    mcu_rows: usize,
+) -> Result<()> {
     let mut sos = vec![layout.components.len() as u8];
     for (i, c) in layout.components.iter().enumerate() {
         sos.push((i + 1) as u8);
         sos.push(((c.table_set as u8) << 4) | (c.table_set as u8));
     }
     sos.extend_from_slice(&[0, 63, 0]);
-    write_segment(&mut out, marker::SOS, &sos);
-
-    let h_max = u32::from(layout.components.iter().map(|c| c.h).max().unwrap_or(1));
-    let v_max = u32::from(layout.components.iter().map(|c| c.v).max().unwrap_or(1));
-    let mcus_per_line = div_ceil_usize(width as usize, (8 * h_max) as usize).max(1);
-    let mcu_rows = div_ceil_usize(height as usize, (8 * v_max) as usize).max(1);
+    write_segment(out, marker::SOS, &sos);
 
     let mut w = EntropyWriter::new();
     let mut dc_pred = [0i32; 4];
-    let mut fdct = Fdct8x8::new()?;
     let mut units_done = 0usize;
-    let total_units = mcus_per_line * mcu_rows;
-
     for mcu_row in 0..mcu_rows {
         for mcu_col in 0..mcus_per_line {
-            if options.restart_interval > 0
-                && units_done != 0
-                && units_done.is_multiple_of(usize::from(options.restart_interval))
-            {
-                w.flush_to_byte();
-                let rst = marker::RST0
-                    + ((units_done
-                        .checked_div(usize::from(options.restart_interval))
-                        .unwrap_or(1)
-                        - 1)
-                        % 8) as u8;
-                w.raw_marker(&[0xFF, rst]);
+            if maybe_write_restart(&mut w, units_done, restart_interval) {
                 dc_pred = [0i32; 4];
             }
             for (ci, c) in layout.components.iter().enumerate() {
-                let Some(plane) = frame.plane(ci) else {
-                    continue;
-                };
-                let comp_w =
-                    div_ceil_usize(width as usize * usize::from(c.h), h_max as usize).max(1);
-                let comp_h =
-                    div_ceil_usize(height as usize * usize::from(c.v), v_max as usize).max(1);
+                let comp = coeffs
+                    .get(ci)
+                    .ok_or(Error::InvalidData("jpeg: component index out of range"))?;
+                let dc_table = dc_tables
+                    .get(c.table_set)
+                    .ok_or(Error::InvalidData("jpeg: table set out of range"))?;
+                let ac_table = ac_tables
+                    .get(c.table_set)
+                    .ok_or(Error::InvalidData("jpeg: table set out of range"))?;
                 for by in 0..usize::from(c.v) {
                     for bx in 0..usize::from(c.h) {
                         let block_x = mcu_col * usize::from(c.h) + bx;
                         let block_y = mcu_row * usize::from(c.v) + by;
-                        let mut samples = [0.0f64; 64];
-                        let level = f64::from(1i32 << (precision - 1));
-                        for row_in_block in 0..8usize {
-                            let y = (block_y * 8 + row_in_block).min(comp_h.saturating_sub(1));
-                            let row = plane.row(y).unwrap_or(&[]);
-                            for col_in_block in 0..8usize {
-                                let x = (block_x * 8 + col_in_block).min(comp_w.saturating_sub(1));
-                                let sample = read_sample(row, x, precision);
-                                if let Some(slot) = samples.get_mut(row_in_block * 8 + col_in_block)
-                                {
-                                    *slot = f64::from(sample) - level;
-                                }
-                            }
-                        }
-                        let mut freq = [0.0f64; 64];
-                        fdct.apply(&samples, &mut freq);
-                        let mut freq_i = [0i32; 64];
-                        for (dst, &v) in freq_i.iter_mut().zip(freq.iter()) {
-                            *dst = v.round() as i32;
-                        }
-                        let quant = quant_tables.get(c.table_set).copied().unwrap_or([1; 64]);
+                        let block = comp
+                            .block(block_x, block_y)
+                            .ok_or(Error::InvalidData("jpeg: block index out of range"))?;
                         let pred = dc_pred
                             .get_mut(ci)
                             .ok_or(Error::InvalidData("jpeg: component index out of range"))?;
-                        encode_block(
-                            &mut w,
-                            &freq_i,
-                            &quant,
-                            pred,
-                            dc_tables
-                                .get(c.table_set)
-                                .ok_or(Error::InvalidData("jpeg: table set out of range"))?,
-                            ac_tables
-                                .get(c.table_set)
-                                .ok_or(Error::InvalidData("jpeg: table set out of range"))?,
-                        )?;
+                        write_dc(&mut w, block, pred, dc_table)?;
+                        write_ac_band(&mut w, block, ac_table, 1, 63)?;
                     }
                 }
             }
             units_done += 1;
         }
     }
-    let _ = total_units;
     w.flush_to_byte();
     out.extend_from_slice(&w.finish());
-    out.extend_from_slice(&[0xFF, marker::EOI]);
-    Ok(out)
+    Ok(())
+}
+
+/// This crate's progressive output: one interleaved `SOF2` DC scan
+/// (`Ss=0,Se=0`) for every component, followed by one non-interleaved AC
+/// scan (`Ss=1,Se=63`) per component — spectral selection only, no
+/// successive approximation. See the module doc for why.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one call site; the parameters are exactly this scan sequence's own geometry"
+)]
+fn write_progressive_scans(
+    out: &mut Vec<u8>,
+    layout: &Layout,
+    coeffs: &arrayvec::ArrayVec<CompCoeffs, 4>,
+    dc_tables: &[EncodeTable; 2],
+    ac_tables: &[EncodeTable; 2],
+    restart_interval: u16,
+    mcus_per_line: usize,
+    mcu_rows: usize,
+    h_max: u32,
+    v_max: u32,
+    width: u32,
+    height: u32,
+) -> Result<()> {
+    let mut sos = vec![layout.components.len() as u8];
+    for (i, c) in layout.components.iter().enumerate() {
+        sos.push((i + 1) as u8);
+        sos.push(((c.table_set as u8) << 4) | (c.table_set as u8));
+    }
+    sos.extend_from_slice(&[0, 0, 0]);
+    write_segment(out, marker::SOS, &sos);
+
+    let mut w = EntropyWriter::new();
+    let mut dc_pred = [0i32; 4];
+    let mut units_done = 0usize;
+    for mcu_row in 0..mcu_rows {
+        for mcu_col in 0..mcus_per_line {
+            if maybe_write_restart(&mut w, units_done, restart_interval) {
+                dc_pred = [0i32; 4];
+            }
+            for (ci, c) in layout.components.iter().enumerate() {
+                let comp = coeffs
+                    .get(ci)
+                    .ok_or(Error::InvalidData("jpeg: component index out of range"))?;
+                let dc_table = dc_tables
+                    .get(c.table_set)
+                    .ok_or(Error::InvalidData("jpeg: table set out of range"))?;
+                for by in 0..usize::from(c.v) {
+                    for bx in 0..usize::from(c.h) {
+                        let block_x = mcu_col * usize::from(c.h) + bx;
+                        let block_y = mcu_row * usize::from(c.v) + by;
+                        let block = comp
+                            .block(block_x, block_y)
+                            .ok_or(Error::InvalidData("jpeg: block index out of range"))?;
+                        let pred = dc_pred
+                            .get_mut(ci)
+                            .ok_or(Error::InvalidData("jpeg: component index out of range"))?;
+                        write_dc(&mut w, block, pred, dc_table)?;
+                    }
+                }
+            }
+            units_done += 1;
+        }
+    }
+    w.flush_to_byte();
+    out.extend_from_slice(&w.finish());
+
+    for (ci, c) in layout.components.iter().enumerate() {
+        let comp = coeffs
+            .get(ci)
+            .ok_or(Error::InvalidData("jpeg: component index out of range"))?;
+        let ac_table = ac_tables
+            .get(c.table_set)
+            .ok_or(Error::InvalidData("jpeg: table set out of range"))?;
+        let (bw, bh) = real_block_extent(width, height, c.h, c.v, h_max, v_max);
+
+        // `Td` (the DC-table nibble) is irrelevant for an AC-only scan — the
+        // decoder never reads it when `Ss != 0` — so `Ta` alone occupies the
+        // low nibble here, matching `header::parse_sos`'s `td = byte >> 4,
+        // ta = byte & 0xF` split.
+        let sos = [1u8, (ci + 1) as u8, c.table_set as u8, 1, 63, 0];
+        write_segment(out, marker::SOS, &sos);
+
+        let mut w = EntropyWriter::new();
+        let mut units_done = 0usize;
+        for block_y in 0..bh {
+            for block_x in 0..bw {
+                let _ = maybe_write_restart(&mut w, units_done, restart_interval);
+                let block = comp
+                    .block(block_x, block_y)
+                    .ok_or(Error::InvalidData("jpeg: block index out of range"))?;
+                write_ac_band(&mut w, block, ac_table, 1, 63)?;
+                units_done += 1;
+            }
+        }
+        w.flush_to_byte();
+        out.extend_from_slice(&w.finish());
+    }
+    Ok(())
 }
