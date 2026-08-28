@@ -178,7 +178,8 @@ the `rustybuzz` question.
 |---|---|
 | `thistogram` | Attempted, not shipped. The output shape (`width x 256`, `width` a temporal window) was measured, but the temporal-buffering semantics (which column a given frame lands in as the window scrolls) were not pinned down with enough confidence to ship rather than guess. |
 | `vectorscope` | Attempted, not shipped. Output shape (`256x256`) confirmed, but `vectorscope` has no `intensity` option the way `waveform` does — a different, unmeasured accumulation rule, not assumed to match `waveform`'s. |
-| `oscilloscope`, `pixscope` | Not shipped this pass. The bitmap-font blocker is resolved (see above — both confirmed to use the same embedded-font mechanism `datascope` now implements), so these are next in this crate's queue rather than blocked on a shared missing dependency. |
+| `pixscope` | Attempted, not shipped — not for the font reason (confirmed shared with `datascope`, see above). Newly measured: its "zoom" box does not magnify. A `7x7` window (`o=1`) over a hand-built period-2 checkerboard shows the checkerboard's own period unchanged inside a `1`px-bordered outline — a location marker, not a magnifier. The real numeric content is an auto-placed (`wx`/`wy` `-1` sentinel) statistics text panel — position, per-component values, evidently min/max/average — whose exact label set and layout were not reverse-engineered this pass. Shipping the marker box alone would not be this filter's useful part. |
+| `oscilloscope` | Not attempted this pass. Confirmed to share the same font mechanism (no font option; same glyph-grid signature), but its trace/grid layout and `st`-gated statistics text were not separately measured. |
 | `graphmonitor`, `agraphmonitor` | **Not expressible against the current `vaco-filter-core` surface**, checked directly: `FilterContext` exposes only the current node's own pads — there is no API to enumerate other nodes, their links, or queue depths, which is exactly what these filters draw. Recorded as `planning/INTERFACE-GAPS.md` gap 22. |
 | `ciescope` | **Not a D7 case.** Every `system` value names a published international-standard primary set (BT.709, BT.2020, DCI-P3, SMPTE-C, …) and the CIE 1931 observer data is public. The blocker is reproducing the reference's exact chromaticity-diagram *rendering* (spectral-locus rasterisation, anti-aliasing, gamut-triangle lines) — not itself specified by any colorimetry standard, so verifying it would need extensive black-box probing this pass's time did not cover. |
 | `drawgraph`, `adrawgraph` | Not attempted. These plot frame metadata rather than pixel data (the metadata mechanism itself exists in this tree — gap 11's dictionary, gap 13's console-log channel, both closed elsewhere), but connected-line/bar/dot rendering exactness is a real question `waveform` sidestepped by drawing independent per-pixel hits. Deferred for time, not blocked. |
@@ -218,7 +219,11 @@ plan document).
   it is already sourced, registered and tested; do not re-derive or
   re-source a font. Re-measure each filter's own layout (cell/margin
   positions, what text it draws) independently; do not assume
-  `datascope`'s pitch constants apply verbatim.
+  `datascope`'s pitch constants apply verbatim. For `pixscope` in
+  particular, do not assume the "zoom" box magnifies pixels — measured
+  this pass to be a plain unmagnified marker outline; the filter's real
+  value is in a statistics text panel whose label set and layout still
+  need reverse-engineering from scratch.
 - If you add `thistogram` or `vectorscope`, re-read this doc's "left out"
   table first — both have real measurement started, recorded in `git`
   history and in this file, that a fresh attempt should build on rather
