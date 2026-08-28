@@ -259,6 +259,46 @@ const DISTINCT: &[(&str, &str)] = &[
         "VuiParameters",
         "H.264 and HEVC VUI; different syntax (D19: cbs)",
     ),
+    // --- vaco-cbs-vp9 (D-21a) names its VP9 syntax structures after the same
+    // words `vaco-codec-vp9`'s decoder already uses for the *decoded* form —
+    // deliberately: the two are different shapes for the same field, not a
+    // missed reuse. `vaco-codec-vp9::LoopFilterParams::ref_deltas` is
+    // `[i32; 4]`, resolved and carried forward across frames (`prev` folded
+    // in on every parse); `vaco-cbs-vp9`'s is `[Option<i32>; 4]`, exactly the
+    // bitstream's per-frame presence flags, because a CBS writer must
+    // reproduce the *coded* deltas, not the resolved state a decoder needs.
+    // `TileInfo` is the same split: the decoder keeps only the derived
+    // `cols_log2`/`rows_log2`; the CBS one keeps the actual sequence of
+    // `increment_tile_cols_log2` bits, because a loop that can stop two
+    // different ways (an explicit 0, or reaching the maximum) needs the bit
+    // sequence itself to write back, not just where it landed.
+    (
+        "LoopFilterDeltas",
+        "vaco-cbs-vp9's raw per-frame delta presence, distinct from \
+         vaco-codec-vp9's resolved, cross-frame LoopFilterParams (D19: cbs)",
+    ),
+    (
+        "LoopFilterParams",
+        "vaco-codec-vp9: resolved, decoder-carried state. vaco-cbs-vp9: raw \
+         per-frame syntax with `Option`-typed presence (D19: cbs)",
+    ),
+    (
+        "QuantizationParams",
+        "vaco-codec-av1: AV1's decode-time quantiser state. vaco-cbs-vp9: \
+         VP9's raw quantization_params() syntax — different codecs, \
+         different shapes (D19: cbs)",
+    ),
+    (
+        "TileInfo",
+        "vaco-codec-vp9: derived tile_cols_log2/tile_rows_log2. vaco-cbs-vp9: \
+         the raw increment-bit sequence a CBS writer needs (D19: cbs)",
+    ),
+    (
+        "Vp9Header",
+        "vaco-parse-vpx: the partial header CodecParameters needs (stops \
+         after frame_size()). vaco-cbs-vp9: the whole uncompressed_header(), \
+         needed to find the header's exact byte end (D19: cbs)",
+    ),
     (
         "Crop",
         "vaco-frame: a crop rectangle. vaco-parse-h264: the SPS frame-crop offsets.",
