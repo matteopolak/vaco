@@ -1453,3 +1453,31 @@ Two duties survive when you do use a Tier A implementation:
 
 If you are unsure whether a specific source is Tier A, ask the orchestrator. Do
 not resolve the doubt by inventing an algorithm.
+
+## Under concurrent load, verify commits by content — `git log` is not enough
+
+An existing rule says you cannot identify your own commits by author, only by
+hash. There is a stronger version of that, found while landing `vaco-checkasm`
+with eight agents writing to one tree: under heavy concurrent write load,
+`git log -- <path>` and `git ls-tree` can return **attribution that looks
+inconsistent** — a path appearing to belong to a commit that did not touch it,
+or a recent write not showing where you expect.
+
+Do not resolve that by staring at more `git log`. Resolve it against content:
+
+- `git diff HEAD~1 HEAD --name-only` after every commit — only your files, every time.
+- If anything looks wrong, `git show HEAD:<path>` against your working tree, and
+  diff against a known-good earlier baseline.
+- Then run the tests and clippy against the **actual committed state**, not
+  against your working tree, which may differ.
+
+The same session produced a related artifact worth recognising: a second
+private-index attempt landed on top of an already-successful first one, because
+the first one's shell output was read as a failure. The result was a harmless
+empty no-op commit. That is the benign outcome. The malign version of the same
+confusion — retrying a step that already succeeded, against a base captured
+before it — is how 106 lines of another agent's work were silently reverted
+earlier. **Capture BASE once, and when a git step's output is ambiguous, check
+whether it already worked before running it again.**
+
+An empty commit in the history is not a problem. A retry against a stale base is.
