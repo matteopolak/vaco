@@ -664,13 +664,9 @@ than assumed from the ceiling closing everything else:
   a missing decode path, not a precision question the IDCT ceiling could
   ever cover; no amount of rounding-schedule correctness touches a
   picture type this crate never attempts to reconstruct.
-- **Pulldown flags**: `picture_coding_extension()` reads
-  `repeat_first_field` and discards it immediately
-  (`let _repeat_first_field = r.get(1);` — never stored on
-  `PictureCodingExtension` at all); `top_field_first` is stored but never
-  propagated to the output `Frame` (`FrameFlags::TOP_FIELD_FIRST` is
-  never set — see that struct's own doc comment). Parsed for correct
-  bitstream framing, not consumed for anything a caller could observe.
+- **Pulldown flags**: `picture_coding_extension()` read
+  `repeat_first_field` and discarded it immediately; `top_field_first` was
+  stored but never propagated to the output `Frame`.
 
 Both are real, checkable, and unaddressed by anything this session's
 IDCT/escape-sentinel work touched — a close on "the numbers moved" would
@@ -681,6 +677,81 @@ part of its stated scope (headers/extensions, the MB layer, frame-picture
 reconstruction accuracy) is settled. Epic #36 does not close on this pair
 either way — #357 (MPEG-1/2 encode) is a real, untouched gap, not a
 ceiling, and nothing about this fix or this judgement touches it.
+
+**A further round took #355's actual remainder, cheapest first.** Pulldown
+is the cheap half, and it split cleanly into a local fix and a genuine
+interface gap, checked directly against `vaco_frame::FrameFlags` before
+writing anything (not assumed): `TOP_FIELD_FIRST` already existed as a
+flag, unused by this crate — `decoder.rs::begin_picture` now sets it
+directly from `picture_coding_extension()`'s own bit, unconditionally,
+covered by a new unit test (`9d81baf`). `repeat_first_field` has nowhere
+to go: together with `top_field_first` it selects 2, 3 or 4 field-display
+periods (the shape of `ffmpeg`'s own `AVFrame::repeat_pict`), not a plain
+boolean, and `vaco_frame::Frame` has no numeric field for it — only two
+booleans exist. This crate does not own `vaco-frame`, and the project's
+single-writer rule forbids editing it from here, so the field stays
+parsed-and-discarded, now documented rather than silently dropped.
+**Independently corroborated, not just asserted**: `vaco-filter-
+deinterlace`'s own `repeatfields.rs` reached the identical conclusion
+from the consuming side — its whole job is to act on this exact signal,
+and it has nothing to read because no decoder in this workspace can
+produce it. Both findings point at the same open interface question for
+whoever owns `vaco-frame`.
+
+**Field pictures were checked, not planned blind, and the checking is
+what closed this round.** The obvious question first: does the
+field-addressing machinery this crate already built for motion
+compensation (`motion.rs`'s `row_scale`/`row_parity`, and
+`macroblock.rs`'s `deinterleave_rows`) already cover actual field
+*pictures*? No — both are explicitly, doc-commented, scoped to field-based
+*prediction within a frame picture* (`frame_pred_frame_dct == 0`, still
+`picture_structure == Frame`, §7.6.2's common real-world interlaced case).
+An actual field picture (`picture_structure` = top or bottom field) is a
+different, larger thing this machinery was never meant to reach:
+
+- **Picture pairing.** Two field pictures (opposite parity) compose one
+  displayable frame. This crate's whole pipeline is 1 bitstream picture :
+  1 output `Frame` (`begin_picture`/`finish_picture`); nothing pairs two
+  half-height pictures into one interleaved output.
+- **Field-granularity reference management.** A field picture can
+  reference the *opposite field of the same frame currently being
+  assembled* (already-decoded rows of the picture in progress) as well as
+  fields of previous frames. `previous`/`recent`/`held` are frame-
+  granularity only — there is no concept of "the top field of the
+  reference I already decoded" to address.
+- **A different `frame_motion_type` code space.** §6.3.17.1's 2-bit
+  motion-type field means `{Field, Frame, Dual-Prime}` for a frame
+  picture (what `macroblock.rs`'s `FRAME_BASED`/`FIELD_BASED`/
+  `DUAL_PRIME` constants implement) but `{Field, 16x8, Dual-Prime}` for a
+  field picture — a genuinely different decode path, not the same one
+  with a flag flipped, and 16x8 MC is a separately-unimplemented mode
+  either way.
+- **Chroma field-positioning nuances** specific to top-field vs.
+  bottom-field content, on top of the above.
+
+**No real fixture is available for this even once built** — checked
+directly, the same discipline applied to Annex P and `yuv444p`, not
+assumed from architecture alone: a real interlaced source encoded with
+`ffmpeg -c:v mpeg2video -flags +ilme+ildct` was bit-traced picture by
+picture, and every one of 4 encoded pictures reads `picture_structure =
+0b11` (frame) — `ildct`/`ilme` select field-based prediction *within*
+frame pictures (what this crate already implements), not separate field
+pictures. `ffmpeg -h full`'s complete option list has nothing shaped like
+an explicit field-picture-output toggle either. Two independent reasons,
+matching the bar Annex P was held to: materially larger than any single
+round (four distinct new subsystems, not a wiring exercise), and
+unverifiable against this project's own real-encoder tooling even once
+built — any implementation would need hand-crafted-bitstream unit tests
+against the primary text's own worked examples for its whole life, the
+position Annex T and the legacy UMV path are already in for
+`vaco-codec-h263`.
+
+**Per instruction: land pulldown, report the field-picture scope, and
+stop — not a half-implementation that reports `CORRUPT` less often but
+still wrongly.** #355 is not re-judged this round, since field pictures
+have not landed; its reasoning stands exactly as recorded above (stays
+open, specifically for field-picture decode and pulldown-flag
+propagation), now with pulldown half-closed rather than fully open.
 
 ## How to change it
 
