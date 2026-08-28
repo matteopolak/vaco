@@ -1,17 +1,21 @@
 # `vaco-format-misc`
 
-Layer 4. Five demuxers — `ivf`, `ffmetadata`, `roq`, `flic`, `cdg` — for
-FM-59 (planning `18-formats.md` §8.7's T3 remainder). Issues #623/#624/#625.
+Layer 4. Seven demuxers — `ivf`, `ffmetadata`, `roq`, `flic`, `cdg`, `bink`,
+`smk` — for FM-59 (planning `18-formats.md` §8.7's T3 remainder). Issues
+#623/#624/#625.
 
 The package this crate was scoped from names roughly sixty game-video and
 legacy-video containers plus a handful of metadata/caption formats. This
-crate implements five of them: the two named as "worth more than their
+crate implements seven of them: the two named as "worth more than their
 size" (`ivf`, the AV1/VP9/VP8 test-vector container, and `ffmetadata`, the
-reference's own metadata interchange format) plus three of the game-video
-containers that are cheap enough to do well without a real encoder to test
-against (`roq`, `flic`, `cdg`). The remaining ~55 names — `bink`, `smk`,
-`vmd`, `wsvqa`, `4xm`, and the rest of the list in the original brief — are
-**not implemented**. See "What was deferred" below.
+reference's own metadata interchange format); three game-video containers
+cheap enough to do well without a real encoder to test against (`roq`,
+`flic`, `cdg`); and, in a later pass, `bink` and `smk`, the two id-Software-
+era game containers in the deferred list with real users and real files in
+the wild, added once `roq`/`flic`/`cdg` had proven the hand-built-fixture
+technique out. The remaining ~53 names — `vmd`, `wsvqa`, `4xm`, and the rest
+of the list in the original brief — are **not implemented**. See "What was
+deferred" below.
 
 ---
 
@@ -24,24 +28,42 @@ against (`roq`, `flic`, `cdg`). The remaining ~55 names — `bink`, `smk`,
 | `roq` | id Software RoQ (Quake III, RTCW) | chunk framing only, no video/audio decode | none (no public encoder exists) | hand-built from `Vaco-Spec-Ref idroq-format-doc`, cross-checked against `ffprobe` |
 | `flic` | Autodesk FLI/FLC/FLX | chunk framing only, no pixel decode | none (no encoder in modern use) | hand-built from `Vaco-Spec-Ref compuphase-flic-doc`, cross-checked against `ffprobe` |
 | `cdg` | CD+Graphics karaoke subchannel | full (fixed 24-byte packets, no header) | none (no encoder) | hand-built from `Vaco-Spec-Ref cdg-revealed`, cross-checked against `ffprobe` |
+| `bink` | RAD Game Tools Bink (`BIK`/`KB2`) | chunk framing only, no video/audio decode | none (no public encoder exists) | hand-built from `Vaco-Spec-Ref multimedia-wiki-bink-container`, measured against `ffprobe`/`ffmpeg` 8.1 |
+| `smk` | RAD Game Tools Smacker | chunk framing only, no video/audio decode | none (no public encoder exists) | hand-built from `Vaco-Spec-Ref multimedia-wiki-smacker`, measured against `ffprobe`/`ffmpeg` 8.1 |
 
-"Cross-checked against `ffprobe`" means: since no encoder exists for
-`roq`/`flic`/`cdg`, a file was hand-built directly from the public format
-documentation, then fed to `ffprobe` 8.1 to see how the *reference* frames
-it into streams and packets. That is a black-box measurement of container
-*framing* (D6/D17) — it never touches the reference's source, and it is
-exactly how three genuinely surprising, undocumented behaviours were found
-(see each module's doc comment): RoQ's audio/video packet merging depends on
-chunk *order*, not chunk *type*; FLIC's keyframe flag is purely positional;
-CDG's `probe_score` is a capped count of well-formed packets, not a fixed
-constant.
+"Cross-checked against `ffprobe`" (and, for `bink`/`smk`, "measured
+against `ffprobe`/`ffmpeg` 8.1") means the same thing throughout: since no
+encoder exists for any of these five formats, a file was hand-built
+directly from the public format documentation, then fed to the reference
+binaries to see how the *reference* frames it into streams and packets.
+That is a black-box measurement of container *framing* (D6/D17) — it never
+touches the reference's source, and it is exactly how five genuinely
+surprising, undocumented behaviours were found (see each module's doc
+comment): RoQ's audio/video packet merging depends on chunk *order*, not
+chunk *type*; FLIC's keyframe flag is purely positional; CDG's
+`probe_score` is a capped count of well-formed packets, not a fixed
+constant; Bink's reference demuxer drifts a byte on odd-length frames and
+that drift cascades into a hard failure on every following frame; Smacker's
+video-packet payload carries an unidentified ~769-byte prefix beyond the
+raw video chunk that this crate could not reverse-engineer with confidence
+(see "What was deferred").
+
+`bink`/`smk` needed a different measurement path than `roq`/`flic`/`cdg`:
+their real decoders (`binkvideo`, `smackvid`) refuse to open a
+framing-only synthetic fixture that lacks a valid Huffman tree or coded
+bitstream, so `-show_streams`/`-show_packets` alone were not enough.
+`ffmpeg -i FILE -c copy -f framemd5 -` was used instead — a stream-copy
+path that only needs the codec found by name, not opened, which was enough
+to measure container framing, packet sizes, timestamps and stream counts
+without needing valid coded payloads.
 
 No FFmpeg source was consulted (D7/D15). `ivf` and `ffmetadata`'s grammars
 are public specifications/documentation (the IVF header, and
-`ffmpeg-formats.html`'s own "Metadata" chapter); `roq`/`flic`/`cdg` are
-documented in `Vaco-Spec-Ref idroq-format-doc` / `compuphase-flic-doc` /
-`cdg-revealed`, all community or original-author references, none of them
-FFmpeg's.
+`ffmpeg-formats.html`'s own "Metadata" chapter); `roq`/`flic`/`cdg`/`bink`/
+`smk` are documented in `Vaco-Spec-Ref idroq-format-doc` /
+`compuphase-flic-doc` / `cdg-revealed` / `multimedia-wiki-bink-container` /
+`multimedia-wiki-smacker`, all community or original-author references,
+none of them FFmpeg's.
 
 ---
 
@@ -118,6 +140,55 @@ stays there through 1000. A file of all-zero bytes loses to an unrelated
 format's probe outright — this is a genuinely weak content test, which
 fits a format with no magic number at all.
 
+### `bink`: per-frame table, seek instead of drift
+
+The header's frame index table gives each frame's own absolute byte
+offset plus a keyframe bit packed into the low bit
+(`raw_start & !1` for the offset, `raw_start & 1` for the flag). One
+video stream plus one audio `Stream` per declared track (stereo decided
+by flags bit 13, which is authoritative over the separate channels
+field). Per-track audio sub-chunks are emitted with their length field
+included as-is (unlike `smk`, Bink's length field is not stripped before
+becoming packet payload); the remainder of the frame is the video packet.
+
+The reference's own demuxer reads frames **sequentially** rather than
+re-seeking to each frame's table offset, so an odd-length frame — legal
+per the table's own accounting, just not something a real encoder
+produces — causes it to read that frame's video chunk one byte short, and
+every following frame inherits the drift, eventually cascading into a
+hard "audio size in header > size of packet left" failure. This was
+confirmed directly: an even-length final frame reproduces the reference
+exactly, while an odd-length non-final frame reproduces the one-byte
+drift and the following frame's failure. This crate's demuxer seeks to
+each frame's own table offset before reading it, so it reproduces neither
+the drift nor the cascading failure — a deliberate, documented divergence
+(see `planning/TECH-DEBT.md`), not a bug worth copying.
+
+### `smk`: frame-size/type tables, and an unresolved packet-payload gap
+
+The header carries fixed-size `FrameSizes`/`FrameTypes`/`AudioRate`
+tables (up to `NUM_TRACKS = 7` audio tracks) and a frame-rate field whose
+sign selects one of three unit conventions
+(`frame_rate_time_base`'s documented three-case `match`). Extradata is
+the four track-size `u32`s followed by the packed Huffman-tree bytes
+(measured: 16 + 10 = 26 bytes for a minimal single-symbol tree). Per
+frame: an optional palette chunk (bit 0 of the frame's size entry) is
+skipped by byte count, then one length-prefixed chunk per active audio
+track with its length (and, if compressed, `UnpackedLength`) fields
+stripped before the payload becomes packet data, then the remainder of
+the frame becomes the video packet.
+
+The video-packet content itself has an unresolved divergence: the
+reference's video packet for a palette-carrying frame is measurably 769
+bytes longer than this crate's raw video-chunk bytes — consistent with a
+1-byte flag plus a 256-entry RGB palette (`1 + 256*3 = 769`), but three
+independent hash-matching attempts at reconstructing that exact byte
+layout from the frame's own palette chunk all failed to match. Rather
+than reverse-engineer an undocumented decoder-cooperative packing
+convention — a materially different task from measuring container framing
+— this crate emits the raw video-chunk bytes only and reports the gap
+honestly (see `planning/TECH-DEBT.md`).
+
 ---
 
 ## The N-row comparison table
@@ -155,12 +226,25 @@ code encodes and a fixture exists to check it against.
 | 22 | cdg | `probe_score` formula | 20/50/90/1000-packet files | `20`/`50`/`85`/`85` | same formula, same outputs |
 | 23 | cdg | keyframe | 10-packet file | `K` on packet 0 only | matches |
 | 24 | cdg | dimensions | any file | fixed `300×216` | `300×216` |
+| 25 | bink | signature | `BIKi`/`KB2a`-style tags | both accepted | matches |
+| 26 | bink | frame table offset/keyframe bit | hand-built, multi-frame | `raw & !1` offset, `raw & 1` keyframe | matches |
+| 27 | bink | stereo flag authority | flags bit 13 set, channels field disagreeing | bit 13 wins | matches |
+| 28 | bink | even-length final frame | hand-built | framemd5 matches this crate's framing exactly | matches |
+| 29 | bink | odd-length non-final frame | hand-built | reference drifts one byte, next frame fails to demux | confirmed via targeted fixture; not reproduced (seeks per-frame instead) |
+| 30 | smk | frame-rate formula | positive/negative/zero raw values | three distinct unit conventions | same three-case formula, same outputs |
+| 31 | smk | extradata layout | hand-built, minimal tree | 4×u32 (16) + tree bytes (10) = 26 | 26 |
+| 32 | smk | audio packet payload | hand-built | length/`UnpackedLength` fields stripped, data only | matches |
+| 33 | smk | video packet payload (palette frame) | hand-built | 769 bytes longer than raw video chunk | not reproduced — unresolved, see "What was deferred" |
 
 Rows 1–7, 12–15, and 16–24 are measurements this session took directly
 (the `ffprobe` invocations are reproducible from each module's doc
 comment); rows 8–11 restate `vaco-mux-stream`'s own independently-measured
 `ffmetadata` grammar findings, re-verified against the same reference
-binary rather than trusted from that crate's doc comment.
+binary rather than trusted from that crate's doc comment. Rows 25–33 were
+measured in a later session using the `ffmpeg -c copy -f framemd5`
+technique described above, since `-show_streams`/`-show_packets` alone
+could not get the reference's real decoders to open these two formats'
+hand-built fixtures.
 
 ---
 
@@ -195,10 +279,14 @@ binary rather than trusted from that crate's doc comment.
 
 ## Configuration
 
-No format-specific options. All five demuxers use `FormatOptions::default()`
-internally (`ivf`/`roq`/`flic`/`cdg` do not even take a `FormatOptions`
-parameter — nothing about them is configurable) and go through the standard
-`vaco_limits::Limits::permissive()` budget for allocation.
+No format-specific options. All seven demuxers use `FormatOptions::default()`
+internally (`ivf`/`roq`/`flic`/`cdg`/`bink`/`smk` do not even take a
+`FormatOptions` parameter — nothing about them is configurable) and go
+through the standard `vaco_limits::Limits::permissive()` budget for
+allocation. `bink`/`smk` additionally bound their own header-declared
+sizes structurally before the budget sees them — `MAX_TRACKS`/
+`MAX_FRAMES`/`MAX_CHUNK` in `bink.rs`, `NUM_TRACKS` (a fixed 7, not
+attacker-controlled) in `smk.rs`.
 
 ---
 
@@ -208,7 +296,8 @@ parameter — nothing about them is configurable) and go through the standard
 `vaco-codec-core` (for `CodecId`/`CodecParameters` — D14.1 permits this;
 it is the *parser* layer, `vaco-parse-*`, that a format crate may not
 depend on, and nothing here does), `vaco-sampfmt` and `vaco-chlayout`
-(`roq`'s audio stream description).
+(`roq`'s audio stream description). `bink` and `smk` added no new
+dependencies.
 
 ---
 
@@ -216,34 +305,50 @@ depend on, and nothing here does), `vaco-sampfmt` and `vaco-chlayout`
 
 **Missing `CodecId` variants — the interface gap that matters most here.**
 `vaco-codec-core` has no variants for any game-video or game-audio codec:
-`Roq`/`RoqDpcm`, `Bink`/`BinkAudio`, `Smacker`/`SmackerAudio`, `Flic`,
-`Cdgraphics`, and the rest of the ~55 undone names would need the same.
-Every stream in `roq`, `flic` and `cdg` therefore carries `codec_id: None`,
-so `-show_streams` prints `codec_name=unknown` where the reference prints a
-real name — reported here rather than worked around, per this crate's
-scope (`vaco-codec-core` is not owned by this package). See
-`planning/INTERFACE-GAPS.md` for the full entry.
+`Roq`/`RoqDpcm`, `Bink`/`BinkAudio`, `Smacker`/`SmackAudio`, `Flic`,
+`Cdgraphics`, and the rest of the ~53 undone names would need the same.
+Every stream in `roq`, `flic`, `cdg`, `bink` and `smk` therefore carries
+`codec_id: None`, so `-show_streams` prints `codec_name=unknown` where the
+reference prints a real name — reported here rather than worked around,
+per this crate's scope (`vaco-codec-core` is not owned by this package).
+See `planning/INTERFACE-GAPS.md` gap 21 for the full entry (extended with
+the `Bink`/`BinkAudio`/`Smacker`/`SmackAudio` rows in the same later pass
+that added the two modules).
 
-**~55 container names not implemented**: `bink`, `smk` (Smacker), `vmd`,
-`ipmovie`, `wsvqa`, `wc3movie`, `dxa`, `cdxl`, `4xm`, `anm`, `bfi`, `bmv`,
-`c93`, `dfa`, `ea`/`ea_cdata`, `film_cpk`, `gdv`, `hnm`, `idcin`, `iss`,
-`jv`, `mm`, `mtv`, `mv`, `mvi`, `paf`, `psxstr`, `rl2`, `rpl`, `siff`,
-`smush`, `thp`, `tiertexseq`, `tmv`, `yop`, `nsv`, `nuv`, `cine`, `r3d`,
-`dhav`, `moflex`, `mgsts`, `aqtitle`, `mcc`, `rcwt`, `tedcaptions`, `tty`,
-`bin`, `xbin`, `adf`, `idf`, `sbg`, `ico`, `apng`. `bink` and `smk` are
-close enough to in-scope to research: their chunk/frame-index-table
-framing is publicly documented on the MultimediaWiki well enough to
-demux structurally (see the agent report for the specific layouts found),
-but implementing, testing and fixture-building both to the same standard
-as the five above did not fit this session. Everything else was not
-researched at all.
+**`smk`'s video-packet payload omits whatever the reference packages
+alongside a palette-carrying frame** (measured ~769 bytes longer than the
+raw video chunk; three hash-matching hypotheses about the exact byte
+layout all failed). Reported as an honest, unresolved divergence rather
+than guessed at further — see `planning/TECH-DEBT.md`.
+
+**`bink` deliberately does not reproduce the reference's odd-length-frame
+drift.** The reference reads frames sequentially and drifts a byte after
+any odd-length frame, cascading into a hard failure on every following
+frame; this crate seeks to each frame's own table offset instead, so it
+neither drifts nor cascades. Confirmed mechanism, deliberate divergence —
+see `planning/TECH-DEBT.md`.
+
+**~53 container names not implemented**: `vmd`, `ipmovie`, `wsvqa`,
+`wc3movie`, `dxa`, `cdxl`, `4xm`, `anm`, `bfi`, `bmv`, `c93`, `dfa`,
+`ea`/`ea_cdata`, `film_cpk`, `gdv`, `hnm`, `idcin`, `iss`, `jv`, `mm`,
+`mtv`, `mv`, `mvi`, `paf`, `psxstr`, `rl2`, `rpl`, `siff`, `smush`, `thp`,
+`tiertexseq`, `tmv`, `yop`, `nsv`, `nuv`, `cine`, `r3d`, `dhav`, `moflex`,
+`mgsts`, `aqtitle`, `mcc`, `rcwt`, `tedcaptions`, `tty`, `bin`, `xbin`,
+`adf`, `idf`, `sbg`, `ico`, `apng`. `vmd`, `idcin` and `wsvqa` are the
+same id-Software-era family as `bink`/`smk` and would likely take the same
+technique, but were not pursued in this pass: the returns on `bink`/`smk`
+had already dropped into open-ended reverse-engineering territory (the
+`smk` palette-payload investigation) rather than straightforward framing
+measurement, which was read as the signal to stop rather than push toward
+a target count. Everything in this list was not researched at all.
 
 **`roq`/`flic` seeking.** Both return `Error::Unsupported`. Neither format
 carries an index; a real implementation would need either a full forward
 scan to build one (expensive for `roq`, whose chunk sizes are not
 predictable without reading them) or accepting an approximate byte-search
 seek, and neither seemed worth it without a real fixture corpus to verify
-seek accuracy against.
+seek accuracy against. `bink`/`smk` also do not implement seeking, for the
+same reason.
 
 **`roq`'s stereo DPCM sample-per-packet count** (`payload_len / 2`) is
 reasoned from the interleaved-stereo convention, not independently measured
