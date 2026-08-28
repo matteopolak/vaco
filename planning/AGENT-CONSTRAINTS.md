@@ -330,6 +330,34 @@ nothing a author did not already have. And a `Vaco-Provenance` kind that
 one — three tests pin that, including the case where `none` must not satisfy a
 `spec` provenance.
 
+## Measure the thing that can be wrong, not the thing that is convenient
+
+Four defects this project shipped past, or nearly shipped past, were invisible
+to the metric being used — not because the metric was computed wrongly, but
+because it was too narrow to contain the failure.
+
+- **AAC 5.1**: per-channel correlation ~0.98, whole-frame correlation ~0. Every
+  channel individually right; the frame collectively wrong, because the
+  bitstream's channel order is not the output's. A per-channel metric calls
+  that a pass.
+- **AAC's QMF banks**: single tones round-trip at >0.99 across 200 Hz–10 kHz,
+  white noise at ~0.04. Energy in one subband hides a per-subband phase error
+  that broadband energy exposes.
+- **VP9's `inv_remap_prob`**: invisible on trivial content because probability
+  updates rarely fire, catastrophic on real content.
+- **MPEG-2's `CODED_BLOCK_PATTERN`**: small quiet fixtures at max deviation 2,
+  busy ones at 234 of 255.
+
+The pattern is one thing: **a corpus or a metric that cannot reach the failing
+path reports success indistinguishable from real success.** So before trusting
+a green number, ask what a failure would have to look like to survive it — and
+then build the case that would not.
+
+Broadband where you tested tones. Whole-signal where you tested parts. Busy
+content where you tested flat. Two tones where one passed. And when a test
+cannot fail, say so: a test that buys confidence it has not earned is worse
+than no test, because it stops the next person looking.
+
 ## Check a recorded blocker before you accept it
 
 A doc comment or a `TECH-DEBT.md` row saying something is not tractable is
