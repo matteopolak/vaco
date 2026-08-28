@@ -11,6 +11,13 @@
 
 [[component]]
 kind = "filter"
+name = "adecorrelate"
+long_name = "Apply decorrelation to input audio"
+ctor = "vaco_filter_audio::adecorrelate::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
 name = "aformat"
 long_name = "Convert the input audio to one of the specified formats"
 ctor = "vaco_filter_audio::aformat::DESC"
@@ -28,6 +35,13 @@ kind = "filter"
 name = "amix"
 long_name = "Audio mixing"
 ctor = "vaco_filter_audio::amix::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "amultiply"
+long_name = "Multiply two audio streams"
+ctor = "vaco_filter_audio::amultiply::DESC"
 media = "audio"
 
 [[component]]

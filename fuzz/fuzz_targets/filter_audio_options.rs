@@ -14,9 +14,10 @@
 //! standing warning that probing a parser *through* a filtergraph measures
 //! the filtergraph's unescaping unless the whole path is exercised together.
 //!
-//! Property: for any byte string, for any of the eleven registered names,
-//! either a clean `Err` comes back at some stage or a working `Instance`,
-//! never a panic and never an unbounded allocation.
+//! Property: for any byte string, for any of the thirteen registered names
+//! (eleven from FT-4.2, plus `amultiply`/`adecorrelate` from FT-4.13e,
+//! GitHub #485), either a clean `Err` comes back at some stage or a working
+//! `Instance`, never a panic and never an unbounded allocation.
 //! fuzz-crate: vaco-filter-audio
 
 #![no_main]
@@ -26,9 +27,11 @@ use vaco_filter_audio::registry::AudioRegistry;
 use vaco_filter_graph::registry::{FilterRegistry, Instantiate};
 
 const NAMES: &[&str] = &[
+    "adecorrelate",
     "aformat",
     "amerge",
     "amix",
+    "amultiply",
     "aresample",
     "asetnsamples",
     "asetrate",

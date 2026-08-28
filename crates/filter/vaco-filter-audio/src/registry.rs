@@ -15,9 +15,11 @@ use vaco_filter_graph::registry::{FilterRegistry, Instance, Instantiate};
 /// The names this crate answers to, in the order `ffmpeg -filters` would
 /// print them (alphabetical, as the reference's own listing is).
 const NAMES: &[&str] = &[
+    "adecorrelate",
     "aformat",
     "amerge",
     "amix",
+    "amultiply",
     "aresample",
     "asetnsamples",
     "asetrate",
@@ -39,9 +41,11 @@ impl FilterRegistry for AudioRegistry {
 
     fn create(&self, req: &Instantiate<'_>) -> Result<Instance, String> {
         match req.name {
+            "adecorrelate" => Ok(crate::adecorrelate::create(req)),
             "aformat" => crate::aformat::create(req),
             "amerge" => crate::amerge::create(req),
             "amix" => crate::amix::create(req),
+            "amultiply" => Ok(crate::amultiply::create(req)),
             "aresample" => crate::aresample::create(req),
             "asetnsamples" => crate::asetnsamples::create(req),
             "asetrate" => crate::asetrate::create(req),

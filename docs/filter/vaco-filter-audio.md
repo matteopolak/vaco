@@ -2,7 +2,9 @@
 
 T1 audio filters (FT-4.2, GitHub issue #466): `aresample`, `aformat`, `volume`,
 `amix`, `amerge`, `channelmap`, `channelsplit`, `join`, `pan`, `asetnsamples`,
-`asetrate`.
+`asetrate`. Plus `amultiply` and `adecorrelate` (FT-4.13e, GitHub #485,
+closing epic #58) — the two `vaco-filter-amix`-row filters plan 16 §4.3 lists
+that this crate had not registered yet.
 
 ## What it is
 
@@ -91,6 +93,25 @@ frame size (FFT-domain filters built on `vaco-tx`) will hit the same wall.
   (arithmetic is always `f64`; ReplayGain side data has no representation in
   `vaco_frame::FrameSideData` yet to read from).
 
+### `amultiply` — bit-exact, and `adecorrelate` — cannot be measured
+
+`amultiply` (two fixed audio input pads, `vaco_filter_core::adapt::Paired`)
+is `y[n] = a[n] * b[n]` per channel, verified byte-exact against the
+reference at full `f64` precision (`amultiply.rs`'s module doc has the
+probe). It has no `eof_action` option surface, so it is `Paired`, not
+`vaco-filter-framesync`'s `Synced` — measured, per this project's standing
+rule for two-input filters.
+
+`adecorrelate`'s `seed=-1` default is genuinely nondeterministic in the
+reference and its RNG stream cannot be recovered from black-box probing
+(D7/D17), so this implementation reproduces the *documented technique*
+(Kendall 1995's random-allpass decorrelation, via cascaded Schroeder allpass
+sections, Schroeder 1962) independently seeded per channel, rather than the
+reference's specific coefficients. Verified against the one real property a
+Schroeder allpass section must have — energy preservation (Parseval) — not
+against the reference. See `adecorrelate.rs`'s module doc for the full
+reasoning.
+
 ## How to change it
 
 - Add a filter: create `src/<name>.rs` following an existing module's shape
@@ -146,3 +167,6 @@ fields, parsed by hand) — see that crate's `opts.rs` module doc.
 Closes GitHub #466 (FT-4.2). All eleven filters are present and exercised on
 their documented common path; see "Sample-accurate plumbing versus
 approximated plumbing" above for exactly what is measured versus structural.
+
+Also closes its share of GitHub #485 (FT-4.13e, closing epic #58):
+`amultiply` (bit-exact) and `adecorrelate` (structural, see above).
