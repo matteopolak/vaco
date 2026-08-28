@@ -297,6 +297,29 @@ pub enum CodecId {
     AptxHd,
     Sbc,
     AdpcmAdx,
+
+    // The game-video/game-audio repertoire `vaco-format-misc`'s `roq`,
+    // `flic`, `cdg`, `bink` and `smk` demuxers need to name a stream's codec
+    // at all (gap 21, `planning/INTERFACE-GAPS.md`): every one of them
+    // carried `codec_id: None`, so `-show_streams` printed
+    // `codec_name=unknown` where the reference names a real codec. Names,
+    // long names and properties probed from `ffmpeg -codecs`/`-decoders`,
+    // 8.1, and for `Roq`/`RoqDpcm` cross-checked against a real file
+    // (`ffmpeg -f lavfi ... -c:v roqvideo -c:a roq_dpcm -f roq`) round-tripped
+    // through `ffprobe`. `BinkAudioDct`/`BinkAudioRdft` are two variants, not
+    // one: the reference reports them as two entirely distinct
+    // `codec_name`s with no shared alias, so one `CodecId` could not print
+    // the right name for both, unlike `AacLatm`'s reason for being separate
+    // from `Aac` in the first place.
+    Roq,
+    RoqDpcm,
+    Flic,
+    Cdgraphics,
+    Bink,
+    BinkAudioDct,
+    BinkAudioRdft,
+    Smacker,
+    SmackAudio,
 }
 
 /// One row of the codec identity table.
@@ -1211,6 +1234,74 @@ const CODECS: &[CodecEntry] = &[
         "SEGA CRI ADX ADPCM",
         A,
         CodecProperties::LOSSY,
+    ),
+    // The game-video/game-audio repertoire: see the `CodecId` variants'
+    // own doc comment for why `BinkAudioDct`/`BinkAudioRdft` are two rows.
+    // Flags read straight off `ffmpeg -codecs`' own I/L/S columns rather
+    // than guessed: `flic` is the one lossless entry here, and every audio
+    // row is intra-only where none of the video rows are.
+    entry(
+        CodecId::Roq,
+        "roq",
+        "id RoQ video",
+        V,
+        CodecProperties::LOSSY,
+    ),
+    entry(
+        CodecId::RoqDpcm,
+        "roq_dpcm",
+        "DPCM id RoQ",
+        A,
+        CodecProperties::LOSSY.union(CodecProperties::INTRA_ONLY),
+    ),
+    entry(
+        CodecId::Flic,
+        "flic",
+        "Autodesk Animator Flic video",
+        V,
+        CodecProperties::LOSSLESS,
+    ),
+    entry(
+        CodecId::Cdgraphics,
+        "cdgraphics",
+        "CD Graphics video",
+        V,
+        CodecProperties::LOSSY,
+    ),
+    entry(
+        CodecId::Bink,
+        "binkvideo",
+        "Bink video",
+        V,
+        CodecProperties::LOSSY,
+    ),
+    entry(
+        CodecId::BinkAudioDct,
+        "binkaudio_dct",
+        "Bink Audio (DCT)",
+        A,
+        CodecProperties::LOSSY.union(CodecProperties::INTRA_ONLY),
+    ),
+    entry(
+        CodecId::BinkAudioRdft,
+        "binkaudio_rdft",
+        "Bink Audio (RDFT)",
+        A,
+        CodecProperties::LOSSY.union(CodecProperties::INTRA_ONLY),
+    ),
+    entry(
+        CodecId::Smacker,
+        "smackvideo",
+        "Smacker video",
+        V,
+        CodecProperties::LOSSY,
+    ),
+    entry(
+        CodecId::SmackAudio,
+        "smackaudio",
+        "Smacker audio",
+        A,
+        CodecProperties::LOSSY.union(CodecProperties::INTRA_ONLY),
     ),
 ];
 
