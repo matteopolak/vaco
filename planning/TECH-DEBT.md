@@ -808,6 +808,67 @@ picks this up next — not yet resolved, and not something to guess at
 further without re-reading §7.2.2.5-§7.2.2.7 against a wider set of
 `(snroffset, floorcod)` combinations than this pass had time to try.
 
+### Update 3: mono's remaining desync — the snroffset/floor combination arithmetic is eliminated too; not root-caused this pass
+
+One more pass on mono specifically, per the coordinator's framing: the
+*fields* (`csnroffst`, `floorcod`, and everything before them in the
+frame) are independently confirmed byte-accurate through block 2, so
+either a correctly-read field is being *combined* wrongly in
+`compute_bap`, or the decoder's response to a genuinely-coded
+`(csnroffst, floorcod)` pair is what's wrong. Checked the three places
+that arithmetic can go wrong while every field it reads is correct, all
+re-verified character-by-character against the raw extracted spec text
+(including checking specifically for PDF-extraction dash/minus
+ambiguity — the source uses a literal Unicode minus sign throughout,
+confirmed at the byte level, no garbling found):
+
+- **§7.2.2.1's `snroffset` composition** — `snroffset[ch] = (((csnroffst
+  − 15) << 4) + fsnroffst[ch]) << 2` matches `combine_snroffset` exactly.
+  `csnroffst` itself (50, for block 2) was independently re-derived
+  directly from the file's raw bytes at its exact bit position, outside
+  this crate's own reader — not a misread.
+- **The `sdecay`/`fdecay`/`sgain`/`dbknee`/`floor` chain** — all five
+  tables (`SLOWDECAY`/`FASTDECAY`/`SLOWGAIN`/`DBKNEE`/`FLOOR`) re-verified
+  byte-for-byte against Tables 7.6-7.10, including specifically
+  re-confirming `floortab[7] = 0xf800` is meant as two's-complement -2048
+  (Table 7.10's own encoding, not an assumption). The combination itself
+  — `mask[j] -= snroffset; mask[j] -= floor; if(mask[j]<0){mask[j]=0};
+  mask[j] &= 0x1fe0; mask[j] += floor;` — matches `compute_bap` exactly.
+  Traced this formula algebraically against block 2's real, byte-verified
+  inputs (`snroffset=2296`, `floorcod=7`, so `floor=-2048`): for *any*
+  starting mask value in a plausible range, `mask[j] -= snroffset -
+  floor` nets to a small number close to zero, survives the `&0x1fe0`
+  truncation as itself (or near it), and `+= floor` then drives the final
+  mask to roughly -1800 to -2048 regardless of the masking curve's own
+  output — which forces `bap` toward its maximum for nearly every bin.
+  This is what the pseudocode, executed faithfully, produces from these
+  two inputs; no transcription error was found in it.
+- **The final `bap`-index clamp** — `address = (psd[i] - mask[j]) >> 5;
+  address = min(63, max(0, address));` matches exactly, and `BAPTAB`
+  re-verified byte-for-byte against Table 7.16.
+
+None of the three eliminated. What's left open, and not resolved this
+pass: block 2's own exponents (independently re-derived from raw bytes
+and confirmed to match this crate's decode exactly) are systematically
+low — 0 to 18 across 148 bins, implying loud, broadband content — despite
+the fixture's global PCM peak being only about -18 dBFS. This is not
+proven to be impossible (a coherent, narrow-band transient can produce
+transform-domain coefficients well above the time-domain peak; Parseval's
+theorem doesn't rule out genuinely broadband, dynamic content producing
+this either), so it does not by itself prove a bug — but it also isn't
+proof of the opposite, since this pass has no independent way (D7 rules
+out the reference decoder's own source) to check what `csnroffst` value
+a conformant encoder would actually have chosen for this content. Also
+newly found in this pass, unimplemented, and unrelated to this specific
+desync (`snroffset` here is nonzero, so it does not apply): §7.2.2.1.1's
+special case — "if [csnroffst, fsnroffst[ch], cplfsnroffst, lfefsnroffst]
+are all found to be equal to zero, then all elements of bap[] should be
+set to zero, and no other bit allocation processing is required" — a real
+gap for whoever picks this up next, distinct from the mono desync above.
+
+Per the coordinator's own framing: this is a bounded "here is everything
+it is not" rather than a fourth partial fix. #367/#368 stay open.
+
 ### AC-3 IMDCT window is a KBD(alpha=5) approximation, not the spec's own table
 
 `vaco-codec-ac3::imdct::kbd_window` approximates AC-3's specific 256-tap
@@ -1207,43 +1268,3 @@ crate's real input is a per-frame `cc_data` side-data buffer, not a
 bitstream a `Decoder::send_packet` would demux — so "what is a packet
 here" needs an answer before the `Decoder` impl can be written, not just a
 translation of already-working output through `SubtitleRect::text`.
-
-### `vaco-format-misc-audio`'s `adx`/`g726`/`g726le` state duration at a different tick rate than the reference
-
-`BlockDemuxer`'s `time_base` is always `1/sample_rate`, so a packet's `pts`
-counts samples. The reference's own `adx` demuxer instead ticks at `1/250`
-(one tick per 32-sample block) and its raw `g726`/`g726le` demuxers tick at
-a generic `1/90000`; both agree with this crate's wall-clock duration
-exactly (`0.304 s` and `0.3 s` on the measured fixtures) but disagree on
-`duration_ts`/`time_base` themselves. `crates/format/vaco-format-misc-audio/tests/differential.rs`
-checks duration in microseconds for exactly this reason. Reproducing the
-reference's tick rate per format would mean `BlockDemuxer` taking a
-caller-supplied `time_base` instead of deriving one from `sample_rate`, and
-`adx` additionally reporting `duration_ts` in blocks rather than samples.
-
-### `vaco-format-misc-audio`'s `aptx`/`aptx_hd` estimate a duration the reference declines to state
-
-Both codecs have a fixed 4:1/6:1 byte:frame ratio, so
-`crates/format/vaco-format-misc-audio/src/block.rs`'s `BlockDemuxer::duration`
-estimates one from the file size — the same policy
-`vaco-format-audio-simple::pcm::RawPcmDemuxer` uses for headerless PCM. The
-reference's own raw `aptx`/`aptx_hd` demuxers report `N/A` instead. Not
-changed, since matching `N/A` would mean discarding a number this crate can
-compute exactly; recorded because a future differential pass comparing
-`duration_ts` field-for-field will flag it as a divergence and should not
-re-litigate the question from scratch.
-
-### The `fuzz` workspace could not be built to actually run `misc_audio_demux`
-
-At the time `vaco-format-misc-audio` landed, `crates/signal/vaco-scale/src/scaler.rs`
-had an uncommitted, in-progress edit calling a `plan_spec` function that did
-not exist yet (`special.rs` was untracked), which fails
-`cargo check`/`cargo fuzz run` for the whole `fuzz` package — every fuzz
-target shares one `Cargo.toml`, so one crate's broken mid-edit state blocks
-all of them, not just its own. `fuzz/fuzz_targets/misc_audio_demux.rs` is
-written and registered (`cargo xtask gen-fuzz` ran cleanly), but was never
-actually executed with `cargo +nightly fuzz run` in this session; a
-proptest-based stand-in (`tests/properties.rs`'s
-`no_demuxer_panics_or_loops_on_arbitrary_bytes`) covers the same
-no-panic/terminates property in the meantime. Re-run the real fuzz target
-once `vaco-scale` builds again.
