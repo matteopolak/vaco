@@ -1,0 +1,28 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+
+[[component]]
+kind      = "parser"
+name      = "vorbis"
+long_name = "Vorbis"
+feature   = "parse-audio-misc"
+ctor      = "vaco_parse_audio_misc::PARSER_VORBIS"
+media     = "audio"
+codec     = "vorbis"
+
+[[component]]
+kind      = "parser"
+name      = "flac"
+long_name = "FLAC (Free Lossless Audio Codec)"
+feature   = "parse-audio-misc"
+ctor      = "vaco_parse_audio_misc::PARSER_FLAC"
+media     = "audio"
+codec     = "flac"
+
+[[component]]
+kind      = "parser"
+name      = "alac"
+long_name = "ALAC (Apple Lossless Audio Codec)"
+feature   = "parse-audio-misc"
+ctor      = "vaco_parse_audio_misc::PARSER_ALAC"
+media     = "audio"
+codec     = "alac"
