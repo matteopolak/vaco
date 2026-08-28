@@ -5727,3 +5727,118 @@ clean both before and after the `vaco-frame` addition, full
 round's five commits.
 
 `Vaco-Spec-Ref: itu-t-h262` §6.3.10, D.9.14.
+
+
+## H.264: Intra_16x16/chroma prediction implemented and wired to a real decode — the flat oracle reconstructs to a byte-exact match against `ffmpeg` (#418, #420)
+
+**The flat fixture, reported first as instructed, because it is the one
+checkable by hand.** `cabac_intra_oracle_flat.264` (one macroblock, 16×16
+frame) decodes, via the existing `decode_slice_cabac`, to
+`Intra16x16PredMode = 2` (DC), `intra_chroma_pred_mode = 0` (DC),
+`coded_block_pattern = (0, 0)` — read directly off `SliceStats`, not
+assumed. Zero luma/chroma CBP means clause 7.3.5's `residual()` is never
+invoked for this macroblock at all (Intra_16x16's own luma DC block,
+read unconditionally, decodes `coded_block_flag == 0`, independently
+confirmed by the CBP-oracle work two rounds ago), so reconstruction is
+prediction alone. With macroblock 0 of the slice having nowhere for
+clause 6.4.8's neighbouring-location process to look (address −1 does
+not exist), both edges are unavailable by construction: eq. (8-75) gives
+`predL[x,y] = 128` for all 256 luma samples, and clause 8.3.3.1's
+neither-available case gives `predC[x,y] = 128` for all 64+64 chroma
+samples. **Cross-checked against real `ffmpeg 8.1`, run as a plain black
+box (D6/D7/D15: behaviour observed, no source read)** —
+`ffmpeg -i cabac_intra_oracle_flat.264 -pix_fmt yuv420p -f rawvideo`
+produces exactly 384 bytes, every one of them `128`. Byte-for-byte match.
+This is the first real pixel-oracle confirmation #418's own investigation
+never had.
+
+**#420 checked against `ASSIGNMENTS.md` before starting**, per instruction:
+`Crate(s): vaco-codec-h264`, matching this agent's own row (`agent:h264-cabac`,
+active). No mis-scope.
+
+**No 8x8 intra prediction at all — a real scope reduction, confirmed
+directly.** Grepped this crate's own `iso-iec-14496-10-2002-draft` source
+for `Intra_8x8`/`intra8x8`: zero matches. Same edition gap already
+established for the 8x8 transform. Not attempted, not a gap left for
+later.
+
+**Implemented, clause by clause, following `dequant.rs`'s established
+seam pattern (pure functions, not yet wired into `mb.rs`'s general
+macroblock loop):**
+
+- `predict_intra16x16` (clause 8.3.2): Vertical (eq. 8-70), Horizontal
+  (eq. 8-71), DC's four availability sub-cases (eq. 8-72..8-75). Not
+  Plane (clause 8.3.2.4) — deferred, needs a weighted-sum-of-differences
+  formula this round's budget did not reach.
+- `predict_intra_chroma` (clause 8.3.3): Horizontal (eq. 8-96), Vertical
+  (eq. 8-97), DC's own per-4x4-quadrant case split (eq. 8-82..8-95). Not
+  Plane (clause 8.3.3.4), same reason.
+- Not implemented at all: `Intra_4x4` (clause 8.3.1) and its mode-
+  inference step (clause 8.3.1.1's `predIntra4x4PredMode`, the default
+  the coordinator specifically flagged as easy to get backwards) — a
+  materially larger piece than the four `Intra_16x16` modes, deferred so
+  the simplest fixture (`Intra_16x16` throughout) could land end to end
+  first rather than covering both partially.
+
+**A bug caught before it was ever committed, in exactly the shape flagged
+going in.** The first draft of chroma DC's per-quadrant split used one
+symmetric averaging helper for all four 4x4 quadrants. Re-reading eq.
+(8-86)..(8-91) before finalising found this wrong: the top-right and
+bottom-left quadrants are *not* symmetric averages the way top-left/
+bottom-right are — each prioritises its own edge unconditionally when
+available (top-right: its own top row; bottom-left: its own left column),
+never combining with the other edge, falling back to the other only when
+its own is unavailable. Fixed by splitting into `dc4_symmetric` and
+`dc4_priority`, locked in with a dedicated test
+(`chroma_dc_top_right_quadrant_prefers_top_over_left`). This is the same
+"neighbour availability, not a symmetric default" shape the coordinator
+warned about going in, and it reproduced here even at the pure-function
+level, before any real neighbour derivation existed to get wrong.
+
+**`mb.rs` extended, minimally, to expose what a real decode already
+computes but previously discarded.** `MbKind::Intra16x16` gained a
+`pred_mode` field from Table 7-11's own `idx % 4` (the same `idx` the
+existing `cbp_luma`/`cbp_chroma` derivation already uses — not a new
+decode, just no longer thrown away). `CabacMbInfo` gained the matching
+`intra16x16_pred_mode` field. `SliceStats` gained
+`first_slice_mb_intra16x16_pred_mode`/`first_slice_mb_intra_chroma_pred_mode`,
+following the exact precedent `first_slice_mb_cbp` set two rounds ago, so
+a real bitstream's first macroblock can drive `predict_intra16x16`/
+`predict_intra_chroma` without duplicating `mb_type`'s CABAC decode
+inside a test.
+
+Gates: full clean sweep (`layer-check`, `dep-gate`, `unsafe-audit`,
+`dup-check`, `owner-gate`, `patent-gate`). `clippy -p vaco-codec-h264
+--all-targets` clean (the new test module needed the same
+`#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic,
+clippy::indexing_slicing, reason = "test code")]` already established on
+`cabac_residual.rs`/`cavlc.rs`'s own test modules, since `#[cfg(test)]`
+code inside `src/` is still subject to the crate-wide denies that
+`tests/`'s own file-level allow covers separately). `rustfmt` run
+directly only on `intra.rs` (confirmed safe: wholly new, self-contained,
+only a local `mod tests {}`, nothing pulling in other files). `mb.rs`'s
+own pre-existing `rustfmt` drift — present throughout the entire file,
+confirmed by `rustfmt --check` flagging dozens of hunks that predate this
+round entirely — left alone; the lines this round adds match the file's
+own surrounding (non-default-rustfmt) style rather than introducing a
+second convention. Full `vaco-codec-h264` test suite: 39 `--lib` tests
+(up from 32; 7 in the new `intra` module, including the flat-fixture
+reconstruction), all integration tests unaffected, the four already-
+`#[ignore]`d CABAC macroblock tests untouched. `h264_entropy` fuzz target
+could not be run this round: `fuzz/Cargo.toml`'s build graph currently
+fails to compile because of an unrelated, concurrently-uncommitted change
+in `vaco-filter-lut/src/lut1d.rs` (`#[derive(...)]` applied to a `const`
+item, someone else's live edit, not this crate's or this agent's). Not
+this agent's crate to fix; noted rather than worked around. No live
+writer on `vaco-codec-h264` confirmed via `ASSIGNMENTS.md` before starting
+and before the commit.
+
+`#418` stays open and untouched; `assert_slice_ends_at_rbsp_trailing_bits`
+was not weakened, not reopened as `#419`, not touched at all this round.
+Given the pixel-oracle result above, the assertion's standing is a
+question for the coordinator to weigh with a real (if partial) oracle
+now in hand — not re-judged here.
+
+`Vaco-Spec-Ref: iso-iec-14496-10-2002-draft` clause 7.4.5 (Table 7-11's
+`Intra16x16PredMode` column), clause 8.3.2 (eq. 8-70..8-75, Table 8-3),
+clause 8.3.3 (eq. 8-82..8-97, Table 8-4).
