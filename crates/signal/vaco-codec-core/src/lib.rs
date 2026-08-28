@@ -1280,6 +1280,21 @@ pub trait Encoder: Send {
     fn receive_packet(&mut self) -> Result<Packet>;
 
     fn flush(&mut self);
+
+    /// Pixel formats this encoder's [`send_frame`](Encoder::send_frame)
+    /// accepts, most-preferred first.
+    ///
+    /// The empty default means "whatever format arrives" — true of every audio
+    /// encoder and of the video encoders that already negotiate their own
+    /// format elsewhere. A video encoder that hard-fails on the wrong format
+    /// (`vaco-codec-qoi`'s "encoder needs rgb24 or rgba input" is the
+    /// motivating case) overrides this so a caller can convert *before*
+    /// sending rather than parse the failure. Additive by construction — a
+    /// default method, so every existing implementor keeps compiling.
+    #[must_use]
+    fn accepted_pix_fmts(&self) -> &'static [vaco_pixfmt::PixFmt] {
+        &[]
+    }
 }
 
 /// Splits a byte stream into packets and reads enough header syntax to describe
