@@ -540,26 +540,75 @@ impl<'a> Runner<'a> {
             }
         };
 
-        let vf = if args.filter_args.is_empty() {
+        let filter_expr = if args.filter_args.is_empty() {
             args.filter_name.to_owned()
         } else {
             format!("{}={}", args.filter_name, args.filter_args)
         };
-        let theirs_argv: Vec<String> = [
-            "-nostdin", "-hide_banner", "-y", "-fflags", "+bitexact", "-flags", "+bitexact", "-f",
-            "rawvideo", "-pix_fmt", args.in_pixfmt, "-s",
+
+        // Pad 0 first (this case's long-standing single fields), then any
+        // extra pads in declaration order -- one `-i` per input, in the
+        // same order `filterexec::run` connects its own source nodes, so
+        // stream index `N` here is pad `N` there.
+        let all_inputs: Vec<(&str, &str, u32, u32)> = std::iter::once((
+            args.media_path,
+            args.in_pixfmt,
+            args.in_width,
+            args.in_height,
+        ))
+        .chain(
+            args.extra_inputs
+                .iter()
+                .map(|e| (e.media_path, e.pixfmt, e.width, e.height)),
+        )
+        .collect();
+
+        let mut theirs_argv: Vec<String> = [
+            "-nostdin",
+            "-hide_banner",
+            "-y",
+            "-fflags",
+            "+bitexact",
+            "-flags",
+            "+bitexact",
         ]
         .into_iter()
         .map(str::to_owned)
-        .chain(std::iter::once(format!("{}x{}", args.in_width, args.in_height)))
-        .chain(["-i".to_owned(), args.media_path.to_owned(), "-vf".to_owned(), vf])
-        .chain(
+        .collect();
+        for &(path, pixfmt, width, height) in &all_inputs {
+            theirs_argv.extend(
+                ["-f", "rawvideo", "-pix_fmt", pixfmt, "-s"]
+                    .into_iter()
+                    .map(str::to_owned),
+            );
+            theirs_argv.push(format!("{width}x{height}"));
+            theirs_argv.push("-i".to_owned());
+            theirs_argv.push(path.to_owned());
+        }
+        // A single input keeps `-vf`, unchanged from before extra inputs
+        // existed, so no already-passing single-input case's exact
+        // invocation shifts. `-filter_complex` is only reached for a case
+        // that actually names more than one input.
+        if all_inputs.len() == 1 {
+            theirs_argv.push("-vf".to_owned());
+            theirs_argv.push(filter_expr);
+        } else {
+            let mut labels = String::new();
+            for i in 0..all_inputs.len() {
+                use std::fmt::Write as _;
+                let _ = write!(labels, "[{i}:v]");
+            }
+            theirs_argv.push("-filter_complex".to_owned());
+            theirs_argv.push(format!("{labels}{filter_expr}"));
+        }
+        theirs_argv.extend(
             ["-f", "rawvideo", "-pix_fmt"]
                 .into_iter()
                 .map(str::to_owned),
-        )
-        .chain([args.out_pixfmt.to_owned(), "-".to_owned()])
-        .collect();
+        );
+        theirs_argv.push(args.out_pixfmt.to_owned());
+        theirs_argv.push("-".to_owned());
+
         let theirs_inv = Invocation::new(&reference.ffmpeg, theirs_argv).with_timeout(case.timeout);
         let theirs_command = theirs_inv.command_line();
 

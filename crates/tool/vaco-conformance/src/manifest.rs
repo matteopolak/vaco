@@ -52,7 +52,15 @@
 //! exists, and it stays inside D6: expected values are generated fresh at test
 //! time and discarded, so nothing FFmpeg-derived enters the repository. A case
 //! refers to its media as `{media}`, or `{media:<id>}` when a suite declares
-//! several.
+//! several. An axis value that needs *more* than the one media its case
+//! iterates to (a multi-input `filter`-tool case, most often) names the
+//! rest with `extra_media = ["id", ...]`, resolved by id against the
+//! suite's full `[[media]]` list rather than iterated — declaring three
+//! extra inputs does not multiply the case count into three. A
+//! `[[media]]` entry that exists only to be named this way, never as the
+//! per-case iterated one, marks itself `fixed = true` so `Suite::expand`'s
+//! iteration skips it. See [`AxisValue::extra_media`] and
+//! [`MediaRef::fixed`](crate::case::MediaRef::fixed).
 //!
 //! Case ids come out as `suite/media/axis=value,axis=value`, in axis
 //! declaration order, which is what makes them stable enough to paste into a
@@ -92,6 +100,18 @@ pub struct AxisValue {
     pub argv: Vec<String>,
     /// Optional per-value tier override.
     pub tier: Option<Tier>,
+    /// `[[media]]` ids to attach to the case *in addition to* the one the
+    /// suite's per-case media iteration already attaches, for a case that
+    /// genuinely needs more than one input (a multi-input `filter`-tool
+    /// case's second/third/... source). Resolved once at [`Suite::expand`]
+    /// time, by id, against the suite's full declared `[[media]]` list --
+    /// not iterated the way the base media is, so declaring `n` extra ids
+    /// does not multiply the case count. Empty for every axis value that
+    /// does not need it (every case today but a multi-input `filter` one).
+    /// A case's argv then names each one explicitly via `{media:<id>}` --
+    /// see `manifest`'s crate doc -- so which token is which input is a
+    /// property of the suite file's own text, not of iteration order.
+    pub extra_media: Vec<String>,
 }
 
 /// One axis of the matrix.
@@ -210,6 +230,7 @@ impl Suite {
                     .and_then(Value::as_str_array)
                     .unwrap_or_default(),
                 generate,
+                fixed: t.get("fixed").and_then(Value::as_bool).unwrap_or(false),
                 id,
             });
         }
@@ -236,6 +257,10 @@ impl Suite {
                         .and_then(Value::as_str_array)
                         .unwrap_or_default(),
                     tier: string(vt, "tier").and_then(|s| Tier::parse(&s)),
+                    extra_media: vt
+                        .get("extra_media")
+                        .and_then(Value::as_str_array)
+                        .unwrap_or_default(),
                 });
             }
             if values.is_empty() {
@@ -381,13 +406,17 @@ impl Suite {
     /// Expand the matrix into cases.
     ///
     /// A suite with no media yields cases with none — source-filter suites are
-    /// legitimate and must not silently produce nothing.
+    /// legitimate and must not silently produce nothing. A suite whose media
+    /// are *all* [`MediaRef::fixed`] (every input is a fixed, named role —
+    /// see that field's doc) also yields cases with none as far as this
+    /// iteration is concerned; they still resolve via `extra_media`.
     #[must_use]
     pub fn expand(&self) -> Vec<Case> {
-        let media_list: Vec<Option<&MediaRef>> = if self.media.is_empty() {
+        let iterable: Vec<&MediaRef> = self.media.iter().filter(|m| !m.fixed).collect();
+        let media_list: Vec<Option<&MediaRef>> = if iterable.is_empty() {
             vec![None]
         } else {
-            self.media.iter().map(Some).collect()
+            iterable.into_iter().map(Some).collect()
         };
         let mut out = Vec::new();
         for media in media_list {
@@ -408,6 +437,7 @@ impl Suite {
                 }
                 let mut argv = Vec::new();
                 let mut tier = self.tier;
+                let mut case_media: Vec<MediaRef> = media.cloned().into_iter().collect();
                 if let Some(t) = media.and_then(|m| self.media_tier.get(&m.id)) {
                     tier = tier.max(*t);
                 }
@@ -422,12 +452,27 @@ impl Suite {
                         if let Some(t) = v.tier {
                             tier = tier.max(t);
                         }
+                        // Resolved by id against the suite's full `[[media]]`
+                        // list, not iterated -- declaring `extra_media` does
+                        // not multiply the case count the way another
+                        // `[[media]]` entry would. Deduplicated so an id
+                        // named by two axes (or already the iterated base
+                        // media) does not appear twice in `{media:<id>}`'s
+                        // search list.
+                        for id in &v.extra_media {
+                            if case_media.iter().any(|m| &m.id == id) {
+                                continue;
+                            }
+                            if let Some(m) = self.media.iter().find(|m| &m.id == id) {
+                                case_media.push(m.clone());
+                            }
+                        }
                     }
                 }
                 out.push(Case {
                     id: CaseId::new(&self.name, media_id, &selection),
                     tool: self.tool,
-                    media: media.cloned().into_iter().collect(),
+                    media: case_media,
                     argv,
                     compare: self.compare.clone(),
                     normalise: self.normalise.clone(),

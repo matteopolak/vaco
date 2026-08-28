@@ -490,6 +490,16 @@ pub struct MediaRef {
     /// media file is a fixture whose provenance somebody has to defend; a file
     /// synthesised by a command visible in the manifest defends itself.
     pub generate: Option<Vec<String>>,
+    /// If `true`, this entry is never the suite's per-case iterated media
+    /// (`Suite::expand`'s outer loop skips it) — it exists only to be
+    /// named explicitly, by id, from `extra_media`/`{media:<id>}`. A
+    /// multi-input `filter` case where every input is a fixed, named role
+    /// (`base`/`overlay`/`mask`, none of them a natural "vary this and
+    /// re-run everything else" axis) marks all of its `[[media]]` this way,
+    /// so declaring three inputs yields one case, not three. Defaults to
+    /// `false`, so every suite written before this existed keeps its
+    /// original one-case-per-media-entry behaviour unchanged.
+    pub fixed: bool,
 }
 
 impl MediaRef {

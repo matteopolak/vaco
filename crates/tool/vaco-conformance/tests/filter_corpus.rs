@@ -111,6 +111,40 @@ fn pixelize_agrees_with_the_reference() {
     }
 }
 
+/// The first multi-input `filter`-tool cases: `maskedmerge` (3 inputs,
+/// base/overlay/mask, a hand-rolled `Filter`) and `maskedmax`/`maskedmin`
+/// (3 inputs, source/filter1/filter2, `Paired`-wrapped instead — the
+/// *other* multi-input shape this crate uses) through `filterexec.rs`'s
+/// N-source-node support. Also pins the case *count*, not just that every
+/// case that ran agreed — six `[[media]]` entries, all marked `fixed` (see
+/// the suite's own comment), across three axis values must expand to
+/// exactly three cases, not six, nine, or zero, which is exactly the shape
+/// of bug (`Tier::Smoke` silently excluding every case earlier in this
+/// campaign) a bare "for o in outcomes" loop cannot catch on its own if
+/// the corpus quietly produced the wrong number of outcomes.
+#[test]
+fn multi_input_key_filters_agree_with_the_reference() {
+    let Some(outcomes) = run_suite("vaco-filter-key-multi.toml") else {
+        return;
+    };
+    assert_eq!(
+        outcomes.len(),
+        3,
+        "expected exactly three cases (six `fixed` media, three axis values); got {outcomes:?}"
+    );
+    for o in &outcomes {
+        println!("{}: {:?}", o.case.id, o.verdict.label());
+        assert!(
+            matches!(o.verdict, Verdict::Agree),
+            "case `{}` did not agree: {:?}\n  ours:   {}\n  theirs: {}",
+            o.case.id,
+            o.verdict,
+            o.ours_command,
+            o.theirs_command
+        );
+    }
+}
+
 #[test]
 fn convolve_agrees_with_the_reference() {
     let Some(outcomes) = run_suite("vaco-filter-convolve.toml") else {

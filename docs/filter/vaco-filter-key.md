@@ -105,6 +105,20 @@ measured, with the mismatch stated rather than rounded away to hide it.
   else `min` (strict `>`, confirmed at the equal-value case landing on
   `min`).
 
+**Multi-input, real end-to-end conformance, 2026-08-28**: this crate is
+also this project's first multi-input `filter`-tool conformance target
+(`vaco-conformance`'s `filterexec.rs`, which used to build exactly one
+source node, now builds one per declared input pad — see that crate's own
+doc for the design). `maskedmerge` (a hand-rolled `Filter`, 3 pads) and
+`maskedmax`/`maskedmin` (`Paired`-wrapped, also 3 pads — the *other*
+multi-input adapter shape this crate uses) all agree with real
+`ffmpeg 8.1` byte-for-byte on a discriminating, non-flat source (a mask
+that ramps across its own range, not just the two saturated endpoints —
+`tests/conformance/filter/vaco-filter-key-multi.toml`), confirming the
+formulas measured above by hand-probing are correct against a genuinely
+independent execution path, not merely self-consistent with the probes
+that derived them.
+
 ### `premultiply`/`unpremultiply`: what is measured and what is not
 
 Measured: the reference genuinely instantiates an internal `framesync`

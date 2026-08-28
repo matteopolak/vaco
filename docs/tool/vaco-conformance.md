@@ -161,18 +161,46 @@ frame, plane by plane, row-major, no padding, exactly what `ffmpeg -f
 rawvideo` writes for `gray8`/`yuv444p`/`gbrp` — so `raw-exact` (C4) diffs
 the two streams with no format-specific knowledge at all.
 
-A `filter`-tool case's `argv`, after `{media}` substitution, is nine
-positional tokens, not CLI flags (there is no CLI to hand them to):
+A `filter`-tool case's `argv`, after `{media}`/`{media:<id>}` substitution,
+is nine positional tokens for input 0 (not CLI flags — there is no CLI to
+hand them to), plus one four-token group per *additional* input pad a
+multi-input filter declares:
 
 ```text
-[0] path to the generated raw input file
+[0] path to input 0's generated raw file
 [1] filter name, e.g. "histogram"
 [2] filter args string, e.g. "level_height=50:scale_height=0:components=1"
-[3] input pixel format: "gray8" | "yuv444p" | "gbrp"
-[4] input width       [5] input height
+[3] input 0's pixel format: "gray8" | "yuv444p" | "gbrp"
+[4] input 0's width    [5] input 0's height
 [6] output pixel format
-[7] output width      [8] output height
+[7] output width       [8] output height
+[9..] zero or more groups of four (media_path, pixfmt, width, height),
+      one per additional input pad, in the filter's own pad-declaration
+      order
 ```
+
+A single-input case is untouched by this: still exactly nine tokens, so
+every case written before multi-input support existed keeps working
+unmodified. `FilterArgs::parse` accepts any number of trailing groups
+(including zero); `filterexec::run` separately checks the count it parsed
+against the filter's own declared `FilterDesc::inputs` length once the
+filter is instantiated, so a case naming too few or too many inputs for
+that specific filter fails loudly, naming both numbers, rather than
+silently connecting the wrong pad.
+
+A suite names an extra input by declaring it `extra_media` on the
+`[[axis]].values[]` entry that needs it, resolved by id against the
+suite's full `[[media]]` list (not iterated — declaring three inputs does
+not multiply the case count into three cases), and referencing it from
+`argv` as `{media:<id>}`. An input with no natural "vary this, rerun
+everything else" role (a fixed `base`/`overlay`/`mask`, say) marks its own
+`[[media]]` entry `fixed = true` so `Suite::expand`'s per-case iteration
+skips it entirely, leaving it available only by explicit name. See
+`tests/conformance/filter/vaco-filter-key-multi.toml` (`maskedmerge`,
+`maskedmax`, `maskedmin` — three inputs each, two different multi-input
+adapter shapes) for a worked example, and `filterexec.rs`'s own doc for
+the full convention and what is still out of scope (a real `framesync`
+timeline needing more than one frame per input before producing output).
 
 Output geometry is declared, not derived — every filter in the first
 corpus (`tests/conformance/filter/`) already has a fixed, filter-specific
@@ -472,8 +500,8 @@ in by hand — that keeps a human in the loop on every case that lands.
 ### Adding a filter test case
 
 `filter`-tool cases do not use CLI-flag argv — see "The `filter` tool"
-above for the nine-token convention `filterexec.rs` expects. A minimal
-case:
+above for the nine-token (plus extra-input groups, for a multi-input
+filter) convention `filterexec.rs` expects. A minimal, single-input case:
 
 ```toml
 schema = 1
