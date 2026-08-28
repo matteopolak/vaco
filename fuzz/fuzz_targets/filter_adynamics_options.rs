@@ -8,7 +8,9 @@
 //! graph connection, which this target never reaches), so the same
 //! single-`Instantiate` shape covers them too.
 //!
-//! Property: for any byte string, for any of the fourteen registered names,
+//! Property: for any byte string, for any of the twenty registered names
+//! (fourteen from FT-4.8b, plus `acrusher`/`adrc`/`adynamicequalizer`/
+//! `adynamicsmooth`/`apsyclip`/`asoftclip` from FT-4.13e, GitHub #485),
 //! either a clean `Err` comes back at some stage or a working `Instance`,
 //! never a panic and never an unbounded allocation.
 //! fuzz-crate: vaco-filter-adynamics
@@ -21,8 +23,14 @@ use vaco_filter_graph::registry::{FilterRegistry, Instantiate};
 
 const NAMES: &[&str] = &[
     "acompressor",
+    "acrusher",
+    "adrc",
+    "adynamicequalizer",
+    "adynamicsmooth",
     "agate",
     "alimiter",
+    "apsyclip",
+    "asoftclip",
     "astats",
     "compand",
     "dynaudnorm",

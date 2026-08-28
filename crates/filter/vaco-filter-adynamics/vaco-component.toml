@@ -14,6 +14,34 @@ media = "audio"
 
 [[component]]
 kind = "filter"
+name = "acrusher"
+long_name = "Reduce audio bit resolution"
+ctor = "vaco_filter_adynamics::acrusher::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "adrc"
+long_name = "Audio Spectral Dynamic Range Controller"
+ctor = "vaco_filter_adynamics::adrc::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "adynamicequalizer"
+long_name = "Apply Dynamic Equalization of input audio"
+ctor = "vaco_filter_adynamics::adynamicequalizer::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "adynamicsmooth"
+long_name = "Apply Dynamic Smoothing of input audio"
+ctor = "vaco_filter_adynamics::adynamicsmooth::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
 name = "agate"
 long_name = "Audio gate"
 ctor = "vaco_filter_adynamics::agate::DESC"
@@ -24,6 +52,20 @@ kind = "filter"
 name = "alimiter"
 long_name = "Audio lookahead limiter"
 ctor = "vaco_filter_adynamics::alimiter::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "apsyclip"
+long_name = "Audio Psychoacoustic Clipper"
+ctor = "vaco_filter_adynamics::apsyclip::DESC"
+media = "audio"
+
+[[component]]
+kind = "filter"
+name = "asoftclip"
+long_name = "Audio Soft Clipper"
+ctor = "vaco_filter_adynamics::asoftclip::DESC"
 media = "audio"
 
 [[component]]

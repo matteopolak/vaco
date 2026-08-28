@@ -5,6 +5,11 @@ children FT-4.8/#56 split into for single-writer ownership — the sibling is
 `vaco-filter-aeq`/#471): the compressor/limiter/gate/expander/sidechain
 family plus loudness normalisation and measurement.
 
+Plus six more (FT-4.13e, GitHub #485, closing epic #58): `acrusher`,
+`asoftclip`, `apsyclip`, `adynamicequalizer`, `adynamicsmooth`, `adrc` — see
+"The FT-4.13e additions" below for what is measured versus structural in
+each.
+
 ## Scope reconciliation
 
 GitHub #472's own text (checked with `gh issue view 472` rather than trusted
@@ -141,6 +146,38 @@ under `target: "vaco_filter_adynamics::<name>"`. The exact line format
 approximates the reference's (`max_volume: <N> dB`, `silence_start: <t>`,
 etc.) but has not been probed byte-for-byte against `ffmpeg`'s output.
 
+### The FT-4.13e additions
+
+- **`acrusher`** — measured exactly at `dc=1, aa=0, samples=1, mode=lin`: a
+  `round(x * L) / L` quantiser, `L = 2^bits - 1`, plus a `mix` blend that
+  turns out to run in the opposite direction from the usual convention
+  (`mix=1` is dry, `mix=0` is wet — measured, not assumed). `dc != 1`,
+  `aa != 0` (the reference's own *default*), `samples > 1`, `mode=log` and
+  the LFO options are accepted but have no effect — probed and found not to
+  fit any bias/scale/clamp variant of the exact formula, so left as an
+  honest no-op rather than a guessed curve. See `acrusher.rs`.
+- **`asoftclip`** — all eight curve types (`tanh`, `atan`, `cubic`,
+  `quintic`, `sin`, `erf`, `alg`, `exp`) recovered by fitting a dense ramp
+  through the reference and confirmed to machine precision, including the
+  exact turning points where `cubic`/`quintic`/`sin` clamp rather than
+  follow their formula past the peak. `exp` measures identical to `tanh`.
+  See `asoftclip.rs`.
+- **`apsyclip`**, **`adynamicequalizer`**, **`adrc`**'s non-default path —
+  structural substitutes, not reproductions: a true psychoacoustic clipper,
+  the reference's dynamic-EQ threshold units, and `adrc`'s per-FFT-bin
+  transfer expression are not recoverable from `-h`'s option list alone
+  without guessing, which this project's standing rule treats as worse than
+  an honest gap. Each module's doc says exactly what real, working
+  alternative was built instead and why.
+- **`adynamicsmooth`** — a real published algorithm (Andrew Simper/Cytomic's
+  self-modulating dynamic smoothing filter, 2014), implemented from its own
+  description and checked against the algorithm's own mathematical
+  properties (unity DC gain; `sensitivity=0` degenerates to a plain
+  two-pole TPT low-pass, checked against an independent from-scratch
+  computation of that case) rather than against the reference.
+- **`adrc`**'s default (`transfer=p`) is measured to be the identity after
+  an initial settle — see `adrc.rs`'s module doc for the probe.
+
 ## How to change it
 
 * A new compressor-family filter: reuse `common::Dynamics` — see
@@ -172,4 +209,13 @@ installs; with none installed, the events are simply dropped.
 `astats`/`volumedetect`/`silencedetect` logging surface), `vaco-filter-adsp`
 (`biquad`: `Coeffs`, `State`, `WidthType`, `lowpass`, `highpass`) for
 `mcompand`'s crossover filters — new dependency, added when `mcompand`'s own
-duplicate `Biquad2` was replaced with this shared type.
+duplicate `Biquad2` was replaced with this shared type; `adynamicequalizer`
+reuses the same dependency for its detection/target biquads (`bandpass`,
+`lowpass`, `highpass`, `peaking`, `lowshelf`, `highshelf`).
+
+## Issues
+
+Also closes its share of GitHub #485 (FT-4.13e, closing epic #58):
+`acrusher`, `asoftclip` (both measured — see above), `apsyclip`,
+`adynamicequalizer`, `adynamicsmooth`, `adrc` (structural or published-
+algorithm, see above).

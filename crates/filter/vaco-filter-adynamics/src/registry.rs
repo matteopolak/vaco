@@ -5,8 +5,14 @@ use vaco_filter_graph::registry::{FilterRegistry, Instance, Instantiate};
 
 const NAMES: &[&str] = &[
     "acompressor",
+    "acrusher",
+    "adrc",
+    "adynamicequalizer",
+    "adynamicsmooth",
     "agate",
     "alimiter",
+    "apsyclip",
+    "asoftclip",
     "astats",
     "compand",
     "dynaudnorm",
@@ -32,8 +38,14 @@ impl FilterRegistry for DynamicsRegistry {
     fn create(&self, req: &Instantiate<'_>) -> Result<Instance, String> {
         Ok(match req.name {
             "acompressor" => crate::acompressor::create(req),
+            "acrusher" => crate::acrusher::create(req),
+            "adrc" => crate::adrc::create(req),
+            "adynamicequalizer" => crate::adynamicequalizer::create(req),
+            "adynamicsmooth" => crate::adynamicsmooth::create(req),
             "agate" => crate::agate::create(req),
             "alimiter" => crate::alimiter::create(req),
+            "apsyclip" => crate::apsyclip::create(req),
+            "asoftclip" => crate::asoftclip::create(req),
             "astats" => crate::astats::create(req),
             "compand" => crate::compand::create(req),
             "dynaudnorm" => crate::dynaudnorm::create(req),

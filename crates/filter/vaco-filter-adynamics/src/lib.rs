@@ -22,11 +22,29 @@
 //! fourteen are implemented here; see
 //! `docs/filter/vaco-filter-adynamics.md` for which are numerically
 //! verified against a real property and which are structural.
+//!
+//! Plus six more (FT-4.13e, GitHub #485, closing epic #58): `acrusher`,
+//! `asoftclip`, `apsyclip`, `adynamicequalizer`, `adynamicsmooth`, `adrc` —
+//! the remaining `vaco-filter-adynamics`-row filters plan 16 §4.3 lists that
+//! had not been registered yet. `acrusher` and `asoftclip` are measured
+//! against the reference (see each module's own doc for exactly what);
+//! `apsyclip`, `adynamicequalizer` and `adrc`'s non-default path are
+//! structural substitutes for algorithms (a psychoacoustic masking model, an
+//! undocumented per-bin spectral expression grammar) that black-box probing
+//! cannot recover, honestly labelled as such rather than guessed;
+//! `adynamicsmooth` implements a real published algorithm (Cytomic's
+//! self-modulating dynamic smoothing filter) from its own description.
 #![forbid(unsafe_code)]
 
 pub mod acompressor;
+pub mod acrusher;
+pub mod adrc;
+pub mod adynamicequalizer;
+pub mod adynamicsmooth;
 pub mod agate;
 pub mod alimiter;
+pub mod apsyclip;
+pub mod asoftclip;
 pub mod astats;
 mod common;
 pub mod compand;
