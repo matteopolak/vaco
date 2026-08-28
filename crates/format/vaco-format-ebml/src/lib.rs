@@ -57,7 +57,11 @@
 //!   cap rather than clamping it.
 //! * [`reader::Slice::children`] is a flat iterator; nesting is the caller's
 //!   business, recursing with an explicit depth checked against
-//!   [`element::MAX_DEPTH`] or a caller-chosen bound.
+//!   [`element::MAX_DEPTH`] or a caller-chosen bound. A child whose
+//!   declared size overruns the in-memory buffer is clamped to what is
+//!   actually there rather than rejected — see that method's own doc for
+//!   the reasoning and its siblings in `vaco-format-isom`/
+//!   `vaco-format-riff`/`vaco-format-asf`.
 //! * [`stack::Stack`] has a fixed frame ceiling ([`stack::Stack::MAX_FRAMES`])
 //!   and cannot grow past it.
 //!

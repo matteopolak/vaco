@@ -199,9 +199,21 @@ impl<'a> Chunk<'a> {
 /// Flat iteration over one container's direct child chunks.
 ///
 /// Mirrors `vaco-format-isom::boxes::BoxIter` in shape (flat, fails once and
-/// stops on a broken chain) but not in size-trust policy: see the module
-/// documentation for why a RIFF chunk's declared size is clamped rather than
-/// rejected.
+/// stops on a broken chain) and, since that crate's own oversized-length
+/// recovery landed, in size-trust policy too: both clamp a declared size
+/// that overruns the buffer actually in memory rather than rejecting it,
+/// for the same reason — see the module documentation here and
+/// `BoxIter`'s own doc for why. The two crates reached this independently,
+/// which is one of the data points behind treating it as this codebase's
+/// house answer for a bounded, in-memory container walk rather than a
+/// RIFF-specific quirk; `vaco-format-ebml`'s `Slice`/`Children` (the same
+/// shape again, one third crate) and `vaco-format-asf`'s `ObjectIter` are
+/// the other two. What still differs crate to crate is only the
+/// stream/seek-based top-level path each format also has (RIFF has none;
+/// ISOBMFF's `TopLevelScanner`, Matroska's `read_body` and MXF's KLV
+/// `read_value` all reject there instead, deliberately, because a
+/// corrupted length seeked over rather than held in memory can otherwise
+/// swallow real, unrelated data into a mis-sized sibling).
 #[derive(Debug, Clone)]
 pub struct ChunkIter<'a> {
     data: &'a [u8],

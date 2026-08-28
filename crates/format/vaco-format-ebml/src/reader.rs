@@ -53,6 +53,28 @@ impl<'a> Slice<'a> {
     /// truncated master should still yield the children that were complete,
     /// which is what every other implementation does and what a partially
     /// written file needs.
+    ///
+    /// **A child whose declared size overruns this master is clamped to
+    /// what `data` actually holds, not rejected** (see [`Children::next`]).
+    /// This is the same house answer `vaco-format-isom::boxes::BoxIter`,
+    /// `vaco-format-riff::chunk::ChunkIter` and
+    /// `vaco-format-asf::object::ObjectIter` independently reached for the
+    /// identical shape — a flat walk over an already-in-memory,
+    /// already-bounded buffer — and for the identical reason: clamping
+    /// never reads a byte that was not already part of this same buffer,
+    /// so it cannot escape into a sibling container's data the way
+    /// resynchronising by scanning content for a new header would.
+    /// [`crate::reader::read_header`]'s own streaming path (used for a
+    /// large or unknown-size master like a Matroska `Cluster`, read
+    /// directly off an [`IoContext`] rather than into memory first) makes
+    /// no such promise at all — it parses whatever size a header declares
+    /// verbatim and leaves bounding it to the caller, which is where
+    /// `vaco-demux-matroska::demux::read_body` does reject a size that
+    /// overruns the file, deliberately (plan 13 section 2.2.2 rule 3):
+    /// a corrupted length seeked over rather than held in memory could
+    /// otherwise swallow real, unrelated data into a mis-sized sibling,
+    /// the same asymmetry `vaco-format-isom` states between `BoxIter` and
+    /// `TopLevelScanner`.
     #[must_use]
     pub const fn children(&self) -> Children<'a> {
         Children {
@@ -94,7 +116,10 @@ impl<'a> Iterator for Children<'a> {
         let header_len = id_len.checked_add(size_len)?;
         let body = rest.get(header_len..)?;
         // An unknown size inside an in-memory master runs to the end of that
-        // master: there is nothing after it to terminate against.
+        // master: there is nothing after it to terminate against. A *known*
+        // size that overruns `body` is clamped the same way, deliberately —
+        // see `Slice::children`'s doc comment for why this is safe here and
+        // is not the same question as `read_header`'s streaming path.
         let n = match size {
             Size::Known(n) => usize::try_from(n).ok()?.min(body.len()),
             Size::Unknown => body.len(),
