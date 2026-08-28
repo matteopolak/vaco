@@ -30,24 +30,50 @@
 //! `vaco-filter-aanalysis` and `vaco-filter-adynamics` are renamed to
 //! `-aeq`/`-aanalysis`/`-adynamics` in a separate, later commit per
 //! `planning/16-filters.md` §4.3 — this move happened under their original
-//! names). The row's remaining two kernels — the EBU R128 loudness core and
-//! partitioned FIR convolution — still have no caller in this crate and are
-//! not added speculatively; whoever needs one next should add it here
-//! rather than duplicating it, per the same rule.
+//! names).
 //!
-//! # Design note: no FFT
+//! # 2026-08-28 addition: [`fir`] (GitHub #461, FT-3.4), and why the EBU
+//! R128 core is deliberately *not* also added here
+//!
+//! Of the row's two remaining kernels, only [`fir`] (partitioned overlap-add
+//! FIR convolution) genuinely has no implementation anywhere in the tree —
+//! added here per this doc's own long-standing invitation, for the FIR
+//! reverb/HRTF-style filters (`headphone`, a possible `afir`) that need it
+//! and do not exist yet.
+//!
+//! The EBU R128 loudness core is a *different* situation from the biquad
+//! story above, not the same one repeating: `vaco-filter-aanalysis::loudness`
+//! already implements the full BS.1770-4 gated scanner (K-weighting, 100 ms
+//! sub-blocks, the 400 ms/3 s gating windows) for `ebur128` and
+//! `replaygain`, and it is the *only* implementation — unlike biquad, no
+//! second crate independently reinvented a narrower one, because
+//! `vaco-filter-adynamics::loudnorm` explicitly declined to (its own doc
+//! says plainly "this is not an EBU R128 / ITU-R BS.1770 implementation",
+//! and names the simpler RMS-based approximation it uses instead, and why).
+//! So there is one owner and zero unmet callers today: adding a second copy
+//! here would be pure duplication with no consolidation to perform, the
+//! same mistake this crate's own `edge_common`/box-blur/morphology/LUT
+//! near-misses in `vaco-filter-vdsp` made for exactly this reason (see that
+//! crate's doc). Extracting `vaco-filter-aanalysis::loudness` into a shared
+//! home is real, correctly-scoped future work — for whoever next needs a
+//! *second* BS.1770 caller, or for a deliberate refactor that also updates
+//! `vaco-filter-aanalysis` to depend on the extracted copy, neither of which
+//! this pass does.
+//!
+//! # Design note: no FFT until now
 //!
 //! The plan's row also lists a "phase-vocoder core" alongside WSOLA. `atempo`
 //! is implemented here with plain time-domain WSOLA (windowed cross-
 //! correlation search for the best splice point, then overlap-add) rather
-//! than a phase vocoder, so this crate has no `vaco-tx` dependency yet. WSOLA
-//! is the standard technique for this exact problem (time-domain
-//! pitch-preserving tempo change) and needs no FFT; a phase-vocoder path can
-//! be added by a future caller that specifically needs its trade-offs
-//! (smoother transients at extreme ratios, at the cost of a dependency on
-//! `vaco-tx`) without disturbing this one.
+//! than a phase vocoder, so this crate had no `vaco-tx` dependency until
+//! [`fir`] needed one for its own, unrelated reason (FFT-domain block
+//! convolution). WSOLA is the standard technique for time-domain
+//! pitch-preserving tempo change and needs no FFT; a phase-vocoder path can
+//! still be added by a future caller that specifically needs its trade-offs
+//! without disturbing this one.
 #![forbid(unsafe_code)]
 
 pub mod biquad;
+pub mod fir;
 pub mod wave;
 pub mod wsola;

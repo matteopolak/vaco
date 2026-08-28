@@ -1,6 +1,6 @@
 [package]
 name = "vaco-filter-adsp"
-description = "Shared audio DSP kernels used by more than one filter crate: LFO wave-table generation and a time-domain WSOLA tempo-change core. Plan 16 §4.1."
+description = "Shared audio DSP kernels used by more than one filter crate: LFO wave-table generation, a time-domain WSOLA tempo-change core, biquad coefficient design, and partitioned overlap-add FIR convolution. Plan 16 §4.1 (GitHub #461, FT-3.4)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,6 +9,7 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+vaco-tx = { path = "../../signal/vaco-tx" }
 
 [dev-dependencies]
 proptest.workspace = true
