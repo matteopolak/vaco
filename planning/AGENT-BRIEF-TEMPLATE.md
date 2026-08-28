@@ -303,3 +303,33 @@ rows says what N separate "verified this one" claims cannot.
 **What not to batch.** Work that shares a *file* with another agent, and work
 whose second half depends on a decision the first half surfaces. Those want
 sequencing, not parallelism — say so and hand the second half back.
+
+## Report the debt you had to work around
+
+Finishing a package includes one more thing: **append what you had to work
+around to `planning/TECH-DEBT.md`.** Not the bugs you fixed — the ones you
+routed past.
+
+You have just spent a session inside a crate and you know things about it that
+no later reader will: which file has outgrown its module and where the seam is,
+which interface you had to work around, which comment now describes behaviour
+the code no longer has, which test cannot fail. That knowledge is otherwise lost
+the moment your context ends, and the next agent pays to rediscover it. The
+`Muxer::add_stream` gap that made `framecrc` print the wrong time base was
+known to at least two agents before it was written down, and cost a full session
+once it finally mattered.
+
+`TECH-DEBT.md` names the categories and what a useful row looks like. Two rules
+worth repeating here:
+
+- **Be specific enough to act on.** "`demux.rs` is 1986 lines and the EBML walk,
+  the track table and the cue index never call each other" is a row someone can
+  pick up. "`demux.rs` is long" is not.
+- **Do not fix it in passing.** If it is small enough to fix inside the change
+  you are already making, do that instead and say so in the commit. The register
+  is for things too large or too far outside your ownership to fix without
+  widening your scope — and widening scope mid-flight is how agents collide.
+
+Report it in your final message too, not only in the file. Debt that turns out
+to block the next package gets scheduled immediately; the rest waits for a quiet
+slot.
