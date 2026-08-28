@@ -3482,6 +3482,30 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "codec-mpeg12")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "mpeg1video",
+        long_name: Some("MPEG-1 video"),
+        krate: "vaco-codec-mpeg12",
+        feature: Some("codec-mpeg12"),
+        media: Some("video"),
+        codec: Some("mpeg1video"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-mpeg12")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "mpeg2video",
+        long_name: Some("MPEG-2 video"),
+        krate: "vaco-codec-mpeg12",
+        feature: Some("codec-mpeg12"),
+        media: Some("video"),
+        codec: Some("mpeg2video"),
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "codec-pnm")]
     crate::Component {
         kind: crate::Kind::Decoder,
@@ -4367,6 +4391,17 @@ pub static COMPONENTS: &[crate::Component] = &[
     },
     crate::Component {
         kind: crate::Kind::Filter,
+        name: "amplify",
+        long_name: Some("Amplify changes between successive video frames."),
+        krate: "vaco-filter-artistic",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
         name: "amultiply",
         long_name: Some("Multiply two audio streams"),
         krate: "vaco-filter-audio",
@@ -5214,6 +5249,17 @@ pub static COMPONENTS: &[crate::Component] = &[
     },
     crate::Component {
         kind: crate::Kind::Filter,
+        name: "delogo",
+        long_name: Some("Remove logo from input video."),
+        krate: "vaco-filter-artistic",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
         name: "detelecine",
         long_name: Some("Apply an inverse telecine pattern."),
         krate: "vaco-filter-deinterlace",
@@ -5305,6 +5351,17 @@ pub static COMPONENTS: &[crate::Component] = &[
         name: "entropy",
         long_name: Some("Measure video frames entropy."),
         krate: "vaco-filter-analysis",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "epx",
+        long_name: Some("Scale the input using EPX algorithm."),
+        krate: "vaco-filter-artistic",
         feature: None,
         media: Some("video"),
         codec: None,
@@ -8373,6 +8430,10 @@ pub static DECODERS: &[&::vaco_codec_core::DecoderDesc] = &[
     &::vaco_codec_mpegaudio::DECODER_MP2,
     #[cfg(feature = "codec-mpegaudio")]
     &::vaco_codec_mpegaudio::DECODER_MP3,
+    #[cfg(feature = "codec-mpeg12")]
+    &::vaco_codec_mpeg12::DECODER_MPEG1,
+    #[cfg(feature = "codec-mpeg12")]
+    &::vaco_codec_mpeg12::DECODER_MPEG2,
     #[cfg(feature = "codec-pnm")]
     &::vaco_codec_pnm::PAM_DECODER,
     #[cfg(feature = "codec-pnm")]
@@ -8506,6 +8567,7 @@ pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[
     &::vaco_filter_audio::amerge::DESC,
     &::vaco_filter_mm::metadata::audio::DESC,
     &::vaco_filter_audio::amix::DESC,
+    &::vaco_filter_artistic::amplify::DESC,
     &::vaco_filter_audio::amultiply::DESC,
     &::vaco_filter_aeq::anequalizer::DESC,
     &::vaco_filter_asource::anoisesrc::DESC,
@@ -8583,6 +8645,7 @@ pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[
     &::vaco_filter_convolve::deflate::DESC,
     &::vaco_filter_temporal::deflicker::DESC,
     &::vaco_filter_temporal::dejudder::DESC,
+    &::vaco_filter_artistic::delogo::DESC,
     &::vaco_filter_deinterlace::detelecine::DESC,
     &::vaco_filter_aeffects::dialoguenhance::DESC,
     &::vaco_filter_convolve::dilation::DESC,
@@ -8592,6 +8655,7 @@ pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[
     &::vaco_filter_aeffects::earwax::DESC,
     &::vaco_filter_aanalysis::ebur128::DESC,
     &::vaco_filter_analysis::entropy::DESC,
+    &::vaco_filter_artistic::epx::DESC,
     &::vaco_filter_aeq::equalizer::DESC,
     &::vaco_filter_convolve::erosion::DESC,
     &::vaco_filter_deinterlace::estdif::DESC,

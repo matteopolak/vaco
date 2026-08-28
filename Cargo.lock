@@ -1920,6 +1920,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-codec-mpeg12"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-bitstream",
+ "vaco-codec-core",
+ "vaco-codec-dsp-idct",
+ "vaco-core",
+ "vaco-frame",
+ "vaco-limits",
+ "vaco-packet",
+ "vaco-pixfmt",
+]
+
+[[package]]
 name = "vaco-codec-mpegaudio"
 version = "0.1.0"
 dependencies = [
@@ -3760,6 +3775,7 @@ dependencies = [
  "vaco-codec-core",
  "vaco-codec-image-simple",
  "vaco-codec-jpeg",
+ "vaco-codec-mpeg12",
  "vaco-codec-mpegaudio",
  "vaco-codec-pnm",
  "vaco-codec-qoi",
