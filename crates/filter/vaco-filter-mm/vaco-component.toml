@@ -175,3 +175,17 @@ name = "aloop"
 long_name = "Loop audio samples"
 ctor = "vaco_filter_mm::looping::audio::DESC"
 media = "audio"
+
+[[component]]
+kind = "filter"
+name = "reverse"
+long_name = "Reverse a video clip"
+ctor = "vaco_filter_mm::reverse::video::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "areverse"
+long_name = "Reverse an audio clip"
+ctor = "vaco_filter_mm::reverse::audio::DESC"
+media = "audio"
