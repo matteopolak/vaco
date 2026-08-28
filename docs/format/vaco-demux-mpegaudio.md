@@ -48,6 +48,37 @@ values **plus a fixed 529-sample decoder delay** (`576 + 529 = 1105`,
 `1080 − 529 = 551`, both confirmed exactly). `DECODER_DELAY` in `demux.rs`
 is that constant, applied in both directions.
 
+### Free-format frame length is derived once, then held constant — and validated, not trusted on sight
+
+`bitrate_index == 0` means the frame length isn't in any table; it has to be
+found by scanning forward for the next sync word and measuring the gap. The
+trap (issue #364): a false sync inside the payload — eleven set bits occur by
+chance often enough in compressed audio — gives a plausible but wrong length,
+and if that's accepted immediately it poisons every later frame, since a
+free-format stream's length is otherwise constant for its whole duration.
+
+`measure_free_format_len` fixes this by treating the first sync-looking match
+as a *candidate*, not an answer: it parses a full header at that offset and
+requires `version`/`layer`/`sample_rate_index`/`bitrate_index` to agree with
+the frame being measured before accepting the gap as the real length (a
+free-format stream's frame length can vary by exactly one byte, the padding
+byte, so `padding_bit` is intentionally excluded from the derived base length
+and re-added per frame). Once derived, `Demuxer::free_format_len` caches the
+padding-exclusive base length for the rest of the stream — later frames just
+add `padding_bit` rather than re-scanning, which also means a false sync
+later in the stream can no longer retroactively corrupt an already-derived
+length.
+
+Verified against a hand-built fixture (real `ffmpeg` CBR output with every
+frame's `bitrate_index` zeroed except the first, so the true frame length is
+known and constant): decoded output is sample-count-exact and
+correlation-identical (0.9921, matching the un-mutated CBR original) to
+decoding the same audio at its real bitrate. No real free-format encoder was
+available on this machine — `ffmpeg`/`lame` do not emit free-format MP3
+without a patched build — so this is the only fixture provenance for this
+path; see `docs/codec/vaco-codec-mpegaudio.md` for the full comparison table
+and its provenance column.
+
 ### The stream time base is a fixed constant, not `1/sample_rate`
 
 Measured at three different sample rates (32000/44100/48000 Hz): every one

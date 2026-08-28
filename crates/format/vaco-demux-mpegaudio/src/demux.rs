@@ -63,6 +63,14 @@ pub struct MpegAudioDemuxer {
     /// Average bytes/second for a byte-offset seek estimate; `None` when the
     /// stream is free-format and no VBR header stated a byte count.
     avg_byte_rate: Option<u64>,
+    /// A free-format stream's frame length, once derived and validated
+    /// against the frame that follows it (`measure_free_format_len`'s own
+    /// docs) — held constant for the rest of the stream rather than
+    /// re-scanned (and re-risking a false sync) every single frame. This is
+    /// the *unpadded* length; `padding_bit` still adds one byte per frame
+    /// as usual. `None` until the first free-format frame is seen, and for
+    /// every non-free-format stream.
+    free_format_len: Option<u32>,
 }
 
 impl MpegAudioDemuxer {
@@ -118,6 +126,7 @@ impl MpegAudioDemuxer {
             skip_end,
             audio_start,
             avg_byte_rate,
+            free_format_len: None,
         };
         demuxer.next = demuxer.read_one_frame()?;
         Ok(demuxer)
@@ -133,7 +142,7 @@ impl MpegAudioDemuxer {
         };
         let len = match header.frame_len() {
             Some(l) => l as usize,
-            None => measure_free_format_len(&mut self.io)?,
+            None => self.free_format_frame_len(header)?,
         };
         let mut buf = self.budget.alloc::<u8>(len)?;
         let pos = self.io.pos();
@@ -159,6 +168,31 @@ impl MpegAudioDemuxer {
         packet.flags |= vaco_packet::PacketFlags::KEY;
         self.frame_index = self.frame_index.saturating_add(1);
         Ok(Some(packet))
+    }
+
+    /// A free-format frame's total length (header included), deriving it
+    /// once per stream and holding it constant afterward.
+    ///
+    /// `bitrate_index == 0` means the frame length is in no table; the only
+    /// way to know it is to find where the next sync falls. A real
+    /// free-format encoder keeps one fixed length for the whole stream
+    /// (only `padding_bit` toggles it by a byte), so deriving it fresh on
+    /// every frame is both needless and risky: an 11-bit sync pattern
+    /// (`0x7FF`) is not rare inside Huffman-coded payload bytes, and a false
+    /// sync there gives a *plausible* wrong length that then poisons every
+    /// frame read after it. Deriving it once, validated against the frame
+    /// that actually follows the candidate length, and reusing it (with
+    /// only the padding bit varying) is what the same trap looks like from
+    /// the other side: an unvalidated one-shot scan and an unvalidated
+    /// scan-every-frame fail exactly the same way, just at different rates.
+    fn free_format_frame_len(&mut self, header: MpegAudioHeader) -> Result<usize> {
+        if let Some(base) = self.free_format_len {
+            return Ok((base.saturating_add(u32::from(header.padding))) as usize);
+        }
+        let total = measure_free_format_len(&mut self.io, header)?;
+        let base = total.saturating_sub(usize::from(header.padding));
+        self.free_format_len = Some(base as u32);
+        Ok(total)
     }
 }
 
@@ -405,8 +439,19 @@ fn find_next_header(io: &mut IoContext) -> Result<MpegAudioHeader> {
 }
 
 /// A free-format frame's length is not stated anywhere in its header; the
-/// only way to know it is to find where the next sync falls.
-fn measure_free_format_len(io: &mut IoContext) -> Result<usize> {
+/// only way to know it is to find where the next sync falls — but a bare
+/// sync match is not enough; see below.
+///
+/// `this_header` is the header of the frame whose length is being measured,
+/// so a candidate length can be checked for more than "some header starts
+/// here": the header there must be the same version, layer and sample rate
+/// (a real stream never changes those frame-to-frame; a false sync inside
+/// Huffman-coded payload bytes has no reason to preserve them), and, for a
+/// genuinely free-format stream, `bitrate_index == 0` again (a free-format
+/// encoder is free-format for the whole stream, not just its first frame).
+/// A candidate that fails this is not a frame boundary; keep scanning from
+/// one byte later rather than accepting the first raw sync match.
+fn measure_free_format_len(io: &mut IoContext, this_header: MpegAudioHeader) -> Result<usize> {
     let mut len = MpegAudioHeader::LEN;
     loop {
         let peek = io.peek(len.saturating_add(4))?;
@@ -418,7 +463,12 @@ fn measure_free_format_len(io: &mut IoContext) -> Result<usize> {
                 "mpegaudio: free-format frame runs past the end of input",
             ));
         };
-        if MpegAudioHeader::parse(u32::from_be_bytes(*chunk)).is_some() {
+        if let Some(next) = MpegAudioHeader::parse(u32::from_be_bytes(*chunk))
+            && next.version == this_header.version
+            && next.layer == this_header.layer
+            && next.sample_rate_index == this_header.sample_rate_index
+            && next.bitrate_index == this_header.bitrate_index
+        {
             return Ok(len);
         }
         len = len.saturating_add(1);
@@ -427,5 +477,68 @@ fn measure_free_format_len(io: &mut IoContext) -> Result<usize> {
                 "mpegaudio: free-format frame did not resynchronise",
             ));
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
+mod free_format_tests {
+    use super::*;
+    use vaco_format_mpegaudio::{ChannelMode, Emphasis, Layer, Version};
+    use vaco_io::{IoContext, IoOptions, MemorySource};
+
+    fn free_format_header() -> MpegAudioHeader {
+        MpegAudioHeader {
+            version: Version::Mpeg1,
+            layer: Layer::III,
+            has_crc: false,
+            bitrate_index: 0, // free-format
+            sample_rate_index: 0,
+            padding: false,
+            private_bit: false,
+            channel_mode: ChannelMode::Mono,
+            mode_extension: 0,
+            copyright: false,
+            original: false,
+            emphasis: Emphasis::None,
+        }
+    }
+
+    /// A false sync (`0x7FF` inside otherwise-arbitrary payload bytes) at an
+    /// earlier offset than the real next frame must not be accepted just
+    /// because a header parses there — it has to look like a continuation
+    /// of the same stream (matching version/layer/sample rate/bitrate
+    /// index), which a byte coincidence has no reason to do.
+    #[test]
+    fn a_false_sync_with_the_wrong_version_is_not_accepted() {
+        let this_header = free_format_header();
+        let mut data = this_header.to_bytes().to_vec();
+        // A "sync" 20 bytes in whose version bits differ from `this_header`
+        // — must be skipped even though `0x7FF` still matches.
+        let mut false_header = this_header;
+        false_header.version = Version::Mpeg2;
+        data.resize(20, 0);
+        data.extend_from_slice(&false_header.to_bytes());
+        // The real next frame, another 10 bytes later, genuinely matches.
+        data.resize(30, 0);
+        data.extend_from_slice(&this_header.to_bytes());
+
+        let mut io = IoContext::new(Box::new(MemorySource::new(data)), &IoOptions::default()).unwrap();
+        let len = measure_free_format_len(&mut io, this_header).unwrap();
+        assert_eq!(len, 30, "must skip the false sync and land on the real next frame");
+    }
+
+    /// A genuine same-parameters header at the very next 4 bytes is
+    /// accepted immediately.
+    #[test]
+    fn a_genuine_continuation_is_accepted_at_the_first_candidate() {
+        let this_header = free_format_header();
+        let mut data = this_header.to_bytes().to_vec();
+        data.resize(21, 0);
+        data.extend_from_slice(&this_header.to_bytes());
+
+        let mut io = IoContext::new(Box::new(MemorySource::new(data)), &IoOptions::default()).unwrap();
+        let len = measure_free_format_len(&mut io, this_header).unwrap();
+        assert_eq!(len, 21);
     }
 }
