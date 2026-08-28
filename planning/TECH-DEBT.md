@@ -1649,3 +1649,164 @@ it only diffs `name`/`long_name`, not the flag columns. A one-line fix
 (`CodecProperties::LOSSY.union(CodecProperties::INTRA_ONLY)`) for whoever
 next touches that row or is auditing the table's properties column against
 the reference's flags.
+
+### `vaco-codec-mpeg12`: an unresolved non-intra residual bit-consumption bug, reproducible
+
+`crates/codec/vaco-codec-mpeg12` (T2-01a, epic #36) is a clean-room ITU-T
+H.262 decoder built directly on `vaco-parse-mpegvideo` and
+`vaco-codec-dsp-idct`'s `mpeg2` IDCT. It decodes I/P/B frame pictures
+(frame-based and field-based-within-a-frame-picture prediction) but has a
+real, measured, unresolved bug: on any fixture busier than a small
+low-motion test clip, a non-intra macroblock's own coefficient/CBP decode
+eventually desyncs the bitstream, and — because `ActivePicture::supported`
+is one flag shared between "this whole picture's coding mode is
+unimplemented" (checked once, at `begin_picture`) and "a decode error
+happened somewhere in this picture" (set from many places inside
+`macroblock::decode_coded_macroblock`/`reconstruct_macroblock`) — every
+slice from that point to the end of the picture is silently skipped
+(`decode_slice`'s own `if !ap.supported { return; }` guard), leaving the
+rest of the frame at its zero-initialized allocation. Because that
+corrupted frame is then used as a motion-compensation reference, the
+corruption propagates to every picture in the rest of the GOP.
+
+Measured (via the crate's own differential harness against
+`ffmpeg`-decoded reference `yuv420p`, MAD/RMS per frame — see
+`docs/codec/vaco-codec-mpeg12.md` for the full table):
+
+- Small (64x48), low-motion I/I-P/I-P-B fixtures, MPEG-2: avg MAD 1.1-1.7,
+  max MAD 2 — essentially reference-quality, the residual float-IDCT
+  rounding difference documented in that same doc.
+- `m2_qcif_ipb` (176x144) and `m2_cif_ipb` (352x288), MPEG-2, and
+  `m2_oddsize` (48x64): avg MAD 11-234, with the corruption traced by hand
+  to one specific macroblock's `coded_block_pattern` VLC decode failing
+  partway through a picture (concretely: `m2_qcif_ipb.m2v`'s second
+  P-picture in display order, macroblock address 80 — mb_x=3, mb_y=7 in an
+  11x9 macroblock grid — fails at the `coded_block_pattern()` VLC call in
+  `macroblock::decode_coded_macroblock`, after a macroblock type and motion
+  vector that both decode as plausible, spec-conforming values). Every
+  macroblock after address 80 in that picture, and the picture's own
+  bottom slice row, is lost; every later picture in the GOP that
+  references it inherits the corruption.
+- The three MPEG-1 fixtures (`m1_i`/`m1_ip`/`m1_ipb`, 64x48) improved
+  drastically this session (avg MAD ~252 -> ~13-54, after fixing the
+  MPEG-1 escape-coding bug below) but still show the same class of
+  residual-desync failure, not yet root-caused independently — it may be
+  the same underlying bug as the MPEG-2 one above, since both involve
+  non-intra coefficient/CBP decode past the first few macroblocks.
+
+What was ruled out by hand-tracing (so the next pass doesn't re-derive
+this): the `CODED_BLOCK_PATTERN`, `DCT_DC_SIZE_LUMA`/`CHROMA`,
+`MACROBLOCK_TYPE` (P-picture "MC, Coded" row), and `MOTION_CODE` tables
+all mechanically cross-checked correct against the spec text at the
+specific values involved; the failing macroblock's own type decode,
+motion-vector decode (f_code=1, no residual-extension bits involved), and
+bidirectional-averaging arithmetic for other, *working* nonzero-motion
+macroblocks in the same picture all hand-verified pixel-exact against the
+reference. The bug is somewhere in coefficient or CBP bit consumption for
+a *specific* macroblock content pattern this session did not isolate
+further — most likely a rare VLC-table edge (an escape-level boundary, or
+a run/level combination near `n` wrapping past 63) exercised only by
+busier/more-detailed content, since the small fixtures never trip it. Two
+real bugs in this exact area were found and fixed this session (see the
+crate's own commit and `docs/codec/vaco-codec-mpeg12.md`'s changelog-style
+notes), so a third, rarer one is plausible rather than surprising.
+
+Two structural fixes worth making together, not separately:
+
+1. Split `ActivePicture::supported` into two flags: one set once at
+   `begin_picture` for "this picture's coding mode is unimplemented"
+   (still correctly gates the whole picture, unsupported-picture counting,
+   and `CORRUPT`/neutral-fill), and one reset per **slice**, not per
+   picture, for "this slice hit a local decode error" — so a bad
+   macroblock loses the rest of *its own slice* (already true today) but
+   not the rest of the picture's *other* slices, which today are silently
+   dropped even though their own bitstream is untouched by the earlier
+   slice's problem.
+2. Once (1) exists, re-run the differential matrix in
+   `docs/codec/vaco-codec-mpeg12.md` and see whether the visible symptom
+   changes from "rest of picture and GOP corrupted" to "one macroblock's
+   region wrong" — which would make the underlying coefficient/CBP bug
+   much easier to isolate by shrinking the blast radius of each repro run.
+
+Fixtures to reproduce with, already in this session's scratch directory
+(not committed — regenerate with `ffmpeg` from a raw YUV source using the
+same `-s WxH -pix_fmt yuv420p -c:v mpeg1video|mpeg2video` flags the crate's
+`docs/codec/vaco-codec-mpeg12.md` documents): `m2_qcif_ipb.m2v` (176x144,
+IBBPBBPBBPBBPBB GOP=15) is the smallest fixture that reproduces the bug.
+
+### `vaco-parse-mpegvideo`: end-of-stream `flush()` reports a spurious `max_alloc_total` budget error on tiny inputs
+
+While building `vaco-codec-mpeg12`'s differential-test harness
+(`crates/codec/vaco-codec-mpeg12/examples/decode_dump.rs`), calling
+`vaco_parse_mpegvideo`'s `Parser::parse(&[])` (the end-of-stream flush
+convention other parsers in this workspace use) on small (5-8 KB) `.m1v`/
+`.m2v` test fixtures returned `Err` reporting `max_alloc_total limit
+exceeded: requested ~1073741824+<small delta>, cap 1073741824` — a
+budget-accounting bug (some code path appears to request/round up to a
+fixed ~1 GiB allocation regardless of the tiny actual input) in a crate
+this agent does not own and did not fix. Worked around by not depending on
+`vaco-parse-mpegvideo` at all for the harness: `decode_dump.rs` implements
+its own ~15-line access-unit splitter directly against
+`vaco_bitstream::annexb::find_start_code`, documented at length in that
+file's own module doc. Whoever owns `vaco-parse-mpegvideo` should add a
+regression fixture at this size and trace the flush path's own allocation
+request.
+
+### `vaco-codec-mpeg12`: pieces that belong to a shared MPEG-family decoder core (D-22, epic #25), not to this crate specifically
+
+D-22 (a shared decode core for the MPEG-1/2/4-family — motion compensation,
+macroblock/slice iteration, IDCT integration, reference-picture management)
+does not exist yet; this crate is the first real consumer of what it would
+factor out of. Nothing here was *designed* against a shared interface, so
+none of it is *wired up* for reuse, but the following pieces are generic to
+the family rather than specific to H.262/MPEG-2 syntax, and are exactly
+what a future D-22 pass should look at extracting:
+
+- `crates/codec/vaco-codec-mpeg12/src/motion.rs`'s `form_prediction`
+  (half-pel interpolation via the spec's `//` round-to-nearest operator,
+  generalized over frame/field addressing through `row_scale`/
+  `row_parity`) and `average_predictions` (B-picture bidirectional
+  averaging) implement §7.6.4/§7.6.7.1 exactly as MPEG-4 part 2's simple
+  and advanced-simple profiles reuse them (MPEG-4 part 2 §7.6 cites H.262's
+  half-pel scheme directly for non-quarter-pel modes) — this is the
+  motion-compensation core.
+- The `previous`/`recent`/`held` one-picture-delay reference-management
+  scheme in `crates/codec/vaco-codec-mpeg12/src/decoder.rs` (B-picture
+  display-order reordering by holding the most recently decoded reference
+  picture until the next one is decoded) is the generic MPEG B-picture
+  reordering algorithm, not an H.262-specific one.
+- `crates/codec/vaco-codec-mpeg12/src/block.rs`'s `inverse_scan`/
+  `dequantise`/`inverse_transform` pipeline (inverse zigzag or alternate
+  scan, weighting-matrix + quantiser-scale dequantisation, mismatch
+  control, IDCT via `vaco-codec-dsp-idct::mpeg2`) is the same three-stage
+  shape MPEG-4 part 2 uses, differing only in the mismatch-control formula
+  and default matrices (both already parameterized here as function
+  arguments, not hardcoded).
+- `vaco-codec-mpeg12`'s own `vlc::decode` (generic linear-scan prefix-code
+  matcher parameterized over any `(bits, value)` table) is not MPEG-2-
+  specific at all — any future MPEG-family VLC table (MPEG-4's own
+  macroblock_type/CBPY tables, for instance) could reuse it as-is.
+
+None of this was extracted in this session because there is no D-22 crate
+to extract it *into* yet, and speculatively designing an interface for a
+second, hypothetical consumer this crate does not have would be exactly
+the kind of unrequested abstraction `AGENT-CONSTRAINTS.md` asks agents to
+avoid. Recorded here so whoever picks up D-22 has a concrete list of
+already-working reference implementations to start from instead of
+re-deriving them.
+
+### `vaco-codec-mpeg12`: explicitly unimplemented decode paths
+
+Recorded once, centrally, rather than scattered per-module (each module's
+own doc comment cross-references this entry): separate field-coded
+pictures (`picture_structure != "Frame picture"` — only field prediction
+*within* a frame picture, §7.6.2's common real-world interlaced case, is
+implemented), dual-prime prediction, 16x8 motion compensation, MPEG-1's
+`full_pel_forward_vector`/`full_pel_backward_vector` modes, and 4:2:2/4:4:4
+chroma sampling (T2-01b/#356, explicitly lower priority and not attempted
+this session) are all unimplemented. A picture that needs any of the first
+three is decoded as a flat `CORRUPT`-flagged mid-grey placeholder rather
+than silently producing wrong pixels (`Mpeg12Decoder::unsupported_pictures`
+counts these); a stream declaring 4:2:2/4:4:4 chroma is out of scope
+entirely (this crate only allocates `Yuv420p` frames). Spatial/SNR/temporal
+scalability extensions are not parsed or decoded.
