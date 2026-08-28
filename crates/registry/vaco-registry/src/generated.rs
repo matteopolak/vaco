@@ -3468,30 +3468,6 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
-    #[cfg(feature = "codec-h263")]
-    crate::Component {
-        kind: crate::Kind::Decoder,
-        name: "h261",
-        long_name: Some("H.261"),
-        krate: "vaco-codec-h263",
-        feature: Some("codec-h263"),
-        media: Some("video"),
-        codec: Some("h261"),
-        extensions: &[],
-        mime_types: &[],
-    },
-    #[cfg(feature = "codec-h263")]
-    crate::Component {
-        kind: crate::Kind::Decoder,
-        name: "h263",
-        long_name: Some("H.263 / H.263-1996, H.263+ / H.263-1998 / H.263 version 2"),
-        krate: "vaco-codec-h263",
-        feature: Some("codec-h263"),
-        media: Some("video"),
-        codec: Some("h263"),
-        extensions: &[],
-        mime_types: &[],
-    },
     #[cfg(feature = "patent-encumbered-h264-decode")]
     crate::Component {
         kind: crate::Kind::Decoder,
@@ -5832,6 +5808,17 @@ pub static COMPONENTS: &[crate::Component] = &[
     },
     crate::Component {
         kind: crate::Kind::Filter,
+        name: "hstack",
+        long_name: Some("Stack video inputs horizontally."),
+        krate: "vaco-filter-stack",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
         name: "hue",
         long_name: Some("Adjust the hue and saturation of the input video."),
         krate: "vaco-filter-color",
@@ -7297,6 +7284,17 @@ pub static COMPONENTS: &[crate::Component] = &[
     },
     crate::Component {
         kind: crate::Kind::Filter,
+        name: "vstack",
+        long_name: Some("Stack video inputs vertically."),
+        krate: "vaco-filter-stack",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
         name: "w3fdif",
         long_name: Some("Apply Martin Weston three field deinterlace."),
         krate: "vaco-filter-deinterlace",
@@ -7322,6 +7320,17 @@ pub static COMPONENTS: &[crate::Component] = &[
         name: "weave",
         long_name: Some("Weave input video fields into frames."),
         krate: "vaco-filter-deinterlace",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "xstack",
+        long_name: Some("Stack video inputs into custom layout."),
+        krate: "vaco-filter-stack",
         feature: None,
         media: Some("video"),
         codec: None,
@@ -8552,10 +8561,6 @@ pub static DECODERS: &[&::vaco_codec_core::DecoderDesc] = &[
     &::vaco_codec_subtitle_bitmap::decoder::DVBSUB_DECODER,
     #[cfg(feature = "codec-subtitle-bitmap")]
     &::vaco_codec_subtitle_bitmap::decoder::DVDSUB_DECODER,
-    #[cfg(feature = "codec-h263")]
-    &::vaco_codec_h263::DECODER_H261,
-    #[cfg(feature = "codec-h263")]
-    &::vaco_codec_h263::DECODER_H263,
     #[cfg(feature = "patent-encumbered-h264-decode")]
     &::vaco_codec_h264::DECODER_H264,
     #[cfg(feature = "codec-jpeg")]
@@ -8828,6 +8833,7 @@ pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[
     &::vaco_filter_asource::hilbert::DESC,
     &::vaco_filter_scope::histogram::DESC,
     &::vaco_filter_denoise::hqdn3d::DESC,
+    &::vaco_filter_stack::hstack::DESC,
     &::vaco_filter_color::hue::DESC,
     &::vaco_filter_analysis::identity::DESC,
     &::vaco_filter_deinterlace::idet::DESC,
@@ -8961,9 +8967,11 @@ pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[
     &::vaco_filter_aeffects::virtualbass::DESC,
     &::vaco_filter_audio::volume::DESC,
     &::vaco_filter_adynamics::volumedetect::DESC,
+    &::vaco_filter_stack::vstack::DESC,
     &::vaco_filter_deinterlace::w3fdif::DESC,
     &::vaco_filter_scope::waveform::DESC,
     &::vaco_filter_deinterlace::weave::WEAVE_DESC,
+    &::vaco_filter_stack::xstack::DESC,
     &::vaco_filter_deinterlace::yadif::DESC,
     &::vaco_filter_blur::yaepblur::DESC,
     &::vaco_filter_source::yuvtestsrc::DESC,
