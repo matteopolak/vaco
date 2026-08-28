@@ -83,6 +83,10 @@ pub enum FrameSideDataKind {
     ContentLightLevel,
     Cropping,
     Metadata,
+    /// Console-log-only lines (gap 13).
+    Log,
+    /// Per-block motion vectors (gap 14).
+    MotionVectors,
 }
 
 impl FrameSideData {
@@ -96,6 +100,8 @@ impl FrameSideData {
             Self::ContentLightLevel { .. } => FrameSideDataKind::ContentLightLevel,
             Self::Cropping(_) => FrameSideDataKind::Cropping,
             Self::Metadata(_) => FrameSideDataKind::Metadata,
+            Self::Log(_) => FrameSideDataKind::Log,
+            Self::MotionVectors(_) => FrameSideDataKind::MotionVectors,
         }
     }
 }
@@ -288,5 +294,35 @@ impl Frame {
             return m.remove(key);
         }
         None
+    }
+
+    /// This frame's console-log-only lines, in the order they were pushed,
+    /// or `&[]` if it carries none (gap 13).
+    ///
+    /// `showinfo` and any filter whose only documented effect is a log line
+    /// rather than a metadata write write here — see
+    /// [`FrameSideData::Log`]'s own doc for why this is a separate channel
+    /// from [`Frame::metadata`] rather than a variant of it.
+    #[must_use]
+    pub fn log_lines(&self) -> &[String] {
+        match self.side_data(FrameSideDataKind::Log) {
+            Some(FrameSideData::Log(lines)) => lines,
+            _ => &[],
+        }
+    }
+
+    /// Append one line to this frame's log-only side data.
+    ///
+    /// Creates the entry on first use, the same "no field, no cost" shape
+    /// [`Frame::set_metadata`] uses — a frame that never calls this carries
+    /// no [`FrameSideDataKind::Log`] entry at all.
+    pub fn push_log_line(&mut self, line: impl Into<String>) {
+        if let Some(FrameSideData::Log(lines)) =
+            self.side_data.iter_mut().find(|d| d.kind() == FrameSideDataKind::Log)
+        {
+            lines.push(line.into());
+            return;
+        }
+        self.side_data.push(FrameSideData::Log(vec![line.into()]));
     }
 }

@@ -7,7 +7,7 @@
 )]
 
 use vaco_chlayout::ChannelLayout;
-use vaco_frame::{Crop, Frame, FrameData, FrameSideData, FrameSideDataKind, PlaneMut};
+use vaco_frame::{Crop, Frame, FrameData, FrameSideData, FrameSideDataKind, MotionVector, PlaneMut};
 use vaco_limits::{Budget, Limits};
 use vaco_pixfmt::PixFmt;
 use vaco_pool::{ALIGN, PoolConfig};
@@ -499,4 +499,53 @@ fn pooled_frames_outlive_their_pool() {
     };
     assert_eq!(frame.plane_count(), 3);
     assert!(frame.plane(0).unwrap().row(0).is_some());
+}
+
+#[test]
+fn log_lines_are_empty_by_default_and_cost_no_side_data_entry() {
+    let mut b = budget();
+    let frame = Frame::alloc_video(&mut b, PixFmt::Rgb24, 8, 8).unwrap();
+    assert_eq!(frame.log_lines(), &[] as &[String]);
+    // Gap 11's own "empty collection at construction" caution applies here
+    // too: a frame that never pushes a line carries no `Log` entry at all.
+    assert!(frame.side_data(FrameSideDataKind::Log).is_none());
+}
+
+#[test]
+fn log_lines_preserve_push_order() {
+    let mut b = budget();
+    let mut frame = Frame::alloc_video(&mut b, PixFmt::Rgb24, 8, 8).unwrap();
+    frame.push_log_line("n:0 pts:0 pts_time:0");
+    frame.push_log_line("color_range:unknown color_space:unknown");
+    assert_eq!(
+        frame.log_lines(),
+        &["n:0 pts:0 pts_time:0".to_string(), "color_range:unknown color_space:unknown".to_string()]
+    );
+}
+
+#[test]
+fn log_lines_coexist_with_metadata_as_separate_channels() {
+    let mut b = budget();
+    let mut frame = Frame::alloc_video(&mut b, PixFmt::Rgb24, 8, 8).unwrap();
+    frame.set_metadata("lavfi.signalstats.YMIN", "22");
+    frame.push_log_line("n:0");
+    assert_eq!(frame.side_data.len(), 2);
+    assert_eq!(frame.metadata_get("lavfi.signalstats.YMIN"), Some("22"));
+    assert_eq!(frame.log_lines(), &["n:0".to_string()]);
+}
+
+#[test]
+fn motion_vectors_side_data_round_trips_through_set_and_remove() {
+    let mut b = budget();
+    let mut frame = Frame::alloc_video(&mut b, PixFmt::Rgb24, 8, 8).unwrap();
+    assert!(frame.side_data(FrameSideDataKind::MotionVectors).is_none());
+
+    let mv = MotionVector { source: -1, w: 16, h: 16, dst_x: 32, dst_y: 48, src_x: 30, src_y: 50 };
+    frame.set_side_data(FrameSideData::MotionVectors(vec![mv]));
+    let Some(FrameSideData::MotionVectors(mvs)) = frame.side_data(FrameSideDataKind::MotionVectors) else {
+        unreachable!("just attached a MotionVectors entry");
+    };
+    assert_eq!(mvs.as_slice(), [mv]);
+    assert!(frame.remove_side_data(FrameSideDataKind::MotionVectors).is_some());
+    assert!(frame.side_data(FrameSideDataKind::MotionVectors).is_none());
 }

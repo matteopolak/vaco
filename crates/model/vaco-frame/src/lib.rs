@@ -139,7 +139,62 @@ pub enum FrameSideData {
     /// and return `&[]`/`None` rather than requiring a caller to check for
     /// the variant's absence first.
     Metadata(FrameMetadata),
+    /// Human-readable lines a filter wants printed at info log level, one
+    /// entry per line (interface gap 11's companion, gap 13,
+    /// `planning/INTERFACE-GAPS.md`).
+    ///
+    /// `showinfo`'s whole output is a console log line, not a metadata
+    /// write — measured (`ffprobe -show_frames` through it, `ffmpeg 8.1`) to
+    /// touch `AVFrame::metadata` **not at all**. [`FrameSideData::Metadata`]
+    /// is the `lavfi.<filter>.<key>` tag convention specifically; stuffing
+    /// an unstructured line under a made-up key there would not reproduce
+    /// anything the reference actually exports, since nothing does. This is
+    /// a separate, narrower channel: no keys, no structure, just the lines
+    /// a filter would otherwise have written straight to the log.
+    Log(Vec<String>),
+    /// Per-block motion vectors a decoder attached to this frame (interface
+    /// gap 14, `planning/INTERFACE-GAPS.md`), for `codecview`'s `mv`/
+    /// `mv_type` visualisation.
+    ///
+    /// No decoder in this workspace populates this yet (D5: motion vectors
+    /// are decoder-internal state no codec crate currently surfaces), so
+    /// this variant exists without a producer — recorded as such rather
+    /// than silently reattempting `codecview` before the decoder-side half
+    /// exists. See [`MotionVector`]'s own doc for the field shape and what
+    /// it is (and is not) measured against.
+    MotionVectors(Vec<MotionVector>),
     // ... generated from the side-data table
+}
+
+/// One motion vector, as a decoder would attach it to the frame it predicts.
+///
+/// Fields mirror the concepts `ffmpeg -h filter=codecview`'s own option
+/// descriptions name for `mv`/`mv_type`/`block`: which prediction direction
+/// produced it, the block it covers, and where it points from and to. This
+/// is a representative shape for a currently-unproduced side data variant
+/// (see [`FrameSideData::MotionVectors`]), not a byte-for-byte transcription
+/// of the reference's internal struct layout — D7 forbids consulting that,
+/// and black-box probing (`ffprobe -export_side_data +mvs`) surfaces only a
+/// side-data-type label, not a field breakdown, for want of a decoder in
+/// this workspace to attach one in the first place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MotionVector {
+    /// Which reference this vector predicts from: negative counts backward
+    /// (B-frame back-reference), positive forward — the same sign
+    /// convention `codecview`'s `mv=pf+bf+bb` options name (past/backward
+    /// forward, backward-frame forward, backward-frame backward).
+    pub source: i32,
+    /// Width and height of the block this vector covers, in luma pixels.
+    pub w: u16,
+    pub h: u16,
+    /// The block's top-left position in the *destination* (this) frame.
+    pub dst_x: i32,
+    pub dst_y: i32,
+    /// Where the block's content came from in the source picture —
+    /// `dst_x + motion_x/scale`, precomputed rather than left for a caller
+    /// to rescale, since drawing an arrow is the only consumer.
+    pub src_x: i32,
+    pub src_y: i32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
