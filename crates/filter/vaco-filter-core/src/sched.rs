@@ -219,6 +219,13 @@ pub struct Graph {
     budget: u64,
     violations: Vec<Violation>,
     last_conflict: Option<Conflict>,
+    /// Every node's public identity, kept in step with `nodes` as they are
+    /// added (never removed) — gap 22's read side, handed to every
+    /// `FilterContext` so a filter can resolve another node's `NodeId`
+    /// into a label without holding a borrow of `nodes` itself (which is
+    /// mutably borrowed for the currently-activating node at that exact
+    /// moment; see the two `FilterContext::new` call sites).
+    node_labels: Vec<crate::context::NodeView>,
 }
 
 impl Default for Graph {
@@ -240,6 +247,7 @@ impl Graph {
             budget: DEFAULT_STEP_BUDGET,
             violations: Vec::new(),
             last_conflict: None,
+            node_labels: Vec::new(),
         }
     }
 
@@ -318,6 +326,11 @@ impl Graph {
     ) -> NodeId {
         let id = NodeId(self.nodes.len() as u32);
         let links = NodeLinks::new(formats.inputs.len(), formats.outputs.len());
+        self.node_labels.push(crate::context::NodeView {
+            id,
+            label: label.clone(),
+            filter_name: desc.name,
+        });
         self.nodes.push(Node {
             kind,
             filter,
@@ -588,7 +601,7 @@ impl Graph {
             let Some(mut filter) = node.filter.take() else {
                 continue;
             };
-            let mut ctx = FilterContext::new(&mut self.links, &links, &self.pool);
+            let mut ctx = FilterContext::new(&mut self.links, &links, &self.pool, &self.node_labels);
             let result = filter.configure(&mut ctx);
             if let Some(node) = self.nodes.get_mut(idx) {
                 node.filter = Some(filter);
@@ -860,7 +873,7 @@ impl Graph {
         };
         let links = node.links.clone();
         let before = self.links.epoch_sum();
-        let mut ctx = FilterContext::new(&mut self.links, &links, &self.pool);
+        let mut ctx = FilterContext::new(&mut self.links, &links, &self.pool, &self.node_labels);
         let outcome = filter.activate(&mut ctx);
         let pushed_bad_format = ctx.saw_format_mismatch();
         let pushed_after_close = ctx.saw_push_after_close();

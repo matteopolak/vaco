@@ -96,10 +96,10 @@ mod test_support;
 pub mod timeline;
 
 pub use adapt::{
-    AudioFilter, Blocked, Fanout, FanoutFilter, FrameFilter, FrameOut, Paired, PairedFilter,
-    Simple, SourceFilter, Sourced,
+    AudioFilter, Blocked, Dual, DualFilter, Fanout, FanoutFilter, FrameFilter, FrameOut, Paired,
+    PairedFilter, Simple, SourceFilter, Sourced,
 };
-pub use context::NodeLinks;
+pub use context::{LinkView, NodeLinks, NodeView};
 pub use link::{Direction, Link, LinkArena, LinkId, LinkStats, NodeId, PadRef, Rejected, Status};
 pub use negotiate::{
     Assignment, AutoConvert, Conflict, ConflictSide, Constraint, ConverterFactory, ConverterSpec,
@@ -193,6 +193,11 @@ pub struct FilterContext<'a> {
     links: &'a mut LinkArena,
     node: &'a NodeLinks,
     pool: &'a FramePool,
+    /// Every node's public identity, for [`FilterContext::graph_nodes`] and
+    /// resolving [`context::LinkView`]'s `PadRef`s from
+    /// [`FilterContext::graph_links`] (gap 22,
+    /// `planning/INTERFACE-GAPS.md`).
+    graph_nodes: &'a [context::NodeView],
     /// Set when a pushed frame did not match its link's negotiated format.
     format_mismatch: bool,
     /// Set when a push landed on an already-closed pad.

@@ -14,6 +14,7 @@
 //! | [`AudioFilter`] | like [`FrameFilter`] but sees exactly `frame_size` samples, with a correctly short final frame |
 //! | [`Paired`] | N-in 1-out, strict lockstep: one frame from every input or the filter ends |
 //! | [`Fanout`] | 1-in N-out (N fixed at construction), one frame in → exactly N out |
+//! | [`Dual`] | N-in M-out (both fixed at construction, default 2/2 — `feedback`'s own arity), `Paired`'s lockstep input rule and `Fanout`'s all-outputs-have-room rule combined — gap 24's adapter half |
 //!
 //! Not here: `SliceFilter`, which needs a thread pool this crate does not depend
 //! on, and `Synced`, which lives in `vaco-filter-framesync` and is the *other*
@@ -650,6 +651,229 @@ impl<F: FanoutFilter> Filter for Fanout<F> {
         }
         ctx.forward_wanted();
         Ok(Activity::NeedInput)
+    }
+
+    fn command(&mut self, name: &str, value: &str) -> Result<()> {
+        let _ = (name, value);
+        Err(vaco_core::Error::Unsupported(
+            "filter accepts no runtime commands",
+        ))
+    }
+}
+
+/// A filter with a fixed, small number of inputs *and* outputs, consuming
+/// one frame from every input in lockstep and producing one frame for every
+/// output each time — `feedback`'s shape (`VV->VV`), and gap 24
+/// (`planning/INTERFACE-GAPS.md`) closed for the adapter half of it.
+///
+/// # Why this did not exist already
+///
+/// Every adapter before this one is N-to-1 or 1-to-N: [`Paired`] takes
+/// several inputs down to one output, [`Fanout`] takes one input out to
+/// several. Enumerating them (`Simple`/`Blocked` 1-in-1-out, `Sourced`
+/// 0-in-1-out, `Fanout` 1-in-*N*-out, `Paired` *N*-in-1-out) found nothing
+/// *N*-in-*M*-out, which is exactly `feedback`'s arity. This adapter is
+/// `Paired`'s lockstep-input rule and `Fanout`'s all-outputs-have-room rule,
+/// combined rather than reimplemented — each output pad gets its own
+/// pending queue where `Paired` only ever needed pad `0`'s.
+///
+/// # This adapter is necessary but not sufficient for `feedback`
+///
+/// `feedback`'s reference usage loops one output back as the filter's own
+/// next-frame input (`[0][fb]feedback[out][fb]`) — a genuine cycle in the
+/// filtergraph, not just an unusual pad count. `Graph::configure` requires
+/// [`crate::sched::Graph::topological_order`], which rejects any cycle
+/// outright (`Error::InvalidData("filtergraph contains a cycle")`) before
+/// a single frame flows — checked directly against this crate's own
+/// scheduler, not assumed. Wiring `feedback` with this adapter over a real
+/// feedback link therefore still fails, at `configure`, independent of
+/// anything this adapter does correctly. That is a second, separate,
+/// larger capability (cyclic graph negotiation) this pass does not
+/// attempt — see `planning/INTERFACE-GAPS.md`'s new entry for it. This
+/// adapter closes the "no *N*-in-*M*-out shape exists" half of gap 24 and
+/// is usable today by any filter with fixed, non-cyclic multi-in/multi-out
+/// wiring; it does not by itself make `feedback` runnable.
+pub trait DualFilter: Send {
+    /// How many inputs this filter has. `2` is `feedback`'s own arity and
+    /// the default; a filter with a construction-time count may override
+    /// it the way [`PairedFilter::input_count`] does.
+    fn input_count(&self) -> usize {
+        2
+    }
+
+    /// How many outputs this filter has. `2` is `feedback`'s own arity.
+    fn output_count(&self) -> usize {
+        2
+    }
+
+    /// Handle one aligned set: exactly [`DualFilter::input_count`] frames
+    /// in, and exactly [`DualFilter::output_count`] frames must come back,
+    /// one per output pad, in pad order.
+    ///
+    /// # Errors
+    /// Whatever the filter's own work reports.
+    fn filter_frames(
+        &mut self,
+        ctx: &mut FilterContext<'_>,
+        inputs: SmallVec<[Frame; 4]>,
+    ) -> Result<SmallVec<[Frame; 4]>>;
+
+    /// Called once when link formats have been agreed.
+    ///
+    /// # Errors
+    /// [`vaco_core::Error::Unsupported`] if the negotiated formats are unusable.
+    fn configure(&mut self, ctx: &mut FilterContext<'_>) -> Result<()> {
+        let _ = ctx;
+        Ok(())
+    }
+
+    /// Discard buffered state after a seek.
+    fn flush_state(&mut self) {}
+}
+
+/// Adapts a [`DualFilter`] to [`Filter`].
+#[derive(Debug)]
+pub struct Dual<F> {
+    inner: F,
+    inputs: usize,
+    /// One slot per input, filled as frames arrive — mirrors [`Paired`]'s
+    /// `held`.
+    held: SmallVec<[Option<Frame>; 4]>,
+    /// One pending queue per *output* pad — the part [`Paired`] never
+    /// needed, since it only ever has one output.
+    pending: SmallVec<[std::collections::VecDeque<Frame>; 4]>,
+    done: bool,
+}
+
+impl<F: DualFilter> Dual<F> {
+    /// Wrap a filter.
+    pub fn new(inner: F) -> Self {
+        let inputs = inner.input_count();
+        let outputs = inner.output_count();
+        Self {
+            held: std::iter::repeat_with(|| None).take(inputs).collect(),
+            pending: std::iter::repeat_with(std::collections::VecDeque::new)
+                .take(outputs)
+                .collect(),
+            inputs,
+            inner,
+            done: false,
+        }
+    }
+
+    /// Borrow the wrapped filter.
+    pub const fn inner(&self) -> &F {
+        &self.inner
+    }
+
+    /// Recover the wrapped filter.
+    pub fn into_inner(self) -> F {
+        self.inner
+    }
+
+    /// Try to drain every output pad's pending queue. Returns `Some` the
+    /// moment any pad cannot take its next frame yet, the same
+    /// blocked-vs-progressed distinction [`push_pending`] makes for the
+    /// single-output case.
+    fn drain_pending(&mut self, ctx: &mut FilterContext<'_>) -> Result<Option<Activity>> {
+        let mut pushed = false;
+        for (pad, queue) in self.pending.iter_mut().enumerate() {
+            while let Some(frame) = queue.pop_front() {
+                if !ctx.output_has_room(pad) {
+                    queue.push_front(frame);
+                    return Ok(Some(if pushed {
+                        Activity::Progressed
+                    } else {
+                        Activity::Blocked
+                    }));
+                }
+                ctx.push_output(pad, frame)?;
+                pushed = true;
+            }
+        }
+        Ok(None)
+    }
+}
+
+impl<F: DualFilter> Filter for Dual<F> {
+    fn configure(&mut self, ctx: &mut FilterContext<'_>) -> Result<()> {
+        self.inner.configure(ctx)
+    }
+
+    fn flush(&mut self) {
+        for slot in &mut self.held {
+            *slot = None;
+        }
+        for queue in &mut self.pending {
+            queue.clear();
+        }
+        self.done = false;
+        self.inner.flush_state();
+    }
+
+    fn activate(&mut self, ctx: &mut FilterContext<'_>) -> Result<Activity> {
+        if self.done {
+            ctx.close_all_outputs();
+            return Ok(Activity::Eof);
+        }
+        if let Some(activity) = self.drain_pending(ctx)? {
+            return Ok(activity);
+        }
+        if (0..self.pending.len()).any(|p| !ctx.output_has_room(p)) {
+            return Ok(Activity::Blocked);
+        }
+
+        let mut progressed = false;
+        let mut ended = false;
+        for pad in 0..self.inputs {
+            let Some(slot) = self.held.get_mut(pad) else {
+                continue;
+            };
+            if slot.is_some() {
+                continue;
+            }
+            if let Some(frame) = ctx.take_input(pad) {
+                *slot = Some(frame);
+                progressed = true;
+            } else if ctx.input_at_eof(pad) {
+                // Same rule as `Paired`: no repeat, no independent
+                // timeline — the first input to run dry ends the whole
+                // filter.
+                ended = true;
+            } else {
+                ctx.request_input(pad);
+            }
+        }
+
+        if ended {
+            ctx.close_all_outputs();
+            self.done = true;
+            return Ok(Activity::Eof);
+        }
+
+        if self.held.iter().all(Option::is_some) {
+            let frames: SmallVec<[Frame; 4]> =
+                self.held.iter_mut().filter_map(Option::take).collect();
+            let outputs = self.inner.filter_frames(ctx, frames)?;
+            if outputs.len() != self.pending.len() {
+                return Err(vaco_core::Error::InvalidData(
+                    "dual filter produced the wrong number of output frames",
+                ));
+            }
+            for (pad, frame) in outputs.into_iter().enumerate() {
+                if let Some(queue) = self.pending.get_mut(pad) {
+                    queue.push_back(frame);
+                }
+            }
+            let _ = self.drain_pending(ctx)?;
+            return Ok(Activity::Progressed);
+        }
+
+        Ok(if progressed {
+            Activity::Progressed
+        } else {
+            Activity::NeedInput
+        })
     }
 
     fn command(&mut self, name: &str, value: &str) -> Result<()> {

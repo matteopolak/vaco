@@ -32,15 +32,22 @@ Each filter here was checked against its own measured option surface:
 | `xmedian` | N (`3..=255`, same cap) | Full | `Synced`/`FrameSyncFilter`, `FsInput::uniform` |
 | `xfade` | 2 (fixed) | None (its own `duration`/`offset` timing) | `Synced`/`FrameSyncFilter`, `FsInput::dual` |
 | `displace`, `remap` | 3 (fixed, `VVV->V`) | None | `Paired` — no framework gap |
-| `feedback` | 2 in, **2 out** | — | **No existing adapter fits — interface gap 24.** |
+| `feedback` | 2 in, **2 out** | — | `Dual`/`DualFilter` fits the shape (gap 24, closed) — the loop still cannot run (gap 25). |
 
-`feedback` is `VV->VV`. Every adapter in `vaco-filter-core::adapt` was
-checked: `Simple`/`Blocked` (1-in-1-out), `Sourced` (0-in-1-out), `Fanout`
-(1-in-*N*-out), `Paired` (*N*-in-**1**-out). None is 2-in-2-out, and the
-reference's own use of `feedback` (`[0][fb]feedback[out][fb]`) loops one
-output back as the filter's next-frame input — a genuine cycle, not just
-an unusual arity. Filed as `planning/INTERFACE-GAPS.md` gap 24 rather
-than worked around inside this crate.
+`feedback` is `VV->VV`. `planning/INTERFACE-GAPS.md` gap 24 (no adapter
+for 2-in-2-out) is closed: `vaco-filter-core::adapt` gained
+`Dual`/`DualFilter` for exactly this shape, tested end-to-end in
+`vaco-filter-core`'s own `tests/graph.rs`. That does not unblock
+`feedback` itself: the reference's own use
+(`[0][fb]feedback[out][fb]`) loops one output back as the filter's own
+next-frame input — a genuine cycle — and `Graph::configure()` requires
+`Graph::topological_order()`, which hard-rejects any cycle before a
+`Dual`-shaped node's pads are ever negotiated. That is a separate,
+harder limitation in the scheduler's negotiation and scheduling, not an
+adapter-shape question, filed as `planning/INTERFACE-GAPS.md` gap 25.
+`feedback` remains unimplemented in this crate — a `Dual`-wrapped filter
+that cannot loop would not be `feedback`, so no partial version is
+built here.
 
 ## What it is
 
@@ -304,7 +311,7 @@ the source.
 | `remap` | `format=gray`, identity map | per-pixel-distinct gradient | **exact** |
 | `remap` | `format=gray:fill=<colour>`, out-of-range map | same, 4 colours | **exact** — BT.709 limited-range luma confirmed |
 | `remap` | `format=color` (default) | — | **not attempted** |
-| `feedback` | — | — | **not implemented — interface gap 24** |
+| `feedback` | — | — | **not implemented — adapter shape exists (gap 24, closed); the loop cannot run (gap 25)** |
 
 No `vaco` CLI/muxer exists yet to drive an actual `-f framecrc`
 invocation (`planning/14-cli.md` is still a plan document); comparisons
@@ -331,9 +338,14 @@ this crate's own tests.
   `remap` to `format=color`, expect a genuinely different code path, not
   a small addition to `format=gray`'s — probe whether the source itself
   needs limited-range treatment before assuming it doesn't.
-- `feedback` needs a real `vaco-filter-core` capability (a 2-in/2-out
-  adapter, and possibly graph-cycle support in `vaco-filter-graph`)
-  before it is attempted again — see `planning/INTERFACE-GAPS.md` gap 24.
+- `feedback` had one of its two blockers removed: `vaco-filter-core`
+  now has a 2-in/2-out adapter (`Dual`/`DualFilter`, gap 24). What is
+  still missing is cycle support in the scheduler itself —
+  `Graph::configure()`'s negotiation pass rejects any cycle outright, so
+  the loop `feedback` needs (`[0][fb]feedback[out][fb]`) cannot be built
+  regardless of adapter shape. See `planning/INTERFACE-GAPS.md` gap 25
+  before attempting this filter again — it needs scheduler/negotiation
+  changes in `vaco-filter-core`, not more work in this crate.
 
 ## Configuration
 

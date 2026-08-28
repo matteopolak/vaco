@@ -29,8 +29,8 @@
 use vaco_core::{Result, Timestamp};
 use vaco_frame::{Frame, FramePool};
 
-use crate::link::{LinkArena, LinkId, Status};
-use crate::{FilterContext, LinkFormat};
+use crate::link::{Link, LinkArena, LinkId, LinkStats, PadRef, Status};
+use crate::{FilterContext, LinkFormat, MediaType, NodeId};
 
 /// Which link each of a node's pads is attached to.
 ///
@@ -91,17 +91,113 @@ impl NodeLinks {
     }
 }
 
+/// One node's public identity — gap 22
+/// (`planning/INTERFACE-GAPS.md`)'s read-only graph introspection, and
+/// deliberately *only* identity: no formats, no scheduler bookkeeping
+/// (`parked_at`/`self_driven`/`last_run` on the scheduler's own `Node` are
+/// exactly the kind of "depends on scheduling order" state a filter must
+/// not be able to read — see [`FilterContext::graph_nodes`]'s own doc for
+/// why those stay out).
+#[derive(Debug, Clone)]
+pub struct NodeView {
+    /// This node's id, matching [`PadRef::node`] on the [`LinkView`]s
+    /// [`FilterContext::graph_links`] returns.
+    pub id: NodeId,
+    /// The instance label (`"hstack@3"`, or whatever the caller of
+    /// [`crate::sched::Graph::add`] supplied).
+    pub label: String,
+    /// The filter's type name (`"hstack"`), from its [`crate::FilterDesc`].
+    pub filter_name: &'static str,
+}
+
+/// One link's observable state — gap 22's other half. Everything here is
+/// already computed for the deadlock diagnostic and `graphmonitor`'s own
+/// counters ([`LinkStats`]'s doc names both); this is that data, reachable
+/// for *any* link in the graph rather than only the current node's own.
+///
+/// Read-only by construction: there is no method here that pushes a frame,
+/// closes a pad, or otherwise reaches into another node. A filter that
+/// wants to *act* on a neighbour is exactly the coupling this stays narrow
+/// to avoid — see [`FilterContext::graph_links`]'s own doc.
+#[derive(Debug, Clone, Copy)]
+pub struct LinkView {
+    pub id: LinkId,
+    pub src: PadRef,
+    pub dst: PadRef,
+    pub media: MediaType,
+    /// Frames currently queued.
+    pub queued: usize,
+    /// The configured queue depth.
+    pub capacity: usize,
+    pub at_eof: bool,
+    pub stats: LinkStats,
+}
+
+impl LinkView {
+    fn from_link(id: LinkId, link: &Link) -> Self {
+        Self {
+            id,
+            src: link.src(),
+            dst: link.dst(),
+            media: link.media(),
+            queued: link.depth(),
+            capacity: link.capacity(),
+            at_eof: link.at_eof(),
+            stats: link.stats(),
+        }
+    }
+}
+
 impl<'a> FilterContext<'a> {
     /// Build a context for one `activate` call.
-    pub(crate) fn new(links: &'a mut LinkArena, node: &'a NodeLinks, pool: &'a FramePool) -> Self {
+    pub(crate) fn new(
+        links: &'a mut LinkArena,
+        node: &'a NodeLinks,
+        pool: &'a FramePool,
+        graph_nodes: &'a [NodeView],
+    ) -> Self {
         Self {
             links,
             node,
             pool,
+            graph_nodes,
             format_mismatch: false,
             push_after_close: false,
             dropped_by_backpressure: false,
         }
+    }
+
+    /// A read-only snapshot of every link in the graph, not just this
+    /// node's own pads — gap 22
+    /// (`planning/INTERFACE-GAPS.md`), built for `graphmonitor`/
+    /// `agraphmonitor`, which need to draw the *whole* graph's queue state
+    /// as a live diagram.
+    ///
+    /// Deliberately the narrowest thing that serves them, checked against
+    /// what a general graph accessor would additionally allow and
+    /// declining it: this is read-only counters
+    /// ([`LinkView`]/[`LinkStats`], already computed for the deadlock
+    /// diagnostic), not a way to enumerate a node's *filter*, push to
+    /// another node's link, or close another node's pad. A filter that
+    /// could do any of those could be written to depend on scheduling
+    /// order for its own output, which is a worse property than the
+    /// missing capability — see this crate's `docs/filter/vaco-filter-core.md`
+    /// for the design note.
+    #[must_use]
+    pub fn graph_links(&self) -> Vec<LinkView> {
+        self.links
+            .iter_ids()
+            .map(|(id, link)| LinkView::from_link(id, link))
+            .collect()
+    }
+
+    /// A read-only list of every node's id and label — resolves
+    /// [`LinkView`]'s `PadRef.node` into something a diagram can print,
+    /// without exposing anything about a node beyond its identity (no
+    /// formats, no scheduler-internal state).
+    #[must_use]
+    pub fn graph_nodes(&self) -> &[NodeView] {
+        self.graph_nodes
     }
 
     pub(crate) const fn saw_format_mismatch(&self) -> bool {

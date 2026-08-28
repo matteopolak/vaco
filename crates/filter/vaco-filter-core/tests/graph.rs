@@ -30,8 +30,9 @@ use vaco_filter_core::negotiate::{
     ConverterFactory, ConverterSpec, FormatSet, NodeFormats, Property, loss,
 };
 use vaco_filter_core::{
-    Activity, Fanout, FanoutFilter, Filter, FilterContext, FilterDesc, FilterFlags, FrameOut,
-    Graph, GraphStatus, LinkFormat, NodeId, Pad, Paired, PairedFilter, Violation,
+    Activity, Dual, DualFilter, Fanout, FanoutFilter, Filter, FilterContext, FilterDesc,
+    FilterFlags, FrameFilter, FrameOut, Graph, GraphStatus, LinkFormat, LinkView, NodeId,
+    NodeView, Pad, Paired, PairedFilter, Simple, Violation,
 };
 use vaco_pixfmt::PixFmt;
 use vaco_sampfmt::SampleFmt;
@@ -1397,4 +1398,346 @@ fn a_generic_timeline_filter_must_be_one_in_one_out() {
         !BAD.is_consistent(),
         "\"forward the input unchanged\" is not well defined for two inputs"
     );
+}
+
+// -------------------------------------------------------------- Dual
+
+const TWO_OUTPUT_PADS: &[Pad] = &[
+    Pad {
+        name: "out",
+        media_type: MediaType::Video,
+    },
+    Pad {
+        name: "fb",
+        media_type: MediaType::Video,
+    },
+];
+
+/// Swaps its two inputs onto its two outputs: output pad `0` gets input
+/// pad `1`'s frame, output pad `1` gets input pad `0`'s frame.
+///
+/// Proves the adapter routes each output to *its own* pad rather than, say,
+/// pushing the same frame twice or leaving the two pending queues aliased —
+/// a swap only comes out right if pad `0`'s queue and pad `1`'s queue never
+/// cross. `Paired`'s own `SumInputs` test proves the input side ("every
+/// input contributed together"); this is the output-side analogue gap 24
+/// needed and no existing adapter test covers, since every earlier adapter
+/// has at most one output.
+#[derive(Debug)]
+struct SwapInputs;
+
+impl DualFilter for SwapInputs {
+    fn filter_frames(
+        &mut self,
+        _ctx: &mut FilterContext<'_>,
+        inputs: SmallVec<[vaco_frame::Frame; 4]>,
+    ) -> Result<SmallVec<[vaco_frame::Frame; 4]>> {
+        let mut iter = inputs.into_iter();
+        let (Some(a), Some(b)) = (iter.next(), iter.next()) else {
+            return Ok(SmallVec::new());
+        };
+        Ok(SmallVec::from_iter([b, a]))
+    }
+}
+
+/// End-to-end: two sources in, two sinks out, through `Dual`. Deliberately
+/// swaps so that a bug routing both outputs from the same pending queue (or
+/// routing pad `1`'s frame to pad `0`) fails the value assertions rather
+/// than merely failing to compile — the runtime half of the pair this gap's
+/// own doc asks for; `dual_stops_at_the_first_input_to_run_dry` below is
+/// the lockstep half.
+#[test]
+fn dual_routes_each_output_to_its_own_pad() -> Result<()> {
+    const DESC: FilterDesc = FilterDesc {
+        name: "swap2",
+        description: "test: swaps two inputs onto two outputs",
+        inputs: TWO_INPUT_PADS,
+        outputs: TWO_OUTPUT_PADS,
+        flags: FilterFlags::empty(),
+    };
+    let mut graph = Graph::new();
+    let src_a = graph.add_source(
+        "a",
+        MediaType::Video,
+        video_source_formats("a", PixFmt::Gray8),
+    );
+    let src_b = graph.add_source(
+        "b",
+        MediaType::Video,
+        video_source_formats("b", PixFmt::Gray8),
+    );
+    let node = graph.add(
+        DESC,
+        NodeFormats::passthrough(2, 2, MediaType::Video, "swap2"),
+        Box::new(Dual::new(SwapInputs)),
+    );
+    let sink_out = graph.add_sink("out", MediaType::Video, any_video_sink("out"));
+    let sink_fb = graph.add_sink("fb", MediaType::Video, any_video_sink("fb"));
+    graph.connect(src_a, 0, node, 0)?;
+    graph.connect(src_b, 0, node, 1)?;
+    graph.connect(node, 0, sink_out, 0)?;
+    graph.connect(node, 1, sink_fb, 0)?;
+    graph.set_source_format(src_a, gray_link(16, 16, Rational::new(1, 25)))?;
+    graph.set_source_format(src_b, gray_link(16, 16, Rational::new(1, 25)))?;
+    graph.configure()?;
+
+    for i in 0..3u8 {
+        graph.send(src_a, gray_frame(16, 16, i64::from(i), i))?;
+    }
+    graph.close_source(src_a, Timestamp::new(3))?;
+    for i in 0..3u8 {
+        graph.send(src_b, gray_frame(16, 16, i64::from(i), i * 10))?;
+    }
+    graph.close_source(src_b, Timestamp::new(3))?;
+
+    let mut out_vals = Vec::new();
+    let mut fb_vals = Vec::new();
+    for _ in 0..1000 {
+        match graph.run()? {
+            GraphStatus::Eof => break,
+            GraphStatus::HasOutput(_) => {}
+            other => panic!("unexpected graph status: {other:?}"),
+        }
+        loop {
+            match graph.recv(sink_out) {
+                Ok(f) => out_vals.push(first_byte(&f)),
+                Err(Error::NeedMoreInput | Error::Eof) => break,
+                Err(e) => return Err(e),
+            }
+        }
+        loop {
+            match graph.recv(sink_fb) {
+                Ok(f) => fb_vals.push(first_byte(&f)),
+                Err(Error::NeedMoreInput | Error::Eof) => break,
+                Err(e) => return Err(e),
+            }
+        }
+    }
+    // Output pad 0 got input b's values (0, 10, 20); output pad 1 got input
+    // a's values (0, 1, 2) -- the swap, not a duplicate of either input.
+    assert_eq!(
+        out_vals,
+        vec![Some(0), Some(10), Some(20)],
+        "output pad 0 must carry input b's frames, not input a's or a copy of both"
+    );
+    assert_eq!(
+        fb_vals,
+        vec![Some(0), Some(1), Some(2)],
+        "output pad 1 must carry input a's frames, not input b's or a copy of both"
+    );
+    assert!(graph.violations().is_empty(), "{:?}", graph.violations());
+    Ok(())
+}
+
+/// Same lockstep contract `Paired` has: no independent timeline, no
+/// `eof_action=repeat` — the first input to run dry ends the whole filter,
+/// discarding whatever the longer input still had queued.
+#[test]
+fn dual_stops_at_the_first_input_to_run_dry() -> Result<()> {
+    const DESC: FilterDesc = FilterDesc {
+        name: "swap2b",
+        description: "test: swaps two inputs onto two outputs",
+        inputs: TWO_INPUT_PADS,
+        outputs: TWO_OUTPUT_PADS,
+        flags: FilterFlags::empty(),
+    };
+    let mut graph = Graph::new();
+    let src_a = graph.add_source(
+        "a",
+        MediaType::Video,
+        video_source_formats("a", PixFmt::Gray8),
+    );
+    let src_b = graph.add_source(
+        "b",
+        MediaType::Video,
+        video_source_formats("b", PixFmt::Gray8),
+    );
+    let node = graph.add(
+        DESC,
+        NodeFormats::passthrough(2, 2, MediaType::Video, "swap2b"),
+        Box::new(Dual::new(SwapInputs)),
+    );
+    let sink_out = graph.add_sink("out", MediaType::Video, any_video_sink("out"));
+    let sink_fb = graph.add_sink("fb", MediaType::Video, any_video_sink("fb"));
+    graph.connect(src_a, 0, node, 0)?;
+    graph.connect(src_b, 0, node, 1)?;
+    graph.connect(node, 0, sink_out, 0)?;
+    graph.connect(node, 1, sink_fb, 0)?;
+    graph.set_source_format(src_a, gray_link(16, 16, Rational::new(1, 25)))?;
+    graph.set_source_format(src_b, gray_link(16, 16, Rational::new(1, 25)))?;
+    graph.configure()?;
+
+    for i in 0..5u8 {
+        graph.send(src_a, gray_frame(16, 16, i64::from(i), i))?;
+    }
+    graph.close_source(src_a, Timestamp::new(5))?;
+    for i in 0..2u8 {
+        graph.send(src_b, gray_frame(16, 16, i64::from(i), i * 10))?;
+    }
+    graph.close_source(src_b, Timestamp::new(2))?;
+
+    let mut out_vals = Vec::new();
+    for _ in 0..1000 {
+        match graph.run()? {
+            GraphStatus::Eof => break,
+            GraphStatus::HasOutput(_) => {}
+            other => panic!("unexpected graph status: {other:?}"),
+        }
+        loop {
+            match graph.recv(sink_out) {
+                Ok(f) => out_vals.push(first_byte(&f)),
+                Err(Error::NeedMoreInput | Error::Eof) => break,
+                Err(e) => return Err(e),
+            }
+        }
+        while graph.recv(sink_fb).is_ok() {}
+    }
+    assert_eq!(
+        out_vals.len(),
+        2,
+        "stops the instant the shorter input (b, 2 frames) is exhausted"
+    );
+    assert!(graph.violations().is_empty(), "{:?}", graph.violations());
+    Ok(())
+}
+
+/// `feedback`'s own reference usage loops one output back as the filter's
+/// next-frame input (`[0][fb]feedback[out][fb]`) — a genuine cycle, not
+/// just the two-output arity `Dual` supplies. Confirms directly, against
+/// this crate's own scheduler rather than by inspection, that
+/// `Graph::configure` refuses such a link before a single frame flows: the
+/// adapter is necessary but not sufficient for `feedback` (see `Dual`'s own
+/// doc and `planning/INTERFACE-GAPS.md`).
+#[test]
+fn a_link_back_into_the_same_node_is_rejected_as_a_cycle_at_configure() -> Result<()> {
+    const DESC: FilterDesc = FilterDesc {
+        name: "swap2c",
+        description: "test: swaps two inputs onto two outputs",
+        inputs: TWO_INPUT_PADS,
+        outputs: TWO_OUTPUT_PADS,
+        flags: FilterFlags::empty(),
+    };
+    let mut graph = Graph::new();
+    let src_a = graph.add_source(
+        "a",
+        MediaType::Video,
+        video_source_formats("a", PixFmt::Gray8),
+    );
+    let node = graph.add(
+        DESC,
+        NodeFormats::passthrough(2, 2, MediaType::Video, "swap2c"),
+        Box::new(Dual::new(SwapInputs)),
+    );
+    let sink_out = graph.add_sink("out", MediaType::Video, any_video_sink("out"));
+    graph.connect(src_a, 0, node, 0)?;
+    // The feedback wiring itself: output pad 1 feeds back into input pad 1
+    // of the very same node.
+    graph.connect(node, 1, node, 1)?;
+    graph.connect(node, 0, sink_out, 0)?;
+    graph.set_source_format(src_a, gray_link(16, 16, Rational::new(1, 25)))?;
+
+    let err = graph.configure().expect_err("a self-loop must not configure");
+    let message = err.to_string();
+    assert!(
+        message.contains("cycle"),
+        "expected a cycle-shaped error, got: {message}"
+    );
+    Ok(())
+}
+
+// ------------------------------------------------------- graph introspection
+
+/// Captures `ctx.graph_nodes()`/`ctx.graph_links()` on its first call, then
+/// passes every frame through unchanged. `Arc<Mutex<..>>` rather than
+/// `Simple::into_inner` because the filter is stored as `Box<dyn Filter>` on
+/// the graph — the concrete type, and any state inside it, is not
+/// recoverable after `graph.add` without a handle kept on the side.
+#[derive(Debug, Clone)]
+struct GraphProbe {
+    seen: std::sync::Arc<std::sync::Mutex<Option<(Vec<NodeView>, Vec<LinkView>)>>>,
+}
+
+impl FrameFilter for GraphProbe {
+    fn filter_frame(&mut self, ctx: &mut FilterContext<'_>, input: vaco_frame::Frame) -> Result<FrameOut> {
+        let mut seen = self.seen.lock().unwrap();
+        if seen.is_none() {
+            *seen = Some((ctx.graph_nodes().to_vec(), ctx.graph_links()));
+        }
+        Ok(FrameOut::One(input))
+    }
+}
+
+/// The runtime half of gap 22's proof: a filter mid-graph can see *other*
+/// nodes' labels and link state through a real `Graph::run`, not just
+/// through a type that happens to compile. Three nodes besides the probe
+/// itself (source, sink, and the probe's own node) must all be visible by
+/// label, and the source->probe link's queue state must be readable even
+/// though it is not one of the probe's own *output* pads.
+#[test]
+fn a_filter_can_read_every_nodes_label_and_every_links_state() -> Result<()> {
+    const DESC: FilterDesc = FilterDesc {
+        name: "probe",
+        description: "test: records graph_nodes()/graph_links() on its first frame",
+        inputs: VIDEO_PAD,
+        outputs: VIDEO_PAD,
+        flags: FilterFlags::empty(),
+    };
+    let mut graph = Graph::new();
+    let src = graph.add_source(
+        "probe_source",
+        MediaType::Video,
+        video_source_formats("probe_source", PixFmt::Gray8),
+    );
+    let probe = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let node = graph.add(
+        DESC,
+        NodeFormats::passthrough(1, 1, MediaType::Video, "probe_node"),
+        Box::new(Simple::new(GraphProbe {
+            seen: std::sync::Arc::clone(&probe),
+        })),
+    );
+    let sink = graph.add_sink(
+        "probe_sink",
+        MediaType::Video,
+        any_video_sink("probe_sink"),
+    );
+    graph.connect(src, 0, node, 0)?;
+    graph.connect(node, 0, sink, 0)?;
+    graph.set_source_format(src, gray_link(16, 16, Rational::new(1, 25)))?;
+    graph.configure()?;
+
+    graph.send(src, gray_frame(16, 16, 0, 7))?;
+    graph.close_source(src, Timestamp::new(1))?;
+    for _ in 0..1000 {
+        match graph.run()? {
+            GraphStatus::Eof => break,
+            GraphStatus::HasOutput(_) => {}
+            other => panic!("unexpected graph status: {other:?}"),
+        }
+        while graph.recv(sink).is_ok() {}
+    }
+
+    let guard = probe.lock().unwrap();
+    let (nodes, links) = guard.as_ref().expect("the probe frame must have run");
+
+    let labels: Vec<&str> = nodes.iter().map(|n| n.label.as_str()).collect();
+    assert!(
+        labels.contains(&"probe_source") && labels.contains(&"probe_sink"),
+        "a filter must be able to name nodes that are not itself: {labels:?}"
+    );
+    assert!(
+        nodes.iter().any(|n| n.id == node),
+        "the probe's own node must also appear, by the same id `connect` used"
+    );
+
+    // The source -> probe link is the probe's own *input*, not something
+    // `FilterContext::input_link` alone would call "another node's state" —
+    // but a diagram needs every link, including this one, addressed by the
+    // same `PadRef` the source/sink pair used to `connect`.
+    let source_link = links
+        .iter()
+        .find(|l| l.src.node == src)
+        .expect("the source's own outbound link must be visible");
+    assert_eq!(source_link.dst.node, node);
+    Ok(())
 }

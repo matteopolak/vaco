@@ -389,6 +389,7 @@ awkward API is paid for 560 times.
 | `Blocked<F: AudioFilter>` | a `FrameFilter` that sees exactly `frame_size` samples | the FIFO, and a correctly short final block |
 | `Paired<F: PairedFilter>` | N-in 1-out (N fixed at construction, two by default), strict lockstep | pulling one frame per input before calling the filter, and ending the whole filter the instant any one input runs dry |
 | `Fanout<F: FanoutFilter>` | 1-in N-out (N fixed at construction) | waiting for room on **every** output pad before consuming, and the flush loop |
+| `Dual<F: DualFilter>` | fixed 2-in 2-out, lockstep inputs | `Paired`'s lockstep-input rule and `Fanout`'s all-outputs-have-room rule combined, plus a pending queue per output pad (the one piece neither existing adapter needed, since neither has more than one of both) |
 
 ### `Paired`/`Fanout`, and why they are not `Synced`
 
@@ -436,6 +437,38 @@ derives from it", which is `extractplanes`' shape (one pad per requested
 plane). It keeps `split`'s exact backpressure discipline: check every output
 pad has room *before* reading the input, so the N derived frames can always be
 pushed immediately afterwards and no per-pad pending queue is needed.
+
+### `Dual`, and the cycle it does not solve
+
+`Simple`/`Blocked` (1-in-1-out), `Sourced` (0-in-1-out), `Fanout`
+(1-in-N-out) and `Paired` (N-in-1-out) cover every shape *except*
+N-in-M-out with more than one output on the "many inputs" side —
+`vaco-filter-overlay`'s `feedback` (`VV->VV`) needed exactly that and
+none of the four fit, found and filed as `planning/INTERFACE-GAPS.md`
+gap 24. `Dual<F: DualFilter>` closes the shape question: it is `Paired`
+and `Fanout` combined (lockstep input consumption, all-outputs-have-room
+backpressure) plus one genuinely new piece, a pending queue *per output
+pad* — neither `Paired` (one output) nor `Fanout` (one input) needed
+more than one of both, so neither had to solve per-pad output
+backpressure and per-input lockstep at once. Like `Paired`,
+`DualFilter::input_count`/`output_count` default to two (`feedback`'s own
+arity) but may be overridden at construction, generalising to N-in/M-out
+the same low-cost way `Paired` generalises past two inputs — not a
+hardcoded-two adapter, just one with a single, two-and-two consumer so
+far. D19 argued against a *new, more general* trait design with no second
+consumer; it did not argue for hardcoding the one this crate already had
+a working pattern for.
+
+`Dual` is **necessary but not sufficient** for `feedback`. `feedback`'s
+own reference usage (`[0][fb]feedback[out][fb]`) loops one output back
+as the filter's own next input — a genuine cycle in the filtergraph, not
+just an unusual arity — and `Graph::configure()` requires
+`Graph::topological_order()`, which hard-rejects any cycle before a
+`Dual`-shaped node's pads would ever be negotiated. That is a scheduler
+and negotiation limitation, not an adapter-shape one, and is a separate,
+open gap (`planning/INTERFACE-GAPS.md` gap 25) — `Dual` exists and is
+tested (`crates/filter/vaco-filter-core/tests/graph.rs`'s
+`dual_*` tests), but `feedback` itself is still not implementable.
 
 `Simple`'s step order is fixed and matters: **drain what was held back → check
 demand → take one input or observe end of stream → evaluate the timeline → call
@@ -708,6 +741,55 @@ pins it against `Fps`, which is the worked example that actually holds a frame.
 
 A source is deliberately **not** rewound: nothing in this interface carries a
 seek target, so an exhausted source stays exhausted and re-closes its output.
+
+## Graph introspection: narrow by design
+
+`ffmpeg -h filter=graphmonitor`/`agraphmonitor` (`vaco-filter-scope`, issue
+#480) draw the *whole graph's* live state — every link's queue depth, EOF
+status, format — and building that crate found this was not just
+unimplemented but **not expressible**: `FilterContext` exposed only the
+current node's own pads, keyed through `self.node: &NodeLinks`, which
+holds only this node's own `LinkId`s. Filed as
+`planning/INTERFACE-GAPS.md` gap 22.
+
+Closing it added two read-only accessors: `FilterContext::graph_nodes(&self)
+-> &[NodeInfo]` (each node's id, scheduler label, `&'static str` filter
+name) and `FilterContext::graph_links(&self) -> Vec<LinkView>` (each
+link's id, `PadRef` endpoints, media type, queue depth, capacity, EOF
+flag, and its existing `LinkStats`). Most of the underlying data already
+existed — `LinkStats`'s own doc comment already named `graphmonitor` as
+an intended consumer, and `links: &mut LinkArena` on `FilterContext` was
+already a reference to the *entire* arena, not just the current node's —
+so the actual gap was which methods exposed it, not missing data. Node
+labels were the one new field: `Graph` gained `node_labels:
+Vec<NodeInfo>`, built incrementally in `push_node` rather than collected
+from `self.nodes` on every call, to keep the scheduler's hot path
+allocation-free.
+
+**The design question was what a filter is allowed to see, not what data
+exists.** A filter that can reach arbitrary graph state — push to another
+node's link, close another node's pad, or reach another node's `Filter`
+implementation — is a filter that can be written to depend on scheduling
+order, which plan 16 §1.1's own boundary ("a filter can never reach
+another filter's private state, only link state") exists to prevent, and
+is a materially worse property than the missing introspection capability
+ever was. `NodeInfo`/`LinkView` are deliberately **read-only snapshots**
+taken at call time, and deliberately exclude scheduler-internal state
+(`parked_at`, `self_driven`, `last_run`) that `graphmonitor`'s `mode`
+flags do not need. A general graph accessor was considered and rejected
+in favour of the narrowest surface that serves the two named consumers.
+
+Verified end-to-end: `tests/graph.rs`'s
+`a_filter_can_read_every_nodes_label_and_every_links_state` builds a real
+3-node graph and confirms a filter can see the *other* nodes' labels and
+an upstream link's state, then (as a deliberate check that the test has
+teeth) `graph_nodes`/`graph_links` were temporarily stubbed to return
+empty and the test failed with a clear diagnostic before the real
+implementation was restored.
+
+**Not done here**: `graphmonitor`/`agraphmonitor` are still not
+implemented as filters in `vaco-filter-scope` — this closes the framework
+capability those filters need, not the filters themselves.
 
 ## Signature gaps
 
