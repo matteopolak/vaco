@@ -150,6 +150,15 @@ const DISTINCT: &[(&str, &str)] = &[
          pattern. Copied into a real `vaco_frame::Frame` once, at emission.",
     ),
     (
+        "Rect",
+        "vaco-filter-draw: a video-frame drawing rectangle (fill/blend/box), \
+         clipped to frame bounds and projected onto chroma-subsampled \
+         planes. vaco-format-subtitle-bitmap: a decoded subtitle region's \
+         position/size, validated against decode limits. Same `{x, y, \
+         width, height}` shape, unrelated domains (filter drawing vs. \
+         subtitle-codec parsing) and layers -- coincidence, not duplication.",
+    ),
+    (
         "Scope",
         "vaco-conformance: a test scope. vaco-probe: an option scope.",
     ),
