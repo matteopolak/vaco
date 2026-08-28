@@ -1527,3 +1527,31 @@ found by a different agent, after this pass had already measured and
 committed its own nine. Whoever wires `AdpcmPsx` into `vaco-format-misc-audio`'s
 `vag.rs` should re-open this kind of entry rather than assume "gap 21 is
 CLOSED" covers it too.
+
+## Gap 22 — no cross-node introspection reachable from a filter (`graphmonitor`/`agraphmonitor`, `vaco-filter-scope`)
+
+`ffmpeg -h filter=graphmonitor`/`agraphmonitor` draw a picture of the
+*whole filtergraph's* live state — every link's queue depth, EOF status,
+disabled/timeline state, format — driven by `mode`/`flags` bitmasks
+(`full`, `compact`, `nozero`, `noeof`, `nodisabled`, `queue`, and more).
+Building `vaco-filter-scope` (issue #480, "FT-4.12g") found that this is
+not just unimplemented but **not expressible against the current
+`vaco-filter-core::FilterContext` surface**, checked directly rather than
+assumed: `FilterContext` exposes only the current node's own pads
+(`input_link`/`output_link`/`peek_input`/`input_depth`, all keyed through
+`self.node: &NodeLinks`, which holds only this node's `LinkId`s). There is
+no accessor that reaches another node, enumerates the graph's nodes at
+all, or reads a `Link`'s `LinkStats` from outside the two endpoints that
+own it.
+
+This is consistent with the architecture's own stated invariant (plan 16
+§1.1: "a filter can never reach another filter's private state, only link
+state") — it is not an oversight so much as a boundary nobody has needed
+to cross yet. Closing this gap means adding a read-only, whole-graph
+snapshot accessor (node list, per-link `LinkStats` plus queue
+depth/status/disabled-state, in a form that does not let a filter mutate
+anything outside its own pads) to `vaco-filter-core`, which is core-crate
+work outside `vaco-filter-scope`'s own ownership.
+
+Not fixed here: `graphmonitor`/`agraphmonitor` are left unimplemented in
+`vaco-filter-scope`, recorded rather than worked around.
