@@ -1406,3 +1406,50 @@ Two things that stay true when you do fetch one:
   implemented from a document are exactly what D7 asks for; transcribed prose is
   not, and neither is a table copied wholesale where the specification's own
   licence does not allow it. Cite the clause, write the code.
+
+## The clean-room rule is about FFmpeg, not about every reference implementation
+
+Twice in one day an agent treated a **permissively-licensed** reference
+implementation as forbidden. One built ALAC from scratch as a self-invented,
+self-interoperable-only design rather than open Apple's reference. Another wrote
+a working Opus decoder from libopus and then reported it in terms that read like
+a confession. The orchestrator briefly mistook the second for a clean-room
+violation. All three of us were wrong, in the same direction.
+
+`planning/research/07-legal-patents-licensing.md` §1.6.1 is explicit. **Tier A —
+open freely, no record needed** includes:
+
+- Published standards (ITU-T, ISO/IEC, IETF RFCs, SMPTE, AES, ETSI/3GPP, W3C, Xiph)
+- Academic papers and textbooks
+- **Permissively-licensed reference implementations** already cleared in the
+  register — libopus (BSD), libvpx (BSD), dav1d (BSD), HM/JM (BSD-3),
+  libjxl (Apache-2.0), Apple's ALAC (Apache-2.0)
+- FFmpeg's *user documentation*, man pages, and `--help` output
+- The `ffmpeg`/`ffprobe`/`ffplay` **binaries**, for black-box testing
+
+**Tier B — off-limits** is FFmpeg / libav / VLC / GStreamer / mpv C source, and
+GPL codec source such as x264/x265. That is what D7/D15 protect against, and the
+distinction is *licence*, not a general principle that reading any implementation
+is dirty.
+
+The cost of getting this backwards is not caution, it is defects. A codec written
+without the reference it was permitted to read is how G.722, G.726 and the first
+ALAC all shipped as plausible-looking stand-ins that no other decoder could read
+— and all three had to be pulled back. Refusing a permitted source does not make
+the work cleaner; it makes it wrong in a way that takes another agent a full
+session to find.
+
+Two duties survive when you do use a Tier A implementation:
+
+- **Record it.** `Vaco-Spec-Ref` trailer plus an entry in `provenance/`, naming
+  the licence you checked and the date you checked it. If an earlier provenance
+  file claims you never read something you have now read, **retract the claim in
+  the same commit** — a stale disclaimer is worse than none.
+- **Attribution is a real obligation, not a nicety.** BSD, MIT, ISC, Apache and
+  FTL all require it in redistributed binaries. That duty is discharged
+  project-wide through the generated `NOTICE` / `THIRD_PARTY_LICENSES` file
+  tracked in #182, not per-crate — so use the source, record it, and let the
+  release-engineering issue collect it.
+
+If you are unsure whether a specific source is Tier A, ask the orchestrator. Do
+not resolve the doubt by inventing an algorithm.
