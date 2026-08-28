@@ -1989,3 +1989,71 @@ to match the reference. Whoever picks this up: the measurement script
 open question is what governs the 16–32 kHz transition specifically,
 since everything on either side of it fits the simple 64 ms/power-of-two
 rule.
+
+### Update: `vaco-codec-mpeg12`'s residual bit-consumption bug is fixed for MPEG-2; a different, smaller MPEG-1 gap remains
+
+The entry above ("an unresolved non-intra residual bit-consumption bug,
+reproducible") is resolved for MPEG-2. Root cause: `CODED_BLOCK_PATTERN`'s
+last three rows (Table B.9, `cbp` 27/39/0) were transcribed as 10-bit
+codes when the spec's own printed table has them at 9 bits — one bit
+shorter than the four rows directly above them, an easy miscount that the
+existing `coded_block_pattern_is_prefix_free_and_covers_every_value` test
+could not catch (prefix-freedom and 64-value coverage both still held with
+the extra leading zero; it just shifted three codes one bit later without
+colliding with anything). Confirmed by hand-tracing a real encoder's bits
+at the exact failure point in `m2_qcif_ipb.m2v`'s second P-picture,
+macroblock 80: the raw bitstream was exactly the spec's correct 9-bit
+`000000010` (`cbp` 39), one bit short of the wrong 10-bit table entry.
+Fixed in `crates/codec/vaco-codec-mpeg12/src/tables.rs`, with a regression
+test (`coded_block_pattern_shortest_codes_are_exactly_9_bits`) asserting
+the exact bit length this time, not just prefix-freedom and coverage.
+
+A structural fix landed alongside it and is worth keeping even though it
+did not by itself fix the bug: `ActivePicture::supported` used to mean
+both "this picture's coding mode is unimplemented" and "a local VLC decode
+failure happened somewhere in this picture," both scoped to the whole
+picture. Splitting the local-decode-error meaning into a new
+`ActivePicture::slice_ok`, reset per `decode_slice` call instead of per
+picture, means one bad slice now only loses the rest of *itself* rather
+than every later slice in the picture (and, since I/P pictures are
+references, every later picture in the GOP). This measurably narrowed the
+CBP bug's own visible corruption from "the rest of the picture and every
+later picture in the GOP" down to "one slice, sometimes two" before the
+table bug itself was found, and is recommended practice for any future
+crate with a single "this picture is fine" flag serving double duty.
+
+Measured impact (differential-tested against `ffmpeg`, full table in
+`docs/codec/vaco-codec-mpeg12.md`): every MPEG-2 fixture on hand is now
+reference-quality — max-abs-deviation of 2 across the board (the
+crate's floating-point IDCT's own rounding, not a decode error), where
+`m2_qcif_ipb`/`m2_cif_ipb`/`m2_oddsize` previously measured avg MAD of
+200+, 234+ and 10.8 respectively. This is not literally "framemd5-
+identical" (T2-01a's own stated bar) — that would require matching a
+specific reference decoder's own integer IDCT rounding bit-for-bit, which
+this crate's Annex-A-compliant-but-not-bit-exact floating-point IDCT
+cannot guarantee — but every desync/corruption bug this differential
+harness can detect on MPEG-2 is now gone.
+
+**MPEG-1 remains genuinely wrong, with different symptoms**: small,
+diffuse error across nearly every macroblock rather than concentrated
+corruption, present from frame 0 of an intra-only fixture (so not
+inter-prediction or reference propagation), growing with content
+complexity. Not a bitstream desync — closer to a per-coefficient
+reconstruction or rounding difference specific to MPEG-1. One concrete,
+plausible hypothesis was tested and eliminated this session: H.262 Annex
+D.9.1 describes ISO/IEC 11172-2's IDCT mismatch control as correcting
+every nonzero-even coefficient independently (unlike MPEG-2's single
+sum-parity-conditional `F[7][7]` correction). Implementing this as "toggle
+every such coefficient's least-significant bit" (the same mechanism
+§7.4.4's own Note 1 describes for MPEG-2's one coefficient, generalised)
+was tried in both possible correction directions and measured *worse* in
+both (avg MAD rose from ~12-44 to ~24-51 across the three MPEG-1
+fixtures) than applying MPEG-2's own rule unconditionally, which is what
+this crate now deliberately does. Also re-checked and ruled out: DC
+precision/reset tables, the linear `quantiser_scale` row (the only one
+MPEG-1 ever selects), and `intra_vlc_format`/escape-coding table
+selection — all correct. The actual cause was not found this session; the
+next place to look is the per-coefficient dequantised values themselves
+(compare against a hand-computed reference for one intra macroblock in
+`m1_i.m1v`, since the bug is present at frame 0 of purely-intra content),
+not bit positions.
