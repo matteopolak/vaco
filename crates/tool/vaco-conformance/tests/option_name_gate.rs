@@ -47,13 +47,15 @@
 //! `KNOWN_OPTIONS` table and `ensure_known_options` copy, same shape,
 //! same precedent as the four `common.rs`-based crates before them).
 //!
-//! The three still here are `vaco-filter-video-geometry`'s `hflip`,
-//! `scale`, `vflip` — not this crate's to fix at all: `assigned`, no
-//! completion date, per `planning/ASSIGNMENTS.md`, same standing rule as
-//! `vaco-filter-color` in the sibling gate. This allowlist is meant to
-//! shrink toward exactly that residue, not sit as a permanent monument —
-//! delete an entry the moment its filter's crate closes the gap, per this
-//! const's own doc below.
+//! The three that were still here -- `vaco-filter-video-geometry`'s
+//! `hflip`, `scale`, `vflip` -- are now closed too: the crate's stale
+//! `ASSIGNMENTS.md` row was reclaimed 2026-08-28 and the same
+//! `ensure_known_options`-per-registry pattern was wired into its own
+//! `registry.rs`. `KNOWN_GAPS` is empty. It stays declared (rather than
+//! deleted along with the machinery that reads it) so the next real
+//! divergence has somewhere to land without re-deriving this file's own
+//! rationale for why a gap belongs here and not folded into the pass/fail
+//! verdict.
 
 #![expect(
     clippy::expect_used,
@@ -73,11 +75,7 @@ use vaco_filter_graph::registry::Instantiate;
 /// does not detect that on its own (an entry that stops failing is
 /// quietly ignored rather than flagged as stale — the same known
 /// limitation `option_consts_gate.rs`'s own `KNOWN_GAPS` carries).
-const KNOWN_GAPS: &[(&str, &str)] = &[
-    ("vaco-filter-video-geometry", "hflip"),
-    ("vaco-filter-video-geometry", "scale"),
-    ("vaco-filter-video-geometry", "vflip"),
-];
+const KNOWN_GAPS: &[(&str, &str)] = &[];
 
 /// A key guaranteed not to be a real option for anything: no reference
 /// filter uses this spelling, and it carries no digits/case pattern that
