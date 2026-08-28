@@ -3242,3 +3242,113 @@ except the three known-`#[ignore]`d CABAC macroblock tests (unchanged),
 both clean, no new `fuzz/artifacts` files, `patent-gate` still "0 of 2".
 `vaco-codec-cabac` and its fuzz target confirmed untouched by `git
 status`. #418 stays open; #419 not reopened.
+
+## H.264 CABAC: found and fixed a real coded_block_pattern neighbour bug, moved but did not close the divergence (#418)
+
+Two more bounded rounds on top of the previous "no bug found" negative
+result and the bypass-path clearance.
+
+**Round A — bypass hypothesis, tested and cleared.** The coordinator's
+specific hypothesis: since `mb_type`/`cbp`/`mb_skip_flag` are all
+`decode_decision` (context-coded, independently verified bit-exact
+against `ffmpeg -debug mb_type`), while `coeff_abs_level_minus1`'s `EGk`
+suffix and `coeff_sign_flag` are the only *bypass*-coded elements
+`residual_block_cabac` reads, a fault confined to bypass would explain
+every correct classification alongside a still-wrong residual. Cleared:
+`crates/codec/vaco-codec-h264/tests/cabac_bypass_egk_oracle.rs` (added
+against `vaco-codec-cabac`'s public API only — that crate is
+`agent:codec-bits`'s, status `done`, not edited, per the ownership
+check) round-trips `encode_bypass_egk`/`decode_bypass_egk`, `decode_uegk`,
+`decode_bypass`, and `decode_bypass_bits` across every realistic H.264
+coefficient value cleanly, confirms the 32-bin prefix ceiling only ever
+engages six orders of magnitude past any realistic value and never
+silently, and includes a deliberately-broken mismatched-`k` case
+(`#[should_panic]`) proving the oracle can actually fail. Real-corpus
+instrumentation (temporary, reverted before committing) at the actual
+`decode_bypass_egk` call site found the ceiling engages **zero times**
+across 243 real calls in all three corpora; largest observed
+`coeff_abs_level_minus1` value was 418.
+
+**Round B — a real bug, found and fixed.** `decode_cbp_cabac`'s luma
+`coded_block_pattern` neighbour derivation (`crates/codec/
+vaco-codec-h264/src/mb.rs`, clause 9.3.3.1.1.4 + 6.4.7.2 + Table 6-2).
+The four 8x8 luma blocks within a macroblock are raster-scan (`0 1 /
+2 3`): block `q`'s left neighbour falls in the *same* macroblock at
+block `q-1` when `q` is in the right column (1, 3), and its above
+neighbour falls in the *same* macroblock at block `q-2` when `q` is in
+the bottom row (2, 3) — two different conditions, two different
+same-macroblock sources. The code computed a single `same_mb_bit` using
+only the left rule and fed it to both `ctxIdxInc` terms:
+
+- `q=0`: both terms cross-macroblock. Correct by construction.
+- `q=1`: left uses same-mb block 0, correct. Above should use the above
+  macroblock's block 3 — already computed correctly as `cross_mb_above`
+  — but `cbp_luma_cond_term` returns early on a `Some` `same_mb_bit` and
+  discards `cross_mb` entirely, so `cross_mb_above` was silently unused.
+- `q=2`: left uses the left macroblock's block 3, correct. Above should
+  use same-mb block 0 (always available at this point), but neither
+  `same_mb_bit` nor `cross_mb_above` was ever populated for `q=2`'s above
+  term — the condition returned 0 with no source at all.
+- `q=3`: left uses same-mb block 2, correct. Above should use same-mb
+  block 1; it got block 2 again, the left value.
+
+Verified by independently re-deriving each `q`'s actual left/above
+`(xN, yN)` from Table 6-2's `(xD, yD) = (-1, 0)` for A / `(0, -1)` for B
+and clause 6.4.7.2's `xN = (luma8x8BlkIdx % 2) * 8 + xD`,
+`yN = (luma8x8BlkIdx / 2) * 8 + yD`, then checking which locations land
+inside the current macroblock versus which cross into a real neighbour —
+not by inspecting the existing code's shape. Fixed by computing
+`same_mb_left_bit` and `same_mb_above_bit` as two independent values.
+
+The analogous 4x4-block-granular `coded_block_flag` neighbour derivation
+(the same file, `decode_residual_cabac`'s luma AC/4x4 loop) was checked
+for the identical trap — the coordinator's own suggestion, since it has
+the same "left and above can both fall inside the current macroblock"
+shape over 4x4 blocks — and does not have it: `left_bit`/`above_bit` are
+looked up from two independently-computed absolute grid positions
+(`x-1, y` and `x, y-1`) rather than sharing one same-macroblock boolean
+between two terms.
+
+**Measured effect, not assumed.** Captured exact before/after
+`assert_slice_ends_at_rbsp_trailing_bits` failure output for all three
+corpora (temporarily reverting the fix in an isolated worktree to get
+the "before" numbers precisely, then restoring it):
+
+| Corpus | Before (expected/found) | After (expected/found) |
+|---|---|---|
+| `cabac_ip_simple.264` | `0b00000100` / `0b00000001` | `0b00000100` / `0b00000001` — **byte-for-byte identical** |
+| `cabac_ip_multiref.264` | `0b00001000` / `0b00001001` | `0b00100000` / `0b00101111` — changed |
+| `cabac_i_only.264` | `0b00000100` / `0b00000010` | `0b00100000` / `0b00111011` — changed |
+
+Two of three corpora show a real, confirmed behavioural change (the
+overall slice-0 bit budget consumed before `end_of_slice_flag` fires
+shifted). None reach a clean end. `cabac_ip_simple.264`'s own mismatch is
+unchanged to the bit, meaning its own slice-0 divergence sits at a point
+this bug never reaches — a separate cause, still unisolated, most likely
+before any macroblock exercising the buggy `q` values is even decoded in
+that corpus's specific content. The fix is correct per primary text and
+is kept regardless of which corpus's dominant cause it was or wasn't.
+
+**What remains.** Every `ctxIdxInc`/context table reachable before
+residual decode in an all-intra slice has now been verified at both
+levels — the `(m, n)` table *values* (prior round) and, for CBP
+specifically, the neighbour-derivation *logic* (this round) — and the
+whole bypass path is cleared (this round). That leaves
+`residual_block_cabac`'s `significant_coeff_flag`/
+`last_significant_coeff_flag` scan-loop structure and `ctxIdxInc` timing
+against real per-coefficient state (as opposed to the formulas checked
+in isolation two rounds ago) as the only unexplored surface in that
+function. The standing next step — a real per-coefficient reference (a
+JM build, or a narrow Python CABAC-engine reimplementation, now
+lower-risk since both the tables and the bypass arithmetic are verified)
+to diff `cabac_i_only.264` slice 0 against block by block — still
+stands.
+
+Gates: `cargo clippy -p vaco-codec-h264 --all-targets` clean, `cargo test
+-p vaco-codec-h264` all passing except the three known-`#[ignore]`d CABAC
+macroblock tests (updated with this round's precise before/after
+finding), `h264_entropy` fuzz target clean (3.5M+ execs), no new
+`fuzz/artifacts` files, `patent-gate` still "0 of 2", `provenance-check`
+shows the same 8 pre-existing failures, none mine. `vaco-codec-cabac` and
+its fuzz target re-confirmed untouched immediately before committing.
+#418 stays open; #419 not reopened.
