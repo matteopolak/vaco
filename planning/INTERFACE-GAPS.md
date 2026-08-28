@@ -2084,3 +2084,23 @@ change to consume `Frame::repeat_pict`, which this entry does not make
 (different ownership, and `repeatfields.rs`'s "hard-duplicate a field"
 logic is a separate piece of work from the data now being available to
 read).
+
+### Addendum — #556 (PR-10b) stays sans-io too, via an explicit `tick()` entry point
+
+Checked before starting #556 (congestion control, ACK/NAK, retransmission,
+the latency window): retransmission and periodic ACKs are exactly the
+timer-driven property this gap names, so the question was whether #556 is
+the child that finally forces the worker-thread seam into existence.
+
+It is not, and does not need to be. The standard sans-io answer for a
+timer-driven protocol — used by, among others, QUIC implementations that
+deliberately keep their state machine free of any socket or clock — is two
+entry points instead of one: `on_packet(data, now)` for network input, and
+an explicit `on_tick(now)` a driver calls on its own cadence for
+timer-driven work (periodic ACKs, RTO-triggered retransmission, latency-
+window drops). Both take time as a plain argument rather than reading a
+clock internally, so #556's own ARQ/congestion-control logic stays exactly
+as pure and unit-testable as #555's handshake state machines, and the
+worker-thread seam this gap already designed is still exactly where
+`on_tick` gets called from, on a real interval, once a live socket exists —
+unchanged by #556 landing first.
