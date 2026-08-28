@@ -131,6 +131,16 @@ impl Mpeg12Decoder {
         if hdr.coding_type == headers::PictureType::I {
             frame.flags |= FrameFlags::KEY;
         }
+        // §6.2.3.1: `top_field_first` is decoded unconditionally by
+        // `picture_coding_extension()`, so it is propagated unconditionally
+        // here too — a downstream consumer that only cares about
+        // interlaced content already has `FrameFlags::INTERLACED` (not set
+        // by this crate; see the module docs) to gate on, the same way a
+        // real decoder's `AVFrame::top_field_first` is set regardless of
+        // `AVFrame::interlaced_frame`.
+        if pce.top_field_first {
+            frame.flags |= FrameFlags::TOP_FIELD_FIRST;
+        }
 
         let supported = pce.is_frame_picture() && hdr.coding_type != headers::PictureType::D;
         if !supported {
@@ -342,6 +352,43 @@ mod tests {
     fn decoder_reports_need_more_input_before_any_packet() {
         let mut dec = Mpeg12Decoder::new(Limits::strict());
         assert!(matches!(dec.receive_frame(), Err(Error::NeedMoreInput)));
+    }
+
+    #[test]
+    fn top_field_first_propagates_to_frame_flags() {
+        let mut dec = Mpeg12Decoder::new(Limits::strict());
+        dec.seq = Some(Sequence {
+            header: SequenceHeader {
+                width: 16,
+                height: 16,
+                intra_matrix: tables::DEFAULT_INTRA_MATRIX,
+                non_intra_matrix: tables::DEFAULT_NON_INTRA_MATRIX,
+            },
+            ext: None,
+            mb_width: 1,
+            mb_height: 1,
+        });
+        let hdr = PictureHeader {
+            temporal_reference: 0,
+            coding_type: headers::PictureType::I,
+            full_pel_forward_vector: false,
+            forward_f_code: 0,
+            full_pel_backward_vector: false,
+            backward_f_code: 0,
+        };
+        let pce = PictureCodingExtension {
+            top_field_first: true,
+            ..PictureCodingExtension::mpeg1_default(0, 0)
+        };
+        assert!(
+            dec.begin_picture(hdr, pce, vaco_core::Timestamp::default(), vaco_core::Duration::default())
+                .is_ok()
+        );
+        let ap = dec.current.as_ref();
+        assert!(ap.is_some(), "begin_picture did not populate current");
+        if let Some(ap) = ap {
+            assert!(ap.frame.flags.contains(FrameFlags::TOP_FIELD_FIRST));
+        }
     }
 
     #[test]

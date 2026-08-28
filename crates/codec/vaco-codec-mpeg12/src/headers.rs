@@ -227,12 +227,14 @@ pub(crate) fn picture_header(payload: &[u8]) -> Option<PictureHeader> {
 /// `extension_start_code_identifier` (§6.2.3.1). MPEG-1 streams have no
 /// picture-coding extension at all; [`crate::decoder`] substitutes
 /// [`PictureCodingExtension::mpeg1_default`] for them.
-/// `top_field_first` and `progressive_frame` are parsed but not yet
-/// consumed: both only matter for a decoder's own display-order or
-/// deinterlacing choices, which are out of this crate's scope (a `Frame`'s
-/// `FrameFlags::TOP_FIELD_FIRST` is not set here).
+/// `top_field_first` is consumed: `crate::decoder::begin_picture`
+/// propagates it directly to `FrameFlags::TOP_FIELD_FIRST` (§6.2.3.1's own
+/// bit, unconditionally — a caller that only cares about interlaced
+/// content already has `FrameFlags::INTERLACED`, not set by this crate, to
+/// gate on first). `progressive_frame` is parsed but not yet consumed: it
+/// only matters for a decoder's own deinterlacing choices, out of this
+/// crate's scope.
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code, reason = "parsed for correct framing, not yet consumed — see this struct's own doc comment")]
 #[allow(
     clippy::struct_excessive_bools,
     reason = "picture_coding_extension() is a fixed bitstream layout of independently-meaningful flags (H.262 §6.2.3.1); a state machine would not reduce the count, only hide it"
@@ -250,6 +252,7 @@ pub(crate) struct PictureCodingExtension {
     pub q_scale_type: bool,
     pub intra_vlc_format: bool,
     pub alternate_scan: bool,
+    #[allow(dead_code, reason = "parsed for correct framing, not yet consumed — see this struct's own doc comment")]
     pub progressive_frame: bool,
 }
 
@@ -299,6 +302,20 @@ pub(crate) fn picture_coding_extension(r: &mut BitReader<'_>) -> PictureCodingEx
     let q_scale_type = r.get(1) != 0;
     let intra_vlc_format = r.get(1) != 0;
     let alternate_scan = r.get(1) != 0;
+    // `repeat_first_field`, together with `top_field_first`, is how a
+    // real MPEG-2 decoder implements 3:2 pulldown: it selects 2, 3 or 4
+    // field-display-periods for this picture (D.9's own
+    // `AVFrame::repeat_pict`-shaped concept, not a plain boolean). Read
+    // for correct framing and discarded rather than stored: there is
+    // nowhere on `vaco_frame::Frame`/`FrameFlags` to put a "repeat by how
+    // many extra fields" value today — only `INTERLACED` and
+    // `TOP_FIELD_FIRST` exist, both booleans. This is the exact gap
+    // `vaco-filter-deinterlace`'s own `repeatfields.rs` independently
+    // documents from the consuming side (that filter's whole job is to
+    // act on this signal, and has nothing to read since no decoder can
+    // produce it) — a shared-crate interface question for whoever owns
+    // `vaco-frame`, not something this crate can work around on its own
+    // under the single-writer rule.
     let _repeat_first_field = r.get(1);
     let _chroma_420_type = r.get(1);
     let progressive_frame = r.get(1) != 0;
