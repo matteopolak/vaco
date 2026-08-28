@@ -1,0 +1,37 @@
+[[source]]
+id       = "alac-magic-cookie"
+kind     = "spec"
+title    = "Apple Lossless Format \"Magic Cookie\" Description (ALACMagicCookieDescription.txt)"
+acquired = "2026-08-28"
+where    = "https://raw.githubusercontent.com/macosforge/alac/master/ALACMagicCookieDescription.txt"
+
+[[source]]
+id       = "alac-readme"
+kind     = "spec"
+title    = "Apple Lossless (ALAC) reference package ReadMe.txt: supported bit depths, channel counts/orders, packet-size limits"
+acquired = "2026-08-28"
+where    = "https://raw.githubusercontent.com/macosforge/alac/master/ReadMe.txt"
+
+# Both of the above are prose format-description documents Apple published
+# alongside (not instead of) its reference decoder/encoder source under
+# codec/ in the same repository. vaco-codec-alac reads only these two files
+# -- never codec/'s C sources, and never the alac crate's own source -- to
+# keep the clean-room boundary issue #285 asks for: the alac crate is a
+# dev-dependency oracle, probed as a black box for its observable
+# input/output behaviour only (see the crate's tests/oracle_alac_crate.rs
+# and its own doc comment), never read as a coding reference.
+
+[[source]]
+id       = "alac-ffmpeg-blackbox-cookie"
+kind     = "blackbox"
+title    = "ALACSpecificConfig bytes as ffmpeg 8.1's ALAC encoder actually writes them, measured from a real output file"
+acquired = "2026-08-28"
+where    = "Local measurement, not a document: `ffmpeg -f lavfi -i \"sine=frequency=440:duration=0.2:sample_rate=44100\" -ac 1 -c:a alac mono.m4a`, then a throwaway Python MP4 box walk (no container-parsing crate) to locate moov/trak/mdia/minf/stbl/stsd's `alac` sample-entry box and hex-dump its trailing 24-byte ALACSpecificConfig. Done because alac-magic-cookie states maxRun \"should be set to 255\"; ffmpeg's real encoder writes 0 instead -- a spec-vs-reality gap in the same spirit as planning/AGENT-CONSTRAINTS.md's \"a name in the reference is not a specification\". The measured bytes are pinned as cookie.rs's real_ffmpeg_mono_cookie regression test and reused in tests/oracle_alac_crate.rs to cross-check this crate's cookie parser against the alac crate's own StreamInfo::from_cookie on identical input."
+
+# No [[table]] rows: this crate has no hand-transcribed constant table of 32
+# or more elements (no VLC table, no quantiser table -- the provenance
+# README's threshold for a row here). frame_codec.rs's predictor and
+# entropy-coding parameters (order, weight shift, Rice adaptation constants)
+# are this crate's own original design, not transcribed from any source --
+# see that module's and predictor.rs's own doc comments, and
+# `Vaco-Provenance: original` on the commits that added them.

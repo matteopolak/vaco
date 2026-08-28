@@ -1,0 +1,179 @@
+//! Differential test against the `alac` dev-dependency oracle.
+//!
+//! This is the one place in this crate that touches the `alac` crate at
+//! all, and it is used exactly as `Cargo.toml`'s doc comment on the
+//! dependency and this crate's own top-level doc describe: as a black box.
+//! No source file of the `alac` crate is read anywhere in this repository —
+//! only its public `StreamInfo`/`Decoder` API, called here with real bytes
+//! and compared against real output.
+//!
+//! # What this validates, and what it does not
+//!
+//! - **Does validate**: this crate's `AlacCookie` parser derives the same
+//!   sample rate, channel count and bit depth from a real magic cookie that
+//!   an independent decoder (`alac::StreamInfo::from_cookie`) derives from
+//!   the identical bytes. That is a genuine two-implementation cross-check
+//!   of the one part of this crate that is spec-derived rather than
+//!   original (see `cookie.rs`).
+//! - **Does not validate** bitstream compatibility of the compressed audio
+//!   payload: this crate's `frame_codec` is its own original framing (see
+//!   the crate's top-level doc), so it cannot and does not attempt to
+//!   decode `alac`'s packet bytes as its own payload. Instead, the real
+//!   packet is decoded once by the oracle to obtain genuine, real-world
+//!   PCM content, which is then round-tripped through *this* crate's own
+//!   encoder and decoder — a realistic-signal round-trip, not an
+//!   interop claim.
+//!
+//! This whole file is test code exercising the oracle and this crate's own
+//! public API with known-good fixtures, not the untrusted-input surface the
+//! workspace's `unwrap_used`/`expect_used`/`indexing_slicing` lints protect.
+//!
+//! The cookie and packet bytes below were extracted 2026-08-28 from
+//! `ffmpeg -f lavfi -i "sine=frequency=440:duration=0.2" -ac 1 -c:a alac
+//! mono.m4a`'s `stsd`/`stsz`/`stco`/`mdat` boxes via a throwaway Python MP4
+//! box walk (not any container-parsing crate) — see the crate's closing
+//! report for the exact recipe. `cookie.rs`'s `real_ffmpeg_mono_cookie` test
+//! pins the same cookie bytes independently.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    reason = "integration test code over trusted fixture data"
+)]
+
+use vaco_chlayout::ChannelLayout;
+use vaco_codec_alac::{AlacCookie, AlacDecoder, AlacEncoder};
+use vaco_codec_core::{Decoder, Encoder};
+use vaco_core::Timestamp;
+use vaco_frame::{Frame, FrameData};
+use vaco_limits::{Budget, Limits};
+use vaco_packet::Packet;
+use vaco_sampfmt::SampleFmt;
+
+/// The real 24-byte `ALACSpecificConfig` from `mono.m4a`'s `stsd` box.
+const REAL_COOKIE_HEX: &str = "000010000010280a0e01000000002004000ac4400000ac44";
+/// The real first ALAC packet (4096 mono samples) from `mono.m4a`'s `mdat`.
+const REAL_PACKET_HEX: &str = "00000000000f0c01840033ff9fff85ffbe006a0ff80ffffc07fbfc2ff7ddc3b401000302000010304082840c1430610400\
+82084186438c61886618c4332052693384274232585658740a840da29ddda498936e26deaaf2f705575aa809b013943069\
+440a889898006838e38d345686e3138c4ef513121b70686ab95c60d0e571cad55b63b18d660eec7a9821a7071c1dee0e3b\
+da680000005bfa5b490304c4c9579c2ad8038e340382a02a2bb72a368ad31c55ade98c8e571a06e0aa0dc1356ae524d906\
+12b4c4dda63802c881a626863bd4718860d0d56ab5575adeb2272aeb55131a6950ddc2538edb05490d56984c91c71aab2a\
+03831d5391380544d34c1c165a1aae5718e0a921a18d1504a92681aae32572b4c705575a75a006098255a92c076d55d69b\
+44ababa6870ae310c69149c1da4039486956b122b4d500e355c2b4dc1a71b8cc7242a5204c55aab60d015d83834d34c130\
+4ef52503951371c1cae3059aabddd5d4695201a1acaab4a0a944cae265762cba0556da001c6801c31dcb4aa54434c55cae\
+3704c680062189a13949ea40625574934ebd2abce65d5eeea0ef10c5529307090690da02b8d5698260d02dc13132a38374\
+3b51ca1030437059ccd5355c5bbc8aaea2706329a490080ad31572b55cae52ad3701a551340e34392d524d380c8c156aae\
+aa0359aad31a183836ab2a0243b6ef22ad5698b2dcabad355226d0e509d83bbb8992934304c6802a0d569aab600c6a52db\
+49ab48ab18086d2ae3762ce5698e009d583409eae3b06862cd55b1c069c6ab8c4d370001a2a4b062192af2eaf2f20a966a\
+aea086b2db0153452910eca49a62cd31a77b40d34c4d369a70a43127043446869cad355a6ef701c0686aaddb4269087072\
+922ad838e034e34571a6218a92681c971c69cba42a85f4ab4c59aad66b226aae900d0dd6552490f4312ad55d5d6aaf39bd\
+66b6c6b2262070763bbb82a556c698d3437152cbaba89838d354099584481c64638b359aababaa834d3234304e149b69c8\
+d09d5d698313456a800686980b12a4d14f9a8964075655d404ddf518ab4d65e4556db1318609210ec6aadaad3556d52a07\
+790155d5b00007ae5da1a1aababa49aad55d0c256b2eb5900a8d14180471c76d3077500135426e2abab2a21349a48a9100\
+aa0955d5d6aaf7acd5576e340c4aa271c71a6940a2f1320d34c4c99aad5698d02c8229054aa4ee4ce4a4ab556c7164bdc6\
+9a0184698268069cbd259a0698aaf2f2f10a855134c54a34d834d36ad269d95749066ab9522c89cad30597574206d0c777\
+121c195c0ab1a6a8155d6aa081809ca1a0c5692991304c001c1c71c71a2b40d3138c4ef9231036e0d031571834395c6aae\
+adb1d8ca598ef51906d0d3838e0ef7071ded340000002dff000996d240c1313255e70cb600e38d0301341515db951b4569\
+8e2ad6f4c6966b7797578935506e09ab5265ca126c25698aada63800d3431a4d0c77a8e310c1a1aad569b838c4e55d6aa2\
+1b4d2637a426276d82a486ab55aa992395cad659501c18eb1c89c1dd44d34c59aae65c1a71c609aa4818374524952556c6\
+ab8c8d6698e0b2f34eb4d30054d232291a4edaabad3689575aa707165d480c10d087a9103430156b122b4c0071acd15aa8\
+98a9149b1a50cd2189a62ab60d015c71a69800e26398d0aa0e343704c59aad52a4da1355126d00d21dde93b0a4865686b3\
+95ccba6862abad544d544d303145115180d31572b8dc131a015410dc013949ea5898468ad34ebb5579acbabddd41de206a\
+a5260e170690c0071aad304c1a05b826265468281e9471a13011575a6e38355dadde44d54409b40d448040b20269aae572\
+9569b80e2a8081c60e48a806a0323055aabaa80d66ab4c68698828ac7a4243b62ad15a626b2dcabad395226d0e509c0777\
+20d4a4c4c131a01906ab4d56980a935296da4d5a4558304369571bb1672b4c7004da01a0a90769c8aadbbda5575aab4e35\
+5c6269b8000d15258310c9579757979054b355757975155b602a68a5221d94934c59a634e0e0d34c4d544d38526f06a003\
+90069cad355a6efa80e0343556e5271a1dda8d055956c1c701a71a2b8d310c1a8c6aa807071c6e2612b55a69b898aad8aa\
+d80003418e027a18956aaeaeb5579cdeb35b63596cad0383b1dddc134ed8d31a686e26b2eaea260e34c6819984013488c7\
+166b35575755069a6468609c1a663b900542701aae3456a950aaeb5574935513948a7ce5c54ec6c557501377d462ad56b2\
+f20e0d898c6e5a4f80";
+
+fn from_hex(s: &str) -> Vec<u8> {
+    (0..s.len())
+        .step_by(2)
+        .filter_map(|i| s.get(i..i + 2))
+        .filter_map(|b| u8::from_str_radix(b, 16).ok())
+        .collect()
+}
+
+#[test]
+fn cookie_parser_agrees_with_the_alac_crate_on_a_real_cookie() {
+    let cookie_bytes = from_hex(REAL_COOKIE_HEX);
+
+    let mine = AlacCookie::parse(&cookie_bytes).expect("this crate's cookie parser");
+    let oracle = alac::StreamInfo::from_cookie(&cookie_bytes).expect("alac crate's cookie parser");
+
+    assert_eq!(mine.config.sample_rate, oracle.sample_rate());
+    assert_eq!(mine.config.bit_depth, oracle.bit_depth());
+    assert_eq!(
+        u32::from(mine.config.num_channels),
+        u32::from(oracle.channels())
+    );
+    assert_eq!(mine.layout(), ChannelLayout::MONO);
+}
+
+#[test]
+fn real_world_pcm_from_the_oracle_round_trips_through_this_crates_own_codec() {
+    let cookie_bytes = from_hex(REAL_COOKIE_HEX);
+    let packet_bytes = from_hex(REAL_PACKET_HEX);
+
+    let info = alac::StreamInfo::from_cookie(&cookie_bytes).expect("alac crate's cookie parser");
+    let mut oracle_decoder = alac::Decoder::new(info.clone());
+    let mut out = vec![0i16; (info.max_samples_per_packet() as usize) * (info.channels() as usize)];
+    let real_pcm: Vec<i32> = oracle_decoder
+        .decode_packet(&packet_bytes, &mut out)
+        .expect("alac crate failed to decode a real ffmpeg-produced packet")
+        .iter()
+        .map(|&s| i32::from(s))
+        .collect();
+    assert_eq!(
+        real_pcm.len(),
+        4096,
+        "the real fixture packet is exactly one 4096-sample frame"
+    );
+
+    let mut budget = Budget::new(Limits::permissive());
+    let mut frame = Frame::alloc_audio(
+        &mut budget,
+        SampleFmt::S16P,
+        ChannelLayout::MONO,
+        real_pcm.len() as u32,
+        info.sample_rate(),
+    )
+    .expect("alloc_audio");
+    {
+        let mut plane = frame.plane_mut(0).expect("plane 0");
+        let row = plane.row_mut(0).expect("row 0");
+        for (i, &s) in real_pcm.iter().enumerate() {
+            if let Some(dst) = row.get_mut(i * 2..i * 2 + 2) {
+                dst.copy_from_slice(&(s as i16).to_le_bytes());
+            }
+        }
+    }
+    frame.pts = Timestamp::new(0);
+
+    let mut enc = AlacEncoder::new(Limits::permissive());
+    enc.send_frame(Some(&frame)).expect("send_frame");
+    let packet = enc.receive_packet().expect("receive_packet");
+    let mut budget2 = Budget::new(Limits::permissive());
+    let packet = Packet::from_slice(&mut budget2, packet.payload()).expect("packet from_slice");
+
+    let mut dec = AlacDecoder::new(Limits::permissive());
+    dec.send_packet(Some(&packet)).expect("send_packet");
+    let decoded = dec.receive_frame().expect("receive_frame");
+    let FrameData::Audio {
+        planes, samples, ..
+    } = &decoded.data
+    else {
+        unreachable!("audio frame")
+    };
+    assert_eq!(*samples, real_pcm.len() as u32);
+    let plane = planes.first().expect("plane 0");
+    let got: Vec<i32> = plane
+        .data
+        .as_slice()
+        .chunks_exact(4)
+        .map(|c| i32::from_le_bytes(c.try_into().expect("4 bytes")))
+        .collect();
+    assert_eq!(got, real_pcm);
+}

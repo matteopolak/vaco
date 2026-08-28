@@ -1,0 +1,22 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+# Not run by this agent — see planning/AGENT-CONSTRAINTS.md's "export your
+# descriptor before writing vaco-component.toml": DECODER_ALAC/ENCODER_ALAC
+# are exported from src/lib.rs before this file was written.
+
+[[component]]
+kind      = "decoder"
+name      = "alac"
+long_name = "ALAC (Apple Lossless Audio Codec)"
+feature   = "codec-alac"
+ctor      = "vaco_codec_alac::DECODER_ALAC"
+media     = "audio"
+codec     = "alac"
+
+[[component]]
+kind      = "encoder"
+name      = "alac"
+long_name = "ALAC (Apple Lossless Audio Codec)"
+feature   = "codec-alac"
+ctor      = "vaco_codec_alac::ENCODER_ALAC"
+media     = "audio"
+codec     = "alac"
