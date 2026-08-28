@@ -1,0 +1,167 @@
+# Registry fragment, per the frozen schema in planning/19-parallel-execution.md
+# §3.4. Demux-only: this crate reports container structure and stream
+# parameters, it does not decode.
+
+[[component]]
+kind       = "demuxer"
+name       = "wv"
+long_name  = "WavPack"
+feature    = "demux-wv"
+ctor       = "vaco_format_misc_audio::wavpack::DEMUXER"
+extensions = "wv"
+mime_types = "audio/x-wavpack"
+
+[[component]]
+kind       = "demuxer"
+name       = "tta"
+long_name  = "TTA (True Audio)"
+feature    = "demux-tta"
+ctor       = "vaco_format_misc_audio::tta::DEMUXER"
+extensions = "tta"
+mime_types = "audio/x-tta"
+
+[[component]]
+kind       = "demuxer"
+name       = "amr"
+long_name  = "3GPP AMR"
+feature    = "demux-amr"
+ctor       = "vaco_format_misc_audio::amr::DEMUXER_AMR"
+extensions = "amr"
+mime_types = "audio/amr,audio/amr-wb"
+
+[[component]]
+kind       = "demuxer"
+name       = "amrnb"
+long_name  = "raw AMR-NB"
+feature    = "demux-amrnb"
+ctor       = "vaco_format_misc_audio::amr::DEMUXER_AMRNB"
+extensions = "amrnb"
+
+[[component]]
+kind       = "demuxer"
+name       = "amrwb"
+long_name  = "raw AMR-WB"
+feature    = "demux-amrwb"
+ctor       = "vaco_format_misc_audio::amr::DEMUXER_AMRWB"
+extensions = "amrwb,awb"
+
+[[component]]
+kind       = "demuxer"
+name       = "adx"
+long_name  = "CRI ADX"
+feature    = "demux-adx"
+ctor       = "vaco_format_misc_audio::adx::DEMUXER"
+extensions = "adx"
+
+[[component]]
+kind       = "demuxer"
+name       = "nistsphere"
+long_name  = "NIST SPeech HEader REsources"
+feature    = "demux-nistsphere"
+ctor       = "vaco_format_misc_audio::nistsphere::DEMUXER"
+extensions = "sph,nist"
+
+[[component]]
+kind       = "demuxer"
+name       = "pvf"
+long_name  = "PVF (Portable Voice Format)"
+feature    = "demux-pvf"
+ctor       = "vaco_format_misc_audio::pvf::DEMUXER"
+extensions = "pvf"
+
+[[component]]
+kind       = "demuxer"
+name       = "g723_1"
+long_name  = "raw G.723.1"
+feature    = "demux-g723-1"
+ctor       = "vaco_format_misc_audio::g723::DEMUXER"
+extensions = "g723_1"
+
+[[component]]
+kind       = "demuxer"
+name       = "sbc"
+long_name  = "raw SBC (low-complexity subband codec)"
+feature    = "demux-sbc"
+ctor       = "vaco_format_misc_audio::sbc::DEMUXER"
+extensions = "sbc"
+mime_types = "audio/sbc"
+
+[[component]]
+kind       = "demuxer"
+name       = "gsm"
+long_name  = "raw GSM"
+feature    = "demux-gsm"
+ctor       = "vaco_format_misc_audio::rawcodec::DEMUXER_GSM"
+extensions = "gsm"
+
+[[component]]
+kind       = "demuxer"
+name       = "sln"
+long_name  = "Asterisk raw pcm"
+feature    = "demux-sln"
+ctor       = "vaco_format_misc_audio::rawcodec::DEMUXER_SLN"
+extensions = "sln"
+
+[[component]]
+kind       = "demuxer"
+name       = "dfpwm"
+long_name  = "raw DFPWM1a"
+feature    = "demux-dfpwm"
+ctor       = "vaco_format_misc_audio::rawcodec::DEMUXER_DFPWM"
+extensions = "dfpwm"
+
+[[component]]
+kind       = "demuxer"
+name       = "g722"
+long_name  = "raw G.722"
+feature    = "demux-g722"
+ctor       = "vaco_format_misc_audio::rawcodec::DEMUXER_G722"
+extensions = "g722"
+
+[[component]]
+kind       = "demuxer"
+name       = "g726"
+long_name  = "raw big-endian G.726 (\"left-justified\")"
+feature    = "demux-g726"
+ctor       = "vaco_format_misc_audio::rawcodec::DEMUXER_G726"
+extensions = "g726"
+
+[[component]]
+kind       = "demuxer"
+name       = "g726le"
+long_name  = "raw little-endian G.726 (\"right-justified\")"
+feature    = "demux-g726le"
+ctor       = "vaco_format_misc_audio::rawcodec::DEMUXER_G726LE"
+extensions = "g726le"
+
+[[component]]
+kind       = "demuxer"
+name       = "g728"
+long_name  = "raw G.728"
+feature    = "demux-g728"
+ctor       = "vaco_format_misc_audio::rawcodec::DEMUXER_G728"
+extensions = "g728"
+
+[[component]]
+kind       = "demuxer"
+name       = "g729"
+long_name  = "G.729 raw format"
+feature    = "demux-g729"
+ctor       = "vaco_format_misc_audio::rawcodec::DEMUXER_G729"
+extensions = "g729"
+
+[[component]]
+kind       = "demuxer"
+name       = "aptx"
+long_name  = "raw aptX (Audio Processing Technology for Bluetooth)"
+feature    = "demux-aptx"
+ctor       = "vaco_format_misc_audio::rawcodec::DEMUXER_APTX"
+extensions = "aptx"
+
+[[component]]
+kind       = "demuxer"
+name       = "aptx_hd"
+long_name  = "raw aptX HD (Audio Processing Technology for Bluetooth)"
+feature    = "demux-aptx-hd"
+ctor       = "vaco_format_misc_audio::rawcodec::DEMUXER_APTX_HD"
+extensions = "aptx_hd"
