@@ -47,8 +47,21 @@ pub(crate) struct SequenceExtension {
 
 /// Parse `sequence_header()`'s body (`payload` starts right after the
 /// `00 00 01 B3` start code) into width/height and the two weighting
-/// matrices, which reset to their §6.2.3.2 defaults on every
+/// matrices, which reset to their §6.2.3.2/§6.3.11 defaults on every
 /// `sequence_header()` regardless of whether a previous one already ran.
+///
+/// This looks contradicted by `load_intra_quantiser_matrix`'s own
+/// semantics text ("If it is set to '0' then there is no change in the
+/// values that shall be used") until read next to §6.3.11's opening
+/// sentence, in the same section: "When a sequence_header_code is decoded
+/// all matrices shall be reset to their default values." The reset happens
+/// first, unconditionally, for every occurrence; "no change" then means no
+/// change *from that just-applied default* — not "keep whatever a previous
+/// sequence_header() left loaded". Checked directly against this
+/// possibility (a repeated `sequence_header()` reusing a custom matrix
+/// without repeating its payload) before writing this comment, since it is
+/// exactly the kind of encoder behaviour that would make the wrong reading
+/// look right on casual inspection.
 #[must_use]
 pub(crate) fn sequence_header(payload: &[u8]) -> SequenceHeader {
     let mut r = BitReader::new(payload);
