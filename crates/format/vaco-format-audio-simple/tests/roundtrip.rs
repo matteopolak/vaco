@@ -328,3 +328,49 @@ fn rso_round_trips_mono_u8() {
         },
     );
 }
+
+/// The reference `rso` muxer accepts every little-endian PCM width plus
+/// A-law/mu-law, not only `pcm_u8` — measured directly (module docs). Every
+/// codec here must reach `write_header`/`write_packet` without
+/// `add_stream` refusing it first.
+#[test]
+fn rso_accepts_every_measured_pcm_codec() {
+    for codec in [
+        CodecId::PcmU8,
+        CodecId::PcmS16le,
+        CodecId::PcmS24le,
+        CodecId::PcmS32le,
+        CodecId::PcmF32le,
+        CodecId::PcmF64le,
+        CodecId::PcmAlaw,
+        CodecId::PcmMulaw,
+    ] {
+        let mut params = audio_params(SampleFmt::S16, 1);
+        params.codec_id = Some(codec);
+        let mut muxer = rso::RsoMuxer::new(Box::new(MemorySink::new())).unwrap();
+        muxer
+            .add_stream(&params)
+            .unwrap_or_else(|e| panic!("rso should accept {codec:?}: {e}"));
+    }
+}
+
+/// Big-endian PCM and `pcm_s8` fail the reference muxer's `write_header`
+/// outright — measured directly (module docs) — so `add_stream` refuses
+/// them rather than writing a file the reference itself could not produce.
+#[test]
+fn rso_rejects_big_endian_and_signed_8bit_pcm() {
+    for codec in [
+        CodecId::PcmS8,
+        CodecId::PcmS16be,
+        CodecId::PcmS24be,
+        CodecId::PcmS32be,
+    ] {
+        let mut params = audio_params(SampleFmt::S16, 1);
+        params.codec_id = Some(codec);
+        let mut muxer = rso::RsoMuxer::new(Box::new(MemorySink::new())).unwrap();
+        assert!(
+            muxer.add_stream(&params).is_err(),
+            "rso should refuse {codec:?}"
+        );
+    }
+}

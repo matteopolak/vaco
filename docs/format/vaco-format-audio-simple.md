@@ -26,7 +26,7 @@ timestamped from a running sample count.
 | `voc` | Creative Voice | block-chain walk (not one contiguous span) | one type-9 block, 16-bit PCM |
 | `sox` | SoX native | fixed header, always 32-bit samples | 32-bit signed PCM |
 | `ircam` | BICSF/IRCAM | fixed 1024-byte header | 16-bit signed PCM |
-| `rso` | Lego Mindstorms RSO | 8-byte header, no public spec (black-box probed) | 8-bit unsigned mono PCM |
+| `rso` | Lego Mindstorms RSO | 8-byte header, no public spec (black-box probed) | mono `pcm_u8`/`pcm_s16le`/`pcm_s24le`/`pcm_s32le`/`pcm_f32le`/`pcm_f64le`/A-law/mu-law, verbatim |
 | `pcm` | shared | `RawPcmDemuxer`, `sample_fmt_for`, `params` — the data-pointer half every format above reduces to | |
 | `extended80` | shared | AIFF's 80-bit IEEE-754 extended-precision sample rate | |
 
@@ -130,8 +130,17 @@ exactly rather than assumed; see `au`'s module docs for the probe.
   not derived from the plausible-looking general scheme.
 - **RSO**: an 8-byte big-endian header with two fields whose meaning could
   not be determined by black-box probing (recorded as unknown, not guessed);
-  the sample-count field is 16 bits and therefore useless past ~8 seconds at
-  8 kHz, so this module ignores it for framing and reads to EOF instead.
+  the offset-2 field is a **byte count** of the data that follows, not a
+  sample count — measured by encoding exactly 1000 `pcm_s16le` samples (2000
+  bytes) and reading `2000` back, not `1000` — and is 16 bits wide, so it is
+  useless past 65 535 bytes; this module ignores it for framing and reads to
+  EOF instead. `RsoMuxer::add_stream` (`rso::accepts`) writes any of
+  `pcm_u8`/`pcm_s16le`/`pcm_s24le`/`pcm_s32le`/`pcm_f32le`/`pcm_f64le`/A-law/
+  mu-law verbatim and refuses big-endian PCM and `pcm_s8` — measured directly
+  against `-c copy`, not derived from `ffmpeg -h muxer=rso`'s *default* codec
+  claim, which names only `pcm_u8` and understates the accepted set. The
+  demuxer still always decodes as `pcm_u8` on read, since nothing in the file
+  states which of the accepted formats was actually written.
   `probe` never claims content-based confidence — there is no signature, only
   plausible-looking numbers — so RSO is reached by extension or `-f rso`,
   exactly as the reference reaches it.
