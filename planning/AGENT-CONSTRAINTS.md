@@ -299,6 +299,32 @@ four `--check` generators) at the wave boundary. **Do not run them all
 yourself** unless your brief says to — they are cheap individually and the
 round-trips are not.
 
+## A VLC table test must assert exact code lengths
+
+Prefix-freedom and full-value coverage are the obvious properties to check on a
+transcribed variable-length code table, and **neither can catch a wrong code
+length.** An extra leading zero preserves both: the code stays prefix-free, the
+table still covers every value, and the reader silently consumes one bit too
+many from that point on.
+
+This is not hypothetical. MPEG-2's `CODED_BLOCK_PATTERN` (H.262 Table B.9) had
+its last three codes transcribed at 10 bits where the specification has them at
+9 — one shorter than the four rows above them, an easy miscount. The existing
+prefix-free-and-coverage test passed. Average per-frame deviation on a CIF
+fixture was **234 out of 255**, and the cause was found only by hand-tracing a
+real encoder's bits to one macroblock and reading the nine bits the stream
+actually contained.
+
+So for every table you transcribe: assert the **exact bit length of every
+code**, not only that the set is prefix-free and complete. Kraft's inequality
+is a cheaper partial check — a complete code sums to exactly 1, so a too-long
+entry makes the sum fall short — but it is weaker than per-entry lengths and
+cannot localise the error.
+
+This applies to every VLC table in the tree, including the shared
+`vaco-codec-vlc` crate, whose own `is_prefix_free` and `kraft_numerator`
+helpers have exactly the blind spot described above.
+
 ## Fuzzing (**D6**)
 
 A crate that parses untrusted input and has no fuzz target is not done.
