@@ -1857,6 +1857,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["yuv10"],
         mime_types: &[],
     },
+    #[cfg(feature = "demux-vag")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "vag",
+        long_name: Some("Sony PS2 VAG"),
+        krate: "vaco-format-misc-audio",
+        feature: Some("demux-vag"),
+        media: None,
+        codec: None,
+        extensions: &["vag"],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-image2")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -2035,6 +2047,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["xwd"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-xwma")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "xwma",
+        long_name: Some("Microsoft xWMA"),
+        krate: "vaco-format-misc-audio",
+        feature: Some("demux-xwma"),
+        media: None,
+        codec: None,
+        extensions: &["xwma"],
         mime_types: &[],
     },
     #[cfg(feature = "demux-raw")]
@@ -3382,6 +3406,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         media: None,
         codec: None,
         extensions: &["y4m"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "patent-encumbered-aac-decode")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "aac",
+        long_name: Some("AAC-LC (Advanced Audio Coding, Low Complexity)"),
+        krate: "vaco-codec-aac",
+        feature: Some("patent-encumbered-aac-decode"),
+        media: Some("audio"),
+        codec: Some("aac"),
+        extensions: &[],
         mime_types: &[],
     },
     #[cfg(feature = "codec-ac3")]
@@ -6408,6 +6444,17 @@ pub static COMPONENTS: &[crate::Component] = &[
     },
     crate::Component {
         kind: crate::Kind::Filter,
+        name: "removelogo",
+        long_name: Some("Remove a TV logo based on a mask image."),
+        krate: "vaco-filter-artistic",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
         name: "repeatfields",
         long_name: Some("Hard repeat fields based on MPEG repeat field flag."),
         krate: "vaco-filter-deinterlace",
@@ -7850,14 +7897,17 @@ pub static COMPONENTS: &[crate::Component] = &[
 /// Non-empty is not an error in itself: D4 explicitly supports building these
 /// yourself. It is an error for the *published* build, and that is what CI
 /// checks.
-pub static ENCUMBERED_ENABLED: &[&str] = &[];
+pub static ENCUMBERED_ENABLED: &[&str] = &[
+    #[cfg(feature = "patent-encumbered-aac-decode")]
+    "aac",
+];
 
 /// Every patent-encumbered component this tree knows about, enabled or not.
 ///
 /// The denominator to [`ENCUMBERED_ENABLED`]'s numerator: a gate that only saw
 /// the enabled list could not tell "nothing is encumbered" from "the table is
 /// broken and reports nothing".
-pub static ENCUMBERED_ALL: &[&str] = &[];
+pub static ENCUMBERED_ALL: &[&str] = &["aac"];
 
 /// Descriptors of every enabled demuxer implementation.
 pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
@@ -8164,6 +8214,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_raw::rawvideo::DEMUXER_V210,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::rawvideo::DEMUXER_V210X,
+    #[cfg(feature = "demux-vag")]
+    &::vaco_format_misc_audio::vag::DEMUXER,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_VBN,
     #[cfg(feature = "demux-raw")]
@@ -8194,6 +8246,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_image2::pipe::DEMUXER_XPM,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_XWD,
+    #[cfg(feature = "demux-xwma")]
+    &::vaco_format_misc_audio::xwma::DEMUXER,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::y4m::DEMUXER_YUV4MPEGPIPE,
 ];
@@ -8414,6 +8468,8 @@ pub static MUXERS: &[&::vaco_format_core::MuxerDesc] = &[
 
 /// Descriptors of every enabled decoder implementation.
 pub static DECODERS: &[&::vaco_codec_core::DecoderDesc] = &[
+    #[cfg(feature = "patent-encumbered-aac-decode")]
+    &::vaco_codec_aac::DECODER_AAC,
     #[cfg(feature = "codec-ac3")]
     &::vaco_codec_ac3::DECODER_AC3,
     #[cfg(feature = "codec-image-simple")]
@@ -8750,6 +8806,7 @@ pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[
     &::vaco_filter_temporal::random::DESC,
     &::vaco_filter_mm::misc::realtime::video::DESC,
     &::vaco_filter_denoise::removegrain::DESC,
+    &::vaco_filter_artistic::removelogo::DESC,
     &::vaco_filter_deinterlace::repeatfields::DESC,
     &::vaco_filter_aanalysis::replaygain::DESC,
     &::vaco_filter_mm::reverse::video::DESC,

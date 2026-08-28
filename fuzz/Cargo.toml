@@ -45,6 +45,7 @@ vaco-bsf-vpx = { path = "../crates/format/vaco-bsf-vpx", optional = true }
 vaco-chlayout = { path = "../crates/model/vaco-chlayout", optional = true }
 vaco-cli = { path = "../crates/app/vaco-cli", optional = true }
 vaco-cli-core = { path = "../crates/app/vaco-cli-core", optional = true }
+vaco-codec-aac = { path = "../crates/codec/vaco-codec-aac", optional = true }
 vaco-codec-ac3 = { path = "../crates/codec/vaco-codec-ac3", optional = true }
 vaco-codec-cabac = { path = "../crates/signal/vaco-codec-cabac", optional = true }
 vaco-codec-cbs = { path = "../crates/signal/vaco-codec-cbs", optional = true }
@@ -88,6 +89,7 @@ vaco-filter-adynamics = { path = "../crates/filter/vaco-filter-adynamics", optio
 vaco-filter-aeffects = { path = "../crates/filter/vaco-filter-aeffects", optional = true }
 vaco-filter-aeq = { path = "../crates/filter/vaco-filter-aeq", optional = true }
 vaco-filter-analysis = { path = "../crates/filter/vaco-filter-analysis", optional = true }
+vaco-filter-artistic = { path = "../crates/filter/vaco-filter-artistic", optional = true }
 vaco-filter-asource = { path = "../crates/filter/vaco-filter-asource", optional = true }
 vaco-filter-audio = { path = "../crates/filter/vaco-filter-audio", optional = true }
 vaco-filter-blur = { path = "../crates/filter/vaco-filter-blur", optional = true }
@@ -187,6 +189,7 @@ default = [
     "chlayout",
     "cli",
     "cli-core",
+    "codec-aac",
     "codec-ac3",
     "codec-cabac",
     "codec-core",
@@ -228,6 +231,7 @@ default = [
     "filter-aeffects",
     "filter-aeq",
     "filter-analysis",
+    "filter-artistic",
     "filter-asource",
     "filter-audio",
     "filter-blur",
@@ -320,6 +324,7 @@ bsf-vpx = ["dep:vaco-bsf-vpx", "dep:vaco-codec-core", "dep:vaco-limits", "dep:va
 chlayout = ["dep:vaco-chlayout"]
 cli = ["dep:vaco-cli", "dep:vaco-cli-core"]
 cli-core = ["dep:vaco-cli-core", "dep:vaco-core"]
+codec-aac = ["dep:vaco-codec-aac", "dep:vaco-codec-core", "dep:vaco-limits", "dep:vaco-packet"]
 codec-ac3 = ["dep:vaco-codec-ac3"]
 codec-cabac = ["dep:vaco-codec-cabac"]
 codec-core = ["dep:vaco-codec-core", "dep:vaco-core", "dep:vaco-limits"]
@@ -361,6 +366,7 @@ filter-adynamics = ["dep:vaco-filter-adynamics", "dep:vaco-filter-graph"]
 filter-aeffects = ["dep:vaco-filter-aeffects", "dep:vaco-filter-graph"]
 filter-aeq = ["dep:vaco-filter-adsp", "dep:vaco-filter-aeq", "dep:vaco-filter-graph"]
 filter-analysis = ["dep:vaco-filter-analysis", "dep:vaco-filter-graph"]
+filter-artistic = ["dep:vaco-filter-artistic", "dep:vaco-limits"]
 filter-asource = ["dep:vaco-filter-asource", "dep:vaco-filter-graph", "dep:vaco-opts"]
 filter-audio = ["dep:vaco-expr", "dep:vaco-filter-audio", "dep:vaco-filter-graph", "dep:vaco-opts"]
 filter-blur = ["dep:vaco-filter-blur", "dep:vaco-filter-graph"]
@@ -449,6 +455,14 @@ textformat = ["dep:vaco-textformat"]
 [profile.release]
 overflow-checks = true
 debug-assertions = true
+
+[[bin]]
+name = "aac_config"
+path = "fuzz_targets/aac_config.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-aac"]
 
 [[bin]]
 name = "ac3_bsi_parse"
@@ -1681,6 +1695,14 @@ test = false
 doc = false
 bench = false
 required-features = ["registry"]
+
+[[bin]]
+name = "removelogo_pgm_parse"
+path = "fuzz_targets/removelogo_pgm_parse.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-artistic"]
 
 [[bin]]
 name = "resample_convert"

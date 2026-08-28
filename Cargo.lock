@@ -1812,6 +1812,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-codec-aac"
+version = "0.1.0"
+dependencies = [
+ "vaco-bitstream",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-frame",
+ "vaco-limits",
+ "vaco-packet",
+ "vaco-parse-aac",
+]
+
+[[package]]
 name = "vaco-codec-ac3"
 version = "0.1.0"
 dependencies = [
@@ -1875,6 +1888,10 @@ dependencies = [
  "vaco-core",
  "vaco-tx",
 ]
+
+[[package]]
+name = "vaco-codec-dsp-sinewin"
+version = "0.1.0"
 
 [[package]]
 name = "vaco-codec-golomb"
@@ -2022,6 +2039,13 @@ version = "0.1.0"
 dependencies = [
  "proptest",
  "quick-xml",
+]
+
+[[package]]
+name = "vaco-codec-vlc"
+version = "0.1.0"
+dependencies = [
+ "vaco-bitstream",
 ]
 
 [[package]]
@@ -2422,6 +2446,7 @@ dependencies = [
  "vaco-filter-core",
  "vaco-filter-graph",
  "vaco-frame",
+ "vaco-limits",
  "vaco-opts",
  "vaco-pixfmt",
 ]
@@ -3771,6 +3796,7 @@ dependencies = [
  "vaco-bsf-legacy",
  "vaco-bsf-subtitle",
  "vaco-bsf-vpx",
+ "vaco-codec-aac",
  "vaco-codec-ac3",
  "vaco-codec-core",
  "vaco-codec-image-simple",
