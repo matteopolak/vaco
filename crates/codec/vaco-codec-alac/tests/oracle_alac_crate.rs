@@ -177,3 +177,51 @@ fn real_world_pcm_from_the_oracle_round_trips_through_this_crates_own_codec() {
         .collect();
     assert_eq!(got, real_pcm);
 }
+
+/// The genuine interop proof this crate's earlier, self-invented framing
+/// could never attempt: decode a real ffmpeg-produced ALAC packet with
+/// *this crate's own decoder* (no oracle involved on this side at all) and
+/// check it against the same bytes decoded by the independent `alac`
+/// crate. Two different decoders, two different implementations, same
+/// real-world compressed bytes, same PCM out.
+#[test]
+fn this_crates_own_decoder_reads_a_real_ffmpeg_alac_packet_bit_for_bit() {
+    let cookie_bytes = from_hex(REAL_COOKIE_HEX);
+    let packet_bytes = from_hex(REAL_PACKET_HEX);
+
+    let info = alac::StreamInfo::from_cookie(&cookie_bytes).expect("alac crate's cookie parser");
+    let mut oracle_decoder = alac::Decoder::new(info.clone());
+    let mut out = vec![0i16; (info.max_samples_per_packet() as usize) * (info.channels() as usize)];
+    let oracle_pcm: Vec<i32> = oracle_decoder
+        .decode_packet(&packet_bytes, &mut out)
+        .expect("alac crate failed to decode a real ffmpeg-produced packet")
+        .iter()
+        .map(|&s| i32::from(s))
+        .collect();
+
+    let mut budget = Budget::new(Limits::permissive());
+    let mut dec = AlacDecoder::new(Limits::permissive());
+    dec.set_extradata(&cookie_bytes).expect("set_extradata on a real cookie");
+    let mut packet = Packet::from_slice(&mut budget, &packet_bytes).expect("packet from_slice");
+    packet.pts = Timestamp::new(0);
+    dec.send_packet(Some(&packet)).expect("this crate's decoder must accept a real ffmpeg packet");
+    let decoded = dec.receive_frame().expect("receive_frame");
+    let FrameData::Audio {
+        planes, samples, ..
+    } = &decoded.data
+    else {
+        unreachable!("audio frame")
+    };
+    assert_eq!(*samples, oracle_pcm.len() as u32);
+    let plane = planes.first().expect("plane 0");
+    let mine: Vec<i32> = plane
+        .data
+        .as_slice()
+        .chunks_exact(4)
+        .map(|c| i32::from_le_bytes(c.try_into().expect("4 bytes")))
+        .collect();
+    assert_eq!(
+        mine, oracle_pcm,
+        "this crate's own decoder must reproduce the alac crate's decode of the same real ffmpeg packet, sample for sample"
+    );
+}

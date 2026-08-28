@@ -23,6 +23,8 @@ pub struct AlacDecoder {
     limits: Limits,
     pending: VecDeque<Frame>,
     sample_rate: u32,
+    bit_depth: u8,
+    frame_length: u32,
     layout_hint: Option<ChannelLayout>,
 }
 
@@ -33,6 +35,8 @@ impl AlacDecoder {
             limits,
             pending: VecDeque::new(),
             sample_rate: DEFAULT_SAMPLE_RATE,
+            bit_depth: 16,
+            frame_length: 4096,
             layout_hint: None,
         }
     }
@@ -47,6 +51,8 @@ impl Decoder for AlacDecoder {
         let mut frame = frame_codec::decode(
             packet.payload(),
             self.sample_rate,
+            self.bit_depth,
+            self.frame_length,
             self.layout_hint.clone(),
             &mut budget,
         )?;
@@ -66,6 +72,8 @@ impl Decoder for AlacDecoder {
     fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
         let cookie = AlacCookie::parse(extradata)?;
         self.sample_rate = cookie.config.sample_rate;
+        self.bit_depth = cookie.config.bit_depth;
+        self.frame_length = cookie.config.frame_length;
         self.layout_hint = Some(cookie.layout());
         Ok(())
     }

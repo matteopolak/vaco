@@ -12,14 +12,36 @@ title    = "Apple Lossless (ALAC) reference package ReadMe.txt: supported bit de
 acquired = "2026-08-28"
 where    = "https://raw.githubusercontent.com/macosforge/alac/master/ReadMe.txt"
 
-# Both of the above are prose format-description documents Apple published
-# alongside (not instead of) its reference decoder/encoder source under
-# codec/ in the same repository. vaco-codec-alac reads only these two files
-# -- never codec/'s C sources, and never the alac crate's own source -- to
-# keep the clean-room boundary issue #285 asks for: the alac crate is a
-# dev-dependency oracle, probed as a black box for its observable
-# input/output behaviour only (see the crate's tests/oracle_alac_crate.rs
-# and its own doc comment), never read as a coding reference.
+# The above two are prose format-description documents Apple published
+# alongside its reference decoder/encoder source under codec/ in the same
+# repository. An earlier version of this file said vaco-codec-alac reads
+# only these two files and never codec/'s C sources -- that was true only
+# while this crate's predictor and entropy coder were a self-invented
+# design that could not decode a real encoder's bitstream (see the
+# now-superseded design note this replaced in frame_codec.rs and
+# predictor.rs's own doc comments). It stopped being true once the owner
+# confirmed (2026-08-28) that Apple's ALAC reference package
+# (https://github.com/macosforge/alac) is licensed Apache License 2.0 --
+# outside this project's D7/D15 clean-room rule, which is specifically
+# about FFmpeg/libav-family GPL/LGPL code, not a blanket ban on every
+# reference implementation. With that settled, this crate's rice.rs,
+# predictor.rs and frame_codec.rs were rewritten as a from-scratch Rust
+# translation of the algorithms in codec/ag_dec.c, codec/ag_enc.c,
+# codec/aglib.h, codec/dp_dec.c, codec/matrix_dec.c,
+# codec/ALACDecoder.cpp and codec/ALACAudioTypes.h -- see the
+# `alac-agc-source` entry below and each module's own `Vaco-Spec-Ref`
+# citations. The alac crate remains a dev-dependency oracle only, still
+# probed as a black box for its observable input/output behaviour (see
+# tests/oracle_alac_crate.rs) and never read as a coding reference --
+# that boundary is unchanged; only the "never read codec/'s C sources"
+# claim above it was wrong.
+
+[[source]]
+id       = "alac-agc-source"
+kind     = "spec"
+title    = "Apple Lossless (ALAC) reference codec source: adaptive Golomb-Rice coder (ag_dec.c, ag_enc.c, aglib.h), dynamic predictor (dp_dec.c), stereo mixing (matrix_dec.c), and top-level packet framing (ALACDecoder.cpp, ALACAudioTypes.h)"
+acquired = "2026-08-28"
+where    = "https://github.com/macosforge/alac (codec/ subdirectory), Apple Inc., Apache License 2.0 -- licence confirmed directly against https://raw.githubusercontent.com/macosforge/alac/master/LICENSE before any of this source was read"
 
 [[source]]
 id       = "alac-ffmpeg-blackbox-cookie"
@@ -30,8 +52,8 @@ where    = "Local measurement, not a document: `ffmpeg -f lavfi -i \"sine=freque
 
 # No [[table]] rows: this crate has no hand-transcribed constant table of 32
 # or more elements (no VLC table, no quantiser table -- the provenance
-# README's threshold for a row here). frame_codec.rs's predictor and
-# entropy-coding parameters (order, weight shift, Rice adaptation constants)
-# are this crate's own original design, not transcribed from any source --
-# see that module's and predictor.rs's own doc comments, and
-# `Vaco-Provenance: original` on the commits that added them.
+# README's threshold for a row here). rice.rs's and predictor.rs's
+# adaptation constants (QBSHIFT, MB0/PB0/KB0, MMULSHIFT/MDENSHIFT/MOFF,
+# MAX_PREFIX) are transcribed from alac-agc-source's aglib.h, not this
+# crate's own invention -- see this file's history and each constant's own
+# doc comment for the corresponding reference name.

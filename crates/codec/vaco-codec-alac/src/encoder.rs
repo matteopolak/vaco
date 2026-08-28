@@ -35,10 +35,10 @@ impl Encoder for AlacEncoder {
         let bytes = frame_codec::encode(frame, &mut budget)?;
         let mut packet = Packet::from_slice(&mut budget, &bytes)?;
         packet.pts = frame.pts;
-        // Every packet is independently decodable: this crate's own framing
-        // carries no cross-packet state (each `Predictor`/`RiceState`
-        // resets per packet), matching `CodecId::Alac`'s registered
-        // `INTRA_ONLY` property.
+        // Every packet is independently decodable: the adaptive Golomb-Rice
+        // state (`rice.rs`) and the predictor's transmitted coefficients
+        // both reset per packet — there is no cross-packet state — matching
+        // `CodecId::Alac`'s registered `INTRA_ONLY` property.
         packet.flags = PacketFlags::KEY;
         self.pending.push_back(packet);
         Ok(())
