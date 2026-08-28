@@ -75,6 +75,9 @@ impl Payload {
                 vaco_frame::FrameData::Audio { planes, .. } => {
                     planes.iter().map(|p| p.data.len() as u64).sum()
                 }
+                vaco_frame::FrameData::Subtitle { rects } => {
+                    rects.iter().map(|r| r.byte_len() as u64).sum()
+                }
             },
         }
     }

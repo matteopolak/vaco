@@ -106,7 +106,7 @@ fn units(frame: &Frame, is_audio: bool) -> i64 {
     }
     match &frame.data {
         FrameData::Audio { samples, .. } => i64::from(*samples),
-        FrameData::Video { .. } => 0,
+        FrameData::Video { .. } | FrameData::Subtitle { .. } => 0,
     }
 }
 

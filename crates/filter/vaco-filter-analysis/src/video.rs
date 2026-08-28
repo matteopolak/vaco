@@ -39,7 +39,7 @@ pub(crate) fn copy_meta(dst: &mut Frame, src: &Frame) {
     dst.sample_aspect_ratio = src.sample_aspect_ratio;
 }
 
-/// This frame's pixel format and plane count, or `None` for audio.
+/// This frame's pixel format and plane count, or `None` for anything else (audio, subtitle).
 pub(crate) fn video_shape(frame: &Frame) -> Option<(PixFmt, u32, u32, usize)> {
     match &frame.data {
         FrameData::Video {
@@ -48,7 +48,7 @@ pub(crate) fn video_shape(frame: &Frame) -> Option<(PixFmt, u32, u32, usize)> {
             height,
             planes,
         } => Some((*format, *width, *height, planes.len())),
-        FrameData::Audio { .. } => None,
+        FrameData::Audio { .. } | FrameData::Subtitle { .. } => None,
     }
 }
 

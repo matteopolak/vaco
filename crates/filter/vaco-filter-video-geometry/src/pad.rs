@@ -243,11 +243,11 @@ impl FrameFilter for Filter {
 
         let in_w = match &input.data {
             FrameData::Video { width, .. } => *width,
-            FrameData::Audio { .. } => 0,
+            FrameData::Audio { .. } | FrameData::Subtitle { .. } => 0,
         };
         let in_h = match &input.data {
             FrameData::Video { height, .. } => *height,
-            FrameData::Audio { .. } => 0,
+            FrameData::Audio { .. } | FrameData::Subtitle { .. } => 0,
         };
         let copy_w = in_w.min(rect.w.saturating_sub(rect.x));
         let copy_h = in_h.min(rect.h.saturating_sub(rect.y));

@@ -57,7 +57,7 @@ pub(crate) fn copy_meta(dst: &mut Frame, src: &Frame) {
     dst.sample_aspect_ratio = src.sample_aspect_ratio;
 }
 
-/// `(format, width, height)` of a video frame, or `None` for audio.
+/// `(format, width, height)` of a video frame, or `None` for anything else (audio, subtitle).
 pub(crate) fn dims(frame: &Frame) -> Option<(PixFmt, u32, u32)> {
     match frame.data {
         FrameData::Video {
@@ -66,7 +66,7 @@ pub(crate) fn dims(frame: &Frame) -> Option<(PixFmt, u32, u32)> {
             height,
             ..
         } => Some((format, width, height)),
-        FrameData::Audio { .. } => None,
+        FrameData::Audio { .. } | FrameData::Subtitle { .. } => None,
     }
 }
 

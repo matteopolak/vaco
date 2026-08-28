@@ -177,7 +177,7 @@ impl Timeline {
         let t = frame.pts.to_seconds(base).unwrap_or(f64::NAN);
         let (w, h) = match &frame.data {
             FrameData::Video { width, height, .. } => (f64::from(*width), f64::from(*height)),
-            FrameData::Audio { .. } => (self.width, self.height),
+            FrameData::Audio { .. } | FrameData::Subtitle { .. } => (self.width, self.height),
         };
         let vars = [t, index as f64, w, h, f64::NAN];
         let value = program.eval_with(&mut Context::new(&vars, &mut self.registers));

@@ -7,7 +7,9 @@
 )]
 
 use vaco_chlayout::ChannelLayout;
-use vaco_frame::{Crop, Frame, FrameData, FrameSideData, FrameSideDataKind, MotionVector, PlaneMut};
+use vaco_frame::{
+    Crop, Frame, FrameData, FrameSideData, FrameSideDataKind, MotionVector, PlaneMut, SubtitleRect,
+};
 use vaco_limits::{Budget, Limits};
 use vaco_pixfmt::PixFmt;
 use vaco_pool::{ALIGN, PoolConfig};
@@ -548,4 +550,36 @@ fn motion_vectors_side_data_round_trips_through_set_and_remove() {
     assert_eq!(mvs.as_slice(), [mv]);
     assert!(frame.remove_side_data(FrameSideDataKind::MotionVectors).is_some());
     assert!(frame.side_data(FrameSideDataKind::MotionVectors).is_none());
+}
+
+#[test]
+fn subtitle_frame_reports_no_video_or_audio_shape() {
+    use smallvec::smallvec;
+    let frame = Frame::from_data(FrameData::Subtitle {
+        rects: smallvec![SubtitleRect::text(10, 10, 100, 20, false, "hi")],
+    });
+    assert!(frame.is_subtitle());
+    assert!(!frame.is_video());
+    assert!(!frame.is_audio());
+    assert_eq!(frame.pixel_format(), None);
+    assert_eq!(frame.dimensions(), None);
+    assert_eq!(frame.plane_count(), 0);
+    assert!(frame.plane(0).is_none());
+}
+
+#[test]
+fn subtitle_frame_carries_more_than_one_rect() {
+    use smallvec::smallvec;
+    let mut frame = Frame::from_data(FrameData::Subtitle {
+        rects: smallvec![
+            SubtitleRect::text(0, 0, 0, 0, false, "line one"),
+            SubtitleRect::text(0, 0, 0, 0, true, "forced line"),
+        ],
+    });
+    let FrameData::Subtitle { rects } = &mut frame.data else {
+        unreachable!("just constructed a Subtitle frame");
+    };
+    assert_eq!(rects.len(), 2);
+    assert!(!rects[0].forced);
+    assert!(rects[1].forced);
 }

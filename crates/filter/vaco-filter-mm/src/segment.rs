@@ -161,7 +161,7 @@ impl FilterTrait for Filter {
 
         let units = match &frame.data {
             FrameData::Audio { samples, .. } => i64::from(*samples),
-            FrameData::Video { .. } => 1,
+            FrameData::Video { .. } | FrameData::Subtitle { .. } => 1,
         };
         self.n_units = self.n_units.saturating_add(units);
         ctx.push_output(self.current, frame)?;

@@ -368,7 +368,7 @@ impl FilterTrait for Amix {
             frame.pts = vaco_core::Timestamp::new(self.next_pts);
             let samples = match &frame.data {
                 vaco_frame::FrameData::Audio { samples, .. } => i64::from(*samples),
-                vaco_frame::FrameData::Video { .. } => 0,
+                vaco_frame::FrameData::Video { .. } | vaco_frame::FrameData::Subtitle { .. } => 0,
             };
             self.next_pts = self.next_pts.saturating_add(samples);
             if ctx.output_has_room(0) {

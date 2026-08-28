@@ -183,12 +183,18 @@ impl Frame {
         matches!(self.data, FrameData::Audio { .. })
     }
 
+    /// Whether this is a subtitle frame.
+    #[must_use]
+    pub const fn is_subtitle(&self) -> bool {
+        matches!(self.data, FrameData::Subtitle { .. })
+    }
+
     /// The pixel format, for a video frame.
     #[must_use]
     pub const fn pixel_format(&self) -> Option<PixFmt> {
         match self.data {
             FrameData::Video { format, .. } => Some(format),
-            FrameData::Audio { .. } => None,
+            FrameData::Audio { .. } | FrameData::Subtitle { .. } => None,
         }
     }
 
@@ -197,7 +203,7 @@ impl Frame {
     pub const fn dimensions(&self) -> Option<(u32, u32)> {
         match self.data {
             FrameData::Video { width, height, .. } => Some((width, height)),
-            FrameData::Audio { .. } => None,
+            FrameData::Audio { .. } | FrameData::Subtitle { .. } => None,
         }
     }
 
@@ -211,6 +217,8 @@ impl Frame {
         match &self.data {
             FrameData::Video { planes, .. } => planes,
             FrameData::Audio { planes, .. } => planes,
+            // A subtitle event has rects, not pixel/sample planes.
+            FrameData::Subtitle { .. } => &[],
         }
     }
 
@@ -218,6 +226,7 @@ impl Frame {
         match &mut self.data {
             FrameData::Video { planes, .. } => planes,
             FrameData::Audio { planes, .. } => planes,
+            FrameData::Subtitle { .. } => &mut [],
         }
     }
 
@@ -245,6 +254,9 @@ impl Frame {
                 let len = plane.data.len();
                 Some(PlaneRef::new(plane.data.as_slice(), len, 1, len))
             }
+            // No pixel/sample planes on a subtitle event — its content
+            // lives in FrameData::Subtitle's own rects.
+            FrameData::Subtitle { .. } => None,
         }
     }
 
@@ -277,6 +289,7 @@ impl Frame {
                 let len = data.len();
                 Some(PlaneMut::new(data, len, 1, len))
             }
+            FrameData::Subtitle { .. } => None,
         }
     }
 
@@ -316,6 +329,7 @@ impl Frame {
                     PlaneMut::new(data, len, 1, len)
                 })
                 .collect(),
+            FrameData::Subtitle { .. } => SmallVec::new(),
         }
     }
 }

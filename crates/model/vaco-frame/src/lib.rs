@@ -42,6 +42,7 @@ mod alloc;
 mod plane;
 mod pool;
 mod sidedata;
+mod subtitle;
 
 use smallvec::SmallVec;
 use vaco_chlayout::ChannelLayout;
@@ -54,6 +55,7 @@ use vaco_sampfmt::SampleFmt;
 pub use plane::{PlaneMut, PlaneRef};
 pub use pool::FramePool;
 pub use sidedata::{Crop, FrameMetadata, FrameSideDataKind};
+pub use subtitle::{SubtitleContent, SubtitleRect};
 
 /// One plane of a video frame, or one channel of planar audio.
 ///
@@ -85,6 +87,20 @@ pub enum FrameData {
         layout: ChannelLayout,
         /// One entry for planar formats, exactly one for interleaved.
         planes: SmallVec<[Plane; 8]>,
+    },
+    /// A subtitle event: zero or more positioned regions (interface gap 17,
+    /// `planning/INTERFACE-GAPS.md`). See [`subtitle`] for the shape and why
+    /// the display-time window is not a field here (it is `Frame::pts`/
+    /// `Frame::duration`, which every variant already carries) and why this
+    /// enum stays closed rather than gaining `#[non_exhaustive]` alongside
+    /// this variant.
+    ///
+    /// No decoder in this workspace constructs one yet — this is the shape
+    /// the three in-flight T2-13 subtitle-codec crates
+    /// (`vaco-codec-subtitle-bitmap`/`-cc`/`-teletext`) are meant to be
+    /// wired to, not a claim that any of them are wired today.
+    Subtitle {
+        rects: SmallVec<[SubtitleRect; 2]>,
     },
 }
 

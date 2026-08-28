@@ -927,6 +927,6 @@ impl SampleFifo {
 fn samples_of(frame: &Frame) -> u32 {
     match frame.data {
         FrameData::Audio { samples, .. } => samples,
-        FrameData::Video { .. } => 0,
+        FrameData::Video { .. } | FrameData::Subtitle { .. } => 0,
     }
 }

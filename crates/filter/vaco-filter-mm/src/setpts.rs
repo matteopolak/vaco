@@ -112,7 +112,7 @@ impl FrameFilter for Filter {
         let t = input.pts.to_seconds(input.time_base).unwrap_or(f64::NAN);
         let samples = match &input.data {
             FrameData::Audio { samples, .. } => f64::from(*samples),
-            FrameData::Video { .. } => f64::NAN,
+            FrameData::Video { .. } | FrameData::Subtitle { .. } => f64::NAN,
         };
 
         let vars = [
