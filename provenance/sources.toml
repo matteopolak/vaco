@@ -641,3 +641,24 @@ kind     = "blackbox"
 title    = "Observed byte layout of ffmpeg -c copy -fflags +bitexact -f avi/-f flv output across MP4 and MPEG-TS sources: AVI's fixed 600 Hz video slot grid with zero-length placeholder chunks, avih.dwMicroSecPerFrame tracking the source track time base, the vprp video-properties chunk fields, and FLV's onMetaData forwarding of the input's ftyp-derived major_brand/minor_version/compatible_brands plus the AVC end-of-sequence tag, ffmpeg 8.1"
 acquired = "2026-08-27"
 where    = "the reference binary installed on the development machine"
+
+[[source]]
+id       = "iso-11172-3"
+kind     = "spec"
+title    = "ISO/IEC 11172-3, Information technology — Coding of moving pictures and associated audio for digital storage media at up to about 1.5 Mbit/s — Part 3: Audio"
+acquired = "2026-08-27"
+where    = "ISO"
+
+[[source]]
+id       = "iso-13818-3"
+kind     = "spec"
+title    = "ISO/IEC 13818-3, Information technology — Generic coding of moving pictures and associated audio information — Part 3: Audio"
+acquired = "2026-08-27"
+where    = "ISO"
+
+[[source]]
+id       = "ffmpeg-mp3-container"
+kind     = "blackbox"
+title    = "ffmpeg 8.1 mp3 demuxer/muxer, measured: frame sync/header layout, Xing/Info/VBRI/LAME tag byte offsets, ID3v2/ID3v1 handling, stream time base, gapless skip_samples derivation"
+acquired = "2026-08-27"
+where    = "ffmpeg/ffprobe 8.1 binaries, black-box"
