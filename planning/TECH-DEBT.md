@@ -5647,3 +5647,83 @@ was not weakened. `#419` not reopened.
 clause 8.5.5 (eq. 8-251/8-252/8-253, Table 8-13), clause 8.5.6 (eq.
 8-254/8-255/8-256), clause 8.5.7 (eq. 8-257/8-258/8-259), clause 8.5.8
 (eq. 8-260..8-265), clause 8.7 (deblocking filter process).
+
+
+### #355's pulldown gap closed via a new `vaco-frame` side-data variant; #355 re-judged, stays open for field pictures alone
+
+Closed the interface question a previous round correctly reported
+rather than worked around: `repeat_first_field` had nowhere to live on
+`vaco_frame::Frame`. `vaco-filter-deinterlace`'s own `repeatfields.rs`
+had independently reached the same conclusion from the consuming side —
+two crates, opposite ends of the same missing concept, is what made this
+worth landing rather than leaving as a cross-referenced gap.
+
+**Verified `vaco-frame`'s actual construction pattern before choosing a
+shape, per explicit instruction, not assumed.** `Frame`'s fields are
+deliberately public and struct-literal-constructible everywhere
+(`vaco-frame/src/alloc.rs`'s own module doc: "the fields stay public and
+a struct literal still works"); 88 files in this tree write `Frame { ...
+}` literals directly; `Frame` derives no `Default`. A new *required*
+field would be a tree-wide breaking change with no `..Default::default()`
+escape hatch — the exact shape that once broke thirteen crates elsewhere
+in this project's history when a field was added to `AudioParameters`.
+
+**`FrameSideData`/`FrameSideDataKind` are both already `#[non_exhaustive]`
+specifically so a new variant is additive.** Confirmed by measurement,
+not by trusting the attribute: `cargo check --workspace` ran clean both
+before and after adding the variant, zero errors either time, across
+every crate in the tree. Added `FrameSideData::Pulldown(u8)` /
+`FrameSideDataKind::Pulldown` (`planning/INTERFACE-GAPS.md` gap 29),
+following the exact `Cropping`/`Frame::set_crop` pattern already
+established: `Frame::repeat_pict()` / `Frame::set_repeat_pict()`.
+
+**The value carried is already-combined, not a raw bit** — deliberately,
+to match what the consuming side actually wants. H.262 §6.3.10's
+`top_field_first`/`repeat_first_field` combination rule depends on a
+sequence-level flag (`progressive_sequence`) as well as two picture-level
+ones, so resolving it requires state only the producing decoder has in
+one place; a consumer like `repeatfields.rs` should read one
+already-resolved field-period count, not re-derive H.262's three-case
+rule itself from raw bits it may not even have full context for.
+
+**`vaco-codec-mpeg12` is gap 29's first producer.**
+`picture_coding_extension()`'s `repeat_first_field` is now stored (was
+discarded, `let _repeat_first_field = ...`); `sequence_extension()`'s
+`progressive_sequence` is now consumed (was dead code) — including
+D.9.14's MPEG-1 compatibility statement (`progressive_sequence == '1'`
+when there is no `sequence_extension()` at all), handled with
+`Option::is_none_or` rather than `unwrap_or_default()` since
+`SequenceExtension::default()`'s `false` is specifically the wrong value
+for the "no extension present" case. `pulldown_extra_fields` implements
+H.262's exact three-case combination rule, verified against the primary
+text directly (quoted and cited in its own doc comment, not recalled),
+covered by a table-driven unit test for all three cases plus a
+`begin_picture` integration test confirming the attached
+`Frame::repeat_pict()` value end to end.
+
+**Re-judged #355 against its now-narrower scope, per instruction.**
+Headers/extensions/MB layer/frame-picture reconstruction accuracy were
+already settled; pulldown is now complete. Field pictures remain
+unimplemented and — found this same investigation, an independent
+measured reason neither this round's dispatcher nor this agent
+anticipated going in — unverifiable against this project's own tooling
+even once built (`ffmpeg`'s `mpeg2video` encoder never emits
+`picture_structure != Frame`, confirmed by bit-tracing four real-encoded
+pictures with `+ilme+ildct`). **#355 stays open, for exactly that one
+item**, recorded as a decision (the same form Annex P's exclusion was
+recorded in for `vaco-codec-h263`), not an omission. Closing the issue
+on "the numbers moved" or on pulldown's completion alone would
+misrepresent a genuine, substantial, unimplemented decode path as done.
+
+No pixel output changes anywhere in this round (side-data only,
+confirmed byte-identical against every fixture on hand both crates
+measure).
+
+Gates green: `cargo test/clippy -p vaco-codec-mpeg12 -p vaco-frame`
+(39 + 32 tests respectively, both clean), `cargo check --workspace`
+clean both before and after the `vaco-frame` addition, full
+`layer-check`/`dep-gate`/`unsafe-audit`/`dup-check`/`time-gate`/
+`owner-gate`/`vlc-scan`. `provenance-check` does not flag any of this
+round's five commits.
+
+`Vaco-Spec-Ref: itu-t-h262` §6.3.10, D.9.14.
