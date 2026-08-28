@@ -1476,3 +1476,22 @@ Also found while probing, unrelated to this gap and not fixed here (out of
 scope — see `planning/TECH-DEBT.md`): `AdpcmAdx`'s existing table row
 (added before this pass) is missing `CodecProperties::INTRA_ONLY`, which
 `ffmpeg -codecs`' own `adpcm_adx` row (`DEAIL.`) states it should have.
+
+### A tenth needed variant, found implementing `vaco-format-misc-audio`'s `vag` (2026-08-28)
+
+Different crate, different issue (#620, FM-58's game-audio containers, not
+FM-59's game-video group above), same gap: Sony PS2 VAG's codec is
+`adpcm_psx` (`ADPCM Playstation` — confirmed via `ffmpeg -codecs`/a real
+`ffprobe` run over a hand-built fixture, `Vaco-Spec-Ref
+vaco-format-misc-audio-vag-xwma-fixtures-probe`), and `CodecId` has no
+variant for it any more than it had one for `Roq`/`Bink`/`Smacker` before
+this gap's first pass. `vaco-format-misc-audio`'s `vag.rs` stream carries
+`codec_id: None` until it lands, same policy as every other format this
+gap has ever named.
+
+| Format | `ffprobe` `codec_name` | Proposed variant |
+|---|---|---|
+| vag | `adpcm_psx` | `AdpcmPsx` |
+
+`xwma` needed no new variant: its `wFormatTag` maps onto the existing
+`Wmav1`/`Wmav2`/`Wmapro`.
