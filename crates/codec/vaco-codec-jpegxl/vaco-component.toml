@@ -1,0 +1,12 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+# No `encoder` fragment: `jxl-oxide` provides no encoder (see the crate's
+# own module docs).
+
+[[component]]
+kind      = "decoder"
+name      = "jpegxl"
+long_name = "JPEG XL, wrapping the `jxl-oxide` crate (D11)"
+feature   = "codec-jpegxl"
+ctor      = "vaco_codec_jpegxl::JPEGXL_DECODER"
+media     = "video"
+codec     = "jpegxl"
