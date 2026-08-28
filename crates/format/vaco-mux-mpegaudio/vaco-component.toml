@@ -1,0 +1,8 @@
+[[component]]
+kind       = "muxer"
+name       = "mp3"
+long_name  = "MP3 (MPEG audio layer 3)"
+feature    = "mux-mp3"
+ctor       = "vaco_mux_mpegaudio::MUXER"
+extensions = "mp3"
+mime_types = "audio/mpeg"
