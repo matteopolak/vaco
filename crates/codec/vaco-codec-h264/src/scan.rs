@@ -92,6 +92,56 @@ pub(crate) fn build_luma_ac_block(dc_val: i32, ac: Option<&CabacResidual>) -> [i
     c
 }
 
+/// Table 8-12's 8x8 zig-zag row (High-profile `transform_size_8x8_flag`),
+/// same role as [`ZIGZAG_4X4`] one size up. This crate's on-hand
+/// `iso-iec-14496-10-2002-draft` source predates the 8x8 transform (the
+/// same gap `mb.rs`'s own module doc names), so this is not a transcription
+/// from that primary text -- it is a coordinate-swapped copy of JM 19.1's
+/// `macroblock.h::SNGL_SCAN8x8` (BSD/Tier A per `provenance/sources.toml`,
+/// the frame/non-field row: this crate is frame-only, see the module doc).
+/// JM stores each entry as `(column, row)`; every one of this array's first
+/// ten entries, after swapping to this module's own `(row, column)`
+/// convention, matches [`ZIGZAG_4X4`]'s first ten entries exactly -- a
+/// zig-zag scan's own early positions are scale-invariant regardless of
+/// block size, so that agreement is an independent check on the swap
+/// direction, not a coincidence of the source data.
+#[rustfmt::skip]
+const ZIGZAG_8X8: [(u8, u8); 64] = [
+    (0, 0), (0, 1), (1, 0), (2, 0), (1, 1), (0, 2), (0, 3), (1, 2),
+    (2, 1), (3, 0), (4, 0), (3, 1), (2, 2), (1, 3), (0, 4), (0, 5),
+    (1, 4), (2, 3), (3, 2), (4, 1), (5, 0), (6, 0), (5, 1), (4, 2),
+    (3, 3), (2, 4), (1, 5), (0, 6), (0, 7), (1, 6), (2, 5), (3, 4),
+    (4, 3), (5, 2), (6, 1), (7, 0), (7, 1), (6, 2), (5, 3), (4, 4),
+    (3, 5), (2, 6), (1, 7), (2, 7), (3, 6), (4, 5), (5, 4), (6, 3),
+    (7, 2), (7, 3), (6, 4), (5, 5), (4, 6), (3, 7), (4, 7), (5, 6),
+    (6, 5), (7, 4), (7, 5), (6, 6), (5, 7), (6, 7), (7, 6), (7, 7),
+];
+
+/// Clause 8.5.13.1's own inverse scan for the 8x8 transform: a plain
+/// 64-position scan list, no DC/AC split (unlike `Intra_16x16`'s luma AC
+/// blocks) -- the 8x8 transform has no macroblock-wide DC term of its own.
+#[must_use]
+fn inverse_zigzag_scan_8x8(residual: Option<&CabacResidual>) -> [i32; 64] {
+    let mut c = [0i32; 64];
+    let Some(res) = residual else { return c };
+    for (&level, &pos) in res.levels.iter().zip(res.positions.iter()) {
+        if let Some(&(i, j)) = ZIGZAG_8X8.get(usize::from(pos))
+            && let Some(slot) = c.get_mut(usize::from(i) * 8 + usize::from(j))
+        {
+            *slot = level;
+        }
+    }
+    c
+}
+
+/// Clause 7.3.5.3.3 / 8.5.13.1: one 8x8 luma block's residual, still in
+/// per-block forward scan order (`ctxBlockCat` 5's own 64-entry scan) --
+/// the 8x8 counterpart to [`inverse_scan_luma_dc`]/[`build_luma_ac_block`].
+#[must_use]
+pub(crate) fn inverse_scan_luma_8x8(residual: Option<&CabacResidual>) -> [i32; 64] {
+    inverse_zigzag_scan_8x8(residual)
+}
+
 /// Clause 8.5.3 step 1a: `ChromaDCLevel`'s own inverse *raster* scan (not
 /// zig-zag at all -- eq. (8-246) assigns `c00, c01, c10, c11` straight
 /// from scan positions `0, 1, 2, 3`), producing the row-major `c[2*i+j]`
@@ -197,6 +247,48 @@ mod tests {
     /// where the two scans genuinely disagree: raster puts idx 3 at (1,
     /// 1), zig-zag puts idx 3 at (2, 0), a position that does not even
     /// exist in a 2x2 block).
+    /// [`ZIGZAG_8X8`]'s own bijection check, mirroring
+    /// [`no_two_zigzag_entries_are_the_same_position`] one size up.
+    #[test]
+    #[allow(
+        clippy::needless_range_loop,
+        reason = "both a and b are indices into the same array (a pairwise uniqueness check) and are also used directly in the assertion message"
+    )]
+    fn no_two_zigzag8x8_entries_are_the_same_position() {
+        for a in 0..64 {
+            for b in (a + 1)..64 {
+                assert_ne!(
+                    ZIGZAG_8X8[a], ZIGZAG_8X8[b],
+                    "8x8 zig-zag scan must be a bijection: idx {a} and {b} both map to {:?}",
+                    ZIGZAG_8X8[a]
+                );
+            }
+        }
+    }
+
+    /// The independent check named in [`ZIGZAG_8X8`]'s own doc: its first
+    /// ten entries, already in this module's `(row, column)` convention,
+    /// must match [`ZIGZAG_4X4`]'s first ten exactly.
+    #[test]
+    fn zigzag8x8_prefix_matches_zigzag4x4() {
+        for i in 0..10 {
+            assert_eq!(ZIGZAG_8X8[i], ZIGZAG_4X4[i], "8x8 and 4x4 zig-zag scans must agree on their common prefix");
+        }
+    }
+
+    #[test]
+    fn a_single_dc_only_coefficient_lands_at_raster_0_0_8x8() {
+        let r = residual(&[9], &[0]);
+        let c = inverse_scan_luma_8x8(Some(&r));
+        assert_eq!(c[0], 9);
+        assert!(c[1..].iter().all(|&v| v == 0));
+    }
+
+    #[test]
+    fn no_residual_is_all_zero_8x8() {
+        assert_eq!(inverse_scan_luma_8x8(None), [0i32; 64]);
+    }
+
     #[test]
     fn chroma_dc_uses_raster_scan_not_zigzag() {
         let r = residual(&[1, 2, 3, 4], &[0, 1, 2, 3]);

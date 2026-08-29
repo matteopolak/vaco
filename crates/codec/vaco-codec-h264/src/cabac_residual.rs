@@ -108,6 +108,33 @@ pub enum ContextCategory {
     ChromaDc,
     /// `ctxBlockCat` 4: `ChromaACLevel`, `maxNumCoeff == 15`.
     ChromaAc,
+    /// `ctxBlockCat` 5: the High-profile 8x8 luma transform's own residual
+    /// (`maxNumCoeff == 64`). Unlike the four categories above,
+    /// `significant_coeff_flag`/`last_significant_coeff_flag`'s own
+    /// `ctxIdxInc` is *not* the scan position itself -- it is a many-to-one
+    /// mapping (Table 9-43's own 8x8 row) onto a much smaller physical
+    /// context count (15 for significance, 9 for "last"), reusing the same
+    /// context across multiple scan positions. [`ContextSet::sig_mut`]/
+    /// [`Self::last_sig_mut`] apply that remap for this category only; see
+    /// [`POS2CTX_MAP8X8`]/[`POS2CTX_LAST8X8`]'s own doc for where the
+    /// mapping itself comes from.
+    ///
+    /// There is also no separate `coded_block_flag` for this category at
+    /// all (clause 7.3.5.3.3's own `residual_luma()`/`residual_block_cabac`
+    /// syntax): an 8x8 block's presence is already fully determined by
+    /// `CodedBlockPatternLuma`'s own per-quadrant bit (unlike the 4x4 case,
+    /// where CBP is coarser than the individual 4x4 blocks it gates, so a
+    /// further flag is genuinely needed to disambiguate which of the four
+    /// actually carry a nonzero coefficient) -- confirmed against JM 19.1's
+    /// `read_comp_cabac.c::readCompCoeff8x8_CABAC`, which reads a level
+    /// directly (via `readRunLevel_CABAC`, the same significance-map+level
+    /// chain [`residual_block_cabac`] already implements) with no
+    /// `coded_block_flag`-shaped read anywhere in it, gated only by its
+    /// caller's own `currMB->cbp & (1 << b8)` check. `crate::mb` reflects
+    /// this directly: it calls [`residual_block_cabac`] for this category
+    /// whenever `CodedBlockPatternLuma`'s bit is set, with no separate
+    /// flag read of its own.
+    Luma8x8,
 }
 
 /// One block's context set: significance-map contexts, sized for the
@@ -146,6 +173,12 @@ pub enum ContextCategory {
 /// not from recollection.
 #[derive(Debug, Clone)]
 pub struct ContextSet {
+    /// Which category this set was built for -- needed at read time (not
+    /// just construction) so [`Self::sig_mut`]/[`Self::last_sig_mut`] know
+    /// whether to apply [`POS2CTX_MAP8X8`]/[`POS2CTX_LAST8X8`]'s remap
+    /// (`ctxBlockCat` 5 only) or pass the scan position straight through
+    /// (every other category, `ctxIdxInc == levelListIdx` directly).
+    category: ContextCategory,
     significant_coeff_flag: [ContextModel; 15],
     last_significant_coeff_flag: [ContextModel; 15],
     coeff_abs_level_minus1_bin0: [ContextModel; 5],
@@ -356,6 +389,81 @@ const ABS_BINN_CHROMA_DC: [[(i16, i16); 4]; 4] = [
     [(-11,97),(-3,81),(0,73),(-4,81)], [(-19,117),(-11,97),(-8,89),(-13,99)],
 ];
 
+// `ctxBlockCat` 5 (8x8 luma, High profile). This crate's on-hand
+// `iso-iec-14496-10-2002-draft` source predates the 8x8 transform entirely
+// (the same gap `mb.rs`'s own module doc names for the transform itself),
+// so none of the six tables below are transcribed from that primary text.
+// They are instead read from JM 19.1's `lib/lcommon/ctx_tables.h`
+// (BSD/Tier A per `provenance/sources.toml`) -- `INIT_MAP`/`INIT_LAST`/
+// `INIT_ONE`/`INIT_ABS`, row index 2 (`LUMA_8x8` in that file's own
+// `defines.h` enum), each of the four `[I_or_SI, idc0, idc1, idc2]`
+// columns read the same way `ContextSet::new`'s existing five categories
+// already are. Cross-checked two ways before trusting the row index:
+// row 0 (`LUMA_16DC`) and row 5 (`LUMA_4x4`) of the *same* JM tables match
+// this module's own already-landed `SIG_LUMA_DC`/`SIG_LUMA4X4` (etc.)
+// columns exactly, so the row layout this module reads `LUMA_8x8` from is
+// independently confirmed correct by two categories whose values were
+// already verified against the primary spec text.
+#[rustfmt::skip]
+const SIG_LUMA8X8: [[(i16, i16); 4]; 15] = [
+    [(-17,120),(-4,79),(-5,85),(-3,78)], [(-20,112),(-7,71),(-6,81),(-8,74)],
+    [(-18,114),(-5,69),(-10,77),(-9,72)], [(-11,85),(-9,70),(-7,81),(-10,72)],
+    [(-15,92),(-8,66),(-17,80),(-18,75)], [(-14,89),(-10,68),(-18,73),(-12,71)],
+    [(-26,71),(-19,73),(-4,74),(-11,63)], [(-15,81),(-12,69),(-10,83),(-5,70)],
+    [(-14,80),(-16,70),(-9,71),(-17,75)], [(0,68),(-15,67),(-9,67),(-14,72)],
+    [(-14,70),(-20,62),(-1,61),(-16,67)], [(-24,56),(-19,70),(-8,66),(-8,53)],
+    [(-23,68),(-16,66),(-14,66),(-14,59)], [(-24,50),(-22,65),(0,59),(-9,52)],
+    [(-11,74),(-20,63),(2,59),(-11,68)],
+];
+#[rustfmt::skip]
+const LAST_LUMA8X8: [[(i16, i16); 4]; 9] = [
+    [(23,-13),(9,-2),(17,-10),(9,-2)], [(26,-13),(26,-9),(32,-13),(30,-10)],
+    [(40,-15),(33,-9),(42,-9),(31,-4)], [(49,-14),(39,-7),(49,-5),(33,-1)],
+    [(44,3),(41,-2),(53,0),(33,7)], [(45,6),(45,3),(64,3),(31,12)],
+    [(44,34),(49,9),(68,10),(37,23)], [(33,54),(45,27),(66,27),(31,38)],
+    [(19,82),(36,59),(47,57),(20,64)],
+];
+#[rustfmt::skip]
+const ABS_BIN0_LUMA8X8: [[(i16, i16); 4]; 5] = [
+    [(-3,75),(-6,66),(-5,71),(-9,71)], [(-1,23),(-7,35),(0,24),(-7,37)],
+    [(1,34),(-7,42),(-1,36),(-8,44)], [(1,43),(-8,45),(-2,42),(-11,49)],
+    [(0,54),(-5,48),(-2,52),(-10,56)],
+];
+#[rustfmt::skip]
+const ABS_BINN_LUMA8X8: [[(i16, i16); 4]; 5] = [
+    [(-2,55),(-12,56),(-9,57),(-12,59)], [(0,61),(-6,60),(-6,63),(-8,63)],
+    [(1,64),(-5,62),(-4,65),(-9,67)], [(0,68),(-8,66),(-4,67),(-6,68)],
+    [(-9,92),(-8,76),(-7,82),(-10,79)],
+];
+
+/// Table 9-43's own `ctxIdxInc` mapping for `significant_coeff_flag` when
+/// `ctxBlockCat == 5` (frame-coded, i.e. the "zig-zag scan" row -- this
+/// crate is frame-only, `mb.rs`'s own `check_scope` refuses MBAFF/field
+/// pictures, so the interlace row is never needed and not transcribed).
+/// 63 entries, one per scan position `0..62` (position 63, the last, is
+/// never asked -- same convention every other category's array already
+/// follows). Read from JM 19.1's `cabac.c::pos2ctx_map8x8` (BSD/Tier A),
+/// the same source and confidence level as this category's init tables
+/// above -- this crate's primary spec text predates the category entirely.
+#[rustfmt::skip]
+const POS2CTX_MAP8X8: [u8; 63] = [
+     0,  1,  2,  3,  4,  5,  5,  4,  4,  3,  3,  4,  4,  4,  5,  5,
+     4,  4,  4,  4,  3,  3,  6,  7,  7,  7,  8,  9, 10,  9,  8,  7,
+     7,  6, 11, 12, 13, 11,  6,  7,  8,  9, 14, 10,  9,  8,  6, 11,
+    12, 13, 11,  6,  9, 14, 10,  9, 11, 12, 13, 11, 14, 10, 12,
+];
+
+/// Table 9-43's own `ctxIdxInc` mapping for `last_significant_coeff_flag`
+/// when `ctxBlockCat == 5`, frame-coded -- same source/scope note as
+/// [`POS2CTX_MAP8X8`]. Read from JM 19.1's `cabac.c::pos2ctx_last8x8`.
+#[rustfmt::skip]
+const POS2CTX_LAST8X8: [u8; 63] = [
+    0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+    3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4,
+    5, 5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7, 8, 8, 8,
+];
+
 /// One context category's `(m, n)` init pair (Tables 9-19/9-20/9-21) for
 /// each of the four `cabac_init_idc`-selected columns, per context index.
 type CabacInitRow = [(i16, i16); 4];
@@ -386,6 +494,7 @@ impl ContextSet {
                 ContextCategory::Luma4x4 => (&SIG_LUMA4X4, &LAST_LUMA4X4, &ABS_BIN0_LUMA4X4, &ABS_BINN_LUMA4X4),
                 ContextCategory::ChromaDc => (&SIG_CHROMA_DC, &LAST_CHROMA_DC, &ABS_BIN0_CHROMA_DC, &ABS_BINN_CHROMA_DC),
                 ContextCategory::ChromaAc => (&SIG_CHROMA_AC, &LAST_CHROMA_AC, &ABS_BIN0_CHROMA_AC, &ABS_BINN_CHROMA_AC),
+                ContextCategory::Luma8x8 => (&SIG_LUMA8X8, &LAST_LUMA8X8, &ABS_BIN0_LUMA8X8, &ABS_BINN_LUMA8X8),
             };
 
         let build = |rows: &[[(i16, i16); 4]], dst: &mut [ContextModel]| {
@@ -396,6 +505,7 @@ impl ContextSet {
             init_contexts(dst, &inits, slice_qp);
         };
         let mut s = Self {
+            category,
             significant_coeff_flag: [ContextModel::UNINITIALISED; 15],
             last_significant_coeff_flag: [ContextModel::UNINITIALISED; 15],
             coeff_abs_level_minus1_bin0: [ContextModel::UNINITIALISED; 5],
@@ -422,14 +532,30 @@ impl ContextSet {
 }
 
 impl ContextSet {
+    /// `ctxIdxInc` for `significant_coeff_flag` at scan position `i` --
+    /// `i` itself for every category except `Luma8x8`, which remaps
+    /// through [`POS2CTX_MAP8X8`] first (see [`ContextCategory::Luma8x8`]'s
+    /// own doc for why that category alone needs this).
     fn sig_mut(&mut self, i: u8) -> &mut ContextModel {
+        let idx = if self.category == ContextCategory::Luma8x8 {
+            POS2CTX_MAP8X8.get(usize::from(i)).copied().unwrap_or(0)
+        } else {
+            i
+        };
         let scratch = &mut self.scratch;
-        self.significant_coeff_flag.get_mut(usize::from(i)).unwrap_or(scratch)
+        self.significant_coeff_flag.get_mut(usize::from(idx)).unwrap_or(scratch)
     }
 
+    /// [`Self::sig_mut`]'s own counterpart for `last_significant_coeff_flag`,
+    /// via [`POS2CTX_LAST8X8`].
     fn last_sig_mut(&mut self, i: u8) -> &mut ContextModel {
+        let idx = if self.category == ContextCategory::Luma8x8 {
+            POS2CTX_LAST8X8.get(usize::from(i)).copied().unwrap_or(0)
+        } else {
+            i
+        };
         let scratch = &mut self.scratch;
-        self.last_significant_coeff_flag.get_mut(usize::from(i)).unwrap_or(scratch)
+        self.last_significant_coeff_flag.get_mut(usize::from(idx)).unwrap_or(scratch)
     }
 
     fn abs_level_bin0_mut(&mut self, idx: u32) -> &mut ContextModel {
@@ -598,16 +724,19 @@ mod tests {
         positions: &[u8],
         levels: &[i32],
     ) {
+        // Routed through `ContextSet`'s own private `sig_mut`/`last_sig_mut`
+        // (not raw field indexing) specifically so this fixture stays
+        // correct for `Luma8x8`: that category's `ctxIdxInc` is not the
+        // scan position itself (see `ContextCategory::Luma8x8`'s own doc),
+        // and encoding into the wrong physical context would desync the
+        // arithmetic coder's adaptation state, not merely mislabel it.
         let last_scan_idx = max_num_coeff - 1;
         for i in 0..last_scan_idx {
             let sig = u32::from(positions.contains(&i));
-            enc.encode_decision(&mut ctx.significant_coeff_flag[usize::from(i)], sig);
+            enc.encode_decision(ctx.sig_mut(i), sig);
             if sig == 1 {
                 let is_last = positions.last() == Some(&i);
-                enc.encode_decision(
-                    &mut ctx.last_significant_coeff_flag[usize::from(i)],
-                    u32::from(is_last),
-                );
+                enc.encode_decision(ctx.last_sig_mut(i), u32::from(is_last));
                 if is_last {
                     break;
                 }
@@ -622,20 +751,20 @@ mod tests {
             for k in 0..prefix {
                 let c = if k == 0 {
                     let idx = if num_gt1 != 0 { 0 } else { (1 + num_eq1).min(4) };
-                    &mut ctx.coeff_abs_level_minus1_bin0[idx as usize]
+                    ctx.abs_level_bin0_mut(idx)
                 } else {
                     let idx = num_gt1.min(4);
-                    &mut ctx.coeff_abs_level_minus1_binn[idx as usize]
+                    ctx.abs_level_binn_mut(idx)
                 };
                 enc.encode_decision(c, 1);
             }
             if prefix < U_COFF {
                 let c = if prefix == 0 {
                     let idx = if num_gt1 != 0 { 0 } else { (1 + num_eq1).min(4) };
-                    &mut ctx.coeff_abs_level_minus1_bin0[idx as usize]
+                    ctx.abs_level_bin0_mut(idx)
                 } else {
                     let idx = num_gt1.min(4);
-                    &mut ctx.coeff_abs_level_minus1_binn[idx as usize]
+                    ctx.abs_level_binn_mut(idx)
                 };
                 enc.encode_decision(c, 0);
             } else {
@@ -729,14 +858,46 @@ mod tests {
         assert_eq!(out.levels, levels);
     }
 
+    /// `ctxBlockCat` 5's own 64-coefficient block, round-tripped through
+    /// [`residual_block_cabac`] like every other category above -- proves
+    /// the position remap ([`POS2CTX_MAP8X8`]/[`POS2CTX_LAST8X8`]) and the
+    /// 64-length scan both work end to end, not merely that the tables
+    /// exist. `encode_fixture` itself uses direct field indexing
+    /// (`ctx.significant_coeff_flag[...]`), not `sig_mut`, so this also
+    /// exercises the remap asymmetrically: the encoder writes to the same
+    /// *physical* context [`residual_block_cabac`]'s own [`ContextSet::sig_mut`]
+    /// reads back via the remap, which only round-trips correctly if the
+    /// remap is applied consistently -- a wrong or missing remap would
+    /// desync the arithmetic coder's context state, not merely misattribute
+    /// adaptation, and this test's own decode would then not reproduce the
+    /// encoded positions/levels.
+    #[test]
+    fn residual_block_cabac_luma8x8_round_trips() {
+        let positions = [0u8, 5, 30, 62];
+        let levels = [4i32, -2, 9, 1];
+        let mut enc = CabacEncoder::new();
+        let mut ctx = ContextSet::new(ContextCategory::Luma8x8, 26, CabacInit::IorSi);
+        encode_fixture(&mut enc, &mut ctx, 64, &positions, &levels);
+        enc.encode_terminate(1);
+        let bytes = enc.finish();
+
+        let mut dec = CabacDecoder::new(&bytes);
+        let mut ctx2 = ContextSet::new(ContextCategory::Luma8x8, 26, CabacInit::IorSi);
+        let mut b = budget();
+        let out = residual_block_cabac(&mut dec, &mut ctx2, 64, &mut b).unwrap();
+        assert_eq!(out.positions, positions);
+        assert_eq!(out.levels, levels);
+    }
+
     #[test]
     fn context_set_new_produces_valid_states_across_the_full_qp_range() {
-        const CATEGORIES: [ContextCategory; 5] = [
+        const CATEGORIES: [ContextCategory; 6] = [
             ContextCategory::LumaDc,
             ContextCategory::LumaAc,
             ContextCategory::Luma4x4,
             ContextCategory::ChromaDc,
             ContextCategory::ChromaAc,
+            ContextCategory::Luma8x8,
         ];
         const INITS: [CabacInit; 4] =
             [CabacInit::IorSi, CabacInit::PSpB(0), CabacInit::PSpB(1), CabacInit::PSpB(2)];
@@ -811,6 +972,10 @@ mod table_distinctness {
             ("ABS_BINN_CHROMA_AC", ABS_BINN_CHROMA_AC.iter().flatten().copied().collect()),
             ("ABS_BIN0_CHROMA_DC", ABS_BIN0_CHROMA_DC.iter().flatten().copied().collect()),
             ("ABS_BINN_CHROMA_DC", ABS_BINN_CHROMA_DC.iter().flatten().copied().collect()),
+            ("SIG_LUMA8X8", SIG_LUMA8X8.iter().flatten().copied().collect()),
+            ("LAST_LUMA8X8", LAST_LUMA8X8.iter().flatten().copied().collect()),
+            ("ABS_BIN0_LUMA8X8", ABS_BIN0_LUMA8X8.iter().flatten().copied().collect()),
+            ("ABS_BINN_LUMA8X8", ABS_BINN_LUMA8X8.iter().flatten().copied().collect()),
         ]
     }
 
@@ -848,7 +1013,7 @@ mod table_distinctness {
     #[test]
     fn named_tables_is_not_accidentally_empty() {
         let tables = named_tables();
-        assert_eq!(tables.len(), 20, "expected exactly 20 named tables in this file");
+        assert_eq!(tables.len(), 24, "expected exactly 24 named tables in this file");
         for (name, vals) in &tables {
             assert!(!vals.is_empty(), "table {name} flattened to zero entries");
         }

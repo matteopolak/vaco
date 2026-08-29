@@ -96,22 +96,34 @@ fn resolves_cavlc_from_a_real_x264_cavlc_stream() {
 }
 
 #[test]
-fn a_high_profile_8x8_transform_stream_is_refused_not_mishandled() {
+fn a_high_profile_8x8_transform_stream_now_decodes() {
     // `cabac_idr_slice.264`/`cabac_extradata.bin`: real x264 output that
     // enables `transform_size_8x8_flag` (High profile's own default) --
-    // squarely out of this crate's own documented scope (`mb::check_scope`,
-    // "this crate's tables are verified against a source that predates
-    // it"). A real, if disappointing, finding: High profile with adaptive
-    // 8x8 transform is common default x264 output, and any stream using
-    // it hits this refusal today, honestly, rather than a wrong decode.
+    // this crate's CABAC path now supports `Intra_8x8`/the 8x8 transform
+    // (`MbKind::Intra8x8`, `crate::intra::predict_intra8x8`,
+    // `crate::dequant::dequant_8x8`, `ContextCategory::Luma8x8`), so this
+    // real High-profile IDR slice now decodes instead of being refused.
+    // This test used to assert the *refusal* -- `planning/AGENT-CONSTRAINTS.md`'s
+    // own "never pin the absence of something the project is building"
+    // rule names this exact shape of test as the one that costs the
+    // agent who *fixes* the gap a debugging session; asserting the
+    // mapping (a real decode) instead, not the emptiness.
     let mut d = decoder();
     d.set_extradata(include_bytes!("fixtures/cabac_extradata.bin")).unwrap();
     let pkt = packet(include_bytes!("fixtures/cabac_idr_slice.264"));
-    let err = d.send_packet(Some(&pkt)).unwrap_err();
-    let Error::Unsupported(msg) = err else {
-        panic!("expected Unsupported, got {err:?}");
+    d.send_packet(Some(&pkt)).unwrap();
+    let frame = d.receive_frame().unwrap();
+    let FrameData::Video { format, width, height, planes } = &frame.data else {
+        panic!("expected a video frame, got {:?}", frame.data);
     };
-    assert!(msg.contains("8x8"), "message did not name the 8x8 transform: {msg}");
+    assert_eq!(format.name(), "yuv420p");
+    assert!(*width > 0 && *height > 0, "width={width} height={height}");
+    assert_eq!(planes.len(), 3, "yuv420p is three planes");
+    let luma = &planes[0].data;
+    assert!(
+        luma.as_slice().windows(2).any(|w| w[0] != w[1]),
+        "luma plane is perfectly flat -- looks like it was never written"
+    );
 }
 
 #[test]

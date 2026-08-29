@@ -28,17 +28,22 @@
 //!
 //! **Explicitly out of scope, not merely unimplemented**:
 //!
-//! - **The 8x8 luma transform** (`transform_size_8x8_flag`, `Intra_8x8`,
-//!   High-profile-only): the primary source this crate's tables are
-//!   verified against (`provenance/vaco-codec-h264.toml`'s
-//!   `iso-iec-14496-10-2002-draft`) predates this entirely — its own
-//!   `mb_pred()`/`macroblock_layer()` syntax tables have no
-//!   `transform_size_8x8_flag` and no `Intra_8x8` case at all, the same
-//!   "predates a later amendment" shape as 4:2:2 chroma DC and
-//!   `level_prefix >= 16` found in the CAVLC table correction. The test
-//!   corpus this module is verified against is encoded Main profile
-//!   specifically to avoid emitting this (High profile turns it on by
-//!   default), rather than leaving an unverified path in untested code.
+//! - **The 8x8 luma transform on the CAVLC side only**
+//!   (`transform_size_8x8_flag`, `Intra_8x8`, High-profile-only):
+//!   [`decode_slice_cavlc`] still refuses `pps.transform_8x8_mode`
+//!   outright, since CAVLC reconstruction is out of scope entirely (see
+//!   the `crate::reconstruct` module doc) and there is no point reading a
+//!   syntax element this dispatch's own tables (`cavlc_tables.rs`) were
+//!   never checked against. **CABAC's own [`decode_slice_cabac`] now
+//!   supports this** (`MbKind::Intra8x8`, `CabacMbCtx::residual_luma8x8`,
+//!   `crate::intra::predict_intra8x8`, `crate::dequant::dequant_8x8`) --
+//!   this crate's on-hand primary source
+//!   (`provenance/vaco-codec-h264.toml`'s `iso-iec-14496-10-2002-draft`)
+//!   predates the 8x8 transform entirely, so every table and equation this
+//!   support needed was instead read from and cross-checked against JM
+//!   19.1 (BSD/Tier A per `provenance/sources.toml`), not that primary
+//!   text -- see `crate::intra`/`crate::dequant`/`crate::cabac_residual`'s
+//!   own module docs for exactly where.
 //! - **MBAFF** (`mb_adaptive_frame_field`) and field pictures. Neighbour
 //!   availability changes shape entirely under MBAFF (pairs of macroblocks,
 //!   parity-dependent derivation) — [`decode_slice_cavlc`] refuses a slice
@@ -67,7 +72,6 @@
 //!   and kept `#[allow(dead_code)]` for whoever picks this up, but the
 //!   decode function that would binarise against them was not written this
 //!   dispatch).
-//! - **CABAC's 8x8 residual category** — same reason as CAVLC's, above.
 //!
 //! **In scope but not yet bit-exact**: CABAC's I/P-slice macroblock layer
 //! (`mb_type`, `sub_mb_type`, `mb_skip_flag`, `coded_block_pattern`,
@@ -122,6 +126,14 @@ impl PartPred {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum MbKind {
     Intra4x4,
+    /// `I_NxN` with `transform_size_8x8_flag == 1` (High profile) --
+    /// `classify_mb_type` never produces this directly (`mb_type == 0`
+    /// always classifies as [`Self::Intra4x4`] first); the CABAC dispatch
+    /// promotes it to this variant after reading `transform_size_8x8_flag`,
+    /// since that flag is not part of `mb_type`'s own binarisation at all
+    /// -- see `decode_macroblock_cabac`'s own comment at the promotion
+    /// site.
+    Intra8x8,
     Intra16x16 { cbp_luma: u8, cbp_chroma: u8, pred_mode: u8 },
     IPcm,
     /// `P_L0_16x16`, `P_L0_L0_16x8`/`8x16`, and every non-direct, non-8x8 B
@@ -141,7 +153,7 @@ enum MbKind {
 
 impl MbKind {
     const fn is_intra(&self) -> bool {
-        matches!(self, Self::Intra4x4 | Self::Intra16x16 { .. } | Self::IPcm)
+        matches!(self, Self::Intra4x4 | Self::Intra8x8 | Self::Intra16x16 { .. } | Self::IPcm)
     }
 }
 
@@ -394,6 +406,19 @@ pub(crate) struct MbResidual {
     /// also wants to know how to predict it before adding that residual
     /// in -- see `crate::reconstruct`.
     pub(crate) intra4x4_pred_mode: [u8; 16],
+    /// `ctxBlockCat` 5's own four 8x8 luma blocks (`luma8x8BlkIdx` 0..3,
+    /// same raster quadrant order [`crate::mb`]'s `cbp_luma` bit-per-quadrant
+    /// convention already uses), forward scan order like every other field
+    /// here -- `None` for a quadrant whose `CodedBlockPatternLuma` bit was
+    /// 0 (no separate `coded_block_flag` exists for this category at all,
+    /// see [`crate::cabac_residual::ContextCategory::Luma8x8`]'s own doc),
+    /// all-`None` (`[None; 4]`) whenever `transform_8x8` (on [`MbSummary`])
+    /// is false.
+    pub(crate) luma8x8: [Option<CabacResidual>; 4],
+    /// `Intra8x8PredMode[luma8x8BlkIdx]`, resolved the same way
+    /// `intra4x4_pred_mode` is -- `[2; 4]` (every block DC) when `kind` is
+    /// not `MbKind::Intra8x8`.
+    pub(crate) intra8x8_pred_mode: [u8; 4],
 }
 
 impl Default for MbResidual {
@@ -404,6 +429,8 @@ impl Default for MbResidual {
             chroma_dc: [None, None],
             chroma_ac: [core::array::from_fn(|_| None), core::array::from_fn(|_| None)],
             intra4x4_pred_mode: [2; 16],
+            luma8x8: [None, None, None, None],
+            intra8x8_pred_mode: [2; 4],
         }
     }
 }
@@ -488,8 +515,16 @@ pub(crate) struct MbSummary {
     pub(crate) skipped: bool,
     pub(crate) is_ipcm: bool,
     pub(crate) is_intra4x4: bool,
+    pub(crate) is_intra8x8: bool,
     pub(crate) is_intra16x16: bool,
     pub(crate) intra16x16_pred_mode: u8,
+    /// This macroblock's own `transform_size_8x8_flag` -- `true` for both
+    /// `MbKind::Intra8x8` and any inter macroblock that read and set the
+    /// flag (`crate::reconstruct`'s inter path needs this just as much as
+    /// the intra one: the flag decides whether a quadrant's residual is
+    /// one 8x8 transform or four 4x4 ones, independently of whether the
+    /// *prediction* underneath it was intra or motion-compensated).
+    pub(crate) transform_8x8: bool,
     #[allow(
         dead_code,
         reason = "carried for crate::reconstruct's chroma path, not yet wired up -- see reconstruct.rs's own module doc on chroma reconstruction being out of scope so far"
@@ -529,12 +564,6 @@ fn check_scope(sps: &Sps, pps: &Pps, header: &SliceHeader) -> Result<()> {
             "vaco-codec-h264: constrained_intra_pred_flag's neighbour substitution is out of scope for #419",
         ));
     }
-    if pps.transform_8x8_mode {
-        return Err(Error::Unsupported(
-            "vaco-codec-h264: transform_size_8x8_flag/Intra_8x8 (High profile) is out of scope for #419 \
-             — this crate's tables are verified against a source that predates it",
-        ));
-    }
     if !matches!(sps.chroma_format, ChromaFormat::Yuv420) {
         return Err(Error::Unsupported("vaco-codec-h264: only 4:2:0 is in scope for #419"));
     }
@@ -564,6 +593,20 @@ pub fn decode_slice_cavlc(
     header: &SliceHeader,
 ) -> Result<SliceStats> {
     check_scope(sps, pps, header)?;
+    if pps.transform_8x8_mode {
+        // CAVLC-only refusal (moved out of `check_scope`, which CABAC's
+        // own `decode_slice_cabac` also calls and no longer needs this
+        // for -- see the module doc's own "explicitly not" list):
+        // CAVLC reconstruction is out of scope entirely
+        // (`crate::reconstruct`'s own module doc), so there is no point
+        // reading `transform_size_8x8_flag`/the 8x8 residual against
+        // `cavlc_tables.rs`'s tables, which were never checked against
+        // either.
+        return Err(Error::Unsupported(
+            "vaco-codec-h264: transform_size_8x8_flag/Intra_8x8 is out of scope for CAVLC \
+             — CAVLC reconstruction is unimplemented regardless",
+        ));
+    }
     let mbs_wide = sps.pic_width_in_mbs;
     let mbs_high = sps.pic_height_in_map_units * if sps.frame_mbs_only { 1 } else { 2 };
     let mut grid = NeighbourGrid::new(mbs_wide.max(1), mbs_high.max(1));
@@ -1502,6 +1545,11 @@ struct CabacMbInfo {
     available: bool,
     skipped: bool,
     is_intra4x4: bool,
+    /// `I_NxN` with `transform_size_8x8_flag == 1` — see `MbKind::Intra8x8`'s
+    /// own doc. Kept alongside, not instead of, `is_intra4x4` since both
+    /// are read for `mb_type_i_cond_term`'s "is this neighbour `I_NxN` at
+    /// all, regardless of transform size" question (clause 9.3.3.1.1.3).
+    is_intra8x8: bool,
     is_intra: bool,
     is_intra16x16: bool,
     is_ipcm: bool,
@@ -1513,6 +1561,13 @@ struct CabacMbInfo {
     /// `is_intra16x16`; `0` otherwise (same "unused when the flag it's
     /// gated on is false" convention as `cbp_luma`/`cbp_chroma` above).
     intra16x16_pred_mode: u8,
+    /// This macroblock's own decoded `transform_size_8x8_flag` (clause
+    /// 9.3.3.1.1.10's own `condTermFlagN` input for the *next*
+    /// macroblock's read of that same syntax element) — `false` for any
+    /// macroblock that never reads it at all (4x4-transform intra, every
+    /// non-8x8-eligible inter shape, `I_PCM`, skipped), matching clause
+    /// 9.3.3.1.1.10's own "not available" reducing to 0.
+    transform_8x8: bool,
 }
 
 /// One 4x4 luma block's motion-prediction neighbour state — [`None`]
@@ -1697,6 +1752,7 @@ impl CabacGrids {
             available: true,
             skipped: false,
             is_intra4x4: false,
+            is_intra8x8: false,
             is_intra: false,
             is_intra16x16: false,
             is_ipcm: false,
@@ -1704,6 +1760,7 @@ impl CabacGrids {
             cbp_chroma: 0,
             intra_chroma_pred_mode: 0,
             intra16x16_pred_mode: 0,
+            transform_8x8: false,
         }
     }
 
@@ -1990,13 +2047,24 @@ fn cbp_chroma_cond_term(neighbour: Option<CabacMbInfo>, bin_idx: u32) -> u32 {
 }
 
 /// clause 9.3.3.1.1.3's `condTermFlagN` for I-slice `mb_type`
-/// (`ctxIdxOffset == 3`): 0 if unavailable or the neighbour is `I_4x4`,
-/// else 1.
+/// (`ctxIdxOffset == 3`): 0 if unavailable or the neighbour is `I_NxN`
+/// (`Intra_4x4` *or* `Intra_8x8` -- both share `mb_type == 0`, so both
+/// count here), else 1.
 fn mb_type_i_cond_term(neighbour: Option<CabacMbInfo>) -> u32 {
     match neighbour {
         None => 0,
-        Some(info) => u32::from(!info.is_intra4x4),
+        Some(info) => u32::from(!(info.is_intra4x4 || info.is_intra8x8)),
     }
+}
+
+/// clause 9.3.3.1.1.10's `condTermFlagN` for `transform_size_8x8_flag`: the
+/// neighbour's own decoded flag value, 0 if unavailable (no `I_PCM`/skipped
+/// special case here -- neither ever reads this flag, so `CabacMbInfo`'s
+/// own default `transform_8x8: false` is already the right answer for
+/// both, the same way `false` is already right for every macroblock that
+/// simply never took the 8x8-transform branch).
+fn transform_8x8_cond_term(neighbour: Option<CabacMbInfo>) -> u32 {
+    neighbour.map_or(0, |info| u32::from(info.transform_8x8))
 }
 
 /// clause 9.3.3.1.1.8's `condTermFlagN` for `intra_chroma_pred_mode`.
@@ -2228,11 +2296,17 @@ struct CabacMbCtx {
     cbf_luma4x4: [ContextModel; 4],
     cbf_chroma_dc: [ContextModel; 4],
     cbf_chroma_ac: [ContextModel; 4],
+    /// `transform_size_8x8_flag` (High profile), ctxIdx 399..=401 -- see
+    /// `cabac_mb_tables::TRANSFORM_SIZE_8X8`'s own doc.
+    transform_size_8x8: [ContextModel; 3],
     residual_luma_dc: ContextSet,
     residual_luma_ac: ContextSet,
     residual_luma4x4: ContextSet,
     residual_chroma_dc: ContextSet,
     residual_chroma_ac: ContextSet,
+    /// `ctxBlockCat` 5's own context set -- see
+    /// `crate::cabac_residual::ContextCategory::Luma8x8`'s own doc.
+    residual_luma8x8: ContextSet,
 }
 
 impl CabacMbCtx {
@@ -2274,6 +2348,8 @@ impl CabacMbCtx {
         init_contexts(&mut cbf_chroma_dc, &inits_by_col(&t::CBF_CHROMA_DC, col), slice_qp);
         let mut cbf_chroma_ac = [ContextModel::UNINITIALISED; 4];
         init_contexts(&mut cbf_chroma_ac, &inits_by_col(&t::CBF_CHROMA_AC, col), slice_qp);
+        let mut transform_size_8x8 = [ContextModel::UNINITIALISED; 3];
+        init_contexts(&mut transform_size_8x8, &inits_by_col(&t::TRANSFORM_SIZE_8X8, col), slice_qp);
 
         let init = if is_i_slice { CabacInit::IorSi } else { CabacInit::PSpB(cabac_init_idc) };
         Self {
@@ -2295,11 +2371,13 @@ impl CabacMbCtx {
             cbf_luma4x4,
             cbf_chroma_dc,
             cbf_chroma_ac,
+            transform_size_8x8,
             residual_luma_dc: ContextSet::new(ContextCategory::LumaDc, slice_qp, init),
             residual_luma_ac: ContextSet::new(ContextCategory::LumaAc, slice_qp, init),
             residual_luma4x4: ContextSet::new(ContextCategory::Luma4x4, slice_qp, init),
             residual_chroma_dc: ContextSet::new(ContextCategory::ChromaDc, slice_qp, init),
             residual_chroma_ac: ContextSet::new(ContextCategory::ChromaAc, slice_qp, init),
+            residual_luma8x8: ContextSet::new(ContextCategory::Luma8x8, slice_qp, init),
         }
     }
 }
@@ -2417,8 +2495,10 @@ pub fn decode_slice_cabac(
                 skipped: true,
                 is_ipcm: false,
                 is_intra4x4: false,
+                is_intra8x8: false,
                 is_intra16x16: false,
                 intra16x16_pred_mode: 0,
+                transform_8x8: false,
                 intra_chroma_pred_mode: 0,
                 qpy,
                 residual: MbResidual::default(),
@@ -2433,6 +2513,7 @@ pub fn decode_slice_cabac(
             let residual = decode_macroblock_cabac(
                 cabac,
                 budget,
+                pps,
                 header,
                 &mut ctx,
                 &mut grids,
@@ -2449,8 +2530,10 @@ pub fn decode_slice_cabac(
                 skipped: false,
                 is_ipcm: info.is_some_and(|i| i.is_ipcm),
                 is_intra4x4: info.is_some_and(|i| i.is_intra4x4),
+                is_intra8x8: info.is_some_and(|i| i.is_intra8x8),
                 is_intra16x16: info.is_some_and(|i| i.is_intra16x16),
                 intra16x16_pred_mode: info.map_or(0, |i| i.intra16x16_pred_mode),
+                transform_8x8: info.is_some_and(|i| i.transform_8x8),
                 intra_chroma_pred_mode: info.map_or(0, |i| i.intra_chroma_pred_mode),
                 qpy,
                 residual: residual.clone(),
@@ -2484,9 +2567,11 @@ pub fn decode_slice_cabac(
 /// once `mb_qp_delta` is known, since eq. (7-23) computes *this*
 /// macroblock's `QPY` from the previous one, not the next one's.
 #[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
 fn decode_macroblock_cabac(
     cabac: &mut CabacDecoder<'_>,
     budget: &mut Budget,
+    pps: &Pps,
     header: &SliceHeader,
     ctx: &mut CabacMbCtx,
     grids: &mut CabacGrids,
@@ -2502,7 +2587,23 @@ fn decode_macroblock_cabac(
     } else {
         decode_mb_type_p(cabac, &mut ctx.mb_type_p)
     };
-    let kind = classify_mb_type(header.kind, raw_code)?;
+    let mut kind = classify_mb_type(header.kind, raw_code)?;
+    // Clause 7.3.5's macroblock_layer(): "if (transform_8x8_mode_flag &&
+    // mb_type == I_NxN) transform_size_8x8_flag" -- read right here, before
+    // mb_pred()'s own intra-mode-flag reads, exactly where the syntax
+    // table places it (this occurrence applies to I *and* P/SP slices
+    // alike: a P-slice macroblock coded via the `Intra` suffix of its own
+    // `mb_type`, `classify_mb_type`'s `v - 5` branch, still classifies as
+    // plain `MbKind::Intra4x4` here, with no slice-kind distinction left
+    // to make). `classify_mb_type` never produces `MbKind::Intra8x8`
+    // directly (this flag is not part of `mb_type`'s own binarisation),
+    // so promoting it here, after the fact, is the only place that can.
+    if matches!(kind, MbKind::Intra4x4) && pps.transform_8x8_mode {
+        let inc = transform_8x8_cond_term(grids.mb_left(mb_x, mb_y)) + transform_8x8_cond_term(grids.mb_above(mb_x, mb_y));
+        if decide(cabac, &mut ctx.transform_size_8x8, inc as usize) == 1 {
+            kind = MbKind::Intra8x8;
+        }
+    }
     if matches!(kind, MbKind::IPcm) {
         // Clause 7.3.5's macroblock_layer(): I_PCM's own branch is just
         // `while(!byte_aligned()) pcm_alignment_zero_bit; for(i=0;
@@ -2556,30 +2657,73 @@ fn decode_macroblock_cabac(
     // this section's own "unused when the flag it's gated on is false"
     // convention.
     let mut intra4x4_pred_mode = [2u8; 16];
+    let mut intra8x8_pred_mode = [2u8; 4];
+    let mut no_sub_mb_part_size_less_than_8x8 = true;
     if is_intra {
-        if matches!(kind, MbKind::Intra4x4) {
-            for blk in 0u32..16 {
+        if matches!(kind, MbKind::Intra4x4 | MbKind::Intra8x8) {
+            // clause 9.3.2.4's own FL binarisation for `rem_intra4x4_pred_mode`
+            // / `rem_intra8x8_pred_mode` alike: binIdx 0 is the *least*
+            // significant bit, increasing towards the most significant one
+            // -- the opposite order a naive "shift left as you read"
+            // reading of "3 bits" would assume. `prev_intra4x4`/
+            // `rem_intra4x4`'s own contexts are reused unchanged for the
+            // 8x8 syntax elements too (confirmed against JM 19.1's
+            // `cabac.c::readIntraPredMode_CABAC`, one shared function and
+            // one shared context pair for both block sizes -- Table 9-11
+            // gives `prev_intra8x8_pred_mode_flag`/`rem_intra8x8_pred_mode`
+            // no ctxIdx of their own at all).
+            let read_one = |cabac: &mut CabacDecoder<'_>, ctx: &mut CabacMbCtx| -> (bool, u8) {
                 let prev_flag = cabac.decode_decision(&mut ctx.prev_intra4x4) == 1;
                 let rem = if prev_flag {
                     0
                 } else {
-                    // clause 9.3.2.4's own FL binarisation: binIdx 0 is the
-                    // *least* significant bit, increasing towards the most
-                    // significant one -- the opposite order a naive
-                    // "shift left as you read" reading of "3 bits" would
-                    // assume.
                     let b0 = cabac.decode_decision(&mut ctx.rem_intra4x4);
                     let b1 = cabac.decode_decision(&mut ctx.rem_intra4x4);
                     let b2 = cabac.decode_decision(&mut ctx.rem_intra4x4);
                     ((b2 << 2) | (b1 << 1) | b0) as u8
                 };
-                let (mode_a, mode_b) = infer_intra4x4_neighbour_modes(grids, mb_x, mb_y, blk);
-                let mode = crate::intra::infer_intra4x4_pred_mode(mode_a, mode_b, prev_flag, rem);
-                if let Some(slot) = intra4x4_pred_mode.get_mut(blk as usize) {
-                    *slot = mode;
+                (prev_flag, rem)
+            };
+            if matches!(kind, MbKind::Intra4x4) {
+                for blk in 0u32..16 {
+                    let (prev_flag, rem) = read_one(cabac, ctx);
+                    let (mode_a, mode_b) = infer_intra4x4_neighbour_modes(grids, mb_x, mb_y, blk);
+                    let mode = crate::intra::infer_intra4x4_pred_mode(mode_a, mode_b, prev_flag, rem);
+                    if let Some(slot) = intra4x4_pred_mode.get_mut(blk as usize) {
+                        *slot = mode;
+                    }
+                    let (lbx, lby) = blk_xy(blk);
+                    grids.set_intra4x4_pred_mode(mb_x * 4 + lbx, mb_y * 4 + lby, mode);
                 }
-                let (lbx, lby) = blk_xy(blk);
-                grids.set_intra4x4_pred_mode(mb_x * 4 + lbx, mb_y * 4 + lby, mode);
+            } else {
+                // `Intra_8x8`: four `luma8x8BlkIdx` blocks, one mode-flag
+                // pair each -- clause 8.3.2.2's own neighbour derivation is
+                // textually identical to `Intra_4x4`'s (`infer_intra8x8_pred_mode`
+                // is `infer_intra4x4_pred_mode` under another name, see its
+                // own doc), and `infer_intra4x4_neighbour_modes` itself
+                // needs no changes to serve both: it already returns `2`
+                // (DC) for any neighbour position `intra4x4_pred_mode_at`
+                // has never written, which already covers "the neighbour
+                // isn't `Intra_4x4`-or-`Intra_8x8`-shaped" the same way it
+                // already covered "isn't `Intra_4x4`-shaped" -- so writing
+                // this block's own resolved mode into all four of its
+                // `luma4x4BlkIdx` sub-positions in the *same* grid
+                // (`intra4x4_pred_mode`, not a separate one) is what makes
+                // a *future* 4x4-or-8x8 neighbour's own lookup correct,
+                // with zero changes to that function.
+                for i8x8 in 0u32..4 {
+                    let (prev_flag, rem) = read_one(cabac, ctx);
+                    let (mode_a, mode_b) = infer_intra4x4_neighbour_modes(grids, mb_x, mb_y, i8x8 * 4);
+                    let mode = crate::intra::infer_intra8x8_pred_mode(mode_a, mode_b, prev_flag, rem);
+                    if let Some(slot) = intra8x8_pred_mode.get_mut(i8x8 as usize) {
+                        *slot = mode;
+                    }
+                    for i4x4 in 0u32..4 {
+                        let blk = i8x8 * 4 + i4x4;
+                        let (lbx, lby) = blk_xy(blk);
+                        grids.set_intra4x4_pred_mode(mb_x * 4 + lbx, mb_y * 4 + lby, mode);
+                    }
+                }
             }
         }
         let inc0 =
@@ -2601,8 +2745,20 @@ fn decode_macroblock_cabac(
         // `ref_idx`/`mvd` neighbour grid does — a 2-partition macroblock's
         // *split direction* decides which 4x4 positions each partition's
         // decoded values land on for the next macroblock to read back.
-        match raw_code {
-            0 => decode_one_partition_cabac(cabac, header, ctx, grids, mb_x, mb_y, PartPred::L0, (0, 0, 3, 3)),
+        //
+        // `NoSubMbPartSizeLessThan8x8Flag` (clause 7.3.5's own
+        // macroblock_layer() pseudocode): initialised 1, and the only
+        // place that can ever clear it is `sub_mb_pred()`'s own per-
+        // sub-macroblock loop (`raw_code` 3/4 below) -- every other shape
+        // here has `NumMbPart(mb_type) < 4`, so `sub_mb_pred()` is never
+        // even invoked for it and the flag stays 1. Feeds the *second*
+        // `transform_size_8x8_flag` occurrence below (the one that can
+        // apply to an inter macroblock, not just `I_NxN`).
+        no_sub_mb_part_size_less_than_8x8 = match raw_code {
+            0 => {
+                decode_one_partition_cabac(cabac, header, ctx, grids, mb_x, mb_y, PartPred::L0, (0, 0, 3, 3));
+                true
+            }
             1 => {
                 decode_two_partitions_cabac(
                     cabac,
@@ -2616,6 +2772,7 @@ fn decode_macroblock_cabac(
                     (0, 0, 3, 1),
                     (0, 2, 3, 3),
                 );
+                true
             }
             2 => {
                 decode_two_partitions_cabac(
@@ -2630,11 +2787,12 @@ fn decode_macroblock_cabac(
                     (0, 0, 1, 3),
                     (2, 0, 3, 3),
                 );
+                true
             }
             3 => decode_sub_mb_pred_cabac(cabac, header, ctx, grids, mb_x, mb_y, false)?,
             4 => decode_sub_mb_pred_cabac(cabac, header, ctx, grids, mb_x, mb_y, true)?,
             _ => return Err(Error::InvalidData("mb_type: unexpected non-intra P mb_type code")),
-        }
+        };
     }
 
     let (cbp_luma, cbp_chroma) = if let MbKind::Intra16x16 { cbp_luma, cbp_chroma, .. } = &kind {
@@ -2644,6 +2802,21 @@ fn decode_macroblock_cabac(
     };
     let intra16x16_pred_mode =
         if let MbKind::Intra16x16 { pred_mode, .. } = &kind { *pred_mode } else { 0 };
+
+    // The *second* `transform_size_8x8_flag` occurrence (clause 7.3.5,
+    // right after `coded_block_pattern`): applies to a non-intra
+    // macroblock whose partitions are all 8x8-or-larger
+    // (`NoSubMbPartSizeLessThan8x8Flag`) and that has any luma residual at
+    // all. `MbKind::Intra8x8` already carries its own flag value from the
+    // *first* occurrence above -- this only ever fires for the `!is_intra`
+    // case, so the two can never both apply to one macroblock.
+    let mut transform_8x8 = matches!(kind, MbKind::Intra8x8);
+    if !is_intra && pps.transform_8x8_mode && cbp_luma > 0 && no_sub_mb_part_size_less_than_8x8 {
+        let inc = transform_8x8_cond_term(grids.mb_left(mb_x, mb_y)) + transform_8x8_cond_term(grids.mb_above(mb_x, mb_y));
+        if decide(cabac, &mut ctx.transform_size_8x8, inc as usize) == 1 {
+            transform_8x8 = true;
+        }
+    }
 
     let cbp_zero = cbp_luma == 0 && cbp_chroma == 0;
     let mb_qp_delta = if cbp_zero && !matches!(kind, MbKind::Intra16x16 { .. }) {
@@ -2684,7 +2857,7 @@ fn decode_macroblock_cabac(
     *qpy = crate::dequant::next_qpy(*qpy, mb_qp_delta);
 
     let mut residual = if cbp_luma > 0 || cbp_chroma > 0 || matches!(kind, MbKind::Intra16x16 { .. }) {
-        decode_residual_cabac(cabac, budget, ctx, grids, &kind, cbp_luma, cbp_chroma, mb_x, mb_y)?
+        decode_residual_cabac(cabac, budget, ctx, grids, &kind, cbp_luma, cbp_chroma, transform_8x8, mb_x, mb_y)?
     } else {
         for blk in 0..16u32 {
             let (bx, by) = blk_xy(blk);
@@ -2705,6 +2878,7 @@ fn decode_macroblock_cabac(
     // zero residual is still a real macroblock, its prediction still
     // needs the right mode.
     residual.intra4x4_pred_mode = intra4x4_pred_mode;
+    residual.intra8x8_pred_mode = intra8x8_pred_mode;
 
     grids.set_mb_info(
         mb_x,
@@ -2713,6 +2887,7 @@ fn decode_macroblock_cabac(
             available: true,
             skipped: false,
             is_intra4x4: matches!(kind, MbKind::Intra4x4),
+            is_intra8x8: matches!(kind, MbKind::Intra8x8),
             is_intra,
             is_intra16x16: matches!(kind, MbKind::Intra16x16 { .. }),
             is_ipcm: false,
@@ -2720,6 +2895,7 @@ fn decode_macroblock_cabac(
             cbp_chroma,
             intra_chroma_pred_mode,
             intra16x16_pred_mode,
+            transform_8x8,
         },
     );
     Ok(residual)
@@ -2949,6 +3125,12 @@ fn decode_two_partitions_cabac(
     clippy::integer_division,
     reason = "quad/sub-partition indices are bounded 0..4 loop variables into fixed-size arrays, and quad%2/quad/2 is the spec's own 2x2 quadrant split, not a precision-loss bug"
 )]
+/// Returns `NoSubMbPartSizeLessThan8x8Flag` (clause 7.3.5's own
+/// `macroblock_layer()` pseudocode) for this macroblock: `true` iff every one
+/// of the four sub-macroblocks decoded here has `NumSubMbPart == 1` (Table
+/// 7-14's own `P_L0_8x8` code, `classify_sub_mb_type`'s `num_sub == 1`) --
+/// the input `decode_macroblock_cabac`'s own second `transform_size_8x8_flag`
+/// occurrence needs.
 fn decode_sub_mb_pred_cabac(
     cabac: &mut CabacDecoder<'_>,
     header: &SliceHeader,
@@ -2957,13 +3139,14 @@ fn decode_sub_mb_pred_cabac(
     mb_x: u32,
     mb_y: u32,
     ref0_inferred: bool,
-) -> Result<()> {
+) -> Result<bool> {
     let mut subs: Vec<(u8, u8, Option<PartPred>)> = budget_alloc_four();
     for _ in 0..4 {
         let code = decode_sub_mb_type_p(cabac, &mut ctx.sub_mb_type_p);
         let (num_sub, pred) = classify_sub_mb_type(false, code)?;
         subs.push((u8::try_from(code).unwrap_or(0), num_sub, pred));
     }
+    let no_sub_mb_part_size_less_than_8x8 = subs.iter().all(|&(_, num_sub, _)| num_sub == 1);
     let n0 = header.num_ref_idx_l0_active_minus1;
     for (i, &(code, num_sub, pred)) in subs.iter().enumerate() {
         let Some(pred) = pred else { continue };
@@ -3056,7 +3239,7 @@ fn decode_sub_mb_pred_cabac(
             }
         }
     }
-    Ok(())
+    Ok(no_sub_mb_part_size_less_than_8x8)
 }
 
 /// A 4-element `Vec` without touching `Budget` for a fixed, tiny, always-4
@@ -3151,6 +3334,7 @@ fn decode_residual_cabac(
     kind: &MbKind,
     cbp_luma: u8,
     cbp_chroma: u8,
+    transform_8x8: bool,
     mb_x: u32,
     mb_y: u32,
 ) -> Result<MbResidual> {
@@ -3205,42 +3389,80 @@ fn decode_residual_cabac(
         }
     }
 
-    for i8x8 in 0..4u32 {
-        for i4x4 in 0..4u32 {
-            let blk = i8x8 * 4 + i4x4;
-            let (bx, by) = blk_xy(blk);
-            let x = mb_x * 4 + bx;
-            let y = mb_y * 4 + by;
-            if cbp_luma & (1 << i8x8) != 0 {
-                let left_bit = grids.cbf_luma_at(x.wrapping_sub(1), y);
-                let above_bit = grids.cbf_luma_at(x, y.wrapping_sub(1));
-                let left_mb = x.checked_sub(1).and_then(|_| {
-                    if bx == 0 { grids.mb_left(mb_x, mb_y) } else { current_mb_info }
-                });
-                let above_mb = y.checked_sub(1).and_then(|_| {
-                    if by == 0 { grids.mb_above(mb_x, mb_y) } else { current_mb_info }
-                });
-                let left_avail = x > 0 && left_bit.is_some();
-                let above_avail = y > 0 && above_bit.is_some();
-                let cond_a = cbf_cond_term(left_mb, left_avail, left_bit.unwrap_or(false), current_is_intra);
-                let cond_b = cbf_cond_term(above_mb, above_avail, above_bit.unwrap_or(false), current_is_intra);
-                let inc = cond_a + 2 * cond_b;
-                let ctx_arr = if is_16x16 { &mut ctx.cbf_luma_ac } else { &mut ctx.cbf_luma4x4 };
-                let coded = decide(cabac, ctx_arr, inc as usize) == 1;
-                grids.set_cbf_luma(x, y, coded);
-                if coded {
-                    let (max_num_coeff, category) = if is_16x16 {
-                        (15, &mut ctx.residual_luma_ac)
-                    } else {
-                        (16, &mut ctx.residual_luma4x4)
-                    };
-                    let res = residual_block_cabac(cabac, category, max_num_coeff, budget)?;
-                    if let Some(slot) = out.luma_ac.get_mut(blk as usize) {
-                        *slot = Some(res);
-                    }
+    if transform_8x8 {
+        // `ctxBlockCat` 5: one residual block per 8x8 quadrant, no
+        // separate `coded_block_flag` at all (see
+        // `crate::cabac_residual::ContextCategory::Luma8x8`'s own doc for
+        // why) -- gated purely by `CodedBlockPatternLuma`'s own bit, the
+        // same bit `decode_cbp_cabac` already reads regardless of
+        // transform size. `grids.set_cbf_luma`'s own four writes per
+        // quadrant duplicate that one bit across all four
+        // `luma4x4BlkIdx` sub-positions this quadrant covers -- not
+        // because this macroblock has four separate flags, but so a
+        // *future* 4x4-transform neighbour's own `ctxBlockCat` 2
+        // `coded_block_flag` derivation (clause 9.3.3.1.1.9's own
+        // cross-transform-size substitution: "when the neighbouring
+        // block uses a different transform size, treat any of its
+        // covering blocks as coded iff its own coded_block_pattern bit
+        // was set") reads the right answer back from the *same* grid
+        // `crate::mb` already threads through every other macroblock
+        // kind, with no separate cross-transform-size code path needed
+        // at the read side.
+        for i8x8 in 0..4u32 {
+            let (qx, qy) = (i8x8 & 1, i8x8 >> 1);
+            let x0 = mb_x * 4 + qx * 2;
+            let y0 = mb_y * 4 + qy * 2;
+            let coded = cbp_luma & (1 << i8x8) != 0;
+            if coded {
+                let res = residual_block_cabac(cabac, &mut ctx.residual_luma8x8, 64, budget)?;
+                if let Some(slot) = out.luma8x8.get_mut(i8x8 as usize) {
+                    *slot = Some(res);
                 }
-            } else {
-                grids.set_cbf_luma(x, y, false);
+            }
+            for dy in 0..2u32 {
+                for dx in 0..2u32 {
+                    grids.set_cbf_luma(x0 + dx, y0 + dy, coded);
+                }
+            }
+        }
+    } else {
+        for i8x8 in 0..4u32 {
+            for i4x4 in 0..4u32 {
+                let blk = i8x8 * 4 + i4x4;
+                let (bx, by) = blk_xy(blk);
+                let x = mb_x * 4 + bx;
+                let y = mb_y * 4 + by;
+                if cbp_luma & (1 << i8x8) != 0 {
+                    let left_bit = grids.cbf_luma_at(x.wrapping_sub(1), y);
+                    let above_bit = grids.cbf_luma_at(x, y.wrapping_sub(1));
+                    let left_mb = x.checked_sub(1).and_then(|_| {
+                        if bx == 0 { grids.mb_left(mb_x, mb_y) } else { current_mb_info }
+                    });
+                    let above_mb = y.checked_sub(1).and_then(|_| {
+                        if by == 0 { grids.mb_above(mb_x, mb_y) } else { current_mb_info }
+                    });
+                    let left_avail = x > 0 && left_bit.is_some();
+                    let above_avail = y > 0 && above_bit.is_some();
+                    let cond_a = cbf_cond_term(left_mb, left_avail, left_bit.unwrap_or(false), current_is_intra);
+                    let cond_b = cbf_cond_term(above_mb, above_avail, above_bit.unwrap_or(false), current_is_intra);
+                    let inc = cond_a + 2 * cond_b;
+                    let ctx_arr = if is_16x16 { &mut ctx.cbf_luma_ac } else { &mut ctx.cbf_luma4x4 };
+                    let coded = decide(cabac, ctx_arr, inc as usize) == 1;
+                    grids.set_cbf_luma(x, y, coded);
+                    if coded {
+                        let (max_num_coeff, category) = if is_16x16 {
+                            (15, &mut ctx.residual_luma_ac)
+                        } else {
+                            (16, &mut ctx.residual_luma4x4)
+                        };
+                        let res = residual_block_cabac(cabac, category, max_num_coeff, budget)?;
+                        if let Some(slot) = out.luma_ac.get_mut(blk as usize) {
+                            *slot = Some(res);
+                        }
+                    }
+                } else {
+                    grids.set_cbf_luma(x, y, false);
+                }
             }
         }
     }

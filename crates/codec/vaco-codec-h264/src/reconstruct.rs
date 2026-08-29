@@ -61,14 +61,15 @@
     reason = "exercised by this module's own tests; not yet wired into vaco-codec-h264's own public decode/receive_frame surface"
 )]
 
-use vaco_codec_dsp_idct::h264::idct4x4;
+use vaco_codec_dsp_idct::h264::{idct4x4, idct8x8};
 
-use crate::dequant::{chroma_qp, dequant_4x4, dequant_chroma_dc_2x2, dequant_luma_dc_4x4};
+use crate::dequant::{chroma_qp, dequant_4x4, dequant_8x8, dequant_chroma_dc_2x2, dequant_luma_dc_4x4};
 use crate::intra::{
-    Neighbours4, Neighbours16, NeighboursChroma, predict_intra4x4, predict_intra16x16, predict_intra_chroma,
+    Neighbours4, Neighbours8, Neighbours16, NeighboursChroma, predict_intra4x4, predict_intra8x8,
+    predict_intra16x16, predict_intra_chroma,
 };
 use crate::mb::{MbResidual, MbSummary, blk_xy};
-use crate::scan::{build_luma_ac_block, inverse_scan_chroma_dc, inverse_scan_luma_dc};
+use crate::scan::{build_luma_ac_block, inverse_scan_chroma_dc, inverse_scan_luma_8x8, inverse_scan_luma_dc};
 
 /// Clause 8.5.1/8.5.2, `Intra_16x16` luma only: predict, then add clause
 /// 8.5.2's own per-4x4-block dequantised-and-transformed residual, then
@@ -266,6 +267,24 @@ impl PictureBuffer {
         self.mark_block_decoded(x, y);
     }
 
+    /// [`Self::write_block4`]'s own 8x8 counterpart -- marks all four 4x4
+    /// sub-blocks this 8x8 area covers as decoded (the same granularity
+    /// [`Self::decoded_4x4`] already tracks at, so a later `Intra_4x4`
+    /// neighbour reading back into an `Intra_8x8`-or-inter-8x8-transform
+    /// macroblock's own samples needs no special case).
+    fn write_block8(&mut self, x: u32, y: u32, block: [[u8; 8]; 8]) {
+        for (i, row) in block.iter().enumerate() {
+            for (j, &v) in row.iter().enumerate() {
+                self.set_pixel(x + j as u32, y + i as u32, v);
+            }
+        }
+        for dy in 0..2u32 {
+            for dx in 0..2u32 {
+                self.mark_block_decoded(x + dx * 4, y + dy * 4);
+            }
+        }
+    }
+
     const fn chroma_width(&self) -> u32 {
         self.mbs_wide * 8
     }
@@ -385,6 +404,93 @@ fn intra4x4_neighbours(buf: &PictureBuffer, x: i32, y: i32) -> Neighbours4 {
         left_available,
         left,
         corner,
+    }
+}
+
+/// [`intra4x4_neighbours`]'s own `Intra_8x8` counterpart -- clause
+/// 8.3.2.2's 25 neighbouring samples, plus the same top-right substitution
+/// rule at 8-sample width instead of 4.
+///
+/// `i8x8` (0..=3, this macroblock's own `luma8x8BlkIdx`) is needed for one
+/// genuinely 8x8-specific rule with no 4x4 equivalent: JM 19.1's
+/// `intra8x8_pred_normal.c` forces the top-right neighbour unavailable
+/// outright for `luma8x8BlkIdx == 3` (`pix_c.available = pix_c.available
+/// && !(ioff == 8 && joff == 8)`, checked in every one of that file's own
+/// nine mode functions), regardless of whether this crate's own
+/// [`PictureBuffer::available`] would otherwise say yes. It would: block
+/// 3's own top-right diagonal, unlike `Intra_4x4`'s luma4x4BlkIdx 3/11
+/// special case (which [`PictureBuffer`]'s own doc notes falls out of
+/// z-order "for free"), lands on block 1 (top-right quadrant), which *is*
+/// already reconstructed by the time block 3 runs -- so without this
+/// explicit override, this crate's own general-purpose availability check
+/// would silently disagree with the standard here.
+fn intra8x8_neighbours(buf: &PictureBuffer, i8x8: u32, x: i32, y: i32) -> Neighbours8 {
+    let top_available = (0..8).all(|dx| buf.available(x + dx, y - 1));
+    let top = core::array::from_fn(|dx| buf.pixel(x + coord(dx), y - 1));
+    let left_available = (0..8).all(|dy| buf.available(x - 1, y + dy));
+    let left = core::array::from_fn(|dy| buf.pixel(x - 1, y + coord(dy)));
+    let corner_available = buf.available(x - 1, y - 1);
+    let corner = if corner_available { buf.pixel(x - 1, y - 1) } else { 0 };
+
+    let top_right_forced_unavailable = i8x8 == 3;
+    let top_right_available =
+        !top_right_forced_unavailable && (8..16).all(|dx| buf.available(x + dx, y - 1));
+    let top_right = if top_right_available {
+        core::array::from_fn(|dx| buf.pixel(x + 8 + coord(dx), y - 1))
+    } else if top_available {
+        // Clause 8.3.2.2's own substitution: p[7,-1]'s value stands in for
+        // all eight, and they are treated as available from here on.
+        [top[7]; 8]
+    } else {
+        [0; 8]
+    };
+
+    Neighbours8 {
+        top_available,
+        top,
+        top_right,
+        left_available,
+        left,
+        corner_available,
+        corner,
+    }
+}
+
+/// Reconstructs one whole `Intra_8x8` macroblock's luma plane into `buf` --
+/// [`reconstruct_intra4x4_mb`]'s own 8x8 counterpart, same per-block
+/// interleaved predict/reconstruct order (four `luma8x8BlkIdx` quadrants,
+/// raster order, each one fully written before the next reads its own
+/// neighbours) but at 8x8 granularity throughout: [`predict_intra8x8`] for
+/// prediction, [`dequant_8x8`]/`idct8x8` for the residual (no
+/// `dc_already_scaled` split -- the 8x8 transform has no macroblock-wide
+/// DC term of its own, see [`dequant_8x8`]'s own doc).
+#[allow(
+    clippy::many_single_char_names,
+    reason = "x/y/n/c/d/r/p mirror clause 8.5's own variable names (pixel position, neighbours, coefficients, dequantised, residual, prediction sample) -- the same convention reconstruct_intra4x4_mb already uses"
+)]
+fn reconstruct_intra8x8_mb(buf: &mut PictureBuffer, mb_x: u32, mb_y: u32, qpy: i32, residual: &MbResidual) {
+    for i8x8 in 0..4u32 {
+        let (qx, qy) = (i8x8 & 1, i8x8 >> 1);
+        let x = mb_x * 16 + qx * 8;
+        let y = mb_y * 16 + qy * 8;
+        let n = intra8x8_neighbours(buf, i8x8, coord(x), coord(y));
+        let mode = residual.intra8x8_pred_mode.get(i8x8 as usize).copied().unwrap_or(2);
+        let pred = predict_intra8x8(mode, n);
+
+        let ac = residual.luma8x8.get(i8x8 as usize).and_then(Option::as_ref);
+        let c = inverse_scan_luma_8x8(ac);
+        let d = dequant_8x8(&c, qpy);
+        let r = idct8x8(&d);
+
+        let mut block = [[0u8; 8]; 8];
+        for (i, row) in block.iter_mut().enumerate() {
+            for (j, v) in row.iter_mut().enumerate() {
+                let p = i32::from(pred.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0));
+                let sum = p + r.get(i * 8 + j).copied().unwrap_or(0);
+                *v = sum.clamp(0, 255) as u8;
+            }
+        }
+        buf.write_block8(x, y, block);
     }
 }
 
@@ -598,10 +704,14 @@ fn reconstruct_inter_mb(
     ref_height: u32,
 ) {
     let empty: &[u8] = &[];
-    for blk in 0..16u32 {
+    // Motion compensation is unaffected by `transform_size_8x8_flag` --
+    // clause 8.4's own prediction-sample derivation never reads it, only
+    // the residual (clause 7.3.5.3.3) does -- so every 4x4 block's own
+    // predicted samples are always computed the same way, one quadrant's
+    // worth (four 4x4 blocks) gathered into `pred8` before either residual
+    // path below reads from it.
+    let fetch_pred_4x4 = |x: u32, y: u32, blk: u32| -> [[u8; 4]; 4] {
         let (bx, by) = blk_xy(blk);
-        let x = mb.mb_x * 16 + bx * 4;
-        let y = mb.mb_y * 16 + by * 4;
         let info = mb.mv_blocks[(by * 4 + bx) as usize];
         let ref_idx = info.ref_idx_l0().max(0) as usize;
         let plane = ref_list0.get(ref_idx).copied().unwrap_or(empty);
@@ -609,19 +719,14 @@ fn reconstruct_inter_mb(
         let (mvx, mvy) = (i32::from(mvx), i32::from(mvy));
         let (int_dx, frac_x) = (mvx >> 2, (mvx & 3) as u32);
         let (int_dy, frac_y) = (mvy >> 2, (mvy & 3) as u32);
-
         let fetch = |ax: i32, ay: i32| -> u8 {
             if plane.is_empty() {
                 return 0;
             }
             let cx = ax.clamp(0, ref_width as i32 - 1) as u32;
             let cy = ay.clamp(0, ref_height as i32 - 1) as u32;
-            plane
-                .get((cy * ref_width + cx) as usize)
-                .copied()
-                .unwrap_or(0)
+            plane.get((cy * ref_width + cx) as usize).copied().unwrap_or(0)
         };
-
         let mut pred = [[0u8; 4]; 4];
         for (i, row) in pred.iter_mut().enumerate() {
             for (j, v) in row.iter_mut().enumerate() {
@@ -630,6 +735,48 @@ fn reconstruct_inter_mb(
                 *v = crate::interp::luma_qpel_sample(fetch, full_x, full_y, frac_x, frac_y);
             }
         }
+        pred
+    };
+
+    if mb.transform_8x8 {
+        for i8x8 in 0..4u32 {
+            let (qx, qy) = (i8x8 & 1, i8x8 >> 1);
+            let x = mb.mb_x * 16 + qx * 8;
+            let y = mb.mb_y * 16 + qy * 8;
+            let mut pred8 = [[0u8; 8]; 8];
+            for i4x4 in 0..4u32 {
+                let (sbx, sby) = blk_xy(i4x4);
+                let blk = i8x8 * 4 + i4x4;
+                let sub = fetch_pred_4x4(x + sbx * 4, y + sby * 4, blk);
+                for (i, row) in sub.iter().enumerate() {
+                    for (j, &v) in row.iter().enumerate() {
+                        if let Some(dst) = pred8.get_mut(sby as usize * 4 + i).and_then(|r| r.get_mut(sbx as usize * 4 + j)) {
+                            *dst = v;
+                        }
+                    }
+                }
+            }
+            let ac = mb.residual.luma8x8.get(i8x8 as usize).and_then(Option::as_ref);
+            let c = inverse_scan_luma_8x8(ac);
+            let d = dequant_8x8(&c, mb.qpy);
+            let r = idct8x8(&d);
+            let mut block = [[0u8; 8]; 8];
+            for (i, row) in block.iter_mut().enumerate() {
+                for (j, v) in row.iter_mut().enumerate() {
+                    let sum = i32::from(pred8[i][j]) + r.get(i * 8 + j).copied().unwrap_or(0);
+                    *v = sum.clamp(0, 255) as u8;
+                }
+            }
+            buf.write_block8(x, y, block);
+        }
+        return;
+    }
+
+    for blk in 0..16u32 {
+        let (bx, by) = blk_xy(blk);
+        let x = mb.mb_x * 16 + bx * 4;
+        let y = mb.mb_y * 16 + by * 4;
+        let pred = fetch_pred_4x4(x, y, blk);
 
         let ac = mb
             .residual
@@ -853,7 +1000,7 @@ pub(crate) fn reconstruct_picture(
                 "vaco-codec-h264: I_PCM picture reconstruction is not implemented",
             ));
         }
-        let is_inter = !mb.is_intra16x16 && !mb.is_intra4x4;
+        let is_inter = !mb.is_intra16x16 && !mb.is_intra4x4 && !mb.is_intra8x8;
         if mb.is_intra16x16 {
             let x = mb.mb_x * 16;
             let y = mb.mb_y * 16;
@@ -880,6 +1027,8 @@ pub(crate) fn reconstruct_picture(
             }
         } else if mb.is_intra4x4 {
             reconstruct_intra4x4_mb(&mut buf, mb.mb_x, mb.mb_y, mb.qpy, &mb.residual);
+        } else if mb.is_intra8x8 {
+            reconstruct_intra8x8_mb(&mut buf, mb.mb_x, mb.mb_y, mb.qpy, &mb.residual);
         } else {
             reconstruct_inter_mb(&mut buf, mb, &ref_list0_luma, ref_width, ref_height);
         }

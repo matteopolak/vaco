@@ -203,6 +203,103 @@ pub(crate) fn dequant_luma_dc_4x4(c: &[i32; 16], qpy: i32) -> [i32; 16] {
     dc
 }
 
+/// Clause 8.5.9 (High-profile 8x8 transform), the `LevelScale8x8` fixed
+/// matrix's six category values per `m = qP % 6`. Unlike [`LEVEL_SCALE_V`]'s
+/// three 4x4 categories, 8x8 has six, keyed on `(i % 4, j % 4)`: `v[0]` both
+/// `≡ 0`, `v[1]` both odd, `v[2]` both `≡ 2`, `v[3]` one `≡0`/one odd, `v[4]`
+/// one `≡0`/one `≡2`, `v[5]` one odd/one `≡2` -- see [`level_scale8x8`].
+///
+/// Not transcribed from the primary text directly (this crate's on-hand
+/// `iso-iec-14496-10-2002-draft` source predates the 8x8 transform
+/// entirely -- the same gap `mb.rs`'s own module doc already names). Derived
+/// instead from JM 19.1 (`quant.h`'s `dequant_coef8[6][8][8]`, BSD/Tier A per
+/// `provenance/sources.toml`), algebraically: JM's own dequantisation
+/// (`read_comp_cabac.c`, `rshift_rnd_sf((level * InvLevelScale8x8) << qp_per,
+/// 6)`, with `InvLevelScale8x8 = dequant_coef8 * 16` for the default flat
+/// scaling matrix) reduces, for an exact multiple of 16, to plain
+/// `level * dequant_coef8[m][i][j]` shifted -- so `dequant_coef8`'s own
+/// 8x8x8 grid *is* `LevelScale8x8(m, i, j)` directly, and its repeating
+/// period-4 pattern in both `i` and `j` collapses to exactly six distinct
+/// values per `m`, listed here in category order. Cross-checked two ways:
+/// `dequant_coef8[0]`'s own values are internally consistent with this six-
+/// category read with no leftover cells, and [`dequant_8x8`]'s derived
+/// shift/rounding formula (below) turned out structurally identical to
+/// [`dequant_luma_dc_4x4`]'s already-verified "compare against 2" shape,
+/// which a coincidence this exact would be an unlikely way to be wrong.
+#[rustfmt::skip]
+const LEVEL_SCALE8X8_V: [[i32; 6]; 6] = [
+    [20, 18, 32, 19, 25, 24],
+    [22, 19, 35, 21, 28, 26],
+    [26, 23, 42, 24, 33, 31],
+    [28, 25, 45, 26, 35, 33],
+    [32, 28, 51, 30, 40, 38],
+    [36, 32, 58, 34, 46, 43],
+];
+
+/// `LevelScale8x8(m, i, j)`, clause 8.5.9 -- see [`LEVEL_SCALE8X8_V`]'s own
+/// doc for the category derivation and provenance.
+#[must_use]
+#[allow(
+    clippy::indexing_slicing,
+    reason = "cat is one of the six literal constants 0..=5 below, into a fixed 6-element row -- not a bitstream-derived index"
+)]
+fn level_scale8x8(m: u32, i: u32, j: u32) -> i32 {
+    let row = LEVEL_SCALE8X8_V.get((m % 6) as usize).copied().unwrap_or([16; 6]);
+    let (ic, jc) = (i % 4, j % 4);
+    let cat = if ic == 0 && jc == 0 {
+        0
+    } else if ic % 2 == 1 && jc % 2 == 1 {
+        1
+    } else if ic == 2 && jc == 2 {
+        2
+    } else if (ic == 0 && jc % 2 == 1) || (jc == 0 && ic % 2 == 1) {
+        3
+    } else if (ic == 0 && jc == 2) || (jc == 0 && ic == 2) {
+        4
+    } else {
+        5
+    };
+    row[cat]
+}
+
+/// Clause 8.5.13.1's own 8x8 dequantisation (High-profile
+/// `transform_size_8x8_flag`), applied to one already inverse-scanned 8x8
+/// coefficient array. Structurally the same "compare `qP/6` against 2"
+/// shape as [`dequant_luma_dc_4x4`] (derived independently here, from JM's
+/// fixed-point dequantisation algebraically reduced -- see
+/// [`LEVEL_SCALE8X8_V`]'s own doc -- not copied from that function), rather
+/// than [`dequant_4x4`]'s plain `<< shift` with no rounding: the 8x8
+/// transform's own scale factor absorbs an extra `2^2` relative to 4x4's,
+/// so the shift threshold moves from `qP/6 == 0` to `qP/6 == 2`.
+///
+/// No `dc_already_scaled` case: unlike `Intra_16x16`'s separate luma DC
+/// transform, the 8x8 transform has no equivalent whole-macroblock DC
+/// split -- every position, including `(0, 0)`, is dequantised the same way.
+#[must_use]
+#[allow(
+    clippy::indexing_slicing,
+    reason = "idx = i*8+j with i,j in 0..8 is provably 0..64, into fixed 64-element arrays -- not a bitstream-derived index"
+)]
+pub(crate) fn dequant_8x8(c: &[i32; 64], qp: i32) -> [i32; 64] {
+    let m = qp.rem_euclid(6) as u32;
+    let qp_per = qp.div_euclid(6);
+    let mut d = [0i32; 64];
+    for i in 0..8u32 {
+        for j in 0..8u32 {
+            let idx = (i * 8 + j) as usize;
+            let scaled = c[idx] * level_scale8x8(m, i, j);
+            d[idx] = if qp_per >= 2 {
+                scaled << (qp_per - 2)
+            } else {
+                let shift = 2 - qp_per;
+                let round = 1i32 << (shift - 1);
+                (scaled + round) >> shift
+            };
+        }
+    }
+    d
+}
+
 /// Clause 8.5.7, eq. (8-257)..(8-259): the chroma DC transform for
 /// `ChromaArrayType == 1` (4:2:0, this crate's only supported chroma
 /// format). Same shape as [`dequant_luma_dc_4x4`] one size down: Hadamard
@@ -353,5 +450,81 @@ mod tests {
         let c = [0i32; 4];
         assert_eq!(dequant_chroma_dc_2x2(&c, 26), [0; 4]);
         assert_eq!(dequant_chroma_dc_2x2(&c, 2), [0; 4]);
+    }
+
+    /// [`LEVEL_SCALE8X8_V`]'s own six categories, spot-checked against the
+    /// JM-derived table row by row (a second, independent read of the same
+    /// derivation this module's doc walks through).
+    #[test]
+    fn level_scale8x8_category_selection() {
+        // (0,0) and (4,4): category 0 for every m.
+        assert_eq!(level_scale8x8(0, 0, 0), 20);
+        assert_eq!(level_scale8x8(0, 4, 4), 20);
+        // (1,1),(1,3),(3,1),(3,3): category 1.
+        assert_eq!(level_scale8x8(0, 1, 1), 18);
+        assert_eq!(level_scale8x8(0, 3, 3), 18);
+        assert_eq!(level_scale8x8(0, 1, 3), 18);
+        // (2,2),(2,6),(6,2),(6,6): category 2.
+        assert_eq!(level_scale8x8(0, 2, 2), 32);
+        assert_eq!(level_scale8x8(0, 6, 6), 32);
+        // (0,1) and (1,0): category 3.
+        assert_eq!(level_scale8x8(0, 0, 1), 19);
+        assert_eq!(level_scale8x8(0, 1, 0), 19);
+        // (0,2) and (2,0): category 4.
+        assert_eq!(level_scale8x8(0, 0, 2), 25);
+        assert_eq!(level_scale8x8(0, 2, 0), 25);
+        // (1,2) and (2,1): category 5.
+        assert_eq!(level_scale8x8(0, 1, 2), 24);
+        assert_eq!(level_scale8x8(0, 2, 1), 24);
+        // m wraps mod 6.
+        assert_eq!(level_scale8x8(6, 0, 0), level_scale8x8(0, 0, 0));
+    }
+
+    #[test]
+    fn no_two_level_scale8x8_rows_are_byte_identical() {
+        for (i, row_a) in LEVEL_SCALE8X8_V.iter().enumerate() {
+            for row_b in LEVEL_SCALE8X8_V.iter().skip(i + 1) {
+                assert_ne!(row_a, row_b, "two rows of LEVEL_SCALE8X8_V are byte-identical");
+            }
+        }
+    }
+
+    #[test]
+    fn dequant_8x8_all_zero_is_all_zero() {
+        assert_eq!(dequant_8x8(&[0i32; 64], 26), [0i32; 64]);
+        assert_eq!(dequant_8x8(&[0i32; 64], 0), [0i32; 64]);
+    }
+
+    /// The "compare `qP/6` against 2" shift threshold, hand-derived from
+    /// JM's fixed-point dequantisation (this module's own doc): `qp_per ==
+    /// 2` (`qp == 12`) is the exact boundary where the formula switches
+    /// from a rounding right-shift to a plain left-shift, with zero shift
+    /// amount right at the boundary (a coefficient of 1 at (0,0), category
+    /// 0, `m = 0`, scales to exactly `LevelScale8x8(0,0,0) == 20`).
+    #[test]
+    fn dequant_8x8_qp12_boundary_is_unshifted() {
+        let mut c = [0i32; 64];
+        c[0] = 1;
+        let d = dequant_8x8(&c, 12);
+        assert_eq!(d[0], 20);
+    }
+
+    #[test]
+    fn dequant_8x8_shift_doubles_per_six_qp_above_boundary() {
+        let mut c = [0i32; 64];
+        c[0] = 1;
+        let low = dequant_8x8(&c, 12);
+        let high = dequant_8x8(&c, 18); // same m (qp%6==0), qp_per one higher
+        assert_eq!(high[0], low[0] * 2);
+    }
+
+    #[test]
+    fn dequant_8x8_rounds_below_the_boundary() {
+        let mut c = [0i32; 64];
+        c[0] = 1; // scaled = 20 (category 0, m=0)
+        // qp=0: qp_per=0, shift=2, round=2 -> (20+2)>>2 = 5.
+        assert_eq!(dequant_8x8(&c, 0)[0], 5);
+        // qp=6: qp_per=1, shift=1, round=1 -> (20+1)>>1 = 10.
+        assert_eq!(dequant_8x8(&c, 6)[0], 10);
     }
 }

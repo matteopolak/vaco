@@ -164,6 +164,25 @@ pub(crate) const PREV_INTRA4X4: Init = (13, 41);
 /// `0/0/0`), every slice type.
 pub(crate) const REM_INTRA4X4: Init = (3, 62);
 
+/// `transform_size_8x8_flag` (High profile). ctxIdx 399..=401, `ctxIdxInc`
+/// = `condTermFlagA + condTermFlagB` (clause 9.3.3.1.1.10: each neighbour
+/// contributes its own decoded `transform_size_8x8_flag`, 0 if that
+/// neighbour is unavailable), column order `[I_or_SI, idc0, idc1, idc2]`.
+///
+/// This crate's on-hand `iso-iec-14496-10-2002-draft` source predates the
+/// 8x8 transform entirely (`mb.rs`'s own module doc names the same gap),
+/// so unlike every other table in this file, these three rows are not
+/// transcribed from that primary text -- they are read from JM 19.1's
+/// `lib/lcommon/ctx_tables.h::INIT_TRANSFORM_SIZE_I`/`_P` (BSD/Tier A per
+/// `provenance/sources.toml`), the same source and confidence level
+/// `cabac_residual.rs`'s own `ctxBlockCat` 5 tables use.
+#[rustfmt::skip]
+pub(crate) const TRANSFORM_SIZE_8X8: [[Init; 4]; 3] = [
+    [(31, 21), (12, 40), (25, 32), (21, 33)],
+    [(31, 31), (11, 51), (21, 49), (19, 50)],
+    [(25, 50), (14, 59), (21, 54), (17, 61)],
+];
+
 /// `coded_block_pattern`'s luma prefix (`FL` of `CodedBlockPatternLuma`,
 /// 4 bits, `binIdx` == the 8x8 luma block index directly). ctxIdx 73..=76,
 /// column order `[I_or_SI, idc0, idc1, idc2]`.
@@ -359,6 +378,10 @@ mod table_distinctness {
                 "CBF_CHROMA_AC",
                 CBF_CHROMA_AC.iter().flatten().copied().collect(),
             ),
+            (
+                "TRANSFORM_SIZE_8X8",
+                TRANSFORM_SIZE_8X8.iter().flatten().copied().collect(),
+            ),
         ]
     }
 
@@ -402,8 +425,8 @@ mod table_distinctness {
         let tables = named_tables();
         assert_eq!(
             tables.len(),
-            21,
-            "expected exactly 21 named tables in this file"
+            22,
+            "expected exactly 22 named tables in this file"
         );
         for (name, vals) in &tables {
             assert!(!vals.is_empty(), "table {name} flattened to zero entries");
