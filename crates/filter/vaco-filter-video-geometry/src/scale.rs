@@ -3,11 +3,36 @@
 //! This filter does **not** reimplement any resampling: it evaluates `w`/`h`
 //! into concrete pixel dimensions and hands the actual work to
 //! [`vaco_scale::Scaler`], per this crate's brief ("`scale` the *filter* is a
-//! thin adapter... not a reimplementation"). Pixel-format conversion
-//! (`scale`'s own `pix_fmts` machinery, and the `in_color_matrix`/
-//! `out_color_matrix` options) is **not implemented** — the output format is
-//! always the input format. Chain `format=` after `scale=` for the common
-//! case of resize-and-convert.
+//! thin adapter... not a reimplementation").
+//!
+//! # Pixel format
+//!
+//! `scale`'s own `pix_fmts` option and the `in_color_matrix`/
+//! `out_color_matrix` options are **not implemented**, and a plain
+//! `-vf scale=W:H` still keeps the source's pixel format unchanged — `create`
+//! still declares [`NodeFormats::passthrough`], tying the input and output
+//! pads to the same value, exactly as before.
+//!
+//! What changed: [`Filter::filter_frame`] no longer *assumes* the tie means
+//! the input and output formats are the same value it can read off the input
+//! frame. It reads back whatever [`Filter::configure`] resolved the *output*
+//! link to and asks [`vaco_scale::Scaler`] to convert straight to it in the
+//! same pass that resizes. For a plain `-vf scale=W:H` the tie still forces
+//! that value to equal the input's, so this is a no-op change there.
+//!
+//! It stops being a no-op for the node [`vaco_filter_graph::convert`] splices
+//! in automatically to repair a pixel-format mismatch elsewhere in the graph
+//! (`VIDEO_CONVERTER` names this same filter). That node is built through this
+//! module's [`create`] too, but the negotiator supplies its own
+//! [`vaco_filter_core::negotiate::NodeFormats`] for it — concrete, untied,
+//! genuinely different formats on each pad — overriding what `create` would
+//! have declared on its own. Before this fix, an auto-inserted `scale` node
+//! reported success at a `yuv420p` → `rgb24` conversion while its
+//! `filter_frame` silently built both `vaco_scale::ImageSpec`s from the
+//! *input* frame's format, leaving the bytes unconverted — E2E-GAPS 1's
+//! `-vf scale=…,-pix_fmt rgb24` case, which failed further downstream (a png
+//! encoder refusing the still-`yuv420p` frame, or the negotiator's own round
+//! bound, depending on how the mismatch was phrased).
 //!
 //! # Measured (ffmpeg 8.1): `w`/`h` are not symmetric
 //!
@@ -81,6 +106,11 @@ pub(crate) struct Filter {
     w: Axis,
     h: Axis,
     out_wh: (u32, u32),
+    /// The pixel format [`Filter::configure`] resolved the output link to.
+    /// `None` until the first `configure`, which is the only state
+    /// [`Filter::filter_frame`] needs to know whether a format conversion
+    /// (as opposed to a pure resize) is required.
+    out_format: Option<PixFmt>,
 }
 
 impl Filter {
@@ -219,12 +249,24 @@ impl FrameFilter for Filter {
         };
         if let Some(mut out) = ctx.output_link(0).cloned() {
             if let LinkFormat::Video {
+                format: out_format,
                 width: w,
                 height: h,
                 sample_aspect_ratio: sar,
                 ..
             } = &mut out
             {
+                // Read back what negotiation resolved the *output* link to,
+                // rather than assuming it must equal the input: a plain
+                // `-vf scale=W:H` still ties the two pads together (see this
+                // module's doc), so `*out_format` equals the input's format
+                // there and this is a no-op read. An auto-inserted converter
+                // node — spliced in with no such tie, to bridge a real
+                // pixel-format mismatch — resolves its output pad to
+                // something concretely different, and `filter_frame` below
+                // now actually converts to it instead of silently keeping
+                // the source format.
+                self.out_format = Some(*out_format);
                 *w = out_w;
                 *h = out_h;
                 *sar = new_sar;
@@ -245,12 +287,13 @@ impl FrameFilter for Filter {
             return Ok(FrameOut::One(input));
         };
         let (out_w, out_h) = self.out_wh;
-        if out_w == width && out_h == height {
+        let out_format = self.out_format.unwrap_or(format);
+        if out_w == width && out_h == height && out_format == format {
             return Ok(FrameOut::One(input));
         }
-        let mut out = ctx.pool().acquire_video(format, out_w, out_h)?;
+        let mut out = ctx.pool().acquire_video(out_format, out_w, out_h)?;
         let src_spec = ImageSpec::new(format, width, height).with_color(input.color);
-        let dst_spec = ImageSpec::new(format, out_w, out_h).with_color(input.color);
+        let dst_spec = ImageSpec::new(out_format, out_w, out_h).with_color(input.color);
         let mut scaler = Scaler::new(&src_spec, &dst_spec, &ScaleOptions::default())?;
         scaler.scale_frame(&input, &mut out)?;
         out.pts = input.pts;
@@ -309,6 +352,7 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
             w: w_axis,
             h: h_axis,
             out_wh: (0, 0),
+            out_format: None,
         })),
     })
 }
@@ -323,6 +367,7 @@ mod tests {
             w: parse_axis(w).unwrap(),
             h: parse_axis(h).unwrap(),
             out_wh: (0, 0),
+            out_format: None,
         }
     }
 

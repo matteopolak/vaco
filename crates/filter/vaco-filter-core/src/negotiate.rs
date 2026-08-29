@@ -937,14 +937,18 @@ pub fn negotiate(
     let mut round = 0u32;
     loop {
         let outcome = solve_once(plan)?;
-        let found = outcome.conflicts;
-        if found.is_empty() {
+        if outcome.conflicts.is_empty() {
             return Ok(Assignment {
                 links: outcome.link_formats,
                 inserted,
                 rounds: round,
             });
         }
+        let Outcome {
+            conflicts: found,
+            resolved_sides,
+            ..
+        } = outcome;
         if mode == AutoConvert::None {
             conflicts.extend(found.into_iter().map(|mut c| {
                 c.auto_convert_disabled = true;
@@ -972,10 +976,33 @@ pub fn negotiate(
             let Some(ends) = plan.links.get(link.0 as usize).copied() else {
                 continue;
             };
-            let (Some(up), Some(down)) = (plan.pad_set(ends.src), plan.pad_set(ends.dst)) else {
+            let (Some(declared_up), Some(declared_down)) =
+                (plan.pad_set(ends.src), plan.pad_set(ends.dst))
+            else {
                 continue;
             };
-            let (up, down) = (up.clone(), down.clone());
+            // Start from what the two pads declare, then overlay whichever
+            // properties actually conflicted with what the solver had *resolved*
+            // them to just before the conflicting join — which can differ from
+            // the raw declaration whenever a tie propagates a constraint from a
+            // sibling pad. `format`'s own input pad declares nothing, but a tie
+            // to its output (forced to `rgb24` by `-pix_fmt`) means the input is
+            // just as forced; handing the factory the raw `None` instead of the
+            // resolved `rgb24` was why `target()` fell back to "pass upstream
+            // through unchanged" and spliced in a converter that provably could
+            // not fix the conflict it was inserted for, tripping the round
+            // bound every time instead of ever finding `rgb24`.
+            let mut up = declared_up.clone();
+            let mut down = declared_down.clone();
+            for &property in &properties {
+                if let Some((_, _, resolved_up, resolved_down)) = resolved_sides
+                    .iter()
+                    .find(|(l, p, ..)| *l == link && *p == property)
+                {
+                    install(&mut up, resolved_up, property);
+                    install(&mut down, resolved_down, property);
+                }
+            }
             let Some(spec) = factory.converter(ends.media, &properties, &up, &down) else {
                 continue;
             };
@@ -1007,6 +1034,15 @@ pub fn negotiate(
 struct Outcome {
     link_formats: Vec<FormatSet>,
     conflicts: Vec<Conflict>,
+    /// For every conflict in [`Outcome::conflicts`], at the same position: the
+    /// two sides' *resolved* `FormatSet` at the moment the join that produced
+    /// it failed — i.e. after folding in every tie and every earlier link's
+    /// constraint, not merely what the pad's own node declared. A repair must
+    /// use these rather than [`NegotiationPlan::pad_set`]'s raw declaration,
+    /// because a tie can force a pad that declares nothing (`scale`'s own
+    /// input, `format`'s own input) to a concrete value inherited from a
+    /// sibling pad, and the raw declaration cannot see that.
+    resolved_sides: Vec<(LinkId, Property, FormatSet, FormatSet)>,
 }
 
 #[expect(
@@ -1017,6 +1053,7 @@ struct Outcome {
 fn solve_once(plan: &NegotiationPlan) -> Result<Outcome> {
     let index = plan.pad_index();
     let mut conflicts: Vec<Conflict> = Vec::new();
+    let mut resolved_sides: Vec<(LinkId, Property, FormatSet, FormatSet)> = Vec::new();
     // One class table per property. Only properties that any link actually uses
     // are solved, so a pure-video graph never touches channel layouts.
     let mut resolved: Vec<FormatSet> = vec![FormatSet::default(); plan.links.len()];
@@ -1097,17 +1134,11 @@ fn solve_once(plan: &NegotiationPlan) -> Result<Outcome> {
             let (Some(a), Some(b)) = (index.of(ends.src), index.of(ends.dst)) else {
                 continue;
             };
-            match join(&mut uf, &mut state, a, b, property) {
-                Ok(_) => {}
-                Err(()) => conflicts.push(build_conflict(
-                    plan,
-                    &index,
-                    &mut uf,
-                    &state,
-                    LinkId(i as u32),
-                    *ends,
-                    property,
-                )),
+            if join(&mut uf, &mut state, a, b, property).is_err() {
+                let link = LinkId(i as u32);
+                let built = build_conflict(plan, &index, &mut uf, &state, link, *ends, property);
+                resolved_sides.push((link, property, built.upstream, built.downstream));
+                conflicts.push(built.conflict);
             }
         }
 
@@ -1143,6 +1174,7 @@ fn solve_once(plan: &NegotiationPlan) -> Result<Outcome> {
     Ok(Outcome {
         link_formats: resolved,
         conflicts,
+        resolved_sides,
     })
 }
 
@@ -1246,6 +1278,15 @@ fn install(target: &mut FormatSet, source: &FormatSet, property: Property) {
     }
 }
 
+/// A [`Conflict`] plus the two sides' resolved [`FormatSet`], for the repair
+/// loop in [`negotiate`] — see [`Outcome::resolved_sides`] for why the raw
+/// per-node declaration is not enough.
+struct ConflictBuild {
+    conflict: Conflict,
+    upstream: FormatSet,
+    downstream: FormatSet,
+}
+
 fn build_conflict(
     plan: &NegotiationPlan,
     index: &PadIndex,
@@ -1254,15 +1295,15 @@ fn build_conflict(
     link: LinkId,
     ends: LinkEnds,
     property: Property,
-) -> Conflict {
-    let side = |uf: &mut UnionFind, pad: PadRef| -> ConflictSide {
+) -> ConflictBuild {
+    let side = |uf: &mut UnionFind, pad: PadRef| -> (ConflictSide, FormatSet) {
         let cell = index
             .of(pad)
             .map(|s| uf.find(s))
             .and_then(|r| state.get(r))
             .and_then(Option::as_ref);
-        let (accepts, narrowed_by) = cell.map_or_else(
-            || (Vec::new(), Vec::new()),
+        let (accepts, narrowed_by, resolved) = cell.map_or_else(
+            || (Vec::new(), Vec::new(), FormatSet::default()),
             |(set, prov)| {
                 (
                     set.get(property).describe(),
@@ -1270,25 +1311,33 @@ fn build_conflict(
                         .iter()
                         .map(|&n| plan.label(n).to_owned())
                         .collect(),
+                    set.clone(),
                 )
             },
         );
-        ConflictSide {
-            pad,
-            label: plan.label(pad.node).to_owned(),
-            accepts,
-            narrowed_by,
-        }
+        (
+            ConflictSide {
+                pad,
+                label: plan.label(pad.node).to_owned(),
+                accepts,
+                narrowed_by,
+            },
+            resolved,
+        )
     };
-    let upstream = side(uf, ends.src);
-    let downstream = side(uf, ends.dst);
-    Conflict {
-        link,
-        property,
-        media: ends.media,
-        upstream,
-        downstream,
-        auto_convert_disabled: false,
+    let (upstream, up_resolved) = side(uf, ends.src);
+    let (downstream, down_resolved) = side(uf, ends.dst);
+    ConflictBuild {
+        conflict: Conflict {
+            link,
+            property,
+            media: ends.media,
+            upstream,
+            downstream,
+            auto_convert_disabled: false,
+        },
+        upstream: up_resolved,
+        downstream: down_resolved,
     }
 }
 
