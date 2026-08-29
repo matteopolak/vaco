@@ -108,6 +108,106 @@ that constructs the provider) — D11's whole point.
 
 ---
 
+## `openssl` 0.10 (vendored) — DTLS for `vaco-protocol-dtls`
+
+**Adopted** 2026-08-28, for #562 (PR-12b, DTLS), under the same Gate 1
+amendment as `ring` above. **Used by** `vaco-protocol-dtls` alone (sole
+declarer; `cargo xtask owner-gate`'s `MEDIA` list and `cargo xtask dep-gate`'s
+scoped Gate 1 check both enforce this).
+
+**What for.** DTLS 1.2 (RFC 6347) client and server handshakes over UDP for
+the `dtls:` protocol — the transport WHIP/WebRTC-shaped callers need and that
+#562 was blocked on since project start: no pure-Rust DTLS implementation
+exists, and D14.2's zero-FFI Gate 1 admitted no alternative until the
+amendment.
+
+**Why FFI is unavoidable here, not merely convenient.** Checked directly
+rather than assumed: no `rustls`-based or other pure-Rust crate implements
+DTLS at all as of this adoption (`rustls` itself only speaks TLS; there is no
+`rustls-dtls` or comparable pure-Rust crate with any real adoption). Every
+credible option for real DTLS is an FFI binding to a C TLS/DTLS library.
+
+**Why `openssl` (rust-openssl) over `boring`/`wolfssl`:**
+- **`wolfssl`** is disqualified outright on Gate 2: wolfSSL is dual-licensed
+  GPLv2 or a paid commercial licence, and GPL is denied unconditionally by
+  this workspace's licence allowlist (`deny.toml`) — this is not a borderline
+  call.
+- **`boring`** (Cloudflare's Rust bindings to BoringSSL, Google's OpenSSL
+  fork) is Gate 3-viable (actively maintained, adopted) but murkier on Gate 2:
+  BoringSSL's own `LICENSE` is a composite of the original OpenSSL licence,
+  the SSLeay licence, and ISC for newer Google-authored files — none of the
+  first two are the modern "OpenSSL License" that OpenSSL itself relicensed
+  away from at 3.0, and neither maps cleanly to an SPDX identifier on this
+  workspace's allowlist. Checked directly against `boring-sys`'s vendored
+  source per D9's "check what is actually linked, not what the wrapper
+  crate declares" — the trap that caught `x264`/`x265` in D9 is exactly the
+  shape of trap a composite non-SPDX licence sets.
+- **`openssl`** (`sfackler`/rust-openssl) vendors OpenSSL itself via
+  `openssl-src`, which at the version this workspace resolves to
+  (`openssl-src 300.6.1+3.6.3`, i.e. OpenSSL 3.6.3) is licensed **Apache-2.0**
+  — OpenSSL relicensed from the old dual OpenSSL/SSLeay licence to Apache-2.0
+  at version 3.0, and every version `openssl-src` can vendor for this crate is
+  3.x or later. Apache-2.0 is on the allowlist outright, no composite to
+  puzzle over.
+
+**Gate 3, checked, not assumed:**
+- **Alive**: `openssl`/`openssl-sys` both released 2026-06-12; `sfackler`'s
+  rust-openssl has been continuously maintained since 2014.
+- **Adopted**: 382M+ crates.io downloads for `openssl` alone; it is the
+  original, most widely depended-on TLS binding in the Rust ecosystem
+  (predating `rustls` itself), used by `hyper-openssl`, `postgres`,
+  `actix-web`'s TLS backend and many others.
+- **Sound**: ten historical RUSTSEC advisories exist for `openssl`, checked
+  individually against the version this workspace resolves to (`0.10.81`) —
+  the three most recent (RUSTSEC-2024-0357, patched `>= 0.10.66`;
+  RUSTSEC-2025-0004, patched `>= 0.10.70`; RUSTSEC-2025-0022, patched
+  `>= 0.10.72`) are all patched well below `0.10.81`. None apply. No
+  advisory directory exists for `openssl-sys` at all.
+- **Shallow**: not shallow, and this is the honest cost of this adoption —
+  `openssl-src` vendors the entire OpenSSL source tree, and `openssl-sys`
+  pulls `cc`, `pkg-config` and `vcpkg` (the latter two are declared
+  unconditionally by `openssl-sys` even though only the non-vendored path
+  actually invokes them) as build machinery. Both are now permitted, scoped
+  to this crate alone, by `cargo xtask dep-gate` (see `xtask/src/deps.rs`).
+- **Vendorable**: weak, and also an honest cost — this workspace could not
+  realistically fork and maintain the whole OpenSSL C codebase itself. This
+  is inherent to *any* real DTLS FFI option (the owner's amendment names
+  exactly these three as the available choices), not specific to picking
+  `openssl` over the alternatives above, which are equally unvendorable by
+  this team.
+
+**Unsafe.** `openssl-sys` is unsafe-heavy by construction (raw FFI bindings
+to a large C library) and `openssl` wraps it in a safe API, same shape as
+`ring` above. `vaco-protocol-dtls` itself stays `#![forbid(unsafe_code)]` —
+D13's `unsafe` allowance is for `vaco-hw-*` only, and this is not that.
+
+**wasm.** Native-only: `openssl-sys`'s vendored build compiles C via `cc`,
+which does not target `wasm32-unknown-unknown`, and DTLS itself needs a real
+UDP socket, which that target has none of either. `vaco-protocol-dtls` is on
+`xtask/src/wasm.rs`'s `NATIVE_ONLY` list for both reasons.
+
+**What is scoped out.** DTLS's own retransmission timers for a lossy
+transport (RFC 6347 §4.2.4) are not implemented — every test here runs over
+loopback, where the gap does not show. `-listen`'s stateless cookie exchange
+(`DTLSv1_listen`) is scoped out in favour of a simpler connect-on-first-packet
+accept. Both are recorded in `vaco-protocol-dtls`'s own crate docs
+(`transport`/`listen` modules), not silently shipped.
+
+**Verified interoperability.** A real handshake was run against the actual
+`ffmpeg 8.1` reference binary (built `--enable-openssl`) as the DTLS
+listener, from this crate's own client path: `ffmpeg -listen 1 -f data -i
+dtls://127.0.0.1:<port>` accepted the connection (`Input #0, data, from
+'dtls://127.0.0.1:<port>'`) with no handshake error, satisfying #562's
+acceptance criterion ("a DTLS session completes against a reference peer")
+directly rather than only against this crate's own client/server pair.
+
+**Exit.** `openssl` is the sole DTLS dependency, isolated behind
+`vaco-protocol-dtls`'s own `Protocol` implementation; swapping it means
+rewriting `context.rs`/`connect.rs`/`listen.rs`/`cert.rs` and nothing outside
+this crate, matching D11's contained-replacement property.
+
+---
+
 ## `rustfft` 6 — dev-dependency only
 
 **Adopted** 2026-08-22, orchestrator. **Used by** `vaco-tx` (dev only).

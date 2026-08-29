@@ -70,6 +70,16 @@ const NATIVE_ONLY: &[(&str, &str)] = &[
          fetch/WebSocket, not this crate.",
     ),
     (
+        "vaco-protocol-dtls",
+        "depends on openssl (vendored, D10 Gate 1 amendment); openssl-sys's \
+         vendored build compiles C via `cc`, which does not target \
+         wasm32-unknown-unknown, and this crate also needs a real UDP \
+         socket, which that target has none of either — the same two \
+         reasons vaco-protocol-socket and vaco-protocol-tls are already on \
+         this list. A wasm build would reach DTLS through the browser's own \
+         WebRTC/DataChannel APIs, not this crate.",
+    ),
+    (
         "vaco-demux-rtsp",
         "RTSP's control connection is inherently duplex (send a request, read \
          its response) before there is anything to hand a caller, so — exactly \

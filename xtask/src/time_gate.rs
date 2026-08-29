@@ -113,6 +113,19 @@ const NATIVE_ONLY: &[(&str, &str)] = &[
          same reasoning as vaco-conformance above, not production code \
          running on a target this would matter for.",
     ),
+    (
+        "vaco-protocol-dtls",
+        "already NATIVE_ONLY for wasm-check: openssl (vendored) compiles C \
+         per target and does not build for wasm32-unknown-unknown at all. \
+         `openssl` itself reaches the wall clock internally for certificate \
+         expiry checks (not this crate's implementation to route through \
+         vaco-time — the crate's own accept-and-handshake path already \
+         routes its own polling loop through `vaco_time::Instant`/`sleep`), \
+         and this crate's own test suite spawns real threads to drive \
+         in-process DTLS client/server handshake tests over loopback — the \
+         same differential-harness-shaped use `vaco-protocol-tls` is exempt \
+         for above.",
+    ),
 ];
 
 /// Whether the item enclosing `line` is compiled out of wasm.

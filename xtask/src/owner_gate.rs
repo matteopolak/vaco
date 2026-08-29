@@ -71,6 +71,11 @@ const MEDIA: &[(&str, &str)] = &[
         "rustls",
         "TLS for https. A transport swap changes what bytes arrive.",
     ),
+    (
+        "openssl",
+        "DTLS for the dtls: protocol. A transport swap changes what bytes \
+         arrive, same reasoning as rustls above.",
+    ),
     // The crypto provider (`rustls-rustcrypto` until 2026-08-28, now `ring`)
     // is NOT its own row: it arrives via `rustls`'s own `ring` Cargo feature
     // rather than as a directly-declared dependency (see

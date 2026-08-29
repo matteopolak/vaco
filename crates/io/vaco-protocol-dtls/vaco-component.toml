@@ -1,0 +1,17 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# `default = false`, matching `vaco-protocol-tls`'s and `vaco-protocol-socket`'s
+# own reasoning: this crate depends on `openssl` (vendored), which does not
+# build for `wasm32-unknown-unknown` (its `-sys` crate compiles C via `cc`;
+# measured — see the crate's `lib.rs` module docs and `xtask/src/wasm.rs`'s
+# `NATIVE_ONLY` entry). Registering unconditionally would make `protocol-dtls`
+# a *default* optional dependency of `vaco-registry`, regressing its own
+# `wasm-check`.
+
+[[component]]
+kind      = "protocol"
+name      = "dtls"
+long_name = "DTLS"
+feature   = "protocol-dtls"
+default   = false
+ctor      = "vaco_protocol_dtls::DTLS_PROTOCOL"
