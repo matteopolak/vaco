@@ -23,7 +23,15 @@
 //! b-intra strong-intra-smoothing`, so sign-data-hiding and strong intra
 //! smoothing are both genuinely exercised, not merely reachable.
 
-#![allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code over a fixed, checked-in fixture")]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::integer_division,
+    clippy::panic,
+    reason = "test code over a fixed, checked-in fixture: WIDTH/HEIGHT are compile-time-known \
+              even powers of two, and a missing plane/row/frame-shape here is itself the test failing"
+)]
 
 use vaco_codec_core::Decoder;
 use vaco_codec_hevc::HevcDecoder;
@@ -105,21 +113,21 @@ fn cabac_intra_frame_decodes_without_error() {
     let _ = decode_and_compare();
 }
 
-/// **Known, named gap — not yet root-caused.** Every 4x4 transform block (one
-/// coefficient group; no `coded_sub_block_flag`/inter-group `patternSigCtx`
-/// interaction) checked so far decodes byte-exact, including real negative-
-/// angle intra prediction, sign-data-hiding and general 2-D DCT/DST paths —
-/// verified by hand against this exact fixture across the whole first 16x16
-/// region (three 8x8 `NxN` CUs plus the reconstruction path). The first CU at
-/// or above 8x8 with a genuinely multi-coefficient-group residual (`groups_w
-/// * groups_h > 1`) diverges, and the defect survived a full line-by-line
-/// re-comparison of every `residual_coding()` formula in [`vaco_codec_hevc`]
+/// **Known, named gap — not yet root-caused.** Every 4x4 transform block
+/// (one coefficient group, no `coded_sub_block_flag`/inter-group
+/// `patternSigCtx` interaction) checked so far decodes byte-exact,
+/// including real negative-angle intra prediction, sign-data-hiding and
+/// general 2-D DCT/DST paths — verified by hand against this exact fixture
+/// across the whole first 16x16 region (three 8x8 `NxN` CUs plus the
+/// reconstruction path). The first CU at or above 8x8 with a genuinely
+/// multi-coefficient-group residual diverges, and the defect survived a
+/// full line-by-line re-comparison of every `residual_coding` formula
 /// against the HM reference decoder — see `residual.rs`'s own module doc.
-/// One real bug in this area *was* found and fixed this pass (coefficient
+/// One real bug in this area was found and fixed this pass: coefficient
 /// scanning used a flat full-size scan instead of HM's `SCAN_GROUPED_4x4`,
 /// which interleaves positions from different 4x4 sub-blocks — see
-/// [`crate::scan::generate_grouped`]'s doc and the property test verifying
-/// it against that flat-scan mistake); a second defect remains.
+/// `crate::scan::generate_grouped`'s doc and the property test verifying
+/// it against that flat-scan mistake. A second defect remains.
 ///
 /// A third, real bug was found and fixed in the same area this pass —
 /// [`crate::residual::sig_base`] used one shared base offset for every

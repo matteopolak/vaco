@@ -4,7 +4,14 @@
 //! contexts and reconstruction are even structurally sound before chasing
 //! anything content-dependent.
 
-#![allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code over a fixed, checked-in fixture")]
+#![allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::needless_range_loop,
+    reason = "test code over a fixed, checked-in fixture: the (x, y) pair is used for both the \
+              value lookup and the diagnostic eprintln!, which an iterator/enumerate rewrite \
+              would make less readable here, not more"
+)]
 
 use vaco_codec_core::Decoder;
 use vaco_codec_hevc::HevcDecoder;
