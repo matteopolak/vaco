@@ -53,11 +53,18 @@ VP9's DCT/ADST family almost exactly.
 
 ### What is deliberately not here
 
-**Threading (the rest of epic #32).** §8.8's in-loop deblocking filter is
-now applied (C-32a) — see "How it works" and "Verification" below.
-Profiles 1-3 (C-32b, #327) are now handled — see the "Profiles 1-3" entry
-under "Verification" below — but multi-tile-column decode still has a
-known `AvailL` simplification (see `planning/TECH-DEBT.md`).
+**Tile/frame-parallel decode itself (the rest of epic #32, C-32c).** §8.8's
+in-loop deblocking filter is now applied (C-32a) — see "How it works" and
+"Verification" below. Profiles 1-3 (C-32b, #327) are now handled — see the
+"Profiles 1-3" entry under "Verification" below. Multi-tile-*column*
+decode is now correct (a real bug, not just an `AvailL` simplification —
+see "Verification" below and `planning/TECH-DEBT.md`), which is a
+prerequisite for tile-parallel decode, not tile-parallel decode itself:
+tiles still decode sequentially, one `Bd` per tile, on the calling
+thread. Actually running them concurrently over
+`vaco-codec-core::threading`'s `SliceThreadedDecoder`/`FrameThreadedDecoder`
+seam (F-03) is unattempted — see `planning/TECH-DEBT.md` for what that
+would need.
 
 **Backward probability adaptation (§8.3/8.4) is not implemented, and this
 is a real, measured problem for any non-frame-parallel stream, not a
@@ -480,6 +487,20 @@ Dev-only: `proptest`. No external runtime dependencies.
   separate, flagged, pre-existing dequantization bug above — which is not
   a loop-filter caveat at all, and reproduces whether or not the loop
   filter runs.
+
+  **Multi-tile-column decode, #328 (C-32c).** `decode_tile` ignored its
+  own column range entirely — called once per tile, it always looped
+  every mi-column of the *frame*, so a second tile column's bitstream was
+  decoded as if it covered the whole width. Measured directly: a real
+  512x64 `libvpx-vp9` key frame with two tile columns
+  (`-tile-columns 1 -frame-parallel 1 -error-resilient max`) decoded with
+  99.98% of its luma bytes wrong against `ffmpeg`'s own decode before the
+  fix. After it: three real encodes this crate could not previously
+  decode correctly — two tile columns (512x64), two tile rows (64x1024,
+  which turned out to already be correct end to end and needed no code
+  change), and both together (1024x1024, tile-columns log2=2 / tile-rows
+  log2=1) — every frame, Y/U/V, byte-exact (0 of 98304/98304/1572864
+  bytes differ per frame respectively).
 
   **Encoder, #330 (C-33b) — real partition/mode decision and real
   (lossless) residual, replacing #329's fixed largest-partition/`DC_PRED`/
