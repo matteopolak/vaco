@@ -29,7 +29,7 @@ use vaco_limits::{Budget, Limits};
 use vaco_packet::{Packet, PacketSideData, PacketSideDataKind};
 use vaco_pixfmt::PixFmt;
 
-use vaco_codec_ffv1::{Ffv1Decoder, Ffv1Encoder, build_envelope};
+use vaco_codec_ffv1::{Ffv1Decoder, Ffv1Encoder};
 
 /// A deterministic, non-uniform pattern so every plane exercises a mix of
 /// flat regions, gradients and noise-like variation rather than only runs.
@@ -103,10 +103,9 @@ fn assert_round_trips(frame: &Frame) {
         Some(PacketSideData::NewExtradata(buf)) => buf.as_slice().to_vec(),
         other => panic!("expected NewExtradata, got {other:?}"),
     };
-    let envelope = build_envelope(w, h, &record);
-
     let mut dec = Ffv1Decoder::new(Limits::permissive());
-    dec.set_extradata(&envelope).expect("set_extradata");
+    dec.set_extradata(&record).expect("set_extradata");
+    dec.prime_video(w, h);
     dec.send(Some(&packet)).expect("send packet");
     let decoded = dec.receive().expect("receive frame");
 
@@ -177,9 +176,9 @@ fn round_trips_solid_colour_yuv420p() {
 
 #[test]
 fn round_trips_multiple_frames_in_one_session() {
-    // Exercises the persistent keyframe/SliceHeader state across frames
-    // (codec::StreamState) — see slice.rs's docs for why a single-frame test
-    // cannot catch a reset-vs-persist mistake there.
+    // Exercises the keyframe/SliceHeader state across multiple frames — see
+    // codec::fresh_keyframe_state's docs for why a single-frame test cannot
+    // catch a reset-vs-persist mistake there.
     let mut enc = Ffv1Encoder::new(Limits::permissive());
     let mut frames = Vec::new();
     let mut packets = Vec::new();
@@ -195,9 +194,9 @@ fn round_trips_multiple_frames_in_one_session() {
         Some(PacketSideData::NewExtradata(buf)) => buf.as_slice().to_vec(),
         other => panic!("expected NewExtradata, got {other:?}"),
     };
-    let envelope = build_envelope(12, 10, &record);
     let mut dec = Ffv1Decoder::new(Limits::permissive());
-    dec.set_extradata(&envelope).expect("set_extradata");
+    dec.set_extradata(&record).expect("set_extradata");
+    dec.prime_video(12, 10);
     for (i, (frame, packet)) in frames.iter().zip(packets.iter()).enumerate() {
         dec.send(Some(packet)).expect("send");
         let decoded = dec.receive().expect("receive");
@@ -270,9 +269,9 @@ const RANGE_H: u32 = 64;
 /// against `ffmpeg`'s own raw decode of the same file.
 #[test]
 fn decodes_real_ffmpeg_range_coder_stream_pixel_exact() {
-    let envelope = build_envelope(RANGE_W, RANGE_H, RANGE_EXTRADATA);
     let mut dec = Ffv1Decoder::new(Limits::permissive());
-    dec.set_extradata(&envelope).expect("set_extradata");
+    dec.set_extradata(RANGE_EXTRADATA).expect("set_extradata");
+    dec.prime_video(RANGE_W, RANGE_H);
 
     let mut budget = Budget::new(Limits::permissive());
     let pkt = Packet::from_slice(&mut budget, RANGE_FRAME0).expect("packet");
@@ -294,9 +293,9 @@ const GOLOMB_H: u32 = 144;
 #[test]
 #[ignore = "known bug: Golomb-Rice run-mode decode diverges from the first sample against a real default-coder ffmpeg file; see codec.rs's module docs"]
 fn decodes_real_ffmpeg_golomb_rice_stream_pixel_exact() {
-    let envelope = build_envelope(GOLOMB_W, GOLOMB_H, GOLOMB_EXTRADATA);
     let mut dec = Ffv1Decoder::new(Limits::permissive());
-    dec.set_extradata(&envelope).expect("set_extradata");
+    dec.set_extradata(GOLOMB_EXTRADATA).expect("set_extradata");
+    dec.prime_video(GOLOMB_W, GOLOMB_H);
 
     let mut budget = Budget::new(Limits::permissive());
     let pkt = Packet::from_slice(&mut budget, GOLOMB_FRAME0).expect("packet");

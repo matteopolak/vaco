@@ -104,10 +104,11 @@ impl SliceBuf {
 /// 128" (§4.6) — this crate resets that array fresh for every slice, since
 /// slices are independently decodable/encodable by design (RFC 9043 §4.5:
 /// "provides opportunities for... multithreaded encoding and decoding"), and
-/// a state shared across slices would defeat that. The one thing that *does*
-/// persist across frames is the single-bit `keyframe` context, which sits
-/// outside the per-slice loop entirely — see [`crate::codec::StreamState`]'s
-/// docs for the real-`ffmpeg` measurement that settled it.
+/// a state shared across slices would defeat that. The single-bit `keyframe`
+/// context, which sits outside the per-slice loop entirely, resets fresh for
+/// every *frame* the same way — see
+/// [`crate::codec::fresh_keyframe_state`]'s docs for the real-`ffmpeg`
+/// measurement that settled it.
 #[derive(Debug, Clone)]
 pub(crate) struct SliceHeader {
     pub slice_x: u32,

@@ -77,6 +77,13 @@ pub trait SendReceive {
         Ok(())
     }
 
+    /// Forwarded to [`Decoder::prime_video`] by [`AsDecoder`]; meaningless for
+    /// an encoder or bitstream filter's `SendReceive`, so the empty default
+    /// costs those implementors nothing.
+    fn prime_video(&mut self, width: u32, height: u32) {
+        let _ = (width, height);
+    }
+
     /// Forwarded to [`Encoder::set_option`] by [`AsEncoder`]; meaningless for
     /// a decoder or bitstream filter's `SendReceive`, so the default costs
     /// those implementors nothing.
@@ -127,6 +134,10 @@ where
 
     fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
         self.0.set_extradata(extradata)
+    }
+
+    fn prime_video(&mut self, width: u32, height: u32) {
+        self.0.prime_video(width, height);
     }
 }
 
@@ -226,6 +237,10 @@ impl<D: Decoder> SendReceive for DecoderProtocol<D> {
 
     fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
         self.inner.set_extradata(extradata)
+    }
+
+    fn prime_video(&mut self, width: u32, height: u32) {
+        self.inner.prime_video(width, height);
     }
 }
 
@@ -434,6 +449,10 @@ impl<T: SendReceive> SendReceive for Validated<T> {
 
     fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
         self.inner.set_extradata(extradata)
+    }
+
+    fn prime_video(&mut self, width: u32, height: u32) {
+        self.inner.prime_video(width, height);
     }
 
     fn set_option(&mut self, key: &str, value: &str) -> Result<()> {

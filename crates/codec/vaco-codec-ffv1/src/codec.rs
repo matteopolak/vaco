@@ -261,44 +261,99 @@ fn rct_inverse(y: i32, cb_off: i32, cr_off: i32, bits: u32) -> (i32, i32, i32) {
     (g, b, r)
 }
 
-/// Adaptive state that persists across every frame of one stream, reset only
-/// on a flush/seek — as opposed to per-pixel context state (`PlaneStates`)
+/// The single-bit `keyframe` context, read/written once per `Frame()` (not
+/// per slice — it sits outside the `while` loop over `Slice()` in RFC 9043
+/// §4.4's pseudocode), as opposed to per-pixel context state (`PlaneStates`)
 /// and `SliceHeader`'s own state array, both of which reset fresh for every
 /// *slice* (RFC 9043 §3.8.1.3 for per-pixel contexts on every keyframe;
 /// `SliceHeader`'s own reset follows from slices being independently
 /// decodable — see `locate_slices`'s docs).
 ///
-/// This crate treats every frame as a keyframe (intra-only scope), yet still
-/// needs *some* state that survives between frames: the single-bit `keyframe`
-/// context, read once per `Frame()` (not per slice — it sits outside the
-/// `while` loop over `Slice()` in RFC 9043 §4.4's pseudocode). RFC 9043 says
-/// it "has its own initial state, set to 128" but never says whether a
-/// *later* frame's read resets to that or keeps adapting. Measured directly
-/// against a real 5-frame `ffmpeg` encode: it keeps adapting — frame 0's
-/// opening bytes differ from frames 1-4's, which are identical to each other
-/// despite different pixel content, exactly what a persisting, saturating
-/// context produces. Get this wrong and a single-frame test cannot tell you
-/// — it only shows up decoding the *second* frame of a real multi-frame
-/// file onward.
-#[derive(Debug, Clone)]
-pub(crate) struct StreamState {
-    keyframe_state: u8,
+/// RFC 9043 says this context "has its own initial state, set to 128" but
+/// never says whether a *later* frame's read resets to that or keeps
+/// adapting. An earlier version of this crate kept adapting it across every
+/// frame of one stream, on the strength of a byte-level comparison of a real
+/// 5-frame `ffmpeg` encode's own output ("frame 0's opening bytes differ from
+/// frames 1-4's, which are identical to each other despite different pixel
+/// content, exactly what a persisting, saturating context produces"). That
+/// comparison never actually decoded the bytes back, and it was wrong: a real
+/// multi-frame `ffmpeg` file decodes with plausible `SliceHeader` geometry on
+/// every frame only when this resets to 128 for every `Frame()`, and produces
+/// nonsense geometry (values nowhere near the frame, headers reading a
+/// quant-table index out of range) from the *second* frame onward when it is
+/// allowed to persist — measured directly by forcing each read to a fresh 128
+/// and watching every frame's header become sane again. A single-frame test
+/// cannot catch this either way, which is exactly why the earlier, wrong
+/// model shipped unnoticed: it only shows up decoding the second frame of a
+/// real multi-frame file onward.
+///
+/// This crate's own encoder and decoder were a self-consistent pair either
+/// way — the round trip passed under the old model too, since both sides
+/// agreed with each other — which is why fixing this needed a *real*
+/// `ffmpeg`-produced multi-frame fixture, not another round trip through this
+/// crate's own encoder.
+#[must_use]
+pub(crate) const fn fresh_keyframe_state() -> u8 {
+    128
 }
 
-impl StreamState {
-    /// Fresh state (RFC 9043's documented initial value 128) — what a
-    /// decoder/encoder starts with, and what `flush` resets back to.
-    #[must_use]
-    pub(crate) const fn fresh() -> Self {
-        Self {
-            keyframe_state: 128,
-        }
+/// Per-pixel adaptive context state, one [`PlaneStates`] per slice *position*
+/// (index into [`locate_slices`]'s output, stable frame to frame since
+/// `num_h_slices`/`num_v_slices` are stream-wide), persisted across
+/// [`decode_frame`] calls.
+///
+/// RFC 9043 §3.8.1.3/§3.8.2.5 say these contexts reset "on a keyframe" — not
+/// on every frame, which is what an earlier version of this crate did
+/// unconditionally, on the theory that this crate treats every frame as a
+/// keyframe (its own intra-only encoder always writes `keyframe = 1`). That
+/// theory does not hold for a real `ffmpeg`-produced stream: measured
+/// directly against a real 5-frame, 4-slice `ffmpeg -coder range_def` encode,
+/// only frame 0 reads `keyframe = true`; frames 1-4 read `false`, and decode
+/// with plausible `SliceHeader` geometry (this crate already got that right)
+/// but *garbage pixels* — every context starting cold at 128 instead of
+/// wherever frame 0 left it adapted, which reads as a near-zero-residual bias
+/// for the first several samples of every following frame. Keying the reset
+/// to the decoded `keyframe` bit instead of to "every frame" fixed it.
+///
+/// This crate's own encoder never writes `keyframe = 0`, so [`PersistedContexts::reset`]
+/// runs on every one of its frames and the persisting path below is never
+/// exercised by this crate's own round-trip tests — only by decoding a real
+/// multi-frame `ffmpeg` file with more than one keyframe-marked frame in a
+/// row absent. That asymmetry is exactly why this was invisible until now.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PersistedContexts {
+    slices: Vec<PlaneStates>,
+}
+
+impl PersistedContexts {
+    /// Discard every slice position's adapted state, so the next
+    /// [`PersistedContexts::slot`] call for each position starts fresh.
+    /// Call this whenever a frame's own `keyframe` bit reads `true`, and once
+    /// up front (a fresh decoder already has an empty `slices`, so this only
+    /// matters after at least one frame has been decoded — [`Ffv1Decoder`]
+    /// also calls it from `flush`, so a seek does not resume mid-adaptation
+    /// against a discontinuous stream).
+    pub(crate) fn reset(&mut self) {
+        self.slices.clear();
     }
-}
 
-impl Default for StreamState {
-    fn default() -> Self {
-        Self::fresh()
+    /// The adapted state for slice position `i`, creating a fresh
+    /// [`PlaneStates`] the first time this position is asked for (either at
+    /// the very start of the stream, or right after [`PersistedContexts::reset`]
+    /// cleared it). Falls back to a scratch, never-persisted [`PlaneStates`]
+    /// on the unreachable branch where growing `slices` to cover `i` still
+    /// left it out of bounds, rather than indexing or panicking.
+    pub(crate) fn slot<'a>(
+        &'a mut self,
+        i: usize,
+        quant_table_set_index_count: usize,
+        scratch: &'a mut PlaneStates,
+    ) -> &'a mut PlaneStates {
+        if self.slices.len() <= i {
+            self.slices
+                .resize_with(i + 1, || PlaneStates::fresh(quant_table_set_index_count));
+        }
+        self.slices.get_mut(i).unwrap_or(scratch)
     }
 }
 
@@ -370,7 +425,7 @@ fn locate_slices(data: &[u8], ec: u32) -> Result<Vec<std::ops::Range<usize>>> {
 /// the frame's dimensions exceed `budget`.
 pub(crate) fn decode_frame(
     config: &Ffv1Config,
-    stream: &mut StreamState,
+    contexts: &mut PersistedContexts,
     data: &[u8],
     width: u32,
     height: u32,
@@ -381,9 +436,10 @@ pub(crate) fn decode_frame(
     let mut frame = vaco_frame::Frame::alloc_video(budget, config.format, width, height)?;
 
     // Frame(): keyframe bit (read once, from the first slice's own byte
-    // range — see StreamState's docs), then one or more independent
-    // Slice()s, each with its own byte range found via SliceFooter.slice_size
-    // chained backward from the end (see locate_slices's docs).
+    // range — fresh coding state every frame, see fresh_keyframe_state's
+    // docs), then one or more independent Slice()s, each with its own byte
+    // range found via SliceFooter.slice_size chained backward from the end
+    // (see locate_slices's docs).
     let slice_ranges = locate_slices(data, params.ec)?;
     let footer_len = SliceFooter::byte_len(params.ec);
 
@@ -397,7 +453,18 @@ pub(crate) fn decode_frame(
             .ok_or(Error::UnexpectedEof)?;
         let mut dec = RangeDecoder::new(region);
         if i == 0 {
-            let _keyframe = dec.get_rac(&mut stream.keyframe_state, &params.state_transition);
+            let mut keyframe_state = fresh_keyframe_state();
+            let keyframe = dec.get_rac(&mut keyframe_state, &params.state_transition);
+            // RFC 9043 §3.8.1.3/§3.8.2.5: per-pixel contexts reset "on a
+            // keyframe" — not on every frame. This crate's own encoder always
+            // writes `keyframe = 1` (its own intra-only scope), but a real
+            // multi-frame `ffmpeg` encode writes it only on the first frame
+            // and expects every following frame to keep adapting every slice
+            // position's context from where the previous frame left it. See
+            // PersistedContexts's docs for how that was measured.
+            if keyframe {
+                contexts.reset();
+            }
         }
 
         // SliceHeader's own state array resets fresh for every slice: slices
@@ -417,8 +484,13 @@ pub(crate) fn decode_frame(
         // Indexed by quant-table-set-index *slot* (0=luma, 1=chroma, ...),
         // not by plane — see PlaneStates's docs: Cb and Cr share slot 1 and,
         // measured against a real ffmpeg encode, also share one adapting
-        // context array.
-        let mut plane_states = PlaneStates::fresh(quant_index_count);
+        // context array. This slice position's own array persists across
+        // frames unless the frame just read `keyframe = true` (see
+        // fresh_keyframe_state's docs) — `contexts.slot` returns whatever was
+        // left adapted from this same slice position last time, or a fresh
+        // one the first time this position is used.
+        let mut scratch = PlaneStates::fresh(quant_index_count);
+        let plane_states = contexts.slot(i, quant_index_count, &mut scratch);
 
         let planes: Vec<SliceBuf> = match params.coder_type {
             CoderType::RangeDefault | CoderType::RangeCustom => (0..plane_count)
@@ -615,11 +687,7 @@ fn store_planes(
 /// [`Error::Unsupported`] if `frame`'s pixel format is not
 /// [`config.format`](Ffv1Config::format), [`Error::InvalidData`] for a frame
 /// missing planes its own format declares.
-pub(crate) fn encode_frame(
-    config: &Ffv1Config,
-    stream: &mut StreamState,
-    frame: &vaco_frame::Frame,
-) -> Result<Vec<u8>> {
+pub(crate) fn encode_frame(config: &Ffv1Config, frame: &vaco_frame::Frame) -> Result<Vec<u8>> {
     let params = &config.params;
     let vaco_frame::FrameData::Video {
         format,
@@ -642,7 +710,8 @@ pub(crate) fn encode_frame(
     let planes = load_planes(frame, params, width, height, &mut budget)?;
 
     let mut enc = RangeEncoder::new();
-    enc.put_rac(&mut stream.keyframe_state, &params.state_transition, true); // keyframe = 1
+    let mut keyframe_state = fresh_keyframe_state();
+    enc.put_rac(&mut keyframe_state, &params.state_transition, true); // keyframe = 1
 
     let header = SliceHeader::whole_frame(params.quant_table_set_index_count());
     let mut header_states = crate::rangecoder::fresh_states();

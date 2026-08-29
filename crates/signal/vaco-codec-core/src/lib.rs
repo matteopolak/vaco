@@ -1689,6 +1689,32 @@ pub trait Decoder: Send {
         let _ = extradata;
         Ok(())
     }
+
+    /// Tell a video decoder the frame dimensions a container reports for the
+    /// track, before the first [`send_packet`](Decoder::send_packet) — the
+    /// video mirror of [`Encoder::prime_audio`], for the same reason: most
+    /// video codecs carry width/height in their own bitstream and have no use
+    /// for this, but RFC 9043 §4 states outright that FFV1's
+    /// `frame_pixel_width`/`frame_pixel_height` "MUST be provided by external
+    /// means" — its Configuration Record, like the rest of its bitstream,
+    /// never states them at all. Before this method existed,
+    /// `vaco-codec-ffv1`'s answer was a private extradata envelope
+    /// (`[width][height][the real Configuration Record]`) that only its own
+    /// tests ever built, because [`set_extradata`](Decoder::set_extradata)
+    /// was the only channel a generically-registered `Box<dyn Decoder>` had
+    /// — so the generic CLI decode path, which hands a decoder the
+    /// container's plain extradata, could never configure it, and only
+    /// `-c:v copy` (which never calls this at all) had ever exercised the
+    /// crate (`planning/E2E-GAPS.md` #2's video-side wiring gap).
+    ///
+    /// The default does nothing, correct for every decoder whose bitstream
+    /// states its own geometry (which is nearly all of them). Calling it
+    /// twice, or with `(0, 0)`, must be harmless — a decoder with nothing
+    /// useful to do with a zero size should treat it as "not yet known"
+    /// rather than fail.
+    fn prime_video(&mut self, width: u32, height: u32) {
+        let _ = (width, height);
+    }
 }
 
 /// So a boxed decoder is itself a [`Decoder`], mirroring
@@ -1716,6 +1742,10 @@ impl<D: Decoder + ?Sized> Decoder for Box<D> {
 
     fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
         (**self).set_extradata(extradata)
+    }
+
+    fn prime_video(&mut self, width: u32, height: u32) {
+        (**self).prime_video(width, height);
     }
 }
 

@@ -78,21 +78,33 @@
 //! table sizes, slice counts) the same way every other decoder in this tree
 //! is bounded.
 //!
-//! `Ffv1Decoder::set_extradata` cannot use the plain "container's
-//! Configuration Record bytes, nothing else" contract most codecs in this
-//! tree use: RFC 9043 §4 says `frame_pixel_width`/`frame_pixel_height` "MUST
-//! be provided by external means" — FFV1's own bitstream (Configuration
-//! Record included) never states them at all, and
-//! [`vaco_codec_core::Decoder`] has no channel other than `set_extradata` for
-//! a generically-registered `Box<dyn Decoder>` to receive them. This crate's
-//! extradata is therefore its own small envelope: `[width: u32 BE][height:
-//! u32 BE][the RFC Configuration Record]`. [`Ffv1Encoder`] attaches the
-//! *plain* RFC Configuration Record (not this envelope) as
+//! `Ffv1Decoder::set_extradata` takes the plain "container's Configuration
+//! Record bytes, nothing else" contract every other codec in this tree uses —
+//! [`codec::Ffv1Config::from_extradata`] never needed width/height, only the
+//! quantization tables and colour signalling the Configuration Record itself
+//! carries. Width and height are a separate problem: RFC 9043 §4 says
+//! `frame_pixel_width`/`frame_pixel_height` "MUST be provided by external
+//! means" — FFV1's own bitstream (Configuration Record included) never states
+//! them at all. [`Ffv1Decoder`] gets them from
+//! [`vaco_codec_core::Decoder::prime_video`], the generic channel the CLI's
+//! decode wiring calls with the container's reported dimensions before the
+//! first packet, the same way `Encoder::prime_audio` tells an audio encoder
+//! its stream shape ahead of time.
+//!
+//! This used to be a private extradata envelope instead —
+//! `[width: u32 BE][height: u32 BE][the RFC Configuration Record]` — built by
+//! nothing but this crate's own tests, because `set_extradata` was the only
+//! channel a generically-registered `Box<dyn Decoder>` had at all before
+//! `prime_video` existed. That meant the generic CLI decode path, which hands
+//! a decoder the container's *plain* extradata, could never configure this
+//! one: `-c:v copy` was the only path that had ever exercised the crate,
+//! because it never calls `set_extradata` at all (`planning/E2E-GAPS.md` #2's
+//! video-side gap). [`Ffv1Encoder`] already attached the plain RFC
+//! Configuration Record (not that envelope) as
 //! `PacketSideDataKind::NewExtradata` on its first packet — that is what a
 //! real container's own track metadata (Matroska's `PixelWidth`/
-//! `PixelHeight`, an MP4 visual sample entry) would carry width/height
-//! alongside, so a future muxer integration is not handed this crate's
-//! private framing by mistake.
+//! `PixelHeight`, an MP4 visual sample entry) carries width/height alongside,
+//! so this crate now matches that shape on the decode side too.
 //!
 //! # Dependencies
 //!
@@ -120,32 +132,6 @@ use vaco_limits::{Budget, Limits};
 use vaco_packet::{Packet, PacketSideData};
 use vaco_pixfmt::PixFmt;
 
-/// Split this crate's decoder-side extradata envelope (see the crate docs)
-/// into `(width, height, configuration_record)`.
-fn split_envelope(data: &[u8]) -> Result<(u32, u32, &[u8])> {
-    let &[w0, w1, w2, w3, h0, h1, h2, h3, ref rest @ ..] = data else {
-        return Err(Error::UnexpectedEof);
-    };
-    let width = u32::from_be_bytes([w0, w1, w2, w3]);
-    let height = u32::from_be_bytes([h0, h1, h2, h3]);
-    Ok((width, height, rest))
-}
-
-/// Build this crate's decoder-side extradata envelope from a plain RFC 9043
-/// Configuration Record plus the dimensions a container reports for the
-/// track (see the crate docs on why this wrapping exists).
-#[must_use]
-pub fn build_envelope(width: u32, height: u32, configuration_record: &[u8]) -> Vec<u8> {
-    // `Vec::new()` growing in place rather than `Vec::with_capacity`, since
-    // the latter is a `Budget`-less allocation sized from caller-supplied
-    // (not attacker-controlled — this runs on the encode side only) data.
-    let mut out = Vec::new();
-    out.extend_from_slice(&width.to_be_bytes());
-    out.extend_from_slice(&height.to_be_bytes());
-    out.extend_from_slice(configuration_record);
-    out
-}
-
 /// A [`SendReceive`] decoder over [`Packet`]/[`Frame`], one FFV1 frame per
 /// packet (this crate is intra-only and declares no [`Caps::DELAY`] — see
 /// the crate docs on slicing/threading scope).
@@ -156,13 +142,18 @@ pub struct Ffv1Decoder {
     config: Option<Ffv1Config>,
     width: u32,
     height: u32,
-    stream: codec::StreamState,
+    /// Per-slice-position adaptive context state, persisted across frames
+    /// whose own `keyframe` bit reads `false` — see
+    /// [`codec::PersistedContexts`]'s docs for why this exists.
+    contexts: codec::PersistedContexts,
 }
 
 impl Ffv1Decoder {
     /// A decoder that bounds every allocation by `limits`. Call
-    /// [`SendReceive::set_extradata`] (this crate's envelope — see the crate
-    /// docs) before sending packets.
+    /// [`SendReceive::set_extradata`] (the plain RFC 9043 Configuration
+    /// Record) and [`SendReceive::prime_video`] (the container's reported
+    /// frame dimensions) before sending packets — see the crate docs on why
+    /// both are needed and neither alone is enough.
     #[must_use]
     pub fn new(limits: Limits) -> Self {
         Self {
@@ -171,7 +162,7 @@ impl Ffv1Decoder {
             config: None,
             width: 0,
             height: 0,
-            stream: codec::StreamState::fresh(),
+            contexts: codec::PersistedContexts::default(),
         }
     }
 }
@@ -191,12 +182,16 @@ impl SendReceive for Ffv1Decoder {
     }
 
     fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
-        let (width, height, record) = split_envelope(extradata)?;
-        let config = Ffv1Config::from_extradata(record)?;
+        self.config = Some(Ffv1Config::from_extradata(extradata)?);
+        // A (re-)configured decoder starts adaptation over, the same as a
+        // seek — see PersistedContexts::reset's docs.
+        self.contexts.reset();
+        Ok(())
+    }
+
+    fn prime_video(&mut self, width: u32, height: u32) {
         self.width = width;
         self.height = height;
-        self.config = Some(config);
-        Ok(())
     }
 
     fn send(&mut self, input: Option<&Packet>) -> Result<()> {
@@ -212,10 +207,15 @@ impl SendReceive for Ffv1Decoder {
                 let config = self.config.as_ref().ok_or(Error::InvalidData(
                     "ffv1: decoder has no configuration; call set_extradata first",
                 ))?;
+                if self.width == 0 || self.height == 0 {
+                    return Err(Error::InvalidData(
+                        "ffv1: decoder does not know the frame size; call prime_video first",
+                    ));
+                }
                 let mut budget = Budget::new(self.limits.clone());
                 let mut frame = codec::decode_frame(
                     config,
-                    &mut self.stream,
+                    &mut self.contexts,
                     pkt.payload(),
                     self.width,
                     self.height,
@@ -234,7 +234,12 @@ impl SendReceive for Ffv1Decoder {
 
     fn flush(&mut self) {
         self.machine.flush();
-        self.stream = codec::StreamState::fresh();
+        // A seek discards buffered state; a decoder that resumed mid-
+        // adaptation against a now-discontinuous stream would decode
+        // garbage exactly like the bug PersistedContexts::reset's docs
+        // describe, just triggered by a seek instead of a missing
+        // `keyframe` check.
+        self.contexts.reset();
     }
 }
 
@@ -248,7 +253,6 @@ pub struct Ffv1Encoder {
     limits: Limits,
     config: Option<Ffv1Config>,
     sent_extradata: bool,
-    stream: codec::StreamState,
 }
 
 impl Ffv1Encoder {
@@ -260,7 +264,6 @@ impl Ffv1Encoder {
             limits,
             config: None,
             sent_extradata: false,
-            stream: codec::StreamState::fresh(),
         }
     }
 }
@@ -306,7 +309,7 @@ impl SendReceive for Ffv1Encoder {
                             .unwrap_or_else(|| unreachable!("just assigned"))
                     }
                 };
-                let body = codec::encode_frame(config, &mut self.stream, frame)?;
+                let body = codec::encode_frame(config, frame)?;
                 let mut budget = Budget::new(self.limits.clone());
                 let mut packet = Packet::from_slice(&mut budget, &body)?;
                 packet.pts = frame.pts;
@@ -492,10 +495,9 @@ mod tests {
             Some(PacketSideData::NewExtradata(buf)) => buf.as_slice().to_vec(),
             _ => panic!("expected NewExtradata"),
         };
-        let envelope = build_envelope(8, 8, &record);
-
         let mut dec = Ffv1Decoder::new(Limits::permissive());
-        dec.set_extradata(&envelope).expect("set_extradata");
+        dec.set_extradata(&record).expect("set_extradata");
+        dec.prime_video(8, 8);
         dec.send(Some(&packet)).expect("send packet");
         let decoded = dec.receive().expect("receive frame");
         assert_eq!(frame_bytes(&frame), frame_bytes(&decoded));

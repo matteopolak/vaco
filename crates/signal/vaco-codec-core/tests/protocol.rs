@@ -542,6 +542,82 @@ fn the_box_blanket_impl_forwards_through_a_generic_decoder_bound() {
     }
 }
 
+/// A `SendReceive` whose `prime_video` is observable through a shared handle
+/// rather than by inspecting the probe itself afterwards — once wrapped in
+/// `AsDecoder(Validated(_))` and boxed as `Box<dyn Decoder>`, the concrete
+/// type is erased and cannot be recovered without `Any`, so the probe hands
+/// out an `Arc<Mutex<_>>` clone before it is moved into the wrapper stack.
+/// `vaco-codec-ffv1`'s `Ffv1Decoder` is wired through exactly this
+/// `AsDecoder(Validated(inner))` shape, and `Decoder::prime_video` is a
+/// defaulted method just like `set_extradata`: a wrapper that inherits the
+/// trait default instead of forwarding silently discards the container's
+/// reported frame size, the same gap this crate's docs record for
+/// `set_extradata`/`Box<dyn Muxer>`.
+#[derive(Debug, Default)]
+struct PrimeVideoProbe {
+    seen: std::sync::Arc<std::sync::Mutex<Option<(u32, u32)>>>,
+}
+
+impl SendReceive for PrimeVideoProbe {
+    type Input = vaco_packet::Packet;
+    type Output = vaco_frame::Frame;
+
+    fn caps(&self) -> Caps {
+        Caps::empty()
+    }
+
+    fn send(&mut self, _input: Option<&vaco_packet::Packet>) -> Result<(), Error> {
+        Err(Error::Eof)
+    }
+
+    fn receive(&mut self) -> Result<vaco_frame::Frame, Error> {
+        Err(Error::Eof)
+    }
+
+    fn flush(&mut self) {}
+
+    fn prime_video(&mut self, width: u32, height: u32) {
+        *self.seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((width, height));
+    }
+}
+
+/// `prime_video` has to survive the same `AsDecoder(Validated(inner))) ->
+/// Box<dyn Decoder>` shape
+/// [`set_extradata_forwards_through_as_decoder_validated_and_the_box`] checks
+/// for `set_extradata` — see [`PrimeVideoProbe`]'s docs for why.
+#[test]
+fn prime_video_forwards_through_as_decoder_validated_and_the_box() {
+    let probe = PrimeVideoProbe::default();
+    let seen = probe.seen.clone();
+    let mut boxed: Box<dyn Decoder> = Box::new(AsDecoder(Validated::new(probe)));
+    boxed.prime_video(160, 120);
+    assert_eq!(
+        *seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
+        Some((160, 120))
+    );
+}
+
+/// The `Box<dyn Decoder>` blanket impl's own forward, mirroring
+/// [`the_box_blanket_impl_forwards_through_a_generic_decoder_bound`] — a
+/// generic `D: Decoder` bound instantiated with `Box<dyn Decoder>`, which
+/// resolves through `impl<D: Decoder + ?Sized> Decoder for Box<D>` rather
+/// than a direct vtable call on `&mut dyn Decoder`.
+fn prime_video_through_generic_decoder<D: Decoder>(d: &mut D, width: u32, height: u32) {
+    d.prime_video(width, height);
+}
+
+#[test]
+fn the_box_blanket_impl_forwards_prime_video_through_a_generic_decoder_bound() {
+    let probe = PrimeVideoProbe::default();
+    let seen = probe.seen.clone();
+    let mut boxed: Box<dyn Decoder> = Box::new(AsDecoder(Validated::new(probe)));
+    prime_video_through_generic_decoder(&mut boxed, 176, 144);
+    assert_eq!(
+        *seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
+        Some((176, 144))
+    );
+}
+
 /// Mirrors [`ExtradataProbe`] on the encode side: an encoder-shaped
 /// `SendReceive` that overrides `set_option` so a test can tell whether a
 /// call reached it or was swallowed by a wrapper's inherited default.
