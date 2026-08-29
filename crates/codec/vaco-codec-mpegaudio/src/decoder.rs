@@ -25,6 +25,19 @@ pub struct MpegAudioDecoder {
     /// Layer III's bit reservoir and overlap-add history. Lazily created the
     /// first time a Layer III packet arrives.
     layer3: Option<Layer3State>,
+    /// `send_packet(None)` has been seen and nothing further will arrive.
+    ///
+    /// Every packet decodes to at most one frame with no cross-packet reorder
+    /// delay (Layer III's bit reservoir lives inside `layer3::decode`, not as
+    /// buffered whole frames here), so there is nothing to hold back and
+    /// flush at end of stream. But `receive_frame` still has to answer
+    /// `Error::Eof` once draining starts and `pending` is empty, rather than
+    /// `NeedMoreInput` forever — the `Decoder`/`SendReceive` protocol has no
+    /// other way to learn a component is actually finished. Measured against
+    /// a real end-to-end CLI run: without this, `vaco -i x.mp3 -c:a
+    /// pcm_s16le out.wav` decoded every real frame correctly and then hung
+    /// indefinitely waiting for a `Eof` that never came.
+    draining: bool,
 }
 
 impl MpegAudioDecoder {
@@ -35,6 +48,7 @@ impl MpegAudioDecoder {
             pending: VecDeque::new(),
             synth: Vec::new(),
             layer3: None,
+            draining: false,
         }
     }
 
@@ -49,6 +63,7 @@ impl MpegAudioDecoder {
 impl Decoder for MpegAudioDecoder {
     fn send_packet(&mut self, packet: Option<&Packet>) -> Result<()> {
         let Some(packet) = packet else {
+            self.draining = true;
             return Ok(());
         };
         let payload = packet.payload();
@@ -81,21 +96,27 @@ impl Decoder for MpegAudioDecoder {
             Some(PacketSideData::SkipSamples { start, end, .. }) => (*start, *end),
             _ => (0, 0),
         };
-        let frame = trim_gapless(frame, skip_front, skip_back, &mut budget)?;
+        let mut frame = trim_gapless(frame, skip_front, skip_back, &mut budget)?;
         if frame_sample_count(&frame) > 0 {
+            frame.pts = packet.pts;
             self.pending.push_back(frame);
         }
         Ok(())
     }
 
     fn receive_frame(&mut self) -> Result<Frame> {
-        self.pending.pop_front().ok_or(Error::NeedMoreInput)
+        self.pending.pop_front().ok_or(if self.draining {
+            Error::Eof
+        } else {
+            Error::NeedMoreInput
+        })
     }
 
     fn flush(&mut self) {
         self.pending.clear();
         self.synth.clear();
         self.layer3 = None;
+        self.draining = false;
     }
 }
 
@@ -164,6 +185,40 @@ fn trim_gapless(frame: Frame, front: u32, back: u32, budget: &mut Budget) -> Res
     out.time_base = frame.time_base;
     out.flags = frame.flags;
     Ok(out)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
+mod eof_tests {
+    use super::*;
+
+    /// `receive_frame` used to answer `NeedMoreInput` forever once draining
+    /// began and nothing was buffered — indistinguishable, to a caller
+    /// pumping the `Decoder`/`SendReceive` protocol, from a component that
+    /// will eventually produce something. Measured against a real `.mp3`
+    /// decoded end to end through the CLI: this hung the whole pipeline
+    /// (converted to a bounded, diagnosed `LimitExceeded` by
+    /// `vaco-sched`'s own no-progress guard fix, but the real fix is here —
+    /// the component should say `Eof`, not rely on a scheduler-level
+    /// safety net to notice it never will).
+    #[test]
+    fn receive_frame_reports_eof_once_draining_and_empty_not_forever_need_more_input() {
+        let mut dec = MpegAudioDecoder::new(Limits::permissive());
+        assert!(matches!(dec.receive_frame(), Err(Error::NeedMoreInput)));
+        dec.send_packet(None).expect("drain signal");
+        assert!(
+            matches!(dec.receive_frame(), Err(Error::Eof)),
+            "must answer Eof once draining with nothing pending, not NeedMoreInput again"
+        );
+    }
+
+    #[test]
+    fn flush_resets_the_draining_flag() {
+        let mut dec = MpegAudioDecoder::new(Limits::permissive());
+        dec.send_packet(None).expect("drain signal");
+        dec.flush();
+        assert!(matches!(dec.receive_frame(), Err(Error::NeedMoreInput)));
+    }
 }
 
 #[cfg(test)]
