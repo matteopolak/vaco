@@ -7033,3 +7033,74 @@ differ across three fixtures after the fix.
 `Vaco-Spec-Ref: vp9-bitstream-spec-v0.6` §6.4.1 (`decode_tile`'s per-
 superblock-row context reset), §8.7.1.10 (inverse WHT, the specification
 this crate's forward transform inverts).
+
+### Correction: `vaco-codec-vp9`'s multi-tile-column gap was worse than recorded, and is now fixed (#328, C-32c)
+
+The entry above ("multi-tile-column decode has a known `AvailL`
+simplification ... a multi-tile-column stream still decodes each column's
+own bits correctly, but `AvailL`'s column-0 assumption means context ...
+is not spec-exact") understated the bug by a wide margin. Measured
+directly while starting #328: `decode_tile` was called once per
+`(tile_row, tile_col)` pair but always looped mi-columns `0..mi_cols`
+regardless of `tile_col` — so a second tile column's own bitstream bytes
+were decoded as though they covered the *entire frame width*, not merely
+mis-contexted at the left edge. A real 512x64 `libvpx-vp9` key frame with
+two tile columns decoded with 99.98% of its luma bytes wrong against
+`ffmpeg`'s own decode, starting from the very first block of the second
+tile column, not just its left edge.
+
+Fixed: `decode_tile` now takes and respects `mi_col_start`/`mi_col_end`
+(via the same `tile_offset` helper already used for tile rows); `AvailL`
+(`decode_block`, `residual`, `inter_block_mode_info`'s interpolation-
+filter context) and the motion-vector candidate scan's column clamp
+(`mvpred::MvRefContext`) all compare against the *tile's* left edge now,
+not the frame's. Verified against `ffmpeg -c:v libvpx-vp9` on real
+encodes covering both axes: two tile columns, two tile rows, and both
+together (1024x1024, 4 columns x 2 rows) — every frame, Y/U/V, byte-exact
+after the fix. Tile *rows* turned out to already be correct end to end
+and needed no code change; the entire bug was confined to columns.
+
+This does not add tile- or frame-*parallel* decode. Correct per-tile
+column/row bounds is a **prerequisite** for that (parallelising a
+computation that reads the wrong bytes for most of its tiles decodes
+garbage faster, not correctly), not the threading work itself. What
+tile-parallel decode over F-03 (`vaco-codec-core::threading`'s
+`SliceThreadedDecoder`, `vaco-codec-core::picture`'s `PictureWriter`/
+`split_bands_mut`) would need, for whoever picks this up:
+
+- `Vp9Decoder`'s single `State` struct (loop filter/segmentation
+  persistence, the reference-frame store, the four saved probability
+  contexts, the previous frame's MV grid) would need to split into the
+  serial "header stage" F-03's own doc describes and a `Send + 'static`
+  per-frame `FrameTask` holding `Arc` snapshots of whatever it reads —
+  `EntropyContext`, the reference `Picture`s, `LoopFilterParams`/
+  `Segmentation` — plus the sole `PictureWriter` for its own output.
+  `decode_one_frame`'s current shape (one big function borrowing
+  `&mut self.state` throughout) does not separate cleanly into that split
+  without real restructuring; this is the larger half of the work.
+- Tile *columns* map onto `SliceThreadedDecoder::slice_jobs` naturally
+  now that they decode correctly in isolation: each tile's `Bd` already
+  reads an independent byte range with (after this fix) an independent
+  `MiColStart`/`MiColEnd`, and each writes a disjoint column range of the
+  output picture — the shape `PictureWriter::split_bands_mut` is for.
+  Tile *rows* would need the loop-filter pass (currently a single whole-
+  frame call after all tiles finish) reordered or deferred per F-03's own
+  banded-progress model, since §8.8's filter reads across tile-row
+  boundaries by design (unlike a tile's own decode).
+- Frame-level (`FrameThreadedDecoder`) parallelism needs reference-frame
+  scaling (§8.5.2's already-implemented `scale_mv`/inter prediction
+  scaling handles *reading* a differently-sized reference; a picture
+  *pool* sized for `max_frames` in flight and the DPB slot bookkeeping
+  that goes with decoding several frames' headers ahead of their own
+  pixel decode finishing does not exist yet) more than it needs new
+  decode logic.
+- Real VP9 conformance test vectors beyond the two already in
+  `vaco-media.lock` (`vp90-2-02-size-08x08`/`-10x10`, neither of which
+  exercises tile columns) would be worth adding specifically for this —
+  most libvpx-encoded content at any real resolution defaults to more
+  than one tile column, which is exactly the case this fix addresses and
+  the existing corpus does not cover at all.
+
+`Vaco-Spec-Ref: vp9-bitstream-spec-v0.6` §6.4.1 (`decode_tile`'s per-tile
+mi-column range), §6.4.4 (`AvailL`), §6.5.1 (`find_mv_refs`'s column
+clamp).
