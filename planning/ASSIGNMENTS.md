@@ -234,7 +234,7 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-codec-subtitle-text | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
 | vaco-codec-tiff | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
 | vaco-codec-vlc | 3 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
-| vaco-codec-vorbis | 4 | — | agent:codec-batch | active | 2026-08-28 | — | in flight; backfilled row, was missing entirely |
+| vaco-codec-vorbis | 4 | #30 | agent:vorbis-enc | active | 2026-08-28 | — | reclaiming stale agent:codec-batch claim (started 2026-08-28, last commit 1007a69 at 15:44 local, ~5h41m idle, no uncommitted work) per AGENT-CONSTRAINTS.md check-a-recorded-blocker guidance; decoder (#308) already done, this is #309-312 encoder work |
 | vaco-codec-vp8 | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
 | vaco-codec-vp9 | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
 | vaco-codec-webp | 4 | — | (backfilled) | done | — | 2026-08-28 | Row was missing entirely; crate exists with real code. Backfilled 2026-08-28 — verify by evidence before claiming. |
