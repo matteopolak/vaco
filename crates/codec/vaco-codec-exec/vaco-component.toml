@@ -1,0 +1,19 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+
+[[component]]
+kind      = "encoder"
+name      = "libx264"
+long_name = "H.264 via a user-installed x264 binary (process boundary, C-46)"
+feature   = "codec-exec"
+ctor      = "vaco_codec_exec::LIBX264_ENCODER"
+media     = "video"
+codec     = "h264"
+
+[[component]]
+kind      = "encoder"
+name      = "libx265"
+long_name = "HEVC via a user-installed x265 binary (process boundary, C-46)"
+feature   = "codec-exec"
+ctor      = "vaco_codec_exec::LIBX265_ENCODER"
+media     = "video"
+codec     = "hevc"
