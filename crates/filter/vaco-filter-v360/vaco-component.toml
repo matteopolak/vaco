@@ -1,0 +1,12 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Plan 16 SS4.4's vaco-filter-v360 row, GitHub #497 (FT-5.8): the reference
+# names 25 projections, this crate implements 2 (equirect, flat) plus
+# yaw/pitch/roll -- see src/lib.rs's doc for the exact scope.
+
+[[component]]
+kind = "filter"
+name = "v360"
+long_name = "Convert 360 projection of video (equirectangular and flat/rectilinear only)."
+ctor = "vaco_filter_v360::v360::DESC"
+media = "video"
