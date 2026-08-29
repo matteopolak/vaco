@@ -131,3 +131,76 @@ implementing with it, not testing against it.
 
 **Exit.** Deleting it costs the large-n oracle only; the direct definitions and the
 golden vectors remain.
+
+---
+
+## `objc2-video-toolbox` 0.3 + `objc2`/`block2`/`objc2-core-media`/`objc2-core-video`/`objc2-core-foundation` — VideoToolbox binding for `vaco-hw-videotoolbox`
+
+**Adopted** 2026-08-28. **Used by** `vaco-hw-videotoolbox` only, behind a
+`[target.'cfg(target_os = "macos")']` dependency table (not a Cargo feature),
+so no other platform's build graph is affected at all.
+
+**What for.** Reaching `VTDecompressionSession` (and the `CMFormatDescription`/
+`CMBlockBuffer`/`CMSampleBuffer`/`CVPixelBuffer` types a decode call is built
+from) without hand-writing Objective-C message-send and Core Foundation
+retain/release bookkeeping by hand — H-01/H-02's hardware-acceleration
+framework needs at least one real backend to prove the framework against, and
+VideoToolbox is the only one this development machine (macOS) can exercise
+end to end.
+
+**Why no owner sign-off was requested first, unlike a normal D10 adoption.**
+`planning/00-decisions.md` D14.3 already names this exact crate family, by
+name, inside its permitted list: *"in `vaco-hw-*` and `vaco-filter-gpu` only,
+pure-Rust bindings to OS/driver media and graphics APIs (`ash`, `objc2-*`,
+`windows`, `wgpu`)."* D13's own backend-strategy table independently
+recommends `objc2-video-toolbox` by name for exactly this reason (MoltenVK
+does not implement Vulkan Video, so VideoToolbox is the only path to Apple's
+media engine at all). The decision was already made; this entry is the
+adoption record Gate 3 still requires, not a request for one.
+
+**Gate 1** pass — pure Rust, zero FFI in the Gate-1 sense (no vendored or
+compiled foreign C/C++). `objc2`'s own `build.rs` only emits
+`cargo:rustc-cfg` target-triple checks; checked directly (not assumed) that
+no crate in this dependency subtree pulls in `cc`/`bindgen`/`cmake`/`pkg-config`
+(`cargo tree -p vaco-hw-videotoolbox -e build` — empty). `cargo deny check
+licenses bans advisories` (workspace-wide, exit 0) raises nothing against any
+`objc2*`/`block2`/`dispatch2` package.
+
+**Gate 2** pass — every crate in this family is `Zlib OR Apache-2.0 OR MIT`
+or plain `MIT` (checked per-crate via the crates.io API, 2026-08-28): all on
+the D3 allowlist.
+
+**Gate 3**, checked per crate:
+- **Alive**: `objc2-video-toolbox`/`objc2-core-media`/`objc2-core-video`/
+  `objc2-core-foundation` all last published 2025-10-04 (v0.3.2); the parent
+  `objc2` crate 2026-02-26 (v0.6.4) — all well inside 12 months at adoption.
+- **Adopted**: `objc2` itself has 100M+ crates.io downloads and is the de
+  facto standard pure-Rust Objective-C interop crate (`github.com/madsmtm/objc2`).
+  `objc2-video-toolbox` specifically is smaller (~46k downloads, ~34k recent)
+  as a narrow sub-crate of that project, not a standalone adoption risk.
+- **Sound**: no RUSTSEC advisory surfaced by `cargo deny check advisories`
+  for any package in this family.
+- **Shallow / forkable**: single upstream repository (`madsmtm/objc2`) for
+  the whole family; no build-time C toolchain dependency to fork around.
+- **Unsafe, measured**: `cargo xtask unsafe-audit` reports 19 unsafe sites in
+  `vaco-hw-videotoolbox` (the consuming crate) — every FFI call across the
+  VideoToolbox/CoreMedia/CoreVideo boundary, plus three `unsafe impl
+  Send`/`Sync` — each with its own `SAFETY` comment. `vaco-hw-core` itself
+  (the framework these traits live on) has zero.
+
+**wasm.** `vaco-hw-videotoolbox` (and therefore this whole family) does not
+enter a `wasm32-unknown-unknown` build graph at all — confirmed directly via
+`cargo check -p vaco-hw-videotoolbox --target wasm32-unknown-unknown`
+(clean) — because the dependency table itself is `cfg`-gated to
+`target_os = "macos"`, not merely feature-gated. No `xtask/src/wasm.rs`
+`NATIVE_ONLY` entry is needed.
+
+**Verified, not just built.** `vaco-hw-videotoolbox`'s own test suite decodes
+a real ffmpeg-produced H.264 keyframe through a real `VTDecompressionSession`
+on this machine and checks the resulting frame's dimensions, pixel format
+and pixel content (`tests/videotoolbox_decode.rs`) — this is not a stub.
+
+**Exit.** Confined to one crate (`vaco-hw-videotoolbox`); removing it removes
+one `HwAccelDesc` from the hardware candidate list, which `vaco-hw-core`'s
+own `select()` already treats as an ordinary, non-fatal "nothing available"
+case.
