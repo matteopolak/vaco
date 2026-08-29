@@ -312,6 +312,8 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-codec-dsp-mecmp | 3 | #145 (PF-3.9) | agent:pf-batch | active | 2026-08-29 | — | Reclaimed from agent:me-rc's done row (#144/D-12) to attempt SATD SIMD specifically, per owner's #145 comment leaving it open ("three of four done, SATD is a real gap"). |
 | vaco-checkasm | 10 | #145 (PF-3.9) | agent:pf-batch | active | 2026-08-29 | — | Extending kernels::mecmp to wire vaco-codec-dsp-mecmp's new SATD vector variant through Differential, so it cannot rot even if dispatch stays scalar. |
 | vaco-simd | 0 | #145 (PF-3.9) | agent:pf-batch | active | 2026-08-29 | — | Extending ops::simd with a small transpose4x4_i32 composition (zip_low/zip_high + 64-bit bitcast, mirrored scalar oracle + proptest) needed by mecmp's SATD attempt; no existing composition covered an in-lane 4x4 transpose. |
+| vaco-filter-text (new) | 5 | #462 (FT-3.5) | agent:text-ass | assigned | 2026-08-28 | — | TextRenderer foundation: fontdb + alias table, rustybuzz shaping/glyph cache, fontdue rasterisation, drawtext. Unblocks vaco-filter-subtitle below. |
+| vaco-filter-subtitle (new) | 5 | #486 #487 #488 #489 (epic FT-5) | agent:text-ass | assigned | 2026-08-28 | — | Bitmap + simple-text + ASS (stage a, static tags) subtitle rendering over vaco-filter-text; SSIM differential harness against ffmpeg subtitles/ass. |
 
 # Fan-out plan: core first, then leaves in batches
 
