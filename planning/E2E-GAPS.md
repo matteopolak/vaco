@@ -33,35 +33,41 @@ and AVCC-vs-Annex-B handling. MP4 stores length-prefixed AVCC; the decoder wants
 Annex-B; `h264_mp4toannexb` exists and is registered but **nothing in the decode
 path ever applies it**.
 
-## 1b. Measured H.264 capability after wiring (2026-08-29, real binary)
+## 1b. Measured H.264 capability (corrected 2026-08-29, real binary)
 
-`H264Decoder` is now wired to the real reconstruction (`a81e2d2`) and genuinely
-decodes through the CLI. Measured against `libx264`-encoded `testsrc2`:
+**A real H.264 stream now decodes end to end.** Measured with a scripted
+harness against `libx264`-encoded `testsrc2`, after the deblocking fix in
+`e63c09f`:
 
 | Input | Result |
 |---|---|
-| Main profile, `-bf 0` | **2 of 25 frames**, then a CABAC desync |
-| Main profile, default (B-frames) | 2 frames, then `CABAC B-slice mb_type/sub_mb_type` |
-| High profile (x264's **default**) | 0 frames — `transform_size_8x8_flag`/Intra_8x8 unimplemented |
-| Baseline / Constrained Baseline | 0 frames — CAVLC reconstruction unimplemented |
+| Main, `-bf 0 -refs 1` | **FULL 25/25 frames** |
+| Main, `-bf 0` (refs 3) | 2/25 — CABAC desync, needs multiple references |
+| Main, default (B-frames) | 2/25 — `CABAC B-slice mb_type/sub_mb_type` |
+| High, any (**x264's own default**) | 0/25 — `transform_size_8x8_flag`/Intra_8x8 |
+| Baseline | 0/25 — CAVLC reconstruction unimplemented |
 
-So the wiring is correct and the first frames are byte-exact, but no real-world
-file decodes to completion yet. In priority order, what stands between here and
-ordinary MP4 playback:
+**An earlier version of this section was wrong** and is corrected here. It
+claimed Main with `-bf 0` reached only 2 frames and blamed a CABAC desync on
+plain P slices. Two errors: `-bf 0` alone still leaves `-refs 3`, and the
+measuring harness silently reported `0/25` for every row because a partial
+write met an exact-size comparison. The desync is real but is **multi-reference
+only** — single-reference Main content decodes completely.
 
-1. **The CABAC desync on P slices** — `end_of_slice_flag` fires before every
-   macroblock is decoded. Pre-existing, tracked by ignored tests in
-   `tests/macroblock_layer_cabac.rs`, several prior investigation rounds, root
-   cause unisolated. This is the blocker: it stops even the simplest real
-   stream at frame 3.
-2. **Intra_8x8 / `transform_size_8x8_flag`** — x264 defaults to High profile,
-   so most files in the world start here.
-3. **CABAC B slices** — x264 emits B-frames by default at every profile.
+Remaining work, ordered by how many real files each blocks:
+
+1. **Intra_8x8 / `transform_size_8x8_flag`** — High profile is x264's default,
+   so this alone excludes most files in existence.
+2. **CABAC B slices** — x264 emits B-frames by default at every profile.
+3. **The multi-reference CABAC desync** — x264 defaults to `-refs 3`. Sharpest
+   known repro: slice 4 of `cabac_ip_multiref.264` stops at 35 of 36
+   macroblocks. `ref_idx_lX` binarization has been ruled out against clause
+   9.3.3.1.1.6.
 4. **CAVLC reconstruction** — the entropy layer verifies bit consumption and
    discards its coefficients and motion vectors.
 
-Nothing here is a design problem; all four are unfinished implementation with a
-correct decoder underneath.
+All four are unfinished implementation over a decoder now proven correct on a
+real stream, not design problems.
 
 ## 2. Matroska rejects codecs it should map
 
