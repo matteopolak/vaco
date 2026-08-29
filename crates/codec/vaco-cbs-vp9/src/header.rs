@@ -569,9 +569,14 @@ pub struct InterFrameRefs {
 /// shapes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Vp9Header {
-    /// `show_existing_frame == 1`: the whole header is these two fields —
-    /// no frame is coded at all.
-    ShowExistingFrame { frame_to_show_map_idx: u8 },
+    /// `show_existing_frame == 1`: no frame is coded, but `profile` is still
+    /// real bits in the bitstream — §6.2 reads the two/three profile bits
+    /// *before* `show_existing_frame`, unconditionally — so it has to be
+    /// kept here too, not just in [`FrameHeader`]. Dropping it was a real
+    /// bug this crate's own fuzzing caught: a `show_existing_frame` unit at
+    /// profile 2 or 3 wrote back with profile forced to 0, changing the
+    /// unit's bytes with no edit at all.
+    ShowExistingFrame { profile: u8, frame_to_show_map_idx: u8 },
     /// A coded frame.
     Frame(Box<FrameHeader>),
 }
@@ -648,6 +653,7 @@ impl Vp9Header {
             r.check()?;
             return Ok((
                 Self::ShowExistingFrame {
+                    profile,
                     frame_to_show_map_idx: idx,
                 },
                 usize::try_from(r.bit_pos() >> 3).unwrap_or(usize::MAX),
@@ -805,7 +811,7 @@ impl Vp9Header {
         let mut w = BitWriter::new();
         w.put(2, 2); // frame_marker
         let profile = match self {
-            Self::ShowExistingFrame { .. } => 0,
+            Self::ShowExistingFrame { profile, .. } => *profile,
             Self::Frame(h) => h.profile,
         };
         w.put(1, u32::from(profile & 1));
@@ -816,6 +822,7 @@ impl Vp9Header {
         match self {
             Self::ShowExistingFrame {
                 frame_to_show_map_idx,
+                ..
             } => {
                 w.put(1, 1);
                 w.put(3, u32::from(*frame_to_show_map_idx));
@@ -1041,11 +1048,30 @@ mod tests {
     #[test]
     fn show_existing_frame_round_trips() {
         let content = Vp9Header::ShowExistingFrame {
+            profile: 0,
             frame_to_show_map_idx: 5,
         };
         let bytes = content.write();
         let (back, end) = Vp9Header::parse(&bytes).expect("parses");
         assert_eq!(end, bytes.len());
         assert_eq!(back, content);
+    }
+
+    /// The bug this crate's own fuzzing caught: `show_existing_frame`'s
+    /// `profile` bits are real bitstream content, read before
+    /// `show_existing_frame` itself, and must survive a rewrite even though
+    /// no frame is coded.
+    #[test]
+    fn show_existing_frame_preserves_a_nonzero_profile() {
+        for profile in [1u8, 2, 3] {
+            let content = Vp9Header::ShowExistingFrame {
+                profile,
+                frame_to_show_map_idx: 6,
+            };
+            let bytes = content.write();
+            let (back, end) = Vp9Header::parse(&bytes).expect("parses");
+            assert_eq!(end, bytes.len());
+            assert_eq!(back, content, "profile {profile}");
+        }
     }
 }

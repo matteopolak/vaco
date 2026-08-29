@@ -18,6 +18,21 @@ use vaco_limits::Budget;
 use crate::header::Vp9Header;
 use crate::superframe::{sub_frame_ranges, write_index};
 
+/// The sentinel [`CbsUnit::unit_type`] for a superframe index's own trailing
+/// bytes (marker, sizes, second marker copy) — distinct from a frame unit
+/// (`0`) and from [`crate::header`]'s scan-data-shaped sentinels this crate
+/// does not have, but still outside the byte range any real per-frame type
+/// could occupy.
+///
+/// Emitted by [`Vp9Cbs::split`] whenever [`sub_frame_ranges`] found an index,
+/// **including the degenerate one-frame case** §Annex B's bit layout can
+/// still express even though no real encoder emits it (this crate's own
+/// [`write_index`] refuses to write one). Dropping that case's index bytes
+/// entirely — rather than keeping them as their own unit — was a real bug
+/// this crate's own fuzzing caught: `assemble` reproduced the frame but
+/// silently lost the three trailing index bytes.
+pub const INDEX_UNIT_TYPE: u32 = 0x101;
+
 /// VP9 has exactly one framing shape at this crate's granularity: a
 /// container sample, optionally a superframe wrapping several coded frames.
 /// There is no second associated-type variant to name (unlike H.26x's Annex
@@ -64,6 +79,7 @@ impl CbsCodec for Vp9Cbs {
     ) -> Result<()> {
         match sub_frame_ranges(data, budget)? {
             Some(ranges) => {
+                let index_start = ranges.last().map_or(0, |&(_, end)| end);
                 for (start, end) in ranges {
                     let bytes = data.get(start..end).ok_or(Error::InvalidData(
                         "vp9 superframe index named a range outside the buffer",
@@ -73,6 +89,12 @@ impl CbsCodec for Vp9Cbs {
                     // what distinguishes a key frame from an inter frame is
                     // a field *inside* the header, not a framing-level tag.
                     fragment.push(CbsUnit::new(0, bytes.to_vec()), budget)?;
+                }
+                // The index's own trailing bytes, kept as their own unit —
+                // see [`INDEX_UNIT_TYPE`]'s doc for the bug this fixes.
+                let index_bytes = data.get(index_start..).unwrap_or(&[]);
+                if !index_bytes.is_empty() {
+                    fragment.push(CbsUnit::new(INDEX_UNIT_TYPE, index_bytes.to_vec()), budget)?;
                 }
             }
             None => {
@@ -91,25 +113,37 @@ impl CbsCodec for Vp9Cbs {
     ) -> Result<()> {
         let total: u64 = fragment.units().iter().map(|u| u.data.len() as u64).sum();
         budget.check(total)?;
-        match fragment.len() {
-            0 => Ok(()),
-            1 => {
-                if let Some(u) = fragment.units().first() {
-                    out.extend_from_slice(&u.data);
-                }
-                Ok(())
+        // A trailing index unit (from `split`, or one a caller built by
+        // hand) means every unit's bytes are already exactly what belongs on
+        // the wire — concatenating is the whole job, and synthesising a new
+        // index on top would double up (or, for the one-frame-plus-index
+        // shape `INDEX_UNIT_TYPE`'s doc names, wrap an index *and* keep the
+        // old one). Only when there is no such unit does this codec need to
+        // build one itself, for a fragment a caller assembled purely from
+        // frame content.
+        let has_index_unit = fragment
+            .units()
+            .last()
+            .is_some_and(|u| u.unit_type == INDEX_UNIT_TYPE);
+        if has_index_unit || fragment.len() <= 1 {
+            for u in fragment.units() {
+                out.extend_from_slice(&u.data);
             }
-            _ => {
-                let lens: Vec<usize> = fragment.units().iter().map(|u| u.data.len()).collect();
-                for u in fragment.units() {
-                    out.extend_from_slice(&u.data);
-                }
-                write_index(out, budget, &lens)
-            }
+            return Ok(());
         }
+        let lens: Vec<usize> = fragment.units().iter().map(|u| u.data.len()).collect();
+        for u in fragment.units() {
+            out.extend_from_slice(&u.data);
+        }
+        write_index(out, budget, &lens)
     }
 
     fn read_unit(&mut self, unit: &CbsUnit, _budget: &mut Budget) -> Result<Vp9Content> {
+        if unit.unit_type == INDEX_UNIT_TYPE {
+            return Err(Error::Unsupported(
+                "a superframe index's own bytes are not frame content this codec decodes",
+            ));
+        }
         let (header, end) = Vp9Header::parse(&unit.data)?;
         let tail = unit.data.get(end..).unwrap_or(&[]).to_vec();
         Ok(Vp9Content { header, tail })
@@ -232,9 +266,13 @@ mod tests {
         let mut b = budget();
         let mut f = CbsFragment::new();
         cbs.split(&data, Vp9Framing, &mut f, &mut b).expect("splits");
-        assert_eq!(f.len(), 2);
+        // Two frame units, plus the index's own trailing bytes as a third —
+        // see `INDEX_UNIT_TYPE`'s doc for why that third unit exists.
+        assert_eq!(f.len(), 3);
         assert_eq!(f.units()[0].data, frame_a);
         assert_eq!(f.units()[1].data, frame_b);
+        assert_eq!(f.units()[2].unit_type, INDEX_UNIT_TYPE);
+        assert_eq!(f.units()[2].data, vec![marker, 40, 25, marker]);
 
         let mut out = Vec::new();
         cbs.assemble(&f, Vp9Framing, &mut out, &mut b).expect("assembles");
@@ -255,5 +293,30 @@ mod tests {
             }
             f.release(&mut b);
         }
+    }
+
+    /// The exact bug this crate's own fuzzing caught: a superframe index
+    /// describing a single frame (unusual — no real encoder emits one, but
+    /// §Annex B's marker byte can still express `frames_in_superframe_minus_1
+    /// == 0`) must not lose its three trailing index bytes on reassembly.
+    #[test]
+    fn a_one_frame_superframe_index_is_not_dropped() {
+        let mut data = vec![0u8, 0, 3];
+        let marker = 0xC0u8; // bytes_per_size = 1, frame_count = 1
+        data.push(marker);
+        data.push(3);
+        data.push(marker);
+
+        let mut cbs = Cbs::new(Vp9Cbs::new());
+        let mut b = budget();
+        let mut f = CbsFragment::new();
+        cbs.split(&data, Vp9Framing, &mut f, &mut b).expect("splits");
+        assert_eq!(f.len(), 2, "one frame unit plus the index unit");
+        assert_eq!(f.units()[1].unit_type, INDEX_UNIT_TYPE);
+
+        let mut out = Vec::new();
+        cbs.assemble(&f, Vp9Framing, &mut out, &mut b).expect("assembles");
+        assert_eq!(out, data);
+        f.release(&mut b);
     }
 }
