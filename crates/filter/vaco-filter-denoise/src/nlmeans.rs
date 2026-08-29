@@ -116,7 +116,12 @@ impl Options {
 
 /// Sum of squared differences between the `(2*pr+1)^2` patches centred at
 /// `(x1, y1)` and `(x2, y2)`, normalised by patch pixel count.
-fn patch_distance(buf: &PlaneBuf, x1: i64, y1: i64, x2: i64, y2: i64, pr: i64) -> f32 {
+///
+/// Only [`nlmeans_plane_naive`] (kept for the differential test and the
+/// benchmark, see its own doc) still calls this directly;
+/// [`nlmeans_plane`]'s integral-image path computes the same quantity
+/// without re-walking the patch per candidate offset.
+pub(crate) fn patch_distance(buf: &PlaneBuf, x1: i64, y1: i64, x2: i64, y2: i64, pr: i64) -> f32 {
     let mut acc = 0.0f32;
     let mut n = 0.0f32;
     for dy in -pr..=pr {
@@ -130,7 +135,14 @@ fn patch_distance(buf: &PlaneBuf, x1: i64, y1: i64, x2: i64, y2: i64, pr: i64) -
     if n > 0.0 { acc / n } else { 0.0 }
 }
 
-fn nlmeans_plane(buf: &PlaneBuf, h: f32, pr: i64, rr: i64) -> PlaneBuf {
+/// Reference implementation: every one of the `(2*rr+1)^2` candidate offsets
+/// re-walks the whole `(2*pr+1)^2` patch from scratch via [`patch_distance`],
+/// `O(w*h*(2*rr+1)^2*(2*pr+1)^2)` total. Kept as the correctness oracle
+/// [`nlmeans_plane`]'s integral-image reformulation below is checked
+/// against (`tests::fast_path_agrees_with_naive_reference`), and as the
+/// module's own record of the "obvious" algorithm the fast path replaces.
+/// Also the baseline `benches/nlmeans.rs` measures the fast path against.
+pub(crate) fn nlmeans_plane_naive(buf: &PlaneBuf, h: f32, pr: i64, rr: i64) -> PlaneBuf {
     let mut out = PlaneBuf::zeroed(buf.width, buf.height, buf.max_val);
     let h2 = (h * h).max(1e-6);
     for y in 0..buf.height {
@@ -149,6 +161,128 @@ fn nlmeans_plane(buf: &PlaneBuf, h: f32, pr: i64, rr: i64) -> PlaneBuf {
                 }
             }
             out.set(x, y, if den > 0.0 { num / den } else { buf.get_clamped(xi, yi) });
+        }
+    }
+    out
+}
+
+/// Zero-padded 2D prefix sum (`(w+1) x (h+1)`) over a flat, row-major `w*h`
+/// buffer, so [`rect_sum`] answers any axis-aligned rectangle query in four
+/// lookups regardless of the rectangle's size.
+fn build_integral(data: &[f32], w: usize, h: usize) -> Vec<f32> {
+    let stride = w + 1;
+    let mut integral = vec![0.0f32; stride.saturating_mul(h + 1)];
+    for y in 0..h {
+        let mut row_sum = 0.0f32;
+        for x in 0..w {
+            row_sum += data.get(y * w + x).copied().unwrap_or(0.0);
+            let above = integral.get(y * stride + x + 1).copied().unwrap_or(0.0);
+            if let Some(cell) = integral.get_mut((y + 1) * stride + x + 1) {
+                *cell = above + row_sum;
+            }
+        }
+    }
+    integral
+}
+
+/// Inclusive rectangle sum over `[x0, x1] x [y0, y1]` from an integral image
+/// [`build_integral`] produced for a `w`-wide source.
+fn rect_sum(integral: &[f32], w: usize, x0: usize, y0: usize, x1: usize, y1: usize) -> f32 {
+    let stride = w + 1;
+    let at = |xx: usize, yy: usize| integral.get(yy * stride + xx).copied().unwrap_or(0.0);
+    at(x1 + 1, y1 + 1) - at(x1 + 1, y0) - at(x0, y1 + 1) + at(x0, y0)
+}
+
+/// Non-local means, reformulated so `patch_distance`'s own `O((2*pr+1)^2)`
+/// re-walk of every candidate patch is replaced by an `O(1)` integral-image
+/// lookup: `O(w*h*(2*rr+1)^2)` total rather than
+/// `O(w*h*(2*rr+1)^2*(2*pr+1)^2)`, [`nlmeans_plane_naive`]'s cost.
+///
+/// # The reformulation, and why it is exact rather than approximate
+///
+/// For a fixed candidate offset `(dx, dy)`, `patch_distance(buf, x, y, x+dx,
+/// y+dy, pr)` is the mean, over `(dx', dy')` in the patch, of `(buf[x+dx',
+/// y+dy'] - buf[x+dx+dx', y+dy+dy'])^2`. Defining `diff(px, py) = (buf[px,
+/// py] - buf[px+dx, py+dy])^2` (both reads clamp-to-edge, same as
+/// [`PlaneBuf::get_clamped`] always did), that squared term is exactly
+/// `diff(x+dx', y+dy')` — so the *whole patch sum* for pixel `(x, y)` at
+/// this offset is a box sum of `diff` centred at `(x, y)`, not merely
+/// related to one. Building `diff` once per offset (`O(w*h)`) and its
+/// integral image (`O(w*h)`) turns every pixel's patch sum at that offset
+/// into one `O(1)` [`rect_sum`] call, which is where the `(2*pr+1)^2` factor
+/// disappears.
+///
+/// `diff` is built over a domain extended by `pr` on every side (`(w +
+/// 2*pr) x (h + 2*pr)`) rather than clamping `(x+dx', y+dy')` into `[0, w) x
+/// [0, h)` before evaluating it, because `get_clamped` clamps `buf[px, py]`
+/// and `buf[px+dx, py+dy]` *independently* — clamping `(px, py)` first and
+/// then applying the offset would clamp the wrong one of the two reads
+/// whenever a patch tap itself falls outside the plane, silently changing
+/// which pixel pair a border patch compares. The extended domain means
+/// every patch window used by any real pixel is fully covered by real
+/// (correctly independently-clamped) `diff` values, so no further clamping
+/// is needed once the domain is built.
+pub(crate) fn nlmeans_plane(buf: &PlaneBuf, h: f32, pr: i64, rr: i64) -> PlaneBuf {
+    let w = buf.width;
+    let ht = buf.height;
+    let h2 = (h * h).max(1e-6);
+    let upr = usize::try_from(pr).unwrap_or(0);
+    let ext_w = w.saturating_add(2 * upr);
+    let ext_h = ht.saturating_add(2 * upr);
+    let patch_area = {
+        let side = 2.0f32 * (pr as f32) + 1.0;
+        (side * side).max(1.0)
+    };
+
+    let mut num = vec![0.0f32; w.saturating_mul(ht)];
+    let mut den = vec![0.0f32; w.saturating_mul(ht)];
+
+    for dy in -rr..=rr {
+        for dx in -rr..=rr {
+            // `diff(ex, ey)` covers real coordinate `(ex - pr, ey - pr)`, so
+            // every patch window a real pixel needs (`[x, x+2pr] x [y,
+            // y+2pr]` in extended coordinates) stays fully inside `[0,
+            // ext_w) x [0, ext_h)`.
+            let mut diff = vec![0.0f32; ext_w.saturating_mul(ext_h)];
+            for ey in 0..ext_h {
+                let ry = i64::try_from(ey).unwrap_or(0) - pr;
+                for ex in 0..ext_w {
+                    let rx = i64::try_from(ex).unwrap_or(0) - pr;
+                    let a = buf.get_clamped(rx, ry);
+                    let b = buf.get_clamped(rx + dx, ry + dy);
+                    if let Some(cell) = diff.get_mut(ey * ext_w + ex) {
+                        *cell = (a - b) * (a - b);
+                    }
+                }
+            }
+            let integral = build_integral(&diff, ext_w, ext_h);
+
+            for y in 0..ht {
+                for x in 0..w {
+                    let sum = rect_sum(&integral, ext_w, x, y, x + 2 * upr, y + 2 * upr);
+                    let d2 = sum / patch_area;
+                    let weight = (-d2 / h2).exp();
+                    let xi = i64::try_from(x).unwrap_or(i64::MAX);
+                    let yi = i64::try_from(y).unwrap_or(i64::MAX);
+                    let idx = y * w + x;
+                    if let (Some(n), Some(d)) = (num.get_mut(idx), den.get_mut(idx)) {
+                        *n += weight * buf.get_clamped(xi + dx, yi + dy);
+                        *d += weight;
+                    }
+                }
+            }
+        }
+    }
+
+    let mut out = PlaneBuf::zeroed(w, ht, buf.max_val);
+    for y in 0..ht {
+        for x in 0..w {
+            let idx = y * w + x;
+            let n = num.get(idx).copied().unwrap_or(0.0);
+            let d = den.get(idx).copied().unwrap_or(0.0);
+            let xi = i64::try_from(x).unwrap_or(i64::MAX);
+            let yi = i64::try_from(y).unwrap_or(i64::MAX);
+            out.set(x, y, if d > 0.0 { n / d } else { buf.get_clamped(xi, yi) });
         }
     }
     out
@@ -247,5 +381,47 @@ mod tests {
             out.variance(),
             noisy_var
         );
+    }
+
+    /// The integral-image fast path must agree with the brute-force
+    /// reference to within float summation-order noise: both compute the
+    /// same sums over the same terms (see `nlmeans_plane`'s own doc for why
+    /// this is an exact reformulation, not an approximation), just
+    /// accumulated in a different order, so exact bit-equality is not
+    /// expected but the numbers should be indistinguishable at 8-bit
+    /// sample precision.
+    ///
+    /// Deliberately not a flat or single-axis field (see
+    /// AGENT-CONSTRAINTS.md's "a source that cannot separate two rules
+    /// validates neither"): a flat field makes every patch distance zero on
+    /// both paths regardless of a border-clamping mistake, so this uses a
+    /// two-axis ramp-plus-checker pattern with real edge content, and a
+    /// patch/research radius pair that pushes real patches past the plane's
+    /// own border on every side.
+    #[test]
+    fn fast_path_agrees_with_naive_reference_including_at_the_border() {
+        let (w, h) = (14, 11);
+        let mut buf = PlaneBuf::zeroed(w, h, 255.0);
+        for y in 0..h {
+            for x in 0..w {
+                let ramp = ((x * 7 + y * 13) % 200) as f32;
+                let checker = if (x + 2 * y) % 5 == 0 { 40.0 } else { 0.0 };
+                buf.set(x, y, ramp + checker);
+            }
+        }
+        for &(pr, rr) in &[(1i64, 2i64), (3, 3), (2, 4)] {
+            let fast = nlmeans_plane(&buf, 8.0, pr, rr);
+            let naive = nlmeans_plane_naive(&buf, 8.0, pr, rr);
+            for y in 0..h {
+                for x in 0..w {
+                    let a = fast.get(x, y).unwrap();
+                    let b = naive.get(x, y).unwrap();
+                    assert!(
+                        (a - b).abs() < 0.05,
+                        "pr={pr} rr={rr} ({x},{y}): fast={a} naive={b}"
+                    );
+                }
+            }
+        }
     }
 }

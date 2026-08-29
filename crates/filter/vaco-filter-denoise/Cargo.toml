@@ -18,7 +18,12 @@ vaco-filter-graph = { path = "../../filter/vaco-filter-graph" }
 [dev-dependencies]
 proptest.workspace = true
 rustfft.workspace = true
+divan.workspace = true
 vaco-limits = { path = "../../core/vaco-limits" }
+
+[[bench]]
+name    = "nlmeans"
+harness = false
 
 [lints]
 workspace = true

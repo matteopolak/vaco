@@ -58,4 +58,60 @@ pub mod vaguedenoiser;
 mod video;
 mod wavelet;
 
+/// Benchmark-only window into `nlmeans`'s internal plane filter
+/// (`pub(crate)` since `PlaneBuf` itself is internal machinery, not this
+/// crate's public surface). Takes/returns plain `Vec<f32>` planes rather
+/// than `PlaneBuf` so nothing internal has to become actually `pub`.
+/// `benches/nlmeans.rs` is the only intended caller.
+#[doc(hidden)]
+pub mod bench_support {
+    use crate::nlmeans::{nlmeans_plane, nlmeans_plane_naive};
+    use crate::video::PlaneBuf;
+
+    fn to_buf(data: &[f32], width: usize, height: usize, max_val: f32) -> PlaneBuf {
+        let mut buf = PlaneBuf::zeroed(width, height, max_val);
+        for y in 0..height {
+            for x in 0..width {
+                if let Some(&v) = data.get(y * width + x) {
+                    buf.set(x, y, v);
+                }
+            }
+        }
+        buf
+    }
+
+    /// The integral-image fast path, as shipped.
+    #[must_use]
+    pub fn nlmeans_fast(
+        data: &[f32],
+        width: usize,
+        height: usize,
+        max_val: f32,
+        h: f32,
+        pr: i64,
+        rr: i64,
+    ) -> Vec<f32> {
+        nlmeans_plane(&to_buf(data, width, height, max_val), h, pr, rr)
+            .as_slice()
+            .to_vec()
+    }
+
+    /// The brute-force `O(w*h*(2rr+1)^2*(2pr+1)^2)` reference the fast path
+    /// replaced.
+    #[must_use]
+    pub fn nlmeans_naive(
+        data: &[f32],
+        width: usize,
+        height: usize,
+        max_val: f32,
+        h: f32,
+        pr: i64,
+        rr: i64,
+    ) -> Vec<f32> {
+        nlmeans_plane_naive(&to_buf(data, width, height, max_val), h, pr, rr)
+            .as_slice()
+            .to_vec()
+    }
+}
+
 pub use registry::DenoiseRegistry;
