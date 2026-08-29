@@ -1,0 +1,19 @@
+# Registry fragment (plan 19 SS3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Plan 16 SS6.3's subtitle-rendering row (GitHub #486/FT-5.1, #487/#488
+# FT-5.2/5.3): `ass` and `subtitles`, both self-contained (`filename=`)
+# filters over `vaco-ass` + `vaco-filter-text`.
+
+[[component]]
+kind = "filter"
+name = "ass"
+long_name = "Render ASS/SSA subtitles onto the input video."
+ctor = "vaco_filter_subtitle::ass_filter::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "subtitles"
+long_name = "Render a subtitle file onto the input video."
+ctor = "vaco_filter_subtitle::subtitles::DESC"
+media = "video"

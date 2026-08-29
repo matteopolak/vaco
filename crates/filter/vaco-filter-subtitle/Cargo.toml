@@ -1,0 +1,32 @@
+[package]
+name = "vaco-filter-subtitle"
+description = "Subtitle rendering filters: bitmap compositing, simple-text layout, ASS typesetting via vaco-ass. `subtitles`/`ass` filters. Plan 16 SS6.3, GitHub #486 (FT-5.1), #487/#488 (FT-5.2/5.3)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+vaco-core = { path = "../../core/vaco-core" }
+vaco-limits = { path = "../../core/vaco-limits" }
+vaco-opts = { path = "../../core/vaco-opts" }
+vaco-color = { path = "../../model/vaco-color" }
+vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
+vaco-frame = { path = "../../model/vaco-frame" }
+vaco-filter-core = { path = "../vaco-filter-core" }
+vaco-filter-graph = { path = "../vaco-filter-graph" }
+vaco-filter-draw = { path = "../vaco-filter-draw" }
+vaco-filter-text = { path = "../vaco-filter-text" }
+vaco-ass = { path = "../vaco-ass" }
+vaco-format-subtitle = { path = "../../format/vaco-format-subtitle" }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.vaco]
+layer = 5

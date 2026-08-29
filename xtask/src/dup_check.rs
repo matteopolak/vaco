@@ -422,6 +422,32 @@ const DISTINCT: &[(&str, &str)] = &[
          (sample rate, channels, bit depth, total samples, MD5). No shared \
          concept.",
     ),
+    (
+        "Event",
+        "vaco-ass: one ASS/SSA `Dialogue:`/`Comment:` line (start/end/style/\
+         margins/override-tag text). vaco-codec-subtitle-cc: one decoded \
+         CEA-608/708 caption event. Two different subtitle families' own \
+         per-cue record, sharing a name because both specifications use it.",
+    ),
+    (
+        "Style",
+        "vaco-ass: one ASS/SSA `[V4+ Styles]` record (font/colour/outline/\
+         alignment). vaco-codec-subtitle-cc: CEA-608/708's pen/window style \
+         attributes. Same reasoning as `Event` above — different formats, \
+         same borrowed vocabulary.",
+    ),
+    (
+        "Script",
+        "vaco-ass: a parsed ASS/SSA document (`Script Info`/`Styles`/\
+         `Events`). vaco-mux-stream: the `ffmetadata` muxer's own script/\
+         directive record. No shared concept.",
+    ),
+    (
+        "Item",
+        "vaco-ass: one tokenized override-tag or literal-text piece of a \
+         `Dialogue:` line's `Text` field. vaco-demux-mxf: one KLV \
+         structural-metadata item. No shared concept.",
+    ),
 ];
 
 /// Known duplicates that are *not* yet resolved, with the plan.
