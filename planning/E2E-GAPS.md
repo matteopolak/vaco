@@ -185,3 +185,46 @@ is live. Measured: 1080p `-refs 1 -bf 0` fails after exactly **10 frames** with
 Real memory is freed correctly; the budget simply never hears about it. **Raising
 `max_alloc_total` would not fix this** — the counter is unbounded until `flush()`,
 so a larger cap only moves the frame at which it fires.
+
+## 9. Benchmark results, measured (2026-08-29, after the DPB fix)
+
+4K now decodes completely — all 75 frames, 933,120,000 bytes — where it was
+capped at 2 frames before the budget-release fix.
+
+| Scenario | ffmpeg | vaco | Ratio |
+|---|---|---|---|
+| mkv → mp4 stream copy | 0.06s | **0.03s** | **vaco 2× faster** |
+| 2160p → 1080p decode+scale+rawvideo | 0.26s | 7.53s | 29× slower |
+| H.264 → H.265 via `libx265` | 1.94s | 5.35s | 2.8× slower |
+
+### How much of that is threading
+
+Isolated on a 10-core machine, 4K decode only:
+
+| | Time |
+|---|---|
+| ffmpeg, default threads | 0.24s |
+| ffmpeg, `-threads 1` | 0.61s |
+| **vaco** (no threading at all) | **6.53s** |
+
+So threading buys ffmpeg ~2.6× here, and **vaco is ~10.7× slower than
+single-threaded ffmpeg**. Two separate problems, and the larger one is not
+threading:
+
+1. **~10× per-frame work.** SIMD coverage, memory layout, and algorithmic
+   choices in the decode path. This is where the real gap is.
+2. **No threading.** Frame- and slice-level parallelism do not exist. `vaco-sched`
+   has machinery; no decoder uses it.
+
+Stream copy — the one path that is neither decode-bound nor encode-bound — is
+already faster than ffmpeg, which suggests the I/O and container layers are
+sound and the gap is specifically in codec inner loops.
+
+### Caveats on these numbers
+
+- **The 2160p→1080p output is not correct yet.** H.264 inter prediction drifts
+  (§7), so this times wrong pixels. The figure will move once that is fixed —
+  possibly in either direction.
+- **The H.265 comparison is not like-for-like**: vaco's output is 7,111,408
+  bytes against ffmpeg's 2,409,789, so different parameters are reaching x265.
+  Until the invocations match, that row measures configuration, not speed.
