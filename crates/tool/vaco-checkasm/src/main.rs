@@ -21,7 +21,7 @@ use vaco_checkasm::kernels::fmtconvert::{Int16ToFloatKernel, Int32ToFloatKernel}
 use vaco_checkasm::kernels::intrapred::DcPredictKernel;
 use vaco_checkasm::kernels::lpc::AutocorrelateKernel;
 use vaco_checkasm::kernels::masked_select::MaskedSelectKernel;
-use vaco_checkasm::kernels::mecmp::{SadKernel, SsdKernel, VarianceKernel};
+use vaco_checkasm::kernels::mecmp::{SadKernel, SatdKernel, SsdKernel, VarianceKernel};
 use vaco_checkasm::kernels::scale_affine::AffineRowKernel;
 use vaco_checkasm::{Differential, Kernel, Report};
 
@@ -92,6 +92,10 @@ const ENTRIES: &[Entry] = &[
     Entry {
         name: VarianceKernel::NAME,
         verify: verify_report::<VarianceKernel>,
+    },
+    Entry {
+        name: SatdKernel::NAME,
+        verify: verify_report::<SatdKernel>,
     },
     Entry {
         name: Int16ToFloatKernel::NAME,

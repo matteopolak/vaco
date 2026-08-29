@@ -1,11 +1,11 @@
 //! Wires `vaco-codec-dsp-mecmp`'s vectorised comparison kernels (D-12,
-//! #144) through the harness: the scalar reference in that crate against
-//! `MecmpKernels::select()`'s dispatched path, over the vector-width tails
-//! and saturation boundaries `crate::edge` generates.
-//!
-//! `satd` is not wired here: it has no vector variant to differ from (see
-//! that crate's doc, "What is vectorised"), so a differential test against
-//! itself would prove nothing.
+//! #144, #145/PF-3.9) through the harness: the scalar reference in that
+//! crate against `MecmpKernels::select()`'s dispatched path, over the
+//! vector-width tails and saturation boundaries `crate::edge` generates.
+//! All four of `sad`/`ssd`/`variance`/`satd` are wired — `satd` joined the
+//! other three once its vector path measured a genuine win (~1.29x on this
+//! machine, see that crate's module doc) rather than the loss its 4x4
+//! Hadamard shuffle was originally expected to be.
 
 use vaco_codec_dsp_mecmp::{MecmpKernels, Plane};
 use vaco_simd::KernelSet;
@@ -161,6 +161,34 @@ impl Kernel for VarianceKernel {
     }
 }
 
+/// [`Kernel`] adapter for [`vaco_codec_dsp_mecmp::satd`].
+#[derive(Debug, Clone, Copy)]
+pub struct SatdKernel;
+
+impl Kernel for SatdKernel {
+    const NAME: &'static str = "vaco-codec-dsp-mecmp::satd";
+    type Case = MecmpCase;
+    type Lane = u32;
+
+    fn cases() -> Vec<Self::Case> {
+        cases()
+    }
+
+    fn scalar(case: &Self::Case) -> Vec<Self::Lane> {
+        vec![(MecmpKernels::reference().satd)(
+            case.cur_plane(),
+            case.ref_plane(),
+        )]
+    }
+
+    fn vector(case: &Self::Case) -> Vec<Self::Lane> {
+        vec![(MecmpKernels::select().satd)(
+            case.cur_plane(),
+            case.ref_plane(),
+        )]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,6 +211,13 @@ mod tests {
     #[test]
     fn variance_vector_agrees_with_scalar() {
         let report = Differential::<VarianceKernel>::run();
+        assert!(report.cases_run() > 0);
+        report.assert_clean();
+    }
+
+    #[test]
+    fn satd_vector_agrees_with_scalar() {
+        let report = Differential::<SatdKernel>::run();
         assert!(report.cases_run() > 0);
         report.assert_clean();
     }

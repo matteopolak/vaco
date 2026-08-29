@@ -68,6 +68,17 @@ fn satd_scalar(bencher: divan::Bencher<'_, '_>) {
     });
 }
 
+#[divan::bench]
+fn satd_dispatched(bencher: divan::Bencher<'_, '_>) {
+    let (cur, refb) = buffers();
+    let k = MecmpKernels::select();
+    bencher.bench(|| {
+        let c = Plane::new(divan::black_box(&cur), W, W, H);
+        let r = Plane::new(divan::black_box(&refb), W, W, H);
+        (k.satd)(c, r)
+    });
+}
+
 fn main() {
     divan::main();
 }
