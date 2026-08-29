@@ -40,28 +40,48 @@
 //! | [`frame`] | the per-frame pipeline: header, qi decode, coefficients, DC prediction, reconstruction, loop filter |
 //! | [`decoder`] | the `Decoder` impl: `set_extradata` (Xiph-laced headers) and per-packet decode |
 //!
-//! # A known gap, honestly
+//! # Verified against a real file, byte-exact per plane
 //!
-//! No genuine Theora encoder was available in this environment to produce
-//! `ffmpeg`-encoded ground truth to diff against (`ffmpeg -codecs` here
-//! lists Theora decode only, not encode), so this crate's verification is
-//! narrower than this tree's other codecs: internal consistency tests
-//! (headers round-trip their own worked examples from the spec text itself,
-//! particularly the coded-order Hilbert curve and the quantization matrix
-//! interpolation formula, both checked digit-for-digit against the spec's
-//! own numeric example) and structural fuzzing, but *not* a byte-exact
-//! comparison of a real encoded frame's reconstructed pixels against an
-//! independent decoder's output. Every formula in [`idct`], [`tokens`], and
-//! [`frame`]'s reconstruction/loop-filter path is transcribed directly from
-//! the spec's own numbered steps rather than measured, with one exception
-//! flagged in [`setup`]'s module doc (the loop filter limit table's decode
-//! procedure, which is missing from the published spec text itself). Treat
-//! this crate as spec-conformant by construction and cross-checked
-//! internally, not as verified against independent ground truth the way
-//! this tree's other from-scratch codecs are — a real `.ogv`/`.ogg`
-//! Theora file with known-correct decoded frames would close this gap and
-//! is the first thing worth throwing at this crate before trusting it in
-//! production.
+//! No genuine Theora *encoder* was available in this environment
+//! (`ffmpeg -codecs` here lists Theora decode only), so this crate could
+//! not generate its own ground truth the way this tree's other from-scratch
+//! codecs do. It does not need to: `ffmpeg` decodes Theora, and real Theora
+//! content is freely available — `ffmpeg`'s own FATE test suite carries
+//! two Ogg/Theora fixtures (`https://fate-suite.ffmpeg.org/ogg/`). This
+//! crate's `tests/oracle.rs` decodes one of them (`bear.ogv`, 320x180,
+//! encoded by an old `ffmpeg`/`libtheora`) and compares every keyframe
+//! against `ffmpeg -i bear.ogv -f rawvideo -pix_fmt yuv420p`'s own decode,
+//! **Y, U and V checked separately** — an aggregate or luma-only check can
+//! hide a chroma-only bug entirely, which is exactly what happened during
+//! this verification (see below) and is why the check stays split.
+//!
+//! Result: **byte-exact on every plane**, at all three of `bear.ogv`'s
+//! keyframes. A second real file (`ogg/empty_theora_packets.ogv`, 320x240,
+//! a genuinely different encoder — native `libtheora`, not `ffmpeg`'s own)
+//! gave the same result at its own nine keyframes. Getting here found and
+//! fixed two real, structural bugs — full account in `tests/oracle.rs`'s
+//! module doc — neither of them in the DCT/entropy/reconstruction pipeline
+//! itself (unsurprising in hindsight, since luma was already byte-exact
+//! before either fix): `vaco-demux-ogg` never packed Theora's comment and
+//! setup headers into `extradata` at all (no real Ogg/Theora file could
+//! reach this decoder through that container until that was fixed), and
+//! this crate's own chroma picture-region crop used the wrong height,
+//! corrupting the last several rows of every chroma plane while leaving
+//! luma untouched. A third bug (the loop filter limit table's reconstructed
+//! decode procedure using the wrong prefix convention, see [`setup`]'s
+//! module doc) surfaced as an immediate, loud parse failure on the first
+//! real file tried, rather than a silent pixel error.
+//!
+//! What this does *not* cover: inter-frame decode (out of scope by design,
+//! see below), and the odd-offset/non-block-aligned picture-region cropping
+//! cases [`frame::crop_plane`]'s doc already flags as unimplemented — both
+//! `bear.ogv` and `empty_theora_packets.ogv` crop from a taller coded frame
+//! down to a non-multiple-of-16 picture height, which already exercises the
+//! *common* even-offset crop path, but an odd `PICX`/`PICY` has not been
+//! seen on a real file. Two real files, three keyframes each on average,
+//! is a real but modest sample — a decoder this well fuzz-tested and this
+//! cleanly verified on what was tried is a reasonable thing to register,
+//! not a proof against every possible real-world stream.
 //!
 //! # How to change it
 //!

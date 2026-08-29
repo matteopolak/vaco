@@ -644,7 +644,8 @@ pub(crate) fn decode_frame_payload(
 /// even, block-aligned picture regions, and getting the last chroma row or
 /// column wrong on an odd, unaligned crop is exactly the kind of
 /// "unstructured, rarely hit" gap this crate's own shipping bar tolerates —
-/// see the crate root doc's "known gap" section.
+/// see the crate root doc's verification section for what has and has not
+/// actually been exercised on a real file.
 pub(crate) fn crop_plane(
     src: &PlaneBuf,
     full_w: u32,

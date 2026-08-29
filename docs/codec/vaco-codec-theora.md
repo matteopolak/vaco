@@ -10,7 +10,7 @@ Specification, Xiph.Org Foundation, June 3 2017 — the only normative Theora
 document; VP3 itself has no separate written spec). This crate decodes
 `FTYPE == 0` (intra/keyframe) frames only and returns
 `vaco_core::Error::Unsupported` for `FTYPE == 1` (inter/delta) frames rather
-than attempting motion compensation — see "A known gap, honestly" below.
+than attempting motion compensation — see "Verified against a real file" below.
 
 ## How it works
 
@@ -50,31 +50,65 @@ procedures the spec describes collapse to a fixed case here, documented in
   approximation, because the spec's right/top-edge pass only fires when the
   neighbor on that side is *uncoded*, which never happens here.
 
-## A known gap, honestly
+## Verified against a real file, byte-exact per plane
 
 No genuine Theora *encoder* was available in this environment (`ffmpeg
--codecs` here lists Theora decode only), so unlike this tree's other
-from-scratch codecs, this crate has not been diffed against an independent
-decoder's output on real encoded content — the D6/D17 "measure against a
-reference implementation" methodology this tree otherwise leans on. What
-verification exists instead: every formula in `idct`, `tokens`, and
-`frame`'s reconstruction/loop-filter path is transcribed directly from the
-spec's own numbered steps (not measured/reconstructed), the coded-order
-Hilbert curve and the quantization-matrix interpolation formula are checked
-digit-for-digit against the spec's own worked numeric examples, and the
-`theora_decode` fuzz target exercises the full pipeline structurally. The one
-exception is the loop filter limit table's decode procedure (section 6.4.1),
-which is **missing from the published spec PDF itself** — confirmed by
-rendering the actual page images, not just a text-extraction glitch — and
-was reconstructed by analogy with the very next, textually-complete section;
-see `src/setup.rs`'s module doc for the full account. Inter-frame decode is
-simply not implemented (a scope decision, not a residual bug): a stream with
-delta frames decodes every keyframe correctly and then returns a clean,
-typed `Error::Unsupported` on the first delta frame rather than repeating a
-stale picture or guessing. A real `.ogv` file with independently-verified
-decoded frames is the first thing worth throwing at this crate before
-trusting it in production; this crate should be treated as spec-conformant
-by construction, not as cross-verified the way this tree's other codecs are.
+-codecs` here lists Theora decode only), so this crate could not generate
+its own D6/D17-style ground truth the way this tree's other from-scratch
+codecs do. It did not need to: `ffmpeg` decodes Theora, and real Theora
+content is freely available from `ffmpeg`'s own FATE test suite
+(`https://fate-suite.ffmpeg.org/ogg/`). `tests/oracle.rs` decodes one such
+fixture (`bear.ogv`, checked in) and diffs every keyframe against `ffmpeg -i
+bear.ogv -f rawvideo -pix_fmt yuv420p`'s own decode, **Y/U/V compared
+separately** rather than as one aggregate metric — this project's own VP8
+encoder work found a chroma-only bug that survived both a self-round-trip
+and a luma-only PSNR check, and the same shape of bug turned up here (see
+below), which is exactly the failure mode a split-by-plane comparison
+exists to catch.
+
+**Result: byte-exact on every plane**, at all three of `bear.ogv`'s
+keyframes, and (not checked in as a fixture, but reproducible from the same
+FATE suite URL) at all nine keyframes of a second real file encoded by a
+different, genuinely independent encoder (`ogg/empty_theora_packets.ogv`,
+320x240, native `libtheora` rather than `ffmpeg`'s own). Getting to that
+result found and fixed two real, structural bugs, neither of them in the
+DCT/entropy/reconstruction pipeline itself (unsurprising in hindsight, since
+luma was already byte-exact before either fix was made):
+
+- `vaco-demux-ogg` never packed Theora's comment and setup header packets
+  into `Stream::params.extradata` — only Vorbis's branch of its header
+  accumulation logic did. No real Ogg/Theora file could reach this decoder
+  through that container at all until that was fixed (a container-side
+  gap, not a bitstream-decode one — see `vaco-demux-ogg`'s own commit for
+  the fix).
+- This crate's own chroma picture-region crop computed its horizontal/
+  vertical subsampling factors by calling `PixelFormat::chroma_blocks(1,
+  1)`, which is a macro-block-domain function that returns `(1, 1)`
+  unchanged for 4:2:0 regardless of its input (the 2x pixel subsampling
+  lives in the fixed 8-vs-16-pixels-per-macro-block convention applied
+  elsewhere, not in that function's block-count ratio). The bug used the
+  coded frame's full chroma height when cropping to the picture region
+  instead of the correctly-halved one, corrupting the last several rows of
+  every chroma plane while leaving luma completely untouched — see
+  `PixelFormat::chroma_subsample`'s doc in `src/ident.rs`.
+
+A third bug — the loop filter limit table's reconstructed decode procedure
+(section 6.4.1, missing from the published spec PDF; see `src/setup.rs`'s
+module doc) initially guessed the wrong prefix convention (read-plus-one,
+by over-eager analogy with AC/DC scale) — surfaced as an immediate, loud
+setup-header parse failure on the first real file tried, not a silent pixel
+error, and was root-caused by exhaustively searching every candidate
+bit-length for that one field against the real bitstream until the entire
+rest of the header parsed validly.
+
+What this still does not cover: inter-frame decode (a scope decision, not a
+residual bug — a stream with delta frames decodes every keyframe correctly
+and returns a clean, typed `Error::Unsupported` on the first delta frame
+rather than repeating a stale picture or guessing), and the spec's
+odd-offset/non-block-aligned picture-region crop rules (section 4.4.4,
+`frame::crop_plane`'s own doc), which neither real fixture exercised. Two
+real files is a real but modest sample; treat this crate as verified on
+what was tried, not proven against every stream Theora can express.
 
 ## How to change it
 
@@ -133,6 +167,18 @@ binary-tree parser (round trip, a single 0-bit-code entry, and an oversized
 token decoder for several representative tokens; the loop filter's response
 function at its band edges; and `Setup`/`Ident`/extradata error paths
 (truncated, garbage, or out-of-order input must fail cleanly, never panic).
+
+`tests/oracle.rs` is the real-file check described above: decodes the
+checked-in `tests/fixtures/bear.ogv` end to end through `vaco-demux-ogg` and
+`TheoraDecoder`, and asserts every keyframe matches the checked-in
+`ffmpeg`-decoded reference (`tests/fixtures/bear_frame{0,12,24}.yuv`)
+byte-for-byte, Y/U/V separately. To check a different or larger real file, swap the fixture path and
+frame indices in `tests/oracle.rs` and regenerate the reference `.yuv`
+slices the same way its own module doc describes doing it for `bear.ogv`
+(`ffmpeg -i <file> -f rawvideo -pix_fmt yuv420p`, sliced per keyframe) —
+the module doc names a second real file (not checked in) that gave the
+same result this way.
+
 A `theora_decode` fuzz target decodes arbitrary bytes as a keyframe packet
 against a small fixed, valid, hand-built extradata blob, run twice through
 the same decoder instance to exercise state carried across packets.

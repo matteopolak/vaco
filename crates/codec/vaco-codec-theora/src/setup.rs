@@ -14,22 +14,36 @@
 //! source itself, not a transcription error on this crate's part.
 //!
 //! The table's own variable list (`qi`: 6 bits, `NBITS`: 3 bits) and its
-//! 7-bit `LFLIMS` output make the intended procedure unambiguous by analogy
-//! with the very next section (6.4.2's otherwise-identical AC/DC scale table
-//! decode, which *does* have its steps: read a bit-width-minus-one prefix,
-//! then that many bits, 64 times). The only free parameter is the prefix
-//! width, and the table's own `NBITS` row settles that: 3 bits here against
-//! AC/DC scale's 4, exactly the difference needed for a 7-bit output field
-//! instead of AC/DC scale's 16-bit one. This crate reconstructs the
-//! procedure as: read a 3-bit unsigned integer, add one, and read that many
-//! bits into each of the 64 `LFLIMS` entries — and confirmed it against
-//! `ffmpeg -c:v theora`'s own setup-header parse on real streams (D17):
-//! decoding a real Theora setup header with this procedure and comparing the
-//! resulting struct's other, textually-complete fields (quantization
-//! parameters immediately follow in the same bitstream) for validity would
-//! fail loudly (`QRBMIS` indices out of range, a Huffman tree that never
-//! terminates within 32 bits) if the loop filter table had consumed the
-//! wrong number of bits — it did not, on every real setup header tried.
+//! 7-bit `LFLIMS` output make the shape of the procedure unambiguous by
+//! analogy with the very next section (6.4.2's otherwise-identical AC/DC
+//! scale table decode, which *does* have its steps: read a prefix giving a
+//! bit width, then read that many bits, 64 times). The one thing analogy
+//! alone could not settle is whether the 3-bit prefix is used directly or
+//! read-plus-one, the way AC/DC scale's 4-bit prefix is (spec text,
+//! section 6.4.2 steps 1/3: "read a 4-bit unsigned integer... assign NBITS
+//! the value read, plus one"). This crate first assumed the same
+//! read-plus-one convention here, by analogy — **that guess was wrong**,
+//! caught only once a real encoded file was decoded end to end (see
+//! `Vaco-Spec-Ref` below): it desynchronised the bitstream immediately
+//! after the loop filter table, producing a nonsensical `NBMS` (number of
+//! base matrices) of 356 against a setup header barely 2600 bytes long.
+//!
+//! The actual convention, confirmed by exhaustively searching every
+//! candidate bit-length for the loop filter section against a real
+//! `ffmpeg`-encoded setup header (`bear.ogv`, `ffmpeg` FATE suite) until the
+//! *entire rest* of the header — AC/DC scale, the base matrix table, all
+//! six quant-range chains summing to exactly 63, and all 80 Huffman trees —
+//! decoded cleanly down to the packet's own byte-alignment padding: the
+//! 3-bit prefix is used **directly, with no plus-one**, unlike AC/DC
+//! scale's 4-bit one. In hindsight this is the more consistent reading of
+//! the two output field widths, not an arbitrary special case: AC/DC
+//! scale's registers are 16 bits wide, so a 4-bit prefix needs the
+//! plus-one to ever reach a width of 16 (a bare 4-bit field maxes out at
+//! 15); `LFLIMS` is a 7-bit register, and a bare 3-bit prefix already
+//! reaches exactly 7 with no offset needed. Only one candidate bit-length
+//! out of several hundred tried made the rest of the header parse validly
+//! at all (`crates/codec/vaco-codec-theora/tests/oracle.rs` and its
+//! `bear.ogv` fixture), and it is the one this convention predicts.
 
 use vaco_bitstream::BitReader;
 use vaco_core::{Error, Result};
@@ -58,7 +72,7 @@ impl Setup {
 
         // Section 6.4.1 (reconstructed procedure; see module doc).
         let mut lflims = [0u32; 64];
-        let nbits = r.get(3) + 1;
+        let nbits = r.get(3);
         for v in &mut lflims {
             *v = r.get(nbits);
         }

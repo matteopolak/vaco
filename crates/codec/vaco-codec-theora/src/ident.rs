@@ -28,6 +28,31 @@ impl PixelFormat {
             Self::Yuv444 => (fmbw.saturating_mul(2), fmbh.saturating_mul(2)),
         }
     }
+
+    /// Pixel-domain chroma subsampling factors `(horizontal, vertical)`:
+    /// how many luma pixels correspond to one chroma pixel on each axis.
+    ///
+    /// This is **not** derivable by calling [`Self::chroma_blocks`] with a
+    /// `1x1` macro block grid — that function's `Yuv420` arm always returns
+    /// its input unchanged (`(fmbw, fmbh)`), because the block-domain
+    /// chroma:luma ratio is 1:1 in macro block units regardless of pixel
+    /// format; the 2x pixel subsampling for 4:2:0/4:2:2 is baked into the
+    /// fixed 8-vs-16-pixels-per-macro-block-edge convention applied
+    /// elsewhere, not into the block *count*. Calling `chroma_blocks(1, 1)`
+    /// to get a subsampling factor was a real bug (caught by decoding a
+    /// real file and finding the last few rows of every chroma plane
+    /// corrupted, section D6/D17): it silently returned `(1, 1)` for every
+    /// pixel format including `Yuv420`, so the picture-region crop used the
+    /// coded frame's full chroma height/width instead of the correct
+    /// halved one, and every row past the true chroma height read padding.
+    #[must_use]
+    pub(crate) const fn chroma_subsample(self) -> (u32, u32) {
+        match self {
+            Self::Yuv420 => (2, 2),
+            Self::Yuv422 => (2, 1),
+            Self::Yuv444 => (1, 1),
+        }
+    }
 }
 
 /// The identification header's fields that frame decode needs.

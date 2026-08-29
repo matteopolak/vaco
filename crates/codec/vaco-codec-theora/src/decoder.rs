@@ -118,8 +118,7 @@ impl TheoraDecoder {
             } else {
                 // Proportional chroma crop; see `frame::crop_plane`'s doc for
                 // the odd-offset/odd-size cases this does not model exactly.
-                let (sx, sy) = ident.pf.chroma_blocks(1, 1);
-                let (sx, sy) = (sx.max(1), sy.max(1));
+                let (sx, sy) = ident.pf.chroma_subsample();
                 (
                     picx / sx,
                     picy / sy,

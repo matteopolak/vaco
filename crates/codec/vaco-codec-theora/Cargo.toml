@@ -19,6 +19,9 @@ vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
 
 [dev-dependencies]
 proptest.workspace = true
+vaco-demux-ogg = { path = "../../format/vaco-demux-ogg" }
+vaco-format-core = { path = "../../format/vaco-format-core" }
+vaco-io = { path = "../../io/vaco-io" }
 
 [lints]
 workspace = true
