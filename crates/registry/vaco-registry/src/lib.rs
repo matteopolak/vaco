@@ -496,6 +496,11 @@ fn bsf_descs() -> impl Iterator<Item = vaco_bsf_core::BsfDesc> {
     vaco_bsf_generic::filters()
         .iter()
         .chain(vaco_bsf_h2645::filters())
+        .chain(vaco_bsf_audio::filters())
+        .chain(vaco_bsf_av1::filters())
+        .chain(vaco_bsf_legacy::filters())
+        .chain(vaco_bsf_subtitle::filters())
+        .chain(vaco_bsf_vpx::filters())
         .copied()
 }
 
