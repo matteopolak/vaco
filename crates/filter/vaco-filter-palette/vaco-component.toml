@@ -1,0 +1,26 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Three of plan 16 §4.2's `vaco-filter-palette` row's four filters
+# (`latticepal` not implemented — not present in the installed ffmpeg 8.1
+# reference at all, see src/lib.rs).
+
+[[component]]
+kind = "filter"
+name = "palettegen"
+long_name = "Find the optimal palette for a given stream."
+ctor = "vaco_filter_palette::palettegen::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "paletteuse"
+long_name = "Use a palette to downsample an input video stream."
+ctor = "vaco_filter_palette::paletteuse::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "elbg"
+long_name = "Apply posterize effect, using the ELBG algorithm."
+ctor = "vaco_filter_palette::elbg::DESC"
+media = "video"
