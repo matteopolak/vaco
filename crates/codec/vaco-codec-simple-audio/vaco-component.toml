@@ -1,0 +1,42 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+# Two of this crate's three codecs are real, registered implementations.
+# `dfpwm` is deliberately NOT listed here: src/dfpwm.rs's module doc and
+# src/lib.rs's crate doc explain why (measured against ffmpeg 8.1's real
+# decode, the transcribed wiki-spec predictor does not reproduce it —
+# registering it would hand a caller wrong output with no error).
+
+[[component]]
+kind      = "decoder"
+name      = "qoa"
+long_name = "QOA (Quite OK Audio)"
+feature   = "codec-simple-audio"
+ctor      = "vaco_codec_simple_audio::QOA_DECODER"
+media     = "audio"
+codec     = "qoa"
+
+[[component]]
+kind      = "encoder"
+name      = "qoa"
+long_name = "QOA (Quite OK Audio)"
+feature   = "codec-simple-audio"
+ctor      = "vaco_codec_simple_audio::QOA_ENCODER"
+media     = "audio"
+codec     = "qoa"
+
+[[component]]
+kind      = "decoder"
+name      = "comfortnoise"
+long_name = "RFC 3389 Comfort Noise"
+feature   = "codec-simple-audio"
+ctor      = "vaco_codec_simple_audio::COMFORTNOISE_DECODER"
+media     = "audio"
+codec     = "comfortnoise"
+
+[[component]]
+kind      = "encoder"
+name      = "comfortnoise"
+long_name = "RFC 3389 Comfort Noise"
+feature   = "codec-simple-audio"
+ctor      = "vaco_codec_simple_audio::COMFORTNOISE_ENCODER"
+media     = "audio"
+codec     = "comfortnoise"

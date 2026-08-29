@@ -1,0 +1,28 @@
+[package]
+name = "vaco-codec-simple-audio"
+description = "Small open-spec audio codecs: DFPWM1a, QOA (Quite OK Audio) and RFC 3389 comfort noise."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+vaco-core = { path = "../../core/vaco-core" }
+vaco-limits = { path = "../../core/vaco-limits" }
+vaco-codec-core = { path = "../../signal/vaco-codec-core" }
+vaco-codec-dsp-lpc = { path = "../../signal/vaco-codec-dsp-lpc" }
+vaco-sampfmt = { path = "../../model/vaco-sampfmt" }
+vaco-chlayout = { path = "../../model/vaco-chlayout" }
+vaco-packet = { path = "../../model/vaco-packet" }
+vaco-frame = { path = "../../model/vaco-frame" }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.vaco]
+layer = 4
