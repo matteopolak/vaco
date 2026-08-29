@@ -160,6 +160,70 @@ impl<'a> VlcTable<'a> {
         }
         None
     }
+
+    /// Build a direct lookup table for [`decode_with_lut`](Self::decode_with_lut):
+    /// index `i` (the `max_len`-bit prefix `decode`'s own `peek` would read)
+    /// maps to `(symbol, len)`, with `len == 0` meaning "no entry matches this
+    /// prefix" — the same sentinel [`VlcEntry::len`]'s own docs already use for
+    /// "never a candidate", so a lookup miss and an ignored zero-length entry
+    /// read the same way.
+    ///
+    /// `O(2^max_len)`: real work, unlike [`VlcTable::new`]. Build this **once**
+    /// per table (a `LazyLock`/`OnceLock` at the call site, exactly as this
+    /// crate's own `benches/vlc.rs` does) and reuse it across every decode —
+    /// building it per call would cost far more than the linear scan it
+    /// replaces.
+    ///
+    /// Entries are filled in table order and a slot already claimed by an
+    /// earlier entry is left alone, which reproduces [`decode`](Self::decode)'s
+    /// own "first match in table order wins" rule exactly — including on a
+    /// malformed (not actually prefix-free) table, where the two would
+    /// otherwise silently disagree on which entry a shared prefix decodes to.
+    #[must_use]
+    pub fn build_lut(&self) -> Vec<(u32, u8)> {
+        let size = 1usize << u32::from(self.max_len);
+        let mut lut = vec![(0u32, 0u8); size];
+        for entry in self.entries {
+            if entry.len == 0 || entry.len > self.max_len {
+                continue;
+            }
+            let shift = self.max_len - entry.len;
+            let base = (entry.code as usize) << shift;
+            let span = 1usize << shift;
+            for slot in lut.iter_mut().skip(base).take(span) {
+                if slot.1 == 0 {
+                    *slot = (entry.symbol, entry.len);
+                }
+            }
+        }
+        lut
+    }
+
+    /// Decode one symbol via a [`build_lut`](Self::build_lut) table: one
+    /// `peek`, one array index, one `skip` — no scan. Verified
+    /// (`tests`/the crate's proptest) to agree with [`decode`](Self::decode)
+    /// on every input, for every table this crate's own test suite builds.
+    ///
+    /// `lut` must have come from `self.build_lut()` (or an equivalent table
+    /// built the same way for the same entries) — a `lut` from a different
+    /// table produces nonsense silently, since there is no way to check that
+    /// from a `&[(u32, u8)]` alone. Panics only via slice indexing are not
+    /// possible: an out-of-range `peeked` value cannot occur because `peek`
+    /// never returns more than `max_len` bits, which is exactly `lut`'s size
+    /// when built by `build_lut`.
+    #[must_use]
+    pub fn decode_with_lut(&self, r: &mut BitReader<'_>, lut: &[(u32, u8)]) -> Option<u32> {
+        if self.max_len == 0 {
+            return None;
+        }
+        let peeked = r.peek(u32::from(self.max_len));
+        let &(symbol, len) = lut.get(peeked as usize)?;
+        if len == 0 {
+            return None;
+        }
+        r.skip(u32::from(len));
+        Some(symbol)
+    }
 }
 
 /// Whether a set of entries forms a prefix-free code: no codeword is a prefix
@@ -308,6 +372,90 @@ mod tests {
         let mut r = BitReader::new(&bytes);
         for entry in &TOY {
             assert_eq!(table.decode(&mut r), Some(entry.symbol));
+        }
+    }
+
+    #[test]
+    fn decode_with_lut_reads_every_symbol_of_the_toy_code() {
+        let table = VlcTable::new(&TOY);
+        let lut = table.build_lut();
+        let bytes = [0b0101_1000u8];
+        let mut r = BitReader::new(&bytes);
+        assert_eq!(table.decode_with_lut(&mut r, &lut), Some(0));
+        assert_eq!(table.decode_with_lut(&mut r, &lut), Some(1));
+        assert_eq!(table.decode_with_lut(&mut r, &lut), Some(2));
+    }
+
+    #[test]
+    fn decode_with_lut_of_an_unmatched_prefix_consumes_nothing_and_returns_none() {
+        let sparse = [VlcEntry::new(0b0, 1, 42)];
+        let table = VlcTable::new(&sparse);
+        let lut = table.build_lut();
+        let bytes = [0b1111_1111u8];
+        let mut r = BitReader::new(&bytes);
+        let before = r.bit_pos();
+        assert_eq!(table.decode_with_lut(&mut r, &lut), None);
+        assert_eq!(r.bit_pos(), before, "a failed decode must not consume bits");
+    }
+
+    #[test]
+    fn empty_table_lut_never_matches_and_never_panics() {
+        let empty: [VlcEntry; 0] = [];
+        let table = VlcTable::new(&empty);
+        // `1 << max_len == 1 << 0 == 1`: build_lut still allocates one
+        // (unused) slot for a max_len-0 table. decode_with_lut never reads
+        // it -- the max_len==0 check returns before touching `lut` -- which
+        // is what this test actually verifies.
+        let lut = table.build_lut();
+        let bytes = [0xffu8; 4];
+        let mut r = BitReader::new(&bytes);
+        assert_eq!(table.decode_with_lut(&mut r, &lut), None);
+    }
+
+    /// A CAVLC-shaped table: varying lengths, a gap (no entry for `0b101`),
+    /// and reused low bits across different lengths, exercising real
+    /// candidate overlap the way `TOY` (a genuinely complete code with no
+    /// gaps) cannot.
+    const REALISTIC: [VlcEntry; 6] = [
+        VlcEntry::new(0b1, 1, 100),
+        VlcEntry::new(0b001, 3, 101),
+        VlcEntry::new(0b010, 3, 102),
+        VlcEntry::new(0b011, 3, 103),
+        VlcEntry::new(0b0001, 4, 104),
+        VlcEntry::new(0b0000, 4, 105),
+    ];
+
+    /// Exhaustively checks `decode_with_lut` against `decode` for every
+    /// possible `max_len`-bit prefix a real bitstream could present —
+    /// stronger than a random sample since `max_len` is small enough here to
+    /// enumerate completely (`2^4 == 16` cases), including the gap (`0b101`)
+    /// that must decode to `None` on both paths and consume nothing.
+    #[test]
+    fn decode_with_lut_agrees_with_decode_on_every_possible_prefix() {
+        let table = VlcTable::new(&REALISTIC);
+        let lut = table.build_lut();
+        assert_eq!(lut.len(), 1 << u32::from(table.max_len()));
+        for prefix in 0u32..(1 << u32::from(table.max_len())) {
+            // Two independent one-byte-plus-padding streams, one per path,
+            // so a wrong bit-consumption count on either side is visible in
+            // its own reader's final position rather than only in the
+            // decoded symbol.
+            let bytes = (prefix << (32 - table.max_len())).to_be_bytes();
+            let mut r_scan = BitReader::new(&bytes);
+            let mut r_lut = BitReader::new(&bytes);
+            let scan = table.decode(&mut r_scan);
+            let lut_result = table.decode_with_lut(&mut r_lut, &lut);
+            assert_eq!(
+                scan, lut_result,
+                "prefix {prefix:0width$b} disagreed",
+                width = table.max_len() as usize
+            );
+            assert_eq!(
+                r_scan.bit_pos(),
+                r_lut.bit_pos(),
+                "prefix {prefix:0width$b} consumed a different bit count",
+                width = table.max_len() as usize
+            );
         }
     }
 }

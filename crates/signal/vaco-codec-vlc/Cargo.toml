@@ -11,6 +11,13 @@ authors.workspace = true
 [dependencies]
 vaco-bitstream = { path = "../../core/vaco-bitstream" }
 
+[dev-dependencies]
+divan.workspace = true
+
+[[bench]]
+name    = "vlc"
+harness = false
+
 [lints]
 workspace = true
 
