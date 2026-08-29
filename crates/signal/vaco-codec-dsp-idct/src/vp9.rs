@@ -425,6 +425,70 @@ fn iwht4(t: &mut [i64], shift: u32) {
     set(t, 3, d);
 }
 
+/// The exact algebraic inverse of one [`iwht4`] butterfly (`shift = 0`) —
+/// derived by reversing its seven lifting steps in reverse order, not
+/// re-derived from any specification text: the VP9 bitstream specification
+/// defines only the *inverse* WHT (decoding is all it needs), so an
+/// encoder is free to choose any forward transform whose composition with
+/// the mandated inverse is the identity. Used by [`forward_wht4x4`], which
+/// this crate's own property tests verify by round-tripping through
+/// [`inverse_transform_2d`] itself — the correct oracle here, since there
+/// is no independent forward-direction specification to transcribe a
+/// second time.
+#[allow(clippy::many_single_char_names, reason = "mirrors iwht4's own a/b/c/d/e names")]
+fn iwht4_inverse(t: &mut [i64]) {
+    let a2 = get(t, 0);
+    let b1 = get(t, 1);
+    let c1 = get(t, 2);
+    let d2 = get(t, 3);
+    let a1 = a2 + b1;
+    let d1 = d2 - c1;
+    let e = (a1 - d1) >> 1;
+    let t3 = e - b1;
+    let t1 = e - c1;
+    let t0 = a1 - t1;
+    let t2 = d1 + t3;
+    set(t, 0, t0);
+    set(t, 1, t1);
+    set(t, 2, t2);
+    set(t, 3, t3);
+}
+
+/// The encoder-side forward Walsh-Hadamard transform: turns a 4x4 residual
+/// block (row-major) into the token values that, dequantised at VP9's
+/// fixed lossless quantiser (`dc_q`/`ac_q(qindex = 0) == 4`) and passed
+/// through [`inverse_transform_2d`] with `lossless = true`, reconstruct
+/// that same residual exactly (the quantiser's factor of 4 is exactly
+/// cancelled by `iwht4`'s own row-pass `>> 2`, which is what makes the
+/// whole pipeline lossless in the first place). Applies
+/// [`iwht4_inverse`] along columns then rows — the reverse order and
+/// reverse operation of [`inverse_transform_2d`]'s own row-then-column
+/// [`iwht4`] pass, which is what inverting a separable transform requires.
+#[must_use]
+pub fn forward_wht4x4(residual: &[i32; 16]) -> [i64; 16] {
+    let mut t: [i64; 16] = std::array::from_fn(|i| i64::from(residual.get(i).copied().unwrap_or(0)));
+    let mut col = [0i64; 4];
+    for j in 0..4 {
+        for (i, slot) in col.iter_mut().enumerate() {
+            *slot = get(&t, i * 4 + j);
+        }
+        iwht4_inverse(&mut col);
+        for (i, &v) in col.iter().enumerate() {
+            set(&mut t, i * 4 + j, v);
+        }
+    }
+    let mut row = [0i64; 4];
+    let after_columns = t;
+    for (i, chunk) in after_columns.chunks(4).enumerate() {
+        row.copy_from_slice(chunk);
+        iwht4_inverse(&mut row);
+        for (j, &v) in row.iter().enumerate() {
+            set(&mut t, i * 4 + j, v);
+        }
+    }
+    t
+}
+
 /// The four `TxType` values §8.7.2 dispatches on — named
 /// `{column-transform}_{row-transform}` per the specification's own naming
 /// (`ADST_DCT`: rows use DCT, columns use ADST — confirmed against both the
@@ -559,5 +623,36 @@ mod tests {
         assert_eq!(brev(3, 0b001), 0b100);
         assert_eq!(brev(3, 0b110), 0b011);
         assert_eq!(brev(5, 0), 0);
+    }
+
+    #[test]
+    fn forward_wht4x4_round_trips_a_hand_picked_block() {
+        let residual: [i32; 16] = [3, -1, 0, 7, 2, 2, -5, 1, 0, 0, 0, -9, 4, -4, 6, -2];
+        let tokens = forward_wht4x4(&residual);
+        let mut dequant: [i64; 16] = std::array::from_fn(|i| tokens.get(i).copied().unwrap_or(0) * 4);
+        inverse_transform_2d(&mut dequant, 2, TxType::DctDct, true);
+        for (r, &d) in residual.iter().zip(dequant.iter()) {
+            assert_eq!(i64::from(*r), d, "residual {residual:?} tokens {tokens:?}");
+        }
+    }
+
+    proptest::proptest! {
+        /// `forward_wht4x4` has no independent specification to check
+        /// against — the property that must hold, and the one this checks
+        /// on thousands of random blocks, is that it exactly inverts
+        /// [`inverse_transform_2d`]'s own lossless path once the fixed
+        /// `x4` quantiser factor is reapplied, for any residual an 8-bit
+        /// (or wider) source difference could produce.
+        #[test]
+        fn forward_wht4x4_always_round_trips(residual in proptest::collection::vec(-2000i32..=2000, 16)) {
+            let mut block = [0i32; 16];
+            block.copy_from_slice(&residual);
+            let tokens = forward_wht4x4(&block);
+            let mut dequant: [i64; 16] = std::array::from_fn(|i| tokens.get(i).copied().unwrap_or(0) * 4);
+            inverse_transform_2d(&mut dequant, 2, TxType::DctDct, true);
+            for (r, d) in block.iter().zip(dequant.iter()) {
+                proptest::prop_assert_eq!(i64::from(*r), *d);
+            }
+        }
     }
 }
