@@ -19,6 +19,11 @@ vaco-codec-core = { path = "../../signal/vaco-codec-core" }
 
 [dev-dependencies]
 proptest.workspace = true
+divan.workspace = true
+
+[[bench]]
+name    = "demux"
+harness = false
 
 [lints]
 workspace = true
