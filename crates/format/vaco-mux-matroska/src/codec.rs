@@ -9,6 +9,28 @@
 //! with no row is refused rather than guessed, since writing a `CodecID` this
 //! crate's own demuxer would not read back is worse than refusing the file.
 //!
+//! # E2E-GAPS 2 (2026-08-29): a table that stopped tracking the codecs this
+//! build actually has
+//!
+//! `Ffv1`, `Theora`, `Mpeg1video`, `Mpeg2video`, `Prores`, `Jpeg` (video) and
+//! `Ac3`, `Alac`, `Mp1`, `Mp2` (audio) all had real decoders and/or encoders
+//! registered elsewhere in the tree but no row here, so `-c:v ffv1 out.mkv`
+//! (and a bare `-c:v copy`/`-c:a copy` remux of any of the others) refused the
+//! stream with "matroska: codec has no `CodecID` mapping" even though this
+//! build could produce or already held the bitstream. Every added string is
+//! the write-side twin of an already-transcribed, already-tested row in
+//! `vaco_demux_matroska::codec::EXACT`; `V_FFV1`, `V_THEORA`, `V_MPEG1`,
+//! `V_MPEG2`, `A_AC3`, `A_ALAC`, `A_MPEG/L1`, `A_MPEG/L2` were additionally
+//! confirmed against real `ffmpeg 8.1 -c:v ffv1`/`-c:a ac3`/`-c:a alac`/`-c:a
+//! mp2` output muxed to `.mkv` (`strings` on the file shows the `CodecID`
+//! element's own bytes; `libtheora`/an MP1 encoder were not available in the
+//! probing environment, so `V_THEORA` and `A_MPEG/L1` rest on the spec table
+//! alone, same as every other row above them that predates this change).
+//! `V_MJPEG` and `V_PRORES` are the demuxer table's own strings for `Jpeg`/
+//! `Prores` unchanged. (`Flac` already had a row — `A_FLAC` was never
+//! actually broken; the gap report's repro command failed earlier, on AAC
+//! decode, and never reached this table at all.)
+//!
 //! # The `webm` restriction
 //!
 //! Measured against `ffmpeg 8.1`: `ffmpeg -f lavfi -i testsrc ... -c:v libx264
@@ -37,11 +59,21 @@ pub const fn codec_id_str(id: CodecId) -> Option<&'static str> {
         CodecId::Av1 => Some("V_AV1"),
         CodecId::Vp8 => Some("V_VP8"),
         CodecId::Vp9 => Some("V_VP9"),
+        CodecId::Ffv1 => Some("V_FFV1"),
+        CodecId::Theora => Some("V_THEORA"),
+        CodecId::Mpeg1video => Some("V_MPEG1"),
+        CodecId::Mpeg2video => Some("V_MPEG2"),
+        CodecId::Prores => Some("V_PRORES"),
+        CodecId::Jpeg => Some("V_MJPEG"),
         CodecId::Aac | CodecId::AacLatm => Some("A_AAC"),
         CodecId::Opus => Some("A_OPUS"),
         CodecId::Vorbis => Some("A_VORBIS"),
         CodecId::Flac => Some("A_FLAC"),
+        CodecId::Mp1 => Some("A_MPEG/L1"),
+        CodecId::Mp2 => Some("A_MPEG/L2"),
         CodecId::Mp3 => Some("A_MPEG/L3"),
+        CodecId::Ac3 => Some("A_AC3"),
+        CodecId::Alac => Some("A_ALAC"),
         CodecId::SubRip => Some("S_TEXT/UTF8"),
         CodecId::Pcm | CodecId::PcmS16le | CodecId::PcmS24le | CodecId::PcmS32le => {
             Some("A_PCM/INT/LIT")
@@ -80,6 +112,25 @@ mod tests {
         assert_eq!(codec_id_str(CodecId::Aac), Some("A_AAC"));
     }
 
+    /// E2E-GAPS 2: the codecs this build actually implements that the table
+    /// used to refuse. `Flac` is deliberately re-asserted here too — it was
+    /// never missing; see the module docs on why the original report named it
+    /// anyway.
+    #[test]
+    fn e2e_gaps_2_codecs_now_map() {
+        assert_eq!(codec_id_str(CodecId::Ffv1), Some("V_FFV1"));
+        assert_eq!(codec_id_str(CodecId::Theora), Some("V_THEORA"));
+        assert_eq!(codec_id_str(CodecId::Mpeg1video), Some("V_MPEG1"));
+        assert_eq!(codec_id_str(CodecId::Mpeg2video), Some("V_MPEG2"));
+        assert_eq!(codec_id_str(CodecId::Prores), Some("V_PRORES"));
+        assert_eq!(codec_id_str(CodecId::Jpeg), Some("V_MJPEG"));
+        assert_eq!(codec_id_str(CodecId::Ac3), Some("A_AC3"));
+        assert_eq!(codec_id_str(CodecId::Alac), Some("A_ALAC"));
+        assert_eq!(codec_id_str(CodecId::Mp1), Some("A_MPEG/L1"));
+        assert_eq!(codec_id_str(CodecId::Mp2), Some("A_MPEG/L2"));
+        assert_eq!(codec_id_str(CodecId::Flac), Some("A_FLAC"));
+    }
+
     #[test]
     fn webm_accepts_only_the_measured_allow_list() {
         for v in [CodecId::Vp8, CodecId::Vp9, CodecId::Av1] {
@@ -108,6 +159,16 @@ mod tests {
             CodecId::Vorbis,
             CodecId::Flac,
             CodecId::Mp3,
+            CodecId::Ffv1,
+            CodecId::Theora,
+            CodecId::Mpeg1video,
+            CodecId::Mpeg2video,
+            CodecId::Prores,
+            CodecId::Jpeg,
+            CodecId::Ac3,
+            CodecId::Alac,
+            CodecId::Mp1,
+            CodecId::Mp2,
         ] {
             let s = codec_id_str(id).unwrap();
             let mapped = vaco_demux_matroska::codec::map(s).and_then(|m| m.codec);
