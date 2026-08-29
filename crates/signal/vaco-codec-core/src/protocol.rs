@@ -68,6 +68,31 @@ pub trait SendReceive {
         let _ = extradata;
         Ok(())
     }
+
+    /// Forwarded to [`Encoder::set_option`] by [`AsEncoder`]; meaningless for
+    /// a decoder or bitstream filter's `SendReceive`, so the default costs
+    /// those implementors nothing.
+    ///
+    /// The default mirrors [`Encoder::set_option`]'s own default exactly —
+    /// reject nothing, change nothing — rather than introducing a second
+    /// "no options at all" signal that [`AsEncoder`] would have to translate
+    /// back into that same contract. Before this existed, `AsEncoder<T>`
+    /// could not forward `set_option` at all (there was nothing on
+    /// `SendReceive` to forward *from*), which made every encoder built
+    /// through it — fifteen codec crates as of this writing — unreachable
+    /// from the CLI's option surface regardless of what the inner type
+    /// wanted to do with an option. A codec with real options to expose
+    /// overrides this the same way it would have overridden
+    /// [`Encoder::set_option`] directly: handle the keys it recognises,
+    /// return [`Error::Option`] for one it recognises but cannot parse, and
+    /// fall through to `Ok(())` (or call this default) for anything else.
+    ///
+    /// # Errors
+    /// See [`Encoder::set_option`].
+    fn set_option(&mut self, key: &str, value: &str) -> Result<()> {
+        let _ = (key, value);
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------- adapters
@@ -119,6 +144,10 @@ where
 
     fn accepted_pix_fmts(&self) -> &'static [vaco_pixfmt::PixFmt] {
         self.0.accepted_pix_fmts()
+    }
+
+    fn set_option(&mut self, key: &str, value: &str) -> Result<()> {
+        self.0.set_option(key, value)
     }
 }
 
@@ -389,6 +418,10 @@ impl<T: SendReceive> SendReceive for Validated<T> {
 
     fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
         self.inner.set_extradata(extradata)
+    }
+
+    fn set_option(&mut self, key: &str, value: &str) -> Result<()> {
+        self.inner.set_option(key, value)
     }
 
     fn send(&mut self, input: Option<&Self::Input>) -> Result<()> {

@@ -11,7 +11,8 @@
 use std::collections::VecDeque;
 use vaco_codec_core::mock::{MockCodec, MockPacket, MockProgram, MockUnit, Step};
 use vaco_codec_core::{
-    AsDecoder, Caps, Decoder, Machine, OnViolation, SendReceive, Stage, Validated, Violation,
+    AsDecoder, AsEncoder, Caps, Decoder, Encoder, Machine, OnViolation, SendReceive, Stage,
+    Validated, Violation,
 };
 
 use vaco_core::Error;
@@ -538,5 +539,118 @@ fn the_box_blanket_impl_forwards_through_a_generic_decoder_bound() {
     match err {
         Error::Option { name, .. } => assert_eq!(name, "extradata-probe"),
         other => panic!("expected Error::Option from ExtradataProbe, got {other:?}"),
+    }
+}
+
+/// Mirrors [`ExtradataProbe`] on the encode side: an encoder-shaped
+/// `SendReceive` that overrides `set_option` so a test can tell whether a
+/// call reached it or was swallowed by a wrapper's inherited default.
+struct OptionProbe;
+
+impl SendReceive for OptionProbe {
+    type Input = vaco_frame::Frame;
+    type Output = vaco_packet::Packet;
+
+    fn caps(&self) -> Caps {
+        Caps::empty()
+    }
+
+    fn send(&mut self, _input: Option<&vaco_frame::Frame>) -> Result<(), Error> {
+        Err(Error::Eof)
+    }
+
+    fn receive(&mut self) -> Result<vaco_packet::Packet, Error> {
+        Err(Error::Eof)
+    }
+
+    fn flush(&mut self) {}
+
+    fn set_option(&mut self, key: &str, value: &str) -> Result<(), Error> {
+        Err(Error::Option {
+            name: "option-probe".to_owned(),
+            detail: format!("reached the inner SendReceive with {key}={value}"),
+        })
+    }
+}
+
+/// `set_option` has to survive both layers a registered encoder is commonly
+/// built through: `Validated`, then `AsEncoder`. Before `SendReceive` grew
+/// this method, `AsEncoder<T>` had nothing to forward it *from* at all, so
+/// every encoder built this way -- fifteen codec crates as of this writing --
+/// was unreachable from the CLI's option surface regardless of what the
+/// wrapped codec actually did with it.
+#[test]
+fn set_option_forwards_through_as_encoder_and_validated() {
+    let mut enc = AsEncoder(Validated::new(OptionProbe));
+    let err = enc
+        .set_option("b", "1000000")
+        .expect_err("must reach OptionProbe::set_option, not the trait default");
+    match err {
+        Error::Option { name, detail } => {
+            assert_eq!(name, "option-probe");
+            assert!(detail.contains("b=1000000"), "unexpected detail: {detail}");
+        }
+        other => panic!("expected Error::Option from OptionProbe, got {other:?}"),
+    }
+}
+
+/// The default body alone must be harmless for a codec with no options at
+/// all -- an encoder that never overrides `SendReceive::set_option` (the
+/// common case among the `AsEncoder`-based codecs) must still accept every
+/// key silently, matching `Encoder::set_option`'s own documented default and
+/// the reference's behaviour for an `AVOption` a codec ignores.
+#[test]
+fn the_default_as_encoder_set_option_is_harmless() {
+    struct NoOptions;
+    impl SendReceive for NoOptions {
+        type Input = vaco_frame::Frame;
+        type Output = vaco_packet::Packet;
+
+        fn caps(&self) -> Caps {
+            Caps::empty()
+        }
+
+        fn send(&mut self, _input: Option<&vaco_frame::Frame>) -> Result<(), Error> {
+            Err(Error::Eof)
+        }
+
+        fn receive(&mut self) -> Result<vaco_packet::Packet, Error> {
+            Err(Error::Eof)
+        }
+
+        fn flush(&mut self) {}
+    }
+    let mut enc = AsEncoder(NoOptions);
+    enc.set_option("b", "1M").expect("ignored is harmless");
+    enc.set_option("b", "1M").expect("twice is harmless");
+    let mut boxed: Box<dyn Encoder> = Box::new(AsEncoder(NoOptions));
+    boxed
+        .set_option("qscale", "5")
+        .expect("forwards through the box, still harmless");
+}
+
+/// A call through a *generic* `E: Encoder` bound, instantiated with
+/// `Box<dyn Encoder>` -- mirrors
+/// `the_box_blanket_impl_forwards_through_a_generic_decoder_bound` on the
+/// decode side. `Box<dyn Encoder>` needs no blanket impl of its own (unlike
+/// `Box<dyn Decoder>`, nothing in this crate wraps a boxed encoder
+/// generically), but the call must still resolve to `AsEncoder`'s override
+/// and not any inherited default.
+fn set_option_through_generic_encoder<E: Encoder + ?Sized>(
+    e: &mut E,
+    key: &str,
+    value: &str,
+) -> Result<(), Error> {
+    e.set_option(key, value)
+}
+
+#[test]
+fn set_option_reaches_the_inner_codec_through_a_generic_encoder_bound() {
+    let mut boxed: Box<dyn Encoder> = Box::new(AsEncoder(Validated::new(OptionProbe)));
+    let err = set_option_through_generic_encoder(&mut *boxed, "b", "42")
+        .expect_err("must reach OptionProbe::set_option through the generic bound");
+    match err {
+        Error::Option { name, .. } => assert_eq!(name, "option-probe"),
+        other => panic!("expected Error::Option from OptionProbe, got {other:?}"),
     }
 }
