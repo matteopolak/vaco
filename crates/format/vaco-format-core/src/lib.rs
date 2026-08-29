@@ -844,11 +844,51 @@ pub trait Muxer: Send {
     /// change, only an explicit answer instead of a capability with nowhere
     /// to express itself.
     ///
+    /// # The same seam also serves a *negotiating* muxer, not just a segmenting one
+    ///
+    /// Every `Muxer` today is opened as `fn(Box<dyn MediaSink>) ->
+    /// Result<Box<dyn Muxer>>` — a pre-connected byte sink, which assumes
+    /// the destination already exists as something byte-oriented. A
+    /// protocol like WHIP (`vaco-mux-whip`, #619) breaks that assumption
+    /// completely: an HTTP `POST` carrying an SDP offer, an SDP answer, an
+    /// ICE connectivity check and a DTLS handshake all have to happen
+    /// *before* there is anything resembling a byte sink at all. That
+    /// muxer needs no new trait method and no `MuxerDesc.open` signature
+    /// change — it is [`FormatFlags::NOFILE`] (matching real `ffmpeg`'s own
+    /// declaration for `whip`, measured directly: the reference's generic
+    /// layer never attempts to open a WHIP destination as a file or
+    /// protocol sink at all) plus this method plus [`Muxer::init`], used
+    /// for a purpose this doc did not originally name:
+    ///
+    /// 1. `open` ignores its `Box<dyn MediaSink>` entirely (as every
+    ///    `NOFILE` muxer already does — nothing reads it).
+    /// 2. `bind_url` stores the destination URL. No network I/O yet: unlike
+    ///    the segmenting case above, this muxer has nothing to re-derive
+    ///    its state from *yet*, because the streams it will publish are not
+    ///    declared until [`Muxer::add_stream`] runs, which — like
+    ///    [`Demuxer::bind_url`] — happens *after* this call.
+    /// 3. [`Muxer::init`] — called once every stream is known and before
+    ///    the header, i.e. exactly early enough to build an SDP offer from
+    ///    real codec parameters — performs the whole negotiation and
+    ///    leaves the muxer holding a live, encrypted transport. From
+    ///    [`Muxer::write_header`] onward it behaves like any other muxer.
+    ///
+    /// A caller reaches this exactly the way it reaches the segmenting
+    /// case: no special-casing by muxer name, only a flag check.
+    /// `vaco-cli`'s `open_output` generalises its existing "call `bind_url`,
+    /// skip the real protocol sink" branch (previously [`FormatFlags::NEEDNUMBER`]
+    /// only) to also try `bind_url` for `NOFILE`, treating the default
+    /// [`Error::Unsupported`] above as "this muxer has no use for its URL"
+    /// — which is silently true for `null`/`mkvtimestamp_v2` and every other
+    /// `NOFILE` muxer that existed before this paragraph was written, so
+    /// nothing about their behaviour changes.
+    ///
     /// # Errors
     /// [`Error::Unsupported`] when this muxer writes to the sink it was
     /// opened with and has no separate URL to bind (the default). Otherwise
     /// whatever resolving `url` finds — a pattern with no `%d` placeholder
-    /// when one is required.
+    /// when one is required, or (for the negotiating case above) nothing at
+    /// all: storing a URL string cannot fail.
     fn bind_url(&mut self, url: &str) -> Result<()> {
         let _ = url;
         Err(Error::Unsupported(
