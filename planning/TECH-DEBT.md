@@ -6894,3 +6894,82 @@ Left for whoever picks this up next:
 §7.4/§7.4.4/Annex D.9.1 (dequantisation + mismatch control) — all measured
 via `vaco-codec-mpeg12`'s own already-checked implementation, not
 re-derived from the standard text directly in this pass.
+
+### Update: `vaco-codec-vp9`'s profiles 1-3 chroma/bit-depth gap is closed (#327)
+
+The entry above ("profiles 1-3 ... unimplemented (rest of epic #32)") is
+resolved for the chroma-subsampling/bit-depth plumbing specifically. The
+actual bug was narrow and single-point: `header::parse_uncompressed_header`
+hardcoded a 4:2:0/8-bit `ColorConfig` for every frame that does not itself
+call `color_config()` (every regular inter frame, per spec section 6.2,
+which signals it only on a key frame or a profile>0 intra-only frame) — a
+literal that happened to be correct for profile 0 and silently wrong for
+every inter frame of any other profile, geometry and bit depth alike.
+`predict`/`transform`/`loopfilter`/`interpredict`/`framebuf` were already
+generic over bit depth and independent x/y chroma subsampling throughout
+(`u16`-backed planes, `subsampling_x`/`subsampling_y` threaded everywhere,
+`clip_max = (1 << bit_depth) - 1`) — the "gap is entirely in predict/
+transform never having been exercised" reading in the entry above turned
+out not to hold once actually measured; the previous verification pass
+never carried a profile 1-3 fixture that had more than one frame, which is
+exactly what hid this bug (it is invisible on a lone key frame).
+
+Fixed by threading a `prev_color: ColorConfig` parameter through
+`parse_uncompressed_header`, carried in `Vp9Decoder::State`. Verified
+against `ffmpeg -c:v libvpx-vp9`'s own decode, Y/U/V measured separately:
+the official libvpx conformance vectors for profile 1 (4:2:2/4:4:0/4:4:4,
+8-bit) and profile 2/3 (4:2:0 and 4:2:2/4:4:4, 10/12-bit) all decode their
+key frames byte-exact, and eight synthetic `-frame-parallel 1
+-error-resilient max` encodes spanning every profile/subsampling/bit-depth
+combination in scope decode every frame byte-exact end to end. Multi-tile-
+column decode's `AvailL` simplification (also named in the entry above)
+is untouched and remains a real, separate gap.
+
+### The backward-probability-adaptation gap (entry above, "now a live gap,
+not a provably-inert one") is confirmed catastrophic on real content, and
+this crate's own differential corpus cannot see it
+
+Found while building #327's multi-frame verification fixtures. The earlier
+entry recorded this as a live but unobserved gap ("a longer real-world
+stream ... is exactly the case where this gap would first produce a
+visible divergence") and this crate's own `docs/codec/vaco-codec-vp9.md`
+Verification table reports its entire differential corpus as bit-exact,
+inter frames included. Both are still individually accurate — and together
+they were read as "the gap has no practical impact yet", which does not
+hold.
+
+Measured directly: `vp90-2-00-quantizer-00.webm` (an official libvpx
+conformance vector, profile 0, 4:2:0, 8-bit, one key frame + one inter
+frame) has `frame_parallel_decoding_mode=false` and
+`refresh_frame_context=true` on both frames — the exact condition under
+which section 8.4's backward adaptation is required — and its second frame
+decodes with 93% of bytes wrong (141638/152064) against `ffmpeg`'s own
+decode, not a small deviation. By contrast, every fixture in this crate's
+existing "bit-exact" corpus was generated with settings under which
+`ffmpeg`'s `libvpx-vp9` encoder happens to set
+`frame_parallel_decoding_mode=true` throughout (confirmed by direct header
+inspection on one such fixture regenerated fresh) — a condition under
+which section 8.4 adaptation is specified to be skipped entirely, so the
+gap is structurally unreachable from that corpus. This is the "a corpus
+that cannot reach the failing path reports success indistinguishable from
+real success" failure shape named elsewhere in this project's own
+constraints: the existing table's bit-exactness claims are not wrong, they
+just cannot speak to this path at all, and were not previously read that
+way.
+
+Practical impact: any real, typical VP9 encode (most encoders default to
+backward adaptation on, since it is the whole reason the mechanism exists —
+forward-only updates repeat the same probability-table cost every frame)
+will diverge from the very first inter frame that loads an adapted
+context. This is a hard blocker for #328's conformance bring-up against
+real test vectors, most of which are exactly this kind of encode, not the
+`-frame-parallel`/`-error-resilient` style fixture this crate's own
+corpus has used throughout. Not fixed here — implementing section 8.3/8.4
+(a `Counts` struct paralleling `EntropyContext`, populated during
+`decode_block`/`residual`, folded in via `adapt_coef_probs`/
+`adapt_noncoef_probs` at `refresh_probs` time, per the original entry's
+own "How to change it" pointer) is a substantial, self-contained piece of
+work and out of scope for #327/#330/#328 as dispatched this round.
+
+`Vaco-Spec-Ref: vp9-bitstream-spec-v0.6` §6.2 (color_config signalling),
+§8.3/§8.4 (backward adaptation, referenced from the original entry).
