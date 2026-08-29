@@ -5,14 +5,13 @@
 //! Also holds the grid motion-search, median and translation-warp pieces
 //! [`deshake`](crate::deshake) and [`stabdetect`](crate::stabdetect)/
 //! [`stabtransform`](crate::stabtransform) share: `deshake` is single-pass
-//! causal stabilisation, the `stabdetect`/`stabtransform` pair is the same
-//! underlying motion estimate and warp with the two-pass, file-mediated
-//! shape `planning/16-filters.md` §4.2's row calls for (`vidstabdetect`/
-//! `vidstabtransform`-equivalent — our own transform-file format, not
-//! `.trf` compatible, per that row's own note; see `stabdetect`'s doc for
-//! why). Extracted here rather than duplicated, per this project's own
-//! "grep for the concept before writing it" rule applied *within* one
-//! crate, not just across crates.
+//! causal stabilisation, the `stabdetect`/`stabtransform` pair is a
+//! `vidstabdetect`/`vidstabtransform`-equivalent built on the same
+//! underlying motion estimate and warp but with a two-pass, file-mediated
+//! shape (our own transform-file format, not `.trf` compatible; see
+//! `stabdetect`'s doc for why). Extracted here rather than duplicated, per
+//! this project's own "grep for the concept before writing it" rule
+//! applied *within* one crate, not just across crates.
 
 use vaco_core::{Error, Result};
 use vaco_frame::{Frame, FramePool};

@@ -7,9 +7,9 @@
 //! the reference — this environment's own `ffmpeg -h filter=vidstabdetect`
 //! reports `Unknown filter`, confirming there is no reference binary to
 //! probe against for this pair at all, not just a licence reason to avoid
-//! one. `planning/16-filters.md` §4.2's row already anticipated exactly
-//! this: register `stabdetect`/`stabtransform` under our own names and do
-//! **not** claim `.trf` file-format compatibility. The option *names*
+//! one, so this registers `stabdetect`/`stabtransform` under our own
+//! names instead and does **not** claim `.trf` file-format compatibility.
+//! The option *names*
 //! below (`result`, `shakiness`, `mincontrast`, `accuracy`, `stepsize`,
 //! `tripod`) are taken from `ffmpeg`'s own published user documentation
 //! (Tier A, D7/§1.6.1 — man pages and `--help`-equivalent text are always

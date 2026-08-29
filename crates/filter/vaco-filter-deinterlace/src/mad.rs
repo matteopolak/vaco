@@ -357,7 +357,7 @@ mod tests {
 ///
 /// # Why this exists and what it settles
 ///
-/// #106 asked for byte-level verification or an explicit scope-cut for
+/// This measures byte-level closeness (or an explicit scope-cut) for
 /// these four filters. Byte-exactness is not reachable (see this module's
 /// own doc: the reference kernels are GPL and undocumented, D7 forbids
 /// reading them), and per the repository owner's 2026-08-28 ruling,
