@@ -1790,6 +1790,51 @@ pub trait Encoder: Send {
         let _ = (key, value);
         Ok(())
     }
+
+    /// Tell an audio encoder the stream shape it is about to receive, before
+    /// the first [`send_frame`](Encoder::send_frame) — `sample_rate` and
+    /// `layout` from the source stream's own [`CodecParameters`], `format`
+    /// the [`accepted_sample_fmts`](Encoder::accepted_sample_fmts) entry the
+    /// pipeline has already committed to feeding it.
+    ///
+    /// The default does nothing, which is correct for the common case: most
+    /// encoders (`vaco-codec-pcm`'s, for one) read everything they need
+    /// straight off each [`Frame`] as it arrives and have no out-of-band
+    /// configuration record to build ahead of time. It exists for the
+    /// minority that do — `vaco-codec-flac`'s `FLAC` frames defer sample
+    /// rate to `STREAMINFO` rather than restate it, so a caller needs the
+    /// finished [`Encoder::extradata`] *before* the muxer's `add_stream`,
+    /// which happens before a single frame has been sent. Without this,
+    /// that information was only ever known after the first `send_frame`
+    /// call — too late for `add_stream`, already past — which is why a real
+    /// `-c:a flac` output written by this build could not be decoded by
+    /// anything else: the container carried no `STREAMINFO` at all
+    /// (`planning/E2E-GAPS.md` #2, the negotiation gap one layer under the
+    /// `CodecID`-mapping fix).
+    fn prime_audio(
+        &mut self,
+        sample_rate: u32,
+        layout: vaco_chlayout::ChannelLayout,
+        format: vaco_sampfmt::SampleFmt,
+    ) {
+        let _ = (sample_rate, layout, format);
+    }
+
+    /// Out-of-band configuration this encoder wants a container to carry as
+    /// the new stream's own `extradata` — FLAC's `"fLaC" + STREAMINFO`
+    /// prefix, ALAC's `ALACSpecificConfig`, AAC's `AudioSpecificConfig`, and
+    /// so on, for the encoders that need one at all.
+    ///
+    /// `None` by default, correct for every encoder whose packets are
+    /// self-describing (every `vaco-codec-pcm` codec, every image codec).
+    /// Meaningful only after [`Self::prime_audio`] for the encoders that
+    /// override it — see that method's doc for why the ordering matters:
+    /// the whole reason this method exists is to answer *before* the first
+    /// [`send_frame`](Encoder::send_frame), at the point `Muxer::add_stream`
+    /// itself needs the answer.
+    fn extradata(&self) -> Option<Vec<u8>> {
+        None
+    }
 }
 
 /// Splits a byte stream into packets and reads enough header syntax to describe
