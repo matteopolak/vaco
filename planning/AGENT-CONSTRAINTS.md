@@ -1598,3 +1598,32 @@ If you genuinely need something another agent owns, say so and stop — that is
 the documented escalation, and it is correct. But "waiting" is not a state this
 system has. There is no queue, no inbox, and nothing arrives while you idle.
 Either act, or report and end your turn.
+
+## A test that skips on error is indistinguishable from a test that passes
+
+An agent wrote a differential test invoking `ffmpeg -f webp`. There is no `webp`
+demuxer — the registered name is `webp_pipe` — so ffmpeg failed every time. The
+test treated a non-zero exit as "reference unavailable, skip", printed nothing
+under captured output, and reported green. It had never once compared anything.
+
+It was caught only by rerunning with `--nocapture`.
+
+Skip-on-error is a reasonable pattern when a tool genuinely may be absent. It
+becomes a lie the moment it also swallows *the tool being present and rejecting
+your command*. Distinguish the two:
+
+- Probe for the tool once, explicitly, and skip on that.
+- After that, a non-zero exit is a **failure**, not a skip. Assert on it.
+- Print the command and its stderr when it fails. A test that cannot tell you
+  what it ran cannot be debugged.
+- If a test can skip, make it say so loudly enough to notice in captured output.
+
+The general form, and it has now bitten this project several ways: **a test that
+cannot fail proves nothing, and reports the same green as one that can.** Before
+trusting a passing differential test, break it on purpose — feed it the wrong
+file, or corrupt one side — and confirm it goes red. If it does not, it was
+never testing anything.
+
+This is `763a374`'s rule one level up: a test that asserts well-formedness does
+not assert correctness, and a test that asserts nothing at all does not even
+assert well-formedness.
