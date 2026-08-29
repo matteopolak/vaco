@@ -41,6 +41,29 @@ impl ExitCode {
     pub const OK: Self = Self(0);
     /// The usage path: no arguments, or no output file.
     pub const USAGE: Self = Self(1);
+    /// A run that reached `Finish::Complete` — no node errored — but a video
+    /// stream real content was decoded for ended up with zero packets muxed.
+    ///
+    /// Not one more `AvError` truncation: measured directly, with no pipe in
+    /// the way (see `exit.rs`'s own module doc for why that matters), from
+    /// `ffmpeg -f h264 -i garbage.264 -c:v rawvideo -f rawvideo out.raw` and
+    /// two variant reproductions (a different output container; a stream
+    /// with a valid SPS/PPS but garbage slice data). All three print
+    /// `Nothing was written into output file, because at least one of its
+    /// streams received no packets.` then `Conversion failed!`, and all
+    /// three exit **69** regardless of which distinct internal `AVERROR`
+    /// each per-task thread hit (`Invalid data found when processing
+    /// input`, `Invalid argument`, an internal decode-thread code) — a fixed
+    /// top-level status the reference falls back to once a stream that
+    /// should have received packets received none, not a `FFERRTAG` this
+    /// crate's usual low-byte-of-the-negative-code arithmetic would produce.
+    ///
+    /// This build has no `-ss`/`-t`/`-frames` (nothing that could legitimately
+    /// trim a stream to empty), so unlike the reference — which still exits 0
+    /// with "Output file is empty, nothing was encoded" when the *cause* is a
+    /// seek past end of input — every zero-packet video encode leg here is a
+    /// real decode failure, not a user-requested empty range.
+    pub const CONVERSION_FAILED: Self = Self(69);
 
     /// The value to hand `std::process::exit`.
     #[must_use]
@@ -193,6 +216,23 @@ impl Diagnostic {
         }
     }
 
+    /// A clean-completing run (`Finish::Complete`, no node error) that still
+    /// produced no packets for a video stream it decoded. See
+    /// [`ExitCode::CONVERSION_FAILED`] for what this reproduces and why it is
+    /// not an `AvError`.
+    #[must_use]
+    pub fn conversion_failed() -> Self {
+        Self {
+            lines: vec![
+                "Nothing was written into output file, because at least one \
+                 of its streams received no packets."
+                    .to_owned(),
+                "Conversion failed!".to_owned(),
+            ],
+            exit: ExitCode::CONVERSION_FAILED,
+        }
+    }
+
     /// The reference's three-line shape for a failure while opening inputs or
     /// outputs: the component's own line, the per-file line, then the summary.
     #[must_use]
@@ -218,6 +258,22 @@ impl Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conversion_failed_matches_the_reference() {
+        // Measured 2026-08-29 on ffmpeg 9.0.1, no pipe in the way (`$?` read
+        // directly): `ffmpeg -f h264 -i garbage.264 -c:v rawvideo -f
+        // rawvideo out.raw` and two variant reproductions all exit 69 with
+        // this exact two-line tail. See `ExitCode::CONVERSION_FAILED`'s doc.
+        let d = Diagnostic::conversion_failed();
+        assert_eq!(d.exit.code(), 69);
+        assert_eq!(
+            d.render(),
+            "Nothing was written into output file, because at least one of \
+             its streams received no packets.\n\
+             Conversion failed!\n"
+        );
+    }
 
     #[test]
     fn measured_exit_codes() {

@@ -1388,6 +1388,27 @@ pub fn run_pipeline(
                                 })?;
                             let limits = vaco_limits::Limits::default();
                             let mut decoder = decoder_desc.build(limits.clone());
+                            if let Some(v) = p.video.as_ref() {
+                                // `Decoder::prime_video`'s own default is a
+                                // no-op, so this costs every decoder except
+                                // the one that actually needs it (FFV1:
+                                // E2E-GAPS.md #2) nothing. Coded size, not
+                                // display size — RFC 9043's
+                                // `frame_pixel_width`/`frame_pixel_height`
+                                // describe the decoded picture, matching the
+                                // "coded" half of the display/coded split
+                                // this build already carries per-codec
+                                // (`planning/AGENT-CONSTRAINTS.md`'s
+                                // "Measure, do not recall" section).
+                                let (width, height) = if v.coded_width > 0 && v.coded_height > 0 {
+                                    (v.coded_width, v.coded_height)
+                                } else {
+                                    (v.width, v.height)
+                                };
+                                if width > 0 && height > 0 {
+                                    decoder.prime_video(width, height);
+                                }
+                            }
                             if let Some(extradata) = p.extradata.as_deref() {
                                 // Offering, not requiring: `Decoder::set_extradata`'s
                                 // own contract says a caller offering a container's
@@ -1654,6 +1675,25 @@ pub fn run_pipeline(
 
     for (out, (sink, high_water)) in outputs.iter().filter(|o| !o.dropped).zip(sinks) {
         let t = sink.tally();
+        // A stream this run actually decoded (not copied) that reached
+        // `Finish::Complete` — no node errored — with zero packets muxed is
+        // not a quiet no-op. This build has no `-ss`/`-t`/`-frames` (nothing
+        // that could legitimately trim a stream to empty), so the only way a
+        // real decode-then-encode leg produces nothing is that the decode
+        // itself silently failed: `planning/E2E-GAPS.md` #6a's SPS-parse
+        // failure did exactly this, completing the whole pipeline and
+        // reporting `frame= 0` at exit 0. `t.streams` is built by one
+        // `add_stream`/`add_stream_with` call per `out.streams` entry, in
+        // that same order (`TallyingMuxer`'s own impl), so the two line up
+        // index for index without needing the tally to carry its own
+        // `StreamCodec` copy.
+        for (spec_stream, stream_tally) in out.streams.iter().zip(&t.streams) {
+            let expected_video = matches!(spec_stream.codec, StreamCodec::Encode(_))
+                && spec_stream.media == Some(MediaType::Video);
+            if expected_video && stream_tally.packets == 0 {
+                return Err(Diagnostic::conversion_failed());
+            }
+        }
         let total_bytes = high_water.map(|h| h.load(Ordering::Relaxed));
         report.summary.push(summary_line(out, &t, total_bytes));
         report.tallies.push(t);
