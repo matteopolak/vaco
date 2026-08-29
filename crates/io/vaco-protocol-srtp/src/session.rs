@@ -239,6 +239,49 @@ mod tests {
         assert_eq!(recovered, plaintext);
     }
 
+    /// A real known-answer test, cross-checked against `libsrtp` (the
+    /// reference C implementation, via its `pylibsrtp` binding — D17
+    /// applied to open-source, non-`FFmpeg` code, so no clean-room concern)
+    /// rather than only against this crate's own round trip.
+    ///
+    /// RFC 3711 publishes no numeric test vectors at all (this crate's own
+    /// provenance note), which is exactly the gap that let a real bug
+    /// through twice: [`crate::kdf::derivation_counter_block`]'s label byte
+    /// was first placed at index 0, then at index 8 after a first "fix" —
+    /// both self-consistent, both wrong, both passing every test that only
+    /// checked the code against its own restated claim. `libsrtp` broke the
+    /// tie: given the master key/salt below, `libsrtp`'s own `protect()`
+    /// produces exactly this ciphertext and tag, byte for byte, only with
+    /// the label at index 7. This test pins that answer permanently so a
+    /// third self-consistent-but-wrong version cannot ship unnoticed again.
+    #[test]
+    fn protect_matches_a_real_libsrtp_known_answer() {
+        let master_key: [u8; 16] = *b"0123456789abcdef";
+        let master_salt: [u8; 14] = *b"ABCDEFGHIJKLMN";
+        let keys = derive_session_keys_aes128(&master_key, &master_salt);
+        let ssrc = 0x1234_5678u32;
+        let mut ctx = SrtpContext::new(keys, ssrc);
+
+        let mut packet = vec![0x80u8, 0x60, 0x00, 0x01];
+        packet.extend_from_slice(&0x0000_0064u32.to_be_bytes());
+        packet.extend_from_slice(&ssrc.to_be_bytes());
+        packet.extend_from_slice(b"hello world test payload");
+
+        let protected = ctx.protect(1, 12, &packet);
+
+        // Captured verbatim from `pylibsrtp.Session.protect()` given the
+        // identical master key/salt, SSRC, sequence number and payload.
+        let expected = "80600001000000641234567\
+                         84f592eebd6db6531a6d70f3cfe96eae989b727\
+                         25dcedabe899429bd10ae451110c28";
+        let expected: Vec<u8> = (0..expected.len())
+            .step_by(2)
+            .filter_map(|i| expected.get(i..i + 2))
+            .filter_map(|b| u8::from_str_radix(b, 16).ok())
+            .collect();
+        assert_eq!(protected, expected);
+    }
+
     #[test]
     fn unprotect_rejects_a_tampered_packet() {
         let keys = derive_session_keys_aes128(&[0x03; 16], &[0x04; 14]);

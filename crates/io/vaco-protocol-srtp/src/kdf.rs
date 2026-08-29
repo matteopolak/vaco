@@ -47,16 +47,56 @@ pub struct SessionKeys {
 }
 
 /// Build the 16-byte AES-CTR counter block §4.3.1 derives each session
-/// value from: `(key_id XOR master_salt) || 0x0000`, where `key_id` is
-/// `label` in the most significant octet and zero everywhere else (the
-/// `kdr=0` simplification above — `r` is always 0, so there is nothing to
-/// right-justify into the low bits of `key_id`).
+/// value from: `(key_id XOR master_salt) || 0x0000`.
+///
+/// **Fixed twice, 2026-08-29, against a real independent peer — the second
+/// fix is the one that actually interoperates.** §4.3.1 states `key_id =
+/// <label> || r` where `r` has "the same length as" the 48-bit packet
+/// index, i.e. `key_id` is `1 + 6 = 7` octets (56 bits), not 6 — a detail
+/// easy to misread as "label plus whatever is left of a 48-bit `key_id`"
+/// instead of "label plus a 48-bit `r`". `key_id` and `master_salt` are
+/// then "aligned so that their least significant bits agree" (right-
+/// aligned) before the XOR, so this 7-octet `key_id` occupies the *last*
+/// seven octets of the 14-octet `master_salt` — indices 7 through 13, not
+/// 8 through 13. With `kdr = 0` (this module's only supported rate) fixing
+/// `r = 0`, `label` lands at exactly index 7 and the remaining six octets
+/// (8-13) stay zero.
+///
+/// This module's first attempt `XOR`ed `label` into byte index 0 (the
+/// *most* significant octet — the wrong end of "right-aligned" entirely).
+/// The **first fix** moved it to index 8, reasoning `key_id` was 6 octets;
+/// still wrong, by exactly one octet, for the reason above. Both versions
+/// were self-consistent and passed every test this module had, because
+/// RFC 3711 publishes no worked numeric example and this module's own
+/// tests re-assert the same claim the code makes rather than an
+/// independent one (see this module's provenance note). Neither wrong
+/// version was distinguishable from the other, or from correct, without
+/// an independent oracle:
+///
+/// - `vaco-mux-whip`'s real interop pass against `mediamtx` 1.20.1
+///   completed a real DTLS handshake and exported real keying material
+///   with the *first* fix (index 8) in place, and every resulting SRTP
+///   packet was still silently dropped — `mediamtx` (`pion/srtp`, an
+///   independent implementation) closed the session with "deadline
+///   exceeded while waiting tracks" and never accepted one.
+/// - `libsrtp` itself (the reference C implementation; checked directly
+///   via its `pylibsrtp` binding, D17 applied to open-source code that is
+///   not `FFmpeg`, so with no clean-room restriction) was then used to
+///   cross-check a hand-built RTP packet end to end: given the same master
+///   key/salt, `libsrtp`'s own `protect()` output matched this module's
+///   *only* once the label moved to index 7. Index 8 produced a
+///   completely different (and, per the failed `mediamtx` session,
+///   non-interoperating) key.
 fn derivation_counter_block(master_salt: &[u8; 14], label: Label) -> [u8; 16] {
     let mut block = [0u8; 16];
     block[..14].copy_from_slice(master_salt);
-    // key_id's label octet XORs into the most significant byte of the
-    // 112-bit salt field (byte 0 of this 16-byte, big-endian block).
-    block[0] ^= label as u8;
+    // `key_id` (`label || r`, `r = 0`) is 7 octets, right-aligned against
+    // the 14-octet salt field: `label` lands at index 7, the first of the
+    // trailing seven.
+    let Some(byte) = block.get_mut(7) else {
+        return block;
+    };
+    *byte ^= label as u8;
     block
 }
 
@@ -143,15 +183,42 @@ mod tests {
     }
 
     #[test]
-    fn the_label_byte_lands_in_the_most_significant_octet_of_the_counter_block() {
-        // Draft-derived: with an all-zero master salt, XORing the label
-        // into byte 0 (this module's own claim about where §4.3.1's
-        // `key_id` land) is directly observable in the counter block —
-        // check it against a hand-built expectation rather than trusting
-        // the implementation's own internal helper.
+    fn the_label_byte_lands_at_index_7_once_right_aligned_per_rfc_3711() {
+        // RFC 3711 §4.3.1: `key_id = <label> || r`, where `r` is defined to
+        // have "the same length as" the 48-bit packet index — so `key_id`
+        // is 7 octets (56 bits), not 6. `key_id` and `master_salt` are then
+        // "aligned so that their least significant bits agree" (right-
+        // aligned) before the XOR. With `kdr = 0` (`r = 0`), `label` is
+        // therefore the first of the trailing *seven* octets of the
+        // 14-octet salt field — index 7 of 0..=13 — not index 0 and not
+        // index 8. Checked against a hand-built expectation rather than
+        // trusting the implementation's own internal helper; index 7 is
+        // the placement a real independent peer (`libsrtp`, via
+        // `pylibsrtp`) confirmed byte-for-byte, after index 0 and index 8
+        // both failed a real `mediamtx` publish.
         let block = derivation_counter_block(&[0u8; 14], Label::SrtpAuthentication);
         let mut expected = [0u8; 16];
-        expected[0] = Label::SrtpAuthentication as u8;
+        expected[7] = Label::SrtpAuthentication as u8;
         assert_eq!(block, expected);
+    }
+
+    #[test]
+    fn the_label_byte_xors_with_a_nonzero_salt_at_index_7_only() {
+        // With a non-trivial salt and a non-zero label, every other byte of
+        // the 14-octet salt region must pass through untouched — only
+        // index 7 changes, proving the XOR neither spills into neighbouring
+        // octets nor lands at the previously-suspected index 8. `label`
+        // must be non-zero here (unlike `SrtpEncryption = 0x00`) or an XOR
+        // at the wrong index would be indistinguishable from no XOR at all.
+        let salt = [0xAAu8; 14];
+        let block = derivation_counter_block(&salt, Label::SrtpSalting);
+        for (i, (&s, &b)) in salt.iter().zip(block.iter().take(14)).enumerate() {
+            if i == 7 {
+                assert_eq!(b, s ^ Label::SrtpSalting as u8);
+            } else {
+                assert_eq!(b, s, "byte {i} should be untouched");
+            }
+        }
+        assert_eq!(&block[14..], &[0u8, 0u8]);
     }
 }

@@ -27,19 +27,38 @@
 //!   Appendix A's fuller out-of-order-across-a-rollover guessing
 //!   algorithm.
 //!
-//! # No reference peer on this machine
+//! # Provenance, and a real interop pass (2026-08-29)
 //!
-//! No `openssl`/`libsrtp`-backed peer was available to interoperate
-//! against in this batch, so every fact here comes from RFC 3711's own
-//! text (freely published IETF RFC, D7/D15-clean) rather than a
-//! differential check. RFC 3711 publishes no numeric test vectors of its
-//! own (see `provenance/sources.toml`'s `rfc-3711` entry), so [`kdf`]'s
-//! tests are self-consistency plus draft-derived field-layout checks, not
+//! RFC 3711 publishes no numeric test vectors of its own (see
+//! `provenance/sources.toml`'s `rfc-3711` entry), so [`kdf`]'s tests were
+//! originally self-consistency plus draft-derived field-layout checks, not
 //! RFC-vector-derived; [`session`]'s `protect`/`unprotect` round-trip and
-//! tamper-rejection tests are the same. [`vaco_crypto::hmac_sha1`]
-//! itself, underneath both, *is* RFC-vector-derived (RFC 2202's own
-//! HMAC-SHA1 test cases, cross-checked against Python's stdlib
-//! `hmac`/`hashlib` before being trusted).
+//! tamper-rejection tests were the same. [`vaco_crypto::hmac_sha1`] itself,
+//! underneath both, *is* RFC-vector-derived (RFC 2202's own HMAC-SHA1 test
+//! cases, cross-checked against Python's stdlib `hmac`/`hashlib` before
+//! being trusted).
+//!
+//! That gap — no independent peer to disagree with — hid a real bug, and
+//! then hid it a *second* time: [`kdf::derivation_counter_block`] `XOR`ed
+//! the key-derivation label into the wrong octet not once but twice (index
+//! 0, then index 8 after a first fix; the correct answer is index 7 — see
+//! that function's own doc for exactly why). Every self-consistency and
+//! field-layout test here passed throughout both wrong versions, because
+//! both kinds check the code against its own restated claim, not against
+//! an independently computed key. The first wrongness surfaced once
+//! `vaco-mux-whip` (#619) completed a real DTLS-SRTP handshake against
+//! `mediamtx` 1.20.1 — an independent implementation (`pion/srtp`) — and
+//! every resulting SRTP packet was silently dropped: connection and
+//! handshake both genuinely succeeded, keys were derived and used exactly
+//! as designed, and every one of them was simply wrong. The *second*
+//! wrongness (the off-by-one at index 8) was caught only by cross-checking
+//! a hand-built packet against `libsrtp` itself (the reference C
+//! implementation, via its `pylibsrtp` binding — D17 applied to
+//! open-source, non-`FFmpeg` code, so no clean-room concern) and comparing
+//! ciphertext byte for byte. [`session`]'s `protect_matches_a_real_libsrtp_known_answer`
+//! pins that exact answer permanently, which is what RFC 3711 itself
+//! cannot do (it publishes no numeric vectors) — the whole reason a wrong
+//! placement survived twice.
 
 #![forbid(unsafe_code)]
 
