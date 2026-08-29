@@ -27,6 +27,13 @@ marker that is not a byte-stuffed `0xFF 0x00` and not a restart marker
 (`RST0..=RST7`) is a distinct unit, tagged with `SCAN_DATA_UNIT_TYPE` (`0x100`
 — outside the `0..=0xFF` range every real marker byte occupies).
 
+A `0xFF` padding-fill byte ahead of a marker (§B.1.1.5 permits any number of
+them) gets its own one-byte unit too, tagged `FILL_UNIT_TYPE` (`0x102`) and
+read back as `JpegContent::Marker(0xFF)`. `split` used to silently drop these
+— no unit ever recorded them, so an untouched fragment reassembled shorter
+than the input — which is why they are a distinct unit type rather than
+folded into the following marker's own unit.
+
 ## Why no bit-packed-codec-shaped write-side deviations
 
 Every field in `SOF`/`DQT`/`DHT` is byte-aligned and self-delimiting by its

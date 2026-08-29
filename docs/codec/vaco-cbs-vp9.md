@@ -23,6 +23,18 @@ Unlike H.264/HEVC/AV1's `Content` enums, there is nowhere else for those bytes
 to live: `CbsUnit::data` is replaced wholesale on a write, so a `Content` that
 dropped the tail would have no way to put it back.
 
+`Vp9Header::ShowExistingFrame` carries a `profile` field even though no frame
+is coded: §6.2 reads the 2-3 profile bits *before* checking
+`show_existing_frame`, so they are real bitstream content a write must
+reproduce, not something `show_existing_frame` makes moot.
+
+A superframe index's own trailing bytes (marker, sizes, second marker copy)
+get a unit of their own, tagged `INDEX_UNIT_TYPE` (`0x101`) — including for
+the degenerate one-sub-frame index Annex B's bit layout can still express
+even though no real encoder emits one. `assemble` skips synthesising a new
+index when a fragment already ends with this unit type, so round-tripping an
+untouched fragment does not silently drop or double the index.
+
 ## Why a separate crate, and why it does not reuse `vaco-parse-vpx`
 
 `vaco-parse-vpx::vp9::parse_uncompressed_header` reads just enough of the
