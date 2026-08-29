@@ -32,7 +32,7 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
 
-    let Ok(encoded) = vaco_codec_exr::encode(&frame) else {
+    let Ok(encoded) = vaco_codec_exr::encode(&frame, &vaco_codec_exr::EncodeOptions::default()) else {
         return;
     };
     let mut budget2 = Budget::new(Limits::permissive());

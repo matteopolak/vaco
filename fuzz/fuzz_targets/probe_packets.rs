@@ -172,10 +172,10 @@ fuzz_target!(|data: &[u8]| {
     }
     for (_, alg) in vaco_probe::dump::HASH_NAMES {
         assert_eq!(
-            alg.digest(&payload).is_some(),
+            alg.digest_hex(&payload).is_some(),
             alg.implemented(),
             "{} disagrees with its own implemented() flag",
-            alg.name()
+            alg.label()
         );
     }
 

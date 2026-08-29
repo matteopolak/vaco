@@ -35,7 +35,11 @@ fuzz_target!(|data: &[u8]| {
     };
 
     let mut budget2 = Budget::new(Limits::strict());
-    let Ok(encoded) = vaco_codec_png::encode(std::slice::from_ref(&first), &mut budget2) else {
+    let Ok(encoded) = vaco_codec_png::encode(
+        std::slice::from_ref(&first),
+        &mut budget2,
+        &vaco_codec_png::EncodeOptions::default(),
+    ) else {
         // Every pixel format `decode` produces is one `encode` accepts
         // (checked directly against `png_color_for`'s match), so a failure
         // here would be a real bug, not a documented gap -- but budget

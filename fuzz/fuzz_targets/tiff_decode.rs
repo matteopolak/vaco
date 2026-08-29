@@ -40,7 +40,10 @@ fuzz_target!(|data: &[u8]| {
         return;
     }
 
-    let Ok(encoded) = vaco_codec_tiff::encode(std::slice::from_ref(&first)) else {
+    let Ok(encoded) = vaco_codec_tiff::encode(
+        std::slice::from_ref(&first),
+        &vaco_codec_tiff::EncodeOptions::default(),
+    ) else {
         return;
     };
     let mut budget2 = Budget::new(Limits::permissive());
