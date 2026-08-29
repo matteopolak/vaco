@@ -45,10 +45,10 @@
 
 mod codec;
 
-pub use codec::{decode, encode};
+pub use codec::{EncodeOptions, Predictor, decode, encode};
 
 use vaco_codec_core::{Accept, Caps, Machine, SendReceive};
-use vaco_core::Result;
+use vaco_core::{Error, Result};
 use vaco_frame::Frame;
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
@@ -128,6 +128,7 @@ pub struct PngEncoder {
     machine: Machine<Packet>,
     limits: Limits,
     pending: Vec<Frame>,
+    options: EncodeOptions,
 }
 
 impl PngEncoder {
@@ -138,6 +139,7 @@ impl PngEncoder {
             machine: Machine::new(Caps::DELAY),
             limits,
             pending: Vec::new(),
+            options: EncodeOptions::default(),
         }
     }
 }
@@ -177,7 +179,7 @@ impl SendReceive for PngEncoder {
         match self.machine.accept(input.is_none())? {
             Accept::Drain => {
                 let mut budget = Budget::new(self.limits.clone());
-                let bytes = codec::encode(&self.pending, &mut budget)?;
+                let bytes = codec::encode(&self.pending, &mut budget, &self.options)?;
                 let mut packet = Packet::from_slice(&mut budget, &bytes)?;
                 packet.pts = self.pending.first().map_or(vaco_core::Timestamp::NONE, |f| f.pts);
                 self.pending.clear();
@@ -202,6 +204,51 @@ impl SendReceive for PngEncoder {
     fn flush(&mut self) {
         self.pending.clear();
         self.machine.flush();
+    }
+
+    /// `-pred` and `-compression_level`, the two `AVOption`s the reference's
+    /// own `png`/`apng` encoders expose (`ffmpeg -h encoder=png`). Any other
+    /// key is silently ignored, matching [`vaco_codec_core::Encoder::set_option`]'s
+    /// own documented default for an option this codec has no use for.
+    ///
+    /// # Errors
+    /// [`Error::Option`] for a `pred` value outside `0`-`5`/`none`-`mixed`,
+    /// or a `compression_level` that does not parse as an integer `0`-`9`.
+    fn set_option(&mut self, key: &str, value: &str) -> Result<()> {
+        match key {
+            "pred" => {
+                self.options.pred = Some(match value.trim() {
+                    "0" | "none" => Predictor::None,
+                    "1" | "sub" => Predictor::Sub,
+                    "2" | "up" => Predictor::Up,
+                    "3" | "avg" => Predictor::Avg,
+                    "4" | "paeth" => Predictor::Paeth,
+                    "5" | "mixed" => Predictor::Mixed,
+                    other => {
+                        return Err(Error::Option {
+                            name: "pred".to_owned(),
+                            detail: format!("unknown prediction method: {other:?}"),
+                        });
+                    }
+                });
+                Ok(())
+            }
+            "compression_level" => {
+                let level: i64 = value.trim().parse().map_err(|_| Error::Option {
+                    name: "compression_level".to_owned(),
+                    detail: format!("not an integer: {value:?}"),
+                })?;
+                let level = u8::try_from(level).ok().filter(|v| *v <= 9).ok_or_else(|| {
+                    Error::Option {
+                        name: "compression_level".to_owned(),
+                        detail: format!("must be 0-9, got {level}"),
+                    }
+                })?;
+                self.options.compression_level = Some(level);
+                Ok(())
+            }
+            _ => Ok(()),
+        }
     }
 }
 
@@ -294,7 +341,12 @@ mod tests {
         for format in [PixFmt::Rgb24, PixFmt::Rgba, PixFmt::Gray8, PixFmt::Ya8] {
             let frame = checker_frame(9, 5, format);
             let mut budget = Budget::new(Limits::permissive());
-            let encoded = codec::encode(std::slice::from_ref(&frame), &mut budget).expect("encode");
+            let encoded = codec::encode(
+                std::slice::from_ref(&frame),
+                &mut budget,
+                &EncodeOptions::default(),
+            )
+            .expect("encode");
             let decoded = codec::decode(&encoded, &mut budget).expect("decode");
             assert_eq!(decoded.len(), 1);
             assert_eq!(frame_bytes(&frame), frame_bytes(&decoded[0]), "{format:?}");
@@ -312,7 +364,8 @@ mod tests {
             .map(|_| checker_frame(4, 4, PixFmt::Rgba))
             .collect();
         let mut budget = Budget::new(Limits::permissive());
-        let encoded = codec::encode(&frames, &mut budget).expect("encode apng");
+        let encoded =
+            codec::encode(&frames, &mut budget, &EncodeOptions::default()).expect("encode apng");
         let decoded = codec::decode(&encoded, &mut budget).expect("decode apng");
         assert_eq!(decoded.len(), frames.len());
         for (input, output) in frames.iter().zip(&decoded) {
@@ -346,5 +399,80 @@ mod tests {
         assert!(matches!(dec.receive(), Err(Error::NeedMoreInput)));
         dec.send(None).expect("begin drain");
         assert!(matches!(dec.receive(), Err(Error::Eof)));
+    }
+
+    /// One frame through, `send(None)` to drain, take the packet.
+    fn encode_one(frame: &Frame, options: &[(&str, &str)]) -> Vec<u8> {
+        let mut enc = PngEncoder::new(Limits::permissive());
+        for (key, value) in options {
+            enc.set_option(key, value).expect("set_option");
+        }
+        enc.send(Some(frame)).expect("send frame");
+        enc.send(None).expect("begin drain");
+        enc.receive().expect("receive packet").payload().to_vec()
+    }
+
+    /// `-compression_level` moves output size monotonically, mirroring the
+    /// real `ffmpeg png` encoder measured directly: 0 (no compression) is
+    /// far larger than 9 (max) on the same pixels. This is CL reachability
+    /// end to end through `set_option`, the same channel the CLI drives.
+    #[test]
+    fn compression_level_moves_output_size_the_expected_direction() {
+        let frame = checker_frame(64, 64, PixFmt::Rgb24);
+        let none = encode_one(&frame, &[("compression_level", "0")]);
+        let max = encode_one(&frame, &[("compression_level", "9")]);
+        assert!(
+            none.len() > max.len(),
+            "expected level 0 ({}) > level 9 ({})",
+            none.len(),
+            max.len()
+        );
+    }
+
+    /// `-pred paeth` and `-pred 4` name the same filter (measured against
+    /// real `ffmpeg`: both produce byte-identical PNGs on the same input),
+    /// so both spellings must reach the same code path here too.
+    #[test]
+    fn pred_accepts_both_the_name_and_the_number() {
+        let frame = checker_frame(16, 16, PixFmt::Rgba);
+        let by_name = encode_one(&frame, &[("pred", "paeth")]);
+        let by_number = encode_one(&frame, &[("pred", "4")]);
+        assert_eq!(by_name, by_number);
+    }
+
+    /// `-pred none` must actually take effect and differ from the default
+    /// (`paeth`) -- not merely parse without erroring.
+    #[test]
+    fn pred_none_differs_from_the_default() {
+        let frame = checker_frame(16, 16, PixFmt::Rgba);
+        let default = encode_one(&frame, &[]);
+        let none = encode_one(&frame, &[("pred", "none")]);
+        assert_ne!(default, none);
+    }
+
+    #[test]
+    fn set_option_rejects_a_malformed_value() {
+        let mut enc = PngEncoder::new(Limits::permissive());
+        assert!(matches!(
+            enc.set_option("pred", "sideways"),
+            Err(Error::Option { .. })
+        ));
+        assert!(matches!(
+            enc.set_option("compression_level", "10"),
+            Err(Error::Option { .. })
+        ));
+        assert!(matches!(
+            enc.set_option("compression_level", "not-a-number"),
+            Err(Error::Option { .. })
+        ));
+    }
+
+    /// A key this encoder has no use for is a silent no-op, matching
+    /// `Encoder::set_option`'s own documented default -- `ffmpeg -c:v png
+    /// -b:v 1M` exits 0 and writes an unchanged PNG.
+    #[test]
+    fn set_option_ignores_a_key_this_encoder_has_no_use_for() {
+        let mut enc = PngEncoder::new(Limits::permissive());
+        enc.set_option("b", "1000000").expect("silently ignored");
     }
 }

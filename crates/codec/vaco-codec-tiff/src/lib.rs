@@ -38,10 +38,10 @@
 
 mod codec;
 
-pub use codec::{decode, encode};
+pub use codec::{CompressionAlgo, EncodeOptions, decode, encode};
 
 use vaco_codec_core::{Accept, Caps, Machine, SendReceive};
-use vaco_core::Result;
+use vaco_core::{Error, Result};
 use vaco_frame::Frame;
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
@@ -116,6 +116,7 @@ pub struct TiffEncoder {
     machine: Machine<Packet>,
     limits: Limits,
     pending: Vec<Frame>,
+    options: EncodeOptions,
 }
 
 impl TiffEncoder {
@@ -126,6 +127,7 @@ impl TiffEncoder {
             machine: Machine::new(Caps::DELAY),
             limits,
             pending: Vec::new(),
+            options: EncodeOptions::default(),
         }
     }
 }
@@ -161,7 +163,7 @@ impl SendReceive for TiffEncoder {
     fn send(&mut self, input: Option<&Frame>) -> Result<()> {
         match self.machine.accept(input.is_none())? {
             Accept::Drain => {
-                let bytes = codec::encode(&self.pending)?;
+                let bytes = codec::encode(&self.pending, &self.options)?;
                 let mut budget = Budget::new(self.limits.clone());
                 let mut packet = Packet::from_slice(&mut budget, &bytes)?;
                 packet.pts = self.pending.first().map_or(vaco_core::Timestamp::NONE, |f| f.pts);
@@ -187,6 +189,33 @@ impl SendReceive for TiffEncoder {
     fn flush(&mut self) {
         self.pending.clear();
         self.machine.flush();
+    }
+
+    /// `-compression_algo`, the one `AVOption` the reference's own `tiff`
+    /// encoder exposes (`ffmpeg -h encoder=tiff`). Any other key is
+    /// silently ignored, matching
+    /// [`vaco_codec_core::Encoder::set_option`]'s own documented default.
+    ///
+    /// # Errors
+    /// [`Error::Option`] for a `compression_algo` value that is none of
+    /// `raw`/`lzw`/`deflate`/`packbits` or their numeric tag (`1`/`5`/
+    /// `32946`/`32773`).
+    fn set_option(&mut self, key: &str, value: &str) -> Result<()> {
+        if key == "compression_algo" {
+            self.options.compression_algo = match value.trim() {
+                "1" | "raw" => CompressionAlgo::Raw,
+                "5" | "lzw" => CompressionAlgo::Lzw,
+                "32946" | "deflate" => CompressionAlgo::Deflate,
+                "32773" | "packbits" => CompressionAlgo::Packbits,
+                other => {
+                    return Err(Error::Option {
+                        name: "compression_algo".to_owned(),
+                        detail: format!("unknown compression algorithm: {other:?}"),
+                    });
+                }
+            };
+        }
+        Ok(())
     }
 }
 
@@ -278,7 +307,8 @@ mod tests {
     fn round_trips_single_page() {
         for format in [PixFmt::Rgb24, PixFmt::Rgba, PixFmt::Gray8] {
             let frame = checker_frame(9, 5, format);
-            let encoded = codec::encode(std::slice::from_ref(&frame)).expect("encode");
+            let encoded = codec::encode(std::slice::from_ref(&frame), &EncodeOptions::default())
+                .expect("encode");
             let mut budget = Budget::new(Limits::permissive());
             let decoded = codec::decode(&encoded, &mut budget).expect("decode");
             assert_eq!(decoded.len(), 1);
@@ -289,7 +319,7 @@ mod tests {
     #[test]
     fn round_trips_multi_page() {
         let frames: Vec<Frame> = (0..3).map(|_| checker_frame(4, 4, PixFmt::Rgb24)).collect();
-        let encoded = codec::encode(&frames).expect("encode");
+        let encoded = codec::encode(&frames, &EncodeOptions::default()).expect("encode");
         let mut budget = Budget::new(Limits::permissive());
         let decoded = codec::decode(&encoded, &mut budget).expect("decode");
         assert_eq!(decoded.len(), frames.len());
@@ -325,5 +355,71 @@ mod tests {
         assert!(matches!(dec.receive(), Err(Error::NeedMoreInput)));
         dec.send(None).expect("begin drain");
         assert!(matches!(dec.receive(), Err(Error::Eof)));
+    }
+
+    /// Every `-compression_algo` value must round-trip through decode
+    /// exactly (all four are lossless) and actually take effect: `raw`
+    /// (uncompressed) must be strictly larger than `deflate` on compressible
+    /// content, not merely parse without error.
+    #[test]
+    fn compression_algo_round_trips_and_actually_changes_size() {
+        let frame = checker_frame(32, 32, PixFmt::Rgb24);
+        let mut sizes = Vec::new();
+        for (key_value, algo) in [
+            ("raw", CompressionAlgo::Raw),
+            ("lzw", CompressionAlgo::Lzw),
+            ("deflate", CompressionAlgo::Deflate),
+            ("packbits", CompressionAlgo::Packbits),
+        ] {
+            let mut enc = TiffEncoder::new(Limits::permissive());
+            enc.set_option("compression_algo", key_value)
+                .expect("set_option");
+            assert_eq!(enc.options.compression_algo, algo);
+            enc.send(Some(&frame)).expect("send frame");
+            enc.send(None).expect("begin drain");
+            let packet = enc.receive().expect("receive packet");
+            let mut budget = Budget::new(Limits::permissive());
+            let decoded = codec::decode(packet.payload(), &mut budget).expect("decode");
+            assert_eq!(decoded.len(), 1);
+            assert_eq!(frame_bytes(&frame), frame_bytes(&decoded[0]));
+            sizes.push((key_value, packet.payload().len()));
+        }
+        let raw_size = sizes[0].1;
+        let deflate_size = sizes[2].1;
+        assert!(
+            raw_size > deflate_size,
+            "expected raw ({raw_size}) > deflate ({deflate_size}): {sizes:?}"
+        );
+    }
+
+    /// The numeric spelling (`ffmpeg`'s own tag values) must reach the same
+    /// algorithm as the name.
+    #[test]
+    fn compression_algo_accepts_both_the_name_and_the_number() {
+        let mut by_name = TiffEncoder::new(Limits::permissive());
+        by_name.set_option("compression_algo", "deflate").expect("set_option");
+        let mut by_number = TiffEncoder::new(Limits::permissive());
+        by_number.set_option("compression_algo", "32946").expect("set_option");
+        assert_eq!(
+            by_name.options.compression_algo,
+            by_number.options.compression_algo
+        );
+    }
+
+    #[test]
+    fn set_option_rejects_a_malformed_compression_algo() {
+        let mut enc = TiffEncoder::new(Limits::permissive());
+        assert!(matches!(
+            enc.set_option("compression_algo", "bogus"),
+            Err(Error::Option { .. })
+        ));
+    }
+
+    /// A key this encoder has no use for is a silent no-op, matching
+    /// `Encoder::set_option`'s own documented default.
+    #[test]
+    fn set_option_ignores_a_key_this_encoder_has_no_use_for() {
+        let mut enc = TiffEncoder::new(Limits::permissive());
+        enc.set_option("b", "1000000").expect("silently ignored");
     }
 }

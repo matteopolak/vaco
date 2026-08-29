@@ -159,28 +159,66 @@ fn frame_to_rgba_f32(frame: &Frame) -> Result<(usize, usize, Vec<f32>)> {
     Ok((width, height, out))
 }
 
-/// Encode one frame as an `OpenEXR` RGBA image (`f32` channels, the `exr`
-/// crate's own default compression).
+/// `-compression`'s four values (`ffmpeg -h encoder=exr`), kept independent
+/// of the D11 boundary's `exr::compression::Compression` -- that mapping
+/// lives in [`encode`] alone. Named `CompressionAlgo` rather than
+/// `Compression` so it cannot be confused with the `exr` crate's own type
+/// even via a glob import.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompressionAlgo {
+    /// `0`/`none`: no compression.
+    None,
+    /// `1`/`rle`: run-length encoding.
+    Rle,
+    /// `2`/`zip1`: ZIP, one scanline per block.
+    Zip1,
+    /// `3`/`zip16`: ZIP, 16 scanlines per block.
+    Zip16,
+}
+
+/// Encoder knobs mirroring `ffmpeg exr`'s own `AVOption`s, measured against
+/// `ffmpeg -h encoder=exr`. `None` leaves this crate's existing default
+/// (`Encoding::default()`, RLE with 64x64 tiles) untouched rather than
+/// forcing a choice nobody asked for; `ffmpeg`'s own default is `none`
+/// (uncompressed), which only matters for file size since every one of
+/// these four is lossless.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EncodeOptions {
+    /// `-compression`.
+    pub compression: Option<CompressionAlgo>,
+}
+
+/// Encode one frame as an `OpenEXR` RGBA image (`f32` channels).
 ///
 /// Fidelity is D11 "Exact for ZIP/RLE/PIZ": the `f32` transform is a
 /// straight copy for a source already carrying `f32` samples, and an
 /// upconversion (`/255`) for an 8-bit source, which is inherently lossy in
 /// the reverse direction — this crate never claims a round trip through an
-/// 8-bit format is exact.
+/// 8-bit format is exact. All four `-compression` choices are themselves
+/// lossless, so which one is picked changes only the byte count.
 ///
 /// # Errors
 ///
 /// [`Error::Unsupported`] for a non-video frame or a pixel format
 /// [`frame_to_rgba_f32`] does not cover. [`Error::InvalidData`] on encoder
 /// failure.
-pub fn encode(frame: &Frame) -> Result<Vec<u8>> {
+pub fn encode(frame: &Frame, options: &EncodeOptions) -> Result<Vec<u8>> {
     let (width, height, data) = frame_to_rgba_f32(frame)?;
     let channels = SpecificChannels::rgba(move |Vec2(x, y): Vec2<usize>| {
         let idx = (y * width + x) * 4;
         let get = |i: usize| data.get(idx + i).copied().unwrap_or(0.0);
         (get(0), get(1), get(2), get(3))
     });
-    let image = Image::from_channels((width, height), channels);
+    let mut encoding = Encoding::default();
+    if let Some(algo) = options.compression {
+        encoding.compression = match algo {
+            CompressionAlgo::None => Compression::Uncompressed,
+            CompressionAlgo::Rle => Compression::RLE,
+            CompressionAlgo::Zip1 => Compression::ZIP1,
+            CompressionAlgo::Zip16 => Compression::ZIP16,
+        };
+    }
+    let image = Image::from_encoded_channels((width, height), encoding, channels);
 
     let mut out: Vec<u8> = Vec::new();
     {

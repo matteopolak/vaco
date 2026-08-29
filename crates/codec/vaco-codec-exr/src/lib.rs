@@ -33,10 +33,10 @@
 
 mod codec;
 
-pub use codec::{decode, encode};
+pub use codec::{CompressionAlgo, EncodeOptions, decode, encode};
 
 use vaco_codec_core::{Accept, Caps, Machine, SendReceive};
-use vaco_core::Result;
+use vaco_core::{Error, Result};
 use vaco_frame::Frame;
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
@@ -108,6 +108,7 @@ impl SendReceive for ExrDecoder {
 pub struct ExrEncoder {
     machine: Machine<Packet>,
     limits: Limits,
+    options: EncodeOptions,
 }
 
 impl ExrEncoder {
@@ -117,6 +118,7 @@ impl ExrEncoder {
         Self {
             machine: Machine::new(Caps::empty()),
             limits,
+            options: EncodeOptions::default(),
         }
     }
 }
@@ -156,7 +158,7 @@ impl SendReceive for ExrEncoder {
                 let Some(frame) = input else {
                     return Ok(());
                 };
-                let bytes = codec::encode(frame)?;
+                let bytes = codec::encode(frame, &self.options)?;
                 let mut budget = Budget::new(self.limits.clone());
                 let mut packet = Packet::from_slice(&mut budget, &bytes)?;
                 packet.pts = frame.pts;
@@ -172,6 +174,33 @@ impl SendReceive for ExrEncoder {
 
     fn flush(&mut self) {
         self.machine.flush();
+    }
+
+    /// `-compression`, the one `AVOption` the reference's own `exr` encoder
+    /// exposes (`ffmpeg -h encoder=exr`) that this crate can honour --
+    /// `-format`/`-gamma` are not, since this crate always writes `f32`
+    /// channels. Any other key is silently ignored, matching
+    /// [`vaco_codec_core::Encoder::set_option`]'s own documented default.
+    ///
+    /// # Errors
+    /// [`Error::Option`] for a `compression` value that is none of
+    /// `none`/`rle`/`zip1`/`zip16` or their numeric tag (`0`-`3`).
+    fn set_option(&mut self, key: &str, value: &str) -> Result<()> {
+        if key == "compression" {
+            self.options.compression = Some(match value.trim() {
+                "0" | "none" => CompressionAlgo::None,
+                "1" | "rle" => CompressionAlgo::Rle,
+                "2" | "zip1" => CompressionAlgo::Zip1,
+                "3" | "zip16" => CompressionAlgo::Zip16,
+                other => {
+                    return Err(Error::Option {
+                        name: "compression".to_owned(),
+                        detail: format!("unknown compression type: {other:?}"),
+                    });
+                }
+            });
+        }
+        Ok(())
     }
 }
 
@@ -265,7 +294,7 @@ mod tests {
     #[test]
     fn round_trips_rgba_f32() {
         let frame = checker_frame(5, 3);
-        let encoded = codec::encode(&frame).expect("encode");
+        let encoded = codec::encode(&frame, &EncodeOptions::default()).expect("encode");
         let mut budget = Budget::new(Limits::permissive());
         let decoded = codec::decode(&encoded, &mut budget).expect("decode");
         let FrameData::Video { width, height, .. } = decoded.data else {
@@ -307,5 +336,53 @@ mod tests {
         assert!(matches!(dec.receive(), Err(Error::NeedMoreInput)));
         dec.send(None).expect("begin drain");
         assert!(matches!(dec.receive(), Err(Error::Eof)));
+    }
+
+    /// Every `-compression` value must round-trip through decode exactly
+    /// (all four are lossless) and `none` must actually be larger than
+    /// `zip16` on smoothly varying content, not merely parse without error.
+    #[test]
+    fn compression_round_trips_and_actually_changes_size() {
+        let frame = checker_frame(64, 64);
+        let mut sizes = Vec::new();
+        for (key_value, algo) in [
+            ("none", CompressionAlgo::None),
+            ("rle", CompressionAlgo::Rle),
+            ("zip1", CompressionAlgo::Zip1),
+            ("zip16", CompressionAlgo::Zip16),
+        ] {
+            let mut enc = ExrEncoder::new(Limits::permissive());
+            enc.set_option("compression", key_value).expect("set_option");
+            assert_eq!(enc.options.compression, Some(algo));
+            enc.send(Some(&frame)).expect("send frame");
+            let packet = enc.receive().expect("receive packet");
+            let mut budget = Budget::new(Limits::permissive());
+            let decoded = codec::decode(packet.payload(), &mut budget).expect("decode");
+            assert_eq!(frame_floats(&frame), frame_floats(&decoded));
+            sizes.push((key_value, packet.payload().len()));
+        }
+        let none_size = sizes[0].1;
+        let zip16_size = sizes[3].1;
+        assert!(
+            none_size > zip16_size,
+            "expected none ({none_size}) > zip16 ({zip16_size}): {sizes:?}"
+        );
+    }
+
+    #[test]
+    fn set_option_rejects_a_malformed_compression() {
+        let mut enc = ExrEncoder::new(Limits::permissive());
+        assert!(matches!(
+            enc.set_option("compression", "bogus"),
+            Err(Error::Option { .. })
+        ));
+    }
+
+    /// A key this encoder has no use for is a silent no-op, matching
+    /// `Encoder::set_option`'s own documented default.
+    #[test]
+    fn set_option_ignores_a_key_this_encoder_has_no_use_for() {
+        let mut enc = ExrEncoder::new(Limits::permissive());
+        enc.set_option("gamma", "2.2").expect("silently ignored");
     }
 }

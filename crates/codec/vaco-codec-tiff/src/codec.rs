@@ -203,26 +203,61 @@ fn packed_plane_bytes(frame: &Frame, row_bytes: usize) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// `-compression_algo`'s named values (`ffmpeg -h encoder=tiff`), kept
+/// independent of the D11 boundary's `tiff::encoder::Compression` -- that
+/// mapping lives in [`encode`] alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CompressionAlgo {
+    /// `1`/`raw`: no compression.
+    Raw,
+    /// `5`/`lzw`.
+    Lzw,
+    /// `32946`/`deflate`.
+    Deflate,
+    /// `32773`/`packbits`. The reference's own default, and the default
+    /// here too when [`encode`] receives no [`EncodeOptions`] override.
+    #[default]
+    Packbits,
+}
+
+/// Encoder knobs mirroring `ffmpeg tiff`'s own `AVOption`s, measured against
+/// `ffmpeg -h encoder=tiff`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EncodeOptions {
+    /// `-compression_algo`.
+    pub compression_algo: CompressionAlgo,
+}
+
 /// Encode one or more frames as a (possibly multi-page) TIFF.
 ///
 /// Fidelity is D11 "Exact for what it covers": every pixel this crate
-/// supports round-trips exactly, since neither direction applies lossy
-/// compression by default.
+/// supports round-trips exactly -- `Lzw`/`Deflate`/`Packbits` are all
+/// lossless, so a non-default `compression_algo` changes only the byte
+/// count, never a decoded pixel.
 ///
 /// # Errors
 ///
 /// [`Error::InvalidData`] for an empty frame list or an encoder failure.
 /// [`Error::Unsupported`] for a pixel format this crate does not map to a
 /// TIFF colour type.
-pub fn encode(frames: &[Frame]) -> Result<Vec<u8>> {
+pub fn encode(frames: &[Frame], options: &EncodeOptions) -> Result<Vec<u8>> {
     if frames.is_empty() {
         return Err(Error::InvalidData("tiff: no frames to encode"));
     }
     let mut out: Vec<u8> = Vec::new();
     {
         let mut cursor = Cursor::new(&mut out);
-        let mut encoder =
-            tiff::encoder::TiffEncoder::new(&mut cursor).map_err(|_| Error::InvalidData("tiff: header encode"))?;
+        let compression = match options.compression_algo {
+            CompressionAlgo::Raw => tiff::encoder::Compression::Uncompressed,
+            CompressionAlgo::Lzw => tiff::encoder::Compression::Lzw,
+            CompressionAlgo::Deflate => {
+                tiff::encoder::Compression::Deflate(tiff::encoder::DeflateLevel::default())
+            }
+            CompressionAlgo::Packbits => tiff::encoder::Compression::Packbits,
+        };
+        let mut encoder = tiff::encoder::TiffEncoder::new(&mut cursor)
+            .map_err(|_| Error::InvalidData("tiff: header encode"))?
+            .with_compression(compression);
         for frame in frames {
             let FrameData::Video { format, width, height, .. } = &frame.data else {
                 return Err(Error::Unsupported("tiff: audio frame"));

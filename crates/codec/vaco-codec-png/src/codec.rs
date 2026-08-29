@@ -429,6 +429,41 @@ fn write_native(frame: &mut Frame, rf: &RawFrame) {
     }
 }
 
+/// `-pred`'s six values (`ffmpeg -h encoder=png`), kept independent of the
+/// D11 boundary's `png::Filter` -- that mapping lives in [`encode`] alone,
+/// so nothing outside this module ever names a `png::` type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Predictor {
+    /// `0`/`none`: never filter a row.
+    None,
+    /// `1`/`sub`: filter against the pixel to the left.
+    Sub,
+    /// `2`/`up`: filter against the pixel above.
+    Up,
+    /// `3`/`avg`: filter against the average of left and above.
+    Avg,
+    /// `4`/`paeth`: the Paeth predictor. The `png` crate's own default when
+    /// no encoder option overrides it.
+    Paeth,
+    /// `5`/`mixed`: choose the best filter independently for each row
+    /// (`png::Filter::Adaptive`).
+    Mixed,
+}
+
+/// Encoder knobs mirroring `ffmpeg png`'s own `AVOption`s, measured against
+/// `ffmpeg -h encoder=png` and a real encode (`-compression_level 0` vs `9`
+/// moves a 320x240 `testsrc` PNG between 231 KiB and 1.3 KiB). `None` in
+/// either field leaves the `png` crate's own default untouched rather than
+/// forcing a choice nobody asked for.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EncodeOptions {
+    /// `-pred`.
+    pub pred: Option<Predictor>,
+    /// `-compression_level`, zlib level 0 (none) to 9 (max); this crate
+    /// clamps to that range before it ever reaches here.
+    pub compression_level: Option<u8>,
+}
+
 /// Encode one or more frames as a PNG (one frame) or APNG (more than one),
 /// the first frame defining the canvas size, colour type and bit depth.
 ///
@@ -441,7 +476,7 @@ fn write_native(frame: &mut Frame, rf: &RawFrame) {
 /// [`Error::InvalidData`] for an empty frame list or an encoder failure.
 /// [`Error::Unsupported`] for a pixel format this crate does not map to a
 /// PNG colour type/bit depth (see [`png_color_for`]).
-pub fn encode(frames: &[Frame], _budget: &mut Budget) -> Result<Vec<u8>> {
+pub fn encode(frames: &[Frame], _budget: &mut Budget, options: &EncodeOptions) -> Result<Vec<u8>> {
     let Some(first) = frames.first() else {
         return Err(Error::InvalidData("png: no frames to encode"));
     };
@@ -460,6 +495,19 @@ pub fn encode(frames: &[Frame], _budget: &mut Budget) -> Result<Vec<u8>> {
         let mut encoder = png::Encoder::new(&mut out, width, height);
         encoder.set_color(color);
         encoder.set_depth(depth);
+        if let Some(level) = options.compression_level {
+            encoder.set_deflate_compression(png::DeflateCompression::Level(level.min(9)));
+        }
+        if let Some(pred) = options.pred {
+            encoder.set_filter(match pred {
+                Predictor::None => png::Filter::NoFilter,
+                Predictor::Sub => png::Filter::Sub,
+                Predictor::Up => png::Filter::Up,
+                Predictor::Avg => png::Filter::Avg,
+                Predictor::Paeth => png::Filter::Paeth,
+                Predictor::Mixed => png::Filter::Adaptive,
+            });
+        }
         if frames.len() > 1 {
             encoder
                 .set_animated(frames.len() as u32, 0)
