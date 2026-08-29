@@ -1,7 +1,7 @@
 //! The `tls:` protocol: a raw TLS connection over TCP, and the crate that
-//! owns `rustls`/`rustls-rustcrypto`/`webpki-roots` on behalf of this
-//! workspace (D11 — see "Dependencies" below for why `vaco-protocol-http`
-//! does not declare them itself).
+//! owns `rustls`/`ring`/`webpki-roots` on behalf of this workspace (D11 — see
+//! "Dependencies" below for why `vaco-protocol-http` does not declare them
+//! itself).
 //!
 //! # What it is
 //!
@@ -19,7 +19,7 @@
 //! | Module | Job |
 //! |---|---|
 //! | [`options`] | `TlsOptions` — `-h protocol=tls`'s surface, the parts this crate implements. |
-//! | [`crypto`] | [`crypto::shared_provider`] — the one `rustls-rustcrypto` `Arc<CryptoProvider>` this crate and `vaco-protocol-http` both build TLS configuration from. |
+//! | [`crypto`] | [`crypto::shared_provider`] — the one `ring`-backed `Arc<CryptoProvider>` this crate and `vaco-protocol-http` both build TLS configuration from. |
 //! | [`pem`] | A small, permissive (whitespace-tolerant) PEM block extractor and base64 decoder, written here rather than adopted — see the module docs. |
 //! | [`roots`] | The default root store (`webpki-roots`), optionally extended with a caller-supplied `ca_file`/`ca_pem`. |
 //! | [`verify`] | Certificate verification policy: standard `WebPkiServerVerifier` when `-verify`/`-tls_verify` is set, and — matching the reference's own **measured default** — a permissive verifier otherwise that still cryptographically checks the handshake signature but does not check the certificate's trust chain or hostname. |
@@ -90,36 +90,43 @@
 //!
 //! # Dependencies (D11 — who owns `rustls`)
 //!
-//! This crate declares `rustls`, `rustls-rustcrypto` and `webpki-roots`
-//! directly; **`vaco-protocol-http` does not** (its own `Cargo.toml` depends
-//! on this crate instead, for [`crypto::shared_provider`]). `cargo xtask
-//! owner-gate` fails the build the moment two Vaco crates both declare a
-//! `MEDIA`-listed dependency, and `rustls`/`rustls-rustcrypto` are both on
-//! that list (`xtask/src/owner_gate.rs`) — "a transport swap changes what
-//! bytes arrive" is exactly true of a TLS stack. `vaco-protocol-http` already
-//! had the full D14.2 gate-by-gate record for this trio in its own crate docs
-//! before this crate existed (`ureq`'s `rustls-no-provider` +
-//! `rustls-webpki-roots` features needing `rustls` present with matching
-//! feature flags for Cargo's feature unification, and
-//! `unversioned_rustls_crypto_provider` needing an actual `Arc<CryptoProvider>`
-//! to hand `ureq`); moving the *declaration* here without repeating that
-//! record would just relocate the D14.2 analysis, so `docs/io/vaco-protocol-http.md`
-//! still carries it and this crate's own docs point there rather than
-//! duplicating it. See [`crypto`]'s module docs for the one function that
-//! makes the shared ownership work.
+//! This crate declares `rustls` and `webpki-roots` directly (`ring` arrives
+//! transitively, via `rustls`'s own `ring` Cargo feature — see [`crypto`]'s
+//! module docs for why that is still exactly one owner); **`vaco-protocol-http`
+//! does not** (its own `Cargo.toml` depends on this crate instead, for
+//! [`crypto::shared_provider`]). `cargo xtask owner-gate` fails the build the
+//! moment two Vaco crates both declare a `MEDIA`-listed dependency, and
+//! `rustls` is on that list (`xtask/src/owner_gate.rs`) — "a transport swap
+//! changes what bytes arrive" is exactly true of a TLS stack. `cargo xtask
+//! dep-gate` (D10 Gate 1) separately checks that `ring` — and the `cc` build
+//! machinery it needs — is reachable **only** through this crate; the
+//! 2026-08-28 owner amendment to Gate 1 is what permits that reachability at
+//! all (`planning/00-decisions.md`, "Gate 1 amendment": TLS carries no media
+//! semantics, unlike every codec/container/filter crate Gate 1 still binds
+//! absolutely). `vaco-protocol-http` already had the full D14.2 gate-by-gate
+//! record for this trio in its own crate docs before this crate existed
+//! (`ureq`'s `rustls-no-provider` + `rustls-webpki-roots` features needing
+//! `rustls` present with matching feature flags for Cargo's feature
+//! unification, and `unversioned_rustls_crypto_provider` needing an actual
+//! `Arc<CryptoProvider>` to hand `ureq`); moving the *declaration* here
+//! without repeating that record would just relocate the analysis, so
+//! `docs/io/vaco-protocol-http.md` still carries it and this crate's own docs
+//! point there rather than duplicating it. See `docs/dependencies.md` for the
+//! `ring`-vs-`rustls-rustcrypto`-vs-`aws-lc-rs` assessment, and [`crypto`]'s
+//! module docs for the one function that makes the shared ownership work.
 //!
 //! # wasm
 //!
 //! Exempted from `cargo xtask wasm-check` (`xtask/src/wasm.rs`'s
-//! `NATIVE_ONLY`) — measured: a throwaway crate depending on
-//! `rustls-rustcrypto` alone fails to build for `wasm32-unknown-unknown`
-//! because it pulls `getrandom` without wasm's `js` feature enabled
-//! (`getrandom`'s own hard `compile_error!` on that target — the same wall
-//! `vaco-protocol-http`'s fragment doc already describes for
-//! `vaco-registry`). Also exempted from `cargo xtask time-gate`'s
-//! `NATIVE_ONLY` for the same reason `vaco-protocol-http` is: `rustls`
-//! reaches the wall clock internally (certificate expiry checks) as part of
-//! its own, not-ours-to-change, implementation.
+//! `NATIVE_ONLY`) — re-measured after the `rustls-rustcrypto`-to-`ring` swap:
+//! a throwaway crate depending on `ring` alone still fails to build for
+//! `wasm32-unknown-unknown`, on the same wall as before (`getrandom`'s own
+//! hard `compile_error!` without wasm's `js` feature enabled — `ring` never
+//! gets far enough to reach its own C/assembly on this target). Also
+//! exempted from `cargo xtask time-gate`'s `NATIVE_ONLY` for the same reason
+//! `vaco-protocol-http` is: `rustls` reaches the wall clock internally
+//! (certificate expiry checks) as part of its own, not-ours-to-change,
+//! implementation.
 
 #![forbid(unsafe_code)]
 

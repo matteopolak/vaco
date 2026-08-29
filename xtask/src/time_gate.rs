@@ -103,13 +103,15 @@ const NATIVE_ONLY: &[(&str, &str)] = &[
     ),
     (
         "vaco-protocol-tls",
-        "already NATIVE_ONLY for wasm-check: rustls-rustcrypto/getrandom. \
-         `rustls` itself reaches the wall clock internally for certificate \
-         expiry checks (not this crate's implementation to route through \
-         vaco-time), and this crate's own test suite spawns a real thread to \
-         drive an in-process TLS server for a loopback handshake test — a \
-         differential-harness-shaped use, same reasoning as vaco-conformance \
-         above, not production code running on a target this would matter for.",
+        "already NATIVE_ONLY for wasm-check: rustls's `ring` crypto provider \
+         compiles C/assembly per target and does not build for \
+         wasm32-unknown-unknown at all. `rustls` itself reaches the wall \
+         clock internally for certificate expiry checks (not this crate's \
+         implementation to route through vaco-time), and this crate's own \
+         test suite spawns a real thread to drive an in-process TLS server \
+         for a loopback handshake test — a differential-harness-shaped use, \
+         same reasoning as vaco-conformance above, not production code \
+         running on a target this would matter for.",
     ),
 ];
 

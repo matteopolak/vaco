@@ -57,7 +57,7 @@ fn server_config() -> Arc<ServerConfig> {
         .expect("fixture key has one PKCS8 block");
     let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_der));
 
-    let provider = Arc::new(rustls_rustcrypto::provider());
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
     let config = ServerConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
         .unwrap()

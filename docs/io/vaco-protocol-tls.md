@@ -1,7 +1,7 @@
 # `vaco-protocol-tls`
 
 Layer 2. `tls:` — and the one crate in this workspace that declares
-`rustls`/`rustls-rustcrypto`/`webpki-roots` (D11).
+`rustls`/`ring`/`webpki-roots` (D11).
 
 ## What it is
 
@@ -9,7 +9,14 @@ A raw TLS-over-TCP transport: the scheme a demuxer opens when it needs a
 TLS-secured byte stream that is not HTTP(S) (RTMPS is the usual case). It is
 also, independently of `tls:` itself, the crate that owns this workspace's
 `rustls` dependency — `vaco-protocol-http` depends on this crate instead of
-declaring `rustls`/`rustls-rustcrypto` itself. See "Who owns `rustls`" below.
+declaring `rustls`/`ring` itself. See "Who owns `rustls`" below.
+
+**2026-08-28 update**: the crypto provider is `ring`, not `rustls-rustcrypto`.
+The owner's Gate 1 amendment (`planning/00-decisions.md`) permits FFI for TLS
+specifically; `rustls-rustcrypto` (D14.2's original pure-Rust choice) was
+pinned at `0.0.2-alpha` with no release since 2024-04-24 and seven RUSTSEC
+advisories that could not clear without one, failing Gate 3 outright. See
+`docs/dependencies.md`'s `ring` entry for the full assessment.
 
 ## The whitelist rule — read this before wiring in HLS/DASH
 
@@ -60,18 +67,25 @@ here because whoever tightens it will need exactly this measurement.
 
 **This crate.** `cargo xtask owner-gate` fails the build the instant two Vaco
 crates both declare a `MEDIA`-listed external dependency in their own
-`[dependencies]` table (`xtask/src/owner_gate.rs`; `rustls` and
-`rustls-rustcrypto` are both on that list — "a transport swap changes what
-bytes arrive"). `vaco-protocol-http` needed a crypto provider for `ureq`
-before this crate existed, so it declared `rustls`/`rustls-rustcrypto`
-directly and wrote up the full D14.2 gate-by-gate record in its own crate
-docs. That record is **still there, unduplicated** — `docs/io/vaco-protocol-http.md`'s
-"Dependencies" section — because it predates this crate and moving the
-*declaration* should not orphan the analysis. What changed: `vaco-protocol-http`'s
-`Cargo.toml` no longer lists `rustls`/`rustls-rustcrypto` itself; its
-`transport.rs` calls [`crypto::shared_provider`](../../crates/io/vaco-protocol-tls/src/crypto.rs)
+`[dependencies]` table (`xtask/src/owner_gate.rs`; `rustls` is on that list —
+"a transport swap changes what bytes arrive"; the crypto provider it activates
+is not its own row any more, because `ring` arrives through a Cargo feature
+rather than a manifest declaration — see that file's comment). `vaco-protocol-http`
+needed a crypto provider for `ureq` before this crate existed, so it declared
+`rustls`/`rustls-rustcrypto` directly and wrote up the full D14.2 gate-by-gate
+record in its own crate docs. That record is **still there, unduplicated** —
+`docs/io/vaco-protocol-http.md`'s "Dependencies" section — because it predates
+this crate and moving the *declaration* should not orphan the analysis. What
+changed: `vaco-protocol-http`'s `Cargo.toml` no longer lists `rustls` itself;
+its `transport.rs` calls [`crypto::shared_provider`](../../crates/io/vaco-protocol-tls/src/crypto.rs)
 here instead, so both crates' TLS configuration is built from the exact same
 `Arc<rustls::crypto::CryptoProvider>` in a process that uses both.
+
+Note that `cargo xtask dep-gate` (D10 Gate 1, not D11 `owner-gate`) sees `ring`
+show up in the resolved build graph under **both** `vaco-protocol-tls` and
+`vaco-protocol-http` — that is Cargo feature unification on the one shared
+`rustls` package, not a second declaration; `dep-gate`'s own comment on the
+`ring` row (`xtask/src/deps.rs`) explains why both are correctly permitted.
 
 `webpki-roots` is declared here only — `vaco-protocol-http` never touches it
 directly (it reaches Mozilla's root bundle through `ureq`'s own
@@ -82,7 +96,7 @@ directly (it reaches Mozilla's root bundle through `ureq`'s own
 | Module | Job |
 |---|---|
 | `options` | `TlsOptions` — `verify`/`tls_verify`, `ca_file`/`cafile`, `verifyhost`. |
-| `crypto` | `shared_provider()` — the one `rustls-rustcrypto` provider this crate and `vaco-protocol-http` both use. |
+| `crypto` | `shared_provider()` — the one `ring`-backed provider this crate and `vaco-protocol-http` both use. |
 | `pem` | A small, whitespace-tolerant PEM block extractor + base64 decoder, written here (D10: no PEM-parsing crate is pre-declared). |
 | `roots` | The default root store (`webpki-roots`), optionally extended with `-ca_file`'s certificates (appended, never substituted). |
 | `verify` | `PermissiveVerifier` (the `verify=false` default — see below) and `client_config()`, which builds the full `rustls::ClientConfig` either way. |
@@ -144,8 +158,8 @@ URL is simply never consulted for options at all.
   the two biggest deferred pieces — both need a private-key parser
   (PKCS#8/RSA DER) this crate does not have. See the crate's `lib.rs` module
   docs for the full deferred list.
-* **Gotcha**: do not add `rustls`/`rustls-rustcrypto` to any other crate's
-  `Cargo.toml` — `cargo xtask owner-gate` will fail the build. Route through
+* **Gotcha**: do not add `rustls` to any other crate's `Cargo.toml` —
+  `cargo xtask owner-gate` will fail the build. Route through
   `crate::crypto::shared_provider` instead, the way `vaco-protocol-http` does.
 * **This crate does not depend on `vaco-protocol-dial`, and should not.**
   `vaco-protocol-dial`'s `dial_tls` depends on this crate for `connect_tcp`/
@@ -166,25 +180,27 @@ not yet in this struct at all — see the crate's `lib.rs` docs): `cert_pem`,
 
 ## Dependencies
 
-`rustls` 0.23 (`default-features = false`, `features = ["std", "tls12"]`),
-`rustls-rustcrypto` 0.0.2-alpha (D14.2's pure-Rust provider choice — the
-honest maturity caveat is recorded in `docs/io/vaco-protocol-http.md`, not
-repeated here), `webpki-roots` 1.x. `vaco-protocol-socket` for
-`addr::connect`/`url::parse` (see "How it works" above). `vaco-protocol-core`
-for the trait and the whitelist gate (not this crate's to change).
+`rustls` 0.23 (`default-features = false`, `features = ["std", "tls12",
+"ring"]` — the `ring` feature is what makes `rustls::crypto::ring` available;
+see `docs/dependencies.md`'s `ring` entry for why it replaced
+`rustls-rustcrypto` and why it was chosen over `aws-lc-rs`), `webpki-roots`
+1.x. `vaco-protocol-socket` for `addr::connect`/`url::parse` (see "How it
+works" above). `vaco-protocol-core` for the trait and the whitelist gate (not
+this crate's to change).
 
 ## wasm
 
 Exempted from `cargo xtask wasm-check` and `cargo xtask time-gate`
 (`xtask/src/wasm.rs` and `xtask/src/time_gate.rs`'s `NATIVE_ONLY` lists), both
 for the same underlying reason `vaco-protocol-http` is exempt from each:
-`rustls-rustcrypto` pulls `getrandom` without wasm's `js` feature enabled,
-which fails to compile for `wasm32-unknown-unknown` with `getrandom`'s own
-hard `compile_error!` (measured directly against a throwaway crate depending
-on `rustls-rustcrypto` alone — nine lines short of `vaco-protocol-socket`'s
-`socket2` failure, same wall); and `rustls` reaches the wall clock internally
-for certificate-expiry checks, which is its own implementation, not this
-crate's to route through `vaco-time`.
+`ring` (reached via `rustls`'s own `ring` feature) pulls `getrandom` without
+wasm's `js` feature enabled, which fails to compile for
+`wasm32-unknown-unknown` with `getrandom`'s own hard `compile_error!` —
+re-measured directly against a throwaway crate depending on `ring` alone
+after the `rustls-rustcrypto`-to-`ring` swap, same wall as before; and
+`rustls` reaches the wall clock internally for certificate-expiry checks,
+which is its own implementation, not this crate's to route through
+`vaco-time`.
 
 The registry fragment (`vaco-component.toml`) sets `default = false` for the
 same wasm-regression reason `vaco-protocol-http`'s and

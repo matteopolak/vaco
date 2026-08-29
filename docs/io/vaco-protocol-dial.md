@@ -49,7 +49,9 @@ None — this crate exposes no `Protocol` and no options schema.
 `vaco-protocol-core` (types), `vaco-protocol-socket` (`addr::connect`,
 `HostPort`), `vaco-protocol-tls` (`connect_tcp`, `handshake`, `TlsOptions`).
 Native-only: see `xtask/src/wasm.rs`'s `NATIVE_ONLY` entry — `dial_tls`
-pulls in `vaco-protocol-tls`'s `getrandom`/`rustls-rustcrypto` wall.
+pulls in `vaco-protocol-tls`'s `getrandom`/`ring` wall (`ring` replaced
+`rustls-rustcrypto` 2026-08-28; same wasm wall either way — see
+`docs/dependencies.md`'s `ring` entry).
 
 ## Testing
 

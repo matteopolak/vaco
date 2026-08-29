@@ -204,7 +204,7 @@ CBC-only), so nothing in this crate needed to change for that fix.
 No `unsafe` in this crate's own code (`#![forbid(unsafe_code)]`, matching
 D2); `aes`'s runtime-dispatched AES-NI/ARMv8-crypto backends use `unsafe`
 internally, weighed rather than vetoed per D10 — the same treatment already
-given to `rustls-rustcrypto` in `vaco-protocol-tls`.
+given to `ring` (formerly `rustls-rustcrypto`) in `vaco-protocol-tls`.
 
 ## Testing — what is measured, and what is not
 

@@ -52,53 +52,55 @@ multiple-versions = "warn"
 wildcards = "warn"
 # D10 Gate 1, structurally. These crates exist to compile or bind foreign code;
 # banning them makes a `-sys` dependency fail to resolve rather than fail review.
+# `cc`/`ring`/`openssl-sys`/`openssl-src`/`pkg-config`/`vcpkg` are no longer
+# blanket-denied here: the 2026-08-28 owner amendment to D10 Gate 1
+# (planning/00-decisions.md, "Gate 1 amendment") permits FFI specifically for
+# TLS/DTLS, which is what `vaco-protocol-tls` (ring) and `vaco-protocol-dtls`
+# (openssl) now use — see docs/dependencies.md for the Gate 2/3 assessment of
+# each. `cargo-deny`'s [bans] cannot express "denied except through these two
+# crates" the way `cargo xtask dep-gate` can (it walks the resolved graph and
+# checks exactly that scoping; see `xtask/src/deps.rs`), so the real,
+# authoritative Gate 1 enforcement for these six now lives there instead of
+# here. `cmake`/`bindgen` stay denied unconditionally: neither TLS provider
+# needs them, so their presence would mean an actual new violation, not a
+# permitted one.
 deny = [
-    { name = "cc" },
     { name = "cmake" },
     { name = "bindgen" },
-    { name = "pkg-config" },
-    { name = "ring",       reason = "compiles C and assembly; fails D10 Gate 1. Use rustls-rustcrypto (D14.2)." },
-    { name = "aws-lc-rs",  reason = "compiles C and assembly; fails D10 Gate 1. Use rustls-rustcrypto (D14.2)." },
-    { name = "aws-lc-sys", reason = "compiles C and assembly; fails D10 Gate 1." },
-    { name = "openssl-sys" },
+    { name = "aws-lc-rs",  reason = "compiles C and assembly; ring was chosen instead for this workspace's TLS provider (docs/dependencies.md)" },
+    { name = "aws-lc-sys", reason = "compiles C and assembly" },
+    { name = "boring-sys", reason = "vendors and compiles BoringSSL; not adopted for DTLS (docs/dependencies.md) -- BoringSSL's licence is a non-standard composite, unlike OpenSSL 3.x+'s plain Apache-2.0" },
+    { name = "wolfssl-sys", reason = "vendors and compiles wolfSSL; GPL-licensed, fails Gate 2 outright" },
 ]
 
 [advisories]
 version = 2
 yanked = "deny"
-# Every entry below traces back to one root cause (QA-10 finding, 2026-08-28):
-# our only D14.2-compliant TLS crypto provider, `rustls-rustcrypto`, is pinned
-# at its latest-ever release (0.0.2-alpha, published 2024-04-24 -- `ring` and
-# `aws-lc-rs` are banned above for compiling C/assembly, which is exactly what
-# D14.2 exists to avoid) and hard-requires `rustls-webpki = "^0.102.0"` and
-# `rsa = "0.9"`, so neither can move to a patched release without a new
-# rustls-rustcrypto release, which does not exist. D10 asks that a dependency
-# be "trusted and maintained"; an alpha crate with no release in over two
-# years, now carrying five unpatched advisories in its own pinned deps, no
-# longer clearly meets that bar. This is a decision for the owner (swap TLS
-# crypto provider, vendor a patched fork, or accept the residual risk) --
-# recorded here, not resolved here. Each entry below was individually
-# assessed for reachability in vaco's own code (a TLS *client* with
-# `with_no_client_auth()`, per crates/io/vaco-protocol-tls/src/verify.rs) --
-# not accepted on the advisory's word alone (D17).
+# QA-10 (2026-08-28) found our then-only D14.2-compliant TLS crypto provider,
+# `rustls-rustcrypto`, pinned at its latest-ever release (0.0.2-alpha,
+# published 2024-04-24) and hard-requiring `rustls-webpki = "^0.102.0"` and
+# `rsa = "0.9"`, carrying seven RUSTSEC advisories combined between the two
+# that could not be patched without a new rustls-rustcrypto release, which did
+# not exist. That failed Gate 3's "alive" and "sound" criteria outright. The
+# owner's Gate 1 amendment the same day (`planning/00-decisions.md`) resolved
+# it by permitting FFI for TLS: `vaco-protocol-tls` now uses `ring` (see
+# docs/dependencies.md), which pulls neither `rustls-webpki@0.102` nor `rsa`
+# at all. Measured, not assumed: `cargo deny check advisories` after the swap
+# reports all five of those as "advisory was not encountered" (their crate
+# versions are simply no longer in the resolved graph), so their ignore
+# entries are removed below rather than kept as dead weight. One entry from
+# that original set survives, for an unrelated reason (`paste`, still pulled
+# by `exr`/`pulp`) -- see its own comment.
 ignore = [
-    # rustls-webpki, all four confirmed against crates/io/vaco-protocol-tls/src:
-    { id = "RUSTSEC-2026-0104", reason = "reachable panic in CRL parsing; this tree calls no CRL API at all" },
-    { id = "RUSTSEC-2026-0049", reason = "CRL distribution-point matching bug; same as above, no CRL API is called" },
-    { id = "RUSTSEC-2026-0098", reason = "webpki name-constraint bug reachable only after signature verification and requires a misissued CA; accepted residual risk, not reachable from ordinary use" },
-    { id = "RUSTSEC-2026-0099", reason = "webpki name-constraint bug, same misissuance precondition as RUSTSEC-2026-0098; accepted residual risk" },
-    # rsa (RustCrypto), pulled in only for rustls-rustcrypto's CLIENT-CERTIFICATE
-    # signing path (src/sign/rsa.rs's RsaSigningKey). vaco-protocol-tls calls
-    # `.with_no_client_auth()` unconditionally and never constructs a
-    # PrivateKeyDer, so the private-key timing side channel this advisory
-    # describes has no code path that reaches it; RSA *verification* (the path
-    # every handshake actually uses) is a public-key operation and is not
-    # the vulnerability. "No safe upgrade is available" upstream regardless.
-    { id = "RUSTSEC-2023-0071", reason = "Marvin timing attack affects RSA private-key signing only; vaco is TLS-client-only with no client-certificate auth, so RsaSigningKey is never constructed" },
     # paste (proc-macro helper), unmaintained upstream with no safe replacement
-    # available to us: pulled in by `pulp` (via the `exr` OpenEXR crate) and by
-    # `rustls-rustcrypto` itself, neither of which we control.
-    { id = "RUSTSEC-2024-0436", reason = "unmaintained proc-macro helper, transitive via exr/pulp and rustls-rustcrypto; no upstream replacement to move either dependent to" },
+    # available to us. Checked, not assumed, after the ring swap removed
+    # rustls-rustcrypto (paste's other former source): `cargo tree -i paste`
+    # now shows exactly one path, `vaco-codec-exr` -> `exr` -> `pulp` ->
+    # `paste`, so this ignore is still needed and its reason is corrected to
+    # match -- it no longer has two independent sources, just the one this
+    # agent does not own (vaco-codec-exr is a codec crate, out of scope for a
+    # TLS/DTLS work package in a shared tree).
+    { id = "RUSTSEC-2024-0436", reason = "unmaintained proc-macro helper, transitive via vaco-codec-exr's exr/pulp dependency; no upstream replacement to move it to, and not this agent's crate to edit" },
 
     # UNLIKE everything above, this pair is FIXABLE and the ignore is meant to
     # be temporary, not accepted risk. quick-xml 0.37.5 (crates/format/

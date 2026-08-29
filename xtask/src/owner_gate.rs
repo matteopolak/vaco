@@ -71,11 +71,14 @@ const MEDIA: &[(&str, &str)] = &[
         "rustls",
         "TLS for https. A transport swap changes what bytes arrive.",
     ),
-    (
-        "rustls-rustcrypto",
-        "the crypto provider behind rustls; see D14.2. Named separately because \
-         it is the part most likely to be replaced.",
-    ),
+    // The crypto provider (`rustls-rustcrypto` until 2026-08-28, now `ring`)
+    // is NOT its own row: it arrives via `rustls`'s own `ring` Cargo feature
+    // rather than as a directly-declared dependency (see
+    // `vaco-protocol-tls/src/crypto.rs`), so it never appears in a manifest's
+    // `[dependencies]` table for this scan to find. `cargo xtask dep-gate`
+    // (D10 Gate 1) tracks it instead, by resolved build graph rather than by
+    // manifest text, which can see a feature-activated dependency this scan
+    // cannot.
     (
         "ureq",
         "the HTTP client. Range handling and redirect policy are observable.",

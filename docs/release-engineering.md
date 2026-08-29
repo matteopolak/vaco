@@ -73,6 +73,17 @@ is a real "trusted and maintained" gap under D10 and worth the owner's
 attention independent of this issue — a crypto-provider swap or a vendored
 fork are the two ways out, and neither is this agent's call to make.
 
+**Resolved 2026-08-28**: the owner made the call this section flagged as
+outstanding — a Gate 1 amendment (`planning/00-decisions.md`) permitting FFI
+for TLS specifically. `vaco-protocol-tls` swapped to `ring`; all five
+`rustls-webpki`/`rsa` advisories above cleared (`cargo deny check advisories`
+now reports them as "not encountered" — the vulnerable crate versions are
+simply out of the graph), and their `deny.toml` ignore entries were removed.
+See `docs/dependencies.md`'s `ring` entry for the replacement's own Gate 2/3
+record. One advisory from the original finding (`RUSTSEC-2024-0436`, `paste`)
+remains ignored for an unrelated reason — it is also pulled in by
+`vaco-codec-exr`'s `exr`/`pulp` dependency, independent of the TLS stack.
+
 ### SBOM
 
 `just sbom` writes SPDX 2.3 and CycloneDX 1.5 JSON for both `vaco-cli` and

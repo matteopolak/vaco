@@ -58,13 +58,16 @@ const NATIVE_ONLY: &[(&str, &str)] = &[
     ),
     (
         "vaco-protocol-tls",
-        "depends on rustls-rustcrypto, which pulls getrandom without wasm's js \
-         feature enabled and fails wasm32-unknown-unknown on getrandom's own \
-         hard compile_error! (measured directly against a throwaway crate \
-         depending on rustls-rustcrypto alone — the same wall vaco-registry's \
-         own vaco-component.toml fragments already document for \
-         vaco-protocol-http). A wasm build reaches TLS through the browser's \
-         own TLS-terminated fetch/WebSocket, not this crate.",
+        "depends (via rustls's `ring` feature) on `ring`, which pulls \
+         getrandom without wasm's js feature enabled and fails \
+         wasm32-unknown-unknown on getrandom's own hard compile_error! — \
+         re-measured directly against a throwaway crate depending on `ring` \
+         alone after the 2026-08-28 rustls-rustcrypto-to-ring swap, same wall, \
+         same error (getrandom, not ring's own C/assembly, is what actually \
+         trips first; the same wall vaco-registry's own vaco-component.toml \
+         fragments already document for vaco-protocol-http). A wasm build \
+         reaches TLS through the browser's own TLS-terminated \
+         fetch/WebSocket, not this crate.",
     ),
     (
         "vaco-demux-rtsp",

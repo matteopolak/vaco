@@ -1,6 +1,6 @@
 [package]
 name = "vaco-protocol-tls"
-description = "The tls: protocol, and this workspace's one rustls/rustls-rustcrypto/webpki-roots dependency (D11)."
+description = "The tls: protocol, and this workspace's one rustls/ring/webpki-roots dependency (D11)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -15,11 +15,14 @@ vaco-opts = { path = "../../core/vaco-opts" }
 vaco-protocol-core = { path = "../../io/vaco-protocol-core" }
 vaco-protocol-socket = { path = "../../io/vaco-protocol-socket" }
 vaco-time = { path = "../../core/vaco-time" }
-# D14.2's provider decision: rustls with a pure-Rust crypto provider. See the
-# crate docs for the full D11/D14.2 record (also carried in
-# docs/io/vaco-protocol-http.md, which had it first).
+# D14.2's original provider decision (rustls-rustcrypto, pure-Rust) was
+# superseded by the 2026-08-28 Gate 1 amendment: rustls-rustcrypto had no
+# release since 2024-04-24 and seven unfixable RUSTSEC advisories, failing
+# Gate 3. `ring` (permitted now that TLS is exempt from Gate 1) replaces it via
+# rustls's own "ring" feature. See the crate docs for the full D11 record (also
+# carried in docs/io/vaco-protocol-http.md, which had it first) and
+# docs/dependencies.md for the Gate 2/3 assessment.
 rustls.workspace = true
-rustls-rustcrypto.workspace = true
 webpki-roots.workspace = true
 
 [dev-dependencies]
