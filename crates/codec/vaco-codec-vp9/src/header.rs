@@ -358,8 +358,16 @@ fn skip_render_size(r: &mut BitReader<'_>) {
 /// superframe-wrapping sample — split with [`crate::superframe::split`]
 /// first). `prev_loop_filter`/`prev_seg` are the previous frame's persisted
 /// state (segmentation and loop-filter deltas both carry forward when a
-/// frame does not update them). Returns `None` on a bad `frame_marker` or a
-/// buffer too short for the fields this crate reads.
+/// frame does not update them). `prev_color` is the sequence's color config
+/// as last established by a key frame or profile>0 intra-only frame: §6.2
+/// only calls `color_config()` on those two frame kinds, so a regular inter
+/// frame (and a profile-0 intra-only frame, which is hardcoded regardless)
+/// carries the previous value forward rather than re-reading it — before
+/// this parameter existed, that carry-forward was a hardcoded 8-bit/4:2:0
+/// literal, which happened to be correct for profile 0 (the only profile
+/// with fixture coverage) and silently wrong for every inter frame of any
+/// other profile. Returns `None` on a bad `frame_marker` or a buffer too
+/// short for the fields this crate reads.
 #[must_use]
 #[allow(clippy::too_many_lines, reason = "one linear syntax table, §6.2")]
 pub fn parse_uncompressed_header(
@@ -368,6 +376,7 @@ pub fn parse_uncompressed_header(
     prev_seg: Segmentation,
     ref_dims: &[Option<RefFrameDims>; tables::NUM_REF_FRAMES],
     prev_frame: Option<PrevFrameInfo>,
+    prev_color: ColorConfig,
 ) -> Option<(FrameHeader, usize)> {
     let mut r = BitReader::new(data);
     if r.get(2) != 2 {
@@ -394,7 +403,12 @@ pub fn parse_uncompressed_header(
                 error_resilient_mode: false,
                 intra_only: false,
                 frame_is_intra: false,
-                color: ColorConfig { bit_depth: 8, color_space: 0, full_range: false, subsampling_x: true, subsampling_y: true },
+                // Not a real syntax element for this frame kind — carried
+                // through unread, same as `prev_loop_filter`/`prev_seg`
+                // below, since `decode_one_frame` persists it back into
+                // `State` and a show-existing-frame must not reset the
+                // sequence's established color config.
+                color: prev_color,
                 width: 0,
                 height: 0,
                 mi_cols: 0,
@@ -430,7 +444,12 @@ pub fn parse_uncompressed_header(
     let show_frame = r.get(1) != 0;
     let error_resilient_mode = r.get(1) != 0;
 
-    let mut color = ColorConfig { bit_depth: 8, color_space: 1, full_range: false, subsampling_x: true, subsampling_y: true };
+    // §6.2's `color_config()` is only called on a key frame or a profile>0
+    // intra-only frame (below); every other path here — a profile-0
+    // intra-only frame (hardcoded, overwrites this unconditionally) and a
+    // regular inter frame (never overwrites it) — needs the sequence's
+    // established value, not a fresh default.
+    let mut color = prev_color;
     let width;
     let height;
     let refresh_frame_flags;
@@ -990,6 +1009,7 @@ fn read_coef_probs(bd: &mut Bd<'_>, tx_mode: i32, entropy: &mut EntropyContext) 
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, reason = "test code exercising a fixed real-encoder fixture, not the untrusted-input surface")]
 mod tests {
     use super::*;
 
@@ -1003,5 +1023,58 @@ mod tests {
     #[test]
     fn inv_remap_prob_decrements_m_before_use() {
         assert_eq!(inv_remap_prob(0, 128), 124);
+    }
+
+    /// A real `libvpx-vp9` profile-1 4:2:2 inter frame (`ffmpeg -f lavfi -i
+    /// testsrc2=size=160x96:rate=5:duration=1.6 -pix_fmt yuv422p -c:v
+    /// libvpx-vp9 -profile:v 1 -frame-parallel 1 -error-resilient max
+    /// -lag-in-frames 0 -b:v 500k -g 30`, second IVF frame payload, in full
+    /// (1429 bytes)) — regression coverage for #327: a regular inter frame's
+    /// own bits never re-signal `color_config()` (only a key frame or a
+    /// profile>0 intra-only frame do), so before `prev_color` existed as a
+    /// parameter here, this frame's parsed `color` was a hardcoded 4:2:0
+    /// 8-bit literal regardless of what was passed in, silently breaking
+    /// every profile-1/2/3 stream's chroma/bit-depth plumbing from the
+    /// second frame onward (invisible on profile 0, where that literal
+    /// happens to already be correct).
+    fn real_inter_frame_profile1_yuv422() -> Vec<u8> {
+        include_bytes!("../tests/fixtures/vp9_profile1_yuv422_inter_frame.bin").to_vec()
+    }
+
+    #[test]
+    fn inter_frame_color_config_carries_forward_from_the_previous_frame() {
+        let data = real_inter_frame_profile1_yuv422();
+        let established = ColorConfig { bit_depth: 8, color_space: 1, full_range: false, subsampling_x: true, subsampling_y: false };
+        let ref_dims: [Option<RefFrameDims>; tables::NUM_REF_FRAMES] =
+            [Some(RefFrameDims { width: 160, height: 96 }); tables::NUM_REF_FRAMES];
+        let prev_frame = Some(PrevFrameInfo { width: 160, height: 96, show_frame: true });
+        let (fh, _) = parse_uncompressed_header(
+            &data,
+            LoopFilterParams::default(),
+            Segmentation::default(),
+            &ref_dims,
+            prev_frame,
+            established,
+        )
+        .expect("a real encoder's inter-frame header parses");
+        assert!(!fh.is_key_frame);
+        assert!(!fh.intra_only);
+        assert_eq!(fh.color, established, "a regular inter frame must carry the sequence's color config forward, not reset it");
+    }
+
+    #[test]
+    fn inter_frame_color_config_does_not_silently_default_to_4_2_0() {
+        // Same frame, deliberately wrong `prev_color` (4:2:0) — proves the
+        // previous test is reading `prev_color` through, not merely
+        // matching it by coincidence with some other hardcoded value.
+        let data = real_inter_frame_profile1_yuv422();
+        let wrong_default = ColorConfig { bit_depth: 8, color_space: 1, full_range: false, subsampling_x: true, subsampling_y: true };
+        let ref_dims: [Option<RefFrameDims>; tables::NUM_REF_FRAMES] =
+            [Some(RefFrameDims { width: 160, height: 96 }); tables::NUM_REF_FRAMES];
+        let prev_frame = Some(PrevFrameInfo { width: 160, height: 96, show_frame: true });
+        let (fh, _) =
+            parse_uncompressed_header(&data, LoopFilterParams::default(), Segmentation::default(), &ref_dims, prev_frame, wrong_default)
+                .expect("a real encoder's inter-frame header parses");
+        assert_eq!(fh.color, wrong_default, "an inter frame's color must equal whatever prev_color it was given");
     }
 }

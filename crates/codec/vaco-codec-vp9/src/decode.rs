@@ -1490,6 +1490,12 @@ struct State {
     prev_mi_cols: usize,
     prev_mi_rows: usize,
     prev_segment_ids: Vec<u8>,
+    /// The sequence's color config as last established by a key frame or a
+    /// profile>0 intra-only frame — a regular inter frame's own header does
+    /// not carry one (see `header::parse_uncompressed_header`'s doc). The
+    /// spec-default initial value here is only ever observed if a malformed
+    /// stream's first frame is not a key frame.
+    color: header::ColorConfig,
 }
 
 impl Default for State {
@@ -1504,6 +1510,7 @@ impl Default for State {
             prev_mi_cols: 0,
             prev_mi_rows: 0,
             prev_segment_ids: Vec::new(),
+            color: header::ColorConfig { bit_depth: 8, color_space: 1, full_range: false, subsampling_x: true, subsampling_y: true },
         }
     }
 }
@@ -1540,13 +1547,19 @@ impl Vp9Decoder {
             }
         }
 
-        let Some((mut fh, header_bytes)) =
-            header::parse_uncompressed_header(data, self.state.loop_filter, self.state.segmentation, &ref_dims, self.state.prev_frame_info)
-        else {
+        let Some((mut fh, header_bytes)) = header::parse_uncompressed_header(
+            data,
+            self.state.loop_filter,
+            self.state.segmentation,
+            &ref_dims,
+            self.state.prev_frame_info,
+            self.state.color,
+        ) else {
             return Ok(());
         };
         self.state.loop_filter = fh.loop_filter;
         self.state.segmentation = fh.segmentation;
+        self.state.color = fh.color;
 
         if fh.show_existing_frame {
             if let Some(slot) = self.state.ref_store.get(fh.frame_to_show_map_idx).cloned() {
