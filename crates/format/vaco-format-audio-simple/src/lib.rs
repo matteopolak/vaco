@@ -26,6 +26,7 @@ pub mod aiff;
 pub mod au;
 pub mod caf;
 pub mod extended80;
+pub mod flac;
 pub mod ircam;
 pub mod pcm;
 pub mod rso;

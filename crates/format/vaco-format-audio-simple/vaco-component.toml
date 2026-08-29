@@ -154,3 +154,11 @@ long_name  = "Lego Mindstorms RSO"
 feature    = "mux-rso"
 ctor       = "vaco_format_audio_simple::rso::MUXER"
 extensions = "rso"
+
+[[component]]
+kind       = "muxer"
+name       = "flac"
+long_name  = "raw FLAC"
+feature    = "mux-flac"
+ctor       = "vaco_format_audio_simple::flac::MUXER"
+extensions = "flac"
