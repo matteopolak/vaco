@@ -1,0 +1,18 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# ProRes *decode* is GREEN in the default distributable build per
+# `planning/research/07-legal-patents-licensing.md` SS5.1's own list ("ProRes
+# decode" appears unconditionally; the `†` there means "decode only, never
+# encode" — a scope note, not a legal-risk flag). No `encumbered` feature and
+# `default` left at its normal `true`, matching that ruling exactly. Encode
+# is RED (Apple's own support page names FFmpeg-derivative encoders as
+# unauthorised) and is not implemented here.
+
+[[component]]
+kind      = "decoder"
+name      = "prores"
+long_name = "Apple ProRes (iCodec Pro)"
+feature   = "codec-prores"
+ctor      = "vaco_codec_prores::DECODER_PRORES"
+media     = "video"
+codec     = "prores"

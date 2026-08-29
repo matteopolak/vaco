@@ -1,0 +1,48 @@
+[[table]]
+name   = "PROGRESSIVE_SCAN"
+file   = "crates/codec/vaco-codec-prores/src/scan.rs"
+source = "smpte-rdd36-2022"
+clause = "SS7.2.2, Figure 4 (progressive block scan pattern)"
+method = "transcribed"
+
+[[table]]
+name   = "INTERLACED_SCAN"
+file   = "crates/codec/vaco-codec-prores/src/scan.rs"
+source = "smpte-rdd36-2022"
+clause = "SS7.2.2, Figure 5 (interlaced block scan pattern)"
+method = "transcribed"
+
+[[table]]
+name   = "dc_diff_codebook"
+file   = "crates/codec/vaco-codec-prores/src/coeff.rs"
+source = "smpte-rdd36-2022"
+clause = "SS7.1.1.3, Table 9 (codebook adaptation for dc_coeff_difference)"
+method = "transcribed"
+
+[[table]]
+name   = "run_codebook"
+file   = "crates/codec/vaco-codec-prores/src/coeff.rs"
+source = "smpte-rdd36-2022"
+clause = "SS7.1.1.4, Table 10 (codebook adaptation for run)"
+method = "transcribed"
+
+[[table]]
+name   = "level_codebook"
+file   = "crates/codec/vaco-codec-prores/src/coeff.rs"
+source = "smpte-rdd36-2022"
+clause = "SS7.1.1.4, Table 11 (codebook adaptation for abs_level_minus_1)"
+method = "transcribed"
+
+[[table]]
+name   = "decode_alpha_run"
+file   = "crates/codec/vaco-codec-prores/src/coeff.rs"
+source = "smpte-rdd36-2022"
+clause = "SS7.1.2, Table 12 (variable-length code for scanned alpha run lengths)"
+method = "transcribed"
+
+[[table]]
+name   = "decode_alpha_difference"
+file   = "crates/codec/vaco-codec-prores/src/coeff.rs"
+source = "smpte-rdd36-2022"
+clause = "SS7.1.2, Tables 13 and 14 (variable-length code for alpha differences, 8- and 16-bit)"
+method = "transcribed"
