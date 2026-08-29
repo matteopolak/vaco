@@ -360,20 +360,33 @@ fn an_output_format_nothing_claims_keeps_the_reference_wording() {
 }
 
 #[test]
-fn an_output_with_no_c_copy_takes_the_missing_encoder_path() {
-    // The reference's own message for a build without the encoder it wants,
-    // which is exactly this build's situation. OBSERVED exit 8.
+fn an_output_with_no_c_copy_now_reaches_a_real_decode_attempt() {
+    // Before E2E-GAPS 4, `-c`-less output streams always took the "probably
+    // disabled" path (OBSERVED exit 8, unconditionally) because
+    // `check_codecs` never consulted the null muxer's own declared defaults
+    // (`wrapped_avframe`/`pcm_s16le`). Now it does, so this fixture's default
+    // *video* track (`V_VP8`, a codec this build genuinely decodes) resolves
+    // and the run gets as far as a real decode attempt. Its default *audio*
+    // track is `A_OPUS`, which this build does not decode yet, so the run
+    // still fails overall -- just later, and for the true reason, rather than
+    // a blanket refusal that would also have covered the video track for no
+    // real reason.
+    //
+    // This is registry-driven rather than pinned, per
+    // `planning/AGENT-CONSTRAINTS.md`'s "never pin the absence of something
+    // the project is building": the day an Opus decoder lands, this stops
+    // asserting anything rather than asserting something false.
+    if vaco_registry::decoder_for(vaco_codec_core::CodecId::Opus).is_some() {
+        return;
+    }
     let f = fixture(&four_track_file());
     let r = go(&["-i", &f.path, "-f", "null", "-"]);
-    assert_eq!(r.code.code(), 8, "{}", r.message());
+    assert_eq!(r.code.code(), 234, "{}", r.message());
     assert!(
-        r.message().contains("is probably disabled"),
+        r.message()
+            .contains("this build has no decoder for the input codec"),
         "{}",
         r.message()
-    );
-    assert!(
-        r.message()
-            .ends_with("Error opening output files: Encoder not found\n")
     );
 }
 

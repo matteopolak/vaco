@@ -342,7 +342,7 @@ pub fn resolve_output(
         ));
     }
 
-    let codecs = check_codecs(cli, out, &streams)?;
+    let codecs = check_codecs(cli, out, format, &streams)?;
     for (s, c) in streams.iter_mut().zip(codecs) {
         s.codec = c;
     }
@@ -788,9 +788,35 @@ fn no_muxer(out: &OutputSpec, name: &str) -> Diagnostic {
 /// has no *encoder* for gets the identical "Unknown encoder" message and exit
 /// code as a name that names no codec at all — there is no separate "known
 /// but unbuilt" message to reproduce.
+/// The registered encoder for `format`'s own default codec for `media`, if
+/// the container declares one and this build actually has an encoder for it.
+///
+/// # E2E-GAPS 4: a container's default was declared but never consulted
+///
+/// `MuxerDesc::default_video`/`default_audio` exist precisely so a stream
+/// with no explicit `-c` can still pick something — `vaco-mux-utility`'s
+/// `MUXER_NULL` sets `default_video: Some(CodecId::WrappedAvframe)` and
+/// `default_audio: Some(CodecId::PcmS16le)` for exactly this reason (see that
+/// crate's module doc). [`check_codecs`] used to go straight to the "probably
+/// disabled" diagnosis whenever `-c` was absent, without ever asking the
+/// resolved muxer what its default was — so `-f null -` refused every run,
+/// even though the reference's own null muxer (measured, `ffmpeg 9.0.1`)
+/// maps a decodable h264/aac pair to `wrapped_avframe`/`pcm_s16le` and
+/// proceeds. A container with no declared default, or one whose declared
+/// codec has no registered encoder in this build, still falls through to the
+/// original message — this only adds the case the reference itself takes.
+fn default_encoder_for(
+    format: &str,
+    media: Option<MediaType>,
+) -> Option<&'static vaco_codec_core::EncoderDesc> {
+    let codec = vaco_registry::muxer_by_name(format)?.default_codec(media?)?;
+    vaco_registry::encoder_for(codec)
+}
+
 fn check_codecs(
     cli: &Cli,
     out: &OutputSpec,
+    format: &str,
     streams: &[OutStream],
 ) -> Result<Vec<StreamCodec>, Diagnostic> {
     // `-c:v copy` is a per-*output*-stream option, so the specifier is matched
@@ -829,17 +855,19 @@ fn check_codecs(
                     ));
                 }
             },
-            None => {
-                return Err(encoder_error(
-                    out,
-                    s,
-                    i,
-                    &format!(
-                        "Automatic encoder selection failed Default encoder for format {} (codec none) is probably disabled. Please choose an encoder manually.",
-                        out.format.as_deref().unwrap_or("null")
-                    ),
-                ));
-            }
+            None => match default_encoder_for(format, s.media) {
+                Some(desc) => chosen_codecs.push(StreamCodec::Encode(desc.name)),
+                None => {
+                    return Err(encoder_error(
+                        out,
+                        s,
+                        i,
+                        &format!(
+                            "Automatic encoder selection failed Default encoder for format {format} (codec none) is probably disabled. Please choose an encoder manually.",
+                        ),
+                    ));
+                }
+            },
         }
     }
     Ok(chosen_codecs)
@@ -1999,11 +2027,21 @@ mod tests {
         );
     }
 
+    /// E2E-GAPS 4: `-f null -` with no `-c` on either stream now resolves to
+    /// the container's own declared defaults — `wrapped_avframe` for video,
+    /// `pcm_s16le` for audio — the same pair the reference (`ffmpeg 9.0.1`,
+    /// measured) maps a decodable h264/aac input to when neither `-c:v` nor
+    /// `-c:a` is given. This replaces a test that asserted the *absence* of
+    /// that mapping, which is exactly the "pin the absence of something the
+    /// project is building" trap `planning/AGENT-CONSTRAINTS.md` warns about:
+    /// it was true only because `check_codecs` never consulted
+    /// `MuxerDesc::default_video`/`default_audio` at all, not because the
+    /// container has no default.
     #[test]
-    fn a_stream_with_no_codec_takes_the_reference_missing_encoder_path() {
+    fn null_video_and_audio_streams_pick_up_the_containers_declared_default_encoder() {
         let (c, mut o) = out_of(&["-i", "a.mkv", "-f", "null", "-"]);
         o.format = Some("null".to_owned());
-        let s = OutStream {
+        let video = OutStream {
             source: StreamPick::demuxed(0, 0),
             media: Some(MediaType::Video),
             codec: StreamCodec::Copy,
@@ -2011,11 +2049,42 @@ mod tests {
             force_key_frames: None,
             codec_options: Vec::new(),
         };
-        let e = check_codecs(&c, &o, &[s]).unwrap_err();
+        let audio = OutStream {
+            media: Some(MediaType::Audio),
+            ..video.clone()
+        };
+        let resolved = check_codecs(&c, &o, "null", &[video, audio]).unwrap();
+        assert_eq!(
+            resolved,
+            vec![
+                StreamCodec::Encode("wrapped_avframe"),
+                StreamCodec::Encode("pcm_s16le"),
+            ]
+        );
+    }
+
+    /// The diagnosis this crate had for every `-c`-less stream before
+    /// E2E-GAPS 4 is still exactly right for a media type the resolved
+    /// container declares no default for at all — a subtitle stream on
+    /// `-f null -`, here — so the reference's own message is still reachable,
+    /// just from a narrower gate.
+    #[test]
+    fn a_stream_with_no_codec_and_no_declared_default_takes_the_reference_missing_encoder_path() {
+        let (c, mut o) = out_of(&["-i", "a.mkv", "-f", "null", "-"]);
+        o.format = Some("null".to_owned());
+        let s = OutStream {
+            source: StreamPick::demuxed(0, 0),
+            media: Some(MediaType::Subtitle),
+            codec: StreamCodec::Copy,
+            graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
+            force_key_frames: None,
+            codec_options: Vec::new(),
+        };
+        let e = check_codecs(&c, &o, "null", &[s]).unwrap_err();
         assert_eq!(
             e.render(),
-            "[vost#0:0] Automatic encoder selection failed Default encoder for format null (codec none) is probably disabled. Please choose an encoder manually.\n\
-             [vost#0:0] Error selecting an encoder\n\
+            "[sost#0:0] Automatic encoder selection failed Default encoder for format null (codec none) is probably disabled. Please choose an encoder manually.\n\
+             [sost#0:0] Error selecting an encoder\n\
              Error opening output file -.\n\
              Error opening output files: Encoder not found\n"
         );
@@ -2033,13 +2102,13 @@ mod tests {
             force_key_frames: None,
             codec_options: Vec::new(),
         };
-        assert!(check_codecs(&c, &o, std::slice::from_ref(&s)).is_ok());
+        assert!(check_codecs(&c, &o, "null", std::slice::from_ref(&s)).is_ok());
 
         // Deliberately a name no encoder will ever have. `libx264` used to
         // stand in for "not registered here" and stopped being true the moment
         // vaco-codec-exec landed it (C-46), which spawns the user's own binary.
         let (c, o) = out_of(&["-i", "a.mkv", "-c:v", "libnosuchencoder", "-f", "null", "-"]);
-        let e = check_codecs(&c, &o, &[s]).unwrap_err();
+        let e = check_codecs(&c, &o, "null", &[s]).unwrap_err();
         assert!(
             e.render()
                 .starts_with("[vost#0:0] Unknown encoder 'libnosuchencoder'\n"),
@@ -2087,7 +2156,7 @@ mod tests {
             force_key_frames: None,
             codec_options: Vec::new(),
         };
-        let resolved = check_codecs(&c, &o, &[s]).unwrap();
+        let resolved = check_codecs(&c, &o, "null", &[s]).unwrap();
         assert_eq!(resolved, vec![StreamCodec::Encode("qoi")]);
     }
 
@@ -2138,7 +2207,7 @@ mod tests {
                 codec_options: Vec::new(),
             },
         ];
-        assert!(check_codecs(&c, &o, &streams).is_ok());
+        assert!(check_codecs(&c, &o, "null", &streams).is_ok());
     }
 
     #[test]
