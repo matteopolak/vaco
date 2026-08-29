@@ -1269,3 +1269,10 @@ kind     = "rfc"
 title    = "RFC 3389, Real-time Transport Protocol (RTP) Payload for Comfort Noise (CN). Defines the SID payload wire format (noise level byte plus quantised LPC reflection coefficients) and states plainly that the comfort-noise analysis/synthesis algorithm itself is unspecified and implementation-defined."
 acquired = "2026-08-28"
 where    = "https://www.rfc-editor.org/rfc/rfc3389.txt"
+
+[[source]]
+id       = "smpte-rdd36-2022"
+kind     = "spec"
+title    = "SMPTE RDD 36:2022, Apple ProRes Bitstream Syntax and Decoding Process (SMPTE Registered Disclosure Document — freely published, not a purchased Standard)"
+acquired = "2026-08-28"
+where    = "https://pub.smpte.org/doc/rdd36/20220909-pub/rdd36-2022.pdf"
