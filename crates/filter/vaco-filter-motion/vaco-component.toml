@@ -16,3 +16,17 @@ name = "deshake"
 long_name = "Stabilize shaky video."
 ctor = "vaco_filter_motion::deshake::DESC"
 media = "video"
+
+[[component]]
+kind = "filter"
+name = "stabdetect"
+long_name = "Analyze video stabilization/deshaking (pass 1 of 2; vaco's own transform-file format, not .trf-compatible)."
+ctor = "vaco_filter_motion::stabdetect::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "stabtransform"
+long_name = "Video stabilization/deshaking (pass 2 of 2; vaco's own transform-file format, not .trf-compatible)."
+ctor = "vaco_filter_motion::stabtransform::DESC"
+media = "video"

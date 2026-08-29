@@ -46,5 +46,7 @@ mod common;
 pub mod deshake;
 pub mod framerate;
 pub mod registry;
+pub mod stabdetect;
+pub mod stabtransform;
 
 pub use registry::MotionRegistry;
