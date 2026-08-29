@@ -49,19 +49,49 @@ dependency here (D11).
   single flipped ciphertext bit, which normal CTR-mode malleability would
   otherwise let through silently without the tag check).
 
-## No reference peer on this machine
+## Real interop found and fixed a real bug (2026-08-29)
 
-No `openssl`/`libsrtp`-backed peer was available to interoperate against
-in this batch, so every fact comes from RFC 3711's own text (freely
-published IETF RFC, D7/D15-clean) rather than a differential check.
+`kdf::derivation_counter_block` XORed the key-derivation label into the
+wrong octet — twice. RFC 3711 §4.3.1 defines `key_id = <label> || r` with
+`r` the *same bit-length as the 48-bit packet index*, so `key_id` is 7
+octets (56 bits), not 6; `key_id` and `master_salt` are then right-aligned
+before the XOR, so `label` lands at index 7 of the 14-octet salt. This
+crate first placed it at index 0 (not right-aligned at all), then — after a
+first fix — at index 8 (one octet short of 7 octets' worth of
+right-alignment). Both were internally self-consistent and passed every
+test this crate had, because RFC 3711 publishes no numeric vectors and the
+tests could only re-assert the code's own claim.
+
+The first wrongness (index 0) surfaced when `vaco-mux-whip` (#619)
+completed a real DTLS-SRTP handshake against `mediamtx` 1.20.1 — an
+independent implementation (`pion/srtp`) — and every SRTP packet was
+silently dropped despite a completely successful handshake and key export.
+The second wrongness (index 8) was caught only by cross-checking a
+hand-built packet against `libsrtp` itself, via its `pylibsrtp` Python
+binding (D17 applied to open-source, non-`FFmpeg` code — no clean-room
+concern): given the same master key/salt, `libsrtp`'s own `protect()`
+matched this crate's output only once the label moved to index 7.
+`session::protect_matches_a_real_libsrtp_known_answer` pins that exact
+byte sequence permanently — the numeric vector RFC 3711 itself does not
+provide, and the reason a wrong placement survived twice.
+
+## No reference peer on this machine (superseded above, kept for the record)
+
+The original assessment: no `openssl`/`libsrtp`-backed peer was available
+to interoperate against in the batch that first shipped this crate, so
+every fact came from RFC 3711's own text (freely published IETF RFC,
+D7/D15-clean) rather than a differential check. That gap is exactly what
+let the bug above ship unnoticed; see the section above for how it closed.
 
 ## Evidence
 
 RFC 3711 publishes no numeric test vectors of its own (checked directly
-against the fetched RFC text). `kdf`'s tests are therefore self-consistency
-plus draft-derived field-layout checks (the label byte's position, not an
-independent numeric answer), and so are `session`'s `protect`/`unprotect`
-round-trip and tamper-rejection tests. `vaco_crypto::hmac_sha1` itself,
+against the fetched RFC text) — which is why `kdf`'s and `session`'s tests
+were originally self-consistency plus draft-derived field-layout checks
+(the label byte's position, not an independent numeric answer) rather than
+vector-derived. `session::protect_matches_a_real_libsrtp_known_answer` is
+now the one exception: a real, independently-produced numeric answer,
+cross-checked against `libsrtp`. `vaco_crypto::hmac_sha1` itself,
 underneath both, *is* RFC-vector-derived (RFC 2202's own HMAC-SHA1 test
 cases, cross-checked against Python's stdlib `hmac`/`hashlib`).
 

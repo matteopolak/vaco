@@ -44,7 +44,7 @@ DTLS in this workspace, because nothing needs to.
 | `cert` | Loading a configured PEM certificate/key, or generating an ephemeral self-signed one when none is configured — see its module docs for why that default (not an error) is the right call for DTLS specifically. |
 | `context` | Building the `openssl::ssl::SslContext` `-verify`/`-use_srtp`/`-mtu` describe, shared by both the client and server paths. |
 | `transport` | `UdpTransport` — a connected `UdpSocket` wearing the `Read`/`Write` coat `openssl::ssl::SslStream` needs. See its module docs for the one thing it deliberately does not do (DTLS retransmission timers). |
-| `connect` | The client path (`Protocol::open`/`create` with `-listen` unset): connects its own UDP socket, applies the whitelist check by hand, and drives the handshake. Also `export_srtp_keying_material`, for `-use_srtp`'s payoff. |
+| `connect` | The client path (`Protocol::open`/`create` with `-listen` unset): connects its own UDP socket, applies the whitelist check by hand, and drives the handshake. Also `export_srtp_keying_material`, for `-use_srtp`'s payoff, and (added for #619) `handshake_over`/`export_srtp_keying_material_from` — the same two operations generic over any `Read + Write` transport, not just `UdpTransport`. |
 | `listen` | The server path (`-listen 1`): binds, waits for the first peer datagram, connects the socket to that peer, and drives the handshake. See its module docs for the scoping decision (no stateless cookie exchange). |
 | `protocol` | `DtlsProtocol`: the `Protocol::open`/`create` entry points, dispatching to `connect` or `listen` per `-listen`/`IoFlags::listen`. |
 
@@ -66,6 +66,20 @@ is configured (`cert` module) rather than refusing to open `dtls:` at all.
 `-verify 1` with `-ca_file` still turns on real chain verification, and a
 self-signed certificate is still correctly refused in that mode — see
 `tests/handshake_success.rs`'s `verify_true_without_the_private_ca_is_refused`.
+
+### `handshake_over` — a generic transport, for a caller that must demultiplex its own socket
+
+Added for `vaco-mux-whip` (#619), additive and backward-compatible:
+`handshake`/`export_srtp_keying_material` are now thin wrappers over
+`handshake_over<S: Read + Write>`/`export_srtp_keying_material_from<S>`.
+A WebRTC-shaped caller sharing one UDP socket among STUN, DTLS and (once
+the handshake finishes) SRTP cannot use the plain `UdpSocket`-typed
+`handshake`, because `UdpTransport` hands every datagram straight to
+OpenSSL with no way to intercept a STUN packet arriving mid-handshake —
+which `vaco-mux-whip` found is not a hypothetical: `mediamtx` genuinely
+sends STUN Binding Requests throughout the handshake window. The generic
+entry point lets that caller supply its own demultiplexing `Read`/`Write`
+implementation instead.
 
 ## How to change it
 
