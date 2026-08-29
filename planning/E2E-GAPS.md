@@ -137,3 +137,51 @@ rather than a failure.
 DPB frames plus filter buffers should be nowhere near it. Either something
 retains every frame, or the budget is being charged for allocations that are
 freed.
+
+## 7. "FULL 25/25" meant frame count, not correctness — correction
+
+Every H.264 result reported in §1b and §6 measured **output size**, not output
+content. Comparing actual decoded bytes against ffmpeg's decode of the same
+file (320×240, Main, `-bf 0 -refs 1`, the configuration reported as "FULL"):
+
+| Frame | Y bytes differing | max Δ | mean Δ | U max Δ | V max Δ |
+|---|---|---|---|---|---|
+| 0 (IDR) | 48 / 76800 | 3 | 0.00 | 1 | 1 |
+| 1 | 528 | 47 | 0.03 | 55 | 144 |
+| 2 | 2,861 | 66 | 0.28 | 142 | 144 |
+| 5 | 5,459 | 125 | 0.74 | 142 | 235 |
+| 12 | 13,064 | 136 | 2.73 | 158 | 238 |
+| 24 | 16,022 (21%) | 133 | 2.78 | 187 | 232 |
+
+**13.70% of all bytes differ across the sequence.**
+
+The intra frame is essentially correct — 48 samples off by at most 3, which is
+the known deblocking rounding gap. **Everything after it drifts**, monotonically,
+and chroma drifts worse than luma. Each P frame predicts from the previous one,
+so an error in inter prediction or reference handling compounds.
+
+By the owner's own shipping rule this is not shippable: the deviation is
+**structured** (it grows with frame index and concentrates in chroma), not the
+small unstructured rounding difference that rule permits.
+
+This is the same failure mode this document already names twice — a harness
+measuring the wrong thing. §1b's `0/25` rows came from comparing an exact size
+against a partial write; these `FULL 25/25` rows came from comparing a size and
+never looking at a byte. **A decoder that emits the right number of bytes has
+demonstrated only that it emits the right number of bytes.**
+
+Correct acceptance for any decoder here: per-plane byte comparison against the
+reference across the **whole sequence**, not the first frame and not the size.
+
+## 8. `H264Decoder`'s DPB never releases its budget (diagnosed, not fixed)
+
+`self.dpb.pop_front()` drops reference pictures without `budget.release(...)`,
+and the reconstructed picture's own charged buffers are never released either.
+`Budget`'s `committed` counter therefore only ever rises, disconnected from what
+is live. Measured: 1080p `-refs 1 -bf 0` fails after exactly **10 frames** with
+~65.5 MB committed against a real working set of ~9–12 MB. At 4K it trips after
+2 frames.
+
+Real memory is freed correctly; the budget simply never hears about it. **Raising
+`max_alloc_total` would not fix this** — the counter is unbounded until `flush()`,
+so a larger cap only moves the frame at which it fires.
