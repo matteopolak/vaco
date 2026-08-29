@@ -1,0 +1,11 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# `shared:` — see the crate docs for why this is an `AF_UNIX` `SOCK_DGRAM`
+# fan-out ring rather than `mmap`-backed shared memory (D2 forbids the
+# `unsafe` every safe wrapper around `mmap` needs on its read side).
+
+[[component]]
+kind      = "protocol"
+name      = "shared"
+long_name = "Local multi-process fan-out ring"
+ctor      = "vaco_protocol_shared::SHARED_PROTOCOL"
