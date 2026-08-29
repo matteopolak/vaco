@@ -1684,3 +1684,40 @@ meant to type.
 This matters more here than it sounds. Every codec pulled back this session --
 G.722, G.726, ALAC, DFPWM -- failed on a table or a formula, not on
 architecture. The structure was always right and the numbers were always wrong.
+
+## The default configuration is where bugs hide
+
+Every one of these was found today, and every one was invisible in the simplest
+case and wrong everywhere else:
+
+- VP9's header reset every frame without its own `color_config()` to a
+  hardcoded 4:2:0/8-bit literal. **Invisible on profile 0**, because the literal
+  happened to match. Catastrophic on profiles 1/2/3 from the second frame on.
+- VP9's `left_nz` was not reset per superblock row. **Invisible on a
+  one-row frame.** Wrong from the second row on.
+- VP9's `decode_tile` ignored its own tile-column range and decoded every tile
+  as the full frame width. **Invisible on a single-tile frame.** A two-column
+  key frame was 99.98% wrong.
+- An H.264 sub-macroblock bug survived eleven rounds because row 0 looked
+  perfect — that fixture's row-0 macroblocks never used the affected split.
+- A VP8 encoder corrupted every chroma macroblock. **Invisible to a luma-only
+  metric** and to its own decoder round-trip.
+- A v360 `roll` formula passed a 90° probe. **90° is symmetric**; a 20° probe
+  ruled out that formula and all six compositions with yaw and pitch.
+
+The shape is always the same: the simplest configuration is degenerate in some
+way that makes a wrong implementation indistinguishable from a right one.
+Profile 0, one row, one tile, one frame, luma only, a right angle, a flat
+fixture.
+
+So **the first fixture is never enough, and passing it is not evidence.** Before
+believing a decoder or a filter works, test at least one case that is:
+
+- not the default profile or the default pixel format,
+- more than one row, tile, slice, partition or frame,
+- not axis-aligned, not symmetric, not a special angle,
+- not flat — real texture, and every plane checked separately.
+
+When something passes immediately, that is the moment to get suspicious, not
+the moment to stop. Ask what the fixture cannot distinguish, then build the
+fixture that can.
