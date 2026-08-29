@@ -1,6 +1,6 @@
 [package]
 name = "vaco-codec-vorbis"
-description = "Vorbis I decode, native: Floor 0 and Floor 1, residue types 0/1/2, all mapping/mode configurations the setup header can express."
+description = "Vorbis I decode and encode, native: decode covers Floor 0 and Floor 1, residue types 0/1/2, all mapping/mode configurations the setup header can express; encode is one fixed low-complexity configuration (issue #30/#309-#312)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -22,6 +22,7 @@ vaco-chlayout = { path = "../../model/vaco-chlayout" }
 [dev-dependencies]
 proptest.workspace = true
 vaco-demux-ogg = { path = "../../format/vaco-demux-ogg" }
+vaco-mux-ogg = { path = "../../format/vaco-mux-ogg" }
 vaco-format-core = { path = "../../format/vaco-format-core" }
 vaco-io = { path = "../../io/vaco-io" }
 

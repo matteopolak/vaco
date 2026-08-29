@@ -1,12 +1,14 @@
 # Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
 #
-# Vorbis I decode is unconditionally GREEN: D3/D4/D9 name Vorbis (alongside
-# Opus and FLAC) as the royalty-free default Ogg codec, and its own
-# specification exists precisely to establish that patent-free status — so
-# this ships like any other GREEN codec, with no `encumbered` feature and
-# `default` left at its normal `true`.
+# Vorbis I decode and encode are both unconditionally GREEN: D3/D4/D9 name
+# Vorbis (alongside Opus and FLAC) as the royalty-free default Ogg codec, and
+# its own specification exists precisely to establish that patent-free
+# status — so both ship like any other GREEN component, with no `encumbered`
+# feature and `default` left at its normal `true`.
 #
-# Decode only. No Vorbis encoder is in scope for this crate (issue #308).
+# Encode (issue #30/#309-#312) is one fixed low-complexity configuration, not
+# the full psychoacoustic/bitrate-managed encoder those issues describe in
+# full — see `src/encoder.rs`'s module doc for exactly what that means.
 
 [[component]]
 kind      = "decoder"
@@ -14,5 +16,14 @@ name      = "vorbis"
 long_name = "Vorbis"
 feature   = "codec-vorbis"
 ctor      = "vaco_codec_vorbis::DECODER_VORBIS"
+media     = "audio"
+codec     = "vorbis"
+
+[[component]]
+kind      = "encoder"
+name      = "vorbis"
+long_name = "Vorbis (native encode, fixed low-complexity setup)"
+feature   = "codec-vorbis"
+ctor      = "vaco_codec_vorbis::ENCODER_VORBIS"
 media     = "audio"
 codec     = "vorbis"

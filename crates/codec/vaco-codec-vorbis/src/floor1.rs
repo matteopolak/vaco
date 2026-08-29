@@ -25,6 +25,27 @@ pub(crate) struct Floor1Config {
 }
 
 impl Floor1Config {
+    /// A config carrying only what [`compute_curve`] reads (`x_list` and
+    /// `multiplier`), for [`crate::encoder`]'s own curve-fitting: it needs
+    /// to compute exactly the curve a real decode of its chosen `y` values
+    /// would produce, without constructing the subclass-book machinery only
+    /// [`decode_packet`] uses. Not meaningful for decode — the dummy fields
+    /// would make [`decode_packet`] treat every partition as "no book, value
+    /// 0", which is why this is a separate constructor rather of a public
+    /// default.
+    #[must_use]
+    pub(crate) fn for_curve_fit(x_list: Vec<u32>, multiplier: u8) -> Self {
+        Self {
+            partition_class_list: Vec::new(),
+            class_dimensions: Vec::new(),
+            class_subclasses: Vec::new(),
+            class_masterbooks: Vec::new(),
+            subclass_books: Vec::new(),
+            multiplier,
+            x_list,
+        }
+    }
+
     #[allow(
         clippy::cast_possible_wrap,
         clippy::cast_lossless,
@@ -215,7 +236,84 @@ pub(crate) fn decode_packet(
     Floor1Decoded::Used { y }
 }
 
-fn low_neighbor(v: &[u32], x: usize) -> usize {
+/// Encode-side inversion of the predictive `val` coding [`decode_packet`]
+/// applies at every `x_list` position from index 2 on (spec 7.2.3/7.2.4).
+/// Returns one `val` per position — indices 0 and 1 are unused (the caller
+/// writes `desired[0]`/`desired[1]` directly, as raw `ilog(range-1)`-bit
+/// fields, exactly as [`decode_packet`] reads them) — such that feeding the
+/// returned `val`s back through [`decode_packet`]'s own math (or
+/// equivalently [`compute_curve`]) reconstructs `desired` exactly, for any
+/// `desired` already clamped to `[0, range)`.
+///
+/// This is the spec's decode formula run backwards: given the same
+/// `predicted` [`decode_packet`] would compute (from this same function's
+/// own choices at every earlier index — indices only ever reference earlier
+/// ones, so there is no forward dependency), pick the transmitted integer
+/// that decodes to the desired value. The four-way case split mirrors
+/// [`decode_packet`]'s `val >= room` / odd-or-even split exactly, solved
+/// for `val` instead of for the reconstructed value; this exact inversion is
+/// also independently documented in Xiph's own `libvorbis` reference
+/// encoder (`floor1_encode` in `lib/floor1.c`), Tier A under this project's
+/// licensing rules (`planning/research/07-legal-patents-licensing.md`
+/// §1.6.1) and consulted directly to confirm this derivation rather than
+/// trusting it unchecked.
+#[allow(
+    clippy::cast_sign_loss,
+    reason = "every arm is bounded to [0, range) before the u32 cast, shown in the surrounding comments"
+)]
+pub(crate) fn encode_values(x_list: &[u32], desired: &[u32], range: i64) -> Vec<u32> {
+    let values = x_list.len();
+    let mut final_y = vec![0i64; values];
+    let mut vals = vec![0u32; values];
+    if let (Some(f), Some(&d)) = (final_y.get_mut(0), desired.first()) {
+        *f = i64::from(d).clamp(0, range.saturating_sub(1));
+    }
+    if let (Some(f), Some(&d)) = (final_y.get_mut(1), desired.get(1)) {
+        *f = i64::from(d).clamp(0, range.saturating_sub(1));
+    }
+
+    for i in 2..values {
+        let lo = low_neighbor(x_list, i);
+        let hi = high_neighbor(x_list, i);
+        let lo_x = i64::from(x_list.get(lo).copied().unwrap_or(0));
+        let lo_y = final_y.get(lo).copied().unwrap_or(0);
+        let hi_x = i64::from(x_list.get(hi).copied().unwrap_or(0));
+        let hi_y = final_y.get(hi).copied().unwrap_or(0);
+        let x = i64::from(x_list.get(i).copied().unwrap_or(0));
+        let predicted = render_point(lo_x, lo_y, hi_x, hi_y, x);
+
+        let target =
+            i64::from(desired.get(i).copied().unwrap_or(0)).clamp(0, range.saturating_sub(1));
+        let diff = target - predicted;
+        let highroom = range - predicted;
+        let lowroom = predicted;
+        let headroom = highroom.min(lowroom);
+
+        let val = if diff == 0 {
+            0
+        } else if diff < 0 {
+            if -diff > headroom {
+                headroom - diff - 1
+            } else {
+                -1 - diff * 2
+            }
+        } else if diff >= headroom {
+            diff + headroom
+        } else {
+            diff * 2
+        };
+
+        if let Some(f) = final_y.get_mut(i) {
+            *f = target;
+        }
+        if let Some(v) = vals.get_mut(i) {
+            *v = u32::try_from(val.max(0)).unwrap_or(0);
+        }
+    }
+    vals
+}
+
+pub(crate) fn low_neighbor(v: &[u32], x: usize) -> usize {
     let target = v.get(x).copied().unwrap_or(0);
     let mut best: Option<(usize, u32)> = None;
     for (n, &val) in v.iter().enumerate().take(x) {
@@ -226,7 +324,7 @@ fn low_neighbor(v: &[u32], x: usize) -> usize {
     best.map_or(0, |(n, _)| n)
 }
 
-fn high_neighbor(v: &[u32], x: usize) -> usize {
+pub(crate) fn high_neighbor(v: &[u32], x: usize) -> usize {
     let target = v.get(x).copied().unwrap_or(0);
     let mut best: Option<(usize, u32)> = None;
     for (n, &val) in v.iter().enumerate().take(x) {
@@ -242,7 +340,7 @@ fn high_neighbor(v: &[u32], x: usize) -> usize {
     clippy::integer_division,
     reason = "spec 9.2.6's own definition of off = err / adx"
 )]
-fn render_point(x0: i64, y0: i64, x1: i64, y1: i64, x: i64) -> i64 {
+pub(crate) fn render_point(x0: i64, y0: i64, x1: i64, y1: i64, x: i64) -> i64 {
     let dy = y1 - y0;
     let adx = (x1 - x0).max(1);
     let ady = dy.abs();
@@ -451,6 +549,65 @@ mod tests {
         assert_eq!(curve.len(), 64);
         for &v in &curve {
             assert!(v.is_finite() && v >= 0.0);
+        }
+    }
+
+    /// [`encode_values`] round-trips through [`compute_curve`] exactly: at
+    /// every `x_list` breakpoint, the rendered curve must equal the table
+    /// lookup for the *desired* quantised value, not merely some decodable
+    /// value — this is the property that matters, since any `vals` array
+    /// decodes to *something* without necessarily being what was asked for.
+    #[test]
+    fn encode_values_reconstructs_the_desired_curve_at_every_breakpoint() {
+        let x_list = vec![0u32, 64, 8, 16, 32, 48];
+        let range = 128i64;
+        let desired = vec![10u32, 100, 40, 70, 55, 90];
+
+        let vals = encode_values(&x_list, &desired, range);
+        let mut y_for_decode = desired.clone();
+        if let Some(v) = y_for_decode.get_mut(2..) {
+            v.clone_from_slice(vals.get(2..).unwrap_or(&[]));
+        }
+
+        let cfg = Floor1Config {
+            partition_class_list: vec![0, 0, 0, 0],
+            class_dimensions: vec![1],
+            class_subclasses: vec![0],
+            class_masterbooks: vec![0],
+            subclass_books: vec![vec![-1]],
+            multiplier: 2,
+            x_list: x_list.clone(),
+        };
+        let curve = compute_curve(&cfg, &y_for_decode, 64);
+        for (i, &x) in x_list.iter().enumerate() {
+            // x_list[1] is always `1 << range_bits`, the curve's own length
+            // (spec 7.2.1) — one past the last valid sample index, not a
+            // renderable point.
+            if x as usize >= curve.len() {
+                continue;
+            }
+            let expected = FLOOR1_INVERSE_DB_TABLE
+                .get((i64::from(desired[i]) * i64::from(cfg.multiplier)) as usize)
+                .copied()
+                .unwrap_or(0.0);
+            let got = curve.get(x as usize).copied().unwrap_or(-1.0);
+            assert!(
+                (got - expected).abs() < 1e-6,
+                "breakpoint {i} (x={x}): got {got}, expected {expected} (desired[{i}]={})",
+                desired[i]
+            );
+        }
+    }
+
+    #[test]
+    fn encode_values_is_a_no_op_when_desired_equals_the_prediction() {
+        // A flat target curve should encode every position >= 2 as val == 0
+        // (predicted already equals desired, per spec 7.2.4's `val != 0` gate).
+        let x_list = vec![0u32, 64, 32, 16, 48];
+        let desired = vec![50u32; 5];
+        let vals = encode_values(&x_list, &desired, 128);
+        for &v in vals.get(2..).unwrap_or(&[]) {
+            assert_eq!(v, 0);
         }
     }
 }

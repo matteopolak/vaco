@@ -105,6 +105,72 @@ impl<'a> BitReaderLsb<'a> {
     }
 }
 
+/// LSB-first bit writer, the encode-side mirror of [`BitReaderLsb`]: `put`
+/// writes a field's least significant bit first, matching [`BitReaderLsb::get`]
+/// bit for bit, and [`BitWriterLsb::put_tree_bit`] writes one raw stream bit,
+/// matching [`BitReaderLsb::read_tree_bit`] — both are the same underlying
+/// operation as [`BitWriterLsb::put`] with `n = 1`; the two names exist so a
+/// call site reads the same way its decode-side counterpart does.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct BitWriterLsb {
+    bytes: Vec<u8>,
+    bit_pos: u64,
+}
+
+impl BitWriterLsb {
+    #[must_use]
+    pub(crate) fn new() -> Self {
+        Self {
+            bytes: Vec::new(),
+            bit_pos: 0,
+        }
+    }
+
+    #[allow(
+        clippy::integer_division,
+        reason = "byte index from a bit position; the truncation is the point"
+    )]
+    fn put_bit(&mut self, bit: u32) {
+        let byte_idx = (self.bit_pos / 8) as usize;
+        let bit_idx = u32::try_from(self.bit_pos % 8).unwrap_or(0);
+        while self.bytes.len() <= byte_idx {
+            self.bytes.push(0);
+        }
+        if bit & 1 != 0
+            && let Some(byte) = self.bytes.get_mut(byte_idx)
+        {
+            *byte |= 1 << bit_idx;
+        }
+        self.bit_pos = self.bit_pos.saturating_add(1);
+    }
+
+    /// Write the low `n` bits (`0..=32`) of `value`, `LSb` first — the exact
+    /// inverse of [`BitReaderLsb::get`].
+    pub(crate) fn put(&mut self, value: u32, n: u32) {
+        let n = n.min(32);
+        for i in 0..n {
+            self.put_bit((value >> i) & 1);
+        }
+    }
+
+    pub(crate) fn put_bool(&mut self, value: bool) {
+        self.put(u32::from(value), 1);
+    }
+
+    /// Write one raw stream bit for a Huffman codeword — see the struct doc.
+    pub(crate) fn put_tree_bit(&mut self, bit: u32) {
+        self.put_bit(bit);
+    }
+
+    /// Finish the packet: whatever fraction of the last byte is unwritten
+    /// reads back as zero, matching [`BitReaderLsb`]'s zero-padded overrun
+    /// behaviour on the decode side.
+    #[must_use]
+    pub(crate) fn finish(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+
 /// `ilog(x)`: position (1-based) of the highest set bit, `0` for `x <= 0`
 /// (spec section 9.2.1).
 #[must_use]
@@ -168,6 +234,44 @@ mod tests {
         let mut r = BitReaderLsb::new(&[0xAB]);
         assert_eq!(r.get(0), 0);
         assert_eq!(r.get(8), 0xAB);
+    }
+
+    #[test]
+    fn bit_writer_round_trips_through_bit_reader() {
+        let mut w = BitWriterLsb::new();
+        w.put(12, 4);
+        w.put(0b111, 3);
+        w.put(17, 7);
+        w.put(6969, 13);
+        w.put_bool(true);
+        let bytes = w.finish();
+
+        let mut r = BitReaderLsb::new(&bytes);
+        assert_eq!(r.get(4), 12);
+        assert_eq!(r.get(3), 0b111);
+        assert_eq!(r.get(7), 17);
+        assert_eq!(r.get(13), 6969);
+        assert!(r.get_bool());
+        assert!(!r.overran());
+    }
+
+    #[test]
+    fn tree_bits_written_msb_first_decode_as_the_flat_binary_value() {
+        // A flat 3-bit code: writing entry 5's codeword (binary 101,
+        // root-decision first) must read back as the raw 3-bit sequence
+        // 1,0,1 via `read_tree_bit`, in that order.
+        let mut w = BitWriterLsb::new();
+        let entry = 5u32;
+        for bit_index in (0..3).rev() {
+            w.put_tree_bit((entry >> bit_index) & 1);
+        }
+        let bytes = w.finish();
+        let mut r = BitReaderLsb::new(&bytes);
+        let mut decoded = 0u32;
+        for _ in 0..3 {
+            decoded = (decoded << 1) | r.read_tree_bit();
+        }
+        assert_eq!(decoded, entry);
     }
 
     #[test]

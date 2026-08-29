@@ -178,3 +178,137 @@ mod tests {
         assert!(out.iter().all(|v| v.is_finite()));
     }
 }
+
+/// Cached forward-MDCT plans, one per transform length, mirroring [`Imdct`].
+///
+/// The forward scale is `4/n`, measured rather than assumed: `vaco-tx`'s
+/// `Mdct::forward` and `Mdct::inverse` share one `Dct4` core called directly
+/// on both sides (see that module's doc), so an unscaled forward followed by
+/// this crate's fixed-scale-1 `FULL_IMDCT` inverse round-trips a windowed
+/// frame at a flat `n/4` gain rather than unity — confirmed empirically
+/// (`n=1024` measured `255.99998`, matching `n/4 = 256` to float rounding)
+/// before picking `4/n` as the compensating forward scale, which the same
+/// harness (window, forward, inverse, re-window, overlap-add three frames of
+/// a sine, compare to the source in the steady-state region) then measured
+/// at `0.99999991` — unity to float rounding. This is an encoder-side
+/// convention only; the spec does not define a forward transform, and the
+/// decoder's own established scale (no extra factor on `Imdct`, see that
+/// type's doc) is unaffected.
+#[derive(Debug)]
+pub(crate) struct MdctForward {
+    plans: HashMap<usize, Arc<Plan<f32>>>,
+}
+
+impl MdctForward {
+    #[must_use]
+    pub(crate) fn new() -> Self {
+        Self {
+            plans: HashMap::new(),
+        }
+    }
+
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "n is a block size, capped at 8192 by the identification header's 4-bit nibble encoding"
+    )]
+    fn plan_for(&mut self, n: usize) -> Result<Arc<Plan<f32>>> {
+        if let Some(p) = self.plans.get(&n) {
+            return Ok(Arc::clone(p));
+        }
+        let scale = 4.0f32 / n as f32;
+        let plan = Plan::<f32>::new(TxKind::Mdct, Direction::Forward, n, scale, TxFlags::empty())
+            .map_err(|_| Error::InvalidData("vorbis: invalid transform length"))?;
+        self.plans.insert(n, Arc::clone(&plan));
+        Ok(plan)
+    }
+
+    /// Forward MDCT: `n` windowed time-domain samples to `n/2` coefficients.
+    #[allow(clippy::integer_division, reason = "n is always a power of two")]
+    pub(crate) fn transform(&mut self, samples: &[f32], n: usize) -> Result<Vec<f32>> {
+        let plan = self.plan_for(n)?;
+        let mut tx = Tx::new(plan);
+        let mut input = vec![0f32; n];
+        let m = input.len().min(samples.len());
+        if let (Some(dst), Some(src)) = (input.get_mut(..m), samples.get(..m)) {
+            dst.copy_from_slice(src);
+        }
+        let mut output = vec![0f32; n / 2];
+        tx.execute(&mut output, &input);
+        Ok(output)
+    }
+}
+
+impl Default for MdctForward {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::cast_precision_loss,
+    clippy::integer_division,
+    reason = "test code"
+)]
+mod encoder_tests {
+    use super::*;
+
+    /// Regression for the `4/n` forward scale documented on [`MdctForward`]:
+    /// window, forward-transform, inverse-transform (the decoder's own
+    /// [`Imdct`], unscaled), re-window and overlap-add three frames of a
+    /// sine, then compare the steady-state middle frame to the source.
+    #[test]
+    fn forward_inverse_roundtrip_is_unity_gain_in_steady_state() {
+        let n = 1024usize;
+        let hop = n / 2;
+        let total = n * 6;
+        let signal: Vec<f32> = (0..total)
+            .map(|i| (2.0 * std::f64::consts::PI * 37.0 * i as f64 / n as f64).sin() as f32 * 0.5)
+            .collect();
+
+        let mut fwd = MdctForward::new();
+        let mut inv = Imdct::new();
+        let win = window(n, n, false, false, false);
+
+        let n_frames = (total - n) / hop;
+        let mut out = vec![0f32; total];
+        for f in 0..n_frames {
+            let start = f * hop;
+            let Some(frame) = signal.get(start..start + n) else {
+                continue;
+            };
+            let windowed: Vec<f32> = frame.iter().zip(&win).map(|(&s, &w)| s * w).collect();
+            let coeffs = fwd.transform(&windowed, n).unwrap();
+            let mut recon = inv.transform(&coeffs, n).unwrap();
+            for (r, &w) in recon.iter_mut().zip(&win) {
+                *r *= w;
+            }
+            for (o, r) in out
+                .get_mut(start..start + n)
+                .unwrap()
+                .iter_mut()
+                .zip(&recon)
+            {
+                *o += *r;
+            }
+        }
+
+        let probe_start = n * 2;
+        let probe_len = n;
+        let mut num = 0f64;
+        let mut den = 0f64;
+        for i in 0..probe_len {
+            let a = f64::from(out[probe_start + i]);
+            let b = f64::from(signal[probe_start + i]);
+            num += a * b;
+            den += b * b;
+        }
+        let ratio = num / den;
+        assert!(
+            (ratio - 1.0).abs() < 1e-4,
+            "forward/inverse round-trip gain should be unity, measured {ratio}"
+        );
+    }
+}
