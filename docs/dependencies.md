@@ -204,3 +204,69 @@ and pixel content (`tests/videotoolbox_decode.rs`) — this is not a stub.
 one `HwAccelDesc` from the hardware candidate list, which `vaco-hw-core`'s
 own `select()` already treats as an ordinary, non-fatal "nothing available"
 case.
+
+---
+
+## `ash` 0.38 — Vulkan Video device/capability probing for `vaco-hw-vulkan`
+
+**Adopted** 2026-08-28. **Used by** `vaco-hw-vulkan` only.
+
+**What for.** Vulkan instance/device bring-up and device-extension
+enumeration, to check whether a machine has a `VK_KHR_video_decode_h264`
+-capable device (H-06a's scope). No decode session is implemented on top of
+it yet (H-06b, real, substantially larger work, left open).
+
+**Why no owner sign-off was requested first.** Same basis as
+`objc2-video-toolbox` above: D14.3 already names `ash` by name in its
+permitted list for `vaco-hw-*`, and D13's own backend-strategy table
+independently calls it "the best single investment" for hardware
+acceleration (one vendor-independent API reaching Linux, Windows and
+Android). The decision predates this adoption record.
+
+**Gate 1** pass — pure Rust, zero FFI in the vendored/compiled-C sense.
+`ash`'s default `loaded` feature reaches the Vulkan loader via `libloading`'s
+`dlopen`/`LoadLibrary` at *runtime*, not a build-time link — no `cc`,
+`bindgen` or `cmake` anywhere in `cargo tree -p vaco-hw-vulkan -e build`
+(empty). `cargo deny check licenses bans advisories` (workspace-wide, exit
+0) raises nothing against `ash` or `libloading`.
+
+**Gate 2** pass — `MIT OR Apache-2.0`, on the D3 allowlist.
+
+**Gate 3**:
+- **Alive**: checked, not assumed to still be current. `ash` 0.38.0+1.3.281
+  was last published 2024-04-01 — over two years before this adoption date,
+  which is worth flagging explicitly rather than glossing over. Its
+  crates.io download count (34M+) and its position as *the* Rust Vulkan
+  binding (no viable alternative exists) argue this is a stable, complete
+  surface rather than an abandoned one, but a maintenance re-check before
+  building the decode-session layer (H-06b) on top of it is warranted.
+- **Adopted**: 34M+ downloads, the de facto standard Rust Vulkan binding.
+- **Sound**: no RUSTSEC advisory surfaced by `cargo deny check advisories`.
+- **Unsafe, measured**: `cargo xtask unsafe-audit` reports 5 unsafe sites in
+  `vaco-hw-vulkan` — `Entry::load`, `create_instance`,
+  `enumerate_physical_devices`, `enumerate_device_extension_properties`,
+  `destroy_instance` — each with its own `SAFETY` comment. Deliberately
+  small: this pass implements the capability query only, not a decode
+  session, which would add substantially more.
+
+**wasm.** Does not build for `wasm32-unknown-unknown` — measured directly:
+`ash`'s `loaded` feature depends on `libloading`, whose safe `Library`/
+`Symbol` re-export is `cfg`-gated to `any(unix, windows, libloading_docs)`,
+which that target satisfies neither of (`E0432`, inside `libloading` itself,
+before `ash`'s own code is even reached). `vaco-hw-vulkan` is on
+`xtask/src/wasm.rs`'s `NATIVE_ONLY` list with this measurement recorded.
+
+**Verified, not just built.** `vaco-hw-vulkan`'s own `probe()` runs real
+`ash` calls on this machine and is confirmed (directly, via a throwaway
+example binary) to return `ProbeOutcome::NoLoader` here — this development
+machine has no properly configured system Vulkan loader, so even ordinary
+instance creation, let alone the video-decode extension check, has not been
+exercised end to end anywhere in this adoption. See
+`docs/hw/vaco-hw-vulkan.md` for the full honesty statement. What *is*
+verified: `probe()` never panics regardless of outcome, and `vaco-hw-core`'s
+`select()` correctly falls back to software against this crate's real
+(non-mocked) `HwAccelDesc` on this machine.
+
+**Exit.** Confined to one crate; removing it removes one `HwAccelDesc`
+candidate, which `select()` already treats as an ordinary "nothing
+available" case.
