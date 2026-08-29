@@ -46,6 +46,7 @@ use vaco_parse_hevc::{ChromaFormat, HevcNalHeader, HevcParser, Pps, SliceHeader,
 
 use crate::cabac_ctx::ContextBank;
 use crate::ctu::{self, Ctx};
+use crate::deblock;
 use crate::framebuf::{CuGrid, Picture};
 
 /// The HEVC decoder. See the crate doc and module doc for exactly what is
@@ -165,7 +166,16 @@ impl HevcDecoder {
         let height = usize::try_from(sps.pic_height_in_luma_samples).unwrap_or(0);
         let mut pic = Picture::new(&mut self.budget, width, height)?;
         let cu_grid = CuGrid::new(&mut self.budget, width, height)?;
-        let mut walk = Ctx::new(&mut pic, cu_grid, &sps, &pps, slice_qp);
+        let mut walk = Ctx::new(
+            &mut pic,
+            cu_grid,
+            &sps,
+            &pps,
+            slice_qp,
+            hdr.deblocking_filter_disabled,
+            hdr.beta_offset_div2,
+            hdr.tc_offset_div2,
+        );
 
         let mut cabac = CabacDecoder::new(cabac_data);
         let mut ctx = ContextBank::new(i8::try_from(slice_qp.clamp(0, 51)).unwrap_or(0));
@@ -192,6 +202,8 @@ impl HevcDecoder {
                 break;
             }
         }
+
+        deblock::filter_picture(&mut walk);
 
         let mut frame = pic_to_frame(&mut self.budget, &sps, &pic)?;
         frame.pts = pkt.pts;

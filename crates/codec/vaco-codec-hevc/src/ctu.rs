@@ -21,7 +21,7 @@ use vaco_core::{Error, Result};
 use vaco_parse_hevc::{Pps, Sps};
 
 use crate::cabac_ctx::ContextBank;
-use crate::framebuf::{CuGrid, Picture};
+use crate::framebuf::{CuGrid, EdgeMarks, Picture};
 use crate::intra_mode::{self, DC_IDX, DM_CHROMA_IDX};
 use crate::intra_pred;
 use crate::residual::{self, Coeffs};
@@ -30,6 +30,10 @@ use crate::transform;
 /// Everything one slice segment's CTU walk needs, held together so the
 /// recursive functions below stay free functions taking `&mut Ctx` rather
 /// than a method on a growing `impl` block.
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each bool is an independent SPS/PPS/slice-header flag this walk needs, not a state machine in disguise"
+)]
 pub(crate) struct Ctx<'p> {
     pub pic: &'p mut Picture,
     pub cu_grid: CuGrid,
@@ -48,14 +52,37 @@ pub(crate) struct Ctx<'p> {
     pub bit_depth_chroma: u32,
     pub cb_qp_offset: i32,
     pub cr_qp_offset: i32,
+    /// Per-4x4-block transform/CU boundary flags, populated as
+    /// [`transform_unit`] reconstructs each luma leaf — the input
+    /// [`crate::deblock`]'s post-picture filtering pass reads.
+    pub edges: EdgeMarks,
+    /// `slice_deblocking_filter_disabled_flag`, after the PPS/slice override
+    /// rules `vaco_parse_hevc::SliceHeader` already resolves.
+    pub deblocking_disabled: bool,
+    /// `slice_beta_offset_div2`.
+    pub beta_offset_div2: i32,
+    /// `slice_tc_offset_div2`.
+    pub tc_offset_div2: i32,
 }
 
 impl<'p> Ctx<'p> {
     /// Re-derives the handful of walk-specific limits from an SPS/PPS pair
     /// the caller ([`crate::decoder`]) has already checked are within this
     /// crate's stated scope.
-    pub(crate) fn new(pic: &'p mut Picture, cu_grid: CuGrid, sps: &Sps, pps: &Pps, slice_qp: i32) -> Self {
+    #[allow(clippy::too_many_arguments, reason = "one call site (decoder.rs), grouping into a sub-struct would not aid clarity")]
+    pub(crate) fn new(
+        pic: &'p mut Picture,
+        cu_grid: CuGrid,
+        sps: &Sps,
+        pps: &Pps,
+        slice_qp: i32,
+        deblocking_disabled: bool,
+        beta_offset_div2: i32,
+        tc_offset_div2: i32,
+    ) -> Self {
         let log2_ctb_size = u32::from(sps.log2_min_cb_size) + u32::from(sps.log2_diff_max_min_cb_size);
+        let width = usize::try_from(sps.pic_width_in_luma_samples).unwrap_or(0);
+        let height = usize::try_from(sps.pic_height_in_luma_samples).unwrap_or(0);
         Self {
             pic_width: i32::try_from(sps.pic_width_in_luma_samples).unwrap_or(0),
             pic_height: i32::try_from(sps.pic_height_in_luma_samples).unwrap_or(0),
@@ -72,6 +99,10 @@ impl<'p> Ctx<'p> {
             bit_depth_chroma: u32::from(sps.bit_depth_chroma),
             cb_qp_offset: pps.cb_qp_offset,
             cr_qp_offset: pps.cr_qp_offset,
+            edges: EdgeMarks::new(width, height),
+            deblocking_disabled,
+            beta_offset_div2,
+            tc_offset_div2,
             pic,
             cu_grid,
         }
@@ -352,6 +383,16 @@ fn transform_unit(
     luma_modes: [u8; 4],
     chroma_mode: u8,
 ) -> Result<()> {
+    // §8.7.2's deblocking grid never filters below `MinCbSizeY` (see
+    // `framebuf::EdgeMarks`'s own module doc) — marking every transform-unit
+    // leaf's own top-left corner here, before prediction/reconstruction, is
+    // sufficient because `EdgeMarks::mark_vert`/`mark_horiz` themselves
+    // reject anything off that grid.
+    let grid = 1i32 << s.log2_min_cb_size;
+    let size = 1i32 << log2_size;
+    s.edges.mark_vert(x0, y0, size, grid);
+    s.edges.mark_horiz(x0, y0, size, grid);
+
     let luma_mode = pu_mode_at(pus, luma_modes, x0, y0);
     reconstruct_luma(cabac, ctx, s, x0, y0, log2_size, luma_mode, cbf_luma)?;
 

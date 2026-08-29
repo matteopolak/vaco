@@ -16,18 +16,20 @@
 //! ([`vaco_core::Error::Unsupported`]) rather than attempted shallowly:
 //!
 //! - **Inter prediction, B/P slices.** I-slices only.
-//! - **Deblocking and SAO.** No in-loop filter runs. Deblocking is purely a
-//!   post-reconstruction pixel filter with no bitstream footprint beyond
-//!   the slice header (already parsed), so an encode with it on just
-//!   reconstructs unfiltered pixels — a real, bounded deviation, not a
-//!   crash. SAO is different and refused outright at the SPS
+//! - **Deblocking (§8.7.2) is implemented** — see [`deblock`]'s own module
+//!   doc for the algorithm, what it reuses from HM 18.0 (Tier A), and why
+//!   it does not reuse `vaco-codec-dsp-deblock` (a genuinely different
+//!   clause 8.7-shaped algorithm, not the same one at a different call
+//!   site). Verified byte-exact against plain `ffmpeg` (no
+//!   `-skip_loop_filter`) on real `libx265` output.
+//! - **SAO.** Still refused outright at the SPS
 //!   (`sample_adaptive_offset_enabled_flag`): §7.3.8.3's `sao()` syntax is
 //!   *in* the bitstream, once per CTU, and this crate parses none of it —
 //!   decoding a stream that actually turns SAO on would desync the entropy
 //!   decoder from the first merged/offset CTU onward, not just reconstruct
-//!   different pixels. Verification is against `ffmpeg -skip_loop_filter
-//!   all` for deblocking, and against material encoded with `no-sao=1` for
-//!   SAO, so there is nothing for either side to disagree about.
+//!   different pixels. Verification for SAO-off content is against
+//!   material encoded with `no-sao=1`, so there is nothing for either side
+//!   to disagree about.
 //! - **Tiles and wavefront (`entropy_coding_sync`).** Refused; only a plain
 //!   single-tile, independent-slice-segment picture is decoded.
 //! - **`cu_qp_delta` / adaptive per-CU QP, chroma QP offset lists, `I_PCM`,
@@ -98,6 +100,7 @@
 
 mod cabac_ctx;
 mod ctu;
+mod deblock;
 mod decoder;
 mod framebuf;
 mod intra_mode;

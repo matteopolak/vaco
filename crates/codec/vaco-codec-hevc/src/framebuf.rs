@@ -208,3 +208,112 @@ impl CuGrid {
         self.mode.get(i).copied().unwrap_or(DC_IDX)
     }
 }
+
+/// Per-4x4-luma-block "is there a transform/coding-unit boundary starting
+/// here" flags, one grid per edge direction — the input [`crate::deblock`]'s
+/// picture-wide filtering pass needs to know which 8-sample-grid lines are
+/// real boundaries at all, since HEVC's deblocking filter (§8.7.2) never
+/// filters below that grid regardless of how finely the transform tree
+/// actually splits (see `deblock`'s own module doc for why: HM's own
+/// `TComLoopFilter::xSetEdgefilterTU` addresses edge-filter flags at
+/// `MinCbSizeY` (never below §8.7.2's fixed 8-sample floor) granularity, so a
+/// transform split finer than that grid is folded into its enclosing grid
+/// cell's boundary rather than creating a new, independently-filtered edge).
+///
+/// [`EdgeMarks::mark_vert`]/[`EdgeMarks::mark_horiz`] are called once per
+/// reconstructed transform-unit leaf (`ctu::transform_unit`'s luma
+/// reconstruction) with that leaf's own top-left corner and size, and do the
+/// grid-alignment check themselves so the caller never has to reason about
+/// it.
+#[derive(Debug)]
+pub(crate) struct EdgeMarks {
+    cols: usize,
+    rows: usize,
+    vert: Vec<bool>,
+    horiz: Vec<bool>,
+}
+
+impl EdgeMarks {
+    /// One `bool` per 4x4 luma block, in each of the two directions — not
+    /// `Budget`-tracked, matching this module's own [`Plane::ready`]/
+    /// [`CuGrid`]'s own `written` precedent for boolean occupancy grids.
+    #[must_use]
+    pub(crate) fn new(luma_width: usize, luma_height: usize) -> Self {
+        let cols = luma_width.div_ceil(4).max(1);
+        let rows = luma_height.div_ceil(4).max(1);
+        let len = cols.saturating_mul(rows);
+        Self { cols, rows, vert: vec![false; len], horiz: vec![false; len] }
+    }
+
+    fn index(&self, bx: usize, by: usize) -> Option<usize> {
+        if bx >= self.cols || by >= self.rows {
+            return None;
+        }
+        Some(by * self.cols + bx)
+    }
+
+    /// Record a vertical edge (a left-side transform/CU boundary) at `x0`
+    /// spanning `[y0, y0 + size)`, but only when `x0` actually falls on the
+    /// deblocking grid (`grid` luma samples, `x0 > 0` — never the picture's
+    /// own left edge) — a transform leaf smaller than the grid, or one whose
+    /// left edge does not land on a grid line, contributes nothing, which is
+    /// exactly HEVC's own "never filter below the 8-sample grid" rule.
+    pub(crate) fn mark_vert(&mut self, x0: i32, y0: i32, size: i32, grid: i32) {
+        if x0 <= 0 || x0 % grid != 0 {
+            return;
+        }
+        let Ok(bx) = usize::try_from(x0 >> 2) else { return };
+        let Ok(by0) = usize::try_from(y0 >> 2) else { return };
+        let blocks = usize::try_from((size >> 2).max(1)).unwrap_or(1);
+        for by in by0..by0.saturating_add(blocks) {
+            if let Some(i) = self.index(bx, by)
+                && let Some(slot) = self.vert.get_mut(i)
+            {
+                *slot = true;
+            }
+        }
+    }
+
+    /// The horizontal-direction mirror of [`EdgeMarks::mark_vert`]: a
+    /// top-side boundary at `y0` spanning `[x0, x0 + size)`.
+    pub(crate) fn mark_horiz(&mut self, x0: i32, y0: i32, size: i32, grid: i32) {
+        if y0 <= 0 || y0 % grid != 0 {
+            return;
+        }
+        let Ok(by) = usize::try_from(y0 >> 2) else { return };
+        let Ok(bx0) = usize::try_from(x0 >> 2) else { return };
+        let blocks = usize::try_from((size >> 2).max(1)).unwrap_or(1);
+        for bx in bx0..bx0.saturating_add(blocks) {
+            if let Some(i) = self.index(bx, by)
+                && let Some(slot) = self.horiz.get_mut(i)
+            {
+                *slot = true;
+            }
+        }
+    }
+
+    /// Whether a vertical edge was marked at luma pixel column `x`, for the
+    /// 4x4 block row containing `y`.
+    #[must_use]
+    pub(crate) fn vert_at(&self, x: i32, y: i32) -> bool {
+        let (Ok(x), Ok(y)) = (usize::try_from(x), usize::try_from(y)) else { return false };
+        self.index(block_of(x), block_of(y)).and_then(|i| self.vert.get(i)).copied().unwrap_or(false)
+    }
+
+    /// Whether a horizontal edge was marked at luma pixel row `y`, for the
+    /// 4x4 block column containing `x`.
+    #[must_use]
+    pub(crate) fn horiz_at(&self, x: i32, y: i32) -> bool {
+        let (Ok(x), Ok(y)) = (usize::try_from(x), usize::try_from(y)) else { return false };
+        self.index(block_of(x), block_of(y)).and_then(|i| self.horiz.get(i)).copied().unwrap_or(false)
+    }
+}
+
+impl Plane {
+    /// The plane's own dimensions — [`crate::deblock`]'s picture-wide pass
+    /// needs to know how far to scan without reaching into private fields.
+    #[must_use]
+    pub(crate) fn dims(&self) -> (usize, usize) {
+        (self.width, self.height)
+    }
+}

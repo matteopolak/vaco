@@ -4,10 +4,11 @@ Layer 4. Intra-only (I-slice) HEVC/H.265 video decode (ITU-T H.265
 (08/2021)): NAL/VPS/SPS/PPS handling, the CTU quadtree, coding units,
 intra prediction (planar/DC/33 angular modes, MPM derivation, reference
 sample smoothing and strong intra smoothing), the transform tree, residual
-coding, dequantisation and reconstruction. Deblocking, SAO, inter
-prediction, B/P-slices, tiles, WPP, `cu_qp_delta`, I_PCM, transform-skip
-residual coding, custom scaling lists and every range-extension feature
-are explicitly out of scope — see "What was cut" below.
+coding, dequantisation, reconstruction and in-loop deblocking (§8.7.2, see
+"Deblocking (§8.7.2), landed" below). SAO, inter prediction, B/P-slices,
+tiles, WPP, `cu_qp_delta`, I_PCM, transform-skip residual coding, custom
+scaling lists and every range-extension feature are explicitly out of
+scope — see "What was cut" below.
 
 **Registered, patent-encumbered-gated.** `vaco-component.toml` declares
 this decoder with `encumbered = true` / `default = false` behind the
@@ -157,11 +158,10 @@ extensions, SCC extensions, tiles, `entropy_coding_sync` (WPP),
 `cu_qp_delta_enabled`, `transquant_bypass_enabled`,
 `sample_adaptive_offset_enabled` (SAO — refused because this crate parses
 none of its per-CTU bitstream syntax, not merely because it never applies
-the filter; see "Registration" below). Deblocking alone stays a silent
-pixel-only deviation (it has no per-CTU bitstream footprint to mis-parse) —
-this is why the test fixtures are deliberately encoded with both filters
-off at the encoder, rather than relying solely on `-skip_loop_filter all`
-to paper over the difference. B/P-slices are not parsed at all; only NAL
+the filter; see "Registration" below). Deblocking is no longer on this
+list — see "Deblocking (§8.7.2), landed" below — since it never had a
+per-CTU bitstream footprint to mis-parse in the first place, only pixels to
+get right. B/P-slices are not parsed at all; only NAL
 types this crate recognises as I-slice VCL data are decoded. Both Annex-B
 and length-prefixed (`hvcC`) framing are handled, via the embedded
 `vaco_parse_hevc::HevcParser` (`decoder.rs`'s own module doc).
@@ -182,11 +182,15 @@ and length-prefixed (`hvcC`) framing are handled, via the embedded
   script). Clean-room rule: HM is Tier A (BSD-3-Clause) and may be read,
   built and instrumented directly; `ffmpeg`/`x265` stay Tier B — run only,
   never opened.
-- **Extending scope** (deblocking, SAO, inter prediction, tiles, WPP):
-  the corresponding SPS/PPS fields already correctly return
-  `Error::Unsupported` by name in `check_scope` when a real stream
-  exercises them — implement behind that same call site rather than
-  adding a new refusal path.
+- **Extending scope** (SAO, inter prediction, tiles, WPP — deblocking is
+  done, see its own section above): the corresponding SPS/PPS fields
+  already correctly return `Error::Unsupported` by name in `check_scope`
+  when a real stream exercises them — implement behind that same call site
+  rather than adding a new refusal path. Deblocking was the one exception,
+  since it has no bitstream footprint to refuse in the first place (a
+  silent pixel-only deviation, not a parse error) — its own call site is
+  `decoder::decode_packet`'s post-CTU-loop `deblock::filter_picture` call,
+  not `check_scope`.
 - **New CABAC context table**: transcribe from HM's `ContextTables.h`
   (Tier A, BSD-3-Clause — see "Specification" below), not from memory or
   from the spec's clause text alone; add the table to `cabac_ctx.rs` and
@@ -317,6 +321,40 @@ Registered as `encumbered = true` / `default = false` behind
 `patent-encumbered-hevc-decode` — see `vaco-component.toml` and
 `DECODER_HEVC` in `src/lib.rs`, mirroring `vaco-codec-h264`'s own D4/D4.1
 posture exactly.
+
+## Deblocking (§8.7.2), landed
+
+`no-deblock=1` above was the interim posture, not the final one:
+`libx265`'s own default turns deblocking on, so no ordinary HEVC file
+decoded byte-exact against a plain `ffmpeg` decode until this landed.
+`src/deblock.rs` implements clause 8.7.2 directly (cross-checked against
+HM 18.0's `TComLoopFilter.cpp`, Tier A) rather than reusing
+`vaco-codec-h264`'s `vaco-codec-dsp-deblock` — see that module's own doc
+for why the two codecs' filters, despite the shared name, are different
+algorithms (different tables, a per-4-line-group decision instead of
+per-line, no chroma activity gate, and more) that a shared primitive would
+have to parameterise away entirely.
+
+This crate's own scope (I-slice-only, no `cu_qp_delta`, one slice segment,
+no tiles) collapses HM's general boundary-strength/QP derivation
+substantially: boundary strength is always 2 (every CU is intra), and
+`qP_P == qP_Q` on every edge (one constant slice QP). Both are consequences
+of scope already refused elsewhere in `check_scope`, not new
+approximations.
+
+Verified with `verify_hevc_deblock.sh` (a parameterised descendant of the
+previous agent's `verify_hevc_cli.sh`, same "prove the harness can report a
+failure before trusting a pass" discipline — checked here by diffing a
+plain decode against an `-skip_loop_filter all` decode of the same file and
+confirming the harness reports a real, non-trivial mismatch): a real
+`libx265` stream (`wpp=0:no-sao=1`, deblocking **on**, `libx265`'s own
+default) decodes **byte-exact on every sample of every plane of every
+frame** against plain `ffmpeg` (no `-skip_loop_filter`), at 320x240 (5x4
+CTUs) and 640x480, at multiple QPs. The pre-existing
+`wpp=0:no-sao=1:no-deblock=1` byte-exact regression
+(`tests/oracle.rs::dense_content_is_byte_exact`) is unchanged, since
+`deblock::filter_picture` returns immediately when
+`slice_deblocking_filter_disabled_flag` is set.
 
 ## Specification
 

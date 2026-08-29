@@ -24,3 +24,17 @@ file   = "crates/codec/vaco-codec-hevc/src/transform.rs"
 source = "itu-t-h265-202108"
 clause = "Table 8-10 (ChromaArrayType == 1, 4:2:0), cross-checked against HM's g_aucChromaScale[CHROMA_420]"
 method = "transcribed"
+
+[[table]]
+name   = "TC_TABLE"
+file   = "crates/codec/vaco-codec-hevc/src/deblock.rs"
+source = "hm-reference-software"
+clause = "TComLoopFilter.cpp, TComLoopFilter::sm_tcTable[MAX_QP + 1 + DEFAULT_INTRA_TC_OFFSET]"
+method = "transcribed"
+
+[[table]]
+name   = "BETA_TABLE"
+file   = "crates/codec/vaco-codec-hevc/src/deblock.rs"
+source = "hm-reference-software"
+clause = "TComLoopFilter.cpp, TComLoopFilter::sm_betaTable[MAX_QP + 1]"
+method = "transcribed"
