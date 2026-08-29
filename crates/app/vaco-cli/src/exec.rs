@@ -2022,11 +2022,14 @@ mod tests {
         };
         assert!(check_codecs(&c, &o, std::slice::from_ref(&s)).is_ok());
 
-        let (c, o) = out_of(&["-i", "a.mkv", "-c:v", "libx264", "-f", "null", "-"]);
+        // Deliberately a name no encoder will ever have. `libx264` used to
+        // stand in for "not registered here" and stopped being true the moment
+        // vaco-codec-exec landed it (C-46), which spawns the user's own binary.
+        let (c, o) = out_of(&["-i", "a.mkv", "-c:v", "libnosuchencoder", "-f", "null", "-"]);
         let e = check_codecs(&c, &o, &[s]).unwrap_err();
         assert!(
             e.render()
-                .starts_with("[vost#0:0] Unknown encoder 'libx264'\n"),
+                .starts_with("[vost#0:0] Unknown encoder 'libnosuchencoder'\n"),
             "{}",
             e.render()
         );
