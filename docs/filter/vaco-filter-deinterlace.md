@@ -92,12 +92,47 @@ conflict.
   even indirectly (D7). What **is** guaranteed, by construction rather than
   special-casing: on a genuinely static/progressive sequence (`prev == cur
   == next`), the temporal candidate at every non-kept row equals that row's
-  true value exactly, so the output reproduces the input exactly — the
-  invariant the row's brief requires. `kerndeint` additionally reuses this
-  temporal core even though the reference's own `kerndeint` is purely
-  spatial, the single largest documented simplification in the crate.
-  `bwdif`'s reference default (`mode=send_field`, two outputs per input) is
-  not implemented; every mode here behaves like `send_frame`.
+  true value exactly, so the output reproduces the input exactly except at
+  a frame's own top/bottom edge row (one-sided spatial estimate, a real
+  bounded limitation — see `mad::tests::a_static_sequence_reproduces_exactly`).
+  `kerndeint` additionally reuses this temporal core even though the
+  reference's own `kerndeint` is purely spatial, the single largest
+  documented simplification in the crate. `bwdif`'s and `w3fdif`'s/
+  `estdif`'s reference default (`mode`/`filter`=field-rate, two outputs per
+  input) is not implemented; every mode here behaves like the reference's
+  own frame-rate mode.
+
+  **A real bug was found and fixed (2026-08-29) by measuring against real
+  `ffmpeg` rather than only the static-sequence invariant above.** The
+  original `blend()` read `prev`/`next` at the *same row* as the missing
+  sample as its "temporal" candidate. On real (or realistically
+  synthesised) interlaced content that row is always the *other*, discarded
+  field's own genuine sample at three different times — so averaging it
+  reconstructs `cur`'s own already-known, wrong-field-time value, almost
+  exactly, whenever motion is smooth. Measured on a fixture built so a
+  correct deinterlace has zero vertical variation (`mad::oracle`, a
+  horizontally-scrolling flat ramp through `ffmpeg -vf tinterlace=4`): the
+  old code's comb score barely moved (input 730112, output 746224 — no
+  better). The fix, `kept_field_estimate`, asks the same "what would the
+  *kept* field show here" question of `prev`/`cur`/`next` alike, so
+  temporal averaging combines three readings of one signal instead of
+  reproducing the artefact. Verified two ways, both now in `src/mad.rs`'s
+  own test suite and reproducible any time `ffmpeg` is on `PATH`:
+  - On the discriminating ramp fixture: comb score collapses to interior-
+    frame-exact (residual confined to the two edge frames with no
+    symmetric temporal partner, a separate documented limitation), and
+    Y/U/V PSNR against real `yadif`/`bwdif`/`w3fdif`/`estdif` (each pinned
+    to its own frame-rate mode option for a fair comparison) is **exactly
+    infinite** — byte-identical to all four real filters on unambiguous
+    linear motion.
+  - On busy, realistic content (`testsrc2`): comb score 689384 -> 251126
+    (63.6% reduction) and Y/U/V PSNR against real `yadif` of 24.01/27.83/
+    28.14 dB — consistent with "two reasonable, differently-designed
+    deinterlacers disagreeing on ambiguous detail", not with either side
+    being broken, and never claimed as byte-exact.
+  Per the repository owner's 2026-08-28 ruling, byte-exactness is not the
+  acceptance bar; this measurement is offered as the "not broken, and here
+  is the residual" evidence that ruling asks for instead.
 - **`pullup`, `fieldmatch`**: original `comb_score`-based heuristics (queue
   fields, weave the front two, accept if the result scores below a fixed
   threshold, otherwise drop the front field as a likely duplicate/orphan
@@ -160,6 +195,14 @@ with its own top/bottom role, so a caller asking `is_tff` of an extracted
 field read the *source frame's* flag instead) was falsified by reverting
 the one-line fix, confirming the test failed exactly the same way it had
 before, and restoring it.
+
+The `kept_field_estimate` fix above (2026-08-29) was found the same way in
+reverse: `mad::oracle::measured_against_real_ffmpeg_deinterlacers` was
+written *before* the fix, observed to fail with the exact numbers quoted
+above (comb score 730112 -> 746224, no reduction), the fix applied, and
+the same test re-run to confirm it now passes with comb score collapsing
+and PSNR going to infinity on the same fixture. The failure and the fix
+are both reproducible from `src/mad.rs`'s own git history.
 
 ## Configuration
 
