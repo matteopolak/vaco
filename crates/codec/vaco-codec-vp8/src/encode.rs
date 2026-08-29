@@ -67,18 +67,20 @@
 //! # Rate control
 //!
 //! [`Vp8Encoder`] embeds a [`vaco_codec_dsp_ratecontrol::RateController`].
-//! **There is currently no channel from the CLI/registry into an
-//! [`Encoder`] instance at all** — `vaco_codec_core::Encoder` has no
-//! `set_option`-shaped method the way `Decoder`/`Muxer`/`BitstreamFilter`
-//! do, so `-b:v`-style configuration cannot reach this encoder yet. That is
-//! a real, confirmed gap in a crate this one does not own
-//! (`vaco-codec-core`); [`VP8_ENCODER`]'s registered constructor therefore
-//! runs constant-quality at a fixed default `qscale`, and
-//! [`Vp8Encoder::with_rate_control`] is exposed for a caller (or a test)
-//! that can supply a [`vaco_codec_dsp_ratecontrol::RateControlConfig`]
-//! directly. Complexity feedback is one-frame-causal: each frame's `qscale`
-//! is chosen from the *previous* frame's actual coded-bit cost, since a
-//! real look-ahead would need buffering this encoder does not have.
+//! The CLI-to-encoder-option channel, `vaco_codec_core::Encoder::set_option`,
+//! now exists and is wired end to end: `vaco-cli` resolves `-b`/`-qscale`
+//! (and every alias — `-b:v`, `-vb`, `-ab`, `-q`, `-qscale`, `-aq`) and calls
+//! [`Vp8Encoder::set_option`] once the encoder is built, which switches the
+//! embedded rate controller to CBR (`"b"`) or constant-quality (`"qscale"`/
+//! `"global_quality"`) accordingly. [`VP8_ENCODER`]'s registered constructor
+//! still runs constant-quality at a fixed default `qscale` until one of
+//! those options is set, and [`Vp8Encoder::with_rate_control`] remains
+//! available for a caller (or a test) that wants to supply a
+//! [`vaco_codec_dsp_ratecontrol::RateControlConfig`] directly rather than go
+//! through the string-keyed option surface. Complexity feedback is
+//! one-frame-causal: each frame's `qscale` is chosen from the *previous*
+//! frame's actual coded-bit cost, since a real look-ahead would need
+//! buffering this encoder does not have.
 
 use vaco_codec_core::machine::{Accept, Machine};
 use vaco_codec_core::{Caps, Encoder, EncoderDesc};
