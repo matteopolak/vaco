@@ -363,7 +363,7 @@ fn write_pps_data(pps: &Pps, w: &mut BitWriter) {
     w.put(1, u32::from(pps.bottom_field_pic_order_in_frame_present));
     w.ue(pps.num_slice_groups - 1);
     if let Some(map) = &pps.slice_group_map {
-        write_slice_group_map(w, map);
+        write_slice_group_map(w, map, pps.num_slice_groups);
     }
     w.ue(pps.num_ref_idx_l0_default_active_minus1);
     w.ue(pps.num_ref_idx_l1_default_active_minus1);
@@ -381,12 +381,13 @@ fn write_pps_data(pps: &Pps, w: &mut BitWriter) {
             Some(lists) => {
                 w.put(1, 1);
                 // §7.3.2.2: the SPS is needed only to *size* the list on
-                // read; on write the count is exactly the number of
-                // `present` flags the parsed tail actually recorded, so it
-                // is read back off the list itself rather than re-derived
-                // from a chroma format this function is not given.
-                let count = lists.present.len();
-                write_scaling_lists(w, lists, count);
+                // read; on write, the count the original bitstream actually
+                // coded is `lists.count`, not `lists.present.len()` — that
+                // array is a fixed 12 entries regardless of how many were
+                // really read (see `ScalingLists::count`'s doc), so using its
+                // length here silently over-writes `present` flags the
+                // source never had, desyncing every field after the tail.
+                write_scaling_lists(w, lists, lists.count as usize);
             }
             None => w.put(1, 0),
         }
@@ -395,7 +396,15 @@ fn write_pps_data(pps: &Pps, w: &mut BitWriter) {
 }
 
 /// The slice-group map, §7.3.2.2 — the inverse of `parse_slice_group_map`.
-fn write_slice_group_map(w: &mut BitWriter, map: &SliceGroupMap) {
+///
+/// `num_slice_groups` (the PPS's own `num_slice_groups_minus1 + 1`, not
+/// anything derived from `map`) sizes the `Explicit` arm's per-entry bit
+/// width, exactly as `parse_slice_group_map` reads it — deriving the width
+/// from the *values actually present* in `ids` instead is wrong whenever the
+/// map does not happen to use every group index up to
+/// `num_slice_groups - 1`, which under-writes bits and desyncs everything
+/// after.
+fn write_slice_group_map(w: &mut BitWriter, map: &SliceGroupMap, num_slice_groups: u32) {
     w.ue(u32::from(map.map_type()));
     match map {
         SliceGroupMap::Interleaved(runs) => {
@@ -420,7 +429,6 @@ fn write_slice_group_map(w: &mut BitWriter, map: &SliceGroupMap) {
         }
         SliceGroupMap::Explicit(ids) => {
             w.ue(ids.len().saturating_sub(1) as u32);
-            let num_slice_groups = ids.iter().copied().max().map_or(1u32, |m| u32::from(m) + 1);
             let bits = 32 - num_slice_groups.saturating_sub(1).leading_zeros();
             for &id in ids {
                 w.put(bits.max(1), u32::from(id));
@@ -730,5 +738,111 @@ mod tests {
             }
             f.release(&mut b);
         }
+    }
+
+    /// Regression for a bug `cbs_h264` fuzzing found: `write_slice_group_map`
+    /// derived the `Explicit` variant's per-entry bit width from the values
+    /// actually present in the map (`ids.iter().max()`) instead of from the
+    /// PPS's own `num_slice_groups`. Both bugs agree exactly when every group
+    /// index 0..num_slice_groups-1 appears in the map, which is why no
+    /// existing fixture caught it — here `num_slice_groups` is 5 but the map
+    /// only ever uses indices 0 and 1, so the old code wrote 1 bit per entry
+    /// where the spec (`Ceil(Log2(5))`) requires 3, desyncing everything
+    /// after and making the re-encoded PPS fail to parse at all.
+    #[test]
+    fn an_explicit_slice_group_map_that_skips_group_indices_round_trips() {
+        let pps = Pps {
+            id: 5,
+            sps_id: 1,
+            entropy_coding_mode: true,
+            bottom_field_pic_order_in_frame_present: false,
+            num_slice_groups: 5,
+            slice_group_map: Some(SliceGroupMap::Explicit(vec![0, 0, 1])),
+            num_ref_idx_l0_default_active_minus1: 0,
+            num_ref_idx_l1_default_active_minus1: 0,
+            weighted_pred: true,
+            weighted_bipred_idc: 0,
+            pic_init_qp_minus26: 1,
+            pic_init_qs_minus26: 0,
+            chroma_qp_index_offset: 1,
+            deblocking_filter_control_present: true,
+            constrained_intra_pred: false,
+            redundant_pic_cnt_present: false,
+            transform_8x8_mode: false,
+            scaling_lists: None,
+            second_chroma_qp_index_offset: -1,
+            has_tail: true,
+        };
+
+        let mut w = RbspWriter::new();
+        write_nal_header(w.bits(), 1, NalUnitType::Pps);
+        write_pps_data(&pps, w.bits());
+        let bytes = w.finish();
+
+        let mut b = budget();
+        let reparsed = Pps::parse(&bytes, None, &mut b).expect("re-parses");
+        assert_eq!(reparsed, pps, "round trip must reproduce the same Pps");
+    }
+
+    /// Regression for a second bug the same fuzzing run found:
+    /// `write_pps_data`'s scaling-list tail used `lists.present.len()` as the
+    /// count of `seq_scaling_list_present_flag` bits to write, but
+    /// [`ScalingLists::present`] is a fixed 12-entry array regardless of how
+    /// many the source bitstream actually coded (6, for a 4:2:0 PPS tail
+    /// without `transform_8x8_mode_flag`) — the entries past the real count
+    /// are just defaulted `false`, never read. Writing all 12 anyway
+    /// double-codes the tail and desyncs `second_chroma_qp_index_offset` and
+    /// everything after it. The fix threads the real count through as
+    /// [`ScalingLists::count`].
+    ///
+    /// `pic_scaling_matrix_present_flag` unconditionally requires the SPS to
+    /// parse (it sizes the tail even when every individual list's own
+    /// `present` bit turns out to be 0), so this test — unlike the others in
+    /// this module — supplies one.
+    #[test]
+    fn a_pps_tail_with_fewer_than_twelve_scaling_lists_round_trips() {
+        const SPS: &[u8] = &[
+            0x67, 0x64, 0x00, 0x1E, 0xAC, 0xD9, 0x40, 0xA0, 0x2F, 0xF9, 0x70, 0x11, 0x00, 0x00,
+            0x03, 0x00, 0x01, 0x00, 0x00, 0x03, 0x00, 0x30, 0x0F, 0x16, 0x2D, 0x96,
+        ];
+        let sps = Sps::parse(SPS, &mut budget()).expect("a real sps");
+
+        let pps = Pps {
+            id: 47,
+            sps_id: 1,
+            entropy_coding_mode: false,
+            bottom_field_pic_order_in_frame_present: false,
+            num_slice_groups: 1,
+            slice_group_map: None,
+            num_ref_idx_l0_default_active_minus1: 0,
+            num_ref_idx_l1_default_active_minus1: 0,
+            weighted_pred: true,
+            weighted_bipred_idc: 1,
+            pic_init_qp_minus26: 0,
+            pic_init_qs_minus26: -1,
+            chroma_qp_index_offset: 0,
+            deblocking_filter_control_present: true,
+            constrained_intra_pred: true,
+            redundant_pic_cnt_present: false,
+            // `transform_8x8_mode: false` means the tail's scaling-list
+            // count is 6 (§7.3.2.2), not the full 12 — the case the old code
+            // got wrong.
+            transform_8x8_mode: false,
+            scaling_lists: Some(Box::new(ScalingLists {
+                count: 6,
+                ..ScalingLists::default()
+            })),
+            second_chroma_qp_index_offset: -3,
+            has_tail: true,
+        };
+
+        let mut w = RbspWriter::new();
+        write_nal_header(w.bits(), 0, NalUnitType::Pps);
+        write_pps_data(&pps, w.bits());
+        let bytes = w.finish();
+
+        let mut b = budget();
+        let reparsed = Pps::parse(&bytes, Some(&sps), &mut b).expect("re-parses");
+        assert_eq!(reparsed, pps, "round trip must reproduce the same Pps");
     }
 }

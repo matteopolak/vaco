@@ -437,6 +437,16 @@ pub struct ScalingLists {
     pub present: [bool; 12],
     /// `UseDefaultScalingMatrix4x4Flag` / `8x8Flag` for i in 0..12.
     pub use_default: [bool; 12],
+    /// The `count` [`read_scaling_lists`] was actually called with — 8 or 12
+    /// for an SPS, 6, 8 or 12 for a PPS tail (§7.3.2.2's `chroma_format_idc
+    /// != 3 ? 2 : 6`, added only when `transform_8x8_mode_flag` is set).
+    /// `present`/`use_default` are fixed-size 12-entry arrays regardless of
+    /// `count` — entries at or past `count` are left at their default
+    /// (`false`) rather than ever having been read — so a writer that needs
+    /// to reproduce exactly how many `seq_scaling_list_present_flag` bits the
+    /// original bitstream coded (a PPS tail's writer has no SPS in hand to
+    /// re-derive it from) must consult this field, not `present.len()`.
+    pub count: u8,
 }
 
 impl Default for ScalingLists {
@@ -446,6 +456,7 @@ impl Default for ScalingLists {
             list_8x8: [[0; 64]; 6],
             present: [false; 12],
             use_default: [false; 12],
+            count: 0,
         }
     }
 }
@@ -839,7 +850,12 @@ pub(crate) fn read_scaling_lists(
     g: &mut BoundedGolomb<'_, '_, '_>,
     count: usize,
 ) -> Result<ScalingLists> {
-    let mut out = ScalingLists::default();
+    let mut out = ScalingLists {
+        // §7.3.2.1.1.1/§7.3.2.2 only ever call this with 8 or 12 (SPS) or 6,
+        // 8 or 12 (PPS tail), all of which fit a `u8`.
+        count: count.min(u8::MAX as usize) as u8,
+        ..ScalingLists::default()
+    };
     for i in 0..count {
         let present = g.u(1)? != 0;
         if let Some(slot) = out.present.get_mut(i) {
