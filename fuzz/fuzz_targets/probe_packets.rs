@@ -227,6 +227,8 @@ fuzz_target!(|data: &[u8]| {
                 // A live backstop rather than a theoretical one: `tiny` is
                 // 2^16 fuel and the loop charges one unit per packet read.
                 limits: vaco_limits::Limits::tiny(),
+                format_flags: vaco_format_core::flags::FormatFlags::empty(),
+                format_options: vaco_format_core::options::FormatOptions::default(),
             })
         };
         let _ = tf.close();

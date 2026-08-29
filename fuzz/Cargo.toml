@@ -33,6 +33,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
+vaco-ass = { path = "../crates/filter/vaco-ass", optional = true }
 vaco-bitstream = { path = "../crates/core/vaco-bitstream", optional = true }
 vaco-bsf-audio = { path = "../crates/format/vaco-bsf-audio", optional = true }
 vaco-bsf-av1 = { path = "../crates/format/vaco-bsf-av1", optional = true }
@@ -59,6 +60,7 @@ vaco-codec-dsp-lpc = { path = "../crates/signal/vaco-codec-dsp-lpc", optional = 
 vaco-codec-dsp-me = { path = "../crates/signal/vaco-codec-dsp-me", optional = true }
 vaco-codec-dsp-mecmp = { path = "../crates/signal/vaco-codec-dsp-mecmp", optional = true }
 vaco-codec-dsp-ratecontrol = { path = "../crates/signal/vaco-codec-dsp-ratecontrol", optional = true }
+vaco-codec-exec = { path = "../crates/codec/vaco-codec-exec", optional = true }
 vaco-codec-exr = { path = "../crates/codec/vaco-codec-exr", optional = true }
 vaco-codec-gif = { path = "../crates/codec/vaco-codec-gif", optional = true }
 vaco-codec-golomb = { path = "../crates/signal/vaco-codec-golomb", optional = true }
@@ -75,6 +77,7 @@ vaco-codec-msac = { path = "../crates/signal/vaco-codec-msac", optional = true }
 vaco-codec-opus = { path = "../crates/codec/vaco-codec-opus", optional = true }
 vaco-codec-png = { path = "../crates/codec/vaco-codec-png", optional = true }
 vaco-codec-pnm = { path = "../crates/codec/vaco-codec-pnm", optional = true }
+vaco-codec-prores = { path = "../crates/codec/vaco-codec-prores", optional = true }
 vaco-codec-qoi = { path = "../crates/codec/vaco-codec-qoi", optional = true }
 vaco-codec-simple-audio = { path = "../crates/codec/vaco-codec-simple-audio", optional = true }
 vaco-codec-subtitle-bitmap = { path = "../crates/codec/vaco-codec-subtitle-bitmap", optional = true }
@@ -83,6 +86,8 @@ vaco-codec-subtitle-teletext = { path = "../crates/codec/vaco-codec-subtitle-tel
 vaco-codec-subtitle-text = { path = "../crates/codec/vaco-codec-subtitle-text", optional = true }
 vaco-codec-theora = { path = "../crates/codec/vaco-codec-theora", optional = true }
 vaco-codec-tiff = { path = "../crates/codec/vaco-codec-tiff", optional = true }
+vaco-codec-vc1 = { path = "../crates/codec/vaco-codec-vc1", optional = true }
+vaco-codec-vorbis = { path = "../crates/codec/vaco-codec-vorbis", optional = true }
 vaco-codec-vp8 = { path = "../crates/codec/vaco-codec-vp8", optional = true }
 vaco-codec-vp9 = { path = "../crates/codec/vaco-codec-vp9", optional = true }
 vaco-codec-webp = { path = "../crates/codec/vaco-codec-webp", optional = true }
@@ -130,6 +135,7 @@ vaco-filter-motion = { path = "../crates/filter/vaco-filter-motion", optional = 
 vaco-filter-palette = { path = "../crates/filter/vaco-filter-palette", optional = true }
 vaco-filter-source = { path = "../crates/filter/vaco-filter-source", optional = true }
 vaco-filter-temporal = { path = "../crates/filter/vaco-filter-temporal", optional = true }
+vaco-filter-v360 = { path = "../crates/filter/vaco-filter-v360", optional = true }
 vaco-filter-video-composite = { path = "../crates/filter/vaco-filter-video-composite", optional = true }
 vaco-filter-video-format = { path = "../crates/filter/vaco-filter-video-format", optional = true }
 vaco-filter-video-geometry = { path = "../crates/filter/vaco-filter-video-geometry", optional = true }
@@ -215,6 +221,7 @@ vaco-tx = { path = "../crates/signal/vaco-tx", optional = true }
 
 [features]
 default = [
+    "ass",
     "bitstream",
     "bsf-audio",
     "bsf-av1",
@@ -238,6 +245,7 @@ default = [
     "codec-dsp-lpc",
     "codec-dsp-me",
     "codec-dsp-ratecontrol",
+    "codec-exec",
     "codec-exr",
     "codec-gif",
     "codec-golomb",
@@ -254,6 +262,7 @@ default = [
     "codec-opus",
     "codec-png",
     "codec-pnm",
+    "codec-prores",
     "codec-qoi",
     "codec-simple-audio",
     "codec-subtitle-bitmap",
@@ -262,6 +271,8 @@ default = [
     "codec-subtitle-text",
     "codec-theora",
     "codec-tiff",
+    "codec-vc1",
+    "codec-vorbis",
     "codec-vp8",
     "codec-vp9",
     "codec-webp",
@@ -308,6 +319,7 @@ default = [
     "filter-palette",
     "filter-source",
     "filter-temporal",
+    "filter-v360",
     "filter-video-composite",
     "filter-video-format",
     "filter-video-geometry",
@@ -384,6 +396,7 @@ default = [
     "textformat",
     "tx",
 ]
+ass = ["dep:vaco-ass"]
 bitstream = ["dep:vaco-bitstream", "dep:vaco-limits"]
 bsf-audio = ["dep:vaco-bsf-audio", "dep:vaco-chlayout", "dep:vaco-codec-core", "dep:vaco-limits", "dep:vaco-packet"]
 bsf-av1 = ["dep:vaco-bsf-av1", "dep:vaco-codec-core", "dep:vaco-limits", "dep:vaco-packet"]
@@ -407,6 +420,7 @@ codec-dsp-intrapred = ["dep:vaco-codec-dsp-intrapred"]
 codec-dsp-lpc = ["dep:vaco-codec-dsp-lpc"]
 codec-dsp-me = ["dep:vaco-codec-dsp-me", "dep:vaco-codec-dsp-mecmp", "dep:vaco-simd"]
 codec-dsp-ratecontrol = ["dep:vaco-codec-dsp-ratecontrol", "dep:vaco-core"]
+codec-exec = ["dep:vaco-codec-exec", "dep:vaco-limits"]
 codec-exr = ["dep:vaco-codec-exr", "dep:vaco-frame", "dep:vaco-limits"]
 codec-gif = ["dep:vaco-codec-gif", "dep:vaco-frame", "dep:vaco-limits"]
 codec-golomb = ["dep:vaco-bitstream", "dep:vaco-codec-golomb", "dep:vaco-limits"]
@@ -423,6 +437,7 @@ codec-msac = ["dep:vaco-codec-msac"]
 codec-opus = ["dep:vaco-codec-core", "dep:vaco-codec-opus", "dep:vaco-frame", "dep:vaco-limits", "dep:vaco-packet"]
 codec-png = ["dep:vaco-codec-png", "dep:vaco-frame", "dep:vaco-limits"]
 codec-pnm = ["dep:vaco-codec-pnm", "dep:vaco-core", "dep:vaco-frame", "dep:vaco-limits"]
+codec-prores = ["dep:vaco-codec-core", "dep:vaco-codec-prores", "dep:vaco-limits", "dep:vaco-packet"]
 codec-qoi = ["dep:vaco-codec-qoi", "dep:vaco-frame", "dep:vaco-limits", "dep:vaco-pixfmt"]
 codec-simple-audio = ["dep:vaco-codec-simple-audio", "dep:vaco-limits"]
 codec-subtitle-bitmap = ["dep:vaco-codec-subtitle-bitmap", "dep:vaco-format-subtitle-bitmap", "dep:vaco-limits", "dep:vaco-subtitle-bitmap"]
@@ -431,6 +446,8 @@ codec-subtitle-teletext = ["dep:vaco-codec-subtitle-teletext"]
 codec-subtitle-text = ["dep:vaco-codec-subtitle-text"]
 codec-theora = ["dep:vaco-codec-core", "dep:vaco-codec-theora", "dep:vaco-frame", "dep:vaco-limits", "dep:vaco-packet", "dep:vaco-pixfmt"]
 codec-tiff = ["dep:vaco-codec-tiff", "dep:vaco-frame", "dep:vaco-limits", "dep:vaco-pixfmt"]
+codec-vc1 = ["dep:vaco-codec-core", "dep:vaco-codec-vc1", "dep:vaco-limits", "dep:vaco-packet"]
+codec-vorbis = ["dep:vaco-chlayout", "dep:vaco-codec-core", "dep:vaco-codec-vorbis", "dep:vaco-frame", "dep:vaco-limits", "dep:vaco-sampfmt"]
 codec-vp8 = ["dep:vaco-codec-core", "dep:vaco-codec-vp8", "dep:vaco-limits", "dep:vaco-packet"]
 codec-vp9 = ["dep:vaco-codec-core", "dep:vaco-codec-vp9", "dep:vaco-limits", "dep:vaco-packet"]
 codec-webp = ["dep:vaco-codec-webp", "dep:vaco-frame", "dep:vaco-limits"]
@@ -477,6 +494,7 @@ filter-motion = ["dep:vaco-filter-graph", "dep:vaco-filter-motion"]
 filter-palette = ["dep:vaco-filter-graph", "dep:vaco-filter-palette"]
 filter-source = ["dep:vaco-filter-graph", "dep:vaco-filter-source", "dep:vaco-opts"]
 filter-temporal = ["dep:vaco-filter-graph", "dep:vaco-filter-temporal"]
+filter-v360 = ["dep:vaco-filter-graph", "dep:vaco-filter-v360"]
 filter-video-composite = ["dep:vaco-expr", "dep:vaco-filter-graph", "dep:vaco-filter-video-composite"]
 filter-video-format = ["dep:vaco-color", "dep:vaco-core", "dep:vaco-filter-graph", "dep:vaco-filter-video-format", "dep:vaco-pixfmt"]
 filter-video-geometry = ["dep:vaco-expr", "dep:vaco-filter-graph", "dep:vaco-filter-video-geometry"]
@@ -608,6 +626,14 @@ test = false
 doc = false
 bench = false
 required-features = ["demux-asf"]
+
+[[bin]]
+name = "ass_parse"
+path = "fuzz_targets/ass_parse.rs"
+test = false
+doc = false
+bench = false
+required-features = ["ass"]
 
 [[bin]]
 name = "audio_simple_demux"
@@ -816,6 +842,14 @@ test = false
 doc = false
 bench = false
 required-features = ["cli-core"]
+
+[[bin]]
+name = "codec_exec_annexb"
+path = "fuzz_targets/codec_exec_annexb.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-exec"]
 
 [[bin]]
 name = "codec_parser_driver"
@@ -1208,6 +1242,14 @@ test = false
 doc = false
 bench = false
 required-features = ["filter-core"]
+
+[[bin]]
+name = "filter_v360_options"
+path = "fuzz_targets/filter_v360_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-v360"]
 
 [[bin]]
 name = "filter_video_composite_options"
@@ -1874,6 +1916,14 @@ bench = false
 required-features = ["probe"]
 
 [[bin]]
+name = "prores_decode"
+path = "fuzz_targets/prores_decode.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-prores"]
+
+[[bin]]
 name = "protocol_crypto_roundtrip"
 path = "fuzz_targets/protocol_crypto_roundtrip.rs"
 test = false
@@ -2280,6 +2330,22 @@ test = false
 doc = false
 bench = false
 required-features = ["tx"]
+
+[[bin]]
+name = "vc1_decode"
+path = "fuzz_targets/vc1_decode.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-vc1"]
+
+[[bin]]
+name = "vorbis_encode_options"
+path = "fuzz_targets/vorbis_encode_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-vorbis"]
 
 [[bin]]
 name = "vp8_decode"
