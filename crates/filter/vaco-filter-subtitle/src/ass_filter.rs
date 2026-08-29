@@ -82,8 +82,13 @@ impl Filter {
 /// Render every active event of `script` onto `frame` at time `t`, sharing
 /// `renderer`'s caches — the one rendering path [`Filter::filter_frame`]
 /// and `vaco-filter-subtitle`'s `subtitles` filter (for a `.ass`/`.ssa`
-/// input) both call.
-pub(crate) fn render_at(script: &vaco_ass::Script, renderer: &mut TextRenderer, frame: &mut Frame, t: Duration) -> Result<()> {
+/// input) both call. `pub` (not `pub(crate)`) so this crate's own
+/// differential tests can drive it directly without a full graph.
+///
+/// # Errors
+/// [`Error::Unsupported`] if `frame` is not video; whatever
+/// [`vaco_filter_text::mask::composite`] or rasterisation reports.
+pub fn render_at(script: &vaco_ass::Script, renderer: &mut TextRenderer, frame: &mut Frame, t: Duration) -> Result<()> {
     let FrameData::Video { width, height, .. } = frame.data else {
         return Err(Error::Unsupported("vaco-filter-subtitle::ass: not a video frame"));
     };

@@ -24,6 +24,8 @@ vaco-format-subtitle = { path = "../../format/vaco-format-subtitle" }
 
 [dev-dependencies]
 proptest.workspace = true
+vaco-conformance = { path = "../../tool/vaco-conformance" }
+vaco-limits = { path = "../../core/vaco-limits" }
 
 [lints]
 workspace = true
