@@ -1627,3 +1627,32 @@ never testing anything.
 This is `763a374`'s rule one level up: a test that asserts well-formedness does
 not assert correctness, and a test that asserts nothing at all does not even
 assert well-formedness.
+
+## The pathspec form protects against staged files, not against a shared working tree
+
+The rule that `git commit -F <msg> -- <paths>` is safe has a limit that was
+found the hard way: it commits **whatever is in the working tree at those
+paths**, including another agent's *uncommitted* edits to the same file.
+
+That is exactly what happened. An agent held an in-progress edit to
+`vaco-codec-core`'s `Encoder` trait; a second agent committed that same path by
+pathspec, and the first agent's unfinished work was absorbed into a commit that
+knew nothing about it. It re-applied on top of the new `HEAD` rather than
+rewriting history, which was the correct recovery.
+
+So the earlier finding stands but is narrower than it reads. The pathspec form
+protects you from sweeping up files you never touched. It does **not** give you
+exclusive claim to a file, and nothing does.
+
+Two consequences:
+
+- **Do not hold a large uncommitted edit to a widely-shared file.** Land it in
+  small commits as you go. The window in which someone else can absorb your work
+  is exactly the window in which it sits uncommitted.
+- **If your work is absorbed, re-apply on top of the new `HEAD`.** Do not
+  rewrite history, and do not `git reset` — both destroy someone else's landed
+  work to recover your own.
+
+`git diff HEAD~1 HEAD --name-only` after every commit remains the check, and it
+catches this from the *other* side: if a file you did not edit appears in your
+commit, you have just absorbed someone. Say so rather than moving on.
