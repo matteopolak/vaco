@@ -6,30 +6,32 @@
 //!
 //! # What this proves, and what it does not
 //!
-//! `H264Decoder::send_packet` locates a real slice header (via
-//! `vaco-parse-h264`, itself reference-tested) and resolves
-//! `entropy_coding_mode_flag` correctly against real encoder output — that
-//! much is checked here, against real bytes. It does **not** prove
-//! [`crate::cavlc::residual_block_cavlc`]/[`crate::cabac_residual::residual_block_cabac`]
-//! consume a real slice's residual bits correctly: that needs the
-//! macroblock loop (#419+) to know which syntax elements precede each
-//! residual block and with what `nC`/`ctxBlockCat`, which this crate does
-//! not implement yet. See `crate`'s own module doc for the fuller
-//! statement of this boundary.
+//! `H264Decoder::send_packet` now decodes a real CABAC I-slice end to
+//! end — a real [`vaco_frame::Frame`] comes back from `receive_frame`,
+//! not just a resolved `entropy_coding_mode_flag`. Byte-exactness against
+//! `ffmpeg` is `crate::reconstruct`'s own, much more thorough corpus
+//! (`cabac_i_only.264`, `cabac_ip_simple.264`, chroma checked
+//! per-plane); this file's job is narrower and different: proving the
+//! *production* [`Decoder`] trait surface — `send_packet`/`receive_frame`/
+//! `set_extradata`/`flush`, with real AVCC-vs-Annex-B framing detection —
+//! actually reaches that already-verified reconstruction, which is
+//! exactly the gap this crate shipped with for a long time (see
+//! `crate::decoder`'s own module doc).
 //!
-//! Generator, so the corpus can be rebuilt when the pinned reference moves:
+//! CAVLC is still refused, honestly — see `crate::decoder`'s own doc for
+//! why (the entropy layer alone verifies bit consumption; motion vectors
+//! and residual coefficients are never captured).
 //!
-//! ```text
-//! ffmpeg -y -f lavfi -i "testsrc2=s=64x64:r=25:d=1" -pix_fmt yuv420p \
-//!        -c:v libx264 -coder cavlc -g 30 -bf 0 -f h264 cavlc.264
-//! ffmpeg -y -f lavfi -i "testsrc2=s=64x64:r=25:d=1" -pix_fmt yuv420p \
-//!        -c:v libx264 -coder cabac -g 30 -bf 2 -f h264 cabac.264
-//! ```
-//!
-//! Each fixture file here is one Annex-B-start-code-prefixed SPS+PPS pair
-//! (`*_extradata.bin`, fed through [`Decoder::set_extradata`]) and the raw
-//! bytes of the first IDR slice NAL unit, start code stripped (`*_idr_slice.264`,
-//! fed as a packet payload — the shape a demuxer hands a decoder).
+//! `cabac_idr_slice.264`/`cabac_extradata.bin` (High profile,
+//! `transform_8x8_mode` set — real x264 default-preset output) are kept
+//! for [`resolves_cavlc_from_a_real_x264_cavlc_stream`]'s CAVLC-side
+//! sibling and for the entropy-mode-resolution boundary alone: a real
+//! *reconstruction* now needs a fixture inside this crate's own
+//! implemented scope, so the actual decode tests below reuse
+//! `cabac_i_only.264` (`crate::reconstruct`'s own #418 corpus,
+//! `Intra_4x4`-only, no 8x8 transform) instead, splitting its own
+//! in-band SPS/PPS from its first IDR slice at test time rather than
+//! keeping a third pair of fixture files for the same content.
 
 #![allow(
     clippy::unwrap_used,
@@ -38,9 +40,11 @@
     reason = "test code over fixed fixtures"
 )]
 
+use vaco_bitstream::annexb;
 use vaco_codec_core::Decoder;
 use vaco_codec_h264::H264Decoder;
 use vaco_core::Error;
+use vaco_frame::FrameData;
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
 
@@ -48,9 +52,35 @@ fn decoder() -> H264Decoder {
     H264Decoder::new(Limits::default())
 }
 
-fn packet(bytes: &[u8]) -> Packet {
+/// Wraps a bare NAL unit's bytes (no start code, no length prefix — what
+/// `fixtures/*_idr_slice.264` store) in an Annex-B start code, matching
+/// this crate's Annex-B extradata fixtures and the framing a real
+/// elementary stream actually carries.
+fn packet(nal_bytes: &[u8]) -> Packet {
+    let mut framed = vec![0u8, 0, 0, 1];
+    framed.extend_from_slice(nal_bytes);
     let mut budget = Budget::new(Limits::default());
-    Packet::from_slice(&mut budget, bytes).unwrap()
+    Packet::from_slice(&mut budget, &framed).unwrap()
+}
+
+/// Splits a real Annex-B elementary stream into a start-code-prefixed
+/// `(SPS + PPS)` extradata blob and the bare bytes of its first primary
+/// coded slice — everything [`decoder`]/[`packet`] need from one `.264`
+/// file, without keeping a separately captured `_extradata.bin` alongside
+/// it.
+fn split_extradata_and_first_slice(data: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    let mut extradata = Vec::new();
+    for nal in annexb::nal_units(data) {
+        match nal.first().map(|b| b & 0x1F) {
+            Some(7 | 8) => {
+                extradata.extend_from_slice(&[0, 0, 0, 1]);
+                extradata.extend_from_slice(nal);
+            }
+            Some(1 | 5) => return (extradata, nal.to_vec()),
+            _ => {}
+        }
+    }
+    panic!("fixture has no slice NAL");
 }
 
 #[test]
@@ -63,11 +93,17 @@ fn resolves_cavlc_from_a_real_x264_cavlc_stream() {
         panic!("expected Unsupported, got {err:?}");
     };
     assert!(msg.contains("CAVLC"), "message did not name CAVLC: {msg}");
-    assert!(!msg.contains("CABAC"), "message wrongly named CABAC: {msg}");
 }
 
 #[test]
-fn resolves_cabac_from_a_real_x264_cabac_stream() {
+fn a_high_profile_8x8_transform_stream_is_refused_not_mishandled() {
+    // `cabac_idr_slice.264`/`cabac_extradata.bin`: real x264 output that
+    // enables `transform_size_8x8_flag` (High profile's own default) --
+    // squarely out of this crate's own documented scope (`mb::check_scope`,
+    // "this crate's tables are verified against a source that predates
+    // it"). A real, if disappointing, finding: High profile with adaptive
+    // 8x8 transform is common default x264 output, and any stream using
+    // it hits this refusal today, honestly, rather than a wrong decode.
     let mut d = decoder();
     d.set_extradata(include_bytes!("fixtures/cabac_extradata.bin")).unwrap();
     let pkt = packet(include_bytes!("fixtures/cabac_idr_slice.264"));
@@ -75,35 +111,66 @@ fn resolves_cabac_from_a_real_x264_cabac_stream() {
     let Error::Unsupported(msg) = err else {
         panic!("expected Unsupported, got {err:?}");
     };
-    assert!(msg.contains("CABAC"), "message did not name CABAC: {msg}");
-    assert!(!msg.contains("CAVLC"), "message wrongly named CAVLC: {msg}");
+    assert!(msg.contains("8x8"), "message did not name the 8x8 transform: {msg}");
 }
 
 #[test]
-fn refuses_a_packet_with_no_active_parameter_sets() {
+fn decodes_a_real_frame_from_a_real_x264_cabac_stream() {
+    let mut d = decoder();
+    let (extradata, slice) = split_extradata_and_first_slice(include_bytes!("fixtures/cabac_i_only.264"));
+    d.set_extradata(&extradata).unwrap();
+    let pkt = packet(&slice);
+    d.send_packet(Some(&pkt)).unwrap();
+    let frame = d.receive_frame().unwrap();
+    let FrameData::Video { format, width, height, planes } = &frame.data else {
+        panic!("expected a video frame, got {:?}", frame.data);
+    };
+    assert_eq!(format.name(), "yuv420p");
+    assert!(*width > 0 && *height > 0, "width={width} height={height}");
+    assert_eq!(planes.len(), 3, "yuv420p is three planes");
+    // A real decode, not a flat placeholder: some sample must differ from
+    // its neighbour, i.e. this is not just an all-grey buffer nobody
+    // actually wrote into.
+    let luma = &planes[0].data;
+    assert!(
+        luma.as_slice().windows(2).any(|w| w[0] != w[1]),
+        "luma plane is perfectly flat -- looks like it was never written"
+    );
+    // No second frame from one packet.
+    assert!(matches!(d.receive_frame(), Err(Error::NeedMoreInput)));
+}
+
+#[test]
+fn a_packet_referencing_unseen_parameter_sets_is_skipped_not_erred() {
     // No `set_extradata` call at all: the slice references a PPS this
-    // decoder has never seen, and that must be reported, not guessed at.
+    // decoder has never seen. `H264Parser::push_access_unit`'s own
+    // documented contract is "skip, don't error" for exactly this case
+    // (a stream joined mid-flight, which is legal and common) --
+    // `H264Decoder` reuses that contract rather than re-deriving a
+    // stricter one of its own.
     let mut d = decoder();
     let pkt = packet(include_bytes!("fixtures/cavlc_idr_slice.264"));
-    let err = d.send_packet(Some(&pkt)).unwrap_err();
-    assert!(matches!(err, Error::Unsupported(_)), "got {err:?}");
+    d.send_packet(Some(&pkt)).unwrap();
+    assert!(matches!(d.receive_frame(), Err(Error::NeedMoreInput)));
 }
 
 #[test]
 fn eof_drains_cleanly() {
     let mut d = decoder();
-    assert!(matches!(d.send_packet(None), Err(Error::Eof)));
+    d.send_packet(None).unwrap();
+    assert!(matches!(d.receive_frame(), Err(Error::Eof)));
 }
 
 #[test]
 fn flush_does_not_panic_and_leaves_the_decoder_usable() {
     let mut d = decoder();
-    d.set_extradata(include_bytes!("fixtures/cavlc_extradata.bin")).unwrap();
+    let (extradata, slice) = split_extradata_and_first_slice(include_bytes!("fixtures/cabac_i_only.264"));
+    d.set_extradata(&extradata).unwrap();
     d.flush();
-    let pkt = packet(include_bytes!("fixtures/cavlc_idr_slice.264"));
+    let pkt = packet(&slice);
     // The active parameter sets are a `vaco-parse-h264` concept independent
-    // of this decoder's own (currently empty) buffered state, so a slice
-    // referencing an already-seen PPS still resolves after a flush.
-    let err = d.send_packet(Some(&pkt)).unwrap_err();
-    assert!(matches!(err, Error::Unsupported(_)));
+    // of this decoder's own (now-cleared) DPB/output-queue state, so a
+    // slice referencing an already-seen PPS still decodes after a flush.
+    d.send_packet(Some(&pkt)).unwrap();
+    assert!(d.receive_frame().is_ok());
 }

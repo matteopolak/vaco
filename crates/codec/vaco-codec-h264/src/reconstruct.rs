@@ -63,10 +63,12 @@
 
 use vaco_codec_dsp_idct::h264::idct4x4;
 
-use crate::dequant::{dequant_4x4, dequant_luma_dc_4x4};
-use crate::intra::{Neighbours4, Neighbours16, predict_intra4x4, predict_intra16x16};
+use crate::dequant::{chroma_qp, dequant_4x4, dequant_chroma_dc_2x2, dequant_luma_dc_4x4};
+use crate::intra::{
+    Neighbours4, Neighbours16, NeighboursChroma, predict_intra4x4, predict_intra16x16, predict_intra_chroma,
+};
 use crate::mb::{MbResidual, MbSummary, blk_xy};
-use crate::scan::{build_luma_ac_block, inverse_scan_luma_dc};
+use crate::scan::{build_luma_ac_block, inverse_scan_chroma_dc, inverse_scan_luma_dc};
 
 /// Clause 8.5.1/8.5.2, `Intra_16x16` luma only: predict, then add clause
 /// 8.5.2's own per-4x4-block dequantised-and-transformed residual, then
@@ -152,6 +154,19 @@ struct PictureBuffer {
     /// One per global 4x4 luma block position, row-major,
     /// `mbs_wide * 4` wide.
     decoded_4x4: Vec<bool>,
+    /// Row-major, `mbs_wide * 8` wide -- `ChromaArrayType == 1` (4:2:0),
+    /// this crate's only supported chroma format, halves each dimension.
+    cb: Vec<u8>,
+    /// Same layout as [`PictureBuffer::cb`].
+    cr: Vec<u8>,
+    /// One per global 4x4 *chroma* block position, row-major, `mbs_wide *
+    /// 2` wide -- coarser than [`PictureBuffer::decoded_4x4`] because a
+    /// macroblock's whole 8x8 chroma area (a 2x2 grid of 4x4 blocks) is
+    /// always predicted and reconstructed together (clause 8.3.3's
+    /// `intra_chroma_pred_mode` is one value per macroblock, not per
+    /// 4x4 block the way `Intra_4x4` luma is), so one bitmap serves both
+    /// Cb and Cr.
+    chroma_decoded: Vec<bool>,
 }
 
 impl PictureBuffer {
@@ -160,11 +175,18 @@ impl PictureBuffer {
         let h = (mbs_high * 16) as usize;
         let bw = (mbs_wide * 4) as usize;
         let bh = (mbs_high * 4) as usize;
+        let cw = (mbs_wide * 8) as usize;
+        let ch = (mbs_high * 8) as usize;
+        let cbw = (mbs_wide * 2) as usize;
+        let cbh = (mbs_high * 2) as usize;
         Self {
             mbs_wide,
             mbs_high,
             luma: vec![128u8; w.saturating_mul(h)],
             decoded_4x4: vec![false; bw.saturating_mul(bh)],
+            cb: vec![128u8; cw.saturating_mul(ch)],
+            cr: vec![128u8; cw.saturating_mul(ch)],
+            chroma_decoded: vec![false; cbw.saturating_mul(cbh)],
         }
     }
 
@@ -242,6 +264,75 @@ impl PictureBuffer {
             }
         }
         self.mark_block_decoded(x, y);
+    }
+
+    const fn chroma_width(&self) -> u32 {
+        self.mbs_wide * 8
+    }
+
+    const fn chroma_height(&self) -> u32 {
+        self.mbs_high * 8
+    }
+
+    /// [`PictureBuffer::available`]'s own chroma-plane counterpart, at
+    /// chroma-4x4-block granularity.
+    #[allow(
+        clippy::integer_division,
+        reason = "x/4, y/4 converts a chroma pixel position to its owning 4x4 chroma block position -- exact by construction"
+    )]
+    fn chroma_available(&self, x: i32, y: i32) -> bool {
+        let (Ok(x), Ok(y)) = (u32::try_from(x), u32::try_from(y)) else {
+            return false;
+        };
+        if x >= self.chroma_width() || y >= self.chroma_height() {
+            return false;
+        }
+        let (bx, by) = (x / 4, y / 4);
+        let bw = self.mbs_wide * 2;
+        self.chroma_decoded
+            .get((by * bw + bx) as usize)
+            .copied()
+            .unwrap_or(false)
+    }
+
+    /// `comp == 0` is Cb, `comp == 1` is Cr -- matching
+    /// [`crate::mb::MbResidual::chroma_dc`]/`chroma_ac`'s own outer-index
+    /// convention throughout this crate.
+    fn chroma_pixel(&self, comp: usize, x: i32, y: i32) -> u8 {
+        let (Ok(x), Ok(y)) = (u32::try_from(x), u32::try_from(y)) else {
+            return 0;
+        };
+        if x >= self.chroma_width() || y >= self.chroma_height() {
+            return 0;
+        }
+        let plane = if comp == 0 { &self.cb } else { &self.cr };
+        plane
+            .get((y * self.chroma_width() + x) as usize)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn set_chroma_pixel(&mut self, comp: usize, x: u32, y: u32, v: u8) {
+        let w = self.chroma_width();
+        let plane = if comp == 0 { &mut self.cb } else { &mut self.cr };
+        if let Some(slot) = plane.get_mut((y * w + x) as usize) {
+            *slot = v;
+        }
+    }
+
+    /// Marks a whole macroblock's 8x8 chroma area (both components share
+    /// one bitmap -- see [`PictureBuffer::chroma_decoded`]'s own doc) as
+    /// reconstructed.
+    fn mark_chroma_mb_decoded(&mut self, mb_x: u32, mb_y: u32) {
+        let bw = self.mbs_wide * 2;
+        for dy in 0..2u32 {
+            for dx in 0..2u32 {
+                let (bx, by) = (mb_x * 2 + dx, mb_y * 2 + dy);
+                if let Some(slot) = self.chroma_decoded.get_mut((by * bw + bx) as usize) {
+                    *slot = true;
+                }
+            }
+        }
     }
 }
 
@@ -396,6 +487,7 @@ pub(crate) fn reconstruct_picture_luma(
                 top,
                 left_available,
                 left,
+                corner: buf.pixel(coord(x) - 1, coord(y) - 1),
             };
             let block = reconstruct_intra16x16_luma(
                 mb.intra16x16_pred_mode,
@@ -464,6 +556,7 @@ pub(crate) fn reconstruct_picture_with_inter(
                 top,
                 left_available,
                 left,
+                corner: buf.pixel(coord(x) - 1, coord(y) - 1),
             };
             let block = reconstruct_intra16x16_luma(
                 mb.intra16x16_pred_mode,
@@ -558,6 +651,267 @@ fn reconstruct_inter_mb(
     }
 }
 
+/// One reference picture's three planes -- what [`reconstruct_picture`]'s
+/// own `ref_list0` needs per candidate, since clause 8.4.2.1's per-block
+/// `ref_idx_l0` selection has to reach chroma exactly the same way
+/// [`reconstruct_inter_mb`]'s own `ref_list0: &[&[u8]]` already reaches
+/// luma.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RefPicturePlanes<'a> {
+    pub(crate) luma: &'a [u8],
+    pub(crate) cb: &'a [u8],
+    pub(crate) cr: &'a [u8],
+}
+
+/// A fully reconstructed picture: luma at `mbs_wide*16 x mbs_high*16`,
+/// Cb/Cr at half that in each dimension (`ChromaArrayType == 1`, this
+/// crate's only supported chroma format), all row-major.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ReconstructedPicture {
+    pub(crate) luma: Vec<u8>,
+    pub(crate) cb: Vec<u8>,
+    pub(crate) cr: Vec<u8>,
+}
+
+/// [`intra4x4_neighbours`]'s own chroma counterpart: clause 8.3.3's 17
+/// neighbouring chroma samples (`p[x,-1]` for `x = 0..7`, `p[-1,y]` for
+/// `y = -1..7`), resolved from real picture state at the *macroblock's*
+/// own 8x8 chroma origin -- unlike luma's `Intra_4x4`, chroma prediction
+/// always operates at this one whole-macroblock granularity regardless of
+/// which luma mode the same macroblock used (clause 8.3.3's own
+/// `intra_chroma_pred_mode` is one value per macroblock).
+fn chroma_neighbours(buf: &PictureBuffer, comp: usize, mb_x: u32, mb_y: u32) -> NeighboursChroma {
+    let x = coord(mb_x * 8);
+    let y = coord(mb_y * 8);
+    let top_available = (0..8).all(|dx| buf.chroma_available(x + dx, y - 1));
+    let top = core::array::from_fn(|dx| buf.chroma_pixel(comp, x + coord(dx), y - 1));
+    let left_available = (0..8).all(|dy| buf.chroma_available(x - 1, y + dy));
+    let left = core::array::from_fn(|dy| buf.chroma_pixel(comp, x - 1, y + coord(dy)));
+    NeighboursChroma {
+        top_available,
+        top,
+        left_available,
+        left,
+        corner: buf.chroma_pixel(comp, x - 1, y - 1),
+    }
+}
+
+/// Clause 8.5.3's chroma residual: the shared 2x2 DC transform
+/// ([`dequant_chroma_dc_2x2`]) folded into each of the 4 chroma AC
+/// blocks' own position (0, 0) (the same "DC injected into every AC
+/// block" shape [`build_luma_ac_block`] already gives luma's
+/// `Intra_16x16`, reused as-is -- clause 8.5.3 eq. (8-248)/(8-249) is
+/// the identical construction one level down), then added onto `pred`
+/// (either an intra prediction or a motion-compensated one -- this step
+/// does not care which).
+#[allow(
+    clippy::indexing_slicing,
+    reason = "bx/by are 0/1 from blk_xy(0..4), x_o/y_o in {0,4}, i/j in 0..4 -- every index below is provably in range, not bitstream-derived"
+)]
+fn add_chroma_residual(mut pred: [[u8; 8]; 8], comp: usize, mb: &MbSummary, qpc: i32) -> [[u8; 8]; 8] {
+    let dc_raw = inverse_scan_chroma_dc(mb.residual.chroma_dc.get(comp).and_then(Option::as_ref));
+    let dc = dequant_chroma_dc_2x2(&dc_raw, qpc);
+    for blk in 0..4u32 {
+        let (bx, by) = blk_xy(blk);
+        let dc_val = dc.get((by * 2 + bx) as usize).copied().unwrap_or(0);
+        let ac = mb
+            .residual
+            .chroma_ac
+            .get(comp)
+            .and_then(|arr| arr.get(blk as usize))
+            .and_then(Option::as_ref);
+        let c = build_luma_ac_block(dc_val, ac);
+        let d = dequant_4x4(&c, qpc, true);
+        let r = idct4x4(&d);
+
+        let x_o = (bx * 4) as usize;
+        let y_o = (by * 4) as usize;
+        for i in 0..4usize {
+            for j in 0..4usize {
+                let p = i32::from(pred[y_o + i][x_o + j]);
+                let sum = p + r.get(i * 4 + j).copied().unwrap_or(0);
+                pred[y_o + i][x_o + j] = sum.clamp(0, 255) as u8;
+            }
+        }
+    }
+    pred
+}
+
+/// Clause 8.4.2.2.2's bilinear chroma motion compensation for one whole
+/// macroblock's one chroma component, reusing the *same* per-luma-4x4-block
+/// `mv_blocks` an inter macroblock's luma prediction already reads
+/// ([`reconstruct_inter_mb`]) -- each luma 4x4 partition's own motion
+/// vector governs a 2x2 chroma area (clause 8.4.1.4's own note: "when the
+/// luma vector applies to 4x4 luma samples, the corresponding chroma
+/// vector applies to 2x2 chroma samples"), so looping the same 16
+/// positions at chroma's half resolution generalises correctly to every
+/// partition shape (16x16 down to 4x4) without special-casing any of
+/// them -- exactly the same shape [`reconstruct_inter_mb`] already uses
+/// for luma, one level coarser.
+#[allow(
+    clippy::indexing_slicing,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_truncation,
+    reason = "blk/dx/dy are fixed 0..16/0..2 loop bounds; mv/pixel arithmetic is checked at the fetch closure's own clamp -- mirrors reconstruct_inter_mb's own identical allow"
+)]
+fn predict_chroma_inter(
+    mb: &MbSummary,
+    comp: usize,
+    ref_list0: &[RefPicturePlanes<'_>],
+    chroma_width: u32,
+    chroma_height: u32,
+) -> [[u8; 8]; 8] {
+    let empty: &[u8] = &[];
+    let mut out = [[0u8; 8]; 8];
+    for blk in 0..16u32 {
+        let (bx, by) = blk_xy(blk);
+        let info = mb.mv_blocks[(by * 4 + bx) as usize];
+        let ref_idx = info.ref_idx_l0().max(0) as usize;
+        let plane = ref_list0
+            .get(ref_idx)
+            .map_or(empty, |r| if comp == 0 { r.cb } else { r.cr });
+        let (mvx, mvy) = info.mv_l0();
+        let (mvx, mvy) = (i32::from(mvx), i32::from(mvy));
+        let cx0 = (mb.mb_x * 8 + bx * 2) as i32;
+        let cy0 = (mb.mb_y * 8 + by * 2) as i32;
+
+        let fetch = |ax: i32, ay: i32| -> u8 {
+            if plane.is_empty() {
+                return 0;
+            }
+            let cx = ax.clamp(0, chroma_width as i32 - 1) as u32;
+            let cy = ay.clamp(0, chroma_height as i32 - 1) as u32;
+            plane
+                .get((cy * chroma_width + cx) as usize)
+                .copied()
+                .unwrap_or(0)
+        };
+
+        for dy in 0..2i32 {
+            for dx in 0..2i32 {
+                let v = crate::interp::chroma_mc_sample(fetch, cx0 + dx, cy0 + dy, mvx, mvy);
+                let oy = (by * 2) as usize + dy as usize;
+                let ox = (bx * 2) as usize + dx as usize;
+                if let Some(row) = out.get_mut(oy)
+                    && let Some(cell) = row.get_mut(ox)
+                {
+                    *cell = v;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// [`reconstruct_picture_luma`]/[`reconstruct_picture_with_inter`]'s own
+/// per-macroblock dispatch (reusing [`reconstruct_intra16x16_luma`]/
+/// [`reconstruct_intra4x4_mb`]/[`reconstruct_inter_mb`] unchanged, exactly
+/// as those two functions do), extended with the chroma half neither of
+/// those two touch: clause 8.3.3's intra chroma prediction (DC/H/V/Plane)
+/// or clause 8.4.2.2.2's bilinear chroma motion compensation, plus clause
+/// 8.5.3's chroma residual add -- composed from pieces already
+/// independently verified ([`predict_intra_chroma`],
+/// [`dequant_chroma_dc_2x2`], [`inverse_scan_chroma_dc`]) rather than new
+/// arithmetic, closing the gap this module's own doc used to describe as
+/// "written but not yet composed".
+///
+/// Chroma prediction is independent of which luma branch a macroblock
+/// took: clause 8.3.3's `intra_chroma_pred_mode` and clause 8.4.1.4's
+/// chroma motion vectors both apply at the whole-macroblock 8x8
+/// granularity regardless of whether luma was `Intra_16x16`, `Intra_4x4`
+/// or inter, so this function computes it once per macroblock, after
+/// (not interleaved with) the luma branch's own per-block work.
+///
+/// `chroma_qp_offset_{cb,cr}` are the PPS's own
+/// `chroma_qp_index_offset`/`second_chroma_qp_index_offset` (clause
+/// 8.5.8) -- constant for the whole picture, unlike `QPY` which is
+/// per-macroblock.
+///
+/// # Errors
+///
+/// As [`reconstruct_picture_luma`]: [`vaco_core::Error::Unsupported`] for
+/// `I_PCM`.
+pub(crate) fn reconstruct_picture(
+    macroblocks: &[MbSummary],
+    mbs_wide: u32,
+    mbs_high: u32,
+    chroma_qp_offset_cb: i32,
+    chroma_qp_offset_cr: i32,
+    ref_list0: &[RefPicturePlanes<'_>],
+) -> vaco_core::Result<ReconstructedPicture> {
+    let mut buf = PictureBuffer::new(mbs_wide, mbs_high);
+    let ref_width = mbs_wide * 16;
+    let ref_height = mbs_high * 16;
+    let chroma_width = mbs_wide * 8;
+    let chroma_height = mbs_high * 8;
+    let ref_list0_luma: Vec<&[u8]> = ref_list0.iter().map(|r| r.luma).collect();
+
+    for mb in macroblocks {
+        if mb.is_ipcm {
+            return Err(vaco_core::Error::Unsupported(
+                "vaco-codec-h264: I_PCM picture reconstruction is not implemented",
+            ));
+        }
+        let is_inter = !mb.is_intra16x16 && !mb.is_intra4x4;
+        if mb.is_intra16x16 {
+            let x = mb.mb_x * 16;
+            let y = mb.mb_y * 16;
+            let top_available = (0..16).all(|dx| buf.available(coord(x) + dx, coord(y) - 1));
+            let top = core::array::from_fn(|dx| buf.pixel(coord(x) + coord(dx), coord(y) - 1));
+            let left_available = (0..16).all(|dy| buf.available(coord(x) - 1, coord(y) + dy));
+            let left = core::array::from_fn(|dy| buf.pixel(coord(x) - 1, coord(y) + coord(dy)));
+            let neighbours = Neighbours16 {
+                top_available,
+                top,
+                left_available,
+                left,
+                corner: buf.pixel(coord(x) - 1, coord(y) - 1),
+            };
+            let block = reconstruct_intra16x16_luma(mb.intra16x16_pred_mode, neighbours, mb.qpy, &mb.residual);
+            for (i, row) in block.iter().enumerate() {
+                for (j, &v) in row.iter().enumerate() {
+                    buf.set_pixel(x + j as u32, y + i as u32, v);
+                }
+            }
+            for blk in 0..16u32 {
+                let (bx, by) = blk_xy(blk);
+                buf.mark_block_decoded(x + bx * 4, y + by * 4);
+            }
+        } else if mb.is_intra4x4 {
+            reconstruct_intra4x4_mb(&mut buf, mb.mb_x, mb.mb_y, mb.qpy, &mb.residual);
+        } else {
+            reconstruct_inter_mb(&mut buf, mb, &ref_list0_luma, ref_width, ref_height);
+        }
+
+        let qpc_cb = chroma_qp(mb.qpy, chroma_qp_offset_cb);
+        let qpc_cr = chroma_qp(mb.qpy, chroma_qp_offset_cr);
+        for (comp, qpc) in [(0usize, qpc_cb), (1usize, qpc_cr)] {
+            let pred = if is_inter {
+                predict_chroma_inter(mb, comp, ref_list0, chroma_width, chroma_height)
+            } else {
+                let neighbours = chroma_neighbours(&buf, comp, mb.mb_x, mb.mb_y);
+                predict_intra_chroma(mb.intra_chroma_pred_mode, neighbours)
+            };
+            let out = add_chroma_residual(pred, comp, mb, qpc);
+            let x0 = mb.mb_x * 8;
+            let y0 = mb.mb_y * 8;
+            for (i, row) in out.iter().enumerate() {
+                for (j, &v) in row.iter().enumerate() {
+                    buf.set_chroma_pixel(comp, x0 + j as u32, y0 + i as u32, v);
+                }
+            }
+        }
+        buf.mark_chroma_mb_decoded(mb.mb_x, mb.mb_y);
+    }
+
+    Ok(ReconstructedPicture {
+        luma: buf.luma,
+        cb: buf.cb,
+        cr: buf.cr,
+    })
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -577,6 +931,7 @@ mod tests {
             top: [0; 16],
             left_available: false,
             left: [0; 16],
+            corner: 0,
         }
     }
 
@@ -1012,6 +1367,60 @@ mod tests {
         }
     }
 
+    /// The same 25-frame, all-`Intra_4x4` corpus as
+    /// [`cabac_i_only_matches_ffmpeg_with_deblocking_skipped`], but
+    /// through [`decode_ip_stream_yuv`] (the same driver
+    /// [`crate::decoder::H264Decoder`] itself is built on) and checking
+    /// Y, U and V independently -- this crate's densest available
+    /// exercise of the chroma intra path (DC/Horizontal/Vertical/Plane,
+    /// real per-macroblock texture) against real, un-deblocked `ffmpeg`
+    /// output.
+    #[test]
+    fn cabac_i_only_chroma_matches_ffmpeg_per_plane_with_deblocking_skipped() {
+        let data: &[u8] = include_bytes!("../tests/fixtures/cabac_i_only.264");
+        let reference: &[u8] = include_bytes!("../tests/fixtures/cabac_i_only_nodeblock_ref.yuv");
+        let frames = decode_ip_stream_yuv(data);
+        assert_eq!(frames.len(), 25);
+        let (luma_len, chroma_len) = (64 * 64, 32 * 32);
+        let frame_stride = luma_len + 2 * chroma_len;
+        let mut mismatch = [0usize; 3];
+        let mut total = [0usize; 3];
+        for (idx, frame) in frames.iter().enumerate() {
+            let pic = frame
+                .as_ref()
+                .unwrap_or_else(|e| panic!("cabac_i_only frame {idx}: {e}"));
+            let base = idx * frame_stride;
+            let planes: [(&[u8], &[u8]); 3] = [
+                (&pic.luma, &reference[base..base + luma_len]),
+                (&pic.cb, &reference[base + luma_len..base + luma_len + chroma_len]),
+                (
+                    &pic.cr,
+                    &reference[base + luma_len + chroma_len..base + luma_len + 2 * chroma_len],
+                ),
+            ];
+            for (p, (ours, refp)) in planes.iter().enumerate() {
+                for (&a, &b) in ours.iter().zip(refp.iter()) {
+                    total[p] += 1;
+                    if a != b {
+                        mismatch[p] += 1;
+                    }
+                }
+            }
+        }
+        for (p, name) in ["Y", "Cb", "Cr"].iter().enumerate() {
+            let pct = if total[p] == 0 {
+                0.0
+            } else {
+                100.0 * (1.0 - mismatch[p] as f64 / total[p] as f64)
+            };
+            eprintln!(
+                "cabac_i_only (no deblock) plane {name}: {} / {} samples differ ({pct:.2}% match)",
+                mismatch[p], total[p]
+            );
+        }
+        assert_eq!(mismatch, [0, 0, 0], "byte-exact against ffmpeg -skip_loop_filter all, every plane");
+    }
+
     /// The same corpus against `ffmpeg`'s own real, deblocked decode --
     /// now exercising a real (scalar, luma-only, intra-only-`bS`) clause
     /// 8.7 deblocking filter ([`crate::deblock::deblock_picture_luma`],
@@ -1268,5 +1677,180 @@ mod tests {
         );
         assert_eq!(failed, 0, "every frame must decode without a hard error");
         assert_eq!(mismatch, 0, "byte-exact against ffmpeg -skip_loop_filter all");
+    }
+
+    /// [`decode_ip_stream_luma`]'s own sibling, driving [`reconstruct_picture`]
+    /// (the chroma-including entry point [`crate::decoder::H264Decoder`]
+    /// itself calls) instead of the luma-only pair -- exists so this
+    /// crate's own chroma composition (`predict_intra_chroma`,
+    /// `predict_chroma_inter`, the chroma residual add) gets the same
+    /// real-corpus, per-plane measurement discipline the luma path
+    /// already has, rather than shipping on the strength of unit tests
+    /// alone -- see `AGENT-CONSTRAINTS.md`'s "measuring one plane is not
+    /// measuring the output".
+    pub(super) fn decode_ip_stream_yuv(data: &[u8]) -> Vec<Result<ReconstructedPicture, String>> {
+        use vaco_bitstream::{BitReader, annexb};
+        use vaco_codec_cabac::CabacDecoder;
+        use vaco_format_nalu::RbspBuf;
+        use vaco_limits::{Budget, Limits};
+        use vaco_parse_h264::{H264NalHeader, NalUnitType, ParameterSets, SliceHeader, SliceKind};
+
+        let mut params = ParameterSets::new();
+        let mut budget = Budget::new(Limits::default());
+        let mut rbsp = RbspBuf::new();
+        let mut dpb: Vec<ReconstructedPicture> = Vec::new();
+        let mut frames = Vec::new();
+
+        for nal in annexb::nal_units(data) {
+            let Some(header) = H264NalHeader::parse(nal) else {
+                continue;
+            };
+            match header.nal_unit_type {
+                NalUnitType::Sps => {
+                    rbsp.fill(nal, &mut budget).unwrap();
+                    let _ = params.add_sps(rbsp.as_slice(), &mut budget);
+                }
+                NalUnitType::Pps => {
+                    rbsp.fill(nal, &mut budget).unwrap();
+                    let _ = params.add_pps(rbsp.as_slice(), &mut budget);
+                }
+                NalUnitType::IdrSlice | NalUnitType::NonIdrSlice => {
+                    rbsp.fill(nal, &mut budget).unwrap();
+                    let payload = rbsp.as_slice();
+                    let mut reader = BitReader::new(payload);
+                    reader.skip(8);
+                    let pps_id = {
+                        let mut r2 = BitReader::new(payload);
+                        r2.skip(8);
+                        let mut g = vaco_codec_golomb::BoundedGolomb::new(&mut r2, &mut budget);
+                        let _ = g.ue_v(u32::MAX).unwrap();
+                        let _ = g.ue_v(9).unwrap();
+                        g.ue_v(255).unwrap() as u8
+                    };
+                    let (pps, sps) = params.sps_for_pps(pps_id).unwrap();
+                    let slice_header =
+                        match SliceHeader::parse_data(&mut reader, header, sps, pps, &mut budget) {
+                            Ok(h) => h,
+                            Err(e) => {
+                                frames.push(Err(format!("slice header: {e:?}")));
+                                continue;
+                            }
+                        };
+                    let mbs_wide = sps.pic_width_in_mbs;
+                    let mbs_high =
+                        sps.pic_height_in_map_units * if sps.frame_mbs_only { 1 } else { 2 };
+                    let mut cabac = CabacDecoder::from_reader(reader);
+                    let result = crate::mb::decode_slice_cabac(
+                        &mut cabac,
+                        &mut budget,
+                        sps,
+                        pps,
+                        &slice_header,
+                    )
+                    .map_err(|e| format!("decode_slice_cabac failed: {e:?}"))
+                    .and_then(|stats| {
+                        if cabac.malformed() {
+                            return Err("CABAC engine reported malformed input".to_owned());
+                        }
+                        let ref_list0: Vec<RefPicturePlanes<'_>> = if slice_header.kind == SliceKind::I {
+                            Vec::new()
+                        } else {
+                            dpb.iter()
+                                .rev()
+                                .map(|p| RefPicturePlanes {
+                                    luma: &p.luma,
+                                    cb: &p.cb,
+                                    cr: &p.cr,
+                                })
+                                .collect()
+                        };
+                        reconstruct_picture(
+                            &stats.macroblocks,
+                            mbs_wide,
+                            mbs_high,
+                            pps.chroma_qp_index_offset,
+                            pps.second_chroma_qp_index_offset,
+                            &ref_list0,
+                        )
+                        .map_err(|e| format!("reconstruct_picture failed: {e:?}"))
+                    });
+                    match &result {
+                        Ok(pic) => dpb.push(pic.clone()),
+                        Err(_) => dpb.push(ReconstructedPicture {
+                            luma: vec![128u8; (mbs_wide * 16 * mbs_high * 16) as usize],
+                            cb: vec![128u8; (mbs_wide * 8 * mbs_high * 8) as usize],
+                            cr: vec![128u8; (mbs_wide * 8 * mbs_high * 8) as usize],
+                        }),
+                    }
+                    frames.push(result);
+                }
+                _ => {}
+            }
+        }
+        frames
+    }
+
+    /// [`cabac_ip_simple_decodes_and_reports_its_own_match_against_ffmpeg`]'s
+    /// own chroma measurement -- Y, U and V compared *separately* against
+    /// the same reference `.yuv` (already full 4:2:0 per
+    /// `frame_stride`'s own `2 * 32 * 32` chroma term, unused for chroma
+    /// until now), per `AGENT-CONSTRAINTS.md`'s "two chroma defects hid
+    /// behind correct luma" lesson.
+    #[test]
+    fn cabac_ip_simple_chroma_matches_ffmpeg_per_plane() {
+        let data: &[u8] = include_bytes!("../tests/fixtures/cabac_ip_simple.264");
+        let reference: &[u8] = include_bytes!("../tests/fixtures/cabac_ip_simple_ref.yuv");
+        let frames = decode_ip_stream_yuv(data);
+        let (luma_len, chroma_len) = (64 * 64, 32 * 32);
+        let frame_stride = luma_len + 2 * chroma_len;
+        let mut failed = 0usize;
+        let mut mismatch = [0usize; 3];
+        let mut total = [0usize; 3];
+        for (idx, frame) in frames.iter().enumerate() {
+            let Ok(pic) = frame else {
+                failed += 1;
+                eprintln!("cabac_ip_simple frame {idx}: {}", frame.as_ref().unwrap_err());
+                continue;
+            };
+            let base = idx * frame_stride;
+            let planes: [(&[u8], &[u8]); 3] = [
+                (&pic.luma, &reference[base..base + luma_len]),
+                (&pic.cb, &reference[base + luma_len..base + luma_len + chroma_len]),
+                (
+                    &pic.cr,
+                    &reference[base + luma_len + chroma_len..base + luma_len + 2 * chroma_len],
+                ),
+            ];
+            for (p, (ours, refp)) in planes.iter().enumerate() {
+                let mut frame_mismatch = 0usize;
+                for (&a, &b) in ours.iter().zip(refp.iter()) {
+                    total[p] += 1;
+                    if a != b {
+                        mismatch[p] += 1;
+                        frame_mismatch += 1;
+                    }
+                }
+                if frame_mismatch > 0 {
+                    eprintln!(
+                        "  frame {idx} plane {}: {frame_mismatch} / {} differ",
+                        ["Y", "Cb", "Cr"][p],
+                        ours.len()
+                    );
+                }
+            }
+        }
+        for (p, name) in ["Y", "Cb", "Cr"].iter().enumerate() {
+            let pct = if total[p] == 0 {
+                0.0
+            } else {
+                100.0 * (1.0 - mismatch[p] as f64 / total[p] as f64)
+            };
+            eprintln!(
+                "cabac_ip_simple plane {name}: {} / {} samples differ ({pct:.2}% match)",
+                mismatch[p], total[p]
+            );
+        }
+        assert_eq!(failed, 0, "every frame must decode without a hard error");
+        assert_eq!(mismatch, [0, 0, 0], "byte-exact against ffmpeg -skip_loop_filter all, every plane");
     }
 }

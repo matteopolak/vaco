@@ -6,13 +6,22 @@
 //!
 //! # What is implemented, and why not more
 //!
-//! `Intra_16x16` (clause 8.3.2): Vertical, Horizontal, DC. **Not Plane**
-//! (clause 8.3.2.4) -- deferred, not attempted incorrectly; it needs a
-//! weighted-sum-of-differences formula not yet reached.
+//! `Intra_16x16` (clause 8.3.2): Vertical, Horizontal, DC, and Plane
+//! (clause 8.3.2.4, transcribed and cross-checked directly against a
+//! primary text -- `provenance/sources.toml`'s
+//! `iso-iec-14496-10-2002-draft`, fetched and `pdftotext`-extracted for
+//! this -- rather than recalled, since a wrong constant here would be
+//! silent, not a compile error).
 //!
 //! Chroma (clause 8.3.3): DC, Horizontal, Vertical, all four 4x4
-//! quadrants' worth of clause 8.3.3.1's own case split for DC. **Not
-//! Plane** (clause 8.3.3.4), same reason.
+//! quadrants' worth of clause 8.3.3.1's own case split for DC, and Plane
+//! (clause 8.3.3.4, same source, same construction as luma's at chroma's
+//! own 8x8 size and constants).
+//!
+//! Both Plane modes need the corner sample `p[-1,-1]` -- eq. (8-80)/
+//! (8-81)'s and (8-102)/(8-103)'s own `x' == 7`/`y' == 3` boundary term
+//! reaches back to it -- so [`Neighbours16`]/[`NeighboursChroma`] each
+//! carry one, unlike every other mode here, which never reads it.
 //!
 //! `Intra_4x4` (clause 8.3.1): all nine prediction modes (clauses
 //! 8.3.1.2.1..8.3.1.2.9, Table 8-2) via a single unified `p[x, y]`
@@ -63,11 +72,21 @@ pub(crate) struct Neighbours16 {
     pub(crate) top: [u8; 16],
     pub(crate) left_available: bool,
     pub(crate) left: [u8; 16],
+    /// `p[-1, -1]`, needed only by Plane (eq. (8-80)/(8-81): the `x' == 7`/
+    /// `y' == 7` term of `H`/`V` lands exactly here) -- every other mode
+    /// this struct serves never reads it, so a caller that never selects
+    /// Plane may leave this `0` without consequence (it is provably
+    /// unread in that case, not merely unlikely to be).
+    pub(crate) corner: u8,
 }
 
 /// Clause 8.3.2, `Intra16x16PredMode` (Table 8-3): `0` Vertical, `1`
-/// Horizontal, `2` DC, `3` Plane (not implemented -- see module doc).
+/// Horizontal, `2` DC, `3` Plane (eq. (8-76)..(8-81)).
 #[must_use]
+#[allow(
+    clippy::many_single_char_names,
+    reason = "h/v/a/b/c/x/y mirror clause 8.3.2.4's own equation variable names (8-76)..(8-81)"
+)]
 pub(crate) fn predict_intra16x16(mode: u8, n: Neighbours16) -> [[u8; 16]; 16] {
     match mode {
         0 => {
@@ -84,6 +103,51 @@ pub(crate) fn predict_intra16x16(mode: u8, n: Neighbours16) -> [[u8; 16]; 16] {
             let mut out = [[0u8; 16]; 16];
             for (y, row) in out.iter_mut().enumerate() {
                 *row = [n.left.get(y).copied().unwrap_or(0); 16];
+            }
+            out
+        }
+        3 => {
+            // eq. (8-76)..(8-81): a single plane fit through the top and
+            // left neighbour rows -- `H`/`V` weighted sums of differences
+            // across the top row/left column (whose own `x' == 7`/
+            // `y' == 7` term reaches back to the corner sample `p[-1,-1]`,
+            // eq. (8-80)/(8-81)), `b`/`c` their per-sample slope in x/y,
+            // `a` eq. (8-77)'s `16 * (p[-1,15] + p[15,-1])`. Clause 8.3.2.4
+            // requires this mode is only ever selected when every one of
+            // these samples (including the corner) is already available,
+            // so no availability case split is needed here (unlike DC).
+            //
+            // `p_top`/`p_left` give the spec's own unified `p[x,-1]`/
+            // `p[-1,y]` addressing, including the `x == -1`/`y == -1`
+            // corner case -- the same shape `crate::intra`'s own `p4`
+            // helper already uses for `Intra_4x4`.
+            let p_top = |x: i32| -> i32 {
+                if x < 0 {
+                    i32::from(n.corner)
+                } else {
+                    usize::try_from(x).ok().and_then(|i| n.top.get(i)).copied().map_or(0, i32::from)
+                }
+            };
+            let p_left = |y: i32| -> i32 {
+                if y < 0 {
+                    i32::from(n.corner)
+                } else {
+                    usize::try_from(y).ok().and_then(|i| n.left.get(i)).copied().map_or(0, i32::from)
+                }
+            };
+            let h: i32 = (0i32..8).map(|x_prime| (x_prime + 1) * (p_top(8 + x_prime) - p_top(6 - x_prime))).sum();
+            let v: i32 = (0i32..8).map(|y_prime| (y_prime + 1) * (p_left(8 + y_prime) - p_left(6 - y_prime))).sum();
+            let a = 16 * (p_left(15) + p_top(15));
+            let b = (5 * h + 32) >> 6;
+            let c = (5 * v + 32) >> 6;
+            let mut out = [[0u8; 16]; 16];
+            for (y, row) in out.iter_mut().enumerate() {
+                for (x, v_out) in row.iter_mut().enumerate() {
+                    let x = i32::try_from(x).unwrap_or(0);
+                    let y = i32::try_from(y).unwrap_or(0);
+                    let sum = a + b * (x - 7) + c * (y - 7) + 16;
+                    *v_out = (sum >> 5).clamp(0, 255) as u8;
+                }
             }
             out
         }
@@ -117,12 +181,20 @@ pub(crate) struct NeighboursChroma {
     pub(crate) top: [u8; 8],
     pub(crate) left_available: bool,
     pub(crate) left: [u8; 8],
+    /// `p[-1, -1]`, needed only by Plane (eq. (8-102)/(8-103): the
+    /// `x' == 3`/`y' == 3` term of `H`/`V` lands exactly here) -- the
+    /// same role [`Neighbours16::corner`] plays for luma.
+    pub(crate) corner: u8,
 }
 
 /// Clause 8.3.3, chroma prediction mode (Table 8-4, same numbering as
 /// luma's `Intra16x16PredMode`): `0` DC, `1` Horizontal, `2` Vertical,
-/// `3` Plane (not implemented).
+/// `3` Plane (eq. (8-98)..(8-103)).
 #[must_use]
+#[allow(
+    clippy::many_single_char_names,
+    reason = "h/v/a/b/c/x/y mirror clause 8.3.3.4's own equation variable names (8-98)..(8-103)"
+)]
 pub(crate) fn predict_intra_chroma(mode: u8, n: NeighboursChroma) -> [[u8; 8]; 8] {
     match mode {
         1 => {
@@ -137,6 +209,43 @@ pub(crate) fn predict_intra_chroma(mode: u8, n: NeighboursChroma) -> [[u8; 8]; 8
             // eq. (8-97): predC[x, y] = p[x, -1].
             let mut out = [[0u8; 8]; 8];
             out.fill(n.top);
+            out
+        }
+        3 => {
+            // eq. (8-98)..(8-103): the same construction as luma Plane
+            // (`predict_intra16x16`'s own `3 =>` arm) at chroma's own 8x8
+            // size and constants (17/16/5 in place of luma's 5/32/6) --
+            // `ChromaArrayType == 1` only, this crate's sole supported
+            // chroma format, so `xCF == yCF == 0` throughout and neither
+            // ever appears below.
+            let p_top = |x: i32| -> i32 {
+                if x < 0 {
+                    i32::from(n.corner)
+                } else {
+                    usize::try_from(x).ok().and_then(|i| n.top.get(i)).copied().map_or(0, i32::from)
+                }
+            };
+            let p_left = |y: i32| -> i32 {
+                if y < 0 {
+                    i32::from(n.corner)
+                } else {
+                    usize::try_from(y).ok().and_then(|i| n.left.get(i)).copied().map_or(0, i32::from)
+                }
+            };
+            let h: i32 = (0i32..4).map(|x_prime| (x_prime + 1) * (p_top(4 + x_prime) - p_top(2 - x_prime))).sum();
+            let v: i32 = (0i32..4).map(|y_prime| (y_prime + 1) * (p_left(4 + y_prime) - p_left(2 - y_prime))).sum();
+            let a = 16 * (p_left(7) + p_top(7));
+            let b = (17 * h + 16) >> 5;
+            let c = (17 * v + 16) >> 5;
+            let mut out = [[0u8; 8]; 8];
+            for (y, row) in out.iter_mut().enumerate() {
+                for (x, v_out) in row.iter_mut().enumerate() {
+                    let x = i32::try_from(x).unwrap_or(0);
+                    let y = i32::try_from(y).unwrap_or(0);
+                    let sum = a + b * (x - 3) + c * (y - 3) + 16;
+                    *v_out = (sum >> 5).clamp(0, 255) as u8;
+                }
+            }
             out
         }
         _ => {
@@ -514,6 +623,7 @@ mod tests {
             top: [0; 16],
             left_available: false,
             left: [0; 16],
+            corner: 0,
         }
     }
 
@@ -523,6 +633,7 @@ mod tests {
             top: [0; 8],
             left_available: false,
             left: [0; 8],
+            corner: 0,
         }
     }
 
@@ -573,6 +684,7 @@ mod tests {
             top: [0, 0, 0, 0, 8, 8, 8, 8],
             left_available: true,
             left: [4, 4, 4, 4, 4, 4, 4, 4],
+            corner: 0,
         };
         let out = predict_intra_chroma(0, n);
         // Top-right quadrant (columns 4..7, rows 0..3): averages top1
@@ -589,6 +701,7 @@ mod tests {
             top: [4; 16],
             left_available: true,
             left: [4; 16],
+            corner: 0,
         };
         let out = predict_intra16x16(2, n);
         assert!(out.iter().all(|row| row.iter().all(|&v| v == 4)));

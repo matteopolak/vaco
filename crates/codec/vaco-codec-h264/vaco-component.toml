@@ -9,13 +9,14 @@
 # are set here together, and the feature name matches epic #51's own title:
 # `patent-encumbered-h264-decode`.
 #
-# Registered even though `vaco-codec-h264` does not yet reconstruct a
-# single sample: T3-01d/#417 (CAVLC) and T3-01e/#418 (CABAC) land the
-# residual-block entropy decode only. `H264Decoder::send_packet` resolves a
-# slice's entropy mode and then returns `Error::Unsupported` for the
-# macroblock layer (#419 onward) that is not implemented yet — never
-# fabricated pixels, mirroring how this workspace already treats
-# `vaco-codec-aac` and `vaco-codec-mpegaudio`'s MPEG-2.5 gate.
+# `H264Decoder::send_packet` decodes real CABAC I/P slices end to end
+# (macroblock layer, prediction, transform, motion compensation, luma
+# deblocking, chroma) and `receive_frame` returns real `yuv420p` frames —
+# see `crate::decoder`'s own module doc for exactly what that covers and
+# what it still refuses honestly (CAVLC, B slices, MBAFF, the 8x8
+# transform, multi-slice pictures). `default = false` stays exactly as-is
+# regardless: this is still `encumbered = true` decoding under D4/D4.1,
+# whether or not it produces a single sample.
 
 [[component]]
 kind      = "decoder"

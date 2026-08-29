@@ -19,12 +19,13 @@ vaco-codec-dsp-idct = { path = "../../signal/vaco-codec-dsp-idct" }
 vaco-codec-dsp-deblock = { path = "../../signal/vaco-codec-dsp-deblock" }
 vaco-codec-dsp-intrapred = { path = "../../signal/vaco-codec-dsp-intrapred" }
 vaco-frame = { path = "../../model/vaco-frame" }
+vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
 vaco-packet = { path = "../../model/vaco-packet" }
 vaco-parse-h264 = { path = "../vaco-parse-h264" }
+vaco-format-nalu = { path = "../../format/vaco-format-nalu" }
 
 [dev-dependencies]
 proptest.workspace = true
-vaco-format-nalu = { path = "../../format/vaco-format-nalu" }
 
 [lints]
 workspace = true

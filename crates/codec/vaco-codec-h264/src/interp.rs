@@ -1,8 +1,20 @@
 //! Clause 8.4.2.2.1's luma quarter-sample interpolation: the six-tap FIR
 //! for half-sample positions, and simple averaging for quarter-sample
-//! ones. Chroma (clause 8.4.2.2.2, bilinear) is out of scope for now --
-//! `crate::reconstruct::PictureBuffer` does not store chroma samples at
-//! all yet, a pre-existing gap this module does not need to touch.
+//! ones. Plus [`chroma_mc_sample`], clause 8.4.2.2.2's bilinear chroma
+//! interpolation -- one-eighth-chroma-sample positions rather than
+//! luma's quarter, and a plain 2-tap-per-axis bilinear filter rather
+//! than the six-tap FIR, since chroma has no half-sample stage of its
+//! own to interpolate through.
+//!
+//! Both transcribed and cross-checked directly against a primary text
+//! (`provenance/sources.toml`'s `iso-iec-14496-10-2002-draft`) rather
+//! than recalled: clause 8.4.1.4's own `mvCLX[0] = mvLX[0]` (eq.
+//! (8-174)/(8-175)) is easy to misremember as "multiply by 2" from its
+//! own prose sentence one line above the equation it explains -- the
+//! prose describes *why* no separate scaling step is needed (a
+//! quarter-luma-sample unit already equals an eighth-chroma-sample unit,
+//! since chroma has half the spatial resolution), not an operation to
+//! perform on top of the equation.
 //!
 //! # The naming
 //!
@@ -153,6 +165,42 @@ pub(crate) fn luma_qpel_sample<F: Fn(i32, i32) -> u8>(
     }
 }
 
+/// Clause 8.4.2.2.2, eq. (8-206)..(8-214): one interpolated chroma sample
+/// at chroma picture position `(x, y)` displaced by the chroma motion
+/// vector `(mv_x, mv_y)` -- `ChromaArrayType == 1` (frame macroblocks,
+/// this crate's only supported case), where clause 8.4.1.4's own eq.
+/// (8-174)/(8-175) make `mvCLX` numerically identical to the luma `mvLX`
+/// a caller already has (see this module's own doc for why no separate
+/// scaling step belongs here). `fetch` is `plane[y.clamp][x.clamp]`,
+/// wrapped by the caller exactly as [`luma_qpel_sample`]'s own `fetch`
+/// is -- eq. (8-206)..(8-213)'s own `Clip3(0, PicWidthInSamplesC - 1,
+/// ...)`/`Clip3(0, PicHeightInSamplesC - 1, ...)` edge clamping is what
+/// that wrapping applies.
+#[must_use]
+pub(crate) fn chroma_mc_sample<F: Fn(i32, i32) -> u8>(fetch: F, x: i32, y: i32, mv_x: i32, mv_y: i32) -> u8 {
+    // eq. (8-180)..(8-183), the xC/yC-relative half already folded into
+    // `x`/`y` by the caller: `xIntC`/`yIntC` is `x`/`y` plus the integer
+    // part of the eighth-sample motion vector, `xFracC`/`yFracC` its low
+    // three bits -- exact for a negative `mv_x`/`mv_y` too, since `>>` on
+    // a signed integer floors and `& 7` on two's complement always yields
+    // the true non-negative remainder.
+    let int_x = mv_x >> 3;
+    let frac_x = mv_x & 7;
+    let int_y = mv_y >> 3;
+    let frac_y = mv_y & 7;
+    let ax = x + int_x;
+    let ay = y + int_y;
+    let a = i32::from(fetch(ax, ay));
+    let b = i32::from(fetch(ax + 1, ay));
+    let c = i32::from(fetch(ax, ay + 1));
+    let d = i32::from(fetch(ax + 1, ay + 1));
+    let sum = (8 - frac_x) * (8 - frac_y) * a
+        + frac_x * (8 - frac_y) * b
+        + (8 - frac_x) * frac_y * c
+        + frac_x * frac_y * d;
+    clip_u8((sum + 32) >> 6)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::integer_division, reason = "test code")]
 mod tests {
@@ -249,5 +297,58 @@ mod tests {
             (i32::from(b) - expected).abs() <= 1,
             "b={b} expected~={expected}"
         );
+    }
+
+    #[test]
+    fn chroma_flat_plane_interpolates_to_itself_at_every_eighth_pel_position() {
+        let fetch = |_x: i32, _y: i32| 200u8;
+        for mv_x in 0..8 {
+            for mv_y in 0..8 {
+                assert_eq!(
+                    chroma_mc_sample(fetch, 10, 10, mv_x, mv_y),
+                    200,
+                    "mv=({mv_x},{mv_y})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn chroma_integer_mv_is_a_pure_fetch() {
+        let fetch = |x: i32, y: i32| u8::try_from((x + y * 5).rem_euclid(256)).unwrap();
+        assert_eq!(chroma_mc_sample(fetch, 3, 4, 8, -16), fetch(4, 2));
+    }
+
+    #[test]
+    fn chroma_half_pel_both_axes_averages_all_four_neighbours() {
+        // xFracC = yFracC = 4 (half of 8): eq. (8-214) weights all four
+        // corners equally at 4*4 == 16 (of 64 total), i.e. a plain
+        // four-sample average.
+        let fetch = |x: i32, y: i32| -> u8 {
+            match (x, y) {
+                (1, 0) => 10,
+                (0, 1) => 20,
+                (1, 1) => 30,
+                _ => 0,
+            }
+        };
+        let got = chroma_mc_sample(fetch, 0, 0, 4, 4);
+        let expected = (10 + 20 + 30 + 2) / 4; // rounded average
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn chroma_negative_mv_floors_toward_negative_infinity() {
+        // mv_x = -1 must give int_x = -1, frac_x = 7 (not int_x = 0,
+        // frac_x = -1, which a truncating `/`/`%` would give) -- the same
+        // floor-division correctness luma's own `>>`/`&` already relies
+        // on, checked here for chroma's 3-bit fractional field. With
+        // int_x = -1, frac_x = 7 the sample is 7/8 of the way from
+        // x == -1 (A, weight 8/64) to x == 0 (B, weight 56/64), so the
+        // result lands close to B, not roughly in between as the wrong
+        // (int_x = 0, frac_x = -1) decomposition would produce.
+        let fetch = |x: i32, _y: i32| if x <= -1 { 0u8 } else { 255u8 };
+        let got = chroma_mc_sample(fetch, 0, 0, -1, 0);
+        assert!(got > 200, "got={got}, expected close to the x=0 sample (255)");
     }
 }

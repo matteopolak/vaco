@@ -38,12 +38,16 @@
 //! Prediction, motion compensation, transform and reconstruction remain
 //! #420 onward.
 //!
-//! [`H264Decoder::send_packet`] locates a slice header far enough to resolve
-//! `entropy_coding_mode_flag` and then returns
-//! [`vaco_core::Error::Unsupported`], honestly, the same choice
-//! `vaco-codec-aac` made for the gap between "configuration resolved" and
-//! "PCM produced" — [`mb::decode_slice_cavlc`] is not wired into it yet,
-//! since nothing it reads is kept beyond what bit consumption needs.
+//! **This is now stale for CABAC.** [`H264Decoder::send_packet`] used to
+//! stop at resolving `entropy_coding_mode_flag` and return
+//! [`vaco_core::Error::Unsupported`] unconditionally; it now drives real
+//! CABAC I/P slices all the way to a real `yuv420p` [`vaco_frame::Frame`]
+//! — [`decoder`]'s own module doc is the current, accurate account.
+//! [`mb::decode_slice_cavlc`] still is not wired to real reconstruction:
+//! unlike its CABAC sibling it discards every decoded coefficient and
+//! motion vector, keeping only what bit-consumption verification needs,
+//! so `H264Decoder` still refuses CAVLC honestly rather than attempting
+//! it — see [`decoder`]'s own doc for why that gap is not a quick fix.
 //!
 //! # Verification: what could be checked here, and what could not
 //!
