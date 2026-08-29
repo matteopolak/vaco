@@ -42,6 +42,19 @@ const DISTINCT: &[(&str, &str)] = &[
         "vaco-chlayout: an audio channel. vaco-conformance: a reporting channel.",
     ),
     (
+        "Candidate",
+        "vaco-codec-flac: a candidate encoder parameter set. vaco-mux-whip: a \
+         parsed RFC 8839 ICE candidate line (address/port/type to run a \
+         connectivity check against). No shared concept.",
+    ),
+    (
+        "Response",
+        "vaco-demux-rtsp: a parsed RTSP response. vaco-mux-whip: a parsed \
+         HTTP/1.1 response from its own minimal client (the WHIP POST/DELETE \
+         exchange). Both are \"an HTTP-shaped response\" in the loosest sense, \
+         but neither crate depends on the other's type or wire format.",
+    ),
+    (
         "State",
         "vaco-filter-adsp: a biquad's Direct Form I delay line (x1/x2/y1/y2). \
          vaco-protocol-http: reconnect attempt counting. Same word, no shared \
