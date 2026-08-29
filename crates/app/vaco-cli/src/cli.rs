@@ -13,14 +13,26 @@
 //! `vaco-cli-core` takes it as an injected [`AvOptionOracle`].
 //!
 //! [`Oracle`] answers it from **what this build actually contains**, which is
-//! the same rule the reference applies to itself. Today that is
-//! `FormatOptions` — `probesize`, `fflags`, `protocol_whitelist` and the rest —
-//! and nothing else, because there are no encoders, decoders or filters to ask.
-//! So `vaco -crf 20 …` reports `Unrecognized option 'crf'` where the reference
-//! accepts it. That is a real divergence, it is caused by the build's contents
-//! rather than by the parser, and it closes on its own as codecs land. The
-//! alternative — accepting every unknown name — makes `-qwrty 3` a silent
-//! no-op, which is worse in exactly the case a user needs help.
+//! the same rule the reference applies to itself. That was `FormatOptions` —
+//! `probesize`, `fflags`, `protocol_whitelist` and the rest — and nothing
+//! else for a long time, because there were no encoders with real options to
+//! ask. `-b`/`-qscale` never needed this at all: they are generic options in
+//! the reference's own `OptionDef` table (`crate::exec::codec_options_of`'s
+//! own doc), not `AVOption`s discovered by search, so they live in
+//! `vaco-cli-core`'s static option table instead. `vaco-codec-png`/`-tiff`/
+//! `-exr`/`-ffv1`/`-vp8` are the first encoders with real *private*
+//! `AVOption`-shaped options, and there is still no registry-wide reflection
+//! that would let this crate search them the way the reference searches
+//! every codec's `AVClass` — `Encoder::set_option` is a runtime "try this
+//! key" interface, not something a caller can list ahead of construction —
+//! so [`crate::exec::PRIVATE_ENCODER_OPTIONS`] is a hand-maintained mirror of
+//! exactly what those encoders implement, grown as their own `set_option`
+//! grows. `vaco -crf 20 …` still reports `Unrecognized option 'crf'` where
+//! the reference accepts it (no encoder here implements `crf`), which is a
+//! real, narrower divergence than before and still caused by the build's
+//! contents rather than by the parser. The alternative — accepting every
+//! unknown name — makes `-qwrty 3` a silent no-op, which is worse in exactly
+//! the case a user needs help.
 
 use std::ffi::OsStr;
 
@@ -43,6 +55,7 @@ pub struct Oracle;
 impl AvOptionOracle for Oracle {
     fn knows(&self, name: &str) -> bool {
         FormatOptions::default().schema().find(name).is_some()
+            || crate::exec::PRIVATE_ENCODER_OPTIONS.contains(&name)
     }
 }
 
@@ -440,9 +453,22 @@ mod tests {
         // `probesize` is a real `FormatOptions` field, so the oracle knows it.
         assert!(Oracle.knows("probesize"));
         assert!(Oracle.knows("protocol_whitelist"));
-        // No encoders in this build, so no `crf`. Divergence, documented.
+        // No encoder in this build implements `crf`. Divergence, documented.
         assert!(!Oracle.knows("crf"));
         assert!(!Oracle.knows("qwerty"));
+    }
+
+    /// Every name in [`crate::exec::PRIVATE_ENCODER_OPTIONS`] must be known
+    /// -- that list and this method are meant to stay in lockstep, and a
+    /// mismatch here is exactly the failure mode `codec_options_of`'s doc
+    /// warns about: a value resolved from the split option set with nowhere
+    /// to have come from, or an option the split stage rejects before
+    /// `codec_options_of` ever sees it.
+    #[test]
+    fn every_private_encoder_option_name_is_known() {
+        for name in crate::exec::PRIVATE_ENCODER_OPTIONS {
+            assert!(Oracle.knows(name), "Oracle does not know {name:?}");
+        }
     }
 
     #[test]

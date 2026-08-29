@@ -338,6 +338,62 @@ impl SendReceive for Ffv1Encoder {
     fn flush(&mut self) {
         self.machine.flush();
     }
+
+    /// `-coder` and `-slices`, the two `AVOption`s `ffmpeg -h encoder=ffv1`
+    /// exposes that this crate's fixed encoding shape can meaningfully
+    /// answer. Both are pure validation, not configuration: this encoder
+    /// always emits `coder_type = 1` (range coder, default state transition
+    /// table -- see the module docs' "Coder" coverage note) in exactly one
+    /// slice per frame, so there is nothing to switch. A value equal to what
+    /// the encoder already does is accepted; a value it cannot honour
+    /// (Golomb-Rice, a custom transition table, or more than one slice) is a
+    /// real [`Error::Option`] rather than a silent wrong-config -- the case
+    /// [`vaco_codec_core::Encoder::set_option`]'s own doc calls out. Every
+    /// other key is silently ignored, matching that same default.
+    ///
+    /// # Errors
+    /// [`Error::Option`] for a `coder`/`slices` value this encoder does not
+    /// implement, or one that does not parse.
+    fn set_option(&mut self, key: &str, value: &str) -> Result<()> {
+        match key {
+            "coder" => match value.trim() {
+                "-2" | "range_def" => Ok(()),
+                "0" | "rice" => Err(Error::Option {
+                    name: "coder".to_owned(),
+                    detail: "this encoder always emits the range coder (RFC 9043 \
+                             coder_type=1); Golomb-Rice output is not implemented"
+                        .to_owned(),
+                }),
+                "1" | "ac" | "2" | "range_tab" => Err(Error::Option {
+                    name: "coder".to_owned(),
+                    detail: "this encoder always uses the range coder's default state \
+                             transition table; a custom transition table is not implemented"
+                        .to_owned(),
+                }),
+                other => Err(Error::Option {
+                    name: "coder".to_owned(),
+                    detail: format!("unknown coder type: {other:?}"),
+                }),
+            },
+            "slices" => {
+                let n: i64 = value.trim().parse().map_err(|_| Error::Option {
+                    name: "slices".to_owned(),
+                    detail: format!("not an integer: {value:?}"),
+                })?;
+                if n == 0 || n == 1 {
+                    Ok(())
+                } else {
+                    Err(Error::Option {
+                        name: "slices".to_owned(),
+                        detail: format!(
+                            "this encoder always writes exactly one slice per frame; {n} is not supported"
+                        ),
+                    })
+                }
+            }
+            _ => Ok(()),
+        }
+    }
 }
 
 fn make_decoder(limits: Limits) -> Box<dyn vaco_codec_core::Decoder> {
@@ -454,5 +510,55 @@ mod tests {
         let mut budget = Budget::new(Limits::permissive());
         let pkt = Packet::from_slice(&mut budget, &[0, 0, 0]).expect("packet");
         assert!(dec.send(Some(&pkt)).is_err());
+    }
+
+    /// `-coder range_def` (and its numeric spelling `-2`) names exactly what
+    /// this encoder already does, so it must be accepted.
+    #[test]
+    fn set_option_coder_accepts_the_value_this_encoder_already_produces() {
+        let mut enc = Ffv1Encoder::new(Limits::permissive());
+        enc.set_option("coder", "range_def").expect("already the default");
+        enc.set_option("coder", "-2").expect("numeric spelling of the same value");
+    }
+
+    /// `-coder rice`/`-coder ac`/`-coder range_tab` all name a coder this
+    /// encoder cannot produce (Golomb-Rice, or a custom transition table);
+    /// silently ignoring them would be a wrong-config trap, so each must be
+    /// a real error instead.
+    #[test]
+    fn set_option_coder_rejects_values_this_encoder_cannot_produce() {
+        let mut enc = Ffv1Encoder::new(Limits::permissive());
+        for value in ["rice", "0", "ac", "1", "range_tab", "2"] {
+            assert!(
+                matches!(enc.set_option("coder", value), Err(Error::Option { .. })),
+                "expected coder={value:?} to be rejected"
+            );
+        }
+    }
+
+    /// `-slices 1` (and the auto-detect spelling `0`) is what this encoder
+    /// already writes; any other count cannot be honoured since this
+    /// encoder never splits a frame into more than one slice.
+    #[test]
+    fn set_option_slices_accepts_one_and_rejects_others() {
+        let mut enc = Ffv1Encoder::new(Limits::permissive());
+        enc.set_option("slices", "1").expect("already the default");
+        enc.set_option("slices", "0").expect("auto-detect, same result");
+        assert!(matches!(
+            enc.set_option("slices", "4"),
+            Err(Error::Option { .. })
+        ));
+        assert!(matches!(
+            enc.set_option("slices", "not-a-number"),
+            Err(Error::Option { .. })
+        ));
+    }
+
+    /// A key this encoder has no use for is a silent no-op, matching
+    /// `Encoder::set_option`'s own documented default.
+    #[test]
+    fn set_option_ignores_a_key_this_encoder_has_no_use_for() {
+        let mut enc = Ffv1Encoder::new(Limits::permissive());
+        enc.set_option("context", "1").expect("silently ignored");
     }
 }

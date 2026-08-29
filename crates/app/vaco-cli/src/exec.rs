@@ -987,10 +987,39 @@ fn codec_options_of(
             })?;
             opts.push(("qscale".to_owned(), q.to_string()));
         }
+        // Codec-private options this build's own encoders actually
+        // implement (vaco-codec-png's `pred`/`compression_level`,
+        // vaco-codec-tiff's `compression_algo`, vaco-codec-exr's
+        // `compression`, vaco-codec-ffv1's `coder`/`slices`), passed through
+        // as opaque strings -- unlike `-b`/`-q` above, none of these has its
+        // own CLI-side grammar to evaluate. Real ffmpeg resolves a name like
+        // this by searching every codec's `AVOption` class at split time;
+        // `crate::cli::Oracle::knows` is this build's hand-maintained mirror
+        // of that search for exactly this list, so a name has to be added in
+        // both places or the option never reaches the split stage at all.
+        for name in PRIVATE_ENCODER_OPTIONS {
+            if let Ok(Some(opt)) = group.stream_option(name, &ctx, idx) {
+                opts.push(((*name).to_owned(), value_str(opt)?));
+            }
+        }
         out_opts.push(opts);
     }
     Ok(out_opts)
 }
+
+/// Every codec-private `Encoder::set_option` key this build's own encoders
+/// recognise, shared between [`codec_options_of`] (which resolves a value
+/// for each) and [`crate::cli::Oracle::knows`] (which is what lets one past
+/// the split stage at all — see that function's own doc for why there is no
+/// registry-wide reflection to consult instead).
+pub(crate) const PRIVATE_ENCODER_OPTIONS: &[&str] = &[
+    "pred",
+    "compression_level",
+    "compression_algo",
+    "compression",
+    "coder",
+    "slices",
+];
 
 /// CL-20: `-vf`/`-af`/`-filter`, `-s`, `-aspect`, `-pix_fmt` for every stream
 /// in `streams` — resolved against the output's own stream list, the same
@@ -2044,6 +2073,29 @@ mod tests {
         };
         let resolved = check_codecs(&c, &o, &[s]).unwrap();
         assert_eq!(resolved, vec![StreamCodec::Encode("qoi")]);
+    }
+
+    #[test]
+    fn codec_options_of_passes_through_a_private_encoder_option_verbatim() {
+        // `-pred paeth` on a PNG output: unlike `-b`/`-q`, this has no CLI-side
+        // grammar of its own, so `codec_options_of` must hand the raw string
+        // straight to `Encoder::set_option` rather than evaluating it.
+        let (c, o) = out_of(&[
+            "-i", "a.png", "-c:v", "png", "-pred", "paeth", "-f", "image2", "-",
+        ]);
+        let streams = vec![OutStream {
+            source: StreamPick::demuxed(0, 0),
+            media: Some(MediaType::Video),
+            codec: StreamCodec::Encode("png"),
+            graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
+            force_key_frames: None,
+            codec_options: Vec::new(),
+        }];
+        let opts = codec_options_of(&c, &o, &streams).unwrap();
+        assert_eq!(
+            opts,
+            vec![vec![("pred".to_owned(), "paeth".to_owned())]]
+        );
     }
 
     #[test]
