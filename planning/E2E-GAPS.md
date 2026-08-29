@@ -97,3 +97,43 @@ bitstream-filter crates, two empty `FormatFlags` declarations, the Ogg/Theora
 extradata gap, the `.jls` extension gap. This list is the same class one level
 up: **the pieces work; the wiring between them does not.** Verification that
 drives internals directly cannot see any of it. Only running the binary can.
+
+## 6. Benchmark findings (2026-08-29, vaco vs ffmpeg)
+
+Three scenarios the owner named, measured with the real binaries.
+
+| Scenario | ffmpeg | vaco |
+|---|---|---|
+| mkv → mp4 stream copy (1080p, 5s) | 0.09s, 3,411,126 B | **0.06s**, 3,412,352 B |
+| 2160p → 1080p decode+scale+rawvideo | 0.35s, 233,280,000 B | exit 0, **0 bytes** |
+| H.264 → H.265 via `libx265` (1080p) | 3.53s, 2,409,789 B | `max_alloc_total limit exceeded` |
+
+**Stream copy is genuinely faster than ffmpeg.** That is the one path measured
+end to end on both sides, and vaco wins it.
+
+### 6a. H.264 SPS parsing fails at level 5.1
+
+Bisected by resolution, all Main profile, `-bf 0 -refs 1`, CABAC:
+
+| Resolution | Level | `vaco-probe` |
+|---|---|---|
+| 320×240 | 13 | `Main`, `yuv420p` |
+| 1280×720 | 31 | `Main`, `yuv420p` |
+| 1920×1080 | 40 | `Main`, `yuv420p` |
+| **3840×2160** | **51** | **`unknown`, `unknown`, `level=-99`** |
+
+The whole SPS parse fails, so `pix_fmt` is `none` and the decoder produces zero
+frames. `max_dimension` is not the cause — `permissive()` allows 65,536 and
+`strict()` allows 8,192, both well over 3840.
+
+**And it exits 0 having decoded nothing.** A run that produces no frames must
+not report success; that is what made this look like a fast benchmark result
+rather than a failure.
+
+### 6b. `max_alloc_total` exceeded on a 1080p transcode
+
+`vaco -i hd.mkv -an -c:v libx265 -f matroska out.mkv` on 1920×1080 hits the
+1 GiB `permissive()` ceiling. A 1080p yuv420p frame is ~3.1 MB, so a handful of
+DPB frames plus filter buffers should be nowhere near it. Either something
+retains every frame, or the budget is being charged for allocations that are
+freed.
