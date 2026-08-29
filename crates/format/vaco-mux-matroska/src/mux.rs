@@ -121,7 +121,7 @@
 //! indexed.
 
 use vaco_codec_core::{CodecId, CodecParameters};
-use vaco_core::{Error, MediaType, Rational, Result};
+use vaco_core::{Disposition, Error, MediaType, Rational, Result};
 use vaco_demux_matroska::ebml::schema as el;
 use vaco_format_core::metadata::MuxMetadata;
 use vaco_format_core::options::{FFlags, FormatOptions};
@@ -549,13 +549,15 @@ impl MatroskaMuxer {
     /// that order — see `docs/format/vaco-mux-matroska.md`).
     /// Child order matches the reference exactly (measured on both a
     /// reordered-video and a video+audio file, CONFORMANCE-FINDINGS 49):
-    /// `TrackNumber TrackUID FlagLacing Language CodecID TrackType
-    /// DefaultDuration Video MaxBlockAdditionID Void CodecPrivate` for a
-    /// video track, the same minus the four video-only fields for audio.
+    /// `TrackNumber TrackUID FlagLacing Language [disposition flags] CodecID
+    /// TrackType DefaultDuration Video MaxBlockAdditionID Void CodecPrivate`
+    /// for a video track, the same minus the four video-only fields for
+    /// audio. The disposition flags' own position (right after `Language`,
+    /// before `CodecID`) is separately measured — see their own comment.
     /// `Name`'s position is **not** measured — neither sample file used here
     /// sets a per-track title — so it stays where it always has, right
     /// after `FlagLacing`.
-    fn track_entry_bytes(t: &TrackOut, name: Option<&str>, language: &str) -> Vec<u8> {
+    fn track_entry_bytes(t: &TrackOut, name: Option<&str>, language: &str, disposition: Disposition) -> Vec<u8> {
         let mut body = write_uint(el::TRACKNUMBER, t.number);
         // Full 8-byte width, not the fewest octets `write_uint` would pick —
         // measured, the reference always writes `TrackUID` this way even
@@ -569,6 +571,41 @@ impl MatroskaMuxer {
             body.extend_from_slice(&write_string(el::NAME, name));
         }
         body.extend_from_slice(&write_string(el::LANGUAGE, language));
+        // `FlagDefault`/`FlagForced` position and omission rule are measured
+        // against `ffmpeg 8.1` (`-disposition:v default`, `forced`, and
+        // `default+forced`, compared byte-for-byte): RFC 9559 §5.1.4.1.9
+        // states `FlagDefault` defaults to 1, which is exactly why the
+        // reference omits the element when the bit *is* set and writes an
+        // explicit `0` only to override that implied default — the same
+        // reading this crate's own demuxer already takes (see
+        // `vaco-demux-matroska::demux`'s `flag_default` comment). Every
+        // other boolean flag here (`FlagForced` included) has an implied
+        // default of `0`, so the rule for those is the ordinary "omit unless
+        // set". The five beyond `FlagDefault`/`FlagForced` are placed in the
+        // same slot by symmetry with what this crate's own demuxer already
+        // reads (RFC 9559, Tier A), not independently re-measured one by one
+        // against the reference.
+        if !disposition.contains(Disposition::DEFAULT) {
+            body.extend_from_slice(&write_uint(el::FLAGDEFAULT, 0));
+        }
+        if disposition.contains(Disposition::FORCED) {
+            body.extend_from_slice(&write_uint(el::FLAGFORCED, 1));
+        }
+        if disposition.contains(Disposition::HEARING_IMPAIRED) {
+            body.extend_from_slice(&write_uint(el::FLAGHEARINGIMPAIRED, 1));
+        }
+        if disposition.contains(Disposition::VISUAL_IMPAIRED) {
+            body.extend_from_slice(&write_uint(el::FLAGVISUALIMPAIRED, 1));
+        }
+        if disposition.contains(Disposition::DESCRIPTIONS) {
+            body.extend_from_slice(&write_uint(el::FLAGTEXTDESCRIPTIONS, 1));
+        }
+        if disposition.contains(Disposition::ORIGINAL) {
+            body.extend_from_slice(&write_uint(el::FLAGORIGINAL, 1));
+        }
+        if disposition.contains(Disposition::COMMENT) {
+            body.extend_from_slice(&write_uint(el::FLAGCOMMENTARY, 1));
+        }
         body.extend_from_slice(&write_string(el::CODECID, t.codec_id));
         body.extend_from_slice(&write_uint(el::TRACKTYPE, if t.is_video { 1 } else { 2 }));
         if let Some(dur) = t.default_duration_ns {
@@ -650,7 +687,8 @@ impl MatroskaMuxer {
                 .iter()
                 .find(|(k, _)| k.eq_ignore_ascii_case("language"))
                 .map_or("und", |(_, v)| v.as_str());
-            body.extend_from_slice(&Self::track_entry_bytes(t, name, language));
+            let disposition = self.metadata.disposition_for_stream(stream_index);
+            body.extend_from_slice(&Self::track_entry_bytes(t, name, language, disposition));
         }
         write_element(el::TRACKS, &with_crc32(&body))
     }
@@ -1688,6 +1726,77 @@ mod tests {
                 .contains(&("title".to_owned(), "Chapter One".to_owned()))
         );
         assert_eq!(demux.chapters()[0].start.ticks(), Some(0));
+    }
+
+    /// `-disposition`'s two measured flags, round-tripped through this
+    /// crate's own demuxer. Measured against real `ffmpeg 8.1` output
+    /// (`-disposition:v default`, `forced`, `default+forced`, compared
+    /// byte-for-byte): `FlagDefault` is omitted when the bit is set (RFC
+    /// 9559 says 1 is the implied default) and written as an explicit `0`
+    /// otherwise; `FlagForced` is written only when set. This pins both
+    /// halves of that rule, plus one flag (`original`) not independently
+    /// byte-measured, only checked by symmetry with this crate's own
+    /// demuxer.
+    #[test]
+    fn disposition_round_trips_through_the_demuxer_per_the_measured_flagdefault_rule() {
+        use vaco_format_core::metadata::MuxMetadata;
+
+        let s = MemorySink::new();
+        let buf: SharedBytes = s.shared();
+        let mut mux = MatroskaMuxer::new_matroska(Box::new(s), &FormatOptions::default()).unwrap();
+        let idx = mux.add_stream(&h264_params()).unwrap();
+
+        let meta = MuxMetadata {
+            stream_disposition: vec![Disposition::FORCED.union(Disposition::ORIGINAL)],
+            ..MuxMetadata::default()
+        };
+        mux.set_metadata(&meta).unwrap();
+        mux.write_header().unwrap();
+        mux.write_packet(&pkt(idx, 0, true)).unwrap();
+        mux.write_trailer().unwrap();
+
+        let bytes = buf.snapshot();
+        let src: Box<dyn vaco_io::MediaSource> = Box::new(MemorySource::new(bytes));
+        let demux =
+            vaco_demux_matroska::MatroskaDemuxer::open(src, &NoParsers, &FormatOptions::default())
+                .unwrap();
+        let stream = &demux.streams()[0];
+        assert!(!stream.disposition.contains(Disposition::DEFAULT));
+        assert!(stream.disposition.contains(Disposition::FORCED));
+        assert!(stream.disposition.contains(Disposition::ORIGINAL));
+    }
+
+    #[test]
+    fn an_explicit_default_flag_is_written_as_the_implied_ebml_default_and_so_omitted() {
+        // The measured half that is easy to get backwards: asking for
+        // `default` explicitly must not force an explicit `FlagDefault=1`
+        // onto the wire, because RFC 9559 already implies 1 when the
+        // element is absent -- writing it anyway would still round-trip
+        // through this crate's own demuxer but would diverge from the
+        // reference byte-for-byte, exactly the class of difference `705779d`
+        // asks to be measured and reported rather than left undetected.
+        let disposition = Disposition::DEFAULT;
+        let name = None;
+        let track = TrackOut {
+            number: 1,
+            codec_id: "V_MPEG4/ISO/AVC",
+            is_video: true,
+            width: 32,
+            height: 32,
+            sample_rate: 0.0,
+            channels: 0,
+            bit_depth: None,
+            default_duration_ns: None,
+            field_order: vaco_codec_core::FieldOrder::Progressive,
+            chroma_location: vaco_color::ChromaLocation::Unspecified,
+            extradata: None,
+        };
+        let bytes = MatroskaMuxer::track_entry_bytes(&track, name, "und", disposition);
+        let needle = write_uint(el::FLAGDEFAULT, 0);
+        assert!(
+            !bytes.windows(needle.len()).any(|w| w == needle),
+            "FlagDefault=0 must not appear when the disposition's default bit is set"
+        );
     }
 
     /// `vaco-cli`'s scheduler drives a raw `dyn Muxer` and has no way to

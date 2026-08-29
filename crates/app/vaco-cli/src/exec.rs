@@ -94,7 +94,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use vaco_cli_core::{MatchCtx, MetadataSpecifier, StreamInfo};
-use vaco_core::{Error, MediaType, Result};
+use vaco_core::{Disposition, Error, MediaType, Result};
+use vaco_expr::Bindings;
 use vaco_format_core::flags::FormatFlags;
 use vaco_format_core::metadata::MuxMetadata;
 use vaco_format_core::{Muxer, Stream};
@@ -528,7 +529,112 @@ fn metadata_of(
         }
     }
 
+    // `-disposition[:stream_spec]`, resolved the same per-stream way
+    // `codec_options_of` resolves `-b`/`-q` (last match wins). The value
+    // lands on `MuxMetadata::stream_disposition` rather than on
+    // `vaco_format_core::StreamSpec`: `add_stream`/`add_stream_with` run
+    // before every `-disposition` occurrence for a stream is necessarily
+    // known, but `MuxMetadata` is not read until `MuxBuilder::open`, after
+    // every stream and every option on the command line exists.
+    let mut stream_disposition = vec![Disposition::empty(); streams.len()];
+    for (i, slot) in stream_disposition.iter_mut().enumerate() {
+        if let Ok(Some(opt)) = group.stream_option("disposition", &ctx, i as u32) {
+            let raw = value_str(opt)?;
+            *slot = eval_disposition(&raw).map_err(|e| {
+                Diagnostic::new(
+                    AvError::EINVAL,
+                    vec![format!("Error parsing option 'disposition' with value '{raw}': {e}")],
+                )
+            })?;
+        }
+    }
+    meta.stream_disposition = stream_disposition;
+
+    // `-program`, one `vaco_format_core::Program` per occurrence, in argv
+    // order — the same "collect every occurrence" shape `-attach` above
+    // uses, since a file may declare more than one. No muxer reads this yet
+    // (see `MuxMetadata::programs`'s own doc); parsed and validated here so
+    // a malformed value is a real, early diagnostic rather than a silent
+    // "unrecognized option" or a value with nowhere to land unchecked.
+    let mut programs = Vec::new();
+    for opt in &group.opts {
+        if opt.resolved().0 != "program" {
+            continue;
+        }
+        let raw = value_str(opt)?;
+        let mut program = parse_program(&raw).map_err(|e| {
+            Diagnostic::new(
+                AvError::EINVAL,
+                vec![format!("Error parsing option 'program' with value '{raw}': {e}")],
+            )
+        })?;
+        program.id = i64::try_from(programs.len()).unwrap_or(i64::MAX);
+        programs.push(program);
+    }
+    meta.programs = programs;
+
     Ok(meta)
+}
+
+/// Evaluate a `-disposition` value the way the reference does: through the
+/// same expression evaluator every numeric option uses, with every named
+/// flag (`"default"`, `"forced"`, …) bound to its bit value — not a `+`/`-`
+/// flag-list grammar of this crate's own invention. `vaco_core::Disposition`'s
+/// own module doc found this measured, not assumed: the reference's error
+/// message for an unknown name (`"Undefined constant or missing '('"`) is the
+/// expression evaluator's own, and `-disposition:v:0 DEFAULT` (wrong case) is
+/// rejected the same way `-crf` rejects an unknown identifier.
+///
+/// So `"default+original"` evaluates as plain arithmetic — `1.0 + 4.0` — and
+/// the result is truncated to the flag bits actually named, exactly as an
+/// `AVOption` of type `FLAGS` truncates the expression's float result.
+///
+/// # Errors
+/// The expression compiler's own message, naming what did not parse.
+fn eval_disposition(raw: &str) -> Result<Disposition, String> {
+    let names: Vec<&str> = Disposition::ALL.iter().map(|&(_, n)| n).collect();
+    let vars: Vec<f64> = Disposition::ALL.iter().map(|&(f, _)| f64::from(f.bits())).collect();
+    let expr = vaco_cli_core::value::Expression::compile_with("disposition", raw, &Bindings::new(&names))
+        .map_err(|e| e.to_string())?;
+    let bits = expr.eval(&vars);
+    Ok(Disposition::from_bits_truncate(bits.round() as i64 as u32))
+}
+
+/// Parse one `-program` occurrence's `title=string:st=number:...` grammar
+/// (measured, `ffmpeg -h full`: the argument placeholder names exactly these
+/// two fields plus a repeatable `st`). `id` is left at `0`; the caller
+/// numbers programs by declaration order, matching how nothing on this
+/// command line states an explicit program id otherwise.
+///
+/// `st=<n>` names an **output** stream position — the same indexing
+/// [`MuxMetadata::stream_tags`] uses — since a program groups the streams
+/// this file is actually writing.
+///
+/// # Errors
+/// A message naming the field that did not parse.
+fn parse_program(raw: &str) -> Result<vaco_format_core::Program, String> {
+    let mut program = vaco_format_core::Program::new(0);
+    for field in raw.split(':') {
+        if field.is_empty() {
+            continue;
+        }
+        let (key, value) = field
+            .split_once('=')
+            .ok_or_else(|| format!("expected key=value, got '{field}'"))?;
+        match key {
+            "title" => program.metadata.push(("title".to_owned(), value.to_owned())),
+            "program_num" => {
+                program.program_num =
+                    Some(value.parse::<i64>().map_err(|_| format!("invalid program_num '{value}'"))?);
+            }
+            "st" => {
+                let idx: u32 = value.parse().map_err(|_| format!("invalid stream index '{value}'"))?;
+                program.stream_indices.push(idx);
+            }
+            other => return Err(format!("unrecognized program field '{other}'")),
+        }
+    }
+    Ok(program)
 }
 
 /// `-metadata key=value` sets; `-metadata key=` (empty value) deletes —
@@ -1624,6 +1730,90 @@ mod tests {
                 .unwrap_or_else(vaco_format_core::Disposition::empty);
             assert_eq!(flag.bits(), other.bits(), "{name}");
         }
+    }
+
+    #[test]
+    fn disposition_expression_adds_named_bit_values() {
+        // Measured shape (`vaco_core::Disposition`'s own module doc): the
+        // reference resolves `-disposition` through its expression
+        // evaluator, so `"default+original"` is plain arithmetic on the two
+        // flags' bit values, not a `+`/`-` flag-list grammar.
+        let d = eval_disposition("default+original").unwrap();
+        assert!(d.contains(Disposition::DEFAULT));
+        assert!(d.contains(Disposition::ORIGINAL));
+        assert!(!d.contains(Disposition::FORCED));
+    }
+
+    #[test]
+    fn disposition_expression_numeric_literal_is_a_bitmask() {
+        let d = eval_disposition("0").unwrap();
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn disposition_expression_rejects_an_unknown_name() {
+        assert!(eval_disposition("nonesuch").is_err());
+    }
+
+    #[test]
+    fn disposition_expression_is_case_sensitive_like_the_reference() {
+        // vaco_core::Disposition's own doc: `DEFAULT`/`Default` are rejected,
+        // only `default` is a bound name.
+        assert!(eval_disposition("DEFAULT").is_err());
+    }
+
+    #[test]
+    fn program_grammar_collects_title_and_repeated_st() {
+        let p = parse_program("title=Commentary:st=0:st=2").unwrap();
+        assert_eq!(p.stream_indices, vec![0, 2]);
+        assert!(
+            p.metadata
+                .contains(&("title".to_owned(), "Commentary".to_owned()))
+        );
+    }
+
+    #[test]
+    fn program_grammar_rejects_an_unrecognized_field() {
+        assert!(parse_program("bogus=1").is_err());
+    }
+
+    #[test]
+    fn program_grammar_rejects_a_non_numeric_stream_index() {
+        assert!(parse_program("st=zz").is_err());
+    }
+
+    #[test]
+    fn cli_wires_disposition_and_program_into_mux_metadata() {
+        let (c, o) = out_of(&[
+            "-i",
+            "a.mkv",
+            "-map",
+            "0:v",
+            "-disposition:v",
+            "default+forced",
+            "-program",
+            "title=Main:st=0",
+            "out.mkv",
+        ]);
+        let streams = vec![OutStream {
+            source: StreamPick::Demuxed { file: 0, stream: 0 },
+            media: Some(MediaType::Video),
+            codec: StreamCodec::Copy,
+            graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
+            force_key_frames: None,
+            codec_options: Vec::new(),
+        }];
+        let meta = metadata_of(&c, &o, &streams).unwrap();
+        assert!(meta.disposition_for_stream(0).contains(Disposition::DEFAULT));
+        assert!(meta.disposition_for_stream(0).contains(Disposition::FORCED));
+        assert_eq!(meta.programs.len(), 1);
+        let program = meta.programs.first().unwrap();
+        assert_eq!(program.stream_indices, vec![0]);
+        assert!(
+            program
+                .metadata
+                .contains(&("title".to_owned(), "Main".to_owned()))
+        );
     }
 
     #[test]
