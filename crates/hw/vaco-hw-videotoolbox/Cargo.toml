@@ -1,0 +1,53 @@
+[package]
+name = "vaco-hw-videotoolbox"
+description = "VideoToolbox hardware decode, built against objc2-video-toolbox (D14.3 names this crate by family as a permitted OS-API binding for vaco-hw-*)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+vaco-core = { path = "../../core/vaco-core" }
+vaco-limits = { path = "../../core/vaco-limits" }
+vaco-frame = { path = "../../model/vaco-frame" }
+vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
+vaco-codec-core = { path = "../../signal/vaco-codec-core" }
+vaco-hw-core = { path = "../vaco-hw-core" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-video-toolbox = "0.3"
+objc2-core-media = "0.3"
+objc2-core-video = "0.3"
+objc2-core-foundation = "0.3"
+
+# D13: this crate needs `unsafe` to reach VideoToolbox at all, so it cannot
+# inherit the workspace's `unsafe_code = "forbid"` block (see that block's own
+# comment in the root Cargo.toml) — it declares its own copy of every other
+# workspace lint instead, so nothing but the one exception is relaxed.
+[lints.rust]
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+integer_division = "deny"
+undocumented_unsafe_blocks = "deny"
+disallowed_methods = "deny"
+module_name_repetitions = "allow"
+similar_names = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+too_many_lines = "allow"
+
+[package.metadata.vaco]
+layer = 9

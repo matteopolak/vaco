@@ -9,8 +9,8 @@ OS media API, and it stays `#![forbid(unsafe_code)]` — it is pure
 orchestration. A concrete backend (VideoToolbox, Vulkan Video, VA-API, D3D12,
 NVDEC) is a separate `vaco-hw-<backend>` crate that implements the traits
 here against real `unsafe` bindings; D13 is what permits `unsafe` in a
-`vaco-hw-*` crate and nowhere else. None of those backend crates exist yet —
-each needs a dependency decision (below) the crate owner has not made.
+`vaco-hw-*` crate and nowhere else. `vaco-hw-videotoolbox` is the first one —
+see `docs/hw/vaco-hw-videotoolbox.md`. The rest do not exist yet.
 
 ## What it is
 
@@ -66,25 +66,23 @@ be told.
 ## Configuration
 
 None. No feature flags, no env vars — the crate has no OS coupling to gate.
-Backend crates will each need their own `cfg(target_os = "...")` gating and,
-per D18, an entry in `xtask/src/wasm.rs`'s `NATIVE_ONLY` list once they
-actually depend on a platform binding crate.
+Backend crates gate their own platform coupling instead: `vaco-hw-videotoolbox`
+puts its `objc2-*` dependencies under a `[target.'cfg(target_os = "macos")']`
+table rather than behind a Cargo feature, so a non-macOS build (including
+`wasm32-unknown-unknown`, confirmed via `cargo check --target
+wasm32-unknown-unknown`) never pulls them in and needs no
+`xtask/src/wasm.rs` `NATIVE_ONLY` entry at all.
 
 ## Dependencies
 
 `vaco-core`, `vaco-limits`, `vaco-frame`, `vaco-pixfmt`, `vaco-codec-core` —
-all already-workspace crates. No new external dependency. The backend crates
-this one is designed to be extended by each need one, and none has been
-approved yet:
+all already-workspace crates. No new external dependency in this crate
+itself. Backend crates each bring their own:
 
-| Backend | Candidate crate | Licence | Notes |
+| Backend | Candidate crate | Licence | Status |
 |---|---|---|---|
-| VideoToolbox | `objc2-video-toolbox` | MIT | Actively maintained (objc2 project); only path to Apple's media engine, since MoltenVK does not implement Vulkan Video. |
-| Vulkan Video | `ash` | MIT OR Apache-2.0 | Pure-Rust Vulkan bindings; widest single-API reach (Linux/Windows/Android). D13's "best single investment". |
-| D3D12 Video | `windows` (Microsoft) | MIT OR Apache-2.0 | Optional per D13 — only worth adding if Vulkan Video proves insufficient on Windows. |
-| VA-API | none identified | — | D13: "only if Vulkan Video proves insufficient in practice. Prefer not to." |
-| NVDEC/NVENC | none identified | — | Needs a CUDA/NVIDIA Video Codec SDK binding; no vetted pure-Rust crate found in the dependency register. |
-
-None of these are in `planning/research/09-dependency-licence-register.md`
-today. Adding one is a D10/D11 decision for the repository owner, not
-something a crate owner adds unilaterally.
+| VideoToolbox | `objc2-video-toolbox` + siblings | Zlib/Apache-2.0/MIT | **Adopted**, `vaco-hw-videotoolbox` — see `docs/hw/vaco-hw-videotoolbox.md` and `docs/dependencies.md`. D14.3 names this crate family by name as permitted inside `vaco-hw-*`. |
+| Vulkan Video | `ash` | MIT OR Apache-2.0 | Permitted by the same D14.3 naming; not yet built (untestable on this host — no Vulkan Video driver path on macOS). |
+| D3D12 Video | `windows` (Microsoft) | MIT OR Apache-2.0 | Permitted by the same D14.3 naming; not yet built (D13 marks it optional pending a Vulkan-Video-on-Windows comparison, and it is untestable on this host regardless). |
+| VA-API | none identified | — | D13: "only if Vulkan Video proves insufficient in practice. Prefer not to." Not evaluated. |
+| NVDEC/NVENC | none identified | — | Needs a CUDA/NVIDIA Video Codec SDK binding; the one wrapper crate found (`nvidia-video-codec-sdk`) binds NVIDIA's proprietary SDK headers, which is a separate licence question from the wrapper's own MIT — not evaluated. |
