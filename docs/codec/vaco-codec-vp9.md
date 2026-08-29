@@ -6,8 +6,8 @@ switchable sub-pel interpolation, and §8.8's in-loop deblocking filter, so
 lossy content decodes bit-exactly rather than within a filter-shaped
 tolerance. Builds on `vaco-codec-msac` (the shared VP8/VP9 boolean entropy
 engine) and `vaco-codec-dsp-idct` (the shared DCT/ADST/WHT transform math).
-Profiles 1-3 and threading remain out of scope — see "What is deliberately
-not here" below.
+Profiles 1-3 (4:2:2/4:4:0/4:4:4 chroma, 10/12-bit) are handled; threading
+remains out of scope — see "What is deliberately not here" below.
 
 ## What it is
 
@@ -53,12 +53,23 @@ VP9's DCT/ADST family almost exactly.
 
 ### What is deliberately not here
 
-**Profiles 1-3, threading (the rest of epic #32).** §8.8's in-loop
-deblocking filter is now applied (C-32a) — see "How it works" and
-"Verification" below. Profiles 1/3 (independent chroma subsampling, more
-pixel format combinations) and 2/3 (10/12-bit) are parsed for totality but
-not exercised by any fixture this crate's scope can reach; multi-tile-column
-decode has a known `AvailL` simplification (see `planning/TECH-DEBT.md`).
+**Threading (the rest of epic #32).** §8.8's in-loop deblocking filter is
+now applied (C-32a) — see "How it works" and "Verification" below.
+Profiles 1-3 (C-32b, #327) are now handled — see the "Profiles 1-3" entry
+under "Verification" below — but multi-tile-column decode still has a
+known `AvailL` simplification (see `planning/TECH-DEBT.md`).
+
+**Backward probability adaptation (§8.3/8.4) is not implemented, and this
+is a real, measured problem for any non-frame-parallel stream, not a
+theoretical one.** Every fixture in the differential table below used
+`ffmpeg -c:v libvpx-vp9` settings that happen to produce
+`frame_parallel_decoding_mode=true` throughout, which is exactly the
+condition under which §8.4 adaptation is *skipped* by spec — so this
+corpus is structurally unable to exercise the gap. A plain official libvpx
+conformance vector (`vp90-2-00-quantizer-00.webm`, profile 0,
+`frame_parallel_decoding_mode=false`) decodes its second frame with 93% of
+bytes wrong against `ffmpeg`'s own output. See `planning/TECH-DEBT.md` for
+the measurement and what implementing §8.3/8.4 needs.
 
 **A pre-existing, unrelated decode bug in lossy content with extreme or
 smoothly-varying coefficient values (§8.6's dequantization / §6.4.24's
@@ -302,12 +313,20 @@ independently rather than sharing it.
   `loop_filter_mode_deltas` persist, and those already flow through
   `LoopFilterParams`, which the frame header machinery threads
   frame-to-frame).
-- **Extending to profiles 1-3:** `header::color_config` already parses
-  profile-dependent subsampling and 10/12-bit `bit_depth`; `pic_to_frame`'s
-  pixel-format match already has stub arms for `yuv422p`/`yuv444p`/`yuv440p`
-  and their `Nle` variants. The gap is entirely in `predict`/`transform`
-  never having been exercised at those bit depths or subsampling ratios,
-  not in missing syntax.
+- **Profiles 1-3 (done, #327):** `header::color_config` parses
+  profile-dependent subsampling and 10/12-bit `bit_depth`, and
+  `pic_to_frame`'s pixel-format match has arms for `yuv422p`/`yuv444p`/
+  `yuv440p` and their `Nle` variants. `predict`/`transform`/`loopfilter`/
+  `interpredict`/`framebuf` turned out to already be generic over bit
+  depth and independent x/y subsampling. The one real gap was
+  `header::parse_uncompressed_header` defaulting every frame that does not
+  itself call `color_config()` (every regular inter frame) to a hardcoded
+  4:2:0/8-bit literal instead of carrying the sequence's established value
+  forward — invisible on a single key frame, which is exactly the shape
+  the pre-#327 fixture corpus had for any profile above 0. If a future
+  profile/format extension shows up as wrong only from the second frame
+  on, suspect the same pattern: something read from the bitstream on some
+  frame kinds and silently defaulted on others.
 - **Gotcha:** any new forward-updated probability table must go through
   `header::diff_update_prob`/`inv_remap_prob` — see the bug above before
   touching either.
@@ -439,6 +458,18 @@ Dev-only: `proptest`. No external runtime dependencies.
     for the one genuine ambiguity found in the level-derivation text, which
     did not require a behavioural change) and the resulting corpus passed
     without any filter-order or level-derivation defect surfacing.
+
+  **Profiles 1-3 (#327):** the official libvpx conformance vectors
+  `vp91-2-04-yuv422/-yuv440/-yuv444.webm` (profile 1, 8-bit) and
+  `vp92-2-20-{10,12}bit-yuv420.webm` / `vp93-2-20-{10,12}bit-yuv444.webm`
+  (profile 2/3, 10/12-bit) all decode their key frames byte-exact against
+  `ffmpeg`. Every row above this one is single-key-frame or
+  `frame_parallel_decoding_mode=true` content, so for real multi-frame
+  coverage: eight `-frame-parallel 1 -error-resilient max` `libvpx-vp9`
+  encodes, one per profile/subsampling/bit-depth combination in scope
+  (4:2:0/4:2:2/4:4:0/4:4:4 x 8/10/12-bit), decode every frame — Y, U, V
+  measured separately — byte-exact. `-frame-parallel 1` avoids the
+  backward-adaptation gap below; it is not a per-profile concern.
 
   Fifteen consecutive frames of a genuine key-then-inter GOP — 14 real
   motion-compensated frames — reconstruct byte-for-byte identical to

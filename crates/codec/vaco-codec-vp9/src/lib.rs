@@ -14,8 +14,15 @@
 //! C-32a lands §8.8's in-loop deblocking filter (`crate::loopfilter`): lossy
 //! VP9 content now decodes bit-exactly rather than within a loop-filter
 //! tolerance — see `crate::loopfilter`'s module doc and
-//! `docs/codec/vaco-codec-vp9.md`'s Verification table. Profiles 1-3 and
-//! threading (the rest of epic #32) remain explicitly out of scope.
+//! `docs/codec/vaco-codec-vp9.md`'s Verification table.
+//!
+//! Profiles 1-3 (#327, C-32b) are handled: `predict`/`transform`/
+//! `loopfilter`/`interpredict`/`framebuf` were already generic over bit
+//! depth and independent x/y chroma subsampling, and the one real gap
+//! (`header::parse_uncompressed_header` resetting to a hardcoded 4:2:0
+//! 8-bit `ColorConfig` on every frame that does not itself re-signal one)
+//! is fixed — see that module's doc. Threading (the rest of epic #32)
+//! remains explicitly out of scope.
 //!
 //! `crate::encode` (issue #329, C-33a) adds this crate's first encoder: a
 //! real, spec-conformant all-intra key-frame bitstream writer with no
