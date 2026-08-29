@@ -3600,6 +3600,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "codec-simple-audio")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "comfortnoise",
+        long_name: Some("RFC 3389 Comfort Noise"),
+        krate: "vaco-codec-simple-audio",
+        feature: Some("codec-simple-audio"),
+        media: Some("audio"),
+        codec: Some("comfortnoise"),
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "codec-subtitle-bitmap")]
     crate::Component {
         kind: crate::Kind::Decoder,
@@ -4168,6 +4180,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "codec-simple-audio")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "qoa",
+        long_name: Some("QOA (Quite OK Audio)"),
+        krate: "vaco-codec-simple-audio",
+        feature: Some("codec-simple-audio"),
+        media: Some("audio"),
+        codec: Some("qoa"),
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "codec-qoi")]
     crate::Component {
         kind: crate::Kind::Decoder,
@@ -4237,6 +4261,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         feature: Some("codec-image-simple"),
         media: Some("video"),
         codec: Some("targa"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-theora")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "theora",
+        long_name: Some("Theora"),
+        krate: "vaco-codec-theora",
+        feature: Some("codec-theora"),
+        media: Some("video"),
+        codec: Some("theora"),
         extensions: &[],
         mime_types: &[],
     },
@@ -4318,7 +4354,7 @@ pub static COMPONENTS: &[crate::Component] = &[
     crate::Component {
         kind: crate::Kind::Decoder,
         name: "webp",
-        long_name: Some("WebP, wrapping the `image-webp` crate (D11)"),
+        long_name: Some("WebP: native VP8L lossless, `image-webp` fallback for VP8X-wrapped files"),
         krate: "vaco-codec-webp",
         feature: Some("codec-webp"),
         media: Some("video"),
@@ -4479,6 +4515,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         feature: Some("codec-image-simple"),
         media: Some("video"),
         codec: Some("bmp"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-simple-audio")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "comfortnoise",
+        long_name: Some("RFC 3389 Comfort Noise"),
+        krate: "vaco-codec-simple-audio",
+        feature: Some("codec-simple-audio"),
+        media: Some("audio"),
+        codec: Some("comfortnoise"),
         extensions: &[],
         mime_types: &[],
     },
@@ -4892,6 +4940,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "codec-simple-audio")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "qoa",
+        long_name: Some("QOA (Quite OK Audio)"),
+        krate: "vaco-codec-simple-audio",
+        feature: Some("codec-simple-audio"),
+        media: Some("audio"),
+        codec: Some("qoa"),
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "codec-qoi")]
     crate::Component {
         kind: crate::Kind::Encoder,
@@ -5044,7 +5104,9 @@ pub static COMPONENTS: &[crate::Component] = &[
     crate::Component {
         kind: crate::Kind::Encoder,
         name: "webp",
-        long_name: Some("WebP (lossless only), wrapping the `image-webp` crate (D11)"),
+        long_name: Some(
+            "WebP: native VP8L lossless by default, lossy via vaco-codec-vp8 (-lossless 0)",
+        ),
         krate: "vaco-codec-webp",
         feature: Some("codec-webp"),
         media: Some("video"),
@@ -6645,6 +6707,17 @@ pub static COMPONENTS: &[crate::Component] = &[
     },
     crate::Component {
         kind: crate::Kind::Filter,
+        name: "deshake",
+        long_name: Some("Stabilize shaky video."),
+        krate: "vaco-filter-motion",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
         name: "detelecine",
         long_name: Some("Apply an inverse telecine pattern."),
         krate: "vaco-filter-deinterlace",
@@ -6771,6 +6844,17 @@ pub static COMPONENTS: &[crate::Component] = &[
         krate: "vaco-filter-aanalysis",
         feature: None,
         media: Some("audio"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "elbg",
+        long_name: Some("Apply posterize effect, using the ELBG algorithm."),
+        krate: "vaco-filter-palette",
+        feature: None,
+        media: Some("video"),
         codec: None,
         extensions: &[],
         mime_types: &[],
@@ -6988,9 +7072,9 @@ pub static COMPONENTS: &[crate::Component] = &[
         kind: crate::Kind::Filter,
         name: "framerate",
         long_name: Some(
-            "Upsamples or downsamples progressive source between specified frame rates",
+            "Upsamples or downsamples progressive source between specified frame rates.",
         ),
-        krate: "vaco-filter-video-format",
+        krate: "vaco-filter-motion",
         feature: None,
         media: Some("video"),
         codec: None,
@@ -7741,6 +7825,28 @@ pub static COMPONENTS: &[crate::Component] = &[
         name: "pal75bars",
         long_name: Some("generate PAL 75% color bars"),
         krate: "vaco-filter-video-source",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "palettegen",
+        long_name: Some("Find the optimal palette for a given stream."),
+        krate: "vaco-filter-palette",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "paletteuse",
+        long_name: Some("Use a palette to downsample an input video stream."),
+        krate: "vaco-filter-palette",
         feature: None,
         media: Some("video"),
         codec: None,
@@ -10071,6 +10177,8 @@ pub static DECODERS: &[&::vaco_codec_core::DecoderDesc] = &[
     &::vaco_codec_rawvideo::BITPACKED_DECODER,
     #[cfg(feature = "codec-image-simple")]
     &::vaco_codec_image_simple::BMP_DECODER,
+    #[cfg(feature = "codec-simple-audio")]
+    &::vaco_codec_simple_audio::COMFORTNOISE_DECODER,
     #[cfg(feature = "codec-subtitle-bitmap")]
     &::vaco_codec_subtitle_bitmap::decoder::DVBSUB_DECODER,
     #[cfg(feature = "codec-subtitle-bitmap")]
@@ -10165,6 +10273,8 @@ pub static DECODERS: &[&::vaco_codec_core::DecoderDesc] = &[
     &::vaco_codec_png::PNG_DECODER,
     #[cfg(feature = "codec-pnm")]
     &::vaco_codec_pnm::PPM_DECODER,
+    #[cfg(feature = "codec-simple-audio")]
+    &::vaco_codec_simple_audio::QOA_DECODER,
     #[cfg(feature = "codec-qoi")]
     &::vaco_codec_qoi::QOI_DECODER,
     #[cfg(feature = "codec-rawvideo")]
@@ -10177,6 +10287,8 @@ pub static DECODERS: &[&::vaco_codec_core::DecoderDesc] = &[
     &::vaco_codec_image_simple::SGI_DECODER,
     #[cfg(feature = "codec-image-simple")]
     &::vaco_codec_image_simple::TGA_DECODER,
+    #[cfg(feature = "codec-theora")]
+    &::vaco_codec_theora::DECODER_THEORA,
     #[cfg(feature = "codec-tiff")]
     &::vaco_codec_tiff::TIFF_DECODER,
     #[cfg(feature = "codec-rawvideo")]
@@ -10221,6 +10333,8 @@ pub static ENCODERS: &[&::vaco_codec_core::EncoderDesc] = &[
     &::vaco_codec_rawvideo::BITPACKED_ENCODER,
     #[cfg(feature = "codec-image-simple")]
     &::vaco_codec_image_simple::BMP_ENCODER,
+    #[cfg(feature = "codec-simple-audio")]
+    &::vaco_codec_simple_audio::COMFORTNOISE_ENCODER,
     #[cfg(feature = "codec-exr")]
     &::vaco_codec_exr::EXR_ENCODER,
     #[cfg(feature = "codec-ffv1")]
@@ -10289,6 +10403,8 @@ pub static ENCODERS: &[&::vaco_codec_core::EncoderDesc] = &[
     &::vaco_codec_png::PNG_ENCODER,
     #[cfg(feature = "codec-pnm")]
     &::vaco_codec_pnm::PPM_ENCODER,
+    #[cfg(feature = "codec-simple-audio")]
+    &::vaco_codec_simple_audio::QOA_ENCODER,
     #[cfg(feature = "codec-qoi")]
     &::vaco_codec_qoi::QOI_ENCODER,
     #[cfg(feature = "codec-rawvideo")]
@@ -10492,6 +10608,7 @@ pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[
     &::vaco_filter_temporal::deflicker::DESC,
     &::vaco_filter_temporal::dejudder::DESC,
     &::vaco_filter_artistic::delogo::DESC,
+    &::vaco_filter_motion::deshake::DESC,
     &::vaco_filter_deinterlace::detelecine::DESC,
     &::vaco_filter_aeffects::dialoguenhance::DESC,
     &::vaco_filter_convolve::dilation::DESC,
@@ -10504,6 +10621,7 @@ pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[
     &::vaco_filter_adynamics::dynaudnorm::DESC,
     &::vaco_filter_aeffects::earwax::DESC,
     &::vaco_filter_aanalysis::ebur128::DESC,
+    &::vaco_filter_palette::elbg::DESC,
     &::vaco_filter_analysis::entropy::DESC,
     &::vaco_filter_artistic::epx::DESC,
     &::vaco_filter_aeq::equalizer::DESC,
@@ -10523,7 +10641,7 @@ pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[
     &::vaco_filter_video_format::format::DESC,
     &::vaco_filter_video_format::fps::DESC,
     &::vaco_filter_geometry::framepack::DESC,
-    &::vaco_filter_video_format::framerate::DESC,
+    &::vaco_filter_motion::framerate::DESC,
     &::vaco_filter_temporal::framestep::DESC,
     &::vaco_filter_temporal::freezedetect::DESC,
     &::vaco_filter_temporal::freezeframes::DESC,
@@ -10592,6 +10710,8 @@ pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[
     &::vaco_filter_video_geometry::pad::DESC,
     &::vaco_filter_video_source::bars::pal100::DESC,
     &::vaco_filter_video_source::bars::pal75::DESC,
+    &::vaco_filter_palette::palettegen::DESC,
+    &::vaco_filter_palette::paletteuse::DESC,
     &::vaco_filter_audio::pan::DESC,
     &::vaco_filter_source::perlin::DESC,
     &::vaco_filter_mm::misc::perms::video::DESC,

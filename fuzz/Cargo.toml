@@ -42,6 +42,8 @@ vaco-bsf-h2645 = { path = "../crates/format/vaco-bsf-h2645", optional = true }
 vaco-bsf-legacy = { path = "../crates/format/vaco-bsf-legacy", optional = true }
 vaco-bsf-subtitle = { path = "../crates/format/vaco-bsf-subtitle", optional = true }
 vaco-bsf-vpx = { path = "../crates/format/vaco-bsf-vpx", optional = true }
+vaco-cbs-jpeg = { path = "../crates/codec/vaco-cbs-jpeg", optional = true }
+vaco-cbs-vp9 = { path = "../crates/codec/vaco-cbs-vp9", optional = true }
 vaco-chlayout = { path = "../crates/model/vaco-chlayout", optional = true }
 vaco-cli = { path = "../crates/app/vaco-cli", optional = true }
 vaco-cli-core = { path = "../crates/app/vaco-cli-core", optional = true }
@@ -73,6 +75,7 @@ vaco-codec-opus = { path = "../crates/codec/vaco-codec-opus", optional = true }
 vaco-codec-png = { path = "../crates/codec/vaco-codec-png", optional = true }
 vaco-codec-pnm = { path = "../crates/codec/vaco-codec-pnm", optional = true }
 vaco-codec-qoi = { path = "../crates/codec/vaco-codec-qoi", optional = true }
+vaco-codec-simple-audio = { path = "../crates/codec/vaco-codec-simple-audio", optional = true }
 vaco-codec-subtitle-bitmap = { path = "../crates/codec/vaco-codec-subtitle-bitmap", optional = true }
 vaco-codec-subtitle-cc = { path = "../crates/codec/vaco-codec-subtitle-cc", optional = true }
 vaco-codec-subtitle-teletext = { path = "../crates/codec/vaco-codec-subtitle-teletext", optional = true }
@@ -122,6 +125,8 @@ vaco-filter-graph = { path = "../crates/filter/vaco-filter-graph", optional = tr
 vaco-filter-key = { path = "../crates/filter/vaco-filter-key", optional = true }
 vaco-filter-lut = { path = "../crates/filter/vaco-filter-lut", optional = true }
 vaco-filter-mm = { path = "../crates/filter/vaco-filter-mm", optional = true }
+vaco-filter-motion = { path = "../crates/filter/vaco-filter-motion", optional = true }
+vaco-filter-palette = { path = "../crates/filter/vaco-filter-palette", optional = true }
 vaco-filter-source = { path = "../crates/filter/vaco-filter-source", optional = true }
 vaco-filter-temporal = { path = "../crates/filter/vaco-filter-temporal", optional = true }
 vaco-filter-video-composite = { path = "../crates/filter/vaco-filter-video-composite", optional = true }
@@ -217,6 +222,8 @@ default = [
     "bsf-legacy",
     "bsf-subtitle",
     "bsf-vpx",
+    "cbs-jpeg",
+    "cbs-vp9",
     "chlayout",
     "cli",
     "cli-core",
@@ -246,6 +253,7 @@ default = [
     "codec-png",
     "codec-pnm",
     "codec-qoi",
+    "codec-simple-audio",
     "codec-subtitle-bitmap",
     "codec-subtitle-cc",
     "codec-subtitle-teletext",
@@ -294,6 +302,8 @@ default = [
     "filter-key",
     "filter-lut",
     "filter-mm",
+    "filter-motion",
+    "filter-palette",
     "filter-source",
     "filter-temporal",
     "filter-video-composite",
@@ -380,6 +390,8 @@ bsf-h2645 = ["dep:vaco-bsf-h2645", "dep:vaco-codec-core", "dep:vaco-limits", "de
 bsf-legacy = ["dep:vaco-bsf-legacy", "dep:vaco-codec-core", "dep:vaco-limits", "dep:vaco-packet"]
 bsf-subtitle = ["dep:vaco-bsf-subtitle", "dep:vaco-codec-core", "dep:vaco-limits", "dep:vaco-packet"]
 bsf-vpx = ["dep:vaco-bsf-vpx", "dep:vaco-codec-core", "dep:vaco-limits", "dep:vaco-packet"]
+cbs-jpeg = ["dep:vaco-cbs-jpeg", "dep:vaco-codec-cbs", "dep:vaco-limits"]
+cbs-vp9 = ["dep:vaco-cbs-vp9", "dep:vaco-codec-cbs", "dep:vaco-limits"]
 chlayout = ["dep:vaco-chlayout"]
 cli = ["dep:vaco-cli", "dep:vaco-cli-core"]
 cli-core = ["dep:vaco-cli-core", "dep:vaco-core"]
@@ -409,6 +421,7 @@ codec-opus = ["dep:vaco-codec-core", "dep:vaco-codec-opus", "dep:vaco-frame", "d
 codec-png = ["dep:vaco-codec-png", "dep:vaco-frame", "dep:vaco-limits"]
 codec-pnm = ["dep:vaco-codec-pnm", "dep:vaco-core", "dep:vaco-frame", "dep:vaco-limits"]
 codec-qoi = ["dep:vaco-codec-qoi", "dep:vaco-frame", "dep:vaco-limits", "dep:vaco-pixfmt"]
+codec-simple-audio = ["dep:vaco-codec-simple-audio", "dep:vaco-limits"]
 codec-subtitle-bitmap = ["dep:vaco-codec-subtitle-bitmap", "dep:vaco-format-subtitle-bitmap", "dep:vaco-limits", "dep:vaco-subtitle-bitmap"]
 codec-subtitle-cc = ["dep:vaco-codec-subtitle-cc"]
 codec-subtitle-teletext = ["dep:vaco-codec-subtitle-teletext"]
@@ -457,6 +470,8 @@ filter-graph = ["dep:vaco-filter-graph"]
 filter-key = ["dep:vaco-core", "dep:vaco-filter-graph", "dep:vaco-filter-key"]
 filter-lut = ["dep:vaco-filter-graph", "dep:vaco-filter-lut"]
 filter-mm = ["dep:vaco-filter-graph", "dep:vaco-filter-mm", "dep:vaco-limits"]
+filter-motion = ["dep:vaco-filter-graph", "dep:vaco-filter-motion"]
+filter-palette = ["dep:vaco-filter-graph", "dep:vaco-filter-palette"]
 filter-source = ["dep:vaco-filter-graph", "dep:vaco-filter-source", "dep:vaco-opts"]
 filter-temporal = ["dep:vaco-filter-graph", "dep:vaco-filter-temporal"]
 filter-video-composite = ["dep:vaco-expr", "dep:vaco-filter-graph", "dep:vaco-filter-video-composite"]
@@ -498,7 +513,7 @@ packet = ["dep:vaco-bitstream", "dep:vaco-limits", "dep:vaco-packet", "dep:vaco-
 parse-aac = ["dep:vaco-bitstream", "dep:vaco-codec-core", "dep:vaco-core", "dep:vaco-limits", "dep:vaco-parse-aac"]
 parse-audio-misc = ["dep:vaco-parse-audio-misc"]
 parse-av1 = ["dep:vaco-codec-cbs", "dep:vaco-codec-core", "dep:vaco-limits", "dep:vaco-parse-av1"]
-parse-h264 = ["dep:vaco-bitstream", "dep:vaco-codec-core", "dep:vaco-core", "dep:vaco-format-nalu", "dep:vaco-limits", "dep:vaco-parse-h264"]
+parse-h264 = ["dep:vaco-bitstream", "dep:vaco-codec-cbs", "dep:vaco-codec-core", "dep:vaco-core", "dep:vaco-format-nalu", "dep:vaco-limits", "dep:vaco-parse-h264"]
 parse-hevc = ["dep:vaco-bitstream", "dep:vaco-codec-cbs", "dep:vaco-codec-core", "dep:vaco-format-nalu", "dep:vaco-limits", "dep:vaco-parse-hevc"]
 parse-image = ["dep:vaco-codec-core", "dep:vaco-limits", "dep:vaco-parse-image"]
 parse-mpegaudio = ["dep:vaco-codec-core", "dep:vaco-core", "dep:vaco-limits", "dep:vaco-parse-mpegaudio"]
@@ -728,12 +743,36 @@ bench = false
 required-features = ["parse-av1"]
 
 [[bin]]
+name = "cbs_h264"
+path = "fuzz_targets/cbs_h264.rs"
+test = false
+doc = false
+bench = false
+required-features = ["parse-h264"]
+
+[[bin]]
 name = "cbs_hevc"
 path = "fuzz_targets/cbs_hevc.rs"
 test = false
 doc = false
 bench = false
 required-features = ["parse-hevc"]
+
+[[bin]]
+name = "cbs_jpeg"
+path = "fuzz_targets/cbs_jpeg.rs"
+test = false
+doc = false
+bench = false
+required-features = ["cbs-jpeg"]
+
+[[bin]]
+name = "cbs_vp9"
+path = "fuzz_targets/cbs_vp9.rs"
+test = false
+doc = false
+bench = false
+required-features = ["cbs-vp9"]
 
 [[bin]]
 name = "chlayout_parse"
@@ -806,6 +845,14 @@ test = false
 doc = false
 bench = false
 required-features = ["color"]
+
+[[bin]]
+name = "comfortnoise_parse"
+path = "fuzz_targets/comfortnoise_parse.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-simple-audio"]
 
 [[bin]]
 name = "conformance_ref_output"
@@ -1118,6 +1165,22 @@ test = false
 doc = false
 bench = false
 required-features = ["filter-mm"]
+
+[[bin]]
+name = "filter_motion_options"
+path = "fuzz_targets/filter_motion_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-motion"]
+
+[[bin]]
+name = "filter_palette_options"
+path = "fuzz_targets/filter_palette_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-palette"]
 
 [[bin]]
 name = "filter_source_options"
@@ -1926,6 +1989,14 @@ test = false
 doc = false
 bench = false
 required-features = ["protocol-wrap"]
+
+[[bin]]
+name = "qoa_decode"
+path = "fuzz_targets/qoa_decode.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-simple-audio"]
 
 [[bin]]
 name = "rbsp_roundtrip"
