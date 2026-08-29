@@ -92,6 +92,16 @@ pub(crate) struct FrameCtx {
     prev_mv_grid: Vec<MiCell>,
     ref_store: RefFrameStore,
     pic: Picture,
+    /// The MI-column range of the tile currently decoding — §6.4's
+    /// `MiColStart`/`MiColEnd`, set by [`decode_frame_tiles`]'s tile loop
+    /// before each call to `decode_tile`. `AvailL` (§6.4.4) and the
+    /// motion-vector candidate scan's own column clamp (§6.5.1) are
+    /// defined relative to *this*, not the frame's own column 0 — a tile
+    /// is independently decodable specifically because its left/above
+    /// edges are never read past, even where the frame's own pixel data
+    /// is already sitting right there in `pic` from an earlier tile.
+    tile_mi_col_start: usize,
+    tile_mi_col_end: usize,
 }
 
 impl FrameCtx {
@@ -241,7 +251,11 @@ fn decode_partition(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyContex
 
 fn decode_block(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyContext, r: usize, c: usize, subsize: i32) {
     let avail_u = r > 0;
-    let avail_l = c > 0; // MiColStart is always 0: single tile column in this crate's scope.
+    // §6.4.4's `AvailL`: unavailable at the *tile's* own left edge, not just
+    // the frame's — a tile's whole reason to exist is that its edges never
+    // read across into a neighbour tile, even one already sitting decoded
+    // in `pic` right next to it.
+    let avail_l = c > ctx.tile_mi_col_start;
 
     let mut block = if ctx.header.frame_is_intra {
         let (segment_id, skip, tx_size, y_mode, uv_mode, sub_modes) = intra_frame_mode_info(bd, ctx, r, c, subsize, avail_u, avail_l);
@@ -883,8 +897,8 @@ fn inter_block_mode_info(bd: &mut Bd<'_>, ctx: &FrameCtx, entropy: &EntropyConte
         mi_col: c,
         mi_rows: ctx.mi_rows,
         mi_cols: ctx.mi_cols,
-        mi_col_start: 0,
-        mi_col_end: ctx.mi_cols,
+        mi_col_start: ctx.tile_mi_col_start,
+        mi_col_end: ctx.tile_mi_col_end,
         cell_at: &cell_at,
         use_prev_frame_mvs: ctx.header.use_prev_frame_mvs,
         prev_cell: &prev_cell,
@@ -925,7 +939,7 @@ fn inter_block_mode_info(bd: &mut Bd<'_>, ctx: &FrameCtx, entropy: &EntropyConte
     }
 
     let interp_filter = if ctx.header.interpolation_filter == tables::SWITCHABLE {
-        let ictx = interp_filter_ctx(ctx, r, c, r > 0, c > 0);
+        let ictx = interp_filter_ctx(ctx, r, c, r > 0, c > ctx.tile_mi_col_start);
         let probs = entropy.interp_filter_probs.get(ictx).copied().unwrap_or([128; 2]);
         bd.read_tree(&tables::INTERP_FILTER_TREE, &probs)
     } else {
@@ -1159,7 +1173,7 @@ fn residual(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyContext, r: us
                         } else {
                             sub_modes.get(block_idx).copied().unwrap_or(tables::DC_PRED)
                         };
-                        let have_left = c > 0 || x > 0;
+                        let have_left = c > ctx.tile_mi_col_start || x > 0;
                         let have_above = r > 0 || y > 0;
                         let not_on_right = x + step < num4x4w;
                         predict_block(ctx, plane, start_x, start_y, mode, tx_sz, have_left, have_above, not_on_right, maxx, maxy, bit_depth);
@@ -1362,7 +1376,10 @@ fn add_residue(ctx: &mut FrameCtx, plane: usize, x: usize, y: usize, tx_sz: i32,
     }
 }
 
-fn decode_tile(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyContext, mi_row_start: usize, mi_row_end: usize) {
+#[allow(clippy::too_many_arguments)]
+fn decode_tile(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyContext, mi_row_start: usize, mi_row_end: usize, mi_col_start: usize, mi_col_end: usize) {
+    ctx.tile_mi_col_start = mi_col_start;
+    ctx.tile_mi_col_end = mi_col_end;
     let mut r = mi_row_start;
     while r < mi_row_end {
         for row in &mut ctx.left_partition_context {
@@ -1376,8 +1393,8 @@ fn decode_tile(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyContext, mi
         for slot in &mut ctx.left_seg_pred_context {
             *slot = false;
         }
-        let mut c = 0usize;
-        while c < ctx.mi_cols {
+        let mut c = mi_col_start;
+        while c < mi_col_end {
             decode_partition(bd, ctx, entropy, r, c, tables::BLOCK_64X64);
             c += 8;
         }
@@ -1422,6 +1439,8 @@ fn decode_frame_tiles(
         prev_mv_grid: if same_dims { prev_mv_grid.to_vec() } else { Vec::new() },
         ref_store: ref_store.clone(),
         pic,
+        tile_mi_col_start: 0,
+        tile_mi_col_end: header.mi_cols,
     };
 
     let tile_cols = 1usize << header.tile.cols_log2;
@@ -1446,14 +1465,10 @@ fn decode_frame_tiles(
 
             let mi_row_start = tile_offset(tile_row, header.mi_rows, header.tile.rows_log2);
             let mi_row_end = tile_offset(tile_row + 1, header.mi_rows, header.tile.rows_log2);
-            // Single tile column supported (`MiColStart` is always 0 in
-            // decode_block's `AvailL` check above) — a multi-tile-column
-            // stream still decodes each column's own bits correctly here,
-            // but `AvailL`'s column-0 assumption means context at a
-            // non-first tile column's left edge is not spec-exact. See
-            // `planning/TECH-DEBT.md`.
+            let mi_col_start = tile_offset(tile_col, header.mi_cols, header.tile.cols_log2);
+            let mi_col_end = tile_offset(tile_col + 1, header.mi_cols, header.tile.cols_log2);
             let mut bd = Bd::new(this_tile);
-            decode_tile(&mut bd, &mut ctx, entropy, mi_row_start, mi_row_end);
+            decode_tile(&mut bd, &mut ctx, entropy, mi_row_start, mi_row_end, mi_col_start, mi_col_end);
         }
     }
     let lf_grid: Vec<loopfilter::MiInfo> = ctx
@@ -1776,10 +1791,92 @@ impl Decoder for Vp9Decoder {
 /// `vaco-component.toml`'s decoder registration point.
 pub static VP9_DECODER: DecoderDesc = DecoderDesc {
     name: "vp9",
-    long_name: "VP9 (no loop filter; VP9 Bitstream & Decoding Process Specification v0.6)",
+    long_name: "VP9 (VP9 Bitstream & Decoding Process Specification v0.6)",
     id: vaco_codec_core::CodecId::Vp9,
     media_type: MediaType::Video,
     caps: vaco_codec_core::Caps::SUBFRAMES,
     supported_rates: &[],
     make: |limits| Box::new(Vp9Decoder::new(limits)),
 };
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic, reason = "test code exercising a fixed real-encoder fixture, not the untrusted-input surface")]
+mod tests {
+    use super::*;
+    use vaco_frame::FrameData;
+
+    /// A real `libvpx-vp9` key frame with two tile columns
+    /// (`ffmpeg -f lavfi -i testsrc2=size=512x64:rate=5:duration=0.4
+    /// -pix_fmt yuv420p -c:v libvpx-vp9 -tile-columns 1 -frame-parallel 1
+    /// -error-resilient max -g 30 -b:v 500k`, first IVF frame payload, in
+    /// full) -- regression coverage for #328: `decode_tile` used to ignore
+    /// its own column range entirely (looping every call from mi-column 0
+    /// to `mi_cols`, regardless of which tile's bitstream it was actually
+    /// reading), and `AvailL`/motion-vector-candidate column bounds were
+    /// hardcoded to the whole frame rather than the current tile — both
+    /// invisible with the single tile column every fixture before this
+    /// had, and both catastrophic (roughly the whole frame wrong) the
+    /// moment a stream actually used more than one.
+    fn two_tile_columns_key_frame() -> Vec<u8> {
+        include_bytes!("../tests/fixtures/vp9_two_tile_columns_key_frame.bin").to_vec()
+    }
+
+    fn decode_first_frame(bytes: &[u8]) -> Frame {
+        let mut dec = Vp9Decoder::new(Limits::permissive());
+        let mut budget = Budget::new(Limits::permissive());
+        let pkt = Packet::from_slice(&mut budget, bytes).expect("packet");
+        dec.send_packet(Some(&pkt)).expect("send");
+        dec.receive_frame().expect("frame")
+    }
+
+    #[test]
+    fn two_tile_columns_decode_correctly_on_both_sides_of_the_boundary() {
+        let frame = decode_first_frame(&two_tile_columns_key_frame());
+        let FrameData::Video { width, height, planes, .. } = &frame.data else { panic!("video frame") };
+        assert_eq!((*width, *height), (512, 64));
+
+        // Expected values measured from `ffmpeg -c:v libvpx-vp9`'s own
+        // decode of the same bitstream. The tile boundary for two equal
+        // tile columns over an 8-superblock-wide (64 mi-column) frame
+        // falls at mi-column 32, i.e. pixel column 256 -- every point
+        // here straddles it, on both rows near the top and bottom of the
+        // frame, so a regression that only fixed one axis would still be
+        // caught.
+        let y = &planes[0];
+        let y_row = |row: usize| -> &[u8] {
+            let start = row * y.stride;
+            &y.data.as_slice()[start..start + 512]
+        };
+        for (x, row, expected) in [
+            (0usize, 0usize, 76u8),
+            (255, 0, 210),
+            (256, 0, 41),
+            (511, 0, 170),
+            (0, 32, 82),
+            (255, 32, 210),
+            (256, 32, 41),
+            (511, 32, 82),
+            (255, 63, 210),
+            (256, 63, 41),
+        ] {
+            assert_eq!(y_row(row)[x], expected, "Y({x},{row})");
+        }
+
+        let u = &planes[1];
+        let v = &planes[2];
+        let u_at = |x: usize, row: usize| -> u8 {
+            let start = row * u.stride;
+            u.data.as_slice()[start + x]
+        };
+        let v_at = |x: usize, row: usize| -> u8 {
+            let start = row * v.stride;
+            v.data.as_slice()[start + x]
+        };
+        for (x, row, expected) in [(0usize, 0usize, 221u8), (127, 0, 16), (128, 0, 240), (255, 0, 166), (128, 31, 240), (255, 31, 166)] {
+            assert_eq!(u_at(x, row), expected, "U({x},{row})");
+        }
+        for (x, row, expected) in [(0usize, 0usize, 164u8), (127, 0, 146), (128, 0, 110), (255, 0, 16), (128, 31, 110), (255, 31, 16)] {
+            assert_eq!(v_at(x, row), expected, "V({x},{row})");
+        }
+    }
+}
