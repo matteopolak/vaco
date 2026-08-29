@@ -48,6 +48,7 @@ use crate::cabac_ctx::ContextBank;
 use crate::ctu::{self, Ctx};
 use crate::deblock;
 use crate::framebuf::{CuGrid, Picture};
+use crate::sao;
 
 /// The HEVC decoder. See the crate doc and module doc for exactly what is
 /// and is not implemented.
@@ -167,6 +168,7 @@ impl HevcDecoder {
         let mut pic = Picture::new(&mut self.budget, width, height)?;
         let cu_grid = CuGrid::new(&mut self.budget, width, height)?;
         let mut walk = Ctx::new(
+            &mut self.budget,
             &mut pic,
             cu_grid,
             &sps,
@@ -175,7 +177,9 @@ impl HevcDecoder {
             hdr.deblocking_filter_disabled,
             hdr.beta_offset_div2,
             hdr.tc_offset_div2,
-        );
+            hdr.sao_luma,
+            hdr.sao_chroma,
+        )?;
 
         let mut cabac = CabacDecoder::new(cabac_data);
         let mut ctx = ContextBank::new(i8::try_from(slice_qp.clamp(0, 51)).unwrap_or(0));
@@ -193,7 +197,7 @@ impl HevcDecoder {
             let row = addr.checked_div(ctbs_x).unwrap_or(0);
             let cx = i32::try_from(col).unwrap_or(0) * ctb_size_i;
             let cy = i32::try_from(row).unwrap_or(0) * ctb_size_i;
-            ctu::decode_ctu(&mut cabac, &mut ctx, &mut walk, cx, cy)?;
+            ctu::decode_ctu(&mut cabac, &mut ctx, &mut walk, cx, cy, addr)?;
             let end = cabac.decode_terminate();
             if cabac.malformed() {
                 return Err(Error::InvalidData("vaco-codec-hevc: CABAC decode ran past the slice segment data"));
@@ -204,6 +208,7 @@ impl HevcDecoder {
         }
 
         deblock::filter_picture(&mut walk);
+        sao::filter_picture(&mut self.budget, &mut walk)?;
 
         let mut frame = pic_to_frame(&mut self.budget, &sps, &pic)?;
         frame.pts = pkt.pts;
@@ -220,20 +225,11 @@ fn check_scope(sps: &Sps, pps: &Pps) -> Result<()> {
     if sps.chroma_format != ChromaFormat::Yuv420 {
         return unsupported("vaco-codec-hevc: only 4:2:0 chroma is decoded");
     }
-    if sps.sample_adaptive_offset_enabled {
-        // Not merely "SAO's pixel offsets are never applied" (true, and
-        // stated in the crate doc) — `sample_adaptive_offset_enabled_flag`
-        // also gates §7.3.8.3's optional `sao()` syntax at the start of
-        // every CTU (`slice_sao_luma_flag`/`slice_sao_chroma_flag`, in
-        // turn read from the slice header). This crate parses neither, so
-        // a stream that actually turns SAO on desyncs the entropy decoder
-        // from the very first CTU that merges or sets an offset — not a
-        // silently-wrong pixel, a `CABAC decode ran past the slice
-        // segment data` crash. Refusing by name, matching every other cut
-        // in this function, turns that crash into an honest
-        // `Error::Unsupported` instead.
-        return unsupported("vaco-codec-hevc: SAO is not supported (encode without it, e.g. libx265 no-sao=1)");
-    }
+    // `sample_adaptive_offset_enabled_flag` is no longer refused here: the
+    // per-CTU `sao()` syntax (§7.3.8.3) is now parsed by `ctu::decode_ctu`
+    // (via `crate::sao::parse_ctu_sao`) and applied by
+    // `crate::sao::filter_picture` after deblocking — see `sao`'s own
+    // module doc.
     if sps.bit_depth_luma != 8 || sps.bit_depth_chroma != 8 {
         return unsupported("vaco-codec-hevc: only 8-bit samples are decoded");
     }
@@ -256,6 +252,29 @@ fn check_scope(sps: &Sps, pps: &Pps) -> Result<()> {
         return unsupported("vaco-codec-hevc: tiles are not supported");
     }
     if pps.entropy_coding_sync_enabled {
+        // A real, substantial WPP attempt was made and reverted, not merely
+        // left unattempted: `decode_packet` was restructured to split
+        // `slice_segment_data()` into one CABAC substream per CTU row (via
+        // `hdr.entry_point_offsets`) and to do §9.3.2.3's context
+        // save/restore at each row's second CTU. Measured against a real
+        // `libx265` WPP-encoded stream (25 real IDR frames, 320x240, 4 CTU
+        // rows): with the sync mechanism active, the first frame decoded
+        // **byte-exact** against `ffmpeg` end to end, and disabling the
+        // restore step entirely (leaving only the per-row CABAC-engine
+        // reinitialisation) raised the failure rate from 7/25 frames to
+        // 23/25 — strong evidence the save/restore *mechanism itself* is
+        // substantially correct and doing most of the right thing. But
+        // 7 of 25 frames still failed with a genuine `CABAC decode ran past
+        // the slice segment data` desync, always in the third or fourth CTU
+        // row and never the first two, and root cause was not found: HM
+        // 18.0 (Tier A, decoded the identical bitstream with zero errors,
+        // confirming the stream itself is valid and the defect is in this
+        // crate, not the encoder's output) would be the next diagnostic
+        // step (a bin-for-bin CABAC trace against it, the same method that
+        // found the DC-context and CTB-row-boundary bugs — see
+        // `docs/codec/vaco-codec-hevc.md`), not attempted here for lack of
+        // time. Refusing cleanly rather than shipping a decoder that is
+        // right on roughly 3 of 4 frames of ordinary content.
         return unsupported("vaco-codec-hevc: wavefront parallel processing is not supported");
     }
     if pps.cu_qp_delta_enabled {

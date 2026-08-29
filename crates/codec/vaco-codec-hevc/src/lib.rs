@@ -22,16 +22,19 @@
 //!   clause 8.7-shaped algorithm, not the same one at a different call
 //!   site). Verified byte-exact against plain `ffmpeg` (no
 //!   `-skip_loop_filter`) on real `libx265` output.
-//! - **SAO.** Still refused outright at the SPS
-//!   (`sample_adaptive_offset_enabled_flag`): §7.3.8.3's `sao()` syntax is
-//!   *in* the bitstream, once per CTU, and this crate parses none of it —
-//!   decoding a stream that actually turns SAO on would desync the entropy
-//!   decoder from the first merged/offset CTU onward, not just reconstruct
-//!   different pixels. Verification for SAO-off content is against
-//!   material encoded with `no-sao=1`, so there is nothing for either side
-//!   to disagree about.
-//! - **Tiles and wavefront (`entropy_coding_sync`).** Refused; only a plain
-//!   single-tile, independent-slice-segment picture is decoded.
+//! - **SAO (§7.3.8.3 syntax, §8.7.3 filtering) is implemented** — see
+//!   [`sao`]'s own module doc for the per-CTU `sao()` parse (merge/new mode,
+//!   band and edge offset) and the filtering process. Verified byte-exact
+//!   against plain `ffmpeg` on real `libx265` output with SAO left at its
+//!   own (on) default, at multiple resolutions and QPs.
+//! - **Tiles.** Refused; only a plain single-tile, independent-slice-segment
+//!   picture is decoded.
+//! - **Wavefront (`entropy_coding_sync_enabled_flag`).** Attempted and
+//!   reverted, not merely unattempted — see `check_scope`'s own comment at
+//!   this flag for the measured result (a real, partially-working
+//!   implementation that still desynced on 7 of 25 frames of ordinary
+//!   content) and what the next diagnostic step would be. Refused cleanly
+//!   rather than shipped wrong.
 //! - **`cu_qp_delta` / adaptive per-CU QP, chroma QP offset lists, `I_PCM`,
 //!   `transform_skip` actually taken, custom scaling lists, and every SPS
 //!   range-extension flag.** Each is refused the moment the bitstream
@@ -106,6 +109,7 @@ mod framebuf;
 mod intra_mode;
 mod intra_pred;
 mod residual;
+mod sao;
 mod scan;
 mod transform;
 

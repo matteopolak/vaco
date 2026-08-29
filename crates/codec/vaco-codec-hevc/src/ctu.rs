@@ -20,11 +20,14 @@ use vaco_codec_cabac::CabacDecoder;
 use vaco_core::{Error, Result};
 use vaco_parse_hevc::{Pps, Sps};
 
+use vaco_limits::Budget;
+
 use crate::cabac_ctx::ContextBank;
 use crate::framebuf::{CuGrid, EdgeMarks, Picture};
 use crate::intra_mode::{self, DC_IDX, DM_CHROMA_IDX};
 use crate::intra_pred;
 use crate::residual::{self, Coeffs};
+use crate::sao::{self, CtuSao};
 use crate::transform;
 
 /// Everything one slice segment's CTU walk needs, held together so the
@@ -63,6 +66,18 @@ pub(crate) struct Ctx<'p> {
     pub beta_offset_div2: i32,
     /// `slice_tc_offset_div2`.
     pub tc_offset_div2: i32,
+    /// `slice_sao_luma_flag`.
+    pub sao_luma: bool,
+    /// `slice_sao_chroma_flag`.
+    pub sao_chroma: bool,
+    /// CTU columns per row, for [`sao::parse_ctu_sao`]'s left/above merge
+    /// addressing.
+    pub ctbs_x: u32,
+    /// Every CTU's resolved SAO parameters so far, indexed by raster
+    /// address — filled in by [`decode_ctu`] as each CTU's `sao()` is
+    /// parsed, read back by a merge at a later address and by
+    /// [`crate::sao::filter_picture`] once the whole picture is decoded.
+    pub sao_params: Vec<CtuSao>,
 }
 
 impl<'p> Ctx<'p> {
@@ -71,6 +86,7 @@ impl<'p> Ctx<'p> {
     /// crate's stated scope.
     #[allow(clippy::too_many_arguments, reason = "one call site (decoder.rs), grouping into a sub-struct would not aid clarity")]
     pub(crate) fn new(
+        budget: &mut Budget,
         pic: &'p mut Picture,
         cu_grid: CuGrid,
         sps: &Sps,
@@ -79,11 +95,18 @@ impl<'p> Ctx<'p> {
         deblocking_disabled: bool,
         beta_offset_div2: i32,
         tc_offset_div2: i32,
-    ) -> Self {
+        sao_luma: bool,
+        sao_chroma: bool,
+    ) -> Result<Self> {
         let log2_ctb_size = u32::from(sps.log2_min_cb_size) + u32::from(sps.log2_diff_max_min_cb_size);
         let width = usize::try_from(sps.pic_width_in_luma_samples).unwrap_or(0);
         let height = usize::try_from(sps.pic_height_in_luma_samples).unwrap_or(0);
-        Self {
+        let ctb_size = 1u32 << log2_ctb_size;
+        let ctbs_x = u32::try_from(width).unwrap_or(0).div_ceil(ctb_size).max(1);
+        let ctbs_y = u32::try_from(height).unwrap_or(0).div_ceil(ctb_size).max(1);
+        let total_ctbs = usize::try_from(ctbs_x.saturating_mul(ctbs_y)).unwrap_or(0);
+        let sao_params: Vec<CtuSao> = budget.alloc(total_ctbs)?;
+        Ok(Self {
             pic_width: i32::try_from(sps.pic_width_in_luma_samples).unwrap_or(0),
             pic_height: i32::try_from(sps.pic_height_in_luma_samples).unwrap_or(0),
             log2_ctb_size,
@@ -103,14 +126,28 @@ impl<'p> Ctx<'p> {
             deblocking_disabled,
             beta_offset_div2,
             tc_offset_div2,
+            sao_luma,
+            sao_chroma,
+            ctbs_x,
+            sao_params,
             pic,
             cu_grid,
-        }
+        })
     }
 }
 
-/// Decode one CTU (`x0, y0` its luma top-left, in picture coordinates).
-pub(crate) fn decode_ctu(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut Ctx<'_>, x0: i32, y0: i32) -> Result<()> {
+/// Decode one CTU (`x0, y0` its luma top-left, in picture coordinates;
+/// `addr` its raster address, needed only for `sao()`'s own merge
+/// addressing). Parses `sao()` (§7.3.8.3) first, exactly where
+/// `coding_tree_unit()`'s own syntax table puts it, when either
+/// `slice_sao_luma_flag` or `slice_sao_chroma_flag` is set.
+pub(crate) fn decode_ctu(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut Ctx<'_>, x0: i32, y0: i32, addr: u32) -> Result<()> {
+    if s.sao_luma || s.sao_chroma {
+        let params = sao::parse_ctu_sao(cabac, ctx, addr, s.ctbs_x, s.sao_luma, s.sao_chroma, &s.sao_params)?;
+        if let Some(slot) = usize::try_from(addr).ok().and_then(|i| s.sao_params.get_mut(i)) {
+            *slot = params;
+        }
+    }
     coding_quadtree(cabac, ctx, s, x0, y0, s.log2_ctb_size, 0)
 }
 

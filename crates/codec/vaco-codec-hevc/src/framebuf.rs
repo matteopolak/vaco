@@ -89,6 +89,16 @@ impl Plane {
             }
         }
     }
+
+    /// [`Plane::set`] taking `i32` coordinates and an already-clamped `i32`
+    /// value — [`crate::sao`] computes in `i32` throughout (clause 8.7.3's
+    /// own arithmetic needs headroom past `u16` mid-formula) and only needs
+    /// the final clip-then-store this wraps.
+    pub(crate) fn set_i32(&mut self, x: i32, y: i32, v: i32) {
+        let (Ok(x), Ok(y)) = (usize::try_from(x), usize::try_from(y)) else { return };
+        let v = u16::try_from(v.max(0)).unwrap_or(0);
+        self.set(x, y, v);
+    }
 }
 
 /// One decoded picture's reconstruction planes: luma plus two 4:2:0 chroma

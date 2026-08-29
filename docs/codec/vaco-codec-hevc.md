@@ -4,11 +4,13 @@ Layer 4. Intra-only (I-slice) HEVC/H.265 video decode (ITU-T H.265
 (08/2021)): NAL/VPS/SPS/PPS handling, the CTU quadtree, coding units,
 intra prediction (planar/DC/33 angular modes, MPM derivation, reference
 sample smoothing and strong intra smoothing), the transform tree, residual
-coding, dequantisation, reconstruction and in-loop deblocking (§8.7.2, see
-"Deblocking (§8.7.2), landed" below). SAO, inter prediction, B/P-slices,
-tiles, WPP, `cu_qp_delta`, I_PCM, transform-skip residual coding, custom
-scaling lists and every range-extension feature are explicitly out of
-scope — see "What was cut" below.
+coding, dequantisation, reconstruction, in-loop deblocking (§8.7.2, see
+"Deblocking (§8.7.2), landed" below) and SAO (§7.3.8.3/§8.7.3, see "SAO
+(§7.3.8.3 / §8.7.3), landed" below). Inter prediction, B/P-slices, tiles,
+WPP (attempted and reverted — see its own section below), `cu_qp_delta`,
+I_PCM, transform-skip residual coding, custom scaling lists and every
+range-extension feature are explicitly out of scope — see "What was cut"
+below.
 
 **Registered, patent-encumbered-gated.** `vaco-component.toml` declares
 this decoder with `encumbered = true` / `default = false` behind the
@@ -154,17 +156,15 @@ own decode of the same file byte-for-byte, per plane, end to end.
 `check_scope` in `decoder.rs` refuses (`Error::Unsupported`, by name, at
 the SPS/PPS) rather than approximates: non-4:2:0 chroma, non-8-bit depth,
 `separate_colour_plane`, custom scaling lists, I_PCM, SPS/PPS range
-extensions, SCC extensions, tiles, `entropy_coding_sync` (WPP),
-`cu_qp_delta_enabled`, `transquant_bypass_enabled`,
-`sample_adaptive_offset_enabled` (SAO — refused because this crate parses
-none of its per-CTU bitstream syntax, not merely because it never applies
-the filter; see "Registration" below). Deblocking is no longer on this
-list — see "Deblocking (§8.7.2), landed" below — since it never had a
-per-CTU bitstream footprint to mis-parse in the first place, only pixels to
-get right. B/P-slices are not parsed at all; only NAL
-types this crate recognises as I-slice VCL data are decoded. Both Annex-B
-and length-prefixed (`hvcC`) framing are handled, via the embedded
-`vaco_parse_hevc::HevcParser` (`decoder.rs`'s own module doc).
+extensions, SCC extensions, tiles, `entropy_coding_sync` (WPP — see its own
+"attempted and reverted" section below for why this one is a *measured*
+refusal, not an unattempted one), `cu_qp_delta_enabled`,
+`transquant_bypass_enabled`. Neither deblocking nor SAO are on this list
+any more — see their own "landed" sections below. B/P-slices are not
+parsed at all; only NAL types this crate recognises as I-slice VCL data are
+decoded. Both Annex-B and length-prefixed (`hvcC`) framing are handled, via
+the embedded `vaco_parse_hevc::HevcParser` (`decoder.rs`'s own module
+doc).
 
 ## How to change it
 
@@ -182,14 +182,19 @@ and length-prefixed (`hvcC`) framing are handled, via the embedded
   script). Clean-room rule: HM is Tier A (BSD-3-Clause) and may be read,
   built and instrumented directly; `ffmpeg`/`x265` stay Tier B — run only,
   never opened.
-- **Extending scope** (SAO, inter prediction, tiles, WPP — deblocking is
-  done, see its own section above): the corresponding SPS/PPS fields
+- **Extending scope** (inter prediction, tiles, WPP — deblocking and SAO
+  are done, see their own sections above): the corresponding SPS/PPS fields
   already correctly return `Error::Unsupported` by name in `check_scope`
   when a real stream exercises them — implement behind that same call site
-  rather than adding a new refusal path. Deblocking was the one exception,
-  since it has no bitstream footprint to refuse in the first place (a
-  silent pixel-only deviation, not a parse error) — its own call site is
-  `decoder::decode_packet`'s post-CTU-loop `deblock::filter_picture` call,
+  rather than adding a new refusal path. For WPP specifically, read the
+  "WPP — attempted and reverted" section first: a substantial, mostly-
+  working implementation already exists in this document's own record of
+  what was tried, and the next step is a bin-trace, not a fresh attempt
+  from scratch. Deblocking was the one exception to the "extend behind the
+  existing refusal" pattern, since it has no bitstream footprint to refuse
+  in the first place (a silent pixel-only deviation, not a parse error) —
+  its own call site is `decoder::decode_packet`'s post-CTU-loop
+  `deblock::filter_picture` call,
   not `check_scope`.
 - **New CABAC context table**: transcribe from HM's `ContextTables.h`
   (Tier A, BSD-3-Clause — see "Specification" below), not from memory or
@@ -355,6 +360,99 @@ CTUs) and 640x480, at multiple QPs. The pre-existing
 (`tests/oracle.rs::dense_content_is_byte_exact`) is unchanged, since
 `deblock::filter_picture` returns immediately when
 `slice_deblocking_filter_disabled_flag` is set.
+
+## SAO (§7.3.8.3 / §8.7.3), landed
+
+`no-sao=1` above was also the interim posture, not the final one:
+`libx265` turns SAO on by default, so — combined with deblocking landing
+first — no *ordinary* `libx265` file decoded byte-exact until this closed
+the gap. Unlike deblocking, SAO genuinely has bitstream footprint this
+crate used to parse none of at all (`sao()`, once per CTU, gated by
+`slice_sao_luma_flag`/`slice_sao_chroma_flag`); `src/sao.rs` now parses it
+(merge-left/merge-up against one shared CABAC context, then per-component
+`sao_type_idx`/band-or-edge-offset/band-position/`sao_eo_class`, following
+HM 18.0's `TDecSbac::parseSAOBlkParam` field order and Cb/Cr sharing rule —
+Cr copies Cb's type/class but reads its own offsets and, for band offset,
+its own band position) and applies clause 8.7.3's filtering process
+(`TComSampleAdaptiveOffset::offsetBlock`) after deblocking, reading from a
+picture-wide snapshot so a CTU's own SAO output never reads a neighbour's
+already-SAO'd samples.
+
+The filtering process itself is written per-pixel rather than porting HM's
+row-buffer-reuse optimisation (see `sao.rs`'s own module doc for why that
+is a performance-only difference, not an algorithmic one) and leans on this
+crate's single-slice/no-tile scope for neighbour availability exactly the
+way `framebuf`'s own module doc already justifies for intra prediction: a
+neighbouring sample is unavailable if and only if it is outside the
+picture.
+
+Verified the same way deblocking was: a real `libx265` stream with SAO left
+at its own (on) default (`wpp=0`, deblocking also at its default-on)
+decodes byte-exact on every sample of every plane of every frame against
+plain `ffmpeg`, at 320x240 and 640x480, at multiple QPs.
+
+## WPP (`entropy_coding_sync_enabled_flag`) — attempted and reverted
+
+Unlike SAO and deblocking, this one is **not** shipped. `check_scope` still
+refuses it, and this section records what was tried and measured so the
+next attempt does not repeat the same ground.
+
+`decode_packet`'s CTU loop was restructured to split `slice_segment_data()`
+into one CABAC substream per CTU row (via `hdr.entry_point_offsets`, byte
+lengths per §7.3.8.1) and to perform §9.3.2.3's context save/restore at
+each row's second CTU (or a row's only CTU, if narrower than two) —
+mirroring `TDecSlice.cpp`'s own `m_entropyCodingSyncContextState` exactly:
+saved once, right after a CTU at that column finishes; restored into the
+*next* row's starting context, not carried forward from that row's own
+last CTU. `end_of_subset_one_bit` (read as one more `decode_terminate()`
+call at a non-final row's own last CTU) was included too.
+
+Measured against a real `libx265` WPP stream (25 real IDR frames, 320x240,
+4 CTU rows, `no-sao=1` to isolate WPP from the SAO work landing in the same
+pass):
+
+- With the full mechanism active, **frame 0 decoded byte-exact** against
+  `ffmpeg`, full 4-row picture, multi-row and multi-column — proof the
+  substream-splitting and sync-restore *mechanism* is structurally sound,
+  not merely "looks right on paper".
+- Across all 25 frames, 7 failed with a genuine `CABAC decode ran past the
+  slice segment data` desync — always in the third or fourth CTU row,
+  **never** the first two.
+- Disabling *only* the context restore (keeping the per-row CABAC-engine
+  reinitialisation, so context merely continues naturally from wherever
+  the previous row's last CTU left it) raised the failure rate to 23 of 25
+  frames — strong evidence the restore mechanism is doing most of the
+  right thing, not that it is actively wrong in general.
+- HM 18.0 (Tier A) decodes the **identical** bitstream with zero errors,
+  confirming the encoder's output is a valid, conformant stream and the
+  defect is in this crate, not in what `libx265` produced.
+
+Root cause was not found within the effort available for this pass. The
+never-fails-in-the-first-two-rows / sometimes-fails-later pattern is
+consistent with either a genuine, narrow bug specific to the
+save/restore/re-init sequence, or a pre-existing, content-triggered
+residual-coding defect that WPP's different encoder rate-distortion
+decisions happen to expose (100 real frames of equivalent *non*-WPP content
+decoded byte-exact, so any such pre-existing defect is rare enough that
+ordinary content does not hit it) — the two hypotheses were not
+distinguished. **The next diagnostic step, per this crate's own established
+method** (see "The multi-coefficient-group residual defect, found and
+fixed" above): a bin-for-bin CABAC trace (context array + index,
+`pStateIdx`, `valMPS`, decoded value) of this crate against an
+identically-instrumented HM 18.0 decoding the same real, failing WPP
+fixture, diffed bin-for-bin from the third CTU row onward. That is exactly
+the method that found the DC-context and CTB-row-boundary bugs, and static
+code review alone did not find this one.
+
+Per `planning/AGENT-CONSTRAINTS.md`'s own standing guidance — "a clean
+refusal is far better than wrong pixels" — `check_scope` continues to
+refuse `entropy_coding_sync_enabled_flag` by name rather than shipping a
+decoder that is correct on roughly three of every four frames of ordinary
+content. The restructured CTU-loop code itself was **not** committed (it
+would be dead code behind the restored refusal, and leaving a known-buggy
+but unreachable path in the tree risks someone re-enabling it without
+rediscovering this section first); this section is the record of what was
+learned instead.
 
 ## Specification
 

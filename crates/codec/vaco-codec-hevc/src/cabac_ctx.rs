@@ -70,6 +70,13 @@ const INIT_GREATER1: [u8; 24] = [
 // coeff_abs_level_greater2_flag: 4 sets luma (4) + 2 sets chroma (2).
 const INIT_GREATER2: [u8; 6] = [138, 153, 136, 167, 152, 152];
 
+// `sao_merge_left_flag`/`sao_merge_up_flag` share this one context (HM's
+// `m_cSaoMergeSCModel.get(0, 0, 0)` for both), and `sao_type_idx_luma`/
+// `sao_type_idx_chroma` share this other one — both single-context tables,
+// I-slice row only (see the module doc).
+const INIT_SAO_MERGE_FLAG: [u8; 1] = [153];
+const INIT_SAO_TYPE_IDX: [u8; 1] = [200];
+
 /// `ctxIndMap4x4`, HM `TComRom.cpp` — the fixed per-position context offset
 /// for a 4x4 transform block's `sig_coeff_flag`, §9.3.4.2.5.
 pub(crate) const CTX_IND_MAP_4X4: [u8; 16] = [0, 1, 4, 5, 2, 3, 4, 5, 6, 6, 8, 8, 7, 7, 8, 8];
@@ -90,7 +97,11 @@ pub(crate) const MIN_IN_GROUP: [u32; 10] = [0, 1, 2, 3, 4, 6, 8, 12, 16, 24];
 /// (or per WPP-restart point, not supported here — see the crate doc) from
 /// [`ContextBank::new`] and threaded through by `&mut` for the rest of the
 /// slice segment.
-#[derive(Debug)]
+// `Clone`/`Copy`: WPP's own context-synchronisation rule (§9.3.2.3) needs a
+// whole-bank snapshot taken after one CTU and restored verbatim before
+// another, row-boundaries apart — `ContextModel` is `Copy` for exactly this
+// reason (see its own doc comment), so every field here is too.
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct ContextBank {
     pub split_cu_flag: [ContextModel; 3],
     pub part_size: [ContextModel; 4],
@@ -105,6 +116,8 @@ pub(crate) struct ContextBank {
     pub last_sig_y: [ContextModel; 30],
     pub greater1: [ContextModel; 24],
     pub greater2: [ContextModel; 6],
+    pub sao_merge_flag: [ContextModel; 1],
+    pub sao_type_idx: [ContextModel; 1],
 }
 
 fn init<const N: usize>(table: &[u8; N], qp: i8) -> [ContextModel; N] {
@@ -133,6 +146,8 @@ impl ContextBank {
             last_sig_y: init(&INIT_LAST_SIG_Y, slice_qp),
             greater1: init(&INIT_GREATER1, slice_qp),
             greater2: init(&INIT_GREATER2, slice_qp),
+            sao_merge_flag: init(&INIT_SAO_MERGE_FLAG, slice_qp),
+            sao_type_idx: init(&INIT_SAO_TYPE_IDX, slice_qp),
         }
     }
 }
