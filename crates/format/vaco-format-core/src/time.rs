@@ -1090,6 +1090,46 @@ mod tests {
         }
     }
 
+    /// `set_stream_delay` can be called again, after packets have already
+    /// been fed, and the *new* delay governs every packet from that call on.
+    ///
+    /// This is the exact mechanism `Discovery`'s own fix for E2E-GAPS #5
+    /// depends on: `Discovery::new` builds its `TimestampFixer` from
+    /// whatever `has_b_frames` the container's initial track parsing knew
+    /// (`0`, for a format like Matroska that states no numeric reorder
+    /// depth), and only a parser reading a real SPS/VUI can refine it —
+    /// which happens later, per packet, inside `Discovery::absorb`. If
+    /// `set_stream_delay` only took effect at construction, refining it
+    /// mid-stream would be silently ignored and every B-frame stream would
+    /// still take R19 (`dts = pts`) forever.
+    #[test]
+    fn set_stream_delay_takes_effect_immediately_even_mid_stream() {
+        let opts = FormatOptions::default();
+        let mut f = TimestampFixer::new(1, FormatFlags::empty(), &opts);
+        // Constructed as if this stream's reorder depth were not yet known —
+        // exactly `Discovery::new`'s state before any packet's bitstream has
+        // been read. R19 fires here: `dts = pts` unconditionally.
+        let mut before = pkt(Some(0), None);
+        f.fix(&mut before, TIME_BASE_Q, Rational::ZERO);
+        assert_eq!(before.dts.ticks(), Some(0));
+
+        // The stream's real depth becomes known (a parser found the SPS).
+        f.set_stream_delay(0, 2, true);
+
+        // R19b now governs: the reorder window fills before any DTS comes
+        // out. The window itself starts fresh here — the `pts=0` packet
+        // above went through R19, not R19b, so it never entered it — which
+        // is why this needs one more packet before the first real value
+        // than `dts_is_reconstructed_through_the_reorder_window` does.
+        let pts = [200_i64, 100, 300, 400];
+        let want = [None, None, Some(100), Some(200)];
+        for (&pts, &want) in pts.iter().zip(want.iter()) {
+            let mut p = pkt(Some(pts), None);
+            f.fix(&mut p, TIME_BASE_Q, Rational::ZERO);
+            assert_eq!(p.dts.ticks(), want, "pts {pts}");
+        }
+    }
+
     /// DTS never exceeds PTS on a reconstructed stream, which is the invariant
     /// a container actually requires — a frame cannot be decoded after the
     /// moment it must be shown.

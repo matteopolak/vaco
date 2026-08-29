@@ -38,7 +38,7 @@
 
 use std::collections::VecDeque;
 
-use vaco_codec_core::{CodecId, Parser, ParserDriver};
+use vaco_codec_core::{CodecId, CodecProperties, Parser, ParserDriver};
 use vaco_core::{Duration, Error, MediaType, Rational, Result, TimeBase, Timestamp};
 use vaco_limits::{Limits, ProgressGuard};
 use vaco_packet::Packet;
@@ -376,6 +376,30 @@ impl<D: Demuxer> Discovery<D> {
             // extradata-synthesis rule needs nothing but the payload bytes
             // and the codec id, see [`synthesize_extradata`].
             synthesize_extradata(stream, pkt.payload());
+            // `self.fixer` was built once, in `Discovery::new`, from whatever
+            // `has_b_frames` the container's own initial track parsing knew —
+            // for Matroska (and any container that does not state a numeric
+            // reorder depth up front), that is `0`, before a single packet's
+            // bitstream has been read. `refine` above is what can *change*
+            // it (a parser reading a real SPS/VUI), and until this call
+            // `self.fixer` never learned: it kept applying R19 (dts = pts
+            // unconditionally) to a stream that, by the time this same
+            // packet's `fix` call below runs, `stream.params` already knows
+            // reorders — the same "wrapper snapshots derived state and never
+            // sees a later change" shape `Discovery`'s own `start_time`
+            // handling was already found to have. Concretely, this is what
+            // made a B-frame stream's stream-copy to a strict container fail
+            // with "non-monotonic dts" even after `set_reorder_delay`
+            // existed on the mux side (`planning/E2E-GAPS.md` #5): `fix`
+            // handed out a real, wrong, non-monotonic DTS (`dts = pts`) on
+            // *this* side before the mux side ever saw a `None` to backfill
+            // correctly.
+            let delay = stream.params.video.as_ref().map_or(0, |v| v.has_b_frames);
+            let reorders = stream
+                .params
+                .codec_id
+                .is_some_and(|c| c.properties().contains(CodecProperties::REORDER));
+            self.fixer.set_stream_delay(stream.index, delay, reorders);
         }
         // `avg_frame_rate` for a stream whose only rate ever comes from the
         // codec's own in-band parameters (a raw elementary stream has no

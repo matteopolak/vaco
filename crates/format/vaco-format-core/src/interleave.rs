@@ -414,6 +414,12 @@ pub struct MuxTimestamps {
     flags: FormatFlags,
     last_dts: Vec<Timestamp>,
     notimestamps: bool,
+    /// R19c's inputs: each stream's reorder depth (`has_b_frames`, `0` for a
+    /// stream that does not reorder) and how many of its packets this chain
+    /// has already processed, real DTS or not. See [`Self::apply`]'s R19c
+    /// comment for what the pair is for.
+    reorder_delay: Vec<u8>,
+    decode_index: Vec<u64>,
 }
 
 impl MuxTimestamps {
@@ -434,6 +440,24 @@ impl MuxTimestamps {
             flags,
             last_dts: vec![Timestamp::NONE; stream_count],
             notimestamps: flags.contains(FormatFlags::NOTIMESTAMPS),
+            reorder_delay: vec![0; stream_count],
+            decode_index: vec![0; stream_count],
+        }
+    }
+
+    /// Declare a stream's reorder depth (the codec's own `has_b_frames`),
+    /// `0` for a stream that does not reorder at all.
+    ///
+    /// The mux-side mirror of [`crate::time::TimestampFixer::set_stream_delay`]
+    /// — same source (`CodecParameters::video::has_b_frames`), same reason:
+    /// R19c needs it to tell "no DTS yet because the reorder window is still
+    /// filling" from "no DTS at all", which it cannot do from `flags` alone.
+    pub fn set_reorder_delay(&mut self, stream_index: u32, delay: u8) {
+        if let Some(slot) = usize::try_from(stream_index)
+            .ok()
+            .and_then(|i| self.reorder_delay.get_mut(i))
+        {
+            *slot = delay;
         }
     }
 
@@ -472,13 +496,70 @@ impl MuxTimestamps {
             pkt.dts = Timestamp::NONE;
             return Ok(());
         }
+        let stream_idx = usize::try_from(pkt.stream_index).ok();
+        let decode_index = stream_idx.and_then(|i| self.decode_index.get(i)).copied();
+        if let Some(slot) = stream_idx.and_then(|i| self.decode_index.get_mut(i)) {
+            *slot = slot.saturating_add(1);
+        }
+
         if pkt.dts.is_none() {
             if pkt.pts.is_none() {
                 return Err(vaco_core::Error::InvalidData(
                     "this container needs timestamps and the packet has none",
                 ));
             }
-            pkt.dts = pkt.pts;
+            // R19c — a reordering stream's leading `delay` packets, backfilled
+            // from decode order rather than from PTS.
+            //
+            // `TimestampFixer`'s own R19b (crate::time) already derives a real
+            // DTS for every packet once its reorder window has seen `delay + 1`
+            // arrivals, and *correctly* leaves the first `delay` packets at
+            // `None` — its own doc calls this "the window filling, not an
+            // error", measured to match the reference's own `ffprobe` output
+            // (`dts = N/A, N/A, 0, 40, 80, …` for `pts = 0, 160, 80, 40, 120,
+            // …`). Those `None`s used to reach here and get `dts = pts`
+            // unconditionally, which is wrong for exactly this window: PTS is
+            // a *display* time, already shifted forward by the reorder delay
+            // relative to decode order, so pts=160 for the second packet
+            // becomes a DTS the *third* packet's real, smaller DTS (0) then
+            // violates — "non-monotonic dts: this container requires strictly
+            // increasing timestamps" on a real B-frame streamcopy to a strict
+            // container (`vaco-mux-mp4`) even though the source demuxer's own
+            // timestamps were correct throughout (`planning/E2E-GAPS.md` #5,
+            // reproduced against a real `ffmpeg`-encoded `-bf 2` H.264/Matroska
+            // file; `mkv -> mkv` and `mkv -> null` never hit this because
+            // neither requires strictly increasing DTS).
+            //
+            // The fix needs no lookahead: `delay` is a static per-stream fact
+            // (`has_b_frames`, threaded in by `set_reorder_delay`) and this
+            // packet already carries its own `duration`, so decode order can
+            // be reconstructed directly — `dts = (decode_index - delay) *
+            // duration`, which is negative for exactly the leading `delay`
+            // packets and lands on the real, demuxer-supplied DTS the moment
+            // `decode_index == delay` (unaffected here, since by then `dts`
+            // is no longer `None`). Measured against the reference's own
+            // remux of the same file: `ffmpeg`'s `mp4` output assigns this
+            // exact shape (`dts = -1280, -640, 0, 640, …` for a two-frame
+            // delay at a 640-tick step) — this does not have to match those
+            // values exactly (D6/the owner's byte-exactness ruling), only
+            // avoid the structural defect, and it does.
+            let delay = stream_idx
+                .and_then(|i| self.reorder_delay.get(i))
+                .copied()
+                .unwrap_or(0);
+            let index = decode_index.unwrap_or(0);
+            let backfilled = if delay > 0 && index < u64::from(delay) {
+                pkt.duration
+                    .to_ticks(to)
+                    .filter(|&step| step > 0)
+                    .map(|step| {
+                        let behind = i64::try_from(u64::from(delay) - index).unwrap_or(i64::MAX);
+                        Timestamp::new(behind.saturating_neg().saturating_mul(step))
+                    })
+            } else {
+                None
+            };
+            pkt.dts = backfilled.unwrap_or(pkt.pts);
         }
 
         // M2 — the user's output offset, in the output base.
@@ -785,6 +866,73 @@ mod tests {
         m.apply(&mut pkt(0, 10, 1), tb, tb).unwrap();
         let mut p = pkt(0, 9, 1);
         assert!(m.apply(&mut p, tb, tb).is_err());
+    }
+
+    /// R19c (E2E-GAPS #5): a reordering stream's leading `delay` packets
+    /// reach `apply` with `dts = None` by design (`TimestampFixer`'s R19b
+    /// leaves them that way rather than guess) — this is the fix that
+    /// `pts` is not a valid stand-in for that window, because it produces a
+    /// non-monotonic sequence the moment the third packet's real, smaller
+    /// DTS arrives. Values are the measured shape of a real 2-B-frame
+    /// x264/Matroska file (`pts = 0, 160, 80, 40, …`, `duration = 40`
+    /// throughout); the exact backfilled numbers (`-80, -40`) do not have
+    /// to match the reference's own choice (D6), only land before `0` and
+    /// keep advancing, which the sequence-strict `check_monotonic` call at
+    /// the end of this test enforces directly.
+    #[test]
+    fn a_reordering_streams_leading_window_is_backfilled_not_copied_from_pts() {
+        let opts = FormatOptions::default();
+        let tb = Rational::new(1, 1000);
+        // TS_NEGATIVE (mp4's own flag, matching the real repro this pins) so
+        // M3's `avoid_negative_ts auto` leaves the backfilled negative values
+        // alone rather than shifting the whole stream — a real, separate
+        // stage this test is not about, and the reason a first attempt at
+        // this test measured `[0, 40, 80]` instead: `FormatFlags::empty()`
+        // resolves `auto` to "shift to non-negative", which is correct for a
+        // container that cannot express negative DTS, just not what this
+        // assertion is checking.
+        let mut m = MuxTimestamps::new(1, FormatFlags::TS_NEGATIVE, &opts);
+        m.set_reorder_delay(0, 2);
+
+        let reorder_pkt = |pts: i64| {
+            let mut p = pkt(0, pts, 1);
+            p.dts = Timestamp::NONE;
+            p.duration = Duration::from_micros(40_000); // 40 ticks @ 1/1000
+            p
+        };
+
+        let mut p0 = reorder_pkt(0);
+        m.apply(&mut p0, tb, tb).unwrap();
+        let mut p1 = reorder_pkt(160);
+        m.apply(&mut p1, tb, tb).unwrap();
+        // The real DTS a conforming demuxer supplies once its own reorder
+        // window has filled — this packet's `dts` was never `None`.
+        let mut p2 = pkt(0, 0, 1);
+        p2.pts = Timestamp::new(80);
+        p2.duration = Duration::from_micros(40_000);
+        m.apply(&mut p2, tb, tb).unwrap();
+
+        let dts: Vec<_> = [&p0, &p1, &p2].iter().map(|p| p.dts.ticks()).collect();
+        assert_eq!(dts, vec![Some(-80), Some(-40), Some(0)]);
+        assert!(
+            dts.is_sorted_by(|a, b| a < b),
+            "must strictly increase: {dts:?}"
+        );
+    }
+
+    /// A stream with no declared reorder delay is unaffected: `dts = pts`
+    /// exactly as before R19c, since `set_reorder_delay` is never called
+    /// (the default is `0`, matching every existing caller before this test
+    /// was written).
+    #[test]
+    fn a_missing_dts_with_no_declared_reorder_delay_still_copies_pts() {
+        let opts = FormatOptions::default();
+        let tb = Rational::new(1, 1000);
+        let mut m = MuxTimestamps::new(1, FormatFlags::empty(), &opts);
+        let mut p = pkt(0, 42, 1);
+        p.dts = Timestamp::NONE;
+        m.apply(&mut p, tb, tb).unwrap();
+        assert_eq!(p.dts.ticks(), Some(42));
     }
 
     /// The two halves of `notimestamps` now agree. `MuxTimestamps` clears the

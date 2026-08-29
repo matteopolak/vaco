@@ -599,7 +599,18 @@ impl MuxBuilder {
                 st.params.effective_media_type() == Some(StreamType::Audio),
             );
         }
-        let chain = MuxTimestamps::new(n, self.flags, &self.opts);
+        let mut chain = MuxTimestamps::new(n, self.flags, &self.opts);
+        // R19c (`vaco-format-core::interleave`'s own doc on `MuxTimestamps::apply`):
+        // a reordering stream's leading `has_b_frames` packets reach here with
+        // no DTS by design (`TimestampFixer`'s R19b leaves them `None` rather
+        // than guess), and the chain needs the same delay `TimestampFixer::
+        // for_streams` reads to backfill them correctly instead of standing
+        // pts in for dts, which is wrong for exactly this window.
+        for (i, st) in self.streams.iter().enumerate() {
+            let idx = u32::try_from(i).unwrap_or(u32::MAX);
+            let delay = st.params.video.as_ref().map_or(0, |v| v.has_b_frames);
+            chain.set_reorder_delay(idx, delay);
+        }
         // M19 — either spelling of "do not buffer" means the same thing here.
         // `max_interleave_delta == 0` deliberately does *not* join them: the
         // reference's reading of zero there is unmeasured, and the queue's own
