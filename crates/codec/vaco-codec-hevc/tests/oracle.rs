@@ -107,55 +107,54 @@ fn decode_and_compare() -> ((f64, usize), (f64, usize), (f64, usize)) {
 
 /// Decodes without error or panic and reports per-plane agreement against
 /// `ffmpeg` — always passes, so it stays green as a smoke test regardless of
-/// [`known_gap_dense_content_still_diverges`]'s outcome.
+/// [`dense_content_is_byte_exact`]'s outcome.
 #[test]
 fn cabac_intra_frame_decodes_without_error() {
     let _ = decode_and_compare();
 }
 
-/// **Known, named gap — not yet root-caused.** Every 4x4 transform block
-/// (one coefficient group, no `coded_sub_block_flag`/inter-group
-/// `patternSigCtx` interaction) checked so far decodes byte-exact,
-/// including real negative-angle intra prediction, sign-data-hiding and
-/// general 2-D DCT/DST paths — verified by hand against this exact fixture
-/// across the whole first 16x16 region (three 8x8 `NxN` CUs plus the
-/// reconstruction path). The first CU at or above 8x8 with a genuinely
-/// multi-coefficient-group residual diverges, and the defect survived a
-/// full line-by-line re-comparison of every `residual_coding` formula
-/// against the HM reference decoder — see `residual.rs`'s own module doc.
-/// One real bug in this area was found and fixed this pass: coefficient
-/// scanning used a flat full-size scan instead of HM's `SCAN_GROUPED_4x4`,
-/// which interleaves positions from different 4x4 sub-blocks — see
-/// `crate::scan::generate_grouped`'s doc and the property test verifying
-/// it against that flat-scan mistake. A second defect remains.
+/// **Formerly a known, named gap — now root-caused and fixed.** Every 4x4
+/// transform block (one coefficient group) always decoded byte-exact; every
+/// 8x8-and-larger (multi-coefficient-group) block diverged. The cause was in
+/// [`crate::residual::sig_ctx_inc`]'s caller: HM's `getSigCtxInc` returns a
+/// literal `0` for the DC position (`(posX + posY) == 0`), which *bypasses*
+/// `firstSignificanceMapContext` (this crate's `sig_base`/`sig_class_base`)
+/// entirely rather than feeding `0` into it — DC is one context shared by
+/// every transform size within a component, at the component's own base
+/// index, not `comp_base + sig_class_base`. `residual_coding` was adding
+/// `sig_class_base` unconditionally. That distinction is invisible at 4x4
+/// (`sig_base` is `0` there), which is exactly why every 4x4 residual block
+/// decoded byte-exact while every 8x8+ block desynchronised the whole
+/// remainder of the CABAC stream from that bin onward.
 ///
-/// A third, real bug was found and fixed in the same area this pass —
+/// Found by instrumenting a byte-for-byte CABAC bin trace (context index,
+/// state, MPS, decoded value) in both this crate and a from-source,
+/// locally-built HM 18.0 (BSD-3-Clause, Tier A) decoding this same fixture,
+/// and diffing the two traces bin-for-bin: the first divergence landed
+/// exactly on the `sig_coeff_flag` bin at the DC position of the first
+/// multi-coefficient-group (8x8, 4-subset) luma transform block, matching
+/// this bug precisely.
+///
+/// Two other real bugs were found and fixed in the same area in an earlier
+/// pass, kept regardless of this fix: coefficient scanning used a flat
+/// full-size scan instead of HM's `SCAN_GROUPED_4x4` (see
+/// `crate::scan::generate_grouped`'s doc), and
 /// [`crate::residual::sig_base`] used one shared base offset for every
-/// `log2TrafoSize == 3` block regardless of scan order, and let 32x32 luma
-/// fall through to `CONTEXT_TYPE_SINGLE`'s reserved slot instead of sharing
-/// `CONTEXT_TYPE_NxN` with 16x16 — both confirmed against
-/// `ContextTables.h`'s own `significanceMapContextSetStart` table and its
-/// `ISLICE_LUMA_SIGNIFICANCE_CONTEXT` column comments. It does not move this
-/// fixture's numbers (this fixture never reaches a horizontal/vertical-scan
-/// 8x8 luma block or a 32x32 block), but it is a genuine fix, not a
-/// speculative one — kept regardless of this test's outcome.
+/// `log2TrafoSize == 3` block regardless of scan order and let 32x32 luma
+/// fall through to a reserved slot.
 ///
-/// `#[ignore]`d rather than deleted so the exact target (byte-exact per
-/// plane on real, busy content) stays a concrete regression test for
-/// whoever picks this back up, per this project's `vaco-codec-av1` and
-/// `vaco-codec-theora` precedent for a named, disclosed gap.
+/// Kept under its own name (not `known_gap_*`) as the concrete regression
+/// test for this exact defect, per this project's `vaco-codec-av1` and
+/// `vaco-codec-theora` precedent for naming a gap specifically enough that
+/// fixing it reads as fixing *this* test, not deleting it.
 #[test]
-#[ignore = "known gap: multi-coefficient-group (8x8+) residual decode is still wrong; see this test's own doc"]
-fn known_gap_dense_content_still_diverges() {
+fn dense_content_is_byte_exact() {
     let ((y_mean, y_exact), (u_mean, u_exact), (v_mean, v_exact)) = decode_and_compare();
     let y_size = WIDTH * HEIGHT;
     let c_size = (WIDTH / 2) * (HEIGHT / 2);
-    assert!(y_mean < 2.0, "luma plane diverges too far: mean abs diff {y_mean}");
-    assert!(u_mean < 2.0, "Cb plane diverges too far: mean abs diff {u_mean}");
-    assert!(v_mean < 2.0, "Cr plane diverges too far: mean abs diff {v_mean}");
-    assert!(y_exact > y_size * 9 / 10, "luma plane: too few exact samples");
-    assert!(u_exact > c_size * 9 / 10, "Cb plane: too few exact samples");
-    assert!(v_exact > c_size * 9 / 10, "Cr plane: too few exact samples");
+    assert_eq!(y_exact, y_size, "luma plane: not byte-exact, mean abs diff {y_mean}");
+    assert_eq!(u_exact, c_size, "Cb plane: not byte-exact, mean abs diff {u_mean}");
+    assert_eq!(v_exact, c_size, "Cr plane: not byte-exact, mean abs diff {v_mean}");
 }
 
 fn blit(frame: &vaco_frame::Frame, plane_index: usize, width: usize, height: usize, out: &mut [u8]) {

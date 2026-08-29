@@ -293,8 +293,22 @@ pub(crate) fn residual_coding(
                 };
                 let explicit = scan_pos_sig > isz(sub_pos0) || subset == 0 || !pos.is_empty();
                 let sig = if explicit {
-                    let inc = sig_ctx_inc(pattern, u32::from(x), u32::from(y), log2_size, is_chroma);
-                    let full = comp_base + sig_class_base + inc as usize;
+                    // HM's `getSigCtxInc` returns a literal `0` for the DC
+                    // position (`(posX + posY) == 0`) — a special case that
+                    // *bypasses* `firstSignificanceMapContext` (this file's
+                    // `sig_class_base`) entirely rather than feeding `0` into
+                    // it. DC is one context shared by every transform size
+                    // within a component, at the component's own base index
+                    // (`comp_base`) — not `comp_base + sig_class_base`. That
+                    // distinction is invisible at 4x4 (`sig_class_base == 0`
+                    // there), which is exactly why 4x4 residual blocks decoded
+                    // byte-exact while every 8x8+ block desynchronised here.
+                    let full = if x == 0 && y == 0 {
+                        comp_base
+                    } else {
+                        let inc = sig_ctx_inc(pattern, u32::from(x), u32::from(y), log2_size, is_chroma);
+                        comp_base + sig_class_base + inc as usize
+                    };
                     decide_at(cabac, &mut ctx.sig_coeff_flag, full) != 0
                 } else {
                     true

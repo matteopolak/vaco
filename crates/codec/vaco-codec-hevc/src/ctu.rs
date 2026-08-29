@@ -171,9 +171,21 @@ fn coding_unit(
     }
 
     let mut luma_modes = [DC_IDX; 4];
+    // §8.4.2's `candIntraPredModeB`: forced unavailable (→ `INTRA_DC`) not
+    // just at the picture's own top edge but at *every* CTB row boundary —
+    // HM's `getPUAbove(..., planarAtCtuBoundary = true)` returns `NULL`
+    // whenever the queried position is the top row of *its own* CTB,
+    // regardless of whether the CTB above has already been decoded. This
+    // is a real spec rule (deliberately not "already decoded" the way
+    // `split_cu_flag`'s own above-neighbour context is), not an
+    // availability approximation this crate's single-slice/no-tiles scope
+    // makes exact elsewhere (see `crate::framebuf`'s module doc) — missing
+    // it only desyncs CABAC once a second CTB row exists, which no CTU-0
+    // fixture can exercise.
+    let ctb_size = 1i32 << s.log2_ctb_size;
     for (i, pu) in pus.iter().enumerate() {
         let left = s.cu_grid.mode_at(pu.x - 1, pu.y);
-        let above = if pu.y == 0 { DC_IDX } else { s.cu_grid.mode_at(pu.x, pu.y - 1) };
+        let above = if pu.y % ctb_size == 0 { DC_IDX } else { s.cu_grid.mode_at(pu.x, pu.y - 1) };
         let mpm = intra_mode::mpm_list(left, above);
         let prev_flag = prev_flags.get(i).copied().unwrap_or(false);
         let mode = if prev_flag {

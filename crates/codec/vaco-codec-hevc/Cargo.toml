@@ -17,6 +17,7 @@ vaco-codec-cabac = { path = "../../signal/vaco-codec-cabac" }
 vaco-codec-dsp-idct = { path = "../../signal/vaco-codec-dsp-idct" }
 vaco-codec-dsp-intrapred = { path = "../../signal/vaco-codec-dsp-intrapred" }
 vaco-parse-hevc = { path = "../vaco-parse-hevc" }
+vaco-format-nalu = { path = "../../format/vaco-format-nalu" }
 vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
 vaco-packet = { path = "../../model/vaco-packet" }
 vaco-frame = { path = "../../model/vaco-frame" }

@@ -1,0 +1,33 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Another `encumbered = true` component in the tree (D4/D4.1), following
+# `vaco-codec-h264`'s precedent exactly: HEVC decode is covered by multiple
+# patent pools (Access Advance / HEVC Advance, MPEG LA, Velos Media — see
+# `planning/research/07-legal-patents-licensing.md`), and remuxing/parsing
+# (`vaco-parse-hevc`) stays default and is unaffected. D4.1 requires
+# `default = false` on any `encumbered = true` row — `gen-registry` refuses
+# the opposite combination outright — so both are set here together, and
+# the feature name follows the same `patent-encumbered-<codec>-decode`
+# convention as `patent-encumbered-h264-decode`/`patent-encumbered-aac-decode`.
+#
+# This crate was deliberately left unregistered while a real `libx265`
+# fixture showed a genuine defect confined to multi-coefficient-group
+# (8x8+) residual blocks — see `docs/codec/vaco-codec-hevc.md` for the root
+# cause (a `sig_coeff_flag` DC-context bug) and how a CABAC bin trace
+# against a locally-built HM 18.0 found it. `HevcDecoder::send_packet`/
+# `receive_frame` now decode a real `libx265`-encoded I-slice sequence
+# byte-exact per plane against `ffmpeg`'s own decode, measured both
+# in-crate (`tests/oracle.rs::dense_content_is_byte_exact`) and via the
+# real `vaco` binary end to end. `default = false` stays exactly as-is
+# regardless: this is still `encumbered = true` decoding under D4/D4.1.
+
+[[component]]
+kind      = "decoder"
+name      = "hevc"
+long_name = "H.265 / HEVC"
+feature   = "patent-encumbered-hevc-decode"
+default   = false
+encumbered = true
+ctor      = "vaco_codec_hevc::DECODER_HEVC"
+media     = "video"
+codec     = "hevc"

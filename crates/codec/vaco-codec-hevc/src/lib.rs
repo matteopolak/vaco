@@ -16,10 +16,18 @@
 //! ([`vaco_core::Error::Unsupported`]) rather than attempted shallowly:
 //!
 //! - **Inter prediction, B/P slices.** I-slices only.
-//! - **Deblocking and SAO.** No in-loop filter runs. Verification is against
-//!   `ffmpeg -skip_loop_filter all` (and, for the crate's own fixtures,
-//!   material encoded with both filters off at the encoder, so there is
-//!   nothing for either decoder to disagree about).
+//! - **Deblocking and SAO.** No in-loop filter runs. Deblocking is purely a
+//!   post-reconstruction pixel filter with no bitstream footprint beyond
+//!   the slice header (already parsed), so an encode with it on just
+//!   reconstructs unfiltered pixels — a real, bounded deviation, not a
+//!   crash. SAO is different and refused outright at the SPS
+//!   (`sample_adaptive_offset_enabled_flag`): §7.3.8.3's `sao()` syntax is
+//!   *in* the bitstream, once per CTU, and this crate parses none of it —
+//!   decoding a stream that actually turns SAO on would desync the entropy
+//!   decoder from the first merged/offset CTU onward, not just reconstruct
+//!   different pixels. Verification is against `ffmpeg -skip_loop_filter
+//!   all` for deblocking, and against material encoded with `no-sao=1` for
+//!   SAO, so there is nothing for either side to disagree about.
 //! - **Tiles and wavefront (`entropy_coding_sync`).** Refused; only a plain
 //!   single-tile, independent-slice-segment picture is decoded.
 //! - **`cu_qp_delta` / adaptive per-CU QP, chroma QP offset lists, `I_PCM`,
@@ -57,14 +65,34 @@
 //!
 //! # Registration
 //!
-//! **Not registered.** No `vaco-component.toml` exists for this crate, the
-//! same choice `vaco-codec-av1` and `vaco-codec-opus` made while their own
-//! decode paths were still gaining verification: a registered decoder is
-//! what `vaco` selects for real input, and this crate's cuts (above) are
-//! real enough that silent wrongness on an unsupported stream shape would be
-//! worse than `vaco -c:v hevc` simply not existing yet. See
-//! `docs/codec/vaco-codec-hevc.md` for the measured per-plane agreement this
-//! pass reached and what should be re-measured before flipping that switch.
+//! **Registered, patent-encumbered-gated.** `vaco-component.toml` declares
+//! this decoder with `encumbered = true` / `default = false` behind the
+//! `patent-encumbered-hevc-decode` feature — the same D4/D4.1 posture as
+//! `vaco-codec-h264` (HEVC decode is covered by multiple patent pools; see
+//! `planning/research/07-legal-patents-licensing.md`). Registration was held
+//! back while a real `libx265`-encoded fixture showed structured pixel error
+//! on multi-coefficient-group (8x8+) residual blocks — see
+//! `docs/codec/vaco-codec-hevc.md` for that defect's root cause (a
+//! `sig_coeff_flag` DC-context bug in [`residual`]) and the bin-trace method
+//! that found it, plus two more real bugs closing this pass found once the
+//! real `vaco` binary (not this crate's own tests) was the thing being
+//! measured: `hvcC`/AVCC-equivalent extradata was accepted and discarded
+//! rather than parsed (so `vaco -i real.mp4` decoded nothing at all — the
+//! exact `vaco-codec-h264` history repeating, fixed the same way, by
+//! embedding [`vaco_parse_hevc::HevcParser`] instead of a second,
+//! ad-hoc parameter-set store), and the luma MPM "above" candidate reused
+//! a real, already-decoded neighbour's mode across a CTB row boundary
+//! instead of §8.4.2's forced-`INTRA_DC` special case there — invisible to
+//! any single-CTU fixture, since it only fires once a *second* row of CTUs
+//! exists. A real `libx265` stream now decodes byte-exact per plane
+//! against `ffmpeg`'s own decode — measured in-crate
+//! (`tests/oracle.rs::dense_content_is_byte_exact`) and via the real
+//! `vaco` binary, full-length, multi-row, multi-column, all three planes —
+//! within this crate's stated scope above (`no-sao`, `wpp=0`, constant QP,
+//! all-intra): see `docs/codec/vaco-codec-hevc.md`'s "Registration"
+//! section for the exact verified command and what a stream that also
+//! turns SAO/WPP/adaptive-QP on gets instead (a clean, named refusal, not
+//! a crash or wrong pixels).
 
 #![forbid(unsafe_code)]
 
@@ -79,3 +107,20 @@ mod scan;
 mod transform;
 
 pub use decoder::HevcDecoder;
+
+/// The registry descriptor for this crate's decoder.
+///
+/// `caps: Caps::PATENT_ENCUMBERED` is the code-level half of D4's gating,
+/// mirroring `vaco-codec-h264::DECODER_H264` exactly — see this module's own
+/// "Registration" doc, and that crate's, for the other half (the
+/// `vaco-component.toml` fragment's `encumbered = true` / `default = false`
+/// pair, which is what `cargo xtask patent-gate` actually checks).
+pub const DECODER_HEVC: ::vaco_codec_core::DecoderDesc = ::vaco_codec_core::DecoderDesc {
+    name: "hevc",
+    long_name: "H.265 / HEVC",
+    id: ::vaco_codec_core::CodecId::Hevc,
+    media_type: ::vaco_core::MediaType::Video,
+    caps: ::vaco_codec_core::Caps::PATENT_ENCUMBERED,
+    supported_rates: &[],
+    make: |limits| ::std::boxed::Box::new(decoder::HevcDecoder::new(limits)),
+};
