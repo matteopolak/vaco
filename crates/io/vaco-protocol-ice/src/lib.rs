@@ -37,6 +37,12 @@
 //! `USERNAME` on the response (RFC 5389 §7.3.1.2 does not require one, and
 //! this crate does not send one either).
 //!
+//! [`respond_to_binding_request`] is the other direction: answering a
+//! Binding Request a peer sends *to* us, keyed with our own local password.
+//! This turned out not to be optional — see its own doc for why a real
+//! peer needs it during the handshake itself, not only for later consent
+//! freshness.
+//!
 //! # What is deliberately not implemented
 //!
 //! Server-reflexive/relayed candidate discovery (a real STUN/TURN *server*
@@ -46,10 +52,7 @@
 //! loosely (a fixed small retry count with a fixed timeout) rather than the
 //! exact `RTO`/backoff algorithm; every test and the one real peer measured
 //! against (`mediamtx`, see `vaco-mux-whip`) is loopback or LAN, where that
-//! gap does not show. Responding to a peer-initiated Binding Request
-//! (RFC 7675 consent freshness, or an ICE-lite peer's own liveness check) is
-//! also not implemented — see [`connectivity_check`]'s doc for the
-//! consequence.
+//! gap does not show.
 //!
 //! # Security
 //!
@@ -252,6 +255,62 @@ pub fn build_binding_request(creds: &IceCredentials, txid: &TransactionId, prior
         Some(creds.remote_pwd.as_bytes()),
         true,
     )
+}
+
+/// Whether `datagram` demultiplexes as STUN under RFC 7983 §7's byte-range
+/// rule: the first byte's top two bits are `00`, i.e. `0..=3`. A caller
+/// sharing one UDP socket among STUN, DTLS (`20..=63`) and SRTP/SRTCP
+/// (`128..=191`) uses this to route an incoming datagram before deciding
+/// whether [`respond_to_binding_request`] even applies.
+#[must_use]
+pub fn looks_like_stun(datagram: &[u8]) -> bool {
+    datagram.first().is_some_and(|&b| b <= 3)
+}
+
+/// If `datagram` is a `local_pwd`-authenticated STUN Binding Request,
+/// build the Success Response to send back; `None` for anything else — a
+/// non-STUN datagram, a STUN message that is not a Binding Request, or one
+/// whose `MESSAGE-INTEGRITY` does not verify against `local_pwd`.
+///
+/// # Why this exists
+///
+/// Measured directly against a real peer (`mediamtx` 1.20.1, D17): it does
+/// not run ICE-lite the way this crate's own [`connectivity_check`]
+/// assumed for its *own* checks — it keeps sending Binding Requests to the
+/// publisher throughout the DTLS handshake window, using `USERNAME
+/// <our-ufrag>:<its-ufrag>` and `MESSAGE-INTEGRITY` keyed with *our* local
+/// password (the credential our own SDP offer granted). Without an answer,
+/// the DTLS handshake this crate's caller is also driving over the same
+/// socket never receives anything back at all — not a rejection, silence —
+/// because the peer is still waiting for its own connectivity to be
+/// confirmed. This is the responder half of the same short-term-credential
+/// mechanism [`connectivity_check`] already implements for our outgoing
+/// checks; see this crate's top-level docs for why the earlier ICE-lite
+/// assumption did not hold and what changed.
+///
+/// # Security
+///
+/// A response is built only after `MESSAGE-INTEGRITY` verifies with
+/// `local_pwd` — the same real authentication [`connectivity_check`]
+/// performs in the other direction, not a rubber stamp. An unauthenticated
+/// or malformed datagram gets `None`, the same as any non-STUN traffic.
+#[must_use]
+pub fn respond_to_binding_request(datagram: &[u8], local_pwd: &str) -> Option<Vec<u8>> {
+    let parsed = parse(datagram).ok()?;
+    if parsed.method != METHOD_BINDING_REQUEST {
+        return None;
+    }
+    if !verify_integrity(&parsed, local_pwd.as_bytes()) {
+        return None;
+    }
+    let attrs: [(u16, &[u8]); 0] = [];
+    Some(encode(
+        METHOD_BINDING_SUCCESS,
+        &parsed.txid,
+        &attrs,
+        Some(local_pwd.as_bytes()),
+        true,
+    ))
 }
 
 /// A parsed STUN header plus a pointer to where `MESSAGE-INTEGRITY` (if any)
@@ -600,5 +659,53 @@ mod tests {
         let c = creds();
         let result = connectivity_check(&client, &c, 1, Duration::from_millis(100), 1);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn looks_like_stun_matches_the_rfc7983_byte_range() {
+        assert!(looks_like_stun(&[0x00, 0x01]));
+        assert!(looks_like_stun(&[0x03]));
+        assert!(!looks_like_stun(&[0x14])); // DTLS ContentType::Handshake (20)
+        assert!(!looks_like_stun(&[0x80])); // RTP/RTCP
+        assert!(!looks_like_stun(&[]));
+    }
+
+    #[test]
+    fn responds_to_a_correctly_authenticated_binding_request() {
+        // Our own request encoder doubles as a stand-in for a peer's real
+        // Binding Request: same wire shape, same short-term-credential
+        // scheme, just addressed the other way (this crate always signs
+        // outgoing requests with `remote_pwd`, which is exactly the role
+        // `local_pwd` plays for an *incoming* one).
+        let local_pwd = "myownlocalpasswordlongenough1";
+        let creds = IceCredentials {
+            local_ufrag: "peerufrag".to_owned(),
+            remote_ufrag: "ourownufrag".to_owned(),
+            remote_pwd: local_pwd.to_owned(),
+        };
+        let txid = [5u8; 12];
+        let request = build_binding_request(&creds, &txid, 100);
+        let response = respond_to_binding_request(&request, local_pwd).unwrap();
+        let parsed = parse(&response).unwrap();
+        assert_eq!(parsed.method, METHOD_BINDING_SUCCESS);
+        assert_eq!(parsed.txid, txid);
+        assert!(verify_integrity(&parsed, local_pwd.as_bytes()));
+    }
+
+    #[test]
+    fn refuses_to_answer_a_request_with_the_wrong_password() {
+        let creds = IceCredentials {
+            local_ufrag: "peerufrag".to_owned(),
+            remote_ufrag: "ourownufrag".to_owned(),
+            remote_pwd: "thewrongpasswordentirely1234".to_owned(),
+        };
+        let request = build_binding_request(&creds, &[1u8; 12], 1);
+        assert!(respond_to_binding_request(&request, "myownlocalpasswordlongenough1").is_none());
+    }
+
+    #[test]
+    fn ignores_non_stun_and_non_request_datagrams() {
+        assert!(respond_to_binding_request(b"not stun at all", "pwd").is_none());
+        assert!(respond_to_binding_request(&[], "pwd").is_none());
     }
 }
