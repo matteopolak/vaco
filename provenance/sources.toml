@@ -1276,3 +1276,17 @@ kind     = "spec"
 title    = "SMPTE RDD 36:2022, Apple ProRes Bitstream Syntax and Decoding Process (SMPTE Registered Disclosure Document — freely published, not a purchased Standard)"
 acquired = "2026-08-28"
 where    = "https://pub.smpte.org/doc/rdd36/20220909-pub/rdd36-2022.pdf"
+
+[[source]]
+id       = "smpte-st421-2013"
+kind     = "spec"
+title    = "SMPTE ST 421:2013, VC-1 Compressed Video Bitstream Format and Decoding Process (freely published SMPTE Standard)"
+acquired = "2026-08-28"
+where    = "https://pub.smpte.org/pub/st421/st0421-2013.pdf"
+
+[[source]]
+id       = "smpte-rp227"
+kind     = "spec"
+title    = "SMPTE RP 227, VC-1 Bitstream Transport Encodings (points to ST 421's own Annex J/L decoder-initialization metadata and RCV serialization)"
+acquired = "2026-08-28"
+where    = "https://multimedia.cx/mirror/rp227.pdf"

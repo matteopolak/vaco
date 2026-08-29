@@ -1,0 +1,25 @@
+[package]
+name = "vaco-codec-vc1"
+description = "VC-1 / WMV3 (SMPTE ST 421) video decode: Simple/Main profile, progressive I-frame only."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+vaco-core = { path = "../../core/vaco-core" }
+vaco-bitstream = { path = "../../core/vaco-bitstream" }
+vaco-limits = { path = "../../core/vaco-limits" }
+vaco-codec-core = { path = "../../signal/vaco-codec-core" }
+vaco-codec-vlc = { path = "../../signal/vaco-codec-vlc" }
+vaco-frame = { path = "../../model/vaco-frame" }
+vaco-packet = { path = "../../model/vaco-packet" }
+vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
+
+[lints]
+workspace = true
+
+[package.metadata.vaco]
+layer = 4

@@ -1,0 +1,148 @@
+[[table]]
+name   = "PQINDEX_TO_PQUANT"
+file   = "crates/codec/vaco-codec-vc1/src/tables.rs"
+source = "smpte-st421-2013"
+clause = "SS7.1.1.6, Table 36 (PQINDEX to PQUANT/Quantizer translation, implicit quantizer)"
+method = "transcribed"
+
+[[table]]
+name   = "CBPCY_I"
+file   = "crates/codec/vaco-codec-vc1/src/tables.rs"
+source = "smpte-st421-2013"
+clause = "SS11.5, Table 168 (I-Picture CBPCY VLC table)"
+method = "transcribed"
+
+# Checked against primary text a second time after this table's own
+# is_prefix_free test failed on first transcription: symbol 61 had been
+# copy-typed as (453, 11), a duplicate of symbol 29's entry, rather than
+# its own printed value (1811, 13). Re-checked line by line against the
+# source table before the fix, not just re-typed.
+
+[[table]]
+name   = "DC_LOW_LUMA"
+file   = "crates/codec/vaco-codec-vc1/src/tables.rs"
+source = "smpte-st421-2013"
+clause = "SS11.7.1, Table 173 (Low-motion Luma DC Differential VLC table)"
+method = "transcribed"
+
+[[table]]
+name   = "DC_LOW_CHROMA"
+file   = "crates/codec/vaco-codec-vc1/src/tables.rs"
+source = "smpte-st421-2013"
+clause = "SS11.7.1, Table 174 (Low-motion Color-difference DC Differential VLC table)"
+method = "transcribed"
+
+[[table]]
+name   = "DC_HIGH_LUMA"
+file   = "crates/codec/vaco-codec-vc1/src/tables.rs"
+source = "smpte-st421-2013"
+clause = "SS11.7.2, Table 175 (High-motion Luma DC Differential VLC table)"
+method = "transcribed"
+
+[[table]]
+name   = "DC_HIGH_CHROMA"
+file   = "crates/codec/vaco-codec-vc1/src/tables.rs"
+source = "smpte-st421-2013"
+clause = "SS11.7.2, Table 176 (High-motion Color-difference DC Differential VLC table)"
+method = "transcribed"
+
+[[table]]
+name   = "HIGH_RATE_INTRA_CODE, HIGH_RATE_INTRA_RUN_LEVEL, HIGH_RATE_INTRA_NOT_LAST_DELTA_LEVEL_BY_RUN, HIGH_RATE_INTRA_LAST_DELTA_LEVEL_BY_RUN, HIGH_RATE_INTRA_NOT_LAST_DELTA_RUN_BY_LEVEL, HIGH_RATE_INTRA_LAST_DELTA_RUN_BY_LEVEL"
+file   = "crates/codec/vaco-codec-vc1/src/tables_ac_data.rs"
+source = "smpte-st421-2013"
+clause = "SS11.8.6, Table 219-225 (High Rate Intra AC coding set: VLC table, indexed run/level, and four escape-mode delta tables)"
+method = "derived"
+
+# method = "derived", not "transcribed": these six tables were extracted
+# programmatically from the PDF's own table cells by a script (not
+# hand-retyped), then cross-checked by an automated prefix-free +
+# entry-count-matches-the-spec's-own-stated-index-range test
+# (tables.rs::tests::ac_coding_sets_are_prefix_free_and_run_level_covers_escape_range)
+# before being used. This is the mitigation this project's own
+# "how confident should a transcribed table be" lesson calls for on a
+# table this large (340+ numeric entries): removing the hand-transcription
+# step rather than merely checking its output.
+
+[[table]]
+name   = "HIGH_RATE_INTER_CODE, HIGH_RATE_INTER_RUN_LEVEL, HIGH_RATE_INTER_NOT_LAST_DELTA_LEVEL_BY_RUN, HIGH_RATE_INTER_LAST_DELTA_LEVEL_BY_RUN, HIGH_RATE_INTER_NOT_LAST_DELTA_RUN_BY_LEVEL, HIGH_RATE_INTER_LAST_DELTA_RUN_BY_LEVEL"
+file   = "crates/codec/vaco-codec-vc1/src/tables_ac_data.rs"
+source = "smpte-st421-2013"
+clause = "SS11.8.7, Table 226-232 (High Rate Inter AC coding set: VLC table, indexed run/level, and four escape-mode delta tables)"
+method = "derived"
+
+[[table]]
+name   = "ESCMODE"
+file   = "crates/codec/vaco-codec-vc1/src/tables.rs"
+source = "smpte-st421-2013"
+clause = "SS7.1.4.7, Table 58 (AC escape decoding mode code-table)"
+method = "transcribed"
+
+[[table]]
+name   = "ESCLVLSZ_CONSERVATIVE"
+file   = "crates/codec/vaco-codec-vc1/src/tables.rs"
+source = "smpte-st421-2013"
+clause = "SS7.1.4.10, Table 59 (Escape Mode 3 level codeword size, conservative)"
+method = "transcribed"
+
+[[table]]
+name   = "ESCLVLSZ_EFFICIENT"
+file   = "crates/codec/vaco-codec-vc1/src/tables.rs"
+source = "smpte-st421-2013"
+clause = "SS7.1.4.10, Table 60 (Escape Mode 3 level codeword size, efficient)"
+method = "transcribed"
+
+[[table]]
+name   = "escrunsz_to_run_bits"
+file   = "crates/codec/vaco-codec-vc1/src/tables.rs"
+source = "smpte-st421-2013"
+clause = "SS7.1.4.11, Table 61 (Escape Mode 3 run codeword size code-table)"
+method = "transcribed"
+
+[[table]]
+name   = "NORMAL_SCAN"
+file   = "crates/codec/vaco-codec-vc1/src/tables.rs"
+source = "smpte-st421-2013"
+clause = "SS11.9.1, Table 233 (Intra Normal Scan)"
+method = "derived"
+
+# method = "derived": read from the PDF's own table cells via pdfplumber's
+# ruling-line-based cell extraction (the flat pdftotext layout badly
+# scrambled this table's two-digit values, splitting each across two
+# visual sub-rows within a narrow column) rather than the running
+# whole-document text dump, then verified as a permutation of 0..63 by
+# a unit test.
+
+[[table]]
+name   = "HORIZONTAL_SCAN"
+file   = "crates/codec/vaco-codec-vc1/src/tables.rs"
+source = "smpte-st421-2013"
+clause = "SS11.9.1, Table 234 (Intra Horizontal Scan)"
+method = "derived"
+
+[[table]]
+name   = "VERTICAL_SCAN"
+file   = "crates/codec/vaco-codec-vc1/src/tables.rs"
+source = "smpte-st421-2013"
+clause = "SS11.9.1, Table 235 (Intra Vertical Scan)"
+method = "derived"
+
+[[table]]
+name   = "T8, C8, inverse_transform_8x8"
+file   = "crates/codec/vaco-codec-vc1/src/transform.rs"
+source = "smpte-st421-2013"
+clause = "Annex A.1 (Figure 157: 1-D 8-point inverse transform matrix; Figure 159: definition of inverse transform)"
+method = "transcribed"
+
+[[table]]
+name   = "SequenceInfo (STRUCT_C field layout)"
+file   = "crates/codec/vaco-codec-vc1/src/header.rs"
+source = "smpte-st421-2013"
+clause = "Annex J.2, Table 263 (Sequence Header Data Structure STRUCT_C for Simple and Main Profiles) plus Annex L Table 265 (Sequence Layer Data Structure, for the STRUCT_A/B/C word-endianness convention)"
+method = "transcribed"
+
+# Verified bit-for-bit against a real RCV file's own bytes before any
+# decoder code was written (three of STRUCT_C's five reserved-bit
+# constants -- Reserved4==1, Reserved5==0, Reserved6==1 -- all matched
+# on the first attempt, which is the strongest evidence a byte-layout
+# derivation from a spec table alone can get without a second decoder to
+# compare against).

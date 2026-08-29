@@ -1,0 +1,25 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# VC-1 was entirely absent from planning/research/07-legal-patents-licensing.md
+# before this crate (a real gap the previous agent on this issue found and
+# recorded). It is patent-encumbered: developed by Microsoft, later placed
+# under an MPEG-LA-administered contributor patent pool covering VC-1
+# encode/decode. No owner ruling on this project's own exposure exists yet.
+#
+# Per D4/D4.1, `encumbered = true` requires `default = false` (gen-registry
+# refuses the opposite combination), so both are set together here, matching
+# `vaco-codec-h264`'s and `vaco-codec-aac`'s precedent exactly. This is a
+# provisional GREEN-pending-review gate, not a claim that VC-1 has been
+# cleared -- see planning/research/07-legal-patents-licensing.md's new VC-1
+# row for what was recorded and what still needs an owner decision.
+
+[[component]]
+kind      = "decoder"
+name      = "vc1"
+long_name = "SMPTE VC-1 (Simple/Main profile, progressive I-frame only)"
+feature   = "patent-encumbered-vc1-decode"
+default   = false
+encumbered = true
+ctor      = "vaco_codec_vc1::DECODER_VC1"
+media     = "video"
+codec     = "vc1"
