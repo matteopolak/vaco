@@ -198,6 +198,88 @@ fn a_single_sample_round_trips() {
     assert_eq!(round_trip(&ch, 16_000), ch);
 }
 
+/// E2E-GAPS #2: without `prime_audio`, `extradata()` answers `None` until
+/// the first frame -- too late for a container's `add_stream`, which is why
+/// a real `-c:a flac` transcode to Matroska produced a file with no
+/// `STREAMINFO` at all and nothing else (not even `ffmpeg`'s own decoder)
+/// could read it back. `prime_audio` closes that: the extradata is
+/// available immediately, from the pipeline's own already-known stream
+/// shape, with no frame sent at all.
+#[test]
+fn prime_audio_makes_extradata_available_before_the_first_frame() {
+    let mut enc = FlacEncoder::new(Limits::permissive());
+    assert_eq!(Encoder::extradata(&enc), None, "nothing primed yet");
+
+    enc.prime_audio(44_100, ChannelLayout::MONO, SampleFmt::S16P);
+    let primed = Encoder::extradata(&enc).expect("extradata after priming");
+    assert!(primed.starts_with(b"fLaC"), "must start with the fLaC magic");
+
+    // And it must be the *same* extradata `ingest` would have produced from
+    // a real frame -- priming is a shortcut to the same state, not a
+    // separate, possibly-diverging path.
+    let frame = s16p_frame(&[vec![0i16; 4]], 44_100);
+    let mut enc2 = FlacEncoder::new(Limits::permissive());
+    enc2.send_frame(Some(&frame)).expect("send frame");
+    let from_frame = Encoder::extradata(&enc2).expect("extradata after a real frame");
+    assert_eq!(primed, from_frame);
+}
+
+/// The regression `prime_audio` almost caused: seeding `state` ahead of the
+/// first frame must not swallow that first frame's own `pts`, which is the
+/// only source `emit_block`'s sample-accurate arithmetic has for the
+/// stream's time-zero. Priming only pre-fills the *shape* (channels/rate/
+/// bit depth); the timeline still has to come from a real frame.
+#[test]
+fn priming_does_not_prevent_the_first_real_frames_pts_from_being_captured() {
+    use vaco_core::Timestamp;
+
+    let mut enc = FlacEncoder::new(Limits::permissive());
+    enc.prime_audio(44_100, ChannelLayout::MONO, SampleFmt::S16P);
+
+    let mut frame = s16p_frame(&[vec![0i16; 4]], 44_100);
+    frame.pts = Timestamp::new(5000);
+    enc.send_frame(Some(&frame)).expect("send frame");
+    enc.send_frame(None).expect("start drain");
+    let packet = enc.receive_packet().expect("packet");
+    assert_eq!(packet.pts, Timestamp::new(5000));
+}
+
+/// E2E-GAPS #5-adjacent: `FlacEncoder` never set a packet's `pts` at all
+/// before this, so a real `-c:a flac` transcode to any strict container
+/// (Matroska among them) failed with "this container needs timestamps and
+/// the packet has none" downstream, even though every sample encoded
+/// correctly. Two full blocks make the assertion about the *second*
+/// packet's `pts` a real one -- a fixed-blocksize FLAC stream's sample
+/// position for frame `n` is exactly `n * BLOCK_SIZE`, and getting this
+/// wrong (say, by using the *first* frame's `pts` for every packet)
+/// produces a value this test would catch.
+#[test]
+fn each_emitted_packet_carries_the_right_sample_accurate_pts() {
+    use vaco_codec_flac::encoder::BLOCK_SIZE;
+    use vaco_core::Timestamp;
+
+    let n = (BLOCK_SIZE as usize) * 2 + 10;
+    let samples: Vec<i16> = (0..n).map(|i| (i % 100) as i16).collect();
+    let mut frame = s16p_frame(&[samples], 44_100);
+    frame.pts = Timestamp::new(1000);
+
+    let mut enc = FlacEncoder::new(Limits::permissive());
+    enc.send_frame(Some(&frame)).expect("send frame");
+    enc.send_frame(None).expect("start drain");
+    let mut pts: Vec<Option<i64>> = Vec::new();
+    while let Ok(packet) = enc.receive_packet() {
+        pts.push(packet.pts.ticks());
+    }
+    assert_eq!(
+        pts,
+        vec![
+            Some(1000),
+            Some(1000 + i64::from(BLOCK_SIZE)),
+            Some(1000 + 2 * i64::from(BLOCK_SIZE)),
+        ]
+    );
+}
+
 proptest::proptest! {
     #[test]
     fn arbitrary_mono_pcm_round_trips_exactly(

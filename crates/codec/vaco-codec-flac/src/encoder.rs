@@ -29,7 +29,7 @@
 
 use vaco_bitstream::BitWriter;
 use vaco_codec_core::{Accept, Caps, Encoder, Machine};
-use vaco_core::{Error, Result};
+use vaco_core::{Error, Result, Timestamp};
 use vaco_frame::{Frame, FrameData};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::{Packet, PacketFlags};
@@ -69,6 +69,14 @@ pub struct FlacEncoder {
     buffered: Vec<Vec<i32>>,
     frame_number: u32,
     max_block_used: u32,
+    /// The first ingested frame's `pts`, in ticks -- assumed (as every other
+    /// codec in this tree does for audio) to be one tick per sample, so a
+    /// later block's `pts` is derivable as `base_pts + frame_number *
+    /// BLOCK_SIZE` without tracking every intermediate frame's own `pts`
+    /// through the cross-call sample buffer. `None` when the source never
+    /// gave one, in which case every output packet is left with no `pts`
+    /// too, same as before this field existed.
+    base_pts: Option<i64>,
 }
 
 impl FlacEncoder {
@@ -82,6 +90,7 @@ impl FlacEncoder {
             buffered: Vec::new(),
             frame_number: 0,
             max_block_used: 0,
+            base_pts: None,
         }
     }
 
@@ -175,6 +184,20 @@ impl FlacEncoder {
             };
             append_samples(dst, row, format, samples);
         }
+        // The *first real frame's* `pts` is the stream's time-zero for
+        // `emit_block`'s arithmetic, regardless of whether `self.state` was
+        // already populated by `prime_audio` (E2E-GAPS #2) before this frame
+        // ever arrived -- keying this on `base_pts` rather than on
+        // `self.state` being freshly `None` is what keeps those two
+        // features from fighting: without this, `prime_audio` pre-filling
+        // `state` made the `None` arm above (the only place this used to be
+        // set) unreachable for the real first frame, and every packet's
+        // `pts` silently went back to `None` -- reproducing the exact
+        // "container needs timestamps" failure `prime_audio` was written to
+        // fix one layer up.
+        if self.base_pts.is_none() {
+            self.base_pts = frame.pts.ticks();
+        }
         Ok(())
     }
 
@@ -223,9 +246,24 @@ impl FlacEncoder {
             per_channel.push(taken);
         }
         let bytes = encode_frame(&per_channel, state.bits_per_sample, self.frame_number);
+        // E2E-GAPS #5-adjacent: this encoder never set a packet's `pts` at
+        // all before this -- every block reached the muxer with none, which
+        // a strict container (Matroska among them) refuses outright
+        // ("this container needs timestamps and the packet has none"),
+        // reproduced end to end via a real `-c:a flac` transcode. FLAC's own
+        // fixed-blocksize convention makes the sample position of block `n`
+        // exactly `n * BLOCK_SIZE` -- the same arithmetic `frame_number`
+        // already feeds into this block's own FLAC frame header for
+        // seeking -- so no separate bookkeeping is needed beyond the first
+        // frame's own `pts` as the stream's time-zero.
+        let pts = self
+            .base_pts
+            .map(|base| base.saturating_add(i64::from(self.frame_number) * i64::from(BLOCK_SIZE)))
+            .map_or(Timestamp::NONE, Timestamp::new);
         self.frame_number = self.frame_number.wrapping_add(1);
         self.max_block_used = self.max_block_used.max(block_size as u32);
         let mut packet = Packet::from_slice(budget, &bytes)?;
+        packet.pts = pts;
         packet.flags = PacketFlags::KEY;
         self.machine.emit(packet);
         Ok(())
@@ -280,6 +318,62 @@ impl Encoder for FlacEncoder {
             buf.clear();
         }
         self.frame_number = 0;
+    }
+
+    /// The two formats [`Self::ingest`] actually accepts, in the same order
+    /// its own `match` tries them. Without this override the pipeline had
+    /// no way to learn this encoder's requirement ahead of `send_frame`, so
+    /// a caller feeding it a packed format (`vaco-codec-pcm`'s decoders,
+    /// among others) discovered the mismatch only from a failed send —
+    /// `"flac: encoder accepts s16p or s32p input only"` — with nothing
+    /// upstream able to insert a conversion first. Same fix as
+    /// `vaco-codec-pcm`'s own `accepted_sample_fmts` override, for the
+    /// E2E-GAPS #3 negotiation path.
+    fn accepted_sample_fmts(&self) -> &'static [vaco_sampfmt::SampleFmt] {
+        &[vaco_sampfmt::SampleFmt::S16P, vaco_sampfmt::SampleFmt::S32P]
+    }
+
+    /// Seeds [`StreamState`] from the pipeline's own already-known shape,
+    /// the same fields [`Self::ingest`] would otherwise wait for the first
+    /// real [`Frame`] to learn -- which is too late for
+    /// [`Self::extradata`] to answer before a container's `add_stream`
+    /// (E2E-GAPS #2). An unsupported `format` is silently ignored, same as
+    /// this trait method's own default contract: `Self::ingest` still
+    /// raises the real, precise `"flac: encoder accepts s16p or s32p input
+    /// only"` the moment a frame actually arrives in one, and a caller that
+    /// already consulted [`Self::accepted_sample_fmts`] (as the CLI's own
+    /// negotiation does) never reaches that path anyway.
+    fn prime_audio(
+        &mut self,
+        sample_rate: u32,
+        layout: vaco_chlayout::ChannelLayout,
+        format: vaco_sampfmt::SampleFmt,
+    ) {
+        if self.state.is_some() {
+            return;
+        }
+        let bits_per_sample = match format {
+            SampleFmt::S16P => 16,
+            SampleFmt::S32P => 24,
+            _ => return,
+        };
+        let channels = layout.channels;
+        if channels == 0 || channels > 8 {
+            return;
+        }
+        self.state = Some(StreamState {
+            channels,
+            sample_rate,
+            bits_per_sample,
+        });
+        self.buffered = (0..channels).map(|_| Vec::new()).collect();
+    }
+
+    /// Delegates to the inherent [`Self::extradata`], answering `None`
+    /// instead of an empty prefix when nothing is known yet (before
+    /// [`Self::prime_audio`] or a first frame).
+    fn extradata(&self) -> Option<Vec<u8>> {
+        (self.state.is_some()).then(|| self.extradata())
     }
 }
 
