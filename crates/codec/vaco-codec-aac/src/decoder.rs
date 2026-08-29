@@ -67,6 +67,10 @@ pub struct AacDecoder {
     /// beyond "not identical across channels".
     prng_counter: u32,
     pending: VecDeque<Frame>,
+    /// `send_packet(None)` has been seen. `receive_frame` reports `Eof`
+    /// once `pending` is empty and this is set, rather than `NeedMoreInput`
+    /// forever -- see `send_packet`'s own doc for why this exists.
+    draining: bool,
 }
 
 impl AacDecoder {
@@ -80,6 +84,7 @@ impl AacDecoder {
             overlap: Vec::new(),
             prng_counter: 0,
             pending: VecDeque::new(),
+            draining: false,
         }
     }
 
@@ -152,8 +157,19 @@ impl Decoder for AacDecoder {
         let Some(packet) = packet else {
             // Draining at EOF: nothing is buffered across packets (each
             // frame is independently decodable once its overlap-add state
-            // exists), so there is nothing further to flush out here.
-            return Err(Error::Eof);
+            // exists), so there is nothing further to flush out here --
+            // but `Error::Eof` is `receive_frame`'s signal to give
+            // (`Decoder::send_packet`'s own doc: the only documented error
+            // from *this* method is `OutputPending`), not `send_packet`'s.
+            // Returning it directly here used to propagate straight through
+            // `CodecWork::advance`'s `self.side.send(None)?` as a fatal
+            // pipeline error instead of a graceful finish -- measured
+            // against a real AAC file transcoded end to end through the
+            // CLI: `vaco -i av.mp4 -vn -c:a pcm_s16le out.wav` decoded every
+            // frame correctly and then failed the whole run with "Error
+            // while filtering: end of stream" instead of completing.
+            self.draining = true;
+            return Ok(());
         };
         let (cfg, body) = self.resolve_packet(packet.payload())?;
         if cfg.is_pending() {
@@ -265,18 +281,24 @@ impl Decoder for AacDecoder {
             }
         }
         self.config = Some(cfg);
+        frame.pts = packet.pts;
         self.pending.push_back(frame);
         Ok(())
     }
 
     fn receive_frame(&mut self) -> Result<Frame> {
-        self.pending.pop_front().ok_or(Error::NeedMoreInput)
+        self.pending.pop_front().ok_or(if self.draining {
+            Error::Eof
+        } else {
+            Error::NeedMoreInput
+        })
     }
 
     fn flush(&mut self) {
         self.config = None;
         self.overlap.clear();
         self.pending.clear();
+        self.draining = false;
     }
 
     fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
@@ -291,6 +313,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic, reason = "test code")]
     use super::AacDecoder;
     use vaco_codec_core::Decoder;
+    use vaco_core::Error;
     use vaco_frame::FrameData;
     use vaco_limits::{Budget, Limits};
     use vaco_packet::Packet;
@@ -359,10 +382,33 @@ mod tests {
         assert!(row.chunks_exact(4).all(|c| f32::from_le_bytes(c.try_into().unwrap()) == 0.0));
     }
 
+    /// E2E-GAPS #5-adjacent: found while verifying `-c:a pcm_s16le` on a real
+    /// AAC input end to end through the CLI, which failed downstream with
+    /// "this container needs timestamps and the packet has none" even
+    /// though decode itself was correct -- this decoder never copied the
+    /// triggering packet's `pts` onto its output frame. One packet always
+    /// decodes to exactly one frame here (no cross-packet reorder delay,
+    /// per this impl's own drain comment), so the mapping is exact.
+    #[test]
+    fn the_decoded_frames_pts_is_the_packets_pts() {
+        let mut dec = AacDecoder::new(Limits::permissive());
+        let bytes = adts_frame_with_minimal_raw_data_block();
+        let mut budget = Budget::new(Limits::permissive());
+        let mut packet = Packet::from_slice(&mut budget, &bytes).unwrap();
+        packet.pts = vaco_core::Timestamp::new(1234);
+        dec.send_packet(Some(&packet)).unwrap();
+        let frame = dec.receive_frame().unwrap();
+        assert_eq!(frame.pts, vaco_core::Timestamp::new(1234));
+    }
+
     #[test]
     fn draining_with_nothing_sent_reports_eof() {
+        // `send_packet(None)` itself is `Ok` -- `Decoder::send_packet`'s own
+        // doc reserves an error return for `OutputPending`, not end of
+        // stream -- and `receive_frame` is where `Eof` actually surfaces.
         let mut dec = AacDecoder::new(Limits::permissive());
-        assert!(dec.send_packet(None).is_err());
+        assert!(dec.send_packet(None).is_ok());
+        assert!(matches!(dec.receive_frame(), Err(Error::Eof)));
     }
 
     #[test]
