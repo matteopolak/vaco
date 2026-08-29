@@ -3,7 +3,7 @@
 //! plus §9.3.2's `more_coefs`/`token` context derivation and the `pareto`
 //! probability-expansion helper).
 
-use vaco_codec_msac::Vp9BoolDecoder as Bd;
+use vaco_codec_msac::{Vp9BoolDecoder as Bd, Vp9BoolEncoder as Be};
 
 use crate::decode::FrameCtx;
 use crate::header::EntropyContext;
@@ -178,6 +178,208 @@ pub(crate) fn decode_tokens(
     (tokens, c)
 }
 
+/// The inverse of [`read_coef`]'s category lookup: which token (0..=10)
+/// covers `abs_val`, given [`tables::EXTRA_BITS`]'s `(cat, num_extra, base)`
+/// rows are laid out in strictly increasing `base` order, one range per
+/// token, with no gaps (`ONE_TOKEN` covers exactly `1`, `DCT_VAL_CATEGORY1`
+/// covers `5..=6`, and so on) — so the last row whose `base` does not
+/// exceed `abs_val` is always the covering token.
+fn token_for_abs_value(abs_val: i32) -> i32 {
+    let mut token = 0i32;
+    for (i, &(_, _, base)) in tables::EXTRA_BITS.iter().enumerate() {
+        if base <= abs_val {
+            token = i32::try_from(i).unwrap_or(0);
+        } else {
+            break;
+        }
+    }
+    token
+}
+
+/// The write-side counterpart of [`read_coef`]: encodes `abs_val` (already
+/// known to be covered by `token`, via [`token_for_abs_value`]) as its
+/// `num_extra` probability-coded extra bits, MSB first — the exact inverse
+/// of `read_coef`'s `coef += bit << (num_extra - 1 - e)` accumulation.
+/// `bit_depth > 8`'s high-bit extension for `DCT_VAL_CATEGORY6` mirrors
+/// `read_coef`'s own (profile 2/3 is not this crate's encoder's scope —
+/// `Vp9Encoder::accepted_pix_fmts` is 4:2:0 8-bit only — kept total rather
+/// than silently wrong if that ever changes).
+fn write_coef(be: &mut Be, token: i32, abs_val: i32, bit_depth: u32) {
+    let idx = usize::try_from(token).unwrap_or(0);
+    let &(cat, num_extra, base) = tables::EXTRA_BITS.get(idx).unwrap_or(&(0, 0, 0));
+    let mut remaining = abs_val - base;
+    if token == tables::token::DCT_VAL_CATEGORY6 {
+        for e in 0..bit_depth.saturating_sub(8) {
+            let shift = 5 + bit_depth - e;
+            let bit = (remaining >> shift) & 1;
+            be.write_bool(255, bit != 0);
+            remaining -= bit << shift;
+        }
+    }
+    let probs = tables::CAT_PROBS.get(cat).copied().unwrap_or(&[128]);
+    for e in 0..num_extra {
+        let shift = num_extra - 1 - e;
+        let bit = (remaining >> shift) & 1;
+        let p = probs.get(usize::try_from(e).unwrap_or(0)).copied().unwrap_or(128);
+        be.write_bool(p, bit != 0);
+    }
+}
+
+/// The write-side counterpart of [`decode_tokens`] (§6.4.24's `tokens()`),
+/// for `vaco-codec-vp9`'s encoder (issue #330): given `coefs`, the already
+/// forward-transformed, raster-order coefficient block a caller computed
+/// (e.g. via [`vaco_codec_dsp_idct::vp9::forward_wht4x4`]), writes exactly
+/// the bits [`decode_tokens`] would need to read back that same block —
+/// same scan order, same per-position band/context derivation (this
+/// function and `decode_tokens` share `coef_row`/`pareto`/`neighbors`
+/// so the two directions cannot silently diverge), same `more_coefs`/
+/// `token_cache`/`checkEob` state machine, just run forwards instead of
+/// backwards. Returns whether any coefficient was nonzero (the caller's
+/// `above_nz`/`left_nz` "nonzero" flag, mirroring `decode_tokens`'s
+/// `eobCount > 0`).
+///
+/// `mi_cols`/`mi_rows`/`above_nz`/`left_nz` are threaded directly rather
+/// than through a `FrameCtx`, since the encoder has no `FrameCtx` of its
+/// own (that type is `crate::decode`'s decode-side frame state) — this
+/// function only ever needed those four fields out of it.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn encode_tokens(
+    be: &mut Be,
+    entropy: &EntropyContext,
+    coefs: &[i32],
+    mi_cols: usize,
+    mi_rows: usize,
+    above_nz: &mut [Vec<bool>; 3],
+    left_nz: &mut [[bool; 16]; 3],
+    plane: usize,
+    start_x: usize,
+    start_y: usize,
+    tx_sz: i32,
+    scan: &[usize],
+    tx_type: vaco_codec_dsp_idct::vp9::TxType,
+    is_inter: bool,
+    subsampling_x: bool,
+    subsampling_y: bool,
+    bit_depth: u32,
+) -> bool {
+    let tx_sz_u = usize::try_from(tx_sz).unwrap_or(0);
+    let seg_eob = 16usize << (tx_sz_u << 1);
+    let n = 4usize << tx_sz_u;
+    let mut token_cache = vec![0usize; seg_eob];
+    let plane0 = usize::from(plane > 0);
+
+    let (sx, sy) = if plane > 0 { (subsampling_x, subsampling_y) } else { (false, false) };
+    let max_x = (2 * mi_cols) >> u32::from(sx);
+    let max_y = (2 * mi_rows) >> u32::from(sy);
+    let x4 = start_x >> 2;
+    let y4 = start_y >> 2;
+    let numpts = 1usize << tx_sz_u;
+    let mut above = false;
+    let mut left = false;
+    for i in 0..numpts {
+        if x4 + i < max_x {
+            above |= above_nz.get(plane).and_then(|r| r.get(x4 + i)).copied().unwrap_or(false);
+        }
+        if y4 + i < max_y {
+            left |= left_nz.get(plane).and_then(|r| r.get((y4 + i) % 16)).copied().unwrap_or(false);
+        }
+    }
+    let c0_ctx = usize::from(above) + usize::from(left);
+
+    // The last scan position (exclusive) holding a nonzero coefficient —
+    // everything from here on is implicitly zero and needs no bit at all,
+    // the mirror of `decode_tokens` discovering the same boundary via
+    // `more_coefs == false`.
+    let mut eob_c = 0usize;
+    for (c, &pos) in scan.iter().enumerate().take(seg_eob) {
+        if coefs.get(pos).copied().unwrap_or(0) != 0 {
+            eob_c = c + 1;
+        }
+    }
+
+    let mut check_eob = true;
+    for c in 0..eob_c {
+        let pos = scan.get(c).copied().unwrap_or(0);
+        let band = if tx_sz == tables::TX_4X4 {
+            tables::COEFBAND_4X4.get(c).copied().unwrap_or(5)
+        } else {
+            tables::COEFBAND_8X8PLUS.get(c).copied().unwrap_or(5)
+        };
+        let bctx = if c == 0 {
+            c0_ctx
+        } else {
+            let (nb0, nb1) = neighbors(c, pos, n, tx_type);
+            let a = token_cache.get(nb0).copied().unwrap_or(0);
+            let b = token_cache.get(nb1).copied().unwrap_or(0);
+            (1 + a + b) >> 1
+        };
+        let row = coef_row(entropy, tx_sz_u, plane0, is_inter, band, bctx.min(5));
+
+        if check_eob {
+            // `c < eob_c` means a later position in this same pass is
+            // still nonzero, so there are always more coefficients here.
+            be.write_bool(row.first().copied().unwrap_or(128), true);
+        }
+
+        let value = coefs.get(pos).copied().unwrap_or(0);
+        let abs_val = value.unsigned_abs();
+        let abs_val = i32::try_from(abs_val).unwrap_or(i32::MAX);
+        let token = token_for_abs_value(abs_val);
+
+        let mut node_probs = [0u8; 10];
+        for (node, slot) in node_probs.iter_mut().enumerate() {
+            let idx = (1 + node).min(2);
+            let base = row.get(idx).copied().unwrap_or(128);
+            *slot = pareto(node, base);
+        }
+        be.write_tree(&tables::TOKEN_TREE, &node_probs, token);
+
+        if let Some(slot) = token_cache.get_mut(pos) {
+            *slot = tables::ENERGY_CLASS.get(usize::try_from(token).unwrap_or(0)).copied().unwrap_or(0);
+        }
+
+        if token == tables::token::ZERO_TOKEN {
+            check_eob = false;
+        } else {
+            write_coef(be, token, abs_val, bit_depth);
+            be.write_literal(1, u32::from(value < 0));
+            check_eob = true;
+        }
+    }
+    if eob_c < seg_eob {
+        // `check_eob` is guaranteed true here: either `eob_c == 0` (nothing
+        // written yet) or position `eob_c - 1` held a nonzero value by
+        // definition, and only `ZERO_TOKEN` ever leaves `check_eob` false.
+        let band = if tx_sz == tables::TX_4X4 { tables::COEFBAND_4X4.get(eob_c).copied().unwrap_or(5) } else { tables::COEFBAND_8X8PLUS.get(eob_c).copied().unwrap_or(5) };
+        let bctx = if eob_c == 0 {
+            c0_ctx
+        } else {
+            let pos = scan.get(eob_c).copied().unwrap_or(0);
+            let (nb0, nb1) = neighbors(eob_c, pos, n, tx_type);
+            let a = token_cache.get(nb0).copied().unwrap_or(0);
+            let b = token_cache.get(nb1).copied().unwrap_or(0);
+            (1 + a + b) >> 1
+        };
+        let row = coef_row(entropy, tx_sz_u, plane0, is_inter, band, bctx.min(5));
+        be.write_bool(row.first().copied().unwrap_or(128), false);
+    }
+
+    let nonzero = eob_c > 0;
+    for i in 0..numpts {
+        if let Some(row) = above_nz.get_mut(plane)
+            && let Some(slot) = row.get_mut(x4 + i)
+        {
+            *slot = nonzero;
+        }
+        if let Some(row) = left_nz.get_mut(plane)
+            && let Some(slot) = row.get_mut((y4 + i) % 16)
+        {
+            *slot = nonzero;
+        }
+    }
+    nonzero
+}
+
 /// §6.4.26's `read_coef`. `BitDepth > 8`'s high-bit extension for
 /// `DCT_VAL_CATEGORY6` is implemented (profiles 2/3 are epic #32b's scope,
 /// not tested here, but this keeps the syntax total rather than silently
@@ -199,4 +401,136 @@ fn read_coef(bd: &mut Bd<'_>, token: i32, bit_depth: u32) -> i32 {
         coef += bit << (num_extra - 1 - e);
     }
     coef
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code exercising a fixed set of hand-picked coefficient blocks")]
+mod tests {
+    use super::*;
+    use vaco_codec_dsp_idct::vp9::TxType;
+
+    /// `decode_tokens` itself takes `&FrameCtx`, `crate::decode`'s own
+    /// decode-only frame state, which this test has no reason to build —
+    /// so this reads the bits `encode_tokens` wrote back with a direct,
+    /// careful transcription of `decode_tokens`'s own loop, through the
+    /// exact same shared `coef_row`/`pareto`/`neighbors` helpers, rather
+    /// than constructing a whole decoder just to call it.
+    fn round_trip(coefs_raster: &[i32; 16]) -> ([i32; 16], bool) {
+        let entropy = EntropyContext::default();
+        let scan = tables::get_scan(tables::TX_4X4, TxType::DctDct);
+        let mut be = Be::new();
+        be.write_bool(128, false);
+        let mut above_nz = [vec![false; 32], vec![false; 32], vec![false; 32]];
+        let mut left_nz = [[false; 16]; 3];
+        let nz = encode_tokens(&mut be, &entropy, coefs_raster, 8, 8, &mut above_nz, &mut left_nz, 0, 0, 0, tables::TX_4X4, scan, TxType::DctDct, false, true, true, 8);
+        let bytes = be.finish();
+
+        // `Bd::new` itself already consumes the mandatory leading marker
+        // bit (`init_bool`, §9.2.1) as part of construction — the marker
+        // `be.write_bool(128, false)` above wrote is exactly what this
+        // constructor reads and discards; reading it a second time here
+        // would desync every bit after it.
+        let mut bd = Bd::new(&bytes);
+        let dec_above_nz = [vec![false; 32], vec![false; 32], vec![false; 32]];
+        let dec_left_nz = [[false; 16]; 3];
+        let mut token_cache = [0usize; 16];
+        let mut tokens_out = [0i32; 16];
+        let plane0 = 0usize;
+        let (sx, sy) = (false, false);
+        let max_x = (2 * 8) >> u32::from(sx);
+        let max_y = (2 * 8) >> u32::from(sy);
+        let mut above = false;
+        let mut left = false;
+        for i in 0..1usize {
+            if i < max_x {
+                above |= dec_above_nz[plane0][i];
+            }
+            if i < max_y {
+                left |= dec_left_nz[plane0][i % 16];
+            }
+        }
+        let c0_ctx = usize::from(above) + usize::from(left);
+        let mut check_eob = true;
+        let mut c = 0usize;
+        while c < 16 {
+            let pos = scan[c];
+            let band = tables::COEFBAND_4X4[c];
+            let bctx = if c == 0 {
+                c0_ctx
+            } else {
+                let (nb0, nb1) = neighbors(c, pos, 4, TxType::DctDct);
+                let a = token_cache[nb0];
+                let b = token_cache[nb1];
+                (1 + a + b) >> 1
+            };
+            let row = coef_row(&entropy, 0, plane0, false, band, bctx.min(5));
+            if check_eob {
+                let more_coefs = bd.read_bool(row[0]);
+                if !more_coefs {
+                    break;
+                }
+            }
+            let mut node_probs = [0u8; 10];
+            for (node, slot) in node_probs.iter_mut().enumerate() {
+                let idx = (1 + node).min(2);
+                *slot = pareto(node, row[idx]);
+            }
+            let token = bd.read_tree(&tables::TOKEN_TREE, &node_probs);
+            token_cache[pos] = tables::ENERGY_CLASS[usize::try_from(token).unwrap_or(0)];
+            if token == tables::token::ZERO_TOKEN {
+                tokens_out[pos] = 0;
+                check_eob = false;
+            } else {
+                let coef = read_coef(&mut bd, token, 8);
+                let sign_bit = bd.read_literal(1) != 0;
+                tokens_out[pos] = if sign_bit { -coef } else { coef };
+                check_eob = true;
+            }
+            c += 1;
+        }
+        let dec_nz = c > 0;
+        (tokens_out, nz == dec_nz)
+    }
+
+    #[test]
+    fn all_zero_round_trips() {
+        let coefs = [0i32; 16];
+        let (out, nz_matches) = round_trip(&coefs);
+        assert_eq!(out, coefs);
+        assert!(nz_matches);
+    }
+
+    #[test]
+    fn single_dc_round_trips() {
+        let mut coefs = [0i32; 16];
+        coefs[0] = 7;
+        let (out, nz_matches) = round_trip(&coefs);
+        assert_eq!(out, coefs);
+        assert!(nz_matches);
+    }
+
+    #[test]
+    fn scattered_values_round_trip() {
+        let coefs = [3, -1, 0, 0, 2, 0, -5, 0, 0, 0, 1, 0, 0, 0, 0, -2];
+        let (out, nz_matches) = round_trip(&coefs);
+        assert_eq!(out, coefs);
+        assert!(nz_matches);
+    }
+
+    #[test]
+    fn large_magnitude_values_round_trip() {
+        let coefs = [200, -150, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -300];
+        let (out, nz_matches) = round_trip(&coefs);
+        assert_eq!(out, coefs);
+        assert!(nz_matches);
+    }
+
+    #[test]
+    fn last_position_nonzero_round_trips() {
+        let mut coefs = [0i32; 16];
+        coefs[15] = 4;
+        let (out, nz_matches) = round_trip(&coefs);
+        assert_eq!(out, coefs);
+        assert!(nz_matches);
+    }
 }

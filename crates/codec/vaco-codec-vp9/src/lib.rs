@@ -25,9 +25,11 @@
 //! remains explicitly out of scope.
 //!
 //! `crate::encode` (issue #329, C-33a) adds this crate's first encoder: a
-//! real, spec-conformant all-intra key-frame bitstream writer with no
-//! partition/mode search yet (that is #330's separate scope) — see its own
-//! module doc for exactly what it does and does not do.
+//! real, spec-conformant all-intra key-frame bitstream writer. #330 (C-33b)
+//! replaces its fixed partition/mode/skip choices with a real (heuristic,
+//! not RD-optimal) partition-size decision, real intra mode decision, and
+//! real lossless residual coding — see `crate::encode`'s own module doc for
+//! exactly what it does and does not do.
 #![forbid(unsafe_code)]
 
 pub mod decode;
