@@ -51,6 +51,15 @@ impl Encoder for AlacEncoder {
     fn flush(&mut self) {
         self.pending.clear();
     }
+
+    /// Mirrors `frame_codec::bytes_per_sample`'s own accepted set. Same
+    /// reasoning as `vaco-codec-flac`/`vaco-codec-pcm`'s overrides: without
+    /// this, a caller only discovers the s16p/s32p requirement from a
+    /// failed `send_frame`, too late to insert a conversion first
+    /// (E2E-GAPS #3).
+    fn accepted_sample_fmts(&self) -> &'static [vaco_sampfmt::SampleFmt] {
+        &[vaco_sampfmt::SampleFmt::S16P, vaco_sampfmt::SampleFmt::S32P]
+    }
 }
 
 #[cfg(test)]
