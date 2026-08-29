@@ -481,6 +481,28 @@ Dev-only: `proptest`. No external runtime dependencies.
   a loop-filter caveat at all, and reproduces whether or not the loop
   filter runs.
 
+  **Encoder, #330 (C-33b) — real partition/mode decision and real
+  (lossless) residual, replacing #329's fixed largest-partition/`DC_PRED`/
+  `skip=1` skeleton.** See `crate::encode`'s own module doc for exactly
+  what changed. Verified two ways: this crate's own decoder round-trips
+  every encoded fixture byte-exact against the source pixels (a
+  meaningful check *because* the encoder stays lossless — any bug in the
+  forward transform, mode decision or token writer would show up as a
+  real pixel mismatch, not a quality regression), and independently,
+  `ffmpeg -c:v libvpx-vp9`'s own decoder reproduces three encoded
+  fixtures (64x64, 192x128 = 3x2 superblocks, 320x256 = 5x4 superblocks,
+  real non-flat synthetic content) byte-for-byte against the same source
+  pixels, Y/U/V. One real bug was found and fixed this way, and is worth
+  recording since it was invisible to a single-superblock test: this
+  encoder's own superblock-row loop reset `left_partition_context` at the
+  start of each superblock row but not `left_nz` — `crate::decode`'s own
+  `decode_tile` resets both (§6.4.1) — so every frame two or more
+  superblock rows tall desynced the coefficient entropy coder from the
+  very first block of its second row onward (roughly half the frame's
+  samples, confirmed by bisecting frame height). A frame only one
+  superblock tall, or only checked for matching width/height rather than
+  pixel content, could not have caught this.
+
 ## Specification
 
 VP9 Bitstream & Decoding Process Specification, version 0.6, 8 December
