@@ -483,16 +483,29 @@ impl OggDemuxer {
                         }
                     }
                 }
-                // Vorbis's `extradata` convention needs every header packet,
-                // not just the identification one `describe` already stored
-                // (see `codec::pack_xiph_headers`'s doc comment for the
-                // measured layout) — accumulated here and packed once the
-                // last one arrives, since that is the first point all of
-                // them exist. `header_index` was read before this packet's
-                // own increment above, so `header_index + 1 == header_total`
-                // means this member of `completed` was that last header.
+                // Vorbis's and Theora's `extradata` convention both need
+                // every header packet, not just the identification one
+                // `describe` already stored (see `codec::pack_xiph_headers`'s
+                // doc comment for the measured layout) — accumulated here and
+                // packed once the last one arrives, since that is the first
+                // point all of them exist. `header_index` was read before
+                // this packet's own increment above, so
+                // `header_index + 1 == header_total` means this member of
+                // `completed` was that last header.
+                //
+                // Before this, Theora's `extradata` was only ever the raw
+                // identification (BOS) packet `describe` sets — the comment
+                // and setup headers were counted (via
+                // `total_header_packets`, so they were correctly withheld
+                // from the data-packet stream) but never packed in, which
+                // silently discarded the setup header every real Theora
+                // decoder needs (quantization tables, Huffman tables, loop
+                // filter limits) for every single Ogg/Theora stream. Found by
+                // running `vaco-codec-theora`'s decoder against a real
+                // `ffmpeg`-produced `.ogv` fixture (`bear.ogv`, `ffmpeg`
+                // FATE suite) rather than a synthetic extradata blob.
                 let is_last_header = header_index.saturating_add(1) == header_total;
-                if codec == OggCodec::Vorbis {
+                if matches!(codec, OggCodec::Vorbis | OggCodec::Theora) {
                     if let Some(l) = self.logical.get_mut(idx) {
                         l.header_bytes.push(bytes);
                     }
