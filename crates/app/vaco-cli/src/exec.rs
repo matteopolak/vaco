@@ -1516,6 +1516,29 @@ pub fn run_pipeline(
                                 match accepted_audio.first() {
                                     Some(&t) => {
                                         out_audio_format = Some(t);
+                                        // E2E-GAPS #2: give the encoder the
+                                        // stream shape it is about to
+                                        // receive *before* the first frame,
+                                        // so an encoder whose packets are
+                                        // not self-describing (`flac`'s
+                                        // defer sample rate to `STREAMINFO`)
+                                        // can answer `Encoder::extradata`
+                                        // in time for `out_params` below —
+                                        // `Muxer::add_stream` happens once,
+                                        // before this pipeline runs a single
+                                        // frame through it, so "wait for the
+                                        // first frame" (this trait method's
+                                        // own default, and every encoder's
+                                        // behaviour before it existed) is
+                                        // always too late.
+                                        let sample_rate =
+                                            p.audio.as_ref().map_or(0, |a| a.sample_rate);
+                                        let layout = p
+                                            .audio
+                                            .as_ref()
+                                            .and_then(|a| a.layout.clone())
+                                            .unwrap_or(vaco_chlayout::ChannelLayout::MONO);
+                                        encoder.prime_audio(sample_rate, layout, t);
                                         spec.add_sample_converter(
                                             frames,
                                             t,
@@ -1532,6 +1555,10 @@ pub fn run_pipeline(
                                     None => frames,
                                 }
                             };
+                            // Read before `encoder` moves into `add_encoder`
+                            // below — see `prime_audio`'s call above for why
+                            // this can already be `Some` with no frame sent.
+                            let encoder_extradata = encoder.extradata();
                             let packets = spec
                                 .add_encoder(frames, encoder, time_base)
                                 .map_err(|e| internal_from("could not attach an encoder", &e))?;
@@ -1545,6 +1572,9 @@ pub fn run_pipeline(
                                 && let Some(a) = out_params.audio.as_mut()
                             {
                                 a.format = Some(fmt);
+                            }
+                            if let Some(edata) = encoder_extradata {
+                                out_params.extradata = Some(edata);
                             }
                             (packets, out_params, name.to_owned())
                         }
