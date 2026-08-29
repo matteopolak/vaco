@@ -1,0 +1,13 @@
+# Registry fragment (plan 19 SS3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Plan 16 SS6.1/SS6.2's `vaco-filter-text` row (GitHub #462, FT-3.5; #473,
+# FT-4.10): `TextRenderer` plus `drawtext`, the one filter this crate
+# registers as a component. `subtitles`/`ass` sit in `vaco-filter-subtitle`
+# instead, per the plan's own SS6.3 crate split.
+
+[[component]]
+kind = "filter"
+name = "drawtext"
+long_name = "Draw text on top of video frames."
+ctor = "vaco_filter_text::drawtext::DESC"
+media = "video"
