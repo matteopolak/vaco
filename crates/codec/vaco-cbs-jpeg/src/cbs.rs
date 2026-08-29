@@ -33,6 +33,13 @@ fn has_no_payload(marker: u8) -> bool {
 /// distinct from any real marker byte, which is at most `0xFF` (255).
 pub const SCAN_DATA_UNIT_TYPE: u32 = 0x100;
 
+/// The sentinel [`CbsUnit::unit_type`] for one `0xFF` padding-fill byte
+/// (§B.1.1.5) ahead of a real marker. Read back as
+/// [`JpegContent::Marker(0xFF)`](JpegContent::Marker) — see that variant's
+/// write-side handling for why `0xFF` is special-cased to one byte rather
+/// than the usual two.
+pub const FILL_UNIT_TYPE: u32 = 0x102;
+
 /// JPEG has one framing shape: a file starting `SOI`, ending `EOI`. Unit
 /// struct purely to satisfy [`CbsCodec::Framing`]'s shape, the same reason
 /// `vaco-cbs-vp9::Vp9Framing` is one.
@@ -43,7 +50,9 @@ pub struct JpegFraming;
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum JpegContent {
-    /// `SOI`, `EOI`, or another no-payload marker.
+    /// `SOI`, `EOI`, another no-payload marker, or (`Marker(0xFF)`, a special
+    /// case) one `0xFF` padding-fill byte ahead of a real marker — see
+    /// [`FILL_UNIT_TYPE`].
     Marker(u8),
     /// The entropy-coded bytes following an `SOS` segment, exactly as they
     /// appear — restart markers and `0xFF 0x00` byte-stuffing intact.
@@ -62,6 +71,7 @@ impl JpegContent {
     #[must_use]
     pub fn unit_type(&self) -> u32 {
         match self {
+            Self::Marker(0xFF) => FILL_UNIT_TYPE,
             Self::Marker(m) | Self::Raw { marker: m, .. } => u32::from(*m),
             Self::ScanData(_) => SCAN_DATA_UNIT_TYPE,
             Self::Sof(h) => u32::from(h.sof_marker),
@@ -103,9 +113,20 @@ impl CbsCodec for JpegCbs {
             let Some(&marker) = data.get(i + 1) else {
                 return Err(Error::InvalidData("jpeg: truncated marker"));
             };
-            // A `0xFF` padding-fill byte before a real marker: skip it, per
-            // §B.1.1.5's `0xFF` fill bytes.
+            // A `0xFF` padding-fill byte ahead of a real marker (§B.1.1.5):
+            // kept as its own one-byte unit rather than skipped outright —
+            // losing it was a real bug this crate's own fuzzing caught
+            // (`FF FF 0A` split into one two-byte unit, discarding the
+            // leading `FF` with no unit to account for it). Emitting it
+            // separately, rather than folding it into the next marker's
+            // unit, keeps every other unit's bytes starting exactly at their
+            // own `0xFF <marker>` pair — the assumption `read_unit`'s fixed
+            // 4-byte-header skip depends on.
             if marker == 0xFF {
+                fragment.push(
+                    CbsUnit::from_source(FILL_UNIT_TYPE, vec![0xFF], origin(i)),
+                    budget,
+                )?;
                 i += 1;
                 continue;
             }
@@ -193,6 +214,9 @@ impl CbsCodec for JpegCbs {
         if unit.unit_type == SCAN_DATA_UNIT_TYPE {
             return Ok(JpegContent::ScanData(unit.data.clone()));
         }
+        if unit.unit_type == FILL_UNIT_TYPE {
+            return Ok(JpegContent::Marker(0xFF));
+        }
         let marker = u8::try_from(unit.unit_type)
             .map_err(|_| Error::InvalidData("jpeg: unit_type out of range for a marker byte"))?;
         if has_no_payload(marker) {
@@ -217,6 +241,10 @@ impl CbsCodec for JpegCbs {
         budget: &mut Budget,
     ) -> Result<()> {
         match content {
+            JpegContent::Marker(0xFF) => {
+                budget.check(1)?;
+                out.push(0xFF);
+            }
             JpegContent::Marker(m) => {
                 budget.check(2)?;
                 out.push(0xFF);
@@ -466,5 +494,29 @@ mod tests {
             }
             f.release(&mut b);
         }
+    }
+
+    /// §B.1.1.5: a `0xFF` fill byte may precede any marker. `split` used to
+    /// silently drop it (`i += 1; continue;` with no unit ever recording it),
+    /// so `assemble` reproduced two bytes instead of three. Each fill byte is
+    /// now its own [`FILL_UNIT_TYPE`] unit that reads back as
+    /// `JpegContent::Marker(0xFF)` and writes back as the single byte it is.
+    #[test]
+    fn a_fill_byte_ahead_of_a_marker_is_not_dropped() {
+        let data = vec![0xFF, 0xFF, TEM]; // fill byte, then TEM marker
+        let mut cbs = Cbs::new(JpegCbs::new());
+        let mut f = CbsFragment::new();
+        let mut b = budget();
+        cbs.split(&data, JpegFraming, &mut f, &mut b).expect("splits");
+        let types: Vec<u32> = f.units().iter().map(|u| u.unit_type).collect();
+        assert_eq!(types, vec![FILL_UNIT_TYPE, u32::from(TEM)]);
+
+        let content = cbs.read_unit(&f, 0, &mut b).expect("reads");
+        assert_eq!(content, JpegContent::Marker(0xFF));
+
+        let mut out = Vec::new();
+        cbs.assemble(&f, JpegFraming, &mut out, &mut b).expect("assembles");
+        assert_eq!(out, data, "the fill byte must survive an untouched round trip");
+        f.release(&mut b);
     }
 }

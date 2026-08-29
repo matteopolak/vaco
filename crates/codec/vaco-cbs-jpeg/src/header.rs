@@ -105,13 +105,29 @@ impl FrameHeader {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuantTable {
     pub id: u8,
-    /// `true` for 16-bit (`Pq == 1`) values, `false` for 8-bit.
-    pub sixteen_bit: bool,
+    /// `Pq`, the full four-bit precision nibble as coded — not just whether
+    /// it selects 16-bit values. §B.2.4.1 only defines 0 (8-bit) and 1
+    /// (16-bit); a real encoder never sets anything else. But a writer that
+    /// collapsed this to a `bool` (`Pq != 0`) would reconstruct any other
+    /// value in 2..=15 as exactly `1` on write, changing bytes no edit
+    /// touched — the reserved nibble is kept whole so that never happens,
+    /// the same way [`HuffmanTable::class`] keeps `Tc` whole.
+    pub precision: u8,
     /// The 64 values in the order they were coded (zig-zag, per §A.3.7) —
     /// kept in coded order rather than de-zigzagged, since a CBS writer
     /// needs exactly what was read, not the natural-order matrix a decoder
     /// wants.
     pub values: [u16; 64],
+}
+
+impl QuantTable {
+    /// Whether values are coded as 16-bit (`Pq != 0`, matching the read
+    /// side's own leniency — only `Pq == 1` is spec-legal, but any nonzero
+    /// value reads exactly the same way).
+    #[must_use]
+    pub const fn sixteen_bit(&self) -> bool {
+        self.precision != 0
+    }
 }
 
 /// A `DQT` segment: one or more tables back to back until the payload ends.
@@ -125,7 +141,8 @@ pub fn parse_dqt(payload: &[u8]) -> Result<Vec<QuantTable>> {
     let mut tables = Vec::new();
     while r.remaining() > 0 {
         let pq_tq = r.u8();
-        let sixteen_bit = pq_tq >> 4 != 0;
+        let precision = pq_tq >> 4;
+        let sixteen_bit = precision != 0;
         let id = pq_tq & 0x0F;
         let mut values = [0u16; 64];
         for slot in &mut values {
@@ -138,7 +155,7 @@ pub fn parse_dqt(payload: &[u8]) -> Result<Vec<QuantTable>> {
         r.check()?;
         tables.push(QuantTable {
             id,
-            sixteen_bit,
+            precision,
             values,
         });
     }
@@ -150,9 +167,9 @@ pub fn parse_dqt(payload: &[u8]) -> Result<Vec<QuantTable>> {
 pub fn write_dqt(tables: &[QuantTable]) -> Vec<u8> {
     let mut out = Vec::new();
     for t in tables {
-        out.push((u8::from(t.sixteen_bit) << 4) | (t.id & 0x0F));
+        out.push((t.precision << 4) | (t.id & 0x0F));
         for &v in &t.values {
-            if t.sixteen_bit {
+            if t.sixteen_bit() {
                 out.extend_from_slice(&v.to_be_bytes());
             } else {
                 out.push(v as u8);
@@ -279,7 +296,7 @@ mod tests {
         payload.extend((0u16..64).map(|i| (i % 256) as u8));
         let tables = parse_dqt(&payload).expect("parses");
         assert_eq!(tables.len(), 1);
-        assert!(!tables[0].sixteen_bit);
+        assert!(!tables[0].sixteen_bit());
         assert_eq!(tables[0].id, 0);
         assert_eq!(tables[0].values[0], 0);
         assert_eq!(tables[0].values[63], 63);
@@ -297,9 +314,27 @@ mod tests {
         }
         let tables = parse_dqt(&payload).expect("parses");
         assert_eq!(tables.len(), 2);
-        assert!(tables[0].sixteen_bit);
+        assert!(tables[0].sixteen_bit());
         assert_eq!(tables[1].id, 1);
         assert_eq!(write_dqt(&tables), payload);
+    }
+
+    /// Regression for a bug `cbs_jpeg` fuzzing found: `Pq` (the precision
+    /// nibble) collapsed to a `bool` on read, so a reserved value outside
+    /// 0/1 (2..=15 — no real encoder ever sets one, but the parser does not
+    /// reject it) came back as exactly `1` on write, changing bytes with no
+    /// edit at all. `precision` now keeps the whole nibble.
+    #[test]
+    fn a_reserved_precision_nibble_round_trips_whole() {
+        let payload = vec![0xFFu8] // Pq=0xF (reserved), Tq=0xF
+            .into_iter()
+            .chain((0u16..64).flat_map(|i| (i * 100).to_be_bytes())) // Pq!=0 reads 16-bit
+            .collect::<Vec<u8>>();
+        let tables = parse_dqt(&payload).expect("parses");
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].precision, 0xF);
+        assert_eq!(tables[0].id, 0xF);
+        assert_eq!(write_dqt(&tables), payload, "the reserved nibble must survive whole");
     }
 
     /// The real four-table `DHT` from the `baseline.jpg` fixture (DC/AC for
