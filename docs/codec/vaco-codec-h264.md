@@ -398,6 +398,91 @@ divergence sits elsewhere. `residual_block_cabac`'s scan-loop timing
 against real per-coefficient state is the only surface in this function
 left unexplored.
 
+## Deblocking (clause 8.7): chroma and inter `bS` closed, one residual open
+
+*(Added after `H264Decoder` was wired to real reconstruction — #419-#425,
+`a81e2d2` — and dispatched to chase the CABAC desync `E2E-GAPS.md` §1b
+reported at "2 of 25 frames, then `end_of_slice_flag` fired before every
+macroblock was decoded". That error is real, but does **not** reproduce
+with a single reference frame: `tests/macroblock_layer_cabac.rs`'s own
+`cabac_ip_simple.264` fixture (`-refs 1`), decoded through the current
+`H264Decoder` via the real CLI, runs all 25 frames without error. It does
+reproduce with multiple references — `cabac_ip_multiref.264` (`-refs 4`)
+genuinely stops short on 7 of 50 slices, confirmed against a real,
+JM-verified-conformant corpus; see
+`every_slice_in_a_real_multiref_cabac_stream_visits_every_macroblock`
+(new) in `tests/macroblock_layer_cabac.rs` for the exact slices and the
+smallest repro found so far (slice 4, 35 of 36 macroblocks). Root cause
+still not isolated — `ref_idx_lX`'s own CABAC binarisation was checked
+directly against clause 9.3.3.1.1.6 as the leading suspect and matches
+exactly, ruling it out. What blocks a byte-close *single-reference* decode
+today is `crate::deblock`, not the CABAC layer — see below.)*
+
+`crate::deblock::deblock_picture_luma` handled only the all-intra case
+(`bS = 4`/`3`, refusing any non-intra macroblock with `Error::Unsupported`)
+and had no chroma counterpart at all — `decoder.rs` applied it to I slices
+only and never touched `Cb`/`Cr`, leaving every P frame's luma undeblocked
+and every frame's chroma undeblocked, silently (no error — `decoder.rs`'s
+own doc, before this fix, explains why that was judged "demonstrably not
+broken" rather than wrong). Measured directly against `ffmpeg`'s real
+(deblocking-on) decode of `cabac_ip_simple.264`'s exact 25 frames: chroma
+already differed on frame 0 (an I slice), concentrated at 4x4/macroblock
+edges — the "structured, not small-and-unstructured" shape
+`AGENT-CONSTRAINTS.md` calls a real defect, not rounding noise.
+
+Fixed both gaps: `boundary_strength` now implements clause 8.7.2.1's Table
+8-18 in full (collapsed to this decoder's single-reference-list, non-MBAFF,
+frame-only scope — `intra` wins first, then a real per-4x4-block
+coefficient-presence check for `bS = 2`, then a real `ref_idx`/motion-vector
+comparison for `bS = 1`), and `deblock_picture_chroma` filters `Cb`/`Cr`
+using `bS` derived at luma granularity and mapped down for 4:2:0 (only
+luma edge positions 0 and 8 have a real chroma column/row; each of luma's
+four per-4-row `bS` groups covers two chroma samples). Verified against a
+locally built, instrumented JM 19.1 reference decoder
+(`vcgit.hhi.fraunhofer.de/jvet/JM`, BSD, Tier A) rather than re-derived from
+the specification a second time — its own `get_strength_ver`/`_hor`
+(`loop_filter_normal.c`) is the primary source for the collapsed rule
+above, and a locally patched build (forcing the decoder's own
+last-macroblock `end_of_slice_flag` shortcut to actually read the bit) is
+what settled the original CABAC-desync question: the real arithmetic
+engine, at the exact state reached after genuinely decoding the picture's
+last macroblock, returns the terminating bit at the same position both
+`vaco-codec-h264` and JM compute — not a desync.
+
+A second, real bug turned up while wiring the general `bS` case:
+`MbSummary::residual.luma_ac` is indexed by `luma4x4BlkIdx` (clause 6.4.3's
+z-scan order, matching `residual_luma()` and `crate::mb::blk_xy`), but
+`MbSummary::mv_blocks` is genuinely raster-ordered (`row * 4 + col`, its own
+doc says so verbatim) — two different conventions on two fields of the
+same struct, and the first version of `boundary_strength` used the same
+raster index for both. `deblock::raster_to_luma4x4_blk_idx` converts before
+the residual lookup now. This alone took frame 0 (I slice) to byte-exact on
+all three planes and cut the P-frame drift roughly two orders of magnitude
+(max sample error 5-15 and growing every frame, down to 1-2 for the first
+several frames).
+
+**What remains open**: from frame 1 onward, a small residual (max absolute
+sample error up to 8 by frame 24 of 25, concentrated at specific
+macroblock-boundary edges) survives. Hand-traced one instance to a `bS = 2`
+edge between a two-partition `P16x8` macroblock and a neighbour with real
+residual — every input checked (both sides' QP, cross-checked against
+`ffmpeg -debug qp`; the `bS` value itself; `ALPHA_TABLE`/`BETA_TABLE`/
+`TC0_TABLE`; the pre-filter sample values, verified byte-exact via the
+undeblocked reference) matched a correct decode, yet the filtered output
+still differs by 1-2. The likely shared cause: `vaco_codec_dsp_deblock`'s
+own `TC0_TABLE` already carries one documented, oracle-found transcription
+fix (`indexA == 30`'s `bS == 3` column) and an acknowledged, deliberately
+not-yet-chased ~0.2% residual in the same tC0-clipped branch, discovered
+independently against the all-intra `cabac_i_only.264` fixture (which does
+exercise `bS < 4` on intra content, unlike frame 0 above, which is all
+`bS = 4`/`3` and never touches `tC0` at all). This dispatch's own `bS = 1`/
+`bS = 2` edges reach exactly that branch. Plausible, not confirmed — no
+second wrong table entry was found the way the first one was.
+`tests/reconstruct.rs`'s `cabac_ip_simple_full_deblocking_matches_ffmpegs_real_decode`
+(new, `#[ignore]`d with the full account) and
+`cabac_ip_simple_frame_zero_full_deblocking_matches_ffmpeg` (new, passing —
+locks in the frame-0 fix) carry the exact numbers.
+
 ## How to change it
 
 `cavlc_tables.rs` holds every CAVLC constant; `cavlc.rs` is the only module

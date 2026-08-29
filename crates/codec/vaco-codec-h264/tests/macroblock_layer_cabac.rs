@@ -229,6 +229,111 @@ fn every_slice_in_a_real_multiref_cabac_stream_consumes_exactly_its_own_bits() {
     assert!(p_count > 0, "expected at least one P slice");
 }
 
+/// A sharper, weaker-in-form but stronger-in-teeth measurement than
+/// [`every_slice_in_a_real_multiref_cabac_stream_consumes_exactly_its_own_bits`]'s
+/// own `assert_slice_ends_at_rbsp_trailing_bits`: just
+/// `H264Decoder`'s own production guard
+/// (`stats.macroblock_count == total_mbs`, `decoder.rs`), the check that
+/// decides whether the real CLI errors out on this content, run against
+/// *every* slice rather than stopping at the first one that fails a
+/// stricter check.
+///
+/// Built after direct measurement (a locally instrumented JM 19.1
+/// reference decoder, `vcgit.hhi.fraunhofer.de/jvet/JM`, Tier A — see
+/// `docs/codec/vaco-codec-h264.md`'s own "Deblocking" section) found that
+/// `assert_slice_ends_at_rbsp_trailing_bits` demands an invariant real
+/// CABAC streams do not actually have: clause 9.3.4.3.5's own encoder-side
+/// flush writes the true `rbsp_stop_one_bit` as the *last* bit of a
+/// multi-bit "terminating codeword" whose earlier bits are the encoder's
+/// own internal register state, not zero-constrained padding — so a
+/// decoder whose `decode_terminate()` correctly fires can legitimately
+/// stop a few bits *before* that literal stop-bit position, precisely the
+/// "right answers, wrong bit cost" shape every one of that test's own
+/// ignore-reasons already describes. That does not mean this crate's own
+/// CABAC decode is bug-free — see below — only that
+/// `assert_slice_ends_at_rbsp_trailing_bits` is not the check to prove it
+/// with.
+///
+/// What this measurement actually finds, unclouded by that: 7 of 50
+/// slices in this real, JM-verified-conformant (`ldecod` decodes all 50
+/// frames with zero errors) `libx264 -coder cabac -refs 4` corpus
+/// genuinely stop short — a *real* premature `end_of_slice_flag`, the
+/// exact shape `H264Decoder::send_packet` refuses in production
+/// (`decoder.rs`'s own `Error::InvalidData` — the error `E2E-GAPS.md` §1b
+/// reports from the real CLI, which does **not** reproduce with `-refs 1`
+/// content, only with more than one active reference — every failing
+/// slice below has `num_ref_idx_l0_active_minus1 >= 2`, every slice with
+/// 0 or 1 active reference decodes cleanly). Slice 4's own shortfall (35
+/// of 36 macroblocks, the smallest of the seven) is the cleanest minimal
+/// repro this investigation has produced so far — sharper than "diverges
+/// at slice 0", which was an artifact of the flawed trailing-bits check
+/// above, not a property of the real defect. `ref_idx_lX`'s own CABAC
+/// binarisation (`decode_ref_idx`, `mb.rs`) was checked directly against
+/// clause 9.3.3.1.1.6 as the leading suspect (a wrong `ctxIdxInc` for
+/// `binIdx >= 1` would plausibly hide until `num_ref_idx_active` makes a
+/// multi-bin value likely) and matches the specification exactly: `binIdx
+/// == 0` uses the neighbour-derived increment, `binIdx == 1` is fixed at
+/// 4, `binIdx >= 2` is fixed at 5. Ruled out, not merely unchecked. Root
+/// cause not isolated further within this dispatch's own time-box.
+#[test]
+#[ignore = "real, reproducible desync on multi-reference P slices -- 7 of \
+50 slices in cabac_ip_multiref.264 stop short of their own picture's \
+macroblock count (slice 4: 35/36, the smallest shortfall and best next \
+repro target); every failing slice has num_ref_idx_l0_active_minus1 >= 2; \
+see this test's own doc for what was ruled out"]
+fn every_slice_in_a_real_multiref_cabac_stream_visits_every_macroblock() {
+    let data: &[u8] = include_bytes!("fixtures/cabac_ip_multiref.264");
+    let mut params = ParameterSets::new();
+    let mut budget = Budget::new(Limits::default());
+    let mut rbsp = RbspBuf::new();
+    let mut slice_idx = 0u32;
+    let mut short_slices = Vec::new();
+
+    for nal in annexb::nal_units(data) {
+        let Some(header) = H264NalHeader::parse(nal) else { continue };
+        match header.nal_unit_type {
+            NalUnitType::Sps => {
+                rbsp.fill(nal, &mut budget).unwrap();
+                let _ = params.add_sps(rbsp.as_slice(), &mut budget);
+            }
+            NalUnitType::Pps => {
+                rbsp.fill(nal, &mut budget).unwrap();
+                let _ = params.add_pps(rbsp.as_slice(), &mut budget);
+            }
+            NalUnitType::IdrSlice | NalUnitType::NonIdrSlice => {
+                rbsp.fill(nal, &mut budget).unwrap();
+                let payload = rbsp.as_slice();
+                let mut reader = BitReader::new(payload);
+                reader.skip(8);
+                let pps_id = {
+                    let mut r2 = BitReader::new(payload);
+                    r2.skip(8);
+                    let mut g = vaco_codec_golomb::BoundedGolomb::new(&mut r2, &mut budget);
+                    let _ = g.ue_v(u32::MAX).unwrap();
+                    let _ = g.ue_v(9).unwrap();
+                    g.ue_v(255).unwrap() as u8
+                };
+                let (pps, sps) = params.sps_for_pps(pps_id).unwrap();
+                let slice_header =
+                    SliceHeader::parse_data(&mut reader, header, sps, pps, &mut budget).unwrap();
+                let total_mbs = sps.pic_width_in_mbs * sps.pic_height_in_map_units;
+                let mut cabac = CabacDecoder::from_reader(reader);
+                let stats =
+                    vaco_codec_h264::mb::decode_slice_cabac(&mut cabac, &mut budget, sps, pps, &slice_header)
+                        .unwrap_or_else(|e| panic!("slice {slice_idx}: {e:?}"));
+                if stats.macroblock_count != total_mbs {
+                    short_slices.push((slice_idx, stats.macroblock_count, total_mbs, slice_header.num_ref_idx_l0_active_minus1));
+                }
+                slice_idx += 1;
+            }
+            _ => {}
+        }
+    }
+
+    println!("short slices (idx, got, total, num_ref_idx_l0_active_minus1): {short_slices:?}");
+    assert!(short_slices.is_empty(), "every slice must visit its own picture's full macroblock count");
+}
+
 #[test]
 #[ignore = "known incomplete, and this round's CBF_CHROMA_AC fix (see the \
 ip_simple test's ignore reason for the exact bug and its Table 9-18 \

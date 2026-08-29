@@ -93,7 +93,7 @@ use vaco_core::{Error, Result};
 use vaco_frame::{Frame, FrameFlags};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
-use vaco_parse_h264::{H264NalHeader, H264Parser, NalUnitType, SliceHeader, SliceKind};
+use vaco_parse_h264::{H264NalHeader, H264Parser, NalUnitType, SliceHeader};
 use vaco_pixfmt::PixFmt;
 
 use crate::reconstruct::{ReconstructedPicture, RefPicturePlanes, reconstruct_picture};
@@ -313,27 +313,31 @@ impl H264Decoder {
         )?;
         drop(ref_list0);
 
-        // Clause 8.7's luma deblocking filter (luma-only, all-intra `bS`
-        // derivation -- see `crate::deblock`'s own doc for exactly what
-        // that covers) -- applied only to I slices, whose macroblocks are
-        // by construction all intra, so `deblock_picture_luma`'s own
-        // explicit non-intra refusal never fires here. A P slice's
-        // picture is left undeblocked rather than refused outright:
-        // every real MP4/CABAC-P stream contains at least one inter
-        // macroblock, so refusing here would make this decoder unusable
-        // for exactly the content #422/#425's own "not yet" note already
-        // names, and an undeblocked P frame is `AGENT-CONSTRAINTS.md`'s
-        // "demonstrably not broken" bar, not a wrong one.
-        if slice_header.kind == SliceKind::I {
-            crate::deblock::deblock_picture_luma(
-                &mut pic.luma,
+        // Clause 8.7's deblocking filter, luma and chroma, both I and P
+        // slices -- `crate::deblock`'s own module doc has the full
+        // boundary-strength derivation (Table 8-18, collapsed to this
+        // decoder's single-reference-list P-slice scope) and the
+        // luma-to-chroma `bS` mapping for 4:2:0.
+        crate::deblock::deblock_picture_luma(
+            &mut pic.luma,
+            &stats.macroblocks,
+            mbs_wide,
+            mbs_high,
+            slice_header.disable_deblocking_filter_idc,
+            slice_header.slice_alpha_c0_offset_div2,
+            slice_header.slice_beta_offset_div2,
+        )?;
+        for (chroma, offset) in [(&mut pic.cb, chroma_qp_offset_cb), (&mut pic.cr, chroma_qp_offset_cr)] {
+            crate::deblock::deblock_picture_chroma(
+                chroma,
                 &stats.macroblocks,
                 mbs_wide,
                 mbs_high,
+                offset,
                 slice_header.disable_deblocking_filter_idc,
                 slice_header.slice_alpha_c0_offset_div2,
                 slice_header.slice_beta_offset_div2,
-            )?;
+            );
         }
 
         if info.is_reference {
