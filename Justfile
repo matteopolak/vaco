@@ -183,9 +183,12 @@ checkasm:
 checkasm-bench:
     cargo run --release -p vaco-checkasm {{TD}} -- --bench
 
-# Two-pass PGO build (plan 12 §7).
+# Two-pass PGO build (plan 12 §7). NOT IMPLEMENTED — PF-0.8 (#98) has not been
+# built. This recipe called `cargo xtask pgo`, which is not a subcommand, so it
+# failed with an unhelpful clap error that read like a broken install.
 build-pgo:
-    cargo xtask pgo
+    @echo "build-pgo is not implemented yet — see PF-0.8 (#98)." >&2
+    @exit 1
 
 # Reclaim build scratch. Safe to run mid-wave: it never touches a target dir a
 # running agent owns, only the orchestrator's own and stale ones.
