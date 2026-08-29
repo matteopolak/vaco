@@ -309,6 +309,9 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-codec-dirac (new) | 4 | #43 (T2-11) | agent:t2-video | active | 2026-08-28 | — | GREEN per the legal register's SS5.1 default-build list (unqualified, no dagger). VC-2's Low Delay/HQ profiles are intra-only by design, so intra-only scope covers a real complete subset; full Dirac inter/OBMC (T2-11c/#389) is out of scope. |
 | vaco-codec-jpeg2000 (new) | 4 | #40 (T2-07) | agent:t2-video | active | 2026-08-28 | — | GREEN (mildly qualified) per the legal register. Least tractable of this batch per the batch's own priority order -- attempted last, after the other four. |
 | vaco-codec-dsp-dwt (new) | 3 | D-15 (unresolved) | agent:t2-video | active | 2026-08-28 | — | Shared lifting-based discrete wavelet transform (ISO 15444-1 Annex F shape), needed by both vaco-codec-jpeg2000 and vaco-codec-dirac; D-15 was unowned and unresolved, claimed here rather than duplicated per-crate. |
+| vaco-codec-dsp-mecmp | 3 | #145 (PF-3.9) | agent:pf-batch | active | 2026-08-29 | — | Reclaimed from agent:me-rc's done row (#144/D-12) to attempt SATD SIMD specifically, per owner's #145 comment leaving it open ("three of four done, SATD is a real gap"). |
+| vaco-checkasm | 10 | #145 (PF-3.9) | agent:pf-batch | active | 2026-08-29 | — | Extending kernels::mecmp to wire vaco-codec-dsp-mecmp's new SATD vector variant through Differential, so it cannot rot even if dispatch stays scalar. |
+| vaco-simd | 0 | #145 (PF-3.9) | agent:pf-batch | active | 2026-08-29 | — | Extending ops::simd with a small transpose4x4_i32 composition (zip_low/zip_high + 64-bit bitcast, mirrored scalar oracle + proptest) needed by mecmp's SATD attempt; no existing composition covered an in-lane 4x4 transpose. |
 
 # Fan-out plan: core first, then leaves in batches
 
