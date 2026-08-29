@@ -33,6 +33,36 @@ and AVCC-vs-Annex-B handling. MP4 stores length-prefixed AVCC; the decoder wants
 Annex-B; `h264_mp4toannexb` exists and is registered but **nothing in the decode
 path ever applies it**.
 
+## 1b. Measured H.264 capability after wiring (2026-08-29, real binary)
+
+`H264Decoder` is now wired to the real reconstruction (`a81e2d2`) and genuinely
+decodes through the CLI. Measured against `libx264`-encoded `testsrc2`:
+
+| Input | Result |
+|---|---|
+| Main profile, `-bf 0` | **2 of 25 frames**, then a CABAC desync |
+| Main profile, default (B-frames) | 2 frames, then `CABAC B-slice mb_type/sub_mb_type` |
+| High profile (x264's **default**) | 0 frames — `transform_size_8x8_flag`/Intra_8x8 unimplemented |
+| Baseline / Constrained Baseline | 0 frames — CAVLC reconstruction unimplemented |
+
+So the wiring is correct and the first frames are byte-exact, but no real-world
+file decodes to completion yet. In priority order, what stands between here and
+ordinary MP4 playback:
+
+1. **The CABAC desync on P slices** — `end_of_slice_flag` fires before every
+   macroblock is decoded. Pre-existing, tracked by ignored tests in
+   `tests/macroblock_layer_cabac.rs`, several prior investigation rounds, root
+   cause unisolated. This is the blocker: it stops even the simplest real
+   stream at frame 3.
+2. **Intra_8x8 / `transform_size_8x8_flag`** — x264 defaults to High profile,
+   so most files in the world start here.
+3. **CABAC B slices** — x264 emits B-frames by default at every profile.
+4. **CAVLC reconstruction** — the entropy layer verifies bit consumption and
+   discards its coefficients and motion vectors.
+
+Nothing here is a design problem; all four are unfinished implementation with a
+correct decoder underneath.
+
 ## 2. Matroska rejects codecs it should map
 
 `the muxer refused a stream: unsupported: matroska: codec has no CodecID
