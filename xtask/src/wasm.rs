@@ -80,6 +80,15 @@ const NATIVE_ONLY: &[(&str, &str)] = &[
          WebRTC/DataChannel APIs, not this crate.",
     ),
     (
+        "vaco-mux-whip",
+        "the whip muxer's own negotiation dials a std::net::TcpStream (via \
+         vaco-protocol-socket's addr::connect, itself NATIVE_ONLY above) for \
+         the WHIP HTTP exchange, and depends on vaco-protocol-dtls \
+         (NATIVE_ONLY above, openssl) for the DTLS handshake SRTP keys are \
+         derived from. A wasm build would reach WHIP through the browser's \
+         own RTCPeerConnection, not a wasm build of this crate.",
+    ),
+    (
         "vaco-demux-rtsp",
         "RTSP's control connection is inherently duplex (send a request, read \
          its response) before there is anything to hand a caller, so — exactly \
