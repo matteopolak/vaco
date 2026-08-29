@@ -6973,3 +6973,63 @@ work and out of scope for #327/#330/#328 as dispatched this round.
 
 `Vaco-Spec-Ref: vp9-bitstream-spec-v0.6` §6.2 (color_config signalling),
 §8.3/§8.4 (backward adaptation, referenced from the original entry).
+
+### Update: `vaco-codec-vp9`'s encoder gains real partition/mode decision and real residual (#330, C-33b)
+
+The all-intra key-frame encoder landed for #329 (C-33a) always chose the
+largest partition down to a hardcoded `BLOCK_8X8`, always `DC_PRED` for
+luma and chroma, and always `skip = 1` (no residual, source pixels never
+read). #330 replaces all three: a per-pixel mean-corrected-variance
+partition-split heuristic (`vaco_codec_dsp_mecmp::variance`, checked at
+64/32/16, never below 8x8 — rectangular `HORZ`/`VERT` partitions and
+sub-8x8 blocks stay out of scope), SATD-based intra mode decision
+(`vaco_codec_dsp_mecmp::satd`) over all ten modes at each coding block's
+top-left 4x4 unit, and real lossless residual coding (forward
+Walsh-Hadamard transform, real coefficient token writing, a real `skip`
+decision based on whether any transform unit's residual is actually
+nonzero). The encoder stays lossless (`base_q_idx = 0`) — no real
+quantiser or rate control yet; `vaco-codec-dsp-ratecontrol` exists for
+when this encoder gains one.
+
+Two additive, small upstream changes this needed, both noted in case a
+future VP9-family (e.g. AV1) encoder wants the same pieces:
+
+- **`vaco_codec_dsp_idct::vp9::forward_wht4x4`** (new function, no
+  existing signature touched): the VP9 bitstream specification defines
+  only the *inverse* Walsh-Hadamard transform (decoding is all it needs),
+  so an encoder needs its own forward direction. Derived by algebraically
+  inverting `iwht4`'s seven-step lifting scheme (each step is invertible
+  by construction; reversing them in reverse order is the standard way to
+  invert a lifting transform), not transcribed from any specification
+  text — there is none to transcribe. Verified by property-testing round
+  trips through the crate's own already-shipped `inverse_transform_2d`
+  itself (`forward_wht4x4_always_round_trips`, ~256 random 4x4 blocks),
+  which is the correct oracle here: there is no independent forward-
+  direction spec to check against, but there is an exact algebraic
+  property (composing forward-then-inverse must be the identity) that a
+  wrong implementation could not satisfy by coincidence.
+- **`vaco-codec-vp9::tokens::encode_tokens`** (new function alongside the
+  existing `decode_tokens`, same file, sharing its private `coef_row`/
+  `pareto`/`neighbors` helpers so the two directions read the identical
+  context/probability tables): the write-side counterpart of coefficient
+  token decode.
+
+**One real bug found and fixed, worth recording for its shape rather than
+its content**: the encoder's own superblock-row loop reset
+`left_partition_context` at the top of every superblock row but not
+`left_nz` — `crate::decode::decode_tile` resets both every row (§6.4.1).
+Missing half of that reset is invisible on a single row of superblocks
+(the initial all-`false` value is still correct there) and desyncs the
+coefficient entropy coder from the very first block of the *second*
+superblock row onward — roughly half a two-superblock-row frame's samples
+came out wrong, found by a pixel-exact lossless round-trip test
+deliberately built two superblock rows tall (a same-sized-but-one-row-
+tall frame, or a test that only checks output width/height rather than
+pixel content, cannot reach this at all). Confirmed independently against
+`ffmpeg -c:v libvpx-vp9`'s own decoder, not just this crate's own decoder,
+on real (non-flat) multi-superblock content: 0 of 6144/36864/122880 bytes
+differ across three fixtures after the fix.
+
+`Vaco-Spec-Ref: vp9-bitstream-spec-v0.6` §6.4.1 (`decode_tile`'s per-
+superblock-row context reset), §8.7.1.10 (inverse WHT, the specification
+this crate's forward transform inverts).
