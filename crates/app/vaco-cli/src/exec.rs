@@ -1562,6 +1562,19 @@ fn open_output(
     let mut probe = (desc.open)(Box::new(vaco_format_core::vacoraw::MemorySink::new()))
         .map_err(|e| muxer_open_error(out, &e))?;
     if probe.flags().contains(FormatFlags::NOFILE) {
+        // A `NOFILE` muxer has no byte-oriented destination at all, but some
+        // (WHIP, `vaco-mux-whip`, #619) still need to know the URL itself —
+        // an HTTP endpoint to negotiate against, not a sink to write into.
+        // `Muxer::bind_url`'s doc comment names this pattern explicitly:
+        // give every `NOFILE` muxer the chance to ask, the same way
+        // `NEEDNUMBER` below already does, and treat "I have no use for
+        // this" (the default `Unsupported`) as silently fine — which is
+        // exactly today's behaviour for `null`/`mkvtimestamp_v2` and every
+        // other `NOFILE` muxer that predates this branch.
+        match probe.bind_url(&out.url) {
+            Ok(()) | Err(Error::Unsupported(_)) => {}
+            Err(e) => return Err(muxer_open_error(out, &e)),
+        }
         return Ok((probe, None));
     }
     // The destination is a filename *pattern* (`out_%03d.png`), not a real
