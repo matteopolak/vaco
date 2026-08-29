@@ -658,6 +658,50 @@ impl Sps {
     pub const fn frame_size_in_mbs(&self) -> u64 {
         (self.pic_width_in_mbs as u64) * (self.frame_height_in_mbs() as u64)
     }
+
+    /// The real byte size of one decoded frame at `width` x `height`, summed
+    /// plane by plane from this SPS's own `chroma_format`/`bit_depth_*` —
+    /// not a worst-case guess.
+    ///
+    /// A flat "4 bytes per pixel" (the RGBA-sized bound several other codecs
+    /// use, where the decoded format really can be that wide) overshoots a
+    /// real 4:2:0 8-bit frame by nearly 3x: 3840x2160 is 12.4 MB of actual
+    /// samples but was being budgeted at 33.2 MB, which pushed an ordinary
+    /// 4K Main-profile stream over `Limits::strict`'s 16 MiB `max_frame_bytes`
+    /// cap and failed the whole SPS parse. The chroma format and bit depths
+    /// are already known by the time [`Sps::parse_data`] reaches its budget
+    /// check, so there is no need to guess.
+    ///
+    /// Chroma planes are `ceil(width / SubWidthC)` by `ceil(height /
+    /// SubHeightC)` samples each, two of them (Cb and Cr), per §6.2 and Table
+    /// 6-1; monochrome has none. A sample is one byte at 8-bit depth and two
+    /// otherwise, matching how every bit depth above 8 is actually stored.
+    ///
+    /// Returns `None` on overflow, which the caller treats as "too large" —
+    /// the same outcome [`vaco_limits::Budget::check_frame`]'s own overflow
+    /// case gives.
+    #[must_use]
+    fn frame_bytes(&self, width: u32, height: u32) -> Option<u64> {
+        let w = u64::from(width);
+        let h = u64::from(height);
+        let luma_bpp: u64 = if self.bit_depth_luma > 8 { 2 } else { 1 };
+        let luma = w.checked_mul(h)?.checked_mul(luma_bpp)?;
+        let chroma = if self.chroma_format == ChromaFormat::Monochrome {
+            0
+        } else {
+            let sub_w = u64::from(self.chroma_format.sub_width_c());
+            let sub_h = u64::from(self.chroma_format.sub_height_c());
+            let chroma_bpp: u64 = if self.bit_depth_chroma > 8 { 2 } else { 1 };
+            // ceil(w / sub_w), ceil(h / sub_h); sub_w and sub_h are always 1
+            // or 2, so `sub - 1` cannot underflow.
+            let cw = w.checked_add(sub_w.checked_sub(1)?)?.checked_div(sub_w)?;
+            let ch = h.checked_add(sub_h.checked_sub(1)?)?.checked_div(sub_h)?;
+            cw.checked_mul(ch)?
+                .checked_mul(2)?
+                .checked_mul(chroma_bpp)?
+        };
+        luma.checked_add(chroma)
+    }
 }
 
 // ------------------------------------------------------------------- parsing
@@ -838,9 +882,17 @@ impl Sps {
         let (w, h) = sps
             .dimensions()
             .ok_or(Error::InvalidData("frame cropping leaves no picture"))?;
-        // Four bytes per pixel is the widest packed 8-bit layout; the real
-        // pixel format tightens this once it is known.
-        budget.check_frame(w.max(sps.coded_width()), h.max(sps.coded_height()), 4)?;
+        let cw = w.max(sps.coded_width());
+        let ch = h.max(sps.coded_height());
+        // Bound the dimensions themselves against `max_dimension`; the
+        // `bytes_per_pixel` of 1 here is a placeholder for that half of the
+        // check only — the real byte total, plane by plane, is computed by
+        // `frame_bytes` and checked against `max_frame_bytes` below.
+        budget.check_frame(cw, ch, 1)?;
+        let bytes = sps
+            .frame_bytes(cw, ch)
+            .ok_or(Error::InvalidData("frame geometry overflows"))?;
+        budget.check_count("max_frame_bytes", bytes, budget.limits().max_frame_bytes)?;
         Ok(sps)
     }
 }

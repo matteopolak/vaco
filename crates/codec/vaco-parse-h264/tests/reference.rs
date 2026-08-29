@@ -608,6 +608,53 @@ fn every_reported_number_matches_the_reference() {
     }
 }
 
+/// A real 4K SPS must parse under [`Limits::strict`], not just
+/// [`Limits::permissive`].
+///
+/// Regression for the bug this session fixed: `Sps::parse_data`'s own
+/// end-of-parse budget check assumed 4 bytes per pixel — the widest packed
+/// 8-bit layout, right for the RGBA-ish image codecs that pattern is copied
+/// from, wildly wrong for a YUV 4:2:0 video frame. At 3840x2160 that
+/// overshoot (33.2 MB) blew straight through `Limits::strict`'s 16 MiB
+/// `max_frame_bytes` cap even though the real frame this SPS describes is
+/// 12.4 MB, so an ordinary 4K Main-profile stream failed to parse its own
+/// SPS under the reference-mirroring "conservative caps for untrusted input"
+/// default (`Discovery::new`'s own default, which is what `vaco-probe` and
+/// `vaco-cli` build their parser from) — `vaco-probe` printed
+/// `profile=unknown`, `pix_fmt=unknown`, `level=-99` on a file libx264 wrote
+/// without complaint, and looked exactly like a rejected level 5.1 rather
+/// than a resolution-triggered budget miscalculation. `level_idc` itself was
+/// never involved: any codec-level table lookup keyed on it (see
+/// [`vaco_parse_h264::LEVELS`]) accepts 51 outright, and this SPS parses
+/// fine under [`Limits::permissive`] both before and after the fix — the
+/// crossover is `pic_width_in_mbs * pic_height_in_map_units * 16 * 16 * 4 >
+/// 16 MiB`, which 4:2:0 8-bit content the size of a real broadcast frame
+/// reaches well before any level table does.
+///
+/// This SPS is the real bytes `libx264` wrote for `testsrc2=size=3840x2160`,
+/// Main profile, `-bf 0 -refs 1`, CABAC, level 5.1 (`0x33`) — lifted the same
+/// way every row in [`TABLE`] is.
+#[test]
+fn a_4k_sps_fits_the_strict_frame_byte_cap() {
+    let ebsp: &[u8] = &[
+        0x67, 0x4d, 0x40, 0x33, 0xda, 0x00, 0xf0, 0x01, 0x0f, 0xb0, 0x11, 0x00, 0x00, 0x03, 0x00,
+        0x01, 0x00, 0x00, 0x03, 0x00, 0x32, 0x0f, 0x18, 0x32, 0xa0,
+    ];
+    let mut scratch = Vec::new();
+    let rbsp = annexb::to_rbsp(ebsp, &mut scratch);
+
+    for limits in [Limits::strict(), Limits::permissive()] {
+        let mut budget = Budget::new(limits);
+        let sps = Sps::parse(rbsp, &mut budget).expect("a real 4K Main SPS must parse");
+        assert_eq!(sps.dimensions(), Some((3840, 2160)));
+        assert_eq!(sps.profile_name(), Some("Main"));
+        assert_eq!(sps.level_idc, 51);
+        let params = codec_parameters(&sps);
+        let v = params.video.as_ref().expect("video parameters");
+        assert_eq!(v.format.map(vaco_pixfmt::PixFmt::name), Some("yuv420p"));
+    }
+}
+
 /// The picture rate, as ITU-T H.264 §E.2.1 defines it, is *half* what the
 /// reference prints as `r_frame_rate`.
 ///
