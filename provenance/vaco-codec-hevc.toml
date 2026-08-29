@@ -1,0 +1,26 @@
+# Every static/const array of 32+ elements in this crate, per
+# docs/provenance.md's threshold. Smaller tables (CTX_IND_MAP_4X4, the
+# per-syntax-element CABAC init tables below 32 entries, ANG_TABLE/
+# INV_ANG_TABLE, FILTER_THRESHOLD, INV_QUANT_SCALES, MIN_IN_GROUP) are
+# documented in their own module doc comments instead, per that same page.
+
+[[table]]
+name   = "INIT_SIG_COEFF_FLAG"
+file   = "crates/codec/vaco-codec-hevc/src/cabac_ctx.rs"
+source = "hm-reference-software"
+clause = "ContextTables.h, ISLICE_LUMA_SIGNIFICANCE_CONTEXT ++ ISLICE_CHROMA_SIGNIFICANCE_CONTEXT (I-slice row only — this crate's slices are always I)"
+method = "transcribed"
+
+[[table]]
+name   = "GROUP_IDX"
+file   = "crates/codec/vaco-codec-hevc/src/cabac_ctx.rs"
+source = "hm-reference-software"
+clause = "TComRom.cpp, g_uiGroupIdx[32]"
+method = "transcribed"
+
+[[table]]
+name   = "CHROMA_QP_MAP_420"
+file   = "crates/codec/vaco-codec-hevc/src/transform.rs"
+source = "itu-t-h265-202108"
+clause = "Table 8-10 (ChromaArrayType == 1, 4:2:0), cross-checked against HM's g_aucChromaScale[CHROMA_420]"
+method = "transcribed"

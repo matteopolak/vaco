@@ -1,0 +1,31 @@
+[package]
+name = "vaco-codec-hevc"
+description = "H.265/HEVC intra-only video decode (patent-encumbered-hevc-decode)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+vaco-core = { path = "../../core/vaco-core" }
+vaco-bitstream = { path = "../../core/vaco-bitstream" }
+vaco-limits = { path = "../../core/vaco-limits" }
+vaco-codec-core = { path = "../../signal/vaco-codec-core" }
+vaco-codec-cabac = { path = "../../signal/vaco-codec-cabac" }
+vaco-codec-dsp-idct = { path = "../../signal/vaco-codec-dsp-idct" }
+vaco-codec-dsp-intrapred = { path = "../../signal/vaco-codec-dsp-intrapred" }
+vaco-parse-hevc = { path = "../vaco-parse-hevc" }
+vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
+vaco-packet = { path = "../../model/vaco-packet" }
+vaco-frame = { path = "../../model/vaco-frame" }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.vaco]
+layer = 4
