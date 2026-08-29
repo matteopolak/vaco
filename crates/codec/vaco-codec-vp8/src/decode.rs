@@ -2,26 +2,48 @@
 //! reconstruction and the loop filter, tied together into a
 //! [`vaco_codec_core::Decoder`].
 //!
-//! # Known-unverified pieces
+//! # Two "known-unverified" pieces, now checked (issue #301)
 //!
-//! Two details RFC 6386's own prose leaves to "the reference decoder" and
-//! which this crate's spec extraction could not pin down from the primary
-//! text alone (see `planning/TECH-DEBT.md`'s row for this crate):
+//! Two details RFC 6386's narrative prose leaves to "the reference decoder"
+//! were previously implemented from a widely-documented convention rather
+//! than a primary-text citation. Both are now checked line-by-line against
+//! RFC 6386's own reference-decoder appendix (§20.6 `dixie_loopfilter.c` and
+//! §20.13's `calculate_chroma_splitmv`/the non-split chroma shortcut in
+//! §20.14's `predict_inter_emulated_edge` — Tier A, part of the RFC itself,
+//! not a third-party implementation) and confirmed correct:
 //!
-//! 1. The exact index a loop-filter *mode* delta (`mb_lf_adjustments()`'s
-//!    four mode-delta slots) applies to for each macroblock mode. This
-//!    crate uses the widely-documented convention (0 = `B_PRED`, 1 =
-//!    `ZEROMV`, 2 = other inter modes, 3 = `SPLITMV`) but has not
-//!    cross-checked it against RFC 6386 §9.4/§10's own text.
-//! 2. Chroma motion-vector rounding: the four covering luma (eighth-pel)
-//!    components are summed and divided by 8 with a symmetric round; the
-//!    exact rounding RFC 6386 specifies was not captured in this crate's
-//!    spec extraction pass.
+//! 1. The loop-filter *mode* delta index (0 = `B_PRED`, 1 = `ZEROMV`, 2 =
+//!    other inter modes, 3 = `SPLITMV`, no delta for other intra modes) —
+//!    [`mode_delta_index`] — matches §20.6's `calculate_filter_parameters`
+//!    exactly.
+//! 2. Chroma motion-vector rounding — [`round_div8`] — summing four luma
+//!    subblock components and dividing by 8 with this crate's symmetric
+//!    round is algebraically identical to §20.14's whole-block shortcut
+//!    (divide the single luma MV by 2, same rounding), and matches
+//!    §20.13's `calculate_chroma_splitmv` exactly for the split case.
 //!
-//! Both are implemented with a reasonable, documented choice rather than
-//! left `todo!()`, and both are exactly the kind of thing the differential
-//! pass against real encoder output (this crate's own tests, `tests/`) is
-//! meant to catch.
+//! A **real bug** turned up during the same check, in a third place the
+//! loop filter reads: whether to skip the four *internal* subblock edges.
+//! §20.6's own comment on the equivalent test warns "this conditional is
+//! actually dependent on the number of coefficients decoded, not the skip
+//! flag as coded in the bitstream" — this crate had used exactly that skip
+//! flag ([`MbInfo`]'s now-removed `skip_coeff` reuse in [`apply_loop_filter`]),
+//! which is wrong whenever `mb_skip_coeff` is clear but every decoded block
+//! still happens to carry zero coefficients. Fixed by tracking
+//! [`MbInfo::any_coeff`] from the actual decoded token results
+//! ([`any_nonzero_coeff`]) instead.
+//!
+//! # Conformance (issue #301)
+//!
+//! `tests/conformance.rs` decodes real `webmproject/vp8-test-vectors` files
+//! and diffs Y, U and V **separately** against `ffmpeg`'s own decode of the
+//! same file. 58 of the 60 official vectors (a curated 10-vector subset is
+//! committed under `tests/fixtures/vp8/`) are **byte-exact** on every plane
+//! after the fix above. The remaining 2 use a non-zero RFC 6386 §9.1
+//! display-rescale code this crate does not implement — a real, scoped-out
+//! feature gap, not a reconstruction defect (see that test file's module
+//! doc for how the two were told apart from real bugs, including an
+//! `ffmpeg` default-vsync frame-duplication trap in the harness itself).
 
 use vaco_codec_core::machine::{Accept, Machine};
 use vaco_codec_core::{Decoder, DecoderDesc};
@@ -101,24 +123,35 @@ pub(crate) fn gather_left<const N: usize>(plane: &Plane, x: i32, y: i32) -> [u8;
 /// (mode context, motion-vector prediction, the loop filter) needs to know.
 #[derive(Debug, Clone, Copy)]
 struct MbInfo {
-    skip_coeff: bool,
     ref_frame: u8, // 0 = intra
     mv: Mv,        // eighth-pel; representative MV (SPLITMV: subblock 15's)
     sub_mvs: [Mv; 16], // eighth-pel per-subblock MV (all equal to `mv` unless SPLITMV)
     is_splitmv: bool,
     has_y2: bool,
+    /// Whether *any* Y1/Y2/U/V block actually decoded a non-zero
+    /// coefficient. RFC 6386 §15.1's own reference decoder (`dixie`,
+    /// §20.6) flags that its loop-filter skip test "is actually dependent
+    /// on the number of coefficients decoded, not the skip flag as coded
+    /// in the bitstream" — `eob_mask` there is set from each block's
+    /// decoded end-of-block count, not from `mb_skip_coeff`. The two agree
+    /// whenever `mb_skip_coeff` is set (no tokens are even read), but a
+    /// macroblock can have `mb_skip_coeff` clear and still decode every
+    /// block to all-zero, in which case the reference still skips the
+    /// internal-edge filter and this field is what lets [`crate::decode`]
+    /// match that.
+    any_coeff: bool,
     filter_level: i32,
 }
 
 impl Default for MbInfo {
     fn default() -> Self {
         Self {
-            skip_coeff: false,
             ref_frame: 0,
             mv: (0, 0),
             sub_mvs: [(0, 0); 16],
             is_splitmv: false,
             has_y2: true,
+            any_coeff: false,
             filter_level: 0,
         }
     }
@@ -290,8 +323,8 @@ fn decode_macroblock(
             *r = [sub_modes[12], sub_modes[13], sub_modes[14], sub_modes[15]];
         }
         ctx.left_bmode = [sub_modes[3], sub_modes[7], sub_modes[11], sub_modes[15]];
-        reconstruct_intra(ctx, entropy, token_bd, col, row, mode, uv_mode, &sub_modes, skip_coeff, segment_id);
-        store_mb(ctx, col, row, segment_id, skip_coeff, 0, mode, (0, 0), [(0, 0); 16], false);
+        let any_coeff = reconstruct_intra(ctx, entropy, token_bd, col, row, mode, uv_mode, &sub_modes, skip_coeff, segment_id);
+        store_mb(ctx, col, row, segment_id, any_coeff, 0, mode, (0, 0), [(0, 0); 16], false);
         return;
     }
 
@@ -307,8 +340,8 @@ fn decode_macroblock(
             sub_modes = [derived_bmode(mode); 16];
         }
         let uv_mode = bd.read_tree(&tables::UV_MODE_TREE, &entropy.uv_mode_prob);
-        reconstruct_intra(ctx, entropy, token_bd, col, row, mode, uv_mode, &sub_modes, skip_coeff, segment_id);
-        store_mb(ctx, col, row, segment_id, skip_coeff, 0, mode, (0, 0), [(0, 0); 16], false);
+        let any_coeff = reconstruct_intra(ctx, entropy, token_bd, col, row, mode, uv_mode, &sub_modes, skip_coeff, segment_id);
+        store_mb(ctx, col, row, segment_id, any_coeff, 0, mode, (0, 0), [(0, 0); 16], false);
         return;
     }
 
@@ -319,7 +352,6 @@ fn decode_macroblock(
     } else {
         3
     };
-
     let neighbor = |m: Option<MbInfo>| -> Option<NeighborMv> {
         m.map(|m| NeighborMv {
             ref_frame: m.ref_frame,
@@ -381,12 +413,12 @@ fn decode_macroblock(
         };
     }
 
-    reconstruct_inter(
+    let any_coeff = reconstruct_inter(
         ctx, entropy, token_bd, refs, col, row, ref_frame, whole_mv, &sub_mvs, is_splitmv,
         skip_coeff, segment_id,
     );
     let stored_sub_mvs = if is_splitmv { sub_mvs } else { [whole_mv; 16] };
-    store_mb(ctx, col, row, segment_id, skip_coeff, ref_frame, mode, whole_mv, stored_sub_mvs, is_splitmv);
+    store_mb(ctx, col, row, segment_id, any_coeff, ref_frame, mode, whole_mv, stored_sub_mvs, is_splitmv);
 }
 
 pub(crate) fn mv_bounds(col: usize, row: usize, mb_cols: usize, mb_rows: usize) -> (i32, i32, i32, i32) {
@@ -405,7 +437,7 @@ fn store_mb(
     col: usize,
     row: usize,
     segment_id: u8,
-    skip_coeff: bool,
+    any_coeff: bool,
     ref_frame: u8,
     mode: i32,
     mv: Mv,
@@ -417,12 +449,12 @@ fn store_mb(
     let idx = row * ctx.mb_cols + col;
     if let Some(slot) = ctx.mbs.get_mut(idx) {
         *slot = MbInfo {
-            skip_coeff,
             ref_frame,
             mv,
             sub_mvs,
             is_splitmv,
             has_y2,
+            any_coeff,
             filter_level: level,
         };
     }
@@ -470,12 +502,13 @@ fn reconstruct_intra(
     sub_modes: &[i32; 16],
     skip_coeff: bool,
     segment_id: u8,
-) {
+) -> bool {
     let has_y2 = y_mode != tables::B_PRED;
     let quant = dequant_for(ctx, segment_id);
 
     // -- residual decode --
     let (y_blocks, y2_block, u_blocks, v_blocks) = decode_residuals(bd, ctx, entropy, col, row, has_y2, skip_coeff, &quant);
+    let any_coeff = any_nonzero_coeff(y2_block.as_ref(), &y_blocks, &u_blocks, &v_blocks);
 
     let base_x = ix(col * 16);
     let base_y = ix(row * 16);
@@ -502,6 +535,18 @@ fn reconstruct_intra(
 
     predict_and_write_8(&mut ctx.u, ix(col * 8), ix(row * 8), uv_mode, &u_blocks);
     predict_and_write_8(&mut ctx.v, ix(col * 8), ix(row * 8), uv_mode, &v_blocks);
+    any_coeff
+}
+
+/// Whether any Y1/Y2/U/V block of a macroblock decoded a non-zero
+/// coefficient — RFC 6386 §15.1's actual loop-filter skip test (see
+/// [`MbInfo::any_coeff`]'s doc), computed from what token decode actually
+/// produced rather than from the `mb_skip_coeff` bitstream flag.
+fn any_nonzero_coeff(y2: Option<&BlockCoeffs>, y: &[BlockCoeffs; 16], u: &[BlockCoeffs; 4], v: &[BlockCoeffs; 4]) -> bool {
+    y2.is_some_and(|b| b.has_coeffs)
+        || y.iter().any(|b| b.has_coeffs)
+        || u.iter().any(|b| b.has_coeffs)
+        || v.iter().any(|b| b.has_coeffs)
 }
 
 #[allow(
@@ -855,14 +900,15 @@ fn reconstruct_inter(
     is_splitmv: bool,
     skip_coeff: bool,
     segment_id: u8,
-) {
+) -> bool {
     let quant = dequant_for(ctx, segment_id);
     let has_y2 = !is_splitmv;
     let (y_blocks, y2_block, u_blocks, v_blocks) =
         decode_residuals(bd, ctx, entropy, col, row, has_y2, skip_coeff, &quant);
+    let any_coeff = any_nonzero_coeff(y2_block.as_ref(), &y_blocks, &u_blocks, &v_blocks);
 
     let Some(refp) = refs.get(ref_frame) else {
-        return;
+        return any_coeff;
     };
 
     let base_x = ix(col * 16);
@@ -932,6 +978,7 @@ fn reconstruct_inter(
         let pred_v = mc_block::<4, 4>(&refp.v, cx, cy, chroma_mv, ctx.header.version);
         write_residual_block(&mut ctx.v, cx, cy, &pred_v, v_block);
     }
+    any_coeff
 }
 
 /// Motion-compensated prediction for one `W x H` block. `mv` is eighth-pel.
@@ -984,7 +1031,7 @@ fn apply_loop_filter(ctx: &mut FrameCtx<'_>) {
                 loopfilter::MbFilterInfo { filter_level: 0, skip_inner: false },
                 |mb| loopfilter::MbFilterInfo {
                     filter_level: mb.filter_level,
-                    skip_inner: mb.skip_coeff && mb.has_y2,
+                    skip_inner: mb.has_y2 && !mb.any_coeff,
                 },
             )
         })
