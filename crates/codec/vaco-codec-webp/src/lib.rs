@@ -1,10 +1,17 @@
-//! WebP, wrapping the `image-webp` crate (D11).
+//! WebP: native lossless (`VP8L`) codec, lossy encode routed through
+//! `vaco-codec-vp8`, and `image-webp` kept only as the fallback for
+//! `VP8X`-wrapped files (alpha, animation, metadata chunks) this crate does
+//! not yet handle natively (C-19).
 //!
 //! # What it is
 //!
 //! [`codec::decode`] translates WebP bytes (still or animated) to
-//! [`vaco_frame::Frame`]s; [`codec::encode`] goes the other way for a single
-//! frame, lossless only. [`WebpDecoder`]/[`WebpEncoder`] wrap those in the
+//! [`vaco_frame::Frame`]s — natively for a bare `VP8L` file, via
+//! `image-webp` for everything `VP8X`-wrapped. [`codec::encode`] goes the
+//! other way for a single frame, natively, always lossless; a caller that
+//! wants lossy sets the `"lossless"` option to `"0"` on [`WebpEncoder`],
+//! which routes through [`codec::encode_lossy`] and `vaco-codec-vp8`'s real
+//! encoder instead. [`WebpDecoder`]/[`WebpEncoder`] wrap those in the
 //! `vaco_codec_core::SendReceive` protocol every codec in this tree shares.
 //!
 //! # How it works
@@ -12,29 +19,36 @@
 //! A packet is the whole file. An animated WebP can yield several frames
 //! from one packet — `image_webp::WebPDecoder` composites dispose/blend
 //! onto the canvas itself, unlike GIF/APNG — hence [`Caps::SUBFRAMES`] on
-//! decode. Encode has no animation path in `image-webp` at all, so it runs
-//! one frame in, one packet out, the same shape as `vaco-codec-qoi`.
+//! decode. Encode has no animation path at all (neither native nor via
+//! `image-webp`), so it runs one frame in, one packet out, the same shape
+//! as `vaco-codec-qoi`.
 //!
 //! # How to change it
 //!
-//! [`codec`] is the only module that knows the `image_webp::` types. A
-//! pixel-format-coverage gap belongs in [`codec::encode`]'s colour-type
-//! match; lossy (`VP8`) encode or animation (`ANMF`) encode would need a
-//! backend `image-webp` does not provide (plan 15 §4A.4 routes lossy WebP
-//! through `vaco-codec-vp8` once it exists, per C-19).
+//! [`vp8l`] is the native lossless bitstream (decode and encode); its own
+//! module doc says exactly what this crate's encoder emits and why that is
+//! still fully valid. [`codec`] is the byte-level glue: RIFF sniffing,
+//! `Frame`-to-ARGB packing, and the lossy path through `vaco-codec-vp8` +
+//! `vaco-scale`. A pixel-format-coverage gap belongs in
+//! [`codec::frame_to_argb`]'s match; `VP8X` features (alpha via a separate
+//! chunk, animation, ICCP/EXIF) going native is future work, not required
+//! by C-19.
 //!
 //! # Dependencies
 //!
-//! `image-webp` (the wrapped decoder/encoder), `vaco-codec-core`,
-//! `vaco-frame`/`vaco-pixfmt`/`vaco-pool`, `vaco-packet`, `vaco-limits`.
+//! `vaco-codec-vp8` (lossy encode), `vaco-scale` (pixel-format conversion
+//! for lossy encode's `Yuv420p` requirement), `image-webp` (the `VP8X`
+//! fallback), `vaco-codec-core`, `vaco-frame`/`vaco-pixfmt`/`vaco-pool`,
+//! `vaco-packet`, `vaco-limits`.
 
 #![forbid(unsafe_code)]
 
 mod codec;
+mod vp8l;
 
 pub use codec::{decode, encode};
 
-use vaco_codec_core::{Accept, Caps, Machine, SendReceive};
+use vaco_codec_core::{Accept, Caps, Encoder, Machine, SendReceive};
 use vaco_core::Result;
 use vaco_frame::Frame;
 use vaco_limits::{Budget, Limits};
@@ -103,12 +117,14 @@ impl SendReceive for WebpDecoder {
     }
 }
 
-/// A [`SendReceive`] encoder over [`Frame`]/[`Packet`]: one lossless WebP
-/// image per frame.
+/// A [`SendReceive`] encoder over [`Frame`]/[`Packet`]: one WebP image per
+/// frame, lossless by default — set the `"lossless"` option to `"0"` for a
+/// lossy (`VP8`) image via `vaco-codec-vp8` instead.
 #[derive(Debug)]
 pub struct WebpEncoder {
     machine: Machine<Packet>,
     limits: Limits,
+    lossless: bool,
 }
 
 impl WebpEncoder {
@@ -118,6 +134,7 @@ impl WebpEncoder {
         Self {
             machine: Machine::new(Caps::empty()),
             limits,
+            lossless: true,
         }
     }
 }
@@ -128,34 +145,30 @@ impl Default for WebpEncoder {
     }
 }
 
-impl SendReceive for WebpEncoder {
-    type Input = Frame;
-    type Output = Packet;
-
-    fn caps(&self) -> Caps {
-        self.machine.caps()
-    }
-
-    fn accepted_pix_fmts(&self) -> &'static [vaco_pixfmt::PixFmt] {
-        &[
-            vaco_pixfmt::PixFmt::Gray8,
-            vaco_pixfmt::PixFmt::Ya8,
-            vaco_pixfmt::PixFmt::Rgb24,
-            vaco_pixfmt::PixFmt::Rgba,
-        ]
-    }
-
-    fn send(&mut self, input: Option<&Frame>) -> Result<()> {
-        match self.machine.accept(input.is_none())? {
+// `WebpEncoder` implements `Encoder` directly, not `SendReceive` +
+// `AsEncoder`: `AsEncoder<T>`'s impl does not forward `set_option` (it has
+// no `SendReceive::set_option` to forward *from* — the trait does not have
+// one), so anything wrapped that way is unreachable from the CLI's
+// `-lossless`-style options regardless of what the inner type wants to do
+// with them. `vaco-codec-vp8`'s `Vp8Encoder` hit the same wall and took the
+// same way out; fixing `AsEncoder` itself belongs to `vaco-codec-core`'s
+// owner, not this crate.
+impl Encoder for WebpEncoder {
+    fn send_frame(&mut self, frame: Option<&Frame>) -> Result<()> {
+        match self.machine.accept(frame.is_none())? {
             Accept::Drain => {
                 self.machine.finish();
                 Ok(())
             }
             Accept::Input => {
-                let Some(frame) = input else {
+                let Some(frame) = frame else {
                     return Ok(());
                 };
-                let bytes = codec::encode(frame)?;
+                let bytes = if self.lossless {
+                    codec::encode(frame)?
+                } else {
+                    codec::encode_lossy(frame, &self.limits)?
+                };
                 let mut budget = Budget::new(self.limits.clone());
                 let mut packet = Packet::from_slice(&mut budget, &bytes)?;
                 packet.pts = frame.pts;
@@ -165,12 +178,43 @@ impl SendReceive for WebpEncoder {
         }
     }
 
-    fn receive(&mut self) -> Result<Packet> {
+    fn receive_packet(&mut self) -> Result<Packet> {
         self.machine.receive()
     }
 
     fn flush(&mut self) {
         self.machine.flush();
+    }
+
+    fn accepted_pix_fmts(&self) -> &'static [vaco_pixfmt::PixFmt] {
+        if self.lossless {
+            &[
+                vaco_pixfmt::PixFmt::Gray8,
+                vaco_pixfmt::PixFmt::Ya8,
+                vaco_pixfmt::PixFmt::Rgb24,
+                vaco_pixfmt::PixFmt::Rgba,
+            ]
+        } else {
+            &[
+                vaco_pixfmt::PixFmt::Yuv420p,
+                vaco_pixfmt::PixFmt::Gray8,
+                vaco_pixfmt::PixFmt::Ya8,
+                vaco_pixfmt::PixFmt::Rgb24,
+                vaco_pixfmt::PixFmt::Rgba,
+            ]
+        }
+    }
+
+    /// `"lossless"`: `"0"`/`"false"` switches to a lossy `VP8` image via
+    /// `vaco-codec-vp8`; anything else (including never calling this) keeps
+    /// the default, native `VP8L` lossless path. Every other key is
+    /// accepted silently, matching the reference's own behaviour for an
+    /// `AVOption` a codec has no use for.
+    fn set_option(&mut self, key: &str, value: &str) -> Result<()> {
+        if key == "lossless" {
+            self.lossless = value != "0" && !value.eq_ignore_ascii_case("false");
+        }
+        Ok(())
     }
 }
 
@@ -181,9 +225,7 @@ fn make_decoder(limits: Limits) -> Box<dyn vaco_codec_core::Decoder> {
 }
 
 fn make_encoder(limits: Limits) -> Box<dyn vaco_codec_core::Encoder> {
-    Box::new(vaco_codec_core::AsEncoder(vaco_codec_core::Validated::new(
-        WebpEncoder::new(limits),
-    )))
+    Box::new(WebpEncoder::new(limits))
 }
 
 /// Registered as this crate's `decoder` fragment (plan 19 §3.4).
@@ -200,7 +242,7 @@ pub static WEBP_DECODER: vaco_codec_core::DecoderDesc = vaco_codec_core::Decoder
 /// Registered as this crate's `encoder` fragment (plan 19 §3.4).
 pub static WEBP_ENCODER: vaco_codec_core::EncoderDesc = vaco_codec_core::EncoderDesc {
     name: "webp",
-    long_name: "WebP (lossless only)",
+    long_name: "WebP (lossless by default; -lossless 0 for VP8 lossy)",
     id: vaco_codec_core::CodecId::Webp,
     media_type: vaco_core::MediaType::Video,
     caps: Caps::empty(),
@@ -301,11 +343,11 @@ mod tests {
     fn send_receive_protocol_shape() {
         let frame = checker_frame(4, 4, PixFmt::Rgba);
         let mut enc = WebpEncoder::new(Limits::permissive());
-        enc.send(Some(&frame)).expect("send frame");
-        let packet = enc.receive().expect("receive packet");
-        assert!(matches!(enc.receive(), Err(Error::NeedMoreInput)));
-        enc.send(None).expect("begin drain");
-        assert!(matches!(enc.receive(), Err(Error::Eof)));
+        enc.send_frame(Some(&frame)).expect("send frame");
+        let packet = enc.receive_packet().expect("receive packet");
+        assert!(matches!(enc.receive_packet(), Err(Error::NeedMoreInput)));
+        enc.send_frame(None).expect("begin drain");
+        assert!(matches!(enc.receive_packet(), Err(Error::Eof)));
 
         let mut dec = WebpDecoder::new(Limits::permissive());
         dec.send(Some(&packet)).expect("send packet");
@@ -317,5 +359,17 @@ mod tests {
         assert!(matches!(dec.receive(), Err(Error::NeedMoreInput)));
         dec.send(None).expect("begin drain");
         assert!(matches!(dec.receive(), Err(Error::Eof)));
+    }
+
+    #[test]
+    fn lossless_option_switches_to_vp8_lossy() {
+        let frame = checker_frame(8, 8, PixFmt::Rgb24);
+        let mut enc = WebpEncoder::new(Limits::permissive());
+        enc.set_option("lossless", "0").expect("set option");
+        enc.send_frame(Some(&frame)).expect("send frame");
+        enc.send_frame(None).expect("begin drain");
+        let packet = enc.receive_packet().expect("receive packet");
+        // A lossy image is a "VP8 " chunk, not "VP8L".
+        assert_eq!(packet.payload().get(12..16), Some(b"VP8 ".as_slice()));
     }
 }

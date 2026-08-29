@@ -1,0 +1,6 @@
+[[table]]
+name   = "DISTANCE_MAP"
+file   = "crates/codec/vaco-codec-webp/src/vp8l/distance_map.rs"
+source = "webp-lossless-bitstream-spec"
+clause = "Section 5.2.2, \"Distance Mapping\" -- the 120-entry (xi, yi) neighbourhood table indexed by distance code 1..=120"
+method = "transcribed"

@@ -3,7 +3,7 @@
 [[component]]
 kind      = "decoder"
 name      = "webp"
-long_name = "WebP, wrapping the `image-webp` crate (D11)"
+long_name = "WebP: native VP8L lossless, `image-webp` fallback for VP8X-wrapped files"
 feature   = "codec-webp"
 ctor      = "vaco_codec_webp::WEBP_DECODER"
 media     = "video"
@@ -12,7 +12,7 @@ codec     = "webp"
 [[component]]
 kind      = "encoder"
 name      = "webp"
-long_name = "WebP (lossless only), wrapping the `image-webp` crate (D11)"
+long_name = "WebP: native VP8L lossless by default, lossy via vaco-codec-vp8 (-lossless 0)"
 feature   = "codec-webp"
 ctor      = "vaco_codec_webp::WEBP_ENCODER"
 media     = "video"
