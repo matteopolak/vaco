@@ -1,0 +1,40 @@
+[package]
+name = "vaco-hw-vulkan"
+description = "Vulkan Video device/capability probing, built against ash (D14.3 names this crate by family as a permitted OS-API binding for vaco-hw-*). Decode sessions are not implemented — see the crate doc."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+vaco-core = { path = "../../core/vaco-core" }
+vaco-codec-core = { path = "../../signal/vaco-codec-core" }
+vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
+vaco-hw-core = { path = "../vaco-hw-core" }
+ash = "0.38"
+
+[lints.rust]
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+integer_division = "deny"
+undocumented_unsafe_blocks = "deny"
+disallowed_methods = "deny"
+module_name_repetitions = "allow"
+similar_names = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+too_many_lines = "allow"
+
+[package.metadata.vaco]
+layer = 9

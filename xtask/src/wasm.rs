@@ -113,6 +113,18 @@ const NATIVE_ONLY: &[(&str, &str)] = &[
         "dials its own TcpStream/TlsStream through vaco-protocol-dial rather \
          than the registry, so it inherits that crate's wall.",
     ),
+    (
+        "vaco-hw-vulkan",
+        "depends on ash's default `loaded` feature, which dlopens the system \
+         Vulkan loader via libloading. Measured directly: cargo check --target \
+         wasm32-unknown-unknown fails inside libloading itself (E0432 \
+         `no Library in the root` — libloading's safe Library/Symbol re-export \
+         is cfg-gated to `any(unix, windows, libloading_docs)`, which \
+         wasm32-unknown-unknown satisfies neither of) before ash's own code is \
+         reached at all. A wasm build would need a Vulkan-in-the-browser path \
+         (WebGPU is the closest analogue) behind the same HwAccelDesc seam, not \
+         a wasm build of this crate.",
+    ),
 ];
 
 const TARGET: &str = "wasm32-unknown-unknown";
