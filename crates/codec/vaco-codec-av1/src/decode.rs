@@ -245,7 +245,10 @@ impl Av1Decoder {
         Self {
             budget: Budget::new(limits.clone()),
             limits,
-            machine: vaco_codec_core::machine::Machine::with_capacity(vaco_codec_core::Caps::empty(), 1),
+            machine: vaco_codec_core::machine::Machine::with_capacity(
+                vaco_codec_core::Caps::SUBFRAMES,
+                1,
+            ),
             seq: None,
         }
     }
@@ -343,7 +346,10 @@ pub static AV1_DECODER: DecoderDesc = DecoderDesc {
     long_name: "AV1 (intra-only; AV1 Bitstream & Decoding Process Specification v1.0.0 with Errata 1)",
     id: vaco_codec_core::CodecId::Av1,
     media_type: MediaType::Video,
-    caps: vaco_codec_core::Caps::empty(),
+    // One temporal unit can carry several shown frames (a frame OBU plus any
+    // number of show_existing_frame headers referencing already-decoded ones),
+    // so one input legitimately yields more than one output.
+    caps: vaco_codec_core::Caps::SUBFRAMES,
     supported_rates: &[],
     make: |limits| Box::new(Av1Decoder::new(limits)),
 };
