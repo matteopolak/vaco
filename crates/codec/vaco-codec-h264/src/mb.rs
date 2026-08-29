@@ -2478,6 +2478,45 @@ pub fn decode_slice_cabac(
                     grids.set_mv(mb_x * 4 + x, mb_y * 4 + y, info);
                 }
             }
+            // clause 9.3.3.1.1.9's own "regarded as available, with
+            // transBlockN treated as containing no non-zero transform
+            // coefficient levels" rule for a P_Skip/B_Skip neighbour: a
+            // skipped macroblock genuinely has no residual anywhere
+            // (`coded_block_pattern` is inferred to 0), so every 4x4
+            // luma/chroma `coded_block_flag` grid position it covers, and
+            // its own macroblock-granular chroma-DC slots, must record
+            // `Some(false)` here -- *not* be left at the grid's own
+            // "never written" `None` default. Left unset, a later
+            // macroblock's own `cbf_*_at` lookup reads `None`, which
+            // `cbf_cond_term`'s caller treats as `trans_available = false`
+            // ("this neighbour is unavailable") rather than "available,
+            // and its transform block is coded 0" -- the wrong branch of
+            // clause 9.3.3.1.1.9 for a neighbour that is very much
+            // available. Both branches happen to return the same
+            // `condTermFlagN` when the *current* macroblock is itself
+            // inter (the overwhelmingly common case, which is why this
+            // reads as "usually harmless" on a quick pass), but they
+            // diverge the moment the current macroblock is intra --
+            // `cbf_cond_term`'s `None` arm substitutes `current_is_intra`
+            // (`1`) where the real answer is `0`, corrupting that one
+            // decision's `ctxIdxInc` and, through it, the adaptive state
+            // of whichever context slot the wrong `ctxIdxInc` selects
+            // instead of the right one -- a divergence that then persists
+            // in that context for the rest of the slice, not just at the
+            // macroblock that first triggered it.
+            for y in 0..4u32 {
+                for x in 0..4u32 {
+                    grids.set_cbf_luma(mb_x * 4 + x, mb_y * 4 + y, false);
+                }
+            }
+            for comp in 0..2usize {
+                for y in 0..2u32 {
+                    for x in 0..2u32 {
+                        grids.set_cbf_chroma(comp, mb_x * 2 + x, mb_y * 2 + y, false);
+                    }
+                }
+                grids.set_cbf_chroma_dc(comp, mb_x, mb_y, false);
+            }
             grids.set_mb_info(
                 mb_x,
                 mb_y,
