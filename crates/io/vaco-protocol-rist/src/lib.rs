@@ -11,11 +11,16 @@
 //! two-section reorder/retransmission buffer.
 //!
 //! Main Profile (#559): GRE tunnelling ([`gre`], [`keepalive`]) and
-//! Pre-Shared Key encryption ([`psk`]). §6's DTLS/certificate path is
+//! Pre-Shared Key encryption ([`psk`]). §6's DTLS/certificate path was
 //! **named blocked and deferred to PR-12** — the same T4-tiered native
-//! DTLS gap already blocking WHIP (#619); `rustls` has no DTLS, and this
-//! is not a fresh finding, just the second package to hit the same one.
-//! §7.5's PSK authentication points to Annex D, a **Normative, full
+//! DTLS gap that also blocked WHIP (#619); `rustls` has no DTLS. PR-12b
+//! (`vaco-protocol-dtls`, #562) landed 2026-08-28 with a real `openssl`-backed
+//! DTLS 1.2 handshake, interop-verified against `ffmpeg 8.1`, which
+//! unblocks both — see [`dtls`] for this package's half: §6.1's session
+//! establishment, §6.2's mandatory cipher-suite check, and §6.3's
+//! certificate configuration (already fully covered by
+//! `vaco_protocol_dtls::options::DtlsOptions`, no gap). §7.5's PSK
+//! authentication points to Annex D, a **Normative, full
 //! EAP-SHA256-SRP6a implementation** (2048-bit safe-prime modular
 //! exponentiation, its own multi-message challenge/response, its own
 //! session-key derivation) — genuinely comparable in size to the
@@ -152,9 +157,12 @@
 //! at this layer; they are documented, not coded. §5.3.4/§5.3.5 (burst
 //! control, SSRC filtering) are explicitly informative in the spec itself
 //! ("details... left to the discretion of the implementer") and are not
-//! built as a result — there is nothing normative to conform to. §6
-//! (DTLS) and Annex D (EAP-SHA256-SRP6a) are named blocked/deferred
-//! above, not attempted.
+//! built as a result — there is nothing normative to conform to. §6 (DTLS)
+//! is now built — see [`dtls`] — with one specific, filed gap: §6.2's
+//! per-suite disable requirement needs an OpenSSL cipher-list knob
+//! `vaco-protocol-dtls` does not expose yet (that crate is not owned by
+//! this package; flagged as a follow-up rather than reached into). Annex D
+//! (EAP-SHA256-SRP6a) remains filed separately as #657, not attempted here.
 //!
 //! # Configuration
 //!
@@ -165,13 +173,15 @@
 //! `vaco-core`, `vaco-crypto` (layer 0 — AES-CTR and PBKDF2-HMAC-SHA256,
 //! not duplicated), `vaco-limits` (bounded parsing), `vaco-protocol-core`
 //! (`ProtocolError`/`Result`, reused ahead of any `Protocol` impl exactly
-//! as `vaco-protocol-srt` does), `vaco-rtp` (layer 1 — RFC 3550 RTP/RTCP
-//! framing, not duplicated), `vaco-time`.
+//! as `vaco-protocol-srt` does), `vaco-protocol-dtls` (layer 2, same-layer
+//! edge — [`dtls`]'s §6 integration, not duplicated), `vaco-rtp` (layer 1
+//! — RFC 3550 RTP/RTCP framing, not duplicated), `vaco-time`.
 
 #![forbid(unsafe_code)]
 
 pub mod bonding;
 pub mod buffer;
+pub mod dtls;
 pub mod gre;
 pub mod keepalive;
 pub mod psk;

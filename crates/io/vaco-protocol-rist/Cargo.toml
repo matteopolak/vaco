@@ -1,6 +1,6 @@
 [package]
 name = "vaco-protocol-rist"
-description = "RIST Simple and Main Profile framing: RTP/RTCP reuse, RIST-specific RTCP messages, retransmission and reassembly (TR-06-1); GRE tunnelling and PSK encryption (TR-06-2); bonding/multi-link and a statistics surface. DTLS and EAP-SRP6a authentication land in a later package."
+description = "RIST Simple and Main Profile framing: RTP/RTCP reuse, RIST-specific RTCP messages, retransmission and reassembly (TR-06-1); GRE tunnelling, PSK encryption and DTLS session establishment (TR-06-2 section 6). EAP-SRP6a authentication (Annex D) is filed separately as #657."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,11 +13,14 @@ vaco-core = { path = "../../core/vaco-core" }
 vaco-crypto = { path = "../../core/vaco-crypto" }
 vaco-limits = { path = "../../core/vaco-limits" }
 vaco-protocol-core = { path = "../../io/vaco-protocol-core" }
+vaco-protocol-dtls = { path = "../../io/vaco-protocol-dtls" }
 vaco-rtp = { path = "../../model/vaco-rtp" }
 vaco-time = { path = "../../core/vaco-time" }
 
 [dev-dependencies]
 proptest.workspace = true
+vaco-io = { path = "../../io/vaco-io" }
+vaco-protocol-socket = { path = "../../io/vaco-protocol-socket" }
 
 [lints]
 workspace = true
