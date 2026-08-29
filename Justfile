@@ -57,7 +57,7 @@ clippy:
 
 # Every gate CI runs, in the order CI runs them.
 ci: fmt-check clippy check-all test-all licence licence-report-check layer-check dep-gate unsafe-audit \
-    wasm-check time-gate patent-gate owner-gate dup-check provenance-check docs-check
+    wasm-check time-gate patent-gate owner-gate dup-check provenance-check docs-check fuzz-check
 
 # ------------------------------------------------------- policy gates (D3/D10)
 
@@ -97,6 +97,16 @@ unsafe-audit:
 # commit touching implementation code carries its provenance trailers.
 provenance-check:
     cargo xtask provenance-check
+
+# `fuzz/` is its own workspace (see gen-fuzz above), so neither check-all nor
+# clippy ever compiles it — a target rots silently against an ordinary,
+# correct API change until someone tries to fuzz with it. Build-only: an
+# actual run belongs in `fuzz-all`/CI's `fuzz-regressions` job, not a gate
+# every `just ci` pays for. Skips with a message rather than failing when
+# nightly + cargo-fuzz are not installed — see `xtask::fuzz_check` for why
+# that is the right degrade for this one, unlike wasm-check.
+fuzz-check:
+    cargo xtask fuzz-check
 
 # Install the git hooks and, on first run, take the DCO + clean-room
 # attestation. Run once per clone; see docs/provenance.md.

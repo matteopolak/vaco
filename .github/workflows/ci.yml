@@ -56,6 +56,15 @@ jobs:
       - run: cargo xtask gen-pixfmt --check
       - run: cargo xtask gen-fuzz --check
       - run: cargo xtask gen-coverage --check
+      # `fuzz/` is its own workspace (F1-F9), so it is built by neither
+      # `check-all` nor the clippy job below — a target can rot against a
+      # correct API change and nothing else here would notice. Install
+      # nightly + cargo-fuzz so this leg actually gates rather than skipping;
+      # `xtask fuzz-check` degrades to a clear skip on a machine that lacks
+      # either, which is what running `just ci` locally without them does.
+      - run: rustup toolchain install nightly --profile minimal
+      - run: cargo install cargo-fuzz --locked
+      - run: cargo xtask fuzz-check
 
   licence:
     name: licence and advisories

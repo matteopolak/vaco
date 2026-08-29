@@ -14,6 +14,7 @@ mod dead_code;
 mod deps;
 mod docs;
 mod dup_check;
+mod fuzz_check;
 mod gen_fuzz;
 mod gen_pixfmt;
 mod layers;
@@ -45,6 +46,7 @@ fn main() {
         "patent-gate" => patent_gate::run(check),
         "provenance-check" => provenance::run(check),
         "vlc-scan" => vlc_scan::run(check),
+        "fuzz-check" => fuzz_check::run(check),
         "check-message" => check_message(args.get(1).map(String::as_str)),
         "owner-gate" => owner_gate::run(check),
         "gen-registry" => registry::run(check),
@@ -67,6 +69,10 @@ fn main() {
             eprintln!("  comment-check   comments stay short and self-contained");
             eprintln!("  provenance-check  every large constant table names its source (D15)");
             eprintln!("  vlc-scan        hand-transcribed VLC tables are pairwise prefix-free (tier 1 of 3)");
+            eprintln!(
+                "  fuzz-check      every fuzz/ target still compiles (D6); skips \
+                 without nightly+cargo-fuzz"
+            );
             eprintln!("  dead-code       public API that only tests use (report, not a gate)");
             eprintln!("  gen-registry    assemble the registry from crate fragments");
             eprintln!("  gen-docs-index  generate docs/README.md");
