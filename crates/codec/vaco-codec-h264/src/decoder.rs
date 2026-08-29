@@ -110,6 +110,39 @@ struct RefPicture {
     cr: Vec<u8>,
 }
 
+/// A copy of `src`, charged to `budget` -- the DPB's own reference-picture
+/// clone (`self.dpb.push_back`'s own `luma`/`cb`/`cr` fields) used to be a
+/// plain [`slice::to_vec`]/[`Clone`], real memory the budget never heard
+/// about at all. Charging it here is what makes the matching
+/// `budget.release` at eviction (see [`H264Decoder::decode_packet`]'s own
+/// DPB-push site) balance a real charge instead of releasing bytes that
+/// were never committed in the first place.
+fn budgeted_clone(budget: &mut Budget, src: &[u8]) -> Result<Vec<u8>> {
+    let mut out: Vec<u8> = budget.alloc(src.len())?;
+    out.copy_from_slice(src);
+    Ok(out)
+}
+
+/// The bytes a [`RefPicture`] holds live, for the `budget.release` call at
+/// every eviction site (DPB overflow, an IDR's own clear-before-decode,
+/// and `flush`) to release exactly what [`budgeted_clone`] charged for it.
+fn ref_picture_bytes(rp: &RefPicture) -> u64 {
+    (rp.luma.len() as u64)
+        .saturating_add(rp.cb.len() as u64)
+        .saturating_add(rp.cr.len() as u64)
+}
+
+/// The bytes a [`ReconstructedPicture`] holds live -- what
+/// `PictureBuffer::new` (inside [`reconstruct_picture`]) charged
+/// `self.budget` for, and what must be released once `decode_packet` is
+/// done reading from it (after `build_frame` and, for a reference
+/// picture, the `budgeted_clone` above have both taken their own copies).
+fn reconstructed_picture_bytes(pic: &ReconstructedPicture) -> u64 {
+    (pic.luma.len() as u64)
+        .saturating_add(pic.cb.len() as u64)
+        .saturating_add(pic.cr.len() as u64)
+}
+
 /// The H.264 decoder. See the module doc for exactly what is and is not
 /// implemented today.
 #[derive(Debug)]
@@ -222,8 +255,15 @@ impl H264Decoder {
         if info.is_idr {
             // clause 8.2.5.1: an IDR access unit empties the DPB before
             // anything in it decodes, so a P slice can never reach across
-            // a GOP boundary.
-            self.dpb.clear();
+            // a GOP boundary. Every evicted picture's planes were charged
+            // to `self.budget` when they were pushed (see the reference-
+            // picture push below) and must be released here, not just
+            // dropped -- #421: `Budget::release` is never automatic, so a
+            // `clear()` that does not call it leaves `committed` counting
+            // bytes real memory no longer holds.
+            for evicted in self.dpb.drain(..) {
+                self.budget.release(ref_picture_bytes(&evicted));
+            }
         }
 
         if !pps.entropy_coding_mode {
@@ -310,6 +350,7 @@ impl H264Decoder {
             chroma_qp_offset_cb,
             chroma_qp_offset_cr,
             &ref_list0,
+            &mut self.budget,
         )?;
         drop(ref_list0);
 
@@ -341,18 +382,67 @@ impl H264Decoder {
         }
 
         if info.is_reference {
-            self.dpb.push_back(RefPicture {
-                luma: pic.luma.clone(),
-                cb: pic.cb.clone(),
-                cr: pic.cr.clone(),
-            });
             let cap = max_num_ref_frames.max(1) as usize;
-            while self.dpb.len() > cap {
-                self.dpb.pop_front();
+            // Evict down to `cap - 1` *before* pushing this picture's own
+            // clone, not after: pushing first and evicting after (the
+            // shape #421 was originally filed against) briefly holds
+            // `cap + 1` reference pictures' worth of budget at once on
+            // every single frame, which is a real, avoidable peak on top
+            // of the leak -- at 4K, with a CABAC slice's own working
+            // grids and the just-reconstructed picture *also* alive at
+            // that same instant, that extra picture's worth of charge is
+            // what was still deciding whether the last frame or two of a
+            // `max_alloc_total`-bounded run fit.
+            while self.dpb.len() > cap.saturating_sub(1) {
+                // #421: the picture this evicts was charged to the budget
+                // by the `budgeted_clone` calls below (on a previous call
+                // to this method) -- `pop_front` alone drops its `Vec`s
+                // (real memory freed correctly) without ever telling
+                // `Budget` those bytes are free, which is what let
+                // `committed` climb forever and cap 1080p at exactly 10
+                // frames. Releasing here is the other half of that same
+                // fix, matched to the `budgeted_clone` charge below.
+                if let Some(evicted) = self.dpb.pop_front() {
+                    self.budget.release(ref_picture_bytes(&evicted));
+                }
             }
+            let stored = RefPicture {
+                luma: budgeted_clone(&mut self.budget, &pic.luma)?,
+                cb: budgeted_clone(&mut self.budget, &pic.cb)?,
+                cr: budgeted_clone(&mut self.budget, &pic.cr)?,
+            };
+            self.dpb.push_back(stored);
         }
 
+        // `Frame::alloc_video` (inside `build_frame`) charges `self.budget`
+        // for the frame's own planes, and nothing about a `Frame`'s `Drop`
+        // ever calls `Budget::release` -- `vaco_pool::Buffer`'s own Drop
+        // only returns storage to a *pool*, and an unpooled buffer (what
+        // `alloc_video` always builds) has none. Once this frame is handed
+        // to `self.machine.emit`, it is the caller's memory to account for,
+        // not this decoder's own working set -- exactly the same
+        // "no longer mine to track" reasoning the DPB eviction and `pic`
+        // release below already apply to reference pictures and the
+        // just-reconstructed picture. Measuring the real charge via the
+        // `committed()` delta (rather than recomputing `PixFmt::plane_layout`
+        // by hand a second time) is what stays correct through this
+        // format's own row-stride/alignment padding without duplicating it.
+        let before_frame = self.budget.committed();
         let frame = self.build_frame(dimensions, crop_unit, crop, mbs_wide, &pic, pkt, info.is_idr)?;
+        let frame_bytes = self.budget.committed().saturating_sub(before_frame);
+        self.budget.release(frame_bytes);
+        // `pic`'s own three planes were charged to `self.budget` inside
+        // `reconstruct_picture` (via `PictureBuffer::new`) and have now
+        // been fully consumed -- `build_frame` copied whatever it needed
+        // into `frame`'s own (separately budgeted, just released above)
+        // planes, and any reference copy this picture needed was already
+        // charged independently above. Releasing here, right before `pic`
+        // drops, is the DPB fix's other half: without it, every decoded
+        // picture -- reference or not -- would still add O(picture size)
+        // to `committed` and never give it back, which is what made even a
+        // `-refs 1` stream fail after a fixed frame count regardless of
+        // the DPB's own bound.
+        self.budget.release(reconstructed_picture_bytes(&pic));
         Ok(Some(frame))
     }
 

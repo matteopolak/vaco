@@ -62,6 +62,7 @@
 )]
 
 use vaco_codec_dsp_idct::h264::{idct4x4, idct8x8};
+use vaco_limits::Budget;
 
 use crate::dequant::{chroma_qp, dequant_4x4, dequant_8x8, dequant_chroma_dc_2x2, dequant_luma_dc_4x4};
 use crate::intra::{
@@ -171,7 +172,16 @@ struct PictureBuffer {
 }
 
 impl PictureBuffer {
-    fn new(mbs_wide: u32, mbs_high: u32) -> Self {
+    /// `budget`-charges exactly the three real sample planes ([`Self::luma`],
+    /// [`Self::cb`], [`Self::cr`]) that survive into a
+    /// [`ReconstructedPicture`] and, through it, this decoder's DPB --
+    /// [`Self::decoded_4x4`]/[`Self::chroma_decoded`] are working
+    /// bookkeeping that never outlives this one function's own call (they
+    /// are not fields of [`ReconstructedPicture`]), so leaving them
+    /// un-budgeted does not reproduce #421's leak: nothing here persists
+    /// past a single `reconstruct_picture` call the way an un-released
+    /// budget charge would.
+    fn new(mbs_wide: u32, mbs_high: u32, budget: &mut Budget) -> vaco_core::Result<Self> {
         let w = (mbs_wide * 16) as usize;
         let h = (mbs_high * 16) as usize;
         let bw = (mbs_wide * 4) as usize;
@@ -180,15 +190,21 @@ impl PictureBuffer {
         let ch = (mbs_high * 8) as usize;
         let cbw = (mbs_wide * 2) as usize;
         let cbh = (mbs_high * 2) as usize;
-        Self {
+        let mut luma: Vec<u8> = budget.alloc(w.saturating_mul(h))?;
+        luma.fill(128);
+        let mut cb: Vec<u8> = budget.alloc(cw.saturating_mul(ch))?;
+        cb.fill(128);
+        let mut cr: Vec<u8> = budget.alloc(cw.saturating_mul(ch))?;
+        cr.fill(128);
+        Ok(Self {
             mbs_wide,
             mbs_high,
-            luma: vec![128u8; w.saturating_mul(h)],
+            luma,
             decoded_4x4: vec![false; bw.saturating_mul(bh)],
-            cb: vec![128u8; cw.saturating_mul(ch)],
-            cr: vec![128u8; cw.saturating_mul(ch)],
+            cb,
+            cr,
             chroma_decoded: vec![false; cbw.saturating_mul(cbh)],
-        }
+        })
     }
 
     const fn width(&self) -> u32 {
@@ -568,8 +584,9 @@ pub(crate) fn reconstruct_picture_luma(
     macroblocks: &[MbSummary],
     mbs_wide: u32,
     mbs_high: u32,
+    budget: &mut Budget,
 ) -> vaco_core::Result<Vec<u8>> {
-    let mut buf = PictureBuffer::new(mbs_wide, mbs_high);
+    let mut buf = PictureBuffer::new(mbs_wide, mbs_high, budget)?;
     for mb in macroblocks {
         if mb.is_ipcm {
             return Err(vaco_core::Error::Unsupported(
@@ -640,8 +657,9 @@ pub(crate) fn reconstruct_picture_with_inter(
     mbs_wide: u32,
     mbs_high: u32,
     ref_list0: &[&[u8]],
+    budget: &mut Budget,
 ) -> vaco_core::Result<Vec<u8>> {
-    let mut buf = PictureBuffer::new(mbs_wide, mbs_high);
+    let mut buf = PictureBuffer::new(mbs_wide, mbs_high, budget)?;
     let ref_width = mbs_wide * 16;
     let ref_height = mbs_high * 16;
     for mb in macroblocks {
@@ -986,8 +1004,9 @@ pub(crate) fn reconstruct_picture(
     chroma_qp_offset_cb: i32,
     chroma_qp_offset_cr: i32,
     ref_list0: &[RefPicturePlanes<'_>],
+    budget: &mut Budget,
 ) -> vaco_core::Result<ReconstructedPicture> {
-    let mut buf = PictureBuffer::new(mbs_wide, mbs_high);
+    let mut buf = PictureBuffer::new(mbs_wide, mbs_high, budget)?;
     let ref_width = mbs_wide * 16;
     let ref_height = mbs_high * 16;
     let chroma_width = mbs_wide * 8;
@@ -1361,7 +1380,7 @@ mod tests {
                             return Err("CABAC engine reported malformed input".to_owned());
                         }
                         let mut luma =
-                            reconstruct_picture_luma(&stats.macroblocks, mbs_wide, mbs_high)
+                            reconstruct_picture_luma(&stats.macroblocks, mbs_wide, mbs_high, &mut budget)
                                 .map_err(|e| format!("reconstruct_picture_luma failed: {e:?}"))?;
                         if apply_deblocking {
                             crate::deblock::deblock_picture_luma(
@@ -1735,7 +1754,7 @@ mod tests {
                             return Err("CABAC engine reported malformed input".to_owned());
                         }
                         let luma = if slice_header.kind == SliceKind::I {
-                            reconstruct_picture_luma(&stats.macroblocks, mbs_wide, mbs_high)
+                            reconstruct_picture_luma(&stats.macroblocks, mbs_wide, mbs_high, &mut budget)
                                 .map_err(|e| format!("reconstruct_picture_luma failed: {e:?}"))?
                         } else {
                             let ref_list0: Vec<&[u8]> =
@@ -1745,6 +1764,7 @@ mod tests {
                                 mbs_wide,
                                 mbs_high,
                                 &ref_list0,
+                                &mut budget,
                             )
                             .map_err(|e| format!("reconstruct_picture_with_inter failed: {e:?}"))?
                         };
@@ -1920,6 +1940,7 @@ mod tests {
                             pps.chroma_qp_index_offset,
                             pps.second_chroma_qp_index_offset,
                             &ref_list0,
+                            &mut budget,
                         )
                         .map_err(|e| format!("reconstruct_picture failed: {e:?}"))
                     });
@@ -1995,7 +2016,7 @@ mod tests {
                     let stats =
                         crate::mb::decode_slice_cabac(&mut cabac, &mut budget, sps, pps, &slice_header).unwrap();
                     let mut pic =
-                        reconstruct_picture(&stats.macroblocks, mbs_wide, mbs_high, pps.chroma_qp_index_offset, pps.second_chroma_qp_index_offset, &[])
+                        reconstruct_picture(&stats.macroblocks, mbs_wide, mbs_high, pps.chroma_qp_index_offset, pps.second_chroma_qp_index_offset, &[], &mut budget)
                             .unwrap();
                     crate::deblock::deblock_picture_luma(
                         &mut pic.luma,
@@ -2176,6 +2197,7 @@ mod tests {
                         pps.chroma_qp_index_offset,
                         pps.second_chroma_qp_index_offset,
                         &ref_list0,
+                        &mut budget,
                     )
                     .unwrap();
                     drop(ref_list0);

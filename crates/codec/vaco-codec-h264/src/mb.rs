@@ -435,6 +435,55 @@ impl Default for MbResidual {
     }
 }
 
+/// Exactly the bytes one macroblock's own [`residual_block_cabac`] calls
+/// charged to `Budget` across every `Some(CabacResidual)` this
+/// [`MbResidual`] holds -- `positions`' capacity is `max_num_coeff` (the
+/// worst case that function reserved up front, clause 7.3.5.3.3's own
+/// `maxNumCoeff`), not its post-scan `len()`, and `levels`' capacity is
+/// the coefficient count `positions.len()` had reached by the time
+/// `residual_block_cabac` allocated it -- both `Vec`s are grown by
+/// `push` only up to the capacity `Budget::alloc` already reserved, never
+/// past it, so `.capacity()` (not `.len()`) is what recovers the real
+/// charge after `push`/`clear`.
+///
+/// Exists because `decode_slice_cabac`'s own per-macroblock `residual`
+/// value is charged here and then, for every macroblock but the slice's
+/// first, immediately cloned into `SliceStats::macroblocks` (a plain,
+/// unbudgeted `Clone`, matching every other per-macroblock field there)
+/// and dropped -- the clone is real memory `Budget` was never told about
+/// in the first place, so it needs no release, but the *original*,
+/// budget-charged `Vec`s drop with it unreleased unless a caller does
+/// exactly this and hands the total to `Budget::release`. Uncaught, this
+/// is a real per-macroblock leak: small on any one macroblock, but
+/// counted for every coded 4x4/8x8/DC block in every macroblock in every
+/// frame, which is what let a 4K decode's `committed` climb by roughly a
+/// megabyte a frame even after the DPB, the just-reconstructed picture
+/// and the emitted frame's own charges were all correctly released.
+fn mb_residual_charged_bytes(residual: &MbResidual) -> u64 {
+    fn one(r: Option<&CabacResidual>) -> u64 {
+        let Some(r) = r else { return 0 };
+        (r.positions.capacity() as u64)
+            .saturating_mul(std::mem::size_of::<u8>() as u64)
+            .saturating_add((r.levels.capacity() as u64).saturating_mul(std::mem::size_of::<i32>() as u64))
+    }
+    let mut total = one(residual.luma_dc.as_ref());
+    for r in &residual.luma_ac {
+        total = total.saturating_add(one(r.as_ref()));
+    }
+    for r in &residual.chroma_dc {
+        total = total.saturating_add(one(r.as_ref()));
+    }
+    for comp in &residual.chroma_ac {
+        for r in comp {
+            total = total.saturating_add(one(r.as_ref()));
+        }
+    }
+    for r in &residual.luma8x8 {
+        total = total.saturating_add(one(r.as_ref()));
+    }
+    total
+}
+
 /// Everything one call to [`decode_slice_cavlc`] measured.
 #[derive(Debug, Default)]
 pub struct SliceStats {
@@ -1652,6 +1701,13 @@ const fn idx_2d(x: u32, y: u32, width: u32, height: u32) -> Option<usize> {
 struct CabacGrids {
     mbs_wide: u32,
     mbs_high: u32,
+    /// Exactly the bytes [`Self::new`]'s own seven [`Budget::alloc`] calls
+    /// charged -- these grids are local to one [`decode_slice_cabac`] call
+    /// (never returned to the caller), so [`Self::release`] gives every
+    /// one of those bytes back once this slice is fully decoded, instead
+    /// of letting them sit in `committed` forever the way #421 found the
+    /// DPB's own per-picture charges doing.
+    charged_bytes: u64,
     mb_info: Vec<CabacMbInfo>,
     cbf_luma: Vec<Option<bool>>,
     cbf_chroma: [Vec<Option<bool>>; 2],
@@ -1712,18 +1768,56 @@ impl CabacGrids {
             .unwrap_or(0);
         let n_chroma4 = usize::try_from((mbs_wide.saturating_mul(2)).saturating_mul(mbs_high.saturating_mul(2)))
             .unwrap_or(0);
+        let mb_info: Vec<CabacMbInfo> = budget.alloc(n_mb)?;
+        let cbf_luma: Vec<Option<bool>> = budget.alloc(n_luma4)?;
+        let cbf_chroma: [Vec<Option<bool>>; 2] = [budget.alloc(n_chroma4)?, budget.alloc(n_chroma4)?];
+        let cbf_chroma_dc: [Vec<Option<bool>>; 2] = [budget.alloc(n_mb)?, budget.alloc(n_mb)?];
+        let cbf_luma_dc: Vec<Option<bool>> = budget.alloc(n_mb)?;
+        let mv: Vec<MvInfo> = budget.alloc(n_luma4)?;
+        let intra4x4_pred_mode: Vec<Option<u8>> = budget.alloc(n_luma4)?;
+        // Exactly what the seven `budget.alloc` calls above charged --
+        // `size_of::<T>() * len()` per `Vec`, matching `Budget::alloc`'s
+        // own `byte_size::<T>(n)` internally. Computed from the real
+        // element sizes rather than assumed, so a future field added here
+        // cannot silently under-release just by being forgotten from a
+        // hand-maintained total.
+        let charged_bytes = [
+            (std::mem::size_of::<CabacMbInfo>(), mb_info.len()),
+            (std::mem::size_of::<Option<bool>>(), cbf_luma.len()),
+            (std::mem::size_of::<Option<bool>>(), cbf_chroma[0].len()),
+            (std::mem::size_of::<Option<bool>>(), cbf_chroma[1].len()),
+            (std::mem::size_of::<Option<bool>>(), cbf_chroma_dc[0].len()),
+            (std::mem::size_of::<Option<bool>>(), cbf_chroma_dc[1].len()),
+            (std::mem::size_of::<Option<bool>>(), cbf_luma_dc.len()),
+            (std::mem::size_of::<MvInfo>(), mv.len()),
+            (std::mem::size_of::<Option<u8>>(), intra4x4_pred_mode.len()),
+        ]
+        .into_iter()
+        .fold(0u64, |acc, (size, len)| acc.saturating_add((size as u64).saturating_mul(len as u64)));
         Ok(Self {
             mbs_wide: mbs_wide.max(1),
             mbs_high: mbs_high.max(1),
-            mb_info: budget.alloc(n_mb)?,
-            cbf_luma: budget.alloc(n_luma4)?,
-            cbf_chroma: [budget.alloc(n_chroma4)?, budget.alloc(n_chroma4)?],
-            cbf_chroma_dc: [budget.alloc(n_mb)?, budget.alloc(n_mb)?],
-            cbf_luma_dc: budget.alloc(n_mb)?,
-            mv: budget.alloc(n_luma4)?,
-            intra4x4_pred_mode: budget.alloc(n_luma4)?,
+            charged_bytes,
+            mb_info,
+            cbf_luma,
+            cbf_chroma,
+            cbf_chroma_dc,
+            cbf_luma_dc,
+            mv,
+            intra4x4_pred_mode,
             currently_decoding: None,
         })
+    }
+
+    /// Gives back exactly the bytes [`Self::new`] charged -- call once,
+    /// when this slice's own macroblock loop is done with these grids
+    /// (they are never read again after `decode_slice_cabac` returns).
+    /// See the struct's own [`Self::charged_bytes`] doc for why this
+    /// exists at all: nothing about `Vec`'s own `Drop` tells `Budget`
+    /// anything, so skipping this call would reproduce #421's leak one
+    /// level up from the DPB.
+    fn release(&self, budget: &mut Budget) {
+        budget.release(self.charged_bytes);
     }
 
     /// Marks `(mb_x, mb_y)` as the macroblock now being decoded --
@@ -2563,6 +2657,18 @@ pub fn decode_slice_cabac(
             )?;
             stats.macroblock_count += 1;
             let info = grids.mb_info_at(mb_x, mb_y);
+            // `residual`'s own `CabacResidual` vectors were charged to
+            // `budget` inside `decode_residual_cabac`'s own
+            // `residual_block_cabac` calls; both destinations below
+            // (`stats.macroblocks`, and `stats.first_slice_mb_residual`
+            // for the slice's first macroblock) take a plain `Clone` --
+            // real, but never budget-tracked, matching every other
+            // per-macroblock field `stats.macroblocks` already holds --
+            // so once both clones exist, `residual` itself is spent and
+            // its own charge must be released here, not left to leak on
+            // every one of a picture's macroblocks. See
+            // `mb_residual_charged_bytes`'s own doc for the full account.
+            let residual_bytes = mb_residual_charged_bytes(&residual);
             stats.macroblocks.push(MbSummary {
                 mb_x,
                 mb_y,
@@ -2585,8 +2691,9 @@ pub fn decode_slice_cabac(
                 stats.first_slice_mb_intra_chroma_pred_mode =
                     info.filter(|i| i.is_intra).map(|i| i.intra_chroma_pred_mode);
                 stats.first_slice_mb_qpy = Some(qpy);
-                stats.first_slice_mb_residual = Some(residual);
+                stats.first_slice_mb_residual = Some(residual.clone());
             }
+            budget.release(residual_bytes);
         }
 
         curr_mb_addr += 1;
@@ -2595,6 +2702,13 @@ pub fn decode_slice_cabac(
             break;
         }
     }
+    // `grids` is local to this one slice's own macroblock loop -- nothing
+    // in `stats` borrows from it, and no caller ever sees it. Releasing
+    // its own charge here (see `CabacGrids::release`'s own doc) is what
+    // keeps a picture's transient neighbour-derivation state from adding
+    // permanently to `committed` on every single slice decoded, the way
+    // #421 found the DPB's per-picture charges doing one level up.
+    grids.release(budget);
     Ok(stats)
 }
 
