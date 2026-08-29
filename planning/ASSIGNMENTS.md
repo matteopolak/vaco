@@ -314,6 +314,7 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-filter-text (new) | 5 | #462 (FT-3.5) | agent:text-ass | assigned | 2026-08-28 | — | TextRenderer foundation: fontdb + alias table, rustybuzz shaping/glyph cache, fontdue rasterisation, drawtext. Unblocks vaco-filter-subtitle below. |
 | vaco-filter-subtitle (new) | 5 | #486 #487 #488 #489 (epic FT-5) | agent:text-ass | assigned | 2026-08-28 | — | Bitmap + simple-text + ASS (stage a, static tags) subtitle rendering over vaco-filter-text; SSIM differential harness against ffmpeg subtitles/ass. |
 | vaco-ass (new) | 5 | #487 #488 #489 (FT-5.2/5.3/5.4) | agent:text-ass | assigned | 2026-08-28 | — | The ASS/SSA script+tag library (plan 16 SS6.3.2): section/style/event parsing, override-tag interpreter, layout hand-off to vaco-filter-text. Issues name this crate distinctly from vaco-filter-subtitle, which registers the actual `ass`/`subtitles` FilterDesc components on top of it. |
+| vaco-codec-exec (new) | 4 | #347 (C-46) | agent:codec-exec | done | 2026-08-29 | 2026-08-29 | `libx264`/`libx265` encoders spawning a user-installed x264/x265 binary (process boundary per the legal register S4.4/S5.2); commit 799a81e. x265 needs a real `.y4m`-suffixed temp file (measured: refuses stdin/non-suffixed input) and refuses input below 64x64; both measured, not assumed. |
 
 # Fan-out plan: core first, then leaves in batches
 
