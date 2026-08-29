@@ -193,7 +193,7 @@ capped at 2 frames before the budget-release fix.
 
 | Scenario | ffmpeg | vaco | Ratio |
 |---|---|---|---|
-| mkv → mp4 stream copy | 0.06s | **0.03s** | **vaco 2× faster** |
+| mkv → mp4 stream copy (5s clip) | 0.06s | 0.03s | too short to measure — see below |
 | 2160p → 1080p decode+scale+rawvideo | 0.26s | 7.53s | 29× slower |
 | H.264 → H.265 via `libx265` | 1.94s | 5.35s | 2.8× slower |
 
@@ -228,3 +228,19 @@ sound and the gap is specifically in codec inner loops.
 - **The H.265 comparison is not like-for-like**: vaco's output is 7,111,408
   bytes against ffmpeg's 2,409,789, so different parameters are reaching x265.
   Until the invocations match, that row measures configuration, not speed.
+
+
+### Correction: the stream-copy number was noise
+
+The 5-second clip above is too short to time. Re-measured on a **60-second,
+1080p, 44 MB** file:
+
+| | Time |
+|---|---|
+| ffmpeg remux | 0.075s |
+| vaco remux | **0.073s** |
+
+**Parity, not a 2× win.** The earlier figure was measurement noise at a
+duration where process startup dominates. The useful conclusion survives —
+the I/O, demux and mux layers are not where the time goes — but "faster than
+ffmpeg" was never a real result and should not have been reported as one.
