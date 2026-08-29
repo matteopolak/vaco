@@ -147,25 +147,134 @@ pub(crate) enum Rounding {
     Trunc,
 }
 
-/// One clamp-bordered box average pass over a whole plane.
-///
-/// `rx`/`ry` are radii (window width `2*rx+1`, height `2*ry+1`). Measured
-/// (see [`crate::boxblur`]'s doc) against a point impulse: the border is
-/// extended by replicating the nearest edge sample, not by zero-padding —
-/// which is why this reads through [`sample_clamped`] rather than treating
-/// an out-of-range tap as zero.
-///
-/// `O(w*h*(2rx+1)*(2ry+1))`: correctness-first, not the sliding-window
-/// incremental-sum form a hot path would want. Every image this crate's
-/// tests and fuzz target touch is small enough that this does not matter;
-/// revisit with `divan` before shipping this on real frame sizes.
+/// Round a box-average sum to a `u8`, per [`Rounding`]. Shared by the fast
+/// separable path and the brute-force reference so the two cannot drift on
+/// this half of the computation independently of the drift proptest checks.
 #[must_use]
 #[allow(
     clippy::integer_division,
     reason = "computing an average: the division is the whole point, not a \
               precision bug"
 )]
+fn round_avg(sum: i64, count: i64, rounding: Rounding) -> u8 {
+    let value = if count > 0 {
+        match rounding {
+            Rounding::Nearest => {
+                // Round-half-away-from-zero on a non-negative sum.
+                (sum * 2 + count) / (count * 2)
+            }
+            Rounding::Trunc => sum / count,
+        }
+    } else {
+        sum
+    };
+    u8::try_from(value.clamp(0, 255)).unwrap_or(255)
+}
+
+/// One clamp-bordered box average pass over a whole plane.
+///
+/// `rx`/`ry` are radii (window width `2*rx+1`, height `2*ry+1`). Measured
+/// (see [`crate::boxblur`]'s doc) against a point impulse: the border is
+/// extended by replicating the nearest edge sample, not by zero-padding.
+///
+/// A box filter is separable into an incremental (sliding-window) horizontal
+/// pass followed by an incremental vertical pass: `O(w*h)` total rather than
+/// the `O(w*h*(2rx+1)*(2ry+1))` a direct rectangle sum costs, which used to
+/// be this function's whole body (kept below as [`box_pass_naive`], the
+/// oracle [`tests::fast_path_agrees_with_naive_reference_everywhere`] checks
+/// this against). Non-negative radii and positive dimensions are the only
+/// shapes worth the sliding-window bookkeeping — every real caller in this
+/// crate already rejects `radius <= 0` before reaching here (see
+/// `boxblur`'s own `radius <= 0` early-out) — so any other combination
+/// (negative radius, zero/negative `w`/`h`) falls back to the naive
+/// reference directly rather than special-casing it in the fast path too.
+#[must_use]
 pub(crate) fn box_pass(
+    rows: &[&[u8]],
+    w: i32,
+    h: i32,
+    rx: i32,
+    ry: i32,
+    rounding: Rounding,
+) -> Vec<Vec<u8>> {
+    let (Ok(uw), Ok(uh)) = (usize::try_from(w), usize::try_from(h)) else {
+        return box_pass_naive(rows, w, h, rx, ry, rounding);
+    };
+    if rx < 0 || ry < 0 || uw == 0 || uh == 0 {
+        return box_pass_naive(rows, w, h, rx, ry, rounding);
+    }
+    let count = i64::from(2 * rx + 1) * i64::from(2 * ry + 1);
+
+    // Horizontal pass: a running sum along each row, clamped at the row's
+    // own edges exactly as `sample_clamped` would. `entering`/`leaving` are
+    // the two samples the window gains/drops as `x` advances by one.
+    let mut horiz: Vec<Vec<i64>> = Vec::new();
+    for y in 0..uh {
+        let row: &[u8] = rows.get(y).copied().unwrap_or(&[]);
+        let clamped = |xi: i32| -> i64 {
+            let cx = xi.clamp(0, w - 1);
+            usize::try_from(cx)
+                .ok()
+                .and_then(|i| row.get(i))
+                .map_or(0, |&v| i64::from(v))
+        };
+        let mut sum: i64 = (-rx..=rx).map(clamped).sum();
+        let mut h_row = Vec::new();
+        h_row.push(sum);
+        for x in 1..uw {
+            let xi = to_i32(x);
+            sum += clamped(xi + rx) - clamped(xi - rx - 1);
+            h_row.push(sum);
+        }
+        horiz.push(h_row);
+    }
+
+    // Vertical pass: a running sum down each column of `horiz`, same
+    // clamp-at-edge shape, writing straight into the row-major output.
+    let mut out: Vec<Vec<u8>> = Vec::new();
+    for _ in 0..uh {
+        out.push(vec![0u8; uw]);
+    }
+    for x in 0..uw {
+        let clamped = |yi: i32| -> i64 {
+            let cy = yi.clamp(0, h - 1);
+            usize::try_from(cy)
+                .ok()
+                .and_then(|i| horiz.get(i))
+                .and_then(|r| r.get(x))
+                .copied()
+                .unwrap_or(0)
+        };
+        let mut sum: i64 = (-ry..=ry).map(clamped).sum();
+        if let Some(dst_row) = out.first_mut()
+            && let Some(cell) = dst_row.get_mut(x)
+        {
+            *cell = round_avg(sum, count, rounding);
+        }
+        for y in 1..uh {
+            let yi = to_i32(y);
+            sum += clamped(yi + ry) - clamped(yi - ry - 1);
+            if let Some(dst_row) = out.get_mut(y)
+                && let Some(cell) = dst_row.get_mut(x)
+            {
+                *cell = round_avg(sum, count, rounding);
+            }
+        }
+    }
+    out
+}
+
+/// The brute-force rectangle-sum reference [`box_pass`] used to be, kept as
+/// the oracle its fast separable path is checked against (both the fixed
+/// corner-impulse test and the proptest below) and as the fallback for the
+/// radius/dimension shapes the fast path does not bother special-casing.
+#[must_use]
+#[allow(
+    clippy::integer_division,
+    reason = "computing an average: the division is the whole point, not a \
+              precision bug"
+)]
+pub(crate) fn box_pass_naive(
     rows: &[&[u8]],
     w: i32,
     h: i32,
@@ -184,18 +293,7 @@ pub(crate) fn box_pass(
                     sum += i64::from(sample_clamped(rows, x + dx, y + dy, w, h));
                 }
             }
-            let value = if count > 0 {
-                match rounding {
-                    Rounding::Nearest => {
-                        // Round-half-away-from-zero on a non-negative sum.
-                        (sum * 2 + count) / (count * 2)
-                    }
-                    Rounding::Trunc => sum / count,
-                }
-            } else {
-                sum
-            };
-            row.push(u8::try_from(value.clamp(0, 255)).unwrap_or(255));
+            row.push(round_avg(sum, count, rounding));
         }
         out.push(row);
     }
@@ -206,6 +304,45 @@ pub(crate) fn box_pass(
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// The fast separable [`box_pass`] must agree with [`box_pass_naive`]
+        /// pixel-for-pixel on every radius/size/rounding combination this
+        /// generates -- including radii wider than the image itself, which
+        /// exercises the clamp-to-edge wraparound on both passes at once.
+        #[test]
+        fn fast_path_agrees_with_naive_reference_everywhere(
+            w in 1i32..12,
+            h in 1i32..12,
+            rx in 0i32..6,
+            ry in 0i32..6,
+            trunc in any::<bool>(),
+            seed in any::<u64>(),
+        ) {
+            let rounding = if trunc { Rounding::Trunc } else { Rounding::Nearest };
+            // A cheap deterministic PRNG (splitmix64) is enough here -- this
+            // only needs *some* varied byte content, not statistical quality.
+            let mut state = seed ^ 0x9E37_79B9_7F4A_7C15;
+            let mut next_byte = || {
+                state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+                let mut z = state;
+                z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+                u8::try_from((z ^ (z >> 31)) & 0xFF).unwrap()
+            };
+            let uw = usize::try_from(w).unwrap();
+            let uh = usize::try_from(h).unwrap();
+            let img: Vec<Vec<u8>> = (0..uh)
+                .map(|_| (0..uw).map(|_| next_byte()).collect())
+                .collect();
+            let rows: Vec<&[u8]> = img.iter().map(Vec::as_slice).collect();
+
+            let fast = box_pass(&rows, w, h, rx, ry, rounding);
+            let naive = box_pass_naive(&rows, w, h, rx, ry, rounding);
+            prop_assert_eq!(fast, naive);
+        }
+    }
 
     #[test]
     fn plane_selected_reads_the_expected_bits() {

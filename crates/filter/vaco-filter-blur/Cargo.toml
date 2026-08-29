@@ -19,7 +19,12 @@ vaco-filter-framesync = { path = "../../filter/vaco-filter-framesync" }
 
 [dev-dependencies]
 proptest.workspace = true
+divan.workspace = true
 vaco-color = { path = "../../model/vaco-color" }
+
+[[bench]]
+name    = "box_pass"
+harness = false
 
 [lints]
 workspace = true

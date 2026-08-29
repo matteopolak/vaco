@@ -87,4 +87,46 @@ pub mod yaepblur;
 #[cfg(test)]
 mod tests_graph;
 
+/// Benchmark-only window into this crate's internal box-average engine
+/// (`common::box_pass`/`box_pass_naive`, both `pub(crate)` since they are
+/// filter-internal machinery rather than this crate's own public surface).
+/// `benches/box_pass.rs` is the only intended caller — nothing in the
+/// filter graph should reach through here.
+#[doc(hidden)]
+pub mod bench_support {
+    use crate::common::{self, Rounding};
+
+    fn rounding(trunc: bool) -> Rounding {
+        if trunc { Rounding::Trunc } else { Rounding::Nearest }
+    }
+
+    /// The `O(w*h)` sliding-window box average, as shipped.
+    #[must_use]
+    pub fn box_pass_fast(
+        rows: &[&[u8]],
+        w: i32,
+        h: i32,
+        rx: i32,
+        ry: i32,
+        trunc: bool,
+    ) -> Vec<Vec<u8>> {
+        common::box_pass(rows, w, h, rx, ry, rounding(trunc))
+    }
+
+    /// The `O(w*h*(2rx+1)*(2ry+1))` brute-force reference the fast path
+    /// replaced, kept as the correctness oracle and the pre-optimisation
+    /// baseline this benchmark compares against.
+    #[must_use]
+    pub fn box_pass_naive(
+        rows: &[&[u8]],
+        w: i32,
+        h: i32,
+        rx: i32,
+        ry: i32,
+        trunc: bool,
+    ) -> Vec<Vec<u8>> {
+        common::box_pass_naive(rows, w, h, rx, ry, rounding(trunc))
+    }
+}
+
 pub use registry::BlurRegistry;
