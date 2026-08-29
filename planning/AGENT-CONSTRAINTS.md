@@ -1656,3 +1656,31 @@ Two consequences:
 `git diff HEAD~1 HEAD --name-only` after every commit remains the check, and it
 catches this from the *other* side: if a file you did not edit appears in your
 commit, you have just absorbed someone. Say so rather than moving on.
+
+## Extract large tables programmatically; a prefix-free test catches the rest
+
+Building VC-1, an agent hand-typed a CBPCY VLC table and copy-duplicated one
+entry from a neighbouring row. Its own `is_prefix_free` test caught it before
+anything shipped. It then extracted the ~340-entry AC tables **programmatically
+from the specification PDF's own table cells** rather than typing them,
+specifically to avoid repeating that.
+
+Both halves are worth copying.
+
+**Extract, do not transcribe.** A table you typed is a table you introduced
+errors into. Pull the cells out of the source document mechanically wherever the
+document allows it. This is not a shortcut — it is the more accurate method, and
+it scales to tables no one would check by eye.
+
+**Then test a structural property, not the values.** A VLC table that is not
+prefix-free is provably wrong, whatever the values are, and that check costs
+nothing and needs no reference. The equivalent exists for most table kinds:
+codebooks must be prefix-free, scan orders must be permutations, quantiser
+tables must be monotonic, inverse transforms must round-trip. **Find the
+invariant and assert it** — it catches the transcription errors that a
+value-by-value review reliably misses, because the reviewer reads what they
+meant to type.
+
+This matters more here than it sounds. Every codec pulled back this session --
+G.722, G.726, ALAC, DFPWM -- failed on a table or a formula, not on
+architecture. The structure was always right and the numbers were always wrong.
