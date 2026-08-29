@@ -221,11 +221,19 @@ the difference is the MOV `fiel` atom, which the file carries and
   bytes intact, so nothing is lost by not adding one.
 - **A new profile name**: `profile::profile_name`. Re-derive from the reference
   first — the table is what `ffprobe` prints, not what Annex A says.
-- **The write path**: `cbs::HevcCbs::write_unit` handles raw units and returns
-  `Unsupported` for typed parameter sets. Filling that in means writing
-  `profile_tier_level()`, every reference picture set and the whole VUI back out
-  **bit-exactly**; a writer that is not bit-exact corrupts a stream silently.
-  Plan 15's D-19 budgets it separately.
+- **The write path (D-19)**: `cbs::HevcCbs::write_unit` re-encodes VPS, SPS and
+  PPS bit-exactly — `profile_tier_level()`, every reference picture set,
+  `scaling_list_data()`, the VUI and both extensions included — verified
+  against real `x265` output (`sd.265`'s VPS/SPS/PPS round-trip byte for byte
+  with no edit). Three narrow, documented exceptions remain, all in the
+  write-side module doc just above `#[cfg(test)]` in `cbs.rs`: an
+  inter-predicted short-term RPS is always re-written in its explicit
+  spelling (the reader never retains the prediction inputs, only the derived
+  delta-POC lists — decodes identically, not always the same bits); the
+  multilayer/3D extension bits are always written 0; and an SCC extension
+  carrying palette or ACT payload the reader already discards returns
+  `Error::Unsupported`. `HevcContent::Sei` remains unwritten — no tested
+  caller edits a decoded SEI message yet.
 
 ### Gotchas
 

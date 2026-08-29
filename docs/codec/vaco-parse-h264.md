@@ -44,6 +44,7 @@ elementary stream that has none. That is comfortably on the near side.
 | `avcc` | `AVCDecoderConfigurationRecord`, ISO/IEC 14496-15 §5.3.3.1 |
 | `params` | the parameter-set store and the derived `CodecParameters` |
 | `parser` | `H264Parser`, the streaming access-unit splitter |
+| `cbs` | the `CbsCodec` implementation (D-18/D-19) — split, edit, re-assemble, including a bit-exact SPS/PPS write path |
 
 ### Parameter-set dependencies, which are not optional
 
@@ -187,6 +188,17 @@ H.264 is the exception rather than the rule. `vaco-parse-hevc` and
 
 ## How to change it
 
+- **The CBS write path (D-18/D-19).** `cbs::H264Cbs` splits an Annex-B or
+  length-prefixed stream into units, decodes `Sps`/`Pps` to their typed form
+  (everything else, SEI included, stays `H264Content::Raw`), and re-encodes
+  both bit-exactly — `seq_parameter_set_data()`, `pic_parameter_set_rbsp()`,
+  `vui_parameters()`/`hrd_parameters()` all included, each mirroring
+  `Sps::parse_data`/`Pps::parse_data`'s own field order. Verified against real
+  `libx264` SPS/PPS (the same fixtures `sps.rs`/`pps.rs` already pin): read
+  with no edit, write back, byte for byte. One documented, narrow deviation —
+  a custom scaling list is always re-encoded per-entry rather than with the
+  early-termination sentinel an encoder may have used, which decodes
+  identically but is not always the same bits; see `cbs.rs`'s module doc.
 - **Adding an SEI payload type.** One arm in `sei::decode_payload` and one
   variant in `SeiPayload`. Unrecognised payloads are already kept whole as
   `Other`, so nothing breaks by not adding one.

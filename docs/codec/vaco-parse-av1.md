@@ -227,6 +227,18 @@ that is a recorded gap rather than a derivation.
 
 ## How to change it
 
+- **The CBS write path (D-20)**: `cbs::Av1Cbs::write_unit` re-encodes
+  `Av1Content::SequenceHeader` and `Av1Content::Metadata` bit-exactly —
+  `sequence_header_obu()` (profile, operating points, frame size, every
+  tool-enable flag, `color_config()`) and all four `metadata_obu()` shapes.
+  Verified against the real `libsvtav1` sequence header this crate's own
+  tests already carry: read with no edit, write back, byte for byte. One
+  documented, detectable exception: a sequence header with
+  `decoder_model_info_present_flag` set returns `Error::Unsupported`, because
+  `SequenceHeader::parse` already discards `decoder_model_info()`'s fields on
+  read (pre-existing, not introduced by the writer). `initial_display_delay`
+  is not even tracked as a flag, so it is always written absent — see
+  `cbs.rs`'s write-side module doc for both.
 - **A new sequence-header field**: add it to `seq::SequenceHeader`, read it
   in `SequenceHeader::parse` at the exact bit position §5.5.1's table gives
   it — every field after it in the syntax depends on the read cursor landing
