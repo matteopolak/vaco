@@ -44,6 +44,19 @@ const SRTP_KEYING_MATERIAL_LABEL: &str = "EXTRACTOR-dtls_srtp";
 /// [`ProtocolError::Malformed`] if the underlying OpenSSL export call fails
 /// (typically: the handshake never negotiated `use_srtp` at all).
 pub fn export_srtp_keying_material(stream: &DtlsStream, out: &mut [u8]) -> Result<()> {
+    export_srtp_keying_material_from(stream, out)
+}
+
+/// As [`export_srtp_keying_material`], generic over the transport — the
+/// [`handshake_over`] counterpart, for a caller whose completed handshake is
+/// an `SslStream<S>` rather than the concrete [`DtlsStream`].
+///
+/// # Errors
+/// As [`export_srtp_keying_material`].
+pub fn export_srtp_keying_material_from<S>(
+    stream: &openssl::ssl::SslStream<S>,
+    out: &mut [u8],
+) -> Result<()> {
     stream
         .ssl()
         .export_keying_material(out, SRTP_KEYING_MATERIAL_LABEL, None)
@@ -105,7 +118,7 @@ pub fn connect_udp(
     Ok(socket)
 }
 
-pub(crate) fn handshake_error(err: &HandshakeError<UdpTransport>) -> ProtocolError {
+pub(crate) fn handshake_error<S>(err: &HandshakeError<S>) -> ProtocolError {
     let detail = match err {
         HandshakeError::SetupFailure(e) => e.to_string(),
         HandshakeError::Failure(s) | HandshakeError::WouldBlock(s) => s.error().to_string(),
@@ -129,14 +142,47 @@ pub fn handshake(
     key_file_pem: Option<&str>,
     ca_file_pem: Option<&str>,
 ) -> Result<DtlsStream> {
+    handshake_over(UdpTransport::new(socket), opts, cert_file_pem, key_file_pem, ca_file_pem)
+}
+
+/// As [`handshake`], but over any caller-supplied [`Read`]/[`Write`]
+/// transport rather than a bare [`UdpSocket`].
+///
+/// # Why this exists
+///
+/// A WebRTC-shaped caller's UDP socket carries three interleaved protocols
+/// on one 5-tuple — STUN, DTLS and (once the handshake finishes) SRTP,
+/// demultiplexed by RFC 7983's first-byte ranges. `vaco-mux-whip` (#619)
+/// found this the hard way, against a real peer: `mediamtx` runs a full ICE
+/// agent, not ICE-lite, and keeps sending its own STUN Binding Requests to
+/// the publisher throughout the handshake window — requests this crate's
+/// plain [`UdpTransport`] cannot tell apart from DTLS records, since it
+/// hands every datagram straight to OpenSSL. A caller that must answer
+/// those requests (or otherwise inspect/filter datagrams) needs its own
+/// transport in the loop, which `handshake`'s fixed `UdpSocket` parameter
+/// cannot express; this generic entry point is that seam, with `handshake`
+/// itself now a thin wrapper reusing it.
+///
+/// `Read`/`Write` requires `'static` because the returned `SslStream` is
+/// `'static`-independent of the borrow checker only when `S` itself is —
+/// matching [`UdpTransport`]'s own owned-socket shape.
+///
+/// # Errors
+/// As [`handshake`].
+pub fn handshake_over<S: std::io::Read + std::io::Write>(
+    transport: S,
+    opts: &DtlsOptions,
+    cert_file_pem: Option<&str>,
+    key_file_pem: Option<&str>,
+    ca_file_pem: Option<&str>,
+) -> Result<openssl::ssl::SslStream<S>> {
     let ctx = crate::context::build(opts, cert_file_pem, key_file_pem, ca_file_pem)?;
     let mut ssl = Ssl::new(&ctx).map_err(|_| ProtocolError::Malformed {
         scheme: "dtls",
         detail: "could not start a DTLS client connection",
     })?;
     crate::context::apply_mtu(&mut ssl, opts.mtu)?;
-    ssl.connect(UdpTransport::new(socket))
-        .map_err(|e| handshake_error(&e))
+    ssl.connect(transport).map_err(|e| handshake_error(&e))
 }
 
 #[cfg(test)]
