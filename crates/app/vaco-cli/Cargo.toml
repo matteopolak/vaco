@@ -75,7 +75,9 @@ vaco-filter-geometry = { path = "../../filter/vaco-filter-geometry" }
 vaco-filter-key = { path = "../../filter/vaco-filter-key" }
 vaco-filter-lut = { path = "../../filter/vaco-filter-lut" }
 vaco-filter-mm = { path = "../../filter/vaco-filter-mm" }
+vaco-filter-motion = { path = "../../filter/vaco-filter-motion" }
 vaco-filter-overlay = { path = "../../filter/vaco-filter-overlay" }
+vaco-filter-palette = { path = "../../filter/vaco-filter-palette" }
 vaco-filter-scope = { path = "../../filter/vaco-filter-scope" }
 vaco-filter-source = { path = "../../filter/vaco-filter-source" }
 vaco-filter-stack = { path = "../../filter/vaco-filter-stack" }

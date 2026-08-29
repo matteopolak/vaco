@@ -45,6 +45,8 @@ vaco-filter-denoise = { path = "../../filter/vaco-filter-denoise" }
 vaco-filter-temporal = { path = "../../filter/vaco-filter-temporal" }
 vaco-filter-source = { path = "../../filter/vaco-filter-source" }
 vaco-filter-mm = { path = "../../filter/vaco-filter-mm" }
+vaco-filter-motion = { path = "../../filter/vaco-filter-motion" }
+vaco-filter-palette = { path = "../../filter/vaco-filter-palette" }
 vaco-filter-video-source = { path = "../../filter/vaco-filter-video-source" }
 vaco-filter-video-format = { path = "../../filter/vaco-filter-video-format" }
 vaco-filter-video-composite = { path = "../../filter/vaco-filter-video-composite" }
