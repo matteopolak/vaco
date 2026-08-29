@@ -314,6 +314,7 @@ found `vaco-core`'s `Rational` methods still unimplemented and had to reimplemen
 | vaco-simd | 0 | #145 (PF-3.9) | agent:pf-batch | active | 2026-08-29 | — | Extending ops::simd with a small transpose4x4_i32 composition (zip_low/zip_high + 64-bit bitcast, mirrored scalar oracle + proptest) needed by mecmp's SATD attempt; no existing composition covered an in-lane 4x4 transpose. |
 | vaco-filter-text (new) | 5 | #462 (FT-3.5) | agent:text-ass | assigned | 2026-08-28 | — | TextRenderer foundation: fontdb + alias table, rustybuzz shaping/glyph cache, fontdue rasterisation, drawtext. Unblocks vaco-filter-subtitle below. |
 | vaco-filter-subtitle (new) | 5 | #486 #487 #488 #489 (epic FT-5) | agent:text-ass | assigned | 2026-08-28 | — | Bitmap + simple-text + ASS (stage a, static tags) subtitle rendering over vaco-filter-text; SSIM differential harness against ffmpeg subtitles/ass. |
+| vaco-ass (new) | 5 | #487 #488 #489 (FT-5.2/5.3/5.4) | agent:text-ass | assigned | 2026-08-28 | — | The ASS/SSA script+tag library (plan 16 SS6.3.2): section/style/event parsing, override-tag interpreter, layout hand-off to vaco-filter-text. Issues name this crate distinctly from vaco-filter-subtitle, which registers the actual `ass`/`subtitles` FilterDesc components on top of it. |
 
 # Fan-out plan: core first, then leaves in batches
 
