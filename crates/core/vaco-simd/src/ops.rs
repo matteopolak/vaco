@@ -151,6 +151,19 @@ pub const fn clip_u8(x: i32) -> u8 {
     }
 }
 
+/// Transpose a 4x4 matrix: `out[r][c] = m[c][r]`. The scalar sibling of
+/// [`simd::transpose4x4_i32`] — see that function's doc for why a 2-D
+/// separable transform needs this at all.
+#[must_use]
+pub const fn transpose4x4_i32(m: [[i32; 4]; 4]) -> [[i32; 4]; 4] {
+    [
+        [m[0][0], m[1][0], m[2][0], m[3][0]],
+        [m[0][1], m[1][1], m[2][1], m[3][1]],
+        [m[0][2], m[1][2], m[2][2], m[3][2]],
+        [m[0][3], m[1][3], m[2][3], m[3][3]],
+    ]
+}
+
 /// Scalar reference for the masked-lane-select row op ([`dispatched_select_u8_row`]):
 /// pick `a` where `mask` is nonzero, else `b`.
 ///
@@ -411,6 +424,42 @@ pub mod simd {
     #[inline(always)]
     pub fn select_u8<S: Lanes>(mask: S::mask8s, a: S::u8s, b: S::u8s) -> S::u8s {
         mask.select(a, b)
+    }
+
+    /// The vector sibling of [`crate::ops::transpose4x4_i32`]: given four
+    /// vectors read as matrix rows, returns four vectors read as matrix
+    /// columns — `out[c].as_slice()[r] == rows[r].as_slice()[c]`.
+    ///
+    /// **Not a lanewise composition.** A 2-D Hadamard/Walsh transform is
+    /// separable (`H·M·H`, the identical row-combination applied twice),
+    /// but only the *vector* axis can be combined by a plain add/sub tree —
+    /// combining lanes *within* one vector needs an actual shuffle, which
+    /// this substrate has no direct 4x4 transpose for. So the second pass
+    /// transposes first (moving the in-lane axis to the vector axis) and
+    /// then reuses the same combination. Built the way `_MM_TRANSPOSE4_PS`
+    /// is: pair adjacent rows at 32-bit granularity with `zip_low`/
+    /// `zip_high`, then finish the swap at 64-bit granularity via a
+    /// value-preserving `bitcast` — two interleaves, no named intrinsic.
+    #[inline(always)]
+    pub fn transpose4x4_i32<S: Lanes>(
+        rows: [fearless_simd::i32x4<S>; 4],
+    ) -> [fearless_simd::i32x4<S>; 4] {
+        let [r0, r1, r2, r3] = rows;
+        let t0 = r0.zip_low(r1); // [r0.0, r1.0, r0.1, r1.1]
+        let t1 = r0.zip_high(r1); // [r0.2, r1.2, r0.3, r1.3]
+        let t2 = r2.zip_low(r3); // [r2.0, r3.0, r2.1, r3.1]
+        let t3 = r2.zip_high(r3); // [r2.2, r3.2, r2.3, r3.3]
+
+        let t0 = t0.bitcast::<fearless_simd::i64x2<S>>();
+        let t1 = t1.bitcast::<fearless_simd::i64x2<S>>();
+        let t2 = t2.bitcast::<fearless_simd::i64x2<S>>();
+        let t3 = t3.bitcast::<fearless_simd::i64x2<S>>();
+
+        let c0 = t0.zip_low(t2).bitcast::<fearless_simd::i32x4<S>>(); // [r0.0, r1.0, r2.0, r3.0]
+        let c1 = t0.zip_high(t2).bitcast::<fearless_simd::i32x4<S>>(); // [r0.1, r1.1, r2.1, r3.1]
+        let c2 = t1.zip_low(t3).bitcast::<fearless_simd::i32x4<S>>(); // [r0.2, r1.2, r2.2, r3.2]
+        let c3 = t1.zip_high(t3).bitcast::<fearless_simd::i32x4<S>>(); // [r0.3, r1.3, r2.3, r3.3]
+        [c0, c1, c2, c3]
     }
 
     /// Clamp `i16` lanes to `0..=255` and pack two vectors into one `u8` vector.

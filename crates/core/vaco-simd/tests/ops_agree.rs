@@ -202,6 +202,23 @@ fn edge_corpus_select_u8() {
     }
 }
 
+/// `transpose4x4_i32`, over one native invocation: build four `i32x4` rows
+/// from a flat 16-element input, transpose, and hand each output vector back
+/// as a plain array via `as_slice`.
+fn transpose4(rows: [[i32; 4]; 4]) -> [[i32; 4]; 4] {
+    #[inline(always)]
+    fn body<S: Lanes>(simd: S, rows: [[i32; 4]; 4]) -> [[i32; 4]; 4] {
+        let vecs = rows.map(|r| i32x4::from_slice(simd, &r));
+        let out = ops::simd::transpose4x4_i32(vecs);
+        out.map(|v| {
+            let s = v.as_slice();
+            [s[0], s[1], s[2], s[3]]
+        })
+    }
+    let caps = Caps::detect();
+    vaco_simd::dispatch_kernel!(caps, simd => body(simd, rows))
+}
+
 // --- the reductions and the widening shapes -----------------------------
 
 /// The three horizontal reductions, plus the explicit rotate tree, over exactly
@@ -393,6 +410,28 @@ proptest! {
     fn abs_i32_agrees(a in prop::collection::vec(any::<i32>(), 0..200)) {
         let want: Vec<i32> = a.iter().map(|&x| ops::abs_i32(x)).collect();
         prop_assert_eq!(v_abs_i32(&a), want);
+    }
+
+    #[test]
+    fn transpose4x4_i32_agrees(vals in prop::collection::vec(any::<i32>(), 16)) {
+        let rows: [[i32; 4]; 4] = [
+            [vals[0], vals[1], vals[2], vals[3]],
+            [vals[4], vals[5], vals[6], vals[7]],
+            [vals[8], vals[9], vals[10], vals[11]],
+            [vals[12], vals[13], vals[14], vals[15]],
+        ];
+        prop_assert_eq!(transpose4(rows), ops::transpose4x4_i32(rows));
+    }
+
+    #[test]
+    fn transpose4x4_i32_is_its_own_inverse(vals in prop::collection::vec(any::<i32>(), 16)) {
+        let rows: [[i32; 4]; 4] = [
+            [vals[0], vals[1], vals[2], vals[3]],
+            [vals[4], vals[5], vals[6], vals[7]],
+            [vals[8], vals[9], vals[10], vals[11]],
+            [vals[12], vals[13], vals[14], vals[15]],
+        ];
+        prop_assert_eq!(transpose4(transpose4(rows)), rows);
     }
 
     #[test]
