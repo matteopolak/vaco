@@ -1278,15 +1278,8 @@ acquired = "2026-08-28"
 where    = "https://pub.smpte.org/doc/rdd36/20220909-pub/rdd36-2022.pdf"
 
 [[source]]
-id       = "smpte-st421-2013"
+id       = "hm-reference-software"
 kind     = "spec"
-title    = "SMPTE ST 421:2013, VC-1 Compressed Video Bitstream Format and Decoding Process (freely published SMPTE Standard)"
+title    = "HM (HEVC Test Model) reference software (BSD-3-Clause), source/Lib/{TLibCommon,TLibDecoder}: ContextTables.h's CABAC context-initialisation tables and significance-map context-set layout (significanceMapContextSetStart, notFirstGroupNeighbourhoodContextOffset), TComTrQuant.cpp's calcPatternSigCtx/getSigCtxInc/getSigCoeffGroupCtxInc, TComDataCU.cpp's getCtxQtCbf/getQuadtreeTULog2MinSizeInCU, TDecSbac.cpp's parseCoeffNxN/parseLastSignificantXY/parseQtCbf and TDecEntropy.cpp's xDecodeTransform control flow. Tier A per planning/AGENT-CONSTRAINTS.md's clean-room section (permissively-licensed reference implementation of the ITU-T H.265 standard, explicitly cleared for direct reading — unlike FFmpeg/x265, which stay Tier B); read for vaco-codec-hevc, whose residual-coding/transform-tree control flow ITU-T H.265's own clause text alone under-specifies precisely enough to transcribe without this kind of syntax-order reference (see planning/AGENT-CONSTRAINTS.md's CABAC-context lesson)."
 acquired = "2026-08-28"
-where    = "https://pub.smpte.org/pub/st421/st0421-2013.pdf"
-
-[[source]]
-id       = "smpte-rp227"
-kind     = "spec"
-title    = "SMPTE RP 227, VC-1 Bitstream Transport Encodings (points to ST 421's own Annex J/L decoder-initialization metadata and RCV serialization)"
-acquired = "2026-08-28"
-where    = "https://multimedia.cx/mirror/rp227.pdf"
+where    = "https://vcgit.hhi.fraunhofer.de/jvet/HM/-/raw/master/source/Lib/TLibCommon/TComTrQuant.cpp"
