@@ -1,0 +1,16 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# `default = false`, matching `vaco-protocol-dtls`'s own reasoning: this
+# crate depends (transitively, through vaco-protocol-dtls) on `openssl`
+# (vendored), which does not build for `wasm32-unknown-unknown` — measured,
+# see `xtask/src/wasm.rs`'s `NATIVE_ONLY` entry for this crate. Registering
+# unconditionally would make `mux-whip` a *default* optional dependency of
+# `vaco-registry`, regressing its own `wasm-check`.
+
+[[component]]
+kind      = "muxer"
+name      = "whip"
+long_name = "WHIP (WebRTC-HTTP Ingestion Protocol) output"
+feature   = "mux-whip"
+default   = false
+ctor      = "vaco_mux_whip::MUXER"
