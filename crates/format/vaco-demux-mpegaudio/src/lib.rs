@@ -16,7 +16,10 @@ pub const DEMUXER: DemuxerDesc = DemuxerDesc {
     long_name: "MP2/3 (MPEG audio layer 2/3)",
     extensions: &["mp3", "mp2", "m2a", "mpa"],
     mime_types: &["audio/mpeg", "audio/x-mpeg", "audio/mp3"],
-    flags: FormatFlags::empty(),
+    // A bare frame sequence with no container index of its own, so the core
+    // builds one and seeks with it. Timestamps are derived from the frame
+    // count and are monotonic, so no TS_DISCONT.
+    flags: FormatFlags::GENERIC_INDEX,
     probe: probe::probe,
     open: open_demuxer,
 };

@@ -38,7 +38,11 @@ use vaco_io::{IoContext, IoOptions, MediaSource};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::{Packet, PacketFlags};
 
-pub const FLAGS: FormatFlags = FormatFlags::empty();
+// This demuxer skips `index` packets by their `forward_ptr` (see the module
+// doc), so NUT's own index-based seeking is not used and the core builds
+// one from the packets it reads. Timestamps come from syncpoints and are
+// monotonic, so no TS_DISCONT.
+pub const FLAGS: FormatFlags = FormatFlags::GENERIC_INDEX;
 
 /// Longest a non-frame packet's payload may declare before this demuxer
 /// treats the length as implausible. `forward_ptr` is attacker-controlled
