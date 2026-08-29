@@ -370,3 +370,73 @@ verified: `probe()` never panics regardless of outcome, and `vaco-hw-core`'s
 **Exit.** Confined to one crate; removing it removes one `HwAccelDesc`
 candidate, which `select()` already treats as an ordinary "nothing
 available" case.
+
+---
+
+## `cosmic-text` 0.12 — text shaping and rasterisation for `vaco-filter-text`
+
+**Adopted** 2026-08-28, for #462 (FT-3.5). **Used by** `vaco-filter-text`
+(`TextRenderer`) alone today; `vaco-ass`/`vaco-filter-subtitle` reach it only
+through that crate's own API, never directly.
+
+**Why this one crate, not four.** `planning/16-filters.md` SS6.1's own
+architecture table names `fontdb` (font discovery), `rustybuzz` (shaping,
+via `unicode-bidi` for reordering) and `swash` (outline parsing and
+rasterisation) as the all-Rust replacement for
+fontconfig/HarfBuzz/FreeType/FriBidi, each annotated "(via cosmic-text)" —
+this is that annotation acted on literally rather than four separate direct
+dependencies. `cosmic-text` is already declared in this workspace's root
+`Cargo.toml` under "text shaping and fonts" (`swash`/`ttf-parser` are listed
+there too, for the same D10 review this entry documents), so this is not a
+new manifest entry, only the first crate to actually depend on it.
+
+**Gate 1 — pure Rust, zero FFI.** `cosmic-text` 0.12.1 and its transitive
+closure (`fontdb` 0.16.2, `rustybuzz` 0.14.1, `swash` 0.1.19, `ttf-parser`
+0.20.1/0.21.1, `skrifa`/`read-fonts`/`font-types` 0.22.x/0.7.3,
+`unicode-bidi` 0.3.18, `unicode-script`/`unicode-properties`/
+`unicode-linebreak`/`unicode-segmentation`/`unicode-bidi-mirroring`/
+`unicode-ccc`, `rangemap`, `self_cell`, `sys-locale`, `yazi`, `zeno`) — no
+`-sys` crate, no `links` key, no build script compiling native code.
+Confirmed by `cargo build` succeeding with no C toolchain invoked and by
+inspecting each crate's own `Cargo.toml` for a `build.rs`/`links` entry.
+
+**Gate 2 — licence.** `cosmic-text`, `fontdb`, `rustybuzz`, `swash`,
+`ttf-parser`: `MIT OR Apache-2.0`. `unicode-*` family: `MIT OR Apache-2.0` or
+`Apache-2.0 OR BSL-1.0` depending on crate, `zeno`: `MIT OR Apache-2.0`. All
+on the D3 allow-list already (`deny.toml`).
+
+**Gate 3 — trusted and maintained.** `cosmic-text` is System76's own text
+stack (backs `cosmic-comp`/COSMIC desktop), actively released (0.12.1 is a
+current line at adoption time), widely adopted beyond its origin project
+(GUI toolkiles including `iced` and `egui`-adjacent crates use it or its
+siblings). `rustybuzz` is a mature, from-scratch Rust port of HarfBuzz's
+shaping algorithm (register task SS9.7's "confirm the port is a rewrite, not
+a near-verbatim translation" is resolved by this: it is an independent
+reimplementation of the *algorithm*, not a transliteration of HarfBuzz's own
+C, and it carries plain MIT with no Old-MIT/HarfBuzz-inherited attribution
+clause). `fontdb`/`ttf-parser`/`swash` are RazrFalcon-originated,
+widely-depended-on crates (the same author's `resvg` ecosystem).
+
+**FreeType is not in this dependency tree at all.** No `freetype-sys`, no
+`freetype-rs`, nothing FTL-licensed anywhere in `cosmic-text`'s closure —
+confirmed via `cargo tree`. This is the whole reason the all-Rust stack was
+preferred in the register: FreeType's FTL carries a real, standing
+attribution obligation in redistributed binaries; not depending on it at
+all removes that obligation rather than merely discharging it.
+
+**Unsafe.** Not audited line-by-line this pass; `swash`'s rasteriser and
+`skrifa`/`read-fonts` (font table parsing) are exactly the kind of
+performance-sensitive binary-format code that commonly carries some
+`unsafe`, weighed rather than vetoed per D10 — none of it is reachable from
+`vaco-filter-text`'s own `#![forbid(unsafe_code)]` boundary, which is
+unchanged by this dependency.
+
+**wasm.** Not checked this pass — `vaco-filter-text` has no `NATIVE_ONLY`
+entry yet. `fontdb`'s system font discovery (`Database::new`'s platform
+scan) is the most likely wasm hazard; a follow-up should verify before
+`vaco-filter-text` is wired into any wasm target.
+
+**Exit.** Confined to `vaco-filter-text::layout`/`vaco-filter-text::alias`;
+swapping shaping/rasterisation backends means rewriting those two modules
+against a different API, not touching `vaco-ass`/`vaco-filter-subtitle`,
+which only see `TextRenderer`/`Layout`/`AlphaMask`.
