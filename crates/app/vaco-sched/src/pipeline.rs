@@ -37,8 +37,8 @@ use vaco_core::{Error, Result, TimeBase};
 use vaco_limits::{Budget, ProgressGuard};
 
 use crate::node::{
-    CodecWork, ConverterSide, DecoderSide, DemuxWork, Done, EncoderSide, FilterWork, Job, MuxWork,
-    PortIn, Ports, Work,
+    AudioConverterSide, CodecWork, ConverterSide, DecoderSide, DemuxWork, Done, EncoderSide,
+    FilterWork, Job, MuxWork, PortIn, Ports, Work,
 };
 use crate::spec::{KindSpec, PipelineSpec};
 use crate::timing;
@@ -576,7 +576,7 @@ impl PipelineSpec {
                 priority: match s.kind {
                     KindSpec::Mux { .. } => 4,
                     KindSpec::Encode(_) => 3,
-                    KindSpec::Filter { .. } | KindSpec::Convert { .. } => 2,
+                    KindSpec::Filter { .. } | KindSpec::Convert { .. } | KindSpec::ConvertAudio { .. } => 2,
                     KindSpec::Decode(_) => 1,
                     KindSpec::Demux { .. } => 0,
                 },
@@ -681,6 +681,14 @@ fn build_work(
         }),
         KindSpec::Convert { dst_format, limits } => Work::Convert(Box::new(CodecWork {
             side: ConverterSide::new(dst_format, limits),
+            stage: Stage::Feeding,
+            last_pts: vaco_core::Timestamp::NONE,
+            stashed: None,
+            pending_eof: None,
+            end_pts: vaco_core::Timestamp::NONE,
+        })),
+        KindSpec::ConvertAudio { dst_format, limits } => Work::ConvertAudio(Box::new(CodecWork {
+            side: AudioConverterSide::new(dst_format, limits),
             stage: Stage::Feeding,
             last_pts: vaco_core::Timestamp::NONE,
             stashed: None,

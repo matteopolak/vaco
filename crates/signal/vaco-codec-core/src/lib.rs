@@ -1746,6 +1746,23 @@ pub trait Encoder: Send {
         &[]
     }
 
+    /// Sample formats this encoder's [`send_frame`](Encoder::send_frame)
+    /// accepts, most-preferred first.
+    ///
+    /// The audio mirror of [`accepted_pix_fmts`](Encoder::accepted_pix_fmts) —
+    /// same empty-means-anything default, same reasoning. `vaco-codec-pcm`'s
+    /// encoders are the motivating case: each `Pcm*` codec has exactly one
+    /// wire format (`pcm_s16le` wants packed `S16`) and currently hard-fails
+    /// a mismatch (`Error::Unsupported`) rather than silently mislabeling the
+    /// stream, which is correct but was previously undetectable by a caller
+    /// ahead of time — there was nothing to ask before calling `send_frame`
+    /// and parsing the failure, the same gap the pixel-format version closed
+    /// for video (E2E-GAPS 3).
+    #[must_use]
+    fn accepted_sample_fmts(&self) -> &'static [vaco_sampfmt::SampleFmt] {
+        &[]
+    }
+
     /// Configure a generic encoder option by name, mirroring the CLI's
     /// `-<name>[:<spec>] <value>` surface (`"b"` for bitrate, `"qscale"` for a
     /// fixed quality) after the encoder is built but before the first

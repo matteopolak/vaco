@@ -17,10 +17,13 @@ vaco-codec-core = { path = "../../signal/vaco-codec-core" }
 vaco-filter-core = { path = "../../filter/vaco-filter-core" }
 vaco-format-core = { path = "../../format/vaco-format-core" }
 vaco-scale = { path = "../../signal/vaco-scale" }
+vaco-resample = { path = "../../signal/vaco-resample" }
 vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
+vaco-sampfmt = { path = "../../model/vaco-sampfmt" }
 
 [dev-dependencies]
 vaco-pool = { path = "../../model/vaco-pool" }
+vaco-chlayout = { path = "../../model/vaco-chlayout" }
 divan.workspace = true
 proptest.workspace = true
 

@@ -571,6 +571,26 @@ impl SendReceive for OptionProbe {
             detail: format!("reached the inner SendReceive with {key}={value}"),
         })
     }
+
+    fn accepted_sample_fmts(&self) -> &'static [vaco_sampfmt::SampleFmt] {
+        &[vaco_sampfmt::SampleFmt::S16, vaco_sampfmt::SampleFmt::S32]
+    }
+}
+
+/// The audio mirror of `set_option_forwards_through_as_encoder_and_validated`
+/// (E2E-GAPS 3): `accepted_sample_fmts` is new on `SendReceive`, so it needs
+/// the same check `accepted_pix_fmts` would have needed the day it was
+/// added -- a wrapper that inherited the trait default instead of forwarding
+/// would silently tell every caller "accepts anything", which is exactly the
+/// state that let a mismatched sample format reach an encoder and a muxer
+/// undetected before this gap was closed.
+#[test]
+fn accepted_sample_fmts_forwards_through_as_encoder_and_validated() {
+    let enc = AsEncoder(Validated::new(OptionProbe));
+    assert_eq!(
+        enc.accepted_sample_fmts(),
+        &[vaco_sampfmt::SampleFmt::S16, vaco_sampfmt::SampleFmt::S32]
+    );
 }
 
 /// `set_option` has to survive both layers a registered encoder is commonly

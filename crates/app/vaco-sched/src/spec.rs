@@ -46,6 +46,7 @@ use vaco_format_core::options::FormatOptions;
 use vaco_format_core::{Demuxer, Muxer};
 use vaco_limits::Limits;
 use vaco_pixfmt::PixFmt;
+use vaco_sampfmt::SampleFmt;
 
 use crate::wire::{Capacity, Flow};
 
@@ -153,6 +154,10 @@ pub(crate) enum KindSpec {
         dst_format: PixFmt,
         limits: Limits,
     },
+    ConvertAudio {
+        dst_format: SampleFmt,
+        limits: Limits,
+    },
     Filter {
         graph: Box<Graph>,
         sources: Vec<NodeId>,
@@ -184,6 +189,7 @@ impl std::fmt::Debug for KindSpec {
             Self::Decode(_) => "Decode",
             Self::Encode(_) => "Encode",
             Self::Convert { .. } => "Convert",
+            Self::ConvertAudio { .. } => "ConvertAudio",
             Self::Filter { .. } => "Filter",
             Self::Mux { .. } => "Mux",
         })
@@ -499,6 +505,44 @@ impl PipelineSpec {
         let id = self.push(NodeSpec {
             label: format!("convert {}:{} -> {}", from.node, from.port, dst_format.name()),
             kind: KindSpec::Convert { dst_format, limits },
+            inputs: vec![(from.into(), time_base)],
+            outputs: vec![(Flow::Frames, time_base)],
+        });
+        Ok(FrameTap { node: id, port: 0 })
+    }
+
+    /// Insert a sample-format converter between a frame producer and whatever
+    /// reads it next.
+    ///
+    /// The audio twin of [`add_converter`](Self::add_converter), for the same
+    /// reason: a decoder's real output format and an encoder's
+    /// [`Encoder::accepted_sample_fmts`] can disagree — decoding AAC's planar
+    /// float into `pcm_s16le` (packed s16) is the motivating case,
+    /// `planning/E2E-GAPS.md` #3 — and nothing sat between them.
+    /// `vaco-resample::convert` does the conversion; this is only the wiring.
+    /// Channel layout and sample rate are unchanged by this node — see
+    /// [`crate::node::AudioConverterSide`]'s docs for why remixing/resampling
+    /// stay out of its scope.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidData`] if the tap does not exist.
+    pub fn add_sample_converter(
+        &mut self,
+        from: FrameTap,
+        dst_format: SampleFmt,
+        time_base: Rational,
+        limits: Limits,
+    ) -> Result<FrameTap> {
+        self.out_of(from.into())?;
+        let id = self.push(NodeSpec {
+            label: format!(
+                "convert {}:{} -> {}",
+                from.node,
+                from.port,
+                dst_format.name()
+            ),
+            kind: KindSpec::ConvertAudio { dst_format, limits },
             inputs: vec![(from.into(), time_base)],
             outputs: vec![(Flow::Frames, time_base)],
         });

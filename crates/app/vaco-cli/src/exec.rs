@@ -1415,6 +1415,24 @@ pub fn run_pipeline(
                             // An encoder that does not care lists nothing, so this is
                             // a no-op for the common case.
                             let accepted = encoder.accepted_pix_fmts();
+                            // What the stream actually carries once this leg's
+                            // conversions (if any) are wired in — filled in
+                            // below whenever a converter changes the format
+                            // the encoder is fed, and applied to `out_params`
+                            // after this block. Without this, `out_params`
+                            // kept reporting the *source's* format after a
+                            // transcode: a real `-c:a pcm_s16le` from a planar
+                            // decoder (`alac`, `flac`) produced correctly
+                            // packed PCM bytes but still described the stream
+                            // as planar to the muxer, and `wav`'s own strict
+                            // check refused it — "wav: planar sample formats
+                            // are not supported" for a stream whose bytes
+                            // were never planar (E2E-GAPS 3's own reported
+                            // symptom, reached from the `alac`/`wav` pair
+                            // once the encoder-side mismatch above was
+                            // fixed).
+                            let mut out_video_format: Option<PixFmt> = None;
+                            let mut out_audio_format: Option<vaco_sampfmt::SampleFmt> = None;
                             let frames = if s.graph_opts.wants_graph() {
                                 // CL-20: a real `-vf`/`-af`/`-filter`/`-s`/`-aspect`/
                                 // `-pix_fmt` graph replaces the ad-hoc
@@ -1447,22 +1465,88 @@ pub fn run_pipeline(
                             } else {
                                 let source_format = p.video.as_ref().and_then(|v| v.format);
                                 let target = converter_target(source_format, accepted);
-                                match target {
-                                    Some(t) if Some(t) != source_format => spec
-                                        .add_converter(frames, t, time_base, limits.clone())
+                                let frames = match target {
+                                    Some(t) if Some(t) != source_format => {
+                                        out_video_format = Some(t);
+                                        spec.add_converter(frames, t, time_base, limits.clone())
+                                            .map_err(|e| {
+                                                internal_from(
+                                                    "could not attach a format converter",
+                                                    &e,
+                                                )
+                                            })?
+                                    }
+                                    _ => frames,
+                                };
+                                // E2E-GAPS 3: the audio twin of the pixel-format
+                                // conversion just above — with one real
+                                // difference from the video case, which is why
+                                // this does not reuse `converter_target`'s
+                                // "skip the node if the source already looks
+                                // right" shape.
+                                //
+                                // `p.video.format` is a fact the SPS/VPS states
+                                // and a decoder is required to honour exactly,
+                                // so comparing it against `accepted` ahead of
+                                // decoding is reliable. `p.audio.format` is not
+                                // the same kind of fact: it is the
+                                // *container's* best guess before a single
+                                // sample has been decoded (measured: a
+                                // Matroska FLAC track reports `s16`, packed,
+                                // while `vaco-codec-flac`'s real decoder
+                                // output is `s16p`, planar — there is no
+                                // Matroska field that could have told the
+                                // demuxer that). Gating insertion on that
+                                // guess reproduces the exact bug this closes:
+                                // the guess happens to already be in
+                                // `accepted`, no converter gets wired, and the
+                                // real (different) runtime format reaches the
+                                // encoder unconverted.
+                                //
+                                // So: whenever the encoder names a specific
+                                // accepted list at all, the converter is
+                                // always wired, unconditionally.
+                                // `AudioConverterSide::convert` already does
+                                // the cheap per-frame passthrough when the
+                                // real format turns out to already match
+                                // (`vaco-sched`'s own test coverage), so this
+                                // costs nothing in the common case and fixes
+                                // the mismatched one.
+                                let accepted_audio = encoder.accepted_sample_fmts();
+                                match accepted_audio.first() {
+                                    Some(&t) => {
+                                        out_audio_format = Some(t);
+                                        spec.add_sample_converter(
+                                            frames,
+                                            t,
+                                            time_base,
+                                            limits.clone(),
+                                        )
                                         .map_err(|e| {
                                             internal_from(
-                                                "could not attach a format converter",
+                                                "could not attach a sample-format converter",
                                                 &e,
                                             )
-                                        })?,
-                                    _ => frames,
+                                        })?
+                                    }
+                                    None => frames,
                                 }
                             };
                             let packets = spec
                                 .add_encoder(frames, encoder, time_base)
                                 .map_err(|e| internal_from("could not attach an encoder", &e))?;
-                            (packets, p.with_codec(encoder_desc.id), name.to_owned())
+                            let mut out_params = p.with_codec(encoder_desc.id);
+                            if let Some(fmt) = out_video_format
+                                && let Some(v) = out_params.video.as_mut()
+                            {
+                                v.format = Some(fmt);
+                            }
+                            if let Some(fmt) = out_audio_format
+                                && let Some(a) = out_params.audio.as_mut()
+                            {
+                                a.format = Some(fmt);
+                            }
+                            (packets, out_params, name.to_owned())
                         }
                     };
                     (packet_tap, out_params, label, format!("{file}:{stream}"))

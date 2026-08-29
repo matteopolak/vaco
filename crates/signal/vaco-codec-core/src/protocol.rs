@@ -58,6 +58,14 @@ pub trait SendReceive {
         &[]
     }
 
+    /// Forwarded to [`Encoder::accepted_sample_fmts`] by [`AsEncoder`]; the
+    /// audio mirror of [`accepted_pix_fmts`](Self::accepted_pix_fmts), same
+    /// default, same reasoning.
+    #[must_use]
+    fn accepted_sample_fmts(&self) -> &'static [vaco_sampfmt::SampleFmt] {
+        &[]
+    }
+
     /// Forwarded to [`Decoder::set_extradata`] by [`AsDecoder`]; meaningless
     /// for an encoder or bitstream filter's `SendReceive`, so the empty
     /// default costs those implementors nothing.
@@ -144,6 +152,10 @@ where
 
     fn accepted_pix_fmts(&self) -> &'static [vaco_pixfmt::PixFmt] {
         self.0.accepted_pix_fmts()
+    }
+
+    fn accepted_sample_fmts(&self) -> &'static [vaco_sampfmt::SampleFmt] {
+        self.0.accepted_sample_fmts()
     }
 
     fn set_option(&mut self, key: &str, value: &str) -> Result<()> {
@@ -414,6 +426,10 @@ impl<T: SendReceive> SendReceive for Validated<T> {
 
     fn accepted_pix_fmts(&self) -> &'static [vaco_pixfmt::PixFmt] {
         self.inner.accepted_pix_fmts()
+    }
+
+    fn accepted_sample_fmts(&self) -> &'static [vaco_sampfmt::SampleFmt] {
+        self.inner.accepted_sample_fmts()
     }
 
     fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {

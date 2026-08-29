@@ -809,6 +809,64 @@ fn the_no_progress_guard_catches_a_livelock() {
     assert_eq!(pipeline.classify(), Finish::Cancelled);
 }
 
+/// A decoder that acknowledges end of stream (`send_packet(None)` returns
+/// `Ok(())`, the shape `Decoder::send_packet`'s own doc requires) but then
+/// never actually finishes: `receive_frame` always answers `NeedMoreInput`,
+/// never `Eof`. Measured against real code, not a hypothetical: both
+/// `vaco-codec-alac`'s and `vaco-codec-vorbis`'s decoders share exactly this
+/// shape (`send_packet(None) => Ok(())` with no state change at all), and a
+/// real ALAC file decoded end to end through the CLI hung indefinitely
+/// because of it before `CodecWork::advance`'s `Stage::Draining` branch
+/// stopped reporting false progress.
+#[derive(Debug, Default)]
+struct NeverDrainsDecoder;
+
+impl Decoder for NeverDrainsDecoder {
+    fn send_packet(&mut self, _packet: Option<&Packet>) -> Result<()> {
+        Ok(())
+    }
+
+    fn receive_frame(&mut self) -> Result<Frame> {
+        Err(Error::NeedMoreInput)
+    }
+
+    fn flush(&mut self) {}
+}
+
+/// The fix this pins: a component stuck in `Stage::Draining`, always
+/// `NeedMoreInput`, is a livelock the `ProgressGuard` must catch — not a
+/// process that never returns. Before `CodecWork::advance` stopped claiming
+/// `progressed = true` on every no-op drain attempt, this test would hang
+/// forever instead of failing; it is written to fail the same way (a stuck
+/// test process) rather than time out cleanly if the fix regresses, which is
+/// deliberate — a hang here should be exactly as loud as the bug it guards.
+#[test]
+fn a_decoder_that_never_drains_is_a_livelock_the_guard_catches_not_a_hang() {
+    let mut spec = PipelineSpec::new();
+    let input = spec.add_input(Box::new(ScriptedDemuxer::new(
+        vec![video_stream(0, TB)],
+        packets(0, 1, 0),
+    )));
+    let tap = spec.input_stream(input, 0).unwrap();
+    let frames = spec
+        .add_decoder(tap, Box::new(NeverDrainsDecoder))
+        .unwrap();
+    let encoded = spec
+        .add_encoder(frames, Box::new(MockEncoder::new(0)), TB)
+        .unwrap();
+    let (mux, _log) = RecordingMuxer::pair(TB);
+    let out = spec.add_output(Box::new(mux));
+    spec.map(encoded, out, &CodecParameters::new(MediaType::Video))
+        .unwrap();
+
+    let mut pipeline = spec.build().unwrap();
+    let err = pipeline.run().expect_err("a stuck decoder must not run forever");
+    assert!(
+        matches!(err, Error::LimitExceeded { .. }),
+        "expected the no-progress guard's LimitExceeded, got {err:?}"
+    );
+}
+
 #[test]
 fn a_tiny_budget_is_an_error_not_a_stall() {
     let mut spec = PipelineSpec::new().with_limits(Limits::permissive().with_alloc_total(16));
@@ -1135,6 +1193,121 @@ fn a_converter_turns_gray8_into_the_encoders_declared_format() {
     assert!(
         seen.iter().all(|f| *f == vaco_pixfmt::PixFmt::Rgb24),
         "every frame reaching the encoder should have been converted to rgb24, got {seen:?}"
+    );
+}
+
+fn audio_stream(index: u32, time_base: Rational) -> Stream {
+    Stream::new(index, MediaType::Audio, time_base)
+}
+
+/// A decoder that always emits one small mono `F32P` frame per packet — the
+/// audio twin of [`GrayDecoder`], standing in for "a real decoder whose
+/// output format the next node might not accept" (planar float is exactly
+/// what `vaco-codec-aac` produces).
+#[derive(Default)]
+struct PlanarFloatDecoder {
+    pending: bool,
+    draining: bool,
+}
+
+impl Decoder for PlanarFloatDecoder {
+    fn send_packet(&mut self, packet: Option<&Packet>) -> Result<()> {
+        match packet {
+            Some(_) => {
+                self.pending = true;
+                Ok(())
+            }
+            None => {
+                self.draining = true;
+                Ok(())
+            }
+        }
+    }
+
+    fn receive_frame(&mut self) -> Result<Frame> {
+        if self.pending {
+            self.pending = false;
+            let mut budget = Budget::new(Limits::permissive());
+            let layout = vaco_chlayout::ChannelLayout::MONO;
+            let mut frame = Frame::alloc_audio(
+                &mut budget,
+                vaco_sampfmt::SampleFmt::F32P,
+                layout,
+                4,
+                48_000,
+            )
+            .expect("alloc_audio");
+            frame.pts = Timestamp::new(1);
+            return Ok(frame);
+        }
+        if self.draining {
+            return Err(Error::Eof);
+        }
+        Err(Error::NeedMoreInput)
+    }
+
+    fn flush(&mut self) {
+        self.pending = false;
+        self.draining = false;
+    }
+}
+
+/// Records the [`vaco_sampfmt::SampleFmt`] of every audio frame it is handed,
+/// the audio twin of [`RecordingSink`].
+struct RecordingAudioSink(Arc<Mutex<Vec<vaco_sampfmt::SampleFmt>>>);
+
+impl Encoder for RecordingAudioSink {
+    fn send_frame(&mut self, frame: Option<&Frame>) -> Result<()> {
+        if let Some(f) = frame
+            && let vaco_frame::FrameData::Audio { format, .. } = f.data
+        {
+            self.0.lock().unwrap().push(format);
+        }
+        Ok(())
+    }
+
+    fn receive_packet(&mut self) -> Result<Packet> {
+        Err(Error::Eof)
+    }
+
+    fn flush(&mut self) {}
+}
+
+/// E2E-GAPS 3: a decoder's real output format (planar float, here) and an
+/// encoder that only accepts one specific format (`pcm_s16le`'s packed s16,
+/// stood in for by `RecordingAudioSink` declaring `&[SampleFmt::S16]`) used
+/// to have nothing between them — this is [`add_sample_converter`]'s own test
+/// that a mismatch is actually bridged, the audio mirror of
+/// `a_converter_turns_gray8_into_the_encoders_declared_format` above.
+#[test]
+fn a_sample_converter_turns_planar_float_into_the_encoders_declared_format() {
+    let mut spec = PipelineSpec::new();
+    let input = spec.add_input(Box::new(ScriptedDemuxer::new(
+        vec![audio_stream(0, TB)],
+        packets(0, 1, 0),
+    )));
+    let tap = spec.input_stream(input, 0).unwrap();
+    let frames = spec.add_decoder(tap, Box::new(PlanarFloatDecoder::default())).unwrap();
+    let converted = spec
+        .add_sample_converter(frames, vaco_sampfmt::SampleFmt::S16, TB, Limits::permissive())
+        .unwrap();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let encoded = spec
+        .add_encoder(converted, Box::new(RecordingAudioSink(seen.clone())), TB)
+        .unwrap();
+    let (mux, _log) = RecordingMuxer::pair(TB);
+    let out = spec.add_output(Box::new(mux));
+    spec.map(encoded, out, &CodecParameters::new(MediaType::Audio))
+        .unwrap();
+
+    let mut pipeline = spec.build().unwrap();
+    pipeline.run().unwrap();
+
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    assert!(
+        seen.iter().all(|f| *f == vaco_sampfmt::SampleFmt::S16),
+        "the frame reaching the encoder should have been converted to packed s16, got {seen:?}"
     );
 }
 

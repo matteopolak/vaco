@@ -36,6 +36,7 @@ use vaco_format_core::mux::MuxWriter;
 use vaco_frame::{Frame, FrameData};
 use vaco_limits::{Budget, Limits};
 use vaco_pixfmt::PixFmt;
+use vaco_sampfmt::SampleFmt;
 use vaco_scale::{ImageSpec, ScaleOptions, Scaler};
 
 use crate::wire::Payload;
@@ -157,6 +158,7 @@ pub(crate) enum Work {
     Decode(CodecWork<DecoderSide>),
     Encode(CodecWork<EncoderSide>),
     Convert(Box<CodecWork<ConverterSide>>),
+    ConvertAudio(Box<CodecWork<AudioConverterSide>>),
     Filter(Box<FilterWork>),
     Mux(Box<MuxWork>),
 }
@@ -173,6 +175,7 @@ impl Work {
             Self::Decode(c) => c.stage == Stage::Drained,
             Self::Encode(c) => c.stage == Stage::Drained,
             Self::Convert(c) => c.stage == Stage::Drained,
+            Self::ConvertAudio(c) => c.stage == Stage::Drained,
             Self::Filter(f) => f.sink_closed.iter().all(|c| *c),
             Self::Mux(m) => m.writer.is_none(),
         }
@@ -189,6 +192,7 @@ impl Work {
             Self::Decode(c) => c.ready(ports),
             Self::Encode(c) => c.ready(ports),
             Self::Convert(c) => c.ready(ports),
+            Self::ConvertAudio(c) => c.ready(ports),
             Self::Filter(f) => f.ready(ports),
             Self::Mux(m) => m.ready(ports),
         }
@@ -215,7 +219,7 @@ impl Work {
     pub(crate) const fn batch(&self) -> usize {
         match self {
             Self::Demux(_) => 0,
-            Self::Decode(_) | Self::Encode(_) | Self::Convert(_) | Self::Filter(_) => 1,
+            Self::Decode(_) | Self::Encode(_) | Self::Convert(_) | Self::ConvertAudio(_) | Self::Filter(_) => 1,
             Self::Mux(_) => 16,
         }
     }
@@ -233,6 +237,7 @@ impl Work {
             Self::Decode(c) => c.advance(inputs, ended, out, close),
             Self::Encode(c) => c.advance(inputs, ended, out, close),
             Self::Convert(c) => c.advance(inputs, ended, out, close),
+            Self::ConvertAudio(c) => c.advance(inputs, ended, out, close),
             Self::Filter(f) => f.advance(inputs, ended, out, close),
             Self::Mux(m) => m.advance(inputs, ended, all_ended),
         }
@@ -503,6 +508,145 @@ impl Side for ConverterSide {
     }
 }
 
+/// Frames in, frames out: a sample-format bridge between a decoder and an
+/// encoder that does not accept what the decoder produces.
+///
+/// The audio twin of [`ConverterSide`], for exactly the gap that one's doc
+/// names for video: `vaco-codec-dsp-fmtconvert`/`vaco-resample` existed and
+/// were tested, but nothing sat between a decoder's real output format and an
+/// encoder that only accepts one specific format — so decoding AAC's planar
+/// float into `pcm_s16le` (packed s16) either got refused by the encoder
+/// (`"encoder input sample format does not match this codec"`) or, worse, was
+/// accepted and mislabeled, and a downstream muxer refused the *container*
+/// property instead (`"wav: planar sample formats are not supported"`) for a
+/// stream whose bytes were never actually planar to begin with (E2E-GAPS 3).
+///
+/// Channel layout and sample rate are passed through unchanged — this only
+/// ever changes *format* (packed vs. planar, and element width), the same way
+/// [`ConverterSide`] only ever changes pixel format and never resolution.
+/// Resampling or remixing is `vaco-resample::Resampler`'s job, reached
+/// through `-ar`/`-ac`/a real filtergraph, not this ad-hoc node.
+pub(crate) struct AudioConverterSide {
+    dst_format: SampleFmt,
+    budget: Budget,
+    pending: Option<Frame>,
+    eof: bool,
+}
+
+impl std::fmt::Debug for AudioConverterSide {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AudioConverterSide")
+            .field("dst_format", &self.dst_format)
+            .finish_non_exhaustive()
+    }
+}
+
+impl AudioConverterSide {
+    pub(crate) fn new(dst_format: SampleFmt, limits: Limits) -> Self {
+        Self {
+            dst_format,
+            budget: Budget::new(limits),
+            pending: None,
+            eof: false,
+        }
+    }
+
+    fn convert(&mut self, src: &Frame) -> Result<Frame> {
+        let FrameData::Audio {
+            format,
+            sample_rate,
+            samples,
+            layout,
+            planes: src_planes,
+        } = &src.data
+        else {
+            return Err(Error::InvalidData(
+                "a sample-format converter received a non-audio frame",
+            ));
+        };
+        let (format, sample_rate, samples, layout) =
+            (*format, *sample_rate, *samples, layout.clone());
+        if format == self.dst_format {
+            return Ok(src.clone());
+        }
+        let src_slices: Vec<&[u8]> = src_planes.iter().map(|p| p.data.as_slice()).collect();
+        let src_ref = if format.is_planar() {
+            vaco_resample::AudioRef::planar(format, &src_slices)?
+        } else {
+            let data = src_slices
+                .first()
+                .copied()
+                .ok_or(Error::InvalidData("audio frame has no plane 0"))?;
+            vaco_resample::AudioRef::packed(format, layout.channels, data)?
+        };
+
+        let mut dst = Frame::alloc_audio(
+            &mut self.budget,
+            self.dst_format,
+            layout.clone(),
+            samples,
+            sample_rate,
+        )?;
+        let FrameData::Audio {
+            planes: dst_planes, ..
+        } = &mut dst.data
+        else {
+            return Err(Error::InvalidData(
+                "a freshly allocated audio frame is not audio",
+            ));
+        };
+        if self.dst_format.is_planar() {
+            let mut dst_slices: Vec<&mut [u8]> =
+                dst_planes.iter_mut().map(|p| p.data.make_mut()).collect();
+            let mut dst_mut = vaco_resample::AudioMut::planar(self.dst_format, &mut dst_slices)?;
+            vaco_resample::convert::convert(src_ref, &mut dst_mut)?;
+        } else {
+            let plane = dst_planes
+                .first_mut()
+                .ok_or(Error::InvalidData("allocated audio frame has no plane 0"))?;
+            let mut dst_mut = vaco_resample::AudioMut::packed(
+                self.dst_format,
+                layout.channels,
+                plane.data.make_mut(),
+            )?;
+            vaco_resample::convert::convert(src_ref, &mut dst_mut)?;
+        }
+        dst.pts = src.pts;
+        dst.duration = src.duration;
+        dst.time_base = src.time_base;
+        dst.flags = src.flags;
+        Ok(dst)
+    }
+}
+
+impl Side for AudioConverterSide {
+    fn send(&mut self, item: Option<&Payload>) -> Result<()> {
+        match item {
+            Some(Payload::Frame(f)) => {
+                self.pending = Some(self.convert(f)?);
+                Ok(())
+            }
+            Some(Payload::Packet(_)) => Err(Error::InvalidData(
+                "a packet reached a sample-format converter",
+            )),
+            None => {
+                self.eof = true;
+                Ok(())
+            }
+        }
+    }
+
+    fn recv(&mut self) -> Result<Payload> {
+        if let Some(f) = self.pending.take() {
+            return Ok(Payload::Frame(f));
+        }
+        if self.eof {
+            return Err(Error::Eof);
+        }
+        Err(Error::NeedMoreInput)
+    }
+}
+
 /// One send/receive component, with the protocol's three stages made explicit.
 #[derive(Debug)]
 pub(crate) struct CodecWork<S: Side> {
@@ -622,7 +766,9 @@ impl<S: Side> CodecWork<S> {
             }
         }
         if self.stage == Stage::Draining {
-            if self.drain(out)? {
+            let before = out.len();
+            let finished = self.drain(out)?;
+            if finished {
                 self.stage = Stage::Drained;
                 let end = if self.last_pts.is_some() {
                     self.last_pts
@@ -631,7 +777,32 @@ impl<S: Side> CodecWork<S> {
                 };
                 close.push((0, end));
             }
-            progressed = true;
+            // Real progress here is "produced at least one item" or "reached
+            // Drained" — not merely "we asked and were told NeedMoreInput
+            // again". `drain` returning `Ok(false)` with nothing pushed to
+            // `out` means the component is still draining with nothing ready
+            // *yet*, which is legitimate for one call (a codec's own reorder
+            // delay can need several steps to empty) but is indistinguishable
+            // from a broken component that announced draining and then never
+            // produces `Eof` at all — `vaco-codec-alac`'s and
+            // `vaco-codec-vorbis`'s decoders both do exactly this today,
+            // `send_packet(None)` a no-op that never moves them out of
+            // "always `NeedMoreInput`".
+            //
+            // Before this fix, `progressed` was unconditionally `true` here,
+            // which fed a false "yes, something happened" into
+            // `Pipeline::end_step`'s `ProgressGuard` on *every* step for as
+            // long as the stuck node was the only thing left runnable — the
+            // guard exists precisely to convert a livelock into
+            // `LimitError::NoProgress` after enough consecutive do-nothing
+            // steps, and a decoder that never drains defeated it by lying
+            // about whether the step actually did anything, hanging the
+            // whole CLI instead of failing with a diagnosis. Measured against
+            // a real `ffmpeg`-encoded ALAC file decoded end to end: before
+            // this change, `vaco -i in.m4a -c:a pcm_s16le -f null -` hangs
+            // indefinitely; after it, the pipeline reports `NoProgress` and
+            // the run ends with a diagnosis instead of a wedged process.
+            progressed = out.len() > before || finished;
         }
         Ok(progressed)
     }

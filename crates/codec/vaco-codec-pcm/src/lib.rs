@@ -296,6 +296,37 @@ impl SendReceive for PcmEncoder {
         Ok(())
     }
 
+    /// The one wire format this codec accepts: [`PcmFormat::decoded`], as
+    /// [`PcmEncoder::send`] already enforces (`Error::Unsupported` on a
+    /// mismatch). Exposing it here, rather than only enforcing it at
+    /// `send_frame` time, is what lets a caller insert a conversion *before*
+    /// sending instead of discovering the mismatch from a failed send
+    /// (E2E-GAPS 3 — the same gap `vaco-codec-qoi`'s `accepted_pix_fmts`
+    /// override closed on the video side).
+    ///
+    /// One `PcmEncoder` handles every `Pcm*` codec this crate registers
+    /// (`resolve` picks `format` at construction), so this cannot be a single
+    /// crate-wide constant the way a codec with one fixed format would write
+    /// it — the match covers every `SampleFmt` `table::PCM_FORMATS` actually
+    /// uses as a `decoded` value, each arm a `'static` one-element slice.
+    fn accepted_sample_fmts(&self) -> &'static [vaco_sampfmt::SampleFmt] {
+        use vaco_sampfmt::SampleFmt;
+        match self.format.decoded {
+            SampleFmt::U8 => &[SampleFmt::U8],
+            SampleFmt::S16 => &[SampleFmt::S16],
+            SampleFmt::S32 => &[SampleFmt::S32],
+            SampleFmt::S64 => &[SampleFmt::S64],
+            SampleFmt::F32 => &[SampleFmt::F32],
+            SampleFmt::F64 => &[SampleFmt::F64],
+            SampleFmt::U8P => &[SampleFmt::U8P],
+            SampleFmt::S16P => &[SampleFmt::S16P],
+            SampleFmt::S32P => &[SampleFmt::S32P],
+            SampleFmt::S64P => &[SampleFmt::S64P],
+            SampleFmt::F32P => &[SampleFmt::F32P],
+            SampleFmt::F64P => &[SampleFmt::F64P],
+        }
+    }
+
     fn send(&mut self, input: Option<&Frame>) -> Result<()> {
         match self.machine.accept(input.is_none())? {
             Accept::Drain => {
@@ -837,6 +868,12 @@ mod tests {
             let frame = Frame::alloc_audio(&mut budget, format.decoded, layout, 4, 8000)
                 .expect("alloc audio");
             let mut encoder = desc.build(Limits::permissive());
+            assert_eq!(
+                encoder.accepted_sample_fmts(),
+                &[format.decoded],
+                "{}: accepted_sample_fmts must name exactly this codec's own wire format",
+                desc.name
+            );
             encoder.send_frame(Some(&frame)).expect("send");
             let packet = encoder.receive_packet().expect("packet");
             assert_eq!(
@@ -848,4 +885,18 @@ mod tests {
         }
     }
 
+    /// E2E-GAPS 3: before `accepted_sample_fmts` existed, a mismatch was only
+    /// discoverable by calling `send_frame` and parsing the resulting error —
+    /// exactly the state `vaco-codec-qoi`'s `accepted_pix_fmts` override
+    /// already fixed on the video side. This is the direct check that a
+    /// caller can now ask *before* sending: a `pcm_s16le` encoder declares
+    /// packed `S16` and nothing else.
+    #[test]
+    fn accepted_sample_fmts_names_the_one_format_send_frame_will_actually_accept() {
+        let enc = PcmEncoder::new(Limits::permissive(), CodecId::PcmS16le);
+        assert_eq!(enc.accepted_sample_fmts(), &[vaco_sampfmt::SampleFmt::S16]);
+
+        let enc = PcmEncoder::new(Limits::permissive(), CodecId::PcmF32le);
+        assert_eq!(enc.accepted_sample_fmts(), &[vaco_sampfmt::SampleFmt::F32]);
+    }
 }
