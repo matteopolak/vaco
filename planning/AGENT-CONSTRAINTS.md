@@ -1835,3 +1835,30 @@ refusal in a later, separate commit when the output is actually byte-exact.
 
 Gating reachability and gating version control are independent decisions. Use
 `check_scope` for the first. Never use "don't commit" for it.
+
+### Postscript: the loss actually happened, and not the way it was predicted
+
+The entry above was written as a caution about *other* agents. Within the hour,
+the agent holding those ~1,700 uncommitted lines destroyed them itself: it ran
+`git checkout -- decoder.rs` meaning to undo a single edit, and wiped the entire
+uncommitted Stage 2 rewrite of that file. Nothing had ever been staged or
+committed, so no git recovery existed.
+
+It got the work back — reconstructed from the crate's own intact APIs plus the
+design record, then validated by temporarily bypassing the refusal and
+reproducing the exact known-good byte count, 2,829,043 of 2,880,000. That
+number depends on precise DPB, POC and context-bank wiring, so reproducing it
+is strong evidence the reconstruction was faithful. But that recovery was
+luck and effort, not a guarantee, and it was only possible because a specific
+measured number happened to be on record.
+
+Two corrections to draw:
+
+- **The danger to uncommitted work is not primarily other agents.** It is the
+  single-file `git checkout --`, `git restore`, and `git reset` you run on
+  yourself while iterating. Those are the commands that make "I'll commit it
+  when it's finished" expensive.
+- **Commit early and often behind a refusal.** A commit is not a claim that the
+  work is done or correct — `check_scope` makes that claim, and it is what
+  users actually see. A commit is only a claim that the work exists and can be
+  found again.
