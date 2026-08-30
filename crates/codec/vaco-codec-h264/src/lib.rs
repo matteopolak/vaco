@@ -137,6 +137,7 @@ mod cabac_mb_tables;
 pub mod cavlc;
 mod cavlc_tables;
 mod deblock;
+mod frame_task;
 mod dequant;
 mod motion;
 mod interp;

@@ -867,6 +867,30 @@ picture, and a CABAC slice whose `end_of_slice_flag` fires early (refused
 as `InvalidData` rather than emitting a partial picture — no longer
 reproducible on any clip in the corpus above, but kept).
 
+## Frame threading (`-threads N`), off by default
+
+`H264Decoder` is split into a serial header/entropy stage and a parallel
+reconstruct/deblock/crop stage, so several pictures decode at once. The full
+design, the determinism argument, the memory accounting and the measured
+scaling are in **`docs/codec/frame-threading.md`**; the crate-side facts are:
+
+- `decoder::H264Decoder::split_packet` is the serial half — parse, CABAC, the
+  DPB, reference lists, clause 8.2.5 marking, POC, and every output-ordering
+  decision. `frame_task::H264FrameTask` is the parallel half.
+- A DPB entry is now two halves. Its bookkeeping (`poc`, `frame_num`, the
+  per-4x4 motion field) is final as soon as the slice is entropy-decoded, so
+  reference-list construction and `ColocatedField` never wait for a pixel; its
+  samples are a `PictureRef` the frame task publishes when it finishes.
+- `ColocatedField` now holds `Arc<Vec<MvInfo>>` shared with the DPB entry that
+  produced it rather than a clone. The grid is one entry per 4x4 luma block of
+  a whole picture — over 32,000 at 4K — and it is immutable once decoded.
+- **Output is bit-identical at every thread count**, verified against ffmpeg's
+  own `rawvideo` on all five regression fixtures at 1, 2, 4 and 8 threads. The
+  ordering decisions are all applied in decode order in `collect_one`, not at
+  dispatch, which is what makes that true rather than lucky.
+- `-threads 1` (the default) spawns nothing and runs each picture inline at
+  dispatch — the same call sequence as before frame threading existed.
+
 ## Configuration
 
 `vaco_limits::Limits`/`Budget` bound every allocation (`residual_block_cavlc`/

@@ -3547,11 +3547,19 @@ fn resolve_c(grids: &CabacGrids, left_x: u32, right_x: u32, top_y: u32) -> MvInf
 pub struct ColocatedField {
     width_4x4: u32,
     height_4x4: u32,
-    blocks: Vec<MvInfo>,
+    /// Shared with the DPB entry that produced it rather than cloned: the
+    /// grid is one `MvInfo` per 4x4 luma block of a whole picture (over
+    /// 32,000 entries at 4K), it is immutable once decoded, and every B slice
+    /// naming this reference wants the same one.
+    blocks: std::sync::Arc<Vec<MvInfo>>,
 }
 
 impl ColocatedField {
-    pub(crate) fn new(width_4x4: u32, height_4x4: u32, blocks: Vec<MvInfo>) -> Self {
+    pub(crate) fn new(
+        width_4x4: u32,
+        height_4x4: u32,
+        blocks: std::sync::Arc<Vec<MvInfo>>,
+    ) -> Self {
         Self { width_4x4, height_4x4, blocks }
     }
 

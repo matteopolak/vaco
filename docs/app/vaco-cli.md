@@ -562,6 +562,23 @@ account.
   builds a codec here, pass `Limits::permissive()` explicitly; do not rely on
   `Default`.
 
+### `-threads N`
+
+Codec-side thread count, reaching a decoder through `Decoder::set_thread_count`
+(whose default is a no-op, so every decoder that has not implemented frame
+threading is untouched). Today that is `vaco-codec-h264` and nothing else — see
+`docs/codec/frame-threading.md`.
+
+**Global here, per-stream in the reference.** `-threads` is an
+`AVCodecContext` `AVOption` upstream, not an entry in `ffmpeg.c`'s own table, so
+it does not appear in `-h full` and was never extracted; vaco has no per-codec
+option store, so `-threads N` before or after `-i` both mean "N threads for
+every codec in this run". `-threads:v:0 4` is not accepted. `0` means one, not
+the reference's "auto": nothing here auto-detects, and a machine-dependent
+default would make a run's output provenance machine-dependent too. A
+non-numeric value is rejected through the option's own declared
+`ValueKind::Int` grammar rather than quietly meaning 1.
+
 ## Configuration
 
 No environment variables and no configuration files. Everything is an option,
