@@ -1386,7 +1386,13 @@ pub fn run_pipeline(
                                 vaco_registry::encoder_by_name(name).ok_or_else(|| {
                                     internal("the resolved encoder is no longer in the registry")
                                 })?;
-                            let limits = vaco_limits::Limits::default();
+                            // `Limits::default()` is `strict()` (`vaco-limits`'s
+                            // deliberate "nobody thought about it" fallback for
+                            // an embedder on untrusted input) — wrong for the
+                            // CLI, whose whole job is decoding a file the user
+                            // handed it directly. `docs/core/vaco-limits.md`
+                            // names `permissive()` the CLI default explicitly.
+                            let limits = vaco_limits::Limits::permissive();
                             let mut decoder = decoder_desc.build(limits.clone());
                             if let Some(v) = p.video.as_ref() {
                                 // `Decoder::prime_video`'s own default is a
@@ -1617,7 +1623,10 @@ pub fn run_pipeline(
                     let encoder_desc = vaco_registry::encoder_by_name(name).ok_or_else(|| {
                         internal("the resolved encoder is no longer in the registry")
                     })?;
-                    let limits = vaco_limits::Limits::default();
+                    // See the matching comment above `StreamCodec::Encode`'s
+                    // own decoder/encoder build: `Limits::permissive()` is the
+                    // documented CLI default, not `default()`/`strict()`.
+                    let limits = vaco_limits::Limits::permissive();
                     let mut encoder = encoder_desc.build(limits);
                     for (key, value) in &s.codec_options {
                         encoder

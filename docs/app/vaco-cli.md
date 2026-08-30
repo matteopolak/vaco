@@ -548,6 +548,19 @@ account.
   performance predictions measuring backwards, most recently a threading design
   45–60× slower than serial. A demux-to-sink graph has nothing to overlap.
   Change it with a measurement, not a hunch.
+* **Every decoder/encoder this binary builds uses `vaco_limits::Limits::permissive()`,
+  never `Limits::default()`.** `Limits::default()` is `strict()` — `vaco-limits`'s
+  deliberate "nobody thought about it" fallback for a library embedding this
+  code on untrusted input — and `docs/core/vaco-limits.md` names `permissive()`
+  the CLI's own default explicitly: a user invoking this binary on their own
+  file has already made the trust decision `strict()` exists to avoid. Two real
+  call sites (`exec.rs`'s `StreamCodec::Encode` branch and
+  `complexgraph.rs`'s decoder build) used to default to `strict()` by omission,
+  which was reachable in practice — `strict()`'s far tighter
+  `max_alloc_total`/`max_frame_bytes` caps could reject an ordinary 4K stream a
+  decoder built with `permissive()` handles fine. If you add a new call that
+  builds a codec here, pass `Limits::permissive()` explicitly; do not rely on
+  `Default`.
 
 ## Configuration
 

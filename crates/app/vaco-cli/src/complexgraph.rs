@@ -354,7 +354,12 @@ pub fn build_and_attach(
             .ok_or_else(|| "resolved stream has no known codec".to_owned())?;
         let decoder_desc = vaco_registry::decoder_for(codec_id)
             .ok_or_else(|| "this build has no decoder for that codec".to_owned())?;
-        let limits = vaco_limits::Limits::default();
+        // `Limits::default()` is `strict()`, `vaco-limits`'s conservative
+        // fallback for an embedder handed untrusted input — not what the CLI
+        // wants for a decoder built from the user's own file.
+        // `docs/core/vaco-limits.md` names `permissive()` the CLI default;
+        // see the matching decision in `exec.rs`.
+        let limits = vaco_limits::Limits::permissive();
         let mut decoder = decoder_desc.build(limits);
         if let Some(extradata) = p.extradata.as_deref() {
             let _ = decoder.set_extradata(extradata);
