@@ -167,40 +167,16 @@ impl MxfDemuxer {
 
         let (streams, bindings, format_metadata) = build_streams(&graph, &mut budget)?;
 
-        // A CBE Index Table Segment's own `IndexDuration` is not trusted
-        // blindly: measured against a real single-partition D-10 file
-        // (`ffmpeg -f mxf_d10`), it states `IndexDuration = 0` even though
-        // the file has a definite, 25-frame essence container — the real
-        // count is only recoverable from the essence container's own
-        // measured size divided by `EditUnitByteCount`, the same computation
-        // `essence::clip_wrapped_spans`'s CBE branch already does. `0` here
-        // most likely means "unknown/growing" in a live-capture writer, not
-        // "empty" — trusting it literally would silently report a
-        // zero-duration, zero-entry index for a file that plainly has
-        // twenty-five real frames.
         let total_essence_len = essence_origin.and_then(|origin| {
             io.size().map(|size| size.saturating_sub(origin))
         });
-        let effective_index_duration = |seg: &IndexTableSegment| -> i64 {
-            if seg.index_duration > 0 {
-                return seg.index_duration;
-            }
-            if seg.is_cbe()
-                && let Some(total) = total_essence_len
-            {
-                #[allow(
-                    clippy::integer_division,
-                    reason = "edit_unit_byte_count is checked non-zero via is_cbe() above"
-                )]
-                let count = total / u64::from(seg.edit_unit_byte_count);
-                return i64::try_from(count).unwrap_or(0);
-            }
-            0
+        let duration_of = |seg: &IndexTableSegment| -> i64 {
+            effective_index_duration(seg, total_essence_len)
         };
 
         let indices = first_essence
             .as_ref()
-            .map(|e| build_indices(&bindings, &index_segments, e, &effective_index_duration))
+            .map(|e| build_indices(&bindings, &index_segments, e, &duration_of))
             .unwrap_or_default();
 
         let duration = bindings
@@ -210,7 +186,7 @@ impl MxfDemuxer {
                 let seg = index_segments
                     .iter()
                     .find(|seg| seg.index_edit_rate == Some(b.edit_rate))?;
-                Timestamp::new(effective_index_duration(seg)).to_duration(s.time_base)
+                Timestamp::new(duration_of(seg)).to_duration(s.time_base)
             })
             .max_by_key(|d: &Duration| d.as_micros());
 
@@ -526,6 +502,64 @@ fn is_clip_wrapped(first: &FirstEssenceElement, seg: &IndexTableSegment) -> bool
     seg.entries
         .get(1)
         .is_some_and(|second| first.value_len >= second.stream_offset)
+}
+
+/// How many edit units `seg` covers, trusted only as far as the essence
+/// container's own measured size backs it up.
+///
+/// A CBE Index Table Segment's own `IndexDuration` is not trusted blindly in
+/// either direction:
+///
+/// * **Zero is not "empty".** Measured against a real single-partition D-10
+///   file (`ffmpeg -f mxf_d10`), `IndexDuration` states `0` even though the
+///   file has a definite, 25-frame essence container — the real count is
+///   only recoverable from the essence container's own measured size
+///   divided by `EditUnitByteCount`, the same computation
+///   `essence::clip_wrapped_spans`'s CBE branch already does. `0` most
+///   likely means "unknown/growing" in a live-capture writer, not "empty".
+/// * **A large positive value is not ground truth either.** `IndexDuration`
+///   is an attacker-controlled `i64` read straight off the wire
+///   (`localset::i64_be`), and [`build_indices`]'s CBE branch runs a loop of
+///   exactly this length. A 9,934-byte file declaring `IndexDuration =
+///   144,115,188,075,855,872` against a real 212,992-byte
+///   `EditUnitByteCount` sailed past the old "0 means unknown" check (the
+///   value is very much not 0) and fell through to `MAX_CBE_INDEX_ENTRIES`
+///   as the only cap — 16,777,216 loop iterations, ~500ms, for a file that
+///   cannot possibly contain more than a handful of real edit units. Found
+///   by `fuzz/fuzz_targets/mxf_demux.rs`,
+///   `slow-unit-a4c0af443812c5c6e4cc5601feb1ab8b163d65b7`.
+///
+/// So a size-derived bound — `total_essence_len / EditUnitByteCount` — is
+/// applied on *both* sides: it substitutes for a `0` and it clamps a stated
+/// value that overshoots it. This makes the bound scale with the input
+/// actually given, rather than sitting at a fixed ceiling regardless of it;
+/// `MAX_CBE_INDEX_ENTRIES` remains the fallback only when `total_essence_len`
+/// itself is unknown (a non-seekable source, where no size-derived bound is
+/// possible at all).
+fn effective_index_duration(seg: &IndexTableSegment, total_essence_len: Option<u64>) -> i64 {
+    let size_bound = if seg.is_cbe() { total_essence_len } else { None }.map(|total| {
+        #[allow(
+            clippy::integer_division,
+            reason = "edit_unit_byte_count is checked non-zero via is_cbe() above"
+        )]
+        let count = total / u64::from(seg.edit_unit_byte_count);
+        count
+    });
+    if seg.index_duration > 0 {
+        let stated = u64::try_from(seg.index_duration).unwrap_or(0);
+        let bounded = match size_bound {
+            // A measured size is ground truth; a stated duration can only
+            // ever be trusted down to it, never up past it.
+            Some(bound) => stated.min(bound),
+            // No real size to measure against (non-seekable source): fall
+            // back to the fixed ceiling `build_indices` already enforces, so
+            // this function's own return value can never exceed what the
+            // loop it feeds will actually run.
+            None => stated.min(MAX_CBE_INDEX_ENTRIES),
+        };
+        return i64::try_from(bounded).unwrap_or(0);
+    }
+    size_bound.and_then(|b| i64::try_from(b).ok()).unwrap_or(0)
 }
 
 fn build_indices(
@@ -1078,5 +1112,76 @@ mod tests {
             b"not an mxf file at all, just prose".to_vec(),
         ));
         assert!(MxfDemuxer::open(src, &NoParsers).is_err());
+    }
+
+    /// The exact shape of `slow-unit-a4c0af443812c5c6e4cc5601feb1ab8b163d65b7`:
+    /// a CBE segment whose stated `IndexDuration` wildly overshoots what a
+    /// 9,934-byte essence container could hold at a 212,992-byte
+    /// `EditUnitByteCount`. The old code trusted any positive
+    /// `IndexDuration` outright and fell through to the fixed
+    /// `MAX_CBE_INDEX_ENTRIES` ceiling (16,777,216) instead of the real,
+    /// much smaller, size-derived count.
+    #[test]
+    fn a_stated_index_duration_is_clamped_to_the_measured_essence_size() {
+        let seg = IndexTableSegment {
+            index_duration: 144_115_188_075_855_872,
+            edit_unit_byte_count: 212_992,
+            ..Default::default()
+        };
+        // 9_934 / 212_992 == 0: the file cannot hold even one full edit unit.
+        assert_eq!(effective_index_duration(&seg, Some(9_934)), 0);
+        assert!(
+            effective_index_duration(&seg, Some(9_934))
+                < i64::try_from(MAX_CBE_INDEX_ENTRIES).unwrap(),
+            "must not fall through to the fixed ceiling when a real size is known"
+        );
+    }
+
+    #[test]
+    fn a_stated_index_duration_within_the_measured_size_passes_through() {
+        let seg = IndexTableSegment {
+            index_duration: 25,
+            edit_unit_byte_count: 1_000,
+            ..Default::default()
+        };
+        assert_eq!(effective_index_duration(&seg, Some(1_000_000)), 25);
+    }
+
+    /// The pre-existing "`IndexDuration == 0` means unknown, not empty" case
+    /// (a real D-10 fixture) must still recover the size-derived count.
+    #[test]
+    fn a_zero_index_duration_falls_back_to_the_measured_size() {
+        let seg = IndexTableSegment {
+            index_duration: 0,
+            edit_unit_byte_count: 1_000,
+            ..Default::default()
+        };
+        assert_eq!(effective_index_duration(&seg, Some(25_000)), 25);
+    }
+
+    #[test]
+    fn without_a_measured_size_a_stated_duration_still_hits_the_fixed_ceiling() {
+        let seg = IndexTableSegment {
+            index_duration: i64::MAX,
+            edit_unit_byte_count: 1,
+            ..Default::default()
+        };
+        assert_eq!(
+            effective_index_duration(&seg, None),
+            i64::try_from(MAX_CBE_INDEX_ENTRIES).unwrap()
+        );
+    }
+
+    #[test]
+    fn a_non_cbe_segment_is_not_size_bounded() {
+        // `edit_unit_byte_count: 0` makes `is_cbe()` false; the size-derived
+        // bound only applies to CBE segments (a VBE segment's own `entries`
+        // already physically bound `build_indices`'s loop over it).
+        let seg = IndexTableSegment {
+            index_duration: 25,
+            edit_unit_byte_count: 0,
+            ..Default::default()
+        };
+        assert_eq!(effective_index_duration(&seg, Some(1)), 25);
     }
 }
