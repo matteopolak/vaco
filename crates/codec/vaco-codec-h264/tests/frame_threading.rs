@@ -191,22 +191,23 @@ fn assert_invariant(name: &str, stream: &[u8]) {
 fn neither_per_picture_budget_charge_leaks_at_any_thread_count() {
     let stream: &[u8] = include_bytes!("fixtures/cabac_ip_simple.264");
     let (extradata, slices) = split(stream);
-    // 64x64 -> a coded picture is 6144 bytes, so a task's charge is 12 KiB and
-    // a DPB entry's about 8 KiB. At eight threads the legitimate live set is
-    // nine in-flight pictures plus the DPB -- around 140 KiB -- while 25
-    // pictures' worth of *either* charge left unreleased is over 300 KiB. The
-    // ceiling sits between the two on purpose.
+    // 64x64: a task's charge is ~42 KiB (two coded pictures at 6 KiB each,
+    // plus 16 `MbSummary` at 1,888 bytes -- the macroblock array is the big
+    // half, here as at 4K) and a DPB entry's is ~12 KiB. At eight threads the
+    // legitimate live set is nine in-flight pictures plus the DPB, around
+    // 410 KiB; 25 pictures' worth of the task charge left unreleased is over
+    // 1 MiB, and of the DPB charge nearly 300 KiB on top of the legitimate
+    // set. The ceiling sits between.
     //
-    // Both halves of that were checked by deleting each `Budget::release` in
-    // turn and confirming this test fails: dropping the DPB-eviction release
-    // fails at frame 21, dropping the in-flight task release fails at frame 16.
-    // An earlier draft used 4 MiB, which caught the first leak and *not* the
-    // second -- a ceiling loose enough to let 25 unreleased charges fit is a
-    // test that passes for the wrong reason, which is the failure mode
-    // `planning/AGENT-CONSTRAINTS.md` names as an oracle that shares your
-    // misreading.
+    // **The number was chosen by checking the test fails, not by rounding.**
+    // Each `Budget::release` was deleted in turn and this test re-run: both
+    // deletions fail at 512 KiB. An earlier draft used 4 MiB, which caught the
+    // DPB leak and silently passed the task leak, because 25 unreleased task
+    // charges still fit underneath it -- a test passing for the wrong reason,
+    // which is the failure `planning/AGENT-CONSTRAINTS.md` names as an oracle
+    // that shares your misreading. Re-check both if these sizes change.
     let mut limits = Limits::permissive();
-    limits.max_alloc_total = 200 * 1024;
+    limits.max_alloc_total = 512 * 1024;
 
     for threads in [1, 2, 4, 8] {
         let mut d = H264Decoder::new(limits.clone());
