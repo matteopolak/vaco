@@ -219,7 +219,7 @@ impl HevcDecoder {
         let width = usize::try_from(sps.pic_width_in_luma_samples).unwrap_or(0);
         let height = usize::try_from(sps.pic_height_in_luma_samples).unwrap_or(0);
         let mut pic = Picture::new(&mut self.budget, width, height)?;
-        let cu_grid = CuGrid::new(&mut self.budget, width, height)?;
+        let cu_grid = CuGrid::new(&mut self.budget, width, height, hdr.kind == SliceKind::B)?;
 
         // ITU-T H.265 §8.3.1: this picture's own picture order count, and
         // (§8.1) whether it is the one IRAP in its sequence that clears
@@ -246,10 +246,23 @@ impl HevcDecoder {
             let pocs = dpb.clear_for_irap(hdr.no_output_of_prior_pics);
             Self::emit_pocs(self.dpb.as_ref(), &mut self.budget, &mut self.machine, &pocs)?;
             if let Some(dpb) = self.dpb.as_mut() {
-                dpb.clear_all();
+                dpb.clear_all(&mut self.budget);
             }
         } else if let Some(dpb) = self.dpb.as_mut() {
-            dpb.apply_reference_picture_set(&sets);
+            // §8.3.2's marking (`remove_unused`'s own trailing call inside
+            // `apply_reference_picture_set` is §C.5.2.2's unconditional
+            // "empty every not-needed-and-unused buffer" step), then the
+            // ordinary (non-IRAP-clear) pre-decode bump — against the DPB
+            // state *before* this picture is stored, per §C.5.2.2's own
+            // three-condition check. See `Dpb::bump_pre_decode`'s own doc
+            // for why this has to run here and not folded into the
+            // post-store bump below.
+            dpb.apply_reference_picture_set(&sets, &mut self.budget);
+            let pre_bumped = dpb.bump_pre_decode();
+            Self::emit_pocs(self.dpb.as_ref(), &mut self.budget, &mut self.machine, &pre_bumped)?;
+            if let Some(dpb) = self.dpb.as_mut() {
+                dpb.reap_unused(&mut self.budget);
+            }
         }
 
         let is_b = hdr.kind == SliceKind::B;
@@ -425,10 +438,14 @@ impl HevcDecoder {
 
         let dpb = self.dpb.as_mut().ok_or(Error::InvalidData("vaco-codec-hevc: DPB missing after its own first use"))?;
         dpb.store(pic, meta, poc.value, hdr.pic_output, is_reference, collocated_out);
-        let bumped = dpb.bump_before_storing();
+        // §C.5.2.3's own "additional bumping" — reorder/latency only, run
+        // against the DPB state *after* this picture is stored (see
+        // `Dpb::bump_pre_decode`'s own doc for why capacity is deliberately
+        // absent here and handled earlier instead).
+        let bumped = dpb.bump_post_decode(poc.value);
         Self::emit_pocs(self.dpb.as_ref(), &mut self.budget, &mut self.machine, &bumped)?;
         if let Some(dpb) = self.dpb.as_mut() {
-            dpb.reap_unused();
+            dpb.reap_unused(&mut self.budget);
         }
         Ok(())
     }

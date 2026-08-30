@@ -70,6 +70,7 @@ use vaco_parse_hevc::rps::ShortTermRps;
 use vaco_parse_hevc::slice::RefPicListModification;
 
 use crate::framebuf::Picture;
+use vaco_limits::Budget;
 
 /// How a picture still sitting in the DPB is marked — §8.3.2's last step
 /// ("every picture ... not included ... is marked as unused for reference").
@@ -275,28 +276,62 @@ pub(crate) struct Dpb {
     entries: Vec<DpbEntry>,
     max_dec_pic_buffering: usize,
     max_num_reorder_pics: usize,
-    /// `sps_max_latency_increase_plus1[HighestTid]`; `0` means "not
-    /// indicated" (§7.4.3.1), which disables the latency-based bump
-    /// condition entirely rather than comparing against a bogus zero bound.
-    max_latency_increase: u32,
+    /// Annex C.5.2.2's own `SpsMaxLatencyPictures[HighestTid]` — **not**
+    /// `sps_max_latency_increase_plus1` itself. `None` when
+    /// `sps_max_latency_increase_plus1 == 0` ("not indicated", §7.4.3.1),
+    /// which disables the latency-based bump condition entirely rather than
+    /// comparing against a bogus bound.
+    sps_max_latency_pictures: Option<u32>,
 }
 
 impl Dpb {
+    /// `max_latency_increase_plus1` is the raw SPS field
+    /// (`sps_max_latency_increase_plus1[HighestTid]`) — **not** already
+    /// `SpsMaxLatencyPictures`. Annex C.5.2.2's own derivation is
+    /// `SpsMaxLatencyPictures = sps_max_num_reorder_pics + sps_max_latency_increase_plus1 - 1`
+    /// (all at `[HighestTid]`), computed here once rather than at every
+    /// [`Dpb::bump_post_decode`] call.
+    ///
+    /// # A real bug this fixed
+    ///
+    /// This constructor used to store `max_latency_increase_plus1` verbatim
+    /// and compare a picture's own `PicLatencyCount` against
+    /// `max_latency_increase_plus1 - 1` directly — silently dropping the
+    /// `sps_max_num_reorder_pics` term from Annex C.5.2.2's own formula
+    /// entirely. Invisible on every fixture this crate had measured before a
+    /// real `bframes` stream, since `sps_max_num_reorder_pics` is `0` for
+    /// every P-slice-only or weighted-prediction fixture this crate's own
+    /// history is built on (nothing ever needs to hold a picture back), so
+    /// the missing term contributed `0` and the bug never moved a number.
+    /// A real hierarchical-B fixture (`sps_max_num_reorder_pics = 2`,
+    /// `sps_max_latency_increase_plus1 = 4`) forced a bump at
+    /// `PicLatencyCount >= 3` instead of the correct `>= 5`, outputting a
+    /// picture two stores early — caught by the resulting output *POC*
+    /// sequence itself going non-monotonic (`0, 1, 2, 3, 4, 6, 8, 5, ...`,
+    /// found via the CLI's own generic mux-side DTS-monotonicity check,
+    /// `vaco-format-core::time::check_monotonic`, tripping downstream of
+    /// this crate for the first time a real reordering codec's own bumping
+    /// logic actually mattered), not by any per-plane pixel comparison —
+    /// the pixels a wrongly-timed but still POC-labelled frame carries are
+    /// unaffected by *when* it is emitted, only *whether the emission order
+    /// itself is right*.
     #[must_use]
-    pub(crate) const fn new(max_dec_pic_buffering: usize, max_num_reorder_pics: usize, max_latency_increase: u32) -> Self {
-        Self { entries: Vec::new(), max_dec_pic_buffering, max_num_reorder_pics, max_latency_increase }
+    pub(crate) fn new(max_dec_pic_buffering: usize, max_num_reorder_pics: usize, max_latency_increase_plus1: u32) -> Self {
+        let sps_max_latency_pictures = (max_latency_increase_plus1 != 0)
+            .then(|| u32::try_from(max_num_reorder_pics).unwrap_or(u32::MAX).saturating_add(max_latency_increase_plus1).saturating_sub(1));
+        Self { entries: Vec::new(), max_dec_pic_buffering, max_num_reorder_pics, sps_max_latency_pictures }
     }
 
     /// §8.3.2's last step: a picture already in the DPB is short-term if its
     /// POC appears in `sets` at all (`StCurrBefore`, `StCurrAfter` or
     /// `StFoll` — all three are "still a reference", only the first two are
     /// "used by the current picture"), and unused for reference otherwise.
-    pub(crate) fn apply_reference_picture_set(&mut self, sets: &ReferencePicSets) {
+    pub(crate) fn apply_reference_picture_set(&mut self, sets: &ReferencePicSets, budget: &mut Budget) {
         for e in &mut self.entries {
             let kept = sets.st_curr_before.contains(&e.poc) || sets.st_curr_after.contains(&e.poc) || sets.st_foll.contains(&e.poc);
             e.marking = if kept { Marking::ShortTerm } else { Marking::Unused };
         }
-        self.remove_unused();
+        self.remove_unused(budget);
     }
 
     /// §C.5.2.2: an IRAP picture with `NoRaslOutputFlag` set empties the
@@ -305,14 +340,14 @@ impl Dpb {
     /// inference) skips outputting whatever was still pending; otherwise
     /// every picture still needing output is bumped first, in POC order.
     ///
-    /// Returns the POCs to output but, like [`Dpb::bump_before_storing`],
-    /// does **not** itself remove anything — [`Dpb::clear_all`] is the
-    /// caller's own next step, once every returned POC has been read via
+    /// Returns the POCs to output but, like [`Dpb::bump_while`], does
+    /// **not** itself remove anything — [`Dpb::clear_all`] is the caller's
+    /// own next step, once every returned POC has been read via
     /// [`Dpb::picture_for_output`] (the same "read before you reap" contract
-    /// `bump_before_storing`'s own doc explains, here for the same reason:
-    /// an unconditional `self.entries.clear()` right here would have
-    /// dropped a pending output picture's own pixel data before its caller
-    /// ever saw it).
+    /// `bump_while`'s own doc explains, here for the same reason: an
+    /// unconditional `self.entries.clear()` right here would have dropped a
+    /// pending output picture's own pixel data before its caller ever saw
+    /// it).
     pub(crate) fn clear_for_irap(&self, no_output_of_prior_pics: bool) -> Vec<i64> {
         if no_output_of_prior_pics {
             Vec::new()
@@ -325,17 +360,97 @@ impl Dpb {
 
     /// Empty the DPB entirely — the second half of an IRAP's own §C.5.2.2
     /// handling, called once [`Dpb::clear_for_irap`]'s own returned POCs
-    /// have all been read out.
-    pub(crate) fn clear_all(&mut self) {
-        self.entries.clear();
+    /// have all been read out. Releases every dropped picture's own charged
+    /// bytes back to `budget` (see [`Picture::budget_bytes`]'s own doc for
+    /// why: an IRAP that clears a long-running stream's whole DPB at once is
+    /// exactly the moment the largest single release happens).
+    pub(crate) fn clear_all(&mut self, budget: &mut Budget) {
+        for e in self.entries.drain(..) {
+            budget.release(e.picture.budget_bytes());
+        }
     }
 
-    /// Annex C's informal "bumping" process, run immediately before storing
-    /// a newly decoded picture: repeatedly output (in POC order) the
-    /// picture with the smallest POC among those still needing output,
-    /// until neither the reorder-count nor the DPB-fullness condition is
-    /// exceeded. Returns the POCs output, in the order they were output
-    /// (which is POC order, by construction).
+    /// §C.5.2.2's "ordinary" (non-IRAP-clear) pre-decode step: called once
+    /// [`Dpb::apply_reference_picture_set`] (whose own trailing
+    /// `remove_unused` call is exactly this clause's own unconditional
+    /// "empty every buffer marked not-needed-and-unused" first step) has
+    /// already run, and *before* the current picture is stored — the DPB
+    /// state this bump reads and the DPB state a conformant encoder's own
+    /// `sps_max_dec_pic_buffering`/`sps_max_num_reorder_pics` promises were
+    /// computed against are the *same* state, one picture short of the one
+    /// about to be decoded.
+    ///
+    /// # A real bug this fixed: capacity bumping used to run one step late
+    ///
+    /// This crate used to run one unified bump — reorder, latency *and*
+    /// capacity together — only *after* `store()`, conflating §C.5.2.2's
+    /// pre-decode step (which alone carries the capacity condition) with
+    /// §C.5.2.3's post-decode "additional bumping" (which only ever carries
+    /// reorder and latency, never capacity — confirmed directly against the
+    /// specification's own two clauses, not inferred). Checking capacity
+    /// against the *post-store* DPB let a picture that had just become the
+    /// current picture's own occupant push the count over
+    /// `sps_max_dec_pic_buffering` one picture earlier than a conformant
+    /// encoder ever promised the decoder would need to bump — on a real
+    /// `libx265` hierarchical-B fixture (`bframes=3`), this bumped POC 6 and
+    /// POC 8 for output *before POC 5 was even decoded*, producing an
+    /// output POC sequence of `..., 4, 6, 8, 5, ...`: non-monotonic, caught
+    /// by the CLI's own generic mux-side DTS check
+    /// (`vaco-format-core::time::check_monotonic`) rather than by any pixel
+    /// comparison, since the pixels of a correctly-decoded picture do not
+    /// change when it is emitted at the wrong moment.
+    pub(crate) fn bump_pre_decode(&mut self) -> Vec<i64> {
+        self.bump_while(|dpb| {
+            let needed = dpb.entries.iter().filter(|e| e.needed_for_output).count();
+            // "The number of pictures in the DPB" (§C.5.2.2's own third
+            // condition): every entry still physically present is, by
+            // construction, either needed for output or still a reference
+            // — anything else was already dropped by the unconditional
+            // removal this function's own doc says precedes it — so this
+            // is equivalent to (and computed the same defensive way as)
+            // "needed for output OR used for reference", recomputed fresh
+            // each loop iteration since a bump earlier in *this* call can
+            // turn a still-referenced entry into a removable one before
+            // `reap_unused` physically drops it.
+            let occupied = dpb.entries.iter().filter(|e| e.needed_for_output || e.marking != Marking::Unused).count();
+            let over_reorder = needed > dpb.max_num_reorder_pics;
+            let over_latency = dpb
+                .sps_max_latency_pictures
+                .is_some_and(|bound| dpb.entries.iter().any(|e| e.needed_for_output && e.latency_count >= bound));
+            let over_capacity = occupied >= dpb.max_dec_pic_buffering;
+            over_reorder || over_latency || over_capacity
+        })
+    }
+
+    /// §C.5.2.3's "additional bumping": runs once the current picture has
+    /// been [`Dpb::store`]d. First increments `PicLatencyCount` for every
+    /// still-pending picture whose POC *follows* `current_poc` in output
+    /// order — not indiscriminately every pending picture, which is the bug
+    /// `PicLatencyCount`'s own increment used to have (see [`Dpb::store`]'s
+    /// own doc) — then repeatedly bumps while the reorder or latency
+    /// condition holds. Capacity is deliberately **not** one of this
+    /// clause's conditions (see [`Dpb::bump_pre_decode`]'s own doc for why
+    /// conflating the two was a real, measured bug).
+    pub(crate) fn bump_post_decode(&mut self, current_poc: i64) -> Vec<i64> {
+        for e in &mut self.entries {
+            if e.needed_for_output && e.poc > current_poc {
+                e.latency_count = e.latency_count.saturating_add(1);
+            }
+        }
+        self.bump_while(|dpb| {
+            let needed = dpb.entries.iter().filter(|e| e.needed_for_output).count();
+            let over_reorder = needed > dpb.max_num_reorder_pics;
+            let over_latency = dpb
+                .sps_max_latency_pictures
+                .is_some_and(|bound| dpb.entries.iter().any(|e| e.needed_for_output && e.latency_count >= bound));
+            over_reorder || over_latency
+        })
+    }
+
+    /// §C.5.2.4's "bumping" process, repeated while `should_bump` holds:
+    /// output (in POC order) the picture with the smallest POC among those
+    /// still needing output. Returns the POCs output, in the order they
+    /// were output (which is POC order, by construction).
     ///
     /// Deliberately does **not** physically remove any entry (the old
     /// version of this function called `remove_unused` inline, which would
@@ -346,27 +461,9 @@ impl Dpb {
     /// picture and never needed to *read* what was bumped, only to observe
     /// its POC). `reap_unused` is the caller's own job, once every POC this
     /// call returns has actually been read via `picture_for_output`.
-    pub(crate) fn bump_before_storing(&mut self) -> Vec<i64> {
+    fn bump_while(&mut self, should_bump: impl Fn(&Self) -> bool) -> Vec<i64> {
         let mut outputs = Vec::new();
-        loop {
-            // "Occupied" per §C.3.2 is "needed for output OR used for
-            // reference" — computed fresh each iteration rather than reread
-            // from `self.entries.len()`, since (per this function's own
-            // deferred-removal contract above) an entry already bumped out
-            // in an earlier iteration of *this* loop is still physically
-            // present but must not count a second time.
-            let occupied = self.entries.iter().filter(|e| e.needed_for_output || e.marking != Marking::Unused).count();
-            let needed = self.entries.iter().filter(|e| e.needed_for_output).count();
-            let over_reorder = needed > self.max_num_reorder_pics;
-            let over_latency = self.max_latency_increase != 0
-                && self
-                    .entries
-                    .iter()
-                    .any(|e| e.needed_for_output && e.latency_count >= self.max_latency_increase.saturating_sub(1));
-            let over_capacity = occupied >= self.max_dec_pic_buffering;
-            if !(over_reorder || over_latency || over_capacity) {
-                break;
-            }
+        while should_bump(self) {
             let Some(idx) = self
                 .entries
                 .iter()
@@ -406,24 +503,29 @@ impl Dpb {
 
     /// Physically drop every entry that is neither needed for output nor
     /// used for reference — the caller's own responsibility to call once it
-    /// has read every POC [`Dpb::bump_before_storing`]/
+    /// has read every POC [`Dpb::bump_pre_decode`]/[`Dpb::bump_post_decode`]/
     /// [`Dpb::clear_for_irap`] just returned via [`Dpb::picture_for_output`]
-    /// (see [`Dpb::bump_before_storing`]'s own doc for why removal is not
-    /// automatic).
-    pub(crate) fn reap_unused(&mut self) {
-        self.remove_unused();
+    /// (see [`Dpb::bump_while`]'s own doc for why removal is not automatic).
+    /// Releases each dropped picture's own charged bytes back to `budget`.
+    pub(crate) fn reap_unused(&mut self, budget: &mut Budget) {
+        self.remove_unused(budget);
     }
 
-    /// Store a newly decoded picture. Every other picture still needing
-    /// output has its `PicLatencyCount` incremented first — §C.3.2's own
-    /// order (increment, then insert the new picture at zero).
+    /// Store a newly decoded picture, `PicLatencyCount` starting at `0`
+    /// (§C.5.2.3's own order: increment every *other* pending picture that
+    /// follows this one in output order, then insert this one at zero — see
+    /// [`Dpb::bump_post_decode`]'s own doc for that increment, which used to
+    /// live here, applied unconditionally to every pending picture
+    /// regardless of whether it actually followed the newly-stored one in
+    /// output order. That distinction is invisible whenever decode order and
+    /// output order agree closely enough that "every other pending picture"
+    /// and "every pending picture with a greater POC" name the same set —
+    /// true for a shallow-enough reorder depth — and wrong the moment a
+    /// picture with a *smaller* POC than something already pending is stored
+    /// later in decode order, exactly what a hierarchical-B GOP does by
+    /// construction).
     #[allow(clippy::too_many_arguments, reason = "one call site (decoder.rs); every argument is a distinct DPB-entry field")]
     pub(crate) fn store(&mut self, picture: Picture, meta: PictureMeta, poc: i64, needed_for_output: bool, is_reference: bool, collocated: Option<CollocatedMotionField>) {
-        for e in &mut self.entries {
-            if e.needed_for_output {
-                e.latency_count = e.latency_count.saturating_add(1);
-            }
-        }
         self.entries.push(DpbEntry {
             picture,
             meta,
@@ -447,7 +549,7 @@ impl Dpb {
 
     /// End of stream: the POCs of everything still pending, in POC order.
     /// Does not remove anything — the same "read before you reap" contract
-    /// as [`Dpb::bump_before_storing`]/[`Dpb::clear_for_irap`]; call
+    /// as [`Dpb::bump_while`]/[`Dpb::clear_for_irap`]; call
     /// [`Dpb::clear_all`] once every returned POC has been read via
     /// [`Dpb::picture_for_output`].
     #[must_use]
@@ -466,13 +568,36 @@ impl Dpb {
         self.entries.iter().find(|e| e.poc == poc && e.marking == Marking::ShortTerm).map(|e| &e.picture)
     }
 
-    fn remove_unused(&mut self) {
-        self.entries.retain(|e| e.needed_for_output || e.marking != Marking::Unused);
+    /// Drops every entry that is neither needed for output nor used for
+    /// reference, releasing each one's own [`Picture::budget_bytes`] back to
+    /// `budget` as it goes — the one place a `Picture`'s charged bytes are
+    /// ever given back, matching [`Budget::release`]'s own contract ("when
+    /// the buffer they paid for is dropped").
+    fn remove_unused(&mut self, budget: &mut Budget) {
+        let mut i = 0;
+        while i < self.entries.len() {
+            let Some(e) = self.entries.get(i) else { break };
+            if e.needed_for_output || e.marking != Marking::Unused {
+                i += 1;
+            } else {
+                let removed = self.entries.remove(i);
+                budget.release(removed.picture.budget_bytes());
+            }
+        }
     }
 
     #[cfg(test)]
     fn pocs(&self) -> Vec<i64> {
         self.entries.iter().map(|e| e.poc).collect()
+    }
+
+    /// A stored entry's own `PicLatencyCount`, by POC — test-only
+    /// introspection so [`Dpb::bump_post_decode`]'s increment rule can be
+    /// checked directly rather than only inferred from whether it happened
+    /// to also cross a bump threshold.
+    #[cfg(test)]
+    fn latency_of(&self, poc: i64) -> Option<u32> {
+        self.entries.iter().find(|e| e.poc == poc).map(|e| e.latency_count)
     }
 }
 
@@ -728,7 +853,7 @@ mod tests {
         assert_eq!(dpb.pocs(), [0, 4]);
         // Only POC 4 is still referenced by the new set.
         let sets = ReferencePicSets { st_curr_before: vec![4], st_curr_after: vec![], st_foll: vec![] };
-        dpb.apply_reference_picture_set(&sets);
+        dpb.apply_reference_picture_set(&sets, &mut budget());
         assert_eq!(dpb.pocs(), [4]);
     }
 
@@ -737,7 +862,7 @@ mod tests {
         let mut dpb = Dpb::new(16, 16, 0);
         dpb.store(tiny_picture(), tiny_meta(), 4, false, true, None);
         let sets = ReferencePicSets { st_curr_before: vec![], st_curr_after: vec![], st_foll: vec![4] };
-        dpb.apply_reference_picture_set(&sets);
+        dpb.apply_reference_picture_set(&sets, &mut budget());
         assert_eq!(dpb.pocs(), [4]);
     }
 
@@ -746,15 +871,16 @@ mod tests {
         // max_num_reorder_pics = 2: a third picture still needing output
         // forces the smallest-POC one out, in POC order rather than decode
         // order (POC 8 was stored before POC 4 — a hierarchical-B decode
-        // order).
+        // order). `bump_post_decode` (§C.5.2.3) is the call that carries the
+        // reorder condition, run with each store's own POC right after it.
         let mut dpb = Dpb::new(16, 2, 0);
         dpb.store(tiny_picture(), tiny_meta(), 0, true, false, None);
-        assert!(dpb.bump_before_storing().is_empty(), "only one pending picture: nothing to bump yet");
+        assert!(dpb.bump_post_decode(0).is_empty(), "only one pending picture: nothing to bump yet");
         dpb.store(tiny_picture(), tiny_meta(), 8, true, false, None);
-        let out = dpb.bump_before_storing();
+        let out = dpb.bump_post_decode(8);
         assert!(out.is_empty(), "two pending is not yet over the limit of two");
         dpb.store(tiny_picture(), tiny_meta(), 4, true, false, None);
-        let out = dpb.bump_before_storing();
+        let out = dpb.bump_post_decode(4);
         assert_eq!(out, [0], "bumps the smallest POC, not decode order");
     }
 
@@ -762,11 +888,35 @@ mod tests {
     fn dpb_fullness_bumps_even_with_no_reorder_pending() {
         // max_num_reorder_pics = 0 but every picture is also a reference, so
         // fullness (max_dec_pic_buffering = 2) is what forces the bump.
+        // Fullness (§C.5.2.2's third condition) is `bump_pre_decode`'s own —
+        // it never fires here regardless, since neither picture is
+        // `needed_for_output` and a bump can only ever select a
+        // needed-for-output entry.
         let mut dpb = Dpb::new(2, 0, 0);
         dpb.store(tiny_picture(), tiny_meta(), 0, false, true, None);
         dpb.store(tiny_picture(), tiny_meta(), 4, false, true, None);
-        assert!(dpb.bump_before_storing().is_empty(), "nothing needs output, so nothing bumps");
+        assert!(dpb.bump_pre_decode().is_empty(), "nothing needs output, so nothing bumps");
         assert_eq!(dpb.pocs(), [0, 4], "both stay as references, not output");
+    }
+
+    #[test]
+    fn bump_pre_decode_forces_output_once_the_dpb_is_genuinely_full() {
+        // Unlike the test above, both pictures here *are* needed for
+        // output (and neither is a reference, so a bumped entry stops
+        // counting as occupied immediately, the same way a real stream's
+        // non-reference pictures do once no later slice's RPS keeps them
+        // alive), so `bump_pre_decode`'s own capacity condition (occupied
+        // >= max_dec_pic_buffering = 2) has a real candidate to select and
+        // stops once the count drops back under the cap — confirming
+        // §C.5.2.2's third condition actually forces output, not just
+        // failing to find nothing to bump. `max_num_reorder_pics = 5` keeps
+        // the *reorder* condition from also firing with only two pending
+        // pictures, isolating capacity as the one bump reason.
+        let mut dpb = Dpb::new(2, 5, 0);
+        dpb.store(tiny_picture(), tiny_meta(), 4, true, false, None);
+        dpb.store(tiny_picture(), tiny_meta(), 0, true, false, None);
+        let out = dpb.bump_pre_decode();
+        assert_eq!(out, [0], "smallest POC first, even though POC 4 was stored earlier");
     }
 
     #[test]
@@ -776,7 +926,7 @@ mod tests {
         dpb.store(tiny_picture(), tiny_meta(), 4, true, true, None);
         let out = dpb.clear_for_irap(true);
         assert!(out.is_empty());
-        dpb.clear_all();
+        dpb.clear_all(&mut budget());
         assert!(dpb.pocs().is_empty());
     }
 
@@ -793,7 +943,7 @@ mod tests {
         for poc in &out {
             assert!(dpb.picture_for_output(*poc).is_some());
         }
-        dpb.clear_all();
+        dpb.clear_all(&mut budget());
         assert!(dpb.pocs().is_empty());
     }
 
@@ -805,40 +955,105 @@ mod tests {
         dpb.store(tiny_picture(), tiny_meta(), 6, false, true, None); // a reference never output
         let out = dpb.flush();
         assert_eq!(out, [0, 12]);
-        dpb.clear_all();
+        dpb.clear_all(&mut budget());
         assert!(dpb.pocs().is_empty());
     }
 
     #[test]
-    fn latency_forces_a_bump_once_the_bound_is_reached() {
-        // max_latency_increase_plus1 = 2 -> SpsMaxLatencyPictures = 1: a
-        // picture is forced out once one later picture has been stored
-        // while it was still pending.
-        let mut dpb = Dpb::new(16, 16, 2);
+    fn latency_only_increments_for_pictures_that_follow_the_current_one_in_output_order() {
+        // §C.5.2.3's own wording: `PicLatencyCount` increments only for a
+        // pending picture whose POC *follows* the picture just stored (i.e.
+        // is greater) — not, as this crate's own `Dpb::store` used to do,
+        // every pending picture unconditionally. `max_num_reorder_pics = 16`
+        // and `max_latency_increase_plus1 = 0` (disabled) here so neither
+        // bump condition can fire and disturb the counts being asserted;
+        // `latency_of` reads `PicLatencyCount` directly rather than
+        // inferring it from whether a bump happened to occur.
+        let mut dpb = Dpb::new(16, 16, 0);
+        dpb.store(tiny_picture(), tiny_meta(), 8, true, false, None);
         dpb.store(tiny_picture(), tiny_meta(), 0, true, false, None);
-        assert!(dpb.bump_before_storing().is_empty());
-        dpb.store(tiny_picture(), tiny_meta(), 4, true, false, None); // POC 0's latency_count -> 1
-        let out = dpb.bump_before_storing();
-        assert_eq!(out, [0]);
+        assert!(dpb.bump_post_decode(0).is_empty(), "no bump condition is active in this test");
+        assert_eq!(dpb.latency_of(8), Some(1), "POC 8 follows the just-stored POC 0 (8 > 0)");
+        assert_eq!(dpb.latency_of(0), Some(0), "a picture never follows itself");
     }
 
-    /// The bug `bump_before_storing`'s own doc records: a bumped,
-    /// non-reference picture's pixel data must still be readable via
-    /// `picture_for_output` until `reap_unused` is explicitly called —
-    /// the old version dropped it immediately (via an inline
-    /// `remove_unused()`), which no earlier test caught because none of
-    /// them ever tried to *read* a bumped entry's own picture.
+    #[test]
+    fn the_bound_forces_a_bump_once_a_pictures_own_latency_reaches_it() {
+        // Annex C.5.2.2: SpsMaxLatencyPictures = sps_max_num_reorder_pics +
+        // sps_max_latency_increase_plus1 - 1 = 1 + 1 - 1 = 1. Storing POC 0
+        // while POC 8 is still pending brings POC 8's own `PicLatencyCount`
+        // to 1 (it follows POC 0 in output order), meeting the bound — the
+        // condition is "at least one picture is at or over the bound", not
+        // "bump that specific picture", so `bump_while`'s own smallest-POC
+        // rule keeps firing (bumping POC 0, then POC 8 too, since POC 8's
+        // own latency is untouched by bumping something else) until nothing
+        // is left needing output.
+        let mut dpb = Dpb::new(16, 1, 1);
+        dpb.store(tiny_picture(), tiny_meta(), 8, true, false, None);
+        assert!(dpb.bump_post_decode(8).is_empty(), "nothing follows POC 8 yet, and only one picture is pending");
+        dpb.store(tiny_picture(), tiny_meta(), 0, true, false, None);
+        let out = dpb.bump_post_decode(0);
+        assert_eq!(out, [0, 8], "both pending pictures are flushed once POC 8's own latency trips the bound");
+    }
+
+    #[test]
+    fn the_reorder_count_is_folded_into_the_latency_bound_not_ignored() {
+        // The bug this fixed: `SpsMaxLatencyPictures` used to be computed as
+        // `max_latency_increase_plus1 - 1` alone, silently dropping
+        // `sps_max_num_reorder_pics` from Annex C.5.2.2's own formula —
+        // giving a bound of `2 - 1 = 1` here instead of the correct
+        // `5 + 2 - 1 = 6`. POC 8 (pending) reaches `PicLatencyCount == 1`
+        // once POC 0 is stored (the same increment as the test above); the
+        // wrong bound would already force a bump at that point, the correct
+        // one requires four more untouched stores' worth of headroom before
+        // it would.
+        let mut dpb = Dpb::new(16, 5, 2);
+        dpb.store(tiny_picture(), tiny_meta(), 8, true, false, None);
+        dpb.store(tiny_picture(), tiny_meta(), 0, true, false, None);
+        let out = dpb.bump_post_decode(0);
+        assert_eq!(dpb.latency_of(8), Some(1));
+        assert!(out.is_empty(), "PicLatencyCount is 1, still below the correct bound of 6");
+    }
+
+    /// The bug `bump_while`'s own doc records: a bumped, non-reference
+    /// picture's pixel data must still be readable via `picture_for_output`
+    /// until `reap_unused` is explicitly called — the old version dropped it
+    /// immediately (via an inline `remove_unused()`), which no earlier test
+    /// caught because none of them ever tried to *read* a bumped entry's own
+    /// picture.
     #[test]
     fn a_bumped_picture_stays_readable_until_reaped() {
         let mut dpb = Dpb::new(16, 1, 0);
         dpb.store(tiny_picture(), tiny_meta(), 0, true, false, None); // not a reference: purely for output
         dpb.store(tiny_picture(), tiny_meta(), 4, true, false, None);
-        let out = dpb.bump_before_storing();
+        let out = dpb.bump_post_decode(4);
         assert_eq!(out, [0]);
         assert!(dpb.picture_for_output(0).is_some(), "bumped picture's own pixels must survive until reaped");
-        dpb.reap_unused();
+        dpb.reap_unused(&mut budget());
         assert!(dpb.picture_for_output(0).is_none(), "reaping removes it once the caller has read it");
         assert!(dpb.picture_for_output(4).is_some(), "the still-pending picture is untouched");
+    }
+
+    #[test]
+    fn reaping_releases_the_dropped_picture_s_own_budget() {
+        // `Picture::budget_bytes` is exactly what `Picture::new` charged, and
+        // `reap_unused` must give it all back once a picture is truly gone —
+        // the fix that let a real hierarchical-B `libx265` fixture (more
+        // simultaneous DPB entries than any P-slice stream ever needed)
+        // decode past `Budget`'s own `max_alloc_total` cap instead of
+        // exhausting it partway through a 25-frame, 640x480 sequence.
+        let mut b = budget();
+        let mut dpb = Dpb::new(16, 1, 0);
+        let charged_at_start = b.committed();
+        dpb.store(Picture::new(&mut b, 4, 4).expect("small alloc"), tiny_meta(), 0, true, false, None);
+        let one_picture_bytes = b.committed() - charged_at_start;
+        assert!(one_picture_bytes > 0, "storing a real Picture must charge real bytes");
+        dpb.store(Picture::new(&mut b, 4, 4).expect("small alloc"), tiny_meta(), 4, true, false, None);
+        let out = dpb.bump_post_decode(4);
+        assert_eq!(out, [0]);
+        let before_reap = b.committed();
+        dpb.reap_unused(&mut b);
+        assert_eq!(before_reap - b.committed(), one_picture_bytes, "reaping POC 0 must release exactly what it was charged");
     }
 
     #[test]

@@ -122,6 +122,22 @@ impl Picture {
             cr: Plane::new(budget, cw, ch)?,
         })
     }
+
+    /// The total bytes [`Budget::alloc`] charged for this picture's three
+    /// planes — what [`crate::dpb::Dpb`] gives back via [`Budget::release`]
+    /// the moment a picture is actually dropped from the DPB (evicted by
+    /// `remove_unused`, or the whole buffer cleared for an IRAP), so a long
+    /// sequence's running `Budget` total reflects pictures genuinely still
+    /// held, not every picture ever decoded. See `dpb.rs`'s own module doc
+    /// for the real fixture this was measured against: a 640x480, 25-frame,
+    /// hierarchical-B `libx265` stream — whose own DPB legitimately holds
+    /// more simultaneous pictures than any P-slice fixture ever did — hit
+    /// `Budget`'s `max_alloc_total` cap before this existed, because nothing
+    /// in this crate ever released a dropped picture's own charge.
+    #[must_use]
+    pub(crate) fn budget_bytes(&self) -> u64 {
+        self.y.byte_len() + self.cb.byte_len() + self.cr.byte_len()
+    }
 }
 
 /// Per-4x4-luma-block metadata the CTU walk needs from already-decoded
@@ -180,12 +196,28 @@ pub(crate) struct CuGrid {
 }
 
 impl CuGrid {
+    /// `has_l1` is `InterSliceParams::is_b` (`false` for an I or P slice's own
+    /// grid) — a P/I slice's own `l1` arrays are charged at length `0`
+    /// (`fill_motion`/`inter_at` degrade to "never populated" automatically:
+    /// an empty `Vec`'s `get`/`get_mut` always return `None`, which reads
+    /// back exactly as "this list unused", the correct answer for every
+    /// block a P/I slice ever writes). This is not an optimisation of
+    /// convenience: doubling every per-4x4-block motion array's footprint
+    /// for a slice kind that can never populate `l1` at all is exactly the
+    /// `Vec::with_capacity`-shaped budget hazard `AGENT-CONSTRAINTS.md` warns
+    /// about applied to a genuine, measured case — a real `libx265` 640x480
+    /// stock fixture (25 P-only frames, the exact "must not regress"
+    /// fixture) started failing `Budget`'s `max_alloc_total` cap the moment
+    /// `l1` support was added unconditionally, and stopped failing the
+    /// moment this gating did.
+    ///
     /// # Errors
     /// [`vaco_core::Error`] if any grid's allocation exceeds `budget`.
-    pub(crate) fn new(budget: &mut Budget, luma_width: usize, luma_height: usize) -> Result<Self> {
+    pub(crate) fn new(budget: &mut Budget, luma_width: usize, luma_height: usize, has_l1: bool) -> Result<Self> {
         let cols = luma_width.div_ceil(4).max(1);
         let rows = luma_height.div_ceil(4).max(1);
         let len = cols.saturating_mul(rows);
+        let len_l1 = if has_l1 { len } else { 0 };
         Ok(Self {
             cols,
             rows,
@@ -200,9 +232,9 @@ impl CuGrid {
             mv0_x: budget.alloc(len)?,
             mv0_y: budget.alloc(len)?,
             ref_poc0: budget.alloc(len)?,
-            mv1_x: budget.alloc(len)?,
-            mv1_y: budget.alloc(len)?,
-            ref_poc1: budget.alloc(len)?,
+            mv1_x: budget.alloc(len_l1)?,
+            mv1_y: budget.alloc(len_l1)?,
+            ref_poc1: budget.alloc(len_l1)?,
             cbf_luma: vec![false; len],
         })
     }
@@ -604,5 +636,13 @@ impl Plane {
     #[must_use]
     pub(crate) fn dims(&self) -> (usize, usize) {
         (self.width, self.height)
+    }
+
+    /// The exact byte count [`Budget::alloc`] charged for `self.data` —
+    /// `width * height` `u16` samples — for [`Picture::budget_bytes`] to sum
+    /// across all three planes.
+    #[must_use]
+    fn byte_len(&self) -> u64 {
+        u64::try_from(self.width.saturating_mul(self.height).saturating_mul(2)).unwrap_or(u64::MAX)
     }
 }

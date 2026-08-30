@@ -621,7 +621,7 @@ mod tests {
 
     #[test]
     fn amvp_falls_back_to_zero_when_nothing_is_available() {
-        let grid = CuGrid::new(&mut vaco_limits::Budget::new(vaco_limits::Limits::strict()), 64, 64).unwrap();
+        let grid = CuGrid::new(&mut vaco_limits::Budget::new(vaco_limits::Limits::strict()), 64, 64, true).unwrap();
         let pu = PuRect { x: 0, y: 0, w: 16, h: 16 };
         let cands = derive_amvp_candidates(&grid, pu, 2, 10, 8, RefList::L0, None);
         assert_eq!(cands, [Mv::ZERO, Mv::ZERO]);
@@ -634,7 +634,7 @@ mod tests {
         // clamps to `0` forever rather than wrapping back through `1` a
         // second time — see `a_b_slice_zero_fill_clamps_at_zero_rather_than_wrapping`
         // for the same rule on the B-slice (dual-list) side.
-        let grid = CuGrid::new(&mut vaco_limits::Budget::new(vaco_limits::Limits::strict()), 64, 64).unwrap();
+        let grid = CuGrid::new(&mut vaco_limits::Budget::new(vaco_limits::Limits::strict()), 64, 64, true).unwrap();
         let pu = PuRect { x: 0, y: 0, w: 16, h: 16 };
         let ref_poc_l0 = [100i64, 90i64];
         let cands = derive_merge_candidates(&grid, pu, 0, PartMode::TwoNx2N, 2, 5, &ref_poc_l0, &[], None, None, false);
@@ -653,7 +653,7 @@ mod tests {
         // §8.5.3.2.5: once `zeroIdx` passes `numRefIdx` (here `min(2, 2) == 2`)
         // every later candidate reuses ref_idx 0 forever — not a modulo cycle
         // back through 1. Five candidates needed, none from spatial/temporal.
-        let grid = CuGrid::new(&mut vaco_limits::Budget::new(vaco_limits::Limits::strict()), 64, 64).unwrap();
+        let grid = CuGrid::new(&mut vaco_limits::Budget::new(vaco_limits::Limits::strict()), 64, 64, true).unwrap();
         let pu = PuRect { x: 0, y: 0, w: 16, h: 16 };
         let ref_poc_l0 = [100i64, 90i64];
         let ref_poc_l1 = [200i64, 190i64];
@@ -672,7 +672,7 @@ mod tests {
         // — §8.5.3.2.4's own condition (different ref POC) is met, so combIdx
         // 0 (l0CandIdx=0, l1CandIdx=1) must produce a genuinely bi-predictive
         // third candidate before the zero-fill ever runs.
-        let grid = CuGrid::new(&mut vaco_limits::Budget::new(vaco_limits::Limits::strict()), 64, 64).unwrap();
+        let grid = CuGrid::new(&mut vaco_limits::Budget::new(vaco_limits::Limits::strict()), 64, 64, true).unwrap();
         let pu = PuRect { x: 8, y: 8, w: 8, h: 8 };
         let ref_poc_l0 = [10i64];
         let ref_poc_l1 = [20i64];
@@ -696,7 +696,7 @@ mod tests {
         // A neighbour predicted only from L1 (naming POC 8) still resolves an
         // L0 AMVP candidate targeting the same POC 8 — HM's own
         // `xAddMVPCandUnscaled` two-list search, matched by POC value alone.
-        let mut grid = CuGrid::new(&mut vaco_limits::Budget::new(vaco_limits::Limits::strict()), 64, 64).unwrap();
+        let mut grid = CuGrid::new(&mut vaco_limits::Budget::new(vaco_limits::Limits::strict()), 64, 64, true).unwrap();
         // Left neighbour of the PU at (16, 0): (15, 0), block (3, 0).
         grid.fill(0, 0, 4, 4, 0, 0);
         grid.fill_motion(0, 0, 4, 4, MotionInfo { l0: None, l1: Some(UniMotion { mv: Mv { x: 40, y: -8 }, ref_poc: 8 }) }, false);
