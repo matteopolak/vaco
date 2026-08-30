@@ -1808,3 +1808,30 @@ lose on a neighbouring one.** An in-bounds fast path that skipped edge clamping
 won on H.264 luma and *regressed chroma by 3.4%*, because chroma's clamp is two
 cheap ops and the guard branch cost more than it saved. Symmetry between two
 code paths is not a reason to skip measuring the second one.
+
+## "Not ready to enable" and "not ready to commit" are different decisions
+
+An agent finished a large HEVC P-slice implementation, found two real bugs with
+it (an inferred-vs-parsed `cbf_luma` desync, and an inverted MER-exclusion test
+that made spatial merge candidates unavailable for essentially every PU), took a
+fixture from 64.8% to 98.2% byte-exact — and then **committed none of it**,
+roughly 1,700 lines, on the grounds that the bar was "land P-slices byte-exact"
+and the bar was not met.
+
+The instinct was correct: never make a decode path reachable while it produces
+silently wrong pixels. Registered-but-wrong is worse than absent, and that
+discipline is why several codecs here could be registered at all.
+
+The remedy was wrong. In a shared tree with other agents committing, uncommitted
+work is the *least* safe place to put it. Someone else's `git stash` — which has
+already happened here once — or a commit made with a directory pathspec rather
+than explicit file paths will take it. Nothing about leaving it in the working
+tree protects users from wrong pixels; only `check_scope` does that.
+
+**Commit the code with the refusal still in place.** The implementation is
+preserved and bisectable, the bug fixes land as their own commits, and
+user-visible behaviour is unchanged because nothing became reachable. Lift the
+refusal in a later, separate commit when the output is actually byte-exact.
+
+Gating reachability and gating version control are independent decisions. Use
+`check_scope` for the first. Never use "don't commit" for it.
