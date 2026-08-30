@@ -126,13 +126,20 @@ impl Picture {
 
 /// Per-4x4-luma-block metadata the CTU walk needs from already-decoded
 /// neighbours: the coding-quadtree depth (`split_cu_flag`'s `ctxInc`,
-/// §9.3.4.2.2) and the luma intra prediction mode (the MPM derivation,
-/// §8.4.2).
+/// §9.3.4.2.2), the luma intra prediction mode (the MPM derivation,
+/// §8.4.2), and the coding unit's own finalised luma `QpY` (§8.6.1's
+/// `qPY_A`/`qPY_B` neighbour derivation, and [`crate::deblock`]'s own
+/// per-edge `qP_P`/`qP_Q`).
 ///
 /// Indexed at 4-sample granularity because that is HEVC's minimum coding
 /// block size; a coding unit's whole footprint is painted in one pass when
 /// its final depth/mode is known, so a later neighbour query is a plain
-/// lookup rather than a tree walk.
+/// lookup rather than a tree walk. `QpY` is painted separately
+/// ([`CuGrid::fill_qp`]) and later than depth/mode ([`CuGrid::fill`]):
+/// unlike depth/mode, which are known before a coding unit's own transform
+/// tree is walked, `QpY` depends on that coding unit's own `cu_qp_delta`
+/// (if any is coded at all — see `ctu::maybe_parse_cu_qp_delta`), which is
+/// only known once the whole transform tree has been read.
 #[derive(Debug)]
 pub(crate) struct CuGrid {
     cols: usize,
@@ -140,11 +147,13 @@ pub(crate) struct CuGrid {
     depth: Vec<u8>,
     mode: Vec<u8>,
     written: Vec<bool>,
+    qp: Vec<i8>,
+    qp_written: Vec<bool>,
 }
 
 impl CuGrid {
     /// # Errors
-    /// [`vaco_core::Error`] if either grid's allocation exceeds `budget`.
+    /// [`vaco_core::Error`] if any grid's allocation exceeds `budget`.
     pub(crate) fn new(budget: &mut Budget, luma_width: usize, luma_height: usize) -> Result<Self> {
         let cols = luma_width.div_ceil(4).max(1);
         let rows = luma_height.div_ceil(4).max(1);
@@ -155,6 +164,8 @@ impl CuGrid {
             depth: budget.alloc(len)?,
             mode: budget.alloc(len)?,
             written: vec![false; len],
+            qp: budget.alloc(len)?,
+            qp_written: vec![false; len],
         })
     }
 
@@ -216,6 +227,43 @@ impl CuGrid {
             return DC_IDX;
         }
         self.mode.get(i).copied().unwrap_or(DC_IDX)
+    }
+
+    /// Paint one coding unit's whole footprint (in 4-sample blocks) with its
+    /// finalised luma `QpY` — called once per coding unit, after its whole
+    /// transform tree has been walked (see this struct's own doc for why
+    /// that timing differs from [`CuGrid::fill`]'s).
+    pub(crate) fn fill_qp(&mut self, bx0: usize, by0: usize, blocks_w: usize, blocks_h: usize, qp: i8) {
+        for by in by0..by0.saturating_add(blocks_h) {
+            for bx in bx0..bx0.saturating_add(blocks_w) {
+                if let Some(i) = self.index(bx, by) {
+                    if let Some(slot) = self.qp.get_mut(i) {
+                        *slot = qp;
+                    }
+                    if let Some(slot) = self.qp_written.get_mut(i) {
+                        *slot = true;
+                    }
+                }
+            }
+        }
+    }
+
+    /// The finalised luma `QpY` of the 4x4 block at luma pixel `(px, py)`, or
+    /// `None` if it is out of picture bounds or not yet decoded — every
+    /// caller (§8.6.1's `qPY_A`/`qPY_B`, and [`crate::deblock`]'s `qP_P`/
+    /// `qP_Q`) has its own well-defined fallback for "unavailable" (§8.6.1's
+    /// `qPY_PREV`, `slice_qp`, respectively), so this returns `Option`
+    /// rather than picking one of those fallbacks itself.
+    #[must_use]
+    pub(crate) fn qp_at(&self, px: i32, py: i32) -> Option<i8> {
+        let (Ok(px), Ok(py)) = (usize::try_from(px), usize::try_from(py)) else {
+            return None;
+        };
+        let i = self.index(block_of(px), block_of(py))?;
+        if !self.qp_written.get(i).copied().unwrap_or(false) {
+            return None;
+        }
+        self.qp.get(i).copied()
     }
 }
 

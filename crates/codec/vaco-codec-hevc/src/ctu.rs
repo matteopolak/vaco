@@ -16,7 +16,7 @@
 //! syntax (depth, `cbf`, mode) — see [`crate::framebuf`]'s module doc for the
 //! same reasoning applied to neighbour availability.
 
-use vaco_codec_cabac::CabacDecoder;
+use vaco_codec_cabac::{CabacDecoder, ContextModel};
 use vaco_core::{Error, Result};
 use vaco_parse_hevc::{Pps, Sps};
 
@@ -55,6 +55,28 @@ pub(crate) struct Ctx<'p> {
     pub bit_depth_chroma: u32,
     pub cb_qp_offset: i32,
     pub cr_qp_offset: i32,
+    /// `cu_qp_delta_enabled_flag`.
+    cu_qp_delta_enabled: bool,
+    /// `Log2MinCuQpDeltaSize = CtbLog2SizeY - diff_cu_qp_delta_depth`.
+    log2_min_cu_qp_delta_size: u32,
+    /// §8.6.1's `qPY_PREV`: the last coding unit's finalised `QpY` in
+    /// decoding order, or `SliceQpY` at the very start of the slice and (via
+    /// `decoder::decode_wpp_rows`'s own reset) at the start of each CTB row
+    /// when WPP is active — `pub` because that reset happens in
+    /// `decoder.rs`, a different module.
+    pub qp_y_prev: i32,
+    /// §8.6.1's `qPY_PRED` for the *current* quantisation group, cached at
+    /// the QG's own reset ([`coding_quadtree`]) rather than recomputed per
+    /// coding unit, since it is a pure function of the QG's own position and
+    /// already-decoded neighbours (both fixed for the QG's whole lifetime).
+    qg_qp_pred: i32,
+    /// Whether `cu_qp_delta_abs`/`cu_qp_delta_sign_flag` has already been
+    /// read for the current quantisation group (`!IsCuQpDeltaCoded`'s
+    /// negation).
+    is_cu_qp_delta_coded: bool,
+    /// The current quantisation group's own `CuQpDeltaVal` — `0` until (and
+    /// unless) [`maybe_parse_cu_qp_delta`] reads a real one.
+    cu_qp_delta_val: i32,
     /// Per-4x4-block transform/CU boundary flags, populated as
     /// [`transform_unit`] reconstructs each luma leaf — the input
     /// [`crate::deblock`]'s post-picture filtering pass reads.
@@ -122,6 +144,12 @@ impl<'p> Ctx<'p> {
             bit_depth_chroma: u32::from(sps.bit_depth_chroma),
             cb_qp_offset: pps.cb_qp_offset,
             cr_qp_offset: pps.cr_qp_offset,
+            cu_qp_delta_enabled: pps.cu_qp_delta_enabled,
+            log2_min_cu_qp_delta_size: log2_ctb_size.saturating_sub(pps.diff_cu_qp_delta_depth),
+            qp_y_prev: slice_qp,
+            qg_qp_pred: slice_qp,
+            is_cu_qp_delta_coded: false,
+            cu_qp_delta_val: 0,
             edges: EdgeMarks::new(width, height),
             deblocking_disabled,
             beta_offset_div2,
@@ -134,6 +162,108 @@ impl<'p> Ctx<'p> {
             cu_grid,
         })
     }
+}
+
+/// §8.6.1's `qPY_PRED`: the predicted luma QP for a quantisation group whose
+/// own top-left is `(xqg, yqg)`. Each of `qPY_A`/`qPY_B` falls back to
+/// [`Ctx::qp_y_prev`] whenever the corresponding neighbour would sit outside
+/// this QG's own CTB — §8.6.1's own same-CTB restriction, confirmed against
+/// HM's `getQpMinCuLeft`/`getQpMinCuAbove` (`TComDataCU.cpp`), which return
+/// `NULL` exactly when the QG sits at column/row zero *of its own CTU*,
+/// always addressing `m_pcPic->getCtu(getCtuRsAddr())` — i.e. never crossing
+/// a CTB boundary regardless of whether the neighbour has already been
+/// decoded. This subsumes the picture-edge case for free: a QG at `x == 0`
+/// or `y == 0` is trivially CTB-aligned too.
+fn qp_y_pred(s: &Ctx<'_>, xqg: i32, yqg: i32) -> i32 {
+    let ctb = 1i32 << s.log2_ctb_size;
+    let qp_a = if xqg % ctb == 0 {
+        s.qp_y_prev
+    } else {
+        s.cu_grid.qp_at(xqg - 1, yqg).map_or(s.qp_y_prev, i32::from)
+    };
+    let qp_b = if yqg % ctb == 0 {
+        s.qp_y_prev
+    } else {
+        s.cu_grid.qp_at(xqg, yqg - 1).map_or(s.qp_y_prev, i32::from)
+    };
+    (qp_a + qp_b + 1) >> 1
+}
+
+/// §8.6.1's final `QpY`: `qPY_PRED` plus the current quantisation group's own
+/// `CuQpDeltaVal`, wrapped over the valid QP range. `QpBdOffsetY == 0`
+/// throughout this crate's 8-bit-only scope (see `transform.rs`'s own
+/// comment on [`crate::transform::chroma_qp`]), so the general `% (52 +
+/// QpBdOffsetY)` collapses to `% 52`; `rem_euclid` rather than a literal
+/// transcription of the spec's `+ 52 + 2*QpBdOffsetY` bias defends against a
+/// malformed/out-of-declared-range `CuQpDeltaVal` rather than assuming a
+/// conforming encoder.
+fn derive_qp_y(qp_y_pred: i32, cu_qp_delta_val: i32) -> i32 {
+    (qp_y_pred + cu_qp_delta_val).rem_euclid(52)
+}
+
+/// `cu_qp_delta_abs`'s truncated-unary prefix (§9.3.3.10's binarisation,
+/// context assignment per its own table): the first bin uses `ctx0`, every
+/// further bin (up to `max_symbol - 1` of them) shares `ctx1`. A literal port
+/// of HM's `TDecSbac::xReadUnaryMaxSymbol` rather than a generic
+/// truncated-unary reading, because its "the loop always consumes
+/// `max_symbol - 1` further bins and only *afterward* decides whether the
+/// last one means +1" shape does not fall out of the more obvious
+/// early-return-on-cap reading (confirmed by tracing both against the same
+/// bit sequence before trusting the port).
+fn read_unary_max(cabac: &mut CabacDecoder<'_>, ctx0: &mut ContextModel, ctx1: &mut ContextModel, max_symbol: u32) -> u32 {
+    if max_symbol == 0 {
+        return 0;
+    }
+    let first = cabac.decode_decision(ctx0);
+    if first == 0 || max_symbol == 1 {
+        return 0;
+    }
+    let mut symbol = 0u32;
+    let mut cont: u32;
+    loop {
+        cont = cabac.decode_decision(ctx1);
+        symbol += 1;
+        if !(cont != 0 && symbol < max_symbol - 1) {
+            break;
+        }
+    }
+    if cont != 0 && symbol == max_symbol - 1 {
+        symbol += 1;
+    }
+    symbol
+}
+
+/// §7.3.8.11's `cu_qp_delta_abs`/`cu_qp_delta_sign_flag`: read at most once
+/// per quantisation group, at the first transform-tree leaf (in decoding
+/// order) whose luma-or-chroma `cbf` is set — exactly where HM's
+/// `TDecEntropy::xDecodeTransform` calls `decodeQP` (`if (validCbf) { if
+/// (bCodeDQP) { decodeQP(...); bCodeDQP = false; } }`), itself inside
+/// `transform_unit()`'s own syntax table position, before that leaf's own
+/// `residual_coding()` of luma. `cu_qp_delta_abs`'s binarisation is TR(cMax
+/// = 5) followed, only on saturation, by an EGk(k = 0) suffix (HM's
+/// `CU_DQP_TU_CMAX = 5`/`CU_DQP_EG_k = 0`, `xReadUnaryMaxSymbol` then
+/// `xReadEpExGolomb`) — [`vaco_codec_cabac::CabacDecoder::decode_bypass_egk`]
+/// already implements the latter bit-for-bit (its own doc derives the same
+/// "run of 1s, terminating 0, then that many suffix bits" shape).
+fn maybe_parse_cu_qp_delta(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut Ctx<'_>, has_residual: bool) -> Result<()> {
+    if !s.cu_qp_delta_enabled || s.is_cu_qp_delta_coded || !has_residual {
+        return Ok(());
+    }
+    s.is_cu_qp_delta_coded = true;
+    let (ctx0, rest) = ctx.cu_qp_delta.split_first_mut().ok_or(Error::InvalidData("cu_qp_delta ctx"))?;
+    let ctx1 = rest.first_mut().ok_or(Error::InvalidData("cu_qp_delta ctx"))?;
+    let mut abs_val = read_unary_max(cabac, ctx0, ctx1, 5);
+    if abs_val >= 5 {
+        abs_val += cabac.decode_bypass_egk(0);
+    }
+    s.cu_qp_delta_val = if abs_val == 0 {
+        0
+    } else {
+        let sign = cabac.decode_bypass();
+        let mag = i32::try_from(abs_val).unwrap_or(i32::MAX);
+        if sign != 0 { -mag } else { mag }
+    };
+    Ok(())
 }
 
 /// Decode one CTU (`x0, y0` its luma top-left, in picture coordinates;
@@ -175,6 +305,17 @@ fn coding_quadtree(
         let cm = ctx.split_cu_flag.get_mut(inc as usize).ok_or(Error::InvalidData("split_cu_flag ctx out of range"))?;
         cabac.decode_decision(cm) != 0
     };
+
+    // §7.3.8.4: whenever this node is at least `Log2MinCuQpDeltaSize`, it
+    // starts a *new* quantisation group — unconditionally, regardless of
+    // `split` — since `Log2MinCuQpDeltaSize <= CtbLog2SizeY` always, this
+    // fires at least once per CTU and, for a CU larger than the nominal QG
+    // size, is the only reset its own (single, larger) QG ever gets.
+    if s.cu_qp_delta_enabled && log2_size >= s.log2_min_cu_qp_delta_size {
+        s.cu_qp_delta_val = 0;
+        s.is_cu_qp_delta_coded = false;
+        s.qg_qp_pred = qp_y_pred(s, x0, y0);
+    }
 
     if split {
         let half = size >> 1;
@@ -306,7 +447,21 @@ fn coding_unit(
         quadtree_tu_log2_min,
         true,
         true,
-    )
+    )?;
+
+    // §8.6.1's own per-coding-unit finalisation (HM's `xFinishDecodeCU`):
+    // every coding unit gets a `QpY`, whether or not it coded its own
+    // `cu_qp_delta` — `derive_qp_y` with the QG's still-zero
+    // `cu_qp_delta_val` reproduces "not yet coded, use qPY_PRED" for free,
+    // and reusing an *already*-coded QG's value for a later, delta-less
+    // sibling CU is exactly `s.cu_qp_delta_val` not having changed since.
+    let qp_y = derive_qp_y(s.qg_qp_pred, s.cu_qp_delta_val);
+    let blocks = usize::try_from((size >> 2).max(1)).unwrap_or(1);
+    let bx0 = usize::try_from(x0 >> 2).unwrap_or(0);
+    let by0 = usize::try_from(y0 >> 2).unwrap_or(0);
+    s.cu_grid.fill_qp(bx0, by0, blocks, blocks, i8::try_from(qp_y).unwrap_or(0));
+    s.qp_y_prev = qp_y;
+    Ok(())
 }
 
 /// `getQuadtreeTULog2MinSizeInCU`, simplified for intra with
@@ -430,6 +585,11 @@ fn transform_unit(
     s.edges.mark_vert(x0, y0, size, grid);
     s.edges.mark_horiz(x0, y0, size, grid);
 
+    // §7.3.8.11: `cu_qp_delta_abs`/`sign`, if this quantisation group has not
+    // already coded one, sit here — before this leaf's own luma
+    // `residual_coding()` — gated on *this leaf's* cbf, luma or chroma.
+    maybe_parse_cu_qp_delta(cabac, ctx, s, cbf_luma || cbf_cb || cbf_cr)?;
+
     let luma_mode = pu_mode_at(pus, luma_modes, x0, y0);
     reconstruct_luma(cabac, ctx, s, x0, y0, log2_size, luma_mode, cbf_luma)?;
 
@@ -502,7 +662,8 @@ fn reconstruct_luma(
         let order = intra_mode::scan_order_for_mode(mode, log2_size, false);
         let coeffs: Coeffs = residual::residual_coding(cabac, ctx, log2_size, order, false, s.sign_data_hiding);
         let use_dst = log2_size == 2;
-        let dequantised = transform::dequant(&coeffs.values, size, s.slice_qp, s.bit_depth_luma);
+        let qp_y = derive_qp_y(s.qg_qp_pred, s.cu_qp_delta_val);
+        let dequantised = transform::dequant(&coeffs.values, size, qp_y, s.bit_depth_luma);
         let residual = transform::inverse_transform(&dequantised, size, use_dst, s.bit_depth_luma);
         transform::add_residual_clip(&mut pred, &residual, size, s.bit_depth_luma);
     }
@@ -537,7 +698,8 @@ fn reconstruct_chroma(
         }
     }
     let order = intra_mode::scan_order_for_mode(mode, log2_size, true);
-    let qp = transform::chroma_qp(s.slice_qp, if is_cb { s.cb_qp_offset } else { s.cr_qp_offset });
+    let qp_y = derive_qp_y(s.qg_qp_pred, s.cu_qp_delta_val);
+    let qp = transform::chroma_qp(qp_y, if is_cb { s.cb_qp_offset } else { s.cr_qp_offset });
     let coeffs = residual::residual_coding(cabac, ctx, log2_size, order, true, s.sign_data_hiding);
     let dequantised = transform::dequant(&coeffs.values, size, qp, s.bit_depth_chroma);
     let residual = transform::inverse_transform(&dequantised, size, false, s.bit_depth_chroma);

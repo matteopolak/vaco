@@ -349,6 +349,15 @@ fn decode_wpp_rows(
             .ok_or(Error::InvalidData("vaco-codec-hevc: entry point range out of bounds"))?;
         let row_bytes = vaco_bitstream::annexb::to_rbsp(row_ebsp, &mut row_rbsp);
         let mut cabac = CabacDecoder::new(row_bytes);
+        // §8.6.1's `qPY_PREV` resets to `SliceQpY` at the start of every CTB
+        // row when WPP is active (the same rule §9.3.2.3's own context reset
+        // does not apply to — this is a *different* per-row reset, of
+        // `cu_qp_delta`'s running QP prediction rather than CABAC context
+        // state). The very first CTU of every row's own `coding_quadtree`
+        // call always re-derives `qg_qp_pred`/`cu_qp_delta_val` fresh (see
+        // that function's own QG-reset comment), so nothing else needs
+        // resetting here.
+        walk.qp_y_prev = walk.slice_qp;
         let mut ctx = if row_idx > 0 && ctbs_x >= 2 {
             saved_ctx.unwrap_or_else(|| ContextBank::new(qp))
         } else {
@@ -420,9 +429,6 @@ fn check_scope(sps: &Sps, pps: &Pps) -> Result<()> {
     }
     if pps.tiles.is_some() {
         return unsupported("vaco-codec-hevc: tiles are not supported");
-    }
-    if pps.cu_qp_delta_enabled {
-        return unsupported("vaco-codec-hevc: per-CU QP delta is not supported (constant slice QP only)");
     }
     if pps.transquant_bypass_enabled {
         return unsupported("vaco-codec-hevc: transquant_bypass is not supported");

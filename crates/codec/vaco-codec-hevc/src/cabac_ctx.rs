@@ -77,6 +77,15 @@ const INIT_GREATER2: [u8; 6] = [138, 153, 136, 167, 152, 152];
 const INIT_SAO_MERGE_FLAG: [u8; 1] = [153];
 const INIT_SAO_TYPE_IDX: [u8; 1] = [200];
 
+// `cu_qp_delta_abs`'s truncated-unary prefix (§9.3.3.10): bin 0 uses ctx 0,
+// every further bin shares ctx 1 (HM's `xReadUnaryMaxSymbol(..., iOffset=1)`
+// against `m_cCUDeltaQpSCModel`). HM declares `NUM_DELTA_QP_CTX == 3` and all
+// three I-slice-row entries are `154` regardless — the third is genuinely
+// unaddressed by any binarisation, kept only so this table's length matches
+// the source's declared size (the same convention `INIT_QT_CBF`'s unused
+// entries already follow).
+const INIT_CU_QP_DELTA: [u8; 3] = [154, 154, 154];
+
 /// `ctxIndMap4x4`, HM `TComRom.cpp` — the fixed per-position context offset
 /// for a 4x4 transform block's `sig_coeff_flag`, §9.3.4.2.5.
 pub(crate) const CTX_IND_MAP_4X4: [u8; 16] = [0, 1, 4, 5, 2, 3, 4, 5, 6, 6, 8, 8, 7, 7, 8, 8];
@@ -118,6 +127,7 @@ pub(crate) struct ContextBank {
     pub greater2: [ContextModel; 6],
     pub sao_merge_flag: [ContextModel; 1],
     pub sao_type_idx: [ContextModel; 1],
+    pub cu_qp_delta: [ContextModel; 3],
 }
 
 fn init<const N: usize>(table: &[u8; N], qp: i8) -> [ContextModel; N] {
@@ -148,6 +158,7 @@ impl ContextBank {
             greater2: init(&INIT_GREATER2, slice_qp),
             sao_merge_flag: init(&INIT_SAO_MERGE_FLAG, slice_qp),
             sao_type_idx: init(&INIT_SAO_TYPE_IDX, slice_qp),
+            cu_qp_delta: init(&INIT_CU_QP_DELTA, slice_qp),
         }
     }
 }
