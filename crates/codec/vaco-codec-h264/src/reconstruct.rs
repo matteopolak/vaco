@@ -258,6 +258,26 @@ impl PictureBuffer {
         }
     }
 
+    /// Writes `row` starting at picture pixel `(x, y)`, one contiguous
+    /// `copy_from_slice` rather than `row.len()` separate bound-checked
+    /// [`Self::set_pixel`] calls -- every caller ([`Self::write_block4`],
+    /// [`Self::write_block8`], and [`reconstruct_picture`]'s own
+    /// `Intra_16x16` direct copy) writes a fixed-size block whose every row
+    /// is a horizontal run of already-in-bounds picture pixels (macroblock
+    /// coordinates never reach the picture edge from outside, by
+    /// construction: `mbs_wide`/`mbs_high` bound every macroblock and every
+    /// block within it), so this is a pure mechanical speedup, not a
+    /// behaviour change -- an out-of-bounds row (which cannot occur in
+    /// practice) is dropped whole here exactly as [`Self::set_pixel`] would
+    /// have dropped it pixel by pixel.
+    fn write_row_luma(&mut self, x: u32, y: u32, row: &[u8]) {
+        let w = self.width() as usize;
+        let start = y as usize * w + x as usize;
+        if let Some(dst) = self.luma.get_mut(start..start.saturating_add(row.len())) {
+            dst.copy_from_slice(row);
+        }
+    }
+
     /// Marks the 4x4 block at picture-pixel upper-left `(x, y)` as
     /// reconstructed -- called once that block's own samples are already
     /// written, so a *later* block's neighbour lookup (same macroblock or
@@ -276,9 +296,7 @@ impl PictureBuffer {
 
     fn write_block4(&mut self, x: u32, y: u32, block: [[u8; 4]; 4]) {
         for (i, row) in block.iter().enumerate() {
-            for (j, &v) in row.iter().enumerate() {
-                self.set_pixel(x + j as u32, y + i as u32, v);
-            }
+            self.write_row_luma(x, y + i as u32, row);
         }
         self.mark_block_decoded(x, y);
     }
@@ -290,9 +308,7 @@ impl PictureBuffer {
     /// macroblock's own samples needs no special case).
     fn write_block8(&mut self, x: u32, y: u32, block: [[u8; 8]; 8]) {
         for (i, row) in block.iter().enumerate() {
-            for (j, &v) in row.iter().enumerate() {
-                self.set_pixel(x + j as u32, y + i as u32, v);
-            }
+            self.write_row_luma(x, y + i as u32, row);
         }
         for dy in 0..2u32 {
             for dx in 0..2u32 {
@@ -352,6 +368,18 @@ impl PictureBuffer {
         let plane = if comp == 0 { &mut self.cb } else { &mut self.cr };
         if let Some(slot) = plane.get_mut((y * w + x) as usize) {
             *slot = v;
+        }
+    }
+
+    /// [`Self::write_row_luma`]'s chroma counterpart -- same "every row is
+    /// an in-bounds contiguous run" argument, one component (`Cb`/`Cr`) at
+    /// a time.
+    fn write_row_chroma(&mut self, comp: usize, x: u32, y: u32, row: &[u8]) {
+        let w = self.chroma_width() as usize;
+        let plane = if comp == 0 { &mut self.cb } else { &mut self.cr };
+        let start = y as usize * w + x as usize;
+        if let Some(dst) = plane.get_mut(start..start.saturating_add(row.len())) {
+            dst.copy_from_slice(row);
         }
     }
 
@@ -1036,9 +1064,7 @@ pub(crate) fn reconstruct_picture(
             };
             let block = reconstruct_intra16x16_luma(mb.intra16x16_pred_mode, neighbours, mb.qpy, &mb.residual);
             for (i, row) in block.iter().enumerate() {
-                for (j, &v) in row.iter().enumerate() {
-                    buf.set_pixel(x + j as u32, y + i as u32, v);
-                }
+                buf.write_row_luma(x, y + i as u32, row);
             }
             for blk in 0..16u32 {
                 let (bx, by) = blk_xy(blk);
@@ -1065,9 +1091,7 @@ pub(crate) fn reconstruct_picture(
             let x0 = mb.mb_x * 8;
             let y0 = mb.mb_y * 8;
             for (i, row) in out.iter().enumerate() {
-                for (j, &v) in row.iter().enumerate() {
-                    buf.set_chroma_pixel(comp, x0 + j as u32, y0 + i as u32, v);
-                }
+                buf.write_row_chroma(comp, x0, y0 + i as u32, row);
             }
         }
         buf.mark_chroma_mb_decoded(mb.mb_x, mb.mb_y);
