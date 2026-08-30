@@ -148,6 +148,12 @@ pub(crate) struct InterSliceParams<'p> {
     /// `RefPicList0[collocated_ref_idx]` does not resolve — see
     /// `crate::dpb`'s own module doc for how this is built.
     pub collocated: Option<crate::dpb::CollocatedMotionField>,
+    /// `RefPicList0`'s own resolved weight/offset table (§8.5.3.3.4.3),
+    /// indexed the same way `ref_pics_l0` is — `Some` exactly when
+    /// `weighted_pred_flag && slice_type == P`, `None` (the default,
+    /// unweighted §8.5.3.3.4.2 path) otherwise. See [`crate::weight`]'s own
+    /// module doc.
+    pub weights: Option<Vec<crate::weight::RefWeights>>,
 }
 
 impl<'p> InterSliceParams<'p> {
@@ -159,6 +165,27 @@ impl<'p> InterSliceParams<'p> {
 
     fn plane_for_poc(&self, poc: i64) -> Option<&'p Picture> {
         self.ref_pics_l0.iter().find(|r| r.poc == poc).map(|r| r.pic)
+    }
+
+    /// The `RefPicList0` index a `poc` resolves to, for
+    /// [`InterSliceParams::weights`] to be indexed by — the position
+    /// `pred_weight_table()`'s own `LumaWeightL0[refIdxL0]`/
+    /// `ChromaWeightL0[refIdxL0]` are actually addressed by.
+    ///
+    /// [`MotionInfo`] carries a resolved POC rather than a `ref_idx` (see
+    /// that type's own doc for why: within one slice `RefPicList0` is
+    /// shared and fixed, so the two normally carry the same information).
+    /// That equivalence has exactly one gap: §8.3.4's `RefPicListTemp0`
+    /// cycling can place the *same* POC at more than one list position when
+    /// fewer distinct reference pictures exist than
+    /// `num_ref_idx_l0_active_minus1 + 1` requests. This resolves to the
+    /// *first* matching position, the same convention [`Self::plane_for_poc`]
+    /// already uses for picture lookup — exact whenever a POC appears once,
+    /// and a known, narrow approximation (picking one of several equally
+    /// valid list positions, all naming the same picture) in the cycling
+    /// case, which a real weighted-prediction fixture has never exercised.
+    fn ref_idx_for_poc(&self, poc: i64) -> Option<usize> {
+        self.ref_pics_l0.iter().position(|r| r.poc == poc)
     }
 }
 
@@ -885,6 +912,11 @@ fn build_cu_prediction(s: &Ctx<'_>, x0: i32, y0: i32, size: i32, pus: &[(PuRect,
 
     for (pu, info) in pus {
         let ref_pic = inter.plane_for_poc(info.ref_poc).ok_or(Error::InvalidData("vaco-codec-hevc: merge/AMVP candidate names an unknown reference POC"))?;
+        // `Some` only when this slice is weighted (§8.5.3.3.4.3) — see
+        // `InterSliceParams::ref_idx_for_poc`'s own doc for the one narrow
+        // case (`RefPicListTemp0` cycling) where the resolved index may not
+        // be the exact one the bitstream originally named.
+        let ref_weights = inter.weights.as_ref().and_then(|w| inter.ref_idx_for_poc(info.ref_poc).and_then(|idx| w.get(idx)));
         let clipped = motion::clip_mv(info.mv, x0, y0, s.pic_width, s.pic_height, ctb_size);
 
         let int_x = pu.x + (clipped.x >> 2);
@@ -893,7 +925,14 @@ fn build_cu_prediction(s: &Ctx<'_>, x0: i32, y0: i32, size: i32, pus: &[(PuRect,
         let frac_y = clipped.y & 3;
         let (w, h) = (usize::try_from(pu.w).unwrap_or(0), usize::try_from(pu.h).unwrap_or(0));
         let mut buf = vec![0i32; w * h];
-        crate::mc::predict_block(&ref_pic.y, int_x, int_y, frac_x, frac_y, w, h, s.bit_depth_luma, true, &mut buf);
+        if let Some(rw) = ref_weights {
+            crate::mc::predict_block_intermediate(&ref_pic.y, int_x, int_y, frac_x, frac_y, w, h, true, &mut buf);
+            for v in &mut buf {
+                *v = crate::mc::apply_weight(*v, rw.luma, s.bit_depth_luma);
+            }
+        } else {
+            crate::mc::predict_block(&ref_pic.y, int_x, int_y, frac_x, frac_y, w, h, s.bit_depth_luma, true, &mut buf);
+        }
         blit(&mut pred.y, usize::try_from(size).unwrap_or(1), usize::try_from(pu.x - x0).unwrap_or(0), usize::try_from(pu.y - y0).unwrap_or(0), w, h, &buf);
 
         // Chroma (4:2:0): half-resolution PU rectangle, the same raw `mv`
@@ -906,10 +945,21 @@ fn build_cu_prediction(s: &Ctx<'_>, x0: i32, y0: i32, size: i32, pus: &[(PuRect,
         let cfrac_y = clipped.y & 7;
         let (cw_u, ch_u) = (usize::try_from(cw).unwrap_or(0), usize::try_from(ch).unwrap_or(0));
         let mut cb_buf = vec![0i32; cw_u * ch_u];
-        crate::mc::predict_block(&ref_pic.cb, cint_x, cint_y, cfrac_x, cfrac_y, cw_u, ch_u, s.bit_depth_chroma, false, &mut cb_buf);
-        blit(&mut pred.cb, usize::try_from(csize).unwrap_or(1), usize::try_from(cx0 - (x0 >> 1)).unwrap_or(0), usize::try_from(cy0 - (y0 >> 1)).unwrap_or(0), cw_u, ch_u, &cb_buf);
         let mut cr_buf = vec![0i32; cw_u * ch_u];
-        crate::mc::predict_block(&ref_pic.cr, cint_x, cint_y, cfrac_x, cfrac_y, cw_u, ch_u, s.bit_depth_chroma, false, &mut cr_buf);
+        if let Some(rw) = ref_weights {
+            crate::mc::predict_block_intermediate(&ref_pic.cb, cint_x, cint_y, cfrac_x, cfrac_y, cw_u, ch_u, false, &mut cb_buf);
+            for v in &mut cb_buf {
+                *v = crate::mc::apply_weight(*v, rw.chroma[0], s.bit_depth_chroma);
+            }
+            crate::mc::predict_block_intermediate(&ref_pic.cr, cint_x, cint_y, cfrac_x, cfrac_y, cw_u, ch_u, false, &mut cr_buf);
+            for v in &mut cr_buf {
+                *v = crate::mc::apply_weight(*v, rw.chroma[1], s.bit_depth_chroma);
+            }
+        } else {
+            crate::mc::predict_block(&ref_pic.cb, cint_x, cint_y, cfrac_x, cfrac_y, cw_u, ch_u, s.bit_depth_chroma, false, &mut cb_buf);
+            crate::mc::predict_block(&ref_pic.cr, cint_x, cint_y, cfrac_x, cfrac_y, cw_u, ch_u, s.bit_depth_chroma, false, &mut cr_buf);
+        }
+        blit(&mut pred.cb, usize::try_from(csize).unwrap_or(1), usize::try_from(cx0 - (x0 >> 1)).unwrap_or(0), usize::try_from(cy0 - (y0 >> 1)).unwrap_or(0), cw_u, ch_u, &cb_buf);
         blit(&mut pred.cr, usize::try_from(csize).unwrap_or(1), usize::try_from(cx0 - (x0 >> 1)).unwrap_or(0), usize::try_from(cy0 - (y0 >> 1)).unwrap_or(0), cw_u, ch_u, &cr_buf);
     }
     Ok(pred)

@@ -52,14 +52,14 @@
 //! several pending pictures before clearing) or none at all (a picture
 //! decoded but not yet due for output).
 //!
-//! P-slices are, as of this pass, still refused by [`check_scope`]'s
-//! caller below despite being implemented (see `ctu::coding_unit_p` and
-//! everything under it, plus [`crate::motion`]/[`crate::mc`]) — a real,
-//! reproduced defect remains in the TMVP-for-AMVP path once a slice has
-//! more than one active reference picture; see
+//! P-slices are implemented and no longer refused (see `ctu::coding_unit_p`
+//! and everything under it, plus [`crate::motion`]/[`crate::mc`]) — the
+//! TMVP-for-AMVP defect that used to block this is fixed; see
 //! `docs/codec/vaco-codec-hevc.md`'s "Stage 2: P-slices" section for the
-//! exact repro. Nothing below this refusal is reachable from a real
-//! bitstream yet.
+//! root cause. Weighted prediction (`weighted_pred_flag`, §8.5.3.3.4.3) is
+//! implemented too — see [`crate::weight`]'s own module doc. B-slices
+//! remain refused unconditionally by [`decode_packet`]'s own slice-kind
+//! check, below.
 
 use vaco_codec_cabac::CabacDecoder;
 use vaco_codec_core::Decoder;
@@ -204,13 +204,14 @@ impl HevcDecoder {
         // transform-tree code that used to be the only thing marking
         // edges).
         //
-        // Stage 4 (weighted prediction) is still left as an honest refusal
-        // below — `pred_weight_table()` is already parsed by
+        // Stage 4 (weighted prediction, `weighted_pred_flag`) is no longer
+        // refused: `pred_weight_table()` was already parsed by
         // `vaco-parse-hevc` (a stream description has to be able to
-        // describe it), but nothing here applies the weights it carries.
-        if pps.weighted_pred && hdr.kind == SliceKind::P {
-            return Err(Error::Unsupported("vaco-codec-hevc: weighted prediction is not supported"));
-        }
+        // describe it), and `crate::weight::resolve_l0` plus
+        // `ctu::build_cu_prediction`'s weighted branch now apply it — see
+        // `docs/codec/vaco-codec-hevc.md`'s weighted-prediction section.
+        // `weighted_bipred_flag` (the B-slice half of §8.5.3.3.4.3) is moot:
+        // B-slices are refused just above, unconditionally.
         if hdr.dependent {
             return Err(Error::Unsupported("vaco-codec-hevc: dependent slice segments are not supported"));
         }
@@ -284,6 +285,16 @@ impl HevcDecoder {
                 None
             };
             let max_num_merge_cand = usize::try_from(5u32.saturating_sub(hdr.five_minus_max_num_merge_cand)).unwrap_or(1).max(1);
+            // §8.5.3.3.4.3, resolved once per slice rather than per PU —
+            // `Some` exactly when `weighted_pred_flag && slice_type == P`
+            // (`hdr.kind == B` already returned above, so this is the only
+            // slice kind `pred_weight_table` can be present for here; see
+            // `crate::weight`'s own module doc for the bi-predictive half
+            // this crate never reaches).
+            let weights = hdr
+                .pred_weight_table
+                .as_ref()
+                .map(|t| crate::weight::resolve_l0(t, ref_pics_l0.len(), u32::from(sps.bit_depth_luma), u32::from(sps.bit_depth_chroma)));
             Some(InterSliceParams {
                 max_num_merge_cand,
                 log2_parallel_merge_level: pps.log2_parallel_merge_level,
@@ -291,6 +302,7 @@ impl HevcDecoder {
                 cur_poc: poc.value,
                 ref_pics_l0,
                 collocated,
+                weights,
             })
         };
 

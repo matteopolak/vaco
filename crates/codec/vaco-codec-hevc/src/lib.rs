@@ -15,21 +15,30 @@
 //! Deliberately **not** in scope, each refused by name
 //! ([`vaco_core::Error::Unsupported`]) rather than attempted shallowly:
 //!
-//! - **P-slices are implemented but still refused.** `prediction_unit()`
-//!   syntax (skip/merge/AMVP), merge/AMVP candidate derivation (§8.5.3.2),
-//!   motion compensation (§8.5.3.3), the inter CABAC context tables
-//!   (§9.3.2.2), and [`dpb`]'s reference-picture management (§8.3.2/§8.3.4,
-//!   Annex C output-reordering "bumping") are all real and wired into
-//!   [`decoder`]. `decode_packet` refuses every P slice unconditionally
-//!   anyway: bin-for-bin CABAC tracing against a from-source HM 18.0 build
-//!   confirms every *parsed* syntax element matches the reference decoder
-//!   exactly, but a real defect remains in the TMVP-for-AMVP candidate path
-//!   once a slice has more than one active reference picture, producing
-//!   silently wrong motion vectors that compound frame over frame — see
+//! - **P-slices are implemented and no longer refused.**
+//!   `prediction_unit()` syntax (skip/merge/AMVP), merge/AMVP candidate
+//!   derivation (§8.5.3.2), motion compensation (§8.5.3.3), the inter CABAC
+//!   context tables (§9.3.2.2), and [`dpb`]'s reference-picture management
+//!   (§8.3.2/§8.3.4, Annex C output-reordering "bumping") are all wired into
+//!   [`decoder`]. The TMVP-for-AMVP defect that used to block this (a
+//!   bottom-right-to-centre temporal fallback gated on "geometrically
+//!   available" rather than "yielded a candidate") is fixed — see
 //!   `docs/codec/vaco-codec-hevc.md`'s "Stage 2: P-slices" section for the
-//!   exact repro. Lift the refusal only once that is fixed and a stock
-//!   multi-reference file decodes byte-exact end to end.
-//! - **B-slices.** Refused by name; not implemented at all.
+//!   root cause and the real `libx265` fixture it was found against.
+//! - **Weighted prediction (`weighted_pred_flag`, §8.5.3.3.4.3) is
+//!   implemented** — see [`weight`]'s own module doc for the per-`ref_idx`
+//!   weight/offset resolution and [`mc`]'s
+//!   `predict_block_intermediate`/`apply_weight` for the explicit weighted
+//!   sample prediction process itself. `pred_weight_table()` was already
+//!   parsed by `vaco-parse-hevc`; this closes the gap where the table was
+//!   parsed and thrown away. Verified byte-exact against plain `ffmpeg` on
+//!   real `libx265` output with genuinely non-neutral weights (confirmed by
+//!   inspecting the parsed table, not assumed) — see
+//!   `docs/codec/vaco-codec-hevc.md`'s weighted-prediction section for the
+//!   fixtures and values.
+//! - **B-slices.** Refused by name; not implemented at all. This also means
+//!   the bi-predictive half of §8.5.3.3.4.3 (`weighted_bipred_flag`) is
+//!   unreachable — [`weight`] resolves `RefPicList0` only.
 //! - **Deblocking (§8.7.2) is implemented** — see [`deblock`]'s own module
 //!   doc for the algorithm, what it reuses from HM 18.0 (Tier A), and why
 //!   it does not reuse `vaco-codec-dsp-deblock` (a genuinely different
@@ -147,6 +156,7 @@ mod residual;
 mod sao;
 mod scan;
 mod transform;
+mod weight;
 
 pub use decoder::HevcDecoder;
 

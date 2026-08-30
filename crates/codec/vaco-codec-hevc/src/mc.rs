@@ -17,12 +17,18 @@
 //!
 //! # Scope: uni-prediction only
 //!
-//! Every function here produces a *final*, already-rounded-and-clipped
+//! [`predict_block`] produces a *final*, already-rounded-and-clipped
 //! prediction block — HM's own `isLast` is always `true` here, because this
 //! crate's P-slice-only scope (`decoder.rs::check_scope` refuses B slices)
 //! never calls this twice to average (`bi == false` throughout HM's own
 //! `xPredInterUni`/`xPredInterBlk`, since a P slice's `PredFlagL1` is always
-//! `0`).
+//! `0`). [`predict_block_intermediate`] is the one exception: it stops one
+//! clause earlier, at §8.5.3.3.3's own *unshifted, unclipped* `predSampleLX`,
+//! because that is what [`crate::weight::resolve_l0`]'s explicit weighted
+//! sample prediction (§8.5.3.3.4.3, applied via [`apply_weight`]) needs to
+//! combine with a reference's weight/offset — folding the final shift into
+//! the interpolation the way [`predict_block`] does is only valid when no
+//! weighting follows it.
 //!
 //! # Specification
 //!
@@ -217,6 +223,137 @@ pub(crate) fn predict_block(ref_plane: &Plane, int_x0: i32, int_y0: i32, frac_x:
             }
         }
     }
+}
+
+/// §8.5.3.3.3.1's own `predSampleLXL` (luma) / §8.5.3.3.4.2's chroma
+/// equivalent — the interpolation filter's *intermediate* output, before
+/// either clause 8.5.3.3.4.2 (default) or 8.5.3.3.4.3 (explicit weighted)
+/// applies its own final shift/offset/clip. See the module doc for why
+/// [`predict_block`] cannot be reused for this: its single-pass branches
+/// fold that final step into the interpolation itself.
+///
+/// This crate's 8-bit-only scope (`decoder::check_scope` refuses any other
+/// `bit_depth`) fixes §8.5.3.3.3.1's own clause-local `shift1`/`shift2`/
+/// `shift3` at `Min(4, BitDepth-8) == 0`, `6`, and `Max(2, 14-BitDepth) == 6`
+/// respectively, so — unlike [`predict_block`] — this takes no `bit_depth`
+/// parameter: there is only one value it could be.
+pub(crate) fn predict_block_intermediate(ref_plane: &Plane, int_x0: i32, int_y0: i32, frac_x: i32, frac_y: i32, width: usize, height: usize, is_luma: bool, out: &mut [i32]) {
+    if frac_x == 0 && frac_y == 0 {
+        // Case 1: predSampleLXL = refSample << shift3 (shift3 == 6 at 8-bit).
+        for y in 0..height {
+            for x in 0..width {
+                let v = clamped_sample(ref_plane, int_x0 + i32::try_from(x).unwrap_or(0), int_y0 + i32::try_from(y).unwrap_or(0)) << IF_FILTER_PREC;
+                if let Some(slot) = out.get_mut(y * width + x) {
+                    *slot = v;
+                }
+            }
+        }
+        return;
+    }
+
+    let filter_row = |frac: i32| -> &'static [i32] {
+        if is_luma {
+            LUMA_FILTER.get(usize::try_from(frac).unwrap_or(0) & 3).map_or(&[][..], |r| &r[..])
+        } else {
+            CHROMA_FILTER.get(usize::try_from(frac).unwrap_or(0) & 7).map_or(&[][..], |r| &r[..])
+        }
+    };
+    let h_taps = filter_row(frac_x);
+    let v_taps = filter_row(frac_y);
+
+    if frac_y == 0 {
+        // Case 2 (horizontal only): predSampleLXL = sum, unshifted (shift1 == 0).
+        for y in 0..height {
+            for x in 0..width {
+                let sum = tap_sum_horizontal(ref_plane, int_x0 + i32::try_from(x).unwrap_or(0), int_y0 + i32::try_from(y).unwrap_or(0), h_taps);
+                if let Some(slot) = out.get_mut(y * width + x) {
+                    *slot = sum;
+                }
+            }
+        }
+        return;
+    }
+
+    if frac_x == 0 {
+        // Case 3 (vertical only): same, unshifted.
+        for y in 0..height {
+            for x in 0..width {
+                let sum = tap_sum_vertical(ref_plane, int_x0 + i32::try_from(x).unwrap_or(0), int_y0 + i32::try_from(y).unwrap_or(0), v_taps);
+                if let Some(slot) = out.get_mut(y * width + x) {
+                    *slot = sum;
+                }
+            }
+        }
+        return;
+    }
+
+    // Case 4 (both fractions non-zero): a horizontal pass (unshifted, same
+    // as case 2/3) into an intermediate buffer `height + taps - 1` rows
+    // tall, then a vertical pass over it shifted right by `shift2 == 6` —
+    // computed directly from the specification's own two-step formula
+    // rather than through `predict_block`'s HM-style biased two-pass
+    // arithmetic (that bias exists only to keep `predict_block`'s own
+    // *already-clipped final* output in range; recovering the unbiased
+    // intermediate value from it would be more roundabout than computing
+    // §8.5.3.3.3.1's formula directly here, and there is no clipping to get
+    // subtly wrong this way since nothing here clips).
+    let n = h_taps.len();
+    let half = i32::try_from(n >> 1).unwrap_or(0) - 1;
+    let extra_rows = n - 1;
+    let buf_rows = height + extra_rows;
+    let mut tmp = vec![0i32; width * buf_rows];
+    for row in 0..buf_rows {
+        let src_y = int_y0 + i32::try_from(row).unwrap_or(0) - half;
+        for x in 0..width {
+            let sum = tap_sum_horizontal(ref_plane, int_x0 + i32::try_from(x).unwrap_or(0), src_y, h_taps);
+            if let Some(slot) = tmp.get_mut(row * width + x) {
+                *slot = sum;
+            }
+        }
+    }
+    for y in 0..height {
+        for x in 0..width {
+            let sum = tap_sum_vertical_buf(&tmp, width, x, y, v_taps);
+            if let Some(slot) = out.get_mut(y * width + x) {
+                *slot = sum >> IF_FILTER_PREC;
+            }
+        }
+    }
+}
+
+/// One reference's resolved weight/offset for one component, §8.5.3.3.4.3 —
+/// `log2_wd` already has `shift1 = Max(2, 14 - BitDepth)` folded in, the same
+/// way the specification's own `LumaLog2WeightDenom`/`ChromaLog2WeightDenom`
+/// combine with it at the point of use. Built by
+/// [`crate::weight::resolve_l0`].
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Weight {
+    pub log2_wd: i32,
+    pub w: i32,
+    pub o: i32,
+}
+
+/// §8.5.3.3.4.3's uni-predictive explicit weighted sample prediction:
+///
+/// ```text
+/// log2Wd >= 1:  Clip3(0, max, ((predSampleLX * w + 2^(log2Wd-1)) >> log2Wd) + o)
+/// log2Wd <  1:  Clip3(0, max, predSampleLX * w + o)
+/// ```
+///
+/// `pred` is [`predict_block_intermediate`]'s own `predSampleLX` output.
+/// `log2Wd < 1` is unreachable from this crate's own parsed ranges
+/// (`luma_log2_weight_denom` is `0..=7`, `shift1 == 6` at 8-bit, so `log2Wd`
+/// is always `>= 6`) but the specification states both cases
+/// unconditionally, so both are implemented rather than asserted away.
+pub(crate) fn apply_weight(pred: i32, weight: Weight, bit_depth: u32) -> i32 {
+    let max_val = (1i32 << bit_depth) - 1;
+    let val = if weight.log2_wd >= 1 {
+        let rounding = 1i32 << (weight.log2_wd - 1);
+        (pred.saturating_mul(weight.w).saturating_add(rounding) >> weight.log2_wd).saturating_add(weight.o)
+    } else {
+        pred.saturating_mul(weight.w).saturating_add(weight.o)
+    };
+    val.clamp(0, max_val)
 }
 
 #[cfg(test)]

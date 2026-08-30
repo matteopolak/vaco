@@ -12,10 +12,12 @@ see "Deblocking (§8.7.2), landed" below), SAO (§7.3.8.3/§8.7.3, see "SAO
 (§7.3.8.3 / §8.7.3), landed" below), wavefront parallel processing
 (§9.3.2.3, see "WPP (`entropy_coding_sync_enabled_flag`), landed" below) and
 per-CU adaptive QP (`cu_qp_delta`, §7.3.8.11/§8.6.1, see "Per-CU QP delta
-(`cu_qp_delta`), landed" below).
-B-slices, weighted prediction, tiles, I_PCM, transform-skip residual
-coding, custom scaling lists and every range-extension feature are
-explicitly out of scope — see "What was cut" below.
+(`cu_qp_delta`), landed" below) and uni-predictive weighted prediction
+(§8.5.3.3.4.3, see "Weighted prediction (§8.5.3.3.4.3), landed" below).
+B-slices (and so the bi-predictive half of weighted prediction), tiles,
+I_PCM, transform-skip residual coding, custom scaling lists and every
+range-extension feature are explicitly out of scope — see "What was cut"
+below.
 
 **Registered, patent-encumbered-gated.** `vaco-component.toml` declares
 this decoder with `encumbered = true` / `default = false` behind the
@@ -41,7 +43,8 @@ residual-coding's context derivations, and intra prediction.
 | `decoder.rs` | `HevcDecoder`, the `Decoder` trait impl, `check_scope` (out-of-scope SPS/PPS features refused by name); embeds `vaco_parse_hevc::HevcParser` for parameter-set bookkeeping and `hvcC`-vs-Annex-B framing, mirroring `vaco-codec-h264` |
 | `ctu.rs` | `coding_quadtree`/`coding_unit`/`transform_tree`/`transform_unit` (§7.3.8.4/.5/.8/.10) for I-slices; `coding_unit_p`/`decode_skip_cu`/`decode_inter_cu`/`transform_tree_inter` and `prediction_unit()` parsing (§7.3.8.5/.6/.9) for P-slices — see "Stage 2: P-slices, byte-exact — landed" below |
 | `motion.rs` | Merge candidate derivation (§8.5.3.2.2/.3, spatial + temporal + zero-fill) and AMVP candidate derivation (§8.5.3.2.6/.7), plus the shared motion-vector scaling arithmetic (`dist_scale_factor`/`scale_mv`, §8.5.3.2.8) both use |
-| `mc.rs` | Motion compensation: 8-tap luma / 4-tap chroma separable interpolation filters at quarter/eighth-sample precision (§8.5.3.3), exact HM fixed-point arithmetic |
+| `mc.rs` | Motion compensation: 8-tap luma / 4-tap chroma separable interpolation filters at quarter/eighth-sample precision (§8.5.3.3), exact HM fixed-point arithmetic; also `predict_block_intermediate` (the unweighted intermediate `predSampleLX`) and `apply_weight` (§8.5.3.3.4.3's explicit weighted formula), which `weight.rs` resolves weights for |
+| `weight.rs` | Explicit weighted sample prediction (§8.5.3.3.4.3): resolves a slice's `pred_weight_table()` into a per-`ref_idx` `LumaWeightL0`/`ChromaWeightL0`/offset table — see "Weighted prediction (§8.5.3.3.4.3), landed" below |
 | `residual.rs` | `residual_coding()` (§7.3.8.11) and its context derivations (`sig_ctx_inc`, `pattern_sig_ctx`, `sig_group_ctx_inc`, `context_set_index`, `read_coeff_remain`) — shared unchanged between I- and P-slices |
 | `scan.rs` | `generate`/`generate_grouped` — up-right-diagonal/horizontal/vertical scan generation, including HM's `SCAN_GROUPED_4x4` sub-block-then-within-sub-block order |
 | `cabac_ctx.rs` | `ContextBank` — CABAC context-init tables and `ContextBank::new(slice_qp)` (I-slice row) / `ContextBank::new_p_slice(slice_qp, cabac_init_flag)` (P-slice P/B rows, §9.3.2.2) |
@@ -165,15 +168,15 @@ own decode of the same file byte-for-byte, per plane, end to end.
 the SPS/PPS) rather than approximates: non-4:2:0 chroma, non-8-bit depth,
 `separate_colour_plane`, custom scaling lists, I_PCM, SPS/PPS range
 extensions, SCC extensions, tiles, `transquant_bypass_enabled`. Neither
-deblocking, SAO, `entropy_coding_sync` (WPP), `cu_qp_delta_enabled`, nor
-P-slices are on this list any more — see their own "landed" sections
-below. B-slices and weighted prediction (`weighted_pred_flag`, a P-slice
-feature — see "Stage 2: P-slices, byte-exact — landed") are refused by
-slice kind/PPS flag in `decode_packet` itself rather than at the SPS/PPS
-`check_scope` call, since neither has a footprint visible before the slice
-header is parsed. Both Annex-B and length-prefixed (`hvcC`) framing are
-handled, via the embedded `vaco_parse_hevc::HevcParser` (`decoder.rs`'s own
-module doc).
+deblocking, SAO, `entropy_coding_sync` (WPP), `cu_qp_delta_enabled`,
+P-slices, nor weighted prediction are on this list any more — see their own
+"landed" sections below. B-slices (`SliceKind::B`) are refused by slice kind
+in `decode_packet` itself rather than at the SPS/PPS `check_scope` call,
+since that has no footprint visible before the slice header is parsed — the
+same used to be true of weighted prediction's own `weighted_pred_flag`
+check, now removed (see "Weighted prediction (§8.5.3.3.4.3), landed" below).
+Both Annex-B and length-prefixed (`hvcC`) framing are handled, via the
+embedded `vaco_parse_hevc::HevcParser` (`decoder.rs`'s own module doc).
 
 ## How to change it
 
@@ -191,9 +194,9 @@ module doc).
   script). Clean-room rule: HM is Tier A (BSD-3-Clause) and may be read,
   built and instrumented directly; `ffmpeg`/`x265` stay Tier B — run only,
   never opened.
-- **Extending scope** (B-slices, weighted prediction, tiles — inter
-  prediction (P-slices), deblocking, SAO, WPP and `cu_qp_delta` are done,
-  see their own sections above): the corresponding SPS/PPS fields already
+- **Extending scope** (B-slices, tiles — inter prediction (P-slices),
+  deblocking, SAO, WPP, `cu_qp_delta` and weighted prediction are done, see
+  their own sections above): the corresponding SPS/PPS fields already
   correctly return `Error::Unsupported` by name in `check_scope` when a
   real stream exercises them — implement behind that same call site rather
   than adding a new refusal path. Reference picture management
@@ -815,17 +818,15 @@ was re-enabled in turn and re-verified against plain `ffmpeg`, 320x240,
   scene-cut fixture (`testsrc2` concatenated with `smptebars` mid-GOP, so
   the cut itself is coded as a P-slice, not a new IDR) both decode
   byte-exact end to end at 320x240.
-- **Weighted prediction (`weightp=1`) still refuses cleanly** —
-  `pps.weighted_pred && hdr.kind == SliceKind::P` in `decoder.rs` — rather
-  than silently misdecoding: HM's H.264 history already has one precedent
-  for weighted prediction being entirely unimplemented and invisible on
-  most content (neutral weights collapse to a plain copy), and this crate
-  has never implemented §8.5.3.3.4's actual weighted-MC arithmetic at all
-  (Stage 4, tracked separately — see "What was cut" below). A fully stock
-  `libx265` invocation (`-x265-params log-level=none`, `bframes=0` aside)
-  turns `weighted_pred_flag` on by default, so this refusal is what a
-  literally-unmodified encode still hits — an honest, named gap, not a new
-  one this pass introduced.
+- **Weighted prediction (`weightp=1`) is now implemented** — see "Weighted
+  prediction (§8.5.3.3.4.3), landed" below. At the time this bullet was
+  written it still refused cleanly instead
+  (`pps.weighted_pred && hdr.kind == SliceKind::P` in `decoder.rs`), the
+  same posture H.264's own history warns is dangerous to leave
+  unimplemented (neutral weights collapse to a plain copy, hiding the gap
+  on most content) — kept here as the historical record of what a fully
+  stock `libx265` invocation used to hit next, once P-slices themselves
+  stopped being the blocker.
 
 **`check_scope` no longer refuses P-slices.** `decoder.rs::decode_packet`'s
 former "P-slices are not supported yet (TMVP-for-AMVP defect, see docs)"
@@ -833,7 +834,134 @@ refusal is gone; a P-slice now decodes through the same path this section
 describes. B-slices (bi-prediction, combined bi-predictive merge
 candidates) remain **not implemented at all** — `decode_packet`'s
 "B-slices are not supported" refusal predates this pass and is unrelated.
-Weighted prediction (Stage 4) remains refused by name, as above.
+Weighted prediction no longer refuses either — see the next section.
+
+## Weighted prediction (§8.5.3.3.4.3), landed
+
+The last thing standing between this crate and a fully stock `libx265`
+invocation staying P-only (`-x265-params log-level=none:bframes=0` — B-slices
+are separately, pre-existingly out of scope, see above): `libx265` turns
+`weighted_pred_flag` on by default, so any P-slice stream decoded through the
+default (non-weighted) §8.5.3.3.4.2 path whenever an encoder happened to pick
+neutral weights, and refused outright the moment one didn't.
+
+**`pred_weight_table()` (§7.3.6.3) was already parsed, and thrown away** —
+exactly the shape of bug this crate's own docs warn about from H.264's
+history (see "A specific warning" in the brief that started this pass, and
+the "Re-enabling the disabled encoder features" bullet above): a stream
+description has to be able to describe the table, so `vaco-parse-hevc`
+parsed it in full (`vaco_parse_hevc::slice::PredWeightTable`,
+`SliceHeader::pred_weight_table`) well before anything in this crate applied
+it. `weight_table_exact` (that struct's own field) is always `true` in this
+crate's scope: the one condition that can make the parse inexact
+(`pps_curr_pic_ref_enabled_flag`, a screen-content-coding flag) lives behind
+the SCC extension, which `check_scope` already refuses outright.
+
+**What was added**: `src/weight.rs` resolves a slice's `PredWeightTable` once
+per slice into a flat per-`ref_idx` table of `LumaWeightL0`/`ChromaWeightL0`
+and `luma_offset_l0`/`ChromaOffsetL0` (§8.5.3.3.4.3's own derivation,
+including the `ChromaOffsetL0` clip formula involving `WpOffsetHalfRangeC`);
+`src/mc.rs` gained `predict_block_intermediate` (§8.5.3.3.3's own
+`predSampleLX`, stopping one clause earlier than `predict_block`'s existing
+folded shift/clip — see that module's own doc for why `predict_block`
+itself could not be reused: its single-pass branches fold the *default*
+clause's final shift into the interpolation, which is only valid when no
+weighting follows it) and `apply_weight` (§8.5.3.3.4.3's uni-predictive
+formula itself); `ctu::build_cu_prediction` branches per PU on whether
+`InterSliceParams::weights` is `Some` (resolved once in `decoder.rs`,
+exactly when `weighted_pred_flag && slice_type == P`) and, when it is, looks
+up the reference's own weight via a new `InterSliceParams::ref_idx_for_poc`
+before calling the intermediate/weighted path instead of `predict_block`.
+The default (non-weighted) path is untouched: `predict_block` itself was not
+modified, and every non-weighted call site still calls it exactly as before.
+
+**One known, narrow approximation, inherited from an existing one**:
+`MotionInfo` carries a resolved POC rather than a `ref_idx` (a deliberate
+choice recorded in `motion.rs`'s own doc, since within one slice
+`RefPicList0` is shared and fixed, so the two normally carry the same
+information for every comparison this crate's merge/AMVP clauses actually
+need). Weighted prediction is the one place that equivalence has a gap:
+§8.3.4's `RefPicListTemp0` cycling can place the same POC at more than one
+list position when fewer distinct reference pictures exist than
+`num_ref_idx_l0_active_minus1 + 1` requests, and `LumaWeightL0`/
+`ChromaWeightL0` are addressed by `ref_idx`, not POC. `ref_idx_for_poc`
+resolves to the *first* matching position — the same convention
+`plane_for_poc` already uses for picture lookup — exact whenever a POC
+appears once in the list, and a narrow approximation (picking one of several
+equally valid list positions, all naming the same picture) in the cycling
+case. No real fixture measured for this pass exercises that case.
+
+**Verified against real `libx265` output with genuinely non-neutral
+weights, confirmed by inspecting the parsed table before trusting any byte
+comparison** — the exact discipline this pass's own brief demanded, after
+H.264's own history of an entirely unimplemented weighted-prediction path
+staying invisible because most content happens to get neutral weights.
+Temporary instrumentation (an `eprintln!` of the parsed `PredWeightTable`,
+gated on an env var, removed before committing) confirmed real deltas on
+every fixture below before the byte comparison ran — for example
+`luma_log2_weight_denom = 5, delta_luma_weight_l0[0] = -3` (`w = 29`) on a
+`life` fixture, and `luma_log2_weight_denom = 5, delta_luma_weight_l0[0] =
+15, luma_offset_l0[0] = -7` (`w = 47`) on a `testsrc2`-with-`fade` one — both
+far from the neutral `w == 1 << denom, o == 0` case that a formula bug could
+hide behind. Measured with `weightp=1` forced explicitly (`life` is not
+guaranteed to pick non-neutral weights on every encode, so this was checked
+per-run, not assumed) and, separately, at `libx265`'s own default
+`weightp=1` on `testsrc2` (which turned out to carry only neutral weights —
+a fixture worth naming as a *negative* result: it passing proves nothing
+about the weighted arithmetic, only that the neutral path still collapses
+to the default one, the same algebraic identity `weight::tests::
+a_neutral_weight_collapses_to_the_default_shift_and_offset` checks directly):
+
+- `life` (320x240, `mold=10`), weighted prediction alone
+  (`bframes=0:weightp=1:no-sao=1:no-deblock=1:wpp=0:qp=30:keyint=25`,
+  isolating weighted prediction from every other loop-filter/QP feature):
+  **2,880,000/2,880,000 bytes exact** (100%), every plane, every frame.
+- The same `life` fixture with SAO, deblocking and WPP restored to their own
+  defaults on top: still 100% byte-exact.
+- The same again with CRF rate control restored too (implying
+  `cu_qp_delta`, `-x265-params "log-level=none:bframes=0:weightp=1:
+  keyint=25"`, no explicit `qp=` at all — weighted prediction, SAO,
+  deblocking, WPP and `cu_qp_delta` all simultaneously at their own
+  defaults): 100% byte-exact, and confirmed to still carry genuinely
+  non-neutral weights (23 of 24 P-slice `pred_weight_table`s had at least
+  one non-neutral entry).
+- The same CRF+weighted-prediction fixture at 352x288 and at 300x500 (a
+  partial last CTU row *and* column): 100% byte-exact at both.
+- A `testsrc2`-with-`fade=t=in` fixture (a second, independently-generated
+  source of non-neutral weights, with larger deltas than `life` produced —
+  `delta_luma_weight_l0[0]` up to `+15`): 100% byte-exact.
+- `life` at 640x480 (a regular, larger CTU grid): 100% byte-exact.
+- Regression check, non-weighted path: 320x240, 416x240, 640x480, 352x288
+  and 300x500 with `weightp=0` (everything else at its own default) are all
+  still 100% byte-exact — `predict_block`'s own arithmetic was not touched,
+  and this confirms nothing broke it.
+
+`check_scope` no longer refuses weighted prediction; the check itself never
+lived at `check_scope` (it was a `decode_packet` slice-kind/PPS-flag check,
+alongside the B-slice refusal, since `pred_weight_table`'s presence has no
+SPS/PPS-level footprint before the slice header is parsed) and is simply
+gone now, not replaced.
+
+A fully stock, completely unmodified `libx265` invocation
+(`-x265-params log-level=none`, no other flags) still does not decode
+end-to-end in this environment — not because of weighted prediction, but
+because this `ffmpeg`/`libx265` build's own default GOP structure inserts a
+B-slice as the very first non-IDR picture after the anchor P-frame in
+decode order (`I, P, B, B, B, P, ...` in decode order for a 320x240
+`testsrc2` clip), and B-slices remain refused, unrelated to this pass. Before
+this pass, that same file hit the weighted-prediction refusal at the anchor
+P-frame (decode order position 1) before ever reaching the B-slice check;
+after this pass, that P-frame decodes correctly and the pipeline reaches the
+B-slice refusal one picture later instead — real progress, though it does
+not change the end-to-end frame count for a literally-unmodified invocation,
+since `vaco-cli`'s pipeline does not flush any already-decoded picture once
+a later one errors and the reorder buffer has not yet bumped anything by
+that point. `-x265-params log-level=none:bframes=0` (the same "stock except
+B-slices, a pre-existing and unrelated gap" framing every earlier stage in
+this document uses) decodes 100% byte-exact, 2,880,000/2,880,000 bytes,
+though — as measured above — that particular invocation's own default
+weights turn out to be neutral on `testsrc2`, so the `life`/`fade` fixtures
+above are what actually exercise the new arithmetic.
 
 ## Specification
 
