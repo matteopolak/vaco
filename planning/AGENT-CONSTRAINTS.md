@@ -1862,3 +1862,37 @@ Two corrections to draw:
   work is done or correct — `check_scope` makes that claim, and it is what
   users actually see. A commit is only a claim that the work exists and can be
   found again.
+
+## A fuzz assertion names a class, not an instance — audit the siblings
+
+`registry_discovery` asserted `bits_per_raw_sample` lies in `1..=64` and caught
+JPEG reporting **164**: `Jpeg::parse` read the SOF precision byte with no
+validation and handed it straight to a field `vaco-probe` prints verbatim. Not
+an internal inconsistency — fabricated metadata reaching the user, and
+reachable from any corrupted or hand-crafted JPEG, not only from fuzzed input.
+Confirmed by patching one byte of a real file: before the fix it printed 164,
+after it prints `N/A`, which is what `ffprobe` prints for the same file.
+
+The fix took one line. The value came from what happened next: auditing the
+harness's *sibling* assertions for the same class turned up **four more**, none
+of which the corpus had reached —
+
+- `vaco-demux-mp4` computed `nal_length_size` from a reserved 2-bit encoding,
+  fabricating `3`, which ISO/IEC 14496-15 does not define.
+- `vaco-parse-audio-misc` let any ALAC `bitDepth` byte through; ALAC codes only
+  16/20/24/32.
+- `vaco-parse-vpx`'s `vpcC` `bitDepth` nibble could report `0`; VP9 codes only
+  8/10/12.
+- `vaco-demux-mxf`'s `ComponentDepth` used `u8::try_from(..).ok()`, admitting
+  `0` and `65..=255`.
+
+So: when a fuzz assertion fires, **fix the instance, then grep for the class.**
+The harness encodes an invariant about a *field*, and every parser that
+populates that field is a candidate. Corpus coverage decides which one fires
+first, and that is an accident of the corpus, not a statement about which
+parsers are correct.
+
+The general defect is a parser copying a syntax element into an output field
+without checking it against the values its own specification defines. Anywhere
+a field is read and stored unvalidated, the next `ffprobe`-shaped output is a
+lie the user has no way to detect.
