@@ -427,10 +427,28 @@ impl HevcDecoder {
         // referenced by a later picture.
         let is_reference = !header.nal_unit_type.is_sub_layer_non_reference();
 
-        // Release `walk` (and, with it, `inter`/`ref_pics_l0`/`collocated`'s
-        // borrows of `self.dpb`) before taking `&mut self.dpb` below —
-        // `pic` and `cu_grid` are moved out of `walk` first since `store`
-        // and `CollocatedMotionField::build` above still needed them.
+        // `walk` owns two `Budget`-tracked working buffers — `cu_grid` and
+        // `sao_params` — that nothing outside this one slice's decode ever
+        // reads again (the collocated motion field built above already
+        // copied out of `cu_grid` everything a later picture's TMVP could
+        // need, at its own, un-tracked, always-smaller footprint — see
+        // `CollocatedMotionField::build`'s own doc). Releasing their charge
+        // back to `self.budget` here, before dropping `walk`, is required:
+        // `Budget::release` is never automatic (`vaco-limits`' own "gotcha:
+        // releasing" — nothing but a dropped `Reservation` releases on its
+        // own, and neither of these was allocated as one), so without this
+        // every decoded picture — not just ones the `Dpb` still holds —
+        // would add `O(picture size)` to `committed` and never give it back,
+        // which is exactly what made a stock `libx265` encode fail
+        // `max_alloc_total` past roughly 640x480 (see `CuGrid::budget_bytes`'s
+        // own doc for the measured shape of that failure).
+        self.budget.release(walk.working_budget_bytes());
+        // Release `walk` itself (and, with it, `inter`/`ref_pics_l0`/
+        // `collocated`'s borrows of `self.dpb`) before taking `&mut
+        // self.dpb` below — `pic` was never inside `walk` (`Ctx::pic` is a
+        // `&mut Picture` borrow of this function's own local, not an owned
+        // field), so only `cu_grid`/`sao_params`/`edges` actually drop here;
+        // `pic` moves into `dpb.store` a few lines down instead.
         drop(walk);
 
         let dpb = self.dpb.as_mut().ok_or(Error::InvalidData("vaco-codec-hevc: DPB missing after its own first use"))?;
@@ -594,6 +612,40 @@ fn decode_wpp_rows(
     let data_start = ebsp_offset_for_rbsp_len(ebsp, header_rbsp_len);
     let ebsp_slice_data = ebsp.get(data_start..).unwrap_or(&[]);
     let row_ranges = wpp_row_ranges(budget, ebsp_slice_data.len(), entry_point_offsets, ctbs_y)?;
+    // `row_ranges` is pure per-slice working state — nothing outside the row
+    // loop below ever reads it again. Its charge is released unconditionally
+    // once that loop (moved into `decode_wpp_row_ranges` for exactly this
+    // reason) returns, success *or* error — a single release site here
+    // rather than duplicating `budget.release` at every early-return buried
+    // in that loop, which would only need one to be missed (today or in a
+    // future edit) to leak again. Same "working buffer this crate's own
+    // `Budget` accounting must not let ride past its real lifetime" shape as
+    // `CuGrid`/`sao_params`/`Snapshot`, just far smaller (`O(ctbs_y)` rather
+    // than `O(picture size)`, since it is only ever one `(usize, usize)` per
+    // CTU row).
+    let row_ranges_bytes = u64::try_from(row_ranges.len())
+        .unwrap_or(u64::MAX)
+        .saturating_mul(u64::try_from(std::mem::size_of::<(usize, usize)>()).unwrap_or(u64::MAX));
+    let result = decode_wpp_row_ranges(&row_ranges, ebsp_slice_data, walk, ctbs_x, ctb_size_i, qp, kind, cabac_init);
+    budget.release(row_ranges_bytes);
+    result
+}
+
+/// The row-by-row CABAC decode `decode_wpp_rows` splits out purely so that
+/// function can release `row_ranges`'s own `Budget` charge on every exit
+/// path (this one's `Result` return, not an early `return` buried in the
+/// loop below) — see that caller's own comment.
+#[allow(clippy::too_many_arguments, reason = "mirrors decode_wpp_rows's own signature, one call site")]
+fn decode_wpp_row_ranges(
+    row_ranges: &[(usize, usize)],
+    ebsp_slice_data: &[u8],
+    walk: &mut Ctx<'_>,
+    ctbs_x: u32,
+    ctb_size_i: i32,
+    qp: i8,
+    kind: SliceKind,
+    cabac_init: bool,
+) -> Result<()> {
     let mut saved_ctx: Option<ContextBank> = None;
     // Reused across rows: `to_rbsp` clears it on every call, and each row's
     // `CabacDecoder` borrow ends (the row's CTU loop finishes) before the
@@ -699,14 +751,36 @@ fn check_scope(sps: &Sps, pps: &Pps) -> Result<()> {
     Ok(())
 }
 
+/// Builds the output `Frame` `emit_pocs` hands to `machine.emit` — a copy of
+/// `pic`'s three planes into `vaco_frame`'s own (differently-shaped, 8-bit
+/// `u8`-sample) layout, charged to `budget` by `Frame::alloc_video` itself.
+///
+/// That charge is released again before this returns, mirroring
+/// `vaco-codec-h264`'s own `build_frame`/`frame_bytes`/`release` sequence
+/// exactly (see that crate's `decoder.rs`, `#421`): once a frame is handed
+/// to `machine.emit`, it is the caller's memory to account for, not this
+/// decoder's own working set, and nothing about a `Frame`'s `Drop` ever
+/// calls `Budget::release` on its own. Measuring the real charge via the
+/// `committed()` delta (rather than recomputing `PixFmt::plane_layout` by
+/// hand a second time) is what stays correct through this format's own
+/// row-stride/alignment padding without duplicating it. Left unreleased,
+/// every single *emitted* frame — I, P or B alike, one per output picture
+/// for the lifetime of the decoder — added `O(picture size)` to `committed`
+/// and never gave it back: the single largest contributor to this crate's
+/// `max_alloc_total` failures past 640x480, since it fires on every frame
+/// rather than being bounded by `Dpb` occupancy the way a leaked `Picture`
+/// or `CuGrid` charge at least eventually would be.
 fn pic_to_frame(budget: &mut Budget, width: u32, height: u32, pic: &Picture) -> Result<vaco_frame::Frame> {
     let pix_fmt = vaco_pixfmt::PixFmt::from_name("yuv420p")
         .map_err(|_| Error::InvalidData("vaco-codec-hevc: yuv420p pixel format missing"))?;
+    let before = budget.committed();
     let mut frame = vaco_frame::Frame::alloc_video(budget, pix_fmt, width, height)?;
     blit(&pic.y, &mut frame, 0, width as usize, height as usize);
     let (cw, ch) = (width.div_ceil(2) as usize, height.div_ceil(2) as usize);
     blit(&pic.cb, &mut frame, 1, cw, ch);
     blit(&pic.cr, &mut frame, 2, cw, ch);
+    let frame_bytes = budget.committed().saturating_sub(before);
+    budget.release(frame_bytes);
     Ok(frame)
 }
 

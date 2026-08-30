@@ -1089,6 +1089,159 @@ reference pictures (refused by `derive_reference_pic_sets`, not
 `check_scope`) and dependent/multi-segment slices (refused inline in
 `decode_packet`, same as before) are also unaffected.
 
+## The `Budget::release` leak past 640x480, found and fixed
+
+The B-slice pass above fixed *one* `Budget::release` gap (`Dpb` never
+releasing an evicted `Picture`'s charge, plus `CuGrid`'s `l1` arrays
+doubling every P/I slice's footprint unconditionally) and, on the strength
+of that fix, reported a stock `libx265` encode byte-exact at 320x240 and
+640x480. Both fixtures happened to sit below the point where the *next*
+leak crossed `Limits::strict`'s 64 MiB `max_alloc_total` cap inside a
+25-frame clip — a bare `ffmpeg -c:v libx265` encode (no `-x265-params` at
+all) failed at every resolution from 854x480 up, each time with a
+`requested` byte count within a fraction of a percent of the 67,108,864-byte
+cap regardless of the picture's own real size, the signature of a
+cumulative counter creeping to a ceiling rather than a single allocation
+that is genuinely too large.
+
+**Confirmed as a leak, not a footprint problem, before touching any code**:
+the previous pass's own 640x480/25-frame fixture, re-encoded to 10 seconds
+(250 frames) instead of 1, failed with the same `max_alloc_total limit
+exceeded` error a *leaked* budget predicts and a *too-large-per-frame*
+budget does not — `max_alloc_total` measures a running total, so a
+resolution that fits comfortably in 25 frames must eventually cross the
+same fixed ceiling once given enough additional frames, if and only if
+something is charged once per frame and never released. (A genuinely
+too-large single picture would instead fail on frame 1, every time,
+independent of stream length — the opposite of what was measured.)
+
+**Root cause: three independent per-slice or per-picture allocations were
+charged to `Budget` and never released**, on top of the one the previous
+pass already fixed. Every one of them is a pure working buffer whose real
+lifetime ends well before the function that allocated it returns, which is
+exactly the shape `vaco-limits`' own "gotcha: releasing" warns about
+("nothing releases automatically except a dropped `Reservation`"):
+
+1. **`ctu::Ctx`'s own `cu_grid: CuGrid` and `sao_params: Vec<CtuSao>`**,
+   allocated fresh once per slice (`decoder.rs`'s `CuGrid::new`/`Ctx::new`)
+   and previously just dropped — not released — at the `drop(walk)` call
+   after a slice's CTU walk, deblocking and SAO passes finish with them.
+   Both are pure per-slice scratch space: `cu_grid`'s own per-4x4-block
+   neighbour metadata and motion have no reader once the picture they
+   describe is fully reconstructed (`CollocatedMotionField::build` already
+   copies out, at its own smaller and deliberately un-tracked footprint,
+   everything a *later* picture's TMVP needs), and `sao_params` is
+   consumed in full by `sao::filter_picture` in the same function. Fixed by
+   `CuGrid::budget_bytes` (framebuf.rs) and `Ctx::working_budget_bytes`
+   (ctu.rs, `cu_grid` plus `sao_params`'s own `total_ctbs *
+   size_of::<CtuSao>()`), released in `decoder.rs` immediately before
+   `drop(walk)`. This was the largest of the three: `CuGrid` alone charges
+   nine per-4x4-block arrays (`depth`/`mode`/`qp`/`mv0_x`/`mv0_y`/
+   `ref_poc0`, plus `mv1_x`/`mv1_y`/`ref_poc1` for a B slice), 15 bytes per
+   4x4 block for a P/I slice and 27 for a B slice — for a 1920x1080 frame,
+   roughly 1.94 MB (P/I) to 3.5 MB (B) per slice, charged and kept forever
+   under the old code.
+2. **`sao::filter_picture`'s three `Snapshot`s** (`snap_y`/`snap_cb`/
+   `snap_cr`, one read-only pre-SAO copy per plane, each the same pixel
+   count as one of `Picture`'s own three planes) — built on every slice
+   that has *any* SAO syntax to parse at all
+   (`slice_sao_luma_flag || slice_sao_chroma_flag`, `libx265`'s own
+   default), previously dropped uncollected at the end of the function.
+   Fixed by `Snapshot::byte_len` (sao.rs), released in `filter_picture`
+   right after the per-CTU offset loop that is their only reader. This one
+   is roughly as large as `CuGrid`'s own charge per slice (it is
+   `Picture`-plane-sized), so together the two alone were doubling the
+   real per-slice leak the previous pass measured.
+3. **The `Frame` `pic_to_frame` builds for `machine.emit`** — charged by
+   `vaco_frame::Frame::alloc_video` and, unlike every other charge in this
+   list, *never freed even conceptually*: it is not scratch space consumed
+   within one function, it is the actual output handed to the caller, one
+   per emitted picture for the entire lifetime of the decoder (I, P and B
+   pictures alike). `vaco-codec-h264`'s own `decoder.rs` had already found
+   and fixed the identical shape (`#421`, its own `build_frame`/
+   `frame_bytes`/`release` sequence): once a frame is handed to
+   `machine.emit`, it is the caller's memory to account for, not this
+   decoder's own working set — nothing about a `Frame`'s `Drop` calls
+   `Budget::release`, so the charge has to be given back explicitly, at the
+   point the frame is built, not carried as if this decoder still owned it.
+   Fixed the same way H.264 did: measure the `committed()` delta around
+   `Frame::alloc_video`, then `release` it before returning. This was the
+   single largest contributor of the three, being unbounded by `Dpb`
+   occupancy the way a leaked `Picture` or `CuGrid` charge at least
+   eventually is (bounded reference-picture-set size caps how many of
+   those can be live at once; nothing bounds how many frames a long stream
+   emits).
+
+A fourth, much smaller instance of the same shape was fixed alongside these
+for completeness (`AGENT-CONSTRAINTS.md`'s "find every path that charges
+`Budget` and check each has a matching release", not because it moved any
+measured number): `decoder::wpp_row_ranges`'s returned `Vec<(usize,
+usize)>` (one entry per CTU row, only allocated when
+`entropy_coding_sync_enabled_flag` is set) was released unconditionally by
+splitting `decode_wpp_rows`'s row-decode loop into its own function
+(`decode_wpp_row_ranges`) so the caller can release `row_ranges`'s charge
+once, after that call returns on *any* path — success or the row loop's own
+early-return error cases — rather than depending on every current and
+future early return inside the loop to remember it individually.
+
+**No cap in `vaco-limits` changed.** All four charges above were pure
+`Budget::release` omissions, not a case where the real footprint exceeds
+`Limits::strict`'s 64 MiB for a legitimate reason — see the next paragraph
+for the one case (4K) where the arithmetic says otherwise, and why that
+one is a different crate's issue, not this one's.
+
+**Verified against real `libx265` output, byte-for-byte, per plane, per
+frame, with the actual `vaco` CLI binary**
+(`--features vaco-registry/patent-encumbered-hevc-decode`), a bare `ffmpeg
+-c:v libx265` encode with **no** `-x265-params` at all:
+
+- The exact confirmation fixture, re-measured after the fix: 640x480, 250
+  frames (10 seconds) — byte-exact, whole file, where it used to fail
+  partway through (leaking budget until frame ~32 of 250 tripped the cap).
+- The full resolution sweep this pass was asked to close: 640x480,
+  854x480, 1024x576, 1280x720 and 1920x1080, 25 frames each — all
+  byte-exact, whole file, where every one above 640x480 used to fail.
+- 1280x720 re-measured at 250 frames (10 seconds) instead of 25 — still
+  byte-exact, confirming duration no longer matters at a resolution that
+  used to fail well inside 25 frames.
+- Every pre-existing regression fixture — 320x240, 416x240, 352x288,
+  322x242 and 300x500 (a partial last CTU row *and* column) — still 100%
+  byte-exact, plus the 61 crate unit tests, `tests/flat.rs` and
+  `tests/oracle.rs::dense_content_is_byte_exact`.
+
+**3840x2160 is a genuine, separate, out-of-scope gap, not this leak** —
+confirmed by driving `HevcDecoder` directly with `Limits::permissive()`
+(bypassing the CLI entirely): the same bare-`libx265` 3840x2160, 25-frame
+fixture decodes **100% byte-exact** once given a `Limits` preset sized for
+it, proving this crate's own decode logic is correct at 4K and the leak
+fix is complete. The real `vaco` CLI still refuses a 4K file, but for a
+reason that belongs to two other crates, neither owned by this pass:
+`vaco-cli`'s own decoder construction (`exec.rs`) builds every decoder with
+`vaco_limits::Limits::default()` (`== strict()`, 16 MiB `max_frame_bytes`)
+rather than `Limits::permissive()` — the CLI default `vaco-limits`' own
+docs describe — and `vaco_parse_hevc::Sps::checked` rejects any SPS whose
+`width.max(coded_width) * height.max(coded_height) * 4` exceeds
+`max_frame_bytes` (`sps.rs`'s `budget.check_frame(w, h, 4)`). 3840x2160
+needs 33,177,600 bytes there against `strict`'s 16,777,216-byte cap —
+genuinely over, by design, for that preset — while 1920x1080's 8,294,400
+needs only 8,847,360, comfortably under. Raising `vaco-limits`' own
+`strict` preset would not be the right fix even if this pass owned that
+decision: `strict` is deliberately conservative for an untrusted-input
+embedder, and the CLI's own wiring not using `permissive()` (its
+documented "CLI default") looks like the real, separate defect. Reported
+rather than worked around, per this pass's own scope (`vaco-codec-hevc`
+and `vaco-limits` only).
+
+**Which fixture would have caught this originally**: any real fixture
+whose `CuGrid`/`Snapshot`/emitted-`Frame` charges, accumulated across
+however many frames it contains, cross `Limits::strict`'s 64 MiB before the
+fixture ends — a fixed frame count at a large-enough resolution (this
+pass's 854x480-and-up sweep) or a fixed, smaller resolution run long enough
+(the 640x480-at-250-frames confirmation). 320x240 and 640x480 at 25 frames
+each cannot express this bug at all: both stay under the ceiling for the
+whole clip, which is exactly why the previous pass's real, correct fix for
+the *other* `Budget::release` gap read as complete once those two passed.
+
 ## Specification
 
 `itu-t-h265-202108` (ITU-T Rec. H.265 (08/2021)) and

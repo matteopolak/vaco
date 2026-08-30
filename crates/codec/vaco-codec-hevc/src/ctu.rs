@@ -321,6 +321,26 @@ impl<'p> Ctx<'p> {
     fn inter(&self) -> Result<&InterSliceParams<'p>> {
         self.inter.as_ref().ok_or(Error::InvalidData("vaco-codec-hevc: inter CU decode reached with no P-slice context"))
     }
+
+    /// The total bytes [`Budget::alloc`] charged for this `Ctx`'s own two
+    /// `Budget`-tracked working buffers — [`CuGrid::budget_bytes`] plus
+    /// `sao_params` (`total_ctbs * size_of::<CtuSao>()`, exactly what
+    /// [`Ctx::new`]'s own `budget.alloc(total_ctbs)` charged for it). Neither
+    /// outlives one slice's own `decode_ctu_slice` call — `decoder.rs`'s own
+    /// call site releases this right before dropping the `Ctx` that owns
+    /// them, the other half of the leak [`CuGrid::budget_bytes`]'s own doc
+    /// describes: `sao_params` is smaller than `cu_grid` per slice, but is
+    /// charged on every slice that has any SAO syntax to parse at all
+    /// (`slice_sao_luma_flag || slice_sao_chroma_flag`), not only ones that
+    /// end up applying a non-`Off` mode anywhere, so it leaked on exactly the
+    /// same stock-`libx265` fixtures `cu_grid`'s own charge did.
+    #[must_use]
+    pub(crate) fn working_budget_bytes(&self) -> u64 {
+        let sao_params_bytes = u64::try_from(self.sao_params.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(u64::try_from(std::mem::size_of::<CtuSao>()).unwrap_or(u64::MAX));
+        self.cu_grid.budget_bytes().saturating_add(sao_params_bytes)
+    }
 }
 
 /// §8.6.1's `qPY_PRED`: the predicted luma QP for a quantisation group whose

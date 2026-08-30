@@ -461,6 +461,41 @@ impl CuGrid {
         };
         self.cbf_luma.get(i).copied().unwrap_or(false)
     }
+
+    /// The total bytes [`Budget::alloc`] charged across this grid's nine
+    /// tracked arrays (`depth`/`mode`/`qp`/`mv0_x`/`mv0_y`/`ref_poc0` always,
+    /// `mv1_x`/`mv1_y`/`ref_poc1` at their real length — `0` for a P/I
+    /// slice's grid, `len` for a B slice's, exactly as [`CuGrid::new`]
+    /// charged them) — what `decoder.rs` gives back via [`Budget::release`]
+    /// once a slice's own CTU walk is done with this grid.
+    ///
+    /// Unlike [`Picture::budget_bytes`], which a picture still held live in
+    /// the `Dpb` needs released only at eviction, this grid is a pure
+    /// per-slice working buffer: nothing outside one `decode_ctu_slice` call
+    /// ever reads it again once that slice's own deblocking/SAO passes and
+    /// `CollocatedMotionField::build` are done with it. Before this existed,
+    /// every single decoded picture — not just ones the `Dpb` kept as a
+    /// reference — added `O(picture size)` to `committed` and never gave it
+    /// back, which is why `max_alloc_total` was reached in lockstep with
+    /// frame *count* rather than `Dpb` occupancy: a stock `libx265` encode
+    /// past roughly 640x480 crossed the 64 MiB `strict` cap within the same
+    /// 25-frame, one-second clip that a smaller-resolution fixture survived
+    /// only because its own per-frame `CuGrid` charge was small enough that
+    /// 25 frames' worth of it, plus the (correctly bounded) `Dpb` occupancy,
+    /// still fit under the ceiling by coincidence.
+    #[must_use]
+    pub(crate) fn budget_bytes(&self) -> u64 {
+        let bytes = |len: usize, size: usize| u64::try_from(len.saturating_mul(size)).unwrap_or(u64::MAX);
+        bytes(self.depth.len(), 1)
+            .saturating_add(bytes(self.mode.len(), 1))
+            .saturating_add(bytes(self.qp.len(), 1))
+            .saturating_add(bytes(self.mv0_x.len(), 2))
+            .saturating_add(bytes(self.mv0_y.len(), 2))
+            .saturating_add(bytes(self.ref_poc0.len(), 8))
+            .saturating_add(bytes(self.mv1_x.len(), 2))
+            .saturating_add(bytes(self.mv1_y.len(), 2))
+            .saturating_add(bytes(self.ref_poc1.len(), 8))
+    }
 }
 
 /// Per-4x4-luma-block "is there a transform/coding-unit boundary starting

@@ -273,6 +273,20 @@ impl Snapshot {
         let idx = yu.saturating_mul(usize::try_from(self.width).unwrap_or(0)).saturating_add(xu);
         self.data.get(idx).copied().map(i32::from)
     }
+
+    /// The exact byte count [`Budget::alloc`] charged for `self.data` — for
+    /// [`filter_picture`] to give back once its own per-CTU loop is done
+    /// reading every snapshot, the same "working buffer, not a `Dpb`-held
+    /// picture" reasoning [`crate::framebuf::CuGrid::budget_bytes`]'s own
+    /// doc explains. Three of these (one per plane) are built on every slice
+    /// SAO actually has syntax for (`slice_sao_luma_flag ||
+    /// slice_sao_chroma_flag` — `libx265`'s own default), each the same size
+    /// as one of `Picture`'s own three planes; left unreleased, this was a
+    /// second, independent per-picture leak on top of `CuGrid`'s.
+    #[must_use]
+    fn byte_len(&self) -> u64 {
+        u64::try_from(self.data.len()).unwrap_or(u64::MAX).saturating_mul(2)
+    }
 }
 
 /// Filter one component's plane for one CTU's rectangle, per §8.7.3.2/.3
@@ -359,5 +373,10 @@ pub(crate) fn filter_picture(budget: &mut Budget, s: &mut Ctx<'_>) -> Result<()>
         offset_block(&mut s.pic.cb, &snap_cb, params.cb, cx0, cy0, cw, ch, s.bit_depth_chroma);
         offset_block(&mut s.pic.cr, &snap_cr, params.cr, cx0, cy0, cw, ch, s.bit_depth_chroma);
     }
+    // The three snapshots are pure working state for the loop just above —
+    // give their charge back before they drop, rather than letting it ride
+    // on `budget.committed()` until `Budget` itself is dropped. See
+    // `Snapshot::byte_len`'s own doc.
+    budget.release(snap_y.byte_len().saturating_add(snap_cb.byte_len()).saturating_add(snap_cr.byte_len()));
     Ok(())
 }
