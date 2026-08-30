@@ -289,7 +289,7 @@ pub(crate) fn derive_merge_candidates(
     let a1_excluded = pu_idx == 1 && matches!(part_mode, PartMode::Nx2N | PartMode::NLx2N | PartMode::NRx2N);
     let b1_excluded = pu_idx == 1 && matches!(part_mode, PartMode::TwoNxN | PartMode::TwoNxNu | PartMode::TwoNxNd);
 
-    let a1 = (!a1_excluded && !is_diff_mer(pos.a1.0, pos.a1.1, x_p, y_p, log2_parallel_merge_level))
+    let a1 = (!a1_excluded && is_diff_mer(pos.a1.0, pos.a1.1, x_p, y_p, log2_parallel_merge_level))
         .then(|| lookup(grid, pos.a1))
         .flatten();
     if let Some(m) = a1 {
@@ -297,7 +297,7 @@ pub(crate) fn derive_merge_candidates(
     }
 
     if cands.len() < max_num_merge_cand {
-        let b1 = (!b1_excluded && !is_diff_mer(pos.b1.0, pos.b1.1, x_p, y_p, log2_parallel_merge_level))
+        let b1 = (!b1_excluded && is_diff_mer(pos.b1.0, pos.b1.1, x_p, y_p, log2_parallel_merge_level))
             .then(|| lookup(grid, pos.b1))
             .flatten();
         if let Some(m) = b1
@@ -308,8 +308,8 @@ pub(crate) fn derive_merge_candidates(
     }
 
     if cands.len() < max_num_merge_cand {
-        let b1 = (!b1_excluded && !is_diff_mer(pos.b1.0, pos.b1.1, x_p, y_p, log2_parallel_merge_level)).then(|| lookup(grid, pos.b1)).flatten();
-        let b0 = (!is_diff_mer(pos.b0.0, pos.b0.1, x_p, y_p, log2_parallel_merge_level)).then(|| lookup(grid, pos.b0)).flatten();
+        let b1 = (!b1_excluded && is_diff_mer(pos.b1.0, pos.b1.1, x_p, y_p, log2_parallel_merge_level)).then(|| lookup(grid, pos.b1)).flatten();
+        let b0 = (is_diff_mer(pos.b0.0, pos.b0.1, x_p, y_p, log2_parallel_merge_level)).then(|| lookup(grid, pos.b0)).flatten();
         if let Some(m) = b0
             && b1 != Some(m)
         {
@@ -318,7 +318,7 @@ pub(crate) fn derive_merge_candidates(
     }
 
     if cands.len() < max_num_merge_cand {
-        let a0 = (!is_diff_mer(pos.a0.0, pos.a0.1, x_p, y_p, log2_parallel_merge_level)).then(|| lookup(grid, pos.a0)).flatten();
+        let a0 = (is_diff_mer(pos.a0.0, pos.a0.1, x_p, y_p, log2_parallel_merge_level)).then(|| lookup(grid, pos.a0)).flatten();
         if let Some(m) = a0
             && a1 != Some(m)
         {
@@ -327,8 +327,8 @@ pub(crate) fn derive_merge_candidates(
     }
 
     if cands.len() < max_num_merge_cand && cands.len() < 4 {
-        let b1 = (!b1_excluded && !is_diff_mer(pos.b1.0, pos.b1.1, x_p, y_p, log2_parallel_merge_level)).then(|| lookup(grid, pos.b1)).flatten();
-        let b2 = (!is_diff_mer(pos.b2.0, pos.b2.1, x_p, y_p, log2_parallel_merge_level)).then(|| lookup(grid, pos.b2)).flatten();
+        let b1 = (!b1_excluded && is_diff_mer(pos.b1.0, pos.b1.1, x_p, y_p, log2_parallel_merge_level)).then(|| lookup(grid, pos.b1)).flatten();
+        let b2 = (is_diff_mer(pos.b2.0, pos.b2.1, x_p, y_p, log2_parallel_merge_level)).then(|| lookup(grid, pos.b2)).flatten();
         if let Some(m) = b2
             && a1 != Some(m)
             && b1 != Some(m)
