@@ -83,6 +83,35 @@ fn split_extradata_and_first_slice(data: &[u8]) -> (Vec<u8>, Vec<u8>) {
     panic!("fixture has no slice NAL");
 }
 
+/// [`split_extradata_and_first_slice`]'s sibling for a fixture whose *n*th
+/// primary-coded-slice NAL (0-indexed, `first_mb_in_slice`/`slice_type`
+/// order in the bitstream -- not display order) is the one a test needs,
+/// alongside the same in-band SPS/PPS extradata. `cabac_ipbb.264`'s own
+/// bitstream order is I, P, B, B, P, B, B, ... (a real `libx264 -bf 2
+/// -refs 1` IBBP stream), confirmed by parsing every slice header's own
+/// `first_mb_in_slice`/`slice_type` at fixture-authoring time -- slice
+/// index 2 is the fixture's first real B slice.
+fn nth_slice_and_extradata(data: &[u8], n: usize) -> (Vec<u8>, Vec<u8>) {
+    let mut extradata = Vec::new();
+    let mut seen = 0usize;
+    for nal in annexb::nal_units(data) {
+        match nal.first().map(|b| b & 0x1F) {
+            Some(7 | 8) => {
+                extradata.extend_from_slice(&[0, 0, 0, 1]);
+                extradata.extend_from_slice(nal);
+            }
+            Some(1 | 5) => {
+                if seen == n {
+                    return (extradata, nal.to_vec());
+                }
+                seen += 1;
+            }
+            _ => {}
+        }
+    }
+    panic!("fixture has fewer than {} slice NALs", n + 1);
+}
+
 #[test]
 fn resolves_cavlc_from_a_real_x264_cavlc_stream() {
     let mut d = decoder();
@@ -93,6 +122,46 @@ fn resolves_cavlc_from_a_real_x264_cavlc_stream() {
         panic!("expected Unsupported, got {err:?}");
     };
     assert!(msg.contains("CAVLC"), "message did not name CAVLC: {msg}");
+}
+
+/// `check_scope`'s own B-slice gate (`crate::mb::decode_slice_cabac`),
+/// added *after* full CABAC B-slice decode already landed: measured
+/// against a real `libx264 -bf 2 -refs 1` IBBP stream, every I/P frame
+/// decoded byte-exact but every B frame carried a small residual (max
+/// per-sample delta 3-4 across roughly 1-2% of samples) not yet
+/// root-caused -- `planning/AGENT-CONSTRAINTS.md`'s "registered-but-wrong
+/// is worse than absent" rule, so the feature stays committed but gated
+/// rather than reachable. This test is the regression that keeps the gate
+/// itself from silently disappearing: it decodes the fixture's real I and
+/// P slices (proving the gate is not a blanket "this fixture never
+/// decodes" refusal) and only then feeds the first real B slice, which
+/// must still fail.
+#[test]
+fn b_slices_are_gated_pending_a_byte_exact_match() {
+    let data = include_bytes!("fixtures/cabac_ipbb.264");
+    let (extradata, i_slice) = nth_slice_and_extradata(data, 0);
+    let (_, p_slice) = nth_slice_and_extradata(data, 1);
+    let (_, b_slice) = nth_slice_and_extradata(data, 2);
+
+    let mut d = decoder();
+    d.set_extradata(&extradata).unwrap();
+
+    let i_pkt = packet(&i_slice);
+    d.send_packet(Some(&i_pkt)).unwrap();
+    let _ = d.receive_frame();
+
+    // `unwrap`, not `expect` (this file's own `#![allow]` covers the
+    // former, not the latter): the fixture's own P slice must still
+    // decode -- this test's own point is that only B is gated.
+    let p_pkt = packet(&p_slice);
+    d.send_packet(Some(&p_pkt)).unwrap();
+
+    let b_pkt = packet(&b_slice);
+    let err = d.send_packet(Some(&b_pkt)).unwrap_err();
+    let Error::Unsupported(msg) = err else {
+        panic!("expected Unsupported for a B slice, got {err:?}");
+    };
+    assert!(msg.contains("B slices"), "message did not name the B-slice gate: {msg}");
 }
 
 #[test]

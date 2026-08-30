@@ -17,7 +17,8 @@
 //!
 //! # What is in scope, and what is explicitly not
 //!
-//! **In scope**: I/P/B slices, `mb_skip_run` (CAVLC) and `mb_skip_flag`
+//! **In scope**: I/P slices (B slices are parsed but gated -- see the "B
+//! slices" bullet below), `mb_skip_run` (CAVLC) and `mb_skip_flag`
 //! (CABAC), all of Table 7-8/7-10/7-11's macroblock types and Table
 //! 7-14/7-15's sub-macroblock types, `ref_idx`/`mvd` presence and count per
 //! partition, `coded_block_pattern` (both entropy modes), `mb_qp_delta`,
@@ -65,13 +66,24 @@
 //!   *does* handle `I_PCM` — see the CABAC section below — because CABAC's
 //!   `mb_type` binarisation signals it unambiguously via
 //!   `decode_terminate`, so there was nothing to guess.
-//! - **CABAC B slices** — [`decode_slice_cabac`] refuses them outright.
-//!   Table 9-27/9-28's B-slice `mb_type`/`sub_mb_type` bin strings do not
-//!   decompose into the same clean arithmetic form as the I-slice and P/SP
-//!   tables (`cabac_mb_tables::MB_TYPE_B`/`SUB_MB_TYPE_B` are transcribed
-//!   and kept `#[allow(dead_code)]` for whoever picks this up, but the
-//!   decode function that would binarise against them was not written this
-//!   dispatch).
+//! - **CABAC B slices** — [`check_scope`] refuses them outright again, as
+//!   of the commit introducing this bullet's own rewrite. This is *not*
+//!   the earlier "binarization was never written" gap: `mb_type`/
+//!   `sub_mb_type` B binarization (Table 9-27/9-28), spatial direct
+//!   prediction (clause 8.4.1.2.2), bi-prediction including implicit
+//!   weighted mode (clause 8.4.2.3.2), and `RefPicList1` construction are
+//!   all implemented and exercised in [`decode_slice_cabac`] — see that
+//!   function's own doc and `crate::reconstruct`/`crate::decoder`. The
+//!   refusal is a correctness gate, not a missing-feature one: measured
+//!   against a real `libx264 -bf 2` IBBP CABAC stream (implicit weighted
+//!   bi-prediction, x264's own default), every I/P frame decodes
+//!   byte-exact but every B frame carries a small residual (max per-sample
+//!   delta 3-4 across roughly 1-2% of samples — the shape of a rounding or
+//!   weight-derivation bug, not a desync or wrong motion vector, per
+//!   `planning/AGENT-CONSTRAINTS.md`'s own diagnostic guidance) not yet
+//!   root-caused. Registered-but-wrong is worse than refused (same
+//!   document), so the refusal stays until that residual is gone —
+//!   lifting it is a separate, later commit's job once it is.
 //!
 //! **In scope but not yet bit-exact**: CABAC's I/P-slice macroblock layer
 //! (`mb_type`, `sub_mb_type`, `mb_skip_flag`, `coded_block_pattern`,
@@ -2704,6 +2716,35 @@ pub fn decode_slice_cabac(
 ) -> Result<SliceStats> {
     check_scope(sps, pps, header)?;
     let is_b_slice = matches!(header.kind, SliceKind::B);
+    // Gated, not missing: every piece of B-slice CABAC decode this
+    // function implements below (`mb_type`/`sub_mb_type` binarization,
+    // spatial direct, bi-prediction including implicit weighted mode,
+    // `RefPicList1` construction -- see this module's own "CABAC B
+    // slices" doc bullet, and `crate::reconstruct`/`crate::decoder`) runs
+    // correctly enough to drive real content structurally, but not yet
+    // correctly enough to trust its *pixels*: measured against a real
+    // `libx264 -bf 2 -refs 1` IBBP CABAC stream (implicit weighted
+    // bi-prediction, x264's own default), every I/P frame decodes
+    // byte-exact and every B frame carries a small residual (max
+    // per-sample delta 3-4 across roughly 1-2% of samples -- the
+    // signature of a rounding or weight-derivation difference, not a
+    // desync or a wrong motion vector, per
+    // `planning/AGENT-CONSTRAINTS.md`'s own diagnostic guidance). This
+    // gate is scoped to `decode_slice_cabac` specifically, not
+    // `check_scope` (which `decode_slice_cavlc` also calls): CAVLC never
+    // reconstructs a pixel regardless of slice kind (`decoder.rs` never
+    // calls it for real decode, only `tests/macroblock_layer.rs`'s own
+    // bit-consumption verification does), so a CAVLC B slice was never
+    // the "silently wrong pixels" risk this gate exists for -- only
+    // CABAC's own reconstruction path is. Registered-but-wrong is worse
+    // than refused (`planning/AGENT-CONSTRAINTS.md`), so this stays until
+    // that residual is gone; lifting it is a separate, later commit's job
+    // once it is.
+    if is_b_slice {
+        return Err(Error::Unsupported(
+            "vaco-codec-h264: B slices are implemented but gated pending a byte-exact match              against real encoder output -- see this function's own comment and              docs/codec/vaco-codec-h264.md",
+        ));
+    }
     // Clause 8.4.1.2.1's temporal direct derivation is a materially
     // different algorithm (scaled motion from the colocated picture's own
     // vector, no spatial median predictor, no `colZeroFlag`) that this
@@ -2712,7 +2753,11 @@ pub fn decode_slice_cabac(
     // direct-coded macroblock's neighbours disagree with what temporal
     // scaling would have produced. `direct_spatial_mv_pred_flag` is
     // x264's own default (spatial), so this only refuses the uncommon
-    // case.
+    // case. Unreachable while the blanket B-slice gate above stays in
+    // place (this function returns before `is_b_slice` can be true past
+    // that point) -- kept, not deleted, for the day that gate lifts: this
+    // is a real, independent scope limitation that will matter again the
+    // moment B slices are trusted for their common (spatial-direct) case.
     if is_b_slice && header.direct_spatial_mv_pred != Some(true) {
         return Err(Error::Unsupported(
             "vaco-codec-h264: temporal direct prediction (direct_spatial_mv_pred_flag == 0) is out of scope",
