@@ -1750,3 +1750,36 @@ took one `ls -l`. Announcing "one blocker left" cost nothing to say and was
 wrong the moment it was said.
 
 A refusal is a floor on what is missing, never a ceiling.
+
+## A path that names an architecture is not evidence of an architecture
+
+An agent implementing HEVC inter prediction stopped after one of four stages
+and reported that no usable oracle existed: the HM it found was "an x86-64
+Linux ELF binary that cannot execute on this arm64 Darwin machine", confirmed
+by an `exec format error`. That was all true. It was also not the only HM
+present.
+
+A previous pass had already built HM 18.0 from source here, natively, with
+`-msse4.1` guarded to x86 targets — the procedure `docs/codec/vaco-codec-hevc.md`
+describes in two separate places. That binary lives at:
+
+    .../scratchpad/hm/HM-HM-18.0/bin/umake/clang-21.0/x86_64/release/TAppDecoder
+
+`file` reports it as `Mach-O 64-bit executable arm64`, and it runs. The
+`x86_64` in the path is HM's own umake build-directory naming, not the target
+architecture. The agent tested a different binary, got a true negative, and
+generalised it into "there is no working HM", which was false and cost it three
+stages of work.
+
+Two habits would have caught it:
+
+- **Test the artefact, not its name.** `file` and `--help` take one second
+  each. A directory component is a claim made by a build system, not a fact
+  about the file.
+- **When a tool you need appears to be missing, search for it before concluding
+  it is absent** — especially in a repo whose docs describe having built it.
+  One `find -name TAppDecoder` returned the working binary immediately.
+
+The wider point: "I could not find X" and "X does not exist" are different
+claims, and only the first one is ever supported by having looked in one place.
+Report the first; earn the second.
