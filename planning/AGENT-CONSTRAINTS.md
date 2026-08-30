@@ -1721,3 +1721,32 @@ believing a decoder or a filter works, test at least one case that is:
 When something passes immediately, that is the moment to get suspicious, not
 the moment to stop. Ask what the fixture cannot distinguish, then build the
 fixture that can.
+
+## Closing a refusal tells you nothing about what was behind it
+
+`vaco-codec-hevc` refused stock `libx265` files with "per-CU QP delta is not
+supported". That was true, and closing it was real work: `cu_qp_delta` now
+decodes byte-exact at three frame sizes across three CRFs, and it forced a
+latent bug out of `deblock.rs`, whose `qP_P == qP_Q` shortcut had been correct
+only because no per-CU QP existed to invalidate it.
+
+But "the last blocker" was the orchestrator's phrase, not a measurement. Behind
+that refusal sat a second one — `only I-slices are decoded` — and a stock file
+is `I B B B B P B B B P ...`: twenty-four of its twenty-five frames are inter.
+The decoder emitted 115,200 bytes for a 320x240 clip. Exactly one frame.
+
+The error you can see is the first one the decoder reaches, not the smallest
+one remaining. A decoder that bails at the first unsupported construct reports
+its refusals in bitstream order, which has nothing to do with their size. Every
+one you close can reveal another, and the one behind may be an order of
+magnitude larger — as it was here, where `cu_qp_delta` is a few hundred lines
+and inter prediction is reference-list management, merge/AMVP derivation, and
+sub-pel interpolation.
+
+So: **measure the capability, not the error.** Before claiming a format works,
+run the real file and check what came out — frame count, byte count, every
+plane of every frame. `115200 == 320*240*1.5` was the whole diagnosis, and it
+took one `ls -l`. Announcing "one blocker left" cost nothing to say and was
+wrong the moment it was said.
+
+A refusal is a floor on what is missing, never a ceiling.
