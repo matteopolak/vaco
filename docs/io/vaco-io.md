@@ -68,6 +68,30 @@ one place a byte can be counted twice or skipped.
 On a forward-only source a backward seek outside the buffer is
 `Error::NotSeekable` — never a silent wrong answer.
 
+**Past-EOF seeks are legal and unclamped**, the same as `lseek` on a real
+file: `MediaSource::seek` reports the position it actually reached, which can
+be past the source's own length, and only a subsequent read discovers there
+is nothing there. Every `MediaSource` this crate ships agrees on this,
+`MemorySource` included — it used to clamp to `data.len()`, which silently
+made it disagree with `FileSource` (a bare `File::seek(SeekFrom::Start)`,
+which the OS never clamps either) about where a demuxer ended up after an
+identical seek. A source is still free to clamp *its own* bound for reasons
+that are not "hit real EOF" — `vaco-protocol-wrap`'s `SubfileSource` clamps to
+its window's end, which is that source's own notion of EOF — `seek`'s
+contract only requires that the returned position be honest about where the
+source actually landed.
+
+**`IoContext::skip(n)` is exactly `n` or an error**, never a silent partial
+move. It calls `seek` internally and compares the position that comes back
+against the target; a mismatch — whether from real EOF, a short read-and-
+discard, or a source's own bound — is `Error::UnexpectedEof`, not a rounded-
+down success. Every `io.skip(n)?` call site in the format/demux layer assumes
+its position advanced by precisely `n` afterward; the alternative (returning
+how far it actually moved) would have silently broken all of them, since none
+inspect the return value today. A caller that genuinely wants "as far as
+possible" should call `IoContext::seek` directly and read the position it
+returns, the way `vaco-demux-mpegts`'s resync logic already does.
+
 ### `peek`
 
 `peek(n)` compacts, grows the buffer to `n` if needed (charging the budget), then
