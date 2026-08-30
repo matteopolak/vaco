@@ -867,7 +867,7 @@ picture, and a CABAC slice whose `end_of_slice_flag` fires early (refused
 as `InvalidData` rather than emitting a partial picture — no longer
 reproducible on any clip in the corpus above, but kept).
 
-## Frame threading (`-threads N`), off by default
+## Frame threading (`-threads N`), on by default
 
 `H264Decoder` is split into a serial header/entropy stage and a parallel
 reconstruct/deblock/crop stage, so several pictures decode at once. The full
@@ -888,8 +888,14 @@ scaling are in **`docs/codec/frame-threading.md`**; the crate-side facts are:
   own `rawvideo` on all five regression fixtures at 1, 2, 4 and 8 threads. The
   ordering decisions are all applied in decode order in `collect_one`, not at
   dispatch, which is what makes that true rather than lucky.
-- `-threads 1` (the default) spawns nothing and runs each picture inline at
-  dispatch — the same call sequence as before frame threading existed.
+- `-threads 1` spawns nothing and runs each picture inline at dispatch — the
+  same call sequence as before frame threading existed. The CLI's own default
+  when `-threads` is unstated is `min(available_parallelism, 4)`
+  (`cli::default_thread_count`), not 1 — see `docs/codec/frame-threading.md`'s
+  "Should it be on by default" for the three conditions that gated the flip
+  and the evidence each one closed. `H264Decoder::new` and the bare `Decoder`
+  trait still default to one thread; only the CLI resolves an unstated
+  `-threads` to more than that.
 - **Publication is row-level above one thread.** `reconstruct` and `deblock` run
   interleaved a macroblock row at a time, the filter one row behind, so
   `frame_task` publishes a band of a reference picture as soon as every row it

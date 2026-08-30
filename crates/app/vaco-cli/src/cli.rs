@@ -135,11 +135,12 @@ pub struct Cli {
     /// what that would still take.
     pub complex_filters: Vec<String>,
     /// `-threads N`, the codec-side thread count. `None` when unstated, which
-    /// means one: intra-decoder parallelism is opt-in, because a decoder that
-    /// has not proved itself bit-identical at every count must not be reached
-    /// by default. Zero is taken as one rather than as the reference's
-    /// "auto", since nothing here auto-detects yet and silently choosing a
-    /// count would make the default depend on the machine.
+    /// resolves to [`default_thread_count`] -- **not** the reference's
+    /// "auto": `-threads` unstated still means the same fixed small count on
+    /// every machine, so a run's output provenance never depends on where it
+    /// ran. `-threads 0` is explicitly stated and taken as one, matching the
+    /// reference's own wording for that value rather than its "auto"
+    /// behaviour, since nothing here auto-detects.
     pub threads: Option<usize>,
 }
 
@@ -151,6 +152,44 @@ impl Cli {
             .of_kind(GroupKind::Output)
             .find(|g| g.index == index)
     }
+
+    /// The thread count a run actually uses: `-threads N` if stated
+    /// (including `-threads 1`, which forces serial), else
+    /// [`default_thread_count`].
+    #[must_use]
+    pub fn thread_count(&self) -> usize {
+        self.threads.unwrap_or_else(default_thread_count)
+    }
+}
+
+/// `-threads` unstated: `min(available_parallelism, 4)`.
+///
+/// H.264 frame threading is bit-identical to the serial decoder at every
+/// thread count (`docs/codec/frame-threading.md`), but the count itself is
+/// deliberately **not** `available_parallelism()` alone. Two reasons, both
+/// measured on the row-granularity decoder that made this the default:
+///
+/// * **The scaling curve is already nearly flat past four.** 3.37x at four
+///   threads against 3.78x at eight on a 4K all-P fixture, for roughly double
+///   the memory -- eight buys 12% more speed for 100% more concurrent
+///   pictures in flight.
+/// * **The memory ceiling would otherwise be machine-dependent.** Each
+///   in-flight picture is charged exactly to `Limits::max_alloc_total`
+///   (`docs/codec/frame-threading.md`'s "Memory" section), so the thread
+///   count is the one knob that decides how many multiply that charge.
+///   `available_parallelism()` alone would make that ceiling depend on the
+///   core count of whatever machine happens to run the decode, which is
+///   exactly the kind of machine-dependence this decoder's own determinism
+///   claim exists to avoid.
+///
+/// Falls back to one if the platform cannot report a core count at all
+/// (`std::thread::available_parallelism`'s own documented failure case,
+/// observed on some containers and restricted sandboxes) -- the same
+/// single-threaded call sequence this decoder always had, never a hang or an
+/// error over a knob nobody turned.
+#[must_use]
+pub fn default_thread_count() -> usize {
+    std::thread::available_parallelism().map_or(1, |n| n.get().min(4))
 }
 
 /// Whether argv asks for the banner to be printed.

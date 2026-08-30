@@ -574,10 +574,20 @@ threading is untouched). Today that is `vaco-codec-h264` and nothing else — se
 it does not appear in `-h full` and was never extracted; vaco has no per-codec
 option store, so `-threads N` before or after `-i` both mean "N threads for
 every codec in this run". `-threads:v:0 4` is not accepted. `0` means one, not
-the reference's "auto": nothing here auto-detects, and a machine-dependent
-default would make a run's output provenance machine-dependent too. A
+the reference's "auto": nothing here auto-detects a count from `0`. A
 non-numeric value is rejected through the option's own declared
 `ValueKind::Int` grammar rather than quietly meaning 1.
+
+**Left unstated, `-threads` resolves to `cli::default_thread_count()` —
+`min(available_parallelism, 4)`**, not the unstated-means-one behaviour this
+crate had before H.264 frame threading's row-granularity pass and its own
+memory/fuzzing conditions closed (`docs/codec/frame-threading.md`'s "Should it
+be on by default"). The bound is fixed rather than `available_parallelism()`
+alone specifically so the *memory* ceiling — a function of how many pictures
+can be in flight at once — stays machine-independent even though `-threads`
+itself is not stated; a run's output is still byte-identical at every thread
+count regardless. `-threads N` always overrides the default, including
+`-threads 1` to force the exact single-threaded call sequence.
 
 ## Configuration
 

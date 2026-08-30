@@ -74,7 +74,13 @@ static FFMPEG_OPTIONS: &[OptDesc] = &[
     // every codec in this run", which is how the reference behaves for the
     // overwhelmingly common case of stating it once. Per-stream
     // (`-threads:v:0`) is not implemented -- see `docs/app/vaco-cli.md`.
-    o("threads", Some("count"), bit::HAS_ARG | bit::GLOBAL, ValueKind::Int, "decoding threads per codec (1 = single-threaded)"),
+    //
+    // Default is `min(available_parallelism, 4)`, not the reference's "auto"
+    // (`0`) -- `crate::cli::default_thread_count`'s own doc has the measured
+    // reason a fixed small bound was kept over the core count. `-threads N`
+    // always overrides it in both directions, including `-threads 1` to
+    // force single-threaded.
+    o("threads", Some("count"), bit::HAS_ARG | bit::GLOBAL, ValueKind::Int, "decoding threads per codec (default: min(cores, 4); 1 = single-threaded)"),
     o("filter_threads", None, bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Str, "threads for simple filter graphs"),
     o("filter_buffered_frames", None, bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Int, "frames a filter graph may buffer"),
     o("filter_complex", Some("graph_description"), bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Custom, "define a complex filter graph"),

@@ -2,15 +2,18 @@
 
 ## What it is
 
-Several pictures decoding at once inside one decoder, opt-in through
+Several pictures decoding at once inside one decoder, controlled by
 `-threads N`, with output bit-identical to the single-threaded decoder at every
 thread count. Implemented for H.264 (`vaco-codec-h264`); the framework it is
 built on (`vaco-codec-core`) is codec-agnostic, so HEVC and VP9 can adopt it
 without a second mechanism.
 
-**It is off by default.** `-threads` unstated, or `-threads 1`, spawns no
-threads at all and runs the identical call sequence the decoder ran before this
-existed. See "Should it be on by default" below for the measured reason.
+**It is on by default, at `min(available_parallelism, 4)` threads.**
+`-threads N` always overrides the default in both directions; `-threads 1`
+still forces the exact single-threaded call sequence the decoder ran before
+this existed, and spawns no threads at all. See "Should it be on by default"
+below for the three conditions this default was made contingent on and the
+evidence each one closed.
 
 ## How it works
 
@@ -214,10 +217,26 @@ suggest.** At 4K a coded picture is 12.4 MB and the cropped output frame is
 about the same, but `SliceStats::macroblocks` is `MbSummary` × 32,400
 macroblocks at 1,888 bytes each — **59 MiB**, five times the two sample buffers
 together, because every macroblock carries its full residual and its sixteen 4×4
-motion blocks. It is charged. The two sample buffers are charged as two whole
-coded pictures rather than exactly — one for the reconstruction planes, one
-covering the cropped frame's row-stride padding — a deliberate over-estimate and
-the one figure here that is not a measurement.
+motion blocks. It is charged, and exactly: `mb_bytes` is
+`stats.macroblocks.len() * size_of::<MbSummary>()`, the real length of the
+`Vec` that ships with the task.
+
+**The two sample buffers are each charged their own real allocation, not a
+stand-in.** This used to be two whole coded pictures — one for the
+reconstruction planes (itself exact) and a second, identical charge standing
+in for the cropped output frame, a deliberate over-estimate tolerable only
+while `-threads` was opt-in (`decoder::coded_picture_bytes(mbs_wide,
+mbs_high).saturating_mul(2)`). A default thread count multiplies whatever
+slack is in a per-picture charge by `threads + 1`, so `decoder::
+output_frame_bytes` now computes the cropped `yuv420p` frame's real byte total
+via the same `PixFmt::plane_layout` call `Frame::alloc_video` itself makes —
+display size, not coded size, each row rounded up to `vaco_pool::ALIGN`. On
+content whose crop is small relative to the macroblock grid (the common case:
+`uhd.mp4`'s 3840x2160 has no crop at all) this is close to what it replaced;
+on a narrow frame whose stride padding is large relative to its width it can
+be *larger* than the old estimate. Both are expected: the point was never to
+charge less, it was to charge the real number instead of a multiplier chosen
+to be safely conservative.
 
 **Guard rows are the only thing row granularity adds, and they are small.** A
 banded DPB entry carries 8 guard rows per 32-row band, so its sample planes cost
@@ -226,6 +245,19 @@ macroblock array per in-flight picture. Measured with `/usr/bin/time -l` on the
 4K fixture, same session: peak RSS at eight threads is 4192 MiB at picture
 granularity and 4304 MiB at row granularity, a 2.7% difference, and one thread
 is 3614 MiB either way because at one thread there are no guard rows at all.
+
+**Peak RSS at the exact charge, same fixture, `-threads 1` and `-threads 4`**
+(`/usr/bin/time -l`, decode to `rawvideo`, real memory rather than the budget's
+own accounting): 3617 MiB at one thread, 4076 MiB at four. The one-thread
+figure is unchanged from the over-estimate era (3614 MiB, above) because at
+one thread there is exactly one picture in flight regardless of what a task's
+charge *says* it costs — the charge only ever changes *when* `-threads N`'s
+own backpressure kicks in, never how much a single in-flight picture actually
+allocates. `Limits::permissive`'s 1 GiB ceiling is nowhere near either number
+at four threads, so the exact charge changed nothing observable here; its
+effect is entirely on how many pictures a given `-max_alloc` allows in flight
+under real pressure (see `a_budget_too_small_for_the_thread_count_costs_speed_not_the_decode`,
+which still passes unmodified).
 
 **Memory pressure is backpressure, not a failed decode.** Nine in-flight 4K
 pictures are ~756 MiB against `Limits::permissive`'s 1 GiB — it fits by margin,
@@ -242,7 +274,7 @@ it honestly — waiting cannot change that.
 
 | knob | where | default |
 |---|---|---|
-| threads | `-threads N` (CLI), `Decoder::set_thread_count` (API) | 1 |
+| threads | `-threads N` (CLI), `Decoder::set_thread_count` (API) | `min(available_parallelism, 4)` via the CLI (`cli::default_thread_count`); the API defaults to 1, unstated, at the `Decoder` trait level |
 | pictures the serial half may run ahead by | `H264Decoder::max_in_flight` | `threads + 1`, or 1 at one thread |
 | the ceiling that actually binds under pressure | `Limits::max_alloc_total` (`-max_alloc`) | 1 GiB (`Limits::permissive`, the CLI default) |
 | band height / guard rows | `decoder::ROW_BAND_HEIGHT` / `ROW_BAND_GUARD`, via `PictureSpec` | 32 / 8 above one thread; one band, no guard, at one thread |
@@ -263,38 +295,49 @@ full tables, the ffmpeg-relative ratios and the memory numbers.
 
 `-threads` is a **global** CLI option here, not the reference's per-stream
 `AVCodecContext` one: vaco has no per-codec option store yet, and stating it once
-is the overwhelmingly common use. `-threads:v:0 4` is not accepted. Zero means
-one, not the reference's "auto" — nothing here auto-detects, and a default that
-depended on the machine would make a run's output provenance depend on it too.
+is the overwhelmingly common use. `-threads:v:0 4` is not accepted. `-threads 0`
+means one, not the reference's "auto" — nothing here auto-detects a count from
+`0`. Leaving `-threads` unstated is different from stating `0`: unstated
+resolves to `min(available_parallelism, 4)` (see "Should it be on by default"
+below), while `0` is a stated value and is taken literally as one, matching the
+reference's own wording for that value.
 
 ## Should it be on by default
 
-**Not yet, and the reason is no longer "it does not help".** It helps a great
-deal: 3.07x at four threads on the all-P 4K clip and 3.00x on the B-pyramid one,
-where the previous, picture-granularity answer was 1.26x and 2.00x. The first of
-the three conditions the picture-granularity pass named — "row granularity
-should land first" — is met, and the content shape that dominates this
-project's corpus is exactly the one that now benefits most.
+**Yes, as of this pass, at `min(available_parallelism, 4)`.** It helps a great
+deal: 3.07–3.37x at four threads on the all-P 4K clip and 3.00x on the
+B-pyramid one, where the picture-granularity answer this project shipped
+first was 1.26x and 2.00x. The row-granularity pass closed the condition two
+earlier passes both left open ("row granularity should land first"), and the
+content shape that dominates this project's corpus — long serial P chains —
+is exactly the one that benefits most from it.
 
-Three things should still be true first, and none of them is "more confidence":
+Three conditions were named before the default could flip, and all three are
+now closed:
 
-1. **The per-picture budget charge should be exact.** It is still a deliberate
-   2x over-estimate (two whole coded pictures, one of them standing in for the
-   cropped frame's row-stride padding). That is fine while the feature is
-   opt-in and wrong once it is not, because a default thread count multiplies it
-   by `threads + 1`. Unchanged from the previous pass's own condition.
-2. **The fuzz target should decode at more than one thread.** `h264_decode`
-   never calls `set_thread_count`, so the row-progress path — the publisher, the
-   per-row waits, `PlaneView::block`'s banded arm — has **no fuzz coverage at
-   all** today. It is covered by the repository's own invariance tests and by
-   many repetitions against the ffmpeg oracle, which is not the same thing.
-   Making a decode path implicit while nothing fuzzes it is the wrong order.
-3. **The count must be a fixed small bound, not `ncores`.** `min(ncores, 4)` is
-   where the measured curve stops being nearly linear, and eight buys another
-   15–25% for roughly 40% more CPU. Output is byte-identical at every thread
-   count, so this does not make a decode machine-dependent — but the *memory*
-   ceiling would be, and `min(ncores, 4)` bounds it at five in-flight pictures,
-   about 420 MB at 4K against `Limits::permissive`'s 1 GiB.
+1. **The per-picture budget charge is exact.** It used to be a deliberate 2x
+   over-estimate (two whole coded pictures, one of them standing in for the
+   cropped frame's row-stride padding) — tolerable while the feature was
+   opt-in, and wrong once a default thread count multiplies whatever slack is
+   in it by `threads + 1`. `decoder::output_frame_bytes` now computes the real
+   cropped-frame byte total via the same `PixFmt::plane_layout` call
+   `Frame::alloc_video` itself makes, in place of the second coded-picture
+   stand-in — see "Memory" above for the arithmetic and the peak-RSS
+   measurement at one and four threads.
+2. **The row-progress path is fuzzed.** `h264_decode_threaded` (new)
+   decodes each input at one thread and at a small thread count drawn from
+   the input itself (1..=4) and asserts the two outputs are byte-identical —
+   a determinism check, not merely "does not panic", which is what actually
+   exercises `ProgressPicture`'s band publication, `TaskCtx::wait_rows`, and
+   the `Banded` arm of `RefPlane`. 106,279 executions over 321 seconds found
+   no divergence and no crash (`fuzz/fuzz_targets/h264_decode_threaded.rs`).
+3. **The count is a fixed small bound, not `available_parallelism()` alone.**
+   `min(available_parallelism, 4)` is where the measured curve stops being
+   nearly linear (3.37x at four against 3.78x at eight on 4K, for roughly
+   double the memory), and it keeps the memory ceiling machine-independent —
+   `available_parallelism()` alone would make how many pictures fit under a
+   given `-max_alloc` depend on the core count of whatever machine happens to
+   run the decode. See `cli::default_thread_count`'s own doc.
 
 ## How to change it
 
