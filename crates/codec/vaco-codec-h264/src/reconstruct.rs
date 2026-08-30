@@ -2579,51 +2579,32 @@ mod tests {
     /// drift by roughly two orders of magnitude (max sample error 5-15,
     /// growing every frame, down to 1-2 for the first several frames).
     ///
-    /// **Not yet closed**: a small residual remains from frame 1 onward
-    /// (observed max absolute sample error up to 8 by frame 24 of 25,
-    /// concentrated at specific macroblock-boundary edges whose two sides
-    /// have different partitions/motion, not spread across the picture).
-    /// Traced one instance by hand to clause 8.7.2.1's `bS = 2` case at a
-    /// vertical macroblock edge between a two-partition P16x8 macroblock
-    /// (top half `mv = (8, 0)`, bottom half `mv = (0, 0)`, both QP-verified
-    /// against `ffmpeg -debug qp`) and a neighbour with real residual in
-    /// the exact 4x4 block this module's own `boundary_strength` selects
-    /// -- every input this investigation checked (macroblock QP, `bS`
-    /// itself, the shared `ALPHA_TABLE`/`BETA_TABLE`/`TC0_TABLE`, the
-    /// pre-filter sample values via the byte-exact undeblocked reference)
-    /// matched a correct decode, yet the filtered output still differs by
-    /// 1-2 from `ffmpeg`'s own. Not isolated further within this
-    /// dispatch's own time-box; the shape (tiny, edge-adjacent, present
-    /// only where a `filterSamplesFlag`-style threshold is plausibly
-    /// borderline) points at a rounding or activity-condition difference
-    /// in `filter_luma_line`/`EdgeThresholds::samples_pass`'s own
-    /// borderline behaviour rather than a wrong `bS`, but that is a
-    /// hypothesis, not a confirmed finding. Circumstantial support for
-    /// that read: `frame 0` here (an intra-only slice, `bS` always 3 or
-    /// 4, clause 8.7.2.4's strong filter, which does not use `tC0` at
-    /// all) is byte-exact, while `cabac_i_only_reconstructs_without_error_and_mostly_matches_ffmpeg`
-    /// just above -- a *different* fixture that does exercise `bS < 4`
-    /// on intra content -- already documents a real, independently-found
-    /// `TC0_TABLE` transcription error (`vaco_codec_dsp_deblock::tables`'s
-    /// own doc) and a remaining, deliberately-not-chased ~0.2% residual
-    /// in the same tC0-clipped branch after fixing it. This test's own
-    /// `bS = 1`/`bS = 2` edges reach exactly that branch too, so the same
-    /// table (or the same clipping arithmetic around it) is the most
-    /// likely shared cause, though this was not confirmed by finding a
-    /// second wrong table entry the way the first one was.
+    /// **Closed, and the defect was in this harness, not in the filter.**
+    /// The residual this doc spent a round chasing -- "up to 8 by frame
+    /// 24, concentrated at specific macroblock-boundary edges whose two
+    /// sides have different partitions/motion" -- came from passing `&[]`
+    /// as `deblock_picture_luma`/`_chroma`'s `ref_list0_poc`. Clause
+    /// 8.7.2.1 compares reference *pictures*, and with an empty list
+    /// `crate::deblock`'s own `ref_poc` answers `None` for every
+    /// `ref_idx`, so "the two sides use a different set of reference
+    /// pictures" is unsatisfiable and every such edge comes out `bS = 0`
+    /// where the answer is 1. The real decoder (`decoder.rs`) has always
+    /// passed real POCs, and decodes this same fixture byte-exact through
+    /// the registered `H264Decoder` -- which is why the hypothesis this
+    /// doc used to record (a rounding or activity-condition difference in
+    /// `filter_luma_line`/`EdgeThresholds::samples_pass`, or a second
+    /// wrong `TC0_TABLE` entry) never found anything: there was nothing
+    /// wrong there to find. The harness now builds one distinct identity
+    /// per `RefPicList0` position and this assertion passes byte-exact on
+    /// all 25 frames, all three planes.
     ///
-    /// `#[ignore]`d rather than loosened: the underlying defect (missing
-    /// chroma/inter deblocking) is fixed and covered by the byte-exact
-    /// frame-0 assertion below; this test's own full-stream assertion
-    /// stays at the real bar (byte-exact) so it fails loudly, honestly,
-    /// and specifically on the still-open residual once someone picks it
-    /// up, rather than passing against a threshold chosen to match
-    /// today's output.
+    /// Third instance of the shape `docs/codec/vaco-codec-h264.md` and
+    /// `planning/E2E-GAPS.md` already record: **a harness that measures
+    /// the wrong thing outlives every hypothesis you form about the code
+    /// it is measuring.** Worth checking a failing internal-API test
+    /// against the same fixture through the public decoder before
+    /// believing the failure.
     #[test]
-    #[ignore = "frame 0 (I slice) is byte-exact; P frames carry a small \
-                (max |delta| <= 8 through frame 24 of 25) residual at \
-                specific macroblock-boundary edges -- see this test's own \
-                doc for what was checked and ruled out"]
     fn cabac_ip_simple_full_deblocking_matches_ffmpegs_real_decode() {
         use vaco_bitstream::{BitReader, annexb};
         use vaco_codec_cabac::CabacDecoder;
@@ -2685,6 +2666,23 @@ mod tests {
                             .map(|p| RefPicturePlanes { luma: &p.luma, cb: &p.cb, cr: &p.cr })
                             .collect()
                     };
+                    // Clause 8.7.2.1 compares reference *pictures*, so
+                    // `deblock_picture_luma`/`_chroma` need one distinct
+                    // identity per `RefPicList0` position -- the real
+                    // decoder passes POCs (`decoder.rs`). Passing `&[]`
+                    // here, as this harness used to, makes
+                    // `crate::deblock`'s own `ref_poc` answer `None` for
+                    // *every* `ref_idx`, so "the two sides use different
+                    // reference pictures" can never be true and every such
+                    // edge comes out `bS = 0` where the answer is 1. The
+                    // values only have to be distinct and stable per list
+                    // position, never real POCs.
+                    #[allow(
+                        clippy::cast_possible_truncation,
+                        clippy::cast_possible_wrap,
+                        reason = "a test harness's own list index, bounded by this fixture's 25 pictures"
+                    )]
+                    let ref_list0_poc: Vec<i32> = (0..ref_list0.len()).map(|i| -(i as i32) - 1).collect();
                     let mut pic = reconstruct_picture(
                         &stats.macroblocks,
                         mbs_wide,
@@ -2708,7 +2706,7 @@ mod tests {
                         slice_header.disable_deblocking_filter_idc,
                         slice_header.slice_alpha_c0_offset_div2,
                         slice_header.slice_beta_offset_div2,
-                        &[],
+                        &ref_list0_poc,
                         &[],
                     )
                     .unwrap();
@@ -2724,7 +2722,7 @@ mod tests {
                             slice_header.disable_deblocking_filter_idc,
                             slice_header.slice_alpha_c0_offset_div2,
                             slice_header.slice_beta_offset_div2,
-                            &[],
+                            &ref_list0_poc,
                             &[],
                         );
                     }

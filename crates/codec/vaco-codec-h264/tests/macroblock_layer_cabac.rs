@@ -276,34 +276,36 @@ fn every_slice_in_a_real_multiref_cabac_stream_consumes_exactly_its_own_bits() {
 /// 4, `binIdx >= 2` is fixed at 5. Ruled out, not merely unchecked. Root
 /// cause not isolated further within this dispatch's own time-box.
 ///
-/// **Re-measured after the B-slice round's `decode_sub_mb_pred_cabac`
-/// fix** (that function's own doc: `ref_idx`/`mvd` were read interleaved
-/// per 8x8 quadrant instead of clause 7.3.5.2's four whole-macroblock
-/// passes, a bug invisible for a single list but flagged at the time as
-/// the likely cause of exactly this desync). It was a real, measurable
-/// improvement, not a no-op — but not the fix: this corpus now stops
-/// short on 5 of 50 slices, not 7 (slice indices 17, 24, 25, 29, 33 today
-/// — a different, smaller set than the seven this doc's own text above
-/// names, meaning some previously-short slices, including the original
-/// "slice 4" repro this doc describes, now visit every macroblock
-/// cleanly). New smallest shortfall: slice 33, 33 of 36 macroblocks
-/// (`num_ref_idx_l0_active_minus1 == 3` on every remaining failure,
-/// unchanged from before). `decode_sub_mb_pred_cabac`'s own fix stands on
-/// its own merits (a real clause 7.3.5.2 ordering bug, confirmed against
-/// primary text, independent of whether it fully explained this desync)
-/// — but a second, still-unlocated defect clearly remains for
-/// `num_ref_idx_l0_active_minus1 >= 2` content. Not re-chased further
-/// this round; recorded honestly rather than left at the old, now
-/// inaccurate 7/50 figure.
+/// **Resolved.** This test now passes, un-ignored, on all 50 slices.
+///
+/// The `ctxIdxInc` suspicion in the paragraph above was right in kind and
+/// wrong in place: `decode_ref_idx`'s own binarisation really is correct
+/// (`binIdx == 0` neighbour-derived, 1 fixed at 4, `>= 2` fixed at 5), and
+/// it was the *neighbour-derived increment* — clause 9.3.3.1.1.6's own
+/// `condTermFlagN` — that had two independent defects, neither reachable
+/// at `num_ref_idx_lX_active_minus1 == 0` because `ref_idx_lX` is then not
+/// in the bitstream at all:
+///
+/// - `decode_two_partitions_cabac` did not publish partition 0's
+///   `ref_idx` into the motion grid before partition 1's `ctxIdxInc` was
+///   derived from it, and clause 6.4.11.7 makes partition 0 of the *same*
+///   macroblock partition 1's neighbour for a 16x8/8x16 shape.
+/// - A `P_Skip`/`B_Skip` or direct-predicted neighbour must contribute
+///   `condTermFlagN = 0` (skip by name, direct through
+///   `predModeEqualFlag`); `MvInfo` had no way to say "this block is
+///   direct", since a direct block's derived motion is deliberately stored
+///   as an ordinary `L0`/`L1`/`Bi` prediction. `MvInfo::direct_or_skip`
+///   is that missing bit.
+///
+/// The earlier `decode_sub_mb_pred_cabac` ordering fix (clause 7.3.5.2's
+/// four whole-macroblock passes) moved this corpus from 7 short slices to
+/// 5 and stands on its own merits; these two took it to 0. Both were
+/// localised by diffing a per-bin `(pStateIdx, valMPS, bit)` trace against
+/// an identically instrumented JM 19.1 — the first divergence in each case
+/// was a single `ref_idx_lX` bin whose decoded *value* was right and whose
+/// *context* was wrong, which is exactly why so much content decoded
+/// byte-exact before either one fired.
 #[test]
-#[ignore = "real, reproducible desync on multi-reference P slices, improved \
-but not resolved by this round's decode_sub_mb_pred_cabac ordering fix -- \
-now 5 of 50 slices in cabac_ip_multiref.264 stop short of their own \
-picture's macroblock count (was 7 of 50 before that fix; slice indices \
-17/24/25/29/33 today, a different and smaller set; slice 33: 33/36, the \
-new smallest shortfall and best next repro target); every failing slice \
-still has num_ref_idx_l0_active_minus1 >= 2; see this test's own doc for \
-what was ruled out and what changed this round"]
 fn every_slice_in_a_real_multiref_cabac_stream_visits_every_macroblock() {
     let data: &[u8] = include_bytes!("fixtures/cabac_ip_multiref.264");
     let mut params = ParameterSets::new();

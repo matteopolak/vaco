@@ -124,20 +124,27 @@ fn resolves_cavlc_from_a_real_x264_cavlc_stream() {
     assert!(msg.contains("CAVLC"), "message did not name CAVLC: {msg}");
 }
 
-/// `check_scope`'s own B-slice gate (`crate::mb::decode_slice_cabac`),
-/// added *after* full CABAC B-slice decode already landed: measured
-/// against a real `libx264 -bf 2 -refs 1` IBBP stream, every I/P frame
-/// decoded byte-exact but every B frame carried a small residual (max
-/// per-sample delta 3-4 across roughly 1-2% of samples) not yet
-/// root-caused -- `planning/AGENT-CONSTRAINTS.md`'s "registered-but-wrong
-/// is worse than absent" rule, so the feature stays committed but gated
-/// rather than reachable. This test is the regression that keeps the gate
-/// itself from silently disappearing: it decodes the fixture's real I and
-/// P slices (proving the gate is not a blanket "this fixture never
-/// decodes" refusal) and only then feeds the first real B slice, which
-/// must still fail.
+/// The B-slice gate is gone: a real `libx264` IBBP CABAC stream's first B
+/// slice now decodes instead of being refused.
+///
+/// This test used to assert the *refusal*. The gate went in when every I
+/// and P frame of a real `-bf 2 -refs 1` stream matched plain `ffmpeg`
+/// byte for byte and every B frame carried a small residual (max
+/// per-sample delta 3-5 over 1-2% of samples) --
+/// `planning/AGENT-CONSTRAINTS.md`'s "registered-but-wrong is worse than
+/// absent". The residual was a clause 8.7.2.1 boundary-strength input
+/// (`MvInfo::ref_idx_l1`), with two `ctxIdxInc` defects behind it; the
+/// end-to-end byte-exactness measurement that justified lifting the gate
+/// lives in `crate::mb::decode_slice_cabac`'s own comment and
+/// `docs/codec/vaco-codec-h264.md`, because it needs the `ffmpeg` binary
+/// and 480 encoded clips and so cannot live in a unit test.
+///
+/// What this test still pins down is narrower and worth keeping: the
+/// fixture's I and P slices decode, *and* its first B slice decodes too --
+/// so a future regression that re-refuses B slices (or that breaks I/P
+/// while "fixing" B) fails here rather than only in a sweep nobody runs.
 #[test]
-fn b_slices_are_gated_pending_a_byte_exact_match() {
+fn a_real_b_slice_now_decodes() {
     let data = include_bytes!("fixtures/cabac_ipbb.264");
     let (extradata, i_slice) = nth_slice_and_extradata(data, 0);
     let (_, p_slice) = nth_slice_and_extradata(data, 1);
@@ -151,17 +158,12 @@ fn b_slices_are_gated_pending_a_byte_exact_match() {
     let _ = d.receive_frame();
 
     // `unwrap`, not `expect` (this file's own `#![allow]` covers the
-    // former, not the latter): the fixture's own P slice must still
-    // decode -- this test's own point is that only B is gated.
+    // former, not the latter).
     let p_pkt = packet(&p_slice);
     d.send_packet(Some(&p_pkt)).unwrap();
 
     let b_pkt = packet(&b_slice);
-    let err = d.send_packet(Some(&b_pkt)).unwrap_err();
-    let Error::Unsupported(msg) = err else {
-        panic!("expected Unsupported for a B slice, got {err:?}");
-    };
-    assert!(msg.contains("B slices"), "message did not name the B-slice gate: {msg}");
+    d.send_packet(Some(&b_pkt)).unwrap();
 }
 
 #[test]

@@ -158,14 +158,13 @@ reads is kept beyond what bit consumption needs.
 Within #419's own scope, explicitly out rather than merely unimplemented
 (see `mb.rs`'s own module doc for the full list and reasons):
 
-- **CABAC's B-slice `mb_type`/`sub_mb_type`** (Table 9-27/9-28's B column)
-  — I and P/SP slices are implemented (`decode_slice_cabac`); B is refused
-  outright. Table 9-27's bin string, unlike every other binarisation in
-  this crate, does not decompose into a clean arithmetic formula the way
-  Table 9-26 (I slices) and the P/SP table do, and hand-deriving it
-  bit-by-bit from the primary text without a second, independent way to
-  check the result risked exactly the class of silent, undetectable error
-  this whole line of work exists to avoid.
+- ~~**CABAC's B-slice `mb_type`/`sub_mb_type`**~~ — **implemented and
+  byte-exact** as of the "B slices, multi-reference and `b-pyramid`" round
+  below, which is also where the reasoning that used to live in this bullet
+  (Table 9-27's bin string does not decompose into a clean arithmetic
+  formula, so it was transcribed from JM 19.1 and bit-traced rather than
+  hand-derived) is now recorded. What is still refused on the B path is
+  **temporal direct** (`direct_spatial_mv_pred_flag == 0`).
 - **CABAC's 8x8 residual category** (`ctxBlockCat` 5, `transform_size_8x8_flag`)
   — same Main-profile-corpus reason as CAVLC's; chroma DC (`ctxBlockCat` 3)
   *is* implemented on both the residual (`cabac_residual.rs`) and
@@ -695,6 +694,178 @@ only place that touches `vaco-parse-h264`; wiring `mb::decode_slice_cavlc`/
 #420's job, once prediction and reconstruction exist to do something with
 what it reads — and CABAC's wiring should wait for the divergence above to
 be resolved first.
+
+## Round: B slices, multi-reference and `b-pyramid` — a fully stock `libx264` file
+
+**Result, stated the way it should be: 160 of 160 clips byte-exact at
+x264's own defaults, no encoder flags at all** — B frames, `b-pyramid`,
+three reference frames, weighted P — 25 frames per clip, per plane per
+frame byte for byte against plain `ffmpeg`, over ten `lavfi` sources
+(`life`, `mandelbrot`, `zoneplate`, `cellauto`, `sierpinski`, `testsrc`,
+`testsrc2`, `smptehdbars`, `rgbtestsrc`, `gradients`) x eight sizes
+(176x144 through 1280x720, including 322x242 for cropping) x Main and
+High. The same corpus is 160/160 at `-bf 0 -refs 1` (unchanged) and
+160/160 at `-bf 3 -refs 1`. 854x480 `yuvtestsrc`, 1920x1080 `mandelbrot`
+and 178x146 `testsrc2` are byte-exact in both profiles at both `-bf 0
+-refs 1` and full defaults. It was effectively 0 before this round: the
+first B slice was refused.
+
+Four defects, one of them the gated B-frame residual, three of them the
+long-standing multi-reference CABAC desync and its `b-pyramid` companion.
+
+### 1. `bS` read a reference index for a list the block never used
+
+`MvInfo::ref_idx_l0`/`ref_idx_l1` returned the raw stored array entry. That
+entry is `0` — a valid reference index — for a list the partition does not
+predict from, not clause 8.4.1.3.2's `refIdxLX = -1`. So
+`deblock::boundary_strength` resolved a uni-predicted B partition's unused
+list to `RefPicList1[0]` and treated the block as bi-predicted, answering
+clause 8.7.2.1's "do the two sides use the same set of reference pictures"
+against a picture the block never referenced. A handful of edges came out
+`bS = 1` where the answer is `0`, or the reverse.
+
+A P slice hid it completely: `RefPicList1` is empty there, so the raw index
+never resolves to anything. That is exactly the reported signature — every
+I and P frame byte-exact, every B frame off by max 3-5 over 1-2% of
+samples.
+
+**How it was localised, in one step:** re-encode the same source with
+`--no-deblock` and decode again. Every frame byte-exact. That single
+experiment excluded implicit weighted bi-prediction, spatial direct motion
+derivation, dequantisation, the inverse transform and chroma-DC
+distribution *together*, and pointed at clause 8.7 — rather than narrowing
+one candidate at a time. The prior round's leading hypothesis (a chroma-DC
+residual-level divergence) was not the cause; nor was implicit weighting,
+which had already been ruled out.
+
+### 2. A B slice's `mb_type` intra suffix read its first bin twice
+
+Table 9-27's B rows make `1 1 1 1 0 1` the entire "Intra, prefix only"
+prefix, and Table 9-11 gives the suffix `ctxIdxOffset == 32` — **the same
+ctxIdx the prefix's last bin uses**. `cabac_mb_tables::MB_TYPE_B`'s own doc
+already said so ("index 5 here (ctxIdx 32) is the shared context between
+the prefix's last bin and the suffix's first") and the table already
+carried ctxIdx 33..=35 in rows 6..=8, which nothing had ever read.
+`decode_mb_type_b_prefix`'s closing `act_sym += bit(5)` *is* the suffix's
+`binIdx == 0` (JM's `readMB_typeInfo_CABAC_b_slice` reads it in the same
+place), but the `NeedsIntraSuffix` arm then called the whole of
+`decode_mb_type_intra_suffix`, which starts by reading that bin again — at
+ctxIdx 17, P/SP's suffix offset. One extra bin, and the rest of the slice
+is out of step.
+
+Only an intra macroblock inside a B slice reaches it, which is why plenty
+of B content was byte-exact without ever firing it. `-bf 3` was enough to
+make it common: 58 of 160 clips passed before the fix, 160 of 160 after.
+
+### 3. `ref_idx_lX`'s `ctxIdxInc` missed two of clause 9.3.3.1.1.6's own zero-conditions
+
+Neither is reachable at `num_ref_idx_lX_active_minus1 == 0`, where
+`ref_idx_lX` is not in the bitstream at all. Together they *are* the
+multi-reference CABAC desync `tests/macroblock_layer_cabac.rs` had carried
+as an open defect for several rounds (7 of 50 slices, then 5 of 50, now
+0 of 50 — that test is un-ignored).
+
+- **Partition 0 was not published before partition 1 read it.** For a
+  16x8/8x16 macroblock, clause 6.4.11.7 makes partition 1's neighbour
+  partition 0 of the *same* macroblock, but
+  `decode_two_partitions_cabac`'s `ref_idx` pass wrote nothing to the
+  motion grid until both values were read, so the lookup saw a
+  never-written `MvInfo::default()`. The `mvd` pass in the same function
+  and the sub-macroblock path both already had the immediate-write rule,
+  with a comment explaining exactly why; the `ref_idx` pass did not.
+- **A skipped or direct neighbour must contribute `condTermFlagN = 0`** —
+  skip by name, direct through `predModeEqualFlag`, since
+  `MbPartPredMode(B_Direct_16x16, 0)` and `SubMbPredMode(B_Direct_8x8)` are
+  `Direct`, which is neither `Pred_LX` nor `BiPred`. A direct block's
+  derived motion is deliberately stored as an ordinary `L0`/`L1`/`Bi`
+  prediction (clause 8.4.1.3's neighbour derivation for a later
+  macroblock's MV prediction reads it that way), so `pred` cannot express
+  this. `MvInfo::direct_or_skip` is the bit that can.
+
+### 4. Adaptive reference-picture marking (clause 8.2.5.4) was not implemented
+
+`decoder.rs` always ran clause 8.2.5.3's sliding window. x264 emits
+`adaptive_ref_pic_marking_mode_flag == 1` for every `b-pyramid` stream —
+its default — to unmark the pyramid's own reference B picture with
+`memory_management_control_operation == 1`. That is never the picture the
+sliding window would evict: the window always takes the smallest
+`FrameNumWrap`, and the B reference is *newer* than the anchor it sits
+between. So the decoder evicted the wrong picture, `RefPicList0` shifted,
+and every later inter macroblock predicted from the wrong reference.
+
+This one has no CABAC signature at all — nothing in the parse depends on
+the DPB — so it shows up as large, structured, accumulating pixel error
+with a perfectly clean bit trace. It was found by dumping each slice's
+resolved `RefPicList0`/`RefPicList1` as POCs from both this decoder and JM
+and diffing: the two agreed for nine pictures and then JM's list 0 held a
+POC this decoder's DPB no longer had.
+
+MMCO 1 and 5 are implemented. 2/3/4/6 are long-term reference management,
+which this decoder has no `RefPicList` section for (clause 8.2.4.3's
+`idc == 2` reordering is refused for the same reason), and are refused as
+`Unsupported` rather than silently dropped.
+
+### Method
+
+Every one of the three CABAC defects was localised the same way, and the
+split that did the work is worth naming: **dump the same thing from both
+decoders at descending granularity, and stop at the first level that
+disagrees.**
+
+1. Per-macroblock syntax elements (`mb_skip_flag`, `mb_type`,
+   `sub_mb_type`, `coded_block_pattern`, `mb_qp_delta`) — this said
+   "everything matches through macroblock 84, `mb_type` at 85 does not",
+   which is a macroblock, not a slice.
+2. Every context-coded CABAC bin as `(pStateIdx, valMPS, bit)` — this said
+   "bin 3933 of slice 5; the four bins before it agree exactly; at 3933 the
+   *state* differs". A differing state with matching history means a
+   **different context was selected**, which excludes the arithmetic engine
+   and the binarisation tree and points straight at a `ctxIdxInc`
+   derivation. All three defects had that same fingerprint.
+
+The oracle was controlled first, per the lesson §13 already records: JM was
+run on a clip already known byte-exact against `ffmpeg` and matched it
+25/25 before any of its traces were believed.
+
+For defect 1 the split was cheaper still — one re-encode with
+`--no-deblock` — and for defect 4 no bin trace helps at all, because the
+bitstream parse is not what is wrong. Reaching for the finest-grained tool
+first would have cost more and shown less in both cases.
+
+### And one more harness that measured the wrong thing
+
+`reconstruct.rs`'s `cabac_ip_simple_full_deblocking_matches_ffmpegs_real_decode`
+had been `#[ignore]`d for rounds over "a small residual from frame 1
+onward, max |delta| <= 8, concentrated at specific macroblock-boundary
+edges", with a recorded hypothesis pointing at `filter_luma_line`'s
+borderline arithmetic or a second wrong `TC0_TABLE` entry. Neither was
+real. The harness passed `&[]` as `deblock_picture_luma`/`_chroma`'s
+`ref_list0_poc`, and with an empty list `deblock::ref_poc` answers `None`
+for every `ref_idx` — so clause 8.7.2.1's "the two sides use a different
+set of reference pictures" is unsatisfiable and every such edge comes out
+`bS = 0` where the answer is 1. The real decoder has always passed real
+POCs, and decodes that same fixture byte-exact through the public
+`H264Decoder`. Giving the harness one distinct identity per
+`RefPicList0` position makes the test pass byte-exact on all 25 frames;
+it is un-ignored.
+
+The cheap check that would have caught it years earlier: **run the same
+fixture through the public API before believing an internal-API test's
+failure.** Two paths, one fixture, different answers means the harness is
+a suspect, not just the code under it.
+
+### What `check_scope` and the decoder still refuse
+
+CAVLC reconstruction (`decode_slice_cavlc` verifies bit consumption only;
+`decoder.rs` never reconstructs from it, so Baseline-profile files are
+refused), **temporal direct** (`direct_spatial_mv_pred_flag == 0` — a
+materially different derivation, and not x264's default), long-term
+reference pictures (MMCO 2/3/4/6 and `ref_pic_list_modification`'s
+`idc == 2`), MBAFF and field pictures, `constrained_intra_pred_flag`'s
+neighbour substitution, 4:2:2/4:4:4, `SI` slices, more than one slice per
+picture, and a CABAC slice whose `end_of_slice_flag` fires early (refused
+as `InvalidData` rather than emitting a partial picture — no longer
+reproducible on any clip in the corpus above, but kept).
 
 ## Configuration
 

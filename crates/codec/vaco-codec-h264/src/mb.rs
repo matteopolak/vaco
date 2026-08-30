@@ -17,7 +17,7 @@
 //!
 //! # What is in scope, and what is explicitly not
 //!
-//! **In scope**: I/P slices (B slices are parsed but gated -- see the "B
+//! **In scope**: I/P/B slices (B on the CABAC path only -- see the "B
 //! slices" bullet below), `mb_skip_run` (CAVLC) and `mb_skip_flag`
 //! (CABAC), all of Table 7-8/7-10/7-11's macroblock types and Table
 //! 7-14/7-15's sub-macroblock types, `ref_idx`/`mvd` presence and count per
@@ -66,24 +66,24 @@
 //!   *does* handle `I_PCM` — see the CABAC section below — because CABAC's
 //!   `mb_type` binarisation signals it unambiguously via
 //!   `decode_terminate`, so there was nothing to guess.
-//! - **CABAC B slices** — [`check_scope`] refuses them outright again, as
-//!   of the commit introducing this bullet's own rewrite. This is *not*
-//!   the earlier "binarization was never written" gap: `mb_type`/
-//!   `sub_mb_type` B binarization (Table 9-27/9-28), spatial direct
-//!   prediction (clause 8.4.1.2.2), bi-prediction including implicit
-//!   weighted mode (clause 8.4.2.3.2), and `RefPicList1` construction are
-//!   all implemented and exercised in [`decode_slice_cabac`] — see that
-//!   function's own doc and `crate::reconstruct`/`crate::decoder`. The
-//!   refusal is a correctness gate, not a missing-feature one: measured
-//!   against a real `libx264 -bf 2` IBBP CABAC stream (implicit weighted
-//!   bi-prediction, x264's own default), every I/P frame decodes
-//!   byte-exact but every B frame carries a small residual (max per-sample
-//!   delta 3-4 across roughly 1-2% of samples — the shape of a rounding or
-//!   weight-derivation bug, not a desync or wrong motion vector, per
-//!   `planning/AGENT-CONSTRAINTS.md`'s own diagnostic guidance) not yet
-//!   root-caused. Registered-but-wrong is worse than refused (same
-//!   document), so the refusal stays until that residual is gone —
-//!   lifting it is a separate, later commit's job once it is.
+//! - **CABAC B slices** — **in scope, and byte-exact**, as of the commit
+//!   lifting this bullet's own gate. `mb_type`/`sub_mb_type` B
+//!   binarization (Table 9-27/9-28), spatial direct prediction (clause
+//!   8.4.1.2.2), bi-prediction including implicit weighted mode (clause
+//!   8.4.2.3.2) and `RefPicList1` construction all run for real in
+//!   [`decode_slice_cabac`]. They were gated for one round, deliberately:
+//!   every I and P frame of a real `libx264 -bf 2 -refs 1` IBBP stream
+//!   matched plain `ffmpeg` byte for byte and every B frame carried a
+//!   small residual (max per-sample delta 3-5 over 1-2% of samples), which
+//!   `planning/AGENT-CONSTRAINTS.md`'s "registered-but-wrong is worse than
+//!   absent" rule makes a refusal, not a caveat. The residual turned out
+//!   to be a clause 8.7.2.1 `bS` input ([`MvInfo::ref_idx_l1`]), with two
+//!   `ctxIdxInc` defects behind it ([`MvInfo::direct_or_skip`] and
+//!   [`decode_mb_type_intra_suffix_tail`]); `decode_slice_cabac`'s own
+//!   comment records the measurement that lifted the gate.
+//!   **Temporal direct** (`direct_spatial_mv_pred_flag == 0`) is still
+//!   refused — a materially different derivation this crate does not
+//!   implement, and not x264's default.
 //!
 //! **In scope but not yet bit-exact**: CABAC's I/P-slice macroblock layer
 //! (`mb_type`, `sub_mb_type`, `mb_skip_flag`, `coded_block_pattern`,
@@ -2815,35 +2815,25 @@ pub fn decode_slice_cabac(
 ) -> Result<SliceStats> {
     check_scope(sps, pps, header)?;
     let is_b_slice = matches!(header.kind, SliceKind::B);
-    // Gated, not missing: every piece of B-slice CABAC decode this
-    // function implements below (`mb_type`/`sub_mb_type` binarization,
-    // spatial direct, bi-prediction including implicit weighted mode,
-    // `RefPicList1` construction -- see this module's own "CABAC B
-    // slices" doc bullet, and `crate::reconstruct`/`crate::decoder`) runs
-    // correctly enough to drive real content structurally, but not yet
-    // correctly enough to trust its *pixels*: measured against a real
-    // `libx264 -bf 2 -refs 1` IBBP CABAC stream (implicit weighted
-    // bi-prediction, x264's own default), every I/P frame decodes
-    // byte-exact and every B frame carries a small residual (max
-    // per-sample delta 3-4 across roughly 1-2% of samples -- the
-    // signature of a rounding or weight-derivation difference, not a
-    // desync or a wrong motion vector, per
-    // `planning/AGENT-CONSTRAINTS.md`'s own diagnostic guidance). This
-    // gate is scoped to `decode_slice_cabac` specifically, not
-    // `check_scope` (which `decode_slice_cavlc` also calls): CAVLC never
-    // reconstructs a pixel regardless of slice kind (`decoder.rs` never
-    // calls it for real decode, only `tests/macroblock_layer.rs`'s own
-    // bit-consumption verification does), so a CAVLC B slice was never
-    // the "silently wrong pixels" risk this gate exists for -- only
-    // CABAC's own reconstruction path is. Registered-but-wrong is worse
-    // than refused (`planning/AGENT-CONSTRAINTS.md`), so this stays until
-    // that residual is gone; lifting it is a separate, later commit's job
-    // once it is.
-    if is_b_slice {
-        return Err(Error::Unsupported(
-            "vaco-codec-h264: B slices are implemented but gated pending a byte-exact match              against real encoder output -- see this function's own comment and              docs/codec/vaco-codec-h264.md",
-        ));
-    }
+    // The gate that used to stand here is gone: B slices decode
+    // byte-exact. It was added when every I and P frame of a real
+    // `libx264 -bf 2 -refs 1` IBBP stream matched plain `ffmpeg` byte for
+    // byte and every B frame did not (max per-sample delta 3-5 over 1-2%
+    // of samples), on `planning/AGENT-CONSTRAINTS.md`'s
+    // "registered-but-wrong is worse than absent" rule. That residual was
+    // a `deblock::boundary_strength` input, not a prediction or residual
+    // error at all -- see `MvInfo::ref_idx_l1` -- and two `ctxIdxInc`
+    // defects (`MvInfo::direct_or_skip`,
+    // `decode_mb_type_intra_suffix_tail`) sat behind it. Measurement that
+    // lifted it, per plane per frame byte for byte against plain `ffmpeg`,
+    // 25 frames per clip, ten `lavfi` sources x eight sizes x Main and
+    // High: 160/160 clips at `-bf 0 -refs 1` (unchanged), 160/160 at
+    // `-bf 3 -refs 1`, and 160/160 at **x264's own defaults, no flags at
+    // all** (B frames, `b-pyramid`, three reference frames, weighted P) --
+    // plus 854x480 `yuvtestsrc`, 1920x1080 `mandelbrot` and 178x146
+    // `testsrc2` (deliberately not a multiple of 16) in both profiles and
+    // both configurations. `docs/codec/vaco-codec-h264.md` records it.
+
     // Clause 8.4.1.2.1's temporal direct derivation is a materially
     // different algorithm (scaled motion from the colocated picture's own
     // vector, no spatial median predictor, no `colZeroFlag`) that this
