@@ -1896,3 +1896,42 @@ The general defect is a parser copying a syntax element into an output field
 without checking it against the values its own specification defines. Anywhere
 a field is read and stored unvalidated, the next `ffprobe`-shaped output is a
 lie the user has no way to detect.
+
+## Profile the callee before you optimise the caller
+
+Two agent-rounds went into deblocking SIMD: one extended `vaco-simd` with
+masked lane select at `i16`/`i32` widths, another built a batched
+`filter_luma_edge`/`filter_chroma_edge` kernel that measured **0.31x/0.41x**
+against scalar with 5/5 and 10/10 round wins. Real work, correctly measured,
+bit-identical output.
+
+It bought **~2.6% end to end.**
+
+A later profile with proper symbolication showed why. The filter kernel that
+was so carefully vectorized is **2.67%** of total runtime. `boundary_strength`
+— the scalar predicate deciding *what* to filter — is **28%**, more than ten
+times the kernel's share. And it was being called once per pixel row when
+`p_blk`/`q_blk`, and therefore its result, are identical for all 4 rows of a
+luma group and all 2 of a chroma group. Memoising it per group, no SIMD
+involved, won **1.27x end to end** (10/10 interleaved rounds) — an order of
+magnitude more than the kernel work.
+
+The mistake was reading `deblock_picture_luma`'s ~17% self time as "the
+deblocking filter is 17%, so vectorize the filter." That figure covered the
+enclosing gather loop, which spent most of its time in a *helper*, not in the
+arithmetic the kernel replaced.
+
+So:
+
+- **Attribute cost to the leaf, not the enclosing function.** Without inline
+  chains resolved (`dsymutil` + `llvm-symbolizer --inlines`, or an equivalent),
+  `#[inline]` collapses samples onto call-site lines and the profile will
+  actively mislead you.
+- **Before optimising X, confirm X is where the time is** — not that X is
+  inside something expensive.
+- **Redundant computation beats faster computation.** The cheapest win is work
+  not done at all. Look for a pure function called in a loop whose inputs do
+  not vary across the loop, before reaching for a wider vector.
+
+A microbenchmark ratio is a statement about a kernel. Only an end-to-end
+measurement is a statement about the program.
