@@ -848,6 +848,21 @@ impl<'a> PlaneView<'a> {
         self.plane.row(y)
     }
 
+    /// The whole published extent of this plane as one contiguous borrow, when
+    /// a single band holds it.
+    ///
+    /// This is the whole-picture face of [`PlaneView::block`]'s own fast path,
+    /// for a caller whose reference-sample reads are written against a plain
+    /// `(&[u8], stride)` pair rather than against per-block borrows — a
+    /// frame-threaded decoder that publishes at *picture* granularity
+    /// (`PictureSpec::single_band`) waits once for the whole plane and then
+    /// wants exactly that pair. `None` whenever the extent spans more than one
+    /// band, which is the row-granularity case [`PlaneView::block`] is for.
+    #[must_use]
+    pub fn contiguous_all(&self) -> Option<BlockRef<'a>> {
+        self.contiguous(0, 0, self.plane.width_bytes, self.rows)
+    }
+
     /// A contiguous borrow of a `w × h` region at `(x, y)`.
     ///
     /// **Fast path**: the region lies inside one band's allocation, so the

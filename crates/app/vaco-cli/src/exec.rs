@@ -1200,6 +1200,7 @@ pub fn run_pipeline(
     files: &[InputStreams],
     complex_filters: &[String],
     auto_conversion_filters: bool,
+    threads: usize,
 ) -> Result<RunSpec, Diagnostic> {
     if outputs.iter().all(|o| o.dropped) {
         // Nothing to write anywhere, so there is nothing to read either. The
@@ -1394,6 +1395,13 @@ pub fn run_pipeline(
                             // names `permissive()` the CLI default explicitly.
                             let limits = vaco_limits::Limits::permissive();
                             let mut decoder = decoder_desc.build(limits.clone());
+                            // `-threads N`. `Decoder::set_thread_count`'s
+                            // default is a no-op reporting `Threading::None`,
+                            // so every decoder that has not implemented
+                            // frame threading is untouched by this, and a
+                            // run that did not say `-threads` passes 1 and
+                            // takes the same path it always did.
+                            let _granted = decoder.set_thread_count(threads);
                             if let Some(v) = p.video.as_ref() {
                                 // `Decoder::prime_video`'s own default is a
                                 // no-op, so this costs every decoder except

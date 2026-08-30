@@ -298,3 +298,343 @@ pub trait SliceThreadedDecoder: Decoder {
     /// Whatever the codec reports.
     fn run_slice(&self, job: Self::Job) -> Result<()>;
 }
+
+// ---------------------------------------------------------------- the runner
+
+/// A pool that runs [`FrameTask`]s concurrently and hands their frames back in
+/// **dispatch order**, never completion order.
+///
+/// # Why dispatch-order collection is the whole determinism argument
+///
+/// A frame-threaded decoder still has to make every *ordering* decision — the
+/// reorder buffer, the output bumping, an IDR's flush — in decode order, or the
+/// emitted sequence becomes a function of how the threads happened to be
+/// scheduled. This runner therefore refuses to hand a caller frame `k + 1`
+/// before frame `k`: the caller sees exactly the sequence the serial decoder
+/// saw, and `threads` changes only *when* the pixels were computed. Combined
+/// with [`crate::PictureRef`]'s publish-once bands (a task cannot read a
+/// reference sample that has not been written) that is the entire basis for
+/// bit-identical output, and none of it needs `unsafe`.
+///
+/// # Why it cannot deadlock
+///
+/// Tasks are taken off one shared queue in dispatch order, and a task only ever
+/// waits on pictures *earlier* in decode order (asserted by
+/// [`TaskCtx::wait_rows`]). So the lowest-indexed task currently in flight has
+/// every task before it already finished, and therefore never blocks — some
+/// worker is always making progress. Dropping the runner closes the queue, and
+/// dropping an undispatched task drops its [`crate::PictureWriter`], which wakes
+/// every waiter with an error rather than leaving it parked.
+///
+/// # D18
+///
+/// `threads` is clamped to 1 where the target has no threads, exactly as
+/// `vaco_sched::Driver` clamps, and a one-thread runner spawns nothing at all:
+/// [`FrameRunner::dispatch`] runs the task inline on the caller's thread. The
+/// single-threaded path therefore costs nothing for this machinery beyond one
+/// `Vec` push, and is the path every other thread count must match.
+#[derive(Debug)]
+pub struct FrameRunner<T: FrameTask> {
+    threads: usize,
+    cancel: CancelToken,
+    /// Next index to hand to [`FrameRunner::dispatch`].
+    next_dispatch: u64,
+    /// Index [`FrameRunner::collect`] will return next.
+    next_collect: u64,
+    /// One slot per dispatched-but-not-yet-collected task, `next_collect` first.
+    slots: std::collections::VecDeque<Option<Result<Frame>>>,
+    #[cfg(not(target_family = "wasm"))]
+    pool: Option<Pool<T>>,
+    #[cfg(target_family = "wasm")]
+    _marker: core::marker::PhantomData<fn() -> T>,
+}
+
+impl<T: FrameTask> FrameRunner<T> {
+    /// Whether this target can run tasks concurrently at all.
+    #[must_use]
+    pub const fn threads_available() -> bool {
+        cfg!(not(target_family = "wasm"))
+    }
+
+    /// A runner with `threads` workers, clamped to what the target supports.
+    ///
+    /// `threads <= 1` spawns nothing and runs every task inline.
+    #[must_use]
+    pub fn new(threads: usize) -> Self {
+        let threads = if Self::threads_available() {
+            threads.max(1)
+        } else {
+            1
+        };
+        Self {
+            threads,
+            cancel: CancelToken::new(),
+            next_dispatch: 0,
+            next_collect: 0,
+            slots: std::collections::VecDeque::new(),
+            #[cfg(not(target_family = "wasm"))]
+            pool: None,
+            #[cfg(target_family = "wasm")]
+            _marker: core::marker::PhantomData,
+        }
+    }
+
+    /// Workers this runner will actually use.
+    #[must_use]
+    pub const fn threads(&self) -> usize {
+        self.threads
+    }
+
+    /// Tasks dispatched but not yet collected.
+    #[must_use]
+    pub fn in_flight(&self) -> usize {
+        self.slots.len()
+    }
+
+    /// The decode index the next [`FrameRunner::dispatch`] will use.
+    #[must_use]
+    pub const fn next_decode_index(&self) -> u64 {
+        self.next_dispatch
+    }
+
+    /// The shared cancellation flag every task's [`TaskCtx`] carries.
+    #[must_use]
+    pub const fn cancel_token(&self) -> &CancelToken {
+        &self.cancel
+    }
+
+    /// Queue `task`. Its decode index is [`FrameRunner::next_decode_index`].
+    ///
+    /// With one thread this runs the task immediately, so the caller's own
+    /// `send_packet` does the same work at the same point it always did.
+    pub fn dispatch(&mut self, task: T) {
+        let index = self.next_dispatch;
+        self.next_dispatch = self.next_dispatch.saturating_add(1);
+        #[cfg(not(target_family = "wasm"))]
+        if self.threads > 1 {
+            self.slots.push_back(None);
+            self.pool_mut().submit(index, task);
+            return;
+        }
+        let ctx = TaskCtx::new(index, &self.cancel);
+        self.slots.push_back(Some(Box::new(task).run(&ctx)));
+    }
+
+    /// Take the next task's result in dispatch order, blocking until it is
+    /// ready. `None` when nothing is in flight.
+    pub fn collect(&mut self) -> Option<Result<Frame>> {
+        if self.slots.is_empty() {
+            return None;
+        }
+        loop {
+            if self.slots.front().is_some_and(Option::is_some) {
+                let done = self.slots.pop_front().flatten();
+                self.next_collect = self.next_collect.saturating_add(1);
+                return done;
+            }
+            #[cfg(not(target_family = "wasm"))]
+            {
+                let base = self.next_collect;
+                let Some((index, result)) = self.pool_mut().recv() else {
+                    // Every worker is gone and nothing more can arrive; report
+                    // the outstanding slot rather than blocking forever.
+                    self.slots.pop_front();
+                    self.next_collect = self.next_collect.saturating_add(1);
+                    return Some(Err(Error::InvalidData(
+                        "vaco-codec-core: a frame worker pool lost a task",
+                    )));
+                };
+                if let Some(slot) = index
+                    .checked_sub(base)
+                    .and_then(|d| usize::try_from(d).ok())
+                    .and_then(|d| self.slots.get_mut(d))
+                {
+                    *slot = Some(result);
+                }
+            }
+            #[cfg(target_family = "wasm")]
+            {
+                // One thread: every slot is filled at dispatch, so the branch
+                // above always took it.
+                return None;
+            }
+        }
+    }
+
+    /// Take the next result only if it is already available.
+    #[must_use]
+    pub fn try_collect(&mut self) -> Option<Result<Frame>> {
+        #[cfg(not(target_family = "wasm"))]
+        if self.threads > 1 {
+            let base = self.next_collect;
+            while let Some((index, result)) = self.pool_mut().try_recv() {
+                if let Some(slot) = index
+                    .checked_sub(base)
+                    .and_then(|d| usize::try_from(d).ok())
+                    .and_then(|d| self.slots.get_mut(d))
+                {
+                    *slot = Some(result);
+                }
+            }
+        }
+        if self.slots.front().is_some_and(Option::is_some) {
+            let done = self.slots.pop_front().flatten();
+            self.next_collect = self.next_collect.saturating_add(1);
+            return done;
+        }
+        None
+    }
+
+    /// Drain and discard everything in flight, then reset the index counters.
+    ///
+    /// What a decoder's `flush` needs after a seek: the pictures in flight
+    /// reference a DPB that is about to be emptied.
+    pub fn reset(&mut self) {
+        while self.collect().is_some() {}
+        self.next_dispatch = 0;
+        self.next_collect = 0;
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn pool_mut(&mut self) -> &mut Pool<T> {
+        let threads = self.threads;
+        self.pool.get_or_insert_with(|| Pool::spawn(threads))
+    }
+}
+
+/// The worker threads and the two channels around them.
+#[cfg(not(target_family = "wasm"))]
+#[derive(Debug)]
+struct Pool<T: FrameTask> {
+    queue: std::sync::Arc<Queue<T>>,
+    done: std::sync::mpsc::Receiver<(u64, Result<Frame>)>,
+    workers: Vec<std::thread::JoinHandle<()>>,
+}
+
+/// The shared task queue. A `Condvar` rather than an `mpsc::Receiver` because
+/// several workers must wait on the *same* queue: whichever worker is free
+/// takes the next task, which is what keeps the lowest in-flight index running.
+#[cfg(not(target_family = "wasm"))]
+#[derive(Debug)]
+struct Queue<T> {
+    state: std::sync::Mutex<QueueState<T>>,
+    wake: std::sync::Condvar,
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[derive(Debug)]
+struct QueueState<T> {
+    items: std::collections::VecDeque<(u64, T)>,
+    closed: bool,
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Sends a reply if it is still armed when it drops — the case where the task
+/// unwound. Mirrors `vaco_sched::driver`'s own guard, for the same reason: the
+/// collector must receive exactly one message per dispatched task or it waits
+/// for one nobody will send.
+#[cfg(not(target_family = "wasm"))]
+struct ReplyGuard {
+    tx: std::sync::mpsc::Sender<(u64, Result<Frame>)>,
+    index: u64,
+    armed: bool,
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl Drop for ReplyGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = self.tx.send((
+                self.index,
+                Err(Error::InvalidData("vaco-codec-core: a frame task panicked")),
+            ));
+        }
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl<T: FrameTask> Pool<T> {
+    fn spawn(threads: usize) -> Self {
+        let queue: std::sync::Arc<Queue<T>> = std::sync::Arc::new(Queue {
+            state: std::sync::Mutex::new(QueueState {
+                items: std::collections::VecDeque::new(),
+                closed: false,
+            }),
+            wake: std::sync::Condvar::new(),
+        });
+        let (done_tx, done) = std::sync::mpsc::channel();
+        let mut workers = Vec::new();
+        for _ in 0..threads {
+            let queue = std::sync::Arc::clone(&queue);
+            let done_tx = done_tx.clone();
+            let cancel = CancelToken::new();
+            workers.push(std::thread::spawn(move || {
+                loop {
+                    let next = {
+                        let mut st = lock(&queue.state);
+                        loop {
+                            if let Some(item) = st.items.pop_front() {
+                                break Some(item);
+                            }
+                            if st.closed {
+                                break None;
+                            }
+                            st = queue
+                                .wake
+                                .wait(st)
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        }
+                    };
+                    let Some((index, task)) = next else { return };
+                    let mut guard = ReplyGuard {
+                        tx: done_tx.clone(),
+                        index,
+                        armed: true,
+                    };
+                    let ctx = TaskCtx::new(index, &cancel);
+                    let result = Box::new(task).run(&ctx);
+                    guard.armed = false;
+                    let _ = done_tx.send((index, result));
+                }
+            }));
+        }
+        Self {
+            queue,
+            done,
+            workers,
+        }
+    }
+
+    fn submit(&self, index: u64, task: T) {
+        let mut st = lock(&self.queue.state);
+        st.items.push_back((index, task));
+        self.queue.wake.notify_one();
+    }
+
+    fn recv(&self) -> Option<(u64, Result<Frame>)> {
+        self.done.recv().ok()
+    }
+
+    fn try_recv(&self) -> Option<(u64, Result<Frame>)> {
+        self.done.try_recv().ok()
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl<T: FrameTask> Drop for Pool<T> {
+    fn drop(&mut self) {
+        {
+            let mut st = lock(&self.queue.state);
+            st.closed = true;
+            st.items.clear();
+        }
+        self.queue.wake.notify_all();
+        for w in self.workers.drain(..) {
+            let _ = w.join();
+        }
+    }
+}

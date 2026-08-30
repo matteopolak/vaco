@@ -134,6 +134,13 @@ pub struct Cli {
     /// a real run** — see `crate::complexgraph`'s module doc for exactly
     /// what that would still take.
     pub complex_filters: Vec<String>,
+    /// `-threads N`, the codec-side thread count. `None` when unstated, which
+    /// means one: intra-decoder parallelism is opt-in, because a decoder that
+    /// has not proved itself bit-identical at every count must not be reached
+    /// by default. Zero is taken as one rather than as the reference's
+    /// "auto", since nothing here auto-detects yet and silently choosing a
+    /// count would make the default depend on the machine.
+    pub threads: Option<usize>,
 }
 
 impl Cli {
@@ -199,6 +206,15 @@ pub fn parse<S: AsRef<OsStr>>(argv: &[S]) -> Result<Cli, Diagnostic> {
             .filter(|o| o.resolved().0 == "filter_complex")
             .map(value_str)
             .collect::<Result<Vec<_>, _>>()?,
+        // `ParsedOption::number` applies the option's own declared grammar
+        // and range (`ValueKind::Int`), so `-threads abc` is rejected with
+        // the reference's wording rather than quietly meaning one.
+        threads: line
+            .last_global("threads")
+            .map(|o| o.number().map_err(|e| split_error(&e)))
+            .transpose()?
+            .flatten()
+            .map(|n| if n < 1.0 { 1 } else { n as usize }),
         ..Cli::default()
     };
 

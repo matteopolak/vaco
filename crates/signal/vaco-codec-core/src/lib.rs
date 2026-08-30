@@ -58,8 +58,8 @@ pub use protocol::{
     Violation, validate_decoder,
 };
 pub use threading::{
-    CancelToken, FrameTask, FrameThreadedDecoder, SliceThreadedDecoder, SplitOutcome, TaskCtx,
-    Threading,
+    CancelToken, FrameRunner, FrameTask, FrameThreadedDecoder, SliceThreadedDecoder, SplitOutcome,
+    TaskCtx, Threading,
 };
 
 /// Identifies a codec independently of who implements it.
@@ -1715,6 +1715,28 @@ pub trait Decoder: Send {
     fn prime_video(&mut self, width: u32, height: u32) {
         let _ = (width, height);
     }
+
+    /// Ask for intra-decoder parallelism, and hear back what was granted.
+    ///
+    /// The channel `-threads N` reaches a decoder through. Frame and slice
+    /// threading are *inside* one component and therefore invisible to
+    /// `vaco_sched::Driver`, which parallelises whole pipeline stages and has
+    /// no way to split one decoder's work — see
+    /// [`crate::threading`] for the two-axis split.
+    ///
+    /// The default ignores the request and reports [`Threading::None`], which
+    /// is the honest answer for every decoder that has not implemented
+    /// [`crate::threading::FrameThreadedDecoder`]. An implementation must only
+    /// ever *narrow* what it offers ([`Threading::clamped_to`]), and must
+    /// produce byte-identical output at every count it accepts: the thread
+    /// count changes when work happens, never what is computed.
+    ///
+    /// Calling it after the first [`send_packet`](Decoder::send_packet) is
+    /// allowed to be ignored; callers set it once, before decoding starts.
+    fn set_thread_count(&mut self, threads: usize) -> threading::Threading {
+        let _ = threads;
+        threading::Threading::None
+    }
 }
 
 /// So a boxed decoder is itself a [`Decoder`], mirroring
@@ -1746,6 +1768,10 @@ impl<D: Decoder + ?Sized> Decoder for Box<D> {
 
     fn prime_video(&mut self, width: u32, height: u32) {
         (**self).prime_video(width, height);
+    }
+
+    fn set_thread_count(&mut self, threads: usize) -> threading::Threading {
+        (**self).set_thread_count(threads)
     }
 }
 

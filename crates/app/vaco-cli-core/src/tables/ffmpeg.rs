@@ -67,6 +67,14 @@ static FFMPEG_OPTIONS: &[OptDesc] = &[
     o("dts_error_threshold", Some("threshold"), bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Float, "error threshold on decode timestamps"),
     o("xerror", Some("error"), bit::GLOBAL | bit::EXPERT, ValueKind::None, "exit on the first error"),
     o("abort_on", Some("flags"), bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Expr, "conditions that abort the run"),
+    // `-threads` is an `AVCodecContext` option in the reference, not an entry
+    // in `ffmpeg.c`'s own table, so it does not appear in `-h full` and was
+    // never extracted. Vaco has no per-codec option store yet, so it is a
+    // global here: `-threads N` before or after `-i` both mean "N threads for
+    // every codec in this run", which is how the reference behaves for the
+    // overwhelmingly common case of stating it once. Per-stream
+    // (`-threads:v:0`) is not implemented -- see `docs/app/vaco-cli.md`.
+    o("threads", Some("count"), bit::HAS_ARG | bit::GLOBAL, ValueKind::Int, "decoding threads per codec (1 = single-threaded)"),
     o("filter_threads", None, bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Str, "threads for simple filter graphs"),
     o("filter_buffered_frames", None, bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Int, "frames a filter graph may buffer"),
     o("filter_complex", Some("graph_description"), bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Custom, "define a complex filter graph"),
