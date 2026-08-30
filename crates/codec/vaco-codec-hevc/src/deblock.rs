@@ -51,10 +51,15 @@
 //! `xGetBoundaryStrengthSingle`/`xEdgeFilterLuma` still carry for the
 //! general case:
 //!
-//! - **Boundary strength is always 2** wherever an edge is marked at all.
-//!   Table 8-12's `bS = 2` case is "either side is intra", and every CU this
-//!   crate decodes is intra; the `bS = 1` (inter, non-zero luma CBF) and
-//!   `bS = 0` cases can never be reached.
+//! - **Boundary strength was always 2** wherever an edge was marked at all,
+//!   back when this crate was I-slice-only. Table 8-12's `bS = 2` case is
+//!   "either side is intra", true of every CU an I-slice-only decoder could
+//!   ever produce. P-slices (see the crate's own "Stage 2" doc) made this
+//!   stop being true the moment two adjacent inter CUs could disagree on
+//!   motion or reference picture — [`boundary_strength`] now derives the
+//!   real Table 8-12 value (restricted to this crate's uni-prediction-only
+//!   scope), and every edge that derives to `bS == 0` is skipped entirely
+//!   rather than filtered.
 //! - **`qP_P`/`qP_Q` are looked up per edge from `CuGrid`'s own per-CU
 //!   `QpY`** (`ctu::coding_unit`'s own post-transform-tree
 //!   `CuGrid::fill_qp`), not one constant `slice_qp` — `cu_qp_delta` (see
@@ -72,8 +77,8 @@
 //!   plain luma QPs are averaged *before* the chroma offset/scale, not
 //!   mapped to chroma QP independently and averaged after.
 //!
-//! Boundary strength is still always 2 (a consequence of this crate's
-//! intra-only scope, unrelated to `cu_qp_delta`).
+//! Boundary strength is no longer always 2 — see [`boundary_strength`]'s own
+//! doc, and the note above about what P-slices changed here.
 //!
 //! # The filtering grid
 //!
@@ -123,11 +128,12 @@ fn clip3_sym(c: i32, v: i32) -> i32 {
 }
 
 /// `iIndexTC`/`sm_tcTable[iIndexTC]` for a given (already-derived, e.g. via
-/// [`chroma_qp`] for chroma) QP — `bS == 2` always in this crate's
-/// intra-only scope (see the module doc), so `2*(bS-1)` collapses to the
-/// literal `2` HM calls `DEFAULT_INTRA_TC_OFFSET`.
-fn tc_for_qp(qp: i32, tc_offset_div2: i32) -> i32 {
-    let idx = (qp + 2 + tc_offset_div2 * 2).clamp(0, 53);
+/// [`chroma_qp`] for chroma) QP and this edge's own [`boundary_strength`]
+/// (`bS`) — `2*(bS-1)` is HM's own `DEFAULT_INTRA_TC_OFFSET`-shaped term,
+/// literally `2` when `bS == 2` (an intra-adjacent edge, this crate's only
+/// case before P-slices existed) and `0` when `bS == 1`.
+fn tc_for_qp(qp: i32, bs: i32, tc_offset_div2: i32) -> i32 {
+    let idx = (qp + 2 * (bs - 1) + tc_offset_div2 * 2).clamp(0, 53);
     TC_TABLE.get(usize::try_from(idx).unwrap_or(0)).copied().unwrap_or(0)
 }
 
@@ -309,6 +315,53 @@ fn qp_avg(s: &Ctx<'_>, dir: Dir, xq: i32, yq: i32) -> i32 {
     (qp_p + qp_q + 1) >> 1
 }
 
+/// Table 8-12's boundary-filtering-strength (`bS`) derivation, restricted to
+/// what a P-slice-only, uni-prediction-only decoder can ever produce (this
+/// crate never builds a `RefPicList1`, so the general table's "different
+/// number of motion vectors used" and "one list vs the other" cases collapse
+/// to a single-MV-per-side comparison — HM's own `xGetBoundaryStrengthSingle`
+/// under the same restriction):
+///
+/// - `2` if either side (`P`, one step back from `(xq, yq)` against `dir`'s
+///   own perpendicular axis, matching [`qp_avg`]'s own convention; `Q`, at
+///   `(xq, yq)` itself) is intra-coded (`CuGrid::inter_at` returning `None`
+///   — §8.5.3.2's own "unavailable" collapse, reused here as "not inter"
+///   the same way `crate::motion`'s own module doc already does).
+/// - `1` if the edge is *also* a transform-block edge
+///   ([`crate::framebuf::EdgeMarks::tu_vert_at`]/`tu_horiz_at`) and either
+///   side's luma transform block coded a non-zero coefficient
+///   ([`CuGrid::cbf_luma_at`]) — a plain prediction-unit-only boundary never
+///   satisfies this term, regardless of what either side's (necessarily
+///   larger, unsplit) transform block coded.
+/// - `1` if the two sides predict from different reference pictures (by
+///   POC).
+/// - `1` if either motion-vector component differs by 4 or more
+///   quarter-luma-sample units.
+/// - `0` otherwise — no filtering at this edge at all.
+fn boundary_strength(s: &Ctx<'_>, dir: Dir, xq: i32, yq: i32) -> i32 {
+    let (xp, yp) = match dir {
+        Dir::Vert => (xq - 1, yq),
+        Dir::Horiz => (xq, yq - 1),
+    };
+    let (Some(q), Some(p)) = (s.cu_grid.inter_at(xq, yq), s.cu_grid.inter_at(xp, yp)) else {
+        return 2;
+    };
+    let is_tu_edge = match dir {
+        Dir::Vert => s.edges.tu_vert_at(xq, yq),
+        Dir::Horiz => s.edges.tu_horiz_at(xq, yq),
+    };
+    if is_tu_edge && (s.cu_grid.cbf_luma_at(xq, yq) || s.cu_grid.cbf_luma_at(xp, yp)) {
+        return 1;
+    }
+    if p.ref_poc != q.ref_poc {
+        return 1;
+    }
+    if (p.mv.x - q.mv.x).abs() >= 4 || (p.mv.y - q.mv.y).abs() >= 4 {
+        return 1;
+    }
+    0
+}
+
 /// Run the whole picture's deblocking pass: every vertical edge first (both
 /// planes), then every horizontal edge (both planes) — matching
 /// `TComLoopFilter::loopFilterPic`'s own two full, separate passes, since
@@ -330,10 +383,13 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
         let mut y = 0;
         while y < height {
             if s.edges.vert_at(x, y) {
-                let qp = qp_avg(s, Dir::Vert, x, y);
-                let tc = tc_for_qp(qp, s.tc_offset_div2);
-                let beta = beta_for_qp(qp, s.beta_offset_div2);
-                filter_luma_group(&mut s.pic.y, Dir::Vert, x, y, tc, beta, s.bit_depth_luma);
+                let bs = boundary_strength(s, Dir::Vert, x, y);
+                if bs > 0 {
+                    let qp = qp_avg(s, Dir::Vert, x, y);
+                    let tc = tc_for_qp(qp, bs, s.tc_offset_div2);
+                    let beta = beta_for_qp(qp, s.beta_offset_div2);
+                    filter_luma_group(&mut s.pic.y, Dir::Vert, x, y, tc, beta, s.bit_depth_luma);
+                }
             }
             y += 4;
         }
@@ -343,10 +399,13 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
     while x < width {
         let mut y = 0;
         while y < height {
-            if s.edges.vert_at(x, y) {
+            // §8.7.2's own chroma gate: filtered only when `bS == 2` (see
+            // this module's doc — chroma has no `alpha`/`beta` activity test
+            // of its own, so `bS` is the only gate it has).
+            if s.edges.vert_at(x, y) && boundary_strength(s, Dir::Vert, x, y) == 2 {
                 let qp = qp_avg(s, Dir::Vert, x, y);
-                let cb_tc = tc_for_qp(chroma_qp(qp, s.cb_qp_offset), s.tc_offset_div2);
-                let cr_tc = tc_for_qp(chroma_qp(qp, s.cr_qp_offset), s.tc_offset_div2);
+                let cb_tc = tc_for_qp(chroma_qp(qp, s.cb_qp_offset), 2, s.tc_offset_div2);
+                let cr_tc = tc_for_qp(chroma_qp(qp, s.cr_qp_offset), 2, s.tc_offset_div2);
                 let cx = x >> 1;
                 let cy0 = y >> 1;
                 let rows = (grid >> 1).max(1);
@@ -366,10 +425,13 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
         let mut x = 0;
         while x < width {
             if s.edges.horiz_at(x, y) {
-                let qp = qp_avg(s, Dir::Horiz, x, y);
-                let tc = tc_for_qp(qp, s.tc_offset_div2);
-                let beta = beta_for_qp(qp, s.beta_offset_div2);
-                filter_luma_group(&mut s.pic.y, Dir::Horiz, y, x, tc, beta, s.bit_depth_luma);
+                let bs = boundary_strength(s, Dir::Horiz, x, y);
+                if bs > 0 {
+                    let qp = qp_avg(s, Dir::Horiz, x, y);
+                    let tc = tc_for_qp(qp, bs, s.tc_offset_div2);
+                    let beta = beta_for_qp(qp, s.beta_offset_div2);
+                    filter_luma_group(&mut s.pic.y, Dir::Horiz, y, x, tc, beta, s.bit_depth_luma);
+                }
             }
             x += 4;
         }
@@ -379,10 +441,10 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
     while y < height {
         let mut x = 0;
         while x < width {
-            if s.edges.horiz_at(x, y) {
+            if s.edges.horiz_at(x, y) && boundary_strength(s, Dir::Horiz, x, y) == 2 {
                 let qp = qp_avg(s, Dir::Horiz, x, y);
-                let cb_tc = tc_for_qp(chroma_qp(qp, s.cb_qp_offset), s.tc_offset_div2);
-                let cr_tc = tc_for_qp(chroma_qp(qp, s.cr_qp_offset), s.tc_offset_div2);
+                let cb_tc = tc_for_qp(chroma_qp(qp, s.cb_qp_offset), 2, s.tc_offset_div2);
+                let cr_tc = tc_for_qp(chroma_qp(qp, s.cr_qp_offset), 2, s.tc_offset_div2);
                 let cy = y >> 1;
                 let cx0 = x >> 1;
                 let cols = (grid >> 1).max(1);

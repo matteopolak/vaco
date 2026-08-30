@@ -162,6 +162,15 @@ pub(crate) struct CuGrid {
     mv_x: Vec<i16>,
     mv_y: Vec<i16>,
     ref_poc: Vec<i64>,
+    /// Per-4x4-block "this position's own luma transform block has one or
+    /// more non-zero coefficient levels" — §8.7.2.4's `bS == 1` condition
+    /// needs exactly this, restricted (by `crate::deblock`'s own caller) to
+    /// positions that are *also* a transform-block edge; a plain
+    /// prediction-unit-only boundary never consults it. Only ever written by
+    /// an inter CU's own transform-unit leaf (`ctu::reconstruct_luma_inter`)
+    /// — intra edges never read it, since either side being intra already
+    /// forces `bS == 2` before this grid would matter.
+    cbf_luma: Vec<bool>,
 }
 
 impl CuGrid {
@@ -184,6 +193,7 @@ impl CuGrid {
             mv_x: budget.alloc(len)?,
             mv_y: budget.alloc(len)?,
             ref_poc: budget.alloc(len)?,
+            cbf_luma: vec![false; len],
         })
     }
 
@@ -354,6 +364,37 @@ impl CuGrid {
         }
         self.is_skip.get(i).copied().unwrap_or(false)
     }
+
+    /// Paint one inter luma transform-unit leaf's own footprint (in
+    /// 4-sample blocks) with whether it coded any non-zero coefficient —
+    /// called once per leaf from `ctu::reconstruct_luma_inter`, mirroring
+    /// [`CuGrid::fill_motion`]'s own per-leaf timing.
+    pub(crate) fn fill_cbf_luma(&mut self, bx0: usize, by0: usize, blocks_w: usize, blocks_h: usize, cbf: bool) {
+        for by in by0..by0.saturating_add(blocks_h) {
+            for bx in bx0..bx0.saturating_add(blocks_w) {
+                if let Some(i) = self.index(bx, by)
+                    && let Some(slot) = self.cbf_luma.get_mut(i)
+                {
+                    *slot = cbf;
+                }
+            }
+        }
+    }
+
+    /// Whether the luma transform block containing `(px, py)` coded any
+    /// non-zero coefficient — `false` for an out-of-bounds or never-written
+    /// position, the same "unavailable reads as the harmless default" shape
+    /// every other query on this grid already has.
+    #[must_use]
+    pub(crate) fn cbf_luma_at(&self, px: i32, py: i32) -> bool {
+        let (Ok(px), Ok(py)) = (usize::try_from(px), usize::try_from(py)) else {
+            return false;
+        };
+        let Some(i) = self.index(block_of(px), block_of(py)) else {
+            return false;
+        };
+        self.cbf_luma.get(i).copied().unwrap_or(false)
+    }
 }
 
 /// Per-4x4-luma-block "is there a transform/coding-unit boundary starting
@@ -378,6 +419,17 @@ pub(crate) struct EdgeMarks {
     rows: usize,
     vert: Vec<bool>,
     horiz: Vec<bool>,
+    /// The subset of `vert`/`horiz` that is *also* a transform-block edge
+    /// (as opposed to a prediction-unit-only boundary interior to one,
+    /// unsplit transform unit — see `ctu::decode_inter_cu`'s own
+    /// [`EdgeMarks::mark_vert`]/[`EdgeMarks::mark_horiz`] calls for where
+    /// that PU-only case comes from). `crate::deblock`'s §8.7.2.4 `bS == 1`
+    /// derivation needs this distinction: its non-zero-coefficient condition
+    /// applies only "when the edge is also a transform block edge" — a
+    /// PU-only edge never qualifies, regardless of what either side's
+    /// (necessarily larger, unsplit) transform block coded.
+    tu_vert: Vec<bool>,
+    tu_horiz: Vec<bool>,
 }
 
 impl EdgeMarks {
@@ -389,7 +441,7 @@ impl EdgeMarks {
         let cols = luma_width.div_ceil(4).max(1);
         let rows = luma_height.div_ceil(4).max(1);
         let len = cols.saturating_mul(rows);
-        Self { cols, rows, vert: vec![false; len], horiz: vec![false; len] }
+        Self { cols, rows, vert: vec![false; len], horiz: vec![false; len], tu_vert: vec![false; len], tu_horiz: vec![false; len] }
     }
 
     fn index(&self, bx: usize, by: usize) -> Option<usize> {
@@ -453,6 +505,62 @@ impl EdgeMarks {
     pub(crate) fn horiz_at(&self, x: i32, y: i32) -> bool {
         let (Ok(x), Ok(y)) = (usize::try_from(x), usize::try_from(y)) else { return false };
         self.index(block_of(x), block_of(y)).and_then(|i| self.horiz.get(i)).copied().unwrap_or(false)
+    }
+
+    /// [`EdgeMarks::mark_vert`], plus also recording that this specific
+    /// vertical edge is a transform-block edge (not merely a filterable
+    /// one) — the call an inter transform-unit leaf makes, as opposed to the
+    /// plain [`EdgeMarks::mark_vert`] a prediction-unit-only interior
+    /// boundary (§8.7.2's own filterable-but-not-a-transform-edge case) uses.
+    pub(crate) fn mark_tu_vert(&mut self, x0: i32, y0: i32, size: i32, grid: i32) {
+        self.mark_vert(x0, y0, size, grid);
+        if x0 <= 0 || x0 % grid != 0 {
+            return;
+        }
+        let Ok(bx) = usize::try_from(x0 >> 2) else { return };
+        let Ok(by0) = usize::try_from(y0 >> 2) else { return };
+        let blocks = usize::try_from((size >> 2).max(1)).unwrap_or(1);
+        for by in by0..by0.saturating_add(blocks) {
+            if let Some(i) = self.index(bx, by)
+                && let Some(slot) = self.tu_vert.get_mut(i)
+            {
+                *slot = true;
+            }
+        }
+    }
+
+    /// The horizontal-direction mirror of [`EdgeMarks::mark_tu_vert`].
+    pub(crate) fn mark_tu_horiz(&mut self, x0: i32, y0: i32, size: i32, grid: i32) {
+        self.mark_horiz(x0, y0, size, grid);
+        if y0 <= 0 || y0 % grid != 0 {
+            return;
+        }
+        let Ok(by) = usize::try_from(y0 >> 2) else { return };
+        let Ok(bx0) = usize::try_from(x0 >> 2) else { return };
+        let blocks = usize::try_from((size >> 2).max(1)).unwrap_or(1);
+        for bx in bx0..bx0.saturating_add(blocks) {
+            if let Some(i) = self.index(bx, by)
+                && let Some(slot) = self.tu_horiz.get_mut(i)
+            {
+                *slot = true;
+            }
+        }
+    }
+
+    /// Whether the vertical edge at `(x, y)` (as addressed by
+    /// [`EdgeMarks::vert_at`]) is also a transform-block edge.
+    #[must_use]
+    pub(crate) fn tu_vert_at(&self, x: i32, y: i32) -> bool {
+        let (Ok(x), Ok(y)) = (usize::try_from(x), usize::try_from(y)) else { return false };
+        self.index(block_of(x), block_of(y)).and_then(|i| self.tu_vert.get(i)).copied().unwrap_or(false)
+    }
+
+    /// Whether the horizontal edge at `(x, y)` (as addressed by
+    /// [`EdgeMarks::horiz_at`]) is also a transform-block edge.
+    #[must_use]
+    pub(crate) fn tu_horiz_at(&self, x: i32, y: i32) -> bool {
+        let (Ok(x), Ok(y)) = (usize::try_from(x), usize::try_from(y)) else { return false };
+        self.index(block_of(x), block_of(y)).and_then(|i| self.tu_horiz.get(i)).copied().unwrap_or(false)
     }
 }
 

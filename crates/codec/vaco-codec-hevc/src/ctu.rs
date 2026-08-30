@@ -715,33 +715,64 @@ fn parse_part_mode_inter(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, at
 }
 
 /// §8.5.3.2.9's temporal candidate, scaled against `(curr_poc,
-/// target_ref_poc)` — `None` whenever no collocated field is recorded, the
-/// collocated block itself is intra, or (for the bottom-right position
-/// only) it would cross the current CTB's own row.
+/// target_ref_poc)` — `None` whenever no collocated field is recorded, or
+/// *neither* the bottom-right nor the centre position yields usable motion.
+///
+/// # The bottom-right-vs-centre fallback is gated on the wrong condition —
+/// found and fixed
+///
+/// HM's own `fillMvpCand`/`getInterMergeCandidates` (confirmed directly
+/// against `TComDataCU.cpp`, Tier A) always attempts the bottom-right
+/// position first when it is geometrically available (in the picture, same
+/// CTB row as the PU) and falls back to the centre position whenever that
+/// attempt *fails for any reason* — `xGetColMVP` returning `false` because
+/// the position names an intra block (`!isInter`) is exactly as much a
+/// reason to fall back as the position being outside the picture in the
+/// first place; HM's own `if (ctuRsAddr >= 0 && xGetColMVP(...)) { BR } else
+/// { centre }` does not distinguish the two. An earlier version of this
+/// function conflated "geometrically available" with "yields motion":
+/// it only ever tried the centre position when `br_in_bounds` was `false`,
+/// so a geometrically-valid bottom-right position that happened to name an
+/// intra (or otherwise motion-less) block returned `None` outright, dropping
+/// the temporal candidate entirely instead of falling back — even though the
+/// *bin-for-bin identical* HM decode of the same stream successfully
+/// resolves a real, non-zero predictor from the centre position in exactly
+/// this case. Found via a byte-for-byte HM 18.0 trace (`xGetColMVP`
+/// instrumented to report its own success/failure and reason) on the
+/// documented repro (CU (208, 24), frame 2 of the P-only fixture): both
+/// HM and this crate compute the *identical* bottom-right pixel position
+/// (confirming §8.5.3.2.8's naive `xPb + nPbW`/`yPb + nPbH` arithmetic
+/// needs no z-scan-index correction — the "dropped, not miscomputed"
+/// language in this module's own history is right about *which* candidate
+/// is wrong, but the earlier "z-scan-index arithmetic" hypothesis for *why*
+/// is refuted by this trace), and HM's own trace shows that position is
+/// genuinely intra in the collocated picture (`xGetColMVP_fail
+/// reason=notInter`) — exactly the case this fix now falls back for.
 fn temporal_candidate(s: &Ctx<'_>, pu_x: i32, pu_y: i32, pu_w: i32, pu_h: i32, curr_poc: i64, target_ref_poc: i64) -> Result<motion::TemporalCandidate> {
     let inter = s.inter()?;
     let Some(collocated) = &inter.collocated else { return Ok(None) };
 
     let x_br = pu_x + pu_w;
     let y_br = pu_y + pu_h;
-    let ctb_size = 1i32 << s.log2_ctb_size;
     let same_ctb_row = (pu_y >> s.log2_ctb_size) == (y_br >> s.log2_ctb_size);
     let br_in_bounds = x_br < s.pic_width && y_br < s.pic_height && same_ctb_row;
-    let _ = ctb_size; // documents the row check's own granularity; the shift comparison above is what matters.
 
-    let raw = if br_in_bounds {
-        collocated.get(x_br, y_br)
-    } else {
+    let br = br_in_bounds.then(|| collocated.get(x_br, y_br)).flatten();
+    let raw = br.or_else(|| {
         // §8.5.3.2.9's centre fallback: `(nPbW/4/2)*4` in each axis, matching
         // HM's own z-scan-index arithmetic (see `crate::motion`'s own doc on
         // why positions here are pixel coordinates) rather than a plain
         // `/2`, which the two only agree with when `nPbW`/`nPbH` are
         // multiples of 8 — not guaranteed for an AMP partition's shorter
-        // side (a 12-wide/tall PU has a genuinely different centre).
+        // side (a 12-wide/tall PU has a genuinely different centre). Tried
+        // whenever the bottom-right attempt above did not produce a
+        // candidate, for *any* reason — geometrically unavailable or
+        // geometrically fine but motion-less — matching HM's own
+        // undifferentiated `else` branch (see this function's own doc).
         #[allow(clippy::integer_division, reason = "deliberate truncating division, matching HM's own integer z-scan-index arithmetic exactly")]
         let (cx, cy) = (pu_x + (pu_w / 4 / 2) * 4, pu_y + (pu_h / 4 / 2) * 4);
         collocated.get(cx, cy)
-    };
+    });
     let Some(info) = raw else { return Ok(None) };
     let scale = motion::dist_scale_factor(curr_poc, target_ref_poc, collocated.poc, info.ref_poc);
     Ok(Some(if scale == 4096 { info.mv } else { motion::scale_mv(info.mv, scale) }))
@@ -773,6 +804,22 @@ fn coding_unit_p(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut Ct
 /// tree at all).
 fn decode_skip_cu(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut Ctx<'_>, x0: i32, y0: i32, log2_size: u32, depth: u32) -> Result<()> {
     let size = 1i32 << log2_size;
+    // A skip CU never reaches `transform_tree_inter`/`transform_unit_inter`
+    // — the only other call sites that mark this picture's deblocking edges
+    // — so without this, a skip CU's own left/top boundary (shared with
+    // whichever CU precedes it) is silently never marked at all. HM marks it
+    // unconditionally regardless of skip status: `TComLoopFilter::xDeblockCU`
+    // calls `xSetEdgefilterTU`/`xSetEdgefilterPU` for every coding unit,
+    // skip included, treating a skip CU as one trivial (residual-free)
+    // transform-block leaf spanning its own whole extent — reproduced here
+    // as `mark_tu_vert`/`mark_tu_horiz` (not the plain, non-`tu_`
+    // variant): the "also a transform-block edge" cbf condition in
+    // `deblock::boundary_strength` still resolves correctly, since a skip
+    // CU's own `cbf_luma_at` is never written and so already reads `false`
+    // — the same "no residual" answer HM's own `getCbf` gives it.
+    let grid = 1i32 << s.log2_min_cb_size;
+    s.edges.mark_tu_vert(x0, y0, size, grid);
+    s.edges.mark_tu_horiz(x0, y0, size, grid);
     let max_num_merge_cand = s.inter()?.max_num_merge_cand;
     let merge_idx = parse_merge_index(cabac, ctx, max_num_merge_cand)?;
     let pu = PuRect { x: x0, y: y0, w: size, h: size };
@@ -915,8 +962,27 @@ fn decode_inter_cu(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut 
     let mut all_merged = true;
     let depth_u8 = u8::try_from(depth).unwrap_or(u8::MAX);
 
+    // §8.7.2's edge-filter flags are set at every prediction-block edge as
+    // well as every transform-block edge (Table 8-12's `bS` derivation reads
+    // motion/reference differences at a PU boundary regardless of whether
+    // the transform tree happens to split there too) — a CU whose
+    // `part_mode` is not `TwoNx2N` but whose transform tree stays unsplit at
+    // this CU's own depth (`rqt_root_cbf`'s single, whole-CU-sized leaf) has
+    // an internal PU boundary with no transform-unit leaf of its own to mark
+    // it. Marked here, once per PU's own top-left edge, since PUs tile the
+    // CU exactly and a PU's own left/top edge is precisely its shared
+    // boundary with the previous PU (or, for `pu_idx == 0`, the CU's own
+    // edge — already marked by the transform tree, so re-marking it here is
+    // redundant but harmless, `EdgeMarks` being a plain boolean OR). Deliberately
+    // the plain (non-`tu_`) mark: this is a filterable edge, not necessarily
+    // a transform-block edge (§8.7.2.4's non-zero-coefficient `bS`
+    // condition must not fire here unless a transform-unit leaf also marked
+    // it).
+    let deblock_grid = 1i32 << s.log2_min_cb_size;
     for pu_idx in 0..num_pus {
         let pu = part_mode.pu_rect(x0, y0, size, pu_idx);
+        s.edges.mark_vert(pu.x, pu.y, pu.h, deblock_grid);
+        s.edges.mark_horiz(pu.x, pu.y, pu.w, deblock_grid);
         let cm = ctx.merge_flag.first_mut().ok_or(Error::InvalidData("merge_flag ctx"))?;
         let merge_flag = cabac.decode_decision(cm) != 0;
 
@@ -973,6 +1039,14 @@ fn decode_inter_cu(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut 
         let quadtree_tu_log2_min = quadtree_tu_log2_min_in_cu(s, log2_size, max_depth, inter_split_flag);
         transform_tree_inter(cabac, ctx, s, x0, y0, log2_size, 0, inter_split_flag != 0, &pred, quadtree_tu_log2_min, true, true)?;
     } else {
+        // Same gap `decode_skip_cu` has, and the same fix: no transform
+        // tree runs on this path, so nothing else marks this CU's own
+        // left/top boundary as a (trivially residual-free) transform-block
+        // edge — see that function's own comment for why HM marks it
+        // unconditionally regardless of `rqt_root_cbf`.
+        let grid = 1i32 << s.log2_min_cb_size;
+        s.edges.mark_tu_vert(x0, y0, size, grid);
+        s.edges.mark_tu_horiz(x0, y0, size, grid);
         write_inter_cu_no_residual(s, x0, y0, size, &pu_motion)?;
     }
 
@@ -1071,8 +1145,8 @@ fn transform_tree_inter(
 fn transform_unit_inter(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut Ctx<'_>, x0: i32, y0: i32, log2_size: u32, cbf_luma: bool, cbf_cb: bool, cbf_cr: bool, pred: &CuPrediction) -> Result<()> {
     let grid = 1i32 << s.log2_min_cb_size;
     let size = 1i32 << log2_size;
-    s.edges.mark_vert(x0, y0, size, grid);
-    s.edges.mark_horiz(x0, y0, size, grid);
+    s.edges.mark_tu_vert(x0, y0, size, grid);
+    s.edges.mark_tu_horiz(x0, y0, size, grid);
 
     maybe_parse_cu_qp_delta(cabac, ctx, s, cbf_luma || cbf_cb || cbf_cr)?;
 
@@ -1161,6 +1235,13 @@ fn reconstruct_luma_inter(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s
         transform::add_residual_clip(&mut pred, &residual, size, s.bit_depth_luma);
     }
     write_block(&mut s.pic.y, x0, y0, size, &pred);
+    // §8.7.2.4's `bS == 1` non-zero-coefficient condition reads this leaf's
+    // own `cbf_luma` at deblocking time — see `CuGrid::cbf_luma_at`'s own
+    // doc for why only the inter path ever needs to record it.
+    let blocks = (size >> 2).max(1);
+    let bx0 = usize::try_from(x0 >> 2).unwrap_or(0);
+    let by0 = usize::try_from(y0 >> 2).unwrap_or(0);
+    s.cu_grid.fill_cbf_luma(bx0, by0, blocks, blocks, cbf);
     Ok(())
 }
 
