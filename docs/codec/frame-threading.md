@@ -141,15 +141,30 @@ one place. Per picture, charged to the decoder's own `vaco_limits::Budget`:
 The task's own `Budget` exists only to apply the per-allocation caps
 (`max_alloc_single`, `max_frame_bytes`) to its individual allocations; the
 aggregate across every in-flight picture is the coordinator's charge above,
-because that is the number `-threads N` actually multiplies. The task charge is
-two coded pictures rather than an exact figure — one for the reconstruction
-planes and one covering the cropped output frame's row-stride padding — a
-deliberate over-estimate, not a measurement.
+because that is the number `-threads N` actually multiplies.
 
-One gap is inherited rather than introduced: `SliceStats::macroblocks` is a
-plain `Vec::push` inside `decode_slice_cabac` and has never been charged. Frame
-threading extends its lifetime from one `send_packet` call to one in-flight
-picture, so it is worth closing, but it is not new.
+**The macroblock array is the big one, which is not what the type names
+suggest.** At 4K a coded picture is 12.4 MB and the cropped output frame is
+about the same, but `SliceStats::macroblocks` is `MbSummary` × 32,400
+macroblocks at 1,888 bytes each — **59 MiB**, five times the two sample buffers
+together, because every macroblock carries its full residual and its sixteen 4×4
+motion blocks. Measured with `/usr/bin/time -l` on the 4K fixture: peak RSS 2854
+MiB at one thread, 3321 MiB at eight, and 8 × 59 MiB accounts for essentially
+all of that ~470 MiB. It is charged. The two sample buffers are charged as two
+whole coded pictures rather than exactly — one for the reconstruction planes,
+one covering the cropped frame's row-stride padding — a deliberate over-estimate
+and the one figure here that is not a measurement.
+
+**Memory pressure is backpressure, not a failed decode.** Nine in-flight 4K
+pictures are ~756 MiB against `Limits::permissive`'s 1 GiB — it fits by margin,
+not by design, and 8K or a tighter `-max_alloc` would not.
+`H264Decoder::split_packet` therefore finishes pictures until the next one's
+charge fits *before* allocating anything for it, so `-threads N` is an upper
+bound on concurrency rather than a demand, and a tight budget costs speed rather
+than the decode. Same rule `vaco-sched`'s wires already encode: never let the
+mechanism that exists to bound memory be the thing that stops the pipeline. If
+nothing is in flight and one picture still does not fit, the reservation reports
+it honestly — waiting cannot change that.
 
 ## Configuration
 
@@ -157,7 +172,15 @@ picture, so it is worth closing, but it is not new.
 |---|---|---|
 | threads | `-threads N` (CLI), `Decoder::set_thread_count` (API) | 1 |
 | pictures the serial half may run ahead by | `H264Decoder::max_in_flight` | `threads + 1`, or 1 at one thread |
+| the ceiling that actually binds under pressure | `Limits::max_alloc_total` (`-max_alloc`) | 1 GiB (`Limits::permissive`, the CLI default) |
 | band height / guard rows | `PictureSpec::with_band_height` / `with_guard` | one band, no guard (`single_band`) |
+
+Measured scaling, for choosing a count (medians, interleaved, wall clock):
+1.23x / 1.26x / 1.30x at 2 / 4 / 8 threads on an all-P 4K clip, and 1.78x /
+2.00x / 1.99x on a stock-`libx264` B-pyramid 1080p clip. CPU utilisation
+flatlines at 129% on the first and 219% on the second, so **above four threads
+there is nothing left to gain at this granularity** — see
+`planning/E2E-GAPS.md` §20 for the full tables and why.
 
 `-threads` is a **global** CLI option here, not the reference's per-stream
 `AVCodecContext` one: vaco has no per-codec option store yet, and stating it once

@@ -715,6 +715,32 @@ impl H264Decoder {
             ImplicitWeights::new(table)
         });
 
+        // What this picture will cost the budget: the task's own working set
+        // (see the note at the reservation below) plus, if it is a reference,
+        // one more coded picture for its DPB entry.
+        let mb_bytes =
+            (stats.macroblocks.len().saturating_mul(core::mem::size_of::<crate::mb::MbSummary>())) as u64;
+        let task_charge = coded_picture_bytes(mbs_wide, mbs_high)
+            .saturating_mul(2)
+            .saturating_add(mb_bytes);
+        let headroom = task_charge.saturating_add(coded_picture_bytes(mbs_wide, mbs_high));
+        // **Memory pressure is backpressure, not failure.** `-threads N` lets
+        // `N + 1` pictures be in flight, and at 4K each one is ~84 MiB once the
+        // macroblock array is counted honestly -- more than `Limits::permissive`'s
+        // whole 1 GiB ceiling at eight threads. Rather than refuse the decode
+        // (the shape this would otherwise take: `-threads 8` working at 1080p
+        // and erroring at 4K), finish pictures until the next one fits. The
+        // thread count then bounds concurrency only as far as the budget
+        // allows, which is what a *limit* is supposed to do. If nothing is in
+        // flight and it still does not fit, the reservation below reports it
+        // honestly -- one picture genuinely does not fit, and no amount of
+        // waiting changes that.
+        while self.budget.available() < headroom && !self.in_flight.is_empty() {
+            if !self.collect_one(true)? {
+                break;
+            }
+        }
+
         // Clause 8.2.5's reference-picture marking, all of it metadata: no
         // sample of this picture exists yet and none is needed. This is why
         // the serial half can run ahead of the pixels at all.
@@ -877,10 +903,6 @@ impl H264Decoder {
         // cropped) but carries row-stride padding, so charging a second whole
         // coded picture for it is a deliberate over-estimate rather than an
         // exact figure.
-        let mb_bytes = (stats.macroblocks.len().saturating_mul(core::mem::size_of::<crate::mb::MbSummary>())) as u64;
-        let task_charge = coded_picture_bytes(mbs_wide, mbs_high)
-            .saturating_mul(2)
-            .saturating_add(mb_bytes);
         self.budget.reserve(task_charge)?.commit();
 
         self.runner.dispatch(H264FrameTask {

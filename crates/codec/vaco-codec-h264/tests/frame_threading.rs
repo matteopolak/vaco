@@ -243,6 +243,62 @@ fn neither_per_picture_budget_charge_leaks_at_any_thread_count() {
     }
 }
 
+/// A budget too small for `-threads N`'s whole in-flight window must cost
+/// *speed*, not the decode.
+///
+/// `-threads 8` at 4K wants nine pictures in flight and about 756 MiB to hold
+/// them, against `Limits::permissive`'s 1 GiB -- it fits by margin rather than
+/// by design, and 8K or a tighter `-max_alloc` would not. The failure that
+/// would produce is the wrong shape: a thread count that silently also means
+/// "and do not decode large pictures". `split_packet` therefore finishes
+/// pictures until the next one's charge fits before allocating anything for
+/// it, so the window shrinks under pressure instead of the decode failing.
+///
+/// This asks for eight threads under a ceiling that holds barely two pictures
+/// and asserts all 25 frames still come out, byte-identical to the unbounded
+/// serial decode. If the drain were removed, this reports `LimitExceeded`.
+#[test]
+fn a_budget_too_small_for_the_thread_count_costs_speed_not_the_decode() {
+    let stream: &[u8] = include_bytes!("fixtures/cabac_ip_simple.264");
+    let want = decode(stream, 1);
+
+    let mut limits = Limits::permissive();
+    // One picture's charge is ~42 KiB and its DPB entry's ~12 KiB, so this
+    // holds two in flight and change -- a quarter of what eight threads asks
+    // for.
+    limits.max_alloc_total = 128 * 1024;
+
+    let (extradata, slices) = split(stream);
+    let mut d = H264Decoder::new(limits);
+    d.set_thread_count(8);
+    let mut budget = Budget::new(Limits::permissive());
+    d.set_extradata(&extradata).unwrap();
+    let mut got = Vec::new();
+    for slice in &slices {
+        let pkt = Packet::from_slice(&mut budget, slice).unwrap();
+        loop {
+            match d.send_packet(Some(&pkt)) {
+                Ok(()) => break,
+                Err(Error::OutputPending) => got.push(observe(&d.receive_frame().unwrap())),
+                Err(e) => panic!(
+                    "a tight budget failed the decode after {} frames instead of \
+                     narrowing the in-flight window: {e:?}",
+                    got.len()
+                ),
+            }
+        }
+        while let Ok(frame) = d.receive_frame() {
+            got.push(observe(&frame));
+        }
+    }
+    d.send_packet(None).unwrap();
+    while let Ok(frame) = d.receive_frame() {
+        got.push(observe(&frame));
+    }
+    assert_eq!(got.len(), want.len(), "frames lost under a tight budget");
+    assert!(got == want, "a tight budget changed the decoded output");
+}
+
 #[test]
 fn a_p_only_chain_decodes_identically_at_every_thread_count() {
     // Nothing here may overlap except the serial stage against the parallel
