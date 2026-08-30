@@ -116,7 +116,7 @@ use vaco_core::{Error, Result};
 use vaco_frame::{Frame, FrameFlags};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
-use vaco_parse_h264::slice::RefPicListModification;
+use vaco_parse_h264::slice::{RefPicListModification, RefPicMarking};
 use vaco_parse_h264::{H264NalHeader, H264Parser, NalUnitType, SliceHeader, SliceKind};
 use vaco_pixfmt::PixFmt;
 
@@ -698,6 +698,70 @@ impl H264Decoder {
         }
 
         if info.is_reference {
+            // Clause 8.2.5.4's adaptive marking, which runs *instead of*
+            // clause 8.2.5.3's sliding window whenever
+            // `adaptive_ref_pic_marking_mode_flag` is 1. x264 emits it for
+            // every `b-pyramid` stream (its default): the pyramid's own
+            // reference B picture is explicitly unmarked with
+            // `memory_management_control_operation == 1` as soon as the
+            // next anchor is coded, which is *not* the picture the sliding
+            // window would have evicted (the window always takes the
+            // smallest `FrameNumWrap`; the B reference is newer than the
+            // anchor it sits between). Ignoring the commands and running
+            // the window anyway therefore evicted the wrong picture and
+            // every later list-0 entry pointed at the wrong reference --
+            // large, structured, accumulating errors from the first
+            // picture that read past the mistake, with no CABAC desync at
+            // all, since nothing about the *bitstream* parse depends on
+            // it.
+            let adaptive = match slice_header.ref_pic_marking.as_ref() {
+                Some(RefPicMarking::Adaptive(cmds)) => Some(cmds.as_slice()),
+                _ => None,
+            };
+            if let Some(cmds) = adaptive {
+                for cmd in cmds {
+                    match cmd.op {
+                        1 => {
+                            // eq. (8-40): `picNumX = CurrPicNum -
+                            // (difference_of_pic_nums_minus1 + 1)`, and
+                            // for a frame `CurrPicNum == frame_num` and a
+                            // stored frame's own `PicNum` is its
+                            // `FrameNumWrap`.
+                            let pic_num_x =
+                                i64::from(curr_frame_num) - (i64::from(cmd.arg0) + 1);
+                            if let Some(pos) = self.dpb.iter().position(|p| {
+                                frame_num_wrap(p.frame_num, curr_frame_num, max_frame_num) == pic_num_x
+                            }) && let Some(evicted) = self.dpb.remove(pos)
+                            {
+                                self.budget.release(ref_picture_bytes(&evicted));
+                            }
+                        }
+                        5 => {
+                            // "Mark all reference pictures as unused" --
+                            // the DPB is emptied, and the current picture
+                            // becomes the only entry.
+                            for evicted in self.dpb.drain(..) {
+                                self.budget.release(ref_picture_bytes(&evicted));
+                            }
+                        }
+                        // Ops 2/3/4/6 are long-term reference management,
+                        // which this decoder does not implement at all
+                        // (`RefPicList` construction has no long-term
+                        // section, and clause 8.2.4.3's `idc == 2`
+                        // reordering is refused for the same reason).
+                        // Refused rather than silently ignored: dropping a
+                        // long-term command leaves the DPB in a state the
+                        // encoder never intended, which is exactly the
+                        // "registered but wrong" failure this crate treats
+                        // as worse than an honest refusal.
+                        _ => {
+                            return Err(Error::Unsupported(
+                                "vaco-codec-h264: long-term reference pictures                                  (memory_management_control_operation 2/3/4/6) are out of scope",
+                            ));
+                        }
+                    }
+                }
+            }
             let cap = max_num_ref_frames.max(1) as usize;
             // Evict down to `cap - 1` *before* pushing this picture's own
             // clone, not after: pushing first and evicting after (the

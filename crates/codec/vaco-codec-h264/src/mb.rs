@@ -1660,6 +1660,16 @@ pub(crate) struct MvInfo {
     /// field exists to make unrepresentable -- see [`Self::as_motion_neighbour`].
     mb_available: bool,
     pred: Option<PartPred>,
+    /// The **raw** decoded `ref_idx_lX` per list, valid only for a list
+    /// `pred` actually reads: every writer below leaves the other list's
+    /// entry at whatever it was initialised to (`0`, from `[0i8; 2]` /
+    /// `[[0i8; 2]; 2]`), because clause 7.3.5.1 never reads a `ref_idx_lX`
+    /// syntax element for a list a partition does not predict from and
+    /// there is no value to store. Read it through
+    /// [`Self::ref_idx_l0`]/[`Self::ref_idx_l1`], never directly: those
+    /// substitute clause 8.4.1.3.2's own `refIdxLX = -1` ("this list is
+    /// not used") for an unread list, which is the convention every
+    /// consumer outside this module is written against.
     ref_idx: [i8; 2],
     mvd: [(i16, i16); 2],
     /// The final derived motion vector (clause 8.4.1's own `mvLX`,
@@ -1668,6 +1678,26 @@ pub(crate) struct MvInfo {
     /// 9.3.3.1.1.7 context derivation). `(0, 0)` for any list `pred`
     /// does not read, same convention as `mvd`.
     mv: [(i16, i16); 2],
+    /// This block belongs to a `P_Skip`/`B_Skip` macroblock, or to a
+    /// direct-predicted region (`B_Direct_16x16`, or a `B_8x8` quadrant
+    /// whose `sub_mb_type` is `B_Direct_8x8`).
+    ///
+    /// Clause 9.3.3.1.1.6 (`ref_idx_lX`) and 9.3.3.1.1.7 (`mvd_lX`) both
+    /// zero their `condTermFlagN`/`absMvdCompN` for such a neighbour --
+    /// skip by name, direct through `predModeEqualFlag`, since
+    /// `MbPartPredMode(B_Direct_16x16, 0)` and
+    /// `SubMbPredMode(B_Direct_8x8)` are both `Direct`, which is neither
+    /// `Pred_LX` nor `BiPred`. `pred` alone cannot express that: a direct
+    /// block's derived motion is stored as a perfectly ordinary
+    /// `L0`/`L1`/`Bi` prediction (it has to be -- clause 8.4.1.3's own
+    /// neighbour derivation for a *later* macroblock's motion vector
+    /// prediction reads it exactly that way, with no direct-ness
+    /// exception), so this flag is what keeps the two questions apart.
+    /// Missing it made a direct neighbour with `ref_idx > 0` contribute
+    /// `condTermFlagN = 1` where the answer is 0 -- invisible at
+    /// `num_ref_idx_lX_active_minus1 == 0` (no `ref_idx_lX` in the
+    /// bitstream at all), a slice-killing CABAC desync above it.
+    direct_or_skip: bool,
 }
 
 impl MvInfo {
@@ -1683,16 +1713,42 @@ impl MvInfo {
         self.pred.is_some()
     }
 
+    /// This block's list-0 reference index, or `-1` when its own `pred`
+    /// does not read list 0 at all -- clause 8.4.1.3.2's own `refIdxLX`
+    /// convention for "this list is not used", and JM 19.1's `NULL`
+    /// `PicMotionParams::ref_pic[LIST_0]` for the same case.
+    ///
+    /// The masking is load-bearing, not defensive: `ref_idx`'s unread
+    /// entry is `0`, not `-1` (see that field's own doc), and `0` is a
+    /// perfectly valid reference index. Returning it raw made a
+    /// list-1-only B partition claim `RefPicList0[0]` as a second
+    /// reference picture, which is exactly the input clause 8.7.2.1's
+    /// `bS` derivation compares -- see [`Self::ref_idx_l1`].
     pub(crate) const fn ref_idx_l0(&self) -> i8 {
-        self.ref_idx[0]
+        if self.reads_l0() { self.ref_idx[0] } else { -1 }
     }
 
     pub(crate) const fn mv_l0(&self) -> (i16, i16) {
         self.mv[0]
     }
 
+    /// This block's list-1 reference index, or `-1` when its own `pred`
+    /// does not read list 1 -- the list-1 half of [`Self::ref_idx_l0`],
+    /// and the half that was actually wrong.
+    ///
+    /// Unmasked, every list-0-only partition of a B slice reported
+    /// `ref_idx_l1() == 0`, which `crate::deblock::boundary_strength`
+    /// resolved to `RefPicList1[0]`'s POC: a uni-predicted block looked
+    /// bi-predicted, so clause 8.7.2.1's "the two sides use the same set
+    /// of reference pictures" test answered against a reference set that
+    /// block never used, and the edge came out `bS = 1` where the answer
+    /// is `0` (or the reverse). A P slice hid it completely -- its
+    /// `RefPicList1` is empty, so `crate::deblock::ref_poc` returns `None`
+    /// for any index at all and the raw value never mattered. That is why
+    /// every I and P frame of a B-frame stream was byte-exact while every
+    /// B frame carried a handful of small deltas along block edges.
     pub(crate) const fn ref_idx_l1(&self) -> i8 {
-        self.ref_idx[1]
+        if self.reads_l1() { self.ref_idx[1] } else { -1 }
     }
 
     pub(crate) const fn mv_l1(&self) -> (i16, i16) {
@@ -2243,6 +2299,9 @@ fn intra_chroma_cond_term(neighbour: Option<CabacMbInfo>) -> u32 {
 /// found by re-checking the primary text bin-by-bin rather than from
 /// recollection — recollection had the polarity backwards.
 fn ref_idx_cond_term(n: MvInfo, list: usize) -> u32 {
+    if n.direct_or_skip {
+        return 0;
+    }
     let Some(pred) = n.pred else { return 0 };
     let reads = if list == 0 { pred.reads_l0() } else { pred.reads_l1() };
     if !reads {
@@ -2253,6 +2312,16 @@ fn ref_idx_cond_term(n: MvInfo, list: usize) -> u32 {
 
 /// clause 9.3.3.1.1.7's `absMvdCompN` for `mvd_lX`.
 fn mvd_abs_term(n: MvInfo, list: usize, comp: usize) -> u32 {
+    // Clause 9.3.3.1.1.7's own `P_Skip`/`B_Skip`/`predModeEqualFlag == 0`
+    // zero-conditions, shared verbatim with `ref_idx_cond_term`'s clause
+    // 9.3.3.1.1.6 list -- see `MvInfo::direct_or_skip`. Redundant in
+    // practice (a skipped or direct block reads no `mvd_lX`, so its stored
+    // `mvd` is `(0, 0)` and `Abs(0)` is 0 either way) but written out
+    // rather than left to that coincidence, since the two clauses state
+    // the same condition and one of them is *not* redundant.
+    if n.direct_or_skip {
+        return 0;
+    }
     let Some(pred) = n.pred else { return 0 };
     let reads = if list == 0 { pred.reads_l0() } else { pred.reads_l1() };
     if !reads {
@@ -2293,6 +2362,32 @@ fn decode_mb_type_intra_suffix(cabac: &mut CabacDecoder<'_>, ctx: &mut [ContextM
     if decide(cabac, ctx, 0) == 0 {
         return 0;
     }
+    decode_mb_type_intra_suffix_tail(cabac, ctx)
+}
+
+/// Table 9-26 from `binIdx == 1` on — everything after the suffix's own
+/// leading "is this `I_NxN`?" bin, which the caller has already decoded as
+/// `1`. Returns 1..=25 (never 0, which is `I_NxN`'s own code and is only
+/// reachable through that already-consumed bin).
+///
+/// Split out because a **B** slice's `mb_type` decodes that leading bin as
+/// part of its own *prefix* tree, not here. Table 9-27's B rows make
+/// `1 1 1 1 0 1` the whole "Intra, prefix only" prefix, and Table 9-11 then
+/// gives the suffix `ctxIdxOffset == 32` — the *same* ctxIdx the prefix's
+/// own last bin uses (`cabac_mb_tables::MB_TYPE_B`'s own doc: "index 5 here
+/// (ctxIdx 32) is the shared context between the prefix's last bin and the
+/// suffix's first"). [`decode_mb_type_b_prefix`]'s final `act_sym += bit(5)`
+/// *is* that suffix bin, exactly as JM 19.1's own
+/// `readMB_typeInfo_CABAC_b_slice` reads it inside its prefix tree. Calling
+/// the whole of [`decode_mb_type_intra_suffix`] afterwards read it a second
+/// time, at the wrong ctxIdx (17, P/SP's suffix offset), and every
+/// subsequent bin in the slice was then one bin out of step — a desync that
+/// only fires on an intra macroblock inside a B slice, which is why plenty
+/// of B content decoded byte-exact without ever reaching it.
+///
+/// `ctx`'s local 0 is *not* read here; only 1..=3 are (ctxIdx 33..=35 for a
+/// B slice, 18..=20 for P/SP).
+fn decode_mb_type_intra_suffix_tail(cabac: &mut CabacDecoder<'_>, ctx: &mut [ContextModel; 4]) -> u32 {
     if cabac.decode_terminate() == 1 {
         return 25;
     }
@@ -2418,16 +2513,20 @@ fn decode_mb_type_b_prefix(inc0: usize, mut bit: impl FnMut(usize) -> u32) -> Mb
     MbTypeBPrefix::Code(act_sym)
 }
 
-fn decode_mb_type_b(cabac: &mut CabacDecoder<'_>, ctx: &mut [ContextModel; 9], mb_type_p: &mut [ContextModel; 7], inc0: usize) -> u32 {
+fn decode_mb_type_b(cabac: &mut CabacDecoder<'_>, ctx: &mut [ContextModel; 9], inc0: usize) -> u32 {
     match decode_mb_type_b_prefix(inc0, |idx| decide(cabac, ctx, idx)) {
         MbTypeBPrefix::Code(v) => v,
         MbTypeBPrefix::NeedsIntraSuffix => {
-            let mut suffix_ctx = [mb_type_p[3], mb_type_p[4], mb_type_p[5], mb_type_p[6]];
-            let v = decode_mb_type_intra_suffix(cabac, &mut suffix_ctx);
-            mb_type_p[3] = suffix_ctx[0];
-            mb_type_p[4] = suffix_ctx[1];
-            mb_type_p[5] = suffix_ctx[2];
-            mb_type_p[6] = suffix_ctx[3];
+            // ctxIdx 32..=35: local 5 is the suffix's own binIdx-0 context,
+            // already consumed by the prefix tree above (see
+            // [`decode_mb_type_intra_suffix_tail`]), and 6..=8 are ctxIdx
+            // 33..=35 -- `MB_TYPE_B`'s own last three rows, which existed
+            // in that table and were never read until this fix.
+            let mut suffix_ctx = [ctx[5], ctx[6], ctx[7], ctx[8]];
+            let v = decode_mb_type_intra_suffix_tail(cabac, &mut suffix_ctx);
+            ctx[6] = suffix_ctx[1];
+            ctx[7] = suffix_ctx[2];
+            ctx[8] = suffix_ctx[3];
             23 + v
         }
     }
@@ -2843,6 +2942,7 @@ pub fn decode_slice_cabac(
                     ref_idx: [0, -1],
                     mvd: [(0, 0), (0, 0)],
                     mv: [skip_mv, (0, 0)],
+                    direct_or_skip: true,
                 };
                 for y in 0..4u32 {
                     for x in 0..4u32 {
@@ -3045,7 +3145,7 @@ fn decode_macroblock_cabac(
         decode_mb_type_i_table(cabac, &mut ctx.mb_type_i, inc0 as usize)
     } else if is_b_slice {
         let inc0 = mb_type_b_cond_term(grids.mb_left(mb_x, mb_y)) + mb_type_b_cond_term(grids.mb_above(mb_x, mb_y));
-        decode_mb_type_b(cabac, &mut ctx.mb_type_b, &mut ctx.mb_type_p, inc0 as usize)
+        decode_mb_type_b(cabac, &mut ctx.mb_type_b, inc0 as usize)
     } else {
         decode_mb_type_p(cabac, &mut ctx.mb_type_p)
     };
@@ -3659,7 +3759,14 @@ fn apply_direct_quadrant(
     let (qi, qj) = (2 * (k & 1), 2 * (k >> 1));
     let write_block = |grids: &mut CabacGrids, bx: u32, by: u32, moving: bool| {
         let (ref_idx, mv) = direct_block(params.l0_ref, params.l1_ref, params.mv0, params.mv1, moving);
-        let info = MvInfo { mb_available: true, pred: pred_from_ref_idx(ref_idx), ref_idx, mvd: [(0, 0); 2], mv };
+        let info = MvInfo {
+            mb_available: true,
+            pred: pred_from_ref_idx(ref_idx),
+            ref_idx,
+            mvd: [(0, 0); 2],
+            mv,
+            direct_or_skip: true,
+        };
         grids.set_mv(mb_x * 4 + bx, mb_y * 4 + by, info);
     };
     if direct_8x8_inference {
@@ -3766,7 +3873,7 @@ fn decode_one_partition_cabac(
         mv[1] = (pmv.0.saturating_add(mvd[1].0), pmv.1.saturating_add(mvd[1].1));
     }
 
-    let info = MvInfo { mb_available: true, pred: Some(pred), ref_idx, mvd, mv };
+    let info = MvInfo { mb_available: true, pred: Some(pred), ref_idx, mvd, mv, direct_or_skip: false };
     for y in y0..=y1 {
         for x in x0..=x1 {
             grids.set_mv(mb_x * 4 + x, mb_y * 4 + y, info);
@@ -3825,6 +3932,42 @@ fn decode_two_partitions_cabac(
                 let inc = ref_idx_cond_term(left, list) + 2 * ref_idx_cond_term(above, list);
                 ref_idx[p][list] = i8::try_from(decode_ref_idx(cabac, &mut ctx.ref_idx, inc)).unwrap_or(i8::MAX);
             }
+            // Publish this partition's `ref_idx` into the motion grid the
+            // moment it is known -- the same immediate-write rule the
+            // `mvd` pass below already documents, and the sub-macroblock
+            // path's own `ref_idx` pass already follows. It is not
+            // cosmetic here either: for a 16x8/8x16 macroblock, clause
+            // 6.4.11.7 makes partition 1's neighbour `A` (8x16) or `B`
+            // (16x8) *partition 0 of this same macroblock*, so clause
+            // 9.3.3.1.1.6's `refIdxZeroFlagN` for partition 1 asks about a
+            // value decoded two lines above. Left unpublished, the lookup
+            // read the grid's never-written `MvInfo::default()` (`pred:
+            // None`), `ref_idx_cond_term` answered 0 for an unavailable
+            // neighbour, and partition 1's `ref_idx_lX` was decoded
+            // against the wrong `ctxIdxInc` -- one bin, right value or
+            // wrong, but always the wrong adaptive context, which then
+            // desynced the rest of the slice.
+            //
+            // `num_ref_idx_lX_active_minus1 == 0` hid this completely:
+            // `ref_idx_lX` is then not in the bitstream at all
+            // (`n_active > 0` above), every partition is `ref_idx` 0, and
+            // `refIdxZeroFlagN` is 1 either way. That is exactly why every
+            // `-refs 1` stream decoded byte-exact while multi-reference
+            // content desynced.
+            let info = MvInfo {
+                mb_available: true,
+                pred: Some(preds[p]),
+                ref_idx: ref_idx[p],
+                mvd: [(0, 0); 2],
+                mv: [(0, 0); 2],
+                direct_or_skip: false,
+            };
+            let (x0, y0, x1, y1) = rects[p];
+            for yy in y0..=y1 {
+                for xx in x0..=x1 {
+                    grids.set_mv(mb_x * 4 + xx, mb_y * 4 + yy, info);
+                }
+            }
         }
     }
     let mut mv = [[(0i16, 0i16); 2]; 2];
@@ -3855,7 +3998,7 @@ fn decode_two_partitions_cabac(
                 // own neighbour lookup two lines above must see this one's
                 // values once decoded, matching clause 6.4.7.5's ordinary
                 // same-macroblock case.
-                let info = MvInfo { mb_available: true, pred: Some(preds[p]), ref_idx: ref_idx[p], mvd: mvd[p], mv: mv[p] };
+                let info = MvInfo { mb_available: true, pred: Some(preds[p]), ref_idx: ref_idx[p], mvd: mvd[p], mv: mv[p], direct_or_skip: false };
                 for yy in y0..=y1 {
                     for xx in x0..=x1 {
                         grids.set_mv(mb_x * 4 + xx, mb_y * 4 + yy, info);
