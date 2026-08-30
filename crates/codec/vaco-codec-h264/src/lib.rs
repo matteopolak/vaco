@@ -158,12 +158,27 @@ pub use decoder::H264Decoder;
 /// doc, and that crate's, for the other half (the `vaco-component.toml`
 /// fragment's `encumbered = true` / `default = false` pair, which is what
 /// `cargo xtask patent-gate` actually checks).
+///
+/// `Caps::FRAME_THREADS` is what
+/// [`vaco_codec_core::Threading::required_caps`] asks a component to declare
+/// before it may return [`vaco_codec_core::Threading::Frame`] from
+/// `set_thread_count`, which this decoder does — see
+/// `docs/codec/frame-threading.md`. It is a statement about the *capability*,
+/// not about the default: `-threads` unstated still means one thread and
+/// spawns nothing.
+///
+/// `Caps::DELAY` is deliberately not here even though `H264Decoder` builds its
+/// own `Machine` with it. That flag is the machine's own "more than one output
+/// may be buffered" policy, set where the machine is constructed; the
+/// descriptor has never carried it, and adding it now would be a separate
+/// change with its own registry-visible consequences to check.
 pub const DECODER_H264: ::vaco_codec_core::DecoderDesc = ::vaco_codec_core::DecoderDesc {
     name: "h264",
     long_name: "H.264 / AVC / MPEG-4 Part 10",
     id: ::vaco_codec_core::CodecId::H264,
     media_type: ::vaco_core::MediaType::Video,
-    caps: ::vaco_codec_core::Caps::PATENT_ENCUMBERED,
+    caps: ::vaco_codec_core::Caps::PATENT_ENCUMBERED
+        .union(::vaco_codec_core::Caps::FRAME_THREADS),
     supported_rates: &[],
     make: |limits| ::std::boxed::Box::new(decoder::H264Decoder::new(limits)),
 };
