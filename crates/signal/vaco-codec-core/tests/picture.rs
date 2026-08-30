@@ -5,7 +5,9 @@
     clippy::expect_used,
     clippy::panic,
     clippy::indexing_slicing,
-    clippy::integer_division
+    clippy::integer_division,
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation
 )]
 
 use std::sync::Arc;
@@ -250,3 +252,65 @@ fn a_picture_larger_than_the_budget_is_refused() {
     let s = spec(4096, 4096, 256, 8);
     assert!(ProgressPicture::allocate(&s, 0, &mut budget).is_err());
 }
+
+/// The guard depth a codec picks is not a margin, it is an exact requirement,
+/// and getting it one row short costs correctness nothing and speed a great
+/// deal — every straddling read silently falls onto the copy path instead.
+///
+/// H.264's own worst case is the widest of any codec this guard is sized for:
+/// clause 8.4.2.2.1's six-tap luma filter reads a **9-row** region for a 4x4
+/// block. A read of `h` rows straddles a seam at `F` exactly when its first row
+/// falls in `F - (h - 1) ..= F - 1`, so a guard of `h - 1 = 8` rows is what
+/// makes every such read land inside the next band's own allocation — and eight
+/// is what `DEFAULT_GUARD` is.
+///
+/// This walks a 9-row read across every row of a banded plane and asserts that
+/// none of them is copied.
+#[test]
+fn a_nine_row_read_never_straddles_a_band_when_the_guard_is_eight() {
+    let mut budget = Budget::new(Limits::permissive());
+    let (width, height, band_h, guard) = (64u32, 128u32, 32u32, 8u32);
+    let (mut w, r) = ProgressPicture::allocate(&spec(width, height, band_h, guard), 0, &mut budget)
+        .unwrap();
+    for k in 0..w.band_count(0) {
+        fill(&mut w, k);
+    }
+    w.finish().unwrap();
+    let view = r.finished(0).unwrap();
+    let mut scratch = BlockScratch::new(&mut budget, 16, 16).unwrap();
+    for y in 0..=(height - 9) {
+        let block = view.block(0, y as i32, 9, 9, &mut scratch).unwrap();
+        assert_eq!(
+            block.stride, width as usize,
+            "a 9-row read at row {y} was copied rather than borrowed, so the guard is too shallow"
+        );
+        for j in 0..9u32 {
+            let row = &block.data[(j as usize) * block.stride..][..9];
+            assert!(
+                row.iter().all(|&v| v == (y + j) as u8),
+                "row {} of the borrow does not hold picture row {}",
+                j,
+                y + j
+            );
+        }
+    }
+}
+
+/// The same read one row short of the guard *does* get copied, which is what
+/// makes the test above a statement about eight specifically rather than about
+/// any guard at all.
+#[test]
+fn a_seven_row_guard_is_one_row_too_few_for_a_nine_row_read() {
+    let mut budget = Budget::new(Limits::permissive());
+    let (mut w, r) = ProgressPicture::allocate(&spec(64, 128, 32, 7), 0, &mut budget).unwrap();
+    for k in 0..w.band_count(0) {
+        fill(&mut w, k);
+    }
+    w.finish().unwrap();
+    let view = r.finished(0).unwrap();
+    let mut scratch = BlockScratch::new(&mut budget, 16, 16).unwrap();
+    // Rows 24..=32: eight rows above the seam at 32 and one below it.
+    let block = view.block(0, 24, 9, 9, &mut scratch).unwrap();
+    assert_eq!(block.stride, 9, "with a 7-row guard this read must take the copy path");
+}
+

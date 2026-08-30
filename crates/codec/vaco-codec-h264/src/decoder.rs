@@ -179,23 +179,51 @@ fn coded_picture_bytes(mbs_wide: u32, mbs_high: u32) -> u64 {
     luma.saturating_add(luma.saturating_div(2))
 }
 
+/// Rows per band of a row-published DPB entry.
+///
+/// The tension is entirely between publication *latency* and the guard rows'
+/// cost. A guard of [`ROW_BAND_GUARD`] rows per band is what makes every
+/// reference read land inside one allocation (see [`ROW_BAND_GUARD`]), so a
+/// band of `B` rows carries `8 / B` of overhead in both memory and the copy
+/// that fills it — 25% at 32 rows — while the *coarsest* progress the reader
+/// sees is one chroma band, which at 4:2:0 is two luma rows per chroma row:
+/// 64 luma rows, four macroblock rows, at 32.
+///
+/// A power of two, so `ProgressPlane`'s row-to-band mapping is a shift rather
+/// than a division by a runtime value — that mapping runs on every block read.
+const ROW_BAND_HEIGHT: u32 = 32;
+
+/// Guard rows a row-published DPB entry carries above each band.
+///
+/// Eight is not a margin, it is exact. Clause 8.4.2.2.1's six-tap filter reads
+/// a **9-row** region for a 4x4 block, so a read whose first row falls in the
+/// last eight rows before a band boundary would straddle two allocations; the
+/// next band's eight guard rows hold precisely those rows, so it does not. Any
+/// smaller guard would push those reads onto `PlaneView::block`'s copy path,
+/// and any larger one would cost memory for nothing.
+const ROW_BAND_GUARD: u32 = 8;
+
 /// The `PictureSpec` a DPB entry is allocated with.
 ///
-/// **One band, no guard rows.** This decoder publishes a reference picture only
-/// once clause 8.7's two whole-picture deblocking passes have swept it, because
-/// until then no row of it is final and a later picture must not predict from
-/// undeblocked samples. Row-granularity publication is what the band machinery
-/// exists for and is the obvious next step, but it needs deblocking interleaved
-/// into the macroblock-row loop first — see `crate::frame_task`'s module doc.
-fn dpb_picture_spec(mbs_wide: u32, mbs_high: u32) -> PictureSpec {
+/// `banded` is `-threads N` with `N > 1`. At one thread a DPB entry is **one
+/// band with no guard rows**: every `PlaneView::block` takes the contiguous
+/// path, `contiguous_all` hands the plane back as one slice, and the
+/// non-threaded decode pays nothing at all for row granularity — not the guard
+/// rows' memory, not the copy that fills them, and not the block API in the
+/// reader (see `crate::reconstruct::RefPlane`).
+fn dpb_picture_spec(mbs_wide: u32, mbs_high: u32, banded: bool) -> PictureSpec {
     let (w, h) = (mbs_wide.saturating_mul(16), mbs_high.saturating_mul(16));
     let (cw, ch) = (mbs_wide.saturating_mul(8), mbs_high.saturating_mul(8));
-    PictureSpec::new(vec![
+    let spec = PictureSpec::new(vec![
         PlaneSpec::new(w, h),
         PlaneSpec::new(cw, ch),
         PlaneSpec::new(cw, ch),
-    ])
-    .single_band()
+    ]);
+    if banded {
+        spec.with_band_height(ROW_BAND_HEIGHT).with_guard(ROW_BAND_GUARD)
+    } else {
+        spec.single_band()
+    }
 }
 
 /// Clause 8.2.4.1's `FrameNumWrap`: `frame_num` reinterpreted as "distance
@@ -860,7 +888,7 @@ impl H264Decoder {
             // and into every later picture's reference list).
             let before = self.budget.committed();
             let (writer, planes) = ProgressPicture::allocate(
-                &dpb_picture_spec(mbs_wide, mbs_high),
+                &dpb_picture_spec(mbs_wide, mbs_high, self.threads > 1),
                 self.runner.next_decode_index(),
                 &mut self.budget,
             )?;
@@ -923,6 +951,7 @@ impl H264Decoder {
                 alpha_c0_offset_div2: slice_header.slice_alpha_c0_offset_div2,
                 beta_offset_div2: slice_header.slice_beta_offset_div2,
             },
+            row_progress: self.threads > 1,
             store,
             geometry: FrameGeometry {
                 dimensions,

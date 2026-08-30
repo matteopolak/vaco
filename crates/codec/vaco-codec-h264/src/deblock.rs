@@ -847,3 +847,119 @@ impl<'a> DeblockCtx<'a> {
     }
 }
 
+#[cfg(test)]
+#[allow(clippy::indexing_slicing, clippy::unwrap_used, clippy::integer_division, reason = "test code")]
+mod tests {
+    use super::*;
+    use crate::mb::{MbResidual, MvInfo};
+
+    /// An `Intra_16x16` macroblock, which gives every edge touching it
+    /// `bS = 4` at a macroblock boundary and `3` internally -- the strongest
+    /// filter, so nothing about this test depends on a motion or coefficient
+    /// comparison happening to come out nonzero.
+    fn intra_mb(mb_x: u32, mb_y: u32) -> MbSummary {
+        MbSummary {
+            mb_x,
+            mb_y,
+            skipped: false,
+            is_ipcm: false,
+            is_intra4x4: false,
+            is_intra8x8: false,
+            is_intra16x16: true,
+            intra16x16_pred_mode: 0,
+            transform_8x8: false,
+            intra_chroma_pred_mode: 0,
+            // High enough that clause 8.7.2.2's alpha/beta admit the gentle
+            // variation the test plane carries; low enough to be a real QP.
+            qpy: 40,
+            residual: MbResidual::default(),
+            mv_blocks: [MvInfo::default(); 16],
+        }
+    }
+
+    fn grid(mbs_wide: u32, mbs_high: u32) -> Vec<MbSummary> {
+        (0..mbs_high)
+            .flat_map(|y| (0..mbs_wide).map(move |x| intra_mb(x, y)))
+            .collect()
+    }
+
+    /// A plane that varies enough for filtering to move bytes, by less than
+    /// the thresholds at `qpy = 40` so that it is not suppressed.
+    fn plane(w: usize, h: usize) -> Vec<u8> {
+        (0..w * h).map(|i| 128 + ((i * 7 + (i / w) * 5) % 7) as u8).collect()
+    }
+
+    fn changed_rows(before: &[u8], after: &[u8], w: usize, h: usize) -> Vec<usize> {
+        (0..h).filter(|&y| before[y * w..(y + 1) * w] != after[y * w..(y + 1) * w]).collect()
+    }
+
+    /// Row granularity rests entirely on knowing how far *up* filtering one
+    /// macroblock row reaches, because that overhang is what stops the row
+    /// above from being final. Clause 8.7.2.3's luma filter modifies `p0`,
+    /// `p1` and `p2`, so a top macroblock edge at `y = my * 16` rewrites rows
+    /// `my * 16 - 1`, `- 2` and `- 3` and nothing higher.
+    ///
+    /// This asserts both halves: nothing outside `my * 16 - 3 ..= my * 16 + 14`
+    /// moves, **and** row `my * 16 - 3` really does move -- an overhang that
+    /// were only hypothetical would make the watermark needlessly conservative
+    /// and this test vacuous.
+    #[test]
+    fn filtering_one_luma_macroblock_row_reaches_exactly_three_rows_above_it() {
+        let (mbs_wide, mbs_high) = (3u32, 3u32);
+        let (w, h) = ((mbs_wide * 16) as usize, (mbs_high * 16) as usize);
+        let mbs = grid(mbs_wide, mbs_high);
+        let ctx = DeblockCtx::new(&mbs, mbs_wide, mbs_high, 0, 0, &[], &[]);
+        let before = plane(w, h);
+        let mut after = before.clone();
+        ctx.luma_mb_row(&mut after, 1);
+        let changed = changed_rows(&before, &after, w, h);
+        assert!(!changed.is_empty(), "the filter did not move a single byte, so this proves nothing");
+        assert_eq!(*changed.iter().min().unwrap(), 13, "the top edge's `p2` is row my * 16 - 3");
+        assert!(
+            *changed.iter().max().unwrap() <= 30,
+            "nothing below `my * 16 + 14` may move: {changed:?}"
+        );
+    }
+
+    /// [`filtering_one_luma_macroblock_row_reaches_exactly_three_rows_above_it`]'s
+    /// chroma half. Clause 8.7's chroma filter modifies `p0` and `q0` only, so
+    /// the overhang is a single row, `my * 8 - 1` -- which is why
+    /// [`crate::reconstruct::chroma_rows_final`] adds seven rather than luma's
+    /// thirteen.
+    #[test]
+    fn filtering_one_chroma_macroblock_row_reaches_exactly_one_row_above_it() {
+        let (mbs_wide, mbs_high) = (3u32, 3u32);
+        let (w, h) = ((mbs_wide * 8) as usize, (mbs_high * 8) as usize);
+        let mbs = grid(mbs_wide, mbs_high);
+        let ctx = DeblockCtx::new(&mbs, mbs_wide, mbs_high, 0, 0, &[], &[]);
+        let before = plane(w, h);
+        let mut after = before.clone();
+        ctx.chroma_mb_row(&mut after, 0, 1);
+        let changed = changed_rows(&before, &after, w, h);
+        assert!(!changed.is_empty(), "the filter did not move a single byte, so this proves nothing");
+        assert_eq!(*changed.iter().min().unwrap(), 7, "the top edge's `p0` is row my * 8 - 1");
+        assert!(
+            *changed.iter().max().unwrap() <= 15,
+            "nothing below `my * 8 + 7` may move: {changed:?}"
+        );
+    }
+
+    /// The whole-picture form and the row-by-row form must be the same
+    /// function. They are the same code, but the row form is what the decoder
+    /// runs and the whole-picture form is what this module's older tests
+    /// check, so the equivalence is worth pinning rather than assuming.
+    #[test]
+    fn filtering_row_by_row_matches_the_whole_picture_sweep() {
+        let (mbs_wide, mbs_high) = (4u32, 4u32);
+        let (w, h) = ((mbs_wide * 16) as usize, (mbs_high * 16) as usize);
+        let mbs = grid(mbs_wide, mbs_high);
+        let mut whole = plane(w, h);
+        deblock_picture_luma(&mut whole, &mbs, mbs_wide, mbs_high, 0, 0, 0, &[], &[]).unwrap();
+        let mut rows = plane(w, h);
+        let ctx = DeblockCtx::new(&mbs, mbs_wide, mbs_high, 0, 0, &[], &[]);
+        for my in 0..mbs_high {
+            ctx.luma_mb_row(&mut rows, my);
+        }
+        assert_eq!(whole, rows);
+    }
+}

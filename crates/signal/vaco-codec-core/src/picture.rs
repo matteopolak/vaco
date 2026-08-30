@@ -154,10 +154,16 @@ impl PictureSpec {
     /// off or the codec is intra-only, a single band means every
     /// [`PlaneView::block`] takes the contiguous path and the non-threaded case
     /// pays nothing at all for this machinery.
+    ///
+    /// The height is rounded up to a power of two so that the row-to-band
+    /// mapping is a shift rather than a division here too — one band means the
+    /// answer is always zero, and there is no reason to pay a `udiv` to learn
+    /// that. Rounding up cannot add a band: `height.div_ceil(band_h)` is still
+    /// one for any `band_h >= height`.
     #[must_use]
     pub fn single_band(mut self) -> Self {
-        let tallest = self.planes.iter().map(|p| p.height).max().unwrap_or(1);
-        self.band_h = tallest.max(1);
+        let tallest = self.planes.iter().map(|p| p.height).max().unwrap_or(1).max(1);
+        self.band_h = tallest.checked_next_power_of_two().unwrap_or(tallest);
         self.guard = 0;
         self
     }
@@ -206,6 +212,10 @@ struct ProgressPlane {
     width_bytes: u32,
     height: u32,
     band_h: u32,
+    /// `band_h.trailing_zeros()` when `band_h` is a power of two, so
+    /// [`ProgressPlane::band_of`] — which every block read runs — is a shift
+    /// instead of a division by a runtime value.
+    band_shift: Option<u32>,
     guard: u32,
     stride: usize,
 }
@@ -224,7 +234,10 @@ impl ProgressPlane {
         reason = "band index from a row number; band_h is clamped to at least 1 at construction"
     )]
     const fn band_of(&self, row: u32) -> usize {
-        (row / self.band_h) as usize
+        match self.band_shift {
+            Some(sh) => (row >> sh) as usize,
+            None => (row / self.band_h) as usize,
+        }
     }
 
     const fn band_first_row(&self, k: usize) -> u32 {
@@ -316,6 +329,7 @@ impl ProgressPicture {
                 width_bytes: p.width_bytes,
                 height: p.height,
                 band_h: spec.band_h,
+                band_shift: spec.band_h.is_power_of_two().then(|| spec.band_h.trailing_zeros()),
                 guard: spec.guard,
                 stride: p.stride,
             });

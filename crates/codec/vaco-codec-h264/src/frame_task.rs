@@ -33,15 +33,26 @@
 //! the writer and into an `OnceLock`, so a reader cannot observe a partially
 //! written one — the compiler, not a convention, is what rules out the race.
 //!
+//! # Granularity: rows, and what bounds the wait
+//!
 //! Reconstruction and clause 8.7's filter are interleaved a macroblock row at a
-//! time ([`crate::reconstruct::reconstruct_picture_rows`]), with the filter one
-//! row behind, so this task learns which rows are *final* as it produces them
-//! rather than only at the end. Publication is still at **picture** granularity
-//! ([`PictureSpec::single_band`]) — the row watermark is computed and reported
-//! but not yet acted on, because a banded plane also requires the reference
-//! reads to go through [`vaco_codec_core::picture::PlaneView::block`], which is
-//! a separate change to the decoder's hot loop. See
-//! `docs/codec/frame-threading.md`.
+//! time ([`crate::reconstruct::PictureReconstructor`]), the filter one row
+//! behind, so a row of this picture becomes *final* while the picture is still
+//! being produced. [`RowPublisher`] copies each band into the DPB entry and
+//! publishes it the moment every row it holds is final, and the next picture
+//! starts predicting from it there rather than waiting for the whole thing.
+//!
+//! The wait is derived, not guessed. Before reconstructing macroblock row `my`,
+//! [`crate::reconstruct::row_reference_reach`] walks that row's own motion
+//! vectors and reports, per reference and per plane, the deepest row clause
+//! 8.4.2.2's filters will actually read — `y + (mv_y >> 2) + 6` for luma's
+//! six-tap, `cy + (mv_y >> 3) + 2` for chroma's bilinear. A reference the row
+//! does not predict from is not waited on at all. Reading past what was waited
+//! for is refused by `PlaneView::block` rather than served, so a bound that was
+//! ever too small would be an error and never wrong pixels.
+//!
+//! At `-threads 1` none of this runs: the DPB entry is one band, the whole
+//! picture is waited for once, and the planes are read as plain slices.
 
 use vaco_codec_core::picture::{PictureRef, PictureWriter};
 use vaco_codec_core::{FrameTask, TaskCtx};
@@ -52,8 +63,9 @@ use vaco_pixfmt::PixFmt;
 
 use crate::mb::MbSummary;
 use crate::reconstruct::{
-    BiPredMode, ImplicitWeights, ReconstructedPicture, RefPicturePlanes, RefPlane,
-    SliceWeightTables, reconstruct_picture_rows,
+    BiPredMode, ImplicitWeights, PictureCtx, PictureReconstructor, ReconstructedPicture,
+    RefPicturePlanes, RefPlane, RowReach, SliceWeightTables, chroma_rows_final, luma_rows_final,
+    macroblocks_in_raster_order, row_reference_reach,
 };
 
 /// The slice-header knobs clause 8.7's filter reads, carried whole rather than
@@ -101,6 +113,14 @@ pub(crate) struct H264FrameTask {
     pub(crate) bipred_mode: BiPredMode,
     pub(crate) implicit_weights: Option<ImplicitWeights>,
     pub(crate) deblock: DeblockParams,
+    /// Whether to publish this picture band by band as its rows become final,
+    /// and to wait on references a macroblock row at a time.
+    ///
+    /// Set exactly when `-threads N` asked for more than one thread, because
+    /// that is when the DPB entry is allocated with more than one band; at one
+    /// thread a picture is one allocation and the whole-picture path reads it
+    /// as one slice.
+    pub(crate) row_progress: bool,
     /// The sole writer of this picture's DPB entry — `Some` exactly when this
     /// is a reference picture. Dropping it without finishing wakes every
     /// waiter with an error, which is what keeps a failed task from parking
@@ -116,41 +136,131 @@ pub(crate) struct H264FrameTask {
     pub(crate) limits: Limits,
 }
 
-/// One reference picture's three planes, borrowed from the published bands.
-fn planes_of<'a>(
-    ctx: &TaskCtx<'_>,
-    reference: &'a PictureRef,
-) -> Result<RefPicturePlanes<'a>> {
+/// The whole of one reference picture, waited for in full.
+///
+/// The non-row-threaded path: `-threads 1` publishes a DPB entry as one band,
+/// so waiting once for every row costs one atomic load and hands back the plane
+/// as one slice -- [`RefPlane::Flat`], which is the plain indexed fetch the
+/// decoder has always used.
+fn whole_planes_of<'a>(ctx: &TaskCtx<'_>, reference: &'a PictureRef) -> Result<RefPicturePlanes<'a>> {
     let mut out: [RefPlane<'a>; 3] = [RefPlane::Flat(&[]), RefPlane::Flat(&[]), RefPlane::Flat(&[])];
     for (plane, slot) in out.iter_mut().enumerate() {
         // `wait_rows` clamps the row it waits for to the plane's own height, so
-        // `u32::MAX` is "every row" -- which is what picture-granularity
-        // publication means. Row granularity would ask for the highest row this
-        // picture's motion vectors can reach instead; see the module doc.
+        // `u32::MAX` is "every row".
         let view = ctx.wait_rows(reference, plane, u32::MAX)?;
-        let block = view.contiguous_all().ok_or(Error::InvalidData(
-            "vaco-codec-h264: a reference plane was not published as one band",
-        ))?;
-        *slot = RefPlane::Flat(block.data);
+        *slot = match view.contiguous_all() {
+            Some(block) => RefPlane::Flat(block.data),
+            // A banded picture that happens to be finished: still not one
+            // allocation, so it is still read through the block API.
+            None => RefPlane::Banded(view),
+        };
     }
     let [luma, cb, cr] = out;
     Ok(RefPicturePlanes { luma, cb, cr })
 }
 
-/// Copy a finished plane into this picture's DPB entry.
-fn publish_plane(writer: &mut PictureWriter, plane: usize, src: &[u8]) -> Result<()> {
-    {
-        let mut band = writer.band_mut(plane, 0)?;
-        let dst = band.data_mut();
-        let n = dst.len().min(src.len());
-        let (Some(d), Some(s)) = (dst.get_mut(..n), src.get(..n)) else {
-            return Err(Error::InvalidData(
-                "vaco-codec-h264: reference band geometry does not match the coded picture",
-            ));
-        };
-        d.copy_from_slice(s);
+/// Wait for exactly the rows reconstructing one macroblock row will read.
+///
+/// A reference the row does not predict from is not waited on at all; it is
+/// refreshed without blocking instead, so that a read the reach derivation did
+/// not anticipate is refused by `PlaneView::block` rather than served from a
+/// stale watermark.
+fn wait_row_planes<'r>(
+    ctx: &TaskCtx<'_>,
+    refs: &'r [PictureRef],
+    reach: &RowReach,
+    list: usize,
+    out: &mut [RefPicturePlanes<'r>],
+) -> Result<()> {
+    for (i, reference) in refs.iter().enumerate() {
+        let Some(slot) = out.get_mut(i) else { break };
+        let luma_to = reach.luma.get(list).and_then(|a| a.get(i)).copied().flatten();
+        let chroma_to = reach.chroma.get(list).and_then(|a| a.get(i)).copied().flatten();
+        for (plane, want) in [(0usize, luma_to), (1, chroma_to), (2, chroma_to)] {
+            let view = match want {
+                Some(y) => Some(ctx.wait_rows(reference, plane, y)?),
+                None => reference.try_rows(plane, 0),
+            };
+            let Some(view) = view else { continue };
+            let cell = match plane {
+                0 => &mut slot.luma,
+                1 => &mut slot.cb,
+                _ => &mut slot.cr,
+            };
+            *cell = RefPlane::Banded(view);
+        }
     }
-    writer.publish_through(plane, 0)
+    Ok(())
+}
+
+/// Copies finished rows of the working picture into this picture's DPB entry,
+/// publishing each band the moment it is complete.
+///
+/// A band is copied and published only once *every* row it contains is final,
+/// which is what makes a reader's `OnceLock::get` an acquire load of finished
+/// samples and nothing else. At one band per picture this is exactly the
+/// publish-once-at-the-end behaviour it replaces.
+struct RowPublisher {
+    /// The next band to fill, per plane.
+    next: [usize; 3],
+}
+
+impl RowPublisher {
+    const fn new() -> Self {
+        Self { next: [0; 3] }
+    }
+
+    fn advance(
+        &mut self,
+        writer: &mut PictureWriter,
+        plane: usize,
+        src: &[u8],
+        stride: usize,
+        final_rows: u32,
+    ) -> Result<()> {
+        let count = writer.band_count(plane);
+        loop {
+            let Some(&k) = self.next.get(plane) else { return Ok(()) };
+            if k >= count {
+                return Ok(());
+            }
+            {
+                let mut band = writer.band_mut(plane, k)?;
+                let (first, rows) = (band.first_row(), band.rows());
+                if first.saturating_add(rows) > final_rows {
+                    return Ok(());
+                }
+                for r in 0..rows {
+                    let Some(dst) = band.row_mut(r) else { break };
+                    let start = (first.saturating_add(r) as usize).saturating_mul(stride);
+                    let Some(row) = src.get(start..start.saturating_add(dst.len())) else {
+                        return Err(Error::InvalidData(
+                            "vaco-codec-h264: reference band geometry does not match the coded picture",
+                        ));
+                    };
+                    dst.copy_from_slice(row);
+                }
+            }
+            writer.publish_through(plane, k)?;
+            if let Some(slot) = self.next.get_mut(plane) {
+                *slot = k.saturating_add(1);
+            }
+        }
+    }
+
+    /// Publish every plane through its own watermark.
+    fn publish(
+        &mut self,
+        store: Option<&mut PictureWriter>,
+        planes: (&[u8], &[u8], &[u8]),
+        strides: (usize, usize),
+        rows: (u32, u32),
+    ) -> Result<()> {
+        let Some(writer) = store else { return Ok(()) };
+        self.advance(writer, 0, planes.0, strides.0, rows.0)?;
+        self.advance(writer, 1, planes.1, strides.1, rows.1)?;
+        self.advance(writer, 2, planes.2, strides.1, rows.1)
+    }
 }
 
 impl FrameTask for H264FrameTask {
@@ -169,27 +279,15 @@ impl FrameTask for H264FrameTask {
             bipred_mode,
             implicit_weights,
             deblock,
+            row_progress,
             mut store,
             geometry,
             limits,
         } = *self;
         let mut budget = Budget::new(limits);
 
-        // Block here, and only here, on the pictures this one predicts from.
-        // Everything above is owned; everything below reads only these borrows.
-        let planes0: Vec<RefPicturePlanes<'_>> = ref_list0
-            .iter()
-            .map(|r| planes_of(ctx, r))
-            .collect::<Result<Vec<_>>>()?;
-        let planes1: Vec<RefPicturePlanes<'_>> = ref_list1
-            .iter()
-            .map(|r| planes_of(ctx, r))
-            .collect::<Result<Vec<_>>>()?;
-
         // Clause 8.7's filter is `None` exactly when the slice header switched
-        // it off; otherwise it is interleaved into the macroblock-row loop
-        // below, one row behind reconstruction, so rows become final -- and
-        // publishable -- as the picture is produced rather than only at the end.
+        // it off, in which case a row is final the moment it is reconstructed.
         let deblock_ctx = (deblock.disable_idc != 1).then(|| {
             crate::deblock::DeblockCtx::new(
                 &macroblocks,
@@ -201,36 +299,102 @@ impl FrameTask for H264FrameTask {
                 &ref_list1_poc,
             )
         });
-        let pic: ReconstructedPicture = reconstruct_picture_rows(
-            &macroblocks,
-            mbs_wide,
-            mbs_high,
-            chroma_qp_offset_cb,
-            chroma_qp_offset_cr,
-            &planes0,
-            &planes1,
-            &weights,
-            bipred_mode,
-            implicit_weights.as_ref(),
-            deblock_ctx.as_ref(),
-            &mut budget,
-            &mut |_luma, _cb, _cr, _luma_rows, _chroma_rows| Ok(()),
-        )?;
+        let strides = ((mbs_wide as usize).saturating_mul(16), (mbs_wide as usize).saturating_mul(8));
+        let heights = (mbs_high.saturating_mul(16), mbs_high.saturating_mul(8));
+        let mut publisher = RowPublisher::new();
+        let mut recon = PictureReconstructor::new(mbs_wide, mbs_high, &mut budget)?;
+
+        let row_wise = row_progress && macroblocks_in_raster_order(&macroblocks, mbs_wide, mbs_high);
+        if row_wise {
+            let empty = RefPicturePlanes {
+                luma: RefPlane::Flat(&[]),
+                cb: RefPlane::Flat(&[]),
+                cr: RefPlane::Flat(&[]),
+            };
+            let mut planes0: Vec<RefPicturePlanes<'_>> = vec![empty; ref_list0.len()];
+            let mut planes1: Vec<RefPicturePlanes<'_>> = vec![empty; ref_list1.len()];
+            let mbw = mbs_wide as usize;
+            for my in 0..mbs_high {
+                let start = (my as usize).saturating_mul(mbw);
+                let row = macroblocks.get(start..start.saturating_add(mbw)).unwrap_or(&[]);
+                let reach = row_reference_reach(row);
+                wait_row_planes(ctx, &ref_list0, &reach, 0, &mut planes0)?;
+                wait_row_planes(ctx, &ref_list1, &reach, 1, &mut planes1)?;
+                {
+                    let pctx = PictureCtx::new(
+                        mbs_wide,
+                        mbs_high,
+                        chroma_qp_offset_cb,
+                        chroma_qp_offset_cr,
+                        &planes0,
+                        &planes1,
+                        &weights,
+                        bipred_mode,
+                        implicit_weights.as_ref(),
+                    );
+                    recon.reconstruct_row(&macroblocks, my, &pctx)?;
+                }
+                let final_rows = match &deblock_ctx {
+                    Some(d) => {
+                        if my == 0 {
+                            continue;
+                        }
+                        let done = my - 1;
+                        recon.deblock_row(d, done, chroma_qp_offset_cb, chroma_qp_offset_cr);
+                        (luma_rows_final(done).min(heights.0), chroma_rows_final(done).min(heights.1))
+                    }
+                    None => (
+                        my.saturating_add(1).saturating_mul(16).min(heights.0),
+                        my.saturating_add(1).saturating_mul(8).min(heights.1),
+                    ),
+                };
+                publisher.publish(store.as_mut(), recon.planes(), strides, final_rows)?;
+            }
+            if let Some(d) = &deblock_ctx
+                && mbs_high > 0
+            {
+                recon.deblock_row(d, mbs_high - 1, chroma_qp_offset_cb, chroma_qp_offset_cr);
+            }
+        } else {
+            // Block here, and only here, on the pictures this one predicts
+            // from. This is the whole-picture path: `-threads 1`, and any
+            // macroblock order the row schedule cannot assume.
+            let planes0: Vec<RefPicturePlanes<'_>> = ref_list0
+                .iter()
+                .map(|r| whole_planes_of(ctx, r))
+                .collect::<Result<Vec<_>>>()?;
+            let planes1: Vec<RefPicturePlanes<'_>> = ref_list1
+                .iter()
+                .map(|r| whole_planes_of(ctx, r))
+                .collect::<Result<Vec<_>>>()?;
+            let pctx = PictureCtx::new(
+                mbs_wide,
+                mbs_high,
+                chroma_qp_offset_cb,
+                chroma_qp_offset_cr,
+                &planes0,
+                &planes1,
+                &weights,
+                bipred_mode,
+                implicit_weights.as_ref(),
+            );
+            recon.reconstruct_all(&macroblocks, &pctx)?;
+            if let Some(d) = &deblock_ctx {
+                for my in 0..mbs_high {
+                    recon.deblock_row(d, my, chroma_qp_offset_cb, chroma_qp_offset_cr);
+                }
+            }
+        }
         drop(deblock_ctx);
-        drop(planes0);
-        drop(planes1);
 
         // Publish before building the output frame: every picture waiting on
         // this one is blocked until this line runs, and the crop below is not.
-        if let Some(writer) = store.as_mut() {
-            publish_plane(writer, 0, &pic.luma)?;
-            publish_plane(writer, 1, &pic.cb)?;
-            publish_plane(writer, 2, &pic.cr)?;
-        }
+        publisher.publish(store.as_mut(), recon.planes(), strides, heights)?;
         if let Some(writer) = store.take() {
             writer.finish()?;
         }
 
+        let pic = recon.finish();
         build_frame(&mut budget, mbs_wide, &pic, &geometry)
     }
 }
