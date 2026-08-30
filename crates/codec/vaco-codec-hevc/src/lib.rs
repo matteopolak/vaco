@@ -15,15 +15,21 @@
 //! Deliberately **not** in scope, each refused by name
 //! ([`vaco_core::Error::Unsupported`]) rather than attempted shallowly:
 //!
-//! - **Inter prediction, B/P slices.** I-slices only.
-//!   [`dpb`]'s reference-picture management (§8.3.2 reference-picture-set
-//!   derivation, §8.3.4 reference picture list construction, and a real
-//!   decoded picture buffer with Annex C's output-reordering "bumping"
-//!   process) is implemented and unit-tested on its own terms, ahead of the
-//!   `prediction_unit`/merge/AMVP/motion-compensation work it exists to
-//!   support — see that module's own doc for what it covers and why it has
-//!   no caller in [`decoder`] yet. `check_scope`'s "only I-slices are
-//!   decoded" refusal is unchanged.
+//! - **P-slices are implemented but still refused.** `prediction_unit()`
+//!   syntax (skip/merge/AMVP), merge/AMVP candidate derivation (§8.5.3.2),
+//!   motion compensation (§8.5.3.3), the inter CABAC context tables
+//!   (§9.3.2.2), and [`dpb`]'s reference-picture management (§8.3.2/§8.3.4,
+//!   Annex C output-reordering "bumping") are all real and wired into
+//!   [`decoder`]. `decode_packet` refuses every P slice unconditionally
+//!   anyway: bin-for-bin CABAC tracing against a from-source HM 18.0 build
+//!   confirms every *parsed* syntax element matches the reference decoder
+//!   exactly, but a real defect remains in the TMVP-for-AMVP candidate path
+//!   once a slice has more than one active reference picture, producing
+//!   silently wrong motion vectors that compound frame over frame — see
+//!   `docs/codec/vaco-codec-hevc.md`'s "Stage 2: P-slices" section for the
+//!   exact repro. Lift the refusal only once that is fixed and a stock
+//!   multi-reference file decodes byte-exact end to end.
+//! - **B-slices.** Refused by name; not implemented at all.
 //! - **Deblocking (§8.7.2) is implemented** — see [`deblock`]'s own module
 //!   doc for the algorithm, what it reuses from HM 18.0 (Tier A), and why
 //!   it does not reuse `vaco-codec-dsp-deblock` (a genuinely different

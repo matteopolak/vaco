@@ -10,16 +10,16 @@ coding, dequantisation, reconstruction, in-loop deblocking (§8.7.2, see
 (§9.3.2.3, see "WPP (`entropy_coding_sync_enabled_flag`), landed" below) and
 per-CU adaptive QP (`cu_qp_delta`, §7.3.8.11/§8.6.1, see "Per-CU QP delta
 (`cu_qp_delta`), landed" below).
-Inter prediction, B/P-slices, tiles, I_PCM, transform-skip
-residual coding, custom scaling lists and every range-extension feature are
-explicitly out of scope — see "What was cut" below. Reference picture
-management (POC-driven reference-picture-set derivation, reference picture
-list construction and DPB output reordering) is implemented as a
-self-contained, unit-tested module (`src/dpb.rs`) ahead of the P/B-slice
-decoding it exists to support — see "Reference picture management (§8.3.2 /
-§8.3.4), landed" below for what that covers and, just as importantly, why it
-has no caller in `decoder.rs` yet: `check_scope`/`decode_packet` still refuse
-every P- and B-slice by name, unchanged from before this pass.
+B-slices, tiles, I_PCM, transform-skip residual coding, custom scaling
+lists and every range-extension feature are explicitly out of scope — see
+"What was cut" below. P-slices are a different story: `prediction_unit()`
+syntax, merge/AMVP candidate derivation, motion compensation, the inter
+CABAC context tables and reference picture management (`src/dpb.rs` —
+POC-driven reference-picture-set derivation, reference picture list
+construction, DPB output reordering) are all implemented and wired
+together, but `decode_packet` still refuses every P-slice by name — see
+"Stage 2: P-slices — implemented, still refused" below for exactly why and
+what a future pass needs to fix before lifting that refusal.
 
 **Registered, patent-encumbered-gated.** `vaco-component.toml` declares
 this decoder with `encumbered = true` / `default = false` behind the
@@ -43,10 +43,13 @@ residual-coding's context derivations, and intra prediction.
 | Module | Contents |
 |---|---|
 | `decoder.rs` | `HevcDecoder`, the `Decoder` trait impl, `check_scope` (out-of-scope SPS/PPS features refused by name); embeds `vaco_parse_hevc::HevcParser` for parameter-set bookkeeping and `hvcC`-vs-Annex-B framing, mirroring `vaco-codec-h264` |
-| `ctu.rs` | `coding_quadtree`/`coding_unit`/`transform_tree`/`transform_unit` (§7.3.8.4/.5/.8/.10), tying entropy decode, prediction and reconstruction together |
-| `residual.rs` | `residual_coding()` (§7.3.8.11) and its context derivations (`sig_ctx_inc`, `pattern_sig_ctx`, `sig_group_ctx_inc`, `context_set_index`, `read_coeff_remain`) |
+| `ctu.rs` | `coding_quadtree`/`coding_unit`/`transform_tree`/`transform_unit` (§7.3.8.4/.5/.8/.10) for I-slices; `coding_unit_p`/`decode_skip_cu`/`decode_inter_cu`/`transform_tree_inter` and `prediction_unit()` parsing (§7.3.8.5/.6/.9) for P-slices — see "Stage 2: P-slices" below for why the latter is implemented but still refused |
+| `motion.rs` | Merge candidate derivation (§8.5.3.2.2/.3, spatial + temporal + zero-fill) and AMVP candidate derivation (§8.5.3.2.6/.7), plus the shared motion-vector scaling arithmetic (`dist_scale_factor`/`scale_mv`, §8.5.3.2.8) both use |
+| `mc.rs` | Motion compensation: 8-tap luma / 4-tap chroma separable interpolation filters at quarter/eighth-sample precision (§8.5.3.3), exact HM fixed-point arithmetic |
+| `residual.rs` | `residual_coding()` (§7.3.8.11) and its context derivations (`sig_ctx_inc`, `pattern_sig_ctx`, `sig_group_ctx_inc`, `context_set_index`, `read_coeff_remain`) — shared unchanged between I- and P-slices |
 | `scan.rs` | `generate`/`generate_grouped` — up-right-diagonal/horizontal/vertical scan generation, including HM's `SCAN_GROUPED_4x4` sub-block-then-within-sub-block order |
-| `cabac_ctx.rs` | `ContextBank` — I-slice-only CABAC context-init tables and `ContextBank::new(slice_qp)` |
+| `cabac_ctx.rs` | `ContextBank` — CABAC context-init tables and `ContextBank::new(slice_qp)` (I-slice row) / `ContextBank::new_p_slice(slice_qp, cabac_init_flag)` (P-slice P/B rows, §9.3.2.2) |
+| `dpb.rs` | `Dpb`/`ReferencePicSets`/`CollocatedMotionField` — reference-picture-set derivation (§8.3.2), reference-picture-list construction (§8.3.4), DPB output-reordering "bumping" (Annex C.3.2/C.5.2), and the compressed 16x16 motion field TMVP reads (§8.5.3.2.8/.9) |
 | `intra_mode.rs` | MPM derivation (§8.4.2), `rem_intra_luma_pred_mode` resolution, chroma derived-mode (Table 8-2/8-3), mode-dependent scan-order selection |
 | `intra_pred.rs` | Reference-sample line construction/substitution/smoothing, planar/DC/angular prediction (hand-rolled — see the module doc for why `vaco-codec-dsp-intrapred`'s `angular_project` does not fit HEVC's negative-angle extension) |
 | `transform.rs` | Flat-scaling-list dequantisation (§8.6.3), the inverse-transform hand-off to `vaco-codec-dsp-idct::hevc` plus §8.6.5's caller-side `bdShift` |
@@ -648,51 +651,108 @@ a sample or a CABAC bin, so a real-fixture comparison would not exercise the
 code any harder than a hand-derived scenario does. It also has no real-file
 verification yet for the reason the next section states.
 
-### What remains, and why this pass stopped here
+### Stage 2: P-slices — implemented, still refused
 
-P-slices (`prediction_unit()` syntax, merge/AMVP candidate derivation,
-motion compensation) and B-slices (bi-prediction, combined bi-predictive
-merge candidates) are **not implemented this pass**, and `check_scope`'s
-`only I-slices are decoded` refusal in `decoder.rs` is unchanged — a stock
-`libx265` file still decodes exactly its first (I) frame and errors on the
-first P- or B-slice, the same 1-of-25 result as before this pass. That is a
-real limit, not a false modesty: every prior hard bug in this crate's own
-history (the DC-context `sig_coeff_flag` bug, the CTB-row MPM rule, WPP's
-entry-point-offset byte space) was found only by a byte-for-byte CABAC bin
-trace against a from-source HM 18.0 build, and this pass had no working HM
-binary available to it — the only prebuilt HM this environment offered
-resolved to an x86-64 Linux ELF binary that cannot execute on this crate's
-own (arm64 Darwin) development machine, and building HM from source
-natively (cloning `vcgit.hhi.fraunhofer.de`, then compiling and guarding its
-`-msse4.1` flag to x86 targets, as a previous pass did for the residual-coding
-bug) is itself a substantial undertaking. Given that, and given
-`AGENT-CONSTRAINTS.md`'s own instruction that a construct not implemented
-should be refused rather than decoded wrong, shipping `prediction_unit`
-parsing, merge/AMVP derivation or sub-pel motion compensation without any
-way to verify a single CABAC bin or filter tap against a trusted second
-implementation would risk exactly the silent, content-dependent,
-drift-compounding class of bug this crate's own history is built out of —
-so this pass landed the one layer (reference picture management) that is
-pure integer/POC arithmetic, fully verifiable by direct construction against
-the specification's own equations with no reference decoder needed at all,
-and stopped there rather than push an unverifiable CABAC/motion-compensation
-layer on top of it. The owner's "byte-exactness is a check, not the bar"
-ruling (`AGENT-CONSTRAINTS.md`) would still permit landing an imperfect
-P-slice decoder with a small, unstructured, measured deviation — but that
-ruling does not relax needing *some* trusted way to tell a small unstructured
-deviation apart from a structured bug in the first place, which is exactly
-what was missing here.
+A later pass built HM 18.0 from source natively (arm64 Darwin — the
+prebuilt HM this environment ships is an x86-64 Linux ELF, unusable here;
+building from source at `vcgit.hhi.fraunhofer.de` was the "future pass"
+this section used to ask for) and used it as a bin-for-bin CABAC oracle to
+implement `prediction_unit()` syntax (skip/merge/AMVP), merge and AMVP
+candidate derivation (§8.5.3.2), motion compensation (8-tap luma / 4-tap
+chroma separable filtering, §8.5.3.3), the inter CABAC context tables
+(§9.3.2.2's P/B rows), and the `decoder.rs` wiring — POC (via
+`vaco-parse-hevc::PocState`), `dpb.rs`'s reference-picture-set derivation
+and reference-picture-list construction, and DPB storage/bumping — a P
+slice needs that `dpb.rs` alone (landed in the previous pass) did not yet
+have a caller for.
 
-A future pass picking this up should: build HM 18.0 from source first (the
-network path to `vcgit.hhi.fraunhofer.de` is reachable from this environment;
-only the prebuilt binary is the wrong architecture), confirm it runs
-natively, and only then implement `prediction_unit()`/merge/AMVP/motion
-compensation against it — reusing `dpb.rs`'s `Dpb`/`ReferencePicSets`/
-`build_ref_pic_lists` as-is, wiring `decoder.rs::decode_packet` to call
-`Dpb::apply_reference_picture_set` and `Dpb::bump_before_storing`/`store`
-around each picture's decode, and threading the resulting `RefPicList0`/
-`RefPicList1` POC values through `Dpb::reference_picture` to reach actual
-sample data for motion compensation.
+Two real, independently-committed bugs were found and fixed on the way,
+both only visible by comparing *values* against HM rather than any
+parse-level check:
+
+- **`cbf_luma` parsed unconditionally for inter CUs.** §7.3.8.8 only
+  parses it when `trafoDepth != 0 || cbf_cb || cbf_cr`; a root-level,
+  all-chroma-zero leaf must infer it `1` instead. This desynced CABAC by
+  one bin the first time a CTU's only-luma-residual case occurred — an
+  intra CU's own leaf has no such condition, so Stage 1's I-slice-only
+  decode never exercised it.
+- **An inverted `Log2ParallelMergeLevel` MER-exclusion check** in
+  `derive_merge_candidates`, which at the specification's own default
+  (a 4x4 region — what almost every real encoder leaves it at) discarded
+  the A1/B1/B0/A0/B2 spatial merge candidates for nearly every PU in the
+  stream. This one kept CABAC entirely in sync (`merge_idx`/`mvp_idx`/`mvd`
+  all parse identically to HM) and corrupted only the candidate *values*
+  those parsed indices resolved to — invisible to any bin-count or
+  bin-value check, visible only as wrong motion vectors and pixel drift
+  compounding frame over frame.
+
+Fixing both took a real `libx265` P-only fixture (320x240, testsrc2,
+`no-sao=1:no-deblock=1:wpp=0:bframes=0:weightp=0:qp=32:keyint=25`) from
+1,867,405/2,880,000 bytes exact (64.8% — wrong from frame 1 onward) to
+**2,829,043/2,880,000 (98.2%) — exact through frame 1**, per plane, per
+frame, whole-sequence.
+
+**A further, real defect remains**, which is why `decoder.rs::decode_packet`
+still refuses every P-slice unconditionally rather than lifting the
+refusal at 98.2%: starting at frame 2 — the first frame in this GOP
+referencing more than one distinct picture (`NumRefIdxL0 > 1`) — small
+pixel differences appear and compound frame over frame (frame 2: 44 of
+76,800 luma bytes wrong, mean abs diff 0.04; by frame 24: mean abs diff
+0.42 luma / 1.13 V). Per the owner's own "byte-exactness is a check, not
+the bar" ruling, a small *unstructured* deviation would be tolerable —
+this is not that: it compounds, which the ruling itself names as the
+signature of a real bug.
+
+The repro, isolated by the same bin-for-bin comparison method that found
+the two fixed bugs (confirmed exactly the way H.264's `Intra_8x8` bug was
+cornered — 0 mode mismatches against 332 prediction mismatches meant the
+parse side was clean and the derivation side was not):
+
+> CU (208, 24), frame 2 (POC 2) of the fixture above. AMVP path,
+> `ref_idx_l0 = 1`, `mvd = (0, 0)`, `mvp_idx = 1` — every one of those
+> bins matches HM exactly. The resolved predictor at slot 1 is `(0, 0)`
+> in `vaco`; HM's is `(-32, 0)`. The spatial neighbours at this position
+> (A1/A0 left group, B0/B1/B2 above group) are confirmed intra
+> (unavailable) or exactly zero-motion on *both* sides, which rules out a
+> plain spatial-candidate bug and points at the TMVP-for-AMVP path
+> (`ctu::temporal_candidate` / `dpb::CollocatedMotionField`) — a predictor
+> of `(0, 0)` where HM has a real, POC-distance-scaled `(-32, 0)` reads
+> less like a miscomputed candidate than like a *dropped* one, falling
+> through to the zero-candidate fallback.
+
+Three things to check on that path, in order, before assuming the
+scaling arithmetic itself is wrong: whether `slice_temporal_mvp_enabled_flag`
+and the collocated-picture selection (`collocated_from_l0_flag`,
+`collocated_ref_idx`) resolve to the picture HM uses at all; the §8.5.3.2.8
+motion-vector scaling itself, which is live (not an identity) for the
+first time exactly at `ref_idx_l0 = 1` — consistent with the drift
+starting precisely where `NumRefIdxL0 > 1` first occurs; and the
+long-term-vs-short-term distinction, which changes whether scaling
+applies at all (moot in this crate's own scope, since long-term
+references are refused by name — see "Long-term references, refused by
+name" — but worth ruling out explicitly rather than assuming).
+
+Two things worth re-confirming before trusting the next HM trace: run it
+first against a clip already known byte-exact (this crate's own instrumented
+HM has not itself been control-tested the way an oracle should be — an
+instrumentation bug in the tracer reads exactly like a decoder bug), and
+hand-check at least one case whose answer is knowable without an oracle at
+all (a `mvd = (0, 0)` block referencing a single, already-known reference
+picture, say).
+
+Once frame 2 (and the whole sequence) is byte-exact on this P-only,
+everything-else-disabled fixture, re-enable SAO, deblocking, WPP and
+weighted prediction one at a time before lifting the `check_scope`
+refusal — this crate's own history already has one precedent for a
+feature being entirely missing and invisible for exactly this reason
+(neutral weights collapsing to a plain copy on most content), and this
+fixture's `no-sao=1:no-deblock=1:wpp=0:weightp=0` flags are the limit of
+what it can find, not evidence those paths are fine.
+
+B-slices (bi-prediction, combined bi-predictive merge candidates) remain
+**not implemented at all** — `decode_packet`'s "B-slices are not
+supported" refusal predates this pass and is unrelated to the P-slice
+defect above.
 
 ## Specification
 
