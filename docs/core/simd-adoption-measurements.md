@@ -446,6 +446,100 @@ show up under `cargo bench -p vaco-simd`.
 
 ---
 
+### Group 10 — H.264 deblocking's `boundary_strength`: the missing scalar cost, found and cut
+
+Dated **2026-08-30**, same 4K 75-frame Main fixture as Groups 8/9, private `--target-dir`, `cargo
+build --profile dist` (opt-level 3, LTO, `strip = "none"`, `debug = "line-tables-only"` — release
+codegen with symbols kept) rather than the stripped `release` profile, because `--unstable-presymbolicate`
+resolved almost nothing on the stripped binary (leaf frames came back as bare hex addresses, e.g.
+`0x37500c`, for the large majority of samples — the same presymbolication failure Group 8/§10's own
+notes warned about, just total here instead of partial). `dsymutil` on the `dist` binary plus
+`llvm-symbolizer --obj=<dSYM> --inlines -f -C -p` against each leaf address (module-relative address
+plus the binary's own `__TEXT` `vmaddr`, confirmed with `dwarfdump --lookup`) recovered the full inline
+chain per sample; aggregating self time by each chain's outermost (physically-emitted) frame gives the
+first *reliable* whole-decoder cost breakdown this document has for H.264:
+
+| self time | function |
+|---:|---|
+| 28.00% | `deblock::boundary_strength` |
+| 18.82% | `reconstruct::reconstruct_picture` |
+| 11.72% | `reconstruct::sample_luma_block` |
+| 11.36% | `deblock::deblock_picture_luma` (gather/scatter and edge bookkeeping, *not* `boundary_strength`) |
+| 4.31% | `reconstruct_inter_mb::{closure#0}` |
+| 3.99% | `cabac_residual::residual_block_cabac` |
+| 3.72% | `deblock::deblock_picture_chroma` |
+| 3.55% | `vaco_codec_dsp_idct::h264::idct4x4` |
+| 2.67% | `vaco_codec_dsp_deblock::batch::filter_luma_edge` (the masked-select kernel itself) |
+
+**This closes the question `E2E-GAPS.md` §10/Group 8 left open.** Group 8 measured the deblocking
+SIMD kernel at 0.31x/0.41x in isolation but only ~2.6% end to end, and reasoned from the two filters'
+combined ~26% share of *total* runtime that the surrounding scalar cost (boundary-strength derivation,
+`EdgeThresholds::derive`, and the per-sample `get`/`set` gather/scatter) must be absorbing most of the
+possible win. This profile confirms it directly and names the size: `boundary_strength` alone is
+**28% of total self time** — the single largest cost centre in the entire decoder, larger than
+`reconstruct_picture`, and almost eleven times the batched filter kernel it feeds (2.67%).
+
+**The cause, found from the call site, not the function body.** `boundary_strength` is a pure
+function of `(mb_edge, p_blk, q_blk)` (plus the two macroblocks and reference-POC lists, none of
+which change within one edge). `deblock_picture_luma`'s per-edge gather loop calls it once per
+*pixel row* (16 times per vertical edge, 16 per horizontal edge) — but `p_blk`/`q_blk` are derived
+from `row / 4` (`blk_row`/`blk_col`), so **all four rows in one group of 4 compute the identical
+`bS` value**, and the call was simply repeated four times instead of once. `deblock_picture_chroma`
+has the same shape at its own granularity (`row / 2`, a 2x repeat, since chroma reuses luma's `bS`
+at half resolution per this crate's own chroma doc comment). Clause 8.7.2.1 defines one `bS` per 4x4
+luma block, not per pixel row — the code already computed the block index correctly, it just called
+the derivation function once too often per block.
+
+**Fix** (`crates/codec/vaco-codec-h264/src/deblock.rs`): in all four gather loops (luma vertical,
+luma horizontal, chroma vertical, chroma horizontal), compute `boundary_strength` once per
+`blk_row`/`blk_col` group into a small fixed-size array (`[u8; 4]`) before the per-row/column gather
+loop, then have that loop index into the array instead of calling the function again. This is pure
+memoisation of an already-pure function — no table, no new data structure, no change to any `bS`
+value — so every call site's inputs and the resulting bytes are unchanged; it only stops recomputing
+the answer the loop already knew from three iterations ago. Not a SIMD change and does not touch
+`vaco-simd`: this is the same "the cost was bookkeeping, not arithmetic" shape `E2E-GAPS.md` §14
+(Group 9) and this document's own Group 8 discussion already named, applied to a redundant scalar
+call instead of a missing compile-time bound.
+
+**Measured**, interleaved baseline/candidate, alternating which ran first each round, 10 independent
+process launches, wall clock (no cycle counter available under this crate's `#![forbid(unsafe_code)]`,
+same constraint Group 8 recorded), on the 4K 75-frame fixture end to end (`vaco -i uhd.mp4 -map 0:v:0
+-c:v rawvideo -f null -`), under background load (a concurrent `dsymutil`/build history left load
+average around 6-16 during the run):
+
+| round | baseline (s) | candidate (s) | candidate/baseline |
+|---:|---:|---:|---:|
+| 1 | 12.801 | 8.138 | 0.636 |
+| 2 | 9.606 | 8.110 | 0.844 |
+| 3 | 9.737 | 7.444 | 0.765 |
+| 4 | 9.589 | 7.550 | 0.787 |
+| 5 | 9.763 | 8.738 | 0.895 |
+| 6 | 11.469 | 9.000 | 0.785 |
+| 7 | 10.748 | 8.817 | 0.820 |
+| 8 | 10.702 | 9.099 | 0.850 |
+| 9 | 13.227 | 8.997 | 0.680 |
+| 10 | 11.798 | 9.366 | 0.794 |
+
+**10 of 10 launches favoured the candidate, mean ratio ≈0.786 (≈1.27x), median ≈0.791.** This is a
+substantially larger, and far more consistent, win than any earlier round in this document or
+`E2E-GAPS.md` — every one of the four prior negative/marginal results (round 2's three interpolation
+attempts, the deblocking kernel's own 2.6% end-to-end share) touched code that was already a small
+share of total time; this touched the single largest one.
+
+**Byte-exact against `ffmpeg`, unchanged**, on all four regression fixtures: the 4K 75-frame clip
+above, a 60-second 1800-frame 1080p `libx264` file (`big.mkv`), and two fresh stock-`libx264`
+(`testsrc2`, default encoder settings — B-frames, CABAC, 3 references) clips at 322x242 and
+1024x576. `cargo test -p vaco-codec-h264 --locked` and `cargo clippy -p vaco-codec-h264 --all-targets
+--locked -- -D warnings` both clean.
+
+**Kept.** Full decode time on the 4K fixture: best-of-3 **8.14s**, down from the round's own
+9.89s-11s baseline range (machine-load-dependent, see `E2E-GAPS.md`'s own caution against comparing
+absolute numbers across sessions) — call it **≈1.2-1.27x** depending on which baseline figure is
+used, against `ffmpeg -threads 1`'s 0.62s best-of-3 (unchanged by this work; the gap narrows from
+~15.9x to ~13.1x using this session's own before/after numbers).
+
+---
+
 ## Revised upstream ask
 
 Plan 12 §11 lists six operations to request before v1.0. The measurements reorder that list sharply —

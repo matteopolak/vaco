@@ -402,14 +402,25 @@ pub(crate) fn deblock_picture_luma(
                 let mut q2a = [0u8; 16];
                 let mut q3a = [0u8; 16];
                 let mut bsa = [0u8; 16];
-                for row in 0..16u32 {
-                    let y = my * 16 + row;
-                    let blk_row = (row / 4) as usize;
+                // `boundary_strength` is a pure function of `(mb_edge, p_blk,
+                // q_blk)` here, and all four rows of one `blk_row` group
+                // share the same `p_blk`/`q_blk` (both are `blk_row`-derived,
+                // not `row`-derived) -- clause 8.7.2.1 defines one `bS` per
+                // 4x4 luma block, not per pixel row. Calling it once per
+                // group of 4 instead of once per row (4x fewer calls) does
+                // not change a single `bS` value; it only stops recomputing
+                // the one this loop already knows.
+                let mut bs_by_blk_row = [0u8; 4];
+                for (blk_row, slot) in bs_by_blk_row.iter_mut().enumerate() {
                     let q_blk = blk_row * 4 + (local / 4) as usize;
                     let p_blk = if mb_edge { blk_row * 4 + 3 } else { blk_row * 4 + (local / 4 - 1) as usize };
+                    *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk, ref_list0_poc, ref_list1_poc);
+                }
+                for row in 0..16u32 {
+                    let y = my * 16 + row;
                     let ri = row as usize;
                     if let Some(slot) = bsa.get_mut(ri) {
-                        *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk, ref_list0_poc, ref_list1_poc);
+                        *slot = bs_by_blk_row.get(ri / 4).copied().unwrap_or(0);
                     }
                     if let Some(slot) = p0a.get_mut(ri) {
                         *slot = get(luma, x - 1, y);
@@ -484,14 +495,19 @@ pub(crate) fn deblock_picture_luma(
                 let mut q2a = [0u8; 16];
                 let mut q3a = [0u8; 16];
                 let mut bsa = [0u8; 16];
-                for col in 0..16u32 {
-                    let x = mx * 16 + col;
-                    let blk_col = (col / 4) as usize;
+                // Same 4x reduction as the vertical pass above: one `bS`
+                // per `blk_col` group of 4 columns, not per column.
+                let mut bs_by_blk_col = [0u8; 4];
+                for (blk_col, slot) in bs_by_blk_col.iter_mut().enumerate() {
                     let q_blk = (local / 4) as usize * 4 + blk_col;
                     let p_blk = if mb_edge { 12 + blk_col } else { (local / 4 - 1) as usize * 4 + blk_col };
+                    *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk, ref_list0_poc, ref_list1_poc);
+                }
+                for col in 0..16u32 {
+                    let x = mx * 16 + col;
                     let ci = col as usize;
                     if let Some(slot) = bsa.get_mut(ci) {
-                        *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk, ref_list0_poc, ref_list1_poc);
+                        *slot = bs_by_blk_col.get(ci / 4).copied().unwrap_or(0);
                     }
                     if let Some(slot) = p0a.get_mut(ci) {
                         *slot = get(luma, x, y - 1);
@@ -614,18 +630,25 @@ pub(crate) fn deblock_picture_chroma(
                 let mut q0a = [0u8; 8];
                 let mut q1a = [0u8; 8];
                 let mut bsa = [0u8; 8];
-                for row in 0..8u32 {
-                    let y = my * 8 + row;
+                // Same memoisation as luma: two chroma rows per `blk_row`
+                // share one luma-derived `bS` (see the comment on
+                // `blk_row` below), so compute it once per group of 2
+                // instead of once per row.
+                let mut bs_by_blk_row = [0u8; 4];
+                for (blk_row, slot) in bs_by_blk_row.iter_mut().enumerate() {
                     // Luma row group this chroma row's bS borrows: chroma
                     // row `row` is luma row `2*row`, whose own 4-row group
                     // is `(2*row) / 4 == row / 2`.
-                    let blk_row = (row / 2) as usize;
                     let q_blk = blk_row * 4 + (luma_local / 4) as usize;
                     let p_blk =
                         if mb_edge { blk_row * 4 + 3 } else { blk_row * 4 + (luma_local / 4 - 1) as usize };
+                    *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk, ref_list0_poc, ref_list1_poc);
+                }
+                for row in 0..8u32 {
+                    let y = my * 8 + row;
                     let ri = row as usize;
                     if let Some(slot) = bsa.get_mut(ri) {
-                        *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk, ref_list0_poc, ref_list1_poc);
+                        *slot = bs_by_blk_row.get(ri / 2).copied().unwrap_or(0);
                     }
                     if let Some(slot) = p0a.get_mut(ri) {
                         *slot = get(chroma, x - 1, y);
@@ -669,14 +692,19 @@ pub(crate) fn deblock_picture_chroma(
                 let mut q0a = [0u8; 8];
                 let mut q1a = [0u8; 8];
                 let mut bsa = [0u8; 8];
-                for col in 0..8u32 {
-                    let x = mx * 8 + col;
-                    let blk_col = (col / 2) as usize;
+                // Same memoisation as the vertical chroma pass above: one
+                // `bS` per `blk_col` group of 2 columns.
+                let mut bs_by_blk_col = [0u8; 4];
+                for (blk_col, slot) in bs_by_blk_col.iter_mut().enumerate() {
                     let q_blk = (luma_local / 4) as usize * 4 + blk_col;
                     let p_blk = if mb_edge { 12 + blk_col } else { (luma_local / 4 - 1) as usize * 4 + blk_col };
+                    *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk, ref_list0_poc, ref_list1_poc);
+                }
+                for col in 0..8u32 {
+                    let x = mx * 8 + col;
                     let ci = col as usize;
                     if let Some(slot) = bsa.get_mut(ci) {
-                        *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk, ref_list0_poc, ref_list1_poc);
+                        *slot = bs_by_blk_col.get(ci / 2).copied().unwrap_or(0);
                     }
                     if let Some(slot) = p0a.get_mut(ci) {
                         *slot = get(chroma, x, y - 1);

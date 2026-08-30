@@ -689,3 +689,102 @@ nothing.** Neutral weights hid weighted prediction in both codecs. Flat content
 hid `Intra_8x8`. Frames at 320x240 and 640x480 hid a budget leak that needed
 either a larger frame or a longer clip to cross its ceiling. In each case the
 work was verified, reported passing, and wrong.
+
+## 18. Profiling loop, round 3 — the real cost centre, and why round 1's SIMD kernel underperformed
+
+Current state before this round, same 75-frame 3840x2160 Main fixture, measured under background
+load (a fuzz sweep and other agents' builds, load average ~7-9):
+
+| | best of 3 |
+|---|---|
+| vaco decode | 9.89s |
+| `ffmpeg -threads 1` | 0.63s |
+| ffmpeg, default threads | 0.18s |
+
+**Do not read this against §10's 5.49s or §15's 8.11s as a regression or an improvement** — different
+sessions, different machine load, and (for §10 specifically) two rounds of correctness work landed in
+between that made the decoder do real work it previously skipped or did wrongly (weighted prediction,
+correct deblocking thresholds, `Intra_8x8`, B-slices). Whether that correctness work cost time is a
+real, separate, unmeasured question — it needs an interleaved A/B across those specific commits on a
+quiet machine, which this round did not attempt.
+
+**Symbolication.** `--unstable-presymbolicate` against the stripped `release` binary resolved almost
+nothing this round — most leaf samples came back as bare hex addresses rather than names, worse than
+the partial failures §10/§14 describe. Building with `cargo build --profile dist` instead (same
+release codegen — `opt-level = 3`, `lto = "fat"`, `codegen-units = 1` — but `strip = "none"` and
+`debug = "line-tables-only"`, an existing workspace profile) kept the optimisation and added symbols.
+`dsymutil` on that binary plus `llvm-symbolizer --obj=<dSYM> --inlines -f -C -p`, fed each leaf
+sample's address (module-relative offset plus the binary's own Mach-O `__TEXT` `vmaddr`, 0x100000000
+on this arm64 build — confirmed correct with `dwarfdump --lookup=<addr>` before trusting any output),
+recovered the full inline chain per sample. Aggregating self time by each chain's *outermost*
+(physically-emitted) frame gives the first reliable whole-decoder profile this document has:
+
+| self time | function |
+|---:|---|
+| 28.00% | `deblock::boundary_strength` |
+| 18.82% | `reconstruct::reconstruct_picture` |
+| 11.72% | `reconstruct::sample_luma_block` |
+| 11.36% | `deblock::deblock_picture_luma` (gather/scatter, not the strength derivation) |
+| 4.31% | `reconstruct_inter_mb::{closure#0}` |
+| 3.99% | `cabac_residual::residual_block_cabac` |
+| 3.72% | `deblock::deblock_picture_chroma` |
+| 3.55% | `vaco_codec_dsp_idct::h264::idct4x4` |
+| 2.67% | `vaco_codec_dsp_deblock::batch::filter_luma_edge` (the round-1 SIMD kernel itself) |
+
+### The deblocking microbenchmark-versus-end-to-end discrepancy, closed
+
+§10/11's masked-select deblocking kernel measured 0.31x/0.41x in its own microbenchmark yet only
+~2.6% end to end — a gap `docs/core/simd-adoption-measurements.md` Group 8 flagged as needing
+explanation. This profile supplies it directly: **the filter kernel itself, `filter_luma_edge`, is
+only 2.67% of total self time.** `boundary_strength` — the scalar predicate that decides *what* to
+filter, called once per 4x4 block edge before the kernel ever runs — is **28%**, more than ten times
+the kernel's own share and the single largest cost centre in the whole decoder. Vectorising the
+filter arithmetic could only ever have moved that 2.67%; the 26% figure Group 8 used to bound the
+*possible* win included all of `boundary_strength`'s cost as part of "the edge's real cost," most of
+which the kernel never touched.
+
+### The actual defect, and the fix
+
+`boundary_strength(mb_edge, p_mb, p_blk, q_mb, q_blk, ref_list0_poc, ref_list1_poc)` is a pure
+function of its arguments. `deblock_picture_luma`'s per-edge gather loop derives `p_blk`/`q_blk` from
+`row / 4` (`blk_row`) for a vertical edge (`col / 4` for horizontal), then calls
+`boundary_strength` once per *row* — 16 calls per edge — even though all four rows sharing one
+`blk_row` group compute byte-identical arguments and therefore an identical `bS`. Clause 8.7.2.1
+defines one `bS` per 4x4 luma block, not per pixel row; the loop already computed the block index
+correctly, it just re-derived the same answer four times per edge instead of once.
+`deblock_picture_chroma` has the same shape at `row / 2` (chroma reuses luma's `bS` at half
+resolution, so its own redundancy is 2x rather than 4x).
+
+Fixed in all four gather loops (luma vertical/horizontal, chroma vertical/horizontal) by computing
+`boundary_strength` once per `blk_row`/`blk_col` group into a small `[u8; 4]` array before the
+per-row/column loop, then indexing into it instead of calling the function again. Pure memoisation
+of an already-pure function: no `bS` value changes, no table, no new type, `vaco-simd` untouched.
+
+### Measured
+
+Interleaved baseline/candidate (alternating start order each round), 10 independent process
+launches, wall clock, on the 4K 75-frame fixture, decode-only (`-c:v rawvideo -f null -`):
+
+**10 of 10 launches favoured the candidate. Ratios: 0.636, 0.844, 0.765, 0.787, 0.895, 0.785, 0.820,
+0.850, 0.680, 0.794 — mean ≈0.786 (≈1.27x), median ≈0.791.** Full numbers, the profiling methodology,
+and the symbolication cross-check are in `docs/core/simd-adoption-measurements.md` Group 10.
+
+Best-of-3 absolute times after the fix: **vaco 8.14s**, `ffmpeg -threads 1` 0.62s (unchanged),
+ffmpeg default threads 0.18s (unchanged). The single-threaded gap narrows from **~15.7x to ~13.1x**
+using this round's own before/after numbers (9.89s/0.63s before, 8.14s/0.62s after). Threading
+remains the larger untouched factor and is out of scope here, per this document's own §10/§15 notes.
+
+**Byte-exact against `ffmpeg`, unchanged, on all four regression fixtures**: the 4K clip above, a
+60-second 1800-frame 1080p `libx264` file (`big.mkv`), and two fresh stock-`libx264` clips (default
+encoder settings — B-frames, CABAC, 3 references) at 322x242 and 1024x576.
+
+### What this says about round 1/2's method, in hindsight
+
+Rounds 1 and 2 (§10, §11) profiled correctly but the profile itself was degraded by presymbolication
+failure on a stripped binary, which is why `boundary_strength` — sitting inside `deblock_picture_luma`
+and `deblock_picture_chroma`'s call graph the whole time — never surfaced as its own line item until
+this round's `dsymutil`/`llvm-symbolizer` pass separated it from its callers. The lesson `E2E-GAPS.md`
+§14 drew about `vaco-scale`'s `filter_h` ("the cost was bookkeeping, not arithmetic, and a runtime
+trip count hid it from the optimiser") has a sibling here: the cost was a *redundant call*, and a
+degraded profile hid it inside a caller's aggregate self time instead of attributing it to its own
+name. Get the symbols right before concluding a function is cheap.
