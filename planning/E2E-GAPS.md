@@ -551,3 +551,53 @@ smaller than `filter_h`'s ~50%+, and shaped differently — its cost is in the
 per-row width loop rather than the tap loop, so the same fix would not
 directly apply); and the decode-side majority of §9's figure, which remains
 the larger open cost.
+
+## 15. Benchmark re-measurement, and why cross-session numbers do not compare
+
+Measured on the 75-frame 3840x2160 Main fixture, **while a fuzz sweep and three
+agents were running**, so these are loaded-machine numbers:
+
+| | best of 3 |
+|---|---|
+| vaco decode | 8.11s |
+| `ffmpeg -threads 1` | 0.62s |
+| ffmpeg default threads | 0.17s |
+| vaco decode + scale to 1080p | 9.41s |
+| ffmpeg decode + scale to 1080p | 0.21s |
+
+That is ~13x off single-threaded ffmpeg and ~48x off default-threaded ffmpeg.
+
+**Do not read 5.49s (§10) against 8.11s here as a regression.** The two were
+taken under different machine loads, and §11 measured wall-clock noise under a
+background sweep at roughly 300%. Only *interleaved, same-session* A/B
+comparisons are valid in this repo. Whether the correctness work — weighted
+prediction, correct deblocking thresholds, `Intra_8x8` — made decode
+legitimately slower by doing work it previously skipped is **plausible and
+unmeasured**; it needs an interleaved A/B across those commits on a quiet
+machine, not a comparison of two numbers taken hours apart.
+
+The scaler's own share is separately measured at **1.30-1.97s** of the total
+(§14), so decode dominates this scenario and remains the target.
+
+### Harness failures, recorded because they keep recurring
+
+Getting the five numbers above took four broken attempts, all mine:
+
+- `ffmpeg` writing to `/dev/null` **without `-y`** exits instantly on the
+  overwrite prompt, and `-v error` hides the prompt. It reported 0.03s for
+  decoding 75 4K frames — physically impossible, and the only reason it was
+  caught.
+- `2>/dev/null` on the timed command **also swallows `/usr/bin/time`'s own
+  output**, yielding empty timings.
+- A shell function juggling fd 3 to separate the two stderr streams produced
+  0.00s for everything.
+- Building with only `patent-encumbered-hevc-decode` **overwrote the binary
+  built with the h264 feature** in the same target dir, so the "decode"
+  being timed was an immediate "no decoder for the input codec" exit. This
+  is the same shared-target-dir trap a profiling agent hit in §10, hit again
+  by the person who wrote up §10.
+
+The fix that worked was to stop writing inline shell and use a Python script
+that checks each subprocess's exit status. **A timing harness that does not
+assert the command succeeded is measuring startup cost.** Sanity-check every
+benchmark number against physical plausibility before believing it.
