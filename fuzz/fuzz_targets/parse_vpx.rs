@@ -9,7 +9,9 @@
 //! 1. **Total consumption.** `Parser::parse` on non-empty input always
 //!    reports consuming the whole slice, whatever it decides the bytes mean.
 //! 2. **A reported size is never zero and never absurd.** VP9's `frame_size()`
-//!    codes width/height as `x_minus_1`, so zero can only mean "not present";
+//!    codes width/height as `x_minus_1`, so zero can only mean "not present",
+//!    and the field-plus-one arithmetic tops out at exactly `1 << 16`
+//!    (0xFFFF + 1), not one less — see the comment at the assertion itself;
 //!    VP8 dimensions are masked to 14 bits, bounding them independently of
 //!    what this crate does with them.
 //! 3. **The superframe index never walks past the buffer it was found in** —
@@ -42,7 +44,24 @@ fuzz_target!(|data: &[u8]| {
     if let Some(h) = parse_display_header(data) {
         if let Some((w, height)) = h.size {
             assert!(w > 0 && height > 0, "frame_size() codes width/height minus 1");
-            assert!(w < (1 << 16) && height < (1 << 16), "16-bit fields");
+            // Not `< (1 << 16)`: §7.2.3 of the VP9 Bitstream & Decoding
+            // Process Specification (v0.6) defines `FrameWidth =
+            // frame_width_minus_1 + 1` with `frame_width_minus_1` a plain
+            // f(16) field and no additional bitstream-conformance ceiling on
+            // a key/intra-only frame's value (the only conformance bounds in
+            // that section are the *inter*-frame reference-scaling ratios in
+            // §7.2.5, which do not apply here). So the all-ones encoding
+            // (0xFFFF) is a legal `frame_width_minus_1` and decodes to
+            // 65536 = 1 << 16 — one past a 16-bit field's own range, since
+            // the value is the field *plus one*. `vaco_parse_vpx::profile`
+            // already encodes this: `MAX_DIMENSION = 1 << 16` is used as an
+            // inclusive bound (`q.width <= self.max_h_size` in
+            // `LevelConstraints::admits`), independently agreeing that 65536
+            // is admissible. This assertion previously used `<` and failed
+            // on crash-739636bad2164ffa41e3c104cc036d1d229bf408, which
+            // decodes to exactly (65536, 64752) — a false harness invariant,
+            // not a parser defect.
+            assert!(w <= (1 << 16) && height <= (1 << 16), "16-bit-plus-one fields");
         }
     }
 

@@ -523,6 +523,56 @@ mod tests {
         assert_eq!(pixel_format(&c), PixFmt::from_name("yuv420p").ok());
     }
 
+    /// §7.2.3: `FrameWidth = frame_width_minus_1 + 1` with
+    /// `frame_width_minus_1` a plain f(16) field and no bitstream-conformance
+    /// ceiling on a key frame's value beyond the field width itself (the
+    /// only per-value bounds in that part of the spec are §7.2.5's
+    /// *inter*-frame reference-scaling ratios, which do not apply to a key
+    /// frame). So the all-ones encoding is legal and yields exactly
+    /// `1 << 16` — one past what fits in 16 bits, since the value is the
+    /// field plus one. `crate::profile::MAX_DIMENSION` already treats
+    /// `1 << 16` as an inclusive ceiling (`LevelConstraints::admits` checks
+    /// `width <= max_h_size`), so this pins the same boundary at the parser
+    /// itself: found by `fuzz/fuzz_targets/parse_vpx.rs`, whose assertion
+    /// wrongly required `w < 1 << 16` and failed on
+    /// `crash-739636bad2164ffa41e3c104cc036d1d229bf408` (kept as a seed under
+    /// `fuzz/seeds/parse_vpx/`), even though this decode is correct.
+    #[test]
+    fn frame_width_minus_1_all_ones_decodes_to_1_shl_16_not_a_wraparound() {
+        let mut bits: Vec<bool> = Vec::new();
+        let mut push = |n: u32, v: u32| {
+            for i in (0..n).rev() {
+                bits.push((v >> i) & 1 != 0);
+            }
+        };
+        push(2, 2); // frame_marker
+        push(1, 0); // profile_low
+        push(1, 0); // profile_high => profile 0
+        push(1, 0); // show_existing_frame
+        push(1, 0); // frame_type = KEY_FRAME
+        push(1, 1); // show_frame
+        push(1, 0); // error_resilient_mode
+        push(8, 0x49);
+        push(8, 0x83);
+        push(8, 0x42);
+        push(3, 1); // color_space = CS_BT_601 (profile 0 skips the bit_depth bit)
+        push(1, 0); // color_range
+        push(16, 0xFFFF); // frame_width_minus_1 = 65535
+        push(16, 0xFFFF); // frame_height_minus_1 = 65535
+        let mut data = Vec::new();
+        for chunk in bits.chunks(8) {
+            let mut byte = 0u8;
+            for (i, &b) in chunk.iter().enumerate() {
+                if b {
+                    byte |= 0x80 >> i;
+                }
+            }
+            data.push(byte);
+        }
+        let h = parse_uncompressed_header(&data).unwrap();
+        assert_eq!(h.size, Some((1 << 16, 1 << 16)));
+    }
+
     #[test]
     fn pix_fmt_matches_the_measured_reference() {
         let c8_420 = Vp9ColorConfig {
